@@ -5,7 +5,7 @@
 
 ## Context
 
-The predecessor scripts demonstrated that shell can quickly configure GRE, WireGuard, and IPsec, but duplicated lifecycle/validation/firewall/diagnostic logic grows difficult to reason about as methods and future panel/agent use expand.
+The predecessor scripts demonstrated that shell can quickly configure GRE, WireGuard, and IPsec, but duplicated lifecycle/validation/firewall/diagnostic logic grows difficult to reason about as methods and external reuse expand.
 
 The desired product still needs to remain operationally simple and high-performance.
 
@@ -17,7 +17,7 @@ For native backends, packet forwarding remains in Linux/native implementations. 
 
 Prefer small validated integrations with standard Linux tools/interfaces over reimplementing networking protocols in userspace.
 
-Keep engine logic independent of the interactive menu and provide non-interactive/machine-readable CLI behavior so a future agent/panel can reuse the same engine.
+Keep engine logic independent of the interactive menu and provide non-interactive/machine-readable CLI behavior so arbitrary external software can reuse STL without reimplementing Link logic.
 
 ## Consequences
 
@@ -26,7 +26,7 @@ Positive:
 - testable orchestration;
 - safer process execution and input handling than large shell managers;
 - cleaner backend contracts;
-- easier future agent/API/panel composition;
+- easier reuse by external consumers through stable contracts;
 - no native-backend dataplane performance penalty.
 
 Cost:
