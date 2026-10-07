@@ -5,7 +5,7 @@
 
 ## Context
 
-The product must create a private point-to-point IP that can be consumed by ordinary applications and future higher-level tunnels/backhauls. Provider/network behavior varies, so the underlay method cannot be hardcoded to one protocol.
+The product must create a private point-to-point IP that can be consumed by ordinary applications and arbitrary external software. Provider/network behavior varies, so the underlay method cannot be hardcoded to one protocol.
 
 ## Decision
 

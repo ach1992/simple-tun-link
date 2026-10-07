@@ -21,7 +21,7 @@ The project should provide one small tool that creates the same consumer-facing 
 
 Given two Linux servers with mutually reachable underlay endpoints, an operator can install stl, create/import a link with minimal input, and obtain a stable point-to-point Link Address on both servers.
 
-A successful link must be usable by normal IP applications and by future higher-level consumers such as backhaul or direct-tunnel software.
+A successful Link must be usable by normal IP applications and by arbitrary external software without requiring that software to understand STL backend internals.
 
 Multi-Link operation is a v0.1 requirement. A host may own zero or more independent Links, including multiple Links to the same peer underlay endpoint pair. For example, A <-> B may simultaneously use GRE Native, WireGuard, and GRE/FOU with distinct Link Addresses and resources. The model must not enforce a one-Link-per-host or one-Link-per-peer singleton. A specific combination may be rejected only when the selected backend/kernel cannot unambiguously distinguish the required resources.
 
@@ -47,7 +47,7 @@ The default path is an interactive terminal UI:
 8. Import on the peer, preview the effective configuration, apply, and verify.
 9. Show concise connectivity and MTU/quality results.
 
-A non-interactive CLI and machine-readable JSON output must expose the same core operations for automation and future panel/agent use.
+A non-interactive CLI and machine-readable JSON output must expose the same core operations for automation and arbitrary external consumers.
 
 ## 5. v0.1 backend scope
 
@@ -66,8 +66,9 @@ A non-interactive CLI and machine-readable JSON output must expose the same core
 ### WireGuard
 - Native WireGuard transport.
 - Secure/authenticated link.
-- Private keys are local secrets and must not be logged or exposed by default.
-- Pairing UX may require a response exchange when keeping private keys local.
+- Private keys are secrets and must never appear in logs, status, diagnostics, or generic JSON.
+- v0.1 uses **Quick Link** as the default one-step pairing mode: the initiator may generate the receiver keypair, include the receiver private key only in the explicitly sensitive setup payload, retain only the receiver public key, and never persist the receiver private key in ordinary initiator state.
+- The pairing schema must allow a future local-key/secure-exchange mode without changing the core Link model.
 
 ### IPsec/XFRM
 - strongSwan/IKEv2 with Linux XFRM interfaces, not the legacy VTI-first design.
@@ -89,10 +90,12 @@ Required:
 - manual configuration;
 - versioned setup-link import/export;
 - human-readable copy block;
-- preview before apply.
+- preview before apply;
+- **Quick Link** as the v0.1 default for secret-bearing backends when a one-step payload materially simplifies setup.
 
-Preferred future-friendly path:
-- optional SSH-assisted pairing may configure both endpoints while keeping secrets local.
+A secret-bearing Quick Link is explicitly **SENSITIVE** credential material. It may intentionally contain a receiver private key or shared PSK, but it must never be logged, included in ordinary status/diagnostic JSON, or silently persisted as an export artifact. Import preview shows that secrets are present without displaying their values.
+
+The pairing schema includes an explicit exchange mode so a future Secure Exchange/local-key flow can be added compatibly if later justified.
 
 Setup-link data is data only. Import must never execute shell content embedded in a link.
 
@@ -132,33 +135,29 @@ Health observation and repair are separate operations. A health check must not s
 - CLI JSON output is a first-class contract for automation; every machine-readable payload carries an explicit schema version and breaking schema changes require a version bump.
 - The automation surface provides idempotent desired-state semantics (for example, `stl link ensure ... --json`) so callers do not need to reproduce create/update/repair decision logic.
 - The engine treats Links as a collection keyed by stable Link ID; it must not assume one active Link, one Link per peer, or one Link per backend.
-- No daemon, central database, web panel, or multi-server control plane is required in v0.1.
-- Boundaries must allow a future local agent/API/panel to reuse the same engine rather than reimplement tunnel logic.
+- No daemon, central database, remote orchestration service, or consumer-specific integration layer is required in v0.1.
+- Boundaries must allow arbitrary external software to reuse STL through stable machine contracts without reimplementing tunnel logic or forcing STL to model consumer-specific concepts.
 - Avoid premature public-library APIs; promote a stable reusable API only when a second real consumer proves the requirement.
 
-## 11. Standalone use and future composition
+## 11. Standalone use and reusable integration
 
 STL is a complete standalone tool and also a reusable connectivity capability.
 
 ~~~text
-Human operator ----------------------> stl interactive CLI
-Independent script ------------------> stl CLI / versioned JSON
-Future node agent/control plane -----> STL engine or CLI contract
-                                          |
-                                   stable Link Address
-                                          |
-                             backhaul / direct / service
+Human operator ----------> interactive STL
+External software -------> versioned CLI / JSON contract
+                               |
+                           STL engine
+                               |
+                         stable Link Address
 ~~~
 
-A future central platform may manage many servers, tunnel products, and even non-tunnel software. That platform may choose STL as a prerequisite/provider for point-to-point L3 connectivity while keeping its own concepts such as node inventory, geography/region, Iran/Kharej roles, application ownership, consumer references, and orchestration policy. Those concepts do not enter the STL domain model.
+STL intentionally defines only its own contracts and lifecycle. It does not define the architecture, inventory, roles, workflow, ownership model, or product behavior of software that may consume it. Consumers may take any form. STL defines only the stable contracts needed to use Link functionality and does not prescribe consumer architecture.
 
-Higher-level consumers may depend on a Link. Dependency/consumer ownership belongs to the higher-level orchestrator; STL owns Link lifecycle and its local resources. The overall dependency graph must remain acyclic, so a Link cannot depend on a higher-level consumer that itself depends on that Link.
+The reusable boundary is kept generic through stable Link IDs, desired/observed state, idempotent ensure/apply behavior, versioned state and JSON schemas, deterministic errors/exit semantics, multi-Link isolation, and UI-independent engine logic. A public in-process Go API is not frozen until a real second in-process consumer proves that need.
 
-The v0.1 architecture preserves this composition path through stable Link IDs, desired/observed state, idempotent ensure/apply behavior, versioned state and JSON schemas, machine-readable errors, and UI-independent engine logic. It does not build a daemon, remote protocol, generic plugin framework, central database, or panel before a real consumer requires them.
-
-Potential future work, explicitly not promised by v0.1:
-- local agent/daemon and remote generic server/capability control plane;
-- MASQUE/CONNECT-IP or other standardized userspace carriers;
+Potential future STL capabilities, explicitly not promised by v0.1:
+- additional standardized userspace carriers such as MASQUE/CONNECT-IP;
 - OpenVPN/TCP fallback;
 - IPv6 Link Addresses;
 - L2/overlay modes such as VXLAN/Geneve when a concrete use case justifies them.
@@ -194,9 +193,8 @@ v0.1 is complete when:
 - automated tests cover domain/config logic and Linux namespace/integration paths where technically feasible;
 - documentation is sufficient for another maintainer to continue work without chat history.
 
-## 14. Owner decisions still open
+## 14. Owner decisions
 
 The project license is **MIT**. The canonical CLI remains `stl`; `stlink` is a low-cost convenience alias to the same executable when installed through the supported installer.
 
-Still open:
-- exact secure-vs-one-shot setup-link UX for secret-bearing backends after implementation spike evidence.
+For v0.1, **Quick Link** is the default one-step pairing mode for secret-bearing backends. The format remains explicitly extensible so a future Secure Exchange/local-key mode can be added without changing the core Link model. No currently open owner decision blocks Issue #2 development.

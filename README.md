@@ -21,7 +21,7 @@ The immediate product stays intentionally small:
 - provide interactive, manual, and versioned setup-link workflows;
 - diagnose MTU/connectivity problems without becoming a general network-management suite.
 
-STL is both a standalone tool and a reusable connectivity capability. A human can use `stl` directly, another script can use its versioned CLI/JSON contract, and a future agent or generic server/capability management platform can reuse the same engine without reimplementing tunnel logic.
+STL is both a standalone tool and a reusable connectivity capability. External software of any kind can consume its stable CLI/JSON contract without reimplementing Link logic. STL does not prescribe what those consumers are or how they are built.
 
 ## v0.1 backend scope
 
@@ -46,7 +46,7 @@ VXLAN and Geneve are intentionally outside v0.1. They solve broader overlay/L2 u
 - **Backend** — GRE, IPIP, WireGuard, or IPsec/XFRM.
 - **Encapsulation** — backend-specific carrier such as Native, FOU, or GUE.
 
-Geographic/product roles such as “Iran” or “Kharej” are intentionally outside the STL data model. A future higher-level platform may use those labels, while STL remains local/peer based.
+Consumer-specific concepts such as geography, product roles, orchestration policy, or application ownership are intentionally outside the STL data model. STL remains local/peer based and reusable.
 
 ## Project map
 

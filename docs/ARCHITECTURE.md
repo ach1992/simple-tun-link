@@ -2,40 +2,39 @@
 
 ## 1. Core model
 
-simple-tun-link owns a **Link**, not a higher-level backhaul/proxy/service.
+simple-tun-link owns a **Link**. It does not own or prescribe the architecture of software that consumes that Link.
 
 ~~~text
-Consumer
-(backhaul / direct tunnel / service)
-               |
-          Link Address
-               |
-        simple-tun-link
-               |
- Backend + Encapsulation
-               |
-            Underlay
+External consumer
+       |
+   Link Address
+       |
+simple-tun-link
+       |
+Backend + Encapsulation
+       |
+    Underlay
 ~~~
 
 Consumers should target the Link Address and remain independent of the selected backend.
 
 ### Integration surfaces
 
-The same engine serves three progressively broader consumers without making any one of them architectural owner:
+The same engine serves human and machine consumers without making any external product an architectural owner:
 
 ~~~text
-Interactive CLI      Automation CLI/JSON      Future agent/platform
-      \                    |                         /
-                    Application engine
-                           |
-                         Link
+Interactive CLI      Machine CLI/JSON
+      \                  /
+             Application engine
+                    |
+                  Link
 ~~~
 
 - Interactive output is for humans and is never an automation contract.
 - Non-interactive commands expose deterministic exit semantics and versioned JSON; callers must never scrape menu text.
-- Idempotent `ensure` semantics allow a script or future agent to declare desired Link state while STL performs inspect/plan/apply/verify.
+- Idempotent `ensure` semantics allow any external consumer to declare desired Link state while STL performs inspect/plan/apply/verify.
 - Engine packages remain private under `internal/` until a real second in-process consumer proves a stable public Go API is needed.
-- A future central platform may manage node inventory, regions/roles, consuming applications, dependency graphs, and non-tunnel software. STL does not absorb those orchestration concepts.
+- Consumer-specific product concepts stay outside STL.
 
 ## 2. Layer boundaries
 
@@ -179,7 +178,7 @@ No blind:
 
 ### Multi-Link isolation and allocation
 
-Multi-Link behavior is a first-class v0.1 requirement, not a future panel-only capability.
+Multi-Link behavior is a first-class v0.1 requirement, not a capability deferred to some external consumer.
 
 A host may maintain 0..N Links. Multiple Links may connect the same two underlay endpoints at the same time, including different backend/encapsulation choices such as GRE Native, WireGuard, and GRE/FOU. Each Link has its own stable Link ID, Link Address pair, lifecycle, observed state, and owned resources.
 
@@ -223,7 +222,8 @@ Default backend.
 
 ### WireGuard
 - encrypted/authenticated;
-- local private-key ownership preferred;
+- private keys are secret and excluded from ordinary logs/status/diagnostics/JSON;
+- v0.1 Quick Link may carry the receiver private key once in a sensitive pairing payload; the initiator retains only the receiver public key and does not persist the receiver private key in ordinary state;
 - endpoint/keepalive configuration is conditional, not globally hardcoded;
 - status includes latest handshake/counters where available.
 
@@ -293,7 +293,11 @@ Requirements:
 
 A human-readable configuration block is an alternate representation of the same internal pairing model.
 
-Secret-bearing one-shot links must be clearly labeled sensitive. WireGuard private keys should remain local by default; secure pairing may therefore require a response exchange or SSH-assisted setup.
+Pairing payloads carry an explicit exchange mode. v0.1 defines `quick` as the default mode for secret-bearing backends because it preserves the simplest one-step workflow and implementation. Quick payloads that contain a receiver private key or shared PSK are explicitly **SENSITIVE** credential material.
+
+For WireGuard Quick Link, the initiator may generate the receiver keypair solely to construct the payload, persist only the receiver public key, and discard the receiver private key from ordinary local state after export. The receiver stores its imported private key locally with restrictive permissions. For IPsec/PSK, the shared PSK may be carried in the sensitive Quick payload and then stored as required by both endpoints.
+
+The format must permit later addition of a `secure_exchange` (or equivalent local-key) mode without changing the core Link model or invalidating existing Quick Link payloads. Secure Exchange is not a v0.1 requirement.
 
 ## 13. Interactive UI contract
 
@@ -322,9 +326,9 @@ Advanced settings remain progressively disclosed.
 
 Menu startup must not block on external update checks or public-IP services.
 
-## 14. Future composition and control-plane compatibility
+## 14. Reusable integration and extensibility
 
-v0.1 is standalone, but its boundaries intentionally permit reuse by independent scripts and a future generic server/capability management platform:
+STL is standalone, but its boundaries intentionally permit reuse by arbitrary external software:
 
 - core behavior is independent from terminal UI;
 - direct CLI subcommands expose deterministic operations and explicit exit semantics;
@@ -332,11 +336,11 @@ v0.1 is standalone, but its boundaries intentionally permit reuse by independent
 - Link IDs are stable and multiple Links, including same-peer Links, are first-class;
 - desired/observed state are separable and an idempotent ensure operation converges desired state;
 - backends expose common lifecycle/status semantics;
-- geography, node grouping, consumer ownership, higher-level dependency graphs, and non-tunnel application management remain outside STL.
+- STL does not model external consumer topology, roles, inventory, ownership, or orchestration policy.
 
-A future agent can initially invoke the CLI/JSON contract. If an actual second in-process Go consumer appears, selected engine APIs may then be promoted from `internal/` rather than speculatively freezing a public package today.
+External software should initially consume the CLI/JSON contract. If a real second in-process Go consumer appears, selected engine APIs may then be promoted from `internal/` rather than speculatively freezing a public package today.
 
-The remote/central control plane must never be required for already-established native tunnels to carry data unless a backend intrinsically requires a userspace process. A panel outage therefore does not become a native Link data-plane outage.
+For native backends, an external consumer must not be required to remain available for established Link data-plane traffic to continue.
 
 ## 15. Complexity rule
 

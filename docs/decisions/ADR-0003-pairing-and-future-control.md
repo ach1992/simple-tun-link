@@ -1,11 +1,11 @@
-# ADR-0003: Versioned setup links, manual fallback, and future control-plane compatibility
+# ADR-0003: Versioned setup links, manual fallback, and reusable integration compatibility
 
 - Status: Accepted
 - Date: 2026-10-07
 
 ## Context
 
-Manual copy blocks are understandable but become error-prone as paired settings grow. STL must also remain usable both as a standalone tool and as a reusable connectivity capability for independent scripts or a future generic server/capability management platform without introducing a second tunnel implementation.
+Manual copy blocks are understandable but become error-prone as paired settings grow. STL must also remain usable both as a standalone tool and as a reusable connectivity capability for arbitrary external software without introducing a second Link implementation.
 
 ## Decision
 
@@ -19,14 +19,14 @@ Provide:
 
 A setup link is data, never executable content.
 
-Secret-bearing backends must preserve local private-key ownership where practical. If a one-shot link contains a credential, the link is explicitly sensitive. Exact quick-vs-secure exchange UX remains implementation work, not permission to weaken secret handling silently.
+Secret-bearing setup payloads are explicitly sensitive. The exact default pairing mode is decided separately in ADR-0004; this ADR only requires the versioned format to carry the mode explicitly and remain extensible.
 
-Do not build a daemon or panel in v0.1. Preserve clean engine boundaries and stable Link identity so a future local agent/control plane can reuse them. A higher-level platform may own node inventory, geography/roles, application consumers, dependency graphs, and non-tunnel software; those orchestration concepts remain outside STL.
+Do not build speculative integration infrastructure in v0.1. Preserve clean engine boundaries and stable Link identity so arbitrary external software can reuse STL through stable contracts while consumer-specific concepts remain outside STL.
 
 ## Consequences
 
 Pairing reduces mismatched peer settings without making chat/manual memory authoritative.
 
-The future panel can consume one implementation rather than recreate backend logic.
+External consumers can use one STL implementation rather than recreate Link/backend lifecycle logic.
 
 Versioned formats require compatibility tests and explicit migration behavior.
