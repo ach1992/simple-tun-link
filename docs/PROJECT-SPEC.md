@@ -6,7 +6,7 @@
 - Product name: simple-tun-link
 - Canonical CLI: stl
 - Primary platform: Linux
-- Initial distribution target: Debian/Ubuntu-class servers
+- Initial distribution target: Debian/Ubuntu-class Linux servers; detailed baseline and capability rules live in docs/SUPPORTED-ENVIRONMENTS.md
 
 This document is the canonical project-level specification. Detailed architecture belongs in docs/ARCHITECTURE.md; live work belongs in GitHub Issues.
 
@@ -128,30 +128,35 @@ Health observation and repair are separate operations. A health check must not s
 - Go is the control-plane implementation language.
 - Packet data should remain in Linux/native backend data paths; stl must not proxy packets for native backends.
 - Core domain/backend logic must not depend on the interactive menu.
-- CLI JSON output is a first-class contract for automation.
+- CLI JSON output is a first-class contract for automation; every machine-readable payload carries an explicit schema version and breaking schema changes require a version bump.
+- The automation surface provides idempotent desired-state semantics (for example, `stl link ensure ... --json`) so callers do not need to reproduce create/update/repair decision logic.
 - The engine treats Links as a collection keyed by stable Link ID; it must not assume one active Link, one Link per peer, or one Link per backend.
 - No daemon, central database, web panel, or multi-server control plane is required in v0.1.
 - Boundaries must allow a future local agent/API/panel to reuse the same engine rather than reimplement tunnel logic.
 - Avoid premature public-library APIs; promote a stable reusable API only when a second real consumer proves the requirement.
 
-## 11. Future composition
+## 11. Standalone use and future composition
 
-A Link Address is intended to be consumable by higher-level software:
+STL is a complete standalone tool and also a reusable connectivity capability.
 
 ~~~text
-Public/Underlay network
-        |
-simple-tun-link backend
-        |
-stable Link Address
-        |
-backhaul / direct tunnel / service / route
+Human operator ----------------------> stl interactive CLI
+Independent script ------------------> stl CLI / versioned JSON
+Future node agent/control plane -----> STL engine or CLI contract
+                                          |
+                                   stable Link Address
+                                          |
+                             backhaul / direct / service
 ~~~
 
-Higher-level consumers may depend on a Link. The dependency graph must remain acyclic; a Link may not depend on a higher-level consumer that itself depends on that Link.
+A future central platform may manage many servers, tunnel products, and even non-tunnel software. That platform may choose STL as a prerequisite/provider for point-to-point L3 connectivity while keeping its own concepts such as node inventory, geography/region, Iran/Kharej roles, application ownership, consumer references, and orchestration policy. Those concepts do not enter the STL domain model.
+
+Higher-level consumers may depend on a Link. Dependency/consumer ownership belongs to the higher-level orchestrator; STL owns Link lifecycle and its local resources. The overall dependency graph must remain acyclic, so a Link cannot depend on a higher-level consumer that itself depends on that Link.
+
+The v0.1 architecture preserves this composition path through stable Link IDs, desired/observed state, idempotent ensure/apply behavior, versioned state and JSON schemas, machine-readable errors, and UI-independent engine logic. It does not build a daemon, remote protocol, generic plugin framework, central database, or panel before a real consumer requires them.
 
 Potential future work, explicitly not promised by v0.1:
-- local agent/daemon and remote panel/control plane;
+- local agent/daemon and remote generic server/capability control plane;
 - MASQUE/CONNECT-IP or other standardized userspace carriers;
 - OpenVPN/TCP fallback;
 - IPv6 Link Addresses;
@@ -181,7 +186,8 @@ v0.1 is complete when:
 - automatic MTU and core diagnostics produce actionable results;
 - repeated apply is idempotent and partial failures roll back owned state;
 - restart/reapply persistence works without corrupting unrelated network state;
-- machine-readable CLI output exists for core operations;
+- machine-readable CLI output exists for core operations with an explicit schema version and stable error/exit semantics;
+- a script can converge a Link toward desired state through an idempotent automation operation without parsing interactive output;
 - one host can operate multiple simultaneous Links to multiple peers and multiple independent Links to the same peer pair; the v0.1 E2E suite includes A <-> B with GRE Native, WireGuard, and GRE/FOU active together, each with independent Link Addresses;
 - removing or repairing one Link in a multi-Link scenario leaves the other Links operational and their traffic unaffected;
 - automated tests cover domain/config logic and Linux namespace/integration paths where technically feasible;
