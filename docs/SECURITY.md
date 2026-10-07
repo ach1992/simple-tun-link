@@ -17,18 +17,21 @@ The project may support transports that work across different network conditions
 
 ## Secrets
 
-Never expose by default:
+Never expose secrets through ordinary observability or machine-status surfaces:
 - WireGuard private keys;
 - IPsec PSKs/private keys;
 - future bearer credentials;
 - SSH credentials.
 
 Rules:
-- redact secrets from logs/status/diagnostic bundles;
-- restrictive file modes;
-- setup links containing a secret are explicitly marked sensitive;
+- redact secrets from logs/status/diagnostic bundles/generic JSON;
+- restrictive file modes for persisted secret state;
+- a v0.1 Quick Link is an explicit, deliberate exception for pairing transport and may contain receiver credentials;
+- secret-bearing setup links/configuration blocks are explicitly marked **SENSITIVE**;
 - import preview shows secret presence, not the secret value;
-- avoid moving a private key between hosts when a local-key pairing path is available.
+- do not automatically write secret-bearing payloads to logs, shell history, diagnostic bundles, or world-readable files;
+- when STL itself writes a secret-bearing export file, use restrictive permissions;
+- after generating a WireGuard peer keypair for Quick Link, the initiator persists only the peer public key and must not retain the peer private key in ordinary state.
 
 ## Setup-link safety
 
@@ -44,7 +47,7 @@ Decoder requirements:
 - reject incompatible backend/encapsulation fields;
 - integrity/damage detection.
 
-Encoded is not encrypted. If a format contains secret material, possession of the link may grant tunnel access and documentation/UI must say so.
+Encoded is not encrypted. In v0.1, Quick Link is the default one-step mode for secret-bearing backends, so possession of such a payload may grant tunnel access. Documentation/UI must clearly say so and treat the payload like a credential. The versioned schema must allow a later secure/local-key exchange mode without weakening or ambiguously reinterpreting existing Quick payloads.
 
 ## Host mutation
 
@@ -64,7 +67,7 @@ Rules:
 
 Creation/removal of Linux network links generally requires elevated capability/root. Keep privileged operations small and explicit.
 
-Future panel/agent work must not expose privileged network mutation directly without authentication, authorization, input validation, and local policy boundaries.
+Any future external integration that exposes privileged network mutation must provide appropriate authentication, authorization, input validation, and local policy boundaries.
 
 ## Dependency/supply chain
 
