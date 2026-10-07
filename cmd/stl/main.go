@@ -11,6 +11,8 @@ import (
 
 const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl version [--json]\n\nTunnel commands will be added through tracked GitHub Issues.\n"
 
+const jsonSchemaVersion = 1
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -24,10 +26,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "version":
 		if len(args) == 2 && args[1] == "--json" {
-			payload := map[string]string{
-				"version": version.Version,
-				"commit":  version.Commit,
-				"date":    version.Date,
+			payload := struct {
+				SchemaVersion int    `json:"schema_version"`
+				Version       string `json:"version"`
+				Commit        string `json:"commit"`
+				Date          string `json:"date"`
+			}{
+				SchemaVersion: jsonSchemaVersion,
+				Version:       version.Version,
+				Commit:        version.Commit,
+				Date:          version.Date,
 			}
 			if err := json.NewEncoder(stdout).Encode(payload); err != nil {
 				fmt.Fprintf(stderr, "encode version: %v\n", err)
