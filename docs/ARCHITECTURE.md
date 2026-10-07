@@ -19,10 +19,28 @@ Consumer
 
 Consumers should target the Link Address and remain independent of the selected backend.
 
+### Integration surfaces
+
+The same engine serves three progressively broader consumers without making any one of them architectural owner:
+
+~~~text
+Interactive CLI      Automation CLI/JSON      Future agent/platform
+      \                    |                         /
+                    Application engine
+                           |
+                         Link
+~~~
+
+- Interactive output is for humans and is never an automation contract.
+- Non-interactive commands expose deterministic exit semantics and versioned JSON; callers must never scrape menu text.
+- Idempotent `ensure` semantics allow a script or future agent to declare desired Link state while STL performs inspect/plan/apply/verify.
+- Engine packages remain private under `internal/` until a real second in-process consumer proves a stable public Go API is needed.
+- A future central platform may manage node inventory, regions/roles, consuming applications, dependency graphs, and non-tunnel software. STL does not absorb those orchestration concepts.
+
 ## 2. Layer boundaries
 
 ### Presentation
-Interactive terminal menu, direct CLI commands, and JSON output.
+Interactive terminal menu, direct CLI commands, and versioned JSON output.
 
 Responsibilities:
 - collect/validate user intent;
@@ -35,12 +53,16 @@ Coordinates lifecycle operations.
 Target lifecycle:
 
 ~~~text
+Ensure(desired state)
+        |
 Inspect -> Plan -> Validate -> Apply -> Verify -> Commit
                                   |
                                 failure
                                   v
                          rollback owned delta
 ~~~
+
+`Ensure` is the external idempotent desired-state operation; it does not bypass the underlying lifecycle.
 
 Responsibilities:
 - idempotency;
@@ -300,20 +322,21 @@ Advanced settings remain progressively disclosed.
 
 Menu startup must not block on external update checks or public-IP services.
 
-## 14. Future panel/agent compatibility
+## 14. Future composition and control-plane compatibility
 
-v0.1 does not build a daemon/panel, but it preserves these options:
+v0.1 is standalone, but its boundaries intentionally permit reuse by independent scripts and a future generic server/capability management platform:
 
 - core behavior is independent from terminal UI;
-- direct CLI subcommands expose deterministic operations;
-- JSON output is stable enough for automation;
+- direct CLI subcommands expose deterministic operations and explicit exit semantics;
+- every machine-readable payload has a schema version;
 - Link IDs are stable and multiple Links, including same-peer Links, are first-class;
-- desired/observed state are separable;
-- backends expose common lifecycle/status semantics.
+- desired/observed state are separable and an idempotent ensure operation converges desired state;
+- backends expose common lifecycle/status semantics;
+- geography, node grouping, consumer ownership, higher-level dependency graphs, and non-tunnel application management remain outside STL.
 
-A future agent can embed/reuse engine packages inside this repository or initially invoke the CLI contract. A public Go library is not created until a real cross-module consumer requires it.
+A future agent can initially invoke the CLI/JSON contract. If an actual second in-process Go consumer appears, selected engine APIs may then be promoted from `internal/` rather than speculatively freezing a public package today.
 
-The control plane must never become required for already-established native tunnels to carry data unless a backend intrinsically requires a userspace process.
+The remote/central control plane must never be required for already-established native tunnels to carry data unless a backend intrinsically requires a userspace process. A panel outage therefore does not become a native Link data-plane outage.
 
 ## 15. Complexity rule
 
