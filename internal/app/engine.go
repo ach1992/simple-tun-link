@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"sort"
+	"strings"
 
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/domain"
@@ -89,6 +91,7 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link) (Result
 }
 
 func (e *Engine) executeLocked(ctx context.Context, request backend.Request, prior state.LinkRecord) (Result, error) {
+	request.OwnedResources = append([]domain.ResourceClaim(nil), prior.OwnedResources...)
 	link := request.Link
 	impl, ok := e.backends.Get(link.Backend)
 	if !ok {
@@ -111,7 +114,10 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 	if err != nil {
 		return Result{}, stlerr.Wrap(stlerr.CodePlan, string(request.Operation), string(link.ID), string(link.Backend), "backend plan contains an invalid resource claim", err)
 	}
-	lockClaims := unionClaims(prior.OwnedResources, resources)
+	lockClaims, err := resourceLockClaims(prior.OwnedResources, resources)
+	if err != nil {
+		return Result{}, stlerr.Wrap(stlerr.CodeState, string(request.Operation), string(link.ID), string(link.Backend), "cannot derive resource locks", err)
+	}
 	resourceRelease, err := e.locks.Acquire(ctx, lockClaims)
 	if err != nil {
 		return Result{}, stlerr.Wrap(stlerr.CodeState, string(request.Operation), string(link.ID), string(link.Backend), "cannot lock Link resources", err)
@@ -193,26 +199,25 @@ func (e *Engine) rollbackFailure(ctx context.Context, request backend.Request, l
 }
 
 func rejectResourceConflicts(snapshot state.Snapshot, id domain.LinkID, wanted []domain.ResourceClaim) error {
-	if len(wanted) == 0 {
-		return nil
-	}
-	wantedSet := make(map[string]domain.ResourceClaim, len(wanted))
-	for _, claim := range wanted {
-		wantedSet[claim.Canonical()] = claim
-	}
 	for _, record := range snapshot.Links {
 		if record.Desired.ID == id {
 			continue
 		}
-		for _, claim := range record.OwnedResources {
-			if wantedClaim, exists := wantedSet[claim.Canonical()]; exists {
-				return stlerr.New(
-					stlerr.CodeConflict,
-					"validate_resources",
-					string(id),
-					"",
-					fmt.Sprintf("resource %s is already owned by Link %s", wantedClaim.Kind, record.Desired.ID),
-				)
+		for _, wantedClaim := range wanted {
+			for _, ownedClaim := range record.OwnedResources {
+				conflict, err := domain.ResourceClaimsConflict(wantedClaim, ownedClaim)
+				if err != nil {
+					return stlerr.Wrap(stlerr.CodeState, "validate_resources", string(id), "", "cannot compare resource ownership", err)
+				}
+				if conflict {
+					return stlerr.New(
+						stlerr.CodeConflict,
+						"validate_resources",
+						string(id),
+						"",
+						fmt.Sprintf("resource %s conflicts with Link %s", wantedClaim.Kind, record.Desired.ID),
+					)
+				}
 			}
 		}
 	}
@@ -235,13 +240,48 @@ func linkLock(id domain.LinkID) domain.ResourceClaim {
 	return domain.ResourceClaim{Kind: "stl-link", Key: string(id)}
 }
 
+func resourceLockClaims(groups ...[]domain.ResourceClaim) ([]domain.ResourceClaim, error) {
+	claims := unionClaims(groups...)
+	for _, claim := range claims {
+		switch claim.Kind {
+		case domain.ResourceLinkAddress, domain.ResourceLinkSubnet:
+			family, err := addressFamily(claim)
+			if err != nil {
+				return nil, err
+			}
+			claims = append(claims, domain.ResourceClaim{Kind: "stl-address-space", Key: family})
+		}
+	}
+	return unionClaims(claims), nil
+}
+
+func addressFamily(claim domain.ResourceClaim) (string, error) {
+	if err := claim.Validate(); err != nil {
+		return "", err
+	}
+	var addr netip.Addr
+	switch claim.Kind {
+	case domain.ResourceLinkAddress:
+		addr, _ = netip.ParseAddr(claim.Key)
+	case domain.ResourceLinkSubnet:
+		prefix, _ := netip.ParsePrefix(claim.Key)
+		addr = prefix.Addr()
+	default:
+		return "", fmt.Errorf("resource kind %q has no address family", claim.Kind)
+	}
+	if addr.Is4() {
+		return "ipv4", nil
+	}
+	return "ipv6", nil
+}
+
 func validatedClaims(claims []domain.ResourceClaim) ([]domain.ResourceClaim, error) {
 	out := unionClaims(claims)
 	for _, claim := range out {
 		if err := claim.Validate(); err != nil {
 			return nil, err
 		}
-		if claim.Kind == "stl-link" {
+		if strings.HasPrefix(claim.Kind, "stl-") {
 			return nil, fmt.Errorf("resource claim kind %q is reserved by the core engine", claim.Kind)
 		}
 	}

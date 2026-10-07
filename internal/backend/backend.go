@@ -20,6 +20,10 @@ type Request struct {
 	// desired state. It is nil for first creation.
 	Prior *domain.Link
 	Link  domain.Link
+	// OwnedResources is the exact exclusive ownership set committed for Prior.
+	// Backends use it to prove ownership before destructive repair/remove work;
+	// overlapping/conflicting identity is not by itself proof of ownership.
+	OwnedResources []domain.ResourceClaim
 }
 
 // Observation is backend-owned observed host state. It is intentionally

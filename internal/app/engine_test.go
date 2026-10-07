@@ -34,6 +34,7 @@ type fakeBackend struct {
 	present        map[domain.LinkID][]domain.ResourceClaim
 	applyCount     int
 	rollbackCount  int
+	lastOwned      []domain.ResourceClaim
 	failVerifyOnce bool
 	applyDelay     time.Duration
 }
@@ -52,8 +53,11 @@ func (b *fakeBackend) Inspect(_ context.Context, link domain.Link) (backend.Obse
 }
 
 func (b *fakeBackend) Plan(_ context.Context, req backend.Request, observed backend.Observation) (backend.Plan, error) {
+	b.mu.Lock()
+	b.lastOwned = append([]domain.ResourceClaim(nil), req.OwnedResources...)
+	b.mu.Unlock()
 	obs := observed.(fakeObservation)
-	claim := domain.ResourceClaim{Kind: "interface", Key: req.Link.DisplayName}
+	claim := domain.ResourceClaim{Kind: domain.ResourceInterface, Key: req.Link.DisplayName}
 	if req.Operation == backend.OperationRemove {
 		return fakePlan{empty: !obs.present}, nil
 	}
@@ -179,6 +183,44 @@ func TestEnsureIsIdempotentAndPersistsDesiredSeparatelyFromObserved(t *testing.T
 	}
 }
 
+func TestEnsureUpdateCarriesPriorOwnershipAndKeepsStableID(t *testing.T) {
+	b := newFakeBackend()
+	engine, store := newEngine(t, b)
+	link := linkFor(t, "stl-old", "10.80.22.0/31", "10.80.22.1/31")
+
+	if _, err := engine.Ensure(context.Background(), link); err != nil {
+		t.Fatal(err)
+	}
+	updated := link
+	updated.DisplayName = "stl-new"
+	result, err := engine.Ensure(context.Background(), updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Changed || result.LinkID != link.ID {
+		t.Fatalf("update result = %#v, want changed with stable ID %s", result, link.ID)
+	}
+
+	b.mu.Lock()
+	lastOwned := append([]domain.ResourceClaim(nil), b.lastOwned...)
+	b.mu.Unlock()
+	if len(lastOwned) != 1 || lastOwned[0].Kind != domain.ResourceInterface || lastOwned[0].Key != "stl-old" {
+		t.Fatalf("backend prior ownership = %#v, want prior interface stl-old", lastOwned)
+	}
+
+	snapshot, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, ok := snapshot.Find(link.ID)
+	if !ok || record.Desired.DisplayName != "stl-new" {
+		t.Fatalf("updated desired state not committed: %#v", record)
+	}
+	if len(record.OwnedResources) != 1 || record.OwnedResources[0].Key != "stl-new" {
+		t.Fatalf("updated ownership not committed: %#v", record.OwnedResources)
+	}
+}
+
 func TestEnsureRollbackOnVerifyFailureAndErrorIsSecretSafe(t *testing.T) {
 	b := newFakeBackend()
 	b.failVerifyOnce = true
@@ -279,6 +321,65 @@ func TestConcurrentLinksCannotClaimSameResource(t *testing.T) {
 	if successes != 1 || conflicts != 1 {
 		t.Fatalf("successes=%d conflicts=%d, want 1/1", successes, conflicts)
 	}
+}
+
+func TestRejectResourceConflictsDetectsOverlappingLinkNetworks(t *testing.T) {
+	first := linkFor(t, "stl-net-a", "10.80.50.0/31", "10.80.50.1/31")
+	second := linkFor(t, "stl-net-b", "10.80.51.0/31", "10.80.51.1/31")
+	snapshot := state.EmptySnapshot()
+	snapshot.Upsert(state.LinkRecord{
+		Desired: first,
+		OwnedResources: []domain.ResourceClaim{{
+			Kind: domain.ResourceLinkSubnet,
+			Key:  "10.80.50.0/30",
+		}},
+	})
+
+	err := rejectResourceConflicts(snapshot, second.ID, []domain.ResourceClaim{{
+		Kind: domain.ResourceLinkAddress,
+		Key:  "10.80.50.2",
+	}})
+	if stlerr.CodeOf(err) != stlerr.CodeConflict {
+		t.Fatalf("err = %v, code = %q, want conflict", err, stlerr.CodeOf(err))
+	}
+}
+
+func TestResourceLockClaimsCoordinateOverlappingAddressSpace(t *testing.T) {
+	subnetLocks, err := resourceLockClaims([]domain.ResourceClaim{{
+		Kind: domain.ResourceLinkSubnet,
+		Key:  "10.80.60.0/30",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	addressLocks, err := resourceLockClaims([]domain.ResourceClaim{{
+		Kind: domain.ResourceLinkAddress,
+		Key:  "10.80.60.2",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := domain.ResourceClaim{Kind: "stl-address-space", Key: "ipv4"}.Canonical()
+	if !hasCanonicalClaim(subnetLocks, want) || !hasCanonicalClaim(addressLocks, want) {
+		t.Fatalf("overlapping address resources do not share the core allocation lock: subnet=%#v address=%#v", subnetLocks, addressLocks)
+	}
+}
+
+func TestValidatedClaimsRejectsCoreReservedKinds(t *testing.T) {
+	_, err := validatedClaims([]domain.ResourceClaim{{Kind: "stl-address-space", Key: "ipv4"}})
+	if err == nil {
+		t.Fatal("expected core-reserved resource kind to be rejected")
+	}
+}
+
+func hasCanonicalClaim(claims []domain.ResourceClaim, canonical string) bool {
+	for _, claim := range claims {
+		if claim.Canonical() == canonical {
+			return true
+		}
+	}
+	return false
 }
 
 func sameClaims(a, b []domain.ResourceClaim) bool {
