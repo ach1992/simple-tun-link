@@ -1,4 +1,4 @@
-# ADR-0003: Versioned setup links, manual fallback, and future control-plane compatibility
+# ADR-0003: Versioned setup links, manual fallback, and reusable integration compatibility
 
 - Status: Accepted
 - Date: 2026-10-07
