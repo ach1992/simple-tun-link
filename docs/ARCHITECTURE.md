@@ -2,7 +2,7 @@
 
 ## 1. Core model
 
-simple-tun-link owns a **Link**, not a higher-level backhaul/proxy/service.
+simple-tun-link owns a **Link**. It does not own or prescribe the architecture of software that consumes that Link.
 
 ~~~text
 External consumer
