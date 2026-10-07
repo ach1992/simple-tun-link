@@ -135,7 +135,7 @@ Health observation and repair are separate operations. A health check must not s
 - CLI JSON output is a first-class contract for automation; every machine-readable payload carries an explicit schema version and breaking schema changes require a version bump.
 - The automation surface provides idempotent desired-state semantics (for example, `stl link ensure ... --json`) so callers do not need to reproduce create/update/repair decision logic.
 - The engine treats Links as a collection keyed by stable Link ID; it must not assume one active Link, one Link per peer, or one Link per backend.
-- No daemon, central database, web panel, or multi-server control plane is required in v0.1.
+- No daemon, central database, remote orchestration service, or consumer-specific integration layer is required in v0.1.
 - Boundaries must allow arbitrary external software to reuse STL through stable machine contracts without reimplementing tunnel logic or forcing STL to model consumer-specific concepts.
 - Avoid premature public-library APIs; promote a stable reusable API only when a second real consumer proves the requirement.
 
