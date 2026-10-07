@@ -72,4 +72,4 @@ Keep dependencies minimal. Review additions to Go modules, CI actions, installer
 
 ## Reporting
 
-Until a dedicated security policy/contact is established, use a private repository-owner contact channel for suspected vulnerabilities rather than publishing exploitable details in a public Issue.
+Private vulnerability reporting is enabled for this public repository. Report suspected vulnerabilities through GitHub's private vulnerability reporting/Security Advisory flow rather than publishing exploitable details in a public Issue.
