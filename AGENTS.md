@@ -21,8 +21,9 @@ Hard boundaries:
 - Multi-Link is first-class: support 0..N Links per host, including multiple independent Links to the same peer pair when the backend/kernel can distinguish them.
 - Never assume one Link per host, peer, or backend; allocate collision-safe per-Link resources and keep create/update/repair/remove isolated from other Links.
 - Interactive UI must not own engine logic.
-- Preserve standalone use plus future script/agent/platform reuse without building speculative services.
+- Preserve standalone use plus generic reuse by arbitrary external software without designing STL around any specific future product.
 - Never make interactive text an automation API; machine-readable outputs are versioned and secret-safe, and desired-state automation is idempotent.
+- v0.1 secret-bearing pairing defaults to Quick Link: payloads are SENSITIVE, may carry receiver credentials, must never leak into ordinary logs/status/diagnostics, and must remain schema-extensible for a future secure/local-key exchange mode.
 
 Validation for ordinary Go changes:
 
