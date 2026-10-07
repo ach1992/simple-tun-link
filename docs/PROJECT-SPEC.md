@@ -22,6 +22,8 @@ Given two Linux servers with mutually reachable underlay endpoints, an operator 
 
 A successful link must be usable by normal IP applications and by future higher-level consumers such as backhaul or direct-tunnel software.
 
+Multi-Link operation is a v0.1 requirement. A host may own zero or more independent Links, including multiple Links to the same peer underlay endpoint pair. For example, A <-> B may simultaneously use GRE Native, WireGuard, and GRE/FOU with distinct Link Addresses and resources. The model must not enforce a one-Link-per-host or one-Link-per-peer singleton. A specific combination may be rejected only when the selected backend/kernel cannot unambiguously distinguish the required resources.
+
 Example conceptual result:
 
 ~~~text
@@ -75,7 +77,7 @@ A non-interactive CLI and machine-readable JSON output must expose the same core
 
 - v0.1 uses IPv4 point-to-point Link Addresses.
 - Default allocation target is an unused RFC1918 /31 pair.
-- Automatic allocation must check local routing/address state and, when peer information is available, avoid collisions on both endpoints.
+- Automatic allocation must check local routing/address state and, when peer information is available, avoid collisions on both endpoints and across every existing STL Link on the host.
 - Manual Link Address configuration remains available.
 - The internal model should not make future IPv6 support unnecessarily difficult.
 
@@ -118,6 +120,8 @@ Health observation and repair are separate operations. A health check must not s
 - Existing interfaces/configuration are never overwritten without identity validation.
 - Apply operations are idempotent.
 - Partial failure must roll back only state owned by the current operation.
+- Creating, updating, repairing, or removing one Link must not mutate or disrupt another Link.
+- Concurrent Link operations must coordinate collision-sensitive resource allocation so two operations cannot claim the same interface identity, Link Address, backend key/identifier, UDP/listen port, XFRM identity, route/firewall ownership, or persistence identity.
 
 ## 10. Architecture and performance constraints
 
@@ -125,6 +129,7 @@ Health observation and repair are separate operations. A health check must not s
 - Packet data should remain in Linux/native backend data paths; stl must not proxy packets for native backends.
 - Core domain/backend logic must not depend on the interactive menu.
 - CLI JSON output is a first-class contract for automation.
+- The engine treats Links as a collection keyed by stable Link ID; it must not assume one active Link, one Link per peer, or one Link per backend.
 - No daemon, central database, web panel, or multi-server control plane is required in v0.1.
 - Boundaries must allow a future local agent/API/panel to reuse the same engine rather than reimplement tunnel logic.
 - Avoid premature public-library APIs; promote a stable reusable API only when a second real consumer proves the requirement.
@@ -177,6 +182,8 @@ v0.1 is complete when:
 - repeated apply is idempotent and partial failures roll back owned state;
 - restart/reapply persistence works without corrupting unrelated network state;
 - machine-readable CLI output exists for core operations;
+- one host can operate multiple simultaneous Links to multiple peers and multiple independent Links to the same peer pair; the v0.1 E2E suite includes A <-> B with GRE Native, WireGuard, and GRE/FOU active together, each with independent Link Addresses;
+- removing or repairing one Link in a multi-Link scenario leaves the other Links operational and their traffic unaffected;
 - automated tests cover domain/config logic and Linux namespace/integration paths where technically feasible;
 - documentation is sufficient for another maintainer to continue work without chat history.
 
