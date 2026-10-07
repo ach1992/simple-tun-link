@@ -3,7 +3,6 @@ package domain
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
 	"net/netip"
 	"strings"
 
@@ -106,13 +105,7 @@ func (l Link) Validate() error {
 }
 
 func (r ResourceClaim) Validate() error {
-	if strings.TrimSpace(r.Kind) == "" || strings.TrimSpace(r.Key) == "" {
-		return fmt.Errorf("resource claim kind and key are required")
-	}
-	if strings.ContainsAny(r.Kind, "\r\n\x00") || strings.ContainsAny(r.Key, "\r\n\x00") {
-		return fmt.Errorf("resource claim contains invalid control characters")
-	}
-	return nil
+	return validateResourceClaim(r)
 }
 
 func (r ResourceClaim) Canonical() string {
