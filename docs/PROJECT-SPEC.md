@@ -5,6 +5,7 @@
 - Repository: ach1992/simple-tun-link
 - Product name: simple-tun-link
 - Canonical CLI: stl
+- Convenience alias: stlink, implemented as an alias/symlink to the same STL executable where the supported installer can provide it; it is not a second binary or separate interface contract.
 - Primary platform: Linux
 - Initial distribution target: Debian/Ubuntu-class Linux servers; detailed baseline and capability rules live in docs/SUPPORTED-ENVIRONMENTS.md
 
@@ -195,8 +196,7 @@ v0.1 is complete when:
 
 ## 14. Owner decisions still open
 
-These are intentionally not guessed:
+The project license is **MIT**. The canonical CLI remains `stl`; `stlink` is a low-cost convenience alias to the same executable when installed through the supported installer.
 
-- open-source license for the first release;
-- whether stlink should be shipped as an optional alias in addition to canonical stl;
+Still open:
 - exact secure-vs-one-shot setup-link UX for secret-bearing backends after implementation spike evidence.
