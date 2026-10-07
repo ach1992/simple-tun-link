@@ -152,7 +152,7 @@ External software -------> versioned CLI / JSON contract
                          stable Link Address
 ~~~
 
-STL intentionally defines only its own contracts and lifecycle. It does not define the architecture, inventory, roles, workflow, ownership model, or product behavior of software that may consume it. Consumers may be small scripts, services, agents, control systems, applications, or future software that does not exist yet.
+STL intentionally defines only its own contracts and lifecycle. It does not define the architecture, inventory, roles, workflow, ownership model, or product behavior of software that may consume it. Consumers may take any form. STL defines only the stable contracts needed to use Link functionality and does not prescribe consumer architecture.
 
 The reusable boundary is kept generic through stable Link IDs, desired/observed state, idempotent ensure/apply behavior, versioned state and JSON schemas, deterministic errors/exit semantics, multi-Link isolation, and UI-independent engine logic. A public in-process Go API is not frozen until a real second in-process consumer proves that need.
 
