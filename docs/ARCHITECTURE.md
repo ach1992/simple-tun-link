@@ -178,7 +178,7 @@ No blind:
 
 ### Multi-Link isolation and allocation
 
-Multi-Link behavior is a first-class v0.1 requirement, not a future panel-only capability.
+Multi-Link behavior is a first-class v0.1 requirement, not a capability deferred to some external consumer.
 
 A host may maintain 0..N Links. Multiple Links may connect the same two underlay endpoints at the same time, including different backend/encapsulation choices such as GRE Native, WireGuard, and GRE/FOU. Each Link has its own stable Link ID, Link Address pair, lifecycle, observed state, and owned resources.
 
