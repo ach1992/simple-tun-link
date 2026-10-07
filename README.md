@@ -2,24 +2,25 @@
 
 **simple-tun-link** is a fast, simple, extensible point-to-point Layer-3 link engine for Linux.
 
-The project creates a stable **Link Address** between two Linux servers over a selected tunnel backend. Applications and higher-level transports can use that address like any other IPv4 address, without needing to know whether the underlying link is GRE, IPIP, WireGuard, or IPsec/XFRM.
+It creates and manages independent **Link Addresses** between Linux servers over selected tunnel backends. Applications and higher-level transports can use those addresses like normal IPv4 addresses without needing to know whether the underlying Link uses GRE, IPIP, WireGuard, or IPsec/XFRM.
 
 Canonical CLI: **stl**
 
-> Status: foundation/bootstrap. Tunnel backends are tracked in GitHub Issues and are not implemented yet.
+> Status: early development. The project foundation and architecture are established; tunnel backends are not implemented yet.
 
 ## Why
 
-The immediate goal is intentionally small:
+The immediate product stays intentionally small:
 
-- install quickly on two servers;
-- create one point-to-point L3 link;
-- use GRE as the default backend;
-- support multiple underlay methods without changing the consumer-facing Link Address;
-- provide simple interactive setup, manual setup, and versioned setup-link exchange;
-- diagnose MTU/connectivity problems without turning the tool into a general network-management suite.
+- install quickly on two or more servers;
+- create and manage one or more independent point-to-point L3 Links;
+- allow multiple Links to different peers and multiple simultaneous Links to the same peer pair;
+- use GRE Native as the default path;
+- keep common setup automatic while preserving advanced controls;
+- provide interactive, manual, and versioned setup-link workflows;
+- diagnose MTU/connectivity problems without becoming a general network-management suite.
 
-The architecture also preserves a clean future path for a panel/agent and for higher-level consumers such as backhaul or direct-tunnel systems.
+STL is both a standalone tool and a reusable connectivity capability. A human can use `stl` directly, another script can use its versioned CLI/JSON contract, and a future agent or generic server/capability management platform can reuse the same engine without reimplementing tunnel logic.
 
 ## v0.1 backend scope
 
@@ -34,32 +35,34 @@ The architecture also preserves a clean future path for a panel/agent and for hi
 | WireGuard | UDP | Encrypted/authenticated | Yes |
 | IPsec/XFRM | ESP / NAT-T | Encrypted/authenticated | Yes |
 
-VXLAN and Geneve are intentionally not v0.1 scope. They solve broader overlay/L2 use cases and can be reconsidered if a concrete consumer requires them.
+VXLAN and Geneve are intentionally outside v0.1. They solve broader overlay/L2 use cases and can be reconsidered only when a concrete consumer needs them.
 
 ## Core terminology
 
-- **Underlay Address** — the reachable address used to establish the tunnel.
-- **Link Address** — the point-to-point private address created by simple-tun-link.
-- **Peer Link Address** — the Link Address on the other endpoint.
+- **Underlay Address** — reachable address used to establish the tunnel.
+- **Link Address** — point-to-point private address created by STL.
+- **Peer Link Address** — Link Address on the other endpoint.
 - **Backend** — GRE, IPIP, WireGuard, or IPsec/XFRM.
-- **Encapsulation** — a backend-specific carrier such as Native, FOU, or GUE.
+- **Encapsulation** — backend-specific carrier such as Native, FOU, or GUE.
 
-No geography-specific roles such as “Iran” or “Kharej” are part of the data model.
+Geographic/product roles such as “Iran” or “Kharej” are intentionally outside the STL data model. A future higher-level platform may use those labels, while STL remains local/peer based.
 
 ## Project map
 
 - [Project specification](docs/PROJECT-SPEC.md) — canonical purpose, scope, constraints, and success criteria.
 - [Architecture](docs/ARCHITECTURE.md) — technical boundaries and runtime model.
+- [Supported environments](docs/SUPPORTED-ENVIRONMENTS.md) — platform and backend capability policy.
 - [Development](docs/DEVELOPMENT.md) — engineering rules and validation commands.
 - [Security](docs/SECURITY.md) — trust, credential, firewall, and setup-link rules.
+- [References and provenance](docs/REFERENCES.md) — predecessor/research inputs and license boundaries.
 - [Architecture decisions](docs/decisions/) — durable decisions and rationale.
-- GitHub Issues — authoritative unresolved work and implementation backlog.
+- GitHub Issues and milestone `v0.1.0` — authoritative unresolved work and execution backlog.
 
 ## Development
 
-The control plane is written in Go. Data-plane traffic remains in the Linux kernel or the selected native tunnel implementation.
+The control plane is written in Go. Native backend packet traffic stays in the Linux kernel/native implementation.
 
-Current bootstrap commands:
+Current validation commands:
 
 ~~~bash
 go test ./...
@@ -71,4 +74,4 @@ See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) before making implementation chan
 
 ## License
 
-No open-source license has been selected yet. License selection is intentionally tracked as an owner decision before the first release.
+No open-source license has been selected yet. License selection is tracked as an owner decision before the first tagged release.

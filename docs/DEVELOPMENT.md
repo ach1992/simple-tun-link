@@ -15,7 +15,7 @@
 
 ## Toolchain
 
-The project targets Go 1.27 for initial development.
+The project language baseline is Go 1.27.0 and the repository pins the current development/build toolchain with the `toolchain` directive. CI must use that directive through `actions/setup-go` rather than silently selecting an older patch.
 
 Use the standard toolchain commands:
 
@@ -48,6 +48,14 @@ Command execution must:
 - validate parsed outputs;
 - never log credentials/private keys;
 - be wrapped behind narrow Linux integration functions so tests can substitute behavior.
+
+## Machine-readable contracts
+
+Interactive terminal text is not an API.
+
+Every JSON payload must include a top-level integer `schema_version`. Additive backward-compatible fields may keep the same schema version; breaking semantic/shape changes require a version bump and explicit compatibility handling. JSON output and exit codes must never expose secret material.
+
+Automation should prefer idempotent desired-state operations such as `stl link ensure ... --json` rather than reproducing lifecycle branching outside STL.
 
 ## State
 
@@ -87,7 +95,10 @@ Use network namespaces and disposable interfaces for:
 - failure rollback;
 - MTU behavior;
 - conflicting resources;
-- two simultaneous links;
+- multiple simultaneous Links to different peers;
+- same-peer coexistence, including GRE Native + WireGuard + GRE/FOU on one A <-> B pair;
+- isolation when one Link is removed/repaired while siblings remain active;
+- concurrent allocation attempts for collision-sensitive resources;
 - mismatched peer configuration;
 - reboot/reapply semantics where feasible;
 - backend isolation.
@@ -97,7 +108,7 @@ Privileged tests must run only in an explicitly disposable environment and may n
 ## Git/GitHub
 
 - main is the integration target.
-- Use focused branches and reviewable PRs for substantive code.
+- Use focused branches and reviewable PRs for substantive code; `main` is protected by required PR + CI once repository rules are applied.
 - Issues own unresolved durable work.
 - ADRs own lasting architectural decisions.
 - Do not mirror live status into docs.
