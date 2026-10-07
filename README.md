@@ -4,7 +4,8 @@
 
 It creates and manages independent **Link Addresses** between Linux servers over selected tunnel backends. Applications and higher-level transports can use those addresses like normal IPv4 addresses without needing to know whether the underlying Link uses GRE, IPIP, WireGuard, or IPsec/XFRM.
 
-Canonical CLI: **stl**
+Canonical CLI: **stl**  
+Convenience alias: **stlink** (same executable/behavior when installed by the supported installer)
 
 > Status: early development. The project foundation and architecture are established; tunnel backends are not implemented yet.
 
@@ -74,4 +75,4 @@ See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) before making implementation chan
 
 ## License
 
-No open-source license has been selected yet. License selection is tracked as an owner decision before the first tagged release.
+Licensed under the [MIT License](LICENSE).
