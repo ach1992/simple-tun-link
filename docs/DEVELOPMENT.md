@@ -11,7 +11,7 @@
 7. Add abstractions only when current implementation has at least two real implementations/consumers or a proven near-term need.
 8. Optimize from measurement, not folklore.
 9. Avoid global host tuning unless the selected backend demonstrably requires a narrowly scoped change.
-10. Keep future panel/agent use possible through deterministic CLI/JSON/core boundaries without building the panel now.
+10. Keep generic external reuse possible through deterministic CLI/JSON/core boundaries without designing around any particular future consumer.
 
 ## Toolchain
 
