@@ -18,6 +18,8 @@ Hard boundaries:
 - No firewall flush/default-route rewrite.
 - No swallowed correctness errors or unconditional success messages.
 - Operations must become idempotent and rollback owned partial state.
+- Multi-Link is first-class: support 0..N Links per host, including multiple independent Links to the same peer pair when the backend/kernel can distinguish them.
+- Never assume one Link per host, peer, or backend; allocate collision-safe per-Link resources and keep create/update/repair/remove isolated from other Links.
 - Interactive UI must not own engine logic.
 - Preserve future CLI JSON/panel/agent reuse without building speculative services.
 

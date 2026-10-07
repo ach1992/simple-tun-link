@@ -129,7 +129,9 @@ Persist only what is needed to recreate and manage links.
 
 Direction:
 - versioned state schema;
-- one stable Link ID independent of interface display name;
+- Links are a collection, not a singleton;
+- zero or more Links may exist on a host, including multiple independent Links to the same peer underlay endpoint pair;
+- one stable Link ID independent of interface display name and peer address;
 - atomic write/replace;
 - restrictive permissions for secret-bearing state;
 - no central database in v0.1;
@@ -152,6 +154,20 @@ No blind:
 - route table flush;
 - global sysctl overwrite;
 - config-file overwrite without identity.
+
+### Multi-Link isolation and allocation
+
+Multi-Link behavior is a first-class v0.1 requirement, not a future panel-only capability.
+
+A host may maintain 0..N Links. Multiple Links may connect the same two underlay endpoints at the same time, including different backend/encapsulation choices such as GRE Native, WireGuard, and GRE/FOU. Each Link has its own stable Link ID, Link Address pair, lifecycle, observed state, and owned resources.
+
+No resource identity may be derived solely from peer address or backend name. Planning/validation must account for every collision-sensitive resource relevant to the selected backend, including interface identity, Link Address/subnet, GRE key, FOU/GUE UDP port, WireGuard interface/listen port, XFRM interface/policy identity, routes, firewall entries, state files, and persistence units/configuration.
+
+A backend may reject a requested same-peer combination only when the underlying kernel/backend cannot distinguish it safely; the rejection must be explicit and must not silently replace or reuse another Link.
+
+Concurrent create/update/remove operations must be safe. Per-Link mutation should be isolated, while host-wide coordination is limited to allocation/ownership surfaces where concurrent operations could otherwise claim the same resource. Do not introduce a coarse global lock unless evidence shows it is necessary.
+
+Removing, repairing, or rolling back one Link must verify current resource identity and affect only that Link's owned resources. Shared host prerequisites must remain available while any other Link still depends on them.
 
 ## 7. Backend contract principles
 
@@ -291,7 +307,7 @@ v0.1 does not build a daemon/panel, but it preserves these options:
 - core behavior is independent from terminal UI;
 - direct CLI subcommands expose deterministic operations;
 - JSON output is stable enough for automation;
-- Link IDs are stable;
+- Link IDs are stable and multiple Links, including same-peer Links, are first-class;
 - desired/observed state are separable;
 - backends expose common lifecycle/status semantics.
 
