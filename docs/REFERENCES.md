@@ -52,4 +52,4 @@ Even when license-compatible reuse might be possible later, prefer independent i
 
 ## Reuse rule
 
-Ideas, standards, and observed behavior may inform STL design. Source-code reuse is a separate decision and requires explicit provenance/license compatibility. Before the first release, Issue #13 owns the final STL license and repository-wide compatibility review.
+STL is licensed under the MIT License. Ideas, standards, and observed behavior may inform STL design. Source-code reuse is a separate decision and still requires explicit provenance/license compatibility. BackPack implementation code remains incompatible with STL's MIT licensing unless a future licensing decision explicitly changes that boundary; Golden-GRE direct code reuse would require deliberate Apache-2.0 attribution/notice handling. Independent reimplementation remains the default.
