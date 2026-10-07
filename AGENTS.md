@@ -21,7 +21,8 @@ Hard boundaries:
 - Multi-Link is first-class: support 0..N Links per host, including multiple independent Links to the same peer pair when the backend/kernel can distinguish them.
 - Never assume one Link per host, peer, or backend; allocate collision-safe per-Link resources and keep create/update/repair/remove isolated from other Links.
 - Interactive UI must not own engine logic.
-- Preserve future CLI JSON/panel/agent reuse without building speculative services.
+- Preserve standalone use plus future script/agent/platform reuse without building speculative services.
+- Never make interactive text an automation API; machine-readable outputs are versioned and secret-safe, and desired-state automation is idempotent.
 
 Validation for ordinary Go changes:
 
