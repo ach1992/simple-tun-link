@@ -23,14 +23,20 @@ func TestVersionJSON(t *testing.T) {
 		t.Fatalf("run() code = %d, want 0; stderr=%q", code, errOut.String())
 	}
 
-	var got map[string]string
+	var got struct {
+		SchemaVersion int    `json:"schema_version"`
+		Version       string `json:"version"`
+		Commit        string `json:"commit"`
+		Date          string `json:"date"`
+	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("version output is not JSON: %v", err)
 	}
-	for _, key := range []string{"version", "commit", "date"} {
-		if got[key] == "" {
-			t.Fatalf("version JSON missing %q: %#v", key, got)
-		}
+	if got.SchemaVersion != jsonSchemaVersion {
+		t.Fatalf("schema_version = %d, want %d", got.SchemaVersion, jsonSchemaVersion)
+	}
+	if got.Version == "" || got.Commit == "" || got.Date == "" {
+		t.Fatalf("version JSON contains empty fields: %#v", got)
 	}
 }
 
