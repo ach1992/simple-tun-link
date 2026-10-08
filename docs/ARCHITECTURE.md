@@ -201,9 +201,16 @@ a changed administrator-owned file. Unit removal uses renameat2 with
 RENAME_NOREPLACE to a private recovery path and verifies the moved inode
 before retiring it. Missing-unit compensation uses exclusive no-overwrite
 publication. Filesystems without the required atomic rename facilities fail
-closed; STL does not fall back to clobbering rename. Incomplete or ambiguous
-recovery fails explicitly; STL does not disable or overwrite identities
-it cannot prove it owns.
+closed; STL does not fall back to clobbering rename. Before any unit
+content read, a non-following, nonblocking file descriptor establishes regular
+inode identity; the content is bounded to 64 KiB. Symlinks, FIFOs, devices,
+changed identities, and oversized files fail closed. When an exchanged or
+retired identity cannot be proven safe to discard, its private .stl-unit-*
+or .stl-retire-* recovery name is retained rather than deleted, including
+when the durability sync fails. Such protected recovery material requires
+manual identity reconciliation; it is never silently cleaned up. Incomplete
+or ambiguous recovery fails explicitly; STL does not disable or overwrite
+identities it cannot prove it owns.
 
 The restore unit needs an installed, durable stl executable path. Real
 backend adapters register through their own tracked implementation Issues;

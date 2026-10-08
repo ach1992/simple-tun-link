@@ -45,16 +45,22 @@ func (p SystemdPersistence) exchangeOwnedUnit(dir, path string, expected, conten
 	if err != nil {
 		return err
 	}
+	incoming, err := os.Lstat(staged)
+	if err != nil {
+		// The freshly staged path already changed; never blindly unlink it.
+		return fmt.Errorf("%w: cannot inspect incoming staging identity at %q: %v", errUnitIdentityConflict, staged, err)
+	}
 	cleanupStaged := true
 	defer func() {
-		if cleanupStaged {
+		if !cleanupStaged {
+			return
+		}
+		// Only dispose of this operation's own incoming staged inode.
+		// If an administrator replaced the staging name, retain it.
+		if current, err := os.Lstat(staged); err == nil && os.SameFile(current, incoming) {
 			_ = os.Remove(staged)
 		}
 	}()
-	incoming, err := os.Lstat(staged)
-	if err != nil {
-		return err
-	}
 	if p.beforeUnitMutation != nil {
 		p.beforeUnitMutation(phase)
 	}
@@ -64,28 +70,55 @@ func (p SystemdPersistence) exchangeOwnedUnit(dir, path string, expected, conten
 	}
 	// The displaced unit is now at the private staging name. Check both the
 	// original inode and bytes, not only the marker or expected text.
-	displaced, statErr := os.Lstat(staged)
-	data, readErr := os.ReadFile(staged)
-	matched := statErr == nil && readErr == nil && displaced.Mode().IsRegular() &&
-		os.SameFile(before, displaced) && bytes.Equal(data, expected)
+	data, displaced, readErr := readRegularUnit(staged)
+	matched := readErr == nil && os.SameFile(before, displaced) && bytes.Equal(data, expected)
 	if !matched {
-		// Revert by exchange, never by overwriting/deleting the displaced
-		// administrator file. If somebody also changed our new canonical
-		// inode, keep the displaced inode at the staging path for recovery.
+		// From this point the staging path contains an unverified identity.
+		// Never invoke the ordinary deferred unlink after a conflict, even
+		// following successful reversal. Another root administrator could
+		// change the canonical inode between the check and reverse exchange,
+		// causing a second foreign identity to land at this staging path.
+		// Retaining a recoverable staging file is better than destroying an
+		// independent unit; operators can remove it after reconciliation.
+		cleanupStaged = false
+		reversed := false
 		if current, err := os.Lstat(path); err == nil && os.SameFile(current, incoming) {
+			if p.afterUnitTransition != nil {
+				p.afterUnitTransition("before-conflict-reverse")
+			}
 			if err := unix.Renameat2(unix.AT_FDCWD, staged, unix.AT_FDCWD, path, unix.RENAME_EXCHANGE); err == nil {
-				return fmt.Errorf("%w: external destination retained, guarded exchange reverted", errUnitIdentityConflict)
+				reversed = true
+				if p.afterUnitTransition != nil {
+					p.afterUnitTransition("after-conflict-reverse")
+				}
 			}
 		}
-		// A temp name holding an unknown/foreign inode must not be deleted.
-		// Preserve it for administrator-led recovery.
-		cleanupStaged = false
 		preserved, preserveErr := preserveUnitStaging(staged)
-		return fmt.Errorf("%w: cannot safely reverse exchange; displaced unit preserved at %q: %v", errUnitIdentityConflict, preserved, preserveErr)
+		if preserveErr != nil {
+			return fmt.Errorf("%w: reversal=%t; cannot verify recovery staging %q: %w", errUnitIdentityConflict, reversed, staged, preserveErr)
+		}
+		// Attempt to make the recovery pathname durable; preserve it even
+		// when fsync fails and explicitly report that uncertain durability.
+		if err := p.syncRetirementDirectory(dir); err != nil {
+			return fmt.Errorf("%w: reversal=%t; recovery staging retained at %q but durability is uncertain: %w", errUnitIdentityConflict, reversed, preserved, err)
+		}
+		return fmt.Errorf("%w: reversal=%t; displaced recovery identity retained at %q", errUnitIdentityConflict, reversed, preserved)
 	}
-	// The displaced inode was exactly STL's expected prior unit. Only now
-	// is it safe to remove the private copy. The published canonical path is
-	// still the new unit when no independent operator intervenes.
+	// The displaced inode was exactly STL's expected prior unit. Recheck
+	// the private staging name immediately before retiring it: a different
+	// root-operated manager may have moved another object there since the
+	// first snapshot. A changed name is recovery evidence, not garbage.
+	if p.afterUnitTransition != nil {
+		p.afterUnitTransition("before-verified-staging-retirement")
+	}
+	recheckData, recheckInfo, recheckErr := readRegularUnit(staged)
+	if recheckErr != nil || !os.SameFile(before, recheckInfo) || !bytes.Equal(recheckData, expected) {
+		cleanupStaged = false
+		return &unitPublicationError{
+			cause:        fmt.Errorf("%w: prior staging changed before retirement: %v", errUnitIdentityConflict, recheckErr),
+			recoveryPath: staged,
+		}
+	}
 	if err := os.Remove(staged); err != nil {
 		return &unitPublicationError{cause: fmt.Errorf("retire verified prior unit: %w", err)}
 	}
@@ -124,30 +157,61 @@ func (p SystemdPersistence) retireOwnedUnit(dir, path string, expected []byte, p
 	if err := unix.Renameat2(unix.AT_FDCWD, path, unix.AT_FDCWD, backup, unix.RENAME_NOREPLACE); err != nil {
 		return fmt.Errorf("atomic no-replace unit retirement unavailable: %w", err)
 	}
-	moved, statErr := os.Lstat(backup)
-	data, readErr := os.ReadFile(backup)
-	matched := statErr == nil && readErr == nil && moved.Mode().IsRegular() &&
-		os.SameFile(before, moved) && bytes.Equal(data, expected)
+	data, moved, readErr := readRegularUnit(backup)
+	matched := readErr == nil && os.SameFile(before, moved) && bytes.Equal(data, expected)
 	if !matched {
-		// Restore the displaced foreign identity only if canonical remains
-		// absent. Never overwrite a newer unit installed concurrently.
-		if err := os.Link(backup, path); err == nil {
-			_ = syncOwnedDir(dir)
-			_ = os.Remove(backup)
-			return fmt.Errorf("%w: displaced unexpected identity restored without overwrite", errUnitIdentityConflict)
+		// Restore exclusively: a canonical unit installed in the meantime
+		// must never be overwritten. Keep the private recovery name even
+		// when link and directory sync succeed. It is the only independent
+		// recovery material if the restored pathname later proves uncertain.
+		if p.afterUnitTransition != nil {
+			p.afterUnitTransition("before-retirement-conflict-restore")
 		}
-		return fmt.Errorf("%w: displaced identity preserved for recovery at %q", errUnitIdentityConflict, backup)
+		if err := os.Link(backup, path); err != nil {
+			// Even a failed canonical relink must not leave the newly moved
+			// protected recovery filename without attempting directory sync.
+			syncErr := p.syncRetirementDirectory(dir)
+			return fmt.Errorf("%w: exclusive restoration unavailable; displaced identity retained at %q: %w", errUnitIdentityConflict, backup, errors.Join(err, syncErr))
+		}
+		if p.afterUnitTransition != nil {
+			p.afterUnitTransition("after-retirement-conflict-link")
+		}
+		if err := p.syncRetirementDirectory(dir); err != nil {
+			// Durability was not established. Do not discard the backup or
+			// imply that the canonical hardlink will survive a crash.
+			return fmt.Errorf("%w: restoration durability uncertain; displaced identity retained at %q: %w", errUnitIdentityConflict, backup, err)
+		}
+		return fmt.Errorf("%w: unexpected identity exclusively restored; protected recovery copy retained at %q", errUnitIdentityConflict, backup)
 	}
-	if err := syncOwnedDir(dir); err != nil {
-		// Retain a hardlink for safe repair of a partially durable removal.
-		if restoreErr := os.Link(backup, path); restoreErr != nil {
-			return fmt.Errorf("unit retirement directory sync failed; verified unit retained at %q: %w", backup, errors.Join(err, restoreErr))
-		}
-		_ = os.Remove(backup)
-		return fmt.Errorf("unit retirement directory sync failed: %w", err)
+	if err := p.syncRetirementDirectory(dir); err != nil {
+		// Even for a verified owned inode, keep the backup if filesystem
+		// durability cannot be proven. Exclusively re-link canonical when
+		// possible and require the operator to reconcile the recovery name.
+		restoreErr := os.Link(backup, path)
+		// Do not unlink either name; if possible, sync the recovery links
+		// with a second best-effort attempt and report the first failure.
+		secondSyncErr := p.syncRetirementDirectory(dir)
+		return fmt.Errorf("unit retirement directory sync failed; owned recovery copy retained at %q: %w", backup, errors.Join(err, restoreErr, secondSyncErr))
+	}
+	// Revalidate the moved inode immediately before deleting the private
+	// recovery name. An unexpected replacement must be retained rather than
+	// unlinked merely because an earlier check passed.
+	if p.afterUnitTransition != nil {
+		p.afterUnitTransition("before-verified-backup-retirement")
+	}
+	recheckData, recheckInfo, recheckErr := readRegularUnit(backup)
+	if recheckErr != nil || !os.SameFile(before, recheckInfo) || !bytes.Equal(recheckData, expected) {
+		return fmt.Errorf("%w: moved staging changed before final unlink; preserve %q: %v", errUnitIdentityConflict, backup, recheckErr)
 	}
 	if err := os.Remove(backup); err != nil {
 		return fmt.Errorf("cannot release verified retired unit staging: %w", err)
+	}
+	return syncOwnedDir(dir)
+}
+
+func (p SystemdPersistence) syncRetirementDirectory(dir string) error {
+	if p.syncUnitDirectory != nil {
+		return p.syncUnitDirectory(dir)
 	}
 	return syncOwnedDir(dir)
 }
@@ -156,18 +220,12 @@ func (p SystemdPersistence) exactUnitIdentity(path string, expected []byte) (os.
 	if err := p.guardExactPublishedUnit(path, expected); err != nil {
 		return nil, err
 	}
-	info, err := os.Lstat(path)
+	current, info, err := readRegularUnit(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: cannot safely inspect expected unit: %w", errUnitIdentityConflict, err)
 	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("expected owned unit is not regular")
-	}
-	// Reconfirm contents after taking the inode snapshot; an in-place
-	// change detected here is an identity conflict, not a reason to write.
-	current, err := os.ReadFile(path)
-	if err != nil || !bytes.Equal(current, expected) {
-		return nil, fmt.Errorf("%w: expected unit changed during inspection", errUnitIdentityConflict)
+	if !bytes.Equal(current, expected) {
+		return nil, fmt.Errorf("%w: expected unit contents changed during inspection", errUnitIdentityConflict)
 	}
 	return info, nil
 }

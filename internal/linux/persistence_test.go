@@ -406,7 +406,7 @@ func TestRemoveRestoreCanceledEnablementInspectionNeverClaimsSafeNoop(t *testing
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	runner := &recordingRunner{} // Intentionally ignores caller cancellation.
-	manager := SystemdPersistence{Runner: runner, UnitDir: t.TempDir()}
+	manager := SystemdPersistence{Runner: runner, UnitDir: t.TempDir(), VerifyUnitPath: func(string) error { return nil }}
 	err := manager.RemoveRestore(ctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled inspection was accepted as a safe cleanup: %v", err)
