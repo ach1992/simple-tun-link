@@ -181,6 +181,15 @@ non-writable, symlink-free directory chain; runtime-only systemd
 enablement, alias/linked/masked states, and ambiguous identities fail
 closed rather than pretending reboot activation is durable.
 
+Every backend rollback of an already-applied change runs with a
+cancellation-detached, bounded cleanup context, including non-systemd
+operations. For systemd unit writes, post-rename durability errors require
+verifying the exact published owned file before restoring the prior unit
+contents and refreshing systemd. Incomplete or ambiguous compensation fails
+explicitly, never as successful activation. Last-Link cleanup must verify
+that no enabled/ambiguous systemd identity remains when its owned unit file
+is already absent; STL does not disable identities it cannot prove it owns.
+
 The restore unit needs an installed, durable stl executable path. Real
 backend adapters register through their own tracked implementation Issues;
 this CLI/persistence substrate does not provide a synthetic production

@@ -100,9 +100,17 @@ func TestSystemdPersistenceRejectsArbitraryExecutable(t *testing.T) {
 
 func TestSystemdPersistenceRefusesEnabledIdentityWithoutOwnedFile(t *testing.T) {
 	runner := &recordingRunner{enabled: map[string]bool{restoreSystemdUnitName: true}}
-	manager := SystemdPersistence{Runner: runner, UnitDir: t.TempDir()}
-	if _, _, err := manager.EnsureRestore(context.Background(), "/usr/local/bin/stl"); err == nil {
-		t.Fatal("expected ambiguous pre-enabled unit identity to be rejected")
+	unitDir := t.TempDir()
+	manager := SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }}
+	_, _, err := manager.EnsureRestore(context.Background(), "/usr/local/bin/stl")
+	if err == nil || !strings.Contains(err.Error(), "without an STL-owned unit file") {
+		t.Fatalf("expected actual enabled-without-owned-file branch, got %v", err)
+	}
+	if len(runner.commands) != 1 || !strings.HasPrefix(runner.commands[0], "systemctl is-enabled") {
+		t.Fatalf("ambiguous identity was mutated: %v", runner.commands)
+	}
+	if _, err := os.Stat(filepath.Join(unitDir, restoreSystemdUnitName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected ambiguous identity installed a file: %v", err)
 	}
 }
 
@@ -306,5 +314,81 @@ func TestSystemdFailedEnabledInspectionDoesNotClaimPersistence(t *testing.T) {
 	}
 	if runner.enabledAttempted {
 		t.Fatal("failed inspection caused unexpected enable mutation")
+	}
+}
+
+// A missing owned unit file does not authorize disabling or overlooking
+// enabled or ambiguously aliased systemd identities.
+func TestRemoveRestoreMissingAndExistingIdentityPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		enabled      bool
+		failInspect  bool
+		existing     string
+		wantError    string
+		wantCommands int
+	}{
+		{name: "missing disabled", wantCommands: 1},
+		{name: "missing enabled orphan", enabled: true, wantError: "lacks an STL-owned unit", wantCommands: 1},
+		{name: "missing inspection fails", failInspect: true, wantError: "cannot verify absent", wantCommands: 1},
+		{name: "existing owned enabled", existing: "owned", enabled: true, wantCommands: 3},
+		{name: "existing foreign", existing: "foreign", enabled: true, wantError: "non-STL", wantCommands: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, restoreSystemdUnitName)
+			switch tc.existing {
+			case "owned":
+				unit, err := renderRestoreSystemdUnit("/usr/local/bin/stl")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(unit), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			case "foreign":
+				if err := os.WriteFile(path, []byte("[Unit]\nDescription=foreign\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			runner := &recordingRunner{enabled: map[string]bool{restoreSystemdUnitName: tc.enabled}}
+			if tc.failInspect {
+				runner.failOn = "systemctl is-enabled " + restoreSystemdUnitName
+			}
+			manager := SystemdPersistence{Runner: runner, UnitDir: dir}
+			err := manager.RemoveRestore(context.Background())
+			if tc.wantError == "" && err != nil {
+				t.Fatalf("unexpected failure: %v", err)
+			}
+			if tc.wantError != "" && (err == nil || !strings.Contains(err.Error(), tc.wantError)) {
+				t.Fatalf("wrong error: got %v, want %q", err, tc.wantError)
+			}
+			if len(runner.commands) != tc.wantCommands {
+				t.Fatalf("unexpected systemctl calls: %v", runner.commands)
+			}
+			if tc.wantError != "" {
+				if tc.existing == "foreign" {
+					got, err := os.ReadFile(path)
+					if err != nil || !strings.Contains(string(got), "foreign") {
+						t.Fatalf("foreign unit mutated: %q %v", got, err)
+					}
+				} else if tc.existing == "" {
+					if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+						t.Fatalf("missing unit created: %v", statErr)
+					}
+				}
+				if !runner.enabled[restoreSystemdUnitName] && tc.enabled {
+					t.Fatal("foreign identity disabled")
+				}
+			}
+			if tc.existing == "owned" && err == nil {
+				if runner.enabled[restoreSystemdUnitName] {
+					t.Fatal("owned unit remained enabled")
+				}
+				if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+					t.Fatalf("owned unit remains: %v", statErr)
+				}
+			}
+		})
 	}
 }

@@ -170,7 +170,7 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 	if e.restorePersistence != nil {
 		persistenceRelease, lockErr := e.locks.Acquire(ctx, []domain.ResourceClaim{restoreLockClaim()})
 		if lockErr != nil {
-			return Result{}, e.rollbackPersistenceFailure(ctx, request, link, undo,
+			return Result{}, e.rollbackFailure(ctx, request, link, undo,
 				stlerr.Wrap(stlerr.CodeState, string(request.Operation), string(link.ID), string(link.Backend), "cannot lock restore persistence", lockErr))
 		}
 		defer persistenceRelease()
@@ -179,7 +179,7 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 			var ensureErr error
 			persistenceUndo, _, ensureErr = e.restorePersistence.EnsureRestore(ctx, e.restoreExecutable)
 			if ensureErr != nil {
-				return Result{}, e.rollbackPersistenceFailure(ctx, request, link, undo,
+				return Result{}, e.rollbackFailure(ctx, request, link, undo,
 					stlerr.Wrap(stlerr.CodeState, "ensure", string(link.ID), string(link.Backend), "cannot activate restore persistence", ensureErr))
 			}
 		}
@@ -229,7 +229,7 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 						"state commit failed and restore persistence rollback did not complete", errors.Join(commitPublic, rollbackErr))
 				}
 			}
-			return Result{}, e.rollbackFailure(rollbackCtx, request, link, undo, commitPublic)
+			return Result{}, e.rollbackWithContext(rollbackCtx, request, link, undo, commitPublic)
 		}
 		return Result{}, e.rollbackFailure(ctx, request, link, undo, commitPublic)
 	}
@@ -252,16 +252,21 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 	}, nil
 }
 
-// A persistence failure can coincide with request cancellation after backend
-// host mutation. Give owned rollback a separate bounded context rather than
-// passing a canceled request context that prevents any cleanup.
-func (e *Engine) rollbackPersistenceFailure(ctx context.Context, request backend.Request, link domain.Link, undo backend.Rollback, original error) error {
+// Every compensation of mutated backend resources receives its own bounded,
+// cancellation-detached cleanup context, even on non-systemd hosts. The
+// original cancellation/failure stays observable in the result.
+func (e *Engine) rollbackFailure(ctx context.Context, request backend.Request, link domain.Link, undo backend.Rollback, original error) error {
+	if undo == nil {
+		return original
+	}
 	rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	return e.rollbackFailure(rollbackCtx, request, link, undo, original)
+	return e.rollbackWithContext(rollbackCtx, request, link, undo, original)
 }
 
-func (e *Engine) rollbackFailure(ctx context.Context, request backend.Request, link domain.Link, undo backend.Rollback, original error) error {
+// rollbackWithContext reuses a shared 30-second cleanup budget when unit
+// compensation has already started, rather than granting another full period.
+func (e *Engine) rollbackWithContext(ctx context.Context, request backend.Request, link domain.Link, undo backend.Rollback, original error) error {
 	if undo == nil {
 		return original
 	}
