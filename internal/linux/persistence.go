@@ -319,6 +319,9 @@ func (p SystemdPersistence) RemoveRestore(ctx context.Context) error {
 
 func (p SystemdPersistence) isEnabled(ctx context.Context, systemctl, name string) (bool, error) {
 	result, err := p.Runner.Run(ctx, systemctl, "is-enabled", name)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, fmt.Errorf("systemd enablement inspection canceled: %w", ctxErr)
+	}
 	state := strings.TrimSpace(string(result.Stdout))
 	switch state {
 	case "enabled":

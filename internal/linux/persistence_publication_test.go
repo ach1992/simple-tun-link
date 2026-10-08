@@ -3,6 +3,7 @@ package linux
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -177,13 +178,33 @@ func expectSystemdOperations(t *testing.T, actual []string, fragments ...string)
 	}
 }
 
+// This systemctl double enforces a usable deadline on compensation commands,
+// unlike the ordinary permissive recording runner.
+type boundedRepairRunner struct {
+	recordingRunner
+	repairCommands int
+}
+
+func (r *boundedRepairRunner) Run(ctx context.Context, name string, args ...string) (CommandResult, error) {
+	if len(args) > 0 && (args[0] == "daemon-reload" || r.repairCommands > 0) {
+		if ctx.Err() != nil {
+			return CommandResult{}, fmt.Errorf("unit cleanup received canceled context: %w", ctx.Err())
+		}
+		if _, ok := ctx.Deadline(); !ok {
+			return CommandResult{}, errors.New("unit cleanup has no deadline")
+		}
+		r.repairCommands++
+	}
+	return r.recordingRunner.Run(ctx, name, args...)
+}
+
 // Even if the request is canceled after the unit file is published, cleanup
 // uses a separate bounded context for the post-compensation daemon reload.
 func TestUnitPublicationCompensationAfterCallerCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	dir := t.TempDir()
-	runner := &recordingRunner{}
+	runner := &boundedRepairRunner{}
 	manager := SystemdPersistence{
 		Runner: runner, UnitDir: dir,
 		VerifyExecutable: func(string) error { return nil },
@@ -200,6 +221,9 @@ func TestUnitPublicationCompensationAfterCallerCancellation(t *testing.T) {
 		t.Fatal("test did not cancel original request")
 	}
 	expectSystemdOperations(t, runner.commands, "systemctl is-enabled ", "systemctl daemon-reload", "systemctl is-enabled ")
+	if runner.repairCommands != 2 {
+		t.Fatalf("cleanup did not complete with bounded contexts: %d operations", runner.repairCommands)
+	}
 	if _, err := os.Lstat(filepath.Join(dir, restoreSystemdUnitName)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("owned unit was not compensated after caller cancellation: %v", err)
 	}

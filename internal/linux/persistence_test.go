@@ -392,3 +392,15 @@ func TestRemoveRestoreMissingAndExistingIdentityPolicy(t *testing.T) {
 		})
 	}
 }
+
+func TestRemoveRestoreCanceledEnablementInspectionNeverClaimsSafeNoop(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	runner := &recordingRunner{} // Intentionally ignores caller cancellation.
+	manager := SystemdPersistence{Runner: runner, UnitDir: t.TempDir()}
+	err := manager.RemoveRestore(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled inspection was accepted as a safe cleanup: %v", err)
+	}
+	expectSystemdOperations(t, runner.commands, "systemctl is-enabled ")
+}
