@@ -313,7 +313,7 @@ func (p SystemdPersistence) guardExactPublishedIdentity(path string, expected []
 	if err != nil {
 		return err
 	}
-	if !os.SameFile(opened, original) {
+	if !sameUnitFile(opened, original) {
 		return fmt.Errorf("%w: canonical inode differs from STL's original published inode", errUnitIdentityConflict)
 	}
 	return nil

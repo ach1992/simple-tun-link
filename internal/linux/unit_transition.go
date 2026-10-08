@@ -51,7 +51,7 @@ func (p SystemdPersistence) exchangeOwnedUnit(dir, path string, expected, conten
 	if err != nil {
 		return nil, err
 	}
-	if expectedIdentity == nil || !os.SameFile(before, expectedIdentity) {
+	if expectedIdentity == nil || !sameUnitFile(before, expectedIdentity) {
 		return nil, fmt.Errorf("%w: original expected canonical inode changed before staging", errUnitIdentityConflict)
 	}
 	// The inode identity comes from the original opened staging descriptor,
@@ -92,7 +92,7 @@ func (p SystemdPersistence) exchangeOwnedUnit(dir, path string, expected, conten
 	if err := p.verifyUnitPath(path); err != nil {
 		return nil, fmt.Errorf("%w: canonical path became untrusted before exchange: %w", errUnitIdentityConflict, err)
 	}
-	if !os.SameFile(priorAtExchangeInfo, expectedIdentity) || !bytes.Equal(priorAtExchange, expected) {
+	if !sameUnitFile(priorAtExchangeInfo, expectedIdentity) || !bytes.Equal(priorAtExchange, expected) {
 		// The canonical file changed after our earlier ownership check.
 		// Abort BEFORE exchanging it; do not rely on post-hoc reversal for an
 		// independently observed change we can already refuse.
@@ -150,7 +150,7 @@ func (p SystemdPersistence) exchangeOwnedUnit(dir, path string, expected, conten
 // Verify OLD by its original inode and bytes (the staged name is noncanonical).
 func (p SystemdPersistence) displacedUnitMatches(path string, before os.FileInfo, expected []byte) bool {
 	data, opened, err := readRegularUnit(path)
-	if err != nil || !os.SameFile(before, opened) || !bytes.Equal(data, expected) {
+	if err != nil || !sameUnitFile(before, opened) || !bytes.Equal(data, expected) {
 		return false
 	}
 	return p.VerifyUnitPath != nil || protectedRootOwnership(opened) == nil
@@ -159,7 +159,7 @@ func (p SystemdPersistence) displacedUnitMatches(path string, before os.FileInfo
 // Verify NEW by exact staging inode, bytes, and canonical path trust.
 func (p SystemdPersistence) incomingUnitMatches(path string, incoming os.FileInfo, content []byte) bool {
 	current, err := p.exactUnitIdentity(path, content)
-	return err == nil && os.SameFile(current, incoming)
+	return err == nil && sameUnitFile(current, incoming)
 }
 
 // retireOwnedUnit moves the canonical unit to a private recovery filename
@@ -171,7 +171,7 @@ func (p SystemdPersistence) retireOwnedUnit(dir, path string, expected []byte, p
 	if err != nil {
 		return err
 	}
-	if len(expectedIdentity) > 0 && (expectedIdentity[0] == nil || !os.SameFile(before, expectedIdentity[0])) {
+	if len(expectedIdentity) > 0 && (expectedIdentity[0] == nil || !sameUnitFile(before, expectedIdentity[0])) {
 		return fmt.Errorf("%w: intended retired canonical inode changed", errUnitIdentityConflict)
 	}
 	backupFile, err := os.CreateTemp(dir, ".stl-retire-*.tmp")
@@ -191,7 +191,7 @@ func (p SystemdPersistence) retireOwnedUnit(dir, path string, expected []byte, p
 	// before unlinking it to make room for RENAME_NOREPLACE. An
 	// independent replacement must not be removed even during setup.
 	currentPlaceholder, err := os.Lstat(backup)
-	if err != nil || !currentPlaceholder.Mode().IsRegular() || !os.SameFile(placeholder, currentPlaceholder) || currentPlaceholder.Size() != 0 {
+	if err != nil || !currentPlaceholder.Mode().IsRegular() || !sameUnitFile(placeholder, currentPlaceholder) || currentPlaceholder.Size() != 0 {
 		return fmt.Errorf("%w: unit retirement placeholder identity changed at %q: %v", errUnitIdentityConflict, backup, err)
 	}
 	if err := os.Remove(backup); err != nil {
@@ -204,7 +204,7 @@ func (p SystemdPersistence) retireOwnedUnit(dir, path string, expected []byte, p
 		return fmt.Errorf("atomic no-replace unit retirement unavailable: %w", err)
 	}
 	data, moved, readErr := readRegularUnit(backup)
-	matched := readErr == nil && os.SameFile(before, moved) && bytes.Equal(data, expected)
+	matched := readErr == nil && sameUnitFile(before, moved) && bytes.Equal(data, expected)
 	if !matched {
 		// Restore exclusively: a canonical unit installed in the meantime
 		// must never be overwritten. Keep the private recovery name even
@@ -246,7 +246,7 @@ func (p SystemdPersistence) retireOwnedUnit(dir, path string, expected []byte, p
 		p.afterUnitTransition("before-verified-backup-retirement")
 	}
 	recheckData, recheckInfo, recheckErr := readRegularUnit(backup)
-	if recheckErr != nil || !os.SameFile(before, recheckInfo) || !bytes.Equal(recheckData, expected) {
+	if recheckErr != nil || !sameUnitFile(before, recheckInfo) || !bytes.Equal(recheckData, expected) {
 		return fmt.Errorf("%w: moved staging changed before final unlink; preserve %q: %v", errUnitIdentityConflict, backup, recheckErr)
 	}
 	if err := os.Remove(backup); err != nil {
@@ -276,6 +276,33 @@ func (p SystemdPersistence) exactUnitIdentity(path string, expected []byte) (os.
 	return info, nil
 }
 
+// pinnedUnitIdentity retains an open descriptor for the originating inode.
+// An unlinked inode cannot be recycled while the file remains open, so
+// os.SameFile cannot accidentally accept a new unit that reused its number.
+// The standard os.File finalizer closes it when the owning transaction/Undo
+// closure becomes unreachable. This is an in-process lifetime guard, not a
+// durable generation identifier across process restarts.
+type pinnedUnitIdentity struct {
+	os.FileInfo
+	origin *os.File
+}
+
+// os.SameFile accepts only os's concrete *fileStat implementation on Linux,
+// not embedded/custom FileInfo implementations. Unwrap held descriptors
+// before comparing their underlying filesystem identity.
+func sameUnitFile(a, b os.FileInfo) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	if held, ok := a.(*pinnedUnitIdentity); ok {
+		a = held.FileInfo
+	}
+	if held, ok := b.(*pinnedUnitIdentity); ok {
+		b = held.FileInfo
+	}
+	return os.SameFile(a, b)
+}
+
 func createOwnedStagingUnit(dir string, content []byte, mode os.FileMode) (string, os.FileInfo, error) {
 	tmp, err := os.CreateTemp(dir, ".stl-unit-*.tmp")
 	if err != nil {
@@ -296,7 +323,7 @@ func createOwnedStagingUnit(dir string, content []byte, mode os.FileMode) (strin
 		// Remove only when bounded actual staging bytes still match what
 		// this writer produced before its own failure.
 		if actual, current, err := readRegularUnit(name); err == nil &&
-			os.SameFile(current, opened) && bytes.Equal(actual, written) {
+			sameUnitFile(current, opened) && bytes.Equal(actual, written) {
 			_ = os.Remove(name)
 		}
 		return "", nil, cause
@@ -315,10 +342,10 @@ func createOwnedStagingUnit(dir string, content []byte, mode os.FileMode) (strin
 	if err := tmp.Sync(); err != nil {
 		return fail(err)
 	}
-	if err := tmp.Close(); err != nil {
-		return fail(err)
-	}
-	return name, opened, nil
+	// Keep the original descriptor alive for as long as the resulting
+	// identity is used by publication, compensation, or an Undo closure.
+	// Closing here would allow a later create to reuse the inode number.
+	return name, &pinnedUnitIdentity{FileInfo: opened, origin: tmp}, nil
 }
 
 func preserveUnitStaging(name string) (string, error) {
