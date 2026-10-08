@@ -179,16 +179,21 @@ restoration and reserve time for bounded owned rollback. Persistence
 installation is restricted to a canonical root-owned executable and a
 non-writable, symlink-free directory chain; runtime-only systemd
 enablement, alias/linked/masked states, and ambiguous identities fail
-closed rather than pretending reboot activation is durable.
+closed rather than pretending reboot activation is durable. Negative
+systemd enablement observations require both the expected process exit
+status and matching stdout; a partial stdout from a timed-out command
+is not authoritative. A completed final-Link unit removal must verify
+the absence of both the owned file and enabled systemd identity.
 
 Every backend rollback of an already-applied change runs with a
 cancellation-detached, bounded cleanup context, including non-systemd
-operations. For systemd unit writes, post-rename durability errors require
-verifying the exact published owned file before restoring the prior unit
-contents and refreshing systemd. Incomplete or ambiguous compensation fails
-explicitly, never as successful activation. Last-Link cleanup must verify
-that no enabled/ambiguous systemd identity remains when its owned unit file
-is already absent; STL does not disable identities it cannot prove it owns.
+operations. All systemd post-publication compensation paths (durability,
+daemon-reload, enable failure, and later Engine rollback) revalidate the
+exact STL-owned unit contents before disabling or restoring the previous
+file, and verify ownership and enablement after bounded cleanup. Missing-unit
+removal compensation uses an exclusive no-overwrite file publication.
+Incomplete or ambiguous recovery fails explicitly; STL does not disable
+or overwrite systemd identities it cannot prove it owns.
 
 The restore unit needs an installed, durable stl executable path. Real
 backend adapters register through their own tracked implementation Issues;

@@ -93,7 +93,7 @@ func (r *fakeSystemctl) Run(_ context.Context, name string, args ...string) (lin
 		if r.enabled {
 			return linux.CommandResult{Stdout: []byte("enabled\n")}, nil
 		}
-		return linux.CommandResult{Stdout: []byte("disabled\n")}, errors.New("disabled")
+		return linux.CommandResult{Stdout: []byte("disabled\n")}, &linux.CommandError{Command: name, ExitCode: 1}
 	case strings.HasPrefix(cmd, "enable "):
 		if r.failEnable {
 			return linux.CommandResult{}, errors.New("failed")

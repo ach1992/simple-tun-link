@@ -210,3 +210,41 @@ func TestEngineLastLinkRemovalReportsOrphanEnabledUnit(t *testing.T) {
 	}
 	expectSystemdOperations(t, runner.commands, "systemctl is-enabled ")
 }
+
+// After the last Link deletion is committed, an enabled orphan discovered in
+// the postcondition must be reported as a partial cleanup failure. No rollback
+// should recreate the committed-removed backend or desired Link.
+func TestEngineLastLinkRemovalRejectsUnverifiedDisablePostcondition(t *testing.T) {
+	root := t.TempDir()
+	unitDir := t.TempDir()
+	store := state.NewFileStore(root)
+	b := &unitEngineBackend{}
+	link := testUnitEngineLink(t)
+	initialEngine := unitEngineFor(t, b, store, root, nil, "")
+	if _, err := initialEngine.Ensure(context.Background(), link); err != nil {
+		t.Fatal(err)
+	}
+	unit, err := renderRestoreSystemdUnit("/usr/local/bin/stl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(unitDir, restoreSystemdUnitName)
+	if err := os.WriteFile(path, []byte(unit), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &stuckEnabledCleanupRunner{}
+	manager := &SystemdPersistence{Runner: runner, UnitDir: unitDir}
+	engine := unitEngineFor(t, b, store, root, manager, "/usr/local/bin/stl")
+	result, operationErr := engine.Remove(context.Background(), link.ID)
+	if !result.Removed || stlerr.CodeOf(operationErr) != stlerr.CodeState || !strings.Contains(operationErr.Error(), "cleanup failed") {
+		t.Fatalf("last-Link partial cleanup was falsely accepted: %+v %v", result, operationErr)
+	}
+	snapshot, err := store.Load(context.Background())
+	if err != nil || len(snapshot.Links) != 0 || b.live || b.undos != 0 {
+		t.Fatalf("committed removed Link was rolled back: saved=%+v backendLive=%t undos=%d err=%v", snapshot, b.live, b.undos, err)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("test did not exercise removal with orphan enablement: %v", err)
+	}
+	expectSystemdOperations(t, runner.commands, "systemctl is-enabled ", "systemctl disable ", "systemctl daemon-reload", "systemctl is-enabled ")
+}

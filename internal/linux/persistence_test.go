@@ -25,7 +25,7 @@ func (r *recordingRunner) Run(_ context.Context, name string, args ...string) (C
 		if r.enabled != nil && r.enabled[args[1]] {
 			return CommandResult{Stdout: []byte("enabled\n")}, nil
 		}
-		return CommandResult{Stdout: []byte("disabled\n")}, errors.New("disabled")
+		return CommandResult{Stdout: []byte("disabled\n")}, &CommandError{Command: name, ExitCode: 1}
 	}
 	if len(args) == 2 && args[0] == "enable" {
 		if r.enabled == nil {
@@ -193,6 +193,7 @@ type systemdStateRunner struct {
 	commands           []string
 	enabledAttempted   bool
 	disableCount       int
+	disabled           bool
 	failEnabledInspect bool
 }
 
@@ -208,8 +209,15 @@ func (r *systemdStateRunner) Run(_ context.Context, name string, args ...string)
 		if r.enabledAttempted {
 			state = r.after
 		}
+		if r.disabled {
+			state = "disabled"
+		}
 		if state == "disabled" || state == "not-found" || state == "enabled-runtime" {
-			return CommandResult{Stdout: []byte(state + "\n")}, errors.New("not permanently enabled")
+			code := 1
+			if state == "not-found" {
+				code = 4
+			}
+			return CommandResult{Stdout: []byte(state + "\n")}, &CommandError{Command: name, ExitCode: code}
 		}
 		if state == "enabled" && r.failEnabledInspect {
 			return CommandResult{Stdout: []byte("enabled\n")}, errors.New("systemctl failed despite stdout")
@@ -219,6 +227,7 @@ func (r *systemdStateRunner) Run(_ context.Context, name string, args ...string)
 		r.enabledAttempted = true
 	case "disable":
 		r.disableCount++
+		r.disabled = true
 	case "daemon-reload":
 	default:
 		return CommandResult{}, errors.New("unexpected systemctl invocation")
@@ -331,7 +340,7 @@ func TestRemoveRestoreMissingAndExistingIdentityPolicy(t *testing.T) {
 		{name: "missing disabled", wantCommands: 1},
 		{name: "missing enabled orphan", enabled: true, wantError: "lacks an STL-owned unit", wantCommands: 1},
 		{name: "missing inspection fails", failInspect: true, wantError: "cannot verify absent", wantCommands: 1},
-		{name: "existing owned enabled", existing: "owned", enabled: true, wantCommands: 3},
+		{name: "existing owned enabled", existing: "owned", enabled: true, wantCommands: 4},
 		{name: "existing foreign", existing: "foreign", enabled: true, wantError: "non-STL", wantCommands: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
