@@ -142,3 +142,40 @@ func TestSystemdPersistencePreservesPriorEnablementOnRollback(t *testing.T) {
 		t.Fatal("prior owned unit content was not restored")
 	}
 }
+
+func TestSystemdPersistenceInspectsOwnedRestoreIdentity(t *testing.T) {
+	runner := &recordingRunner{}
+	unitDir := t.TempDir()
+	manager := SystemdPersistence{Runner: runner, UnitDir: unitDir}
+	present, err := manager.IsRestoreInstalled(context.Background())
+	if err != nil || present {
+		t.Fatalf("fresh host was not recognized: %t %v", present, err)
+	}
+	if _, _, err := manager.EnsureRestore(context.Background(), "/usr/local/bin/stl"); err != nil {
+		t.Fatal(err)
+	}
+	present, err = manager.IsRestoreInstalled(context.Background())
+	if err != nil || !present {
+		t.Fatalf("owned unit not recognized: %t %v", present, err)
+	}
+}
+
+func TestSystemdPersistenceDoesNotTrustUnownedOrOrphanedIdentity(t *testing.T) {
+	unitDir := t.TempDir()
+	path := filepath.Join(unitDir, restoreSystemdUnitName)
+	runner := &recordingRunner{}
+	manager := SystemdPersistence{Runner: runner, UnitDir: unitDir}
+	if err := os.WriteFile(path, []byte("[Unit]\nDescription=foreign\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.IsRestoreInstalled(context.Background()); err == nil {
+		t.Fatal("foreign restore identity was not rejected")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	runner.enabled = map[string]bool{restoreSystemdUnitName: true}
+	if _, err := manager.IsRestoreInstalled(context.Background()); err == nil {
+		t.Fatal("orphaned enabled identity was accepted as absent")
+	}
+}

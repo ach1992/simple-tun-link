@@ -19,9 +19,11 @@ type Locker interface {
 }
 
 type Engine struct {
-	backends *backend.Registry
-	store    state.Store
-	locks    Locker
+	backends           *backend.Registry
+	store              state.Store
+	locks              Locker
+	restorePersistence RestorePersistence
+	restoreExecutable  string
 }
 
 type Result struct {
@@ -160,6 +162,28 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 		return Result{}, e.rollbackFailure(ctx, request, link, undo, contextualize(err, stlerr.CodeVerify, string(request.Operation), link, "backend verification failed"))
 	}
 
+	// Serialize only the host-wide persistence transition and state commit.
+	// Backend inspection/apply stays per-Link to preserve Multi-Link concurrency.
+	var persistenceUndo func(context.Context) error
+	if e.restorePersistence != nil {
+		persistenceRelease, lockErr := e.locks.Acquire(ctx, []domain.ResourceClaim{restoreLockClaim()})
+		if lockErr != nil {
+			return Result{}, e.rollbackFailure(ctx, request, link, undo,
+				stlerr.Wrap(stlerr.CodeState, string(request.Operation), string(link.ID), string(link.Backend), "cannot lock restore persistence", lockErr))
+		}
+		defer persistenceRelease()
+
+		if request.Operation == backend.OperationEnsure {
+			var ensureErr error
+			persistenceUndo, _, ensureErr = e.restorePersistence.EnsureRestore(ctx, e.restoreExecutable)
+			if ensureErr != nil {
+				return Result{}, e.rollbackFailure(ctx, request, link, undo,
+					stlerr.Wrap(stlerr.CodeState, "ensure", string(link.ID), string(link.Backend), "cannot activate restore persistence", ensureErr))
+			}
+		}
+	}
+
+	remaining := -1
 	commitErr := e.store.Update(ctx, func(snapshot *state.Snapshot) error {
 		switch request.Operation {
 		case backend.OperationEnsure:
@@ -174,11 +198,29 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 		default:
 			return fmt.Errorf("unsupported operation %q", request.Operation)
 		}
+		remaining = len(snapshot.Links)
 		return nil
 	})
 	if commitErr != nil {
 		commitPublic := contextualize(commitErr, stlerr.CodeState, string(request.Operation), link, "cannot commit local state")
+		if persistenceUndo != nil {
+			if rollbackErr := persistenceUndo(context.WithoutCancel(ctx)); rollbackErr != nil {
+				commitPublic = stlerr.Wrap(stlerr.CodeRollback, string(request.Operation), string(link.ID), string(link.Backend),
+					"state commit failed and restore persistence rollback did not complete", errors.Join(commitPublic, rollbackErr))
+			}
+		}
 		return Result{}, e.rollbackFailure(ctx, request, link, undo, commitPublic)
+	}
+
+	// After the final desired Link is durably deleted, its owned reboot unit
+	// is no longer needed. An uncertain cleanup is reported as partial failure;
+	// never roll a removed Link back solely to conceal a unit cleanup error.
+	if request.Operation == backend.OperationRemove && remaining == 0 && e.restorePersistence != nil {
+		if err := e.restorePersistence.RemoveRestore(ctx); err != nil {
+			return Result{LinkID: link.ID, Changed: changed, Removed: true},
+				stlerr.Wrap(stlerr.CodeState, "remove", string(link.ID), string(link.Backend),
+					"Link removed, but restore persistence cleanup failed", err)
+		}
 	}
 
 	return Result{
@@ -301,4 +343,10 @@ func unionClaims(groups ...[]domain.ResourceClaim) []domain.ResourceClaim {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Canonical() < out[j].Canonical() })
 	return out
+}
+
+// restoreLockClaim protects the host-wide unit lifecycle and desired-state
+// transition without serializing the independent backend apply steps.
+func restoreLockClaim() domain.ResourceClaim {
+	return domain.ResourceClaim{Kind: "stl-restore-unit", Key: "host"}
 }

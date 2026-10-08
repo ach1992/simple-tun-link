@@ -158,6 +158,27 @@ Direction:
 - no central database in v0.1;
 - observed kernel state is inspected, not blindly assumed from stored config.
 
+The installed Linux CLI uses /var/lib/simple-tun-link as its canonical
+private state root (state.json plus locks). The minimal non-interactive
+command stl link restore --all loads this state and invokes the same
+Engine.RestoreAll / Engine.Ensure lifecycle. Unsupported backends or failed
+reapply must exit nonzero; no second restore engine is permitted.
+
+On systemd hosts, the normal Engine Ensure activates one STL-owned restore
+unit before committing desired state, and Remove disables/removes the unit
+after committing the last desired Link deletion. The host persistence
+transition and desired-state commit share a narrowly scoped lock. An empty
+restore reconciles an orphaned STL-owned unit after interruption or cleanup
+failure. This does not replace or require systemd-networkd, NetworkManager,
+Netplan, or another host network manager. Hosts without systemd may use
+the ordinary engine in manual/non-persistent mode.
+
+The restore unit needs an installed, durable stl executable path. Real
+backend adapters register through their own tracked implementation Issues;
+this CLI/persistence substrate does not provide a synthetic production
+tunnel backend. Future CLI commands in Issue #10 must reuse the same
+state root, engine construction, and persistence integration.
+
 Never store plaintext private keys in generic logs/status/JSON output.
 
 ## 6. Resource ownership

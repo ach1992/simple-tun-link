@@ -13,7 +13,10 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/domain"
 )
 
-const SchemaVersion = 1
+const (
+	SchemaVersion = 1
+	DefaultRoot   = "/var/lib/simple-tun-link"
+)
 
 var ErrNotFound = errors.New("link state not found")
 
@@ -96,6 +99,26 @@ func NewFileStore(root string) *FileStore {
 		statePath: filepath.Join(root, "state.json"),
 		lockPath:  filepath.Join(root, ".state.lock"),
 	}
+}
+
+// HasCommittedState distinguishes a durable empty desired-state snapshot from
+// absent state (for example an unavailable mount). Absence is never proof that
+// an existing restore unit may safely be removed.
+func (s *FileStore) HasCommittedState(ctx context.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	info, err := os.Lstat(s.statePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("desired-state path is not a regular file")
+	}
+	return true, nil
 }
 
 func (s *FileStore) Load(ctx context.Context) (Snapshot, error) {

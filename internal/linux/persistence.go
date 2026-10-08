@@ -114,6 +114,44 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 	return undo, true, nil
 }
 
+// IsRestoreInstalled safely distinguishes a fresh host from missing desired
+// state on a host whose restore unit is already installed. A foreign unit or
+// enabled identity without a proven owned file is never treated as absent.
+func (p SystemdPersistence) IsRestoreInstalled(ctx context.Context) (bool, error) {
+	if p.Runner == nil {
+		return false, fmt.Errorf("systemd runner is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	unitDir := p.UnitDir
+	if unitDir == "" {
+		unitDir = "/etc/systemd/system"
+	}
+	content, err := os.ReadFile(filepath.Join(unitDir, restoreSystemdUnitName))
+	if err == nil {
+		if !isOwnedSystemdUnit(content) {
+			return false, fmt.Errorf("unowned systemd restore unit identity")
+		}
+		return true, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Errorf("inspect restore unit: %w", err)
+	}
+	systemctl := p.SystemctlBinary
+	if systemctl == "" {
+		systemctl = "systemctl"
+	}
+	enabled, err := p.isEnabled(ctx, systemctl, restoreSystemdUnitName)
+	if err != nil {
+		return false, err
+	}
+	if enabled {
+		return false, fmt.Errorf("enabled systemd restore identity lacks an STL-owned unit")
+	}
+	return false, nil
+}
+
 // RemoveRestore disables and removes only STL's owned restore unit. Failures
 // preserve or restore the prior owned file/enabled state where possible.
 func (p SystemdPersistence) RemoveRestore(ctx context.Context) error {
