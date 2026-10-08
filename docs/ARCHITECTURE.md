@@ -177,9 +177,11 @@ The owned restore unit has a 35-minute oneshot startup ceiling; the CLI
 uses a 30-minute signal-aware (SIGINT/SIGTERM) context to bound Link
 restoration and reserve time for bounded owned rollback. Persistence
 installation is restricted to a canonical root-owned executable and a
-non-writable, symlink-free directory chain; runtime-only systemd
-enablement, alias/linked/masked states, and ambiguous identities fail
-closed rather than pretending reboot activation is durable. Negative
+non-writable, symlink-free directory chain. The privileged restore unit itself
+must also be a root-owned regular file with no unprivileged-writable file or
+parent-directory components; an STL ownership marker alone is insufficient.
+Runtime-only systemd enablement, alias/linked/masked states, and ambiguous
+identities fail closed rather than pretending reboot activation is durable. Negative
 systemd enablement observations require both the expected process exit
 status and matching stdout; a partial stdout from a timed-out command
 is not authoritative. A completed final-Link unit removal must verify
@@ -190,10 +192,18 @@ cancellation-detached, bounded cleanup context, including non-systemd
 operations. All systemd post-publication compensation paths (durability,
 daemon-reload, enable failure, and later Engine rollback) revalidate the
 exact STL-owned unit contents before disabling or restoring the previous
-file, and verify ownership and enablement after bounded cleanup. Missing-unit
-removal compensation uses an exclusive no-overwrite file publication.
-Incomplete or ambiguous recovery fails explicitly; STL does not disable
-or overwrite systemd identities it cannot prove it owns.
+file, and verify ownership and enablement after bounded cleanup. Initial
+unit creation uses no-overwrite hard-link publication. Updates atomically
+exchange the new and existing unit with Linux renameat2(RENAME_EXCHANGE),
+verifying the displaced original inode/content before disposing of it; a
+conflict attempts a reversible exchange and fails rather than discarding
+a changed administrator-owned file. Unit removal uses renameat2 with
+RENAME_NOREPLACE to a private recovery path and verifies the moved inode
+before retiring it. Missing-unit compensation uses exclusive no-overwrite
+publication. Filesystems without the required atomic rename facilities fail
+closed; STL does not fall back to clobbering rename. Incomplete or ambiguous
+recovery fails explicitly; STL does not disable or overwrite identities
+it cannot prove it owns.
 
 The restore unit needs an installed, durable stl executable path. Real
 backend adapters register through their own tracked implementation Issues;

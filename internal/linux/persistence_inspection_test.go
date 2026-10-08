@@ -48,7 +48,7 @@ func TestSystemdEnablementInspectionDoesNotTrustPartialStdout(t *testing.T) {
 				result: CommandResult{Stdout: []byte(tc.status + "\n")},
 				err:    tc.err,
 			}
-			manager := SystemdPersistence{Runner: runner, UnitDir: dir}
+			manager := SystemdPersistence{Runner: runner, UnitDir: dir, VerifyUnitPath: func(string) error { return nil }}
 			err := manager.RemoveRestore(context.Background())
 			if (err == nil) != tc.allowed {
 				t.Fatalf("accepted unverified inspection=%t expected=%t err=%v", err == nil, tc.allowed, err)
@@ -85,7 +85,7 @@ func TestRemoveVerifiesPostconditionRatherThanTrustingDisableSuccess(t *testing.
 		t.Fatal(err)
 	}
 	runner := &stuckEnabledCleanupRunner{}
-	manager := SystemdPersistence{Runner: runner, UnitDir: dir}
+	manager := SystemdPersistence{Runner: runner, UnitDir: dir, VerifyUnitPath: func(string) error { return nil }}
 	err = manager.RemoveRestore(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "remains enabled") {
 		t.Fatalf("successful disable without verified postcondition was accepted: %v", err)
@@ -125,7 +125,7 @@ func TestRemoveNeverDeletesExternallyChangedOwnedUnit(t *testing.T) {
 	foreign := []byte("[Unit]\nDescription=operator replacement\n")
 	runner := &mutationDuringDisableRunner{unitPath: path, replacement: foreign}
 	runner.enabled = map[string]bool{restoreSystemdUnitName: true}
-	manager := SystemdPersistence{Runner: runner, UnitDir: dir}
+	manager := SystemdPersistence{Runner: runner, UnitDir: dir, VerifyUnitPath: func(string) error { return nil }}
 	if err := manager.RemoveRestore(context.Background()); err == nil {
 		t.Fatal("external file change after disable was removed")
 	}

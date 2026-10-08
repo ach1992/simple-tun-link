@@ -42,7 +42,7 @@ func (r *recordingRunner) Run(_ context.Context, name string, args ...string) (C
 func TestSystemdPersistenceEnsureRestoreAndRollback(t *testing.T) {
 	runner := &recordingRunner{}
 	unitDir := t.TempDir()
-	manager := SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }}
+	manager := SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil }}
 
 	undo, changed, err := manager.EnsureRestore(context.Background(), "/usr/local/bin/stl")
 	if err != nil {
@@ -80,7 +80,7 @@ func TestSystemdPersistenceRefusesUnownedRestoreUnit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(unitDir, restoreSystemdUnitName), []byte("[Unit]\nDescription=external\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	manager := SystemdPersistence{Runner: &recordingRunner{}, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }}
+	manager := SystemdPersistence{Runner: &recordingRunner{}, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil }}
 	if _, _, err := manager.EnsureRestore(context.Background(), "/usr/local/bin/stl"); err == nil {
 		t.Fatal("expected unowned unit overwrite to be rejected")
 	}
@@ -90,7 +90,7 @@ func TestSystemdPersistenceRefusesUnownedRestoreUnit(t *testing.T) {
 }
 
 func TestSystemdPersistenceRejectsArbitraryExecutable(t *testing.T) {
-	manager := SystemdPersistence{Runner: &recordingRunner{}, UnitDir: t.TempDir(), VerifyExecutable: func(string) error { return nil }}
+	manager := SystemdPersistence{Runner: &recordingRunner{}, UnitDir: t.TempDir(), VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil }}
 	for _, executable := range []string{"stl", "/usr/local/bin/bash", "/usr/local/bin/stl other"} {
 		if _, _, err := manager.EnsureRestore(context.Background(), executable); err == nil {
 			t.Fatalf("expected executable %q to be rejected", executable)
@@ -101,7 +101,7 @@ func TestSystemdPersistenceRejectsArbitraryExecutable(t *testing.T) {
 func TestSystemdPersistenceRefusesEnabledIdentityWithoutOwnedFile(t *testing.T) {
 	runner := &recordingRunner{enabled: map[string]bool{restoreSystemdUnitName: true}}
 	unitDir := t.TempDir()
-	manager := SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }}
+	manager := SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil }}
 	_, _, err := manager.EnsureRestore(context.Background(), "/usr/local/bin/stl")
 	if err == nil || !strings.Contains(err.Error(), "without an STL-owned unit file") {
 		t.Fatalf("expected actual enabled-without-owned-file branch, got %v", err)
@@ -117,7 +117,7 @@ func TestSystemdPersistenceRefusesEnabledIdentityWithoutOwnedFile(t *testing.T) 
 func TestSystemdPersistenceRollsBackFileWhenEnableFails(t *testing.T) {
 	unitDir := t.TempDir()
 	runner := &recordingRunner{failOn: "systemctl enable " + restoreSystemdUnitName}
-	manager := SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }}
+	manager := SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil }}
 	_, _, err := manager.EnsureRestore(context.Background(), "/usr/local/bin/stl")
 	if err == nil {
 		t.Fatal("expected enable failure")
@@ -130,7 +130,7 @@ func TestSystemdPersistenceRollsBackFileWhenEnableFails(t *testing.T) {
 func TestSystemdPersistencePreservesPriorEnablementOnRollback(t *testing.T) {
 	unitDir := t.TempDir()
 	runner := &recordingRunner{enabled: map[string]bool{restoreSystemdUnitName: true}}
-	manager := SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }}
+	manager := SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil }}
 	oldContent := managedSystemdMarker + "\n[Unit]\nDescription=old\n"
 	if err := os.WriteFile(filepath.Join(unitDir, restoreSystemdUnitName), []byte(oldContent), 0o644); err != nil {
 		t.Fatal(err)
@@ -154,7 +154,7 @@ func TestSystemdPersistencePreservesPriorEnablementOnRollback(t *testing.T) {
 func TestSystemdPersistenceInspectsOwnedRestoreIdentity(t *testing.T) {
 	runner := &recordingRunner{}
 	unitDir := t.TempDir()
-	manager := SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }}
+	manager := SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil }}
 	present, err := manager.IsRestoreInstalled(context.Background())
 	if err != nil || present {
 		t.Fatalf("fresh host was not recognized: %t %v", present, err)
@@ -172,7 +172,7 @@ func TestSystemdPersistenceDoesNotTrustUnownedOrOrphanedIdentity(t *testing.T) {
 	unitDir := t.TempDir()
 	path := filepath.Join(unitDir, restoreSystemdUnitName)
 	runner := &recordingRunner{}
-	manager := SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }}
+	manager := SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil }}
 	if err := os.WriteFile(path, []byte("[Unit]\nDescription=foreign\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +270,7 @@ func TestSystemdEnablementStatesRequireDurableIdentity(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			manager := SystemdPersistence{Runner: runner, UnitDir: dir, VerifyExecutable: func(string) error { return nil }}
+			manager := SystemdPersistence{Runner: runner, UnitDir: dir, VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil }}
 			_, changed, err := manager.EnsureRestore(context.Background(), "/usr/local/bin/stl")
 			if (err == nil) != tc.wantOK {
 				t.Fatalf("success=%t want=%t err=%v", err == nil, tc.wantOK, err)
@@ -317,7 +317,7 @@ func TestSystemdFailedEnabledInspectionDoesNotClaimPersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &systemdStateRunner{before: "enabled", failEnabledInspect: true}
-	manager := SystemdPersistence{Runner: runner, UnitDir: dir, VerifyExecutable: func(string) error { return nil }}
+	manager := SystemdPersistence{Runner: runner, UnitDir: dir, VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil }}
 	if _, _, err := manager.EnsureRestore(context.Background(), "/usr/local/bin/stl"); err == nil {
 		t.Fatal("failed systemctl inspection was mistaken for durable enablement")
 	}
@@ -364,7 +364,7 @@ func TestRemoveRestoreMissingAndExistingIdentityPolicy(t *testing.T) {
 			if tc.failInspect {
 				runner.failOn = "systemctl is-enabled " + restoreSystemdUnitName
 			}
-			manager := SystemdPersistence{Runner: runner, UnitDir: dir}
+			manager := SystemdPersistence{Runner: runner, UnitDir: dir, VerifyUnitPath: func(string) error { return nil }}
 			err := manager.RemoveRestore(context.Background())
 			if tc.wantError == "" && err != nil {
 				t.Fatalf("unexpected failure: %v", err)

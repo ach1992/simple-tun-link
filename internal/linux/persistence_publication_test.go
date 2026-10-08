@@ -47,7 +47,7 @@ func TestEnsureRestoresFirstPublishedUnitOnDurabilityFailure(t *testing.T) {
 	runner := &recordingRunner{}
 	manager := SystemdPersistence{
 		Runner: runner, UnitDir: dir,
-		VerifyExecutable: func(string) error { return nil },
+		VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil },
 		afterUnitPublish: func() error { return errUnitAfterRename },
 	}
 	undo, changed, err := manager.EnsureRestore(context.Background(), "/usr/local/bin/stl")
@@ -74,7 +74,7 @@ func TestEnsureRestoresPriorOwnedEnabledUnitAfterPublicationFailure(t *testing.T
 	runner := &recordingRunner{enabled: map[string]bool{restoreSystemdUnitName: true}}
 	manager := SystemdPersistence{
 		Runner: runner, UnitDir: dir,
-		VerifyExecutable: func(string) error { return nil },
+		VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil },
 		afterUnitPublish: func() error { return errUnitAfterRename },
 	}
 	if _, _, err := manager.EnsureRestore(context.Background(), "/usr/local/bin/stl"); !errors.Is(err, errUnitAfterRename) {
@@ -97,7 +97,7 @@ func TestEnsureDoesNotOverwriteForeignUnitOnUnknownPublicationOutcome(t *testing
 	foreign := []byte("[Unit]\nDescription=an unrecognized unit\n")
 	manager := SystemdPersistence{
 		Runner: runner, UnitDir: dir,
-		VerifyExecutable: func(string) error { return nil },
+		VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil },
 		afterUnitPublish: func() error {
 			if err := os.WriteFile(path, foreign, 0o644); err != nil {
 				return err
@@ -122,7 +122,7 @@ func TestEnsureReportsFailedUnitPublicationCompensation(t *testing.T) {
 	runner := &recordingRunner{}
 	manager := SystemdPersistence{
 		Runner: runner, UnitDir: dir,
-		VerifyExecutable: func(string) error { return nil },
+		VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil },
 		afterUnitPublish: func() error { return errUnitAfterRename },
 		restoreAfterFailure: func(string, string, []byte, bool) error {
 			return errors.New("controlled restoration failure")
@@ -149,7 +149,7 @@ func TestEnsureReportsUnitReloadFailureAfterRestoringOwnedPrior(t *testing.T) {
 	runner := &recordingRunner{enabled: map[string]bool{restoreSystemdUnitName: true}, failOn: "systemctl daemon-reload"}
 	manager := SystemdPersistence{
 		Runner: runner, UnitDir: dir,
-		VerifyExecutable: func(string) error { return nil },
+		VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil },
 		afterUnitPublish: func() error { return errUnitAfterRename },
 	}
 	_, _, err := manager.EnsureRestore(context.Background(), "/usr/local/bin/stl")
@@ -207,7 +207,7 @@ func TestUnitPublicationCompensationAfterCallerCancellation(t *testing.T) {
 	runner := &boundedRepairRunner{}
 	manager := SystemdPersistence{
 		Runner: runner, UnitDir: dir,
-		VerifyExecutable: func(string) error { return nil },
+		VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil },
 		afterUnitPublish: func() error {
 			cancel()
 			return errUnitAfterRename
@@ -242,7 +242,7 @@ func TestUnitPublicationRejectsUnprovenRestoration(t *testing.T) {
 	runner := &recordingRunner{enabled: map[string]bool{restoreSystemdUnitName: true}}
 	manager := SystemdPersistence{
 		Runner: runner, UnitDir: dir,
-		VerifyExecutable: func(string) error { return nil },
+		VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil },
 		afterUnitPublish: func() error { return errUnitAfterRename },
 		restoreAfterFailure: func(string, string, []byte, bool) error {
 			return nil // Deliberately lies about restoring the prior content.

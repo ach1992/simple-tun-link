@@ -124,7 +124,7 @@ func TestEngineUnitPostPublicationFailureKeepsCommittedIntentConsistent(t *testi
 			b := &unitEngineBackend{}
 			runner := &recordingRunner{}
 			normal := &SystemdPersistence{
-				Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil },
+				Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil },
 			}
 			link := testUnitEngineLink(t)
 			if tc.replacement {
@@ -135,7 +135,7 @@ func TestEngineUnitPostPublicationFailureKeepsCommittedIntentConsistent(t *testi
 			}
 			risky := &SystemdPersistence{
 				Runner: runner, UnitDir: unitDir,
-				VerifyExecutable: func(string) error { return nil },
+				VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil },
 				afterUnitPublish: func() error { return errUnitAfterRename },
 			}
 			executable := "/usr/local/bin/stl"
@@ -194,7 +194,7 @@ func TestEngineLastLinkRemovalReportsOrphanEnabledUnit(t *testing.T) {
 	}
 
 	runner := &recordingRunner{enabled: map[string]bool{restoreSystemdUnitName: true}}
-	manager := &SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }}
+	manager := &SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil }}
 	engine := unitEngineFor(t, b, store, root, manager, "/usr/local/bin/stl")
 	result, err := engine.Remove(context.Background(), link.ID)
 	if stlerr.CodeOf(err) != stlerr.CodeState || !result.Removed || !strings.Contains(err.Error(), "cleanup failed") {
@@ -233,7 +233,7 @@ func TestEngineLastLinkRemovalRejectsUnverifiedDisablePostcondition(t *testing.T
 		t.Fatal(err)
 	}
 	runner := &stuckEnabledCleanupRunner{}
-	manager := &SystemdPersistence{Runner: runner, UnitDir: unitDir}
+	manager := &SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyUnitPath: func(string) error { return nil }}
 	engine := unitEngineFor(t, b, store, root, manager, "/usr/local/bin/stl")
 	result, operationErr := engine.Remove(context.Background(), link.ID)
 	if !result.Removed || stlerr.CodeOf(operationErr) != stlerr.CodeState || !strings.Contains(operationErr.Error(), "cleanup failed") {

@@ -113,7 +113,7 @@ func TestRestoreCommandUsesPersistedStateAndOwnedSystemdUnit(t *testing.T) {
 	b, systemctl := &restoreBackend{}, &fakeSystemctl{}
 	options := &runtimeOptions{
 		stateRoot: root, backends: []backend.Backend{b},
-		restorePersistence: linux.SystemdPersistence{Runner: systemctl, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }},
+		restorePersistence: linux.SystemdPersistence{Runner: systemctl, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil }},
 		executable:         "/usr/local/bin/stl",
 	}
 	var out, errs bytes.Buffer
@@ -200,7 +200,7 @@ func TestRestoreCommandPropagatesSystemdEnableFailure(t *testing.T) {
 	var out, errs bytes.Buffer
 	code := runWithRuntime([]string{"link", "restore", "--all"}, &out, &errs, &runtimeOptions{
 		stateRoot: root, backends: []backend.Backend{b},
-		restorePersistence: linux.SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }},
+		restorePersistence: linux.SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil }},
 		executable:         "/usr/local/bin/stl",
 	})
 	if code != 1 || b.applied != 0 || !strings.Contains(errs.String(), "state_failed") {
@@ -216,7 +216,7 @@ func TestRestoreCommandReconcilesCommittedEmptyStateAndOwnedUnit(t *testing.T) {
 	unitDir := filepath.Join(t.TempDir(), "units")
 	seedRestoreState(t, root)
 	runner := &fakeSystemctl{}
-	manager := linux.SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }}
+	manager := linux.SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil }}
 	if _, _, err := manager.EnsureRestore(context.Background(), "/usr/local/bin/stl"); err != nil {
 		t.Fatal(err)
 	}

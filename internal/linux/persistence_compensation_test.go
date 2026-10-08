@@ -66,7 +66,7 @@ func newCompensationFixture(t *testing.T, existing, enabled bool) (string, strin
 	}
 	runner := &compensationRunner{unitPath: path, foreign: []byte("[Unit]\nDescription=foreign operator file\n")}
 	runner.enabled = map[string]bool{restoreSystemdUnitName: enabled}
-	manager := SystemdPersistence{Runner: runner, UnitDir: dir, VerifyExecutable: func(string) error { return nil }}
+	manager := SystemdPersistence{Runner: runner, UnitDir: dir, VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil }}
 	return dir, path, prior, runner, manager
 }
 
@@ -367,7 +367,7 @@ func TestSymlinkedOwnedMarkerUnitIsNotTrusted(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &recordingRunner{}
-	manager := SystemdPersistence{Runner: runner, UnitDir: dir, VerifyExecutable: func(string) error { return nil }}
+	manager := SystemdPersistence{Runner: runner, UnitDir: dir, VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil }}
 	if _, _, err := manager.EnsureRestore(context.Background(), "/usr/local/bin/stl"); err == nil {
 		t.Fatal("symlinked unit was accepted for activation")
 	}
