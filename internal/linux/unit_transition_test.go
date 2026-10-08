@@ -203,8 +203,14 @@ func TestAtomicNewAndExistingOwnedUnitTransitionsSucceed(t *testing.T) {
 	if !runner.enabled[restoreSystemdUnitName] {
 		t.Fatal("replacement rollback lost enablement")
 	}
-	if err := undo(context.Background()); err != nil {
-		t.Fatalf("original installation undo failed: %v", err)
+	// The newer replacement rollback reproduced identical old bytes but
+	// published a DIFFERENT inode. A stale closure from the original create
+	// must not claim ownership of that new inode merely by content equality.
+	if err := undo(context.Background()); !errors.Is(err, errUnitIdentityConflict) {
+		t.Fatalf("stale first-install undo falsely claimed a different inode: %v", err)
+	}
+	if err := manager.RemoveRestore(context.Background()); err != nil {
+		t.Fatalf("explicit owned unit removal after stale undo failed: %v", err)
 	}
 	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("first unit undo failed to remove own unit: %v", err)
@@ -220,23 +226,24 @@ func TestAtomicNewAndExistingOwnedUnitTransitionsSucceed(t *testing.T) {
 	}
 }
 
-// This is the exact interleaving left uncovered by the previous review:
-// canonical changes after its inode was checked but before reverse exchange.
-// The unexpected second external inode can land in the private staging name.
+// A second independently installed canonical unit must remain canonical
+// even when the first external identity is recoverable in staging. Old-side
+// correctness alone is never authorization to reverse/displace the second.
 func TestConflictReverseNeverUnlinksSecondForeignIdentity(t *testing.T) {
 	_, path, _, runner, manager := newCompensationFixture(t, true, true)
 	foreignFirst := []byte("[Unit]\nDescription=first external identity\n")
 	foreignSecond := []byte("[Unit]\nDescription=second external identity\n")
 	var preservedIncoming string
-	manager.beforeUnitMutation = func(phase string) {
-		if phase == "replace" {
+	preExchangeMutation := func(phase string) {
+		if phase == "before-atomic-exchange" {
 			if err := os.WriteFile(path, foreignFirst, 0o644); err != nil {
 				t.Fatal(err)
 			}
 		}
 	}
 	manager.afterUnitTransition = func(phase string) {
-		if phase == "before-conflict-reverse" {
+		preExchangeMutation(phase)
+		if phase == "after-atomic-exchange" {
 			preservedIncoming = path + ".incoming-preserved"
 			if err := os.Rename(path, preservedIncoming); err != nil {
 				t.Fatal(err)
@@ -251,16 +258,16 @@ func TestConflictReverseNeverUnlinksSecondForeignIdentity(t *testing.T) {
 		t.Fatalf("conflict reversal did not preserve recovery location: %v", err)
 	}
 	got, readErr := os.ReadFile(path)
-	if readErr != nil || string(got) != string(foreignFirst) {
-		t.Fatalf("first external identity lost: %q %v", got, readErr)
+	if readErr != nil || string(got) != string(foreignSecond) {
+		t.Fatalf("new independent canonical identity was displaced: %q %v", got, readErr)
 	}
 	matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".stl-unit-*.tmp"))
 	if err != nil || len(matches) != 1 {
 		t.Fatalf("second displaced identity not preserved: %v %v", matches, err)
 	}
 	got, readErr = os.ReadFile(matches[0])
-	if readErr != nil || string(got) != string(foreignSecond) {
-		t.Fatalf("second external identity was deleted by deferred cleanup: %q %v", got, readErr)
+	if readErr != nil || string(got) != string(foreignFirst) {
+		t.Fatalf("first independently owned recovery identity was lost: %q %v", got, readErr)
 	}
 	incoming, readErr := os.ReadFile(preservedIncoming)
 	if readErr != nil || !strings.Contains(string(incoming), "ExecStart=/opt/stl/stl") {
@@ -271,53 +278,64 @@ func TestConflictReverseNeverUnlinksSecondForeignIdentity(t *testing.T) {
 	}
 }
 
-func TestConflictReverseRetainsUnexpectedPostReversalStaging(t *testing.T) {
-	_, path, _, _, manager := newCompensationFixture(t, true, true)
-	first := []byte("[Unit]\nDescription=first external\n")
-	later := []byte("[Unit]\nDescription=post-reversal external\n")
-	manager.beforeUnitMutation = func(phase string) {
-		if phase == "replace" {
-			if err := os.WriteFile(path, first, 0o644); err != nil {
-				t.Fatal(err)
-			}
-		}
+func TestProvenConflictReverseRetainsUnexpectedPostReversalStaging(t *testing.T) {
+	dir, path, original, _, manager := newCompensationFixture(t, true, true)
+	old, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := []byte("[Unit]\nDescription=first external canonical\n")
+	later := []byte("[Unit]\nDescription=post-reversal external staging\n")
+	// Model the syscall result in isolation: the current canonical pathname
+	// is the EXACT incoming STL inode, while staging contains the original
+	// canonical object independently captured immediately before exchange.
+	installed, err := renderRestoreSystemdUnit("/opt/stl/stl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(installed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	incoming, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := filepath.Join(dir, ".stl-unit-post-reverse.tmp")
+	if err := os.WriteFile(stage, first, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	preExchange, err := os.Lstat(stage)
+	if err != nil {
+		t.Fatal(err)
 	}
 	var incomingPreserved string
 	manager.afterUnitTransition = func(phase string) {
 		if phase != "after-conflict-reverse" {
 			return
 		}
-		matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".stl-unit-*.tmp"))
-		if err != nil || len(matches) != 1 {
-			t.Fatalf("missing stage after reverse: %v %v", matches, err)
-		}
-		incomingPreserved = matches[0] + ".incoming"
-		if err := os.Rename(matches[0], incomingPreserved); err != nil {
+		incomingPreserved = filepath.Join(dir, "reversed-original-incoming")
+		if err := os.Rename(stage, incomingPreserved); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(matches[0], later, 0o644); err != nil {
+		if err := os.WriteFile(stage, later, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	_, _, err := manager.EnsureRestore(context.Background(), "/opt/stl/stl")
-	if !errors.Is(err, errUnitIdentityConflict) {
-		t.Fatalf("missed ownership conflict: %v", err)
+	err = manager.reconcileExchangeConflict(dir, path, stage, old, incoming, preExchange, original, []byte(installed), first)
+	if !errors.Is(err, errUnitIdentityConflict) || !strings.Contains(err.Error(), "reversal=true") {
+		t.Fatalf("proven reverse was unexpectedly rejected: %v", err)
 	}
-	matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".stl-unit-*.tmp"))
-	if err != nil || len(matches) != 1 {
-		t.Fatalf("staging not retained: %v %v", matches, err)
+	got, readErr := os.ReadFile(path)
+	if readErr != nil || string(got) != string(first) {
+		t.Fatalf("previous independent canonical unit not returned: %q %v", got, readErr)
 	}
-	got, err := os.ReadFile(matches[0])
-	if err != nil || string(got) != string(later) {
-		t.Fatalf("external post-reversal staging lost: %q %v", got, err)
+	got, readErr = os.ReadFile(stage)
+	if readErr != nil || string(got) != string(later) {
+		t.Fatalf("post-reversal independent staging deleted: %q %v", got, readErr)
 	}
-	got, err = os.ReadFile(path)
-	if err != nil || string(got) != string(first) {
-		t.Fatalf("first external file lost: %q %v", got, err)
-	}
-	got, err = os.ReadFile(incomingPreserved)
-	if err != nil || !strings.Contains(string(got), "ExecStart=/opt/stl/stl") {
-		t.Fatalf("incoming STL unit lost: %q %v", got, err)
+	got, readErr = os.ReadFile(incomingPreserved)
+	if readErr != nil || string(got) != installed {
+		t.Fatalf("STL's displaced publication lost: %q %v", got, readErr)
 	}
 }
 
@@ -559,8 +577,8 @@ func TestConflictStagingDirectorySyncFailureRetainsRecoverableObjects(t *testing
 	_, path, _, _, manager := newCompensationFixture(t, true, true)
 	foreign := []byte("[Unit]\nDescription=independent\n")
 	failedSync := errors.New("simulated fsync in conflict recovery")
-	manager.beforeUnitMutation = func(phase string) {
-		if phase == "replace" {
+	manager.afterUnitTransition = func(phase string) {
+		if phase == "before-atomic-exchange" {
 			if err := os.WriteFile(path, foreign, 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -576,12 +594,12 @@ func TestConflictStagingDirectorySyncFailureRetainsRecoverableObjects(t *testing
 		t.Fatalf("private staging deleted on fsync failure: %v", stage)
 	}
 	contents, e := os.ReadFile(stage[0])
-	if e != nil || !strings.Contains(string(contents), "ExecStart=/opt/stl/stl") {
-		t.Fatalf("recoverable attempted unit lost: %q %v", contents, e)
+	if e != nil || string(contents) != string(foreign) {
+		t.Fatalf("untrusted displaced canonical material lost: %q %v", contents, e)
 	}
 	contents, e = os.ReadFile(path)
-	if e != nil || string(contents) != string(foreign) {
-		t.Fatalf("external canonical identity lost: %q %v", contents, e)
+	if e != nil || !strings.Contains(string(contents), "ExecStart=/opt/stl/stl") {
+		t.Fatalf("unverified but retained incoming STL unit lost: %q %v", contents, e)
 	}
 }
 

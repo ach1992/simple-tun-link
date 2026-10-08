@@ -190,29 +190,53 @@ the absence of both the owned file and enabled systemd identity.
 Every backend rollback of an already-applied change runs with a
 cancellation-detached, bounded cleanup context, including non-systemd
 operations. All systemd post-publication compensation paths (durability,
-daemon-reload, enable failure, and later Engine rollback) revalidate the
-exact STL-owned unit contents before disabling or restoring the previous
-file, and verify ownership and enablement after bounded cleanup. Initial
-unit creation uses no-overwrite hard-link publication. Updates atomically
-exchange the new and existing unit with Linux renameat2(RENAME_EXCHANGE).
-Both sides are verified before prior-unit disposal: the displaced original
-inode/content, and the canonical incoming inode captured through the
-original opened staging descriptor, with exact bytes and root ownership.
-Any uncertain side fails before systemctl daemon-reload; guarded reversal
-preserves the protected staging recovery identity. Unit removal uses
-renameat2(RENAME_NOREPLACE) to a private recovery path and verifies the moved inode
-before retiring it. Missing-unit compensation uses exclusive no-overwrite
-publication. Filesystems without the required atomic rename facilities fail
-closed; STL does not fall back to clobbering rename. Before any unit
-content read, a non-following, nonblocking file descriptor establishes regular
-inode identity; the content is bounded to 64 KiB. Symlinks, FIFOs, devices,
-changed identities, and oversized files fail closed. When an exchanged or
-retired identity cannot be proven safe to discard, its private .stl-unit-*
-or .stl-retire-* recovery name is retained rather than deleted, including
-when the durability sync fails. Such protected recovery material requires
-manual identity reconciliation; it is never silently cleaned up. Incomplete
-or ambiguous recovery fails explicitly; STL does not disable or overwrite
-identities it cannot prove it owns.
+daemon-reload, enable failure, and later Engine rollback) revalidate
+**both the exact unit bytes and the original inode identity created by STL**.
+A valid marker or byte-identical unit installed by another administrator
+never grants ownership to disable, replace, delete, or re-enable it.
+An operation's originating inode identity is retained through publication,
+enablement, bounded compensation, and Undo. A stale Undo whose original
+published inode has been replaced must fail with an explicit conflict.
+
+Initial installation and absent-unit deletion compensation share the same
+no-clobber hard-link publication helper. The temporary source inode is
+captured through its original opened descriptor, not a later Lstat.
+The actual source and canonical identities/content are verified before and
+after linking, and before a systemctl daemon-reload. Publication which may
+have happened without a provable STL-created inode is **post-publication
+uncertainty**, not an unchanged transaction; it must not be blindly
+compensated. A potentially independent temporary source is retained with
+an inspectable recovery location rather than unlinked, including when it
+has the expected bytes on a different inode or was edited in place.
+
+Existing-unit updates atomically exchange the incoming and existing unit
+with Linux renameat2(RENAME_EXCHANGE). Before the exchange, the current
+canonical inode and content are revalidated against the original operation
+identity. After the exchange, both the displaced original inode/content
+and the new canonical inode/content must be verified. A reversal may move
+a canonical file only when that file remains the **exact original incoming
+STL inode and bytes**, and the displaced staging object still matches the
+file observed just before exchange. Proof that the old STL inode remains
+recoverable is never permission to relocate an independently installed
+canonical unit. On insufficient proof, preserve the current canonical
+identity, retain available private recovery material and fail explicitly;
+no daemon-reload/enable is performed on an unverified outcome.
+
+Unit removal uses renameat2(RENAME_NOREPLACE) to a private recovery path,
+validates the moved inode before retirement, and verifies expected ownership
+before disabling the unit. Missing-unit compensation uses exclusive
+no-overwrite publication and verifies the restored inode before re-enabling.
+Filesystems without required atomic rename facilities fail closed; STL does
+not fall back to clobbering rename. Before every unit content read, a
+non-following, nonblocking file descriptor proves a regular inode; reads
+are bounded to 64 KiB. Symlinks, FIFOs, devices, unexpected inodes, changed
+contents, and oversized files fail closed. Protected .stl-unit-* and
+.stl-retire-* recovery names are retained when an independent identity or
+uncertain durability prevents safe cleanup. Manual reconciliation may be
+required, and no recovery path should be deleted merely because it shares
+an STL-style filename. Unrestricted concurrent root writers cannot be
+serialized without their cooperation; all avoidable observed ownership
+conflicts abort without overriding their canonical configuration.
 
 The restore unit needs an installed, durable stl executable path. Real
 backend adapters register through their own tracked implementation Issues;

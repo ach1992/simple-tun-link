@@ -8,23 +8,43 @@ import (
 )
 
 // A failed exchange must keep its private displaced file until reconciliation.
-func (p SystemdPersistence) reconcileExchangeConflict(dir, path, staged string, before, incoming os.FileInfo, expected []byte) error {
-	oldSafe := p.displacedUnitMatches(staged, before, expected)
+// preserveUnverifiedStaging retains a potentially independent staging file
+// rather than deleting or installing it; fsync makes the recovery pathname
+// durable where the filesystem supports it.
+func (p SystemdPersistence) preserveUnverifiedStaging(dir, staged, description string) error {
+	path, err := preserveUnitStaging(staged)
+	if err != nil {
+		return fmt.Errorf("%w: %s; recovery identity uncertain at %q: %w", errUnitIdentityConflict, description, staged, err)
+	}
+	if err := p.syncRetirementDirectory(dir); err != nil {
+		return fmt.Errorf("%w: %s; recovery retained at %q but directory durability uncertain: %w", errUnitIdentityConflict, description, path, err)
+	}
+	return fmt.Errorf("%w: %s; protected recovery identity retained at %q", errUnitIdentityConflict, description, path)
+}
+
+func (p SystemdPersistence) reconcileExchangeConflict(dir, path, staged string, before, incoming, priorAtExchange os.FileInfo, expected, installed, priorAtExchangeBytes []byte) error {
+	// Ownership of the OLD staging identity alone never authorizes
+	// displacement of an independently installed canonical systemd unit.
+	// Only our original published incoming inode AND bytes may be displaced,
+	// and only the actual canonical inode/content captured immediately before
+	// the exchange may be restored to that pathname. This excludes late
+	// independent mutations to the private staging identity.
 	reversed, restoredPrior := false, false
-	current, err := os.Lstat(path)
-	if err == nil && (oldSafe || os.SameFile(current, incoming)) {
+	if p.incomingUnitMatches(path, incoming, installed) &&
+		p.displacedUnitMatches(staged, priorAtExchange, priorAtExchangeBytes) {
 		if p.afterUnitTransition != nil {
 			p.afterUnitTransition("before-conflict-reverse")
 		}
-		if !oldSafe || p.displacedUnitMatches(staged, before, expected) {
+		// Recheck after the failure-injection boundary. A concurrent operator
+		// may have installed another canonical unit in the meantime.
+		if p.incomingUnitMatches(path, incoming, installed) &&
+			p.displacedUnitMatches(staged, priorAtExchange, priorAtExchangeBytes) {
 			if err := unix.Renameat2(unix.AT_FDCWD, staged, unix.AT_FDCWD, path, unix.RENAME_EXCHANGE); err == nil {
 				reversed = true
 				if p.afterUnitTransition != nil {
 					p.afterUnitTransition("after-conflict-reverse")
 				}
-				if oldSafe {
-					restoredPrior = p.displacedUnitMatches(path, before, expected) && p.verifyUnitPath(path) == nil
-				}
+				restoredPrior = p.displacedUnitMatches(path, before, expected) && p.verifyUnitPath(path) == nil
 			}
 		}
 	}

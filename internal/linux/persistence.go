@@ -42,6 +42,11 @@ type SystemdPersistence struct {
 // must not be compensated like an unchanged filesystem transaction.
 type unitPublicationError struct {
 	cause error
+	// This is the inode opened by STL for publication. When it is nil,
+	// successful publication of an STL-owned canonical inode is NOT proven,
+	// so automatic compensation must leave any independent canonical file
+	// untouched even if its bytes happen to be identical.
+	publishedIdentity os.FileInfo
 	// Generated, STL-owned recovery path only; arbitrary failing subprocess
 	// output and error details must not leak through the public error.
 	recoveryPath string
@@ -88,7 +93,7 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 		return nil, false, fmt.Errorf("unsafe systemd restore unit identity: %w", err)
 	}
 
-	prior, _, readErr := readRegularUnit(path)
+	prior, priorIdentity, readErr := readRegularUnit(path)
 	existed := readErr == nil
 	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 		return nil, false, fmt.Errorf("read systemd unit: %w", readErr)
@@ -117,6 +122,7 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 	}
 
 	fileChanged := !existed || string(prior) != content
+	publishedIdentity := priorIdentity // retained when no file replacement occurs
 	if fileChanged {
 		// The systemctl inspection may have allowed an administrator to
 		// replace the existing unit. Never overwrite a changed identity.
@@ -125,13 +131,21 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 				return nil, false, fmt.Errorf("cannot replace changed STL unit: %w", err)
 			}
 		}
-		if err := p.publishOwnedUnit(unitDir, path, []byte(content), prior, existed); err != nil {
+		incomingIdentity, err := p.publishOwnedUnit(unitDir, path, []byte(content), prior, existed, priorIdentity)
+		if err != nil {
 			var publication *unitPublicationError
 			if errors.As(err, &publication) {
+				// Never compensate a merely byte-identical foreign inode.
+				// Only the originating STL staging inode is authorized for
+				// further destructive operations. Unknown = manual recovery.
+				if publication.publishedIdentity == nil {
+					return nil, false, fmt.Errorf("systemd unit publication uncertain; no proven STL-origin inode for compensation: %w", err)
+				}
+				publishedIdentity = publication.publishedIdentity
 				// This is not a definitely-uncommitted change: the new unit
 				// may already be visible. Verify the exact owned content
 				// before attempting to restore the previous identity.
-				reconcileErr := p.compensatePublishedUnit(ctx, systemctl, unitDir, path, []byte(content), prior, existed, wasEnabled, true, false)
+				reconcileErr := p.compensatePublishedUnit(ctx, systemctl, unitDir, path, []byte(content), prior, publishedIdentity, existed, wasEnabled, true, false)
 				return nil, false, errors.Join(fmt.Errorf("systemd restore unit publication failed after rename: %w", err), reconcileErr)
 			}
 			// A conflict during atomic transition is already being preserved
@@ -139,15 +153,19 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 			// defeat the ownership guarantee.
 			return nil, false, err
 		}
+		publishedIdentity = incomingIdentity
+		if err := p.guardExactPublishedIdentity(path, []byte(content), publishedIdentity); err != nil {
+			return nil, false, fmt.Errorf("newly published STL unit lost its originating inode: %w", err)
+		}
 		if _, err := p.Runner.Run(ctx, systemctl, "daemon-reload"); err != nil {
-			repairErr := p.compensatePublishedUnit(ctx, systemctl, unitDir, path, []byte(content), prior, existed, wasEnabled, true, false)
+			repairErr := p.compensatePublishedUnit(ctx, systemctl, unitDir, path, []byte(content), prior, publishedIdentity, existed, wasEnabled, true, false)
 			return nil, false, errors.Join(fmt.Errorf("systemd daemon-reload: %w", err), repairErr)
 		}
 	}
 
 	enabledChanged := false
 	if !wasEnabled {
-		if err := p.guardExactPublishedUnit(path, []byte(content)); err != nil {
+		if err := p.guardExactPublishedIdentity(path, []byte(content), publishedIdentity); err != nil {
 			return nil, false, fmt.Errorf("cannot enable changed STL unit identity: %w", err)
 		}
 		_, enableErr := p.Runner.Run(ctx, systemctl, "enable", restoreSystemdUnitName)
@@ -159,12 +177,12 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 			}
 		}
 		if enableErr != nil {
-			repairErr := p.compensatePublishedUnit(ctx, systemctl, unitDir, path, []byte(content), prior, existed, wasEnabled, fileChanged, true)
+			repairErr := p.compensatePublishedUnit(ctx, systemctl, unitDir, path, []byte(content), prior, publishedIdentity, existed, wasEnabled, fileChanged, true)
 			return nil, false, errors.Join(fmt.Errorf("enable STL systemd unit: %w", enableErr), repairErr)
 		}
 		enabledChanged = true
 	}
-	if err := p.guardExactPublishedUnit(path, []byte(content)); err != nil {
+	if err := p.guardExactPublishedIdentity(path, []byte(content), publishedIdentity); err != nil {
 		return nil, false, fmt.Errorf("cannot verify owned STL restore unit after activation: %w", err)
 	}
 	if !fileChanged && !enabledChanged {
@@ -172,7 +190,7 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 	}
 
 	undo := func(undoCtx context.Context) error {
-		return p.compensatePublishedUnit(undoCtx, systemctl, unitDir, path, []byte(content), prior, existed, wasEnabled, fileChanged, enabledChanged)
+		return p.compensatePublishedUnit(undoCtx, systemctl, unitDir, path, []byte(content), prior, publishedIdentity, existed, wasEnabled, fileChanged, enabledChanged)
 	}
 	return undo, true, nil
 }
@@ -181,7 +199,7 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 // for post-rename durability errors, daemon-reload/enable failures, and the
 // rollback closure returned to Engine. Every destructive action is gated by
 // the exact STL-owned contents published by this operation.
-func (p SystemdPersistence) compensatePublishedUnit(ctx context.Context, systemctl, unitDir, path string, published, prior []byte, existed, wasEnabled, fileChanged, enableAttempted bool) error {
+func (p SystemdPersistence) compensatePublishedUnit(ctx context.Context, systemctl, unitDir, path string, published, prior []byte, publishedIdentity os.FileInfo, existed, wasEnabled, fileChanged, enableAttempted bool) error {
 	if existed && !isOwnedSystemdUnit(prior) {
 		return fmt.Errorf("systemd unit compensation incomplete: prior unit ownership is unproven")
 	}
@@ -197,7 +215,7 @@ func (p SystemdPersistence) compensatePublishedUnit(ctx context.Context, systemc
 	if err := repairCtx.Err(); err != nil {
 		return fmt.Errorf("systemd unit compensation incomplete: %w", err)
 	}
-	if err := p.guardExactPublishedUnit(path, published); err != nil {
+	if err := p.guardExactPublishedIdentity(path, published, publishedIdentity); err != nil {
 		return fmt.Errorf("systemd unit compensation uncertain: %w", err)
 	}
 
@@ -208,7 +226,7 @@ func (p SystemdPersistence) compensatePublishedUnit(ctx context.Context, systemc
 		if _, err := p.Runner.Run(repairCtx, systemctl, "disable", restoreSystemdUnitName); err != nil {
 			return fmt.Errorf("systemd unit compensation incomplete: disable owned enablement: %w", err)
 		}
-		if err := p.guardExactPublishedUnit(path, published); err != nil {
+		if err := p.guardExactPublishedIdentity(path, published, publishedIdentity); err != nil {
 			return fmt.Errorf("systemd unit compensation uncertain after disable: %w", err)
 		}
 		enabled, err := p.isEnabled(repairCtx, systemctl, restoreSystemdUnitName)
@@ -223,10 +241,10 @@ func (p SystemdPersistence) compensatePublishedUnit(ctx context.Context, systemc
 	if fileChanged {
 		// Re-read after external systemctl work, immediately before replacing
 		// or deleting the operation's published file.
-		if err := p.guardExactPublishedUnit(path, published); err != nil {
+		if err := p.guardExactPublishedIdentity(path, published, publishedIdentity); err != nil {
 			return fmt.Errorf("systemd unit compensation uncertain before file restoration: %w", err)
 		}
-		if err := p.restorePublishedUnitWithSeam(unitDir, path, published, prior, existed); err != nil {
+		if err := p.restorePublishedUnitWithSeam(unitDir, path, published, prior, existed, publishedIdentity); err != nil {
 			return fmt.Errorf("systemd unit compensation incomplete: %w", err)
 		}
 		// A successful write alone is not proof that prior identity returned.
@@ -250,13 +268,13 @@ func (p SystemdPersistence) compensatePublishedUnit(ctx context.Context, systemc
 	return nil
 }
 
-func (p SystemdPersistence) restorePublishedUnitWithSeam(dir, path string, published, prior []byte, existed bool) error {
+func (p SystemdPersistence) restorePublishedUnitWithSeam(dir, path string, published, prior []byte, existed bool, publishedIdentity os.FileInfo) error {
 	if p.restoreAfterFailure != nil {
 		// A deterministic test seam for incomplete or dishonest restoration.
 		// Production uses the atomic guarded restore path below.
 		return p.restoreAfterFailure(dir, path, prior, existed)
 	}
-	return p.restorePublishedUnit(dir, path, published, prior, existed)
+	return p.restorePublishedUnit(dir, path, published, prior, existed, publishedIdentity)
 }
 
 // guardExactPublishedUnit refuses symlinks, nonregular files, foreign content
@@ -280,6 +298,23 @@ func (p SystemdPersistence) guardExactPublishedUnit(path string, expected []byte
 	}
 	if !isOwnedSystemdUnit(current) || !bytes.Equal(current, expected) {
 		return fmt.Errorf("current unit is not the exact STL-owned content published by this operation")
+	}
+	return nil
+}
+
+// guardExactPublishedIdentity requires root/trust, exact bytes and the
+// actual originating inode. A second administrator can install byte-identical
+// STL-marked text; neither the text nor its marker confers ownership.
+func (p SystemdPersistence) guardExactPublishedIdentity(path string, expected []byte, original os.FileInfo) error {
+	if original == nil {
+		return fmt.Errorf("%w: original published inode identity is unavailable", errUnitIdentityConflict)
+	}
+	opened, err := p.exactUnitIdentity(path, expected)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(opened, original) {
+		return fmt.Errorf("%w: canonical inode differs from STL's original published inode", errUnitIdentityConflict)
 	}
 	return nil
 }
@@ -357,7 +392,7 @@ func (p SystemdPersistence) RemoveRestore(ctx context.Context) error {
 		unitDir = "/etc/systemd/system"
 	}
 	path := filepath.Join(unitDir, restoreSystemdUnitName)
-	prior, _, err := readRegularUnit(path)
+	prior, priorIdentity, err := readRegularUnit(path)
 	systemctl := p.SystemctlBinary
 	if systemctl == "" {
 		systemctl = "systemctl"
@@ -388,7 +423,7 @@ func (p SystemdPersistence) RemoveRestore(ctx context.Context) error {
 	if !isOwnedSystemdUnit(prior) {
 		return fmt.Errorf("refusing to remove non-STL systemd unit %q", restoreSystemdUnitName)
 	}
-	if err := p.guardExactPublishedUnit(path, prior); err != nil {
+	if err := p.guardExactPublishedIdentity(path, prior, priorIdentity); err != nil {
 		return fmt.Errorf("refusing to remove unverified owned unit: %w", err)
 	}
 
@@ -396,24 +431,27 @@ func (p SystemdPersistence) RemoveRestore(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := p.guardExactPublishedIdentity(path, prior, priorIdentity); err != nil {
+		return fmt.Errorf("unit identity changed during systemd enablement inspection; refusing disable: %w", err)
+	}
 	if wasEnabled {
 		if _, err := p.Runner.Run(ctx, systemctl, "disable", restoreSystemdUnitName); err != nil {
 			return fmt.Errorf("disable STL systemd unit: %w", err)
 		}
 	}
-	if err := p.guardExactPublishedUnit(path, prior); err != nil {
+	if err := p.guardExactPublishedIdentity(path, prior, priorIdentity); err != nil {
 		return fmt.Errorf("STL unit identity changed before owned removal; cleanup incomplete: %w", err)
 	}
-	if err := p.retireOwnedUnit(unitDir, path, prior, "delete"); err != nil {
+	if err := p.retireOwnedUnit(unitDir, path, prior, "delete", priorIdentity); err != nil {
 		// Guarded compensation is safe even after an identity conflict:
 		// it refuses foreign canonical files, but it can exclusively
 		// reinstate the previous owned unit if the canonical path is absent.
 		// Never discard foreign recovery material retained by retirement.
-		restoreErr := p.compensateRemovedUnit(ctx, systemctl, unitDir, path, prior, wasEnabled)
+		restoreErr := p.compensateRemovedUnit(ctx, systemctl, unitDir, path, prior, priorIdentity, wasEnabled)
 		return errors.Join(fmt.Errorf("remove STL systemd unit: %w", err), restoreErr)
 	}
 	if _, err := p.Runner.Run(ctx, systemctl, "daemon-reload"); err != nil {
-		restoreErr := p.compensateRemovedUnit(ctx, systemctl, unitDir, path, prior, wasEnabled)
+		restoreErr := p.compensateRemovedUnit(ctx, systemctl, unitDir, path, prior, priorIdentity, wasEnabled)
 		return errors.Join(fmt.Errorf("systemd daemon-reload after remove: %w", err), restoreErr)
 	}
 	if err := p.verifyPriorUnit(path, nil, false); err != nil {
@@ -433,7 +471,7 @@ func (p SystemdPersistence) RemoveRestore(ctx context.Context) error {
 // the current identity is either still exactly prior or absent. An operator's
 // independently installed/replaced unit is never overwritten. Restoration
 // after deletion uses an exclusive no-replace hardlink publication.
-func (p SystemdPersistence) compensateRemovedUnit(ctx context.Context, systemctl, dir, path string, prior []byte, wasEnabled bool) error {
+func (p SystemdPersistence) compensateRemovedUnit(ctx context.Context, systemctl, dir, path string, prior []byte, original os.FileInfo, wasEnabled bool) error {
 	repairBase := ctx
 	if ctx.Err() != nil {
 		repairBase = context.WithoutCancel(ctx)
@@ -441,34 +479,36 @@ func (p SystemdPersistence) compensateRemovedUnit(ctx context.Context, systemctl
 	repairCtx, cancel := context.WithTimeout(repairBase, 30*time.Second)
 	defer cancel()
 	info, err := os.Lstat(path)
+	owned := original
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		if err := writeOwnedUnitIfAbsent(dir, path, prior, 0o644); err != nil {
+		owned, err = p.publishUnitIfAbsent(dir, path, prior, 0o644, "compensate-source-link")
+		if err != nil {
 			return fmt.Errorf("STL unit removal compensation incomplete: cannot restore owned file without replacement: %w", err)
 		}
 	case err != nil:
 		return fmt.Errorf("STL unit removal compensation uncertain: cannot inspect unit identity: %w", err)
 	case info.Mode().IsRegular():
-		if err := p.guardExactPublishedUnit(path, prior); err != nil {
+		if err := p.guardExactPublishedIdentity(path, prior, owned); err != nil {
 			return fmt.Errorf("STL unit removal compensation uncertain: %w", err)
 		}
 	default:
 		return fmt.Errorf("STL unit removal compensation uncertain: foreign or nonregular file occupies unit identity")
 	}
-	if err := p.verifyPriorUnit(path, prior, true); err != nil {
+	if err := p.guardExactPublishedIdentity(path, prior, owned); err != nil {
 		return fmt.Errorf("STL unit removal compensation incomplete: %w", err)
 	}
 	if _, err := p.Runner.Run(repairCtx, systemctl, "daemon-reload"); err != nil {
 		return fmt.Errorf("STL unit removal compensation incomplete: reload: %w", err)
 	}
-	if err := p.guardExactPublishedUnit(path, prior); err != nil {
+	if err := p.guardExactPublishedIdentity(path, prior, owned); err != nil {
 		return fmt.Errorf("STL unit removal compensation uncertain after reload: %w", err)
 	}
 	if wasEnabled {
 		if _, err := p.Runner.Run(repairCtx, systemctl, "enable", restoreSystemdUnitName); err != nil {
 			return fmt.Errorf("STL unit removal compensation incomplete: re-enable: %w", err)
 		}
-		if err := p.guardExactPublishedUnit(path, prior); err != nil {
+		if err := p.guardExactPublishedIdentity(path, prior, owned); err != nil {
 			return fmt.Errorf("STL unit removal compensation uncertain after re-enable: %w", err)
 		}
 	}
@@ -482,39 +522,97 @@ func (p SystemdPersistence) compensateRemovedUnit(ctx context.Context, systemctl
 	return nil
 }
 
-// writeOwnedUnitIfAbsent publishes a fully synced temporary file under the
-// canonical name only if no other actor created a replacement in the meantime.
-func writeOwnedUnitIfAbsent(dir, path string, contents []byte, mode os.FileMode) error {
-	tmp, err := os.CreateTemp(dir, ".stl-recover-*.tmp")
+// publishUnitIfAbsent is the single trusted implementation of initial
+// no-clobber publication AND absent-unit compensation. Its source inode
+// comes from createOwnedStagingUnit's opened descriptor; os.Link's exclusive
+// destination semantics alone do not prove ownership of the source.
+func (p SystemdPersistence) publishUnitIfAbsent(dir, path string, contents []byte, mode os.FileMode, sourcePhase string) (os.FileInfo, error) {
+	// Trust the canonical parent directory/target identity before touching the
+	// sensitive systemd namespace; recheck the actual opened inode afterward.
+	if err := p.verifyUnitPath(path); err != nil {
+		return nil, fmt.Errorf("unsafe systemd unit publication target: %w", err)
+	}
+	staged, incoming, err := createOwnedStagingUnit(dir, contents, mode)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer os.Remove(tmp.Name())
-	defer tmp.Close()
-	if err := tmp.Chmod(mode); err != nil {
-		return err
+	cleanupStaged := true
+	defer func() {
+		// Neither an inode match alone nor a filename match authorizes
+		// deletion. In-place edits also invalidate our right to clean up.
+		if cleanupStaged && p.displacedUnitMatches(staged, incoming, contents) {
+			_ = os.Remove(staged)
+		}
+	}()
+
+	if p.beforeUnitMutation != nil && sourcePhase != "" {
+		p.beforeUnitMutation(sourcePhase)
 	}
-	if _, err := tmp.Write(contents); err != nil {
-		return err
+	if !p.displacedUnitMatches(staged, incoming, contents) {
+		cleanupStaged = false
+		return nil, p.preserveUnverifiedStaging(dir, staged, "initial hardlink source changed before publication")
 	}
-	if err := tmp.Sync(); err != nil {
-		return err
+	if p.afterUnitTransition != nil {
+		p.afterUnitTransition("before-absent-publication-hardlink")
 	}
-	if err := tmp.Close(); err != nil {
-		return err
+	// Link fails on EEXIST without overwriting the canonical unit. It does
+	// not provide source-path comparison, so inspect both identities below.
+	if err := os.Link(staged, path); err != nil {
+		if !p.displacedUnitMatches(staged, incoming, contents) {
+			cleanupStaged = false
+			return nil, errors.Join(err, p.preserveUnverifiedStaging(dir, staged, "initial hardlink source changed during failed publication"))
+		}
+		return nil, err
 	}
-	// Hard-link creation is atomic and returns EEXIST rather than replacing
-	// a symlink or unit created by an independent administrator.
-	if err := os.Link(tmp.Name(), path); err != nil {
-		return err
+	if p.afterUnitTransition != nil {
+		p.afterUnitTransition("after-absent-publication-link")
 	}
-	// The new unit now exists at its canonical path. A directory fsync
-	// failure is post-publication uncertainty, not a definitely-aborted
-	// create; EnsureRestore must attempt guarded owned compensation.
-	if err := syncOwnedDir(dir); err != nil {
-		return &unitPublicationError{cause: err}
+	uncertain := func(cause error, recovery string) (os.FileInfo, error) {
+		var owned os.FileInfo
+		if p.incomingUnitMatches(path, incoming, contents) {
+			owned = incoming
+		}
+		return nil, &unitPublicationError{
+			cause: cause, recoveryPath: recovery, publishedIdentity: owned,
+		}
 	}
-	return nil
+	// Publication is now potentially visible. A mismatch must be reported
+	// as POST-publication uncertainty, not an unchanged prior state.
+	if !p.incomingUnitMatches(path, incoming, contents) ||
+		!p.displacedUnitMatches(staged, incoming, contents) {
+		cleanupStaged = false
+		return uncertain(fmt.Errorf("%w: initial hardlink source or canonical identity differs from prepared inode", errUnitIdentityConflict), staged)
+	}
+	// Durably publish the canonical hardlink before dropping the private
+	// staging name. An fsync failure must not be mistaken for prepublication.
+	if err := p.syncRetirementDirectory(dir); err != nil {
+		cleanupStaged = false
+		return uncertain(err, staged)
+	}
+	if p.afterUnitTransition != nil {
+		p.afterUnitTransition("before-verified-initial-staging-retirement")
+	}
+	if !p.incomingUnitMatches(path, incoming, contents) ||
+		!p.displacedUnitMatches(staged, incoming, contents) {
+		cleanupStaged = false
+		return uncertain(fmt.Errorf("%w: initial hardlink identity changed before staging retirement", errUnitIdentityConflict), staged)
+	}
+	if err := os.Remove(staged); err != nil {
+		cleanupStaged = false
+		return uncertain(fmt.Errorf("retire verified initial staging: %w", err), staged)
+	}
+	// The temp pathname was successfully retired. Never try to remove
+	// another object that may subsequently appear at that same pathname.
+	cleanupStaged = false
+	if err := p.syncRetirementDirectory(dir); err != nil {
+		return uncertain(err, "")
+	}
+	// Only return success when the canonical inode is still exactly what
+	// was prepared, with validated content and applicable ownership.
+	if !p.incomingUnitMatches(path, incoming, contents) {
+		return uncertain(fmt.Errorf("%w: initial canonical unit identity changed after staging retirement", errUnitIdentityConflict), "")
+	}
+	return incoming, nil
 }
 
 func (p SystemdPersistence) isEnabled(ctx context.Context, systemctl, name string) (bool, error) {
@@ -597,25 +695,6 @@ WantedBy=multi-user.target
 
 func isOwnedSystemdUnit(content []byte) bool {
 	return strings.HasPrefix(string(content), managedSystemdMarker+"\n")
-}
-
-// The compatibility wrappers remain for isolated tests of publication
-// failures. They only create *absent* units; production replacements and
-// rollback use SystemdPersistence's guarded atomic transitions.
-func writeAtomicFile(dir, path string, content []byte, mode os.FileMode) error {
-	return writeAtomicFileWithHook(dir, path, content, mode, nil)
-}
-
-func writeAtomicFileWithHook(dir, path string, content []byte, mode os.FileMode, afterPublish func() error) error {
-	if err := writeOwnedUnitIfAbsent(dir, path, content, mode); err != nil {
-		return err
-	}
-	if afterPublish != nil {
-		if err := afterPublish(); err != nil {
-			return &unitPublicationError{cause: err}
-		}
-	}
-	return nil
 }
 
 func syncOwnedDir(path string) error {

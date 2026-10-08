@@ -139,9 +139,9 @@ func TestAtomicExchangeRejectsUnverifiedIncomingIdentity(t *testing.T) {
 	}
 }
 
-// A valid initial exchange may race with a second administrator before the
-// displaced old identity is released. The second canonical object moves into
-// private recovery staging; no unsafe reload is attempted.
+// A late independent canonical replacement stays installed at its own
+// pathname. The displaced prior STL inode remains privately recoverable;
+// reversing would improperly relocate independent canonical configuration.
 func TestLateCanonicalReplacementStillRetainsBothExchangeIdentities(t *testing.T) {
 	dir, path, oldContent, runner, p := newCompensationFixture(t, true, true)
 	oldInfo, err := os.Lstat(path)
@@ -164,27 +164,35 @@ func TestLateCanonicalReplacementStillRetainsBothExchangeIdentities(t *testing.T
 		}
 	}
 	_, _, err = p.EnsureRestore(context.Background(), "/opt/stl/stl")
+	activationErr := err
 	if !errors.Is(err, errUnitIdentityConflict) || !injected {
 		t.Fatalf("late canonical replacement was not rejected: %v", err)
 	}
 	info, err := os.Lstat(path)
-	if err != nil || !os.SameFile(info, oldInfo) {
-		t.Fatal("original owned inode was not restored")
+	if err != nil || os.SameFile(info, oldInfo) {
+		t.Fatalf("late independent canonical identity was displaced: %v", err)
 	}
 	content, err := os.ReadFile(path)
-	if err != nil || !bytes.Equal(content, oldContent) {
-		t.Fatal("original owned content was lost")
+	if err != nil || !bytes.Equal(content, foreign) {
+		t.Fatalf("late independent canonical contents changed: %q %v", content, err)
 	}
 	stages, err := filepath.Glob(filepath.Join(dir, ".stl-unit-*.tmp"))
 	if err != nil || len(stages) != 1 {
-		t.Fatalf("foreign recovery stage missing: %v %v", stages, err)
+		t.Fatalf("prior STL recovery stage missing: %v %v", stages, err)
+	}
+	recoveryInfo, err := os.Lstat(stages[0])
+	if err != nil || !os.SameFile(recoveryInfo, oldInfo) {
+		t.Fatalf("previous STL inode not preserved in recovery: %v", err)
 	}
 	recovered, err := os.ReadFile(stages[0])
-	if err != nil || !bytes.Equal(recovered, foreign) {
-		t.Fatalf("late foreign file lost: %q %v", recovered, err)
+	if err != nil || !bytes.Equal(recovered, oldContent) {
+		t.Fatalf("previous STL contents not preserved: %q %v", recovered, err)
 	}
 	if _, err := os.Stat(savedIncoming); err != nil {
 		t.Fatal("original incoming staging not preserved")
+	}
+	if !strings.Contains(activationErr.Error(), stages[0]) || !strings.Contains(activationErr.Error(), "reversal=false") {
+		t.Fatalf("error did not identify incomplete recovery: %v", activationErr)
 	}
 	if len(runner.commands) != 1 || runner.commands[0] != "systemctl is-enabled "+restoreSystemdUnitName {
 		t.Fatalf("late external replacement reached systemctl: %v", runner.commands)
@@ -225,4 +233,97 @@ func TestIncomingConflictRetainsRecoveryAfterDirectorySyncFailure(t *testing.T) 
 		t.Fatalf("incoming identity lost: %q %v", displaced, err)
 	}
 	expectSystemdOperations(t, runner.commands, "systemctl is-enabled ")
+}
+
+// The old displaced inode may be changed in private staging AFTER the
+// exchange. Restoring that later object to canonical would be equally unsafe
+// as displacing a changed independent canonical unit.
+func TestPostExchangeStagingReplacementCannotBecomeCanonical(t *testing.T) {
+	dir, path, prior, runner, p := newCompensationFixture(t, true, true)
+	foreign := []byte("[Unit]\nDescription=other actor inserted into private recovery\n")
+	var savedOld string
+	p.afterUnitTransition = func(phase string) {
+		if phase != "after-atomic-exchange" {
+			return
+		}
+		stages, err := filepath.Glob(filepath.Join(dir, ".stl-unit-*.tmp"))
+		if err != nil || len(stages) != 1 {
+			t.Fatalf("private displacement missing: %v %v", stages, err)
+		}
+		savedOld = filepath.Join(dir, "displaced-original-stl")
+		if err := os.Rename(stages[0], savedOld); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(stages[0], foreign, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, _, err := p.EnsureRestore(context.Background(), "/opt/stl/stl")
+	if !errors.Is(err, errUnitIdentityConflict) || !strings.Contains(err.Error(), "reversal=false") {
+		t.Fatalf("post-exchange staging swap was treated as safe reverse: %v", err)
+	}
+	got, e := os.ReadFile(path)
+	if e != nil || !strings.Contains(string(got), "ExecStart=/opt/stl/stl") {
+		t.Fatalf("unverified foreign stage was installed as canonical: %q %v", got, e)
+	}
+	got, e = os.ReadFile(savedOld)
+	if e != nil || !bytes.Equal(got, prior) {
+		t.Fatalf("previous owned inode not recoverable: %q %v", got, e)
+	}
+	stages, e := filepath.Glob(filepath.Join(dir, ".stl-unit-*.tmp"))
+	if e != nil || len(stages) != 1 {
+		t.Fatalf("foreign stage was unlinked: %v %v", stages, e)
+	}
+	got, e = os.ReadFile(stages[0])
+	if e != nil || !bytes.Equal(got, foreign) || !strings.Contains(err.Error(), stages[0]) {
+		t.Fatalf("foreign recovery material or error path was lost: %q %v err=%v", got, e, err)
+	}
+	expectSystemdOperations(t, runner.commands, "systemctl is-enabled ")
+}
+
+// Byte-identical replacement is still a different canonical identity; the
+// rollback cannot displace it merely because its contents resemble STL text.
+func TestLateCanonicalByteIdenticalForeignInodeIsNotReversed(t *testing.T) {
+	dir, path, _, runner, p := newCompensationFixture(t, true, true)
+	var laterInfo os.FileInfo
+	var laterBytes []byte
+	p.afterUnitTransition = func(phase string) {
+		if phase != "before-verified-staging-retirement" {
+			return
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		laterBytes = b
+		if err := os.Rename(path, path+".original-incoming"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		laterInfo, err = os.Lstat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, _, err := p.EnsureRestore(context.Background(), "/opt/stl/stl")
+	if !errors.Is(err, errUnitIdentityConflict) || !strings.Contains(err.Error(), "reversal=false") {
+		t.Fatalf("different incoming canonical inode was silently accepted: %v", err)
+	}
+	now, e := os.Lstat(path)
+	if e != nil || !os.SameFile(now, laterInfo) {
+		t.Fatalf("independent byte-identical canonical inode was displaced: %v", e)
+	}
+	data, e := os.ReadFile(path)
+	if e != nil || !bytes.Equal(data, laterBytes) {
+		t.Fatalf("new independent canonical contents changed: %q %v", data, e)
+	}
+	if len(runner.commands) != 1 {
+		t.Fatalf("unexpected systemctl mutation on canonical identity conflict: %v", runner.commands)
+	}
+	oldStages, e := filepath.Glob(filepath.Join(dir, ".stl-unit-*.tmp"))
+	if e != nil || len(oldStages) != 1 {
+		t.Fatalf("prior STL staging was lost: %v %v", oldStages, e)
+	}
 }

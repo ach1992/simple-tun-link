@@ -15,7 +15,8 @@ var errUnitAfterRename = errors.New("controlled failure after unit rename")
 func TestAtomicUnitWriterDistinguishesPublishedFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, restoreSystemdUnitName)
-	if err := writeAtomicFileWithHook(dir, path, []byte("visible"), 0o644, func() error {
+	visible := []byte(managedSystemdMarker + "\n[Unit]\nDescription=visible\n")
+	if err := writeAtomicFileWithHook(dir, path, visible, 0o644, func() error {
 		return errUnitAfterRename
 	}); err == nil {
 		t.Fatal("expected publication failure")
@@ -26,7 +27,7 @@ func TestAtomicUnitWriterDistinguishesPublishedFailure(t *testing.T) {
 		}
 	}
 	data, err := os.ReadFile(path)
-	if err != nil || string(data) != "visible" {
+	if err != nil || string(data) != string(visible) {
 		t.Fatalf("post-publication failure did not exercise a published file: %q %v", data, err)
 	}
 
