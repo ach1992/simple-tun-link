@@ -41,14 +41,11 @@ func (p SystemdPersistence) exchangeOwnedUnit(dir, path string, expected, conten
 	if err != nil {
 		return err
 	}
-	staged, err := createOwnedStagingUnit(dir, content, 0o644)
+	// The inode identity comes from the original opened staging descriptor,
+	// not a later pathname Lstat that could have inspected a replacement.
+	staged, incoming, err := createOwnedStagingUnit(dir, content, 0o644)
 	if err != nil {
 		return err
-	}
-	incoming, err := os.Lstat(staged)
-	if err != nil {
-		// The freshly staged path already changed; never blindly unlink it.
-		return fmt.Errorf("%w: cannot inspect incoming staging identity at %q: %v", errUnitIdentityConflict, staged, err)
 	}
 	cleanupStaged := true
 	defer func() {
@@ -68,56 +65,29 @@ func (p SystemdPersistence) exchangeOwnedUnit(dir, path string, expected, conten
 		// No fallback to ordinary rename: it could clobber an external file.
 		return fmt.Errorf("atomic guarded unit exchange unavailable: %w", err)
 	}
-	// The displaced unit is now at the private staging name. Check both the
-	// original inode and bytes, not only the marker or expected text.
-	data, displaced, readErr := readRegularUnit(staged)
-	matched := readErr == nil && os.SameFile(before, displaced) && bytes.Equal(data, expected)
-	if !matched {
-		// From this point the staging path contains an unverified identity.
-		// Never invoke the ordinary deferred unlink after a conflict, even
-		// following successful reversal. Another root administrator could
-		// change the canonical inode between the check and reverse exchange,
-		// causing a second foreign identity to land at this staging path.
-		// Retaining a recoverable staging file is better than destroying an
-		// independent unit; operators can remove it after reconciliation.
+	// Verify both sides of the atomic exchange before retiring prior bytes.
+	if !p.displacedUnitMatches(staged, before, expected) ||
+		!p.incomingUnitMatches(path, incoming, content) {
 		cleanupStaged = false
-		reversed := false
-		if current, err := os.Lstat(path); err == nil && os.SameFile(current, incoming) {
-			if p.afterUnitTransition != nil {
-				p.afterUnitTransition("before-conflict-reverse")
-			}
-			if err := unix.Renameat2(unix.AT_FDCWD, staged, unix.AT_FDCWD, path, unix.RENAME_EXCHANGE); err == nil {
-				reversed = true
-				if p.afterUnitTransition != nil {
-					p.afterUnitTransition("after-conflict-reverse")
-				}
-			}
-		}
-		preserved, preserveErr := preserveUnitStaging(staged)
-		if preserveErr != nil {
-			return fmt.Errorf("%w: reversal=%t; cannot verify recovery staging %q: %w", errUnitIdentityConflict, reversed, staged, preserveErr)
-		}
-		// Attempt to make the recovery pathname durable; preserve it even
-		// when fsync fails and explicitly report that uncertain durability.
-		if err := p.syncRetirementDirectory(dir); err != nil {
-			return fmt.Errorf("%w: reversal=%t; recovery staging retained at %q but durability is uncertain: %w", errUnitIdentityConflict, reversed, preserved, err)
-		}
-		return fmt.Errorf("%w: reversal=%t; displaced recovery identity retained at %q", errUnitIdentityConflict, reversed, preserved)
+		return p.reconcileExchangeConflict(dir, path, staged, before, incoming, expected)
 	}
-	// The displaced inode was exactly STL's expected prior unit. Recheck
-	// the private staging name immediately before retiring it: a different
-	// root-operated manager may have moved another object there since the
-	// first snapshot. A changed name is recovery evidence, not garbage.
 	if p.afterUnitTransition != nil {
 		p.afterUnitTransition("before-verified-staging-retirement")
 	}
-	recheckData, recheckInfo, recheckErr := readRegularUnit(staged)
-	if recheckErr != nil || !os.SameFile(before, recheckInfo) || !bytes.Equal(recheckData, expected) {
+	// Recheck both path identities immediately before discarding staging.
+	if !p.displacedUnitMatches(staged, before, expected) ||
+		!p.incomingUnitMatches(path, incoming, content) {
 		cleanupStaged = false
-		return &unitPublicationError{
-			cause:        fmt.Errorf("%w: prior staging changed before retirement: %v", errUnitIdentityConflict, recheckErr),
-			recoveryPath: staged,
+		if p.incomingUnitMatches(path, incoming, content) {
+			// The just-published canonical inode is still provably ours:
+			// return an explicit post-publication failure so EnsureRestore
+			// can compensate it without touching the unrelated staging name.
+			return &unitPublicationError{
+				cause:        fmt.Errorf("%w: displaced staging changed before retirement", errUnitIdentityConflict),
+				recoveryPath: staged,
+			}
 		}
+		return p.reconcileExchangeConflict(dir, path, staged, before, incoming, expected)
 	}
 	if err := os.Remove(staged); err != nil {
 		return &unitPublicationError{cause: fmt.Errorf("retire verified prior unit: %w", err)}
@@ -131,6 +101,21 @@ func (p SystemdPersistence) exchangeOwnedUnit(dir, path string, expected, conten
 		}
 	}
 	return nil
+}
+
+// Verify OLD by its original inode and bytes (the staged name is noncanonical).
+func (p SystemdPersistence) displacedUnitMatches(path string, before os.FileInfo, expected []byte) bool {
+	data, opened, err := readRegularUnit(path)
+	if err != nil || !os.SameFile(before, opened) || !bytes.Equal(data, expected) {
+		return false
+	}
+	return p.VerifyUnitPath != nil || protectedRootOwnership(opened) == nil
+}
+
+// Verify NEW by exact staging inode, bytes, and canonical path trust.
+func (p SystemdPersistence) incomingUnitMatches(path string, incoming os.FileInfo, content []byte) bool {
+	current, err := p.exactUnitIdentity(path, content)
+	return err == nil && os.SameFile(current, incoming)
 }
 
 // retireOwnedUnit moves the canonical unit to a private recovery filename
@@ -230,16 +215,26 @@ func (p SystemdPersistence) exactUnitIdentity(path string, expected []byte) (os.
 	return info, nil
 }
 
-func createOwnedStagingUnit(dir string, content []byte, mode os.FileMode) (string, error) {
+func createOwnedStagingUnit(dir string, content []byte, mode os.FileMode) (string, os.FileInfo, error) {
 	tmp, err := os.CreateTemp(dir, ".stl-unit-*.tmp")
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	name := tmp.Name()
-	fail := func(err error) (string, error) {
+	// Capture the inode through our own descriptor, never a pathname that
+	// may already point to a different privileged administrator's file.
+	opened, err := tmp.Stat()
+	if err != nil {
 		_ = tmp.Close()
-		_ = os.Remove(name)
-		return "", err
+		return "", nil, fmt.Errorf("cannot inspect created unit staging descriptor at %q: %w", name, err)
+	}
+	fail := func(cause error) (string, os.FileInfo, error) {
+		_ = tmp.Close()
+		// Cleanup only our original inode, never a substituted stage.
+		if current, err := os.Lstat(name); err == nil && os.SameFile(current, opened) {
+			_ = os.Remove(name)
+		}
+		return "", nil, cause
 	}
 	if err := tmp.Chmod(mode); err != nil {
 		return fail(err)
@@ -251,10 +246,9 @@ func createOwnedStagingUnit(dir string, content []byte, mode os.FileMode) (strin
 		return fail(err)
 	}
 	if err := tmp.Close(); err != nil {
-		_ = os.Remove(name)
-		return "", err
+		return fail(err)
 	}
-	return name, nil
+	return name, opened, nil
 }
 
 func preserveUnitStaging(name string) (string, error) {

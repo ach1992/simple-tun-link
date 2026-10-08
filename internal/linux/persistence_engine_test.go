@@ -248,3 +248,89 @@ func TestEngineLastLinkRemovalRejectsUnverifiedDisablePostcondition(t *testing.T
 	}
 	expectSystemdOperations(t, runner.commands, "systemctl is-enabled ", "systemctl disable ", "systemctl daemon-reload", "systemctl is-enabled ")
 }
+
+// A substituted incoming inode must abort BEFORE reload and preserve Engine
+// state, backend state, and the exact prior owned systemd-unit inode.
+func TestEngineIncomingExchangeIdentityFailureRollsBackWithoutStateCommit(t *testing.T) {
+	root, unitDir := t.TempDir(), t.TempDir()
+	store := state.NewFileStore(root)
+	b := &unitEngineBackend{}
+	runner := &recordingRunner{}
+	normal := &SystemdPersistence{
+		Runner: runner, UnitDir: unitDir,
+		VerifyExecutable: func(string) error { return nil },
+		VerifyUnitPath:   func(string) error { return nil },
+	}
+	link := testUnitEngineLink(t)
+	if _, err := unitEngineFor(t, b, store, root, normal, "/usr/local/bin/stl").Ensure(context.Background(), link); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(unitDir, restoreSystemdUnitName)
+	priorInfo, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priorBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandsBefore := len(runner.commands)
+	risky := &SystemdPersistence{
+		Runner: runner, UnitDir: unitDir,
+		VerifyExecutable: func(string) error { return nil },
+		VerifyUnitPath:   func(string) error { return nil },
+	}
+	risky.beforeUnitMutation = func(phase string) {
+		if phase != "replace" {
+			return
+		}
+		names, err := filepath.Glob(filepath.Join(unitDir, ".stl-unit-*.tmp"))
+		if err != nil || len(names) != 1 {
+			t.Fatalf("unexpected incoming stage: %v %v", names, err)
+		}
+		staged := names[0]
+		sameBytes, err := os.ReadFile(staged)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(staged, filepath.Join(unitDir, "original-incoming")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(staged, sameBytes, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	attempted := link
+	attempted.DisplayName = "engine-new"
+	_, err = unitEngineFor(t, b, store, root, risky, "/opt/stl/stl").Ensure(context.Background(), attempted)
+	if stlerr.CodeOf(err) != stlerr.CodeState || !errors.Is(err, errUnitIdentityConflict) {
+		t.Fatalf("unverified incoming unit not propagated as Engine failure: %v", err)
+	}
+	snap, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, ok := snap.Find(link.ID)
+	if !ok || original.Desired.DisplayName != link.DisplayName {
+		t.Fatalf("committed Link intent changed on rejected activation: %+v", snap)
+	}
+	if !b.live || b.owned != link.DisplayName || b.undos != 1 {
+		t.Fatalf("backend rollback lost prior state: %+v", b)
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !os.SameFile(info, priorInfo) {
+		t.Fatalf("prior systemd-unit inode lost: %v", err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil || string(contents) != string(priorBytes) {
+		t.Fatalf("prior unit bytes lost: %q %v", contents, err)
+	}
+	expectSystemdOperations(t, runner.commands[commandsBefore:], "systemctl is-enabled ")
+	if !runner.enabled[restoreSystemdUnitName] {
+		t.Fatal("previous enablement changed")
+	}
+	stages, err := filepath.Glob(filepath.Join(unitDir, ".stl-unit-*.tmp"))
+	if err != nil || len(stages) != 1 {
+		t.Fatalf("unexpected incoming identity not retained: %v %v", stages, err)
+	}
+}

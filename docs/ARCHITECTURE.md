@@ -194,11 +194,13 @@ daemon-reload, enable failure, and later Engine rollback) revalidate the
 exact STL-owned unit contents before disabling or restoring the previous
 file, and verify ownership and enablement after bounded cleanup. Initial
 unit creation uses no-overwrite hard-link publication. Updates atomically
-exchange the new and existing unit with Linux renameat2(RENAME_EXCHANGE),
-verifying the displaced original inode/content before disposing of it; a
-conflict attempts a reversible exchange and fails rather than discarding
-a changed administrator-owned file. Unit removal uses renameat2 with
-RENAME_NOREPLACE to a private recovery path and verifies the moved inode
+exchange the new and existing unit with Linux renameat2(RENAME_EXCHANGE).
+Both sides are verified before prior-unit disposal: the displaced original
+inode/content, and the canonical incoming inode captured through the
+original opened staging descriptor, with exact bytes and root ownership.
+Any uncertain side fails before systemctl daemon-reload; guarded reversal
+preserves the protected staging recovery identity. Unit removal uses
+renameat2(RENAME_NOREPLACE) to a private recovery path and verifies the moved inode
 before retiring it. Missing-unit compensation uses exclusive no-overwrite
 publication. Filesystems without the required atomic rename facilities fail
 closed; STL does not fall back to clobbering rename. Before any unit
