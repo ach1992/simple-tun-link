@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/ach1992/simple-tun-link/internal/app"
 	"github.com/ach1992/simple-tun-link/internal/backend"
@@ -112,6 +113,10 @@ func productionRuntimeOptions() (*runtimeOptions, error) {
 		if execErr != nil {
 			return nil, fmt.Errorf("locate STL executable: %w", execErr)
 		}
+		executable, execErr = canonicalSTLExecutable(executable)
+		if execErr != nil {
+			return nil, execErr
+		}
 		options.restorePersistence = linux.SystemdPersistence{Runner: linux.ExecRunner{}}
 		options.executable = executable
 	case errors.Is(err, os.ErrNotExist):
@@ -138,4 +143,26 @@ func buildRuntimeEngine(options runtimeOptions) (*app.Engine, error) {
 		return app.NewWithRestorePersistence(registry, store, locks, options.restorePersistence, options.executable)
 	}
 	return app.New(registry, store, locks)
+}
+
+// An installer may expose the same executable under the stlink convenience
+// alias. The owned unit must still reference the canonical installed stl
+// identity, never a different or unproven sibling executable.
+func canonicalSTLExecutable(executable string) (string, error) {
+	if !filepath.IsAbs(executable) {
+		return "", fmt.Errorf("STL executable path must be absolute")
+	}
+	if filepath.Base(executable) == "stl" {
+		return executable, nil
+	}
+	canonical := filepath.Join(filepath.Dir(executable), "stl")
+	source, err := os.Stat(executable)
+	if err != nil {
+		return "", fmt.Errorf("inspect executable identity: %w", err)
+	}
+	target, err := os.Stat(canonical)
+	if err != nil || !os.SameFile(source, target) {
+		return "", fmt.Errorf("restore requires a durable canonical stl executable beside its alias")
+	}
+	return canonical, nil
 }

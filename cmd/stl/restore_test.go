@@ -230,3 +230,31 @@ func TestRestoreCommandReconcilesCommittedEmptyStateAndOwnedUnit(t *testing.T) {
 		t.Fatalf("owned restore unit was left installed: %v", err)
 	}
 }
+
+func TestCanonicalSTLExecutableAcceptsProvenAliasOnly(t *testing.T) {
+	dir := t.TempDir()
+	canonical := filepath.Join(dir, "stl")
+	alias := filepath.Join(dir, "stlink")
+	if err := os.WriteFile(canonical, []byte("test"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(canonical, alias); err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range []string{canonical, alias} {
+		got, err := canonicalSTLExecutable(source)
+		if err != nil || got != canonical {
+			t.Fatalf("resolve %q: %q %v", source, got, err)
+		}
+	}
+	other := filepath.Join(dir, "different")
+	if err := os.WriteFile(other, []byte("different"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := canonicalSTLExecutable(other); err == nil {
+		t.Fatal("unrelated executable was allowed to impersonate canonical stl")
+	}
+	if _, err := canonicalSTLExecutable("stlink"); err == nil {
+		t.Fatal("relative executable alias was accepted")
+	}
+}

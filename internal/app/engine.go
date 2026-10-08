@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/domain"
@@ -168,7 +169,7 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 	if e.restorePersistence != nil {
 		persistenceRelease, lockErr := e.locks.Acquire(ctx, []domain.ResourceClaim{restoreLockClaim()})
 		if lockErr != nil {
-			return Result{}, e.rollbackFailure(ctx, request, link, undo,
+			return Result{}, e.rollbackPersistenceFailure(ctx, request, link, undo,
 				stlerr.Wrap(stlerr.CodeState, string(request.Operation), string(link.ID), string(link.Backend), "cannot lock restore persistence", lockErr))
 		}
 		defer persistenceRelease()
@@ -177,7 +178,7 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 			var ensureErr error
 			persistenceUndo, _, ensureErr = e.restorePersistence.EnsureRestore(ctx, e.restoreExecutable)
 			if ensureErr != nil {
-				return Result{}, e.rollbackFailure(ctx, request, link, undo,
+				return Result{}, e.rollbackPersistenceFailure(ctx, request, link, undo,
 					stlerr.Wrap(stlerr.CodeState, "ensure", string(link.ID), string(link.Backend), "cannot activate restore persistence", ensureErr))
 			}
 		}
@@ -203,11 +204,16 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 	})
 	if commitErr != nil {
 		commitPublic := contextualize(commitErr, stlerr.CodeState, string(request.Operation), link, "cannot commit local state")
-		if persistenceUndo != nil {
-			if rollbackErr := persistenceUndo(context.WithoutCancel(ctx)); rollbackErr != nil {
-				commitPublic = stlerr.Wrap(stlerr.CodeRollback, string(request.Operation), string(link.ID), string(link.Backend),
-					"state commit failed and restore persistence rollback did not complete", errors.Join(commitPublic, rollbackErr))
+		if e.restorePersistence != nil {
+			rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+			if persistenceUndo != nil {
+				if rollbackErr := persistenceUndo(rollbackCtx); rollbackErr != nil {
+					commitPublic = stlerr.Wrap(stlerr.CodeRollback, string(request.Operation), string(link.ID), string(link.Backend),
+						"state commit failed and restore persistence rollback did not complete", errors.Join(commitPublic, rollbackErr))
+				}
 			}
+			return Result{}, e.rollbackFailure(rollbackCtx, request, link, undo, commitPublic)
 		}
 		return Result{}, e.rollbackFailure(ctx, request, link, undo, commitPublic)
 	}
@@ -228,6 +234,15 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 		Changed: changed,
 		Removed: request.Operation == backend.OperationRemove,
 	}, nil
+}
+
+// A persistence failure can coincide with request cancellation after backend
+// host mutation. Give owned rollback a separate bounded context rather than
+// passing a canceled request context that prevents any cleanup.
+func (e *Engine) rollbackPersistenceFailure(ctx context.Context, request backend.Request, link domain.Link, undo backend.Rollback, original error) error {
+	rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	return e.rollbackFailure(rollbackCtx, request, link, undo, original)
 }
 
 func (e *Engine) rollbackFailure(ctx context.Context, request backend.Request, link domain.Link, undo backend.Rollback, original error) error {

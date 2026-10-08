@@ -285,3 +285,110 @@ func TestConcurrentMultiLinkPersistenceTransitions(t *testing.T) {
 		t.Fatalf("concurrent last-owner cleanup violated: active=%t removes=%d", p.active, p.removes)
 	}
 }
+
+type cancelPersistence struct{ cancel context.CancelFunc }
+
+func (p cancelPersistence) EnsureRestore(context.Context, string) (func(context.Context) error, bool, error) {
+	p.cancel()
+	return nil, false, context.Canceled
+}
+func (cancelPersistence) RemoveRestore(context.Context) error              { return nil }
+func (cancelPersistence) IsRestoreInstalled(context.Context) (bool, error) { return false, nil }
+
+type contextAwareBackend struct {
+	*fakeBackend
+	rollbackCtxErr error
+}
+
+func (b *contextAwareBackend) Apply(ctx context.Context, req backend.Request, observed backend.Observation, plan backend.Plan) (backend.Rollback, error) {
+	undo, err := b.fakeBackend.Apply(ctx, req, observed, plan)
+	if err != nil {
+		return nil, err
+	}
+	return func(rollbackCtx context.Context) error {
+		if rollbackCtx.Err() != nil {
+			b.rollbackCtxErr = rollbackCtx.Err()
+			return rollbackCtx.Err()
+		}
+		return undo(rollbackCtx)
+	}, nil
+}
+
+func TestPersistenceFailureAfterContextCancellationStillRollsBackBackend(t *testing.T) {
+	b := &contextAwareBackend{fakeBackend: newFakeBackend()}
+	registry, err := backend.NewRegistry(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	engine, err := NewWithRestorePersistence(registry, state.NewFileStore(root), state.NewLockManager(root),
+		cancelPersistence{cancel: cancel}, "/usr/local/bin/stl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := linkFor(t, "cancel-persist", "10.80.112.0/31", "10.80.112.1/31")
+	_, err = engine.Ensure(ctx, link)
+	if err == nil {
+		t.Fatal("expected cancellation-related persistence failure")
+	}
+	if b.rollbackCtxErr != nil || b.rollbackCount != 1 {
+		t.Fatalf("canceled context prevented owned backend rollback: ctxErr=%v count=%d", b.rollbackCtxErr, b.rollbackCount)
+	}
+}
+
+type canceledCommitStore struct {
+	state.Store
+	cancel context.CancelFunc
+}
+
+func (s canceledCommitStore) Update(context.Context, func(*state.Snapshot) error) error {
+	s.cancel()
+	return context.Canceled
+}
+
+type contextAwarePersistence struct {
+	*fakeRestorePersistence
+	rollbackCtxErr error
+}
+
+func (p *contextAwarePersistence) EnsureRestore(ctx context.Context, executable string) (func(context.Context) error, bool, error) {
+	undo, changed, err := p.fakeRestorePersistence.EnsureRestore(ctx, executable)
+	if err != nil {
+		return nil, false, err
+	}
+	return func(undoCtx context.Context) error {
+		if undoCtx.Err() != nil {
+			p.rollbackCtxErr = undoCtx.Err()
+			return undoCtx.Err()
+		}
+		return undo(undoCtx)
+	}, changed, nil
+}
+
+func TestCommitCancellationStillRollsBackPersistenceAndBackend(t *testing.T) {
+	b := &contextAwareBackend{fakeBackend: newFakeBackend()}
+	p := &contextAwarePersistence{fakeRestorePersistence: &fakeRestorePersistence{}}
+	registry, err := backend.NewRegistry(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := canceledCommitStore{Store: state.NewFileStore(root), cancel: cancel}
+	engine, err := NewWithRestorePersistence(registry, store, state.NewLockManager(root), p, "/usr/local/bin/stl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := linkFor(t, "cancel-commit", "10.80.113.0/31", "10.80.113.1/31")
+	_, err = engine.Ensure(ctx, link)
+	if err == nil {
+		t.Fatal("expected state commit cancellation")
+	}
+	if b.rollbackCtxErr != nil || b.rollbackCount != 1 || p.rollbackCtxErr != nil || p.undos != 1 || p.active {
+		t.Fatalf("cancellation lost rollback: backendContext=%v backendCount=%d unitContext=%v unitUndos=%d unitActive=%t",
+			b.rollbackCtxErr, b.rollbackCount, p.rollbackCtxErr, p.undos, p.active)
+	}
+}
