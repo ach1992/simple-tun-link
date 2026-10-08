@@ -112,7 +112,7 @@ func TestSharedPrerequisiteEnsureIsIdempotentPerOwner(t *testing.T) {
 	}
 }
 
-func TestSharedPrerequisiteFailsClosedOnOrphanedMetadata(t *testing.T) {
+func TestSharedPrerequisiteFailsClosedOnCommittedMetadataBeforeOwnerMarker(t *testing.T) {
 	root := t.TempDir()
 	manager := NewSharedPrerequisites(root)
 	id := domain.LinkID("lnk_0123456789abcdef0123456789abcdef")
@@ -121,7 +121,11 @@ func TestSharedPrerequisiteFailsClosedOnOrphanedMetadata(t *testing.T) {
 	if err := ensurePrivateDir(dir); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeSharedMetadata(dir, sharedMetadata{SchemaVersion: sharedMetadataVersion, Owned: true}); err != nil {
+	if err := writeSharedMetadata(dir, sharedMetadata{
+		SchemaVersion: sharedMetadataVersion,
+		State:         sharedMetadataStateCommitted,
+		Owned:         true,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	applied := false
@@ -134,6 +138,140 @@ func TestSharedPrerequisiteFailsClosedOnOrphanedMetadata(t *testing.T) {
 	}
 	if applied {
 		t.Fatal("orphaned metadata caused host prerequisite to be re-applied")
+	}
+}
+
+func TestSharedPrerequisiteFailsClosedAcrossFirstOwnerCrashBoundaries(t *testing.T) {
+	stages := []string{
+		"intent-durable-before-apply",
+		"apply-succeeded-before-commit",
+	}
+	for _, stage := range stages {
+		t.Run(stage, func(t *testing.T) {
+			root := t.TempDir()
+			manager := NewSharedPrerequisites(root)
+			id := domain.LinkID("lnk_0123456789abcdef0123456789abcdef")
+			key := "module:pending-" + stage
+			dir := filepath.Join(root, "shared", sharedKeyHash(key))
+			if err := ensurePrivateDir(dir); err != nil {
+				t.Fatal(err)
+			}
+			if err := writeSharedMetadata(dir, sharedMetadata{
+				SchemaVersion: sharedMetadataVersion,
+				State:         sharedMetadataStateAcquiring,
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			applied := false
+			_, _, err := manager.Ensure(context.Background(), id, key, func(context.Context) (SharedApplyResult, error) {
+				applied = true
+				return SharedApplyResult{Owned: true, Rollback: func(context.Context) error { return nil }}, nil
+			}, func(context.Context) error { return nil })
+			if err == nil {
+				t.Fatal("expected incomplete acquisition to fail closed")
+			}
+			if applied {
+				t.Fatal("incomplete acquisition caused uncertain host prerequisite to be re-applied")
+			}
+		})
+	}
+}
+
+func TestSharedPrerequisiteCommittedOwnerMarkerIsIdempotent(t *testing.T) {
+	root := t.TempDir()
+	manager := NewSharedPrerequisites(root)
+	id := domain.LinkID("lnk_0123456789abcdef0123456789abcdef")
+	key := "module:committed-owner"
+	dir := filepath.Join(root, "shared", sharedKeyHash(key))
+	if err := ensurePrivateDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSharedMetadata(dir, sharedMetadata{
+		SchemaVersion: sharedMetadataVersion,
+		State:         sharedMetadataStateCommitted,
+		Owned:         true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := createOwnerMarker(filepath.Join(dir, "owner-"+string(id))); err != nil {
+		t.Fatal(err)
+	}
+
+	applied := false
+	_, changed, err := manager.Ensure(context.Background(), id, key, func(context.Context) (SharedApplyResult, error) {
+		applied = true
+		return SharedApplyResult{Owned: true, Rollback: func(context.Context) error { return nil }}, nil
+	}, func(context.Context) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatal("committed owner marker unexpectedly reported a change")
+	}
+	if applied {
+		t.Fatal("committed owner marker caused host prerequisite to be re-applied")
+	}
+}
+
+func TestSharedPrerequisitePersistsIntentBeforeApply(t *testing.T) {
+	root := t.TempDir()
+	manager := NewSharedPrerequisites(root)
+	id := domain.LinkID("lnk_0123456789abcdef0123456789abcdef")
+	key := "module:intent-ordering"
+	dir := filepath.Join(root, "shared", sharedKeyHash(key))
+
+	_, changed, err := manager.Ensure(context.Background(), id, key, func(context.Context) (SharedApplyResult, error) {
+		metadata, err := readSharedMetadata(dir)
+		if err != nil {
+			t.Fatalf("read metadata inside apply: %v", err)
+		}
+		if metadata.State != sharedMetadataStateAcquiring {
+			t.Fatalf("metadata state inside apply=%q, want %q", metadata.State, sharedMetadataStateAcquiring)
+		}
+		return SharedApplyResult{Owned: false}, nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("first Ensure did not report a committed owner")
+	}
+}
+
+func TestSharedPrerequisiteApplyErrorLeavesPendingAcquisition(t *testing.T) {
+	root := t.TempDir()
+	manager := NewSharedPrerequisites(root)
+	id := domain.LinkID("lnk_0123456789abcdef0123456789abcdef")
+	key := "module:apply-error"
+	wantErr := errors.New("apply failed")
+
+	_, _, err := manager.Ensure(context.Background(), id, key, func(context.Context) (SharedApplyResult, error) {
+		return SharedApplyResult{}, wantErr
+	}, nil)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Ensure error=%v, want %v", err, wantErr)
+	}
+
+	dir := filepath.Join(root, "shared", sharedKeyHash(key))
+	metadata, err := readSharedMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.State != sharedMetadataStateAcquiring {
+		t.Fatalf("metadata state=%q, want %q", metadata.State, sharedMetadataStateAcquiring)
+	}
+
+	retried := false
+	_, _, err = manager.Ensure(context.Background(), id, key, func(context.Context) (SharedApplyResult, error) {
+		retried = true
+		return SharedApplyResult{Owned: false}, nil
+	}, nil)
+	if err == nil {
+		t.Fatal("expected retry against pending acquisition to fail closed")
+	}
+	if retried {
+		t.Fatal("pending acquisition caused apply to be retried")
 	}
 }
 
@@ -166,7 +304,7 @@ func TestSharedPrerequisiteRejectsUnknownMetadataFields(t *testing.T) {
 	if err := ensurePrivateDir(dir); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "metadata.json"), []byte(`{"schema_version":1,"owned":true,"unexpected":1}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "metadata.json"), []byte(`{"schema_version":2,"state":"committed","owned":true,"unexpected":1}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := manager.Ensure(context.Background(), id, key, func(context.Context) (SharedApplyResult, error) {

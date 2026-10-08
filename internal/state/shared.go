@@ -16,7 +16,11 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/domain"
 )
 
-const sharedMetadataVersion = 1
+const (
+	sharedMetadataVersion        = 2
+	sharedMetadataStateAcquiring = "acquiring"
+	sharedMetadataStateCommitted = "committed"
+)
 
 type SharedApplyResult struct {
 	// Owned is true only when the shared host prerequisite is STL-owned and may
@@ -31,8 +35,9 @@ type SharedApply func(context.Context) (SharedApplyResult, error)
 type SharedRemove func(context.Context) error
 
 type sharedMetadata struct {
-	SchemaVersion int  `json:"schema_version"`
-	Owned         bool `json:"owned"`
+	SchemaVersion int    `json:"schema_version"`
+	State         string `json:"state"`
+	Owned         bool   `json:"owned"`
 }
 
 type SharedPrerequisites struct {
@@ -73,6 +78,9 @@ func (m *SharedPrerequisites) Ensure(ctx context.Context, id domain.LinkID, key 
 		if err != nil {
 			return nil, false, err
 		}
+		if err := requireCommittedSharedMetadata(metadata); err != nil {
+			return nil, false, err
+		}
 		if metadata.Owned && remove == nil {
 			return nil, false, fmt.Errorf("STL-owned shared prerequisite requires remove function")
 		}
@@ -92,31 +100,73 @@ func (m *SharedPrerequisites) Ensure(ctx context.Context, id domain.LinkID, key 
 			return nil, false, err
 		}
 		if metadataExists {
-			return nil, false, fmt.Errorf("orphaned shared prerequisite metadata; refusing to re-apply uncertain host state")
+			existing, err := readSharedMetadata(dir)
+			if err != nil {
+				return nil, false, err
+			}
+			if existing.State == sharedMetadataStateAcquiring {
+				return nil, false, fmt.Errorf("incomplete shared prerequisite acquisition; refusing to re-apply uncertain host state")
+			}
+			return nil, false, fmt.Errorf("orphaned committed shared prerequisite metadata; refusing to re-apply uncertain host state")
+		}
+
+		// Persist an acquisition intent before touching host state. If the
+		// process or host dies after this point, a future Ensure sees the
+		// incomplete state and fails closed instead of blindly re-applying an
+		// uncertain prerequisite.
+		pending := sharedMetadata{
+			SchemaVersion: sharedMetadataVersion,
+			State:         sharedMetadataStateAcquiring,
+		}
+		if err := writeSharedMetadata(dir, pending); err != nil {
+			return nil, false, err
 		}
 
 		applied, err = apply(ctx)
 		if err != nil {
-			return nil, false, err
+			// The apply callback may have partially mutated host state before
+			// returning an error. Keep the durable acquiring marker so a later
+			// Ensure cannot assume the host is clean and re-apply it.
+			return nil, false, fmt.Errorf("apply shared prerequisite with acquisition pending: %w", err)
 		}
 		if applied.Owned && applied.Rollback == nil {
+			// Host state is now potentially STL-owned but cannot be safely
+			// reverted. Leave the acquiring marker in place and fail closed.
 			return nil, false, fmt.Errorf("STL-owned shared prerequisite requires rollback")
 		}
 		if applied.Owned && remove == nil {
+			baseErr := fmt.Errorf("STL-owned shared prerequisite requires remove function")
 			rollbackErr := applied.Rollback(context.WithoutCancel(ctx))
-			return nil, false, errors.Join(fmt.Errorf("STL-owned shared prerequisite requires remove function"), rollbackErr)
+			if rollbackErr != nil {
+				return nil, false, errors.Join(baseErr, rollbackErr)
+			}
+			metadataErr := removeSharedMetadata(dir)
+			return nil, false, errors.Join(baseErr, metadataErr)
 		}
-		metadata = sharedMetadata{SchemaVersion: sharedMetadataVersion, Owned: applied.Owned}
+		metadata = sharedMetadata{
+			SchemaVersion: sharedMetadataVersion,
+			State:         sharedMetadataStateCommitted,
+			Owned:         applied.Owned,
+		}
 		if err := writeSharedMetadata(dir, metadata); err != nil {
 			var rollbackErr error
 			if applied.Rollback != nil {
 				rollbackErr = applied.Rollback(context.WithoutCancel(ctx))
 			}
-			return nil, false, errors.Join(err, rollbackErr)
+			if rollbackErr != nil {
+				// Preserve whichever durable metadata state survived the failed
+				// commit so future acquisition remains fail-closed.
+				return nil, false, errors.Join(err, rollbackErr)
+			}
+			metadataErr := removeSharedMetadata(dir)
+			return nil, false, errors.Join(err, metadataErr)
 		}
 	} else {
 		metadata, err = readSharedMetadata(dir)
 		if err != nil {
+			return nil, false, err
+		}
+		if err := requireCommittedSharedMetadata(metadata); err != nil {
 			return nil, false, err
 		}
 		if metadata.Owned && remove == nil {
@@ -160,6 +210,9 @@ func (m *SharedPrerequisites) Ensure(ctx context.Context, id domain.LinkID, key 
 		}
 		meta, err := readSharedMetadata(undoDir)
 		if err != nil {
+			return err
+		}
+		if err := requireCommittedSharedMetadata(meta); err != nil {
 			return err
 		}
 		if len(owners) > 1 {
@@ -215,6 +268,9 @@ func (m *SharedPrerequisites) Release(ctx context.Context, id domain.LinkID, key
 	}
 	metadata, err := readSharedMetadata(dir)
 	if err != nil {
+		return false, err
+	}
+	if err := requireCommittedSharedMetadata(metadata); err != nil {
 		return false, err
 	}
 	if metadata.Owned && remove == nil {
@@ -322,8 +378,8 @@ func removeOwnerMarker(path string) error {
 }
 
 func writeSharedMetadata(dir string, metadata sharedMetadata) error {
-	if metadata.SchemaVersion != sharedMetadataVersion {
-		return fmt.Errorf("unsupported shared metadata version")
+	if err := validateSharedMetadata(metadata); err != nil {
+		return err
 	}
 	tmp, err := os.CreateTemp(dir, ".shared-meta-*.tmp")
 	if err != nil {
@@ -389,10 +445,33 @@ func readSharedMetadata(dir string) (sharedMetadata, error) {
 		}
 		return sharedMetadata{}, fmt.Errorf("decode shared prerequisite metadata trailing data: %w", err)
 	}
-	if metadata.SchemaVersion != sharedMetadataVersion {
-		return sharedMetadata{}, fmt.Errorf("unsupported shared prerequisite metadata version %d", metadata.SchemaVersion)
+	if err := validateSharedMetadata(metadata); err != nil {
+		return sharedMetadata{}, err
 	}
 	return metadata, nil
+}
+
+func validateSharedMetadata(metadata sharedMetadata) error {
+	if metadata.SchemaVersion != sharedMetadataVersion {
+		return fmt.Errorf("unsupported shared prerequisite metadata version %d", metadata.SchemaVersion)
+	}
+	switch metadata.State {
+	case sharedMetadataStateAcquiring:
+		if metadata.Owned {
+			return fmt.Errorf("acquiring shared prerequisite metadata cannot claim ownership")
+		}
+	case sharedMetadataStateCommitted:
+	default:
+		return fmt.Errorf("invalid shared prerequisite metadata state")
+	}
+	return nil
+}
+
+func requireCommittedSharedMetadata(metadata sharedMetadata) error {
+	if metadata.State != sharedMetadataStateCommitted {
+		return fmt.Errorf("shared prerequisite acquisition is incomplete; refusing uncertain host state")
+	}
+	return nil
 }
 
 func removeSharedMetadata(dir string) error {
