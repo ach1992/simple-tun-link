@@ -81,7 +81,8 @@ type IPTablesFirewall struct {
 	IP6TablesBinary string
 }
 
-// EnsureInbound ensures one exact STL-owned allow rule. The returned undo
+// EnsureInbound ensures one exact STL-owned allow rule. New rules are appended
+// so pre-existing administrator policy keeps precedence. The returned undo
 // removes only a rule added by this call. No chain flush, policy change, or
 // unrelated rule mutation is ever performed.
 func (f IPTablesFirewall) EnsureInbound(ctx context.Context, id domain.LinkID, rule InboundFirewallRule) (func(context.Context) error, bool, error) {
@@ -115,17 +116,24 @@ func (f IPTablesFirewall) EnsureInbound(ctx context.Context, id domain.LinkID, r
 		return func(context.Context) error { return nil }, false, nil
 	}
 
-	insertArgs := append([]string{"-w", firewallWaitSeconds, "-I", "INPUT", "1"}, args...)
-	if _, err := f.Runner.Run(ctx, binary, insertArgs...); err != nil {
-		return nil, false, fmt.Errorf("add STL firewall rule: %w", err)
+	if err := f.appendExact(ctx, binary, args); err != nil {
+		rollbackErr := f.restoreRuleAbsent(context.WithoutCancel(ctx), binary, args)
+		return nil, false, errors.Join(err, wrapFirewallError("restore pre-add firewall state", rollbackErr))
 	}
+
 	verified, verifyErr := f.ruleExists(ctx, binary, args)
 	if verifyErr != nil || !verified {
-		rollbackErr := f.deleteExact(context.WithoutCancel(ctx), binary, args)
+		rollbackErr := f.restoreRuleAbsent(context.WithoutCancel(ctx), binary, args)
 		if verifyErr != nil {
-			return nil, false, errors.Join(fmt.Errorf("verify STL firewall rule: %w", verifyErr), rollbackErr)
+			return nil, false, errors.Join(
+				fmt.Errorf("verify STL firewall rule: %w", verifyErr),
+				wrapFirewallError("restore pre-add firewall state", rollbackErr),
+			)
 		}
-		return nil, false, errors.Join(fmt.Errorf("verify STL firewall rule: rule not found after add"), rollbackErr)
+		return nil, false, errors.Join(
+			fmt.Errorf("verify STL firewall rule: rule not found after add"),
+			wrapFirewallError("restore pre-add firewall state", rollbackErr),
+		)
 	}
 
 	undo := func(undoCtx context.Context) error {
@@ -143,7 +151,9 @@ func (f IPTablesFirewall) EnsureInbound(ctx context.Context, id domain.LinkID, r
 }
 
 // RemoveInbound removes only the exact STL-owned rule identified by the same
-// Link ID and canonical rule fields used at creation time.
+// Link ID and canonical rule fields used at creation time. If the delete
+// command or its verification is ambiguous, the operation reports failure and
+// attempts to restore the exact pre-operation owned rule.
 func (f IPTablesFirewall) RemoveInbound(ctx context.Context, id domain.LinkID, rule InboundFirewallRule) (bool, error) {
 	if err := id.Validate(); err != nil {
 		return false, err
@@ -174,16 +184,19 @@ func (f IPTablesFirewall) RemoveInbound(ctx context.Context, id domain.LinkID, r
 	if !exists {
 		return false, nil
 	}
+
 	if err := f.deleteExact(ctx, binary, args); err != nil {
-		return false, err
+		restoreErr := f.restoreRulePresent(context.WithoutCancel(ctx), binary, args)
+		return false, errors.Join(err, wrapFirewallError("restore pre-delete firewall state", restoreErr))
 	}
-	stillExists, err := f.ruleExists(ctx, binary, args)
-	if err != nil {
-		// The delete already happened. Re-add the exact owned rule so an
-		// inspection failure cannot silently leave state half-reconciled.
-		restoreArgs := append([]string{"-w", firewallWaitSeconds, "-I", "INPUT", "1"}, args...)
-		_, restoreErr := f.Runner.Run(context.WithoutCancel(ctx), binary, restoreArgs...)
-		return false, errors.Join(fmt.Errorf("verify removed STL firewall rule: %w", err), restoreErr)
+
+	stillExists, verifyErr := f.ruleExists(ctx, binary, args)
+	if verifyErr != nil {
+		restoreErr := f.restoreRulePresent(context.WithoutCancel(ctx), binary, args)
+		return false, errors.Join(
+			fmt.Errorf("verify removed STL firewall rule: %w", verifyErr),
+			wrapFirewallError("restore pre-delete firewall state", restoreErr),
+		)
 	}
 	if stillExists {
 		return false, fmt.Errorf("STL firewall rule still exists after exact delete")
@@ -204,17 +217,35 @@ func (f IPTablesFirewall) binary(peer netip.Addr) string {
 	return "iptables"
 }
 
+// ruleExists treats only a successful -C as positive proof of exact presence.
+// Any -C failure is ambiguous across supported xtables implementations, so a
+// successful read-only INPUT listing must independently prove that the STL
+// ownership marker is absent before this function can report absence.
 func (f IPTablesFirewall) ruleExists(ctx context.Context, binary string, ruleArgs []string) (bool, error) {
 	checkArgs := append([]string{"-w", firewallWaitSeconds, "-C", "INPUT"}, ruleArgs...)
-	_, err := f.Runner.Run(ctx, binary, checkArgs...)
-	if err == nil {
+	_, checkErr := f.Runner.Run(ctx, binary, checkArgs...)
+	if checkErr == nil {
 		return true, nil
 	}
-	var commandErr *CommandError
-	if errors.As(err, &commandErr) && commandErr.ExitCode == 1 && !commandErr.TimedOut && !commandErr.Canceled {
-		return false, nil
+
+	marker, err := firewallMarkerFromArgs(ruleArgs)
+	if err != nil {
+		return false, err
 	}
-	return false, fmt.Errorf("inspect STL firewall rule: %w", err)
+	listResult, listErr := f.Runner.Run(ctx, binary, "-w", firewallWaitSeconds, "-S", "INPUT")
+	if listErr != nil {
+		return false, errors.Join(
+			fmt.Errorf("check exact STL firewall rule: %w", checkErr),
+			fmt.Errorf("list INPUT firewall rules: %w", listErr),
+		)
+	}
+	if firewallListingHasMarker(listResult.Stdout, marker) {
+		return false, errors.Join(
+			fmt.Errorf("check exact STL firewall rule: %w", checkErr),
+			fmt.Errorf("STL firewall ownership marker is present but exact rule could not be verified"),
+		)
+	}
+	return false, nil
 }
 
 func (f IPTablesFirewall) deleteIfPresent(ctx context.Context, binary string, ruleArgs []string) error {
@@ -222,13 +253,88 @@ func (f IPTablesFirewall) deleteIfPresent(ctx context.Context, binary string, ru
 	if err != nil || !exists {
 		return err
 	}
-	return f.deleteExact(ctx, binary, ruleArgs)
+	if err := f.deleteExact(ctx, binary, ruleArgs); err != nil {
+		restoreErr := f.restoreRulePresent(context.WithoutCancel(ctx), binary, ruleArgs)
+		return errors.Join(err, wrapFirewallError("restore pre-delete firewall state", restoreErr))
+	}
+	stillExists, verifyErr := f.ruleExists(ctx, binary, ruleArgs)
+	if verifyErr != nil {
+		restoreErr := f.restoreRulePresent(context.WithoutCancel(ctx), binary, ruleArgs)
+		return errors.Join(
+			fmt.Errorf("verify removed STL firewall rule: %w", verifyErr),
+			wrapFirewallError("restore pre-delete firewall state", restoreErr),
+		)
+	}
+	if stillExists {
+		return fmt.Errorf("STL firewall rule still exists after exact delete")
+	}
+	return nil
+}
+
+func (f IPTablesFirewall) appendExact(ctx context.Context, binary string, ruleArgs []string) error {
+	appendArgs := append([]string{"-w", firewallWaitSeconds, "-A", "INPUT"}, ruleArgs...)
+	if _, err := f.Runner.Run(ctx, binary, appendArgs...); err != nil {
+		return fmt.Errorf("append STL firewall rule: %w", err)
+	}
+	return nil
 }
 
 func (f IPTablesFirewall) deleteExact(ctx context.Context, binary string, ruleArgs []string) error {
 	deleteArgs := append([]string{"-w", firewallWaitSeconds, "-D", "INPUT"}, ruleArgs...)
 	if _, err := f.Runner.Run(ctx, binary, deleteArgs...); err != nil {
 		return fmt.Errorf("remove STL firewall rule: %w", err)
+	}
+	return nil
+}
+
+// restoreRuleAbsent reconciles an ambiguous add/verification failure back to
+// the pre-add state. An exact delete is safe because absence was established
+// before the attempted add and the rule carries this operation's ownership
+// marker. A delete error is tolerated only when read-only inspection
+// independently proves the owned marker is absent afterward.
+func (f IPTablesFirewall) restoreRuleAbsent(ctx context.Context, binary string, ruleArgs []string) error {
+	deleteErr := f.deleteExact(ctx, binary, ruleArgs)
+	exists, inspectErr := f.ruleExists(ctx, binary, ruleArgs)
+	if inspectErr != nil {
+		return errors.Join(deleteErr, fmt.Errorf("verify STL firewall rollback: %w", inspectErr))
+	}
+	if exists {
+		return errors.Join(deleteErr, fmt.Errorf("STL firewall rule remains after rollback"))
+	}
+	return nil
+}
+
+// restoreRulePresent reconciles an ambiguous delete/verification failure back
+// to the pre-delete state. It never appends when presence is uncertain: the
+// exact rule must first be positively absent under the same fail-closed
+// inspection semantics.
+func (f IPTablesFirewall) restoreRulePresent(ctx context.Context, binary string, ruleArgs []string) error {
+	exists, err := f.ruleExists(ctx, binary, ruleArgs)
+	if err != nil {
+		return fmt.Errorf("inspect STL firewall rule before restore: %w", err)
+	}
+	if exists {
+		return nil
+	}
+
+	appendErr := f.appendExact(ctx, binary, ruleArgs)
+	if appendErr != nil {
+		exists, inspectErr := f.ruleExists(context.WithoutCancel(ctx), binary, ruleArgs)
+		if inspectErr != nil {
+			return errors.Join(appendErr, fmt.Errorf("verify STL firewall restore: %w", inspectErr))
+		}
+		if exists {
+			return nil
+		}
+		return appendErr
+	}
+
+	exists, verifyErr := f.ruleExists(ctx, binary, ruleArgs)
+	if verifyErr != nil {
+		return fmt.Errorf("verify restored STL firewall rule: %w", verifyErr)
+	}
+	if !exists {
+		return fmt.Errorf("verify restored STL firewall rule: rule not found after restore")
 	}
 	return nil
 }
@@ -254,6 +360,33 @@ func firewallRuleArgs(id domain.LinkID, rule InboundFirewallRule) []string {
 	return args
 }
 
+func firewallMarkerFromArgs(ruleArgs []string) (string, error) {
+	for i := 0; i+1 < len(ruleArgs); i++ {
+		if ruleArgs[i] == "--comment" {
+			if ruleArgs[i+1] == "" {
+				break
+			}
+			return ruleArgs[i+1], nil
+		}
+	}
+	return "", fmt.Errorf("STL firewall rule is missing ownership marker")
+}
+
+func firewallListingHasMarker(stdout []byte, marker string) bool {
+	for _, line := range strings.Split(string(stdout), "\n") {
+		fields := strings.Fields(line)
+		for i := 0; i+1 < len(fields); i++ {
+			if fields[i] != "--comment" {
+				continue
+			}
+			if strings.Trim(fields[i+1], "\"'") == marker {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func firewallClaim(id domain.LinkID, rule InboundFirewallRule) domain.ResourceClaim {
 	return domain.ResourceClaim{Kind: domain.ResourceFirewall, Key: firewallMarker(id, rule)}
 }
@@ -268,4 +401,11 @@ func firewallMarker(id domain.LinkID, rule InboundFirewallRule) string {
 	}, "|")
 	sum := sha256.Sum256([]byte(canonical))
 	return "stl:" + string(id) + ":" + hex.EncodeToString(sum[:8])
+}
+
+func wrapFirewallError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
