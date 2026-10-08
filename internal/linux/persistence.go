@@ -18,6 +18,9 @@ type SystemdPersistence struct {
 	Runner          Runner
 	UnitDir         string
 	SystemctlBinary string
+	// VerifyExecutable is an isolated unit-test seam. Production uses strict
+	// root-owned executable/path verification before any unit side effects.
+	VerifyExecutable func(string) error
 }
 
 // EnsureRestore installs/updates STL's single restore unit and enables it for
@@ -30,6 +33,13 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 	content, err := renderRestoreSystemdUnit(stlExecutable)
 	if err != nil {
 		return nil, false, err
+	}
+	verify := p.VerifyExecutable
+	if verify == nil {
+		verify = VerifyTrustedSTLExecutable
+	}
+	if err := verify(stlExecutable); err != nil {
+		return nil, false, fmt.Errorf("refusing unsafe STL restore executable: %w", err)
 	}
 	unitDir := p.UnitDir
 	if unitDir == "" {
@@ -77,14 +87,22 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 
 	enabledChanged := false
 	if !wasEnabled {
-		if _, err := p.Runner.Run(ctx, systemctl, "enable", restoreSystemdUnitName); err != nil {
+		_, enableErr := p.Runner.Run(ctx, systemctl, "enable", restoreSystemdUnitName)
+		if enableErr == nil {
+			var durable bool
+			durable, enableErr = p.isEnabled(ctx, systemctl, restoreSystemdUnitName)
+			if enableErr == nil && !durable {
+				enableErr = fmt.Errorf("systemd restore unit is not durably enabled")
+			}
+		}
+		if enableErr != nil {
 			_, disableErr := p.Runner.Run(context.WithoutCancel(ctx), systemctl, "disable", restoreSystemdUnitName)
 			var restoreErr, reloadErr error
 			if fileChanged {
 				restoreErr = restoreSystemdFile(unitDir, path, prior, existed)
 				_, reloadErr = p.Runner.Run(context.WithoutCancel(ctx), systemctl, "daemon-reload")
 			}
-			return nil, false, errors.Join(fmt.Errorf("enable STL systemd unit: %w", err), disableErr, restoreErr, reloadErr)
+			return nil, false, errors.Join(fmt.Errorf("enable STL systemd unit: %w", enableErr), disableErr, restoreErr, reloadErr)
 		}
 		enabledChanged = true
 	}
@@ -215,10 +233,19 @@ func (p SystemdPersistence) isEnabled(ctx context.Context, systemctl, name strin
 	result, err := p.Runner.Run(ctx, systemctl, "is-enabled", name)
 	state := strings.TrimSpace(string(result.Stdout))
 	switch state {
-	case "enabled", "enabled-runtime", "linked", "linked-runtime", "alias":
+	case "enabled":
+		// Only permanent enablement proves execution after reboot. A failed
+		// inspection cannot be promoted to success by its stdout alone.
+		if err != nil {
+			return false, fmt.Errorf("inspect durable systemd enablement: %w", err)
+		}
 		return true, nil
-	case "disabled", "indirect", "static", "masked", "masked-runtime", "not-found":
+	case "disabled", "not-found":
 		return false, nil
+	case "enabled-runtime", "linked-runtime":
+		return false, fmt.Errorf("systemd unit is only enabled/linked at runtime, not durably persisted")
+	case "linked", "alias", "indirect", "static", "masked", "masked-runtime", "generated", "transient":
+		return false, fmt.Errorf("refusing ambiguous or administrator-managed systemd unit state %q", state)
 	case "":
 		if err == nil {
 			return false, fmt.Errorf("systemctl is-enabled returned no state")
@@ -247,6 +274,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+TimeoutStartSec=35min
 ExecStart=%s link restore --all
 
 [Install]

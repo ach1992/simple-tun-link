@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -204,6 +205,21 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 	})
 	if commitErr != nil {
 		commitPublic := contextualize(commitErr, stlerr.CodeState, string(request.Operation), link, "cannot commit local state")
+		// A state update can publish state.json before its metadata/directory
+		// fsync fails. Compare the visible state under the existing Link and
+		// persistence locks before compensating any host changes. If there is
+		// ambiguity, retain the host state and report a non-success requiring
+		// reconciliation; blindly undoing a published intent is destructive.
+		visible, loadErr := e.store.Load(context.WithoutCancel(ctx))
+		published := loadErr == nil && stateMatchesOperation(visible, request, resources)
+		oldState := loadErr == nil && stateMatchesPrior(visible, link.ID, prior)
+		var publicationErr *state.PublicationError
+		indeterminate := errors.As(commitErr, &publicationErr)
+		if published || indeterminate || !oldState {
+			return Result{LinkID: link.ID, Changed: changed, Removed: request.Operation == backend.OperationRemove},
+				stlerr.Wrap(stlerr.CodeState, string(request.Operation), string(link.ID), string(link.Backend),
+					"desired-state commit outcome is uncertain; host changes retained for reconciliation", errors.Join(commitErr, loadErr))
+		}
 		if e.restorePersistence != nil {
 			rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
@@ -364,4 +380,22 @@ func unionClaims(groups ...[]domain.ResourceClaim) []domain.ResourceClaim {
 // transition without serializing the independent backend apply steps.
 func restoreLockClaim() domain.ResourceClaim {
 	return domain.ResourceClaim{Kind: "stl-restore-unit", Key: "host"}
+}
+
+// stateMatchesOperation proves the attempted desired-state record became
+// visible; equality covers both requested intent and all owned resource claims.
+func stateMatchesOperation(snapshot state.Snapshot, request backend.Request, resources []domain.ResourceClaim) bool {
+	record, exists := snapshot.Find(request.Link.ID)
+	if request.Operation == backend.OperationRemove {
+		return !exists
+	}
+	return exists && record.Desired == request.Link && slices.Equal(record.OwnedResources, resources)
+}
+
+func stateMatchesPrior(snapshot state.Snapshot, id domain.LinkID, prior state.LinkRecord) bool {
+	record, exists := snapshot.Find(id)
+	if prior.Desired.ID == "" {
+		return !exists
+	}
+	return exists && record.Desired == prior.Desired && slices.Equal(record.OwnedResources, prior.OwnedResources)
 }

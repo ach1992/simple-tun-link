@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
+	"time"
 
 	"github.com/ach1992/simple-tun-link/internal/app"
 	"github.com/ach1992/simple-tun-link/internal/backend"
@@ -20,6 +23,10 @@ import (
 const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl version [--json]\n  stl link restore --all\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
 
 const jsonSchemaVersion = 1
+
+// Leave room for orderly, bounded owned rollback before systemd's 35-minute
+// oneshot startup ceiling (see the generated restore unit).
+const restoreOperationTimeout = 30 * time.Minute
 
 type runtimeOptions struct {
 	stateRoot          string
@@ -83,19 +90,9 @@ func runWithRuntime(args []string, stdout, stderr io.Writer, options *runtimeOpt
 				return 1
 			}
 		}
-		engine, err := buildRuntimeEngine(*options)
-		if err != nil {
-			fmt.Fprintln(stderr, "cannot initialize restore runtime")
-			return 1
-		}
-		results, err := engine.RestoreAll(context.Background())
-		if err != nil {
-			// Never emit sensitive backend/command causes; report partial progress.
-			fmt.Fprintf(stderr, "restore failed after %d link(s): %v\n", len(results), stlerr.Public(err))
-			return 1
-		}
-		fmt.Fprintf(stdout, "restored %d link(s)\n", len(results))
-		return 0
+		ctx, cancel := restoreRunContext()
+		defer cancel()
+		return restoreWithContext(ctx, *options, stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n\n%s", args[0], usage)
 		return 2
@@ -165,4 +162,29 @@ func canonicalSTLExecutable(executable string) (string, error) {
 		return "", fmt.Errorf("restore requires a durable canonical stl executable beside its alias")
 	}
 	return canonical, nil
+}
+
+// Systemd sends SIGTERM when the service is stopped/times out. Deliver the
+// signal as graceful Engine cancellation rather than interrupting host-state
+// cleanup, and bound ordinary restores independently of systemd.
+func restoreRunContext() (context.Context, context.CancelFunc) {
+	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, cancel := context.WithTimeout(signalCtx, restoreOperationTimeout)
+	return ctx, func() { cancel(); stop() }
+}
+
+func restoreWithContext(ctx context.Context, options runtimeOptions, stdout, stderr io.Writer) int {
+	engine, err := buildRuntimeEngine(options)
+	if err != nil {
+		fmt.Fprintln(stderr, "cannot initialize restore runtime")
+		return 1
+	}
+	results, err := engine.RestoreAll(ctx)
+	if err != nil {
+		// Report partial progress, but keep backend/command causes secret-safe.
+		fmt.Fprintf(stderr, "restore failed after %d link(s): %v\n", len(results), stlerr.Public(err))
+		return 1
+	}
+	fmt.Fprintf(stdout, "restored %d link(s)\n", len(results))
+	return 0
 }

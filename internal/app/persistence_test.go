@@ -392,3 +392,98 @@ func TestCommitCancellationStillRollsBackPersistenceAndBackend(t *testing.T) {
 			b.rollbackCtxErr, b.rollbackCount, p.rollbackCtxErr, p.undos, p.active)
 	}
 }
+
+// This Store deliberately publishes state before returning a synthetic I/O
+// failure, reproducing a post-rename metadata/fsync failure from FileStore.
+type publishThenErrorStore struct{ state.Store }
+
+func (s publishThenErrorStore) Update(ctx context.Context, mutate func(*state.Snapshot) error) error {
+	if err := s.Store.Update(ctx, mutate); err != nil {
+		return err
+	}
+	return errors.New("simulated post-publication failure")
+}
+
+func TestPublishedEnsureFailureRetainsBackendAndPersistence(t *testing.T) {
+	b, p := newFakeBackend(), &fakeRestorePersistence{}
+	engine, store := persistentTestEngine(t, b, p)
+	engine.store = publishThenErrorStore{Store: store}
+	link := linkFor(t, "post-publish-ensure", "10.80.120.0/31", "10.80.120.1/31")
+	result, err := engine.Ensure(context.Background(), link)
+	if stlerr.CodeOf(err) != stlerr.CodeState || !result.Changed {
+		t.Fatalf("post-publication failure not reported: %+v %v", result, err)
+	}
+	snapshot, loadErr := store.Load(context.Background())
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if _, exists := snapshot.Find(link.ID); !exists || b.rollbackCount != 0 || !p.active || b.applyCount != 1 {
+		t.Fatalf("published state was destructively compensated: present=%t rollbacks=%d unit=%t applies=%d",
+			exists, b.rollbackCount, p.active, b.applyCount)
+	}
+}
+
+func TestPublishedRemoveFailureKeepsRemovedStateAndReportsOrphanUnit(t *testing.T) {
+	b, p := newFakeBackend(), &fakeRestorePersistence{}
+	engine, store := persistentTestEngine(t, b, p)
+	link := linkFor(t, "post-publish-remove", "10.80.121.0/31", "10.80.121.1/31")
+	if _, err := engine.Ensure(context.Background(), link); err != nil {
+		t.Fatal(err)
+	}
+	engine.store = publishThenErrorStore{Store: store}
+	result, err := engine.Remove(context.Background(), link.ID)
+	if stlerr.CodeOf(err) != stlerr.CodeState || !result.Removed {
+		t.Fatalf("published Remove failure not reported: %+v %v", result, err)
+	}
+	snapshot, loadErr := store.Load(context.Background())
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	_, present := snapshot.Find(link.ID)
+	b.mu.Lock()
+	_, observed := b.present[link.ID]
+	b.mu.Unlock()
+	if present || observed || b.rollbackCount != 0 || !p.active || p.removes != 0 {
+		t.Fatalf("published Remove was undone or falsely cleaned: desired=%t observed=%t undo=%d unit=%t removes=%d",
+			present, observed, b.rollbackCount, p.active, p.removes)
+	}
+	// A subsequent empty-state restore safely retries the orphan unit cleanup.
+	engine.store = store
+	if _, err := engine.RestoreAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if p.active || p.removes != 1 {
+		t.Fatalf("orphan unit not reconciled: active=%t removes=%d", p.active, p.removes)
+	}
+}
+
+func TestUnobservableCommitFailureDoesNotDestructivelyUndoBackend(t *testing.T) {
+	b, p := newFakeBackend(), &fakeRestorePersistence{}
+	engine, _ := persistentTestEngine(t, b, p)
+	link := linkFor(t, "unobservable-commit", "10.80.122.0/31", "10.80.122.1/31")
+	// Let the initial read succeed, fail only when reconciling the commit.
+	engine.store = &failReconcileStore{Store: engine.store}
+	result, err := engine.Ensure(context.Background(), link)
+	if stlerr.CodeOf(err) != stlerr.CodeState || !result.Changed {
+		t.Fatalf("uncertain update not reported: %+v %v", result, err)
+	}
+	if b.rollbackCount != 0 || !p.active {
+		t.Fatal("ambiguous commit was destructively compensated")
+	}
+}
+
+type failReconcileStore struct {
+	state.Store
+	loads int
+}
+
+func (s *failReconcileStore) Load(ctx context.Context) (state.Snapshot, error) {
+	s.loads++
+	if s.loads >= 3 {
+		return state.Snapshot{}, errors.New("cannot inspect state after failure")
+	}
+	return s.Store.Load(ctx)
+}
+func (s *failReconcileStore) Update(context.Context, func(*state.Snapshot) error) error {
+	return errors.New("uncertain update")
+}

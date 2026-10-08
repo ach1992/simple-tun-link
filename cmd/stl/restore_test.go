@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/domain"
@@ -112,7 +113,7 @@ func TestRestoreCommandUsesPersistedStateAndOwnedSystemdUnit(t *testing.T) {
 	b, systemctl := &restoreBackend{}, &fakeSystemctl{}
 	options := &runtimeOptions{
 		stateRoot: root, backends: []backend.Backend{b},
-		restorePersistence: linux.SystemdPersistence{Runner: systemctl, UnitDir: unitDir},
+		restorePersistence: linux.SystemdPersistence{Runner: systemctl, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }},
 		executable:         "/usr/local/bin/stl",
 	}
 	var out, errs bytes.Buffer
@@ -199,7 +200,7 @@ func TestRestoreCommandPropagatesSystemdEnableFailure(t *testing.T) {
 	var out, errs bytes.Buffer
 	code := runWithRuntime([]string{"link", "restore", "--all"}, &out, &errs, &runtimeOptions{
 		stateRoot: root, backends: []backend.Backend{b},
-		restorePersistence: linux.SystemdPersistence{Runner: runner, UnitDir: unitDir},
+		restorePersistence: linux.SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }},
 		executable:         "/usr/local/bin/stl",
 	})
 	if code != 1 || b.applied != 0 || !strings.Contains(errs.String(), "state_failed") {
@@ -215,7 +216,7 @@ func TestRestoreCommandReconcilesCommittedEmptyStateAndOwnedUnit(t *testing.T) {
 	unitDir := filepath.Join(t.TempDir(), "units")
 	seedRestoreState(t, root)
 	runner := &fakeSystemctl{}
-	manager := linux.SystemdPersistence{Runner: runner, UnitDir: unitDir}
+	manager := linux.SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }}
 	if _, _, err := manager.EnsureRestore(context.Background(), "/usr/local/bin/stl"); err != nil {
 		t.Fatal(err)
 	}
@@ -256,5 +257,51 @@ func TestCanonicalSTLExecutableAcceptsProvenAliasOnly(t *testing.T) {
 	}
 	if _, err := canonicalSTLExecutable("stlink"); err == nil {
 		t.Fatal("relative executable alias was accepted")
+	}
+}
+
+func TestProductionRestoreContextHasBoundedDeadline(t *testing.T) {
+	ctx, cancel := restoreRunContext()
+	defer cancel()
+	until, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("production restore has no timeout")
+	}
+	remaining := time.Until(until)
+	if remaining < restoreOperationTimeout-time.Minute || remaining > restoreOperationTimeout {
+		t.Fatalf("unexpected operation deadline: %v", remaining)
+	}
+}
+
+func TestCanceledRestoreReturnsNonzeroWithoutBackendMutation(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	seedRestoreState(t, root, restoreTestLink(t, "a", domain.BackendGRE, "10.80.150.0/31", "10.80.150.1/31"))
+	b := &restoreBackend{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var out, errs bytes.Buffer
+	code := restoreWithContext(ctx, runtimeOptions{stateRoot: root, backends: []backend.Backend{b}}, &out, &errs)
+	if code != 1 || b.applied != 0 || out.Len() != 0 {
+		t.Fatalf("canceled restore mutated backend or succeeded: code=%d backend=%d stdout=%q stderr=%q", code, b.applied, out.String(), errs.String())
+	}
+}
+
+func TestRestoreLockWaitRespectsContextDeadline(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	link := restoreTestLink(t, "b", domain.BackendGRE, "10.80.151.0/31", "10.80.151.1/31")
+	seedRestoreState(t, root, link)
+	locker := state.NewLockManager(root)
+	release, err := locker.Acquire(context.Background(), []domain.ResourceClaim{{Kind: "stl-link", Key: string(link.ID)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	b := &restoreBackend{}
+	var out, errs bytes.Buffer
+	code := restoreWithContext(ctx, runtimeOptions{stateRoot: root, backends: []backend.Backend{b}}, &out, &errs)
+	if code != 1 || b.applied != 0 || ctx.Err() != context.DeadlineExceeded {
+		t.Fatalf("lock timeout not honored: code=%d backend=%d ctx=%v err=%q", code, b.applied, ctx.Err(), errs.String())
 	}
 }

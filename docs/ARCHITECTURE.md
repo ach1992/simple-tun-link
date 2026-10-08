@@ -173,6 +173,14 @@ failure. This does not replace or require systemd-networkd, NetworkManager,
 Netplan, or another host network manager. Hosts without systemd may use
 the ordinary engine in manual/non-persistent mode.
 
+The owned restore unit has a 35-minute oneshot startup ceiling; the CLI
+uses a 30-minute signal-aware (SIGINT/SIGTERM) context to bound Link
+restoration and reserve time for bounded owned rollback. Persistence
+installation is restricted to a canonical root-owned executable and a
+non-writable, symlink-free directory chain; runtime-only systemd
+enablement, alias/linked/masked states, and ambiguous identities fail
+closed rather than pretending reboot activation is durable.
+
 The restore unit needs an installed, durable stl executable path. Real
 backend adapters register through their own tracked implementation Issues;
 this CLI/persistence substrate does not provide a synthetic production
