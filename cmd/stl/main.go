@@ -15,6 +15,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/app"
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	grebackend "github.com/ach1992/simple-tun-link/internal/backend/gre"
+	ipipbackend "github.com/ach1992/simple-tun-link/internal/backend/ipip"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
@@ -122,22 +123,28 @@ func runWithRuntimeInput(args []string, input io.Reader, stdout, stderr io.Write
 	}
 }
 
-// When real backend adapters land, register them here for restore and for
-// the normal lifecycle CLI. Missing backends fail explicitly, not silently.
+// Assemble the same registered backends for restore and normal lifecycle CLI.
+// Missing backends fail explicitly, not silently.
 func productionRuntimeOptions() (*runtimeOptions, error) {
 	options := &runtimeOptions{stateRoot: state.DefaultRoot}
 	runner := linux.ExecRunner{}
 	locks := state.NewLockManager(options.stateRoot)
+	routes := linux.RouteResolver{Runner: runner}
+	firewall := linux.IPTablesFirewall{Runner: runner, Locks: locks}
+	collisions := linux.CollisionInspector{Snapshotter: linux.HostSnapshotter{Runner: runner}}
 	gre, err := grebackend.New(grebackend.Options{
-		Runner:     runner,
-		Routes:     linux.RouteResolver{Runner: runner},
-		Firewall:   linux.IPTablesFirewall{Runner: runner, Locks: locks},
-		Collisions: linux.CollisionInspector{Snapshotter: linux.HostSnapshotter{Runner: runner}},
+		Runner: runner, Routes: routes, Firewall: firewall, Collisions: collisions,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("initialize GRE backend: %w", err)
 	}
-	options.backends = []backend.Backend{gre}
+	ipip, err := ipipbackend.New(ipipbackend.Options{
+		Runner: runner, Routes: routes, Firewall: firewall, Collisions: collisions,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("initialize IPIP backend: %w", err)
+	}
+	options.backends = []backend.Backend{gre, ipip}
 
 	info, err := os.Stat("/run/systemd/system")
 	switch {

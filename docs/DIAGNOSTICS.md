@@ -137,6 +137,21 @@ faked Linux runner responses rather than contacting any external IP.
 The CLI also keeps a lighter read-only `link status` command that
 reports identity-checked interface counters without probing connectivity.
 
+## IPIP adapter — backend identity and counters
+
+`ObserveIPIP` uses the same backend-neutral MTU, quality and Linux DF-probe
+engine as GRE. It checks IPIP capability, the backend's ownership-verified
+interface/counters, deterministic interface identity and ifindex before
+sending bounded Link Address probes. IPIP supplies transport overhead:
+20 bytes for Native, 28 for FOU and 32 for GUE over an IPv4 underlay.
+Manual MTU never bypasses the observed route/underlay ceiling.
+
+`stl link status` exposes the IPIP counters as `ipip_state`;
+`stl link diagnose` emits the same versioned common report, with
+`backend: "ipip"` and an IPIP `state` field. Neither a verified interface
+nor an in-memory/fake-runner diagnostic test proves that peer traffic
+works. Privileged bidirectional IPIP acceptance remains Issue #5/#12.
+
 ## MTU policy
 
 `MTUConstraints.UnderlayMTU` comes from route-aware source/interface

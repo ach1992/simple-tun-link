@@ -74,3 +74,33 @@ func TestGREEncapsulationPortValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestIPIPEncapsulationAndUnderlayValidation(t *testing.T) {
+	link := Link{
+		ID: LinkID("lnk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		Underlay: Underlay{
+			Local: netip.MustParseAddr("192.0.2.10"),
+			Peer:  netip.MustParseAddr("198.51.100.20"),
+		},
+		Addresses: LinkAddresses{
+			Local: netip.MustParsePrefix("10.80.20.0/31"),
+			Peer:  netip.MustParsePrefix("10.80.20.1/31"),
+		},
+		Backend: BackendIPIP,
+	}
+	for _, encap := range []Encapsulation{EncapNative, EncapFOU, EncapGUE} {
+		link.Encapsulation = encap
+		if err := link.Validate(); err != nil {
+			t.Fatalf("supported IPIP encapsulation %s rejected: %v", encap, err)
+		}
+	}
+	link.Encapsulation = EncapUDP
+	if err := link.Validate(); err == nil {
+		t.Fatal("unsupported IPIP encapsulation accepted")
+	}
+	link.Encapsulation = EncapNative
+	link.Underlay.Local = netip.MustParseAddr("2001:db8::1")
+	if err := link.Validate(); err == nil {
+		t.Fatal("IPv6 IPIP underlay accepted in v0.1")
+	}
+}

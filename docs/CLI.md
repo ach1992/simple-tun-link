@@ -14,16 +14,16 @@ observations from **explicit host-mutating** commands.
   order. An empty state file yields an empty list; listing does not construct
   backend runtimes, probe host interfaces, or alter network state.
 - `stl link status <link-id> [--json]`: read one saved Link and inspect
-  its live backend state. GRE is supported using its ownership-/ifindex-checked
-  `DiagnosticState` adapter, including network interface counters. Unsupported
+  its live backend state. GRE and IPIP use ownership-/ifindex-checked
+  `DiagnosticState` adapters, including network interface counters. Unsupported
   backend kinds return a nonzero error rather than claiming health.
 - `stl link diagnose <link-id> [--mtu <bytes>] [--json]`: explicitly
-  probe the selected GRE Link's **peer Link Address** using bounded ICMP
-  echo with IPv4 Don't Fragment. Reports actually observed RTT/loss/jitter
-  and safe PMTU recommendations alongside the GRE interface counters.
+  probe the selected GRE/IPIP Link's **peer Link Address** using bounded ICMP
+  echo with IPv4 Don't Fragment. Reports observed RTT/loss/jitter
+  and conservative PMTU recommendations alongside backend interface counters.
   This command transmits diagnostic packets but makes **no** host network,
   firewall, MTU or desired-state changes. Requires a configured and
-  identity-checked active GRE interface.
+  identity-checked active GRE/IPIP interface.
 - `stl link preview --stdin [--json]`: decode and **redact** a
   versioned setup link supplied only through standard input, then display
   the **receiver-oriented** Link identity, addresses, encapsulation,
@@ -32,8 +32,8 @@ observations from **explicit host-mutating** commands.
   command-line arguments, which can enter shell history/process listings.
 - `stl link export <link-id> [--json]`: **read-only but intentionally
   disclosing**, export a canonical receiver Setup Link for a saved
-  credential-free GRE Link, including encoded endpoints and display metadata.
-  Unlike status/diagnostics, this command explicitly emits shareable setup
+  credential-free GRE or IPIP Link, including encoded endpoints and
+  display metadata. Unlike status/diagnostics, this command explicitly emits shareable setup
   material; refer to the export security caveat below.
 - `stl link ensure --stdin [--json]`: **mutating** idempotent desired
   Link convergence via the existing Engine, accepting a strict versioned JSON
@@ -46,7 +46,7 @@ observations from **explicit host-mutating** commands.
 `list` reports **configured desired state**, not actual network reachability.
 `status` reports **interface_verified**, not end-to-end connectivity.
 Its `connectivity` field explicitly says `not_measured`: a configured,
-owned, UP GRE interface with counters alone is not proof of peer traffic,
+owned, UP GRE/IPIP interface with counters alone is not proof of peer traffic,
 working firewall policy, or PMTU. Real Link Address probes belong to
 the read-only diagnostics path in [DIAGNOSTICS.md](DIAGNOSTICS.md).
 
@@ -57,8 +57,9 @@ the read-only diagnostics path in [DIAGNOSTICS.md](DIAGNOSTICS.md).
 - `link list`: `{ "schema_version": 1, "links": [...] }`; each entry includes
   only Link ID, backend, encapsulation, local and peer Link Addresses.
 - `link status`: a projected Link entry, `interface_verified: true`,
-  `connectivity: "not_measured"` and GRE's identity-checked counter view.
-- `link diagnose`: the existing GRE diagnostics report with top-level
+  `connectivity: "not_measured"` and the selected backend's identity-checked
+  `gre_state` or `ipip_state` counters (never both).
+- `link diagnose`: the GRE/IPIP diagnostics report with top-level
   schema version, Link ID, backend kind, identity-checked counter state,
   MTU result and quality result. `--mtu` overrides the **inner IPv4
   packet** MTU manually; oversized values are errors, not silently clamped.
@@ -189,10 +190,10 @@ Create / Import / Manage** user experience and protected secret-bearing
 recipient import flow. They do not establish live FOU/GUE bidirectional
 traffic or release E2E acceptance.
 
-## Explicit plaintext GRE setup-link export (Issue #8)
+## Explicit plaintext GRE/IPIP setup-link export (Issue #8)
 
 `stl link export <link-id> [--json]` deliberately exports an
-**already-saved GRE Link's** versioned `stl://2.` Setup Link for the
+**already-saved GRE or IPIP Link's** versioned `stl://2.` Setup Link for the
 other endpoint. It uses the **same canonical pairing model and receiver
 inversion** as `stl link preview --stdin`; no alternate encoder or
 backend setup method is introduced. For example:
@@ -207,17 +208,16 @@ URL; machine output contains integer CLI `schema_version: 1`, separate
 `pairing_schema_version`, Link ID, backend/mode metadata and an
 explicit `setup_link`. Both are **intentional export outputs**, not
 status or diagnostic responses. The output reveals the Link's endpoints,
-display-name metadata (encoded in the URL), GRE key identifiers and
-other configuration. An included SHA-256 checksum detects accidental
-damage, **not** authenticity. GRE does not encrypt or authenticate traffic;
+display-name metadata (encoded in the URL), and any GRE key identifiers.
+An included SHA-256 checksum detects accidental damage, **not**
+authenticity. GRE and IPIP do not encrypt or authenticate traffic;
 share setup material with the intended peer rather than public logs.
 
 The command is read-only and does not inspect, repair or apply the Link.
 Existence in saved desired state **does not prove a working tunnel**.
-Only currently credential-free GRE exports are supported. IPIP awaits its
-complete backend contract; WireGuard and IPsec remain explicitly
-Unsupported until reviewed secure recipient credential generation,
-export, storage and apply exist. Export never silently omits private
+Only credential-free GRE/IPIP Native/FOU/GUE exports are supported.
+WireGuard and IPsec remain explicitly Unsupported until reviewed secure
+recipient credential generation, export, storage and apply exist. Export never silently omits private
 keys/PSKs to manufacture a broken setup link. Confirm the configuration
 via the existing `link preview` before a separate authorized apply
 step. No new command automatically applies an exported setup link.

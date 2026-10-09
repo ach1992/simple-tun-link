@@ -44,11 +44,18 @@ func TestCLIExportCreatesCanonicalRecipientSetupLinkByStableID(t *testing.T) {
 	second.Encapsulation = domain.EncapFOU
 	second.GRE = domain.GREOptions{UDPPort: 4500, KeyEnabled: true, Key: 0, Checksum: true}
 	storeReadLinks(t, root, second, first)
+	ipipNative := exportLinkFixture("4", "10.80.52.0/31")
+	ipipNative.Backend = domain.BackendIPIP
+	ipipFOU := exportLinkFixture("5", "10.80.53.0/31")
+	ipipFOU.Backend, ipipFOU.Encapsulation = domain.BackendIPIP, domain.EncapFOU
+	ipipGUE := exportLinkFixture("6", "10.80.54.0/31")
+	ipipGUE.Backend, ipipGUE.Encapsulation = domain.BackendIPIP, domain.EncapGUE
+	storeReadLinks(t, root, ipipNative, ipipFOU, ipipGUE)
 	before, err := os.ReadFile(filepath.Join(root, "state.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	links := []domain.Link{first, second}
+	links := []domain.Link{first, second, ipipNative, ipipFOU, ipipGUE}
 	for _, link := range links {
 		code, out, stderr := runExport(t, root, "link", "export", string(link.ID), "--json")
 		if code != 0 || stderr != "" || strings.Contains(out, "private_label") {
@@ -59,10 +66,10 @@ func TestCLIExportCreatesCanonicalRecipientSetupLinkByStableID(t *testing.T) {
 			t.Fatal(err)
 		}
 		if response.SchemaVersion != jsonSchemaVersion || response.PairingSchemaVersion != pairing.SchemaVersion ||
-			response.LinkID != link.ID || response.Backend != domain.BackendGRE ||
+			response.LinkID != link.ID || response.Backend != link.Backend ||
 			response.Encapsulation != link.Encapsulation || response.Mode != pairing.ModeQuick ||
 			response.HasCredential || response.Sensitive || !strings.HasPrefix(response.SetupLink, "stl://2.") {
-			t.Fatalf("invalid versioned GRE pairing export: %+v", response)
+			t.Fatalf("invalid versioned plaintext pairing export: %+v", response)
 		}
 		offer, err := pairing.DecodeSetupLink(response.SetupLink)
 		if err != nil {
@@ -78,7 +85,7 @@ func TestCLIExportCreatesCanonicalRecipientSetupLinkByStableID(t *testing.T) {
 			t.Fatalf("Setup Link does not recreate same peer/inverse/options: %+v", receiver)
 		}
 		if offer.IsSensitive() || len(offer.RecipientCredential()) != 0 {
-			t.Fatal("plaintext GRE unexpectedly included recipient credentials")
+			t.Fatal("plaintext backend unexpectedly included recipient credentials")
 		}
 		humanCode, human, errorsOut := runExport(t, root, "link", "export", string(link.ID))
 		if humanCode != 0 || errorsOut != "" || !strings.Contains(human, "not encrypted") ||
@@ -102,7 +109,6 @@ func TestCLIExportRejectsSecretBackendWithoutInventingKeys(t *testing.T) {
 	}{
 		{domain.BackendWireGuard, domain.EncapUDP},
 		{domain.BackendIPsec, domain.EncapESP},
-		{domain.BackendIPIP, domain.EncapNative},
 	} {
 		link.Backend = tc.kind
 		link.Encapsulation = tc.encap
