@@ -148,6 +148,16 @@ func TestGRENetnsE2E(t *testing.T) {
 		if !ok || quality["reachable"] != true {
 			t.Fatalf("diagnose did not prove Link Address reachability: %s", stdout.String())
 		}
+		state, ok := result["state"].(map[string]any)
+		if !ok {
+			t.Fatalf("diagnose lacks identity-checked GRE counter state: %s", stdout.String())
+		}
+		rx, rxOK := state["rx_packets"].(float64)
+		tx, txOK := state["tx_packets"].(float64)
+		if !rxOK || !txOK || rx < 1 || tx < 1 {
+			t.Fatalf("bidirectional probe produced no observed GRE RX/TX packets: %s", stdout.String())
+		}
+		t.Logf("GRE_E2E_COUNTERS mode=%s rx_packets=%v tx_packets=%v", encap, rx, tx)
 	case "remove":
 		if result["link_id"] != string(id) || result["removed"] != true {
 			t.Fatalf("remove did not confirm owned Link removal: %s", stdout.String())

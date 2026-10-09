@@ -19,6 +19,10 @@ done
 source_root="$(cd -- "$(dirname -- "$0")/../.." && pwd)"
 test -f "$source_root/go.mod" || { echo "Source tree/go.mod not found" >&2; exit 2; }
 cd "$source_root"
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "REFUSED: uncommitted/untracked source would invalidate recorded test SHA" >&2
+  exit 2
+fi
 
 # Use only a fresh runner-owned directory and fresh namespaces.
 workdir="$(mktemp -d /tmp/stl-gre-e2e.XXXXXXXX)"
