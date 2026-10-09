@@ -86,6 +86,30 @@ sends data to an external service. Any future export-to-file functionality
 must enforce protected, no-clobber permissions and avoid shell history,
 world-readable output, and routine logs.
 
+## CLI recipient preview via protected stdin
+
+The non-interactive operator command `stl link preview --stdin [--json]`
+reads at most the protocol's bounded setup URL size, accepting at most
+one trailing line terminator for piped input. The setup URL is **not** a
+positional argument or CLI option, which avoids automatic disclosure in
+shell history and process arguments. For an existing protected local file:
+
+~~~sh
+stl link preview --stdin --json < /path/to/private/setup-link.txt
+~~~
+
+Do not put the secret URL literally into shell command text or logs. The CLI
+uses the canonical pairing decoder and recipient inversion, then emits only
+Link ID, backend, encapsulation, public endpoint/address metadata, format
+version, Quick mode, and secret **presence/type**. Arbitrary display names
+and the supplied URL are omitted. Credential data stays in memory only for
+the decode lifetime. Malformed/unsupported links produce redacted structured
+errors. No file, Link state, route, firewall, interface or backend is changed
+by previewing.
+
+Actual user-confirmed credential storage and import/apply remain separate
+Issue #8/#10 acceptance; this command does not imply they are implemented.
+
 ## Apply and backend integration
 
 Decoding and generating a preview **never applies a Link, starts a command,

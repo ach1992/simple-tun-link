@@ -23,6 +23,12 @@ unimplemented functionality.
   This command transmits diagnostic packets but makes **no** host network,
   firewall, MTU or desired-state changes. Requires a configured and
   identity-checked active GRE interface.
+- `stl link preview --stdin [--json]`: decode and **redact** a
+  versioned setup link supplied only through standard input, then display
+  the **receiver-oriented** Link identity, addresses, encapsulation,
+  exchange mode, and credential-presence flag without revealing any
+  credential or applying network state. Never pass SENSITIVE Quick Links as
+  command-line arguments, which can enter shell history/process listings.
 - `stl link restore --all`: existing host persistence/reapply command.
 
 `list` reports **configured desired state**, not actual network reachability.
@@ -46,6 +52,11 @@ the read-only diagnostics path in [DIAGNOSTICS.md](DIAGNOSTICS.md).
   packet** MTU manually; oversized values are errors, not silently clamped.
   Without `--mtu`, MTU is selected by bounded DF probes, and an
   unverified fallback is explicitly marked unverified.
+- `link preview`: one redacted object with CLI schema version 1,
+  a separate `pairing_schema_version`, receiver-facing non-secret
+  Link metadata, `has_credential`, credential kind and sensitive flag.
+  The input setup link, private keys, arbitrary display names and decoding
+  cause are deliberately excluded from JSON and human output.
 - Read errors: `{ "schema_version": 1, "error": { "code": ..., ... } }`;
   raw state-file content, arbitrary backend output/errors, display names
   and credentials are not included.
