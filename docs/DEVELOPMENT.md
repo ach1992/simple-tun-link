@@ -124,9 +124,10 @@ deliberate local opt-in, *not* authorization by itself.
 
 The opt-in script creates only fresh paired network namespaces, synthetic
 veth underlay and per-side temporary state; it invokes the real CLI/Engine/GRE
-backend for Native, FOU and GUE separately. For each mode it checks first
-ensure, idempotent re-ensure, verified status, real bidirectional Link Address
-traffic, read-only diagnostics, owned removal and empty state. Cleanup runs
+backend for Native, FOU and GUE on the same synthetic underlay pair.
+It checks first ensure, idempotent re-ensure, verified status, real
+bidirectional Link Address traffic, read-only diagnostics, coexistence,
+sibling isolation after removal, owned cleanup and empty state. Cleanup runs
 even on failure. It does **not** install packages, load modules explicitly,
 reconfigure the host control-plane interface, or silently report unsupported
 FOU/GUE capabilities as passing. Kernel module autoload may still occur;

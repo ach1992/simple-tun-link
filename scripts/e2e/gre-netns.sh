@@ -122,14 +122,21 @@ traffic() {
   printf 'GRE_%s_BIDIRECTIONAL=PASS\n' "$mode"
 }
 
-# Test each implemented GRE encapsulation end-to-end using the canonical CLI.
-# Cross-backend same-peer coexistence and systemd restart are separate #12 gates.
-for mode in native fou gue; do
+# Three independent GRE links to the exact same A/B underlay pair: Native,
+# FOU and GUE must remain address-/resource-isolated. Full cross-backend
+# GRE + WireGuard coexistence and systemd restart remain later #12 gates.
+select_mode() {
+  mode=$1
   case "$mode" in
     native) link_id=lnk_11111111111111111111111111111111; octet=20; port=0 ;;
     fou)    link_id=lnk_22222222222222222222222222222222; octet=30; port=33061 ;;
     gue)    link_id=lnk_33333333333333333333333333333333; octet=40; port=33062 ;;
+    *) echo "invalid test mode" >&2; exit 2 ;;
   esac
+}
+
+for selected_mode in native fou gue; do
+  select_mode "$selected_mode"
   echo "BEGIN_GRE_MODE=$mode"
   run_side a ensure
   run_side b ensure
@@ -140,9 +147,30 @@ for mode in native fou gue; do
   traffic
   run_side a diagnose
   run_side b diagnose
+  echo "GRE_MODE_READY=$mode"
+done
+
+for selected_mode in native fou gue; do
+  select_mode "$selected_mode"
+  traffic
+done
+echo "GRE_SAME_UNDERLAY_MULTI_LINK=PASS"
+
+select_mode fou
+run_side a remove
+run_side b remove
+for selected_mode in native gue; do
+  select_mode "$selected_mode"
+  run_side a status
+  run_side b status
+  traffic
+done
+echo "GRE_SIBLING_TRAFFIC_SURVIVES_FOU_REMOVE=PASS"
+
+for selected_mode in native gue; do
+  select_mode "$selected_mode"
   run_side a remove
   run_side b remove
-  echo "GRE_MODE_COMPLETE=$mode"
 done
 
 # Confirm no Link desired state, owned interface, FOU mapping or firewall rule
