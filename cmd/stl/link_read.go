@@ -9,6 +9,7 @@ import (
 
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	grebackend "github.com/ach1992/simple-tun-link/internal/backend/gre"
+	ipipbackend "github.com/ach1992/simple-tun-link/internal/backend/ipip"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
@@ -41,11 +42,12 @@ type linkListResponse struct {
 // InterfaceVerified is true only after a live identity/counter check.
 // It does not assert Link Address reachability or firewall effectiveness.
 type linkStatusResponse struct {
-	SchemaVersion     int                         `json:"schema_version"`
-	Link              linkSummary                 `json:"link"`
-	InterfaceVerified bool                        `json:"interface_verified"`
-	Connectivity      string                      `json:"connectivity"`
-	GREState          *grebackend.DiagnosticState `json:"gre_state,omitempty"`
+	SchemaVersion     int                          `json:"schema_version"`
+	Link              linkSummary                  `json:"link"`
+	InterfaceVerified bool                         `json:"interface_verified"`
+	Connectivity      string                       `json:"connectivity"`
+	GREState          *grebackend.DiagnosticState  `json:"gre_state,omitempty"`
+	IPIPState         *ipipbackend.DiagnosticState `json:"ipip_state,omitempty"`
 }
 
 type linkReadErrorResponse struct {
@@ -139,36 +141,58 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 			break
 		}
 	}
-	// A future backend may offer a generic diagnostic projection. For now,
-	// only the already integrated GRE adapter can prove its live state.
-	if selected == nil || record.Desired.Backend != domain.BackendGRE {
+	if selected == nil {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_status", "live status is unavailable for this backend")
 	}
-	inspector, ok := selected.(interface {
-		DiagnosticState(context.Context, domain.Link) (grebackend.DiagnosticState, error)
-	})
-	if !ok {
-		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_status", "backend has no live diagnostic adapter")
-	}
-	observed, err := inspector.DiagnosticState(ctx, record.Desired)
-	if err != nil {
-		if ctx.Err() != nil {
-			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInspect, "link_status", "live diagnostic inspection was interrupted")
-		}
-		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInspect, "link_status", "live diagnostic state could not be verified")
-	}
-	expectedName, nameErr := grebackend.InterfaceName(id)
-	if nameErr != nil || observed.Interface != expectedName || observed.IfIndex <= 0 ||
-		observed.Encapsulation != record.Desired.Encapsulation {
-		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInspect, "link_status", "backend returned inconsistent Link identity")
-	}
 	response := linkStatusResponse{
-		SchemaVersion:     jsonSchemaVersion,
-		Link:              summarizeLink(record.Desired),
-		InterfaceVerified: true,
-		Connectivity:      "not_measured",
-		GREState:          &observed,
+		SchemaVersion: jsonSchemaVersion, Link: summarizeLink(record.Desired),
+		Connectivity: "not_measured",
 	}
+	var interfaceName, kindLabel string
+	var rxPackets, txPackets uint64
+	switch record.Desired.Backend {
+	case domain.BackendGRE:
+		inspector, ok := selected.(interface {
+			DiagnosticState(context.Context, domain.Link) (grebackend.DiagnosticState, error)
+		})
+		if !ok {
+			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_status", "backend has no live diagnostic adapter")
+		}
+		observed, err := inspector.DiagnosticState(ctx, record.Desired)
+		if err != nil {
+			return readStatusInspectionError(ctx, stdout, stderr, jsonOutput)
+		}
+		expectedName, nameErr := grebackend.InterfaceName(id)
+		if nameErr != nil || observed.Interface != expectedName || observed.IfIndex <= 0 ||
+			observed.Encapsulation != record.Desired.Encapsulation {
+			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInspect, "link_status", "backend returned inconsistent Link identity")
+		}
+		response.GREState = &observed
+		interfaceName, kindLabel = observed.Interface, "GRE"
+		rxPackets, txPackets = observed.RXPackets, observed.TXPackets
+	case domain.BackendIPIP:
+		inspector, ok := selected.(interface {
+			DiagnosticState(context.Context, domain.Link) (ipipbackend.DiagnosticState, error)
+		})
+		if !ok {
+			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_status", "backend has no live diagnostic adapter")
+		}
+		observed, err := inspector.DiagnosticState(ctx, record.Desired)
+		if err != nil {
+			return readStatusInspectionError(ctx, stdout, stderr, jsonOutput)
+		}
+		expectedName, nameErr := ipipbackend.InterfaceName(id)
+		if nameErr != nil || observed.Interface != expectedName || observed.IfIndex <= 0 ||
+			observed.Encapsulation != record.Desired.Encapsulation {
+			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInspect, "link_status", "backend returned inconsistent Link identity")
+		}
+		response.IPIPState = &observed
+		interfaceName, kindLabel = observed.Interface, "IPIP"
+		rxPackets, txPackets = observed.RXPackets, observed.TXPackets
+	default:
+		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_status", "live status is unavailable for this backend")
+	}
+	response.InterfaceVerified = true
 	if jsonOutput {
 		if err := json.NewEncoder(stdout).Encode(response); err != nil {
 			fmt.Fprintln(stderr, "cannot encode link status")
@@ -176,7 +200,14 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 		}
 		return 0
 	}
-	fmt.Fprintf(stdout, "Link %s: GRE/%s interface verified on %s; connectivity not measured (RX %d packets, TX %d packets)\n",
-		id, record.Desired.Encapsulation, observed.Interface, observed.RXPackets, observed.TXPackets)
+	fmt.Fprintf(stdout, "Link %s: %s/%s interface verified on %s; connectivity not measured (RX %d packets, TX %d packets)\n",
+		id, kindLabel, record.Desired.Encapsulation, interfaceName, rxPackets, txPackets)
 	return 0
+}
+
+func readStatusInspectionError(ctx context.Context, stdout, stderr io.Writer, jsonOutput bool) int {
+	if ctx.Err() != nil {
+		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInspect, "link_status", "live diagnostic inspection was interrupted")
+	}
+	return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInspect, "link_status", "live diagnostic state could not be verified")
 }

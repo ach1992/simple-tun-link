@@ -121,6 +121,16 @@ func (l Link) Validate() error {
 	if l.Backend != BackendGRE && l.GRE != (GREOptions{}) {
 		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "GRE options are only valid for the GRE backend")
 	}
+	if l.Backend == BackendIPIP {
+		if !l.Underlay.Local.Is4() || !l.Underlay.Peer.Is4() {
+			return stlerr.New(stlerr.CodeUnsupported, "validate_link", string(l.ID), string(l.Backend), "v0.1 IPIP requires IPv4 underlay endpoints")
+		}
+		switch l.Encapsulation {
+		case EncapNative, EncapFOU, EncapGUE:
+		default:
+			return stlerr.New(stlerr.CodeUnsupported, "validate_link", string(l.ID), string(l.Backend), "unsupported IPIP encapsulation")
+		}
+	}
 	if l.Backend == BackendGRE {
 		switch l.Encapsulation {
 		case EncapNative, EncapFOU, EncapGUE:

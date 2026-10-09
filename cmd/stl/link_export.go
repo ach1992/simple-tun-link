@@ -15,7 +15,7 @@ import (
 
 // SetupLinkExport is an intentionally explicit export/copy payload, not a
 // status/diagnostic result. It may reveal endpoint addresses, Link IDs and
-// display names encoded in the URL even though current GRE is unencrypted.
+// display names encoded in the URL. Current GRE/IPIP links are unencrypted.
 type SetupLinkExport struct {
 	SchemaVersion        int                  `json:"schema_version"`
 	PairingSchemaVersion int                  `json:"pairing_schema_version"`
@@ -28,8 +28,8 @@ type SetupLinkExport struct {
 	SetupLink            string               `json:"setup_link"`
 }
 
-// Export an already persisted GRE Link by stable Link ID. No backend runtime
-// is assembled, and no secret-bearing backend is supported until its key
+// Export an already persisted plaintext GRE/IPIP Link by stable Link ID.
+// No backend runtime is assembled, and no secret-bearing backend is supported until its key
 // storage/receiver import contract is implemented and separately reviewed.
 func linkExportCommand(args []string, stdout, stderr io.Writer, options *runtimeOptions) int {
 	jsonOutput := slices.Contains(args, "--json")
@@ -61,9 +61,9 @@ func linkExportCommand(args []string, stdout, stderr io.Writer, options *runtime
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, "link_export",
 			"Link ID is not present in local desired state")
 	}
-	// Never silently drop required recipient secrets. IPIP is also deferred
-	// until its backend/FOU/GUE options have a complete persisted contract.
-	if record.Desired.Backend != domain.BackendGRE {
+	// Never silently drop required recipient secrets. Plaintext GRE/IPIP
+	// reuse the same canonical pairing inversion and persisted Link contract.
+	if record.Desired.Backend != domain.BackendGRE && record.Desired.Backend != domain.BackendIPIP {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_export",
 			"export is not yet supported for this backend")
 	}
@@ -80,7 +80,7 @@ func linkExportCommand(args []string, stdout, stderr io.Writer, options *runtime
 		url, err := offer.EncodeSetupLink()
 		if err != nil {
 			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, "link_export",
-				"cannot encode validated GRE pairing data")
+				"cannot encode validated plaintext pairing data")
 		}
 		payload := SetupLinkExport{
 			SchemaVersion:        jsonSchemaVersion,
@@ -99,7 +99,7 @@ func linkExportCommand(args []string, stdout, stderr io.Writer, options *runtime
 	block, err := offer.HumanReadableBlock()
 	if err != nil {
 		return readCommandError(stdout, stderr, false, stlerr.CodeInvalid, "link_export",
-			"cannot format validated GRE pairing data")
+			"cannot format validated plaintext pairing data")
 	}
 	fmt.Fprintln(stdout, "Explicit export only: this link reveals endpoint metadata and is not encrypted.")
 	_, err = io.WriteString(stdout, block)

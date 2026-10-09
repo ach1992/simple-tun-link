@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/diagnostics"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
@@ -50,7 +51,7 @@ func linkDiagnoseCommand(args []string, stdout, stderr io.Writer, options *runti
 	if !exists {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, "link_diagnose", "Link ID is not present in local desired state")
 	}
-	if record.Desired.Backend != domain.BackendGRE {
+	if record.Desired.Backend != domain.BackendGRE && record.Desired.Backend != domain.BackendIPIP {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_diagnose", "active diagnostics for this backend are unavailable")
 	}
 	if options == nil {
@@ -59,32 +60,50 @@ func linkDiagnoseCommand(args []string, stdout, stderr io.Writer, options *runti
 			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeState, "link_diagnose", "cannot initialize diagnostic backend")
 		}
 	}
-	var inspector diagnostics.GREInspector
+	var selected backend.Backend
 	for _, impl := range options.backends {
-		if impl != nil && impl.Kind() == domain.BackendGRE {
-			if adapted, ok := impl.(diagnostics.GREInspector); ok {
-				inspector = adapted
-			}
+		if impl != nil && impl.Kind() == record.Desired.Backend {
+			selected = impl
 			break
 		}
 	}
-	if inspector == nil {
-		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_diagnose", "GRE diagnostic backend is unavailable")
+	if selected == nil {
+		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_diagnose", "diagnostic backend is unavailable")
 	}
 	runner := options.probeRunner
 	if runner == nil {
 		runner = linux.ExecRunner{}
 	}
-	report, err := diagnostics.ObserveGRE(ctx, record.Desired, inspector, runner, manualMTU)
+	var report interface{ Summary() string }
+	backendName := "GRE"
+	switch record.Desired.Backend {
+	case domain.BackendGRE:
+		inspector, ok := selected.(diagnostics.GREInspector)
+		if !ok {
+			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_diagnose", "GRE diagnostic backend is unavailable")
+		}
+		var measured diagnostics.GREReport
+		measured, err = diagnostics.ObserveGRE(ctx, record.Desired, inspector, runner, manualMTU)
+		report = measured
+	case domain.BackendIPIP:
+		backendName = "IPIP"
+		inspector, ok := selected.(diagnostics.IPIPInspector)
+		if !ok {
+			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_diagnose", "IPIP diagnostic backend is unavailable")
+		}
+		var measured diagnostics.IPIPReport
+		measured, err = diagnostics.ObserveIPIP(ctx, record.Desired, inspector, runner, manualMTU)
+		report = measured
+	}
 	if err != nil {
 		code := stlerr.CodeOf(err)
 		switch code {
 		case stlerr.CodeInvalid:
-			return readCommandError(stdout, stderr, jsonOutput, code, "link_diagnose", "invalid GRE diagnostic configuration or MTU request")
+			return readCommandError(stdout, stderr, jsonOutput, code, "link_diagnose", "invalid "+backendName+" diagnostic configuration or MTU request")
 		case stlerr.CodeUnsupported:
-			return readCommandError(stdout, stderr, jsonOutput, code, "link_diagnose", "GRE diagnosis unsupported on this host")
+			return readCommandError(stdout, stderr, jsonOutput, code, "link_diagnose", backendName+" diagnosis unsupported on this host")
 		default:
-			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInspect, "link_diagnose", "GRE Link diagnostic observation failed")
+			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInspect, "link_diagnose", backendName+" Link diagnostic observation failed")
 		}
 	}
 	if jsonOutput {
@@ -100,7 +119,7 @@ func linkDiagnoseCommand(args []string, stdout, stderr io.Writer, options *runti
 
 // The optional mtu value is deliberately inner IPv4 packet bytes (not
 // iputils ping -s payload bytes). The common diagnostics algorithm performs
-// final validation against the kernel-observed outer MTU and GRE overhead.
+// final validation against the kernel-observed outer MTU and backend overhead.
 func parseDiagnoseOptions(args []string) (int, bool) {
 	if len(args) < 2 || args[0] != "diagnose" {
 		return 0, false

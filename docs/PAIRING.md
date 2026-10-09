@@ -111,20 +111,21 @@ by previewing.
 Actual user-confirmed credential storage and import/apply remain separate
 Issue #8/#10 acceptance; this command does not imply they are implemented.
 
-## Explicit GRE export CLI
+## Explicit GRE/IPIP export CLI
 
 `stl link export <link-id> [--json]` intentionally produces a
 versioned Quick Setup Link and a receiver-oriented human-readable block
-for an existing saved GRE Link. It calls `pairing.NewQuickOffer`
+for an existing saved GRE or IPIP Link. It calls `pairing.NewQuickOffer`
 and the canonical pairing export API; there is no second URL encoder.
 Export itself does not inspect live host networking, mutate state or
-attempt to set up the peer. Non-secret GRE Native/FOU/GUE configuration,
-including UDP port/key identifier, round-trips through the existing
-versioned schema and receiver inversion.
+attempt to set up the peer. Non-secret GRE Native/FOU/GUE configuration
+(including explicit UDP port/key identifier) and IPIP Native/FOU/GUE
+configuration (whose UDP port derives from the shared Link ID)
+round-trip through the same versioned schema and receiver inversion.
 
-Only **credential-free GRE** can currently be exported. WireGuard and
-IPsec exports are denied rather than silently dropping recipient private
-keys/PSKs; IPIP export awaits the complete backend-specific contract.
+Only **credential-free GRE/IPIP** can currently be exported. WireGuard
+and IPsec exports are denied rather than silently dropping recipient private
+keys/PSKs.
 Human/JSON output intentionally includes the full Setup Link URL and
 must be treated as **explicitly requested share/export material**, not
 ordinary diagnostic/status output. Even without a secret credential,
