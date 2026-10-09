@@ -335,23 +335,17 @@ func greTypeArgs(link domain.Link) []string {
 	return args
 }
 
-// Linux GRE receive lookup can collide across Native/FOU/GUE when the
-// underlay endpoint pair and GRE key identity match, regardless of outer
-// UDP encapsulation/port. Keep this independent of the existing detailed
-// backend identity so older persisted resource claims remain compatible.
+// Keep observed-kernel identities and persisted Desired reservations on the
+// exact same canonical resource key, including legacy (pre-gre/rx) records.
 func greReceiveIdentity(local, peer netip.Addr, keyed bool, key uint32) string {
-	keyText := "absent"
-	if keyed {
-		keyText = strconv.FormatUint(uint64(key), 10)
-	}
-	return "gre/rx/" + local.String() + "/" + peer.String() + "/key=" + keyText
+	return domain.GREReceiveClaim(
+		domain.Underlay{Local: local, Peer: peer},
+		domain.GREOptions{KeyEnabled: keyed, Key: key},
+	).Key
 }
 
 func greReceiveClaim(link domain.Link) domain.ResourceClaim {
-	return domain.ResourceClaim{
-		Kind: domain.ResourceBackendID,
-		Key:  greReceiveIdentity(link.Underlay.Local, link.Underlay.Peer, link.GRE.KeyEnabled, link.GRE.Key),
-	}
+	return domain.GREReceiveClaim(link.Underlay, link.GRE)
 }
 
 func backendIdentity(local, peer netip.Addr, keyed bool, key uint32, encap domain.Encapsulation, port uint16) string {
