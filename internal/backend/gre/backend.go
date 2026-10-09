@@ -163,7 +163,7 @@ func (b *Backend) Inspect(ctx context.Context, link domain.Link) (core.Observati
 		if err != nil {
 			return nil, fmt.Errorf("inspect GRE Link Addresses: %w", err)
 		}
-		links[i].IPv4Addresses, err = parseIPv4Addresses(addrResult.Stdout, name)
+		links[i].IPv4Addresses, err = parseIPv4Addresses(addrResult.Stdout, name, links[i].IfIndex)
 		if err != nil {
 			return nil, err
 		}

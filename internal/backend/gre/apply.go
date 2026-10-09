@@ -214,7 +214,14 @@ func (b *Backend) verifyCreatedInterface(ctx context.Context, link domain.Link, 
 	}
 	obs := fresh.(observation)
 	state := obs.Target
-	if !state.Exists || state.IfIndex != index || state.Owner != expectedOwner || !state.matchesConfigurationBeforeOwnership(link, name) {
+	expectedAlias := ""
+	if expectedOwner != "" {
+		expectedAlias, err = linux.OwnerTag(expectedOwner)
+		if err != nil {
+			return observedLink{}, err
+		}
+	}
+	if !state.Exists || state.IfIndex != index || state.Owner != expectedOwner || state.Alias != expectedAlias || !state.matchesConfigurationBeforeOwnership(link, name) {
 		return observedLink{}, fmt.Errorf("created GRE interface identity changed; preserving current host state")
 	}
 	return state, nil
@@ -225,28 +232,28 @@ func rollbackStateMatchesCreationProgress(state observedLink, link domain.Link, 
 		return false
 	}
 	expectedOwner := domain.LinkID("")
+	expectedAlias := ""
 	if progress.OwnershipMarked {
 		expectedOwner = link.ID
+		var err error
+		expectedAlias, err = linux.OwnerTag(link.ID)
+		if err != nil {
+			return false
+		}
 	}
-	if state.Owner != expectedOwner {
+	if state.Owner != expectedOwner || state.Alias != expectedAlias {
 		return false
 	}
 
 	switch {
-	case !progress.AddressAttempted:
+	case !progress.AddressAttempted, !progress.AddressAssigned:
+		// A failed/ambiguous address create proves no ownership of any new
+		// address, even if the observed address equals the requested one.
 		if len(state.IPv4Addresses) != 0 {
 			return false
 		}
-	case progress.AddressAssigned:
-		if len(state.IPv4Addresses) != 1 || state.IPv4Addresses[0] != link.Addresses.Local {
-			return false
-		}
 	default:
-		// An address mutation that returned an error may still be ambiguous.
-		// Only the pre-attempt state or the exact intended address is
-		// attributable to this operation; any other/additional address is not.
-		if len(state.IPv4Addresses) > 1 ||
-			(len(state.IPv4Addresses) == 1 && state.IPv4Addresses[0] != link.Addresses.Local) {
+		if len(state.IPv4Addresses) != 1 || state.IPv4Addresses[0] != link.Addresses.Local {
 			return false
 		}
 	}
@@ -257,8 +264,8 @@ func rollbackStateMatchesCreationProgress(state observedLink, link domain.Link, 
 	case progress.UpConfirmed:
 		return state.Up
 	default:
-		// A failed/ambiguous up mutation can legitimately leave either state.
-		return true
+		// An observed Up state after an error is not proven to be ours.
+		return !state.Up
 	}
 }
 

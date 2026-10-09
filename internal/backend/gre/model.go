@@ -47,6 +47,7 @@ type linkJSON struct {
 }
 
 type addressJSON struct {
+	IfIndex  int    `json:"ifindex"`
 	IfName   string `json:"ifname"`
 	AddrInfo []struct {
 		Family    string `json:"family"`
@@ -59,6 +60,7 @@ type observedLink struct {
 	Exists        bool
 	IfIndex       int
 	Name          string
+	Alias         string
 	Owner         domain.LinkID
 	Up            bool
 	Local         netip.Addr
@@ -109,10 +111,10 @@ func parseGRELink(row linkJSON) (observedLink, error) {
 		return observedLink{}, fmt.Errorf("invalid inspected GRE peer underlay")
 	}
 	state := observedLink{
-		Exists: true, IfIndex: row.IfIndex, Name: row.IfName, Local: local,
+		Exists: true, IfIndex: row.IfIndex, Name: row.IfName, Alias: row.IfAlias, Local: local,
 		Peer: peer, TTL: row.LinkInfo.InfoData.TTL, PMTUD: true, Encapsulation: domain.EncapNative,
 	}
-	if owner, ok := linux.ParseOwnerTag(strings.TrimSpace(row.IfAlias)); ok {
+	if owner, ok := linux.ParseOwnerTag(row.IfAlias); ok {
 		state.Owner = owner
 	}
 	state.Up = slices.Contains(row.Flags, "UP")
@@ -168,16 +170,18 @@ func parseGREKey(text string) (uint32, error) {
 	return binary.BigEndian.Uint32(bytes[:]), nil
 }
 
-func parseIPv4Addresses(raw []byte, name string) ([]netip.Prefix, error) {
+func parseIPv4Addresses(raw []byte, name string, ifindex int) ([]netip.Prefix, error) {
 	var rows []addressJSON
 	if err := json.Unmarshal(raw, &rows); err != nil {
 		return nil, fmt.Errorf("parse GRE address state: %w", err)
 	}
+	// Address lookup uses a reusable name. The returned kernel ifindex must
+	// agree with the earlier link snapshot before combining both observations.
+	if len(rows) != 1 || ifindex <= 0 || rows[0].IfIndex != ifindex || rows[0].IfName != name {
+		return nil, fmt.Errorf("GRE address observation identity changed; preserving current host state")
+	}
 	var out []netip.Prefix
 	for _, row := range rows {
-		if row.IfName != name {
-			continue
-		}
 		for _, info := range row.AddrInfo {
 			if info.Family != "inet" {
 				continue
@@ -194,6 +198,10 @@ func parseIPv4Addresses(raw []byte, name string) ([]netip.Prefix, error) {
 
 func (g observedLink) matches(link domain.Link, name string) bool {
 	if !g.Exists || g.Name != name || g.Owner != link.ID || !g.Up || g.Local != link.Underlay.Local || g.Peer != link.Underlay.Peer {
+		return false
+	}
+	expectedAlias, err := linux.OwnerTag(link.ID)
+	if err != nil || g.Alias != expectedAlias {
 		return false
 	}
 	if g.KeyEnabled != link.GRE.KeyEnabled || (g.KeyEnabled && g.Key != link.GRE.Key) ||

@@ -37,12 +37,13 @@ func testLink() domain.Link {
 }
 
 type fakeRunner struct {
-	link     domain.Link
-	name     string
-	state    observedLink
-	extra    []observedLink
-	mappings []fouMapping
-	commands []string
+	link                 domain.Link
+	name                 string
+	state                observedLink
+	extra                []observedLink
+	mappings             []fouMapping
+	commands             []string
+	addressIndexOverride int
 }
 
 func (r *fakeRunner) Run(_ context.Context, name string, args ...string) (linux.CommandResult, error) {
@@ -84,7 +85,11 @@ func (r *fakeRunner) Run(_ context.Context, name string, args ...string) (linux.
 		for _, prefix := range r.state.IPv4Addresses {
 			items = append(items, fmt.Sprintf(`{"family":"inet","local":%q,"prefixlen":%d}`, prefix.Addr().String(), prefix.Bits()))
 		}
-		raw := fmt.Sprintf(`[{"ifname":%q,"addr_info":[%s]}]`, r.state.Name, strings.Join(items, ","))
+		index := r.state.IfIndex
+		if r.addressIndexOverride != 0 {
+			index = r.addressIndexOverride
+		}
+		raw := fmt.Sprintf(`[{"ifindex":%d,"ifname":%q,"addr_info":[%s]}]`, index, r.state.Name, strings.Join(items, ","))
 		return linux.CommandResult{Stdout: []byte(raw)}, nil
 	case strings.HasPrefix(joined, "link add "):
 		if r.state.Exists {
@@ -125,8 +130,8 @@ func (r *fakeRunner) Run(_ context.Context, name string, args ...string) (linux.
 
 func rowFromState(s observedLink) linkJSON {
 	var row linkJSON
-	row.IfIndex, row.IfName = s.IfIndex, s.Name
-	if s.Owner != "" {
+	row.IfIndex, row.IfName, row.IfAlias = s.IfIndex, s.Name, s.Alias
+	if row.IfAlias == "" && s.Owner != "" {
 		row.IfAlias, _ = linux.OwnerTag(s.Owner)
 	}
 	if s.Up {
@@ -749,5 +754,175 @@ func TestNativeGRERollbackPreservesUnexpectedAdditionalAddress(t *testing.T) {
 	}
 	if !runner.state.Exists || !slices.Contains(runner.state.IPv4Addresses, external) {
 		t.Fatalf("rollback destroyed independently added address/state: %#v", runner.state)
+	}
+}
+
+func attemptGRECreate(t *testing.T, b *Backend, link domain.Link) (core.Rollback, error) {
+	t.Helper()
+	ctx := context.Background()
+	req := core.Request{Operation: core.OperationEnsure, Link: link}
+	obs, err := b.Inspect(ctx, link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := b.Plan(ctx, req, obs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Validate(ctx, req, obs, candidate); err != nil {
+		t.Fatal(err)
+	}
+	return b.Apply(ctx, req, obs, candidate)
+}
+
+func TestNativeGREAmbiguousMutationRollbackOnlyDeletesUnmodifiedState(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		mutate   func(*Backend, *fakeRunner)
+		preserve bool
+	}{
+		{
+			name: "failed_address_with_exact_intended_address",
+			mutate: func(b *Backend, r *fakeRunner) {
+				b.addAddress = func(_ context.Context, _ int, prefix netip.Prefix) error {
+					r.state.IPv4Addresses = []netip.Prefix{prefix}
+					return errors.New("address request failed after ambiguous mutation")
+				}
+			},
+			preserve: true,
+		},
+		{
+			name: "failed_address_without_mutation",
+			mutate: func(b *Backend, _ *fakeRunner) {
+				b.addAddress = func(context.Context, int, netip.Prefix) error {
+					return errors.New("address request failed before mutation")
+				}
+			},
+		},
+		{
+			name: "failed_up_with_interface_activated",
+			mutate: func(b *Backend, r *fakeRunner) {
+				b.setUp = func(context.Context, int) error {
+					r.state.Up = true
+					return errors.New("link-up failed after ambiguous mutation")
+				}
+			},
+			preserve: true,
+		},
+		{
+			name: "failed_up_without_mutation",
+			mutate: func(b *Backend, _ *fakeRunner) {
+				b.setUp = func(context.Context, int) error {
+					return errors.New("link-up failed before mutation")
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			link := testLink()
+			name, _ := InterfaceName(link.ID)
+			runner := &fakeRunner{link: link, name: name}
+			b := newTestBackend(t, runner, &fakeFirewall{}, fakeCollisions{})
+			tc.mutate(b, runner)
+			undo, err := attemptGRECreate(t, b, link)
+			if err == nil || undo == nil {
+				t.Fatalf("ambiguous mutation must return a rollback: %v", err)
+			}
+			rollbackErr := undo(context.Background())
+			if tc.preserve {
+				if rollbackErr == nil || !strings.Contains(rollbackErr.Error(), "preserving") {
+					t.Fatalf("ambiguous mutation was not preserved: %v", rollbackErr)
+				}
+				if !runner.state.Exists {
+					t.Fatal("independently modified interface was destroyed")
+				}
+				if strings.Contains(tc.name, "address") && !slices.Contains(runner.state.IPv4Addresses, link.Addresses.Local) {
+					t.Fatal("exact independently observable address was lost")
+				}
+				if strings.Contains(tc.name, "up") && !runner.state.Up {
+					t.Fatal("ambiguous activated state was lost")
+				}
+			} else if rollbackErr != nil || runner.state.Exists {
+				t.Fatalf("safe unmodified state was not rolled back: err=%v state=%#v", rollbackErr, runner.state)
+			}
+		})
+	}
+}
+
+func TestNativeGRERawAliasBeforeOwnershipIsNotOverwrittenOrDeleted(t *testing.T) {
+	link := testLink()
+	name, _ := InterfaceName(link.ID)
+	owner, _ := linux.OwnerTag(link.ID)
+	for _, rawAlias := range []string{"external-alias", " " + owner} {
+		t.Run(rawAlias, func(t *testing.T) {
+			runner := &fakeRunner{link: link, name: name}
+			b := newTestBackend(t, runner, &fakeFirewall{}, fakeCollisions{})
+			b.lookupIndex = func(string) (int, error) {
+				runner.state.Alias = rawAlias
+				return 77, nil
+			}
+			b.setAlias = func(context.Context, int, string) error {
+				t.Fatal("must not overwrite an independently added alias")
+				return nil
+			}
+			b.deleteLink = func(context.Context, int) error {
+				t.Fatal("must not delete interface with independently added alias")
+				return nil
+			}
+			undo, err := attemptGRECreate(t, b, link)
+			if err == nil || undo == nil {
+				t.Fatalf("raw alias drift not rejected: %v", err)
+			}
+			if err := undo(context.Background()); err == nil || !strings.Contains(err.Error(), "preserving") {
+				t.Fatalf("raw alias drift allowed rollback: %v", err)
+			}
+			if !runner.state.Exists || runner.state.Alias != rawAlias {
+				t.Fatalf("independently supplied raw alias was changed: %#v", runner.state)
+			}
+		})
+	}
+}
+
+func TestNativeGRERollbackPreservesChangedRawAlias(t *testing.T) {
+	link := testLink()
+	name, _ := InterfaceName(link.ID)
+	owner, _ := linux.OwnerTag(link.ID)
+	runner := &fakeRunner{link: link, name: name}
+	b := newTestBackend(t, runner, &fakeFirewall{failEnsure: true}, fakeCollisions{})
+	undo, err := attemptGRECreate(t, b, link)
+	if err == nil || undo == nil {
+		t.Fatalf("expected later firewall failure: %v", err)
+	}
+	runner.state.Alias = " " + owner
+	if err := undo(context.Background()); err == nil || !strings.Contains(err.Error(), "preserving") {
+		t.Fatalf("noncanonical owner alias was accepted: %v", err)
+	}
+	if !runner.state.Exists || runner.state.Alias != " "+owner {
+		t.Fatalf("changed alias was destroyed: %#v", runner.state)
+	}
+}
+
+func TestNativeGREAddressObservationRejectsNameReuseAcrossIfindexes(t *testing.T) {
+	link := testLink()
+	name, _ := InterfaceName(link.ID)
+	runner := &fakeRunner{link: link, name: name, addressIndexOverride: 88}
+	b := newTestBackend(t, runner, &fakeFirewall{}, fakeCollisions{})
+	b.setAlias = func(context.Context, int, string) error {
+		t.Fatal("address observation is not consistent; must not mark ownership")
+		return nil
+	}
+	b.deleteLink = func(context.Context, int) error {
+		t.Fatal("composite observations must not permit destructive rollback")
+		return nil
+	}
+	undo, err := attemptGRECreate(t, b, link)
+	if err == nil || undo == nil || !strings.Contains(err.Error(), "identity changed") {
+		t.Fatalf("name reused by another ifindex was not rejected: %v", err)
+	}
+	if err := undo(context.Background()); err == nil || !strings.Contains(err.Error(), "preserving") {
+		t.Fatalf("mismatched ifindex allowed rollback: %v", err)
+	}
+	if !runner.state.Exists || runner.state.IfIndex != 77 || runner.state.Owner != "" {
+		t.Fatalf("mismatched observation modified or destroyed interface: %#v", runner.state)
 	}
 }
