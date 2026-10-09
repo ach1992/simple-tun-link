@@ -62,14 +62,15 @@ func printMenuHeader(out io.Writer, options *runtimeOptions) {
 	}
 }
 
-// Kernel/host/interface labels must not inject terminal control sequences.
+// Kernel/host/interface labels must not inject terminal control or
+// Unicode format/bidirectional ordering characters.
 func safeMenuText(value string) string {
 	var result strings.Builder
 	for _, r := range value {
 		if result.Len() >= 96 {
 			break
 		}
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 			result.WriteByte('_')
 		} else {
 			result.WriteRune(r)

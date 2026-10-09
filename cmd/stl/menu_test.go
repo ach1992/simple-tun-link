@@ -104,8 +104,9 @@ func TestMenuEOFAndCommandArgumentBoundaries(t *testing.T) {
 }
 
 func TestMenuHeaderSanitizesUntrustedTerminalText(t *testing.T) {
-	got := safeMenuText("host\x1b[31m\nnow")
-	if strings.Contains(got, "\x1b") || strings.Contains(got, "\n") ||
+	got := safeMenuText("host\x1b[31m\nnow\u202eRTL\u2069\u200d")
+	if strings.Contains(got, "\x1b") || strings.Contains(got, "\n") || strings.Contains(got, "\u202e") ||
+		strings.Contains(got, "\u2069") || strings.Contains(got, "\u200d") ||
 		!strings.Contains(got, "host") {
 		t.Fatalf("unsafe console label: %q", got)
 	}
