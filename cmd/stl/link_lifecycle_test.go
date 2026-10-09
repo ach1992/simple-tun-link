@@ -8,6 +8,9 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -108,10 +111,29 @@ func makeLifecycleDesired(t *testing.T, idChar string, subnet string) (domain.Li
 // when their inner Link is constructed with the current domain fixture.
 func desiredRequestJSON(t *testing.T, link domain.Link, version int) string {
 	t.Helper()
-	request := struct {
-		SchemaVersion int         `json:"schema_version"`
-		Link          domain.Link `json:"link"`
-	}{SchemaVersion: version, Link: link}
+	// Existing test fixtures must also serialize the pinned public v1
+	// contract, not internal domain.Link; domain JSON changes cannot
+	// silently reconfigure these automation acceptance scenarios.
+	request := desiredLinkRequestV1{
+		SchemaVersion: version,
+		Link: desiredLinkV1{
+			ID: link.ID, DisplayName: link.DisplayName,
+			Underlay: desiredUnderlayV1{
+				Local: link.Underlay.Local, Peer: link.Underlay.Peer,
+			},
+			Addresses: desiredLinkAddressesV1{
+				Local: link.Addresses.Local, Peer: link.Addresses.Peer,
+			},
+			Backend: link.Backend, Encapsulation: link.Encapsulation,
+			GRE: desiredGREOptionsV1{
+				KeyEnabled: link.GRE.KeyEnabled, Key: link.GRE.Key,
+				TTL: link.GRE.TTL, TOS: link.GRE.TOS,
+				DisablePMTUD: link.GRE.DisablePMTUD,
+				Checksum:     link.GRE.Checksum, Sequence: link.GRE.Sequence,
+				UDPPort: link.GRE.UDPPort,
+			},
+		},
+	}
 	raw, err := json.Marshal(request)
 	if err != nil {
 		t.Fatal(err)
@@ -426,6 +448,179 @@ func TestLifecycleCLIUnsupportedSchemaAndDomainCapabilities(t *testing.T) {
 			}
 			if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("unsupported request created state/locks: %v", err)
+			}
+		})
+	}
+}
+
+// The exact v1 public JSON field set is an acceptance boundary. An internal
+// domain field addition must not widen the request, and even an intentional
+// addition to these wire structs must be accompanied by a schema decision.
+func TestDesiredLinkV1WireContractFieldAllowlist(t *testing.T) {
+	cases := []struct {
+		name     string
+		value    any
+		expected []string
+	}{
+		{"request", desiredLinkRequestV1{}, []string{"schema_version", "link"}},
+		{"link", desiredLinkV1{}, []string{
+			"id", "display_name", "underlay", "addresses", "backend", "encapsulation", "gre",
+		}},
+		{"underlay", desiredUnderlayV1{}, []string{"local", "peer"}},
+		{"addresses", desiredLinkAddressesV1{}, []string{"local", "peer"}},
+		{"gre", desiredGREOptionsV1{}, []string{
+			"key_enabled", "key", "ttl", "tos", "disable_pmtud", "checksum", "sequence", "udp_port",
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ty := reflect.TypeOf(tc.value)
+			got := make([]string, 0, ty.NumField())
+			for i := 0; i < ty.NumField(); i++ {
+				field := ty.Field(i)
+				if !field.IsExported() {
+					t.Fatalf("unexported field %s in public input wire struct", field.Name)
+				}
+				tag := strings.Split(field.Tag.Get("json"), ",")[0]
+				if tag == "" || tag == "-" {
+					t.Fatalf("missing/hidden JSON tag on %s", field.Name)
+				}
+				got = append(got, tag)
+			}
+			sort.Strings(got)
+			sort.Strings(tc.expected)
+			if !slices.Equal(got, tc.expected) {
+				t.Fatalf("schema v1 field allowlist drift: got %v, want %v; review version compatibility", got, tc.expected)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name string
+		want reflect.Type
+	}{
+		{"Underlay", reflect.TypeOf(desiredUnderlayV1{})},
+		{"Addresses", reflect.TypeOf(desiredLinkAddressesV1{})},
+		{"GRE", reflect.TypeOf(desiredGREOptionsV1{})},
+	} {
+		field, ok := reflect.TypeOf(desiredLinkV1{}).FieldByName(tc.name)
+		if !ok || field.Type != tc.want {
+			t.Fatalf("nested %s must be the private frozen CLI v1 type, never a mutable domain type", tc.name)
+		}
+	}
+}
+
+func TestDesiredLinkV1PreservesAllGREOptionsAndEndpointValues(t *testing.T) {
+	tests := []struct {
+		name     string
+		raw      string
+		expected domain.Link
+	}{
+		{
+			name: "FOU includes keyed zero and all applicable v1 options",
+			raw:  `{"schema_version":1,"link":{"id":"lnk_77777777777777777777777777777777","display_name":"not_for_public_output","underlay":{"local":"192.0.2.10","peer":"192.0.2.20"},"addresses":{"local":"10.70.20.0/31","peer":"10.70.20.1/31"},"backend":"gre","encapsulation":"fou","gre":{"key_enabled":true,"key":0,"ttl":42,"tos":16,"disable_pmtud":false,"checksum":true,"sequence":true,"udp_port":4500}}}`,
+			expected: domain.Link{
+				ID:          "lnk_77777777777777777777777777777777",
+				DisplayName: "not_for_public_output",
+				Underlay: domain.Underlay{
+					Local: netip.MustParseAddr("192.0.2.10"),
+					Peer:  netip.MustParseAddr("192.0.2.20"),
+				},
+				Addresses: domain.LinkAddresses{
+					Local: netip.MustParsePrefix("10.70.20.0/31"),
+					Peer:  netip.MustParsePrefix("10.70.20.1/31"),
+				},
+				Backend: domain.BackendGRE, Encapsulation: domain.EncapFOU,
+				GRE: domain.GREOptions{
+					KeyEnabled: true, Key: 0, TTL: 42, TOS: 16, DisablePMTUD: false,
+					Checksum: true, Sequence: true, UDPPort: 4500,
+				},
+			},
+		},
+		{
+			name: "GUE preserves nonzero key and disable PMTUD",
+			raw:  `{"schema_version":1,"link":{"id":"lnk_88888888888888888888888888888888","underlay":{"local":"192.0.2.11","peer":"192.0.2.22"},"addresses":{"local":"10.70.21.0/31","peer":"10.70.21.1/31"},"backend":"gre","encapsulation":"gue","gre":{"key_enabled":true,"key":4294967295,"ttl":0,"tos":0,"disable_pmtud":true,"checksum":false,"sequence":false,"udp_port":4501}}}`,
+			expected: domain.Link{
+				ID: "lnk_88888888888888888888888888888888",
+				Underlay: domain.Underlay{
+					Local: netip.MustParseAddr("192.0.2.11"),
+					Peer:  netip.MustParseAddr("192.0.2.22"),
+				},
+				Addresses: domain.LinkAddresses{
+					Local: netip.MustParsePrefix("10.70.21.0/31"),
+					Peer:  netip.MustParsePrefix("10.70.21.1/31"),
+				},
+				Backend: domain.BackendGRE, Encapsulation: domain.EncapGUE,
+				GRE: domain.GREOptions{KeyEnabled: true, Key: 4294967295, DisablePMTUD: true, UDPPort: 4501},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			decoded, err := decodeDesiredLink(strings.NewReader(tc.raw))
+			if err != nil {
+				t.Fatalf("canonical v1 input rejected: %v", err)
+			}
+			if decoded != tc.expected {
+				t.Fatalf("v1 to domain conversion lost or changed config: got %+v want %+v", decoded, tc.expected)
+			}
+			// Exercise the actual new CLI boundary, not only the helper.
+			root := filepath.Join(t.TempDir(), "state")
+			fake := newLifecycleFake()
+			code, out, stderr := runLifecycleTest(t, root, fake, []string{"link", "ensure", "--stdin", "--json"}, tc.raw)
+			if code != 0 || stderr != "" || strings.Contains(out, "not_for_public_output") || len(fake.applies) != 1 {
+				t.Fatalf("v1 request did not traverse canonical Engine safely: %d %q %q", code, out, stderr)
+			}
+			snapshot, err := state.NewFileStore(root).Load(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			stored, ok := snapshot.Find(tc.expected.ID)
+			if !ok || stored.Desired != tc.expected {
+				t.Fatalf("canonical Engine did not persist exact mapped v1 Link: found=%v got=%+v", ok, stored.Desired)
+			}
+		})
+	}
+}
+
+func TestDesiredLinkV1RejectsUnknownNestedDomainExtensionsBeforeRuntime(t *testing.T) {
+	// A future field in internal/domain may be valid in the internal state
+	// format; it must NOT become part of the public CLI v1 input automatically.
+	base := `{"schema_version":1,"link":{"id":"lnk_99999999999999999999999999999999","underlay":{"local":"192.0.2.10","peer":"192.0.2.20"},"addresses":{"local":"10.70.22.0/31","peer":"10.70.22.1/31"},"backend":"gre","encapsulation":"fou","gre":{"key_enabled":true,"key":7,"udp_port":4500}}}`
+	cases := []struct {
+		name        string
+		old         string
+		replacement string
+	}{
+		{"future underlay field", `"peer":"192.0.2.20"`, `"peer":"192.0.2.20","source_ifindex":123`},
+		{"future Link Address field", `"peer":"10.70.22.1/31"`, `"peer":"10.70.22.1/31","gateway":"10.70.22.7"`},
+		{"future GRE credential field", `"udp_port":4500`, `"udp_port":4500,"private_key":"NEVER_EXPOSE_TO_CLIENT"`},
+		{"future GRE encryption switch", `"udp_port":4500`, `"udp_port":4500,"future_crypto":true`},
+		{"future link field", `"encapsulation":"fou"`, `"encapsulation":"fou","interface_name":"foreign0"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !strings.Contains(base, tc.old) {
+				t.Fatalf("missing test anchor %s", tc.old)
+			}
+			payload := strings.Replace(base, tc.old, tc.replacement, 1)
+			root := filepath.Join(t.TempDir(), "no-state")
+			fake := newLifecycleFake()
+			code, out, stderr := runLifecycleTest(t, root, fake, []string{"link", "ensure", "--stdin", "--json"}, payload)
+			if code != 2 || stderr != "" || strings.Contains(out, "NEVER_EXPOSE_TO_CLIENT") ||
+				strings.Contains(out, "foreign0") || strings.Contains(out, "future_crypto") {
+				t.Fatalf("schema v1 accidentally admitted unknown nested field: code=%d out=%q err=%q", code, out, stderr)
+			}
+			var response linkReadErrorResponse
+			if err := json.Unmarshal([]byte(out), &response); err != nil ||
+				response.SchemaVersion != jsonSchemaVersion || response.Error == nil ||
+				response.Error.Code != stlerr.CodeInvalid {
+				t.Fatalf("unknown input lacked redacted versioned invalid response: %q", out)
+			}
+			if len(fake.applies) != 0 || len(fake.present) != 0 {
+				t.Fatalf("unknown nested v1 field reached backend: %+v", fake)
+			}
+			if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("unknown field created state/locks: %v", err)
 			}
 		})
 	}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"os/signal"
 	"slices"
@@ -190,30 +191,69 @@ func lifecycleFailure(stdout, stderr io.Writer, jsonOutput bool, code stlerr.Cod
 	}
 }
 
-// The v1 CLI automation request is a distinct, explicitly versioned protocol,
-// not the internal Link struct as a top-level unversioned request. Its accepted
-// fields are pinned here so future changes to domain.Link do not silently
-// expand this automation input contract.
+// The v1 automation wire contract is intentionally frozen at EVERY nesting
+// level. Never put domain.* structs in these JSON-decoded types: adding a
+// domain field must not silently expand the public schema_version:1 input.
+// Only stable primitives and standard-library IP value types are allowed.
+// Introducing a new public input field needs an explicit schema decision.
 type desiredLinkRequestV1 struct {
 	SchemaVersion int           `json:"schema_version"`
 	Link          desiredLinkV1 `json:"link"`
 }
 
 type desiredLinkV1 struct {
-	ID            domain.LinkID        `json:"id"`
-	DisplayName   string               `json:"display_name,omitempty"`
-	Underlay      domain.Underlay      `json:"underlay"`
-	Addresses     domain.LinkAddresses `json:"addresses"`
-	Backend       domain.Backend       `json:"backend"`
-	Encapsulation domain.Encapsulation `json:"encapsulation"`
-	GRE           domain.GREOptions    `json:"gre,omitempty"`
+	ID            domain.LinkID          `json:"id"`
+	DisplayName   string                 `json:"display_name,omitempty"`
+	Underlay      desiredUnderlayV1      `json:"underlay"`
+	Addresses     desiredLinkAddressesV1 `json:"addresses"`
+	Backend       domain.Backend         `json:"backend"`
+	Encapsulation domain.Encapsulation   `json:"encapsulation"`
+	GRE           desiredGREOptionsV1    `json:"gre,omitempty"`
 }
 
+type desiredUnderlayV1 struct {
+	Local netip.Addr `json:"local"`
+	Peer  netip.Addr `json:"peer"`
+}
+
+type desiredLinkAddressesV1 struct {
+	Local netip.Prefix `json:"local"`
+	Peer  netip.Prefix `json:"peer"`
+}
+
+// Keep the exact GRE v1 option set here. KeyEnabled must remain separate
+// from Key so a present key value of zero is not confused with no GRE key.
+type desiredGREOptionsV1 struct {
+	KeyEnabled   bool   `json:"key_enabled,omitempty"`
+	Key          uint32 `json:"key,omitempty"`
+	TTL          uint8  `json:"ttl,omitempty"`
+	TOS          uint8  `json:"tos,omitempty"`
+	DisablePMTUD bool   `json:"disable_pmtud,omitempty"`
+	Checksum     bool   `json:"checksum,omitempty"`
+	Sequence     bool   `json:"sequence,omitempty"`
+	UDPPort      uint16 `json:"udp_port,omitempty"`
+}
+
+// Explicit v1-to-domain mapping is the compatibility boundary. Do not
+// reflect/round-trip JSON here: new internal fields must take their default
+// until a consciously versioned public input supports them.
 func (d desiredLinkV1) link() domain.Link {
 	return domain.Link{
 		ID: d.ID, DisplayName: d.DisplayName,
-		Underlay: d.Underlay, Addresses: d.Addresses,
-		Backend: d.Backend, Encapsulation: d.Encapsulation, GRE: d.GRE,
+		Underlay: domain.Underlay{
+			Local: d.Underlay.Local, Peer: d.Underlay.Peer,
+		},
+		Addresses: domain.LinkAddresses{
+			Local: d.Addresses.Local, Peer: d.Addresses.Peer,
+		},
+		Backend: d.Backend, Encapsulation: d.Encapsulation,
+		GRE: domain.GREOptions{
+			KeyEnabled: d.GRE.KeyEnabled, Key: d.GRE.Key,
+			TTL: d.GRE.TTL, TOS: d.GRE.TOS,
+			DisablePMTUD: d.GRE.DisablePMTUD,
+			Checksum:     d.GRE.Checksum, Sequence: d.GRE.Sequence,
+			UDPPort: d.GRE.UDPPort,
+		},
 	}
 }
 

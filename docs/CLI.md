@@ -122,6 +122,17 @@ configure the illustrative addresses:
 }
 ~~~
 
+**Compatibility boundary:** all accepted v1 fields are fixed, including
+the nested `underlay`, `addresses` and `gre` objects.
+Underlay and Link Addresses accept only `local` / `peer`; GRE v1
+accepts only `key_enabled`, `key`, `ttl`, `tos`,
+`disable_pmtud`, `checksum`, `sequence` and `udp_port`.
+These names and their value types are the CLI contract rather than a
+serialization of mutable internal domain structs. Unknown nested fields
+are rejected, even if a later internal backend implementation gains them.
+A future public field addition requires an explicit compatibility/version
+decision; the existing version-1 reader must not silently widen.
+
 The v1 outer schema is a separate CLI contract from internal Go state.
 Missing, zero, null, non-integer or duplicate schema versions fail as
 invalid (exit 2). Unrecognized positive future versions fail explicitly as
