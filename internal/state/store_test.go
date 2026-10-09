@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -118,5 +119,31 @@ func TestResourceLocksSerializeSameClaimAndRespectContext(t *testing.T) {
 	defer cancel()
 	if _, err := manager.Acquire(ctx, []domain.ResourceClaim{claim}); err == nil {
 		t.Fatal("expected second acquisition to block until context deadline")
+	}
+}
+
+func TestFileStorePostPublicationFailureIsExplicitlyIndeterminate(t *testing.T) {
+	root := t.TempDir()
+	s := NewFileStore(root)
+	s.afterPublish = func() error { return os.ErrPermission }
+	id, err := domain.NewLinkID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := testLink(t, id, "10.80.124.0/31", "10.80.124.1/31")
+	err = s.Update(context.Background(), func(snapshot *Snapshot) error {
+		snapshot.Upsert(LinkRecord{Desired: link})
+		return nil
+	})
+	var postPublish *PublicationError
+	if !errors.As(err, &postPublish) {
+		t.Fatalf("post-rename failure was not identified as indeterminate: %v", err)
+	}
+	snapshot, err := s.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := snapshot.Find(id); !exists {
+		t.Fatal("post-publication error was incorrectly treated as uncommitted")
 	}
 }

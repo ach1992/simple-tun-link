@@ -1,0 +1,336 @@
+package linux
+
+import (
+	"context"
+	"errors"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/ach1992/simple-tun-link/internal/app"
+	"github.com/ach1992/simple-tun-link/internal/backend"
+	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/state"
+	"github.com/ach1992/simple-tun-link/internal/stlerr"
+)
+
+// These integration tests wire the real Engine and real unit-file manager
+// together, replacing only backend traffic and systemctl with isolated fakes.
+type unitEngineBackend struct {
+	live       bool
+	owned      string
+	applyCount int
+	undos      int
+}
+
+type unitEngineObservation struct{ live bool }
+
+func (o unitEngineObservation) ObservedResources() []domain.ResourceClaim { return nil }
+
+type unitEnginePlan struct {
+	remove bool
+	name   string
+}
+
+func (p unitEnginePlan) Empty() bool { return false }
+func (p unitEnginePlan) Resources() []domain.ResourceClaim {
+	if p.remove {
+		return nil
+	}
+	return []domain.ResourceClaim{{Kind: domain.ResourceInterface, Key: p.name}}
+}
+func (b *unitEngineBackend) Kind() domain.Backend { return domain.BackendGRE }
+func (b *unitEngineBackend) Inspect(context.Context, domain.Link) (backend.Observation, error) {
+	return unitEngineObservation{live: b.live}, nil
+}
+func (b *unitEngineBackend) Plan(_ context.Context, request backend.Request, _ backend.Observation) (backend.Plan, error) {
+	return unitEnginePlan{remove: request.Operation == backend.OperationRemove, name: request.Link.DisplayName}, nil
+}
+func (b *unitEngineBackend) Validate(context.Context, backend.Request, backend.Observation, backend.Plan) error {
+	return nil
+}
+func (b *unitEngineBackend) Apply(_ context.Context, request backend.Request, _ backend.Observation, _ backend.Plan) (backend.Rollback, error) {
+	priorLive, priorOwner := b.live, b.owned
+	b.live = request.Operation != backend.OperationRemove
+	b.owned = request.Link.DisplayName
+	b.applyCount++
+	return func(context.Context) error {
+		b.live = priorLive
+		b.owned = priorOwner
+		b.undos++
+		return nil
+	}, nil
+}
+func (b *unitEngineBackend) Verify(_ context.Context, request backend.Request) (backend.Observation, error) {
+	if b.live != (request.Operation != backend.OperationRemove) {
+		return nil, errors.New("backend not in expected state")
+	}
+	return unitEngineObservation{live: b.live}, nil
+}
+
+func testUnitEngineLink(t *testing.T) domain.Link {
+	t.Helper()
+	id, err := domain.NewLinkID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return domain.Link{
+		ID: id, DisplayName: "engine-old",
+		Underlay: domain.Underlay{
+			Local: netip.MustParseAddr("192.0.2.30"),
+			Peer:  netip.MustParseAddr("198.51.100.40"),
+		},
+		Addresses: domain.LinkAddresses{
+			Local: netip.MustParsePrefix("10.80.251.0/31"),
+			Peer:  netip.MustParsePrefix("10.80.251.1/31"),
+		},
+		Backend: domain.BackendGRE, Encapsulation: domain.EncapNative,
+	}
+}
+func unitEngineFor(t *testing.T, b *unitEngineBackend, store *state.FileStore, root string, manager *SystemdPersistence, executable string) *app.Engine {
+	t.Helper()
+	registry, err := backend.NewRegistry(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locks := state.NewLockManager(root)
+	if manager == nil {
+		engine, err := app.New(registry, store, locks)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return engine
+	}
+	engine, err := app.NewWithRestorePersistence(registry, store, locks, manager, executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return engine
+}
+
+func TestEngineUnitPostPublicationFailureKeepsCommittedIntentConsistent(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		replacement bool
+	}{
+		{"first install", false}, {"replace owned enabled", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			unitDir := t.TempDir()
+			store := state.NewFileStore(root)
+			b := &unitEngineBackend{}
+			runner := &recordingRunner{}
+			normal := &SystemdPersistence{
+				Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil },
+			}
+			link := testUnitEngineLink(t)
+			if tc.replacement {
+				initial := unitEngineFor(t, b, store, root, normal, "/usr/local/bin/stl")
+				if _, err := initial.Ensure(context.Background(), link); err != nil {
+					t.Fatal(err)
+				}
+			}
+			risky := &SystemdPersistence{
+				Runner: runner, UnitDir: unitDir,
+				VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil },
+				afterUnitPublish: func() error { return errUnitAfterRename },
+			}
+			executable := "/usr/local/bin/stl"
+			expectedOwner := ""
+			if tc.replacement {
+				executable = "/opt/stl/stl" // Forces the same owned unit to change.
+				expectedOwner = link.DisplayName
+				link.DisplayName = "engine-new"
+			}
+			engine := unitEngineFor(t, b, store, root, risky, executable)
+			_, err := engine.Ensure(context.Background(), link)
+			if stlerr.CodeOf(err) != stlerr.CodeState || !errors.Is(err, errUnitAfterRename) {
+				t.Fatalf("post-publication failure not reported: %v", err)
+			}
+			committed, err := store.Load(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			record, exists := committed.Find(link.ID)
+			if exists != tc.replacement {
+				t.Fatalf("published unit incorrectly committed intent: %+v", record)
+			}
+			if exists && record.Desired.DisplayName != expectedOwner {
+				t.Fatalf("prior desired intent overwritten: %+v", record)
+			}
+			if b.live != tc.replacement || b.owned != expectedOwner || b.undos != 1 {
+				t.Fatalf("backend rollback inconsistent with committed intent: live=%t owner=%q undos=%d", b.live, b.owned, b.undos)
+			}
+			unitPath := filepath.Join(unitDir, restoreSystemdUnitName)
+			contents, readErr := os.ReadFile(unitPath)
+			if tc.replacement {
+				if readErr != nil || !strings.Contains(string(contents), "ExecStart=/usr/local/bin/stl link restore --all") {
+					t.Fatalf("previous durable boot command not retained: %q %v", contents, readErr)
+				}
+				if !runner.enabled[restoreSystemdUnitName] {
+					t.Fatal("prior enabled unit lost enablement")
+				}
+			} else {
+				if !errors.Is(readErr, os.ErrNotExist) || runner.enabled[restoreSystemdUnitName] {
+					t.Fatalf("failed first install left orphaned unit: %v enabled=%t", readErr, runner.enabled[restoreSystemdUnitName])
+				}
+			}
+		})
+	}
+}
+
+func TestEngineLastLinkRemovalReportsOrphanEnabledUnit(t *testing.T) {
+	root := t.TempDir()
+	unitDir := t.TempDir()
+	store := state.NewFileStore(root)
+	b := &unitEngineBackend{}
+	link := testUnitEngineLink(t)
+	normal := unitEngineFor(t, b, store, root, nil, "")
+	if _, err := normal.Ensure(context.Background(), link); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &recordingRunner{enabled: map[string]bool{restoreSystemdUnitName: true}}
+	manager := &SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil }}
+	engine := unitEngineFor(t, b, store, root, manager, "/usr/local/bin/stl")
+	result, err := engine.Remove(context.Background(), link.ID)
+	if stlerr.CodeOf(err) != stlerr.CodeState || !result.Removed || !strings.Contains(err.Error(), "cleanup failed") {
+		t.Fatalf("orphan enabled unit failure hidden: %+v %v", result, err)
+	}
+	committed, loadErr := store.Load(context.Background())
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(committed.Links) != 0 || b.live || runner.enabled[restoreSystemdUnitName] == false {
+		t.Fatalf("last-link state or enablement mismatched: saved=%d backend=%t enabled=%t",
+			len(committed.Links), b.live, runner.enabled[restoreSystemdUnitName])
+	}
+	expectSystemdOperations(t, runner.commands, "systemctl is-enabled ")
+}
+
+// After the last Link deletion is committed, an enabled orphan discovered in
+// the postcondition must be reported as a partial cleanup failure. No rollback
+// should recreate the committed-removed backend or desired Link.
+func TestEngineLastLinkRemovalRejectsUnverifiedDisablePostcondition(t *testing.T) {
+	root := t.TempDir()
+	unitDir := t.TempDir()
+	store := state.NewFileStore(root)
+	b := &unitEngineBackend{}
+	link := testUnitEngineLink(t)
+	initialEngine := unitEngineFor(t, b, store, root, nil, "")
+	if _, err := initialEngine.Ensure(context.Background(), link); err != nil {
+		t.Fatal(err)
+	}
+	unit, err := renderRestoreSystemdUnit("/usr/local/bin/stl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(unitDir, restoreSystemdUnitName)
+	if err := os.WriteFile(path, []byte(unit), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &stuckEnabledCleanupRunner{}
+	manager := &SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyUnitPath: func(string) error { return nil }}
+	engine := unitEngineFor(t, b, store, root, manager, "/usr/local/bin/stl")
+	result, operationErr := engine.Remove(context.Background(), link.ID)
+	if !result.Removed || stlerr.CodeOf(operationErr) != stlerr.CodeState || !strings.Contains(operationErr.Error(), "cleanup failed") {
+		t.Fatalf("last-Link partial cleanup was falsely accepted: %+v %v", result, operationErr)
+	}
+	snapshot, err := store.Load(context.Background())
+	if err != nil || len(snapshot.Links) != 0 || b.live || b.undos != 0 {
+		t.Fatalf("committed removed Link was rolled back: saved=%+v backendLive=%t undos=%d err=%v", snapshot, b.live, b.undos, err)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("test did not exercise removal with orphan enablement: %v", err)
+	}
+	expectSystemdOperations(t, runner.commands, "systemctl is-enabled ", "systemctl disable ", "systemctl daemon-reload", "systemctl is-enabled ")
+}
+
+// A substituted incoming inode must abort BEFORE reload and preserve Engine
+// state, backend state, and the exact prior owned systemd-unit inode.
+func TestEngineIncomingExchangeIdentityFailureRollsBackWithoutStateCommit(t *testing.T) {
+	root, unitDir := t.TempDir(), t.TempDir()
+	store := state.NewFileStore(root)
+	b := &unitEngineBackend{}
+	runner := &recordingRunner{}
+	normal := &SystemdPersistence{
+		Runner: runner, UnitDir: unitDir,
+		VerifyExecutable: func(string) error { return nil },
+		VerifyUnitPath:   func(string) error { return nil },
+	}
+	link := testUnitEngineLink(t)
+	if _, err := unitEngineFor(t, b, store, root, normal, "/usr/local/bin/stl").Ensure(context.Background(), link); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(unitDir, restoreSystemdUnitName)
+	priorInfo, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priorBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandsBefore := len(runner.commands)
+	risky := &SystemdPersistence{
+		Runner: runner, UnitDir: unitDir,
+		VerifyExecutable: func(string) error { return nil },
+		VerifyUnitPath:   func(string) error { return nil },
+	}
+	risky.beforeUnitMutation = func(phase string) {
+		if phase != "replace" {
+			return
+		}
+		names, err := filepath.Glob(filepath.Join(unitDir, ".stl-unit-*.tmp"))
+		if err != nil || len(names) != 1 {
+			t.Fatalf("unexpected incoming stage: %v %v", names, err)
+		}
+		staged := names[0]
+		sameBytes, err := os.ReadFile(staged)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(staged, filepath.Join(unitDir, "original-incoming")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(staged, sameBytes, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	attempted := link
+	attempted.DisplayName = "engine-new"
+	_, err = unitEngineFor(t, b, store, root, risky, "/opt/stl/stl").Ensure(context.Background(), attempted)
+	if stlerr.CodeOf(err) != stlerr.CodeState || !errors.Is(err, errUnitIdentityConflict) {
+		t.Fatalf("unverified incoming unit not propagated as Engine failure: %v", err)
+	}
+	snap, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, ok := snap.Find(link.ID)
+	if !ok || original.Desired.DisplayName != link.DisplayName {
+		t.Fatalf("committed Link intent changed on rejected activation: %+v", snap)
+	}
+	if !b.live || b.owned != link.DisplayName || b.undos != 1 {
+		t.Fatalf("backend rollback lost prior state: %+v", b)
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !os.SameFile(info, priorInfo) {
+		t.Fatalf("prior systemd-unit inode lost: %v", err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil || string(contents) != string(priorBytes) {
+		t.Fatalf("prior unit bytes lost: %q %v", contents, err)
+	}
+	expectSystemdOperations(t, runner.commands[commandsBefore:], "systemctl is-enabled ")
+	if !runner.enabled[restoreSystemdUnitName] {
+		t.Fatal("previous enablement changed")
+	}
+	stages, err := filepath.Glob(filepath.Join(unitDir, ".stl-unit-*.tmp"))
+	if err != nil || len(stages) != 1 {
+		t.Fatalf("unexpected incoming identity not retained: %v %v", stages, err)
+	}
+}
