@@ -149,7 +149,7 @@ A future userspace carrier may legitimately introduce a data-plane helper, but i
 Persist only what is needed to recreate and manage links.
 
 Direction:
-- versioned state schema;
+- versioned state schema; current schema v2 adds backend-specific GRE options; compatible v1 state is migrated in memory, while legacy GRE FOU/GUE/options that lacked sufficient identity are rejected for explicit regeneration rather than guessed;
 - Links are a collection, not a singleton;
 - zero or more Links may exist on a host, including multiple independent Links to the same peer underlay endpoint pair;
 - one stable Link ID independent of interface display name and peer address;
