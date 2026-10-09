@@ -229,6 +229,11 @@ func (b *Backend) Plan(ctx context.Context, req core.Request, observed core.Obse
 		p.firewallChange = !firewallPresent
 		p.fouChange = p.fouManaged && !p.fouPresent
 	case core.OperationRemove:
+		// Earlier persisted GRE Links did not record the shared receive claim.
+		// Lock it for Remove as well, so a concurrent cross-encapsulation
+		// Ensure cannot race our deletion. This is a synchronization claim,
+		// NOT proof of ownership; Validate still checks Prior.OwnedResources.
+		p.resources = []domain.ResourceClaim{greReceiveClaim(req.Link)}
 		p.interfaceChange = obs.Target.Exists && obs.Target.Owner == req.Link.ID
 		p.firewallChange = firewallPresent
 		p.fouChange = p.fouManaged && p.fouPresent

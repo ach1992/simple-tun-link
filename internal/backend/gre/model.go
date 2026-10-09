@@ -1,6 +1,7 @@
 package gre
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -78,8 +79,14 @@ type observedLink struct {
 }
 
 func parseGRELinks(raw []byte) ([]observedLink, error) {
+	// json.Unmarshal accepts top-level null into a nil slice, but inspection
+	// must never treat malformed or absent output as zero GRE interfaces.
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '[' {
+		return nil, fmt.Errorf("GRE link inspection must be a JSON array")
+	}
 	var rows []json.RawMessage
-	if err := json.Unmarshal(raw, &rows); err != nil {
+	if err := json.Unmarshal(trimmed, &rows); err != nil {
 		return nil, fmt.Errorf("parse GRE link state: %w", err)
 	}
 	out := make([]observedLink, 0, len(rows))
@@ -99,9 +106,21 @@ func parseGRELinks(raw []byte) ([]observedLink, error) {
 		if err := json.Unmarshal(item, &row); err != nil {
 			return nil, fmt.Errorf("invalid GRE link inspection row: %w", err)
 		}
-		// Linux exposes the wildcard gre0 fallback through the same query. It
-		// has local/remote "any" and is not an STL point-to-point Link.
-		if strings.TrimSpace(row.LinkInfo.InfoData.Local) == "any" || strings.TrimSpace(row.LinkInfo.InfoData.Remote) == "any" {
+		// Only the kernel's genuine gre0 fallback is safely ignorable. Any
+		// other wildcard GRE row (or a malformed gre0 identity) must fail
+		// closed rather than disappear from conflict/ownership inspection.
+		local := strings.TrimSpace(row.LinkInfo.InfoData.Local)
+		remote := strings.TrimSpace(row.LinkInfo.InfoData.Remote)
+		if local == "any" || remote == "any" {
+			if row.IfName != "gre0" || row.IfIndex <= 0 ||
+				row.LinkInfo.InfoKind != "gre" || row.IfAlias != "" ||
+				local != "any" || remote != "any" ||
+				row.LinkInfo.InfoData.IKey != "" || row.LinkInfo.InfoData.OKey != "" ||
+				row.LinkInfo.InfoData.Encap != nil ||
+				row.LinkInfo.InfoData.ICsum || row.LinkInfo.InfoData.OCsum ||
+				row.LinkInfo.InfoData.ISeq || row.LinkInfo.InfoData.OSeq {
+				return nil, fmt.Errorf("invalid GRE wildcard fallback inspection row")
+			}
 			continue
 		}
 		state, err := parseGRELink(row)
@@ -328,6 +347,13 @@ func greReceiveIdentity(local, peer netip.Addr, keyed bool, key uint32) string {
 	return "gre/rx/" + local.String() + "/" + peer.String() + "/key=" + keyText
 }
 
+func greReceiveClaim(link domain.Link) domain.ResourceClaim {
+	return domain.ResourceClaim{
+		Kind: domain.ResourceBackendID,
+		Key:  greReceiveIdentity(link.Underlay.Local, link.Underlay.Peer, link.GRE.KeyEnabled, link.GRE.Key),
+	}
+}
+
 func backendIdentity(local, peer netip.Addr, keyed bool, key uint32, encap domain.Encapsulation, port uint16) string {
 	keyText := "none"
 	if keyed {
@@ -343,7 +369,7 @@ func backendIdentity(local, peer netip.Addr, keyed bool, key uint32, encap domai
 func desiredResources(link domain.Link, name string, firewall domain.ResourceClaim) []domain.ResourceClaim {
 	return append(commonCollisionClaims(link, name),
 		domain.ResourceClaim{Kind: domain.ResourceBackendID, Key: backendIdentity(link.Underlay.Local, link.Underlay.Peer, link.GRE.KeyEnabled, link.GRE.Key, link.Encapsulation, link.GRE.UDPPort)},
-		domain.ResourceClaim{Kind: domain.ResourceBackendID, Key: greReceiveIdentity(link.Underlay.Local, link.Underlay.Peer, link.GRE.KeyEnabled, link.GRE.Key)},
+		greReceiveClaim(link),
 		firewall,
 	)
 }

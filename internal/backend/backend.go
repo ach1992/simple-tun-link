@@ -34,8 +34,9 @@ type Observation interface {
 
 // Plan is backend-owned executable intent. Resources must return the complete
 // secret-free resource set that the Link should own after a successful Ensure.
-// For Remove, it may be empty because the persisted ownership set is locked by
-// the engine before mutation.
+// For Remove, it may return extra lock-only claims absent from older persisted
+// ownership sets. Such claims serialize operations but never prove ownership
+// or authorize destructive changes; Validate must check persisted ownership.
 type Plan interface {
 	Empty() bool
 	Resources() []domain.ResourceClaim
