@@ -16,6 +16,13 @@ unimplemented functionality.
   its live backend state. GRE is supported using its ownership-/ifindex-checked
   `DiagnosticState` adapter, including network interface counters. Unsupported
   backend kinds return a nonzero error rather than claiming health.
+- `stl link diagnose <link-id> [--mtu <bytes>] [--json]`: explicitly
+  probe the selected GRE Link's **peer Link Address** using bounded ICMP
+  echo with IPv4 Don't Fragment. Reports actually observed RTT/loss/jitter
+  and safe PMTU recommendations alongside the GRE interface counters.
+  This command transmits diagnostic packets but makes **no** host network,
+  firewall, MTU or desired-state changes. Requires a configured and
+  identity-checked active GRE interface.
 - `stl link restore --all`: existing host persistence/reapply command.
 
 `list` reports **configured desired state**, not actual network reachability.
@@ -33,6 +40,12 @@ the read-only diagnostics path in [DIAGNOSTICS.md](DIAGNOSTICS.md).
   only Link ID, backend, encapsulation, local and peer Link Addresses.
 - `link status`: a projected Link entry, `interface_verified: true`,
   `connectivity: "not_measured"` and GRE's identity-checked counter view.
+- `link diagnose`: the existing GRE diagnostics report with top-level
+  schema version, Link ID, backend kind, identity-checked counter state,
+  MTU result and quality result. `--mtu` overrides the **inner IPv4
+  packet** MTU manually; oversized values are errors, not silently clamped.
+  Without `--mtu`, MTU is selected by bounded DF probes, and an
+  unverified fallback is explicitly marked unverified.
 - Read errors: `{ "schema_version": 1, "error": { "code": ..., ... } }`;
   raw state-file content, arbitrary backend output/errors, display names
   and credentials are not included.
@@ -46,6 +59,6 @@ These commands read STL's existing local desired-state file. The state
 directory typically belongs to a privileged operator; access failures
 produce a structured error rather than creating/replacing files.
 
-`link ensure`, create/import, active diagnostics commands and broader
-interactive UX remain pending under Issue #10. No new mutation route is
+`link ensure`, create/import, optional throughput, non-GRE diagnostic
+adapters and the broader interactive UX remain pending under Issue #10. No new mutation route is
 introduced by the read-only commands.

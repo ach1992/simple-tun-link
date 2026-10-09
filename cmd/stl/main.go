@@ -21,7 +21,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/version"
 )
 
-const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link restore --all\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
+const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link diagnose <link-id> [--mtu <bytes>] [--json]\n  stl link restore --all\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
 
 const jsonSchemaVersion = 1
 
@@ -32,6 +32,7 @@ const restoreOperationTimeout = 30 * time.Minute
 type runtimeOptions struct {
 	stateRoot          string
 	backends           []backend.Backend
+	probeRunner        linux.Runner
 	restorePersistence app.RestorePersistence
 	executable         string
 }
@@ -81,6 +82,9 @@ func runWithRuntime(args []string, stdout, stderr io.Writer, options *runtimeOpt
 	case "link":
 		if len(args) >= 2 && (args[1] == "list" || args[1] == "status") {
 			return linkReadCommand(args[1:], stdout, stderr, options)
+		}
+		if len(args) >= 2 && args[1] == "diagnose" {
+			return linkDiagnoseCommand(args[1:], stdout, stderr, options)
 		}
 		if len(args) != 3 || args[1] != "restore" || args[2] != "--all" {
 			fmt.Fprintln(stderr, "usage: stl link restore --all")
