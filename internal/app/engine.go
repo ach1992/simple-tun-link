@@ -42,10 +42,23 @@ func New(backends *backend.Registry, store state.Store, locks Locker) (*Engine, 
 }
 
 func (e *Engine) Ensure(ctx context.Context, desired domain.Link) (Result, error) {
+	return e.ensureWithPolicy(ctx, desired, false)
+}
+
+// EnsureImported allows a confirmed pairing import to create a new Link ID
+// or re-ensure exactly its committed desired state. Unlike ordinary Ensure,
+// it must never reconfigure an existing Link, even if the backend is the same.
+// The check happens under the canonical per-Link lock, not in the CLI, so a
+// concurrent writer cannot invalidate an earlier state preflight.
+func (e *Engine) EnsureImported(ctx context.Context, desired domain.Link) (Result, error) {
+	return e.ensureWithPolicy(ctx, desired, true)
+}
+
+func (e *Engine) ensureWithPolicy(ctx context.Context, desired domain.Link, rejectReconfiguration bool) (Result, error) {
 	if err := desired.Validate(); err != nil {
 		return Result{}, contextualize(err, stlerr.CodeInvalid, "ensure", desired, "invalid desired Link")
 	}
-	return e.executeEnsure(ctx, desired)
+	return e.executeEnsure(ctx, desired, rejectReconfiguration)
 }
 
 func (e *Engine) Remove(ctx context.Context, id domain.LinkID) (Result, error) {
@@ -71,7 +84,7 @@ func (e *Engine) Remove(ctx context.Context, id domain.LinkID) (Result, error) {
 	return e.executeLocked(ctx, backend.Request{Operation: backend.OperationRemove, Prior: &prior, Link: record.Desired}, record)
 }
 
-func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link) (Result, error) {
+func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectReconfiguration bool) (Result, error) {
 	linkRelease, err := e.locks.Acquire(ctx, []domain.ResourceClaim{linkLock(desired.ID)})
 	if err != nil {
 		return Result{}, stlerr.Wrap(stlerr.CodeState, "ensure", string(desired.ID), string(desired.Backend), "cannot lock Link", err)
@@ -83,6 +96,10 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link) (Result
 		return Result{}, stlerr.Wrap(stlerr.CodeState, "ensure", string(desired.ID), string(desired.Backend), "cannot load local state", err)
 	}
 	record, exists := snapshot.Find(desired.ID)
+	if exists && rejectReconfiguration && record.Desired != desired {
+		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure_imported", string(desired.ID),
+			string(desired.Backend), "existing Link ID has different desired state; explicit reconfiguration is required")
+	}
 	if exists && record.Desired.Backend != desired.Backend {
 		return Result{}, stlerr.New(stlerr.CodeUnsupported, "ensure", string(desired.ID), string(desired.Backend), "changing backend for an existing Link is not supported by this lifecycle yet")
 	}

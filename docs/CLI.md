@@ -30,6 +30,12 @@ observations from **explicit host-mutating** commands.
   exchange mode, and credential-presence flag without revealing any
   credential or applying network state. Never pass SENSITIVE Quick Links as
   command-line arguments, which can enter shell history/process listings.
+- `stl link import --stdin --confirm <preview-token> [--json]`:
+  **mutating**, accepts a reviewed credential-free GRE/IPIP setup link from
+  standard input and converges its receiver-oriented Link through the same
+  canonical Engine as `ensure`. The required token is produced by a
+  prior `link preview` of those exact input bytes. This is not a
+  credentialed WireGuard/IPsec importer.
 - `stl link export <link-id> [--json]`: **read-only but intentionally
   disclosing**, export a canonical receiver Setup Link for a saved
   credential-free GRE or IPIP Link, including encoded endpoints and
@@ -70,11 +76,17 @@ the read-only diagnostics path in [DIAGNOSTICS.md](DIAGNOSTICS.md).
   Link metadata, non-secret GRE configuration options when present,
   `has_credential`, credential kind and sensitive flag.
   The input setup link, private keys, arbitrary display names and decoding
-  cause are deliberately excluded from JSON and human output.
+  cause are deliberately excluded from JSON and human output. For
+  importable plaintext GRE/IPIP offers only, it also returns
+  `import_confirmation`: the full lowercase SHA-256 of the exact normalized
+  input URL, to bind a subsequent explicit import to the reviewed payload.
 - `link export`: explicit export JSON with CLI and pairing schema
   versions, Link ID, backend/encapsulation, credential/sensitivity flags
   and the complete intentional `setup_link` field. The encoded URL
   discloses metadata and MUST NOT be treated as ordinary status output.
+- `link import`: same versioned Engine success/failure envelope as
+  `link ensure`, with `operation: "link_import"`; this is confirmation of
+  owned host-state convergence, not remote connectivity.
 - `link ensure` / `link remove`: versioned operation, Link ID,
   changed and removed fields on Engine success. Failure JSON remains
   nonzero and may include uncertainty/reconciliation signals.
@@ -97,8 +109,9 @@ explicit `export` never change network configuration. Export is
 **deliberately revealing** and not suitable for ordinary diagnostics/logging.
 The distinct `ensure`, `remove` and `restore` paths are
 explicit host-mutating operations. Interactive
-create/import, optional throughput, non-GRE diagnostic adapters and the
-task-first UI remain pending under Issues #8, #9 and #10.
+create/import, protected recipient credential storage, optional throughput,
+non-GRE/IPIP diagnostic adapters and the task-first UI remain pending under
+Issues #8, #9 and #10.
 
 ## Explicit Link lifecycle commands — Issue #10
 
@@ -220,4 +233,66 @@ WireGuard and IPsec remain explicitly Unsupported until reviewed secure
 recipient credential generation, export, storage and apply exist. Export never silently omits private
 keys/PSKs to manufacture a broken setup link. Confirm the configuration
 via the existing `link preview` before a separate authorized apply
-step. No new command automatically applies an exported setup link.
+step. Export never applies a Link; the explicit `link import` command
+described below can apply only a credential-free GRE/IPIP offer after
+exact-payload confirmation.
+
+## Explicit plaintext setup-link import (Issues #8/#10)
+
+A receiving operator first reviews the inverted Link details and the
+confirmation token; preview is **strictly read-only**:
+
+~~~sh
+stl link preview --stdin --json < /path/to/protected/setup-link.txt
+~~~
+
+For a credential-free GRE or IPIP Quick Link, the preview JSON includes
+`import_confirmation`, a 64-character lowercase SHA-256 digest of the
+exact decoded/line-terminator-normalized `stl://` URL. After verifying
+the receiver underlay, peer address, Link Addresses, backend and GRE
+options, the operator may explicitly apply **that same input**:
+
+~~~sh
+stl link import --stdin --confirm <import_confirmation> --json < /path/to/protected/setup-link.txt
+~~~
+
+A changed, damaged, truncated, oversized or different setup URL does
+**not** match the confirmation token and is rejected before creating
+runtime state or touching a network interface. Passing the confirmation
+token is an explicit apply instruction, not an interactive prompt or
+peer-identity authentication. Neither the setup-link SHA-256 checksum nor
+this confirmation digest proves the sender is authorized: verify the
+offer with the intended peer through a trusted channel. Plaintext GRE
+and IPIP provide **no encryption or peer authentication**.
+
+The importer calls the canonical `Offer.ReceiverLink` inversion, then
+`Engine.EnsureImported`: the import-specific policy permits a **new Link ID**
+or an **existing ID whose committed desired state exactly matches** the
+reviewed receiver configuration. If that ID already exists with *any*
+different desired configuration (including a different backend, address,
+GRE option or display name), import returns a redacted `conflict` and does
+not inspect, reconfigure or remove the existing backend resources. This
+conflict check runs **under the same per-Link lock** as normal `Engine.Ensure`
+and `Engine.Remove`, closing the race between state preflight and apply.
+To intentionally reconfigure an existing Link, use the separately authorized,
+versioned `stl link ensure` workflow instead of pairing import.
+
+`Engine.EnsureImported` reuses the canonical Engine's ownership,
+per-Link resource allocation, idempotency, verification and rollback
+behavior. It does not introduce a second networking lifecycle. The
+importer never logs/prints the input URL, embedded display name or arbitrary
+backend errors; structured success
+returns `operation: "link_import"` and the normal versioned Engine
+result. Failures after Engine execution are nonzero with
+`outcome: "unconfirmed"` and `reconciliation_required: true`.
+A successful Engine result proves local backend convergence, **not**
+bidirectional traffic, MTU or peer cooperation.
+
+Credential-bearing WireGuard/IPsec Quick Links remain deliberately
+unsupported for import, even if a caller supplies a matching token:
+protected recipient-key storage and backend-specific lifecycle must
+exist first. Preview of those offers remains redacted and emits no
+`import_confirmation` token. Do not convert secret-bearing setup URLs
+into generic `link ensure` JSON or discard secrets to force a partial
+apply. Full interactive pairing and release-level privileged E2E remain
+outstanding under Issues #8/#10/#12.
