@@ -17,12 +17,16 @@ const idOne = "lnk_00112233445566778899aabbccddeeff"
 const idTwo = "lnk_ffeeddccbbaa99887766554433221100"
 
 func testLink(id string, backend domain.Backend, encap domain.Encapsulation) domain.Link {
-	return domain.Link{
+	link := domain.Link{
 		ID: domain.LinkID(id), DisplayName: "Production Link / Test",
 		Backend: backend, Encapsulation: encap,
 		Underlay:  domain.Underlay{Local: netip.MustParseAddr("192.0.2.10"), Peer: netip.MustParseAddr("192.0.2.20")},
 		Addresses: domain.LinkAddresses{Local: netip.MustParsePrefix("10.90.20.0/31"), Peer: netip.MustParsePrefix("10.90.20.1/31")},
 	}
+	if backend == domain.BackendGRE && (encap == domain.EncapFOU || encap == domain.EncapGUE) {
+		link.GRE.UDPPort = 5555
+	}
+	return link
 }
 func wgTestKey() []byte {
 	return []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0xa6}, 32)))
@@ -272,6 +276,28 @@ func TestPairingRejectsIPv6UnderlayZones(t *testing.T) {
 	}
 }
 
+func TestGRERoundTripPreservesBackendOptions(t *testing.T) {
+	link := testLink(idOne, domain.BackendGRE, domain.EncapNative)
+	link.GRE = domain.GREOptions{
+		KeyEnabled: true, Key: 0, TOS: 16, DisablePMTUD: true, Checksum: true, Sequence: true,
+	}
+	offer, err := NewQuickOffer(link, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire, err := offer.EncodeSetupLink()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeSetupLink(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Link() != link || decoded.ReceiverLink().GRE != link.GRE {
+		t.Fatalf("GRE options changed across pairing round-trip: %#v", decoded.Link().GRE)
+	}
+}
+
 func TestPairingAcceptsOrdinaryIPv6UnderlayAndInversion(t *testing.T) {
 	link := testLink(idOne, domain.BackendGRE, domain.EncapNative)
 	link.Underlay.Local = netip.MustParseAddr("2001:db8::10")
@@ -341,5 +367,8 @@ func TestManualBlockUsesCanonicalPairingOffer(t *testing.T) {
 	}
 	if strings.Contains(block, "SENSITIVE —") {
 		t.Fatal("plaintext offer mislabeled as secret-bearing")
+	}
+	if !strings.Contains(block, "Version: 2\n") || !strings.Contains(block, "Setup link: stl://2.") {
+		t.Fatalf("current human-readable version/link mismatch: %q", block)
 	}
 }

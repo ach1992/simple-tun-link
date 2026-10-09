@@ -18,7 +18,10 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
-const setupPrefix = "stl://1."
+const (
+	setupPrefix       = "stl://2."
+	legacySetupPrefix = "stl://1."
+)
 
 // wireOffer is the only intentionally credential-bearing JSON structure.
 // Never expose it from generic status, preview, String or ordinary MarshalJSON.
@@ -40,12 +43,13 @@ type wireSecret struct {
 //
 // Wire shape:
 //
-//	stl://1.<unpadded base64url canonical JSON>.<lowercase sha256 of JSON>
+//	stl://<version>.<unpadded base64url canonical JSON>.<lowercase sha256 of JSON>
 func (o Offer) EncodeSetupLink() (string, error) {
 	if err := o.validate(); err != nil {
 		return "", stlerr.Wrap(stlerr.CodeInvalid, "pairing_export", "", "", "invalid pairing data", err)
 	}
-	wire := wireOffer{SchemaVersion: SchemaVersion, Mode: o.mode, Link: o.link}
+	version := o.effectiveSchemaVersion()
+	wire := wireOffer{SchemaVersion: version, Mode: o.mode, Link: o.link}
 	if o.IsSensitive() {
 		wire.Recipient = &wireSecret{
 			Kind: o.CredentialKind(),
@@ -60,7 +64,11 @@ func (o Offer) EncodeSetupLink() (string, error) {
 		return "", stlerr.New(stlerr.CodeInvalid, "pairing_export", "", "", "pairing payload exceeds size limit")
 	}
 	sum := sha256.Sum256(jsonData)
-	link := setupPrefix + base64.RawURLEncoding.EncodeToString(jsonData) + "." + hex.EncodeToString(sum[:])
+	prefix, err := setupPrefixForVersion(version)
+	if err != nil {
+		return "", stlerr.Wrap(stlerr.CodeUnsupported, "pairing_export", "", "", "unsupported pairing schema version", err)
+	}
+	link := prefix + base64.RawURLEncoding.EncodeToString(jsonData) + "." + hex.EncodeToString(sum[:])
 	if len(link) > MaxLinkBytes {
 		return "", stlerr.New(stlerr.CodeInvalid, "pairing_export", "", "", "setup link exceeds size limit")
 	}
@@ -78,10 +86,14 @@ func DecodeSetupLink(input string) (Offer, error) {
 	if len(input) > MaxLinkBytes {
 		return invalid("setup link exceeds size limit", nil)
 	}
-	if !strings.HasPrefix(input, setupPrefix) {
-		return invalid("invalid or unsupported setup-link scheme/version", nil)
+	envelopeVersion, prefix, err := setupEnvelopeVersion(input)
+	if err != nil {
+		return invalid("invalid setup-link scheme/version", err)
 	}
-	body := input[len(setupPrefix):]
+	if envelopeVersion != legacySchemaVersion && envelopeVersion != SchemaVersion {
+		return Offer{}, stlerr.New(stlerr.CodeUnsupported, "pairing_decode", "", "", "unsupported pairing schema version")
+	}
+	body := input[len(prefix):]
 	dot := strings.IndexByte(body, '.')
 	if dot <= 0 || dot == len(body)-1 || strings.IndexByte(body[dot+1:], '.') >= 0 {
 		return invalid("invalid setup-link envelope", nil)
@@ -115,7 +127,7 @@ func DecodeSetupLink(input string) (Offer, error) {
 	}
 	// Explicit field-shape and duplicate-key rejection prevents a malformed
 	// JSON object from being interpreted differently by distinct consumers.
-	if err := validateWireJSONShape(raw); err != nil {
+	if err := validateWireJSONShape(raw, envelopeVersion); err != nil {
 		return invalid("invalid or ambiguous setup-link fields", err)
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
@@ -128,8 +140,8 @@ func DecodeSetupLink(input string) (Offer, error) {
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		return invalid("setup-link contains additional JSON values", err)
 	}
-	if wire.SchemaVersion != SchemaVersion {
-		return Offer{}, stlerr.New(stlerr.CodeUnsupported, "pairing_decode", "", "", "unsupported pairing schema version")
+	if wire.SchemaVersion != envelopeVersion {
+		return invalid("setup-link envelope and payload schema versions disagree", nil)
 	}
 	if wire.Mode != ModeQuick {
 		return Offer{}, stlerr.New(stlerr.CodeUnsupported, "pairing_decode", "", "", "unsupported pairing exchange mode")
@@ -159,11 +171,47 @@ func DecodeSetupLink(input string) (Offer, error) {
 			return invalid("plaintext backend cannot carry a recipient credential", nil)
 		}
 	}
-	offer, err := NewQuickOffer(wire.Link, credential)
-	if err != nil {
+	if envelopeVersion == legacySchemaVersion && wire.Link.Backend == domain.BackendGRE &&
+		(wire.Link.Encapsulation == domain.EncapFOU || wire.Link.Encapsulation == domain.EncapGUE) {
+		return Offer{}, stlerr.New(stlerr.CodeUnsupported, "pairing_decode", "", "", "legacy GRE FOU/GUE setup links lack the required UDP port; regenerate the setup link")
+	}
+	offer := Offer{
+		link: wire.Link, mode: wire.Mode, schemaVersion: envelopeVersion,
+		recipientSecret: append([]byte(nil), credential...),
+	}
+	if err := offer.validate(); err != nil {
 		return invalid("invalid backend, addresses or recipient credential", err)
 	}
 	return offer, nil
+}
+
+func setupPrefixForVersion(version int) (string, error) {
+	switch version {
+	case legacySchemaVersion:
+		return legacySetupPrefix, nil
+	case SchemaVersion:
+		return setupPrefix, nil
+	default:
+		return "", fmt.Errorf("unsupported pairing schema version %d", version)
+	}
+}
+
+func setupEnvelopeVersion(input string) (int, string, error) {
+	const scheme = "stl://"
+	if !strings.HasPrefix(input, scheme) {
+		return 0, "", fmt.Errorf("unsupported setup-link scheme")
+	}
+	rest := input[len(scheme):]
+	dot := strings.IndexByte(rest, '.')
+	if dot <= 0 {
+		return 0, "", fmt.Errorf("missing setup-link version")
+	}
+	versionText := rest[:dot]
+	version, err := strconv.Atoi(versionText)
+	if err != nil || version <= 0 || strconv.Itoa(version) != versionText {
+		return 0, "", fmt.Errorf("invalid setup-link version")
+	}
+	return version, scheme + versionText + ".", nil
 }
 
 // PreviewSetupLink is the safe read-only entrypoint for an import-preview UI.
@@ -180,7 +228,7 @@ func PreviewSetupLink(input string) (Preview, error) {
 // validateWireJSONShape rejects duplicate keys, unexpected nested objects,
 // arrays, null, case-variant key spellings and unknown fields before Go's
 // permissive struct mapping can resolve a conflicting field.
-func validateWireJSONShape(raw []byte) error {
+func validateWireJSONShape(raw []byte, schemaVersion int) error {
 	// encoding/json accepts unpaired UTF-16 surrogate escapes and silently
 	// converts them to U+FFFD. Check the original JSON strings first so a
 	// checksum-protected payload cannot change meaning during decoding.
@@ -189,7 +237,7 @@ func validateWireJSONShape(raw []byte) error {
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
-	if err := validateWireValue(dec, "root", 0); err != nil {
+	if err := validateWireValue(dec, "root", 0, schemaVersion); err != nil {
 		return err
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
@@ -262,6 +310,7 @@ var wireAllowedFields = map[string]map[string]string{
 		"addresses":     "addresses",
 		"backend":       "string",
 		"encapsulation": "string",
+		"gre":           "gre",
 	},
 	"underlay": {
 		"local": "string",
@@ -275,9 +324,19 @@ var wireAllowedFields = map[string]map[string]string{
 		"kind": "string",
 		"data": "string",
 	},
+	"gre": {
+		"key_enabled":   "bool",
+		"key":           "number",
+		"ttl":           "number",
+		"tos":           "number",
+		"disable_pmtud": "bool",
+		"checksum":      "bool",
+		"sequence":      "bool",
+		"udp_port":      "number",
+	},
 }
 
-func validateWireValue(dec *json.Decoder, expected string, depth int) error {
+func validateWireValue(dec *json.Decoder, expected string, depth int, schemaVersion int) error {
 	if depth > 8 {
 		return fmt.Errorf("excessive JSON nesting")
 	}
@@ -300,6 +359,9 @@ func validateWireValue(dec *json.Decoder, expected string, depth int) error {
 				return fmt.Errorf("invalid JSON field name")
 			}
 			fieldType, ok := allowed[name]
+			if schemaVersion == legacySchemaVersion && expected == "link" && name == "gre" {
+				ok = false
+			}
 			if !ok {
 				return fmt.Errorf("unknown JSON field")
 			}
@@ -307,7 +369,7 @@ func validateWireValue(dec *json.Decoder, expected string, depth int) error {
 				return fmt.Errorf("duplicate JSON field")
 			}
 			seen[name] = struct{}{}
-			if err := validateWireValue(dec, fieldType, depth+1); err != nil {
+			if err := validateWireValue(dec, fieldType, depth+1, schemaVersion); err != nil {
 				return err
 			}
 		}
@@ -326,6 +388,12 @@ func validateWireValue(dec *json.Decoder, expected string, depth int) error {
 	if expected == "number" {
 		if _, ok := token.(json.Number); !ok {
 			return fmt.Errorf("expected JSON number")
+		}
+		return nil
+	}
+	if expected == "bool" {
+		if _, ok := token.(bool); !ok {
+			return fmt.Errorf("expected JSON boolean")
 		}
 		return nil
 	}

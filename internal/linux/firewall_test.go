@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/state"
@@ -619,5 +620,54 @@ func TestIPTablesFirewallPreservesEquivalentExternalRule(t *testing.T) {
 	}
 	if !runner.hasRule("iptables", external) {
 		t.Fatal("STL removal deleted equivalent external rule")
+	}
+}
+
+func TestIPTablesFirewallFindsAnyOwnedInboundMarker(t *testing.T) {
+	runner := newFirewallRunner()
+	fw := testFirewall(t, runner)
+	owner := domain.LinkID("lnk_0123456789abcdef0123456789abcdef")
+	other := domain.LinkID("lnk_fedcba9876543210fedcba9876543210")
+	runner.seedRule("iptables", firewallRuleArgs(other, testFirewallRule()))
+	if present, err := fw.HasOwnedInbound(context.Background(), owner, false); err != nil || present {
+		t.Fatalf("foreign marker matched owner: present=%v err=%v", present, err)
+	}
+	runner.seedRule("iptables", firewallRuleArgs(owner, testFirewallRule()))
+	if present, err := fw.HasOwnedInbound(context.Background(), owner, false); err != nil || !present {
+		t.Fatalf("owned marker not found: present=%v err=%v", present, err)
+	}
+}
+
+func TestIPTablesFirewallCallerHeldLockPathDoesNotReacquire(t *testing.T) {
+	runner := newFirewallRunner()
+	locks := state.NewLockManager(t.TempDir())
+	fw := IPTablesFirewall{Runner: runner, Locks: locks}
+	id := domain.LinkID("lnk_0123456789abcdef0123456789abcdef")
+	rule := testFirewallRule()
+	claim, err := InboundFirewallClaim(id, rule)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	release, err := locks.Acquire(ctx, []domain.ResourceClaim{claim})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	undo, changed, err := fw.EnsureInboundLocked(ctx, id, rule)
+	if err != nil || !changed {
+		t.Fatalf("caller-held-lock ensure failed: changed=%v err=%v", changed, err)
+	}
+	if err := undo(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err = fw.EnsureInboundLocked(ctx, id, rule); err != nil || !changed {
+		t.Fatalf("caller-held-lock re-add failed: changed=%v err=%v", changed, err)
+	}
+	removed, err := fw.RemoveInboundLocked(ctx, id, rule)
+	if err != nil || !removed {
+		t.Fatalf("caller-held-lock remove failed: removed=%v err=%v", removed, err)
 	}
 }

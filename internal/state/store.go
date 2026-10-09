@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	SchemaVersion = 1
-	DefaultRoot   = "/var/lib/simple-tun-link"
+	SchemaVersion       = 2
+	legacySchemaVersion = 1
+	DefaultRoot         = "/var/lib/simple-tun-link"
 )
 
 var ErrNotFound = errors.New("link state not found")
@@ -198,14 +199,36 @@ func (s *FileStore) loadUnlocked() (Snapshot, error) {
 		}
 		return Snapshot{}, fmt.Errorf("decode state trailing data: %w", err)
 	}
-	if snapshot.SchemaVersion != SchemaVersion {
-		return Snapshot{}, fmt.Errorf("unsupported state schema_version %d", snapshot.SchemaVersion)
+	snapshot, err = migrateSnapshot(snapshot)
+	if err != nil {
+		return Snapshot{}, err
 	}
 	snapshot.normalize()
 	if err := validateSnapshot(snapshot); err != nil {
 		return Snapshot{}, err
 	}
 	return snapshot, nil
+}
+
+func migrateSnapshot(snapshot Snapshot) (Snapshot, error) {
+	switch snapshot.SchemaVersion {
+	case SchemaVersion:
+		return snapshot, nil
+	case legacySchemaVersion:
+		for _, record := range snapshot.Links {
+			link := record.Desired
+			if link.GRE != (domain.GREOptions{}) {
+				return Snapshot{}, fmt.Errorf("legacy state schema v1 cannot contain GRE backend options; regenerate the Link state")
+			}
+			if link.Backend == domain.BackendGRE && (link.Encapsulation == domain.EncapFOU || link.Encapsulation == domain.EncapGUE) {
+				return Snapshot{}, fmt.Errorf("legacy GRE FOU/GUE state lacks the required UDP port; regenerate the Link state")
+			}
+		}
+		snapshot.SchemaVersion = SchemaVersion
+		return snapshot, nil
+	default:
+		return Snapshot{}, fmt.Errorf("unsupported state schema_version %d", snapshot.SchemaVersion)
+	}
 }
 
 func (s *FileStore) writeAtomic(snapshot Snapshot) error {
