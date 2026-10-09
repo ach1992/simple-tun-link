@@ -74,3 +74,55 @@ produce a structured error rather than creating/replacing files.
 `link ensure`, create/import, optional throughput, non-GRE diagnostic
 adapters and the broader interactive UX remain pending under Issue #10. No new mutation route is
 introduced by the read-only commands.
+
+## Explicit Link lifecycle commands — Issue #10
+
+The following operations **change the selected host's network and durable
+desired state**. They are not equivalent to read-only status, preview or
+diagnostics. Use only with operator-approved local/peer address, source and
+backend configuration on a host you are authorized to administer:
+
+~~~sh
+stl link ensure --stdin --json < /path/to/desired-link.json
+stl link remove lnk_<32-hex-characters> --confirm lnk_<same-32-hex-characters> --json
+~~~
+
+For ensure, stdin contains one bounded, strict JSON object representing the
+existing backend-neutral `domain.Link` (ID, backend, encapsulation, underlay
+local/peer, Link Address local/peer, optional display name and GRE settings).
+It is **not** a `stl://` pairing link and cannot carry recipient WireGuard
+private keys, IPsec PSKs or arbitrary commands. An unknown backend is
+explicitly unsupported rather than silently accepted. Duplicate/case-
+variant keys, unknown fields, arrays, null values, trailing JSON values,
+oversize input and invalid Link configuration fail before runtime creation.
+Do not put potentially sensitive setup links into shell command arguments.
+
+`ensure` and `remove` both call the **same canonical Engine** used for
+restore: inspect, plan, owner/resource-lock, re-inspect, validate, apply,
+verify, commit desired state and persistence/rollback compensation. They
+do not implement a second networking lifecycle. `ensure` is idempotent
+where the backend supports convergence; `changed=false` means no backend
+mutation was required after inspection, not proof that the remote peer
+responds. Removing a Link requires repeating the **exact stable Link ID**
+after `--confirm` and can remove only Engine-proven owned resources.
+`remove` must never silently remove another same-peer Link.
+
+`--json` success returns top-level integer `schema_version: 1`,
+operation, link_id, changed and removed. A failure returns a nonzero exit
+and redacted versioned error. When an operation may have changed host or
+committed state, its JSON indicates `outcome: "unconfirmed"` and
+`reconciliation_required: true`, with any Engine-provided partial
+result in snake_case. These are conservative reconciliation signals,
+not a claimed successful apply. Do not retry a failed stateful operation
+blindly; inspect `link list` and `link status` first.
+
+Exit codes remain 0 on verified Engine success; 2 for invalid input/usage,
+4 for unsupported backend, and 1 for other operational, state or rollback
+failures. The commands use a five-minute signal-aware deadline and the
+Engine's cancellation-detached, bounded owned rollback. No global tuning
+or unrelated host networking changes are permitted by this CLI layer.
+
+These commands are not a replacement for the unfinished **interactive
+Create / Import / Manage** user experience and protected secret-bearing
+recipient import flow. They do not establish live FOU/GUE bidirectional
+traffic or release E2E acceptance.

@@ -21,7 +21,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/version"
 )
 
-const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link diagnose <link-id> [--mtu <bytes>] [--json]\n  stl link preview --stdin [--json]\n  stl link restore --all\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
+const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link diagnose <link-id> [--mtu <bytes>] [--json]\n  stl link preview --stdin [--json]\n  stl link ensure --stdin [--json]\n  stl link remove <link-id> --confirm <link-id> [--json]\n  stl link restore --all\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
 
 const jsonSchemaVersion = 1
 
@@ -51,8 +51,8 @@ func runWithRuntime(args []string, stdout, stderr io.Writer, options *runtimeOpt
 	return runWithRuntimeInput(args, os.Stdin, stdout, stderr, options)
 }
 
-// Stdin is explicit only for credential-sensitive, read-only pairing input.
-// Existing CLI/Engine paths preserve their historical non-interactive behavior.
+// Stdin is explicit for data-only desired Link JSON and for sensitive,
+// read-only pairing previews. Existing Engine/restore paths remain shared.
 func runWithRuntimeInput(args []string, input io.Reader, stdout, stderr io.Writer, options *runtimeOptions) int {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprint(stdout, usage)
@@ -91,6 +91,9 @@ func runWithRuntimeInput(args []string, input io.Reader, stdout, stderr io.Write
 		}
 		if len(args) >= 2 && args[1] == "diagnose" {
 			return linkDiagnoseCommand(args[1:], stdout, stderr, options)
+		}
+		if len(args) >= 2 && (args[1] == "ensure" || args[1] == "remove") {
+			return linkLifecycleCommand(args[1:], input, stdout, stderr, options)
 		}
 		if len(args) >= 2 && args[1] == "preview" {
 			return linkPreviewCommand(args[1:], input, stdout, stderr)
