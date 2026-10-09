@@ -111,6 +111,29 @@ by previewing.
 Actual user-confirmed credential storage and import/apply remain separate
 Issue #8/#10 acceptance; this command does not imply they are implemented.
 
+## Explicit GRE export CLI
+
+`stl link export <link-id> [--json]` intentionally produces a
+versioned Quick Setup Link and a receiver-oriented human-readable block
+for an existing saved GRE Link. It calls `pairing.NewQuickOffer`
+and the canonical pairing export API; there is no second URL encoder.
+Export itself does not inspect live host networking, mutate state or
+attempt to set up the peer. Non-secret GRE Native/FOU/GUE configuration,
+including UDP port/key identifier, round-trips through the existing
+versioned schema and receiver inversion.
+
+Only **credential-free GRE** can currently be exported. WireGuard and
+IPsec exports are denied rather than silently dropping recipient private
+keys/PSKs; IPIP export awaits the complete backend-specific contract.
+Human/JSON output intentionally includes the full Setup Link URL and
+must be treated as **explicitly requested share/export material**, not
+ordinary diagnostic/status output. Even without a secret credential,
+it discloses network endpoints, Link ID and encoded display-name/config
+metadata. SHA-256 integrity does not authenticate who sent it.
+Use `link preview --stdin` at the receiving endpoint, then a
+separate operator-authorized Engine apply. Actual safe import/credential
+storage remains open under Issues #8/#10.
+
 ## Apply and backend integration
 
 Decoding and generating a preview **never applies a Link, starts a command,

@@ -30,6 +30,11 @@ observations from **explicit host-mutating** commands.
   exchange mode, and credential-presence flag without revealing any
   credential or applying network state. Never pass SENSITIVE Quick Links as
   command-line arguments, which can enter shell history/process listings.
+- `stl link export <link-id> [--json]`: **read-only but intentionally
+  disclosing**, export a canonical receiver Setup Link for a saved
+  credential-free GRE Link, including encoded endpoints and display metadata.
+  Unlike status/diagnostics, this command explicitly emits shareable setup
+  material; refer to the export security caveat below.
 - `stl link ensure --stdin [--json]`: **mutating** idempotent desired
   Link convergence via the existing Engine, accepting a strict versioned JSON
   request on standard input. Full request schema appears below.
@@ -65,6 +70,10 @@ the read-only diagnostics path in [DIAGNOSTICS.md](DIAGNOSTICS.md).
   `has_credential`, credential kind and sensitive flag.
   The input setup link, private keys, arbitrary display names and decoding
   cause are deliberately excluded from JSON and human output.
+- `link export`: explicit export JSON with CLI and pairing schema
+  versions, Link ID, backend/encapsulation, credential/sensitivity flags
+  and the complete intentional `setup_link` field. The encoded URL
+  discloses metadata and MUST NOT be treated as ordinary status output.
 - `link ensure` / `link remove`: versioned operation, Link ID,
   changed and removed fields on Engine success. Failure JSON remains
   nonzero and may include uncertainty/reconciliation signals.
@@ -82,9 +91,11 @@ private state store. The pure `link preview` command does not load
 persisted state; access failures in the other read paths are errors, not
 instructions to create/replace files.
 
-Read-only `list`, `status`, `diagnose` and `preview` never
-change network configuration; the distinct `ensure`, `remove` and
-`restore` paths are explicit host-mutating operations. Interactive
+Read-only `list`, `status`, `diagnose`, `preview` and
+explicit `export` never change network configuration. Export is
+**deliberately revealing** and not suitable for ordinary diagnostics/logging.
+The distinct `ensure`, `remove` and `restore` paths are
+explicit host-mutating operations. Interactive
 create/import, optional throughput, non-GRE diagnostic adapters and the
 task-first UI remain pending under Issues #8, #9 and #10.
 
@@ -177,3 +188,36 @@ These commands are not a replacement for the unfinished **interactive
 Create / Import / Manage** user experience and protected secret-bearing
 recipient import flow. They do not establish live FOU/GUE bidirectional
 traffic or release E2E acceptance.
+
+## Explicit plaintext GRE setup-link export (Issue #8)
+
+`stl link export <link-id> [--json]` deliberately exports an
+**already-saved GRE Link's** versioned `stl://2.` Setup Link for the
+other endpoint. It uses the **same canonical pairing model and receiver
+inversion** as `stl link preview --stdin`; no alternate encoder or
+backend setup method is introduced. For example:
+
+~~~sh
+stl link export lnk_<32-hex-characters>
+stl link export lnk_<32-hex-characters> --json
+~~~
+
+Human output contains a canonical pairing copy block and the encoded
+URL; machine output contains integer CLI `schema_version: 1`, separate
+`pairing_schema_version`, Link ID, backend/mode metadata and an
+explicit `setup_link`. Both are **intentional export outputs**, not
+status or diagnostic responses. The output reveals the Link's endpoints,
+display-name metadata (encoded in the URL), GRE key identifiers and
+other configuration. An included SHA-256 checksum detects accidental
+damage, **not** authenticity. GRE does not encrypt or authenticate traffic;
+share setup material with the intended peer rather than public logs.
+
+The command is read-only and does not inspect, repair or apply the Link.
+Existence in saved desired state **does not prove a working tunnel**.
+Only currently credential-free GRE exports are supported. IPIP awaits its
+complete backend contract; WireGuard and IPsec remain explicitly
+Unsupported until reviewed secure recipient credential generation,
+export, storage and apply exist. Export never silently omits private
+keys/PSKs to manufacture a broken setup link. Confirm the configuration
+via the existing `link preview` before a separate authorized apply
+step. No new command automatically applies an exported setup link.
