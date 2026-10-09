@@ -308,10 +308,10 @@ func (b *Backend) Validate(ctx context.Context, req core.Request, observed core.
 			return stlerr.New(stlerr.CodeConflict, "gre_validate", string(req.Link.ID), string(req.Link.Backend), "GRE host resource conflicts with existing state")
 		}
 	}
-	wantedID := backendIdentity(req.Link.Underlay.Local, req.Link.Underlay.Peer, req.Link.GRE.KeyEnabled, req.Link.GRE.Key, req.Link.Encapsulation, req.Link.GRE.UDPPort)
+	wantedReceive := greReceiveIdentity(req.Link.Underlay.Local, req.Link.Underlay.Peer, req.Link.GRE.KeyEnabled, req.Link.GRE.Key)
 	for _, existing := range obs.Links {
-		if existing.Name != p.name && existing.backendIdentity() == wantedID {
-			return stlerr.New(stlerr.CodeConflict, "gre_validate", string(req.Link.ID), string(req.Link.Backend), "GRE underlay/key tuple is already in use")
+		if existing.Name != p.name && existing.receiveIdentity() == wantedReceive {
+			return stlerr.New(stlerr.CodeConflict, "gre_validate", string(req.Link.ID), string(req.Link.Backend), "GRE underlay/key receive identity is already in use across encapsulations")
 		}
 	}
 	return nil

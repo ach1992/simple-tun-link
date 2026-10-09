@@ -379,6 +379,19 @@ func TestNativeGRERejectsForeignOwnershipAndDuplicateTuple(t *testing.T) {
 		t.Fatalf("duplicate GRE tuple accepted: %v", err)
 	}
 
+	// Linux GRE receive lookup also collides when encapsulation/UDP port
+	// differ but underlay endpoints and GRE key identity are identical.
+	runner.extra[0].Encapsulation = domain.EncapFOU
+	runner.extra[0].UDPPort = 33061
+	obs, _ = b.Inspect(ctx, link)
+	candidate, err = b.Plan(ctx, req, obs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Validate(ctx, req, obs, candidate); stlerr.CodeOf(err) != stlerr.CodeConflict {
+		t.Fatalf("cross-encap duplicate receive identity accepted: %v", err)
+	}
+
 	runner.extra[0].Key = 1
 	obs, _ = b.Inspect(ctx, link)
 	candidate, err = b.Plan(ctx, req, obs)
@@ -387,6 +400,25 @@ func TestNativeGRERejectsForeignOwnershipAndDuplicateTuple(t *testing.T) {
 	}
 	if err := b.Validate(ctx, req, obs, candidate); err != nil {
 		t.Fatalf("distinct GRE key was incorrectly rejected: %v", err)
+	}
+}
+
+func TestGREReceiveClaimCrossEncapsulationLocking(t *testing.T) {
+	link := testLink()
+	link.GRE = domain.GREOptions{}
+	fou := link
+	fou.Encapsulation = domain.EncapFOU
+	fou.GRE.UDPPort = 33061
+	firewall := domain.ResourceClaim{Kind: domain.ResourceFirewall, Key: "test"}
+	receive := domain.ResourceClaim{Kind: domain.ResourceBackendID,
+		Key: greReceiveIdentity(link.Underlay.Local, link.Underlay.Peer, false, 0)}
+	if !slices.Contains(desiredResources(link, "stl-native", firewall), receive) ||
+		!slices.Contains(desiredResources(fou, "stl-fou", firewall), receive) {
+		t.Fatal("same underlay/unkeyed GRE receives do not share a serialization/conflict claim")
+	}
+	fou.GRE.KeyEnabled, fou.GRE.Key = true, 33061
+	if slices.Contains(desiredResources(fou, "stl-fou", firewall), receive) {
+		t.Fatal("distinct keyed GRE receive identity collides with unkeyed Native")
 	}
 }
 
@@ -440,10 +472,11 @@ func TestFOUAndGUELifecycleUseOwnedSymmetricUDPMapping(t *testing.T) {
 			link.GRE.UDPPort = 5555
 			name, _ := InterfaceName(link.ID)
 			runner := &fakeRunner{link: link, name: name}
-			// A Native GRE with the same endpoints/key remains distinguishable.
+			// Same underlay peers are supported across encapsulations only when
+			// Linux GRE receive identity differs (a distinct keyed value here).
 			runner.extra = []observedLink{{
 				Exists: true, IfIndex: 90, Name: "native-peer", Local: link.Underlay.Local, Peer: link.Underlay.Peer,
-				KeyEnabled: link.GRE.KeyEnabled, Key: link.GRE.Key, PMTUD: true, Encapsulation: domain.EncapNative,
+				KeyEnabled: true, Key: 1, PMTUD: true, Encapsulation: domain.EncapNative,
 			}}
 			firewall := &fakeFirewall{}
 			b := newTestBackend(t, runner, firewall, fakeCollisions{})

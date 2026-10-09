@@ -76,13 +76,21 @@ func TestGRENetnsE2E(t *testing.T) {
 		!strings.HasPrefix(peerAddress.String(), "10.81.") {
 		t.Fatal("refusing any non-synthetic GRE namespace test endpoints")
 	}
+	greOptions := domain.GREOptions{UDPPort: uint16(port)}
+	if keyText := os.Getenv("STL_GRE_E2E_KEY"); keyText != "" {
+		key, err := strconv.ParseUint(keyText, 10, 32)
+		if err != nil {
+			t.Fatal("invalid synthetic GRE test key")
+		}
+		greOptions.KeyEnabled, greOptions.Key = true, uint32(key)
+	}
 	link := domain.Link{
 		ID:            id,
 		Backend:       domain.BackendGRE,
 		Encapsulation: encap,
 		Underlay:      domain.Underlay{Local: localUnderlay, Peer: peerUnderlay},
 		Addresses:     domain.LinkAddresses{Local: localAddress, Peer: peerAddress},
-		GRE:           domain.GREOptions{UDPPort: uint16(port)},
+		GRE:           greOptions,
 	}
 	if err := link.Validate(); err != nil {
 		t.Fatal("invalid synthetic GRE test Link", err)
@@ -108,7 +116,7 @@ func TestGRENetnsE2E(t *testing.T) {
 	}
 	var args []string
 	switch action {
-	case "ensure", "reensure":
+	case "ensure", "reensure", "conflict":
 		args = []string{"link", "ensure", "--stdin", "--json"}
 	case "status":
 		args = []string{"link", "status", string(id), "--json"}
@@ -123,6 +131,20 @@ func TestGRENetnsE2E(t *testing.T) {
 	}
 	var stdout, stderr bytes.Buffer
 	exit := runWithRuntimeInput(args, bytes.NewReader(desired), &stdout, &stderr, options)
+	if action == "conflict" {
+		var rejected struct {
+			SchemaVersion int `json:"schema_version"`
+			Error         struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(stdout.Bytes(), &rejected) != nil ||
+			exit != 1 || rejected.SchemaVersion != 1 || rejected.Error.Code != "conflict" {
+			t.Fatalf("expected typed, non-mutating GRE receive conflict: exit=%d stdout=%q stderr=%q", exit, stdout.String(), stderr.String())
+		}
+		t.Logf("GRE_RECEIVE_CONFLICT_REJECTED link_id=%s", id)
+		return
+	}
 	if exit != 0 {
 		t.Fatalf("GRE %s/%s %s: exit=%d stdout=%q stderr=%q",
 			encap, id, action, exit, stdout.String(), stderr.String())

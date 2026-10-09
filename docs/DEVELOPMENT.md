@@ -124,9 +124,11 @@ deliberate local opt-in, *not* authorization by itself.
 
 The opt-in script creates only fresh paired network namespaces, synthetic
 veth underlay and per-side temporary state; it invokes the real CLI/Engine/GRE
-backend for Native, FOU and GUE on the same synthetic underlay pair.
+backend for Native, FOU and GUE on the same synthetic underlay pair,
+using distinct GRE keys for the UDP-encapsulated siblings. The unkeyed
+same-pair FOU request must fail as a typed conflict before host mutation.
 It checks first ensure, idempotent re-ensure, verified status, real
-bidirectional Link Address traffic, read-only diagnostics, coexistence,
+bidirectional Link Address traffic, read-only diagnostics, keyed coexistence,
 sibling isolation after removal, owned cleanup and empty state. Cleanup runs
 even on failure. It does **not** install packages, load modules explicitly,
 reconfigure the host control-plane interface, or silently report unsupported

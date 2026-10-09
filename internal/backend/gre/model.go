@@ -238,11 +238,11 @@ func (g observedLink) matchesConfigurationBeforeOwnership(link domain.Link, name
 		g.Encapsulation == link.Encapsulation && g.UDPPort == link.GRE.UDPPort
 }
 
-func (g observedLink) backendIdentity() string {
+func (g observedLink) receiveIdentity() string {
 	if !g.Exists || !g.Local.IsValid() || !g.Peer.IsValid() {
 		return ""
 	}
-	return backendIdentity(g.Local, g.Peer, g.KeyEnabled, g.Key, g.Encapsulation, g.UDPPort)
+	return greReceiveIdentity(g.Local, g.Peer, g.KeyEnabled, g.Key)
 }
 
 func validateLink(link domain.Link) error {
@@ -316,6 +316,18 @@ func greTypeArgs(link domain.Link) []string {
 	return args
 }
 
+// Linux GRE receive lookup can collide across Native/FOU/GUE when the
+// underlay endpoint pair and GRE key identity match, regardless of outer
+// UDP encapsulation/port. Keep this independent of the existing detailed
+// backend identity so older persisted resource claims remain compatible.
+func greReceiveIdentity(local, peer netip.Addr, keyed bool, key uint32) string {
+	keyText := "absent"
+	if keyed {
+		keyText = strconv.FormatUint(uint64(key), 10)
+	}
+	return "gre/rx/" + local.String() + "/" + peer.String() + "/key=" + keyText
+}
+
 func backendIdentity(local, peer netip.Addr, keyed bool, key uint32, encap domain.Encapsulation, port uint16) string {
 	keyText := "none"
 	if keyed {
@@ -331,6 +343,7 @@ func backendIdentity(local, peer netip.Addr, keyed bool, key uint32, encap domai
 func desiredResources(link domain.Link, name string, firewall domain.ResourceClaim) []domain.ResourceClaim {
 	return append(commonCollisionClaims(link, name),
 		domain.ResourceClaim{Kind: domain.ResourceBackendID, Key: backendIdentity(link.Underlay.Local, link.Underlay.Peer, link.GRE.KeyEnabled, link.GRE.Key, link.Encapsulation, link.GRE.UDPPort)},
+		domain.ResourceClaim{Kind: domain.ResourceBackendID, Key: greReceiveIdentity(link.Underlay.Local, link.Underlay.Peer, link.GRE.KeyEnabled, link.GRE.Key)},
 		firewall,
 	)
 }

@@ -108,6 +108,7 @@ run_side() {
     STL_GRE_E2E_STATE_ROOT="$state_root" \
     STL_GRE_E2E_ID="$link_id" \
     STL_GRE_E2E_ENCAP="$mode" \
+    STL_GRE_E2E_KEY="$key" \
     STL_GRE_E2E_UL_LOCAL="$local_ul" \
     STL_GRE_E2E_UL_PEER="$peer_ul" \
     STL_GRE_E2E_LINK_LOCAL="$local_link" \
@@ -128,9 +129,9 @@ traffic() {
 select_mode() {
   mode=$1
   case "$mode" in
-    native) link_id=lnk_11111111111111111111111111111111; octet=20; port=0 ;;
-    fou)    link_id=lnk_22222222222222222222222222222222; octet=30; port=33061 ;;
-    gue)    link_id=lnk_33333333333333333333333333333333; octet=40; port=33062 ;;
+    native) link_id=lnk_11111111111111111111111111111111; octet=20; port=0; key="" ;;
+    fou)    link_id=lnk_22222222222222222222222222222222; octet=30; port=33061; key=33061 ;;
+    gue)    link_id=lnk_33333333333333333333333333333333; octet=40; port=33062; key=33062 ;;
     *) echo "invalid test mode" >&2; exit 2 ;;
   esac
 }
@@ -148,6 +149,20 @@ for selected_mode in native fou gue; do
   run_side a diagnose
   run_side b diagnose
   echo "GRE_MODE_READY=$mode"
+  if [[ "$mode" == native ]]; then
+    # Same peer pair AND absent GRE key is ambiguous even if UDP encapsulation
+    # differs. Reject before any FOU receive mapping/other kernel mutation.
+    select_mode fou
+    key=""
+    run_side a conflict
+    if [[ "$(ip netns exec "$ns_a" ip -json fou show)" != "[]" ]]; then
+      echo "failed GRE request leaked an owned receive mapping" >&2
+      exit 1
+    fi
+    select_mode native
+    traffic
+    echo "GRE_UNKEYED_RECEIVE_CONFLICT_REJECTED=PASS"
+  fi
 done
 
 for selected_mode in native fou gue; do
