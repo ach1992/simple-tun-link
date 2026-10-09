@@ -120,8 +120,10 @@ func executeLinkMutation(operation string, desired domain.Link, id domain.LinkID
 	defer cancel()
 	var result app.Result
 	switch operation {
-	case "link_ensure", "link_import":
+	case "link_ensure":
 		result, err = engine.Ensure(ctx, desired)
+	case "link_import":
+		result, err = engine.EnsureImported(ctx, desired)
 	case "link_remove":
 		result, err = engine.Remove(ctx, id)
 	default:

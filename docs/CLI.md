@@ -266,10 +266,22 @@ offer with the intended peer through a trusted channel. Plaintext GRE
 and IPIP provide **no encryption or peer authentication**.
 
 The importer calls the canonical `Offer.ReceiverLink` inversion, then
-`Engine.Ensure`, reusing its ownership, per-Link resource allocation,
-idempotency, verification and rollback behavior. It does not use a second
-networking lifecycle. The importer never logs/prints the input URL,
-embedded display name or arbitrary backend errors; structured success
+`Engine.EnsureImported`: the import-specific policy permits a **new Link ID**
+or an **existing ID whose committed desired state exactly matches** the
+reviewed receiver configuration. If that ID already exists with *any*
+different desired configuration (including a different backend, address,
+GRE option or display name), import returns a redacted `conflict` and does
+not inspect, reconfigure or remove the existing backend resources. This
+conflict check runs **under the same per-Link lock** as normal `Engine.Ensure`
+and `Engine.Remove`, closing the race between state preflight and apply.
+To intentionally reconfigure an existing Link, use the separately authorized,
+versioned `stl link ensure` workflow instead of pairing import.
+
+`Engine.EnsureImported` reuses the canonical Engine's ownership,
+per-Link resource allocation, idempotency, verification and rollback
+behavior. It does not introduce a second networking lifecycle. The
+importer never logs/prints the input URL, embedded display name or arbitrary
+backend errors; structured success
 returns `operation: "link_import"` and the normal versioned Engine
 result. Failures after Engine execution are nonzero with
 `outcome: "unconfirmed"` and `reconciliation_required: true`.

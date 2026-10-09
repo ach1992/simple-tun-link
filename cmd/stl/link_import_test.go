@@ -6,8 +6,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/pairing"
 	"github.com/ach1992/simple-tun-link/internal/state"
+	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
 func testQuickSetupLink(t *testing.T, link domain.Link, credential []byte) string {
@@ -217,5 +220,82 @@ func TestPlaintextImportEngineFailureIsUnconfirmedAndRedacted(t *testing.T) {
 		if strings.Contains(out, value) {
 			t.Fatal("failed import leaked backend or untrusted payload")
 		}
+	}
+}
+
+// A matching setup URL token authorizes only a new Link or re-ensure of
+// identical saved intent. It never grants a silent right to replace another
+// configuration that already owns the same stable Link ID.
+func TestPlaintextImportRefusesExistingLinkReconfiguration(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	fake := newLifecycleFake()
+	original, _ := makeLifecycleDesired(t, "a", "10.70.14.0/31")
+	sibling, _ := makeLifecycleDesired(t, "b", "10.70.15.0/31")
+	for _, link := range []domain.Link{original, sibling} {
+		url := testQuickSetupLink(t, link, nil)
+		code, out, errOut := runLifecycleTest(t, root, fake,
+			[]string{"link", "import", "--stdin", "--confirm", setupLinkConfirmation(url), "--json"}, url)
+		if code != 0 || errOut != "" {
+			t.Fatalf("failed to import initial/sibling link: code=%d out=%q err=%q", code, out, errOut)
+		}
+	}
+	before, err := state.NewFileStore(root).Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	priorApplies := len(fake.applies)
+
+	greChanged := original
+	greChanged.GRE.TOS = 12
+	underlayChanged := original
+	underlayChanged.Underlay.Peer = netip.MustParseAddr("192.0.2.35")
+	nameChanged := original
+	nameChanged.DisplayName = "UNTRUSTED_DIFFERENT_DISPLAY_NAME_DO_NOT_PRINT"
+	backendChanged := original
+	backendChanged.Backend = domain.BackendIPIP
+
+	for _, tc := range []struct {
+		name string
+		link domain.Link
+	}{
+		{"different GRE options", greChanged},
+		{"different underlay", underlayChanged},
+		{"different display name", nameChanged},
+		{"different backend", backendChanged},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			url := testQuickSetupLink(t, tc.link, nil)
+			token := setupLinkConfirmation(url)
+			code, jsonOut, errOut := runLifecycleTest(t, root, fake,
+				[]string{"link", "import", "--stdin", "--confirm", token, "--json"}, url)
+			if code != 1 || errOut != "" {
+				t.Fatalf("conflicting import not rejected: code=%d out=%q err=%q", code, jsonOut, errOut)
+			}
+			var response lifecycleFailureResponse
+			if err := json.Unmarshal([]byte(jsonOut), &response); err != nil {
+				t.Fatal(err)
+			}
+			if response.SchemaVersion != jsonSchemaVersion || response.Error == nil ||
+				response.Error.Code != stlerr.CodeConflict || response.Error.Operation != "link_import" {
+				t.Fatalf("conflict lost safe machine classification: %+v", response)
+			}
+			humanCode, humanOut, humanErr := runLifecycleTest(t, root, fake,
+				[]string{"link", "import", "--stdin", "--confirm", token}, url)
+			if humanCode != 1 || humanOut != "" || !strings.Contains(humanErr, "conflict") {
+				t.Fatalf("human import did not surface conflict: code=%d out=%q err=%q", humanCode, humanOut, humanErr)
+			}
+			for _, raw := range []string{url, token, tc.link.DisplayName} {
+				if strings.Contains(jsonOut+errOut+humanOut+humanErr, raw) {
+					t.Fatal("conflict leaked untrusted payload or confirmation")
+				}
+			}
+			after, err := state.NewFileStore(root).Load(context.Background())
+			if err != nil || !reflect.DeepEqual(after, before) {
+				t.Fatalf("conflict overwrote committed state/ownership: got=%+v err=%v", after, err)
+			}
+			if len(fake.applies) != priorApplies || !fake.present[original.ID] || !fake.present[sibling.ID] {
+				t.Fatalf("conflict mutated existing backend or sibling: applies=%+v present=%+v", fake.applies, fake.present)
+			}
+		})
 	}
 }

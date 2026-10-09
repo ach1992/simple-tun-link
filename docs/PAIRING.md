@@ -170,10 +170,16 @@ a single optional trailing line terminator.
 the same URL bytes and a matching token. Invalid, changed, unsupported or
 credential-bearing offers are rejected **before** backend/runtime state
 is assembled. Import uses the same `Offer.ReceiverLink` inversion as
-preview and delegates stateful convergence exclusively to
-`Engine.Ensure`. This is local, explicit network mutation; preview and
-export remain read-only. The confirmation is a reviewed-payload binding,
-not sender authentication, and the plaintext transport remains insecure
+preview and delegates stateful convergence to `Engine.EnsureImported`.
+Under the canonical Link lock, it permits only first creation or
+idempotent re-ensure of the **exact previously committed desired state**.
+An existing Link ID with different saved configuration fails with a
+redacted conflict and remains unchanged: the preview token is not approval
+to replace an existing Link. An explicit reconfiguration must use the
+separate desired-state `link ensure` workflow. This is local, explicit
+network mutation; preview and export remain read-only. The confirmation
+is a reviewed-payload binding, not sender authentication, and the plaintext
+transport remains insecure
 against active network attackers.
 
 This is only a **plaintext pairing slice**, not Issue #8 completion.
