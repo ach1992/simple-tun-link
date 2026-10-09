@@ -158,6 +158,104 @@ Direction:
 - no central database in v0.1;
 - observed kernel state is inspected, not blindly assumed from stored config.
 
+The installed Linux CLI uses /var/lib/simple-tun-link as its canonical
+private state root (state.json plus locks). The minimal non-interactive
+command stl link restore --all loads this state and invokes the same
+Engine.RestoreAll / Engine.Ensure lifecycle. Unsupported backends or failed
+reapply must exit nonzero; no second restore engine is permitted.
+
+On systemd hosts, the normal Engine Ensure activates one STL-owned restore
+unit before committing desired state, and Remove disables/removes the unit
+after committing the last desired Link deletion. The host persistence
+transition and desired-state commit share a narrowly scoped lock. An empty
+restore reconciles an orphaned STL-owned unit after interruption or cleanup
+failure. This does not replace or require systemd-networkd, NetworkManager,
+Netplan, or another host network manager. Hosts without systemd may use
+the ordinary engine in manual/non-persistent mode.
+
+The owned restore unit has a 35-minute oneshot startup ceiling; the CLI
+uses a 30-minute signal-aware (SIGINT/SIGTERM) context to bound Link
+restoration and reserve time for bounded owned rollback. Persistence
+installation is restricted to a canonical root-owned executable and a
+non-writable, symlink-free directory chain. The privileged restore unit itself
+must also be a root-owned regular file with no unprivileged-writable file or
+parent-directory components; an STL ownership marker alone is insufficient.
+Runtime-only systemd enablement, alias/linked/masked states, and ambiguous
+identities fail closed rather than pretending reboot activation is durable. Negative
+systemd enablement observations require both the expected process exit
+status and matching stdout; a partial stdout from a timed-out command
+is not authoritative. A completed final-Link unit removal must verify
+the absence of both the owned file and enabled systemd identity.
+
+Every backend rollback of an already-applied change runs with a
+cancellation-detached, bounded cleanup context, including non-systemd
+operations. All systemd post-publication compensation paths (durability,
+daemon-reload, enable failure, and later Engine rollback) revalidate
+**both the exact unit bytes and the original inode identity created by STL**.
+A valid marker or byte-identical unit installed by another administrator
+never grants ownership to disable, replace, delete, or re-enable it.
+An operation's originating inode identity is retained through publication,
+enablement, bounded compensation, and Undo. Both newly created staging and
+previously installed canonical units keep their original opened descriptors
+alive while their inode metadata authorizes any transition, including the
+OLD side of exchange, removal and recovery after systemctl calls. Creation
+failure cleanup and retirement-placeholder unlink also keep their originating
+descriptors open through their final ownership-sensitive checks. This prevents
+inode-number reuse (filesystem ABA) from making a new byte-identical file
+pass an os.SameFile(dev,inode) check after the former object was unlinked.
+Short-lived identities are explicitly closed at the transaction boundary;
+the published identity is held by a returned Undo closure until it becomes
+unreachable, when the os.File finalizer can close its descriptor.
+A stale Undo whose original published inode has been replaced must fail
+with an explicit conflict. This in-process protection is not a persistent
+identity token across a process restart.
+
+Initial installation and absent-unit deletion compensation share the same
+no-clobber hard-link publication helper. The temporary source inode is
+captured through its original opened descriptor, not a later Lstat.
+The actual source and canonical identities/content are verified before and
+after linking, and before a systemctl daemon-reload. Publication which may
+have happened without a provable STL-created inode is **post-publication
+uncertainty**, not an unchanged transaction; it must not be blindly
+compensated. A potentially independent temporary source is retained with
+an inspectable recovery location rather than unlinked, including when it
+has the expected bytes on a different inode or was edited in place.
+
+Existing-unit updates atomically exchange the incoming and existing unit
+with Linux renameat2(RENAME_EXCHANGE). Before the exchange, the current
+canonical inode and content are revalidated against the original operation
+identity. After the exchange, both the displaced original inode/content
+and the new canonical inode/content must be verified. A reversal may move
+a canonical file only when that file remains the **exact original incoming
+STL inode and bytes**, and the displaced staging object still matches the
+file observed just before exchange. Proof that the old STL inode remains
+recoverable is never permission to relocate an independently installed
+canonical unit. On insufficient proof, preserve the current canonical
+identity, retain available private recovery material and fail explicitly;
+no daemon-reload/enable is performed on an unverified outcome.
+
+Unit removal uses renameat2(RENAME_NOREPLACE) to a private recovery path,
+validates the moved inode before retirement, and verifies expected ownership
+before disabling the unit. Missing-unit compensation uses exclusive
+no-overwrite publication and verifies the restored inode before re-enabling.
+Filesystems without required atomic rename facilities fail closed; STL does
+not fall back to clobbering rename. Before every unit content read, a
+non-following, nonblocking file descriptor proves a regular inode; reads
+are bounded to 64 KiB. Symlinks, FIFOs, devices, unexpected inodes, changed
+contents, and oversized files fail closed. Protected .stl-unit-* and
+.stl-retire-* recovery names are retained when an independent identity or
+uncertain durability prevents safe cleanup. Manual reconciliation may be
+required, and no recovery path should be deleted merely because it shares
+an STL-style filename. Unrestricted concurrent root writers cannot be
+serialized without their cooperation; all avoidable observed ownership
+conflicts abort without overriding their canonical configuration.
+
+The restore unit needs an installed, durable stl executable path. Real
+backend adapters register through their own tracked implementation Issues;
+this CLI/persistence substrate does not provide a synthetic production
+tunnel backend. Future CLI commands in Issue #10 must reuse the same
+state root, engine construction, and persistence integration.
+
 Never store plaintext private keys in generic logs/status/JSON output.
 
 ## 6. Resource ownership

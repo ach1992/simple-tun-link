@@ -13,9 +13,22 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/domain"
 )
 
-const SchemaVersion = 1
+const (
+	SchemaVersion = 1
+	DefaultRoot   = "/var/lib/simple-tun-link"
+)
 
 var ErrNotFound = errors.New("link state not found")
+
+// PublicationError means a state rename already succeeded, but subsequent
+// durability/metadata work failed. The caller must not compensate blindly;
+// the visible snapshot may already contain the new authoritative intent.
+type PublicationError struct{ Cause error }
+
+func (e *PublicationError) Error() string {
+	return "desired-state publication outcome requires reconciliation"
+}
+func (e *PublicationError) Unwrap() error { return e.Cause }
 
 type LinkRecord struct {
 	Desired        domain.Link            `json:"desired"`
@@ -88,6 +101,8 @@ type FileStore struct {
 	root      string
 	statePath string
 	lockPath  string
+	// afterPublish injects a post-rename failure in isolated tests only.
+	afterPublish func() error
 }
 
 func NewFileStore(root string) *FileStore {
@@ -96,6 +111,26 @@ func NewFileStore(root string) *FileStore {
 		statePath: filepath.Join(root, "state.json"),
 		lockPath:  filepath.Join(root, ".state.lock"),
 	}
+}
+
+// HasCommittedState distinguishes a durable empty desired-state snapshot from
+// absent state (for example an unavailable mount). Absence is never proof that
+// an existing restore unit may safely be removed.
+func (s *FileStore) HasCommittedState(ctx context.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	info, err := os.Lstat(s.statePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("desired-state path is not a regular file")
+	}
+	return true, nil
 }
 
 func (s *FileStore) Load(ctx context.Context) (Snapshot, error) {
@@ -209,15 +244,23 @@ func (s *FileStore) writeAtomic(snapshot Snapshot) error {
 		_ = os.Remove(tmpName)
 		return err
 	}
+	if s.afterPublish != nil {
+		if err := s.afterPublish(); err != nil {
+			return &PublicationError{Cause: err}
+		}
+	}
 	if err := os.Chmod(s.statePath, 0o600); err != nil {
-		return err
+		return &PublicationError{Cause: err}
 	}
 	dir, err := os.Open(s.root)
 	if err != nil {
-		return err
+		return &PublicationError{Cause: err}
 	}
 	defer dir.Close()
-	return dir.Sync()
+	if err := dir.Sync(); err != nil {
+		return &PublicationError{Cause: err}
+	}
+	return nil
 }
 
 func validateSnapshot(snapshot Snapshot) error {
