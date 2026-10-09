@@ -20,6 +20,17 @@ const maxRestoreUnitBytes = 64 * 1024
 // f.Stat and os.SameFile tie the bytes to the object opened, not to a
 // previously inspected path that could have changed in the meantime.
 func readRegularUnit(path string) ([]byte, os.FileInfo, error) {
+	return readUnitContents(path, false)
+}
+
+// readPinnedRegularUnit retains the descriptor for a long-lived inode identity.
+// A metadata-only FileInfo becomes unsafe once the final link is removed:
+// Linux may reuse that inode number before the caller finishes its operation.
+func readPinnedRegularUnit(path string) ([]byte, os.FileInfo, error) {
+	return readUnitContents(path, true)
+}
+
+func readUnitContents(path string, retainOrigin bool) ([]byte, os.FileInfo, error) {
 	entry, err := os.Lstat(path)
 	if err != nil {
 		return nil, nil, err
@@ -32,7 +43,12 @@ func readRegularUnit(path string) ([]byte, os.FileInfo, error) {
 		return nil, nil, fmt.Errorf("open systemd unit without following links: %w", err)
 	}
 	f := os.NewFile(uintptr(fd), path)
-	defer f.Close()
+	transferred := false
+	defer func() {
+		if !transferred {
+			_ = f.Close()
+		}
+	}()
 	opened, err := f.Stat()
 	if err != nil {
 		return nil, nil, fmt.Errorf("inspect opened systemd unit: %w", err)
@@ -67,6 +83,10 @@ func readRegularUnit(path string) ([]byte, os.FileInfo, error) {
 	}
 	if !current.Mode().IsRegular() || !os.SameFile(opened, current) {
 		return nil, nil, fmt.Errorf("%w: unit pathname changed during bounded read", errUnitIdentityConflict)
+	}
+	if retainOrigin {
+		transferred = true
+		return data, &pinnedUnitIdentity{FileInfo: opened, origin: f}, nil
 	}
 	return data, opened, nil
 }

@@ -38,19 +38,21 @@ func (p SystemdPersistence) publishOwnedUnit(dir, path string, content, prior []
 	return p.exchangeOwnedUnit(dir, path, prior, content, "replace", p.afterUnitPublish, priorIdentity)
 }
 
-func (p SystemdPersistence) restorePublishedUnit(dir, path string, published, prior []byte, existed bool, original os.FileInfo) error {
+func (p SystemdPersistence) restorePublishedUnit(dir, path string, published, prior []byte, existed bool, original os.FileInfo) (os.FileInfo, error) {
 	if !existed {
-		return p.retireOwnedUnit(dir, path, published, "restore-delete", original)
+		return nil, p.retireOwnedUnit(dir, path, published, "restore-delete", original)
 	}
-	_, err := p.exchangeOwnedUnit(dir, path, published, prior, "restore", nil, original)
-	return err
+	// The restored unit remains pinned across the caller's subsequent
+	// daemon-reload and verification, not merely through the exchange syscall.
+	return p.exchangeOwnedUnit(dir, path, published, prior, "restore", nil, original)
 }
 
 func (p SystemdPersistence) exchangeOwnedUnit(dir, path string, expected, content []byte, phase string, afterPublish func() error, expectedIdentity os.FileInfo) (os.FileInfo, error) {
-	before, err := p.exactUnitIdentity(path, expected)
+	before, err := p.exactPinnedUnitIdentity(path, expected)
 	if err != nil {
 		return nil, err
 	}
+	defer closePinnedUnit(before)
 	if expectedIdentity == nil || !sameUnitFile(before, expectedIdentity) {
 		return nil, fmt.Errorf("%w: original expected canonical inode changed before staging", errUnitIdentityConflict)
 	}
@@ -60,6 +62,12 @@ func (p SystemdPersistence) exchangeOwnedUnit(dir, path string, expected, conten
 	if err != nil {
 		return nil, err
 	}
+	keepIncomingPin := false
+	defer func() {
+		if !keepIncomingPin {
+			closePinnedUnit(incoming)
+		}
+	}()
 	cleanupStaged := true
 	defer func() {
 		if !cleanupStaged {
@@ -85,10 +93,11 @@ func (p SystemdPersistence) exchangeOwnedUnit(dir, path string, expected, conten
 	// before the swap. It may differ from the earlier validated owned unit,
 	// in which case the failed operation must return that actual independent
 	// canonical file, not some later substitute for the displaced stage.
-	priorAtExchange, priorAtExchangeInfo, err := readRegularUnit(path)
+	priorAtExchange, priorAtExchangeInfo, err := readPinnedRegularUnit(path)
 	if err != nil {
 		return nil, fmt.Errorf("%w: cannot establish canonical identity immediately before exchange: %w", errUnitIdentityConflict, err)
 	}
+	defer closePinnedUnit(priorAtExchangeInfo)
 	if err := p.verifyUnitPath(path); err != nil {
 		return nil, fmt.Errorf("%w: canonical path became untrusted before exchange: %w", errUnitIdentityConflict, err)
 	}
@@ -125,6 +134,7 @@ func (p SystemdPersistence) exchangeOwnedUnit(dir, path string, expected, conten
 			// The just-published canonical inode is still provably ours:
 			// return an explicit post-publication failure so EnsureRestore
 			// can compensate it without touching the unrelated staging name.
+			keepIncomingPin = true
 			return nil, &unitPublicationError{
 				cause:             fmt.Errorf("%w: displaced staging changed before retirement", errUnitIdentityConflict),
 				recoveryPath:      staged,
@@ -134,16 +144,20 @@ func (p SystemdPersistence) exchangeOwnedUnit(dir, path string, expected, conten
 		return nil, p.reconcileExchangeConflict(dir, path, staged, before, incoming, priorAtExchangeInfo, expected, content, priorAtExchange)
 	}
 	if err := os.Remove(staged); err != nil {
+		keepIncomingPin = true
 		return nil, &unitPublicationError{cause: fmt.Errorf("retire verified prior unit: %w", err), publishedIdentity: incoming}
 	}
 	if err := syncOwnedDir(dir); err != nil {
+		keepIncomingPin = true
 		return nil, &unitPublicationError{cause: err, publishedIdentity: incoming}
 	}
 	if afterPublish != nil {
 		if err := afterPublish(); err != nil {
+			keepIncomingPin = true
 			return nil, &unitPublicationError{cause: err, publishedIdentity: incoming}
 		}
 	}
+	keepIncomingPin = true
 	return incoming, nil
 }
 
@@ -167,10 +181,11 @@ func (p SystemdPersistence) incomingUnitMatches(path string, incoming os.FileInf
 // is performed on the moved object before unlinking the private backup.
 // This closes the check-then-unlink window of os.Remove(canonical).
 func (p SystemdPersistence) retireOwnedUnit(dir, path string, expected []byte, phase string, expectedIdentity ...os.FileInfo) error {
-	before, err := p.exactUnitIdentity(path, expected)
+	before, err := p.exactPinnedUnitIdentity(path, expected)
 	if err != nil {
 		return err
 	}
+	defer closePinnedUnit(before)
 	if len(expectedIdentity) > 0 && (expectedIdentity[0] == nil || !sameUnitFile(before, expectedIdentity[0])) {
 		return fmt.Errorf("%w: intended retired canonical inode changed", errUnitIdentityConflict)
 	}
@@ -178,18 +193,19 @@ func (p SystemdPersistence) retireOwnedUnit(dir, path string, expected []byte, p
 	if err != nil {
 		return err
 	}
+	// Keep the placeholder allocated until its ownership-sensitive unlink.
+	defer backupFile.Close()
 	backup := backupFile.Name()
 	placeholder, err := backupFile.Stat()
 	if err != nil {
-		_ = backupFile.Close()
-		return err
-	}
-	if err := backupFile.Close(); err != nil {
 		return err
 	}
 	// The reserved temporary pathname must still refer to OUR placeholder
 	// before unlinking it to make room for RENAME_NOREPLACE. An
 	// independent replacement must not be removed even during setup.
+	if p.afterUnitTransition != nil {
+		p.afterUnitTransition("before-retirement-placeholder-unlink")
+	}
 	currentPlaceholder, err := os.Lstat(backup)
 	if err != nil || !currentPlaceholder.Mode().IsRegular() || !sameUnitFile(placeholder, currentPlaceholder) || currentPlaceholder.Size() != 0 {
 		return fmt.Errorf("%w: unit retirement placeholder identity changed at %q: %v", errUnitIdentityConflict, backup, err)
@@ -263,17 +279,50 @@ func (p SystemdPersistence) syncRetirementDirectory(dir string) error {
 }
 
 func (p SystemdPersistence) exactUnitIdentity(path string, expected []byte) (os.FileInfo, error) {
+	return p.exactUnitIdentityWithPin(path, expected, false)
+}
+
+func (p SystemdPersistence) exactPinnedUnitIdentity(path string, expected []byte) (os.FileInfo, error) {
+	return p.exactUnitIdentityWithPin(path, expected, true)
+}
+
+func (p SystemdPersistence) exactUnitIdentityWithPin(path string, expected []byte, pin bool) (os.FileInfo, error) {
 	if err := p.guardExactPublishedUnit(path, expected); err != nil {
 		return nil, err
 	}
-	current, info, err := readRegularUnit(path)
+	var current []byte
+	var info os.FileInfo
+	var err error
+	if pin {
+		current, info, err = readPinnedRegularUnit(path)
+	} else {
+		current, info, err = readRegularUnit(path)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: cannot safely inspect expected unit: %w", errUnitIdentityConflict, err)
 	}
 	if !bytes.Equal(current, expected) {
+		closePinnedUnit(info)
 		return nil, fmt.Errorf("%w: expected unit contents changed during inspection", errUnitIdentityConflict)
 	}
+	// The second open may observe another inode after the initial guard.
+	// Trust must apply to the descriptor actually retained by this call.
+	if p.VerifyUnitPath == nil {
+		if err := protectedRootOwnership(info); err != nil {
+			closePinnedUnit(info)
+			return nil, fmt.Errorf("%w: opened unit lost trusted root ownership: %w", errUnitIdentityConflict, err)
+		}
+	}
 	return info, nil
+}
+
+// closePinnedUnit closes a transaction-local identity after its last
+// ownership-sensitive use. A returned Engine Undo retains its published
+// identity instead, so the original descriptor remains open for that closure.
+func closePinnedUnit(info os.FileInfo) {
+	if pinned, ok := info.(*pinnedUnitIdentity); ok && pinned.origin != nil {
+		_ = pinned.origin.Close()
+	}
 }
 
 // pinnedUnitIdentity retains an open descriptor for the originating inode.
@@ -318,14 +367,7 @@ func createOwnedStagingUnit(dir string, content []byte, mode os.FileMode) (strin
 	}
 	var written []byte
 	fail := func(cause error) (string, os.FileInfo, error) {
-		_ = tmp.Close()
-		// A concurrent in-place edit does not change inode identity.
-		// Remove only when bounded actual staging bytes still match what
-		// this writer produced before its own failure.
-		if actual, current, err := readRegularUnit(name); err == nil &&
-			sameUnitFile(current, opened) && bytes.Equal(actual, written) {
-			_ = os.Remove(name)
-		}
+		cleanupFailedOwnedStaging(tmp, opened, written)
 		return "", nil, cause
 	}
 	if err := tmp.Chmod(mode); err != nil {
@@ -346,6 +388,16 @@ func createOwnedStagingUnit(dir string, content []byte, mode os.FileMode) (strin
 	// identity is used by publication, compensation, or an Undo closure.
 	// Closing here would allow a later create to reuse the inode number.
 	return name, &pinnedUnitIdentity{FileInfo: opened, origin: tmp}, nil
+}
+
+// cleanupFailedOwnedStaging keeps the original inode allocated through the
+// last identity-sensitive check and unlink. A replaced pathname is preserved.
+func cleanupFailedOwnedStaging(tmp *os.File, opened os.FileInfo, written []byte) {
+	defer tmp.Close()
+	if actual, current, err := readRegularUnit(tmp.Name()); err == nil &&
+		sameUnitFile(current, opened) && bytes.Equal(actual, written) {
+		_ = os.Remove(tmp.Name())
+	}
 }
 
 func preserveUnitStaging(name string) (string, error) {

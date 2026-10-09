@@ -93,7 +93,20 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 		return nil, false, fmt.Errorf("unsafe systemd restore unit identity: %w", err)
 	}
 
-	prior, priorIdentity, readErr := readRegularUnit(path)
+	prior, priorIdentity, readErr := readPinnedRegularUnit(path)
+	// Keep the original unit allocated while it is used to authorize an
+	// exchange across systemctl and filesystem transitions. The published
+	// inode remains pinned if an Undo closure is returned.
+	publishedIdentity := priorIdentity
+	keepPublishedPin := false
+	defer func() {
+		if publishedIdentity != priorIdentity {
+			closePinnedUnit(priorIdentity)
+		}
+		if !keepPublishedPin {
+			closePinnedUnit(publishedIdentity)
+		}
+	}()
 	existed := readErr == nil
 	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 		return nil, false, fmt.Errorf("read systemd unit: %w", readErr)
@@ -122,7 +135,7 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 	}
 
 	fileChanged := !existed || string(prior) != content
-	publishedIdentity := priorIdentity // retained when no file replacement occurs
+	// Start with the inspected original identity; publication may replace it.
 	if fileChanged {
 		// The systemctl inspection may have allowed an administrator to
 		// replace the existing unit. Never overwrite a changed identity.
@@ -135,6 +148,7 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 		if err != nil {
 			var publication *unitPublicationError
 			if errors.As(err, &publication) {
+				publishedIdentity = publication.publishedIdentity
 				// Never compensate a merely byte-identical foreign inode.
 				// Only the originating STL staging inode is authorized for
 				// further destructive operations. Unknown = manual recovery.
@@ -192,6 +206,7 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 	undo := func(undoCtx context.Context) error {
 		return p.compensatePublishedUnit(undoCtx, systemctl, unitDir, path, []byte(content), prior, publishedIdentity, existed, wasEnabled, fileChanged, enabledChanged)
 	}
+	keepPublishedPin = true
 	return undo, true, nil
 }
 
@@ -238,24 +253,43 @@ func (p SystemdPersistence) compensatePublishedUnit(ctx context.Context, systemc
 		}
 	}
 
+	var restoredPin os.FileInfo
+	defer func() { closePinnedUnit(restoredPin) }()
+	verifyRestoredPrior := func() error {
+		if !existed {
+			return p.verifyPriorUnit(path, prior, false)
+		}
+		if restoredPin != nil {
+			return p.guardExactPublishedIdentity(path, prior, restoredPin)
+		}
+		if !fileChanged {
+			return p.guardExactPublishedIdentity(path, prior, publishedIdentity)
+		}
+		// The test-only restoreAfterFailure seam cannot return provenance.
+		// Its exact-content check still detects a dishonest no-op restore.
+		return p.verifyPriorUnit(path, prior, true)
+	}
 	if fileChanged {
 		// Re-read after external systemctl work, immediately before replacing
 		// or deleting the operation's published file.
 		if err := p.guardExactPublishedIdentity(path, published, publishedIdentity); err != nil {
 			return fmt.Errorf("systemd unit compensation uncertain before file restoration: %w", err)
 		}
-		if err := p.restorePublishedUnitWithSeam(unitDir, path, published, prior, existed, publishedIdentity); err != nil {
-			return fmt.Errorf("systemd unit compensation incomplete: %w", err)
+		var restoreErr error
+		restoredPin, restoreErr = p.restorePublishedUnitWithSeam(unitDir, path, published, prior, existed, publishedIdentity)
+		if restoreErr != nil {
+			return fmt.Errorf("systemd unit compensation incomplete: %w", restoreErr)
 		}
-		// A successful write alone is not proof that prior identity returned.
-		if err := p.verifyPriorUnit(path, prior, existed); err != nil {
+		// A successful write alone is not proof that the exact restored inode
+		// survived; keep its descriptor through external systemctl operations.
+		if err := verifyRestoredPrior(); err != nil {
 			return fmt.Errorf("systemd unit compensation incomplete: %w", err)
 		}
 	}
 	if _, err := p.Runner.Run(repairCtx, systemctl, "daemon-reload"); err != nil {
 		return fmt.Errorf("systemd unit compensation incomplete: daemon-reload failed: %w", err)
 	}
-	if err := p.verifyPriorUnit(path, prior, existed); err != nil {
+	if err := verifyRestoredPrior(); err != nil {
 		return fmt.Errorf("systemd unit compensation incomplete after daemon-reload: %w", err)
 	}
 	enabled, err := p.isEnabled(repairCtx, systemctl, restoreSystemdUnitName)
@@ -268,13 +302,20 @@ func (p SystemdPersistence) compensatePublishedUnit(ctx context.Context, systemc
 	return nil
 }
 
-func (p SystemdPersistence) restorePublishedUnitWithSeam(dir, path string, published, prior []byte, existed bool, publishedIdentity os.FileInfo) error {
+func (p SystemdPersistence) restorePublishedUnitWithSeam(dir, path string, published, prior []byte, existed bool, publishedIdentity os.FileInfo) (os.FileInfo, error) {
 	if p.restoreAfterFailure != nil {
 		// A deterministic test seam for incomplete or dishonest restoration.
 		// Production uses the atomic guarded restore path below.
-		return p.restoreAfterFailure(dir, path, prior, existed)
+		return nil, p.restoreAfterFailure(dir, path, prior, existed)
 	}
-	return p.restorePublishedUnit(dir, path, published, prior, existed, publishedIdentity)
+	restored, err := p.restorePublishedUnit(dir, path, published, prior, existed, publishedIdentity)
+	if err != nil {
+		var publication *unitPublicationError
+		if errors.As(err, &publication) {
+			closePinnedUnit(publication.publishedIdentity)
+		}
+	}
+	return restored, err
 }
 
 // guardExactPublishedUnit refuses symlinks, nonregular files, foreign content
@@ -392,7 +433,8 @@ func (p SystemdPersistence) RemoveRestore(ctx context.Context) error {
 		unitDir = "/etc/systemd/system"
 	}
 	path := filepath.Join(unitDir, restoreSystemdUnitName)
-	prior, priorIdentity, err := readRegularUnit(path)
+	prior, priorIdentity, err := readPinnedRegularUnit(path)
+	defer closePinnedUnit(priorIdentity)
 	systemctl := p.SystemctlBinary
 	if systemctl == "" {
 		systemctl = "systemctl"
@@ -480,12 +522,19 @@ func (p SystemdPersistence) compensateRemovedUnit(ctx context.Context, systemctl
 	defer cancel()
 	info, err := os.Lstat(path)
 	owned := original
+	var recovered os.FileInfo
+	defer func() { closePinnedUnit(recovered) }()
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		owned, err = p.publishUnitIfAbsent(dir, path, prior, 0o644, "compensate-source-link")
+		recovered, err = p.publishUnitIfAbsent(dir, path, prior, 0o644, "compensate-source-link")
 		if err != nil {
+			var publication *unitPublicationError
+			if errors.As(err, &publication) {
+				closePinnedUnit(publication.publishedIdentity)
+			}
 			return fmt.Errorf("STL unit removal compensation incomplete: cannot restore owned file without replacement: %w", err)
 		}
+		owned = recovered
 	case err != nil:
 		return fmt.Errorf("STL unit removal compensation uncertain: cannot inspect unit identity: %w", err)
 	case info.Mode().IsRegular():
@@ -536,6 +585,12 @@ func (p SystemdPersistence) publishUnitIfAbsent(dir, path string, contents []byt
 	if err != nil {
 		return nil, err
 	}
+	keepIncomingPin := false
+	defer func() {
+		if !keepIncomingPin {
+			closePinnedUnit(incoming)
+		}
+	}()
 	cleanupStaged := true
 	defer func() {
 		// Neither an inode match alone nor a filename match authorizes
@@ -571,6 +626,7 @@ func (p SystemdPersistence) publishUnitIfAbsent(dir, path string, contents []byt
 		var owned os.FileInfo
 		if p.incomingUnitMatches(path, incoming, contents) {
 			owned = incoming
+			keepIncomingPin = true
 		}
 		return nil, &unitPublicationError{
 			cause: cause, recoveryPath: recovery, publishedIdentity: owned,
@@ -612,6 +668,7 @@ func (p SystemdPersistence) publishUnitIfAbsent(dir, path string, contents []byt
 	if !p.incomingUnitMatches(path, incoming, contents) {
 		return uncertain(fmt.Errorf("%w: initial canonical unit identity changed after staging retirement", errUnitIdentityConflict), "")
 	}
+	keepIncomingPin = true
 	return incoming, nil
 }
 

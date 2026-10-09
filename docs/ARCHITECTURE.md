@@ -195,12 +195,17 @@ daemon-reload, enable failure, and later Engine rollback) revalidate
 A valid marker or byte-identical unit installed by another administrator
 never grants ownership to disable, replace, delete, or re-enable it.
 An operation's originating inode identity is retained through publication,
-enablement, bounded compensation, and Undo. The original staging file
-descriptor stays open while its transaction/Undo still holds the identity:
-this prevents inode-number reuse (filesystem ABA) from making a new
-byte-identical file pass an os.SameFile(dev,inode) check after the former
-object was unlinked. Callers release their closure/identity when no longer
-needed; the os.File finalizer eventually closes an abandoned descriptor.
+enablement, bounded compensation, and Undo. Both newly created staging and
+previously installed canonical units keep their original opened descriptors
+alive while their inode metadata authorizes any transition, including the
+OLD side of exchange, removal and recovery after systemctl calls. Creation
+failure cleanup and retirement-placeholder unlink also keep their originating
+descriptors open through their final ownership-sensitive checks. This prevents
+inode-number reuse (filesystem ABA) from making a new byte-identical file
+pass an os.SameFile(dev,inode) check after the former object was unlinked.
+Short-lived identities are explicitly closed at the transaction boundary;
+the published identity is held by a returned Undo closure until it becomes
+unreachable, when the os.File finalizer can close its descriptor.
 A stale Undo whose original published inode has been replaced must fail
 with an explicit conflict. This in-process protection is not a persistent
 identity token across a process restart.
