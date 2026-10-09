@@ -135,7 +135,7 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 	for {
 		fmt.Fprintln(out, "\nTasks:")
 		fmt.Fprintln(out, "  1  Create Tunnel (guided setup pending)")
-		fmt.Fprintln(out, "  2  Import Setup Link (protected CLI workflow)")
+		fmt.Fprintln(out, "  2  Import Setup Link (confirmed GRE/IPIP only)")
 		fmt.Fprintln(out, "  3  Manage Links")
 		fmt.Fprintln(out, "  4  Tests & Diagnostics")
 		fmt.Fprintln(out, "  5  Settings (pending)")
@@ -155,8 +155,9 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 		case "1":
 			fmt.Fprintln(out, "Guided creation is not implemented. Use stl link ensure --stdin to apply an explicitly reviewed GRE Native configuration. No changes made.")
 		case "2":
-			fmt.Fprintln(out, "Use stl link preview --stdin to safely inspect a setup link, then stl link import --stdin --confirm TOKEN for the same reviewed input.")
-			fmt.Fprintln(out, "Do not pass SENSITIVE setup links as command arguments. No changes made.")
+			if code := menuImport(input, reader, out, errOut, options); code != 0 {
+				return code
+			}
 		case "3":
 			if code := linkReadCommand([]string{"list"}, out, errOut, options); code != 0 {
 				return code
