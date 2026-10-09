@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"slices"
-	"strings"
 
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/pairing"
@@ -30,6 +29,7 @@ type ImportPreviewResponse struct {
 	HasCredential        bool                   `json:"has_credential"`
 	CredentialKind       pairing.CredentialKind `json:"credential_kind,omitempty"`
 	Sensitive            bool                   `json:"sensitive"`
+	ImportConfirmation   string                 `json:"import_confirmation,omitempty"`
 	GRE                  *domain.GREOptions     `json:"gre,omitempty"`
 }
 
@@ -40,15 +40,10 @@ func linkPreviewCommand(args []string, input io.Reader, stdout, stderr io.Writer
 	if !valid || input == nil {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, "link_preview", "usage: stl link preview --stdin [--json]")
 	}
-	// Read only up to the protocol cap plus a conventional pipe newline.
-	// An oversize payload never enters the decoder and is never echoed back.
-	bytes, err := io.ReadAll(io.LimitReader(input, pairing.MaxLinkBytes+2))
-	if err != nil || len(bytes) == 0 || len(bytes) > pairing.MaxLinkBytes+1 {
+	encoded, err := readSetupLink(input)
+	if err != nil {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, "link_preview", "setup-link input is unavailable or exceeds the size limit")
 	}
-	encoded := string(bytes)
-	encoded = strings.TrimSuffix(encoded, "\n")
-	encoded = strings.TrimSuffix(encoded, "\r")
 	preview, err := pairing.PreviewSetupLink(encoded)
 	if err != nil {
 		// Do not include raw setup strings, credential bytes, decode cause,
@@ -76,6 +71,9 @@ func linkPreviewCommand(args []string, input io.Reader, stdout, stderr io.Writer
 		gre := link.GRE
 		response.GRE = &gre
 	}
+	if importablePlaintextOffer(preview) {
+		response.ImportConfirmation = setupLinkConfirmation(encoded)
+	}
 	if jsonOutput {
 		if err := json.NewEncoder(stdout).Encode(response); err != nil {
 			fmt.Fprintln(stderr, "cannot encode pairing import preview")
@@ -97,6 +95,12 @@ func linkPreviewCommand(args []string, input io.Reader, stdout, stderr io.Writer
 	} else {
 		fmt.Fprintln(stdout, "Recipient credential: none")
 	}
-	fmt.Fprintln(stdout, "No Link was applied. Explicit import/apply is a separate operation.")
+	if response.ImportConfirmation != "" {
+		fmt.Fprintln(stdout, "After reviewing these receiver settings, apply this exact setup link with:")
+		fmt.Fprintf(stdout, "stl link import --stdin --confirm %s (same stdin data)\n", response.ImportConfirmation)
+	} else {
+		fmt.Fprintln(stdout, "Recipient import/apply is not available for this backend or credential-bearing payload.")
+	}
+	fmt.Fprintln(stdout, "No Link was applied during preview.")
 	return 0
 }
