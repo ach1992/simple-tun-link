@@ -30,13 +30,13 @@ func (b *Backend) Apply(ctx context.Context, req core.Request, observed core.Obs
 }
 
 type creationProgress struct {
-	IfIndex           int
-	Created           bool
-	OwnershipMarked   bool
-	AddressAttempted  bool
-	AddressAssigned   bool
-	UpAttempted       bool
-	UpConfirmed       bool
+	IfIndex          int
+	Created          bool
+	OwnershipMarked  bool
+	AddressAttempted bool
+	AddressAssigned  bool
+	UpAttempted      bool
+	UpConfirmed      bool
 }
 
 func (b *Backend) applyEnsure(ctx context.Context, req core.Request, obs observation, p plan) (core.Rollback, error) {
