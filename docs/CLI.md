@@ -1,9 +1,10 @@
-# STL CLI — implemented read-only commands
+# STL CLI — implemented read-only and explicit lifecycle commands
 
-STL's broader interactive task-first interface, create/import/manage commands,
-and stable automation lifecycle are owned by Issue #10.
-This page describes **only the implemented commands**; it does not promise
-unimplemented functionality.
+STL's broader task-first interactive interface and complete create/import/manage
+workflow are still tracked in Issue #10. The versioned non-interactive
+ensure/remove lifecycle is implemented but its remaining runtime/backend
+acceptance is tracked separately. This page distinguishes **read-only**
+observations from **explicit host-mutating** commands.
 
 ## Commands
 
@@ -29,7 +30,13 @@ unimplemented functionality.
   exchange mode, and credential-presence flag without revealing any
   credential or applying network state. Never pass SENSITIVE Quick Links as
   command-line arguments, which can enter shell history/process listings.
-- `stl link restore --all`: existing host persistence/reapply command.
+- `stl link ensure --stdin [--json]`: **mutating** idempotent desired
+  Link convergence via the existing Engine, accepting a strict versioned JSON
+  request on standard input. Full request schema appears below.
+- `stl link remove <link-id> --confirm <same-link-id> [--json]`:
+  **mutating** Engine-owned removal after explicit stable ID confirmation.
+- `stl link restore --all`: **mutating** host persistence/reapply
+  operation for existing saved Links, using the same Engine.
 
 `list` reports **configured desired state**, not actual network reachability.
 `status` reports **interface_verified**, not end-to-end connectivity.
@@ -58,6 +65,9 @@ the read-only diagnostics path in [DIAGNOSTICS.md](DIAGNOSTICS.md).
   `has_credential`, credential kind and sensitive flag.
   The input setup link, private keys, arbitrary display names and decoding
   cause are deliberately excluded from JSON and human output.
+- `link ensure` / `link remove`: versioned operation, Link ID,
+  changed and removed fields on Engine success. Failure JSON remains
+  nonzero and may include uncertainty/reconciliation signals.
 - Read errors: `{ "schema_version": 1, "error": { "code": ..., ... } }`;
   raw state-file content, arbitrary backend output/errors, display names
   and credentials are not included.
@@ -67,10 +77,103 @@ argument or missing Link ID; `4` unsupported live backend; `1` state or
 inspection failure. A failure cannot silently become a success even when
 the requested Link exists in saved configuration.
 
-These commands read STL's existing local desired-state file. The state
-directory typically belongs to a privileged operator; access failures
-produce a structured error rather than creating/replacing files.
+Commands that require the local desired-state snapshot use the existing
+private state store. The pure `link preview` command does not load
+persisted state; access failures in the other read paths are errors, not
+instructions to create/replace files.
 
-`link ensure`, create/import, optional throughput, non-GRE diagnostic
-adapters and the broader interactive UX remain pending under Issue #10. No new mutation route is
-introduced by the read-only commands.
+Read-only `list`, `status`, `diagnose` and `preview` never
+change network configuration; the distinct `ensure`, `remove` and
+`restore` paths are explicit host-mutating operations. Interactive
+create/import, optional throughput, non-GRE diagnostic adapters and the
+task-first UI remain pending under Issues #8, #9 and #10.
+
+## Explicit Link lifecycle commands — Issue #10
+
+The following operations **change the selected host's network and durable
+desired state**. They are not equivalent to read-only status, preview or
+diagnostics. Use only with operator-approved local/peer address, source and
+backend configuration on a host you are authorized to administer:
+
+~~~sh
+stl link ensure --stdin --json < /path/to/desired-link.json
+stl link remove lnk_<32-hex-characters> --confirm lnk_<same-32-hex-characters> --json
+~~~
+
+`ensure` accepts one bounded **versioned CLI request**, not an internal
+`domain.Link` object directly. The top-level integer
+`schema_version: 1` is **required**. Its `link` member contains
+the desired v1 Link fields: ID, backend, encapsulation, underlay endpoints,
+Link Address endpoints, and optional display name / GRE options.
+
+For example, this is a valid **request shape only**, not a recommendation to
+configure the illustrative addresses:
+
+~~~json
+{
+  "schema_version": 1,
+  "link": {
+    "id": "lnk_0123456789abcdef0123456789abcdef",
+    "underlay": {"local": "192.0.2.10", "peer": "192.0.2.20"},
+    "addresses": {"local": "10.80.20.0/31", "peer": "10.80.20.1/31"},
+    "backend": "gre",
+    "encapsulation": "native"
+  }
+}
+~~~
+
+**Compatibility boundary:** all accepted v1 fields are fixed, including
+the nested `underlay`, `addresses` and `gre` objects.
+Underlay and Link Addresses accept only `local` / `peer`; GRE v1
+accepts only `key_enabled`, `key`, `ttl`, `tos`,
+`disable_pmtud`, `checksum`, `sequence` and `udp_port`.
+These names and their value types are the CLI contract rather than a
+serialization of mutable internal domain structs. Unknown nested fields
+are rejected, even if a later internal backend implementation gains them.
+A future public field addition requires an explicit compatibility/version
+decision; the existing version-1 reader must not silently widen.
+
+The v1 outer schema is a separate CLI contract from internal Go state.
+Missing, zero, null, non-integer or duplicate schema versions fail as
+invalid (exit 2). Unrecognized positive future versions fail explicitly as
+unsupported (exit 4), without silently assuming v1. A valid schema v1
+request that selects a domain-unsupported feature (such as IPv6 Link
+Addresses or an unsupported GRE encapsulation) also exits 4; malformed
+or otherwise invalid configuration exits 2. An unregistered backend
+is explicitly unsupported rather than accepted silently.
+
+This input is **not** a `stl://` pairing link and cannot carry recipient
+WireGuard private keys, IPsec PSKs or arbitrary commands. Duplicate/case-
+variant keys (also inside the Link), unknown fields, arrays, null values,
+trailing JSON values and oversize input are rejected before runtime
+creation. Do not put sensitive setup links into shell command arguments.
+
+`ensure` and `remove` both call the **same canonical Engine** used for
+restore: inspect, plan, owner/resource-lock, re-inspect, validate, apply,
+verify, commit desired state and persistence/rollback compensation. They
+do not implement a second networking lifecycle. `ensure` is idempotent
+where the backend supports convergence; `changed=false` means no backend
+mutation was required after inspection, not proof that the remote peer
+responds. Removing a Link requires repeating the **exact stable Link ID**
+after `--confirm` and can remove only Engine-proven owned resources.
+`remove` must never silently remove another same-peer Link.
+
+`--json` success returns top-level integer `schema_version: 1`,
+operation, link_id, changed and removed. A failure returns a nonzero exit
+and redacted versioned error. When an operation may have changed host or
+committed state, its JSON indicates `outcome: "unconfirmed"` and
+`reconciliation_required: true`, with any Engine-provided partial
+result in snake_case. These are conservative reconciliation signals,
+not a claimed successful apply. Do not retry a failed stateful operation
+blindly; inspect `link list` and `link status` first.
+
+Exit codes remain 0 on verified Engine success; 2 for invalid input/usage,
+4 for unsupported backend, and 1 for other operational, state or rollback
+failures. The commands use a five-minute signal-aware deadline and the
+Engine's cancellation-detached, bounded owned rollback. No global tuning
+or unrelated host networking changes are permitted by this CLI layer.
+
+These commands are not a replacement for the unfinished **interactive
+Create / Import / Manage** user experience and protected secret-bearing
+recipient import flow. They do not establish live FOU/GUE bidirectional
+traffic or release E2E acceptance.
