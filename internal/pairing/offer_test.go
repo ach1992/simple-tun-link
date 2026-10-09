@@ -228,6 +228,75 @@ func TestRejectInvalidBackendCredentialCombinations(t *testing.T) {
 		})
 	}
 }
+func TestPairingRejectsIPv6UnderlayZones(t *testing.T) {
+	// Any zone is host-local and not a portable pairing address. This also
+	// prevents terminal-control/line-injection when printing underlay fields.
+	for _, tc := range []struct {
+		name, zone string
+	}{
+		{"ordinary_zone", "eth0"},
+		{"newline_zone", "lan\nInjected: yes"},
+		{"escape_zone", "lan\x1b[31m"},
+		{"separator_zone", "lan\u2028bad"},
+	} {
+		for _, endpoint := range []string{"local", "peer"} {
+			t.Run(tc.name+"_"+endpoint, func(t *testing.T) {
+				link := testLink(idOne, domain.BackendGRE, domain.EncapNative)
+				link.Underlay.Local = netip.MustParseAddr("2001:db8::10")
+				link.Underlay.Peer = netip.MustParseAddr("2001:db8::20")
+				scoped, err := netip.ParseAddr("fe80::1%" + tc.zone)
+				if err != nil {
+					t.Fatalf("invalid scoped test fixture: %v", err)
+				}
+				if endpoint == "local" {
+					link.Underlay.Local = scoped
+				} else {
+					link.Underlay.Peer = scoped
+				}
+
+				if _, err := NewQuickOffer(link, nil); err == nil {
+					t.Fatal("scoped underlay accepted for export")
+				}
+				raw, err := json.Marshal(wireOffer{SchemaVersion: SchemaVersion, Mode: ModeQuick, Link: link})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := DecodeSetupLink(encodeRawForTest(raw)); err == nil {
+					t.Fatal("scoped underlay accepted on import")
+				}
+				if block, err := (Offer{link: link, mode: ModeQuick}).HumanReadableBlock(); err == nil || block != "" {
+					t.Fatal("unsafe underlay appeared in human-readable block")
+				}
+			})
+		}
+	}
+}
+
+func TestPairingAcceptsOrdinaryIPv6UnderlayAndInversion(t *testing.T) {
+	link := testLink(idOne, domain.BackendGRE, domain.EncapNative)
+	link.Underlay.Local = netip.MustParseAddr("2001:db8::10")
+	link.Underlay.Peer = netip.MustParseAddr("2001:db8::20")
+	offer, err := NewQuickOffer(link, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire, err := offer.EncodeSetupLink()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeSetupLink(wire)
+	if err != nil || decoded.Link() != link {
+		t.Fatalf("unscoped IPv6 round-trip failed: %v", err)
+	}
+	if decoded.ReceiverLink().Underlay.Local != link.Underlay.Peer || Invert(decoded.ReceiverLink()) != link {
+		t.Fatal("receiver IPv6 underlay inversion failed")
+	}
+	block, err := decoded.HumanReadableBlock()
+	if err != nil || !strings.Contains(block, "Receiver underlay: 2001:db8::20\nPeer underlay: 2001:db8::10\n") {
+		t.Fatalf("unexpected human-readable IPv6 underlay output: %v", err)
+	}
+}
+
 func TestRejectUnsafeOrInvalidLinkMetadata(t *testing.T) {
 	tests := []struct {
 		name string

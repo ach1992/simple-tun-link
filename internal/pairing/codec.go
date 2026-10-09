@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -180,6 +181,12 @@ func PreviewSetupLink(input string) (Preview, error) {
 // arrays, null, case-variant key spellings and unknown fields before Go's
 // permissive struct mapping can resolve a conflicting field.
 func validateWireJSONShape(raw []byte) error {
+	// encoding/json accepts unpaired UTF-16 surrogate escapes and silently
+	// converts them to U+FFFD. Check the original JSON strings first so a
+	// checksum-protected payload cannot change meaning during decoding.
+	if err := validateJSONSurrogateEscapes(raw); err != nil {
+		return err
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	if err := validateWireValue(dec, "root", 0); err != nil {
@@ -189,6 +196,56 @@ func validateWireJSONShape(raw []byte) error {
 		return fmt.Errorf("trailing JSON data")
 	}
 	return nil
+}
+
+// validateJSONSurrogateEscapes inspects only JSON string escape boundaries.
+// Ordinary JSON syntax, unknown escapes and structure remain the decoder's
+// responsibility; only lone UTF-16 surrogate escapes are rejected here.
+// The input is already bounded by MaxPayloadBytes and checked for UTF-8.
+func validateJSONSurrogateEscapes(raw []byte) error {
+	for i := 0; i < len(raw); i++ {
+		if raw[i] != '"' {
+			continue
+		}
+		for i++; i < len(raw) && raw[i] != '"'; {
+			if raw[i] != '\\' {
+				i++
+				continue
+			}
+			if i+1 >= len(raw) {
+				return fmt.Errorf("truncated JSON string escape")
+			}
+			if raw[i+1] != 'u' {
+				i += 2 // Includes escaped backslashes and escaped quotes.
+				continue
+			}
+			first, valid := jsonUTF16Unit(raw, i)
+			if !valid {
+				return fmt.Errorf("invalid JSON Unicode escape")
+			}
+			switch {
+			case first >= 0xD800 && first <= 0xDBFF:
+				second, valid := jsonUTF16Unit(raw, i+6)
+				if !valid || second < 0xDC00 || second > 0xDFFF {
+					return fmt.Errorf("unpaired JSON UTF-16 high surrogate")
+				}
+				i += 12
+			case first >= 0xDC00 && first <= 0xDFFF:
+				return fmt.Errorf("unpaired JSON UTF-16 low surrogate")
+			default:
+				i += 6
+			}
+		}
+	}
+	return nil
+}
+
+func jsonUTF16Unit(raw []byte, offset int) (uint64, bool) {
+	if offset < 0 || len(raw)-offset < 6 || raw[offset] != '\\' || raw[offset+1] != 'u' {
+		return 0, false
+	}
+	unit, err := strconv.ParseUint(string(raw[offset+2:offset+6]), 16, 16)
+	return unit, err == nil
 }
 
 var wireAllowedFields = map[string]map[string]string{

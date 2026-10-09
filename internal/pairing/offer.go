@@ -120,6 +120,12 @@ func (o Offer) validate() error {
 	if !o.link.Underlay.Local.IsValid() || !o.link.Underlay.Peer.IsValid() {
 		return fmt.Errorf("invalid underlay address")
 	}
+	// IPv6 zone identifiers are local interface names, not portable peer
+	// addresses. Reject them before exporting untrusted address text in a
+	// human-readable block, including otherwise ordinary zones such as eth0.
+	if o.link.Underlay.Local.Zone() != "" || o.link.Underlay.Peer.Zone() != "" {
+		return fmt.Errorf("IPv6 underlay zones are unsupported in pairing links")
+	}
 	if !o.link.Underlay.Local.Is4() && !o.link.Underlay.Local.Is6() {
 		return fmt.Errorf("invalid local underlay family")
 	}

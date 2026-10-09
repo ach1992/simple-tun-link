@@ -30,9 +30,14 @@ Link as a credential, not as a shareable diagnostic artifact.
 The decoder limits the entire input to 24 KiB and decoded JSON to 16 KiB.
 It rejects noncanonical Base64/checksum, malformed/duplicate/unknown fields,
 nested extensions without an explicit schema contract, invalid UTF-8,
-truncated or mismatched checksums, unsupported mode/version, and incompatible
-backend/encapsulation/credential combinations. It never evaluates embedded
-content as a command or path.
+unpaired JSON UTF-16 surrogate escapes (which Go's JSON decoder otherwise
+silently replaces), truncated or mismatched checksums, unsupported mode/version,
+and incompatible backend/encapsulation/credential combinations. Valid Unicode
+surrogate pairs and explicit U+FFFD characters remain supported. IPv6 underlay
+addresses without zones remain supported; scoped IPv6 zone identifiers are
+rejected because they are host-local and unsafe to reproduce in a portable
+human-readable pairing block. It never evaluates embedded content as a command
+or path.
 
 ## Perspective and credential model
 

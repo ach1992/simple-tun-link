@@ -110,6 +110,75 @@ func TestCredentialBackendKindAndEncodingTampering(t *testing.T) {
 		})
 	}
 }
+func TestRejectMalformedEscapedUTF16Surrogates(t *testing.T) {
+	linkJSON, err := json.Marshal(testLink(idOne, domain.BackendGRE, domain.EncapNative))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := fmt.Sprintf(`{"schema_version":1,"mode":"quick","link":%s}`, linkJSON)
+	original := `"display_name":"Production Link / Test"`
+	for _, tc := range []struct{ name, literal string }{
+		{"lone_high", `"\uD83D"`},
+		{"lone_low", `"\uDE00"`},
+		{"nonpair_second_escape", `"\uD83D\u0061"`},
+		{"two_high_surrogates", `"\uD83D\uD83D"`},
+		{"nonadjacent_surrogates", `"\uD83Dx\uDE00"`},
+		{"high_then_escaped_backslash", `"\uD83D\\uDE00"`},
+		{"invalid_second_hex_quad", `"\uD83D\uDE0Z"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := strings.Replace(base, original, `"display_name":`+tc.literal, 1)
+			if raw == base {
+				t.Fatal("test fixture did not replace display name")
+			}
+			pairingLink := encodeRawForTest([]byte(raw))
+			if _, err := DecodeSetupLink(pairingLink); err == nil || stlerr.CodeOf(err) != stlerr.CodeInvalid {
+				t.Fatalf("malformed surrogate accepted: %v", err)
+			}
+			if _, err := PreviewSetupLink(pairingLink); err == nil {
+				t.Fatal("malformed surrogate accepted by redacted preview")
+			}
+		})
+	}
+}
+
+func TestValidJSONUnicodeEscapesPreservePairingMetadata(t *testing.T) {
+	linkJSON, err := json.Marshal(testLink(idOne, domain.BackendGRE, domain.EncapNative))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := fmt.Sprintf(`{"schema_version":1,"mode":"quick","link":%s}`, linkJSON)
+	for _, tc := range []struct{ name, literal, want string }{
+		{"surrogate_pair", `"\uD83D\uDE00"`, "😀"},
+		{"literal_replacement_character", `"�"`, "�"},
+		{"escaped_replacement_character", `"\uFFFD"`, "�"},
+		{"persian_display_name", `"نمونه"`, "نمونه"},
+		{"escaped_literal_backslash", `"\\uD800"`, `\uD800`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := strings.Replace(base, `"display_name":"Production Link / Test"`, `"display_name":`+tc.literal, 1)
+			if raw == base {
+				t.Fatal("test fixture did not replace display name")
+			}
+			decoded, err := DecodeSetupLink(encodeRawForTest([]byte(raw)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decoded.Link().DisplayName != tc.want {
+				t.Fatalf("metadata changed: got %q want %q", decoded.Link().DisplayName, tc.want)
+			}
+			reencoded, err := decoded.EncodeSetupLink()
+			if err != nil {
+				t.Fatal(err)
+			}
+			roundtrip, err := DecodeSetupLink(reencoded)
+			if err != nil || roundtrip.Link().DisplayName != tc.want {
+				t.Fatalf("unicode pairing round-trip failed: %v", err)
+			}
+		})
+	}
+}
+
 func TestInvalidUTF8IsNotSilentlyRewritten(t *testing.T) {
 	raw := []byte("{\"schema_version\":1,\"mode\":\"quick\",\"link\":{\"display_name\":\"")
 	raw = append(raw, 0xff)
