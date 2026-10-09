@@ -78,12 +78,27 @@ type observedLink struct {
 }
 
 func parseGRELinks(raw []byte) ([]observedLink, error) {
-	var rows []linkJSON
+	var rows []json.RawMessage
 	if err := json.Unmarshal(raw, &rows); err != nil {
 		return nil, fmt.Errorf("parse GRE link state: %w", err)
 	}
 	out := make([]observedLink, 0, len(rows))
-	for _, row := range rows {
+	for _, item := range rows {
+		// iproute2 can emit exact empty JSON objects for unrelated interfaces
+		// when filtering by type gre before the GRE module is loaded. Ignore
+		// only those placeholders: partially populated observations must still
+		// fail closed rather than masking a foreign/corrupted GRE identity.
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(item, &fields); err != nil || fields == nil {
+			return nil, fmt.Errorf("invalid GRE link inspection row")
+		}
+		if len(fields) == 0 {
+			continue
+		}
+		var row linkJSON
+		if err := json.Unmarshal(item, &row); err != nil {
+			return nil, fmt.Errorf("invalid GRE link inspection row: %w", err)
+		}
 		// Linux exposes the wildcard gre0 fallback through the same query. It
 		// has local/remote "any" and is not an STL point-to-point Link.
 		if strings.TrimSpace(row.LinkInfo.InfoData.Local) == "any" || strings.TrimSpace(row.LinkInfo.InfoData.Remote) == "any" {

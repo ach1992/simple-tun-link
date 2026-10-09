@@ -390,6 +390,32 @@ func TestNativeGRERejectsForeignOwnershipAndDuplicateTuple(t *testing.T) {
 	}
 }
 
+func TestParseGREIPRouteEmptyPlaceholders(t *testing.T) {
+	// iproute2 6.15 emits {} for non-GRE interfaces when no GRE module/link
+	// has been created yet. This must not prevent the first Native ensure.
+	valid := `{"ifindex":5,"ifname":"g0","flags":["POINTOPOINT","NOARP"],"linkinfo":{"info_kind":"gre","info_data":{"remote":"198.51.100.1","local":"192.0.2.1","ttl":0,"pmtudisc":true}}}`
+	rows, err := parseGRELinks([]byte("[{}, { }, " + valid + ", {}]"))
+	if err != nil {
+		t.Fatalf("empty iproute2 placeholders must not block GRE inspection: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Name != "g0" || rows[0].IfIndex != 5 {
+		t.Fatalf("GRE parser lost genuine identity after placeholders: %#v", rows)
+	}
+	if empty, err := parseGRELinks([]byte("[{}, {}]")); err != nil || len(empty) != 0 {
+		t.Fatalf("only placeholders should produce empty, valid observation: %#v, %v", empty, err)
+	}
+	for _, raw := range []string{
+		`[{}, {"ifname":"unrecognized"}]`,
+		`[{}, {"ifindex":1,"ifname":"foreign","linkinfo":{"info_kind":"veth"}}]`,
+		`[{}, null]`,
+		`[{}, 17]`,
+	} {
+		if _, err := parseGRELinks([]byte(raw)); err == nil {
+			t.Fatalf("must reject nonempty/malformed GRE observation: %s", raw)
+		}
+	}
+}
+
 func TestParseKernelGREJSONPreservesExplicitZeroKey(t *testing.T) {
 	raw := []byte(`[{"ifindex":5,"ifname":"g0","flags":["POINTOPOINT","NOARP"],"linkinfo":{"info_kind":"gre","info_data":{"remote":"198.51.100.1","local":"192.0.2.1","ttl":0,"pmtudisc":true,"ikey":"0.0.0.0","okey":"0.0.0.0"}}}]`)
 	links, err := parseGRELinks(raw)
