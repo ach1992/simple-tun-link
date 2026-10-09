@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -145,5 +146,52 @@ func TestFileStorePostPublicationFailureIsExplicitlyIndeterminate(t *testing.T) 
 	}
 	if _, exists := snapshot.Find(id); !exists {
 		t.Fatal("post-publication error was incorrectly treated as uncommitted")
+	}
+}
+
+func TestFileStoreMigratesCompatibleV1AndRejectsIncompleteGREV1(t *testing.T) {
+	id, _ := domain.NewLinkID()
+	base := testLink(t, id, "10.80.30.0/31", "10.80.30.1/31")
+
+	t.Run("native", func(t *testing.T) {
+		root := t.TempDir()
+		legacy := Snapshot{SchemaVersion: legacySchemaVersion, Links: []LinkRecord{{Desired: base}}}
+		payload, err := json.Marshal(legacy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "state.json"), payload, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := NewFileStore(root).Load(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.SchemaVersion != SchemaVersion || len(got.Links) != 1 || got.Links[0].Desired != base {
+			t.Fatalf("unexpected migrated state: %#v", got)
+		}
+	})
+
+	for _, tc := range []struct {
+		name string
+		link domain.Link
+	}{
+		{"gre_options", func() domain.Link { l := base; l.GRE = domain.GREOptions{KeyEnabled: true, Key: 7}; return l }()},
+		{"gre_fou_without_port", func() domain.Link { l := base; l.Encapsulation = domain.EncapFOU; return l }()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			legacy := Snapshot{SchemaVersion: legacySchemaVersion, Links: []LinkRecord{{Desired: tc.link}}}
+			payload, err := json.Marshal(legacy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "state.json"), payload, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := NewFileStore(root).Load(context.Background()); err == nil || !strings.Contains(err.Error(), "legacy") {
+				t.Fatalf("incomplete legacy GRE state accepted: %v", err)
+			}
+		})
 	}
 }

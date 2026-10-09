@@ -15,8 +15,12 @@ import (
 )
 
 func encodeRawForTest(raw []byte) string {
+	return encodeRawForVersionTest(SchemaVersion, raw)
+}
+
+func encodeRawForVersionTest(version int, raw []byte) string {
 	sum := sha256.Sum256(raw)
-	return setupPrefix + base64.RawURLEncoding.EncodeToString(raw) + "." + hex.EncodeToString(sum[:])
+	return fmt.Sprintf("stl://%d.%s.%s", version, base64.RawURLEncoding.EncodeToString(raw), hex.EncodeToString(sum[:]))
 }
 func TestRejectMalformedTruncatedOversizedAndTamperedLinks(t *testing.T) {
 	offer, err := NewQuickOffer(testLink(idOne, domain.BackendWireGuard, domain.EncapUDP), wgTestKey())
@@ -32,7 +36,7 @@ func TestRejectMalformedTruncatedOversizedAndTamperedLinks(t *testing.T) {
 		t.Fatal("invalid test fixture")
 	}
 	cases := []string{
-		"", "example://1." + parts[0] + "." + parts[1], "stl://2." + parts[0] + "." + parts[1],
+		"", "example://1." + parts[0] + "." + parts[1], "stl://3." + parts[0] + "." + parts[1],
 		"stl://1.", valid[:len(valid)-5], valid + ".extra", valid + "\nsecret",
 		valid[:len(valid)-1] + "0", setupPrefix + "not_base64!." + parts[1],
 		setupPrefix + parts[0] + "." + strings.ToUpper(parts[1]), setupPrefix + "a." + parts[1],
@@ -58,26 +62,30 @@ func TestMalformedSchemasRejectedEvenWithCorrectIntegrityHash(t *testing.T) {
 		name, raw string
 		code      stlerr.Code
 	}{
-		{"trailing JSON", fmt.Sprintf(`{"schema_version":1,"mode":"quick","link":%s} true`, link), stlerr.CodeInvalid},
-		{"unknown root key", fmt.Sprintf(`{"schema_version":1,"mode":"quick","link":%s,"command":"rm -rf /"}`, link), stlerr.CodeInvalid},
-		{"unknown nested key", strings.Replace(fmt.Sprintf(`{"schema_version":1,"mode":"quick","link":%s}`, link), `"underlay":{`, `"underlay":{"command":"execute",`, 1), stlerr.CodeInvalid},
-		{"duplicate exchange mode", fmt.Sprintf(`{"schema_version":1,"mode":"quick","mode":"secure_exchange","link":%s}`, link), stlerr.CodeInvalid},
-		{"duplicate nested local", strings.Replace(fmt.Sprintf(`{"schema_version":1,"mode":"quick","link":%s}`, link), `"underlay":{`, `"underlay":{"local":"198.51.100.3",`, 1), stlerr.CodeInvalid},
-		{"wrong key case", fmt.Sprintf(`{"schema_version":1,"Mode":"quick","link":%s}`, link), stlerr.CodeInvalid},
-		{"array instead of link", `{"schema_version":1,"mode":"quick","link":[]}`, stlerr.CodeInvalid},
-		{"null recipient credential", fmt.Sprintf(`{"schema_version":1,"mode":"quick","link":%s,"recipient_secret":null}`, link), stlerr.CodeInvalid},
-		{"unsupported schema version", fmt.Sprintf(`{"schema_version":2,"mode":"quick","link":%s}`, link), stlerr.CodeUnsupported},
-		{"unsupported exchange mode", fmt.Sprintf(`{"schema_version":1,"mode":"secure_exchange","link":%s}`, link), stlerr.CodeUnsupported},
-		{"missing schema version", fmt.Sprintf(`{"mode":"quick","link":%s}`, link), stlerr.CodeUnsupported},
-		{"plaintext backend with credential", fmt.Sprintf(`{"schema_version":1,"mode":"quick","link":%s,"recipient_secret":{"kind":"ipsec_psk","data":"YQ"}}`, link), stlerr.CodeInvalid},
-		{"unknown nested credential field", fmt.Sprintf(`{"schema_version":1,"mode":"quick","link":%s,"recipient_secret":{"kind":"ipsec_psk","data":"YQ","path":"/etc/passwd"}}`, link), stlerr.CodeInvalid},
-		{"unknown credential kind", fmt.Sprintf(`{"schema_version":1,"mode":"quick","link":%s,"recipient_secret":{"kind":"shell","data":"YQ"}}`, link), stlerr.CodeInvalid},
-		{"duplicate credential data", fmt.Sprintf(`{"schema_version":1,"mode":"quick","link":%s,"recipient_secret":{"kind":"ipsec_psk","data":"YQ","data":"Yg"}}`, link), stlerr.CodeInvalid},
-		{"malformed JSON", fmt.Sprintf(`{"schema_version":1,"mode":"quick","link":%s`, link), stlerr.CodeInvalid},
+		{"trailing JSON", fmt.Sprintf(`{"schema_version":2,"mode":"quick","link":%s} true`, link), stlerr.CodeInvalid},
+		{"unknown root key", fmt.Sprintf(`{"schema_version":2,"mode":"quick","link":%s,"command":"rm -rf /"}`, link), stlerr.CodeInvalid},
+		{"unknown nested key", strings.Replace(fmt.Sprintf(`{"schema_version":2,"mode":"quick","link":%s}`, link), `"underlay":{`, `"underlay":{"command":"execute",`, 1), stlerr.CodeInvalid},
+		{"duplicate exchange mode", fmt.Sprintf(`{"schema_version":2,"mode":"quick","mode":"secure_exchange","link":%s}`, link), stlerr.CodeInvalid},
+		{"duplicate nested local", strings.Replace(fmt.Sprintf(`{"schema_version":2,"mode":"quick","link":%s}`, link), `"underlay":{`, `"underlay":{"local":"198.51.100.3",`, 1), stlerr.CodeInvalid},
+		{"wrong key case", fmt.Sprintf(`{"schema_version":2,"Mode":"quick","link":%s}`, link), stlerr.CodeInvalid},
+		{"array instead of link", `{"schema_version":2,"mode":"quick","link":[]}`, stlerr.CodeInvalid},
+		{"null recipient credential", fmt.Sprintf(`{"schema_version":2,"mode":"quick","link":%s,"recipient_secret":null}`, link), stlerr.CodeInvalid},
+		{"unsupported schema version", fmt.Sprintf(`{"schema_version":3,"mode":"quick","link":%s}`, link), stlerr.CodeUnsupported},
+		{"unsupported exchange mode", fmt.Sprintf(`{"schema_version":2,"mode":"secure_exchange","link":%s}`, link), stlerr.CodeUnsupported},
+		{"missing schema version", fmt.Sprintf(`{"mode":"quick","link":%s}`, link), stlerr.CodeInvalid},
+		{"plaintext backend with credential", fmt.Sprintf(`{"schema_version":2,"mode":"quick","link":%s,"recipient_secret":{"kind":"ipsec_psk","data":"YQ"}}`, link), stlerr.CodeInvalid},
+		{"unknown nested credential field", fmt.Sprintf(`{"schema_version":2,"mode":"quick","link":%s,"recipient_secret":{"kind":"ipsec_psk","data":"YQ","path":"/etc/passwd"}}`, link), stlerr.CodeInvalid},
+		{"unknown credential kind", fmt.Sprintf(`{"schema_version":2,"mode":"quick","link":%s,"recipient_secret":{"kind":"shell","data":"YQ"}}`, link), stlerr.CodeInvalid},
+		{"duplicate credential data", fmt.Sprintf(`{"schema_version":2,"mode":"quick","link":%s,"recipient_secret":{"kind":"ipsec_psk","data":"YQ","data":"Yg"}}`, link), stlerr.CodeInvalid},
+		{"malformed JSON", fmt.Sprintf(`{"schema_version":2,"mode":"quick","link":%s`, link), stlerr.CodeInvalid},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := DecodeSetupLink(encodeRawForTest([]byte(tt.raw)))
+			encoded := encodeRawForTest([]byte(tt.raw))
+			if tt.name == "unsupported schema version" {
+				encoded = encodeRawForVersionTest(3, []byte(tt.raw))
+			}
+			_, err := DecodeSetupLink(encoded)
 			if err == nil || stlerr.CodeOf(err) != tt.code {
 				t.Fatalf("incorrect code/accepted schema: %v", err)
 			}
@@ -87,13 +95,89 @@ func TestMalformedSchemasRejectedEvenWithCorrectIntegrityHash(t *testing.T) {
 		})
 	}
 }
+func TestLegacyV1CompatibilityAndGREMigration(t *testing.T) {
+	t.Run("native_gre_round_trip", func(t *testing.T) {
+		link := testLink(idOne, domain.BackendGRE, domain.EncapNative)
+		raw, err := json.Marshal(wireOffer{SchemaVersion: legacySchemaVersion, Mode: ModeQuick, Link: link})
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := DecodeSetupLink(encodeRawForVersionTest(legacySchemaVersion, raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decoded.Link() != link || decoded.Preview().SchemaVersion != legacySchemaVersion {
+			t.Fatalf("legacy Native GRE changed: %#v", decoded.Preview())
+		}
+		reencoded, err := decoded.EncodeSetupLink()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(reencoded, legacySetupPrefix) {
+			t.Fatalf("legacy setup link did not preserve its schema version: %q", reencoded)
+		}
+		block, err := decoded.HumanReadableBlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(block, "Version: 1\n") || !strings.Contains(block, "Setup link: stl://1.") {
+			t.Fatalf("legacy human-readable version/link mismatch: %q", block)
+		}
+	})
+
+	t.Run("wireguard_secret", func(t *testing.T) {
+		link := testLink(idOne, domain.BackendWireGuard, domain.EncapUDP)
+		credential := wgTestKey()
+		raw, err := json.Marshal(wireOffer{
+			SchemaVersion: legacySchemaVersion, Mode: ModeQuick, Link: link,
+			Recipient: &wireSecret{Kind: CredentialWireGuardPrivateKey, Data: base64.RawURLEncoding.EncodeToString(credential)},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := DecodeSetupLink(encodeRawForVersionTest(legacySchemaVersion, raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(decoded.RecipientCredential(), credential) || decoded.Preview().SchemaVersion != legacySchemaVersion {
+			t.Fatal("legacy WireGuard credential contract changed")
+		}
+	})
+
+	t.Run("gre_fou_requires_regeneration", func(t *testing.T) {
+		link := testLink(idOne, domain.BackendGRE, domain.EncapFOU)
+		link.GRE = domain.GREOptions{} // v1 had no field for the now-required UDP port.
+		raw, err := json.Marshal(wireOffer{SchemaVersion: legacySchemaVersion, Mode: ModeQuick, Link: link})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = DecodeSetupLink(encodeRawForVersionTest(legacySchemaVersion, raw))
+		if err == nil || stlerr.CodeOf(err) != stlerr.CodeUnsupported || !strings.Contains(err.Error(), "regenerate") {
+			t.Fatalf("legacy GRE/FOU migration was not explicit: %v", err)
+		}
+	})
+
+	t.Run("v1_rejects_v2_gre_extension", func(t *testing.T) {
+		link := testLink(idOne, domain.BackendGRE, domain.EncapNative)
+		link.GRE = domain.GREOptions{KeyEnabled: true, Key: 7}
+		raw, err := json.Marshal(wireOffer{SchemaVersion: legacySchemaVersion, Mode: ModeQuick, Link: link})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = DecodeSetupLink(encodeRawForVersionTest(legacySchemaVersion, raw))
+		if err == nil || stlerr.CodeOf(err) != stlerr.CodeInvalid {
+			t.Fatalf("v1 accepted v2-only GRE fields: %v", err)
+		}
+	})
+}
+
 func TestCredentialBackendKindAndEncodingTampering(t *testing.T) {
 	linkJSON, err := json.Marshal(testLink(idOne, domain.BackendWireGuard, domain.EncapUDP))
 	if err != nil {
 		t.Fatal(err)
 	}
 	link := string(linkJSON)
-	base := `{"schema_version":1,"mode":"quick","link":%s,"recipient_secret":{"kind":%s,"data":%s}}`
+	base := `{"schema_version":2,"mode":"quick","link":%s,"recipient_secret":{"kind":%s,"data":%s}}`
 	cases := []struct{ name, kind, data string }{
 		{"wrong kind", `"ipsec_psk"`, fmt.Sprintf("%q", base64.RawURLEncoding.EncodeToString(wgTestKey()))},
 		{"missing kind", `""`, fmt.Sprintf("%q", base64.RawURLEncoding.EncodeToString(wgTestKey()))},
@@ -115,7 +199,7 @@ func TestRejectMalformedEscapedUTF16Surrogates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := fmt.Sprintf(`{"schema_version":1,"mode":"quick","link":%s}`, linkJSON)
+	base := fmt.Sprintf(`{"schema_version":2,"mode":"quick","link":%s}`, linkJSON)
 	original := `"display_name":"Production Link / Test"`
 	for _, tc := range []struct{ name, literal string }{
 		{"lone_high", `"\uD83D"`},
@@ -147,7 +231,7 @@ func TestValidJSONUnicodeEscapesPreservePairingMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := fmt.Sprintf(`{"schema_version":1,"mode":"quick","link":%s}`, linkJSON)
+	base := fmt.Sprintf(`{"schema_version":2,"mode":"quick","link":%s}`, linkJSON)
 	for _, tc := range []struct{ name, literal, want string }{
 		{"surrogate_pair", `"\uD83D\uDE00"`, "😀"},
 		{"literal_replacement_character", `"�"`, "�"},
@@ -180,7 +264,7 @@ func TestValidJSONUnicodeEscapesPreservePairingMetadata(t *testing.T) {
 }
 
 func TestInvalidUTF8IsNotSilentlyRewritten(t *testing.T) {
-	raw := []byte("{\"schema_version\":1,\"mode\":\"quick\",\"link\":{\"display_name\":\"")
+	raw := []byte("{\"schema_version\":2,\"mode\":\"quick\",\"link\":{\"display_name\":\"")
 	raw = append(raw, 0xff)
 	raw = append(raw, []byte("\"}}")...)
 	_, err := DecodeSetupLink(encodeRawForTest(raw))

@@ -14,6 +14,7 @@ import (
 
 	"github.com/ach1992/simple-tun-link/internal/app"
 	"github.com/ach1992/simple-tun-link/internal/backend"
+	grebackend "github.com/ach1992/simple-tun-link/internal/backend/gre"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
@@ -103,6 +104,19 @@ func runWithRuntime(args []string, stdout, stderr io.Writer, options *runtimeOpt
 // the normal lifecycle CLI. Missing backends fail explicitly, not silently.
 func productionRuntimeOptions() (*runtimeOptions, error) {
 	options := &runtimeOptions{stateRoot: state.DefaultRoot}
+	runner := linux.ExecRunner{}
+	locks := state.NewLockManager(options.stateRoot)
+	gre, err := grebackend.New(grebackend.Options{
+		Runner:     runner,
+		Routes:     linux.RouteResolver{Runner: runner},
+		Firewall:   linux.IPTablesFirewall{Runner: runner, Locks: locks},
+		Collisions: linux.CollisionInspector{Snapshotter: linux.HostSnapshotter{Runner: runner}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("initialize GRE backend: %w", err)
+	}
+	options.backends = []backend.Backend{gre}
+
 	info, err := os.Stat("/run/systemd/system")
 	switch {
 	case err == nil && info.IsDir():

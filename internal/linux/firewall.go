@@ -81,24 +81,79 @@ type IPTablesFirewall struct {
 	IP6TablesBinary string
 }
 
+// InboundFirewallClaim returns the exact secret-free ownership claim for one
+// STL-managed inbound rule so backend resource plans and firewall mutation use
+// the same identity.
+func InboundFirewallClaim(id domain.LinkID, rule InboundFirewallRule) (domain.ResourceClaim, error) {
+	if err := id.Validate(); err != nil {
+		return domain.ResourceClaim{}, err
+	}
+	if err := rule.Validate(); err != nil {
+		return domain.ResourceClaim{}, err
+	}
+	return firewallClaim(id, rule), nil
+}
+
+// HasInbound is a read-only exact ownership check for the rule managed by
+// EnsureInbound/RemoveInbound.
+func (f IPTablesFirewall) HasInbound(ctx context.Context, id domain.LinkID, rule InboundFirewallRule) (bool, error) {
+	if err := id.Validate(); err != nil {
+		return false, err
+	}
+	if err := rule.Validate(); err != nil {
+		return false, err
+	}
+	if f.Runner == nil {
+		return false, fmt.Errorf("firewall runner is required")
+	}
+	return f.ruleExists(ctx, f.binary(rule.Peer), firewallRuleArgs(id, rule))
+}
+
+// HasOwnedInbound reports whether the INPUT chain still contains any rule
+// carrying this Link's STL ownership marker. Backends use it to fail closed
+// when route changes prevent reconstructing the exact original rule.
+func (f IPTablesFirewall) HasOwnedInbound(ctx context.Context, id domain.LinkID, ipv6 bool) (bool, error) {
+	if err := id.Validate(); err != nil {
+		return false, err
+	}
+	if f.Runner == nil {
+		return false, fmt.Errorf("firewall runner is required")
+	}
+	binary := f.IPTablesBinary
+	if ipv6 {
+		binary = f.IP6TablesBinary
+	}
+	if binary == "" {
+		if ipv6 {
+			binary = "ip6tables"
+		} else {
+			binary = "iptables"
+		}
+	}
+	result, err := f.Runner.Run(ctx, binary, "-w", firewallWaitSeconds, "-S", "INPUT")
+	if err != nil {
+		return false, fmt.Errorf("list INPUT firewall rules: %w", err)
+	}
+	prefix := "stl:" + string(id) + ":"
+	for _, line := range strings.Split(string(result.Stdout), "\n") {
+		fields := strings.Fields(line)
+		for i := 0; i+1 < len(fields); i++ {
+			if fields[i] == "--comment" && strings.HasPrefix(strings.Trim(fields[i+1], "\"'"), prefix) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
 // EnsureInbound ensures one exact STL-owned allow rule. New rules are appended
 // so pre-existing administrator policy keeps precedence. The returned undo
 // removes only a rule added by this call. No chain flush, policy change, or
 // unrelated rule mutation is ever performed.
 func (f IPTablesFirewall) EnsureInbound(ctx context.Context, id domain.LinkID, rule InboundFirewallRule) (func(context.Context) error, bool, error) {
-	if err := id.Validate(); err != nil {
+	if err := f.validateMutation(id, rule, true); err != nil {
 		return nil, false, err
 	}
-	if err := rule.Validate(); err != nil {
-		return nil, false, err
-	}
-	if f.Runner == nil {
-		return nil, false, fmt.Errorf("firewall runner is required")
-	}
-	if f.Locks == nil {
-		return nil, false, fmt.Errorf("firewall lock manager is required")
-	}
-
 	claim := firewallClaim(id, rule)
 	release, err := f.Locks.Acquire(ctx, []domain.ResourceClaim{claim})
 	if err != nil {
@@ -106,6 +161,32 @@ func (f IPTablesFirewall) EnsureInbound(ctx context.Context, id domain.LinkID, r
 	}
 	defer release()
 
+	undoLocked, changed, err := f.EnsureInboundLocked(ctx, id, rule)
+	if err != nil {
+		return nil, false, err
+	}
+	undo := func(undoCtx context.Context) error {
+		if err := undoCtx.Err(); err != nil {
+			return err
+		}
+		undoRelease, err := f.Locks.Acquire(undoCtx, []domain.ResourceClaim{claim})
+		if err != nil {
+			return err
+		}
+		defer undoRelease()
+		return undoLocked(undoCtx)
+	}
+	return undo, changed, nil
+}
+
+// EnsureInboundLocked performs the exact mutation without acquiring the
+// firewall resource lock. It is for callers such as the canonical Engine that
+// already hold InboundFirewallClaim for the full apply/rollback transaction.
+// The returned undo likewise assumes that same ownership lock remains held.
+func (f IPTablesFirewall) EnsureInboundLocked(ctx context.Context, id domain.LinkID, rule InboundFirewallRule) (func(context.Context) error, bool, error) {
+	if err := f.validateMutation(id, rule, false); err != nil {
+		return nil, false, err
+	}
 	binary := f.binary(rule.Peer)
 	args := firewallRuleArgs(id, rule)
 	exists, err := f.ruleExists(ctx, binary, args)
@@ -140,11 +221,6 @@ func (f IPTablesFirewall) EnsureInbound(ctx context.Context, id domain.LinkID, r
 		if err := undoCtx.Err(); err != nil {
 			return err
 		}
-		undoRelease, err := f.Locks.Acquire(undoCtx, []domain.ResourceClaim{claim})
-		if err != nil {
-			return err
-		}
-		defer undoRelease()
 		return f.deleteIfPresent(undoCtx, binary, args)
 	}
 	return undo, true, nil
@@ -155,26 +231,25 @@ func (f IPTablesFirewall) EnsureInbound(ctx context.Context, id domain.LinkID, r
 // command or its verification is ambiguous, the operation reports failure and
 // attempts to restore the exact pre-operation owned rule.
 func (f IPTablesFirewall) RemoveInbound(ctx context.Context, id domain.LinkID, rule InboundFirewallRule) (bool, error) {
-	if err := id.Validate(); err != nil {
+	if err := f.validateMutation(id, rule, true); err != nil {
 		return false, err
 	}
-	if err := rule.Validate(); err != nil {
-		return false, err
-	}
-	if f.Runner == nil {
-		return false, fmt.Errorf("firewall runner is required")
-	}
-	if f.Locks == nil {
-		return false, fmt.Errorf("firewall lock manager is required")
-	}
-
 	claim := firewallClaim(id, rule)
 	release, err := f.Locks.Acquire(ctx, []domain.ResourceClaim{claim})
 	if err != nil {
 		return false, err
 	}
 	defer release()
+	return f.RemoveInboundLocked(ctx, id, rule)
+}
 
+// RemoveInboundLocked is the caller-held-lock counterpart of RemoveInbound.
+// The caller must hold InboundFirewallClaim throughout mutation and any
+// compensation so Engine resource locking is never recursively reacquired.
+func (f IPTablesFirewall) RemoveInboundLocked(ctx context.Context, id domain.LinkID, rule InboundFirewallRule) (bool, error) {
+	if err := f.validateMutation(id, rule, false); err != nil {
+		return false, err
+	}
 	binary := f.binary(rule.Peer)
 	args := firewallRuleArgs(id, rule)
 	exists, err := f.ruleExists(ctx, binary, args)
@@ -202,6 +277,22 @@ func (f IPTablesFirewall) RemoveInbound(ctx context.Context, id domain.LinkID, r
 		return false, fmt.Errorf("STL firewall rule still exists after exact delete")
 	}
 	return true, nil
+}
+
+func (f IPTablesFirewall) validateMutation(id domain.LinkID, rule InboundFirewallRule, requireLocks bool) error {
+	if err := id.Validate(); err != nil {
+		return err
+	}
+	if err := rule.Validate(); err != nil {
+		return err
+	}
+	if f.Runner == nil {
+		return fmt.Errorf("firewall runner is required")
+	}
+	if requireLocks && f.Locks == nil {
+		return fmt.Errorf("firewall lock manager is required")
+	}
+	return nil
 }
 
 func (f IPTablesFirewall) binary(peer netip.Addr) string {
