@@ -15,6 +15,7 @@ type Route struct {
 	Source  netip.Addr
 	Device  string
 	Gateway netip.Addr
+	MTU     int // Optional route-specific PMTU; zero means unspecified.
 }
 
 type RouteResolver struct {
@@ -28,6 +29,10 @@ type ipRoute struct {
 	Device      string `json:"dev"`
 	Preferred   string `json:"prefsrc"`
 	Source      string `json:"src"`
+	MTU         int    `json:"mtu"`
+	Metrics     struct {
+		MTU int `json:"mtu"`
+	} `json:"metrics"`
 }
 
 // Resolve asks the kernel for the route to the actual peer instead of guessing
@@ -91,7 +96,15 @@ func (r RouteResolver) Resolve(ctx context.Context, peer netip.Addr) (Route, err
 		}
 	}
 
+	if row.MTU < 0 || row.Metrics.MTU < 0 {
+		return Route{}, fmt.Errorf("route lookup reported an invalid MTU")
+	}
+	mtu := row.MTU
+	if row.Metrics.MTU > 0 && (mtu == 0 || row.Metrics.MTU < mtu) {
+		mtu = row.Metrics.MTU
+	}
 	return Route{
+		MTU:     mtu,
 		Peer:    peer,
 		Source:  source,
 		Device:  row.Device,

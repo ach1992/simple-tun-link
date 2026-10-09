@@ -14,19 +14,21 @@ with root outcomes in PROJECT-SPEC.md and behavior in ARCHITECTURE.md.
 - A conservative fallback that is **never described as measured**.
 - Short, bounded Link Address probe aggregation for loss, RTT and jitter.
 - One versioned `Report` with a shared human-readable `Summary()`.
-- Test-only fake DF-probe adapters and deterministic behavior/failure tests.
+- A Linux read-only probe and route-aware preflight adapter, using the same
+  common report and algorithm, without hardcoding backend overhead.
 
-It does **not** modify any network state. It does not execute system commands,
-configure the tunnel, trigger repair, install a probe tool, store credentials,
-create host probes, or claim live tunnel reachability. Real Linux/backend
-integration follows Issue #3 and backend Issues #4–#7.
+The pure core is OS-independent. The optional Linux adapter executes bounded
+read-only inspection commands and ICMP echo probes but **never modifies**
+network state, applies MTU, repairs a tunnel, installs software, stores keys
+or claims live backend E2E acceptance. Binding the real backend interface and
+overhead is owned by Issues #4–#7; release E2E by Issue #12.
 
 ## Measurement contract
 
 `DFProber.Probe(ctx, link, packetBytes)` measures an **inner IPv4
 datagram**, with `packetBytes` including the 20-byte IPv4 and 8-byte
 ICMP echo headers. The destination must be the **peer Link Address** for the
-specific stable Link ID, not merely the public underlay address. A future
+specific stable Link ID, not merely the public underlay address. The Linux
 iputils ping adapter uses `-s (packetBytes - 28)` and ensures
 non-fragmenting/DF probing. See the
 [Linux ping documentation](https://man7.org/linux/man-pages/man8/ping.8.html).
@@ -43,6 +45,47 @@ A tool execution failure or canceled/deadlined adapter operation is **not**
 a received reply or automatically a lost packet. Probes must honor the
 supplied context and its child deadline. Probe implementations remain
 read-only, Link-scoped, and limited to the authorized selected interface.
+
+## Linux read-only adapter
+
+`PreflightLinux(ctx, link, opts)` resolves the actual route toward the
+**underlay peer**, requires the kernel-selected source to match the requested
+underlay source, then checks that the selected backend-supplied Link interface
+is UP and owns the exact local IPv4 Link prefix. The physical underlay device
+must also be UP. Underlay MTU comes from the kernel's physical route-device
+MTU, restricted by any explicit route MTU metric. Backend overhead is required,
+positive, and passed from the backend; no common encapsulation guesses apply.
+Missing or mismatched state fails closed before any active probes.
+
+`NewLinuxDFProber` binds one Link ID and Link Address pair to its selected
+interface. A single DF echo is executed with separated argv (no shell),
+using the supported Linux `env` tool to set `LC_ALL=C` for deterministic
+`iputils ping` parsing. It forces IPv4, disables name lookup, sends exactly
+one echo with `-M do`, uses `-s (packetBytes - 28)`, and binds both
+`-I <Link-interface>` and `-I <local-Link-IP>`. The destination is the
+peer Link IP, **never the underlay peer IP**.
+
+A reply is accepted only with a confirmed one-packet summary, matching peer
+address/sequence and parseable RTT. Definite local or remote fragmentation
+returns `too_large`; a verified sent-but-unanswered summary returns
+`timeout`. Unsupported/missing tooling or malformed output cannot become
+a successful measurement or established MTU ceiling. Arbitrary command
+output/errors are not propagated into the versioned report. Cancellation
+prevents further probes.
+
+`ObserveLinux` composes this adapter with the common read-only
+`Observe` decision/report model. Missing backend capability/counter hooks
+and operator integration are still distinct acceptance work.
+
+Optional nonprivileged runtime verification uses only the local loopback
+interface, without sending packets to external destinations:
+
+~~~sh
+STL_LIVE_LOOPBACK_PING=1 go test ./internal/diagnostics -run '^TestLinuxDFProberLoopbackSmoke$' -count=1
+~~~
+
+This verifies iputils syntax and parser behavior, **not** real Link
+data-plane reachability, FOU/GUE or multi-Link E2E acceptance.
 
 ## MTU policy
 
@@ -125,16 +168,15 @@ with its separate authorization/ownership checks.
 
 ## Remaining Issue #9 implementation
 
-The current core is not full Issue #9 completion. Still required:
+This Linux adapter does not complete Issue #9. Still required:
 
-- Runtime capability/tool/module preflight reuse from the common Linux layer;
-- Real read-only Linux DF probe adapter bound to Link Address/interface;
-- Backend-provided worst-case overhead and safe MTU application mapping;
-- Integration with backend state/counter observations (#4–#7);
-- Operator diagnostics/JSON commands and optional throughput tests (#10);
-- Namespace/live Link reachability, PMTU and Multi-Link isolation verification
-  in the E2E harness (#12).
+- Link-scoped backend interface/overhead/capability integration and tooling
+  preflight with explicit missing/unsupported capability reporting (#4–#7);
+- Safe MTU application through the Engine, never from health observation;
+- Backend state/counter integration (#4–#7);
+- Operator diagnostics/JSON entry points and optional throughput path (#10);
+- Live namespace Link Address/PMTU, multi-Link isolation and release E2E (#12).
 
-The independent core can be reviewed and merged separately once its own
-review/integration gates pass. Do not close Issue #9 until the actual
-diagnostic and operator acceptance requirements are proven.
+The Linux adapter is independently reviewable without touching the
+in-flight privileged GRE candidate. Keep Issue #9 OPEN until remaining
+acceptance is genuinely completed.

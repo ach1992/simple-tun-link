@@ -79,3 +79,27 @@ func TestRouteResolverPropagatesCommandFailure(t *testing.T) {
 		t.Fatalf("err = %v, want wrapped command failure", err)
 	}
 }
+
+func TestRouteResolverReportsOptionalRouteMTU(t *testing.T) {
+	cases := []struct {
+		name    string
+		json    string
+		wantMTU int
+		wantErr bool
+	}{
+		{"top level", `[{"dst":"203.0.113.9","dev":"eth0","prefsrc":"192.0.2.10","mtu":1410}]`, 1410, false},
+		{"nested metric", `[{"dst":"203.0.113.9","dev":"eth0","prefsrc":"192.0.2.10","metrics":{"mtu":1390}}]`, 1390, false},
+		{"both use lower", `[{"dst":"203.0.113.9","dev":"eth0","prefsrc":"192.0.2.10","mtu":1450,"metrics":{"mtu":1390}}]`, 1390, false},
+		{"not specified", `[{"dst":"203.0.113.9","dev":"eth0","prefsrc":"192.0.2.10"}]`, 0, false},
+		{"invalid negative", `[{"dst":"203.0.113.9","dev":"eth0","prefsrc":"192.0.2.10","mtu":-1}]`, 0, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &fakeRunner{result: CommandResult{Stdout: []byte(tc.json)}}
+			route, err := (RouteResolver{Runner: runner}).Resolve(context.Background(), netip.MustParseAddr("203.0.113.9"))
+			if (err != nil) != tc.wantErr || (err == nil && route.MTU != tc.wantMTU) {
+				t.Fatalf("Route.MTU=%d err=%v; want %d error=%v", route.MTU, err, tc.wantMTU, tc.wantErr)
+			}
+		})
+	}
+}
