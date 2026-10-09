@@ -513,7 +513,7 @@ func TestFOURejectsForeignReceivePortMapping(t *testing.T) {
 	}
 }
 
-func TestNativeGRELookupFailureReturnsSafeRollbackForCreatedInterface(t *testing.T) {
+func TestNativeGRELookupFailurePreservesUnindexedCreatedInterface(t *testing.T) {
 	link := testLink()
 	name, _ := InterfaceName(link.ID)
 	runner := &fakeRunner{link: link, name: name}
@@ -528,10 +528,7 @@ func TestNativeGRELookupFailureReturnsSafeRollbackForCreatedInterface(t *testing
 			return nil
 		},
 		DeleteLink: func(_ context.Context, index int) error {
-			if index != 77 {
-				return fmt.Errorf("wrong rollback index %d", index)
-			}
-			runner.state = observedLink{}
+			t.Fatalf("unindexed interface must not be destructively deleted by ifindex %d", index)
 			return nil
 		},
 	})
@@ -555,11 +552,11 @@ func TestNativeGRELookupFailureReturnsSafeRollbackForCreatedInterface(t *testing
 	if err == nil || undo == nil {
 		t.Fatalf("lookup failure did not return rollback: %v", err)
 	}
-	if err := undo(context.Background()); err != nil {
-		t.Fatal(err)
+	if err := undo(context.Background()); err == nil || !strings.Contains(err.Error(), "preserving") {
+		t.Fatalf("unindexed rollback did not fail closed: %v", err)
 	}
-	if runner.state.Exists {
-		t.Fatal("created unowned GRE interface survived rollback")
+	if !runner.state.Exists {
+		t.Fatal("unindexed created interface was destructively removed")
 	}
 }
 
@@ -682,5 +679,75 @@ func TestNativeGRERollbackRevalidatesOwnershipBeforeDelete(t *testing.T) {
 	}
 	if !runner.state.Exists || runner.state.Owner != foreignOwner {
 		t.Fatalf("rollback deleted or changed foreign-owned interface: %#v", runner.state)
+	}
+}
+
+func TestNativeGRERollbackBeforeAddressAssignmentDeletesOnlyUntouchedCreatedState(t *testing.T) {
+	link := testLink()
+	name, _ := InterfaceName(link.ID)
+	runner := &fakeRunner{link: link, name: name}
+	firewall := &fakeFirewall{}
+	b := newTestBackend(t, runner, firewall, fakeCollisions{})
+	b.addAddress = func(context.Context, int, netip.Prefix) error {
+		return errors.New("address add failed")
+	}
+
+	ctx := context.Background()
+	req := core.Request{Operation: core.OperationEnsure, Link: link}
+	obs, err := b.Inspect(ctx, link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := b.Plan(ctx, req, obs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Validate(ctx, req, obs, candidate); err != nil {
+		t.Fatal(err)
+	}
+	undo, err := b.Apply(ctx, req, obs, candidate)
+	if err == nil || undo == nil {
+		t.Fatalf("address failure did not return rollback: %v", err)
+	}
+	if err := undo(context.Background()); err != nil {
+		t.Fatalf("rollback of untouched pre-address state failed: %v", err)
+	}
+	if runner.state.Exists {
+		t.Fatal("created GRE interface survived safe pre-address rollback")
+	}
+}
+
+func TestNativeGRERollbackPreservesUnexpectedAdditionalAddress(t *testing.T) {
+	link := testLink()
+	name, _ := InterfaceName(link.ID)
+	runner := &fakeRunner{link: link, name: name}
+	firewall := &fakeFirewall{failEnsure: true}
+	b := newTestBackend(t, runner, firewall, fakeCollisions{})
+
+	ctx := context.Background()
+	req := core.Request{Operation: core.OperationEnsure, Link: link}
+	obs, err := b.Inspect(ctx, link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := b.Plan(ctx, req, obs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Validate(ctx, req, obs, candidate); err != nil {
+		t.Fatal(err)
+	}
+	undo, err := b.Apply(ctx, req, obs, candidate)
+	if err == nil || undo == nil {
+		t.Fatalf("expected post-create firewall failure: %v", err)
+	}
+
+	external := netip.MustParsePrefix("10.80.21.10/32")
+	runner.state.IPv4Addresses = append(runner.state.IPv4Addresses, external)
+	if err := undo(context.Background()); err == nil || !strings.Contains(err.Error(), "preserving") {
+		t.Fatalf("rollback accepted independently changed address state: %v", err)
+	}
+	if !runner.state.Exists || !slices.Contains(runner.state.IPv4Addresses, external) {
+		t.Fatalf("rollback destroyed independently added address/state: %#v", runner.state)
 	}
 }

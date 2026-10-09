@@ -29,10 +29,18 @@ func (b *Backend) Apply(ctx context.Context, req core.Request, observed core.Obs
 	}
 }
 
+type creationProgress struct {
+	IfIndex           int
+	Created           bool
+	OwnershipMarked   bool
+	AddressAttempted  bool
+	AddressAssigned   bool
+	UpAttempted       bool
+	UpConfirmed       bool
+}
+
 func (b *Backend) applyEnsure(ctx context.Context, req core.Request, obs observation, p plan) (core.Rollback, error) {
-	createdIndex := 0
-	interfaceCreated := false
-	ownershipMarked := false
+	progress := creationProgress{}
 	fouCreated := false
 	var firewallUndo func(context.Context) error
 	rollback := func(undoCtx context.Context) error {
@@ -40,12 +48,8 @@ func (b *Backend) applyEnsure(ctx context.Context, req core.Request, obs observa
 		if firewallUndo != nil {
 			errs = append(errs, firewallUndo(undoCtx))
 		}
-		if interfaceCreated {
-			if createdIndex > 0 {
-				errs = append(errs, b.rollbackCreatedInterface(undoCtx, req.Link, p.name, createdIndex, ownershipMarked))
-			} else {
-				errs = append(errs, b.deleteUnownedCreatedInterface(undoCtx, req.Link, p.name))
-			}
+		if progress.Created {
+			errs = append(errs, b.rollbackCreatedInterface(undoCtx, req.Link, p.name, progress))
 		}
 		if fouCreated {
 			_, err := b.deleteFOU(undoCtx, p.fouMapping)
@@ -65,8 +69,8 @@ func (b *Backend) applyEnsure(ctx context.Context, req core.Request, obs observa
 		if obs.Target.Exists {
 			return rollback, fmt.Errorf("GRE repair requires explicit reconciliation")
 		}
-		index, created, owned, err := b.createOwnedInterface(ctx, req.Link, p.name)
-		createdIndex, interfaceCreated, ownershipMarked = index, created, owned
+		var err error
+		progress, err = b.createOwnedInterface(ctx, req.Link, p.name)
 		if err != nil {
 			return rollback, err
 		}
@@ -92,7 +96,7 @@ func (b *Backend) applyRemove(ctx context.Context, req core.Request, _ observati
 			errs = append(errs, err)
 		}
 		if interfaceRemoved {
-			_, _, _, err := b.createOwnedInterface(undoCtx, req.Link, p.name)
+			_, err := b.createOwnedInterface(undoCtx, req.Link, p.name)
 			errs = append(errs, err)
 		}
 		if firewallRemoved {
@@ -133,56 +137,74 @@ func (b *Backend) applyRemove(ctx context.Context, req core.Request, _ observati
 	return rollback, nil
 }
 
-func (b *Backend) createOwnedInterface(ctx context.Context, link domain.Link, name string) (int, bool, bool, error) {
+func (b *Backend) createOwnedInterface(ctx context.Context, link domain.Link, name string) (creationProgress, error) {
+	progress := creationProgress{}
 	args := []string{"link", "add", name}
 	args = append(args, greTypeArgs(link)...)
 	if _, err := b.runner.Run(ctx, b.ipBinary, args...); err != nil {
-		return 0, false, false, fmt.Errorf("create GRE interface: %w", err)
+		return progress, fmt.Errorf("create GRE interface: %w", err)
 	}
+	progress.Created = true
 
 	// The successful exclusive name add proves that this operation created an
 	// interface at that instant. From here onward we capture and use its kernel
-	// ifindex, and revalidate name/index/configuration before ownership marking.
+	// ifindex, and revalidate identity/configuration plus the creation stage
+	// before every later mutation and any destructive rollback.
 	index, err := b.lookupIndex(name)
 	if err != nil || index <= 0 {
-		return 0, true, false, fmt.Errorf("resolve created GRE interface identity: %w", err)
+		return progress, fmt.Errorf("resolve created GRE interface identity: %w", err)
 	}
-	if _, err := b.verifyCreatedInterface(ctx, link, name, index, ""); err != nil {
-		return index, true, false, err
+	progress.IfIndex = index
+	state, err := b.verifyCreatedInterface(ctx, link, name, index, "")
+	if err != nil {
+		return progress, err
+	}
+	if !rollbackStateMatchesCreationProgress(state, link, name, progress) {
+		return progress, fmt.Errorf("created GRE interface gained unexpected state before ownership marking; preserving current host state")
 	}
 
 	owner, err := linux.OwnerTag(link.ID)
 	if err != nil {
-		return index, true, false, err
+		return progress, err
 	}
 	if err := b.setAlias(ctx, index, owner); err != nil {
-		return index, true, false, fmt.Errorf("mark GRE interface ownership: %w", err)
+		return progress, fmt.Errorf("mark GRE interface ownership: %w", err)
 	}
-	if _, err := b.verifyCreatedInterface(ctx, link, name, index, link.ID); err != nil {
-		return index, true, true, err
-	}
-
-	if err := b.addAddress(ctx, index, link.Addresses.Local); err != nil {
-		return index, true, true, fmt.Errorf("assign GRE Link Address: %w", err)
-	}
-	state, err := b.verifyCreatedInterface(ctx, link, name, index, link.ID)
-	if err != nil {
-		return index, true, true, err
-	}
-	if len(state.IPv4Addresses) != 1 || state.IPv4Addresses[0] != link.Addresses.Local {
-		return index, true, true, fmt.Errorf("verify GRE Link Address: created interface address changed or is ambiguous")
-	}
-	if err := b.setUp(ctx, index); err != nil {
-		return index, true, true, fmt.Errorf("activate GRE interface: %w", err)
-	}
+	progress.OwnershipMarked = true
 	state, err = b.verifyCreatedInterface(ctx, link, name, index, link.ID)
 	if err != nil {
-		return index, true, true, err
+		return progress, err
 	}
-	if !state.matches(link, name) {
-		return index, true, true, fmt.Errorf("verify activated GRE interface: final state changed or is incomplete")
+	if !rollbackStateMatchesCreationProgress(state, link, name, progress) {
+		return progress, fmt.Errorf("created GRE interface gained unexpected state before address assignment; preserving current host state")
 	}
-	return index, true, true, nil
+
+	progress.AddressAttempted = true
+	if err := b.addAddress(ctx, index, link.Addresses.Local); err != nil {
+		return progress, fmt.Errorf("assign GRE Link Address: %w", err)
+	}
+	progress.AddressAssigned = true
+	state, err = b.verifyCreatedInterface(ctx, link, name, index, link.ID)
+	if err != nil {
+		return progress, err
+	}
+	if !rollbackStateMatchesCreationProgress(state, link, name, progress) {
+		return progress, fmt.Errorf("verify GRE Link Address: created interface address state changed or is ambiguous")
+	}
+
+	progress.UpAttempted = true
+	if err := b.setUp(ctx, index); err != nil {
+		return progress, fmt.Errorf("activate GRE interface: %w", err)
+	}
+	progress.UpConfirmed = true
+	state, err = b.verifyCreatedInterface(ctx, link, name, index, link.ID)
+	if err != nil {
+		return progress, err
+	}
+	if !state.matches(link, name) || !rollbackStateMatchesCreationProgress(state, link, name, progress) {
+		return progress, fmt.Errorf("verify activated GRE interface: final state changed or is incomplete")
+	}
+	return progress, nil
 }
 
 func (b *Backend) verifyCreatedInterface(ctx context.Context, link domain.Link, name string, index int, expectedOwner domain.LinkID) (observedLink, error) {
@@ -198,7 +220,52 @@ func (b *Backend) verifyCreatedInterface(ctx context.Context, link domain.Link, 
 	return state, nil
 }
 
-func (b *Backend) rollbackCreatedInterface(ctx context.Context, link domain.Link, name string, index int, ownershipMarked bool) error {
+func rollbackStateMatchesCreationProgress(state observedLink, link domain.Link, name string, progress creationProgress) bool {
+	if !state.Exists || state.Name != name || state.IfIndex != progress.IfIndex || !state.matchesConfigurationBeforeOwnership(link, name) {
+		return false
+	}
+	expectedOwner := domain.LinkID("")
+	if progress.OwnershipMarked {
+		expectedOwner = link.ID
+	}
+	if state.Owner != expectedOwner {
+		return false
+	}
+
+	switch {
+	case !progress.AddressAttempted:
+		if len(state.IPv4Addresses) != 0 {
+			return false
+		}
+	case progress.AddressAssigned:
+		if len(state.IPv4Addresses) != 1 || state.IPv4Addresses[0] != link.Addresses.Local {
+			return false
+		}
+	default:
+		// An address mutation that returned an error may still be ambiguous.
+		// Only the pre-attempt state or the exact intended address is
+		// attributable to this operation; any other/additional address is not.
+		if len(state.IPv4Addresses) > 1 ||
+			(len(state.IPv4Addresses) == 1 && state.IPv4Addresses[0] != link.Addresses.Local) {
+			return false
+		}
+	}
+
+	switch {
+	case !progress.UpAttempted:
+		return !state.Up
+	case progress.UpConfirmed:
+		return state.Up
+	default:
+		// A failed/ambiguous up mutation can legitimately leave either state.
+		return true
+	}
+}
+
+func (b *Backend) rollbackCreatedInterface(ctx context.Context, link domain.Link, name string, progress creationProgress) error {
+	if progress.IfIndex <= 0 {
+		return b.preserveUnindexedCreatedInterface(ctx, link, name)
+	}
 	fresh, err := b.Inspect(ctx, link)
 	if err != nil {
 		return fmt.Errorf("inspect GRE interface before rollback: %w", err)
@@ -207,39 +274,29 @@ func (b *Backend) rollbackCreatedInterface(ctx context.Context, link domain.Link
 	state := obs.Target
 	if !state.Exists {
 		for _, candidate := range obs.Links {
-			if candidate.IfIndex == index {
+			if candidate.IfIndex == progress.IfIndex {
 				return fmt.Errorf("created GRE ifindex now identifies different state; preserving current host state")
 			}
 		}
 		return nil
 	}
-	expectedOwner := domain.LinkID("")
-	if ownershipMarked {
-		expectedOwner = link.ID
+	if !rollbackStateMatchesCreationProgress(state, link, name, progress) {
+		return fmt.Errorf("created GRE interface state changed before rollback; preserving current host state")
 	}
-	if state.IfIndex != index || state.Owner != expectedOwner || !state.matchesConfigurationBeforeOwnership(link, name) {
-		return fmt.Errorf("created GRE interface identity changed before rollback; preserving current host state")
-	}
-	if err := b.deleteLink(ctx, index); err != nil {
+	if err := b.deleteLink(ctx, progress.IfIndex); err != nil {
 		return fmt.Errorf("delete created GRE interface during rollback: %w", err)
 	}
 	return nil
 }
 
-func (b *Backend) deleteUnownedCreatedInterface(ctx context.Context, link domain.Link, name string) error {
+func (b *Backend) preserveUnindexedCreatedInterface(ctx context.Context, link domain.Link, name string) error {
 	fresh, err := b.Inspect(ctx, link)
 	if err != nil {
-		return fmt.Errorf("inspect GRE interface for rollback: %w", err)
+		return fmt.Errorf("inspect unindexed GRE interface for rollback: %w", err)
 	}
 	state := fresh.(observation).Target
 	if !state.Exists {
 		return nil
 	}
-	if state.Owner != "" || !state.matchesConfigurationBeforeOwnership(link, name) {
-		return fmt.Errorf("created GRE interface identity is ambiguous; preserving current state")
-	}
-	if err := b.deleteLink(ctx, state.IfIndex); err != nil {
-		return fmt.Errorf("delete unowned created GRE interface: %w", err)
-	}
-	return nil
+	return fmt.Errorf("created GRE interface identity was never captured; preserving current host state for explicit reconciliation")
 }
