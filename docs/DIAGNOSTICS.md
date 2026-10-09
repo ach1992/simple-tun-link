@@ -120,6 +120,23 @@ ifindex, foreign interface, malformed counter identities, and cancellation.
 These tests do **not** claim real FOU/GUE data-plane acceptance (Issue #4),
 CLI/operator commands (Issue #10), or release E2E (Issue #12).
 
+## GRE operator diagnostic command
+
+`stl link diagnose <link-id> [--mtu <inner-ipv4-bytes>] [--json]`
+requires a saved Link and an actually verified GRE backend. It composes the
+existing read-only capability/counter checks with the Linux Link-bound ICMP
+DF probe and produces the same secret-safe, versioned report. The optional
+manual MTU value is checked against the real underlay-MTU-minus-GRE-overhead
+ceiling and is **never applied automatically**. Invalid/unsupported/unknown
+state yields a structured nonzero CLI result; a configured Link is not
+silently reported as reachable.
+
+The explicit command transmits a bounded number of diagnostic echo packets
+to the *peer Link Address*. It does not modify the host, and unit tests use
+faked Linux runner responses rather than contacting any external IP.
+The CLI also keeps a lighter read-only `link status` command that
+reports identity-checked interface counters without probing connectivity.
+
 ## MTU policy
 
 `MTUConstraints.UnderlayMTU` comes from route-aware source/interface
@@ -203,9 +220,10 @@ with its separate authorization/ownership checks.
 
 This Linux adapter does not complete Issue #9. Still required:
 
-- Connect this GRE-specific backend diagnostic adapter to the operator CLI,
-  and add equivalent capability/interface/overhead/counter integration for
-  IPIP, WireGuard and IPsec as their backends become available (#5–#7);
+- The implemented `stl link diagnose <id> [--mtu <bytes>] [--json]`
+  command exposes this GRE-specific report without calling repair or apply.
+  Equivalent capability/interface/overhead/counter integration for IPIP,
+  WireGuard and IPsec remains pending as those backends arrive (#5–#7);
 - Safe MTU application through the Engine, never from health observation;
 - Backend state/counter integration (#4–#7);
 - Operator diagnostics/JSON entry points and optional throughput path (#10);
