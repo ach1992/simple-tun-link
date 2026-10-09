@@ -1,9 +1,10 @@
-# STL CLI — implemented read-only commands
+# STL CLI — implemented read-only and explicit lifecycle commands
 
-STL's broader interactive task-first interface, create/import/manage commands,
-and stable automation lifecycle are owned by Issue #10.
-This page describes **only the implemented commands**; it does not promise
-unimplemented functionality.
+STL's broader task-first interactive interface and complete create/import/manage
+workflow are still tracked in Issue #10. The versioned non-interactive
+ensure/remove lifecycle is implemented but its remaining runtime/backend
+acceptance is tracked separately. This page distinguishes **read-only**
+observations from **explicit host-mutating** commands.
 
 ## Commands
 
@@ -29,7 +30,13 @@ unimplemented functionality.
   exchange mode, and credential-presence flag without revealing any
   credential or applying network state. Never pass SENSITIVE Quick Links as
   command-line arguments, which can enter shell history/process listings.
-- `stl link restore --all`: existing host persistence/reapply command.
+- `stl link ensure --stdin [--json]`: **mutating** idempotent desired
+  Link convergence via the existing Engine, accepting a strict versioned JSON
+  request on standard input. Full request schema appears below.
+- `stl link remove <link-id> --confirm <same-link-id> [--json]`:
+  **mutating** Engine-owned removal after explicit stable ID confirmation.
+- `stl link restore --all`: **mutating** host persistence/reapply
+  operation for existing saved Links, using the same Engine.
 
 `list` reports **configured desired state**, not actual network reachability.
 `status` reports **interface_verified**, not end-to-end connectivity.
@@ -58,6 +65,9 @@ the read-only diagnostics path in [DIAGNOSTICS.md](DIAGNOSTICS.md).
   `has_credential`, credential kind and sensitive flag.
   The input setup link, private keys, arbitrary display names and decoding
   cause are deliberately excluded from JSON and human output.
+- `link ensure` / `link remove`: versioned operation, Link ID,
+  changed and removed fields on Engine success. Failure JSON remains
+  nonzero and may include uncertainty/reconciliation signals.
 - Read errors: `{ "schema_version": 1, "error": { "code": ..., ... } }`;
   raw state-file content, arbitrary backend output/errors, display names
   and credentials are not included.
@@ -67,13 +77,16 @@ argument or missing Link ID; `4` unsupported live backend; `1` state or
 inspection failure. A failure cannot silently become a success even when
 the requested Link exists in saved configuration.
 
-These commands read STL's existing local desired-state file. The state
-directory typically belongs to a privileged operator; access failures
-produce a structured error rather than creating/replacing files.
+Commands that require the local desired-state snapshot use the existing
+private state store. The pure `link preview` command does not load
+persisted state; access failures in the other read paths are errors, not
+instructions to create/replace files.
 
-`link ensure`, create/import, optional throughput, non-GRE diagnostic
-adapters and the broader interactive UX remain pending under Issue #10. No new mutation route is
-introduced by the read-only commands.
+Read-only `list`, `status`, `diagnose` and `preview` never
+change network configuration; the distinct `ensure`, `remove` and
+`restore` paths are explicit host-mutating operations. Interactive
+create/import, optional throughput, non-GRE diagnostic adapters and the
+task-first UI remain pending under Issues #8, #9 and #10.
 
 ## Explicit Link lifecycle commands — Issue #10
 
@@ -87,15 +100,42 @@ stl link ensure --stdin --json < /path/to/desired-link.json
 stl link remove lnk_<32-hex-characters> --confirm lnk_<same-32-hex-characters> --json
 ~~~
 
-For ensure, stdin contains one bounded, strict JSON object representing the
-existing backend-neutral `domain.Link` (ID, backend, encapsulation, underlay
-local/peer, Link Address local/peer, optional display name and GRE settings).
-It is **not** a `stl://` pairing link and cannot carry recipient WireGuard
-private keys, IPsec PSKs or arbitrary commands. An unknown backend is
-explicitly unsupported rather than silently accepted. Duplicate/case-
-variant keys, unknown fields, arrays, null values, trailing JSON values,
-oversize input and invalid Link configuration fail before runtime creation.
-Do not put potentially sensitive setup links into shell command arguments.
+`ensure` accepts one bounded **versioned CLI request**, not an internal
+`domain.Link` object directly. The top-level integer
+`schema_version: 1` is **required**. Its `link` member contains
+the desired v1 Link fields: ID, backend, encapsulation, underlay endpoints,
+Link Address endpoints, and optional display name / GRE options.
+
+For example, this is a valid **request shape only**, not a recommendation to
+configure the illustrative addresses:
+
+~~~json
+{
+  "schema_version": 1,
+  "link": {
+    "id": "lnk_0123456789abcdef0123456789abcdef",
+    "underlay": {"local": "192.0.2.10", "peer": "192.0.2.20"},
+    "addresses": {"local": "10.80.20.0/31", "peer": "10.80.20.1/31"},
+    "backend": "gre",
+    "encapsulation": "native"
+  }
+}
+~~~
+
+The v1 outer schema is a separate CLI contract from internal Go state.
+Missing, zero, null, non-integer or duplicate schema versions fail as
+invalid (exit 2). Unrecognized positive future versions fail explicitly as
+unsupported (exit 4), without silently assuming v1. A valid schema v1
+request that selects a domain-unsupported feature (such as IPv6 Link
+Addresses or an unsupported GRE encapsulation) also exits 4; malformed
+or otherwise invalid configuration exits 2. An unregistered backend
+is explicitly unsupported rather than accepted silently.
+
+This input is **not** a `stl://` pairing link and cannot carry recipient
+WireGuard private keys, IPsec PSKs or arbitrary commands. Duplicate/case-
+variant keys (also inside the Link), unknown fields, arrays, null values,
+trailing JSON values and oversize input are rejected before runtime
+creation. Do not put sensitive setup links into shell command arguments.
 
 `ensure` and `remove` both call the **same canonical Engine** used for
 restore: inspect, plan, owner/resource-lock, re-inspect, validate, apply,

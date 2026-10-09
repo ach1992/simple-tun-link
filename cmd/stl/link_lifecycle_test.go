@@ -101,12 +101,32 @@ func makeLifecycleDesired(t *testing.T, idChar string, subnet string) (domain.Li
 		Addresses:   domain.LinkAddresses{Local: netip.MustParsePrefix(subnet), Peer: netip.MustParsePrefix(strings.Replace(subnet, ".0/31", ".1/31", 1))},
 		Backend:     domain.BackendGRE, Encapsulation: domain.EncapNative,
 	}
-	raw, err := json.Marshal(link)
+	return link, desiredRequestJSON(t, link, desiredLinkSchemaVersion)
+}
+
+// Requests are always sent using the public versioned CLI envelope, even
+// when their inner Link is constructed with the current domain fixture.
+func desiredRequestJSON(t *testing.T, link domain.Link, version int) string {
+	t.Helper()
+	request := struct {
+		SchemaVersion int         `json:"schema_version"`
+		Link          domain.Link `json:"link"`
+	}{SchemaVersion: version, Link: link}
+	raw, err := json.Marshal(request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return link, string(raw)
+	return string(raw)
 }
+func mustMarshalJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	out, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
 func runLifecycleTest(t *testing.T, root string, b *lifecycleFakeBackend, args []string, stdin string) (int, string, string) {
 	t.Helper()
 	var out, errOut bytes.Buffer
@@ -198,6 +218,20 @@ func TestLifecycleCLIRejectedInputCannotCreateLocksStateOrModifyHost(t *testing.
 		{"second object", raw + raw},
 		{"nested arrays", strings.Replace(raw, `"local":"192.0.2.10"`, `"local":["192.0.2.10"]`, 1)},
 		{"very large", raw + strings.Repeat("DO_NOT_EXPOSE", maxDesiredLinkBytes)},
+		{"legacy unversioned Link object", string(mustMarshalJSON(t, link))},
+		{"missing schema_version", strings.Replace(raw, `"schema_version":1,`, "", 1)},
+		{"schema_version null", strings.Replace(raw, `"schema_version":1`, `"schema_version":null`, 1)},
+		{"schema_version string", strings.Replace(raw, `"schema_version":1`, `"schema_version":"1"`, 1)},
+		{"schema_version floating", strings.Replace(raw, `"schema_version":1`, `"schema_version":1.5`, 1)},
+		{"schema_version boolean", strings.Replace(raw, `"schema_version":1`, `"schema_version":true`, 1)},
+		{"schema_version zero", strings.Replace(raw, `"schema_version":1`, `"schema_version":0`, 1)},
+		{"schema_version negative", strings.Replace(raw, `"schema_version":1`, `"schema_version":-1`, 1)},
+		{"duplicate schema_version", strings.Replace(raw, `"schema_version":1`, `"schema_version":1,"schema_version":1`, 1)},
+		{"case-folded duplicate schema_version", strings.Replace(raw, `"schema_version":1`, `"schema_version":1,"SCHEMA_VERSION":2`, 1)},
+		{"missing link", `{"schema_version":1}`},
+		{"link null", `{"schema_version":1,"link":null}`},
+		{"link array", `{"schema_version":1,"link":[]}`},
+		{"unknown envelope field", strings.Replace(raw, `"schema_version":1,`, `"schema_version":1,"recipient_secret":"DO_NOT_EXPOSE",`, 1)},
 	}
 	for _, tc := range inputs {
 		t.Run(tc.name, func(t *testing.T) {
@@ -343,5 +377,56 @@ func TestLifecycleFailurePartialResultUsesStableJSONNames(t *testing.T) {
 	}
 	if _, has := partial["LinkID"]; has {
 		t.Fatal("internal Go property leaked")
+	}
+}
+
+// The machine request's v1 schema is distinct from internal domain.Link.
+// An unknown future schema version is a deterministic unsupported-capability
+// result; unsupported version/domain requests are rejected before runtime.
+func TestLifecycleCLIUnsupportedSchemaAndDomainCapabilities(t *testing.T) {
+	base, _ := makeLifecycleDesired(t, "8", "10.70.8.0/31")
+	tests := []struct {
+		name    string
+		link    domain.Link
+		version int
+	}{
+		{"future request schema v2", base, 2},
+		{"unsupported GRE encapsulation", func() domain.Link {
+			changed := base
+			changed.Encapsulation = domain.EncapUDP
+			return changed
+		}(), 1},
+		{"unsupported IPv6 Link addresses", func() domain.Link {
+			changed := base
+			changed.Addresses.Local = netip.MustParsePrefix("fd12:3456::/127")
+			changed.Addresses.Peer = netip.MustParsePrefix("fd12:3456::1/127")
+			return changed
+		}(), 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "must-not-exist")
+			fake := newLifecycleFake()
+			raw := desiredRequestJSON(t, tc.link, tc.version)
+			code, out, stderr := runLifecycleTest(t, root, fake,
+				[]string{"link", "ensure", "--stdin", "--json"}, raw)
+			if code != 4 || stderr != "" || strings.Contains(out, "very_private_label") ||
+				strings.Contains(out, string(tc.link.ID)) {
+				t.Fatalf("unsupported request was misclassified/leaked: exit=%d out=%q err=%q",
+					code, out, stderr)
+			}
+			var got linkReadErrorResponse
+			if err := json.Unmarshal([]byte(out), &got); err != nil ||
+				got.SchemaVersion != jsonSchemaVersion || got.Error == nil ||
+				got.Error.Code != stlerr.CodeUnsupported {
+				t.Fatalf("unsupported request lacks safe versioned error: %q %v", out, err)
+			}
+			if len(fake.applies) != 0 || len(fake.present) != 0 {
+				t.Fatalf("unsupported request touched backend: %+v", fake)
+			}
+			if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("unsupported request created state/locks: %v", err)
+			}
+		})
 	}
 }

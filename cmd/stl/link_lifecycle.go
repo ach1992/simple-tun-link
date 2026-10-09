@@ -20,9 +20,12 @@ import (
 )
 
 const (
-	maxDesiredLinkBytes = 16 * 1024
-	lifecycleTimeLimit  = 5 * time.Minute
-	maxLinkJSONNesting  = 12
+	// Input schema and response schema evolve independently. A future
+	// change to CLI output must not silently reinterpret existing requests.
+	desiredLinkSchemaVersion = 1
+	maxDesiredLinkBytes      = 16 * 1024
+	lifecycleTimeLimit       = 5 * time.Minute
+	maxLinkJSONNesting       = 12
 )
 
 type lifecycleResultResponse struct {
@@ -67,7 +70,14 @@ func linkLifecycleCommand(args []string, input io.Reader, stdout, stderr io.Writ
 		var err error
 		desired, err = decodeDesiredLink(input)
 		if err != nil {
-			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, operation, "desired Link JSON is invalid or unsupported")
+			// Syntax and malformed schema are invalid, while an explicitly
+			// unsupported schema version or domain capability is unsupported.
+			// Never expose the decoder's raw error or desired state here.
+			code := stlerr.CodeInvalid
+			if stlerr.CodeOf(err) == stlerr.CodeUnsupported {
+				code = stlerr.CodeUnsupported
+			}
+			return readCommandError(stdout, stderr, jsonOutput, code, operation, "desired Link JSON is invalid or unsupported")
 		}
 		id = desired.ID
 	case "remove":
@@ -180,9 +190,36 @@ func lifecycleFailure(stdout, stderr io.Writer, jsonOutput bool, code stlerr.Cod
 	}
 }
 
-// Decode from a small, bounded, data-only JSON object. A setup link is NOT
-// accepted here; credential-bearing pairing requires a separately reviewed
-// import/secret-storage flow, never a silent conversion to desired Link.
+// The v1 CLI automation request is a distinct, explicitly versioned protocol,
+// not the internal Link struct as a top-level unversioned request. Its accepted
+// fields are pinned here so future changes to domain.Link do not silently
+// expand this automation input contract.
+type desiredLinkRequestV1 struct {
+	SchemaVersion int           `json:"schema_version"`
+	Link          desiredLinkV1 `json:"link"`
+}
+
+type desiredLinkV1 struct {
+	ID            domain.LinkID        `json:"id"`
+	DisplayName   string               `json:"display_name,omitempty"`
+	Underlay      domain.Underlay      `json:"underlay"`
+	Addresses     domain.LinkAddresses `json:"addresses"`
+	Backend       domain.Backend       `json:"backend"`
+	Encapsulation domain.Encapsulation `json:"encapsulation"`
+	GRE           domain.GREOptions    `json:"gre,omitempty"`
+}
+
+func (d desiredLinkV1) link() domain.Link {
+	return domain.Link{
+		ID: d.ID, DisplayName: d.DisplayName,
+		Underlay: d.Underlay, Addresses: d.Addresses,
+		Backend: d.Backend, Encapsulation: d.Encapsulation, GRE: d.GRE,
+	}
+}
+
+// Decode from a small, bounded, versioned data-only JSON object. A setup link
+// is NOT accepted here; credential-bearing pairing needs separately reviewed
+// import/secret storage, never a silent conversion to desired Link.
 func decodeDesiredLink(reader io.Reader) (domain.Link, error) {
 	if reader == nil {
 		return domain.Link{}, fmt.Errorf("Link input is required")
@@ -196,12 +233,22 @@ func decodeDesiredLink(reader io.Reader) (domain.Link, error) {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(input))
 	decoder.DisallowUnknownFields()
-	var link domain.Link
-	if err := decoder.Decode(&link); err != nil {
-		return domain.Link{}, fmt.Errorf("invalid Link JSON")
+	var request desiredLinkRequestV1
+	if err := decoder.Decode(&request); err != nil {
+		return domain.Link{}, fmt.Errorf("invalid desired Link request")
 	}
+	switch {
+	case request.SchemaVersion <= 0:
+		return domain.Link{}, fmt.Errorf("missing or invalid desired Link schema_version")
+	case request.SchemaVersion != desiredLinkSchemaVersion:
+		return domain.Link{}, stlerr.New(stlerr.CodeUnsupported, "decode_link", "", "",
+			"unsupported desired Link schema version")
+	}
+	link := request.Link.link()
 	if err := link.Validate(); err != nil {
-		return domain.Link{}, fmt.Errorf("invalid desired Link")
+		// Keep the existing typed CodeUnsupported (IPv6 Link Addresses,
+		// unsupported GRE encapsulations); the caller projects only its code.
+		return domain.Link{}, err
 	}
 	return link, nil
 }
