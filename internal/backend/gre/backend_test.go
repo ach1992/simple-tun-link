@@ -498,3 +498,53 @@ func TestFOURejectsForeignReceivePortMapping(t *testing.T) {
 		t.Fatalf("foreign receive-port mapping accepted: %v", err)
 	}
 }
+
+func TestNativeGRELookupFailureReturnsSafeRollbackForCreatedInterface(t *testing.T) {
+	link := testLink()
+	name, _ := InterfaceName(link.ID)
+	runner := &fakeRunner{link: link, name: name}
+	firewall := &fakeFirewall{}
+	b, err := New(Options{
+		Runner:   runner,
+		Routes:   fakeRoute{linux.Route{Peer: link.Underlay.Peer, Source: link.Underlay.Local, Device: "eth0"}},
+		Firewall: firewall, Collisions: fakeCollisions{},
+		LookupIndex: func(string) (int, error) { return 0, errors.New("lookup failed") },
+		SetAlias: func(context.Context, int, string) error {
+			t.Fatal("alias must not run without resolved ifindex")
+			return nil
+		},
+		DeleteLink: func(_ context.Context, index int) error {
+			if index != 77 {
+				return fmt.Errorf("wrong rollback index %d", index)
+			}
+			runner.state = observedLink{}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	req := core.Request{Operation: core.OperationEnsure, Link: link}
+	obs, err := b.Inspect(ctx, link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := b.Plan(ctx, req, obs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Validate(ctx, req, obs, candidate); err != nil {
+		t.Fatal(err)
+	}
+	undo, err := b.Apply(ctx, req, obs, candidate)
+	if err == nil || undo == nil {
+		t.Fatalf("lookup failure did not return rollback: %v", err)
+	}
+	if err := undo(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if runner.state.Exists {
+		t.Fatal("created unowned GRE interface survived rollback")
+	}
+}

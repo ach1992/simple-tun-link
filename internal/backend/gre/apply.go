@@ -31,6 +31,7 @@ func (b *Backend) Apply(ctx context.Context, req core.Request, observed core.Obs
 
 func (b *Backend) applyEnsure(ctx context.Context, req core.Request, obs observation, p plan) (core.Rollback, error) {
 	createdIndex := 0
+	interfaceCreated := false
 	fouCreated := false
 	var firewallUndo func(context.Context) error
 	rollback := func(undoCtx context.Context) error {
@@ -38,8 +39,12 @@ func (b *Backend) applyEnsure(ctx context.Context, req core.Request, obs observa
 		if firewallUndo != nil {
 			errs = append(errs, firewallUndo(undoCtx))
 		}
-		if createdIndex > 0 {
-			errs = append(errs, b.deleteLink(undoCtx, createdIndex))
+		if interfaceCreated {
+			if createdIndex > 0 {
+				errs = append(errs, b.deleteLink(undoCtx, createdIndex))
+			} else {
+				errs = append(errs, b.deleteUnownedCreatedInterface(undoCtx, req.Link, p.name))
+			}
 		}
 		if fouCreated {
 			_, err := b.deleteFOU(undoCtx, p.fouMapping)
@@ -59,8 +64,8 @@ func (b *Backend) applyEnsure(ctx context.Context, req core.Request, obs observa
 		if obs.Target.Exists {
 			return rollback, fmt.Errorf("GRE repair requires explicit reconciliation")
 		}
-		index, err := b.createOwnedInterface(ctx, req.Link, p.name)
-		createdIndex = index
+		index, created, err := b.createOwnedInterface(ctx, req.Link, p.name)
+		createdIndex, interfaceCreated = index, created
 		if err != nil {
 			return rollback, err
 		}
@@ -86,7 +91,7 @@ func (b *Backend) applyRemove(ctx context.Context, req core.Request, _ observati
 			errs = append(errs, err)
 		}
 		if interfaceRemoved {
-			_, err := b.createOwnedInterface(undoCtx, req.Link, p.name)
+			_, _, err := b.createOwnedInterface(undoCtx, req.Link, p.name)
 			errs = append(errs, err)
 		}
 		if firewallRemoved {
@@ -127,30 +132,48 @@ func (b *Backend) applyRemove(ctx context.Context, req core.Request, _ observati
 	return rollback, nil
 }
 
-func (b *Backend) createOwnedInterface(ctx context.Context, link domain.Link, name string) (int, error) {
+func (b *Backend) createOwnedInterface(ctx context.Context, link domain.Link, name string) (int, bool, error) {
 	args := []string{"link", "add", name}
 	args = append(args, greTypeArgs(link)...)
 	if _, err := b.runner.Run(ctx, b.ipBinary, args...); err != nil {
-		return 0, fmt.Errorf("create GRE interface: %w", err)
+		return 0, false, fmt.Errorf("create GRE interface: %w", err)
 	}
 
 	// Capture the kernel identity created by the successful exclusive name add.
 	index, err := b.lookupIndex(name)
 	if err != nil || index <= 0 {
-		return 0, fmt.Errorf("resolve created GRE interface identity: %w", err)
+		return 0, true, fmt.Errorf("resolve created GRE interface identity: %w", err)
 	}
 	owner, err := linux.OwnerTag(link.ID)
 	if err != nil {
-		return index, err
+		return index, true, err
 	}
 	if err := b.setAlias(ctx, index, owner); err != nil {
-		return index, fmt.Errorf("mark GRE interface ownership: %w", err)
+		return index, true, fmt.Errorf("mark GRE interface ownership: %w", err)
 	}
 	if _, err := b.runner.Run(ctx, b.ipBinary, "address", "add", link.Addresses.Local.String(), "dev", name); err != nil {
-		return index, fmt.Errorf("assign GRE Link Address: %w", err)
+		return index, true, fmt.Errorf("assign GRE Link Address: %w", err)
 	}
 	if _, err := b.runner.Run(ctx, b.ipBinary, "link", "set", "dev", name, "up"); err != nil {
-		return index, fmt.Errorf("activate GRE interface: %w", err)
+		return index, true, fmt.Errorf("activate GRE interface: %w", err)
 	}
-	return index, nil
+	return index, true, nil
+}
+
+func (b *Backend) deleteUnownedCreatedInterface(ctx context.Context, link domain.Link, name string) error {
+	fresh, err := b.Inspect(ctx, link)
+	if err != nil {
+		return fmt.Errorf("inspect GRE interface for rollback: %w", err)
+	}
+	state := fresh.(observation).Target
+	if !state.Exists {
+		return nil
+	}
+	if state.Owner != "" || !state.matchesConfigurationBeforeOwnership(link, name) {
+		return fmt.Errorf("created GRE interface identity is ambiguous; preserving current state")
+	}
+	if err := b.deleteLink(ctx, state.IfIndex); err != nil {
+		return fmt.Errorf("delete unowned created GRE interface: %w", err)
+	}
+	return nil
 }

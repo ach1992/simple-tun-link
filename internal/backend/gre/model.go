@@ -205,6 +205,16 @@ func (g observedLink) matches(link domain.Link, name string) bool {
 	return len(g.IPv4Addresses) == 1 && g.IPv4Addresses[0] == link.Addresses.Local
 }
 
+func (g observedLink) matchesConfigurationBeforeOwnership(link domain.Link, name string) bool {
+	if !g.Exists || g.Name != name || g.Local != link.Underlay.Local || g.Peer != link.Underlay.Peer {
+		return false
+	}
+	return g.KeyEnabled == link.GRE.KeyEnabled && (!g.KeyEnabled || g.Key == link.GRE.Key) &&
+		g.TTL == link.GRE.TTL && g.TOS == link.GRE.TOS &&
+		g.PMTUD != link.GRE.DisablePMTUD && g.Checksum == link.GRE.Checksum && g.Sequence == link.GRE.Sequence &&
+		g.Encapsulation == link.Encapsulation && g.UDPPort == link.GRE.UDPPort
+}
+
 func (g observedLink) backendIdentity() string {
 	if !g.Exists || !g.Local.IsValid() || !g.Peer.IsValid() {
 		return ""
