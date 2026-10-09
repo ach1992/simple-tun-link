@@ -33,6 +33,32 @@ Rules:
 - when STL itself writes a secret-bearing export file, use restrictive permissions;
 - after generating a WireGuard peer keypair for Quick Link, the initiator persists only the peer public key and must not retain the peer private key in ordinary state.
 
+### WireGuard key-material boundary
+
+The private WireGuard key primitive under `internal/backend/wireguard` is
+**not** a completed WireGuard tunnel backend. It uses Go's standard X25519
+implementation and clamped `wg genkey`-compatible output. Generic JSON and
+formatting do not serialize private bytes; deliberate `SecretWireValue()`
+access is reserved for credential-specific pairing/file operations, never
+status, diagnostics or normal desired-state storage.
+
+`KeyStore` places a private key in a dedicated per-Link file under the
+STL state root's private `credentials/` directory. It requires owner-private
+directories, rejects symlink traversal, reads only a same-owner singly-linked
+regular file with mode `0600`, and publishes a synced temporary key file with
+an atomic **no-replace** hard link followed by directory sync. Concurrent
+new-key writes for one Link must not overwrite one another. Publication
+uncertainty must be reconciled rather than blindly deleting an existing key.
+The store intentionally has no generic update/remove API; backend lifecycle
+must later implement verified, Link-owned retirement and credential rollback.
+
+The caller must store the **local** private key only at its owning endpoint.
+The initiator must never persist a generated *recipient* private key as local
+state; that material belongs only in the explicitly SENSITIVE Quick Link
+until protected receiver-side import. Backend integration, credential
+retirement, canonical Engine wiring and real WireGuard traffic evidence
+remain Issue #6/#8/#12 acceptance, not proved by these primitives.
+
 ## Setup-link safety
 
 A setup link is untrusted input.
