@@ -71,7 +71,7 @@ func (b *Backend) applyEnsure(ctx context.Context, req core.Request, obs observa
 		}
 	}
 	if p.firewallChange {
-		undo, _, err := b.firewall.EnsureInbound(ctx, req.Link.ID, p.firewallRule)
+		undo, _, err := b.firewall.EnsureInboundLocked(ctx, req.Link.ID, p.firewallRule)
 		if err != nil {
 			return rollback, err
 		}
@@ -95,14 +95,14 @@ func (b *Backend) applyRemove(ctx context.Context, req core.Request, _ observati
 			errs = append(errs, err)
 		}
 		if firewallRemoved {
-			_, _, err := b.firewall.EnsureInbound(undoCtx, req.Link.ID, p.firewallRule)
+			_, _, err := b.firewall.EnsureInboundLocked(undoCtx, req.Link.ID, p.firewallRule)
 			errs = append(errs, err)
 		}
 		return errors.Join(errs...)
 	}
 
 	if p.firewallChange {
-		removed, err := b.firewall.RemoveInbound(ctx, req.Link.ID, p.firewallRule)
+		removed, err := b.firewall.RemoveInboundLocked(ctx, req.Link.ID, p.firewallRule)
 		if err != nil {
 			return rollback, err
 		}

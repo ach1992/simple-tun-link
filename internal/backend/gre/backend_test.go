@@ -169,7 +169,7 @@ func (f *fakeFirewall) HasInbound(context.Context, domain.LinkID, linux.InboundF
 func (f *fakeFirewall) HasOwnedInbound(context.Context, domain.LinkID, bool) (bool, error) {
 	return f.present, nil
 }
-func (f *fakeFirewall) EnsureInbound(context.Context, domain.LinkID, linux.InboundFirewallRule) (func(context.Context) error, bool, error) {
+func (f *fakeFirewall) EnsureInboundLocked(context.Context, domain.LinkID, linux.InboundFirewallRule) (func(context.Context) error, bool, error) {
 	if f.failEnsure {
 		return nil, false, errors.New("firewall add failed")
 	}
@@ -177,7 +177,7 @@ func (f *fakeFirewall) EnsureInbound(context.Context, domain.LinkID, linux.Inbou
 	f.present = true
 	return func(context.Context) error { f.present = was; return nil }, !was, nil
 }
-func (f *fakeFirewall) RemoveInbound(context.Context, domain.LinkID, linux.InboundFirewallRule) (bool, error) {
+func (f *fakeFirewall) RemoveInboundLocked(context.Context, domain.LinkID, linux.InboundFirewallRule) (bool, error) {
 	was := f.present
 	f.present = false
 	return was, nil

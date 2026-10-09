@@ -19,8 +19,8 @@ type RouteResolver interface {
 type Firewall interface {
 	HasInbound(context.Context, domain.LinkID, linux.InboundFirewallRule) (bool, error)
 	HasOwnedInbound(context.Context, domain.LinkID, bool) (bool, error)
-	EnsureInbound(context.Context, domain.LinkID, linux.InboundFirewallRule) (func(context.Context) error, bool, error)
-	RemoveInbound(context.Context, domain.LinkID, linux.InboundFirewallRule) (bool, error)
+	EnsureInboundLocked(context.Context, domain.LinkID, linux.InboundFirewallRule) (func(context.Context) error, bool, error)
+	RemoveInboundLocked(context.Context, domain.LinkID, linux.InboundFirewallRule) (bool, error)
 }
 
 type CollisionInspector interface {
