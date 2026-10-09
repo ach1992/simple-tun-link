@@ -22,7 +22,7 @@ func runMenuTest(t *testing.T, root, input string) (int, string, string) {
 
 func TestMenuTasksAndNavigationDoNotCreateState(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "absent")
-	code, output, errOut := runMenuTest(t, root, "1\n2\n3\n\n4\n\n5\n6\n7\n8\n")
+	code, output, errOut := runMenuTest(t, root, "1\n3\n\n4\n\n5\n6\n7\n8\n")
 	if code != 0 || errOut != "" {
 		t.Fatalf("menu failed: code=%d err=%q", code, errOut)
 	}
@@ -31,7 +31,7 @@ func TestMenuTasksAndNavigationDoNotCreateState(t *testing.T) {
 		"Local address candidate:", "Configured Links: 0",
 		"Create Tunnel", "Import Setup Link", "Manage Links",
 		"Tests & Diagnostics", "Settings", "Update", "Uninstall", "Exit",
-		"stl link preview --stdin", "stl link ensure --stdin",
+		"stl link ensure --stdin",
 		"Not implemented", "0 configured link(s)", "bounded probes",
 	} {
 		if !strings.Contains(output, item) {

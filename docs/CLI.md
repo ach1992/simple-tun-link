@@ -1,14 +1,57 @@
 # STL CLI — implemented read-only and explicit lifecycle commands
 
-STL's broader task-first interactive interface and complete create/import/manage
-workflow are still tracked in Issue #10. The versioned non-interactive
-ensure/remove lifecycle is implemented but its remaining runtime/backend
+The terminal menu now supports local overview, Link management/status,
+selected diagnostics, and an explicit, preview-confirmed plaintext GRE/IPIP
+setup-link import. Guided Create, credential-bearing import and the complete
+operator workflow remain open under Issues #10 and #8. The versioned
+non-interactive ensure/remove lifecycle is implemented but its remaining runtime/backend
 acceptance is tracked separately. This page distinguishes **read-only**
 observations from **explicit host-mutating** commands.
+
+## Task-first terminal menu
+
+With interactive stdin and stdout, running `stl` opens the bounded task menu;
+`stl menu` opens it explicitly. Non-terminal no-argument invocation keeps the
+existing deterministic command help (no scripts are prompted for input).
+The menu header only reads local OS/kernel/interface candidates and persisted
+Link counts; a candidate address is **not** a route-confirmed source or proof
+of connectivity. It performs no remote update/IP queries or network probes.
+
+The Import Setup Link task reads **one bounded line** at the operator prompt.
+For an actual terminal it disables terminal echo during that one input read
+and restores terminal settings **before any preview/apply**; if this cannot
+be established safely it refuses input. Paste only after the prompt. It never
+prints the URL, decoded arbitrary display-name or secret-bearing payload.
+This is not a way to make a secret safe if it was already copied through an
+untrusted shell, process argument, clipboard, terminal logger or recording.
+
+The menu delegates decoding and preview to the same strict `link preview`
+CLI code, then shows the receiver-oriented underlay, Link Addresses and GRE
+options. Before requesting the final Link-ID confirmation, it discards
+already queued terminal input; pre-pasting multiple lines together cannot
+silently supply a confirmation before the preview was displayed. For a
+**credential-free GRE/IPIP Quick Link only**, it requires the operator to type
+the **exact stable Link ID** as a separate confirmation.
+Only then does it delegate to the existing `link import` operation, whose
+SHA-256 confirmation binds the exact reviewed URL. That Engine import can
+create a new Link or idempotently re-ensure identical state; it rejects a
+same-ID configuration change under the canonical Link lock. Cancel or
+invalid input never invokes an Engine mutation.
+
+GRE/IPIP plaintext imports provide **no confidentiality or peer identity**;
+verify the offer with the intended peer through a trusted channel. Sensitive
+WireGuard/IPsec offers show credential presence as **REDACTED**, but cannot
+be applied until backend-owned protected recipient import is implemented.
+The menu makes no separate promises about working peer traffic or complete
+pairing. The Create, Settings, Update and Uninstall tasks remain explicitly
+pending and do not report false success. Menu text and selection numbers are
+human UI, not automation contracts; existing versioned `--json` commands
+remain the automation interface.
 
 ## Commands
 
 - `stl help`
+- `stl menu`: explicitly open the human terminal menu; no JSON automation contract.
 - `stl version [--json]`
 - `stl link list [--json]`: read saved configured Links in stable Link ID
   order. An empty state file yields an empty list; listing does not construct
