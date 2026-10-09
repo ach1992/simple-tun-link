@@ -6,17 +6,17 @@ by `internal/pairing`. The overall v0.1 requirements are owned by
 Backend-specific interface configuration and key generation remain owned by
 Issues #4–#7; CLI/import/apply orchestration remains owned by Issue #10.
 
-## Version 1 setup links
+## Version 2 setup links
 
-The canonical transport string is:
+The current canonical transport string is:
 
 ~~~text
-stl://1.<unpadded-base64url-of-JSON>.<lowercase-sha256-of-JSON>
+stl://2.<unpadded-base64url-of-JSON>.<lowercase-sha256-of-JSON>
 ~~~
 
 The JSON contains:
 
-- `schema_version`: integer `1`;
+- `schema_version`: integer `2`;
 - `mode`: explicit `"quick"`;
 - `link`: the creator-oriented backend-neutral `domain.Link`, including its
   stable Link ID, local/peer underlay endpoints and local/peer Link Addresses;
@@ -26,6 +26,15 @@ The SHA-256 value detects accidental corruption or damage. **It is neither a
 MAC nor a signature.** Anyone who can modify a setup link can recompute its
 checksum. Base64 is encoding, **not encryption**. Treat a secret-bearing Quick
 Link as a credential, not as a shareable diagnostic artifact.
+
+Version 2 adds the typed `link.gre` object required to carry GRE key/advanced
+options and the FOU/GUE UDP port without weakening strict unknown-field
+rejection. The decoder remains compatible with version 1 payloads whose
+semantics were complete (including GRE Native, IPIP, WireGuard and IPsec), and
+a decoded v1 offer preserves v1 when re-exported. Legacy v1 GRE FOU/GUE links
+are rejected with an explicit regeneration requirement because v1 never carried
+the now-required UDP port; inventing one during import would change networking
+semantics and collision ownership. Version 1 also rejects v2-only `gre` fields.
 
 The decoder limits the entire input to 24 KiB and decoded JSON to 16 KiB.
 It rejects noncanonical Base64/checksum, malformed/duplicate/unknown fields,

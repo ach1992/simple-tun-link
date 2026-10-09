@@ -20,7 +20,8 @@ import (
 )
 
 const (
-	SchemaVersion = 1
+	SchemaVersion       = 2
+	legacySchemaVersion = 1
 
 	// MaxPayloadBytes bounds both untrusted decoded JSON and deliberate export.
 	MaxPayloadBytes = 16 * 1024
@@ -49,6 +50,7 @@ const (
 type Offer struct {
 	link            domain.Link
 	mode            ExchangeMode
+	schemaVersion   int
 	recipientSecret []byte
 }
 
@@ -61,6 +63,7 @@ func NewQuickOffer(link domain.Link, credential []byte) (Offer, error) {
 	offer := Offer{
 		link:            link,
 		mode:            ModeQuick,
+		schemaVersion:   SchemaVersion,
 		recipientSecret: append([]byte(nil), credential...),
 	}
 	if err := offer.validate(); err != nil {
@@ -70,6 +73,13 @@ func NewQuickOffer(link domain.Link, credential []byte) (Offer, error) {
 }
 
 func (o Offer) validate() error {
+	version := o.effectiveSchemaVersion()
+	if version != legacySchemaVersion && version != SchemaVersion {
+		return fmt.Errorf("unsupported pairing schema version")
+	}
+	if version == legacySchemaVersion && o.link.GRE != (domain.GREOptions{}) {
+		return fmt.Errorf("pairing schema v1 cannot carry GRE backend options")
+	}
 	if o.mode != ModeQuick {
 		return fmt.Errorf("unsupported pairing exchange mode")
 	}
@@ -150,6 +160,13 @@ func validateLinkPrefixes(a domain.LinkAddresses) error {
 	return nil
 }
 
+func (o Offer) effectiveSchemaVersion() int {
+	if o.schemaVersion == 0 {
+		return SchemaVersion
+	}
+	return o.schemaVersion
+}
+
 func (o Offer) Link() domain.Link  { return o.link }
 func (o Offer) Mode() ExchangeMode { return o.mode }
 func (o Offer) IsSensitive() bool  { return len(o.recipientSecret) != 0 }
@@ -198,7 +215,7 @@ type Preview struct {
 
 func (o Offer) Preview() Preview {
 	return Preview{
-		SchemaVersion: SchemaVersion,
+		SchemaVersion: o.effectiveSchemaVersion(),
 		Mode:          o.mode,
 		Link:          o.ReceiverLink(),
 		HasCredential: o.IsSensitive(),

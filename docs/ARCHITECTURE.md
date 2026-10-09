@@ -379,7 +379,7 @@ Health is observational. Repair is explicit.
 Canonical shape is versioned and self-identifying, for example:
 
 ~~~text
-stl://1.<encoded-payload>
+stl://2.<encoded-payload>
 ~~~
 
 Requirements:
