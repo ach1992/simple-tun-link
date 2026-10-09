@@ -10,9 +10,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ach1992/simple-tun-link/internal/app"
 	core "github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
+	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
@@ -379,6 +381,19 @@ func TestNativeGRERejectsForeignOwnershipAndDuplicateTuple(t *testing.T) {
 		t.Fatalf("duplicate GRE tuple accepted: %v", err)
 	}
 
+	// Linux GRE receive lookup also collides when encapsulation/UDP port
+	// differ but underlay endpoints and GRE key identity are identical.
+	runner.extra[0].Encapsulation = domain.EncapFOU
+	runner.extra[0].UDPPort = 33061
+	obs, _ = b.Inspect(ctx, link)
+	candidate, err = b.Plan(ctx, req, obs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Validate(ctx, req, obs, candidate); stlerr.CodeOf(err) != stlerr.CodeConflict {
+		t.Fatalf("cross-encap duplicate receive identity accepted: %v", err)
+	}
+
 	runner.extra[0].Key = 1
 	obs, _ = b.Inspect(ctx, link)
 	candidate, err = b.Plan(ctx, req, obs)
@@ -387,6 +402,303 @@ func TestNativeGRERejectsForeignOwnershipAndDuplicateTuple(t *testing.T) {
 	}
 	if err := b.Validate(ctx, req, obs, candidate); err != nil {
 		t.Fatalf("distinct GRE key was incorrectly rejected: %v", err)
+	}
+}
+
+// A missing kernel interface must not release a previously committed Link's
+// GRE receive reservation. Legacy records predate the gre/rx resource claim.
+func TestLegacyGREDesiredReservationSurvivesAbsentInterface(t *testing.T) {
+	ctx := context.Background()
+	legacy := testLink()
+	legacy.GRE = domain.GREOptions{} // unkeyed Native, persisted before gre/rx
+	legacyName, err := InterfaceName(legacy.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyFirewall, err := linux.InboundFirewallClaim(legacy.ID, linux.InboundFirewallRule{
+		Local: legacy.Underlay.Local, Peer: legacy.Underlay.Peer,
+		InputInterface: "eth0", Protocol: greProtocol,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyClaims := slices.DeleteFunc(desiredResources(legacy, legacyName, legacyFirewall),
+		func(claim domain.ResourceClaim) bool { return claim == greReceiveClaim(legacy) })
+	// FileStore normalizes claim ordering on persistence, not claim content.
+	slices.SortFunc(legacyClaims, func(a, b domain.ResourceClaim) int {
+		return strings.Compare(a.Canonical(), b.Canonical())
+	})
+	if slices.Contains(legacyClaims, greReceiveClaim(legacy)) {
+		t.Fatal("test must use a real pre-gre/rx persisted claim set")
+	}
+
+	incoming := legacy
+	incoming.ID = domain.LinkID("lnk_22222222222222222222222222222222")
+	incoming.Encapsulation = domain.EncapFOU
+	incoming.GRE.UDPPort = 33061
+	incoming.Addresses = domain.LinkAddresses{
+		Local: netip.MustParsePrefix("10.80.21.0/31"),
+		Peer:  netip.MustParsePrefix("10.80.21.1/31"),
+	}
+	incomingName, err := InterfaceName(incoming.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Explicitly absent kernel interface: the only reservation is Desired.
+	runner := &fakeRunner{link: incoming, name: incomingName}
+	fw := &fakeFirewall{}
+	adapter := newTestBackend(t, runner, fw, fakeCollisions{})
+	registry, err := core.NewRegistry(adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	store := state.NewFileStore(root)
+	if err := store.Update(ctx, func(snapshot *state.Snapshot) error {
+		snapshot.Upsert(state.LinkRecord{Desired: legacy, OwnedResources: legacyClaims})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := app.New(registry, store, state.NewLockManager(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Ensure(ctx, incoming); stlerr.CodeOf(err) != stlerr.CodeConflict {
+		t.Fatalf("missing legacy kernel interface freed persisted GRE receive reservation: %v", err)
+	}
+	for _, command := range runner.commands {
+		if strings.Contains(command, " link add ") || strings.Contains(command, " fou add ") {
+			t.Fatalf("conflicting Ensure mutated kernel before resource conflict: %q", command)
+		}
+	}
+	if fw.present || len(runner.mappings) != 0 || runner.state.Exists {
+		t.Fatal("conflicting Ensure modified firewall, FOU mapping, or GRE interface")
+	}
+	snapshot, err := store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldRecord, ok := snapshot.Find(legacy.ID)
+	if !ok || !slices.Equal(oldRecord.OwnedResources, legacyClaims) || len(snapshot.Links) != 1 {
+		t.Fatalf("legacy committed ownership was rewritten or displaced: %#v", snapshot)
+	}
+
+	// An explicit key=0 is distinct from an absent GRE key, even with the
+	// same underlay endpoints and a different encapsulation/UDP port.
+	incoming.GRE.KeyEnabled, incoming.GRE.Key = true, 0
+	runner.link = incoming
+	result, err := engine.Ensure(ctx, incoming)
+	if err != nil || !result.Changed {
+		t.Fatalf("distinct keyed GRE receive identity was incorrectly blocked: %#v %v", result, err)
+	}
+	snapshot, err = store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Links) != 2 {
+		t.Fatalf("valid distinct keyed GRE did not coexist with legacy intent: %#v", snapshot)
+	}
+	oldRecord, ok = snapshot.Find(legacy.ID)
+	if !ok || !slices.Equal(oldRecord.OwnedResources, legacyClaims) {
+		t.Fatal("adding independent keyed GRE changed existing legacy ownership")
+	}
+	incomingRecord, ok := snapshot.Find(incoming.ID)
+	if !ok || !slices.Contains(incomingRecord.OwnedResources, greReceiveClaim(incoming)) {
+		t.Fatal("new keyed Link did not persist its new receive reservation")
+	}
+}
+
+func TestGRELegacyRemoveSerializesCrossEncapsulationEnsure(t *testing.T) {
+	legacy := testLink()
+	name, err := InterfaceName(legacy.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observedState := observedLink{
+		Exists: true, IfIndex: 77, Name: name, Owner: legacy.ID,
+		Local: legacy.Underlay.Local, Peer: legacy.Underlay.Peer,
+		KeyEnabled: legacy.GRE.KeyEnabled, Key: legacy.GRE.Key,
+		TTL: legacy.GRE.TTL, TOS: legacy.GRE.TOS,
+		PMTUD:    !legacy.GRE.DisablePMTUD,
+		Checksum: legacy.GRE.Checksum, Sequence: legacy.GRE.Sequence,
+		Encapsulation: legacy.Encapsulation, Up: true,
+		IPv4Addresses: []netip.Prefix{legacy.Addresses.Local},
+	}
+	runner := &fakeRunner{link: legacy, name: name, state: observedState}
+	b := newTestBackend(t, runner, &fakeFirewall{present: true}, fakeCollisions{})
+	ctx := context.Background()
+	req := core.Request{Operation: core.OperationRemove, Prior: &legacy, Link: legacy}
+	obs, err := b.Inspect(ctx, legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := b.Plan(ctx, req, obs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fwClaim, err := linux.InboundFirewallClaim(legacy.ID, candidate.(plan).firewallRule)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Exact persisted claims from before the gre/rx claim was introduced.
+	legacyOwned := slices.DeleteFunc(desiredResources(legacy, name, fwClaim), func(c domain.ResourceClaim) bool {
+		return c == greReceiveClaim(legacy)
+	})
+	shared := greReceiveClaim(legacy)
+	if slices.Contains(legacyOwned, shared) || !slices.Contains(candidate.Resources(), shared) {
+		t.Fatal("legacy ownership unexpectedly includes gre/rx or Remove failed to lock gre/rx")
+	}
+	req.OwnedResources = legacyOwned
+	if err := b.Validate(ctx, req, obs, candidate); err != nil {
+		t.Fatalf("valid legacy-owned Remove was rejected: %v", err)
+	}
+	// A lock-only claim must not grant destructive ownership.
+	forged := req
+	forged.OwnedResources = nil
+	if err := b.Validate(ctx, forged, obs, candidate); err == nil {
+		t.Fatal("new synchronization claim bypassed legacy ownership checks")
+	}
+
+	competitor := legacy
+	competitor.ID = domain.LinkID("lnk_22222222222222222222222222222222")
+	competitor.Encapsulation = domain.EncapFOU
+	competitor.GRE.UDPPort = 33061
+	competitor.Addresses = domain.LinkAddresses{
+		Local: netip.MustParsePrefix("10.80.21.0/31"),
+		Peer:  netip.MustParsePrefix("10.80.21.1/31"),
+	}
+	competitorName, err := InterfaceName(competitor.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	competitorFirewall, err := linux.InboundFirewallClaim(competitor.ID, linux.InboundFirewallRule{
+		Local: competitor.Underlay.Local, Peer: competitor.Underlay.Peer,
+		InputInterface: "eth0", Protocol: 17, DestinationPort: competitor.GRE.UDPPort,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	competitorClaims := desiredResources(competitor, competitorName, competitorFirewall)
+	if !slices.Contains(competitorClaims, shared) {
+		t.Fatal("competing cross-encapsulation Ensure did not claim the common receive lock")
+	}
+	// The sole conflict must be gre/rx, not a reused firewall, Link Address,
+	// interface, UDP port, or detailed backend identity.
+	removeLocks := append(append([]domain.ResourceClaim(nil), legacyOwned...), candidate.Resources()...)
+	for _, removing := range removeLocks {
+		for _, creating := range competitorClaims {
+			conflict, err := domain.ResourceClaimsConflict(removing, creating)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if conflict && (removing != shared || creating != shared) {
+				t.Fatalf("regression locks overlap outside GRE receive identity: %#v %#v", removing, creating)
+			}
+		}
+	}
+	// Use the same prior + plan input envelope as Engine, while isolating
+	// gre/rx from the generic IPv4-address allocation lock.
+	manager := state.NewLockManager(t.TempDir())
+	release, err := manager.Acquire(ctx, removeLocks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The file-lock implementation only observes a canceled context when
+	// an actual claim blocks. This discriminates shared-lock contention
+	// without introducing timing or a sleeping/stress test.
+	waitCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = manager.Acquire(waitCtx, competitorClaims)
+	if !errors.Is(err, context.Canceled) {
+		_ = release()
+		t.Fatalf("FOU Ensure did not wait for legacy GRE Remove: %v", err)
+	}
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+	release, err = manager.Acquire(ctx, competitorClaims)
+	if err != nil {
+		t.Fatalf("competing FOU Ensure cannot resume after Remove releases locks: %v", err)
+	}
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGREReceiveClaimCrossEncapsulationLocking(t *testing.T) {
+	link := testLink()
+	link.GRE = domain.GREOptions{}
+	fou := link
+	fou.Encapsulation = domain.EncapFOU
+	fou.GRE.UDPPort = 33061
+	firewall := domain.ResourceClaim{Kind: domain.ResourceFirewall, Key: "test"}
+	receive := domain.ResourceClaim{Kind: domain.ResourceBackendID,
+		Key: greReceiveIdentity(link.Underlay.Local, link.Underlay.Peer, false, 0)}
+	if !slices.Contains(desiredResources(link, "stl-native", firewall), receive) ||
+		!slices.Contains(desiredResources(fou, "stl-fou", firewall), receive) {
+		t.Fatal("same underlay/unkeyed GRE receives do not share a serialization/conflict claim")
+	}
+	fou.GRE.KeyEnabled, fou.GRE.Key = true, 33061
+	if slices.Contains(desiredResources(fou, "stl-fou", firewall), receive) {
+		t.Fatal("distinct keyed GRE receive identity collides with unkeyed Native")
+	}
+}
+
+func TestParseGREIPRouteEmptyPlaceholders(t *testing.T) {
+	// iproute2 6.15 emits {} for non-GRE interfaces when no GRE module/link
+	// has been created yet. This must not prevent the first Native ensure.
+	valid := `{"ifindex":5,"ifname":"g0","flags":["POINTOPOINT","NOARP"],"linkinfo":{"info_kind":"gre","info_data":{"remote":"198.51.100.1","local":"192.0.2.1","ttl":0,"pmtudisc":true}}}`
+	rows, err := parseGRELinks([]byte("[{}, { }, " + valid + ", {}]"))
+	if err != nil {
+		t.Fatalf("empty iproute2 placeholders must not block GRE inspection: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Name != "g0" || rows[0].IfIndex != 5 {
+		t.Fatalf("GRE parser lost genuine identity after placeholders: %#v", rows)
+	}
+	if empty, err := parseGRELinks([]byte("[{}, {}]")); err != nil || len(empty) != 0 {
+		t.Fatalf("only placeholders should produce empty, valid observation: %#v, %v", empty, err)
+	}
+	for _, raw := range []string{
+		`[{}, {"ifname":"unrecognized"}]`,
+		`[{}, {"ifindex":1,"ifname":"foreign","linkinfo":{"info_kind":"veth"}}]`,
+		`[{}, null]`,
+		`[{}, 17]`,
+	} {
+		if _, err := parseGRELinks([]byte(raw)); err == nil {
+			t.Fatalf("must reject nonempty/malformed GRE observation: %s", raw)
+		}
+	}
+}
+
+func TestGREInspectionRejectsMalformedRootAndWildcardFallback(t *testing.T) {
+	// A genuine kernel gre0 fallback is the only wildcard interface omitted.
+	fallback := `{"ifindex":8,"ifname":"gre0","flags":["NOARP"],"linkinfo":{"info_kind":"gre","info_data":{"local":"any","remote":"any","ttl":0}}}`
+	parsed, err := parseGRELinks([]byte("[{}, " + fallback + ", {}]"))
+	if err != nil || len(parsed) != 0 {
+		t.Fatalf("valid gre0 fallback and empty iproute2 placeholders must be skipped: %#v %v", parsed, err)
+	}
+	if links, err := parseGRELinks([]byte("[]")); err != nil || len(links) != 0 {
+		t.Fatalf("empty JSON array must remain valid: %#v %v", links, err)
+	}
+	for name, raw := range map[string]string{
+		"top-level null":         "null",
+		"whitespace null":        " \n null \n",
+		"empty input":            " \n ",
+		"nonarray root":          `{"ifname":"gre0"}`,
+		"wrong fallback kind":    `[{"ifindex":8,"ifname":"gre0","linkinfo":{"info_kind":"veth","info_data":{"local":"any","remote":"any"}}}]`,
+		"missing fallback index": `[{"ifname":"gre0","linkinfo":{"info_kind":"gre","info_data":{"local":"any","remote":"any"}}}]`,
+		"foreign wildcard name":  `[{"ifindex":8,"ifname":"foreign","linkinfo":{"info_kind":"gre","info_data":{"local":"any","remote":"any"}}}]`,
+		"one wildcard address":   `[{"ifindex":8,"ifname":"gre0","linkinfo":{"info_kind":"gre","info_data":{"local":"any","remote":"198.51.100.20"}}}]`,
+		"owned wildcard alias":   `[{"ifindex":8,"ifname":"gre0","ifalias":"foreign-tag","linkinfo":{"info_kind":"gre","info_data":{"local":"any","remote":"any"}}}]`,
+		"keyed wildcard":         `[{"ifindex":8,"ifname":"gre0","linkinfo":{"info_kind":"gre","info_data":{"local":"any","remote":"any","ikey":"0.0.0.7","okey":"0.0.0.7"}}}]`,
+		"encapsulated wildcard":  `[{"ifindex":8,"ifname":"gre0","linkinfo":{"info_kind":"gre","info_data":{"local":"any","remote":"any","encap":{"type":"fou","sport":33061,"dport":33061}}}}]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, err := parseGRELinks([]byte(raw)); err == nil {
+				t.Fatalf("malformed GRE observation silently treated as absence: %#v", got)
+			}
+		})
 	}
 }
 
@@ -414,10 +726,11 @@ func TestFOUAndGUELifecycleUseOwnedSymmetricUDPMapping(t *testing.T) {
 			link.GRE.UDPPort = 5555
 			name, _ := InterfaceName(link.ID)
 			runner := &fakeRunner{link: link, name: name}
-			// A Native GRE with the same endpoints/key remains distinguishable.
+			// Same underlay peers are supported across encapsulations only when
+			// Linux GRE receive identity differs (a distinct keyed value here).
 			runner.extra = []observedLink{{
 				Exists: true, IfIndex: 90, Name: "native-peer", Local: link.Underlay.Local, Peer: link.Underlay.Peer,
-				KeyEnabled: link.GRE.KeyEnabled, Key: link.GRE.Key, PMTUD: true, Encapsulation: domain.EncapNative,
+				KeyEnabled: true, Key: 1, PMTUD: true, Encapsulation: domain.EncapNative,
 			}}
 			firewall := &fakeFirewall{}
 			b := newTestBackend(t, runner, firewall, fakeCollisions{})

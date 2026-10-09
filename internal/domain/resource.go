@@ -51,6 +51,21 @@ func validateResourceClaim(r ResourceClaim) error {
 	return nil
 }
 
+// GREReceiveClaim is the shared, secret-free GRE receive reservation. Kernel
+// receive identity depends on underlay endpoints and key presence/value, not
+// Native/FOU/GUE or the UDP port. It is intentionally a reservation identity,
+// not proof that an interface, mapping, or firewall rule is owned.
+func GREReceiveClaim(underlay Underlay, options GREOptions) ResourceClaim {
+	key := "absent"
+	if options.KeyEnabled {
+		key = strconv.FormatUint(uint64(options.Key), 10)
+	}
+	return ResourceClaim{
+		Kind: ResourceBackendID,
+		Key:  "gre/rx/" + underlay.Local.String() + "/" + underlay.Peer.String() + "/key=" + key,
+	}
+}
+
 // ResourceClaimsConflict reports whether two exclusive claims cannot safely be
 // owned by separate Links. Most resources conflict by exact identity; Link
 // addresses/subnets additionally conflict when their IP ranges overlap.

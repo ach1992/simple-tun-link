@@ -114,6 +114,33 @@ Do not duplicate the full cross-backend matrix in each backend Issue. Backend Is
 
 Privileged tests may never mutate the AI Server Agent control-plane interface/routes/firewall.
 
+### GRE live acceptance, without a permanent privileged CI runner
+
+After obtaining **separate authorization for a dedicated disposable test VM**, run
+`sudo env STL_E2E_DISPOSABLE_HOST=approved ./scripts/e2e/gre-netns.sh`
+from a clean checkout. **Never run this on the AI Server Agent control plane,
+a shared host or production infrastructure.** The environment flag is a
+deliberate local opt-in, *not* authorization by itself.
+
+The opt-in script creates only fresh paired network namespaces, synthetic
+veth underlay and per-side temporary state; it invokes the real CLI/Engine/GRE
+backend for Native, FOU and GUE on the same synthetic underlay pair,
+using distinct GRE keys for the UDP-encapsulated siblings. The unkeyed
+same-pair FOU request must fail as a typed conflict before host mutation.
+It checks first ensure, idempotent re-ensure, verified status, real
+bidirectional Link Address traffic, read-only diagnostics, keyed coexistence,
+sibling isolation after removal, owned cleanup and empty state. Cleanup runs
+even on failure. It does **not** install packages, load modules explicitly,
+reconfigure the host control-plane interface, or silently report unsupported
+FOU/GUE capabilities as passing. Kernel module autoload may still occur;
+therefore the host must be disposable.
+
+Preserve the complete log, test exit code, source SHA and printed kernel,
+iproute2, iptables and Go versions as Issue #4/#12 acceptance evidence.
+Compiling the gated Go test in ordinary CI does **not** count as a live pass.
+This backend-focused test does **not** replace Issue #12's coexistence,
+concurrency, pairing, systemd restart or distro release matrix.
+
 ## Git/GitHub
 
 - main is the integration target.

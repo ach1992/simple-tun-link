@@ -293,13 +293,29 @@ func (e *Engine) rollbackWithContext(ctx context.Context, request backend.Reques
 	return original
 }
 
+// reservationClaimsForConflict includes compatibility-only reservations
+// derivable from committed intent. Old GRE state lacks the shared gre/rx claim,
+// but its desired tunnel still reserves that receive identity even when the
+// kernel interface is absent (e.g., before recovery). Never persist or use
+// these inferred claims as ownership proof for Remove or rollback.
+func reservationClaimsForConflict(record state.LinkRecord) []domain.ResourceClaim {
+	claims := record.OwnedResources
+	if record.Desired.Backend == domain.BackendGRE {
+		receive := domain.GREReceiveClaim(record.Desired.Underlay, record.Desired.GRE)
+		if !slices.Contains(claims, receive) {
+			claims = append(slices.Clone(claims), receive)
+		}
+	}
+	return claims
+}
+
 func rejectResourceConflicts(snapshot state.Snapshot, id domain.LinkID, wanted []domain.ResourceClaim) error {
 	for _, record := range snapshot.Links {
 		if record.Desired.ID == id {
 			continue
 		}
 		for _, wantedClaim := range wanted {
-			for _, ownedClaim := range record.OwnedResources {
+			for _, ownedClaim := range reservationClaimsForConflict(record) {
 				conflict, err := domain.ResourceClaimsConflict(wantedClaim, ownedClaim)
 				if err != nil {
 					return stlerr.Wrap(stlerr.CodeState, "validate_resources", string(id), "", "cannot compare resource ownership", err)

@@ -1,6 +1,7 @@
 package gre
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -78,15 +79,48 @@ type observedLink struct {
 }
 
 func parseGRELinks(raw []byte) ([]observedLink, error) {
-	var rows []linkJSON
-	if err := json.Unmarshal(raw, &rows); err != nil {
+	// json.Unmarshal accepts top-level null into a nil slice, but inspection
+	// must never treat malformed or absent output as zero GRE interfaces.
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '[' {
+		return nil, fmt.Errorf("GRE link inspection must be a JSON array")
+	}
+	var rows []json.RawMessage
+	if err := json.Unmarshal(trimmed, &rows); err != nil {
 		return nil, fmt.Errorf("parse GRE link state: %w", err)
 	}
 	out := make([]observedLink, 0, len(rows))
-	for _, row := range rows {
-		// Linux exposes the wildcard gre0 fallback through the same query. It
-		// has local/remote "any" and is not an STL point-to-point Link.
-		if strings.TrimSpace(row.LinkInfo.InfoData.Local) == "any" || strings.TrimSpace(row.LinkInfo.InfoData.Remote) == "any" {
+	for _, item := range rows {
+		// iproute2 can emit exact empty JSON objects for unrelated interfaces
+		// when filtering by type gre before the GRE module is loaded. Ignore
+		// only those placeholders: partially populated observations must still
+		// fail closed rather than masking a foreign/corrupted GRE identity.
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(item, &fields); err != nil || fields == nil {
+			return nil, fmt.Errorf("invalid GRE link inspection row")
+		}
+		if len(fields) == 0 {
+			continue
+		}
+		var row linkJSON
+		if err := json.Unmarshal(item, &row); err != nil {
+			return nil, fmt.Errorf("invalid GRE link inspection row: %w", err)
+		}
+		// Only the kernel's genuine gre0 fallback is safely ignorable. Any
+		// other wildcard GRE row (or a malformed gre0 identity) must fail
+		// closed rather than disappear from conflict/ownership inspection.
+		local := strings.TrimSpace(row.LinkInfo.InfoData.Local)
+		remote := strings.TrimSpace(row.LinkInfo.InfoData.Remote)
+		if local == "any" || remote == "any" {
+			if row.IfName != "gre0" || row.IfIndex <= 0 ||
+				row.LinkInfo.InfoKind != "gre" || row.IfAlias != "" ||
+				local != "any" || remote != "any" ||
+				row.LinkInfo.InfoData.IKey != "" || row.LinkInfo.InfoData.OKey != "" ||
+				row.LinkInfo.InfoData.Encap != nil ||
+				row.LinkInfo.InfoData.ICsum || row.LinkInfo.InfoData.OCsum ||
+				row.LinkInfo.InfoData.ISeq || row.LinkInfo.InfoData.OSeq {
+				return nil, fmt.Errorf("invalid GRE wildcard fallback inspection row")
+			}
 			continue
 		}
 		state, err := parseGRELink(row)
@@ -223,11 +257,11 @@ func (g observedLink) matchesConfigurationBeforeOwnership(link domain.Link, name
 		g.Encapsulation == link.Encapsulation && g.UDPPort == link.GRE.UDPPort
 }
 
-func (g observedLink) backendIdentity() string {
+func (g observedLink) receiveIdentity() string {
 	if !g.Exists || !g.Local.IsValid() || !g.Peer.IsValid() {
 		return ""
 	}
-	return backendIdentity(g.Local, g.Peer, g.KeyEnabled, g.Key, g.Encapsulation, g.UDPPort)
+	return greReceiveIdentity(g.Local, g.Peer, g.KeyEnabled, g.Key)
 }
 
 func validateLink(link domain.Link) error {
@@ -301,6 +335,19 @@ func greTypeArgs(link domain.Link) []string {
 	return args
 }
 
+// Keep observed-kernel identities and persisted Desired reservations on the
+// exact same canonical resource key, including legacy (pre-gre/rx) records.
+func greReceiveIdentity(local, peer netip.Addr, keyed bool, key uint32) string {
+	return domain.GREReceiveClaim(
+		domain.Underlay{Local: local, Peer: peer},
+		domain.GREOptions{KeyEnabled: keyed, Key: key},
+	).Key
+}
+
+func greReceiveClaim(link domain.Link) domain.ResourceClaim {
+	return domain.GREReceiveClaim(link.Underlay, link.GRE)
+}
+
 func backendIdentity(local, peer netip.Addr, keyed bool, key uint32, encap domain.Encapsulation, port uint16) string {
 	keyText := "none"
 	if keyed {
@@ -316,6 +363,7 @@ func backendIdentity(local, peer netip.Addr, keyed bool, key uint32, encap domai
 func desiredResources(link domain.Link, name string, firewall domain.ResourceClaim) []domain.ResourceClaim {
 	return append(commonCollisionClaims(link, name),
 		domain.ResourceClaim{Kind: domain.ResourceBackendID, Key: backendIdentity(link.Underlay.Local, link.Underlay.Peer, link.GRE.KeyEnabled, link.GRE.Key, link.Encapsulation, link.GRE.UDPPort)},
+		greReceiveClaim(link),
 		firewall,
 	)
 }
