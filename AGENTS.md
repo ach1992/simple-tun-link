@@ -25,13 +25,11 @@ Hard boundaries:
 - Never make interactive text an automation API; machine-readable outputs are versioned and secret-safe, and desired-state automation is idempotent.
 - v0.1 secret-bearing pairing defaults to Quick Link: payloads are SENSITIVE, may carry receiver credentials, must never leak into ordinary logs/status/diagnostics, and must remain schema-extensible for a future secure/local-key exchange mode.
 
-Validation for ordinary Go changes:
-
-~~~bash
-test -z "$(gofmt -l .)"
-go vet ./...
-go test ./...
-~~~
+Validation economics:
+- During implementation, use the narrowest high-signal test that can change the next decision; do not repeatedly run the full suite while the candidate is still changing.
+- Do not add tests for trivial/compiler-guaranteed behavior or duplicate an already stronger behavioral proof.
+- Race/fuzz/repeated stress/cross-compile/privileged E2E are risk-triggered, not default rituals.
+- Once a Go candidate is stable, run the required acceptance gate once: `test -z "$(gofmt -l .)"`, `go vet ./...`, `go test ./...`, then exact-candidate CI. Re-run only evidence invalidated by later changes.
 
 Privileged/network tests run only in disposable namespaces/environments and must preserve the AI Server Agent control plane.
 

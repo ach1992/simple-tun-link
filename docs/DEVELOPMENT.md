@@ -79,31 +79,40 @@ Optional cleanup/diagnostic failures may be warnings only when the requested ope
 
 ## Testing
 
+Testing is evidence, not ceremony. Add or run a test only when its failure could reveal a real behavioral, compatibility, security, concurrency, rollback, or contract defect. Do not add tests for obvious language/compiler behavior, trivial getters/constants, documentation-only edits, or implementation details already exercised by a stronger behavioral test.
+
+During implementation:
+- run the narrowest relevant package/test after a meaningful behavioral slice when early feedback is useful;
+- do not rerun the full suite after every edit;
+- do not use race, fuzz, repeated/shuffled loops, cross-compilation, or privileged E2E by default—use them only when the changed surface creates that specific risk or a prior failure justifies them;
+- when a regression is fixed, keep one focused deterministic regression where practical instead of permanently repeating large stress loops;
+- preserve still-valid evidence after unrelated edits.
+
+For a stable Go candidate, run the repository-required acceptance gate once: formatting, `go vet ./...`, `go test ./...`, and exact-candidate CI. Re-run broader evidence only when a later change invalidates it.
+
 ### Unit tests
-Cover:
-- parsing/validation;
-- address allocation;
-- setup-link encode/decode/versioning;
-- plan/idempotency logic;
-- secret redaction;
-- CLI/JSON contracts where useful.
+Prioritize behavior with meaningful failure modes:
+- parsing/validation and malformed input;
+- address/resource allocation and collision rules;
+- setup-link encode/decode/versioning and secret redaction;
+- plan/idempotency/rollback logic;
+- public CLI/JSON/error contracts where compatibility matters.
 
-### Linux integration tests
-Use network namespaces and disposable interfaces for:
-- create/reapply/remove;
-- actual data transfer, not only interface existence;
-- failure rollback;
-- MTU behavior;
-- conflicting resources;
-- multiple simultaneous Links to different peers;
-- same-peer coexistence, including GRE Native + WireGuard + GRE/FOU on one A <-> B pair;
-- isolation when one Link is removed/repaired while siblings remain active;
-- concurrent allocation attempts for collision-sensitive resources;
-- mismatched peer configuration;
-- reboot/reapply semantics where feasible;
-- backend isolation.
+Avoid duplicate tests that prove the same branch through multiple layers unless the layer boundary itself is the risk.
 
-Privileged tests must run only in an explicitly disposable environment and may never mutate the AI Server Agent control-plane interface/routes/firewall.
+### Linux integration and E2E tests
+Use disposable environments only for behavior that unit/fake tests cannot establish, especially real kernel/backend effects:
+- create/reapply/remove and actual data transfer;
+- rollback after real partial failure;
+- MTU/PMTU behavior and backend counters;
+- collision/isolation across simultaneous Links;
+- same-peer coexistence, including GRE Native + WireGuard + GRE/FOU;
+- persistence/restart behavior in a disposable systemd-capable environment;
+- backend-specific capability and mismatch behavior.
+
+Do not duplicate the full cross-backend matrix in each backend Issue. Backend Issues own focused backend proofs; Issue #12 owns release-level coexistence, multi-Link, restart/reapply, and supported-environment E2E evidence.
+
+Privileged tests may never mutate the AI Server Agent control-plane interface/routes/firewall.
 
 ## Git/GitHub
 
