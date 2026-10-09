@@ -21,7 +21,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/version"
 )
 
-const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link diagnose <link-id> [--mtu <bytes>] [--json]\n  stl link restore --all\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
+const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link diagnose <link-id> [--mtu <bytes>] [--json]\n  stl link preview --stdin [--json]\n  stl link restore --all\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
 
 const jsonSchemaVersion = 1
 
@@ -48,6 +48,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 // runWithRuntime keeps the production CLI and tests on the same assembly path.
 // Broader lifecycle CLI/JSON ergonomics belong to Issue #10.
 func runWithRuntime(args []string, stdout, stderr io.Writer, options *runtimeOptions) int {
+	return runWithRuntimeInput(args, os.Stdin, stdout, stderr, options)
+}
+
+// Stdin is explicit only for credential-sensitive, read-only pairing input.
+// Existing CLI/Engine paths preserve their historical non-interactive behavior.
+func runWithRuntimeInput(args []string, input io.Reader, stdout, stderr io.Writer, options *runtimeOptions) int {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprint(stdout, usage)
 		return 0
@@ -85,6 +91,9 @@ func runWithRuntime(args []string, stdout, stderr io.Writer, options *runtimeOpt
 		}
 		if len(args) >= 2 && args[1] == "diagnose" {
 			return linkDiagnoseCommand(args[1:], stdout, stderr, options)
+		}
+		if len(args) >= 2 && args[1] == "preview" {
+			return linkPreviewCommand(args[1:], input, stdout, stderr)
 		}
 		if len(args) != 3 || args[1] != "restore" || args[2] != "--all" {
 			fmt.Fprintln(stderr, "usage: stl link restore --all")
