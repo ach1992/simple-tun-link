@@ -621,3 +621,18 @@ func TestIPTablesFirewallPreservesEquivalentExternalRule(t *testing.T) {
 		t.Fatal("STL removal deleted equivalent external rule")
 	}
 }
+
+func TestIPTablesFirewallFindsAnyOwnedInboundMarker(t *testing.T) {
+	runner := newFirewallRunner()
+	fw := testFirewall(t, runner)
+	owner := domain.LinkID("lnk_0123456789abcdef0123456789abcdef")
+	other := domain.LinkID("lnk_fedcba9876543210fedcba9876543210")
+	runner.seedRule("iptables", firewallRuleArgs(other, testFirewallRule()))
+	if present, err := fw.HasOwnedInbound(context.Background(), owner, false); err != nil || present {
+		t.Fatalf("foreign marker matched owner: present=%v err=%v", present, err)
+	}
+	runner.seedRule("iptables", firewallRuleArgs(owner, testFirewallRule()))
+	if present, err := fw.HasOwnedInbound(context.Background(), owner, false); err != nil || !present {
+		t.Fatalf("owned marker not found: present=%v err=%v", present, err)
+	}
+}

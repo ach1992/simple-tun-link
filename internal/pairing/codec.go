@@ -262,6 +262,7 @@ var wireAllowedFields = map[string]map[string]string{
 		"addresses":     "addresses",
 		"backend":       "string",
 		"encapsulation": "string",
+		"gre":           "gre",
 	},
 	"underlay": {
 		"local": "string",
@@ -274,6 +275,16 @@ var wireAllowedFields = map[string]map[string]string{
 	"credential": {
 		"kind": "string",
 		"data": "string",
+	},
+	"gre": {
+		"key_enabled":   "bool",
+		"key":           "number",
+		"ttl":           "number",
+		"tos":           "number",
+		"disable_pmtud": "bool",
+		"checksum":      "bool",
+		"sequence":      "bool",
+		"udp_port":      "number",
 	},
 }
 
@@ -326,6 +337,12 @@ func validateWireValue(dec *json.Decoder, expected string, depth int) error {
 	if expected == "number" {
 		if _, ok := token.(json.Number); !ok {
 			return fmt.Errorf("expected JSON number")
+		}
+		return nil
+	}
+	if expected == "bool" {
+		if _, ok := token.(bool); !ok {
+			return fmt.Errorf("expected JSON boolean")
 		}
 		return nil
 	}

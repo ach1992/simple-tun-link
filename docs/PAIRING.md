@@ -56,8 +56,9 @@ Recipient credentials may be present only for:
 - IPsec/ESP or IPsec/NAT-T: a bounded PSK intended for authorized endpoints.
   Backend code is responsible for creating a high-entropy secret and storing
   it with restrictive permissions.
-- GRE/IPIP Native, FOU and GUE: no credential payload is accepted. GRE keys,
-  when introduced by their backend, are identifiers rather than encryption.
+- GRE/IPIP Native, FOU and GUE: no credential payload is accepted. GRE keys
+  and other GRE backend options are ordinary non-secret pairing data; GRE keys
+  are identifiers rather than encryption.
 
 `PreviewSetupLink(input)` is the preferred import-preview entrypoint: it
 returns redacted recipient metadata without returning an `Offer` containing a
@@ -84,10 +85,11 @@ adapter and CLI must obtain an explicit local apply action after displaying
 the redacted preview, then use the canonical Engine and backend secret
 storage instead of inventing a second Link lifecycle.
 
-The current module intentionally does not implement backend-specific
-parameter mapping, the final interactive UI, or a privileged installation.
-It therefore completes an **independent, testable portion of Issue #8**, not
-Issue #8's full acceptance or any live tunnel-recovery requirement.
+The pairing module carries validated backend options but does not itself apply
+them, implement the final interactive UI, or perform privileged installation.
+Application still goes through the canonical Engine/backend lifecycle. Pairing
+therefore remains an **independent, testable portion of Issue #8**, not Issue
+#8's full acceptance or any live tunnel-recovery requirement.
 
 A future `secure_exchange` mode requires an explicit protocol/schema update,
 not a reinterpretation of v1 Quick Link secrets. An unknown mode or

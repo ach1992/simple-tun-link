@@ -39,6 +39,20 @@ type LinkAddresses struct {
 	Peer  netip.Prefix `json:"peer"`
 }
 
+// GREOptions is the GRE-specific desired configuration carried by a Link.
+// The zero value is the simple unkeyed GRE default. KeyEnabled distinguishes
+// an explicit GRE key value of zero from an unkeyed tunnel.
+type GREOptions struct {
+	KeyEnabled   bool   `json:"key_enabled,omitempty"`
+	Key          uint32 `json:"key,omitempty"`
+	TTL          uint8  `json:"ttl,omitempty"`
+	TOS          uint8  `json:"tos,omitempty"`
+	DisablePMTUD bool   `json:"disable_pmtud,omitempty"`
+	Checksum     bool   `json:"checksum,omitempty"`
+	Sequence     bool   `json:"sequence,omitempty"`
+	UDPPort      uint16 `json:"udp_port,omitempty"`
+}
+
 // Link is desired backend-neutral state. Interface names and backend-owned
 // resource identities deliberately do not participate in Link identity.
 type Link struct {
@@ -48,6 +62,9 @@ type Link struct {
 	Addresses     LinkAddresses `json:"addresses"`
 	Backend       Backend       `json:"backend"`
 	Encapsulation Encapsulation `json:"encapsulation"`
+	// GRE is meaningful only when Backend == BackendGRE. omitzero keeps the
+	// backend-neutral JSON compact while preserving Link comparability.
+	GRE GREOptions `json:"gre,omitzero"`
 }
 
 // ResourceClaim is a secret-free identity for a collision-sensitive host
@@ -100,6 +117,29 @@ func (l Link) Validate() error {
 	}
 	if l.Encapsulation == "" {
 		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "encapsulation is required")
+	}
+	if l.Backend != BackendGRE && l.GRE != (GREOptions{}) {
+		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "GRE options are only valid for the GRE backend")
+	}
+	if l.Backend == BackendGRE {
+		switch l.Encapsulation {
+		case EncapNative, EncapFOU, EncapGUE:
+		default:
+			return stlerr.New(stlerr.CodeUnsupported, "validate_link", string(l.ID), string(l.Backend), "unsupported GRE encapsulation")
+		}
+		if !l.GRE.KeyEnabled && l.GRE.Key != 0 {
+			return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "GRE key value requires key_enabled")
+		}
+		switch l.Encapsulation {
+		case EncapNative:
+			if l.GRE.UDPPort != 0 {
+				return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "GRE Native does not use a UDP encapsulation port")
+			}
+		case EncapFOU, EncapGUE:
+			if l.GRE.UDPPort == 0 {
+				return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "GRE FOU/GUE requires a UDP encapsulation port")
+			}
+		}
 	}
 	return nil
 }

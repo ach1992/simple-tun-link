@@ -306,12 +306,15 @@ The engine owns transaction/idempotency semantics. Backend implementations must 
 
 ### GRE
 Default backend.
-- Native default.
-- keyed GRE supported;
-- FOU/GUE advanced encapsulation;
-- Auto MTU default;
-- TTL/TOS/checksum/sequence/PMTUD only exposed where meaningful;
-- GRE key is not an authentication secret.
+- Native is the default; the v0.1 GRE implementation uses IPv4 underlay endpoints.
+- Keyed GRE is supported, including an explicit key value of zero; the key is an identifier, not authentication or encryption.
+- FOU/GUE are advanced encapsulations. Each Link owns one non-zero symmetric UDP port: the same fixed port is used as the tunnel encapsulation source/destination and as a receive mapping bound to the exact local/peer underlay pair and physical underlay device.
+- Interface names are deterministically derived from Link ID and remain within Linux IFNAMSIZ; an `stl:<LinkID>` alias marks ownership. Destructive removal uses the observed kernel ifindex rather than deleting by reusable interface name alone.
+- Multi-Link collision identity includes encapsulation, underlay pair, GRE key presence/value and, for FOU/GUE, UDP port. Distinct keys/encapsulations may coexist when the kernel can distinguish them.
+- Auto MTU consumes backend overhead instead of hardcoded guesses: IPv4+GRE base overhead plus enabled GRE checksum/key/sequence fields, plus UDP for FOU and UDP+GUE base header for GUE.
+- TTL/TOS/checksum/sequence/PMTUD are explicit advanced options and are verified from observed kernel state.
+- The backend exposes read-only capability and packet/byte/error counter hooks for common diagnostics; health observation never repairs state.
+- Native inbound firewall ownership is exact peer/local/protocol/device. FOU/GUE use exact peer/local/UDP-destination/device rules. Route drift with an older owned rule fails closed for explicit reconciliation instead of silently adding or deleting a different rule.
 
 ### IPIP
 - Native default within the IPIP backend;
