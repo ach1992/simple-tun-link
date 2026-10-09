@@ -74,3 +74,36 @@ produce a structured error rather than creating/replacing files.
 `link ensure`, create/import, optional throughput, non-GRE diagnostic
 adapters and the broader interactive UX remain pending under Issue #10. No new mutation route is
 introduced by the read-only commands.
+
+## Explicit plaintext GRE setup-link export (Issue #8)
+
+`stl link export <link-id> [--json]` deliberately exports an
+**already-saved GRE Link's** versioned `stl://2.` Setup Link for the
+other endpoint. It uses the **same canonical pairing model and receiver
+inversion** as `stl link preview --stdin`; no alternate encoder or
+backend setup method is introduced. For example:
+
+~~~sh
+stl link export lnk_<32-hex-characters>
+stl link export lnk_<32-hex-characters> --json
+~~~
+
+Human output contains a canonical pairing copy block and the encoded
+URL; machine output contains integer CLI `schema_version: 1`, separate
+`pairing_schema_version`, Link ID, backend/mode metadata and an
+explicit `setup_link`. Both are **intentional export outputs**, not
+status or diagnostic responses. The output reveals the Link's endpoints,
+display-name metadata (encoded in the URL), GRE key identifiers and
+other configuration. An included SHA-256 checksum detects accidental
+damage, **not** authenticity. GRE does not encrypt or authenticate traffic;
+share setup material with the intended peer rather than public logs.
+
+The command is read-only and does not inspect, repair or apply the Link.
+Existence in saved desired state **does not prove a working tunnel**.
+Only currently credential-free GRE exports are supported. IPIP awaits its
+complete backend contract; WireGuard and IPsec remain explicitly
+Unsupported until reviewed secure recipient credential generation,
+export, storage and apply exist. Export never silently omits private
+keys/PSKs to manufacture a broken setup link. Confirm the configuration
+via the existing `link preview` before a separate authorized apply
+step. No new command automatically applies an exported setup link.
