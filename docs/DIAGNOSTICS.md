@@ -87,6 +87,39 @@ STL_LIVE_LOOPBACK_PING=1 go test ./internal/diagnostics -run '^TestLinuxDFProber
 This verifies iputils syntax and parser behavior, **not** real Link
 data-plane reachability, FOU/GUE or multi-Link E2E acceptance.
 
+## GRE adapter — backend identity and counters
+
+`ObserveGRE(ctx, link, inspector, runner, manualMTU)` connects the
+backend-neutral v1 measurement and Linux DF-probe implementation to the
+already implemented GRE backend, without duplicating the MTU/quality logic.
+
+It requires a GRE Link, the backend's capability report and
+`DiagnosticState` ownership/counter inspection. Before transmitting
+any Link Address ICMP echo, it verifies the deterministic GRE interface name,
+encapsulation and positive kernel ifindex. The Linux preflight then requires
+the same ifindex in the selected Link-interface address snapshot; an interface
+replaced under a reusable name cannot be silently mixed with the earlier
+backend diagnostic view.
+
+The backend itself supplies its real worst-case overhead for native GRE,
+key, checksum, sequence, FOU/GUE UDP and GUE headers. Source route, underlay
+MTU and selected Link Address checks remain in the single Linux adapter.
+Measurements are bounded and purely observational; **no suggested MTU is
+automatically applied**. Live GRE operational interface/counter verification
+does not by itself prove traffic to a remote peer.
+
+`GREReport` preserves the common `schema_version: 1`, `link_id`,
+`mtu` and `quality` keys, adding only the GRE backend kind and
+the secret-free, identity-checked interface counters as `state`.
+Capability failures, unknown ownership and mismatched interface observations
+return explicit non-success; they are not mislabeled as healthy.
+
+The adapter has fake-runner regressions covering live-observation composition,
+FOU overhead vs manual MTU, wrong backend, unavailable capability, stale
+ifindex, foreign interface, malformed counter identities, and cancellation.
+These tests do **not** claim real FOU/GUE data-plane acceptance (Issue #4),
+CLI/operator commands (Issue #10), or release E2E (Issue #12).
+
 ## MTU policy
 
 `MTUConstraints.UnderlayMTU` comes from route-aware source/interface
@@ -170,8 +203,9 @@ with its separate authorization/ownership checks.
 
 This Linux adapter does not complete Issue #9. Still required:
 
-- Link-scoped backend interface/overhead/capability integration and tooling
-  preflight with explicit missing/unsupported capability reporting (#4–#7);
+- Connect this GRE-specific backend diagnostic adapter to the operator CLI,
+  and add equivalent capability/interface/overhead/counter integration for
+  IPIP, WireGuard and IPsec as their backends become available (#5–#7);
 - Safe MTU application through the Engine, never from health observation;
 - Backend state/counter integration (#4–#7);
 - Operator diagnostics/JSON entry points and optional throughput path (#10);
