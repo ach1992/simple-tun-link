@@ -22,7 +22,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/version"
 )
 
-const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link diagnose <link-id> [--mtu <bytes>] [--json]\n  stl link preview --stdin [--json]\n  stl link import --stdin --confirm <preview-token> [--json]\n  stl link export <link-id> [--json]\n  stl link ensure --stdin [--json]\n  stl link remove <link-id> --confirm <link-id> [--json]\n  stl link restore --all\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
+const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl menu\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link diagnose <link-id> [--mtu <bytes>] [--json]\n  stl link preview --stdin [--json]\n  stl link import --stdin --confirm <preview-token> [--json]\n  stl link export <link-id> [--json]\n  stl link ensure --stdin [--json]\n  stl link remove <link-id> --confirm <link-id> [--json]\n  stl link restore --all\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
 
 const jsonSchemaVersion = 1
 
@@ -55,12 +55,28 @@ func runWithRuntime(args []string, stdout, stderr io.Writer, options *runtimeOpt
 // Stdin is explicit for data-only desired Link JSON and for sensitive,
 // read-only pairing previews. Existing Engine/restore paths remain shared.
 func runWithRuntimeInput(args []string, input io.Reader, stdout, stderr io.Writer, options *runtimeOptions) int {
-	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
+	if len(args) == 0 {
+		// With no terminal attached, preserve deterministic help output.
+		stdinFile, stdinOK := input.(*os.File)
+		stdoutFile, stdoutOK := stdout.(*os.File)
+		if stdinOK && stdoutOK && terminalIsInteractive(stdinFile) && terminalIsInteractive(stdoutFile) {
+			return menuCommand(input, stdout, stderr, options)
+		}
+		fmt.Fprint(stdout, usage)
+		return 0
+	}
+	if args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprint(stdout, usage)
 		return 0
 	}
 
 	switch args[0] {
+	case "menu":
+		if len(args) != 1 {
+			fmt.Fprintln(stderr, "usage: stl menu")
+			return 2
+		}
+		return menuCommand(input, stdout, stderr, options)
 	case "version":
 		if len(args) == 2 && args[1] == "--json" {
 			payload := struct {
