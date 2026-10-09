@@ -258,7 +258,7 @@ func (o Offer) HumanReadableBlock() (string, error) {
 		b.WriteString("STL SETUP — no included recipient credential\n")
 	}
 	fmt.Fprintf(&b, "Version: %d\nExchange mode: %s\nLink ID: %s\nBackend: %s\nEncapsulation: %s\n",
-		SchemaVersion, o.mode, recipient.ID, recipient.Backend, recipient.Encapsulation)
+		o.effectiveSchemaVersion(), o.mode, recipient.ID, recipient.Backend, recipient.Encapsulation)
 	fmt.Fprintf(&b, "Receiver underlay: %s\nPeer underlay: %s\nReceiver Link Address: %s\nPeer Link Address: %s\n",
 		recipient.Underlay.Local, recipient.Underlay.Peer, recipient.Addresses.Local, recipient.Addresses.Peer)
 	if o.IsSensitive() {

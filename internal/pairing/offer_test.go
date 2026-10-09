@@ -279,7 +279,7 @@ func TestPairingRejectsIPv6UnderlayZones(t *testing.T) {
 func TestGRERoundTripPreservesBackendOptions(t *testing.T) {
 	link := testLink(idOne, domain.BackendGRE, domain.EncapNative)
 	link.GRE = domain.GREOptions{
-		KeyEnabled: true, Key: 0, TTL: 64, TOS: 16, DisablePMTUD: true, Checksum: true, Sequence: true,
+		KeyEnabled: true, Key: 0, TOS: 16, DisablePMTUD: true, Checksum: true, Sequence: true,
 	}
 	offer, err := NewQuickOffer(link, nil)
 	if err != nil {
@@ -367,5 +367,8 @@ func TestManualBlockUsesCanonicalPairingOffer(t *testing.T) {
 	}
 	if strings.Contains(block, "SENSITIVE —") {
 		t.Fatal("plaintext offer mislabeled as secret-bearing")
+	}
+	if !strings.Contains(block, "Version: 2\n") || !strings.Contains(block, "Setup link: stl://2.") {
+		t.Fatalf("current human-readable version/link mismatch: %q", block)
 	}
 }

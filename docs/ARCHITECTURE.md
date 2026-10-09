@@ -312,7 +312,7 @@ Default backend.
 - Interface names are deterministically derived from Link ID and remain within Linux IFNAMSIZ; an `stl:<LinkID>` alias marks ownership. Destructive removal uses the observed kernel ifindex rather than deleting by reusable interface name alone.
 - Multi-Link collision identity includes encapsulation, underlay pair, GRE key presence/value and, for FOU/GUE, UDP port. Distinct keys/encapsulations may coexist when the kernel can distinguish them.
 - Auto MTU consumes backend overhead instead of hardcoded guesses: IPv4+GRE base overhead plus enabled GRE checksum/key/sequence fields, plus UDP for FOU and UDP+GUE base header for GUE.
-- TTL/TOS/checksum/sequence/PMTUD are explicit advanced options and are verified from observed kernel state.
+- TTL/TOS/checksum/sequence/PMTUD are explicit advanced options and are verified from observed kernel state. A fixed GRE TTL with disabled PMTU discovery is rejected because Linux documents those semantics as incompatible.
 - The backend exposes read-only capability and packet/byte/error counter hooks for common diagnostics; health observation never repairs state.
 - Native inbound firewall ownership is exact peer/local/protocol/device. FOU/GUE use exact peer/local/UDP-destination/device rules. Route drift with an older owned rule fails closed for explicit reconciliation instead of silently adding or deleting a different rule.
 

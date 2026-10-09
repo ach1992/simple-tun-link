@@ -58,6 +58,13 @@ func TestGREEncapsulationPortValidation(t *testing.T) {
 		{"fou_without_udp_port", func() Link { l := base; l.Encapsulation = EncapFOU; return l }()},
 		{"gue_without_udp_port", func() Link { l := base; l.Encapsulation = EncapGUE; return l }()},
 		{"unkeyed_with_key_value", func() Link { l := base; l.Encapsulation = EncapNative; l.GRE.Key = 7; return l }()},
+		{"fixed_ttl_with_disabled_pmtud", func() Link {
+			l := base
+			l.Encapsulation = EncapNative
+			l.GRE.TTL = 64
+			l.GRE.DisablePMTUD = true
+			return l
+		}()},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

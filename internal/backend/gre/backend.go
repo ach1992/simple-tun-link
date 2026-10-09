@@ -34,6 +34,8 @@ type Options struct {
 	Collisions  CollisionInspector
 	IPBinary    string
 	SetAlias    func(context.Context, int, string) error
+	AddAddress  func(context.Context, int, netip.Prefix) error
+	SetUp       func(context.Context, int) error
 	DeleteLink  func(context.Context, int) error
 	LookupIndex func(string) (int, error)
 }
@@ -45,6 +47,8 @@ type Backend struct {
 	collisions  CollisionInspector
 	ipBinary    string
 	setAlias    func(context.Context, int, string) error
+	addAddress  func(context.Context, int, netip.Prefix) error
+	setUp       func(context.Context, int) error
 	deleteLink  func(context.Context, int) error
 	lookupIndex func(string) (int, error)
 }
@@ -60,6 +64,14 @@ func New(opts Options) (*Backend, error) {
 	setAlias := opts.SetAlias
 	if setAlias == nil {
 		setAlias = linux.SetLinkAliasByIndex
+	}
+	addAddress := opts.AddAddress
+	if addAddress == nil {
+		addAddress = linux.AddIPv4AddressByIndex
+	}
+	setUp := opts.SetUp
+	if setUp == nil {
+		setUp = linux.SetLinkUpByIndex
 	}
 	deleteLink := opts.DeleteLink
 	if deleteLink == nil {
@@ -77,7 +89,8 @@ func New(opts Options) (*Backend, error) {
 	}
 	return &Backend{
 		runner: opts.Runner, routes: opts.Routes, firewall: opts.Firewall,
-		collisions: opts.Collisions, ipBinary: ip, setAlias: setAlias, deleteLink: deleteLink, lookupIndex: lookupIndex,
+		collisions: opts.Collisions, ipBinary: ip, setAlias: setAlias, addAddress: addAddress, setUp: setUp,
+		deleteLink: deleteLink, lookupIndex: lookupIndex,
 	}, nil
 }
 

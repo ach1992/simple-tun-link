@@ -130,6 +130,9 @@ func (l Link) Validate() error {
 		if !l.GRE.KeyEnabled && l.GRE.Key != 0 {
 			return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "GRE key value requires key_enabled")
 		}
+		if l.GRE.TTL != 0 && l.GRE.DisablePMTUD {
+			return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "fixed GRE TTL requires PMTU discovery to remain enabled")
+		}
 		switch l.Encapsulation {
 		case EncapNative:
 			if l.GRE.UDPPort != 0 {

@@ -116,6 +116,13 @@ func TestLegacyV1CompatibilityAndGREMigration(t *testing.T) {
 		if !strings.HasPrefix(reencoded, legacySetupPrefix) {
 			t.Fatalf("legacy setup link did not preserve its schema version: %q", reencoded)
 		}
+		block, err := decoded.HumanReadableBlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(block, "Version: 1\n") || !strings.Contains(block, "Setup link: stl://1.") {
+			t.Fatalf("legacy human-readable version/link mismatch: %q", block)
+		}
 	})
 
 	t.Run("wireguard_secret", func(t *testing.T) {

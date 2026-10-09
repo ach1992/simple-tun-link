@@ -31,7 +31,7 @@ func testLink() domain.Link {
 		Backend: domain.BackendGRE, Encapsulation: domain.EncapNative,
 		GRE: domain.GREOptions{
 			KeyEnabled: true, Key: 0, TTL: 64, TOS: 0x10,
-			DisablePMTUD: true, Checksum: true, Sequence: true,
+			Checksum: true, Sequence: true,
 		},
 	}
 }
@@ -208,6 +208,20 @@ func newTestBackend(t *testing.T, runner *fakeRunner, firewall *fakeFirewall, co
 			runner.state.Owner = owner
 			return nil
 		},
+		AddAddress: func(_ context.Context, index int, prefix netip.Prefix) error {
+			if index != 77 {
+				return fmt.Errorf("wrong index %d", index)
+			}
+			runner.state.IPv4Addresses = []netip.Prefix{prefix}
+			return nil
+		},
+		SetUp: func(_ context.Context, index int) error {
+			if index != 77 {
+				return fmt.Errorf("wrong index %d", index)
+			}
+			runner.state.Up = true
+			return nil
+		},
 		DeleteLink: func(_ context.Context, index int) error {
 			if index != 77 {
 				return fmt.Errorf("wrong index %d", index)
@@ -272,7 +286,7 @@ func TestNativeGRELifecycleIsIdempotentAndOwned(t *testing.T) {
 			break
 		}
 	}
-	for _, fragment := range []string{"key 0", "ttl 64", "tos 0x10", "nopmtudisc", "icsum ocsum", "iseq oseq"} {
+	for _, fragment := range []string{"key 0", "ttl 64", "tos 0x10", "icsum ocsum", "iseq oseq"} {
 		if !strings.Contains(createCommand, fragment) {
 			t.Fatalf("create argv missing %q: %q", fragment, createCommand)
 		}
@@ -546,5 +560,127 @@ func TestNativeGRELookupFailureReturnsSafeRollbackForCreatedInterface(t *testing
 	}
 	if runner.state.Exists {
 		t.Fatal("created unowned GRE interface survived rollback")
+	}
+}
+
+func TestNativeGRECreationIdentityDriftPreservesReplacement(t *testing.T) {
+	link := testLink()
+	name, _ := InterfaceName(link.ID)
+	foreignOwner := domain.LinkID("lnk_33333333333333333333333333333333")
+
+	for _, tc := range []struct {
+		name     string
+		lookup   func(*fakeRunner) (int, error)
+		setAlias func(*fakeRunner, int, string) error
+	}{
+		{
+			name: "replacement_before_ownership_mark",
+			lookup: func(r *fakeRunner) (int, error) {
+				r.state.IfIndex = 88
+				r.state.Owner = foreignOwner
+				return 77, nil
+			},
+			setAlias: func(*fakeRunner, int, string) error {
+				t.Fatal("ownership must not be written after pre-alias identity drift")
+				return nil
+			},
+		},
+		{
+			name:   "ownership_changed_before_address_setup",
+			lookup: func(*fakeRunner) (int, error) { return 77, nil },
+			setAlias: func(r *fakeRunner, index int, _ string) error {
+				if index != 77 {
+					return fmt.Errorf("wrong index %d", index)
+				}
+				// Model an external writer replacing/changing ownership immediately
+				// after the identity-bound ownership mutation completed.
+				r.state.Owner = foreignOwner
+				return nil
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &fakeRunner{link: link, name: name}
+			firewall := &fakeFirewall{}
+			b, err := New(Options{
+				Runner:   runner,
+				Routes:   fakeRoute{linux.Route{Peer: link.Underlay.Peer, Source: link.Underlay.Local, Device: "eth0"}},
+				Firewall: firewall, Collisions: fakeCollisions{},
+				LookupIndex: func(string) (int, error) { return tc.lookup(runner) },
+				SetAlias:    func(_ context.Context, index int, alias string) error { return tc.setAlias(runner, index, alias) },
+				AddAddress: func(context.Context, int, netip.Prefix) error {
+					t.Fatal("address mutation must not run after identity drift")
+					return nil
+				},
+				SetUp: func(context.Context, int) error {
+					t.Fatal("link-up mutation must not run after identity drift")
+					return nil
+				},
+				DeleteLink: func(_ context.Context, index int) error {
+					t.Fatalf("ambiguous replacement must not be deleted by ifindex %d", index)
+					return nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := context.Background()
+			req := core.Request{Operation: core.OperationEnsure, Link: link}
+			obs, err := b.Inspect(ctx, link)
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidate, err := b.Plan(ctx, req, obs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := b.Validate(ctx, req, obs, candidate); err != nil {
+				t.Fatal(err)
+			}
+			undo, err := b.Apply(ctx, req, obs, candidate)
+			if err == nil || undo == nil {
+				t.Fatalf("identity drift was not surfaced: %v", err)
+			}
+			if err := undo(context.Background()); err == nil || !strings.Contains(err.Error(), "preserving") {
+				t.Fatalf("ambiguous rollback did not fail closed: %v", err)
+			}
+			if !runner.state.Exists || runner.state.Owner != foreignOwner {
+				t.Fatalf("foreign replacement was mutated during failed rollback: %#v", runner.state)
+			}
+		})
+	}
+}
+
+func TestNativeGRERollbackRevalidatesOwnershipBeforeDelete(t *testing.T) {
+	link := testLink()
+	name, _ := InterfaceName(link.ID)
+	runner := &fakeRunner{link: link, name: name}
+	firewall := &fakeFirewall{failEnsure: true}
+	b := newTestBackend(t, runner, firewall, fakeCollisions{})
+	ctx := context.Background()
+	req := core.Request{Operation: core.OperationEnsure, Link: link}
+	obs, err := b.Inspect(ctx, link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := b.Plan(ctx, req, obs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Validate(ctx, req, obs, candidate); err != nil {
+		t.Fatal(err)
+	}
+	undo, err := b.Apply(ctx, req, obs, candidate)
+	if err == nil || undo == nil {
+		t.Fatalf("expected post-create firewall failure: %v", err)
+	}
+
+	foreignOwner := domain.LinkID("lnk_44444444444444444444444444444444")
+	runner.state.Owner = foreignOwner
+	if err := undo(context.Background()); err == nil || !strings.Contains(err.Error(), "preserving") {
+		t.Fatalf("rollback accepted changed ownership: %v", err)
+	}
+	if !runner.state.Exists || runner.state.Owner != foreignOwner {
+		t.Fatalf("rollback deleted or changed foreign-owned interface: %#v", runner.state)
 	}
 }
