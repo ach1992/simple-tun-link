@@ -7,7 +7,7 @@ It creates and manages independent **Link Addresses** between Linux servers over
 Canonical CLI: **stl**  
 Convenience alias: **stlink** (same executable/behavior when installed by the supported installer)
 
-> Status: pre-release development. The GRE backend and observational CLI/diagnostics are implemented, but live GRE FOU/GUE traffic acceptance and IPIP/WireGuard/IPsec backends, complete CLI, installer and release E2E remain outstanding.
+> Status: pre-release development. GRE/IPIP backend code and core lifecycle CLI are integrated; live GRE FOU/GUE traffic acceptance, WireGuard/IPsec, complete interactive/credentialed pairing, installer and release E2E remain outstanding.
 
 ## Why
 

@@ -94,6 +94,14 @@ func linkLifecycleCommand(args []string, input io.Reader, stdout, stderr io.Writ
 	default:
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, "link_mutation", "unknown lifecycle operation")
 	}
+	return executeLinkMutation(operation, desired, id, jsonOutput, stdout, stderr, options)
+}
+
+// executeLinkMutation is the sole CLI execution path for import, ensure and
+// remove. All three delegate actual mutations, ownership and rollback to the
+// same canonical Engine, without another pairing-specific lifecycle.
+func executeLinkMutation(operation string, desired domain.Link, id domain.LinkID,
+	jsonOutput bool, stdout, stderr io.Writer, options *runtimeOptions) int {
 	if options == nil {
 		var err error
 		options, err = productionRuntimeOptions()
@@ -111,19 +119,22 @@ func linkLifecycleCommand(args []string, input io.Reader, stdout, stderr io.Writ
 	ctx, cancel := context.WithTimeout(signalCtx, lifecycleTimeLimit)
 	defer cancel()
 	var result app.Result
-	switch args[0] {
-	case "ensure":
+	switch operation {
+	case "link_ensure", "link_import":
 		result, err = engine.Ensure(ctx, desired)
-	case "remove":
+	case "link_remove":
 		result, err = engine.Remove(ctx, id)
+	default:
+		return lifecycleFailure(stdout, stderr, jsonOutput, stlerr.CodeInternal, operation, nil,
+			"unknown internal Link operation")
 	}
 	if err != nil {
 		code := stlerr.CodeOf(err)
 		return lifecycleFailure(stdout, stderr, jsonOutput, code, operation, &result,
 			"Link operation did not complete successfully; inspect current Link status/state before retry")
 	}
-	if result.LinkID != id || (args[0] == "remove" && !result.Removed) ||
-		(args[0] == "ensure" && result.Removed) {
+	if result.LinkID != id || (operation == "link_remove" && !result.Removed) ||
+		(operation != "link_remove" && result.Removed) {
 		return lifecycleFailure(stdout, stderr, jsonOutput, stlerr.CodeInternal, operation, &result,
 			"Link Engine returned an inconsistent lifecycle result; reconcile before retry")
 	}
@@ -137,9 +148,13 @@ func linkLifecycleCommand(args []string, input io.Reader, stdout, stderr io.Writ
 		}
 		return 0
 	}
-	if args[0] == "ensure" {
+	if operation != "link_remove" {
 		if result.Changed {
-			fmt.Fprintf(stdout, "Link %s ensured; changes applied and verified\n", id)
+			if operation == "link_import" {
+				fmt.Fprintf(stdout, "Link %s imported; changes applied and verified\n", id)
+			} else {
+				fmt.Fprintf(stdout, "Link %s ensured; changes applied and verified\n", id)
+			}
 		} else {
 			fmt.Fprintf(stdout, "Link %s already matches desired state\n", id)
 		}

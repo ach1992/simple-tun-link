@@ -108,8 +108,11 @@ the decode lifetime. Malformed/unsupported links produce redacted structured
 errors. No file, Link state, route, firewall, interface or backend is changed
 by previewing.
 
-Actual user-confirmed credential storage and import/apply remain separate
-Issue #8/#10 acceptance; this command does not imply they are implemented.
+The preview command itself never applies anything. It emits an exact-URL
+confirmation token only for supported credential-free GRE/IPIP offers.
+Secret-bearing preview remains redacted and emits no import token.
+Protected recipient credential storage and interactive import remain
+outstanding Issue #8/#10 acceptance.
 
 ## Explicit GRE/IPIP export CLI
 
@@ -131,17 +134,18 @@ must be treated as **explicitly requested share/export material**, not
 ordinary diagnostic/status output. Even without a secret credential,
 it discloses network endpoints, Link ID and encoded display-name/config
 metadata. SHA-256 integrity does not authenticate who sent it.
-Use `link preview --stdin` at the receiving endpoint, then a
-separate operator-authorized Engine apply. Actual safe import/credential
-storage remains open under Issues #8/#10.
+Use `link preview --stdin` at the receiving endpoint, then an
+explicit, confirmed `link import --stdin --confirm <preview-token>` for a
+**credential-free GRE/IPIP** offer. Credentialed import/storage still
+requires backend-specific work under Issues #6/#7/#8/#10.
 
 ## Apply and backend integration
 
 Decoding and generating a preview **never applies a Link, starts a command,
-creates a device, or persists credentials**. The backend-specific import
-adapter and CLI must obtain an explicit local apply action after displaying
-the redacted preview, then use the canonical Engine and backend secret
-storage instead of inventing a second Link lifecycle.
+creates a device, or persists credentials**. The explicit plaintext importer
+requires the exact preview confirmation token and uses the canonical Engine.
+Future credential-bearing adapters must additionally provide protected
+backend-owned secret storage before any apply, never a second Link lifecycle.
 
 The pairing module carries validated backend options but does not itself apply
 them, implement the final interactive UI, or perform privileged installation.
@@ -152,3 +156,27 @@ therefore remains an **independent, testable portion of Issue #8**, not Issue
 A future `secure_exchange` mode requires an explicit protocol/schema update,
 not a reinterpretation of v1 Quick Link secrets. An unknown mode or
 schema version currently fails closed.
+
+## Explicit plaintext import via the canonical Engine
+
+A non-interactive receiving operator may apply a reviewed,
+credential-free GRE/IPIP `stl://` offer with `stl link import`.
+`link preview --stdin [--json]` first produces a redacted receiver-side
+preview and, only for those importable offers, `import_confirmation`:
+the full SHA-256 digest of the exact input setup URL after accepting
+a single optional trailing line terminator.
+
+`link import --stdin --confirm <import_confirmation> [--json]` requires
+the same URL bytes and a matching token. Invalid, changed, unsupported or
+credential-bearing offers are rejected **before** backend/runtime state
+is assembled. Import uses the same `Offer.ReceiverLink` inversion as
+preview and delegates stateful convergence exclusively to
+`Engine.Ensure`. This is local, explicit network mutation; preview and
+export remain read-only. The confirmation is a reviewed-payload binding,
+not sender authentication, and the plaintext transport remains insecure
+against active network attackers.
+
+This is only a **plaintext pairing slice**, not Issue #8 completion.
+Receiver private key/PSK import, protected secret storage and interactive
+pairing remain unsupported until integrated with the WireGuard/IPsec
+backends and their review/validation gates.
