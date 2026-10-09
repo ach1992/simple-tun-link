@@ -26,6 +26,9 @@ type LinuxProbeOptions struct {
 	Interface       string
 	BackendOverhead int
 	ManualMTU       int
+	// ExpectedIfIndex, when positive, pins preflight to a previously
+	// verified backend observation rather than a reusable interface name.
+	ExpectedIfIndex int
 	IPBinary        string
 	PingBinary      string
 }
@@ -144,6 +147,9 @@ func PreflightLinux(ctx context.Context, link domain.Link, o LinuxProbeOptions) 
 	tunnel, err := inspectLinuxInterface(ctx, o.Runner, ip, true, o.Interface)
 	if err != nil {
 		return MTUConstraints{}, fmt.Errorf("inspect selected Link interface: %w", err)
+	}
+	if o.ExpectedIfIndex > 0 && tunnel.IfIndex != o.ExpectedIfIndex {
+		return MTUConstraints{}, fmt.Errorf("selected Link interface identity changed during diagnostics")
 	}
 	localAddressPresent := false
 	for _, info := range tunnel.AddrInfo {

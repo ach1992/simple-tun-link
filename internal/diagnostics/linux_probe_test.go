@@ -123,6 +123,22 @@ func TestLinuxPreflightRefusesMismatchedSourceAddressOrUnavailableInterface(t *t
 	}
 }
 
+func TestLinuxPreflightRequiresPreviouslyVerifiedBackendIfindex(t *testing.T) {
+	runner := newScriptedLinuxRunner()
+	options := testLinuxOptions(runner)
+	options.ExpectedIfIndex = 88
+	if _, err := PreflightLinux(context.Background(), diagnosticLink(), options); err == nil {
+		t.Fatal("different interface ifindex was silently merged with prior backend state")
+	}
+	if runner.pingTotalRequests != 0 {
+		t.Fatalf("unsafe network probing after identity drift: %d", runner.pingTotalRequests)
+	}
+	options.ExpectedIfIndex = runner.addressIndex
+	if _, err := PreflightLinux(context.Background(), diagnosticLink(), options); err != nil {
+		t.Fatalf("correct captured ifindex was rejected: %v", err)
+	}
+}
+
 func TestLinuxPingOutcomeClassificationRejectsUnprovenReplies(t *testing.T) {
 	peer := netip.MustParseAddr("10.80.20.1")
 	reply := "64 bytes from 10.80.20.1: icmp_seq=1 ttl=64 time=0.045 ms\n1 packets transmitted, 1 received, 0% packet loss\n"
