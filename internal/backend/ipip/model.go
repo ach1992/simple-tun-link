@@ -178,7 +178,7 @@ func (g observedLink) backendIdentity() string {
 	if !g.Exists || !g.Local.IsValid() || !g.Peer.IsValid() {
 		return ""
 	}
-	return backendIdentity(g.Local, g.Peer, g.Encapsulation, g.UDPPort)
+	return backendIdentity(g.Local, g.Peer)
 }
 
 func validateLink(link domain.Link) error {
@@ -254,18 +254,17 @@ func ipipTypeArgs(link domain.Link) ([]string, error) {
 	return args, nil
 }
 
-func backendIdentity(local, peer netip.Addr, encap domain.Encapsulation, port uint16) string {
-	identity := "ipip/" + string(encap) + "/" + local.String() + "/" + peer.String()
-	if port != 0 {
-		identity += "/udp=" + strconv.Itoa(int(port))
-	}
-	return identity
+// Linux IPIP tunnel lookup does not uniquely distinguish the same local/remote
+// IPv4 endpoint pair by FOU/GUE encapsulation or UDP port. Use one shared
+// collision/lock identity across all three encapsulations; no second Link may
+// race to claim the same kernel endpoint pair.
+func backendIdentity(local, peer netip.Addr) string {
+	return "ipip/underlay/" + local.String() + "/" + peer.String()
 }
 
 func desiredResources(link domain.Link, name string, firewall domain.ResourceClaim) []domain.ResourceClaim {
-	port, _ := UDPPort(link)
 	return append(commonCollisionClaims(link, name),
-		domain.ResourceClaim{Kind: domain.ResourceBackendID, Key: backendIdentity(link.Underlay.Local, link.Underlay.Peer, link.Encapsulation, port)},
+		domain.ResourceClaim{Kind: domain.ResourceBackendID, Key: backendIdentity(link.Underlay.Local, link.Underlay.Peer)},
 		firewall,
 	)
 }
@@ -293,10 +292,6 @@ func firewallProtocolAndPort(link domain.Link) (uint8, uint16, error) {
 	return 17, port, nil
 }
 
-func desiredBackendIdentity(link domain.Link) (string, error) {
-	port, err := UDPPort(link)
-	if err != nil {
-		return "", err
-	}
-	return backendIdentity(link.Underlay.Local, link.Underlay.Peer, link.Encapsulation, port), nil
+func desiredBackendIdentity(link domain.Link) string {
+	return backendIdentity(link.Underlay.Local, link.Underlay.Peer)
 }

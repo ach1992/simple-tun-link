@@ -317,9 +317,10 @@ Default backend.
 - Native inbound firewall ownership is exact peer/local/protocol/device. FOU/GUE use exact peer/local/UDP-destination/device rules. Route drift with an older owned rule fails closed for explicit reconciliation instead of silently adding or deleting a different rule.
 
 ### IPIP
-- Native default within the IPIP backend;
-- FOU/GUE advanced encapsulation;
-- minimal overhead and simple point-to-point behavior.
+- Native is the IPIP default; FOU/GUE are advanced UDP encapsulations with a deterministic, Link-ID-derived receive port, exact mapping ownership and IP protocol 4 for FOU.
+- Linux IPIP tunnel lookup is not safely distinguished by FOU/GUE encapsulation or UDP port alone. On the tested Debian 13 / Linux 6.12 kernel, Native+FOU and FOU+GUE attempts for the same local/remote IPv4 underlay pair return EEXIST. STL therefore reserves the **same pair-wide backend resource/lock identity** for all IPIP encapsulations and rejects additional IPIP Links using that pair before applying changes.
+- This IPIP-specific constraint does not forbid different backend kinds, such as GRE or WireGuard, from using the same underlay peers, nor independently addressable IPIP endpoint pairs. Multi-Link requests fail with an explicit conflict when the kernel cannot distinguish them.
+- IPIP Native/FOU/GUE provide backend-specific overhead and owned, read-only state/counters to the common MTU/diagnostic layer. Diagnostic suggestions do not alter host network state.
 
 ### WireGuard
 - encrypted/authenticated;

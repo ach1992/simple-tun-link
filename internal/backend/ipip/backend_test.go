@@ -285,7 +285,7 @@ func TestNativeIPIPLifecycleIsIdempotentOwnedAndUsesProtocol4(t *testing.T) {
 	}
 	resources := candidate.Resources()
 	if !slices.ContainsFunc(resources, func(c domain.ResourceClaim) bool {
-		return c.Kind == domain.ResourceBackendID && strings.Contains(c.Key, "ipip/native/")
+		return c.Kind == domain.ResourceBackendID && strings.Contains(c.Key, "ipip/underlay/")
 	}) {
 		t.Fatalf("IPIP backend identity missing from resources: %#v", resources)
 	}
@@ -546,5 +546,88 @@ func TestParseIPIPKernelStateRejectsAmbiguousIdentity(t *testing.T) {
 	bad := []byte(`[{"ifindex":5,"ifname":"x","flags":[],"linkinfo":{"info_kind":"ipip","info_data":{"remote":"198.51.100.20","local":"192.0.2.10","encap":{"type":"fou","sport":50000,"dport":50001}}}}]`)
 	if _, err := parseIPIPLinks(bad); err == nil {
 		t.Fatal("asymmetric inspected UDP ports were accepted")
+	}
+}
+
+// Linux IPIP uses the same endpoint-pair lookup for Native, FOU and GUE.
+// Different UDP ports do not allow two IPIP devices with the same endpoints
+// in the tested kernel; reject before creating any new FOU/GUE mapping.
+func TestIPIPRejectsSamePeerDifferentEncapsulationBeforeMutation(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		wanted   domain.Encapsulation
+		existing domain.Encapsulation
+	}{
+		{"FOU alongside Native", domain.EncapFOU, domain.EncapNative},
+		{"GUE alongside FOU", domain.EncapGUE, domain.EncapFOU},
+		{"Native alongside GUE", domain.EncapNative, domain.EncapGUE},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			link := testLink()
+			link.Encapsulation = tc.wanted
+			name, err := InterfaceName(link.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			otherID := domain.LinkID("lnk_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+			otherName, err := InterfaceName(otherID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			foreign := observedLink{
+				Exists: true, IfIndex: 88, Name: otherName, Owner: otherID,
+				Local: link.Underlay.Local, Peer: link.Underlay.Peer,
+				Encapsulation: tc.existing, Up: true,
+			}
+			if tc.existing != domain.EncapNative {
+				foreign.UDPPort = 61555
+			}
+			runner := &fakeRunner{link: link, name: name, extra: []observedLink{foreign}}
+			b := newTestBackend(t, runner, &fakeFirewall{}, fakeCollisions{})
+			ctx := context.Background()
+			req := core.Request{Operation: core.OperationEnsure, Link: link}
+			obs, err := b.Inspect(ctx, link)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, err := b.Plan(ctx, req, obs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := b.Validate(ctx, req, obs, p); stlerr.CodeOf(err) != stlerr.CodeConflict {
+				t.Fatalf("same-peer combination was not rejected as a conflict: %v", err)
+			}
+			for _, command := range runner.commands {
+				if strings.Contains(command, " link add ") || strings.Contains(command, " fou add ") {
+					t.Fatalf("mutating command ran before collision rejection: %q", command)
+				}
+			}
+			if runner.state.Exists || len(runner.mappings) != 0 {
+				t.Fatal("rejecting a same-peer collision mutated backend resources")
+			}
+		})
+	}
+}
+
+func TestIPIPUnderlayPairClaimSerializesEncapsulationVariants(t *testing.T) {
+	first := testLink()
+	original := backendIdentity(first.Underlay.Local, first.Underlay.Peer)
+	if original != "ipip/underlay/192.0.2.10/198.51.100.20" {
+		t.Fatalf("unexpected pair identity %q", original)
+	}
+	for _, encap := range []domain.Encapsulation{domain.EncapNative, domain.EncapFOU, domain.EncapGUE} {
+		other := first
+		other.ID = "lnk_99999999999999999999999999999999"
+		other.Encapsulation = encap
+		name, _ := InterfaceName(other.ID)
+		claims := desiredResources(other, name, domain.ResourceClaim{Kind: "test", Key: "test"})
+		if !slices.Contains(claims, domain.ResourceClaim{Kind: domain.ResourceBackendID, Key: original}) {
+			t.Fatalf("IPIP %s omitted the shared collision/lock key: %+v", encap, claims)
+		}
+	}
+	second := first
+	second.Underlay.Peer = netip.MustParseAddr("198.51.100.21")
+	if backendIdentity(second.Underlay.Local, second.Underlay.Peer) == original {
+		t.Fatal("different underlay peers were collapsed into one resource key")
 	}
 }

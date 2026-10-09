@@ -308,13 +308,15 @@ func (b *Backend) Validate(ctx context.Context, req core.Request, observed core.
 			return stlerr.New(stlerr.CodeConflict, "ipip_validate", string(req.Link.ID), string(req.Link.Backend), "IPIP host resource conflicts with existing state")
 		}
 	}
-	wantedID, err := desiredBackendIdentity(req.Link)
-	if err != nil {
-		return err
-	}
+	// Verified in isolated Linux 6.12 namespaces: creating IPIP FOU or GUE
+	// against an existing Native/FOU tunnel with the same endpoints fails with
+	// EEXIST even when encapsulation and UDP ports differ. Reject before
+	// creating a receive mapping or firewall/interface state instead of
+	// relying on an ambiguous kernel apply failure.
+	wantedID := desiredBackendIdentity(req.Link)
 	for _, existing := range obs.Links {
 		if existing.Name != p.name && existing.backendIdentity() == wantedID {
-			return stlerr.New(stlerr.CodeConflict, "ipip_validate", string(req.Link.ID), string(req.Link.Backend), "IPIP underlay/encapsulation identity is already in use")
+			return stlerr.New(stlerr.CodeConflict, "ipip_validate", string(req.Link.ID), string(req.Link.Backend), "Linux IPIP underlay endpoint pair is already occupied by another tunnel")
 		}
 	}
 	return nil
