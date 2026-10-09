@@ -126,3 +126,35 @@ func TestCLIPreviewInputNeverAppearsOnArgvOrUsesBackendRuntime(t *testing.T) {
 		t.Fatalf("failed setup link was exposed: %d %q", code, out)
 	}
 }
+
+func TestCLIPreviewIncludesNonsecretFOUSettingsBeforeAnyImport(t *testing.T) {
+	link := fixtureReadLink("lnk_ffffffffffffffffffffffffffffffff",
+		"10.80.80.0/31", "10.80.80.1/31", domain.BackendGRE)
+	link.Encapsulation = domain.EncapFOU
+	link.GRE = domain.GREOptions{KeyEnabled: true, Key: 0, UDPPort: 4500, Checksum: true}
+	offer, err := pairing.NewQuickOffer(link, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	url, err := offer.EncodeSetupLink()
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, body, stderr := previewCLI([]string{"link", "preview", "--stdin", "--json"}, url+"\n")
+	if code != 0 || stderr != "" {
+		t.Fatalf("cannot preview GRE FOU: %d %q %q", code, body, stderr)
+	}
+	var got ImportPreviewResponse
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.GRE == nil || !got.GRE.KeyEnabled || got.GRE.Key != 0 ||
+		got.GRE.UDPPort != 4500 || !got.GRE.Checksum || got.Sensitive {
+		t.Fatalf("important non-secret backend config omitted: %+v", got)
+	}
+	code, body, stderr = previewCLI([]string{"link", "preview", "--stdin"}, url+"\n")
+	if code != 0 || stderr != "" || !strings.Contains(body, "udp_port=4500") ||
+		!strings.Contains(body, "key_enabled=true key=0") || strings.Contains(body, url) {
+		t.Fatalf("human backend-specific preview incomplete: %d %q %q", code, body, stderr)
+	}
+}

@@ -100,8 +100,9 @@ stl link preview --stdin --json < /path/to/private/setup-link.txt
 
 Do not put the secret URL literally into shell command text or logs. The CLI
 uses the canonical pairing decoder and recipient inversion, then emits only
-Link ID, backend, encapsulation, public endpoint/address metadata, format
-version, Quick mode, and secret **presence/type**. Arbitrary display names
+Link ID, backend, encapsulation, public endpoint/address metadata, non-secret
+GRE knobs (including key identifier and FOU/GUE UDP port), format version,
+Quick mode, and secret **presence/type**. Arbitrary display names
 and the supplied URL are omitted. Credential data stays in memory only for
 the decode lifetime. Malformed/unsupported links produce redacted structured
 errors. No file, Link state, route, firewall, interface or backend is changed

@@ -54,7 +54,8 @@ the read-only diagnostics path in [DIAGNOSTICS.md](DIAGNOSTICS.md).
   unverified fallback is explicitly marked unverified.
 - `link preview`: one redacted object with CLI schema version 1,
   a separate `pairing_schema_version`, receiver-facing non-secret
-  Link metadata, `has_credential`, credential kind and sensitive flag.
+  Link metadata, non-secret GRE configuration options when present,
+  `has_credential`, credential kind and sensitive flag.
   The input setup link, private keys, arbitrary display names and decoding
   cause are deliberately excluded from JSON and human output.
 - Read errors: `{ "schema_version": 1, "error": { "code": ..., ... } }`;

@@ -30,6 +30,7 @@ type ImportPreviewResponse struct {
 	HasCredential        bool                   `json:"has_credential"`
 	CredentialKind       pairing.CredentialKind `json:"credential_kind,omitempty"`
 	Sensitive            bool                   `json:"sensitive"`
+	GRE                  *domain.GREOptions     `json:"gre,omitempty"`
 }
 
 func linkPreviewCommand(args []string, input io.Reader, stdout, stderr io.Writer) int {
@@ -68,6 +69,13 @@ func linkPreviewCommand(args []string, input io.Reader, stdout, stderr io.Writer
 		HasCredential: preview.HasCredential, CredentialKind: preview.Credential,
 		Sensitive: preview.Sensitive,
 	}
+	// GRE knobs such as the UDP receive port and key are not credentials.
+	// Without their preview a recipient cannot recognize what would be
+	// configured for FOU/GUE or distinguish keyed from unkeyed GRE.
+	if link.Backend == domain.BackendGRE && link.GRE != (domain.GREOptions{}) {
+		gre := link.GRE
+		response.GRE = &gre
+	}
 	if jsonOutput {
 		if err := json.NewEncoder(stdout).Encode(response); err != nil {
 			fmt.Fprintln(stderr, "cannot encode pairing import preview")
@@ -79,6 +87,11 @@ func linkPreviewCommand(args []string, input io.Reader, stdout, stderr io.Writer
 	fmt.Fprintf(stdout, "Link %s: %s/%s\n", response.LinkID, response.Backend, response.Encapsulation)
 	fmt.Fprintf(stdout, "Receiver underlay %s; peer underlay %s\n", response.LocalUnderlay, response.PeerUnderlay)
 	fmt.Fprintf(stdout, "Receiver Link Address %s; peer Link Address %s\n", response.LocalAddress, response.PeerAddress)
+	if response.GRE != nil {
+		o := response.GRE
+		fmt.Fprintf(stdout, "GRE options: key_enabled=%t key=%d udp_port=%d ttl=%d tos=%d disable_pmtud=%t checksum=%t sequence=%t\n",
+			o.KeyEnabled, o.Key, o.UDPPort, o.TTL, o.TOS, o.DisablePMTUD, o.Checksum, o.Sequence)
+	}
 	if response.HasCredential {
 		fmt.Fprintf(stdout, "Recipient credential %s: PRESENT / REDACTED (SENSITIVE)\n", response.CredentialKind)
 	} else {
