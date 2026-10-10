@@ -25,7 +25,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/version"
 )
 
-const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl menu\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link diagnose <link-id> [--mtu <bytes>] [--json]\n  stl link preview --stdin [--json]\n  stl link import --stdin --confirm <preview-token> [--json]\n  stl link export <link-id> [--json]\n  stl link ensure --stdin [--json]\n  stl link remove <link-id> --confirm <link-id> [--json]\n  stl link restore --all\n  stl maintenance pre-uninstall --json\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
+const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl menu\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link diagnose <link-id> [--mtu <bytes>] [--json]\n  stl link preview --stdin [--json]\n  stl link import --stdin --confirm <preview-token> [--json]\n  stl link export <link-id> [--json]\n  stl link create-wireguard --stdin --output <private-file> [--json]\n  stl link resume-wireguard --stdin --confirm <setup-digest> [--json]\n  stl link credential retire <link-id> --confirm <link-id> --public-key <local-public-key> [--json]\n  stl link ensure --stdin [--json]\n  stl link remove <link-id> --confirm <link-id> [--json]\n  stl link restore --all\n  stl maintenance pre-uninstall --json\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
 
 const jsonSchemaVersion = 1
 
@@ -41,6 +41,9 @@ type runtimeOptions struct {
 	executable         string
 	// Test-only deterministic identity seam; nil uses crypto-random Link IDs.
 	createLinkID func() (domain.LinkID, error)
+	// Test seam for a failure immediately after final handoff publication.
+	// Production always uses the real protected, no-clobber writer.
+	writeHandoff func(string, []byte) error
 }
 
 func main() {
@@ -124,6 +127,15 @@ func runWithRuntimeInput(args []string, input io.Reader, stdout, stderr io.Write
 		}
 		if len(args) >= 2 && args[1] == "import" {
 			return linkImportCommand(args[1:], input, stdout, stderr, options)
+		}
+		if len(args) >= 2 && args[1] == "create-wireguard" {
+			return linkCreateWireGuardCommand(args[1:], input, stdout, stderr, options)
+		}
+		if len(args) >= 2 && args[1] == "credential" {
+			return linkCredentialCommand(args[1:], stdout, stderr, options)
+		}
+		if len(args) >= 2 && args[1] == "resume-wireguard" {
+			return linkResumeWireGuardCommand(args[1:], input, stdout, stderr, options)
 		}
 		if len(args) >= 2 && args[1] == "export" {
 			return linkExportCommand(args[1:], stdout, stderr, options)

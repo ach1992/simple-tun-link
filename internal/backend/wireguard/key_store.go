@@ -275,3 +275,65 @@ func openProtectedCredentials(root string, create bool) (int, error) {
 	}
 	return fd, nil
 }
+
+// RetireExact deletes only a safely opened, canonical private key whose
+// derived public identity matches the operator's expected local key. The
+// caller MUST hold the canonical Engine Link lock and establish that no
+// persisted intent, interface, firewall, or live WG identity uses this key.
+// The final descriptor-to-path identity check rejects unexpected replacement
+// before unlink; a privileged out-of-band actor can still race kernel unlink
+// and remains an explicit host-level reconciliation risk.
+// Missing key under a valid protected root/credentials directory is idempotent.
+func (s *KeyStore) RetireExact(id domain.LinkID, expectedPublic string) (bool, error) {
+	name, err := s.keyName(id)
+	if err != nil {
+		return false, err
+	}
+	dir, err := openProtectedCredentials(s.stateRoot, false)
+	if err != nil {
+		return false, err
+	}
+	defer unix.Close(dir)
+	key, file, err := s.openVerifiedKey(id)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+	actual, err := key.PublicKey()
+	if err != nil || expectedPublic == "" || actual != expectedPublic {
+		return false, fmt.Errorf("protected WireGuard credential identity does not match retirement confirmation")
+	}
+	var fromFD, fromName unix.Stat_t
+	if err = unix.Fstat(int(file.Fd()), &fromFD); err != nil {
+		return false, fmt.Errorf("cannot inspect verified retirement FD")
+	}
+	if err = unix.Fstatat(dir, name, &fromName, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return false, fmt.Errorf("cannot inspect retirement identity")
+	}
+	if fromName.Mode&unix.S_IFMT != unix.S_IFREG || fromName.Mode&0o777 != 0o600 ||
+		fromName.Uid != uint32(os.Geteuid()) || fromName.Nlink != 1 ||
+		fromName.Dev != fromFD.Dev || fromName.Ino != fromFD.Ino {
+		return false, fmt.Errorf("protected retirement file changed; preserving credential")
+	}
+	if err = unix.Unlinkat(dir, name, 0); err != nil {
+		return false, fmt.Errorf("cannot retire verified WireGuard credential: %w", err)
+	}
+	if err = unix.Fsync(dir); err != nil {
+		return false, fmt.Errorf("credential unlinked but durability uncertain; reconcile protected storage")
+	}
+	return true, nil
+}
+
+// LocalPublicIdentity derives only the public identity of the protected
+// sender credential. No raw private value or generic JSON leaves KeyStore.
+func (s *KeyStore) LocalPublicIdentity(id domain.LinkID) (string, error) {
+	key, err := s.Load(id)
+	if err != nil {
+		return "", err
+	}
+	defer key.Zeroize()
+	return key.PublicKey()
+}

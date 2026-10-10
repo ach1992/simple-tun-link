@@ -37,8 +37,10 @@ type LinkRecord struct {
 }
 
 type Snapshot struct {
-	SchemaVersion int          `json:"schema_version"`
-	Links         []LinkRecord `json:"links"`
+	SchemaVersion   int              `json:"schema_version"`
+	Links           []LinkRecord     `json:"links"`
+	PendingSenders  []PendingSender  `json:"pending_senders,omitempty"`
+	RemovalReceipts []RemovalReceipt `json:"removal_receipts,omitempty"`
 }
 
 func EmptySnapshot() Snapshot {
@@ -91,6 +93,8 @@ func (s *Snapshot) normalize() {
 	sort.Slice(s.Links, func(i, j int) bool {
 		return s.Links[i].Desired.ID < s.Links[j].Desired.ID
 	})
+	sort.Slice(s.PendingSenders, func(i, j int) bool { return s.PendingSenders[i].Link.ID < s.PendingSenders[j].Link.ID })
+	sort.Slice(s.RemovalReceipts, func(i, j int) bool { return s.RemovalReceipts[i].LinkID < s.RemovalReceipts[j].LinkID })
 }
 
 type Store interface {
@@ -215,6 +219,9 @@ func migrateSnapshot(snapshot Snapshot) (Snapshot, error) {
 	case SchemaVersion:
 		return snapshot, nil
 	case legacySchemaVersion:
+		if len(snapshot.PendingSenders) > 0 || len(snapshot.RemovalReceipts) > 0 {
+			return Snapshot{}, fmt.Errorf("legacy state cannot contain WireGuard lifecycle records")
+		}
 		for _, record := range snapshot.Links {
 			link := record.Desired
 			if link.GRE != (domain.GREOptions{}) {
@@ -308,7 +315,7 @@ func validateSnapshot(snapshot Snapshot) error {
 			}
 		}
 	}
-	return nil
+	return validateWireGuardLifecycle(snapshot)
 }
 
 func cloneRecord(record LinkRecord) LinkRecord {

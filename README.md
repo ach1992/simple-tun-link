@@ -7,7 +7,7 @@ It creates and manages independent **Link Addresses** between Linux servers over
 Canonical CLI: **stl**  
 Convenience alias: **stlink** (same executable/behavior when installed by the supported installer)
 
-> Status: pre-release development. GRE/IPIP and the core lifecycle CLI are integrated; a **candidate** WireGuard adapter and protected v3 receiver import exist but are not yet independently reviewed, privileged-traffic-validated or released. An offline-tested installer/update/uninstall script is available, but no public release has been published. IPsec, guided WireGuard sender export, credential retirement, full backend/coexistence traffic and release E2E remain outstanding.
+> Status: pre-release development. GRE/IPIP and core lifecycle CLI are integrated. The independently reviewed WireGuard backend and v3 receiver import are in `main`; sender creation, protected one-time handoff/Resume and conditional credential retirement are new development-candidate capabilities pending separate review. No real privileged WireGuard two-peer traffic, cross-backend coexistence, or release acceptance is established. Installer/update/uninstall have offline regression coverage but no public release is published; IPsec remains pending.
 
 ## Why
 
@@ -67,6 +67,25 @@ one-command installer, checksum-verified atomic updates, the `stlink` alias,
 and guarded uninstall. No public version/tag is currently available, so do
 not execute the placeholder `vX.Y.Z` command as an actual installation.
 For nonprivileged/offline test coverage, run `bash scripts/test-install.sh`.
+
+## WireGuard Quick Link (pre-release)
+
+The menu now offers a guided encrypted WireGuard/UDP sender workflow alongside
+the default GRE Native path. The noninteractive `stl link create-wireguard`
+creates a new WireGuard Link and writes a one-time **SENSITIVE** v3 receiver
+setup URL only to an explicitly chosen, owner-private `0600` file. The peer
+uses redacted `stl link preview` and confirmed `stl link import`; failed
+sender activation can be resumed with `stl link resume-wireguard` using the
+same protected handoff. Sender creation durably stages its own private key
+and exact handoff-bound **public pending Link intent before exposing the
+SENSITIVE URL**, and successful commit consumes Pending atomically.
+Successful `stl link remove` preserves its private
+key for rollback; separate `stl link credential retire` requires a
+**Link-specific durable successful-Remove receipt** and live-resource absence,
+never an unrelated state file. [CLI instructions](docs/CLI.md) explain the
+exact commands, recovery boundaries and safety requirements. **No privileged two-peer
+traffic, release readiness or secure channel for delivering the handoff is
+implied by these source-level workflows.**
 
 ## Development
 

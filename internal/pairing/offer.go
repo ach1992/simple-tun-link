@@ -199,6 +199,15 @@ func (o Offer) IsSensitive() bool  { return len(o.recipientSecret) != 0 }
 // RecipientCredential returns a defensive copy of the recipient's credential.
 // This is a deliberate secret-access API for the future backend-specific
 // import/secure-storage adapter, NOT an observability or JSON accessor.
+// ClearRecipientCredential releases the ephemeral receiver credential held by
+// an explicit Quick Link creator after the sensitive export is written.
+func (o *Offer) ClearRecipientCredential() {
+	if o != nil {
+		clear(o.recipientSecret)
+		o.recipientSecret = nil
+	}
+}
+
 func (o Offer) RecipientCredential() []byte {
 	return append([]byte(nil), o.recipientSecret...)
 }

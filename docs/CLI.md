@@ -1,10 +1,10 @@
 # STL CLI — implemented read-only and explicit lifecycle commands
 
-The terminal menu supports local overview, guided **GRE Native** Create,
-Link management/status, selected diagnostics, and preview-confirmed plaintext
-GRE/IPIP Setup Link import and receiver-side protected WireGuard v3 Quick
-Link import. Sender-side WireGuard Create/Export, IPsec, privileged traffic
-verification and remaining operator tasks are still open under Issues #6–#10.
+The terminal menu supports local overview, guided **GRE Native** and
+**WireGuard/UDP** Create, Link management/status, selected diagnostics,
+preview-confirmed plaintext GRE/IPIP import and protected WireGuard v3 Quick
+Link import. IPsec, privileged WireGuard traffic verification and remaining
+operator tasks are still open under Issues #6–#10.
 The versioned non-interactive ensure/remove lifecycle is implemented, with
 runtime/backend acceptance tracked separately. This page distinguishes
 **read-only** observations from **explicit host-mutating** commands.
@@ -75,8 +75,10 @@ connectivity, and offers active, read-only link diagnostics after import.
 If export, status or diagnostics fail **after** ensure, the local Link may
 already exist: inspect/reconcile its Link ID rather than assuming rollback.
 
-Current Create covers GRE Native only. GRE/IPIP FOU/GUE, WireGuard and
-IPsec/XFRM have separate tracked backend/pairing work. A non-TTY stl
+The separate guided WireGuard Create task uses a protected v3 one-time
+receiver handoff file rather than printing a private key or URL to ordinary
+terminal/JSON output. GRE/IPIP FOU/GUE and IPsec/XFRM have separate tracked
+backend/pairing work. A non-TTY stl
 invocation still prints help without prompting; stl menu is for humans,
 not an automation protocol.
 
@@ -112,6 +114,145 @@ pairing. Settings, Update and Uninstall remain explicitly pending and do not
 report false success. Menu text and selection numbers are
 human UI, not automation contracts; existing versioned `--json` commands
 remain the automation interface.
+
+## WireGuard sender creation, recovery and credential retirement
+
+The guided **Create WireGuard Tunnel** menu task asks for the peer's underlay
+IPv4, locally checked RFC1918 /31 subnet, two explicit UDP listening ports,
+configurable independent keepalive intervals (Enter=disabled), and an
+**absolute, explicitly selected private handoff file path**. The destination
+parent must be owned by the effective user and private (`0700`); the output
+file must not already exist. The wizard previews only public settings,
+flushes queued terminal input and requires freshly typing the exact Link ID.
+The menu uses the SAME pinned version-1 sender request and Engine as the
+noninteractive command, not a second implementation.
+
+For automation, create the SENSITIVE recipient handoff and local WireGuard
+Link together through an explicit, versioned **public-only** JSON request.
+The following sample addresses/ports are placeholders, not valid instructions
+for an arbitrary host:
+
+~~~sh
+stl link create-wireguard --stdin --output /root/stl-recipient.stl --json <<'JSON'
+{
+  "schema_version": 1,
+  "underlay": {"local": "192.0.2.10", "peer": "192.0.2.20"},
+  "addresses": {"local": "10.80.50.0/31", "peer": "10.80.50.1/31"},
+  "listen_port": 51871,
+  "peer_port": 51872,
+  "local_keepalive": 25,
+  "peer_keepalive": 0
+}
+JSON
+~~~
+
+`link_id` is optional; when omitted, a fresh cryptographically generated
+stable ID is used. Existing IDs must not be repurposed. Sender and recipient
+keypairs are generated separately; only the sender's private key enters its
+protected per-Link KeyStore, and only the **recipient public key** enters the
+initiator's ordinary desired state. The receiver private key appears only in
+its explicitly requested, checksummed v3 `stl://` Quick Link. The output
+file contains exactly one such URL and a final newline; creation uses
+same-owner, symlink-free private-directory traversal, atomic `0600`
+no-replace publication and durable directory synchronization. Neither the
+normal text output nor the JSON result contains the URL or private key.
+The CLI requires an existing private parent; it does not silently create a
+new export directory or overwrite a file.
+
+Sender Create is now a single **canonical, Link-locked two-phase transaction**.
+Before exposing the receiver URL it verifies there is no committed/pending
+same-ID Link, durably stages the sender's protected **own** private key, then
+durably reserves the exact public sender `domain.Link` together with the
+SHA-256 of the precise sensitive v3 offer in the optional `pending_senders`
+section of `state.json` (schema version 2 remains backward-compatible).
+Only after both sender recovery records are durable may the SENSITIVE file
+become visible. Local backend activation then uses the ordinary Engine
+Validate/Apply/Verify and commits the Link **atomically with consuming its
+pending sender reservation**. Concurrent same-ID Create and ordinary Ensure
+cannot bypass this reservation or publish competing receiver offers.
+
+If activation or even final handoff publication reports an error, inspect the
+private output path and stored state. **Only when the original SENSITIVE
+handoff exists** does exact Resume have the credentials and URL necessary for
+recovery. Failed staging or a failure *before* handoff publication can leave
+a protected local orphan key/pending reservation with **no receiver URL**;
+that case requires explicit operator reconciliation, not regenerating a
+competing same-ID offer. Never treat a pending record alone as proof of a
+successful tunnel, or delete its matching sender key casually.
+
+To retry the exact already-published identity, obtain the SHA-256 confirmation
+token from a redacted read-only preview of that same URL and use:
+
+~~~sh
+stl link preview --stdin --json < /root/stl-recipient.stl
+stl link resume-wireguard --stdin --confirm <import_confirmation> --json < /root/stl-recipient.stl
+~~~
+
+Resume does **not** generate new keypairs, overwrite saved credentials, or
+adopt a changed same-ID Link. Before the first successful commit it requires
+both the **identical complete original public Link** and **identical exact
+handoff digest** from the durable Pending record, plus the matching protected
+sender private/public identity. A modified and rechecksummed recipient offer
+cannot change even an address, display name, port or keepalive. After a
+successful atomic Link commit has consumed Pending, an identical committed
+Link (and its same sender private/public identity) authorizes idempotent
+reverification. Missing or conflicting proof fails closed. The confirmation digest is neither sender authentication nor
+encryption. On the intended receiver, securely transfer the one-time file,
+verify the public identities/out-of-band sender trust, preview, then run:
+
+~~~sh
+stl link preview --stdin --json < /path/to/received.stl
+stl link import --stdin --confirm <import_confirmation> --json < /path/to/received.stl
+~~~
+
+A successful local Engine result is **not** proof that two endpoints have
+handshaken or exchanged traffic. After peer acceptance, remove the sensitive
+handoff export deliberately. Saved-state `stl link export` remains
+GRE/IPIP-only: once the ephemeral recipient key is gone, it cannot be
+reconstructed from the public sender state, and STL will not fabricate one.
+
+`stl link remove` deliberately **retains** the protected local WireGuard
+private key for rollback/reconciliation. After successfully removing the
+Link and verifying its absence, the operator may separately retire the
+specific local key, giving the expected **local public key** recorded from
+status/desired state before Remove:
+
+~~~sh
+stl link credential retire <link-id> --confirm <link-id> --public-key <local-public-key> --json
+~~~
+
+The Engine holds its maintenance and per-Link locks. **Merely finding a
+`state.json` for another Link or no active ID is never retirement authority.**
+A `removal_receipts` record for the **exact Link ID, WireGuard backend and
+expected original local public key** is published only *after* its canonical
+Remove, durable desired-state deletion and associated restore cleanup return
+confirmed success. Failed/indeterminate Remove and a failed first Ensure
+cannot issue this proof. A crash after deletion but before receipt publication
+can leave an intentionally unretirable orphan until operator reconciliation.
+A new Ensure attempt for that Link ID durably invalidates the historical
+receipt *before* provisioning/applying, including when that attempt later
+fails, preventing stale receipts authorizing deletion of needed retry keys.
+
+Retire requires the Link-specific receipt and absence of committed/pending
+state, confirms no associated live kernel interface/ownership alias, public
+WireGuard identity or STL-owned firewall entry, then verifies and removes
+only the same-owner, regular, single-linked `0600` key whose derived public
+identity matches the operator's confirmation. The receipt is then durably
+marked `retired: true` for safe idempotent retries; a retired proof can never
+authorize unlinking any subsequently reappearing key. A verified previously
+absent key yields `retired: false`. Missing proof, ambiguous host inspection,
+damaged credentials and live resources refuse retirement. No key material
+is emitted. File deletion is **not physical flash media sanitization**.
+
+On abrupt power loss, the current protected handoff writer can leave a
+same-owner `0600` `.stl-handoff-*.tmp` in the explicitly chosen private
+parent directory. This is not a public leak but may retain a second copy of
+the receiver secret. Inspect that directory and reconcile/delete only
+verified task-owned stale temporary files before treating the one-time
+handoff as fully retired; do not perform unsafe wildcard cleanup.
+
+No real privileged two-peer handshake, bidirectional traffic, reboot restore
+or coexistence E2E is implied by synthetic tests of these workflows.
 
 ## Commands
 
@@ -347,9 +488,10 @@ share setup material with the intended peer rather than public logs.
 The command is read-only and does not inspect, repair or apply the Link.
 Existence in saved desired state **does not prove a working tunnel**.
 Only credential-free GRE/IPIP Native/FOU/GUE exports are supported.
-WireGuard and IPsec remain explicitly Unsupported until reviewed secure
-recipient credential generation, export, storage and apply exist. Export never silently omits private
-keys/PSKs to manufacture a broken setup link. Confirm the configuration
+WireGuard and IPsec remain explicitly Unsupported for **re-export from
+persisted sender state**, because recipient private keys are deliberately
+not retained. WireGuard uses the separate one-time Create/Resume
+workflow. Export never silently omits private keys/PSKs to manufacture a broken setup link. Confirm the configuration
 via the existing `link preview` before a separate authorized apply
 step. Export never applies a Link; the explicit `link import` command
 described below can apply only a credential-free GRE/IPIP offer after
@@ -417,5 +559,6 @@ a WireGuard interface does **not** destroy stored credentials. Operators
 must handle eventual key retirement deliberately. WireGuard public status
 supports a verified interface, latest handshake timestamp and RX/TX bytes,
 **not a proof of peer reachability or a packet-level E2E test**.
-WireGuard guided creator/export, IPsec, real privileged bidirectional traffic,
-and release-level pairing/coexistence acceptance remain Issues #6–#12.
+WireGuard guided sender creation and explicit credential retirement are
+implemented but real privileged bidirectional traffic, IPsec and
+release-level pairing/coexistence acceptance remain Issues #6–#12.

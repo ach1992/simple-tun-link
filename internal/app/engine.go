@@ -86,6 +86,14 @@ type RecipientCredentialStore interface {
 // A failed host apply may leave a protected uncommitted key for exact-credential
 // retry/reconciliation; such a key must never be blindly removed.
 func (e *Engine) EnsureImportedRecipient(ctx context.Context, desired domain.Link, credential []byte, store RecipientCredentialStore) (Result, error) {
+	return e.EnsureWithWireGuardCredential(ctx, desired, credential, store)
+}
+
+// EnsureWithWireGuardCredential provisions an endpoint's OWN private key and
+// ensures the matching public WireGuard Link under the canonical maintenance,
+// Link and resource locks. Both sender creation and receiver import use this
+// single transaction; secrets never enter ordinary Link desired state.
+func (e *Engine) EnsureWithWireGuardCredential(ctx context.Context, desired domain.Link, credential []byte, store RecipientCredentialStore) (Result, error) {
 	if store == nil || desired.Backend != domain.BackendWireGuard ||
 		desired.WireGuard == (domain.WireGuardOptions{}) ||
 		desired.WireGuard.ListenPort == 0 || desired.WireGuard.PeerPort == 0 {
@@ -155,7 +163,36 @@ func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.
 			"saved Link changed since confirmed preview; no removal was attempted")
 	}
 	prior := record.Desired
-	return e.executeLocked(ctx, backend.Request{Operation: backend.OperationRemove, Prior: &prior, Link: record.Desired}, record)
+	result, err := e.executeLocked(ctx, backend.Request{Operation: backend.OperationRemove, Prior: &prior, Link: record.Desired}, record, "")
+	if err != nil {
+		return result, err
+	}
+	// The Link-specific receipt must NOT be created during an indeterminate
+	// publication, backend rollback or unsuccessful restore-unit cleanup.
+	// Only a successful, durable canonical Remove reaches this point.
+	if prior.Backend == domain.BackendWireGuard {
+		if err := e.store.Update(ctx, func(snapshot *state.Snapshot) error {
+			if _, exists := snapshot.Find(id); exists {
+				return fmt.Errorf("Link reappeared before verified removal receipt")
+			}
+			if _, pending := snapshot.FindPendingSender(id); pending {
+				return fmt.Errorf("sender pending transaction survived committed Remove")
+			}
+			old, exists := snapshot.FindRemovalReceipt(id)
+			if exists && (old.Backend != domain.BackendWireGuard || old.LocalPublicKey != prior.WireGuard.LocalPublicKey || old.Retired) {
+				return fmt.Errorf("conflicting credential removal receipt")
+			}
+			if !exists {
+				snapshot.RemovalReceipts = append(snapshot.RemovalReceipts, state.RemovalReceipt{
+					LinkID: id, Backend: domain.BackendWireGuard, LocalPublicKey: prior.WireGuard.LocalPublicKey})
+			}
+			return nil
+		}); err != nil {
+			return result, stlerr.Wrap(stlerr.CodeState, "remove", string(id), string(prior.Backend),
+				"Link removed, but durable credential retirement receipt could not be confirmed; preserve key", err)
+		}
+	}
+	return result, nil
 }
 
 func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectReconfiguration bool, provision func() error) (Result, error) {
@@ -168,6 +205,10 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 	snapshot, err := e.store.Load(ctx)
 	if err != nil {
 		return Result{}, stlerr.Wrap(stlerr.CodeState, "ensure", string(desired.ID), string(desired.Backend), "cannot load local state", err)
+	}
+	if _, pending := snapshot.FindPendingSender(desired.ID); pending {
+		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID), string(desired.Backend),
+			"Link has reserved WireGuard sender intent; use exact-hand-off Resume instead")
 	}
 	record, exists := snapshot.Find(desired.ID)
 	if exists && rejectReconfiguration && record.Desired != desired {
@@ -182,6 +223,21 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 	if _, registered := e.backends.Get(desired.Backend); !registered {
 		return Result{}, stlerr.New(stlerr.CodeUnsupported, "ensure_imported", string(desired.ID), string(desired.Backend), "requested backend is not registered")
 	}
+	// Invalidate historical removal authority BEFORE a new attempt (even
+	// one which later fails apply) can stage a key or host resources. An
+	// old receipt must never authorize deleting an active retry's key.
+	if _, receipt := snapshot.FindRemovalReceipt(desired.ID); receipt {
+		if err := e.store.Update(ctx, func(fresh *state.Snapshot) error {
+			if _, pending := fresh.FindPendingSender(desired.ID); pending {
+				return fmt.Errorf("pending sender holds Link identity")
+			}
+			fresh.DeleteRemovalReceipt(desired.ID)
+			return nil
+		}); err != nil {
+			return Result{}, stlerr.Wrap(stlerr.CodeState, "ensure", string(desired.ID), string(desired.Backend),
+				"cannot invalidate previous credential removal receipt", err)
+		}
+	}
 	if provision != nil {
 		if err := provision(); err != nil {
 			return Result{}, stlerr.Wrap(stlerr.CodeState, "ensure_imported", string(desired.ID), string(desired.Backend),
@@ -193,10 +249,12 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 		previous := record.Desired
 		prior = &previous
 	}
-	return e.executeLocked(ctx, backend.Request{Operation: backend.OperationEnsure, Prior: prior, Link: desired}, record)
+	return e.executeLocked(ctx, backend.Request{Operation: backend.OperationEnsure, Prior: prior, Link: desired}, record, "")
 }
 
-func (e *Engine) executeLocked(ctx context.Context, request backend.Request, prior state.LinkRecord) (Result, error) {
+// senderDigest is nonempty only for a Create/Resume whose precise handoff
+// SHA-256 is authorized by the durable per-Link pending-sender transaction.
+func (e *Engine) executeLocked(ctx context.Context, request backend.Request, prior state.LinkRecord, senderDigest string) (Result, error) {
 	request.OwnedResources = append([]domain.ResourceClaim(nil), prior.OwnedResources...)
 	link := request.Link
 	impl, ok := e.backends.Get(link.Backend)
@@ -244,6 +302,24 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 	if request.Operation == backend.OperationEnsure {
 		if err := rejectResourceConflicts(fresh, link.ID, resources); err != nil {
 			return Result{}, err
+		}
+		if entry, pending := fresh.FindPendingSender(link.ID); pending {
+			if senderDigest == "" || entry.Link != link || entry.HandoffSHA256 != senderDigest {
+				return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(link.ID), string(link.Backend),
+					"another sender transaction reserves this Link identity")
+			}
+		} else if senderDigest != "" {
+			// A committed exact desired Link is sufficient after an earlier
+			// successful commit consumed the pending record atomically.
+			committed, exists := fresh.Find(link.ID)
+			if !exists || committed.Desired != link {
+				return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(link.ID), string(link.Backend),
+					"missing exact pending sender intent")
+			}
+		}
+		if _, removed := fresh.FindRemovalReceipt(link.ID); removed {
+			return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(link.ID), string(link.Backend),
+				"previous removal authorization was not invalidated")
 		}
 	}
 	if err := impl.Validate(ctx, request, observed, plan); err != nil {
@@ -293,6 +369,20 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 		case backend.OperationEnsure:
 			if err := rejectResourceConflicts(*snapshot, link.ID, resources); err != nil {
 				return err
+			}
+			if pending, exists := snapshot.FindPendingSender(link.ID); exists {
+				if senderDigest == "" || pending.Link != link || pending.HandoffSHA256 != senderDigest {
+					return fmt.Errorf("pending sender intent changed before commit")
+				}
+				snapshot.DeletePendingSender(link.ID)
+			} else if senderDigest != "" {
+				committed, exists := snapshot.Find(link.ID)
+				if !exists || committed.Desired != link {
+					return fmt.Errorf("missing exact sender transaction before commit")
+				}
+			}
+			if _, removed := snapshot.FindRemovalReceipt(link.ID); removed {
+				return fmt.Errorf("obsolete removal receipt survives ensure")
 			}
 			snapshot.Upsert(state.LinkRecord{Desired: link, OwnedResources: resources})
 		case backend.OperationRemove:

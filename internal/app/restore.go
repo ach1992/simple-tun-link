@@ -128,7 +128,7 @@ func (e *Engine) restorePersisted(ctx context.Context, id domain.LinkID) (Result
 		return Result{}, true, contextualize(err, stlerr.CodeInvalid, "restore", record.Desired, "invalid persisted Link")
 	}
 	prior := record.Desired
-	result, err := e.executeLocked(ctx, backend.Request{Operation: backend.OperationEnsure, Prior: &prior, Link: record.Desired}, record)
+	result, err := e.executeLocked(ctx, backend.Request{Operation: backend.OperationEnsure, Prior: &prior, Link: record.Desired}, record, "")
 	return result, true, err
 }
 

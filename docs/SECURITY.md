@@ -61,16 +61,40 @@ Apply preflight both require a protected, safely readable private credential
 whose public identity matches the persisted Link. Missing, permission-drifted,
 or mismatched credentials refuse deletion of both the interface and firewall,
 so an uncommitted Remove can still reconstruct the original owned state.
-Verified Link-owned credential retirement and reconciliation tooling remain
-outstanding.
+An explicit, identity-bound credential retirement action is available only
+after a **specific durable successful canonical Remove receipt** for the
+Link ID, WireGuard backend and exact local public identity, plus read-only
+live host absence checks under the Engine Link lock. An unrelated committed
+state file is never sufficient; indeterminate Remove and failed first Ensure
+never issue retirement authorization. On a new Ensure attempt for the same
+ID, any old receipt is invalidated *before* staging/Apply. Successful key
+retirement marks the exact receipt retired as a durable idempotency witness;
+normal Remove still preserves the key for rollback. A missing/unsafe file,
+missing proof or live STL-owned resource refuses retirement. Safe
+retirement is not secure physical-media erasure, and unexpected external
+privileged filesystem changes still require operator reconciliation.
 
 The caller must store the **local** private key only at its owning endpoint.
 The initiator must never persist a generated *recipient* private key as local
 state; that material belongs only in the explicitly SENSITIVE Quick Link
-until protected receiver-side import. Configured v3 receiver import now
-provisions the local key under canonical Engine locks, but **guided sender
-export, credential retirement, real WireGuard handshake/traffic/coexistence,
-and persistence proof** remain Issue #6/#8/#12 acceptance. Read-only status
+until protected receiver-side import.
+Sender Create stages its **own** protected private key and a no-secret,
+SHA-256-bound public `pending_senders` reservation in ordinary state **before**
+allowing the recipient handoff to become visible. A successful canonical
+Engine state commit consumes Pending atomically while publishing the Link.
+After incomplete creation, exact Resume checks every field and the original
+full payload digest, not just the sender's public key. An untrusted modified
+and rechecksummed offer cannot become the original pending sender Link.
+The pending record is public configuration, not a backup of either private
+key; loss of a receiver handoff before publication requires explicit orphan
+reconciliation rather than silent rekeying.
+ Configured v3 receiver import now
+provisions the local key under canonical Engine locks. The guided sender
+now generates its own protected private key and a separate ephemeral receiver
+private key only for a deliberately exported 0600 SENSITIVE Quick Link,
+while its ordinary state retains only the receiver public key. Real WireGuard
+handshake/traffic/coexistence and persistence proof remain Issue #6/#8/#12
+acceptance. Read-only status
 reports public handshake and counter observations; it does not authenticate
 who supplied the setup URL or prove bidirectional traffic.
 
