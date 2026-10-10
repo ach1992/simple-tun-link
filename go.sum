@@ -1,2 +1,4 @@
+github.com/strongswan/govici v0.8.2 h1:0LuY16Z8pRvbA1SW/BBdKcBERpFpwwCXkhLbwETVThQ=
+github.com/strongswan/govici v0.8.2/go.mod h1:Auq9H2J1gSMD3D+r2g9HlUpF5tep/wP0u0fMCfBE+Bw=
 golang.org/x/sys v0.48.0 h1:bbX/i/6MgT9BVLM9RT1thmxL04yeTAhbEz4SyadbXoo=
 golang.org/x/sys v0.48.0/go.mod h1:hNLxWAXmnKAxqDtdwIYC4bM9oQPEecfsnNMuSxOs3og=
