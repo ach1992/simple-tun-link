@@ -99,7 +99,12 @@ for recovery in "${recovery_dirs[@]}"; do
   saved_action=$(sed -n 's/^operation=//p' "$marker")
   saved_hash=$(sed -n 's/^sha256=//p' "$marker")
   [[ $saved_hash =~ ^[0-9a-f]{64}$ ]] || fail 'invalid committed recovery marker'
-  grep -qx 'status=committed' "$marker" || fail 'invalid committed recovery status'
+  [[ $saved_action == install || $saved_action == update || $saved_action == uninstall ]] || fail 'unknown committed recovery operation'
+  # Journal v1 requires exactly three fields, in canonical order, with one
+  # trailing newline. Incomplete/corrupt markers never authorize recovery.
+  marker_body=$(cat -- "$marker") || fail 'cannot read committed recovery marker'
+  marker_expected=$(printf 'status=committed\noperation=%s\nsha256=%s' "$saved_action" "$saved_hash")
+  [[ $marker_body == "$marker_expected" && $(wc -c < "$marker") -eq $( (${#marker_expected} + 1) ) ]] || fail 'invalid committed recovery journal structure'
   case "$saved_action" in
     install|update)
       is_regular "$record" && is_regular "$target" &&
@@ -290,7 +295,10 @@ if [[ $action == uninstall ]]; then
   failpoint prepublish-sync
   rm -- "$alias"
   sync_paths "$bin_dir" || fail 'cannot durably retire alias'
-  mv -T -- "$target" "$stage/removed-stl"
+  # The durable previous-stl is a copy, not a hardlink. Unlink canonical
+  # instead of moving its live inode into recovery: queued processes must see
+  # /usr/local/bin/stl (deleted) after uninstall, not a recovery pathname.
+  rm -- "$target"
   sync_paths "$bin_dir" "$stage" || fail 'cannot durably retire canonical executable'
   rm -- "$record"
   if [[ $prefix != /usr/local && ${STL_INSTALL_TEST_FAIL_AFTER_UNINSTALL_REMOVE:-} == 1 ]]; then
