@@ -39,9 +39,14 @@ func TestWireGuardNetnsE2E(t *testing.T) {
 		t.Fatal("refusing WireGuard mutation outside disposable netns")
 	}
 	root := os.Getenv("STL_WG_E2E_STATE_ROOT")
+	crossMode := os.Getenv("STL_WG_CROSS_E2E") == "1"
+	fixtureDir := filepath.Base(filepath.Dir(root))
+	allowedFixture := strings.HasPrefix(fixtureDir, "stl-wg-e2e.")
+	if crossMode {
+		allowedFixture = strings.HasPrefix(fixtureDir, "stl-gre-e2e.")
+	}
 	if root != filepath.Clean(root) || filepath.Dir(filepath.Dir(root)) != "/tmp" ||
-		!strings.HasPrefix(filepath.Base(filepath.Dir(root)), "stl-wg-e2e.") ||
-		(filepath.Base(root) != "a" && filepath.Base(root) != "b") {
+		!allowedFixture || (filepath.Base(root) != "a" && filepath.Base(root) != "b") {
 		t.Fatal("refusing non-disposable credential root")
 	}
 	const testID = domain.LinkID("lnk_88888888888888888888888888888888")
@@ -138,6 +143,22 @@ func TestWireGuardNetnsE2E(t *testing.T) {
 			t.Fatal("real WireGuard status lacks handshake or bidirectional transfer evidence")
 		}
 		t.Logf("WG_REAL_E2E public_counters_verified handshake=%v rx=%v tx=%v", wg["latest_handshake_unix"], wg["rx_bytes"], wg["tx_bytes"])
+	case "diagnose":
+		resp := call([]string{"link", "diagnose", string(testID), "--json"}, nil)
+		quality, ok := resp["quality"].(map[string]any)
+		if !ok || quality["reachable"] != true || resp["backend"] != string(domain.BackendWireGuard) {
+			t.Fatal("real WireGuard active diagnostic did not prove Link Address reachability")
+		}
+		state, ok := resp["state"].(map[string]any)
+		if !ok || state["interface"] == "" {
+			t.Fatal("real WireGuard diagnostic lacks identity-verified interface state")
+		}
+		rx, rxOK := state["rx_bytes"].(float64)
+		tx, txOK := state["tx_bytes"].(float64)
+		if !rxOK || !txOK || rx < 1 || tx < 1 {
+			t.Fatal("real WireGuard diagnostic lacks bidirectional public transfer counters")
+		}
+		t.Logf("WG_REAL_DIAGNOSIS reachability=PASS rx_bytes=%v tx_bytes=%v", rx, tx)
 	case "remove":
 		resp := call([]string{"link", "remove", string(testID), "--confirm", string(testID), "--json"}, nil)
 		if resp["removed"] != true || resp["link_id"] != string(testID) {
@@ -160,7 +181,35 @@ func TestWireGuardNetnsE2E(t *testing.T) {
 	case "list":
 		resp := call([]string{"link", "list", "--json"}, nil)
 		links, ok := resp["links"].([]any)
-		if !ok || len(links) != 0 {
+		if !ok {
+			t.Fatal("real removed WireGuard Link listing unavailable")
+		}
+		if crossMode {
+			// In the shared state root exactly the three preexisting GRE
+			// siblings must survive WireGuard Remove and credential Retire.
+			expected := map[string]bool{
+				"lnk_11111111111111111111111111111111": true,
+				"lnk_22222222222222222222222222222222": true,
+				"lnk_33333333333333333333333333333333": true,
+			}
+			if len(links) != len(expected) {
+				t.Fatal("cross-backend Link collection lost a sibling or retained WireGuard")
+			}
+			for _, value := range links {
+				item, ok := value.(map[string]any)
+				if !ok {
+					t.Fatal("cross-backend Link collection contains a malformed entry")
+				}
+				id, ok := item["id"].(string)
+				if !ok || !expected[id] {
+					t.Fatal("cross-backend Link collection has an unexpected identity")
+				}
+				delete(expected, id)
+			}
+			if len(expected) != 0 {
+				t.Fatal("cross-backend Link collection lost a GRE sibling")
+			}
+		} else if len(links) != 0 {
 			t.Fatal("real removed WireGuard Link still in committed state")
 		}
 	default:
