@@ -74,7 +74,9 @@ may require manual reconciliation. If the installer retains a
 `/usr/local/bin/.stl-install.*` recovery directory, **do not delete or blindly
 restore it**: inspect the installed binary hash, installation record, unit and
 Links, then choose an explicit recovery/roll-forward. Check executable identity
-again before retrying.
+again before retrying. Unreconciled `.stl-install.*` recovery directories block all
+further installer transactions; inspect and reconcile the binary, record and
+retained evidence before explicitly retiring any recovery material.
 
 ## Uninstall: never tear down live Links implicitly
 
