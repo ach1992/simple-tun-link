@@ -161,23 +161,8 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 				return code
 			}
 		case "3":
-			if code := linkReadCommand([]string{"list"}, out, errOut, options); code != 0 {
+			if code := menuManage(input, reader, out, errOut, options); code != 0 {
 				return code
-			}
-			fmt.Fprint(out, "Status for Link ID (Enter returns to menu): ")
-			id, err := readMenuAnswer(reader)
-			if err != nil && !errors.Is(err, io.EOF) {
-				fmt.Fprintln(errOut, "invalid Link ID")
-				return 2
-			}
-			if id != "" {
-				if domain.LinkID(id).Validate() != nil {
-					fmt.Fprintln(errOut, "invalid Link ID")
-					return 2
-				}
-				if code := linkReadCommand([]string{"status", id}, out, errOut, options); code != 0 {
-					return code
-				}
 			}
 		case "4":
 			if code := linkReadCommand([]string{"list"}, out, errOut, options); code != 0 {

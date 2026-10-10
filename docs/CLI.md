@@ -17,6 +17,24 @@ The menu header only reads local OS/kernel/interface candidates and persisted
 Link counts; a candidate address is **not** a route-confirmed source or proof
 of connectivity. It performs no remote update/IP queries or network probes.
 
+### Manage Links
+
+Select **Manage Links** to list all locally saved Links and choose one stable
+Link ID. The Status action reuses the existing read-only `stl link status`
+backend inspection; it does not infer connectivity from saved state.
+
+The Remove action is available **only on a real interactive terminal**. It
+shows a redacted, Link-specific removal preview (identity, addresses and
+underlay), requires a freshly typed **exact Link ID**, and discards queued
+terminal input before accepting confirmation. Cancelling or using a non-TTY
+stream causes no removal. The operator must review the state again if the
+saved desired Link changed during confirmation. On confirmation, the menu
+delegates to the existing `stl link remove <id> --confirm <id>` command and
+canonical Engine ownership/rollback/persistence checks; it never deletes
+interfaces or firewall rules directly. Failed or uncertain removal must be
+reconciled before retrying. For non-interactive automation, use that explicit
+CLI command and its versioned `--json` result instead of scripting the menu.
+
 ### Guided GRE Native Create
 
 Select **Create Tunnel**. GRE Native is the current guided backend; advanced
@@ -41,7 +59,9 @@ Only after confirmation does STL submit a strict version-1 desired-Link JSON
 request to its existing link ensure command and canonical Engine; the menu
 has no independent host-mutation/ownership logic.
 
-**Peer-side configuration cannot be inspected from the initiating host.**
+**Peer-side configuration cannot be fully inspected from the initiating
+host.** STL excludes the known peer underlay IPv4 from both automatic and
+manual /31 choices; other peer-side addresses/routes remain unknown.
 Verify that the selected /31 is unused on the receiving server before
 confirming. The Engine rechecks local conflicts/ownership under resource locks
 at apply; initial previews alone do not reserve resources. Successful local
