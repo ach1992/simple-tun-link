@@ -106,7 +106,7 @@ func TestIPIPNetnsE2E(t *testing.T) {
 	locks := state.NewLockManager(root)
 	adapter, err := ipipbackend.New(ipipbackend.Options{
 		Runner: runner, Routes: linux.RouteResolver{Runner: runner},
-		Firewall: linux.IPTablesFirewall{Runner: runner, Locks: locks},
+		Firewall:   linux.IPTablesFirewall{Runner: runner, Locks: locks},
 		Collisions: linux.CollisionInspector{Snapshotter: linux.HostSnapshotter{Runner: runner}},
 	})
 	if err != nil {
