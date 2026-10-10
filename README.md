@@ -7,7 +7,7 @@ It creates and manages independent **Link Addresses** between Linux servers over
 Canonical CLI: **stl**  
 Convenience alias: **stlink** (same executable/behavior when installed by the supported installer)
 
-> Status: pre-release development. GRE/IPIP and core lifecycle CLI are integrated. The independently reviewed WireGuard backend and v3 receiver import are in `main`; sender creation, protected one-time handoff/Resume and conditional credential retirement are new development-candidate capabilities pending separate review. No real privileged WireGuard two-peer traffic, cross-backend coexistence, or release acceptance is established. Installer/update/uninstall have offline regression coverage but no public release is published; IPsec remains pending.
+> Status: **pre-release development**. GRE/IPIP and core lifecycle CLI are integrated. The WireGuard backend, v3 receiver import, sender creation, durable protected one-time handoff/Resume and conditional credential retirement were independently reviewed and integrated into `main` through PR #51. They are **not** operationally accepted: real privileged WireGuard two-peer traffic, multi-backend coexistence, systemd/reboot acceptance and the supported-distro matrix remain open. Installer/update/uninstall have offline regression coverage, but no public release is published; IPsec remains pending.
 
 ## Why
 

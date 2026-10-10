@@ -51,7 +51,7 @@ func linkDiagnoseCommand(args []string, stdout, stderr io.Writer, options *runti
 	if !exists {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, "link_diagnose", "Link ID is not present in local desired state")
 	}
-	if record.Desired.Backend != domain.BackendGRE && record.Desired.Backend != domain.BackendIPIP {
+	if record.Desired.Backend != domain.BackendGRE && record.Desired.Backend != domain.BackendIPIP && record.Desired.Backend != domain.BackendWireGuard {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_diagnose", "active diagnostics for this backend are unavailable")
 	}
 	if options == nil {
@@ -93,6 +93,15 @@ func linkDiagnoseCommand(args []string, stdout, stderr io.Writer, options *runti
 		}
 		var measured diagnostics.IPIPReport
 		measured, err = diagnostics.ObserveIPIP(ctx, record.Desired, inspector, runner, manualMTU)
+		report = measured
+	case domain.BackendWireGuard:
+		backendName = "WireGuard"
+		inspector, ok := selected.(diagnostics.WireGuardInspector)
+		if !ok {
+			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_diagnose", "WireGuard diagnostic backend is unavailable")
+		}
+		var measured diagnostics.WireGuardReport
+		measured, err = diagnostics.ObserveWireGuard(ctx, record.Desired, inspector, runner, manualMTU)
 		report = measured
 	}
 	if err != nil {
