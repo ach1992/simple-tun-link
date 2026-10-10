@@ -101,6 +101,15 @@ expect_failure env STL_INSTALL_TEST_FAIL_AFTER_UNINSTALL_REMOVE=1 bash "$install
 [[ -f $prefix/bin/stl && -L $prefix/bin/stlink && -f $prefix/lib/simple-tun-link/install-record ]] || fail 'failed uninstall did not restore all installed identities'
 bash "$installer" uninstall --prefix "$prefix"
 [[ ! -e $prefix/bin/stl && ! -L $prefix/bin/stlink && ! -e $prefix/lib/simple-tun-link/install-record ]] || fail 'uninstall left installed artifacts'
+# Uninstall must unlink the canonical executable, not move the live inode
+# into the retained journal (which would obscure /proc/self/exe identity).
+shopt -s nullglob
+retired=("$prefix/bin"/.stl-install.*)
+shopt -u nullglob
+[[ ${#retired[@]} -eq 1 && -f ${retired[0]}/previous-stl && ! -e ${retired[0]}/removed-stl ]] || fail 'uninstall incorrectly retained a moved live executable inode'
+# A fresh install validates and retires the completed-uninstall journal.
+bash "$installer" install --bundle "$root/v0.1.0" --prefix "$prefix" > /dev/null
+[[ $(sha "$prefix/bin/stl") == "$original" ]] || fail 'reinstall following committed uninstall produced wrong binary'
 
 # An untrustworthy backup must not be silently discarded after publication.
 # Retain recovery data, report the partial state, and block blind retries.
@@ -174,6 +183,23 @@ shopt -s nullglob
 markers=("$committed/bin"/.stl-install.*)
 shopt -u nullglob
 [[ ${#markers[@]} -eq 1 && -f ${markers[0]}/COMMITTED ]] || fail 'missing durable committed journal'
+# A syntactically complete but corrupt/inconsistent COMMITTED must never
+# be retired. This exercises the same strict journal v1 grammar as the Go gate.
+marker="${markers[0]}/COMMITTED"
+cp -p -- "$marker" "$root/known-good-committed"
+for kind in empty status-only unknown extra wrong-hash; do
+  case "$kind" in
+    empty) : > "$marker" ;;
+    status-only) printf 'status=committed\n' > "$marker" ;;
+    unknown) printf 'status=committed\noperation=foreign\nsha256=%s\n' "$(sha "$committed/bin/stl")" > "$marker" ;;
+    extra) cp "$root/known-good-committed" "$marker"; printf 'extra=1\n' >> "$marker" ;;
+    wrong-hash) printf 'status=committed\noperation=install\nsha256=%064d\n' 0 > "$marker" ;;
+  esac
+  expect_failure bash "$installer" update --bundle "$root/v0.1.0" --prefix "$committed"
+  [[ $(sha "$committed/bin/stl") == "$original" ]] || fail "$kind journal corruption mutated canonical binary"
+  [[ -f $marker ]] || fail "$kind journal corruption was silently retired"
+done
+cp -p -- "$root/known-good-committed" "$marker"
 bash "$installer" update --bundle "$root/v0.1.0" --prefix "$committed" > /dev/null
 shopt -s nullglob
 markers=("$committed/bin"/.stl-install.*)
