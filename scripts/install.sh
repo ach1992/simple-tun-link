@@ -210,7 +210,7 @@ if [[ -n $bundle ]]; then
   bundle=$(realpath -e -- "$bundle")
   is_regular "$bundle/BUILD-MANIFEST.txt" || fail 'bundle manifest missing or unsafe'
   version=$(sed -n 's/^version=//p' "$bundle/BUILD-MANIFEST.txt")
-  [[ $version =~ ^(v[0-9]+\.[0-9]+\.[0-9]+\([.-][a-zA-Z0-9.-]+\)?|dev-[0-9a-f]{12})$ ]] || fail 'invalid bundle version'
+  [[ $version =~ ^(v[0-9]+\.[0-9]+\.[0-9]+([.-][a-zA-Z0-9.-]+)?|dev-[0-9a-f]{12})$ ]] || fail 'invalid bundle version'
 fi
 asset="stl_${version}_linux_${arch}"
 for file in SHA256SUMS BUILD-MANIFEST.txt LICENSE "$asset"; do
