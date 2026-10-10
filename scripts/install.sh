@@ -78,6 +78,11 @@ fi
 [[ ! -L $lock && ( ! -e $lock || -f $lock ) ]] || fail 'unsafe installer lock identity'
 exec 9>>"$lock"
 flock -x -w 30 9 || fail 'another STL installer is running'
+# A prior uncertain transaction is not proof that a new one may overwrite it.
+shopt -s nullglob
+recovery_dirs=("$bin_dir"/.stl-install.*)
+shopt -u nullglob
+(( ${#recovery_dirs[@]} == 0 )) || fail 'unreconciled STL installer recovery directory exists; inspect it before retrying'
 
 is_regular() { [[ -f $1 && ! -L $1 ]]; }
 hash_file() { sha256sum -- "$1" | awk '{print $1}'; }
@@ -90,6 +95,7 @@ read_record() {
   is_regular "$target" || fail 'installed stl is missing or unsafe'
   [[ $(hash_file "$target") == "$prior_hash" ]] || fail 'installed stl differs from recorded owned binary; refusing overwrite'
   [[ -L $alias && $(readlink -- "$alias") == stl ]] || fail 'stlink alias missing or differs from installer-owned symlink'
+  prior_record_hash=$(hash_file "$record")
 }
 
 if [[ $action == install ]]; then
@@ -131,9 +137,10 @@ finish() {
       elif [[ ! -f $target || -L $target || $(hash_file "$target") != "$prior_hash" ]]; then
         keep_recovery=1
       fi
-      if [[ ! -e $record && ! -L $record && -f $stage/previous-record ]]; then
+      if [[ ! -e $record && ! -L $record && -f $stage/previous-record ]] &&
+         [[ $(hash_file "$stage/previous-record") == "$prior_record_hash" ]]; then
         cp -p -- "$stage/previous-record" "$record" || keep_recovery=1
-      elif [[ ! -f $record || -L $record ]]; then
+      elif [[ ! -f $record || -L $record || $(hash_file "$record") != "$prior_record_hash" ]]; then
         keep_recovery=1
       fi
       if [[ ! -e $alias && ! -L $alias ]]; then
@@ -144,15 +151,19 @@ finish() {
     else
       if [[ -n $new_hash && -f $target && ! -L $target && $(hash_file "$target") == "$new_hash" ]]; then
         if [[ $action == update ]]; then
-          if [[ $new_hash != "$prior_hash" && -f $stage/previous-stl && $(hash_file "$stage/previous-stl") == "$prior_hash" ]]; then
-            mv -T -- "$stage/previous-stl" "$target" || keep_recovery=1
+          if [[ $new_hash != "$prior_hash" ]]; then
+            if [[ -f $stage/previous-stl && $(hash_file "$stage/previous-stl") == "$prior_hash" ]]; then
+              mv -T -- "$stage/previous-stl" "$target" || keep_recovery=1
+            else
+              keep_recovery=1
+            fi
           fi
         else
           rm -- "$target" || keep_recovery=1
         fi
       elif [[ $action == install && ( -e $target || -L $target ) ]]; then
         keep_recovery=1
-      elif [[ $action == update && -f $stage/previous-stl ]] &&
+      elif [[ $action == update ]] &&
            [[ ! -f $target || -L $target || $(hash_file "$target") != "$prior_hash" ]]; then
         keep_recovery=1
       fi
@@ -163,14 +174,19 @@ finish() {
       fi
       if [[ -n $new_record_hash && -f $record && ! -L $record && $(hash_file "$record") == "$new_record_hash" ]]; then
         if [[ $action == update ]]; then
-          if [[ -f $stage/previous-record ]]; then
+          if [[ -f $stage/previous-record && $(hash_file "$stage/previous-record") == "$prior_record_hash" ]]; then
             cp -p -- "$stage/previous-record" "$record_tmp.recover" &&
               mv -T -- "$record_tmp.recover" "$record" || keep_recovery=1
+          else
+            keep_recovery=1
           fi
         else
           rm -- "$record" || keep_recovery=1
         fi
       elif [[ $action == install && ( -e $record || -L $record ) ]]; then
+        keep_recovery=1
+      elif [[ $action == update ]] &&
+           [[ ! -f $record || -L $record || $(hash_file "$record") != "$prior_record_hash" ]]; then
         keep_recovery=1
       fi
     fi
@@ -259,9 +275,18 @@ mv -T -- "$stage/incoming" "$target"
 if [[ -n $bundle && $prefix != /usr/local && ${STL_INSTALL_TEST_FAIL_AFTER_SWAP:-} == 1 ]]; then
   fail 'injected after-swap failure (offline isolated test only)'
 fi
+if [[ $action == update && -n $bundle && $prefix != /usr/local && ${STL_INSTALL_TEST_CORRUPT_BACKUP:-} == 1 ]]; then
+  printf 'damaged\n' >> "$stage/previous-stl"
+  fail 'injected damaged recovery source (offline isolated test only)'
+fi
 sync -f "$target" "$bin_dir" || fail 'binary publication sync failed'
 if [[ $action == install ]]; then
   ln -s stl "$alias"
+fi
+if [[ $action == update ]]; then
+  [[ $(hash_file "$record") == "$prior_record_hash" ]] || fail 'install record changed during binary update; reconciliation required'
+else
+  [[ ! -e $record && ! -L $record ]] || fail 'install record appeared during installation; refusing overwrite'
 fi
 mv -T -- "$record_tmp" "$record"
 [[ $(hash_file "$record") == "$new_record_hash" && $(hash_file "$target") == "$new_hash" && -L $alias && $(readlink -- "$alias") == stl ]] || fail 'post-publication identity check failed'
