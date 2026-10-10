@@ -221,6 +221,87 @@ ipip_traffic() {
   printf 'IPIP_%s_BIDIRECTIONAL=PASS\n' "$ipip_mode"
 }
 
+# Snapshot only exact STL-owned INPUT rules. Do not compare or mutate
+# unrelated administrator rules. The comment format is defined by
+# internal/linux/firewall.go: stl:<lnk_32hex>:<sha256_first_8_bytes>.
+stl_owned_input_rules() {
+  local ns="$1" listing line
+  local marker='(^|[[:space:]])--comment[[:space:]]"?stl:lnk_[0-9a-f]{32}:[0-9a-f]{16}"?([[:space:]]|$)'
+  listing="$(ip netns exec "$ns" iptables -w 5 -S INPUT)" || return 1
+  while IFS= read -r line; do
+    if [[ $line =~ $marker ]]; then
+      printf '%s\n' "$line"
+    fi
+  done <<< "$listing" | LC_ALL=C sort
+}
+
+gre_owned_ids=(
+  lnk_11111111111111111111111111111111
+  lnk_22222222222222222222222222222222
+  lnk_33333333333333333333333333333333
+)
+
+gre_only_input_rules() {
+  local line id
+  while IFS= read -r line; do
+    [[ -n $line ]] || continue
+    for id in "${gre_owned_ids[@]}"; do
+      if [[ $line == *"stl:${id}:"* ]]; then
+        printf '%s\n' "$line"
+        break
+      fi
+    done
+  done <<< "$1" | LC_ALL=C sort
+}
+
+require_gre_firewall_baseline() {
+  local ns="$1" owned id matches
+  owned="$(stl_owned_input_rules "$ns")" || return 1
+  [[ $(printf '%s\n' "$owned" | wc -l) -eq 3 ]] || {
+    echo "FAIL: expected exactly three STL-owned GRE INPUT rules in $ns" >&2
+    return 1
+  }
+  for id in "${gre_owned_ids[@]}"; do
+    matches="$(grep -Fc -- "stl:${id}:" <<< "$owned" || true)"
+    [[ $matches -eq 1 ]] || {
+      echo "FAIL: GRE Link $id does not own exactly one INPUT rule in $ns" >&2
+      return 1
+    }
+  done
+  printf '%s\n' "$owned"
+}
+
+assert_gre_firewall_unchanged() {
+  local ns all gre expected
+  for ns in "$ns_a" "$ns_b"; do
+    all="$(stl_owned_input_rules "$ns")" || return 1
+    gre="$(gre_only_input_rules "$all")"
+    if [[ $ns == "$ns_a" ]]; then
+      expected="$gre_firewall_a"
+    else
+      expected="$gre_firewall_b"
+    fi
+    [[ $gre == "$expected" ]] || {
+      echo "FAIL: IPIP operation changed a GRE-owned INPUT firewall rule in $ns" >&2
+      return 1
+    }
+  done
+}
+
+assert_stl_firewall_rule_count() {
+  local ns="$1" id="$2" expected="$3" all count
+  all="$(stl_owned_input_rules "$ns")" || return 1
+  count="$(grep -Fc -- "stl:${id}:" <<< "$all" || true)"
+  [[ $count -eq $expected ]] || {
+    echo "FAIL: expected $expected STL-owned INPUT rules for $id in $ns; found $count" >&2
+    return 1
+  }
+}
+
+# The baseline is established AFTER all three GRE modes have been created.
+# It must contain exactly one real owned rule for each Link, on both sides.
+gre_firewall_a="$(require_gre_firewall_baseline "$ns_a")" || exit 1
+gre_firewall_b="$(require_gre_firewall_baseline "$ns_b")" || exit 1
 gre_fou_a="$(ip netns exec "$ns_a" ip -json fou show)"
 gre_fou_b="$(ip netns exec "$ns_b" ip -json fou show)"
 for selected_ipip_mode in native fou gue; do
@@ -228,6 +309,10 @@ for selected_ipip_mode in native fou gue; do
   echo "BEGIN_IPIP_MODE=$ipip_mode"
   run_ipip_side a ensure
   run_ipip_side b ensure
+  # Verify IPIP owns a distinct INPUT rule while all GRE rules stay intact.
+  assert_stl_firewall_rule_count "$ns_a" "$ipip_id" 1
+  assert_stl_firewall_rule_count "$ns_b" "$ipip_id" 1
+  assert_gre_firewall_unchanged
   run_ipip_side a reensure
   run_ipip_side b reensure
   run_ipip_side a status
@@ -241,6 +326,9 @@ for selected_ipip_mode in native fou gue; do
     # installing a UDP receive mapping or changing the existing IPIP link.
     ipip_mode=fou; ipip_id=lnk_77777777777777777777777777777777; ipip_octet=99
     run_ipip_side a conflict
+    assert_gre_firewall_unchanged
+    # A rejected same-underlay Link has no right to an INPUT allow rule.
+    assert_stl_firewall_rule_count "$ns_a" "$ipip_id" 0
     [[ "$(ip netns exec "$ns_a" ip -json fou show)" == "$gre_fou_a" ]] || {
       echo "IPIP endpoint conflict leaked a FOU mapping" >&2; exit 1;
     }
@@ -251,6 +339,10 @@ for selected_ipip_mode in native fou gue; do
 
   run_ipip_side a remove
   run_ipip_side b remove
+  # Retire only selected IPIP INPUT rule; GRE ownership remains byte-identical.
+  assert_stl_firewall_rule_count "$ns_a" "$ipip_id" 0
+  assert_stl_firewall_rule_count "$ns_b" "$ipip_id" 0
+  assert_gre_firewall_unchanged
   run_ipip_side a list
   run_ipip_side b list
   for ns in "$ns_a" "$ns_b"; do
