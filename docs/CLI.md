@@ -2,8 +2,9 @@
 
 The terminal menu supports local overview, guided **GRE Native** Create,
 Link management/status, selected diagnostics, and preview-confirmed plaintext
-GRE/IPIP Setup Link import. Credential-bearing import, other guided backends
-and remaining operator tasks are still open under Issues #10 and #8.
+GRE/IPIP Setup Link import and receiver-side protected WireGuard v3 Quick
+Link import. Sender-side WireGuard Create/Export, IPsec, privileged traffic
+verification and remaining operator tasks are still open under Issues #6–#10.
 The versioned non-interactive ensure/remove lifecycle is implemented, with
 runtime/backend acceptance tracked separately. This page distinguishes
 **read-only** observations from **explicit host-mutating** commands.
@@ -92,7 +93,8 @@ CLI code, then shows the receiver-oriented underlay, Link Addresses and GRE
 options. Before requesting the final Link-ID confirmation, it discards
 already queued terminal input; pre-pasting multiple lines together cannot
 silently supply a confirmation before the preview was displayed. For a
-**credential-free GRE/IPIP Quick Link only**, it requires the operator to type
+**credential-free GRE/IPIP or configured, credential-bound WireGuard v3
+Quick Link**, it requires the operator to type
 the **exact stable Link ID** as a separate confirmation.
 Only then does it delegate to the existing `link import` operation, whose
 SHA-256 confirmation binds the exact reviewed URL. That Engine import can
@@ -100,10 +102,11 @@ create a new Link or idempotently re-ensure identical state; it rejects a
 same-ID configuration change under the canonical Link lock. Cancel or
 invalid input never invokes an Engine mutation.
 
-GRE/IPIP plaintext imports provide **no confidentiality or peer identity**;
+Quick Link payloads provide **no confidentiality or authenticated sender**;
 verify the offer with the intended peer through a trusted channel. Sensitive
-WireGuard/IPsec offers show credential presence as **REDACTED**, but cannot
-be applied until backend-owned protected recipient import is implemented.
+WireGuard v3 offers show credential presence as **REDACTED** and additionally
+show public keys/ports/keepalives before exact Link-ID confirmation. IPsec
+and legacy WireGuard v1/v2 offers remain preview-only.
 The menu makes no separate promises about working peer traffic or complete
 pairing. Settings, Update and Uninstall remain explicitly pending and do not
 report false success. Menu text and selection numbers are
@@ -136,11 +139,13 @@ remain the automation interface.
   credential or applying network state. Never pass SENSITIVE Quick Links as
   command-line arguments, which can enter shell history/process listings.
 - `stl link import --stdin --confirm <preview-token> [--json]`:
-  **mutating**, accepts a reviewed credential-free GRE/IPIP setup link from
-  standard input and converges its receiver-oriented Link through the same
-  canonical Engine as `ensure`. The required token is produced by a
-  prior `link preview` of those exact input bytes. This is not a
-  credentialed WireGuard/IPsec importer.
+  **mutating**, accepts a reviewed credential-free GRE/IPIP or configured
+  credential-bound WireGuard v3 Quick Link via standard input and converges
+  its receiver-oriented Link through the canonical Engine. The required
+  confirmation token comes from preview of the exact URL. V3 WireGuard
+  stores its receiver private key under restrictive permissions **inside
+  Engine's per-Link transaction lock**. Legacy WireGuard v1/v2 and IPsec
+  remain unsupported for import.
 - `stl link export <link-id> [--json]`: **read-only but intentionally
   disclosing**, export a canonical receiver Setup Link for a saved
   credential-free GRE or IPIP Link, including encoded endpoints and
@@ -151,13 +156,16 @@ remain the automation interface.
   request on standard input. Full request schema appears below.
 - `stl link remove <link-id> --confirm <same-link-id> [--json]`:
   **mutating** Engine-owned removal after explicit stable ID confirmation.
+  If an owned WireGuard interface must be deleted, removal first requires
+  its matching protected private key to be safe and readable for rollback;
+  otherwise interface and firewall state are preserved for reconciliation.
 - `stl link restore --all`: **mutating** host persistence/reapply
   operation for existing saved Links, using the same Engine.
 
 `list` reports **configured desired state**, not actual network reachability.
 `status` reports **interface_verified**, not end-to-end connectivity.
 Its `connectivity` field explicitly says `not_measured`: a configured,
-owned, UP GRE/IPIP interface with counters alone is not proof of peer traffic,
+owned, UP GRE/IPIP/WireGuard interface with counters alone is not proof of peer traffic,
 working firewall policy, or PMTU. Real Link Address probes belong to
 the read-only diagnostics path in [DIAGNOSTICS.md](DIAGNOSTICS.md).
 
@@ -169,7 +177,9 @@ the read-only diagnostics path in [DIAGNOSTICS.md](DIAGNOSTICS.md).
   only Link ID, backend, encapsulation, local and peer Link Addresses.
 - `link status`: a projected Link entry, `interface_verified: true`,
   `connectivity: "not_measured"` and the selected backend's identity-checked
-  `gre_state` or `ipip_state` counters (never both).
+  `gre_state`, `ipip_state` or `wireguard_state` (only its selected
+  backend); WireGuard includes verified public identity, latest handshake
+  Unix timestamp and byte counters, not a private credential.
 - `link diagnose`: the GRE/IPIP diagnostics report with top-level
   schema version, Link ID, backend kind, identity-checked counter state,
   MTU result and quality result. `--mtu` overrides the **inner IPv4
@@ -179,10 +189,12 @@ the read-only diagnostics path in [DIAGNOSTICS.md](DIAGNOSTICS.md).
 - `link preview`: one redacted object with CLI schema version 1,
   a separate `pairing_schema_version`, receiver-facing non-secret
   Link metadata, non-secret GRE configuration options when present,
-  `has_credential`, credential kind and sensitive flag.
+  `has_credential`, credential kind and sensitive flag. For v3 WireGuard,
+  preview also includes **public** local/peer keys, local/peer listen ports
+  and keepalive settings, never the private key.
   The input setup link, private keys, arbitrary display names and decoding
   cause are deliberately excluded from JSON and human output. For
-  importable plaintext GRE/IPIP offers only, it also returns
+  importable plaintext GRE/IPIP and WireGuard v3 Quick Links, it returns
   `import_confirmation`: the full lowercase SHA-256 of the exact normalized
   input URL, to bind a subsequent explicit import to the reviewed payload.
 - `link export`: explicit export JSON with CLI and pairing schema
@@ -372,7 +384,8 @@ offer with the intended peer through a trusted channel. Plaintext GRE
 and IPIP provide **no encryption or peer authentication**.
 
 The importer calls the canonical `Offer.ReceiverLink` inversion, then
-`Engine.EnsureImported`: the import-specific policy permits a **new Link ID**
+`Engine.EnsureImported` (plaintext) or `Engine.EnsureImportedRecipient`
+(credential-bound WireGuard): the import-specific policy permits a **new Link ID**
 or an **existing ID whose committed desired state exactly matches** the
 reviewed receiver configuration. If that ID already exists with *any*
 different desired configuration (including a different backend, address,
@@ -394,11 +407,15 @@ result. Failures after Engine execution are nonzero with
 A successful Engine result proves local backend convergence, **not**
 bidirectional traffic, MTU or peer cooperation.
 
-Credential-bearing WireGuard/IPsec Quick Links remain deliberately
-unsupported for import, even if a caller supplies a matching token:
-protected recipient-key storage and backend-specific lifecycle must
-exist first. Preview of those offers remains redacted and emits no
-`import_confirmation` token. Do not convert secret-bearing setup URLs
-into generic `link ensure` JSON or discard secrets to force a partial
-apply. Full interactive pairing and release-level privileged E2E remain
-outstanding under Issues #8/#10/#12.
+WireGuard v3 import uses the protected KeyStore: private bytes travel only
+through a 0600 key file and an already-verified inherited descriptor to
+`wg set`, not generic JSON, argv or log output. Identical-credential retry
+is allowed under Engine locks; mismatched credentials, unknown backend,
+legacy WireGuard v1/v2 and all IPsec offers are refused. Failed apply may
+leave a validated private key intentionally for reconciliation; removing
+a WireGuard interface does **not** destroy stored credentials. Operators
+must handle eventual key retirement deliberately. WireGuard public status
+supports a verified interface, latest handshake timestamp and RX/TX bytes,
+**not a proof of peer reachability or a packet-level E2E test**.
+WireGuard guided creator/export, IPsec, real privileged bidirectional traffic,
+and release-level pairing/coexistence acceptance remain Issues #6–#12.

@@ -7,7 +7,7 @@ It creates and manages independent **Link Addresses** between Linux servers over
 Canonical CLI: **stl**  
 Convenience alias: **stlink** (same executable/behavior when installed by the supported installer)
 
-> Status: pre-release development. GRE/IPIP and the core lifecycle CLI are integrated. An offline-tested release installer/update/uninstall script is available, but no public release has been published. Live GRE FOU/GUE traffic acceptance, WireGuard/IPsec, complete credentialed pairing, menu integration, and release E2E remain outstanding.
+> Status: pre-release development. GRE/IPIP and the core lifecycle CLI are integrated; a **candidate** WireGuard adapter and protected v3 receiver import exist but are not yet independently reviewed, privileged-traffic-validated or released. An offline-tested installer/update/uninstall script is available, but no public release has been published. IPsec, guided WireGuard sender export, credential retirement, full backend/coexistence traffic and release E2E remain outstanding.
 
 ## Why
 

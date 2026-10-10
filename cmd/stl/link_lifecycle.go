@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ach1992/simple-tun-link/internal/app"
+	wgbackend "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
@@ -109,6 +110,19 @@ func executeLinkMutation(operation string, desired domain.Link, id domain.LinkID
 // executor. The direct versioned CLI continues to use unconditional Remove.
 func executeLinkMutationConditional(operation string, desired domain.Link, id domain.LinkID,
 	jsonOutput bool, stdout, stderr io.Writer, options *runtimeOptions, expected *domain.Link) int {
+	return executeLinkMutationControlled(operation, desired, id, jsonOutput, stdout, stderr, options, expected, nil)
+}
+
+func executeLinkMutationRecipient(operation string, desired domain.Link, id domain.LinkID,
+	jsonOutput bool, stdout, stderr io.Writer, options *runtimeOptions, credential []byte) int {
+	return executeLinkMutationControlled(operation, desired, id, jsonOutput, stdout, stderr, options, nil, credential)
+}
+
+func executeLinkMutationControlled(operation string, desired domain.Link, id domain.LinkID,
+	jsonOutput bool, stdout, stderr io.Writer, options *runtimeOptions, expected *domain.Link, credential []byte) int {
+	if len(credential) != 0 && (operation != "link_import" || desired.Backend != domain.BackendWireGuard) {
+		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, operation, "invalid protected import operation")
+	}
 	if expected != nil && (operation != "link_remove" || expected.ID != id) {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, operation,
 			"conditional removal Link identity does not match")
@@ -118,6 +132,19 @@ func executeLinkMutationConditional(operation string, desired domain.Link, id do
 		options, err = productionRuntimeOptions()
 		if err != nil {
 			return lifecycleFailure(stdout, stderr, jsonOutput, stlerr.CodeState, operation, nil, "cannot initialize backend/runtime; no success is confirmed")
+		}
+	}
+	if len(credential) != 0 {
+		registered := false
+		for _, candidate := range options.backends {
+			if candidate != nil && candidate.Kind() == domain.BackendWireGuard {
+				registered = true
+				break
+			}
+		}
+		if !registered {
+			return lifecycleFailure(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, operation, nil,
+				"protected WireGuard backend is unavailable; no mutation attempted")
 		}
 	}
 	engine, err := buildRuntimeEngine(*options)
@@ -134,7 +161,15 @@ func executeLinkMutationConditional(operation string, desired domain.Link, id do
 	case "link_ensure":
 		result, err = engine.Ensure(ctx, desired)
 	case "link_import":
-		result, err = engine.EnsureImported(ctx, desired)
+		if len(credential) != 0 {
+			keys, keyErr := wgbackend.NewKeyStore(options.stateRoot)
+			if keyErr != nil {
+				return lifecycleFailure(stdout, stderr, jsonOutput, stlerr.CodeState, operation, nil, "cannot initialize protected WireGuard recipient store")
+			}
+			result, err = engine.EnsureImportedRecipient(ctx, desired, credential, keys)
+		} else {
+			result, err = engine.EnsureImported(ctx, desired)
+		}
 	case "link_remove":
 		if expected != nil {
 			result, err = engine.RemoveIfUnchanged(ctx, *expected)

@@ -28,10 +28,26 @@ func importablePlaintextOffer(preview pairing.Preview) bool {
 	return preview.Link.Backend == domain.BackendGRE || preview.Link.Backend == domain.BackendIPIP
 }
 
+// Credential-bearing recipient import is restricted to the bound v3 public
+// WireGuard config; older v1/v2 credential-only offers remain preview-only.
+func importableWireGuardOffer(preview pairing.Preview) bool {
+	link := preview.Link
+	return preview.SchemaVersion == pairing.WireGuardSchemaVersion &&
+		preview.Mode == pairing.ModeQuick && preview.HasCredential && preview.Sensitive &&
+		preview.Credential == pairing.CredentialWireGuardPrivateKey &&
+		link.Backend == domain.BackendWireGuard && link.Encapsulation == domain.EncapUDP &&
+		link.WireGuard != (domain.WireGuardOptions{}) &&
+		link.WireGuard.ListenPort != 0 && link.WireGuard.PeerPort != 0 &&
+		link.WireGuard.Validate() == nil
+}
+
+func importableOffer(preview pairing.Preview) bool {
+	return importablePlaintextOffer(preview) || importableWireGuardOffer(preview)
+}
+
 // linkImportCommand requires a preview-derived token for the EXACT setup link
-// before the canonical Engine is even assembled. Credentialed Quick Links
-// fail closed until the relevant backend has protected recipient storage;
-// silently applying a Link while dropping its credential is forbidden.
+// before the canonical Engine is assembled. v3 WireGuard uses its validated
+// protected credential transaction; legacy/unrecognized secrets fail closed.
 func linkImportCommand(args []string, input io.Reader, stdout, stderr io.Writer, options *runtimeOptions) int {
 	jsonOutput := slices.Contains(args, "--json")
 	valid := (len(args) == 4 || (len(args) == 5 && args[4] == "--json")) &&
@@ -55,9 +71,9 @@ func linkImportCommand(args []string, input io.Reader, stdout, stderr io.Writer,
 		return readCommandError(stdout, stderr, jsonOutput, code, "link_import",
 			"setup link is invalid or unsupported")
 	}
-	if !importablePlaintextOffer(offer.Preview()) {
+	if !importableOffer(offer.Preview()) {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_import",
-			"credential-bearing and non-GRE/IPIP pairing import require a protected backend-specific importer")
+			"setup-link backend/schema is not eligible for protected recipient import")
 	}
 	expected := setupLinkConfirmation(encoded)
 	if subtle.ConstantTimeCompare([]byte(args[3]), []byte(expected)) != 1 {
@@ -74,6 +90,14 @@ func linkImportCommand(args []string, input io.Reader, stdout, stderr io.Writer,
 		}
 		return readCommandError(stdout, stderr, jsonOutput, code, "link_import",
 			"receiver Link configuration is invalid or unsupported")
+	}
+	if importableWireGuardOffer(offer.Preview()) {
+		credential := offer.RecipientCredential()
+		defer clear(credential)
+		if len(credential) == 0 {
+			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, "link_import", "WireGuard receiver credential is missing")
+		}
+		return executeLinkMutationRecipient("link_import", desired, desired.ID, jsonOutput, stdout, stderr, options, credential)
 	}
 	return executeLinkMutation("link_import", desired, desired.ID, jsonOutput, stdout, stderr, options)
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	grebackend "github.com/ach1992/simple-tun-link/internal/backend/gre"
 	ipipbackend "github.com/ach1992/simple-tun-link/internal/backend/ipip"
+	wgbackend "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/maintenance"
@@ -169,7 +170,17 @@ func productionRuntimeOptions() (*runtimeOptions, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize IPIP backend: %w", err)
 	}
-	options.backends = []backend.Backend{gre, ipip}
+	keys, err := wgbackend.NewKeyStore(options.stateRoot)
+	if err != nil {
+		return nil, fmt.Errorf("initialize protected WireGuard credentials: %w", err)
+	}
+	wg, err := wgbackend.New(wgbackend.Options{
+		Runner: runner, Routes: routes, Firewall: firewall, Collisions: collisions, Keys: keys,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("initialize WireGuard backend: %w", err)
+	}
+	options.backends = []backend.Backend{gre, ipip, wg}
 
 	info, err := os.Stat("/run/systemd/system")
 	switch {

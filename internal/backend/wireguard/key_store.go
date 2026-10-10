@@ -2,6 +2,7 @@ package wireguard
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -126,42 +127,97 @@ func (s *KeyStore) PutNew(id domain.LinkID, key PrivateKey) error {
 	return nil
 }
 
+// EnsureRecipient is retry-safe after an earlier ambiguous activation failure.
+// It never silently replaces an existing key: only the identical supplied
+// canonical private key is acceptable on replay.
+func (s *KeyStore) EnsureRecipient(id domain.LinkID, credential []byte, expectedPublic string) error {
+	supplied, err := DecodePrivateKey(string(credential))
+	if err != nil {
+		return fmt.Errorf("invalid WireGuard recipient credential")
+	}
+	public, err := supplied.PublicKey()
+	if err != nil || expectedPublic == "" || public != expectedPublic {
+		return fmt.Errorf("WireGuard recipient credential does not match public identity")
+	}
+	existing, err := s.Load(id)
+	if errors.Is(err, os.ErrNotExist) {
+		return s.PutNew(id, supplied)
+	}
+	if err != nil {
+		return err
+	}
+	if subtle.ConstantTimeCompare([]byte(existing.SecretWireValue()), credential) != 1 {
+		return fmt.Errorf("WireGuard recipient credential conflicts with existing Link key")
+	}
+	return nil
+}
+
 // Load reads only a regular, singly-linked, same-owner, 0600 key file through
-// an O_NOFOLLOW descriptor. It does not invoke wg, log the private key, or
-// expose material through a generic JSON/state interface.
+// an O_NOFOLLOW descriptor. It never logs or generically serializes secrets.
 func (s *KeyStore) Load(id domain.LinkID) (PrivateKey, error) {
+	key, file, err := s.openVerifiedKey(id)
+	if file != nil {
+		file.Close()
+	}
+	return key, err
+}
+
+// OpenForWireGuard passes a verified read-only credential descriptor to wg.
+// The subprocess receives /proc/self/fd/3, never secret text or a writable
+// path; even a concurrent filesystem rename cannot alter the opened inode.
+func (s *KeyStore) OpenForWireGuard(id domain.LinkID, expectedPublic string) (*os.File, error) {
+	key, file, err := s.openVerifiedKey(id)
+	if err != nil {
+		return nil, err
+	}
+	public, err := key.PublicKey()
+	if err != nil || public != expectedPublic {
+		file.Close()
+		return nil, fmt.Errorf("protected WireGuard key does not match local public identity")
+	}
+	return file, nil
+}
+
+func (s *KeyStore) openVerifiedKey(id domain.LinkID) (PrivateKey, *os.File, error) {
 	name, err := s.keyName(id)
 	if err != nil {
-		return PrivateKey{}, err
+		return PrivateKey{}, nil, err
 	}
 	dirfd, err := openProtectedCredentials(s.stateRoot, false)
 	if err != nil {
-		return PrivateKey{}, err
+		return PrivateKey{}, nil, err
 	}
 	defer unix.Close(dirfd)
 	fd, err := unix.Openat(dirfd, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return PrivateKey{}, fmt.Errorf("cannot open protected WireGuard key: %w", err)
+		return PrivateKey{}, nil, fmt.Errorf("cannot open protected WireGuard key: %w", err)
 	}
 	file := os.NewFile(uintptr(fd), "wireguard-credential")
-	defer file.Close()
+	fail := func() (PrivateKey, *os.File, error) {
+		file.Close()
+		return PrivateKey{}, nil, fmt.Errorf("invalid protected WireGuard credential file")
+	}
 	var info unix.Stat_t
 	if err := unix.Fstat(fd, &info); err != nil ||
 		info.Mode&unix.S_IFMT != unix.S_IFREG ||
 		info.Mode&0o777 != 0o600 ||
 		info.Uid != uint32(os.Geteuid()) || info.Nlink != 1 {
-		return PrivateKey{}, fmt.Errorf("WireGuard credential file ownership or permissions invalid")
+		return fail()
 	}
 	bytes, err := io.ReadAll(io.LimitReader(file, wireKeyTextLen+3))
 	if err != nil || len(bytes) != wireKeyTextLen+1 || bytes[wireKeyTextLen] != '\n' {
-		return PrivateKey{}, fmt.Errorf("invalid protected WireGuard credential file")
+		clear(bytes)
+		return fail()
 	}
 	key, err := DecodePrivateKey(string(bytes[:wireKeyTextLen]))
 	clear(bytes)
 	if err != nil {
-		return PrivateKey{}, fmt.Errorf("invalid protected WireGuard credential file")
+		return fail()
 	}
-	return key, nil
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return fail()
+	}
+	return key, file, nil
 }
 
 // openProtectedCredentials uses descriptor-relative, no-symlink traversal.

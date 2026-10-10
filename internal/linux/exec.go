@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -24,6 +25,14 @@ type CommandResult struct {
 // callers must never build a shell command string from untrusted input.
 type Runner interface {
 	Run(context.Context, string, ...string) (CommandResult, error)
+}
+
+// FileRunner is an optional execution seam for tools needing validated file
+// descriptors (not secret-bearing argv, stdin or temporary config paths).
+// File descriptors are inherited as /proc/self/fd/3, /proc/self/fd/4, etc.
+type FileRunner interface {
+	Runner
+	RunWithFiles(context.Context, string, []*os.File, ...string) (CommandResult, error)
 }
 
 // ExecRunner executes Linux tools directly with os/exec. Timeout applies only
@@ -68,6 +77,22 @@ func (e *CommandError) Unwrap() error {
 }
 
 func (r ExecRunner) Run(ctx context.Context, name string, args ...string) (CommandResult, error) {
+	return r.run(ctx, name, nil, args...)
+}
+
+func (r ExecRunner) RunWithFiles(ctx context.Context, name string, files []*os.File, args ...string) (CommandResult, error) {
+	if len(files) > 4 {
+		return CommandResult{}, fmt.Errorf("too many inherited command files")
+	}
+	for _, file := range files {
+		if file == nil {
+			return CommandResult{}, fmt.Errorf("invalid inherited command file")
+		}
+	}
+	return r.run(ctx, name, files, args...)
+}
+
+func (r ExecRunner) run(ctx context.Context, name string, files []*os.File, args ...string) (CommandResult, error) {
 	if ctx == nil {
 		return CommandResult{}, fmt.Errorf("context is required")
 	}
@@ -86,6 +111,7 @@ func (r ExecRunner) Run(ctx context.Context, name string, args ...string) (Comma
 	defer cancel()
 
 	cmd := exec.CommandContext(runCtx, name, args...)
+	cmd.ExtraFiles = files
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

@@ -98,7 +98,7 @@ func TestMenuImportRejectsOversizeAndMalformedWithoutMutation(t *testing.T) {
 	}
 }
 
-func TestMenuImportCredentialedQuickLinkIsRedactedAndCannotApply(t *testing.T) {
+func TestMenuImportCredentialedQuickLinkIsRedactedAndUnconfirmedDoesNotApply(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "no-state")
 	fake := newLifecycleFake()
 	link, _ := makeLifecycleDesired(t, "c", "10.70.95.0/31")
@@ -109,7 +109,7 @@ func TestMenuImportCredentialedQuickLinkIsRedactedAndCannotApply(t *testing.T) {
 	code, output, errOut := runMenuImportTest(t, root, []backend.Backend{fake},
 		"2\n"+url+"\n8\n")
 	if code != 0 || errOut != "" || !strings.Contains(output, "SENSITIVE") ||
-		!strings.Contains(output, "Protected credential import is not available") {
+		!strings.Contains(output, "Import cancelled") {
 		t.Fatalf("credentialed input was not safely declined: code=%d err=%q", code, errOut)
 	}
 	for _, forbidden := range []string{url, key, link.DisplayName, setupLinkConfirmation(url)} {

@@ -128,6 +128,11 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		fmt.Fprintf(out, "GRE: key_enabled=%t key=%d udp_port=%d ttl=%d tos=%d disable_pmtud=%t checksum=%t sequence=%t\n",
 			g.KeyEnabled, g.Key, g.UDPPort, g.TTL, g.TOS, g.DisablePMTUD, g.Checksum, g.Sequence)
 	}
+	if w := preview.WireGuard; w != nil {
+		fmt.Fprintf(out, "WireGuard local public key %s, peer public key %s\n", w.LocalPublicKey, w.PeerPublicKey)
+		fmt.Fprintf(out, "WireGuard receive port %d, peer port %d, local keepalive %d, peer keepalive %d\n",
+			w.ListenPort, w.PeerPort, w.LocalKeepalive, w.PeerKeepalive)
+	}
 	if preview.HasCredential || preview.Sensitive {
 		fmt.Fprintln(out, "Recipient credentials: present / REDACTED (SENSITIVE)")
 	}
@@ -136,7 +141,7 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		return 0
 	}
 
-	fmt.Fprintln(out, "GRE/IPIP offers are not encrypted or peer-authenticated. Verify the peer separately.")
+	fmt.Fprintln(out, "Quick Links are neither encrypted nor peer-authenticated. Verify sender and recipient identity separately.")
 	fmt.Fprintln(out, "This apply changes local network state via the canonical Link Engine.")
 	fmt.Fprintln(out, "Existing Link IDs with different saved configuration are never reconfigured by import.")
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
