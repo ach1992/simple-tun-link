@@ -20,7 +20,12 @@ jobs:
       - name: Toolchain
         run: go version
       - name: Formatting
-        run: test -z "$(gofmt -l .)"
+        run: |
+          files="$(gofmt -l .)"
+          if [ -n "$files" ]; then
+            gofmt -d .
+            exit 1
+          fi
       - name: Vet
         run: go vet ./...
       - name: Test
