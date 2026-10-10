@@ -15,6 +15,21 @@ import (
 	"github.com/strongswan/govici/vici"
 )
 
+// Same-package test seam only: production packages can obtain a Reader via
+// NewReader but cannot inject a transport or bypass its Unix socket policy.
+func readerWithTestSession(dial sessionDialer) Reader {
+	return Reader{dial: dial}
+}
+
+func TestReaderTransportIsNotExternallyInjectable(t *testing.T) {
+	typeOfReader := reflect.TypeOf(Reader{})
+	for i := 0; i < typeOfReader.NumField(); i++ {
+		if field := typeOfReader.Field(i); field.IsExported() {
+			t.Fatalf("Reader unexpectedly exposes transport-setting field %q", field.Name)
+		}
+	}
+}
+
 type fakeSession struct {
 	got      []string
 	replies  map[string]*vici.Message
@@ -57,7 +72,7 @@ func TestReaderInspectsOnlyExactNamesAndNeverMutatesDaemon(t *testing.T) {
 		"get-conns":  messageList(t, "conns", []string{"foreign-owner-conn", p.ConnectionName}),
 		"get-shared": messageList(t, "keys", []string{"foreign-owner-secret", p.SecretName}),
 	}}
-	r := Reader{Dial: func(context.Context) (Session, error) { return s, nil }}
+	r := readerWithTestSession(func(context.Context) (Session, error) { return s, nil })
 	got, err := r.Inspect(context.Background(), p)
 	if err != nil || !got.ConnectionNamePresent || !got.SecretNamePresent {
 		t.Fatalf("lost exact VICI names: %+v %v", got, err)
@@ -99,7 +114,7 @@ func TestReaderFailsClosedOnUnknownMalformedOrDuplicateInventory(t *testing.T) {
 			s := &fakeSession{replies: map[string]*vici.Message{
 				"get-conns": tc.conn, "get-shared": tc.shared,
 			}, failAt: tc.failCmd, errorMsg: "secret-redaction-fixture-should-not-appear"}
-			r := Reader{Dial: func(context.Context) (Session, error) { return s, nil }}
+			r := readerWithTestSession(func(context.Context) (Session, error) { return s, nil })
 			_, err := r.Inspect(context.Background(), p)
 			if err == nil || strings.Contains(err.Error(), "secret-redaction-fixture") {
 				t.Fatal("unsafe VICI inventory was trusted or leaked daemon text")
@@ -250,10 +265,10 @@ func TestVICIProfileIsRevalidatedBeforeAnyIO(t *testing.T) {
 				t.Fatal("noncanonical profile created unsafe VICI payload")
 			}
 			called := false
-			r := Reader{Dial: func(context.Context) (Session, error) {
+			r := readerWithTestSession(func(context.Context) (Session, error) {
 				called = true
 				return &fakeSession{}, nil
-			}}
+			})
 			if _, err := r.Inspect(context.Background(), candidate); err == nil || called {
 				t.Fatal("noncanonical profile reached daemon socket")
 			}

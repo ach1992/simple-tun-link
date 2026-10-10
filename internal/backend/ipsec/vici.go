@@ -21,9 +21,12 @@ type Session interface {
 	Close() error
 }
 
-type SessionDialer func(context.Context) (Session, error)
+// The dialer is deliberately NOT part of Reader's public configuration.
+// Only NewReader can construct a production reader. Test-time injection is
+// confined to same-package test code, not arbitrary CLI/backend consumers.
+type sessionDialer func(context.Context) (Session, error)
 
-type Reader struct{ Dial SessionDialer }
+type Reader struct{ dial sessionDialer }
 
 // NewReader opens the VICI control socket only for explicit per-Link public
 // state inspection. An unavailable/non-socket endpoint fails closed. The
@@ -34,7 +37,7 @@ func NewReader(socketPath string) (Reader, error) {
 		socketPath == "/" {
 		return Reader{}, fmt.Errorf("invalid VICI socket location")
 	}
-	return Reader{Dial: func(ctx context.Context) (Session, error) {
+	return Reader{dial: func(ctx context.Context) (Session, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -65,7 +68,7 @@ type Snapshot struct {
 }
 
 func (r Reader) Inspect(ctx context.Context, p Profile) (Snapshot, error) {
-	if ctx == nil || r.Dial == nil {
+	if ctx == nil || r.dial == nil {
 		return Snapshot{}, fmt.Errorf("VICI reader requires context and dialer")
 	}
 	if err := ctx.Err(); err != nil {
@@ -74,7 +77,7 @@ func (r Reader) Inspect(ctx context.Context, p Profile) (Snapshot, error) {
 	if err := p.validateIdentity(); err != nil {
 		return Snapshot{}, err
 	}
-	session, err := r.Dial(ctx)
+	session, err := r.dial(ctx)
 	if err != nil {
 		// A library/network error might contain daemon-controlled text;
 		// never format it in a secret-related operator response.

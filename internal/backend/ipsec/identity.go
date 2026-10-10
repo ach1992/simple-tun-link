@@ -56,6 +56,21 @@ func NewProfile(link domain.Link) (Profile, error) {
 		!link.Underlay.Local.Is4() || !link.Underlay.Peer.Is4() {
 		return Profile{}, fmt.Errorf("IPsec v0.1 profile requires ESP or NAT-T over two IPv4 endpoints")
 	}
+	// IsGlobalUnicast classifies addresses, not Internet route reachability,
+	// so RFC1918 and TEST-NET endpoints remain valid for private networks and
+	// disposable E2E fixtures. Explicitly reject 0/8 and 240/4 as well:
+	// netip.IsGlobalUnicast alone can admit some non-concrete reserved addresses.
+	// strongSwan treats 0.0.0.0 as an IKE wildcard, not a concrete STL peer.
+	if !concreteIPv4Unicast(link.Underlay.Local) || !concreteIPv4Unicast(link.Underlay.Peer) {
+		return Profile{}, fmt.Errorf("IPsec underlay endpoints must be concrete unicast IPv4")
+	}
+	// A /31 is valid for point-to-point addresses only if *both* host
+	// selectors are concrete unicast. Do not admit a 0/8 or multicast /31
+	// that would otherwise become an invalid or broad strongSwan TS.
+	if !concreteIPv4Unicast(link.Addresses.Local.Addr()) ||
+		!concreteIPv4Unicast(link.Addresses.Peer.Addr()) {
+		return Profile{}, fmt.Errorf("IPsec Link Addresses must be concrete unicast IPv4")
+	}
 	if link.Addresses.Local.Bits() != 31 || link.Addresses.Peer.Bits() != 31 ||
 		link.Addresses.Local.Masked() != link.Addresses.Peer.Masked() {
 		return Profile{}, fmt.Errorf("IPsec Link Addresses must be a matched IPv4 /31 pair")
@@ -83,6 +98,16 @@ func NewProfile(link domain.Link) (Profile, error) {
 		PeerIKEID:      "stl-" + hexID + "-" + hi,
 	}
 	return p, nil
+}
+
+func concreteIPv4Unicast(addr netip.Addr) bool {
+	if !addr.Is4() || !addr.IsGlobalUnicast() {
+		return false
+	}
+	// RFC 1122 identifies 0/8 as "this network"; 240/4 remains reserved.
+	// Go's global-unicast classification does not reject their whole ranges.
+	octets := addr.As4()
+	return octets[0] != 0 && octets[0] < 240
 }
 
 // validateIdentity prevents callers from assembling or mutating a Profile by

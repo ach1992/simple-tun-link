@@ -2,6 +2,7 @@ package ipsec
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/netip"
 	"slices"
@@ -105,6 +106,90 @@ func TestProfileRejectsUnsupportedOrAmbiguousPolicyBeforeIO(t *testing.T) {
 			tc.alter(&l)
 			if _, err := NewProfile(l); err == nil {
 				t.Fatal("unsafe IPsec profile accepted")
+			}
+		})
+	}
+}
+
+// R2 regression: unspecified, loopback, link-local, multicast and broadcast
+// IPv4 are not concrete peer endpoints nor meaningful IPsec host selectors.
+// RFC1918 and TEST-NET unicast addresses remain usable for disposable netns.
+func TestProfileRejectsNonConcreteIPv4WithoutVICIAccess(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		alter func(*domain.Link)
+	}{
+		{"unspecified local underlay", func(l *domain.Link) {
+			l.Underlay.Local = netip.MustParseAddr("0.0.0.0")
+		}},
+		{"unspecified peer underlay", func(l *domain.Link) {
+			l.Underlay.Peer = netip.MustParseAddr("0.0.0.0")
+		}},
+		{"nonzero 0/8 peer underlay", func(l *domain.Link) {
+			l.Underlay.Peer = netip.MustParseAddr("0.1.2.3")
+		}},
+		{"reserved 240/4 peer underlay", func(l *domain.Link) {
+			l.Underlay.Peer = netip.MustParseAddr("240.0.0.1")
+		}},
+		{"multicast local underlay", func(l *domain.Link) {
+			l.Underlay.Local = netip.MustParseAddr("224.0.0.1")
+		}},
+		{"multicast peer underlay", func(l *domain.Link) {
+			l.Underlay.Peer = netip.MustParseAddr("239.1.2.3")
+		}},
+		{"loopback local underlay", func(l *domain.Link) {
+			l.Underlay.Local = netip.MustParseAddr("127.0.0.1")
+		}},
+		{"link-local peer underlay", func(l *domain.Link) {
+			l.Underlay.Peer = netip.MustParseAddr("169.254.1.2")
+		}},
+		{"limited broadcast peer underlay", func(l *domain.Link) {
+			l.Underlay.Peer = netip.MustParseAddr("255.255.255.255")
+		}},
+		{"unspecified Link Address pair", func(l *domain.Link) {
+			l.Addresses.Local = netip.MustParsePrefix("0.0.0.0/31")
+			l.Addresses.Peer = netip.MustParsePrefix("0.0.0.1/31")
+		}},
+		{"nonzero 0/8 Link Address pair", func(l *domain.Link) {
+			l.Addresses.Local = netip.MustParsePrefix("0.1.2.2/31")
+			l.Addresses.Peer = netip.MustParsePrefix("0.1.2.3/31")
+		}},
+		{"reserved 240/4 Link Address pair", func(l *domain.Link) {
+			l.Addresses.Local = netip.MustParsePrefix("240.0.0.0/31")
+			l.Addresses.Peer = netip.MustParsePrefix("240.0.0.1/31")
+		}},
+		{"multicast Link Address pair", func(l *domain.Link) {
+			l.Addresses.Local = netip.MustParsePrefix("224.0.0.0/31")
+			l.Addresses.Peer = netip.MustParsePrefix("224.0.0.1/31")
+		}},
+		{"loopback Link Address pair", func(l *domain.Link) {
+			l.Addresses.Local = netip.MustParsePrefix("127.0.0.0/31")
+			l.Addresses.Peer = netip.MustParsePrefix("127.0.0.1/31")
+		}},
+		{"link-local Link Address pair", func(l *domain.Link) {
+			l.Addresses.Local = netip.MustParsePrefix("169.254.0.0/31")
+			l.Addresses.Peer = netip.MustParsePrefix("169.254.0.1/31")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			link := testIPsecLink(t, domain.EncapESP)
+			tc.alter(&link)
+			if _, err := NewProfile(link); err == nil {
+				t.Fatal("IPsec accepted a non-concrete unicast IPv4 endpoint/selector")
+			}
+			// Even a manually forged Profile cannot produce public VICI intent,
+			// and the reader must reject it before invoking the injected dialer.
+			forged := Profile{Link: link}
+			if _, err := forged.ConnectionRequest(); err == nil {
+				t.Fatal("invalid address profile produced a VICI request")
+			}
+			dialed := false
+			r := readerWithTestSession(func(context.Context) (Session, error) {
+				dialed = true
+				return &fakeSession{}, nil
+			})
+			if _, err := r.Inspect(context.Background(), forged); err == nil || dialed {
+				t.Fatal("invalid address profile reached VICI or falsely succeeded")
 			}
 		})
 	}
