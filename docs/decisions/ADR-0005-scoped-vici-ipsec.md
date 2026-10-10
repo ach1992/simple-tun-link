@@ -265,3 +265,37 @@ future XFRM creation transaction therefore must first persist an uncertain
 identity, preserving the original ifindex/ownership evidence across the
 non-atomic alias step. An alias on a restarted process is not sufficient
 proof and an interrupted create must not blindly delete by derived name.
+
+## Owner decision (2026-10-11): portable native-exclusive v0.1 runtime
+
+The Owner accepted **one shared IPsec control-plane implementation** with
+small, capability-selected Linux packaging/service adapters, not separate
+IPsec engines for Debian/Ubuntu and not a mandatory privileged container or
+network namespace. The first operational profile will have **one STL-owned
+strongSwan daemon per host**, not per Link, with an STL-owned VICI/config/
+credential boundary and standard IKE/NAT-T UDP 500/4500, reusing current
+Link/Quick Link identity without adding remote IKE port fields.
+
+This is an **operational target, not an implemented/verified feature**.
+Before even attempting a daemon start, key transfer, VICI load or XFRM
+mutation, separately prove exclusive configuration/service/socket/port
+ownership, effective secure logging policy, controlled package install
+behavior and durable owner-only kernel interface/SA/policy identity. Process
+absence or an STL-shaped name/nonce is insufficient. No untrusted external
+strongSwan service may be stopped, adopted, reloaded, or modified.
+
+A preexisting or uncertain strongSwan owner, IKE port conflict, suspicious
+configuration, ambiguous host identity or missing capability **disables only
+IPsec** and returns a stable reason plus actionable operator guidance; GRE,
+IPIP and WireGuard remain usable. The accepted v0.1 architecture does not
+promise simultaneous foreign strongSwan coexistence. A separate isolated
+runtime may be designed later after proven need and reviewed distro/version
+compatibility. Extra read-before-write probes on a shared daemon remain
+**explicitly rejected** as a substitute for ownership.
+
+The project-wide observability contract in docs/ARCHITECTURE.md applies to
+this backend: secure reason codes, operator next steps, bounded correlation,
+read-only doctor, no sensitive daemon stderr/VICI payloads, and no CFG DBG4
+raw PSK logs even during troubleshooting. Existing source-only journal and
+no-effectful-writer constraints remain until the operational security and
+real IKEv2/ESP/NAT-T E2E gates pass. Issues #7 and #12 stay OPEN.

@@ -332,3 +332,22 @@ Keep dependencies minimal. Review additions to Go modules, CI actions, installer
 ## Reporting
 
 Private vulnerability reporting is enabled for this public repository. Report suspected vulnerabilities through GitHub's private vulnerability reporting/Security Advisory flow rather than publishing exploitable details in a public Issue.
+
+## Operator troubleshooting and logs
+
+The accepted portable native-exclusive IPsec runtime must fail closed if
+an unrelated/ambiguous strongSwan process, configuration, service, IKE port,
+credential or XFRM resource is present. A successful read-only process or
+package probe is **not** a service-ownership or host-resource proof. The
+`stl doctor ipsec` read-only diagnostic is intentionally unable to activate
+IPsec while its backend remains unregistered. Never terminate a foreign
+process or reconcile external credentials as a troubleshooting shortcut.
+
+Across all STL backends, human failure output should include a stable,
+secret-safe reason and next action. Structured logs may retain public
+operation/Link identity, stage, duration and outcome but must never serialize
+credentials, setup links, full argv, untrusted daemon stderr, raw VICI
+messages or SA key material. Optional verbose diagnostics must enforce the
+same rules. Configure/check daemon log backends so raw PSKs cannot appear at
+CFG DBG4 before any future actual PSK transfer. A safe `doctor` or `status`
+operation never performs repair, reload, reconfiguration or service startup.

@@ -58,7 +58,13 @@ type linkReadErrorResponse struct {
 }
 
 func readCommandError(stdout, stderr io.Writer, jsonOutput bool, code stlerr.Code, operation, detail string) int {
-	public := stlerr.New(code, operation, "", "", detail)
+	return readCommandPublicError(stdout, stderr, jsonOutput,
+		stlerr.New(code, operation, "", "", detail))
+}
+
+// readCommandPublicError preserves the versioned error envelope and exit
+// semantics for ordinary errors and for errors with additional safe context.
+func readCommandPublicError(stdout, stderr io.Writer, jsonOutput bool, public *stlerr.Error) int {
 	if jsonOutput {
 		if err := json.NewEncoder(stdout).Encode(linkReadErrorResponse{SchemaVersion: jsonSchemaVersion, Error: public}); err != nil {
 			fmt.Fprintln(stderr, "cannot encode error response")
@@ -67,7 +73,7 @@ func readCommandError(stdout, stderr io.Writer, jsonOutput bool, code stlerr.Cod
 	} else {
 		fmt.Fprintln(stderr, public.Error())
 	}
-	switch code {
+	switch public.Code {
 	case stlerr.CodeInvalid:
 		return 2
 	case stlerr.CodeUnsupported:
@@ -129,6 +135,9 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 	record, ok := snapshot.Find(id)
 	if !ok {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, "link_status", "Link ID is not present in local desired state")
+	}
+	if record.Desired.Backend == domain.BackendIPsec {
+		return ipsecUnregisteredError(stdout, stderr, jsonOutput, "link_status", id)
 	}
 	if options == nil {
 		options, err = productionRuntimeOptions()

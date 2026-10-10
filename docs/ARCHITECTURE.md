@@ -460,3 +460,60 @@ Avoid:
 - duplicating Linux networking logic in pure Go when a small, validated native-tool boundary is safer.
 
 Architecture may expand only when a concrete accepted capability requires it.
+
+## 16. Runtime portability and operator observability
+
+The v0.1 IPsec architecture uses **one** canonical Engine/VICI/PSK/XFRM
+lifecycle across supported Linux distributions. Small host adapters select
+package names/versions, executable paths, service manager and security
+confinement from observed capabilities rather than from the distro name
+alone. The first runtime profile is **native-exclusive**: one STL-owned
+strongSwan service per host and multiple independent per-Link identities,
+with standard IKE/NAT-T UDP 500/4500. Do not assume a stopped service or
+empty process listing establishes exclusive rights over VICI, sockets,
+policies, SAs, XFRM links, files or future writers.
+
+A foreign/uncertain daemon, service, existing configuration, port or kernel
+resource is an **IPsec-only fail-closed** condition. Do not stop, reconfigure
+or adopt foreign resources. GRE/IPIP/WireGuard remain independent. A more
+isolated runtime is considered only with demonstrated coexistence demand,
+real package/platform tests and new security/compatibility acceptance.
+Currently the IPsec operational backend is **not registered**; a read-only
+probe, staged PSK or VICI journal never grants permission to activate it.
+
+For **every backend** and interactive/non-interactive workflow, build the
+operator experience from one normalized, backend-neutral observation/result
+model rather than writing separate troubleshooting prose in each frontend:
+
+- Human result: **what happened**, specific reason, whether the observation
+  is proven or unknown, one **safe next action**, and what (if anything)
+  was changed or rolled back. Never claim success on an unverified outcome.
+- Machine result: stable category and specific `reason_code`, typed status,
+  versioned schema, deterministic exit behavior. Presentations must not
+  depend on parsing arbitrary English exception strings. Breaking changes
+  require a schema version and migration policy; new optional fields must
+  preserve current consumer compatibility.
+- Event correlation: operation, stable public Link ID if applicable,
+  backend, stage, safe reason code, elapsed time and outcome. A bounded,
+  explicit troubleshooting mode may add pre-approved *nonsecret* metadata;
+  never dump raw command argv, untrusted stdout/stderr, config or credentials.
+  CLI stdout for `--json` is reserved for machine output; diagnostics and
+  operator logs must not corrupt it. File/journald persistence, retention,
+  rotation and verbosity are chosen only where an owned runtime needs them;
+  a new logging daemon/database is not required.
+- Confidentiality: no private keys/PSKs, SENSITIVE setup URLs, raw VICI
+  frames, XFRM SA keys, daemon/kernel error payload, user-supplied config
+  or unvalidated filesystem paths in status, logs or support exports.
+  strongSwan effective CFG logging policy must be attested before PSK load;
+  debug mode never enables DBG4 raw-secret output.
+- `status` and `doctor` are observational. Explicit repair/apply/remove
+  retain the canonical Engine authority and owned-only rollback. Unknown,
+  timeout and incomplete inventory remain distinct from true absence.
+
+Current initial read-only `stl doctor ipsec [--json]` checks only observed
+processes and prerequisite commands and always reports IPsec activation as
+**not allowed**. It is not a complete port/service/ownership attestation.
+Future operational work must reuse this distinction rather than promote
+`pgrep` absence, `swanctl --version`, or XFRM inventory success into
+an activation permit. Issues #7 and #12 own operational and release proof;
+Issue #9 owns common diagnostics, Issue #10 the user-facing command surfaces.

@@ -74,6 +74,8 @@ A non-interactive CLI and machine-readable JSON output must expose the same core
 - strongSwan/IKEv2 with Linux XFRM interfaces, not the legacy VTI-first design.
 - Native ESP and NAT-T/ESP-in-UDP behavior.
 - Credential material is secret and follows setup-link security rules.
+- v0.1 operational target: one STL-owned native-exclusive strongSwan runtime per eligible host, with standard IKE UDP 500/4500, not one daemon per Link. Preserve one shared IPsec engine and use small capability-driven packaging/service adapters across Linux distributions.
+- Existing or ambiguously owned strongSwan services, management, ports, credentials or kernel resources block only IPsec activation; never stop or adopt a foreign daemon. GRE/IPIP/WireGuard remain independently usable. An isolated multi-daemon alternative is future work, not a prerequisite for v0.1.
 
 ## 6. Link addressing
 
@@ -111,6 +113,8 @@ Creation must use a small high-value diagnostic set:
 - short latency/loss/jitter measurement;
 - backend-specific state/counter validation;
 - optional throughput test, not mandatory during ordinary creation.
+- At installation, setup, status, diagnostics, lifecycle and restore failures, show the operator a clear *why*, stable machine reason identifier, actionable next step and whether the observation is incomplete. Machine-readable JSON must not require prose parsing, and no diagnostic may silently repair.
+- Prefer structured, bounded, redacted events tied to operation/Link/backend and stable reason code; normal users see concise output, while opt-in safe troubleshooting provides more context without exposing credentials or untrusted daemon/kernel output. Never turn on unsafe strongSwan credential-debug logging for diagnosis.
 
 Health observation and repair are separate operations. A health check must not silently mutate the system.
 
@@ -135,7 +139,7 @@ Health observation and repair are separate operations. A health check must not s
 - CLI JSON output is a first-class contract for automation; every machine-readable payload carries an explicit schema version and breaking schema changes require a version bump.
 - The automation surface provides idempotent desired-state semantics (for example, `stl link ensure ... --json`) so callers do not need to reproduce create/update/repair decision logic.
 - The engine treats Links as a collection keyed by stable Link ID; it must not assume one active Link, one Link per peer, or one Link per backend.
-- No daemon, central database, remote orchestration service, or consumer-specific integration layer is required in v0.1.
+- No **STL management daemon**, central database, remote orchestration service, or consumer-specific integration layer is required in v0.1. The optional IPsec backend uses its native strongSwan service only after explicit, verified STL-exclusive ownership; this is not a new generic STL control daemon.
 - Boundaries must allow arbitrary external software to reuse STL through stable machine contracts without reimplementing tunnel logic or forcing STL to model consumer-specific concepts.
 - Avoid premature public-library APIs; promote a stable reusable API only when a second real consumer proves the requirement.
 
@@ -198,3 +202,5 @@ v0.1 is complete when:
 The project license is **MIT**. The canonical CLI remains `stl`; `stlink` is a low-cost convenience alias to the same executable when installed through the supported installer.
 
 For v0.1, **Quick Link** is the default one-step pairing mode for secret-bearing backends. The format remains explicitly extensible so a future Secure Exchange/local-key mode can be added without changing the core Link model. No currently open owner decision blocks Issue #2 development.
+
+For IPsec v0.1, the Owner accepts a single native-exclusive STL-owned strongSwan runtime on eligible hosts and an explicit fail-closed IPsec-only unavailability on any host with foreign/ambiguous daemon ownership. Future coexistence/isolation modes require independent validation and review. The Owner also requires actionable, redacted operator diagnostics and coherent safe logging across **every** backend and CLI/menu workflow; this is a product-wide acceptance criterion, not an IPsec-specific embellishment.

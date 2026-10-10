@@ -1,0 +1,115 @@
+package diagnostics
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/ach1992/simple-tun-link/internal/linux"
+)
+
+type ipsecDoctorRunner struct {
+	overrides map[string]error
+	calls     []string
+}
+
+func (r *ipsecDoctorRunner) Run(_ context.Context, name string, args ...string) (linux.CommandResult, error) {
+	key := strings.Join(append([]string{name}, args...), " ")
+	r.calls = append(r.calls, key)
+	if err, ok := r.overrides[key]; ok {
+		return linux.CommandResult{Stdout: []byte("private_key=NEVER_SHOW"), Stderr: []byte("PSK=NEVER_SHOW")}, err
+	}
+	if name == "/usr/bin/pgrep" {
+		return linux.CommandResult{}, &linux.CommandError{Command: name, ExitCode: 1}
+	}
+	return linux.CommandResult{}, nil
+}
+
+func checkByName(t *testing.T, report IPsecHostReport, name string) IPsecHostCheck {
+	t.Helper()
+	for _, check := range report.Checks {
+		if check.Name == name {
+			return check
+		}
+	}
+	t.Fatalf("missing check %s", name)
+	return IPsecHostCheck{}
+}
+
+func TestIPsecDoctorReadOnlyAndNoFalseActivation(t *testing.T) {
+	runner := &ipsecDoctorRunner{}
+	report, err := InspectIPsecHost(context.Background(), runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.SchemaVersion != 1 || report.Backend != "ipsec" || report.RuntimeMode != "native_exclusive" ||
+		report.ActivationAllowed || len(report.Checks) != 4 {
+		t.Fatalf("false operational claim: %+v", report)
+	}
+	if c := checkByName(t, report, "daemon_process"); c.ReasonCode != "charon_process_not_observed" ||
+		c.Status != "observed" || !strings.Contains(c.Summary, "unverified") {
+		t.Fatalf("missing ownership caution: %+v", c)
+	}
+	if c := checkByName(t, report, "operational_runtime"); c.ReasonCode != "ipsec_runtime_not_registered" ||
+		c.Status != "blocked" || c.NextStep == "" {
+		t.Fatalf("missing actionable blocked runtime: %+v", c)
+	}
+	wantCalls := []string{"/usr/bin/pgrep -x charon", "/usr/bin/pgrep -x charon-systemd",
+		"/usr/sbin/swanctl --version", "/sbin/ip -json -details link show type xfrm"}
+	if strings.Join(runner.calls, "|") != strings.Join(wantCalls, "|") {
+		t.Fatalf("unexpected command calls (mutation risk): %q", runner.calls)
+	}
+}
+
+func TestIPsecDoctorDetectsExistingDaemonWithoutTouchingIt(t *testing.T) {
+	runner := &ipsecDoctorRunner{overrides: map[string]error{
+		"/usr/bin/pgrep -x charon": nil,
+	}}
+	report, err := InspectIPsecHost(context.Background(), runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := checkByName(t, report, "daemon_process")
+	if c.Status != "blocked" || c.ReasonCode != "charon_process_observed" ||
+		report.ActivationAllowed || !strings.Contains(c.NextStep, "Do not stop") {
+		t.Fatalf("foreign daemon not protected: %+v", report)
+	}
+}
+
+func TestIPsecDoctorUnknownObservationsDoNotLeakOrBecomeVacant(t *testing.T) {
+	runner := &ipsecDoctorRunner{overrides: map[string]error{
+		"/usr/bin/pgrep -x charon":                    &linux.CommandError{Command: "pgrep", ExitCode: 2},
+		"/usr/sbin/swanctl --version":                 errors.New("private_key=NEVER_SHOW"),
+		"/sbin/ip -json -details link show type xfrm": errors.New("PSK=NEVER_SHOW"),
+	}}
+	report, err := InspectIPsecHost(context.Background(), runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"daemon_process", "strongswan_tool", "xfrm_inventory"} {
+		if c := checkByName(t, report, name); c.Status != "unknown" || c.ReasonCode == "" || c.NextStep == "" {
+			t.Fatalf("unsafe or unactionable unknown check: %+v", c)
+		}
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "NEVER_SHOW") || strings.Contains(string(encoded), "private_key") ||
+		report.ActivationAllowed {
+		t.Fatalf("diagnostic leaked secrets or declared readiness: %s", encoded)
+	}
+}
+
+func TestIPsecDoctorCanceledAndInvalidDependencies(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := InspectIPsecHost(ctx, &ipsecDoctorRunner{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation swallowed: %v", err)
+	}
+	if _, err := InspectIPsecHost(context.Background(), nil); err == nil {
+		t.Fatal("nil runner accepted")
+	}
+}

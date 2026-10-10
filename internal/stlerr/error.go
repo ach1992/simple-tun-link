@@ -32,6 +32,10 @@ type Error struct {
 	ObjectID  string `json:"object_id,omitempty"`
 	Backend   string `json:"backend,omitempty"`
 	Detail    string `json:"detail,omitempty"`
+	// Optional machine-readable recovery fields. Keep both absent for
+	// existing callers; human prose remains independent of machine branching.
+	ReasonCode string `json:"reason_code,omitempty"`
+	NextStep   string `json:"next_step,omitempty"`
 
 	cause error
 }

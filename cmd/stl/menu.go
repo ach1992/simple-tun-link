@@ -174,6 +174,7 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 				return code
 			}
 			fmt.Fprintln(out, "Diagnostics send bounded probes to a selected peer Link Address; no host configuration is changed.")
+			fmt.Fprintln(out, "IPsec prerequisites (read-only): stl doctor ipsec")
 			fmt.Fprint(out, "Diagnose Link ID (Enter returns to menu): ")
 			id, err := readMenuAnswer(reader)
 			if err != nil && !errors.Is(err, io.EOF) {
