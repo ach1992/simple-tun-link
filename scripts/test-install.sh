@@ -180,4 +180,32 @@ markers=("$committed/bin"/.stl-install.*)
 shopt -u nullglob
 [[ ${#markers[@]} -eq 0 ]] || fail 'verified committed journal not retired'
 
+# R3: a separately forked shared Engine-like flock must exclude an installer
+# transaction until the shared holder exits; normal Link work uses SH locks.
+concurrent="$root/maintenance-concurrent"
+mkdir -p "$concurrent/bin" "$concurrent/lib"
+bash "$installer" install --bundle "$root/v0.1.0" --prefix "$concurrent" > /dev/null
+mkfifo "$root/release-gate"
+(
+  exec 8>>"$concurrent/lib/simple-tun-link/.maintenance.lock"
+  flock -s 8
+  touch "$root/gate-acquired"
+  read -r _ < "$root/release-gate"
+) &
+holder=$!
+for ((i=0;i<100;i++)); do
+  [[ -e $root/gate-acquired ]] && break
+  sleep 0.01
+done
+[[ -e $root/gate-acquired ]] || fail 'shared gate helper could not obtain maintenance lock'
+bash "$installer" update --bundle "$root/v0.1.1" --prefix "$concurrent" > "$root/concurrent-out" 2> "$root/concurrent-err" &
+updater=$!
+sleep 0.12
+[[ $(sha "$concurrent/bin/stl") == "$original" ]] || fail 'exclusive update crossed active shared mutation'
+kill -0 "$updater" 2>/dev/null || fail 'installer exited instead of waiting on shared maintenance lock'
+printf 'release\n' > "$root/release-gate"
+wait "$holder"
+wait "$updater" || fail 'installer failed after shared maintenance gate released'
+[[ $(sha "$concurrent/bin/stl") == "$(sha "$root/v0.1.1/stl_v0.1.1_linux_amd64")" ]] || fail 'queued update did not publish after release'
+
 printf 'Installer offline checks PASS (integrity, concurrency gate, durability failure seams, rollback, and recovery journals).\n'
