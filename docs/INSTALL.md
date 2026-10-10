@@ -14,7 +14,10 @@ build, or ordinary `go test`.
   `/usr/local/lib/simple-tun-link/install-record` (plus a retained lock file).
 - The canonical Engine still owns every Link, `/var/lib/simple-tun-link`,
   network resource, and `simple-tun-link-restore.service`. The installer does
-  **not** manage those resources or install a second systemd service.
+  **not** manage those resources or currently install a second systemd service.
+  The future IPsec native-exclusive mode requires a separately verified
+  STL-owned strongSwan service lifecycle; current dependency provisioning
+  does **not** imply safe, registered or operational IPsec activation.
 - On real `/usr/local` installs/updates, the installer identifies the OS from
   `/etc/os-release` as data, validates Ubuntu >=22.04 or Debian >=11, checks
   installed APT package identities via `dpkg-query`, and installs ONLY missing

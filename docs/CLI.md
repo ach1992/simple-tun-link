@@ -564,3 +564,30 @@ supports a verified interface, latest handshake timestamp and RX/TX bytes,
 WireGuard guided sender creation and explicit credential retirement are
 implemented but real privileged bidirectional traffic, IPsec and
 release-level pairing/coexistence acceptance remain Issues #6–#12.
+
+## Read-only host troubleshooting: IPsec (source-only)
+
+Run `stl doctor ipsec` to see a bounded, operator-readable list of
+observations and the next safe step for each. Use `stl doctor ipsec --json`
+for `schema_version: 1`, `backend: "ipsec"`, `runtime_mode:
+"native_exclusive"`, `activation_allowed: false` and stable per-check
+`status`, `reason_code`, `summary` and `next_step` fields. The exit
+code is **4 (unsupported)** even when all read-only probes run, because
+operational IPsec is intentionally not registered yet. Invalid arguments
+exit **2**. An incomplete report is an operational failure, not vacancy.
+
+The command can observe a running `charon`/`charon-systemd` process,
+the `swanctl --version` prerequisite and whether a read-only XFRM
+interface inventory can be obtained. `pgrep` absence, `swanctl` and
+`ip` successes **do not prove exclusive ownership, host readiness,
+configuration safety, IKE port availability, actual ESP/NAT-T support or
+cryptographic connectivity**. Any detected daemon process blocks the
+native-exclusive mode until ownership can be proven by a separately
+reviewed operational path. No services, packages, credentials, routing,
+firewall, kernel objects or state directories are changed.
+
+IPsec is still not a selectable operational backend. Existing GRE/IPIP/
+WireGuard functions continue independently. The same program-wide
+`reason_code` + actionable guidance and safe event-logging policy must be
+applied to future setup, status, create/ensure, repair, remove and restore
+workflows. See docs/ARCHITECTURE.md and Issue #9/#10 for that shared contract.

@@ -68,6 +68,17 @@ and guarded uninstall. No public version/tag is currently available, so do
 not execute the placeholder `vX.Y.Z` command as an actual installation.
 For nonprivileged/offline test coverage, run `bash scripts/test-install.sh`.
 
+## Read-only IPsec troubleshooting (pre-release)
+
+Use `stl doctor ipsec` for a plain-language report or `stl doctor ipsec --json`
+for stable reason identifiers, observed prerequisite state and suggested
+next steps. This command is read-only and deliberately exits with unsupported
+status while the operational IPsec runtime is not registered. An apparently
+empty process listing or readable XFRM inventory is not proof that STL can
+safely own a daemon, port or kernel resource. A non-STL strongSwan installation
+must never be stopped or adopted by STL; only IPsec is unavailable in that
+case. See [CLI](docs/CLI.md) and [ADR-0005](docs/decisions/ADR-0005-scoped-vici-ipsec.md).
+
 ## WireGuard Quick Link (pre-release)
 
 The menu now offers a guided encrypted WireGuard/UDP sender workflow alongside

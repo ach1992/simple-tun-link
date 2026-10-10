@@ -1,0 +1,123 @@
+package diagnostics
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/ach1992/simple-tun-link/internal/linux"
+)
+
+// IPsecHostCheck reports one bounded, observational prerequisite. It never
+// authorizes service startup, VICI writes, kernel mutation or foreign adoption.
+type IPsecHostCheck struct {
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	ReasonCode string `json:"reason_code"`
+	Summary    string `json:"summary"`
+	NextStep   string `json:"next_step"`
+}
+
+// IPsecHostReport is an independent v1, secret-safe diagnostic contract.
+// In this source-only milestone ActivationAllowed is ALWAYS false.
+// Successful commands are observations, never proof of exclusive ownership.
+type IPsecHostReport struct {
+	SchemaVersion     int              `json:"schema_version"`
+	Backend           string           `json:"backend"`
+	RuntimeMode       string           `json:"runtime_mode"`
+	ActivationAllowed bool             `json:"activation_allowed"`
+	Checks            []IPsecHostCheck `json:"checks"`
+}
+
+func InspectIPsecHost(ctx context.Context, runner linux.Runner) (IPsecHostReport, error) {
+	if ctx == nil || runner == nil {
+		return IPsecHostReport{}, fmt.Errorf("IPsec host inspector requires context and runner")
+	}
+	if err := ctx.Err(); err != nil {
+		return IPsecHostReport{}, err
+	}
+
+	report := IPsecHostReport{
+		SchemaVersion: 1,
+		Backend:       "ipsec",
+		RuntimeMode:   "native_exclusive",
+		Checks:        make([]IPsecHostCheck, 0, 4),
+	}
+	report.Checks = append(report.Checks, inspectCharonProcesses(ctx, runner))
+	report.Checks = append(report.Checks, inspectIPsecCommand(ctx, runner, "swanctl", []string{"--version"},
+		"strongswan_tool", "strongswan_tool_observed", "strongswan_tool_unverified",
+		"strongSwan swanctl responded to a read-only version request.",
+		"Cannot verify swanctl from a read-only version request.",
+		"Check the installed strongSwan client package and its executable; do not modify a foreign service."))
+	report.Checks = append(report.Checks, inspectIPsecCommand(ctx, runner, "ip",
+		[]string{"-json", "-details", "link", "show", "type", "xfrm"},
+		"xfrm_inventory", "xfrm_inventory_readable", "xfrm_inventory_unverified",
+		"Read-only XFRM interface inventory completed; XFRM creation is not proven.",
+		"Cannot verify the XFRM interface inventory.",
+		"Check iproute2, kernel XFRM support and inspection permissions; do not treat missing output as vacant state."))
+	report.Checks = append(report.Checks, IPsecHostCheck{
+		Name: "operational_runtime", Status: "blocked", ReasonCode: "ipsec_runtime_not_registered",
+		Summary:  "IPsec operational activation is not implemented or registered in this build.",
+		NextStep: "Use supported GRE/IPIP/WireGuard links; IPsec activation needs independent ownership, secure logging and traffic acceptance.",
+	})
+	if err := ctx.Err(); err != nil {
+		return IPsecHostReport{}, err
+	}
+	return report, nil
+}
+
+func inspectIPsecCommand(ctx context.Context, runner linux.Runner, binary string, args []string,
+	name, observedCode, unknownCode, observedText, unknownText, nextStep string) IPsecHostCheck {
+	check := IPsecHostCheck{
+		Name: name, Status: "unknown", ReasonCode: unknownCode,
+		Summary: unknownText, NextStep: nextStep,
+	}
+	if ctx.Err() != nil {
+		return check
+	}
+	// No command output, command argv or underlying error is returned.
+	if _, err := runner.Run(ctx, binary, args...); err == nil {
+		check.Status = "observed"
+		check.ReasonCode = observedCode
+		check.Summary = observedText
+		check.NextStep = "No action for this observation; it is not permission to activate IPsec."
+	}
+	return check
+}
+
+func inspectCharonProcesses(ctx context.Context, runner linux.Runner) IPsecHostCheck {
+	// pgrep -x may report both STL-owned and unrelated processes. Until
+	// independently authenticated service ownership exists, ANY match blocks.
+	// Exit code 1 means no process observed, not a proof no foreign state
+	// or third-party writer can race an eventual activation.
+	sawUnknown := false
+	for _, name := range []string{"charon", "charon-systemd"} {
+		if ctx.Err() != nil {
+			break
+		}
+		_, err := runner.Run(ctx, "pgrep", "-x", name)
+		if err == nil {
+			return IPsecHostCheck{
+				Name: "daemon_process", Status: "blocked", ReasonCode: "charon_process_observed",
+				Summary:  "A strongSwan daemon process is already present; STL cannot prove exclusive ownership.",
+				NextStep: "Do not stop or adopt the existing daemon. Use another backend or investigate service ownership manually.",
+			}
+		}
+		var cmdErr *linux.CommandError
+		if !errors.As(err, &cmdErr) || cmdErr.ExitCode != 1 || cmdErr.TimedOut || cmdErr.Canceled {
+			sawUnknown = true
+		}
+	}
+	if sawUnknown {
+		return IPsecHostCheck{
+			Name: "daemon_process", Status: "unknown", ReasonCode: "charon_process_unverified",
+			Summary:  "StrongSwan process inspection was incomplete; absence cannot be inferred.",
+			NextStep: "Check whether pgrep can inspect host processes; do not assume an existing daemon is absent.",
+		}
+	}
+	return IPsecHostCheck{
+		Name: "daemon_process", Status: "observed", ReasonCode: "charon_process_not_observed",
+		Summary:  "No charon process observed by pgrep; installed configurations, ports and kernel ownership remain unverified.",
+		NextStep: "A complete ownership and service check is required before operational IPsec activation.",
+	}
+}

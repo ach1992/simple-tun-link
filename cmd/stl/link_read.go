@@ -130,6 +130,9 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 	if !ok {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, "link_status", "Link ID is not present in local desired state")
 	}
+	if record.Desired.Backend == domain.BackendIPsec {
+		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_status", ipsecUnregisteredHelp)
+	}
 	if options == nil {
 		options, err = productionRuntimeOptions()
 		if err != nil {
