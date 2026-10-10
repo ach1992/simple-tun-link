@@ -578,7 +578,11 @@ exit **2**. An incomplete report is an operational failure, not vacancy.
 
 The command can observe a running `charon`/`charon-systemd` process,
 the `swanctl --version` prerequisite and whether a read-only XFRM
-interface inventory can be obtained. `pgrep` absence, `swanctl` and
+interface inventory can be obtained. On supported Debian/Ubuntu builds it
+uses fixed system binary paths (`/usr/bin/pgrep`, `/usr/sbin/swanctl`,
+`/sbin/ip`) rather than executing tools found through a user-controlled
+`PATH`; other layouts require a validated distro adapter, not a fallback.
+`pgrep` absence, `swanctl` and
 `ip` successes **do not prove exclusive ownership, host readiness,
 configuration safety, IKE port availability, actual ESP/NAT-T support or
 cryptographic connectivity**. Any detected daemon process blocks the

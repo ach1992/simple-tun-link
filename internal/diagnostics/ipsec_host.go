@@ -44,12 +44,12 @@ func InspectIPsecHost(ctx context.Context, runner linux.Runner) (IPsecHostReport
 		Checks:        make([]IPsecHostCheck, 0, 4),
 	}
 	report.Checks = append(report.Checks, inspectCharonProcesses(ctx, runner))
-	report.Checks = append(report.Checks, inspectIPsecCommand(ctx, runner, "swanctl", []string{"--version"},
+	report.Checks = append(report.Checks, inspectIPsecCommand(ctx, runner, "/usr/sbin/swanctl", []string{"--version"},
 		"strongswan_tool", "strongswan_tool_observed", "strongswan_tool_unverified",
 		"strongSwan swanctl responded to a read-only version request.",
 		"Cannot verify swanctl from a read-only version request.",
 		"Check the installed strongSwan client package and its executable; do not modify a foreign service."))
-	report.Checks = append(report.Checks, inspectIPsecCommand(ctx, runner, "ip",
+	report.Checks = append(report.Checks, inspectIPsecCommand(ctx, runner, "/sbin/ip",
 		[]string{"-json", "-details", "link", "show", "type", "xfrm"},
 		"xfrm_inventory", "xfrm_inventory_readable", "xfrm_inventory_unverified",
 		"Read-only XFRM interface inventory completed; XFRM creation is not proven.",
@@ -75,6 +75,10 @@ func inspectIPsecCommand(ctx context.Context, runner linux.Runner, binary string
 	if ctx.Err() != nil {
 		return check
 	}
+	// Fixed root-owned distro executable paths avoid invoking a caller-supplied
+	// PATH executable when the CLI is run with elevated privileges.
+	// Missing tools fail closed as unknown; alternate distro paths require a
+	// separately validated adapter, never arbitrary PATH fallback.
 	// No command output, command argv or underlying error is returned.
 	if _, err := runner.Run(ctx, binary, args...); err == nil {
 		check.Status = "observed"
@@ -95,7 +99,7 @@ func inspectCharonProcesses(ctx context.Context, runner linux.Runner) IPsecHostC
 		if ctx.Err() != nil {
 			break
 		}
-		_, err := runner.Run(ctx, "pgrep", "-x", name)
+		_, err := runner.Run(ctx, "/usr/bin/pgrep", "-x", name)
 		if err == nil {
 			return IPsecHostCheck{
 				Name: "daemon_process", Status: "blocked", ReasonCode: "charon_process_observed",

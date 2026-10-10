@@ -24,13 +24,13 @@ func (p *ipsecCLIProbe) Run(_ context.Context, name string, args ...string) (lin
 	key := strings.Join(append([]string{name}, args...), " ")
 	p.calls = append(p.calls, key)
 	switch {
-	case key == "pgrep -x charon" && p.daemonPresent:
+	case key == "/usr/bin/pgrep -x charon" && p.daemonPresent:
 		return linux.CommandResult{}, nil
-	case strings.HasPrefix(key, "pgrep -x "):
+	case strings.HasPrefix(key, "/usr/bin/pgrep -x "):
 		return linux.CommandResult{}, &linux.CommandError{Command: "pgrep", ExitCode: 1}
-	case key == "swanctl --version":
+	case key == "/usr/sbin/swanctl --version":
 		return linux.CommandResult{}, errors.New("PSK=DO_NOT_PRINT")
-	case key == "ip -json -details link show type xfrm":
+	case key == "/sbin/ip -json -details link show type xfrm":
 		return linux.CommandResult{}, nil
 	default:
 		t := "unanticipated read-only command " + name

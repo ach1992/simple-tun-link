@@ -21,7 +21,7 @@ func (r *ipsecDoctorRunner) Run(_ context.Context, name string, args ...string) 
 	if err, ok := r.overrides[key]; ok {
 		return linux.CommandResult{Stdout: []byte("private_key=NEVER_SHOW"), Stderr: []byte("PSK=NEVER_SHOW")}, err
 	}
-	if name == "pgrep" {
+	if name == "/usr/bin/pgrep" {
 		return linux.CommandResult{}, &linux.CommandError{Command: name, ExitCode: 1}
 	}
 	return linux.CommandResult{}, nil
@@ -56,8 +56,8 @@ func TestIPsecDoctorReadOnlyAndNoFalseActivation(t *testing.T) {
 		c.Status != "blocked" || c.NextStep == "" {
 		t.Fatalf("missing actionable blocked runtime: %+v", c)
 	}
-	wantCalls := []string{"pgrep -x charon", "pgrep -x charon-systemd",
-		"swanctl --version", "ip -json -details link show type xfrm"}
+	wantCalls := []string{"/usr/bin/pgrep -x charon", "/usr/bin/pgrep -x charon-systemd",
+		"/usr/sbin/swanctl --version", "/sbin/ip -json -details link show type xfrm"}
 	if strings.Join(runner.calls, "|") != strings.Join(wantCalls, "|") {
 		t.Fatalf("unexpected command calls (mutation risk): %q", runner.calls)
 	}
@@ -65,7 +65,7 @@ func TestIPsecDoctorReadOnlyAndNoFalseActivation(t *testing.T) {
 
 func TestIPsecDoctorDetectsExistingDaemonWithoutTouchingIt(t *testing.T) {
 	runner := &ipsecDoctorRunner{overrides: map[string]error{
-		"pgrep -x charon": nil,
+		"/usr/bin/pgrep -x charon": nil,
 	}}
 	report, err := InspectIPsecHost(context.Background(), runner)
 	if err != nil {
@@ -80,9 +80,9 @@ func TestIPsecDoctorDetectsExistingDaemonWithoutTouchingIt(t *testing.T) {
 
 func TestIPsecDoctorUnknownObservationsDoNotLeakOrBecomeVacant(t *testing.T) {
 	runner := &ipsecDoctorRunner{overrides: map[string]error{
-		"pgrep -x charon":                       &linux.CommandError{Command: "pgrep", ExitCode: 2},
-		"swanctl --version":                     errors.New("private_key=NEVER_SHOW"),
-		"ip -json -details link show type xfrm": errors.New("PSK=NEVER_SHOW"),
+		"/usr/bin/pgrep -x charon":                    &linux.CommandError{Command: "pgrep", ExitCode: 2},
+		"/usr/sbin/swanctl --version":                 errors.New("private_key=NEVER_SHOW"),
+		"/sbin/ip -json -details link show type xfrm": errors.New("PSK=NEVER_SHOW"),
 	}}
 	report, err := InspectIPsecHost(context.Background(), runner)
 	if err != nil {
