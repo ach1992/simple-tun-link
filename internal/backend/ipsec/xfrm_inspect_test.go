@@ -396,3 +396,142 @@ func TestXFRMVacancyRejectsNonXFRMIfIDAmbiguity(t *testing.T) {
 		}
 	}
 }
+
+func TestXFRMLinkJSONRejectsMisplacedIdentityByScope(t *testing.T) {
+	p, err := NewProfile(testIPsecLink(t, domain.EncapESP))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := fmt.Sprintf("0x%x", p.InterfaceID)
+	cases := []struct {
+		name   string
+		raw    string
+		reject bool
+	}{
+		{"root-if-id-target", fmt.Sprintf(`[{"ifname":"other","if_id":"%s"}]`, target), true},
+		{"root-if-id-unrelated", `[{"ifname":"other","if_id":42}]`, true},
+		{"root-info-kind", `[{"ifname":"other","info_kind":"xfrm"}]`, true},
+		{"root-info-data", `[{"ifname":"other","info_data":{"if_id":42}}]`, true},
+		{"root-linkinfo-nested-kind", `[{"ifname":"other","linkinfo":{"info_kind":"veth","if_id":42}}]`, true},
+		{"linkinfo-if-id-target", fmt.Sprintf(`[{"ifname":"other","linkinfo":{"info_kind":"xfrm","if_id":"%s","info_data":{"if_id":42}}}]`, target), true},
+		{"linkinfo-if-id-unrelated", `[{"ifname":"other","linkinfo":{"info_kind":"veth","if_id":42}}]`, true},
+		{"linkinfo-misplaced-ifname", `[{"ifname":"other","linkinfo":{"ifname":"planned","info_kind":"veth"}}]`, true},
+		{"linkinfo-misplaced-linkinfo", `[{"ifname":"other","linkinfo":{"linkinfo":{},"info_kind":"veth"}}]`, true},
+		{"info-data-misplaced-ifname", `[{"ifname":"other","linkinfo":{"info_kind":"xfrm","info_data":{"if_id":42,"ifname":"stl"}}}]`, true},
+		{"info-data-misplaced-linkinfo", `[{"ifname":"other","linkinfo":{"info_kind":"xfrm","info_data":{"if_id":42,"linkinfo":{}}}}]`, true},
+		{"info-data-misplaced-info-kind", `[{"ifname":"other","linkinfo":{"info_kind":"xfrm","info_data":{"if_id":42,"info_kind":"veth"}}}]`, true},
+		{"info-data-misplaced-info-data", `[{"ifname":"other","linkinfo":{"info_kind":"xfrm","info_data":{"if_id":42,"info_data":{}}}}]`, true},
+		{"non-xfrm-info-data-misplaced-kind", `[{"ifname":"other","linkinfo":{"info_kind":"veth","info_data":{"info_kind":"xfrm"}}}]`, true},
+		{"non-xfrm-info-data-misplaced-ifname", `[{"ifname":"other","linkinfo":{"info_kind":"veth","info_data":{"ifname":"stl"}}}]`, true},
+		{"null-misplaced-if-id", `[{"ifname":"other","if_id":null}]`, true},
+		{"unrelated-physical", `[{"ifname":"lo"}]`, false},
+		{"unrelated-veth", `[{"ifname":"veth42","linkinfo":{"info_kind":"veth","info_data":{"peer":{"ifindex":7,"ifname":"veth43"}}}}]`, false},
+		{"unrelated-bridge-slave", `[{"ifname":"eth42","linkinfo":{"info_slave_kind":"bridge","info_slave_data":{"state":"forwarding"}}}]`, false},
+		{"unrelated-xfrm", `[{"ifname":"other","linkinfo":{"info_kind":"xfrm","info_data":{"if_id":42}}}]`, false},
+		{"target-xfrm-id", fmt.Sprintf(`[{"ifname":"other","linkinfo":{"info_kind":"xfrm","info_data":{"if_id":"%s"}}}]`, target), true},
+		{"target-link-name", fmt.Sprintf(`[{"ifname":"%s"}]`, p.InterfaceName), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := goodXFRMFixture()
+			f.rows["ip -details -json link show"] = []byte(tc.raw)
+			err := (XFRMVacancyInspector{Runner: f.Run}).RequireVacant(context.Background(), p)
+			if (err != nil) != tc.reject {
+				t.Fatalf("mis-scoped XFRM identity: error=%v, reject=%t", err, tc.reject)
+			}
+		})
+	}
+}
+
+func TestXFRMLegacyStateSelectorTailFailClosed(t *testing.T) {
+	const id uint32 = 0x2121
+	const sa = "src 192.0.2.10 dst 192.0.2.11\n\tproto esp spi 0x12345678 reqid 17 mode tunnel\n"
+	const sel = "\tsel src 10.0.0.0/24 dst 10.1.0.0/24"
+	cases := []struct {
+		name               string
+		tail               string
+		collision, invalid bool
+	}{
+		{"plain-selector", "", false, false},
+		{"tcp-ports", " proto tcp sport 423 dport 443 dev eth0", false, false},
+		{"udp-ports", " proto udp sport 5353 dport 53", false, false},
+		{"numeric-protocol", " proto 6 sport 443 dport 9443 uid 1000", false, false},
+		{"icmp-selector", " proto icmp type 8 code 0 dev lo", false, false},
+		{"gre-selector", " proto gre key 123 dev tun0", false, false},
+		{"mh-selector", " proto mh type 3 (dport) 0x1", false, false},
+		{"mh-port-only", " proto mh (dport) 0x0001", false, false},
+		{"icmpv6-code-only", " proto ipv6-icmp code 3", false, false},
+		{"unknown-numeric-protocol", " proto 254 sport 4", false, false},
+		{"dev-and-uid", " dev eth0 uid 1000", false, false},
+		{"proto-bare", " proto", false, true},
+		{"proto-invalid", " proto made-up-protocol", false, true},
+		{"proto-overflow", " proto 256", false, true},
+		{"proto-duplicate", " proto tcp proto udp", false, true},
+		{"proto-conflicting-forms", " proto tcp proto 6", false, true},
+		{"sport-bare", " proto tcp sport", false, true},
+		{"sport-duplicate", " proto tcp sport 53 sport 8080", false, true},
+		{"sport-invalid", " proto tcp sport not-a-port", false, true},
+		{"dport-overflow", " proto udp dport 65536", false, true},
+		{"dport-negative", " proto udp dport -1", false, true},
+		{"dev-bare", " proto tcp dev", false, true},
+		{"dev-empty", " proto tcp dev \"\"", false, true},
+		{"uid-negative", " uid -1", false, true},
+		{"unexpected-token", " proto tcp unknown 4", false, true},
+		{"orphan-tail-token", " proto tcp sport 21 missing", false, true},
+		{"malformed-type-for-tcp", " proto tcp type 8", false, true},
+		{"malformed-key-for-udp", " proto udp key 0x1", false, true},
+		{"duplicate-dev", " dev eth0 dev eth1", false, true},
+		{"selector-ifid-target", " if_id 0x2121", false, true},
+		{"selector-ifid-unrelated", " if_id 0x2a", false, true},
+		{"selector-ifid-bare", " if_id", false, true},
+		{"selector-id-later", " proto tcp sport 123 if_id 0x2121", false, true},
+		{"selector-id-unrelated-later", " proto tcp sport 123 if_id 42", false, true},
+		{"selector-duplicate-uid", " uid 100 uid 101", false, true},
+		{"selector-bad-mh-code", " proto mh code 8", false, true},
+		{"selector-bad-icmp-port", " proto icmp sport 8", false, true},
+		{"selector-bad-gre-port", " proto gre dport 22", false, true},
+		{"unknown-port-order", " proto tcp dport 80 sport 443", false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := sa + sel + tc.tail + "\n"
+			found, err := xfrmInventoryUsesID([]byte(raw), id, "state")
+			if (err != nil) != tc.invalid || (!tc.invalid && found != tc.collision) {
+				t.Fatalf("selector tail: found=%t err=%v expected collision=%t invalid=%t", found, err, tc.collision, tc.invalid)
+			}
+		})
+	}
+	for _, pair := range []struct {
+		name, idText string
+		collision    bool
+	}{
+		{"parent-id-before", "0x2121", true},
+		{"unrelated-id-before", "0x2a", false},
+	} {
+		t.Run(pair.name, func(t *testing.T) {
+			raw := sa + "\tif_id " + pair.idText + "\n" + sel + " proto tcp sport 7 dport 9\n"
+			found, err := xfrmInventoryUsesID([]byte(raw), id, "state")
+			if err != nil || found != pair.collision {
+				t.Fatalf("parent ID: found=%t err=%v", found, err)
+			}
+		})
+	}
+	raw := sa + sel + " proto tcp sport 7 dport 9\n\tif_id 0x2121\n"
+	found, err := xfrmInventoryUsesID([]byte(raw), id, "state")
+	if err != nil || !found {
+		t.Fatalf("parent if_id after selector: found=%t err=%v", found, err)
+	}
+	for _, tc := range []struct{ name, raw string }{
+		{"duplicate-selector", sa + sel + " proto tcp\n" + sel + " proto udp\n"},
+		{"selector-before-parent-proto", "src 192.0.2.10 dst 192.0.2.11\n" + sel + " proto tcp\n\tproto esp spi 0x1 reqid 17 mode tunnel\n"},
+		{"id-noncanonical-line", sa + "\tmeta if_id 0x2121\n"},
+		{"id-in-parent-proto", sa + "\tproto esp if_id 0x2121\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := xfrmInventoryUsesID([]byte(tc.raw), id, "state")
+			if err == nil {
+				t.Fatal("invalid selector or misplaced identifier accepted")
+			}
+		})
+	}
+}

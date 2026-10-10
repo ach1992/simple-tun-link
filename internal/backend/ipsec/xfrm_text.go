@@ -100,9 +100,17 @@ func xfrmUniqueJSONObject(raw json.RawMessage, retain ...string) (result map[str
 		if needed {
 			values[key] = value
 		} else {
+			// Link identity keys are meaningful at exactly one nesting
+			// level. A misplaced key must not disappear into the ignored
+			// data path and incorrectly prove absence of a foreign device.
+			// Ordinary nonidentity attributes remain driver-specific.
+			misplaced := xfrmLinkIdentityKey(key)
 			// Unrelated SA fields may contain secret keys; never retain
 			// decoded copies, even though the caller also clears raw bytes.
 			clear(value)
+			if misplaced {
+				return nil, fmt.Errorf("misplaced XFRM link identity field")
+			}
 		}
 	}
 	close, err := dec.Token()
@@ -113,6 +121,19 @@ func xfrmUniqueJSONObject(raw json.RawMessage, retain ...string) (result map[str
 		return nil, fmt.Errorf("extra XFRM JSON data")
 	}
 	return values, nil
+}
+
+// Link identity is scope-specific: ifname/linkinfo at the outer record,
+// info_kind/info_data inside linkinfo, and if_id only inside info_data.
+// All other appearances are malformed, regardless of the ID's value.
+// This helper intentionally excludes ordinary driver-specific attributes.
+func xfrmLinkIdentityKey(name string) bool {
+	switch name {
+	case "ifname", "linkinfo", "info_kind", "info_data", "if_id":
+		return true
+	default:
+		return false
+	}
 }
 
 // Only the structurally validated policy/SA row may supply an optional if_id.
@@ -207,6 +228,7 @@ func xfrmTextUsesID(raw []byte, target uint32, kind string) (bool, error) {
 	seenRecord := false
 	hasDescriptor := false
 	seenID := false
+	seenSelector := false
 	found := false
 	finish := func() error {
 		if seenRecord && !hasDescriptor {
@@ -234,7 +256,7 @@ func xfrmTextUsesID(raw []byte, target uint32, kind string) (bool, error) {
 				!validXFRMEndpoint(string(fields[3]), kind) {
 				return false, fmt.Errorf("invalid XFRM text header")
 			}
-			seenRecord, seenID, hasDescriptor = true, false, false
+			seenRecord, seenID, hasDescriptor, seenSelector = true, false, false, false
 		} else if !seenRecord || bytes.Equal(fields[0], []byte("src")) {
 			return false, fmt.Errorf("unexpected XFRM text inventory")
 		}
@@ -250,30 +272,35 @@ func xfrmTextUsesID(raw []byte, target uint32, kind string) (bool, error) {
 			hasDescriptor = true
 		}
 		if bytes.Equal(fields[0], []byte("sel")) {
-			if kind != "state" || len(fields) < 5 ||
-				!bytes.Equal(fields[1], []byte("src")) ||
-				!bytes.Equal(fields[3], []byte("dst")) ||
-				!validXFRMEndpoint(string(fields[2]), "policy") ||
-				!validXFRMEndpoint(string(fields[4]), "policy") {
-				return false, fmt.Errorf("invalid XFRM state selector")
+			if kind != "state" || !hasDescriptor || seenSelector {
+				return false, fmt.Errorf("misplaced or duplicate XFRM state selector")
 			}
-			// A selector-level proto/if_id does not grant parent identity.
+			if err := validateXFRMStateSelector(fields); err != nil {
+				return false, err
+			}
+			seenSelector = true
 			continue
 		}
-		for j, field := range fields {
-			if !bytes.Equal(field, []byte("if_id")) {
-				continue
-			}
-			if seenID || j+1 >= len(fields) {
+		// iproute2 prints XFRM if_id as its own top-level attribute line.
+		// A similarly spelled token inside another line is misplaced and must
+		// never establish vacancy, even when its value is not our target.
+		if bytes.Equal(fields[0], []byte("if_id")) {
+			if seenID || len(fields) != 2 {
 				return false, fmt.Errorf("ambiguous XFRM text interface identifier")
 			}
-			id, err := strconv.ParseUint(string(fields[j+1]), 0, 32)
+			id, err := strconv.ParseUint(string(fields[1]), 0, 32)
 			if err != nil {
 				return false, fmt.Errorf("invalid XFRM text interface identifier")
 			}
 			seenID = true
 			if uint32(id) == target {
 				found = true
+			}
+			continue
+		}
+		for _, field := range fields {
+			if bytes.Equal(field, []byte("if_id")) {
+				return false, fmt.Errorf("misplaced XFRM text interface identifier")
 			}
 		}
 	}
@@ -284,4 +311,147 @@ func xfrmTextUsesID(raw []byte, target uint32, kind string) (bool, error) {
 		return false, err
 	}
 	return found, nil
+}
+
+// validateXFRMStateSelector recognizes the bounded token/value grammar
+// printed by iproute2's xfrm_selector_print. Selector attributes are NOT
+// parent-SA identifiers; in particular any if_id at this scope is malformed.
+// Unknown attributes fail closed rather than being skipped as an empty ID.
+func validateXFRMStateSelector(fields [][]byte) error {
+	if len(fields) < 5 || !bytes.Equal(fields[0], []byte("sel")) ||
+		!bytes.Equal(fields[1], []byte("src")) || !bytes.Equal(fields[3], []byte("dst")) ||
+		!validXFRMEndpoint(string(fields[2]), "policy") ||
+		!validXFRMEndpoint(string(fields[4]), "policy") {
+		return fmt.Errorf("invalid XFRM selector header")
+	}
+	seen := make(map[string]bool)
+	protoID := uint64(0)
+	rank := 0
+	for i := 5; i < len(fields); i += 2 {
+		if i+1 >= len(fields) {
+			return fmt.Errorf("incomplete XFRM selector attribute")
+		}
+		name, value := string(fields[i]), string(fields[i+1])
+		if seen[name] {
+			return fmt.Errorf("duplicate XFRM selector attribute")
+		}
+		seen[name] = true
+		currentRank := 0
+		switch name {
+		case "proto":
+			currentRank = 1
+			var ok bool
+			protoID, ok = xfrmSelectorProtocol(value)
+			if !ok {
+				return fmt.Errorf("invalid XFRM selector protocol")
+			}
+		case "sport", "dport", "type", "code":
+			if name == "sport" || name == "type" {
+				currentRank = 2
+			} else {
+				currentRank = 3
+			}
+			if !xfrmUnsignedDecimal(value, 16) {
+				return fmt.Errorf("invalid XFRM selector port or type")
+			}
+		case "key":
+			currentRank = 2
+			if !xfrmUnsignedDecimal(value, 32) {
+				return fmt.Errorf("invalid XFRM selector key")
+			}
+		case "(dport)":
+			currentRank = 3
+			if !strings.HasPrefix(value, "0x") || len(value) < 3 || len(value) > 6 {
+				return fmt.Errorf("invalid XFRM selector mobility port")
+			}
+			if _, err := strconv.ParseUint(value[2:], 16, 16); err != nil {
+				return fmt.Errorf("invalid XFRM selector mobility port")
+			}
+		case "dev":
+			currentRank = 4
+			if len(value) == 0 || len(value) >= 16 || value[0] == '-' {
+				return fmt.Errorf("invalid XFRM selector device")
+			}
+			for j := 0; j < len(value); j++ {
+				c := value[j]
+				if !((c >= '0' && c <= '9') ||
+					(c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+					c == '_' || c == '-' || c == '.' || c == '@' || c == '+') {
+					return fmt.Errorf("invalid XFRM selector device")
+				}
+			}
+		case "uid":
+			currentRank = 5
+			if !xfrmUnsignedDecimal(value, 32) {
+				return fmt.Errorf("invalid XFRM selector uid")
+			}
+		default:
+			return fmt.Errorf("unknown XFRM selector attribute")
+		}
+		// iproute2 prints proto, selector transport/type fields, dev,
+		// then optional uid in that order.
+		if currentRank < rank {
+			return fmt.Errorf("ambiguous XFRM selector attribute order")
+		}
+		rank = currentRank
+	}
+
+	// iproute2 prints ports for most transport protocols, type/code for
+	// ICMP, key for GRE, and type/(dport) for mobility headers.
+	if seen["key"] && protoID != 47 {
+		return fmt.Errorf("invalid XFRM selector GRE key")
+	}
+	if seen["type"] || seen["code"] || seen["(dport)"] {
+		if protoID != 1 && protoID != 58 && protoID != 135 {
+			return fmt.Errorf("invalid XFRM selector type or code")
+		}
+		if (protoID == 135 && seen["code"]) ||
+			(protoID != 135 && seen["(dport)"]) {
+			return fmt.Errorf("invalid XFRM selector mobility fields")
+		}
+	}
+	if seen["sport"] || seen["dport"] {
+		if protoID == 1 || protoID == 58 || protoID == 47 || protoID == 135 {
+			return fmt.Errorf("invalid XFRM selector transport fields")
+		}
+	}
+	return nil
+}
+
+func xfrmUnsignedDecimal(value string, bits int) bool {
+	if len(value) == 0 {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < '0' || value[i] > '9' {
+			return false
+		}
+	}
+	_, err := strconv.ParseUint(value, 10, bits)
+	return err == nil
+}
+
+// iproute2's strxf_proto() prints getprotobynumber names, or a numeric
+// fallback for unlisted protocol numbers. Do not treat arbitrary words as
+// valid identities: reject unknown protocol spellings rather than guessing.
+func xfrmSelectorProtocol(value string) (uint64, bool) {
+	if xfrmUnsignedDecimal(value, 8) {
+		n, _ := strconv.ParseUint(value, 10, 8)
+		return n, n != 0
+	}
+	// Common documented IANA/Linux protocol names across supported distros.
+	names := map[string]uint64{
+		"icmp": 1, "igmp": 2, "ipencap": 4, "ipip": 4,
+		"tcp": 6, "udp": 17, "dccp": 33, "ipv6": 41,
+		"ipv6-route": 43, "ipv6-frag": 44, "rsvp": 46,
+		"gre": 47, "esp": 50, "ah": 51,
+		"ipv6-icmp": 58, "icmpv6": 58,
+		"ipv6-nonxt": 59, "ipv6-opts": 60,
+		"ospf": 89, "etherip": 97, "encap": 98,
+		"pim": 103, "ipcomp": 108, "vrrp": 112,
+		"l2tp": 115, "sctp": 132, "mh": 135,
+		"mobility-header": 135, "udplite": 136,
+	}
+	proto, ok := names[value]
+	return proto, ok
 }

@@ -109,8 +109,16 @@ identities, complete policy/SA endpoints and valid `dir` / `proto`, or
 semantically verified legacy iproute2 text with complete headers and valid
 descriptor values. The Linux link inventory must also reject duplicate or
 case-ambiguous ifname/linkinfo/info_kind/info_data/if_id identities at each
-relevant nesting level. A state selector's proto is not a second SA proto;
-only structurally located top-level descriptor lines establish SA identity. An absent `if_id` is harmless only after the row is
+relevant nesting level and reject those identities if placed at the wrong
+nesting level (even when an unrelated value might otherwise appear vacant).
+A state selector's proto is not a second SA proto; only structurally located
+top-level descriptor lines establish SA identity. Do not skip the selector
+tail: parse recognized iproute2 protocol, sport/dport, ICMP type/code, GRE
+key, dev and optional uid fields with bounded values; unknown, duplicate,
+malformed, or misplaced if_id tokens must fail closed. This scoped selector
+grammar follows the iproute2 source:
+https://github.com/iproute2/iproute2/blob/e11870d5b9414b2e0770463bd6fc2399744dc734/ip/ipxfrm.c
+and preserves the bounded Debian-bookworm text path. An absent `if_id` is harmless only after the row is
 positively recognized; a null, conflicting or invalid present ID is unknown.
 Never accept an inventory probe failure as evidence of vacancy. Kernel state
 and temporary decoded JSON copies are sensitive and must be cleared, never

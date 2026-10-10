@@ -174,10 +174,15 @@ and SA rows must have recognizable endpoints and a valid `dir` / `proto`;
 duplicate field names, missing descriptors, and invalid/present-null `if_id`
 are unverified, never absence evidence. Linux link JSON additionally rejects
 nested duplicate or case-ambiguous ifname/linkinfo/info_kind/info_data/if_id
-keys before comparing interface claims. Ordinary unrelated non-XFRM links
-remain supported. Legacy policy/state text requires complete headers and
-bounded, valid descriptors, recognizing a state SA's leading proto separately
-from a later selector-level proto. The original XFRM state bytes
+keys before comparing interface claims. Those reserved identity keys are
+also rejected if they appear at an incorrect JSON nesting level, regardless
+of whether their value matches the planned Link. Ordinary unrelated
+non-XFRM links remain supported. Legacy policy/state text requires complete
+headers and bounded, valid descriptors. The SA-level proto is distinct from
+a selector's transport proto; every selector tail attribute must match a
+supported bounded iproute2 token/value shape (proto, ports, ICMP type/code,
+GRE key, device and optional uid), without duplicates, unknown tokens or
+misplaced if_id. The original XFRM state bytes
 and parser-owned JSON copies (which may contain key material) are cleared;
 daemon and kernel error text is not reflected to ordinary output.
 
