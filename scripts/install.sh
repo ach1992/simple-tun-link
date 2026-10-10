@@ -149,87 +149,133 @@ new_hash=
 new_record_hash=
 keep_recovery=0
 
-# Reconcile from observed identities, not only bookkeeping flags: even a
-# signal between rename/unlink and the following shell assignment must not
-# erase an old executable or strand a partially removed installation.
+# All failure compensation is identity-guarded. Keep previous recovery copies
+# in stage (do not mv away the only copy) until the repaired canonical state
+# and every applicable parent directory are durably synchronized.
 finish() {
   local rc=$?
   trap - EXIT
   set +e
-  if (( rc != 0 )) && [[ -n $stage ]]; then
-    if [[ $action == uninstall ]]; then
-      if [[ -f $stage/removed-stl ]]; then
-        if [[ ! -e $target && ! -L $target && $(hash_file "$stage/removed-stl") == "$prior_hash" ]]; then
-          mv -T -- "$stage/removed-stl" "$target" || keep_recovery=1
-        else
-          keep_recovery=1
-        fi
-      elif [[ ! -f $target || -L $target || $(hash_file "$target") != "$prior_hash" ]]; then
-        keep_recovery=1
+  if [[ -n $stage && -d $stage ]]; then
+    if (( rc == 0 )); then
+      if [[ -f $stage/COMMITTED ]]; then
+        # A deliberately retained, fsynced commit marker is reconciled and
+        # retired by the next installer invocation, after verifying identity.
+        :
+      else
+        rm -rf -- "$stage" || rc=1
+        sync_paths "$bin_dir" || rc=1
       fi
-      if [[ ! -e $record && ! -L $record && -f $stage/previous-record ]] &&
-         [[ $(hash_file "$stage/previous-record") == "$prior_record_hash" ]]; then
-        cp -p -- "$stage/previous-record" "$record" || keep_recovery=1
-      elif [[ ! -f $record || -L $record || $(hash_file "$record") != "$prior_record_hash" ]]; then
-        keep_recovery=1
-      fi
-      if [[ ! -e $alias && ! -L $alias ]]; then
-        ln -s stl "$alias" || keep_recovery=1
-      elif [[ ! -L $alias || $(readlink -- "$alias") != stl ]]; then
-        keep_recovery=1
-      fi
+    elif [[ -f $stage/COMMITTED ]]; then
+      keep_recovery=1
     else
-      if [[ -n $new_hash && -f $target && ! -L $target && $(hash_file "$target") == "$new_hash" ]]; then
-        if [[ $action == update ]]; then
-          if [[ $new_hash != "$prior_hash" ]]; then
-            if [[ -f $stage/previous-stl && $(hash_file "$stage/previous-stl") == "$prior_hash" ]]; then
-              mv -T -- "$stage/previous-stl" "$target" || keep_recovery=1
-            else
-              keep_recovery=1
-            fi
-          fi
-        else
-          rm -- "$target" || keep_recovery=1
-        fi
-      elif [[ $action == install && ( -e $target || -L $target ) ]]; then
-        keep_recovery=1
-      elif [[ $action == update ]] &&
-           [[ ! -f $target || -L $target || $(hash_file "$target") != "$prior_hash" ]]; then
-        keep_recovery=1
-      fi
-      if [[ $action == install && -L $alias && $(readlink -- "$alias") == stl ]]; then
-        rm -- "$alias" || keep_recovery=1
-      elif [[ $action == install && ( -e $alias || -L $alias ) ]]; then
-        keep_recovery=1
-      fi
-      if [[ -n $new_record_hash && -f $record && ! -L $record && $(hash_file "$record") == "$new_record_hash" ]]; then
-        if [[ $action == update ]]; then
-          if [[ -f $stage/previous-record && $(hash_file "$stage/previous-record") == "$prior_record_hash" ]]; then
-            cp -p -- "$stage/previous-record" "$record_tmp.recover" &&
-              mv -T -- "$record_tmp.recover" "$record" || keep_recovery=1
+      if [[ $action == uninstall ]]; then
+        if [[ ! -f $target || -L $target || $(hash_file "$target") != "$prior_hash" ]]; then
+          if [[ ! -e $target && ! -L $target && -f $stage/previous-stl ]] &&
+             [[ $(hash_file "$stage/previous-stl") == "$prior_hash" ]]; then
+            cp -p -- "$stage/previous-stl" "$stage/recover-stl" &&
+              sync_paths "$stage/recover-stl" "$stage" &&
+              mv -T -- "$stage/recover-stl" "$target" || keep_recovery=1
           else
             keep_recovery=1
           fi
-        else
-          rm -- "$record" || keep_recovery=1
         fi
-      elif [[ $action == install && ( -e $record || -L $record ) ]]; then
-        keep_recovery=1
-      elif [[ $action == update ]] &&
-           [[ ! -f $record || -L $record || $(hash_file "$record") != "$prior_record_hash" ]]; then
-        keep_recovery=1
+        if [[ ! -f $record || -L $record || $(hash_file "$record") != "$prior_record_hash" ]]; then
+          if [[ ! -e $record && ! -L $record && -f $stage/previous-record ]] &&
+             [[ $(hash_file "$stage/previous-record") == "$prior_record_hash" ]]; then
+            cp -p -- "$stage/previous-record" "$record_dir/.stl-restore-record.$$" &&
+              sync_paths "$record_dir/.stl-restore-record.$$" &&
+              mv -T -- "$record_dir/.stl-restore-record.$$" "$record" || keep_recovery=1
+          else
+            keep_recovery=1
+          fi
+        fi
+        if [[ ! -L $alias || $(readlink -- "$alias") != stl ]]; then
+          if [[ ! -e $alias && ! -L $alias ]]; then
+            ln -s stl "$alias" || keep_recovery=1
+          else
+            keep_recovery=1
+          fi
+        fi
+      else
+        if [[ -n $new_hash && -f $target && ! -L $target && $(hash_file "$target") == "$new_hash" ]]; then
+          if [[ $action == update ]]; then
+            if [[ $new_hash != "$prior_hash" ]]; then
+              if [[ -f $stage/previous-stl && $(hash_file "$stage/previous-stl") == "$prior_hash" ]]; then
+                cp -p -- "$stage/previous-stl" "$stage/recover-stl" &&
+                  sync_paths "$stage/recover-stl" "$stage" &&
+                  mv -T -- "$stage/recover-stl" "$target" || keep_recovery=1
+              else
+                keep_recovery=1
+              fi
+            fi
+          else
+            rm -- "$target" || keep_recovery=1
+          fi
+        elif [[ $action == install && ( -e $target || -L $target ) ]]; then
+          keep_recovery=1
+        elif [[ $action == update ]] &&
+             [[ ! -f $target || -L $target || $(hash_file "$target") != "$prior_hash" ]]; then
+          keep_recovery=1
+        fi
+        if [[ $action == install && -L $alias && $(readlink -- "$alias") == stl ]]; then
+          rm -- "$alias" || keep_recovery=1
+        elif [[ $action == install && ( -e $alias || -L $alias ) ]]; then
+          keep_recovery=1
+        fi
+        if [[ -n $new_record_hash && -f $record && ! -L $record && $(hash_file "$record") == "$new_record_hash" ]]; then
+          if [[ $action == update ]]; then
+            if [[ -f $stage/previous-record && $(hash_file "$stage/previous-record") == "$prior_record_hash" ]]; then
+              cp -p -- "$stage/previous-record" "$record_dir/.stl-restore-record.$$" &&
+                sync_paths "$record_dir/.stl-restore-record.$$" &&
+                mv -T -- "$record_dir/.stl-restore-record.$$" "$record" || keep_recovery=1
+            else
+              keep_recovery=1
+            fi
+          else
+            rm -- "$record" || keep_recovery=1
+          fi
+        elif [[ $action == install && ( -e $record || -L $record ) ]]; then
+          keep_recovery=1
+        elif [[ $action == update ]] &&
+             [[ ! -f $record || -L $record || $(hash_file "$record") != "$prior_record_hash" ]]; then
+          keep_recovery=1
+        fi
+      fi
+      # A successful apparent compensation is not a proven rollback until
+      # all restored files, aliases and directory entries have been fsynced.
+      if (( !keep_recovery )); then
+        [[ ! -e $target || ( -f $target && ! -L $target ) ]] || keep_recovery=1
+        if [[ -f $target ]]; then sync_paths "$target" || keep_recovery=1; fi
+        if [[ -f $record ]]; then sync_paths "$record" || keep_recovery=1; fi
+        sync_paths "$bin_dir" "$record_dir" "$stage" || keep_recovery=1
+        if [[ $prefix != /usr/local && ${STL_INSTALL_TEST_FAIL_AT:-} == compensation-sync ]]; then
+          keep_recovery=1
+        fi
+      fi
+      if (( !keep_recovery )); then
+        rm -rf -- "$stage" || keep_recovery=1
+        sync_paths "$bin_dir" || keep_recovery=1
       fi
     fi
-  fi
-  [[ -z $record_tmp ]] || rm -f -- "$record_tmp" "$record_tmp.recover"
-  if [[ -n $stage ]]; then
     if (( keep_recovery )); then
       printf 'stl installer: partial failure; inspect retained recovery directory: %s\n' "$stage" >&2
-    else
-      rm -rf -- "$stage"
     fi
   fi
+  if [[ -n $record_tmp ]]; then
+    rm -f -- "$record_tmp" "$record_tmp.recover"
+  fi
   exit "$rc"
+}
+
+# All source and record materials must be synced before the first canonical
+# namespace mutation. COMMITTED is written only after both identities are
+# verified and all canonical publication/directory syncs succeeded.
+commit_marker() {
+  local committed_hash=$1
+  printf 'status=committed\noperation=%s\nsha256=%s\n' "$action" "$committed_hash" > "$stage/COMMITTED"
+  chmod 0600 "$stage/COMMITTED"
+  sync_paths "$stage/COMMITTED" "$stage" "$bin_dir" "$record_dir" || fail 'cannot durably publish committed transaction marker'
 }
 trap finish EXIT
 trap 'exit 130' INT
