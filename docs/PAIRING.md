@@ -44,10 +44,14 @@ checksum was recomputed. This is a key-identity binding check, **not** sender
 authentication or transport encryption. Use a trusted channel to establish
 the setup link's origin.
 
-This preparation does not activate a WireGuard backend or enable WireGuard
-credential import: `stl link import` still rejects all credential-bearing
-links, and `stl link ensure` JSON v1 is unchanged. Private credentials
-must go through the protected per-Link KeyStore before any future network apply.
+The WireGuard backend and **confirmed v3 recipient import** now use the
+canonical Engine: only a validated v3 Quick Link with a receiver credential
+matching its declared public key can be applied. `stl link ensure` desired
+JSON v1 remains unchanged; direct WireGuard provisioning requires an already
+protected local per-Link KeyStore credential. Legacy credential-only v1/v2
+WireGuard and IPsec pairing **remain preview-only and unimportable**.
+These backend/CLI additions do not constitute privileged traffic, handshake,
+peer pairing, key retirement, or complete release acceptance.
 
 The decoder also preserves previously valid v1/v2 credential-only WireGuard
 offers with no public configuration for redacted preview and re-export; they
@@ -130,11 +134,14 @@ the decode lifetime. Malformed/unsupported links produce redacted structured
 errors. No file, Link state, route, firewall, interface or backend is changed
 by previewing.
 
-The preview command itself never applies anything. It emits an exact-URL
-confirmation token only for supported credential-free GRE/IPIP offers.
-Secret-bearing preview remains redacted and emits no import token.
-Protected recipient credential storage and interactive import remain
-outstanding Issue #8/#10 acceptance.
+The preview command never applies anything. It emits an exact-URL
+confirmation token for supported credential-free GRE/IPIP **and configured,
+credential-bound v3 WireGuard** Quick Links. V3 preview includes the
+receiver's **public** key identities, listen/peer ports, and per-side
+keepalive preferences; the private key is always redacted. A token is a
+binding to the reviewed encoded input, **not sender authentication**.
+Interactive import also requires freshly typing the exact Link ID.
+Legacy WireGuard v1/v2 and IPsec remain non-importable.
 
 ## Explicit GRE/IPIP export CLI
 
@@ -148,9 +155,13 @@ attempt to set up the peer. Non-secret GRE Native/FOU/GUE configuration
 configuration (whose UDP port derives from the shared Link ID)
 round-trip through the same versioned schema and receiver inversion.
 
-Only **credential-free GRE/IPIP** can currently be exported. WireGuard
-and IPsec exports are denied rather than silently dropping recipient private
-keys/PSKs.
+`stl link export` remains intentionally restricted to **credential-free
+GRE/IPIP**. It cannot recreate a receiver-only secret from public saved
+state. WireGuard and IPsec exports are denied rather than silently dropping
+recipient private keys or PSKs; the initiating caller can construct a new
+sensitive v3 WireGuard offer through the existing pairing library from an
+explicit ephemeral recipient keypair, but no guided sender-side export UX is
+part of this slice.
 Human/JSON output intentionally includes the full Setup Link URL and
 must be treated as **explicitly requested share/export material**, not
 ordinary diagnostic/status output. Even without a secret credential,
@@ -158,16 +169,24 @@ it discloses network endpoints, Link ID and encoded display-name/config
 metadata. SHA-256 integrity does not authenticate who sent it.
 Use `link preview --stdin` at the receiving endpoint, then an
 explicit, confirmed `link import --stdin --confirm <preview-token>` for a
-**credential-free GRE/IPIP** offer. Credentialed import/storage still
-requires backend-specific work under Issues #6/#7/#8/#10.
+supported GRE/IPIP plaintext or WireGuard v3 Quick Link. V3 WireGuard
+receiver import provisions the protected KeyStore **inside the canonical
+Engine Link lock**, not in a separate CLI-managed transaction. A matching
+pre-existing key permits idempotent retry; an existing different key is
+never overwritten. An uncertain/failed apply can leave a protected key for
+explicit reconciliation and exact-credential replay. No auto-cleanup of
+private keys is attempted during network removal.
 
 ## Apply and backend integration
 
 Decoding and generating a preview **never applies a Link, starts a command,
-creates a device, or persists credentials**. The explicit plaintext importer
-requires the exact preview confirmation token and uses the canonical Engine.
-Future credential-bearing adapters must additionally provide protected
-backend-owned secret storage before any apply, never a second Link lifecycle.
+creates a device, or persists credentials**. The explicit importer requires the exact preview confirmation token and
+uses the canonical Engine. For WireGuard v3 the receiver secret is separately
+validated against its declared public identity, stored with mode 0600 under
+owner-private directories, and only passed to `wg set` through a verified
+inherited, read-only file descriptor (`/proc/self/fd/3`), never argv or
+ordinary JSON. WireGuard status only inspects public keys, listen ports,
+peer identities and counter/handshake state.
 
 The pairing module carries validated backend options but does not itself apply
 them, implement the final interactive UI, or perform privileged installation.

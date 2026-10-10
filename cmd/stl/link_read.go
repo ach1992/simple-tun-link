@@ -10,6 +10,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	grebackend "github.com/ach1992/simple-tun-link/internal/backend/gre"
 	ipipbackend "github.com/ach1992/simple-tun-link/internal/backend/ipip"
+	wgbackend "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
@@ -48,6 +49,7 @@ type linkStatusResponse struct {
 	Connectivity      string                       `json:"connectivity"`
 	GREState          *grebackend.DiagnosticState  `json:"gre_state,omitempty"`
 	IPIPState         *ipipbackend.DiagnosticState `json:"ipip_state,omitempty"`
+	WireGuardState    *wgbackend.DiagnosticState   `json:"wireguard_state,omitempty"`
 }
 
 type linkReadErrorResponse struct {
@@ -150,6 +152,7 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 	}
 	var interfaceName, kindLabel string
 	var rxPackets, txPackets uint64
+	counterUnit := "packets"
 	switch record.Desired.Backend {
 	case domain.BackendGRE:
 		inspector, ok := selected.(interface {
@@ -189,6 +192,28 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 		response.IPIPState = &observed
 		interfaceName, kindLabel = observed.Interface, "IPIP"
 		rxPackets, txPackets = observed.RXPackets, observed.TXPackets
+	case domain.BackendWireGuard:
+		inspector, ok := selected.(interface {
+			DiagnosticState(context.Context, domain.Link) (wgbackend.DiagnosticState, error)
+		})
+		if !ok {
+			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_status", "WireGuard has no live diagnostic adapter")
+		}
+		measured, readErr := inspector.DiagnosticState(ctx, record.Desired)
+		if readErr != nil {
+			return readStatusInspectionError(ctx, stdout, stderr, jsonOutput)
+		}
+		expectedName, nameErr := wgbackend.InterfaceName(id)
+		if nameErr != nil || measured.Interface != expectedName || measured.IfIndex <= 0 ||
+			measured.LocalPublicKey != record.Desired.WireGuard.LocalPublicKey ||
+			measured.PeerPublicKey != record.Desired.WireGuard.PeerPublicKey ||
+			measured.ListenPort != record.Desired.WireGuard.ListenPort {
+			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInspect, "link_status", "WireGuard returned inconsistent Link identity")
+		}
+		response.WireGuardState = &measured
+		interfaceName, kindLabel = measured.Interface, "WireGuard"
+		rxPackets, txPackets = measured.RXBytes, measured.TXBytes
+		counterUnit = "bytes"
 	default:
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_status", "live status is unavailable for this backend")
 	}
@@ -200,8 +225,8 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 		}
 		return 0
 	}
-	fmt.Fprintf(stdout, "Link %s: %s/%s interface verified on %s; connectivity not measured (RX %d packets, TX %d packets)\n",
-		id, kindLabel, record.Desired.Encapsulation, interfaceName, rxPackets, txPackets)
+	fmt.Fprintf(stdout, "Link %s: %s/%s interface verified on %s; connectivity not measured (RX %d %s, TX %d %s)\n",
+		id, kindLabel, record.Desired.Encapsulation, interfaceName, rxPackets, counterUnit, txPackets, counterUnit)
 	return 0
 }
 

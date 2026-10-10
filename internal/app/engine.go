@@ -74,7 +74,33 @@ func (e *Engine) EnsureImported(ctx context.Context, desired domain.Link) (Resul
 	return e.ensureWithPolicy(ctx, desired, true)
 }
 
+// RecipientCredentialStore is a protected, retry-safe per-Link provisioner.
+// This remains an Engine transaction extension, not a pairing-specific
+// independent lifecycle or a public WireGuard secret stored in domain.Link.
+type RecipientCredentialStore interface {
+	EnsureRecipient(domain.LinkID, []byte, string) error
+}
+
+// EnsureImportedRecipient protects a confirmed v3 WireGuard credential under
+// the SAME canonical maintenance/Link locks used by all Engine mutations.
+// A failed host apply may leave a protected uncommitted key for exact-credential
+// retry/reconciliation; such a key must never be blindly removed.
+func (e *Engine) EnsureImportedRecipient(ctx context.Context, desired domain.Link, credential []byte, store RecipientCredentialStore) (Result, error) {
+	if store == nil || desired.Backend != domain.BackendWireGuard ||
+		desired.WireGuard == (domain.WireGuardOptions{}) ||
+		desired.WireGuard.ListenPort == 0 || desired.WireGuard.PeerPort == 0 {
+		return Result{}, stlerr.New(stlerr.CodeUnsupported, "ensure_imported", string(desired.ID), string(desired.Backend), "protected WireGuard recipient import requires configured v3 pairing")
+	}
+	return e.ensureWithProvision(ctx, desired, true, func() error {
+		return store.EnsureRecipient(desired.ID, credential, desired.WireGuard.LocalPublicKey)
+	})
+}
+
 func (e *Engine) ensureWithPolicy(ctx context.Context, desired domain.Link, rejectReconfiguration bool) (Result, error) {
+	return e.ensureWithProvision(ctx, desired, rejectReconfiguration, nil)
+}
+
+func (e *Engine) ensureWithProvision(ctx context.Context, desired domain.Link, rejectReconfiguration bool, provision func() error) (Result, error) {
 	if err := desired.Validate(); err != nil {
 		return Result{}, contextualize(err, stlerr.CodeInvalid, "ensure", desired, "invalid desired Link")
 	}
@@ -83,7 +109,7 @@ func (e *Engine) ensureWithPolicy(ctx context.Context, desired domain.Link, reje
 		return Result{}, stlerr.Wrap(stlerr.CodeState, "ensure", string(desired.ID), "", "maintenance gate unavailable; no mutation attempted", err)
 	}
 	defer release()
-	return e.executeEnsure(ctx, desired, rejectReconfiguration)
+	return e.executeEnsure(ctx, desired, rejectReconfiguration, provision)
 }
 
 // RemoveIfUnchanged is the interactive preview-confirmed variant of Remove.
@@ -132,7 +158,7 @@ func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.
 	return e.executeLocked(ctx, backend.Request{Operation: backend.OperationRemove, Prior: &prior, Link: record.Desired}, record)
 }
 
-func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectReconfiguration bool) (Result, error) {
+func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectReconfiguration bool, provision func() error) (Result, error) {
 	linkRelease, err := e.locks.Acquire(ctx, []domain.ResourceClaim{linkLock(desired.ID)})
 	if err != nil {
 		return Result{}, stlerr.Wrap(stlerr.CodeState, "ensure", string(desired.ID), string(desired.Backend), "cannot lock Link", err)
@@ -150,6 +176,17 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 	}
 	if exists && record.Desired.Backend != desired.Backend {
 		return Result{}, stlerr.New(stlerr.CodeUnsupported, "ensure", string(desired.ID), string(desired.Backend), "changing backend for an existing Link is not supported by this lifecycle yet")
+	}
+	// Do not persist an imported credential when the requested backend is
+	// unavailable. Credential activation remains inside the Engine Link lock.
+	if _, registered := e.backends.Get(desired.Backend); !registered {
+		return Result{}, stlerr.New(stlerr.CodeUnsupported, "ensure_imported", string(desired.ID), string(desired.Backend), "requested backend is not registered")
+	}
+	if provision != nil {
+		if err := provision(); err != nil {
+			return Result{}, stlerr.Wrap(stlerr.CodeState, "ensure_imported", string(desired.ID), string(desired.Backend),
+				"protected recipient credential cannot be provisioned; no network mutation attempted", err)
+		}
 	}
 	var prior *domain.Link
 	if exists {

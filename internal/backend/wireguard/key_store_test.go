@@ -2,6 +2,7 @@ package wireguard
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -285,5 +286,73 @@ func TestPutRecipientChecksIdentityBeforeTouchingState(t *testing.T) {
 	got, err = store.Load(privateTestID)
 	if err != nil || got != receiver {
 		t.Fatal("existing receiver credential changed after refused replacement")
+	}
+}
+
+func TestEnsureRecipientIdempotentAndVerifiedOpen(t *testing.T) {
+	store, root := testKeyStore(t)
+	receiver := testGeneratedKey(t)
+	public, err := receiver.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := []byte(receiver.SecretWireValue())
+	foreign := testGeneratedKey(t)
+	foreignPub, err := foreign.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureRecipient(privateTestID, value, foreignPub); err == nil {
+		t.Fatal("wrong public identity accepted")
+	}
+	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("wrong credential touched disk before identity validation")
+	}
+	if err := store.EnsureRecipient(privateTestID, value, public); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureRecipient(privateTestID, value, public); err != nil {
+		t.Fatal("safe replay of identical credential was rejected", err)
+	}
+	if err := store.EnsureRecipient(privateTestID, []byte(foreign.SecretWireValue()), foreignPub); err == nil {
+		t.Fatal("different private key replaced a persisted credential")
+	}
+	if _, err := store.OpenForWireGuard(privateTestID, foreignPub); err == nil {
+		t.Fatal("opened private credential for wrong local public identity")
+	}
+	fd, err := store.OpenForWireGuard(privateTestID, public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fd.Close()
+	raw, err := io.ReadAll(fd)
+	if err != nil || string(raw) != receiver.SecretWireValue()+"\n" {
+		t.Fatal("verified opened credential descriptor does not match private material")
+	}
+	if _, err := store.Load(privateTestID); err != nil {
+		t.Fatal(err)
+	}
+	info, err := fd.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		t.Fatal("verified FD is not an owner-private regular file")
+	}
+}
+
+func TestProtectedCredentialFDRejectsUnsafeLeaf(t *testing.T) {
+	store, root := testKeyStore(t)
+	key := testGeneratedKey(t)
+	public, err := key.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutNew(privateTestID, key); err != nil {
+		t.Fatal(err)
+	}
+	credentialPath := filepath.Join(root, "credentials", string(privateTestID)+".wgkey")
+	if err := os.Chmod(credentialPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.OpenForWireGuard(privateTestID, public); err == nil {
+		t.Fatal("world-readable credential passed to wg")
 	}
 }

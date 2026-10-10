@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/ach1992/simple-tun-link/internal/backend"
+	"github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/pairing"
 	"github.com/ach1992/simple-tun-link/internal/state"
@@ -147,7 +148,7 @@ func TestPlaintextIPIPImportAllEncapsulations(t *testing.T) {
 	}
 }
 
-func TestPlaintextImportRejectsSecretsAndUnreviewedChangesWithoutMutation(t *testing.T) {
+func TestCredentialedImportRejectsUnregisteredBackendAndUnreviewedChangesWithoutMutation(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "not-created")
 	fake := newLifecycleFake()
 	source, _ := makeLifecycleDesired(t, "d", "10.70.11.0/31")
@@ -162,7 +163,7 @@ func TestPlaintextImportRejectsSecretsAndUnreviewedChangesWithoutMutation(t *tes
 	if err := json.Unmarshal([]byte(previewJSON), &preview); err != nil {
 		t.Fatal(err)
 	}
-	if code != 0 || errOut != "" || preview.ImportConfirmation != "" || !preview.HasCredential ||
+	if code != 0 || errOut != "" || preview.ImportConfirmation != setupLinkConfirmation(secretURL) || !preview.HasCredential ||
 		strings.Contains(previewJSON, key) || strings.Contains(previewJSON, secretURL) {
 		t.Fatalf("credentialed preview was not redacted: %d %q %q", code, previewJSON, errOut)
 	}
@@ -172,8 +173,8 @@ func TestPlaintextImportRejectsSecretsAndUnreviewedChangesWithoutMutation(t *tes
 		input string
 		exit  int
 	}{
-		{"secret rejected", []string{"link", "import", "--stdin", "--confirm", setupLinkConfirmation(secretURL), "--json"}, secretURL, 4},
-		{"wrong confirmation", []string{"link", "import", "--stdin", "--confirm", strings.Repeat("f", 64), "--json"}, secretURL, 4},
+		{"missing WireGuard backend", []string{"link", "import", "--stdin", "--confirm", setupLinkConfirmation(secretURL), "--json"}, secretURL, 4},
+		{"wrong confirmation", []string{"link", "import", "--stdin", "--confirm", strings.Repeat("f", 64), "--json"}, secretURL, 2},
 		{"invalid confirmation shape", []string{"link", "import", "--stdin", "--confirm", "not-a-token", "--json"}, secretURL, 2},
 		{"oversize", []string{"link", "import", "--stdin", "--confirm", strings.Repeat("0", 64), "--json"}, strings.Repeat("X", pairing.MaxLinkBytes+2), 2},
 		{"missing confirmation", []string{"link", "import", "--stdin", "--json"}, secretURL, 2},
@@ -298,5 +299,157 @@ func TestPlaintextImportRefusesExistingLinkReconfiguration(t *testing.T) {
 				t.Fatalf("conflict mutated existing backend or sibling: applies=%+v present=%+v", fake.applies, fake.present)
 			}
 		})
+	}
+}
+
+type wireguardImportFake struct{ *lifecycleFakeBackend }
+
+func (wireguardImportFake) Kind() domain.Backend { return domain.BackendWireGuard }
+
+func (wireguardImportFake) DiagnosticState(_ context.Context, link domain.Link) (wireguard.DiagnosticState, error) {
+	name, err := wireguard.InterfaceName(link.ID)
+	if err != nil {
+		return wireguard.DiagnosticState{}, err
+	}
+	return wireguard.DiagnosticState{Interface: name, IfIndex: 82, LocalPublicKey: link.WireGuard.LocalPublicKey,
+		PeerPublicKey: link.WireGuard.PeerPublicKey, ListenPort: link.WireGuard.ListenPort,
+		LatestHandshakeUnix: 1700000000, RXBytes: 128, TXBytes: 256}, nil
+}
+
+func TestWireGuardV3ImportProtectedIdempotentAndRedacted(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	fake := &wireguardImportFake{newLifecycleFake()}
+	source, _ := makeLifecycleDesired(t, "f", "10.71.80.0/31")
+	source.Backend, source.Encapsulation = domain.BackendWireGuard, domain.EncapUDP
+	receiverKey := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x52}, 32))
+	completeWireGuardFixture(t, &source, receiverKey)
+	url := testQuickSetupLink(t, source, []byte(receiverKey))
+	options := &runtimeOptions{stateRoot: root, backends: []backend.Backend{fake}}
+	run := func(args ...string) (int, string, string) {
+		t.Helper()
+		var out, errOut bytes.Buffer
+		code := runWithRuntimeInput(args, strings.NewReader(url), &out, &errOut, options)
+		return code, out.String(), errOut.String()
+	}
+	code, previewJSON, stderr := run("link", "preview", "--stdin", "--json")
+	var preview ImportPreviewResponse
+	if err := json.Unmarshal([]byte(previewJSON), &preview); err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 || stderr != "" || preview.WireGuard == nil || !preview.Sensitive ||
+		preview.ImportConfirmation != setupLinkConfirmation(url) ||
+		*preview.WireGuard != pairing.Invert(source).WireGuard ||
+		strings.Contains(previewJSON, receiverKey) || strings.Contains(previewJSON, url) {
+		t.Fatalf("unsafe/incomplete WireGuard recipient preview: code=%d body=%s err=%s", code, previewJSON, stderr)
+	}
+	wrong, out, errOut := run("link", "import", "--stdin", "--confirm", strings.Repeat("0", 64), "--json")
+	if wrong != 2 || errOut != "" || strings.Contains(out, url) || len(fake.applies) != 0 {
+		t.Fatalf("unreviewed import changed state: %d %s %s", wrong, out, errOut)
+	}
+	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("preview/unconfirmed import created credential storage: %v", err)
+	}
+	for round := 0; round < 2; round++ {
+		code, out, errOut = run("link", "import", "--stdin", "--confirm", preview.ImportConfirmation, "--json")
+		if code != 0 || errOut != "" || strings.Contains(out, receiverKey) || strings.Contains(out, url) {
+			t.Fatalf("protected import %d failed or leaked: %d %q %q", round, code, out, errOut)
+		}
+		var result lifecycleResultResponse
+		if err := json.Unmarshal([]byte(out), &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.Changed != (round == 0) || result.LinkID != source.ID {
+			t.Fatalf("bad replay: %+v", result)
+		}
+	}
+	if len(fake.applies) != 1 {
+		t.Fatalf("replay reapplied WireGuard: %+v", fake.applies)
+	}
+	var statusOut, statusErr bytes.Buffer
+	statusCode := runWithRuntimeInput([]string{"link", "status", string(source.ID), "--json"}, strings.NewReader(""), &statusOut, &statusErr, options)
+	var status linkStatusResponse
+	if err := json.Unmarshal(statusOut.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if statusCode != 0 || statusErr.Len() != 0 || !status.InterfaceVerified || status.Connectivity != "not_measured" ||
+		status.WireGuardState == nil || status.WireGuardState.RXBytes != 128 ||
+		status.GREState != nil || status.IPIPState != nil ||
+		strings.Contains(statusOut.String(), receiverKey) || strings.Contains(statusOut.String(), url) {
+		t.Fatalf("WireGuard status leaked or lost backend projection: code=%d status=%+v", statusCode, status)
+	}
+	keys, err := wireguard.NewKeyStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	protected, err := keys.Load(source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if protected.SecretWireValue() != receiverKey {
+		t.Fatal("receiver credential not provisioned exactly")
+	}
+	stat, err := os.Stat(filepath.Join(root, "credentials", string(source.ID)+".wgkey"))
+	if err != nil || stat.Mode().Perm() != 0o600 {
+		t.Fatalf("credential permission mismatch: %v %v", stat, err)
+	}
+	snap, err := state.NewFileStore(root).Load(context.Background())
+	if err != nil || len(snap.Links) != 1 || snap.Links[0].Desired != pairing.Invert(source) {
+		t.Fatalf("receiver Link commit mismatch: %+v %v", snap, err)
+	}
+	stateText, err := os.ReadFile(filepath.Join(root, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(stateText, []byte(receiverKey)) || bytes.Contains(stateText, []byte(url)) {
+		t.Fatal("receiver private key persisted in ordinary state")
+	}
+
+	changed := source
+	changed.DisplayName = "attacker-controlled-metadata"
+	alternate := testQuickSetupLink(t, changed, []byte(receiverKey))
+	var out2, err2 bytes.Buffer
+	code = runWithRuntimeInput([]string{"link", "import", "--stdin", "--confirm", setupLinkConfirmation(alternate), "--json"}, strings.NewReader(alternate), &out2, &err2, options)
+	if code != 1 || len(fake.applies) != 1 || strings.Contains(out2.String()+err2.String(), alternate) {
+		t.Fatalf("reconfiguration accepted/leaked: %d", code)
+	}
+	updated, err := state.NewFileStore(root).Load(context.Background())
+	if err != nil || updated.Links[0].Desired != pairing.Invert(source) {
+		t.Fatal("rejected import mutated committed Link")
+	}
+}
+
+func TestWireGuardImportFailedActivationKeepsRetryableCredential(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	fake := &wireguardImportFake{newLifecycleFake()}
+	fake.failApply = true
+	source, _ := makeLifecycleDesired(t, "a", "10.71.82.0/31")
+	source.Backend, source.Encapsulation = domain.BackendWireGuard, domain.EncapUDP
+	secret := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x62}, 32))
+	completeWireGuardFixture(t, &source, secret)
+	url := testQuickSetupLink(t, source, []byte(secret))
+	options := &runtimeOptions{stateRoot: root, backends: []backend.Backend{fake}}
+	invoke := func() (int, string) {
+		var out, errOut bytes.Buffer
+		code := runWithRuntimeInput([]string{"link", "import", "--stdin", "--confirm", setupLinkConfirmation(url), "--json"}, strings.NewReader(url), &out, &errOut, options)
+		if errOut.Len() != 0 {
+			t.Fatalf("unsafe error channel: %s", errOut.String())
+		}
+		return code, out.String()
+	}
+	code, body := invoke()
+	if code != 1 || strings.Contains(body, secret) || strings.Contains(body, url) {
+		t.Fatalf("failed import leaked or succeeded: %d %s", code, body)
+	}
+	keys, err := wireguard.NewKeyStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := keys.Load(source.ID); err != nil {
+		t.Fatalf("failed apply lost credential required for reconciliation: %v", err)
+	}
+	fake.failApply = false
+	code, body = invoke()
+	if code != 0 || strings.Contains(body, secret) {
+		t.Fatalf("idempotent recovery failed: %d %s", code, body)
 	}
 }

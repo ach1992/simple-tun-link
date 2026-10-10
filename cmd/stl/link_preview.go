@@ -16,21 +16,22 @@ import (
 // the setup URL and every secret-bearing or future backend-specific field.
 // CLI schema version and pairing-wire schema version are distinct contracts.
 type ImportPreviewResponse struct {
-	SchemaVersion        int                    `json:"schema_version"`
-	PairingSchemaVersion int                    `json:"pairing_schema_version"`
-	Mode                 pairing.ExchangeMode   `json:"mode"`
-	LinkID               domain.LinkID          `json:"link_id"`
-	Backend              domain.Backend         `json:"backend"`
-	Encapsulation        domain.Encapsulation   `json:"encapsulation"`
-	LocalUnderlay        string                 `json:"local_underlay"`
-	PeerUnderlay         string                 `json:"peer_underlay"`
-	LocalAddress         string                 `json:"local_address"`
-	PeerAddress          string                 `json:"peer_address"`
-	HasCredential        bool                   `json:"has_credential"`
-	CredentialKind       pairing.CredentialKind `json:"credential_kind,omitempty"`
-	Sensitive            bool                   `json:"sensitive"`
-	ImportConfirmation   string                 `json:"import_confirmation,omitempty"`
-	GRE                  *domain.GREOptions     `json:"gre,omitempty"`
+	SchemaVersion        int                      `json:"schema_version"`
+	PairingSchemaVersion int                      `json:"pairing_schema_version"`
+	Mode                 pairing.ExchangeMode     `json:"mode"`
+	LinkID               domain.LinkID            `json:"link_id"`
+	Backend              domain.Backend           `json:"backend"`
+	Encapsulation        domain.Encapsulation     `json:"encapsulation"`
+	LocalUnderlay        string                   `json:"local_underlay"`
+	PeerUnderlay         string                   `json:"peer_underlay"`
+	LocalAddress         string                   `json:"local_address"`
+	PeerAddress          string                   `json:"peer_address"`
+	HasCredential        bool                     `json:"has_credential"`
+	CredentialKind       pairing.CredentialKind   `json:"credential_kind,omitempty"`
+	Sensitive            bool                     `json:"sensitive"`
+	ImportConfirmation   string                   `json:"import_confirmation,omitempty"`
+	GRE                  *domain.GREOptions       `json:"gre,omitempty"`
+	WireGuard            *domain.WireGuardOptions `json:"wireguard,omitempty"`
 }
 
 func linkPreviewCommand(args []string, input io.Reader, stdout, stderr io.Writer) int {
@@ -71,7 +72,11 @@ func linkPreviewCommand(args []string, input io.Reader, stdout, stderr io.Writer
 		gre := link.GRE
 		response.GRE = &gre
 	}
-	if importablePlaintextOffer(preview) {
+	if link.Backend == domain.BackendWireGuard && link.WireGuard != (domain.WireGuardOptions{}) {
+		wg := link.WireGuard
+		response.WireGuard = &wg // public identities and ports only
+	}
+	if importableOffer(preview) {
 		response.ImportConfirmation = setupLinkConfirmation(encoded)
 	}
 	if jsonOutput {
@@ -89,6 +94,11 @@ func linkPreviewCommand(args []string, input io.Reader, stdout, stderr io.Writer
 		o := response.GRE
 		fmt.Fprintf(stdout, "GRE options: key_enabled=%t key=%d udp_port=%d ttl=%d tos=%d disable_pmtud=%t checksum=%t sequence=%t\n",
 			o.KeyEnabled, o.Key, o.UDPPort, o.TTL, o.TOS, o.DisablePMTUD, o.Checksum, o.Sequence)
+	}
+	if response.WireGuard != nil {
+		w := response.WireGuard
+		fmt.Fprintf(stdout, "WireGuard public configuration: local_key=%s peer_key=%s listen_port=%d peer_port=%d local_keepalive=%d peer_keepalive=%d\n",
+			w.LocalPublicKey, w.PeerPublicKey, w.ListenPort, w.PeerPort, w.LocalKeepalive, w.PeerKeepalive)
 	}
 	if response.HasCredential {
 		fmt.Fprintf(stdout, "Recipient credential %s: PRESENT / REDACTED (SENSITIVE)\n", response.CredentialKind)
