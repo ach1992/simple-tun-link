@@ -510,10 +510,36 @@ model rather than writing separate troubleshooting prose in each frontend:
   retain the canonical Engine authority and owned-only rollback. Unknown,
   timeout and incomplete inventory remain distinct from true absence.
 
-Current initial read-only `stl doctor ipsec [--json]` checks only observed
-processes and prerequisite commands and always reports IPsec activation as
-**not allowed**. It is not a complete port/service/ownership attestation.
-Future operational work must reuse this distinction rather than promote
-`pgrep` absence, `swanctl --version`, or XFRM inventory success into
-an activation permit. Issues #7 and #12 own operational and release proof;
-Issue #9 owns common diagnostics, Issue #10 the user-facing command surfaces.
+The still-unregistered `stl doctor ipsec [--json]` additionally inspects
+bounded, read-only `/proc/net/udp{,6}` socket tables for IKE/NAT-T UDP
+500/4500 collisions within the **calling network namespace**. Incomplete,
+missing or malformed data maps to a stable `unknown` reason; an observed
+binding is `blocked`. Not observing a binding is strictly a point-in-time
+observation, not reservation, process ownership, or future bind permission.
+The report always says `activation_allowed:false` and exits unsupported.
+Host-wide service/package/port ownership is **not** attested.
+
+`internal/backend/ipsec.NativeExclusiveConfigV1` adds an immutable-source,
+non-operational strongSwan configuration blueprint for `charon-systemd`.
+It contains **no includes or host /etc/strongswan.conf dependency**, a
+fixed proposed STL-only Unix VICI socket, native journald default/CFG level
+`1`, and disabled daemon-managed routing/virtual IP assignment.
+`CheckNativeExclusiveConfigV1` requires byte-for-byte local equivalence
+instead of interpreting an arbitrary strongSwan configuration as safe.
+This check is **not a running-process/effective-log attestation**, nor a
+writer, installation, managed service, VICI ACL, port reservation or
+activation permit. The future Linux adapter must provision the root-protected
+configuration at the pinned path, select its `STRONGSWAN_CONF` environment
+for the exact owned daemon executable, prove loaded identity and no external
+reload/settings/logging writers, verify permission/confinement/port ownership,
+and retain immutable/revalidated runtime evidence before any key load.
+The private VICI path alone does not prevent an untrusted client from
+calling `load-shared`, `load-conn` or `reload-settings`. An owner-only
+service and socket boundary must be proven independently.
+
+Future operational work must never promote `pgrep` absence, UDP
+non-observation, config-file equality, `swanctl --version` or XFRM
+inventory success into an activation permit. Existing strongSwan and
+GRE/IPIP/WireGuard resources are not touched. Issues #7 and #12 own
+operational and release proof; Issue #9 owns common diagnostics and safe
+correlated logs, Issue #10 the user-facing command surfaces.

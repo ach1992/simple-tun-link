@@ -60,6 +60,17 @@ selector protocols, read-only vacancy checks additionally need
 against `/etc/protocols`. Missing/mismatched NSS mapping is an explicit
 fail-closed IPsec preflight incompatibility, not an empty resource table.
 
+The read-only native-exclusive diagnostic now includes UDP 500/4500
+observations from bounded `/proc/net/udp` and `/proc/net/udp6` for the
+calling network namespace. Linux procfs layout is parsed strictly; a
+missing IPv6 table, inaccessible procfs or incomplete snapshot yields
+`ike_udp_inventory_unverified`, **not** a positive vacancy. This does not
+change the supported kernel/distro matrix, count as a qualified port-ownership
+test or enable IPsec. The fixed proposed strongSwan configuration is a
+non-operational `charon-systemd` template; validated distro/systemd
+adapters, service ownership and effective logging verification still require
+real disposable-environment acceptance.
+
 
 ## Release validation
 
