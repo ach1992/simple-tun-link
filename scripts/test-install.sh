@@ -95,4 +95,20 @@ expect_failure env STL_INSTALL_TEST_FAIL_AFTER_UNINSTALL_REMOVE=1 bash "$install
 bash "$installer" uninstall --prefix "$prefix"
 [[ ! -e $prefix/bin/stl && ! -L $prefix/bin/stlink && ! -e $prefix/lib/simple-tun-link/install-record ]] || fail 'uninstall left installed artifacts'
 
-printf 'Installer offline checks PASS (install, verified update, rollback, ownership, Link guard, uninstall).\n'
+# An untrustworthy backup must not be silently discarded after publication.
+# Retain recovery data, report the partial state, and block blind retries.
+quarantine="$root/ambiguous-prefix"
+mkdir -p "$quarantine/bin" "$quarantine/lib"
+bash "$installer" install --bundle "$root/v0.1.0" --prefix "$quarantine"
+expect_failure env STL_INSTALL_TEST_CORRUPT_BACKUP=1 bash "$installer" update --bundle "$root/v0.1.1" --prefix "$quarantine"
+grep -q 'partial failure; inspect retained recovery directory:' "$root/err" || fail 'uncertain update failed without recovery warning'
+[[ $(sha "$quarantine/bin/stl") == "$(sha "$root/v0.1.1/stl_v0.1.1_linux_amd64")" ]] || fail 'unexpected binary identity after uncertain update'
+[[ $(grep '^version=' "$quarantine/lib/simple-tun-link/install-record") == version=v0.1.0 ]] || fail 'unexpected record identity after uncertain update'
+shopt -s nullglob
+recoveries=("$quarantine/bin"/.stl-install.*)
+shopt -u nullglob
+[[ ${#recoveries[@]} -eq 1 && -f ${recoveries[0]}/previous-stl ]] || fail 'uncertain recovery material was discarded'
+expect_failure bash "$installer" update --bundle "$root/v0.1.1" --prefix "$quarantine"
+grep -q 'unreconciled STL installer recovery directory' "$root/err" || fail 'blind retry did not fail closed'
+
+printf 'Installer offline checks PASS (verified install/update/uninstall, rollback, and uncertain recovery quarantine).\n'
