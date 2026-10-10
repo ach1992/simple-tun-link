@@ -63,6 +63,7 @@ func (e *Engine) StageIPsecRecipient(ctx context.Context, rawURL string, confirm
 	if err != nil {
 		return stlerr.New(stlerr.CodeInvalid, "ipsec_stage_recipient", "", "ipsec", "invalid or unsupported IPsec Quick Link")
 	}
+	defer offer.ClearRecipientCredential()
 	desired, secret, _, err := checkedIPsecQuickOffer(offer, true)
 	if err != nil {
 		return err
@@ -78,9 +79,13 @@ func checkedIPsecQuickOffer(offer pairing.Offer, recipient bool) (domain.Link, [
 		preview.Credential != pairing.CredentialIPsecPSK {
 		return domain.Link{}, nil, "", stlerr.New(stlerr.CodeUnsupported, "ipsec_stage", "", "ipsec", "only a strict IPsec Quick Link can be staged")
 	}
-	encoded, err := offer.EncodeSetupLink()
-	if err != nil {
-		return domain.Link{}, nil, "", stlerr.New(stlerr.CodeInvalid, "ipsec_stage", "", "ipsec", "invalid SENSITIVE IPsec pairing intent")
+	var encoded string
+	if !recipient {
+		var err error
+		encoded, err = offer.EncodeSetupLink()
+		if err != nil {
+			return domain.Link{}, nil, "", stlerr.New(stlerr.CodeInvalid, "ipsec_stage", "", "ipsec", "invalid SENSITIVE IPsec pairing intent")
+		}
 	}
 	secret := offer.RecipientCredential()
 	key, err := ipsec.ParsePSK(secret)
