@@ -19,7 +19,7 @@ bundle() {
 if [ "\$1" = version ] && [ "\$2" = --json ]; then
   echo '{"schema_version":1,"version":"$version","commit":"$commit","date":"2026-10-10T00:00:00Z"}'
 elif [ "\$1" = link ] && [ "\$2" = list ] && [ "\$3" = --json ]; then
-  if [ "${STL_INSTALL_TEST_LINKS:-0}" = 1 ]; then
+  if [ "\${STL_INSTALL_TEST_LINKS:-0}" = 1 ]; then
     echo '{"schema_version":1,"links":[{"id":"lnk_synthetic"}]}'
   else
     echo '{"schema_version":1,"links":[]}'
