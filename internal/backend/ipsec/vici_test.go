@@ -3,6 +3,7 @@ package ipsec
 import (
 	"context"
 	"errors"
+	"iter"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -31,11 +32,14 @@ func TestReaderTransportIsNotExternallyInjectable(t *testing.T) {
 }
 
 type fakeSession struct {
-	got      []string
-	replies  map[string]*vici.Message
-	failAt   string
-	errorMsg string
-	closed   bool
+	got       []string
+	replies   map[string]*vici.Message
+	events    []*vici.Message
+	streamErr error
+	filter    string
+	failAt    string
+	errorMsg  string
+	closed    bool
 }
 
 func (f *fakeSession) Call(_ context.Context, cmd string, in *vici.Message) (*vici.Message, error) {
@@ -47,6 +51,38 @@ func (f *fakeSession) Call(_ context.Context, cmd string, in *vici.Message) (*vi
 		return nil, errors.New(f.errorMsg)
 	}
 	return f.replies[cmd], nil
+}
+
+func (f *fakeSession) CallStreaming(_ context.Context, cmd, event string, in *vici.Message) iter.Seq2[*vici.Message, error] {
+	return func(yield func(*vici.Message, error) bool) {
+		f.got = append(f.got, cmd)
+		if cmd != "list-conns" || event != "list-conn" || in == nil {
+			yield(nil, errors.New("unexpected daemon-wide inventory request"))
+			return
+		}
+		f.filter, _ = in.Get("ike").(string)
+		for _, item := range f.events {
+			if !yield(item, nil) {
+				return
+			}
+		}
+		if f.streamErr != nil {
+			yield(nil, f.streamErr)
+		}
+	}
+}
+
+func connEvent(t *testing.T, name string) *vici.Message {
+	t.Helper()
+	section := vici.NewMessage()
+	if err := section.Set("version", "IKEv2"); err != nil {
+		t.Fatal(err)
+	}
+	envelope := vici.NewMessage()
+	if err := envelope.Set(name, section); err != nil {
+		t.Fatal(err)
+	}
+	return envelope
 }
 
 func (f *fakeSession) Close() error {
@@ -77,7 +113,7 @@ func TestReaderInspectsOnlyExactNamesAndNeverMutatesDaemon(t *testing.T) {
 	if err != nil || !got.ConnectionNamePresent || !got.SecretNamePresent {
 		t.Fatalf("lost exact VICI names: %+v %v", got, err)
 	}
-	if !s.closed || !reflect.DeepEqual(s.got, []string{"get-conns", "get-shared"}) {
+	if !s.closed || !reflect.DeepEqual(s.got, []string{"get-conns", "list-conns", "get-shared"}) || s.filter != p.ConnectionName {
 		t.Fatal("reader must not call any VICI load/unload/clear command")
 	}
 	s.got, s.closed = nil, false
@@ -123,9 +159,78 @@ func TestReaderFailsClosedOnUnknownMalformedOrDuplicateInventory(t *testing.T) {
 				t.Fatal("failed VICI inventory leaked open daemon session")
 			}
 			for _, c := range s.got {
-				if !slices.Contains([]string{"get-conns", "get-shared"}, c) {
+				if !slices.Contains([]string{"get-conns", "list-conns", "get-shared"}, c) {
 					t.Fatal("inspector invoked a daemon mutation")
 				}
+			}
+		})
+	}
+}
+
+// VICI get-conns excludes configs loaded by other strongSwan config
+// backends. Operational load-conn REPLACES a same-name daemon object, so
+// vacancy must use the complete streamed list-conns view as well.
+func TestReaderRejectsForeignBackendConnectionNameCollision(t *testing.T) {
+	p, err := NewProfile(testIPsecLink(t, domain.EncapESP))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &fakeSession{
+		replies: map[string]*vici.Message{
+			"get-conns":  messageList(t, "conns", []string{}),
+			"get-shared": messageList(t, "keys", []string{}),
+		},
+		events: []*vici.Message{connEvent(t, p.ConnectionName)},
+	}
+	r := readerWithTestSession(func(context.Context) (Session, error) { return s, nil })
+	got, err := r.Inspect(context.Background(), p)
+	if err != nil || !got.ConnectionNamePresent || got.SecretNamePresent || !s.closed {
+		t.Fatalf("foreign backend collision lost: %+v %v", got, err)
+	}
+	if s.filter != p.ConnectionName || !reflect.DeepEqual(s.got, []string{"get-conns", "list-conns", "get-shared"}) {
+		t.Fatalf("daemon-wide name probe not performed: %+v", s)
+	}
+}
+
+// A partially delivered or malformed daemon-wide stream must never be
+// mistaken for vacancy, even if the VICI-only view reports zero objects.
+func TestReaderFailsClosedOnIncompleteOrAmbiguousAllBackendStream(t *testing.T) {
+	p, err := NewProfile(testIPsecLink(t, domain.EncapESP))
+	if err != nil {
+		t.Fatal(err)
+	}
+	badSection := vici.NewMessage()
+	if err := badSection.Set(p.ConnectionName, "not-a-section"); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name   string
+		events []*vici.Message
+		err    error
+	}{
+		{"stream interrupted", nil, errors.New("SENSITIVE daemon stderr")},
+		{"stream failed after event", []*vici.Message{connEvent(t, p.ConnectionName)}, errors.New("SENSITIVE daemon stderr")},
+		{"nil event", []*vici.Message{nil}, nil},
+		{"malformed section", []*vici.Message{badSection}, nil},
+		{"unexpected foreign name", []*vici.Message{connEvent(t, "foreign")}, nil},
+		{"duplicate target", []*vici.Message{connEvent(t, p.ConnectionName), connEvent(t, p.ConnectionName)}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &fakeSession{
+				replies: map[string]*vici.Message{
+					"get-conns":  messageList(t, "conns", []string{}),
+					"get-shared": messageList(t, "keys", []string{}),
+				},
+				events: tc.events, streamErr: tc.err,
+			}
+			r := readerWithTestSession(func(context.Context) (Session, error) { return s, nil })
+			got, err := r.Inspect(context.Background(), p)
+			if err == nil || strings.Contains(err.Error(), "SENSITIVE") || !s.closed {
+				t.Fatalf("unsafe daemon inventory accepted or leaked: %+v %v", got, err)
+			}
+			if slices.Contains(s.got, "get-shared") {
+				t.Fatal("continued credential inventory after untrusted daemon connection view")
 			}
 		})
 	}

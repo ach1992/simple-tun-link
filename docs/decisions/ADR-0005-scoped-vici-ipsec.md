@@ -137,6 +137,18 @@ Never accept an inventory probe failure as evidence of vacancy. Kernel state
 and temporary decoded JSON copies are sensitive and must be cleared, never
 included in errors or logs.
 
+The connection-name vacancy gate must check **both** VICI-exclusive
+`get-conns` and the daemon-wide `list-conns` streamed `list-conn`
+events filtered to the exact canonical IKE connection name. strongSwan
+documents that `get-conns` excludes configurations loaded by non-VICI
+backends, while `load-conn` updates/replaces a same-name connection.
+The full filtered stream must be exhausted successfully; malformed,
+duplicate, unexpected or interrupted events mean unknown vacancy, never
+permission to overwrite a foreign config. A filtered stream is a
+read-only collision check, NOT owner proof or a transaction with other
+strongSwan writers. Source: the upstream VICI protocol README
+(https://github.com/strongswan/strongswan/blob/master/src/libcharon/plugins/vici/README.md).
+
 A successful preflight is NOT persistent ownership proof, a reservation
 against other administrators or a VICI/XFRM write permit. Any future
 transaction must repeat fresh host checks while holding STL locks and prove
