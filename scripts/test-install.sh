@@ -24,6 +24,13 @@ elif [ "\$1" = link ] && [ "\$2" = list ] && [ "\$3" = --json ]; then
   else
     echo '{"schema_version":1,"links":[]}'
   fi
+elif [ "\$1" = maintenance ] && [ "\$2" = pre-uninstall ] && [ "\$3" = --json ]; then
+  if [ "${STL_INSTALL_TEST_LINKS:-0}" = 1 ]; then
+    echo '{"schema_version":1,"ready":false}'
+    exit 1
+  else
+    echo '{"schema_version":1,"ready":true}'
+  fi
 else
   exit 2
 fi
@@ -111,4 +118,66 @@ shopt -u nullglob
 expect_failure bash "$installer" update --bundle "$root/v0.1.1" --prefix "$quarantine"
 grep -q 'unreconciled STL installer recovery directory' "$root/err" || fail 'blind retry did not fail closed'
 
-printf 'Installer offline checks PASS (verified install/update/uninstall, rollback, and uncertain recovery quarantine).\n'
+# R1: a failed/incomplete installer fetch must not invoke sudo on a syntactically
+# complete prefix. Model the documented private-download-before-sudo boundary.
+mkdir -p "$root/fakebin"
+cat > "$root/fakebin/curl" <<'CURL'
+#!/usr/bin/env bash
+while [[ $# -gt 0 ]]; do
+  if [[ $1 == -o ]]; then shift; output=$1; break; fi
+  shift
+done
+printf 'exit 0\n' > "$output"
+exit 18 # simulated broken transport after a syntactically valid prefix
+CURL
+cat > "$root/fakebin/sudo" <<'SUDO'
+#!/usr/bin/env bash
+echo privileged-installer-executed > "$STL_TEST_SUDO_MARKER"
+exit 0
+SUDO
+chmod 0755 "$root/fakebin/curl" "$root/fakebin/sudo"
+export STL_TEST_SUDO_MARKER="$root/sudo-was-executed"
+expect_failure env PATH="$root/fakebin:$PATH" bash -c 'set -euo pipefail; umask 077; t=$(mktemp); trap '\''rm -f -- "$t"'\'' EXIT; curl -fLSs -o "$t" https://example.invalid/installer; bash -n "$t"; sudo bash "$t" install --version v0.1.0'
+[[ ! -e $STL_TEST_SUDO_MARKER ]] || fail 'partial network delivery executed privileged code'
+
+# R2: explicit pre-publication, post-rename, and record-sync failure seams.
+for point in prepublish-sync post-executable-sync record-sync; do
+  recovered="$root/recovered-$point"
+  mkdir -p "$recovered/bin" "$recovered/lib"
+  bash "$installer" install --bundle "$root/v0.1.0" --prefix "$recovered" > /dev/null
+  expect_failure env STL_INSTALL_TEST_FAIL_AT="$point" bash "$installer" update --bundle "$root/v0.1.1" --prefix "$recovered"
+  [[ $(sha "$recovered/bin/stl") == "$original" ]] || fail "$point failed to restore exact original binary"
+  [[ $(grep '^version=' "$recovered/lib/simple-tun-link/install-record") == version=v0.1.0 ]] || fail "$point failed to restore ownership record"
+  [[ $(readlink "$recovered/bin/stlink") == stl ]] || fail "$point damaged alias"
+done
+
+# Failed compensation durability must keep recovery evidence, even when all
+# visible canonical paths appear restored.
+compensating="$root/compensation-uncertain"
+mkdir -p "$compensating/bin" "$compensating/lib"
+bash "$installer" install --bundle "$root/v0.1.0" --prefix "$compensating" > /dev/null
+expect_failure env STL_INSTALL_TEST_FAIL_AFTER_SWAP=1 STL_INSTALL_TEST_FAIL_AT=compensation-sync bash "$installer" update --bundle "$root/v0.1.1" --prefix "$compensating"
+grep -q 'partial failure; inspect retained recovery directory' "$root/err" || fail 'uncertain compensation discarded evidence'
+shopt -s nullglob
+uncertain=("$compensating/bin"/.stl-install.*)
+shopt -u nullglob
+[[ ${#uncertain[@]} -eq 1 && -f ${uncertain[0]}/previous-stl ]] || fail 'missing durable recovery copy after compensation uncertainty'
+expect_failure bash "$installer" update --bundle "$root/v0.1.1" --prefix "$compensating"
+grep -q 'unreconciled STL installer recovery directory' "$root/err" || fail 'retry crossed incomplete rollback state'
+
+# Committed journal is retained until a later invocation verifies canonical
+# identity; a successful idempotent retry durably retires it.
+committed="$root/committed"
+mkdir -p "$committed/bin" "$committed/lib"
+bash "$installer" install --bundle "$root/v0.1.0" --prefix "$committed" > /dev/null
+shopt -s nullglob
+markers=("$committed/bin"/.stl-install.*)
+shopt -u nullglob
+[[ ${#markers[@]} -eq 1 && -f ${markers[0]}/COMMITTED ]] || fail 'missing durable committed journal'
+bash "$installer" update --bundle "$root/v0.1.0" --prefix "$committed" > /dev/null
+shopt -s nullglob
+markers=("$committed/bin"/.stl-install.*)
+shopt -u nullglob
+[[ ${#markers[@]} -eq 0 ]] || fail 'verified committed journal not retired'
+
+printf 'Installer offline checks PASS (integrity, concurrency gate, durability failure seams, rollback, and recovery journals).\n'
