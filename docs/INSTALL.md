@@ -80,6 +80,19 @@ At the next invocation, it removes a committed journal only if the current
 binary, alias and ownership record still prove the recorded operation. A
 non-committed journal always requires explicit manual reconciliation.
 
+The `COMMITTED` v1 journal contains **exactly three newline-terminated
+fields**, in this order: `status=committed`, `operation=install|update|uninstall`,
+and `sha256=<64 lowercase hexadecimal characters>`. The Installer and the
+Engine maintenance gate both reject incomplete, malformed or identity-
+inconsistent journals; the marker filename alone is not commit proof.
+For install/update, the recorded hash must match both the current canonical
+executable and its valid installer ownership record, with the exact
+`stlink -> stl` alias. For uninstall, all three installed identities must
+be absent. After securing a separate durable recovery copy, uninstall
+**unlinks** the canonical executable rather than moving its live inode into
+the recovery directory; a running stale process therefore retains the
+`stl (deleted)` identity and must be denied before any Engine mutation.
+
 If the installer retains a
 `/usr/local/bin/.stl-install.*` recovery directory, **do not delete or blindly
 restore it**: inspect the installed binary hash, installation record, unit and
