@@ -457,24 +457,66 @@ func TestXFRMLegacyStateSelectorTailFailClosed(t *testing.T) {
 		{"udp-ports", " proto udp sport 5353 dport 53", false, false},
 		{"numeric-protocol", " proto 6 sport 443 dport 9443 uid 1000", false, false},
 		{"icmp-selector", " proto icmp type 8 code 0 dev lo", false, false},
+		{"icmp-type-max", " proto icmp type 255", false, false},
+		{"icmp-code-max", " proto icmp code 255", false, false},
+		{"icmpv6-type-max", " proto ipv6-icmp type 255 code 255", false, false},
+		{"icmpv6-code-max", " proto ipv6-icmp code 255", false, false},
+		{"transport-ports-max", " proto tcp sport 65535 dport 65535", false, false},
+		{"gre-key-max", " proto gre key 4294967295", false, false},
+		{"mh-type-max", " proto mobility-header type 255", false, false},
+		{"mh-hex-max", " proto mobility-header (dport) 0xffff", false, false},
+		{"database-proto-ggp", " proto ggp", false, false},
+		{"database-proto-ax25", " proto ax.25", false, false},
+		{"database-proto-wesp", " proto wesp", false, false},
+		{"database-proto-ipip", " proto ipip", false, false},
+		{"device-hash", " proto tcp dev stl#valid", false, false},
+		{"device-exclamation", " proto tcp dev eth!0", false, false},
+		{"device-tilde", " proto tcp dev eth~0", false, false},
+		{"device-leading-hyphen", " proto tcp dev -eth", false, false},
+		{"device-max-length", " proto tcp dev abcdefghijklmno", false, false},
+
 		{"gre-selector", " proto gre key 123 dev tun0", false, false},
-		{"mh-selector", " proto mh type 3 (dport) 0x1", false, false},
-		{"mh-port-only", " proto mh (dport) 0x0001", false, false},
+		{"mh-selector", " proto mobility-header type 3 (dport) 0x0001", false, false},
+		{"mh-port-only", " proto mobility-header (dport) 0x0001", false, false},
 		{"icmpv6-code-only", " proto ipv6-icmp code 3", false, false},
 		{"unknown-numeric-protocol", " proto 254 sport 4", false, false},
 		{"dev-and-uid", " dev eth0 uid 1000", false, false},
 		{"proto-bare", " proto", false, true},
 		{"proto-invalid", " proto made-up-protocol", false, true},
 		{"proto-overflow", " proto 256", false, true},
+		{"proto-noncanonical-decimal", " proto 006", false, true},
+		{"transport-port-noncanonical", " proto tcp sport 0001", false, true},
+		{"icmp-type-noncanonical", " proto icmp type 0255", false, true},
+		{"icmp-code-noncanonical", " proto icmp code 0000", false, true},
+		{"gre-key-noncanonical", " proto gre key 00001", false, true},
+		{"uid-noncanonical", " uid 0001", false, true},
 		{"proto-duplicate", " proto tcp proto udp", false, true},
 		{"proto-conflicting-forms", " proto tcp proto 6", false, true},
 		{"sport-bare", " proto tcp sport", false, true},
 		{"sport-duplicate", " proto tcp sport 53 sport 8080", false, true},
 		{"sport-invalid", " proto tcp sport not-a-port", false, true},
 		{"dport-overflow", " proto udp dport 65536", false, true},
+		{"icmp-type-out-of-range", " proto icmp type 256", false, true},
+		{"icmp-code-out-of-range", " proto icmp code 256", false, true},
+		{"icmpv6-type-out-of-range", " proto ipv6-icmp type 256", false, true},
+		{"icmpv6-code-out-of-range", " proto ipv6-icmp code 65535", false, true},
+		{"mh-type-out-of-range", " proto mobility-header type 256", false, true},
+		{"mh-hex-short", " proto mobility-header (dport) 0x1", false, true},
+		{"mh-hex-too-long", " proto mobility-header (dport) 0x00001", false, true},
+		{"mh-hex-uppercase", " proto mobility-header (dport) 0x00AF", false, true},
+		{"mh-hex-nonhex", " proto mobility-header (dport) 0x0xyz", false, true},
+		{"device-single-dot", " proto tcp dev .", false, true},
+		{"device-double-dot", " proto tcp dev ..", false, true},
+		{"device-slash", " proto tcp dev eth/1", false, true},
+		{"device-colon", " proto tcp dev eth:1", false, true},
+		{"device-space", " proto tcp dev eth 1", false, true},
+		{"device-too-long", " proto tcp dev abcdefghijklmnop", false, true},
+		{"proto-invalid-database-alias", " proto IPSEC-ESP", false, true},
+		{"proto-unsupported-local-name", " proto made-up-protocol", false, true},
+
 		{"dport-negative", " proto udp dport -1", false, true},
 		{"dev-bare", " proto tcp dev", false, true},
-		{"dev-empty", " proto tcp dev \"\"", false, true},
+		{"dev-literal-quotes", " proto tcp dev \"\"", false, false},
 		{"uid-negative", " uid -1", false, true},
 		{"unexpected-token", " proto tcp unknown 4", false, true},
 		{"orphan-tail-token", " proto tcp sport 21 missing", false, true},
@@ -487,7 +529,7 @@ func TestXFRMLegacyStateSelectorTailFailClosed(t *testing.T) {
 		{"selector-id-later", " proto tcp sport 123 if_id 0x2121", false, true},
 		{"selector-id-unrelated-later", " proto tcp sport 123 if_id 42", false, true},
 		{"selector-duplicate-uid", " uid 100 uid 101", false, true},
-		{"selector-bad-mh-code", " proto mh code 8", false, true},
+		{"selector-bad-mh-code", " proto mobility-header code 8", false, true},
 		{"selector-bad-icmp-port", " proto icmp sport 8", false, true},
 		{"selector-bad-gre-port", " proto gre dport 22", false, true},
 		{"unknown-port-order", " proto tcp dport 80 sport 443", false, true},
@@ -531,6 +573,105 @@ func TestXFRMLegacyStateSelectorTailFailClosed(t *testing.T) {
 			_, err := xfrmInventoryUsesID([]byte(tc.raw), id, "state")
 			if err == nil {
 				t.Fatal("invalid selector or misplaced identifier accepted")
+			}
+		})
+	}
+}
+
+// The legacy iproute2 selector protocol is the primary name returned by
+// libc's getprotobynumber(), not a small built-in protocol-name whitelist.
+// Test the first-name rule and uncommon entries with an isolated table.
+func TestXFRMSelectorProtocolTableFileBacked(t *testing.T) {
+	const db = "# /etc/protocols fixture\n" +
+		"ip 0 IP\n" +
+		"hopopt 0 HOPOPT\n" +
+		"ggp 3 GGP\n" +
+		"tcp 6 TCP\n" +
+		"tcp-alternate 6 TCP-ALTERNATE\n" +
+		"mobility-header 135 Mobility-Header\n" +
+		"ax.25 93 AX.25\n" +
+		"wesp 141 WESP\n" +
+		"custom-proto 222 CUSTOM-PROTO\n" +
+		"out-of-range 262 MPTCP\n"
+	for _, tc := range []struct {
+		name   string
+		number uint64
+		valid  bool
+	}{
+		{"ggp", 3, true},
+		{"ax.25", 93, true},
+		{"wesp", 141, true},
+		{"mobility-header", 135, true},
+		{"custom-proto", 222, true},
+		{"tcp", 6, true},
+		{"tcp-alternate", 0, false},
+		{"TCP", 0, false},
+		{"hopopt", 0, false},
+		{"made-up-protocol", 0, false},
+		{"out-of-range", 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := xfrmSelectorProtocolTable(tc.name, []byte(db))
+			if ok != tc.valid || (ok && got != tc.number) {
+				t.Fatalf("protocol lookup: got=%d valid=%t, want %d/%t", got, ok, tc.number, tc.valid)
+			}
+		})
+	}
+	if _, ok := xfrmSelectorProtocolTable("tcp", []byte("tcp 6\nTCP 6\ntcp 17\n")); ok {
+		t.Fatal("conflicting primary mappings must fail closed")
+	}
+	if n, ok := xfrmSelectorProtocol("254"); !ok || n != 254 {
+		t.Fatalf("numeric protocol fallback invalid: %d / %t", n, ok)
+	}
+	if _, ok := xfrmSelectorProtocol("256"); ok {
+		t.Fatal("protocol greater than uint8 unexpectedly accepted")
+	}
+}
+
+// Supported Debian/Ubuntu runtimes provide /etc/protocols. These entries
+// also come from getent's canonical number->name results on the isolated
+// Debian 12 runtime; they are all absent from the previous hard-coded map.
+func TestXFRMSelectorProtocolHostDatabase(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		id   uint64
+	}{
+		{"ggp", 3}, {"ax.25", 93}, {"ipip", 94},
+		{"mobility-header", 135}, {"wesp", 141},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := xfrmSelectorProtocol(tc.name)
+			if !ok || got != tc.id {
+				t.Fatalf("file-backed %s: got %d / %t, want %d", tc.name, got, ok, tc.id)
+			}
+		})
+	}
+	if _, ok := xfrmSelectorProtocol("made-up-protocol"); ok {
+		t.Fatal("invented protocol name must not prove valid inventory")
+	}
+}
+
+// Validate the kernel's dev_valid_name constraints rather than an STL
+// naming convention; foreign link names may include punctuation such as #.
+func TestXFRMSelectorDeviceKernelNames(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		valid bool
+	}{
+		{"eth0", true}, {"eth#hash", true}, {"dev!name", true},
+		{"stl~test", true}, {"-leading", true}, {"quote\"name", true},
+		{"abcdefghi123456", true}, {"veth@peer", true},
+		{"", false}, {".", false}, {"..", false},
+		{"has/slash", false}, {"eth:alias", false},
+		{"two words", false}, {"has\ttab", false},
+		{"has\nnewline", false}, {"has\rreturn", false},
+		{"has\vvertical", false}, {"has\fform", false},
+		{"a\x00b", false}, {"abcdefghijklmnop", false},
+	} {
+		t.Run(fmt.Sprintf("%q", tc.name), func(t *testing.T) {
+			got := validXFRMSelectorDevice(tc.name)
+			if got != tc.valid {
+				t.Fatalf("device %q: got %t, want %t", tc.name, got, tc.valid)
 			}
 		})
 	}

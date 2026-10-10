@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -351,7 +352,13 @@ func validateXFRMStateSelector(fields [][]byte) error {
 			} else {
 				currentRank = 3
 			}
-			if !xfrmUnsignedDecimal(value, 16) {
+			// Linux/iproute2 bounds type/code to 8 bits, but transport
+			// ports use the full 16-bit domain.
+			bits := 16
+			if name == "type" || name == "code" {
+				bits = 8
+			}
+			if !xfrmUnsignedDecimal(value, bits) {
 				return fmt.Errorf("invalid XFRM selector port or type")
 			}
 		case "key":
@@ -361,24 +368,21 @@ func validateXFRMStateSelector(fields [][]byte) error {
 			}
 		case "(dport)":
 			currentRank = 3
-			if !strings.HasPrefix(value, "0x") || len(value) < 3 || len(value) > 6 {
+			// xfrm_selector_print uses "(dport) 0x%.4x" for MH:
+			// exactly four lowercase hexadecimal digits after 0x.
+			if len(value) != 6 || !strings.HasPrefix(value, "0x") {
 				return fmt.Errorf("invalid XFRM selector mobility port")
 			}
-			if _, err := strconv.ParseUint(value[2:], 16, 16); err != nil {
-				return fmt.Errorf("invalid XFRM selector mobility port")
+			for j := 2; j < len(value); j++ {
+				c := value[j]
+				if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+					return fmt.Errorf("invalid XFRM selector mobility port")
+				}
 			}
 		case "dev":
 			currentRank = 4
-			if len(value) == 0 || len(value) >= 16 || value[0] == '-' {
+			if !validXFRMSelectorDevice(value) {
 				return fmt.Errorf("invalid XFRM selector device")
-			}
-			for j := 0; j < len(value); j++ {
-				c := value[j]
-				if !((c >= '0' && c <= '9') ||
-					(c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-					c == '_' || c == '-' || c == '.' || c == '@' || c == '+') {
-					return fmt.Errorf("invalid XFRM selector device")
-				}
 			}
 		case "uid":
 			currentRank = 5
@@ -419,7 +423,8 @@ func validateXFRMStateSelector(fields [][]byte) error {
 }
 
 func xfrmUnsignedDecimal(value string, bits int) bool {
-	if len(value) == 0 {
+	// iproute2 prints these decimal values with %u: no leading zeros.
+	if len(value) == 0 || (len(value) > 1 && value[0] == '0') {
 		return false
 	}
 	for i := 0; i < len(value); i++ {
@@ -431,27 +436,83 @@ func xfrmUnsignedDecimal(value string, bits int) bool {
 	return err == nil
 }
 
-// iproute2's strxf_proto() prints getprotobynumber names, or a numeric
-// fallback for unlisted protocol numbers. Do not treat arbitrary words as
-// valid identities: reject unknown protocol spellings rather than guessing.
+// The kernel's dev_valid_name permits any nonempty interface name shorter
+// than IFNAMSIZ (16 bytes), except ".", "..", '/', ':', and whitespace.
+// Do not apply STL-owned interface naming rules to FOREIGN selectors.
+func validXFRMSelectorDevice(name string) bool {
+	if len(name) == 0 || len(name) >= 16 || name == "." || name == ".." {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c == 0 || c == '/' || c == ':' ||
+			c == ' ' || (c >= '\t' && c <= '\r') {
+			return false
+		}
+	}
+	return true
+}
+
+// iproute2's strxf_proto() uses libc getprotobynumber(), returning the
+// current host protocol database's PRIMARY name (not a fixed IANA list).
+// Debian/Ubuntu use /etc/protocols for the standard file-backed database,
+// including names absent from any hand-curated list. Unknown, unavailable,
+// corrupt or excessive data must NOT prove a valid selector; numeric kernel
+// protocol IDs remain independently bounded to 8 bits. Other NSS sources
+// can only lead to a conservative rejection, never a guessed identity.
 func xfrmSelectorProtocol(value string) (uint64, bool) {
 	if xfrmUnsignedDecimal(value, 8) {
 		n, _ := strconv.ParseUint(value, 10, 8)
 		return n, n != 0
 	}
-	// Common documented IANA/Linux protocol names across supported distros.
-	names := map[string]uint64{
-		"icmp": 1, "igmp": 2, "ipencap": 4, "ipip": 4,
-		"tcp": 6, "udp": 17, "dccp": 33, "ipv6": 41,
-		"ipv6-route": 43, "ipv6-frag": 44, "rsvp": 46,
-		"gre": 47, "esp": 50, "ah": 51,
-		"ipv6-icmp": 58, "icmpv6": 58,
-		"ipv6-nonxt": 59, "ipv6-opts": 60,
-		"ospf": 89, "etherip": 97, "encap": 98,
-		"pim": 103, "ipcomp": 108, "vrrp": 112,
-		"l2tp": 115, "sctp": 132, "mh": 135,
-		"mobility-header": 135, "udplite": 136,
+	if len(value) == 0 || len(value) > 128 {
+		return 0, false
 	}
-	proto, ok := names[value]
-	return proto, ok
+	f, err := os.Open("/etc/protocols")
+	if err != nil {
+		return 0, false
+	}
+	defer f.Close()
+	// Bound the system database read in case of unexpected/corrupt input.
+	const maxProtocols = 1 << 20
+	data, err := io.ReadAll(io.LimitReader(f, maxProtocols+1))
+	if err != nil || len(data) > maxProtocols {
+		return 0, false
+	}
+	return xfrmSelectorProtocolTable(value, data)
+}
+
+// getprotobynumber() selects the FIRST primary name for each number.
+// Aliases and later duplicate-number entries are not emitted by iproute2.
+// Keep this parse independent of fixture/global process state so tests can
+// use deterministic protocol databases, and re-read host state per preflight.
+func xfrmSelectorProtocolTable(value string, data []byte) (uint64, bool) {
+	primaries := make(map[uint64]string)
+	names := make(map[string]uint64)
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		if i := bytes.IndexByte(line, '#'); i >= 0 {
+			line = line[:i]
+		}
+		fields := bytes.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		id, err := strconv.ParseUint(string(fields[1]), 10, 8)
+		if err != nil || id == 0 {
+			continue // protocol zero is not printed in selector proto
+		}
+		name := string(fields[0])
+		if len(name) == 0 || len(name) > 128 {
+			continue
+		}
+		if existing, ok := names[name]; ok && existing != id {
+			return 0, false // ambiguous file-backed protocol database
+		}
+		names[name] = id
+		if _, present := primaries[id]; !present {
+			primaries[id] = name
+		}
+	}
+	id, found := names[value]
+	return id, found && primaries[id] == value
 }

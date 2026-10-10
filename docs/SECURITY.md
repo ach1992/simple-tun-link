@@ -182,7 +182,15 @@ headers and bounded, valid descriptors. The SA-level proto is distinct from
 a selector's transport proto; every selector tail attribute must match a
 supported bounded iproute2 token/value shape (proto, ports, ICMP type/code,
 GRE key, device and optional uid), without duplicates, unknown tokens or
-misplaced if_id. The original XFRM state bytes
+misplaced if_id. In particular, ICMP type/code are 8-bit, MH `(dport)` uses
+the canonical four-hex-digit form, foreign `dev` values follow Linux
+`dev_valid_name` rather than STL's stricter own-link naming policy, and
+named protocols are matched to the primary names in the host's bounded,
+read-only `/etc/protocols` database instead of an incomplete hard-coded
+whitelist. Numeric protocol identifiers are 8-bit and canonical decimal.
+An unreadable/unknown protocol name fails closed; non-file NSS protocol
+sources may conservatively reduce compatibility and require independent
+host evidence before enabling operational IPsec. The original XFRM state bytes
 and parser-owned JSON copies (which may contain key material) are cleared;
 daemon and kernel error text is not reflected to ordinary output.
 

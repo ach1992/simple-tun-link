@@ -115,8 +115,16 @@ A state selector's proto is not a second SA proto; only structurally located
 top-level descriptor lines establish SA identity. Do not skip the selector
 tail: parse recognized iproute2 protocol, sport/dport, ICMP type/code, GRE
 key, dev and optional uid fields with bounded values; unknown, duplicate,
-malformed, or misplaced if_id tokens must fail closed. This scoped selector
-grammar follows the iproute2 source:
+malformed, or misplaced if_id tokens must fail closed. Follow the actual
+iproute2 output contract: decimal numbers have canonical formatting;
+ICMP type/code are uint8 rather than uint16; an MH `(dport)` value has the
+fixed-width lowercase `0x` plus four hex digits; foreign `dev` names follow
+Linux `dev_valid_name` rather than STL's planned-interface alphabet.
+Selector protocol names derive from the file-backed host `/etc/protocols`
+primary names as used by default Debian/Ubuntu iproute2/libc, not a static
+IANA subset; unknown/unreadable names or ambiguous tables fail closed.
+Non-file NSS overrides are not assumed equivalent without host evidence.
+This scoped selector grammar follows the iproute2 source:
 https://github.com/iproute2/iproute2/blob/e11870d5b9414b2e0770463bd6fc2399744dc734/ip/ipxfrm.c
 and preserves the bounded Debian-bookworm text path. An absent `if_id` is harmless only after the row is
 positively recognized; a null, conflicting or invalid present ID is unknown.
