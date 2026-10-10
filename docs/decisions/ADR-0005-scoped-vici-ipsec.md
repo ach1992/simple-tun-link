@@ -149,6 +149,29 @@ read-only collision check, NOT owner proof or a transaction with other
 strongSwan writers. Source: the upstream VICI protocol README
 (https://github.com/strongswan/strongswan/blob/master/src/libcharon/plugins/vici/README.md).
 
+## Host NSS protocol-name gate (non-operational)
+
+Legacy iproute2 XFRM selector text prints the primary protocol name
+returned by glibc `getprotobynumber()`, not necessarily the first name
+in `/etc/protocols` when non-file NSS providers are configured.
+For each named selector, first resolve the bounded file-backed primary
+and then verify exact agreement with a read-only, absolute-path
+`/usr/bin/getent protocols <decimal-ID>` NSS lookup. GNU getent passes
+numeric protocol keys to the same libc function used by distro iproute2.
+The call has a short deadline and bounded output; a per-inventory cache
+and overall lookup budget avoid repeated unbounded slow-provider calls.
+Disagreement, unsupported/missing NSS tooling, malformed reply and
+timeouts fail closed. This preserves the supported `db files` Debian
+configuration when its effective mappings agree, while refusing false
+vacancy from custom non-file providers. A custom primary absent from
+`/etc/protocols` remains unsupported until an independently reviewed
+full-NSS resolver is added. No writer, system-wide NSS change or
+activation permit is introduced.
+
+References:
+- https://man7.org/linux/man-pages/man1/getent.1.html
+- https://man7.org/linux/man-pages/man3/getprotoent.3.html
+
 A successful preflight is NOT persistent ownership proof, a reservation
 against other administrators or a VICI/XFRM write permit. Any future
 transaction must repeat fresh host checks while holding STL locks and prove

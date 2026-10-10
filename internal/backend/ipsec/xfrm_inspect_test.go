@@ -667,6 +667,61 @@ func TestXFRMSelectorProtocolHostDatabase(t *testing.T) {
 	}
 }
 
+// libc NSS may use db, files, or a custom provider. Only an exact
+// getprotobynumber primary match can corroborate the local file parser.
+// getent output is never allowed to grant vacancy on ambiguity or failure.
+func TestXFRMSelectorNSSPrimaryCompatibilityGate(t *testing.T) {
+	cases := []struct {
+		name   string
+		output string
+		want   bool
+	}{
+		{"standard-glibc", "tcp                   6 TCP\n", true},
+		{"no-alias", "tcp 6\n", true},
+		{"foreign-provider-name", "custom-tcp 6 TCP\n", false},
+		{"foreign-provider-number", "tcp 17 TCP\n", false},
+		{"wrong-case", "TCP 6 tcp\n", false},
+		{"noncanonical-number", "tcp 06 TCP\n", false},
+		{"out-of-range-number", "tcp 256 TCP\n", false},
+		{"missing-number", "tcp\n", false},
+		{"missing-newline", "tcp 6 TCP", false},
+		{"two-rows", "tcp 6 TCP\ntcp 6 TCP\n", false},
+		{"CRLF", "tcp 6 TCP\r\n", false},
+		{"embedded-NUL", "tcp 6\x00 TCP\n", false},
+		{"control-alias", "tcp 6 ok\x01\n", false},
+		{"tab-spaced", "tcp\t6 TCP\n", false},
+		{"blank", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := xfrmNSSPrimaryMatches("tcp", 6, []byte(tc.output)); got != tc.want {
+				t.Fatalf("ambiguous NSS output accepted or standard NSS rejected: %q (got %t)", tc.output, got)
+			}
+		})
+	}
+	if xfrmNSSPrimaryMatches("tcp", 6, []byte(strings.Repeat("x", 4097))) {
+		t.Fatal("unbounded NSS lookup output accepted")
+	}
+}
+
+func TestXFRMNSSProtocolLookupBoundedAndCancelable(t *testing.T) {
+	var output xfrmLimitedOutput
+	if n, err := output.Write(bytes.Repeat([]byte{'x'}, 4096)); err != nil || n != 4096 {
+		t.Fatalf("cannot accept exact bounded protocol reply: %d, %v", n, err)
+	}
+	if _, err := output.Write([]byte{'y'}); err == nil || len(output.bytes) != 4096 {
+		t.Fatal("unbounded NSS response bypassed output cap")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, ok := xfrmSelectorProtocolContext(ctx, "tcp"); ok {
+		t.Fatal("cancelled selector lookup reached NSS")
+	}
+	if _, err := xfrmInventoryUsesIDContext(ctx, []byte("[]"), 12, "state"); err == nil {
+		t.Fatal("cancelled XFRM inspection reported verified absence")
+	}
+}
+
 // Validate the kernel's dev_valid_name constraints rather than an STL
 // naming convention; foreign link names may include punctuation such as #.
 func TestXFRMSelectorDeviceKernelNames(t *testing.T) {

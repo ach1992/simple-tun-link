@@ -2,13 +2,16 @@ package ipsec
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/netip"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // xfrmInventoryUsesID supports both modern JSON iproute2 inventories and
@@ -17,6 +20,16 @@ import (
 // are parsed fail-closed; raw output may contain SA key material and must be
 // zeroized by the caller without ever appearing in an error or log.
 func xfrmInventoryUsesID(raw []byte, target uint32, kind string) (bool, error) {
+	return xfrmInventoryUsesIDContext(context.Background(), raw, target, kind)
+}
+
+// Production inspection supplies the caller's cancellation and deadline to
+// the NSS compatibility gate. The context-free wrapper keeps parser fixtures
+// independent of Engine and host I/O.
+func xfrmInventoryUsesIDContext(ctx context.Context, raw []byte, target uint32, kind string) (bool, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return false, fmt.Errorf("XFRM inventory inspection interrupted")
+	}
 	if kind != "policy" && kind != "state" {
 		return false, fmt.Errorf("unsupported XFRM inventory")
 	}
@@ -44,7 +57,7 @@ func xfrmInventoryUsesID(raw []byte, target uint32, kind string) (bool, error) {
 		}
 		return false, nil
 	}
-	return xfrmTextUsesID(raw, target, kind)
+	return xfrmTextUsesID(ctx, raw, target, kind)
 }
 
 // iproute2 writes structural separators as ASCII bytes, not Unicode text.
@@ -261,12 +274,35 @@ func validXFRMEndpoint(value, kind string) bool {
 // unindented concrete src/dst header and ONE valid policy dir or state proto.
 // An if_id token must have exactly one bounded value per record. Ambiguous
 // input is unknown, not proof of empty state; we do not accept free-form grep.
-func xfrmTextUsesID(raw []byte, target uint32, kind string) (bool, error) {
+func xfrmTextUsesID(ctx context.Context, raw []byte, target uint32, kind string) (bool, error) {
 	seenRecord := false
 	hasDescriptor := false
 	seenID := false
 	seenSelector := false
 	found := false
+	// A large legacy SA inventory can repeat the same transport selector
+	// hundreds of times. Keep NSS answers local to this single read-only
+	// snapshot; never cache them across independent host inspections.
+	type protocolAnswer struct {
+		id uint64
+		ok bool
+	}
+	protocols := make(map[string]protocolAnswer)
+	// Bound the TOTAL NSS lookup budget for one host inventory, not just
+	// individual getent processes. A slow third-party provider cannot turn
+	// many otherwise-valid selector rows into an unbounded preflight.
+	lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	resolveProtocol := func(value string) (uint64, bool) {
+		if answer, exists := protocols[value]; exists {
+			return answer.id, answer.ok
+		}
+		id, ok := xfrmSelectorProtocolContext(lookupCtx, value)
+		if len(protocols) < 256 {
+			protocols[value] = protocolAnswer{id: id, ok: ok}
+		}
+		return id, ok
+	}
 	finish := func() error {
 		if seenRecord && !hasDescriptor {
 			return fmt.Errorf("incomplete XFRM text record")
@@ -312,7 +348,7 @@ func xfrmTextUsesID(raw []byte, target uint32, kind string) (bool, error) {
 			if kind != "state" || !hasDescriptor || seenSelector {
 				return false, fmt.Errorf("misplaced or duplicate XFRM state selector")
 			}
-			if err := validateXFRMStateSelector(fields); err != nil {
+			if err := validateXFRMStateSelector(fields, resolveProtocol); err != nil {
 				return false, err
 			}
 			seenSelector = true
@@ -354,7 +390,7 @@ func xfrmTextUsesID(raw []byte, target uint32, kind string) (bool, error) {
 // printed by iproute2's xfrm_selector_print. Selector attributes are NOT
 // parent-SA identifiers; in particular any if_id at this scope is malformed.
 // Unknown attributes fail closed rather than being skipped as an empty ID.
-func validateXFRMStateSelector(fields [][]byte) error {
+func validateXFRMStateSelector(fields [][]byte, protocol func(string) (uint64, bool)) error {
 	if len(fields) < 5 || !bytes.Equal(fields[0], []byte("sel")) ||
 		!bytes.Equal(fields[1], []byte("src")) || !bytes.Equal(fields[3], []byte("dst")) ||
 		!validXFRMEndpoint(string(fields[2]), "policy") ||
@@ -378,7 +414,7 @@ func validateXFRMStateSelector(fields [][]byte) error {
 		case "proto":
 			currentRank = 1
 			var ok bool
-			protoID, ok = xfrmSelectorProtocol(value)
+			protoID, ok = protocol(value)
 			if !ok {
 				return fmt.Errorf("invalid XFRM selector protocol")
 			}
@@ -492,13 +528,21 @@ func validXFRMSelectorDevice(name string) bool {
 }
 
 // iproute2's strxf_proto() uses libc getprotobynumber(), returning the
-// current host protocol database's PRIMARY name (not a fixed IANA list).
-// Debian/Ubuntu use /etc/protocols for the standard file-backed database,
-// including names absent from any hand-curated list. Unknown, unavailable,
-// corrupt or excessive data must NOT prove a valid selector; numeric kernel
-// protocol IDs remain independently bounded to 8 bits. Other NSS sources
-// can only lead to a conservative rejection, never a guessed identity.
+// host NSS database's PRIMARY name (not a fixed IANA list). Parse the
+// bounded local file-backed table first, then verify that libc NSS actually
+// returns the SAME primary for that numeric ID. Debian/Ubuntu may configure
+// db, files, and additional NSS modules; a customized provider must never
+// silently make /etc/protocols alone authoritative for vacancy. Unknown,
+// unavailable, inconsistent or excessive data fail closed. Numeric kernel
+// protocol IDs remain independently bounded to canonical uint8 decimal.
 func xfrmSelectorProtocol(value string) (uint64, bool) {
+	return xfrmSelectorProtocolContext(context.Background(), value)
+}
+
+func xfrmSelectorProtocolContext(ctx context.Context, value string) (uint64, bool) {
+	if ctx == nil || ctx.Err() != nil {
+		return 0, false
+	}
 	if xfrmUnsignedDecimal(value, 8) {
 		n, _ := strconv.ParseUint(value, 10, 8)
 		return n, n != 0
@@ -517,7 +561,70 @@ func xfrmSelectorProtocol(value string) (uint64, bool) {
 	if err != nil || len(data) > maxProtocols {
 		return 0, false
 	}
-	return xfrmSelectorProtocolTable(value, data)
+	id, ok := xfrmSelectorProtocolTable(value, data)
+	return id, ok && xfrmNSSProtocolMatches(ctx, value, id)
+}
+
+// xfrmNSSProtocolMatches checks glibc's effective NSS lookup, including
+// non-file providers, rather than trusting /etc/protocols blindly. GNU
+// getent protocols <decimal> calls getprotobynumber(), the same lookup
+// iproute2 uses for legacy selector names. A missing getent binary, NSS
+// timeout, malformed output or a different primary name is UNSUPPORTED
+// semantics: do not turn it into an apparently vacant XFRM inventory.
+// Use the distro's absolute glibc getent path, not an executable from PATH.
+func xfrmNSSProtocolMatches(parent context.Context, name string, number uint64) bool {
+	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/usr/bin/getent", "protocols", strconv.FormatUint(number, 10))
+	// Bound Wait even if a broken NSS subprocess leaves its stdout pipe
+	// inherited by another process after getent itself has exited.
+	cmd.WaitDelay = 500 * time.Millisecond
+	var output xfrmLimitedOutput
+	defer clear(output.bytes)
+	cmd.Stdout = &output
+	cmd.Stderr = io.Discard // NSS/provider errors are untrusted data.
+	if err := cmd.Run(); err != nil || ctx.Err() != nil {
+		return false
+	}
+	return xfrmNSSPrimaryMatches(name, number, output.bytes)
+}
+
+// Cap even a hostile/misconfigured NSS provider's output while subprocess
+// timeout independently bounds a provider that stops responding or writing.
+type xfrmLimitedOutput struct{ bytes []byte }
+
+func (w *xfrmLimitedOutput) Write(p []byte) (int, error) {
+	const maxOutput = 4096
+	if len(p) > maxOutput-len(w.bytes) {
+		return 0, fmt.Errorf("oversized NSS protocols result")
+	}
+	w.bytes = append(w.bytes, p...)
+	return len(p), nil
+}
+
+// getent emits one protocol record with the canonical primary, decimal ID
+// and zero or more aliases. Never accept partial/multiline records, binary
+// controls, a different number or a different primary name as equivalence.
+func xfrmNSSPrimaryMatches(name string, number uint64, raw []byte) bool {
+	if len(raw) == 0 || len(raw) > 4096 || raw[len(raw)-1] != '\n' ||
+		bytes.Count(raw, []byte("\n")) != 1 || bytes.IndexByte(raw, 0) >= 0 ||
+		bytes.IndexByte(raw, '\r') >= 0 {
+		return false
+	}
+	for _, c := range raw[:len(raw)-1] {
+		// GNU getent emits only space-padded text before its final newline.
+		// Control bytes make even a seemingly matching primary ambiguous.
+		if c < 0x20 || c == 0x7f {
+			return false
+		}
+	}
+	fields := xfrmASCIIFields(raw[:len(raw)-1])
+	if len(fields) < 2 || string(fields[0]) != name ||
+		!xfrmUnsignedDecimal(string(fields[1]), 8) {
+		return false
+	}
+	id, err := strconv.ParseUint(string(fields[1]), 10, 8)
+	return err == nil && id == number
 }
 
 // getprotobynumber() selects the FIRST primary name for each number.

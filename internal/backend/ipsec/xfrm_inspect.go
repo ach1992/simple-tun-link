@@ -78,7 +78,7 @@ func (i XFRMVacancyInspector) RequireVacant(ctx context.Context, p Profile) erro
 		if err != nil {
 			return err
 		}
-		collides, inspectErr := xfrmInventoryUsesID(raw, p.InterfaceID, args[len(args)-1])
+		collides, inspectErr := xfrmInventoryUsesIDContext(ctx, raw, p.InterfaceID, args[len(args)-1])
 		clear(raw)
 		if inspectErr != nil {
 			return fmt.Errorf("cannot verify XFRM policy or SA identity")
