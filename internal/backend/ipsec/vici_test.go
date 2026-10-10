@@ -226,3 +226,37 @@ func TestVICIConnectionPayloadIsPerLinkAndPublicOnly(t *testing.T) {
 		})
 	}
 }
+
+func TestVICIProfileIsRevalidatedBeforeAnyIO(t *testing.T) {
+	p, err := NewProfile(testIPsecLink(t, domain.EncapESP))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*Profile)
+	}{
+		{"foreign connection name", func(x *Profile) { x.ConnectionName = "foreign-conn" }},
+		{"wrong XFRM id", func(x *Profile) { x.InterfaceID++ }},
+		{"changed traffic selectors", func(x *Profile) {
+			x.Link.Addresses.Local = x.Link.Addresses.Peer
+		}},
+		{"mutated IKE identity", func(x *Profile) { x.PeerIKEID = x.LocalIKEID }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := p
+			tc.mutate(&candidate)
+			if _, err := candidate.ConnectionRequest(); err == nil {
+				t.Fatal("noncanonical profile created unsafe VICI payload")
+			}
+			called := false
+			r := Reader{Dial: func(context.Context) (Session, error) {
+				called = true
+				return &fakeSession{}, nil
+			}}
+			if _, err := r.Inspect(context.Background(), candidate); err == nil || called {
+				t.Fatal("noncanonical profile reached daemon socket")
+			}
+		})
+	}
+}

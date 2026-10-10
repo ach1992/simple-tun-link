@@ -71,6 +71,9 @@ func (r Reader) Inspect(ctx context.Context, p Profile) (Snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return Snapshot{}, err
 	}
+	if err := p.validateIdentity(); err != nil {
+		return Snapshot{}, err
+	}
 	session, err := r.Dial(ctx)
 	if err != nil {
 		// A library/network error might contain daemon-controlled text;
@@ -130,6 +133,9 @@ func containsExactUnique(reply *vici.Message, key, target string) (bool, error) 
 // load a shared secret, or establish an IKE SA. Direct use of this message
 // without canonical Link locks and ownership proof is NOT supported.
 func (p Profile) ConnectionRequest() (*vici.Message, error) {
+	if err := p.validateIdentity(); err != nil {
+		return nil, err
+	}
 	l, r := p.LinkHostSelectors()
 	if p.ConnectionName == "" || p.ChildName == "" || p.InterfaceID == 0 ||
 		p.LocalIKEID == "" || p.PeerIKEID == "" {

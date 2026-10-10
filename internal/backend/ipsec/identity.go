@@ -85,6 +85,18 @@ func NewProfile(link domain.Link) (Profile, error) {
 	return p, nil
 }
 
+// validateIdentity prevents callers from assembling or mutating a Profile by
+// hand and bypassing the canonical policy/identity checks before VICI I/O.
+// A profile name is a routing/ownership identity, not untrusted free-form
+// operator input.
+func (p Profile) validateIdentity() error {
+	canonical, err := NewProfile(p.Link)
+	if err != nil || canonical != p {
+		return fmt.Errorf("noncanonical IPsec per-Link identity")
+	}
+	return nil
+}
+
 // ResourceClaims returns only public, exclusive identities for the Engine's
 // existing per-resource locks. The full Link ID is retained for VICI handles;
 // the bounded Linux interface name is independently checked on collision.
