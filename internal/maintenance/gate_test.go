@@ -118,3 +118,34 @@ func TestUninstallRejectsQueuedOldBinary(t *testing.T) {
 		t.Fatal("stale Engine admitted with absent canonical executable")
 	}
 }
+
+func TestUncommittedInstallerRecoveryBlocksEngine(t *testing.T) {
+	dir := t.TempDir()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "stl")
+	if err := os.Link(exe, target); err != nil {
+		t.Skipf("hardlinking test executable unavailable: %v", err)
+	}
+	g := Gate{Directory: dir, Canonical: target, testOnlyUnprivilegedPath: true}
+	unsettled := filepath.Join(dir, ".stl-install.incomplete")
+	if err := os.Mkdir(unsettled, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if release, err := g.Acquire(context.Background()); err == nil {
+		_ = release()
+		t.Fatal("Engine mutation was admitted while installer recovery is uncertain")
+	}
+	if err := os.WriteFile(filepath.Join(unsettled, "COMMITTED"), []byte("status=committed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	release, err := g.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("verified-image Engine with committed journal should be allowed: %v", err)
+	}
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+}
