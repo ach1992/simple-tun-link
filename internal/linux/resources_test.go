@@ -113,3 +113,19 @@ func TestParseUDPListenersHandlesIPv4AndIPv6(t *testing.T) {
 		t.Fatal("missing UDP port 4500")
 	}
 }
+
+func TestCollisionInspectorIncludesBareHostRoutes(t *testing.T) {
+	runner := resourceRunner{output: map[string]string{
+		"ip -json link show":            "[]",
+		"ip -json address show":         "[]",
+		"ip -json route show table all": `[{"dst":"10.88.2.1","dev":"eth0"}]`,
+		"ss -H -u -l -n":                "",
+	}}
+	inspector := CollisionInspector{Snapshotter: HostSnapshotter{Runner: runner}}
+	conflicts, err := inspector.Inspect(context.Background(), []domain.ResourceClaim{
+		{Kind: domain.ResourceLinkSubnet, Key: "10.88.2.0/31"},
+	})
+	if err != nil || len(conflicts) != 1 || conflicts[0].Claim.Key != "10.88.2.1/32" {
+		t.Fatalf("bare host route was not reserved: %+v %v", conflicts, err)
+	}
+}

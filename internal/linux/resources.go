@@ -139,7 +139,14 @@ func (s HostSnapshotter) Snapshot(ctx context.Context) (hostSnapshot, error) {
 		}
 		prefix, err := netip.ParsePrefix(dst)
 		if err != nil {
-			continue
+			// iproute2 may represent a host route as a bare address
+			// rather than with /32 or /128. Ignoring it can allocate
+			// a Link subnet over another existing host route.
+			addr, addrErr := netip.ParseAddr(dst)
+			if addrErr != nil || addr.Zone() != "" {
+				return hostSnapshot{}, fmt.Errorf("route inspection returned an invalid destination")
+			}
+			prefix = netip.PrefixFrom(addr, addr.BitLen())
 		}
 		prefix = prefix.Masked()
 		// An IPv4/IPv6 /0 is the default route even when iproute2
