@@ -298,3 +298,101 @@ func TestXFRMInventoryLegacyDescriptorAndHeaderValidation(t *testing.T) {
 		})
 	}
 }
+
+// Duplicate JSON keys inside Linux link entries must never hide another Link
+// name, a real XFRM kind, or an interface ID.
+func TestXFRMVacancyLinkInventoryDuplicateKeys(t *testing.T) {
+	p, err := NewProfile(testIPsecLink(t, domain.EncapESP))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := fmt.Sprintf("0x%x", p.InterfaceID)
+	cases := []struct {
+		name, inventory string
+		reject          bool
+	}{
+		{"ifname-later-foreign", fmt.Sprintf(`[{"ifname":"%s","ifname":"other"}]`, p.InterfaceName), true},
+		{"ifname-later-planned", fmt.Sprintf(`[{"ifname":"other","ifname":"%s"}]`, p.InterfaceName), true},
+		{"duplicate-linkinfo", `[{"ifname":"other","linkinfo":{"info_kind":"xfrm","info_data":{"if_id":1}},"linkinfo":{"info_kind":"veth"}}]`, true},
+		{"duplicate-info-kind", `[{"ifname":"other","linkinfo":{"info_kind":"xfrm","info_kind":"veth","info_data":{"if_id":1}}}]`, true},
+		{"duplicate-info-kind-reversed", `[{"ifname":"other","linkinfo":{"info_kind":"veth","info_kind":"xfrm","info_data":{"if_id":1}}}]`, true},
+		{"duplicate-info-data", `[{"ifname":"other","linkinfo":{"info_kind":"xfrm","info_data":{"if_id":1},"info_data":{"if_id":2}}}]`, true},
+		{"duplicate-if-id", fmt.Sprintf(`[{"ifname":"other","linkinfo":{"info_kind":"xfrm","info_data":{"if_id":"%s","if_id":1}}}]`, target), true},
+		{"duplicate-if-id-reversed", fmt.Sprintf(`[{"ifname":"other","linkinfo":{"info_kind":"xfrm","info_data":{"if_id":1,"if_id":"%s"}}}]`, target), true},
+		{"noncanonical-ifname", `[{"IfName":"other"}]`, true},
+		{"noncanonical-linkinfo", `[{"ifname":"other","LinkInfo":{"info_kind":"veth"}}]`, true},
+		{"noncanonical-info-kind", `[{"ifname":"other","linkinfo":{"Info_Kind":"xfrm","info_data":{"if_id":1}}}]`, true},
+		{"noncanonical-info-data", `[{"ifname":"other","linkinfo":{"info_kind":"xfrm","Info_Data":{"if_id":1}}}]`, true},
+		{"noncanonical-if-id", `[{"ifname":"other","linkinfo":{"info_kind":"xfrm","info_data":{"If_ID":1}}}]`, true},
+		{"missing-ifname", `[{}]`, true},
+		{"missing-xfrm-if-id", `[{"ifname":"other","linkinfo":{"info_kind":"xfrm","info_data":{}}}]`, true},
+		{"normal-physical-link", `[{"ifname":"lo"}]`, false},
+		{"normal-veth", `[{"ifname":"veth42","linkinfo":{"info_kind":"veth","info_data":{"peer":{"ifindex":42}}}}]`, false},
+		{"bridge-slave-link", `[{"ifname":"eth42","linkinfo":{"info_slave_kind":"bridge","info_slave_data":{"state":"forwarding"}}}]`, false},
+		{"foreign-xfrm", `[{"ifname":"not-stl","linkinfo":{"info_kind":"xfrm","info_data":{"if_id":"0x2a"}}}]`, false},
+		{"colliding-name", fmt.Sprintf(`[{"ifname":"%s"}]`, p.InterfaceName), true},
+		{"colliding-ifid", fmt.Sprintf(`[{"ifname":"other","linkinfo":{"info_kind":"xfrm","info_data":{"if_id":"%s"}}}]`, target), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := goodXFRMFixture()
+			f.rows["ip -details -json link show"] = []byte(tc.inventory)
+			err := (XFRMVacancyInspector{Runner: f.Run}).RequireVacant(context.Background(), p)
+			if (err != nil) != tc.reject {
+				t.Fatalf("unexpected link inventory result: err=%v reject=%t", err, tc.reject)
+			}
+		})
+	}
+}
+
+// Valid iproute2 state output can include both SA proto and selector proto.
+// The selector's transport protocol must not count as a second SA identity.
+func TestXFRMTextStateSelectorProtocolScope(t *testing.T) {
+	const id uint32 = 0x2121
+	const sa = "src 192.0.2.10 dst 192.0.2.11\n\tproto esp spi 0x12345678 reqid 17 mode tunnel\n"
+	const sel = "\tsel src 10.0.0.0/24 dst 10.1.0.0/24 proto tcp\n"
+	cases := []struct {
+		name, kind, text string
+		collides, reject bool
+	}{
+		{"selector-no-id", "state", sa + sel, false, false},
+		{"selector-different-id", "state", sa + "\tif_id 0x2a\n" + sel, false, false},
+		{"selector-target-id", "state", sa + sel + "\tif_id 0x2121\n", true, false},
+		{"selector-target-before", "state", sa + "\tif_id 0x2121\n" + sel, true, false},
+		{"true-duplicate-sa", "state", sa + "\tproto ah spi 0x1\n" + sel, false, true},
+		{"bare-sa-proto", "state", "src 192.0.2.10 dst 192.0.2.11\n\tproto\n" + sel, false, true},
+		{"no-sa-proto", "state", "src 192.0.2.10 dst 192.0.2.11\n" + sel, false, true},
+		{"invalid-sa-proto", "state", "src 192.0.2.10 dst 192.0.2.11\n\tproto tcp\n" + sel, false, true},
+		{"bare-selector", "state", sa + "\tsel\n", false, true},
+		{"broken-selector-endpoint", "state", sa + "\tsel src broken dst 10.1.0.0/24 proto tcp\n", false, true},
+		{"two-top-level-ids", "state", sa + "\tif_id 0x2a\n" + sel + "\tif_id 0x2121\n", false, true},
+		{"policy-nested-proto", "policy", "src 10.0.0.0/24 dst 10.1.0.0/24\n\tdir out priority 0\n\ttmpl src 192.0.2.10 dst 192.0.2.11 proto esp mode tunnel\n", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := xfrmInventoryUsesID([]byte(tc.text), id, tc.kind)
+			if (err != nil) != tc.reject || (!tc.reject && got != tc.collides) {
+				t.Fatalf("parser: collision=%v err=%v wantCollision=%v wantReject=%v", got, err, tc.collides, tc.reject)
+			}
+		})
+	}
+}
+
+func TestXFRMVacancyRejectsNonXFRMIfIDAmbiguity(t *testing.T) {
+	p, err := NewProfile(testIPsecLink(t, domain.EncapESP))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []string{
+		`[{"ifname":"other","linkinfo":{"info_kind":"XFRM","info_data":{"if_id":42}}}]`,
+		`[{"ifname":"other","linkinfo":{"info_kind":"veth","info_data":{"if_id":42}}}]`,
+		`[{"ifname":"other","linkinfo":{"info_kind":"veth","info_data":{"if_id":42,"if_id":43}}}]`,
+	}
+	for _, raw := range cases {
+		f := goodXFRMFixture()
+		f.rows["ip -details -json link show"] = []byte(raw)
+		if err := (XFRMVacancyInspector{Runner: f.Run}).RequireVacant(context.Background(), p); err == nil {
+			t.Fatal("ambiguous link inventory accepted")
+		}
+	}
+}

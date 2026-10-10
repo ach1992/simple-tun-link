@@ -61,39 +61,10 @@ func (i XFRMVacancyInspector) RequireVacant(ctx context.Context, p Profile) erro
 	if err != nil {
 		return err
 	}
-	var links []struct {
-		IfName   string `json:"ifname"`
-		LinkInfo struct {
-			Kind string `json:"info_kind"`
-			Data struct {
-				IfID json.RawMessage `json:"if_id"`
-			} `json:"info_data"`
-		} `json:"linkinfo"`
-	}
-	if err := json.Unmarshal(raw, &links); err != nil || links == nil {
-		clear(raw)
-		return fmt.Errorf("invalid XFRM host link inventory")
-	}
+	inspectErr := xfrmLinkInventoryVacant(raw, p)
 	clear(raw)
-	seen := map[string]bool{}
-	for _, l := range links {
-		if l.IfName == "" || seen[l.IfName] {
-			return fmt.Errorf("ambiguous host interface inventory")
-		}
-		seen[l.IfName] = true
-		if l.IfName == p.InterfaceName {
-			return fmt.Errorf("IPsec interface name already occupied")
-		}
-		if l.LinkInfo.Kind != "xfrm" {
-			continue
-		}
-		id, err := xfrmIfID(l.LinkInfo.Data.IfID, true)
-		if err != nil {
-			return fmt.Errorf("cannot verify foreign XFRM interface identity")
-		}
-		if id == p.InterfaceID {
-			return fmt.Errorf("IPsec XFRM interface ID already occupied")
-		}
+	if inspectErr != nil {
+		return inspectErr
 	}
 
 	// A deleted/orphaned interface is not proof that its policies or SAs
@@ -117,6 +88,108 @@ func (i XFRMVacancyInspector) RequireVacant(ctx context.Context, p Profile) erro
 		}
 	}
 	return nil
+}
+
+// xfrmLinkInventoryVacant uses the same duplicate-aware JSON decoding as the
+// policy/SA parser. Ordinary json.Unmarshal into a link struct can silently
+// let a later ifname, info_kind, info_data or if_id overwrite an earlier one,
+// concealing another administrator's interface or XFRM ID.
+func xfrmLinkInventoryVacant(raw []byte, p Profile) error {
+	var entries []json.RawMessage
+	parseErr := json.Unmarshal(raw, &entries)
+	defer func() {
+		for _, entry := range entries {
+			clear(entry)
+		}
+	}()
+	if parseErr != nil || entries == nil {
+		return fmt.Errorf("invalid XFRM host link inventory")
+	}
+	seen := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		name, xfrmID, isXFRM, err := xfrmLinkIdentity(entry)
+		if err != nil || name == "" || seen[name] {
+			return fmt.Errorf("ambiguous host interface inventory")
+		}
+		seen[name] = true
+		if name == p.InterfaceName {
+			return fmt.Errorf("IPsec interface name already occupied")
+		}
+		if isXFRM && xfrmID == p.InterfaceID {
+			return fmt.Errorf("IPsec XFRM interface ID already occupied")
+		}
+	}
+	return nil
+}
+
+// Parse one link record without ever treating nested last-key-wins data as a
+// verified identity. An ordinary physical link can legitimately lack
+// linkinfo, and a bridge slave can have only info_slave_kind/info_slave_data;
+// neither form needs an XFRM if_id.
+func xfrmLinkIdentity(raw []byte) (name string, ifID uint32, xfrm bool, err error) {
+	link, err := xfrmUniqueJSONObject(raw, "ifname", "linkinfo")
+	if err != nil {
+		return "", 0, false, fmt.Errorf("ambiguous XFRM link record")
+	}
+	defer clearXFRMJSONObject(link)
+	if err := json.Unmarshal(link["ifname"], &name); err != nil || name == "" {
+		return "", 0, false, fmt.Errorf("missing XFRM interface name")
+	}
+	rawInfo, present := link["linkinfo"]
+	if !present {
+		return name, 0, false, nil
+	}
+	info, err := xfrmUniqueJSONObject(rawInfo, "info_kind", "info_data")
+	if err != nil {
+		return "", 0, false, fmt.Errorf("ambiguous XFRM linkinfo")
+	}
+	defer clearXFRMJSONObject(info)
+	rawKind, kindPresent := info["info_kind"]
+	rawData, dataPresent := info["info_data"]
+	if !kindPresent {
+		if dataPresent {
+			return "", 0, false, fmt.Errorf("XFRM link data without link kind")
+		}
+		return name, 0, false, nil
+	}
+	var kind string
+	if err := json.Unmarshal(rawKind, &kind); err != nil || kind == "" {
+		return "", 0, false, fmt.Errorf("invalid XFRM link kind")
+	}
+	if strings.EqualFold(kind, "xfrm") && kind != "xfrm" {
+		return "", 0, false, fmt.Errorf("noncanonical XFRM link kind")
+	}
+	if !dataPresent {
+		if kind == "xfrm" {
+			return "", 0, false, fmt.Errorf("XFRM link has no interface ID data")
+		}
+		return name, 0, false, nil
+	}
+	// Examine data on every link kind before declaring vacancy. An otherwise
+	// ordinary link may have arbitrary driver data, but a purported non-XFRM
+	// link advertising an XFRM if_id is inconsistent and cannot be trusted.
+	data, err := xfrmUniqueJSONObject(rawData, "if_id")
+	if err != nil {
+		return "", 0, false, fmt.Errorf("ambiguous XFRM interface ID data")
+	}
+	defer clearXFRMJSONObject(data)
+	if kind != "xfrm" {
+		if _, hasID := data["if_id"]; hasID {
+			return "", 0, false, fmt.Errorf("inconsistent non-XFRM interface identifier")
+		}
+		return name, 0, false, nil
+	}
+	ifID, err = xfrmIfID(data["if_id"], true)
+	if err != nil {
+		return "", 0, false, fmt.Errorf("cannot verify foreign XFRM interface identity")
+	}
+	return name, ifID, true, nil
+}
+
+func clearXFRMJSONObject(fields map[string]json.RawMessage) {
+	for _, value := range fields {
+		clear(value)
+	}
 }
 
 // Never return raw command output/error text: XFRM state inspection may

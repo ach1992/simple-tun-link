@@ -50,7 +50,7 @@ func xfrmInventoryUsesID(raw []byte, target uint32, kind string) (bool, error) {
 // struct/map unmarshal otherwise silently keeps the LAST duplicate, including
 // a conflicting if_id, dir, proto, src or dst. A noncanonical case variant of
 // any of these security-relevant names is also ambiguous, not ignorable.
-func xfrmUniqueJSONObject(raw json.RawMessage) (result map[string]json.RawMessage, err error) {
+func xfrmUniqueJSONObject(raw json.RawMessage, retain ...string) (result map[string]json.RawMessage, err error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	open, err := dec.Token()
 	if err != nil || open != json.Delim('{') {
@@ -80,7 +80,7 @@ func xfrmUniqueJSONObject(raw json.RawMessage) (result map[string]json.RawMessag
 			return nil, fmt.Errorf("duplicate XFRM JSON field")
 		}
 		seen[key] = true
-		for _, reserved := range []string{"if_id", "dir", "proto", "src", "dst"} {
+		for _, reserved := range []string{"if_id", "dir", "proto", "src", "dst", "ifname", "linkinfo", "info_kind", "info_data"} {
 			if strings.EqualFold(key, reserved) && key != reserved {
 				return nil, fmt.Errorf("noncanonical XFRM JSON field")
 			}
@@ -90,10 +90,16 @@ func xfrmUniqueJSONObject(raw json.RawMessage) (result map[string]json.RawMessag
 			clear(value)
 			return nil, fmt.Errorf("invalid XFRM JSON field value")
 		}
-		switch key {
-		case "if_id", "dir", "proto", "src", "dst":
+		needed := false
+		for _, field := range retain {
+			if field == key {
+				needed = true
+				break
+			}
+		}
+		if needed {
 			values[key] = value
-		default:
+		} else {
 			// Unrelated SA fields may contain secret keys; never retain
 			// decoded copies, even though the caller also clears raw bytes.
 			clear(value)
@@ -112,7 +118,7 @@ func xfrmUniqueJSONObject(raw json.RawMessage) (result map[string]json.RawMessag
 // Only the structurally validated policy/SA row may supply an optional if_id.
 // Always zero the retained decoded JSON values before returning.
 func xfrmJSONRowUsesID(raw []byte, target uint32, kind string) (bool, error) {
-	row, err := xfrmUniqueJSONObject(raw)
+	row, err := xfrmUniqueJSONObject(raw, "if_id", "dir", "proto", "src", "dst")
 	if err != nil {
 		return false, fmt.Errorf("ambiguous JSON XFRM inventory")
 	}
@@ -232,14 +238,29 @@ func xfrmTextUsesID(raw []byte, target uint32, kind string) (bool, error) {
 		} else if !seenRecord || bytes.Equal(fields[0], []byte("src")) {
 			return false, fmt.Errorf("unexpected XFRM text inventory")
 		}
-		for j, field := range fields {
-			if bytes.Equal(field, descriptor) {
-				if hasDescriptor || j+1 >= len(fields) ||
-					!validXFRMDescriptor(kind, string(fields[j+1])) {
-					return false, fmt.Errorf("invalid or duplicate XFRM text descriptor")
-				}
-				hasDescriptor = true
+		// The record descriptor belongs to the canonical first token of
+		// the SA/protocol or policy/direction line. State selectors such as
+		// "sel src ... dst ... proto tcp" and policy templates may also
+		// contain "proto", but do not describe the parent SA's protocol.
+		if bytes.Equal(fields[0], descriptor) {
+			if hasDescriptor || len(fields) < 2 ||
+				!validXFRMDescriptor(kind, string(fields[1])) {
+				return false, fmt.Errorf("invalid or duplicate XFRM text descriptor")
 			}
+			hasDescriptor = true
+		}
+		if bytes.Equal(fields[0], []byte("sel")) {
+			if kind != "state" || len(fields) < 5 ||
+				!bytes.Equal(fields[1], []byte("src")) ||
+				!bytes.Equal(fields[3], []byte("dst")) ||
+				!validXFRMEndpoint(string(fields[2]), "policy") ||
+				!validXFRMEndpoint(string(fields[4]), "policy") {
+				return false, fmt.Errorf("invalid XFRM state selector")
+			}
+			// A selector-level proto/if_id does not grant parent identity.
+			continue
+		}
+		for j, field := range fields {
 			if !bytes.Equal(field, []byte("if_id")) {
 				continue
 			}

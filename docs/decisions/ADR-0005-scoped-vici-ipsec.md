@@ -107,7 +107,10 @@ colliding names/32-bit IDs, and orphaned policies/SAs with matching if_id.
 XFRM inspection accepts only verified JSON rows with unique relevant field
 identities, complete policy/SA endpoints and valid `dir` / `proto`, or
 semantically verified legacy iproute2 text with complete headers and valid
-descriptor values. An absent `if_id` is harmless only after the row is
+descriptor values. The Linux link inventory must also reject duplicate or
+case-ambiguous ifname/linkinfo/info_kind/info_data/if_id identities at each
+relevant nesting level. A state selector's proto is not a second SA proto;
+only structurally located top-level descriptor lines establish SA identity. An absent `if_id` is harmless only after the row is
 positively recognized; a null, conflicting or invalid present ID is unknown.
 Never accept an inventory probe failure as evidence of vacancy. Kernel state
 and temporary decoded JSON copies are sensitive and must be cleared, never
