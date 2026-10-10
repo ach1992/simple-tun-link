@@ -227,6 +227,68 @@ tests cover foreign interface-name/ID collisions and an orphan policy.
 They do not establish IKEv2, ESP/NAT-T traffic, VICI mutation or the release
 acceptance matrix. Issues #7 and #12 remain open.
 
+
+## Unregistered IPsec VICI configuration journal (not an operational backend)
+
+The Engine can now record an exact public PendingIPsec identity and
+random nonce in a durable source-only journal. **The production build has
+NO VICI `load-shared` or `load-conn` writer, no generally constructible
+effectful adapter, and NO `ApplyPreparedIPsecVICI` entrypoint.** The only
+production step is `PrepareIPsecVICI`, which rechecks protected PSK,
+canonical locks and complete read-only daemon/kernel vacancy, then records
+`prepared` without changing strongSwan. The existing public
+`CheckIPsecActivationVacancy` also stays read-only and grants no
+capability to perform a daemon mutation.
+
+An exclusively **test-compiled** fake-operation simulator advances
+strictly adjacent journal phases to exercise cancellation, fail-closed
+publication ambiguity, concurrency and observation/error handling. It has
+no real govici effectful transport. The journal phases `issuing-shared`
+and `issuing-connection` are reserved for future owner-proof integration:
+if they ever appear, their effect must be treated as uncertain; name
+presence in `shared-observed` or `connection-observed` is still NOT
+proof of ownership. No existing or prospective state entry authorizes
+automatic retransmission, replacement, unload, deletion or retirement.
+The protected PSK remains private and unchanged.
+
+**Race finding and operational stop:** upstream strongSwan `load-shared`
+replaces a same-ID secret and `load-conn` replaces/updates a same-name
+connection. A foreign daemon client can insert that object after the
+last `get-conns`/`list-conns`/`get-shared` read and before the write;
+STL's locks cannot stop a third-party client. More inspection cannot
+close this TOCTOU window. No real writer may be reintroduced until an
+atomic load-if-absent/exclusive ownership protocol, or a separately
+approved isolated-daemon strategy, is proven against foreign-writer
+races. It must also pass all logging, credential and lifecycle gates.
+
+The new `ipsec_vici_operations` member is optional under state schema
+v2, so a current reader can load prior state. Older v2 readers with
+strict unknown-field rejection cannot downgrade/read a journal-bearing
+v2 file; currently no standard runtime path writes such a journal.
+A schema migration or explicit upgrade-only support policy must be
+settled before production enablement. No non-compatible downgrade is
+silently attempted.
+
+**Upstream daemon-log prerequisite:** strongSwan's VICI shared-key loader
+contains a CFG debug-level-4 raw-secret trace (`DBG4(DBG_CFG, "key: %#B",
+&data)` in `vici_cred.c`). STL deliberately neither logs raw PSKs nor
+inserts them into ordinary output, but cannot prevent an independently
+configured strongSwan daemon from logging them at this verbose level.
+The future production activation contract MUST check/enforce a safe daemon
+logging policy before transferring any PSK (or reject that environment),
+including effective file/journald logging backends; absence of such an
+attestation is not an authorized production key load. Do not mutate global
+strongSwan logging policy merely to make an unsupported host pass.
+Reference: https://github.com/strongswan/strongswan/blob/master/src/libcharon/plugins/vici/vici_cred.c
+
+A disposable Debian 13 netns test also established that passing an `alias`
+when creating an XFRM link is **not** sufficient to atomically persist its
+`ifalias`; setting the alias separately was necessary. Future kernel
+lifecycle/rollback cannot equate a name-shaped or later matching alias
+with proof that STL created the interface. The durable XFRM write-and-
+cleanup transaction, IKEv2/ESP/NAT-T traffic and Issue #12 release
+integration remain outstanding.
+
 ## Setup-link safety
 
 A setup link is untrusted input.
