@@ -63,11 +63,11 @@ func TestUninstallPreflightCanonicalStateAndUnit(t *testing.T) {
 		ID: id, Backend: domain.BackendGRE, Encapsulation: domain.EncapNative,
 		Underlay: domain.Underlay{
 			Local: netip.MustParseAddr("192.0.2.10"),
-			Peer: netip.MustParseAddr("198.51.100.20"),
+			Peer:  netip.MustParseAddr("198.51.100.20"),
 		},
 		Addresses: domain.LinkAddresses{
 			Local: netip.MustParsePrefix("10.80.20.0/31"),
-			Peer: netip.MustParsePrefix("10.80.20.1/31"),
+			Peer:  netip.MustParsePrefix("10.80.20.1/31"),
 		},
 	}
 	if err := store.Update(ctx, func(s *state.Snapshot) error {
