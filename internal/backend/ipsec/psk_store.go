@@ -118,8 +118,11 @@ func (s *PSKStore) PutNew(id domain.LinkID, raw []byte) error {
 	defer clear(content)
 	hex.Encode(content[:pskWireHexSize], key.material[:])
 	content[pskWireHexSize] = '\n'
-	for len(content) > 0 {
-		n, writeErr := unix.Write(fd, content)
+	// Never advance the slice scheduled for zeroization: each successful
+	// write must not leave earlier PSK bytes stranded in this buffer.
+	remaining := content
+	for len(remaining) > 0 {
+		n, writeErr := unix.Write(fd, remaining)
 		if errors.Is(writeErr, unix.EINTR) {
 			continue
 		}
@@ -127,7 +130,7 @@ func (s *PSKStore) PutNew(id domain.LinkID, raw []byte) error {
 			unix.Close(fd)
 			return fmt.Errorf("cannot write protected IPsec credential")
 		}
-		content = content[n:]
+		remaining = remaining[n:]
 	}
 	if err := unix.Fsync(fd); err != nil {
 		unix.Close(fd)

@@ -128,6 +128,33 @@ still preview-only; some older offers may contain bounded PSKs other than
 Their eventual migration/import policy needs explicit compatibility handling
 before exposing a user-facing IPsec import or rekey flow.
 
+### Engine-locked IPsec credential intent (pre-operational)
+
+A source-only canonical Engine staging transaction now reserves a full
+public IPsec Link identity and its collision-sensitive resource claims in
+`state.json` before an explicitly **SENSITIVE** Quick Link can be handed
+to a peer. The sender reserves a SHA-256 digest of the exact legacy v2
+Quick Link; the receiving endpoint records the fully inverted public Link
+and role. Raw PSK and setup URL do **not** enter ordinary state.
+
+The Engine acquires the existing shared maintenance gate, per-Link lock,
+and resource locks. With no previous pending record it uses no-replace
+PSK publication, then durable public-intent publication before invoking
+an explicitly supplied sensitive handoff callback. A retry requires the
+same complete public Link, original exact setup-link digest, and exact
+protected PSK. Failed or uncertain publication preserves an orphan PSK
+or pending record; it does not guess ownership or silently adopt, remove,
+or rekey the file. An explicit future operator reconciliation path is
+required for orphaned keys without a matching durable public intent.
+
+Existing v2 IPsec payloads still decode for preview; only exactly 32-byte
+PSKs may enter the new protected staging transaction. Different-length
+legacy payloads remain preview-only and require an explicit user decision
+about rekey/import, not automatic coercion. The staged state is **not**
+a committed live Link and cannot authorize VICI writes, XFRM changes,
+SA teardown, credential retirement, or an operational success message.
+No production IPsec CLI/backend is registered by this milestone.
+
 ## Setup-link safety
 
 A setup link is untrusted input.
