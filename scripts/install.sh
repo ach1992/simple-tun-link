@@ -342,16 +342,21 @@ record_tmp=$(mktemp "$record_dir/.install-record.XXXXXXXX")
 printf 'format=1\nproject=simple-tun-link\nversion=%s\nsha256=%s\n' "$version" "$new_hash" > "$record_tmp"
 chmod 0600 "$record_tmp"
 new_record_hash=$(hash_file "$record_tmp")
+# The incoming executable and prepared metadata must be durable before the
+# first destructive rename. A directory sync records the recovery namespace.
+sync_paths "$stage/incoming" "$record_tmp" "$stage" "$record_dir" "$bin_dir" || fail 'cannot durably prepare incoming install transaction'
 
 if [[ $action == update ]]; then
   cp -p -- "$target" "$stage/previous-stl"
   cp -p -- "$record" "$stage/previous-record"
-  [[ $(hash_file "$target") == "$prior_hash" ]] || fail 'installed binary changed before update'
+  [[ $(hash_file "$target") == "$prior_hash" && $(hash_file "$record") == "$prior_record_hash" ]] || fail 'installed binary or record changed before update'
+  sync_paths "$stage/previous-stl" "$stage/previous-record" "$stage" "$bin_dir" || fail 'cannot durably preserve update rollback sources'
   if [[ $prior_hash == "$new_hash" ]]; then
     printf 'stl is already installed from this exact artifact (%s).\n' "$version"
     exit 0
   fi
 fi
+failpoint prepublish-sync
 # Incoming and canonical executable are in the same directory/filesystem.
 # mv -T is an atomic rename: the old executable is never truncated in place.
 mv -T -- "$stage/incoming" "$target"
@@ -362,9 +367,11 @@ if [[ $action == update && -n $bundle && $prefix != /usr/local && ${STL_INSTALL_
   printf 'damaged\n' >> "$stage/previous-stl"
   fail 'injected damaged recovery source (offline isolated test only)'
 fi
-sync -f "$target" "$bin_dir" || fail 'binary publication sync failed'
+sync_paths "$target" "$bin_dir" || fail 'binary publication sync failed'
+failpoint post-executable-sync
 if [[ $action == install ]]; then
   ln -s stl "$alias"
+  sync_paths "$bin_dir" || fail 'alias publication sync failed'
 fi
 if [[ $action == update ]]; then
   [[ $(hash_file "$record") == "$prior_record_hash" ]] || fail 'install record changed during binary update; reconciliation required'
@@ -372,6 +379,8 @@ else
   [[ ! -e $record && ! -L $record ]] || fail 'install record appeared during installation; refusing overwrite'
 fi
 mv -T -- "$record_tmp" "$record"
+sync_paths "$record" "$record_dir" || fail 'ownership record publication sync failed'
+failpoint record-sync
 [[ $(hash_file "$record") == "$new_record_hash" && $(hash_file "$target") == "$new_hash" && -L $alias && $(readlink -- "$alias") == stl ]] || fail 'post-publication identity check failed'
-sync -f "$record" "$record_dir" || fail 'installation metadata sync failed'
+commit_marker "$new_hash"
 printf '%s stl %s for linux/%s; stlink resolves to the same executable.\n' "${action^}" "$version" "$arch"
