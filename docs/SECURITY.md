@@ -134,7 +134,8 @@ A source-only canonical Engine staging transaction now reserves a full
 public IPsec Link identity and its collision-sensitive resource claims in
 `state.json` before an explicitly **SENSITIVE** Quick Link can be handed
 to a peer. The sender reserves a SHA-256 digest of the exact legacy v2
-Quick Link; the receiving endpoint records the fully inverted public Link
+Quick Link; the receiving endpoint requires confirmation of the exact
+original previewed URL bytes, then records the fully inverted public Link
 and role. Raw PSK and setup URL do **not** enter ordinary state.
 
 The Engine acquires the existing shared maintenance gate, per-Link lock,
