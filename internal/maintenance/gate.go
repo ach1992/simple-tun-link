@@ -33,6 +33,17 @@ type Gate struct {
 }
 
 func NewInstalledGate() Gate {
+	// A supported installer may use an explicit prefix in a disposable/local
+	// environment. Resolve the running executable path (including its old
+	// identity after rename) so its Engine acquires that installer's flock.
+	running, err := os.Readlink("/proc/self/exe")
+	if err == nil {
+		running = strings.TrimSuffix(running, " (deleted)")
+		if filepath.Base(running) == "stl" && filepath.Base(filepath.Dir(running)) == "bin" {
+			prefix := filepath.Dir(filepath.Dir(running))
+			return Gate{Directory: filepath.Join(prefix, "lib", "simple-tun-link"), Canonical: filepath.Join(prefix, "bin", "stl")}
+		}
+	}
 	return Gate{Directory: DefaultDirectory, Canonical: CanonicalSTL}
 }
 
@@ -155,6 +166,27 @@ func (g Gate) validateExecutableIdentity(dir string) error {
 	}
 	if !filepath.IsAbs(canonical) || filepath.Clean(canonical) != canonical {
 		return fmt.Errorf("maintenance executable path must be absolute and canonical")
+	}
+	// A failed/partially recovered installer leaves a private transaction
+	// directory without a durably published COMMITTED marker. Do not run any
+	// Link mutation while its executable/record transition is unresolved.
+	entries, err := os.ReadDir(filepath.Dir(canonical))
+	if err != nil {
+		return fmt.Errorf("cannot inspect installation recovery directories: %w", err)
+	}
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), ".stl-install.") {
+			continue
+		}
+		recovery := filepath.Join(filepath.Dir(canonical), entry.Name())
+		info, statErr := os.Lstat(recovery)
+		if statErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("untrusted installer recovery identity; reconcile before Link mutation")
+		}
+		marker, markerErr := os.Lstat(filepath.Join(recovery, "COMMITTED"))
+		if markerErr != nil || !marker.Mode().IsRegular() {
+			return fmt.Errorf("unresolved installer recovery requires reconciliation before Link mutation")
+		}
 	}
 	// For a checkout or manually run binary with no STL managed installation,
 	// the lock still protects concurrent installs but there is no managed
