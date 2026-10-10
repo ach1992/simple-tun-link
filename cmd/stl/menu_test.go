@@ -22,7 +22,7 @@ func runMenuTest(t *testing.T, root, input string) (int, string, string) {
 
 func TestMenuTasksAndNavigationDoNotCreateState(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "absent")
-	code, output, errOut := runMenuTest(t, root, "1\n3\n\n4\n\n5\n6\n7\n8\n")
+	code, output, errOut := runMenuTest(t, root, "1\nq\n3\n\n4\n\n5\n6\n7\n8\n")
 	if code != 0 || errOut != "" {
 		t.Fatalf("menu failed: code=%d err=%q", code, errOut)
 	}
@@ -31,7 +31,7 @@ func TestMenuTasksAndNavigationDoNotCreateState(t *testing.T) {
 		"Local address candidate:", "Configured Links: 0",
 		"Create Tunnel", "Import Setup Link", "Manage Links",
 		"Tests & Diagnostics", "Settings", "Update", "Uninstall", "Exit",
-		"stl link ensure --stdin",
+		"GRE Native (default)", "Create cancelled",
 		"Not implemented", "0 configured link(s)", "bounded probes",
 	} {
 		if !strings.Contains(output, item) {
@@ -104,6 +104,9 @@ func TestMenuEOFAndCommandArgumentBoundaries(t *testing.T) {
 }
 
 func TestMenuHeaderSanitizesUntrustedTerminalText(t *testing.T) {
+	if got := safeMenuText(strings.Repeat("😀", 25)); len(got) > 96 {
+		t.Fatalf("UTF-8 header exceeded 96-byte bound: %d", len(got))
+	}
 	got := safeMenuText("host\x1b[31m\nnow\u202eRTL\u2069\u200d")
 	if strings.Contains(got, "\x1b") || strings.Contains(got, "\n") || strings.Contains(got, "\u202e") ||
 		strings.Contains(got, "\u2069") || strings.Contains(got, "\u200d") ||
