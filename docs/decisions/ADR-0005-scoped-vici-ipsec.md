@@ -181,3 +181,65 @@ VICI names alone NEVER authorize destruction of an existing daemon object.
 No production runtime registration, VICI or kernel mutation is enabled by
 this checkpoint. Issue #7 retains the operational backend and backend-focus
 IKEv2/ESP/NAT-T acceptance; Issue #12 retains release-wide E2E.
+
+## Durable VICI preparation and issuing journal (source-only milestone)
+
+A follow-up, deliberately **unregistered** Engine pathway introduces a
+public-only, durable per-Link VICI *operation journal*, with a random
+nonzero transaction nonce and the **exact complete staged public intent**
+(sender/recipient identity and sender handoff digest included). Its phases
+are `prepared`, `issuing-shared`, `shared-observed`,
+`issuing-connection`, and `connection-observed`. Every transition is
+validated against the unchanged canonical PendingIPsec state; malformed,
+orphaned and duplicate transaction records fail closed at state load.
+
+`PrepareIPsecVICI` rechecks durable pending intent, protected PSK and the
+complete daemon/XFRM collision surfaces under the canonical maintenance,
+Link and resource locks, then durably records `prepared` without affecting
+the daemon. `ApplyPreparedIPsecVICI` is **not registered in the production
+CLI/backend**. In the testable Engine seam it issues only exact per-Link
+VICI `load-shared` (scoped to both canonical IKE IDs) and `load-conn`
+(with no auto-start). A durable `issuing-*` phase MUST precede any
+potentially effectful command; a successful response is followed by
+read-only daemon name checks, a phase transition and fresh collision
+checks before the next command. The transport rejects insecure/non-Unix
+sockets and redacts all secret-bearing daemon and subprocess errors. No
+wildcard, daemon-global operation, IKE initiation/termination, XFRM write,
+PSK deletion or credential retirement exists in this pathway.
+
+**Critical ownership rule:** `issuing-*` can mean the command succeeded
+but the acknowledgement or durable phase update was lost. `*-observed`
+means **only name presence, NOT resource ownership**. No journal phase,
+name, interface alias, nonce or successful readback by itself permits
+a retry, unload, replacement or deletion of daemon/kernel objects.
+After any uncertain effect, the action stops and keeps both the public
+intent and protected PSK for explicit independent reconciliation. No
+automatic recovery or operational Link commit is claimed. The source-only
+writer must remain inaccessible through production runtime registration
+until independently proven ownership and rollback semantics, real isolated
+IKEv2/ESP/NAT-T, and release gates are satisfied.
+
+## strongSwan debug logging remains an activation blocker
+
+The daemon's VICI credential loader has a CFG level-4 debug trace that
+formats the *raw* shared IKE key (`DBG4(DBG_CFG, "key: %#B", &data)` in
+upstream `vici_cred.c`). Hiding plaintext from STL's own stdout/status
+is therefore insufficient if the independently configured daemon uses
+verbose CFG logging. Prior to production registration, the activation
+contract must verify the effective strongSwan log configuration and
+fail closed if it may emit PSK material; do not globally reconfigure an
+unrelated administrator's daemon as a convenience. The source-only
+writer has **not** passed this operational prerequisite.
+
+## XFRM interface alias is not atomic at creation
+
+An isolated Debian 13 / Linux 6.12 disposable **network namespace** probe
+with iproute2 6.15 showed that `ip link add name ... alias ... type xfrm
+if_id ...` did not yield an `ifalias` in `ip -details -json link show`;
+only a separate `ip link set dev ... alias ...` produced the alias.
+This probe created/deleted only temporary test-namespace resources. A
+future XFRM creation transaction therefore must first persist an uncertain
+*pre-effect* phase and prove the actual STL-created kernel interface
+identity, preserving the original ifindex/ownership evidence across the
+non-atomic alias step. An alias on a restarted process is not sufficient
+proof and an interrupted create must not blindly delete by derived name.

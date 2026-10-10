@@ -34,6 +34,14 @@ type IPsecProtectedKeyReader interface {
 // transaction must repeat all checks immediately before its own writes,
 // preserving locks and its own durable creation/recovery proof.
 func (e *Engine) CheckIPsecActivationVacancy(ctx context.Context, id domain.LinkID, keys IPsecProtectedKeyReader, vici IPsecVICIInventory, xfrm IPsecXFRMVacancy) error {
+	return e.withIPsecActivationVacancy(ctx, id, keys, vici, xfrm, nil)
+}
+
+// This helper keeps the maintenance -> Link -> resource locks held through
+// the entire pre-effect durable journal transaction. The action is invoked
+// only after a fresh, canonical state/credential/daemon/kernel vacancy check.
+// A successful preflight still does not authorize deletion or VICI ownership.
+func (e *Engine) withIPsecActivationVacancy(ctx context.Context, id domain.LinkID, keys IPsecProtectedKeyReader, vici IPsecVICIInventory, xfrm IPsecXFRMVacancy, action func(ipsec.Profile, *ipsec.PSK) error) error {
 	const op = "ipsec_vacancy"
 	invalid := func(msg string) error {
 		return stlerr.New(stlerr.CodeInvalid, op, string(id), "ipsec", msg)
@@ -115,7 +123,7 @@ func (e *Engine) CheckIPsecActivationVacancy(ctx context.Context, id domain.Link
 	if err != nil {
 		return conflict("staged IPsec protected credential is missing or unsafe")
 	}
-	key.Zeroize()
+	defer key.Zeroize()
 
 	daemon, err := vici.Inspect(ctx, profile)
 	if err != nil {
@@ -130,8 +138,12 @@ func (e *Engine) CheckIPsecActivationVacancy(ctx context.Context, id domain.Link
 	if err := ctx.Err(); err != nil {
 		return unknown("IPsec vacancy check was interrupted")
 	}
-	// Never emit a writable grant/permit, nor record ownership in state here.
-	// In particular, a foreign strongSwan administrator can race this check.
+	// Never emit a writable permit. Actions run while all locks remain
+	// held and are responsible for their own durable pre-effect phase journal.
+	// A foreign administrator may still race these observations.
+	if action != nil {
+		return action(profile, &key)
+	}
 	return nil
 }
 

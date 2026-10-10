@@ -227,6 +227,52 @@ tests cover foreign interface-name/ID collisions and an orphan policy.
 They do not establish IKEv2, ESP/NAT-T traffic, VICI mutation or the release
 acceptance matrix. Issues #7 and #12 remain open.
 
+
+## Unregistered IPsec VICI configuration journal (not an operational backend)
+
+An isolated source-only Engine API now records an exact public PendingIPsec
+identity and nonce in a durable VICI operation journal before exposing any
+bounded per-object write seam. The only operations in that seam are an
+IKE-identity-scoped per-Link `load-shared` and the single named `load-conn`;
+there is **no** daemon-wide reload, wildcard operation, XFRM writer, IKE
+initiation, credential retirement, or registered production IPsec backend.
+The existing public `CheckIPsecActivationVacancy` stays read-only and grants
+no capability to perform writes.
+
+`prepared` is a no-daemon-effect checkpoint; `issuing-shared` and
+`issuing-connection` indicate that a command might have been delivered,
+including when publication/daemon acknowledgement fails. `shared-observed`
+and `connection-observed` attest only to reported names, **not STL-created
+ownership**. The exact journal binds both public Link configuration and
+sender/recipient handoff identity. Absent/corrupt/changed journal or
+pending state, failed inspection, failed key check, interrupted commands,
+failed durability, lost acknowledgement and unexpected daemon contents
+all fail closed without automatic retransmission or unload. The protected
+PSK is retained for explicit reconciliation; no ordinary status/log/error
+contains it or an untrusted daemon reply. In the current milestone there
+is no active CLI route to invoke this writer. No unattended cleanup of
+existing VICI configurations is authorized.
+
+**Upstream daemon-log prerequisite:** strongSwan's VICI shared-key loader
+contains a CFG debug-level-4 raw-secret trace (`DBG4(DBG_CFG, "key: %#B",
+&data)` in `vici_cred.c`). STL deliberately neither logs raw PSKs nor
+inserts them into ordinary output, but cannot prevent an independently
+configured strongSwan daemon from logging them at this verbose level.
+The future production activation contract MUST check/enforce a safe daemon
+logging policy before transferring any PSK (or reject that environment),
+including effective file/journald logging backends; absence of such an
+attestation is not an authorized production key load. Do not mutate global
+strongSwan logging policy merely to make an unsupported host pass.
+Reference: https://github.com/strongswan/strongswan/blob/master/src/libcharon/plugins/vici/vici_cred.c
+
+A disposable Debian 13 netns test also established that passing an `alias`
+when creating an XFRM link is **not** sufficient to atomically persist its
+`ifalias`; setting the alias separately was necessary. Future kernel
+lifecycle/rollback cannot equate a name-shaped or later matching alias
+with proof that STL created the interface. The durable XFRM write-and-
+cleanup transaction, IKEv2/ESP/NAT-T traffic and Issue #12 release
+integration remain outstanding.
+
 ## Setup-link safety
 
 A setup link is untrusted input.
