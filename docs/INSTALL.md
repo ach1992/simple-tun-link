@@ -1,0 +1,134 @@
+# Install, update, and uninstall (Issue #11)
+
+STL is **pre-release** until an authorized, tagged GitHub release is actually
+published. The commands below use a placeholder `vX.Y.Z`; replace it with an
+**existing** released tag after publication. No installer runs during a clone,
+build, or ordinary `go test`.
+
+## Supported deployment shape
+
+- Linux amd64 or arm64; Debian/Ubuntu-class hosts are the initial target.
+- Root-owned `/usr/local/bin/stl` is the single executable.
+  `/usr/local/bin/stlink` is a relative symlink to `stl`, not another binary.
+- Installer bookkeeping is root-owned in
+  `/usr/local/lib/simple-tun-link/install-record` (plus a retained lock file).
+- The canonical Engine still owns every Link, `/var/lib/simple-tun-link`,
+  network resource, and `simple-tun-link-restore.service`. The installer does
+  **not** manage those resources or install a second systemd service.
+- Backend packages/tools are **not** installed by the base installer. Runtime
+  preflight reports a missing `ip`, `iptables`, `wg`, or strongSwan capability
+  for the applicable backend. Install optional tools using the host's ordinary
+  package manager when that backend is actually needed.
+
+## Install from an official released tag
+
+Read the [installer source](../scripts/install.sh) before running it as root.
+For a single-command install, with an explicit released tag:
+
+~~~sh
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/ach1992/simple-tun-link/vX.Y.Z/scripts/install.sh | sudo bash -s -- install --version vX.Y.Z'
+~~~
+
+The script fetches `SHA256SUMS`, `BUILD-MANIFEST.txt`, `LICENSE`, and the one
+architecture-specific `stl_vX.Y.Z_linux_<arch>` executable from the **fixed
+project GitHub release URL** over HTTPS. It checks the relevant SHA-256 entries,
+MIT/commit/version metadata, and the executable's `version --json` identity
+**before** publication. No caller-provided download URL is accepted.
+
+SHA-256 checksums protect against accidental damage/mismatched bytes, **not**
+against a compromised release account or replacement of checksums and binaries
+together. Trust the GitHub project/tag and review the script; pinned tags and
+HTTPS do not make the checksum file an independent signature.
+
+For an auditable two-step alternative, download the script from the exact tag
+into a private location, inspect it, then run:
+
+~~~sh
+sudo bash ./install.sh install --version vX.Y.Z
+stl version --json
+stlink version --json
+~~~
+
+No public tag/release is being created by these instructions.
+
+## Update
+
+Download the installer from the **intended new released tag**, inspect it, and
+run `sudo bash ./install.sh update --version vX.Y.Z` (or use the same one-command
+pattern with `update`). The installer refuses a foreign or locally modified
+`stl`, an unrecognized/missing `stlink`, or malformed installation metadata.
+
+- Each installer is serialized with `flock`.
+- A verified executable is staged on the **same filesystem** as canonical
+  `stl`; `mv -T` publishes it by atomic rename, never truncating in place.
+- The old executable is retained in a private transaction directory until
+  the new binary, alias, and ownership record have been checked and synced.
+  Ordinary post-rename failures attempt identity-guarded restoration of the
+  previous binary/record. Uncertain recovery **fails with an explicit path**
+  to retained private material, never reports success.
+- Update does not restart systemd, change the kernel, or reapply Links.
+  Runtime/backend/state compatibility must be reviewed before each release.
+
+A fatal interruption (power loss, `SIGKILL`) between rename and record sync
+may require manual reconciliation. If the installer retains a
+`/usr/local/bin/.stl-install.*` recovery directory, **do not delete or blindly
+restore it**: inspect the installed binary hash, installation record, unit and
+Links, then choose an explicit recovery/roll-forward. Check executable identity
+again before retrying.
+
+## Uninstall: never tear down live Links implicitly
+
+First quiesce concurrent Link operators and inspect the saved Links:
+
+~~~sh
+sudo stl link list --json
+~~~
+
+For each existing Link ID, explicitly inspect it, then remove it through
+`stl link remove <link-id> --confirm <link-id>`; the canonical Engine owns
+resource and persistence cleanup. Verify no Links remain. A failed removal,
+ambiguous state, or remaining `simple-tun-link-restore.service` requires
+resolution via the Link/Engine workflow **before** uninstall. Do **not** delete
+interfaces, route/firewall rules, or the restore unit manually as a shortcut.
+
+After the Link state is proven empty and the Engine-owned restore unit is gone:
+
+~~~sh
+sudo bash ./install.sh uninstall
+~~~
+
+Uninstall removes only the hash-verified installer-owned canonical executable,
+its exact `stlink -> stl` symlink, and the installer ownership record. It keeps
+the installer lock and does **not** delete `/var/lib/simple-tun-link`, other
+systemd units, network resources, arbitrary `stl` files, or host packages.
+This deliberate separation prevents an installer from inventing a second
+Link-removal lifecycle. Empty historic state may be archived or retired later
+through a distinct explicit audited operation, not silent uninstall.
+
+If any state read or ownership check is inconclusive, uninstall fails closed.
+As with any software removal, coordinate with other operators: the installer
+cannot prevent a different process from starting a new Link between read-only
+inspection and file removal.
+
+## Offline/disposable validation
+
+~~~sh
+bash scripts/test-install.sh
+~~~
+
+The nonprivileged test uses disposable prefixes and locally generated fake
+release bundles. It covers checksum refusal, foreign ownership, install,
+update/idempotence, post-swap failure recovery, modified-binary refusal,
+Link-presence refusal, uninstall and uninstall failure recovery. It neither
+accesses production releases nor performs privileged networking/systemd
+operations. To test an actual build bundle without publication:
+
+~~~sh
+bash scripts/install.sh install --bundle /path/to/build-bundle --prefix /path/to/private/test-prefix
+~~~
+
+The test prefix must already contain `bin` and `lib` directories. An offline
+snapshot bundle is not a supported public release. Do not claim these fake
+bundle tests prove arm64 execution, real distro support, service restart,
+firewall safety, or kernel traffic. Issue #12 owns that release-quality E2E
+proof. A real public release/tag is a separate human authorization gate.
