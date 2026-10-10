@@ -7,7 +7,7 @@ It creates and manages independent **Link Addresses** between Linux servers over
 Canonical CLI: **stl**  
 Convenience alias: **stlink** (same executable/behavior when installed by the supported installer)
 
-> Status: **pre-release development**. GRE/IPIP and core lifecycle CLI are integrated. The WireGuard backend, v3 receiver import, sender creation, durable protected one-time handoff/Resume and conditional credential retirement were independently reviewed and integrated into `main` through PR #51. They are **not** operationally accepted: real privileged WireGuard two-peer traffic, multi-backend coexistence, systemd/reboot acceptance and the supported-distro matrix remain open. Installer/update/uninstall have offline regression coverage, but no public release is published; IPsec remains pending.
+> Status: **pre-release development**. GRE/IPIP, WireGuard Quick Link sender/receiver/Resume, credential retirement and active diagnostics are integrated. On one disposable Debian 13-kernel test host, real WireGuard encrypted two-peer traffic and the GRE/IPIP modes have passed. The same-peer four-Link GRE + WireGuard regression is under Issue #12 review and is **not yet integrated**. **Full v0.1 release acceptance remains open:** IPsec/XFRM, persistence/restart, broader failure and multi-peer cases, and supported Ubuntu/Debian/architecture matrix. No public release has been published.
 
 ## Why
 

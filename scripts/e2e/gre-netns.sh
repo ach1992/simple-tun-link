@@ -328,6 +328,8 @@ if [[ -v STL_E2E_CROSS_WG && "$STL_E2E_CROSS_WG" == approved ]]; then
   run_cross_wg_side a create
   run_cross_wg_side b import
   run_cross_wg_side a resume
+  run_cross_wg_side a cross-list
+  run_cross_wg_side b cross-list
   assert_stl_firewall_rule_count "$ns_a" "$wg_id" 1
   assert_stl_firewall_rule_count "$ns_b" "$wg_id" 1
   ip netns exec "$ns_a" ping -n -c 3 -W 3 -I 10.83.10.0 10.83.10.1 >/dev/null

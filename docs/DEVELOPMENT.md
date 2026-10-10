@@ -122,6 +122,24 @@ from a clean checkout. **Never run this on the AI Server Agent control plane,
 a shared host or production infrastructure.** The environment flag is a
 deliberate local opt-in, *not* authorization by itself.
 
+For the release-level shared-state **GRE Native + GRE/FOU + GRE/GUE +
+WireGuard** test, use the same independently approved isolated fixture with
+both opt-ins:
+
+~~~bash
+sudo env STL_E2E_DISPOSABLE_HOST=approved STL_E2E_CROSS_WG=approved ./scripts/e2e/gre-netns.sh
+~~~
+
+This requires working kernel WireGuard support and the wg executable in
+addition to existing GRE/IPIP prerequisites. Missing wg is a capability
+failure, not a passing test. The cross test uses the same two network
+namespaces and **same per-peer state roots** for all four Links; checks the
+live four-ID persisted collection; confirms bidirectional encrypted
+WireGuard traffic and real active, probe-confirmed MTU/connectivity
+diagnosis; then removes/retires only WireGuard and checks that the three
+GRE siblings still work before continuing the original IPIP suite.
+The flags alone never authorize testing on an active control-plane host.
+
 The opt-in script creates only fresh paired network namespaces, synthetic
 veth underlay and per-side temporary state; it invokes the real CLI/Engine/GRE
 backend for Native, FOU and GUE on the same synthetic underlay pair,
@@ -149,9 +167,10 @@ iproute2, iptables and Go versions as Issue #4/#12 acceptance evidence.
 Compiling the gated Go tests and syntax-checking the script in ordinary CI
 **do not count as privileged live evidence**. The opt-in flag alone is never
 permission to test on a shared or production host. This slice validates
-GRE/IPIP cross-backend isolation, but **does not** replace Issue #12's
-GRE/WireGuard/IPsec matrix, multi-peer scenarios, concurrency, pairing,
-disposable real-systemd persistence/restart, or distro/arm64 release gates.
+GRE/IPIP cross-backend isolation. The optional WireGuard cross fixture
+covers one four-Link same-peer scenario, but neither fixture completes Issue
+#12's IPsec, multiple different peers, concurrency/failure, real systemd
+persistence/restart, Ubuntu/distro or arm64 release gates.
 
 ## Git/GitHub
 
