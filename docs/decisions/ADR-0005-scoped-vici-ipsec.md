@@ -97,3 +97,23 @@ pairing schema or imply silent migration/rekey authorization.
 
 Staging alone authorizes no connection load/unload, SA termination,
 Linux network change, operational claim, or public release.
+
+## Read-only activation vacancy checkpoint
+
+A follow-up source-only preflight requires exact durable staged public
+identity and a protected PSK under canonical Engine locks, then refuses
+existing same-name strongSwan connection/PSK objects, XFRM interfaces with
+colliding names/32-bit IDs, and orphaned policies/SAs with matching if_id.
+XFRM inspection accepts verified JSON or strictly parsed legacy iproute2
+text, never an inventory probe failure as evidence of vacancy. Kernel state
+output is sensitive and must not appear in errors or logs.
+
+A successful preflight is NOT persistent ownership proof, a reservation
+against other administrators or a VICI/XFRM write permit. Any future
+transaction must repeat fresh host checks while holding STL locks and prove
+STL-owned effects with receipts/host identity before repair, rollback, unload
+or credential retirement. In particular, public PendingIPsec and derived
+VICI names alone NEVER authorize destruction of an existing daemon object.
+No production runtime registration, VICI or kernel mutation is enabled by
+this checkpoint. Issue #7 retains the operational backend and backend-focus
+IKEv2/ESP/NAT-T acceptance; Issue #12 retains release-wide E2E.
