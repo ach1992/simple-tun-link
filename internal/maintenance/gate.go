@@ -33,9 +33,9 @@ type Gate struct {
 }
 
 func NewInstalledGate() Gate {
-	// A supported installer may use an explicit prefix in a disposable/local
-	// environment. Resolve the running executable path (including its old
-	// identity after rename) so its Engine acquires that installer's flock.
+	// A supported installer may use an explicit prefix. After an uninstall
+	// unlinks the canonical inode, Linux reports that pathname as (deleted);
+	// strip that suffix so a queued Engine keeps the original installer's gate.
 	running, err := os.Readlink("/proc/self/exe")
 	if err == nil {
 		running = strings.TrimSuffix(running, " (deleted)")
@@ -167,9 +167,11 @@ func (g Gate) validateExecutableIdentity(dir string) error {
 	if !filepath.IsAbs(canonical) || filepath.Clean(canonical) != canonical {
 		return fmt.Errorf("maintenance executable path must be absolute and canonical")
 	}
-	// A failed/partially recovered installer leaves a private transaction
-	// directory without a durably published COMMITTED marker. Do not run any
-	// Link mutation while its executable/record transition is unresolved.
+	// Only trust installer journals beneath a protected canonical bin
+	// directory. A regular COMMITTED pathname alone is never commit proof.
+	if err := verifyDirectory(filepath.Dir(canonical), g.testOnlyUnprivilegedPath); err != nil {
+		return fmt.Errorf("untrusted executable directory: %w", err)
+	}
 	entries, err := os.ReadDir(filepath.Dir(canonical))
 	if err != nil {
 		return fmt.Errorf("cannot inspect installation recovery directories: %w", err)
@@ -183,9 +185,8 @@ func (g Gate) validateExecutableIdentity(dir string) error {
 		if statErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("untrusted installer recovery identity; reconcile before Link mutation")
 		}
-		marker, markerErr := os.Lstat(filepath.Join(recovery, "COMMITTED"))
-		if markerErr != nil || !marker.Mode().IsRegular() {
-			return fmt.Errorf("unresolved installer recovery requires reconciliation before Link mutation")
+		if err := g.verifyRecoveryJournal(recovery, canonical, dir); err != nil {
+			return fmt.Errorf("unresolved installer recovery requires reconciliation before Link mutation: %w", err)
 		}
 	}
 	// For a checkout or manually run binary with no STL managed installation,
