@@ -160,6 +160,59 @@ a committed live Link and cannot authorize VICI writes, XFRM changes,
 SA teardown, credential retirement, or an operational success message.
 No production IPsec CLI/backend is registered by this milestone.
 
+### Read-only IPsec activation vacancy preflight (not ownership)
+
+Before any operational IPsec backend is enabled, a source-only
+`Engine.CheckIPsecActivationVacancy` may inspect a staged Link under the
+existing maintenance -> Link -> resource lock order. It revalidates the exact
+durable pending identity and protected key, rejects committed/pending resource
+collisions, and requires both strongSwan connection/PSK *name vacancy* and
+XFRM interface name, 32-bit `if_id`, orphan policy and SA vacancy. A matching
+foreign name or if_id is a **conflict**, never adoption permission. Missing,
+malformed, ambiguous or unavailable inventory fails closed. JSON policy
+and SA rows must have recognizable endpoints and a valid `dir` / `proto`;
+duplicate field names, missing descriptors, and invalid/present-null `if_id`
+are unverified, never absence evidence. Linux link JSON additionally rejects
+nested duplicate or case-ambiguous ifname/linkinfo/info_kind/info_data/if_id
+keys before comparing interface claims. Those reserved identity keys are
+also rejected if they appear at an incorrect JSON nesting level, regardless
+of whether their value matches the planned Link. Ordinary unrelated
+non-XFRM links remain supported. Legacy policy/state text requires complete
+headers and bounded, valid descriptors. The SA-level proto is distinct from
+a selector's transport proto; every selector tail attribute must match a
+supported bounded iproute2 token/value shape (proto, ports, ICMP type/code,
+GRE key, device and optional uid), without duplicates, unknown tokens or
+misplaced if_id. In particular, ICMP type/code are 8-bit, MH `(dport)` uses
+the canonical four-hex-digit form, foreign `dev` values follow Linux
+`dev_valid_name` rather than STL's stricter own-link naming policy, and
+legacy text separators/empty-stdout checks are interpreted as ASCII bytes
+rather than Unicode whitespace. In particular, UTF-8 Unicode whitespace
+must never remove kernel-invalid raw bytes (such as `0xa0`) or split a
+Linux-valid foreign interface name; a nonempty Unicode-only response is
+not vacancy evidence. Named protocols are matched to the primary names in
+the host's bounded, read-only `/etc/protocols` database instead of an incomplete hard-coded
+whitelist. Numeric protocol identifiers are 8-bit and canonical decimal.
+An unreadable/unknown protocol name fails closed; non-file NSS protocol
+sources may conservatively reduce compatibility and require independent
+host evidence before enabling operational IPsec. The original XFRM state bytes
+and parser-owned JSON copies (which may contain key material) are cleared;
+daemon and kernel error text is not reflected to ordinary output.
+
+This is **observation only**, not a persisted authority token or authorization
+to call `load-conn`, `load-shared`, `unload-conn`, `unload-shared`, initiate,
+terminate, add/delete XFRM, or retire a PSK. A third-party strongSwan/kernel
+writer is not serialized by STL locks, so the future activation transaction
+must re-inspect and independently prove an STL-created resource before each
+effect or cleanup. Do not infer ownership from `PendingIPsec`, filenames,
+interface aliases, name-shaped VICI objects or derived `if_id` alone.
+
+The inspector handles modern JSON XFRM and older iproute2 text inventory.
+A successful *empty* XFRM policy/SA command can have no stdout on iproute2
+6.1; command failures are never treated as empty. Real-kernel disposable
+tests cover foreign interface-name/ID collisions and an orphan policy.
+They do not establish IKEv2, ESP/NAT-T traffic, VICI mutation or the release
+acceptance matrix. Issues #7 and #12 remain open.
+
 ## Setup-link safety
 
 A setup link is untrusted input.

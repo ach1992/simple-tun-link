@@ -97,3 +97,52 @@ pairing schema or imply silent migration/rekey authorization.
 
 Staging alone authorizes no connection load/unload, SA termination,
 Linux network change, operational claim, or public release.
+
+## Read-only activation vacancy checkpoint
+
+A follow-up source-only preflight requires exact durable staged public
+identity and a protected PSK under canonical Engine locks, then refuses
+existing same-name strongSwan connection/PSK objects, XFRM interfaces with
+colliding names/32-bit IDs, and orphaned policies/SAs with matching if_id.
+XFRM inspection accepts only verified JSON rows with unique relevant field
+identities, complete policy/SA endpoints and valid `dir` / `proto`, or
+semantically verified legacy iproute2 text with complete headers and valid
+descriptor values. The Linux link inventory must also reject duplicate or
+case-ambiguous ifname/linkinfo/info_kind/info_data/if_id identities at each
+relevant nesting level and reject those identities if placed at the wrong
+nesting level (even when an unrelated value might otherwise appear vacant).
+A state selector's proto is not a second SA proto; only structurally located
+top-level descriptor lines establish SA identity. Do not skip the selector
+tail: parse recognized iproute2 protocol, sport/dport, ICMP type/code, GRE
+key, dev and optional uid fields with bounded values; unknown, duplicate,
+malformed, or misplaced if_id tokens must fail closed. Follow the actual
+iproute2 output contract: decimal numbers have canonical formatting;
+ICMP type/code are uint8 rather than uint16; an MH `(dport)` value has the
+fixed-width lowercase `0x` plus four hex digits; foreign `dev` names follow
+Linux `dev_valid_name` rather than STL's planned-interface alphabet.
+Legacy iproute2 text parsing and successful-empty inventory checks must
+use ASCII structural whitespace byte-by-byte, not Unicode-aware token
+splitting/trimming: preserve non-ASCII bytes verbatim for the kernel
+device-name check, rejecting `0xa0` while retaining Linux-valid sequences
+like UTF-8 `c2 85`. Unicode-only nonempty inventory never means vacancy.
+Selector protocol names derive from the file-backed host `/etc/protocols`
+primary names as used by default Debian/Ubuntu iproute2/libc, not a static
+IANA subset; unknown/unreadable names or ambiguous tables fail closed.
+Non-file NSS overrides are not assumed equivalent without host evidence.
+This scoped selector grammar follows the iproute2 source:
+https://github.com/iproute2/iproute2/blob/e11870d5b9414b2e0770463bd6fc2399744dc734/ip/ipxfrm.c
+and preserves the bounded Debian-bookworm text path. An absent `if_id` is harmless only after the row is
+positively recognized; a null, conflicting or invalid present ID is unknown.
+Never accept an inventory probe failure as evidence of vacancy. Kernel state
+and temporary decoded JSON copies are sensitive and must be cleared, never
+included in errors or logs.
+
+A successful preflight is NOT persistent ownership proof, a reservation
+against other administrators or a VICI/XFRM write permit. Any future
+transaction must repeat fresh host checks while holding STL locks and prove
+STL-owned effects with receipts/host identity before repair, rollback, unload
+or credential retirement. In particular, public PendingIPsec and derived
+VICI names alone NEVER authorize destruction of an existing daemon object.
+No production runtime registration, VICI or kernel mutation is enabled by
+this checkpoint. Issue #7 retains the operational backend and backend-focus
+IKEv2/ESP/NAT-T acceptance; Issue #12 retains release-wide E2E.
