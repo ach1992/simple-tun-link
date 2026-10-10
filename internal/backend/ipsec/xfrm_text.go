@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/netip"
 	"strconv"
+	"strings"
 )
 
 // xfrmInventoryUsesID supports both modern JSON iproute2 inventories and
@@ -17,18 +20,24 @@ func xfrmInventoryUsesID(raw []byte, target uint32, kind string) (bool, error) {
 		return false, fmt.Errorf("unsupported XFRM inventory")
 	}
 	if bytes.HasPrefix(bytes.TrimSpace(raw), []byte("[")) {
-		var rows []struct {
-			IfID json.RawMessage `json:"if_id"`
-		}
-		if err := json.Unmarshal(raw, &rows); err != nil || rows == nil {
+		var rows []json.RawMessage
+		parseErr := json.Unmarshal(raw, &rows)
+		// RawMessage unmarshal copies entire rows, which may include SA
+		// encryption material. Clear all copies on success AND failure.
+		defer func() {
+			for _, row := range rows {
+				clear(row)
+			}
+		}()
+		if parseErr != nil || rows == nil {
 			return false, fmt.Errorf("invalid JSON XFRM inventory")
 		}
-		for _, row := range rows {
-			id, err := xfrmIfID(row.IfID, false)
+		for _, rawRow := range rows {
+			collision, err := xfrmJSONRowUsesID(rawRow, target, kind)
 			if err != nil {
-				return false, fmt.Errorf("unverifiable XFRM inventory identifier")
+				return false, err
 			}
-			if id == target {
+			if collision {
 				return true, nil
 			}
 		}
@@ -37,8 +46,155 @@ func xfrmInventoryUsesID(raw []byte, target uint32, kind string) (bool, error) {
 	return xfrmTextUsesID(raw, target, kind)
 }
 
+// Reject duplicate JSON keys before decoding their values. Go's ordinary
+// struct/map unmarshal otherwise silently keeps the LAST duplicate, including
+// a conflicting if_id, dir, proto, src or dst. A noncanonical case variant of
+// any of these security-relevant names is also ambiguous, not ignorable.
+func xfrmUniqueJSONObject(raw json.RawMessage) (result map[string]json.RawMessage, err error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	open, err := dec.Token()
+	if err != nil || open != json.Delim('{') {
+		return nil, fmt.Errorf("invalid XFRM JSON row")
+	}
+	values := make(map[string]json.RawMessage)
+	seen := make(map[string]bool)
+	// Decoding fields can allocate copies of SA encryption material.
+	// On early parse failure clear previously retained values too.
+	defer func() {
+		if err != nil {
+			for _, value := range values {
+				clear(value)
+			}
+		}
+	}()
+	for dec.More() {
+		token, tokenErr := dec.Token()
+		if tokenErr != nil {
+			return nil, fmt.Errorf("invalid XFRM JSON field")
+		}
+		key, ok := token.(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid XFRM JSON field name")
+		}
+		if seen[key] {
+			return nil, fmt.Errorf("duplicate XFRM JSON field")
+		}
+		seen[key] = true
+		for _, reserved := range []string{"if_id", "dir", "proto", "src", "dst"} {
+			if strings.EqualFold(key, reserved) && key != reserved {
+				return nil, fmt.Errorf("noncanonical XFRM JSON field")
+			}
+		}
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			clear(value)
+			return nil, fmt.Errorf("invalid XFRM JSON field value")
+		}
+		switch key {
+		case "if_id", "dir", "proto", "src", "dst":
+			values[key] = value
+		default:
+			// Unrelated SA fields may contain secret keys; never retain
+			// decoded copies, even though the caller also clears raw bytes.
+			clear(value)
+		}
+	}
+	close, err := dec.Token()
+	if err != nil || close != json.Delim('}') {
+		return nil, fmt.Errorf("invalid XFRM JSON row")
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, fmt.Errorf("extra XFRM JSON data")
+	}
+	return values, nil
+}
+
+// Only the structurally validated policy/SA row may supply an optional if_id.
+// Always zero the retained decoded JSON values before returning.
+func xfrmJSONRowUsesID(raw []byte, target uint32, kind string) (bool, error) {
+	row, err := xfrmUniqueJSONObject(raw)
+	if err != nil {
+		return false, fmt.Errorf("ambiguous JSON XFRM inventory")
+	}
+	defer func() {
+		for _, value := range row {
+			clear(value)
+		}
+	}()
+	if !xfrmJSONHasEndpoints(row, kind) || !xfrmJSONHasDescriptor(row, kind) {
+		return false, fmt.Errorf("incomplete JSON XFRM inventory")
+	}
+	rawID, present := row["if_id"]
+	if !present {
+		return false, nil // Valid wildcard policy/SA with no interface ID.
+	}
+	// An explicitly present but null ID is ambiguous, not absent.
+	if bytes.Equal(bytes.TrimSpace(rawID), []byte("null")) {
+		return false, fmt.Errorf("invalid JSON XFRM interface identifier")
+	}
+	id, err := xfrmIfID(rawID, false)
+	if err != nil {
+		return false, fmt.Errorf("unverifiable XFRM inventory identifier")
+	}
+	return id == target, nil
+}
+
+func xfrmJSONHasDescriptor(row map[string]json.RawMessage, kind string) bool {
+	field := "proto"
+	if kind == "policy" {
+		field = "dir"
+	}
+	raw, ok := row[field]
+	if !ok {
+		return false
+	}
+	var value string
+	return json.Unmarshal(raw, &value) == nil && validXFRMDescriptor(kind, value)
+}
+
+func xfrmJSONHasEndpoints(row map[string]json.RawMessage, kind string) bool {
+	for _, field := range []string{"src", "dst"} {
+		raw, exists := row[field]
+		if !exists {
+			return false
+		}
+		var value string
+		if json.Unmarshal(raw, &value) != nil || !validXFRMEndpoint(value, kind) {
+			return false
+		}
+	}
+	return true
+}
+
+// These are the Linux xfrm policy directions and iproute2 XFRM state
+// protocols. Unknown descriptors cannot prove resource absence.
+func validXFRMDescriptor(kind, value string) bool {
+	switch kind {
+	case "policy":
+		return value == "in" || value == "out" || value == "fwd"
+	case "state":
+		return value == "esp" || value == "ah" || value == "comp" ||
+			value == "route2" || value == "hao"
+	default:
+		return false
+	}
+}
+
+func validXFRMEndpoint(value, kind string) bool {
+	// SA endpoints must be single addresses; policy selectors may be
+	// addresses or masked CIDRs (including intentional wildcard selectors).
+	if _, err := netip.ParseAddr(value); err == nil {
+		return true
+	}
+	if kind == "policy" {
+		_, err := netip.ParsePrefix(value)
+		return err == nil
+	}
+	return false
+}
+
 // Parse only documented textual XFRM entries. Every record must have an
-// unindented src/dst header and the expected policy dir or state proto.
+// unindented concrete src/dst header and ONE valid policy dir or state proto.
 // An if_id token must have exactly one bounded value per record. Ambiguous
 // input is unknown, not proof of empty state; we do not accept free-form grep.
 func xfrmTextUsesID(raw []byte, target uint32, kind string) (bool, error) {
@@ -52,6 +208,10 @@ func xfrmTextUsesID(raw []byte, target uint32, kind string) (bool, error) {
 		}
 		return nil
 	}
+	descriptor := []byte("proto")
+	if kind == "policy" {
+		descriptor = []byte("dir")
+	}
 	for _, line := range bytes.Split(raw, []byte("\n")) {
 		trimmed := bytes.TrimSpace(line)
 		if len(trimmed) == 0 {
@@ -63,16 +223,21 @@ func xfrmTextUsesID(raw []byte, target uint32, kind string) (bool, error) {
 				return false, err
 			}
 			if len(fields) < 4 || !bytes.Equal(fields[0], []byte("src")) ||
-				!bytes.Equal(fields[2], []byte("dst")) {
+				!bytes.Equal(fields[2], []byte("dst")) ||
+				!validXFRMEndpoint(string(fields[1]), kind) ||
+				!validXFRMEndpoint(string(fields[3]), kind) {
 				return false, fmt.Errorf("invalid XFRM text header")
 			}
 			seenRecord, seenID, hasDescriptor = true, false, false
-		} else if !seenRecord {
+		} else if !seenRecord || bytes.Equal(fields[0], []byte("src")) {
 			return false, fmt.Errorf("unexpected XFRM text inventory")
 		}
 		for j, field := range fields {
-			if (kind == "policy" && bytes.Equal(field, []byte("dir"))) ||
-				(kind == "state" && bytes.Equal(field, []byte("proto"))) {
+			if bytes.Equal(field, descriptor) {
+				if hasDescriptor || j+1 >= len(fields) ||
+					!validXFRMDescriptor(kind, string(fields[j+1])) {
+					return false, fmt.Errorf("invalid or duplicate XFRM text descriptor")
+				}
 				hasDescriptor = true
 			}
 			if !bytes.Equal(field, []byte("if_id")) {

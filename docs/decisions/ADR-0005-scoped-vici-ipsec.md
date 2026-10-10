@@ -104,9 +104,14 @@ A follow-up source-only preflight requires exact durable staged public
 identity and a protected PSK under canonical Engine locks, then refuses
 existing same-name strongSwan connection/PSK objects, XFRM interfaces with
 colliding names/32-bit IDs, and orphaned policies/SAs with matching if_id.
-XFRM inspection accepts verified JSON or strictly parsed legacy iproute2
-text, never an inventory probe failure as evidence of vacancy. Kernel state
-output is sensitive and must not appear in errors or logs.
+XFRM inspection accepts only verified JSON rows with unique relevant field
+identities, complete policy/SA endpoints and valid `dir` / `proto`, or
+semantically verified legacy iproute2 text with complete headers and valid
+descriptor values. An absent `if_id` is harmless only after the row is
+positively recognized; a null, conflicting or invalid present ID is unknown.
+Never accept an inventory probe failure as evidence of vacancy. Kernel state
+and temporary decoded JSON copies are sensitive and must be cleared, never
+included in errors or logs.
 
 A successful preflight is NOT persistent ownership proof, a reservation
 against other administrators or a VICI/XFRM write permit. Any future

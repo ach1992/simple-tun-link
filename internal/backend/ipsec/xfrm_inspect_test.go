@@ -75,8 +75,8 @@ func TestXFRMVacancyRejectsForeignAliasNameIDPolicyAndState(t *testing.T) {
 			fmt.Sprintf(`[{"ifname":"other-xfrm","linkinfo":{"info_kind":"xfrm","info_data":{"if_id":"%s"}}}]`, hexID)},
 		{"xfrm-id-decimal", "ip -details -json link show",
 			fmt.Sprintf(`[{"ifname":"other-xfrm","linkinfo":{"info_kind":"xfrm","info_data":{"if_id":%d}}}]`, p.InterfaceID)},
-		{"orphan-policy", "ip -json xfrm policy", fmt.Sprintf(`[{"if_id":"%s","dir":"out"}]`, hexID)},
-		{"orphan-sa", "ip -json xfrm state", fmt.Sprintf(`[{"if_id":"%s","aead":{"key":"sensitive-fixture-must-not-leak"}}]`, hexID)},
+		{"orphan-policy", "ip -json xfrm policy", fmt.Sprintf(`[{"src":"10.251.1.1/32","dst":"10.251.1.2/32","dir":"out","if_id":"%s"}]`, hexID)},
+		{"orphan-sa", "ip -json xfrm state", fmt.Sprintf(`[{"src":"192.0.2.10","dst":"192.0.2.11","proto":"esp","if_id":"%s","aead":{"key":"sensitive-fixture-must-not-leak"}}]`, hexID)},
 		{"malformed-foreign-interface", "ip -details -json link show", `[{"ifname":"other-xfrm","linkinfo":{"info_kind":"xfrm"}}]`},
 		{"duplicate-interface", "ip -details -json link show", `[{"ifname":"same"},{"ifname":"same"}]`},
 		{"malformed-policy", "ip -json xfrm policy", `[{"if_id":"not-an-ID"}]`},
@@ -118,8 +118,8 @@ func TestXFRMVacancyAllowsUnrelatedHostResourcesAndRefusesForgedProfiles(t *test
 		otherID++
 	}
 	f.rows["ip -details -json link show"] = []byte(fmt.Sprintf(`[{"ifname":"other","linkinfo":{"info_kind":"xfrm","info_data":{"if_id":"0x%x"}}}]`, otherID))
-	f.rows["ip -json xfrm policy"] = []byte(fmt.Sprintf(`[{"if_id":%d}]`, otherID))
-	f.rows["ip -json xfrm state"] = []byte(fmt.Sprintf(`[{"if_id":%d}]`, otherID))
+	f.rows["ip -json xfrm policy"] = []byte(fmt.Sprintf(`[{"src":"10.251.1.1/32","dst":"10.251.1.2/32","dir":"in","if_id":%d}]`, otherID))
+	f.rows["ip -json xfrm state"] = []byte(fmt.Sprintf(`[{"src":"192.0.2.10","dst":"192.0.2.11","proto":"esp","if_id":%d}]`, otherID))
 	i := XFRMVacancyInspector{Runner: f.Run}
 	if err := i.RequireVacant(context.Background(), p); err != nil {
 		t.Fatal(err)
@@ -201,6 +201,99 @@ func TestXFRMVacancyLegacyTextPolicyAndSAInventory(t *testing.T) {
 			}
 			if !tc.block && err != nil {
 				t.Fatalf("unrelated legacy inventory rejected: %v", err)
+			}
+		})
+	}
+}
+
+// Inventory may be declared vacant only after EACH nonempty JSON row is
+// structurally verified, including its endpoints, policy direction / SA
+// protocol and unique exact interface-ID representation. Invalid rows cannot
+// be skipped, even when an earlier record was unrelated to the planned Link.
+func TestXFRMInventoryJSONDescriptorAndIdentityValidation(t *testing.T) {
+	const id uint32 = 0x2121
+	cases := []struct {
+		name, kind, raw    string
+		collision, invalid bool
+	}{
+		{"empty", "policy", `[]`, false, false},
+		{"policy-wildcard", "policy", `[{"src":"0.0.0.0/0","dst":"0.0.0.0/0","dir":"in"}]`, false, false},
+		{"policy-unrelated", "policy", `[{"src":"10.251.1.1/32","dst":"10.251.1.2/32","dir":"out","if_id":"0x123"}]`, false, false},
+		{"policy-target", "policy", `[{"src":"10.251.1.1/32","dst":"10.251.1.2/32","dir":"fwd","if_id":"0x2121"}]`, true, false},
+		{"state-no-ifid", "state", `[{"src":"192.0.2.10","dst":"192.0.2.11","proto":"ah"}]`, false, false},
+		{"state-target", "state", `[{"src":"192.0.2.10","dst":"192.0.2.11","proto":"esp","if_id":8481}]`, true, false},
+		{"policy-blank-object", "policy", `[{}]`, false, true},
+		{"state-blank-object", "state", `[{}]`, false, true},
+		{"policy-unknown-only", "policy", `[{"unknown":"whatever"}]`, false, true},
+		{"state-unknown-only", "state", `[{"unknown":"whatever"}]`, false, true},
+		{"policy-no-dir", "policy", `[{"src":"10.0.0.0/24","dst":"10.1.0.0/24"}]`, false, true},
+		{"state-no-proto", "state", `[{"src":"192.0.2.10","dst":"192.0.2.11"}]`, false, true},
+		{"policy-bad-dir", "policy", `[{"src":"10.0.0.0/24","dst":"10.1.0.0/24","dir":"sideways"}]`, false, true},
+		{"policy-dir-null", "policy", `[{"src":"10.0.0.0/24","dst":"10.1.0.0/24","dir":null}]`, false, true},
+		{"policy-dir-number", "policy", `[{"src":"10.0.0.0/24","dst":"10.1.0.0/24","dir":1}]`, false, true},
+		{"state-bad-proto", "state", `[{"src":"192.0.2.10","dst":"192.0.2.11","proto":"unknown"}]`, false, true},
+		{"state-proto-null", "state", `[{"src":"192.0.2.10","dst":"192.0.2.11","proto":null}]`, false, true},
+		{"policy-no-src", "policy", `[{"dst":"10.1.0.0/24","dir":"out"}]`, false, true},
+		{"state-no-dst", "state", `[{"src":"192.0.2.10","proto":"esp"}]`, false, true},
+		{"policy-bad-src", "policy", `[{"src":"invalid","dst":"10.1.0.0/24","dir":"out"}]`, false, true},
+		{"state-bad-dst", "state", `[{"src":"192.0.2.10","dst":"192.0.2.11/32","proto":"esp"}]`, false, true},
+		{"policy-null-ifid", "policy", `[{"src":"10.0.0.0/24","dst":"10.1.0.0/24","dir":"out","if_id":null}]`, false, true},
+		{"state-invalid-ifid", "state", `[{"src":"192.0.2.10","dst":"192.0.2.11","proto":"esp","if_id":"bad"}]`, false, true},
+		{"duplicate-policy-ifid", "policy", `[{"src":"10.0.0.0/24","dst":"10.1.0.0/24","dir":"out","if_id":"0x123","if_id":"0x2121"}]`, false, true},
+		{"duplicate-state-ifid", "state", `[{"src":"192.0.2.10","dst":"192.0.2.11","proto":"esp","if_id":"0x123","if_id":"0x2121"}]`, false, true},
+		{"duplicate-policy-dir", "policy", `[{"src":"10.0.0.0/24","dst":"10.1.0.0/24","dir":"out","dir":"in"}]`, false, true},
+		{"duplicate-state-proto", "state", `[{"src":"192.0.2.10","dst":"192.0.2.11","proto":"esp","proto":"ah"}]`, false, true},
+		{"duplicate-source", "policy", `[{"src":"10.0.0.0/24","src":"10.0.1.0/24","dst":"10.1.0.0/24","dir":"in"}]`, false, true},
+		{"duplicate-other-field", "state", `[{"src":"192.0.2.10","dst":"192.0.2.11","proto":"esp","spi":"0x01","spi":"0x02"}]`, false, true},
+		{"noncanonical-ifid-case", "policy", `[{"src":"10.0.0.0/24","dst":"10.1.0.0/24","dir":"out","IF_ID":"0x2121"}]`, false, true},
+		{"noncanonical-descriptor-case", "state", `[{"src":"192.0.2.10","dst":"192.0.2.11","PROTO":"esp"}]`, false, true},
+		{"malformed-second-row", "policy", `[{"src":"10.0.0.0/24","dst":"10.1.0.0/24","dir":"out"},{"unknown":"invalid"}]`, false, true},
+		{"null-row", "state", `[null]`, false, true},
+		{"unsupported-json-top-level", "policy", `{"src":"10.0.0.0/24","dst":"10.1.0.0/24","dir":"out"}`, false, true},
+		{"invalid-trailing-data", "policy", `[{"src":"10.0.0.0/24","dst":"10.1.0.0/24","dir":"out"}] garbage`, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := xfrmInventoryUsesID([]byte(tc.raw), id, tc.kind)
+			if (err != nil) != tc.invalid || (!tc.invalid && got != tc.collision) {
+				t.Fatalf("unexpected JSON inventory result: collision=%v err=%v, want collision=%v invalid=%v",
+					got, err, tc.collision, tc.invalid)
+			}
+		})
+	}
+}
+
+func TestXFRMInventoryLegacyDescriptorAndHeaderValidation(t *testing.T) {
+	const id uint32 = 0x2121
+	cases := []struct {
+		name, kind, raw    string
+		collision, invalid bool
+	}{
+		{"policy-no-id", "policy", "src 10.0.0.0/24 dst 10.1.0.0/24\n\tdir out priority 0\n", false, false},
+		{"state-no-id", "state", "src 192.0.2.10 dst 192.0.2.11\n\tproto esp spi 0x1234\n", false, false},
+		{"policy-target", "policy", "src 10.0.0.0/24 dst 10.1.0.0/24\n\tdir out priority 0\n\tif_id 0x2121\n", true, false},
+		{"state-target", "state", "src 192.0.2.10 dst 192.0.2.11\n\tproto esp spi 0x1234\n\tif_id 0x2121\n", true, false},
+		{"bare-policy-dir", "policy", "src 10.0.0.0/24 dst 10.1.0.0/24\n\tdir\n", false, true},
+		{"bare-state-proto", "state", "src 192.0.2.10 dst 192.0.2.11\n\tproto\n", false, true},
+		{"policy-dir-next-token-invalid", "policy", "src 10.0.0.0/24 dst 10.1.0.0/24\n\tdir priority 4\n", false, true},
+		{"state-proto-next-token-invalid", "state", "src 192.0.2.10 dst 192.0.2.11\n\tproto spi 0x3\n", false, true},
+		{"bad-policy-dir", "policy", "src 10.0.0.0/24 dst 10.1.0.0/24\n\tdir sideways\n", false, true},
+		{"bad-state-proto", "state", "src 192.0.2.10 dst 192.0.2.11\n\tproto unknown\n", false, true},
+		{"duplicate-policy-dir", "policy", "src 10.0.0.0/24 dst 10.1.0.0/24\n\tdir out\n\tdir in\n", false, true},
+		{"duplicate-state-proto", "state", "src 192.0.2.10 dst 192.0.2.11\n\tproto esp\n\tproto ah\n", false, true},
+		{"missing-src-dst-header", "policy", "src foo dst bar\n\tdir out\n", false, true},
+		{"wrong-state-header", "state", "src 10.0.0.0/24 dst 10.1.0.0/24\n\tproto esp\n", false, true},
+		{"duplicate-ifid", "policy", "src 10.0.0.0/24 dst 10.1.0.0/24\n\tdir out\n\tif_id 0x2\n\tif_id 0x2121\n", false, true},
+		{"unrecognized-text", "state", "nothing recognizably XFRM", false, true},
+		{"incomplete-second-record", "policy", "src 10.0.0.0/24 dst 10.1.0.0/24\n\tdir in\nsrc 10.0.1.0/24 dst 10.1.1.0/24\n", false, true},
+		{"valid-multiple-records", "policy", "src 10.0.0.0/24 dst 10.1.0.0/24\n\tdir in\nsrc 10.0.1.0/24 dst 10.1.1.0/24\n\tdir out\n\tif_id 0x2121\n", true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := xfrmInventoryUsesID([]byte(tc.raw), id, tc.kind)
+			if (err != nil) != tc.invalid || (!tc.invalid && got != tc.collision) {
+				t.Fatalf("unexpected legacy inventory result: collision=%v err=%v, want collision=%v invalid=%v",
+					got, err, tc.collision, tc.invalid)
 			}
 		})
 	}

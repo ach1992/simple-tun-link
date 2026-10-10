@@ -169,9 +169,13 @@ durable pending identity and protected key, rejects committed/pending resource
 collisions, and requires both strongSwan connection/PSK *name vacancy* and
 XFRM interface name, 32-bit `if_id`, orphan policy and SA vacancy. A matching
 foreign name or if_id is a **conflict**, never adoption permission. Missing,
-malformed, ambiguous or unavailable inventory fails closed, and returned
-XFRM state bytes (which may contain key material) are zeroized; daemon and
-kernel error text is not reflected to ordinary output.
+malformed, ambiguous or unavailable inventory fails closed. JSON policy
+and SA rows must have recognizable endpoints and a valid `dir` / `proto`;
+duplicate field names, missing descriptors, and invalid/present-null `if_id`
+are unverified, never absence evidence. Legacy text also requires complete
+headers and bounded, valid descriptor values. The original XFRM state bytes
+and parser-owned JSON copies (which may contain key material) are cleared;
+daemon and kernel error text is not reflected to ordinary output.
 
 This is **observation only**, not a persisted authority token or authorization
 to call `load-conn`, `load-shared`, `unload-conn`, `unload-shared`, initiate,
