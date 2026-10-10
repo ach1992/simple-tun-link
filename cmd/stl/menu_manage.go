@@ -7,9 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"reflect"
 	"strings"
-	"time"
 
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/state"
@@ -70,7 +68,7 @@ func menuManage(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 	case "s":
 		return linkReadCommand([]string{"status", idText}, out, errOut, options)
 	case "r":
-		return menuRemoveLink(input, reader, out, errOut, options, root, record.Desired)
+		return menuRemoveLink(input, reader, out, errOut, options, record.Desired)
 	default:
 		fmt.Fprintln(errOut, "Unknown Manage action; no changes made.")
 		return 2
@@ -81,7 +79,7 @@ func menuManage(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 // have an explicit, versioned Engine-backed CLI remove command with matching
 // Link-ID confirmation, and must never rely on terminal transcript parsing.
 func menuRemoveLink(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
-	options *runtimeOptions, root string, selected domain.Link) int {
+	options *runtimeOptions, selected domain.Link) int {
 	stdin, stdinOK := input.(*os.File)
 	stdout, stdoutOK := out.(*os.File)
 	if !stdinOK || !stdoutOK || !terminalIsInteractive(stdin) || !terminalIsInteractive(stdout) {
@@ -111,21 +109,9 @@ func menuRemoveLink(input io.Reader, reader *bufio.Reader, out, errOut io.Writer
 		return 2
 	}
 
-	// A Link may have been reconfigured while the operator reviewed the
-	// preview. Narrow this race before handing off to Engine, which remains
-	// responsible for fresh state, resource locks and ownership checks.
-	recheckCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	current, err := state.NewFileStore(root).Load(recheckCtx)
-	if err != nil {
-		fmt.Fprintln(errOut, "Cannot recheck saved Link before removal; no changes applied.")
-		return 1
-	}
-	existing, found := current.Find(selected.ID)
-	if !found || !reflect.DeepEqual(existing.Desired, selected) {
-		fmt.Fprintln(errOut, "Saved Link changed since preview; removal was not attempted. Review it again.")
-		return 1
-	}
-	return linkLifecycleCommand([]string{"remove", string(selected.ID), "--confirm", string(selected.ID)},
-		nil, out, errOut, options)
+	// The confirmed desired Link is checked inside the canonical Engine's
+	// per-Link lock, before backend inspection, planning or mutation. A menu-
+	// level recheck here would be racy with concurrent Engine.Ensure.
+	return executeLinkMutationConditional("link_remove", domain.Link{}, selected.ID, false,
+		out, errOut, options, &selected)
 }

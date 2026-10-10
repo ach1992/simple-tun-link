@@ -102,6 +102,17 @@ func linkLifecycleCommand(args []string, input io.Reader, stdout, stderr io.Writ
 // same canonical Engine, without another pairing-specific lifecycle.
 func executeLinkMutation(operation string, desired domain.Link, id domain.LinkID,
 	jsonOutput bool, stdout, stderr io.Writer, options *runtimeOptions) int {
+	return executeLinkMutationConditional(operation, desired, id, jsonOutput, stdout, stderr, options, nil)
+}
+
+// The menu alone can pass a previewed desired Link to the same mutation
+// executor. The direct versioned CLI continues to use unconditional Remove.
+func executeLinkMutationConditional(operation string, desired domain.Link, id domain.LinkID,
+	jsonOutput bool, stdout, stderr io.Writer, options *runtimeOptions, expected *domain.Link) int {
+	if expected != nil && (operation != "link_remove" || expected.ID != id) {
+		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, operation,
+			"conditional removal Link identity does not match")
+	}
 	if options == nil {
 		var err error
 		options, err = productionRuntimeOptions()
@@ -125,13 +136,21 @@ func executeLinkMutation(operation string, desired domain.Link, id domain.LinkID
 	case "link_import":
 		result, err = engine.EnsureImported(ctx, desired)
 	case "link_remove":
-		result, err = engine.Remove(ctx, id)
+		if expected != nil {
+			result, err = engine.RemoveIfUnchanged(ctx, *expected)
+		} else {
+			result, err = engine.Remove(ctx, id)
+		}
 	default:
 		return lifecycleFailure(stdout, stderr, jsonOutput, stlerr.CodeInternal, operation, nil,
 			"unknown internal Link operation")
 	}
 	if err != nil {
 		code := stlerr.CodeOf(err)
+		if expected != nil && code == stlerr.CodeConflict {
+			return lifecycleFailure(stdout, stderr, jsonOutput, code, operation, &result,
+				"Saved Link changed since preview or removal conflicted; review current Link state before retry")
+		}
 		return lifecycleFailure(stdout, stderr, jsonOutput, code, operation, &result,
 			"Link operation did not complete successfully; inspect current Link status/state before retry")
 	}

@@ -27,10 +27,11 @@ The Remove action is available **only on a real interactive terminal**. It
 shows a redacted, Link-specific removal preview (identity, addresses and
 underlay), requires a freshly typed **exact Link ID**, and discards queued
 terminal input before accepting confirmation. Cancelling or using a non-TTY
-stream causes no removal. The operator must review the state again if the
-saved desired Link changed during confirmation. On confirmation, the menu
-delegates to the existing `stl link remove <id> --confirm <id>` command and
-canonical Engine ownership/rollback/persistence checks; it never deletes
+stream causes no removal. On confirmation, the menu delegates to the same
+canonical Engine removal path as `stl link remove`, but passes the previewed
+Link as an expected-state condition. **Under the per-Link lock**, the Engine
+rejects removal if a concurrent Ensure changed the confirmed desired Link.
+Ownership/rollback/persistence handling is unchanged; the menu never deletes
 interfaces or firewall rules directly. Failed or uncertain removal must be
 reconciled before retrying. For non-interactive automation, use that explicit
 CLI command and its versioned `--json` result instead of scripting the menu.
