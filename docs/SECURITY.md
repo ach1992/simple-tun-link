@@ -162,6 +162,14 @@ No production IPsec CLI/backend is registered by this milestone.
 
 ### Read-only IPsec activation vacancy preflight (not ownership)
 
+The VICI vacancy reader checks both the VICI-only `get-conns`
+inventory and the daemon-wide streamed `list-conns` inventory. A
+matching foreign connection loaded outside VICI is not vacant:
+strongSwan `load-conn` can replace it by name. The exact-name filtered
+event stream must complete with no error, duplicates or unexpected
+entries. This does not reserve the daemon namespace against non-STL
+administrators or authorize VICI writes.
+
 Before any operational IPsec backend is enabled, a source-only
 `Engine.CheckIPsecActivationVacancy` may inspect a staged Link under the
 existing maintenance -> Link -> resource lock order. It revalidates the exact

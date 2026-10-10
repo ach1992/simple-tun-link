@@ -3,6 +3,7 @@ package ipsec
 import (
 	"context"
 	"fmt"
+	"iter"
 	"net"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 // owner-checked backend, not an unguarded shell command or an opt-in flag.
 type Session interface {
 	Call(context.Context, string, *vici.Message) (*vici.Message, error)
+	CallStreaming(context.Context, string, string, *vici.Message) iter.Seq2[*vici.Message, error]
 	Close() error
 }
 
@@ -62,6 +64,8 @@ func NewReader(socketPath string) (Reader, error) {
 // A matching name by itself NEVER authorizes replacement, unload or cleanup.
 // Invalid/missing daemon collection results fail closed rather than turning
 // an unknown daemon into an empty, writable one.
+// Both VICI-only get-conns and all-provider list-conns must be checked: the
+// former alone cannot rule out collisions with other connection providers.
 type Snapshot struct {
 	ConnectionNamePresent bool
 	SecretNamePresent     bool
@@ -91,7 +95,14 @@ func (r Reader) Inspect(ctx context.Context, p Profile) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("VICI connection inventory unavailable")
 	}
-	seenConn, err := containsExactUnique(conn, "conns", p.ConnectionName)
+	seenVICIConn, err := containsExactUnique(conn, "conns", p.ConnectionName)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	// get-conns ONLY enumerates VICI-loaded connections. strongSwan may
+	// load a foreign matching name from another backend; load-conn would
+	// replace that object. Inspect the daemon-wide view as well.
+	seenAnyConn, err := daemonConnectionPresent(ctx, session, p.ConnectionName)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -103,7 +114,40 @@ func (r Reader) Inspect(ctx context.Context, p Profile) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	return Snapshot{ConnectionNamePresent: seenConn, SecretNamePresent: seenKey}, nil
+	return Snapshot{ConnectionNamePresent: seenVICIConn || seenAnyConn, SecretNamePresent: seenKey}, nil
+}
+
+// daemonConnectionPresent checks all loaded strongSwan configurations, not
+// just VICI-owned ones. The single-name filter is a request optimization,
+// NEVER ownership proof. Any unexpected event, duplicate, or stream error
+// prevents a vacancy verdict. The stream completes before returning: early
+// cancellation could otherwise turn an incomplete inventory into absence.
+func daemonConnectionPresent(ctx context.Context, session Session, name string) (bool, error) {
+	query := vici.NewMessage()
+	if err := query.Set("ike", name); err != nil {
+		return false, fmt.Errorf("invalid daemon inventory filter")
+	}
+	count := 0
+	for event, err := range session.CallStreaming(ctx, "list-conns", "list-conn", query) {
+		if err != nil || event == nil {
+			return false, fmt.Errorf("strongSwan complete connection inventory unavailable")
+		}
+		fields := event.Keys()
+		if len(fields) != 1 || fields[0] != name {
+			return false, fmt.Errorf("unexpected strongSwan connection inventory identity")
+		}
+		if section, ok := event.Get(name).(*vici.Message); !ok || section == nil {
+			return false, fmt.Errorf("invalid strongSwan connection inventory entry")
+		}
+		count++
+		if count > 1 {
+			return false, fmt.Errorf("ambiguous strongSwan connection inventory")
+		}
+	}
+	if ctx.Err() != nil {
+		return false, fmt.Errorf("strongSwan complete connection inventory interrupted")
+	}
+	return count == 1, nil
 }
 
 func containsExactUnique(reply *vici.Message, key, target string) (bool, error) {
