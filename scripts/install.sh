@@ -149,15 +149,34 @@ ensure_packages() {
     printf 'STL dependencies already installed for %s %s (%s).\n' "$os_id" "$os_version" "$backends" >&2
     return
   fi
-  # Do not silently introduce a second charon daemon variant. Existing
-  # strongSwan-starter configurations are foreign operator-owned state.
-  if [[ $want_ipsec == 1 ]] && ! package_installed charon-systemd; then
-    if package_installed strongswan-starter; then
-      fail 'foreign strongswan-starter installed; refusing automatic charon-systemd installation, reconcile daemon choice explicitly'
-    fi
-    if command -v pgrep >/dev/null &&
-       (pgrep -x charon >/dev/null || pgrep -x charon-systemd >/dev/null); then
-      fail 'existing strongSwan daemon process detected; refusing a second daemon installation'
+  # Installing new IPsec packages can activate/restart an operator-owned
+  # daemon even if charon-systemd is already present. Require a truly fresh
+  # daemon environment for ANY missing IPsec package; do not opportunistically
+  # take ownership of a foreign strongSwan instance.
+  if [[ $want_ipsec == 1 ]]; then
+    local missing_ipsec=0
+    for pkg in "${missing[@]}"; do
+      case "$pkg" in
+        charon-systemd|strongswan-swanctl|libstrongswan-standard-plugins) missing_ipsec=1 ;;
+      esac
+    done
+    if [[ $missing_ipsec == 1 ]]; then
+      if package_installed strongswan-starter || package_installed charon-systemd; then
+        fail 'existing strongSwan installation requires operator-managed package reconciliation; refusing automatic package changes'
+      fi
+      # Debian 11 minimal images ship pidof but not pgrep; fail closed when
+      # neither process-identity checker is available.
+      if command -v pgrep >/dev/null; then
+        if pgrep -x charon >/dev/null || pgrep -x charon-systemd >/dev/null; then
+          fail 'existing strongSwan daemon process detected; refusing IPsec package changes'
+        fi
+      elif command -v pidof >/dev/null; then
+        if pidof charon charon-systemd >/dev/null; then
+          fail 'existing strongSwan daemon process detected; refusing IPsec package changes'
+        fi
+      else
+        fail 'cannot safely determine whether a strongSwan daemon is already running'
+      fi
     fi
   fi
   printf 'Installing missing STL dependency packages on %s %s: %s\n' "$os_id" "$os_version" "${missing[*]}" >&2

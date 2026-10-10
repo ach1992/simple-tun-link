@@ -28,7 +28,8 @@ build, or ordinary `go test`.
 - Installing `charon-systemd` can enable/start the daemon. To preserve foreign
   VPN service ownership, optional IPsec dependency installation requires
   explicit `--backends ipsec` / `--backends all` selection and refuses an
-  existing alternative `strongswan-starter` package or running `charon` daemon. The installer NEVER
+  existing `strongswan-starter` or `charon-systemd` package whenever an IPsec package change is required, or a running
+  `charon` daemon. The installer NEVER
   loads/removes IKE configs, changes firewall/routes or enables global tuning.
 - Only missing packages are requested; the installer never upgrades the entire
   host or edits repositories. Host APT package installation is not covered by
