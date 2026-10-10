@@ -301,7 +301,7 @@ if [[ $action == uninstall ]]; then
   [[ ! -e $target && ! -L $target && ! -e $alias && ! -L $alias && ! -e $record && ! -L $record ]] || fail 'uninstall identities not fully retired'
   commit_marker "$prior_hash"
   printf 'Uninstalled installer-owned stl/stlink only; Link state was left untouched.\n'
-
+  exit 0
 fi
 
 arch=$(uname -m)
