@@ -104,6 +104,7 @@ func TestMenuImportCredentialedQuickLinkIsRedactedAndCannotApply(t *testing.T) {
 	link, _ := makeLifecycleDesired(t, "c", "10.70.95.0/31")
 	link.Backend, link.Encapsulation = domain.BackendWireGuard, domain.EncapUDP
 	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32))
+	completeWireGuardFixture(t, &link, key)
 	url := testQuickSetupLink(t, link, []byte(key))
 	code, output, errOut := runMenuImportTest(t, root, []backend.Backend{fake},
 		"2\n"+url+"\n8\n")

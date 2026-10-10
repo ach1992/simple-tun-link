@@ -153,6 +153,7 @@ func TestPlaintextImportRejectsSecretsAndUnreviewedChangesWithoutMutation(t *tes
 	source, _ := makeLifecycleDesired(t, "d", "10.70.11.0/31")
 	source.Backend, source.Encapsulation = domain.BackendWireGuard, domain.EncapUDP
 	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32))
+	completeWireGuardFixture(t, &source, key)
 	secretURL := testQuickSetupLink(t, source, []byte(key))
 
 	code, previewJSON, errOut := runLifecycleTest(t, root, fake,

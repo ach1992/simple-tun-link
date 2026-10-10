@@ -2,6 +2,7 @@ package pairing
 
 import (
 	"bytes"
+	"crypto/ecdh"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -26,11 +27,35 @@ func testLink(id string, backend domain.Backend, encap domain.Encapsulation) dom
 	if backend == domain.BackendGRE && (encap == domain.EncapFOU || encap == domain.EncapGUE) {
 		link.GRE.UDPPort = 5555
 	}
+	if backend == domain.BackendWireGuard {
+		link.WireGuard = domain.WireGuardOptions{
+			LocalPublicKey: wgPublicForTest(wgSenderTestKey()),
+			PeerPublicKey:  wgPublicForTest(wgTestKey()),
+			ListenPort:     51820, PeerPort: 51821,
+			LocalKeepalive: 0, PeerKeepalive: 25,
+		}
+	}
 	return link
 }
 func wgTestKey() []byte {
 	return []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0xa6}, 32)))
 }
+func wgSenderTestKey() []byte {
+	return []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0xb7}, 32)))
+}
+
+func wgPublicForTest(secret []byte) string {
+	raw, err := base64.StdEncoding.Strict().DecodeString(string(secret))
+	if err != nil {
+		panic("invalid static test credential")
+	}
+	key, err := ecdh.X25519().NewPrivateKey(raw)
+	if err != nil {
+		panic("invalid static test private key")
+	}
+	return base64.StdEncoding.EncodeToString(key.PublicKey().Bytes())
+}
+
 func ipsecTestPSK() []byte { return []byte("random-test-psk-aaaaaaaaaaaaaaaa") }
 
 func TestPairingRoundTripAndReceiverInversion(t *testing.T) {
@@ -58,7 +83,13 @@ func TestPairingRoundTripAndReceiverInversion(t *testing.T) {
 				t.Fatal(err)
 			}
 			serialized, err := offer.EncodeSetupLink()
-			if err != nil || !strings.HasPrefix(serialized, setupPrefix) {
+			expectedPrefix := setupPrefix
+			expectedVersion := SchemaVersion
+			if tt.backend == domain.BackendWireGuard {
+				expectedPrefix = wireGuardSetupPrefix
+				expectedVersion = WireGuardSchemaVersion
+			}
+			if err != nil || !strings.HasPrefix(serialized, expectedPrefix) {
 				t.Fatalf("encode failed: %v", err)
 			}
 			if len(serialized) > MaxLinkBytes {
@@ -91,7 +122,7 @@ func TestPairingRoundTripAndReceiverInversion(t *testing.T) {
 				t.Fatal("encoding not deterministic")
 			}
 			preview := parsed.Preview()
-			if preview.Link != inverted || preview.HasCredential != parsed.IsSensitive() || preview.SchemaVersion != SchemaVersion {
+			if preview.Link != inverted || preview.HasCredential != parsed.IsSensitive() || preview.SchemaVersion != expectedVersion {
 				t.Fatal("preview not recipient-oriented")
 			}
 		})
@@ -370,5 +401,71 @@ func TestManualBlockUsesCanonicalPairingOffer(t *testing.T) {
 	}
 	if !strings.Contains(block, "Version: 2\n") || !strings.Contains(block, "Setup link: stl://2.") {
 		t.Fatalf("current human-readable version/link mismatch: %q", block)
+	}
+}
+
+func TestWireGuardQuickLinkBindsRecipientSecretAndInvertsPublicConfiguration(t *testing.T) {
+	link := testLink(idOne, domain.BackendWireGuard, domain.EncapUDP)
+	offer, err := NewQuickOffer(link, wgTestKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	inverted := offer.ReceiverLink()
+	if inverted.WireGuard.LocalPublicKey != link.WireGuard.PeerPublicKey ||
+		inverted.WireGuard.PeerPublicKey != link.WireGuard.LocalPublicKey ||
+		inverted.WireGuard.ListenPort != link.WireGuard.PeerPort ||
+		inverted.WireGuard.PeerPort != link.WireGuard.ListenPort ||
+		inverted.WireGuard.LocalKeepalive != link.WireGuard.PeerKeepalive ||
+		inverted.WireGuard.PeerKeepalive != link.WireGuard.LocalKeepalive {
+		t.Fatal("receiver public identity, ports or keepalive policy were not inverted")
+	}
+	if Invert(inverted) != link {
+		t.Fatal("wireguard inversion is not reversible")
+	}
+	url, err := offer.EncodeSetupLink()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeSetupLink(url)
+	if err != nil || decoded.Link() != link || decoded.ReceiverLink() != inverted {
+		t.Fatal("WireGuard Quick Link public configuration did not round-trip")
+	}
+	if bytes.Contains([]byte(fmt.Sprintf("%+v", offer.Preview())), wgTestKey()) {
+		t.Fatal("receiver secret leaked through public preview")
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(*domain.Link)
+		key  []byte
+	}{
+		{"recipient private key mismatches expected peer public", func(*domain.Link) {}, wgSenderTestKey()},
+		{"peer port missing", func(l *domain.Link) { l.WireGuard.PeerPort = 0 }, wgTestKey()},
+		{"local port missing", func(l *domain.Link) { l.WireGuard.ListenPort = 0 }, wgTestKey()},
+		{"no public configuration", func(l *domain.Link) { l.WireGuard = domain.WireGuardOptions{} }, wgTestKey()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			changed := link
+			tc.edit(&changed)
+			if _, err := NewQuickOffer(changed, tc.key); err == nil {
+				t.Fatal("invalid/mismatched WireGuard receiver pairing accepted")
+			}
+		})
+	}
+}
+
+func TestWireGuardQuickLinkTamperedPublicIdentityRejectedAfterNewChecksum(t *testing.T) {
+	link := testLink(idOne, domain.BackendWireGuard, domain.EncapUDP)
+	link.WireGuard.PeerPublicKey = wgPublicForTest([]byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0xc8}, 32))))
+	wire := wireOffer{
+		SchemaVersion: WireGuardSchemaVersion, Mode: ModeQuick, Link: link,
+		Recipient: &wireSecret{Kind: CredentialWireGuardPrivateKey,
+			Data: base64.RawURLEncoding.EncodeToString(wgTestKey())},
+	}
+	raw, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeSetupLink(encodeRawForVersionTest(WireGuardSchemaVersion, raw)); err == nil {
+		t.Fatal("rechecksummed public identity tampering was accepted")
 	}
 }

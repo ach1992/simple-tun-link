@@ -7,6 +7,7 @@
 package pairing
 
 import (
+	"crypto/ecdh"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -20,8 +21,9 @@ import (
 )
 
 const (
-	SchemaVersion       = 2
-	legacySchemaVersion = 1
+	SchemaVersion          = 2 // existing GRE/IPIP/IPsec and legacy WireGuard pairing
+	WireGuardSchemaVersion = 3 // new public peer configuration and credential identity binding
+	legacySchemaVersion    = 1
 
 	// MaxPayloadBytes bounds both untrusted decoded JSON and deliberate export.
 	MaxPayloadBytes = 16 * 1024
@@ -60,10 +62,14 @@ type Offer struct {
 // canonical standard base64 text; IPsec expects a nonempty high-entropy PSK.
 // The caller must not persist a generated recipient private key on the sender.
 func NewQuickOffer(link domain.Link, credential []byte) (Offer, error) {
+	version := SchemaVersion
+	if link.Backend == domain.BackendWireGuard {
+		version = WireGuardSchemaVersion
+	}
 	offer := Offer{
 		link:            link,
 		mode:            ModeQuick,
-		schemaVersion:   SchemaVersion,
+		schemaVersion:   version,
 		recipientSecret: append([]byte(nil), credential...),
 	}
 	if err := offer.validate(); err != nil {
@@ -74,11 +80,17 @@ func NewQuickOffer(link domain.Link, credential []byte) (Offer, error) {
 
 func (o Offer) validate() error {
 	version := o.effectiveSchemaVersion()
-	if version != legacySchemaVersion && version != SchemaVersion {
+	if version != legacySchemaVersion && version != SchemaVersion && version != WireGuardSchemaVersion {
 		return fmt.Errorf("unsupported pairing schema version")
+	}
+	if version == WireGuardSchemaVersion && o.link.Backend != domain.BackendWireGuard {
+		return fmt.Errorf("pairing schema v3 is reserved for configured WireGuard")
 	}
 	if version == legacySchemaVersion && o.link.GRE != (domain.GREOptions{}) {
 		return fmt.Errorf("pairing schema v1 cannot carry GRE backend options")
+	}
+	if version <= SchemaVersion && o.link.WireGuard != (domain.WireGuardOptions{}) {
+		return fmt.Errorf("pairing schema v1/v2 cannot carry WireGuard public configuration")
 	}
 	if o.mode != ModeQuick {
 		return fmt.Errorf("unsupported pairing exchange mode")
@@ -114,6 +126,19 @@ func (o Offer) validate() error {
 		raw, err := base64.StdEncoding.Strict().DecodeString(string(o.recipientSecret))
 		if err != nil || len(raw) != 32 || base64.StdEncoding.EncodeToString(raw) != string(o.recipientSecret) {
 			return fmt.Errorf("invalid WireGuard recipient private key encoding")
+		}
+		// Earlier credential-only v1/v2 offers remain decodable and
+		// previewable, but cannot be imported as configured WireGuard links.
+		// Schema v3 binds the public config to the recipient private key.
+		if version == WireGuardSchemaVersion {
+			if o.link.WireGuard == (domain.WireGuardOptions{}) ||
+				o.link.WireGuard.ListenPort == 0 || o.link.WireGuard.PeerPort == 0 {
+				return fmt.Errorf("WireGuard Quick Link requires both peer keys and listen ports")
+			}
+			key, err := ecdh.X25519().NewPrivateKey(raw)
+			if err != nil || base64.StdEncoding.EncodeToString(key.PublicKey().Bytes()) != o.link.WireGuard.PeerPublicKey {
+				return fmt.Errorf("WireGuard recipient credential does not match its public identity")
+			}
 		}
 	case domain.BackendIPsec:
 		if o.link.Encapsulation != domain.EncapESP && o.link.Encapsulation != domain.EncapNATT {
@@ -199,6 +224,12 @@ func Invert(link domain.Link) domain.Link {
 	inverted := link
 	inverted.Underlay.Local, inverted.Underlay.Peer = link.Underlay.Peer, link.Underlay.Local
 	inverted.Addresses.Local, inverted.Addresses.Peer = link.Addresses.Peer, link.Addresses.Local
+	inverted.WireGuard.LocalPublicKey, inverted.WireGuard.PeerPublicKey =
+		link.WireGuard.PeerPublicKey, link.WireGuard.LocalPublicKey
+	inverted.WireGuard.ListenPort, inverted.WireGuard.PeerPort =
+		link.WireGuard.PeerPort, link.WireGuard.ListenPort
+	inverted.WireGuard.LocalKeepalive, inverted.WireGuard.PeerKeepalive =
+		link.WireGuard.PeerKeepalive, link.WireGuard.LocalKeepalive
 	return inverted
 }
 
