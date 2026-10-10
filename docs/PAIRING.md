@@ -6,9 +6,9 @@ by `internal/pairing`. The overall v0.1 requirements are owned by
 Backend-specific interface configuration and key generation remain owned by
 Issues #4–#7; CLI/import/apply orchestration remains owned by Issue #10.
 
-## Version 2 setup links
+## Versioned setup links
 
-The current canonical transport string is:
+GRE/IPIP/IPsec continue using the v2 setup-link transport:
 
 ~~~text
 stl://2.<unpadded-base64url-of-JSON>.<lowercase-sha256-of-JSON>
@@ -29,12 +29,33 @@ Link as a credential, not as a shareable diagnostic artifact.
 
 Version 2 adds the typed `link.gre` object required to carry GRE key/advanced
 options and the FOU/GUE UDP port without weakening strict unknown-field
-rejection. The decoder remains compatible with version 1 payloads whose
-semantics were complete (including GRE Native, IPIP, WireGuard and IPsec), and
-a decoded v1 offer preserves v1 when re-exported. Legacy v1 GRE FOU/GUE links
-are rejected with an explicit regeneration requirement because v1 never carried
-the now-required UDP port; inventing one during import would change networking
-semantics and collision ownership. Version 1 also rejects v2-only `gre` fields.
+rejection.
+
+**Configured WireGuard Quick Links use schema v3** (`stl://3.`), not v2.
+This preserves the exact strict v2 decoding contract. V3 carries a typed,
+**public-only** `link.wireguard` with `local_public_key`, `peer_public_key`,
+`listen_port`, `peer_port`, `local_keepalive`, and
+`peer_keepalive`. These contain no private key and are centrally swapped
+with the underlay and Link Addresses when inverting an offer. New WireGuard
+Quick Links require two distinct canonical public keys, two explicit listen
+ports, and a recipient private key whose derived public key matches the
+specified recipient identity. A mismatch is rejected even if the SHA-256
+checksum was recomputed. This is a key-identity binding check, **not** sender
+authentication or transport encryption. Use a trusted channel to establish
+the setup link's origin.
+
+This preparation does not activate a WireGuard backend or enable WireGuard
+credential import: `stl link import` still rejects all credential-bearing
+links, and `stl link ensure` JSON v1 is unchanged. Private credentials
+must go through the protected per-Link KeyStore before any future network apply.
+
+The decoder also preserves previously valid v1/v2 credential-only WireGuard
+offers with no public configuration for redacted preview and re-export; they
+are **not** ready-to-activate configuration. V1 GRE Native, IPIP and IPsec
+payloads remain decodable, and a decoded v1 offer retains v1 on re-export.
+Legacy v1 GRE FOU/GUE is rejected with an explicit regeneration requirement
+because v1 lacks the UDP port; inventing one would change ownership semantics.
+V1 rejects v2 GRE options, and v1/v2 reject v3 WireGuard public fields.
 
 The decoder limits the entire input to 24 KiB and decoded JSON to 16 KiB.
 It rejects noncanonical Base64/checksum, malformed/duplicate/unknown fields,
@@ -52,7 +73,8 @@ or path.
 
 An encoded offer represents the **initiator's** Link orientation. An importer
 must use `Offer.ReceiverLink()` (which centrally swaps local and peer underlay
-and Link Addresses) before applying. The stable Link ID, backend,
+and Link Addresses, plus WireGuard's public keys/listen ports and per-side
+keepalive settings when present) before applying. The stable Link ID, backend,
 encapsulation, and display name remain unchanged; multiple independent Links
 to the same underlay endpoint pair retain separate IDs.
 

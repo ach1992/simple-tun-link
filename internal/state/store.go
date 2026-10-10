@@ -220,6 +220,9 @@ func migrateSnapshot(snapshot Snapshot) (Snapshot, error) {
 			if link.GRE != (domain.GREOptions{}) {
 				return Snapshot{}, fmt.Errorf("legacy state schema v1 cannot contain GRE backend options; regenerate the Link state")
 			}
+			if link.WireGuard != (domain.WireGuardOptions{}) {
+				return Snapshot{}, fmt.Errorf("legacy state schema v1 cannot contain WireGuard backend options; regenerate the Link state")
+			}
 			if link.Backend == domain.BackendGRE && (link.Encapsulation == domain.EncapFOU || link.Encapsulation == domain.EncapGUE) {
 				return Snapshot{}, fmt.Errorf("legacy GRE FOU/GUE state lacks the required UDP port; regenerate the Link state")
 			}

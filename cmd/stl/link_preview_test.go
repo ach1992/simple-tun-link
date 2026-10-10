@@ -54,6 +54,7 @@ func TestCLIPreviewRedactsReceiverPrivateKeyAndUnknownDisplayName(t *testing.T) 
 	link.Encapsulation = domain.EncapUDP
 	link.DisplayName = "credential-should-not-appear"
 	secret := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32))
+	completeWireGuardFixture(t, &link, secret)
 	offer, err := pairing.NewQuickOffer(link, []byte(secret))
 	if err != nil {
 		t.Fatal(err)

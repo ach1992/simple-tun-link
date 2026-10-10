@@ -2,6 +2,7 @@ package domain
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"net/netip"
 	"strings"
@@ -53,6 +54,47 @@ type GREOptions struct {
 	UDPPort      uint16 `json:"udp_port,omitempty"`
 }
 
+// WireGuardOptions contains ONLY public configuration. Private keys live in
+// the protected per-Link KeyStore, never in desired state or generic JSON.
+// Zero options remain decodable for legacy preview-only pairing links; the
+// WireGuard activation path must require a complete configuration.
+type WireGuardOptions struct {
+	LocalPublicKey string `json:"local_public_key,omitempty"`
+	PeerPublicKey  string `json:"peer_public_key,omitempty"`
+	ListenPort     uint16 `json:"listen_port,omitempty"`
+	PeerPort       uint16 `json:"peer_port,omitempty"`
+	// Keepalive is a local endpoint policy. Separate values permit asymmetric
+	// Quick Link pairing while keeping both peers' preferences explicit.
+	LocalKeepalive uint16 `json:"local_keepalive,omitempty"`
+	PeerKeepalive  uint16 `json:"peer_keepalive,omitempty"`
+}
+
+func (w WireGuardOptions) Validate() error {
+	if !canonicalWireGuardPublicKey(w.LocalPublicKey) || !canonicalWireGuardPublicKey(w.PeerPublicKey) {
+		return stlerr.New(stlerr.CodeInvalid, "validate_link", "", string(BackendWireGuard), "WireGuard requires canonical local and peer public keys")
+	}
+	if w.LocalPublicKey == w.PeerPublicKey {
+		return stlerr.New(stlerr.CodeInvalid, "validate_link", "", string(BackendWireGuard), "WireGuard local and peer public keys must differ")
+	}
+	return nil
+}
+
+func canonicalWireGuardPublicKey(value string) bool {
+	if len(value) != 44 {
+		return false
+	}
+	decoded, err := base64.StdEncoding.Strict().DecodeString(value)
+	if err != nil || len(decoded) != 32 || base64.StdEncoding.EncodeToString(decoded) != value {
+		return false
+	}
+	for _, b := range decoded {
+		if b != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // Link is desired backend-neutral state. Interface names and backend-owned
 // resource identities deliberately do not participate in Link identity.
 type Link struct {
@@ -64,7 +106,8 @@ type Link struct {
 	Encapsulation Encapsulation `json:"encapsulation"`
 	// GRE is meaningful only when Backend == BackendGRE. omitzero keeps the
 	// backend-neutral JSON compact while preserving Link comparability.
-	GRE GREOptions `json:"gre,omitzero"`
+	GRE       GREOptions       `json:"gre,omitzero"`
+	WireGuard WireGuardOptions `json:"wireguard,omitzero"`
 }
 
 // ResourceClaim is a secret-free identity for a collision-sensitive host
@@ -120,6 +163,19 @@ func (l Link) Validate() error {
 	}
 	if l.Backend != BackendGRE && l.GRE != (GREOptions{}) {
 		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "GRE options are only valid for the GRE backend")
+	}
+	if l.Backend != BackendWireGuard && l.WireGuard != (WireGuardOptions{}) {
+		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "WireGuard options are only valid for the WireGuard backend")
+	}
+	if l.Backend == BackendWireGuard {
+		if l.Encapsulation != EncapUDP {
+			return stlerr.New(stlerr.CodeUnsupported, "validate_link", string(l.ID), string(l.Backend), "WireGuard requires UDP encapsulation")
+		}
+		if l.WireGuard != (WireGuardOptions{}) {
+			if err := l.WireGuard.Validate(); err != nil {
+				return err
+			}
+		}
 	}
 	if l.Backend == BackendIPIP {
 		if !l.Underlay.Local.Is4() || !l.Underlay.Peer.Is4() {

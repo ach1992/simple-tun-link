@@ -247,3 +247,43 @@ func TestProtectedWireGuardKeyStoreRejectsUntrustedWritableAncestor(t *testing.T
 		t.Fatal("accepted untrusted ancestor or leaked secret")
 	}
 }
+
+func TestPutRecipientChecksIdentityBeforeTouchingState(t *testing.T) {
+	store, root := testKeyStore(t)
+	receiver := testGeneratedKey(t)
+	foreign := testGeneratedKey(t)
+	receiverPublic, err := receiver.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignPublic, err := foreign.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRecipient(privateTestID, []byte(receiver.SecretWireValue()), foreignPublic); err == nil {
+		t.Fatal("stored recipient private key not matching public identity")
+	}
+	if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("mismatched key created credential state directory")
+	}
+	if err := store.PutRecipient(privateTestID, []byte("malformed-credential"), receiverPublic); err == nil {
+		t.Fatal("stored malformed recipient key")
+	}
+	if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("malformed key created credential state directory")
+	}
+	if err := store.PutRecipient(privateTestID, []byte(receiver.SecretWireValue()), receiverPublic); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Load(privateTestID)
+	if err != nil || got != receiver {
+		t.Fatal("valid recipient key not persisted correctly")
+	}
+	if err := store.PutRecipient(privateTestID, []byte(foreign.SecretWireValue()), foreignPublic); err == nil {
+		t.Fatal("silently replaced already-provisioned receiver credential")
+	}
+	got, err = store.Load(privateTestID)
+	if err != nil || got != receiver {
+		t.Fatal("existing receiver credential changed after refused replacement")
+	}
+}

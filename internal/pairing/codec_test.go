@@ -36,7 +36,7 @@ func TestRejectMalformedTruncatedOversizedAndTamperedLinks(t *testing.T) {
 		t.Fatal("invalid test fixture")
 	}
 	cases := []string{
-		"", "example://1." + parts[0] + "." + parts[1], "stl://3." + parts[0] + "." + parts[1],
+		"", "example://1." + parts[0] + "." + parts[1], "stl://4." + parts[0] + "." + parts[1],
 		"stl://1.", valid[:len(valid)-5], valid + ".extra", valid + "\nsecret",
 		valid[:len(valid)-1] + "0", setupPrefix + "not_base64!." + parts[1],
 		setupPrefix + parts[0] + "." + strings.ToUpper(parts[1]), setupPrefix + "a." + parts[1],
@@ -70,7 +70,7 @@ func TestMalformedSchemasRejectedEvenWithCorrectIntegrityHash(t *testing.T) {
 		{"wrong key case", fmt.Sprintf(`{"schema_version":2,"Mode":"quick","link":%s}`, link), stlerr.CodeInvalid},
 		{"array instead of link", `{"schema_version":2,"mode":"quick","link":[]}`, stlerr.CodeInvalid},
 		{"null recipient credential", fmt.Sprintf(`{"schema_version":2,"mode":"quick","link":%s,"recipient_secret":null}`, link), stlerr.CodeInvalid},
-		{"unsupported schema version", fmt.Sprintf(`{"schema_version":3,"mode":"quick","link":%s}`, link), stlerr.CodeUnsupported},
+		{"unsupported schema version", fmt.Sprintf(`{"schema_version":4,"mode":"quick","link":%s}`, link), stlerr.CodeUnsupported},
 		{"unsupported exchange mode", fmt.Sprintf(`{"schema_version":2,"mode":"secure_exchange","link":%s}`, link), stlerr.CodeUnsupported},
 		{"missing schema version", fmt.Sprintf(`{"mode":"quick","link":%s}`, link), stlerr.CodeInvalid},
 		{"plaintext backend with credential", fmt.Sprintf(`{"schema_version":2,"mode":"quick","link":%s,"recipient_secret":{"kind":"ipsec_psk","data":"YQ"}}`, link), stlerr.CodeInvalid},
@@ -83,7 +83,7 @@ func TestMalformedSchemasRejectedEvenWithCorrectIntegrityHash(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			encoded := encodeRawForTest([]byte(tt.raw))
 			if tt.name == "unsupported schema version" {
-				encoded = encodeRawForVersionTest(3, []byte(tt.raw))
+				encoded = encodeRawForVersionTest(4, []byte(tt.raw))
 			}
 			_, err := DecodeSetupLink(encoded)
 			if err == nil || stlerr.CodeOf(err) != tt.code {
@@ -127,6 +127,7 @@ func TestLegacyV1CompatibilityAndGREMigration(t *testing.T) {
 
 	t.Run("wireguard_secret", func(t *testing.T) {
 		link := testLink(idOne, domain.BackendWireGuard, domain.EncapUDP)
+		link.WireGuard = domain.WireGuardOptions{} // schema v1 had no public WireGuard fields
 		credential := wgTestKey()
 		raw, err := json.Marshal(wireOffer{
 			SchemaVersion: legacySchemaVersion, Mode: ModeQuick, Link: link,
@@ -177,7 +178,7 @@ func TestCredentialBackendKindAndEncodingTampering(t *testing.T) {
 		t.Fatal(err)
 	}
 	link := string(linkJSON)
-	base := `{"schema_version":2,"mode":"quick","link":%s,"recipient_secret":{"kind":%s,"data":%s}}`
+	base := `{"schema_version":3,"mode":"quick","link":%s,"recipient_secret":{"kind":%s,"data":%s}}`
 	cases := []struct{ name, kind, data string }{
 		{"wrong kind", `"ipsec_psk"`, fmt.Sprintf("%q", base64.RawURLEncoding.EncodeToString(wgTestKey()))},
 		{"missing kind", `""`, fmt.Sprintf("%q", base64.RawURLEncoding.EncodeToString(wgTestKey()))},
@@ -188,7 +189,7 @@ func TestCredentialBackendKindAndEncodingTampering(t *testing.T) {
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
 			raw := fmt.Sprintf(base, link, tt.kind, tt.data)
-			if _, err := DecodeSetupLink(encodeRawForTest([]byte(raw))); err == nil {
+			if _, err := DecodeSetupLink(encodeRawForVersionTest(WireGuardSchemaVersion, []byte(raw))); err == nil {
 				t.Fatal("malformed recipient credential accepted")
 			}
 		})
@@ -294,4 +295,61 @@ func FuzzDecodeSetupLink(f *testing.F) {
 			}
 		}
 	})
+}
+
+func TestLegacyWireGuardV2OfferRemainsPreviewableWithoutPublicOptions(t *testing.T) {
+	legacy := testLink(idOne, domain.BackendWireGuard, domain.EncapUDP)
+	legacy.WireGuard = domain.WireGuardOptions{}
+	wire := wireOffer{
+		SchemaVersion: SchemaVersion, Mode: ModeQuick, Link: legacy,
+		Recipient: &wireSecret{Kind: CredentialWireGuardPrivateKey,
+			Data: base64.RawURLEncoding.EncodeToString(wgTestKey())},
+	}
+	raw, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	url := encodeRawForTest(raw)
+	decoded, err := DecodeSetupLink(url)
+	if err != nil {
+		t.Fatal("previously valid v2 WireGuard pairing must remain readable", err)
+	}
+	preview := decoded.Preview()
+	if !preview.Sensitive || !preview.HasCredential || preview.Link.WireGuard != (domain.WireGuardOptions{}) {
+		t.Fatal("legacy credential-only WireGuard preview changed")
+	}
+	roundTrip, err := decoded.EncodeSetupLink()
+	if err != nil || roundTrip != url {
+		t.Fatal("legacy WireGuard v2 payload could not round-trip")
+	}
+	if _, err := NewQuickOffer(legacy, wgTestKey()); err == nil {
+		t.Fatal("new unconfigured WireGuard v2 export accepted")
+	}
+}
+
+func TestConfiguredWireGuardRequiresNewSchemaWithoutReinterpretingV2(t *testing.T) {
+	configured := testLink(idOne, domain.BackendWireGuard, domain.EncapUDP)
+	credential := &wireSecret{Kind: CredentialWireGuardPrivateKey,
+		Data: base64.RawURLEncoding.EncodeToString(wgTestKey())}
+	wire := wireOffer{SchemaVersion: SchemaVersion, Mode: ModeQuick,
+		Link: configured, Recipient: credential}
+	raw, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeSetupLink(encodeRawForVersionTest(SchemaVersion, raw)); err == nil {
+		t.Fatal("schema v2 silently accepted v3 WireGuard public fields")
+	}
+	// New schema cannot be used as an unconfigured shortcut, even though
+	// historical v2 preview-only offers without public fields remain readable.
+	configured.WireGuard = domain.WireGuardOptions{}
+	wire.SchemaVersion = WireGuardSchemaVersion
+	wire.Link = configured
+	raw, err = json.Marshal(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeSetupLink(encodeRawForVersionTest(WireGuardSchemaVersion, raw)); err == nil {
+		t.Fatal("schema v3 accepted an unconfigured WireGuard recipient")
+	}
 }

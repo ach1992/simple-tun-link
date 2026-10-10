@@ -36,6 +36,24 @@ func (s *KeyStore) keyName(id domain.LinkID) (string, error) {
 	return string(id) + ".wgkey", nil
 }
 
+// PutRecipient binds explicitly imported Quick Link material to the receiver's
+// expected public identity before making any filesystem change. A mismatched
+// or malformed credential must not leave an orphaned receiver key.
+func (s *KeyStore) PutRecipient(id domain.LinkID, credential []byte, expectedPublic string) error {
+	if err := id.Validate(); err != nil {
+		return fmt.Errorf("invalid recipient Link ID")
+	}
+	key, err := DecodePrivateKey(string(credential))
+	if err != nil {
+		return fmt.Errorf("invalid WireGuard recipient credential")
+	}
+	public, err := key.PublicKey()
+	if err != nil || expectedPublic == "" || public != expectedPublic {
+		return fmt.Errorf("WireGuard recipient credential does not match public identity")
+	}
+	return s.PutNew(id, key)
+}
+
 // PutNew atomically publishes a private key only if its Link ID has no prior
 // key. On a post-publication error, the key is preserved for reconciliation;
 // silently deleting it could strand an active or about-to-be-restored Link.

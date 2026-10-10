@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	setupPrefix       = "stl://2."
-	legacySetupPrefix = "stl://1."
+	setupPrefix          = "stl://2."
+	wireGuardSetupPrefix = "stl://3."
+	legacySetupPrefix    = "stl://1."
 )
 
 // wireOffer is the only intentionally credential-bearing JSON structure.
@@ -90,7 +91,7 @@ func DecodeSetupLink(input string) (Offer, error) {
 	if err != nil {
 		return invalid("invalid setup-link scheme/version", err)
 	}
-	if envelopeVersion != legacySchemaVersion && envelopeVersion != SchemaVersion {
+	if envelopeVersion != legacySchemaVersion && envelopeVersion != SchemaVersion && envelopeVersion != WireGuardSchemaVersion {
 		return Offer{}, stlerr.New(stlerr.CodeUnsupported, "pairing_decode", "", "", "unsupported pairing schema version")
 	}
 	body := input[len(prefix):]
@@ -191,6 +192,8 @@ func setupPrefixForVersion(version int) (string, error) {
 		return legacySetupPrefix, nil
 	case SchemaVersion:
 		return setupPrefix, nil
+	case WireGuardSchemaVersion:
+		return wireGuardSetupPrefix, nil
 	default:
 		return "", fmt.Errorf("unsupported pairing schema version %d", version)
 	}
@@ -311,6 +314,7 @@ var wireAllowedFields = map[string]map[string]string{
 		"backend":       "string",
 		"encapsulation": "string",
 		"gre":           "gre",
+		"wireguard":     "wireguard",
 	},
 	"underlay": {
 		"local": "string",
@@ -323,6 +327,14 @@ var wireAllowedFields = map[string]map[string]string{
 	"credential": {
 		"kind": "string",
 		"data": "string",
+	},
+	"wireguard": {
+		"local_public_key": "string",
+		"peer_public_key":  "string",
+		"listen_port":      "number",
+		"peer_port":        "number",
+		"local_keepalive":  "number",
+		"peer_keepalive":   "number",
 	},
 	"gre": {
 		"key_enabled":   "bool",
@@ -359,8 +371,13 @@ func validateWireValue(dec *json.Decoder, expected string, depth int, schemaVers
 				return fmt.Errorf("invalid JSON field name")
 			}
 			fieldType, ok := allowed[name]
-			if schemaVersion == legacySchemaVersion && expected == "link" && name == "gre" {
-				ok = false
+			if expected == "link" {
+				if schemaVersion == legacySchemaVersion && name == "gre" {
+					ok = false
+				}
+				if schemaVersion <= SchemaVersion && name == "wireguard" {
+					ok = false
+				}
 			}
 			if !ok {
 				return fmt.Errorf("unknown JSON field")
