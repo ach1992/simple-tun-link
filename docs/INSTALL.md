@@ -7,7 +7,7 @@ build, or ordinary `go test`.
 
 ## Supported deployment shape
 
-- Linux amd64 or arm64; Debian/Ubuntu-class hosts are the initial target.
+- Linux amd64 or arm64; Ubuntu 22.04+ and Debian 11+ are supported installer targets. Derivatives are not assumed compatible.
 - Root-owned `/usr/local/bin/stl` is the single executable.
   `/usr/local/bin/stlink` is a relative symlink to `stl`, not another binary.
 - Installer bookkeeping is root-owned in
@@ -15,10 +15,39 @@ build, or ordinary `go test`.
 - The canonical Engine still owns every Link, `/var/lib/simple-tun-link`,
   network resource, and `simple-tun-link-restore.service`. The installer does
   **not** manage those resources or install a second systemd service.
-- Backend packages/tools are **not** installed by the base installer. Runtime
-  preflight reports a missing `ip`, `iptables`, `wg`, or strongSwan capability
-  for the applicable backend. Install optional tools using the host's ordinary
-  package manager when that backend is actually needed.
+- On real `/usr/local` installs/updates, the installer identifies the OS from
+  `/etc/os-release` as data, validates Ubuntu >=22.04 or Debian >=11, checks
+  installed APT package identities via `dpkg-query`, and installs ONLY missing
+  distro packages with `apt-get` from the host's existing repositories.
+  Default `--backends native` selects `iproute2` + `iptables` for GRE/IPIP.
+  `--backends native,wireguard` adds `wireguard-tools`;
+  `--backends native,ipsec` adds `charon-systemd`,
+  `strongswan-swanctl` and `libstrongswan-standard-plugins`
+  (OpenSSL/GCM algorithm backends, not guaranteed by `--no-install-recommends`).
+  `--backends all` opts in to every backend dependency.
+- Installing `charon-systemd` can enable/start the daemon. To preserve foreign
+  VPN service ownership, optional IPsec dependency installation requires
+  explicit `--backends ipsec` / `--backends all` selection and refuses an
+  existing `strongswan-starter` or `charon-systemd` package whenever an IPsec package change is required, or a running
+  `charon` daemon. The installer NEVER
+  loads/removes IKE configs, changes firewall/routes or enables global tuning.
+- Only missing packages are requested; the installer never upgrades the entire
+  host or edits repositories. Host APT package installation is not covered by
+  the STL binary rollback transaction, and STL uninstall never uninstalls host
+  packages. On error it reports the partial-package-management limitation.
+- Offline `--bundle --prefix /private/test` installs cannot install real host
+  packages. Use the non-mutating `requirements` command to preview the exact
+  packages before invoking privileged install.
+- Debian 11 LTS security support ended 2026-08-31. The requested minimum
+  remains supported **if working, signed, maintained APT package repositories
+  are configured on the host**, but the default Bullseye security mirror has
+  returned HTTP 404 for previously indexed packages since LTS expiry. The
+  installer fails with a specific error rather than disabling signature/expiry
+  checks, downgrading packages or silently rewriting repositories. Choose
+  Debian 12+ or an independently maintained Debian 11/ELTS source.
+- Kernel modules, iproute2 XFRM features and strongSwan runtime behavior remain
+  capability-gated; distro/package detection does not prove real tunnel traffic
+  or release qualification (Issue #12).
 
 ## Install from an official released tag
 
@@ -28,6 +57,17 @@ For a single-command install, with an explicit released tag:
 ~~~sh
 bash -c 'set -euo pipefail; umask 077; t=$(mktemp); trap '\''rm -f -- "$t"'\'' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 -o "$t" https://raw.githubusercontent.com/ach1992/simple-tun-link/vX.Y.Z/scripts/install.sh; bash -n "$t"; sudo bash "$t" install --version vX.Y.Z'
 ~~~
+
+The default one-command example installs only the native GRE/IPIP
+dependencies. To provision all backend packages automatically, append
+`--backends all` to the `sudo bash "$t" install --version vX.Y.Z` invocation
+in that wrapper, after checking existing strongSwan services. A fetched
+installer cannot bootstrap its own download client: `curl` is needed for the
+one-command wrapper on the host before package provisioning starts.
+To preview without changing anything:
+```sh
+bash scripts/install.sh requirements --backends all
+```
 
 The one-command wrapper completes and syntax-checks the exact-tag installer download into a private temporary file **before invoking sudo**; a partial/failed download is never streamed into a privileged shell. The downloaded installer then fetches `SHA256SUMS`, `BUILD-MANIFEST.txt`, `LICENSE`, and the one
 architecture-specific `stl_vX.Y.Z_linux_<arch>` executable from the **fixed
@@ -158,6 +198,7 @@ update/uninstall. Multiple unrelated Links still mutate concurrently.
 ## Offline/disposable validation
 
 ~~~sh
+bash scripts/test-install-requirements.sh
 bash scripts/test-install.sh
 ~~~
 
