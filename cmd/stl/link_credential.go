@@ -78,7 +78,7 @@ func (g wireGuardRetirementGuard) VerifyUnused(ctx context.Context, id domain.Li
 			continue
 		}
 		fields := strings.Fields(line)
-		if len(fields) != 2 {
+		if len(fields) != 2 || (fields[1] != "(none)" && !canonicalWireGuardPublicConfirmation(fields[1])) {
 			return fmt.Errorf("invalid global WireGuard public-key observation")
 		}
 		if fields[0] == name || fields[1] == expectedPublic {

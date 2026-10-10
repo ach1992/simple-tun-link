@@ -98,6 +98,7 @@ func TestWireGuardCredentialRetireNeedsCommittedAndLiveHostAbsence(t *testing.T)
 		{"interface-name", func() { probe.linkName = "stlwg" + string(link.ID)[4:14] }, func() { probe.linkName = "" }},
 		{"owner-alias", func() { probe.alias = "stl:" + string(link.ID) }, func() { probe.alias = "" }},
 		{"active-public-key", func() { probe.livePublic = public }, func() { probe.livePublic = "" }},
+		{"malformed-public-key-observation", func() { probe.livePublic = "not-a-public-key" }, func() { probe.livePublic = "" }},
 		{"owned-firewall", func() { probe.ownedFirewall = true }, func() { probe.ownedFirewall = false }},
 		{"unknown-inspection", func() { probe.inspectionFail = true }, func() { probe.inspectionFail = false }},
 	} {
