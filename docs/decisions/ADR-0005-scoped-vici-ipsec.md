@@ -65,7 +65,8 @@ The initial PR proves only public identity/profile formation, read-only
 VICI inventory handling and fail-closed unit behavior. It is not an IPsec
 dataplane, IKEv2/ESP/NAT-T, secret-storage, restart, or release acceptance.
 Issues #7 and #12 remain OPEN.
-\nThe follow-up protected-PSK storage milestone introduces a dedicated
+
+The follow-up protected-PSK storage milestone introduces a dedicated
 no-replace, owner-private per-Link credential store with secret-redacted
 values and a shared audited directory traversal guard used by WireGuard.
 It deliberately performs NO VICI/Engine mutation, recipient import, credential
