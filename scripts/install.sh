@@ -109,8 +109,12 @@ for recovery in "${recovery_dirs[@]}"; do
     install|update)
       is_regular "$record" && is_regular "$target" &&
         [[ -L $alias && $(readlink -- "$alias") == stl ]] &&
-        [[ $(hash_file "$target") == "$saved_hash" ]] &&
-        grep -qx "sha256=$saved_hash" "$record" || fail 'committed installation differs; preserve recovery evidence'
+        [[ $(hash_file "$target") == "$saved_hash" ]] || fail 'committed installation differs; preserve recovery evidence'
+      saved_record_version=$(sed -n 's/^version=//p' "$record")
+      [[ $saved_record_version =~ ^(v[0-9]+\.[0-9]+\.[0-9]+([.-][a-zA-Z0-9.-]+)?|dev-[0-9a-f]{12})$ ]] || fail 'invalid committed recovery record version'
+      record_body=$(cat -- "$record") || fail 'cannot read committed recovery record'
+      record_expected=$(printf 'format=1\nproject=simple-tun-link\nversion=%s\nsha256=%s' "$saved_record_version" "$saved_hash")
+      [[ $record_body == "$record_expected" && $(wc -c < "$record") -eq $(( ${#record_expected} + 1 )) ]] || fail 'committed recovery record identity is inconsistent'
       ;;
     uninstall)
       [[ ! -e $record && ! -L $record && ! -e $target && ! -L $target && ! -e $alias && ! -L $alias ]] || fail 'committed uninstall differs; preserve recovery evidence'
