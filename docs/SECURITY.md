@@ -98,6 +98,36 @@ acceptance. Read-only status
 reports public handshake and counter observations; it does not authenticate
 who supplied the setup URL or prove bidirectional traffic.
 
+### IPsec protected-PSK foundation (not yet a live backend)
+
+The IPsec module now has a separate Link-scoped protected PSK store under
+the same descriptor-verified root's private `credentials/` directory.
+It uses `<link-ID>.ipsecpsk` files, distinct from `.wgkey`, with strict
+`0700` directories, owner-only `0600` regular single-link files, no-symlink
+descriptor traversal, and atomic no-replace publication followed by directory
+fsync. The shared `internal/credentials` implementation retains the existing
+WireGuard path checks; two independent backend keys cannot overwrite one
+another, including when their Link ID text matches.
+
+The IPsec v0.1 store accepts **exactly 32 random bytes** (256-bit PSK),
+rejects all-zero and noncanonical stored encoding, redacts generic Go
+formatting and JSON, returns a private copy only through the deliberately
+named `SecretBytes()` function, and requires the caller to clear that copy.
+`EnsureExact` allows replay of the identical PSK but never silent rekey or
+replacement. Publication errors after a no-replace write may leave an orphan
+credential; this is deliberate fail-closed recovery preservation.
+
+**Security scope boundary:** No production IPsec Engine registration, VICI
+load/unload, IKE identity proof, live SA, XFRM interface, pairing CLI or
+credential retirement is implemented by this storage milestone. A VICI name
+match never proves ownership; future Engine operations must hold the
+canonical maintenance/per-Link/resource locks and prove exact owned state
+before any daemon mutation or removal. Legacy v2 Quick Link IPsec offers are
+still preview-only; some older offers may contain bounded PSKs other than
+32 bytes, but this protected store does not silently accept or mutate them.
+Their eventual migration/import policy needs explicit compatibility handling
+before exposing a user-facing IPsec import or rekey flow.
+
 ## Setup-link safety
 
 A setup link is untrusted input.
