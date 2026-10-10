@@ -61,7 +61,20 @@ func (e *Engine) ensureWithPolicy(ctx context.Context, desired domain.Link, reje
 	return e.executeEnsure(ctx, desired, rejectReconfiguration)
 }
 
+// RemoveIfUnchanged is the interactive preview-confirmed variant of Remove.
+// The expected desired Link is checked *after* acquiring the same per-Link lock
+// as Ensure and ordinary Remove, so a concurrent reconfiguration cannot slip
+// between the confirmation check and destructive backend work. This is an
+// internal Engine operation, not a new machine CLI/API contract.
+func (e *Engine) RemoveIfUnchanged(ctx context.Context, expected domain.Link) (Result, error) {
+	return e.remove(ctx, expected.ID, &expected)
+}
+
 func (e *Engine) Remove(ctx context.Context, id domain.LinkID) (Result, error) {
+	return e.remove(ctx, id, nil)
+}
+
+func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.Link) (Result, error) {
 	if err := id.Validate(); err != nil {
 		return Result{}, contextualize(err, stlerr.CodeInvalid, "remove", domain.Link{ID: id}, "invalid Link ID")
 	}
@@ -79,6 +92,10 @@ func (e *Engine) Remove(ctx context.Context, id domain.LinkID) (Result, error) {
 	record, ok := snapshot.Find(id)
 	if !ok {
 		return Result{}, stlerr.New(stlerr.CodeInvalid, "remove", string(id), "", "Link is not present in local state")
+	}
+	if expected != nil && record.Desired != *expected {
+		return Result{}, stlerr.New(stlerr.CodeConflict, "remove", string(id), "",
+			"saved Link changed since confirmed preview; no removal was attempted")
 	}
 	prior := record.Desired
 	return e.executeLocked(ctx, backend.Request{Operation: backend.OperationRemove, Prior: &prior, Link: record.Desired}, record)

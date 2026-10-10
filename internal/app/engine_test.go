@@ -402,3 +402,101 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+type gateBeforeLinkLock struct {
+	delegate Locker
+	linkID   domain.LinkID
+	entered  chan struct{}
+	proceed  chan struct{}
+}
+
+func (g *gateBeforeLinkLock) Acquire(ctx context.Context, claims []domain.ResourceClaim) (func() error, error) {
+	if len(claims) == 1 && claims[0] == linkLock(g.linkID) {
+		close(g.entered)
+		select {
+		case <-g.proceed:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return g.delegate.Acquire(ctx, claims)
+}
+
+// The reviewer-identified race happens after the operator has confirmed A
+// but before Remove acquires the Link lock. Force Ensure(B) to win that
+// interleaving deterministically; the conditional Remove must fail before
+// invoking the backend, without affecting another same-peer Link.
+func TestRemoveIfUnchangedRejectsConcurrentReconfigurationAfterConfirmation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	root := t.TempDir()
+	b := newFakeBackend()
+	registry, err := backend.NewRegistry(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := state.NewFileStore(root)
+	normal, err := New(registry, store, state.NewLockManager(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := linkFor(t, "preview-old", "10.80.30.0/31", "10.80.30.1/31")
+	sibling := linkFor(t, "sibling-stays", "10.80.31.0/31", "10.80.31.1/31")
+	for _, link := range []domain.Link{first, sibling} {
+		if _, err := normal.Ensure(ctx, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gate := &gateBeforeLinkLock{
+		delegate: state.NewLockManager(root), linkID: first.ID,
+		entered: make(chan struct{}), proceed: make(chan struct{}),
+	}
+	conditional, err := New(registry, store, gate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type outcome struct {
+		result Result
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := conditional.RemoveIfUnchanged(ctx, first)
+		done <- outcome{result, err}
+	}()
+	select {
+	case <-gate.entered:
+		// The removal is confirmed/submitted but not allowed to lock.
+	case <-ctx.Done():
+		t.Fatal("conditional removal never reached the Link-lock boundary")
+	}
+
+	updated := first
+	updated.DisplayName = "preview-changed"
+	if result, err := normal.Ensure(ctx, updated); err != nil || !result.Changed {
+		t.Fatalf("competing same-ID Ensure did not win before removal: %+v %v", result, err)
+	}
+	close(gate.proceed)
+	select {
+	case got := <-done:
+		if stlerr.CodeOf(got.err) != stlerr.CodeConflict || got.result != (Result{}) {
+			t.Fatalf("stale confirmed Remove must reject before backend work: %+v %v", got.result, got.err)
+		}
+	case <-ctx.Done():
+		t.Fatal("conditional Remove deadlocked on the same-Link lock")
+	}
+	visible, err := store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, ok := visible.Find(first.ID)
+	other, okSibling := visible.Find(sibling.ID)
+	if !ok || !okSibling || record.Desired != updated || other.Desired != sibling {
+		t.Fatal("stale removal lost reconfigured or unrelated desired Link")
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.applyCount != 3 || len(b.present) != 2 {
+		t.Fatalf("conditional removal touched backend state: applyCount=%d present=%d", b.applyCount, len(b.present))
+	}
+}
