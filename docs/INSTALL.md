@@ -21,7 +21,9 @@ build, or ordinary `go test`.
   distro packages with `apt-get` from the host's existing repositories.
   Default `--backends native` selects `iproute2` + `iptables` for GRE/IPIP.
   `--backends native,wireguard` adds `wireguard-tools`;
-  `--backends native,ipsec` adds `charon-systemd` + `strongswan-swanctl`.
+  `--backends native,ipsec` adds `charon-systemd`,
+  `strongswan-swanctl` and `libstrongswan-standard-plugins`
+  (OpenSSL/GCM algorithm backends, not guaranteed by `--no-install-recommends`).
   `--backends all` opts in to every backend dependency.
 - Installing `charon-systemd` can enable/start the daemon. To preserve foreign
   VPN service ownership, optional IPsec dependency installation requires
@@ -35,9 +37,13 @@ build, or ordinary `go test`.
 - Offline `--bundle --prefix /private/test` installs cannot install real host
   packages. Use the non-mutating `requirements` command to preview the exact
   packages before invoking privileged install.
-- Debian 11 LTS security support ended 2026-08-31. Compatibility remains as
-  requested but the installer warns and does not silently rewrite repositories
-  or invent security update coverage. Prefer Debian 12+ for maintained hosts.
+- Debian 11 LTS security support ended 2026-08-31. The requested minimum
+  remains supported **if working, signed, maintained APT package repositories
+  are configured on the host**, but the default Bullseye security mirror has
+  returned HTTP 404 for previously indexed packages since LTS expiry. The
+  installer fails with a specific error rather than disabling signature/expiry
+  checks, downgrading packages or silently rewriting repositories. Choose
+  Debian 12+ or an independently maintained Debian 11/ELTS source.
 - Kernel modules, iproute2 XFRM features and strongSwan runtime behavior remain
   capability-gated; distro/package detection does not prove real tunnel traffic
   or release qualification (Issue #12).

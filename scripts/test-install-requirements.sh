@@ -27,10 +27,10 @@ for distro in 'ubuntu 22.04' 'ubuntu 22.10' 'ubuntu 24.04' 'ubuntu 26.04' \
   plan native,wireguard
   grep -qx "packages=iproute2 iptables wireguard-tools" "$root/out" || fail "wrong WireGuard package list on $distro"
   plan native,ipsec
-  grep -qx "packages=iproute2 iptables charon-systemd strongswan-swanctl" "$root/out" || fail "wrong IPsec package list on $distro"
+  grep -qx "packages=iproute2 iptables charon-systemd strongswan-swanctl libstrongswan-standard-plugins" "$root/out" || fail "wrong IPsec package list on $distro"
   grep -q 'notice=IPsec packages can enable/start' "$root/out" || fail 'IPsec daemon change not flagged'
   plan all
-  grep -qx "packages=iproute2 iptables wireguard-tools charon-systemd strongswan-swanctl" "$root/out" ||
+  grep -qx "packages=iproute2 iptables wireguard-tools charon-systemd strongswan-swanctl libstrongswan-standard-plugins" "$root/out" ||
     fail "wrong all-backend package list on $distro"
   if [[ $distro == 'debian 11' ]]; then
     grep -q 'Debian 11 LTS ended 2026-08-31' "$root/err" || fail 'Debian 11 security EOL warning missing'

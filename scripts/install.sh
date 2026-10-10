@@ -126,7 +126,9 @@ select_packages() {
   # firewall guards, including a host using only WireGuard/IPsec.
   packages=(iproute2 iptables)
   [[ $want_wg == 0 ]] || packages+=(wireguard-tools)
-  [[ $want_ipsec == 0 ]] || packages+=(charon-systemd strongswan-swanctl)
+  # The standard plugin bundle supplies common cryptographic backends such
+  # as OpenSSL/GCM; --no-install-recommends would omit it otherwise.
+  [[ $want_ipsec == 0 ]] || packages+=(charon-systemd strongswan-swanctl libstrongswan-standard-plugins)
 }
 
 package_installed() {
@@ -161,8 +163,12 @@ ensure_packages() {
   printf 'Installing missing STL dependency packages on %s %s: %s\n' "$os_id" "$os_version" "${missing[*]}" >&2
   DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none apt-get -o Acquire::Retries=2 update ||
     fail 'apt package index refresh failed; STL executable is unchanged'
-  DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none apt-get install -y --no-install-recommends -- "${missing[@]}" ||
+  if ! DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none apt-get install -y --no-install-recommends -- "${missing[@]}"; then
+    if [[ $os_id == debian && $os_version == 11* ]]; then
+      fail 'Debian 11 post-LTS APT repositories can reference removed security packages (HTTP 404). STL executable is unchanged; use maintained signed Debian 11/ELTS sources or upgrade to Debian 12+, then retry. The installer never overrides APT verification or rewrites sources.'
+    fi
     fail 'apt dependency installation failed; STL executable is unchanged (inspect package manager state)'
+  fi
   for pkg in "${packages[@]}"; do
     package_installed "$pkg" || fail "package remains unavailable after installation: $pkg"
   done
