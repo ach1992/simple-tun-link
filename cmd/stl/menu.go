@@ -138,9 +138,9 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 		fmt.Fprintln(out, "  2  Import Setup Link (confirmed GRE/IPIP only)")
 		fmt.Fprintln(out, "  3  Manage Links")
 		fmt.Fprintln(out, "  4  Tests & Diagnostics")
-		fmt.Fprintln(out, "  5  Settings (pending)")
-		fmt.Fprintln(out, "  6  Update (pending)")
-		fmt.Fprintln(out, "  7  Uninstall (pending)")
+		fmt.Fprintln(out, "  5  Settings (read-only)")
+		fmt.Fprintln(out, "  6  Update (guided)")
+		fmt.Fprintln(out, "  7  Uninstall (guided)")
 		fmt.Fprintln(out, "  8  Exit")
 		fmt.Fprint(out, "Choose a task: ")
 		choice, err := readMenuAnswer(reader)
@@ -184,8 +184,18 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 					return code
 				}
 			}
-		case "5", "6", "7":
-			fmt.Fprintln(out, "Not implemented in this build. No changes made.")
+		case "5":
+			if code := menuSettings(out, errOut, options); code != 0 {
+				return code
+			}
+		case "6":
+			if code := menuUpdate(reader, out, errOut); code != 0 {
+				return code
+			}
+		case "7":
+			if code := menuUninstall(out, errOut, options); code != 0 {
+				return code
+			}
 		case "8":
 			return 0
 		default:

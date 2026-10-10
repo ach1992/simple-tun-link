@@ -56,6 +56,12 @@ No public tag/release is being created by these instructions.
 
 ## Update
 
+The interactive `stl menu` Update task is a **guided, read-only handoff**:
+it accepts only a safe published-version tag and displays the pinned release
+and installer source. It never downloads or runs a remote script itself.
+The actual replacement is owned exclusively by this separately verified
+installer; the menu does not duplicate any install/update lifecycle.
+
 Download the installer from the **intended new released tag**, inspect it, and
 run `sudo bash ./install.sh update --version vX.Y.Z` (or use the same one-command
 pattern with `update`). The installer refuses a foreign or locally modified
@@ -104,6 +110,13 @@ Never blindly delete a journal, or reuse the recorded old binary without
 checking state schema and Engine compatibility.
 
 ## Uninstall: never tear down live Links implicitly
+
+The interactive `stl menu` Uninstall task only guides a human operator.
+When saved Links remain it lists their stable IDs and the existing
+`stl link remove` command, but never performs removal or prints
+untrusted display names. With no saved Links it explicitly says that
+the count is **not** proof of safe uninstall; the installer still performs
+the canonical Go preflight under exclusive maintenance locking.
 
 First quiesce concurrent Link operators and inspect the saved Links:
 
