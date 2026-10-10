@@ -40,6 +40,7 @@ type Snapshot struct {
 	SchemaVersion   int              `json:"schema_version"`
 	Links           []LinkRecord     `json:"links"`
 	PendingSenders  []PendingSender  `json:"pending_senders,omitempty"`
+	PendingIPsec    []PendingIPsec   `json:"pending_ipsec,omitempty"`
 	RemovalReceipts []RemovalReceipt `json:"removal_receipts,omitempty"`
 }
 
@@ -94,6 +95,7 @@ func (s *Snapshot) normalize() {
 		return s.Links[i].Desired.ID < s.Links[j].Desired.ID
 	})
 	sort.Slice(s.PendingSenders, func(i, j int) bool { return s.PendingSenders[i].Link.ID < s.PendingSenders[j].Link.ID })
+	sort.Slice(s.PendingIPsec, func(i, j int) bool { return s.PendingIPsec[i].Link.ID < s.PendingIPsec[j].Link.ID })
 	sort.Slice(s.RemovalReceipts, func(i, j int) bool { return s.RemovalReceipts[i].LinkID < s.RemovalReceipts[j].LinkID })
 }
 
@@ -219,7 +221,7 @@ func migrateSnapshot(snapshot Snapshot) (Snapshot, error) {
 	case SchemaVersion:
 		return snapshot, nil
 	case legacySchemaVersion:
-		if len(snapshot.PendingSenders) > 0 || len(snapshot.RemovalReceipts) > 0 {
+		if len(snapshot.PendingSenders) > 0 || len(snapshot.PendingIPsec) > 0 || len(snapshot.RemovalReceipts) > 0 {
 			return Snapshot{}, fmt.Errorf("legacy state cannot contain WireGuard lifecycle records")
 		}
 		for _, record := range snapshot.Links {
@@ -315,7 +317,10 @@ func validateSnapshot(snapshot Snapshot) error {
 			}
 		}
 	}
-	return validateWireGuardLifecycle(snapshot)
+	if err := validateWireGuardLifecycle(snapshot); err != nil {
+		return err
+	}
+	return validateIPsecLifecycle(snapshot)
 }
 
 func cloneRecord(record LinkRecord) LinkRecord {

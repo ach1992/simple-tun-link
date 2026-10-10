@@ -118,8 +118,11 @@ func (s *PSKStore) PutNew(id domain.LinkID, raw []byte) error {
 	defer clear(content)
 	hex.Encode(content[:pskWireHexSize], key.material[:])
 	content[pskWireHexSize] = '\n'
-	for len(content) > 0 {
-		n, writeErr := unix.Write(fd, content)
+	// Never advance the slice scheduled for zeroization: each successful
+	// write must not leave earlier PSK bytes stranded in this buffer.
+	remaining := content
+	for len(remaining) > 0 {
+		n, writeErr := unix.Write(fd, remaining)
 		if errors.Is(writeErr, unix.EINTR) {
 			continue
 		}
@@ -127,7 +130,7 @@ func (s *PSKStore) PutNew(id domain.LinkID, raw []byte) error {
 			unix.Close(fd)
 			return fmt.Errorf("cannot write protected IPsec credential")
 		}
-		content = content[n:]
+		remaining = remaining[n:]
 	}
 	if err := unix.Fsync(fd); err != nil {
 		unix.Close(fd)
@@ -168,6 +171,27 @@ func (s *PSKStore) EnsureExact(id domain.LinkID, raw []byte) error {
 	}
 	defer existing.Zeroize()
 	if subtle.ConstantTimeCompare(existing.material[:], key.material[:]) != 1 {
+		return fmt.Errorf("IPsec credential conflicts with the existing Link key")
+	}
+	return nil
+}
+
+// RequireExistingExact verifies a pending Link's EXISTING protected credential.
+// Missing, unsafe, corrupt or different material refuses the replay. In
+// particular this operation must never call PutNew: a durable public intent
+// is not permission to rebind a lost or replaced credential.
+func (s *PSKStore) RequireExistingExact(id domain.LinkID, raw []byte) error {
+	wanted, err := ParsePSK(raw)
+	if err != nil {
+		return err
+	}
+	defer wanted.Zeroize()
+	existing, err := s.Load(id)
+	if err != nil {
+		return err
+	}
+	defer existing.Zeroize()
+	if subtle.ConstantTimeCompare(existing.material[:], wanted.material[:]) != 1 {
 		return fmt.Errorf("IPsec credential conflicts with the existing Link key")
 	}
 	return nil

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ach1992/simple-tun-link/internal/backend"
+	"github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
@@ -210,6 +211,10 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID), string(desired.Backend),
 			"Link has reserved WireGuard sender intent; use exact-hand-off Resume instead")
 	}
+	if _, pending := snapshot.FindPendingIPsec(desired.ID); pending {
+		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID), string(desired.Backend),
+			"IPsec credential is staged for this Link; activate only after ownership-verified backend support")
+	}
 	record, exists := snapshot.Find(desired.ID)
 	if exists && rejectReconfiguration && record.Desired != desired {
 		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure_imported", string(desired.ID),
@@ -300,6 +305,9 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 		return Result{}, stlerr.Wrap(stlerr.CodeState, string(request.Operation), string(link.ID), string(link.Backend), "cannot reload local state", err)
 	}
 	if request.Operation == backend.OperationEnsure {
+		if _, staged := fresh.FindPendingIPsec(link.ID); staged {
+			return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(link.ID), string(link.Backend), "IPsec credential intent reserves Link identity")
+		}
 		if err := rejectResourceConflicts(fresh, link.ID, resources); err != nil {
 			return Result{}, err
 		}
@@ -367,6 +375,9 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 	commitErr := e.store.Update(ctx, func(snapshot *state.Snapshot) error {
 		switch request.Operation {
 		case backend.OperationEnsure:
+			if _, staged := snapshot.FindPendingIPsec(link.ID); staged {
+				return fmt.Errorf("IPsec credential intent reserves Link identity")
+			}
 			if err := rejectResourceConflicts(*snapshot, link.ID, resources); err != nil {
 				return err
 			}
@@ -503,6 +514,52 @@ func rejectResourceConflicts(snapshot state.Snapshot, id domain.LinkID, wanted [
 						"",
 						fmt.Sprintf("resource %s conflicts with Link %s", wantedClaim.Kind, record.Desired.ID),
 					)
+				}
+			}
+		}
+	}
+	// Uncommitted IPsec PSK reservations are canonical public Link intents.
+	// Their claims must block all other backends until an explicit, owned
+	// activation/reconciliation path exists; file names alone grant no rights.
+	for _, pending := range snapshot.PendingIPsec {
+		if pending.Link.ID == id {
+			continue
+		}
+		profile, err := ipsec.NewProfile(pending.Link)
+		if err != nil {
+			return stlerr.New(stlerr.CodeState, "validate_resources", string(id), "", "invalid reserved IPsec resource identity")
+		}
+		for _, wantedClaim := range wanted {
+			for _, pendingClaim := range profile.ResourceClaims() {
+				conflict, err := domain.ResourceClaimsConflict(wantedClaim, pendingClaim)
+				if err != nil {
+					return stlerr.Wrap(stlerr.CodeState, "validate_resources", string(id), "", "cannot compare reserved IPsec ownership", err)
+				}
+				if conflict {
+					return stlerr.New(stlerr.CodeConflict, "validate_resources", string(id), "", "resource reserved by pending IPsec Link")
+				}
+			}
+		}
+	}
+	// Existing WireGuard pending senders reserve their public Link Addresses
+	// before any peer handoff is published, even before backend Apply.
+	for _, pending := range snapshot.PendingSenders {
+		if pending.Link.ID == id {
+			continue
+		}
+		link := pending.Link
+		addressClaims := []domain.ResourceClaim{
+			{Kind: domain.ResourceLinkAddress, Key: link.Addresses.Local.Addr().String()},
+			{Kind: domain.ResourceLinkSubnet, Key: link.Addresses.Local.Masked().String()},
+		}
+		for _, wantedClaim := range wanted {
+			for _, reservation := range addressClaims {
+				conflict, err := domain.ResourceClaimsConflict(wantedClaim, reservation)
+				if err != nil {
+					return stlerr.Wrap(stlerr.CodeState, "validate_resources", string(id), "", "cannot compare reserved WireGuard addresses", err)
+				}
+				if conflict {
+					return stlerr.New(stlerr.CodeConflict, "validate_resources", string(id), "", "Link Address reserved by pending WireGuard sender")
 				}
 			}
 		}

@@ -73,3 +73,27 @@ It deliberately performs NO VICI/Engine mutation, recipient import, credential
 retirement, real IKEv2/ESP traffic or release acceptance. Engine ownership
 and lifecycle proof remain mandatory before using the stored key operationally.
 Issues #7 and #12 remain OPEN.
+
+
+## Protected credential staging follow-up
+
+Before any owner-verified operational VICI/XFRM change, the Engine
+may stage an IPsec Quick Link and per-Link PSK through the canonical
+maintenance -> Link -> resource lock order. The ordinary state stores
+only the full public pending Link, endpoint role, and (for the sender)
+the digest of the exact SENSITIVE v2 handoff; never the PSK or URL.
+A missing public intent never grants permission to adopt an orphan PSK
+with a matching filename. Sender pending state records offer.Link()
+(creator-local orientation), not the recipient-facing Preview.Link.
+Recipient state records offer.ReceiverLink() (exact opposite orientation).
+Exact retry may continue a previously durable pending intent only after
+verifying the *existing* protected PSK with a constant-time equality
+check; missing material fails closed and is never silently recreated.
+
+For backward compatibility, previously exported v2 IPsec Quick Links
+with PSKs other than 32 bytes remain previewable but cannot be staged
+or activated. This deliberately does not change the existing v2
+pairing schema or imply silent migration/rekey authorization.
+
+Staging alone authorizes no connection load/unload, SA termination,
+Linux network change, operational claim, or public release.
