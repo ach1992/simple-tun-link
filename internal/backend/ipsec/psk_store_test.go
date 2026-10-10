@@ -97,6 +97,18 @@ func TestIPsecProtectedPSKNoReplaceAndExactReplay(t *testing.T) {
 	if err := store.EnsureExact(testPSKLink1, key); err != nil {
 		t.Fatal("identical retry must be idempotent", err)
 	}
+	if err := store.RequireExistingExact(testPSKLink1, key); err != nil {
+		t.Fatal("exact existing credential verification failed:", err)
+	}
+	if err := store.RequireExistingExact(testPSKLink1, other); err == nil {
+		t.Fatal("different existing PSK accepted as exact replay")
+	}
+	if err := store.RequireExistingExact(testPSKLink2, other); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing required protected PSK must not be created: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "credentials", string(testPSKLink2)+".ipsecpsk")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("RequireExistingExact created a new protected key: %v", err)
+	}
 	if err := store.EnsureExact(testPSKLink1, other); err == nil {
 		t.Fatal("different IPsec key must not replace existing key")
 	}

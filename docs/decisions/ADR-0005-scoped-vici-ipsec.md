@@ -83,8 +83,12 @@ maintenance -> Link -> resource lock order. The ordinary state stores
 only the full public pending Link, endpoint role, and (for the sender)
 the digest of the exact SENSITIVE v2 handoff; never the PSK or URL.
 A missing public intent never grants permission to adopt an orphan PSK
-with a matching filename. Exact retry may continue a previously
-durable pending intent using a verified identical protected PSK.
+with a matching filename. Sender pending state records offer.Link()
+(creator-local orientation), not the recipient-facing Preview.Link.
+Recipient state records offer.ReceiverLink() (exact opposite orientation).
+Exact retry may continue a previously durable pending intent only after
+verifying the *existing* protected PSK with a constant-time equality
+check; missing material fails closed and is never silently recreated.
 
 For backward compatibility, previously exported v2 IPsec Quick Links
 with PSKs other than 32 bytes remain previewable but cannot be staged

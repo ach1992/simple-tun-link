@@ -143,9 +143,13 @@ and resource locks. With no previous pending record it uses no-replace
 PSK publication, then durable public-intent publication before invoking
 an explicitly supplied sensitive handoff callback. A retry requires the
 same complete public Link, original exact setup-link digest, and exact
-protected PSK. Failed or uncertain publication preserves an orphan PSK
-or pending record; it does not guess ownership or silently adopt, remove,
-or rekey the file. An explicit future operator reconciliation path is
+**existing** protected PSK. A missing, unsafe or different key under an
+otherwise durable pending intent requires explicit reconciliation, not
+automatic regeneration (including if the sender/recipient Link and digest
+match). The sender records the creator-oriented Link, while the recipient
+records its exact inversion. Failed or uncertain publication preserves an
+orphan PSK or pending record; it never guesses ownership or silently
+adopts, removes, or rekeys the file. An explicit future operator reconciliation path is
 required for orphaned keys without a matching durable public intent.
 
 Existing v2 IPsec payloads still decode for preview; only exactly 32-byte

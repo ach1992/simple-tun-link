@@ -176,6 +176,27 @@ func (s *PSKStore) EnsureExact(id domain.LinkID, raw []byte) error {
 	return nil
 }
 
+// RequireExistingExact verifies a pending Link's EXISTING protected credential.
+// Missing, unsafe, corrupt or different material refuses the replay. In
+// particular this operation must never call PutNew: a durable public intent
+// is not permission to rebind a lost or replaced credential.
+func (s *PSKStore) RequireExistingExact(id domain.LinkID, raw []byte) error {
+	wanted, err := ParsePSK(raw)
+	if err != nil {
+		return err
+	}
+	defer wanted.Zeroize()
+	existing, err := s.Load(id)
+	if err != nil {
+		return err
+	}
+	defer existing.Zeroize()
+	if subtle.ConstantTimeCompare(existing.material[:], wanted.material[:]) != 1 {
+		return fmt.Errorf("IPsec credential conflicts with the existing Link key")
+	}
+	return nil
+}
+
 // Load verifies a read-only O_NOFOLLOW descriptor: regular/singly-linked,
 // owner-only 0600, strictly 64 lowercase hex digits and one newline.
 // This is NOT an authorization to unload/replace a VICI daemon object.

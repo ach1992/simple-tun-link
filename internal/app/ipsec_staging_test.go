@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -35,7 +36,11 @@ func stagedIPsecLink(id domain.LinkID, linkNet string) domain.Link {
 }
 func stageEngine(t *testing.T) (*Engine, *state.FileStore, *ipsec.PSKStore) {
 	t.Helper()
-	root := filepath.Join(t.TempDir(), "stl")
+	return stageEngineAtRoot(t, filepath.Join(t.TempDir(), "stl"))
+}
+
+func stageEngineAtRoot(t *testing.T, root string) (*Engine, *state.FileStore, *ipsec.PSKStore) {
+	t.Helper()
 	registry, err := backend.NewRegistry()
 	if err != nil {
 		t.Fatal(err)
@@ -77,6 +82,10 @@ func TestIPsecStageBindsExactSenderAndReceiverWithoutAnyActiveBackend(t *testing
 		saved, err := sa.Load(ctx)
 		if err != nil || len(saved.PendingIPsec) != 1 || saved.PendingIPsec[0].Origin != "sender" {
 			t.Fatal("handoff visible without durable canonical sender intent", err)
+		}
+		if saved.PendingIPsec[0].Link != offer.Link() ||
+			saved.PendingIPsec[0].Link == offer.Preview().Link {
+			t.Fatal("sender intent is not exact creator-local Link orientation")
 		}
 		if _, err := ka.Load(link.ID); err != nil {
 			t.Fatal("handoff visible without protected key", err)
@@ -147,7 +156,18 @@ func TestIPsecStageBindsExactSenderAndReceiverWithoutAnyActiveBackend(t *testing
 		receiver.PendingIPsec[0].Link != offer.ReceiverLink() || receiver.PendingIPsec[0].HandoffSHA256 != "" {
 		t.Fatal("receiver did not bind exact inverted public intent", err)
 	}
-	for _, snapshot := range []state.Snapshot{mustState(t, sa), receiver} {
+	sender := mustState(t, sa)
+	if len(sender.PendingIPsec) != 1 || sender.PendingIPsec[0].Link != offer.Link() ||
+		sender.PendingIPsec[0].Link.ID != receiver.PendingIPsec[0].Link.ID ||
+		sender.PendingIPsec[0].Link.Backend != receiver.PendingIPsec[0].Link.Backend ||
+		sender.PendingIPsec[0].Link.Encapsulation != receiver.PendingIPsec[0].Link.Encapsulation ||
+		pairing.Invert(sender.PendingIPsec[0].Link) != receiver.PendingIPsec[0].Link ||
+		pairing.Invert(receiver.PendingIPsec[0].Link) != sender.PendingIPsec[0].Link ||
+		sender.PendingIPsec[0].Link.Underlay.Local != receiver.PendingIPsec[0].Link.Underlay.Peer ||
+		sender.PendingIPsec[0].Link.Addresses.Local != receiver.PendingIPsec[0].Link.Addresses.Peer {
+		t.Fatal("sender and receiver durable public identities are not exact inversions")
+	}
+	for _, snapshot := range []state.Snapshot{sender, receiver} {
 		wire, err := json.Marshal(snapshot)
 		if err != nil {
 			t.Fatal(err)
@@ -322,5 +342,97 @@ func TestIPsecStageFailuresNeverPublishAndNeverAdoptUnboundOrphan(t *testing.T) 
 	if err := x.StageIPsecSender(ctx, other, xk, func(string) error { return errors.New("raw SENSITIVE url stl://2.secret") }); err == nil ||
 		strings.Contains(err.Error(), "stl://") {
 		t.Fatalf("SENSITIVE callback error leaked: %v", err)
+	}
+}
+
+// A durable recipient intent is not sufficient to replace missing PSK
+// material. Neither the original Quick Link nor a different rechecksummed
+// Quick Link with exactly the same public Link may silently rebind it.
+func TestIPsecPendingRecipientMissingProtectedCredentialRequiresReconciliation(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "stl")
+	e, store, keys := stageEngineAtRoot(t, root)
+	link := stagedIPsecLink("lnk_33333333333333333333333333333333", "10.84.26.0/31")
+	keyA := bytes.Repeat([]byte{0x4c}, 32)
+	keyB := bytes.Repeat([]byte{0x5d}, 32)
+	urlA, err := offerForStage(t, link, keyA).EncodeSetupLink()
+	if err != nil {
+		t.Fatal(err)
+	}
+	urlB, err := offerForStage(t, link, keyB).EncodeSetupLink()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if urlA == urlB {
+		t.Fatal("test Quick Links must contain different PSKs")
+	}
+	if err := e.StageIPsecRecipient(ctx, urlA, confirmIPsecURL(urlA), keys); err != nil {
+		t.Fatal("initial exact protected recipient staging failed:", err)
+	}
+	before := mustState(t, store)
+	if len(before.PendingIPsec) != 1 || before.PendingIPsec[0].Link != pairing.Invert(link) ||
+		before.PendingIPsec[0].Origin != "recipient" || len(before.Links) != 0 {
+		t.Fatal("wrong initial recipient ownership intent")
+	}
+	credentialPath := filepath.Join(root, "credentials", string(link.ID)+".ipsecpsk")
+	if err := e.StageIPsecRecipient(ctx, urlB, confirmIPsecURL(urlB), keys); stlerr.CodeOf(err) != stlerr.CodeConflict {
+		t.Fatalf("different PSK rebound existing protected identity: %v", err)
+	}
+	old, err := keys.Load(link.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldBytes := old.SecretBytes()
+	if !bytes.Equal(oldBytes, keyA) {
+		t.Fatal("rejected PSK changed existing key")
+	}
+	clear(oldBytes)
+	old.Zeroize()
+	// Simulate external loss of one file ONLY within the disposable test root.
+	if err := os.Remove(credentialPath); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct{ name, url string }{
+		{"original-URL", urlA},
+		{"same-public-Link-different-PSK", urlB},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := e.StageIPsecRecipient(ctx, test.url, confirmIPsecURL(test.url), keys); stlerr.CodeOf(err) != stlerr.CodeConflict {
+				t.Fatalf("missing protected recipient PSK must fail closed: %v", err)
+			}
+			if _, err := os.Lstat(credentialPath); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("pending replay silently recreated protected PSK: %v", err)
+			}
+			if after := mustState(t, store); !reflect.DeepEqual(before, after) {
+				t.Fatal("failed pending replay mutated canonical state or claimed operational backend")
+			}
+		})
+	}
+}
+
+// Missing sender credentials must likewise refuse to publish a new handoff
+// even when public Link intent and original URL digest still match exactly.
+func TestIPsecPendingSenderMissingProtectedCredentialCannotPublish(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "stl")
+	e, store, keys := stageEngineAtRoot(t, root)
+	link := stagedIPsecLink("lnk_44444444444444444444444444444444", "10.84.28.0/31")
+	offer := offerForStage(t, link, bytes.Repeat([]byte{0x6a}, 32))
+	published := 0
+	if err := e.StageIPsecSender(ctx, offer, keys, func(string) error { published++; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	before := mustState(t, store)
+	if err := os.Remove(filepath.Join(root, "credentials", string(link.ID)+".ipsecpsk")); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.StageIPsecSender(ctx, offer, keys, func(string) error { published++; return nil }); stlerr.CodeOf(err) != stlerr.CodeConflict {
+		t.Fatalf("missing sender credential allowed handoff: %v", err)
+	}
+	if published != 1 || !reflect.DeepEqual(before, mustState(t, store)) {
+		t.Fatal("missing protected sender key published a handoff or changed pending ownership")
+	}
+	if _, err := keys.Load(link.ID); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("sender replay silently recreated missing credential: %v", err)
 	}
 }

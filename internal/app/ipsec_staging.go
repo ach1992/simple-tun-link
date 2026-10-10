@@ -19,7 +19,7 @@ import (
 // synchronization and the public intent; raw keys never enter state.json.
 type IPsecCredentialStore interface {
 	PutNew(domain.LinkID, []byte) error
-	EnsureExact(domain.LinkID, []byte) error
+	RequireExistingExact(domain.LinkID, []byte) error
 }
 
 // StageIPsecSender persists a 256-bit PSK and complete public sender Link
@@ -94,7 +94,9 @@ func checkedIPsecQuickOffer(offer pairing.Offer, recipient bool) (domain.Link, [
 		clear(secret)
 		return domain.Link{}, nil, "", stlerr.New(stlerr.CodeUnsupported, "ipsec_stage", "", "ipsec", "legacy IPsec PSK size is preview-only; require a new 256-bit key via an explicit operator-approved flow")
 	}
-	desired := preview.Link
+	// Preview is recipient-oriented even when rendered by the sender.
+	// Never derive the sender's durable local identity from Preview.Link.
+	desired := offer.Link()
 	if recipient {
 		desired = offer.ReceiverLink()
 	}
@@ -160,7 +162,9 @@ func (e *Engine) stageIPsec(ctx context.Context, desired domain.Link, secret []b
 		if pending != expected {
 			return stlerr.New(stlerr.CodeConflict, "ipsec_stage", string(desired.ID), "ipsec", "staged IPsec Link or handoff identity differs; explicit reconciliation is required")
 		}
-		if err := keys.EnsureExact(desired.ID, secret); err != nil {
+		// A durable pending intent requires the SAME EXISTING protected key.
+		// Replay must never recreate missing material or adopt a new PSK.
+		if err := keys.RequireExistingExact(desired.ID, secret); err != nil {
 			return stlerr.New(stlerr.CodeConflict, "ipsec_stage", string(desired.ID), "ipsec", "staged protected PSK missing, unsafe or different")
 		}
 	} else {
