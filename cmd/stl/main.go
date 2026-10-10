@@ -24,7 +24,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/version"
 )
 
-const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl menu\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link diagnose <link-id> [--mtu <bytes>] [--json]\n  stl link preview --stdin [--json]\n  stl link import --stdin --confirm <preview-token> [--json]\n  stl link export <link-id> [--json]\n  stl link ensure --stdin [--json]\n  stl link remove <link-id> --confirm <link-id> [--json]\n  stl link restore --all\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
+const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl menu\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link diagnose <link-id> [--mtu <bytes>] [--json]\n  stl link preview --stdin [--json]\n  stl link import --stdin --confirm <preview-token> [--json]\n  stl link export <link-id> [--json]\n  stl link ensure --stdin [--json]\n  stl link remove <link-id> --confirm <link-id> [--json]\n  stl link restore --all\n  stl maintenance pre-uninstall --json\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
 
 const jsonSchemaVersion = 1
 
@@ -75,6 +75,8 @@ func runWithRuntimeInput(args []string, input io.Reader, stdout, stderr io.Write
 	}
 
 	switch args[0] {
+	case "maintenance":
+		return uninstallPreflightCommand(args[1:], stdout, stderr)
 	case "menu":
 		if len(args) != 1 {
 			fmt.Fprintln(stderr, "usage: stl menu")
