@@ -7,7 +7,7 @@ It creates and manages independent **Link Addresses** between Linux servers over
 Canonical CLI: **stl**  
 Convenience alias: **stlink** (same executable/behavior when installed by the supported installer)
 
-> Status: pre-release development. GRE/IPIP backend code and core lifecycle CLI are integrated; live GRE FOU/GUE traffic acceptance, WireGuard/IPsec, complete interactive/credentialed pairing, installer and release E2E remain outstanding.
+> Status: pre-release development. GRE/IPIP and the core lifecycle CLI are integrated. An offline-tested release installer/update/uninstall script is available, but no public release has been published. Live GRE FOU/GUE traffic acceptance, WireGuard/IPsec, complete credentialed pairing, menu integration, and release E2E remain outstanding.
 
 ## Why
 
@@ -54,10 +54,19 @@ Consumer-specific concepts such as geography, product roles, orchestration polic
 - [Architecture](docs/ARCHITECTURE.md) — technical boundaries and runtime model.
 - [Supported environments](docs/SUPPORTED-ENVIRONMENTS.md) — platform and backend capability policy.
 - [Development](docs/DEVELOPMENT.md) — engineering rules and validation commands.
+- [Install and recovery](docs/INSTALL.md) — installer, update, guarded uninstall and operator recovery.
 - [Security](docs/SECURITY.md) — trust, credential, firewall, and setup-link rules.
 - [References and provenance](docs/REFERENCES.md) — predecessor/research inputs and license boundaries.
 - [Architecture decisions](docs/decisions/) — durable decisions and rationale.
 - GitHub Issues and milestone `v0.1.0` — authoritative unresolved work and execution backlog.
+
+## Installation (pre-release)
+
+The [installation runbook](docs/INSTALL.md) documents the future tagged-release
+one-command installer, checksum-verified atomic updates, the `stlink` alias,
+and guarded uninstall. No public version/tag is currently available, so do
+not execute the placeholder `vX.Y.Z` command as an actual installation.
+For nonprivileged/offline test coverage, run `bash scripts/test-install.sh`.
 
 ## Development
 
