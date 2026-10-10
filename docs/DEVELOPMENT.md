@@ -114,7 +114,7 @@ Do not duplicate the full cross-backend matrix in each backend Issue. Backend Is
 
 Privileged tests may never mutate the AI Server Agent control-plane interface/routes/firewall.
 
-### GRE live acceptance, without a permanent privileged CI runner
+### GRE and IPIP live acceptance, without a permanent privileged CI runner
 
 After obtaining **separate authorization for a dedicated disposable test VM**, run
 `sudo env STL_E2E_DISPOSABLE_HOST=approved ./scripts/e2e/gre-netns.sh`
@@ -127,9 +127,18 @@ veth underlay and per-side temporary state; it invokes the real CLI/Engine/GRE
 backend for Native, FOU and GUE on the same synthetic underlay pair,
 using distinct GRE keys for the UDP-encapsulated siblings. The unkeyed
 same-pair FOU request must fail as a typed conflict before host mutation.
-It checks first ensure, idempotent re-ensure, verified status, real
-bidirectional Link Address traffic, read-only diagnostics, keyed coexistence,
-sibling isolation after removal, owned cleanup and empty state. Cleanup runs
+
+The **same namespace pair and temporary state** then runs IPIP Native,
+FOU and GUE sequentially via the real CLI and IPIP backend, while all
+three existing GRE Links remain active. IPIP endpoint-pair lookup cannot
+distinguish a second IPIP mode to the same underlay pair, so the attempted
+second mode must fail with a typed conflict and without leaked UDP receive
+state. Each IPIP mode must pass create, idempotent ensure, identity-checked
+status, bidirectional Link Address traffic, read-only diagnostic counters
+and owned removal. After each removal, the GRE Links must still pass
+bidirectional traffic and their existing FOU/GUE mappings must be unchanged.
+
+The runner verifies sibling isolation and final cleanup. Cleanup runs
 even on failure. It does **not** install packages, load modules explicitly,
 reconfigure the host control-plane interface, or silently report unsupported
 FOU/GUE capabilities as passing. Kernel module autoload may still occur;
@@ -137,9 +146,12 @@ therefore the host must be disposable.
 
 Preserve the complete log, test exit code, source SHA and printed kernel,
 iproute2, iptables and Go versions as Issue #4/#12 acceptance evidence.
-Compiling the gated Go test in ordinary CI does **not** count as a live pass.
-This backend-focused test does **not** replace Issue #12's coexistence,
-concurrency, pairing, systemd restart or distro release matrix.
+Compiling the gated Go tests and syntax-checking the script in ordinary CI
+**do not count as privileged live evidence**. The opt-in flag alone is never
+permission to test on a shared or production host. This slice validates
+GRE/IPIP cross-backend isolation, but **does not** replace Issue #12's
+GRE/WireGuard/IPsec matrix, multi-peer scenarios, concurrency, pairing,
+disposable real-systemd persistence/restart, or distro/arm64 release gates.
 
 ## Git/GitHub
 
