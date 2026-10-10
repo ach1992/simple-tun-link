@@ -51,7 +51,7 @@ record_dir="$prefix/lib/simple-tun-link"
 target="$bin_dir/stl"
 alias="$bin_dir/stlink"
 record="$record_dir/install-record"
-lock="$record_dir/.install.lock"
+lock="$record_dir/.maintenance.lock"
 [[ -d $bin_dir && ! -L $bin_dir && -d $prefix/lib && ! -L $prefix/lib ]] || fail 'prefix must already contain safe bin and lib directories'
 
 # Default system-wide install must not traverse a writable or unowned directory.
@@ -78,14 +78,43 @@ fi
 [[ ! -L $lock && ( ! -e $lock || -f $lock ) ]] || fail 'unsafe installer lock identity'
 exec 9>>"$lock"
 flock -x -w 30 9 || fail 'another STL installer is running'
-# A prior uncertain transaction is not proof that a new one may overwrite it.
+is_regular() { [[ -f $1 && ! -L $1 ]]; }
+hash_file() { sha256sum -- "$1" | awk '{print $1}'; }
+sync_paths() { sync -f -- "$@"; }
+failpoint() {
+  if [[ $prefix != /usr/local && ${STL_INSTALL_TEST_FAIL_AT:-} == "$1" ]]; then
+    fail "injected $1 durability/transaction failure (isolated test only)"
+  fi
+}
+# Preserve uncertain transactions and never replay them blindly. A prior
+# durable COMMITTED journal may be retired only after verifying the recorded
+# current installation identity under the exclusive maintenance gate.
 shopt -s nullglob
 recovery_dirs=("$bin_dir"/.stl-install.*)
 shopt -u nullglob
-(( ${#recovery_dirs[@]} == 0 )) || fail 'unreconciled STL installer recovery directory exists; inspect it before retrying'
-
-is_regular() { [[ -f $1 && ! -L $1 ]]; }
-hash_file() { sha256sum -- "$1" | awk '{print $1}'; }
+for recovery in "${recovery_dirs[@]}"; do
+  [[ -d $recovery && ! -L $recovery ]] || fail 'unsafe retained recovery identity'
+  marker="$recovery/COMMITTED"
+  is_regular "$marker" || fail 'unreconciled STL installer recovery directory exists; inspect it before retrying'
+  saved_action=$(sed -n 's/^operation=//p' "$marker")
+  saved_hash=$(sed -n 's/^sha256=//p' "$marker")
+  [[ $saved_hash =~ ^[0-9a-f]{64}$ ]] || fail 'invalid committed recovery marker'
+  grep -qx 'status=committed' "$marker" || fail 'invalid committed recovery status'
+  case "$saved_action" in
+    install|update)
+      is_regular "$record" && is_regular "$target" &&
+        [[ -L $alias && $(readlink -- "$alias") == stl ]] &&
+        [[ $(hash_file "$target") == "$saved_hash" ]] &&
+        grep -qx "sha256=$saved_hash" "$record" || fail 'committed installation differs; preserve recovery evidence'
+      ;;
+    uninstall)
+      [[ ! -e $record && ! -L $record && ! -e $target && ! -L $target && ! -e $alias && ! -L $alias ]] || fail 'committed uninstall differs; preserve recovery evidence'
+      ;;
+    *) fail 'unknown committed recovery operation' ;;
+  esac
+  rm -rf -- "$recovery" || fail 'cannot retire verified committed recovery'
+  sync_paths "$bin_dir" || fail 'cannot durably retire verified committed recovery'
+done
 read_record() {
   is_regular "$record" || fail 'STL ownership record is missing or not regular'
   grep -qx 'format=1' "$record" && grep -qx 'project=simple-tun-link' "$record" || fail 'invalid ownership record'
@@ -107,10 +136,11 @@ fi
 # A release operation is not a Link lifecycle. Prevent uninstall unless STL's
 # canonical read contract proves zero Links and the Engine-owned unit is absent.
 if [[ $action == uninstall ]]; then
-  [[ ! -e /etc/systemd/system/simple-tun-link-restore.service && ! -L /etc/systemd/system/simple-tun-link-restore.service ]] || fail 'restore service still exists; remove/reconcile Links through stl first'
-  [[ ! -L /var/lib/simple-tun-link && ! -L /var/lib/simple-tun-link/state.json ]] || fail 'unsafe Link state path; manual reconciliation required'
-  listed=$("$target" link list --json) || fail 'cannot inspect Link state; refusing uninstall'
-  [[ $listed =~ ^\{\"schema_version\":[0-9]+,\"links\":\[\]\}$ ]] || fail 'configured Links or unknown Link state remain; remove each Link through stl first'
+  # Installer holds exclusive maintenance flock. The canonical Go preflight
+  # is the single authority on durable state and systemd enablement.
+  checked=$("$target" maintenance pre-uninstall --json) || fail 'canonical uninstall preflight failed; no files removed'
+  [[ $checked == '{"schema_version":1,"ready":true}' ]] || fail 'canonical uninstall preflight did not prove safety'
+
 fi
 
 stage=
