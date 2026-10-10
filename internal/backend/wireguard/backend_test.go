@@ -8,23 +8,28 @@ import (
 	"io"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/ach1992/simple-tun-link/internal/app"
 	core "github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
+	"github.com/ach1992/simple-tun-link/internal/state"
 )
 
 type fakeKernel struct {
-	target        observedLink
-	others        []observedLink
-	calls         [][]string
-	fail          string
-	wantSecret    string
-	exposedSecret bool
+	target            observedLink
+	others            []observedLink
+	calls             [][]string
+	fail              string
+	wantSecret        string
+	exposedSecret     bool
+	publicKeyOverride string // malformed literal for explicit inspection-denial tests
+	deletedInterfaces int
 }
 
 func (f *fakeKernel) Run(_ context.Context, binary string, args ...string) (linux.CommandResult, error) {
@@ -70,7 +75,11 @@ func (f *fakeKernel) Run(_ context.Context, binary string, args ...string) (linu
 				case "listen-port":
 					lines = append(lines, fmt.Sprintf("%s %d", candidate.Name, candidate.ListenPort))
 				case "public-key":
-					lines = append(lines, fmt.Sprintf("%s %s", candidate.Name, candidate.PublicKey))
+					value := candidate.PublicKey
+					if value == "" {
+						value = "(none)"
+					}
+					lines = append(lines, fmt.Sprintf("%s %s", candidate.Name, value))
 				}
 			}
 			return linux.CommandResult{Stdout: []byte(strings.Join(lines, "\n"))}, nil
@@ -82,6 +91,12 @@ func (f *fakeKernel) Run(_ context.Context, binary string, args ...string) (linu
 		switch field {
 		case "public-key":
 			value = f.target.PublicKey
+			if value == "" {
+				value = "(none)"
+			}
+			if f.publicKeyOverride != "" {
+				value = f.publicKeyOverride
+			}
 		case "listen-port":
 			value = strconv.Itoa(int(f.target.ListenPort))
 		case "peers":
@@ -238,8 +253,12 @@ func fixture(t *testing.T) (*Backend, domain.Link, *KeyStore, *fakeKernel, *fake
 			fake.target.IPv4Addresses = []netip.Prefix{prefix}
 			return nil
 		},
-		SetUp:      func(_ context.Context, index int) error { fake.target.Up = true; return nil },
-		DeleteLink: func(_ context.Context, index int) error { fake.target = observedLink{}; return nil },
+		SetUp: func(_ context.Context, index int) error { fake.target.Up = true; return nil },
+		DeleteLink: func(_ context.Context, index int) error {
+			fake.deletedInterfaces++
+			fake.target = observedLink{}
+			return nil
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -487,5 +506,268 @@ func TestWireGuardGenericHostListenerCollision(t *testing.T) {
 	}
 	if kernel.target.Exists {
 		t.Fatal("collision mutated host state")
+	}
+}
+
+// Models the real wireguard-tools unkeyed representation, not the old fake
+// runner's blank-line response. The exact post-add/new-interface stage must
+// pass before an owner tag is assigned; on a later alias failure the captured
+// ifindex is safely removed without ever touching a foreign device.
+func TestWireGuardRealStyleUnsetKeyAllowsFirstCreateAndPreAliasRollback(t *testing.T) {
+	b, link, _, kernel, _ := fixture(t)
+	name, err := InterfaceName(link.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = kernel.Run(context.Background(), "ip", "link", "add", name, "type", "wireguard"); err != nil {
+		t.Fatal(err)
+	}
+	result, err := kernel.Run(context.Background(), "wg", "show", name, "public-key")
+	if err != nil || strings.TrimSpace(string(result.Stdout)) != "(none)" {
+		t.Fatalf("fake must model real unkeyed wg output: %q %v", result.Stdout, err)
+	}
+	p := creationProgress{IfIndex: kernel.target.IfIndex, Created: true}
+	if err = b.verifyCreation(context.Background(), link, name, p); err != nil {
+		t.Fatalf("real-style preconfiguration rejected: %v", err)
+	}
+	if err = b.rollbackCreatedInterface(context.Background(), link, name, p); err != nil || kernel.target.Exists {
+		t.Fatalf("unowned preconfiguration rollback failed: %v, state=%+v", err, kernel.target)
+	}
+	aliasCalls := 0
+	b.setAlias = func(context.Context, int, string) error {
+		aliasCalls++
+		return errors.New("synthetic ownership-alias failure")
+	}
+	obs, err := b.Inspect(context.Background(), link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := core.Request{Operation: core.OperationEnsure, Link: link}
+	wanted, err := b.Plan(context.Background(), req, obs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	undo, err := b.Apply(context.Background(), req, obs, wanted)
+	if err == nil || undo == nil || aliasCalls != 1 {
+		t.Fatalf("did not reach alias after validating real unkeyed state: %v, calls=%d", err, aliasCalls)
+	}
+	if err = undo(context.Background()); err != nil || kernel.target.Exists {
+		t.Fatalf("pre-alias failure stranded owned ifindex: %v state=%+v", err, kernel.target)
+	}
+	b.setAlias = func(_ context.Context, _ int, alias string) error {
+		kernel.target.Alias = alias
+		kernel.target.Owner = link.ID
+		return nil
+	}
+	obs, err = b.Inspect(context.Background(), link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wanted, err = b.Plan(context.Background(), req, obs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	undo, err = b.Apply(context.Background(), req, obs, wanted)
+	if err != nil {
+		t.Fatalf("real-style first creation did not finish: %v", err)
+	}
+	if _, err = b.Verify(context.Background(), req); err != nil {
+		t.Fatalf("configured interface was not verified: %v", err)
+	}
+	if undo == nil || kernel.exposedSecret {
+		t.Fatal("missing rollback or secret leaked")
+	}
+}
+
+func TestWireGuardPublicKeyInspectionRejectsMalformedNonemptyValues(t *testing.T) {
+	b, link, _, kernel, _ := fixture(t)
+	name, err := InterfaceName(link.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = kernel.Run(context.Background(), "ip", "link", "add", name, "type", "wireguard"); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"", "none", "(none) extra", "garbage", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "dG9vLXNtYWxs"} {
+		kernel.publicKeyOverride = bad
+		// Override of empty is not representable with the test seam, so
+		// test that invalidity through the parser directly below.
+		if bad == "" {
+			if _, err := parseObservedPublicKey([]byte("\n")); err == nil {
+				t.Fatal("blank public-key output accepted")
+			}
+			continue
+		}
+		if bad == "(none) extra" { /* only the exact sentinel is allowed */
+		}
+		if _, err := b.Inspect(context.Background(), link); err == nil {
+			t.Fatalf("malformed public key %q accepted", bad)
+		}
+	}
+}
+
+// A real Engine transaction (with only the Linux hooks replaced) proves
+// that a destructive Remove does not begin until the credential needed for
+// recreation is available, owner-protected and identity-bound. All host
+// mutation is local fake state; no privileged networking is executed.
+func engineFixture(t *testing.T) (*app.Engine, *Backend, domain.Link, *KeyStore, *fakeKernel, *fakeFirewall, *failureCommitStore) {
+	t.Helper()
+	b, link, keys, kernel, fw := fixture(t)
+	registry, err := core.NewRegistry(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapped := &failureCommitStore{Store: state.NewFileStore(keys.stateRoot)}
+	engine, err := app.New(registry, wrapped, state.NewLockManager(keys.stateRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := engine.Ensure(context.Background(), link)
+	if err != nil || result.LinkID != link.ID || !result.Changed {
+		t.Fatalf("cannot establish committed test Link: result=%+v err=%v", result, err)
+	}
+	return engine, b, link, keys, kernel, fw, wrapped
+}
+
+type failureCommitStore struct {
+	state.Store
+	failUpdate       bool
+	attemptedUpdates int
+}
+
+func (s *failureCommitStore) Update(ctx context.Context, update func(*state.Snapshot) error) error {
+	if s.failUpdate {
+		s.attemptedUpdates++
+		// The durable state file and its publication metadata remain
+		// untouched. Engine must restore the host before it returns.
+		return errors.New("synthetic desired-state commit failure before publication")
+	}
+	return s.Store.Update(ctx, update)
+}
+
+func TestWireGuardEngineRemoveRejectsUnrecoverableCredentialBeforeAnyMutation(t *testing.T) {
+	cases := []struct {
+		name   string
+		damage func(*testing.T, *KeyStore, domain.Link)
+	}{
+		{"missing", func(t *testing.T, s *KeyStore, l domain.Link) {
+			t.Helper()
+			if err := os.Remove(filepath.Join(s.stateRoot, "credentials", string(l.ID)+".wgkey")); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"unsafe-permissions", func(t *testing.T, s *KeyStore, l domain.Link) {
+			t.Helper()
+			if err := os.Chmod(filepath.Join(s.stateRoot, "credentials", string(l.ID)+".wgkey"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"public-identity-mismatch", func(t *testing.T, s *KeyStore, l domain.Link) {
+			t.Helper()
+			replacement := testGeneratedKey(t)
+			if err := os.WriteFile(filepath.Join(s.stateRoot, "credentials", string(l.ID)+".wgkey"), []byte(replacement.SecretWireValue()+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			engine, _, link, keys, kernel, fw, store := engineFixture(t)
+			before := kernel.target
+			beforeRule := fw.rule
+			stateBefore, err := store.Load(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !before.Exists || !before.Up || !fw.exists {
+				t.Fatal("test setup was not fully live")
+			}
+			tc.damage(t, keys, link)
+			if result, err := engine.Remove(context.Background(), link.ID); err == nil {
+				t.Fatalf("unrecoverable Remove returned success: %+v", result)
+			}
+			if !reflect.DeepEqual(kernel.target, before) || !fw.exists || fw.rule != beforeRule {
+				t.Fatalf("unsafe Remove mutated interface or firewall: before=%+v after=%+v firewall=%+v", before, kernel.target, fw)
+			}
+			after, err := store.Load(context.Background())
+			if err != nil || !reflect.DeepEqual(stateBefore, after) {
+				t.Fatalf("failed Remove changed committed desired state: before=%+v after=%+v err=%v", stateBefore, after, err)
+			}
+		})
+	}
+}
+
+func TestWireGuardRemoveApplyRechecksCredentialImmediatelyBeforeFirstMutation(t *testing.T) {
+	_, b, link, keys, kernel, fw, store := engineFixture(t)
+	ctx := context.Background()
+	snapshot, err := store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, found := snapshot.Find(link.ID)
+	if !found {
+		t.Fatal("missing committed Link")
+	}
+	obs, err := b.Inspect(ctx, link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := core.Request{Operation: core.OperationRemove, Link: link, Prior: &link, OwnedResources: record.OwnedResources}
+	p, err := b.Plan(ctx, req, obs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = b.Validate(ctx, req, obs, p); err != nil {
+		t.Fatalf("healthy credential rejected by Remove preflight: %v", err)
+	}
+	before := kernel.target
+	rule := fw.rule
+	// Models external credential damage between Engine's locked Validate
+	// and the backend's first actual destructive Apply step.
+	if err = os.Remove(filepath.Join(keys.stateRoot, "credentials", string(link.ID)+".wgkey")); err != nil {
+		t.Fatal(err)
+	}
+	undo, err := b.Apply(ctx, req, obs, p)
+	if err == nil || undo != nil {
+		t.Fatal("Remove Apply did not fail before any mutation after credential drift")
+	}
+	if !reflect.DeepEqual(kernel.target, before) || !fw.exists || fw.rule != rule {
+		t.Fatal("Apply modified host despite credential drift")
+	}
+}
+
+func TestWireGuardEngineRemoveCommitFailureRestoresExactOwnedState(t *testing.T) {
+	engine, _, link, keys, kernel, fw, store := engineFixture(t)
+	ctx := context.Background()
+	before, err := store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := kernel.target
+	originalRule := fw.rule
+	store.failUpdate = true
+	result, err := engine.Remove(ctx, link.ID)
+	if err == nil || result.Removed {
+		t.Fatalf("synthetic pre-publication commit failure was not reported: %+v, %v", result, err)
+	}
+	if store.attemptedUpdates != 1 || kernel.deletedInterfaces != 1 {
+		t.Fatalf("did not exercise Remove delete + commit boundary: commits=%d deletes=%d", store.attemptedUpdates, kernel.deletedInterfaces)
+	}
+	if !kernel.target.Exists || !kernel.target.Up || !kernel.target.matches(link, original.Name) ||
+		kernel.target.IfIndex <= 0 || kernel.target.Alias != original.Alias ||
+		kernel.target.PublicKey != original.PublicKey || kernel.target.ListenPort != original.ListenPort ||
+		kernel.target.Endpoint != original.Endpoint || kernel.target.Keepalive != original.Keepalive ||
+		len(kernel.target.IPv4Addresses) != 1 || kernel.target.IPv4Addresses[0] != link.Addresses.Local {
+		t.Fatalf("Remove compensation did not reconstruct exact owned interface: before=%+v after=%+v", original, kernel.target)
+	}
+	if !fw.exists || fw.rule != originalRule {
+		t.Fatal("Remove compensation did not recreate exact firewall rule")
+	}
+	after, err := store.Load(ctx)
+	if err != nil || !reflect.DeepEqual(before, after) {
+		t.Fatalf("pre-publication commit failure changed desired state: before=%+v after=%+v err=%v", before, after, err)
+	}
+	if _, err = keys.Load(link.ID); err != nil {
+		t.Fatal("protected key needed for rollback was lost", err)
 	}
 }

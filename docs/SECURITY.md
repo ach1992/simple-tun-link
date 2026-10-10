@@ -55,8 +55,14 @@ read-only FD can be inherited by `wg set private-key /proc/self/fd/3`
 without exposing the private key in argv, shell history, generic status or
 normal JSON. `EnsureRecipient` is replay-safe only for an identical key.
 Failed/uncertain activation preserves protected credentials for safe retry;
-interface removal does not silently destroy a private key. Verified Link-owned
-credential retirement and reconciliation tooling remain outstanding.
+interface removal does not silently destroy a private key. Before a
+**destructive** WireGuard Remove, the Engine-held validation and the immediate
+Apply preflight both require a protected, safely readable private credential
+whose public identity matches the persisted Link. Missing, permission-drifted,
+or mismatched credentials refuse deletion of both the interface and firewall,
+so an uncommitted Remove can still reconstruct the original owned state.
+Verified Link-owned credential retirement and reconciliation tooling remain
+outstanding.
 
 The caller must store the **local** private key only at its owning endpoint.
 The initiator must never persist a generated *recipient* private key as local

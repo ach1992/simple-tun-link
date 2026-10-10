@@ -2,6 +2,7 @@ package wireguard
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"net/netip"
@@ -176,7 +177,10 @@ func (b *Backend) inspectPublicWG(ctx context.Context, o *observedLink) error {
 	if err != nil {
 		return err
 	}
-	o.PublicKey = strings.TrimSpace(string(key))
+	o.PublicKey, err = parseObservedPublicKey(key)
+	if err != nil {
+		return err
+	}
 	port, err := get("listen-port")
 	if err != nil {
 		return err
@@ -232,6 +236,34 @@ func (b *Backend) inspectPublicWG(ctx context.Context, o *observedLink) error {
 	}
 	o.Endpoint, err = parsePeerAttribute(endpoints, o.Peers[0])
 	return err
+}
+
+// wireguard-tools prints exactly "(none)" for a new interface without a
+// private key. Normalize that one sentinel at the read boundary, but fail
+// closed for empty, malformed, noncanonical, or all-zero public keys.
+func parseObservedPublicKey(raw []byte) (string, error) {
+	text := strings.TrimSpace(string(raw))
+	if text == "(none)" {
+		return "", nil
+	}
+	if len(text) != 44 {
+		return "", fmt.Errorf("unexpected WireGuard public-key observation")
+	}
+	decoded, err := base64.StdEncoding.Strict().DecodeString(text)
+	if err != nil || len(decoded) != 32 || base64.StdEncoding.EncodeToString(decoded) != text {
+		return "", fmt.Errorf("invalid WireGuard public-key observation")
+	}
+	nonzero := false
+	for _, b := range decoded {
+		if b != 0 {
+			nonzero = true
+			break
+		}
+	}
+	if !nonzero {
+		return "", fmt.Errorf("invalid all-zero WireGuard public-key observation")
+	}
+	return text, nil
 }
 
 func (b *Backend) Plan(ctx context.Context, req core.Request, observed core.Observation) (core.Plan, error) {
@@ -332,6 +364,15 @@ func (b *Backend) Validate(ctx context.Context, req core.Request, observed core.
 		}
 	}
 	if req.Operation == core.OperationRemove {
+		// Engine holds the canonical Link and resource locks here. Remove's
+		// rollback must be capable of recreating an owned interface after
+		// a later Verify/commit failure. Do not start any destructive work
+		// when the required private key has drifted or is missing.
+		if p.interfaceChange {
+			if err := b.requireRecreationCredential(req.Link); err != nil {
+				return err
+			}
+		}
 		return b.rejectForeignReplacement(ctx, req.Link.ID, p.name)
 	}
 	// Common host inspection supports only interface/address/subnet/UDP;
@@ -359,6 +400,23 @@ func (b *Backend) Validate(ctx context.Context, req core.Request, observed core.
 	}
 	if err := b.rejectWireGuardSocketAndKeyCollision(ctx, req.Link); err != nil {
 		return err
+	}
+	return nil
+}
+
+// requireRecreationCredential verifies the same protected local key which
+// createOwnedInterface needs for Remove compensation. Keep the preflight
+// private-key-free in errors and avoid generic `wg show` secret inspection.
+// Apply repeats this check immediately before its first destructive action:
+// the protected file might have changed after the Engine's Validate call.
+func (b *Backend) requireRecreationCredential(link domain.Link) error {
+	fd, err := b.keys.OpenForWireGuard(link.ID, link.WireGuard.LocalPublicKey)
+	if err != nil {
+		return stlerr.Wrap(stlerr.CodeConflict, "wireguard_remove", string(link.ID), string(link.Backend),
+			"protected WireGuard credential needed for safe removal rollback is unavailable or invalid", err)
+	}
+	if err := fd.Close(); err != nil {
+		return fmt.Errorf("close verified WireGuard rollback credential: %w", err)
 	}
 	return nil
 }

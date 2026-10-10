@@ -74,6 +74,14 @@ func (b *Backend) applyEnsure(ctx context.Context, req core.Request, obs observa
 }
 
 func (b *Backend) applyRemove(ctx context.Context, req core.Request, p plan) (core.Rollback, error) {
+	// Must precede *both* the firewall deletion and the interface deletion.
+	// A compromised/missing key makes rollback after an uncommitted Remove
+	// impossible; a preflight failure must leave the entire host unchanged.
+	if p.interfaceChange {
+		if err := b.requireRecreationCredential(req.Link); err != nil {
+			return nil, err
+		}
+	}
 	removedFirewall, removedInterface := false, false
 	rollback := func(undoCtx context.Context) error {
 		var errs []error

@@ -156,6 +156,9 @@ remain the automation interface.
   request on standard input. Full request schema appears below.
 - `stl link remove <link-id> --confirm <same-link-id> [--json]`:
   **mutating** Engine-owned removal after explicit stable ID confirmation.
+  If an owned WireGuard interface must be deleted, removal first requires
+  its matching protected private key to be safe and readable for rollback;
+  otherwise interface and firewall state are preserved for reconciliation.
 - `stl link restore --all`: **mutating** host persistence/reapply
   operation for existing saved Links, using the same Engine.
 
