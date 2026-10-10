@@ -326,3 +326,14 @@ func (s *KeyStore) RetireExact(id domain.LinkID, expectedPublic string) (bool, e
 	}
 	return true, nil
 }
+
+// LocalPublicIdentity derives only the public identity of the protected
+// sender credential. No raw private value or generic JSON leaves KeyStore.
+func (s *KeyStore) LocalPublicIdentity(id domain.LinkID) (string, error) {
+	key, err := s.Load(id)
+	if err != nil {
+		return "", err
+	}
+	defer key.Zeroize()
+	return key.PublicKey()
+}

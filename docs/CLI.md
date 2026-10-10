@@ -159,12 +159,29 @@ normal text output nor the JSON result contains the URL or private key.
 The CLI requires an existing private parent; it does not silently create a
 new export directory or overwrite a file.
 
-The file is intentionally published **before** local WireGuard activation,
-so a failure cannot strand an active initiator without the receiver's one-time
-credential. If activation reports failure/uncertainty, keep the protected
-file and inspect saved state. To retry the exact already-published identity,
-obtain the SHA-256 confirmation token from the redacted read-only preview
-of that same URL and use:
+Sender Create is now a single **canonical, Link-locked two-phase transaction**.
+Before exposing the receiver URL it verifies there is no committed/pending
+same-ID Link, durably stages the sender's protected **own** private key, then
+durably reserves the exact public sender `domain.Link` together with the
+SHA-256 of the precise sensitive v3 offer in the optional `pending_senders`
+section of `state.json` (schema version 2 remains backward-compatible).
+Only after both sender recovery records are durable may the SENSITIVE file
+become visible. Local backend activation then uses the ordinary Engine
+Validate/Apply/Verify and commits the Link **atomically with consuming its
+pending sender reservation**. Concurrent same-ID Create and ordinary Ensure
+cannot bypass this reservation or publish competing receiver offers.
+
+If activation or even final handoff publication reports an error, inspect the
+private output path and stored state. **Only when the original SENSITIVE
+handoff exists** does exact Resume have the credentials and URL necessary for
+recovery. Failed staging or a failure *before* handoff publication can leave
+a protected local orphan key/pending reservation with **no receiver URL**;
+that case requires explicit operator reconciliation, not regenerating a
+competing same-ID offer. Never treat a pending record alone as proof of a
+successful tunnel, or delete its matching sender key casually.
+
+To retry the exact already-published identity, obtain the SHA-256 confirmation
+token from a redacted read-only preview of that same URL and use:
 
 ~~~sh
 stl link preview --stdin --json < /root/stl-recipient.stl
@@ -172,9 +189,14 @@ stl link resume-wireguard --stdin --confirm <import_confirmation> --json < /root
 ~~~
 
 Resume does **not** generate new keypairs, overwrite saved credentials, or
-adopt a changed same-ID Link. It reuses the same canonical Engine and the
-already-protected local sender key; a missing key or mismatched desired state
-fails closed. The confirmation digest is neither sender authentication nor
+adopt a changed same-ID Link. Before the first successful commit it requires
+both the **identical complete original public Link** and **identical exact
+handoff digest** from the durable Pending record, plus the matching protected
+sender private/public identity. A modified and rechecksummed recipient offer
+cannot change even an address, display name, port or keepalive. After a
+successful atomic Link commit has consumed Pending, an identical committed
+Link (and its same sender private/public identity) authorizes idempotent
+reverification. Missing or conflicting proof fails closed. The confirmation digest is neither sender authentication nor
 encryption. On the intended receiver, securely transfer the one-time file,
 verify the public identities/out-of-band sender trust, preview, then run:
 
@@ -199,18 +221,35 @@ status/desired state before Remove:
 stl link credential retire <link-id> --confirm <link-id> --public-key <local-public-key> --json
 ~~~
 
-The Engine holds its maintenance and per-Link locks. It requires an
-existing validated committed state file, verifies no committed Link with that
-ID exists, confirms the associated kernel interface name and
-ownership alias are absent, that no live WireGuard interface uses that public
-identity, and that no STL-owned INPUT firewall rule remains. It then verifies
-and removes only the exact same-owner, regular, single-linked `0600` key file
-whose derived public key matches the operator's confirmation. Missing or
-ambiguous inspections, damaged credentials and still-live resources refuse
-retirement. A verified already-absent key returns `retired: false` and
-`retired: true` means a protected file was unlinked; no keys are returned
-in output. Do not confuse private-file deletion with secure physical flash
-media sanitization or use it as a substitute for backup/reconciliation.
+The Engine holds its maintenance and per-Link locks. **Merely finding a
+`state.json` for another Link or no active ID is never retirement authority.**
+A `removal_receipts` record for the **exact Link ID, WireGuard backend and
+expected original local public key** is published only *after* its canonical
+Remove, durable desired-state deletion and associated restore cleanup return
+confirmed success. Failed/indeterminate Remove and a failed first Ensure
+cannot issue this proof. A crash after deletion but before receipt publication
+can leave an intentionally unretirable orphan until operator reconciliation.
+A new Ensure attempt for that Link ID durably invalidates the historical
+receipt *before* provisioning/applying, including when that attempt later
+fails, preventing stale receipts authorizing deletion of needed retry keys.
+
+Retire requires the Link-specific receipt and absence of committed/pending
+state, confirms no associated live kernel interface/ownership alias, public
+WireGuard identity or STL-owned firewall entry, then verifies and removes
+only the same-owner, regular, single-linked `0600` key whose derived public
+identity matches the operator's confirmation. The receipt is then durably
+marked `retired: true` for safe idempotent retries; a retired proof can never
+authorize unlinking any subsequently reappearing key. A verified previously
+absent key yields `retired: false`. Missing proof, ambiguous host inspection,
+damaged credentials and live resources refuse retirement. No key material
+is emitted. File deletion is **not physical flash media sanitization**.
+
+On abrupt power loss, the current protected handoff writer can leave a
+same-owner `0600` `.stl-handoff-*.tmp` in the explicitly chosen private
+parent directory. This is not a public leak but may retain a second copy of
+the receiver secret. Inspect that directory and reconcile/delete only
+verified task-owned stale temporary files before treating the one-time
+handoff as fully retired; do not perform unsafe wildcard cleanup.
 
 No real privileged two-peer handshake, bidirectional traffic, reboot restore
 or coexistence E2E is implied by synthetic tests of these workflows.

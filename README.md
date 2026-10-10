@@ -76,10 +76,14 @@ creates a new WireGuard Link and writes a one-time **SENSITIVE** v3 receiver
 setup URL only to an explicitly chosen, owner-private `0600` file. The peer
 uses redacted `stl link preview` and confirmed `stl link import`; failed
 sender activation can be resumed with `stl link resume-wireguard` using the
-same protected handoff. Successful `stl link remove` preserves its private
-key for rollback; separate `stl link credential retire` requires confirmed
-committed-state and live-host absence before key deletion. [CLI instructions](docs/CLI.md)
-explain the exact commands and safety boundaries. **No privileged two-peer
+same protected handoff. Sender creation durably stages its own private key
+and exact handoff-bound **public pending Link intent before exposing the
+SENSITIVE URL**, and successful commit consumes Pending atomically.
+Successful `stl link remove` preserves its private
+key for rollback; separate `stl link credential retire` requires a
+**Link-specific durable successful-Remove receipt** and live-resource absence,
+never an unrelated state file. [CLI instructions](docs/CLI.md) explain the
+exact commands, recovery boundaries and safety requirements. **No privileged two-peer
 traffic, release readiness or secure channel for delivering the handoff is
 implied by these source-level workflows.**
 

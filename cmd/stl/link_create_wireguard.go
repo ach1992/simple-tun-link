@@ -123,6 +123,30 @@ func linkCreateWireGuardCommand(args []string, input io.Reader, out, errOut io.W
 			return wireGuardCreationError(out, errOut, isJSON, stlerr.CodeState, "", "cannot allocate WireGuard Link ID")
 		}
 	}
+	// Check runtime and output path before creating or persisting ANY new
+	// sender/recipient private key. This is only an early check: the final
+	// no-clobber publication is repeated inside the Engine transaction.
+	if err = checkSensitiveHandoffDestination(output); err != nil {
+		return wireGuardCreationError(out, errOut, isJSON, stlerr.CodeInvalid, id,
+			"SENSITIVE handoff destination unsafe or already exists; nothing staged")
+	}
+	if opts == nil {
+		opts, err = productionRuntimeOptions()
+		if err != nil {
+			return wireGuardCreationError(out, errOut, isJSON, stlerr.CodeState, id,
+				"sender runtime unavailable before handoff publication")
+		}
+	}
+	runtime, err := buildRuntimeEngine(*opts)
+	if err != nil {
+		return wireGuardCreationError(out, errOut, isJSON, stlerr.CodeState, id,
+			"cannot initialize canonical sender Engine before handoff publication")
+	}
+	keys, err := wgbackend.NewKeyStore(opts.stateRoot)
+	if err != nil {
+		return wireGuardCreationError(out, errOut, isJSON, stlerr.CodeState, id,
+			"protected sender KeyStore unavailable before handoff publication")
+	}
 	local, localPub, err := wgbackend.GenerateKeyPair()
 	if err != nil {
 		return wireGuardCreationError(out, errOut, isJSON, stlerr.CodeState, id, "cannot generate local WireGuard identity")
@@ -149,34 +173,25 @@ func linkCreateWireGuardCommand(args []string, input io.Reader, out, errOut io.W
 	if err != nil {
 		return wireGuardCreationError(out, errOut, isJSON, stlerr.CodeState, id, "cannot encode protected recipient Quick Link")
 	}
-	if err = writeSensitiveHandoff(output, []byte(block+"\n")); err != nil {
-		// Nothing has been applied/provisioned yet. A post-publication
-		// handoff error is reported as uncertain; operator must inspect file.
-		return wireGuardCreationError(out, errOut, isJSON, stlerr.CodeState, id, "cannot safely publish SENSITIVE handoff; inspect destination before retry; no Link apply attempted")
-	}
 	localCredential := []byte(local.SecretWireValue())
 	defer clear(localCredential)
-	if opts == nil {
-		opts, err = productionRuntimeOptions()
-		if err != nil {
-			return wireGuardCreationError(out, errOut, isJSON, stlerr.CodeState, id, "SENSITIVE handoff written but runtime unavailable; reconcile or resume; no Link apply attempted")
-		}
-	}
-	runtime, err := buildRuntimeEngine(*opts)
-	if err != nil {
-		return wireGuardCreationError(out, errOut, isJSON, stlerr.CodeState, id, "SENSITIVE handoff written but Engine unavailable; reconcile or resume")
-	}
-	keys, err := wgbackend.NewKeyStore(opts.stateRoot)
-	if err != nil {
-		return wireGuardCreationError(out, errOut, isJSON, stlerr.CodeState, id, "SENSITIVE handoff written but KeyStore unavailable; reconcile or resume")
-	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	timed, cancel := context.WithTimeout(ctx, lifecycleTimeLimit)
 	defer cancel()
-	result, err := runtime.EnsureWithWireGuardCredential(timed, link, localCredential, keys)
+	// The Engine owns staging and publication ordering under the SAME
+	// maintenance + Link lock as normal Ensure/Remove/recipient Import.
+	write := writeSensitiveHandoff
+	if opts != nil && opts.writeHandoff != nil {
+		write = opts.writeHandoff
+	}
+	result, err := runtime.CreateWireGuardSender(timed, link, localCredential,
+		setupLinkConfirmation(block), keys, func() error {
+			return write(output, []byte(block+"\n"))
+		})
 	if err != nil || result.LinkID != id || result.Removed {
-		return wireGuardCreationError(out, errOut, isJSON, stlerr.CodeState, id, "SENSITIVE handoff written; local Link activation unconfirmed. Keep protected file and reconcile/resume using its exact setup link")
+		return wireGuardCreationError(out, errOut, isJSON, stlerr.CodeState, id,
+			"sender Create not confirmed: key/pending staging or handoff publication may be partial; inspect protected file and committed state before exact Resume/reconciliation")
 	}
 	if isJSON {
 		if err = json.NewEncoder(out).Encode(wireGuardSenderResult{SchemaVersion: jsonSchemaVersion, Operation: "link_create_wireguard", LinkID: id,
@@ -221,20 +236,25 @@ func linkResumeWireGuardCommand(args []string, input io.Reader, out, errOut io.W
 			return readCommandError(out, errOut, isJSON, stlerr.CodeState, "link_resume_wireguard", "runtime unavailable")
 		}
 	}
-	// No KeyStore provisioning here. Engine EnsureImported can only converge
-	// an exact committed sender Link, or a previously staged matching local
-	// credential. No receiver private key is saved or used locally.
-	return executeSenderResume(link, isJSON, out, errOut, opts)
+	// Resume requires exact persistent pending intent + original handoff digest,
+	// or an already committed identical sender Link, and verifies KeyStore
+	// public identity before canonical Engine reapply. No rekeying.
+	return executeSenderResume(link, setupLinkConfirmation(raw), isJSON, out, errOut, opts)
 }
 
-func executeSenderResume(link domain.Link, isJSON bool, out, errOut io.Writer, opts *runtimeOptions) int {
+func executeSenderResume(link domain.Link, digest string, isJSON bool, out, errOut io.Writer, opts *runtimeOptions) int {
 	runtime, err := buildRuntimeEngine(*opts)
 	if err != nil {
 		return wireGuardCreationError(out, errOut, isJSON, stlerr.CodeState, link.ID, "cannot initialize WireGuard resume runtime")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), lifecycleTimeLimit)
 	defer cancel()
-	result, err := runtime.EnsureImported(ctx, link)
+	keys, err := wgbackend.NewKeyStore(opts.stateRoot)
+	if err != nil {
+		return wireGuardCreationError(out, errOut, isJSON, stlerr.CodeState, link.ID,
+			"cannot open protected sender KeyStore for exact Resume")
+	}
+	result, err := runtime.ResumeWireGuardSender(ctx, link, digest, keys)
 	if err != nil || result.LinkID != link.ID || result.Removed {
 		return wireGuardCreationError(out, errOut, isJSON, stlerr.CodeState, link.ID, "sender retry unconfirmed; reconcile persisted Link and protected local credential")
 	}

@@ -2,9 +2,12 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
@@ -13,6 +16,7 @@ import (
 // and delegated read-only host inspection proves no surviving owner resources.
 type CredentialRetirementStore interface {
 	RetireExact(domain.LinkID, string) (bool, error)
+	LocalPublicIdentity(domain.LinkID) (string, error)
 }
 type CredentialRetirementGuard interface {
 	VerifyUnused(context.Context, domain.LinkID, string) error
@@ -58,12 +62,57 @@ func (e *Engine) RetireWireGuardCredential(ctx context.Context, id domain.LinkID
 	if _, exists := snapshot.Find(id); exists {
 		return false, stlerr.New(stlerr.CodeConflict, "credential_retire", string(id), "", "Link still has committed desired state; remove and verify the Link before retiring its private key")
 	}
+	// A snapshot belonging to OTHER Links is never a retirement grant. The
+	// proof must be the exact Link-specific receipt written ONLY after
+	// successful durable canonical Remove of this WireGuard identity.
+	receipt, hasReceipt := snapshot.FindRemovalReceipt(id)
+	if !hasReceipt || receipt.Backend != domain.BackendWireGuard || receipt.LocalPublicKey != expectedPublic {
+		return false, stlerr.New(stlerr.CodeConflict, "credential_retire", string(id), "",
+			"no durable successful-Remove receipt for this WireGuard Link and exact public identity; preserve private key")
+	}
+	if _, pending := snapshot.FindPendingSender(id); pending {
+		return false, stlerr.New(stlerr.CodeConflict, "credential_retire", string(id), "",
+			"pending sender transaction still requires reconciliation; preserve key")
+	}
 	if err = guard.VerifyUnused(ctx, id, expectedPublic); err != nil {
 		return false, stlerr.Wrap(stlerr.CodeConflict, "credential_retire", string(id), "", "host resource absence cannot be proved; preserve credential", err)
 	}
+	if receipt.Retired {
+		// The durable historical receipt makes repeat delivery idempotent,
+		// but NEVER authorizes deleting a subsequently reappearing key.
+		_, keyErr := store.LocalPublicIdentity(id)
+		if errors.Is(keyErr, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, stlerr.New(stlerr.CodeConflict, "credential_retire", string(id), "",
+			"retired Link identity unexpectedly has a key or cannot prove key absence")
+	}
 	retired, err := store.RetireExact(id, expectedPublic)
 	if err != nil {
-		return false, stlerr.Wrap(stlerr.CodeState, "credential_retire", string(id), "", fmt.Sprintf("protected credential retirement failed or is uncertain for Link %s", id), err)
+		return false, stlerr.Wrap(stlerr.CodeState, "credential_retire", string(id), "",
+			fmt.Sprintf("protected credential retirement failed or is uncertain for Link %s", id), err)
+	}
+	// Preserve the exact per-Link receipt as an idempotency/audit witness,
+	// marking its key retirement only AFTER the protected key is verified
+	// absent. On publication uncertainty, report non-success for recovery.
+	if err = e.store.Update(ctx, func(s *state.Snapshot) error {
+		if _, exists := s.Find(id); exists {
+			return fmt.Errorf("Link reappeared during retirement")
+		}
+		proof, exists := s.FindRemovalReceipt(id)
+		if !exists || proof.Backend != domain.BackendWireGuard || proof.LocalPublicKey != expectedPublic {
+			return fmt.Errorf("exact successful-Remove receipt changed")
+		}
+		for i := range s.RemovalReceipts {
+			if s.RemovalReceipts[i].LinkID == id {
+				s.RemovalReceipts[i].Retired = true
+				break
+			}
+		}
+		return nil
+	}); err != nil {
+		return false, stlerr.Wrap(stlerr.CodeState, "credential_retire", string(id), "",
+			"protected key may have been retired but receipt durability uncertain; reconcile", err)
 	}
 	return retired, nil
 }

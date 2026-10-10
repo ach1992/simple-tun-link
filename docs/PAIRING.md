@@ -112,10 +112,17 @@ actual setup link alongside readable receiver-facing public settings and
 labels secret-bearing exports `SENSITIVE`. Neither method writes a file or
 sends data to an external service. The explicit `stl link create-wireguard` sender command now writes the
 one-time sensitive URL to a user-selected, same-owner private directory with
-atomic no-replace `0600` publication, and only then applies the sender Link
-through the canonical Engine. `resume-wireguard` verifies the exact handoff
-digest and uses the protected sender credential without regenerating a peer
-private key. Ordinary Link export remains GRE/IPIP-only; after the recipient
+atomic no-replace `0600` publication. **Before** this publication, the
+same canonical maintenance/Link-locked transaction has already durably
+staged the sender's own private key and the complete public pending sender
+Link plus SHA-256 of the precise SENSITIVE URL (never the receiver private
+key) in `state.json`. The Engine only applies after the handoff is visible,
+then atomically commits desired Link state while consuming Pending.
+`resume-wireguard` checks **every field** against the durable pending public
+Link **and** exact original handoff digest, verifying the protected sender
+private/public identity without regenerating a peer private key. Once the
+Link is committed, its exact desired state authorizes idempotent reapply.
+ Ordinary Link export remains GRE/IPIP-only; after the recipient
 key is delivered it is intentionally unrecoverable from the sender's public
 saved state. All secret-bearing export files must avoid shell history,
 world-readable destinations, and ordinary logs.

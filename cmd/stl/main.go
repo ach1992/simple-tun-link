@@ -41,6 +41,9 @@ type runtimeOptions struct {
 	executable         string
 	// Test-only deterministic identity seam; nil uses crypto-random Link IDs.
 	createLinkID func() (domain.LinkID, error)
+	// Test seam for a failure immediately after final handoff publication.
+	// Production always uses the real protected, no-clobber writer.
+	writeHandoff func(string, []byte) error
 }
 
 func main() {

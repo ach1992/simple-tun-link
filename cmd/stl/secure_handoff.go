@@ -111,3 +111,27 @@ func openPrivateHandoffParent(path string) (int, error) {
 	}
 	return fd, nil
 }
+
+// checkSensitiveHandoffDestination is a pure filesystem preflight for the
+// normal invalid-path/no-clobber case, BEFORE any sender credential staging.
+// It is not a reservation: the final descriptor-relative writer repeats
+// every check and performs atomic no-replace publication under the Link lock.
+func checkSensitiveHandoffDestination(path string) error {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path || path == "/" {
+		return fmt.Errorf("invalid SENSITIVE handoff output path")
+	}
+	dir, err := openPrivateHandoffParent(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer unix.Close(dir)
+	var st unix.Stat_t
+	err = unix.Fstatat(dir, filepath.Base(path), &st, unix.AT_SYMLINK_NOFOLLOW)
+	if err == nil {
+		return fmt.Errorf("SENSITIVE handoff destination already exists")
+	}
+	if !errors.Is(err, unix.ENOENT) {
+		return fmt.Errorf("cannot prove SENSITIVE handoff destination is absent: %w", err)
+	}
+	return nil
+}
