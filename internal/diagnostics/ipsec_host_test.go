@@ -10,6 +10,16 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/linux"
 )
 
+// Keep legacy doctor tests hermetic; current host UDP sockets are unrelated
+// to their process/tool probes and must not affect unit-test outcomes.
+func inspectIPsecDoctorFixture(ctx context.Context, runner linux.Runner) (IPsecHostReport, error) {
+	files := map[string]string{
+		"/proc/net/udp":  udpHeader + "0: 00000000:C350 00000000:0000 07 00000000:00000000 00:00000000 00000000 0 0 0\n",
+		"/proc/net/udp6": udp6Header + "0: 00000000000000000000000000000000:C350 00000000000000000000000000000000:0000 07 00000000:00000000 00:00000000 00000000 0 0 0\n",
+	}
+	return inspectIPsecHostWithPorts(ctx, runner, ipsecInventoryReader(files, nil))
+}
+
 type ipsecDoctorRunner struct {
 	overrides map[string]error
 	calls     []string
@@ -40,12 +50,12 @@ func checkByName(t *testing.T, report IPsecHostReport, name string) IPsecHostChe
 
 func TestIPsecDoctorReadOnlyAndNoFalseActivation(t *testing.T) {
 	runner := &ipsecDoctorRunner{}
-	report, err := InspectIPsecHost(context.Background(), runner)
+	report, err := inspectIPsecDoctorFixture(context.Background(), runner)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if report.SchemaVersion != 1 || report.Backend != "ipsec" || report.RuntimeMode != "native_exclusive" ||
-		report.ActivationAllowed || len(report.Checks) != 4 {
+		report.ActivationAllowed || len(report.Checks) != 5 {
 		t.Fatalf("false operational claim: %+v", report)
 	}
 	if c := checkByName(t, report, "daemon_process"); c.ReasonCode != "charon_process_not_observed" ||
@@ -67,7 +77,7 @@ func TestIPsecDoctorDetectsExistingDaemonWithoutTouchingIt(t *testing.T) {
 	runner := &ipsecDoctorRunner{overrides: map[string]error{
 		"/usr/bin/pgrep -x charon": nil,
 	}}
-	report, err := InspectIPsecHost(context.Background(), runner)
+	report, err := inspectIPsecDoctorFixture(context.Background(), runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +94,7 @@ func TestIPsecDoctorUnknownObservationsDoNotLeakOrBecomeVacant(t *testing.T) {
 		"/usr/sbin/swanctl --version":                 errors.New("private_key=NEVER_SHOW"),
 		"/sbin/ip -json -details link show type xfrm": errors.New("PSK=NEVER_SHOW"),
 	}}
-	report, err := InspectIPsecHost(context.Background(), runner)
+	report, err := inspectIPsecDoctorFixture(context.Background(), runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,10 +116,10 @@ func TestIPsecDoctorUnknownObservationsDoNotLeakOrBecomeVacant(t *testing.T) {
 func TestIPsecDoctorCanceledAndInvalidDependencies(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := InspectIPsecHost(ctx, &ipsecDoctorRunner{}); !errors.Is(err, context.Canceled) {
+	if _, err := inspectIPsecDoctorFixture(ctx, &ipsecDoctorRunner{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation swallowed: %v", err)
 	}
-	if _, err := InspectIPsecHost(context.Background(), nil); err == nil {
+	if _, err := inspectIPsecDoctorFixture(context.Background(), nil); err == nil {
 		t.Fatal("nil runner accepted")
 	}
 }

@@ -299,3 +299,33 @@ read-only doctor, no sensitive daemon stderr/VICI payloads, and no CFG DBG4
 raw PSK logs even during troubleshooting. Existing source-only journal and
 no-effectful-writer constraints remain until the operational security and
 real IKEv2/ESP/NAT-T E2E gates pass. Issues #7 and #12 stay OPEN.
+
+
+## Source-only native configuration and IKE port observations (2026-10-11)
+
+The next bounded source milestone creates a proposed `charon-systemd`
+strongSwan configuration with an STL-private VICI Unix socket, no
+external configuration includes, journald `default=1` / `cfg=1`
+to prevent DBG4 PSK disclosure, and no daemon-managed route/virtual
+IP changes. The config guard checks exact local bytes only. The
+operational adapter must still pin a trusted root-owned inode/parent
+chain, control `STRONGSWAN_CONF`, prove the active daemon's effective
+configuration/logger state and exclusively restrict VICI and
+`reload-settings` writers before loading any secret.
+
+The observational `stl doctor ipsec` now detects currently bound
+UDP 500/4500 sockets via bounded, strictly parsed procfs IPv4/IPv6
+tables from its own network namespace, with stable `blocked`,
+`observed` and `unknown` reasons. A missing `udp6` table or partial
+parse is unknown, and any non-observation remains only a dated
+observation, never ownership or a bind reservation. No package scripts,
+systemctl calls, daemon writes, VICI calls or network changes have been
+introduced. Source tests and nonprivileged host inspection are
+not a substitute for strongSwan 5.9/6.x, kernel, systemd, multi-Link,
+IKEv2/ESP/NAT-T privileged acceptance under #7/#12.
+
+Source references for configuration and logging:
+- https://docs.strongswan.org/docs/5.9/config/strongswanConf.html
+- https://docs.strongswan.org/docs/latest/daemons/charon-systemd.html
+- https://docs.strongswan.org/docs/latest/config/logging.html
+- https://github.com/strongswan/strongswan/blob/master/src/libcharon/plugins/vici/vici_cred.c

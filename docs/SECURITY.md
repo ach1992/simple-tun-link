@@ -351,3 +351,20 @@ messages or SA key material. Optional verbose diagnostics must enforce the
 same rules. Configure/check daemon log backends so raw PSKs cannot appear at
 CFG DBG4 before any future actual PSK transfer. A safe `doctor` or `status`
 operation never performs repair, reload, reconfiguration or service startup.
+
+The source-only IPsec native-exclusive `strongswan.conf` builder pins a
+proposed STL-specific VICI socket and native journald logging with
+`default=1` and `cfg=1`; its byte-comparison guard refuses changes such
+as CFG4, extra loggers or included configuration. **File bytes alone never
+prove effective log safety.** Before any real PSK transfer, the operational
+admission path must demonstrate that the *actual running* daemon loaded the
+protected, pinned no-include configuration, that VICI/reload callers cannot
+replace it or raise effective CFG debug levels, and that all active logging
+backends satisfy the secret-safe policy. Missing proof is an IPsec-only
+fail-closed condition. No service/config is installed or started by this
+source-only component.
+
+`stl doctor ipsec` also observes UDP 500/4500 occupancy from bounded procfs
+tables in the current namespace. It never dumps socket rows/inodes and never
+converts a missing/unreadable/malformed table into an empty one; an
+`observed` non-collision is not service/socket ownership or a bind permit.

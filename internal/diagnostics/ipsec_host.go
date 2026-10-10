@@ -34,8 +34,14 @@ type IPsecHostReport struct {
 }
 
 func InspectIPsecHost(ctx context.Context, runner linux.Runner) (IPsecHostReport, error) {
-	if ctx == nil || runner == nil {
-		return IPsecHostReport{}, fmt.Errorf("IPsec host inspector requires context and runner")
+	return inspectIPsecHostWithPorts(ctx, runner, readIPsecPortInventory)
+}
+
+// The port reader is test-only injection inside diagnostics. Production uses
+// bounded local /proc/net observations, never commands or service mutation.
+func inspectIPsecHostWithPorts(ctx context.Context, runner linux.Runner, ports ipsecPortReader) (IPsecHostReport, error) {
+	if ctx == nil || runner == nil || ports == nil {
+		return IPsecHostReport{}, fmt.Errorf("IPsec host inspector requires complete read-only dependencies")
 	}
 	if err := ctx.Err(); err != nil {
 		return IPsecHostReport{}, err
@@ -45,9 +51,10 @@ func InspectIPsecHost(ctx context.Context, runner linux.Runner) (IPsecHostReport
 		SchemaVersion: 1,
 		Backend:       "ipsec",
 		RuntimeMode:   "native_exclusive",
-		Checks:        make([]IPsecHostCheck, 0, 4),
+		Checks:        make([]IPsecHostCheck, 0, 5),
 	}
 	report.Checks = append(report.Checks, inspectCharonProcesses(ctx, runner))
+	report.Checks = append(report.Checks, inspectIPsecIKEPorts(ctx, ports))
 	report.Checks = append(report.Checks, inspectIPsecCommand(ctx, runner, "/usr/sbin/swanctl", []string{"--version"},
 		"strongswan_tool", "strongswan_tool_observed", "strongswan_tool_unverified",
 		"strongSwan swanctl responded to a read-only version request.",

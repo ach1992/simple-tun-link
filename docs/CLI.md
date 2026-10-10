@@ -576,19 +576,38 @@ code is **4 (unsupported)** even when all read-only probes run, because
 operational IPsec is intentionally not registered yet. Invalid arguments
 exit **2**. An incomplete report is an operational failure, not vacancy.
 
-The command can observe a running `charon`/`charon-systemd` process,
+The command observes `charon`/`charon-systemd` processes, bound UDP
+500/4500 sockets in the **caller's current network namespace** using
+bounded read-only `/proc/net/udp` and `/proc/net/udp6` snapshots,
 the `swanctl --version` prerequisite and whether a read-only XFRM
 interface inventory can be obtained. On supported Debian/Ubuntu builds it
 uses fixed system binary paths (`/usr/bin/pgrep`, `/usr/sbin/swanctl`,
 `/sbin/ip`) rather than executing tools found through a user-controlled
 `PATH`; other layouts require a validated distro adapter, not a fallback.
-`pgrep` absence, `swanctl` and
-`ip` successes **do not prove exclusive ownership, host readiness,
-configuration safety, IKE port availability, actual ESP/NAT-T support or
-cryptographic connectivity**. Any detected daemon process blocks the
-native-exclusive mode until ownership can be proven by a separately
-reviewed operational path. No services, packages, credentials, routing,
-firewall, kernel objects or state directories are changed.
+
+The additional JSON check is `name:"ike_udp_ports"`. Its stable results are:
+`blocked/ike_udp_ports_observed` when UDP 500 or 4500 is already bound,
+`observed/ike_udp_ports_not_observed` when both inventory reads and parsing
+completed without a matching binding, or
+`unknown/ike_udp_inventory_unverified` when data needed to establish
+non-occupancy is absent, incomplete, too large or malformed. A correctly
+identified **bound** IKE socket remains `blocked` even if the other
+snapshot is unreadable; non-occupancy requires both complete inventories.
+All results provide a safe `next_step`.
+Nothing is inferred about ownership from socket addresses, process names or
+namespaces; two non-atomic observations never reserve a socket. An
+`observed` result does **not** prove it is safe to bind or start anything.
+The command does not probe other namespaces, hidden writers or effective
+service/logging configuration. Missing `/proc/net/udp6` is **unknown**,
+not automatically treated as IPv6 disabled.
+
+`pgrep` absence, UDP non-observation, `swanctl` and `ip` success
+**do not prove exclusive ownership, host readiness, configuration safety,
+future IKE port availability, actual ESP/NAT-T support or cryptographic
+connectivity**. Any detected daemon or standard IKE port collision is an
+IPsec-only blocker; never stop/rebind/adopt a foreign process or socket.
+No services, packages, credentials, routing, firewall, kernel objects or
+state directories are changed.
 
 For a locally stored IPsec Link, `stl link status <link-id> --json` and
 `stl link diagnose <link-id> --json` preserve the current
