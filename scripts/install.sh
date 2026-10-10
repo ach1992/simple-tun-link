@@ -109,63 +109,69 @@ fi
 
 stage=
 record_tmp=
-committed=0
-published=0
-record_published=0
-alias_created=0
-alias_removed=0
-removed=0
 new_hash=
+new_record_hash=
 keep_recovery=0
 
-# On a failed update, only restore the old binary if the current one is still
-# exactly ours. Never clobber another writer. Keep recovery evidence otherwise.
+# Reconcile from observed identities, not only bookkeeping flags: even a
+# signal between rename/unlink and the following shell assignment must not
+# erase an old executable or strand a partially removed installation.
 finish() {
   local rc=$?
   trap - EXIT
   set +e
   if (( rc != 0 )) && [[ -n $stage ]]; then
     if [[ $action == uninstall ]]; then
-      if (( removed )); then
-        if [[ ! -e $target && ! -L $target && -f $stage/removed-stl ]]; then
+      if [[ -f $stage/removed-stl ]]; then
+        if [[ ! -e $target && ! -L $target && $(hash_file "$stage/removed-stl") == "$prior_hash" ]]; then
           mv -T -- "$stage/removed-stl" "$target" || keep_recovery=1
         else
           keep_recovery=1
         fi
+      elif [[ ! -f $target || -L $target || $(hash_file "$target") != "$prior_hash" ]]; then
+        keep_recovery=1
       fi
-      if (( alias_removed )); then
-        if [[ ! -e $alias && ! -L $alias ]]; then ln -s stl "$alias" || keep_recovery=1; else keep_recovery=1; fi
+      if [[ ! -e $record && ! -L $record && -f $stage/previous-record ]]; then
+        cp -p -- "$stage/previous-record" "$record" || keep_recovery=1
+      elif [[ ! -f $record || -L $record ]]; then
+        keep_recovery=1
       fi
-      if (( record_published )); then
-        if [[ ! -e $record && ! -L $record ]]; then
-          cp -p -- "$stage/previous-record" "$record" || keep_recovery=1
-        else
-          keep_recovery=1
-        fi
+      if [[ ! -e $alias && ! -L $alias ]]; then
+        ln -s stl "$alias" || keep_recovery=1
+      elif [[ ! -L $alias || $(readlink -- "$alias") != stl ]]; then
+        keep_recovery=1
       fi
-    elif (( published )); then
-      if [[ -f $target && ! -L $target && $(hash_file "$target") == "$new_hash" ]]; then
+    else
+      if [[ -n $new_hash && -f $target && ! -L $target && $(hash_file "$target") == "$new_hash" ]]; then
         if [[ $action == update ]]; then
-          mv -T -- "$stage/previous-stl" "$target" || keep_recovery=1
+          if [[ $new_hash != "$prior_hash" && -f $stage/previous-stl && $(hash_file "$stage/previous-stl") == "$prior_hash" ]]; then
+            mv -T -- "$stage/previous-stl" "$target" || keep_recovery=1
+          fi
         else
           rm -- "$target" || keep_recovery=1
         fi
-      else
+      elif [[ $action == install && ( -e $target || -L $target ) ]]; then
+        keep_recovery=1
+      elif [[ $action == update && -f $stage/previous-stl ]] &&
+           [[ ! -f $target || -L $target || $(hash_file "$target") != "$prior_hash" ]]; then
         keep_recovery=1
       fi
-      if (( alias_created )); then
-        if [[ -L $alias && $(readlink -- "$alias") == stl ]]; then rm -- "$alias" || keep_recovery=1; else keep_recovery=1; fi
+      if [[ $action == install && -L $alias && $(readlink -- "$alias") == stl ]]; then
+        rm -- "$alias" || keep_recovery=1
+      elif [[ $action == install && ( -e $alias || -L $alias ) ]]; then
+        keep_recovery=1
       fi
-      if (( record_published )); then
-        if [[ -f $record && ! -L $record && $(hash_file "$record") == "$new_record_hash" ]]; then
-          if [[ $action == update ]]; then
-            cp -p -- "$stage/previous-record" "$record_tmp.recover" && mv -T -- "$record_tmp.recover" "$record" || keep_recovery=1
-          else
-            rm -- "$record" || keep_recovery=1
+      if [[ -n $new_record_hash && -f $record && ! -L $record && $(hash_file "$record") == "$new_record_hash" ]]; then
+        if [[ $action == update ]]; then
+          if [[ -f $stage/previous-record ]]; then
+            cp -p -- "$stage/previous-record" "$record_tmp.recover" &&
+              mv -T -- "$record_tmp.recover" "$record" || keep_recovery=1
           fi
         else
-          keep_recovery=1
+          rm -- "$record" || keep_recovery=1
         fi
+      elif [[ $action == install && ( -e $record || -L $record ) ]]; then
+        keep_recovery=1
       fi
     fi
   fi
@@ -189,16 +195,12 @@ if [[ $action == uninstall ]]; then
   cp -p -- "$record" "$stage/previous-record"
   [[ $(hash_file "$target") == "$prior_hash" ]] || fail 'installed binary changed before uninstall'
   rm -- "$alias"
-  alias_removed=1
   mv -T -- "$target" "$stage/removed-stl"
-  removed=1
   rm -- "$record"
-  record_published=1
   if [[ $prefix != /usr/local && ${STL_INSTALL_TEST_FAIL_AFTER_UNINSTALL_REMOVE:-} == 1 ]]; then
     fail 'injected uninstall failure (isolated test only)'
   fi
   sync -f "$bin_dir" "$record_dir" || fail 'uninstall directory sync failed; attempting recovery'
-  committed=1
   printf 'Uninstalled installer-owned stl/stlink only; Link state was left untouched.\n'
   exit 0
 fi
@@ -248,25 +250,20 @@ if [[ $action == update ]]; then
   [[ $(hash_file "$target") == "$prior_hash" ]] || fail 'installed binary changed before update'
   if [[ $prior_hash == "$new_hash" ]]; then
     printf 'stl is already installed from this exact artifact (%s).\n' "$version"
-    committed=1
-    exit 0
+      exit 0
   fi
 fi
 # Incoming and canonical executable are in the same directory/filesystem.
 # mv -T is an atomic rename: the old executable is never truncated in place.
 mv -T -- "$stage/incoming" "$target"
-published=1
 if [[ -n $bundle && $prefix != /usr/local && ${STL_INSTALL_TEST_FAIL_AFTER_SWAP:-} == 1 ]]; then
   fail 'injected after-swap failure (offline isolated test only)'
 fi
 sync -f "$target" "$bin_dir" || fail 'binary publication sync failed'
 if [[ $action == install ]]; then
   ln -s stl "$alias"
-  alias_created=1
 fi
 mv -T -- "$record_tmp" "$record"
-record_published=1
 [[ $(hash_file "$record") == "$new_record_hash" && $(hash_file "$target") == "$new_hash" && -L $alias && $(readlink -- "$alias") == stl ]] || fail 'post-publication identity check failed'
 sync -f "$record" "$record_dir" || fail 'installation metadata sync failed'
-committed=1
 printf '%s stl %s for linux/%s; stlink resolves to the same executable.\n' "${action^}" "$version" "$arch"
