@@ -445,7 +445,9 @@ func validXFRMSelectorDevice(name string) bool {
 	}
 	for i := 0; i < len(name); i++ {
 		c := name[i]
-		if c == 0 || c == '/' || c == ':' ||
+		// Linux's byte-oriented lib/ctype.c marks 0xa0 as _S|_SP,
+		// unlike adjacent 0xa1. Unicode whitespace is not equivalent.
+		if c == 0 || c == 0xa0 || c == '/' || c == ':' ||
 			c == ' ' || (c >= '\t' && c <= '\r') {
 			return false
 		}

@@ -474,6 +474,12 @@ func TestXFRMLegacyStateSelectorTailFailClosed(t *testing.T) {
 		{"device-tilde", " proto tcp dev eth~0", false, false},
 		{"device-leading-hyphen", " proto tcp dev -eth", false, false},
 		{"device-max-length", " proto tcp dev abcdefghijklmno", false, false},
+		// Linux ctype treats the raw byte 0xa0 as whitespace, but 0xa1 is
+		// not whitespace. These are byte sequences, not Unicode whitespace.
+		{"device-kernel-space-0xa0", " proto tcp dev eth" + string([]byte{0xa0}) + "0", false, true},
+		{"device-kernel-neighbor-0xa1", " proto tcp dev eth" + string([]byte{0xa1}) + "0", false, false},
+		{"device-only-0xa0", " dev " + string([]byte{0xa0}), false, true},
+		{"device-only-0xa1", " dev " + string([]byte{0xa1}), false, false},
 
 		{"gre-selector", " proto gre key 123 dev tun0", false, false},
 		{"mh-selector", " proto mobility-header type 3 (dport) 0x0001", false, false},
@@ -661,6 +667,10 @@ func TestXFRMSelectorDeviceKernelNames(t *testing.T) {
 		{"eth0", true}, {"eth#hash", true}, {"dev!name", true},
 		{"stl~test", true}, {"-leading", true}, {"quote\"name", true},
 		{"abcdefghi123456", true}, {"veth@peer", true},
+		// Raw Linux ctype byte classification: 0xa0 is space, 0xa1 is not.
+		{string([]byte{0xa0}), false}, {string([]byte{0xa1}), true},
+		{"eth" + string([]byte{0xa0}) + "0", false},
+		{"eth" + string([]byte{0xa1}) + "0", true},
 		{"", false}, {".", false}, {"..", false},
 		{"has/slash", false}, {"eth:alias", false},
 		{"two words", false}, {"has\ttab", false},
