@@ -26,14 +26,17 @@ Read the [installer source](../scripts/install.sh) before running it as root.
 For a single-command install, with an explicit released tag:
 
 ~~~sh
-bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/ach1992/simple-tun-link/vX.Y.Z/scripts/install.sh | sudo bash -s -- install --version vX.Y.Z'
+bash -c 'set -euo pipefail; umask 077; t=$(mktemp); trap '\''rm -f -- "$t"'\'' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 -o "$t" https://raw.githubusercontent.com/ach1992/simple-tun-link/vX.Y.Z/scripts/install.sh; bash -n "$t"; sudo bash "$t" install --version vX.Y.Z'
 ~~~
 
-The script fetches `SHA256SUMS`, `BUILD-MANIFEST.txt`, `LICENSE`, and the one
+The one-command wrapper completes and syntax-checks the exact-tag installer download into a private temporary file **before invoking sudo**; a partial/failed download is never streamed into a privileged shell. The downloaded installer then fetches `SHA256SUMS`, `BUILD-MANIFEST.txt`, `LICENSE`, and the one
 architecture-specific `stl_vX.Y.Z_linux_<arch>` executable from the **fixed
 project GitHub release URL** over HTTPS. It checks the relevant SHA-256 entries,
 MIT/commit/version metadata, and the executable's `version --json` identity
 **before** publication. No caller-provided download URL is accepted.
+
+For `--bundle` system-wide installs, use a private administrator-controlled
+bundle source; bundle-local checksums do not authenticate a hostile source.
 
 SHA-256 checksums protect against accidental damage/mismatched bytes, **not**
 against a compromised release account or replacement of checksums and binaries
@@ -70,13 +73,22 @@ pattern with `update`). The installer refuses a foreign or locally modified
   Runtime/backend/state compatibility must be reviewed before each release.
 
 A fatal interruption (power loss, `SIGKILL`) between rename and record sync
-may require manual reconciliation. If the installer retains a
+may require manual reconciliation. The installer synchronizes prepared binaries and rollback sources before
+publication, syncs canonical identities and directories after rename, and
+retains a durable `COMMITTED` transaction journal for safe subsequent retirement.
+At the next invocation, it removes a committed journal only if the current
+binary, alias and ownership record still prove the recorded operation. A
+non-committed journal always requires explicit manual reconciliation.
+
+If the installer retains a
 `/usr/local/bin/.stl-install.*` recovery directory, **do not delete or blindly
 restore it**: inspect the installed binary hash, installation record, unit and
 Links, then choose an explicit recovery/roll-forward. Check executable identity
 again before retrying. Unreconciled `.stl-install.*` recovery directories block all
 further installer transactions; inspect and reconcile the binary, record and
 retained evidence before explicitly retiring any recovery material.
+Never blindly delete a journal, or reuse the recorded old binary without
+checking state schema and Engine compatibility.
 
 ## Uninstall: never tear down live Links implicitly
 
@@ -99,7 +111,11 @@ After the Link state is proven empty and the Engine-owned restore unit is gone:
 sudo bash ./install.sh uninstall
 ~~~
 
-Uninstall removes only the hash-verified installer-owned canonical executable,
+Uninstall calls `stl maintenance pre-uninstall --json` under the exclusive
+maintenance lock. That Go command distinguishes a never-used host from a
+missing state snapshot in an existing root and uses the canonical systemd
+installed/enabled checks. Missing, malformed, symlinked or otherwise ambiguous
+state fails closed. Uninstall removes only the hash-verified installer-owned canonical executable,
 its exact `stlink -> stl` symlink, and the installer ownership record. It keeps
 the installer lock and does **not** delete `/var/lib/simple-tun-link`, other
 systemd units, network resources, arbitrary `stl` files, or host packages.
@@ -108,9 +124,10 @@ Link-removal lifecycle. Empty historic state may be archived or retired later
 through a distinct explicit audited operation, not silent uninstall.
 
 If any state read or ownership check is inconclusive, uninstall fails closed.
-As with any software removal, coordinate with other operators: the installer
-cannot prevent a different process from starting a new Link between read-only
-inspection and file removal.
+The installer holds an **exclusive maintenance flock** across the read-only
+canonical Go pre-uninstall check and entire uninstall transaction. Ordinary
+Engine mutations hold shared locks and stale queued binaries are rejected after
+update/uninstall. Multiple unrelated Links still mutate concurrently.
 
 ## Offline/disposable validation
 
