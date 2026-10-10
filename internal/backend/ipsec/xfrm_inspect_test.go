@@ -1,6 +1,7 @@
 package ipsec
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -480,6 +481,15 @@ func TestXFRMLegacyStateSelectorTailFailClosed(t *testing.T) {
 		{"device-kernel-neighbor-0xa1", " proto tcp dev eth" + string([]byte{0xa1}) + "0", false, false},
 		{"device-only-0xa0", " dev " + string([]byte{0xa0}), false, true},
 		{"device-only-0xa1", " dev " + string([]byte{0xa1}), false, false},
+		// Unicode U+0085 is UTF-8 c2 85: neither raw byte is kernel whitespace.
+		{"device-utf8-nel-embedded", " proto tcp dev eth" + string([]byte{0xc2, 0x85}) + "0", false, false},
+		{"device-utf8-nel-standalone", " proto tcp dev " + string([]byte{0xc2, 0x85}), false, false},
+		{"device-utf8-nel-before-uid", " proto tcp dev eth" + string([]byte{0xc2, 0x85}) + "0 uid 4", false, false},
+		// Unicode U+00A0 is UTF-8 c2 a0: raw byte a0 is kernel whitespace.
+		{"device-utf8-nbsp-trailing", " proto tcp dev eth" + string([]byte{0xc2, 0xa0}), false, true},
+		{"device-utf8-nbsp-embedded", " proto tcp dev eth" + string([]byte{0xc2, 0xa0}) + "0", false, true},
+		{"device-utf8-nbsp-before-uid", " proto tcp dev eth" + string([]byte{0xc2, 0xa0}) + "0 uid 4", false, true},
+		{"device-utf8-nbsp-standalone", " proto tcp dev " + string([]byte{0xc2, 0xa0}), false, true},
 
 		{"gre-selector", " proto gre key 123 dev tun0", false, false},
 		{"mh-selector", " proto mobility-header type 3 (dport) 0x0001", false, false},
@@ -684,5 +694,62 @@ func TestXFRMSelectorDeviceKernelNames(t *testing.T) {
 				t.Fatalf("device %q: got %t, want %t", tc.name, got, tc.valid)
 			}
 		})
+	}
+}
+
+// A successful subprocess is not proof of an empty inventory when its stdout
+// contains Unicode whitespace not emitted as ASCII structural iproute2 spaces.
+func TestXFRMVacancyRejectsUnicodeOnlyInventory(t *testing.T) {
+	p, err := NewProfile(testIPsecLink(t, domain.EncapESP))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cmd := range []string{"ip -json xfrm policy", "ip -json xfrm state"} {
+		for _, tc := range []struct {
+			name   string
+			output []byte
+		}{
+			{"unicode-nel", []byte{0xc2, 0x85}},
+			{"unicode-nbsp", []byte{0xc2, 0xa0}},
+			{"unicode-nel-after-ascii", []byte{' ', '\t', 0xc2, 0x85}},
+			{"unicode-nbsp-after-ascii", []byte{'\n', 0xc2, 0xa0}},
+		} {
+			t.Run(cmd+"/"+tc.name, func(t *testing.T) {
+				f := goodXFRMFixture()
+				f.rows[cmd] = tc.output
+				if err := (XFRMVacancyInspector{Runner: f.Run}).RequireVacant(context.Background(), p); err == nil {
+					t.Fatal("nonempty Unicode inventory was promoted to vacant")
+				}
+			})
+		}
+	}
+}
+
+// Legacy XFRM structural delimiters are ASCII bytes ONLY. This covers the
+// entire byte domain, so a future Unicode whitespace helper cannot silently
+// reintroduce false vacancy or reject Linux-valid interface names.
+func TestXFRMASCIIWhitespaceLexing(t *testing.T) {
+	for n := 0; n <= 255; n++ {
+		b := byte(n)
+		want := b == ' ' || (b >= '\t' && b <= '\r')
+		if got := xfrmASCIIWhitespace(b); got != want {
+			t.Fatalf("byte 0x%02x whitespace=%v, want %v", b, got, want)
+		}
+	}
+	raw := []byte{' ', '\t', 'd', 'e', 'v', ' ', 'e', 't', 'h', 0xc2, 0x85, '0', '\r', '\n', 'u', 'i', 'd', ' ', '1', '7', ' '}
+	fields := xfrmASCIIFields(xfrmTrimASCIIWhitespace(raw))
+	want := [][]byte{[]byte("dev"), {'e', 't', 'h', 0xc2, 0x85, '0'}, []byte("uid"), []byte("17")}
+	if len(fields) != len(want) {
+		t.Fatalf("Unicode bytes were split: got %d fields, want %d", len(fields), len(want))
+	}
+	for i := range want {
+		if !bytes.Equal(fields[i], want[i]) {
+			t.Fatalf("token %d bytes changed: got %x, want %x", i, fields[i], want[i])
+		}
+	}
+	rawNBSP := []byte{' ', 'e', 't', 'h', 0xc2, 0xa0, '\t'}
+	token := xfrmTrimASCIIWhitespace(rawNBSP)
+	if !bytes.Equal(token, []byte{'e', 't', 'h', 0xc2, 0xa0}) {
+		t.Fatalf("UTF-8 NBSP was normalized away: got %x", token)
 	}
 }

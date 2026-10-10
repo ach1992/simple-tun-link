@@ -203,12 +203,12 @@ func (i XFRMVacancyInspector) read(ctx context.Context, ip string, allowEmpty bo
 	// Kernel iproute2 prints an empty stdout (not "[]") for a successful
 	// empty xfrm state/policy inventory. Allow this only after a successful
 	// exit and only for policy/state, never for the required link inventory.
-	if allowEmpty && len(bytes.TrimSpace(raw)) == 0 {
+	if allowEmpty && len(xfrmTrimASCIIWhitespace(raw)) == 0 {
 		clear(raw)
 		return []byte("[]"), nil
 	}
 	// Reject excessive or malformed output instead of trusting partial data.
-	if len(raw) == 0 || len(raw) > 4<<20 || (!allowEmpty && !bytes.HasPrefix(bytes.TrimSpace(raw), []byte("["))) {
+	if len(raw) == 0 || len(raw) > 4<<20 || (!allowEmpty && !bytes.HasPrefix(xfrmTrimASCIIWhitespace(raw), []byte("["))) {
 		clear(raw)
 		return nil, fmt.Errorf("invalid XFRM inventory response")
 	}

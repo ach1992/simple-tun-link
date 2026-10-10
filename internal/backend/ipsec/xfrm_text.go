@@ -20,7 +20,7 @@ func xfrmInventoryUsesID(raw []byte, target uint32, kind string) (bool, error) {
 	if kind != "policy" && kind != "state" {
 		return false, fmt.Errorf("unsupported XFRM inventory")
 	}
-	if bytes.HasPrefix(bytes.TrimSpace(raw), []byte("[")) {
+	if bytes.HasPrefix(xfrmTrimASCIIWhitespace(raw), []byte("[")) {
 		var rows []json.RawMessage
 		parseErr := json.Unmarshal(raw, &rows)
 		// RawMessage unmarshal copies entire rows, which may include SA
@@ -45,6 +45,42 @@ func xfrmInventoryUsesID(raw []byte, target uint32, kind string) (bool, error) {
 		return false, nil
 	}
 	return xfrmTextUsesID(raw, target, kind)
+}
+
+// iproute2 writes structural separators as ASCII bytes, not Unicode text.
+// Go bytes.TrimSpace/Fields decode UTF-8 and can erase raw kernel-invalid
+// 0xa0 or split Linux-valid sequences such as c2 85 (U+0085).
+// Return views of the original buffer: do not normalize/copy secret-bearing
+// XFRM output, and preserve every non-ASCII byte for semantic validation.
+func xfrmASCIIWhitespace(c byte) bool {
+	return c == ' ' || (c >= '\t' && c <= '\r')
+}
+
+func xfrmTrimASCIIWhitespace(raw []byte) []byte {
+	start, end := 0, len(raw)
+	for start < end && xfrmASCIIWhitespace(raw[start]) {
+		start++
+	}
+	for end > start && xfrmASCIIWhitespace(raw[end-1]) {
+		end--
+	}
+	return raw[start:end]
+}
+
+func xfrmASCIIFields(line []byte) [][]byte {
+	var fields [][]byte
+	for i := 0; i < len(line); {
+		if xfrmASCIIWhitespace(line[i]) {
+			i++
+			continue
+		}
+		start := i
+		for i < len(line) && !xfrmASCIIWhitespace(line[i]) {
+			i++
+		}
+		fields = append(fields, line[start:i])
+	}
+	return fields
 }
 
 // Reject duplicate JSON keys before decoding their values. Go's ordinary
@@ -157,7 +193,7 @@ func xfrmJSONRowUsesID(raw []byte, target uint32, kind string) (bool, error) {
 		return false, nil // Valid wildcard policy/SA with no interface ID.
 	}
 	// An explicitly present but null ID is ambiguous, not absent.
-	if bytes.Equal(bytes.TrimSpace(rawID), []byte("null")) {
+	if bytes.Equal(xfrmTrimASCIIWhitespace(rawID), []byte("null")) {
 		return false, fmt.Errorf("invalid JSON XFRM interface identifier")
 	}
 	id, err := xfrmIfID(rawID, false)
@@ -242,11 +278,11 @@ func xfrmTextUsesID(raw []byte, target uint32, kind string) (bool, error) {
 		descriptor = []byte("dir")
 	}
 	for _, line := range bytes.Split(raw, []byte("\n")) {
-		trimmed := bytes.TrimSpace(line)
+		trimmed := xfrmTrimASCIIWhitespace(line)
 		if len(trimmed) == 0 {
 			continue
 		}
-		fields := bytes.Fields(trimmed)
+		fields := xfrmASCIIFields(trimmed)
 		if bytes.HasPrefix(line, []byte("src ")) {
 			if err := finish(); err != nil {
 				return false, err
@@ -495,7 +531,7 @@ func xfrmSelectorProtocolTable(value string, data []byte) (uint64, bool) {
 		if i := bytes.IndexByte(line, '#'); i >= 0 {
 			line = line[:i]
 		}
-		fields := bytes.Fields(line)
+		fields := xfrmASCIIFields(line)
 		if len(fields) < 2 {
 			continue
 		}

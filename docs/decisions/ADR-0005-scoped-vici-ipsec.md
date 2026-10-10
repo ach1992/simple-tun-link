@@ -120,6 +120,11 @@ iproute2 output contract: decimal numbers have canonical formatting;
 ICMP type/code are uint8 rather than uint16; an MH `(dport)` value has the
 fixed-width lowercase `0x` plus four hex digits; foreign `dev` names follow
 Linux `dev_valid_name` rather than STL's planned-interface alphabet.
+Legacy iproute2 text parsing and successful-empty inventory checks must
+use ASCII structural whitespace byte-by-byte, not Unicode-aware token
+splitting/trimming: preserve non-ASCII bytes verbatim for the kernel
+device-name check, rejecting `0xa0` while retaining Linux-valid sequences
+like UTF-8 `c2 85`. Unicode-only nonempty inventory never means vacancy.
 Selector protocol names derive from the file-backed host `/etc/protocols`
 primary names as used by default Debian/Ubuntu iproute2/libc, not a static
 IANA subset; unknown/unreadable names or ambiguous tables fail closed.
