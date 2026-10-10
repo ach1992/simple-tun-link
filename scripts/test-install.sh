@@ -25,7 +25,7 @@ elif [ "\$1" = link ] && [ "\$2" = list ] && [ "\$3" = --json ]; then
     echo '{"schema_version":1,"links":[]}'
   fi
 elif [ "\$1" = maintenance ] && [ "\$2" = pre-uninstall ] && [ "\$3" = --json ]; then
-  if [ "${STL_INSTALL_TEST_LINKS:-0}" = 1 ]; then
+  if [ "\${STL_INSTALL_TEST_LINKS:-0}" = 1 ]; then
     echo '{"schema_version":1,"ready":false}'
     exit 1
   else
