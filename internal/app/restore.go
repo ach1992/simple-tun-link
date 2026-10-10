@@ -15,6 +15,12 @@ import (
 // failure, so the CLI can report actual partial progress without concealing
 // a failed reapply.
 func (e *Engine) RestoreAll(ctx context.Context) ([]Result, error) {
+	maintenanceRelease, err := e.acquireMaintenance(ctx)
+	if err != nil {
+		return nil, stlerr.Wrap(stlerr.CodeState, "restore_all", "", "", "maintenance gate unavailable; no restore attempted", err)
+	}
+	defer maintenanceRelease()
+
 	snapshot, err := e.store.Load(ctx)
 	if err != nil {
 		return nil, stlerr.Wrap(stlerr.CodeState, "restore_all", "", "", "cannot load persisted Links", err)

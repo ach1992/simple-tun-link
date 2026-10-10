@@ -20,7 +20,14 @@ type Locker interface {
 	Acquire(context.Context, []domain.ResourceClaim) (func() error, error)
 }
 
+// MaintenanceGuard is held across an entire canonical Engine mutation. Shared
+// acquisitions coexist; installer-held exclusive acquisitions block mutations.
+type MaintenanceGuard interface {
+	Acquire(context.Context) (func() error, error)
+}
+
 type Engine struct {
+	maintenance        MaintenanceGuard
 	backends           *backend.Registry
 	store              state.Store
 	locks              Locker
@@ -41,6 +48,19 @@ func New(backends *backend.Registry, store state.Store, locks Locker) (*Engine, 
 	return &Engine{backends: backends, store: store, locks: locks}, nil
 }
 
+// SetMaintenanceGuard enables the shared install/Engine exclusion for managed
+// production runtimes without changing the test-only injected Engine seams.
+func (e *Engine) SetMaintenanceGuard(g MaintenanceGuard) {
+	e.maintenance = g
+}
+
+func (e *Engine) acquireMaintenance(ctx context.Context) (func() error, error) {
+	if e.maintenance == nil {
+		return func() error { return nil }, nil
+	}
+	return e.maintenance.Acquire(ctx)
+}
+
 func (e *Engine) Ensure(ctx context.Context, desired domain.Link) (Result, error) {
 	return e.ensureWithPolicy(ctx, desired, false)
 }
@@ -58,6 +78,11 @@ func (e *Engine) ensureWithPolicy(ctx context.Context, desired domain.Link, reje
 	if err := desired.Validate(); err != nil {
 		return Result{}, contextualize(err, stlerr.CodeInvalid, "ensure", desired, "invalid desired Link")
 	}
+	release, err := e.acquireMaintenance(ctx)
+	if err != nil {
+		return Result{}, stlerr.Wrap(stlerr.CodeState, "ensure", string(desired.ID), "", "maintenance gate unavailable; no mutation attempted", err)
+	}
+	defer release()
 	return e.executeEnsure(ctx, desired, rejectReconfiguration)
 }
 
@@ -78,6 +103,12 @@ func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.
 	if err := id.Validate(); err != nil {
 		return Result{}, contextualize(err, stlerr.CodeInvalid, "remove", domain.Link{ID: id}, "invalid Link ID")
 	}
+
+	maintenanceRelease, err := e.acquireMaintenance(ctx)
+	if err != nil {
+		return Result{}, stlerr.Wrap(stlerr.CodeState, "remove", string(id), "", "maintenance gate unavailable; no mutation attempted", err)
+	}
+	defer maintenanceRelease()
 
 	linkRelease, err := e.locks.Acquire(ctx, []domain.ResourceClaim{linkLock(id)})
 	if err != nil {
