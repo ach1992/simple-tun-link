@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/state"
@@ -67,14 +68,13 @@ func printMenuHeader(out io.Writer, options *runtimeOptions) {
 func safeMenuText(value string) string {
 	var result strings.Builder
 	for _, r := range value {
-		if result.Len() >= 96 {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			r = '_'
+		}
+		if result.Len()+utf8.RuneLen(r) > 96 {
 			break
 		}
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
-			result.WriteByte('_')
-		} else {
-			result.WriteRune(r)
-		}
+		result.WriteRune(r)
 	}
 	if result.Len() == 0 {
 		return "unknown"
@@ -134,7 +134,7 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 	printMenuHeader(out, options)
 	for {
 		fmt.Fprintln(out, "\nTasks:")
-		fmt.Fprintln(out, "  1  Create Tunnel (guided setup pending)")
+		fmt.Fprintln(out, "  1  Create Tunnel (guided GRE Native)")
 		fmt.Fprintln(out, "  2  Import Setup Link (confirmed GRE/IPIP only)")
 		fmt.Fprintln(out, "  3  Manage Links")
 		fmt.Fprintln(out, "  4  Tests & Diagnostics")
@@ -153,7 +153,9 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 		}
 		switch choice {
 		case "1":
-			fmt.Fprintln(out, "Guided creation is not implemented. Use stl link ensure --stdin to apply an explicitly reviewed GRE Native configuration. No changes made.")
+			if code := menuCreate(input, reader, out, errOut, options); code != 0 {
+				return code
+			}
 		case "2":
 			if code := menuImport(input, reader, out, errOut, options); code != 0 {
 				return code

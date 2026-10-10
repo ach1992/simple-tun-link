@@ -142,6 +142,12 @@ func (s HostSnapshotter) Snapshot(ctx context.Context) (hostSnapshot, error) {
 			continue
 		}
 		prefix = prefix.Masked()
+		// An IPv4/IPv6 /0 is the default route even when iproute2
+		// spells it as a prefix rather than the keyword 'default'.
+		// Reserving /0 would incorrectly forbid every Link subnet.
+		if prefix.Bits() == 0 {
+			continue
+		}
 		routes = append(routes, ObservedResource{
 			Claim:  domain.ResourceClaim{Kind: domain.ResourceLinkSubnet, Key: prefix.String()},
 			Owner:  ownersByInterface[row.Device],

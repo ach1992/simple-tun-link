@@ -16,6 +16,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	grebackend "github.com/ach1992/simple-tun-link/internal/backend/gre"
 	ipipbackend "github.com/ach1992/simple-tun-link/internal/backend/ipip"
+	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
@@ -36,6 +37,8 @@ type runtimeOptions struct {
 	probeRunner        linux.Runner
 	restorePersistence app.RestorePersistence
 	executable         string
+	// Test-only deterministic identity seam; nil uses crypto-random Link IDs.
+	createLinkID func() (domain.LinkID, error)
 }
 
 func main() {

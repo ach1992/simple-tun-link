@@ -30,7 +30,7 @@ func TestCollisionInspectorFindsCommonHostCollisionsAndOwner(t *testing.T) {
 	runner := resourceRunner{output: map[string]string{
 		"ip -json link show":            `[{"ifname":"stl0","ifalias":"stl:lnk_0123456789abcdef0123456789abcdef"},{"ifname":"eth0"}]`,
 		"ip -json address show":         `[{"ifname":"stl0","addr_info":[{"local":"10.80.20.0","prefixlen":31}]},{"ifname":"eth0","addr_info":[{"local":"192.0.2.10","prefixlen":24}]}]`,
-		"ip -json route show table all": `[{"dst":"10.80.30.0/24","dev":"eth0"},{"dst":"default","dev":"eth0"}]`,
+		"ip -json route show table all": `[{"dst":"10.80.30.0/24","dev":"eth0"},{"dst":"default","dev":"eth0"},{"dst":"0.0.0.0/0","dev":"eth0"}]`,
 		"ss -H -u -l -n":                "UNCONN 0 0 0.0.0.0:4500 0.0.0.0:*\n",
 	}}
 	inspector := CollisionInspector{Snapshotter: HostSnapshotter{Runner: runner}}
@@ -59,6 +59,14 @@ func TestCollisionInspectorFindsCommonHostCollisionsAndOwner(t *testing.T) {
 	}
 	if !foundOwnedInterface {
 		t.Fatal("interface collision not reported")
+	}
+	// Explicit /0 notation is still a default route, not a
+	// claim against every possible private Link subnet.
+	unrelated, err := inspector.Inspect(context.Background(), []domain.ResourceClaim{
+		{Kind: domain.ResourceLinkSubnet, Key: "172.30.0.0/31"},
+	})
+	if err != nil || len(unrelated) != 0 {
+		t.Fatalf("default route blocked an unused Link /31: %+v %v", unrelated, err)
 	}
 }
 
