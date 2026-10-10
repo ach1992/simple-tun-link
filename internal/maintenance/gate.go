@@ -202,7 +202,7 @@ func (g Gate) validateExecutableIdentity(dir string) error {
 	if recordErr != nil && !errors.Is(recordErr, os.ErrNotExist) {
 		return fmt.Errorf("cannot inspect installation record: %w", recordErr)
 	}
-	managedRunning := g.testOnlyUnprivilegedPath || running == canonical || strings.HasPrefix(running, canonical+" (deleted)")
+	managedRunning := running == canonical || strings.HasPrefix(running, canonical+" (deleted)")
 	if !recordExists && !managedRunning {
 		return nil
 	}
