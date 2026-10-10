@@ -285,16 +285,23 @@ stage=$(mktemp -d "$bin_dir/.stl-install.XXXXXXXX")
 if [[ $action == uninstall ]]; then
   cp -p -- "$target" "$stage/previous-stl"
   cp -p -- "$record" "$stage/previous-record"
-  [[ $(hash_file "$target") == "$prior_hash" ]] || fail 'installed binary changed before uninstall'
+  [[ $(hash_file "$target") == "$prior_hash" && $(hash_file "$record") == "$prior_record_hash" ]] || fail 'installed identity changed before uninstall'
+  sync_paths "$stage/previous-stl" "$stage/previous-record" "$stage" "$bin_dir" || fail 'cannot durably preserve uninstall rollback source'
+  failpoint prepublish-sync
   rm -- "$alias"
+  sync_paths "$bin_dir" || fail 'cannot durably retire alias'
   mv -T -- "$target" "$stage/removed-stl"
+  sync_paths "$bin_dir" "$stage" || fail 'cannot durably retire canonical executable'
   rm -- "$record"
   if [[ $prefix != /usr/local && ${STL_INSTALL_TEST_FAIL_AFTER_UNINSTALL_REMOVE:-} == 1 ]]; then
     fail 'injected uninstall failure (isolated test only)'
   fi
-  sync -f "$bin_dir" "$record_dir" || fail 'uninstall directory sync failed; attempting recovery'
+  sync_paths "$record_dir" || fail 'cannot durably retire ownership record'
+  failpoint record-sync
+  [[ ! -e $target && ! -L $target && ! -e $alias && ! -L $alias && ! -e $record && ! -L $record ]] || fail 'uninstall identities not fully retired'
+  commit_marker "$prior_hash"
   printf 'Uninstalled installer-owned stl/stlink only; Link state was left untouched.\n'
-  exit 0
+
 fi
 
 arch=$(uname -m)
