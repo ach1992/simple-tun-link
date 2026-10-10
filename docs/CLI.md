@@ -110,10 +110,10 @@ WireGuard v3 offers show credential presence as **REDACTED** and additionally
 show public keys/ports/keepalives before exact Link-ID confirmation. IPsec
 and legacy WireGuard v1/v2 offers remain preview-only.
 The menu makes no separate promises about working peer traffic or complete
-pairing. Settings, Update and Uninstall remain explicitly pending and do not
-report false success. Menu text and selection numbers are
-human UI, not automation contracts; existing versioned `--json` commands
-remain the automation interface.
+pairing. Settings is observational; Update and Uninstall provide guided,
+read-only installer handoffs and never silently mutate the host. Menu text
+and selection numbers are human UI, not automation contracts; existing
+versioned `--json` commands remain the automation interface.
 
 ## WireGuard sender creation, recovery and credential retirement
 
@@ -263,16 +263,18 @@ or coexistence E2E is implied by synthetic tests of these workflows.
   order. An empty state file yields an empty list; listing does not construct
   backend runtimes, probe host interfaces, or alter network state.
 - `stl link status <link-id> [--json]`: read one saved Link and inspect
-  its live backend state. GRE and IPIP use ownership-/ifindex-checked
-  `DiagnosticState` adapters, including network interface counters. Unsupported
-  backend kinds return a nonzero error rather than claiming health.
+  its live backend state. GRE, IPIP and WireGuard use ownership-/ifindex-checked
+  `DiagnosticState` adapters with public state and interface/transfer counters.
+  Unsupported backend kinds return a nonzero error rather than claiming health.
 - `stl link diagnose <link-id> [--mtu <bytes>] [--json]`: explicitly
-  probe the selected GRE/IPIP Link's **peer Link Address** using bounded ICMP
-  echo with IPv4 Don't Fragment. Reports observed RTT/loss/jitter
+  probe the selected GRE/IPIP/WireGuard Link's **peer Link Address** using
+  bounded ICMP echo with IPv4 Don't Fragment. Reports observed RTT/loss/jitter
   and conservative PMTU recommendations alongside backend interface counters.
-  This command transmits diagnostic packets but makes **no** host network,
-  firewall, MTU or desired-state changes. Requires a configured and
-  identity-checked active GRE/IPIP interface.
+  For WireGuard, it also reports public peer identity, handshake time and
+  transfer bytes; a zero pre-probe handshake time does **not** prove a
+  connection or a failure. This command transmits diagnostic packets but
+  makes **no** host network, firewall, MTU or desired-state changes. Requires
+  a configured, identity-checked active interface.
 - `stl link preview --stdin [--json]`: decode and **redact** a
   versioned setup link supplied only through standard input, then display
   the **receiver-oriented** Link identity, addresses, encapsulation,
@@ -321,8 +323,8 @@ the read-only diagnostics path in [DIAGNOSTICS.md](DIAGNOSTICS.md).
   `gre_state`, `ipip_state` or `wireguard_state` (only its selected
   backend); WireGuard includes verified public identity, latest handshake
   Unix timestamp and byte counters, not a private credential.
-- `link diagnose`: the GRE/IPIP diagnostics report with top-level
-  schema version, Link ID, backend kind, identity-checked counter state,
+- `link diagnose`: the GRE/IPIP/WireGuard diagnostics report with top-level
+  schema version, Link ID, backend kind, identity-checked public/counter state,
   MTU result and quality result. `--mtu` overrides the **inner IPv4
   packet** MTU manually; oversized values are errors, not silently clamped.
   Without `--mtu`, MTU is selected by bounded DF probes, and an
@@ -368,8 +370,8 @@ explicit `export` never change network configuration. Export is
 The distinct `ensure`, `remove` and `restore` paths are
 explicit host-mutating operations. Interactive
 create/import, protected recipient credential storage, optional throughput,
-non-GRE/IPIP diagnostic adapters and the task-first UI remain pending under
-Issues #8, #9 and #10.
+IPsec diagnostic adapter and the remaining task-first UI work are tracked under
+Issues #8, #9 and #10; privileged WireGuard traffic acceptance remains #6/#12.
 
 ## Explicit Link lifecycle commands — Issue #10
 

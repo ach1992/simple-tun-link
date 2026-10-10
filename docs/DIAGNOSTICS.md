@@ -74,8 +74,9 @@ output/errors are not propagated into the versioned report. Cancellation
 prevents further probes.
 
 `ObserveLinux` composes this adapter with the common read-only
-`Observe` decision/report model. Missing backend capability/counter hooks
-and operator integration are still distinct acceptance work.
+`Observe` decision/report model. It does not bypass backend-specific
+capability, ownership or counter inspection; unsupported backend kinds
+remain unavailable until their own adapters are implemented.
 
 Optional nonprivileged runtime verification uses only the local loopback
 interface, without sending packets to external destinations:
@@ -151,6 +152,26 @@ Manual MTU never bypasses the observed route/underlay ceiling.
 `backend: "ipip"` and an IPIP `state` field. Neither a verified interface
 nor an in-memory/fake-runner diagnostic test proves that peer traffic
 works. Privileged bidirectional IPIP acceptance remains Issue #5/#12.
+
+## WireGuard adapter — public handshake, counters and active diagnosis
+
+`ObserveWireGuard` reuses the same **read-only** Linux DF probe, RTT/loss/jitter
+and manual/Auto MTU results. It refuses to probe until the backend confirms
+the active WireGuard tool/capability and an owned, configured interface with
+matching ifindex, local/peer **public** key identities and listen port.
+Preflight rechecks the selected interface ifindex and its local Link Address.
+The WireGuard backend supplies **60 bytes** IPv4 data-packet overhead: outer
+IPv4 20 + UDP 8 + WireGuard data header/authentication tag 32. Unsupported
+underlay/credentials fail rather than assuming another overhead.
+
+`stl link diagnose` now emits `backend: "wireguard"`, a public-only `state`
+(verified interface, public identities, handshake Unix timestamp and RX/TX
+bytes), and the common versioned MTU/quality report. A handshake timestamp
+of zero means no handshake was observed **at pre-probe inspection**; neither
+the interface's existence nor a timestamp alone proves end-to-end traffic.
+Authenticated bidirectional traffic and cross-backend coexistence still
+require separately authorized **real WireGuard kernel** acceptance (#6/#12).
+No private key or SENSITIVE setup URL is inspected or serialized.
 
 ## MTU policy
 
@@ -235,15 +256,12 @@ with its separate authorization/ownership checks.
 
 This Linux adapter does not complete Issue #9. Still required:
 
-- The implemented `stl link diagnose <id> [--mtu <bytes>] [--json]`
-  command exposes this GRE-specific report without calling repair or apply.
-  Equivalent capability/interface/overhead/counter integration for IPIP,
-  WireGuard and IPsec remains pending as those backends arrive (#5–#7);
+- IPsec/XFRM overhead, capability, state and counter integration once its
+  backend exists (#7);
 - Safe MTU application through the Engine, never from health observation;
-- Backend state/counter integration (#4–#7);
-- Operator diagnostics/JSON entry points and optional throughput path (#10);
-- Live namespace Link Address/PMTU, multi-Link isolation and release E2E (#12).
+- Optional throughput path (when tooling is present and explicitly requested);
+- Live namespace Link Address/PMTU, WireGuard peer traffic, multi-Link isolation,
+  restart/reapply and release E2E evidence (#6/#12).
 
-The Linux adapter is independently reviewable without touching the
-in-flight privileged GRE candidate. Keep Issue #9 OPEN until remaining
-acceptance is genuinely completed.
+Keep Issue #9 OPEN until remaining acceptance is genuinely completed.
+Unprivileged mock-runner tests are **not** WireGuard runtime acceptance.

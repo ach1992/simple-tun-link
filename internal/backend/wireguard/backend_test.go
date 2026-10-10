@@ -62,6 +62,11 @@ func (f *fakeKernel) Run(_ context.Context, binary string, args ...string) (linu
 	case binary == "ip" && len(args) == 5 && args[0] == "link" && args[1] == "add":
 		f.target = observedLink{Exists: true, IfIndex: 17, Name: args[2]}
 		return linux.CommandResult{}, nil
+	case binary == "wg" && reflect.DeepEqual(args, []string{"show", "interfaces"}):
+		if f.fail == "wg-observation" {
+			return linux.CommandResult{}, errors.New("synthetic wg unavailable")
+		}
+		return linux.CommandResult{Stdout: []byte(f.target.Name + "\n")}, nil
 	case binary == "wg" && len(args) == 3 && args[0] == "show":
 		iface, field := args[1], args[2]
 		if iface == "all" {
