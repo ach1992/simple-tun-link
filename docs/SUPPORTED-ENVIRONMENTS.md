@@ -5,7 +5,17 @@ This document owns the v0.1 platform baseline. Runtime preflight remains authori
 ## Initial platform policy
 
 - Linux only.
-- Primary distro family: Debian/Ubuntu.
+- Installer distro floor: Ubuntu 22.04+ and Debian 11+ (Debian/Ubuntu ID
+  values, not guesses from ID_LIKE). Unknown derivatives fail explicitly;
+  repositories are never rewritten automatically. The requested Debian 11
+  compatibility floor remains despite its security LTS expiry (2026-08-31).
+  Security-maintained production hosts should use Debian 12+ or suitable
+  extended security support.
+- Automatic prerequisite provisioning: native GRE/IPIP installs/verifies
+  iproute2 and iptables. Optional WireGuard selects wireguard-tools; optional
+  IPsec selects charon-systemd and strongswan-swanctl explicitly to avoid
+  surprising an existing strongSwan daemon. The installer only requests
+  missing packages from the distro's own configured APT sources.
 - Baseline kernel: **5.4 or newer**.
 - Baseline iproute2: **5.1 or newer**.
 - Initial release architectures: **linux/amd64** and **linux/arm64**.

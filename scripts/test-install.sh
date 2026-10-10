@@ -234,4 +234,14 @@ wait "$holder"
 wait "$updater" || fail 'installer failed after shared maintenance gate released'
 [[ $(sha "$concurrent/bin/stl") == "$(sha "$root/v0.1.1/stl_v0.1.1_linux_amd64")" ]] || fail 'queued update did not publish after release'
 
+# The full offline suite also covers the distro-aware APT planner.
+bash "$(dirname "$0")/test-install-requirements.sh"
+
+# Explicit all-backend selection still never touches the real host's APT
+# when the installer targets a disposable offline prefix.
+no_host_packages="$root/optional-dependencies"
+mkdir -p "$no_host_packages/bin" "$no_host_packages/lib"
+bash "$installer" install --bundle "$root/v0.1.0" --prefix "$no_host_packages" --backends all >/dev/null
+[[ -x $no_host_packages/bin/stl ]] || fail 'offline all-backend installation did not publish STL'
+
 printf 'Installer offline checks PASS (integrity, concurrency gate, durability failure seams, rollback, and recovery journals).\n'
