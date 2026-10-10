@@ -230,28 +230,44 @@ acceptance matrix. Issues #7 and #12 remain open.
 
 ## Unregistered IPsec VICI configuration journal (not an operational backend)
 
-An isolated source-only Engine API now records an exact public PendingIPsec
-identity and nonce in a durable VICI operation journal before exposing any
-bounded per-object write seam. The only operations in that seam are an
-IKE-identity-scoped per-Link `load-shared` and the single named `load-conn`;
-there is **no** daemon-wide reload, wildcard operation, XFRM writer, IKE
-initiation, credential retirement, or registered production IPsec backend.
-The existing public `CheckIPsecActivationVacancy` stays read-only and grants
-no capability to perform writes.
+The Engine can now record an exact public PendingIPsec identity and
+random nonce in a durable source-only journal. **The production build has
+NO VICI `load-shared` or `load-conn` writer, no generally constructible
+effectful adapter, and NO `ApplyPreparedIPsecVICI` entrypoint.** The only
+production step is `PrepareIPsecVICI`, which rechecks protected PSK,
+canonical locks and complete read-only daemon/kernel vacancy, then records
+`prepared` without changing strongSwan. The existing public
+`CheckIPsecActivationVacancy` also stays read-only and grants no
+capability to perform a daemon mutation.
 
-`prepared` is a no-daemon-effect checkpoint; `issuing-shared` and
-`issuing-connection` indicate that a command might have been delivered,
-including when publication/daemon acknowledgement fails. `shared-observed`
-and `connection-observed` attest only to reported names, **not STL-created
-ownership**. The exact journal binds both public Link configuration and
-sender/recipient handoff identity. Absent/corrupt/changed journal or
-pending state, failed inspection, failed key check, interrupted commands,
-failed durability, lost acknowledgement and unexpected daemon contents
-all fail closed without automatic retransmission or unload. The protected
-PSK is retained for explicit reconciliation; no ordinary status/log/error
-contains it or an untrusted daemon reply. In the current milestone there
-is no active CLI route to invoke this writer. No unattended cleanup of
-existing VICI configurations is authorized.
+An exclusively **test-compiled** fake-operation simulator advances
+strictly adjacent journal phases to exercise cancellation, fail-closed
+publication ambiguity, concurrency and observation/error handling. It has
+no real govici effectful transport. The journal phases `issuing-shared`
+and `issuing-connection` are reserved for future owner-proof integration:
+if they ever appear, their effect must be treated as uncertain; name
+presence in `shared-observed` or `connection-observed` is still NOT
+proof of ownership. No existing or prospective state entry authorizes
+automatic retransmission, replacement, unload, deletion or retirement.
+The protected PSK remains private and unchanged.
+
+**Race finding and operational stop:** upstream strongSwan `load-shared`
+replaces a same-ID secret and `load-conn` replaces/updates a same-name
+connection. A foreign daemon client can insert that object after the
+last `get-conns`/`list-conns`/`get-shared` read and before the write;
+STL's locks cannot stop a third-party client. More inspection cannot
+close this TOCTOU window. No real writer may be reintroduced until an
+atomic load-if-absent/exclusive ownership protocol, or a separately
+approved isolated-daemon strategy, is proven against foreign-writer
+races. It must also pass all logging, credential and lifecycle gates.
+
+The new `ipsec_vici_operations` member is optional under state schema
+v2, so a current reader can load prior state. Older v2 readers with
+strict unknown-field rejection cannot downgrade/read a journal-bearing
+v2 file; currently no standard runtime path writes such a journal.
+A schema migration or explicit upgrade-only support policy must be
+settled before production enablement. No non-compatible downgrade is
+silently attempted.
 
 **Upstream daemon-log prerequisite:** strongSwan's VICI shared-key loader
 contains a CFG debug-level-4 raw-secret trace (`DBG4(DBG_CFG, "key: %#B",

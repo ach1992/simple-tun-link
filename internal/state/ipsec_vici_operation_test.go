@@ -1,7 +1,9 @@
 package state
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -72,5 +74,55 @@ func TestIPsecVICIOperationRejectsOrphanCollisionAndCorruption(t *testing.T) {
 				t.Fatal("unsafe/orphaned IPsec VICI journal accepted")
 			}
 		})
+	}
+}
+
+// State v2 before this source-only journal remains readable. Once a
+// journal-bearing v2 snapshot exists, an old strictly decoding v2 reader
+// must *reject* it rather than silently dropping unknown safety metadata.
+// This is a documented no-downgrade policy until explicit schema migration.
+func TestIPsecVICIOperationV2ReaderCompatibilityMatrix(t *testing.T) {
+	ctx := context.Background()
+	store := NewFileStore(filepath.Join(t.TempDir(), "state"))
+	entry := pendingIPsecFixture()
+	if err := store.Update(ctx, func(s *Snapshot) error {
+		s.PendingIPsec = append(s.PendingIPsec, entry)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	oldSnapshot, err := store.Load(ctx)
+	if err != nil || len(oldSnapshot.PendingIPsec) != 1 ||
+		len(oldSnapshot.IPsecVICIOperations) != 0 {
+		t.Fatalf("old journal-free v2 state incompatible: %v", err)
+	}
+	if err := store.Update(ctx, func(s *Snapshot) error {
+		s.IPsecVICIOperations = append(s.IPsecVICIOperations, IPsecVICIOperation{
+			Intent: entry, Nonce: "29b12628fa2ef1c20db6253af2f103b6", Phase: IPsecVICIPrepared,
+		})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := store.Load(ctx)
+	if err != nil || len(fresh.IPsecVICIOperations) != 1 || fresh.SchemaVersion != SchemaVersion {
+		t.Fatalf("new v2 reader rejected explicit journal-bearing state: %v", err)
+	}
+	raw, err := json.Marshal(fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type oldReaderV2 struct {
+		SchemaVersion   int              `json:"schema_version"`
+		Links           []LinkRecord     `json:"links"`
+		PendingSenders  []PendingSender  `json:"pending_senders,omitempty"`
+		PendingIPsec    []PendingIPsec   `json:"pending_ipsec,omitempty"`
+		RemovalReceipts []RemovalReceipt `json:"removal_receipts,omitempty"`
+	}
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	var old oldReaderV2
+	if err := d.Decode(&old); err == nil || !strings.Contains(err.Error(), "ipsec_vici_operations") {
+		t.Fatalf("older strict v2 reader unexpectedly accepted/dropped journal: %v", err)
 	}
 }

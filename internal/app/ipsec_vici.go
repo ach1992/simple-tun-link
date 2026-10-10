@@ -12,14 +12,6 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
-// IPsecScopedVICIWriter exposes ONLY the bounded per-object operations
-// required before XFRM interface installation. No unload, global operation,
-// wildcard, SA termination or credential retirement is present in this seam.
-type IPsecScopedVICIWriter interface {
-	LoadShared(context.Context, ipsec.Profile, *ipsec.PSK) error
-	LoadConnection(context.Context, ipsec.Profile) error
-}
-
 // PrepareIPsecVICI durably records intent BEFORE any daemon effect. This
 // marker is intentionally not an ownership token and is never sufficient
 // to resume an interrupted VICI call or to unload matching daemon names.
@@ -53,67 +45,21 @@ func (e *Engine) PrepareIPsecVICI(ctx context.Context, id domain.LinkID, keys IP
 	})
 }
 
-// ApplyPreparedIPsecVICI is a deliberately isolated VICI configuration phase.
-// It does NOT register an operational Link or start IKE/XFRM traffic. Each
-// potentially side-effectful call is preceded by a durable ISSUING marker.
-// If any call/reply/check/state update is uncertain, retain that marker and
-// STOP; never retry or unload a same-name object without independent host
-// ownership proof. This remains an unregistered source-only Engine path.
-func (e *Engine) ApplyPreparedIPsecVICI(ctx context.Context, id domain.LinkID, keys IPsecProtectedKeyReader, reader IPsecVICIInventory, xfrm IPsecXFRMVacancy, writer IPsecScopedVICIWriter) error {
-	const op = "ipsec_vici_apply"
-	if writer == nil {
-		return stlerr.New(stlerr.CodeInvalid, op, string(id), "ipsec", "scoped VICI writer is required")
-	}
-	return e.withIPsecActivationVacancy(ctx, id, keys, reader, xfrm, func(p ipsec.Profile, key *ipsec.PSK) error {
-		if err := e.advanceIPsecVICIPhase(ctx, p, state.IPsecVICIPrepared, state.IPsecVICIIssuingShared); err != nil {
-			return stlerr.New(stlerr.CodeConflict, op, string(id), "ipsec", "durable prepared IPsec transaction is required; no VICI call made")
-		}
-		if err := writer.LoadShared(ctx, p, key); err != nil {
-			return stlerr.New(stlerr.CodeState, op, string(id), "ipsec", "scoped shared-key call uncertain; retain transaction journal for manual reconciliation")
-		}
-		view, err := reader.Inspect(ctx, p)
-		if err != nil || !view.SecretNamePresent || view.ConnectionNamePresent {
-			return stlerr.New(stlerr.CodeState, op, string(id), "ipsec", "strongSwan shared-key result unverified; retain transaction journal")
-		}
-		if err := e.advanceIPsecVICIPhase(ctx, p, state.IPsecVICIIssuingShared, state.IPsecVICISharedObserved); err != nil {
-			return stlerr.New(stlerr.CodeState, op, string(id), "ipsec", "shared-key observation not durable; no connection call made")
-		}
-		// Repeat immediately before connection load: an outside writer may
-		// have introduced a colliding connection during the shared-key step.
-		view, err = reader.Inspect(ctx, p)
-		if err != nil || !view.SecretNamePresent || view.ConnectionNamePresent {
-			return stlerr.New(stlerr.CodeState, op, string(id), "ipsec", "strongSwan connection namespace changed; do not overwrite")
-		}
-		if err := xfrm.RequireVacant(ctx, p); err != nil {
-			return stlerr.New(stlerr.CodeState, op, string(id), "ipsec", "XFRM namespace changed; do not load connection")
-		}
-		if err := ctx.Err(); err != nil {
-			return stlerr.New(stlerr.CodeState, op, string(id), "ipsec", "IPsec VICI transaction interrupted before connection call")
-		}
-		if err := e.advanceIPsecVICIPhase(ctx, p, state.IPsecVICISharedObserved, state.IPsecVICIIssuingConnection); err != nil {
-			return stlerr.New(stlerr.CodeState, op, string(id), "ipsec", "connection issue journal not proven durable; no connection call made")
-		}
-		if err := writer.LoadConnection(ctx, p); err != nil {
-			return stlerr.New(stlerr.CodeState, op, string(id), "ipsec", "scoped connection call uncertain; retain transaction journal")
-		}
-		view, err = reader.Inspect(ctx, p)
-		if err != nil || !view.ConnectionNamePresent || !view.SecretNamePresent {
-			return stlerr.New(stlerr.CodeState, op, string(id), "ipsec", "strongSwan connection result unverified; retain transaction journal")
-		}
-		if err := e.advanceIPsecVICIPhase(ctx, p, state.IPsecVICIIssuingConnection, state.IPsecVICIConnectionSeen); err != nil {
-			return stlerr.New(stlerr.CodeState, op, string(id), "ipsec", "connection observation not durable; retain transaction journal")
-		}
-		// Presence is not ownership proof. XFRM, IKE negotiation, scoped
-		// cleanup/reapply and canonical Link commit are separate gated work.
-		return nil
-	})
-}
-
-// This helper is called only from a transaction holding maintenance/Link/
-// resource locks. It refuses phase skips and journal/link substitutions.
-// State publication uncertainty must stop calls, not trigger best-effort
-// cleanup against another administrator's possible daemon objects.
+// advanceIPsecVICIPhase is a pure state-journal transition; no production
+// caller currently advances beyond prepared. Only the test simulator uses
+// this method until an independently proven no-clobber ownership protocol
+// exists. It enforces exact intent binding and allowed adjacent phases, but
+// does not contact VICI, modify XFRM, or confer any daemon ownership.
 func (e *Engine) advanceIPsecVICIPhase(ctx context.Context, p ipsec.Profile, from, to string) error {
+	// Even internal callers may not skip phases to manufacture evidence
+	// of a daemon call that was never actually issued/observed.
+	valid := (from == state.IPsecVICIPrepared && to == state.IPsecVICIIssuingShared) ||
+		(from == state.IPsecVICIIssuingShared && to == state.IPsecVICISharedObserved) ||
+		(from == state.IPsecVICISharedObserved && to == state.IPsecVICIIssuingConnection) ||
+		(from == state.IPsecVICIIssuingConnection && to == state.IPsecVICIConnectionSeen)
+	if !valid {
+		return fmt.Errorf("invalid IPsec VICI journal phase transition")
+	}
 	return e.store.Update(ctx, func(s *state.Snapshot) error {
 		pending, ok := s.FindPendingIPsec(p.Link.ID)
 		current, exists := s.FindIPsecVICIOperation(p.Link.ID)

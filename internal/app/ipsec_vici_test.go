@@ -12,7 +12,70 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/state"
+	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
+
+// ipsecVICITestWriter is a TEST-ONLY injected fake. The real govici
+// load-shared/load-conn adapter is deliberately absent from production
+// because strongSwan replaces same-name foreign daemon objects in a race.
+type ipsecVICITestWriter interface {
+	LoadShared(context.Context, ipsec.Profile, *ipsec.PSK) error
+	LoadConnection(context.Context, ipsec.Profile) error
+}
+
+// simulatePreparedIPsecVICI exists only in _test.go and injects fake effects.
+// It exercises the durable journal and fail-closed phase transitions without
+// creating any real strongSwan adapter or authorization to load a foreign
+// connection/credential. The production build has no Apply method.
+func (e *Engine) simulatePreparedIPsecVICI(ctx context.Context, id domain.LinkID, keys IPsecProtectedKeyReader, reader IPsecVICIInventory, xfrm IPsecXFRMVacancy, writer ipsecVICITestWriter) error {
+	const op = "ipsec_vici_apply"
+	if writer == nil {
+		return stlerr.New(stlerr.CodeInvalid, op, string(id), "ipsec", "test-only VICI simulation fixture is required")
+	}
+	return e.withIPsecActivationVacancy(ctx, id, keys, reader, xfrm, func(p ipsec.Profile, key *ipsec.PSK) error {
+		if err := e.advanceIPsecVICIPhase(ctx, p, state.IPsecVICIPrepared, state.IPsecVICIIssuingShared); err != nil {
+			return stlerr.New(stlerr.CodeConflict, op, string(id), "ipsec", "durable prepared IPsec transaction is required; no VICI call made")
+		}
+		if err := writer.LoadShared(ctx, p, key); err != nil {
+			return stlerr.New(stlerr.CodeState, op, string(id), "ipsec", "scoped shared-key call uncertain; retain transaction journal for manual reconciliation")
+		}
+		view, err := reader.Inspect(ctx, p)
+		if err != nil || !view.SecretNamePresent || view.ConnectionNamePresent {
+			return stlerr.New(stlerr.CodeState, op, string(id), "ipsec", "strongSwan shared-key result unverified; retain transaction journal")
+		}
+		if err := e.advanceIPsecVICIPhase(ctx, p, state.IPsecVICIIssuingShared, state.IPsecVICISharedObserved); err != nil {
+			return stlerr.New(stlerr.CodeState, op, string(id), "ipsec", "shared-key observation not durable; no connection call made")
+		}
+		// Repeat immediately before connection load: an outside writer may
+		// have introduced a colliding connection during the shared-key step.
+		view, err = reader.Inspect(ctx, p)
+		if err != nil || !view.SecretNamePresent || view.ConnectionNamePresent {
+			return stlerr.New(stlerr.CodeState, op, string(id), "ipsec", "strongSwan connection namespace changed; do not overwrite")
+		}
+		if err := xfrm.RequireVacant(ctx, p); err != nil {
+			return stlerr.New(stlerr.CodeState, op, string(id), "ipsec", "XFRM namespace changed; do not load connection")
+		}
+		if err := ctx.Err(); err != nil {
+			return stlerr.New(stlerr.CodeState, op, string(id), "ipsec", "IPsec VICI transaction interrupted before connection call")
+		}
+		if err := e.advanceIPsecVICIPhase(ctx, p, state.IPsecVICISharedObserved, state.IPsecVICIIssuingConnection); err != nil {
+			return stlerr.New(stlerr.CodeState, op, string(id), "ipsec", "connection issue journal not proven durable; no connection call made")
+		}
+		if err := writer.LoadConnection(ctx, p); err != nil {
+			return stlerr.New(stlerr.CodeState, op, string(id), "ipsec", "scoped connection call uncertain; retain transaction journal")
+		}
+		view, err = reader.Inspect(ctx, p)
+		if err != nil || !view.ConnectionNamePresent || !view.SecretNamePresent {
+			return stlerr.New(stlerr.CodeState, op, string(id), "ipsec", "strongSwan connection result unverified; retain transaction journal")
+		}
+		if err := e.advanceIPsecVICIPhase(ctx, p, state.IPsecVICIIssuingConnection, state.IPsecVICIConnectionSeen); err != nil {
+			return stlerr.New(stlerr.CodeState, op, string(id), "ipsec", "connection observation not durable; retain transaction journal")
+		}
+		// Presence is not ownership proof. XFRM, IKE negotiation, scoped
+		// cleanup/reapply and canonical Link commit are separate gated work.
+		return nil
+	})
+}
 
 type ipsecVICIWriterFixture struct {
 	store       *state.FileStore
@@ -100,10 +163,10 @@ func TestIPsecVICIPrepareIsDurableIdempotentAndNeverMutatesDaemon(t *testing.T) 
 	}
 }
 
-func TestIPsecVICIApplyIsScopedAndStopsAtUncommittedConfiguration(t *testing.T) {
+func TestIPsecVICISimulatedPhasesStopAtUncommittedConfiguration(t *testing.T) {
 	e, st, keys, link, daemon, xfrm := stagedPreparedVICI(t)
 	writer := &ipsecVICIWriterFixture{store: st, t: t, daemon: daemon}
-	if err := e.ApplyPreparedIPsecVICI(context.Background(), link.ID, keys, daemon, xfrm, writer); err != nil {
+	if err := e.simulatePreparedIPsecVICI(context.Background(), link.ID, keys, daemon, xfrm, writer); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(writer.calls, []string{"load-shared", "load-conn"}) {
@@ -121,7 +184,7 @@ func TestIPsecVICIApplyIsScopedAndStopsAtUncommittedConfiguration(t *testing.T) 
 		t.Fatalf("VICI and XFRM were not re-inspected after first effect: daemon=%d kernel=%d", daemon.calls, xfrm.calls)
 	}
 	// A success receipt from VICI is NOT authority to repeat load or unload.
-	if err := e.ApplyPreparedIPsecVICI(context.Background(), link.ID, keys, daemon, xfrm, writer); err == nil {
+	if err := e.simulatePreparedIPsecVICI(context.Background(), link.ID, keys, daemon, xfrm, writer); err == nil {
 		t.Fatal("loaded daemon objects were implicitly adopted on retry")
 	}
 	if len(writer.calls) != 2 {
@@ -129,7 +192,7 @@ func TestIPsecVICIApplyIsScopedAndStopsAtUncommittedConfiguration(t *testing.T) 
 	}
 }
 
-func TestIPsecVICIFailureRetainsUncertainPhaseAndNeverRetriesOrLeaks(t *testing.T) {
+func TestIPsecVICISimulatedFailureRetainsUncertainPhaseAndNeverRetriesOrLeaks(t *testing.T) {
 	for _, tc := range []struct{ name, failOn, wantPhase string }{
 		{"shared reply uncertain", "shared", state.IPsecVICIIssuingShared},
 		{"connection reply uncertain", "connection", state.IPsecVICIIssuingConnection},
@@ -137,7 +200,7 @@ func TestIPsecVICIFailureRetainsUncertainPhaseAndNeverRetriesOrLeaks(t *testing.
 		t.Run(tc.name, func(t *testing.T) {
 			e, st, keys, link, daemon, xfrm := stagedPreparedVICI(t)
 			writer := &ipsecVICIWriterFixture{store: st, t: t, daemon: daemon, failOn: tc.failOn}
-			err := e.ApplyPreparedIPsecVICI(context.Background(), link.ID, keys, daemon, xfrm, writer)
+			err := e.simulatePreparedIPsecVICI(context.Background(), link.ID, keys, daemon, xfrm, writer)
 			if err == nil || strings.Contains(err.Error(), "SENSITIVE") {
 				t.Fatalf("uncertain writer error leaked or reported success: %v", err)
 			}
@@ -147,7 +210,7 @@ func TestIPsecVICIFailureRetainsUncertainPhaseAndNeverRetriesOrLeaks(t *testing.
 				t.Fatalf("unsafe phase after partial write: %+v", op)
 			}
 			count := len(writer.calls)
-			if err = e.ApplyPreparedIPsecVICI(context.Background(), link.ID, keys, daemon, xfrm, writer); err == nil {
+			if err = e.simulatePreparedIPsecVICI(context.Background(), link.ID, keys, daemon, xfrm, writer); err == nil {
 				t.Fatal("uncertain daemon effect retried")
 			}
 			if len(writer.calls) != count {
@@ -160,7 +223,7 @@ func TestIPsecVICIFailureRetainsUncertainPhaseAndNeverRetriesOrLeaks(t *testing.
 	}
 }
 
-func TestIPsecVICIRejectsForeignCollisionBeforePreparationAndExecution(t *testing.T) {
+func TestIPsecVICISimulationRejectsObservedCollisions(t *testing.T) {
 	e, st, keys, link, daemon, xfrm := stagedPreparedVICI(t)
 	daemon.observed.ConnectionNamePresent = true
 	if err := e.PrepareIPsecVICI(context.Background(), link.ID, keys, daemon, xfrm); err == nil {
@@ -169,7 +232,7 @@ func TestIPsecVICIRejectsForeignCollisionBeforePreparationAndExecution(t *testin
 	daemon.observed.ConnectionNamePresent = false
 	xfrm.err = errors.New("SENSITIVE uncertain kernel inventory")
 	writer := &ipsecVICIWriterFixture{store: st, t: t, daemon: daemon}
-	if err := e.ApplyPreparedIPsecVICI(context.Background(), link.ID, keys, daemon, xfrm, writer); err == nil || len(writer.calls) != 0 {
+	if err := e.simulatePreparedIPsecVICI(context.Background(), link.ID, keys, daemon, xfrm, writer); err == nil || len(writer.calls) != 0 {
 		t.Fatal("XFRM collision bypassed")
 	}
 	s, _ := st.Load(context.Background())
@@ -217,13 +280,13 @@ func (f *ipsecVICIUpdateFault) Update(ctx context.Context, mutate func(*state.Sn
 	}
 	return nil
 }
-func TestIPsecVICIRequiresDurableIssuingReceiptBeforeAnyEffect(t *testing.T) {
+func TestIPsecVICISimulationRequiresDurablePhaseBeforeFakeEffect(t *testing.T) {
 	for _, published := range []bool{false, true} {
 		t.Run(map[bool]string{false: "before-rename", true: "after-rename"}[published], func(t *testing.T) {
 			e, st, keys, link, daemon, xfrm := stagedPreparedVICI(t)
 			e.store = &ipsecVICIUpdateFault{Store: st, failOnPhase: state.IPsecVICIIssuingShared, published: published}
 			writer := &ipsecVICIWriterFixture{store: st, t: t, daemon: daemon}
-			err := e.ApplyPreparedIPsecVICI(context.Background(), link.ID, keys, daemon, xfrm, writer)
+			err := e.simulatePreparedIPsecVICI(context.Background(), link.ID, keys, daemon, xfrm, writer)
 			if err == nil || strings.Contains(err.Error(), "SENSITIVE") || len(writer.calls) != 0 {
 				t.Fatalf("effect sent without durable journal proof: %v", err)
 			}
@@ -258,11 +321,11 @@ func (f *ipsecXFRMFailAt) RequireVacant(_ context.Context, _ ipsec.Profile) erro
 	}
 	return nil
 }
-func TestIPsecVICIStopsBeforeConnectionWhenHostChangesAfterSharedLoad(t *testing.T) {
+func TestIPsecVICISimulationStopsBeforeConnectionOnHostDrift(t *testing.T) {
 	e, st, keys, link, daemon, _ := stagedPreparedVICI(t)
 	xfrm := &ipsecXFRMFailAt{failAt: 2} // after initial VICI vacancy check, before connection
 	writer := &ipsecVICIWriterFixture{store: st, t: t, daemon: daemon}
-	err := e.ApplyPreparedIPsecVICI(context.Background(), link.ID, keys, daemon, xfrm, writer)
+	err := e.simulatePreparedIPsecVICI(context.Background(), link.ID, keys, daemon, xfrm, writer)
 	if err == nil || strings.Contains(err.Error(), "SENSITIVE") || !reflect.DeepEqual(writer.calls, []string{"load-shared"}) {
 		t.Fatalf("foreign kernel drift failed to block VICI connection: %v %v", err, writer.calls)
 	}
@@ -276,7 +339,7 @@ func TestIPsecVICIStopsBeforeConnectionWhenHostChangesAfterSharedLoad(t *testing
 // Two callers cannot both consume the same prepared journal or replace a
 // same-name daemon connection: the canonical Link lock serializes them,
 // and the second invocation must treat the first write as an occupied name.
-func TestIPsecVICIConcurrentApplyCannotDuplicateEffects(t *testing.T) {
+func TestIPsecVICIConcurrentSimulationCannotDuplicateFakeEffects(t *testing.T) {
 	e, st, keys, link, daemon, xfrm := stagedPreparedVICI(t)
 	writer := &ipsecVICIWriterFixture{store: st, t: t, daemon: daemon}
 	start := make(chan struct{})
@@ -287,7 +350,7 @@ func TestIPsecVICIConcurrentApplyCannotDuplicateEffects(t *testing.T) {
 		go func(index int) {
 			defer wg.Done()
 			<-start
-			errs[index] = e.ApplyPreparedIPsecVICI(context.Background(), link.ID, keys, daemon, xfrm, writer)
+			errs[index] = e.simulatePreparedIPsecVICI(context.Background(), link.ID, keys, daemon, xfrm, writer)
 		}(i)
 	}
 	close(start)
@@ -305,5 +368,35 @@ func TestIPsecVICIConcurrentApplyCannotDuplicateEffects(t *testing.T) {
 	op, ok := s.FindIPsecVICIOperation(link.ID)
 	if !ok || op.Phase != state.IPsecVICIConnectionSeen || len(s.Links) != 0 {
 		t.Fatal("concurrent VICI phase lost safety or claimed an operational Link")
+	}
+}
+
+// The source-only journal transition helper must never infer success by
+// skipping observations or moving backward, even in fake-only simulation.
+func TestIPsecVICIRejectsNonAdjacentJournalPhaseTransitions(t *testing.T) {
+	e, st, _, link, _, _ := stagedPreparedVICI(t)
+	profile, err := ipsec.NewProfile(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalid := [][2]string{
+		{state.IPsecVICIPrepared, state.IPsecVICIConnectionSeen},
+		{state.IPsecVICIPrepared, state.IPsecVICISharedObserved},
+		{state.IPsecVICIPrepared, state.IPsecVICIPrepared},
+		{state.IPsecVICIConnectionSeen, state.IPsecVICIPrepared},
+		{state.IPsecVICIIssuingShared, state.IPsecVICISharedObserved},
+	}
+	before, err := st.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, edges := range invalid {
+		if err := e.advanceIPsecVICIPhase(context.Background(), profile, edges[0], edges[1]); err == nil {
+			t.Fatalf("journal permitted invalid or unproven transition %s -> %s", edges[0], edges[1])
+		}
+		after, err := st.Load(context.Background())
+		if err != nil || !reflect.DeepEqual(before, after) {
+			t.Fatalf("failed journal transition changed durable state: %v", err)
+		}
 	}
 }
