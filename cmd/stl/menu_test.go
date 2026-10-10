@@ -22,7 +22,7 @@ func runMenuTest(t *testing.T, root, input string) (int, string, string) {
 
 func TestMenuTasksAndNavigationDoNotCreateState(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "absent")
-	code, output, errOut := runMenuTest(t, root, "1\nq\n3\n\n4\n\n5\n6\n7\n8\n")
+	code, output, errOut := runMenuTest(t, root, "1\nq\n3\n\n4\n\n5\n6\n\n7\n8\n")
 	if code != 0 || errOut != "" {
 		t.Fatalf("menu failed: code=%d err=%q", code, errOut)
 	}
@@ -32,7 +32,8 @@ func TestMenuTasksAndNavigationDoNotCreateState(t *testing.T) {
 		"Create Tunnel", "Import Setup Link", "Manage Links",
 		"Tests & Diagnostics", "Settings", "Update", "Uninstall", "Exit",
 		"GRE Native (default)", "Create cancelled",
-		"Not implemented", "0 configured link(s)", "bounded probes",
+		"Settings (read-only)", "Update (guided)", "Uninstall (guided)",
+		"Update cancelled", "pre-uninstall", "0 configured link(s)", "bounded probes",
 	} {
 		if !strings.Contains(output, item) {
 			t.Fatalf("menu omitted %q", item)
