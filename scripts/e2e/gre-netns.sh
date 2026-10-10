@@ -304,6 +304,72 @@ gre_firewall_a="$(require_gre_firewall_baseline "$ns_a")" || exit 1
 gre_firewall_b="$(require_gre_firewall_baseline "$ns_b")" || exit 1
 gre_fou_a="$(ip netns exec "$ns_a" ip -json fou show)"
 gre_fou_b="$(ip netns exec "$ns_b" ip -json fou show)"
+
+# Optional release-level real cross-backend acceptance in the SAME source,
+# namespace pair and state roots as GRE Native + FOU + GUE. This is an
+# explicit opt-in, not a silent skipped part of the GRE/IPIP-only E2E.
+if [[ -v STL_E2E_CROSS_WG && "$STL_E2E_CROSS_WG" == approved ]]; then
+  command -v wg >/dev/null || { echo 'MISSING CROSS_WG PREREQUISITE=wg' >&2; exit 2; }
+  wg_id=lnk_88888888888888888888888888888888
+  run_cross_wg_side() {
+    local side="$1" action="$2" ns root
+    if [[ "$side" == a ]]; then
+      ns="$ns_a"; root="$workdir/a"
+    else
+      ns="$ns_b"; root="$workdir/b"
+    fi
+    ip netns exec "$ns" env \
+      STL_WG_NETNS_E2E=1 \
+      STL_WG_CROSS_E2E=1 \
+      STL_WG_E2E_ACTION="$action" \
+      STL_WG_E2E_STATE_ROOT="$root" \
+      "$workdir/gre-e2e.test" -test.run '^TestWireGuardNetnsE2E$' -test.v
+  }
+  run_cross_wg_side a create
+  run_cross_wg_side b import
+  run_cross_wg_side a resume
+  run_cross_wg_side a cross-list
+  run_cross_wg_side b cross-list
+  assert_stl_firewall_rule_count "$ns_a" "$wg_id" 1
+  assert_stl_firewall_rule_count "$ns_b" "$wg_id" 1
+  ip netns exec "$ns_a" ping -n -c 3 -W 3 -I 10.83.10.0 10.83.10.1 >/dev/null
+  ip netns exec "$ns_b" ping -n -c 3 -W 3 -I 10.83.10.1 10.83.10.0 >/dev/null
+  echo 'CROSS_WG_BIDIRECTIONAL_ENCRYPTED=PASS'
+  run_cross_wg_side a status
+  run_cross_wg_side b status
+  run_cross_wg_side a diagnose
+  run_cross_wg_side b diagnose
+  assert_gre_firewall_unchanged
+  [[ "$(ip netns exec "$ns_a" ip -json fou show)" == "$gre_fou_a" &&
+     "$(ip netns exec "$ns_b" ip -json fou show)" == "$gre_fou_b" ]] || {
+    echo 'FAIL: WireGuard changed a GRE FOU/GUE receive mapping' >&2; exit 1;
+  }
+  for gre_mode in native fou gue; do
+    select_mode "$gre_mode"; traffic
+  done
+  echo 'GRE_NATIVE_FOU_GUE_WG_SAME_PEER_CONCURRENT=PASS'
+  run_cross_wg_side a remove
+  run_cross_wg_side b remove
+  assert_stl_firewall_rule_count "$ns_a" "$wg_id" 0
+  assert_stl_firewall_rule_count "$ns_b" "$wg_id" 0
+  assert_gre_firewall_unchanged
+  run_cross_wg_side a retire
+  run_cross_wg_side b retire
+  run_cross_wg_side a list
+  run_cross_wg_side b list
+  for ns in "$ns_a" "$ns_b"; do
+    if ip netns exec "$ns" wg show interfaces | grep -F 'stlwg8888888888'; then
+      echo 'FAIL: removed WireGuard interface survived cross-backend test' >&2; exit 1
+    fi
+  done
+  for gre_mode in native fou gue; do
+    select_mode "$gre_mode"; traffic
+  done
+  echo 'CROSS_WG_REMOVE_RETIRES_ONLY_OWN_RESOURCES=PASS'
+else
+  echo 'GRE_IPIP_CROSS_WG=SKIP (set STL_E2E_CROSS_WG=approved)'
+fi
+
 for selected_ipip_mode in native fou gue; do
   select_ipip_mode "$selected_ipip_mode"
   echo "BEGIN_IPIP_MODE=$ipip_mode"
