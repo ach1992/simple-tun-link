@@ -18,6 +18,7 @@ import (
 	ipipbackend "github.com/ach1992/simple-tun-link/internal/backend/ipip"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
+	"github.com/ach1992/simple-tun-link/internal/maintenance"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 	"github.com/ach1992/simple-tun-link/internal/version"
@@ -201,10 +202,21 @@ func buildRuntimeEngine(options runtimeOptions) (*app.Engine, error) {
 	}
 	store := state.NewFileStore(options.stateRoot)
 	locks := state.NewLockManager(options.stateRoot)
+	var engine *app.Engine
 	if options.restorePersistence != nil {
-		return app.NewWithRestorePersistence(registry, store, locks, options.restorePersistence, options.executable)
+		engine, err = app.NewWithRestorePersistence(registry, store, locks, options.restorePersistence, options.executable)
+	} else {
+		engine, err = app.New(registry, store, locks)
 	}
-	return app.New(registry, store, locks)
+	if err != nil {
+		return nil, err
+	}
+	if options.stateRoot == state.DefaultRoot {
+		// All default-root production mutations acquire a shared lock before
+		// Link/resource locks. The installer holds its exclusive peer.
+		engine.SetMaintenanceGuard(maintenance.NewInstalledGate())
+	}
+	return engine, nil
 }
 
 // An installer may expose the same executable under the stlink convenience
