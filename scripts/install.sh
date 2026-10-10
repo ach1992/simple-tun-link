@@ -250,7 +250,7 @@ if [[ $action == update ]]; then
   [[ $(hash_file "$target") == "$prior_hash" ]] || fail 'installed binary changed before update'
   if [[ $prior_hash == "$new_hash" ]]; then
     printf 'stl is already installed from this exact artifact (%s).\n' "$version"
-      exit 0
+    exit 0
   fi
 fi
 # Incoming and canonical executable are in the same directory/filesystem.
