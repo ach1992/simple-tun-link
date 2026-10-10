@@ -26,6 +26,8 @@ jobs:
             gofmt -d .
             exit 1
           fi
+      - name: Privileged E2E runner syntax (no host mutation)
+        run: bash -n scripts/e2e/gre-netns.sh
       - name: Vet
         run: go vet ./...
       - name: Test
