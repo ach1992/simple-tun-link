@@ -173,10 +173,9 @@ echo "GRE_SAME_UNDERLAY_MULTI_LINK=PASS"
 
 # Extend the SAME disposable two-namespace topology with IPIP acceptance.
 # This is a release-level cross-backend proof, not a parallel host networking
-# harness. IPIP's Linux endpoint-pair lookup forbids two simultaneous IPIP
-# modes with the same A/B underlay, so the three modes run sequentially and
-# a different IPIP mode must fail while one is active. All three GRE siblings
-# remain operational throughout.
+# harness. Linux IPIP endpoint-pair lookup forbids simultaneous IPIP modes
+# with the same underlay pair, so IPIP modes run sequentially. The full GRE
+# trio remains live and must survive every IPIP operation.
 echo "REQUIRE_ALL_IPIP_MODES=native,fou,gue (unsupported capability is a failure, not a pass)"
 
 run_ipip_side() {
@@ -203,48 +202,7 @@ run_ipip_side() {
     STL_IPIP_E2E_UL_PEER="$peer_ul" \
     STL_IPIP_E2E_LINK_LOCAL="$local_link" \
     STL_IPIP_E2E_LINK_PEER="$peer_link" \
-    "$workdir/gre-e2e.test" -test.run '^TestIPIPNetnsE2E
-run_side a remove
-run_side b remove
-for selected_mode in native gue; do
-  select_mode "$selected_mode"
-  run_side a status
-  run_side b status
-  traffic
-done
-echo "GRE_SIBLING_TRAFFIC_SURVIVES_FOU_REMOVE=PASS"
-
-for selected_mode in native gue; do
-  select_mode "$selected_mode"
-  run_side a remove
-  run_side b remove
-done
-
-# Confirm no Link desired state, owned interface, FOU mapping or firewall rule
-# remains inside either fresh namespace. Never inspect/remove foreign resources.
-for side in a b; do
-  mode=native; link_id=lnk_11111111111111111111111111111111; octet=20; port=0
-  run_side "$side" list
-done
-for ns in "$ns_a" "$ns_b"; do
-  if ip -n "$ns" -d link show | grep -F 'alias stl:lnk_'; then
-    echo "FAIL: owned interface survived removal in $ns" >&2
-    exit 1
-  fi
-  mappings="$(ip netns exec "$ns" ip -json fou show)"
-  if [[ "$mappings" != "[]" ]]; then
-    echo "FAIL: FOU/GUE mapping survived removal in $ns: $mappings" >&2
-    exit 1
-  fi
-  if ip netns exec "$ns" iptables -S INPUT | grep -F 'stl:'; then
-    echo "FAIL: owned firewall rule survived removal in $ns" >&2
-    exit 1
-  fi
-done
-
-echo "GRE_NATIVE_FOU_GUE_E2E=PASS"
-echo "GRE_IPIP_DISPOSABLE_CROSS_BACKEND_E2E=PASS"
- -test.v
+    "$workdir/gre-e2e.test" -test.run '^TestIPIPNetnsE2E$' -test.v
 }
 
 select_ipip_mode() {
@@ -279,8 +237,8 @@ for selected_ipip_mode in native fou gue; do
   run_ipip_side b diagnose
 
   if [[ "$ipip_mode" == native ]]; then
-    # Linux cannot distinguish a second IPIP tunnel on the same underlay
-    # pair by UDP encapsulation. Reject it before creating a FOU mapping.
+    # A second IPIP mode with the same peer pair must be rejected before
+    # installing a UDP receive mapping or changing the existing IPIP link.
     ipip_mode=fou; ipip_id=lnk_77777777777777777777777777777777; ipip_octet=99
     run_ipip_side a conflict
     [[ "$(ip netns exec "$ns_a" ip -json fou show)" == "$gre_fou_a" ]] || {
@@ -305,8 +263,6 @@ for selected_ipip_mode in native fou gue; do
      "$(ip netns exec "$ns_b" ip -json fou show)" == "$gre_fou_b" ]] || {
     echo "FAIL: IPIP cleanup changed existing GRE FOU/GUE receive mappings" >&2; exit 1;
   }
-  # The full previously configured GRE trio must retain bidirectional data
-  # traffic after every IPIP creation/removal; no sibling should be disrupted.
   for gre_mode in native fou gue; do
     select_mode "$gre_mode"
     traffic
@@ -355,3 +311,4 @@ for ns in "$ns_a" "$ns_b"; do
 done
 
 echo "GRE_NATIVE_FOU_GUE_E2E=PASS"
+echo "GRE_IPIP_DISPOSABLE_CROSS_BACKEND_E2E=PASS"
