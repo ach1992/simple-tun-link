@@ -135,13 +135,14 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 	for {
 		fmt.Fprintln(out, "\nTasks:")
 		fmt.Fprintln(out, "  1  Create Tunnel (guided GRE Native)")
-		fmt.Fprintln(out, "  2  Import Setup Link (confirmed GRE/IPIP only)")
+		fmt.Fprintln(out, "  2  Import Setup Link (confirmed GRE/IPIP/WireGuard v3)")
 		fmt.Fprintln(out, "  3  Manage Links")
 		fmt.Fprintln(out, "  4  Tests & Diagnostics")
 		fmt.Fprintln(out, "  5  Settings (read-only)")
 		fmt.Fprintln(out, "  6  Update (guided)")
 		fmt.Fprintln(out, "  7  Uninstall (guided)")
 		fmt.Fprintln(out, "  8  Exit")
+		fmt.Fprintln(out, "  9  Create WireGuard Tunnel (protected Quick Link)")
 		fmt.Fprint(out, "Choose a task: ")
 		choice, err := readMenuAnswer(reader)
 		if errors.Is(err, io.EOF) {
@@ -154,6 +155,10 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 		switch choice {
 		case "1":
 			if code := menuCreate(input, reader, out, errOut, options); code != 0 {
+				return code
+			}
+		case "9":
+			if code := menuCreateWireGuard(input, reader, out, errOut, options); code != 0 {
 				return code
 			}
 		case "2":
@@ -199,7 +204,7 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 		case "8":
 			return 0
 		default:
-			fmt.Fprintln(out, "Select a number from 1 to 8.")
+			fmt.Fprintln(out, "Select a number from 1 to 9.")
 		}
 	}
 }

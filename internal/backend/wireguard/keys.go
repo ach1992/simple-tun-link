@@ -60,6 +60,14 @@ func (k PrivateKey) SecretWireValue() string {
 	return base64.StdEncoding.EncodeToString(k.material[:])
 }
 
+// Zeroize overwrites the in-memory copy of a private key after the one-time
+// protected handoff is encoded or the local key is provisioned.
+func (k *PrivateKey) Zeroize() {
+	if k != nil {
+		clear(k.material[:])
+	}
+}
+
 func (PrivateKey) String() string     { return "[WireGuard private key REDACTED]" }
 func (k PrivateKey) GoString() string { return k.String() }
 func (PrivateKey) MarshalJSON() ([]byte, error) {

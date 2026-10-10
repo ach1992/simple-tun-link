@@ -86,6 +86,14 @@ type RecipientCredentialStore interface {
 // A failed host apply may leave a protected uncommitted key for exact-credential
 // retry/reconciliation; such a key must never be blindly removed.
 func (e *Engine) EnsureImportedRecipient(ctx context.Context, desired domain.Link, credential []byte, store RecipientCredentialStore) (Result, error) {
+	return e.EnsureWithWireGuardCredential(ctx, desired, credential, store)
+}
+
+// EnsureWithWireGuardCredential provisions an endpoint's OWN private key and
+// ensures the matching public WireGuard Link under the canonical maintenance,
+// Link and resource locks. Both sender creation and receiver import use this
+// single transaction; secrets never enter ordinary Link desired state.
+func (e *Engine) EnsureWithWireGuardCredential(ctx context.Context, desired domain.Link, credential []byte, store RecipientCredentialStore) (Result, error) {
 	if store == nil || desired.Backend != domain.BackendWireGuard ||
 		desired.WireGuard == (domain.WireGuardOptions{}) ||
 		desired.WireGuard.ListenPort == 0 || desired.WireGuard.PeerPort == 0 {

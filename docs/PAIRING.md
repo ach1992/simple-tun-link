@@ -44,14 +44,16 @@ checksum was recomputed. This is a key-identity binding check, **not** sender
 authentication or transport encryption. Use a trusted channel to establish
 the setup link's origin.
 
-The WireGuard backend and **confirmed v3 recipient import** now use the
-canonical Engine: only a validated v3 Quick Link with a receiver credential
+The WireGuard backend, **confirmed v3 recipient import** and protected sender
+Create/Resume now use the canonical Engine: only a validated v3 Quick Link with a receiver credential
 matching its declared public key can be applied. `stl link ensure` desired
 JSON v1 remains unchanged; direct WireGuard provisioning requires an already
 protected local per-Link KeyStore credential. Legacy credential-only v1/v2
 WireGuard and IPsec pairing **remain preview-only and unimportable**.
-These backend/CLI additions do not constitute privileged traffic, handshake,
-peer pairing, key retirement, or complete release acceptance.
+An explicit protected-key retirement action is also available only after
+persisted Link absence and read-only live interface, WireGuard public identity
+and owned firewall absence are established. These additions do not prove
+privileged handshake/traffic, coexistence or complete release acceptance.
 
 The decoder also preserves previously valid v1/v2 credential-only WireGuard
 offers with no public configuration for redacted preview and re-export; they
@@ -108,9 +110,15 @@ storage. Its caller is responsible for restricting lifetime and persistence.
 produce **potentially sensitive export material**. The latter includes the
 actual setup link alongside readable receiver-facing public settings and
 labels secret-bearing exports `SENSITIVE`. Neither method writes a file or
-sends data to an external service. Any future export-to-file functionality
-must enforce protected, no-clobber permissions and avoid shell history,
-world-readable output, and routine logs.
+sends data to an external service. The explicit `stl link create-wireguard` sender command now writes the
+one-time sensitive URL to a user-selected, same-owner private directory with
+atomic no-replace `0600` publication, and only then applies the sender Link
+through the canonical Engine. `resume-wireguard` verifies the exact handoff
+digest and uses the protected sender credential without regenerating a peer
+private key. Ordinary Link export remains GRE/IPIP-only; after the recipient
+key is delivered it is intentionally unrecoverable from the sender's public
+saved state. All secret-bearing export files must avoid shell history,
+world-readable destinations, and ordinary logs.
 
 ## CLI recipient preview via protected stdin
 

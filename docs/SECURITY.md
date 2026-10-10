@@ -61,16 +61,23 @@ Apply preflight both require a protected, safely readable private credential
 whose public identity matches the persisted Link. Missing, permission-drifted,
 or mismatched credentials refuse deletion of both the interface and firewall,
 so an uncommitted Remove can still reconstruct the original owned state.
-Verified Link-owned credential retirement and reconciliation tooling remain
-outstanding.
+An explicit, identity-bound credential retirement action is available only
+after canonical desired-state and read-only live host absence checks under the
+Engine Link lock; normal Remove still preserves the key for rollback. A
+missing/unsafe file or live STL-owned resource refuses retirement. Safe
+retirement is not secure physical-media erasure, and unexpected external
+privileged filesystem changes still require operator reconciliation.
 
 The caller must store the **local** private key only at its owning endpoint.
 The initiator must never persist a generated *recipient* private key as local
 state; that material belongs only in the explicitly SENSITIVE Quick Link
 until protected receiver-side import. Configured v3 receiver import now
-provisions the local key under canonical Engine locks, but **guided sender
-export, credential retirement, real WireGuard handshake/traffic/coexistence,
-and persistence proof** remain Issue #6/#8/#12 acceptance. Read-only status
+provisions the local key under canonical Engine locks. The guided sender
+now generates its own protected private key and a separate ephemeral receiver
+private key only for a deliberately exported 0600 SENSITIVE Quick Link,
+while its ordinary state retains only the receiver public key. Real WireGuard
+handshake/traffic/coexistence and persistence proof remain Issue #6/#8/#12
+acceptance. Read-only status
 reports public handshake and counter observations; it does not authenticate
 who supplied the setup URL or prove bidirectional traffic.
 
