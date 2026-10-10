@@ -104,7 +104,7 @@ for recovery in "${recovery_dirs[@]}"; do
   # trailing newline. Incomplete/corrupt markers never authorize recovery.
   marker_body=$(cat -- "$marker") || fail 'cannot read committed recovery marker'
   marker_expected=$(printf 'status=committed\noperation=%s\nsha256=%s' "$saved_action" "$saved_hash")
-  [[ $marker_body == "$marker_expected" && $(wc -c < "$marker") -eq $( (${#marker_expected} + 1) ) ]] || fail 'invalid committed recovery journal structure'
+  [[ $marker_body == "$marker_expected" && $(wc -c < "$marker") -eq $(( ${#marker_expected} + 1 )) ]] || fail 'invalid committed recovery journal structure'
   case "$saved_action" in
     install|update)
       is_regular "$record" && is_regular "$target" &&
