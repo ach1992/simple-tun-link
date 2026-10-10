@@ -4,4 +4,7 @@ go 1.27.0
 
 toolchain go1.27.1
 
-require golang.org/x/sys v0.48.0
+require (
+	github.com/strongswan/govici v0.8.2
+	golang.org/x/sys v0.48.0
+)
