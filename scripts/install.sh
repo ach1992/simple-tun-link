@@ -10,10 +10,18 @@ Usage:
   install.sh install --version vX.Y.Z [--prefix /usr/local]
   install.sh update --version vX.Y.Z [--prefix /usr/local]
   install.sh install|update --bundle /path/to/release-bundle [--prefix /usr/local]
+  install.sh install|update --version vX.Y.Z [--backends native,wireguard,ipsec]
+  install.sh install|update --bundle /path/to/release-bundle [--prefix /usr/local] [--backends all]
+  install.sh requirements [--backends native,wireguard,ipsec] [--os-release-file /path/to/read-only-fixture]
   install.sh uninstall [--prefix /usr/local]
 
-The remote source is the official GitHub release, never a caller-supplied URL.
---bundle is for locally built/tested bundles. No host Links are modified.
+The default backend selection is native (GRE/IPIP). Add wireguard and/or
+ipsec explicitly to provision optional dependencies. "all" selects all.
+IPsec package installation can enable/start charon-systemd: explicit opt-in
+avoids silently affecting pre-existing strongSwan services.
+No host Link or network configuration is modified by this installer.
+--bundle is for locally built/tested bundles; system dependencies are
+only installed on the real /usr/local prefix, never an offline test prefix.
 USAGE
   exit 2
 }
@@ -21,31 +29,192 @@ fail() { printf 'stl installer: %s\n' "$*" >&2; exit 1; }
 [[ $# -ge 1 ]] || usage
 action=$1
 shift
-case "$action" in install|update|uninstall) ;; *) usage ;; esac
+case "$action" in install|update|uninstall|requirements) ;; *) usage ;; esac
 prefix=/usr/local
 version=
 bundle=
+backends=native
+backends_supplied=0
+os_release_fixture=
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version) [[ $# -ge 2 && -z $version ]] || usage; version=$2; shift 2 ;;
     --bundle) [[ $# -ge 2 && -z $bundle ]] || usage; bundle=$2; shift 2 ;;
     --prefix) [[ $# -ge 2 ]] || usage; prefix=$2; shift 2 ;;
+    --backends) [[ $# -ge 2 && $backends_supplied == 0 ]] || usage; backends=$2; backends_supplied=1; shift 2 ;;
+    --os-release-file) [[ $# -ge 2 && -z $os_release_fixture ]] || usage; os_release_fixture=$2; shift 2 ;;
     *) usage ;;
   esac
 done
-if [[ $action == uninstall ]]; then
+if [[ $action == uninstall || $action == requirements ]]; then
   [[ -z $version && -z $bundle ]] || usage
+  [[ $action != uninstall || $backends_supplied == 0 ]] || usage
 else
   [[ -n $version && -z $bundle || -z $version && -n $bundle ]] || usage
+fi
+[[ $action == requirements || -z $os_release_fixture ]] || usage
+
+# Use a data-only OS release parser. Never "source" /etc/os-release as shell
+# code, and never accept caller-controlled OS paths for privileged installs.
+read_os_value() {
+  local path=$1 key=$2 line value= count=0
+  [[ -f $path && -r $path ]] || fail "OS release file is unreadable: $path"
+  while IFS= read -r line || [[ -n $line ]]; do
+    if [[ $line == "$key="* ]]; then
+      ((count+=1))
+      value=${line#*=}
+    fi
+  done < "$path"
+  [[ $count == 1 ]] || fail "OS release must define $key exactly once"
+  if [[ $value == \"*\" ]]; then value=${value:1:${#value}-2}; fi
+  [[ $value =~ ^[a-zA-Z0-9._-]+$ ]] || fail "invalid $key in OS release"
+  printf '%s' "$value"
+}
+
+validate_os() {
+  local os_file=$1 major minor
+  os_id=$(read_os_value "$os_file" ID)
+  os_version=$(read_os_value "$os_file" VERSION_ID)
+  case "$os_id" in
+    debian)
+      [[ $os_version =~ ^([0-9]+)(\.[0-9]+)?$ ]] || fail "invalid Debian version: $os_version"
+      major=${BASH_REMATCH[1]}
+      (( 10#$major >= 11 )) || fail "Debian 11 or later is required; found $os_version"
+      if (( 10#$major == 11 )); then
+        printf 'stl installer WARNING: Debian 11 LTS ended 2026-08-31; retain compatibility only with separately maintained security support. No APT source changes are made.\n' >&2
+      fi
+      ;;
+    ubuntu)
+      [[ $os_version =~ ^([0-9]+)\.([0-9]{2})$ ]] || fail "invalid Ubuntu version: $os_version"
+      major=${BASH_REMATCH[1]}
+      minor=${BASH_REMATCH[2]}
+      (( 10#$major > 22 || (10#$major == 22 && 10#$minor >= 4) )) ||
+        fail "Ubuntu 22.04 or later is required; found $os_version"
+      ;;
+    *) fail "unsupported distribution: $os_id $os_version; expected Ubuntu >=22.04 or Debian >=11" ;;
+  esac
+}
+
+# Explicit backend selection prevents unexpectedly provisioning an IPsec
+# daemon on a host that already has another strongSwan deployment.
+select_packages() {
+  local item
+  local -a requested=()
+  want_native=0
+  want_wg=0
+  want_ipsec=0
+  [[ $backends =~ ^[a-z,]+$ ]] || usage
+  # Bash read -a silently discards an empty trailing CSV item.
+  [[ $backends != ,* && $backends != *, && $backends != *,,* ]] || usage
+  IFS=',' read -ra requested <<< "$backends"
+  [[ ${#requested[@]} -gt 0 ]] || usage
+  for item in "${requested[@]}"; do
+    case "$item" in
+      native) [[ $want_native == 0 ]] || usage; want_native=1 ;;
+      wireguard) [[ $want_wg == 0 ]] || usage; want_wg=1 ;;
+      ipsec) [[ $want_ipsec == 0 ]] || usage; want_ipsec=1 ;;
+      all)
+        [[ ${#requested[@]} == 1 ]] || usage
+        want_native=1
+        want_wg=1
+        want_ipsec=1
+        ;;
+      *) usage ;;
+    esac
+  done
+  # iproute2 and iptables are always required for Engine runtime and
+  # firewall guards, including a host using only WireGuard/IPsec.
+  packages=(iproute2 iptables)
+  [[ $want_wg == 0 ]] || packages+=(wireguard-tools)
+  # The standard plugin bundle supplies common cryptographic backends such
+  # as OpenSSL/GCM; --no-install-recommends would omit it otherwise.
+  [[ $want_ipsec == 0 ]] || packages+=(charon-systemd strongswan-swanctl libstrongswan-standard-plugins)
+}
+
+package_installed() {
+  local result
+  result=$(dpkg-query -W -f='${Status}' -- "$1" 2>/dev/null) || return 1
+  [[ $result == 'install ok installed' ]]
+}
+
+ensure_packages() {
+  local pkg
+  local -a missing=()
+  command -v apt-get >/dev/null && command -v dpkg-query >/dev/null ||
+    fail 'apt-get and dpkg-query are required on supported distributions'
+  for pkg in "${packages[@]}"; do
+    package_installed "$pkg" || missing+=("$pkg")
+  done
+  if (( ${#missing[@]} == 0 )); then
+    printf 'STL dependencies already installed for %s %s (%s).\n' "$os_id" "$os_version" "$backends" >&2
+    return
+  fi
+  # Installing new IPsec packages can activate/restart an operator-owned
+  # daemon even if charon-systemd is already present. Require a truly fresh
+  # daemon environment for ANY missing IPsec package; do not opportunistically
+  # take ownership of a foreign strongSwan instance.
+  if [[ $want_ipsec == 1 ]]; then
+    local missing_ipsec=0
+    for pkg in "${missing[@]}"; do
+      case "$pkg" in
+        charon-systemd|strongswan-swanctl|libstrongswan-standard-plugins) missing_ipsec=1 ;;
+      esac
+    done
+    if [[ $missing_ipsec == 1 ]]; then
+      if package_installed strongswan-starter || package_installed charon-systemd; then
+        fail 'existing strongSwan installation requires operator-managed package reconciliation; refusing automatic package changes'
+      fi
+      # Debian 11 minimal images ship pidof but not pgrep; fail closed when
+      # neither process-identity checker is available.
+      if command -v pgrep >/dev/null; then
+        if pgrep -x charon >/dev/null || pgrep -x charon-systemd >/dev/null; then
+          fail 'existing strongSwan daemon process detected; refusing IPsec package changes'
+        fi
+      elif command -v pidof >/dev/null; then
+        if pidof charon charon-systemd >/dev/null; then
+          fail 'existing strongSwan daemon process detected; refusing IPsec package changes'
+        fi
+      else
+        fail 'cannot safely determine whether a strongSwan daemon is already running'
+      fi
+    fi
+  fi
+  printf 'Installing missing STL dependency packages on %s %s: %s\n' "$os_id" "$os_version" "${missing[*]}" >&2
+  DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none apt-get -o Acquire::Retries=2 update ||
+    fail 'apt package index refresh failed; STL executable is unchanged'
+  if ! DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none apt-get install -y --no-install-recommends -- "${missing[@]}"; then
+    if [[ $os_id == debian && $os_version == 11* ]]; then
+      fail 'Debian 11 post-LTS APT repositories can reference removed security packages (HTTP 404). STL executable is unchanged; use maintained signed Debian 11/ELTS sources or upgrade to Debian 12+, then retry. The installer never overrides APT verification or rewrites sources.'
+    fi
+    fail 'apt dependency installation failed; STL executable is unchanged (inspect package manager state)'
+  fi
+  for pkg in "${packages[@]}"; do
+    package_installed "$pkg" || fail "package remains unavailable after installation: $pkg"
+  done
+}
+
+select_packages
+if [[ $action == requirements ]]; then
+  validate_os "${os_release_fixture:-/etc/os-release}"
+  printf 'distribution=%s\nversion=%s\nselected_backends=%s\npackages=%s\n'     "$os_id" "$os_version" "$backends" "${packages[*]}"
+  if [[ $want_ipsec == 1 ]]; then
+    printf 'notice=IPsec packages can enable/start charon-systemd; existing daemons need operator review\n'
+  fi
+  exit 0
 fi
 if [[ -n $version ]]; then
   [[ $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][a-zA-Z0-9.-]+)?$ ]] || usage
 fi
+[[ $(uname -s) == Linux ]] || fail 'STL installer supports Linux only'
 [[ $prefix == /* && $prefix != / && -d $prefix && ! -L $prefix ]] || fail 'prefix must be an existing absolute non-symlink directory'
 [[ "$(realpath -e -- "$prefix")" == "$prefix" ]] || fail 'prefix must be canonical (no symlinks or dot segments)'
 # Nondefault prefixes are isolated/offline test or custom local installations.
 [[ $prefix == /usr/local || -n $bundle || $action == uninstall ]] || fail 'a nondefault prefix requires an offline --bundle'
 [[ $prefix != /usr/local || $EUID -eq 0 ]] || fail 'installation to /usr/local requires root'
+if [[ $prefix == /usr/local && $action != uninstall ]]; then
+  # Fail early, before installing files or packages, on unsupported systems.
+  validate_os /etc/os-release
+fi
 bin_dir="$prefix/bin"
 record_dir="$prefix/lib/simple-tun-link"
 target="$bin_dir/stl"
@@ -349,6 +518,11 @@ commit=$(sed -n 's/^commit=//p' "$manifest")
 install -m 0755 -- "$stage/$asset" "$stage/incoming"
 metadata=$("$stage/incoming" version --json) || fail 'downloaded binary cannot report version metadata'
 [[ $metadata == *\"version\":\"$version\"* && $metadata == *\"commit\":\"$commit\"* ]] || fail 'release executable and manifest identity disagree'
+# Install only missing distro-native prerequisites, after authenticating the
+# exact candidate artifact and BEFORE touching the canonical STL executable.
+# Package installations are not part of the STL binary rollback transaction;
+# do not auto-remove/undo administrator-owned APT state on any failure.
+if [[ $prefix == /usr/local ]]; then ensure_packages; fi
 new_hash=$(hash_file "$stage/incoming")
 record_tmp=$(mktemp "$record_dir/.install-record.XXXXXXXX")
 printf 'format=1\nproject=simple-tun-link\nversion=%s\nsha256=%s\n' "$version" "$new_hash" > "$record_tmp"
