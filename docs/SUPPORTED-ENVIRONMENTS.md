@@ -53,3 +53,18 @@ Before v0.1 is tagged:
 - treat other Linux distributions as best-effort until explicitly added to the tested matrix.
 
 Unsupported or missing capability must be reported explicitly. Tests must not silently convert an unsupported backend into a pass.
+
+## Non-release XFRM inspector verification (2026-10-10)
+
+One isolated read-only-inspector probe used Debian 13 (trixie) amd64
+**host kernel 6.12.41+deb13-amd64** with an ephemeral Debian 12
+(bookworm) container containing **iproute2 6.1.0** and Go 1.27.1.
+The container used `--network none` and isolated NET_ADMIN; disposable
+XFRM interface name/if_id and policy collision cases passed and were
+removed within that container. On this iproute2 version, `ip -json xfrm
+policy/state` emits legacy text for nonempty tables and empty stdout
+for an empty table on successful exit. These are **not** two supported
+installations or any strongSwan/IKEv2 compatibility acceptance: the test
+image has no strongSwan; no encrypted traffic was negotiated. Required
+Ubuntu/Debian, strongSwan version, architecture, systemd and release E2E
+evidence remains outstanding under Issues #7 and #12.

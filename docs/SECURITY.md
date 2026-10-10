@@ -160,6 +160,34 @@ a committed live Link and cannot authorize VICI writes, XFRM changes,
 SA teardown, credential retirement, or an operational success message.
 No production IPsec CLI/backend is registered by this milestone.
 
+### Read-only IPsec activation vacancy preflight (not ownership)
+
+Before any operational IPsec backend is enabled, a source-only
+`Engine.CheckIPsecActivationVacancy` may inspect a staged Link under the
+existing maintenance -> Link -> resource lock order. It revalidates the exact
+durable pending identity and protected key, rejects committed/pending resource
+collisions, and requires both strongSwan connection/PSK *name vacancy* and
+XFRM interface name, 32-bit `if_id`, orphan policy and SA vacancy. A matching
+foreign name or if_id is a **conflict**, never adoption permission. Missing,
+malformed, ambiguous or unavailable inventory fails closed, and returned
+XFRM state bytes (which may contain key material) are zeroized; daemon and
+kernel error text is not reflected to ordinary output.
+
+This is **observation only**, not a persisted authority token or authorization
+to call `load-conn`, `load-shared`, `unload-conn`, `unload-shared`, initiate,
+terminate, add/delete XFRM, or retire a PSK. A third-party strongSwan/kernel
+writer is not serialized by STL locks, so the future activation transaction
+must re-inspect and independently prove an STL-created resource before each
+effect or cleanup. Do not infer ownership from `PendingIPsec`, filenames,
+interface aliases, name-shaped VICI objects or derived `if_id` alone.
+
+The inspector handles modern JSON XFRM and older iproute2 text inventory.
+A successful *empty* XFRM policy/SA command can have no stdout on iproute2
+6.1; command failures are never treated as empty. Real-kernel disposable
+tests cover foreign interface-name/ID collisions and an orphan policy.
+They do not establish IKEv2, ESP/NAT-T traffic, VICI mutation or the release
+acceptance matrix. Issues #7 and #12 remain open.
+
 ## Setup-link safety
 
 A setup link is untrusted input.
