@@ -42,6 +42,12 @@ Requires the WireGuard kernel/module capability and the userspace `wg` tooling u
 ### IPsec/XFRM
 
 Requires Linux XFRM-interface support, iproute2 XFRM support, and a compatible strongSwan/IKEv2 installation. strongSwan supports XFRM interfaces since 5.8.0; the exact v0.1 tested strongSwan versions are validated by Issue #7 rather than guessed in advance.
+On glibc Debian/Ubuntu hosts where iproute2 emits legacy named XFRM
+selector protocols, read-only vacancy checks additionally need
+`/usr/bin/getent` to verify the host's actual NSS primary-name mapping
+against `/etc/protocols`. Missing/mismatched NSS mapping is an explicit
+fail-closed IPsec preflight incompatibility, not an empty resource table.
+
 
 ## Release validation
 

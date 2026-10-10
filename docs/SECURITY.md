@@ -198,11 +198,17 @@ rather than Unicode whitespace. In particular, UTF-8 Unicode whitespace
 must never remove kernel-invalid raw bytes (such as `0xa0`) or split a
 Linux-valid foreign interface name; a nonempty Unicode-only response is
 not vacancy evidence. Named protocols are matched to the primary names in
-the host's bounded, read-only `/etc/protocols` database instead of an incomplete hard-coded
-whitelist. Numeric protocol identifiers are 8-bit and canonical decimal.
-An unreadable/unknown protocol name fails closed; non-file NSS protocol
-sources may conservatively reduce compatibility and require independent
-host evidence before enabling operational IPsec. The original XFRM state bytes
+a bounded, read-only `/etc/protocols` primary-name table, and checked
+against the actual host glibc NSS `getprotobynumber` result via absolute
+`/usr/bin/getent protocols <number>`. Numeric protocol identifiers remain
+8-bit canonical decimal and need no NSS name. A customized non-file NSS
+provider that returns a different primary, unavailable `getent`, malformed
+or oversized output, lookup timeout, or unknown name fails closed rather
+than accepting a false vacancy. Lookups share a bounded per-inventory
+deadline, are cached only within that inspection, and never log raw output.
+Hosts with non-file providers whose effective primary agrees with the
+file-backed name remain compatible for the checked protocol IDs; foreign
+names absent from the file remain conservatively unsupported. The original XFRM state bytes
 and parser-owned JSON copies (which may contain key material) are cleared;
 daemon and kernel error text is not reflected to ordinary output.
 
