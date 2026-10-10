@@ -8,6 +8,10 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/linux"
 )
 
+// IPsecRuntimeNotRegisteredReason is shared by the observational doctor
+// and inactive IPsec Link status/diagnose errors. It is a stable machine code.
+const IPsecRuntimeNotRegisteredReason = "ipsec_runtime_not_registered"
+
 // IPsecHostCheck reports one bounded, observational prerequisite. It never
 // authorizes service startup, VICI writes, kernel mutation or foreign adoption.
 type IPsecHostCheck struct {
@@ -56,7 +60,7 @@ func InspectIPsecHost(ctx context.Context, runner linux.Runner) (IPsecHostReport
 		"Cannot verify the XFRM interface inventory.",
 		"Check iproute2, kernel XFRM support and inspection permissions; do not treat missing output as vacant state."))
 	report.Checks = append(report.Checks, IPsecHostCheck{
-		Name: "operational_runtime", Status: "blocked", ReasonCode: "ipsec_runtime_not_registered",
+		Name: "operational_runtime", Status: "blocked", ReasonCode: IPsecRuntimeNotRegisteredReason,
 		Summary:  "IPsec operational activation is not implemented or registered in this build.",
 		NextStep: "Use supported GRE/IPIP/WireGuard links; IPsec activation needs independent ownership, secure logging and traffic acceptance.",
 	})

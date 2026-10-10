@@ -9,13 +9,26 @@ import (
 	"time"
 
 	"github.com/ach1992/simple-tun-link/internal/diagnostics"
+	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
 const ipsecDoctorTimeout = 8 * time.Second
 
-const ipsecUnregisteredHelp = "IPsec operational runtime is not available in this build; run stl doctor ipsec for read-only prerequisites and safe next steps"
+const ipsecDoctorNextStep = "stl doctor ipsec"
+
+const ipsecUnregisteredHelp = "IPsec operational runtime is not available in this build; run " + ipsecDoctorNextStep + " for read-only prerequisites and safe next steps"
+
+// ipsecUnregisteredError uses the normal v1 error JSON/human/exit path but
+// adds the validated Link identity and a specific stable recovery reason.
+// No probe runs here; the operator can choose the read-only doctor explicitly.
+func ipsecUnregisteredError(stdout, stderr io.Writer, jsonOutput bool, operation string, id domain.LinkID) int {
+	public := stlerr.New(stlerr.CodeUnsupported, operation, string(id), string(domain.BackendIPsec), ipsecUnregisteredHelp)
+	public.ReasonCode = diagnostics.IPsecRuntimeNotRegisteredReason
+	public.NextStep = ipsecDoctorNextStep
+	return readCommandPublicError(stdout, stderr, jsonOutput, public)
+}
 
 // ipsecDoctorCommand is observational. It must never call the application
 // Engine, enable a service, fetch keys, invoke VICI writes or touch the host.

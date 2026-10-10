@@ -52,7 +52,7 @@ func linkDiagnoseCommand(args []string, stdout, stderr io.Writer, options *runti
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, "link_diagnose", "Link ID is not present in local desired state")
 	}
 	if record.Desired.Backend == domain.BackendIPsec {
-		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_diagnose", ipsecUnregisteredHelp)
+		return ipsecUnregisteredError(stdout, stderr, jsonOutput, "link_diagnose", id)
 	}
 	if record.Desired.Backend != domain.BackendGRE && record.Desired.Backend != domain.BackendIPIP && record.Desired.Backend != domain.BackendWireGuard {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_diagnose", "active diagnostics for this backend are unavailable")

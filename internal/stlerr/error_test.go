@@ -25,4 +25,10 @@ func TestErrorDoesNotExposeCause(t *testing.T) {
 	if strings.Contains(string(encoded), "SUPER-SECRET") {
 		t.Fatalf("JSON leaked cause: %s", encoded)
 	}
+	// Newly supported optional reason/action fields must not change the
+	// ordinary v1 error object unless a caller explicitly supplies them.
+	if strings.Contains(string(encoded), "reason_code") ||
+		strings.Contains(string(encoded), "next_step") {
+		t.Fatalf("empty optional recovery fields changed generic JSON: %s", encoded)
+	}
 }

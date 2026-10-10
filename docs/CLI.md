@@ -590,6 +590,19 @@ native-exclusive mode until ownership can be proven by a separately
 reviewed operational path. No services, packages, credentials, routing,
 firewall, kernel objects or state directories are changed.
 
+For a locally stored IPsec Link, `stl link status <link-id> --json` and
+`stl link diagnose <link-id> --json` preserve the current
+`schema_version:1` error envelope and `error.code:"unsupported"` with
+exit **4**, but now also include optional, stable:
+`error.reason_code:"ipsec_runtime_not_registered"`,
+`error.backend:"ipsec"`, `error.object_id` (validated exact Link ID),
+`error.operation` (respectively `link_status` / `link_diagnose`) and
+`error.next_step:"stl doctor ipsec"`. Existing generic errors omit these
+optional fields unless supported. Machine callers branch on the code and
+reason, **not** on the human `detail`; `next_step` is the exact safe
+read-only CLI command. The human error continues to explain why activation
+is not available.
+
 IPsec is still not a selectable operational backend. Existing GRE/IPIP/
 WireGuard functions continue independently. The same program-wide
 `reason_code` + actionable guidance and safe event-logging policy must be
