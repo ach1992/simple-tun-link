@@ -40,6 +40,8 @@ func (r *guidedTestRunner) Run(_ context.Context, name string, args ...string) (
 			return linux.CommandResult{}, errors.New("opaque, potentially sensitive route error")
 		}
 		output = "[{\"dst\":\"192.0.2.20\",\"dev\":\"eth0\",\"prefsrc\":\"192.0.2.10\",\"gateway\":\"192.0.2.1\",\"mtu\":1500}]"
+	case "ip -4 -json route get 10.0.0.5":
+		output = "[{\"dst\":\"10.0.0.5\",\"dev\":\"eth0\",\"prefsrc\":\"192.0.2.10\",\"gateway\":\"192.0.2.1\",\"mtu\":1500}]"
 	case "ip -json -details link show type gre":
 		if r.capabilityFail {
 			return linux.CommandResult{}, errors.New("GRE unavailable")
@@ -485,5 +487,33 @@ func TestGuidedGRECreateDiagnosticFailureRetainsConfiguredLink(t *testing.T) {
 	saved, err := state.NewFileStore(root).Load(context.Background())
 	if err != nil || len(saved.Links) != 1 || len(fake.applies) != 1 {
 		t.Fatalf("failed optional diagnosis must not remove configured Link: %+v %v", saved, err)
+	}
+}
+
+func TestGuidedGRECreateRejectsKnownPeerUnderlayCollision(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "absent")
+	fake := &guidedTestBackend{lifecycleFakeBackend: newLifecycleFake()}
+	code, out, errOut := runGuidedTest(guidedTestOptions(root, &guidedTestRunner{}, fake),
+		"1\n10.0.0.5\n10.0.0.4/31\n")
+	if code != 2 || !strings.Contains(errOut, "known peer underlay") ||
+		strings.Contains(out, "PREVIEW ONLY") || len(fake.applies) != 0 {
+		t.Fatalf("known peer underlay collision was not rejected at preflight: code=%d out=%q err=%q", code, out, errOut)
+	}
+	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected peer address collision created state: %v", err)
+	}
+}
+
+func TestGuidedGRECreateAutoCandidatesSkipKnownPeerUnderlay(t *testing.T) {
+	peer := netip.MustParseAddr("10.0.0.5")
+	candidates := []netip.Prefix{
+		netip.MustParsePrefix("10.0.0.4/31"),
+		netip.MustParsePrefix("10.0.0.6/31"),
+	}
+	got, available, err := domain.FreePrivate31(candidates,
+		collectReservedLinkAddresses(state.EmptySnapshot(), peer))
+	if err != nil || !available || got != candidates[1] {
+		t.Fatalf("automatic candidate did not exclude known peer underlay: got=%s available=%t err=%v",
+			got, available, err)
 	}
 }

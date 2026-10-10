@@ -82,9 +82,10 @@ func createStateRoot(options *runtimeOptions) string {
 }
 
 // collectReservedLinkAddresses includes legacy state that did not persist all
-// owned claims, while leaving actual mutation/ownership authority to Engine.
-func collectReservedLinkAddresses(snapshot state.Snapshot) []domain.ResourceClaim {
-	var claims []domain.ResourceClaim
+// owned claims and the known peer underlay address (even though other peer
+// host resources cannot be inspected). Mutation authority remains with Engine.
+func collectReservedLinkAddresses(snapshot state.Snapshot, peer netip.Addr) []domain.ResourceClaim {
+	claims := []domain.ResourceClaim{{Kind: domain.ResourceLinkAddress, Key: peer.String()}}
 	for _, record := range snapshot.Links {
 		claims = append(claims, record.OwnedResources...)
 		for _, prefix := range []netip.Prefix{record.Desired.Addresses.Local, record.Desired.Addresses.Peer} {
@@ -242,14 +243,14 @@ func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		fmt.Fprintln(errOut, "Cannot inspect host address, route or interface reservations; nothing applied.")
 		return 1
 	}
-	reserved := collectReservedLinkAddresses(snapshot)
+	reserved := collectReservedLinkAddresses(snapshot, peer)
 	auto, autoOK, err := domain.FreePrivate31(proposals, append(live, reserved...))
 	if err != nil {
 		fmt.Fprintln(errOut, "Cannot validate Link Address reservations; nothing applied.")
 		return 1
 	}
 	if autoOK {
-		fmt.Fprintf(out, "Suggested Link subnet: %s (local host checked; peer host NOT checked)\n", auto)
+		fmt.Fprintf(out, "Suggested Link subnet: %s (local host checked; known peer underlay excluded; other peer host state NOT checked)\n", auto)
 	} else {
 		fmt.Fprintln(out, "No free automatic /31 proposal found. Provide a manually verified RFC1918 /31.")
 	}
@@ -272,7 +273,7 @@ func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		}
 		_, available, checkErr := domain.FreePrivate31([]netip.Prefix{selected}, append(live, reserved...))
 		if checkErr != nil || !available {
-			fmt.Fprintln(errOut, "Manual Link subnet overlaps local routes, addresses or saved STL Links. Nothing applied.")
+			fmt.Fprintln(errOut, "Manual Link subnet overlaps local routes, addresses, saved STL Links or the known peer underlay address. Nothing applied.")
 			return 2
 		}
 	} else if !autoOK {
@@ -357,7 +358,7 @@ func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		link.GRE.DisablePMTUD, link.GRE.Checksum, link.GRE.Sequence)
 	fmt.Fprintln(out, "If confirmed: Engine will validate/recheck ownership, create only an STL-owned GRE interface/address,")
 	fmt.Fprintln(out, "manage a peer-scoped protocol-47 firewall rule and desired state, and configure owned restore persistence if supported.")
-	fmt.Fprintln(out, "Only this host was inspected. Ensure the /31 is unused on the PEER and its route is reachable.")
+	fmt.Fprintln(out, "The known peer underlay was excluded, but other peer-host resources remain unverified. Confirm /31 availability on the PEER.")
 	fmt.Fprintln(out, "The GRE key identifies a receive tunnel; it is NOT encryption or authentication.")
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
 		fmt.Fprintln(errOut, "Cannot establish a fresh terminal confirmation; nothing applied.")
