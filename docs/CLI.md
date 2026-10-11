@@ -615,6 +615,24 @@ exclusive ownership vacancy and never calls `systemctl` or reads
 third-party service content. Future activation must independently attest
 an STL-owned service against actual package and process/kernel state.
 
+The additive `name:"native_config"` check reads ONLY the proposed fixed
+`/var/lib/simple-tun-link/ipsec/strongswan.conf` artifact. It traverses
+root-owned, non-writable, non-symlink parents through pinned directory
+descriptors; requires the state/IPsec directories to be private, a
+root-owned singly-linked `0600` regular file and exact reviewed config
+bytes; and rechecks opened inode and every directory-entry identity.
+Results: `observed/native_config_bytes_verified` (local bytes only),
+`blocked/native_config_not_provisioned` (missing),
+`blocked/native_config_untrusted` (unsafe file, parent, or content), and
+`unknown/native_config_unverified` (incomplete inspection). These results
+never report raw file contents, path details or underlying errors.
+An unprivileged operator may see `unknown` when the root-private path
+cannot be read; do not weaken permissions to make the check green.
+Even an exact protected file is NOT an STL-origin publication receipt,
+proof of `STRONGSWAN_CONF` selection or effective daemon CFG logging, nor
+a service, VICI, port, package or XFRM ownership permit. Future admission
+must prove those independently and revalidate them across restarts.
+
 The additional JSON check is `name:"ike_udp_ports"`. Its stable results are:
 `blocked/ike_udp_ports_observed` when UDP 500 or 4500 is already bound,
 `observed/ike_udp_ports_not_observed` when both inventory reads and parsing

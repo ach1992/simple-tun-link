@@ -518,6 +518,12 @@ binding is `blocked`. Not observing a binding is strictly a point-in-time
 observation, not reservation, process ownership, or future bind permission.
 The report always says `activation_allowed:false` and exits unsupported.
 Host-wide service/package/port ownership is **not** attested.
+The additive `native_config` check verifies only root-private, exact
+local `strongswan.conf` bytes with pinned no-follow path descriptors;
+it is neither an STL-created durable receipt nor runtime logging or
+service ownership. Operational admission must bind durable provenance,
+selected process/service configuration and exclusive control across
+restart/recovery before any VICI or kernel write.
 
 `internal/backend/ipsec.NativeExclusiveConfigV1` adds an immutable-source,
 non-operational strongSwan configuration blueprint for `charon-systemd`.
