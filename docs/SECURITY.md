@@ -406,6 +406,18 @@ this check alone. Future integration must control Engine/host transaction
 locks and prove ownership of the *actual* service before invoking any
 provisioning on the real host.
 
+The proposed STL-specific `simple-tun-link-ipsec.service` is currently a
+source-only blueprint, not an installed or enabled unit. It explicitly pins
+`STRONGSWAN_CONF`, lacks automatic `swanctl --load-all`/reload or `[Install]`
+sections, and requests a root-private runtime directory/UMask. A new read-only
+`native_service_unit` doctor observation checks its exact local protected
+file bytes and inode/path; it cannot prove STL origin or actual loaded
+systemd behavior. Package postinst/preinst scripts, distro-managed service
+aliases, all drop-ins/generators, live process environment, executable and
+CFG/journald effective log levels, VICI socket credentials and external
+writers still require separate fail-closed admission proof. No effectful
+unit publisher, `systemctl` caller or daemon start has been registered.
+
 `stl doctor ipsec` also observes UDP 500/4500 occupancy from bounded procfs
 tables in the current namespace. It never dumps socket rows/inodes and never
 converts a missing/unreadable/malformed table into an empty one; an

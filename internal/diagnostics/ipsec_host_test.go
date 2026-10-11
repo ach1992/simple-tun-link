@@ -22,7 +22,8 @@ func inspectIPsecDoctorFixture(ctx context.Context, runner linux.Runner) (IPsecH
 	return inspectIPsecHostWithInputs(ctx, runner, ipsecInventoryReader(files, nil), func(string) (os.FileInfo, error) {
 		return nil, os.ErrNotExist
 	}, func() ipsec.NativeConfigAssessment { return ipsec.NativeConfigMissing },
-		func() ipsec.NativeOriginAssessment { return ipsec.NativeOriginMissing })
+		func() ipsec.NativeOriginAssessment { return ipsec.NativeOriginMissing },
+		func() ipsec.NativeServiceUnitAssessment { return ipsec.NativeServiceUnitMissing })
 }
 
 type ipsecDoctorRunner struct {
@@ -60,7 +61,7 @@ func TestIPsecDoctorReadOnlyAndNoFalseActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if report.SchemaVersion != 1 || report.Backend != "ipsec" || report.RuntimeMode != "native_exclusive" ||
-		report.ActivationAllowed || len(report.Checks) != 8 {
+		report.ActivationAllowed || len(report.Checks) != 9 {
 		t.Fatalf("false operational claim: %+v", report)
 	}
 	if c := checkByName(t, report, "daemon_process"); c.ReasonCode != "charon_process_not_observed" ||
@@ -69,6 +70,9 @@ func TestIPsecDoctorReadOnlyAndNoFalseActivation(t *testing.T) {
 	}
 	if c := checkByName(t, report, "strongswan_service"); c.Status != "observed" || c.ReasonCode != "strongswan_service_not_observed" {
 		t.Fatalf("missing read-only service inventory: %+v", c)
+	}
+	if c := checkByName(t, report, "native_service_unit"); c.Status != "blocked" || c.ReasonCode != "native_service_unit_not_provisioned" {
+		t.Fatalf("missing proposed native service unit prerequisite: %+v", c)
 	}
 	if c := checkByName(t, report, "native_config"); c.Status != "blocked" || c.ReasonCode != "native_config_not_provisioned" {
 		t.Fatalf("missing root-private config prerequisite: %+v", c)

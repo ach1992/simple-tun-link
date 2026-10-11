@@ -615,6 +615,24 @@ exclusive ownership vacancy and never calls `systemctl` or reads
 third-party service content. Future activation must independently attest
 an STL-owned service against actual package and process/kernel state.
 
+The new additive `name:"native_service_unit"` check inspects ONLY
+`/etc/systemd/system/simple-tun-link-ipsec.service` using pinned, non-following
+root-owned directory and file descriptors. It accepts the exact reviewed
+source-only `charon-systemd` unit bytes with safe file permissions and
+single-link identity. The source profile selects `STRONGSWAN_CONF` explicitly,
+uses a proposed private runtime directory and UMask, and has **no** distro
+`ExecStartPost=swanctl --load-all`, `ExecReload` or enable/start command.
+Results: `observed/native_service_unit_bytes_verified` (file snapshot only),
+`blocked/native_service_unit_not_provisioned` (absent),
+`blocked/native_service_unit_untrusted` (conflict, unsafe path or bytes) and
+`unknown/native_service_unit_unverified` (incomplete inspection). A positive
+result is **not** STL-origin publication, loaded systemd unit/drop-in/generator
+inspection, effective environment or secure logger attestation. The unit is
+NOT published, installed or wired into Engine, CLI or installer; no operator
+should copy it onto a live host. Future package installation must account for
+distro-managed units and maintainer-script service side effects before any
+privileged operation.
+
 The additive `name:"native_config"` check reads ONLY the proposed fixed
 `/var/lib/simple-tun-link/ipsec/strongswan.conf` artifact. It traverses
 root-owned, non-writable, non-symlink parents through pinned directory

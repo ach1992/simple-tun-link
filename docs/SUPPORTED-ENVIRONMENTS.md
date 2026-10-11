@@ -86,6 +86,15 @@ post-reboot or IKEv2/ESP/NAT-T compatibility test. The separate additive
 `native_config_origin` read-only diagnostic reports a receipt-bound snapshot
 or a stable missing/conflict/unverified reason, and always leaves
 `activation_allowed:false`.
+The additional source-only `charon-systemd` systemd-unit profile assumes
+`/usr/sbin/charon-systemd` and `Type=notify` on a qualified Debian/Ubuntu
+package. Its read-only `native_service_unit` doctor check inspects only the
+protected canonical unit file and never claims active/effective unit ownership.
+The profile has not been installed or exercised via systemd, and package
+installation may trigger distro service-start hooks; this requires separately
+authorized disposable-environment verification before admission. Exact
+Ubuntu/Debian packaging, service aliases, unit overrides and process/runtime
+settings remain unproven for operational use.
 The documented Ubuntu/Debian daemonless/container smoke therefore must
 not be promoted to an operational or persistence acceptance result.
 

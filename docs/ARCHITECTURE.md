@@ -334,6 +334,11 @@ Default backend.
 - VTI is not the primary design;
 - ESP/NAT-T behavior;
 - explicit credential handling and XFRM/SA diagnostics.
+- proposed STL-private, one-per-host `charon-systemd` unit and a separate
+  protected strongSwan configuration; source-only unit-byte inspection is not
+  unit publication or systemd/process/effective-logging ownership. Any future
+  activation must independently gate distro package effects, all loaded
+  unit overrides, VICI writers, IKE ports and kernel resources.
 
 ## 9. Address allocation
 
