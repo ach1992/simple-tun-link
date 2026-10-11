@@ -456,20 +456,32 @@ credential; even a positive result cannot prove PID 1's actual loaded
 service, overrides, environment, logger, VICI writers, or network access.
 No host service/package/network mutation was added.
 
-## Read-only systemd loaded-unit metadata (source-only)
+## Non-loading systemd in-memory unit observation (source-only)
 
-An additional `stl doctor ipsec` check now obtains only fixed, selected
-properties through `/usr/bin/systemctl --system show --all`. It rejects an
-alternate unit ID, any reported alias, followed unit, drop-in, generator/
-SourcePath, runtime/transient identity, stale reload, masked unit, or
-unexpected unit-file state. An unavailable, malformed, duplicated, truncated,
-oversized or otherwise incomplete report is `unknown`, not an empty unit
-inventory. A canonical `loaded` response is explicitly only a time-local
-**manager-reported snapshot**: it neither authenticates the systemd
-process nor proves exact on-disk receipt, effective ExecStart/Environment,
-STRONGSWAN_CONF, native CFG/journald logging, service/package provenance,
-VICI socket/client exclusivity or unchanging resources. Manager output,
-stderr and unexpected path values are not returned to users or logs.
-A source-only diagnostic cannot promote itself into operational admission;
-`activation_allowed=false` and doctor exit 4 persist. No service/control,
-file, package, network or kernel effect is introduced.
+The source-only IPsec doctor now uses `systemctl list-units --all`
+with a fixed single-target glob and *never* uses `systemctl show UNIT`.
+The latter can resolve an absent unit object by implicitly loading
+its metadata in PID 1. In contrast, list-units enumerates currently
+in-memory primary identities without an explicit unit lookup. A successful
+empty listing only means that the primary unit was not in memory **at the
+time of the snapshot**. An explicitly masked/failed entry is blocked.
+A normally loaded entry is still `unknown`, since the listing does not
+prove effective fragment, aliases, generator, drop-ins, current
+ExecStart/Environment, pending reload, native logger, process or VICI
+rights. A second `show UNIT` after inventory is expressly forbidden:
+the unit may unload between operations and the next lookup may load it.
+All unverified override/identity conditions therefore remain unknown,
+never an affirmative admission. Filesystem origin readers are separate
+and cannot fill the effective-manager proof gap.
+
+The new optional `linux.BoundedRunner` interface enforces **16 KiB
+stdout and 1 KiB stderr stream capture ceilings before buffering** for
+the manager probe; stdout/stderr overflow cancels the process and returns
+a safe error without partial content. Without bounded capability the
+diagnostic returns `unknown`, not an unbounded `Runner.Run` fallback.
+Errors and raw untrusted manager output are never serialized. The
+system may naturally load/unload units concurrently, so even a list
+snapshot cannot reserve or certify a stable state. No service start/
+stop/enable/reload, package, VICI, credential, file, network or kernel
+mutation is performed. `activation_allowed=false` and doctor exit 4
+persist; privileged disposable operational acceptance remains required.

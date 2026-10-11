@@ -28,8 +28,8 @@ func (p *ipsecCLIProbe) Run(_ context.Context, name string, args ...string) (lin
 		return linux.CommandResult{}, nil
 	case strings.HasPrefix(key, "/usr/bin/pgrep -x "):
 		return linux.CommandResult{}, &linux.CommandError{Command: "pgrep", ExitCode: 1}
-	case name == "/usr/bin/systemctl" && key == "/usr/bin/systemctl --system --no-pager show --all --property=Id,Names,Following,LoadState,FragmentPath,SourcePath,DropInPaths,NeedDaemonReload,Transient,UnitFileState -- simple-tun-link-ipsec.service":
-		return linux.CommandResult{Stdout: []byte("Id=simple-tun-link-ipsec.service\nNames=simple-tun-link-ipsec.service\nFollowing=\nLoadState=not-found\nFragmentPath=\nSourcePath=\nDropInPaths=\nNeedDaemonReload=no\nTransient=no\nUnitFileState=\n")}, nil
+	case name == "/usr/bin/systemctl" && key == "/usr/bin/systemctl --system --no-pager --no-legend --plain --full --all --type=service list-units simple-tun-link-ipsec.servic?":
+		return linux.CommandResult{}, nil
 	case key == "/usr/sbin/swanctl --help":
 		return linux.CommandResult{}, errors.New("PSK=DO_NOT_PRINT")
 	case key == "/sbin/ip -json -details link show type xfrm":
@@ -38,6 +38,13 @@ func (p *ipsecCLIProbe) Run(_ context.Context, name string, args ...string) (lin
 		t := "unanticipated read-only command " + name
 		return linux.CommandResult{}, errors.New(t)
 	}
+}
+
+func (p *ipsecCLIProbe) RunBounded(ctx context.Context, limits linux.CaptureLimits, name string, args ...string) (linux.CommandResult, error) {
+	if limits.Stdout != 16*1024 || limits.Stderr != 1024 {
+		return linux.CommandResult{}, errors.New("unbounded systemd doctor probe")
+	}
+	return p.Run(ctx, name, args...)
 }
 
 func TestIPsecDoctorOperatorAndMachineDiagnostics(t *testing.T) {
@@ -70,7 +77,7 @@ func TestIPsecDoctorOperatorAndMachineDiagnostics(t *testing.T) {
 	}
 	for _, call := range probe.calls {
 		if strings.Contains(call, "load-") || strings.Contains(call, "ip link add") || strings.Contains(call, "swanctl --load") ||
-			(strings.Contains(call, "systemctl") && call != "/usr/bin/systemctl --system --no-pager show --all --property=Id,Names,Following,LoadState,FragmentPath,SourcePath,DropInPaths,NeedDaemonReload,Transient,UnitFileState -- simple-tun-link-ipsec.service") {
+			(strings.Contains(call, "systemctl") && call != "/usr/bin/systemctl --system --no-pager --no-legend --plain --full --all --type=service list-units simple-tun-link-ipsec.servic?") {
 			t.Fatalf("doctor used effectful command: %q", call)
 		}
 	}

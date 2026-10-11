@@ -107,13 +107,16 @@ observably retained stages require manual reconciliation. These fixtures
 do not simulate a real power failure or certify all filesystem semantics. The additional read-only native_service_unit_origin
 observation does not establish an effective systemd unit, package
 compatibility, service ownership or operational acceptance.
-The additional read-only `native_systemd_loaded_unit` manager observation
-was checked for the `not-found` response on the unprivileged AI Test Server
-systemd environment; canonical loaded/override cases are presently
-source fixtures only. Its `systemctl --system show --all` property snapshot
-does not certify Ubuntu/Debian version compatibility, effective
-ExecStart/Environment, runtime ownership or admission. Those require
-separately authorized disposable guest/systemd testing.
+The non-loading `native_systemd_loaded_unit` observation uses
+`systemctl --system list-units --all` with one fixed glob; a successful
+empty manager-inventory result only blocks an already-loaded-primary
+observation, not unit files/aliases. A canonical listed/loaded entry is
+still `unknown` because fragment, alias, drop-in, generator, executable
+and environment cannot be safely attested by this single query. Stream
+capture is bounded during execution (16 KiB stdout, 1 KiB stderr);
+unavailable/overflowed manager queries fail closed. Source regression
+tests cover this boundary; separately authorized disposable systemd
+validation across the stated version matrix remains outstanding.
 The profile has not been installed or exercised via systemd, and package
 installation may trigger distro service-start hooks; this requires separately
 authorized disposable-environment verification before admission. Exact

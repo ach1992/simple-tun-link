@@ -340,13 +340,14 @@ Default backend.
   source-only service-unit publisher now demonstrates no-clobber, private
   receipt/inode-xattr-bound origin checks in fixtures only, with no operational
   call path. Neither matching bytes nor even a valid origin snapshot attests
-  the unit loaded by PID 1. A subsequent read-only systemd manager observation
-  checks the reported canonical loaded fragment, name/alias set, source,
-  drop-ins, transient status and pending reload; even a matching snapshot is
-  not effective ExecStart/Environment, process, logger or ownership proof.
-  Any future activation must independently gate
-  distro package effects, all loaded
-  unit overrides, VICI writers, IKE ports and kernel resources.
+  the unit loaded by PID 1. An additional bounded, non-loading
+  `list-units --all` diagnostic enumerates the systemd in-memory
+  primary-unit name only. An already-loaded unit still reports unknown,
+  because no safe single-step observation has established its fragment,
+  aliases, drop-ins, generator, reload state, process or effective settings.
+  No `systemctl show UNIT` or racy follow-up object lookup is allowed.
+  Any future activation must independently gate distro package effects,
+  all loaded unit overrides, VICI writers, IKE ports and kernel resources.
 
 ## 9. Address allocation
 

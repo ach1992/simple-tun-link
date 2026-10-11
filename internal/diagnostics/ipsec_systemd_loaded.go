@@ -5,124 +5,126 @@ import (
 	"context"
 	"strings"
 
-	"github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 )
 
-// This is deliberately a *time-local, untrusted systemd-manager observation*.
-// It cannot certify PID 1, executable provenance, effective ExecStart or
-// Environment, secure strongSwan logging or exclusive VICI writer access.
-// It never starts/reloads/enables a unit or authorizes IPsec activation.
+// Only the systemd in-memory unit INVENTORY is safe to query without loading
+// an absent unit. systemctl show <UNIT> can cause systemd to load that unit's
+// metadata, so it must NEVER be used by this observation. In-memory identity
+// is not the effective unit configuration or an admission/ownership grant.
 const (
 	nativeSystemdUnitName = "simple-tun-link-ipsec.service"
-	maxSystemdShowBytes   = 16 * 1024
+	maxSystemdListBytes   = 16 * 1024
+	maxSystemdStderrBytes = 1024
 )
 
-var nativeSystemdShowArgs = []string{
-	"--system", "--no-pager", "show", "--all",
-	"--property=Id,Names,Following,LoadState,FragmentPath,SourcePath,DropInPaths,NeedDaemonReload,Transient,UnitFileState",
-	"--", nativeSystemdUnitName,
+// A glob forces list-units' in-memory enumeration (not a unit-object lookup).
+// '?' matches only the final 'e'; unexpected rows are unknown, not adoption.
+var nativeSystemdListArgs = []string{
+	"--system", "--no-pager", "--no-legend", "--plain", "--full",
+	"--all", "--type=service", "list-units", "simple-tun-link-ipsec.servic?",
 }
 
-// inspectNativeSystemdLoadedUnit is read-only. The fixed absolute executable,
-// system bus and unit name do not depend on caller-supplied arguments or PATH.
-// No systemctl output, error, or raw property is included in public results.
+type nativeSystemdInventoryState int
+
+const (
+	systemdInventoryUnknown nativeSystemdInventoryState = iota
+	systemdInventoryNotListed
+	systemdInventoryListed
+	systemdInventoryConflict
+)
+
+// inspectNativeSystemdLoadedUnit never invokes a unit-object lookup, let
+// alone start/stop/reload or daemon operations. If the named unit is loaded,
+// the in-memory list alone does NOT expose FragmentPath, DropInPaths, Names,
+// generators or NeedDaemonReload: return UNKNOWN until those effective values
+// can be attested without causing a load or a race-induced reload. Existing
+// protected disk snapshots remain separate and cannot fill this proof gap.
 func inspectNativeSystemdLoadedUnit(ctx context.Context, runner linux.Runner) IPsecHostCheck {
 	check := IPsecHostCheck{
-		Name: "native_systemd_loaded_unit", Status: "unknown",
+		Name:       "native_systemd_loaded_unit",
+		Status:     "unknown",
 		ReasonCode: "native_systemd_unit_unverified",
-		Summary:    "The systemd manager's loaded IPsec unit identity could not be verified.",
-		NextStep:   "Check the system manager and loaded unit identity read-only; do not start, reload or adopt any strongSwan service.",
+		Summary:    "The systemd manager's existing loaded-unit inventory could not be verified.",
+		NextStep:   "Inspect the existing unit and manager using an independently verified non-loading method; do not start, reload or adopt a strongSwan service.",
 	}
 	if ctx == nil || runner == nil || ctx.Err() != nil {
 		return check
 	}
-	result, err := runner.Run(ctx, "/usr/bin/systemctl", nativeSystemdShowArgs...)
-	if err != nil {
+	bounded, ok := runner.(linux.BoundedRunner)
+	if !ok {
+		// Never silently fall back to Runner.Run, which buffers unbounded
+		// command output before the diagnostic parser can inspect it.
 		return check
 	}
-	values, ok := parseNativeSystemdShow(result.Stdout)
+	result, err := bounded.RunBounded(ctx, linux.CaptureLimits{
+		Stdout: maxSystemdListBytes, Stderr: maxSystemdStderrBytes,
+	}, "/usr/bin/systemctl", nativeSystemdListArgs...)
+	if err != nil || len(result.Stderr) != 0 {
+		return check
+	}
+	state, ok := parseNativeSystemdList(result.Stdout)
 	if !ok {
 		return check
 	}
-	// PID 1 may change these properties immediately after the read. Even a
-	// fully matching snapshot is NOT a resource reservation or origin proof.
-	// Non-canonical manager identities and any override remain blocked, not
-	// silently interpreted as a successful STL-owned service.
-	if values["Id"] != nativeSystemdUnitName ||
-		values["Names"] != nativeSystemdUnitName ||
-		values["Following"] != "" ||
-		values["SourcePath"] != "" ||
-		values["DropInPaths"] != "" ||
-		values["Transient"] != "no" ||
-		values["NeedDaemonReload"] != "no" {
-		return nativeSystemdLoadedConflict()
-	}
-	switch values["LoadState"] {
-	case "not-found":
-		if values["FragmentPath"] != "" || values["UnitFileState"] != "" {
-			return nativeSystemdLoadedConflict()
-		}
+	switch state {
+	case systemdInventoryNotListed:
 		check.Status = "blocked"
 		check.ReasonCode = "native_systemd_unit_not_loaded"
-		check.Summary = "systemd has not loaded the proposed STL-only IPsec unit."
-		check.NextStep = "Do not install or start the source-only unit on a live host; qualify protected publication and systemd admission in a disposable environment."
-		return check
-	case "loaded":
-		if values["FragmentPath"] != ipsec.NativeExclusiveServiceUnitPath ||
-			values["UnitFileState"] != "static" {
-			return nativeSystemdLoadedConflict()
-		}
-		check.Status = "observed"
-		check.ReasonCode = "native_systemd_unit_loaded_snapshot"
-		check.Summary = "systemd reports the canonical IPsec unit fragment loaded without reported aliases, drop-ins, generators or stale reload; effective runtime and ownership are not verified."
-		check.NextStep = "Independently attest exact service properties, package and process origin, STRONGSWAN_CONF, CFG logging, VICI writers and host resources before any activation."
-		return check
-	default:
+		check.Summary = "The proposed STL IPsec service is not listed under its primary name in systemd's current in-memory unit inventory; on-disk units and aliases remain unverified."
+		check.NextStep = "Do not install or start the source-only unit on a live host; validate unit identity, aliases, packages and systemd admission in an authorized disposable environment."
+	case systemdInventoryConflict:
 		return nativeSystemdLoadedConflict()
+	case systemdInventoryListed:
+		check.Summary = "systemd lists the proposed unit in memory, but its effective fragment, aliases, drop-ins, generators and reload status cannot be safely attested by this non-loading probe."
+		check.NextStep = "Keep IPsec blocked; qualify a non-loading effective-unit attestation and independent package, process, environment, logger and VICI ownership."
 	}
+	return check
 }
 
 func nativeSystemdLoadedConflict() IPsecHostCheck {
 	return IPsecHostCheck{
 		Name: "native_systemd_loaded_unit", Status: "blocked",
 		ReasonCode: "native_systemd_unit_conflict",
-		Summary:    "The loaded IPsec unit identity is masked, overridden, changed or incompatible with the reviewed STL-only profile.",
-		NextStep:   "Inspect systemd unit aliases, drop-ins, generators and other owners manually; never replace, start or reload a foreign service.",
+		Summary:    "The existing in-memory IPsec unit entry has an incompatible or failed load state.",
+		NextStep:   "Inspect systemd unit identity and foreign owners manually; never replace, start or reload an unowned service.",
 	}
 }
 
-// parseNativeSystemdShow accepts ONLY a complete, bounded ASCII property
-// snapshot from systemctl show --all. Incomplete, duplicated, injected or
-// unfamiliar output is unknown, never proof of no foreign management state.
-func parseNativeSystemdShow(raw []byte) (map[string]string, bool) {
-	const fields = "Id,Names,Following,LoadState,FragmentPath,SourcePath,DropInPaths,NeedDaemonReload,Transient,UnitFileState"
-	if len(raw) == 0 || len(raw) > maxSystemdShowBytes || raw[len(raw)-1] != '\n' {
-		return nil, false
+// parseNativeSystemdList accepts a complete, one-row in-memory list only.
+// Empty stdout from a SUCCESSFUL bounded list-units request means that no
+// matching primary unit was listed *at that instant*, NOT that no file,
+// alias, generator, other daemon or future writer exists. Untrusted text,
+// Unicode terminal markers, extra units, truncated rows and future output
+// changes always degrade to UNKNOWN instead of a false clean inventory.
+func parseNativeSystemdList(raw []byte) (nativeSystemdInventoryState, bool) {
+	if len(raw) > maxSystemdListBytes {
+		return systemdInventoryUnknown, false
+	}
+	if len(raw) == 0 {
+		return systemdInventoryNotListed, true
+	}
+	if raw[len(raw)-1] != '\n' || bytes.Count(raw, []byte{'\n'}) != 1 {
+		return systemdInventoryUnknown, false
 	}
 	for _, b := range raw {
 		if b != '\n' && (b < 0x20 || b > 0x7e) {
-			return nil, false
+			return systemdInventoryUnknown, false
 		}
 	}
-	allowed := make(map[string]struct{}, 10)
-	for _, key := range strings.Split(fields, ",") {
-		allowed[key] = struct{}{}
+	fields := strings.Fields(string(raw[:len(raw)-1]))
+	if len(fields) < 5 || fields[0] != nativeSystemdUnitName {
+		return systemdInventoryUnknown, false
 	}
-	values := make(map[string]string, len(allowed))
-	for _, line := range bytes.Split(bytes.TrimSuffix(raw, []byte("\n")), []byte("\n")) {
-		key, value, ok := bytes.Cut(line, []byte("="))
-		if !ok {
-			return nil, false
-		}
-		name := string(key)
-		if _, found := allowed[name]; !found {
-			return nil, false
-		}
-		if _, duplicate := values[name]; duplicate {
-			return nil, false
-		}
-		values[name] = string(value)
+	// The text columns are UNIT LOAD ACTIVE SUB DESCRIPTION; descriptions
+	// may have spaces but cannot qualify ownership. LOAD's unknown future
+	// variants do not prove that an expected unit was loaded.
+	switch fields[1] {
+	case "loaded":
+		return systemdInventoryListed, true
+	case "masked", "not-found", "bad-setting", "error":
+		return systemdInventoryConflict, true
+	default:
+		return systemdInventoryUnknown, false
 	}
-	return values, len(values) == len(allowed)
 }

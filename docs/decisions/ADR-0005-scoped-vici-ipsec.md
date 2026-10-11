@@ -448,25 +448,36 @@ Source references for configuration and logging:
 - https://docs.strongswan.org/docs/latest/config/logging.html
 - https://github.com/strongswan/strongswan/blob/master/src/libcharon/plugins/vici/vici_cred.c
 
-## Read-only systemd-manager loaded-unit observation (source-only)
+## R1/R2 correction: non-loading systemd inventory and bounded capture
 
-A bounded read-only `systemctl --system show --all` probe checks the
-manager-reported `Id`, `Names`, `Following`, `LoadState`,
-`FragmentPath`, `SourcePath`, `DropInPaths`, `NeedDaemonReload`,
-`Transient` and `UnitFileState`. Only the canonical STL unit name and
-fragment, a loaded static native unit without aliases, drop-ins, source
-generator, transient identity or pending manager reload receive an
-`observed` **metadata-snapshot** classification. Non-canonical identities
-block; missing unit blocks; unavailable or incompletely parsed properties
-remain unknown. No manager output is exposed. This source-only diagnostic
-never starts/reloads/enables systemd and leaves activation disallowed.
-It cannot attest effective ExecStart/Environment, service process,
-STRONGSWAN_CONF, logger policy, package side effects, VICI writers,
-file-origin durability or continued exclusivity. Those separate gates
-must be proved in a disposable authorized operational environment before
-the accepted native-exclusive runtime can be activated. No architecture
-change or new Owner decision is introduced.
+The original `systemctl show UNIT` implementation was rejected: upstream
+systemd may resolve the unit object by loading an absent unit into PID 1,
+so the resulting `LoadState=loaded` could be induced by the diagnosis
+itself. The corrected **source-only** probe uses only `systemctl list-units
+--all` with a fixed glob, which queries the existing in-memory unit list.
+No second unit-object query is permitted: if the unit unloads between
+steps, `show UNIT` could load it again. Empty list results mean only
+no matching primary unit *at that instant* and block. Failed/masked
+loaded entries block; canonical loaded entries remain **unknown**, not
+`observed`, because the list cannot attest actual aliases, fragment,
+generator, drop-ins, loaded-vs-disk drift, transient property, pending
+reload, ExecStart/Environment or other effective settings. The existing
+on-disk origin receipt checks also cannot prove PID 1's loaded
+configuration. Safe fuller effective inspection is still a prerequisite
+for operational IPsec, not a reason to weaken this diagnostic.
 
-Systemd property references:
+The `linux.BoundedRunner` stream primitive enforces separate 16 KiB
+stdout and 1 KiB stderr ceilings **while the subprocess writes**. Overflow
+cancels execution and returns an untrusted-output-free error; the diagnostic
+fails closed if this bounded primitive is unavailable, instead of using
+the old unbounded `bytes.Buffer` and a post-capture parser limit. Parser,
+capture, and exact CLI safeguards have tests; no privileged systemd
+service/daemon activation test is claimed. This is an implementation
+correction within the accepted owner architecture and leaves Issue #7/#12
+and `activation_allowed=false` unchanged.
+
+Systemd behavior/source references:
+- https://manpages.debian.org/bullseye/systemd/systemctl.1.en.html
+- https://manpages.debian.org/bullseye/systemd/systemd.1.en.html
+- https://github.com/systemd/systemd/blob/v247/src/core/dbus-manager.c
 - https://www.freedesktop.org/wiki/Software/systemd/dbus/
-- https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html

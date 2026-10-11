@@ -633,29 +633,37 @@ or incomplete publication), unknown/native_service_unit_origin_unverified
 a positive result is not a systemd operational admission. Schema stays 1,
 activation_allowed remains false and doctor exit code remains 4.
 
-The additional `name:"native_systemd_loaded_unit"` is a read-only
-`/usr/bin/systemctl --system --no-pager show --all --property=...`
-observation of PID 1's *reported* unit identity. It requires a complete,
-bounded property snapshot: exact canonical ID/sole name and fragment path,
-`LoadState=loaded`, `UnitFileState=static`, no `Following`, `SourcePath`,
-`DropInPaths`, transient identity or pending daemon reload. Results:
-`observed/native_systemd_unit_loaded_snapshot` (manager metadata only),
-`blocked/native_systemd_unit_not_loaded` (no loaded unit),
-`blocked/native_systemd_unit_conflict` (foreign/overridden/masked/stale),
-and `unknown/native_systemd_unit_unverified` (incomplete/unavailable manager
-metadata). The command never invokes enable/start/reload; raw manager output
-and errors are not returned. It does **not** attest that bytes/origin match,
-effective `ExecStart`/`Environment`, `STRONGSWAN_CONF`, package, process,
-CFG logging, VICI writer rights or uninterrupted ownership. A changed
-manager state after observation cannot be ruled out. IPsec remains blocked.
+The additive `name:"native_systemd_loaded_unit"` checks only the current
+**in-memory unit inventory** using fixed
+`/usr/bin/systemctl --system --no-pager --no-legend --plain --full --all
+--type=service list-units 'simple-tun-link-ipsec.servic?'`.
+Unlike `systemctl show UNIT` (which may cause systemd to load an absent
+unit), `list-units` enumerates units already in the manager's memory and
+does not request loading the target. A successful empty result is
+`blocked/native_systemd_unit_not_loaded`: no matching *primary* unit was
+listed at that instant, **not** proof of absent files, aliases or daemon.
+An entry with a known failed/masked load state is
+`blocked/native_systemd_unit_conflict`. A loaded in-memory entry, incomplete
+or malformed output, error, missing bounded-runner capability, unexpected
+stderr or overflow is `unknown/native_systemd_unit_unverified`: the
+single safe listing cannot prove actual fragment, aliases, drop-ins,
+generators, source, transient status, pending reload or effective unit
+configuration. No successful `observed` loaded-unit admission is claimed.
+This is deliberate fail-closed behavior, not an incentive to call
+`show UNIT` after listing: the unit may unload in between and be
+implicitly reloaded. The runner enforces **16 KiB stdout and 1 KiB stderr
+capture ceilings during execution**, terminating on overflow without
+returning raw subprocess output. `activation_allowed` stays false and
+doctor exit stays 4; PID 1 may independently change between snapshots.
 
 Results: `observed/native_service_unit_bytes_verified` (file snapshot only),
 `blocked/native_service_unit_not_provisioned` (absent),
 `blocked/native_service_unit_untrusted` (conflict, unsafe path or bytes) and
 `unknown/native_service_unit_unverified` (incomplete inspection). A positive
 result is **not** STL-origin publication or effective loaded-systemd,
-process/environment or secure logger attestation; the separate manager
-observation above is only a time-local metadata snapshot. The unit is
+process/environment or secure logger attestation; the separate in-memory
+inventory above remains blocked/unknown until effective properties can be
+attested without an inducing unit lookup. The unit is
 NOT published, installed or wired into Engine, CLI or installer; no operator
 should copy it onto a live host. Future package installation must account for
 distro-managed units and maintainer-script service side effects before any

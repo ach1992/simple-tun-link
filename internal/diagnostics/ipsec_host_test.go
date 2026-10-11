@@ -38,15 +38,20 @@ func (r *ipsecDoctorRunner) Run(_ context.Context, name string, args ...string) 
 	if err, ok := r.overrides[key]; ok {
 		return linux.CommandResult{Stdout: []byte("private_key=NEVER_SHOW"), Stderr: []byte("PSK=NEVER_SHOW")}, err
 	}
-	if name == "/usr/bin/systemctl" {
-		return linux.CommandResult{Stdout: nativeSystemdFixture(map[string]string{
-			"LoadState": "not-found", "FragmentPath": "", "UnitFileState": "",
-		})}, nil
-	}
 	if name == "/usr/bin/pgrep" {
 		return linux.CommandResult{}, &linux.CommandError{Command: name, ExitCode: 1}
 	}
 	return linux.CommandResult{}, nil
+}
+
+func (r *ipsecDoctorRunner) RunBounded(ctx context.Context, limits linux.CaptureLimits, name string, args ...string) (linux.CommandResult, error) {
+	if limits.Stdout != maxSystemdListBytes || limits.Stderr != maxSystemdStderrBytes ||
+		name != "/usr/bin/systemctl" {
+		return linux.CommandResult{}, errors.New("unsafe bounded probe")
+	}
+	// A successful empty list-units snapshot means no PRIMARY in-memory
+	// manager entry; it is not service-file or alias absence.
+	return r.Run(ctx, name, args...)
 }
 
 func checkByName(t *testing.T, report IPsecHostReport, name string) IPsecHostCheck {
@@ -97,7 +102,7 @@ func TestIPsecDoctorReadOnlyAndNoFalseActivation(t *testing.T) {
 		t.Fatalf("missing actionable blocked runtime: %+v", c)
 	}
 	wantCalls := []string{"/usr/bin/pgrep -x charon", "/usr/bin/pgrep -x charon-systemd",
-		"/usr/bin/systemctl " + strings.Join(nativeSystemdShowArgs, " "), "/usr/sbin/swanctl --help", "/sbin/ip -json -details link show type xfrm"}
+		"/usr/bin/systemctl " + strings.Join(nativeSystemdListArgs, " "), "/usr/sbin/swanctl --help", "/sbin/ip -json -details link show type xfrm"}
 	if strings.Join(runner.calls, "|") != strings.Join(wantCalls, "|") {
 		t.Fatalf("unexpected command calls (mutation risk): %q", runner.calls)
 	}

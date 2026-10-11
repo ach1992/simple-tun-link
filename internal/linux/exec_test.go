@@ -53,3 +53,53 @@ func TestCommandErrorDoesNotEchoArgumentsOrStderr(t *testing.T) {
 		t.Fatalf("command error = %#v, want positive exit code", commandErr)
 	}
 }
+
+// An untrusted command may emit far more data than its diagnostic can parse.
+// Verify the subprocess capture boundary, not merely a parser fed a large
+// preallocated slice. Both stdout and stderr must be independently bounded.
+func TestExecRunnerBoundedCaptureStopsOversizedProcessOutput(t *testing.T) {
+	runner := ExecRunner{Timeout: 3 * time.Second}
+	cases := []struct {
+		name   string
+		script string
+	}{
+		{"stdout", "head -c 200000 /dev/zero"},
+		{"stderr", "head -c 200000 /dev/zero >&2"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			start := time.Now()
+			result, err := runner.RunBounded(context.Background(), CaptureLimits{Stdout: 4096, Stderr: 1024},
+				"/bin/sh", "-c", tc.script)
+			if !errors.Is(err, ErrOutputLimit) {
+				t.Fatalf("oversized stream was not rejected by capture boundary: %v", err)
+			}
+			if len(result.Stdout) != 0 || len(result.Stderr) != 0 {
+				t.Fatal("overflow leaked partial command output")
+			}
+			if time.Since(start) > 2*time.Second {
+				t.Fatal("oversized output did not cause prompt subprocess termination")
+			}
+			if strings.Contains(err.Error(), "/dev/zero") {
+				t.Fatal("command error exposed argv")
+			}
+		})
+	}
+}
+
+func TestExecRunnerBoundedCaptureAcceptsExactLimits(t *testing.T) {
+	runner := ExecRunner{Timeout: time.Second}
+	result, err := runner.RunBounded(context.Background(), CaptureLimits{Stdout: 5, Stderr: 4},
+		"/bin/sh", "-c", "printf 12345; printf abcd >&2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(result.Stdout) != "12345" || string(result.Stderr) != "abcd" {
+		t.Fatalf("unexpected bounded streams: %q %q", result.Stdout, result.Stderr)
+	}
+	for _, limits := range []CaptureLimits{{}, {Stdout: -1, Stderr: 2}, {Stdout: 5}} {
+		if _, err := runner.RunBounded(context.Background(), limits, "/bin/echo", "unsafe"); err == nil {
+			t.Fatal("accepted a missing/invalid capture limit")
+		}
+	}
+}
