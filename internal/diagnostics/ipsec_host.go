@@ -53,12 +53,13 @@ func inspectIPsecHostWithInputs(ctx context.Context, runner linux.Runner, ports 
 		SchemaVersion: 1,
 		Backend:       "ipsec",
 		RuntimeMode:   "native_exclusive",
-		Checks:        make([]IPsecHostCheck, 0, 10),
+		Checks:        make([]IPsecHostCheck, 0, 11),
 	}
 	report.Checks = append(report.Checks, inspectCharonProcesses(ctx, runner))
 	report.Checks = append(report.Checks, inspectStrongSwanServiceFiles(ctx, lstat))
 	report.Checks = append(report.Checks, inspectNativeExclusiveServiceUnit(serviceUnit))
 	report.Checks = append(report.Checks, inspectNativeExclusiveServiceUnitOrigin(unitOrigin))
+	report.Checks = append(report.Checks, inspectNativeSystemdLoadedUnit(ctx, runner))
 	report.Checks = append(report.Checks, inspectNativeExclusiveConfig(config))
 	report.Checks = append(report.Checks, inspectNativeExclusiveConfigOrigin(origin))
 	report.Checks = append(report.Checks, inspectIPsecIKEPorts(ctx, ports))

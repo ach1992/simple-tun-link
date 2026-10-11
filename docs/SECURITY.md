@@ -416,7 +416,7 @@ systemd behavior. Package postinst/preinst scripts, distro-managed service
 aliases, all drop-ins/generators, live process environment, executable and
 CFG/journald effective log levels, VICI socket credentials and external
 writers still require separate fail-closed admission proof. No effectful
-unit publisher, `systemctl` caller or daemon start has been registered.
+unit publisher, `systemctl` mutator or daemon start has been registered.
 
 `stl doctor ipsec` also observes UDP 500/4500 occupancy from bounded procfs
 tables in the current namespace. It never dumps socket rows/inodes and never
@@ -455,3 +455,21 @@ and exact source bytes. The token is not an unforgeable root adversary
 credential; even a positive result cannot prove PID 1's actual loaded
 service, overrides, environment, logger, VICI writers, or network access.
 No host service/package/network mutation was added.
+
+## Read-only systemd loaded-unit metadata (source-only)
+
+An additional `stl doctor ipsec` check now obtains only fixed, selected
+properties through `/usr/bin/systemctl --system show --all`. It rejects an
+alternate unit ID, any reported alias, followed unit, drop-in, generator/
+SourcePath, runtime/transient identity, stale reload, masked unit, or
+unexpected unit-file state. An unavailable, malformed, duplicated, truncated,
+oversized or otherwise incomplete report is `unknown`, not an empty unit
+inventory. A canonical `loaded` response is explicitly only a time-local
+**manager-reported snapshot**: it neither authenticates the systemd
+process nor proves exact on-disk receipt, effective ExecStart/Environment,
+STRONGSWAN_CONF, native CFG/journald logging, service/package provenance,
+VICI socket/client exclusivity or unchanging resources. Manager output,
+stderr and unexpected path values are not returned to users or logs.
+A source-only diagnostic cannot promote itself into operational admission;
+`activation_allowed=false` and doctor exit 4 persist. No service/control,
+file, package, network or kernel effect is introduced.

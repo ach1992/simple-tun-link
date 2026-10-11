@@ -447,3 +447,26 @@ Source references for configuration and logging:
 - https://docs.strongswan.org/docs/latest/daemons/charon-systemd.html
 - https://docs.strongswan.org/docs/latest/config/logging.html
 - https://github.com/strongswan/strongswan/blob/master/src/libcharon/plugins/vici/vici_cred.c
+
+## Read-only systemd-manager loaded-unit observation (source-only)
+
+A bounded read-only `systemctl --system show --all` probe checks the
+manager-reported `Id`, `Names`, `Following`, `LoadState`,
+`FragmentPath`, `SourcePath`, `DropInPaths`, `NeedDaemonReload`,
+`Transient` and `UnitFileState`. Only the canonical STL unit name and
+fragment, a loaded static native unit without aliases, drop-ins, source
+generator, transient identity or pending manager reload receive an
+`observed` **metadata-snapshot** classification. Non-canonical identities
+block; missing unit blocks; unavailable or incompletely parsed properties
+remain unknown. No manager output is exposed. This source-only diagnostic
+never starts/reloads/enables systemd and leaves activation disallowed.
+It cannot attest effective ExecStart/Environment, service process,
+STRONGSWAN_CONF, logger policy, package side effects, VICI writers,
+file-origin durability or continued exclusivity. Those separate gates
+must be proved in a disposable authorized operational environment before
+the accepted native-exclusive runtime can be activated. No architecture
+change or new Owner decision is introduced.
+
+Systemd property references:
+- https://www.freedesktop.org/wiki/Software/systemd/dbus/
+- https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html

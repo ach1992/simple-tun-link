@@ -340,7 +340,11 @@ Default backend.
   source-only service-unit publisher now demonstrates no-clobber, private
   receipt/inode-xattr-bound origin checks in fixtures only, with no operational
   call path. Neither matching bytes nor even a valid origin snapshot attests
-  the unit loaded by PID 1. Any future activation must independently gate
+  the unit loaded by PID 1. A subsequent read-only systemd manager observation
+  checks the reported canonical loaded fragment, name/alias set, source,
+  drop-ins, transient status and pending reload; even a matching snapshot is
+  not effective ExecStart/Environment, process, logger or ownership proof.
+  Any future activation must independently gate
   distro package effects, all loaded
   unit overrides, VICI writers, IKE ports and kernel resources.
 

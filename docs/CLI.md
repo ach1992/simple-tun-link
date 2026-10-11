@@ -601,7 +601,7 @@ version/help without a running daemon. A successful help probe establishes
 only executable availability, **never daemon or IPsec readiness**.
 Upstream dispatch: [strongSwan 5.9.13](https://github.com/strongswan/strongswan/blob/5.9.13/src/swanctl/command.c)
 and [6.0.1](https://github.com/strongswan/strongswan/blob/6.0.1/src/swanctl/command.c).
-On supported Debian/Ubuntu builds the doctor uses fixed system binary paths (`/usr/bin/pgrep`, `/usr/sbin/swanctl`,
+On supported Debian/Ubuntu builds the doctor uses fixed system binary paths (`/usr/bin/pgrep`, `/usr/bin/systemctl`, `/usr/sbin/swanctl`,
 `/sbin/ip`) rather than executing tools found through a user-controlled
 `PATH`; other layouts require a validated distro adapter, not a fallback.
 
@@ -633,12 +633,29 @@ or incomplete publication), unknown/native_service_unit_origin_unverified
 a positive result is not a systemd operational admission. Schema stays 1,
 activation_allowed remains false and doctor exit code remains 4.
 
+The additional `name:"native_systemd_loaded_unit"` is a read-only
+`/usr/bin/systemctl --system --no-pager show --all --property=...`
+observation of PID 1's *reported* unit identity. It requires a complete,
+bounded property snapshot: exact canonical ID/sole name and fragment path,
+`LoadState=loaded`, `UnitFileState=static`, no `Following`, `SourcePath`,
+`DropInPaths`, transient identity or pending daemon reload. Results:
+`observed/native_systemd_unit_loaded_snapshot` (manager metadata only),
+`blocked/native_systemd_unit_not_loaded` (no loaded unit),
+`blocked/native_systemd_unit_conflict` (foreign/overridden/masked/stale),
+and `unknown/native_systemd_unit_unverified` (incomplete/unavailable manager
+metadata). The command never invokes enable/start/reload; raw manager output
+and errors are not returned. It does **not** attest that bytes/origin match,
+effective `ExecStart`/`Environment`, `STRONGSWAN_CONF`, package, process,
+CFG logging, VICI writer rights or uninterrupted ownership. A changed
+manager state after observation cannot be ruled out. IPsec remains blocked.
+
 Results: `observed/native_service_unit_bytes_verified` (file snapshot only),
 `blocked/native_service_unit_not_provisioned` (absent),
 `blocked/native_service_unit_untrusted` (conflict, unsafe path or bytes) and
 `unknown/native_service_unit_unverified` (incomplete inspection). A positive
-result is **not** STL-origin publication, loaded systemd unit/drop-in/generator
-inspection, effective environment or secure logger attestation. The unit is
+result is **not** STL-origin publication or effective loaded-systemd,
+process/environment or secure logger attestation; the separate manager
+observation above is only a time-local metadata snapshot. The unit is
 NOT published, installed or wired into Engine, CLI or installer; no operator
 should copy it onto a live host. Future package installation must account for
 distro-managed units and maintainer-script service side effects before any

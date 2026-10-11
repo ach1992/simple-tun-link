@@ -28,6 +28,8 @@ func (p *ipsecCLIProbe) Run(_ context.Context, name string, args ...string) (lin
 		return linux.CommandResult{}, nil
 	case strings.HasPrefix(key, "/usr/bin/pgrep -x "):
 		return linux.CommandResult{}, &linux.CommandError{Command: "pgrep", ExitCode: 1}
+	case name == "/usr/bin/systemctl" && key == "/usr/bin/systemctl --system --no-pager show --all --property=Id,Names,Following,LoadState,FragmentPath,SourcePath,DropInPaths,NeedDaemonReload,Transient,UnitFileState -- simple-tun-link-ipsec.service":
+		return linux.CommandResult{Stdout: []byte("Id=simple-tun-link-ipsec.service\nNames=simple-tun-link-ipsec.service\nFollowing=\nLoadState=not-found\nFragmentPath=\nSourcePath=\nDropInPaths=\nNeedDaemonReload=no\nTransient=no\nUnitFileState=\n")}, nil
 	case key == "/usr/sbin/swanctl --help":
 		return linux.CommandResult{}, errors.New("PSK=DO_NOT_PRINT")
 	case key == "/sbin/ip -json -details link show type xfrm":
@@ -52,7 +54,7 @@ func TestIPsecDoctorOperatorAndMachineDiagnostics(t *testing.T) {
 		t.Fatal(err)
 	}
 	if report.ActivationAllowed || report.SchemaVersion != 1 || report.Backend != "ipsec" ||
-		report.RuntimeMode != "native_exclusive" || len(report.Checks) != 10 {
+		report.RuntimeMode != "native_exclusive" || len(report.Checks) != 11 {
 		t.Fatalf("missing stable fail-closed diagnostic envelope: %+v", report)
 	}
 	if strings.Contains(stdout.String(), "DO_NOT_PRINT") || !strings.Contains(stdout.String(), "reason_code") {
@@ -67,8 +69,8 @@ func TestIPsecDoctorOperatorAndMachineDiagnostics(t *testing.T) {
 		t.Fatalf("operator did not receive actionable failure: code %d output %q", code, stdout.String())
 	}
 	for _, call := range probe.calls {
-		if strings.Contains(call, "load-") || strings.Contains(call, "systemctl") ||
-			strings.Contains(call, "ip link add") || strings.Contains(call, "swanctl --load") {
+		if strings.Contains(call, "load-") || strings.Contains(call, "ip link add") || strings.Contains(call, "swanctl --load") ||
+			(strings.Contains(call, "systemctl") && call != "/usr/bin/systemctl --system --no-pager show --all --property=Id,Names,Following,LoadState,FragmentPath,SourcePath,DropInPaths,NeedDaemonReload,Transient,UnitFileState -- simple-tun-link-ipsec.service") {
 			t.Fatalf("doctor used effectful command: %q", call)
 		}
 	}
