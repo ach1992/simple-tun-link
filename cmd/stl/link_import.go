@@ -13,9 +13,9 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
-// setupLinkConfirmation identifies the exact reviewed plaintext setup URL.
-// It is an operator confirmation token, NOT a signature, MAC or proof of
-// the sender's identity/trustworthiness.
+// setupLinkConfirmation binds the exact reviewed setup URL, including a
+// SENSITIVE WireGuard v3 handoff. This digest is an operator confirmation
+// token, NOT a signature, MAC or proof of sender identity or safe delivery.
 func setupLinkConfirmation(encoded string) string {
 	sum := sha256.Sum256([]byte(encoded))
 	return fmt.Sprintf("%x", sum)

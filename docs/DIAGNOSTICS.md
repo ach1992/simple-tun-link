@@ -169,8 +169,10 @@ underlay/credentials fail rather than assuming another overhead.
 bytes), and the common versioned MTU/quality report. A handshake timestamp
 of zero means no handshake was observed **at pre-probe inspection**; neither
 the interface's existence nor a timestamp alone proves end-to-end traffic.
-Authenticated bidirectional traffic and cross-backend coexistence still
-require separately authorized **real WireGuard kernel** acceptance (#6/#12).
+A focused, separately authorized real-kernel E2E on a disposable Debian
+host verified bidirectional WireGuard traffic, active diagnosis and GRE
+coexistence (PR #53 / Issue #12); this does **not** establish all failure,
+recovery, multi-peer or distro/architecture release acceptance.
 No private key or SENSITIVE setup URL is inspected or serialized.
 
 ## MTU policy
@@ -260,8 +262,12 @@ This Linux adapter does not complete Issue #9. Still required:
   backend exists (#7);
 - Safe MTU application through the Engine, never from health observation;
 - Optional throughput path (when tooling is present and explicitly requested);
-- Live namespace Link Address/PMTU, WireGuard peer traffic, multi-Link isolation,
-  restart/reapply and release E2E evidence (#6/#12).
+- Additional error/rollback and distinct-peer cases, real systemd
+  restart/reapply, and supported-environment release E2E evidence (#6/#12).
+  Focused real Link Address/PMTU, WireGuard peer traffic and GRE coexistence
+  evidence is already recorded in PR #53; do not redo it by default.
 
 Keep Issue #9 OPEN until remaining acceptance is genuinely completed.
-Unprivileged mock-runner tests are **not** WireGuard runtime acceptance.
+Unprivileged mock-runner tests alone are **not** WireGuard runtime
+acceptance; the existing focused real-kernel evidence is separate from the
+remaining release-level matrix.

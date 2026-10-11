@@ -449,8 +449,12 @@ and redacted versioned error. When an operation may have changed host or
 committed state, its JSON indicates `outcome: "unconfirmed"` and
 `reconciliation_required: true`, with any Engine-provided partial
 result in snake_case. These are conservative reconciliation signals,
-not a claimed successful apply. Do not retry a failed stateful operation
-blindly; inspect `link list` and `link status` first.
+not a claimed successful apply. Some current early CLI/Engine rejections also
+use this conservative envelope before any verified host mutation; do not
+interpret the flag as proof that a change occurred. Issue #9/#10 owns a
+future evidence-backed no-effect versus indeterminate outcome distinction
+without a silent breaking change to schema v1. Do not retry a failed
+stateful operation blindly; inspect `link list` and `link status` first.
 
 Exit codes remain 0 on verified Engine success; 2 for invalid input/usage,
 4 for unsupported backend, and 1 for other operational, state or rollback
@@ -458,11 +462,12 @@ failures. The commands use a five-minute signal-aware deadline and the
 Engine's cancellation-detached, bounded owned rollback. No global tuning
 or unrelated host networking changes are permitted by this CLI layer.
 
-The GRE Native guided Create and GRE/IPIP plaintext Import delegate to these
-commands. Other backend Create workflows, protected secret-bearing recipient
-import, complete interactive management, privileged peer traffic, and
-release E2E acceptance remain separately tracked; a successful CLI test does
-not establish those outcomes.
+The GRE Native guided Create, the guided WireGuard sender/Resume and
+confirmed GRE/IPIP/WireGuard v3 recipient Import reuse the canonical Engine
+instead of a separate menu lifecycle. Their focused real-kernel evidence is
+recorded under Issue #12; full recovery, IPsec, release-environment and
+operator UX acceptance remain separately tracked. A successful source/CLI
+test alone does not establish peer traffic or release readiness.
 
 ## Explicit plaintext GRE/IPIP setup-link export (Issue #8)
 
@@ -496,10 +501,10 @@ not retained. WireGuard uses the separate one-time Create/Resume
 workflow. Export never silently omits private keys/PSKs to manufacture a broken setup link. Confirm the configuration
 via the existing `link preview` before a separate authorized apply
 step. Export never applies a Link; the explicit `link import` command
-described below can apply only a credential-free GRE/IPIP offer after
-exact-payload confirmation.
+described below can apply either a credential-free GRE/IPIP offer or a
+configured WireGuard v3 Quick Link after exact-payload confirmation.
 
-## Explicit plaintext setup-link import (Issues #8/#10)
+## Confirmed GRE/IPIP and WireGuard v3 setup-link import (Issues #8/#10)
 
 A receiving operator first reviews the inverted Link details and the
 confirmation token; preview is **strictly read-only**:
