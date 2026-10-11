@@ -416,9 +416,18 @@ name; the relevant parent directories are synced. EEXIST, symlinks,
 untrusted ancestry, absent xattrs, unsupported atomics, prepared-only
 receipts, tampered unit bytes, replaced inodes, unsafe permissions and
 ambiguous crashes never authorize overwrite, replay or adoption.
-Two fixed, non-service staging names prevent a pre-receipt interruption
-from being silently forgotten: their continued presence blocks publication
-and even read-only missing/vacancy classification until manual reconciliation.
+The stage inode's contents and xattr are fsynced and its identity
+validated; critically, **its containing systemd directory is also fsynced
+before any pre-receipt crash point or receipt creation**. Then the receipt
+is fsynced, atomically published and its directory fsynced before the
+canonical no-replace rename; the systemd directory is fsynced once more
+after canonical publication. Two fixed, non-service staging names make
+a pre-receipt interruption discoverable when all preceding durability
+operations have succeeded and the filesystem honors those operations:
+their continued presence blocks publication and even read-only
+missing/vacancy classification until manual reconciliation. Any failed
+required file/directory fsync leaves persistence uncertain and fails closed;
+an on-disk fixture is not proof of power-loss recovery on all filesystems.
 
 The additive tenth stl doctor ipsec check native_service_unit_origin
 reports a verified receipt snapshot but never proves PID 1 loaded the

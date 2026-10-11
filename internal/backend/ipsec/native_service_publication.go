@@ -36,8 +36,9 @@ type nativeUnitOriginReceipt struct {
 }
 
 type nativeUnitPublishHooks struct {
-	afterStage      func() error // test-only crash before receipt commit
-	afterReceipt    func() error // test-only crash/race injection
+	stageDirSync    func(int) error // test-only fsync ordering/failure seam; nil uses unix.Fsync
+	afterStage      func() error    // test-only crash before receipt commit
+	afterReceipt    func() error    // test-only crash/race injection
 	beforeCanonical func() error
 	afterCanonical  func() error
 	nonceSource     io.Reader // nil means crypto/rand.Reader
@@ -163,7 +164,21 @@ func publishNativeUnitAt(root string, owner uint32, hooks nativeUnitPublishHooks
 	}
 	var source unix.Stat_t
 	if unix.Fstat(fd, &source) != nil || !nativeRegularIdentity(source, owner, len(nativeExclusiveServiceUnitV1)) ||
+		!nativePathMatchesFD(uDir, unitStage, fd, source) ||
 		!trustedNativeUnitChain(unitChain, owner) || !stateChain.trusted(owner) {
+		return errNativePublicationUnknown
+	}
+	// Fsync of the staged file persists its contents/xattr, NOT its directory
+	// entry. Persist the fixed pending name before the pre-receipt crash seam
+	// and before writing a receipt so a successful filesystem transaction
+	// cannot reboot into an apparent, falsely vacant service-unit state.
+	// If the directory sync fails, durability is UNKNOWN; do not proceed,
+	// claim a durable stage, retry or remove the ambiguous temporary file.
+	stageDirSync := unix.Fsync
+	if hooks.stageDirSync != nil {
+		stageDirSync = hooks.stageDirSync
+	}
+	if stageDirSync(uDir) != nil {
 		return errNativePublicationUnknown
 	}
 	if hooks.afterStage != nil && hooks.afterStage() != nil {

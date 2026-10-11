@@ -97,8 +97,14 @@ renameat2(RENAME_NOREPLACE), inode user.* xattrs and successful file and
 directory fsync. Unlike the config it stages a private 0600 unit in the
 root-owned /etc/systemd/system directory and records its origin under
 /var/lib/simple-tun-link/ipsec. Any preexisting unit is a conflict, even
-when byte-identical, and interrupted transactions including a retained
-fixed-name pre-receipt stage require manual reconciliation. The additional read-only native_service_unit_origin
+when byte-identical. The unit-stage file and its parent directory
+must both fsync successfully **before** a pre-receipt interruption can
+be described as leaving a durably discoverable fixed-name stage.
+Subsequently, the receipt file/state directory and final unit directory
+must be synced at their respective publication boundaries. A failed
+fsync leaves persistence unknown and fails closed; interrupted or
+observably retained stages require manual reconciliation. These fixtures
+do not simulate a real power failure or certify all filesystem semantics. The additional read-only native_service_unit_origin
 observation does not establish an effective systemd unit, package
 compatibility, service ownership or operational acceptance.
 The profile has not been installed or exercised via systemd, and package

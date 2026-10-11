@@ -433,10 +433,23 @@ versioned receipt in /var/lib/simple-tun-link/ipsec *before* atomic
 renameat2(RENAME_NOREPLACE) exposes the new name. Both parent directories
 are fsynced. Unsupported xattr/atomic/fsync support fails closed;
 preexisting units are never overwritten or adopted, even if byte-identical.
-Fixed no-replace staging names make even a crash before receipt
-publication observable; a staged-only artifact blocks both future
-publication and any doctor vacancy claim. Partial transactions require
-manual reconciliation, never blind retry, cleanup or service start. The companion read-only doctor check
+After the staged unit's contents/xattr have been written and its inode
+fsync and identity checks succeed, the provisioner explicitly fsyncs the
+containing systemd unit directory **before** the pre-receipt
+interruption point and before any origin-receipt creation. This ordering
+makes the fixed pending pathname durable across a crash **only when both
+file and directory synchronization succeed and the filesystem honors
+their documented semantics**. The private receipt is then fsynced and its
+parent directory fsynced before the no-replace canonical rename; the
+systemd unit directory is fsynced again after that rename.
+
+Fixed no-replace staging names prevent a successful pre-receipt stage
+transaction from being silently forgotten: their continued presence
+blocks future publication and any doctor vacancy claim. If any required
+file/directory fsync fails, durability is unknown and the operation
+returns a fail-closed error; it must never claim a durable pending name
+or automatically retry, clean up, adopt or start a service. Fixture tests
+check ordering and failure behavior, **not** real power-loss persistence. The companion read-only doctor check
 native_service_unit_origin verifies only a time-local receipt, token, inode
 and exact source bytes. The token is not an unforgeable root adversary
 credential; even a positive result cannot prove PID 1's actual loaded

@@ -118,6 +118,116 @@ func TestNativeUnitPublicationNeverAdoptsForeignState(t *testing.T) {
 	}
 }
 
+// Regression for R1: fsync(unit stage fd) does not durably name that inode.
+// The stage directory must be synced before the afterStage interruption seam
+// and before a receipt is even attempted. The fixture can prove syscall
+// ordering and fail-closed errors, NOT simulate an actual power-loss reboot.
+func TestNativeUnitPublicationPreReceiptDirectorySyncGate(t *testing.T) {
+	t.Run("successful directory sync precedes pre-receipt crash hook", func(t *testing.T) {
+		root, unit, receipt, owner := nativeUnitPublicationFixture(t)
+		synced, calledAfter := false, false
+		err := publishNativeUnitAt(root, owner, nativeUnitPublishHooks{
+			stageDirSync: func(fd int) error {
+				if err := unix.Fsync(fd); err != nil {
+					return err
+				}
+				synced = true
+				return nil
+			},
+			afterStage: func() error {
+				calledAfter = true
+				if !synced {
+					t.Fatal("reached pre-receipt interruption seam before fsync of unit directory")
+				}
+				return errors.New("simulate interruption after durable directory sync")
+			},
+		})
+		if !errors.Is(err, errNativePublicationUnknown) || !synced || !calledAfter {
+			t.Fatalf("unexpected pre-receipt sync/interruption state: err=%v synced=%t hook=%t", err, synced, calledAfter)
+		}
+		if _, err := os.Lstat(filepath.Join(filepath.Dir(unit), nativeUnitStageName)); err != nil {
+			t.Fatalf("synced stage not observable in current filesystem: %v", err)
+		}
+		if _, err := os.Lstat(unit); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("canonical unit created before receipt: %v", err)
+		}
+		if _, err := os.Lstat(receipt); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("receipt created before interruption point: %v", err)
+		}
+		if got := inspectNativeUnitOriginAt(root, owner); got != NativeOriginConflict {
+			t.Fatalf("stage-only state must block vacancy: %s", got)
+		}
+	})
+
+	t.Run("failed directory sync is fail-closed and does not claim persistence", func(t *testing.T) {
+		root, unit, receipt, owner := nativeUnitPublicationFixture(t)
+		afterStageCalled := false
+		afterReceiptCalled := false
+		syncAttempted := false
+		err := publishNativeUnitAt(root, owner, nativeUnitPublishHooks{
+			stageDirSync: func(fd int) error {
+				if fd < 0 {
+					t.Fatal("invalid directory fd")
+				}
+				syncAttempted = true
+				return errors.New("injected unit-stage directory fsync error")
+			},
+			afterStage: func() error {
+				afterStageCalled = true
+				return nil
+			},
+			afterReceipt: func() error {
+				afterReceiptCalled = true
+				return nil
+			},
+		})
+		if !errors.Is(err, errNativePublicationUnknown) || !syncAttempted ||
+			afterStageCalled || afterReceiptCalled {
+			t.Fatalf("fsync failure passed receipt boundary: err=%v sync=%t stage=%t receipt=%t",
+				err, syncAttempted, afterStageCalled, afterReceiptCalled)
+		}
+		if _, err := os.Lstat(receipt); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("receipt published despite failed stage directory sync: %v", err)
+		}
+		if _, err := os.Lstat(unit); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("canonical unit published despite failed stage directory sync: %v", err)
+		}
+		// The staged name is visible on this still-running filesystem, but
+		// a reboot is NOT modeled: after fsync failure its durability is unknown.
+		if _, err := os.Lstat(filepath.Join(filepath.Dir(unit), nativeUnitStageName)); err != nil {
+			t.Fatalf("unknown failure should not blindly delete staged data: %v", err)
+		}
+		if err := publishNativeUnitAt(root, owner, nativeUnitPublishHooks{}); !errors.Is(err, errNativePublicationConflict) {
+			t.Fatalf("ambiguous stage was automatically retried/adopted: %v", err)
+		}
+	})
+
+	t.Run("receipt is never attempted before stage directory sync", func(t *testing.T) {
+		root, _, _, owner := nativeUnitPublicationFixture(t)
+		synced, reachedReceipt := false, false
+		err := publishNativeUnitAt(root, owner, nativeUnitPublishHooks{
+			stageDirSync: func(fd int) error {
+				if err := unix.Fsync(fd); err != nil {
+					return err
+				}
+				synced = true
+				return nil
+			},
+			afterReceipt: func() error {
+				reachedReceipt = true
+				if !synced {
+					t.Fatal("receipt committed before durable stage directory entry")
+				}
+				return errors.New("stop after receipt")
+			},
+		})
+		if !errors.Is(err, errNativePublicationPending) || !synced || !reachedReceipt {
+			t.Fatalf("unexpected ordered receipt failure: err=%v stageSync=%t receipt=%t",
+				err, synced, reachedReceipt)
+		}
+	})
+}
+
 func TestNativeUnitPublicationDetectsPreReceiptCrashAndPendingArtifacts(t *testing.T) {
 	t.Run("crash after stage before receipt", func(t *testing.T) {
 		root, unit, receipt, owner := nativeUnitPublicationFixture(t)
