@@ -14,10 +14,7 @@ cd "$source_root"
 [[ -f go.mod && -z "$(git status --porcelain)" ]] || {
   echo "REFUSED: source must be committed and clean" >&2; exit 2;
 }
-workdir="$(mktemp -d /tmp/stl-gre-multipeer.XXXXXXXX)"
-suffix="${workdir##*.}"
-ns_a="stlm${suffix}a"; ns_b="stlm${suffix}b"; ns_c="stlm${suffix}c"
-created_a=0; created_b=0; created_c=0
+# Do all fallible read-only host baselines before allocating test resources.
 host_route_before="$(ip -4 route show default)"
 host_input_before="$(iptables -S INPUT)"
 host_primary_if="$(ip -4 route show default | awk 'NR==1 {for (i=1; i<=NF; i++) if ($i=="dev") {print $(i+1); exit}}')"
@@ -25,6 +22,10 @@ host_primary_before=""
 if [[ -n "$host_primary_if" ]]; then
   host_primary_before="$(ip -json address show dev "$host_primary_if")"
 fi
+workdir="$(mktemp -d /tmp/stl-gre-multipeer.XXXXXXXX)"
+suffix="${workdir##*.}"
+ns_a="stlm${suffix}a"; ns_b="stlm${suffix}b"; ns_c="stlm${suffix}c"
+created_a=0; created_b=0; created_c=0
 cleanup() {
   local status="$1" ns
   trap - EXIT INT TERM
@@ -126,7 +127,15 @@ traffic_pair() {
   echo "GRE_${pair^^}_BIDIRECTIONAL=PASS"
 }
 owned_rule() {
-  ip netns exec "$1" iptables -w 5 -S INPUT | grep -F -- "stl:$2:" || true
+  local listing line
+  listing="$(ip netns exec "$1" iptables -w 5 -S INPUT)" || {
+    echo "FAIL: cannot inspect owned firewall inventory in $1" >&2
+    return 1
+  }
+  while IFS= read -r line; do
+    [[ "$line" == *"stl:$2:"* ]] && printf '%s\n' "$line"
+  done <<< "$listing"
+  return 0
 }
 assert_rule_count() {
   local n
