@@ -416,6 +416,9 @@ name; the relevant parent directories are synced. EEXIST, symlinks,
 untrusted ancestry, absent xattrs, unsupported atomics, prepared-only
 receipts, tampered unit bytes, replaced inodes, unsafe permissions and
 ambiguous crashes never authorize overwrite, replay or adoption.
+Two fixed, non-service staging names prevent a pre-receipt interruption
+from being silently forgotten: their continued presence blocks publication
+and even read-only missing/vacancy classification until manual reconciliation.
 
 The additive tenth stl doctor ipsec check native_service_unit_origin
 reports a verified receipt snapshot but never proves PID 1 loaded the

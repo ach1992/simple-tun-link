@@ -433,8 +433,10 @@ versioned receipt in /var/lib/simple-tun-link/ipsec *before* atomic
 renameat2(RENAME_NOREPLACE) exposes the new name. Both parent directories
 are fsynced. Unsupported xattr/atomic/fsync support fails closed;
 preexisting units are never overwritten or adopted, even if byte-identical.
-Partial transactions require manual reconciliation, never blind retry,
-cleanup or service start. The companion read-only doctor check
+Fixed no-replace staging names make even a crash before receipt
+publication observable; a staged-only artifact blocks both future
+publication and any doctor vacancy claim. Partial transactions require
+manual reconciliation, never blind retry, cleanup or service start. The companion read-only doctor check
 native_service_unit_origin verifies only a time-local receipt, token, inode
 and exact source bytes. The token is not an unforgeable root adversary
 credential; even a positive result cannot prove PID 1's actual loaded

@@ -19,10 +19,12 @@ import (
 // calls this primitive. These paths and their modes are NOT service ownership,
 // activation, startup, package-management or deletion permissions.
 const (
-	nativeUnitOriginName  = "simple-tun-link-ipsec.service.origin"
-	nativeUnitOriginXattr = "user.simple_tun_link.ipsec_unit_origin"
-	nativeUnitOriginLimit = 512
-	nativeUnitName        = "simple-tun-link-ipsec.service"
+	nativeUnitOriginName       = "simple-tun-link-ipsec.service.origin"
+	nativeUnitOriginXattr      = "user.simple_tun_link.ipsec_unit_origin"
+	nativeUnitOriginLimit      = 512
+	nativeUnitName             = "simple-tun-link-ipsec.service"
+	nativeUnitStageName        = ".stl-ipsec-unit.pending"
+	nativeUnitReceiptStageName = ".stl-ipsec-unit-receipt.pending"
 )
 
 type nativeUnitOriginReceipt struct {
@@ -34,6 +36,7 @@ type nativeUnitOriginReceipt struct {
 }
 
 type nativeUnitPublishHooks struct {
+	afterStage      func() error // test-only crash before receipt commit
 	afterReceipt    func() error // test-only crash/race injection
 	beforeCanonical func() error
 	afterCanonical  func() error
@@ -119,6 +122,17 @@ func publishNativeUnitAt(root string, owner uint32, hooks nativeUnitPublishHooks
 	if err := nativeMustBeAbsent(sDir, nativeUnitOriginName); err != nil {
 		return err
 	}
+	// Fixed private staging names make a crash BEFORE receipt publication
+	// observable on the next attempt; never orphan a random .tmp inode and
+	// silently try a new nonce after an interrupted transaction.
+	for _, pending := range []struct {
+		dir  int
+		name string
+	}{{uDir, nativeUnitStageName}, {sDir, nativeUnitReceiptStageName}} {
+		if err := nativeMustBeAbsent(pending.dir, pending.name); err != nil {
+			return err
+		}
+	}
 	if !trustedNativeUnitChain(unitChain, owner) || !stateChain.trusted(owner) {
 		return errNativePublicationConflict
 	}
@@ -131,10 +145,13 @@ func publishNativeUnitAt(root string, owner uint32, hooks nativeUnitPublishHooks
 		return errNativePublicationUnknown
 	}
 	token := hex.EncodeToString(nonce[:])
-	unitStage := ".stl-ipsec-unit-" + token + ".tmp"
-	receiptStage := ".stl-ipsec-unit-receipt-" + token + ".tmp"
+	unitStage := nativeUnitStageName
+	receiptStage := nativeUnitReceiptStageName
 	fd, err := unix.Openat(uDir, unitStage, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
 	if err != nil {
+		if errors.Is(err, unix.EEXIST) {
+			return errNativePublicationConflict
+		}
 		return errNativePublicationUnknown
 	}
 	defer unix.Close(fd)
@@ -149,6 +166,9 @@ func publishNativeUnitAt(root string, owner uint32, hooks nativeUnitPublishHooks
 		!trustedNativeUnitChain(unitChain, owner) || !stateChain.trusted(owner) {
 		return errNativePublicationUnknown
 	}
+	if hooks.afterStage != nil && hooks.afterStage() != nil {
+		return errNativePublicationUnknown
+	}
 	receipt := nativeUnitOriginReceipt{
 		SchemaVersion: 1, Nonce: token, Device: uint64(source.Dev), Inode: source.Ino,
 		UnitSHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(nativeExclusiveServiceUnitV1))),
@@ -160,6 +180,9 @@ func publishNativeUnitAt(root string, owner uint32, hooks nativeUnitPublishHooks
 	wire = append(wire, 10)
 	rfd, err := unix.Openat(sDir, receiptStage, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
 	if err != nil {
+		if errors.Is(err, unix.EEXIST) {
+			return errNativePublicationConflict
+		}
 		return errNativePublicationUnknown
 	}
 	defer unix.Close(rfd)
@@ -257,6 +280,16 @@ func inspectNativeUnitOriginAt(root string, owner uint32) NativeOriginAssessment
 			return NativeOriginUnverified
 		}
 	}
+	if uerr == nil {
+		if status := nativeUnitPendingStatus(uChain.parent(), nativeUnitStageName); status != NativeOriginMissing {
+			return status
+		}
+	}
+	if serr == nil {
+		if status := nativeUnitPendingStatus(sChain.parent(), nativeUnitReceiptStageName); status != NativeOriginMissing {
+			return status
+		}
+	}
 	// Absence is safe only when BOTH sides are absent. Any stray canonical
 	// unit or private prepared receipt (including after an interrupted write)
 	// blocks adoption, even when the opposite parent does not exist.
@@ -349,6 +382,19 @@ func inspectNativeUnitOriginAt(root string, owner uint32) NativeOriginAssessment
 }
 
 func nativeUnitOriginAbsentSide(dir int, name string) NativeOriginAssessment {
+	err := nativeMustBeAbsent(dir, name)
+	if err == nil {
+		return NativeOriginMissing
+	}
+	if errors.Is(err, errNativePublicationConflict) {
+		return NativeOriginConflict
+	}
+	return NativeOriginUnverified
+}
+
+// A fixed-name staged artifact is an interrupted publication, never a
+// canonical vacancy signal. This reader does not delete or resume it.
+func nativeUnitPendingStatus(dir int, name string) NativeOriginAssessment {
 	err := nativeMustBeAbsent(dir, name)
 	if err == nil {
 		return NativeOriginMissing

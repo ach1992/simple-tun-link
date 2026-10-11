@@ -97,8 +97,8 @@ renameat2(RENAME_NOREPLACE), inode user.* xattrs and successful file and
 directory fsync. Unlike the config it stages a private 0600 unit in the
 root-owned /etc/systemd/system directory and records its origin under
 /var/lib/simple-tun-link/ipsec. Any preexisting unit is a conflict, even
-when byte-identical, and interrupted transactions require manual
-reconciliation. The additional read-only native_service_unit_origin
+when byte-identical, and interrupted transactions including a retained
+fixed-name pre-receipt stage require manual reconciliation. The additional read-only native_service_unit_origin
 observation does not establish an effective systemd unit, package
 compatibility, service ownership or operational acceptance.
 The profile has not been installed or exercised via systemd, and package

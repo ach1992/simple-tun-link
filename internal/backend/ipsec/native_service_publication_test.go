@@ -118,6 +118,59 @@ func TestNativeUnitPublicationNeverAdoptsForeignState(t *testing.T) {
 	}
 }
 
+func TestNativeUnitPublicationDetectsPreReceiptCrashAndPendingArtifacts(t *testing.T) {
+	t.Run("crash after stage before receipt", func(t *testing.T) {
+		root, unit, receipt, owner := nativeUnitPublicationFixture(t)
+		err := publishNativeUnitAt(root, owner, nativeUnitPublishHooks{afterStage: func() error {
+			return errors.New("interrupt before receipt")
+		}})
+		if !errors.Is(err, errNativePublicationUnknown) {
+			t.Fatalf("pre-receipt interruption: %v", err)
+		}
+		if _, err := os.Lstat(unit); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("canonical unit unexpectedly created: %v", err)
+		}
+		if _, err := os.Lstat(receipt); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("receipt unexpectedly published: %v", err)
+		}
+		if _, err := os.Lstat(filepath.Join(filepath.Dir(unit), nativeUnitStageName)); err != nil {
+			t.Fatalf("prepared stage must be retained for operator reconciliation: %v", err)
+		}
+		if got := inspectNativeUnitOriginAt(root, owner); got != NativeOriginConflict {
+			t.Fatalf("prepared-only stage interpreted as vacancy: %s", got)
+		}
+		if err := publishNativeUnitAt(root, owner, nativeUnitPublishHooks{}); !errors.Is(err, errNativePublicationConflict) {
+			t.Fatalf("blind retry adopted or ignored staged file: %v", err)
+		}
+	})
+	for _, name := range []string{nativeUnitStageName, nativeUnitReceiptStageName} {
+		t.Run(name, func(t *testing.T) {
+			root, unit, receipt, owner := nativeUnitPublicationFixture(t)
+			if err := os.MkdirAll(filepath.Dir(receipt), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			dir := filepath.Dir(unit)
+			if name == nativeUnitReceiptStageName {
+				dir = filepath.Dir(receipt)
+			}
+			foreignStage := filepath.Join(dir, name)
+			if err := os.WriteFile(foreignStage, []byte("foreign prepared stage"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if got := inspectNativeUnitOriginAt(root, owner); got != NativeOriginConflict {
+				t.Fatalf("staged-only foreign artifact granted vacancy: %s", got)
+			}
+			if err := publishNativeUnitAt(root, owner, nativeUnitPublishHooks{}); !errors.Is(err, errNativePublicationConflict) {
+				t.Fatalf("foreign staged name overwritten: %v", err)
+			}
+			bytes, err := os.ReadFile(foreignStage)
+			if err != nil || string(bytes) != "foreign prepared stage" {
+				t.Fatalf("foreign staged object altered: %v", err)
+			}
+		})
+	}
+}
+
 func TestNativeUnitPublicationRaceAndInterruptionNeverAutoRecovers(t *testing.T) {
 	t.Run("canonical raced by foreign actor", func(t *testing.T) {
 		root, unit, _, owner := nativeUnitPublicationFixture(t)
