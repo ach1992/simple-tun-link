@@ -592,9 +592,15 @@ non-following `lstat`. It inspects bound UDP 500/4500 sockets in the
 **caller's current network namespace** through bounded read-only
 `/proc/net/udp` and `/proc/net/udp6` snapshots; it also checks
 `swanctl --help` and whether a read-only XFRM interface inventory
-can be obtained. Packaged strongSwan 5.9.13 and 6.0.1 support the
-read-only `swanctl --help` check (their `--version` exits 2), but help
-success is still only a tool observation, not proof of daemon readiness.
+can be obtained. In the tested **daemonless** Ubuntu 24.04 / strongSwan
+5.9.13 and Debian 13 / strongSwan 6.0.1 packages, `swanctl --version`
+returned exit 2 **because normal command dispatch first attempts a VICI
+connection**, not because the `version` command is unsupported. Global
+`swanctl --help` is handled before VICI connection and prints the local
+version/help without a running daemon. A successful help probe establishes
+only executable availability, **never daemon or IPsec readiness**.
+Upstream dispatch: [strongSwan 5.9.13](https://github.com/strongswan/strongswan/blob/5.9.13/src/swanctl/command.c)
+and [6.0.1](https://github.com/strongswan/strongswan/blob/6.0.1/src/swanctl/command.c).
 On supported Debian/Ubuntu builds the doctor uses fixed system binary paths (`/usr/bin/pgrep`, `/usr/sbin/swanctl`,
 `/sbin/ip`) rather than executing tools found through a user-controlled
 `PATH`; other layouts require a validated distro adapter, not a fallback.
