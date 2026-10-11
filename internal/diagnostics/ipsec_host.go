@@ -36,13 +36,13 @@ type IPsecHostReport struct {
 }
 
 func InspectIPsecHost(ctx context.Context, runner linux.Runner) (IPsecHostReport, error) {
-	return inspectIPsecHostWithInputs(ctx, runner, readIPsecPortInventory, os.Lstat, ipsec.InspectNativeExclusiveConfig)
+	return inspectIPsecHostWithInputs(ctx, runner, readIPsecPortInventory, os.Lstat, ipsec.InspectNativeExclusiveConfig, ipsec.InspectNativeExclusiveConfigOrigin)
 }
 
 // Both readers are test-injectable only within this package. Production uses
 // bounded local /proc and fixed-path Lstat; no daemon or service mutation.
-func inspectIPsecHostWithInputs(ctx context.Context, runner linux.Runner, ports ipsecPortReader, lstat servicePathLstat, config func() ipsec.NativeConfigAssessment) (IPsecHostReport, error) {
-	if ctx == nil || runner == nil || ports == nil || lstat == nil || config == nil {
+func inspectIPsecHostWithInputs(ctx context.Context, runner linux.Runner, ports ipsecPortReader, lstat servicePathLstat, config func() ipsec.NativeConfigAssessment, origin func() ipsec.NativeOriginAssessment) (IPsecHostReport, error) {
+	if ctx == nil || runner == nil || ports == nil || lstat == nil || config == nil || origin == nil {
 		return IPsecHostReport{}, fmt.Errorf("IPsec host inspector requires complete read-only dependencies")
 	}
 	if err := ctx.Err(); err != nil {
@@ -53,11 +53,12 @@ func inspectIPsecHostWithInputs(ctx context.Context, runner linux.Runner, ports 
 		SchemaVersion: 1,
 		Backend:       "ipsec",
 		RuntimeMode:   "native_exclusive",
-		Checks:        make([]IPsecHostCheck, 0, 7),
+		Checks:        make([]IPsecHostCheck, 0, 8),
 	}
 	report.Checks = append(report.Checks, inspectCharonProcesses(ctx, runner))
 	report.Checks = append(report.Checks, inspectStrongSwanServiceFiles(ctx, lstat))
 	report.Checks = append(report.Checks, inspectNativeExclusiveConfig(config))
+	report.Checks = append(report.Checks, inspectNativeExclusiveConfigOrigin(origin))
 	report.Checks = append(report.Checks, inspectIPsecIKEPorts(ctx, ports))
 	report.Checks = append(report.Checks, inspectIPsecCommand(ctx, runner, "/usr/sbin/swanctl", []string{"--help"},
 		"strongswan_tool", "strongswan_tool_observed", "strongswan_tool_unverified",

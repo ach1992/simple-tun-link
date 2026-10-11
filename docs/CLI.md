@@ -633,6 +633,22 @@ proof of `STRONGSWAN_CONF` selection or effective daemon CFG logging, nor
 a service, VICI, port, package or XFRM ownership permit. Future admission
 must prove those independently and revalidate them across restarts.
 
+The additive read-only `name:"native_config_origin"` check independently
+verifies a **durable prepared publication receipt** against the protected
+configuration inode, its unique on-inode origin xattr, reviewed SHA-256,
+root-private receipt bytes and current descriptor-pinned canonical path.
+Results are `observed/native_config_origin_observed` (receipt-bound snapshot),
+`blocked/native_config_origin_not_provisioned` (no receipt/config pair),
+`blocked/native_config_origin_conflict` (orphan receipt, foreign config,
+identity or permission drift), and `unknown/native_config_origin_unverified`
+(inaccessible or incomplete probe). No nonce, xattr, bytes, raw host error or
+untrusted pathname is emitted. The source-only, **unexported** no-clobber
+publisher is not called by CLI/Engine: `doctor` does not create the receipt.
+A successful receipt check is not authority to start strongSwan, load a PSK,
+control VICI, adopt a service, reserve IKE ports or remove XFRM resources.
+Root administrators outside STL are not serialized by the receipt; operational
+admission still needs fresh service/process/writer and kernel proof.
+
 The additional JSON check is `name:"ike_udp_ports"`. Its stable results are:
 `blocked/ike_udp_ports_observed` when UDP 500 or 4500 is already bound,
 `observed/ike_udp_ports_not_observed` when both inventory reads and parsing

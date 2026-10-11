@@ -21,7 +21,8 @@ func inspectIPsecDoctorFixture(ctx context.Context, runner linux.Runner) (IPsecH
 	}
 	return inspectIPsecHostWithInputs(ctx, runner, ipsecInventoryReader(files, nil), func(string) (os.FileInfo, error) {
 		return nil, os.ErrNotExist
-	}, func() ipsec.NativeConfigAssessment { return ipsec.NativeConfigMissing })
+	}, func() ipsec.NativeConfigAssessment { return ipsec.NativeConfigMissing },
+		func() ipsec.NativeOriginAssessment { return ipsec.NativeOriginMissing })
 }
 
 type ipsecDoctorRunner struct {
@@ -59,7 +60,7 @@ func TestIPsecDoctorReadOnlyAndNoFalseActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if report.SchemaVersion != 1 || report.Backend != "ipsec" || report.RuntimeMode != "native_exclusive" ||
-		report.ActivationAllowed || len(report.Checks) != 7 {
+		report.ActivationAllowed || len(report.Checks) != 8 {
 		t.Fatalf("false operational claim: %+v", report)
 	}
 	if c := checkByName(t, report, "daemon_process"); c.ReasonCode != "charon_process_not_observed" ||
@@ -71,6 +72,9 @@ func TestIPsecDoctorReadOnlyAndNoFalseActivation(t *testing.T) {
 	}
 	if c := checkByName(t, report, "native_config"); c.Status != "blocked" || c.ReasonCode != "native_config_not_provisioned" {
 		t.Fatalf("missing root-private config prerequisite: %+v", c)
+	}
+	if c := checkByName(t, report, "native_config_origin"); c.Status != "blocked" || c.ReasonCode != "native_config_origin_not_provisioned" {
+		t.Fatalf("missing durable receipt prerequisite: %+v", c)
 	}
 	if c := checkByName(t, report, "operational_runtime"); c.ReasonCode != "ipsec_runtime_not_registered" ||
 		c.Status != "blocked" || c.NextStep == "" {

@@ -340,6 +340,33 @@ identity, effective logging, VICI authorization and kernel owner gates.
 No effectful service or VICI writer has been added; Issues #7/#12 remain
 OPEN. This adds a preflight observation, not a new owner-level decision.
 
+## Prepared no-clobber native file publication and provenance checkpoint
+
+A source-only, unexported filesystem primitive now stages the **exact**
+reviewed `strongswan.conf` into a private, root-only future state path.
+The algorithm writes/fsyncs a unique 128-bit origin-token xattr on the
+original config inode, durably publishes a versioned 0600 receipt binding
+nonce + device/inode + fixed config SHA-256 **before** the canonical effect,
+then uses `renameat2(RENAME_NOREPLACE)` and parent `fsync`. Unsupported
+user xattrs, no-replace semantics or fsync fail closed; a preexisting
+canonical config is never replaced, even with identical bytes. Prepared
+receipt without matching config, interrupted publication, receipt/xattr
+replacement, changed paths and altered bytes require explicit operator
+reconciliation. No blind rollback/automatic recovery or adoption exists.
+
+`stl doctor ipsec` now also exposes additive, **read-only**
+`native_config_origin` classifications, opening both receipt and config
+under non-following pinned private directories and validating the original
+inode, receipt/xattr token and canonical content. This provides bounded
+STL-origin **publication evidence**, not an unforgeable credential against
+arbitrary root writers. Even a positive receipt snapshot cannot prove
+service/package/process ownership, `STRONGSWAN_CONF` selection, effective
+CFG logging, VICI writer isolation, stable UDP 500/4500 ownership or XFRM
+resources. There is deliberately **no production call site** for the
+config writer and no service/VICI/kernel effect. This new code does not
+expand acceptance or re-authorize any rejected unsafe daemon operation;
+operational gates in Issue #7 and traffic gates in #12 remain OPEN.
+
 The observational `stl doctor ipsec` now detects currently bound
 UDP 500/4500 sockets via bounded, strictly parsed procfs IPv4/IPv6
 tables from its own network namespace, with stable `blocked`,

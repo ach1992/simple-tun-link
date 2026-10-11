@@ -75,6 +75,17 @@ canonical storage and exact reviewed source bytes. It can report unknown
 when invoked without access to that protected path. Successful source
 file attestation is not installed-package compatibility, durable
 STL-created inode proof, active logging attestation or service eligibility.
+The optional source-only native publication primitive needs a trusted,
+owner-private local filesystem supporting Linux
+`renameat2(RENAME_NOREPLACE)`, `user.*` inode xattrs and file/directory
+`fsync`; unsupported features fail closed. In unprivileged private-directory
+unit tests these primitives successfully stage and verify a no-clobber,
+receipt-bound fixed config, including failure/replacement scenarios. This
+is **not** a root-host provisioning, distro package, systemd startup,
+post-reboot or IKEv2/ESP/NAT-T compatibility test. The separate additive
+`native_config_origin` read-only diagnostic reports a receipt-bound snapshot
+or a stable missing/conflict/unverified reason, and always leaves
+`activation_allowed:false`.
 The documented Ubuntu/Debian daemonless/container smoke therefore must
 not be promoted to an operational or persistence acceptance result.
 
