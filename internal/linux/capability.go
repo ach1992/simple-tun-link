@@ -69,7 +69,11 @@ func (p CapabilityProbe) Probe(ctx context.Context) (CapabilityReport, error) {
 	wireguardKernel := p.commandAvailable(ctx, ip, "-json", "-details", "link", "show", "type", "wireguard")
 	wireguardTool := p.commandAvailable(ctx, wg, "show", "all", "dump")
 	xfrm := p.commandAvailable(ctx, ip, "-json", "-details", "link", "show", "type", "xfrm")
-	strongSwan := p.commandAvailable(ctx, swanctl, "--version")
+	// swanctl --version exists in strongSwan 5.9/6.0, but normal
+	// command dispatch connects to VICI first; daemonless hosts fail.
+	// Global --help is handled before any VICI connection and prints the
+	// local version/help. This proves tooling presence, not daemon readiness.
+	strongSwan := p.commandAvailable(ctx, swanctl, "--help")
 	systemd := p.commandAvailable(ctx, systemctl, "--version")
 
 	report[CapabilityGRENative] = status(gre, "GRE link type is unavailable")

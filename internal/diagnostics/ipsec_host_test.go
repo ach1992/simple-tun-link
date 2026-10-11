@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -17,7 +18,9 @@ func inspectIPsecDoctorFixture(ctx context.Context, runner linux.Runner) (IPsecH
 		"/proc/net/udp":  udpHeader + "0: 00000000:C350 00000000:0000 07 00000000:00000000 00:00000000 00000000 0 0 0\n",
 		"/proc/net/udp6": udp6Header + "0: 00000000000000000000000000000000:C350 00000000000000000000000000000000:0000 07 00000000:00000000 00:00000000 00000000 0 0 0\n",
 	}
-	return inspectIPsecHostWithPorts(ctx, runner, ipsecInventoryReader(files, nil))
+	return inspectIPsecHostWithInputs(ctx, runner, ipsecInventoryReader(files, nil), func(string) (os.FileInfo, error) {
+		return nil, os.ErrNotExist
+	})
 }
 
 type ipsecDoctorRunner struct {
@@ -55,19 +58,22 @@ func TestIPsecDoctorReadOnlyAndNoFalseActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if report.SchemaVersion != 1 || report.Backend != "ipsec" || report.RuntimeMode != "native_exclusive" ||
-		report.ActivationAllowed || len(report.Checks) != 5 {
+		report.ActivationAllowed || len(report.Checks) != 6 {
 		t.Fatalf("false operational claim: %+v", report)
 	}
 	if c := checkByName(t, report, "daemon_process"); c.ReasonCode != "charon_process_not_observed" ||
 		c.Status != "observed" || !strings.Contains(c.Summary, "unverified") {
 		t.Fatalf("missing ownership caution: %+v", c)
 	}
+	if c := checkByName(t, report, "strongswan_service"); c.Status != "observed" || c.ReasonCode != "strongswan_service_not_observed" {
+		t.Fatalf("missing read-only service inventory: %+v", c)
+	}
 	if c := checkByName(t, report, "operational_runtime"); c.ReasonCode != "ipsec_runtime_not_registered" ||
 		c.Status != "blocked" || c.NextStep == "" {
 		t.Fatalf("missing actionable blocked runtime: %+v", c)
 	}
 	wantCalls := []string{"/usr/bin/pgrep -x charon", "/usr/bin/pgrep -x charon-systemd",
-		"/usr/sbin/swanctl --version", "/sbin/ip -json -details link show type xfrm"}
+		"/usr/sbin/swanctl --help", "/sbin/ip -json -details link show type xfrm"}
 	if strings.Join(runner.calls, "|") != strings.Join(wantCalls, "|") {
 		t.Fatalf("unexpected command calls (mutation risk): %q", runner.calls)
 	}
@@ -91,7 +97,7 @@ func TestIPsecDoctorDetectsExistingDaemonWithoutTouchingIt(t *testing.T) {
 func TestIPsecDoctorUnknownObservationsDoNotLeakOrBecomeVacant(t *testing.T) {
 	runner := &ipsecDoctorRunner{overrides: map[string]error{
 		"/usr/bin/pgrep -x charon":                    &linux.CommandError{Command: "pgrep", ExitCode: 2},
-		"/usr/sbin/swanctl --version":                 errors.New("private_key=NEVER_SHOW"),
+		"/usr/sbin/swanctl --help":                    errors.New("private_key=NEVER_SHOW"),
 		"/sbin/ip -json -details link show type xfrm": errors.New("PSK=NEVER_SHOW"),
 	}}
 	report, err := inspectIPsecDoctorFixture(context.Background(), runner)

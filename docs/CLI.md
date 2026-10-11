@@ -586,14 +586,34 @@ code is **4 (unsupported)** even when all read-only probes run, because
 operational IPsec is intentionally not registered yet. Invalid arguments
 exit **2**. An incomplete report is an operational failure, not vacancy.
 
-The command observes `charon`/`charon-systemd` processes, bound UDP
-500/4500 sockets in the **caller's current network namespace** using
-bounded read-only `/proc/net/udp` and `/proc/net/udp6` snapshots,
-the `swanctl --version` prerequisite and whether a read-only XFRM
-interface inventory can be obtained. On supported Debian/Ubuntu builds it
-uses fixed system binary paths (`/usr/bin/pgrep`, `/usr/sbin/swanctl`,
+The command observes `charon`/`charon-systemd` processes and known
+Debian/Ubuntu strongSwan systemd/SysV service-file identities with
+non-following `lstat`. It inspects bound UDP 500/4500 sockets in the
+**caller's current network namespace** through bounded read-only
+`/proc/net/udp` and `/proc/net/udp6` snapshots; it also checks
+`swanctl --help` and whether a read-only XFRM interface inventory
+can be obtained. In the tested **daemonless** Ubuntu 24.04 / strongSwan
+5.9.13 and Debian 13 / strongSwan 6.0.1 packages, `swanctl --version`
+returned exit 2 **because normal command dispatch first attempts a VICI
+connection**, not because the `version` command is unsupported. Global
+`swanctl --help` is handled before VICI connection and prints the local
+version/help without a running daemon. A successful help probe establishes
+only executable availability, **never daemon or IPsec readiness**.
+Upstream dispatch: [strongSwan 5.9.13](https://github.com/strongswan/strongswan/blob/5.9.13/src/swanctl/command.c)
+and [6.0.1](https://github.com/strongswan/strongswan/blob/6.0.1/src/swanctl/command.c).
+On supported Debian/Ubuntu builds the doctor uses fixed system binary paths (`/usr/bin/pgrep`, `/usr/sbin/swanctl`,
 `/sbin/ip`) rather than executing tools found through a user-controlled
 `PATH`; other layouts require a validated distro adapter, not a fallback.
+
+The additive service check `name:"strongswan_service"` reports
+`blocked/strongswan_service_observed` if a known strongSwan/IPsec unit or
+init-script identity exists (including a dangling symlink),
+`unknown/strongswan_service_inventory_unverified` on unreadable/incomplete
+file inspection, and `observed/strongswan_service_not_observed` only when
+all known paths were absent. This does **not** claim package, daemon or
+exclusive ownership vacancy and never calls `systemctl` or reads
+third-party service content. Future activation must independently attest
+an STL-owned service against actual package and process/kernel state.
 
 The additional JSON check is `name:"ike_udp_ports"`. Its stable results are:
 `blocked/ike_udp_ports_observed` when UDP 500 or 4500 is already bound,

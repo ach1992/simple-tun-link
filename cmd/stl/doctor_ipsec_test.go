@@ -28,7 +28,7 @@ func (p *ipsecCLIProbe) Run(_ context.Context, name string, args ...string) (lin
 		return linux.CommandResult{}, nil
 	case strings.HasPrefix(key, "/usr/bin/pgrep -x "):
 		return linux.CommandResult{}, &linux.CommandError{Command: "pgrep", ExitCode: 1}
-	case key == "/usr/sbin/swanctl --version":
+	case key == "/usr/sbin/swanctl --help":
 		return linux.CommandResult{}, errors.New("PSK=DO_NOT_PRINT")
 	case key == "/sbin/ip -json -details link show type xfrm":
 		return linux.CommandResult{}, nil
@@ -52,7 +52,7 @@ func TestIPsecDoctorOperatorAndMachineDiagnostics(t *testing.T) {
 		t.Fatal(err)
 	}
 	if report.ActivationAllowed || report.SchemaVersion != 1 || report.Backend != "ipsec" ||
-		report.RuntimeMode != "native_exclusive" || len(report.Checks) != 5 {
+		report.RuntimeMode != "native_exclusive" || len(report.Checks) != 6 {
 		t.Fatalf("missing stable fail-closed diagnostic envelope: %+v", report)
 	}
 	if strings.Contains(stdout.String(), "DO_NOT_PRINT") || !strings.Contains(stdout.String(), "reason_code") {
