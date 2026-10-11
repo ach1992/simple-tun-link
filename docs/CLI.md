@@ -3,8 +3,10 @@
 The terminal menu supports local overview, guided **GRE Native** and
 **WireGuard/UDP** Create, Link management/status, selected diagnostics,
 preview-confirmed plaintext GRE/IPIP import and protected WireGuard v3 Quick
-Link import. IPsec, privileged WireGuard traffic verification and remaining
-operator tasks are still open under Issues #6–#10.
+Link import. Focused real-kernel WireGuard bidirectional traffic and
+same-peer GRE coexistence were integrated in PR #53; operational IPsec,
+additional failure/recovery cases and release acceptance remain open under
+Issues #6–#12.
 The versioned non-interactive ensure/remove lifecycle is implemented, with
 runtime/backend acceptance tracked separately. This page distinguishes
 **read-only** observations from **explicit host-mutating** commands.
@@ -251,8 +253,10 @@ the receiver secret. Inspect that directory and reconcile/delete only
 verified task-owned stale temporary files before treating the one-time
 handoff as fully retired; do not perform unsafe wildcard cleanup.
 
-No real privileged two-peer handshake, bidirectional traffic, reboot restore
-or coexistence E2E is implied by synthetic tests of these workflows.
+Synthetic tests of these workflows alone do not prove real handshakes,
+traffic, reboot restore or coexistence. Focused real-kernel WireGuard traffic
+and GRE coexistence were demonstrated in PR #53; actual systemd/restart,
+distinct-peer and supported-environment release acceptance remain #12.
 
 ## Commands
 
@@ -369,9 +373,9 @@ explicit `export` never change network configuration. Export is
 **deliberately revealing** and not suitable for ordinary diagnostics/logging.
 The distinct `ensure`, `remove` and `restore` paths are
 explicit host-mutating operations. Interactive
-create/import, protected recipient credential storage, optional throughput,
-IPsec diagnostic adapter and the remaining task-first UI work are tracked under
-Issues #8, #9 and #10; privileged WireGuard traffic acceptance remains #6/#12.
+additional create/import recovery, optional throughput, operational IPsec
+and remaining task-first UI work are tracked under Issues #7–#10. Focused
+WireGuard/GRE traffic was observed in PR #53; broader release E2E remains #12.
 
 ## Explicit Link lifecycle commands — Issue #10
 
@@ -449,8 +453,12 @@ and redacted versioned error. When an operation may have changed host or
 committed state, its JSON indicates `outcome: "unconfirmed"` and
 `reconciliation_required: true`, with any Engine-provided partial
 result in snake_case. These are conservative reconciliation signals,
-not a claimed successful apply. Do not retry a failed stateful operation
-blindly; inspect `link list` and `link status` first.
+not a claimed successful apply. Some current early CLI/Engine rejections also
+use this conservative envelope before any verified host mutation; do not
+interpret the flag as proof that a change occurred. Issue #9/#10 owns a
+future evidence-backed no-effect versus indeterminate outcome distinction
+without a silent breaking change to schema v1. Do not retry a failed
+stateful operation blindly; inspect `link list` and `link status` first.
 
 Exit codes remain 0 on verified Engine success; 2 for invalid input/usage,
 4 for unsupported backend, and 1 for other operational, state or rollback
@@ -458,11 +466,12 @@ failures. The commands use a five-minute signal-aware deadline and the
 Engine's cancellation-detached, bounded owned rollback. No global tuning
 or unrelated host networking changes are permitted by this CLI layer.
 
-The GRE Native guided Create and GRE/IPIP plaintext Import delegate to these
-commands. Other backend Create workflows, protected secret-bearing recipient
-import, complete interactive management, privileged peer traffic, and
-release E2E acceptance remain separately tracked; a successful CLI test does
-not establish those outcomes.
+The GRE Native guided Create, the guided WireGuard sender/Resume and
+confirmed GRE/IPIP/WireGuard v3 recipient Import reuse the canonical Engine
+instead of a separate menu lifecycle. Their focused real-kernel evidence is
+recorded under Issue #12; full recovery, IPsec, release-environment and
+operator UX acceptance remain separately tracked. A successful source/CLI
+test alone does not establish peer traffic or release readiness.
 
 ## Explicit plaintext GRE/IPIP setup-link export (Issue #8)
 
@@ -496,10 +505,10 @@ not retained. WireGuard uses the separate one-time Create/Resume
 workflow. Export never silently omits private keys/PSKs to manufacture a broken setup link. Confirm the configuration
 via the existing `link preview` before a separate authorized apply
 step. Export never applies a Link; the explicit `link import` command
-described below can apply only a credential-free GRE/IPIP offer after
-exact-payload confirmation.
+described below can apply either a credential-free GRE/IPIP offer or a
+configured WireGuard v3 Quick Link after exact-payload confirmation.
 
-## Explicit plaintext setup-link import (Issues #8/#10)
+## Confirmed GRE/IPIP and WireGuard v3 setup-link import (Issues #8/#10)
 
 A receiving operator first reviews the inverted Link details and the
 confirmation token; preview is **strictly read-only**:
@@ -561,9 +570,10 @@ a WireGuard interface does **not** destroy stored credentials. Operators
 must handle eventual key retirement deliberately. WireGuard public status
 supports a verified interface, latest handshake timestamp and RX/TX bytes,
 **not a proof of peer reachability or a packet-level E2E test**.
-WireGuard guided sender creation and explicit credential retirement are
-implemented but real privileged bidirectional traffic, IPsec and
-release-level pairing/coexistence acceptance remain Issues #6–#12.
+WireGuard guided sender creation, v3 recipient import and explicit credential
+retirement are implemented. Focused real-kernel bidirectional WireGuard
+traffic and same-peer GRE coexistence were observed in PR #53; operational
+IPsec, restart/recovery and release-level acceptance remain Issues #6–#12.
 
 ## Read-only host troubleshooting: IPsec (source-only)
 

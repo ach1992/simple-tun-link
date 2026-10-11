@@ -7,7 +7,14 @@ It creates and manages independent **Link Addresses** between Linux servers over
 Canonical CLI: **stl**  
 Convenience alias: **stlink** (same executable/behavior when installed by the supported installer)
 
-> Status: **pre-release development**. GRE/IPIP, WireGuard Quick Link sender/receiver/Resume, credential retirement and active diagnostics are integrated. On one disposable Debian 13-kernel test host, real WireGuard encrypted two-peer traffic and the GRE/IPIP modes have passed. The same-peer four-Link GRE + WireGuard regression is under Issue #12 review and is **not yet integrated**. **Full v0.1 release acceptance remains open:** IPsec/XFRM, persistence/restart, broader failure and multi-peer cases, and supported Ubuntu/Debian/architecture matrix. No public release has been published.
+> Status: **pre-release development**. GRE/IPIP, WireGuard v3 Quick Link
+> sender/receiver/Resume, credential retirement and active diagnostics are
+> integrated. Focused disposable-kernel tests include real GRE/IPIP/WireGuard
+> traffic and same-peer GRE Native + FOU + GUE + WireGuard coexistence
+> ([PR #53](https://github.com/ach1992/simple-tun-link/pull/53)).
+> **Release acceptance remains open:** operational IPsec/XFRM, real
+> systemd restart/reapply, broader failure/multi-peer scenarios, and the
+> Ubuntu/Debian/architecture matrix (Issue #12). No public release exists.
 
 ## Why
 
@@ -95,9 +102,11 @@ Successful `stl link remove` preserves its private
 key for rollback; separate `stl link credential retire` requires a
 **Link-specific durable successful-Remove receipt** and live-resource absence,
 never an unrelated state file. [CLI instructions](docs/CLI.md) explain the
-exact commands, recovery boundaries and safety requirements. **No privileged two-peer
-traffic, release readiness or secure channel for delivering the handoff is
-implied by these source-level workflows.**
+exact commands, recovery boundaries and safety requirements. **The
+create/import workflow alone does not establish encrypted traffic or a safe
+handoff channel.** Focused real-kernel WireGuard/GRE evidence is recorded in
+PR #53 / Issue #12; release, restart, multi-peer and cross-platform
+acceptance remain open. Deliver the SENSITIVE handoff through a trusted channel.
 
 ## Development
 

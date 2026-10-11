@@ -37,8 +37,10 @@ Rules:
 
 The WireGuard adapter under `internal/backend/wireguard` supports a
 credential-protected, Engine-owned per-Link interface lifecycle and v3
-receiver import, **not** a privileged-traffic-accepted/released backend. It uses Go's standard X25519
-implementation and clamped `wg genkey`-compatible output. Generic JSON and
+receiver import. Focused privileged traffic has been demonstrated in a
+disposable environment, but the backend is **not yet release-qualified**.
+It uses Go's standard X25519 implementation and clamped
+`wg genkey`-compatible output. Generic JSON and
 formatting do not serialize private bytes; deliberate `SecretWireValue()`
 access is reserved for credential-specific pairing/file operations, never
 status, diagnostics or normal desired-state storage.
@@ -88,15 +90,16 @@ and rechecksummed offer cannot become the original pending sender Link.
 The pending record is public configuration, not a backup of either private
 key; loss of a receiver handoff before publication requires explicit orphan
 reconciliation rather than silent rekeying.
- Configured v3 receiver import now
-provisions the local key under canonical Engine locks. The guided sender
-now generates its own protected private key and a separate ephemeral receiver
-private key only for a deliberately exported 0600 SENSITIVE Quick Link,
-while its ordinary state retains only the receiver public key. Real WireGuard
-handshake/traffic/coexistence and persistence proof remain Issue #6/#8/#12
-acceptance. Read-only status
-reports public handshake and counter observations; it does not authenticate
-who supplied the setup URL or prove bidirectional traffic.
+Configured v3 receiver import provisions the local key under canonical
+Engine locks. The guided sender generates its own protected private key and
+a separate ephemeral receiver private key only for a deliberately exported
+0600 SENSITIVE Quick Link; ordinary state retains only the receiver public
+key. Real bidirectional WireGuard traffic, public handshake/counters and a
+same-peer GRE/WireGuard coexistence fixture were observed in isolated kernel
+E2E (PR #53, Issue #12). Broader failure, restart/persistence, multi-peer
+and release-environment acceptance remain open under Issues #6/#8/#12.
+Read-only status reports public handshake and counter observations; it does
+not authenticate the setup URL sender or prove current bidirectional traffic.
 
 ### IPsec protected-PSK foundation (not yet a live backend)
 

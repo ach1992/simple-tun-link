@@ -213,32 +213,37 @@ A future `secure_exchange` mode requires an explicit protocol/schema update,
 not a reinterpretation of v1 Quick Link secrets. An unknown mode or
 schema version currently fails closed.
 
-## Explicit plaintext import via the canonical Engine
+## Confirmed setup-link import via the canonical Engine
 
-A non-interactive receiving operator may apply a reviewed,
-credential-free GRE/IPIP `stl://` offer with `stl link import`.
-`link preview --stdin [--json]` first produces a redacted receiver-side
-preview and, only for those importable offers, `import_confirmation`:
+A non-interactive receiving operator may apply a reviewed credential-free
+GRE/IPIP `stl://` offer **or a configured, credential-bound WireGuard v3
+Quick Link** with `stl link import`. `link preview --stdin [--json]` first
+produces a redacted receiver-side preview and, only for those importable
+offers, `import_confirmation`:
 the full SHA-256 digest of the exact input setup URL after accepting
 a single optional trailing line terminator.
 
 `link import --stdin --confirm <import_confirmation> [--json]` requires
-the same URL bytes and a matching token. Invalid, changed, unsupported or
-credential-bearing offers are rejected **before** backend/runtime state
-is assembled. Import uses the same `Offer.ReceiverLink` inversion as
-preview and delegates stateful convergence to `Engine.EnsureImported`.
+the same URL bytes and a matching token. Invalid, changed and unsupported
+offers (including legacy WireGuard v1/v2 and IPsec) are rejected before
+backend/runtime state is assembled. Import uses the same
+`Offer.ReceiverLink` inversion as preview and delegates convergence to
+`Engine.EnsureImported` (GRE/IPIP) or
+`Engine.EnsureImportedRecipient` (WireGuard v3 with protected key provisioning
+under the canonical Engine locks).
 Under the canonical Link lock, it permits only first creation or
 idempotent re-ensure of the **exact previously committed desired state**.
 An existing Link ID with different saved configuration fails with a
 redacted conflict and remains unchanged: the preview token is not approval
 to replace an existing Link. An explicit reconfiguration must use the
-separate desired-state `link ensure` workflow. This is local, explicit
-network mutation; preview and export remain read-only. The confirmation
-is a reviewed-payload binding, not sender authentication, and the plaintext
-transport remains insecure
-against active network attackers.
+separate desired-state `link ensure` workflow. This is local, explicit network mutation; preview and export remain
+read-only. Confirmation is a reviewed-payload binding, not sender
+authentication. GRE/IPIP Link traffic remains plaintext and unauthenticated;
+WireGuard v3 encrypts Link traffic, but its SENSITIVE Quick Link must be
+delivered to the intended peer through a trusted channel.
 
-This is only a **plaintext pairing slice**, not Issue #8 completion.
-Receiver private key/PSK import, protected secret storage and interactive
-pairing remain unsupported until integrated with the WireGuard/IPsec
-backends and their review/validation gates.
+The plaintext GRE/IPIP import and protected WireGuard v3 recipient import
+are implemented; neither completes Issue #8. IPsec/PSK activation/import,
+remaining recovery/edge cases and broader release acceptance still depend
+on Issues #7/#8/#12. A preview confirmation digest binds exact payload bytes
+but does **not** authenticate the sender or securely transport a Quick Link.

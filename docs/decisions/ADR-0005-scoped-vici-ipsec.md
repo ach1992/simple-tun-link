@@ -242,9 +242,12 @@ number.
 
 ## strongSwan debug logging remains an activation blocker
 
-The daemon's VICI credential loader has a CFG level-4 debug trace that
-formats the *raw* shared IKE key (`DBG4(DBG_CFG, "key: %#B", &data)` in
-upstream `vici_cred.c`). Hiding plaintext from STL's own stdout/status
+Some strongSwan versions (verified in upstream `vici_cred.c` at
+[5.9.5](https://github.com/strongswan/strongswan/blob/5.9.5/src/libcharon/plugins/vici/vici_cred.c)
+and [6.0.0](https://github.com/strongswan/strongswan/blob/6.0.0/src/libcharon/plugins/vici/vici_cred.c))
+have a CFG level-4 debug trace that formats the *raw* shared IKE key
+(`DBG4(DBG_CFG, "key: %#B", &data)`). That exact trace was absent from
+the checked upstream 5.9.1 source. Hiding plaintext from STL's own stdout/status
 is therefore insufficient if the independently configured daemon uses
 verbose CFG logging. Prior to production registration, the activation
 contract must verify the effective strongSwan log configuration and

@@ -17,8 +17,9 @@ const NativeExclusiveVICIPath = "/run/simple-tun-link/ipsec/charon.vici"
 
 // The proposed config uses STRONGSWAN_CONF to avoid inheriting the host's
 // /etc/strongswan.conf and its includes. Its explicit journald CFG ceiling
-// is intentionally below DBG4, where strongSwan's VICI shared-key loader
-// prints raw PSKs. No filelog/syslog/custom logger or includes are declared.
+// is intentionally below DBG4, which can disclose shared keys in VICI
+// credential-loading traces on verified strongSwan versions. No
+// filelog/syslog/custom logger or includes are declared.
 // Config BYTES alone cannot attest an actual daemon's effective log policy:
 // future operational admission additionally needs pinned process/service
 // identity, a private writable boundary, and reload/change control.
