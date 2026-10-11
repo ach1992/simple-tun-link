@@ -27,24 +27,32 @@ suffix="${workdir##*.}"
 ns_a="stlm${suffix}a"; ns_b="stlm${suffix}b"; ns_c="stlm${suffix}c"
 created_a=0; created_b=0; created_c=0
 cleanup() {
-  local status="$1" ns
+  local status="$1" ns remaining observed_route observed_input observed_primary
   trap - EXIT INT TERM
   set +e
   if (( created_c )); then ip netns delete "$ns_c" || status=1; fi
   if (( created_b )); then ip netns delete "$ns_b" || status=1; fi
   if (( created_a )); then ip netns delete "$ns_a" || status=1; fi
+  remaining="$(ip netns list)" || {
+    echo "FAIL: cannot verify namespace cleanup" >&2
+    status=1
+  }
   for ns in "$ns_a" "$ns_b" "$ns_c"; do
-    if ip netns list | awk '{print $1}' | grep -Fxq -- "$ns"; then
+    if awk '{print $1}' <<< "$remaining" | grep -Fxq -- "$ns"; then
       echo "FAIL: owned namespace remains: $ns" >&2; status=1
     fi
   done
-  if [[ "$(ip -4 route show default)" != "$host_route_before" ||
-        "$(iptables -S INPUT)" != "$host_input_before" ]]; then
+  observed_route="$(ip -4 route show default)" || status=1
+  observed_input="$(iptables -S INPUT)" || status=1
+  if [[ "$observed_route" != "$host_route_before" ||
+        "$observed_input" != "$host_input_before" ]]; then
     echo "FAIL: host default route or INPUT rules changed; do not auto-restore" >&2; status=1
   fi
-  if [[ -n "$host_primary_if" &&
-        "$(ip -json address show dev "$host_primary_if")" != "$host_primary_before" ]]; then
-    echo "FAIL: host primary-interface addresses changed" >&2; status=1
+  if [[ -n "$host_primary_if" ]]; then
+    observed_primary="$(ip -json address show dev "$host_primary_if")" || status=1
+    if [[ "$observed_primary" != "$host_primary_before" ]]; then
+      echo "FAIL: host primary-interface addresses changed" >&2; status=1
+    fi
   fi
   if [[ "$workdir" == /tmp/stl-gre-multipeer.* && -d "$workdir" ]]; then
     rm -rf -- "$workdir" || status=1
@@ -55,8 +63,9 @@ cleanup() {
 trap 'cleanup "$?"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+existing="$(ip netns list)" || { echo "REFUSED: cannot inspect namespaces" >&2; exit 2; }
 for ns in "$ns_a" "$ns_b" "$ns_c"; do
-  if ip netns list | awk '{print $1}' | grep -Fxq -- "$ns"; then
+  if awk '{print $1}' <<< "$existing" | grep -Fxq -- "$ns"; then
     echo "REFUSED: namespace name is already in use" >&2; exit 2
   fi
 done
@@ -195,10 +204,16 @@ run_side a ab list
 run_side b ab list
 run_side c ac list
 for ns in "$ns_a" "$ns_b" "$ns_c"; do
-  if ip -n "$ns" -d link show | grep -F "alias stl:lnk_"; then
+  links="$(ip -n "$ns" -d link show)" || {
+    echo "FAIL: cannot inspect interfaces after removal in $ns" >&2; exit 1
+  }
+  rules="$(ip netns exec "$ns" iptables -S INPUT)" || {
+    echo "FAIL: cannot inspect firewall after removal in $ns" >&2; exit 1
+  }
+  if [[ "$links" == *"alias stl:lnk_"* ]]; then
     echo "FAIL: owned GRE interface survived remove" >&2; exit 1
   fi
-  if ip netns exec "$ns" iptables -S INPUT | grep -F -- "stl:lnk_"; then
+  if [[ "$rules" == *"stl:lnk_"* ]]; then
     echo "FAIL: owned firewall rule survived remove" >&2; exit 1
   fi
 done
