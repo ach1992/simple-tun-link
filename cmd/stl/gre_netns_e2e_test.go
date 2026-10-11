@@ -24,7 +24,7 @@ import (
 // the production CLI -> Engine -> GRE backend path, not a parallel lifecycle.
 func TestGRENetnsE2E(t *testing.T) {
 	if os.Getenv("STL_GRE_NETNS_E2E") != "1" {
-		t.Skip("privileged GRE acceptance runs only via scripts/e2e/gre-netns.sh")
+		t.Skip("privileged GRE acceptance requires an approved disposable GRE runner")
 	}
 	if os.Geteuid() != 0 {
 		t.Fatal("privileged GRE acceptance requires disposable-test root")
@@ -41,10 +41,15 @@ func TestGRENetnsE2E(t *testing.T) {
 		}
 		return value
 	}
+	multiPeer := os.Getenv("STL_GRE_MULTI_PEER_E2E") == "approved"
 	root := required("STL_GRE_E2E_STATE_ROOT")
+	parent := filepath.Base(filepath.Dir(root))
+	side := filepath.Base(root)
 	if root != filepath.Clean(root) || filepath.Dir(filepath.Dir(root)) != "/tmp" ||
-		!strings.HasPrefix(filepath.Base(filepath.Dir(root)), "stl-gre-e2e.") ||
-		(filepath.Base(root) != "a" && filepath.Base(root) != "b") {
+		!(multiPeer && strings.HasPrefix(parent, "stl-gre-multipeer.") &&
+			(side == "a" || side == "b" || side == "c") ||
+			!multiPeer && strings.HasPrefix(parent, "stl-gre-e2e.") &&
+				(side == "a" || side == "b")) {
 		t.Fatal("refusing GRE test state outside the scoped temporary runner directory")
 	}
 	action := required("STL_GRE_E2E_ACTION")
@@ -70,7 +75,23 @@ func TestGRENetnsE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal("invalid synthetic GRE UDP port", err)
 	}
-	if !((localUnderlay.String() == "192.0.2.10" && peerUnderlay.String() == "192.0.2.11") ||
+	if multiPeer {
+		// Two immutable native GRE pairs, one shared A-side desired-state root.
+		matchPair := func(wantID domain.LinkID, ulLocal, ulPeer, local, peer string) bool {
+			return id == wantID && localUnderlay.String() == ulLocal &&
+				peerUnderlay.String() == ulPeer && localAddress.String() == local &&
+				peerAddress.String() == peer
+		}
+		ab := domain.LinkID("lnk_abababababababababababababababab")
+		ac := domain.LinkID("lnk_cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd")
+		allowed := matchPair(ab, "192.0.2.10", "192.0.2.11", "10.85.10.0/31", "10.85.10.1/31") ||
+			matchPair(ab, "192.0.2.11", "192.0.2.10", "10.85.10.1/31", "10.85.10.0/31") ||
+			matchPair(ac, "192.0.2.20", "192.0.2.21", "10.85.20.0/31", "10.85.20.1/31") ||
+			matchPair(ac, "192.0.2.21", "192.0.2.20", "10.85.20.1/31", "10.85.20.0/31")
+		if !allowed || encap != domain.EncapNative || port != 0 || os.Getenv("STL_GRE_E2E_KEY") != "" {
+			t.Fatal("refusing noncanonical multi-peer GRE fixture")
+		}
+	} else if !((localUnderlay.String() == "192.0.2.10" && peerUnderlay.String() == "192.0.2.11") ||
 		(localUnderlay.String() == "192.0.2.11" && peerUnderlay.String() == "192.0.2.10")) ||
 		!strings.HasPrefix(localAddress.String(), "10.81.") ||
 		!strings.HasPrefix(peerAddress.String(), "10.81.") {
@@ -124,7 +145,7 @@ func TestGRENetnsE2E(t *testing.T) {
 		args = []string{"link", "diagnose", string(id), "--json"}
 	case "remove":
 		args = []string{"link", "remove", string(id), "--confirm", string(id), "--json"}
-	case "list":
+	case "list", "multi-list", "multi-survivor":
 		args = []string{"link", "list", "--json"}
 	default:
 		t.Fatalf("unsupported GRE test action %q", action)
@@ -183,6 +204,51 @@ func TestGRENetnsE2E(t *testing.T) {
 	case "remove":
 		if result["link_id"] != string(id) || result["removed"] != true {
 			t.Fatalf("remove did not confirm owned Link removal: %s", stdout.String())
+		}
+	case "multi-list", "multi-survivor":
+		if !multiPeer {
+			t.Fatal("multi-peer list check requires isolated opt-in")
+		}
+		ab := "lnk_abababababababababababababababab"
+		ac := "lnk_cdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+		var expected []string
+		if action == "multi-list" {
+			switch side {
+			case "a":
+				expected = []string{ab, ac}
+			case "b":
+				expected = []string{ab}
+			case "c":
+				expected = []string{ac}
+			}
+		} else {
+			switch side {
+			case "a", "c":
+				expected = []string{ac}
+			case "b":
+				expected = []string{}
+			}
+		}
+		links, ok := result["links"].([]any)
+		if !ok || len(links) != len(expected) {
+			t.Fatalf("%s: expected %d Links in %s: %s", action, len(expected), side, stdout.String())
+		}
+		seen := make(map[string]bool, len(links))
+		for _, raw := range links {
+			item, ok := raw.(map[string]any)
+			if !ok {
+				t.Fatalf("invalid Link list entry: %s", stdout.String())
+			}
+			got, ok := item["id"].(string)
+			if !ok || seen[got] {
+				t.Fatalf("missing or duplicate Link ID: %s", stdout.String())
+			}
+			seen[got] = true
+		}
+		for _, want := range expected {
+			if !seen[want] {
+				t.Fatalf("wrong persisted Link IDs for %s: %s", side, stdout.String())
+			}
 		}
 	case "list":
 		links, ok := result["links"].([]any)
