@@ -19,6 +19,12 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/state"
 )
 
+// Canonical immutable fixture identities shared by input and result checks.
+const (
+	greMultiPeerABID = "lnk_abababababababababababababababab"
+	greMultiPeerACID = "lnk_cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+)
+
 // This test is compiled into the normal test binary but never changes a host
 // unless an explicitly approved disposable netns runner opts in. It exercises
 // the production CLI -> Engine -> GRE backend path, not a parallel lifecycle.
@@ -82,8 +88,8 @@ func TestGRENetnsE2E(t *testing.T) {
 				peerUnderlay.String() == ulPeer && localAddress.String() == local &&
 				peerAddress.String() == peer
 		}
-		ab := domain.LinkID("lnk_abababababababababababababababab")
-		ac := domain.LinkID("lnk_cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd")
+		ab := domain.LinkID(greMultiPeerABID)
+		ac := domain.LinkID(greMultiPeerACID)
 		allowed := matchPair(ab, "192.0.2.10", "192.0.2.11", "10.85.10.0/31", "10.85.10.1/31") ||
 			matchPair(ab, "192.0.2.11", "192.0.2.10", "10.85.10.1/31", "10.85.10.0/31") ||
 			matchPair(ac, "192.0.2.20", "192.0.2.21", "10.85.20.0/31", "10.85.20.1/31") ||
@@ -209,8 +215,8 @@ func TestGRENetnsE2E(t *testing.T) {
 		if !multiPeer {
 			t.Fatal("multi-peer list check requires isolated opt-in")
 		}
-		ab := "lnk_abababababababababababababababab"
-		ac := "lnk_cdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+		ab := greMultiPeerABID
+		ac := greMultiPeerACID
 		var expected []string
 		if action == "multi-list" {
 			switch side {
