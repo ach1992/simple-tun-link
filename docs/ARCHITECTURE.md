@@ -525,6 +525,24 @@ service ownership. Operational admission must bind durable provenance,
 selected process/service configuration and exclusive control across
 restart/recovery before any VICI or kernel write.
 
+A separate source-only native-config publication primitive now stages the
+fixed strongSwan profile in an owner-private directory, persists a
+no-clobber prepared origin receipt and per-inode random xattr, then uses
+`renameat2(RENAME_NOREPLACE)` and directory fsync. A retry when either
+canonical file or receipt already exists is a **conflict**; after a crash,
+a partial receipt/config pair needs explicit reconciliation, never adoption
+based on matching bytes. A separate `native_config_origin` read-only doctor
+check compares the durable receipt's nonce/device/inode/expected SHA-256
+with the exact opened file/xattr and revalidates the protected path.
+The primitive remains **unexported, with no Engine/CLI/installer caller**:
+normal execution neither writes the receipt nor activates strongSwan.
+The check is a snapshot of protected on-disk publication identity, not an
+exclusive systemd/service/process identity, secure effective CFG logger,
+private VICI writer, IKE port reservation, or kernel XFRM ownership. The
+future host adapter must first validate its own transaction permissions and
+capability requirements; unsupported xattr/no-replace/fsync facilities fail
+closed rather than falling back to destructive publication.
+
 `internal/backend/ipsec.NativeExclusiveConfigV1` adds an immutable-source,
 non-operational strongSwan configuration blueprint for `charon-systemd`.
 It contains **no includes or host /etc/strongswan.conf dependency**, a

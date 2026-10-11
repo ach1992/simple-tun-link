@@ -378,6 +378,34 @@ Root-private publication receipts, verified systemd/process/package
 provenance and VICI writer isolation remain mandatory before secrets
 or effects.
 
+The next source-only publication primitive (not exposed through Engine,
+CLI or installer) prepares a root-private `strongswan.conf.origin` receipt
+*before* atomically publishing `strongswan.conf` with Linux
+`renameat2(RENAME_NOREPLACE)`. It first syncs reviewed config bytes and a
+fresh 128-bit per-publication origin xattr on its private temporary inode,
+then syncs the no-replace receipt containing the originating device/inode,
+nonce and fixed SHA-256, then no-replace publishes the canonical file and
+syncs the directory. It cannot overwrite a preexisting foreign file, even
+one containing byte-identical config. A publication stopped after recording
+the receipt is not automatically retried or adopted; an ambiguous failure
+retains protected recovery artifacts for manual reconciliation. A missing
+xattr, unsupported filesystem primitive, altered receipt, replacement inode,
+unsafe directory or symlink fails closed. There is deliberately no
+config-retirement, package install, systemctl, daemon start, VICI or kernel
+writer in this milestone.
+
+The separate `native_config_origin` doctor check verifies this receipt
+**read-only**, including current inode, canonical bytes, origin xattr and
+protected parent identities; it exposes only fixed classifications. This
+provides stronger STL-publication evidence than byte equality, but still
+cannot defeat a fully privileged root actor capable of altering both receipt
+and xattr, cannot reserve the path after a read, and cannot establish the
+actual running daemon's config, logging, VICI writer or port ownership.
+No IPsec activation, key transfer or destructive resource effect may rely on
+this check alone. Future integration must control Engine/host transaction
+locks and prove ownership of the *actual* service before invoking any
+provisioning on the real host.
+
 `stl doctor ipsec` also observes UDP 500/4500 occupancy from bounded procfs
 tables in the current namespace. It never dumps socket rows/inodes and never
 converts a missing/unreadable/malformed table into an empty one; an
