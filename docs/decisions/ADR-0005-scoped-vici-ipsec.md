@@ -378,7 +378,33 @@ introduced. Source tests and nonprivileged host inspection are
 not a substitute for strongSwan 5.9/6.x, kernel, systemd, multi-Link,
 IKEv2/ESP/NAT-T privileged acceptance under #7/#12.
 
+## Proposed STL-specific systemd unit (source-only admission slice)
+
+`NativeExclusiveServiceUnitV1()` now defines a reviewable, uninstalled
+`/etc/systemd/system/simple-tun-link-ipsec.service` with
+`Type=notify`, the proposed `/usr/sbin/charon-systemd`, an explicit
+`STRONGSWAN_CONF` path, private runtime directory/UMask and **no** automatic
+`ExecStartPost=swanctl --load-all`, reload action, installer enablement or
+restart policy. Upstream `strongswan.service` has `ExecStartPost=... --load-all`
+and `ExecReload=...`; blindly reusing it would violate exclusive VICI and
+per-Link credential control. An additive read-only `native_service_unit`
+doctor observation checks reviewed local bytes and protected pinned inode/path,
+not STL origin or effective systemd state. No unit publisher, installer,
+Engine/CLI activation or host service side effects are added.
+
+**Remaining gate:** prove a no-clobber STL-origin unit publication transaction;
+inspect loaded systemd properties and all drop-ins/generators and aliases;
+attest the exact executable, process and `STRONGSWAN_CONF` selection; prove
+secure effective journal/CFG logging and VICI writer confinement; assess
+distribution package install/remove scripts and their automatic service
+behavior before touching the host. A package-managed unit's mere presence
+must not be mistaken for an STL-owned private daemon, and the current
+`strongswan_service` inventory check intentionally blocks on that identity.
+The proposed source profile is not ready to be installed or started.
+
 Source references for configuration and logging:
+- https://github.com/strongswan/strongswan/blob/master/init/systemd/strongswan.service.in
+- https://docs.strongswan.org/docs/6.0/install/install.html
 - https://docs.strongswan.org/docs/5.9/config/strongswanConf.html
 - https://docs.strongswan.org/docs/latest/daemons/charon-systemd.html
 - https://docs.strongswan.org/docs/latest/config/logging.html
