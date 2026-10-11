@@ -140,6 +140,25 @@ diagnosis; then removes/retires only WireGuard and checks that the three
 GRE siblings still work before continuing the original IPIP suite.
 The flags alone never authorize testing on an active control-plane host.
 
+### GRE Native, one A host with two distinct peers
+
+After separate authorization for an isolated disposable test VM, the
+three-namespace runner can be executed from a **clean committed checkout**:
+
+~~~bash
+sudo env STL_E2E_DISPOSABLE_HOST=approved ./scripts/e2e/gre-multipeer-netns.sh
+~~~
+
+This **separate Issue #12 fixture** reuses the same production GRE test/CLI/Engine,
+with independent A-B and A-C synthetic underlay pairs, two stable Link IDs and
+one A-side desired-state directory. It checks bidirectional Link Address
+traffic, identity-checked status/diagnostics, idempotent reapply, the exact
+saved Link ID sets, A-C traffic and firewall identity after A-B removal,
+and owned cleanup. It changes no host control-plane configuration. Actual
+kernel acceptance requires a documented **successful privileged execution**;
+source/CI/Go skip alone are not a live proof. Real systemd service
+restart/restore remains a distinct release requirement.
+
 The opt-in script creates only fresh paired network namespaces, synthetic
 veth underlay and per-side temporary state; it invokes the real CLI/Engine/GRE
 backend for Native, FOU and GUE on the same synthetic underlay pair,
@@ -168,9 +187,11 @@ Compiling the gated Go tests and syntax-checking the script in ordinary CI
 **do not count as privileged live evidence**. The opt-in flag alone is never
 permission to test on a shared or production host. This slice validates
 GRE/IPIP cross-backend isolation. The optional WireGuard cross fixture
-covers one four-Link same-peer scenario, but neither fixture completes Issue
-#12's IPsec, multiple different peers, concurrency/failure, real systemd
-persistence/restart, Ubuntu/distro or arm64 release gates.
+covers one four-Link same-peer scenario; the separate three-namespace fixture
+targets different-peer concurrent Links. Neither source fixture, without
+real approved execution, satisfies the corresponding live acceptance.
+IPsec, concurrency/failure, real systemd persistence/restart, the
+Ubuntu/Debian release matrix and arm64 qualification also remain Issue #12 gates.
 
 ## Git/GitHub
 

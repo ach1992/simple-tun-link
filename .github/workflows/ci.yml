@@ -29,6 +29,7 @@ jobs:
       - name: Privileged E2E runner syntax (no host mutation)
         run: |
           bash -n scripts/e2e/gre-netns.sh
+          bash -n scripts/e2e/gre-multipeer-netns.sh
           bash -n scripts/e2e/wireguard-netns.sh
       - name: Vet
         run: go vet ./...
