@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Privileged multi-peer acceptance only inside a dedicated disposable test host.
-# Never changes host interfaces, routes, firewall, services or kernel modules.
+# Only isolated test namespaces are explicitly changed; kernel module autoload
+# may still occur. Never run on a shared host or the Agent control-plane host.
 set -Eeuo pipefail
 umask 077
 if [[ "${STL_E2E_DISPOSABLE_HOST:-}" != approved || $EUID -ne 0 ]]; then
