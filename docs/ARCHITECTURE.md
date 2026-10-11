@@ -336,8 +336,12 @@ Default backend.
 - explicit credential handling and XFRM/SA diagnostics.
 - proposed STL-private, one-per-host `charon-systemd` unit and a separate
   protected strongSwan configuration; source-only unit-byte inspection is not
-  unit publication or systemd/process/effective-logging ownership. Any future
-  activation must independently gate distro package effects, all loaded
+  unit publication or systemd/process/effective-logging ownership. A separate
+  source-only service-unit publisher now demonstrates no-clobber, private
+  receipt/inode-xattr-bound origin checks in fixtures only, with no operational
+  call path. Neither matching bytes nor even a valid origin snapshot attests
+  the unit loaded by PID 1. Any future activation must independently gate
+  distro package effects, all loaded
   unit overrides, VICI writers, IKE ports and kernel resources.
 
 ## 9. Address allocation

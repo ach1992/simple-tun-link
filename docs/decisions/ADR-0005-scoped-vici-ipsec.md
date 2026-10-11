@@ -389,10 +389,12 @@ restart policy. Upstream `strongswan.service` has `ExecStartPost=... --load-all`
 and `ExecReload=...`; blindly reusing it would violate exclusive VICI and
 per-Link credential control. An additive read-only `native_service_unit`
 doctor observation checks reviewed local bytes and protected pinned inode/path,
-not STL origin or effective systemd state. No unit publisher, installer,
-Engine/CLI activation or host service side effects are added.
+not STL origin or effective systemd state. This earlier slice contained
+no unit publisher, installer, Engine/CLI activation or host service effects;
+the follow-up below introduces a fixture-only publication primitive.
 
-**Remaining gate:** prove a no-clobber STL-origin unit publication transaction;
+**Remaining operational gate:** wire a reviewed no-clobber STL-origin
+publisher behind independently verified host admission and lifetime locks;
 inspect loaded systemd properties and all drop-ins/generators and aliases;
 attest the exact executable, process and `STRONGSWAN_CONF` selection; prove
 secure effective journal/CFG logging and VICI writer confinement; assess
@@ -401,6 +403,30 @@ behavior before touching the host. A package-managed unit's mere presence
 must not be mistaken for an STL-owned private daemon, and the current
 `strongswan_service` inventory check intentionally blocks on that identity.
 The proposed source profile is not ready to be installed or started.
+
+## No-clobber service-unit origin transaction (source-only)
+
+A follow-up adds an **unexported, uncalled in production** unit publisher
+and a separate read-only origin diagnostic. Publication binds a new 0600
+unit inode under the protected /etc/systemd/system directory to a fresh
+nonzero inode-xattr token and root-private versioned receipt stored in the
+existing STL IPsec state directory. The receipt is fsynced and committed
+before renameat2(RENAME_NOREPLACE) exposes the canonical systemd unit
+name; the relevant parent directories are synced. EEXIST, symlinks,
+untrusted ancestry, absent xattrs, unsupported atomics, prepared-only
+receipts, tampered unit bytes, replaced inodes, unsafe permissions and
+ambiguous crashes never authorize overwrite, replay or adoption.
+
+The additive tenth stl doctor ipsec check native_service_unit_origin
+reports a verified receipt snapshot but never proves PID 1 loaded the
+profile, the actual ExecStart/Environment, package provenance, secure
+logging or exclusive VICI/port/XFRM rights. There is still **no** installer,
+systemctl start/enable/reload action, package mutation, VICI writer, Engine
+operational adapter or credential/SA lifecycle. No host root-level
+publication test has yet been run. Those operational gates remain OPEN
+under Issue #7, as does release E2E Issue #12. The prior paragraph's
+“no unit publisher” refers to its earlier reviewed PR; this primitive
+is strictly test-only and cannot install or activate the service.
 
 Source references for configuration and logging:
 - https://github.com/strongswan/strongswan/blob/master/init/systemd/strongswan.service.in
