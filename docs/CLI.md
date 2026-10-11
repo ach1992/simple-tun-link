@@ -622,6 +622,17 @@ source-only `charon-systemd` unit bytes with safe file permissions and
 single-link identity. The source profile selects `STRONGSWAN_CONF` explicitly,
 uses a proposed private runtime directory and UMask, and has **no** distro
 `ExecStartPost=swanctl --load-all`, `ExecReload` or enable/start command.
+The separate read-only name:"native_service_unit_origin" check verifies
+the independently recorded root-private receipt and exact original inode
+xattr token, not just a byte-identical service unit file.
+Classifications: observed/native_service_unit_origin_observed (receipt-bound
+file snapshot only), blocked/native_service_unit_origin_not_provisioned
+(both absent), blocked/native_service_unit_origin_conflict (foreign, changed,
+or incomplete publication), unknown/native_service_unit_origin_unverified
+(incomplete inspection). The writer has no CLI or Engine call site;
+a positive result is not a systemd operational admission. Schema stays 1,
+activation_allowed remains false and doctor exit code remains 4.
+
 Results: `observed/native_service_unit_bytes_verified` (file snapshot only),
 `blocked/native_service_unit_not_provisioned` (absent),
 `blocked/native_service_unit_untrusted` (conflict, unsafe path or bytes) and

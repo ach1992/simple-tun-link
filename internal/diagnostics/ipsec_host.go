@@ -36,13 +36,13 @@ type IPsecHostReport struct {
 }
 
 func InspectIPsecHost(ctx context.Context, runner linux.Runner) (IPsecHostReport, error) {
-	return inspectIPsecHostWithInputs(ctx, runner, readIPsecPortInventory, os.Lstat, ipsec.InspectNativeExclusiveConfig, ipsec.InspectNativeExclusiveConfigOrigin, ipsec.InspectNativeExclusiveServiceUnit)
+	return inspectIPsecHostWithInputs(ctx, runner, readIPsecPortInventory, os.Lstat, ipsec.InspectNativeExclusiveConfig, ipsec.InspectNativeExclusiveConfigOrigin, ipsec.InspectNativeExclusiveServiceUnit, ipsec.InspectNativeExclusiveServiceUnitOrigin)
 }
 
 // Both readers are test-injectable only within this package. Production uses
 // bounded local /proc and fixed-path Lstat; no daemon or service mutation.
-func inspectIPsecHostWithInputs(ctx context.Context, runner linux.Runner, ports ipsecPortReader, lstat servicePathLstat, config func() ipsec.NativeConfigAssessment, origin func() ipsec.NativeOriginAssessment, serviceUnit func() ipsec.NativeServiceUnitAssessment) (IPsecHostReport, error) {
-	if ctx == nil || runner == nil || ports == nil || lstat == nil || config == nil || origin == nil || serviceUnit == nil {
+func inspectIPsecHostWithInputs(ctx context.Context, runner linux.Runner, ports ipsecPortReader, lstat servicePathLstat, config func() ipsec.NativeConfigAssessment, origin func() ipsec.NativeOriginAssessment, serviceUnit func() ipsec.NativeServiceUnitAssessment, unitOrigin func() ipsec.NativeOriginAssessment) (IPsecHostReport, error) {
+	if ctx == nil || runner == nil || ports == nil || lstat == nil || config == nil || origin == nil || serviceUnit == nil || unitOrigin == nil {
 		return IPsecHostReport{}, fmt.Errorf("IPsec host inspector requires complete read-only dependencies")
 	}
 	if err := ctx.Err(); err != nil {
@@ -53,11 +53,12 @@ func inspectIPsecHostWithInputs(ctx context.Context, runner linux.Runner, ports 
 		SchemaVersion: 1,
 		Backend:       "ipsec",
 		RuntimeMode:   "native_exclusive",
-		Checks:        make([]IPsecHostCheck, 0, 9),
+		Checks:        make([]IPsecHostCheck, 0, 10),
 	}
 	report.Checks = append(report.Checks, inspectCharonProcesses(ctx, runner))
 	report.Checks = append(report.Checks, inspectStrongSwanServiceFiles(ctx, lstat))
 	report.Checks = append(report.Checks, inspectNativeExclusiveServiceUnit(serviceUnit))
+	report.Checks = append(report.Checks, inspectNativeExclusiveServiceUnitOrigin(unitOrigin))
 	report.Checks = append(report.Checks, inspectNativeExclusiveConfig(config))
 	report.Checks = append(report.Checks, inspectNativeExclusiveConfigOrigin(origin))
 	report.Checks = append(report.Checks, inspectIPsecIKEPorts(ctx, ports))

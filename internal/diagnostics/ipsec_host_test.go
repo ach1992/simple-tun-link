@@ -23,7 +23,8 @@ func inspectIPsecDoctorFixture(ctx context.Context, runner linux.Runner) (IPsecH
 		return nil, os.ErrNotExist
 	}, func() ipsec.NativeConfigAssessment { return ipsec.NativeConfigMissing },
 		func() ipsec.NativeOriginAssessment { return ipsec.NativeOriginMissing },
-		func() ipsec.NativeServiceUnitAssessment { return ipsec.NativeServiceUnitMissing })
+		func() ipsec.NativeServiceUnitAssessment { return ipsec.NativeServiceUnitMissing },
+		func() ipsec.NativeOriginAssessment { return ipsec.NativeOriginMissing })
 }
 
 type ipsecDoctorRunner struct {
@@ -61,7 +62,7 @@ func TestIPsecDoctorReadOnlyAndNoFalseActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if report.SchemaVersion != 1 || report.Backend != "ipsec" || report.RuntimeMode != "native_exclusive" ||
-		report.ActivationAllowed || len(report.Checks) != 9 {
+		report.ActivationAllowed || len(report.Checks) != 10 {
 		t.Fatalf("false operational claim: %+v", report)
 	}
 	if c := checkByName(t, report, "daemon_process"); c.ReasonCode != "charon_process_not_observed" ||
@@ -73,6 +74,9 @@ func TestIPsecDoctorReadOnlyAndNoFalseActivation(t *testing.T) {
 	}
 	if c := checkByName(t, report, "native_service_unit"); c.Status != "blocked" || c.ReasonCode != "native_service_unit_not_provisioned" {
 		t.Fatalf("missing proposed native service unit prerequisite: %+v", c)
+	}
+	if c := checkByName(t, report, "native_service_unit_origin"); c.Status != "blocked" || c.ReasonCode != "native_service_unit_origin_not_provisioned" {
+		t.Fatalf("missing unit-origin admission check: %+v", c)
 	}
 	if c := checkByName(t, report, "native_config"); c.Status != "blocked" || c.ReasonCode != "native_config_not_provisioned" {
 		t.Fatalf("missing root-private config prerequisite: %+v", c)
