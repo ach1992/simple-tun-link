@@ -316,6 +316,30 @@ chain, control `STRONGSWAN_CONF`, prove the active daemon's effective
 configuration/logger state and exclusively restrict VICI and
 `reload-settings` writers before loading any secret.
 
+## Protected local native-config inspection (source-only follow-up)
+
+`InspectNativeExclusiveConfig` is a read-only prerequisite for the
+native-exclusive `strongswan.conf`: the exact reviewed local bytes, a
+root-owned 0600 single-link regular file, root-owned non-symlinked
+non-writable ancestors and root-private state/IPsec directories. It opens
+each directory and the final file via pinned, non-following descriptors,
+bounds content reads, and revalidates the file and each directory entry
+against the opened inode after inspection. Replaced paths, changed
+content/CFG level, hardlinks and ambiguous reads fail closed.
+`stl doctor ipsec` exposes a stable additive `native_config` check.
+
+This is **byte/path attestation only**, not affirmative STL-origin
+ownership, durable publication, service/package adoption, process
+`STRONGSWAN_CONF` selection, effective logger safety, a persistent
+no-clobber lock or permission to load a secret. A foreign administrator
+can supply byte-identical content, and a root actor can change the path
+after the observation. Future service provisioning therefore needs an
+origin-bound durable receipt/transaction with root-private atomic
+publication and recovery, plus exact active executable/service/process
+identity, effective logging, VICI authorization and kernel owner gates.
+No effectful service or VICI writer has been added; Issues #7/#12 remain
+OPEN. This adds a preflight observation, not a new owner-level decision.
+
 The observational `stl doctor ipsec` now detects currently bound
 UDP 500/4500 sockets via bounded, strictly parsed procfs IPv4/IPv6
 tables from its own network namespace, with stable `blocked`,

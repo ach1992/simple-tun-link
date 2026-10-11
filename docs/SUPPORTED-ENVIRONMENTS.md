@@ -70,6 +70,13 @@ test or enable IPsec. The fixed proposed strongSwan configuration is a
 non-operational `charon-systemd` template; validated distro/systemd
 adapters, service ownership and effective logging verification still require
 real disposable-environment acceptance.
+The additive `native_config` read-only check requires root-private
+canonical storage and exact reviewed source bytes. It can report unknown
+when invoked without access to that protected path. Successful source
+file attestation is not installed-package compatibility, durable
+STL-created inode proof, active logging attestation or service eligibility.
+The documented Ubuntu/Debian daemonless/container smoke therefore must
+not be promoted to an operational or persistence acceptance result.
 
 
 ## Release validation

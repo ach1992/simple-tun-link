@@ -367,6 +367,17 @@ backends satisfy the secret-safe policy. Missing proof is an IPsec-only
 fail-closed condition. No service/config is installed or started by this
 source-only component.
 
+The additional read-only native-config artifact probe pins each parent
+and the opened file, requiring root-only state/IPsec directory traversal,
+root-owned exact `0600` single-link config, reviewed bytes, and
+post-read identity checks. No arbitrary file contents or errors are
+returned to the doctor. A positive check remains **insufficient** to
+establish an STL-origin file or secure active daemon logging: matching
+content can be foreign and its path can change after inspection.
+Root-private publication receipts, verified systemd/process/package
+provenance and VICI writer isolation remain mandatory before secrets
+or effects.
+
 `stl doctor ipsec` also observes UDP 500/4500 occupancy from bounded procfs
 tables in the current namespace. It never dumps socket rows/inodes and never
 converts a missing/unreadable/malformed table into an empty one; an

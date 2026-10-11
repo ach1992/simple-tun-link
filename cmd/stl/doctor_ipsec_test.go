@@ -52,7 +52,7 @@ func TestIPsecDoctorOperatorAndMachineDiagnostics(t *testing.T) {
 		t.Fatal(err)
 	}
 	if report.ActivationAllowed || report.SchemaVersion != 1 || report.Backend != "ipsec" ||
-		report.RuntimeMode != "native_exclusive" || len(report.Checks) != 6 {
+		report.RuntimeMode != "native_exclusive" || len(report.Checks) != 7 {
 		t.Fatalf("missing stable fail-closed diagnostic envelope: %+v", report)
 	}
 	if strings.Contains(stdout.String(), "DO_NOT_PRINT") || !strings.Contains(stdout.String(), "reason_code") {
