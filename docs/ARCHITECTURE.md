@@ -538,7 +538,7 @@ calling `load-shared`, `load-conn` or `reload-settings`. An owner-only
 service and socket boundary must be proven independently.
 
 Future operational work must never promote `pgrep` absence, UDP
-non-observation, config-file equality, `swanctl --version` or XFRM
+non-observation, config-file equality, `swanctl --help` or XFRM
 inventory success into an activation permit. Existing strongSwan and
 GRE/IPIP/WireGuard resources are not touched. Issues #7 and #12 own
 operational and release proof; Issue #9 owns common diagnostics and safe

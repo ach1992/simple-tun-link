@@ -57,10 +57,10 @@ func inspectIPsecHostWithInputs(ctx context.Context, runner linux.Runner, ports 
 	report.Checks = append(report.Checks, inspectCharonProcesses(ctx, runner))
 	report.Checks = append(report.Checks, inspectStrongSwanServiceFiles(ctx, lstat))
 	report.Checks = append(report.Checks, inspectIPsecIKEPorts(ctx, ports))
-	report.Checks = append(report.Checks, inspectIPsecCommand(ctx, runner, "/usr/sbin/swanctl", []string{"--version"},
+	report.Checks = append(report.Checks, inspectIPsecCommand(ctx, runner, "/usr/sbin/swanctl", []string{"--help"},
 		"strongswan_tool", "strongswan_tool_observed", "strongswan_tool_unverified",
-		"strongSwan swanctl responded to a read-only version request.",
-		"Cannot verify swanctl from a read-only version request.",
+		"strongSwan swanctl responded to a read-only help and version summary request.",
+		"Cannot verify swanctl from a read-only help request.",
 		"Check the installed strongSwan client package and its executable; do not modify a foreign service."))
 	report.Checks = append(report.Checks, inspectIPsecCommand(ctx, runner, "/sbin/ip",
 		[]string{"-json", "-details", "link", "show", "type", "xfrm"},

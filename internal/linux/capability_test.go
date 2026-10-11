@@ -43,7 +43,7 @@ func TestCapabilityProbeDegradesPerBackend(t *testing.T) {
 }
 
 func TestCapabilityProbeDoesNotExposeProbeErrors(t *testing.T) {
-	runner := capabilityRunner{fail: map[string]bool{"swanctl --version": true}}
+	runner := capabilityRunner{fail: map[string]bool{"swanctl --help": true}}
 	report, err := (CapabilityProbe{Runner: runner}).Probe(context.Background())
 	if err != nil {
 		t.Fatal(err)

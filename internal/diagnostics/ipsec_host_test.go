@@ -73,7 +73,7 @@ func TestIPsecDoctorReadOnlyAndNoFalseActivation(t *testing.T) {
 		t.Fatalf("missing actionable blocked runtime: %+v", c)
 	}
 	wantCalls := []string{"/usr/bin/pgrep -x charon", "/usr/bin/pgrep -x charon-systemd",
-		"/usr/sbin/swanctl --version", "/sbin/ip -json -details link show type xfrm"}
+		"/usr/sbin/swanctl --help", "/sbin/ip -json -details link show type xfrm"}
 	if strings.Join(runner.calls, "|") != strings.Join(wantCalls, "|") {
 		t.Fatalf("unexpected command calls (mutation risk): %q", runner.calls)
 	}
@@ -97,7 +97,7 @@ func TestIPsecDoctorDetectsExistingDaemonWithoutTouchingIt(t *testing.T) {
 func TestIPsecDoctorUnknownObservationsDoNotLeakOrBecomeVacant(t *testing.T) {
 	runner := &ipsecDoctorRunner{overrides: map[string]error{
 		"/usr/bin/pgrep -x charon":                    &linux.CommandError{Command: "pgrep", ExitCode: 2},
-		"/usr/sbin/swanctl --version":                 errors.New("private_key=NEVER_SHOW"),
+		"/usr/sbin/swanctl --help":                    errors.New("private_key=NEVER_SHOW"),
 		"/sbin/ip -json -details link show type xfrm": errors.New("PSK=NEVER_SHOW"),
 	}}
 	report, err := inspectIPsecDoctorFixture(context.Background(), runner)

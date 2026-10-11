@@ -591,9 +591,11 @@ Debian/Ubuntu strongSwan systemd/SysV service-file identities with
 non-following `lstat`. It inspects bound UDP 500/4500 sockets in the
 **caller's current network namespace** through bounded read-only
 `/proc/net/udp` and `/proc/net/udp6` snapshots; it also checks
-`swanctl --version` and whether a read-only XFRM interface inventory
-can be obtained. On supported Debian/Ubuntu builds it
-uses fixed system binary paths (`/usr/bin/pgrep`, `/usr/sbin/swanctl`,
+`swanctl --help` and whether a read-only XFRM interface inventory
+can be obtained. Packaged strongSwan 5.9.13 and 6.0.1 support the
+read-only `swanctl --help` check (their `--version` exits 2), but help
+success is still only a tool observation, not proof of daemon readiness.
+On supported Debian/Ubuntu builds the doctor uses fixed system binary paths (`/usr/bin/pgrep`, `/usr/sbin/swanctl`,
 `/sbin/ip`) rather than executing tools found through a user-controlled
 `PATH`; other layouts require a validated distro adapter, not a fallback.
 
