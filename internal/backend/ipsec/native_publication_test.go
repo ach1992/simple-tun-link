@@ -2,6 +2,8 @@ package ipsec
 
 import (
 	"bytes"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -327,5 +329,65 @@ func TestNativeConfigPublicationRefusesSwappedPrivateDirectory(t *testing.T) {
 	}
 	if got := inspectNativeOriginAt(root, uid); got != NativeOriginMissing {
 		t.Fatalf("new foreign directory was treated as STL-owned: %s", got)
+	}
+}
+
+// A crypto/rand.Read result of 16 zero bytes is valid input entropy. The
+// publisher must draw again BEFORE any persisted receipt, because the reader
+// explicitly requires a nonzero token.
+func TestNativeConfigPublicationZeroNonceRetriesBeforeReceipt(t *testing.T) {
+	root, path, uid := nativePublicationFixture(t)
+	var accepted [16]byte
+	accepted[0], accepted[15] = 0x42, 0x7f
+	entropy := bytes.NewReader(append(make([]byte, 16), accepted[:]...))
+	if err := publishNativeConfigAt(root, uid, nativePublishHooks{nonceSource: entropy}); err != nil {
+		t.Fatalf("valid second draw failed: %v", err)
+	}
+	if entropy.Len() != 0 {
+		t.Fatalf("did not consume the second 128-bit entropy draw: %d bytes remain", entropy.Len())
+	}
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(path), nativeOriginName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receipt nativeOriginReceipt
+	if err := json.Unmarshal(raw, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Nonce != hex.EncodeToString(accepted[:]) {
+		t.Fatalf("origin token did not use the nonzero draw: %s", receipt.Nonce)
+	}
+	if got := inspectNativeOriginAt(root, uid); got != NativeOriginVerified {
+		t.Fatalf("writer-produced nonzero receipt was rejected by the inspector: %s", got)
+	}
+}
+
+func TestNativeConfigPublicationEntropyFailureBeforeAnyPublication(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		entropy []byte
+	}{
+		{"all eight draws zero", make([]byte, 8*16)},
+		{"zero draw followed by EOF", make([]byte, 16)},
+		{"partial first draw", make([]byte, 15)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, path, uid := nativePublicationFixture(t)
+			if err := publishNativeConfigAt(root, uid, nativePublishHooks{
+				nonceSource: bytes.NewReader(tc.entropy),
+			}); !errors.Is(err, errNativePublicationUnknown) {
+				t.Fatalf("invalid entropy was not rejected without publication: %v", err)
+			}
+			if got := inspectNativeOriginAt(root, uid); got != NativeOriginMissing {
+				t.Fatalf("failure produced unexpected receipt or canonical config: %s", got)
+			}
+			entries, err := os.ReadDir(filepath.Dir(path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("entropy failure left %d staging or canonical files", len(entries))
+			}
+		})
 	}
 }

@@ -59,6 +59,28 @@ type nativePublishHooks struct {
 	afterReceipt    func() error // test-only failure injection; no production caller
 	beforeCanonical func() error
 	afterCanonical  func() error
+	nonceSource     io.Reader // test-only deterministic entropy seam; nil uses crypto/rand.Reader
+}
+
+// newNativeOriginNonce uses the exact nonzero nonce domain required by the
+// origin receipt inspector. A zero draw is valid entropy output, but must not
+// become a published receipt that our own inspector rejects. The retry bound
+// also ensures a failing entropy source cannot hang a publication attempt.
+func newNativeOriginNonce(source io.Reader) ([16]byte, error) {
+	var nonce [16]byte
+	if source == nil {
+		return nonce, errNativePublicationUnknown
+	}
+	const maxDraws = 8
+	for attempt := 0; attempt < maxDraws; attempt++ {
+		if _, err := io.ReadFull(source, nonce[:]); err != nil {
+			return [16]byte{}, err
+		}
+		if nonce != ([16]byte{}) {
+			return nonce, nil
+		}
+	}
+	return [16]byte{}, errNativePublicationUnknown
 }
 
 // publishNativeConfigAt is intentionally not exported and has no production
@@ -86,8 +108,12 @@ func publishNativeConfigAt(root string, owner uint32, hooks nativePublishHooks) 
 		return errNativePublicationConflict
 	}
 
-	var nonce [16]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
+	entropy := hooks.nonceSource
+	if entropy == nil {
+		entropy = rand.Reader
+	}
+	nonce, err := newNativeOriginNonce(entropy)
+	if err != nil {
 		return errNativePublicationUnknown
 	}
 	token := hex.EncodeToString(nonce[:])
