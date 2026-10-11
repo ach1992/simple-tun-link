@@ -151,7 +151,9 @@ Manual MTU never bypasses the observed route/underlay ceiling.
 `stl link diagnose` emits the same versioned common report, with
 `backend: "ipip"` and an IPIP `state` field. Neither a verified interface
 nor an in-memory/fake-runner diagnostic test proves that peer traffic
-works. Privileged bidirectional IPIP acceptance remains Issue #5/#12.
+works. Backend-focused real bidirectional IPIP Native/FOU/GUE traffic was
+accepted under closed Issue #5. Additional cross-backend/release-environment
+E2E remains Issue #12; unfinished common diagnostics belongs to Issue #9.
 
 ## WireGuard adapter — public handshake, counters and active diagnosis
 

@@ -29,8 +29,11 @@ type SetupLinkExport struct {
 }
 
 // Export an already persisted plaintext GRE/IPIP Link by stable Link ID.
-// No backend runtime is assembled, and no secret-bearing backend is supported until its key
-// storage/receiver import contract is implemented and separately reviewed.
+// No backend runtime is assembled. Saved state intentionally has no receiver
+// WireGuard private key, so a valid sensitive receiver handoff cannot be
+// reconstructed by export. WireGuard v3 recipient import already exists;
+// its secret-bearing offer comes only from the protected one-time
+// Create/Resume handoff path, never from saved-state export.
 func linkExportCommand(args []string, stdout, stderr io.Writer, options *runtimeOptions) int {
 	jsonOutput := slices.Contains(args, "--json")
 	valid := (len(args) == 2 || (len(args) == 3 && args[2] == "--json")) && args[0] == "export"
