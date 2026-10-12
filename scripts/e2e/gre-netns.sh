@@ -449,6 +449,17 @@ CONFIG
       [[ -S /run/stl-ipsec-proof/$side.vici ]] && kill -0 "$pid" 2>/dev/null || {
         echo 'FAIL: isolated IPsec peer did not expose its private VICI endpoint' >&2; exit 1;
       }
+      # VICI readiness alone does not mean the peer can receive IKEv2.
+      # The minimal Docker cap set must retain NET_BIND_SERVICE so charon
+      # can open 500/4500; without it, Connect waits 20s and times out.
+      local listeners
+      listeners="$(ip netns exec "$ns" ss -lun)" || {
+        echo 'FAIL: cannot inspect private IKE socket listeners' >&2; exit 1;
+      }
+      [[ "$listeners" == *"0.0.0.0:500"* && "$listeners" == *"0.0.0.0:4500"* ]] || {
+        echo "FAIL: IPsec peer $side has VICI but no bound UDP 500/4500 listeners" >&2
+        exit 1
+      }
     }
     start_cross_ipsec_peer a
     start_cross_ipsec_peer b

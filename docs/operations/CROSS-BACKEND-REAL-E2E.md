@@ -80,7 +80,10 @@ is present. Normal CLI and production admission are unchanged.
 
 The runner owns two fixture-only strongSwan processes (one per namespace),
 a private 0700 VICI configuration directory, and the bounded test-only
-CLI credential exchange. It starts no host systemd unit and never mounts
+CLI credential exchange. The restricted disposable Docker capability set
+includes `NET_BIND_SERVICE` for strongSwan's IKE UDP 500/4500 listeners;
+without it VICI can appear healthy while IKE traffic is impossible.
+Each fresh namespace must confirm BOTH actual UDP listeners before Connect. It starts no host systemd unit and never mounts
 an Agent's host strongSwan socket, runtime, credential directory or
 network namespace. The guest test forces the IPsec capability rather than
 silently skipping it. Host-only CI checks source syntax; actual privileged

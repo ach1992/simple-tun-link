@@ -84,6 +84,7 @@ for entry in "ubuntu:$ubuntu_image" "debian:$debian_image"; do
     --tmpfs /tmp:exec,nosuid,size=256m,mode=1777 \
     --tmpfs /run:mode=0755,size=32m \
     --cap-drop ALL --cap-add NET_ADMIN --cap-add NET_RAW --cap-add SYS_ADMIN \
+    --cap-add NET_BIND_SERVICE \
     --security-opt apparmor=unconfined --security-opt seccomp=unconfined \
     --mount "type=bind,source=$temp/source,target=/proof/source,readonly" \
     --mount "type=bind,source=$temp/stl-cross.test,target=/proof/stl-cross.test,readonly" \
