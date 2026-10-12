@@ -88,6 +88,7 @@ for entry in "ubuntu:$ubuntu_image" "debian:$debian_image"; do
     --mount "type=bind,source=$temp/source,target=/proof/source,readonly" \
     --mount "type=bind,source=$temp/stl-cross.test,target=/proof/stl-cross.test,readonly" \
     -e STL_E2E_DISPOSABLE_HOST=approved -e STL_E2E_CROSS_WG=approved \
+    -e STL_E2E_CROSS_IPSEC=approved \
     -e STL_E2E_PREBUILT_TEST=/proof/stl-cross.test \
     -e "STL_E2E_PREBUILT_SHA256=$binary_sha" \
     -e "STL_E2E_SOURCE_SHA=$source_sha" \
@@ -104,6 +105,7 @@ for entry in "ubuntu:$ubuntu_image" "debian:$debian_image"; do
       printf "CROSS_BACKEND_GUEST_KERNEL=%s\n" "$(uname -r)"
       printf "CROSS_BACKEND_GUEST_IPROUTE=%s\n" "$(ip -Version)"
       printf "CROSS_BACKEND_GUEST_WG=%s\n" "$(wg --version)"
+      printf "CROSS_BACKEND_GUEST_CHARON_PACKAGE=%s\n" "$(dpkg-query -W charon-systemd)"
       exec /bin/bash /proof/source/scripts/e2e/gre-netns.sh
     '
   echo "CROSS_BACKEND_$distro=PASS"

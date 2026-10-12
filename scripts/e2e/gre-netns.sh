@@ -49,12 +49,31 @@ ns_a="stlg${suffix}a"
 ns_b="stlg${suffix}b"
 created_a=0
 created_b=0
+ipsec_pid_a=""
+ipsec_pid_b=""
+ipsec_work_owned=0
 host_default_before="$(ip -4 route show default)"
 
 cleanup() {
   local status="$1"
   trap - EXIT INT TERM
   set +e
+  # Only terminate daemons created by THIS disposable test. Never infer
+  # authority to signal an arbitrary process from a reused numeric PID.
+  local owned_pid owned_exe
+  for owned_pid in "$ipsec_pid_a" "$ipsec_pid_b"; do
+    [[ $owned_pid =~ ^[0-9]+$ ]] || continue
+    if [[ -r /proc/$owned_pid/exe || -L /proc/$owned_pid/exe ]]; then
+      owned_exe="$(readlink "/proc/$owned_pid/exe" 2>/dev/null || true)"
+      if [[ ${owned_exe##*/} == charon-systemd ]]; then
+        kill "$owned_pid" 2>/dev/null || status=1
+        wait "$owned_pid" 2>/dev/null || true
+      fi
+    fi
+  done
+  if (( ipsec_work_owned )) && [[ -d /run/stl-ipsec-proof ]]; then
+    rm -rf -- /run/stl-ipsec-proof || status=1
+  fi
   if (( created_b )); then
     ip netns delete "$ns_b" || { echo "FAILED to delete owned namespace $ns_b" >&2; status=1; }
   fi
@@ -375,7 +394,106 @@ if [[ -v STL_E2E_CROSS_WG && "$STL_E2E_CROSS_WG" == approved ]]; then
   done
   echo 'GRE_NATIVE_FOU_GUE_WG_SAME_PEER_CONCURRENT=PASS'
 
-  # All four Links are still live: remove/reapply FOU WITHOUT stopping WG.
+  # Native IKEv2/XFRM is added to the EXACT A/B namespaces and per-side
+  # desired-state roots already shared by three GRE Links and WireGuard.
+  # No parallel standalone IPsec database or different underlay peers can
+  # qualify as this five-Link release acceptance. Cross-peer VICI daemons
+  # live only in the disconnected container and are pinned by their PIDs.
+  if [[ ${STL_E2E_CROSS_IPSEC:-} == approved ]]; then
+    [[ -x /usr/sbin/charon-systemd ]] || {
+      echo 'MISSING_CROSS_IPSEC_TOOL=charon-systemd' >&2; exit 2;
+    }
+    command -v swanctl >/dev/null || {
+      echo 'MISSING_CROSS_IPSEC_TOOL=swanctl' >&2; exit 2;
+    }
+    [[ ! -e /run/stl-ipsec-proof ]] || {
+      echo 'REFUSED: IPsec fixture root exists before this disposable run' >&2; exit 2;
+    }
+    mkdir -m 0700 /run/stl-ipsec-proof
+    ipsec_work_owned=1
+    for side in a b; do
+      cat > "/run/stl-ipsec-proof/$side.conf" <<CONFIG
+charon {
+ install_routes = no
+ install_virtual_ip = no
+}
+charon-systemd {
+ install_routes = no
+ install_virtual_ip = no
+ journal {
+  default = 1
+  cfg = 1
+ }
+ plugins {
+  vici {
+   socket = unix:///run/stl-ipsec-proof/$side.vici
+  }
+ }
+}
+CONFIG
+    done
+    start_cross_ipsec_peer() {
+      local side="$1" ns pid count
+      if [[ $side == a ]]; then ns="$ns_a"; else ns="$ns_b"; fi
+      ip netns exec "$ns" env STRONGSWAN_CONF="/run/stl-ipsec-proof/$side.conf" \
+        /usr/sbin/charon-systemd >"/run/stl-ipsec-proof/$side.log" 2>&1 &
+      pid=$!
+      if [[ $side == a ]]; then ipsec_pid_a="$pid"; else ipsec_pid_b="$pid"; fi
+      printf '%s\n' "$pid" >"/run/stl-ipsec-proof/$side.pid"
+      for count in $(seq 1 100); do
+        if [[ -S /run/stl-ipsec-proof/$side.vici ]] && kill -0 "$pid" 2>/dev/null; then
+          break
+        fi
+        sleep .1
+      done
+      [[ -S /run/stl-ipsec-proof/$side.vici ]] && kill -0 "$pid" 2>/dev/null || {
+        echo 'FAIL: isolated IPsec peer did not expose its private VICI endpoint' >&2; exit 1;
+      }
+    }
+    start_cross_ipsec_peer a
+    start_cross_ipsec_peer b
+    echo 'CROSS_FIVE_BACKEND_SEPARATE_OWNED_VICI_DAEMONS=PASS'
+    run_cross_ipsec_side() {
+      local side="$1" action="$2" ns root
+      if [[ $side == a ]]; then ns="$ns_a"; root="$workdir/a";
+      else ns="$ns_b"; root="$workdir/b"; fi
+      ip netns exec "$ns" env \
+        STL_E2E_DISPOSABLE_HOST=approved STL_IPSEC_ISOLATED=approved \
+        STL_IPSEC_CLI_FIXTURE=approved STL_IPSEC_CROSS_E2E=approved \
+        STL_IPSEC_CLI_OP="$action" STL_IPSEC_CLI_SIDE="$side" \
+        STL_IPSEC_CLI_LINK=c STL_IPSEC_CLI_ENCAP=esp \
+        STL_IPSEC_CROSS_STATE_ROOT="$root" \
+        "$workdir/gre-e2e.test" -test.run '^TestIPsecCanonicalCLIRealIsolatedE2E$' -test.v
+    }
+    cross_ipsec_traffic() {
+      ip netns exec "$ns_a" ping -n -q -c 3 -W 2 -I 10.84.10.0 10.84.10.1 >/dev/null
+      ip netns exec "$ns_b" ping -n -q -c 3 -W 2 -I 10.84.10.1 10.84.10.0 >/dev/null
+    }
+    run_cross_ipsec_side a create
+    run_cross_ipsec_side b import
+    if ip netns exec "$ns_a" ping -n -q -c 1 -W 1 -I 10.84.10.0 10.84.10.1 >/dev/null 2>&1; then
+      echo 'FAIL: IPsec inner packets passed without negotiated protection' >&2; exit 1;
+    fi
+    run_cross_ipsec_side a connect
+    cross_ipsec_traffic
+    for side in a b; do
+      if [[ $side == a ]]; then ns="$ns_a"; else ns="$ns_b"; fi
+      [[ "$(ip -n "$ns" xfrm state | grep -c 'proto esp' || true)" == 2 ]] || {
+        echo 'FAIL: IPsec negotiated ESP SAs not independently observed' >&2; exit 1;
+      }
+      run_cross_ipsec_side "$side" status
+      run_cross_ipsec_side "$side" cross-list
+      run_cross_ipsec_side "$side" ensure
+    done
+    run_cross_ipsec_side a diagnose
+    assert_gre_firewall_unchanged
+    for gre_mode in native fou gue; do select_mode "$gre_mode"; traffic; done
+    ip netns exec "$ns_a" ping -n -c 2 -W 3 -I 10.83.10.0 10.83.10.1 >/dev/null
+    echo 'FIVE_SAME_PEER_GRE_NATIVE_FOU_GUE_WG_IPSEC=PASS'
+  fi
+
+  # All four original GRE/WG Links stay live; when opted in, so does the
+  # fifth IKEv2/XFRM Link through scoped GRE/FOU remove, reapply and repair.
   # Verify the three survivors both by identity and actual packets.
   select_mode fou
   run_side a remove
@@ -422,6 +540,11 @@ if [[ -v STL_E2E_CROSS_WG && "$STL_E2E_CROSS_WG" == approved ]]; then
   ip netns exec "$ns_a" ping -n -c 2 -W 3 -I 10.83.10.0 10.83.10.1 >/dev/null
   ip netns exec "$ns_b" ping -n -c 2 -W 3 -I 10.83.10.1 10.83.10.0 >/dev/null
   assert_gre_firewall_unchanged
+  if [[ ${STL_E2E_CROSS_IPSEC:-} == approved ]]; then
+    cross_ipsec_traffic
+    run_cross_ipsec_side a status
+    echo 'FOU_RECOVERY_PRESERVES_REAL_IPSEC_TRAFFIC=PASS'
+  fi
   echo 'FOU_LINK_LOSS_RECOVERY_PRESERVES_GRE_AND_WG=PASS'
 
   # Two independent requests compete for the SAME owned FOU receive port.
@@ -486,6 +609,25 @@ if [[ -v STL_E2E_CROSS_WG && "$STL_E2E_CROSS_WG" == approved ]]; then
   ip netns exec "$ns_b" ping -n -c 2 -W 3 -I 10.83.10.1 10.83.10.0 >/dev/null
   assert_gre_firewall_unchanged
   echo 'FOREIGN_GRE_ADOPTION_REJECTED_WITH_SIBLINGS_LIVE=PASS'
+  if [[ ${STL_E2E_CROSS_IPSEC:-} == approved ]]; then
+    cross_ipsec_traffic
+    run_cross_ipsec_side a remove
+    run_cross_ipsec_side b remove
+    for ns in "$ns_a" "$ns_b"; do
+      [[ "$(ip -n "$ns" xfrm state | grep -c 'proto esp' || true)" == 0 ]] || {
+        echo 'FAIL: removed IPsec left a kernel ESP SA' >&2; exit 1;
+      }
+      [[ "$(ip -n "$ns" -d link show type xfrm | grep -c 'alias stl:lnk_' || true)" == 0 ]] || {
+        echo 'FAIL: removed IPsec retained owned XFRM interface' >&2; exit 1;
+      }
+    done
+    run_cross_wg_side a cross-list
+    run_cross_wg_side b cross-list
+    for gre_mode in native fou gue; do select_mode "$gre_mode"; traffic; done
+    ip netns exec "$ns_a" ping -n -c 2 -W 3 -I 10.83.10.0 10.83.10.1 >/dev/null
+    assert_gre_firewall_unchanged
+    echo 'IPSEC_SCOPED_REMOVE_PRESERVES_GRE_WG_SIBLINGS=PASS'
+  fi
   run_cross_wg_side a cross-list
   run_cross_wg_side b cross-list
 
