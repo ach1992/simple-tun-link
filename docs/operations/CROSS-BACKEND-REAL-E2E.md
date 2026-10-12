@@ -111,18 +111,28 @@ attempts separately instead of inventing PASS evidence.
 ## Ephemeral privileged PR verification
 
 `.github/workflows/cross-backend-e2e.yml` runs this exact-source matrix
-on a fresh GitHub-hosted Ubuntu 24.04 **VM** for same-repository PRs
-touching runtime/E2E files. It does **not** modify the dedicated AI Test
+on two separately allocated GitHub-hosted disposable **VMs** for
+same-repository PRs touching runtime/E2E files: an Ubuntu 22.04 x86_64
+runner and a **real** Ubuntu 24.04 ARM64 runner. These two hosts have
+independent, running kernel identities. The workflow loads the `fou`
+module explicitly only within those disposable runners; inability
+to load it **FAILS** the required acceptance instead of hiding a
+kernel limitation. It does **not** modify the dedicated AI Test
 Server or AI Server Agent. The workflow checks out the PR's exact HEAD,
 uses a read-only repository token with no persisted checkout credentials,
 builds test-only Ubuntu 24.04 and Debian 13 images, and exercises both
 guests with `--network none` and the existing owner-/cleanup-guarded
 driver. The runner has a distinct, ephemeral x86_64 kernel and real
-kernel tunnel operations, but **not** two separately booted distro
-kernels, a guest OS reboot, or ARM64 runtime.
+kernel tunnel operations, but **not** independently booted distro
+kernels or a whole-guest OS reboot. A successful ARM64 job with
+`uname -m=aarch64`, `GOARCH=arm64`, native guest architecture, real
+packet evidence, correct exclusive kernel resource identities and cleanup
+**does** qualify as native ARM64 runtime evidence. Cross-compilation does not.
 
-A real `SUCCESS` run of this privileged job with the six-Link markers
-and zero cleanup failures is required before claiming NAT-T cross-backend
+Real `SUCCESS` runs for both native architecture jobs with the six-Link
+markers and zero cleanup failures are required before claiming the full
+cross-backend architecture matrix; record partial successes by kernel and
+distribution without promoting them to a full matrix PASS.
 acceptance. A blocked job, missing container capability, cancelled
 run, unsupported provider kernel, or `SKIP` is not acceptance.
 The ordinary Go CI remains nonprivileged and is not a substitute.

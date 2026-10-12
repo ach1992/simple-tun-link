@@ -26,6 +26,14 @@ source_status="$(git -c safe.directory="$source_root" status --porcelain)" || {
 }
 source_sha="$(git -c safe.directory="$source_root" rev-parse HEAD)" || exit 2
 [[ $source_sha =~ ^[0-9a-f]{40}$ ]] || exit 2
+# Real ARM64 acceptance must execute on a native ARM64 kernel; do not
+# confuse emulated userspace or a cross-compiled test binary with runtime.
+host_arch="$(uname -m)"
+case "$host_arch:$(go env GOARCH)" in
+  x86_64:amd64|aarch64:arm64) ;;
+  *) echo "REFUSED: unsupported or cross-compiled kernel/Go architecture $host_arch" >&2; exit 2 ;;
+esac
+echo "CROSS_BACKEND_REAL_KERNEL_ARCH=$host_arch"
 # Pin exact guest images: caller is responsible for building and reviewing
 # these task-only images using cross-backend.Dockerfile first.
 ubuntu_image="${STL_E2E_IMAGE_UBUNTU:-stl-cross-backend:ubuntu24}"
@@ -95,6 +103,7 @@ for entry in "ubuntu:$ubuntu_image" "debian:$debian_image"; do
     -e "STL_E2E_PREBUILT_SHA256=$binary_sha" \
     -e "STL_E2E_SOURCE_SHA=$source_sha" \
     -e "STL_E2E_EXPECTED_DISTRO=$distro" \
+    -e "STL_E2E_EXPECTED_ARCH=$host_arch" \
     "$image" /bin/bash -c '
       set -Eeuo pipefail
       . /etc/os-release
@@ -102,7 +111,14 @@ for entry in "ubuntu:$ubuntu_image" "debian:$debian_image"; do
         ubuntu:ubuntu:24.04|debian:debian:13) ;;
         *) echo "REFUSED: image is not declared Ubuntu LTS/Debian stable"; exit 2 ;;
       esac
-      [[ "$(uname -m)" == x86_64 ]] || { echo "UNTESTED_ARCHITECTURE=$(uname -m)"; exit 2; }
+      [[ "$(uname -m)" == "$STL_E2E_EXPECTED_ARCH" ]] || {
+        echo "REFUSED: kernel/guest architecture mismatch $(uname -m)"; exit 2;
+      }
+      case "$STL_E2E_EXPECTED_ARCH:$(dpkg --print-architecture)" in
+        x86_64:amd64|aarch64:arm64) ;;
+        *) echo "REFUSED: guest architecture not native to kernel"; exit 2 ;;
+      esac
+      echo "CROSS_BACKEND_GUEST_ARCH=$STL_E2E_EXPECTED_ARCH"
       echo "CROSS_BACKEND_GUEST_DISTRO=$PRETTY_NAME"
       printf "CROSS_BACKEND_GUEST_KERNEL=%s\n" "$(uname -r)"
       printf "CROSS_BACKEND_GUEST_IPROUTE=%s\n" "$(ip -Version)"

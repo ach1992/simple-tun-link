@@ -124,7 +124,10 @@ sudo env PATH="$PATH" STL_E2E_DISPOSABLE_HOST=approved \
 The runner is **not** safe to run on a production or control-plane server.
 The image builds use the distribution's package repositories and may
 install packages inside the *images only*. The runtime guests remain
-network-disconnected with fresh, isolated namespaces. Six-Link acceptance
+network-disconnected with fresh, isolated namespaces. The dedicated
+PR workflow now runs this source on both real x86_64 and ARM64 GitHub-hosted
+VMs, with exact-native Go/guest architecture assertions; runner-local
+`fou` module activation fails closed on unsupported kernels. Six-Link acceptance
 requires *both* actual ESP and ESP-in-UDP XFRM SAs, distinct protected
 credentials, pre-negotiation plaintext rejection, actual bidirectional
 inner traffic, exact shared-state inventory, scoped ESP removal with NAT-T

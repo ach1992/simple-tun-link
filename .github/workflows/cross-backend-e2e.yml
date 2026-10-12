@@ -18,7 +18,15 @@ permissions:
 jobs:
   six-link-kernel:
     if: github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            kernel_arch: x86_64
+          - runner: ubuntu-24.04-arm
+            kernel_arch: aarch64
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
@@ -44,6 +52,24 @@ jobs:
             echo 'REFUSED: runner itself is a container'
             exit 2
           fi
+          test "$(uname -m)" = "${{ matrix.kernel_arch }}" || {
+            echo 'REFUSED: physical runner architecture differs from declared acceptance matrix'
+            exit 2
+          }
+          echo "REAL_KERNEL_ARCH=$(uname -m)"
+          echo "NATIVE_GOARCH=$(go env GOARCH)"
+      - name: Ensure required FOU kernel module on disposable VM
+        run: |
+          set -euo pipefail
+          # Explicitly load only the required kernel receive module on the
+          # freshly allocated, dedicated CI VM; never on an Agent host.
+          # An unavailable FOU module must FAIL (not silently SKIP).
+          sudo modprobe fou || {
+            echo 'UNSUPPORTED_FOU_KERNEL_MODULE=FAIL'
+            exit 2
+          }
+          ip -json fou show
+          echo 'DISPOSABLE_RUNNER_FOU_MODULE=READY'
       - name: Build isolated userspace images
         run: |
           set -euo pipefail
