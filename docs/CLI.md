@@ -116,6 +116,9 @@ the inventory query completed, **not** that a network Link is healthy.
 
 ### Operator recovery fields (shared status/diagnose/mutations)
 
+See [operator failure-to-recovery workflow](OPERATOR-RECOVERY.md) for
+Engine stage evidence, rollback confidence, and read-only recovery checks.
+
 The existing public v1 `error` object now consistently emits
 `reason_code` and `next_step` through a shared safe fallback for
 invalid/unsupported/conflicting/inspection/plan/apply/verify/state/rollback
@@ -541,12 +544,11 @@ and redacted versioned error. When an operation may have changed host or
 committed state, its JSON indicates `outcome: "unconfirmed"` and
 `reconciliation_required: true`, with any Engine-provided partial
 result in snake_case. These are conservative reconciliation signals,
-not a claimed successful apply. Some current early CLI/Engine rejections also
-use this conservative envelope before any verified host mutation; do not
-interpret the flag as proof that a change occurred. Issue #9/#10 owns a
-future evidence-backed no-effect versus indeterminate outcome distinction
-without a silent breaking change to schema v1. Do not retry a failed
-stateful operation blindly; inspect `link list` and `link status` first.
+not a claimed successful apply. Early failures still use the conservative envelope even when no host Apply
+was invoked. The optional additive `error.evidence` object now distinguishes
+Engine `stage`, `host_mutation`, `desired_state`, and `rollback` without
+changing existing schema-v1 top-level values or exit semantics. See
+[OPERATOR-RECOVERY.md](OPERATOR-RECOVERY.md) before any retry or repair.
 
 Exit codes remain 0 on verified Engine success; 2 for invalid input/usage,
 4 for unsupported backend, and 1 for other operational, state or rollback

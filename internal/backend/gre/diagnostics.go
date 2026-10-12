@@ -31,12 +31,20 @@ func (b *Backend) Capability(ctx context.Context, link domain.Link) (linux.Capab
 		if ctx.Err() != nil {
 			return linux.CapabilityStatus{}, ctx.Err()
 		}
+		if b.moduleProbe(ctx, "ip_gre") {
+			return linux.CapabilityStatus{Reason: "kernel module is available on disk but not loaded",
+				ReasonCode: "kernel_module_not_loaded"}, nil
+		}
 		return linux.CapabilityStatus{Reason: "GRE link type is unavailable"}, nil
 	}
 	if link.Encapsulation == domain.EncapFOU || link.Encapsulation == domain.EncapGUE {
 		if _, err := b.runner.Run(ctx, b.ipBinary, "-json", "fou", "show"); err != nil {
 			if ctx.Err() != nil {
 				return linux.CapabilityStatus{}, ctx.Err()
+			}
+			if b.moduleProbe(ctx, "fou") {
+				return linux.CapabilityStatus{Reason: "FOU kernel module is available on disk but not loaded",
+					ReasonCode: "kernel_module_not_loaded"}, nil
 			}
 			return linux.CapabilityStatus{Reason: "GRE FOU/GUE support is unavailable"}, nil
 		}

@@ -56,14 +56,24 @@ func ObserveGRE(ctx context.Context, link domain.Link, inspector GREInspector, r
 		return GREReport{}, stlerr.Wrap(stlerr.CodeInspect, "diagnose_gre", string(link.ID), string(link.Backend), "cannot inspect GRE capability", err)
 	}
 	if !capability.Available {
-		return GREReport{}, stlerr.New(stlerr.CodeUnsupported, "diagnose_gre", string(link.ID), string(link.Backend), "GRE capability is not available")
+		unsupported := stlerr.New(stlerr.CodeUnsupported, "diagnose_gre", string(link.ID), string(link.Backend), "GRE capability is not available")
+		if capability.ReasonCode == "kernel_module_not_loaded" {
+			unsupported.ReasonCode = capability.ReasonCode
+			unsupported.NextStep = "Check module availability for this kernel; load only with operator authorization and retry observation."
+		}
+		return GREReport{}, unsupported
 	}
 	state, err := inspector.DiagnosticState(ctx, link)
 	if err != nil {
 		if ctx.Err() != nil {
 			return GREReport{}, ctx.Err()
 		}
-		return GREReport{}, stlerr.Wrap(stlerr.CodeInspect, "diagnose_gre", string(link.ID), string(link.Backend), "cannot verify GRE operational state and counters", err)
+		wrapped := stlerr.Wrap(stlerr.CodeInspect, "diagnose_gre", string(link.ID), string(link.Backend),
+			"cannot verify GRE operational state and counters", err)
+		if known := stlerr.Public(err); known.ReasonCode == "kernel_module_not_loaded" {
+			wrapped.ReasonCode, wrapped.NextStep = known.ReasonCode, known.NextStep
+		}
+		return GREReport{}, wrapped
 	}
 	expectedName, err := grebackend.InterfaceName(link.ID)
 	if err != nil {

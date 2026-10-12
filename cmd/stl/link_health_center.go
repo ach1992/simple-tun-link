@@ -288,6 +288,11 @@ func healthBlocked(link domain.Link, reason, summary, next string) healthLinkChe
 }
 
 func healthDiagnosticFailure(link domain.Link, err error) healthLinkCheck {
+	if stlerr.Public(err).ReasonCode == "kernel_module_not_loaded" {
+		return healthBlocked(link, "kernel_module_not_loaded",
+			"Required kernel module is available on disk but not currently loaded; inspection was not completed.",
+			"Verify host kernel module policy and load only with authorization; rerun read-only diagnostics afterwards.")
+	}
 	if code := stlerr.CodeOf(err); code == stlerr.CodeUnsupported {
 		return healthBlocked(link, "diagnostic_capability_unavailable",
 			"Backend capability or diagnostic adapter is unavailable.",

@@ -38,6 +38,7 @@ type Options struct {
 	SetUp       func(context.Context, int) error
 	DeleteLink  func(context.Context, int) error
 	LookupIndex func(string) (int, error)
+	ModuleProbe func(context.Context, string) bool
 }
 
 type Backend struct {
@@ -51,6 +52,7 @@ type Backend struct {
 	setUp       func(context.Context, int) error
 	deleteLink  func(context.Context, int) error
 	lookupIndex func(string) (int, error)
+	moduleProbe func(context.Context, string) bool
 }
 
 func New(opts Options) (*Backend, error) {
@@ -87,8 +89,13 @@ func New(opts Options) (*Backend, error) {
 			return device.Index, nil
 		}
 	}
+	moduleProbe := opts.ModuleProbe
+	if moduleProbe == nil {
+		moduleProbe = (linux.KernelModuleProbe{Runner: opts.Runner}).AvailableButNotLoaded
+	}
 	return &Backend{
-		runner: opts.Runner, routes: opts.Routes, firewall: opts.Firewall,
+		moduleProbe: moduleProbe,
+		runner:      opts.Runner, routes: opts.Routes, firewall: opts.Firewall,
 		collisions: opts.Collisions, ipBinary: ip, setAlias: setAlias, addAddress: addAddress, setUp: setUp,
 		deleteLink: deleteLink, lookupIndex: lookupIndex,
 	}, nil
@@ -142,6 +149,9 @@ func (b *Backend) Inspect(ctx context.Context, link domain.Link) (core.Observati
 	}
 	result, err := b.runner.Run(ctx, b.ipBinary, "-details", "-json", "link", "show", "type", "gre")
 	if err != nil {
+		if b.moduleProbe(ctx, "ip_gre") {
+			return nil, core.KernelModuleNotLoaded("ip_gre")
+		}
 		return nil, fmt.Errorf("inspect GRE links: %w", err)
 	}
 	links, err := parseGRELinks(result.Stdout)

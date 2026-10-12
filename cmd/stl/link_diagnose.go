@@ -64,6 +64,13 @@ func linkDiagnoseCommand(args []string, stdout, stderr io.Writer, options *runti
 	measurement, err := inspectLinkDiagnostic(ctx, record.Desired, *options, manualMTU)
 	if err != nil {
 		code := stlerr.CodeOf(err)
+		if stlerr.Public(err).ReasonCode == "kernel_module_not_loaded" {
+			public := stlerr.New(code, "link_diagnose", "", "",
+				"required kernel module is available on disk but not loaded; diagnostic inventory was not verified")
+			public.ReasonCode = "kernel_module_not_loaded"
+			public.NextStep = "Check kernel module policy and load only with authorization; rerun observational diagnosis."
+			return readCommandPublicError(stdout, stderr, jsonOutput, public)
+		}
 		switch code {
 		case stlerr.CodeInvalid:
 			return readCommandError(stdout, stderr, jsonOutput, code, "link_diagnose", "invalid diagnostic configuration or MTU request")

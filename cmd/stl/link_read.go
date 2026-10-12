@@ -174,7 +174,7 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 		}
 		observed, err := inspector.DiagnosticState(ctx, record.Desired)
 		if err != nil {
-			return readStatusInspectionError(ctx, stdout, stderr, jsonOutput)
+			return readStatusInspectionError(ctx, stdout, stderr, jsonOutput, err)
 		}
 		expectedName, nameErr := grebackend.InterfaceName(id)
 		if nameErr != nil || observed.Interface != expectedName || observed.IfIndex <= 0 ||
@@ -193,7 +193,7 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 		}
 		observed, err := inspector.DiagnosticState(ctx, record.Desired)
 		if err != nil {
-			return readStatusInspectionError(ctx, stdout, stderr, jsonOutput)
+			return readStatusInspectionError(ctx, stdout, stderr, jsonOutput, err)
 		}
 		expectedName, nameErr := ipipbackend.InterfaceName(id)
 		if nameErr != nil || observed.Interface != expectedName || observed.IfIndex <= 0 ||
@@ -212,7 +212,7 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 		}
 		measured, readErr := inspector.DiagnosticState(ctx, record.Desired)
 		if readErr != nil {
-			return readStatusInspectionError(ctx, stdout, stderr, jsonOutput)
+			return readStatusInspectionError(ctx, stdout, stderr, jsonOutput, readErr)
 		}
 		expectedName, nameErr := wgbackend.InterfaceName(id)
 		if nameErr != nil || measured.Interface != expectedName || measured.IfIndex <= 0 ||
@@ -241,7 +241,14 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 	return 0
 }
 
-func readStatusInspectionError(ctx context.Context, stdout, stderr io.Writer, jsonOutput bool) int {
+func readStatusInspectionError(ctx context.Context, stdout, stderr io.Writer, jsonOutput bool, observed error) int {
+	if stlerr.Public(observed).ReasonCode == "kernel_module_not_loaded" && ctx.Err() == nil {
+		public := stlerr.New(stlerr.CodeInspect, "link_status", "", "",
+			"required kernel module is available on disk but not loaded; Link state was not verified")
+		public.ReasonCode = "kernel_module_not_loaded"
+		public.NextStep = "Check installed kernel module and host policy; load only with authorization, then retry status."
+		return readCommandPublicError(stdout, stderr, jsonOutput, public)
+	}
 	if ctx.Err() != nil {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInspect, "link_status", "live diagnostic inspection was interrupted")
 	}

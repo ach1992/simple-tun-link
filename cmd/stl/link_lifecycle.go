@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/netip"
@@ -131,7 +132,8 @@ func executeLinkMutationControlled(operation string, desired domain.Link, id dom
 		var err error
 		options, err = productionRuntimeOptions()
 		if err != nil {
-			return lifecycleFailure(stdout, stderr, jsonOutput, stlerr.CodeState, operation, nil, "cannot initialize backend/runtime; no success is confirmed")
+			return lifecycleFailureWithEvidence(stdout, stderr, jsonOutput, stlerr.CodeState, operation, nil,
+				"cannot initialize backend/runtime; no success is confirmed", preflightEvidence(), nil)
 		}
 	}
 	if len(credential) != 0 {
@@ -143,13 +145,14 @@ func executeLinkMutationControlled(operation string, desired domain.Link, id dom
 			}
 		}
 		if !registered {
-			return lifecycleFailure(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, operation, nil,
-				"protected WireGuard backend is unavailable; no mutation attempted")
+			return lifecycleFailureWithEvidence(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, operation, nil,
+				"protected WireGuard backend is unavailable; no mutation attempted", preflightEvidence(), nil)
 		}
 	}
 	engine, err := buildRuntimeEngine(*options)
 	if err != nil {
-		return lifecycleFailure(stdout, stderr, jsonOutput, stlerr.CodeState, operation, nil, "cannot initialize Link Engine; no success is confirmed")
+		return lifecycleFailureWithEvidence(stdout, stderr, jsonOutput, stlerr.CodeState, operation, nil,
+			"cannot initialize Link Engine; no success is confirmed", preflightEvidence(), nil)
 	}
 
 	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -164,7 +167,8 @@ func executeLinkMutationControlled(operation string, desired domain.Link, id dom
 		if len(credential) != 0 {
 			keys, keyErr := wgbackend.NewKeyStore(options.stateRoot)
 			if keyErr != nil {
-				return lifecycleFailure(stdout, stderr, jsonOutput, stlerr.CodeState, operation, nil, "cannot initialize protected WireGuard recipient store")
+				return lifecycleFailureWithEvidence(stdout, stderr, jsonOutput, stlerr.CodeState, operation, nil,
+					"cannot initialize protected WireGuard recipient store", preflightEvidence(), nil)
 			}
 			result, err = engine.EnsureImportedRecipient(ctx, desired, credential, keys)
 		} else {
@@ -183,11 +187,13 @@ func executeLinkMutationControlled(operation string, desired domain.Link, id dom
 	if err != nil {
 		code := stlerr.CodeOf(err)
 		if expected != nil && code == stlerr.CodeConflict {
-			return lifecycleFailure(stdout, stderr, jsonOutput, code, operation, &result,
-				"Saved Link changed since preview or removal conflicted; review current Link state before retry")
+			return lifecycleFailureWithEvidence(stdout, stderr, jsonOutput, code, operation, &result,
+				"Saved Link changed since preview or removal conflicted; review current Link state before retry",
+				stlerr.EvidenceOf(err), err)
 		}
-		return lifecycleFailure(stdout, stderr, jsonOutput, code, operation, &result,
-			"Link operation did not complete successfully; inspect current Link status/state before retry")
+		return lifecycleFailureWithEvidence(stdout, stderr, jsonOutput, code, operation, &result,
+			"Link operation did not complete successfully; inspect current Link status/state before retry",
+			stlerr.EvidenceOf(err), err)
 	}
 	if result.LinkID != id || (operation == "link_remove" && !result.Removed) ||
 		(operation != "link_remove" && result.Removed) {
@@ -220,13 +226,78 @@ func executeLinkMutationControlled(operation string, desired domain.Link, id dom
 	return 0
 }
 
+func preflightEvidence() *stlerr.OperationEvidence {
+	return &stlerr.OperationEvidence{Stage: "preflight", HostMutation: "not_attempted",
+		DesiredState: "no_commit_attempted", Rollback: "not_required"}
+}
+
 func lifecycleFailure(stdout, stderr io.Writer, jsonOutput bool, code stlerr.Code, operation string, result *app.Result, detail string) int {
+	return lifecycleFailureWithEvidence(stdout, stderr, jsonOutput, code, operation, result, detail, nil, nil)
+}
+
+// Only separately authored public guidance and typed stage metadata are used.
+// Do not forward an Engine/backend error's raw Detail or underlying cause.
+func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, code stlerr.Code, operation string,
+	result *app.Result, detail string, evidence *stlerr.OperationEvidence, observed error) int {
 	if code == "" {
 		code = stlerr.CodeInternal
 	}
 	// Error details here are authored literals, never the raw OS, backend,
 	// private state, caller-provided JSON or credential-bearing exception.
 	safe := stlerr.WithGuidance(stlerr.New(code, operation, "", "", detail))
+	var observedPublic *stlerr.Error
+	if observed != nil {
+		// Retain the original errors.Is cause chain, but project only
+		// validated identifiers and typed reasons. Never forward raw
+		// command output, arbitrary Details, or credential-bearing causes.
+		observedPublic = stlerr.Public(observed)
+		if domain.LinkID(observedPublic.ObjectID).Validate() == nil {
+			safe.ObjectID = observedPublic.ObjectID
+		}
+		switch domain.Backend(observedPublic.Backend) {
+		case domain.BackendGRE, domain.BackendIPIP, domain.BackendWireGuard, domain.BackendIPsec:
+			safe.Backend = observedPublic.Backend
+		}
+	}
+	if evidence != nil {
+		copy := *evidence
+		safe.Evidence = &copy
+		// Only the canonical Engine can attest that Apply was not invoked.
+		// The old top-level v1 "unconfirmed"/reconciliation fields remain
+		// unchanged; consumers opt into the additive evidence object.
+		switch {
+		case evidence.Stage == "credential_provision" && evidence.CredentialProvision == "attempted":
+			safe.ReasonCode = "credential_provision_outcome_unverified"
+			safe.NextStep = "A protected local key write was attempted; reconcile the exact key identity and saved Link intent before retry. No backend Apply was invoked."
+		case observedPublic != nil && observedPublic.ReasonCode == "kernel_module_not_loaded":
+			safe.ReasonCode = "kernel_module_not_loaded"
+			safe.NextStep = "Inspect the matching kernel module and supported host packages; load it only with operator authorization, then retry read-only checks."
+		case evidence.DesiredState == "visible_unconfirmed":
+			safe.ReasonCode = "state_publication_uncertain"
+			safe.NextStep = "Inspect saved desired state and live owned resources before retrying or removing anything; a publication may be visible without durable confirmation."
+		case evidence.DesiredState == "committed":
+			safe.ReasonCode = "post_commit_cleanup_incomplete"
+			safe.NextStep = "The desired-state commit completed; inspect the remaining owned service or credential cleanup before retrying."
+		case evidence.Rollback == "incomplete":
+			safe.ReasonCode = "rollback_incomplete"
+			safe.NextStep = "Inspect and reconcile the exact owned resources and local state; do not repeat mutation while compensation is incomplete."
+		case evidence.Rollback == "completed_unverified":
+			safe.ReasonCode = "rollback_completed_unverified"
+			safe.NextStep = "Owned rollback returned successfully, but recheck live Link identity and saved state before retrying."
+		case evidence.HostMutation == "not_attempted" && errors.Is(observed, context.DeadlineExceeded):
+			safe.ReasonCode = "operation_deadline_exceeded_before_apply"
+			safe.NextStep = "Operation timed out before backend Apply; inspect Link state, lock contention and host availability before retrying explicitly."
+		case evidence.HostMutation == "not_attempted" && errors.Is(observed, context.Canceled):
+			safe.ReasonCode = "operation_cancelled_before_apply"
+			safe.NextStep = "Operation was canceled before backend Apply; inspect Link state and retry only if still intended."
+		case evidence.HostMutation == "not_attempted":
+			safe.ReasonCode = "rejected_before_host_apply"
+			safe.NextStep = "Correct prerequisites or conflicting intent, then inspect Link state read-only before retrying; Engine did not invoke host Apply."
+		}
+		if evidence.CredentialProvision == "attempted" && evidence.Stage != "credential_provision" {
+			safe.NextStep += " A protected key write was also attempted; verify its exact identity before any retry or replacement."
+		}
+	}
 	out := lifecycleFailureResponse{
 		SchemaVersion:          jsonSchemaVersion,
 		Error:                  safe,
@@ -249,6 +320,14 @@ func lifecycleFailure(stdout, stderr io.Writer, jsonOutput bool, code stlerr.Cod
 	} else {
 		fmt.Fprintln(stderr, safe.Error())
 		fmt.Fprintf(stderr, "Reason: %s\nNext: %s\n", safe.ReasonCode, safe.NextStep)
+		if evidence != nil {
+			fmt.Fprintf(stderr, "Evidence: stage=%s host_mutation=%s desired_state=%s rollback=%s\n",
+				evidence.Stage, evidence.HostMutation, evidence.DesiredState, evidence.Rollback)
+			if evidence.CredentialProvision != "" {
+				fmt.Fprintf(stderr, "Credential provision: %s (the exact protected key may remain)\n",
+					evidence.CredentialProvision)
+			}
+		}
 		if result != nil && result.LinkID != "" {
 			fmt.Fprintf(stderr, "Partial operation result for Link %s; reconcile current host/state before retry\n", result.LinkID)
 		}

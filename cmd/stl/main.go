@@ -292,6 +292,19 @@ func restoreWithContext(ctx context.Context, options runtimeOptions, stdout, std
 		public := stlerr.WithGuidance(stlerr.Public(err))
 		fmt.Fprintf(stderr, "restore failed after %d link(s): %s\nReason: %s\nNext: %s\n",
 			len(results), public, public.ReasonCode, public.NextStep)
+		for _, failed := range restoreFailureSummaries(err) {
+			fmt.Fprintf(stderr, "Link %s (%s): reason=%s; next=%s\n",
+				failed.LinkID, failed.Backend, failed.Reason, failed.NextStep)
+			if failed.Evidence != nil {
+				fmt.Fprintf(stderr, "  Evidence: stage=%s host_mutation=%s desired_state=%s rollback=%s\n",
+					failed.Evidence.Stage, failed.Evidence.HostMutation,
+					failed.Evidence.DesiredState, failed.Evidence.Rollback)
+				if failed.Evidence.CredentialProvision != "" {
+					fmt.Fprintf(stderr, "  Credential provision: %s; exact protected key identity requires reconciliation\n",
+						failed.Evidence.CredentialProvision)
+				}
+			}
+		}
 		return 1
 	}
 	fmt.Fprintf(stdout, "restored %d link(s)\n", len(results))
