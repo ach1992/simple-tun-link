@@ -71,7 +71,7 @@ exact firewall and FOU mappings, guest/host routing baselines, and cleanup
 without blindly restoring unexpected host changes. For interrupted tests,
 inspect and retire **only task-owned** resources after reviewing evidence.
 
-## Five-Link real IPsec acceptance method
+## Five- and six-Link real IPsec acceptance method
 
 The isolated cross-backend image now includes `charon-systemd` and
 `strongswan-swanctl` userspace, solely inside task-created Docker images.
@@ -110,45 +110,62 @@ attempts separately instead of inventing PASS evidence.
 
 ## Ephemeral privileged PR verification
 
-`.github/workflows/cross-backend-e2e.yml` runs this exact-source matrix
+`.github/workflows/cross-backend-e2e.yml` runs the exact-source matrix
 on two separately allocated GitHub-hosted disposable **VMs** for
-same-repository PRs touching runtime/E2E files: an Ubuntu 22.04 x86_64
-runner and a **real** Ubuntu 24.04 ARM64 runner. These two hosts have
-independent, running kernel identities. The workflow explicitly loads only the `fou` and `ipip` kernel
-modules in these disposable runners: the first PR x86 runner failed
-early GRE/FOU inspection until `fou` was loaded, and the next x86
-and ARM64 runs both proved the new six-Link ESP/NAT-T lifecycle but
-stopped on a later IPIP Native `inspect_failed` before completing
-the full preexisting IPIP matrix. A missing module still **FAILS**
-acceptance; no bypass or SKIP is permitted. It does **not** modify the dedicated AI Test
-Server or AI Server Agent. The workflow checks out the PR's exact HEAD,
-uses a read-only repository token with no persisted checkout credentials,
-builds test-only Ubuntu 24.04 and Debian 13 images, and exercises both
-guests with `--network none` and the existing owner-/cleanup-guarded
-driver. The runner has a distinct, ephemeral x86_64 kernel and real
-kernel tunnel operations, but **not** independently booted distro
-kernels or a whole-guest OS reboot. A successful ARM64 job with
-`uname -m=aarch64`, `GOARCH=arm64`, native guest architecture, real
-packet evidence, correct exclusive kernel resource identities and cleanup
-**does** qualify as native ARM64 runtime evidence. Cross-compilation does not.
+same-repository PRs touching runtime/E2E files: Ubuntu 22.04 x86_64
+and Ubuntu 24.04 ARM64. Each VM has its own running kernel. The workflow
+checks out and verifies the exact PR HEAD, uses a read-only token without
+persisted checkout credentials, and builds test-only Ubuntu 24.04 and
+Debian 13 images. The disconnected `--network none` guests use the
+existing owner- and cleanup-guarded driver. The workflow loads only the
+required `fou` and `ipip` modules on these disposable VMs; missing
+capability **FAILS**, never silently SKIPs. No AI Test Server, AI Server
+Agent, production host or other host control plane is modified.
 
-Real `SUCCESS` runs for both native architecture jobs with the six-Link
-markers and zero cleanup failures are required before claiming the full
-cross-backend architecture matrix; record partial successes by kernel and
-distribution without promoting them to a full matrix PASS.
-acceptance. A blocked job, missing container capability, cancelled
-run, unsupported provider kernel, or `SKIP` is not acceptance.
-The ordinary Go CI remains nonprivileged and is not a substitute.
+The earlier attempts failed on initially unavailable FOU and IPIP module
+prerequisites, respectively. The exact-HEAD completed successful run below
+retains both kernel checks and executes the full preexisting IPIP matrix.
+The two native VM kernels are independent, but their Ubuntu/Debian Docker
+userspaces **share each respective VM kernel**; these are not separately
+booted distro kernels and no full guest OS reboot occurred.
+
+**Verified native release-level matrix (2026-10-12):** the
+[official exact-HEAD privileged run](https://github.com/ach1992/simple-tun-link/actions/runs/38280434443)
+completed **SUCCESS** at `a6aa71316c3b27cf5c49b7f752c41962677e871c`:
+
+- [AMD64 job](https://github.com/ach1992/simple-tun-link/actions/runs/38280434443/job/114916131220):
+  `uname -m=x86_64`, `GOARCH=amd64`, kernel `6.8.0-1064-azure`;
+  Ubuntu 24.04.5 and Debian 13 userspaces both PASS.
+- [ARM64 job](https://github.com/ach1992/simple-tun-link/actions/runs/38280434443/job/114916131610):
+  `uname -m=aarch64`, `GOARCH=arm64`, kernel `6.17.0-1022-azure`;
+  Ubuntu 24.04.5 and Debian 13 userspaces both PASS.
+
+Each of the four combinations passed six simultaneous Links, real ESP
+and ESP-in-UDP traffic, scoped FOU recovery, independent ESP/NAT-T removal,
+GRE/IPIP Native/FOU/GUE coexistence and exact resource cleanup.
+Each distro execution emitted `GRE_E2E_CLEANUP_EXIT=0`, and both VM jobs
+ended with `CROSS_BACKEND_DISPOSABLE_CLEANUP_EXIT=0`. This is **native
+AMD64 and ARM64 runtime acceptance**, not cross-compilation. The earlier
+failed runs remain auditable; they are not being counted as successful
+acceptance. Future runs must likewise succeed with all required packet
+markers and zero cleanup failures. A blocked job, missing capability,
+cancelled run or `SKIP` is never acceptance. Ordinary Go CI is nonprivileged
+and does not substitute for this evidence.
 
 ## Remaining gates outside this package
 
-Issue #12 stays **OPEN** pending actual full guest reboot/boot persistence
-(distinct from a real systemd service restart), broader failure/rollback and
-full reboot/boot coverage for strongSwan and mixed Links, plus ARM64 **runtime** acceptance where
-an isolated capable machine is available. Cross-building on amd64 is not
-ARM64 runtime proof. Valid earlier systemd GRE/IPsec and standalone IKEv2
-ESP/NAT-T proofs remain separate evidence; this Docker runner does not
-pretend to retest them.
+Issue #12 stays **OPEN** for an actual full guest **OS reboot** with
+automatic restoration of normally installed STL Links, durable state,
+protected credentials and real post-reboot bilateral packets. A systemd
+service restart or fresh Docker namespace is not a guest reboot. Distinct
+interruption/rollback and unsupported-capability handling not already
+proved by existing evidence also remain Issue #12 work.
+
+The completed native AMD64/ARM64 matrix above does **not** demonstrate
+independently booted Ubuntu and Debian distro kernels, physical NAT-router
+traversal or power-loss recovery. Its NAT-T evidence is actual in-kernel
+ESP-in-UDP, not a public NAT deployment. Valid earlier systemd GRE/IPsec
+and standalone IKEv2 ESP/NAT-T proofs remain separate evidence.
 
 Issue #11 exclusively owns release artifacts and safe
 install/update/uninstall. No merge, tag, release or deployment is implied.

@@ -82,9 +82,42 @@ root-owned **0700 immediate ancestor**, root socket owner and matching
 automatically enable/start vendor `strongswan.service`; the disposable
 systemd test image disables *its own* vendor service during image build.
 Never infer that a package install/upgrade on a real host is harmless or
-disable/adopt a third-party service. This PR is not a production installer,
-release, real NAT-router test, arm64 validation, physical reboot or
-power-failure recovery certification. Broader matrix remains Issue #12.
+disable/adopt a third-party service. The earlier systemd fixture alone was
+not ARM64 runtime validation. The separate native multi-architecture matrix
+below now provides that proof, but neither fixture certifies a production
+installer/release artifact, physical NAT-router traversal, full OS reboot,
+independently booted Ubuntu/Debian distro kernels or power-failure recovery.
+
+## Native release-level runtime matrix (Issue #12, 2026-10-12)
+
+The [official privileged six-Link E2E run](https://github.com/ach1992/simple-tun-link/actions/runs/38280434443)
+completed **SUCCESS** at Git commit
+`a6aa71316c3b27cf5c49b7f752c41962677e871c`.
+Each GitHub-hosted disposable VM has a **real independently running Linux
+kernel** and a natively built Go test binary (not cross-compiled or emulated):
+
+| Runner architecture | Verified kernel | Native Go architecture | Container userspaces |
+| --- | --- | --- | --- |
+| x86_64 | `6.8.0-1064-azure` | `amd64` | Ubuntu 24.04.5 LTS and Debian 13 |
+| aarch64 | `6.17.0-1022-azure` | `arm64` | Ubuntu 24.04.5 LTS and Debian 13 |
+
+All **four** architecture/userspace combinations passed real bidirectional
+traffic for simultaneous GRE Native/FOU/GUE, authenticated WireGuard,
+separately keyed IKEv2/XFRM ESP and NAT-T, scoped recovery and removal,
+and sequential IPIP Native/FOU/GUE coexistence. Both real native kernels
+exercised protected credential/ownership handling, resource collisions
+and foreign-resource rejection. Each userspace completed
+`GRE_E2E_CLEANUP_EXIT=0`; both jobs completed
+`CROSS_BACKEND_DISPOSABLE_CLEANUP_EXIT=0`.
+
+This is accepted **native linux/amd64 and linux/arm64 runtime**
+evidence for the network-namespace release-level matrix. Ubuntu/Debian
+containers **share their respective runner's kernel**: no separately
+booted distribution kernels were validated. No full guest OS reboot
+and automatic boot restore, physical/external NAT-router traversal, or
+power-loss recovery was performed. Runtime proof is distinct from
+installation/testing of final downloadable release artifacts, which
+Issue #11 owns.
 
 ## Release validation
 
@@ -106,8 +139,9 @@ The container used `--network none` and isolated NET_ADMIN; disposable
 XFRM interface name/if_id and policy collision cases passed and were
 removed within that container. On this iproute2 version, `ip -json xfrm
 policy/state` emits legacy text for nonempty tables and empty stdout
-for an empty table on successful exit. These are **not** two supported
-installations or any strongSwan/IKEv2 compatibility acceptance: the test
-image has no strongSwan; no encrypted traffic was negotiated. Required
-Ubuntu/Debian, strongSwan version, architecture, systemd and release E2E
-evidence remains outstanding under Issues #7 and #12.
+for an empty table on successful exit. **This historical inspector-only
+probe**, by itself, was not a supported installation or strongSwan/IKEv2
+traffic acceptance: its image contained no strongSwan. The later
+native AMD64/ARM64 Ubuntu/Debian operational release matrix is documented
+above; independently booted distribution kernels and whole-guest
+reboot/boot-restore evidence remain unproven under Issue #12.
