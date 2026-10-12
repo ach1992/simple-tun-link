@@ -98,7 +98,11 @@ func (e *Engine) EnsureWithWireGuardCredential(ctx context.Context, desired doma
 	if store == nil || desired.Backend != domain.BackendWireGuard ||
 		desired.WireGuard == (domain.WireGuardOptions{}) ||
 		desired.WireGuard.ListenPort == 0 || desired.WireGuard.PeerPort == 0 {
-		return Result{}, stlerr.New(stlerr.CodeUnsupported, "ensure_imported", string(desired.ID), string(desired.Backend), "protected WireGuard recipient import requires configured v3 pairing")
+		return Result{}, stlerr.WithEvidence(
+			stlerr.New(stlerr.CodeUnsupported, "ensure_imported", string(desired.ID), string(desired.Backend),
+				"protected WireGuard recipient import requires configured v3 pairing"),
+			stlerr.OperationEvidence{Stage: "preflight", HostMutation: "not_attempted",
+				DesiredState: "no_commit_attempted", Rollback: "not_required"})
 	}
 	return e.ensureWithProvision(ctx, desired, true, func() error {
 		return store.EnsureRecipient(desired.ID, credential, desired.WireGuard.LocalPublicKey)
@@ -109,7 +113,15 @@ func (e *Engine) ensureWithPolicy(ctx context.Context, desired domain.Link, reje
 	return e.ensureWithProvision(ctx, desired, rejectReconfiguration, nil)
 }
 
-func (e *Engine) ensureWithProvision(ctx context.Context, desired domain.Link, rejectReconfiguration bool, provision func() error) (Result, error) {
+func (e *Engine) ensureWithProvision(ctx context.Context, desired domain.Link, rejectReconfiguration bool, provision func() error) (out Result, operationErr error) {
+	defer func() {
+		if operationErr != nil && stlerr.EvidenceOf(operationErr) == nil {
+			operationErr = stlerr.WithEvidence(operationErr, stlerr.OperationEvidence{
+				Stage: "preflight", HostMutation: "not_attempted",
+				DesiredState: "no_commit_attempted", Rollback: "not_required",
+			})
+		}
+	}()
 	if err := desired.Validate(); err != nil {
 		return Result{}, contextualize(err, stlerr.CodeInvalid, "ensure", desired, "invalid desired Link")
 	}
@@ -134,7 +146,15 @@ func (e *Engine) Remove(ctx context.Context, id domain.LinkID) (Result, error) {
 	return e.remove(ctx, id, nil)
 }
 
-func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.Link) (Result, error) {
+func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.Link) (out Result, operationErr error) {
+	defer func() {
+		if operationErr != nil && stlerr.EvidenceOf(operationErr) == nil {
+			operationErr = stlerr.WithEvidence(operationErr, stlerr.OperationEvidence{
+				Stage: "preflight", HostMutation: "not_attempted",
+				DesiredState: "no_commit_attempted", Rollback: "not_required",
+			})
+		}
+	}()
 	if err := id.Validate(); err != nil {
 		return Result{}, contextualize(err, stlerr.CodeInvalid, "remove", domain.Link{ID: id}, "invalid Link ID")
 	}
@@ -189,14 +209,25 @@ func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.
 			}
 			return nil
 		}); err != nil {
-			return result, stlerr.Wrap(stlerr.CodeState, "remove", string(id), string(prior.Backend),
-				"Link removed, but durable credential retirement receipt could not be confirmed; preserve key", err)
+			return result, stlerr.WithEvidence(
+				stlerr.Wrap(stlerr.CodeState, "remove", string(id), string(prior.Backend),
+					"Link removed, but durable credential retirement receipt could not be confirmed; preserve key", err),
+				stlerr.OperationEvidence{Stage: "credential_retirement", HostMutation: "attempted",
+					DesiredState: "committed", Rollback: "not_attempted"})
 		}
 	}
 	return result, nil
 }
 
-func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectReconfiguration bool, provision func() error) (Result, error) {
+func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectReconfiguration bool, provision func() error) (out Result, operationErr error) {
+	defer func() {
+		if operationErr != nil && stlerr.EvidenceOf(operationErr) == nil {
+			operationErr = stlerr.WithEvidence(operationErr, stlerr.OperationEvidence{
+				Stage: "preflight", HostMutation: "not_attempted",
+				DesiredState: "no_commit_attempted", Rollback: "not_required",
+			})
+		}
+	}()
 	linkRelease, err := e.locks.Acquire(ctx, []domain.ResourceClaim{linkLock(desired.ID)})
 	if err != nil {
 		return Result{}, stlerr.Wrap(stlerr.CodeState, "ensure", string(desired.ID), string(desired.Backend), "cannot lock Link", err)
@@ -259,7 +290,18 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 
 // senderDigest is nonempty only for a Create/Resume whose precise handoff
 // SHA-256 is authorized by the durable per-Link pending-sender transaction.
-func (e *Engine) executeLocked(ctx context.Context, request backend.Request, prior state.LinkRecord, senderDigest string) (Result, error) {
+func (e *Engine) executeLocked(ctx context.Context, request backend.Request, prior state.LinkRecord, senderDigest string) (result Result, err error) {
+	// Stage evidence is derived from this Engine execution, never error text.
+	// "attempted" does not assert which resources were actually changed.
+	evidence := stlerr.OperationEvidence{
+		Stage: "inspect", HostMutation: "not_attempted",
+		DesiredState: "no_commit_attempted", Rollback: "not_required",
+	}
+	defer func() {
+		if err != nil && stlerr.EvidenceOf(err) == nil {
+			err = stlerr.WithEvidence(err, evidence)
+		}
+	}()
 	request.OwnedResources = append([]domain.ResourceClaim(nil), prior.OwnedResources...)
 	link := request.Link
 	impl, ok := e.backends.Get(link.Backend)
@@ -271,6 +313,7 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 	if err != nil {
 		return Result{}, contextualize(err, stlerr.CodeInspect, string(request.Operation), link, "backend inspection failed")
 	}
+	evidence.Stage = "plan"
 	plan, err := impl.Plan(ctx, request, observed)
 	if err != nil {
 		return Result{}, contextualize(err, stlerr.CodePlan, string(request.Operation), link, "backend planning failed")
@@ -330,6 +373,7 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 				"previous removal authorization was not invalidated")
 		}
 	}
+	evidence.Stage = "validate"
 	if err := impl.Validate(ctx, request, observed, plan); err != nil {
 		return Result{}, contextualize(err, stlerr.CodeValidate, string(request.Operation), link, "backend validation failed")
 	}
@@ -337,40 +381,50 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 	changed := !plan.Empty()
 	var undo backend.Rollback
 	if changed {
+		evidence.Stage = "apply"
+		evidence.HostMutation = "attempted"
+		evidence.Rollback = "unavailable"
 		undo, err = impl.Apply(ctx, request, observed, plan)
 		if err != nil {
-			return Result{}, e.rollbackFailure(ctx, request, link, undo, contextualize(err, stlerr.CodeApply, string(request.Operation), link, "backend apply failed"))
+			return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo, evidence.Stage, evidence.HostMutation, contextualize(err, stlerr.CodeApply, string(request.Operation), link, "backend apply failed"))
 		}
 		if undo == nil {
 			return Result{}, stlerr.New(stlerr.CodeInternal, string(request.Operation), string(link.ID), string(link.Backend), "backend changed state without providing rollback")
 		}
 	}
 
+	evidence.Stage = "verify"
 	if _, err := impl.Verify(ctx, request); err != nil {
-		return Result{}, e.rollbackFailure(ctx, request, link, undo, contextualize(err, stlerr.CodeVerify, string(request.Operation), link, "backend verification failed"))
+		return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo, evidence.Stage, evidence.HostMutation, contextualize(err, stlerr.CodeVerify, string(request.Operation), link, "backend verification failed"))
 	}
 
 	// Serialize only the host-wide persistence transition and state commit.
 	// Backend inspection/apply stays per-Link to preserve Multi-Link concurrency.
 	var persistenceUndo func(context.Context) error
 	if e.restorePersistence != nil {
+		evidence.Stage = "persistence"
 		persistenceRelease, lockErr := e.locks.Acquire(ctx, []domain.ResourceClaim{restoreLockClaim()})
 		if lockErr != nil {
-			return Result{}, e.rollbackFailure(ctx, request, link, undo,
+			return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo, evidence.Stage, evidence.HostMutation,
 				stlerr.Wrap(stlerr.CodeState, string(request.Operation), string(link.ID), string(link.Backend), "cannot lock restore persistence", lockErr))
 		}
 		defer persistenceRelease()
 
 		if request.Operation == backend.OperationEnsure {
+			// Host restore-unit publication may have been attempted even if
+			// no backend Apply was needed.
+			evidence.HostMutation = "attempted"
 			var ensureErr error
 			persistenceUndo, _, ensureErr = e.restorePersistence.EnsureRestore(ctx, e.restoreExecutable)
 			if ensureErr != nil {
-				return Result{}, e.rollbackFailure(ctx, request, link, undo,
+				return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo, evidence.Stage, evidence.HostMutation,
 					stlerr.Wrap(stlerr.CodeState, "ensure", string(link.ID), string(link.Backend), "cannot activate restore persistence", ensureErr))
 			}
 		}
 	}
 
+	evidence.Stage = "state_commit"
+	evidence.DesiredState = "commit_attempted"
 	remaining := -1
 	commitErr := e.store.Update(ctx, func(snapshot *state.Snapshot) error {
 		switch request.Operation {
@@ -419,10 +473,16 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 		var publicationErr *state.PublicationError
 		indeterminate := errors.As(commitErr, &publicationErr)
 		if published || indeterminate || !oldState {
+			evidence.DesiredState = "visible_unconfirmed"
+			evidence.Rollback = "not_attempted"
+			if changed || persistenceUndo != nil {
+				evidence.HostMutation = "retained"
+			}
 			return Result{LinkID: link.ID, Changed: changed, Removed: request.Operation == backend.OperationRemove},
-				stlerr.Wrap(stlerr.CodeState, string(request.Operation), string(link.ID), string(link.Backend),
-					"desired-state commit outcome is uncertain; host changes retained for reconciliation", errors.Join(commitErr, loadErr))
+				stlerr.WithEvidence(stlerr.Wrap(stlerr.CodeState, string(request.Operation), string(link.ID), string(link.Backend),
+					"desired-state commit outcome is uncertain; host changes retained for reconciliation", errors.Join(commitErr, loadErr)), evidence)
 		}
+		evidence.DesiredState = "prior_verified"
 		if e.restorePersistence != nil {
 			rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
@@ -432,14 +492,23 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 						"state commit failed and restore persistence rollback did not complete", errors.Join(commitPublic, rollbackErr))
 				}
 			}
-			return Result{}, e.rollbackWithContext(rollbackCtx, request, link, undo, commitPublic)
+			compensationErr := e.rollbackWithContextAtStage(rollbackCtx, request, link, undo,
+				"state_commit", evidence.HostMutation, commitPublic)
+			return Result{}, stlerr.WithEvidence(compensationErr,
+				stlerr.OperationEvidence{Stage: "state_commit", HostMutation: evidence.HostMutation, DesiredState: "prior_verified",
+					Rollback: rollbackStatus(undo, persistenceUndo != nil, compensationErr)})
 		}
-		return Result{}, e.rollbackFailure(ctx, request, link, undo, commitPublic)
+		failed := e.rollbackFailure(ctx, request, link, undo, commitPublic)
+		return Result{}, stlerr.WithEvidence(failed,
+			stlerr.OperationEvidence{Stage: "state_commit", HostMutation: evidence.HostMutation, DesiredState: "prior_verified",
+				Rollback: rollbackStatus(undo, false, failed)})
 	}
 
 	// After the final desired Link is durably deleted, its owned reboot unit
 	// is no longer needed. An uncertain cleanup is reported as partial failure;
 	// never roll a removed Link back solely to conceal a unit cleanup error.
+	evidence.DesiredState = "committed"
+	evidence.Stage = "persistence_cleanup"
 	if request.Operation == backend.OperationRemove && remaining == 0 && e.restorePersistence != nil {
 		if err := e.restorePersistence.RemoveRestore(ctx); err != nil {
 			return Result{LinkID: link.ID, Changed: changed, Removed: true},
@@ -459,24 +528,58 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 // cancellation-detached cleanup context, even on non-systemd hosts. The
 // original cancellation/failure stays observable in the result.
 func (e *Engine) rollbackFailure(ctx context.Context, request backend.Request, link domain.Link, undo backend.Rollback, original error) error {
+	return e.rollbackFailureAtStage(ctx, request, link, undo, "rollback", "attempted", original)
+}
+
+func (e *Engine) rollbackFailureAtStage(ctx context.Context, request backend.Request, link domain.Link,
+	undo backend.Rollback, stage, mutation string, original error) error {
 	if undo == nil {
-		return original
+		rollback := "unavailable"
+		if mutation == "not_attempted" {
+			rollback = "not_required"
+		}
+		return stlerr.WithEvidence(original, stlerr.OperationEvidence{
+			Stage: stage, HostMutation: mutation, DesiredState: "no_commit_attempted", Rollback: rollback,
+		})
 	}
 	rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	return e.rollbackWithContext(rollbackCtx, request, link, undo, original)
+	return e.rollbackWithContextAtStage(rollbackCtx, request, link, undo, stage, mutation, original)
 }
 
-// rollbackWithContext reuses a shared 30-second cleanup budget when unit
-// compensation has already started, rather than granting another full period.
-func (e *Engine) rollbackWithContext(ctx context.Context, request backend.Request, link domain.Link, undo backend.Rollback, original error) error {
+// The caller passes the exact Engine stage reached. Error code and prose are
+// not lifecycle evidence. Reuse the shared rollback context where a unit
+// compensation has already started.
+func (e *Engine) rollbackWithContextAtStage(ctx context.Context, request backend.Request, link domain.Link,
+	undo backend.Rollback, stage, mutation string, original error) error {
+	evidence := stlerr.OperationEvidence{Stage: stage, HostMutation: mutation,
+		DesiredState: "no_commit_attempted", Rollback: "unavailable"}
 	if undo == nil {
-		return original
+		return stlerr.WithEvidence(original, evidence)
 	}
 	if err := undo(ctx); err != nil {
-		return stlerr.Wrap(stlerr.CodeRollback, string(request.Operation), string(link.ID), string(link.Backend), "operation failed and rollback did not complete", errors.Join(original, err))
+		evidence.Rollback = "incomplete"
+		return stlerr.WithEvidence(stlerr.Wrap(stlerr.CodeRollback, string(request.Operation), string(link.ID), string(link.Backend),
+			"operation failed and rollback did not complete", errors.Join(original, err)), evidence)
 	}
-	return original
+	// Callback success is not a second independent kernel/state verification.
+	evidence.Rollback = "completed_unverified"
+	return stlerr.WithEvidence(original, evidence)
+}
+
+// rollbackStatus conservatively projects the typed result of the actual
+// compensation call, without claiming independent verification.
+func rollbackStatus(undo backend.Rollback, persistenceCompensated bool, operationErr error) string {
+	// Persistence-unit compensation may fail even when backend Apply had
+	// nothing to undo. Never hide that failure behind "not_required".
+	if stlerr.CodeOf(operationErr) == stlerr.CodeRollback {
+		return "incomplete"
+	}
+	if undo == nil && !persistenceCompensated {
+		return "not_required"
+	}
+	// Neither successful callback alone proves full host convergence.
+	return "completed_unverified"
 }
 
 // reservationClaimsForConflict includes compatibility-only reservations
@@ -574,7 +677,9 @@ func contextualize(err error, fallback stlerr.Code, operation string, link domai
 		if safeDetail == "" {
 			safeDetail = detail
 		}
-		return stlerr.Wrap(typed.Code, operation, string(link.ID), string(link.Backend), safeDetail, err)
+		wrapped := stlerr.Wrap(typed.Code, operation, string(link.ID), string(link.Backend), safeDetail, err)
+		wrapped.ReasonCode, wrapped.NextStep, wrapped.Evidence = typed.ReasonCode, typed.NextStep, typed.Evidence
+		return wrapped
 	}
 	return stlerr.Wrap(fallback, operation, string(link.ID), string(link.Backend), detail, err)
 }

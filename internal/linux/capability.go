@@ -20,8 +20,9 @@ const (
 )
 
 type CapabilityStatus struct {
-	Available bool
-	Reason    string
+	Available  bool
+	Reason     string
+	ReasonCode string // optional typed observation, never a guess from command stderr
 }
 
 type CapabilityReport map[Capability]CapabilityStatus

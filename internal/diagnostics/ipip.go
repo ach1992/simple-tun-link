@@ -56,14 +56,24 @@ func ObserveIPIP(ctx context.Context, link domain.Link, inspector IPIPInspector,
 		return IPIPReport{}, stlerr.Wrap(stlerr.CodeInspect, "diagnose_ipip", string(link.ID), string(link.Backend), "cannot inspect IPIP capability", err)
 	}
 	if !capability.Available {
-		return IPIPReport{}, stlerr.New(stlerr.CodeUnsupported, "diagnose_ipip", string(link.ID), string(link.Backend), "IPIP capability is not available")
+		unsupported := stlerr.New(stlerr.CodeUnsupported, "diagnose_ipip", string(link.ID), string(link.Backend), "IPIP capability is not available")
+		if capability.ReasonCode == "kernel_module_not_loaded" {
+			unsupported.ReasonCode = capability.ReasonCode
+			unsupported.NextStep = "Check module availability for this kernel; load only with operator authorization and retry observation."
+		}
+		return IPIPReport{}, unsupported
 	}
 	state, err := inspector.DiagnosticState(ctx, link)
 	if err != nil {
 		if ctx.Err() != nil {
 			return IPIPReport{}, ctx.Err()
 		}
-		return IPIPReport{}, stlerr.Wrap(stlerr.CodeInspect, "diagnose_ipip", string(link.ID), string(link.Backend), "cannot verify IPIP operational state and counters", err)
+		wrapped := stlerr.Wrap(stlerr.CodeInspect, "diagnose_ipip", string(link.ID), string(link.Backend),
+			"cannot verify IPIP operational state and counters", err)
+		if known := stlerr.Public(err); known.ReasonCode == "kernel_module_not_loaded" {
+			wrapped.ReasonCode, wrapped.NextStep = known.ReasonCode, known.NextStep
+		}
+		return IPIPReport{}, wrapped
 	}
 	expectedName, err := ipipbackend.InterfaceName(link.ID)
 	if err != nil {

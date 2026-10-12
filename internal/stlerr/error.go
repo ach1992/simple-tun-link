@@ -34,8 +34,9 @@ type Error struct {
 	Detail    string `json:"detail,omitempty"`
 	// Optional machine-readable recovery fields. Keep both absent for
 	// existing callers; human prose remains independent of machine branching.
-	ReasonCode string `json:"reason_code,omitempty"`
-	NextStep   string `json:"next_step,omitempty"`
+	ReasonCode string             `json:"reason_code,omitempty"`
+	NextStep   string             `json:"next_step,omitempty"`
+	Evidence   *OperationEvidence `json:"evidence,omitempty"`
 
 	cause error
 }

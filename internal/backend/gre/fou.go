@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 )
@@ -25,6 +26,9 @@ type fouMapping struct {
 func (b *Backend) inspectFOU(ctx context.Context) ([]fouMapping, error) {
 	result, err := b.runner.Run(ctx, b.ipBinary, "-json", "fou", "show")
 	if err != nil {
+		if b.moduleProbe(ctx, "fou") {
+			return nil, backend.KernelModuleNotLoaded("fou")
+		}
 		return nil, fmt.Errorf("inspect FOU/GUE receive mappings: %w", err)
 	}
 	return parseFOUMappings(result.Stdout)

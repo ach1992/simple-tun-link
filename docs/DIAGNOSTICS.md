@@ -25,6 +25,10 @@ overhead is owned by Issues #4–#7; release E2E by Issue #12.
 
 ## Whole-host Link diagnosis and operator recovery
 
+The [operator recovery guide](OPERATOR-RECOVERY.md) covers versioned
+Engine-stage evidence, trusted no-Apply classifications, kernel module
+prerequisites and safe next actions. Health inspection never repairs.
+
 The read-only `stl link diagnose --all [--timeout 10m] [--json]`
 operator command and the menu's Diagnostics/All option share the exact
 same GRE/IPIP/WireGuard `Observe*` backend adapters used by the original
