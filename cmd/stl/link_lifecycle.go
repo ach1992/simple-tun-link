@@ -226,7 +226,7 @@ func lifecycleFailure(stdout, stderr io.Writer, jsonOutput bool, code stlerr.Cod
 	}
 	// Error details here are authored literals, never the raw OS, backend,
 	// private state, caller-provided JSON or credential-bearing exception.
-	safe := stlerr.New(code, operation, "", "", detail)
+	safe := stlerr.WithGuidance(stlerr.New(code, operation, "", "", detail))
 	out := lifecycleFailureResponse{
 		SchemaVersion:          jsonSchemaVersion,
 		Error:                  safe,
@@ -248,6 +248,7 @@ func lifecycleFailure(stdout, stderr io.Writer, jsonOutput bool, code stlerr.Cod
 		}
 	} else {
 		fmt.Fprintln(stderr, safe.Error())
+		fmt.Fprintf(stderr, "Reason: %s\nNext: %s\n", safe.ReasonCode, safe.NextStep)
 		if result != nil && result.LinkID != "" {
 			fmt.Fprintf(stderr, "Partial operation result for Link %s; reconcile current host/state before retry\n", result.LinkID)
 		}

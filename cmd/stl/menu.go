@@ -175,13 +175,17 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 			}
 			fmt.Fprintln(out, "Diagnostics send bounded probes to a selected peer Link Address; no host configuration is changed.")
 			fmt.Fprintln(out, "IPsec prerequisites (read-only): stl doctor ipsec")
-			fmt.Fprint(out, "Diagnose Link ID (Enter returns to menu): ")
+			fmt.Fprint(out, "Diagnose Link ID or 'all' (Enter returns to menu): ")
 			id, err := readMenuAnswer(reader)
 			if err != nil && !errors.Is(err, io.EOF) {
 				fmt.Fprintln(errOut, "invalid Link ID; no probes sent")
 				return 2
 			}
-			if id != "" {
+			if id == "all" {
+				if code := linkDiagnoseCommand([]string{"diagnose", "--all"}, out, errOut, options); code != 0 {
+					fmt.Fprintln(out, "Some Link checks are blocked or unverified; no automatic repair was attempted.")
+				}
+			} else if id != "" {
 				if domain.LinkID(id).Validate() != nil {
 					fmt.Fprintln(errOut, "invalid Link ID; no probes sent")
 					return 2

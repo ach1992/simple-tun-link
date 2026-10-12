@@ -23,6 +23,47 @@ network state, applies MTU, repairs a tunnel, installs software, stores keys
 or claims live backend E2E acceptance. Binding the real backend interface and
 overhead is owned by Issues #4–#7; release E2E by Issue #12.
 
+## Whole-host Link diagnosis and operator recovery
+
+The read-only `stl link diagnose --all [--timeout 10m] [--json]`
+operator command and the menu's Diagnostics/All option share the exact
+same GRE/IPIP/WireGuard `Observe*` backend adapters used by the original
+single-Link CLI. One saved-state snapshot determines the stable Link ID set,
+but live measurements are separate and time-local. A failed/unavailable
+Link cannot prevent a different saved Link from being checked.
+
+The report is deliberately **not** a promise that the Link is continuously
+healthy. `observed/link_peer_replied` means only a verified, Link-bound
+echo was received at probe time. A validly sent but unanswered probe becomes
+`unknown/link_probe_no_reply`, not proof of permanent peer failure.
+Incomplete/no-capability measurements are likewise unknown/blocked, not
+silently successful. Operational IPsec stays
+`blocked/ipsec_runtime_not_registered`; there is no implicit service or
+network mutation. A batch can be canceled and returns an explicit
+interrupted outcome with unknown remaining records. An empty saved Link set
+is reported separately and is never evidence of operational reachability.
+
+Each report includes only safe Link identity, versioned MTU/quality
+observations, verified counters, optional latest observed WireGuard
+handshake timestamp and a stable reason/next step. Untrusted raw command
+output and backend errors, free-form saved display names, and secrets never
+enter batch/human reports. Per-Link diagnostic duration is bounded;
+the total batch duration is configurable rather than hardcoded to an
+arbitrary Link count.
+
+Machine errors across Link read, diagnose, ensure, import, export, retire and
+restore-dependent flows use `stlerr.WithGuidance` at the existing public
+error boundary. This maps well-defined error categories to conservative,
+stable `reason_code` and `next_step` fields while preserving any more
+specific verified backend reason. Generic `state_unverified`,
+`apply_outcome_unverified` and `rollback_incomplete` explicitly require
+reconciliation instead of suggesting blind repeated writes. Internal raw
+causes never become JSON/human strings.
+
+These source and fake-runner tests are not real privileged network
+acceptance. Issue #12 still owns the release/kernel/namespace matrix and
+Issue #7 still owns operational IPsec.
+
 ## Measurement contract
 
 `DFProber.Probe(ctx, link, packetBytes)` measures an **inner IPv4

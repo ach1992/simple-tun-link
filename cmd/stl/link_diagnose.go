@@ -9,10 +9,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/diagnostics"
 	"github.com/ach1992/simple-tun-link/internal/domain"
-	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
@@ -23,6 +21,9 @@ const diagnoseOperationTimeout = 35 * time.Second
 // ICMP echo packets to the selected peer Link Address; it never repairs,
 // applies MTU, adds routes, or modifies any kernel or saved Link state.
 func linkDiagnoseCommand(args []string, stdout, stderr io.Writer, options *runtimeOptions) int {
+	if len(args) >= 2 && args[1] == "--all" {
+		return linkDiagnoseAllCommand(args, stdout, stderr, options)
+	}
 	jsonOutput := slices.Contains(args, "--json")
 	manualMTU, ok := parseDiagnoseOptions(args)
 	if !ok {
@@ -54,70 +55,25 @@ func linkDiagnoseCommand(args []string, stdout, stderr io.Writer, options *runti
 	if record.Desired.Backend == domain.BackendIPsec {
 		return ipsecUnregisteredError(stdout, stderr, jsonOutput, "link_diagnose", id)
 	}
-	if record.Desired.Backend != domain.BackendGRE && record.Desired.Backend != domain.BackendIPIP && record.Desired.Backend != domain.BackendWireGuard {
-		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_diagnose", "active diagnostics for this backend are unavailable")
-	}
 	if options == nil {
 		options, err = productionRuntimeOptions()
 		if err != nil {
 			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeState, "link_diagnose", "cannot initialize diagnostic backend")
 		}
 	}
-	var selected backend.Backend
-	for _, impl := range options.backends {
-		if impl != nil && impl.Kind() == record.Desired.Backend {
-			selected = impl
-			break
-		}
-	}
-	if selected == nil {
-		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_diagnose", "diagnostic backend is unavailable")
-	}
-	runner := options.probeRunner
-	if runner == nil {
-		runner = linux.ExecRunner{}
-	}
-	var report interface{ Summary() string }
-	backendName := "GRE"
-	switch record.Desired.Backend {
-	case domain.BackendGRE:
-		inspector, ok := selected.(diagnostics.GREInspector)
-		if !ok {
-			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_diagnose", "GRE diagnostic backend is unavailable")
-		}
-		var measured diagnostics.GREReport
-		measured, err = diagnostics.ObserveGRE(ctx, record.Desired, inspector, runner, manualMTU)
-		report = measured
-	case domain.BackendIPIP:
-		backendName = "IPIP"
-		inspector, ok := selected.(diagnostics.IPIPInspector)
-		if !ok {
-			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_diagnose", "IPIP diagnostic backend is unavailable")
-		}
-		var measured diagnostics.IPIPReport
-		measured, err = diagnostics.ObserveIPIP(ctx, record.Desired, inspector, runner, manualMTU)
-		report = measured
-	case domain.BackendWireGuard:
-		backendName = "WireGuard"
-		inspector, ok := selected.(diagnostics.WireGuardInspector)
-		if !ok {
-			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_diagnose", "WireGuard diagnostic backend is unavailable")
-		}
-		var measured diagnostics.WireGuardReport
-		measured, err = diagnostics.ObserveWireGuard(ctx, record.Desired, inspector, runner, manualMTU)
-		report = measured
-	}
+	measurement, err := inspectLinkDiagnostic(ctx, record.Desired, *options, manualMTU)
 	if err != nil {
 		code := stlerr.CodeOf(err)
 		switch code {
 		case stlerr.CodeInvalid:
-			return readCommandError(stdout, stderr, jsonOutput, code, "link_diagnose", "invalid "+backendName+" diagnostic configuration or MTU request")
+			return readCommandError(stdout, stderr, jsonOutput, code, "link_diagnose", "invalid diagnostic configuration or MTU request")
 		case stlerr.CodeUnsupported:
-			return readCommandError(stdout, stderr, jsonOutput, code, "link_diagnose", backendName+" diagnosis unsupported on this host")
+			return readCommandError(stdout, stderr, jsonOutput, code, "link_diagnose", "Link diagnosis unsupported on this host")
 		default:
-			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInspect, "link_diagnose", backendName+" Link diagnostic observation failed")
+			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInspect, "link_diagnose", "Link diagnostic observation failed")
 		}
 	}
+	report := measurement.report
 	if jsonOutput {
 		if err := json.NewEncoder(stdout).Encode(report); err != nil {
 			fmt.Fprintln(stderr, "cannot encode diagnostic report")

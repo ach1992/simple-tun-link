@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/state"
 )
 
@@ -113,5 +114,30 @@ func TestMenuHeaderSanitizesUntrustedTerminalText(t *testing.T) {
 		strings.Contains(got, "\u2069") || strings.Contains(got, "\u200d") ||
 		!strings.Contains(got, "host") {
 		t.Fatalf("unsafe console label: %q", got)
+	}
+}
+
+func TestMenuAllLinkHealthIsReadOnlyAndReturnsToTasksOnBlockedBackend(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	gre := fixtureReadLink("lnk_11111111111111111111111111111111", "10.80.70.0/31", "10.80.70.1/31", domain.BackendGRE)
+	ipsec := fixtureReadLink("lnk_22222222222222222222222222222222", "10.80.80.0/31", "10.80.80.1/31", domain.BackendIPsec)
+	ipsec.Encapsulation = domain.EncapESP
+	storeReadLinks(t, root, gre, ipsec)
+	code, output, stderr := runMenuTest(t, root, "4\nall\n8\n")
+	if code != 0 || stderr != "" {
+		t.Fatalf("blocked diagnosis should return to operator task menu: %d %q %q", code, output, stderr)
+	}
+	for _, want := range []string{
+		"Diagnose Link ID or 'all'", "Links in snapshot: 2",
+		"ipsec_runtime_not_registered", "diagnostic_capability_unavailable",
+		"Some Link checks are blocked or unverified",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("missing operator health result %q in %q", want, output)
+		}
+	}
+	if strings.Contains(output, "DO_NOT_EXPOSE_OR_LOG") ||
+		strings.Contains(output, "private_key=") {
+		t.Fatalf("unsafe saved Link display name leaked through menu: %q", output)
 	}
 }
