@@ -11,6 +11,9 @@ type OperationEvidence struct {
 	HostMutation string `json:"host_mutation"`
 	DesiredState string `json:"desired_state"`
 	Rollback     string `json:"rollback"`
+	// A protected credential may be staged before network Apply. Its
+	// attempted persistence is separate from the host backend mutation.
+	CredentialProvision string `json:"credential_provision,omitempty"`
 }
 
 // WithEvidence records known Engine stage transitions without serializing

@@ -275,9 +275,14 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 		}
 	}
 	if provision != nil {
+		// This callback can persist a protected local key even if it
+		// subsequently fails or Engine network Apply never runs.
 		if err := provision(); err != nil {
-			return Result{}, stlerr.Wrap(stlerr.CodeState, "ensure_imported", string(desired.ID), string(desired.Backend),
-				"protected recipient credential cannot be provisioned; no network mutation attempted", err)
+			return Result{}, stlerr.WithEvidence(
+				stlerr.Wrap(stlerr.CodeState, "ensure_imported", string(desired.ID), string(desired.Backend),
+					"protected recipient credential cannot be provisioned; no network mutation attempted", err),
+				stlerr.OperationEvidence{Stage: "credential_provision", HostMutation: "not_attempted",
+					DesiredState: "no_commit_attempted", Rollback: "not_required", CredentialProvision: "attempted"})
 		}
 	}
 	var prior *domain.Link
@@ -285,7 +290,14 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 		previous := record.Desired
 		prior = &previous
 	}
-	return e.executeLocked(ctx, backend.Request{Operation: backend.OperationEnsure, Prior: prior, Link: desired}, record, "")
+	result, err := e.executeLocked(ctx, backend.Request{Operation: backend.OperationEnsure, Prior: prior, Link: desired}, record, "")
+	if err != nil && provision != nil {
+		if observed := stlerr.EvidenceOf(err); observed != nil {
+			observed.CredentialProvision = "attempted"
+			err = stlerr.WithEvidence(err, *observed)
+		}
+	}
+	return result, err
 }
 
 // senderDigest is nonempty only for a Create/Resume whose precise handoff

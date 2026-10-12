@@ -109,3 +109,21 @@ func TestLifecycleVerifiedSuccessAndIdempotenceKeepV1ResultShape(t *testing.T) {
 	}
 	_ = stlerr.CodeInspect // ensure optional error model remains independent of result
 }
+
+func TestLifecycleCredentialProvisionFailureCannotBePromotedToSafeNoop(t *testing.T) {
+	proof := &stlerr.OperationEvidence{Stage: "credential_provision",
+		HostMutation: "not_attempted", DesiredState: "no_commit_attempted",
+		Rollback: "not_required", CredentialProvision: "attempted"}
+	failure := stlerr.New(stlerr.CodeState, "ensure_imported",
+		"lnk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "wireguard", "protected credential could not be provisioned")
+	var stdout, stderr bytes.Buffer
+	exit := lifecycleFailureWithEvidence(&stdout, &stderr, true, stlerr.CodeState, "link_import", nil,
+		"Link import did not complete successfully", proof, failure)
+	var payload lifecycleFailureResponse
+	if exit != 1 || stderr.Len() != 0 || json.Unmarshal(stdout.Bytes(), &payload) != nil ||
+		payload.Error == nil || payload.Error.ReasonCode != "credential_provision_outcome_unverified" ||
+		payload.Error.Evidence == nil || payload.Error.Evidence.CredentialProvision != "attempted" ||
+		!strings.Contains(payload.Error.NextStep, "protected local key") {
+		t.Fatalf("CLI hid potentially retained protected credential: exit=%d output=%s", exit, stdout.String())
+	}
+}

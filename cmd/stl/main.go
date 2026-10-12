@@ -299,6 +299,10 @@ func restoreWithContext(ctx context.Context, options runtimeOptions, stdout, std
 				fmt.Fprintf(stderr, "  Evidence: stage=%s host_mutation=%s desired_state=%s rollback=%s\n",
 					failed.Evidence.Stage, failed.Evidence.HostMutation,
 					failed.Evidence.DesiredState, failed.Evidence.Rollback)
+				if failed.Evidence.CredentialProvision != "" {
+					fmt.Fprintf(stderr, "  Credential provision: %s; exact protected key identity requires reconciliation\n",
+						failed.Evidence.CredentialProvision)
+				}
 			}
 		}
 		return 1

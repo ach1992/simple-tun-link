@@ -26,8 +26,14 @@ an optional `evidence` object:
 | `host_mutation` | `not_attempted`: this Engine invocation has **not** called a host Apply/persistence publication; `attempted`: a call that may mutate was made, **not proof that anything changed**; `retained`: compensation deliberately skipped to preserve possible published intent |
 | `desired_state` | `no_commit_attempted`, `commit_attempted`, `prior_verified` (previous snapshot reloaded), `visible_unconfirmed` (publication/durability or readback ambiguous), `committed` |
 | `rollback` | `not_required`, `unavailable`, `not_attempted`, `completed_unverified` (callback returned success, **not a separate full host attestation**), `incomplete` |
+| `credential_provision` (optional) | `attempted`: protected per-Link key persistence was invoked separately before backend Apply; the exact key may remain even if backend mutation never started |
 
-These values describe **this invocation only**. `not_attempted` does not
+These values describe **this invocation only**. In particular,
+`host_mutation:not_attempted` refers to backend network Apply and restore
+persistence publication; it is **not** proof that protected credential files
+or removal-receipt state were never written. Check the optional
+`credential_provision` evidence before any credential-bound retry.
+`not_attempted` does not
 prove the host is free of pre-existing or concurrent external resources;
 `prior_verified` is a state-store readback, not a proof of global kernel
 state. Protected per-Link credential staging or cleanup may be deliberately
@@ -76,6 +82,7 @@ unregistered backend and retains its existing error/exit category.
 | `reason_code` | What to do |
 | --- | --- |
 | `rejected_before_host_apply` | Correct Link intent or conflicts, inspect saved/live identity, then explicitly retry when safe; no Engine backend Apply was invoked |
+| `credential_provision_outcome_unverified` | A protected key write was attempted but the Engine did not confirm provisioning; inspect exact protected key and pending/committed Link identity before regenerating/retrying |
 | `kernel_module_not_loaded` | The specific module was absent from `/sys/module` but `modinfo -n` found a regular kernel-module artifact; confirm supported host/kernel policy before separately authorizing any load |
 | `observation_unverified` / `diagnostic_observation_unverified` | Retry read-only inventory; failure is **not** proof of absence, a free UDP port or permission to overwrite a foreign Link |
 | `apply_outcome_unverified` | A host Apply was attempted without confirmed rollback; inspect owned kernel resources and stored intent before retrying |

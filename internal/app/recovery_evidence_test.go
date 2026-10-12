@@ -248,3 +248,40 @@ func TestEngineCommitFailureEvidenceMatchesActualCompensation(t *testing.T) {
 		})
 	}
 }
+
+func TestEngineProtectedCredentialProvisionIsNotMisreportedAsNoSideEffects(t *testing.T) {
+	link := linkFor(t, "credential", "10.92.26.0/31", "10.92.26.1/31")
+	for _, failureStage := range []string{"provision", "verify"} {
+		t.Run(failureStage, func(t *testing.T) {
+			b := newFakeBackend()
+			engine, _ := newEngine(t, b)
+			b.failVerifyOnce = failureStage == "verify"
+			calls := 0
+			_, err := engine.executeEnsure(context.Background(), link, false, func() error {
+				calls++
+				if failureStage == "provision" {
+					return errors.New("private_key=SECRET: simulated write failure")
+				}
+				return nil
+			})
+			if calls != 1 {
+				t.Fatalf("credential callback calls=%d", calls)
+			}
+			evidence := stlerr.EvidenceOf(err)
+			if evidence == nil || evidence.CredentialProvision != "attempted" {
+				t.Fatalf("protected credential staging disappeared from failure: %+v %v", evidence, err)
+			}
+			if failureStage == "provision" {
+				requireOperationEvidence(t, err, "credential_provision", "not_attempted", "no_commit_attempted", "not_required")
+				if stlerr.CodeOf(err) != stlerr.CodeState || b.applyCount != 0 {
+					t.Fatal("failed credential provision incorrectly changed network resources")
+				}
+			} else {
+				requireOperationEvidence(t, err, "verify", "attempted", "no_commit_attempted", "completed_unverified")
+			}
+			if strings.Contains(stlerr.Public(err).Error(), "SECRET") {
+				t.Fatal("protected credential failure leaked its private cause")
+			}
+		})
+	}
+}

@@ -262,6 +262,9 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 		// The old top-level v1 "unconfirmed"/reconciliation fields remain
 		// unchanged; consumers opt into the additive evidence object.
 		switch {
+		case evidence.Stage == "credential_provision" && evidence.CredentialProvision == "attempted":
+			safe.ReasonCode = "credential_provision_outcome_unverified"
+			safe.NextStep = "A protected local key write was attempted; reconcile the exact key identity and saved Link intent before retry. No backend Apply was invoked."
 		case observed != nil && observed.ReasonCode == "kernel_module_not_loaded":
 			safe.ReasonCode = "kernel_module_not_loaded"
 			safe.NextStep = "Inspect the matching kernel module and supported host packages; load it only with operator authorization, then retry read-only checks."
@@ -280,6 +283,9 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 		case evidence.HostMutation == "not_attempted":
 			safe.ReasonCode = "rejected_before_host_apply"
 			safe.NextStep = "Correct prerequisites or conflicting intent, then inspect Link state read-only before retrying; Engine did not invoke host Apply."
+		}
+		if evidence.CredentialProvision == "attempted" && evidence.Stage != "credential_provision" {
+			safe.NextStep += " A protected key write was also attempted; verify its exact identity before any retry or replacement."
 		}
 	}
 	out := lifecycleFailureResponse{
@@ -307,6 +313,10 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 		if evidence != nil {
 			fmt.Fprintf(stderr, "Evidence: stage=%s host_mutation=%s desired_state=%s rollback=%s\n",
 				evidence.Stage, evidence.HostMutation, evidence.DesiredState, evidence.Rollback)
+			if evidence.CredentialProvision != "" {
+				fmt.Fprintf(stderr, "Credential provision: %s (the exact protected key may remain)\n",
+					evidence.CredentialProvision)
+			}
 		}
 		if result != nil && result.LinkID != "" {
 			fmt.Fprintf(stderr, "Partial operation result for Link %s; reconcile current host/state before retry\n", result.LinkID)
