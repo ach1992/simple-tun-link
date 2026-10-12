@@ -25,7 +25,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/version"
 )
 
-const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl menu\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link diagnose <link-id> [--mtu <bytes>] [--json]\n  stl link preview --stdin [--json]\n  stl link import --stdin --confirm <preview-token> [--json]\n  stl link export <link-id> [--json]\n  stl link create-wireguard --stdin --output <private-file> [--json]\n  stl link resume-wireguard --stdin --confirm <setup-digest> [--json]\n  stl link credential retire <link-id> --confirm <link-id> --public-key <local-public-key> [--json]\n  stl link ensure --stdin [--json]\n  stl link remove <link-id> --confirm <link-id> [--json]\n  stl link restore --all\n  stl doctor ipsec [--json]\n  stl maintenance pre-uninstall --json\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
+const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl menu\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link diagnose <link-id> [--mtu <bytes>] [--json]\n  stl link diagnose --all [--timeout <duration>] [--json]\n  stl link preview --stdin [--json]\n  stl link import --stdin --confirm <preview-token> [--json]\n  stl link export <link-id> [--json]\n  stl link create-wireguard --stdin --output <private-file> [--json]\n  stl link resume-wireguard --stdin --confirm <setup-digest> [--json]\n  stl link credential retire <link-id> --confirm <link-id> --public-key <local-public-key> [--json]\n  stl link ensure --stdin [--json]\n  stl link remove <link-id> --confirm <link-id> [--json]\n  stl link restore --all\n  stl doctor ipsec [--json]\n  stl maintenance pre-uninstall --json\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
 
 const jsonSchemaVersion = 1
 
@@ -280,13 +280,18 @@ func restoreRunContext() (context.Context, context.CancelFunc) {
 func restoreWithContext(ctx context.Context, options runtimeOptions, stdout, stderr io.Writer) int {
 	engine, err := buildRuntimeEngine(options)
 	if err != nil {
-		fmt.Fprintln(stderr, "cannot initialize restore runtime")
+		public := stlerr.WithGuidance(stlerr.New(stlerr.CodeState, "restore_all", "", "",
+			"cannot initialize restore runtime"))
+		fmt.Fprintf(stderr, "%s\nReason: %s\nNext: %s\n", public, public.ReasonCode, public.NextStep)
 		return 1
 	}
 	results, err := engine.RestoreAll(ctx)
 	if err != nil {
-		// Report partial progress, but keep backend/command causes secret-safe.
-		fmt.Fprintf(stderr, "restore failed after %d link(s): %v\n", len(results), stlerr.Public(err))
+		// Keep progress and public code, never the underlying backend/tool
+		// cause (which may include credentials or unexpected kernel output).
+		public := stlerr.WithGuidance(stlerr.Public(err))
+		fmt.Fprintf(stderr, "restore failed after %d link(s): %s\nReason: %s\nNext: %s\n",
+			len(results), public, public.ReasonCode, public.NextStep)
 		return 1
 	}
 	fmt.Fprintf(stdout, "restored %d link(s)\n", len(results))

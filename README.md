@@ -87,6 +87,30 @@ safely own a daemon, port or kernel resource. A non-STL strongSwan installation
 must never be stopped or adopted by STL; only IPsec is unavailable in that
 case. See [CLI](docs/CLI.md) and [ADR-0005](docs/decisions/ADR-0005-scoped-vici-ipsec.md).
 
+## One-command Link health and troubleshooting
+
+Inspect every configured Link from one place without repairing anything:
+
+~~~sh
+stl link diagnose --all
+stl link diagnose --all --json
+stl link diagnose --all --timeout 10m --json
+~~~
+
+The same feature is under **Tests & Diagnostics → all** in the terminal menu.
+For each GRE, IPIP or WireGuard Link, STL checks the live backend identity,
+uses bounded Link Address probes and reports observed MTU/quality/counters.
+One failing Link does not hide other Links. Unsupported IPsec remains
+explicitly blocked. Reports distinguish replied, blocked and unknown
+conditions with stable machine `reason_code` and safe `next_step`.
+A reply proves reachability only during the test; unknown is **not**
+silently promoted into a healthy result. Ordinary operator errors now
+include actionable, redacted recovery guidance too.
+
+See [CLI](docs/CLI.md) and [diagnostic contract](docs/DIAGNOSTICS.md).
+These read-only source-backed diagnostics are **not** a substitute for the
+separately required live release E2E tests in Issue #12.
+
 ## WireGuard Quick Link (pre-release)
 
 The menu now offers a guided encrypted WireGuard/UDP sender workflow alongside

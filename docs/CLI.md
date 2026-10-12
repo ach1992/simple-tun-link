@@ -39,6 +39,94 @@ interfaces or firewall rules directly. Failed or uncertain removal must be
 reconciled before retrying. For non-interactive automation, use that explicit
 CLI command and its versioned `--json` result instead of scripting the menu.
 
+### All-Link diagnostics center (read-only, issue #9/#10)
+
+The CLI now exposes one coherent operational view of **every saved Link**:
+
+~~~sh
+stl link diagnose --all
+stl link diagnose --all --json
+stl link diagnose --all --timeout 10m --json
+~~~
+
+The menu's **Tests & Diagnostics** task also accepts `all` at the Link ID
+prompt; degraded/unsupported results return to the task menu instead of
+exiting it. Ordinary per-Link `stl link diagnose <link-id> [--mtu <bytes>]
+[--json]` remains available with the **same** backend capability,
+identity/counter validation and Link-scoped non-fragmenting ICMP probes.
+There is no parallel probing implementation, no administrative control
+command and **no automatic repair**.
+
+The v1 batch JSON contains `schema_version:1`, `operation:
+"link_diagnose_all"`, `outcome` (`complete` or `interrupted`),
+`total`, `observed`, `blocked`, `unknown`, and ordered `checks`.
+Each check identifies a Link by safe ID/backend/mode/address summary and
+provides a stable `status`, `reason_code`, `summary` and `next_step`.
+On successful measurement it also contains a compact `observation`
+with PMTU selection, bounded quality samples, owned RX/TX counters and
+units, plus a last-observed WireGuard handshake timestamp when available.
+Arbitrary Link display names, sensitive setup links, private keys,
+credential files and raw subprocess error/output are **not** included.
+
+The statuses distinguish **evidence**, not persistent health guarantees:
+
+- `observed/link_peer_replied` means a verified interface received one or
+  more peer echoes in a short sample; it is not a future availability SLA.
+- `unknown/link_probe_no_reply` means an attempted probe got no reply;
+  ICMP policy or path issues may explain this, so the transport is not
+  categorically declared down.
+- `unknown/link_probe_incomplete` or
+  `unknown/diagnostic_observation_unverified` means the probe or identity
+  observation was incomplete.
+- `blocked/diagnostic_capability_unavailable` and
+  `blocked/ipsec_runtime_not_registered` describe unavailable backends;
+  IPsec is **never activated** or inferred healthy. The latter has the
+  **same exact `next_step: "stl doctor ipsec"`** as per-Link IPsec
+  `status` and `diagnose`: this is the supported, read-only prerequisite
+  inspection command, not permission to activate strongSwan.
+- `unknown/diagnostic_interrupted` includes the unprocessed Links if the
+  batch is canceled or exceeds its configured total time budget.
+
+The report uses a single time-local saved-state snapshot, stable Link-ID
+ordering and independent per-Link checks. Each Link gets its existing
+**35-second maximum probe budget**; there is no fixed cap on the number of
+saved Links. For a large collection, optionally set the **total** `--timeout`
+to a positive Go duration such as `10m` or `1h`; the flag rejects
+ambiguous/malformed durations. The deadline starts **before saved-state
+inventory loading and diagnostic runtime initialization**, not just before
+Link probes; those stages and all child Link probes share the deadline.
+If the inventory is known when the deadline expires, the interrupted batch
+retains every Link ID with incomplete observations marked unknown; neither
+the current Link nor unprocessed siblings can be promoted to healthy.
+If the deadline expires **before a trustworthy inventory was loaded**, the
+command instead emits the existing version-1 `error` envelope with
+`reason_code: "diagnostic_interrupted"`, an explicit next step and exit
+`1`—it **does not invent an empty batch**. Synchronous filesystem
+operations may need to return before cancellation can be reported, but
+their elapsed time still consumes the requested total budget; no later
+live probe is started after expiry. This does not guarantee an atomic
+host-wide snapshot: Links may change while observation runs.
+
+Exit statuses are `0` when every observed Link received a peer reply (or
+when the saved inventory is empty, explicitly marked as such); `4` when
+one or more Links are blocked but none is unknown; and `1` when any Link
+is unknown or the run is interrupted. Invalid flags return `2` with the
+ordinary v1 error envelope. A `0` code on an empty inventory means that
+the inventory query completed, **not** that a network Link is healthy.
+
+### Operator recovery fields (shared status/diagnose/mutations)
+
+The existing public v1 `error` object now consistently emits
+`reason_code` and `next_step` through a shared safe fallback for
+invalid/unsupported/conflicting/inspection/plan/apply/verify/state/rollback
+errors. Backend-specific validated codes, such as
+`ipsec_runtime_not_registered`, retain precedence. Human errors print the
+same code and a `Next:` action; lifecycle JSON still marks unconfirmed
+mutation results as `outcome:unconfirmed` and
+`reconciliation_required:true`. This additive guidance never claims that
+a partially applied or rolled-back Link is safe to retry without inspection,
+and it never copies backend/tool causes into operator output.
+
 ### Guided GRE Native Create
 
 Select **Create Tunnel**. GRE Native is the current guided backend; advanced

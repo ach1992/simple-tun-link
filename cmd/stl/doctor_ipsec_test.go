@@ -153,10 +153,16 @@ func TestIPsecLinkStatusAndDiagnoseGiveRecoveryPath(t *testing.T) {
 		}
 	}
 
-	// Existing generic error contracts must not grow empty recovery fields.
+	// The v1 error envelope now provides actionable fallback guidance for
+	// ordinary errors as well. Domain-specific IPsec recovery above must
+	// remain more precise than this generic invalid-request case.
 	code, other, otherErr := readCLI(t, root, nil, "link", "status", "lnk_invalid", "--json")
-	if code != 2 || otherErr != "" || strings.Contains(other, "reason_code") ||
-		strings.Contains(other, "next_step") {
-		t.Fatalf("non-IPsec error changed schema semantics: code=%d out=%q err=%q", code, other, otherErr)
+	var generic linkReadErrorResponse
+	if err := json.Unmarshal([]byte(other), &generic); err != nil ||
+		code != 2 || otherErr != "" || generic.SchemaVersion != 1 ||
+		generic.Error == nil || generic.Error.Code != stlerr.CodeInvalid ||
+		generic.Error.ReasonCode != "invalid_request" ||
+		generic.Error.NextStep == "" || strings.Contains(other, "DO_NOT_EXPOSE_OR_LOG") {
+		t.Fatalf("non-IPsec error lost safe generic recovery fields: code=%d out=%q err=%q", code, other, otherErr)
 	}
 }

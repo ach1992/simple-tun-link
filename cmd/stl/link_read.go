@@ -65,6 +65,7 @@ func readCommandError(stdout, stderr io.Writer, jsonOutput bool, code stlerr.Cod
 // readCommandPublicError preserves the versioned error envelope and exit
 // semantics for ordinary errors and for errors with additional safe context.
 func readCommandPublicError(stdout, stderr io.Writer, jsonOutput bool, public *stlerr.Error) int {
+	public = stlerr.WithGuidance(public)
 	if jsonOutput {
 		if err := json.NewEncoder(stdout).Encode(linkReadErrorResponse{SchemaVersion: jsonSchemaVersion, Error: public}); err != nil {
 			fmt.Fprintln(stderr, "cannot encode error response")
@@ -72,6 +73,7 @@ func readCommandPublicError(stdout, stderr io.Writer, jsonOutput bool, public *s
 		}
 	} else {
 		fmt.Fprintln(stderr, public.Error())
+		fmt.Fprintf(stderr, "Reason: %s\nNext: %s\n", public.ReasonCode, public.NextStep)
 	}
 	switch public.Code {
 	case stlerr.CodeInvalid:
