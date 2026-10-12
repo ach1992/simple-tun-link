@@ -40,6 +40,10 @@ type Result struct {
 	LinkID  domain.LinkID
 	Changed bool
 	Removed bool
+
+	// Tracks whether this Engine invocation called backend Apply or host
+	// restore persistence. Internal-only, never part of CLI JSON.
+	hostMutationAttempted bool
 }
 
 func New(backends *backend.Registry, store state.Store, locks Locker) (*Engine, error) {
@@ -209,10 +213,17 @@ func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.
 			}
 			return nil
 		}); err != nil {
+			// Receipt publication itself only touches desired state. Do not
+			// mistake its failure for a host mutation or forget an earlier
+			// backend Apply / restore persistence mutation.
+			hostMutation := "not_attempted"
+			if result.hostMutationAttempted {
+				hostMutation = "attempted"
+			}
 			return result, stlerr.WithEvidence(
 				stlerr.Wrap(stlerr.CodeState, "remove", string(id), string(prior.Backend),
 					"Link removed, but durable credential retirement receipt could not be confirmed; preserve key", err),
-				stlerr.OperationEvidence{Stage: "credential_retirement", HostMutation: "attempted",
+				stlerr.OperationEvidence{Stage: "credential_retirement", HostMutation: hostMutation,
 					DesiredState: "committed", Rollback: "not_attempted"})
 		}
 	}
@@ -522,6 +533,9 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 	evidence.DesiredState = "committed"
 	evidence.Stage = "persistence_cleanup"
 	if request.Operation == backend.OperationRemove && remaining == 0 && e.restorePersistence != nil {
+		// The final owned unit cleanup may mutate systemd/unit files even
+		// when Remove's backend Plan was a verified no-op.
+		evidence.HostMutation = "attempted"
 		if err := e.restorePersistence.RemoveRestore(ctx); err != nil {
 			return Result{LinkID: link.ID, Changed: changed, Removed: true},
 				stlerr.Wrap(stlerr.CodeState, "remove", string(link.ID), string(link.Backend),
@@ -530,9 +544,10 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 	}
 
 	return Result{
-		LinkID:  link.ID,
-		Changed: changed,
-		Removed: request.Operation == backend.OperationRemove,
+		LinkID:                link.ID,
+		Changed:               changed,
+		Removed:               request.Operation == backend.OperationRemove,
+		hostMutationAttempted: evidence.HostMutation != "not_attempted",
 	}, nil
 }
 

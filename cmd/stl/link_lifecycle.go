@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/netip"
@@ -188,11 +189,11 @@ func executeLinkMutationControlled(operation string, desired domain.Link, id dom
 		if expected != nil && code == stlerr.CodeConflict {
 			return lifecycleFailureWithEvidence(stdout, stderr, jsonOutput, code, operation, &result,
 				"Saved Link changed since preview or removal conflicted; review current Link state before retry",
-				stlerr.EvidenceOf(err), stlerr.Public(err))
+				stlerr.EvidenceOf(err), err)
 		}
 		return lifecycleFailureWithEvidence(stdout, stderr, jsonOutput, code, operation, &result,
 			"Link operation did not complete successfully; inspect current Link status/state before retry",
-			stlerr.EvidenceOf(err), stlerr.Public(err))
+			stlerr.EvidenceOf(err), err)
 	}
 	if result.LinkID != id || (operation == "link_remove" && !result.Removed) ||
 		(operation != "link_remove" && result.Removed) {
@@ -237,22 +238,25 @@ func lifecycleFailure(stdout, stderr io.Writer, jsonOutput bool, code stlerr.Cod
 // Only separately authored public guidance and typed stage metadata are used.
 // Do not forward an Engine/backend error's raw Detail or underlying cause.
 func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, code stlerr.Code, operation string,
-	result *app.Result, detail string, evidence *stlerr.OperationEvidence, observed *stlerr.Error) int {
+	result *app.Result, detail string, evidence *stlerr.OperationEvidence, observed error) int {
 	if code == "" {
 		code = stlerr.CodeInternal
 	}
 	// Error details here are authored literals, never the raw OS, backend,
 	// private state, caller-provided JSON or credential-bearing exception.
 	safe := stlerr.WithGuidance(stlerr.New(code, operation, "", "", detail))
+	var observedPublic *stlerr.Error
 	if observed != nil {
-		if domain.LinkID(observed.ObjectID).Validate() == nil {
-			safe.ObjectID = observed.ObjectID
+		// Retain the original errors.Is cause chain, but project only
+		// validated identifiers and typed reasons. Never forward raw
+		// command output, arbitrary Details, or credential-bearing causes.
+		observedPublic = stlerr.Public(observed)
+		if domain.LinkID(observedPublic.ObjectID).Validate() == nil {
+			safe.ObjectID = observedPublic.ObjectID
 		}
-		// These are canonical domain backend identifiers, not backend
-		// supplied strings or untrusted display names.
-		switch domain.Backend(observed.Backend) {
+		switch domain.Backend(observedPublic.Backend) {
 		case domain.BackendGRE, domain.BackendIPIP, domain.BackendWireGuard, domain.BackendIPsec:
-			safe.Backend = observed.Backend
+			safe.Backend = observedPublic.Backend
 		}
 	}
 	if evidence != nil {
@@ -265,7 +269,7 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 		case evidence.Stage == "credential_provision" && evidence.CredentialProvision == "attempted":
 			safe.ReasonCode = "credential_provision_outcome_unverified"
 			safe.NextStep = "A protected local key write was attempted; reconcile the exact key identity and saved Link intent before retry. No backend Apply was invoked."
-		case observed != nil && observed.ReasonCode == "kernel_module_not_loaded":
+		case observedPublic != nil && observedPublic.ReasonCode == "kernel_module_not_loaded":
 			safe.ReasonCode = "kernel_module_not_loaded"
 			safe.NextStep = "Inspect the matching kernel module and supported host packages; load it only with operator authorization, then retry read-only checks."
 		case evidence.DesiredState == "visible_unconfirmed":
@@ -280,6 +284,12 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 		case evidence.Rollback == "completed_unverified":
 			safe.ReasonCode = "rollback_completed_unverified"
 			safe.NextStep = "Owned rollback returned successfully, but recheck live Link identity and saved state before retrying."
+		case evidence.HostMutation == "not_attempted" && errors.Is(observed, context.DeadlineExceeded):
+			safe.ReasonCode = "operation_deadline_exceeded_before_apply"
+			safe.NextStep = "Operation timed out before backend Apply; inspect Link state, lock contention and host availability before retrying explicitly."
+		case evidence.HostMutation == "not_attempted" && errors.Is(observed, context.Canceled):
+			safe.ReasonCode = "operation_cancelled_before_apply"
+			safe.NextStep = "Operation was canceled before backend Apply; inspect Link state and retry only if still intended."
 		case evidence.HostMutation == "not_attempted":
 			safe.ReasonCode = "rejected_before_host_apply"
 			safe.NextStep = "Correct prerequisites or conflicting intent, then inspect Link state read-only before retrying; Engine did not invoke host Apply."

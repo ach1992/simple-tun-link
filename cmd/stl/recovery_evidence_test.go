@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/ach1992/simple-tun-link/internal/app"
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
@@ -125,5 +128,158 @@ func TestLifecycleCredentialProvisionFailureCannotBePromotedToSafeNoop(t *testin
 		payload.Error.Evidence == nil || payload.Error.Evidence.CredentialProvision != "attempted" ||
 		!strings.Contains(payload.Error.NextStep, "protected local key") {
 		t.Fatalf("CLI hid potentially retained protected credential: exit=%d output=%s", exit, stdout.String())
+	}
+}
+
+type interruptedLifecycleInspector struct {
+	*lifecycleFakeBackend
+	cause error
+}
+
+func (b *interruptedLifecycleInspector) Inspect(context.Context, domain.Link) (backend.Observation, error) {
+	return nil, errors.Join(b.cause, errors.New("private_key=FORBIDDEN_RAW_ERROR"))
+}
+
+func TestLifecycleCLIPreApplyInterruptionsHaveTrustedReasons(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		cause  error
+		reason string
+	}{
+		{"deadline", context.DeadlineExceeded, "operation_deadline_exceeded_before_apply"},
+		{"canceled", context.Canceled, "operation_cancelled_before_apply"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			link, raw := makeLifecycleDesired(t, "8", "10.70.28.0/31")
+			fake := newLifecycleFake()
+			inspector := &interruptedLifecycleInspector{fake, tc.cause}
+			var stdout, stderr bytes.Buffer
+			code := runWithRuntimeInput([]string{"link", "ensure", "--stdin", "--json"},
+				strings.NewReader(raw), &stdout, &stderr,
+				&runtimeOptions{stateRoot: root, backends: []backend.Backend{inspector}})
+			payload := assertCLIRecoveryFailure(t, code, stdout.String(), stderr.String(),
+				"inspect_failed", "inspect", "not_attempted", tc.reason)
+			if payload.Error.Evidence.DesiredState != "no_commit_attempted" ||
+				payload.Error.Evidence.Rollback != "not_required" || len(fake.applies) != 0 {
+				t.Fatalf("read-only interruption incorrectly mutated host: %+v", payload)
+			}
+			snapshot, err := state.NewFileStore(root).Load(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, exists := snapshot.Find(link.ID); exists {
+				t.Fatal("interrupted Ensure persisted desired state")
+			}
+			stdout.Reset()
+			stderr.Reset()
+			code = runWithRuntimeInput([]string{"link", "ensure", "--stdin"},
+				strings.NewReader(raw), &stdout, &stderr,
+				&runtimeOptions{stateRoot: root, backends: []backend.Backend{inspector}})
+			if code != 1 || stdout.Len() != 0 ||
+				!strings.Contains(stderr.String(), "Reason: "+tc.reason) ||
+				!strings.Contains(stderr.String(), "Next: ") ||
+				strings.Contains(stderr.String(), "FORBIDDEN_RAW_ERROR") ||
+				strings.Contains(stderr.String(), "private_key=") {
+				t.Fatalf("human recovery did not preserve redacted interruption: exit=%d output=%q", code, stderr.String())
+			}
+		})
+	}
+}
+
+// A real canceled Link-lock wait is covered by internal/app. Verify that
+// the same typed cause is retained by the CLI projector, not parsed from prose.
+func TestLifecycleCLIProjectsCanceledLockWaitWithoutLeakingCause(t *testing.T) {
+	interruption := stlerr.WithEvidence(
+		stlerr.Wrap(stlerr.CodeState, "ensure", "", "", "cannot lock Link",
+			errors.Join(context.DeadlineExceeded, errors.New("PSK=HIDDEN"))),
+		stlerr.OperationEvidence{Stage: "preflight", HostMutation: "not_attempted",
+			DesiredState: "no_commit_attempted", Rollback: "not_required"})
+	var out, stderr bytes.Buffer
+	exit := lifecycleFailureWithEvidence(&out, &stderr, true, stlerr.CodeState, "link_ensure",
+		nil, "Link operation did not complete successfully", stlerr.EvidenceOf(interruption), interruption)
+	payload := assertCLIRecoveryFailure(t, exit, out.String(), stderr.String(),
+		"state_failed", "preflight", "not_attempted", "operation_deadline_exceeded_before_apply")
+	if payload.Error.Evidence.Rollback != "not_required" {
+		t.Fatal("cancellation before Apply incorrectly required rollback")
+	}
+}
+
+type failingFinalUnitPersistence struct {
+	active  bool
+	removes int
+}
+
+func (p *failingFinalUnitPersistence) EnsureRestore(context.Context, string) (func(context.Context) error, bool, error) {
+	previous := p.active
+	p.active = true
+	return func(context.Context) error { p.active = previous; return nil }, !previous, nil
+}
+
+func (p *failingFinalUnitPersistence) RemoveRestore(context.Context) error {
+	p.removes++
+	return errors.New("private_key=UNTRUSTED_UNIT_FAILURE")
+}
+
+func (p *failingFinalUnitPersistence) IsRestoreInstalled(context.Context) (bool, error) {
+	return p.active, nil
+}
+
+func TestLifecycleCLIFinalNoopRemoveFailurePreservesV1JSONEvidence(t *testing.T) {
+	root := t.TempDir()
+	link, raw := makeLifecycleDesired(t, "9", "10.70.29.0/31")
+	b := newLifecycleFake()
+	p := &failingFinalUnitPersistence{}
+	opts := &runtimeOptions{stateRoot: root, backends: []backend.Backend{b},
+		restorePersistence: p, executable: "/usr/local/bin/stl"}
+	var stdout, stderr bytes.Buffer
+	code := runWithRuntimeInput([]string{"link", "ensure", "--stdin", "--json"},
+		strings.NewReader(raw), &stdout, &stderr, opts)
+	if code != 0 || stderr.Len() != 0 || !b.present[link.ID] {
+		t.Fatalf("failed to seed CLI owned Link: exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	delete(b.present, link.ID) // The planned backend Remove must be a no-op.
+	beforeApply := len(b.applies)
+	stdout.Reset()
+	stderr.Reset()
+	code = runWithRuntimeInput([]string{"link", "remove", string(link.ID),
+		"--confirm", string(link.ID), "--json"}, nil, &stdout, &stderr, opts)
+	payload := assertCLIRecoveryFailure(t, code, stdout.String(), stderr.String(),
+		"state_failed", "persistence_cleanup", "attempted", "post_commit_cleanup_incomplete")
+	if payload.Error.Evidence.DesiredState != "committed" || payload.PartialResult == nil ||
+		payload.PartialResult.LinkID != link.ID || payload.PartialResult.Changed ||
+		!payload.PartialResult.Removed || p.removes != 1 || len(b.applies) != beforeApply {
+		t.Fatalf("failed cleanup lost confirmed Remove or invented Apply: %+v", payload)
+	}
+	snapshot, err := state.NewFileStore(root).Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := snapshot.Find(link.ID); exists {
+		t.Fatal("failed unit cleanup undid committed Remove")
+	}
+}
+
+func TestLifecycleCLIReceiptFailureProjectsActualHostMutationWithSameV1Envelope(t *testing.T) {
+	id := domain.LinkID("lnk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	for _, mutation := range []string{"not_attempted", "attempted"} {
+		t.Run(mutation, func(t *testing.T) {
+			err := stlerr.WithEvidence(stlerr.Wrap(stlerr.CodeState, "remove", string(id), "wireguard",
+				"receipt publication not confirmed", errors.New("PSK=UNTRUSTED_RECEIPT_CAUSE")),
+				stlerr.OperationEvidence{Stage: "credential_retirement", HostMutation: mutation,
+					DesiredState: "committed", Rollback: "not_attempted"})
+			result := &app.Result{LinkID: id, Changed: mutation == "attempted", Removed: true}
+			var stdout, stderr bytes.Buffer
+			code := lifecycleFailureWithEvidence(&stdout, &stderr, true, stlerr.CodeState,
+				"link_remove", result, "Link operation did not complete successfully",
+				stlerr.EvidenceOf(err), err)
+			payload := assertCLIRecoveryFailure(t, code, stdout.String(), stderr.String(),
+				"state_failed", "credential_retirement", mutation, "post_commit_cleanup_incomplete")
+			if payload.PartialResult == nil || !payload.PartialResult.Removed ||
+				payload.Error.Evidence.Rollback != "not_attempted" ||
+				payload.Error.Evidence.DesiredState != "committed" {
+				t.Fatalf("receipt failure lost committed-state evidence: %+v", payload)
+			}
+		})
 	}
 }

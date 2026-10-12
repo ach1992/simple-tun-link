@@ -22,11 +22,13 @@ an optional `evidence` object:
 
 | Evidence field | Values and precise meaning |
 | --- | --- |
-| `stage` | `preflight`, `inspect`, `plan`, `validate`, `apply`, `verify`, `persistence`, `state_commit`, `persistence_cleanup`, `credential_retirement` (or `rollback` for a standalone Engine rollback helper) |
+| `stage` | `preflight`, `inspect`, `plan`, `validate`, `apply`, `verify`, `persistence`, `state_commit`, `persistence_cleanup`, `credential_retirement`, `credential_provision` (or `rollback` for a standalone Engine rollback helper) |
 | `host_mutation` | `not_attempted`: this Engine invocation has **not** called a host Apply/persistence publication; `attempted`: a call that may mutate was made, **not proof that anything changed**; `retained`: compensation deliberately skipped to preserve possible published intent |
 | `desired_state` | `no_commit_attempted`, `commit_attempted`, `prior_verified` (previous snapshot reloaded), `visible_unconfirmed` (publication/durability or readback ambiguous), `committed` |
 | `rollback` | `not_required`, `unavailable`, `not_attempted`, `completed_unverified` (callback returned success, **not a separate full host attestation**), `incomplete` |
 | `credential_provision` (optional) | `attempted`: protected per-Link key persistence was invoked separately before backend Apply; the exact key may remain even if backend mutation never started |
+
+The `credential_provision` **stage** is emitted when protected key persistence fails before backend/network Apply; `credential_provision:"attempted"` separately witnesses that the key may remain. This is not an ordinary host/network mutation.
 
 These values describe **this invocation only**. In particular,
 `host_mutation:not_attempted` refers to backend network Apply and restore
@@ -82,6 +84,7 @@ unregistered backend and retains its existing error/exit category.
 | `reason_code` | What to do |
 | --- | --- |
 | `rejected_before_host_apply` | Correct Link intent or conflicts, inspect saved/live identity, then explicitly retry when safe; no Engine backend Apply was invoked |
+| `operation_deadline_exceeded_before_apply` / `operation_cancelled_before_apply` | An Engine stage timed out or was canceled before backend Apply. Inspect Link and protected credential state, lock contention/host availability, and retry only if still intended |
 | `credential_provision_outcome_unverified` | A protected key write was attempted but the Engine did not confirm provisioning; inspect exact protected key and pending/committed Link identity before regenerating/retrying |
 | `kernel_module_not_loaded` | The specific module was absent from `/sys/module` but `modinfo -n` found a regular kernel-module artifact; confirm supported host/kernel policy before separately authorizing any load |
 | `observation_unverified` / `diagnostic_observation_unverified` | Retry read-only inventory; failure is **not** proof of absence, a free UDP port or permission to overwrite a foreign Link |
