@@ -184,6 +184,10 @@ func TestProtectedWireGuardKeyStoreRejectsUnsafePathsAndFiles(t *testing.T) {
 		if err := os.Mkdir(root, 0o755); err != nil {
 			t.Fatal(err)
 		}
+		// Verify rejection of the intended insecure mode even with umask 0077.
+		if err := os.Chmod(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
 		if err := store.PutNew(privateTestID, testGeneratedKey(t)); err == nil {
 			t.Fatal("created credential inside a group/world-traversable state root")
 		}
