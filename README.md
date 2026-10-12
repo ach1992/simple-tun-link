@@ -7,14 +7,18 @@ It creates and manages independent **Link Addresses** between Linux servers over
 Canonical CLI: **stl**  
 Convenience alias: **stlink** (same executable/behavior when installed by the supported installer)
 
-> Status: **pre-release development**. GRE/IPIP, WireGuard v3 Quick Link
-> sender/receiver/Resume, credential retirement and active diagnostics are
-> integrated. Focused disposable-kernel tests include real GRE/IPIP/WireGuard
-> traffic and same-peer GRE Native + FOU + GUE + WireGuard coexistence
-> ([PR #53](https://github.com/ach1992/simple-tun-link/pull/53)).
-> **Release acceptance remains open:** operational IPsec/XFRM, real
-> systemd restart/reapply, broader failure/multi-peer scenarios, and the
-> Ubuntu/Debian/architecture matrix (Issue #12). No public release exists.
+> Status: **pre-release; no public tag or GitHub Release**. The source
+> integrates GRE/IPIP Native/FOU/GUE, WireGuard v3 Quick Link, and the
+> **conditionally admitted**, native-exclusive IPsec/XFRM IKEv2 ESP/NAT-T
+> backend. Privileged six-simultaneous-Link E2E passed on native AMD64 and
+> ARM64 kernels with Ubuntu 24.04.5 and Debian 13 container userspaces
+> ([PR #77](https://github.com/ach1992/simple-tun-link/pull/77)).
+> Container userspaces share each runner's kernel; separate distro-kernel
+> and whole-guest reboot evidence is tracked in
+> [Issue #12](https://github.com/ach1992/simple-tun-link/issues/12).
+> Full-guest IPsec ESP/NAT-T reboot, physical NAT-router traversal and abrupt
+> power-loss recovery remain unproven. [Issue #11](https://github.com/ach1992/simple-tun-link/issues/11)
+> owns tagged artifacts, published installer verification and public release.
 
 ## Why
 
@@ -79,13 +83,17 @@ For nonprivileged/offline test coverage, run `bash scripts/test-install.sh`.
 
 Use `stl doctor ipsec` for a plain-language report or `stl doctor ipsec --json`
 for stable reason identifiers, observed prerequisite state and suggested
-next steps. This command is read-only and deliberately exits with unsupported
-status while the operational IPsec runtime is not registered. An apparently
-empty process listing, non-observed UDP 500/4500 binding in the current
-network namespace, or readable XFRM inventory is not proof that STL can
-safely own a daemon, port or kernel resource. A non-STL strongSwan installation
-must never be stopped or adopted by STL; only IPsec is unavailable in that
-case. See [CLI](docs/CLI.md) and [ADR-0005](docs/decisions/ADR-0005-scoped-vici-ipsec.md).
+next steps. This command is read-only. It reports `activation_allowed:true`
+only when strict native-exclusive runtime admission independently attests
+the STL-owned strongSwan configuration, loaded service, process, VICI,
+UDP ports and relevant kernel ownership. Otherwise it reports an explicit
+blocked/unknown state and exits unsupported (4); it never installs,
+starts or adopts a service. An apparently empty process listing, non-observed
+UDP 500/4500 binding or readable XFRM inventory is not proof of ownership.
+Foreign or unverifiable strongSwan deployment blocks **only IPsec**, never
+GRE/IPIP/WireGuard. See [CLI](docs/CLI.md),
+[real IPsec acceptance](docs/operations/IPSEC-REAL-E2E.md) and
+[ADR-0005](docs/decisions/ADR-0005-scoped-vici-ipsec.md).
 
 ## One-command Link health and troubleshooting
 
@@ -100,8 +108,9 @@ stl link diagnose --all --timeout 10m --json
 The same feature is under **Tests & Diagnostics → all** in the terminal menu.
 For each GRE, IPIP or WireGuard Link, STL checks the live backend identity,
 uses bounded Link Address probes and reports observed MTU/quality/counters.
-One failing Link does not hide other Links. Unsupported IPsec remains
-explicitly blocked. Reports distinguish replied, blocked and unknown
+One failing Link does not hide other Links. IPsec remains separately
+capability-gated: a blocked or unknown admission state must never be
+reported as healthy. Reports distinguish replied, blocked and unknown
 conditions with stable machine `reason_code` and safe `next_step`.
 A reply proves reachability only during the test; unknown is **not**
 silently promoted into a healthy result. Ordinary operator errors now

@@ -661,11 +661,22 @@ must handle eventual key retirement deliberately. WireGuard public status
 supports a verified interface, latest handshake timestamp and RX/TX bytes,
 **not a proof of peer reachability or a packet-level E2E test**.
 WireGuard guided sender creation, v3 recipient import and explicit credential
-retirement are implemented. Focused real-kernel bidirectional WireGuard
-traffic and same-peer GRE coexistence were observed in PR #53; operational
-IPsec, restart/recovery and release-level acceptance remain Issues #6–#12.
+retirement are implemented. Real-kernel bidirectional WireGuard and same-peer
+GRE coexistence were observed in PR #53. Native-exclusive operational IPsec
+is now conditionally admitted, with true ESP/NAT-T traffic and removal
+evidence (see [IPsec real E2E](operations/IPSEC-REAL-E2E.md)).
+Unproven reboot, physical NAT and release/publication gates remain with
+Issues #11 and #12.
 
 ## IPsec operational CLI and historical read-only diagnostic milestones
+
+The opening paragraphs below describe **current** conditional runtime
+admission and operational commands. Later paragraphs document historical
+fail-closed diagnostic milestones from before operational admission was
+implemented; their older statements that activation is always denied or
+the publisher is not wired are **historical**, not the present CLI contract.
+Use [real IPsec E2E](operations/IPSEC-REAL-E2E.md) and
+[architecture](ARCHITECTURE.md) for the current ownership/activation boundary.
 
 `stl doctor ipsec` is always read-only. Without a positively attested STL
 native-exclusive strongSwan service, `--json` preserves
