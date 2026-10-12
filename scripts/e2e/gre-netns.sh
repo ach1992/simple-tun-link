@@ -328,6 +328,8 @@ gre_firewall_a="$(require_gre_firewall_baseline "$ns_a")" || exit 1
 gre_firewall_b="$(require_gre_firewall_baseline "$ns_b")" || exit 1
 gre_fou_a="$(ip netns exec "$ns_a" ip -json fou show)"
 gre_fou_b="$(ip netns exec "$ns_b" ip -json fou show)"
+gre_fou_a_semantic="$(ip netns exec "$ns_a" ip fou show | LC_ALL=C sort)"
+gre_fou_b_semantic="$(ip netns exec "$ns_b" ip fou show | LC_ALL=C sort)"
 
 # Optional release-level real cross-backend acceptance in the SAME source,
 # namespace pair and state roots as GRE Native + FOU + GUE. This is an
@@ -503,6 +505,16 @@ if [[ -v STL_E2E_CROSS_WG && "$STL_E2E_CROSS_WG" == approved ]]; then
     select_mode "$gre_mode"; traffic
   done
   echo 'CROSS_WG_REMOVE_RETIRES_ONLY_OWN_RESOURCES=PASS'
+  # The deliberate FOU remove/recreate above can reorder kernel JSON rows.
+  # Preserve the stronger same-resource check against the *original*
+  # canonical identities before refreshing the old IPIP runner's raw-order
+  # snapshot; do not mistake enumeration order for a resource mutation.
+  [[ "$(ip netns exec "$ns_a" ip fou show | LC_ALL=C sort)" == "$gre_fou_a_semantic" &&
+     "$(ip netns exec "$ns_b" ip fou show | LC_ALL=C sort)" == "$gre_fou_b_semantic" ]] || {
+    echo 'FAIL: original GRE FOU/GUE mapping identity changed' >&2; exit 1;
+  }
+  gre_fou_a="$(ip netns exec "$ns_a" ip -json fou show)"
+  gre_fou_b="$(ip netns exec "$ns_b" ip -json fou show)"
 else
   echo 'GRE_IPIP_CROSS_WG=SKIP (set STL_E2E_CROSS_WG=approved)'
 fi
