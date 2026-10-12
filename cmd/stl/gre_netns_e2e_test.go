@@ -143,7 +143,7 @@ func TestGRENetnsE2E(t *testing.T) {
 	}
 	var args []string
 	switch action {
-	case "ensure", "reensure", "conflict":
+	case "ensure", "reensure", "conflict", "repair", "race":
 		args = []string{"link", "ensure", "--stdin", "--json"}
 	case "status":
 		args = []string{"link", "status", string(id), "--json"}
@@ -158,6 +158,30 @@ func TestGRENetnsE2E(t *testing.T) {
 	}
 	var stdout, stderr bytes.Buffer
 	exit := runWithRuntimeInput(args, bytes.NewReader(desired), &stdout, &stderr, options)
+	if action == "race" {
+		if exit == 0 {
+			var result map[string]any
+			if json.Unmarshal(stdout.Bytes(), &result) != nil ||
+				result["schema_version"] != float64(1) || result["link_id"] != string(id) ||
+				result["changed"] != true {
+				t.Fatal("concurrent GRE claim returned malformed success")
+			}
+			t.Logf("GRE_RESOURCE_RACE_ACCEPTED link_id=%s", id)
+			return
+		}
+		var rejected struct {
+			SchemaVersion int `json:"schema_version"`
+			Error         struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if exit != 1 || json.Unmarshal(stdout.Bytes(), &rejected) != nil ||
+			rejected.SchemaVersion != 1 || rejected.Error.Code != "conflict" {
+			t.Fatalf("concurrent GRE claim returned neither owned success nor typed conflict: exit=%d", exit)
+		}
+		t.Logf("GRE_RESOURCE_RACE_REJECTED link_id=%s", id)
+		return
+	}
 	if action == "conflict" {
 		var rejected struct {
 			SchemaVersion int `json:"schema_version"`
@@ -184,8 +208,8 @@ func TestGRENetnsE2E(t *testing.T) {
 		t.Fatalf("%s: missing expected CLI schema_version", action)
 	}
 	switch action {
-	case "ensure", "reensure":
-		if result["link_id"] != string(id) || result["changed"] != (action == "ensure") {
+	case "ensure", "reensure", "repair":
+		if result["link_id"] != string(id) || result["changed"] != (action != "reensure") {
 			t.Fatalf("%s: wrong idempotent ensure outcome: %s", action, stdout.String())
 		}
 	case "status":

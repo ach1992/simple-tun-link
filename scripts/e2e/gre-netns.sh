@@ -12,16 +12,34 @@ if (( EUID != 0 )); then
   echo "REFUSED: network namespace acceptance requires root on the disposable host" >&2
   exit 2
 fi
-for tool in go ip ping iptables mktemp sha256sum git; do
+for tool in ip ping iptables mktemp sha256sum; do
   command -v "$tool" >/dev/null || { echo "Missing test prerequisite: $tool" >&2; exit 2; }
 done
 
 source_root="$(cd -- "$(dirname -- "$0")/../.." && pwd)"
 test -f "$source_root/go.mod" || { echo "Source tree/go.mod not found" >&2; exit 2; }
 cd "$source_root"
-if [[ -n "$(git status --porcelain)" ]]; then
-  echo "REFUSED: uncommitted/untracked source would invalidate recorded test SHA" >&2
-  exit 2
+# Prebuilt mode is for disconnected, read-only mounted source in disposable
+# Docker guests. Its builder must verify the exact clean source commit before
+# compiling. The digest binds the actual executable mounted into each guest.
+if [[ -n "${STL_E2E_PREBUILT_TEST:-}" ]]; then
+  [[ "${STL_E2E_SOURCE_SHA:-}" =~ ^[0-9a-f]{40}$ &&
+     "${STL_E2E_PREBUILT_SHA256:-}" =~ ^[0-9a-f]{64}$ &&
+     -f "$STL_E2E_PREBUILT_TEST" && -x "$STL_E2E_PREBUILT_TEST" ]] || {
+    echo 'REFUSED: unverified prebuilt E2E binary/source identity' >&2; exit 2;
+  }
+  [[ "$(sha256sum "$STL_E2E_PREBUILT_TEST" | awk '{print $1}')" == "$STL_E2E_PREBUILT_SHA256" ]] || {
+    echo 'REFUSED: mounted E2E executable digest mismatch' >&2; exit 2;
+  }
+  source_sha="$STL_E2E_SOURCE_SHA"
+else
+  for tool in go git; do
+    command -v "$tool" >/dev/null || { echo "Missing test prerequisite: $tool" >&2; exit 2; }
+  done
+  [[ -z "$(git status --porcelain)" ]] || {
+    echo "REFUSED: uncommitted/untracked source would invalidate recorded test SHA" >&2; exit 2;
+  }
+  source_sha="$(git rev-parse HEAD)"
 fi
 
 # Use only a fresh runner-owned directory and fresh namespaces.
@@ -63,14 +81,20 @@ if ip netns list | awk '{ print $1 }' | grep -Fxe "$ns_a" -e "$ns_b" >/dev/null;
 fi
 mkdir -m 0700 "$workdir/a" "$workdir/b"
 
-printf 'TEST_SOURCE_SHA=%s\n' "$(git rev-parse HEAD)"
-printf 'VERSIONS kernel=%s iproute=%s iptables=%s go=%s\n' \
-  "$(uname -r)" "$(ip -Version)" "$(iptables --version)" "$(go version)"
+printf 'TEST_SOURCE_SHA=%s\n' "$source_sha"
+printf 'VERSIONS kernel=%s iproute=%s iptables=%s wg=%s\n' \
+  "$(uname -r)" "$(ip -Version)" "$(iptables --version)" "$(command -v wg >/dev/null && wg --version || echo unavailable)"
 echo "REQUIRE_ALL_MODES=native,fou,gue (unsupported capability is a failure, not a pass)"
 
 # No module installation, modprobe, host firewall changes or external peers.
 # GOTOOLCHAIN=local refuses an unexpected network toolchain download.
-GOTOOLCHAIN=local go test -c -o "$workdir/gre-e2e.test" ./cmd/stl
+if [[ -n "${STL_E2E_PREBUILT_TEST:-}" ]]; then
+  cp -- "$STL_E2E_PREBUILT_TEST" "$workdir/gre-e2e.test"
+  chmod 0700 "$workdir/gre-e2e.test"
+else
+  GOTOOLCHAIN=local go test -c -o "$workdir/gre-e2e.test" ./cmd/stl
+fi
+printf 'E2E_EXECUTABLE_SHA256=%s\n' "$(sha256sum "$workdir/gre-e2e.test" | awk '{print $1}')"
 ip netns add "$ns_a"
 created_a=1
 ip netns add "$ns_b"
@@ -125,7 +149,7 @@ traffic() {
 
 # Three independent GRE links to the exact same A/B underlay pair: Native,
 # FOU and GUE must remain address-/resource-isolated. Full cross-backend
-# GRE + WireGuard coexistence and systemd restart remain later #12 gates.
+# Full release qualification (reboot/arch matrix) remains Issue #12.
 select_mode() {
   mode=$1
   case "$mode" in
@@ -304,6 +328,8 @@ gre_firewall_a="$(require_gre_firewall_baseline "$ns_a")" || exit 1
 gre_firewall_b="$(require_gre_firewall_baseline "$ns_b")" || exit 1
 gre_fou_a="$(ip netns exec "$ns_a" ip -json fou show)"
 gre_fou_b="$(ip netns exec "$ns_b" ip -json fou show)"
+gre_fou_a_semantic="$(ip netns exec "$ns_a" ip fou show | LC_ALL=C sort)"
+gre_fou_b_semantic="$(ip netns exec "$ns_b" ip fou show | LC_ALL=C sort)"
 
 # Optional release-level real cross-backend acceptance in the SAME source,
 # namespace pair and state roots as GRE Native + FOU + GUE. This is an
@@ -348,6 +374,121 @@ if [[ -v STL_E2E_CROSS_WG && "$STL_E2E_CROSS_WG" == approved ]]; then
     select_mode "$gre_mode"; traffic
   done
   echo 'GRE_NATIVE_FOU_GUE_WG_SAME_PEER_CONCURRENT=PASS'
+
+  # All four Links are still live: remove/reapply FOU WITHOUT stopping WG.
+  # Verify the three survivors both by identity and actual packets.
+  select_mode fou
+  run_side a remove
+  run_side b remove
+  for ns in "$ns_a" "$ns_b"; do
+    assert_stl_firewall_rule_count "$ns" "$link_id" 0
+  done
+  for selected_mode in native gue; do
+    select_mode "$selected_mode"; traffic
+  done
+  ip netns exec "$ns_a" ping -n -c 2 -W 3 -I 10.83.10.0 10.83.10.1 >/dev/null
+  ip netns exec "$ns_b" ping -n -c 2 -W 3 -I 10.83.10.1 10.83.10.0 >/dev/null
+  run_cross_wg_side a status
+  run_cross_wg_side b status
+  echo 'FOU_REMOVE_PRESERVES_GRE_AND_WG_TRAFFIC=PASS'
+  select_mode fou
+  run_side a ensure
+  run_side b ensure
+  run_side a reensure
+  run_side b reensure
+  traffic
+  for ns in "$ns_a" "$ns_b"; do
+    assert_stl_firewall_rule_count "$ns" "$link_id" 1
+  done
+  assert_gre_firewall_unchanged
+  echo 'FOU_REAPPLY_WITH_WG_ACTIVE=PASS'
+
+  # Reconcile a deliberately lost *owned* GRE/FOU kernel interface on A,
+  # leaving its verified mapping and durable desired state intact.
+  select_mode fou
+  observed_alias="$(ip -n "$ns_a" -d link show stl222222222222)"
+  [[ "$observed_alias" == *"alias stl:$link_id"* ]] || {
+    echo 'REFUSED: FOU test target is not currently STL-owned' >&2; exit 2;
+  }
+  ip -n "$ns_a" link delete stl222222222222
+  run_side a repair
+  run_side a reensure
+  run_side a status
+  run_side b status
+  traffic
+  for selected_mode in native gue; do
+    select_mode "$selected_mode"; traffic
+  done
+  ip netns exec "$ns_a" ping -n -c 2 -W 3 -I 10.83.10.0 10.83.10.1 >/dev/null
+  ip netns exec "$ns_b" ping -n -c 2 -W 3 -I 10.83.10.1 10.83.10.0 >/dev/null
+  assert_gre_firewall_unchanged
+  echo 'FOU_LINK_LOSS_RECOVERY_PRESERVES_GRE_AND_WG=PASS'
+
+  # Two independent requests compete for the SAME owned FOU receive port.
+  # Both are made through actual concurrent canonical CLI/Engine processes;
+  # exactly one is allowed to commit and the other must type-reject conflict.
+  # Distinct GRE keys, Link IDs, and /31 addresses isolate receive claims,
+  # backend identities, interface/address and firewall claims. ONLY the
+  # UDP listen port is shared, so the port conflict is the decisive resource.
+  # Kernel receive-mapping enumeration order is not stable after deletion
+  # and recreation. Compare complete sorted line records captured immediately
+  # before and after the contested claims, never unsorted JSON-array bytes.
+  race_fou_before="$(ip netns exec "$ns_a" ip fou show | LC_ALL=C sort)"
+  race_log_a="$workdir/race-a.log"; race_log_b="$workdir/race-b.log"
+  ( mode=fou; link_id=lnk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; octet=70;
+    port=33373; key=33374; run_side a race ) >"$race_log_a" 2>&1 &
+  race_pid_a=$!
+  ( mode=fou; link_id=lnk_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; octet=80;
+    port=33373; key=33375; run_side a race ) >"$race_log_b" 2>&1 &
+  race_pid_b=$!
+  wait "$race_pid_a" || { cat "$race_log_a" >&2; cat "$race_log_b" >&2; exit 1; }
+  wait "$race_pid_b" || { cat "$race_log_a" >&2; cat "$race_log_b" >&2; exit 1; }
+  cat "$race_log_a" "$race_log_b"
+  accepted="$(grep -Fhc GRE_RESOURCE_RACE_ACCEPTED "$race_log_a" "$race_log_b" | awk '{s+=$1} END {print s+0}')"
+  rejected="$(grep -Fhc GRE_RESOURCE_RACE_REJECTED "$race_log_a" "$race_log_b" | awk '{s+=$1} END {print s+0}')"
+  [[ "$accepted" == 1 && "$rejected" == 1 ]] || {
+    echo 'FAIL: simultaneous FOU receive claims were not uniquely serialized' >&2; exit 1;
+  }
+  if grep -Fq GRE_RESOURCE_RACE_ACCEPTED "$race_log_a"; then
+    mode=fou; link_id=lnk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; octet=70; port=33373; key=33374
+  else
+    mode=fou; link_id=lnk_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; octet=80; port=33373; key=33375
+  fi
+  run_side a remove
+  assert_stl_firewall_rule_count "$ns_a" "$link_id" 0
+  race_fou_after="$(ip netns exec "$ns_a" ip fou show | LC_ALL=C sort)"
+  [[ "$race_fou_after" == "$race_fou_before" ]] || {
+    echo 'FAIL: concurrent claim cleanup leaked/changed a receive mapping' >&2
+    printf 'BEFORE_FOU=%s\nAFTER_FOU=%s\n' "$race_fou_before" "$race_fou_after" >&2
+    exit 1
+  }
+  assert_gre_firewall_unchanged
+  echo 'CONCURRENT_GRE_FOU_PORT_CLAIM_ONE_OWNER=PASS'
+
+  # A foreign GRE interface under the next exact deterministic name must
+  # NEVER be adopted or deleted on rejected Ensure. The fixture owns only
+  # this synthetic foreign object, and explicitly removes it afterwards.
+  foreign_id=lnk_ffffffffffffffffffffffffffffffff
+  foreign_if=stlffffffffffff
+  ip -n "$ns_a" link add "$foreign_if" type gre local 192.0.2.10 remote 192.0.2.11 key 42042
+  ip -n "$ns_a" link set dev "$foreign_if" alias foreign-fixture
+  foreign_before="$(ip -n "$ns_a" -details link show dev "$foreign_if")"
+  ( mode=native; link_id="$foreign_id"; octet=90; port=0; key=42042;
+    run_side a conflict )
+  [[ "$(ip -n "$ns_a" -details link show dev "$foreign_if")" == "$foreign_before" ]] || {
+    echo 'FAIL: foreign interface was adopted or changed' >&2; exit 1;
+  }
+  ip -n "$ns_a" link delete "$foreign_if"
+  for selected_mode in native fou gue; do
+    select_mode "$selected_mode"; traffic
+  done
+  ip netns exec "$ns_a" ping -n -c 2 -W 3 -I 10.83.10.0 10.83.10.1 >/dev/null
+  ip netns exec "$ns_b" ping -n -c 2 -W 3 -I 10.83.10.1 10.83.10.0 >/dev/null
+  assert_gre_firewall_unchanged
+  echo 'FOREIGN_GRE_ADOPTION_REJECTED_WITH_SIBLINGS_LIVE=PASS'
+  run_cross_wg_side a cross-list
+  run_cross_wg_side b cross-list
+
   run_cross_wg_side a remove
   run_cross_wg_side b remove
   assert_stl_firewall_rule_count "$ns_a" "$wg_id" 0
@@ -366,6 +507,16 @@ if [[ -v STL_E2E_CROSS_WG && "$STL_E2E_CROSS_WG" == approved ]]; then
     select_mode "$gre_mode"; traffic
   done
   echo 'CROSS_WG_REMOVE_RETIRES_ONLY_OWN_RESOURCES=PASS'
+  # The deliberate FOU remove/recreate above can reorder kernel JSON rows.
+  # Preserve the stronger same-resource check against the *original*
+  # canonical identities before refreshing the old IPIP runner's raw-order
+  # snapshot; do not mistake enumeration order for a resource mutation.
+  [[ "$(ip netns exec "$ns_a" ip fou show | LC_ALL=C sort)" == "$gre_fou_a_semantic" &&
+     "$(ip netns exec "$ns_b" ip fou show | LC_ALL=C sort)" == "$gre_fou_b_semantic" ]] || {
+    echo 'FAIL: original GRE FOU/GUE mapping identity changed' >&2; exit 1;
+  }
+  gre_fou_a="$(ip netns exec "$ns_a" ip -json fou show)"
+  gre_fou_b="$(ip netns exec "$ns_b" ip -json fou show)"
 else
   echo 'GRE_IPIP_CROSS_WG=SKIP (set STL_E2E_CROSS_WG=approved)'
 fi
