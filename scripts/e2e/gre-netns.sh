@@ -426,6 +426,10 @@ if [[ -v STL_E2E_CROSS_WG && "$STL_E2E_CROSS_WG" == approved ]]; then
   # Both are made through actual concurrent canonical CLI/Engine processes;
   # exactly one is allowed to commit and the other must type-reject conflict.
   # Disjoint /31 addresses make the UDP receive port the decisive resource.
+  # Kernel receive-mapping enumeration order is not stable after deletion
+  # and recreation. Compare complete sorted line records captured immediately
+  # before and after the contested claims, never unsorted JSON-array bytes.
+  race_fou_before="$(ip netns exec "$ns_a" ip fou show | LC_ALL=C sort)"
   race_log_a="$workdir/race-a.log"; race_log_b="$workdir/race-b.log"
   ( mode=fou; link_id=lnk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; octet=70;
     port=33373; key=33373; run_side a race ) >"$race_log_a" 2>&1 &
@@ -448,8 +452,11 @@ if [[ -v STL_E2E_CROSS_WG && "$STL_E2E_CROSS_WG" == approved ]]; then
   fi
   run_side a remove
   assert_stl_firewall_rule_count "$ns_a" "$link_id" 0
-  [[ "$(ip netns exec "$ns_a" ip -json fou show)" == "$gre_fou_a" ]] || {
-    echo 'FAIL: concurrent claim cleanup leaked/changed a receive mapping' >&2; exit 1;
+  race_fou_after="$(ip netns exec "$ns_a" ip fou show | LC_ALL=C sort)"
+  [[ "$race_fou_after" == "$race_fou_before" ]] || {
+    echo 'FAIL: concurrent claim cleanup leaked/changed a receive mapping' >&2
+    printf 'BEFORE_FOU=%s\nAFTER_FOU=%s\n' "$race_fou_before" "$race_fou_after" >&2
+    exit 1
   }
   assert_gre_firewall_unchanged
   echo 'CONCURRENT_GRE_FOU_PORT_CLAIM_ONE_OWNER=PASS'

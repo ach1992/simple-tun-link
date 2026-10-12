@@ -3,6 +3,9 @@
 # disposable Docker guests. Never invoke on the Agent host or on production.
 set -Eeuo pipefail
 umask 077
+# Root may inspect this aiworker-owned worktree, but must never refresh or
+# replace its index. Every invocation here is read-only with respect to Git.
+export GIT_OPTIONAL_LOCKS=0
 if [[ ${STL_E2E_DISPOSABLE_HOST:-} != approved || $EUID -ne 0 ]]; then
   echo 'REFUSED: explicitly approved disposable Docker host and root required' >&2
   exit 2
