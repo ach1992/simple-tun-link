@@ -13,10 +13,7 @@ const ownerTagPrefix = "stl:"
 // support an alias/comment field. It identifies the owning Link, not merely a
 // resource with a colliding name.
 func OwnerTag(id domain.LinkID) (string, error) {
-	if err := id.Validate(); err != nil {
-		return "", err
-	}
-	return ownerTagPrefix + string(id), nil
+	return domain.OwnerTag(id)
 }
 
 func ParseOwnerTag(tag string) (domain.LinkID, bool) {

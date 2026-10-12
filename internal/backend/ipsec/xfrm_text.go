@@ -279,6 +279,8 @@ func xfrmTextUsesID(ctx context.Context, raw []byte, target uint32, kind string)
 	hasDescriptor := false
 	seenID := false
 	seenSelector := false
+	socketPolicy := false
+	headerSrc, headerDst := "", ""
 	found := false
 	// A large legacy SA inventory can repeat the same transport selector
 	// hundreds of times. Keep NSS answers local to this single read-only
@@ -330,8 +332,27 @@ func xfrmTextUsesID(ctx context.Context, raw []byte, target uint32, kind string)
 				return false, fmt.Errorf("invalid XFRM text header")
 			}
 			seenRecord, seenID, hasDescriptor, seenSelector = true, false, false, false
+			socketPolicy = false
+			headerSrc, headerDst = string(fields[1]), string(fields[3])
 		} else if !seenRecord || bytes.Equal(fields[0], []byte("src")) {
 			return false, fmt.Errorf("unexpected XFRM text inventory")
+		}
+		// strongSwan adds kernel per-socket bypass policies for IKE UDP
+		// sockets. iproute2 renders these as socket in|out priority 0,
+		// not dir. Admit only exact wildcard form without an if_id;
+		// malformed or marked extensions fail closed.
+		if kind == "policy" && bytes.Equal(fields[0], []byte("socket")) {
+			if hasDescriptor || len(fields) != 4 ||
+				!(bytes.Equal(fields[1], []byte("in")) || bytes.Equal(fields[1], []byte("out"))) ||
+				!bytes.Equal(fields[2], []byte("priority")) ||
+				!bytes.Equal(fields[3], []byte("0")) ||
+				!((headerSrc == "::/0" && headerDst == "::/0") ||
+					(headerSrc == "0.0.0.0/0" && headerDst == "0.0.0.0/0")) {
+				return false, fmt.Errorf("invalid socket bypass policy")
+			}
+			socketPolicy = true
+			hasDescriptor = true
+			continue
 		}
 		// The record descriptor belongs to the canonical first token of
 		// the SA/protocol or policy/direction line. State selectors such as
@@ -358,7 +379,7 @@ func xfrmTextUsesID(ctx context.Context, raw []byte, target uint32, kind string)
 		// A similarly spelled token inside another line is misplaced and must
 		// never establish vacancy, even when its value is not our target.
 		if bytes.Equal(fields[0], []byte("if_id")) {
-			if seenID || len(fields) != 2 {
+			if socketPolicy || seenID || len(fields) != 2 {
 				return false, fmt.Errorf("ambiguous XFRM text interface identifier")
 			}
 			id, err := strconv.ParseUint(string(fields[1]), 0, 32)

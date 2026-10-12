@@ -3,6 +3,8 @@
 # Caller must create a container with --network none and network-namespace caps.
 set -euo pipefail
 umask 077
+STL_IPSEC_DRIVER="${STL_IPSEC_DRIVER:-vici}"
+STL_IPSEC_LAB_TRACE="${STL_IPSEC_LAB_TRACE:-none}"
 if [ "$STL_E2E_DISPOSABLE_HOST" != approved ] ||
    [ "$STL_IPSEC_ISOLATED" != approved ] ||
    [ "$(id -u)" -ne 0 ] ||
@@ -11,8 +13,9 @@ if [ "$STL_E2E_DISPOSABLE_HOST" != approved ] ||
   echo "ERROR: disconnected disposable container with explicit authorization required" >&2
   exit 2
 fi
-case "$STL_IPSEC_CASE" in single|multi|mismatch|conflict|restart) ;; *) echo "invalid lab case" >&2; exit 2 ;; esac
+case "$STL_IPSEC_CASE" in single|multi|mismatch|conflict|restart|foreign|recover) ;; *) echo "invalid lab case" >&2; exit 2 ;; esac
 case "$STL_IPSEC_ENCAP" in esp|nat-t) ;; *) echo "invalid encapsulation" >&2; exit 2 ;; esac
+case "$STL_IPSEC_DRIVER" in vici|engine|cli) ;; *) echo "invalid lab driver" >&2; exit 2 ;; esac
 
 work=/run/stl-ipsec-proof
 mkdir -m 0700 -p "$work"
@@ -80,6 +83,11 @@ start_owned_peer() {
 }
 for side in a b; do start_owned_peer "$side"; done
 echo "SEPARATE_STRONGSWAN_VICI_ENDPOINTS=2"
+if [ "$STL_IPSEC_LAB_TRACE" = approved ]; then
+  echo "LAB_XFRM_POLICY_A_PRECREATE_START"
+  ip -n stl-ipsec-a -json xfrm policy
+  echo "LAB_XFRM_POLICY_A_PRECREATE_END"
+fi
 
 link_iface() { printf 'stlx%s' "$(printf '%011s' "$1" | tr ' ' "$1")"; }
 link_addresses() {
@@ -93,8 +101,34 @@ vici_op() {
   local operation=$1 side=$2 suffix=$3
   /usr/local/bin/stl-ipsec-probe "$operation" "$work/$side.vici" "$side" "$STL_IPSEC_ENCAP" "$suffix"
 }
+engine_op() {
+  local operation=$1 side=$2 suffix=$3
+  ip netns exec "stl-ipsec-$side"     /usr/local/bin/stl-ipsec-engine-peer "$operation" "$side" "$suffix" "$STL_IPSEC_ENCAP"
+}
+cli_op() {
+  local operation=$1 side=$2 suffix=$3
+  ip netns exec "stl-ipsec-$side"     env STL_IPSEC_CLI_OP="$operation" STL_IPSEC_CLI_SIDE="$side"     STL_IPSEC_CLI_LINK="$suffix" STL_IPSEC_CLI_ENCAP="$STL_IPSEC_ENCAP"     /usr/local/bin/stl-ipsec-cli-test -test.run '^TestIPsecCanonicalCLIRealIsolatedE2E$' -test.v
+}
 prepare_link() {
   local suffix=$1 id_hex ifid ifname side ipaddr
+  if [ "$STL_IPSEC_DRIVER" = cli ]; then
+    cli_op create a "$suffix"
+    if [ "$STL_IPSEC_CASE" = mismatch ] && [ "$suffix" = b ]; then
+      cli_op import-mismatch b "$suffix"
+    else
+      cli_op import b "$suffix"
+    fi
+    return 0
+  fi
+  if [ "$STL_IPSEC_DRIVER" = engine ]; then
+    engine_op create a "$suffix"
+    if [ "$STL_IPSEC_CASE" = mismatch ] && [ "$suffix" = b ]; then
+      engine_op import-mismatch b "$suffix"
+    else
+      engine_op import b "$suffix"
+    fi
+    return 0
+  fi
   id_hex=$(printf '%032s' "$suffix" | tr ' ' "$suffix")
   ifid=$(printf 'stl/ipsec/xfrm/v1/%s' "$id_hex" | sha256sum | cut -c1-8)
   ifid=$((16#$ifid))
@@ -108,7 +142,15 @@ prepare_link() {
   done
   for side in a b; do vici_op load "$side" "$suffix"; done
 }
-initiate_link() { vici_op initiate a "$1"; }
+initiate_link() {
+  if [ "$STL_IPSEC_DRIVER" = cli ]; then
+    cli_op connect a "$1"
+  elif [ "$STL_IPSEC_DRIVER" = engine ]; then
+    engine_op connect a "$1"
+  else
+    vici_op initiate a "$1"
+  fi
+}
 assert_no_plaintext_path() {
   local suffix=$1
   link_addresses "$suffix"
@@ -128,18 +170,45 @@ ping_link() {
 reapply_link() {
   local suffix=$1 side
   for side in a b; do
-    vici_op reapply "$side" "$suffix"
+    if [ "$STL_IPSEC_DRIVER" = cli ]; then
+      cli_op ensure "$side" "$suffix"
+      cli_op status "$side" "$suffix"
+      cli_op diagnose "$side" "$suffix"
+    elif [ "$STL_IPSEC_DRIVER" = engine ]; then
+      engine_op ensure "$side" "$suffix"
+      engine_op status "$side" "$suffix"
+    else
+      vici_op reapply "$side" "$suffix"
+    fi
   done
   echo "NO_REPLACE_REAPPLY_LINK_$suffix=PASS"
 }
 remove_link() {
   local suffix=$1 side
-  vici_op terminate a "$suffix"
-  for side in a b; do
-    vici_op unload "$side" "$suffix"
-    vici_op assert-absent "$side" "$suffix"
-    ip -n stl-ipsec-$side link delete "$(link_iface "$suffix")"
-  done
+  if [ "$STL_IPSEC_DRIVER" = cli ]; then
+    for side in a b; do
+      cli_op remove "$side" "$suffix"
+      vici_op assert-absent "$side" "$suffix"
+      if ip -n stl-ipsec-$side link show "$(link_iface "$suffix")" >/dev/null 2>&1; then
+        echo "ERROR: CLI Remove retained XFRM device" >&2; exit 1
+      fi
+    done
+  elif [ "$STL_IPSEC_DRIVER" = engine ]; then
+    for side in a b; do
+      engine_op remove "$side" "$suffix"
+      vici_op assert-absent "$side" "$suffix"
+      if ip -n stl-ipsec-$side link show "$(link_iface "$suffix")" >/dev/null 2>&1; then
+        echo "ERROR: committed IPsec Remove retained XFRM device" >&2; exit 1
+      fi
+    done
+  else
+    vici_op terminate a "$suffix"
+    for side in a b; do
+      vici_op unload "$side" "$suffix"
+      vici_op assert-absent "$side" "$suffix"
+      ip -n stl-ipsec-$side link delete "$(link_iface "$suffix")"
+    done
+  fi
   echo "SCOPED_REMOVE_LINK_$suffix=PASS"
 }
 check_sas() {
@@ -161,6 +230,24 @@ check_natt() {
   done
   echo "REAL_NATT_XFRM_ENCAPSULATION=PASS"
 }
+
+if [ "$STL_IPSEC_CASE" = foreign ]; then
+  if [ "$STL_IPSEC_DRIVER" != engine ] && [ "$STL_IPSEC_DRIVER" != cli ]; then
+    echo "ERROR: foreign-owner rejection requires canonical STL driver" >&2; exit 2
+  fi
+  # Simulate a preexisting VICI object from another management writer.
+  vici_op load a a
+  if { if [ "$STL_IPSEC_DRIVER" = cli ]; then cli_op create a a; else engine_op create a a; fi; }; then
+    echo "ERROR: STL adopted a preexisting VICI connection/PSK" >&2; exit 1
+  fi
+  vici_op check a a
+  if ip -n stl-ipsec-a link show "$(link_iface a)" >/dev/null 2>&1; then
+    echo "ERROR: Engine modified XFRM despite foreign object" >&2; exit 1
+  fi
+  echo "REAL_IPSEC_FOREIGN_VICI_REJECTION=PASS"
+  echo "REAL_IPSEC_E2E=PASS case=foreign encapsulation=$STL_IPSEC_ENCAP"
+  exit 0
+fi
 
 prepare_link a
 assert_no_plaintext_path a
@@ -194,7 +281,7 @@ case "$STL_IPSEC_CASE" in
   conflict)
     # Existing matching object must not be overwritten by any load path,
     # even when it has canonical STL-looking names. Name != ownership.
-    if vici_op load a a; then
+    if { if [ "$STL_IPSEC_DRIVER" = engine ]; then engine_op create a a; else vici_op load a a; fi; }; then
       echo "ERROR: preexisting daemon object was silently replaced" >&2; exit 1
     fi
     vici_op check a a
@@ -222,19 +309,51 @@ case "$STL_IPSEC_CASE" in
     check_sas 0
     echo "REAL_IPSEC_DAEMON_RESTART_RESTORE=PASS"
     ;;
+  recover)
+    if [ "$STL_IPSEC_DRIVER" != engine ] && [ "$STL_IPSEC_DRIVER" != cli ]; then
+      echo "ERROR: recovery requires canonical STL driver" >&2; exit 2
+    fi
+    # Bounded fixture-only loss of all in-memory per-Link VICI objects;
+    # protected PSKs and canonical committed state remain on disk.
+    # This models the state lost across a daemon restart without asserting
+    # that a real installed systemd unit was restarted.
+    vici_op terminate a a
+    for side in a b; do
+      vici_op unload "$side" a
+      vici_op assert-absent "$side" a
+    done
+    check_sas 0
+    for side in a b; do
+      if [ "$STL_IPSEC_DRIVER" = cli ]; then cli_op restore "$side" a
+      else engine_op restore "$side" a; fi
+    done
+    initiate_link a
+    ping_link a
+    check_sas 2
+    reapply_link a
+    remove_link a
+    check_sas 0
+    echo "REAL_IPSEC_OWNED_VICI_RELOAD_RESTORE=PASS"
+    ;;
   mismatch)
     export STL_IPSEC_MISMATCH_LINK=b
     prepare_link b
-    if vici_op initiate a b; then
+    if initiate_link b; then
       echo "ERROR: mismatched PSK unexpectedly established IKEv2" >&2; exit 1
     fi
     # A failed child negotiation must not tear down the healthy sibling.
     check_sas 2
     ping_link a
     for side in a b; do
-      vici_op unload "$side" b
+      if [ "$STL_IPSEC_DRIVER" = cli ]; then
+        cli_op remove "$side" b
+      elif [ "$STL_IPSEC_DRIVER" = engine ]; then
+        engine_op remove "$side" b
+      else
+        vici_op unload "$side" b
+        ip -n stl-ipsec-$side link delete "$(link_iface b)"
+      fi
       vici_op assert-absent "$side" b
-      ip -n stl-ipsec-$side link delete "$(link_iface b)"
     done
     check_sas 2
     remove_link a

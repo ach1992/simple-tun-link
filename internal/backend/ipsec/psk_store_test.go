@@ -352,3 +352,97 @@ func TestIPsecPSKStoreConcurrentNoClobber(t *testing.T) {
 		t.Fatal("concurrent update left private transient files", err)
 	}
 }
+
+func TestIPsecProtectedPSKReceiptBoundRetirement(t *testing.T) {
+	store, root := makePSKStore(t)
+	key := freshTestPSK(t)
+	sibling := freshTestPSK(t)
+	if err := store.PutNew(testPSKLink1, key); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutNew(testPSKLink2, sibling); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := store.Digest(testPSKLink1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RetireMatching(testPSKLink1, strings.Repeat("0", 64)); err == nil {
+		t.Fatal("accepted mismatched retirement digest")
+	}
+	if err := store.RetireMatching(testPSKLink1, "INVALID"); err == nil {
+		t.Fatal("accepted malformed retirement digest")
+	}
+	if err := store.RetireMatching(testPSKLink1, digest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Load(testPSKLink1); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("retired key still exists or is in unknown state: %v", err)
+	}
+	if err := store.RetireMatching(testPSKLink1, digest); err != nil {
+		t.Fatal("exact already-retired key must replay idempotently", err)
+	}
+	actual, err := store.Load(testPSKLink2)
+	if err != nil {
+		t.Fatal("sibling protected PSK was damaged")
+	}
+	raw := actual.SecretBytes()
+	actual.Zeroize()
+	if !bytes.Equal(raw, sibling) {
+		clear(raw)
+		t.Fatal("sibling protected PSK bytes changed")
+	}
+	clear(raw)
+	if _, err := os.Lstat(filepath.Join(root, "credentials", string(testPSKLink1)+".ipsecpsk")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("retirement did not remove protected file inode")
+	}
+}
+
+func TestIPsecProtectedPSKRetirementRejectsForeignInodes(t *testing.T) {
+	for label, corrupt := range map[string]func(*testing.T, string){
+		"world-readable": func(t *testing.T, p string) {
+			if e := os.Chmod(p, 0644); e != nil {
+				t.Fatal(e)
+			}
+		},
+		"hardlink": func(t *testing.T, p string) {
+			if e := os.Link(p, p+".foreign"); e != nil {
+				t.Fatal(e)
+			}
+		},
+		"symlink": func(t *testing.T, p string) {
+			outside := filepath.Join(t.TempDir(), "outside")
+			if e := os.Rename(p, outside); e != nil {
+				t.Fatal(e)
+			}
+			if e := os.Symlink(outside, p); e != nil {
+				t.Fatal(e)
+			}
+		},
+		"unexpected-content": func(t *testing.T, p string) {
+			if e := os.WriteFile(p, bytes.Repeat([]byte{'f'}, 65), 0600); e != nil {
+				t.Fatal(e)
+			}
+		},
+	} {
+		t.Run(label, func(t *testing.T) {
+			store, root := makePSKStore(t)
+			key := freshTestPSK(t)
+			if e := store.PutNew(testPSKLink1, key); e != nil {
+				t.Fatal(e)
+			}
+			digest, e := store.Digest(testPSKLink1)
+			if e != nil {
+				t.Fatal(e)
+			}
+			file := filepath.Join(root, "credentials", string(testPSKLink1)+".ipsecpsk")
+			corrupt(t, file)
+			if e := store.RetireMatching(testPSKLink1, digest); e == nil {
+				t.Fatal("retirement deleted an unsafe, changed or foreign key inode")
+			}
+			if _, e := os.Lstat(file); e != nil {
+				t.Fatal("unsafe private path was deleted")
+			}
+		})
+	}
+}

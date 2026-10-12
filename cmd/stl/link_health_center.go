@@ -191,7 +191,7 @@ func linkDiagnoseAllWithServices(args []string, stdout, stderr io.Writer, option
 			check = healthUnavailable(link, "diagnostic_interrupted",
 				"Batch diagnosis stopped before this Link could be observed.",
 				"Review current Link state and rerun the read-only check with a suitable --timeout.")
-		case link.Backend == domain.BackendIPsec:
+		case link.Backend == domain.BackendIPsec && !hasOperationalIPsec(*options):
 			// Same condition, reason and machine action as per-Link status
 			// and diagnose; detailed read-only evidence lives in doctor.
 			check = healthBlocked(link, diagnostics.IPsecRuntimeNotRegisteredReason,

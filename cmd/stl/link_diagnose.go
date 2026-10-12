@@ -52,14 +52,15 @@ func linkDiagnoseCommand(args []string, stdout, stderr io.Writer, options *runti
 	if !exists {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, "link_diagnose", "Link ID is not present in local desired state")
 	}
-	if record.Desired.Backend == domain.BackendIPsec {
-		return ipsecUnregisteredError(stdout, stderr, jsonOutput, "link_diagnose", id)
-	}
+
 	if options == nil {
 		options, err = productionRuntimeOptions()
 		if err != nil {
 			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeState, "link_diagnose", "cannot initialize diagnostic backend")
 		}
+	}
+	if record.Desired.Backend == domain.BackendIPsec && !hasOperationalIPsec(*options) {
+		return ipsecUnregisteredError(stdout, stderr, jsonOutput, "link_diagnose", id)
 	}
 	measurement, err := inspectLinkDiagnostic(ctx, record.Desired, *options, manualMTU)
 	if err != nil {

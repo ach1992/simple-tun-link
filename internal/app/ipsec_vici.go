@@ -45,11 +45,9 @@ func (e *Engine) PrepareIPsecVICI(ctx context.Context, id domain.LinkID, keys IP
 	})
 }
 
-// advanceIPsecVICIPhase is a pure state-journal transition; no production
-// caller currently advances beyond prepared. Only the test simulator uses
-// this method until an independently proven no-clobber ownership protocol
-// exists. It enforces exact intent binding and allowed adjacent phases, but
-// does not contact VICI, modify XFRM, or confer any daemon ownership.
+// advanceIPsecVICIPhase advances only exact adjacent durable transaction
+// phases for either initial activation or committed-Link recovery. A journal
+// alone does not confer daemon ownership; Backend admission is independent.
 func (e *Engine) advanceIPsecVICIPhase(ctx context.Context, p ipsec.Profile, from, to string) error {
 	// Even internal callers may not skip phases to manufacture evidence
 	// of a daemon call that was never actually issued/observed.
@@ -61,17 +59,34 @@ func (e *Engine) advanceIPsecVICIPhase(ctx context.Context, p ipsec.Profile, fro
 		return fmt.Errorf("invalid IPsec VICI journal phase transition")
 	}
 	return e.store.Update(ctx, func(s *state.Snapshot) error {
-		pending, ok := s.FindPendingIPsec(p.Link.ID)
-		current, exists := s.FindIPsecVICIOperation(p.Link.ID)
-		if !ok || pending.Link != p.Link || !exists || current.Intent != pending || current.Phase != from {
-			return fmt.Errorf("IPsec VICI transaction changed")
+		// New activation and committed-Link recovery have disjoint durable
+		// intent types. Only their exact authoritative transaction can
+		// advance an adjacent phase; neither name nor VICI reply grants it.
+		if pending, ok := s.FindPendingIPsec(p.Link.ID); ok {
+			current, exists := s.FindIPsecVICIOperation(p.Link.ID)
+			if pending.Link != p.Link || !exists || current.Intent != pending || current.Phase != from {
+				return fmt.Errorf("IPsec activation VICI transaction changed")
+			}
+			for i := range s.IPsecVICIOperations {
+				if s.IPsecVICIOperations[i].Intent.Link.ID == p.Link.ID {
+					s.IPsecVICIOperations[i].Phase = to
+					return nil
+				}
+			}
+			return fmt.Errorf("activation VICI transaction disappeared")
 		}
-		for i := range s.IPsecVICIOperations {
-			if s.IPsecVICIOperations[i].Intent.Link.ID == p.Link.ID {
-				s.IPsecVICIOperations[i].Phase = to
+		existing, ok := s.Find(p.Link.ID)
+		current, present := s.FindIPsecReapplyOperation(p.Link.ID)
+		if !ok || existing.Desired != p.Link || !present || current.Intent != p.Link ||
+			current.Phase != from {
+			return fmt.Errorf("IPsec committed-Link reapply transaction changed")
+		}
+		for i := range s.IPsecReapplyOperations {
+			if s.IPsecReapplyOperations[i].Intent.ID == p.Link.ID {
+				s.IPsecReapplyOperations[i].Phase = to
 				return nil
 			}
 		}
-		return fmt.Errorf("missing VICI transaction")
+		return fmt.Errorf("IPsec committed-Link reapply journal disappeared")
 	})
 }

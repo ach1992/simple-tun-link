@@ -4,6 +4,19 @@
 - Date: 2026-10-10
 - Controlling acceptance: Issue #7
 
+**Current implementation checkpoint (2026-10-12):** The following
+"source-only" and "future" sections document the historical safety work
+that preceded the new conditional native-exclusive operational backend.
+Those sections are not assertions that the current candidate remains
+unregistered. The implementation is now integrated into the canonical
+Engine/CLI on **attested, STL-owned native strongSwan service runtimes**,
+with real isolated ESP/NAT-T, systemd restart/restore, scoped XFRM/VICI
+ownership, durable uncertain-operation journals and receipt-bound
+post-Remove protected PSK retirement. Ordinary runtime assembly still
+does not install or start services or adopt foreign state. The acceptance
+proof and unverified release/production boundaries are in
+[IPsec real E2E](../operations/IPSEC-REAL-E2E.md).
+
 ## Context
 
 The accepted v0.1 backend uses strongSwan/IKEv2 and Linux XFRM

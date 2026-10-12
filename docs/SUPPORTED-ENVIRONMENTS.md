@@ -41,90 +41,50 @@ Requires the WireGuard kernel/module capability and the userspace `wg` tooling u
 
 ### IPsec/XFRM
 
-Requires Linux XFRM-interface support, iproute2 XFRM support, and a compatible strongSwan/IKEv2 installation. strongSwan supports XFRM interfaces since 5.8.0; the exact v0.1 tested strongSwan versions are validated by Issue #7 rather than guessed in advance.
-The accepted operational target is **native-exclusive**: one STL-owned
-strongSwan runtime per host, with standard UDP 500/4500. A foreign or
-unprovably owned strongSwan service/process, conflicting ports, untrusted
-configuration or ambiguous XFRM owner state makes only IPsec unavailable;
-no automatic foreign-service shutdown or adoption. Probe outcomes reflect
-actual capabilities and distinguish unknown from absent. The source-only
-IPsec backend is **not yet registered**, regardless of read-only
-prerequisite results. Installing strongSwan packages can auto-start
-distro services: eligible-host lifecycle and package-script effects
-require disposable testing before operational activation. Multiple full
-IPsec implementations per distribution and mandatory netns are not
-planned for v0.1; package and service adapters may differ by capability.
-On glibc Debian/Ubuntu hosts where iproute2 emits legacy named XFRM
-selector protocols, read-only vacancy checks additionally need
-`/usr/bin/getent` to verify the host's actual NSS primary-name mapping
-against `/etc/protocols`. Missing/mismatched NSS mapping is an explicit
-fail-closed IPsec preflight incompatibility, not an empty resource table.
+The accepted native-exclusive IPsec backend is **conditionally registered**
+only when current STL-origin protected configuration and service-unit files
+and inode receipts, the already loaded exact systemd unit and effective
+settings, exclusive strongSwan process/netns/cgroup/executable/configuration
+and logging, protected VICI peer credentials, UDP 500/4500 and collision-free
+XFRM identity are all independently attested. A foreign/unverifiable
+same-namespace service, process, port or XFRM/VICI owner disables **only
+IPsec**, never GRE/IPIP/WireGuard. No package installation or service start
+occurs in ordinary runtime assembly. The user may stage a SENSITIVE IPsec
+Quick Link only after runtime admission.
 
-The read-only native-exclusive diagnostic now includes UDP 500/4500
-observations from bounded `/proc/net/udp` and `/proc/net/udp6` for the
-calling network namespace. Linux procfs layout is parsed strictly; a
-missing IPv6 table, inaccessible procfs or incomplete snapshot yields
-`ike_udp_inventory_unverified`, **not** a positive vacancy. This does not
-change the supported kernel/distro matrix, count as a qualified port-ownership
-test or enable IPsec. The fixed proposed strongSwan configuration is a
-non-operational `charon-systemd` template; validated distro/systemd
-adapters, service ownership and effective logging verification still require
-real disposable-environment acceptance.
-The additive `native_config` read-only check requires root-private
-canonical storage and exact reviewed source bytes. It can report unknown
-when invoked without access to that protected path. Successful source
-file attestation is not installed-package compatibility, durable
-STL-created inode proof, active logging attestation or service eligibility.
-The optional source-only native publication primitive needs a trusted,
-owner-private local filesystem supporting Linux
-`renameat2(RENAME_NOREPLACE)`, `user.*` inode xattrs and file/directory
-`fsync`; unsupported features fail closed. In unprivileged private-directory
-unit tests these primitives successfully stage and verify a no-clobber,
-receipt-bound fixed config, including failure/replacement scenarios. This
-is **not** a root-host provisioning, distro package, systemd startup,
-post-reboot or IKEv2/ESP/NAT-T compatibility test. The separate additive
-`native_config_origin` read-only diagnostic reports a receipt-bound snapshot
-or a stable missing/conflict/unverified reason, and always leaves
-`activation_allowed:false`.
-The additional source-only `charon-systemd` systemd-unit profile assumes
-`/usr/sbin/charon-systemd` and `Type=notify` on a qualified Debian/Ubuntu
-package. Its read-only `native_service_unit` doctor check inspects only the
-protected canonical unit file and never claims active/effective unit ownership.
-The companion source-only **unit publication** primitive has no
-production call site and has only been exercised under private unprivileged
-fixtures. Like the separate native config publisher it requires
-renameat2(RENAME_NOREPLACE), inode user.* xattrs and successful file and
-directory fsync. Unlike the config it stages a private 0600 unit in the
-root-owned /etc/systemd/system directory and records its origin under
-/var/lib/simple-tun-link/ipsec. Any preexisting unit is a conflict, even
-when byte-identical. The unit-stage file and its parent directory
-must both fsync successfully **before** a pre-receipt interruption can
-be described as leaving a durably discoverable fixed-name stage.
-Subsequently, the receipt file/state directory and final unit directory
-must be synced at their respective publication boundaries. A failed
-fsync leaves persistence unknown and fails closed; interrupted or
-observably retained stages require manual reconciliation. These fixtures
-do not simulate a real power failure or certify all filesystem semantics. The additional read-only native_service_unit_origin
-observation does not establish an effective systemd unit, package
-compatibility, service ownership or operational acceptance.
-The non-loading `native_systemd_loaded_unit` observation uses
-`systemctl --system list-units --all` with one fixed glob; a successful
-empty manager-inventory result only blocks an already-loaded-primary
-observation, not unit files/aliases. A canonical listed/loaded entry is
-still `unknown` because fragment, alias, drop-in, generator, executable
-and environment cannot be safely attested by this single query. Stream
-capture is bounded during execution (16 KiB stdout, 1 KiB stderr);
-unavailable/overflowed manager queries fail closed. Source regression
-tests cover this boundary; separately authorized disposable systemd
-validation across the stated version matrix remains outstanding.
-The profile has not been installed or exercised via systemd, and package
-installation may trigger distro service-start hooks; this requires separately
-authorized disposable-environment verification before admission. Exact
-Ubuntu/Debian packaging, service aliases, unit overrides and process/runtime
-settings remain unproven for operational use.
-The documented Ubuntu/Debian daemonless/container smoke therefore must
-not be promoted to an operational or persistence acceptance result.
+**Observed disposable kernel/daemon acceptance (2026-10-12)**:
+- **Debian 13 (trixie) amd64**: strongSwan `6.0.1-6+deb13u7`,
+  iproute2 `6.15.0-1`, Linux kernel `6.8.0-31-generic` (shared
+  test host's kernel, not a Debian kernel claim).
+- **Ubuntu 24.04 LTS amd64**: strongSwan
+  `5.9.13-2ubuntu4.24.04.5`, iproute2 `6.1.0-1ubuntu6.4`,
+  systemd `255.4-1ubuntu8.17` for native PID1-service acceptance;
+  Linux kernel `6.8.0-31-generic` (same isolated host kernel).
 
+On both distributions actual IKEv2/ESP/NAT-T, kernel `espinudp`,
+bidirectional Link Address traffic, two same-underlay Links, safe sibling
+removal, mismatch/foreign-owner rejection, canonical CLI state/diagnostics
+and protected key retirement were exercised in fresh network-disconnected
+disposable containers. A real **Ubuntu native STL systemd unit** and CLI
+also passed both ESP and NAT-T with restart of the owned service, state
+restore, bidirectional traffic, exact SA/XFRM cleanup and receipt-bound PSK
+retirement. See [IPsec real E2E](operations/IPSEC-REAL-E2E.md).
+
+The installer floor **Ubuntu 22.04+/Debian 11+** and kernel/iproute2 floors
+listed above are **not** operational IPsec certification for those older
+versions. Named-protocol legacy `iproute2` text parsing remains guarded
+by canonical NSS file/`getent` agreement. On the tested strongSwan 5.9/6.x
+the VICI socket can be group-mode `0770`; acceptance requires its
+root-owned **0700 immediate ancestor**, root socket owner and matching
+`SO_PEERCRED`, rejecting other/world access.
+
+**Deployment boundary:** distro strongSwan maintainer scripts may
+automatically enable/start vendor `strongswan.service`; the disposable
+systemd test image disables *its own* vendor service during image build.
+Never infer that a package install/upgrade on a real host is harmless or
+disable/adopt a third-party service. This PR is not a production installer,
+release, real NAT-router test, arm64 validation, physical reboot or
+power-failure recovery certification. Broader matrix remains Issue #12.
 
 ## Release validation
 

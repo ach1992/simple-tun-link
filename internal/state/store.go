@@ -37,12 +37,14 @@ type LinkRecord struct {
 }
 
 type Snapshot struct {
-	SchemaVersion       int                  `json:"schema_version"`
-	Links               []LinkRecord         `json:"links"`
-	PendingSenders      []PendingSender      `json:"pending_senders,omitempty"`
-	PendingIPsec        []PendingIPsec       `json:"pending_ipsec,omitempty"`
-	IPsecVICIOperations []IPsecVICIOperation `json:"ipsec_vici_operations,omitempty"`
-	RemovalReceipts     []RemovalReceipt     `json:"removal_receipts,omitempty"`
+	SchemaVersion          int                     `json:"schema_version"`
+	Links                  []LinkRecord            `json:"links"`
+	PendingSenders         []PendingSender         `json:"pending_senders,omitempty"`
+	PendingIPsec           []PendingIPsec          `json:"pending_ipsec,omitempty"`
+	IPsecVICIOperations    []IPsecVICIOperation    `json:"ipsec_vici_operations,omitempty"`
+	IPsecReapplyOperations []IPsecReapplyOperation `json:"ipsec_reapply_operations,omitempty"`
+	IPsecRemovalReceipts   []IPsecRemovalReceipt   `json:"ipsec_removal_receipts,omitempty"`
+	RemovalReceipts        []RemovalReceipt        `json:"removal_receipts,omitempty"`
 }
 
 func EmptySnapshot() Snapshot {
@@ -99,6 +101,12 @@ func (s *Snapshot) normalize() {
 	sort.Slice(s.PendingIPsec, func(i, j int) bool { return s.PendingIPsec[i].Link.ID < s.PendingIPsec[j].Link.ID })
 	sort.Slice(s.IPsecVICIOperations, func(i, j int) bool {
 		return s.IPsecVICIOperations[i].Intent.Link.ID < s.IPsecVICIOperations[j].Intent.Link.ID
+	})
+	sort.Slice(s.IPsecReapplyOperations, func(i, j int) bool {
+		return s.IPsecReapplyOperations[i].Intent.ID < s.IPsecReapplyOperations[j].Intent.ID
+	})
+	sort.Slice(s.IPsecRemovalReceipts, func(i, j int) bool {
+		return s.IPsecRemovalReceipts[i].LinkID < s.IPsecRemovalReceipts[j].LinkID
 	})
 	sort.Slice(s.RemovalReceipts, func(i, j int) bool { return s.RemovalReceipts[i].LinkID < s.RemovalReceipts[j].LinkID })
 }
@@ -226,7 +234,7 @@ func migrateSnapshot(snapshot Snapshot) (Snapshot, error) {
 		return snapshot, nil
 	case legacySchemaVersion:
 		if len(snapshot.PendingSenders) > 0 || len(snapshot.PendingIPsec) > 0 ||
-			len(snapshot.IPsecVICIOperations) > 0 || len(snapshot.RemovalReceipts) > 0 {
+			len(snapshot.IPsecVICIOperations) > 0 || len(snapshot.IPsecReapplyOperations) > 0 || len(snapshot.RemovalReceipts) > 0 {
 			return Snapshot{}, fmt.Errorf("legacy state cannot contain backend lifecycle records")
 		}
 		for _, record := range snapshot.Links {
@@ -328,7 +336,13 @@ func validateSnapshot(snapshot Snapshot) error {
 	if err := validateIPsecLifecycle(snapshot); err != nil {
 		return err
 	}
-	return validateIPsecVICIOperations(snapshot)
+	if err := validateIPsecVICIOperations(snapshot); err != nil {
+		return err
+	}
+	if err := validateIPsecReapplyOperations(snapshot); err != nil {
+		return err
+	}
+	return validateIPsecRemovalReceipts(snapshot)
 }
 
 func cloneRecord(record LinkRecord) LinkRecord {

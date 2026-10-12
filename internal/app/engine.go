@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -50,7 +52,17 @@ func New(backends *backend.Registry, store state.Store, locks Locker) (*Engine, 
 	if backends == nil || store == nil || locks == nil {
 		return nil, fmt.Errorf("backends, store, and locks are required")
 	}
-	return &Engine{backends: backends, store: store, locks: locks}, nil
+	e := &Engine{backends: backends, store: store, locks: locks}
+	if impl, exists := backends.Get(domain.BackendIPsec); exists {
+		// An operational IPsec backend can be used only inside this Engine's
+		// canonical mutation/journal authority, not by a parallel CLI writer.
+		if admitted, ok := impl.(interface {
+			SetPhaseJournal(func(context.Context, ipsec.Profile, string, string) error)
+		}); ok {
+			admitted.SetPhaseJournal(e.advanceIPsecVICIPhase)
+		}
+	}
+	return e, nil
 }
 
 // SetMaintenanceGuard enables the shared install/Engine exclusion for managed
@@ -227,6 +239,19 @@ func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.
 					DesiredState: "committed", Rollback: "not_attempted"})
 		}
 	}
+	if prior.Backend == domain.BackendIPsec {
+		if err := e.retireIPsecCredentialLocked(ctx, id); err != nil {
+			hostMutation := "not_attempted"
+			if result.hostMutationAttempted {
+				hostMutation = "attempted"
+			}
+			return result, stlerr.WithEvidence(
+				stlerr.Wrap(stlerr.CodeState, "remove", string(id), "ipsec",
+					"IPsec Link is removed but protected credential retirement is unconfirmed; use exact receipt-bound retry", err),
+				stlerr.OperationEvidence{Stage: "credential_retirement", HostMutation: hostMutation,
+					DesiredState: "committed", Rollback: "not_attempted"})
+		}
+	}
 	return result, nil
 }
 
@@ -256,6 +281,10 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 	if _, pending := snapshot.FindPendingIPsec(desired.ID); pending {
 		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID), string(desired.Backend),
 			"IPsec credential is staged for this Link; activate only after ownership-verified backend support")
+	}
+	if _, receipt := snapshot.FindIPsecRemovalReceipt(desired.ID); receipt {
+		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID), string(desired.Backend),
+			"prior IPsec retirement receipt reserves this Link ID; create a fresh identity")
 	}
 	record, exists := snapshot.Find(desired.ID)
 	if exists && rejectReconfiguration && record.Desired != desired {
@@ -313,7 +342,11 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 
 // senderDigest is nonempty only for a Create/Resume whose precise handoff
 // SHA-256 is authorized by the durable per-Link pending-sender transaction.
-func (e *Engine) executeLocked(ctx context.Context, request backend.Request, prior state.LinkRecord, senderDigest string) (result Result, err error) {
+func (e *Engine) executeLocked(ctx context.Context, request backend.Request, prior state.LinkRecord, senderDigest string) (Result, error) {
+	return e.executeLockedWithIPsec(ctx, request, prior, senderDigest, false)
+}
+
+func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Request, prior state.LinkRecord, senderDigest string, activateIPsec bool) (result Result, err error) {
 	// Stage evidence is derived from this Engine execution, never error text.
 	// "attempted" does not assert which resources were actually changed.
 	evidence := stlerr.OperationEvidence{
@@ -370,9 +403,24 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 	if err != nil {
 		return Result{}, stlerr.Wrap(stlerr.CodeState, string(request.Operation), string(link.ID), string(link.Backend), "cannot reload local state", err)
 	}
+	if link.Backend == domain.BackendIPsec {
+		if _, priorTransaction := fresh.FindIPsecReapplyOperation(link.ID); priorTransaction {
+			return Result{}, stlerr.New(stlerr.CodeConflict, "ipsec_reconcile", string(link.ID), "ipsec",
+				"earlier IPsec reapply journal requires owner-verified reconciliation; no host Apply")
+		}
+	}
 	if request.Operation == backend.OperationEnsure {
-		if _, staged := fresh.FindPendingIPsec(link.ID); staged {
-			return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(link.ID), string(link.Backend), "IPsec credential intent reserves Link identity")
+		if staged, exists := fresh.FindPendingIPsec(link.ID); exists {
+			if !activateIPsec || link.Backend != domain.BackendIPsec || staged.Link != link {
+				return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(link.ID), string(link.Backend), "IPsec credential intent reserves Link identity")
+			}
+		} else if activateIPsec {
+			return Result{}, stlerr.New(stlerr.CodeConflict, "ipsec_activate", string(link.ID), "ipsec", "exact protected pending intent missing")
+		}
+		if activateIPsec {
+			if _, exists := fresh.FindIPsecVICIOperation(link.ID); exists {
+				return Result{}, stlerr.New(stlerr.CodeConflict, "ipsec_activate", string(link.ID), "ipsec", "prior IPsec daemon transaction needs explicit reconciliation")
+			}
 		}
 		if err := rejectResourceConflicts(fresh, link.ID, resources); err != nil {
 			return Result{}, err
@@ -401,7 +449,88 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 		return Result{}, contextualize(err, stlerr.CodeValidate, string(request.Operation), link, "backend validation failed")
 	}
 
+	ipsecRetirementDigest := ""
+	if request.Operation == backend.OperationRemove && link.Backend == domain.BackendIPsec {
+		fingerprint, ok := impl.(interface {
+			CredentialDigest(domain.LinkID) (string, error)
+		})
+		if !ok {
+			return Result{}, stlerr.New(stlerr.CodeUnsupported, "ipsec_remove", string(link.ID), "ipsec",
+				"IPsec backend lacks protected credential retirement binding")
+		}
+		digest, err := fingerprint.CredentialDigest(link.ID)
+		if err != nil {
+			return Result{}, stlerr.New(stlerr.CodeState, "ipsec_remove", string(link.ID), "ipsec",
+				"protected IPsec rollback/retirement credential cannot be verified")
+		}
+		ipsecRetirementDigest = digest
+	}
 	changed := !plan.Empty()
+	if activateIPsec {
+		if !changed {
+			return Result{}, stlerr.New(stlerr.CodeConflict, "ipsec_activate", string(link.ID), "ipsec", "staged IPsec activation has no vacant resources to create")
+		}
+		// Prepare a durable *public* journal BEFORE any VICI or kernel write.
+		// This is not itself an ownership permit; Validate above must pass
+		// the dedicated runtime-admission and observed-vacancy gate.
+		var nonce [16]byte
+		if _, err := rand.Read(nonce[:]); err != nil {
+			return Result{}, stlerr.New(stlerr.CodeState, "ipsec_activate", string(link.ID), "ipsec", "cannot create private transaction nonce")
+		}
+		if err := e.store.Update(ctx, func(s *state.Snapshot) error {
+			pending, ok := s.FindPendingIPsec(link.ID)
+			if !ok || pending.Link != link {
+				return fmt.Errorf("IPsec pending activation identity changed")
+			}
+			if _, exists := s.FindIPsecVICIOperation(link.ID); exists {
+				return fmt.Errorf("previous IPsec journal exists")
+			}
+			if _, exists := s.Find(link.ID); exists {
+				return fmt.Errorf("IPsec activation Link already committed")
+			}
+			s.IPsecVICIOperations = append(s.IPsecVICIOperations,
+				state.IPsecVICIOperation{Intent: pending, Nonce: hex.EncodeToString(nonce[:]), Phase: state.IPsecVICIPrepared})
+			return nil
+		}); err != nil {
+			return Result{}, stlerr.New(stlerr.CodeState, "ipsec_activate", string(link.ID), "ipsec", "IPsec activation journal could not be durably prepared; no backend Apply invoked")
+		}
+	}
+	reapplyIPsec := link.Backend == domain.BackendIPsec && request.Operation == backend.OperationEnsure &&
+		!activateIPsec && changed
+	requiresVICILoad := false
+	if reapplyIPsec {
+		if specialized, ok := plan.(interface{ NeedsIPsecVICILoad() bool }); !ok {
+			return Result{}, stlerr.New(stlerr.CodeUnsupported, "ipsec_reapply", string(link.ID), "ipsec",
+				"IPsec reapply plan lacks durable VICI mutation description")
+		} else {
+			requiresVICILoad = specialized.NeedsIPsecVICILoad()
+		}
+		var nonce [16]byte
+		if _, err := rand.Read(nonce[:]); err != nil {
+			return Result{}, stlerr.New(stlerr.CodeState, "ipsec_reapply", string(link.ID), "ipsec", "cannot allocate IPsec reapply nonce")
+		}
+		// Reserve a durable committed-Link recovery identity BEFORE any
+		// XFRM/VICI write. Unexpected interruption blocks future Ensure/
+		// Remove/Connect, not silently adopt or reload same-name objects.
+		if err := e.store.Update(ctx, func(s *state.Snapshot) error {
+			current, exists := s.Find(link.ID)
+			if !exists || current.Desired != link || len(s.IPsecReapplyOperations) > 4096 {
+				return fmt.Errorf("IPsec committed Link identity changed")
+			}
+			if _, prev := s.FindIPsecReapplyOperation(link.ID); prev {
+				return fmt.Errorf("IPsec reapply transaction already in progress")
+			}
+			if _, pending := s.FindPendingIPsec(link.ID); pending {
+				return fmt.Errorf("IPsec Link not exclusively committed")
+			}
+			s.IPsecReapplyOperations = append(s.IPsecReapplyOperations, state.IPsecReapplyOperation{
+				Intent: link, Nonce: hex.EncodeToString(nonce[:]), Phase: state.IPsecVICIPrepared})
+			return nil
+		}); err != nil {
+			return Result{}, stlerr.New(stlerr.CodeState, "ipsec_reapply", string(link.ID), "ipsec",
+				"cannot durably prepare recovery transaction; no backend Apply")
+		}
+	}
 	var undo backend.Rollback
 	if changed {
 		evidence.Stage = "apply"
@@ -452,7 +581,37 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 	commitErr := e.store.Update(ctx, func(snapshot *state.Snapshot) error {
 		switch request.Operation {
 		case backend.OperationEnsure:
-			if _, staged := snapshot.FindPendingIPsec(link.ID); staged {
+			if reapplyIPsec {
+				op, exists := snapshot.FindIPsecReapplyOperation(link.ID)
+				expectedPhase := state.IPsecVICIPrepared
+				if requiresVICILoad {
+					expectedPhase = state.IPsecVICIConnectionSeen
+				}
+				if !exists || op.Intent != link || op.Phase != expectedPhase {
+					return fmt.Errorf("IPsec reapply transaction is unverified or missing")
+				}
+				if !snapshot.DeleteIPsecReapplyOperation(link.ID) {
+					return fmt.Errorf("IPsec reapply transaction cannot be committed")
+				}
+			}
+			if activateIPsec {
+				pending, exists := snapshot.FindPendingIPsec(link.ID)
+				op, recorded := snapshot.FindIPsecVICIOperation(link.ID)
+				if !exists || pending.Link != link || !recorded || op.Intent != pending ||
+					op.Phase != state.IPsecVICIConnectionSeen {
+					return fmt.Errorf("IPsec activation journal is not fully observed")
+				}
+				for i, item := range snapshot.IPsecVICIOperations {
+					if item.Intent.Link.ID == link.ID {
+						snapshot.IPsecVICIOperations = append(snapshot.IPsecVICIOperations[:i],
+							snapshot.IPsecVICIOperations[i+1:]...)
+						break
+					}
+				}
+				if !snapshot.DeletePendingIPsec(link.ID) {
+					return fmt.Errorf("IPsec pending intent could not be consumed")
+				}
+			} else if _, staged := snapshot.FindPendingIPsec(link.ID); staged {
 				return fmt.Errorf("IPsec credential intent reserves Link identity")
 			}
 			if err := rejectResourceConflicts(*snapshot, link.ID, resources); err != nil {
@@ -476,6 +635,19 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 		case backend.OperationRemove:
 			if !snapshot.Delete(link.ID) {
 				return state.ErrNotFound
+			}
+			if link.Backend == domain.BackendIPsec {
+				if ipsecRetirementDigest == "" {
+					return fmt.Errorf("missing protected IPsec retirement identity")
+				}
+				if _, exists := snapshot.FindIPsecRemovalReceipt(link.ID); exists {
+					return fmt.Errorf("IPsec retirement authorization already exists")
+				}
+				// Persist the receipt in EXACTLY the same state transaction
+				// that removes the committed Link, never in a best-effort
+				// follow-up that can be lost across a crash.
+				snapshot.IPsecRemovalReceipts = append(snapshot.IPsecRemovalReceipts,
+					state.IPsecRemovalReceipt{LinkID: link.ID, PSKSHA256: ipsecRetirementDigest})
 			}
 		default:
 			return fmt.Errorf("unsupported operation %q", request.Operation)

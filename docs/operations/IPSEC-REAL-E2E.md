@@ -1,160 +1,190 @@
-# Real isolated IKEv2/IPsec/XFRM two-peer acceptance fixture
+# Real native-exclusive IPsec/IKEv2/XFRM acceptance
 
-Controlling work: Issue #7. The full release distribution, architecture and
-reboot matrix remains assigned to Issue #12.
+Controlling engineering work: Issue #7. Issue #12 retains the broader
+release/architecture/reboot/platform matrix. All evidence below is from
+**isolated, deliberately authorized, disposable Linux Docker fixtures**, not
+a production installation or a real NAT router. Do not run privileged tests
+on a shared control-plane/production host without explicit authority.
 
-IMPORTANT: This is a **real protected-traffic integration fixture**, not a
-production-enabled IPsec backend. The canonical Engine still does not register
-an operational IPsec implementation. Successful isolated VICI calls are never
-host-service admission or canonical Engine lifecycle evidence.
+## Functional vertical delivered for independent review
 
-## Fixture boundaries
+The normal `stl` CLI conditionally registers `ipsec.OperationalBackend`
+**only** after an entire currently loaded native-exclusive service origin
+admission succeeds. Otherwise IPsec is unavailable, while GRE/IPIP/WireGuard
+remain independent. No default package install, strongSwan start/stop, vendor
+service adoption, automatic rekey, wildcard VICI cleanup or host firewall
+change occurs through runtime construction.
 
-The caller launches a throwaway container disconnected from all networks
-(Docker --network none), with specifically granted NET_ADMIN, NET_RAW and
-SYS_ADMIN, without mounting host services, network namespaces, package files,
-daemon configuration or writable host system paths. Inside this disposable
-container only, two independent Linux network namespaces contain:
+- `stl doctor ipsec --json`: read-only, current native service admission;
+  success does not mean negotiated Link traffic.
+- `stl link create-ipsec --stdin --output /root/<private-file> --json`:
+  bounded versioned public JSON in stdin, protected 256-bit PSK generation,
+  root-private **SENSITIVE** Quick Link handoff file, Engine stage/activate.
+- `stl link preview --stdin --json`, then
+  `stl link import --stdin --confirm <preview-token> --json` on the peer:
+  no SENSITIVE URL/PSK in ordinary JSON, logs or errors.
+- `stl link connect-ipsec <id> --confirm <id> --json`: explicitly initiate
+  per-Link IKEv2. Command acceptance is **not** equivalent to encrypted traffic.
+- `stl link ensure --stdin --json` and `stl link restore --all`:
+  canonical Engine idempotence, protected PSK, durable activation/reapply
+  journals; interrupt/unknown effect preserves reconciliation state and
+  **must not** trigger blind replacement/retry.
+- `stl link status <id> --json`, `stl link diagnose <id> --json`:
+  exact admitted interface and private VICI/SA observations, real
+  Link-Address quality/PMTU probes; no XFRM key or raw daemon output.
+- `stl link remove <id> --confirm <id> --json`:
+  exact committed-claim/ifindex/VICI removal, independent of whether the
+  peer Underlay remains reachable; atomically records a protected-key
+  retirement receipt, then retires **only the matching** credential.
+  `stl link retire-ipsec <id> --confirm <id> --json` is an idempotent
+  **post-Remove-only** retry; it refuses active/pending/unrecorded Links.
 
-- One private veth underlay (192.0.2.1/30 and 192.0.2.2/30).
-- Two independent native strongSwan charon-systemd daemon processes.
-- Two distinct private Unix VICI endpoints and protected configuration files.
-- One or two canonical STL-named connections, children, PSK identifiers
-  and nonzero XFRM interface IDs derived from full 128-bit Link identities.
-- Real /31 Link Addresses and 256-bit random protected test PSKs.
+Dedicated non-loading test-only source publishers use receipt-bound,
+no-replace `strongswan.conf` and `simple-tun-link-ipsec.service` files.
+These publisher internals are deliberately **not exposed as a general host
+installer**. Runtime admission attests actual loaded systemd unit properties,
+vendor-service conflict policy, process executable/cgroup/netns/environment,
+effective private VICI socket with SO_PEERCRED, and current UDP 500/4500
+ownership, revalidating before operational effects. It rejects foreign
+same-namespace strongSwan and preserves unrelated isolated namespaces.
 
-The Go helper constructs per-Link VICI requests using the repository's real
-ipsec.Profile code and upstream govici framing. It cannot contact the host's
-default VICI socket: it checks the disposable authorizations, Docker marker,
-and exact fixture Unix socket location. load-conn and load-shared are strictly
-per-Link; the helper checks vacancy and refuses an already present name.
-The fixture has only two freshly created private daemon writers; this
-private-writer fact is essential. A vacancy read against a shared daemon
-does NOT prevent a foreign writer race and is never a production ownership
-token.
+## Real two-peer evidence (2026-10-12)
 
-Each fixture case performs an actual IKEv2 negotiation and bidirectional ping
-(three ICMP packets each way) across the Link Addresses, inspects installed
-kernel ESP SA identities and checks cleanup. A negative control checks that
-the Link Addresses cannot communicate before any protected SA exists.
-NAT-T acceptance requires actual kernel ESP-in-UDP encapsulation (ip xfrm
-state encap espinudp), not merely a configuration flag.
+- Debian 13 amd64: strongSwan `6.0.1-6+deb13u7`, iproute2 `6.15.0-1`.
+- Ubuntu 24.04 amd64: strongSwan `5.9.13-2ubuntu4.24.04.5`,
+  iproute2 `6.1.0-1ubuntu6.4`. Native PID1-systemd fixture also used
+  Ubuntu systemd `255.4-1ubuntu8.17`.
+- Shared test-server Linux kernel: `6.8.0-31-generic`. Namespace
+  isolation and real kernel XFRM/ESP state; neither host network routes nor
+  its strongSwan/systemd services were changed.
 
-- single: create, private-scoped VICI load, negotiate, protected traffic,
-  read-only reapply check, terminate, unload and exact XFRM cleanup.
-- multi: establish two simultaneous independent Links with the same underlay
-  peers, remove one and prove the sibling still transfers packets.
-- mismatch: use a different PSK on one peer for the second Link, require
-  IKE negotiation failure, preserve an unrelated healthy sibling and clean
-  the failed Link's test-owned objects.
-- conflict: attempt a second VICI load for an already occupied same-name
-  connection and shared PSK; reject replacement, retain existing traffic.
-- restart: exploratory daemon restart and VICI reload from the same protected
-  secret, NOT part of the verified evidence below.
+**Canonical Engine and CLI**, in independent Debian/Ubuntu containers:
+ESP and NAT-T; one or two simultaneous Links with identical underlay peers;
+256-bit Quick Link sender/recipient import; three successful ICMP Link Address
+packets in **both directions** after IKEv2; zero successful packets over the
+same Link Addresses **before** negotiation; confirmed kernel `espinudp`
+encapsulation for NAT-T; wrong-PSK rejection; rejection of preexisting
+foreign VICI connection/credential; read-only `status` and `diagnose`;
+idempotent `ensure`; loss/reload of owned VICI state via canonical
+`RestoreAll`; isolated removal of one Link without sibling disruption;
+complete XFRM, per-Link daemon and private-PSK cleanup, with durable
+retirement receipt and idempotent post-Remove retry.
 
-The reapply check is intentionally **read-only** after first load. It does
-not attest the actual PSK bytes already held by a daemon, durable ownership
-or any production Engine transaction.
+**Installed systemd + normal STL executable**, in an explicitly disposable
+Ubuntu 24.04 PID1-systemd container with native STL config/unit published by
+the reviewed no-replace fixture and vendor strongSwan unit disabled **only
+inside that container**: `stl doctor ipsec` returned
+`activation_allowed:true`; ordinary `stl create-ipsec` + peer import
+established real ESP traffic; real `systemctl restart
+simple-tun-link-ipsec.service` succeeded; `stl link restore --all`
+reloaded the saved owned Link, then bilateral traffic resumed; per-Link Remove
+cleaned owned XFRM/VICI/SA and the stored protected PSK. This full path
+passed with **ESP and NAT-T** (including kernel ESP-in-UDP). The source
+fixture did not call systemctl on the test-server host.
 
-## Reproduce in an authorized disposable Docker environment
+A missing/foreign service, unverified socket/ports/owner, stale kernel
+resource or ambiguous transaction fails **IPsec-only closed**. A malformed
+XFRM socket-bypass policy cannot masquerade as vacancy. A denied invalid
+PSK digest, hardlink, symlink or unsafe key permissions cannot authorize
+credential deletion.
 
-From the repository root, ensure Go, Docker and a recent Linux XFRM-enabled
-kernel are available. Docker must be controlled by an explicitly authorized
-operator. These steps build and execute containers; never run the test
-script itself on the control-plane host.
+## Reproduction: disconnected namespace E2E
 
-    mkdir -p /tmp/stl-ipsec-e2e
-    go build -o /tmp/stl-ipsec-e2e/stl-ipsec-probe ./scripts/e2e/ipsec-vici-probe
+From the repository root on an authorized disposable Docker-capable test
+machine (privileged Docker itself is a consequential capability):
 
-    docker build -f scripts/e2e/ipsec-lab-debian.Dockerfile -t stl-proof:debian .
-    docker build -f scripts/e2e/ipsec-lab-ubuntu.Dockerfile -t stl-proof:ubuntu .
-
-With one selected image (repeat for the other), run each combination.
-The commands mount the read-only tool and fixture script only:
-
-    IMAGE=stl-proof:debian
-    for ENCAP in esp nat-t; do
-      for CASE in single multi mismatch conflict; do
-        docker run --rm --network none \
-          --cap-add NET_ADMIN --cap-add NET_RAW --cap-add SYS_ADMIN \
-          --security-opt apparmor=unconfined --security-opt seccomp=unconfined \
-          -e STL_E2E_DISPOSABLE_HOST=approved \
-          -e STL_IPSEC_ISOLATED=approved \
-          -e STL_IPSEC_ENCAP="$ENCAP" -e STL_IPSEC_CASE="$CASE" \
-          -v /tmp/stl-ipsec-e2e/stl-ipsec-probe:/usr/local/bin/stl-ipsec-probe:ro \
-          -v "$PWD/scripts/e2e/ipsec-two-peer-netns.sh":/proof/run.sh:ro \
-          "$IMAGE" bash /proof/run.sh
-      done
+```bash
+mkdir -p /tmp/stl-ipsec-e2e
+go test -c -o /tmp/stl-ipsec-e2e/stl-ipsec-cli-test ./cmd/stl
+go build -o /tmp/stl-ipsec-e2e/stl-ipsec-probe ./scripts/e2e/ipsec-vici-probe
+docker build -f scripts/e2e/ipsec-lab-debian.Dockerfile -t stl-ipsec:debian .
+docker build -f scripts/e2e/ipsec-lab-ubuntu.Dockerfile -t stl-ipsec:ubuntu .
+for image in debian ubuntu; do
+  for encap in esp nat-t; do
+    for scenario in single multi mismatch foreign recover; do
+      docker run --rm --network none \
+        --cap-add NET_ADMIN --cap-add NET_RAW --cap-add SYS_ADMIN \
+        --security-opt apparmor=unconfined --security-opt seccomp=unconfined \
+        -e STL_E2E_DISPOSABLE_HOST=approved -e STL_IPSEC_ISOLATED=approved \
+        -e STL_IPSEC_CLI_FIXTURE=approved -e STL_IPSEC_DRIVER=cli \
+        -e STL_IPSEC_CASE="$scenario" -e STL_IPSEC_ENCAP="$encap" \
+        -v /tmp/stl-ipsec-e2e/stl-ipsec-cli-test:/usr/local/bin/stl-ipsec-cli-test:ro \
+        -v /tmp/stl-ipsec-e2e/stl-ipsec-probe:/usr/local/bin/stl-ipsec-probe:ro \
+        -v "$PWD/scripts/e2e/ipsec-two-peer-netns.sh":/proof/run.sh:ro \
+        "stl-ipsec:$image" bash /proof/run.sh
     done
+  done
+done
+```
 
-A passing test prints the REAL_IPSEC_E2E=PASS marker with exact case and
-encapsulation, along with bidirectional ICMP statistics, and checks SA
-and VICI object cleanup. Unexpected or ambiguous daemon responses fail
-closed rather than becoming a success marker.
+The `foreign` negative case intentionally expects one CLI operation to fail
+before outputting an overall passing rejection marker. A mismatch case expects
+authentication failure while a healthy sibling continues transferring data.
 
-## Measured observations, 2026-10-12
+## Reproduction: real PID1-systemd native service E2E
 
-AI Test Server, Ubuntu 6.8.0-31-generic host kernel (XFRM kernel behavior
-shared with the isolated containers; host network configuration untouched):
+A distinct image `scripts/e2e/ipsec-lab-ubuntu-systemd.Dockerfile`
+explicitly disables the vendor unit **inside Docker image build**. Do not
+disable/mask/stop a foreign service on a real host. Use a separate **fresh**
+container for `esp` and `nat-t`, because the durable retired Link identity
+must never be silently re-used for a second key. Build `stl`, the two
+test binaries, and `ipsec-vici-probe` as above, then inside the disposable
+container copy each executable as `/usr/local/bin/<name>`, **chown
+root:root and chmod 0755** (production executable trust gate), run
+`TestIsolatedNativeExclusivePublication`, and explicitly start the
+STL-only unit within the container before running the fixture:
 
-- Debian 13 proof image ID:
-  sha256:a0a66dbaa5c8aa2d7ffaf6eab085a670f9526fec2b7a6b1416bed50ece12edc2
-  strongSwan 6.0.1 and iproute2 6.15.0.
-- Ubuntu 24.04 proof image ID:
-  sha256:3558e5e7de97f0a9e01d49a33bbb977c73b0cf0dce7ef458add8f0629b0c239a
-  Ubuntu image package versions must be separately recorded at rerun.
+```bash
+docker build -f scripts/e2e/ipsec-lab-ubuntu-systemd.Dockerfile -t stl-ipsec:systemd .
+# Create a new disposable container for each encap; this sample uses ESP.
+cid=$(docker run --rm -d --network none --privileged --cgroupns private \
+  --tmpfs /run --tmpfs /run/lock stl-ipsec:systemd)
+trap 'docker rm -f "$cid" >/dev/null 2>&1 || :' EXIT
+go build -o /tmp/stl-ipsec-e2e/stl ./cmd/stl
+go test -c -o /tmp/stl-ipsec-e2e/stl-ipsec-native-test ./internal/backend/ipsec
+for binary in stl stl-ipsec-native-test stl-ipsec-cli-test stl-ipsec-probe; do
+  docker cp "/tmp/stl-ipsec-e2e/$binary" "$cid:/usr/local/bin/$binary"
+done
+docker exec "$cid" sh -c 'chown root:root /usr/local/bin/stl /usr/local/bin/stl-ipsec-* && chmod 0755 /usr/local/bin/stl /usr/local/bin/stl-ipsec-*'
+docker exec -e STL_E2E_DISPOSABLE_HOST=approved -e STL_IPSEC_ISOLATED=approved \
+  -e STL_IPSEC_SYSTEMD_FIXTURE=approved "$cid" /usr/local/bin/stl-ipsec-native-test \
+  -test.run '^TestIsolatedNativeExclusivePublication$' -test.v
+docker exec "$cid" sh -c 'systemctl daemon-reload && systemctl start simple-tun-link-ipsec.service'
+docker cp scripts/e2e/ipsec-installed-systemd.sh "$cid:/tmp/run-ipsec.sh"
+docker exec -e STL_E2E_DISPOSABLE_HOST=approved -e STL_IPSEC_ISOLATED=approved \
+  -e STL_IPSEC_SYSTEMD_FIXTURE=approved -e STL_IPSEC_ENCAP=esp "$cid" bash /tmp/run-ipsec.sh
+```
 
-On both distributions, single/ESP, single/NAT-T, multi/ESP and
-mismatch/ESP passed in fresh disconnected disposable containers.
-Debian also passed multi/NAT-T and conflict/ESP. The later Debian
-multi/NAT-T run included both negative pre-IKE plaintext controls.
+One complete run must end with
+`NATIVE_SYSTEMD_REAL_IPSEC_E2E=PASS encapsulation=esp` or `nat-t`,
+plus `NATIVE_SYSTEMD_ACTUAL_UNIT_RESTART_RESTORE=PASS` and
+`NATIVE_SYSTEMD_PROTECTED_PSK_RETIREMENT=PASS`. The command applies
+privileged network/systemd effects **only inside that disposable
+network-disconnected container**; Docker itself runs with elevated rights,
+so use only an explicitly authorized isolated test server.
 
-The recorded traffic was 3 of 3 ICMP packets received in BOTH directions.
-The full NAT-T route had two ESP-in-UDP SAs per peer. Multi-Link removal
-kept the surviving sibling passing bidirectional traffic; mismatch left
-that sibling intact and produced no extra ESP SAs; scoped cleanup left
-zero test Link SAs. A duplicate VICI load was rejected, demonstrating a
-safety guard added after discovering the upstream replacement behavior.
+## Non-negotiable limitations and deployment gates
 
-## Open non-negotiable gates
-
-This fixture alone does **not** prove native-exclusive systemd unit origin,
-effective daemon process and secure CFG logging provenance, package script
-or autostart side effects, lifetime-exclusive private VICI writers,
-canonical Engine credential activation/commit, durable XFRM creation and
-ifindex receipts, fail-safe interrupted transaction recovery, actual
-production status/diagnostics, startup/reboot restore, NAT router traversal
-or Issue #12's broader acceptance matrix.
-
-The current fixture does not register an IPsec production backend; enabling
-the existing read-only preparation code without these gates would risk
-replacing foreign daemon objects and exposing secrets. Keep Issue #7 OPEN;
-a final independent HIGH_ASSURANCE review and merge are appropriate only
-after a complete operational Engine-integrated candidate, installed-service
-admission and real isolated acceptance are all delivered and verified.
-
-## Native-exclusive installation hazard observed in both distributions
-
-A read-only examination of the installed Debian and Ubuntu package metadata
-confirmed that charon-systemd packages ship a vendor-owned strongswan.service
-unit and maintainer scripts. In BOTH tested package versions, the postinst
-contains deb-systemd-helper enable, systemctl daemon-reload and
-deb-systemd-invoke start/restart actions for that service. The exact observed
-packages were Debian charon-systemd 6.0.1-6+deb13u7 and Ubuntu
-charon-systemd 5.9.13-2ubuntu4.24.04.5.
-
-Therefore, simply installing packages with apt on a real systemd host can
-create/enable/start an **independent strongSwan service** and invalidate
-native-exclusive ownership. A stopped service or an empty UDP socket list
-does not resolve this durable autostart/upgrade risk. No foreign service,
-package hook, global strongSwan configuration, or host firewall was modified
-during these observations. The production implementation MUST explicitly
-account for package-transaction side effects and future upgrades, not mask
-or disable an unknown foreign unit as an undocumented workaround.
-
-The latest supplementary isolated tests also passed multi/NAT-T and
-mismatch/NAT-T on Ubuntu 24.04, mismatch/NAT-T on Debian 13, and the
-conflict rejection scenario on Ubuntu. Production restart/restore remained
-unverified because the privileged restart fixture invocation could not
-be authorized through the test execution tool. This is an explicit gate,
-not a successful restart observation.
+1. The distro `charon-systemd` packages ship vendor `strongswan.service`
+   units and post-install scripts that may **enable/start a foreign service**.
+   This test image disables its own vendor unit on image build; the actual
+   package-install/upgrade side effects on a preexisting production host
+   must never be assumed safe. Production provisioning is **not performed**
+   by this engineering PR; approved packaging/update operational guidance
+   and a host-specific safety review are still required.
+2. The positive native runtime check is an audited **time-local**
+   provenance/permission snapshot, not a formal lifetime mutex against
+   privileged foreign root administrators. The exact protected directory,
+   loaded unit and private VICI boundary are assumed to remain
+   administrator-controlled. Never share this private daemon with a foreign
+   VICI writer or adopt same-name objects.
+3. The actual public-NAT router traversal, reboot/power-loss durability,
+   CI on arm64/other old kernel-distro floors, production installer/release
+   and all combinations of the Issue #12 matrix remain **unverified**.
+   The implemented restore test is a **real STL systemd service restart**,
+   not a full OS reboot.
+4. A crash during an indeterminate VICI write retains a durable public-only
+   journal and stops automatic replay. It requires explicit, owner-verified
+   reconciliation; never delete arbitrary observed state or auto-rekey.
+5. Deployment, merge and public release still require the project's Owner
+   gates and one independent, author-separated high-assurance review.
