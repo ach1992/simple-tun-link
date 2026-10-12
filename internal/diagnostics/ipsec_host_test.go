@@ -44,6 +44,16 @@ func (r *ipsecDoctorRunner) Run(_ context.Context, name string, args ...string) 
 	return linux.CommandResult{}, nil
 }
 
+func (r *ipsecDoctorRunner) RunBounded(ctx context.Context, limits linux.CaptureLimits, name string, args ...string) (linux.CommandResult, error) {
+	if limits.Stdout != maxSystemdListBytes || limits.Stderr != maxSystemdStderrBytes ||
+		name != "/usr/bin/systemctl" {
+		return linux.CommandResult{}, errors.New("unsafe bounded probe")
+	}
+	// A successful empty list-units snapshot means no PRIMARY in-memory
+	// manager entry; it is not service-file or alias absence.
+	return r.Run(ctx, name, args...)
+}
+
 func checkByName(t *testing.T, report IPsecHostReport, name string) IPsecHostCheck {
 	t.Helper()
 	for _, check := range report.Checks {
@@ -62,7 +72,7 @@ func TestIPsecDoctorReadOnlyAndNoFalseActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if report.SchemaVersion != 1 || report.Backend != "ipsec" || report.RuntimeMode != "native_exclusive" ||
-		report.ActivationAllowed || len(report.Checks) != 10 {
+		report.ActivationAllowed || len(report.Checks) != 11 {
 		t.Fatalf("false operational claim: %+v", report)
 	}
 	if c := checkByName(t, report, "daemon_process"); c.ReasonCode != "charon_process_not_observed" ||
@@ -78,6 +88,9 @@ func TestIPsecDoctorReadOnlyAndNoFalseActivation(t *testing.T) {
 	if c := checkByName(t, report, "native_service_unit_origin"); c.Status != "blocked" || c.ReasonCode != "native_service_unit_origin_not_provisioned" {
 		t.Fatalf("missing unit-origin admission check: %+v", c)
 	}
+	if c := checkByName(t, report, "native_systemd_loaded_unit"); c.Status != "blocked" || c.ReasonCode != "native_systemd_unit_not_loaded" {
+		t.Fatalf("systemd loaded-unit snapshot missing or falsely upgraded: %+v", c)
+	}
 	if c := checkByName(t, report, "native_config"); c.Status != "blocked" || c.ReasonCode != "native_config_not_provisioned" {
 		t.Fatalf("missing root-private config prerequisite: %+v", c)
 	}
@@ -89,7 +102,7 @@ func TestIPsecDoctorReadOnlyAndNoFalseActivation(t *testing.T) {
 		t.Fatalf("missing actionable blocked runtime: %+v", c)
 	}
 	wantCalls := []string{"/usr/bin/pgrep -x charon", "/usr/bin/pgrep -x charon-systemd",
-		"/usr/sbin/swanctl --help", "/sbin/ip -json -details link show type xfrm"}
+		"/usr/bin/systemctl " + strings.Join(nativeSystemdListArgs, " "), "/usr/sbin/swanctl --help", "/sbin/ip -json -details link show type xfrm"}
 	if strings.Join(runner.calls, "|") != strings.Join(wantCalls, "|") {
 		t.Fatalf("unexpected command calls (mutation risk): %q", runner.calls)
 	}

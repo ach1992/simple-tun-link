@@ -27,6 +27,42 @@ type Runner interface {
 	Run(context.Context, string, ...string) (CommandResult, error)
 }
 
+// CaptureLimits are per-stream byte ceilings for a bounded subprocess probe.
+// Both limits must be positive. The process is canceled immediately when
+// either stream exceeds its ceiling, without buffering the extra bytes.
+type CaptureLimits struct {
+	Stdout int
+	Stderr int
+}
+
+// BoundedRunner is optional: sensitive, untrusted-command diagnostics must
+// fail closed when the configured runner cannot enforce capture bounds.
+type BoundedRunner interface {
+	Runner
+	RunBounded(context.Context, CaptureLimits, string, ...string) (CommandResult, error)
+}
+
+// ErrOutputLimit is safe to inspect but contains no subprocess output.
+var ErrOutputLimit = errors.New("command capture limit exceeded")
+
+// boundedCapture never allocates in proportion to an oversized Write;
+// cancellation terminates the subprocess even if it would ignore SIGPIPE.
+type boundedCapture struct {
+	buffer   bytes.Buffer
+	limit    int
+	cancel   context.CancelFunc
+	overflow bool
+}
+
+func (b *boundedCapture) Write(p []byte) (int, error) {
+	if len(p) > b.limit-b.buffer.Len() {
+		b.overflow = true
+		b.cancel()
+		return 0, ErrOutputLimit
+	}
+	return b.buffer.Write(p)
+}
+
 // FileRunner is an optional execution seam for tools needing validated file
 // descriptors (not secret-bearing argv, stdin or temporary config paths).
 // File descriptors are inherited as /proc/self/fd/3, /proc/self/fd/4, etc.
@@ -77,7 +113,16 @@ func (e *CommandError) Unwrap() error {
 }
 
 func (r ExecRunner) Run(ctx context.Context, name string, args ...string) (CommandResult, error) {
-	return r.run(ctx, name, nil, args...)
+	return r.run(ctx, name, nil, nil, args...)
+}
+
+// RunBounded is for inherently untrusted command-output surfaces. Unlike a
+// post-hoc length check, it bounds memory while os/exec streams are read.
+func (r ExecRunner) RunBounded(ctx context.Context, limits CaptureLimits, name string, args ...string) (CommandResult, error) {
+	if limits.Stdout <= 0 || limits.Stderr <= 0 {
+		return CommandResult{}, fmt.Errorf("positive command capture limits required")
+	}
+	return r.run(ctx, name, nil, &limits, args...)
 }
 
 func (r ExecRunner) RunWithFiles(ctx context.Context, name string, files []*os.File, args ...string) (CommandResult, error) {
@@ -89,10 +134,10 @@ func (r ExecRunner) RunWithFiles(ctx context.Context, name string, files []*os.F
 			return CommandResult{}, fmt.Errorf("invalid inherited command file")
 		}
 	}
-	return r.run(ctx, name, files, args...)
+	return r.run(ctx, name, files, nil, args...)
 }
 
-func (r ExecRunner) run(ctx context.Context, name string, files []*os.File, args ...string) (CommandResult, error) {
+func (r ExecRunner) run(ctx context.Context, name string, files []*os.File, limits *CaptureLimits, args ...string) (CommandResult, error) {
 	if ctx == nil {
 		return CommandResult{}, fmt.Errorf("context is required")
 	}
@@ -113,10 +158,26 @@ func (r ExecRunner) run(ctx context.Context, name string, files []*os.File, args
 	cmd := exec.CommandContext(runCtx, name, args...)
 	cmd.ExtraFiles = files
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	var boundedOut, boundedErr *boundedCapture
+	if limits != nil {
+		boundedOut = &boundedCapture{limit: limits.Stdout, cancel: cancel}
+		boundedErr = &boundedCapture{limit: limits.Stderr, cancel: cancel}
+		cmd.Stdout = boundedOut
+		cmd.Stderr = boundedErr
+	} else {
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+	}
 
 	err := cmd.Run()
+	if limits != nil {
+		if boundedOut.overflow || boundedErr.overflow {
+			// No partial untrusted bytes escape an overflowing invocation.
+			return CommandResult{}, &CommandError{Command: name, ExitCode: -1, cause: ErrOutputLimit}
+		}
+		stdout = boundedOut.buffer
+		stderr = boundedErr.buffer
+	}
 	result := CommandResult{
 		Stdout: append([]byte(nil), stdout.Bytes()...),
 		Stderr: append([]byte(nil), stderr.Bytes()...),

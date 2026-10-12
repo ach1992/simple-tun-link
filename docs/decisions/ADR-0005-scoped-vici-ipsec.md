@@ -447,3 +447,37 @@ Source references for configuration and logging:
 - https://docs.strongswan.org/docs/latest/daemons/charon-systemd.html
 - https://docs.strongswan.org/docs/latest/config/logging.html
 - https://github.com/strongswan/strongswan/blob/master/src/libcharon/plugins/vici/vici_cred.c
+
+## R1/R2 correction: non-loading systemd inventory and bounded capture
+
+The original `systemctl show UNIT` implementation was rejected: upstream
+systemd may resolve the unit object by loading an absent unit into PID 1,
+so the resulting `LoadState=loaded` could be induced by the diagnosis
+itself. The corrected **source-only** probe uses only `systemctl list-units
+--all` with a fixed glob, which queries the existing in-memory unit list.
+No second unit-object query is permitted: if the unit unloads between
+steps, `show UNIT` could load it again. Empty list results mean only
+no matching primary unit *at that instant* and block. Failed/masked
+loaded entries block; canonical loaded entries remain **unknown**, not
+`observed`, because the list cannot attest actual aliases, fragment,
+generator, drop-ins, loaded-vs-disk drift, transient property, pending
+reload, ExecStart/Environment or other effective settings. The existing
+on-disk origin receipt checks also cannot prove PID 1's loaded
+configuration. Safe fuller effective inspection is still a prerequisite
+for operational IPsec, not a reason to weaken this diagnostic.
+
+The `linux.BoundedRunner` stream primitive enforces separate 16 KiB
+stdout and 1 KiB stderr ceilings **while the subprocess writes**. Overflow
+cancels execution and returns an untrusted-output-free error; the diagnostic
+fails closed if this bounded primitive is unavailable, instead of using
+the old unbounded `bytes.Buffer` and a post-capture parser limit. Parser,
+capture, and exact CLI safeguards have tests; no privileged systemd
+service/daemon activation test is claimed. This is an implementation
+correction within the accepted owner architecture and leaves Issue #7/#12
+and `activation_allowed=false` unchanged.
+
+Systemd behavior/source references:
+- https://manpages.debian.org/bullseye/systemd/systemctl.1.en.html
+- https://manpages.debian.org/bullseye/systemd/systemd.1.en.html
+- https://github.com/systemd/systemd/blob/v247/src/core/dbus-manager.c
+- https://www.freedesktop.org/wiki/Software/systemd/dbus/

@@ -416,7 +416,7 @@ systemd behavior. Package postinst/preinst scripts, distro-managed service
 aliases, all drop-ins/generators, live process environment, executable and
 CFG/journald effective log levels, VICI socket credentials and external
 writers still require separate fail-closed admission proof. No effectful
-unit publisher, `systemctl` caller or daemon start has been registered.
+unit publisher, `systemctl` mutator or daemon start has been registered.
 
 `stl doctor ipsec` also observes UDP 500/4500 occupancy from bounded procfs
 tables in the current namespace. It never dumps socket rows/inodes and never
@@ -455,3 +455,33 @@ and exact source bytes. The token is not an unforgeable root adversary
 credential; even a positive result cannot prove PID 1's actual loaded
 service, overrides, environment, logger, VICI writers, or network access.
 No host service/package/network mutation was added.
+
+## Non-loading systemd in-memory unit observation (source-only)
+
+The source-only IPsec doctor now uses `systemctl list-units --all`
+with a fixed single-target glob and *never* uses `systemctl show UNIT`.
+The latter can resolve an absent unit object by implicitly loading
+its metadata in PID 1. In contrast, list-units enumerates currently
+in-memory primary identities without an explicit unit lookup. A successful
+empty listing only means that the primary unit was not in memory **at the
+time of the snapshot**. An explicitly masked/failed entry is blocked.
+A normally loaded entry is still `unknown`, since the listing does not
+prove effective fragment, aliases, generator, drop-ins, current
+ExecStart/Environment, pending reload, native logger, process or VICI
+rights. A second `show UNIT` after inventory is expressly forbidden:
+the unit may unload between operations and the next lookup may load it.
+All unverified override/identity conditions therefore remain unknown,
+never an affirmative admission. Filesystem origin readers are separate
+and cannot fill the effective-manager proof gap.
+
+The new optional `linux.BoundedRunner` interface enforces **16 KiB
+stdout and 1 KiB stderr stream capture ceilings before buffering** for
+the manager probe; stdout/stderr overflow cancels the process and returns
+a safe error without partial content. Without bounded capability the
+diagnostic returns `unknown`, not an unbounded `Runner.Run` fallback.
+Errors and raw untrusted manager output are never serialized. The
+system may naturally load/unload units concurrently, so even a list
+snapshot cannot reserve or certify a stable state. No service start/
+stop/enable/reload, package, VICI, credential, file, network or kernel
+mutation is performed. `activation_allowed=false` and doctor exit 4
+persist; privileged disposable operational acceptance remains required.

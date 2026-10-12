@@ -601,7 +601,7 @@ version/help without a running daemon. A successful help probe establishes
 only executable availability, **never daemon or IPsec readiness**.
 Upstream dispatch: [strongSwan 5.9.13](https://github.com/strongswan/strongswan/blob/5.9.13/src/swanctl/command.c)
 and [6.0.1](https://github.com/strongswan/strongswan/blob/6.0.1/src/swanctl/command.c).
-On supported Debian/Ubuntu builds the doctor uses fixed system binary paths (`/usr/bin/pgrep`, `/usr/sbin/swanctl`,
+On supported Debian/Ubuntu builds the doctor uses fixed system binary paths (`/usr/bin/pgrep`, `/usr/bin/systemctl`, `/usr/sbin/swanctl`,
 `/sbin/ip`) rather than executing tools found through a user-controlled
 `PATH`; other layouts require a validated distro adapter, not a fallback.
 
@@ -633,12 +633,37 @@ or incomplete publication), unknown/native_service_unit_origin_unverified
 a positive result is not a systemd operational admission. Schema stays 1,
 activation_allowed remains false and doctor exit code remains 4.
 
+The additive `name:"native_systemd_loaded_unit"` checks only the current
+**in-memory unit inventory** using fixed
+`/usr/bin/systemctl --system --no-pager --no-legend --plain --full --all
+--type=service list-units 'simple-tun-link-ipsec.servic?'`.
+Unlike `systemctl show UNIT` (which may cause systemd to load an absent
+unit), `list-units` enumerates units already in the manager's memory and
+does not request loading the target. A successful empty result is
+`blocked/native_systemd_unit_not_loaded`: no matching *primary* unit was
+listed at that instant, **not** proof of absent files, aliases or daemon.
+An entry with a known failed/masked load state is
+`blocked/native_systemd_unit_conflict`. A loaded in-memory entry, incomplete
+or malformed output, error, missing bounded-runner capability, unexpected
+stderr or overflow is `unknown/native_systemd_unit_unverified`: the
+single safe listing cannot prove actual fragment, aliases, drop-ins,
+generators, source, transient status, pending reload or effective unit
+configuration. No successful `observed` loaded-unit admission is claimed.
+This is deliberate fail-closed behavior, not an incentive to call
+`show UNIT` after listing: the unit may unload in between and be
+implicitly reloaded. The runner enforces **16 KiB stdout and 1 KiB stderr
+capture ceilings during execution**, terminating on overflow without
+returning raw subprocess output. `activation_allowed` stays false and
+doctor exit stays 4; PID 1 may independently change between snapshots.
+
 Results: `observed/native_service_unit_bytes_verified` (file snapshot only),
 `blocked/native_service_unit_not_provisioned` (absent),
 `blocked/native_service_unit_untrusted` (conflict, unsafe path or bytes) and
 `unknown/native_service_unit_unverified` (incomplete inspection). A positive
-result is **not** STL-origin publication, loaded systemd unit/drop-in/generator
-inspection, effective environment or secure logger attestation. The unit is
+result is **not** STL-origin publication or effective loaded-systemd,
+process/environment or secure logger attestation; the separate in-memory
+inventory above remains blocked/unknown until effective properties can be
+attested without an inducing unit lookup. The unit is
 NOT published, installed or wired into Engine, CLI or installer; no operator
 should copy it onto a live host. Future package installation must account for
 distro-managed units and maintainer-script service side effects before any
