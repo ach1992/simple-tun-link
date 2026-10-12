@@ -43,6 +43,17 @@ Quick Link handoffs.
 - Introduce a **task-created synthetic foreign GRE interface** at the
   deterministic would-be name, refuse adoption with unchanged identity,
   delete only the synthetic foreign fixture and verify sibling traffic.
+- With all four GRE/WireGuard Links still live, bring up **actual
+  strongSwan/IKEv2 + Linux XFRM/ESP** inside the SAME disposable A/B
+  namespaces, same underlying 192.0.2.10/11 endpoints and same per-side
+  fsynced state roots. Use a fifth, independent IPsec Link ID and /31.
+  Confirm a five-Link exact-ID inventory on both peers, reject plaintext
+  pre-negotiation, then prove two-way encrypted packets and kernel ESP SAs.
+- While that fifth Link is negotiated, remove/reapply/repair GRE/FOU;
+  recheck actual IPsec packets and status, intact GRE resource ownership,
+  and healthy WireGuard. Remove only the IPsec Link, verify XFRM/SA/key
+  retirement, and prove all original GRE/WireGuard siblings still transfer
+  packets and have the exact original four-Link inventory.
 - Remove/retire WireGuard without deleting any GRE sibling; execute the
   existing sequential IPIP Native, FOU and GUE suite while GRE is still
   alive. Reject same-peer IPIP resource collisions, then remove exactly
@@ -54,11 +65,42 @@ exact firewall and FOU mappings, guest/host routing baselines, and cleanup
 without blindly restoring unexpected host changes. For interrupted tests,
 inspect and retire **only task-owned** resources after reviewing evidence.
 
+## Five-Link real IPsec acceptance method
+
+The isolated cross-backend image now includes `charon-systemd` and
+`strongswan-swanctl` userspace, solely inside task-created Docker images.
+Build distinct Ubuntu 24.04 and Debian 13 image tags from
+`cross-backend.Dockerfile`, as documented in `docs/DEVELOPMENT.md`.
+The root driver opts in with both `STL_E2E_CROSS_WG=approved` and
+`STL_E2E_CROSS_IPSEC=approved`; the standalone GRE runner remains usable
+without optional IPsec. `TestIPsecCanonicalCLIRealIsolatedE2E` adds a
+strictly test-only `c` identity and uses its exact per-peer
+`/tmp/stl-gre-e2e.*/{a,b}` shared state root when the cross-mode option
+is present. Normal CLI and production admission are unchanged.
+
+The runner owns two fixture-only strongSwan processes (one per namespace),
+a private 0700 VICI configuration directory, and the bounded test-only
+CLI credential exchange. The restricted disposable Docker capability set
+includes `NET_BIND_SERVICE` for strongSwan's IKE UDP 500/4500 listeners;
+without it VICI can appear healthy while IKE traffic is impossible.
+Each fresh namespace must confirm BOTH actual UDP listeners before Connect. It starts no host systemd unit and never mounts
+an Agent's host strongSwan socket, runtime, credential directory or
+network namespace. The guest test forces the IPsec capability rather than
+silently skipping it. Host-only CI checks source syntax; actual privileged
+packet proof must be performed independently in disposable guests.
+
+The markers `FIVE_SAME_PEER_GRE_NATIVE_FOU_GUE_WG_IPSEC=PASS`,
+`FOU_RECOVERY_PRESERVES_REAL_IPSEC_TRAFFIC=PASS`, and
+`IPSEC_SCOPED_REMOVE_PRESERVES_GRE_WG_SIBLINGS=PASS` mean **only** that
+all corresponding real packet, persisted-identity and kernel-lifecycle
+checks succeeded on the environment recorded alongside them. The
+runner must also pass its existing full matrix and final resource cleanup.
+
 ## Remaining gates outside this package
 
 Issue #12 stays **OPEN** pending actual full guest reboot/boot persistence
 (distinct from a real systemd service restart), broader failure/rollback and
-cross-backend IPsec interactions, plus ARM64 **runtime** acceptance where
+full reboot/boot coverage for strongSwan and mixed Links, plus ARM64 **runtime** acceptance where
 an isolated capable machine is available. Cross-building on amd64 is not
 ARM64 runtime proof. Valid earlier systemd GRE/IPsec and standalone IKEv2
 ESP/NAT-T proofs remain separate evidence; this Docker runner does not

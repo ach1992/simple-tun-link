@@ -100,6 +100,33 @@ Prioritize behavior with meaningful failure modes:
 
 Avoid duplicate tests that prove the same branch through multiple layers unless the layer boundary itself is the risk.
 
+The Issue #12 release-level cross-backend Docker runner now requires a
+strongSwan-capable disposable image for each supported userspace, to
+exercise five *simultaneously persisted* GRE Native/FOU/GUE, WireGuard,
+and IPsec/IKEv2 links across the same two guest namespaces and state roots.
+On an expressly authorized disposable Docker test machine, from a clean
+committed checkout, build the task-only images and then run:
+
+~~~bash
+docker build -f scripts/e2e/cross-backend.Dockerfile \
+  --build-arg BASE_IMAGE=ubuntu:24.04 -t stl-cross-five:ubuntu24 .
+docker build -f scripts/e2e/cross-backend.Dockerfile \
+  --build-arg BASE_IMAGE=debian:trixie -t stl-cross-five:debian13 .
+sudo env PATH="$PATH" STL_E2E_DISPOSABLE_HOST=approved \
+  STL_E2E_IMAGE_UBUNTU=stl-cross-five:ubuntu24 \
+  STL_E2E_IMAGE_DEBIAN=stl-cross-five:debian13 \
+  bash scripts/e2e/cross-backend-docker.sh
+~~~
+
+The runner is **not** safe to run on a production or control-plane server.
+The image builds use the distribution's package repositories and may
+install packages inside the *images only*. The runtime guests remain
+network-disconnected with fresh, isolated namespaces; the published
+five-Link success markers require actual bidirectional encrypted IPsec
+traffic, not only an instantiated strongSwan process. See
+`docs/operations/CROSS-BACKEND-REAL-E2E.md` for exact evidence rules and
+remaining full-guest reboot / ARM64 limitations.
+
 ### Linux integration and E2E tests
 Use disposable environments only for behavior that unit/fake tests cannot establish, especially real kernel/backend effects:
 - create/reapply/remove and actual data transfer;

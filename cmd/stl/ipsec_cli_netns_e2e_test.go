@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -78,6 +79,13 @@ func fixtureLinkForCLI(t *testing.T, side, suffix, encap string) domain.Link {
 	if suffix == "b" {
 		addrA, addrB = netip.MustParsePrefix("10.251.88.2/31"), netip.MustParsePrefix("10.251.88.3/31")
 	}
+	if os.Getenv("STL_IPSEC_CROSS_E2E") == "approved" {
+		if suffix != "c" {
+			t.Fatal("cross-backend IPsec fixture requires its dedicated Link identity")
+		}
+		underA, underB = netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("192.0.2.11")
+		addrA, addrB = netip.MustParsePrefix("10.84.10.0/31"), netip.MustParsePrefix("10.84.10.1/31")
+	}
 	if !a {
 		underA, underB = underB, underA
 		addrA, addrB = addrB, addrA
@@ -98,9 +106,28 @@ func TestIPsecCanonicalCLIRealIsolatedE2E(t *testing.T) {
 	}
 	op, side, suffix, encap := os.Getenv("STL_IPSEC_CLI_OP"), os.Getenv("STL_IPSEC_CLI_SIDE"),
 		os.Getenv("STL_IPSEC_CLI_LINK"), os.Getenv("STL_IPSEC_CLI_ENCAP")
-	if side != "a" && side != "b" || suffix != "a" && suffix != "b" ||
-		encap != "esp" && encap != "nat-t" {
+	crossMode := os.Getenv("STL_IPSEC_CROSS_E2E") == "approved"
+	if side != "a" && side != "b" || encap != "esp" && encap != "nat-t" ||
+		(!crossMode && suffix != "a" && suffix != "b") || (crossMode && suffix != "c") {
 		t.Fatal("invalid fixed CLI peer fixture identity")
+	}
+	stateRoot := cliLabRoot + "/cli-state-" + side
+	if crossMode {
+		// The GRE/WireGuard runner creates this root, and the other two
+		// backends persist into it. Restrict the injected IPsec CLI fixture
+		// to precisely those task-owned /tmp roots and one A/B peer.
+		stateRoot = os.Getenv("STL_IPSEC_CROSS_STATE_ROOT")
+		if filepath.Clean(stateRoot) != stateRoot || filepath.Dir(filepath.Dir(stateRoot)) != "/tmp" ||
+			!strings.HasPrefix(filepath.Base(filepath.Dir(stateRoot)), "stl-gre-e2e.") ||
+			filepath.Base(stateRoot) != side {
+			t.Fatal("cross-backend IPsec state root is outside isolated GRE fixture")
+		}
+		for _, exact := range []string{filepath.Dir(stateRoot), stateRoot} {
+			info, err := os.Lstat(exact)
+			if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 || info.Mode()&os.ModeSymlink != 0 {
+				t.Fatal("cross-backend shared state path is unavailable, symlinked or unsafe")
+			}
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 55*time.Second)
 	defer cancel()
@@ -113,7 +140,7 @@ func TestIPsecCanonicalCLIRealIsolatedE2E(t *testing.T) {
 	// the exact same disk location as the previous independent invocation.
 	runner := linux.ExecRunner{}
 	route := linux.RouteResolver{Runner: runner}
-	keys, err := ipsec.NewPSKStore(cliLabRoot + "/cli-state-" + side)
+	keys, err := ipsec.NewPSKStore(stateRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +174,7 @@ func TestIPsecCanonicalCLIRealIsolatedE2E(t *testing.T) {
 	case "fault-address":
 		backendImpl.AddAddr = func(context.Context, int, netip.Prefix) error { return fmt.Errorf("fixture interruption after alias") }
 	}
-	opts := &runtimeOptions{stateRoot: cliLabRoot + "/cli-state-" + side, backends: []backend.Backend{backendImpl},
+	opts := &runtimeOptions{stateRoot: stateRoot, backends: []backend.Backend{backendImpl},
 		probeRunner: runner}
 	l := fixtureLinkForCLI(t, side, suffix, encap)
 	if op == "inject-remove" {
@@ -270,6 +297,11 @@ func TestIPsecCanonicalCLIRealIsolatedE2E(t *testing.T) {
 		args = []string{"link", "restore", "--all"}
 	case "doctor":
 		args = []string{"doctor", "ipsec", "--json"}
+	case "cross-list":
+		if !crossMode {
+			t.Fatal("five-backend inventory requires explicit cross-backend fixture")
+		}
+		args = []string{"link", "list", "--json"}
 	default:
 		t.Fatalf("unsupported isolated CLI operation %q", op)
 	}
@@ -340,6 +372,36 @@ func TestIPsecCanonicalCLIRealIsolatedE2E(t *testing.T) {
 		if json.Unmarshal(out.Bytes(), &report) != nil || report.SchemaVersion != 1 ||
 			report.MTU.SelectedMTU <= 0 || report.Quality.PacketsReceived <= 0 {
 			t.Fatal("IPsec diagnose failed to measure Link Address packet traffic")
+		}
+	}
+	if op == "cross-list" {
+		var listing struct {
+			SchemaVersion int `json:"schema_version"`
+			Links         []struct {
+				ID string `json:"id"`
+			} `json:"links"`
+		}
+		if json.Unmarshal(out.Bytes(), &listing) != nil || listing.SchemaVersion != 1 {
+			t.Fatal("five-backend persisted inventory unavailable")
+		}
+		expected := map[string]bool{
+			"lnk_11111111111111111111111111111111": true,
+			"lnk_22222222222222222222222222222222": true,
+			"lnk_33333333333333333333333333333333": true,
+			"lnk_88888888888888888888888888888888": true,
+			"lnk_cccccccccccccccccccccccccccccccc": true,
+		}
+		if len(listing.Links) != len(expected) {
+			t.Fatal("five simultaneous backend Links not persisted")
+		}
+		for _, item := range listing.Links {
+			if !expected[item.ID] {
+				t.Fatal("missing or duplicate five-backend persisted Link")
+			}
+			delete(expected, item.ID)
+		}
+		if len(expected) != 0 {
+			t.Fatal("five-backend Link identity set incomplete")
 		}
 	}
 	if op == "doctor" {
