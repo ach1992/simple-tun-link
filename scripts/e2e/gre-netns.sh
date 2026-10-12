@@ -12,6 +12,11 @@ if (( EUID != 0 )); then
   echo "REFUSED: network namespace acceptance requires root on the disposable host" >&2
   exit 2
 fi
+if [[ ${STL_E2E_CROSS_NATT:-} == approved &&
+      ( ${STL_E2E_CROSS_IPSEC:-} != approved || ${STL_E2E_CROSS_WG:-} != approved ) ]]; then
+  echo 'REFUSED: dual ESP/NAT-T acceptance requires IPsec and WireGuard cross-mode opt-ins' >&2
+  exit 2
+fi
 for tool in ip ping iptables mktemp sha256sum; do
   command -v "$tool" >/dev/null || { echo "Missing test prerequisite: $tool" >&2; exit 2; }
 done
@@ -464,21 +469,32 @@ CONFIG
     start_cross_ipsec_peer a
     start_cross_ipsec_peer b
     echo 'CROSS_FIVE_BACKEND_SEPARATE_OWNED_VICI_DAEMONS=PASS'
+    cross_ipsec_expected=five-esp
     run_cross_ipsec_side() {
-      local side="$1" action="$2" ns root
+      local side="$1" action="$2" suffix="${3:-c}" ns root encap
+      case "$suffix" in
+        c) encap=esp ;;
+        d) encap=nat-t ;;
+        *) echo 'REFUSED: unknown fixed cross-backend IPsec Link' >&2; exit 2 ;;
+      esac
       if [[ $side == a ]]; then ns="$ns_a"; root="$workdir/a";
       else ns="$ns_b"; root="$workdir/b"; fi
       ip netns exec "$ns" env \
         STL_E2E_DISPOSABLE_HOST=approved STL_IPSEC_ISOLATED=approved \
         STL_IPSEC_CLI_FIXTURE=approved STL_IPSEC_CROSS_E2E=approved \
         STL_IPSEC_CLI_OP="$action" STL_IPSEC_CLI_SIDE="$side" \
-        STL_IPSEC_CLI_LINK=c STL_IPSEC_CLI_ENCAP=esp \
+        STL_IPSEC_CLI_LINK="$suffix" STL_IPSEC_CLI_ENCAP="$encap" \
+        STL_IPSEC_CROSS_EXPECT="$cross_ipsec_expected" \
         STL_IPSEC_CROSS_STATE_ROOT="$root" \
         "$workdir/gre-e2e.test" -test.run '^TestIPsecCanonicalCLIRealIsolatedE2E$' -test.v
     }
     cross_ipsec_traffic() {
       ip netns exec "$ns_a" ping -n -q -c 3 -W 2 -I 10.84.10.0 10.84.10.1 >/dev/null
       ip netns exec "$ns_b" ping -n -q -c 3 -W 2 -I 10.84.10.1 10.84.10.0 >/dev/null
+    }
+    cross_natt_traffic() {
+      ip netns exec "$ns_a" ping -n -q -c 3 -W 2 -I 10.84.20.0 10.84.20.1 >/dev/null
+      ip netns exec "$ns_b" ping -n -q -c 3 -W 2 -I 10.84.20.1 10.84.20.0 >/dev/null
     }
     run_cross_ipsec_side a create
     run_cross_ipsec_side b import
@@ -501,10 +517,41 @@ CONFIG
     for gre_mode in native fou gue; do select_mode "$gre_mode"; traffic; done
     ip netns exec "$ns_a" ping -n -c 2 -W 3 -I 10.83.10.0 10.83.10.1 >/dev/null
     echo 'FIVE_SAME_PEER_GRE_NATIVE_FOU_GUE_WG_IPSEC=PASS'
+    if [[ ${STL_E2E_CROSS_NATT:-} == approved ]]; then
+      # A second distinct IKEv2 Link uses NAT-T while ESP and all four
+      # GRE/WG Links remain live on the very same A/B and persisted roots.
+      # Each connection has its own protected PSK and nonoverlapping /31.
+      run_cross_ipsec_side a create d
+      run_cross_ipsec_side b import d
+      if ip netns exec "$ns_a" ping -n -q -c 1 -W 1 -I 10.84.20.0 10.84.20.1 >/dev/null 2>&1; then
+        echo 'FAIL: NAT-T inner packets passed before IKEv2 negotiation' >&2; exit 1;
+      fi
+      run_cross_ipsec_side a connect d
+      cross_natt_traffic
+      cross_ipsec_traffic
+      cross_ipsec_expected=six
+      for side in a b; do
+        if [[ $side == a ]]; then ns="$ns_a"; else ns="$ns_b"; fi
+        [[ "$(ip -n "$ns" xfrm state | grep -c 'proto esp' || true)" -eq 4 ]] || {
+          echo 'FAIL: two independent IPsec Links did not yield four owned-direction SAs' >&2; exit 1;
+        }
+        [[ "$(ip -n "$ns" xfrm state | grep -c 'encap type espinudp' || true)" -eq 2 ]] || {
+          echo 'FAIL: actual NAT-T ESP-in-UDP encapsulation is absent or not isolated' >&2; exit 1;
+        }
+        run_cross_ipsec_side "$side" status d
+        run_cross_ipsec_side "$side" cross-list d
+        run_cross_ipsec_side "$side" ensure d
+      done
+      run_cross_ipsec_side a diagnose d
+      for gre_mode in native fou gue; do select_mode "$gre_mode"; traffic; done
+      ip netns exec "$ns_a" ping -n -c 2 -W 3 -I 10.83.10.0 10.83.10.1 >/dev/null
+      assert_gre_firewall_unchanged
+      echo 'SIX_SAME_PEER_GRE_NATIVE_FOU_GUE_WG_ESP_NATT=PASS'
+    fi
   fi
 
-  # All four original GRE/WG Links stay live; when opted in, so does the
-  # fifth IKEv2/XFRM Link through scoped GRE/FOU remove, reapply and repair.
+  # All four original GRE/WG Links stay live; when opted in, so do the
+  # real IPsec ESP and NAT-T Links through scoped GRE/FOU repair and removal.
   # Verify the three survivors both by identity and actual packets.
   select_mode fou
   run_side a remove
@@ -555,6 +602,11 @@ CONFIG
     cross_ipsec_traffic
     run_cross_ipsec_side a status
     echo 'FOU_RECOVERY_PRESERVES_REAL_IPSEC_TRAFFIC=PASS'
+    if [[ ${STL_E2E_CROSS_NATT:-} == approved ]]; then
+      cross_natt_traffic
+      run_cross_ipsec_side a status d
+      echo 'FOU_RECOVERY_PRESERVES_ESP_AND_NATT=PASS'
+    fi
   fi
   echo 'FOU_LINK_LOSS_RECOVERY_PRESERVES_GRE_AND_WG=PASS'
 
@@ -622,8 +674,32 @@ CONFIG
   echo 'FOREIGN_GRE_ADOPTION_REJECTED_WITH_SIBLINGS_LIVE=PASS'
   if [[ ${STL_E2E_CROSS_IPSEC:-} == approved ]]; then
     cross_ipsec_traffic
+    if [[ ${STL_E2E_CROSS_NATT:-} == approved ]]; then cross_natt_traffic; fi
     run_cross_ipsec_side a remove
     run_cross_ipsec_side b remove
+    if [[ ${STL_E2E_CROSS_NATT:-} == approved ]]; then
+      # Retiring ESP must preserve independently owned NAT-T, including its
+      # protected credentials, live ESP-in-UDP SAs and all non-IPsec siblings.
+      cross_ipsec_expected=five-natt
+      for side in a b; do
+        if [[ $side == a ]]; then ns="$ns_a"; else ns="$ns_b"; fi
+        [[ "$(ip -n "$ns" xfrm state | grep -c 'proto esp' || true)" -eq 2 ]] || {
+          echo 'FAIL: scoped ESP removal disturbed remaining NAT-T SA count' >&2; exit 1;
+        }
+        [[ "$(ip -n "$ns" xfrm state | grep -c 'encap type espinudp' || true)" -eq 2 ]] || {
+          echo 'FAIL: scoped ESP removal disturbed remaining NAT-T encapsulation' >&2; exit 1;
+        }
+        run_cross_ipsec_side "$side" status d
+        run_cross_ipsec_side "$side" cross-list d
+      done
+      cross_natt_traffic
+      for gre_mode in native fou gue; do select_mode "$gre_mode"; traffic; done
+      ip netns exec "$ns_a" ping -n -c 2 -W 3 -I 10.83.10.0 10.83.10.1 >/dev/null
+      assert_gre_firewall_unchanged
+      echo 'REMOVE_ESP_PRESERVES_NATT_AND_GRE_WG=PASS'
+      run_cross_ipsec_side a remove d
+      run_cross_ipsec_side b remove d
+    fi
     for ns in "$ns_a" "$ns_b"; do
       [[ "$(ip -n "$ns" xfrm state | grep -c 'proto esp' || true)" == 0 ]] || {
         echo 'FAIL: removed IPsec left a kernel ESP SA' >&2; exit 1;
@@ -638,6 +714,9 @@ CONFIG
     ip netns exec "$ns_a" ping -n -c 2 -W 3 -I 10.83.10.0 10.83.10.1 >/dev/null
     assert_gre_firewall_unchanged
     echo 'IPSEC_SCOPED_REMOVE_PRESERVES_GRE_WG_SIBLINGS=PASS'
+    if [[ ${STL_E2E_CROSS_NATT:-} == approved ]]; then
+      echo 'NATT_SCOPED_REMOVE_PRESERVES_GRE_WG_SIBLINGS=PASS'
+    fi
   fi
   run_cross_wg_side a cross-list
   run_cross_wg_side b cross-list

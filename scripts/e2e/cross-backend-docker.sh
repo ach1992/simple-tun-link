@@ -90,6 +90,7 @@ for entry in "ubuntu:$ubuntu_image" "debian:$debian_image"; do
     --mount "type=bind,source=$temp/stl-cross.test,target=/proof/stl-cross.test,readonly" \
     -e STL_E2E_DISPOSABLE_HOST=approved -e STL_E2E_CROSS_WG=approved \
     -e STL_E2E_CROSS_IPSEC=approved \
+    -e STL_E2E_CROSS_NATT=approved \
     -e STL_E2E_PREBUILT_TEST=/proof/stl-cross.test \
     -e "STL_E2E_PREBUILT_SHA256=$binary_sha" \
     -e "STL_E2E_SOURCE_SHA=$source_sha" \

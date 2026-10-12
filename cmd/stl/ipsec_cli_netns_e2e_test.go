@@ -80,11 +80,15 @@ func fixtureLinkForCLI(t *testing.T, side, suffix, encap string) domain.Link {
 		addrA, addrB = netip.MustParsePrefix("10.251.88.2/31"), netip.MustParsePrefix("10.251.88.3/31")
 	}
 	if os.Getenv("STL_IPSEC_CROSS_E2E") == "approved" {
-		if suffix != "c" {
-			t.Fatal("cross-backend IPsec fixture requires its dedicated Link identity")
+		if suffix != "c" && suffix != "d" {
+			t.Fatal("cross-backend IPsec fixture requires an exact reserved Link identity")
 		}
 		underA, underB = netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("192.0.2.11")
-		addrA, addrB = netip.MustParsePrefix("10.84.10.0/31"), netip.MustParsePrefix("10.84.10.1/31")
+		if suffix == "c" {
+			addrA, addrB = netip.MustParsePrefix("10.84.10.0/31"), netip.MustParsePrefix("10.84.10.1/31")
+		} else {
+			addrA, addrB = netip.MustParsePrefix("10.84.20.0/31"), netip.MustParsePrefix("10.84.20.1/31")
+		}
 	}
 	if !a {
 		underA, underB = underB, underA
@@ -98,6 +102,51 @@ func fixtureLinkForCLI(t *testing.T, side, suffix, encap string) domain.Link {
 	}
 }
 
+// The six-Link E2E must not silently alias ESP and NAT-T to one Link,
+// overlap their inner subnets, or move either peer off the GRE/WG underlay.
+// This identity test is unprivileged; actual negotiation is separately gated.
+func TestCrossBackendIPsecFixtureProfiles(t *testing.T) {
+	t.Setenv("STL_IPSEC_CROSS_E2E", "approved")
+	seen := make(map[domain.LinkID]bool)
+	claims := make(map[string]bool)
+	for _, test := range []struct {
+		suffix, encapsulation, a, b string
+	}{
+		{"c", "esp", "10.84.10.0/31", "10.84.10.1/31"},
+		{"d", "nat-t", "10.84.20.0/31", "10.84.20.1/31"},
+	} {
+		left := fixtureLinkForCLI(t, "a", test.suffix, test.encapsulation)
+		right := fixtureLinkForCLI(t, "b", test.suffix, test.encapsulation)
+		if seen[left.ID] || left.ID != right.ID || left.Encapsulation != domain.Encapsulation(test.encapsulation) ||
+			left.Underlay.Local.String() != "192.0.2.10" || left.Underlay.Peer.String() != "192.0.2.11" ||
+			left.Addresses.Local.String() != test.a || left.Addresses.Peer.String() != test.b ||
+			right.Underlay.Local != left.Underlay.Peer || right.Underlay.Peer != left.Underlay.Local ||
+			right.Addresses.Local != left.Addresses.Peer || right.Addresses.Peer != left.Addresses.Local {
+			t.Fatalf("reserved cross-backend IPsec fixture identities collide: %s", test.suffix)
+		}
+		profile, err := ipsec.NewProfile(left)
+		if err != nil {
+			t.Fatalf("cross-backend IPsec %s fixture invalid: %v", test.suffix, err)
+		}
+		other, err := ipsec.NewProfile(right)
+		if err != nil || profile.ConnectionName != other.ConnectionName ||
+			profile.SecretName != other.SecretName || profile.InterfaceID != other.InterfaceID {
+			t.Fatalf("peer IPsec %s profiles disagree on exact resource identity", test.suffix)
+		}
+		for _, claim := range profile.ResourceClaims() {
+			key := string(claim.Kind) + ":" + claim.Key
+			if claims[key] {
+				t.Fatalf("ESP/NAT-T fixture shared an exclusive host claim: %s", claim.Kind)
+			}
+			claims[key] = true
+		}
+		seen[left.ID] = true
+	}
+	if len(seen) != 2 {
+		t.Fatal("ESP/NAT-T fixtures do not represent two independent identities")
+	}
+}
+
 func TestIPsecCanonicalCLIRealIsolatedE2E(t *testing.T) {
 	if os.Getenv("STL_E2E_DISPOSABLE_HOST") != "approved" ||
 		os.Getenv("STL_IPSEC_ISOLATED") != "approved" ||
@@ -108,7 +157,8 @@ func TestIPsecCanonicalCLIRealIsolatedE2E(t *testing.T) {
 		os.Getenv("STL_IPSEC_CLI_LINK"), os.Getenv("STL_IPSEC_CLI_ENCAP")
 	crossMode := os.Getenv("STL_IPSEC_CROSS_E2E") == "approved"
 	if side != "a" && side != "b" || encap != "esp" && encap != "nat-t" ||
-		(!crossMode && suffix != "a" && suffix != "b") || (crossMode && suffix != "c") {
+		(!crossMode && suffix != "a" && suffix != "b") ||
+		(crossMode && !((suffix == "c" && encap == "esp") || (suffix == "d" && encap == "nat-t"))) {
 		t.Fatal("invalid fixed CLI peer fixture identity")
 	}
 	stateRoot := cliLabRoot + "/cli-state-" + side
@@ -299,7 +349,7 @@ func TestIPsecCanonicalCLIRealIsolatedE2E(t *testing.T) {
 		args = []string{"doctor", "ipsec", "--json"}
 	case "cross-list":
 		if !crossMode {
-			t.Fatal("five-backend inventory requires explicit cross-backend fixture")
+			t.Fatal("cross-backend inventory requires explicit isolated fixture")
 		}
 		args = []string{"link", "list", "--json"}
 	default:
@@ -382,26 +432,36 @@ func TestIPsecCanonicalCLIRealIsolatedE2E(t *testing.T) {
 			} `json:"links"`
 		}
 		if json.Unmarshal(out.Bytes(), &listing) != nil || listing.SchemaVersion != 1 {
-			t.Fatal("five-backend persisted inventory unavailable")
+			t.Fatal("cross-backend persisted inventory unavailable")
 		}
 		expected := map[string]bool{
 			"lnk_11111111111111111111111111111111": true,
 			"lnk_22222222222222222222222222222222": true,
 			"lnk_33333333333333333333333333333333": true,
 			"lnk_88888888888888888888888888888888": true,
-			"lnk_cccccccccccccccccccccccccccccccc": true,
+		}
+		switch os.Getenv("STL_IPSEC_CROSS_EXPECT") {
+		case "", "five-esp":
+			expected["lnk_cccccccccccccccccccccccccccccccc"] = true
+		case "six":
+			expected["lnk_cccccccccccccccccccccccccccccccc"] = true
+			expected["lnk_dddddddddddddddddddddddddddddddd"] = true
+		case "five-natt":
+			expected["lnk_dddddddddddddddddddddddddddddddd"] = true
+		default:
+			t.Fatal("invalid exact cross-backend persisted inventory expectation")
 		}
 		if len(listing.Links) != len(expected) {
-			t.Fatal("five simultaneous backend Links not persisted")
+			t.Fatal("expected simultaneous backend Link identity count not persisted")
 		}
 		for _, item := range listing.Links {
 			if !expected[item.ID] {
-				t.Fatal("missing or duplicate five-backend persisted Link")
+				t.Fatal("unexpected or duplicate cross-backend persisted Link")
 			}
 			delete(expected, item.ID)
 		}
 		if len(expected) != 0 {
-			t.Fatal("five-backend Link identity set incomplete")
+			t.Fatal("cross-backend Link identity set incomplete")
 		}
 	}
 	if op == "doctor" {

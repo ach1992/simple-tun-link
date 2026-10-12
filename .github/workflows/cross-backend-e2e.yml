@@ -1,0 +1,60 @@
+# Privileged release matrix runs only on a fresh GitHub-hosted disposable
+# VM, never on a connected operator/Agent host. PR head is pinned exactly;
+# this job has no write token, caches no guest credentials and uses isolated
+# --network none Docker guests with source-bound root-driver safety checks.
+name: Disposable cross-backend release E2E
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/cross-backend-e2e.yml'
+      - 'scripts/e2e/**'
+      - 'cmd/stl/**'
+      - 'internal/**'
+
+permissions:
+  contents: read
+
+jobs:
+  six-link-kernel:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Source and host identity
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          test -z "$(git status --porcelain)"
+          printf 'CROSS_BACKEND_SOURCE_SHA=%s\n' "$(git rev-parse HEAD)"
+          uname -a
+          df -h /
+          go version
+          docker version
+          ip -Version
+          iptables --version
+          if test -e /.dockerenv; then
+            echo 'REFUSED: runner itself is a container'
+            exit 2
+          fi
+      - name: Build isolated userspace images
+        run: |
+          set -euo pipefail
+          docker build -f scripts/e2e/cross-backend.Dockerfile \
+            --build-arg BASE_IMAGE=ubuntu:24.04 -t stl-cross-six:ubuntu24 .
+          docker build -f scripts/e2e/cross-backend.Dockerfile \
+            --build-arg BASE_IMAGE=debian:trixie -t stl-cross-six:debian13 .
+      - name: Real six-Link GRE/WG/IKEv2 ESP/NAT-T matrix
+        run: |
+          set -euo pipefail
+          sudo env PATH="$PATH" STL_E2E_DISPOSABLE_HOST=approved \
+            STL_E2E_IMAGE_UBUNTU=stl-cross-six:ubuntu24 \
+            STL_E2E_IMAGE_DEBIAN=stl-cross-six:debian13 \
+            bash scripts/e2e/cross-backend-docker.sh

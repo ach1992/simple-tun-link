@@ -100,10 +100,13 @@ Prioritize behavior with meaningful failure modes:
 
 Avoid duplicate tests that prove the same branch through multiple layers unless the layer boundary itself is the risk.
 
-The Issue #12 release-level cross-backend Docker runner now requires a
-strongSwan-capable disposable image for each supported userspace, to
-exercise five *simultaneously persisted* GRE Native/FOU/GUE, WireGuard,
-and IPsec/IKEv2 links across the same two guest namespaces and state roots.
+The Issue #12 release-level cross-backend Docker runner requires a
+strongSwan-capable disposable image for each supported userspace. It
+exercises six *simultaneously persisted* Links on the same two guest
+namespaces and state roots: GRE Native/FOU/GUE, authenticated WireGuard,
+native IKEv2/XFRM ESP, and a separately keyed IKEv2/XFRM NAT-T Link.
+The original five-Link ESP-only acceptance remains historical evidence;
+the new NAT-T coexistence gate needs its own successful privileged run.
 On an expressly authorized disposable Docker test machine, from a clean
 committed checkout, build the task-only images and then run:
 
@@ -121,9 +124,13 @@ sudo env PATH="$PATH" STL_E2E_DISPOSABLE_HOST=approved \
 The runner is **not** safe to run on a production or control-plane server.
 The image builds use the distribution's package repositories and may
 install packages inside the *images only*. The runtime guests remain
-network-disconnected with fresh, isolated namespaces; the published
-five-Link success markers require actual bidirectional encrypted IPsec
-traffic, not only an instantiated strongSwan process. See
+network-disconnected with fresh, isolated namespaces. Six-Link acceptance
+requires *both* actual ESP and ESP-in-UDP XFRM SAs, distinct protected
+credentials, pre-negotiation plaintext rejection, actual bidirectional
+inner traffic, exact shared-state inventory, scoped ESP removal with NAT-T
+still operational, and eventual credential/SA retirement. Unavailable
+kernel/daemon support is a failure for this required test, not a PASS
+or silent SKIP. See
 `docs/operations/CROSS-BACKEND-REAL-E2E.md` for exact evidence rules and
 remaining full-guest reboot / ARM64 limitations.
 
