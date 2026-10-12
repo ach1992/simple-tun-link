@@ -10,6 +10,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	grebackend "github.com/ach1992/simple-tun-link/internal/backend/gre"
 	ipipbackend "github.com/ach1992/simple-tun-link/internal/backend/ipip"
+	ipsecbackend "github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	wgbackend "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/state"
@@ -43,13 +44,14 @@ type linkListResponse struct {
 // InterfaceVerified is true only after a live identity/counter check.
 // It does not assert Link Address reachability or firewall effectiveness.
 type linkStatusResponse struct {
-	SchemaVersion     int                          `json:"schema_version"`
-	Link              linkSummary                  `json:"link"`
-	InterfaceVerified bool                         `json:"interface_verified"`
-	Connectivity      string                       `json:"connectivity"`
-	GREState          *grebackend.DiagnosticState  `json:"gre_state,omitempty"`
-	IPIPState         *ipipbackend.DiagnosticState `json:"ipip_state,omitempty"`
-	WireGuardState    *wgbackend.DiagnosticState   `json:"wireguard_state,omitempty"`
+	SchemaVersion     int                           `json:"schema_version"`
+	Link              linkSummary                   `json:"link"`
+	InterfaceVerified bool                          `json:"interface_verified"`
+	Connectivity      string                        `json:"connectivity"`
+	GREState          *grebackend.DiagnosticState   `json:"gre_state,omitempty"`
+	IPIPState         *ipipbackend.DiagnosticState  `json:"ipip_state,omitempty"`
+	WireGuardState    *wgbackend.DiagnosticState    `json:"wireguard_state,omitempty"`
+	IPsecState        *ipsecbackend.DiagnosticState `json:"ipsec_state,omitempty"`
 }
 
 type linkReadErrorResponse struct {
@@ -138,9 +140,6 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 	if !ok {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, "link_status", "Link ID is not present in local desired state")
 	}
-	if record.Desired.Backend == domain.BackendIPsec {
-		return ipsecUnregisteredError(stdout, stderr, jsonOutput, "link_status", id)
-	}
 	if options == nil {
 		options, err = productionRuntimeOptions()
 		if err != nil {
@@ -155,6 +154,9 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 		}
 	}
 	if selected == nil {
+		if record.Desired.Backend == domain.BackendIPsec {
+			return ipsecUnregisteredError(stdout, stderr, jsonOutput, "link_status", id)
+		}
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_status", "live status is unavailable for this backend")
 	}
 	response := linkStatusResponse{
@@ -165,6 +167,23 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 	var rxPackets, txPackets uint64
 	counterUnit := "packets"
 	switch record.Desired.Backend {
+	case domain.BackendIPsec:
+		inspector, ok := selected.(*ipsecbackend.OperationalBackend)
+		if !ok {
+			return ipsecUnregisteredError(stdout, stderr, jsonOutput, "link_status", id)
+		}
+		observed, err := inspector.DiagnosticState(ctx, record.Desired)
+		if err != nil {
+			return readStatusInspectionError(ctx, stdout, stderr, jsonOutput, err)
+		}
+		expected, _ := ipsecbackend.NewProfile(record.Desired)
+		if observed.Interface != expected.InterfaceName || observed.XFRMID != expected.InterfaceID ||
+			observed.IfIndex <= 0 || !observed.ConnectionConfigured {
+			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInspect, "link_status",
+				"live IPsec interface or strongSwan identity is inconsistent")
+		}
+		response.IPsecState = &observed
+		interfaceName, kindLabel = observed.Interface, "IPsec"
 	case domain.BackendGRE:
 		inspector, ok := selected.(interface {
 			DiagnosticState(context.Context, domain.Link) (grebackend.DiagnosticState, error)
@@ -234,6 +253,11 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 			fmt.Fprintln(stderr, "cannot encode link status")
 			return 1
 		}
+		return 0
+	}
+	if response.IPsecState != nil {
+		fmt.Fprintf(stdout, "Link %s: IPsec/%s XFRM interface %s verified; SA observed=%t, packet reachability not measured\n",
+			id, record.Desired.Encapsulation, interfaceName, response.IPsecState.SecurityAssociationPresent)
 		return 0
 	}
 	fmt.Fprintf(stdout, "Link %s: %s/%s interface verified on %s; connectivity not measured (RX %d %s, TX %d %s)\n",

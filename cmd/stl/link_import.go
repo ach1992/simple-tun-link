@@ -71,7 +71,10 @@ func linkImportCommand(args []string, input io.Reader, stdout, stderr io.Writer,
 		return readCommandError(stdout, stderr, jsonOutput, code, "link_import",
 			"setup link is invalid or unsupported")
 	}
-	if !importableOffer(offer.Preview()) {
+	// Decoded Quick offers may contain secret bytes; keep the sensitive
+	// payload out of ordinary errors even when import is rejected.
+	defer offer.ClearRecipientCredential()
+	if !importableOffer(offer.Preview()) && !importableIPsecOffer(offer.Preview()) {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_import",
 			"setup-link backend/schema is not eligible for protected recipient import")
 	}
@@ -90,6 +93,9 @@ func linkImportCommand(args []string, input io.Reader, stdout, stderr io.Writer,
 		}
 		return readCommandError(stdout, stderr, jsonOutput, code, "link_import",
 			"receiver Link configuration is invalid or unsupported")
+	}
+	if importableIPsecOffer(offer.Preview()) {
+		return executeIPsecRecipientImport(encoded, args[3], desired.ID, jsonOutput, stdout, stderr, options)
 	}
 	if importableWireGuardOffer(offer.Preview()) {
 		credential := offer.RecipientCredential()

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/ach1992/simple-tun-link/internal/backend"
+	ipsecbackend "github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	"github.com/ach1992/simple-tun-link/internal/diagnostics"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
@@ -29,13 +30,7 @@ func inspectLinkDiagnostic(ctx context.Context, link domain.Link, options runtim
 	if err := ctx.Err(); err != nil {
 		return linkDiagnostic{}, err
 	}
-	if link.Backend == domain.BackendIPsec {
-		err := stlerr.New(stlerr.CodeUnsupported, "link_diagnose", string(link.ID), string(link.Backend),
-			"IPsec runtime is not registered; no active Link diagnosis is available")
-		err.ReasonCode = "ipsec_runtime_not_registered"
-		err.NextStep = "Use GRE/IPIP/WireGuard for active Links; qualify exclusive strongSwan ownership before any IPsec activation."
-		return linkDiagnostic{}, err
-	}
+
 	var selected backend.Backend
 	for _, impl := range options.backends {
 		if impl != nil && impl.Kind() == link.Backend {
@@ -52,6 +47,18 @@ func inspectLinkDiagnostic(ctx context.Context, link domain.Link, options runtim
 		runner = linux.ExecRunner{}
 	}
 	switch link.Backend {
+	case domain.BackendIPsec:
+		inspector, ok := selected.(*ipsecbackend.OperationalBackend)
+		if !ok {
+			return linkDiagnostic{}, stlerr.New(stlerr.CodeUnsupported, "link_diagnose",
+				string(link.ID), "ipsec", "IPsec runtime is not registered")
+		}
+		measured, err := diagnostics.ObserveIPsec(ctx, link, inspector, runner, manualMTU)
+		if err != nil {
+			return linkDiagnostic{}, err
+		}
+		return linkDiagnostic{report: measured, mtu: measured.MTU, quality: measured.Quality,
+			counterUnit: "packets"}, nil
 	case domain.BackendGRE:
 		inspector, ok := selected.(diagnostics.GREInspector)
 		if !ok {

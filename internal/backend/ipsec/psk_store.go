@@ -4,6 +4,7 @@ package ipsec
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
@@ -247,4 +248,107 @@ func (s *PSKStore) Load(id domain.LinkID) (PSK, error) {
 		return PSK{}, fmt.Errorf("invalid protected IPsec credential material")
 	}
 	return key, nil
+}
+
+// Digest computes a non-reversible receipt identity for the installed
+// 256-bit PSK. A digest of a high-entropy key is not a replacement for
+// checking the exact protected credential and its inode at retirement.
+func (s *PSKStore) Digest(id domain.LinkID) (string, error) {
+	p, err := s.Load(id)
+	if err != nil {
+		return "", err
+	}
+	defer p.Zeroize()
+	raw := p.SecretBytes()
+	digest := sha256.Sum256(raw)
+	clear(raw)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+// RetireMatching removes only the matching root-private 256-bit PSK from
+// the protected credential directory. Caller MUST hold canonical
+// maintenance/Link locks and an already-durable post-Remove receipt;
+// a basename, absent Link or matching key digest alone is NOT authority.
+//
+// This method does not remove any VICI/SA/kernel state. A missing file is
+// idempotently retired only after rechecking the protected directory and
+// exact non-existence. Changed ownership/content/inodes fail closed.
+func (s *PSKStore) RetireMatching(id domain.LinkID, expectedSHA256 string) error {
+	name, err := s.keyName(id)
+	if err != nil {
+		return err
+	}
+	expected, err := hex.DecodeString(expectedSHA256)
+	if err != nil || len(expected) != 32 || hex.EncodeToString(expected) != expectedSHA256 {
+		return fmt.Errorf("invalid protected IPsec retirement receipt identity")
+	}
+	defer clear(expected)
+	dirfd, err := credentials.OpenProtected(s.stateRoot, false)
+	if err != nil {
+		return fmt.Errorf("cannot inspect protected IPsec retirement directory")
+	}
+	defer unix.Close(dirfd)
+	fd, err := unix.Openat(dirfd, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if errors.Is(err, unix.ENOENT) {
+		var path unix.Stat_t
+		if e := unix.Fstatat(dirfd, name, &path, unix.AT_SYMLINK_NOFOLLOW); errors.Is(e, unix.ENOENT) {
+			return nil
+		}
+		return fmt.Errorf("protected IPsec credential path changed during retirement")
+	}
+	if err != nil {
+		return fmt.Errorf("protected IPsec retirement file is inaccessible or unsafe")
+	}
+	file := os.NewFile(uintptr(fd), "ipsec-retirement")
+	defer file.Close()
+	var pinned unix.Stat_t
+	if err = unix.Fstat(fd, &pinned); err != nil ||
+		pinned.Mode&unix.S_IFMT != unix.S_IFREG ||
+		pinned.Mode&0o777 != 0o600 || pinned.Uid != uint32(os.Geteuid()) ||
+		pinned.Nlink != 1 || pinned.Size != int64(pskWireHexSize+1) {
+		return fmt.Errorf("protected IPsec credential identity not verified")
+	}
+	var wire [pskWireHexSize + 1]byte
+	defer clear(wire[:])
+	if _, err = io.ReadFull(file, wire[:]); err != nil || wire[pskWireHexSize] != '\n' {
+		return fmt.Errorf("protected IPsec retirement contents truncated or invalid")
+	}
+	var trailing [1]byte
+	if n, err := file.Read(trailing[:]); n != 0 || err != io.EOF {
+		return fmt.Errorf("protected IPsec retirement contents exceed expected length")
+	}
+	var material [pskLength]byte
+	defer clear(material[:])
+	if _, err := hex.Decode(material[:], wire[:pskWireHexSize]); err != nil {
+		return fmt.Errorf("protected IPsec retirement key encoding invalid")
+	}
+	var canonical [pskWireHexSize]byte
+	hex.Encode(canonical[:], material[:])
+	sameEncoding := subtle.ConstantTimeCompare(canonical[:], wire[:pskWireHexSize]) == 1
+	clear(canonical[:])
+	if !sameEncoding {
+		return fmt.Errorf("protected IPsec retirement key encoding is not canonical")
+	}
+	digest := sha256.Sum256(material[:])
+	sameKey := subtle.ConstantTimeCompare(digest[:], expected) == 1
+	clear(digest[:])
+	if !sameKey {
+		return fmt.Errorf("protected IPsec retirement key does not match durable receipt")
+	}
+	var again, path unix.Stat_t
+	if unix.Fstat(fd, &again) != nil ||
+		unix.Fstatat(dirfd, name, &path, unix.AT_SYMLINK_NOFOLLOW) != nil ||
+		again.Dev != pinned.Dev || again.Ino != pinned.Ino ||
+		path.Dev != pinned.Dev || path.Ino != pinned.Ino ||
+		path.Mode != pinned.Mode || path.Size != pinned.Size ||
+		path.Nlink != 1 || path.Uid != pinned.Uid {
+		return fmt.Errorf("protected IPsec retirement inode changed before deletion")
+	}
+	if err := unix.Unlinkat(dirfd, name, 0); err != nil {
+		return fmt.Errorf("protected IPsec credential removal not confirmed")
+	}
+	if err := unix.Fsync(dirfd); err != nil {
+		return fmt.Errorf("protected IPsec credential deletion durability unverified")
+	}
+	return nil
 }

@@ -484,4 +484,28 @@ system may naturally load/unload units concurrently, so even a list
 snapshot cannot reserve or certify a stable state. No service start/
 stop/enable/reload, package, VICI, credential, file, network or kernel
 mutation is performed. `activation_allowed=false` and doctor exit 4
-persist; privileged disposable operational acceptance remains required.
+persist when native-exclusive runtime is unadmitted; privileged disposable
+operational acceptance remains separately required.
+
+## IPsec operational crash and key-retirement boundaries (Issue #7)
+
+The root-privileged native `charon-systemd` executable must itself be
+root-owned, regular, non-group/world-writable and reachable only through a
+root-controlled path. Its inode must match the observed systemd MainPID
+`/proc/<pid>/exe`. A plain 0755 mode without UID 0 is untrusted, even
+when every private service/config/VICI receipt is present.
+
+An XFRM device exists only under the original recorded owner/ifindex
+journal and verified `if_id`/alias. The gap between kernel create and
+persistent ifindex is intentionally **unrecoverable automatically**:
+STL cannot claim an unrecorded interface solely from its name. An aborted
+or interrupted Remove retains original Link claims and a durable
+step-by-step VICI/kernel journal until exact scoped reconciliation
+completes. Neither Status nor Doctor performs repair. Unverified daemon
+responses never authorize a matching-name takeover.
+
+After a committed Remove's protected digest receipt, `retire-ipsec` is
+a **local receipt-based credential deletion**, independent of systemd
+availability. Missing receipt, pending/active Link, unexpected journal,
+changed key inode/mode/owner or mismatched digest prevent deletion.
+Deleting the credential does not imply physical disk erasure.

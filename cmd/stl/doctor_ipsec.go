@@ -40,6 +40,47 @@ func ipsecDoctorCommand(args []string, stdout, stderr io.Writer, options *runtim
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, "doctor_ipsec",
 			"usage: stl doctor ipsec [--json]")
 	}
+	// Prefer a complete currently admitted native-exclusive runtime when
+	// available. The older source-only prerequisites deliberately treat
+	// EVERY charon/UDP listener as foreign because they have no PID/socket
+	// ownership proofs, so combining those checks with admitted state would
+	// give a contradictory report.
+	if options == nil {
+		resolved, err := productionRuntimeOptions()
+		if err == nil {
+			options = resolved
+		}
+	}
+	if options != nil {
+		admissionCtx, cancel := context.WithTimeout(context.Background(), ipsecDoctorTimeout)
+		_, admitted := activeIPsecBackend(admissionCtx, options)
+		cancel()
+		if admitted == nil {
+			report := diagnostics.IPsecHostReport{
+				SchemaVersion: 1, Backend: "ipsec", RuntimeMode: "native_exclusive",
+				ActivationAllowed: true,
+				Checks: []diagnostics.IPsecHostCheck{{
+					Name: "operational_runtime", Status: "observed",
+					ReasonCode: "ipsec_native_exclusive_owner_admitted",
+					Summary:    "Current STL-created unit, process, logging configuration, private VICI peer and IKE ports were attested read-only.",
+					NextStep:   "Use explicit create/import/activate and verify the negotiated SA and Link Address traffic. Reapply admission before each mutation.",
+				}},
+			}
+			if jsonOutput {
+				if err := json.NewEncoder(stdout).Encode(report); err != nil {
+					fmt.Fprintln(stderr, "cannot encode qualified native IPsec status")
+					return 1
+				}
+			} else {
+				fmt.Fprintln(stdout, "IPsec native-exclusive: current STL runtime ownership VERIFIED (read-only observation)")
+				for _, check := range report.Checks {
+					fmt.Fprintf(stdout, "- [%s] %s (%s): %s\n", check.Status, check.Name, check.ReasonCode, check.Summary)
+				}
+				fmt.Fprintln(stdout, "Readiness is time-local; Link traffic requires separate negotiation and verification.")
+			}
+			return 0
+		}
+	}
 	runner := linux.Runner(linux.ExecRunner{})
 	if options != nil && options.probeRunner != nil {
 		runner = options.probeRunner

@@ -4,6 +4,19 @@
 - Date: 2026-10-10
 - Controlling acceptance: Issue #7
 
+**Current implementation checkpoint (2026-10-12):** The following
+"source-only" and "future" sections document the historical safety work
+that preceded the new conditional native-exclusive operational backend.
+Those sections are not assertions that the current candidate remains
+unregistered. The implementation is now integrated into the canonical
+Engine/CLI on **attested, STL-owned native strongSwan service runtimes**,
+with real isolated ESP/NAT-T, systemd restart/restore, scoped XFRM/VICI
+ownership, durable uncertain-operation journals and receipt-bound
+post-Remove protected PSK retirement. Ordinary runtime assembly still
+does not install or start services or adopt foreign state. The acceptance
+proof and unverified release/production boundaries are in
+[IPsec real E2E](../operations/IPSEC-REAL-E2E.md).
+
 ## Context
 
 The accepted v0.1 backend uses strongSwan/IKEv2 and Linux XFRM
@@ -481,3 +494,47 @@ Systemd behavior/source references:
 - https://manpages.debian.org/bullseye/systemd/systemd.1.en.html
 - https://github.com/systemd/systemd/blob/v247/src/core/dbus-manager.c
 - https://www.freedesktop.org/wiki/Software/systemd/dbus/
+
+## Issue #7 accepted operational implementation: crash-safe XFRM and scoped Remove (2026-10-12)
+
+Historical sections above record earlier *source-only* milestones; their
+statements that no effectful IPsec runtime existed apply to the respective
+milestones, not the present candidate. Runtime activation remains conditional
+on successful native-exclusive admission and externally provisioned STL-owned
+service/config, without ever stopping/adopting a foreign daemon.
+
+The operational Engine persists its public-only `ipsec_xfrm_operations`
+before kernel interface creation. After a successful create it must durably
+bind the original ifindex **before** setting the non-atomic alias and then
+record alias/configuration completion. An `issuing-create` checkpoint with
+no persisted original ifindex confers NO deletion authority, even if a
+matching interface name and `if_id` are visible. The explicit
+`reconcile-xfrm-ipsec` operation may abort only a durable, exact-owned
+device while VICI issuance is still in its prepared stage; unknown
+pre-index collision requires operator verification, not blind cleanup.
+
+Per-Link Remove persists `ipsec_remove_operations` before effectful
+SA/VICI/kernel teardown. Only adjacent, durable progress through SA
+termination, exact connection unload, exact shared-key unload and verified
+original-ifindex deletion allows canonical state commit. An uncertain
+completion preserves the journal and original committed ownership, blocks
+ordinary reapply and supports **explicit** `reconcile-ipsec` with fresh
+native/VICI/XFRM validation and sibling isolation. No command performs
+wildcard daemon unload or foreign resource adoption. After atomic Link
+removal and non-secret digest receipt commit, `retire-ipsec` verifies
+that receipt under maintenance+Link locks and safely retires matching
+root-private PSK **without requiring a live strongSwan service**.
+
+Native daemon executable trust now also demands root UID, regular file,
+root-controlled non-writable path ancestry and original active-PID inode
+identity. These gates complement private VICI/SO_PEERCRED, IKE port,
+configuration origin and logger policy, not replace them. They are
+time-local observations, not an absolute defense against independent
+privileged root administrators.
+
+No state/ordinary CLI version bump is made: private state stays schema v2
+with additional optional operation journals, public machine JSON remains
+schema_version 1. Journal-bearing state is **upgrade-only** until resolved;
+legacy schema-v1 lifecycle fields, including post-Remove IPsec receipts,
+fail closed on migration. Wider distribution/package/reboot/arm64 release
+validation still belongs to Issues #11/#12.

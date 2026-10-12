@@ -665,16 +665,36 @@ retirement are implemented. Focused real-kernel bidirectional WireGuard
 traffic and same-peer GRE coexistence were observed in PR #53; operational
 IPsec, restart/recovery and release-level acceptance remain Issues #6–#12.
 
-## Read-only host troubleshooting: IPsec (source-only)
+## IPsec operational CLI and historical read-only diagnostic milestones
 
-Run `stl doctor ipsec` to see a bounded, operator-readable list of
-observations and the next safe step for each. Use `stl doctor ipsec --json`
-for `schema_version: 1`, `backend: "ipsec"`, `runtime_mode:
-"native_exclusive"`, `activation_allowed: false` and stable per-check
-`status`, `reason_code`, `summary` and `next_step` fields. The exit
-code is **4 (unsupported)** even when all read-only probes run, because
-operational IPsec is intentionally not registered yet. Invalid arguments
-exit **2**. An incomplete report is an operational failure, not vacancy.
+`stl doctor ipsec` is always read-only. Without a positively attested STL
+native-exclusive strongSwan service, `--json` preserves
+`schema_version:1`, `backend:"ipsec"`, `runtime_mode:"native_exclusive"`,
+`activation_allowed:false` and stable `status`, `reason_code`,
+`summary`, `next_step` fields, exiting **4 (unsupported)**. With
+complete native admission it returns `activation_allowed:true`; this
+only attests current runtime ownership, not IKE or encrypted traffic.
+Invalid arguments exit **2**.
+
+On admitted hosts the actual operational CLI is `stl link create-ipsec`
+(256-bit PSK, root-protected SENSITIVE Quick Link), `preview`/`import`,
+`activate-ipsec`, `connect-ipsec`, `ensure`, `status`, `diagnose`,
+`restore --all` and exact `remove`. After a Remove receipt, local
+`retire-ipsec <id> --confirm <id>` safely retries protected PSK retirement
+even if strongSwan is stopped or unadmitted. An interrupted durable
+Remove requires explicit `reconcile-ipsec <id> --confirm <id>`; interrupted
+XFRM creation can be inspected and, only when original ifindex/ownership
+allows, aborted via `reconcile-xfrm-ipsec <id> --confirm <id>`.
+Every command supports the applicable versioned JSON surface; an
+indeterminate kernel-create interval without a persisted ifindex refuses
+automatic deletion/adoption. Commands never restart a foreign service.
+
+The detailed read-only checks below record the historical source-only
+diagnostic milestones and remain relevant **when native runtime admission
+fails**. Historical `activation_allowed:false` and exit-4 statements
+within that chronology do not describe a currently admitted runtime.
+The production config/unit publisher remains fixture-only; this is not a
+production host installer. See `docs/operations/IPSEC-REAL-E2E.md`.
 
 The command observes `charon`/`charon-systemd` processes and known
 Debian/Ubuntu strongSwan systemd/SysV service-file identities with
@@ -817,8 +837,8 @@ IPsec-only blocker; never stop/rebind/adopt a foreign process or socket.
 No services, packages, credentials, routing, firewall, kernel objects or
 state directories are changed.
 
-For a locally stored IPsec Link, `stl link status <link-id> --json` and
-`stl link diagnose <link-id> --json` preserve the current
+When operational IPsec is not admitted, `stl link status <link-id> --json`
+and `stl link diagnose <link-id> --json` preserve the
 `schema_version:1` error envelope and `error.code:"unsupported"` with
 exit **4**, but now also include optional, stable:
 `error.reason_code:"ipsec_runtime_not_registered"`,
@@ -828,10 +848,12 @@ exit **4**, but now also include optional, stable:
 optional fields unless supported. Machine callers branch on the code and
 reason, **not** on the human `detail`; `next_step` is the exact safe
 read-only CLI command. The human error continues to explain why activation
-is not available.
+is not available. With admitted runtime the same commands report bounded
+live kernel/VICI and Link-Address observations, not generic unsupported.
 
-IPsec is still not a selectable operational backend. Existing GRE/IPIP/
-WireGuard functions continue independently. The same program-wide
+IPsec remains unavailable when the native-exclusive service is absent or
+unverified; on positively admitted hosts the canonical Engine registers its
+operational backend. GRE/IPIP/WireGuard continue independently. The same program-wide
 `reason_code` + actionable guidance and safe event-logging policy must be
 applied to future setup, status, create/ensure, repair, remove and restore
 workflows. See docs/ARCHITECTURE.md and Issue #9/#10 for that shared contract.

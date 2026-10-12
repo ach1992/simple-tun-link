@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	grebackend "github.com/ach1992/simple-tun-link/internal/backend/gre"
 	ipipbackend "github.com/ach1992/simple-tun-link/internal/backend/ipip"
+	ipsecbackend "github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	wgbackend "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
@@ -25,7 +27,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/version"
 )
 
-const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl menu\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link diagnose <link-id> [--mtu <bytes>] [--json]\n  stl link diagnose --all [--timeout <duration>] [--json]\n  stl link preview --stdin [--json]\n  stl link import --stdin --confirm <preview-token> [--json]\n  stl link export <link-id> [--json]\n  stl link create-wireguard --stdin --output <private-file> [--json]\n  stl link resume-wireguard --stdin --confirm <setup-digest> [--json]\n  stl link credential retire <link-id> --confirm <link-id> --public-key <local-public-key> [--json]\n  stl link ensure --stdin [--json]\n  stl link remove <link-id> --confirm <link-id> [--json]\n  stl link restore --all\n  stl doctor ipsec [--json]\n  stl maintenance pre-uninstall --json\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
+const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl menu\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link diagnose <link-id> [--mtu <bytes>] [--json]\n  stl link diagnose --all [--timeout <duration>] [--json]\n  stl link preview --stdin [--json]\n  stl link import --stdin --confirm <preview-token> [--json]\n  stl link export <link-id> [--json]\n  stl link create-wireguard --stdin --output <private-file> [--json]\n  stl link create-ipsec --stdin --output <private-file> [--json]\n  stl link activate-ipsec <link-id> --confirm <link-id> [--json]\n  stl link connect-ipsec <link-id> --confirm <link-id> [--json]\n  stl link retire-ipsec <link-id> --confirm <link-id> [--json]\n  stl link reconcile-ipsec <link-id> --confirm <link-id> [--json]\n  stl link reconcile-xfrm-ipsec <link-id> --confirm <link-id> [--json]\n  stl link resume-wireguard --stdin --confirm <setup-digest> [--json]\n  stl link credential retire <link-id> --confirm <link-id> --public-key <local-public-key> [--json]\n  stl link ensure --stdin [--json]\n  stl link remove <link-id> --confirm <link-id> [--json]\n  stl link restore --all\n  stl doctor ipsec [--json]\n  stl maintenance pre-uninstall --json\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
 
 const jsonSchemaVersion = 1
 
@@ -133,6 +135,13 @@ func runWithRuntimeInput(args []string, input io.Reader, stdout, stderr io.Write
 		if len(args) >= 2 && args[1] == "create-wireguard" {
 			return linkCreateWireGuardCommand(args[1:], input, stdout, stderr, options)
 		}
+		if len(args) >= 2 && args[1] == "create-ipsec" {
+			return linkCreateIPsecCommand(args[1:], input, stdout, stderr, options)
+		}
+		if len(args) >= 2 && (args[1] == "activate-ipsec" || args[1] == "connect-ipsec" || args[1] == "retire-ipsec" || args[1] == "reconcile-ipsec" || args[1] == "reconcile-xfrm-ipsec") {
+			return linkIPsecLifecycleCommand(args[1:], stdout, stderr, options)
+		}
+
 		if len(args) >= 2 && args[1] == "credential" {
 			return linkCredentialCommand(args[1:], stdout, stderr, options)
 		}
@@ -195,6 +204,36 @@ func productionRuntimeOptions() (*runtimeOptions, error) {
 		return nil, fmt.Errorf("initialize WireGuard backend: %w", err)
 	}
 	options.backends = []backend.Backend{gre, ipip, wg}
+	// Runtime activation is read-only admission followed by registration.
+	// The unverified/missing native-exclusive service blocks IPsec ONLY;
+	// GRE/IPIP/WireGuard assembly and behavior must stay independent.
+	// Never start, adopt or configure strongSwan from this constructor.
+	nativeAdmission := ipsecbackend.NewNativeRuntimeAdmission()
+	gateCtx, gateCancel := context.WithTimeout(context.Background(), 8*time.Second)
+	admitted := nativeAdmission.Authorize(gateCtx) == nil
+	gateCancel()
+	if admitted {
+		protectedKeys, keyErr := ipsecbackend.NewPSKStore(options.stateRoot)
+		writer, writerErr := ipsecbackend.NewScopedWriter(ipsecbackend.NativeExclusiveVICIPath)
+		if keyErr == nil && writerErr == nil {
+			operational, opErr := ipsecbackend.NewOperationalBackend(ipsecbackend.OperationalOptions{
+				Admission: nativeAdmission, Runner: ipsecbackend.BoundedExecRunner{}, Keys: protectedKeys,
+				Routes: ipsecbackend.HostRouteResolveFunc(func(ctx context.Context, peer netip.Addr) (ipsecbackend.HostRoute, error) {
+					resolved, err := routes.Resolve(ctx, peer)
+					if err != nil {
+						return ipsecbackend.HostRoute{}, err
+					}
+					return ipsecbackend.HostRoute{Source: resolved.Source, Device: resolved.Device}, nil
+				}),
+				Writer: writer, XFRM: ipsecbackend.NewXFRMVacancyInspector("ip"),
+				SetAlias: linux.SetLinkAliasByIndex, AddAddr: linux.AddIPv4AddressByIndex,
+				SetUp: linux.SetLinkUpByIndex, Delete: linux.DeleteLinkByIndex,
+			})
+			if opErr == nil {
+				options.backends = append(options.backends, operational)
+			}
+		}
+	}
 
 	info, err := os.Stat("/run/systemd/system")
 	switch {

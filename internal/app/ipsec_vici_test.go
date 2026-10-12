@@ -15,18 +15,17 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
-// ipsecVICITestWriter is a TEST-ONLY injected fake. The real govici
-// load-shared/load-conn adapter is deliberately absent from production
-// because strongSwan replaces same-name foreign daemon objects in a race.
+// ipsecVICITestWriter is a TEST-ONLY injected fake for the original
+// prepare/phase-journal safety contract. The production scoped govici writer
+// now operates only behind native-exclusive service and Engine ownership.
 type ipsecVICITestWriter interface {
 	LoadShared(context.Context, ipsec.Profile, *ipsec.PSK) error
 	LoadConnection(context.Context, ipsec.Profile) error
 }
 
 // simulatePreparedIPsecVICI exists only in _test.go and injects fake effects.
-// It exercises the durable journal and fail-closed phase transitions without
-// creating any real strongSwan adapter or authorization to load a foreign
-// connection/credential. The production build has no Apply method.
+// It tests the original journal's fail-closed transitions; unlike the live
+// operational backend it neither contacts the daemon nor establishes ownership.
 func (e *Engine) simulatePreparedIPsecVICI(ctx context.Context, id domain.LinkID, keys IPsecProtectedKeyReader, reader IPsecVICIInventory, xfrm IPsecXFRMVacancy, writer ipsecVICITestWriter) error {
 	const op = "ipsec_vici_apply"
 	if writer == nil {

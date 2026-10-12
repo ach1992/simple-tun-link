@@ -330,24 +330,25 @@ Default backend.
 - status includes latest handshake/counters where available.
 
 ### IPsec/XFRM
-- strongSwan/IKEv2 + XFRM interface;
-- VTI is not the primary design;
-- ESP/NAT-T behavior;
-- explicit credential handling and XFRM/SA diagnostics.
-- proposed STL-private, one-per-host `charon-systemd` unit and a separate
-  protected strongSwan configuration; source-only unit-byte inspection is not
-  unit publication or systemd/process/effective-logging ownership. A separate
-  source-only service-unit publisher now demonstrates no-clobber, private
-  receipt/inode-xattr-bound origin checks in fixtures only, with no operational
-  call path. Neither matching bytes nor even a valid origin snapshot attests
-  the unit loaded by PID 1. An additional bounded, non-loading
-  `list-units --all` diagnostic enumerates the systemd in-memory
-  primary-unit name only. An already-loaded unit still reports unknown,
-  because no safe single-step observation has established its fragment,
-  aliases, drop-ins, generator, reload state, process or effective settings.
-  No `systemctl show UNIT` or racy follow-up object lookup is allowed.
-  Any future activation must independently gate distro package effects,
-  all loaded unit overrides, VICI writers, IKE ports and kernel resources.
+
+- strongSwan/IKEv2 with independent nonzero per-Link XFRM interface IDs,
+  exact interface aliases/ifindexes, /32 selectors and protected 256-bit PSKs.
+  ESP and kernel-confirmed NAT-T/ESP-in-UDP are implemented.
+- The conditional runtime uses exactly one **STL-origin,
+  native-exclusive** `charon-systemd` service and private VICI Unix socket
+  per eligible host; all operations use the same canonical Engine and
+  durable transaction journals. No global `swanctl --load-all`, wildcard
+  unload, route flush or foreign-daemon adoption.
+- Runtime admission requires a verified on-disk config/unit receipt,
+  effective loaded systemd identity, root-controlled regular executable
+  inode/path ancestry, process/cgroup/netns, logger configuration, private
+  VICI peer and exclusive UDP socket ownership.
+  Failure disables only IPsec. Service provisioning on real hosts is
+  deliberately separate from this code and requires Owner review.
+- Create/Import/Connect/Ensure/Status/Diagnose/Restore/Remove and protected
+  PSK retirement are exercised on real isolated Debian/Ubuntu traffic;
+  an actual STL systemd service restart/restore passed in disposable Ubuntu.
+  See [real IPsec E2E](operations/IPSEC-REAL-E2E.md).
 
 ## 9. Address allocation
 
@@ -492,8 +493,9 @@ resource is an **IPsec-only fail-closed** condition. Do not stop, reconfigure
 or adopt foreign resources. GRE/IPIP/WireGuard remain independent. A more
 isolated runtime is considered only with demonstrated coexistence demand,
 real package/platform tests and new security/compatibility acceptance.
-Currently the IPsec operational backend is **not registered**; a read-only
-probe, staged PSK or VICI journal never grants permission to activate it.
+The IPsec operational backend is **conditionally registered** only after
+full read-only native-exclusive admission; a generic read-only probe, staged
+PSK or public-only journal alone never grants permission to activate it.
 
 For **every backend** and interactive/non-interactive workflow, build the
 operator experience from one normalized, backend-neutral observation/result
@@ -524,60 +526,73 @@ model rather than writing separate troubleshooting prose in each frontend:
   retain the canonical Engine authority and owned-only rollback. Unknown,
   timeout and incomplete inventory remain distinct from true absence.
 
-The still-unregistered `stl doctor ipsec [--json]` additionally inspects
-bounded, read-only `/proc/net/udp{,6}` socket tables for IKE/NAT-T UDP
-500/4500 collisions within the **calling network namespace**. Incomplete,
-missing or malformed data maps to a stable `unknown` reason; an observed
-binding is `blocked`. Not observing a binding is strictly a point-in-time
-observation, not reservation, process ownership, or future bind permission.
-The report always says `activation_allowed:false` and exits unsupported.
-Host-wide service/package/port ownership is **not** attested.
-The additive `native_config` check verifies only root-private, exact
-local `strongswan.conf` bytes with pinned no-follow path descriptors;
-it is neither an STL-created durable receipt nor runtime logging or
-service ownership. Operational admission must bind durable provenance,
-selected process/service configuration and exclusive control across
-restart/recovery before any VICI or kernel write.
+The source-only doctor compatibility path still inventories `/proc/net/
+udp{,6}` read-only, reporting a blocked/unknown prerequisite when no
+operational runtime can be admitted. Once the entire dedicated
+`NativeRuntimeAdmission` passes, `stl doctor ipsec --json` instead reports
+the **time-local** positive admitted state. This is not proof an individual
+Link negotiated IKE or passed packets.
 
-A separate source-only native-config publication primitive now stages the
-fixed strongSwan profile in an owner-private directory, persists a
-no-clobber prepared origin receipt and per-inode random xattr, then uses
-`renameat2(RENAME_NOREPLACE)` and directory fsync. A retry when either
-canonical file or receipt already exists is a **conflict**; after a crash,
-a partial receipt/config pair needs explicit reconciliation, never adoption
-based on matching bytes. A separate `native_config_origin` read-only doctor
-check compares the durable receipt's nonce/device/inode/expected SHA-256
-with the exact opened file/xattr and revalidates the protected path.
-The primitive remains **unexported, with no Engine/CLI/installer caller**:
-normal execution neither writes the receipt nor activates strongSwan.
-The check is a snapshot of protected on-disk publication identity, not an
-exclusive systemd/service/process identity, secure effective CFG logger,
-private VICI writer, IKE port reservation, or kernel XFRM ownership. The
-future host adapter must first validate its own transaction permissions and
-capability requirements; unsupported xattr/no-replace/fsync facilities fail
-closed rather than falling back to destructive publication.
+Operational origin derives from exact protected native
+`strongswan.conf`/systemd unit bytes and root-private
+receipt/inode/xattr-bound no-replace publication. The actual loaded
+`simple-tun-link-ipsec.service` and effective process
+(`/usr/sbin/charon-systemd`, cgroup/netns/environment, CFG/journald
+source), owner-restricted VICI directory/socket with `SO_PEERCRED`
+and matching UDP 500/4500 socket ownership are rechecked before effects.
+The on-disk configuration does not import global foreign
+`/etc/strongswan.conf` includes or enable daemon-managed routing.
+A read-before-write vacancy check **alone** does not grant no-clobber
+ownership: the private writer boundary and Engine locks/transactions are
+additional obligations.
 
-`internal/backend/ipsec.NativeExclusiveConfigV1` adds an immutable-source,
-non-operational strongSwan configuration blueprint for `charon-systemd`.
-It contains **no includes or host /etc/strongswan.conf dependency**, a
-fixed proposed STL-only Unix VICI socket, native journald default/CFG level
-`1`, and disabled daemon-managed routing/virtual IP assignment.
-`CheckNativeExclusiveConfigV1` requires byte-for-byte local equivalence
-instead of interpreting an arbitrary strongSwan configuration as safe.
-This check is **not a running-process/effective-log attestation**, nor a
-writer, installation, managed service, VICI ACL, port reservation or
-activation permit. The future Linux adapter must provision the root-protected
-configuration at the pinned path, select its `STRONGSWAN_CONF` environment
-for the exact owned daemon executable, prove loaded identity and no external
-reload/settings/logging writers, verify permission/confinement/port ownership,
-and retain immutable/revalidated runtime evidence before any key load.
-The private VICI path alone does not prevent an untrusted client from
-calling `load-shared`, `load-conn` or `reload-settings`. An owner-only
-service and socket boundary must be proven independently.
+`OperationalBackend` is integrated with the canonical Engine
+maintenance -> Link -> resources locks, protected IPsec Quick Link staging,
+in-memory VICI load/unload with exact IKE connection and shared-key names,
+XFRM device creation/alias/ifindex and crash-safe reconciliation. The
+Engine durably journals XFRM pre-effect issuance, original ifindex before
+non-atomic alias, and exact owner state; unknown pre-index kernel effects
+are never deleted using a derived name. An explicit `reconcile-xfrm-ipsec`
+command can abort only a provable exact-owned device while VICI issuance
+has not begun. The Engine persists a public-only activation/reapply VICI
+issuing journal **before** each
+indeterminate secret-bearing VICI write. Unknown effects require explicit
+owner-verified reconciliation, never blind retry or adoption. Restarted
+STL-owned daemon state can reapply exactly committed Links and protected
+PSKs; tests demonstrate real service restart and continued encrypted traffic.
 
-Future operational work must never promote `pgrep` absence, UDP
-non-observation, config-file equality, `swanctl --help` or XFRM
-inventory success into an activation permit. Existing strongSwan and
-GRE/IPIP/WireGuard resources are not touched. Issues #7 and #12 own
-operational and release proof; Issue #9 owns common diagnostics and safe
-correlated logs, Issue #10 the user-facing command surfaces.
+A successful Remove requires persisted exact ownership, tracks each
+SA/VICI/kernel step in a durable per-Link Remove journal, retires only
+its own VICI/XFRM/SA state without assuming a reachable remote underlay,
+and atomically commits a **non-secret retirement receipt** together with
+the Link deletion. Unknown termination, unload or ifindex-pinned deletion
+halts ordinary operations until explicitly confirmed `reconcile-ipsec`
+reloads the exact journal and attests fresh daemon/kernel state. A separately verified root-protected PSK retirement
+then deletes only the exact matching credential and durably marks that
+receipt complete; `retire-ipsec` is a post-Remove-only idempotent retry
+that deliberately needs **no active strongSwan service**, only the protected
+State, receipt, maintenance/Link locks and matching key digest.
+Unknown effects never authorize deletion of another key or daemon object.
+
+The native config/unit **publisher functions remain unexported,
+fixture-only**: the production CLI does not install, enable or disable
+any systemd or vendor service. The production package/upgrade plan must
+address vendor strongSwan postinstall autostart side effects and cannot
+silently neutralize an existing administrator-owned service. Owner
+authorization and Issue #12 release acceptance remain separate.
+
+### Native-exclusive IPsec operational proof boundary (Issue #7, 2026-10-12)
+
+The independent Debian 13 / Ubuntu 24.04 disposable two-peer fixtures
+establish **actual canonical Engine and CLI** IKEv2, ESP/NAT-T,
+bidirectional Link Address packets, host XFRM SAs, sibling isolation,
+foreign-name and PSK mismatch rejection, exact scoped cleanup and
+protected credential retirement. The Ubuntu PID1-systemd disposable
+fixture separately establishes the **normal STL executable using its own
+native-exclusive installed unit**, real systemd service restart, protected
+state/PSK restore and successful two-way packets for ESP and NAT-T.
+See [the reproducible IPsec evidence](operations/IPSEC-REAL-E2E.md).
+
+Issue #7 remains OPEN pending independent review/integration authorization.
+This is not a tested production package upgrade, public NAT-router path,
+full reboot/power-loss or Issue #12 architecture/platform/release matrix.

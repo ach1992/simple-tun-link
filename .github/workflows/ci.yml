@@ -31,6 +31,8 @@ jobs:
           bash -n scripts/e2e/gre-netns.sh
           bash -n scripts/e2e/gre-multipeer-netns.sh
           bash -n scripts/e2e/wireguard-netns.sh
+          bash -n scripts/e2e/ipsec-two-peer-netns.sh
+          bash -n scripts/e2e/ipsec-installed-systemd.sh
       - name: Vet
         run: go vet ./...
       - name: Test
