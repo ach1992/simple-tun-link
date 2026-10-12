@@ -581,3 +581,18 @@ inventory success into an activation permit. Existing strongSwan and
 GRE/IPIP/WireGuard resources are not touched. Issues #7 and #12 own
 operational and release proof; Issue #9 owns common diagnostics and safe
 correlated logs, Issue #10 the user-facing command surfaces.
+
+### Native-exclusive IPsec isolated proof boundary (Issue #7, 2026-10-12)
+
+A disposable, network-disconnected, two-peer strongSwan fixture now provides
+actual IKEv2 negotiation, kernel XFRM/ESP and ESP-in-UDP traffic observations,
+scoped per-Link VICI teardown, duplicate-name rejection, credential-mismatch
+isolation and sibling-Link preservation on Debian 13 and Ubuntu 24.04.
+See [the reproducible IPsec real-E2E fixture](operations/IPSEC-REAL-E2E.md).
+**This is not Engine integration or host ownership proof:** the production
+IPsec backend remains unregistered and Issue #7 remains open. In both tested
+distros the vendor charon-systemd package has a strongswan.service unit and
+post-install hooks capable of enabling/starting that foreign service.
+Provisioning must account for that side effect before native-exclusive
+activation; do not modify foreign services or infer ownership from their
+absence. Issue #12 still owns the full release matrix.
