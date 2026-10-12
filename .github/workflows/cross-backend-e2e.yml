@@ -58,18 +58,22 @@ jobs:
           }
           echo "REAL_KERNEL_ARCH=$(uname -m)"
           echo "NATIVE_GOARCH=$(go env GOARCH)"
-      - name: Ensure required FOU kernel module on disposable VM
+      - name: Ensure required tunnel modules on disposable VM
         run: |
           set -euo pipefail
-          # Explicitly load only the required kernel receive module on the
-          # freshly allocated, dedicated CI VM; never on an Agent host.
-          # An unavailable FOU module must FAIL (not silently SKIP).
-          sudo modprobe fou || {
-            echo 'UNSUPPORTED_FOU_KERNEL_MODULE=FAIL'
-            exit 2
-          }
+          # The disposable VM starts with minimal loaded modules. Load only
+          # the FOU and IPIP drivers required by the *existing* complete
+          # release matrix; never run this on the Agent or a shared host.
+          # Missing capability is FAIL, not SKIP.
+          for module in fou ipip; do
+            sudo modprobe "$module" || {
+              echo "UNSUPPORTED_KERNEL_MODULE=$module"
+              exit 2
+            }
+            echo "DISPOSABLE_RUNNER_MODULE=$module:READY"
+          done
           ip -json fou show
-          echo 'DISPOSABLE_RUNNER_FOU_MODULE=READY'
+          ip -details -json link show type ipip
       - name: Build isolated userspace images
         run: |
           set -euo pipefail

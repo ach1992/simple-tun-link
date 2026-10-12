@@ -114,10 +114,13 @@ attempts separately instead of inventing PASS evidence.
 on two separately allocated GitHub-hosted disposable **VMs** for
 same-repository PRs touching runtime/E2E files: an Ubuntu 22.04 x86_64
 runner and a **real** Ubuntu 24.04 ARM64 runner. These two hosts have
-independent, running kernel identities. The workflow loads the `fou`
-module explicitly only within those disposable runners; inability
-to load it **FAILS** the required acceptance instead of hiding a
-kernel limitation. It does **not** modify the dedicated AI Test
+independent, running kernel identities. The workflow explicitly loads only the `fou` and `ipip` kernel
+modules in these disposable runners: the first PR x86 runner failed
+early GRE/FOU inspection until `fou` was loaded, and the next x86
+and ARM64 runs both proved the new six-Link ESP/NAT-T lifecycle but
+stopped on a later IPIP Native `inspect_failed` before completing
+the full preexisting IPIP matrix. A missing module still **FAILS**
+acceptance; no bypass or SKIP is permitted. It does **not** modify the dedicated AI Test
 Server or AI Server Agent. The workflow checks out the PR's exact HEAD,
 uses a read-only repository token with no persisted checkout credentials,
 builds test-only Ubuntu 24.04 and Debian 13 images, and exercises both
