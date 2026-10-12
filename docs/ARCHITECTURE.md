@@ -340,8 +340,9 @@ Default backend.
   durable transaction journals. No global `swanctl --load-all`, wildcard
   unload, route flush or foreign-daemon adoption.
 - Runtime admission requires a verified on-disk config/unit receipt,
-  effective loaded systemd identity, process/executable/cgroup/netns,
-  logger configuration, private VICI peer and exclusive UDP socket ownership.
+  effective loaded systemd identity, root-controlled regular executable
+  inode/path ancestry, process/cgroup/netns, logger configuration, private
+  VICI peer and exclusive UDP socket ownership.
   Failure disables only IPsec. Service provisioning on real hosts is
   deliberately separate from this code and requires Owner review.
 - Create/Import/Connect/Ensure/Status/Diagnose/Restore/Remove and protected
@@ -548,19 +549,29 @@ additional obligations.
 `OperationalBackend` is integrated with the canonical Engine
 maintenance -> Link -> resources locks, protected IPsec Quick Link staging,
 in-memory VICI load/unload with exact IKE connection and shared-key names,
-XFRM device creation/alias/ifindex and rollback. The Engine persists a
-public-only activation/reapply VICI issuing journal **before** each
+XFRM device creation/alias/ifindex and crash-safe reconciliation. The
+Engine durably journals XFRM pre-effect issuance, original ifindex before
+non-atomic alias, and exact owner state; unknown pre-index kernel effects
+are never deleted using a derived name. An explicit `reconcile-xfrm-ipsec`
+command can abort only a provable exact-owned device while VICI issuance
+has not begun. The Engine persists a public-only activation/reapply VICI
+issuing journal **before** each
 indeterminate secret-bearing VICI write. Unknown effects require explicit
 owner-verified reconciliation, never blind retry or adoption. Restarted
 STL-owned daemon state can reapply exactly committed Links and protected
 PSKs; tests demonstrate real service restart and continued encrypted traffic.
 
-A successful Remove requires persisted exact ownership, retires only its
-own VICI/XFRM/SA state without assuming a reachable remote underlay,
+A successful Remove requires persisted exact ownership, tracks each
+SA/VICI/kernel step in a durable per-Link Remove journal, retires only
+its own VICI/XFRM/SA state without assuming a reachable remote underlay,
 and atomically commits a **non-secret retirement receipt** together with
-the Link deletion. A separately verified root-protected PSK retirement
+the Link deletion. Unknown termination, unload or ifindex-pinned deletion
+halts ordinary operations until explicitly confirmed `reconcile-ipsec`
+reloads the exact journal and attests fresh daemon/kernel state. A separately verified root-protected PSK retirement
 then deletes only the exact matching credential and durably marks that
-receipt complete; `retire-ipsec` is a post-Remove-only idempotent retry.
+receipt complete; `retire-ipsec` is a post-Remove-only idempotent retry
+that deliberately needs **no active strongSwan service**, only the protected
+State, receipt, maintenance/Link locks and matching key digest.
 Unknown effects never authorize deletion of another key or daemon object.
 
 The native config/unit **publisher functions remain unexported,

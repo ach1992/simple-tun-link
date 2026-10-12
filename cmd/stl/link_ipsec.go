@@ -48,6 +48,13 @@ type ipsecConnectResult struct {
 	Initiation    string        `json:"initiation"`
 }
 
+type ipsecXFRMReconcileResult struct {
+	SchemaVersion int           `json:"schema_version"`
+	Operation     string        `json:"operation"`
+	LinkID        domain.LinkID `json:"link_id"`
+	Reconciled    bool          `json:"reconciled"`
+}
+
 type ipsecRetireResult struct {
 	SchemaVersion int           `json:"schema_version"`
 	Operation     string        `json:"operation"`
@@ -305,10 +312,10 @@ func executeIPsecRecipientImport(encoded, confirmation string, id domain.LinkID,
 func linkIPsecLifecycleCommand(args []string, out, errOut io.Writer, opts *runtimeOptions) int {
 	isJSON := slices.Contains(args, "--json")
 	if len(args) < 4 || len(args) > 5 || (len(args) == 5 && args[4] != "--json") ||
-		(args[0] != "activate-ipsec" && args[0] != "connect-ipsec" && args[0] != "retire-ipsec") ||
+		(args[0] != "activate-ipsec" && args[0] != "connect-ipsec" && args[0] != "retire-ipsec" && args[0] != "reconcile-ipsec" && args[0] != "reconcile-xfrm-ipsec") ||
 		args[2] != "--confirm" || args[1] != args[3] {
 		return readCommandError(out, errOut, isJSON, stlerr.CodeInvalid, "link_ipsec",
-			"usage: stl link activate-ipsec|connect-ipsec|retire-ipsec <link-id> --confirm <link-id> [--json]")
+			"usage: stl link activate-ipsec|connect-ipsec|retire-ipsec|reconcile-ipsec|reconcile-xfrm-ipsec <link-id> --confirm <link-id> [--json]")
 	}
 	id := domain.LinkID(args[1])
 	if id.Validate() != nil {
@@ -323,12 +330,16 @@ func linkIPsecLifecycleCommand(args []string, out, errOut io.Writer, opts *runti
 				"cannot initialize IPsec runtime before operation", nil)
 		}
 	}
-	pre, stop := context.WithTimeout(context.Background(), readOperationTimeout)
-	_, admissionErr := activeIPsecBackend(pre, opts)
-	stop()
-	if admissionErr != nil {
-		return ipsecFailure(out, errOut, isJSON, stlerr.CodeUnsupported, op, id,
-			"native-exclusive IPsec backend is unavailable; no mutation attempted", nil)
+	// Post-Remove credential retirement is local, not a daemon operation.
+	// A stopped service must not trap an already committed removal receipt.
+	if args[0] != "retire-ipsec" {
+		pre, stop := context.WithTimeout(context.Background(), readOperationTimeout)
+		_, admissionErr := activeIPsecBackend(pre, opts)
+		stop()
+		if admissionErr != nil {
+			return ipsecFailure(out, errOut, isJSON, stlerr.CodeUnsupported, op, id,
+				"native-exclusive IPsec backend is unavailable; no mutation attempted", nil)
+		}
 	}
 	engine, err := buildRuntimeEngine(*opts)
 	if err != nil {
@@ -338,6 +349,12 @@ func linkIPsecLifecycleCommand(args []string, out, errOut io.Writer, opts *runti
 	ctx, cancel := context.WithTimeout(context.Background(), lifecycleTimeLimit)
 	defer cancel()
 	if args[0] == "retire-ipsec" {
+		keys, keyErr := ipsecbackend.NewPSKStore(opts.stateRoot)
+		if keyErr != nil {
+			return ipsecFailure(out, errOut, isJSON, stlerr.CodeState, op, id,
+				"protected IPsec retirement store unavailable", nil)
+		}
+		engine.SetIPsecRetirementStore(keys)
 		if err := engine.RetireIPsecCredential(ctx, id); err != nil {
 			return ipsecFailure(out, errOut, isJSON, stlerr.CodeOf(err), op, id,
 				"no exact committed IPsec removal receipt, or protected credential retirement is unconfirmed", err)
@@ -350,6 +367,39 @@ func linkIPsecLifecycleCommand(args []string, out, errOut io.Writer, opts *runti
 			}
 		} else {
 			fmt.Fprintf(out, "Protected IPsec key for removed Link %s retired; no active Link was changed.\n", id)
+		}
+		return 0
+	}
+	if args[0] == "reconcile-xfrm-ipsec" {
+		if reconcileErr := engine.ReconcileIPsecXFRM(ctx, id); reconcileErr != nil {
+			return ipsecFailure(out, errOut, isJSON, stlerr.CodeOf(reconcileErr), op, id,
+				"XFRM creation cannot be safely reconciled without original durable ifindex", reconcileErr)
+		}
+		if isJSON {
+			if err := json.NewEncoder(out).Encode(ipsecXFRMReconcileResult{
+				SchemaVersion: jsonSchemaVersion, Operation: op, LinkID: id, Reconciled: true}); err != nil {
+				fmt.Fprintln(errOut, "XFRM reconciliation completed but result could not be encoded")
+				return 1
+			}
+		} else {
+			fmt.Fprintf(out, "Exact IPsec XFRM creation for Link %s safely reconciled; retry original intent if needed.\n", id)
+		}
+		return 0
+	}
+	if args[0] == "reconcile-ipsec" {
+		result, recoverErr := engine.ReconcileIPsecRemove(ctx, id)
+		if recoverErr != nil {
+			return ipsecFailure(out, errOut, isJSON, stlerr.CodeOf(recoverErr), op, id,
+				"exact IPsec Remove reconciliation not confirmed; inspect its durable journal", recoverErr)
+		}
+		if isJSON {
+			if err := json.NewEncoder(out).Encode(lifecycleResultResponse{
+				SchemaVersion: jsonSchemaVersion, Operation: op, LinkID: id, Changed: result.Changed, Removed: result.Removed}); err != nil {
+				fmt.Fprintln(errOut, "IPsec Remove reconciliation succeeded but result could not be encoded")
+				return 1
+			}
+		} else {
+			fmt.Fprintf(out, "IPsec Remove reconciled for Link %s with committed exact ownership.\n", id)
 		}
 		return 0
 	}

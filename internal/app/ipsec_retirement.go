@@ -54,17 +54,22 @@ func (e *Engine) retireIPsecCredentialLocked(ctx context.Context, id domain.Link
 	if receipt.Retired {
 		return nil
 	}
-	implementation, registered := e.backends.Get(domain.BackendIPsec)
-	if !registered {
-		return fmt.Errorf("protected IPsec backend unavailable for exact key retirement")
+	var retire func(domain.LinkID, string) error
+	if e.ipsecRetirement != nil {
+		retire = e.ipsecRetirement.RetireMatching
+	} else if implementation, registered := e.backends.Get(domain.BackendIPsec); registered {
+		// Compatibility with injected Engine tests; production configures the
+		// same protected store independently of live IPsec runtime admission.
+		if backend, ok := implementation.(interface {
+			RetireCredential(domain.LinkID, string) error
+		}); ok {
+			retire = backend.RetireCredential
+		}
 	}
-	retire, ok := implementation.(interface {
-		RetireCredential(domain.LinkID, string) error
-	})
-	if !ok {
-		return fmt.Errorf("backend has no receipt-bound IPsec key retirement")
+	if retire == nil {
+		return fmt.Errorf("protected IPsec retirement store unavailable")
 	}
-	if err := retire.RetireCredential(id, receipt.PSKSHA256); err != nil {
+	if err := retire(id, receipt.PSKSHA256); err != nil {
 		return fmt.Errorf("IPsec key retirement unconfirmed; protected credential retained for exact reconciliation")
 	}
 	if err := e.store.Update(ctx, func(s *state.Snapshot) error {

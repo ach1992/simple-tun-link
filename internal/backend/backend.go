@@ -24,6 +24,9 @@ type Request struct {
 	// Backends use it to prove ownership before destructive repair/remove work;
 	// overlapping/conflicting identity is not by itself proof of ownership.
 	OwnedResources []domain.ResourceClaim
+	// Only the Engine's explicit, journal-verified IPsec Remove recovery
+	// may observe a partially unloaded daemon and continue scoped cleanup.
+	IPsecRemoveRecovery bool
 }
 
 // Observation is backend-owned observed host state. It is intentionally

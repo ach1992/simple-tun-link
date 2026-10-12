@@ -142,6 +142,16 @@ func run() error {
 		if err = call("terminate", q); err != nil {
 			return err
 		}
+	case "unload-conn":
+		q, _ := vici.MarshalMessage(map[string]any{"name": p.ConnectionName})
+		if err = call("unload-conn", q); err != nil {
+			return err
+		}
+	case "unload-shared":
+		q, _ := vici.MarshalMessage(map[string]any{"id": p.SecretName})
+		if err = call("unload-shared", q); err != nil {
+			return err
+		}
 	case "unload":
 		q, _ := vici.MarshalMessage(map[string]any{"name": p.ConnectionName})
 		if err = call("unload-conn", q); err != nil {

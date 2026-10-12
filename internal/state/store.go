@@ -43,6 +43,8 @@ type Snapshot struct {
 	PendingIPsec           []PendingIPsec          `json:"pending_ipsec,omitempty"`
 	IPsecVICIOperations    []IPsecVICIOperation    `json:"ipsec_vici_operations,omitempty"`
 	IPsecReapplyOperations []IPsecReapplyOperation `json:"ipsec_reapply_operations,omitempty"`
+	IPsecRemoveOperations  []IPsecRemoveOperation  `json:"ipsec_remove_operations,omitempty"`
+	IPsecXFRMOperations    []IPsecXFRMOperation    `json:"ipsec_xfrm_operations,omitempty"`
 	IPsecRemovalReceipts   []IPsecRemovalReceipt   `json:"ipsec_removal_receipts,omitempty"`
 	RemovalReceipts        []RemovalReceipt        `json:"removal_receipts,omitempty"`
 }
@@ -104,6 +106,12 @@ func (s *Snapshot) normalize() {
 	})
 	sort.Slice(s.IPsecReapplyOperations, func(i, j int) bool {
 		return s.IPsecReapplyOperations[i].Intent.ID < s.IPsecReapplyOperations[j].Intent.ID
+	})
+	sort.Slice(s.IPsecXFRMOperations, func(i, j int) bool {
+		return s.IPsecXFRMOperations[i].Intent.ID < s.IPsecXFRMOperations[j].Intent.ID
+	})
+	sort.Slice(s.IPsecRemoveOperations, func(i, j int) bool {
+		return s.IPsecRemoveOperations[i].Intent.ID < s.IPsecRemoveOperations[j].Intent.ID
 	})
 	sort.Slice(s.IPsecRemovalReceipts, func(i, j int) bool {
 		return s.IPsecRemovalReceipts[i].LinkID < s.IPsecRemovalReceipts[j].LinkID
@@ -234,7 +242,10 @@ func migrateSnapshot(snapshot Snapshot) (Snapshot, error) {
 		return snapshot, nil
 	case legacySchemaVersion:
 		if len(snapshot.PendingSenders) > 0 || len(snapshot.PendingIPsec) > 0 ||
-			len(snapshot.IPsecVICIOperations) > 0 || len(snapshot.IPsecReapplyOperations) > 0 || len(snapshot.RemovalReceipts) > 0 {
+			len(snapshot.IPsecVICIOperations) > 0 || len(snapshot.IPsecReapplyOperations) > 0 ||
+			len(snapshot.IPsecRemovalReceipts) > 0 || len(snapshot.IPsecRemoveOperations) > 0 ||
+			len(snapshot.IPsecXFRMOperations) > 0 ||
+			len(snapshot.RemovalReceipts) > 0 {
 			return Snapshot{}, fmt.Errorf("legacy state cannot contain backend lifecycle records")
 		}
 		for _, record := range snapshot.Links {
@@ -340,6 +351,12 @@ func validateSnapshot(snapshot Snapshot) error {
 		return err
 	}
 	if err := validateIPsecReapplyOperations(snapshot); err != nil {
+		return err
+	}
+	if err := validateIPsecRemoveOperations(snapshot); err != nil {
+		return err
+	}
+	if err := validateIPsecXFRMOperations(snapshot); err != nil {
 		return err
 	}
 	return validateIPsecRemovalReceipts(snapshot)

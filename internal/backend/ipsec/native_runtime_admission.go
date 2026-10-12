@@ -131,16 +131,71 @@ func (a NativeRuntimeAdmission) servicePID(ctx context.Context) (uint32, error) 
 	return uint32(n), nil
 }
 
+// StrongSwan is launched with root privileges and receives the IKE PSK.
+// Inode equality alone is insufficient: an unprivileged owner may replace
+// bytes inside an otherwise mode-0755 executable. Verify all components of
+// the executable's root-controlled path as well as its pinned file descriptor.
+func rootControlledExecutableMetadata(info os.FileInfo, directory bool) bool {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Uid != 0 || info.Mode().Perm()&0o022 != 0 ||
+		info.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	if directory {
+		return info.IsDir()
+	}
+	return info.Mode().IsRegular()
+}
+
+func verifyTrustedNativeExecutable(processExe, installedPath string) error {
+	if !filepath.IsAbs(installedPath) || filepath.Clean(installedPath) != installedPath {
+		return fmt.Errorf("native executable path invalid")
+	}
+	process, err := os.Stat(processExe)
+	if err != nil {
+		return fmt.Errorf("native executable process identity unavailable")
+	}
+	checkAncestors := func() error {
+		for parent := filepath.Dir(installedPath); ; parent = filepath.Dir(parent) {
+			info, statErr := os.Lstat(parent)
+			if statErr != nil || !rootControlledExecutableMetadata(info, true) {
+				return fmt.Errorf("native executable ancestry is not root-controlled")
+			}
+			if parent == "/" {
+				return nil
+			}
+		}
+	}
+	if err := checkAncestors(); err != nil {
+		return err
+	}
+	fd, err := unix.Open(installedPath, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("native executable cannot be pinned")
+	}
+	file := os.NewFile(uintptr(fd), "native-strongswan-executable")
+	defer file.Close()
+	installed, err := file.Stat()
+	if err != nil || !rootControlledExecutableMetadata(installed, false) || !os.SameFile(process, installed) {
+		return fmt.Errorf("native executable origin or root ownership unverified")
+	}
+	path, err := os.Lstat(installedPath)
+	if err != nil || !rootControlledExecutableMetadata(path, false) || !os.SameFile(path, installed) {
+		return fmt.Errorf("native executable path changed during attestation")
+	}
+	if err := checkAncestors(); err != nil {
+		return err
+	}
+	return nil
+}
+
 func verifyNativeProcess(pid uint32) error {
 	if pid < 2 {
 		return fmt.Errorf("missing native daemon PID")
 	}
 	base := fmt.Sprintf("/proc/%d", pid)
-	current, err := os.Stat(base + "/exe")
-	installed, err2 := os.Stat(nativeStrongSwanExecutable)
-	if err != nil || err2 != nil || !os.SameFile(current, installed) ||
-		installed.Mode().Perm()&0o022 != 0 {
-		return fmt.Errorf("native executable origin unverified")
+	if err := verifyTrustedNativeExecutable(base+"/exe", nativeStrongSwanExecutable); err != nil {
+		return err
 	}
 	gotNS, err := os.Readlink(base + "/ns/net")
 	selfNS, err2 := os.Readlink("/proc/self/ns/net")

@@ -3,12 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/ach1992/simple-tun-link/internal/pairing"
+	"net"
 	"net/netip"
 	"os"
 	"strings"
@@ -135,14 +137,62 @@ func TestIPsecCanonicalCLIRealIsolatedE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Explicit failpoints affect ONLY this disconnected Docker test binary.
+	// They interrupt XFRM creation at the actual kernel-to-alias boundaries.
+	switch op {
+	case "fault-index":
+		backendImpl.Index = func(string) (int, error) { return 0, fmt.Errorf("fixture index persistence interruption") }
+	case "fault-alias":
+		backendImpl.SetAlias = func(context.Context, int, string) error { return fmt.Errorf("fixture interruption before alias") }
+	case "fault-address":
+		backendImpl.AddAddr = func(context.Context, int, netip.Prefix) error { return fmt.Errorf("fixture interruption after alias") }
+	}
 	opts := &runtimeOptions{stateRoot: cliLabRoot + "/cli-state-" + side, backends: []backend.Backend{backendImpl},
 		probeRunner: runner}
 	l := fixtureLinkForCLI(t, side, suffix, encap)
+	if op == "inject-remove" {
+		if side != "a" {
+			t.Fatal("only fixture endpoint A may inject an isolated Remove checkpoint")
+		}
+		phase := os.Getenv("STL_IPSEC_FAULT_PHASE")
+		if phase != state.IPsecRemoveIssuingShared && phase != state.IPsecRemoveIssuingDevice {
+			t.Fatal("unsupported isolated Remove fault phase")
+		}
+		profile, err := ipsec.NewProfile(l)
+		if err != nil {
+			t.Fatal(err)
+		}
+		iface, err := net.InterfaceByName(profile.InterfaceName)
+		if err != nil || iface.Index <= 0 {
+			t.Fatal("original owned XFRM ifindex unavailable")
+		}
+		var nonce [16]byte
+		if _, err := rand.Read(nonce[:]); err != nil {
+			t.Fatal("cannot allocate fixture transaction")
+		}
+		store := state.NewFileStore(opts.stateRoot)
+		if err := store.Update(ctx, func(s *state.Snapshot) error {
+			committed, has := s.Find(l.ID)
+			if !has || committed.Desired != l || len(committed.OwnedResources) == 0 {
+				return fmt.Errorf("cannot simulate crash without committed exact Link")
+			}
+			if _, exists := s.FindIPsecRemoveOperation(l.ID); exists {
+				return fmt.Errorf("Remove checkpoint already exists")
+			}
+			s.IPsecRemoveOperations = append(s.IPsecRemoveOperations, state.IPsecRemoveOperation{
+				Intent: l, Nonce: hex.EncodeToString(nonce[:]), Phase: phase, IfIndex: iface.Index})
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("ISOLATED_DURABLE_REMOVE_INTERRUPTION=PASS phase=%s", phase)
+		return
+	}
 	var args []string
 	var input []byte
 	handoff := cliLabRoot + "/" + suffix + ".cli-handoff"
 	switch op {
-	case "create":
+	case "create", "fault-index", "fault-alias", "fault-address":
 		if side != "a" {
 			t.Fatal("only creator side A")
 		}
@@ -204,6 +254,18 @@ func TestIPsecCanonicalCLIRealIsolatedE2E(t *testing.T) {
 		args = []string{"link", "remove", string(l.ID), "--confirm", string(l.ID), "--json"}
 	case "retire":
 		args = []string{"link", "retire-ipsec", string(l.ID), "--confirm", string(l.ID), "--json"}
+	case "activate":
+		args = []string{"link", "activate-ipsec", string(l.ID), "--confirm", string(l.ID), "--json"}
+	case "reconcile-remove":
+		args = []string{"link", "reconcile-ipsec", string(l.ID), "--confirm", string(l.ID), "--json"}
+	case "reconcile-xfrm", "reconcile-xfrm-deny":
+		args = []string{"link", "reconcile-xfrm-ipsec", string(l.ID), "--confirm", string(l.ID), "--json"}
+	case "ensure-reject":
+		input, err = json.Marshal(map[string]any{"schema_version": 1, "link": l})
+		if err != nil {
+			t.Fatal(err)
+		}
+		args = []string{"link", "ensure", "--stdin", "--json"}
 	case "restore":
 		args = []string{"link", "restore", "--all"}
 	case "doctor":
@@ -213,6 +275,43 @@ func TestIPsecCanonicalCLIRealIsolatedE2E(t *testing.T) {
 	}
 	var out, errs bytes.Buffer
 	code := runWithRuntimeInput(args, bytes.NewReader(input), &out, &errs, opts)
+	if strings.HasPrefix(op, "fault-") {
+		if code == 0 {
+			t.Fatal("deliberately interrupted XFRM creation falsely succeeded")
+		}
+		journalState, loadErr := state.NewFileStore(opts.stateRoot).Load(ctx)
+		if loadErr != nil {
+			t.Fatal(loadErr)
+		}
+		journal, found := journalState.FindIPsecXFRMOperation(l.ID)
+		expectedPhase, expectedIndex := state.IPsecXFRMIndexed, true
+		if op == "fault-index" {
+			expectedPhase, expectedIndex = state.IPsecXFRMIssuingCreate, false
+		}
+		if op == "fault-address" {
+			expectedPhase = state.IPsecXFRMAliased
+		}
+		if !found || journal.Phase != expectedPhase || (journal.IfIndex > 0) != expectedIndex {
+			t.Fatalf("original XFRM ifindex/crash checkpoint lost: %+v", journal)
+		}
+		profile, _ := ipsec.NewProfile(l)
+		iface, err := net.InterfaceByName(profile.InterfaceName)
+		if err != nil || iface.Index <= 0 {
+			t.Fatal("real partially created kernel device missing")
+		}
+		if expectedIndex && iface.Index != journal.IfIndex {
+			t.Fatal("journal ifindex differs from original kernel device")
+		}
+		t.Logf("ISOLATED_XFRM_CRASH_CHECKPOINT=PASS case=%s phase=%s", op, expectedPhase)
+		return
+	}
+	if op == "reconcile-xfrm-deny" || op == "ensure-reject" {
+		if code == 0 {
+			t.Fatal("unsafe automatic retry/deletion succeeded despite interrupted journal")
+		}
+		t.Logf("ISOLATED_IPSEC_UNCERTAIN_EFFECT_FAIL_CLOSED=PASS op=%s", op)
+		return
+	}
 	if code != 0 {
 		// Outputs in this deliberately SENSITIVE execution are never logged
 		// in full on failure. Only exit status and fixed operation are safe.
@@ -251,7 +350,7 @@ func TestIPsecCanonicalCLIRealIsolatedE2E(t *testing.T) {
 			t.Fatal("injected admitted fixture should report admitted time-local status")
 		}
 	}
-	if op == "remove" || op == "retire" {
+	if op == "remove" || op == "retire" || op == "reconcile-remove" {
 		// Credential retirement is part of the returned success contract,
 		// not an optional background cleanup.
 		stored, err := ipsec.NewPSKStore(opts.stateRoot)

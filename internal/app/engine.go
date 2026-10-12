@@ -36,6 +36,9 @@ type Engine struct {
 	locks              Locker
 	restorePersistence RestorePersistence
 	restoreExecutable  string
+	ipsecRetirement    interface {
+		RetireMatching(domain.LinkID, string) error
+	}
 }
 
 type Result struct {
@@ -61,8 +64,27 @@ func New(backends *backend.Registry, store state.Store, locks Locker) (*Engine, 
 		}); ok {
 			admitted.SetPhaseJournal(e.advanceIPsecVICIPhase)
 		}
+		if operational, ok := impl.(interface {
+			SetRemoveJournal(func(context.Context, ipsec.Profile) (ipsec.RemovalCheckpoint, error), func(context.Context, ipsec.Profile, string, string) error)
+		}); ok {
+			operational.SetRemoveJournal(e.ipsecRemovalCheckpoint, e.advanceIPsecRemovePhase)
+		}
+		if operational, ok := impl.(interface {
+			SetDeviceJournal(func(context.Context, ipsec.Profile, string, string, int) error)
+		}); ok {
+			operational.SetDeviceJournal(e.advanceIPsecXFRMPhase)
+		}
 	}
 	return e, nil
+}
+
+// SetIPsecRetirementStore installs the local, protected credential backend for
+// post-Remove receipt-bound deletion, independent of running strongSwan.
+// Configure only during Engine assembly, before concurrent operations.
+func (e *Engine) SetIPsecRetirementStore(store interface {
+	RetireMatching(domain.LinkID, string) error
+}) {
+	e.ipsecRetirement = store
 }
 
 // SetMaintenanceGuard enables the shared install/Engine exclusion for managed
@@ -155,14 +177,14 @@ func (e *Engine) ensureWithProvision(ctx context.Context, desired domain.Link, r
 // between the confirmation check and destructive backend work. This is an
 // internal Engine operation, not a new machine CLI/API contract.
 func (e *Engine) RemoveIfUnchanged(ctx context.Context, expected domain.Link) (Result, error) {
-	return e.remove(ctx, expected.ID, &expected)
+	return e.remove(ctx, expected.ID, &expected, false)
 }
 
 func (e *Engine) Remove(ctx context.Context, id domain.LinkID) (Result, error) {
-	return e.remove(ctx, id, nil)
+	return e.remove(ctx, id, nil, false)
 }
 
-func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.Link) (out Result, operationErr error) {
+func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.Link, reconcileIPsec bool) (out Result, operationErr error) {
 	defer func() {
 		if operationErr != nil && stlerr.EvidenceOf(operationErr) == nil {
 			operationErr = stlerr.WithEvidence(operationErr, stlerr.OperationEvidence{
@@ -200,7 +222,21 @@ func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.
 			"saved Link changed since confirmed preview; no removal was attempted")
 	}
 	prior := record.Desired
-	result, err := e.executeLocked(ctx, backend.Request{Operation: backend.OperationRemove, Prior: &prior, Link: record.Desired}, record, "")
+	if prior.Backend == domain.BackendIPsec {
+		_, pending := snapshot.FindIPsecRemoveOperation(id)
+		if pending && !reconcileIPsec {
+			return Result{}, stlerr.New(stlerr.CodeConflict, "remove", string(id), "ipsec",
+				"interrupted IPsec Remove is journaled; use link reconcile-ipsec with exact confirmation")
+		}
+		if !pending && reconcileIPsec {
+			return Result{}, stlerr.New(stlerr.CodeConflict, "ipsec_reconcile_remove", string(id), "ipsec",
+				"no interrupted committed IPsec Remove transaction exists")
+		}
+	} else if reconcileIPsec {
+		return Result{}, stlerr.New(stlerr.CodeUnsupported, "ipsec_reconcile_remove", string(id), "ipsec", "not an IPsec Link")
+	}
+	result, err := e.executeLocked(ctx, backend.Request{Operation: backend.OperationRemove, Prior: &prior,
+		Link: record.Desired, IPsecRemoveRecovery: reconcileIPsec}, record, "")
 	if err != nil {
 		return result, err
 	}
@@ -404,6 +440,19 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		return Result{}, stlerr.Wrap(stlerr.CodeState, string(request.Operation), string(link.ID), string(link.Backend), "cannot reload local state", err)
 	}
 	if link.Backend == domain.BackendIPsec {
+		if _, previousXFRM := fresh.FindIPsecXFRMOperation(link.ID); previousXFRM {
+			return Result{}, stlerr.New(stlerr.CodeConflict, "ipsec_xfrm_reconcile", string(link.ID), "ipsec",
+				"unfinished XFRM creation requires explicit reconcile-xfrm-ipsec")
+		}
+		if _, removal := fresh.FindIPsecRemoveOperation(link.ID); removal {
+			if request.Operation != backend.OperationRemove || !request.IPsecRemoveRecovery {
+				return Result{}, stlerr.New(stlerr.CodeConflict, "ipsec_remove", string(link.ID), "ipsec",
+					"interrupted IPsec Remove requires explicit journal reconciliation")
+			}
+		} else if request.IPsecRemoveRecovery {
+			return Result{}, stlerr.New(stlerr.CodeConflict, "ipsec_remove", string(link.ID), "ipsec",
+				"durable IPsec Remove authorization vanished")
+		}
 		if _, priorTransaction := fresh.FindIPsecReapplyOperation(link.ID); priorTransaction {
 			return Result{}, stlerr.New(stlerr.CodeConflict, "ipsec_reconcile", string(link.ID), "ipsec",
 				"earlier IPsec reapply journal requires owner-verified reconciliation; no host Apply")
@@ -531,6 +580,81 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 				"cannot durably prepare recovery transaction; no backend Apply")
 		}
 	}
+	// Persist a per-Link XFRM creation journal before invoking the kernel.
+	// The device's original ifindex is later fsynced while still unaliased.
+	requiresIPsecDevice := false
+	if link.Backend == domain.BackendIPsec && request.Operation == backend.OperationEnsure {
+		if currentPlan, ok := plan.(interface{ NeedsIPsecXFRMCreate() bool }); ok {
+			requiresIPsecDevice = currentPlan.NeedsIPsecXFRMCreate()
+		}
+	}
+	if requiresIPsecDevice {
+		var nonce [16]byte
+		if _, err := rand.Read(nonce[:]); err != nil {
+			return Result{}, stlerr.New(stlerr.CodeState, "ipsec_xfrm", string(link.ID), "ipsec",
+				"cannot allocate durable XFRM creation identity")
+		}
+		if err := e.store.Update(ctx, func(s *state.Snapshot) error {
+			if _, exists := s.FindIPsecXFRMOperation(link.ID); exists {
+				return fmt.Errorf("earlier XFRM creation is not reconciled")
+			}
+			if pending, exists := s.FindPendingIPsec(link.ID); exists {
+				vici, ready := s.FindIPsecVICIOperation(link.ID)
+				if pending.Link != link || !ready || vici.Phase != state.IPsecVICIPrepared {
+					return fmt.Errorf("new XFRM device lacks protected pending transaction")
+				}
+			} else {
+				committed, hasLink := s.Find(link.ID)
+				vici, ready := s.FindIPsecReapplyOperation(link.ID)
+				if !hasLink || committed.Desired != link || !ready ||
+					vici.Intent != link || vici.Phase != state.IPsecVICIPrepared {
+					return fmt.Errorf("restored XFRM device lacks committed owner journal")
+				}
+			}
+			s.IPsecXFRMOperations = append(s.IPsecXFRMOperations, state.IPsecXFRMOperation{
+				Intent: link, Nonce: hex.EncodeToString(nonce[:]), Phase: state.IPsecXFRMPrepared})
+			return nil
+		}); err != nil {
+			return Result{}, stlerr.New(stlerr.CodeState, "ipsec_xfrm", string(link.ID), "ipsec",
+				"XFRM pre-effect intent not durably published; no device creation attempted")
+		}
+	}
+	// Committed IPsec Remove must be durable BEFORE the first VICI/SA/kernel
+	// teardown effect. An uncertain phase cannot be automatically replayed
+	// or compensated by reloading the shared PSK.
+	if request.Operation == backend.OperationRemove && link.Backend == domain.BackendIPsec {
+		if _, operational := impl.(*ipsec.OperationalBackend); operational && !request.IPsecRemoveRecovery {
+			profile, profileErr := ipsec.NewProfile(link)
+			if profileErr != nil {
+				return Result{}, stlerr.New(stlerr.CodeInvalid, "ipsec_remove", string(link.ID), "ipsec", "invalid committed IPsec removal identity")
+			}
+			originalIndex := 0
+			if o, ok := observed.(interface{ RemovalIfIndex() int }); ok {
+				originalIndex = o.RemovalIfIndex()
+			}
+			var nonce [16]byte
+			if _, err := rand.Read(nonce[:]); err != nil {
+				return Result{}, stlerr.New(stlerr.CodeState, "ipsec_remove", string(link.ID), "ipsec",
+					"cannot create protected IPsec Remove transaction identity")
+			}
+			if err := e.store.Update(ctx, func(s *state.Snapshot) error {
+				rec, present := s.Find(link.ID)
+				if !present || rec.Desired != link || !ipsecClaimsRecordedEngine(rec.OwnedResources, profile) {
+					return fmt.Errorf("IPsec committed owner identity changed")
+				}
+				if _, collision := s.FindIPsecRemoveOperation(link.ID); collision {
+					return fmt.Errorf("IPsec Remove transaction already exists")
+				}
+				s.IPsecRemoveOperations = append(s.IPsecRemoveOperations, state.IPsecRemoveOperation{
+					Intent: link, Nonce: hex.EncodeToString(nonce[:]), Phase: state.IPsecRemovePrepared,
+					IfIndex: originalIndex})
+				return nil
+			}); err != nil {
+				return Result{}, stlerr.New(stlerr.CodeState, "ipsec_remove", string(link.ID), "ipsec",
+					"cannot durably prepare IPsec Remove before host effect")
+			}
+		}
+	}
 	var undo backend.Rollback
 	if changed {
 		evidence.Stage = "apply"
@@ -581,6 +705,13 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 	commitErr := e.store.Update(ctx, func(snapshot *state.Snapshot) error {
 		switch request.Operation {
 		case backend.OperationEnsure:
+			if requiresIPsecDevice {
+				device, exists := snapshot.FindIPsecXFRMOperation(link.ID)
+				if !exists || device.Intent != link || device.Phase != state.IPsecXFRMConfigured ||
+					!snapshot.DeleteIPsecXFRMOperation(link.ID) {
+					return fmt.Errorf("IPsec XFRM original ifindex/configuration not durably verified")
+				}
+			}
 			if reapplyIPsec {
 				op, exists := snapshot.FindIPsecReapplyOperation(link.ID)
 				expectedPhase := state.IPsecVICIPrepared
@@ -633,6 +764,13 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 			}
 			snapshot.Upsert(state.LinkRecord{Desired: link, OwnedResources: resources})
 		case backend.OperationRemove:
+			if _, operational := impl.(*ipsec.OperationalBackend); operational && link.Backend == domain.BackendIPsec {
+				journal, present := snapshot.FindIPsecRemoveOperation(link.ID)
+				if !present || journal.Intent != link || journal.Phase != state.IPsecRemoveDeviceAbsent ||
+					!snapshot.DeleteIPsecRemoveOperation(link.ID) {
+					return fmt.Errorf("IPsec Remove still requires durable owner-scoped reconciliation")
+				}
+			}
 			if !snapshot.Delete(link.ID) {
 				return state.ErrNotFound
 			}

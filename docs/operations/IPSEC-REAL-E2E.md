@@ -188,3 +188,94 @@ so use only an explicitly authorized isolated test server.
    reconciliation; never delete arbitrary observed state or auto-rekey.
 5. Deployment, merge and public release still require the project's Owner
    gates and one independent, author-separated high-assurance review.
+
+## Issue #7 high-assurance R1–R5 crash/reconciliation acceptance (2026-10-12)
+
+The operational runtime now checks the native `/usr/sbin/charon-systemd`
+executable is a root-owned regular inode with root-controlled, non-writable
+ancestry before trusting its PID, systemd service and private VICI socket.
+The isolated native systemd positive test verifies this admission on genuine
+Ubuntu strongSwan; ordinary unprivileged tests reject a non-root-owned 0755
+binary and a writable ancestor.
+
+A durable per-Link `ipsec_xfrm_operations` record is written BEFORE the
+kernel `ip link add`, then advances through `issuing-create`, `indexed`,
+`aliased`, `configured`. The original kernel ifindex is fsynced
+**before** the non-atomic alias operation. If the process crashes after the
+kernel created a device but before the ifindex receipt was persisted, its
+identity remains **unknown**; STL refuses automatic deletion/adoption by
+name or `if_id`. `reconcile-xfrm-ipsec <link-id> --confirm <link-id>
+[--json]` is explicit, exact-owner and allowed only before VICI effectful
+issuance; it aborts only the original journal-bound kernel object or safely
+clears an undeniably vacant pre-effect state. Never turn unknown identity
+into a made-up ifindex.
+
+A durable per-Link `ipsec_remove_operations` record precedes the first
+SA/VICI/kernel Remove mutation and covers exact ordered phases: SA
+termination, connection unload, credential unload, ifindex-pinned XFRM
+deletion, canonical Link+journal commit and receipt-bound post-Remove PSK
+retirement. Interrupted Remove blocks ordinary Ensure/Remove and must
+be explicitly resumed by `reconcile-ipsec <link-id> --confirm <link-id>
+[--json]` under the same Engine locks, exact committed resource identity
+and fresh attested VICI/kernel readbacks. Unknown outcomes retain their
+journal; no wildcard cleanup or automatic credential reload is authorized.
+`retire-ipsec` operates from the protected post-Remove receipt even
+when strongSwan is STOPPED or cannot pass runtime admission.
+
+The current state file schema remains **v2** (ordinary CLI JSON remains
+`schema_version:1`). Older v2 binaries that reject unknown lifecycle
+members cannot read a journal-bearing new v2 state: **upgrade-only** during
+an unresolved journal; downgrade/rewrite is not a recovery method. Schema
+v1 files containing any lifecycle-only members, including
+`ipsec_removal_receipts`, are rejected. Existing legitimate schema-v1
+GRE/IPIP Link snapshots still migrate.
+
+### Reproduce real isolated crash/fault matrix
+
+From the same source checkout and approved disposable Docker test server,
+compile and mount the two exact-source Go binaries as in the preceding
+"Reproduction: disconnected namespace E2E" section. The same bounded
+`scripts/e2e/ipsec-two-peer-netns.sh` supports additional
+`STL_IPSEC_DRIVER=cli` scenarios, individually in **fresh**
+`--rm --network none` Docker containers with the original read-only
+`/proof/run.sh` and matching read-only test binaries:
+
+- `STL_IPSEC_CASE=xfrm-index`: interruption after actual Linux XFRM
+  create but before original ifindex publication; the resumed process
+  rejects both automatic Ensure and unsafe name-based reconciliation;
+  the ambiguous device remains untouched within the disposable fixture
+- `STL_IPSEC_CASE=xfrm-alias`: after persisted original ifindex before
+  alias; new process aborts only the journal-owned device, reactivates
+  original protected PSK, proves fresh IKEv2/ESP traffic and scoped remove
+- `STL_IPSEC_CASE=xfrm-address`: after alias before address/up; same
+  exact-owner recovery and real bilateral traffic
+- `STL_IPSEC_CASE=xfrm-foreign`: after original ifindex journaling,
+  the test deliberately replaces the XFRM interface in its isolated
+  namespace with a fresh foreign device of the SAME name and `if_id`.
+  Reconciliation must refuse to delete/adopt it, and the test confirms
+  the replacement remains intact before fixture-only cleanup
+- `STL_IPSEC_CASE=remove-shared`: test-only simulated interruption with
+  a genuine removed VICI connection but still-present shared PSK
+- `STL_IPSEC_CASE=remove-shared-absent`: same indeterminate unload, while
+  the secret was actually already unloaded
+- `STL_IPSEC_CASE=remove-device`: daemon objects absent but original
+  journal-bound XFRM device still present
+- `STL_IPSEC_CASE=remove-device-absent`: kernel deleted the exact owned
+  interface after its original ifindex was durably journaled, before
+  the resumed Remove command
+
+All four Remove cases resume with a **new CLI process**, prove that an
+ordinary Ensure is blocked, finish exact scoped cleanup and protected PSK
+retirement, and transfer packets over a simultaneously negotiated,
+unaffected sibling Link. Fault injection and root/kernel writes occur
+**only in explicitly disposable containers**. The script deliberately
+does not pass when unauthorized privilege, Docker marker or network
+isolation is missing.
+
+Targeted state tests also recreate `FileStore` after each checkpoint,
+verify persisted phases/ifindex and reject orphaned, duplicate or tampered
+journals. The original native PID1-systemd ESP/NAT-T acceptance above
+must still pass on the revised exact source tree. These simulated
+interruption tests are bounded reproducible fault injections, **not**
+proof of actual physical power loss, external NAT router traversal or
+production package/upgrade safety; Issue #12 retains release-level gates.

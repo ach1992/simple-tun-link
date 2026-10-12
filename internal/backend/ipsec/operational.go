@@ -42,13 +42,33 @@ type OperationalOptions struct {
 // only public underlay addresses or an IPsec-looking kernel interface.
 type OperationalBackend struct {
 	OperationalOptions
-	phaseJournal func(context.Context, Profile, string, string) error
+	phaseJournal  func(context.Context, Profile, string, string) error
+	removeJournal func(context.Context, Profile) (RemovalCheckpoint, error)
+	advanceRemove func(context.Context, Profile, string, string) error
+	advanceDevice func(context.Context, Profile, string, string, int) error
 }
 
 // SetPhaseJournal binds an Engine-owned durable phase transition to the
 // backend. It must be set once at runtime assembly before concurrent calls.
 func (b *OperationalBackend) SetPhaseJournal(fn func(context.Context, Profile, string, string) error) {
 	b.phaseJournal = fn
+}
+
+// RemovalCheckpoint is read from durable, Engine-owned committed Link state;
+// it must never be synthesized by the backend from a matching VICI name.
+type RemovalCheckpoint struct {
+	Phase   string
+	IfIndex int
+}
+
+func (b *OperationalBackend) SetRemoveJournal(load func(context.Context, Profile) (RemovalCheckpoint, error), advance func(context.Context, Profile, string, string) error) {
+	b.removeJournal, b.advanceRemove = load, advance
+}
+
+// SetDeviceJournal binds ifindex evidence before the non-atomic Linux alias
+// step; it cannot authorize deleting a same-name or same-if_id foreign link.
+func (b *OperationalBackend) SetDeviceJournal(advance func(context.Context, Profile, string, string, int) error) {
+	b.advanceDevice = advance
 }
 
 func NewOperationalBackend(opts OperationalOptions) (*OperationalBackend, error) {
@@ -140,6 +160,8 @@ type operationalObservation struct {
 	Shared     bool
 }
 
+func (o operationalObservation) RemovalIfIndex() int { return o.Iface.Index }
+
 func (o operationalObservation) ObservedResources() []domain.ResourceClaim {
 	if !o.Iface.Exists {
 		return nil
@@ -155,8 +177,9 @@ type operationalPlan struct {
 	Remove  bool
 }
 
-func (p operationalPlan) Empty() bool              { return !p.Create && !p.Load && !p.Remove }
-func (p operationalPlan) NeedsIPsecVICILoad() bool { return p.Load }
+func (p operationalPlan) Empty() bool                { return !p.Create && !p.Load && !p.Remove }
+func (p operationalPlan) NeedsIPsecVICILoad() bool   { return p.Load }
+func (p operationalPlan) NeedsIPsecXFRMCreate() bool { return p.Create }
 
 func (p operationalPlan) Resources() []domain.ResourceClaim {
 	return append([]domain.ResourceClaim(nil), p.Claims...)
@@ -242,10 +265,12 @@ func (b *OperationalBackend) Plan(ctx context.Context, req core.Request, observe
 		if o.Iface.Exists && !o.Iface.matches(o.Profile) {
 			return nil, fmt.Errorf("refusing removal of unowned IPsec interface")
 		}
-		if o.Connection != o.Shared {
-			return nil, fmt.Errorf("partial VICI state cannot be safely removed")
+		if o.Connection != o.Shared && !req.IPsecRemoveRecovery {
+			return nil, fmt.Errorf("partial VICI state requires explicit journal-bound reconcile-ipsec")
 		}
-		p.Remove = o.Iface.Exists || o.Connection
+		// A committed Link always requires a durable finalization transaction,
+		// even if the daemon already lost all objects after an interruption.
+		p.Remove = true
 	default:
 		return nil, fmt.Errorf("unsupported IPsec operation")
 	}
@@ -381,15 +406,14 @@ func (b *OperationalBackend) Connect(ctx context.Context, link domain.Link, owne
 
 func (b *OperationalBackend) applyEnsure(ctx context.Context, p operationalPlan) (core.Rollback, error) {
 	profile := p.Profile
-	progress := ipsecProgress{}
-	undo := func(undoCtx context.Context) error {
-		return b.rollbackCreation(undoCtx, profile, progress)
+	// Durable VICI/XFRM transactions forbid blind rollback of unknown daemon
+	// writes or pre-alias kernel effects; recovery is explicit and scoped.
+	undo := func(context.Context) error {
+		return fmt.Errorf("IPsec issuing journal requires explicit owner-scoped reconciliation")
 	}
 	if p.Create {
-		var err error
-		progress, err = b.createDevice(ctx, profile)
-		if err != nil {
-			return undo, err
+		if _, err := b.createDevice(ctx, profile); err != nil {
+			return nil, err
 		}
 	}
 	if p.Load {
@@ -397,15 +421,15 @@ func (b *OperationalBackend) applyEnsure(ctx context.Context, p operationalPlan)
 		// the daemon names now appear vacant. Every potentially sensitive
 		// effect has an adjacent durable, Engine-owned issuing phase.
 		if err := b.authorize(ctx); err != nil {
-			return undo, err
+			return nil, err
 		}
 		before, err := b.Writer.Inspect(ctx, profile)
 		if err != nil || before.ConnectionNamePresent || before.SecretNamePresent {
-			return undo, fmt.Errorf("scoped VICI occupancy changed; refusing replacement")
+			return nil, fmt.Errorf("scoped VICI occupancy changed; refusing replacement")
 		}
 		key, err := b.Keys.Load(profile.Link.ID)
 		if err != nil {
-			return undo, fmt.Errorf("protected IPsec PSK unavailable")
+			return nil, fmt.Errorf("protected IPsec PSK unavailable")
 		}
 		defer key.Zeroize()
 		if b.phaseJournal == nil {
@@ -417,7 +441,6 @@ func (b *OperationalBackend) applyEnsure(ctx context.Context, p operationalPlan)
 		if err = b.Writer.LoadShared(ctx, profile, &key); err != nil {
 			return nil, fmt.Errorf("IPsec key load uncertain; preserve resources for reconciliation")
 		}
-		progress.Shared = true
 		if err = b.phaseJournal(ctx, profile, "issuing-shared", "shared-observed"); err != nil {
 			return nil, fmt.Errorf("cannot durably observe IPsec shared credential")
 		}
@@ -427,7 +450,6 @@ func (b *OperationalBackend) applyEnsure(ctx context.Context, p operationalPlan)
 		if err = b.Writer.LoadConnection(ctx, profile); err != nil {
 			return nil, fmt.Errorf("IPsec connection load uncertain; preserve resources for reconciliation")
 		}
-		progress.Connection = true
 		if err = b.phaseJournal(ctx, profile, "issuing-connection", "connection-observed"); err != nil {
 			return nil, fmt.Errorf("cannot durably observe created IPsec connection")
 		}
@@ -436,72 +458,7 @@ func (b *OperationalBackend) applyEnsure(ctx context.Context, p operationalPlan)
 }
 
 func (b *OperationalBackend) applyRemove(ctx context.Context, p operationalPlan) (core.Rollback, error) {
-	profile := p.Profile
-	progress := ipsecProgress{}
-	// Once any VICI mutation is uncertain, do not claim to have reversed it.
-	if p.Remove {
-		current, err := b.Inspect(ctx, profile.Link)
-		if err != nil {
-			return nil, err
-		}
-		o := current.(operationalObservation)
-		if o.Connection {
-			active, saErr := b.hasIPsecSA(ctx, profile)
-			if saErr != nil {
-				return nil, fmt.Errorf("cannot inspect owned IPsec SA before removal")
-			}
-			if active {
-				if err = b.Writer.Terminate(ctx, profile); err != nil {
-					// An SA may already have been removed by the peer; explicit
-					// reconciliation is safer than a wildcard termination.
-					return nil, fmt.Errorf("scoped IPsec termination uncertain")
-				}
-			}
-			if err = b.Writer.UnloadConnection(ctx, profile); err != nil {
-				return nil, fmt.Errorf("IPsec unload connection uncertain")
-			}
-			progress.Connection = true
-			if err = b.Writer.UnloadShared(ctx, profile); err != nil {
-				return nil, fmt.Errorf("IPsec unload key uncertain")
-			}
-			progress.Shared = true
-		}
-		if o.Iface.Exists {
-			fresh, err := b.inspectDevice(ctx, profile)
-			if err != nil || !fresh.matches(profile) || fresh.Index != o.Iface.Index {
-				return nil, fmt.Errorf("IPsec interface ownership changed before deletion")
-			}
-			if err = b.Delete(ctx, fresh.Index); err != nil {
-				return nil, fmt.Errorf("IPsec owned interface delete unconfirmed")
-			}
-			progress.Deleted = true
-		}
-	}
-	undo := func(undoCtx context.Context) error {
-		if progress.Deleted {
-			_, err := b.createDevice(undoCtx, profile)
-			if err != nil {
-				return err
-			}
-		}
-		if progress.Shared {
-			key, err := b.Keys.Load(profile.Link.ID)
-			if err != nil {
-				return fmt.Errorf("protected rollback PSK unavailable")
-			}
-			defer key.Zeroize()
-			if err = b.Writer.LoadShared(undoCtx, profile, &key); err != nil {
-				return err
-			}
-		}
-		if progress.Connection {
-			if err := b.Writer.LoadConnection(undoCtx, profile); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	return undo, nil
+	return b.applyJournalledRemove(ctx, p)
 }
 
 type ipsecProgress struct {
@@ -512,6 +469,9 @@ type ipsecProgress struct {
 
 func (b *OperationalBackend) createDevice(ctx context.Context, p Profile) (ipsecProgress, error) {
 	progress := ipsecProgress{}
+	if b.advanceDevice == nil {
+		return progress, fmt.Errorf("durable XFRM creation journal unavailable")
+	}
 	route, err := b.Routes.Resolve(ctx, p.Link.Underlay.Peer)
 	if err != nil || route.Source != p.Link.Underlay.Local || route.Device == "" {
 		return progress, fmt.Errorf("IPsec route changed before XFRM creation")
@@ -521,6 +481,12 @@ func (b *OperationalBackend) createDevice(ctx context.Context, p Profile) (ipsec
 	}
 	if err = b.authorize(ctx); err != nil {
 		return progress, err
+	}
+	// Journal issuing-create BEFORE the kernel may allocate an ifindex. If a
+	// crash occurs before the returned ifindex can be fsynced, the identity
+	// remains unknown and must never be adopted/deleted by name alone.
+	if err = b.advanceDevice(ctx, p, "prepared", "issuing-create", 0); err != nil {
+		return progress, fmt.Errorf("cannot journal XFRM create before kernel effect")
 	}
 	_, err = b.Runner.RunBounded(ctx, CaptureLimits{Stdout: 4096, Stderr: 1024},
 		b.IPBinary, "link", "add", "name", p.InterfaceName, "type", "xfrm",
@@ -538,6 +504,11 @@ func (b *OperationalBackend) createDevice(ctx context.Context, p Profile) (ipsec
 	if err != nil || !observed.Exists || observed.Index != idx || observed.ID != p.InterfaceID || observed.Alias != "" {
 		return progress, fmt.Errorf("XFRM creation identity uncertain")
 	}
+	// This durable identity is the sole authority to recover the unaliased
+	// device after a process crash. It must precede the separate alias call.
+	if err = b.advanceDevice(ctx, p, "issuing-create", "indexed", idx); err != nil {
+		return progress, fmt.Errorf("XFRM original ifindex was not durably published")
+	}
 	tag, _ := domain.OwnerTag(p.Link.ID)
 	if err = b.SetAlias(ctx, idx, tag); err != nil {
 		return progress, fmt.Errorf("cannot mark XFRM device owner")
@@ -545,6 +516,9 @@ func (b *OperationalBackend) createDevice(ctx context.Context, p Profile) (ipsec
 	observed, err = b.inspectDevice(ctx, p)
 	if err != nil || observed.Index != idx || observed.Alias != tag || observed.ID != p.InterfaceID {
 		return progress, fmt.Errorf("XFRM ownership marking incomplete")
+	}
+	if err = b.advanceDevice(ctx, p, "indexed", "aliased", idx); err != nil {
+		return progress, fmt.Errorf("XFRM owner alias journal unconfirmed")
 	}
 	if err = b.AddAddr(ctx, idx, p.Link.Addresses.Local); err != nil {
 		return progress, fmt.Errorf("cannot assign IPsec Link Address")
@@ -555,6 +529,9 @@ func (b *OperationalBackend) createDevice(ctx context.Context, p Profile) (ipsec
 	observed, err = b.inspectDevice(ctx, p)
 	if err != nil || !observed.matches(p) || observed.Index != idx {
 		return progress, fmt.Errorf("created IPsec XFRM device differs from exact intent")
+	}
+	if err = b.advanceDevice(ctx, p, "aliased", "configured", idx); err != nil {
+		return progress, fmt.Errorf("XFRM configured journal unconfirmed")
 	}
 	return progress, nil
 }

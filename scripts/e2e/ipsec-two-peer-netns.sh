@@ -13,7 +13,7 @@ if [ "$STL_E2E_DISPOSABLE_HOST" != approved ] ||
   echo "ERROR: disconnected disposable container with explicit authorization required" >&2
   exit 2
 fi
-case "$STL_IPSEC_CASE" in single|multi|mismatch|conflict|restart|foreign|recover) ;; *) echo "invalid lab case" >&2; exit 2 ;; esac
+case "$STL_IPSEC_CASE" in single|multi|mismatch|conflict|restart|foreign|recover|xfrm-index|xfrm-alias|xfrm-address|xfrm-foreign|remove-shared|remove-shared-absent|remove-device|remove-device-absent) ;; *) echo "invalid lab case" >&2; exit 2 ;; esac
 case "$STL_IPSEC_ENCAP" in esp|nat-t) ;; *) echo "invalid encapsulation" >&2; exit 2 ;; esac
 case "$STL_IPSEC_DRIVER" in vici|engine|cli) ;; *) echo "invalid lab driver" >&2; exit 2 ;; esac
 
@@ -249,6 +249,58 @@ if [ "$STL_IPSEC_CASE" = foreign ]; then
   exit 0
 fi
 
+# Faults run ONLY through canonical STL CLI in fresh, disconnected disposable
+# containers. Each CLI call starts a new Go process and loads the fsynced state.
+case "$STL_IPSEC_CASE" in
+ xfrm-index|xfrm-alias|xfrm-address|xfrm-foreign)
+   [ "$STL_IPSEC_DRIVER" = cli ] || { echo "XFRM crash proof requires CLI"; exit 2; }
+   case "$STL_IPSEC_CASE" in
+     xfrm-index) cli_op fault-index a a ;;
+     xfrm-alias) cli_op fault-alias a a ;;
+     xfrm-address) cli_op fault-address a a ;;
+     xfrm-foreign) cli_op fault-alias a a ;;
+   esac
+   cli_op ensure-reject a a
+   if [ "$STL_IPSEC_CASE" = xfrm-foreign ]; then
+     # A replacement with the exact same name/if_id must not inherit the
+     # original durable ifindex's deletion authority.
+     ip -n stl-ipsec-a link delete "$(link_iface a)"
+     id_hex=$(printf '%032s' a | tr ' ' a)
+     ifid=$(printf 'stl/ipsec/xfrm/v1/%s' "$id_hex" | sha256sum | cut -c1-8)
+     ifid=$((16#$ifid))
+     ip -n stl-ipsec-a link add "$(link_iface a)" type xfrm dev v-stl-a if_id "$ifid"
+     cli_op reconcile-xfrm-deny a a
+     ip -n stl-ipsec-a link show "$(link_iface a)" >/dev/null
+     # The replacement is disposable-fixture-owned, not STL-owned. Remove
+     # only the known test-created interface before container auto-cleanup.
+     ip -n stl-ipsec-a link delete "$(link_iface a)"
+     echo "REAL_IPSEC_XFRM_FOREIGN_REPLACEMENT_PRESERVED=PASS"
+   elif [ "$STL_IPSEC_CASE" = xfrm-index ]; then
+     # The kernel allocated the interface, but no original ifindex was
+     # durably recorded. NEVER grant name/if_id-only deletion authority.
+     cli_op reconcile-xfrm-deny a a
+     ip -n stl-ipsec-a link show "$(link_iface a)" >/dev/null
+     echo "REAL_IPSEC_XFRM_UNINDEXED_FOREIGN_SAFE=PASS"
+   else
+     cli_op reconcile-xfrm a a
+     if ip -n stl-ipsec-a link show "$(link_iface a)" >/dev/null 2>&1; then
+       echo "ERROR: journalled original device survived safe abort" >&2; exit 1
+     fi
+     cli_op activate a a
+     cli_op import b a
+     assert_no_plaintext_path a
+     initiate_link a
+     ping_link a
+     check_sas 2
+     remove_link a
+     check_sas 0
+     echo "REAL_IPSEC_XFRM_JOURNAL_RESTART_RECOVERY=PASS phase=$STL_IPSEC_CASE"
+   fi
+   echo "REAL_IPSEC_E2E=PASS case=$STL_IPSEC_CASE encapsulation=$STL_IPSEC_ENCAP"
+   exit 0
+   ;;
+esac
+
 prepare_link a
 assert_no_plaintext_path a
 initiate_link a
@@ -258,6 +310,47 @@ check_natt
 reapply_link a
 ping_link a
 case "$STL_IPSEC_CASE" in
+  remove-shared|remove-shared-absent|remove-device|remove-device-absent)
+    [ "$STL_IPSEC_DRIVER" = cli ] || { echo "Remove crash proof requires CLI"; exit 2; }
+    # Keep a simultaneous healthy same-underlay sibling while tearing down
+    # only the original Link's scoped daemon objects.
+    prepare_link b
+    initiate_link b
+    ping_link b
+    check_sas 4
+    vici_op terminate a a
+    case "$STL_IPSEC_CASE" in
+      remove-shared|remove-shared-absent)
+        vici_op unload-conn a a
+        if [ "$STL_IPSEC_CASE" = remove-shared-absent ]; then
+          vici_op unload-shared a a
+        fi
+        STL_IPSEC_FAULT_PHASE=issuing-unload-shared cli_op inject-remove a a
+        ;;
+      remove-device|remove-device-absent)
+        vici_op unload a a
+        STL_IPSEC_FAULT_PHASE=issuing-device-delete cli_op inject-remove a a
+        if [ "$STL_IPSEC_CASE" = remove-device-absent ]; then
+          # The original ifindex was saved BEFORE the disconnected fixture
+          # simulated an interrupted kernel delete.
+          ip -n stl-ipsec-a link delete "$(link_iface a)"
+        fi
+        ;;
+    esac
+    cli_op ensure-reject a a
+    cli_op reconcile-remove a a
+    vici_op assert-absent a a
+    if ip -n stl-ipsec-a link show "$(link_iface a)" >/dev/null 2>&1; then
+      echo "ERROR: reconciled original XFRM device survived Remove" >&2; exit 1
+    fi
+    check_sas 2
+    ping_link b
+    cli_op remove b a
+    vici_op assert-absent b a
+    remove_link b
+    check_sas 0
+    echo "REAL_IPSEC_REMOVE_JOURNAL_RESTART_RECOVERY=PASS phase=$STL_IPSEC_CASE"
+    ;;
   single)
     remove_link a
     check_sas 0
