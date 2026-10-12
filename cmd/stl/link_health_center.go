@@ -81,12 +81,36 @@ func parseHealthCenterArgs(args []string) (jsonOutput bool, timeout time.Duratio
 	return seenJSON, timeout, true
 }
 
+// healthCenterServices is a narrow deterministic test seam around the three
+// fallible stages. Production uses the real read-only state/backend/probe
+// implementations; no alternative health algorithm or mutable adapter exists.
+type healthCenterServices struct {
+	load    func(context.Context) (state.Snapshot, error)
+	prepare func(context.Context) (*runtimeOptions, error)
+	observe func(context.Context, domain.Link, runtimeOptions) (linkDiagnostic, error)
+}
+
 func linkDiagnoseAllCommand(args []string, stdout, stderr io.Writer, options *runtimeOptions) int {
+	return linkDiagnoseAllWithServices(args, stdout, stderr, options, healthCenterServices{})
+}
+
+func linkDiagnoseAllWithServices(args []string, stdout, stderr io.Writer, options *runtimeOptions, services healthCenterServices) int {
 	jsonOutput := slices.Contains(args, "--json")
 	_, timeout, valid := parseHealthCenterArgs(args)
 	if !valid {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, "link_diagnose_all",
 			"usage: stl link diagnose --all [--timeout <duration>] [--json]")
+	}
+	// The operator's total budget and signal cancellation begin BEFORE
+	// loading inventory or preparing the diagnostic runtime. No probe gets
+	// a fresh unrelated timeout that could outlive this parent deadline.
+	baseCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	ctx := baseCtx
+	if timeout != 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(baseCtx, timeout)
+		defer cancel()
 	}
 	root := state.DefaultRoot
 	if options != nil {
@@ -99,7 +123,22 @@ func linkDiagnoseAllCommand(args []string, stdout, stderr io.Writer, options *ru
 
 	// One authoritative, time-local state snapshot: Links created/removed
 	// concurrently are not implicitly adopted or merged into this inventory.
-	snapshot, err := state.NewFileStore(root).Load(context.Background())
+	if services.load == nil {
+		services.load = state.NewFileStore(root).Load
+	}
+	snapshot, err := services.load(ctx)
+	if err != nil && (ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		// No verified inventory means there is no honest batch count or set
+		// of unprocessed Link IDs. Return a typed v1 error instead of
+		// fabricating an empty/healthy inventory. If the state read DID
+		// succeed after cancellation, retain the actual inventory and
+		// render its entire membership as interrupted/unknown below.
+		public := stlerr.New(stlerr.CodeInspect, "link_diagnose_all", "", "",
+			"Link inventory was not verified before the diagnostic budget expired or the request was interrupted")
+		public.ReasonCode = "diagnostic_interrupted"
+		public.NextStep = "Retry read-only all-Link diagnosis with a sufficient --timeout; no Link health was established."
+		return readCommandPublicError(stdout, stderr, jsonOutput, public)
+	}
 	if err != nil {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeState, "link_diagnose_all",
 			"cannot read persisted Link inventory")
@@ -116,22 +155,33 @@ func linkDiagnoseAllCommand(args []string, stdout, stderr io.Writer, options *ru
 
 	// Initialization errors are not silently treated as healthy/vacant.
 	// A global lack of tools does not discard the per-Link inventory.
+	// Production initialization is synchronous and cannot be interrupted
+	// mid-filesystem syscall, but cancellation is checked before/after it
+	// and its elapsed time counts against the shared batch deadline.
 	runtimeAvailable := true
-	if options == nil && len(links) > 0 {
-		options, err = productionRuntimeOptions()
-		runtimeAvailable = err == nil
+	if options == nil && len(links) > 0 && ctx.Err() == nil {
+		if services.prepare == nil {
+			services.prepare = func(ctx context.Context) (*runtimeOptions, error) {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				runtime, err := productionRuntimeOptions()
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				return runtime, err
+			}
+		}
+		options, err = services.prepare(ctx)
+		runtimeAvailable = err == nil && options != nil
 	}
 	if options == nil {
 		options = &runtimeOptions{stateRoot: root}
 	}
-
-	baseCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	ctx := baseCtx
-	if timeout != 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(baseCtx, timeout)
-		defer cancel()
+	if services.observe == nil {
+		services.observe = func(ctx context.Context, link domain.Link, options runtimeOptions) (linkDiagnostic, error) {
+			return inspectLinkDiagnostic(ctx, link, options, 0)
+		}
 	}
 	for _, link := range links {
 		var check healthLinkCheck
@@ -142,9 +192,11 @@ func linkDiagnoseAllCommand(args []string, stdout, stderr io.Writer, options *ru
 				"Batch diagnosis stopped before this Link could be observed.",
 				"Review current Link state and rerun the read-only check with a suitable --timeout.")
 		case link.Backend == domain.BackendIPsec:
-			check = healthBlocked(link, "ipsec_runtime_not_registered",
-				"IPsec runtime is not installed or registered for operational Link checks.",
-				"Use a supported active backend; complete exclusive strongSwan qualification before IPsec activation.")
+			// Same condition, reason and machine action as per-Link status
+			// and diagnose; detailed read-only evidence lives in doctor.
+			check = healthBlocked(link, diagnostics.IPsecRuntimeNotRegisteredReason,
+				"IPsec operational runtime is unregistered. Run stl doctor ipsec to examine prerequisites without activation.",
+				ipsecDoctorNextStep)
 		case !runtimeAvailable:
 			check = healthUnavailable(link, "diagnostic_runtime_unavailable",
 				"Diagnostic runtime could not be initialized; no live observation was attempted.",
@@ -153,9 +205,22 @@ func linkDiagnoseAllCommand(args []string, stdout, stderr io.Writer, options *ru
 			// Independent bounded per-Link work; no global request timeout is
 			// imposed by default. Operators may configure an overall budget.
 			probeCtx, cancel := context.WithTimeout(ctx, diagnoseOperationTimeout)
-			measurement, problem := inspectLinkDiagnostic(probeCtx, link, *options, 0)
+			measurement, problem := services.observe(probeCtx, link, *options)
+			probeErr := probeCtx.Err()
 			cancel()
-			if problem != nil {
+			// A late healthy-looking result cannot override an expired
+			// parent or child deadline, even if an adapter ignored ctx.
+			// After parent expiry every remaining Link stays unknown.
+			if ctx.Err() != nil {
+				response.Outcome = "interrupted"
+				check = healthUnavailable(link, "diagnostic_interrupted",
+					"Batch deadline expired while this Link was being observed; the outcome is unverified.",
+					"Recheck the Link after reviewing the batch --timeout; no repair was attempted.")
+			} else if probeErr != nil {
+				check = healthUnavailable(link, "diagnostic_interrupted",
+					"Per-Link observation deadline expired; the outcome is unverified.",
+					"Review Link status and repeat read-only diagnosis before considering any changes.")
+			} else if problem != nil {
 				check = healthDiagnosticFailure(link, problem)
 				if ctx.Err() != nil {
 					response.Outcome = "interrupted"

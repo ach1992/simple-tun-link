@@ -38,18 +38,31 @@ echo was received at probe time. A validly sent but unanswered probe becomes
 `unknown/link_probe_no_reply`, not proof of permanent peer failure.
 Incomplete/no-capability measurements are likewise unknown/blocked, not
 silently successful. Operational IPsec stays
-`blocked/ipsec_runtime_not_registered`; there is no implicit service or
-network mutation. A batch can be canceled and returns an explicit
-interrupted outcome with unknown remaining records. An empty saved Link set
-is reported separately and is never evidence of operational reachability.
+`blocked/ipsec_runtime_not_registered` with canonical
+`next_step: "stl doctor ipsec"` across all-Link and per-Link status/
+diagnosis; there is no implicit service or network mutation. A batch can
+be canceled and returns an explicit interrupted outcome with unknown
+remaining records **when inventory was successfully read**. If cancellation
+interrupts inventory loading before a verified Link set exists, the version-1
+public error envelope returns `reason_code: "diagnostic_interrupted"`
+and exit `1` instead of fabricating `total:0`. An actually empty saved
+Link set is reported separately and is never evidence of reachability.
 
 Each report includes only safe Link identity, versioned MTU/quality
 observations, verified counters, optional latest observed WireGuard
 handshake timestamp and a stable reason/next step. Untrusted raw command
 output and backend errors, free-form saved display names, and secrets never
-enter batch/human reports. Per-Link diagnostic duration is bounded;
-the total batch duration is configurable rather than hardcoded to an
-arbitrary Link count.
+enter batch/human reports. Per-Link diagnostic duration is bounded.
+The optional **total** batch deadline starts before state loading/runtime
+setup, propagates to the state loader and Link probes, and is checked on
+both sides of synchronous initialization as well as after each probe.
+An adapter that produces a late healthy-looking result after a child or
+parent deadline cannot turn that Link green; remaining inventory is
+explicitly marked unknown. The total budget is configurable rather than
+hardcoded to an arbitrary Link count. A synchronous OS read/initialization
+call cannot always be forcibly preempted mid-operation; time it consumes
+nevertheless counts against the batch deadline and no new probe can run
+after it expires.
 
 Machine errors across Link read, diagnose, ensure, import, export, retire and
 restore-dependent flows use `stlerr.WithGuidance` at the existing public

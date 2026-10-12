@@ -80,7 +80,10 @@ The statuses distinguish **evidence**, not persistent health guarantees:
   observation was incomplete.
 - `blocked/diagnostic_capability_unavailable` and
   `blocked/ipsec_runtime_not_registered` describe unavailable backends;
-  IPsec is **never activated** or inferred healthy.
+  IPsec is **never activated** or inferred healthy. The latter has the
+  **same exact `next_step: "stl doctor ipsec"`** as per-Link IPsec
+  `status` and `diagnose`: this is the supported, read-only prerequisite
+  inspection command, not permission to activate strongSwan.
 - `unknown/diagnostic_interrupted` includes the unprocessed Links if the
   batch is canceled or exceeds its configured total time budget.
 
@@ -89,10 +92,20 @@ ordering and independent per-Link checks. Each Link gets its existing
 **35-second maximum probe budget**; there is no fixed cap on the number of
 saved Links. For a large collection, optionally set the **total** `--timeout`
 to a positive Go duration such as `10m` or `1h`; the flag rejects
-ambiguous/malformed durations. An expired batch preserves all Link IDs in
-the report as observed/blocked/unknown without falsely claiming that the
-rest were checked. This does not guarantee an atomic host-wide snapshot:
-Links may change while the observation runs.
+ambiguous/malformed durations. The deadline starts **before saved-state
+inventory loading and diagnostic runtime initialization**, not just before
+Link probes; those stages and all child Link probes share the deadline.
+If the inventory is known when the deadline expires, the interrupted batch
+retains every Link ID with incomplete observations marked unknown; neither
+the current Link nor unprocessed siblings can be promoted to healthy.
+If the deadline expires **before a trustworthy inventory was loaded**, the
+command instead emits the existing version-1 `error` envelope with
+`reason_code: "diagnostic_interrupted"`, an explicit next step and exit
+`1`—it **does not invent an empty batch**. Synchronous filesystem
+operations may need to return before cancellation can be reported, but
+their elapsed time still consumes the requested total budget; no later
+live probe is started after expiry. This does not guarantee an atomic
+host-wide snapshot: Links may change while observation runs.
 
 Exit statuses are `0` when every observed Link received a peer reply (or
 when the saved inventory is empty, explicitly marked as such); `4` when

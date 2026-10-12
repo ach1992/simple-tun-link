@@ -119,7 +119,8 @@ func TestHealthCenterMixedGREIPIPWireGuardIPsecDeterministicSafeReport(t *testin
 			t.Fatalf("unstable ordered Link identity: %+v", check)
 		}
 		if i == 3 {
-			if check.Status != "blocked" || check.ReasonCode != "ipsec_runtime_not_registered" || check.Observed != nil {
+			if check.Status != "blocked" || check.ReasonCode != diagnostics.IPsecRuntimeNotRegisteredReason ||
+				check.NextStep != ipsecDoctorNextStep || check.Observed != nil {
 				t.Fatalf("IPsec activation falsely implied: %+v", check)
 			}
 		} else if check.Status != "observed" || check.ReasonCode != "link_peer_replied" ||
@@ -212,22 +213,17 @@ func TestHealthCenterEmptyAndFailureInputNoMutation(t *testing.T) {
 	}
 }
 
-func TestHealthCenterExpiredBudgetPreservesAllLinkStatusesWithoutProbing(t *testing.T) {
+func TestHealthCenterExpiredBeforeInventoryCannotInventEmptySnapshot(t *testing.T) {
 	root, implementations, probe, _ := fixtureHealthCenter(t)
 	code, out, stderr := runHealth(t, root, implementations, probe, "--timeout", "1ns", "--json")
 	if code != 1 || stderr != "" {
 		t.Fatalf("timeout silently passed or failed without report: %d %q %q", code, out, stderr)
 	}
-	var report healthCenterResponse
-	if err := json.Unmarshal([]byte(out), &report); err != nil {
-		t.Fatal(err)
-	}
-	if report.Outcome != "interrupted" || report.Total != 4 || report.Unknown == 0 ||
-		len(report.Checks) != 4 {
-		t.Fatalf("timeout lost Link inventory: %+v", report)
-	}
-	if report.Checks[0].ReasonCode != "diagnostic_interrupted" {
-		t.Fatalf("first unobserved Link not marked uncertain: %+v", report.Checks[0])
+	var result linkReadErrorResponse
+	if err := json.Unmarshal([]byte(out), &result); err != nil || result.SchemaVersion != 1 ||
+		result.Error == nil || result.Error.ReasonCode != "diagnostic_interrupted" ||
+		result.Error.NextStep == "" || strings.Contains(out, `"total":0`) {
+		t.Fatalf("unverified inventory masqueraded as empty healthy snapshot: %+v %v", result, err)
 	}
 	if len(probe.commands) != 0 {
 		t.Fatal("expired deadline began kernel/network probes")
