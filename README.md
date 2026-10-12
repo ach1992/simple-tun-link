@@ -13,12 +13,15 @@ Convenience alias: **stlink** (same executable/behavior when installed by the su
 > backend. Privileged six-simultaneous-Link E2E passed on native AMD64 and
 > ARM64 kernels with Ubuntu 24.04.5 and Debian 13 container userspaces
 > ([PR #77](https://github.com/ach1992/simple-tun-link/pull/77)).
-> Container userspaces share each runner's kernel; separate distro-kernel
-> and whole-guest reboot evidence is tracked in
-> [Issue #12](https://github.com/ach1992/simple-tun-link/issues/12).
-> Full-guest IPsec ESP/NAT-T reboot, physical NAT-router traversal and abrupt
-> power-loss recovery remain unproven. [Issue #11](https://github.com/ach1992/simple-tun-link/issues/11)
-> owns tagged artifacts, published installer verification and public release.
+> Containers share each runner's kernel. Separate real Debian 13 and Ubuntu
+> 24.04 KVM guest kernels passed actual snapshot install/update/uninstall;
+> GRE Native and WireGuard passed whole-guest automatic restore after both
+> clean reboot and deliberately abrupt QEMU termination
+> ([Issue #11](https://github.com/ach1992/simple-tun-link/issues/11),
+> [Issue #12](https://github.com/ach1992/simple-tun-link/issues/12#issuecomment-6134259976)).
+> Full-guest IPsec ESP/NAT-T reboot or crash restore, physical NAT-router
+> traversal and a published/tagged artifact remain **unproven**. Issue #11
+> owns public release; Issue #12 owns remaining network E2E.
 
 ## Why
 

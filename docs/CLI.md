@@ -665,7 +665,12 @@ retirement are implemented. Real-kernel bidirectional WireGuard and same-peer
 GRE coexistence were observed in PR #53. Native-exclusive operational IPsec
 is now conditionally admitted, with true ESP/NAT-T traffic and removal
 evidence (see [IPsec real E2E](operations/IPSEC-REAL-E2E.md)).
-Unproven reboot, physical NAT and release/publication gates remain with
+GRE Native and WireGuard automatic restore have additionally passed real
+whole-guest reboot and simulated abrupt KVM process termination followed
+by a fresh boot, with protected credentials unchanged
+([Issue #12 evidence](https://github.com/ach1992/simple-tun-link/issues/12#issuecomment-6134259976)).
+Whole-guest **IPsec ESP/NAT-T** reboot/crash restoration, physical WAN/NAT
+router traversal, and public tagged-release gates remain **unproven** under
 Issues #11 and #12.
 
 ## IPsec operational CLI and historical read-only diagnostic milestones
