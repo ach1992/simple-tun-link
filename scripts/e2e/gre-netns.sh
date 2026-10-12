@@ -427,17 +427,19 @@ if [[ -v STL_E2E_CROSS_WG && "$STL_E2E_CROSS_WG" == approved ]]; then
   # Two independent requests compete for the SAME owned FOU receive port.
   # Both are made through actual concurrent canonical CLI/Engine processes;
   # exactly one is allowed to commit and the other must type-reject conflict.
-  # Disjoint /31 addresses make the UDP receive port the decisive resource.
+  # Distinct GRE keys, Link IDs, and /31 addresses isolate receive claims,
+  # backend identities, interface/address and firewall claims. ONLY the
+  # UDP listen port is shared, so the port conflict is the decisive resource.
   # Kernel receive-mapping enumeration order is not stable after deletion
   # and recreation. Compare complete sorted line records captured immediately
   # before and after the contested claims, never unsorted JSON-array bytes.
   race_fou_before="$(ip netns exec "$ns_a" ip fou show | LC_ALL=C sort)"
   race_log_a="$workdir/race-a.log"; race_log_b="$workdir/race-b.log"
   ( mode=fou; link_id=lnk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; octet=70;
-    port=33373; key=33373; run_side a race ) >"$race_log_a" 2>&1 &
+    port=33373; key=33374; run_side a race ) >"$race_log_a" 2>&1 &
   race_pid_a=$!
   ( mode=fou; link_id=lnk_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; octet=80;
-    port=33373; key=33373; run_side a race ) >"$race_log_b" 2>&1 &
+    port=33373; key=33375; run_side a race ) >"$race_log_b" 2>&1 &
   race_pid_b=$!
   wait "$race_pid_a" || { cat "$race_log_a" >&2; cat "$race_log_b" >&2; exit 1; }
   wait "$race_pid_b" || { cat "$race_log_a" >&2; cat "$race_log_b" >&2; exit 1; }
@@ -448,9 +450,9 @@ if [[ -v STL_E2E_CROSS_WG && "$STL_E2E_CROSS_WG" == approved ]]; then
     echo 'FAIL: simultaneous FOU receive claims were not uniquely serialized' >&2; exit 1;
   }
   if grep -Fq GRE_RESOURCE_RACE_ACCEPTED "$race_log_a"; then
-    mode=fou; link_id=lnk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; octet=70; port=33373; key=33373
+    mode=fou; link_id=lnk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; octet=70; port=33373; key=33374
   else
-    mode=fou; link_id=lnk_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; octet=80; port=33373; key=33373
+    mode=fou; link_id=lnk_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; octet=80; port=33373; key=33375
   fi
   run_side a remove
   assert_stl_firewall_rule_count "$ns_a" "$link_id" 0
