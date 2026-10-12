@@ -140,6 +140,43 @@ diagnosis; then removes/retires only WireGuard and checks that the three
 GRE siblings still work before continuing the original IPIP suite.
 The flags alone never authorize testing on an active control-plane host.
 
+### Reproducible Ubuntu/Debian same-peer cross-backend release E2E
+
+Issue #12 owns the combined real-kernel acceptance. Use **only an expressly
+designated disposable Docker-capable test VM**, never a shared host, production
+or the AI Server Agent. Docker containers share the host kernel and may cause
+module autoload; if that effect is forbidden, use a dedicated disposable
+VM with its own kernel instead.
+
+From a committed clean checkout on that test VM, prepare both task-only images
+(online packages are installed only in the disposable image builds):
+
+~~~bash
+docker build -f scripts/e2e/cross-backend.Dockerfile \
+  --build-arg BASE_IMAGE=ubuntu:24.04 -t stl-cross-backend:ubuntu24 .
+docker build -f scripts/e2e/cross-backend.Dockerfile \
+  --build-arg BASE_IMAGE=debian:13 -t stl-cross-backend:debian13 .
+sudo env STL_E2E_DISPOSABLE_HOST=approved \
+  ./scripts/e2e/cross-backend-docker.sh
+~~~
+
+The driver builds the exact clean Git revision into one test executable,
+verifies its SHA256 inside each fresh network-disconnected container, and runs
+two fresh guest namespaces with task-owned state. It performs no host-wide
+package or firewall administration, and does not mount host networking,
+Docker socket, agent credentials or systemd. Both guests exercise **real**
+GRE Native, FOU, GUE, WireGuard and sequential IPIP using the canonical
+CLI/Engine. Live same-peer coexistence, idempotency, FOU remove/reapply,
+owned interface-loss recovery, simultaneous FOU port claims, foreign
+interface rejection, sibling packet delivery and scoped cleanup must pass;
+no mock/skip is accepted as proof.
+
+Keep a release receipt with guest versions, source and executable SHA,
+kernel and packet/rule observations, plus explicit missing capabilities.
+See [cross-backend evidence and outstanding gates](operations/CROSS-BACKEND-REAL-E2E.md).
+This does **not** assert ARM64 runtime, full guest reboot, IPsec plus all
+other backends in one session, or physical power-loss durability.
+
 ### GRE Native, one A host with two distinct peers
 
 After separate authorization for an isolated disposable test VM, the
