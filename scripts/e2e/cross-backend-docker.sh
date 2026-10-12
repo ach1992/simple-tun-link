@@ -56,6 +56,16 @@ trap 'exit 143' TERM
 
 GOTOOLCHAIN=local go test -c -o "$temp/stl-cross.test" ./cmd/stl
 binary_sha="$(sha256sum "$temp/stl-cross.test" | awk '{print $1}')"
+# No full worktree mount: its private aiworker permissions would otherwise
+# require the disconnected guest to gain DAC_OVERRIDE. Stage only committed,
+# non-secret fixture inputs and expose them read-only with ordinary 0755/0644.
+mkdir -p "$temp/source/scripts/e2e"
+git -c safe.directory="$source_root" show "$source_sha:scripts/e2e/gre-netns.sh" > "$temp/source/scripts/e2e/gre-netns.sh"
+git -c safe.directory="$source_root" show "$source_sha:go.mod" > "$temp/source/go.mod"
+chmod 0755 "$temp" "$temp/source" "$temp/source/scripts" "$temp/source/scripts/e2e" "$temp/source/scripts/e2e/gre-netns.sh"
+chmod 0644 "$temp/source/go.mod"
+script_sha="$(sha256sum "$temp/source/scripts/e2e/gre-netns.sh" | awk '{print $1}')"
+echo "CROSS_BACKEND_COMMITTED_SCRIPT_SHA256=$script_sha"
 echo "CROSS_BACKEND_SOURCE_SHA=$source_sha"
 echo "CROSS_BACKEND_TEST_BINARY_SHA256=$binary_sha"
 echo "CROSS_BACKEND_BUILDER=$(go version)"
@@ -72,7 +82,7 @@ for entry in "ubuntu:$ubuntu_image" "debian:$debian_image"; do
     --tmpfs /run:mode=0755,size=32m \
     --cap-drop ALL --cap-add NET_ADMIN --cap-add NET_RAW --cap-add SYS_ADMIN \
     --security-opt apparmor=unconfined --security-opt seccomp=unconfined \
-    --mount "type=bind,source=$source_root,target=/proof/source,readonly" \
+    --mount "type=bind,source=$temp/source,target=/proof/source,readonly" \
     --mount "type=bind,source=$temp/stl-cross.test,target=/proof/stl-cross.test,readonly" \
     -e STL_E2E_DISPOSABLE_HOST=approved -e STL_E2E_CROSS_WG=approved \
     -e STL_E2E_PREBUILT_TEST=/proof/stl-cross.test \

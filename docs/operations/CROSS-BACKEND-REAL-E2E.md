@@ -12,7 +12,7 @@ no host packages, systemd units or strongSwan services are changed.
 Use the build/run commands in [DEVELOPMENT.md](../DEVELOPMENT.md).
 Review the Dockerfile and base image digest first. The root driver refuses
 an unclean checkout, absent images or unverified test-binary digest, and
-enforces fresh --network none containers with a read-only source/binary mount,
+enforces fresh --network none containers with a read-only mount of the exact committed script/go.mod and binary,
 no Docker socket, no host systemd or foreign runtime state. Each guest uses
 temporary veth-backed A/B network namespaces. The test executable uses the
 canonical production CLI -> Engine -> backend path, not a simulated tunnel.
