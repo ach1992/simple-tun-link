@@ -68,9 +68,12 @@ func (b *OperationalBackend) applyJournalledRemove(ctx context.Context, p operat
 				if err = b.Writer.Terminate(ctx, profile); err != nil {
 					return nil, fmt.Errorf("IPsec SA termination uncertain; explicit reconciliation required")
 				}
-				sa, err = b.hasIPsecSA(ctx, profile)
-				if err != nil || sa {
-					return nil, fmt.Errorf("IPsec SA termination not yet observed")
+				// An acknowledged VICI termination may precede the kernel's
+				// final XFRM readback. Do not reissue a VICI mutation.
+				if err := waitForIPsecSAAbsence(ctx, func(ctx context.Context) (bool, error) {
+					return b.hasIPsecSA(ctx, profile)
+				}); err != nil {
+					return nil, err
 				}
 			}
 			if err := advance(state.IPsecRemoveTerminated); err != nil {

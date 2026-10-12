@@ -339,10 +339,13 @@ func xfrmTextUsesID(ctx context.Context, raw []byte, target uint32, kind string)
 		}
 		// strongSwan adds kernel per-socket bypass policies for IKE UDP
 		// sockets. iproute2 renders these as socket in|out priority 0,
-		// not dir. Admit only exact wildcard form without an if_id;
-		// malformed or marked extensions fail closed.
+		// sometimes with the canonical "ptype main" suffix (Debian 13).
+		// Admit only these exact wildcard forms without an if_id;
+		// malformed, marked or otherwise extended policies fail closed.
 		if kind == "policy" && bytes.Equal(fields[0], []byte("socket")) {
-			if hasDescriptor || len(fields) != 4 ||
+			if hasDescriptor ||
+				!(len(fields) == 4 || (len(fields) == 6 &&
+					bytes.Equal(fields[4], []byte("ptype")) && bytes.Equal(fields[5], []byte("main")))) ||
 				!(bytes.Equal(fields[1], []byte("in")) || bytes.Equal(fields[1], []byte("out"))) ||
 				!bytes.Equal(fields[2], []byte("priority")) ||
 				!bytes.Equal(fields[3], []byte("0")) ||
