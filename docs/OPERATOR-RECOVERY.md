@@ -25,7 +25,7 @@ an optional `evidence` object:
 | `stage` | `preflight`, `inspect`, `plan`, `validate`, `apply`, `verify`, `persistence`, `state_commit`, `persistence_cleanup`, `credential_retirement`, `credential_provision` (or `rollback` for a standalone Engine rollback helper) |
 | `host_mutation` | `not_attempted`: this Engine invocation has **not** called a host Apply/persistence publication; `attempted`: a call that may mutate was made, **not proof that anything changed**; `retained`: compensation deliberately skipped to preserve possible published intent |
 | `desired_state` | `no_commit_attempted`, `commit_attempted`, `prior_verified` (previous snapshot reloaded), `visible_unconfirmed` (publication/durability or readback ambiguous), `committed` |
-| `rollback` | `not_required`, `unavailable`, `not_attempted`, `completed_unverified` (callback returned success, **not a separate full host attestation**), `incomplete` |
+| `rollback` | `not_required` (no backend Apply compensation needed), `unavailable` (callback not yet established), `not_attempted` (compensation deliberately not run, including after a confirmed commit), `completed_unverified` (callback returned success, **not a separate full host attestation**), `incomplete` |
 | `credential_provision` (optional) | `attempted`: protected per-Link key persistence was invoked separately before backend Apply; the exact key may remain even if backend mutation never started |
 
 The `credential_provision` **stage** is emitted when protected key persistence fails before backend/network Apply; `credential_provision:"attempted"` separately witnesses that the key may remain. This is not an ordinary host/network mutation.

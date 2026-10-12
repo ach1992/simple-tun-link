@@ -527,10 +527,17 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 				Rollback: rollbackStatus(undo, false, failed)})
 	}
 
+	// After the desired state is durably committed, owned backend rollback
+	// callbacks from Apply must not be invoked by post-commit cleanup. A
+	// callback was returned by the successful non-empty Apply, so reporting
+	// the earlier pre-Apply "unavailable" value would misstate the outcome.
+	evidence.DesiredState = "committed"
+	if undo != nil {
+		evidence.Rollback = "not_attempted"
+	}
 	// After the final desired Link is durably deleted, its owned reboot unit
 	// is no longer needed. An uncertain cleanup is reported as partial failure;
 	// never roll a removed Link back solely to conceal a unit cleanup error.
-	evidence.DesiredState = "committed"
 	evidence.Stage = "persistence_cleanup"
 	if request.Operation == backend.OperationRemove && remaining == 0 && e.restorePersistence != nil {
 		// The final owned unit cleanup may mutate systemd/unit files even

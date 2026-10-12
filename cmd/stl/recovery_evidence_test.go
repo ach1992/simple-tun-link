@@ -225,38 +225,61 @@ func (p *failingFinalUnitPersistence) IsRestoreInstalled(context.Context) (bool,
 	return p.active, nil
 }
 
-func TestLifecycleCLIFinalNoopRemoveFailurePreservesV1JSONEvidence(t *testing.T) {
-	root := t.TempDir()
-	link, raw := makeLifecycleDesired(t, "9", "10.70.29.0/31")
-	b := newLifecycleFake()
-	p := &failingFinalUnitPersistence{}
-	opts := &runtimeOptions{stateRoot: root, backends: []backend.Backend{b},
-		restorePersistence: p, executable: "/usr/local/bin/stl"}
-	var stdout, stderr bytes.Buffer
-	code := runWithRuntimeInput([]string{"link", "ensure", "--stdin", "--json"},
-		strings.NewReader(raw), &stdout, &stderr, opts)
-	if code != 0 || stderr.Len() != 0 || !b.present[link.ID] {
-		t.Fatalf("failed to seed CLI owned Link: exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
-	}
-	delete(b.present, link.ID) // The planned backend Remove must be a no-op.
-	beforeApply := len(b.applies)
-	stdout.Reset()
-	stderr.Reset()
-	code = runWithRuntimeInput([]string{"link", "remove", string(link.ID),
-		"--confirm", string(link.ID), "--json"}, nil, &stdout, &stderr, opts)
-	payload := assertCLIRecoveryFailure(t, code, stdout.String(), stderr.String(),
-		"state_failed", "persistence_cleanup", "attempted", "post_commit_cleanup_incomplete")
-	if payload.Error.Evidence.DesiredState != "committed" || payload.PartialResult == nil ||
-		payload.PartialResult.LinkID != link.ID || payload.PartialResult.Changed ||
-		!payload.PartialResult.Removed || p.removes != 1 || len(b.applies) != beforeApply {
-		t.Fatalf("failed cleanup lost confirmed Remove or invented Apply: %+v", payload)
-	}
-	snapshot, err := state.NewFileStore(root).Load(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, exists := snapshot.Find(link.ID); exists {
-		t.Fatal("failed unit cleanup undid committed Remove")
+func TestLifecycleCLIFinalRemoveCleanupFailurePreservesV1JSONEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		id           string
+		subnet       string
+		backendNoop  bool
+		wantRollback string
+	}{
+		{name: "backend_noop", id: "9", subnet: "10.70.29.0/31", backendNoop: true, wantRollback: "not_required"},
+		{name: "backend_changed", id: "e", subnet: "10.70.30.0/31", wantRollback: "not_attempted"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			link, raw := makeLifecycleDesired(t, tc.id, tc.subnet)
+			b := newLifecycleFake()
+			p := &failingFinalUnitPersistence{}
+			opts := &runtimeOptions{stateRoot: root, backends: []backend.Backend{b},
+				restorePersistence: p, executable: "/usr/local/bin/stl"}
+			var stdout, stderr bytes.Buffer
+			code := runWithRuntimeInput([]string{"link", "ensure", "--stdin", "--json"},
+				strings.NewReader(raw), &stdout, &stderr, opts)
+			if code != 0 || stderr.Len() != 0 || !b.present[link.ID] {
+				t.Fatalf("failed to seed CLI owned Link: exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			if tc.backendNoop {
+				// Network state was already absent before canonical Remove.
+				delete(b.present, link.ID)
+			}
+			beforeApply := len(b.applies)
+			stdout.Reset()
+			stderr.Reset()
+			code = runWithRuntimeInput([]string{"link", "remove", string(link.ID),
+				"--confirm", string(link.ID), "--json"}, nil, &stdout, &stderr, opts)
+			payload := assertCLIRecoveryFailure(t, code, stdout.String(), stderr.String(),
+				"state_failed", "persistence_cleanup", "attempted", "post_commit_cleanup_incomplete")
+			wantChanged := !tc.backendNoop
+			wantApplyCount := beforeApply
+			if wantChanged {
+				wantApplyCount++
+			}
+			if payload.Error.Evidence.DesiredState != "committed" ||
+				payload.Error.Evidence.Rollback != tc.wantRollback || payload.PartialResult == nil ||
+				payload.PartialResult.LinkID != link.ID || payload.PartialResult.Changed != wantChanged ||
+				!payload.PartialResult.Removed || p.removes != 1 || !p.active ||
+				len(b.applies) != wantApplyCount || b.present[link.ID] {
+				t.Fatalf("failed cleanup misreported committed Remove or compensated host: %+v; applies=%d", payload, len(b.applies))
+			}
+			snapshot, err := state.NewFileStore(root).Load(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, exists := snapshot.Find(link.ID); exists {
+				t.Fatal("failed unit cleanup undid committed desired-state deletion")
+			}
+		})
 	}
 }
 

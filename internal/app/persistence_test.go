@@ -159,15 +159,26 @@ func TestRemoveReportsPartialFailureAfterCommitWhenUnitCleanupFails(t *testing.T
 	}
 	p.failRemove = true
 	result, err := engine.Remove(context.Background(), link.ID)
-	if stlerr.CodeOf(err) != stlerr.CodeState || !result.Removed {
-		t.Fatalf("expected reported partial removal, got %#v %v", result, err)
+	if stlerr.CodeOf(err) != stlerr.CodeState || !result.Removed || !result.Changed {
+		t.Fatalf("expected changed-but-committed partial removal, got %#v %v", result, err)
 	}
+	// Apply returned a rollback callback, but once state deletion commits,
+	// cleanup failures must not carry the pre-Apply "unavailable" status.
+	requireOperationEvidence(t, err, "persistence_cleanup", "attempted", "committed", "not_attempted")
 	snapshot, loadErr := store.Load(context.Background())
 	if loadErr != nil || len(snapshot.Links) != 0 {
 		t.Fatalf("last Link removal was not committed: %v %v", snapshot, loadErr)
 	}
-	if b.rollbackCount != 0 {
-		t.Fatal("completed removal was incorrectly rolled back")
+	b.mu.Lock()
+	_, stillPresent := b.present[link.ID]
+	applyCount, rollbackCount := b.applyCount, b.rollbackCount
+	b.mu.Unlock()
+	if stillPresent || rollbackCount != 0 || applyCount != 2 {
+		t.Fatalf("committed Remove undone or incomplete: host_present=%t applies=%d rollbacks=%d",
+			stillPresent, applyCount, rollbackCount)
+	}
+	if p.removes != 1 || !p.active {
+		t.Fatalf("fault did not reach final owned-unit cleanup: removes=%d active=%t", p.removes, p.active)
 	}
 }
 
