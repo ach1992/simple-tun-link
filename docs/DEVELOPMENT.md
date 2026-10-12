@@ -100,10 +100,14 @@ Prioritize behavior with meaningful failure modes:
 
 Avoid duplicate tests that prove the same branch through multiple layers unless the layer boundary itself is the risk.
 
-The Issue #12 release-level cross-backend Docker runner now requires a
-strongSwan-capable disposable image for each supported userspace, to
-exercise five *simultaneously persisted* GRE Native/FOU/GUE, WireGuard,
-and IPsec/IKEv2 links across the same two guest namespaces and state roots.
+The Issue #12 release-level cross-backend Docker runner requires a
+strongSwan-capable disposable image for each supported userspace. It
+exercises six *simultaneously persisted* Links on the same two guest
+namespaces and state roots: GRE Native/FOU/GUE, authenticated WireGuard,
+native IKEv2/XFRM ESP, and a separately keyed IKEv2/XFRM NAT-T Link.
+The original five-Link ESP-only evidence remains valid. The native
+six-Link ESP/NAT-T coexistence gate passed the
+[2026-10-12 exact-source AMD64/ARM64 privileged matrix](https://github.com/ach1992/simple-tun-link/actions/runs/38280434443).
 On an expressly authorized disposable Docker test machine, from a clean
 committed checkout, build the task-only images and then run:
 
@@ -121,11 +125,20 @@ sudo env PATH="$PATH" STL_E2E_DISPOSABLE_HOST=approved \
 The runner is **not** safe to run on a production or control-plane server.
 The image builds use the distribution's package repositories and may
 install packages inside the *images only*. The runtime guests remain
-network-disconnected with fresh, isolated namespaces; the published
-five-Link success markers require actual bidirectional encrypted IPsec
-traffic, not only an instantiated strongSwan process. See
-`docs/operations/CROSS-BACKEND-REAL-E2E.md` for exact evidence rules and
-remaining full-guest reboot / ARM64 limitations.
+network-disconnected with fresh, isolated namespaces. The dedicated
+PR workflow now runs this source on both real x86_64 and ARM64 GitHub-hosted
+VMs, with exact-native Go/guest architecture assertions; runner-local
+`fou` and `ipip` module activation fails closed on unsupported kernels. Six-Link acceptance
+requires *both* actual ESP and ESP-in-UDP XFRM SAs, distinct protected
+credentials, pre-negotiation plaintext rejection, actual bidirectional
+inner traffic, exact shared-state inventory, scoped ESP removal with NAT-T
+still operational, and eventual credential/SA retirement. Unavailable
+kernel/daemon support is a failure for this required test, not a PASS
+or silent SKIP. See
+`docs/operations/CROSS-BACKEND-REAL-E2E.md` for exact evidence rules
+and remaining full-guest reboot, separately booted distro-kernel and
+physical NAT-router limitations. Native ARM64 runtime is already proved
+by the dedicated ARM64 job, not by cross-compilation.
 
 ### Linux integration and E2E tests
 Use disposable environments only for behavior that unit/fake tests cannot establish, especially real kernel/backend effects:
@@ -191,18 +204,24 @@ The driver builds the exact clean Git revision into one test executable,
 verifies its SHA256 inside each fresh network-disconnected container, and runs
 two fresh guest namespaces with task-owned state. It performs no host-wide
 package or firewall administration, and does not mount host networking,
-Docker socket, agent credentials or systemd. Both guests exercise **real**
-GRE Native, FOU, GUE, WireGuard and sequential IPIP using the canonical
-CLI/Engine. Live same-peer coexistence, idempotency, FOU remove/reapply,
-owned interface-loss recovery, simultaneous FOU port claims, foreign
-interface rejection, sibling packet delivery and scoped cleanup must pass;
+Docker socket, agent credentials or systemd. The current cross-backend
+runner exercises **real** GRE Native, FOU, GUE, authenticated WireGuard,
+independently keyed IKEv2 ESP and NAT-T, and sequential IPIP using the
+canonical CLI/Engine. Live same-peer coexistence, idempotency, FOU
+remove/reapply, owned interface-loss recovery, simultaneous FOU port
+claims, foreign interface rejection, sibling packet delivery and scoped
+cleanup must pass;
 no mock/skip is accepted as proof.
 
 Keep a release receipt with guest versions, source and executable SHA,
 kernel and packet/rule observations, plus explicit missing capabilities.
 See [cross-backend evidence and outstanding gates](operations/CROSS-BACKEND-REAL-E2E.md).
-This does **not** assert ARM64 runtime, full guest reboot, IPsec plus all
-other backends in one session, or physical power-loss durability.
+The completed privileged PR matrix has proved **native AMD64 and ARM64**
+runtime with all six Links in one session on both Ubuntu and Debian
+userspaces; these share each native runner's kernel. It has **not**
+proved whole-guest OS reboot/boot restoration, independently booted
+Ubuntu/Debian distro kernels, physical NAT-router traversal or
+power-loss durability.
 
 ### GRE Native, one A host with two distinct peers
 
@@ -254,8 +273,13 @@ GRE/IPIP cross-backend isolation. The optional WireGuard cross fixture
 covers one four-Link same-peer scenario; the separate three-namespace fixture
 targets different-peer concurrent Links. Neither source fixture, without
 real approved execution, satisfies the corresponding live acceptance.
-IPsec, concurrency/failure, real systemd persistence/restart, the
-Ubuntu/Debian release matrix and arm64 qualification also remain Issue #12 gates.
+That narrower GRE/IPIP-only fixture was not, by itself, IPsec,
+multi-backend concurrency or ARM64 evidence. Separate completed
+Issue #12 E2E evidence now covers the native AMD64/ARM64
+Ubuntu/Debian six-Link release matrix, while earlier systemd restart
+evidence is preserved. A real whole-guest reboot/boot restore and
+remaining distinct interruption/rollback cases are still Issue #12 gates;
+installer and artifact release lifecycle belongs to Issue #11.
 
 ## Git/GitHub
 
