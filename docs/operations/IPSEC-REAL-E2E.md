@@ -311,20 +311,25 @@ addressed a previously failing real-kernel boot acceptance in Issue #12:
   IKE/CHILD SAs appeared, and encrypted Link Address packets crossed
   **both directions**. NAT-T additionally had the real Linux kernel
   `encap type espinudp` XFRM states on both peers.
-- A separate ESP guest was terminated by **SIGKILL to the exact test-owned
-  QEMU process while actual bilateral ESP traffic was live**. Its same
-  persistent disk required ext4 Journal recovery, then both automatic
-  Link restoration and bilateral encrypted traffic succeeded on a new
-  kernel boot. This is **not** a physical power-loss claim.
+- **Both ESP and NAT-T** were separately terminated by **SIGKILL to the
+  exact test-owned QEMU process while actual bilateral protected traffic was
+  live** (including observed real `encap type espinudp` NAT-T kernel SAs).
+  Each same persistent disk required ext4 Journal recovery, then automatic
+  Link restoration, fresh IKE/CHILD SAs and bilateral encrypted traffic
+  succeeded on a new kernel boot with no manual Connect. This is a valid
+  disposable-VM abrupt-process-termination test, **not** a physical power-loss
+  or physical WAN/NAT-router claim.
 
 The exact source SHA, separately run official AMD64/ARM64 E2E, per-boot
 fixed PASS markers, file digests, failure history, and cleanup receipts
 belong in [Issue #12](https://github.com/ach1992/simple-tun-link/issues/12).
 Tests were manually executed in private disposable guests, not on the AI
 agent's live host networking or an external real-world NAT router.
-**NAT-T abrupt-crash recovery** and **physical WAN/external NAT traversal**
-are still not accepted. The older *published prerelease* predates PR #81;
-this evidence must not be presented as a published Stable release or proof
-of an installed binary's upgrade lifecycle. Never weaken fail-closed
+**Physical WAN/external NAT-router traversal** is still not accepted;
+prior platform blocks forbid any alternate cross-server connectivity bypass.
+The public `v0.1.0-rc.1` **pre-release** predates PR #81 and does **not**
+contain these fixes. Its own AMD64/ARM64 installed-artifact life-cycle checks
+passed separately (Issue #11 closed). Do not present the **unmerged source
+candidate** as a published Stable release or a deployed/installed fix. Never weaken fail-closed
 native ownership checks or substitute simulated CLI-only green tests for
 real post-reboot kernel packets.

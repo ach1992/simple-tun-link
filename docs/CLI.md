@@ -9,11 +9,12 @@ is now **conditionally operational**, with real IKEv2 ESP and NAT-T traffic
 verified in the native AMD64/ARM64 release E2E matrix (Issue #12).
 A later, **unreleased PR #81 source candidate** additionally passed actual
 KVM whole-guest ESP/NAT-T automatic restore with two-way encrypted traffic,
-and ESP abrupt-QEMU termination followed by same-disk recovery (Issue #12).
-These are not capabilities yet certified in the published prerelease.
-**NAT-T abrupt-crash recovery**, physical/external NAT-router traversal,
-and the relevant published-tag/installed-artifact acceptance remain open
-(Issues #11–#12).
+and both ESP and NAT-T abrupt-QEMU termination followed by automatic
+same-disk recovery (Issue #12). These new runtime fixes are not included in
+the published `v0.1.0-rc.1` pre-release, whose real AMD64/ARM64 installed
+artifact lifecycle has separately passed (Issue #11 closed).
+**Physical/external WAN NAT-router traversal** and integration/release of
+the new candidate remain open; no stable release is authorized.
 The versioned non-interactive ensure/remove lifecycle is implemented.
 This page distinguishes **read-only** observations from **explicit
 host-mutating** commands.
@@ -359,11 +360,14 @@ with Ubuntu/Debian userspaces, GRE systemd restart/reapply, and
 GRE/WireGuard whole-guest reboot and abrupt-QEMU recovery (Issue #12).
 On an **unreleased PR #81 source candidate**, true full-guest KVM reboot
 restored ESP and NAT-T automatically, including renewed IKE/CHILD SAs and
-bilateral encrypted packets; ESP also passed abrupt-QEMU SIGKILL and
-automatic same-disk recovery. This does **not** prove an installed published
-binary or physical WAN peer. **NAT-T abrupt-crash recovery**, external NAT
-routers, published release/download lifecycle and installed ARM64 release-
-artifact acceptance remain open (Issues #11–#12).
+bilateral encrypted packets; both ESP and NAT-T also passed abruptly
+SIGKILL-terminated QEMU and automatic same-disk recovery. This does **not**
+prove a physical WAN/NAT-router peer or that the older public pre-release
+contains these pending changes. The actual published `v0.1.0-rc.1` AMD64
+and emulated ARM64 installed-binary lifecycles passed in separate guests
+(Issue #11 closed); remaining gates are **external/physical WAN NAT**,
+independent review/integration of PR #81, and explicit authorization before
+releasing this new source candidate (Issue #12).
 
 ## Commands
 
@@ -484,9 +488,10 @@ explicit host-mutating operations. Additional pairing/import recovery
 remaining task-first UI work (Issue #10) are separately tracked.
 Native-exclusive IPsec is already conditionally operational (Issue #7 closed),
 with real ESP/NAT-T E2E traffic. An **unreleased PR #81 candidate** passed
-whole-guest KVM automatic ESP/NAT-T reboot recovery and abrupt ESP VM-crash
-recovery. **NAT-T crash and physical WAN/NAT acceptance remain open** under
-Issue #12; these tests do not promote the published prerelease.
+whole-guest KVM automatic ESP/NAT-T reboot recovery and genuine abrupt
+QEMU-crash recovery for **both** modes. **Physical WAN/NAT acceptance remains
+open** under Issue #12; these tests do not promote the older public
+`v0.1.0-rc.1` pre-release (Issue #11's installer acceptance is closed).
 
 ## Explicit Link lifecycle commands — Issue #10
 
@@ -583,10 +588,12 @@ GRE/WireGuard traffic, distinct-peer and multi-Link coexistence, native
 AMD64/ARM64 six-Link E2E including conditionally admitted IPsec ESP/NAT-T,
 GRE systemd restart and GRE/WireGuard full-guest reboot/crash recovery.
 Unreleased PR #81 separately proves real full-kernel KVM IPsec ESP/NAT-T
-automatic reboot recovery and ESP abrupt-VM-crash recovery. Remaining release
-gaps are **NAT-T abrupt-crash recovery**, **physical/external WAN/NAT-router
-traversal**, **published source-tagged release/downloads** and **installed
-ARM64 release-artifact acceptance** (Issues #11–#12); unresolved pairing, diagnostic and operator
+automatic reboot and both ESP/NAT-T abrupt-VM-crash recovery. **Physical/
+external WAN NAT-router traversal** remains unproven (Issue #12), and PR #81
+still needs independent review, approved integration and a newly authorized
+release. The separately published `v0.1.0-rc.1` AMD64/ARM64 installed-
+artifact lifecycle passed and Issue #11 is closed; unresolved pairing,
+diagnostic and operator
 UX acceptance remains tracked under Issues #8–#10. A successful source/CLI
 test alone does not establish peer traffic or release readiness.
 
@@ -698,10 +705,12 @@ by a fresh boot, with protected credentials unchanged
 ([Issue #12 evidence](https://github.com/ach1992/simple-tun-link/issues/12#issuecomment-6134259976)).
 A later **unreleased PR #81 candidate** separately passed whole-guest ESP
 and NAT-T automatic reboot restoration with live bilateral encrypted packets,
-and genuine abrupt-QEMU SIGKILL followed by ESP same-disk automatic recovery.
-**NAT-T abrupt-crash recovery**, physical WAN/NAT-router traversal, and the
-published/tagged-release acceptance gate remain **unproven** under Issues
-#11–#12. No prerelease binary should be mistaken for this source candidate.
+and genuine abrupt-QEMU SIGKILL followed by same-disk automatic recovery for
+**both ESP and NAT-T**. **Physical WAN/external NAT-router traversal** remains
+**unproven** under Issue #12. Separately, published `v0.1.0-rc.1` installer
+and ARM64-emulated/AMD64 real-guest artifact lifecycles were accepted under
+closed Issue #11, but the old pre-release contains **none of these new fixes**.
+PR #81 integration and a later stable/new release require their own gates.
 
 ## IPsec operational CLI and historical read-only diagnostic milestones
 

@@ -1,9 +1,12 @@
 # Install, update, and uninstall (Issue #11)
 
-STL is **pre-release** until an authorized, tagged GitHub release is actually
-published. The commands below use a placeholder `vX.Y.Z`; replace it with an
-**existing** released tag after publication. No installer runs during a clone,
-build, or ordinary `go test`.
+The public [`v0.1.0-rc.1` pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.1)
+is published, **not Stable**. Its tagged installer and downloaded AMD64/
+emulated ARM64 artifacts passed real independent Debian/Ubuntu installed
+lifecycle tests (Issue #11 closed). It predates the unmerged PR #81 IPsec
+boot/crash fixes. The commands below also show placeholder `vX.Y.Z`;
+replace it only with an **existing published** tag. No installer runs during
+a clone, build, or ordinary `go test`.
 
 ## Supported deployment shape
 

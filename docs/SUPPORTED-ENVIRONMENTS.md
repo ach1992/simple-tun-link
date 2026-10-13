@@ -154,15 +154,17 @@ The subsequent, **unreleased PR #81 source candidate** independently passed
 true Debian 13 AMD64 KVM full-kernel reboot for native-exclusive IPsec ESP
 and NAT-T, including automatic STL Link restoration, reestablished IKE/CHILD
 SAs, and verified two-way encrypted traffic in an isolated Ubuntu PID1
-systemd guest with ext4-persisted owner receipts. ESP additionally passed
-an abruptly SIGKILL-terminated QEMU guest and automatic same-disk crash
-recovery. These results do **not** prove NAT-T abrupt-crash recovery,
-physical WAN/NAT-router traversal, or an installed published prerelease
-binary. Native ARM64 six-Link traffic remains covered by official E2E;
-**installed ARM64 release artifact** acceptance also remains outstanding.
-Issue #12 tracks remaining physical network/crash gates and Issue #11 the
-public release/installed-artifact acceptance. The currently published
-prerelease predates this candidate and must not claim these fixes.
+systemd guest with ext4-persisted owner receipts. **Both ESP and NAT-T**
+additionally passed independently executed abrupt-QEMU SIGKILL while real
+bilateral encrypted traffic was active, followed by Linux ext4 journal
+recovery, automatic same-disk IPsec restore and bilateral encrypted traffic.
+These tests do **not** prove physical WAN/NAT-router traversal or release of
+this new code. Native ARM64 six-Link E2E is independently verified. The
+**published `v0.1.0-rc.1` AMD64 and emulated ARM64 installed-release-artifact
+lifecycle** also passed on independent Debian/Ubuntu full guests (closed
+Issue #11). This pre-release predates and **does not contain** PR #81 fixes.
+Issue #12 remains OPEN for physical network, independent review, integration
+and owner-gated next-release acceptance.
 
 ## Release validation
 
