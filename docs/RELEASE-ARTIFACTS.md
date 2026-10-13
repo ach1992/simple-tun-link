@@ -65,7 +65,10 @@ No tag or public GitHub release was created by this implementation. A later
 **separately authorized** publication must attach the exact source-tagged
 binaries, SHA256SUMS, LICENSE and BUILD-MANIFEST to the matching GitHub
 release, establish the tested supported-environment matrix (Issue #12), and
-record release notes/evidence. The menu's Update/Uninstall operator integration
-(Issue #10) remains pending; the installer is available as an explicit script.
-No production installation, deployment or privileged systemd/network E2E has
-been performed as part of this slice.
+record release notes/evidence. The menu's read-only Update/Uninstall
+operator handoff is already integrated ([PR #48](https://github.com/ach1992/simple-tun-link/pull/48));
+it does **not** download, execute or replace the separate installer.
+This artifact-building slice did not install or deploy STL in production.
+Privileged systemd/network E2E evidence is independently tracked in
+[Issue #12](https://github.com/ach1992/simple-tun-link/issues/12), not
+established by this artifact-building slice.

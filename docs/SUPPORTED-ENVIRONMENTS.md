@@ -84,9 +84,11 @@ systemd test image disables *its own* vendor service during image build.
 Never infer that a package install/upgrade on a real host is harmless or
 disable/adopt a third-party service. The earlier systemd fixture alone was
 not ARM64 runtime validation. The separate native multi-architecture matrix
-below now provides that proof, but neither fixture certifies a production
-installer/release artifact, physical NAT-router traversal, full OS reboot,
-independently booted Ubuntu/Debian distro kernels or power-failure recovery.
+below now provides that proof, but these early fixtures **alone** do not
+certify a production installer/release artifact, physical NAT-router
+traversal, full OS reboot, independently booted distro kernels or
+power-failure recovery. Later separate guest-only evidence is distinguished
+below; none is a published tagged release or physical WAN deployment.
 
 ## Native release-level runtime matrix (Issue #12, 2026-10-12)
 
@@ -112,12 +114,49 @@ and foreign-resource rejection. Each userspace completed
 
 This is accepted **native linux/amd64 and linux/arm64 runtime**
 evidence for the network-namespace release-level matrix. Ubuntu/Debian
-containers **share their respective runner's kernel**: no separately
-booted distribution kernels were validated. No full guest OS reboot
-and automatic boot restore, physical/external NAT-router traversal, or
-power-loss recovery was performed. Runtime proof is distinct from
-installation/testing of final downloadable release artifacts, which
-Issue #11 owns.
+containers **share their respective runner's kernel**: **this particular
+runner workflow** did not boot independent distro kernels or exercise
+whole-guest reboot, external NAT-router traversal or power-loss recovery.
+Runtime proof is distinct from installing final downloadable release
+artifacts, which Issue #11 owns.
+
+## Supplementary source-bound native-guest acceptance (2026-10-13)
+
+The [Issue #11 release-lifecycle record](https://github.com/ach1992/simple-tun-link/issues/11#issuecomment-6133926392)
+proves actual root `/usr/local` installer **snapshot** upgrade and safe uninstall
+on two **independently booted, disposable KVM Linux kernels** built from
+clean `main@aab0cac0cd8991d792e75b421c4acfacd42258e7`:
+
+| Guest | Actual independent guest kernel | iproute2 | Result |
+| --- | --- | --- | --- |
+| Debian 13 (amd64) | `6.12.111+deb13-cloud-amd64` | `6.15.0` | **PASS** |
+| Ubuntu 24.04 LTS (amd64) | `6.8.0-142-generic` | `6.1.0` | **PASS** |
+
+Each system installed a previous source-bound `stl` snapshot, provisioned
+all explicitly selected GRE/WireGuard/IPsec distro packages through signed
+APT, atomically updated to the current snapshot, rejected a tampered
+artifact without changing the executable, and successfully completed
+idempotent update and uninstall while preserving unrelated files/packages.
+A separate Debian 13 guest proved active bidirectional GRE traffic prevents
+uninstall without stopping the Link or overwriting the executable; after
+explicit scoped Link/restore-unit removal, uninstall succeeds
+([Issue #11](https://github.com/ach1992/simple-tun-link/issues/11#issuecomment-6133986111)).
+
+The [Issue #12 crash/recovery record](https://github.com/ach1992/simple-tun-link/issues/12#issuecomment-6134259976)
+additionally proves that real **GRE Native and WireGuard** Links and protected
+receiver credentials survive a deliberately abrupt QEMU process kill and
+booting the **same persisted VM disk**; automatic systemd restoration,
+bilateral authenticated traffic, idempotent reapply and scoped cleanup
+were observed. Earlier separate full-guest clean reboot acceptance also
+passed for GRE and WireGuard.
+
+These checks do **not** establish full-guest **IPsec ESP/NAT-T** reboot or
+crash recovery, physical NAT-router/second physical host traversal, or the
+actual published source-tagged release download path. Native ARM64 six-Link
+kernel traffic is proven by the official E2E matrix; **an ARM64 installer
+binary** was built and checksummed but not installed in an ARM64 guest by
+these new lifecycle checks. Issue #12 retains the network gaps and Issue #11
+retains the public release/installed artifact gates.
 
 ## Release validation
 
@@ -143,5 +182,6 @@ for an empty table on successful exit. **This historical inspector-only
 probe**, by itself, was not a supported installation or strongSwan/IKEv2
 traffic acceptance: its image contained no strongSwan. The later
 native AMD64/ARM64 Ubuntu/Debian operational release matrix is documented
-above; independently booted distribution kernels and whole-guest
-reboot/boot-restore evidence remain unproven under Issue #12.
+above; **this 2026-10-10 inspector-only probe** did not boot independent
+distribution kernels or demonstrate full-guest reboot/recovery. Later
+source-bound KVM guest evidence is separately recorded above under Issue #12.
