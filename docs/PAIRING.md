@@ -121,6 +121,20 @@ staged the sender's own private key and the complete public pending sender
 Link plus SHA-256 of the precise SENSITIVE URL (never the receiver private
 key) in `state.json`. The Engine only applies after the handoff is visible,
 then atomically commits desired Link state while consuming Pending.
+A hard crash that leaves an intact private
+`.stl-handoff-<hex>.tmp` before atomic publication can now be reconciled
+explicitly with `stl link recover-handoff --source <original-temp>
+--output <private-destination> --confirm <exact-link-id> [--json]`.
+The source must be the original same-owner, single-link `0600` temporary
+in its original `0700` directory; target must be an absent file in
+**that same directory**. The canonical Engine locks preserve the original
+sender-only pending intent, exact Link and URL SHA-256, and protected local
+WireGuard public identity or IPsec PSK before a no-clobber rename and fsync.
+This re-exposes the **original** receiver secret, never regenerates one,
+modifies host networking, or treats a pending sender as an active tunnel.
+An orphan key without the original intact URL or matching pending record
+has no automatic destructive repair. The optional JSON output includes only
+version, Link identity/backend and destination path, never URL bytes/PSK.
 `resume-wireguard` checks **every field** against the durable pending public
 Link **and** exact original handoff digest, verifying the protected sender
 private/public identity without regenerating a peer private key. Once the

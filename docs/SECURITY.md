@@ -90,6 +90,17 @@ and rechecksummed offer cannot become the original pending sender Link.
 The pending record is public configuration, not a backup of either private
 key; loss of a receiver handoff before publication requires explicit orphan
 reconciliation rather than silent rekeying.
+For hard-crash handoff temporaries, `link recover-handoff`
+accepts only a verified intact original same-owner `0600` staging inode
+under an owner-private `0700` directory, proves exact pending sender
+intent/digest and matching protected local key under canonical Engine locks,
+and publishes via same-directory, no-clobber rename with file/parent fsync.
+Both WireGuard and IPsec sender credentials are supported; recipient-origin
+IPsec staging and already-committed links do not grant recovery authority.
+Unsafe, lost, mismatched or orphaned material remains preserved and
+requires deliberate manual reconciliation; STL never guesses authorization
+to delete an orphan key or invent a new peer secret. This private-file
+recovery is not tunnel traffic, handshake or host-mutating repair.
 Configured v3 receiver import provisions the local key under canonical
 Engine locks. The guided sender generates its own protected private key and
 a separate ephemeral receiver private key only for a deliberately exported
