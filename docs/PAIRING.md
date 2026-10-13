@@ -49,7 +49,10 @@ Create/Resume now use the canonical Engine: only a validated v3 Quick Link with 
 matching its declared public key can be applied. `stl link ensure` desired
 JSON v1 remains unchanged; direct WireGuard provisioning requires an already
 protected local per-Link KeyStore credential. Legacy credential-only v1/v2
-WireGuard and IPsec pairing **remain preview-only and unimportable**.
+WireGuard and v1 IPsec pairing remain preview-only. Strict IPsec v2 offers
+containing a **nonzero, exactly 32-byte PSK** are eligible for protected import only
+when STL's native-exclusive strongSwan admission passes. Other previously
+valid v2 PSK lengths remain preview-only, not silently rekeyed.
 An explicit protected-key retirement action is also available only after
 persisted Link absence and read-only live interface, WireGuard public identity
 and owned firewall absence are established. These additions do not prove
@@ -150,13 +153,17 @@ errors. No file, Link state, route, firewall, interface or backend is changed
 by previewing.
 
 The preview command never applies anything. It emits an exact-URL
-confirmation token for supported credential-free GRE/IPIP **and configured,
-credential-bound v3 WireGuard** Quick Links. V3 preview includes the
-receiver's **public** key identities, listen/peer ports, and per-side
+confirmation token for supported credential-free GRE/IPIP, configured,
+credential-bound v3 WireGuard, **and strict v2 IPsec with a nonzero 32-byte
+PSK** Quick Links. Token availability is a schema/credential check, **not**
+a strongSwan admission decision or proof of network reachability. V3
+preview includes the receiver's **public** key identities, listen/peer ports, and per-side
 keepalive preferences; the private key is always redacted. A token is a
 binding to the reviewed encoded input, **not sender authentication**.
 Interactive import also requires freshly typing the exact Link ID.
-Legacy WireGuard v1/v2 and IPsec remain non-importable.
+Legacy WireGuard v1/v2, IPsec v1 and IPsec v2 with non-32-byte PSKs
+and IPsec v2 with all-zero PSKs remain preview-only; no import confirmation
+is issued for these offers.
 
 ## Explicit GRE/IPIP export CLI
 
@@ -216,21 +223,27 @@ schema version currently fails closed.
 ## Confirmed setup-link import via the canonical Engine
 
 A non-interactive receiving operator may apply a reviewed credential-free
-GRE/IPIP `stl://` offer **or a configured, credential-bound WireGuard v3
-Quick Link** with `stl link import`. `link preview --stdin [--json]` first
-produces a redacted receiver-side preview and, only for those importable
-offers, `import_confirmation`:
+GRE/IPIP `stl://` offer, a configured credential-bound WireGuard v3
+Quick Link, **or a strict 32-byte-PSK IPsec v2 Quick Link** with
+`stl link import`. `link preview --stdin [--json]` first
+produces a redacted receiver-side preview and, only for these structurally
+importable offers, `import_confirmation`:
 the full SHA-256 digest of the exact input setup URL after accepting
 a single optional trailing line terminator.
 
 `link import --stdin --confirm <import_confirmation> [--json]` requires
 the same URL bytes and a matching token. Invalid, changed and unsupported
-offers (including legacy WireGuard v1/v2 and IPsec) are rejected before
-backend/runtime state is assembled. Import uses the same
-`Offer.ReceiverLink` inversion as preview and delegates convergence to
-`Engine.EnsureImported` (GRE/IPIP) or
-`Engine.EnsureImportedRecipient` (WireGuard v3 with protected key provisioning
-under the canonical Engine locks).
+offers (including legacy WireGuard v1/v2, IPsec v1 and IPsec v2 with an
+unsupported PSK length) are rejected before backend/runtime state is
+assembled. Import uses the same `Offer.ReceiverLink` inversion as preview
+and delegates convergence to `Engine.EnsureImported` (GRE/IPIP),
+`Engine.EnsureImportedRecipient` (WireGuard v3 with protected key
+provisioning under the canonical Engine locks), or
+`Engine.StageIPsecRecipient` followed by `Engine.ActivateStagedIPsec`
+(strict IPsec v2 after fresh native-exclusive admission). The IPsec
+transaction protects the existing PSK, checks durable exact intent, and
+refuses foreign/uncertain strongSwan ownership; it does not silently start
+or adopt a foreign service.
 Under the canonical Link lock, it permits only first creation or
 idempotent re-ensure of the **exact previously committed desired state**.
 An existing Link ID with different saved configuration fails with a
@@ -242,8 +255,11 @@ authentication. GRE/IPIP Link traffic remains plaintext and unauthenticated;
 WireGuard v3 encrypts Link traffic, but its SENSITIVE Quick Link must be
 delivered to the intended peer through a trusted channel.
 
-The plaintext GRE/IPIP import and protected WireGuard v3 recipient import
-are implemented; neither completes Issue #8. IPsec/PSK activation/import,
-remaining recovery/edge cases and broader release acceptance still depend
-on Issues #7/#8/#12. A preview confirmation digest binds exact payload bytes
+Plaintext GRE/IPIP, protected WireGuard v3 and conditionally admitted,
+protected IPsec v2 recipient import are implemented; none alone completes
+Issue #8. The IPsec path requires an exactly 32-byte PSK, an already
+verified STL-exclusive native service and separate explicit IKEv2
+initiation/traffic validation. Remaining credential recovery/edge cases
+are tracked in #8; real cross-backend and external acceptance remains #12.
+A preview confirmation digest binds exact payload bytes
 but does **not** authenticate the sender or securely transport a Quick Link.

@@ -137,8 +137,12 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		fmt.Fprintln(out, "Recipient credentials: present / REDACTED (SENSITIVE)")
 	}
 	if preview.ImportConfirmation == "" {
-		fmt.Fprintln(out, "Protected credential import is not available yet. No changes were applied.")
+		fmt.Fprintln(out, "This setup link is preview-only: import is unavailable for its schema or credential. No changes were applied.")
 		return 0
+	}
+	if preview.Backend == "ipsec" {
+		fmt.Fprintln(out, "IPsec import requires an attested STL-exclusive strongSwan service; admission is checked again before protected PSK staging.")
+		fmt.Fprintln(out, "Local import does not prove IKEv2 or peer traffic. Connect and verify encrypted traffic separately.")
 	}
 
 	fmt.Fprintln(out, "Quick Links are neither encrypted nor peer-authenticated. Verify sender and recipient identity separately.")

@@ -45,7 +45,7 @@ func linkPreviewCommand(args []string, input io.Reader, stdout, stderr io.Writer
 	if err != nil {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, "link_preview", "setup-link input is unavailable or exceeds the size limit")
 	}
-	preview, err := pairing.PreviewSetupLink(encoded)
+	offer, err := pairing.DecodeSetupLink(encoded)
 	if err != nil {
 		// Do not include raw setup strings, credential bytes, decode cause,
 		// or arbitrary user-provided input in human or machine errors.
@@ -55,6 +55,11 @@ func linkPreviewCommand(args []string, input io.Reader, stdout, stderr io.Writer
 		}
 		return readCommandError(stdout, stderr, jsonOutput, code, "link_preview", "setup link is invalid or unsupported")
 	}
+	// Retain the decoded credential only to determine whether a v2 IPsec
+	// PSK meets the operational store's exact length. Display and JSON still
+	// use only the redacted Preview; no backend admission or mutation occurs.
+	defer offer.ClearRecipientCredential()
+	preview := offer.Preview()
 	link := preview.Link
 	response := ImportPreviewResponse{
 		SchemaVersion: jsonSchemaVersion, PairingSchemaVersion: preview.SchemaVersion,
@@ -76,7 +81,7 @@ func linkPreviewCommand(args []string, input io.Reader, stdout, stderr io.Writer
 		wg := link.WireGuard
 		response.WireGuard = &wg // public identities and ports only
 	}
-	if importableOffer(preview) {
+	if importableOffer(preview) || importableIPsecOffer(offer) {
 		response.ImportConfirmation = setupLinkConfirmation(encoded)
 	}
 	if jsonOutput {
@@ -108,6 +113,9 @@ func linkPreviewCommand(args []string, input io.Reader, stdout, stderr io.Writer
 	if response.ImportConfirmation != "" {
 		fmt.Fprintln(stdout, "After reviewing these receiver settings, apply this exact setup link with:")
 		fmt.Fprintf(stdout, "stl link import --stdin --confirm %s (same stdin data)\n", response.ImportConfirmation)
+		if link.Backend == domain.BackendIPsec {
+			fmt.Fprintln(stdout, "IPsec import requires a separately attested STL-exclusive strongSwan service; it does not initiate IKEv2 or prove peer traffic.")
+		}
 	} else {
 		fmt.Fprintln(stdout, "Recipient import/apply is not available for this backend or credential-bearing payload.")
 	}

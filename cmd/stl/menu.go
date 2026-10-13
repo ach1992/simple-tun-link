@@ -135,7 +135,7 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 	for {
 		fmt.Fprintln(out, "\nTasks:")
 		fmt.Fprintln(out, "  1  Create Tunnel (guided GRE Native)")
-		fmt.Fprintln(out, "  2  Import Setup Link (confirmed GRE/IPIP/WireGuard v3)")
+		fmt.Fprintln(out, "  2  Import Setup Link (GRE/IPIP/WireGuard v3/IPsec v2)")
 		fmt.Fprintln(out, "  3  Manage Links")
 		fmt.Fprintln(out, "  4  Tests & Diagnostics")
 		fmt.Fprintln(out, "  5  Settings (read-only)")

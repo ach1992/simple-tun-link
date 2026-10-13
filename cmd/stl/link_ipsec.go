@@ -244,12 +244,25 @@ func linkCreateIPsecCommand(args []string, input io.Reader, out, errOut io.Write
 	return 0
 }
 
-// A strict v2 protected PSK import consumes the exact preview confirmation.
-func importableIPsecOffer(p pairing.Preview) bool {
-	return p.SchemaVersion == pairing.SchemaVersion && p.Mode == pairing.ModeQuick &&
-		p.Sensitive && p.HasCredential && p.Credential == pairing.CredentialIPsecPSK &&
-		p.Link.Backend == domain.BackendIPsec &&
-		(p.Link.Encapsulation == domain.EncapESP || p.Link.Encapsulation == domain.EncapNATT)
+// Only a valid, nonzero exact 32-byte v2 PSK can enter the protected store.
+// Older bounded v2 PSKs remain previewable, but must not receive an APPLY
+// confirmation or proceed to native-runtime admission. No secret is logged.
+func importableIPsecOffer(offer pairing.Offer) bool {
+	p := offer.Preview()
+	if p.SchemaVersion != pairing.SchemaVersion || p.Mode != pairing.ModeQuick ||
+		!p.Sensitive || !p.HasCredential || p.Credential != pairing.CredentialIPsecPSK ||
+		p.Link.Backend != domain.BackendIPsec ||
+		(p.Link.Encapsulation != domain.EncapESP && p.Link.Encapsulation != domain.EncapNATT) {
+		return false
+	}
+	secret := offer.RecipientCredential()
+	defer clear(secret)
+	key, err := ipsecbackend.ParsePSK(secret)
+	if err != nil {
+		return false
+	}
+	key.Zeroize()
+	return true
 }
 
 func executeIPsecRecipientImport(encoded, confirmation string, id domain.LinkID,

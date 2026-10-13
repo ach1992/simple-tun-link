@@ -128,6 +128,69 @@ func TestCLIPreviewInputNeverAppearsOnArgvOrUsesBackendRuntime(t *testing.T) {
 	}
 }
 
+func TestCLIPreviewIPsecExactPSKTokenAndLegacyPreviewOnly(t *testing.T) {
+	for _, encap := range []domain.Encapsulation{domain.EncapESP, domain.EncapNATT} {
+		t.Run(string(encap), func(t *testing.T) {
+			link := fixtureReadLink("lnk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"10.88.94.0/31", "10.88.94.1/31", domain.BackendIPsec)
+			link.Encapsulation = encap
+			link.DisplayName = "NEVER_EXPOSE_IPSEC_NAME"
+			for _, tc := range []struct {
+				name       string
+				secret     []byte
+				importable bool
+			}{
+				{"valid 32-byte PSK", bytes.Repeat([]byte{0x59}, 32), true},
+				{"legacy 16-byte PSK", bytes.Repeat([]byte{0x59}, 16), false},
+				{"forbidden all-zero PSK", make([]byte, 32), false},
+			} {
+				secret := tc.secret
+				offer, err := pairing.NewQuickOffer(link, secret)
+				if err != nil {
+					t.Fatal(err)
+				}
+				url, err := offer.EncodeSetupLink()
+				offer.ClearRecipientCredential()
+				if err != nil {
+					t.Fatal(err)
+				}
+				code, body, stderr := previewCLI([]string{"link", "preview", "--stdin", "--json"}, url+"\n")
+				if code != 0 || stderr != "" {
+					t.Fatalf("IPsec preview rejected %s: %d %q", tc.name, code, stderr)
+				}
+				var got ImportPreviewResponse
+				if err := json.Unmarshal([]byte(body), &got); err != nil {
+					t.Fatal(err)
+				}
+				expected := ""
+				if tc.importable {
+					expected = setupLinkConfirmation(url)
+				}
+				if got.SchemaVersion != 1 || got.PairingSchemaVersion != 2 ||
+					got.Backend != domain.BackendIPsec || got.Encapsulation != encap ||
+					got.LinkID != link.ID || !got.Sensitive || !got.HasCredential ||
+					got.CredentialKind != pairing.CredentialIPsecPSK ||
+					got.ImportConfirmation != expected ||
+					got.LocalUnderlay != link.Underlay.Peer.String() {
+					t.Fatalf("invalid redacted IPsec preview for %s: %+v", tc.name, got)
+				}
+				code, human, humanErr := previewCLI([]string{"link", "preview", "--stdin"}, url)
+				if code != 0 || humanErr != "" || !strings.Contains(human, "ipsec_psk") {
+					t.Fatalf("incorrect human IPsec preview: %d %q %q", code, human, humanErr)
+				}
+				for _, value := range []string{url, string(secret), link.DisplayName} {
+					if strings.Contains(body+stderr+human+humanErr, value) {
+						t.Fatal("IPsec preview leaked setup URL, PSK or untrusted display name")
+					}
+				}
+				if !tc.importable && !strings.Contains(human, "not available") {
+					t.Fatal("legacy non-32-byte PSK incorrectly advertised as importable")
+				}
+			}
+		})
+	}
+}
+
 func TestCLIPreviewIncludesNonsecretFOUSettingsBeforeAnyImport(t *testing.T) {
 	link := fixtureReadLink("lnk_ffffffffffffffffffffffffffffffff",
 		"10.80.80.0/31", "10.80.80.1/31", domain.BackendGRE)
