@@ -98,3 +98,26 @@ func TestDBusDecoderRejectsUntrustedProperties(t *testing.T) {
 		}
 	}
 }
+
+func TestEnabledNativeServiceRequiresExactBootEdgeProof(t *testing.T) {
+	cases := []struct {
+		state    string
+		bootEdge bool
+		expected bool
+	}{
+		{`s "static"`, false, true},
+		{`s "static"`, true, true},
+		{`s "enabled"`, false, false},
+		{`s "enabled"`, true, true},
+		{`s "enabled-runtime"`, true, false},
+		{`s "linked"`, true, false},
+		{`s "masked"`, true, false},
+		{`s "enabled" trailing`, true, false},
+		{`s "enabled"\ns "foreign"`, true, false},
+	}
+	for _, tc := range cases {
+		if got := nativeUnitFileStateVerified(tc.state, tc.bootEdge); got != tc.expected {
+			t.Errorf("state=%q bootEdge=%v got=%v want=%v", tc.state, tc.bootEdge, got, tc.expected)
+		}
+	}
+}
