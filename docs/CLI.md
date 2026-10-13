@@ -349,9 +349,15 @@ verified task-owned stale temporary files before treating the one-time
 handoff as fully retired; do not perform unsafe wildcard cleanup.
 
 Synthetic tests of these workflows alone do not prove real handshakes,
-traffic, reboot restore or coexistence. Focused real-kernel WireGuard traffic
-and GRE coexistence were demonstrated in PR #53; actual systemd/restart,
-distinct-peer and supported-environment release acceptance remain #12.
+traffic, reboot restore or coexistence. Separate privileged evidence already
+proves GRE/WireGuard traffic, distinct-peer and same-peer multi-Link
+coexistence, native AMD64/ARM64 six-Link GRE/WG/IKEv2 ESP/NAT-T traffic
+with Ubuntu/Debian userspaces, GRE systemd restart/reapply, and
+GRE/WireGuard whole-guest reboot and abrupt-QEMU recovery (Issue #12).
+Still unproven are **full-guest IPsec ESP/NAT-T reboot/crash restoration**,
+**physical/external NAT-router traversal**, the **published source-tagged
+release/download lifecycle**, and **installed ARM64 release-artifact
+acceptance** (Issues #11–#12).
 
 ## Commands
 
@@ -564,9 +570,15 @@ or unrelated host networking changes are permitted by this CLI layer.
 
 The GRE Native guided Create, the guided WireGuard sender/Resume and
 confirmed GRE/IPIP/WireGuard v3 recipient Import reuse the canonical Engine
-instead of a separate menu lifecycle. Their focused real-kernel evidence is
-recorded under Issue #12; full recovery, IPsec, release-environment and
-operator UX acceptance remain separately tracked. A successful source/CLI
+instead of a separate menu lifecycle. Issue #12 records accepted real
+GRE/WireGuard traffic, distinct-peer and multi-Link coexistence, native
+AMD64/ARM64 six-Link E2E including conditionally admitted IPsec ESP/NAT-T,
+GRE systemd restart and GRE/WireGuard full-guest reboot/crash recovery.
+Remaining release gaps are **full-guest IPsec ESP/NAT-T reboot/crash
+restoration**, **physical/external WAN/NAT-router traversal**, **published
+source-tagged release/downloads** and **installed ARM64 release-artifact
+acceptance** (Issues #11–#12); unresolved pairing, diagnostic and operator
+UX acceptance remains tracked under Issues #8–#10. A successful source/CLI
 test alone does not establish peer traffic or release readiness.
 
 ## Explicit plaintext GRE/IPIP setup-link export (Issue #8)
