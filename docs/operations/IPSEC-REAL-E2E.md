@@ -279,3 +279,52 @@ must still pass on the revised exact source tree. These simulated
 interruption tests are bounded reproducible fault injections, **not**
 proof of actual physical power loss, external NAT router traversal or
 production package/upgrade safety; Issue #12 retains release-level gates.
+
+
+### Whole-guest automatic IPsec recovery — unreleased PR #81 candidate
+
+The source-only candidate in [PR #81](https://github.com/ach1992/simple-tun-link/pull/81)
+addressed a previously failing real-kernel boot acceptance in Issue #12:
+
+- The STL native-exclusive strongSwan service, when explicitly scheduled
+  by its exact, root-owned canonical systemd boot edge, reports
+  `UnitFileState=enabled`. Admission now verifies that edge and all existing
+  private publication receipts, loaded-unit properties, VICI writer,
+  process and socket ownership; an arbitrary enabled/foreign service is
+  **not** accepted.
+- The STL-owned restore unit orders *after* an already-scheduled native
+  service, without `Wants=`/`Requires=` on that service. Canonical
+  `RestoreAll` rehydrates the committed IPsec XFRM/VICI profile and,
+  only if no SA is present, initiates IKE using the existing Engine-scoped
+  owner/resource locks and freshly verified, journal-clean Link identity.
+  Re-initiating a healthy session and replaying staged/uncertain credentials
+  are forbidden.
+- In a dedicated Debian 13 AMD64 QEMU/KVM full-OS guest containing an
+  explicitly disposable, `--network none` Ubuntu 24.04 PID1-systemd
+  strongSwan fixture, original source test guards, private root-owned
+  state/service receipt files and the canonical CLI established authentic
+  two-peer ESP **and** NAT-T before reboot. Source-pinned guest disks were
+  actually powered off and booted with a new kernel; test-only isolated
+  peer-underlay startup preceded automatic systemd Link restore.
+- Both modes passed **without a manual Connect command**: the native
+  service was admitted, the owned Link was automatically restored, fresh
+  IKE/CHILD SAs appeared, and encrypted Link Address packets crossed
+  **both directions**. NAT-T additionally had the real Linux kernel
+  `encap type espinudp` XFRM states on both peers.
+- A separate ESP guest was terminated by **SIGKILL to the exact test-owned
+  QEMU process while actual bilateral ESP traffic was live**. Its same
+  persistent disk required ext4 Journal recovery, then both automatic
+  Link restoration and bilateral encrypted traffic succeeded on a new
+  kernel boot. This is **not** a physical power-loss claim.
+
+The exact source SHA, separately run official AMD64/ARM64 E2E, per-boot
+fixed PASS markers, file digests, failure history, and cleanup receipts
+belong in [Issue #12](https://github.com/ach1992/simple-tun-link/issues/12).
+Tests were manually executed in private disposable guests, not on the AI
+agent's live host networking or an external real-world NAT router.
+**NAT-T abrupt-crash recovery** and **physical WAN/external NAT traversal**
+are still not accepted. The older *published prerelease* predates PR #81;
+this evidence must not be presented as a published Stable release or proof
+of an installed binary's upgrade lifecycle. Never weaken fail-closed
+native ownership checks or substitute simulated CLI-only green tests for
+real post-reboot kernel packets.

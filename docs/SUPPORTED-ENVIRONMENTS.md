@@ -150,13 +150,19 @@ bilateral authenticated traffic, idempotent reapply and scoped cleanup
 were observed. Earlier separate full-guest clean reboot acceptance also
 passed for GRE and WireGuard.
 
-These checks do **not** establish full-guest **IPsec ESP/NAT-T** reboot or
-crash recovery, physical NAT-router/second physical host traversal, or the
-actual published source-tagged release download path. Native ARM64 six-Link
-kernel traffic is proven by the official E2E matrix; **an ARM64 installer
-binary** was built and checksummed but not installed in an ARM64 guest by
-these new lifecycle checks. Issue #12 retains the network gaps and Issue #11
-retains the public release/installed artifact gates.
+The subsequent, **unreleased PR #81 source candidate** independently passed
+true Debian 13 AMD64 KVM full-kernel reboot for native-exclusive IPsec ESP
+and NAT-T, including automatic STL Link restoration, reestablished IKE/CHILD
+SAs, and verified two-way encrypted traffic in an isolated Ubuntu PID1
+systemd guest with ext4-persisted owner receipts. ESP additionally passed
+an abruptly SIGKILL-terminated QEMU guest and automatic same-disk crash
+recovery. These results do **not** prove NAT-T abrupt-crash recovery,
+physical WAN/NAT-router traversal, or an installed published prerelease
+binary. Native ARM64 six-Link traffic remains covered by official E2E;
+**installed ARM64 release artifact** acceptance also remains outstanding.
+Issue #12 tracks remaining physical network/crash gates and Issue #11 the
+public release/installed-artifact acceptance. The currently published
+prerelease predates this candidate and must not claim these fixes.
 
 ## Release validation
 

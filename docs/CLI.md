@@ -7,9 +7,12 @@ Link import. Focused real-kernel WireGuard bidirectional traffic and
 same-peer GRE coexistence were integrated in PR #53. Native-exclusive IPsec
 is now **conditionally operational**, with real IKEv2 ESP and NAT-T traffic
 verified in the native AMD64/ARM64 release E2E matrix (Issue #12).
-Still-unproven acceptance is specific to **full-guest IPsec ESP/NAT-T
-reboot/crash restoration**, **physical/external NAT-router traversal** and
-the **published source-tagged release/installed-artifact lifecycle**
+A later, **unreleased PR #81 source candidate** additionally passed actual
+KVM whole-guest ESP/NAT-T automatic restore with two-way encrypted traffic,
+and ESP abrupt-QEMU termination followed by same-disk recovery (Issue #12).
+These are not capabilities yet certified in the published prerelease.
+**NAT-T abrupt-crash recovery**, physical/external NAT-router traversal,
+and the relevant published-tag/installed-artifact acceptance remain open
 (Issues #11–#12).
 The versioned non-interactive ensure/remove lifecycle is implemented.
 This page distinguishes **read-only** observations from **explicit
@@ -354,10 +357,13 @@ proves GRE/WireGuard traffic, distinct-peer and same-peer multi-Link
 coexistence, native AMD64/ARM64 six-Link GRE/WG/IKEv2 ESP/NAT-T traffic
 with Ubuntu/Debian userspaces, GRE systemd restart/reapply, and
 GRE/WireGuard whole-guest reboot and abrupt-QEMU recovery (Issue #12).
-Still unproven are **full-guest IPsec ESP/NAT-T reboot/crash restoration**,
-**physical/external NAT-router traversal**, the **published source-tagged
-release/download lifecycle**, and **installed ARM64 release-artifact
-acceptance** (Issues #11–#12).
+On an **unreleased PR #81 source candidate**, true full-guest KVM reboot
+restored ESP and NAT-T automatically, including renewed IKE/CHILD SAs and
+bilateral encrypted packets; ESP also passed abrupt-QEMU SIGKILL and
+automatic same-disk recovery. This does **not** prove an installed published
+binary or physical WAN peer. **NAT-T abrupt-crash recovery**, external NAT
+routers, published release/download lifecycle and installed ARM64 release-
+artifact acceptance remain open (Issues #11–#12).
 
 ## Commands
 
@@ -477,8 +483,10 @@ explicit host-mutating operations. Additional pairing/import recovery
 (Issue #8), optional throughput and diagnostic acceptance (Issue #9), and
 remaining task-first UI work (Issue #10) are separately tracked.
 Native-exclusive IPsec is already conditionally operational (Issue #7 closed),
-with real ESP/NAT-T E2E traffic; **full-guest IPsec reboot/crash recovery and
-physical WAN/NAT acceptance remain open** under Issue #12.
+with real ESP/NAT-T E2E traffic. An **unreleased PR #81 candidate** passed
+whole-guest KVM automatic ESP/NAT-T reboot recovery and abrupt ESP VM-crash
+recovery. **NAT-T crash and physical WAN/NAT acceptance remain open** under
+Issue #12; these tests do not promote the published prerelease.
 
 ## Explicit Link lifecycle commands — Issue #10
 
@@ -574,10 +582,11 @@ instead of a separate menu lifecycle. Issue #12 records accepted real
 GRE/WireGuard traffic, distinct-peer and multi-Link coexistence, native
 AMD64/ARM64 six-Link E2E including conditionally admitted IPsec ESP/NAT-T,
 GRE systemd restart and GRE/WireGuard full-guest reboot/crash recovery.
-Remaining release gaps are **full-guest IPsec ESP/NAT-T reboot/crash
-restoration**, **physical/external WAN/NAT-router traversal**, **published
-source-tagged release/downloads** and **installed ARM64 release-artifact
-acceptance** (Issues #11–#12); unresolved pairing, diagnostic and operator
+Unreleased PR #81 separately proves real full-kernel KVM IPsec ESP/NAT-T
+automatic reboot recovery and ESP abrupt-VM-crash recovery. Remaining release
+gaps are **NAT-T abrupt-crash recovery**, **physical/external WAN/NAT-router
+traversal**, **published source-tagged release/downloads** and **installed
+ARM64 release-artifact acceptance** (Issues #11–#12); unresolved pairing, diagnostic and operator
 UX acceptance remains tracked under Issues #8–#10. A successful source/CLI
 test alone does not establish peer traffic or release readiness.
 
@@ -687,9 +696,12 @@ GRE Native and WireGuard automatic restore have additionally passed real
 whole-guest reboot and simulated abrupt KVM process termination followed
 by a fresh boot, with protected credentials unchanged
 ([Issue #12 evidence](https://github.com/ach1992/simple-tun-link/issues/12#issuecomment-6134259976)).
-Whole-guest **IPsec ESP/NAT-T** reboot/crash restoration, physical WAN/NAT
-router traversal, and public tagged-release gates remain **unproven** under
-Issues #11 and #12.
+A later **unreleased PR #81 candidate** separately passed whole-guest ESP
+and NAT-T automatic reboot restoration with live bilateral encrypted packets,
+and genuine abrupt-QEMU SIGKILL followed by ESP same-disk automatic recovery.
+**NAT-T abrupt-crash recovery**, physical WAN/NAT-router traversal, and the
+published/tagged-release acceptance gate remain **unproven** under Issues
+#11–#12. No prerelease binary should be mistaken for this source candidate.
 
 ## IPsec operational CLI and historical read-only diagnostic milestones
 
