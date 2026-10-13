@@ -4,12 +4,16 @@ The terminal menu supports local overview, guided **GRE Native** and
 **WireGuard/UDP** Create, Link management/status, selected diagnostics,
 preview-confirmed plaintext GRE/IPIP import and protected WireGuard v3 Quick
 Link import. Focused real-kernel WireGuard bidirectional traffic and
-same-peer GRE coexistence were integrated in PR #53; operational IPsec,
-additional failure/recovery cases and release acceptance remain open under
-Issues #6–#12.
-The versioned non-interactive ensure/remove lifecycle is implemented, with
-runtime/backend acceptance tracked separately. This page distinguishes
-**read-only** observations from **explicit host-mutating** commands.
+same-peer GRE coexistence were integrated in PR #53. Native-exclusive IPsec
+is now **conditionally operational**, with real IKEv2 ESP and NAT-T traffic
+verified in the native AMD64/ARM64 release E2E matrix (Issue #12).
+Still-unproven acceptance is specific to **full-guest IPsec ESP/NAT-T
+reboot/crash restoration**, **physical/external NAT-router traversal** and
+the **published source-tagged release/installed-artifact lifecycle**
+(Issues #11–#12).
+The versioned non-interactive ensure/remove lifecycle is implemented.
+This page distinguishes **read-only** observations from **explicit
+host-mutating** commands.
 
 ## Task-first terminal menu
 
@@ -463,10 +467,12 @@ Read-only `list`, `status`, `diagnose`, `preview` and
 explicit `export` never change network configuration. Export is
 **deliberately revealing** and not suitable for ordinary diagnostics/logging.
 The distinct `ensure`, `remove` and `restore` paths are
-explicit host-mutating operations. Interactive
-additional create/import recovery, optional throughput, operational IPsec
-and remaining task-first UI work are tracked under Issues #7–#10. Focused
-WireGuard/GRE traffic was observed in PR #53; broader release E2E remains #12.
+explicit host-mutating operations. Additional pairing/import recovery
+(Issue #8), optional throughput and diagnostic acceptance (Issue #9), and
+remaining task-first UI work (Issue #10) are separately tracked.
+Native-exclusive IPsec is already conditionally operational (Issue #7 closed),
+with real ESP/NAT-T E2E traffic; **full-guest IPsec reboot/crash recovery and
+physical WAN/NAT acceptance remain open** under Issue #12.
 
 ## Explicit Link lifecycle commands — Issue #10
 

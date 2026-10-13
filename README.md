@@ -140,9 +140,16 @@ key for rollback; separate `stl link credential retire` requires a
 never an unrelated state file. [CLI instructions](docs/CLI.md) explain the
 exact commands, recovery boundaries and safety requirements. **The
 create/import workflow alone does not establish encrypted traffic or a safe
-handoff channel.** Focused real-kernel WireGuard/GRE evidence is recorded in
-PR #53 / Issue #12; release, restart, multi-peer and cross-platform
-acceptance remain open. Deliver the SENSITIVE handoff through a trusted channel.
+handoff channel.** Real GRE/WireGuard traffic, distinct-peer/multi-peer
+scenarios, native AMD64/ARM64 six-Link E2E and GRE systemd restart have
+passed in their recorded test environments. GRE/WireGuard also passed
+full-guest reboot and abrupt KVM termination followed by automatic restore
+([Issue #12](https://github.com/ach1992/simple-tun-link/issues/12#issuecomment-6134259976)).
+Still unproven: **full-guest IPsec ESP/NAT-T reboot/crash restoration**,
+**external/physical NAT-router traversal**, the **published source-tagged
+release/download lifecycle**, and **installed ARM64 release-artifact
+acceptance** (Issues #11–#12). Deliver the SENSITIVE handoff through a
+trusted channel.
 
 ## Development
 
