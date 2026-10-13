@@ -145,7 +145,13 @@ func TestWireGuardSenderRejectsUnsafeHandoffBeforeKeyOrHostMutation(t *testing.T
 	if err := os.Symlink(path, cases[1].path); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(filepath.Join(filepath.Dir(parent), "unsafe"), 0o755); err != nil {
+	unsafeDir := filepath.Join(filepath.Dir(parent), "unsafe")
+	if err := os.Mkdir(unsafeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// An inherited restrictive umask can silently turn 0755 into safe 0700.
+	// Set the deliberately unsafe fixture mode explicitly before asserting rejection.
+	if err := os.Chmod(unsafeDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range cases {
