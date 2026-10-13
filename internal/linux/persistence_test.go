@@ -298,10 +298,16 @@ func TestSystemdRestoreUnitHasBoundedOneShotStartup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, fragment := range []string{"Type=oneshot", "TimeoutStartSec=35min", "ExecStart=/usr/local/bin/stl link restore --all"} {
+	for _, fragment := range []string{"Type=oneshot", "TimeoutStartSec=35min", "ExecStart=/usr/local/bin/stl link restore --all", "After=network-online.target simple-tun-link-ipsec.service", "Wants=network-online.target"} {
 		if !strings.Contains(unit, fragment) {
 			t.Fatalf("restore unit missing %s", fragment)
 		}
+	}
+	// Do not start, require or adopt a foreign/ambiguous strongSwan service.
+	if strings.Contains(unit, "Wants=simple-tun-link-ipsec.service") ||
+		strings.Contains(unit, "Requires=simple-tun-link-ipsec.service") ||
+		strings.Contains(unit, "strongswan.service") {
+		t.Fatal("restore unit must order only against the STL-native service without claiming service ownership")
 	}
 }
 
