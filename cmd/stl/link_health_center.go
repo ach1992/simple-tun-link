@@ -44,12 +44,15 @@ type healthLinkCheck struct {
 }
 
 type healthLinkObservation struct {
-	MTU                 diagnostics.MTUResult     `json:"mtu"`
-	Quality             diagnostics.QualityResult `json:"quality"`
-	RX                  uint64                    `json:"rx"`
-	TX                  uint64                    `json:"tx"`
-	CounterUnit         string                    `json:"counter_unit"`
-	LatestHandshakeUnix *int64                    `json:"latest_handshake_unix,omitempty"`
+	MTU     diagnostics.MTUResult     `json:"mtu"`
+	Quality diagnostics.QualityResult `json:"quality"`
+	// A measured zero is distinct from a backend that did not verify
+	// counters at all. Previously supported GRE/IPIP/WireGuard emit both
+	// fields even when zero; IPsec without a reader omits them.
+	RX                  *uint64 `json:"rx,omitempty"`
+	TX                  *uint64 `json:"tx,omitempty"`
+	CounterUnit         string  `json:"counter_unit,omitempty"`
+	LatestHandshakeUnix *int64  `json:"latest_handshake_unix,omitempty"`
 }
 
 func parseHealthCenterArgs(args []string) (jsonOutput bool, timeout time.Duration, ok bool) {
@@ -257,10 +260,17 @@ func linkDiagnoseAllWithServices(args []string, stdout, stderr io.Writer, option
 				check.Link.ID, check.Link.Backend, check.Link.Encapsulation,
 				check.Status, check.ReasonCode, check.Summary, check.NextStep)
 			if check.Observed != nil {
-				fmt.Fprintf(stdout, "  MTU=%d, probes=%d, replies=%d, RX=%d TX=%d %s\n",
+				fmt.Fprintf(stdout, "  MTU=%d, probes=%d, replies=%d",
 					check.Observed.MTU.SelectedMTU, check.Observed.Quality.PacketsSent,
-					check.Observed.Quality.PacketsReceived, check.Observed.RX,
-					check.Observed.TX, check.Observed.CounterUnit)
+					check.Observed.Quality.PacketsReceived)
+				if check.Observed.RX != nil && check.Observed.TX != nil &&
+					check.Observed.CounterUnit != "" {
+					fmt.Fprintf(stdout, ", RX=%d TX=%d %s",
+						*check.Observed.RX, *check.Observed.TX, check.Observed.CounterUnit)
+				} else {
+					fmt.Fprint(stdout, ", RX/TX counters: not measured")
+				}
+				fmt.Fprintln(stdout)
 			}
 		}
 		fmt.Fprintf(stdout, "Links in snapshot: %d | peer replied: %d | blocked: %d | unknown: %d | run: %s\n",
@@ -321,7 +331,12 @@ func healthDiagnosticFailure(link domain.Link, err error) healthLinkCheck {
 func healthFromMeasurement(link domain.Link, measurement linkDiagnostic) healthLinkCheck {
 	observed := &healthLinkObservation{
 		MTU: measurement.mtu, Quality: measurement.quality,
-		RX: measurement.rx, TX: measurement.tx, CounterUnit: measurement.counterUnit,
+	}
+	// Only a backend that verified and supplied actual counter units may
+	// publish even the number zero; an absent measurement must be omitted.
+	if measurement.counterUnit == "packets" || measurement.counterUnit == "bytes" {
+		rx, tx := measurement.rx, measurement.tx
+		observed.RX, observed.TX, observed.CounterUnit = &rx, &tx, measurement.counterUnit
 	}
 	if measurement.handshakeUTC > 0 {
 		observed.LatestHandshakeUnix = &measurement.handshakeUTC

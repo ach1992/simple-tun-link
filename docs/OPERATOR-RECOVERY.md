@@ -125,9 +125,14 @@ FOU/GUE receive mappings (`fou`).
    count plus validated **per-Link failure reason, next action and stage**
    where evidence exists. It does not silently ignore failed siblings.
    Unrecoverable shared-state or rollback failure stops the batch.
-6. For IPsec/XFRM, only `stl doctor ipsec --json` is currently supported:
-   the operational backend remains unregistered, and no diagnostic is an
-   activation permit. See Issues #7 and #12.
+6. For IPsec/XFRM, run `stl doctor ipsec --json` first to inspect
+   native-exclusive service prerequisites. When **not** admitted, the
+   operational backend stays unregistered and status/diagnosis is blocked.
+   When admitted, read-only `status` and `diagnose` can verify owned XFRM
+   identity, installed SA and bounded Link Address responses; the current
+   API does **not** measure IPsec RX/TX counters. A diagnosed SA does not
+   grant activation permission, authenticate an untrusted peer or prove
+   sustained encrypted traffic. See Issues #9 and #12.
 
 Safe failures may not contain `evidence` if they occur outside the canonical
 Engine or in a legacy entry point; absence of evidence means **unknown**,

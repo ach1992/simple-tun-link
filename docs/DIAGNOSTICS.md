@@ -41,10 +41,14 @@ healthy. `observed/link_peer_replied` means only a verified, Link-bound
 echo was received at probe time. A validly sent but unanswered probe becomes
 `unknown/link_probe_no_reply`, not proof of permanent peer failure.
 Incomplete/no-capability measurements are likewise unknown/blocked, not
-silently successful. Operational IPsec stays
+silently successful. **When** the native-exclusive IPsec runtime cannot
+be admitted/registered, its Link stays
 `blocked/ipsec_runtime_not_registered` with canonical
 `next_step: "stl doctor ipsec"` across all-Link and per-Link status/
-diagnosis; there is no implicit service or network mutation. A batch can
+diagnosis; there is no implicit service or network mutation. An already
+admitted runtime may perform bounded, read-only Link Address diagnostics
+after verifying its private owned XFRM interface and SA. An installed
+IPsec SA is not proof that the peer replied. A batch can
 be canceled and returns an explicit interrupted outcome with unknown
 remaining records **when inventory was successfully read**. If cancellation
 interrupts inventory loading before a verified Link set exists, the version-1
@@ -235,6 +239,30 @@ coexistence (PR #53 / Issue #12); this does **not** establish all failure,
 recovery, multi-peer or distro/architecture release acceptance.
 No private key or SENSITIVE setup URL is inspected or serialized.
 
+## IPsec/XFRM adapter — admitted read-only observations
+
+`ObserveIPsec` is conditionally available **only** after the independent
+native-exclusive service admission gate succeeds. It verifies the exact
+private XFRM interface name/ifindex/if_id, owned VICI connection and an
+installed IPsec SA **before** bounded Link Address DF probes. ESP
+and NAT-T conservatively budget **128 and 136 bytes** respectively; these
+are planning bounds, **not** guaranteed negotiated-transform overheads.
+A successful ICMP response proves only a short, Link-scoped observation.
+
+The IPsec backend's current `DiagnosticState` verifies interface, XFRM ID,
+connection and SA presence, but **does not read packet/byte counters**.
+The all-Link health report must therefore omit `rx`, `tx` and
+`counter_unit` on an IPsec observation, rather than falsely reporting
+zero measured packets. Human output explicitly states that RX/TX were
+not measured. An actual **measured zero** on GRE/IPIP/WireGuard continues
+to serialize as numeric zero with its verified `packets`/`bytes` unit.
+This keeps the existing version-1 successful backend JSON shape intact,
+while making previously unsupported/unverified IPsec counters absent.
+
+IPsec state/SA existence is a current observation, not proof of fresh IKE,
+ongoing encryption, peer trust or future reachability. No diagnostic
+adapter may start a daemon, install policies, change MTU or repair state.
+
 ## MTU policy
 
 `MTUConstraints.UnderlayMTU` comes from route-aware source/interface
@@ -318,8 +346,10 @@ with its separate authorization/ownership checks.
 
 This Linux adapter does not complete Issue #9. Still required:
 
-- IPsec/XFRM overhead, capability, state and counter integration once its
-  backend exists (#7);
+- IPsec packet/byte counter integration with exact owner-bound kernel
+  reads (currently deliberately unavailable rather than fabricated); the
+  conditional XFRM/SA observer and conservative ESP/NAT-T overhead
+  estimates are already implemented;
 - Safe MTU application through the Engine, never from health observation;
 - Optional throughput path (when tooling is present and explicitly requested);
 - Additional error/rollback and distinct-peer cases, real systemd
