@@ -167,6 +167,58 @@ func TestMenuImportIPIPUsesExistingImporter(t *testing.T) {
 	}
 }
 
+func TestMenuIPsecConfirmedOfferFailsClosedWithoutNativeService(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "uncreated-state")
+	fake := newLifecycleFake()
+	link, _ := makeLifecycleDesired(t, "f", "10.70.102.0/31")
+	link.Backend, link.Encapsulation = domain.BackendIPsec, domain.EncapNATT
+	link.DisplayName = "NEVER_PRINT_IPSEC_NAME"
+	secret := bytes.Repeat([]byte{0x59}, 32)
+	url := testQuickSetupLink(t, link, secret)
+
+	cases := []struct {
+		name       string
+		confirm    string
+		exit       int
+		wantOutput string
+	}{
+		{"cancel", "", 0, "Import cancelled"},
+		{"confirmed, runtime unadmitted", string(link.ID), 4, "native-exclusive"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			code, output, errOut := runMenuImportTest(t, root, []backend.Backend{fake},
+				"2\n"+url+"\n"+tc.confirm+"\n8\n")
+			if code != tc.exit || !strings.Contains(output+errOut, tc.wantOutput) ||
+				!strings.Contains(output, "SENSITIVE") ||
+				!strings.Contains(output, "strongSwan") {
+				t.Fatalf("menu IPsec guarded import: code=%d out=%q stderr=%q", code, output, errOut)
+			}
+			for _, raw := range []string{url, string(secret), link.DisplayName, setupLinkConfirmation(url)} {
+				if strings.Contains(output+errOut, raw) {
+					t.Fatal("IPsec menu exposed secret, offer or confirmation token")
+				}
+			}
+			if len(fake.applies) != 0 {
+				t.Fatal("IPsec menu invoked unrelated backend")
+			}
+			if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("unadmitted/cancelled IPsec import mutated protected state: %v", err)
+			}
+		})
+	}
+
+	legacy := testQuickSetupLink(t, link, bytes.Repeat([]byte{0x59}, 16))
+	code, output, errOut := runMenuImportTest(t, root, []backend.Backend{fake}, "2\n"+legacy+"\n8\n")
+	if code != 0 || errOut != "" || !strings.Contains(output, "preview-only") ||
+		strings.Contains(output, "To APPLY") || strings.Contains(output+errOut, legacy) {
+		t.Fatalf("legacy IPsec Quick Link was treated as importable: %d %q %q", code, output, errOut)
+	}
+	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy preview created protected state: %v", err)
+	}
+}
+
 func TestMenuURLConsumesOneBoundedLineWithoutWaitingForEOF(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader("setup\r\nnext\n"))
 	encoded, err := readMenuURL(reader)

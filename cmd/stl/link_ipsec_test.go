@@ -2,8 +2,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"net/netip"
 	"os"
@@ -67,10 +65,20 @@ func TestIPsecRecipientImportWithoutAdmittedServiceKeepsSecretProtected(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	hash := sha256.Sum256([]byte(encoded))
+	var previewOut, previewErr bytes.Buffer
+	previewExit := runWithRuntimeInput([]string{"link", "preview", "--stdin", "--json"},
+		strings.NewReader(encoded), &previewOut, &previewErr, nil)
+	var preview ImportPreviewResponse
+	if previewExit != 0 || previewErr.Len() != 0 ||
+		json.Unmarshal(previewOut.Bytes(), &preview) != nil ||
+		preview.ImportConfirmation != setupLinkConfirmation(encoded) ||
+		!preview.Sensitive || preview.CredentialKind != pairing.CredentialIPsecPSK ||
+		strings.Contains(previewOut.String(), encoded) {
+		t.Fatalf("cannot securely preview canonical IPsec v2 handoff: code=%d output=%s", previewExit, previewOut.String())
+	}
 	opts := &runtimeOptions{stateRoot: filepath.Join(temp, "state")}
 	var stdout, stderr bytes.Buffer
-	exit := runWithRuntimeInput([]string{"link", "import", "--stdin", "--confirm", hex.EncodeToString(hash[:]), "--json"},
+	exit := runWithRuntimeInput([]string{"link", "import", "--stdin", "--confirm", preview.ImportConfirmation, "--json"},
 		strings.NewReader(encoded), &stdout, &stderr, opts)
 	if exit != 4 || stderr.Len() != 0 {
 		t.Fatalf("unadmitted IPsec import must fail: code=%d stdout=%s stderr=%s", exit, stdout.String(), stderr.String())

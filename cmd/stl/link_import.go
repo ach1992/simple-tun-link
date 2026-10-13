@@ -46,8 +46,9 @@ func importableOffer(preview pairing.Preview) bool {
 }
 
 // linkImportCommand requires a preview-derived token for the EXACT setup link
-// before the canonical Engine is assembled. v3 WireGuard uses its validated
-// protected credential transaction; legacy/unrecognized secrets fail closed.
+// before the canonical Engine is assembled. Configured WireGuard v3 and
+// exact-key IPsec v2 use protected credential transactions; other legacy
+// or unrecognized secret-bearing offers fail closed.
 func linkImportCommand(args []string, input io.Reader, stdout, stderr io.Writer, options *runtimeOptions) int {
 	jsonOutput := slices.Contains(args, "--json")
 	valid := (len(args) == 4 || (len(args) == 5 && args[4] == "--json")) &&
@@ -74,7 +75,7 @@ func linkImportCommand(args []string, input io.Reader, stdout, stderr io.Writer,
 	// Decoded Quick offers may contain secret bytes; keep the sensitive
 	// payload out of ordinary errors even when import is rejected.
 	defer offer.ClearRecipientCredential()
-	if !importableOffer(offer.Preview()) && !importableIPsecOffer(offer.Preview()) {
+	if !importableOffer(offer.Preview()) && !importableIPsecOffer(offer) {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_import",
 			"setup-link backend/schema is not eligible for protected recipient import")
 	}
@@ -94,7 +95,7 @@ func linkImportCommand(args []string, input io.Reader, stdout, stderr io.Writer,
 		return readCommandError(stdout, stderr, jsonOutput, code, "link_import",
 			"receiver Link configuration is invalid or unsupported")
 	}
-	if importableIPsecOffer(offer.Preview()) {
+	if importableIPsecOffer(offer) {
 		return executeIPsecRecipientImport(encoded, args[3], desired.ID, jsonOutput, stdout, stderr, options)
 	}
 	if importableWireGuardOffer(offer.Preview()) {

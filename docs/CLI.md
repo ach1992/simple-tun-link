@@ -2,8 +2,9 @@
 
 The terminal menu supports local overview, guided **GRE Native** and
 **WireGuard/UDP** Create, Link management/status, selected diagnostics,
-preview-confirmed plaintext GRE/IPIP import and protected WireGuard v3 Quick
-Link import. Focused real-kernel WireGuard bidirectional traffic and
+preview-confirmed plaintext GRE/IPIP import, protected WireGuard v3 Quick
+Link import and conditionally admitted IPsec v2 (32-byte PSK) import.
+Focused real-kernel WireGuard bidirectional traffic and
 same-peer GRE coexistence were integrated in PR #53. Native-exclusive IPsec
 is now **conditionally operational**, with real IKEv2 ESP and NAT-T traffic
 verified in the native AMD64/ARM64 release E2E matrix (Issue #12).
@@ -198,8 +199,8 @@ CLI code, then shows the receiver-oriented underlay, Link Addresses and GRE
 options. Before requesting the final Link-ID confirmation, it discards
 already queued terminal input; pre-pasting multiple lines together cannot
 silently supply a confirmation before the preview was displayed. For a
-**credential-free GRE/IPIP or configured, credential-bound WireGuard v3
-Quick Link**, it requires the operator to type
+**credential-free GRE/IPIP, configured credential-bound WireGuard v3,
+or strict 32-byte-PSK IPsec v2 Quick Link**, it requires the operator to type
 the **exact stable Link ID** as a separate confirmation.
 Only then does it delegate to the existing `link import` operation, whose
 SHA-256 confirmation binds the exact reviewed URL. That Engine import can
@@ -210,8 +211,12 @@ invalid input never invokes an Engine mutation.
 Quick Link payloads provide **no confidentiality or authenticated sender**;
 verify the offer with the intended peer through a trusted channel. Sensitive
 WireGuard v3 offers show credential presence as **REDACTED** and additionally
-show public keys/ports/keepalives before exact Link-ID confirmation. IPsec
-and legacy WireGuard v1/v2 offers remain preview-only.
+show public keys/ports/keepalives before exact Link-ID confirmation.
+For strict IPsec v2, it displays only PSK presence and warns that activation
+requires an already attested STL-exclusive strongSwan service; successful
+local import does not initiate IKE or prove protected traffic. Legacy
+WireGuard v1/v2, IPsec v1 and IPsec v2 with non-32-byte PSKs remain
+preview-only.
 The menu makes no separate promises about working peer traffic or complete
 pairing. Settings is observational; Update and Uninstall provide guided,
 read-only installer handoffs and never silently mutate the host. Menu text
@@ -400,13 +405,15 @@ explicit authorization and verified release artifacts.
   credential or applying network state. Never pass SENSITIVE Quick Links as
   command-line arguments, which can enter shell history/process listings.
 - `stl link import --stdin --confirm <preview-token> [--json]`:
-  **mutating**, accepts a reviewed credential-free GRE/IPIP or configured
-  credential-bound WireGuard v3 Quick Link via standard input and converges
-  its receiver-oriented Link through the canonical Engine. The required
-  confirmation token comes from preview of the exact URL. V3 WireGuard
-  stores its receiver private key under restrictive permissions **inside
-  Engine's per-Link transaction lock**. Legacy WireGuard v1/v2 and IPsec
-  remain unsupported for import.
+  **mutating**, accepts a reviewed credential-free GRE/IPIP, configured
+  credential-bound WireGuard v3, or exact-32-byte-PSK IPsec v2 Quick Link via
+  standard input. The required token comes from read-only preview of the
+  exact URL. WireGuard stores its receiver private key under restrictive
+  permissions inside the canonical Engine transaction. IPsec uses the
+  protected PSK store and staged Engine activation **only after native-exclusive
+  service admission**; it cannot adopt or stop a foreign strongSwan runtime.
+  Legacy WireGuard v1/v2, IPsec v1 and non-32-byte IPsec v2 offers are
+  preview-only.
 - `stl link export <link-id> [--json]`: **read-only but intentionally
   disclosing**, export a canonical receiver Setup Link for a saved
   credential-free GRE or IPIP Link, including encoded endpoints and
@@ -630,16 +637,17 @@ share setup material with the intended peer rather than public logs.
 The command is read-only and does not inspect, repair or apply the Link.
 Existence in saved desired state **does not prove a working tunnel**.
 Only credential-free GRE/IPIP Native/FOU/GUE exports are supported.
-WireGuard and IPsec remain explicitly Unsupported for **re-export from
+WireGuard and IPsec remain explicitly unsupported for **re-export from
 persisted sender state**, because recipient private keys are deliberately
 not retained. WireGuard uses the separate one-time Create/Resume
 workflow. Export never silently omits private keys/PSKs to manufacture a broken setup link. Confirm the configuration
 via the existing `link preview` before a separate authorized apply
 step. Export never applies a Link; the explicit `link import` command
 described below can apply either a credential-free GRE/IPIP offer or a
-configured WireGuard v3 Quick Link after exact-payload confirmation.
+configured WireGuard v3 or strict IPsec v2 Quick Link after exact-payload
+confirmation and IPsec-only native service admission.
 
-## Confirmed GRE/IPIP and WireGuard v3 setup-link import (Issues #8/#10)
+## Confirmed GRE/IPIP, WireGuard v3 and IPsec v2 setup-link import (Issues #8/#10)
 
 A receiving operator first reviews the inverted Link details and the
 confirmation token; preview is **strictly read-only**:
@@ -648,7 +656,8 @@ confirmation token; preview is **strictly read-only**:
 stl link preview --stdin --json < /path/to/protected/setup-link.txt
 ~~~
 
-For a credential-free GRE or IPIP Quick Link, the preview JSON includes
+For a credential-free GRE/IPIP, configured WireGuard v3 or strict IPsec v2
+Quick Link with exactly 32 PSK bytes, the preview JSON includes
 `import_confirmation`, a 64-character lowercase SHA-256 digest of the
 exact decoded/line-terminator-normalized `stl://` URL. After verifying
 the receiver underlay, peer address, Link Addresses, backend and GRE
@@ -668,10 +677,13 @@ offer with the intended peer through a trusted channel. Plaintext GRE
 and IPIP provide **no encryption or peer authentication**.
 
 The importer calls the canonical `Offer.ReceiverLink` inversion, then
-`Engine.EnsureImported` (plaintext) or `Engine.EnsureImportedRecipient`
-(credential-bound WireGuard): the import-specific policy permits a **new Link ID**
-or an **existing ID whose committed desired state exactly matches** the
-reviewed receiver configuration. If that ID already exists with *any*
+`Engine.EnsureImported` (plaintext), `Engine.EnsureImportedRecipient`
+(credential-bound WireGuard), or staged `Engine.StageIPsecRecipient` /
+`Engine.ActivateStagedIPsec` after native-exclusive admission (IPsec v2).
+Plaintext and WireGuard import permit a **new Link ID** or an **existing
+ID whose committed desired state exactly matches** the reviewed receiver
+configuration; IPsec additionally requires exact protected PSK/ownership
+intent and fails closed on uncertain state. If that ID already exists with *any*
 different desired configuration (including a different backend, address,
 GRE option or display name), import returns a redacted `conflict` and does
 not inspect, reconfigure or remove the existing backend resources. This
@@ -695,7 +707,8 @@ WireGuard v3 import uses the protected KeyStore: private bytes travel only
 through a 0600 key file and an already-verified inherited descriptor to
 `wg set`, not generic JSON, argv or log output. Identical-credential retry
 is allowed under Engine locks; mismatched credentials, unknown backend,
-legacy WireGuard v1/v2 and all IPsec offers are refused. Failed apply may
+legacy WireGuard v1/v2, IPsec v1, and IPsec v2 with non-32-byte or all-zero
+PSKs are refused for import. Failed apply may
 leave a validated private key intentionally for reconciliation; removing
 a WireGuard interface does **not** destroy stored credentials. Operators
 must handle eventual key retirement deliberately. WireGuard public status
@@ -704,8 +717,12 @@ supports a verified interface, latest handshake timestamp and RX/TX bytes,
 WireGuard guided sender creation, v3 recipient import and explicit credential
 retirement are implemented. Real-kernel bidirectional WireGuard and same-peer
 GRE coexistence were observed in PR #53. Native-exclusive operational IPsec
-is now conditionally admitted, with true ESP/NAT-T traffic and removal
-evidence (see [IPsec real E2E](operations/IPSEC-REAL-E2E.md)).
+v2 recipient import is now conditionally admitted, with source-level strict
+PSK staging and independently
+verified ESP/NAT-T traffic/removal evidence (see
+[IPsec real E2E](operations/IPSEC-REAL-E2E.md)). Its preview token
+does not authorize service activation, authenticate the sender, initiate IKE,
+or establish real WAN/NAT-router compatibility.
 GRE Native and WireGuard automatic restore have additionally passed real
 whole-guest reboot and simulated abrupt KVM process termination followed
 by a fresh boot, with protected credentials unchanged
