@@ -7,7 +7,7 @@ It creates and manages independent **Link Addresses** between Linux servers over
 Canonical CLI: **stl**  
 Convenience alias: **stlink** (same executable/behavior when installed by the supported installer)
 
-> Status: **pre-release; no public tag or GitHub Release**. The source
+> Status: **public v0.1.0-rc.1 pre-release; no Stable release**. The source
 > integrates GRE/IPIP Native/FOU/GUE, WireGuard v3 Quick Link, and the
 > **conditionally admitted**, native-exclusive IPsec/XFRM IKEv2 ESP/NAT-T
 > backend. Privileged six-simultaneous-Link E2E passed on native AMD64 and
@@ -80,11 +80,13 @@ Consumer-specific concepts such as geography, product roles, orchestration polic
 
 ## Installation (pre-release)
 
-The [installation runbook](docs/INSTALL.md) documents the future tagged-release
-one-command installer, checksum-verified atomic updates, the `stlink` alias,
-and guarded uninstall. No public version/tag is currently available, so do
-not execute the placeholder `vX.Y.Z` command as an actual installation.
-For nonprivileged/offline test coverage, run `bash scripts/test-install.sh`.
+The [installation runbook](docs/INSTALL.md) documents the one-command
+installer, checksum-verified atomic updates, the `stlink` alias, and guarded
+uninstall for the published [v0.1.0-rc.1 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.1).
+Use a real published tag; `vX.Y.Z` in examples is only a placeholder.
+The current public pre-release does **not** contain the unmerged PR #81
+IPsec reboot/crash recovery fixes. For nonprivileged/offline test coverage,
+run `bash scripts/test-install.sh`.
 
 ## Read-only IPsec troubleshooting (pre-release)
 

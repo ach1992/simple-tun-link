@@ -178,16 +178,22 @@ so use only an explicitly authorized isolated test server.
    loaded unit and private VICI boundary are assumed to remain
    administrator-controlled. Never share this private daemon with a foreign
    VICI writer or adopt same-name objects.
-3. The actual public-NAT router traversal, reboot/power-loss durability,
-   CI on arm64/other old kernel-distro floors, production installer/release
-   and all combinations of the Issue #12 matrix remain **unverified**.
-   The implemented restore test is a **real STL systemd service restart**,
-   not a full OS reboot.
+3. The disconnected-container fixture above establishes a **real STL
+   systemd service restart**, not a whole-OS reboot. Subsequent Issue #12
+   testing (documented below) separately establishes native Debian 13 AMD64
+   KVM whole-guest ESP/NAT-T automatic restore after kernel reboot and abrupt
+   QEMU termination, plus official native AMD64/ARM64 cross-backend E2E.
+   Equivalent ARM64 whole-guest reboot/crash and physical WAN/NAT-router
+   traversal remain **unverified**; QEMU SIGKILL is not physical power loss.
+   The published `v0.1.0-rc.1` is a pre-release from before unmerged PR #81
+   and therefore does **not** include its IPsec recovery fixes. No Stable
+   release or production deployment is established by these tests.
 4. A crash during an indeterminate VICI write retains a durable public-only
    journal and stops automatic replay. It requires explicit, owner-verified
    reconciliation; never delete arbitrary observed state or auto-rekey.
-5. Deployment, merge and public release still require the project's Owner
-   gates and one independent, author-separated high-assurance review.
+5. Any further public release, Stable promotion, deployment, and the
+   security-sensitive PR #81 merge still require applicable Owner gates
+   and independent, author-separated high-assurance review.
 
 ## Issue #7 high-assurance R1–R5 crash/reconciliation acceptance (2026-10-12)
 

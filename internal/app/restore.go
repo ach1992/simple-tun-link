@@ -211,8 +211,11 @@ func (e *Engine) reconnectRestoredIPsecLocked(ctx context.Context, desired domai
 		return stlerr.New(stlerr.CodeUnsupported, "ipsec_restore_connect", string(desired.ID), "ipsec", "IPsec scoped connection initiation unavailable")
 	}
 	if err := connect.Connect(ctx, exact.Desired, exact.OwnedResources); err != nil {
-		// Never expose peer/PSK/VICI output, and never claim reconnected traffic.
-		return stlerr.New(stlerr.CodeState, "ipsec_restore_connect", string(desired.ID), "ipsec", "restored IPsec configuration is committed but automatic IKE initiation failed or is indeterminate; inspect live SA")
+		// Local Ensure committed successfully. This scoped initiation cannot
+		// prove traffic: report a Link-local verification failure so independent
+		// siblings still restore. Never retry an indeterminate IKE attempt or
+		// expose raw peer/PSK/VICI diagnostics.
+		return stlerr.New(stlerr.CodeVerify, "ipsec_restore_connect", string(desired.ID), "ipsec", "restored IPsec configuration is committed but automatic IKE initiation failed or is indeterminate; inspect live SA")
 	}
 	return nil
 }
