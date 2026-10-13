@@ -15,9 +15,11 @@ build, or ordinary `go test`.
 - The canonical Engine still owns every Link, `/var/lib/simple-tun-link`,
   network resource, and `simple-tun-link-restore.service`. The installer does
   **not** manage those resources or currently install a second systemd service.
-  The future IPsec native-exclusive mode requires a separately verified
-  STL-owned strongSwan service lifecycle; current dependency provisioning
-  does **not** imply safe, registered or operational IPsec activation.
+  Operational IPsec is **conditionally registered** only after the current
+  STL-owned native-exclusive strongSwan runtime passes independent ownership
+  and capability admission. The installer installs optional packages only;
+  it does not publish/adopt an IPsec service/configuration or guarantee
+  safe IPsec activation. See [IPsec real E2E](operations/IPSEC-REAL-E2E.md).
 - On real `/usr/local` installs/updates, the installer identifies the OS from
   `/etc/os-release` as data, validates Ubuntu >=22.04 or Debian >=11, checks
   installed APT package identities via `dpkg-query`, and installs ONLY missing

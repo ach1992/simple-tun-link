@@ -4,12 +4,16 @@ The terminal menu supports local overview, guided **GRE Native** and
 **WireGuard/UDP** Create, Link management/status, selected diagnostics,
 preview-confirmed plaintext GRE/IPIP import and protected WireGuard v3 Quick
 Link import. Focused real-kernel WireGuard bidirectional traffic and
-same-peer GRE coexistence were integrated in PR #53; operational IPsec,
-additional failure/recovery cases and release acceptance remain open under
-Issues #6–#12.
-The versioned non-interactive ensure/remove lifecycle is implemented, with
-runtime/backend acceptance tracked separately. This page distinguishes
-**read-only** observations from **explicit host-mutating** commands.
+same-peer GRE coexistence were integrated in PR #53. Native-exclusive IPsec
+is now **conditionally operational**, with real IKEv2 ESP and NAT-T traffic
+verified in the native AMD64/ARM64 release E2E matrix (Issue #12).
+Still-unproven acceptance is specific to **full-guest IPsec ESP/NAT-T
+reboot/crash restoration**, **physical/external NAT-router traversal** and
+the **published source-tagged release/installed-artifact lifecycle**
+(Issues #11–#12).
+The versioned non-interactive ensure/remove lifecycle is implemented.
+This page distinguishes **read-only** observations from **explicit
+host-mutating** commands.
 
 ## Task-first terminal menu
 
@@ -345,9 +349,15 @@ verified task-owned stale temporary files before treating the one-time
 handoff as fully retired; do not perform unsafe wildcard cleanup.
 
 Synthetic tests of these workflows alone do not prove real handshakes,
-traffic, reboot restore or coexistence. Focused real-kernel WireGuard traffic
-and GRE coexistence were demonstrated in PR #53; actual systemd/restart,
-distinct-peer and supported-environment release acceptance remain #12.
+traffic, reboot restore or coexistence. Separate privileged evidence already
+proves GRE/WireGuard traffic, distinct-peer and same-peer multi-Link
+coexistence, native AMD64/ARM64 six-Link GRE/WG/IKEv2 ESP/NAT-T traffic
+with Ubuntu/Debian userspaces, GRE systemd restart/reapply, and
+GRE/WireGuard whole-guest reboot and abrupt-QEMU recovery (Issue #12).
+Still unproven are **full-guest IPsec ESP/NAT-T reboot/crash restoration**,
+**physical/external NAT-router traversal**, the **published source-tagged
+release/download lifecycle**, and **installed ARM64 release-artifact
+acceptance** (Issues #11–#12).
 
 ## Commands
 
@@ -463,10 +473,12 @@ Read-only `list`, `status`, `diagnose`, `preview` and
 explicit `export` never change network configuration. Export is
 **deliberately revealing** and not suitable for ordinary diagnostics/logging.
 The distinct `ensure`, `remove` and `restore` paths are
-explicit host-mutating operations. Interactive
-additional create/import recovery, optional throughput, operational IPsec
-and remaining task-first UI work are tracked under Issues #7–#10. Focused
-WireGuard/GRE traffic was observed in PR #53; broader release E2E remains #12.
+explicit host-mutating operations. Additional pairing/import recovery
+(Issue #8), optional throughput and diagnostic acceptance (Issue #9), and
+remaining task-first UI work (Issue #10) are separately tracked.
+Native-exclusive IPsec is already conditionally operational (Issue #7 closed),
+with real ESP/NAT-T E2E traffic; **full-guest IPsec reboot/crash recovery and
+physical WAN/NAT acceptance remain open** under Issue #12.
 
 ## Explicit Link lifecycle commands — Issue #10
 
@@ -558,9 +570,15 @@ or unrelated host networking changes are permitted by this CLI layer.
 
 The GRE Native guided Create, the guided WireGuard sender/Resume and
 confirmed GRE/IPIP/WireGuard v3 recipient Import reuse the canonical Engine
-instead of a separate menu lifecycle. Their focused real-kernel evidence is
-recorded under Issue #12; full recovery, IPsec, release-environment and
-operator UX acceptance remain separately tracked. A successful source/CLI
+instead of a separate menu lifecycle. Issue #12 records accepted real
+GRE/WireGuard traffic, distinct-peer and multi-Link coexistence, native
+AMD64/ARM64 six-Link E2E including conditionally admitted IPsec ESP/NAT-T,
+GRE systemd restart and GRE/WireGuard full-guest reboot/crash recovery.
+Remaining release gaps are **full-guest IPsec ESP/NAT-T reboot/crash
+restoration**, **physical/external WAN/NAT-router traversal**, **published
+source-tagged release/downloads** and **installed ARM64 release-artifact
+acceptance** (Issues #11–#12); unresolved pairing, diagnostic and operator
+UX acceptance remains tracked under Issues #8–#10. A successful source/CLI
 test alone does not establish peer traffic or release readiness.
 
 ## Explicit plaintext GRE/IPIP setup-link export (Issue #8)
@@ -661,11 +679,27 @@ must handle eventual key retirement deliberately. WireGuard public status
 supports a verified interface, latest handshake timestamp and RX/TX bytes,
 **not a proof of peer reachability or a packet-level E2E test**.
 WireGuard guided sender creation, v3 recipient import and explicit credential
-retirement are implemented. Focused real-kernel bidirectional WireGuard
-traffic and same-peer GRE coexistence were observed in PR #53; operational
-IPsec, restart/recovery and release-level acceptance remain Issues #6–#12.
+retirement are implemented. Real-kernel bidirectional WireGuard and same-peer
+GRE coexistence were observed in PR #53. Native-exclusive operational IPsec
+is now conditionally admitted, with true ESP/NAT-T traffic and removal
+evidence (see [IPsec real E2E](operations/IPSEC-REAL-E2E.md)).
+GRE Native and WireGuard automatic restore have additionally passed real
+whole-guest reboot and simulated abrupt KVM process termination followed
+by a fresh boot, with protected credentials unchanged
+([Issue #12 evidence](https://github.com/ach1992/simple-tun-link/issues/12#issuecomment-6134259976)).
+Whole-guest **IPsec ESP/NAT-T** reboot/crash restoration, physical WAN/NAT
+router traversal, and public tagged-release gates remain **unproven** under
+Issues #11 and #12.
 
 ## IPsec operational CLI and historical read-only diagnostic milestones
+
+The opening paragraphs below describe **current** conditional runtime
+admission and operational commands. Later paragraphs document historical
+fail-closed diagnostic milestones from before operational admission was
+implemented; their older statements that activation is always denied or
+the publisher is not wired are **historical**, not the present CLI contract.
+Use [real IPsec E2E](operations/IPSEC-REAL-E2E.md) and
+[architecture](ARCHITECTURE.md) for the current ownership/activation boundary.
 
 `stl doctor ipsec` is always read-only. Without a positively attested STL
 native-exclusive strongSwan service, `--json` preserves
