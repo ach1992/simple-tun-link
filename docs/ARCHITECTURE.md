@@ -593,6 +593,8 @@ native-exclusive installed unit**, real systemd service restart, protected
 state/PSK restore and successful two-way packets for ESP and NAT-T.
 See [the reproducible IPsec evidence](operations/IPSEC-REAL-E2E.md).
 
-Issue #7 remains OPEN pending independent review/integration authorization.
-This is not a tested production package upgrade, public NAT-router path,
-full reboot/power-loss or Issue #12 architecture/platform/release matrix.
+Issue #7 was closed after conditional operational IPsec acceptance. These
+earlier container tests did not prove physical WAN/NAT-router traversal
+or whole-OS reboot/crash recovery; later whole-guest KVM evidence is recorded
+under Issue #12. Physical power-loss and external peer/router acceptance
+remain distinct from the isolated tests.

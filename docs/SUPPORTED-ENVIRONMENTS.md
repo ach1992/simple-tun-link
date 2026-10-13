@@ -150,8 +150,9 @@ bilateral authenticated traffic, idempotent reapply and scoped cleanup
 were observed. Earlier separate full-guest clean reboot acceptance also
 passed for GRE and WireGuard.
 
-The subsequent, **unreleased PR #81 source candidate** independently passed
-true Debian 13 AMD64 KVM full-kernel reboot for native-exclusive IPsec ESP
+Subsequent [PR #81](https://github.com/ach1992/simple-tun-link/pull/81)
+testing independently established true Debian 13 AMD64 KVM full-kernel
+reboot for native-exclusive IPsec ESP
 and NAT-T, including automatic STL Link restoration, reestablished IKE/CHILD
 SAs, and verified two-way encrypted traffic in an isolated Ubuntu PID1
 systemd guest with ext4-persisted owner receipts. **Both ESP and NAT-T**
@@ -163,8 +164,9 @@ this new code. Native ARM64 six-Link E2E is independently verified. The
 **published `v0.1.0-rc.1` AMD64 and emulated ARM64 installed-release-artifact
 lifecycle** also passed on independent Debian/Ubuntu full guests (closed
 Issue #11). This pre-release predates and **does not contain** PR #81 fixes.
-Issue #12 remains OPEN for physical network, independent review, integration
-and owner-gated next-release acceptance.
+Physical WAN/NAT-router peer acceptance is tracked under Issue #12 and was
+not established by these isolated tests. Integration and authorization to
+publish a new release are separate from this technical test evidence.
 
 ## Release validation
 

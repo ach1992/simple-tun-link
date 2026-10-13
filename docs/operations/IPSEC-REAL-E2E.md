@@ -185,15 +185,16 @@ so use only an explicitly authorized isolated test server.
    QEMU termination, plus official native AMD64/ARM64 cross-backend E2E.
    Equivalent ARM64 whole-guest reboot/crash and physical WAN/NAT-router
    traversal remain **unverified**; QEMU SIGKILL is not physical power loss.
-   The published `v0.1.0-rc.1` is a pre-release from before unmerged PR #81
-   and therefore does **not** include its IPsec recovery fixes. No Stable
-   release or production deployment is established by these tests.
+   The published `v0.1.0-rc.1` pre-release predates the IPsec reboot/crash
+   recovery changes introduced in PR #81 and does **not** include them.
+   No Stable release or production deployment is established by these tests.
 4. A crash during an indeterminate VICI write retains a durable public-only
    journal and stops automatic replay. It requires explicit, owner-verified
    reconciliation; never delete arbitrary observed state or auto-rekey.
-5. Any further public release, Stable promotion, deployment, and the
-   security-sensitive PR #81 merge still require applicable Owner gates
-   and independent, author-separated high-assurance review.
+5. Integration, publication, Stable promotion and deployment are separate
+   controlled actions. The source and isolated-test evidence does not itself
+   authorize any of them; applicable Owner and independent-review gates
+   must be satisfied for each consequential action.
 
 ## Issue #7 high-assurance R1–R5 crash/reconciliation acceptance (2026-10-12)
 
@@ -287,9 +288,9 @@ proof of actual physical power loss, external NAT router traversal or
 production package/upgrade safety; Issue #12 retains release-level gates.
 
 
-### Whole-guest automatic IPsec recovery — unreleased PR #81 candidate
+### Whole-guest automatic IPsec recovery — PR #81 test evidence
 
-The source-only candidate in [PR #81](https://github.com/ach1992/simple-tun-link/pull/81)
+The engineering changes introduced in [PR #81](https://github.com/ach1992/simple-tun-link/pull/81)
 addressed a previously failing real-kernel boot acceptance in Issue #12:
 
 - The STL native-exclusive strongSwan service, when explicitly scheduled
@@ -326,16 +327,18 @@ addressed a previously failing real-kernel boot acceptance in Issue #12:
   disposable-VM abrupt-process-termination test, **not** a physical power-loss
   or physical WAN/NAT-router claim.
 
-The exact source SHA, separately run official AMD64/ARM64 E2E, per-boot
-fixed PASS markers, file digests, failure history, and cleanup receipts
-belong in [Issue #12](https://github.com/ach1992/simple-tun-link/issues/12).
+The whole-guest reboot/crash tests ran against exact runtime source
+`6346ae9f7651a59e92020def026a409ff9bc22af` (not the subsequent
+failure-isolation remediation). The source SHA, separate AMD64/ARM64 E2E,
+per-boot PASS markers, file digests, failure history, and cleanup receipts
+are recorded in [Issue #12](https://github.com/ach1992/simple-tun-link/issues/12).
 Tests were manually executed in private disposable guests, not on the AI
 agent's live host networking or an external real-world NAT router.
 **Physical WAN/external NAT-router traversal** is still not accepted;
 prior platform blocks forbid any alternate cross-server connectivity bypass.
 The public `v0.1.0-rc.1` **pre-release** predates PR #81 and does **not**
 contain these fixes. Its own AMD64/ARM64 installed-artifact life-cycle checks
-passed separately (Issue #11 closed). Do not present the **unmerged source
-candidate** as a published Stable release or a deployed/installed fix. Never weaken fail-closed
-native ownership checks or substitute simulated CLI-only green tests for
-real post-reboot kernel packets.
+passed separately (Issue #11 closed). Do not present source commits or
+isolated test results as proof of a published Stable release or an
+installed/deployed fix. Never weaken fail-closed native ownership checks
+or substitute simulated CLI-only tests for real post-reboot kernel packets.

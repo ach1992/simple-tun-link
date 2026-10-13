@@ -3,10 +3,10 @@
 The public [`v0.1.0-rc.1` pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.1)
 is published, **not Stable**. Its tagged installer and downloaded AMD64/
 emulated ARM64 artifacts passed real independent Debian/Ubuntu installed
-lifecycle tests (Issue #11 closed). It predates the unmerged PR #81 IPsec
-boot/crash fixes. The commands below also show placeholder `vX.Y.Z`;
-replace it only with an **existing published** tag. No installer runs during
-a clone, build, or ordinary `go test`.
+lifecycle tests (Issue #11 closed). That tag predates the IPsec boot/crash
+recovery changes introduced in PR #81. The commands below show the
+placeholder `vX.Y.Z`; replace it only with an **existing published** tag.
+No installer runs during a clone, build, or ordinary `go test`.
 
 ## Supported deployment shape
 

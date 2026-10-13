@@ -21,8 +21,9 @@ Convenience alias: **stlink** (same executable/behavior when installed by the su
 > [Issue #12](https://github.com/ach1992/simple-tun-link/issues/12#issuecomment-6134259976)).
 > A real, public, installable [v0.1.0-rc.1 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.1)
 > has passed the AMD64/ARM64 release-artifact lifecycle (Issue #11 closed).
-> A later **unmerged PR #81** source candidate passed real whole-guest KVM
-> automatic IPsec ESP/NAT-T reboot **and abrupt-QEMU-crash** restoration,
+> Subsequent [PR #81](https://github.com/ach1992/simple-tun-link/pull/81)
+> engineering evidence records real whole-guest KVM automatic IPsec ESP/NAT-T
+> reboot **and abrupt-QEMU-crash** restoration,
 > including bilateral encrypted traffic. The public pre-release does **not**
 > contain those new fixes. Physical WAN/NAT-router traversal is still
 > **unproven** (Issue #12); no stable release is authorized/published.
@@ -84,9 +85,10 @@ The [installation runbook](docs/INSTALL.md) documents the one-command
 installer, checksum-verified atomic updates, the `stlink` alias, and guarded
 uninstall for the published [v0.1.0-rc.1 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.1).
 Use a real published tag; `vX.Y.Z` in examples is only a placeholder.
-The current public pre-release does **not** contain the unmerged PR #81
-IPsec reboot/crash recovery fixes. For nonprivileged/offline test coverage,
-run `bash scripts/test-install.sh`.
+The published `v0.1.0-rc.1` pre-release predates the IPsec reboot/crash
+recovery changes introduced in PR #81. Source-level acceptance does not
+certify what an installed release binary contains. For nonprivileged/offline
+test coverage, run `bash scripts/test-install.sh`.
 
 ## Read-only IPsec troubleshooting (pre-release)
 
@@ -151,8 +153,9 @@ scenarios, native AMD64/ARM64 six-Link E2E and GRE systemd restart have
 passed in their recorded test environments. GRE/WireGuard also passed
 full-guest reboot and abrupt KVM termination followed by automatic restore
 ([Issue #12](https://github.com/ach1992/simple-tun-link/issues/12#issuecomment-6134259976)).
-A later **unmerged PR #81 source candidate** passed full-guest KVM IPsec
-ESP/NAT-T automatic reboot **and abrupt-QEMU-crash** recovery with real
+The [PR #81](https://github.com/ach1992/simple-tun-link/pull/81)
+test record documents full-guest KVM IPsec ESP/NAT-T automatic reboot
+**and abrupt-QEMU-crash** recovery with real
 bilateral encrypted traffic and strongSwan ownership checks. The published
 [v0.1.0-rc.1 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.1)
 and its installed AMD64/ARM64 artifact lifecycle passed separate isolated
