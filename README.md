@@ -7,7 +7,7 @@ It creates and manages independent **Link Addresses** between Linux servers over
 Canonical CLI: **stl**  
 Convenience alias: **stlink** (same executable/behavior when installed by the supported installer)
 
-> Status: **pre-release; no public tag or GitHub Release**. The source
+> Status: **public v0.1.0-rc.1 pre-release; no Stable release**. The source
 > integrates GRE/IPIP Native/FOU/GUE, WireGuard v3 Quick Link, and the
 > **conditionally admitted**, native-exclusive IPsec/XFRM IKEv2 ESP/NAT-T
 > backend. Privileged six-simultaneous-Link E2E passed on native AMD64 and
@@ -19,9 +19,14 @@ Convenience alias: **stlink** (same executable/behavior when installed by the su
 > clean reboot and deliberately abrupt QEMU termination
 > ([Issue #11](https://github.com/ach1992/simple-tun-link/issues/11),
 > [Issue #12](https://github.com/ach1992/simple-tun-link/issues/12#issuecomment-6134259976)).
-> Full-guest IPsec ESP/NAT-T reboot or crash restore, physical NAT-router
-> traversal and a published/tagged artifact remain **unproven**. Issue #11
-> owns public release; Issue #12 owns remaining network E2E.
+> A real, public, installable [v0.1.0-rc.1 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.1)
+> has passed the AMD64/ARM64 release-artifact lifecycle (Issue #11 closed).
+> Subsequent [PR #81](https://github.com/ach1992/simple-tun-link/pull/81)
+> engineering evidence records real whole-guest KVM automatic IPsec ESP/NAT-T
+> reboot **and abrupt-QEMU-crash** restoration,
+> including bilateral encrypted traffic. The public pre-release does **not**
+> contain those new fixes. Physical WAN/NAT-router traversal is still
+> **unproven** (Issue #12); no stable release is authorized/published.
 
 ## Why
 
@@ -76,11 +81,14 @@ Consumer-specific concepts such as geography, product roles, orchestration polic
 
 ## Installation (pre-release)
 
-The [installation runbook](docs/INSTALL.md) documents the future tagged-release
-one-command installer, checksum-verified atomic updates, the `stlink` alias,
-and guarded uninstall. No public version/tag is currently available, so do
-not execute the placeholder `vX.Y.Z` command as an actual installation.
-For nonprivileged/offline test coverage, run `bash scripts/test-install.sh`.
+The [installation runbook](docs/INSTALL.md) documents the one-command
+installer, checksum-verified atomic updates, the `stlink` alias, and guarded
+uninstall for the published [v0.1.0-rc.1 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.1).
+Use a real published tag; `vX.Y.Z` in examples is only a placeholder.
+The published `v0.1.0-rc.1` pre-release predates the IPsec reboot/crash
+recovery changes introduced in PR #81. Source-level acceptance does not
+certify what an installed release binary contains. For nonprivileged/offline
+test coverage, run `bash scripts/test-install.sh`.
 
 ## Read-only IPsec troubleshooting (pre-release)
 
@@ -145,11 +153,16 @@ scenarios, native AMD64/ARM64 six-Link E2E and GRE systemd restart have
 passed in their recorded test environments. GRE/WireGuard also passed
 full-guest reboot and abrupt KVM termination followed by automatic restore
 ([Issue #12](https://github.com/ach1992/simple-tun-link/issues/12#issuecomment-6134259976)).
-Still unproven: **full-guest IPsec ESP/NAT-T reboot/crash restoration**,
-**external/physical NAT-router traversal**, the **published source-tagged
-release/download lifecycle**, and **installed ARM64 release-artifact
-acceptance** (Issues #11–#12). Deliver the SENSITIVE handoff through a
-trusted channel.
+The [PR #81](https://github.com/ach1992/simple-tun-link/pull/81)
+test record documents full-guest KVM IPsec ESP/NAT-T automatic reboot
+**and abrupt-QEMU-crash** recovery with real
+bilateral encrypted traffic and strongSwan ownership checks. The published
+[v0.1.0-rc.1 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.1)
+and its installed AMD64/ARM64 artifact lifecycle passed separate isolated
+acceptance (Issue #11 closed), but that tag predates these IPsec fixes.
+**External/physical WAN NAT-router traversal** is still unproven (Issue #12).
+No stable v0.1.0 release is yet certified. Deliver the SENSITIVE handoff
+through a trusted channel.
 
 ## Development
 

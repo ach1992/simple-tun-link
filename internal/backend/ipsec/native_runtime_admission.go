@@ -99,13 +99,25 @@ func (a NativeRuntimeAdmission) servicePID(ctx context.Context) (uint32, error) 
 	for _, prop := range []struct{ category, key, value string }{
 		{"Unit", "LoadState", "loaded"}, {"Unit", "ActiveState", "active"},
 		{"Unit", "FragmentPath", NativeExclusiveServiceUnitPath},
-		{"Unit", "SourcePath", ""}, {"Unit", "UnitFileState", "static"},
+		{"Unit", "SourcePath", ""},
 		{"Service", "Type", "notify"}, {"Service", "User", ""},
 		{"Service", "Group", ""}, {"Service", "RootDirectory", ""},
 	} {
 		if err := a.require(ctx, path, prop.category, prop.key, prop.value); err != nil {
 			return 0, err
 		}
+	}
+	// A statically defined native service becomes UnitFileState=enabled after
+	// an explicitly installed multi-user.target.wants edge. Reject every
+	// unrecognized or foreign enablement source; never infer authorization
+	// solely from a matching systemd property string.
+	fileState, err := a.property(ctx, path, "Unit", "UnitFileState")
+	if err != nil {
+		return 0, fmt.Errorf("native unit file state unavailable")
+	}
+	if fileState != `s "static"` &&
+		!nativeUnitFileStateVerified(fileState, trustedNativeBootEnablementAt("/", 0)) {
+		return 0, fmt.Errorf("native unit enablement origin unverified")
 	}
 	for _, prop := range []struct{ category, key, value string }{
 		{"Unit", "DropInPaths", "as 0"}, {"Unit", "NeedDaemonReload", "b false"},
@@ -129,6 +141,12 @@ func (a NativeRuntimeAdmission) servicePID(ctx context.Context) (uint32, error) 
 		return 0, fmt.Errorf("native systemd object identity changed")
 	}
 	return uint32(n), nil
+}
+
+// No generic enabled unit is trusted: an enabled state needs an exact
+// root-owned canonical boot edge verified on this invocation.
+func nativeUnitFileStateVerified(state string, trustedBootEdge bool) bool {
+	return state == `s "static"` || (state == `s "enabled"` && trustedBootEdge)
 }
 
 // StrongSwan is launched with root privileges and receives the IKE PSK.

@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/ach1992/simple-tun-link/internal/backend"
+	"github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
@@ -129,7 +131,93 @@ func (e *Engine) restorePersisted(ctx context.Context, id domain.LinkID) (Result
 	}
 	prior := record.Desired
 	result, err := e.executeLocked(ctx, backend.Request{Operation: backend.OperationEnsure, Prior: &prior, Link: record.Desired}, record, "")
-	return result, true, err
+	if err != nil || record.Desired.Backend != domain.BackendIPsec {
+		return result, true, err
+	}
+	// Native strongSwan starts with empty IKE/CHILD SAs after a host reboot.
+	// Canonical Ensure restores a committed owned XFRM device and private VICI
+	// profile, but does NOT initiate an IKE exchange (start_action=none).
+	// Only previously committed IPsec Links may reconnect, and only after
+	// exact refreshed owner claims, locks and live SA inventory are verified.
+	if err := e.reconnectRestoredIPsecLocked(ctx, record.Desired); err != nil {
+		return result, true, err
+	}
+	return result, true, nil
+}
+
+// reconnectRestoredIPsecLocked runs under RestoreAll's maintenance lease and
+// per-Link lock. It never creates a Link, accepts pending Quick Link staging,
+// bypasses Engine transactions or adopts a daemon. Resource locks and
+// immutable committed ownership are re-checked before VICI initiation.
+func (e *Engine) reconnectRestoredIPsecLocked(ctx context.Context, desired domain.Link) error {
+	first, err := e.store.Load(ctx)
+	if err != nil {
+		return stlerr.New(stlerr.CodeState, "ipsec_restore_connect", string(desired.ID), "ipsec", "committed Link state unavailable after restore")
+	}
+	record, found := first.Find(desired.ID)
+	if !found || record.Desired != desired || len(record.OwnedResources) == 0 {
+		return stlerr.New(stlerr.CodeConflict, "ipsec_restore_connect", string(desired.ID), "ipsec", "exact committed IPsec owner missing after restore")
+	}
+	claims, err := resourceLockClaims(record.OwnedResources)
+	if err != nil {
+		return stlerr.New(stlerr.CodeState, "ipsec_restore_connect", string(desired.ID), "ipsec", "committed IPsec resource locks invalid")
+	}
+	release, err := e.locks.Acquire(ctx, claims)
+	if err != nil {
+		return stlerr.New(stlerr.CodeState, "ipsec_restore_connect", string(desired.ID), "ipsec", "cannot lock restored IPsec resources")
+	}
+	defer release()
+	fresh, err := e.store.Load(ctx)
+	if err != nil {
+		return stlerr.New(stlerr.CodeState, "ipsec_restore_connect", string(desired.ID), "ipsec", "cannot recheck committed IPsec state")
+	}
+	exact, present := fresh.Find(desired.ID)
+	if !present || exact.Desired != record.Desired ||
+		!slices.EqualFunc(exact.OwnedResources, record.OwnedResources,
+			func(a, b domain.ResourceClaim) bool { return a.Canonical() == b.Canonical() }) {
+		return stlerr.New(stlerr.CodeConflict, "ipsec_restore_connect", string(desired.ID), "ipsec", "committed IPsec resources changed before reconnection")
+	}
+	if _, pending := fresh.FindPendingIPsec(desired.ID); pending {
+		return stlerr.New(stlerr.CodeConflict, "ipsec_restore_connect", string(desired.ID), "ipsec", "staged IPsec credential cannot automatically connect")
+	}
+	if _, pending := fresh.FindIPsecReapplyOperation(desired.ID); pending {
+		return stlerr.New(stlerr.CodeConflict, "ipsec_restore_connect", string(desired.ID), "ipsec", "unreconciled IPsec reapply forbids reconnection")
+	}
+	if _, pending := fresh.FindIPsecVICIOperation(desired.ID); pending {
+		return stlerr.New(stlerr.CodeConflict, "ipsec_restore_connect", string(desired.ID), "ipsec", "unreconciled IPsec VICI transaction forbids reconnection")
+	}
+	impl, ok := e.backends.Get(domain.BackendIPsec)
+	if !ok {
+		return stlerr.New(stlerr.CodeUnsupported, "ipsec_restore_connect", string(desired.ID), "ipsec", "IPsec runtime unavailable after restore")
+	}
+	inspector, ok := impl.(interface {
+		DiagnosticState(context.Context, domain.Link) (ipsec.DiagnosticState, error)
+	})
+	if !ok {
+		return stlerr.New(stlerr.CodeUnsupported, "ipsec_restore_connect", string(desired.ID), "ipsec", "IPsec SA verification unavailable")
+	}
+	observed, err := inspector.DiagnosticState(ctx, exact.Desired)
+	if err != nil || !observed.ConnectionConfigured || observed.IfIndex <= 0 {
+		return stlerr.New(stlerr.CodeInspect, "ipsec_restore_connect", string(desired.ID), "ipsec", "restored IPsec device or SA inventory unverified")
+	}
+	if observed.SecurityAssociationPresent {
+		// Manual restore of an already-healthy Link does not start extra IKE.
+		return nil
+	}
+	connect, ok := impl.(interface {
+		Connect(context.Context, domain.Link, []domain.ResourceClaim) error
+	})
+	if !ok {
+		return stlerr.New(stlerr.CodeUnsupported, "ipsec_restore_connect", string(desired.ID), "ipsec", "IPsec scoped connection initiation unavailable")
+	}
+	if err := connect.Connect(ctx, exact.Desired, exact.OwnedResources); err != nil {
+		// Local Ensure committed successfully. This scoped initiation cannot
+		// prove traffic: report a Link-local verification failure so independent
+		// siblings still restore. Never retry an indeterminate IKE attempt or
+		// expose raw peer/PSK/VICI diagnostics.
+		return stlerr.New(stlerr.CodeVerify, "ipsec_restore_connect", string(desired.ID), "ipsec", "restored IPsec configuration is committed but automatic IKE initiation failed or is indeterminate; inspect live SA")
+	}
+	return nil
 }
 
 func canContinueRestore(err error) bool {

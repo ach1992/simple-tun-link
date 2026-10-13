@@ -178,16 +178,23 @@ so use only an explicitly authorized isolated test server.
    loaded unit and private VICI boundary are assumed to remain
    administrator-controlled. Never share this private daemon with a foreign
    VICI writer or adopt same-name objects.
-3. The actual public-NAT router traversal, reboot/power-loss durability,
-   CI on arm64/other old kernel-distro floors, production installer/release
-   and all combinations of the Issue #12 matrix remain **unverified**.
-   The implemented restore test is a **real STL systemd service restart**,
-   not a full OS reboot.
+3. The disconnected-container fixture above establishes a **real STL
+   systemd service restart**, not a whole-OS reboot. Subsequent Issue #12
+   testing (documented below) separately establishes native Debian 13 AMD64
+   KVM whole-guest ESP/NAT-T automatic restore after kernel reboot and abrupt
+   QEMU termination, plus official native AMD64/ARM64 cross-backend E2E.
+   Equivalent ARM64 whole-guest reboot/crash and physical WAN/NAT-router
+   traversal remain **unverified**; QEMU SIGKILL is not physical power loss.
+   The published `v0.1.0-rc.1` pre-release predates the IPsec reboot/crash
+   recovery changes introduced in PR #81 and does **not** include them.
+   No Stable release or production deployment is established by these tests.
 4. A crash during an indeterminate VICI write retains a durable public-only
    journal and stops automatic replay. It requires explicit, owner-verified
    reconciliation; never delete arbitrary observed state or auto-rekey.
-5. Deployment, merge and public release still require the project's Owner
-   gates and one independent, author-separated high-assurance review.
+5. Integration, publication, Stable promotion and deployment are separate
+   controlled actions. The source and isolated-test evidence does not itself
+   authorize any of them; applicable Owner and independent-review gates
+   must be satisfied for each consequential action.
 
 ## Issue #7 high-assurance R1–R5 crash/reconciliation acceptance (2026-10-12)
 
@@ -279,3 +286,59 @@ must still pass on the revised exact source tree. These simulated
 interruption tests are bounded reproducible fault injections, **not**
 proof of actual physical power loss, external NAT router traversal or
 production package/upgrade safety; Issue #12 retains release-level gates.
+
+
+### Whole-guest automatic IPsec recovery — PR #81 test evidence
+
+The engineering changes introduced in [PR #81](https://github.com/ach1992/simple-tun-link/pull/81)
+addressed a previously failing real-kernel boot acceptance in Issue #12:
+
+- The STL native-exclusive strongSwan service, when explicitly scheduled
+  by its exact, root-owned canonical systemd boot edge, reports
+  `UnitFileState=enabled`. Admission now verifies that edge and all existing
+  private publication receipts, loaded-unit properties, VICI writer,
+  process and socket ownership; an arbitrary enabled/foreign service is
+  **not** accepted.
+- The STL-owned restore unit orders *after* an already-scheduled native
+  service, without `Wants=`/`Requires=` on that service. Canonical
+  `RestoreAll` rehydrates the committed IPsec XFRM/VICI profile and,
+  only if no SA is present, initiates IKE using the existing Engine-scoped
+  owner/resource locks and freshly verified, journal-clean Link identity.
+  Re-initiating a healthy session and replaying staged/uncertain credentials
+  are forbidden.
+- In a dedicated Debian 13 AMD64 QEMU/KVM full-OS guest containing an
+  explicitly disposable, `--network none` Ubuntu 24.04 PID1-systemd
+  strongSwan fixture, original source test guards, private root-owned
+  state/service receipt files and the canonical CLI established authentic
+  two-peer ESP **and** NAT-T before reboot. Source-pinned guest disks were
+  actually powered off and booted with a new kernel; test-only isolated
+  peer-underlay startup preceded automatic systemd Link restore.
+- Both modes passed **without a manual Connect command**: the native
+  service was admitted, the owned Link was automatically restored, fresh
+  IKE/CHILD SAs appeared, and encrypted Link Address packets crossed
+  **both directions**. NAT-T additionally had the real Linux kernel
+  `encap type espinudp` XFRM states on both peers.
+- **Both ESP and NAT-T** were separately terminated by **SIGKILL to the
+  exact test-owned QEMU process while actual bilateral protected traffic was
+  live** (including observed real `encap type espinudp` NAT-T kernel SAs).
+  Each same persistent disk required ext4 Journal recovery, then automatic
+  Link restoration, fresh IKE/CHILD SAs and bilateral encrypted traffic
+  succeeded on a new kernel boot with no manual Connect. This is a valid
+  disposable-VM abrupt-process-termination test, **not** a physical power-loss
+  or physical WAN/NAT-router claim.
+
+The whole-guest reboot/crash tests ran against exact runtime source
+`6346ae9f7651a59e92020def026a409ff9bc22af` (not the subsequent
+failure-isolation remediation). The source SHA, separate AMD64/ARM64 E2E,
+per-boot PASS markers, file digests, failure history, and cleanup receipts
+are recorded in [Issue #12](https://github.com/ach1992/simple-tun-link/issues/12).
+Tests were manually executed in private disposable guests, not on the AI
+agent's live host networking or an external real-world NAT router.
+**Physical WAN/external NAT-router traversal** is still not accepted;
+prior platform blocks forbid any alternate cross-server connectivity bypass.
+The public `v0.1.0-rc.1` **pre-release** predates PR #81 and does **not**
+contain these fixes. Its own AMD64/ARM64 installed-artifact life-cycle checks
+passed separately (Issue #11 closed). Do not present source commits or
+isolated test results as proof of a published Stable release or an
+installed/deployed fix. Never weaken fail-closed native ownership checks
+or substitute simulated CLI-only tests for real post-reboot kernel packets.

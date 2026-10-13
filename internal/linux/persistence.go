@@ -734,10 +734,12 @@ func renderRestoreSystemdUnit(stlExecutable string) (string, error) {
 	if strings.ContainsAny(stlExecutable, " \t\\\"'%;") {
 		return "", fmt.Errorf("STL executable path contains unsupported systemd characters")
 	}
+	// The native-exclusive service may share this boot transaction. Ordering
+	// never starts, adopts, enables or requires an untrusted IPsec service.
 	return fmt.Sprintf(`%s
 [Unit]
 Description=Restore simple-tun-link Links
-After=network-online.target
+After=network-online.target simple-tun-link-ipsec.service
 Wants=network-online.target
 
 [Service]

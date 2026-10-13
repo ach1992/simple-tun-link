@@ -101,7 +101,13 @@ and release-environment acceptance remain open under Issues #6/#8/#12.
 Read-only status reports public handshake and counter observations; it does
 not authenticate the setup URL sender or prove current bidirectional traffic.
 
-### IPsec protected-PSK foundation (not yet a live backend)
+### IPsec protected-PSK foundation (historical pre-operational milestone)
+
+The pre-operational sections below preserve the original source-only security
+constraints and test history, not the current state of conditional operational
+IPsec. Current Engine/VICI/XFRM ownership and rollback boundaries appear in
+[IPsec operational crash and key-retirement boundaries](#ipsec-operational-crash-and-key-retirement-boundaries-issue-7)
+and [the operational E2E evidence](operations/IPSEC-REAL-E2E.md).
 
 The IPsec module now has a separate Link-scoped protected PSK store under
 the same descriptor-verified root's private `credentials/` directory.
@@ -228,10 +234,12 @@ A successful *empty* XFRM policy/SA command can have no stdout on iproute2
 6.1; command failures are never treated as empty. Real-kernel disposable
 tests cover foreign interface-name/ID collisions and an orphan policy.
 They do not establish IKEv2, ESP/NAT-T traffic, VICI mutation or the release
-acceptance matrix. Issues #7 and #12 remain open.
+acceptance matrix. At this historical milestone, Issue #7 had not yet
+reached operational acceptance; Issue #12 separately owns real-world release
+and physical peer/router acceptance.
 
 
-## Unregistered IPsec VICI configuration journal (not an operational backend)
+## Unregistered IPsec VICI configuration journal (historical pre-operational stage)
 
 The Engine can now record an exact public PendingIPsec identity and
 random nonce in a durable source-only journal. **The production build has
@@ -288,9 +296,11 @@ A disposable Debian 13 netns test also established that passing an `alias`
 when creating an XFRM link is **not** sufficient to atomically persist its
 `ifalias`; setting the alias separately was necessary. Future kernel
 lifecycle/rollback cannot equate a name-shaped or later matching alias
-with proof that STL created the interface. The durable XFRM write-and-
-cleanup transaction, IKEv2/ESP/NAT-T traffic and Issue #12 release
-integration remain outstanding.
+with proof that STL created the interface. At this historical stage the
+durable XFRM write/cleanup lifecycle and IKEv2/ESP/NAT-T traffic were
+still outstanding. Later conditional operational
+evidence is recorded in Issue #7; external WAN/NAT-router testing remains
+tracked in Issue #12.
 
 ## Setup-link safety
 

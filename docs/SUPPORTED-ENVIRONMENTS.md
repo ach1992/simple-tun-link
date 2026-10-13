@@ -150,13 +150,23 @@ bilateral authenticated traffic, idempotent reapply and scoped cleanup
 were observed. Earlier separate full-guest clean reboot acceptance also
 passed for GRE and WireGuard.
 
-These checks do **not** establish full-guest **IPsec ESP/NAT-T** reboot or
-crash recovery, physical NAT-router/second physical host traversal, or the
-actual published source-tagged release download path. Native ARM64 six-Link
-kernel traffic is proven by the official E2E matrix; **an ARM64 installer
-binary** was built and checksummed but not installed in an ARM64 guest by
-these new lifecycle checks. Issue #12 retains the network gaps and Issue #11
-retains the public release/installed artifact gates.
+Subsequent [PR #81](https://github.com/ach1992/simple-tun-link/pull/81)
+testing independently established true Debian 13 AMD64 KVM full-kernel
+reboot for native-exclusive IPsec ESP
+and NAT-T, including automatic STL Link restoration, reestablished IKE/CHILD
+SAs, and verified two-way encrypted traffic in an isolated Ubuntu PID1
+systemd guest with ext4-persisted owner receipts. **Both ESP and NAT-T**
+additionally passed independently executed abrupt-QEMU SIGKILL while real
+bilateral encrypted traffic was active, followed by Linux ext4 journal
+recovery, automatic same-disk IPsec restore and bilateral encrypted traffic.
+These tests do **not** prove physical WAN/NAT-router traversal or release of
+this new code. Native ARM64 six-Link E2E is independently verified. The
+**published `v0.1.0-rc.1` AMD64 and emulated ARM64 installed-release-artifact
+lifecycle** also passed on independent Debian/Ubuntu full guests (closed
+Issue #11). This pre-release predates and **does not contain** PR #81 fixes.
+Physical WAN/NAT-router peer acceptance is tracked under Issue #12 and was
+not established by these isolated tests. Integration and authorization to
+publish a new release are separate from this technical test evidence.
 
 ## Release validation
 
