@@ -129,10 +129,12 @@ FOU/GUE receive mappings (`fou`).
    native-exclusive service prerequisites. When **not** admitted, the
    operational backend stays unregistered and status/diagnosis is blocked.
    When admitted, read-only `status` and `diagnose` can verify owned XFRM
-   identity, installed SA and bounded Link Address responses; the current
-   API does **not** measure IPsec RX/TX counters. A diagnosed SA does not
-   grant activation permission, authenticate an untrusted peer or prove
-   sustained encrypted traffic. See Issues #9 and #12.
+   identity, installed SA and bounded Link Address responses. Exact-owner
+   XFRM **interface packet** counters are reported only when a separate
+   read-only kernel stats probe verifies identity and both values; otherwise
+   RX/TX remain "not measured", not zero. A diagnosed SA or interface
+   packet count does not grant activation permission, authenticate an
+   untrusted peer or prove sustained encrypted traffic. See Issues #9 and #12.
 
 Safe failures may not contain `evidence` if they occur outside the canonical
 Engine or in a legacy entry point; absence of evidence means **unknown**,

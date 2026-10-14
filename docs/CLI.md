@@ -77,10 +77,12 @@ On successful measurement it also contains a compact `observation`
 with PMTU selection, bounded quality samples, **when measured**
 owned RX/TX counters and their units, plus a last-observed WireGuard
 handshake timestamp when available. Conditionally admitted IPsec can
-verify an owned SA and Link Address response but does **not** yet read
-packet/byte counters: its `rx`, `tx` and `counter_unit` keys are
-**absent**, not misleading zeroes. Human output states "not measured".
-A verified measured zero on GRE/IPIP/WireGuard remains `0`.
+verify an owned SA and Link Address response; it optionally reports
+read-only **XFRM interface packet counters** only when exact ownership
+and actual kernel stats are independently verified. Otherwise its `rx`,
+`tx` and `counter_unit` keys are **absent**, not misleading zeroes;
+human output says "not measured". A verified measured zero on any
+measuring backend remains numeric `0`.
 Arbitrary Link display names, sensitive setup links, private keys,
 credential files and raw subprocess error/output are **not** included.
 
