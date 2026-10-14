@@ -288,6 +288,56 @@ that case requires explicit operator reconciliation, not regenerating a
 competing same-ID offer. Never treat a pending record alone as proof of a
 successful tunnel, or delete its matching sender key casually.
 
+### Recover a crash-staged private Quick Link (WireGuard or IPsec)
+
+A hard kill before atomic publication can leave a
+`.stl-handoff-<32-lowercase-hex>.tmp` file inside the **same private
+0700 handoff directory**, even when the requested output file does not
+exist. Do not use wildcards for deletion, log file contents, or infer
+an orphan is safe to retire. List only candidates in the intended directory
+and identify the Link ID from already recorded **public** state:
+
+~~~sh
+find /root/private -maxdepth 1 -type f -name '.stl-handoff-*.tmp' -printf '%f\n'
+stl link recover-handoff --source /root/private/.stl-handoff-<original-hex>.tmp \
+  --output /root/private/recovered.stl --confirm <exact-link-id> --json
+~~~
+
+`recover-handoff` performs **no network, daemon, Engine Apply or new-key
+operation**. It verifies the exact named source is a same-owner, regular,
+singly-linked `0600` file in a symlink-free private directory and contains
+a valid **SENSITIVE** Quick Link with the confirmed Link ID. Under the
+canonical maintenance/Link lock it requires the **original exact URL digest,
+whole sender-oriented public Link, sender-origin pending intent and existing
+protected sender credential**. The IPsec path verifies the existing 32-byte
+PSK with no replacement; WireGuard verifies the existing sender public
+identity. Only then it makes the original source inode durable and performs
+a same-directory atomic **no-replace rename**, fsyncs the parent, and emits
+versioned redacted confirmation. Already committed Links, recipient-origin
+IPsec pending, different/rechecksummed URL, orphan keys without pending,
+unsafe/changed files and occupied destinations are rejected, leaving source
+data intact where possible. **An IPsec removal/retirement receipt permanently
+reserves the same Link ID across backends**, including for WireGuard Create,
+Resume and crash-handoff recovery: use a new Link ID rather than treating
+retirement as authority to reuse the old one. Contradictory legacy saved
+state is refused for operator reconciliation; the private source remains.
+Canonical-named FIFOs and other non-regular sources are opened non-blocking
+and fail before payload decoding instead of hanging. A directory-sync error after rename is
+**uncertain publication**, not success: check both paths, never rekey.
+
+After recovery, an exact WireGuard pending sender may use redacted
+`preview` then `resume-wireguard` using **the same recovered file**;
+an IPsec sender may use `activate-ipsec <link-id> --confirm <link-id>`
+only with independently admitted native-exclusive strongSwan. Neither
+handoff recovery nor IPsec activation proves IKE initiation or peer traffic.
+If there is only an orphan key or pending intent but **no intact original
+URL**, STL deliberately refuses adoption/secret recreation. Preserve
+evidence and reconcile the protected state and live host identity under
+operator control; never silently delete credentials, pending state or
+randomly regenerate a receiver key. Recovered exports remain SENSITIVE and
+require a trusted delivery channel.
+
+
 To retry the exact already-published identity, obtain the SHA-256 confirmation
 token from a redacted read-only preview of that same URL and use:
 
