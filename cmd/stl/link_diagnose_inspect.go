@@ -57,8 +57,10 @@ func inspectLinkDiagnostic(ctx context.Context, link domain.Link, options runtim
 		if err != nil {
 			return linkDiagnostic{}, err
 		}
-		return linkDiagnostic{report: measured, mtu: measured.MTU, quality: measured.Quality,
-			counterUnit: "packets"}, nil
+		// An admitted XFRM SA and verified Link Address probes do not
+		// imply that IPsec interface RX/TX counters were inspected.
+		// Do not invent measured zero packets in the batch health report.
+		return linkDiagnostic{report: measured, mtu: measured.MTU, quality: measured.Quality}, nil
 	case domain.BackendGRE:
 		inspector, ok := selected.(diagnostics.GREInspector)
 		if !ok {

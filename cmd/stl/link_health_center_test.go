@@ -293,9 +293,51 @@ func TestHealthCenterTwoSamePeerGRELinksIndependent(t *testing.T) {
 		report.Observed != 2 || report.Blocked != 0 || report.Unknown != 0 ||
 		report.Checks[0].Link.ID != first.ID || report.Checks[1].Link.ID != second.ID ||
 		report.Checks[0].Observed == nil || report.Checks[1].Observed == nil ||
-		report.Checks[0].Observed.RX != 11 || report.Checks[1].Observed.RX != 31 ||
+		report.Checks[0].Observed.RX == nil || *report.Checks[0].Observed.RX != 11 ||
+		report.Checks[1].Observed.RX == nil || *report.Checks[1].Observed.RX != 31 ||
 		probe.probes[firstName] != 6 || probe.probes[secondName] != 6 {
 		t.Fatalf("same-peer Links were conflated, skipped or misattributed: %+v probes=%v err=%v",
 			report, probe.probes, err)
+	}
+}
+
+// IPsec has a verified SA and potentially real peer-echo evidence, but the
+// current DiagnosticState contains no interface or SA RX/TX reader. A
+// missing measurement must not be serialized as observed zero packets.
+func TestHealthCenterNoFabricatedIPsecCounterValues(t *testing.T) {
+	link := fixtureReadLink("lnk_cccccccccccccccccccccccccccccccc",
+		"10.80.75.0/31", "10.80.75.1/31", domain.BackendIPsec)
+	link.Encapsulation = domain.EncapESP
+	measurement := linkDiagnostic{
+		quality: diagnostics.QualityResult{Status: diagnostics.QualityMeasured, Reachable: true},
+	}
+	check := healthFromMeasurement(link, measurement)
+	if check.Status != "observed" || check.Observed == nil ||
+		check.Observed.RX != nil || check.Observed.TX != nil ||
+		check.Observed.CounterUnit != "" {
+		t.Fatalf("IPsec counters were falsely verified: %+v", check)
+	}
+	raw, err := json.Marshal(check)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte(`"rx":`)) || bytes.Contains(raw, []byte(`"tx":`)) ||
+		bytes.Contains(raw, []byte(`"counter_unit":`)) ||
+		bytes.Contains(raw, []byte("private_key")) {
+		t.Fatalf("unverified IPsec counter fields leaked: %s", raw)
+	}
+	// A legitimate observed zero for a GRE/WG/IPIP Link still appears in
+	// version-1 JSON as a numeric zero with its verified counter unit.
+	measurement.counterUnit = "packets"
+	check = healthFromMeasurement(link, measurement)
+	if check.Observed == nil || check.Observed.RX == nil || check.Observed.TX == nil ||
+		*check.Observed.RX != 0 || *check.Observed.TX != 0 {
+		t.Fatalf("legitimate observed zero counters were dropped: %+v", check)
+	}
+	raw, err = json.Marshal(check)
+	if err != nil || !bytes.Contains(raw, []byte(`"rx":0`)) ||
+		!bytes.Contains(raw, []byte(`"tx":0`)) ||
+		!bytes.Contains(raw, []byte(`"counter_unit":"packets"`)) {
+		t.Fatalf("existing version-1 measured counter contract regressed: %s, %v", raw, err)
 	}
 }
