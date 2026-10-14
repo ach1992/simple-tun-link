@@ -27,7 +27,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/version"
 )
 
-const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl menu\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link diagnose <link-id> [--mtu <bytes>] [--json]\n  stl link diagnose --all [--timeout <duration>] [--json]\n  stl link preview --stdin [--json]\n  stl link import --stdin --confirm <preview-token> [--json]\n  stl link export <link-id> [--json]\n  stl link create-wireguard --stdin --output <private-file> [--json]\n  stl link create-ipsec --stdin --output <private-file> [--json]\n  stl link activate-ipsec <link-id> --confirm <link-id> [--json]\n  stl link connect-ipsec <link-id> --confirm <link-id> [--json]\n  stl link retire-ipsec <link-id> --confirm <link-id> [--json]\n  stl link reconcile-ipsec <link-id> --confirm <link-id> [--json]\n  stl link reconcile-xfrm-ipsec <link-id> --confirm <link-id> [--json]\n  stl link resume-wireguard --stdin --confirm <setup-digest> [--json]\n  stl link recover-handoff --source <private-temp> --output <private-file> --confirm <link-id> [--json]\n  stl link credential retire <link-id> --confirm <link-id> --public-key <local-public-key> [--json]\n  stl link ensure --stdin [--json]\n  stl link remove <link-id> --confirm <link-id> [--json]\n  stl link restore --all\n  stl doctor ipsec [--json]\n  stl maintenance pre-uninstall --json\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
+const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl menu\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link diagnose <link-id> [--mtu <bytes>] [--json]\n  stl link diagnose --all [--timeout <duration>] [--json]\n  stl link throughput <link-id> --confirm <link-id> [--seconds <1..10>] [--json]\n  stl link preview --stdin [--json]\n  stl link import --stdin --confirm <preview-token> [--json]\n  stl link export <link-id> [--json]\n  stl link create-wireguard --stdin --output <private-file> [--json]\n  stl link create-ipsec --stdin --output <private-file> [--json]\n  stl link activate-ipsec <link-id> --confirm <link-id> [--json]\n  stl link connect-ipsec <link-id> --confirm <link-id> [--json]\n  stl link retire-ipsec <link-id> --confirm <link-id> [--json]\n  stl link reconcile-ipsec <link-id> --confirm <link-id> [--json]\n  stl link reconcile-xfrm-ipsec <link-id> --confirm <link-id> [--json]\n  stl link resume-wireguard --stdin --confirm <setup-digest> [--json]\n  stl link recover-handoff --source <private-temp> --output <private-file> --confirm <link-id> [--json]\n  stl link credential retire <link-id> --confirm <link-id> --public-key <local-public-key> [--json]\n  stl link ensure --stdin [--json]\n  stl link remove <link-id> --confirm <link-id> [--json]\n  stl link restore --all\n  stl doctor ipsec [--json]\n  stl maintenance pre-uninstall --json\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
 
 const jsonSchemaVersion = 1
 
@@ -36,9 +36,11 @@ const jsonSchemaVersion = 1
 const restoreOperationTimeout = 30 * time.Minute
 
 type runtimeOptions struct {
-	stateRoot          string
-	backends           []backend.Backend
-	probeRunner        linux.Runner
+	stateRoot   string
+	backends    []backend.Backend
+	probeRunner linux.Runner
+	// Explicit throughput is never invoked by ordinary read-only diagnose.
+	throughputRunner   linux.BoundedRunner
 	restorePersistence app.RestorePersistence
 	executable         string
 	// Test-only deterministic identity seam; nil uses crypto-random Link IDs.
@@ -122,6 +124,9 @@ func runWithRuntimeInput(args []string, input io.Reader, stdout, stderr io.Write
 		}
 		if len(args) >= 2 && args[1] == "diagnose" {
 			return linkDiagnoseCommand(args[1:], stdout, stderr, options)
+		}
+		if len(args) >= 2 && args[1] == "throughput" {
+			return linkThroughputCommand(args[1:], stdout, stderr, options)
 		}
 		if len(args) >= 2 && (args[1] == "ensure" || args[1] == "remove") {
 			return linkLifecycleCommand(args[1:], input, stdout, stderr, options)

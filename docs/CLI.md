@@ -432,6 +432,47 @@ and emulated ARM64 installed-binary lifecycles passed in separate guests
 in Issue #12; publishing a release with the PR #81 fixes requires its own
 explicit authorization and verified release artifacts.
 
+## Explicit, optional TCP throughput — Issue #9
+
+**Generates real TCP data only on direct operator invocation.** It is never
+run by create, import, restore, `status`, `diagnose`, `--all`, the menu
+or background recovery. Both sides must independently authorize the test.
+On the already active peer, an operator may separately start an iperf3
+server **bound only to that peer's Link Address** (not the public IP):
+
+~~~sh
+iperf3 --server --bind <peer-Link-address> --port 5201
+~~~
+
+On the local machine, after checking Link status/identity:
+
+~~~sh
+stl link throughput <link-id> --confirm <same-link-id> --seconds 3 --json
+~~~
+
+The canonical local Link ID is mandatory **twice**. Allowed duration is 1–10
+seconds (default 3); only one outbound TCP client stream goes to the
+committed peer **Link Address** and fixed TCP/5201 port. No arbitrary
+destination, server launch, firewall change, UDP test, reverse traffic or
+daemon control is possible through STL. The client uses iperf3
+`--bind <local-Link-address>%<exact-owned-interface>`; on Linux this
+requests `SO_BINDTODEVICE`. An unsupported iperf3 version, unavailable
+tool, insufficient bind privilege or failed route/identity/reachability
+preflight blocks the test **without an unbound retry**. The command
+holds the canonical per-Link Engine lock during the short traffic window;
+STL-driven concurrent remove/reconfigure must wait.
+
+The kernel route to the committed peer must explicitly choose that Link's
+verified interface, exact local source address and no gateway; STL rejects
+an underlay/default-route fallback. Output is bounded and projects only
+version-1 numeric `sent_mbps`, `received_mbps`, total byte counts,
+protocol/direction, duration, Link ID and backend. It excludes raw iperf
+server output and all credentials. Failed/malformed data does not become
+a measured zero. The short sample does not guarantee sustained throughput.
+The peer iperf3 listener's exposure and eventual shutdown remain the
+explicit responsibility of its operator. Never run an unapproved
+cross-server/physical WAN test merely because this optional CLI exists.
+
 ## Commands
 
 - `stl help`

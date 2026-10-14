@@ -342,6 +342,37 @@ Health observation is **not** repair. Real adapters must not use
 Any explicit repair will use the canonical owned transactional Engine,
 with its separate authorization/ownership checks.
 
+## Optional explicit, traffic-generating throughput
+
+`stl link throughput <id> --confirm <same-id> [--seconds 1..10] [--json]`
+is a separate **opt-in** client operation. Unlike `diagnose`, it sends
+real TCP test traffic; it never runs by default or launches a listening
+iperf3 server. A trusted operator must separately provision/authorize an
+iperf3 listener on the remote peer's **Link Address**, TCP port 5201.
+
+The client first reuses the common read-only backend identity, bounded
+Link Address quality observation and per-backend ownership checks. It
+verifies the kernel route to the exact peer Link Address uses the measured
+owned interface and saved local Link Address as the source, without a
+gateway, and rechecks that the canonical desired Link has not changed. It
+holds the canonical Engine per-Link lock during the test to prevent
+concurrent STL Remove/Ensure/Restore for that Link.
+Only then may it execute one bounded iperf3 TCP client for 1–10 seconds,
+binding both the source Link Address and Linux interface via the
+`--bind local%device`/SO_BINDTODEVICE contract. A missing/unsupported
+tool, changed route, no peer reply, unverified interface, absent listener,
+unexpected exit, output overflow or malformed/partial iperf JSON blocks
+or fails without falling back to an unbound/public-underlay test.
+
+The short versioned report contains **only** numeric sent/received bytes
+and Mbit/s, protocol, direction, requested duration, backend and Link ID.
+No raw iperf payload or server-supplied arbitrary text is exposed. Local
+execution uses a strict time/output budget; a completed sample proves
+neither future capacity nor continuous tunnel health. Tests use a fake
+bounded process runner and never transmit throughput traffic to real
+remote networks. Any physical WAN acceptance belongs separately to #12
+and requires its own owner/platform authorization.
+
 ## Remaining Issue #9 implementation
 
 This Linux adapter does not complete Issue #9. Still required:
@@ -351,7 +382,8 @@ This Linux adapter does not complete Issue #9. Still required:
   conditional XFRM/SA observer and conservative ESP/NAT-T overhead
   estimates are already implemented;
 - Safe MTU application through the Engine, never from health observation;
-- Optional throughput path (when tooling is present and explicitly requested);
+- Acceptance evidence for the opt-in, strictly Link-bound throughput
+  client on authorized supported systems and separately prepared peers;
 - Additional error/rollback and distinct-peer cases, real systemd
   restart/reapply, and supported-environment release E2E evidence (#6/#12).
   Focused real Link Address/PMTU, WireGuard peer traffic and GRE coexistence
