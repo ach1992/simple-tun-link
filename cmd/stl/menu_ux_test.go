@@ -377,7 +377,7 @@ func TestOperatorSavedSensitiveConnectionDetailsStayReadOnly(t *testing.T) {
 	}
 	code, out, errText := runGuidedTest(&runtimeOptions{stateRoot: root}, "3\n1\n4\n0\n8\n")
 	if code != 0 || errText != "" ||
-		!strings.Contains(out, "private handoff") ||
+		!strings.Contains(out, "original protected receiver offer") ||
 		strings.Contains(out, "PRIVATE_DISPLAY_DO_NOT_SHOW") ||
 		strings.Contains(out, "private_key") ||
 		strings.Contains(out, "PSK=") {

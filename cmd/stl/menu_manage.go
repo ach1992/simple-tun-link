@@ -42,9 +42,10 @@ func menuManage(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 	for {
 		fmt.Fprintln(out, "\n  1  Status (local, read-only)")
 		fmt.Fprintln(out, "  2  Check connection (read-only)")
-		fmt.Fprintln(out, "  3  Share / copy setup link again (GRE or IPIP)")
+		fmt.Fprintln(out, "  3  Share Setup Link (repeatable; encrypted links ask before showing)")
 		fmt.Fprintln(out, "  4  Connection details (copy both server IPs / manual setup)")
 		fmt.Fprintln(out, "  5  Remove this tunnel (asks for confirmation)")
+		fmt.Fprintln(out, "  6  Delete saved receiver Setup Link (WireGuard / IPsec only)")
 		fmt.Fprintln(out, "  0  Back")
 		fmt.Fprint(out, "Choose an action: ")
 		action, err := readMenuAnswer(reader)
@@ -73,8 +74,10 @@ func menuManage(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 					fmt.Fprintln(out, "Setup Link cannot be rebuilt from the current saved state. No network changes made.")
 				}
 			} else {
-				fmt.Fprintln(out, "Encrypted Quick Links contain the OTHER server's private credential and cannot be regenerated from saved tunnel State.")
-				fmt.Fprintln(out, "Use the protected setup file saved during creation. If lost before a completed setup, start a new tunnel; don't reuse a guessed secret.")
+				// No backend/Engine mutation. Display only the exactly
+				// saved original receiver secret after a fresh TTY consent,
+				// and verify full current Link identity before disclosure.
+				menuSensitiveHandoffAction(input, reader, out, errOut, options, selected, false)
 			}
 		case "4", "i":
 			current, err := savedMenuLinks(options)
@@ -96,8 +99,14 @@ func menuManage(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			}
 		case "5", "r":
 			return menuRemoveLink(input, reader, out, errOut, options, selected)
+		case "6":
+			if selected.Backend == domain.BackendGRE || selected.Backend == domain.BackendIPIP {
+				fmt.Fprintln(out, "Plaintext Setup Links are computed on request and no private receiver file exists to delete.")
+				continue
+			}
+			menuSensitiveHandoffAction(input, reader, out, errOut, options, selected, true)
 		default:
-			fmt.Fprintln(out, "Choose a number from 0 to 5.")
+			fmt.Fprintln(out, "Choose a number from 0 to 6.")
 		}
 	}
 }

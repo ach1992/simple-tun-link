@@ -82,11 +82,11 @@ func printManualConnectionDetails(out io.Writer, l domain.Link) {
 		fmt.Fprintf(out, "  THIS server UDP listen port: %d | OTHER server UDP listen port: %d\n", l.WireGuard.ListenPort, l.WireGuard.PeerPort)
 		fmt.Fprintf(out, "  THIS server PUBLIC key: %s\n", l.WireGuard.LocalPublicKey)
 		fmt.Fprintf(out, "  OTHER server PUBLIC key: %s\n", l.WireGuard.PeerPublicKey)
-		fmt.Fprintln(out, "  A protected recipient private key is also required; reuse the saved private handoff file.")
-		fmt.Fprintln(out, "  A lost private handoff cannot be reconstructed from saved Link settings.")
+		fmt.Fprintln(out, "  The original protected receiver offer remains available via My tunnels -> Share -> SHOW.")
+		fmt.Fprintln(out, "  Deleted/lost receiver secrets cannot be regenerated from ordinary saved Link State.")
 	case domain.BackendIPsec:
 		fmt.Fprintln(out, "  IPsec/IKEv2 uses an independent protected PSK and native-exclusive strongSwan.")
-		fmt.Fprintln(out, "  These public details are NOT enough to provision the peer; reuse the saved private handoff.")
+		fmt.Fprintln(out, "  Public details alone are insufficient: use My tunnels -> Share -> SHOW for the protected receiver offer.")
 		fmt.Fprintln(out, "  An already staged/private receiver PSK cannot be exported from ordinary Link state.")
 	default:
 		fmt.Fprintln(out, "  This backend is not supported for manual setup; use its canonical Setup Link.")

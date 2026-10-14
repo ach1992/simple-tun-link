@@ -96,7 +96,15 @@ Required:
 - preview before apply;
 - **Quick Link** as the v0.1 default for secret-bearing backends when a one-step payload materially simplifies setup.
 
-A secret-bearing Quick Link is explicitly **SENSITIVE** credential material. It may intentionally contain a receiver private key or shared PSK, but it must never be logged, included in ordinary status/diagnostic JSON, or silently persisted as an export artifact. Import preview shows that secrets are present without displaying their values.
+A secret-bearing Quick Link is explicitly **SENSITIVE** credential
+material: receiver private key/PSK never appears in ordinary State,
+status/diagnostic JSON, logs, or generic inventory. The approved
+Issue #91 guided sender **intentionally** retains a separate
+owner-private, immutable per-Link receiver Setup Link until explicit
+operator deletion, so it is not silently recorded in ordinary State.
+Showing it needs a fresh interactive SHOW and a verified unchanged
+sender Link identity; deleting it needs a separate DELETE.
+Import preview reports credential presence without disclosing it.
 
 The pairing schema includes an explicit exchange mode so a future Secure Exchange/local-key flow can be added compatibly if later justified.
 
@@ -238,3 +246,20 @@ from public State. Details are configured addresses, not verified
 remote host state or NAT visibility. GRE Native needs IP protocol 47;
 IPIP Native needs IP protocol 4. External WAN/NAT remains owner-tested
 after publication.
+
+
+Owner decision 2026-10-14 (Issue #91): The **guided** new WireGuard and
+IPsec sender saves its exact original receiver handoff to an STL-owned
+owner-private receiver-handoffs/ directory, indexed by the immutable
+Link ID. The handoff remains (including after reboot) until the
+operator explicitly deletes it. The human My tunnels -> Share workflow
+must require a fresh real-TTY SHOW to display it, and a separate
+fresh DELETE removes only that verified protected file. Neither
+action changes the tunnel, generates new keys, edits public desired
+State nor exposes secrets in ordinary JSON. Reject unsafe/mismatching
+receiver files and old untracked CLI output paths; there is no
+recovery from public State if the protected offer was lost.
+Never remove the stored handoff automatically after delivery or
+a Link deletion. Users who removed a Link before deleting its handoff
+must explicitly inspect and clean their own remaining private file
+on the host. Public rc.2 predates all of these UI changes.

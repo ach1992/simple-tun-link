@@ -107,7 +107,7 @@ func menuCreateIPsec(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	fmt.Fprintln(out, "\nReview encrypted tunnel (not yet created):")
 	fmt.Fprintf(out, "  IPsec %s | THIS server %s, tunnel IP %s\n", mode, route.Source, addresses.Local)
 	fmt.Fprintf(out, "  OTHER server %s, tunnel IP %s\n", peer, addresses.Peer)
-	fmt.Fprintf(out, "  Protected receiver file: %s\n", handoff)
+	fmt.Fprintln(out, "  Protected receiver Setup Link: retained for later sharing under STL-owned private storage")
 	fmt.Fprintln(out, "This will generate a unique protected key, stage IPsec and activate only STL-owned resources.")
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
 		fmt.Fprintln(errOut, "Cannot establish fresh terminal confirmation; no changes applied.")
@@ -121,13 +121,19 @@ func menuCreateIPsec(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		fmt.Fprintln(out, "Cancelled. No keys or tunnel were created.")
 		return 0
 	}
+	handoff, err = prepareProtectedMenuHandoff(options, id)
+	if err != nil {
+		fmt.Fprintln(errOut, "Cannot safely reserve the protected Setup Link file. No new key generated.")
+		return 1
+	}
 	code := linkCreateIPsecCommand([]string{"create-ipsec", "--stdin", "--output", handoff},
 		bytes.NewReader(payload), out, errOut, options)
 	if code != 0 {
 		fmt.Fprintln(errOut, "If a protected handoff was already staged, keep that file and reconcile before starting a new IPsec setup.")
 		return code
 	}
-	fmt.Fprintf(out, "Protected Setup Link saved: %s\n", handoff)
-	fmt.Fprintln(out, "OTHER server: import this protected file and explicitly Connect; then diagnose encrypted traffic.")
+	fmt.Fprintln(out, "The protected receiver Setup Link remains available: My tunnels -> tunnel number -> Share Setup Link.")
+	fmt.Fprintln(out, "OTHER server: Import -> Protected link, then explicitly Connect IPsec and diagnose traffic.")
+	fmt.Fprintln(out, "Use Delete saved Setup Link only when you no longer need that receiver handoff.")
 	return 0
 }

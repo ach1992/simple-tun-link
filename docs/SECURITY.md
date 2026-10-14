@@ -31,7 +31,19 @@ Rules:
 - import preview shows secret presence, not the secret value;
 - do not automatically write secret-bearing payloads to logs, shell history, diagnostic bundles, or world-readable files;
 - when STL itself writes a secret-bearing export file, use restrictive permissions;
-- after generating a WireGuard peer keypair for Quick Link, the initiator persists only the peer public key and must not retain the peer private key in ordinary state.
+- the new guided WireGuard/IPsec sender intentionally retains its
+  receiver Quick Link in STL-owned private receiver-handoffs/
+  (0700 directory and 0600 immutable per-Link file) until explicit
+  operator deletion. The special SHOW action requires a real
+  terminal, a fresh typed confirmation, current saved sender Link
+  matching and trusted no-follow private file. It may expose
+  the secret to people looking at the screen or terminal scrollback.
+  Normal inventory, JSON, diagnostics, status and errors remain redacted;
+- after generating a WireGuard peer keypair for Quick Link, the initiator
+  saves only its peer public key in ordinary desired State. A receiver
+  private credential may be retained only in the separate protected
+  handoff until the operator explicitly deletes it; no regenerated
+  receiver credential is inferred from normal State.
 
 ### WireGuard key-material boundary
 

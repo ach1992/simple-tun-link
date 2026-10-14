@@ -15,6 +15,31 @@ Commands below use generic `vX.Y.Z` as a placeholder: replace it with an
 **actually published** tag, never a branch name. No installer runs during a
 clone, build, or ordinary `go test`.
 
+## Protected receiver Setup Link retention (next guided UI)
+
+The future Issue #91 guided sender deliberately retains WireGuard and
+IPsec receiver Setup Links in the STL private state root's
+receiver-handoffs/ directory, separate from ordinary State and sender
+credentials. Every Link ID has a 0600 identity-bound private file
+inside an owned 0700 directory. Back up this directory together
+with State and the separately protected sender credentials when
+host disaster recovery matters. Keep all copies private.
+
+Guided My tunnels -> Share -> SHOW displays the same original offer
+after fresh real-TTY consent. Only a separate explicit DELETE erases
+this receiver file; it does not remove the active tunnel or local keys.
+Link removal or uninstall must not silently delete retained receiver
+handoffs. For an already removed Link, the owner must deliberately
+inspect and clean any remaining private handoff. The normal system
+root is /var/lib/simple-tun-link/receiver-handoffs/; only inspect
+files you own and have verified, never use wildcard deletion or
+relax owner-only permissions.
+
+Old rc.2 handoffs created with an explicit filename are still in
+that original path. The new menu does not search arbitrary old
+private paths or reconstruct a lost receiver secret. The normal
+noninteractive creator command still requires an explicit --output.
+
 ## Supported deployment shape
 
 - Linux amd64 or arm64; Ubuntu 22.04+ and Debian 11+ are supported installer targets. Derivatives are not assumed compatible.

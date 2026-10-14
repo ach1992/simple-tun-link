@@ -16,17 +16,16 @@ import (
 func TestGuidedWireGuardCreatesConfirmedProtectedHandoff(t *testing.T) {
 	base := t.TempDir()
 	root := filepath.Join(base, "state")
-	parent := filepath.Join(base, "handoff")
-	if err := os.Mkdir(parent, 0o700); err != nil {
+	file, err := protectedMenuHandoffPath(&runtimeOptions{stateRoot: root}, createTestID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	file := filepath.Join(parent, "receiver.stl")
 	host := &guidedTestRunner{}
 	fake := &wireGuardCreatorFake{newLifecycleFake()}
 	opts := &runtimeOptions{stateRoot: root, backends: []backend.Backend{fake}, probeRunner: host,
 		mtuManager:   guidedMTUFake{},
 		createLinkID: func() (domain.LinkID, error) { return createTestID, nil }}
-	stdin := "1\n2\n192.0.2.20\n\n51871\n51872\nn\n" + file + "\nYES\n8\n"
+	stdin := "1\n2\n192.0.2.20\n\n51871\n51872\nn\nYES\n8\n"
 	var out, stderr bytes.Buffer
 	code := runWithRuntimeInput([]string{"menu"}, strings.NewReader(stdin), &out, &stderr, opts)
 	if code != 0 || stderr.Len() != 0 {
@@ -35,6 +34,14 @@ func TestGuidedWireGuardCreatesConfirmedProtectedHandoff(t *testing.T) {
 	if !strings.Contains(out.String(), "Review WireGuard tunnel") || !strings.Contains(out.String(), "WireGuard Link") ||
 		!strings.Contains(out.String(), "SENSITIVE") || strings.Contains(out.String(), "stl://") || len(fake.applies) != 1 {
 		t.Fatalf("guided create bypassed safe public preview/Engine: %s applies=%v", out.String(), fake.applies)
+	}
+	info, err := os.Lstat(file)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		t.Fatal("guided private handoff not mode 0600", err)
+	}
+	parentInfo, err := os.Lstat(filepath.Dir(file))
+	if err != nil || !parentInfo.IsDir() || parentInfo.Mode().Perm() != 0o700 {
+		t.Fatal("guided protected handoff directory must be 0700", err)
 	}
 	content, err := os.ReadFile(file)
 	if err != nil {
@@ -48,18 +55,17 @@ func TestGuidedWireGuardCreatesConfirmedProtectedHandoff(t *testing.T) {
 
 func TestGuidedWireGuardCancelDoesNotGeneratePrivateFileOrState(t *testing.T) {
 	base := t.TempDir()
-	parent := filepath.Join(base, "handoff")
-	if err := os.Mkdir(parent, 0o700); err != nil {
+	root := filepath.Join(base, "state")
+	file, err := protectedMenuHandoffPath(&runtimeOptions{stateRoot: root}, createTestID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	root := filepath.Join(base, "state")
-	file := filepath.Join(parent, "must-not-exist.stl")
 	host := &guidedTestRunner{}
 	fake := &wireGuardCreatorFake{newLifecycleFake()}
 	opts := &runtimeOptions{stateRoot: root, backends: []backend.Backend{fake}, probeRunner: host,
 		mtuManager:   guidedMTUFake{},
 		createLinkID: func() (domain.LinkID, error) { return createTestID, nil }}
-	stdin := "1\n2\n192.0.2.20\n\n51871\n51872\nn\n" + file + "\nNO\n8\n"
+	stdin := "1\n2\n192.0.2.20\n\n51871\n51872\nn\nNO\n8\n"
 	var out, stderr bytes.Buffer
 	code := runWithRuntimeInput([]string{"menu"}, strings.NewReader(stdin), &out, &stderr, opts)
 	if code != 0 || stderr.Len() != 0 || len(fake.applies) != 0 {
