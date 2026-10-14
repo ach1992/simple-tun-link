@@ -4,20 +4,20 @@
 [README](../README.md)**. This page is the advanced installer/maintenance
 runbook, not a required first stop for a new operator.
 
-Current release-candidate line: [`v0.1.0-rc.2`](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.2)
-(**pre-release, not Stable**). It includes the IPsec recovery, diagnostics,
-managed-MTU and State v3 changes after historical `v0.1.0-rc.1`. Check the
-published release page and asset checksums before installing. The older
-rc.1 tagged-artifact lifecycle was verified separately in Issue #11;
-the newer rc.2 evidence and its limitations are in
-[Issue #12](https://github.com/ach1992/simple-tun-link/issues/12).
+Current release candidate: [v0.1.0-rc.3](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.3)
+(**pre-release, not Stable**). The new guided Create/Manage UI and
+repeatable private receiver handoffs are changes from rc.2.
+The rc.2 IPsec, MTU and State v3 rollback boundary still applies.
+Check the published release, SHA256SUMS and exact installed commit
+before trusting the update. Earlier rc.2 release evidence and its
+limits are in [Issue #12](https://github.com/ach1992/simple-tun-link/issues/12).
 Commands below use generic `vX.Y.Z` as a placeholder: replace it with an
 **actually published** tag, never a branch name. No installer runs during a
 clone, build, or ordinary `go test`.
 
-## Protected receiver Setup Link retention (next guided UI)
+## Protected receiver Setup Link retention (rc.3 guided UI)
 
-The future Issue #91 guided sender deliberately retains WireGuard and
+The rc.3 guided sender deliberately retains WireGuard and
 IPsec receiver Setup Links in the STL private state root's
 receiver-handoffs/ directory, separate from ordinary State and sender
 credentials. Every Link ID has a 0600 identity-bound private file
@@ -98,32 +98,28 @@ For a single-command install, with an explicit released tag:
 bash -c 'set -euo pipefail; umask 077; t=$(mktemp); trap '\''rm -f -- "$t"'\'' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 -o "$t" https://raw.githubusercontent.com/ach1992/simple-tun-link/vX.Y.Z/scripts/install.sh; bash -n "$t"; sudo bash "$t" install --version vX.Y.Z'
 ~~~
 
-### Upcoming operator-first bootstrap (Issue #91, NOT in rc.2)
+### Operator-first one-line install (v0.1.0-rc.3)
 
-A future, separately published tag that contains scripts/quick-install.sh
-can install the usual GRE/IPIP/WireGuard dependencies and **open STL's
-menu immediately** after the verified official install:
+For the current rc.3 pre-release, the user-facing one-line installer is:
 
 ~~~sh
-curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/vX.Y.Z/scripts/quick-install.sh | bash -s -- vX.Y.Z
+curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.3/scripts/quick-install.sh | bash -s -- v0.1.0-rc.3
 ~~~
 
-Replace BOTH vX.Y.Z placeholders with the same **actually published new
-tag**. This form cannot work against rc.2 because rc.2 has no quick
-bootstrap script; do not assume a newer tag exists. The bootstrap itself
-is unprivileged. It pins the canonical installer download to the explicit
-tag, checks that the file exists and parses before invoking privileged
-installation, and delegates release asset/manifest/checksum verification
-to the unchanged canonical installer. When launched from a pipe in a real
-terminal, it reattaches the installed menu to /dev/tty; without a TTY it
-leaves an instruction to run sudo stl menu manually.
+This script is unprivileged initially and downloads the canonical
+installer pinned to the same explicit GitHub release tag. It checks
+syntax/availability before invoking root; the canonical installer
+checks the release SHA256SUMS and manifest before binary installation.
+When run through a pipe on a real TTY, it opens the new menu on
+/dev/tty after installing. Without a TTY, run sudo stl menu.
+The default backend prerequisite set is native,wireguard; optionally
+append native to install only GRE/IPIP prerequisites.
 
-Do not use the quick bootstrap to adopt/install strongSwan/IPsec without
-the separate prerequisite review; it deliberately supports only native
-or native,wireguard package selections. To test the no-root bootstrap,
-download failures and terminal reattachment **offline**, run
-bash scripts/test-quick-install.sh. The fake installation test touches
-no host networking, package manager or persistent systemd services.
+This rc.3 command cannot be used with an rc.2 URL/tag, since rc.2
+does not contain quick-install.sh. Verify a real release exists before
+running. It does not adopt or install strongSwan/IPsec automatically;
+do not modify existing VPN services to circumvent the admission gate.
+Offline bootstrap failure/PTY tests: bash scripts/test-quick-install.sh.
 
 The default one-command example installs only the native GRE/IPIP
 dependencies. To provision all backend packages automatically, append

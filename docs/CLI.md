@@ -1,12 +1,11 @@
 # STL CLI — operator menus and stable machine commands
 
-For published v0.1.0-rc.2, consult the
-[README](../README.md) and the stable **versioned CLI/JSON**
-reference below. The simpler human terminal interface in
-[Issue #91](https://github.com/ach1992/simple-tun-link/issues/91)
-is **not in released rc.2** until a separately reviewed new tag exists.
+The human menu below is part of the
+[v0.1.0-rc.3 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.3).
+The old rc.2 executable retains its older menu. Versioned
+noninteractive machine CLI/JSON contracts remain unchanged.
 
-The next candidate's terminal choices:
+Current menu choices:
 
 - Start: stl menu (or stl in an interactive terminal), with a concise
   version/repository/host/connection IP/kernel/saved Link count banner.
@@ -74,7 +73,7 @@ stl link diagnose --all --json
 stl link diagnose --all --timeout 10m --json
 ~~~
 
-The next menu's **Test connectivity** task accepts a Link number or
+The rc.3 menu's **Test connectivity** task accepts a Link number or
 `a` for all; degraded/unsupported results return to the task menu instead
 of exiting it. Ordinary per-Link `stl link diagnose <link-id> [--mtu <bytes>]
 [--json]` remains available with the **same** backend capability,
@@ -164,7 +163,7 @@ and it never copies backend/tool causes into operator output.
 
 ### Guided creation and straightforward GRE Native pairing
 
-In the **unreleased Issue #91 menu**, choose 1 Create tunnel ->
+In the **rc.3 operator-first menu**, choose 1 Create tunnel ->
 1 GRE Native (or press Enter to select the default). The user enters
 the OTHER server's reachable IPv4; STL detects THIS server's
 underlay/source IP from a local kernel route. The wizard automatically
@@ -194,7 +193,7 @@ connectivity and PMTU require both peer interfaces first.
 An uncertain persistence/rollback result returns to the menu but
 requires read-only reconciliation, never blind automatic retry.
 
-The next guided Create -> WireGuard task uses the canonical
+The rc.3 guided Create -> WireGuard task uses the canonical
 protected v3 receiver handoff; IPsec uses protected v2. Neither
 credential is displayed by normal Create/Status/JSON. GRE/IPIP
 FOU/GUE, WireGuard and conditionally admitted IPsec live under one
@@ -214,7 +213,7 @@ under locks. A valid plaintext token intentionally appears in the
 operator's terminal echo, so use protected mode for sensitive offers.
 No Input/preview error echoes credential bytes or tries automatic
 host mutation. Old rc.2 retains its older separate menu and prompt
-contract; this page describes the future Issue #91 candidate.
+contract; this page describes the rc.3 interface.
 
 Quick Link payloads provide **no confidentiality or authenticated sender**;
 verify the offer with the intended peer through a trusted channel. Sensitive
@@ -233,7 +232,7 @@ versioned `--json` commands remain the automation interface.
 
 ## WireGuard sender creation, recovery and credential retirement
 
-In the next guided Create -> WireGuard flow, THIS server's
+In the rc.3 guided Create -> WireGuard flow, THIS server's
 connection IP is detected from the route to the other server,
 the suggested private Link IP pair can be accepted by Enter,
 and both default UDP ports can be accepted by Enter. The menu

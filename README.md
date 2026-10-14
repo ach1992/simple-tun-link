@@ -2,14 +2,9 @@
 
 **Create and manage point-to-point IP tunnels between Linux servers.** STL provides a stable private IPv4 **Link Address** on each server, while the underlying tunnel can use GRE, IPIP, WireGuard, or conditionally available IPsec. You can create multiple independent Links, including different tunnels between the same pair of servers.
 
-**Latest:** [v0.1.0-rc.2](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.2) (**pre-release, not Stable**). This release includes automatic restoration of committed Links after reboot, endpoint-local managed MTU, and the IPsec/diagnostic fixes introduced after rc.1. Isolated native Linux and guest-reboot tests passed; **physical Internet/WAN/NAT-router deployments have not yet been independently validated**. Test on noncritical systems first.
+**Current release candidate:** [v0.1.0-rc.3](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.3) (**Pre-release, not Stable**). The new operator-first menu, one-line installer and repeatable protected Setup Link sharing build on rc.2's committed-Link reboot restoration, managed MTU and backend fixes. Isolated native Linux validation does **not** prove physical Internet/WAN/NAT-router behavior; test on noncritical servers first.
 
 The installed command is `stl`; `stlink` is an alias for the same program.
-
-**Version note:** The simplified Create/Manage interface below is currently
-in development under [Issue #91](https://github.com/ach1992/simple-tun-link/issues/91)
-and **not yet included in the published rc.2 executable**. Use the rc.2
-commands below until a separately reviewed new version is published.
 
 ## What you can create
 
@@ -32,38 +27,38 @@ GRE keys distinguish tunnels but **do not encrypt traffic**. FOU/GUE are UDP enc
 
 ## 2. Install on both servers
 
-### Published rc.2 (available now, older menu)
-
-This existing one-liner installs the **published** pre-release, not the
-new Issue #91 menu. Review the [installer source](scripts/install.sh)
-before giving it root access. It verifies release manifests and binary checksums.
+**One-line installer for v0.1.0-rc.3** (run on each server):
 
 ~~~bash
-bash -c 'set -euo pipefail; umask 077; t=$(mktemp); trap '\''rm -f -- "$t"'\'' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 -o "$t" https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.2/scripts/install.sh; bash -n "$t"; sudo bash "$t" install --version v0.1.0-rc.2'
+curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.3/scripts/quick-install.sh | bash -s -- v0.1.0-rc.3
 ~~~
 
-This installs native GRE/IPIP prerequisites. To include WireGuard, append
---backends native,wireguard to the installer invocation.
+This is an explicitly tag-pinned HTTPS bootstrap; review its
+[small bootstrap source](scripts/quick-install.sh) and
+[canonical installer](scripts/install.sh) before running privileged
+operations. The bootstrap checks the downloaded canonical installer
+before elevating permissions; the canonical installer verifies the
+release manifest and artifact SHA256 checksums. It installs native
+GRE/IPIP and WireGuard prerequisites by default and **opens STL's
+menu automatically** in a real terminal, even when the bootstrap
+script was piped to Bash. It does not install/adopt IPsec services,
+silently edit provider firewall/NAT settings or rewrite host routes.
+Without a terminal, run sudo stl menu after installation.
 
-### Simpler one-line install (next published release only)
+To install only GRE/IPIP prerequisites, append native after the
+version argument. The same pinned command is appropriate to
+update the existing STL executable, but read
+[State/rollback precautions](docs/INSTALL.md)
+before updating an already configured server.
+The command uses curl; if its download fails, nothing should be
+installed. Do not paste untrusted scripts or replace the version
+with a mutable branch name. A HTTPS tag and checksum are not proof
+of publisher trust.
 
-Once Issue #91 has passed review and a *new real tag* is published, replace
-both occurrences of vX.Y.Z with that same actual released tag:
-
-~~~bash
-curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/vX.Y.Z/scripts/quick-install.sh | bash -s -- vX.Y.Z
-~~~
-
-The quick bootstrap runs without initial root privileges; it downloads and
-syntax-checks the same pinned official installer into a private temporary
-file, runs its verified install with sudo, and **opens the interactive menu
-automatically** on a real terminal, even when the quick script came from
-stdin. In noninteractive environments, use sudo stl menu afterward.
-Its default dependencies support native GRE/IPIP and WireGuard. IPsec
-dependencies require separate explicit operator admission; third-party
-strongSwan services are never silently adopted or stopped. Do not try this
-new command against rc.2 (the quick-install file is not in that old tag).
-Pinned HTTPS/asset checksums do not replace trust in the release publisher.
+**Older v0.1.0-rc.2** used a longer installer and has the old menu.
+The new instructions and protected receiver-handoff retention
+require that the installed executable actually reports rc.3.
+Existing private rc.2 handoffs stay in their original chosen paths.
 
 Verify when done:
 
@@ -73,7 +68,7 @@ stlink version --json
 sudo stl menu
 ~~~
 
-## 3. Connect Server A and Server B (new menu)
+## 3. Connect Server A and Server B
 
 The simplest default, GRE Native, is **not encrypted**. You need the
 OTHER server's reachable connection IPv4. STL automatically chooses
@@ -98,8 +93,8 @@ THIS server's underlay/source IP from the Linux kernel route to that peer.
 
 **Forgot to copy the link?** You do not need to recreate the tunnel:
 on Server A, use **3 My tunnels -> number -> 3 Share**. It returns the
-same Setup Link for a saved GRE/IPIP tunnel. On the currently installed
-rc.2 release, where the menu is older, use the CLI instead:
+same Setup Link for a saved GRE/IPIP tunnel. On the older
+rc.2 release, where the menu is different, use the CLI instead:
 
 ~~~bash
 sudo stl link list
@@ -136,7 +131,7 @@ recreate an unknown receiver private key/PSK.
 
 ## 4. Create an encrypted WireGuard tunnel
 
-Install WireGuard prerequisites on both hosts. In the new menu select
+Install WireGuard prerequisites on both hosts. In the menu select
 **1 Create tunnel -> 2 WireGuard**. Enter the OTHER host's reachable IPv4;
 press Enter for the suggested private tunnel IP pair and the default UDP
 51820 ports, or choose different ports. Optional keepalive and local MTU
@@ -169,7 +164,7 @@ rc.2 is still the old separate menu option 9; consult the
 
 ## 5. View, share, test, and remove saved tunnels
 
-In the next menu, **3 My tunnels** lists Link numbers instead of forcing
+In the menu, **3 My tunnels** lists Link numbers instead of forcing
 users to type long IDs. A selected Link offers Status, Test connection,
 Share (repeatable plaintext GRE/IPIP regeneration or fresh SHOW-gated
 protected WireGuard/IPsec retrieval), Connection details, Remove and
