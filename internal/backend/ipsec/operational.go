@@ -133,6 +133,11 @@ type DiagnosticState struct {
 	XFRMID                     uint32 `json:"xfrm_id"`
 	ConnectionConfigured       bool   `json:"connection_configured"`
 	SecurityAssociationPresent bool   `json:"security_association_present"`
+	// Only a proven exact-owner kernel stats64 read may populate these.
+	// A nil pointer means not measured, not a numerical zero.
+	RXPackets   *uint64 `json:"rx_packets,omitempty"`
+	TXPackets   *uint64 `json:"tx_packets,omitempty"`
+	CounterUnit string  `json:"counter_unit,omitempty"`
 }
 
 func (b *OperationalBackend) DiagnosticState(ctx context.Context, l domain.Link) (DiagnosticState, error) {
@@ -148,9 +153,16 @@ func (b *OperationalBackend) DiagnosticState(ctx context.Context, l domain.Link)
 	if err != nil {
 		return DiagnosticState{}, fmt.Errorf("IPsec SA inventory unavailable")
 	}
-	return DiagnosticState{Interface: o.Profile.InterfaceName, IfIndex: o.Iface.Index,
+	diag := DiagnosticState{Interface: o.Profile.InterfaceName, IfIndex: o.Iface.Index,
 		XFRMID: o.Profile.InterfaceID, ConnectionConfigured: true,
-		SecurityAssociationPresent: sa}, nil
+		SecurityAssociationPresent: sa}
+	if sa {
+		diag.RXPackets, diag.TXPackets = b.diagnosticPacketCounters(ctx, o.Profile, o.Iface.Index)
+		if diag.RXPackets != nil && diag.TXPackets != nil {
+			diag.CounterUnit = "packets"
+		}
+	}
+	return diag, nil
 }
 
 type operationalObservation struct {
