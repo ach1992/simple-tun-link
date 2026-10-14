@@ -13,6 +13,10 @@ fi
 for tool in ip iperf3 strace python3 timeout mktemp ss; do
   command -v "$tool" >/dev/null || { echo "THROUGHPUT_BIND_PREREQUISITE_MISSING=$tool" >&2; exit 2; }
 done
+python3 -c 'import json, pathlib, re, sys' || {
+  echo 'THROUGHPUT_BIND_PYTHON_STDLIB_MISSING=json' >&2
+  exit 2
+}
 [[ -z "$(ip -4 route show default)" ]] || {
   echo 'REFUSED: throughput guest must not have a default or external route' >&2
   exit 2
