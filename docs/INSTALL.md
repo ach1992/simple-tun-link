@@ -113,7 +113,20 @@ checks the release SHA256SUMS and manifest before binary installation.
 When run through a pipe on a real TTY, it opens the new menu on
 /dev/tty after installing. Without a TTY, run sudo stl menu.
 The default backend prerequisite set is native,wireguard; optionally
-append native to install only GRE/IPIP prerequisites.
+append native to install only GRE/IPIP prerequisites. For an **existing
+installer-owned STL**, use the explicit update form rather than the
+install command:
+
+~~~sh
+curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.3/scripts/quick-install.sh | bash -s -- v0.1.0-rc.3 update
+~~~
+
+This selects the unchanged canonical installer update transaction,
+including identity-verified existing ownership and rollback journals.
+For a narrower prerequisite selection, append native update after
+the tag. The command refuses foreign or inconsistent installed
+state rather than silently replacing it. Confirm rollback-compatible
+State and backups before starting.
 
 This rc.3 command cannot be used with an rc.2 URL/tag, since rc.2
 does not contain quick-install.sh. Verify a real release exists before
@@ -121,7 +134,7 @@ running. It does not adopt or install strongSwan/IPsec automatically;
 do not modify existing VPN services to circumvent the admission gate.
 Offline bootstrap failure/PTY tests: bash scripts/test-quick-install.sh.
 
-The default one-command example installs only the native GRE/IPIP
+The longer direct canonical-installer example above installs only the native GRE/IPIP
 dependencies. To provision all backend packages automatically, append
 `--backends all` to the `sudo bash "$t" install --version vX.Y.Z` invocation
 in that wrapper, after checking existing strongSwan services. A fetched

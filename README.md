@@ -46,10 +46,11 @@ silently edit provider firewall/NAT settings or rewrite host routes.
 Without a terminal, run sudo stl menu after installation.
 
 To install only GRE/IPIP prerequisites, append native after the
-version argument. The same pinned command is appropriate to
-update the existing STL executable, but read
-[State/rollback precautions](docs/INSTALL.md)
-before updating an already configured server.
+version argument. **An existing STL installation must use the
+explicit update action**, not install. The canonical installer will
+refuse to overwrite an existing or foreign executable, rather than
+silently adopt it. Read the [State/rollback precautions](docs/INSTALL.md)
+before updating a server with configured Links.
 The command uses curl; if its download fails, nothing should be
 installed. Do not paste untrusted scripts or replace the version
 with a mutable branch name. A HTTPS tag and checksum are not proof
@@ -157,8 +158,8 @@ chats, tickets or shell history.
 On **already published rc.2**, the older creator used a manually
 chosen private output filename, not this automatic retention.
 Keep and use that original protected file: it cannot be magically
-recovered from State by the upcoming menu. The new Share/Delete
-actions for protected links are not in rc.2. WireGuard creation in
+recovered from State by the rc.3 menu. The protected Share/Delete
+actions are not available in rc.2. WireGuard creation in
 rc.2 is still the old separate menu option 9; consult the
 [CLI/pairing guide](docs/CLI.md).
 
@@ -175,7 +176,7 @@ retained private handoff; cleanup after Link removal needs a
 deliberate owner-private file action. Remove still requires a fresh
 confirmation and rejects changed/unowned resources.
 
-The stable CLI commands work in rc.2 as well as future releases:
+These stable CLI commands work in rc.2 and rc.3:
 
 ~~~bash
 sudo stl link list --json                  # Saved Links
@@ -199,7 +200,22 @@ not automatically retry possible partial network mutations.
 
 ## 6. Update safely
 
-To update an existing rc.1 installation to rc.2, fetch and review the installer **from rc.2**, then use the same secure one-command wrapper above with its last invocation changed from `install --version v0.1.0-rc.2` to **`update --version v0.1.0-rc.2`**. The terminal menu's Update task only shows instructions; it does not silently install anything.
+**To update an already installer-owned STL to v0.1.0-rc.3**, first
+quiesce STL mutations and protect a consistent backup of State and
+receiver/sender credential files. Then run the explicit, pinned
+**one-line update** on that server:
+
+~~~bash
+curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.3/scripts/quick-install.sh | bash -s -- v0.1.0-rc.3 update
+~~~
+
+This uses the canonical installer **update** transaction, checks
+existing binary/record ownership before replacement, verifies
+downloaded artifact identity and checksums, and returns to the menu
+after success. It never silently modifies existing tunnel interfaces.
+A fresh installation uses the **install** one-liner in section 2,
+not update. The menu's Update task only provides guidance; it
+does not perform hidden upgrades.
 
 **Important State v3 compatibility warning:** after an rc.2 executable successfully writes **State schema v3** (used for managed local MTU), an older pre-v3 executable **cannot read that State**. **Binary-only rollback is not State rollback.** Before updating hosts with existing Links, quiesce STL mutations and keep a **consistent protected backup** of State **and separate credentials** with a tested recovery path. Do **not** manually edit `schema_version`, drop MTU fields, or delete interfaces/systemd files to force a downgrade. Prefer a compatible roll-forward if recovery is needed; follow the [full update/recovery runbook](docs/INSTALL.md#persisted-state-v3-upgrade-and-safe-rollback-boundary).
 

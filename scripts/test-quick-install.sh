@@ -53,6 +53,22 @@ if ((EUID==0));then
 else
   grep -q 'sudo bash .* install --version v0.1.0-rc.123 --backends native,wireguard' "$STL_TEST_EXECUTIONS"
 fi
+# Operator upgrades must use the canonical update transaction rather than
+# quietly running install over an existing version (which correctly refuses).
+: > "$STL_TEST_EXECUTIONS"
+bash "$repo/scripts/quick-install.sh" v0.1.0-rc.123 update > "$scratch/out" 2>"$scratch/err"
+if ((EUID==0));then
+  grep -q 'test fake installer' "$STL_TEST_EXECUTIONS"
+else
+  grep -q 'sudo bash .* update --version v0.1.0-rc.123 --backends native,wireguard' "$STL_TEST_EXECUTIONS"
+fi
+: > "$STL_TEST_EXECUTIONS"
+bash "$repo/scripts/quick-install.sh" v0.1.0-rc.123 native update > "$scratch/out" 2>"$scratch/err"
+if ((EUID==0));then
+  grep -q 'test fake installer' "$STL_TEST_EXECUTIONS"
+else
+  grep -q 'sudo bash .* update --version v0.1.0-rc.123 --backends native' "$STL_TEST_EXECUTIONS"
+fi
 before="$(wc -c < "$STL_TEST_EXECUTIONS")"
 for invalid in 'v0.1.0-rc.123;rm' 'latest' '../main' 'v0.1.0-rc.123--bad/path'; do
   if bash "$repo/scripts/quick-install.sh" "$invalid" > "$scratch/out" 2>"$scratch/err"; then
@@ -60,6 +76,16 @@ for invalid in 'v0.1.0-rc.123;rm' 'latest' '../main' 'v0.1.0-rc.123--bad/path'; 
     exit 1
   fi
 done
+for invalid in 'native,wireguard,ipsec' 'upgrade' 'native,update'; do
+  if bash "$repo/scripts/quick-install.sh" v0.1.0-rc.123 "$invalid" > "$scratch/out" 2> "$scratch/err"; then
+    echo 'Bootstrap incorrectly accepted invalid action/backends.' >&2
+    exit 1
+  fi
+done
+if bash "$repo/scripts/quick-install.sh" v0.1.0-rc.123 update update > "$scratch/out" 2>"$scratch/err"; then
+  echo 'Bootstrap accepted duplicate update flags.' >&2
+  exit 1
+fi
 [[ "$before" == "$(wc -c < "$STL_TEST_EXECUTIONS")" ]] || {
   echo 'Invalid tag invoked privileged installer.' >&2
   exit 1

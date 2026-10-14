@@ -16,18 +16,26 @@ quick_install_main() {
   STL_BOOTSTRAP_STARTED=1
   umask 077
   usage() {
-    echo "Usage: bash quick-install.sh <existing-published-tag> [native|native,wireguard]" >&2
+    echo "Usage: bash quick-install.sh <existing-published-tag> [native|native,wireguard] [update]" >&2
+    echo "For an already installer-owned STL: bash quick-install.sh <tag> update" >&2
     exit 2
   }
-  [[ $# == 1 || $# == 2 ]] || usage
+  [[ $# -ge 1 && $# -le 3 ]] || usage
   version=$1
   backends=native,wireguard
-  if [[ $# == 2 ]]; then backends=$2; fi
+  action=install
   [[ $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || usage
-  case "$backends" in
-    native|native,wireguard) ;;
-    *) usage ;;
-  esac
+  if [[ $# -ge 2 ]]; then
+    case "$2" in
+      native|native,wireguard) backends=$2 ;;
+      update) action=update ;;
+      *) usage ;;
+    esac
+  fi
+  if [[ $# == 3 ]]; then
+    [[ $action == install && $3 == update ]] || usage
+    action=update
+  fi
   # Do not trust a mutable latest endpoint. Download the canonical installer
   # for the exact tag, check it is complete and parses before privilege elevation.
   source_url="https://raw.githubusercontent.com/ach1992/simple-tun-link/$version/scripts/install.sh"
@@ -37,11 +45,11 @@ quick_install_main() {
   [[ -s $tmp ]] || { echo "STL installer was not downloaded." >&2; exit 1; }
   bash -n "$tmp"
   if (( EUID == 0 )); then
-    bash "$tmp" install --version "$version" --backends "$backends"
+    bash "$tmp" "$action" --version "$version" --backends "$backends"
   else
-    sudo bash "$tmp" install --version "$version" --backends "$backends"
+    sudo bash "$tmp" "$action" --version "$version" --backends "$backends"
   fi
-  echo "STL $version installed. Opening the menu on this terminal..."
+  echo "STL $version $action completed. Opening the menu on this terminal..."
   # When a bootstrap script is piped into bash, fd 0 is the script content,
   # not interactive menu input. Reattach to the controlling terminal only.
   if [[ -t 1 ]] && { exec {stl_menu_tty}<>/dev/tty; } 2>/dev/null; then
