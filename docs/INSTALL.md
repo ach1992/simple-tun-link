@@ -126,6 +126,41 @@ pattern with `update`). The installer refuses a foreign or locally modified
 - Update does not restart systemd, change the kernel, or reapply Links.
   Runtime/backend/state compatibility must be reviewed before each release.
 
+### Persisted State v3: upgrade and safe rollback boundary
+
+The private `/var/lib/simple-tun-link/state.json` format is versioned **separately**
+from CLI request/response and Quick Link/pairing formats. State schema **v3**
+adds endpoint-local managed MTU. A genuinely valid State v1/v2 document remains
+readable by a v3-capable STL executable and its old Links stay **unmanaged**:
+reading alone never changes State or host MTU. The first *successful State
+mutation* subsequently persists v3. A legacy State document that already
+contains an `mtu` field is rejected, not silently granted permission to
+change a kernel interface.
+
+**Before updating a host with committed Links**, quiesce concurrent STL
+mutations, verify the intended released executable and its source manifest,
+and retain a consistent, access-restricted, recoverable backup of the current
+State **and any separately protected credentials** through the host's approved
+backup mechanism. Never paste State, pairing URLs, keys or secrets into an
+issue, terminal transcript or troubleshooting report. Keep an inventory of the
+existing Link IDs and the owned restore-unit status without dumping secrets.
+A successful installer update by itself neither validates a newly running
+Link nor proves persistence after reboot; those are separate Engine/release
+acceptance steps.
+
+**Do not treat installer binary rollback as State rollback.** Once any new
+runtime has written schema v3, pre-v3 STL executables cannot read that State
+and must fail closed. On a failed new-version rollout, prefer a verified
+**v3-compatible roll-forward** after reconciling installer transaction journals,
+installed executable identity, protected State and systemd/Link ownership. An
+older binary may be restored only if an operator has independently established
+that the preserved State format and runtime/backend dependencies still match
+that binary and no State mutation/uncertain publication has crossed the
+compatibility boundary. Never fake a downgrade by editing `schema_version`,
+stripping MTU policy fields, discarding state/credentials, or manually deleting
+owned network/systemd resources. Escalate unresolved or ambiguous state rather
+than reporting a successful rollback.
+
 A fatal interruption (power loss, `SIGKILL`) between rename and record sync
 may require manual reconciliation. The installer synchronizes prepared binaries and rollback sources before
 publication, syncs canonical identities and directories after rename, and

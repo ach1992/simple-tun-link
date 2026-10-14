@@ -72,3 +72,38 @@ This artifact-building slice did not install or deploy STL in production.
 Privileged systemd/network E2E evidence is independently tracked in
 [Issue #12](https://github.com/ach1992/simple-tun-link/issues/12), not
 established by this artifact-building slice.
+
+## State v3 and full-guest release acceptance (Issue #12)
+
+Managed MTU is persisted in **State schema v3**; it is distinct from CLI
+request schema v2 and existing pairing schemas. Valid old v1/v2 State must
+restore without a surprise MTU write, and a subsequent successful mutation
+may persist v3. An old pre-v3 executable cannot consume a v3 snapshot: test
+upgrade/rollback policy and publish the operator guidance in [INSTALL.md](INSTALL.md)
+with the release. A binary-only installer recovery is not a State migration.
+
+Before separately authorized Stable publication, collect exact **candidate
+source/tag, build manifest, checksum and installed executable identities** for
+supported architectures. In an authorized **disposable full-system guest with
+real PID1 systemd and its own kernel**, prove the following on the **same
+persisted guest disk**, not by creating a replacement Link after reboot:
+
+1. A canonical successfully committed Link has an immutable recorded Link ID,
+   State/credential identity and **actual bidirectional inner Link traffic**;
+   managed-MTU policy is applied and observed at the real Linux interface.
+2. Record the guest kernel boot ID, verify the STL-owned scheduled restore unit,
+   then reboot the **guest OS**, never the AI/test-server host or its control
+   plane. Provide the private peer underlay before the normal restore unit runs.
+3. On a distinct kernel boot ID, **before manual `ensure`, fresh pairing or
+   re-creation**, prove automatic restore of the same Link and observed MTU,
+   returned bilateral packets, idempotent subsequent reapply and scoped cleanup.
+4. Verify safe v1/v2-to-v3 state compatibility, secret-safe evidence, real
+   installed executable/manifest SHA and failure/unsupported-capability cases.
+
+Namespace-only kernel tests, a disposable container's systemd restart,
+source-only offline installer, older source's KVM results, and a green CI
+summary are **not** substitutes for this current-source whole-guest proof.
+Record exact distro/kernel/backend/tool versions, results and honest limits in
+[Issue #12](https://github.com/ach1992/simple-tun-link/issues/12). External
+physical WAN/NAT validation remains Owner-run **after** publication; do not
+claim it occurred or circumvent tool/platform restrictions to attempt it.
