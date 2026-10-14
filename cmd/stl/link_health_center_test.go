@@ -15,6 +15,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	grebackend "github.com/ach1992/simple-tun-link/internal/backend/gre"
 	ipipbackend "github.com/ach1992/simple-tun-link/internal/backend/ipip"
+	ipsecbackend "github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	wgbackend "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/diagnostics"
 	"github.com/ach1992/simple-tun-link/internal/domain"
@@ -339,5 +340,40 @@ func TestHealthCenterNoFabricatedIPsecCounterValues(t *testing.T) {
 		!bytes.Contains(raw, []byte(`"tx":0`)) ||
 		!bytes.Contains(raw, []byte(`"counter_unit":"packets"`)) {
 		t.Fatalf("existing version-1 measured counter contract regressed: %s, %v", raw, err)
+	}
+}
+
+func TestHealthCenterIPsecMeasuredCountersOnlyFromVerifiedState(t *testing.T) {
+	link := fixtureReadLink("lnk_dddddddddddddddddddddddddddddddd",
+		"10.80.76.0/31", "10.80.76.1/31", domain.BackendIPsec)
+	link.Encapsulation = domain.EncapESP
+	zero, seven := uint64(0), uint64(7)
+	report := diagnostics.IPsecReport{State: ipsecbackend.DiagnosticState{}}
+	check := healthFromMeasurement(link, ipsecHealthProjection(report))
+	if check.Observed == nil || check.Observed.RX != nil || check.Observed.TX != nil {
+		t.Fatalf("no kernel observation must omit IPsec counters: %+v", check)
+	}
+	report.State.RXPackets = &zero
+	report.State.TXPackets = &seven
+	// Partial/inconsistent evidence is not a measured counter source.
+	for _, unit := range []string{"", "bytes"} {
+		report.State.CounterUnit = unit
+		check = healthFromMeasurement(link, ipsecHealthProjection(report))
+		if check.Observed == nil || check.Observed.RX != nil || check.Observed.TX != nil {
+			t.Fatalf("unverified unit was presented as IPsec packets: %+v", check)
+		}
+	}
+	report.State.CounterUnit = "packets"
+	check = healthFromMeasurement(link, ipsecHealthProjection(report))
+	if check.Observed == nil || check.Observed.RX == nil || check.Observed.TX == nil ||
+		*check.Observed.RX != 0 || *check.Observed.TX != 7 ||
+		check.Observed.CounterUnit != "packets" {
+		t.Fatalf("verified zero/nonzero IPsec counters lost: %+v", check)
+	}
+	raw, err := json.Marshal(check)
+	if err != nil || !bytes.Contains(raw, []byte(`"rx":0`)) ||
+		!bytes.Contains(raw, []byte(`"tx":7`)) ||
+		!bytes.Contains(raw, []byte(`"counter_unit":"packets"`)) {
+		t.Fatalf("IPsec measured packet report inconsistent: %s %v", raw, err)
 	}
 }

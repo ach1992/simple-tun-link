@@ -249,15 +249,22 @@ and NAT-T conservatively budget **128 and 136 bytes** respectively; these
 are planning bounds, **not** guaranteed negotiated-transform overheads.
 A successful ICMP response proves only a short, Link-scoped observation.
 
-The IPsec backend's current `DiagnosticState` verifies interface, XFRM ID,
-connection and SA presence, but **does not read packet/byte counters**.
-The all-Link health report must therefore omit `rx`, `tx` and
-`counter_unit` on an IPsec observation, rather than falsely reporting
-zero measured packets. Human output explicitly states that RX/TX were
-not measured. An actual **measured zero** on GRE/IPIP/WireGuard continues
-to serialize as numeric zero with its verified `packets`/`bytes` unit.
-This keeps the existing version-1 successful backend JSON shape intact,
-while making previously unsupported/unverified IPsec counters absent.
+The IPsec backend's `DiagnosticState` first verifies the exact owned XFRM
+interface, its Link ID, private strongSwan configuration and a matching SA.
+Only after that verification it **optionally** reads the exact interface's
+bounded `ip -s -details -json link show dev <owned-interface>` packet
+statistics. Before using any count, the read must independently match the
+XFRM name, ifindex, if_id and Link ownership alias and contain both real
+`stats64.rx.packets` and `stats64.tx.packets` values. These are **XFRM
+interface packet counts**, not SA-specific or peer-authentication proof.
+If the kernel/iproute2 response is absent, incomplete, changed, ambiguous
+or unreadable, neither value is considered measured: the all-Link v1 report
+**omits** `rx`, `tx`, `counter_unit` and human output says
+"RX/TX counters: not measured". A truly measured IPsec packet count
+(including zero) appears numerically with unit `packets`. GRE/IPIP/WireGuard
+continue to preserve their already-supported measured zero behavior and
+units without a schema version change. No status is marked healthy because
+a counter exists, and a stats read failure never invents zero traffic.
 
 IPsec state/SA existence is a current observation, not proof of fresh IKE,
 ongoing encryption, peer trust or future reachability. No diagnostic
@@ -377,10 +384,10 @@ and requires its own owner/platform authorization.
 
 This Linux adapter does not complete Issue #9. Still required:
 
-- IPsec packet/byte counter integration with exact owner-bound kernel
-  reads (currently deliberately unavailable rather than fabricated); the
-  conditional XFRM/SA observer and conservative ESP/NAT-T overhead
-  estimates are already implemented;
+- Additional supported-kernel/architecture runtime evidence for the
+  conditional exact-owner XFRM **interface packet** counter reader;
+  per-SA counter readings and sustained/peer-authenticated traffic are
+  not inferred from these interface statistics;
 - Safe MTU application through the Engine, never from health observation;
 - Acceptance evidence for the opt-in, strictly Link-bound throughput
   client on authorized supported systems and separately prepared peers;

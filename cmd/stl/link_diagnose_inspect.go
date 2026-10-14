@@ -57,10 +57,7 @@ func inspectLinkDiagnostic(ctx context.Context, link domain.Link, options runtim
 		if err != nil {
 			return linkDiagnostic{}, err
 		}
-		// An admitted XFRM SA and verified Link Address probes do not
-		// imply that IPsec interface RX/TX counters were inspected.
-		// Do not invent measured zero packets in the batch health report.
-		return linkDiagnostic{report: measured, mtu: measured.MTU, quality: measured.Quality}, nil
+		return ipsecHealthProjection(measured), nil
 	case domain.BackendGRE:
 		inspector, ok := selected.(diagnostics.GREInspector)
 		if !ok {
@@ -102,4 +99,16 @@ func inspectLinkDiagnostic(ctx context.Context, link domain.Link, options runtim
 		return linkDiagnostic{}, stlerr.New(stlerr.CodeUnsupported, "link_diagnose", string(link.ID), string(link.Backend),
 			"active diagnosis is not implemented for this backend")
 	}
+}
+
+// ipsecHealthProjection includes counters only when a real, exact-owner
+// XFRM interface stats64 observation supplied both fields and a packet unit.
+// A verified SA or ICMP response alone must never fabricate an RX/TX zero.
+func ipsecHealthProjection(measured diagnostics.IPsecReport) linkDiagnostic {
+	result := linkDiagnostic{report: measured, mtu: measured.MTU, quality: measured.Quality}
+	state := measured.State
+	if state.RXPackets != nil && state.TXPackets != nil && state.CounterUnit == "packets" {
+		result.rx, result.tx, result.counterUnit = *state.RXPackets, *state.TXPackets, "packets"
+	}
+	return result
 }
