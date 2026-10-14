@@ -98,8 +98,11 @@ and publishes via same-directory, no-clobber rename with file/parent fsync.
 Both WireGuard and IPsec sender credentials are supported; recipient-origin
 IPsec staging and already-committed links do not grant recovery authority.
 An IPsec removal receipt (even with retired PSK) is a **cross-backend
-Link-ID tombstone**: WireGuard Create must reject it before key staging,
-and Resume and handoff recovery must not resurrect the identity. The
+Link-ID tombstone**: both WireGuard Create and IPsec Sender/Recipient
+Stage must reject it **before writing a protected key**, including after
+PSK retirement. The IPsec Stage transaction also rechecks the receipt
+before appending PendingIPsec. WireGuard Resume and handoff recovery must
+not resurrect the identity. The
 persisted-state validator rejects contradictory same-ID IPsec retirement
 and WireGuard pending-sender records. Files named like STL temporaries
 are opened with `O_NONBLOCK` before regular-file type validation, so an
