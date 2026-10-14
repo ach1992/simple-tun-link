@@ -76,6 +76,9 @@ func (e *Engine) recoverPendingSenderHandoff(ctx context.Context, link domain.Li
 	if _, removed := snap.FindRemovalReceipt(link.ID); removed {
 		return stlerr.New(stlerr.CodeConflict, op, string(link.ID), "", "sender identity was already removed")
 	}
+	if _, retired := snap.FindIPsecRemovalReceipt(link.ID); retired {
+		return stlerr.New(stlerr.CodeConflict, op, string(link.ID), "", "prior IPsec retirement reserves the sender Link ID")
+	}
 	switch link.Backend {
 	case domain.BackendWireGuard:
 		pending, ok := snap.FindPendingSender(link.ID)

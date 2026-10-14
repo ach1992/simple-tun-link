@@ -30,6 +30,17 @@ func TestIPsecRemovalReceiptRejectsAmbiguousAuthorization(t *testing.T) {
 			l.ID = id
 			s.Upsert(LinkRecord{Desired: l})
 		},
+		"pending-wireguard-overlap": func(s *Snapshot) {
+			pending := validPendingForLifecycleTest(t)
+			pending.Link.ID = id
+			s.PendingSenders = append(s.PendingSenders, pending)
+		},
+		"retired-pending-wireguard-overlap": func(s *Snapshot) {
+			s.IPsecRemovalReceipts[0].Retired = true
+			pending := validPendingForLifecycleTest(t)
+			pending.Link.ID = id
+			s.PendingSenders = append(s.PendingSenders, pending)
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := makeSnapshot()

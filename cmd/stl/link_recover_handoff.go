@@ -62,7 +62,10 @@ func withVerifiedHandoffTemporary(source, output string, operation func(raw stri
 		return fmt.Errorf("cannot inspect protected handoff parent")
 	}
 	defer unix.Close(dir)
-	fd, err := unix.Openat(dir, temporary, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	// O_NONBLOCK prevents an attacker-created canonical-name FIFO from
+	// hanging before Fstat can reject non-regular sources. It does not
+	// change regular-file read semantics.
+	fd, err := unix.Openat(dir, temporary, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return fmt.Errorf("cannot open exact protected STL temporary")
 	}

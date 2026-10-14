@@ -97,7 +97,13 @@ intent/digest and matching protected local key under canonical Engine locks,
 and publishes via same-directory, no-clobber rename with file/parent fsync.
 Both WireGuard and IPsec sender credentials are supported; recipient-origin
 IPsec staging and already-committed links do not grant recovery authority.
-Unsafe, lost, mismatched or orphaned material remains preserved and
+An IPsec removal receipt (even with retired PSK) is a **cross-backend
+Link-ID tombstone**: WireGuard Create must reject it before key staging,
+and Resume and handoff recovery must not resurrect the identity. The
+persisted-state validator rejects contradictory same-ID IPsec retirement
+and WireGuard pending-sender records. Files named like STL temporaries
+are opened with `O_NONBLOCK` before regular-file type validation, so an
+unsafe named pipe cannot suspend recovery. Unsafe, lost, mismatched or orphaned material remains preserved and
 requires deliberate manual reconciliation; STL never guesses authorization
 to delete an orphan key or invent a new peer secret. This private-file
 recovery is not tunnel traffic, handshake or host-mutating repair.

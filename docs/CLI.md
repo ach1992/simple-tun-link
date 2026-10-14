@@ -316,7 +316,13 @@ a same-directory atomic **no-replace rename**, fsyncs the parent, and emits
 versioned redacted confirmation. Already committed Links, recipient-origin
 IPsec pending, different/rechecksummed URL, orphan keys without pending,
 unsafe/changed files and occupied destinations are rejected, leaving source
-data intact where possible. A directory-sync error after rename is
+data intact where possible. **An IPsec removal/retirement receipt permanently
+reserves the same Link ID across backends**, including for WireGuard Create,
+Resume and crash-handoff recovery: use a new Link ID rather than treating
+retirement as authority to reuse the old one. Contradictory legacy saved
+state is refused for operator reconciliation; the private source remains.
+Canonical-named FIFOs and other non-regular sources are opened non-blocking
+and fail before payload decoding instead of hanging. A directory-sync error after rename is
 **uncertain publication**, not success: check both paths, never rekey.
 
 After recovery, an exact WireGuard pending sender may use redacted

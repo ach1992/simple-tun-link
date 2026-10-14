@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/netip"
@@ -10,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ach1992/simple-tun-link/internal/app"
 	"github.com/ach1992/simple-tun-link/internal/backend"
@@ -18,6 +21,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/pairing"
 	"github.com/ach1992/simple-tun-link/internal/state"
+	"golang.org/x/sys/unix"
 )
 
 func recoveredTempName(parent string) string {
@@ -353,5 +357,117 @@ func TestRecoverHandoffRejectsInPlaceContentRewriteBeforePublish(t *testing.T) {
 	}
 	if _, err := os.Lstat(output); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("failed recovery created a destination")
+	}
+}
+
+// Legacy snapshots may contain an IPsec tombstone and a WireGuard pending
+// sender for the same Link ID. Such snapshots now fail validation. Recovery
+// must preserve the original sensitive crash file, not claim success.
+func TestRecoverWireGuardIPsecRetirementOverlapLeavesOriginalSource(t *testing.T) {
+	for _, retired := range []bool{false, true} {
+		name := "receipt_not_retired"
+		if retired {
+			name = "receipt_retired"
+		}
+		t.Run(name, func(t *testing.T) {
+			opts, source, target, link, root := stagedCrashWireGuard(t)
+			store := state.NewFileStore(root)
+			snap, err := store.Load(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			sum := sha256.Sum256([]byte("legacy-IPsec-retirement-test"))
+			snap.IPsecRemovalReceipts = append(snap.IPsecRemovalReceipts, state.IPsecRemovalReceipt{
+				LinkID: link.ID, PSKSHA256: hex.EncodeToString(sum[:]), Retired: retired,
+			})
+			// Simulate a *historical* durable snapshot that slipped through the
+			// previous cross-backend validator, without using the now-protected
+			// state Update (which rightly refuses this overlap).
+			serialized, err := json.Marshal(snap)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "state.json"), serialized, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Load(context.Background()); err == nil {
+				t.Fatal("cross-backend retired+pending collision was still considered valid state")
+			}
+			before, err := os.ReadFile(source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			code, stdout, stderr := creatorRun([]string{
+				"link", "recover-handoff", "--source", source, "--output", target, "--confirm", string(link.ID), "--json",
+			}, "", opts)
+			if code == 0 || stderr != "" || strings.Contains(stdout, "stl://") ||
+				strings.Contains(stdout, "recipient_secret") {
+				t.Fatalf("IPsec retired Link ID authorized recovery or leaked secret: %d %q %q", code, stdout, stderr)
+			}
+			after, err := os.ReadFile(source)
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatal("rejected legacy overlap modified or removed private crash handoff", err)
+			}
+			if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("invalid same-ID legacy state published a SENSITIVE target")
+			}
+		})
+	}
+}
+
+// A FIFO with an otherwise canonical temporary name must never hang the
+// CLI while waiting for a writer. Keep the test itself bounded so a future
+// accidental removal of O_NONBLOCK gives prompt, actionable CI feedback.
+func TestRecoverCanonicalNamedFIFORejectsPromptlyWithoutDisclosure(t *testing.T) {
+	privateDir := filepath.Join(t.TempDir(), "private")
+	if err := os.Mkdir(privateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	source := recoveredTempName(privateDir)
+	target := filepath.Join(privateDir, "must-not-publish.stl")
+	if err := unix.Mkfifo(source, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	id := domain.LinkID("lnk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	root := filepath.Join(t.TempDir(), "state")
+	type response struct {
+		code           int
+		stdout, stderr string
+	}
+	finished := make(chan response, 1)
+	go func() {
+		code, stdout, stderr := creatorRun([]string{
+			"link", "recover-handoff", "--source", source, "--output", target, "--confirm", string(id), "--json",
+		}, "", &runtimeOptions{stateRoot: root})
+		finished <- response{code: code, stdout: stdout, stderr: stderr}
+	}()
+	var got response
+	select {
+	case got = <-finished:
+	case <-time.After(2 * time.Second):
+		// If a regressed blocking FIFO reader exists, opening a writer can
+		// free it so the test does not strand a blocked goroutine.
+		if fd, err := unix.Open(source, unix.O_WRONLY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0); err == nil {
+			unix.Close(fd)
+		}
+		t.Fatal("canonical-name FIFO blocked recovery before regular-file validation")
+	}
+	if got.code == 0 || got.stderr != "" ||
+		strings.Contains(got.stdout, "stl://") ||
+		strings.Contains(got.stdout, "recipient_secret") ||
+		strings.Contains(got.stdout, "private_key") {
+		t.Fatalf("FIFO recovery unsafe or disclosed material: code=%d out=%q err=%q", got.code, got.stdout, got.stderr)
+	}
+	var payload linkReadErrorResponse
+	if err := json.Unmarshal([]byte(got.stdout), &payload); err != nil ||
+		payload.Error == nil || payload.Error.Code == "" {
+		t.Fatal("FIFO did not produce a bounded redacted error envelope", err)
+	}
+	if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("FIFO unexpectedly generated a SENSITIVE destination")
+	}
+	info, err := os.Lstat(source)
+	if err != nil || info.Mode()&os.ModeNamedPipe == 0 {
+		t.Fatal("FIFO source was changed or removed during rejected recovery", err)
 	}
 }
