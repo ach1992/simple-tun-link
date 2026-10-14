@@ -13,7 +13,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/version"
 	"golang.org/x/sys/unix"
@@ -43,9 +42,10 @@ func printMenuHeader(out io.Writer, options *runtimeOptions) {
 	if unix.Uname(&u) == nil {
 		kernel = unix.ByteSliceToString(u.Release[:])
 	}
-	fmt.Fprintf(out, "simple-tun-link | stl %s | github.com/ach1992/simple-tun-link\n", safeMenuText(version.Version))
+	fmt.Fprintf(out, "simple-tun-link (STL)  |  Version: %s\n", safeMenuText(version.Version))
+	fmt.Fprintln(out, "Repository: https://github.com/ach1992/simple-tun-link")
 	fmt.Fprintf(out, "Host: %s | OS: %s/%s | Kernel: %s\n", safeMenuText(host), runtime.GOOS, runtime.GOARCH, safeMenuText(kernel))
-	fmt.Fprintf(out, "Local address candidate: %s (verify route toward the peer)\n", safeMenuText(localAddressCandidate()))
+	fmt.Fprintf(out, "Local address candidate: %s (route verified during setup)\n", safeMenuText(localAddressCandidate()))
 
 	root := state.DefaultRoot
 	if options != nil {
@@ -59,7 +59,7 @@ func printMenuHeader(out io.Writer, options *runtimeOptions) {
 	if err != nil {
 		fmt.Fprintln(out, "Configured Links: unavailable (state cannot be read)")
 	} else {
-		fmt.Fprintf(out, "Configured Links: %d (saved state, not verified connectivity)\n", len(snapshot.Links))
+		fmt.Fprintf(out, "Configured Links: %d (saved; use Test connectivity for live status)\n", len(snapshot.Links))
 	}
 }
 
@@ -107,18 +107,29 @@ func localAddressCandidate() string {
 
 func readMenuAnswer(in *bufio.Reader) (string, error) {
 	answer := make([]byte, 0, 32)
-	for len(answer) <= menuInputLimit {
+	overflow := false
+	for count := 0; count < 64*1024; count++ {
 		next, err := in.ReadByte()
 		if err != nil {
-			if errors.Is(err, io.EOF) && len(answer) != 0 {
+			if errors.Is(err, io.EOF) && (len(answer) > 0 || overflow) {
+				if overflow {
+					return "", errMenuInputTooLong
+				}
 				return strings.TrimSpace(string(answer)), nil
 			}
 			return "", err
 		}
 		if next == '\n' {
+			if overflow {
+				return "", errMenuInputTooLong
+			}
 			return strings.TrimSpace(string(answer)), nil
 		}
-		answer = append(answer, next)
+		if len(answer) < menuInputLimit {
+			answer = append(answer, next)
+		} else {
+			overflow = true
+		}
 	}
 	return "", errMenuInputTooLong
 }
@@ -131,85 +142,52 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 		return 2
 	}
 	reader := bufio.NewReader(input)
-	printMenuHeader(out, options)
 	for {
-		fmt.Fprintln(out, "\nTasks:")
-		fmt.Fprintln(out, "  1  Create Tunnel (guided GRE Native)")
-		fmt.Fprintln(out, "  2  Import Setup Link (GRE/IPIP/WireGuard v3/IPsec v2)")
-		fmt.Fprintln(out, "  3  Manage Links")
-		fmt.Fprintln(out, "  4  Tests & Diagnostics")
-		fmt.Fprintln(out, "  5  Settings (read-only)")
-		fmt.Fprintln(out, "  6  Update (guided)")
-		fmt.Fprintln(out, "  7  Uninstall (guided)")
+		fmt.Fprintln(out, "\n------------------------------------------------------------")
+		printMenuHeader(out, options)
+		fmt.Fprintln(out, "\nMAIN MENU")
+		fmt.Fprintln(out, "  1  Create tunnel       (choose GRE / IPIP / WireGuard / IPsec)")
+		fmt.Fprintln(out, "  2  Import setup link   (join an existing tunnel)")
+		fmt.Fprintln(out, "  3  My tunnels          (status / share / test / remove)")
+		fmt.Fprintln(out, "  4  Test connectivity   (read-only)")
+		fmt.Fprintln(out, "  5  Settings           (read-only)")
+		fmt.Fprintln(out, "  6  Update             (guided)")
+		fmt.Fprintln(out, "  7  Uninstall          (guided)")
 		fmt.Fprintln(out, "  8  Exit")
-		fmt.Fprintln(out, "  9  Create WireGuard Tunnel (protected Quick Link)")
 		fmt.Fprint(out, "Choose a task: ")
 		choice, err := readMenuAnswer(reader)
 		if errors.Is(err, io.EOF) {
 			return 0
 		}
 		if err != nil {
-			fmt.Fprintln(errOut, "menu selection is invalid or too long")
-			return 2
+			fmt.Fprintln(out, "Please enter a short number from 1 to 8. You are still in the menu.")
+			continue
 		}
+		var result int
 		switch choice {
 		case "1":
-			if code := menuCreate(input, reader, out, errOut, options); code != 0 {
-				return code
-			}
-		case "9":
-			if code := menuCreateWireGuard(input, reader, out, errOut, options); code != 0 {
-				return code
-			}
+			result = menuCreate(input, reader, out, errOut, options)
 		case "2":
-			if code := menuImport(input, reader, out, errOut, options); code != 0 {
-				return code
-			}
+			result = menuImport(input, reader, out, errOut, options)
 		case "3":
-			if code := menuManage(input, reader, out, errOut, options); code != 0 {
-				return code
-			}
+			result = menuManage(input, reader, out, errOut, options)
 		case "4":
-			if code := linkReadCommand([]string{"list"}, out, errOut, options); code != 0 {
-				return code
-			}
-			fmt.Fprintln(out, "Diagnostics send bounded probes to a selected peer Link Address; no host configuration is changed.")
-			fmt.Fprintln(out, "IPsec prerequisites (read-only): stl doctor ipsec")
-			fmt.Fprint(out, "Diagnose Link ID or 'all' (Enter returns to menu): ")
-			id, err := readMenuAnswer(reader)
-			if err != nil && !errors.Is(err, io.EOF) {
-				fmt.Fprintln(errOut, "invalid Link ID; no probes sent")
-				return 2
-			}
-			if id == "all" {
-				if code := linkDiagnoseCommand([]string{"diagnose", "--all"}, out, errOut, options); code != 0 {
-					fmt.Fprintln(out, "Some Link checks are blocked or unverified; no automatic repair was attempted.")
-				}
-			} else if id != "" {
-				if domain.LinkID(id).Validate() != nil {
-					fmt.Fprintln(errOut, "invalid Link ID; no probes sent")
-					return 2
-				}
-				if code := linkDiagnoseCommand([]string{"diagnose", id}, out, errOut, options); code != 0 {
-					return code
-				}
-			}
+			result = menuDiagnose(input, reader, out, errOut, options)
 		case "5":
-			if code := menuSettings(out, errOut, options); code != 0 {
-				return code
-			}
+			result = menuSettings(out, errOut, options)
 		case "6":
-			if code := menuUpdate(reader, out, errOut); code != 0 {
-				return code
-			}
+			result = menuUpdate(reader, out, errOut)
 		case "7":
-			if code := menuUninstall(out, errOut, options); code != 0 {
-				return code
-			}
-		case "8":
+			result = menuUninstall(out, errOut, options)
+		case "8", "0", "q":
+			fmt.Fprintln(out, "Goodbye.")
 			return 0
 		default:
-			fmt.Fprintln(out, "Select a number from 1 to 9.")
+			fmt.Fprintln(out, "Choose a number from 1 to 8.")
+		}
+		if result != 0 {
+			fmt.Fprintln(out, "\nThat action did not complete. Read the message above, then choose your next action.")
+			fmt.Fprintln(out, "No automatic retry or cleanup has been started.")
 		}
 	}
 }

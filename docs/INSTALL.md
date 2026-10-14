@@ -73,6 +73,33 @@ For a single-command install, with an explicit released tag:
 bash -c 'set -euo pipefail; umask 077; t=$(mktemp); trap '\''rm -f -- "$t"'\'' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 -o "$t" https://raw.githubusercontent.com/ach1992/simple-tun-link/vX.Y.Z/scripts/install.sh; bash -n "$t"; sudo bash "$t" install --version vX.Y.Z'
 ~~~
 
+### Upcoming operator-first bootstrap (Issue #91, NOT in rc.2)
+
+A future, separately published tag that contains scripts/quick-install.sh
+can install the usual GRE/IPIP/WireGuard dependencies and **open STL's
+menu immediately** after the verified official install:
+
+~~~sh
+curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/vX.Y.Z/scripts/quick-install.sh | bash -s -- vX.Y.Z
+~~~
+
+Replace BOTH vX.Y.Z placeholders with the same **actually published new
+tag**. This form cannot work against rc.2 because rc.2 has no quick
+bootstrap script; do not assume a newer tag exists. The bootstrap itself
+is unprivileged. It pins the canonical installer download to the explicit
+tag, checks that the file exists and parses before invoking privileged
+installation, and delegates release asset/manifest/checksum verification
+to the unchanged canonical installer. When launched from a pipe in a real
+terminal, it reattaches the installed menu to /dev/tty; without a TTY it
+leaves an instruction to run sudo stl menu manually.
+
+Do not use the quick bootstrap to adopt/install strongSwan/IPsec without
+the separate prerequisite review; it deliberately supports only native
+or native,wireguard package selections. To test the no-root bootstrap,
+download failures and terminal reattachment **offline**, run
+bash scripts/test-quick-install.sh. The fake installation test touches
+no host networking, package manager or persistent systemd services.
+
 The default one-command example installs only the native GRE/IPIP
 dependencies. To provision all backend packages automatically, append
 `--backends all` to the `sudo bash "$t" install --version vX.Y.Z` invocation

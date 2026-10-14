@@ -82,6 +82,7 @@ A non-interactive CLI and machine-readable JSON output must expose the same core
 - v0.1 uses IPv4 point-to-point Link Addresses.
 - Default allocation target is an unused RFC1918 /31 pair.
 - Automatic allocation must check local routing/address state and, when peer information is available, avoid collisions on both endpoints and across every existing STL Link on the host.
+- **Human manual addressing:** the operator can specify both private IPv4 endpoints directly; a valid adjacent /31 pair stays supported, and two ordinary usable hosts in one /30 (such as 10.235.1.1 and 10.235.1.2) must also be accepted without weakening subnet/collision/peer checks. Do not ask beginners for canonical network-prefix or first/second host technicalities; advanced setup may still show the chosen CIDR.
 - Manual Link Address configuration remains available.
 - The internal model should not make future IPv6 support unnecessarily difficult.
 
@@ -211,3 +212,29 @@ For v0.1, **Quick Link** is the default one-step pairing mode for secret-bearing
 For IPsec v0.1, the Owner accepts a single native-exclusive STL-owned strongSwan runtime on eligible hosts and an explicit fail-closed IPsec-only unavailability on any host with foreign/ambiguous daemon ownership. Future coexistence/isolation modes require independent validation and review. The Owner also requires actionable, redacted operator diagnostics and coherent safe logging across **every** backend and CLI/menu workflow; this is a product-wide acceptance criterion, not an IPsec-specific embellishment.
 
 2026-10-14 Owner acceptance: pre-success setup is disposable, but a fully committed working tunnel MUST be restored after reboot; basic protection against lost/unknown secrets or foreign resource deletion is not waived. The persisted MTU contract is `unset=legacy/unmanaged`, `auto`, or `manual(bytes)`, applied only under canonical local Engine ownership and never copied across pairing. Real physical WAN/NAT-router experiments are Owner-run **after** publication; do not claim them pre-tested or bypass platform restrictions. Installed released-artifact identity and successful committed-Link restart/traffic remain pre-publication acceptance. Stable publication/tag still needs separate Owner authorization.
+
+
+## 15. Operator-first human interface — Owner field acceptance (2026-10-14)
+
+The shipped v0.1.0-rc.2 backend CLI and persistence remain the machine contract; Issue #91 is a distinct human-UX improvement after real server screenshots. The ordinary TUI must offer one Create action with a numbered backend/mode choice (GRE Native default, GRE/IPIP FOU/GUE, WireGuard/UDP, and conditionally admitted IPsec), a compact version/repository/host/Link summary, private-address auto suggestion or explicit local/peer IP entry, numbered Link management/diagnostics, and obvious retry/cancel/navigation. A new one-line pinned installer workflow should open the interactive menu after a verified installation, preserving installer ownership/checksum checks.
+
+Menu confirmations need not require typing opaque full Link IDs; a fresh affirmative response after a reviewed preview is sufficient for creation/import, and an explicit stronger remove confirmation with a stable expected-intent guard is required for destructive removal. An input error or a failed/uncertain backend operation must **not exit the TUI**; never convert a failed, unconfirmed or blocked Engine outcome into success or silently retry a possibly mutated operation. Read-only diagnostics are not automatic repair.
+
+Plain GRE/IPIP setup links may be pasted with visible terminal input **only when an operator explicitly selects a plaintext-import path**; sensitive WireGuard/IPsec handoffs remain protected/redacted and owner-private. Persisted GRE/IPIP state can regenerate its safe pairing offer; a lost sensitive receiver handoff cannot be recreated from sender state. Never weaken protected per-Link credentials, resource identity, atomic systemd persistence, foreign-strongSwan admission or committed-Link reboot restoration merely for a simpler TUI. Explicitly describe Auto MTU as a local conservative **pre-creation policy**, not real end-to-end PMTU measurement; probe the active peer only after creation/import on both sides. Physical WAN/NAT validation is still Owner-run after publication. A later release beyond rc.2 requires separate review/integration/publication gates.
+
+
+Owner follow-up to Issue #91 (2026-10-14): Kernel route to the other
+server determines THIS server's local underlay/source IP; Enter accepts
+the suggested pair of private Link IPs. Keep the first Create screen
+short (GRE Native, WireGuard, IPIP Native, Manual and Advanced submenus).
+Numbered Manage always offers a read-only copyable saved two-server
+configuration sheet and repeatable GRE/IPIP Setup Link export. GRE
+Native can be configured manually on the peer with a matching nonsecret
+GRE receive key (including numeric zero) or unkeyed on both sides,
+and IPIP Native can be paired manually without a Setup Link. FOU/GUE
+require canonical paired UDP Setup Links; WireGuard/IPsec still require
+the protected private receiver handoff and never recreate secrets
+from public State. Details are configured addresses, not verified
+remote host state or NAT visibility. GRE Native needs IP protocol 47;
+IPIP Native needs IP protocol 4. External WAN/NAT remains owner-tested
+after publication.

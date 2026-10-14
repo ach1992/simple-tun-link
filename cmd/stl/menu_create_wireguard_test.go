@@ -26,13 +26,13 @@ func TestGuidedWireGuardCreatesConfirmedProtectedHandoff(t *testing.T) {
 	opts := &runtimeOptions{stateRoot: root, backends: []backend.Backend{fake}, probeRunner: host,
 		mtuManager:   guidedMTUFake{},
 		createLinkID: func() (domain.LinkID, error) { return createTestID, nil }}
-	stdin := "9\n192.0.2.20\n\nn\n51871\n51872\n25\n\n" + file + "\n" + string(createTestID) + "\n8\n"
+	stdin := "1\n2\n192.0.2.20\n\n51871\n51872\nn\n" + file + "\nYES\n8\n"
 	var out, stderr bytes.Buffer
 	code := runWithRuntimeInput([]string{"menu"}, strings.NewReader(stdin), &out, &stderr, opts)
 	if code != 0 || stderr.Len() != 0 {
 		t.Fatalf("guided WG failed: %d %s %s", code, out.String(), stderr.String())
 	}
-	if !strings.Contains(out.String(), "PREVIEW ONLY") || !strings.Contains(out.String(), "WireGuard Link") ||
+	if !strings.Contains(out.String(), "Review WireGuard tunnel") || !strings.Contains(out.String(), "WireGuard Link") ||
 		!strings.Contains(out.String(), "SENSITIVE") || strings.Contains(out.String(), "stl://") || len(fake.applies) != 1 {
 		t.Fatalf("guided create bypassed safe public preview/Engine: %s applies=%v", out.String(), fake.applies)
 	}
@@ -59,7 +59,7 @@ func TestGuidedWireGuardCancelDoesNotGeneratePrivateFileOrState(t *testing.T) {
 	opts := &runtimeOptions{stateRoot: root, backends: []backend.Backend{fake}, probeRunner: host,
 		mtuManager:   guidedMTUFake{},
 		createLinkID: func() (domain.LinkID, error) { return createTestID, nil }}
-	stdin := "9\n192.0.2.20\n\nn\n51871\n51872\n\n\n" + file + "\nNO\n8\n"
+	stdin := "1\n2\n192.0.2.20\n\n51871\n51872\nn\n" + file + "\nNO\n8\n"
 	var out, stderr bytes.Buffer
 	code := runWithRuntimeInput([]string{"menu"}, strings.NewReader(stdin), &out, &stderr, opts)
 	if code != 0 || stderr.Len() != 0 || len(fake.applies) != 0 {

@@ -18,18 +18,29 @@ import (
 // limit. It does not read until EOF, which would block at an interactive TTY.
 func readMenuURL(reader *bufio.Reader) (string, error) {
 	data := make([]byte, 0, 256)
-	for len(data) <= pairing.MaxLinkBytes {
+	oversized := false
+	for count := 0; count < pairing.MaxLinkBytes+64*1024; count++ {
 		b, err := reader.ReadByte()
 		if err != nil {
-			if errors.Is(err, io.EOF) && len(data) != 0 {
+			if errors.Is(err, io.EOF) && len(data) != 0 && !oversized {
 				return strings.TrimSuffix(string(data), "\r"), nil
+			}
+			if oversized {
+				return "", errMenuInputTooLong
 			}
 			return "", err
 		}
 		if b == '\n' {
+			if oversized {
+				return "", errMenuInputTooLong
+			}
 			return strings.TrimSuffix(string(data), "\r"), nil
 		}
-		data = append(data, b)
+		if len(data) < pairing.MaxLinkBytes {
+			data = append(data, b)
+		} else {
+			oversized = true
+		}
 	}
 	return "", errMenuInputTooLong
 }
@@ -96,72 +107,136 @@ func clearQueuedMenuConfirmation(input io.Reader, reader *bufio.Reader) error {
 // menuImport delegates all decoding, preview, canonical inversion,
 // import eligibility, state locking and mutation to existing commands.
 // The extra operator confirmation is intentionally human-only.
+// A plain GRE/IPIP offer may be visible on the terminal; a credentialed
+// WireGuard/IPsec offer stays protected. Both use the canonical preview
+// and import commands, with a freshly typed affirmative after the preview.
 func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, options *runtimeOptions) int {
-	fmt.Fprintln(out, "Paste only after the next prompt. Terminal echo will be suppressed while reading.")
-	fmt.Fprintln(out, "Do not pass setup URLs as command arguments or paste them into shell history.")
-	fmt.Fprint(out, "Setup link: ")
-	encoded, err := readPrivateMenuURL(input, reader)
-	fmt.Fprintln(out)
-	if err != nil || encoded == "" {
-		fmt.Fprintln(errOut, "setup link input unavailable or too large; nothing was applied")
-		return 2
+	for {
+		fmt.Fprintln(out, "\nIMPORT SETUP LINK — join a tunnel created on the OTHER server")
+		fmt.Fprintln(out, "  1  GRE / IPIP link (plaintext; pasted text will be visible)")
+		fmt.Fprintln(out, "  2  WireGuard / IPsec (contains secret keys; paste hidden)")
+		fmt.Fprintln(out, "  0  Back")
+		fmt.Fprint(out, "Choose type [1]: ")
+		mode, err := readMenuAnswer(reader)
+		if errors.Is(err, io.EOF) {
+			return 0
+		}
+		if err != nil {
+			fmt.Fprintln(out, "Invalid input; choose 0, 1 or 2.")
+			continue
+		}
+		if mode == "" {
+			mode = "1"
+		}
+		if mode == "0" || strings.EqualFold(mode, "q") {
+			return 0
+		}
+		if mode != "1" && mode != "2" {
+			fmt.Fprintln(out, "Choose 1 for ordinary GRE/IPIP or 2 for protected credentials.")
+			continue
+		}
+		// Once chosen, a bad paste retries THIS prompt; the operator does
+		// not have to navigate the backend choice again.
+		for {
+			if mode == "1" {
+				fmt.Fprintln(out, "Paste the GRE/IPIP stl:// line. It is not encrypted and WILL be visible while typing.")
+			} else {
+				fmt.Fprintln(out, "Paste the secret-bearing stl:// line. Terminal input is hidden to protect peer keys.")
+			}
+			fmt.Fprintln(out, "Copy the FULL setup line, then press Enter. Enter 0 alone to return.")
+			fmt.Fprint(out, "Setup link: ")
+			var encoded string
+			if mode == "2" {
+				encoded, err = readPrivateMenuURL(input, reader)
+			} else {
+				encoded, err = readMenuURL(reader)
+			}
+			fmt.Fprintln(out)
+			if errors.Is(err, io.EOF) {
+				return 0
+			}
+			if errors.Is(err, errMenuInputTooLong) {
+				fmt.Fprintln(out, "The pasted line is too long (maximum 24 KB). Copy only ONE complete stl:// line, without surrounding text.")
+				continue
+			}
+			if err != nil {
+				fmt.Fprintln(out, "Terminal input was interrupted; no tunnel was changed. Try again.")
+				continue
+			}
+			encoded = strings.TrimSpace(encoded)
+			if encoded == "0" || strings.EqualFold(encoded, "q") {
+				return 0
+			}
+			if encoded == "" {
+				fmt.Fprintln(out, "No setup link received. Paste a complete stl:// line or choose Back.")
+				continue
+			}
+			if !strings.HasPrefix(encoded, "stl://") {
+				fmt.Fprintln(out, "This is not an STL setup link. It must start with stl:// (no commands or surrounding text).")
+				continue
+			}
+			var buffer bytes.Buffer
+			if code := linkPreviewCommand([]string{"preview", "--stdin", "--json"},
+				strings.NewReader(encoded), &buffer, io.Discard); code != 0 {
+				fmt.Fprintln(out, "The setup link could not be read: it may be incomplete, altered, or from an unsupported STL version.")
+				fmt.Fprintln(out, "Copy the original COMPLETE line from the other server (Manage -> Share for GRE/IPIP) and retry.")
+				continue
+			}
+			var preview ImportPreviewResponse
+			if err := json.Unmarshal(buffer.Bytes(), &preview); err != nil {
+				fmt.Fprintln(out, "Cannot interpret the setup preview. No changes applied.")
+				continue
+			}
+			if mode == "1" && (preview.Sensitive || preview.HasCredential) {
+				fmt.Fprintln(out, "This setup link contains a private credential. No changes were applied.")
+				fmt.Fprintln(out, "Use option 2 (Protected link) so the next paste is hidden.")
+				break
+			}
+			if mode == "2" && !preview.Sensitive && !preview.HasCredential {
+				fmt.Fprintln(out, "This is an ordinary plaintext GRE/IPIP setup link; importing it in protected mode is also supported.")
+			}
+			fmt.Fprintln(out, "\nReview the tunnel you are about to add:")
+			fmt.Fprintf(out, "  Type: %s / %s\n", preview.Backend, preview.Encapsulation)
+			fmt.Fprintf(out, "  THIS server: %s (tunnel IP %s)\n", preview.LocalUnderlay, preview.LocalAddress)
+			fmt.Fprintf(out, "  OTHER server: %s (tunnel IP %s)\n", preview.PeerUnderlay, preview.PeerAddress)
+			if preview.HasCredential || preview.Sensitive {
+				fmt.Fprintln(out, "  SENSITIVE one-time receiver credential: present but HIDDEN")
+			} else if preview.GRE != nil {
+				fmt.Fprintln(out, "  GRE: no encryption. Its key is only an identifier.")
+			}
+			if preview.ImportConfirmation == "" {
+				fmt.Fprintln(out, "This offer is preview-only on this STL version. Nothing was changed; use a supported newer offer.")
+				continue
+			}
+			if preview.Backend == "ipsec" {
+				fmt.Fprintln(out, "IPsec needs a verified STL-owned strongSwan service before import. Import alone does not connect IKE.")
+			}
+			fmt.Fprintln(out, "Check that the underlay IPs and both tunnel IPs are correct. Import changes THIS server's configuration.")
+			if err := clearQueuedMenuConfirmation(input, reader); err != nil {
+				fmt.Fprintln(out, "Cannot establish a fresh terminal confirmation; nothing was imported.")
+				return 2
+			}
+			fmt.Fprint(out, "Import this tunnel? Type YES to confirm (Enter=no): ")
+			confirm, err := readMenuAnswer(reader)
+			if errors.Is(err, io.EOF) {
+				return 0
+			}
+			if err != nil {
+				fmt.Fprintln(out, "Invalid confirmation; no tunnel imported.")
+				continue
+			}
+			if !strings.EqualFold(confirm, "yes") {
+				fmt.Fprintln(out, "Import cancelled. No changes applied.")
+				return 0
+			}
+			code := linkImportCommand([]string{"import", "--stdin", "--confirm", preview.ImportConfirmation},
+				strings.NewReader(encoded), out, errOut, options)
+			if code != 0 {
+				fmt.Fprintln(out, "Import was not confirmed. Check the reported reason, existing saved tunnels, and peer before another attempt.")
+			} else {
+				fmt.Fprintln(out, "Import finished. Both servers can now use Test connectivity to check tunnel traffic.")
+			}
+			return code
+		}
 	}
-
-	var previewBuffer bytes.Buffer
-	if code := linkPreviewCommand([]string{"preview", "--stdin", "--json"},
-		strings.NewReader(encoded), &previewBuffer, io.Discard); code != 0 {
-		fmt.Fprintln(errOut, "setup link is invalid or unsupported; nothing was applied")
-		return code
-	}
-	var preview ImportPreviewResponse
-	if err := json.Unmarshal(previewBuffer.Bytes(), &preview); err != nil {
-		fmt.Fprintln(errOut, "cannot interpret redacted setup preview; nothing was applied")
-		return 1
-	}
-	fmt.Fprintf(out, "PREVIEW ONLY: Link %s, %s/%s, mode %s\n",
-		preview.LinkID, preview.Backend, preview.Encapsulation, preview.Mode)
-	fmt.Fprintf(out, "Receiver underlay %s, peer underlay %s\n",
-		preview.LocalUnderlay, preview.PeerUnderlay)
-	fmt.Fprintf(out, "Receiver Link Address %s, peer Link Address %s\n",
-		preview.LocalAddress, preview.PeerAddress)
-	if g := preview.GRE; g != nil {
-		fmt.Fprintf(out, "GRE: key_enabled=%t key=%d udp_port=%d ttl=%d tos=%d disable_pmtud=%t checksum=%t sequence=%t\n",
-			g.KeyEnabled, g.Key, g.UDPPort, g.TTL, g.TOS, g.DisablePMTUD, g.Checksum, g.Sequence)
-	}
-	if w := preview.WireGuard; w != nil {
-		fmt.Fprintf(out, "WireGuard local public key %s, peer public key %s\n", w.LocalPublicKey, w.PeerPublicKey)
-		fmt.Fprintf(out, "WireGuard receive port %d, peer port %d, local keepalive %d, peer keepalive %d\n",
-			w.ListenPort, w.PeerPort, w.LocalKeepalive, w.PeerKeepalive)
-	}
-	if preview.HasCredential || preview.Sensitive {
-		fmt.Fprintln(out, "Recipient credentials: present / REDACTED (SENSITIVE)")
-	}
-	if preview.ImportConfirmation == "" {
-		fmt.Fprintln(out, "This setup link is preview-only: import is unavailable for its schema or credential. No changes were applied.")
-		return 0
-	}
-	if preview.Backend == "ipsec" {
-		fmt.Fprintln(out, "IPsec import requires an attested STL-exclusive strongSwan service; admission is checked again before protected PSK staging.")
-		fmt.Fprintln(out, "Local import does not prove IKEv2 or peer traffic. Connect and verify encrypted traffic separately.")
-	}
-
-	fmt.Fprintln(out, "Quick Links are neither encrypted nor peer-authenticated. Verify sender and recipient identity separately.")
-	fmt.Fprintln(out, "This apply changes local network state via the canonical Link Engine.")
-	fmt.Fprintln(out, "Existing Link IDs with different saved configuration are never reconfigured by import.")
-	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
-		fmt.Fprintln(errOut, "cannot ensure a fresh terminal confirmation; nothing was applied")
-		return 2
-	}
-	fmt.Fprintf(out, "To APPLY, type exact Link ID %s (Enter cancels): ", preview.LinkID)
-	confirm, err := readMenuAnswer(reader)
-	if err != nil && !errors.Is(err, io.EOF) {
-		fmt.Fprintln(errOut, "invalid confirmation; nothing was applied")
-		return 2
-	}
-	if errors.Is(err, io.EOF) || confirm != string(preview.LinkID) {
-		fmt.Fprintln(out, "Import cancelled; nothing was applied.")
-		return 0
-	}
-	return linkImportCommand([]string{"import", "--stdin", "--confirm", preview.ImportConfirmation},
-		strings.NewReader(encoded), out, errOut, options)
 }

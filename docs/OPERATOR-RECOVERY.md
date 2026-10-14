@@ -103,6 +103,41 @@ claimed empty `fou` inventory and no claimed free conflicting port.
 The check covers GRE Native (`ip_gre`), IPIP Native (`ipip`) and GRE/IPIP
 FOU/GUE receive mappings (`fou`).
 
+## Specific field symptom: persistence failure during first GRE creation
+
+An owner-observed rc.2 create returned reason
+rollback_completed_unverified with stage=persistence, and the first
+server's saved Link inventory was empty. That output alone cannot prove
+which step or systemd prerequisite failed; callback completion is **not**
+a separate kernel/service attestation. Before retrying, run **read-only**
+checks on THAT host (not a connected management/control-plane server):
+
+~~~sh
+sudo stl link list --json
+systemctl --version
+systemctl is-enabled simple-tun-link-restore.service || true
+systemctl status simple-tun-link-restore.service --no-pager || true
+stat -c '%U:%G %a %n' /usr/local/bin/stl /etc/systemd/system || true
+stat -c '%U:%G %a %n' /etc/systemd/system/simple-tun-link-restore.service || true
+~~~
+
+If a service unit is missing after a rollback, that is not proof that
+the network or saved desired state is absent. Do not delete/replace any
+unit or kernel interface until STL ownership and saved State have been
+inspected. The canonical restore unit/executable are expected to be
+root-owned, nonsymlinked and not writable by non-root accounts; an
+untrusted path, non-systemd environment or failed daemon-reload/enable
+may block persistence, but those are **possible causes**, not
+a diagnosis of the operator's specific machine. A failed diagnostic
+or missing ICMP replies before the other endpoint imports the Link
+likewise do not prove local tunnel failure.
+
+The next menu keeps this failure visible and returns to the main menu
+without automatically retrying a potentially uncertain mutation.
+For a real-world root cause, compare the redacted command outcomes and
+systemd state on the affected original host; do not paste unredacted
+credentials, pairing URLs or sensitive host logs into a public ticket.
+
 ## Operator walk-through
 
 1. Identify the exact stable Link ID from `stl link list --json`; this

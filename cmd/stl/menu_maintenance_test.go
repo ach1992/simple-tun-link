@@ -37,7 +37,7 @@ func TestMenuUpdateRejectsInjectionAndDoesNotEchoInput(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "absent")
 	payload := "v0.1.0; touch /tmp/private-menu-injection"
 	code, out, errOut := runMenuTest(t, root, "6\n"+payload+"\n")
-	if code != 2 || !strings.Contains(errOut, "Invalid release tag") ||
+	if code != 0 || !strings.Contains(errOut, "Invalid release tag") ||
 		strings.Contains(out+errOut, payload) || strings.Contains(out, "sudo bash") {
 		t.Fatalf("untrusted tag accepted or echoed: code=%d out=%q err=%q", code, out, errOut)
 	}
@@ -107,7 +107,7 @@ func TestMenuUninstallFailsClosedOnCorruptState(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, out, errOut := runMenuTest(t, root, "7\n8\n")
-	if code != 1 || !strings.Contains(errOut, "Uninstall blocked") ||
+	if code != 0 || !strings.Contains(errOut, "Uninstall blocked") ||
 		strings.Contains(out, "sudo bash /path/to/verified/install.sh uninstall") {
 		t.Fatalf("corrupt state was treated as safe: code=%d out=%q err=%q", code, out, errOut)
 	}

@@ -1,49 +1,51 @@
-# STL CLI — implemented read-only and explicit lifecycle commands
+# STL CLI — operator menus and stable machine commands
 
-The terminal menu supports guided **GRE Native** and **WireGuard/UDP**
-creation, Link management, diagnostics, preview-confirmed GRE/IPIP import,
-protected WireGuard v3 import, and conditionally admitted IPsec v2 import.
-**New operators should start with the [README](../README.md)** for install
-and a two-server walkthrough; this page owns precise CLI, JSON, pairing
-and advanced recovery contracts.
+For published v0.1.0-rc.2, consult the
+[README](../README.md) and the stable **versioned CLI/JSON**
+reference below. The simpler human terminal interface in
+[Issue #91](https://github.com/ach1992/simple-tun-link/issues/91)
+is **not in released rc.2** until a separately reviewed new tag exists.
 
-The [`v0.1.0-rc.2` pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.2)
-contains the IPsec reboot/crash recovery, diagnostics and managed-MTU source
-improvements after historical rc.1. Real native AMD64/ARM64 multi-backend
-traffic and full-guest committed GRE/MTU reboot restoration are evidenced in
-[Issue #12](https://github.com/ach1992/simple-tun-link/issues/12).
-These isolated checks **do not prove physical WAN/NAT-router traversal**
-or a Stable release. The versioned non-interactive ensure/remove lifecycle
-is implemented. Below, **read-only** observations are distinct from commands
-that **mutate host state**.
+The next candidate's terminal choices:
 
-## Task-first terminal menu
+- Start: stl menu (or stl in an interactive terminal), with a concise
+  version/repository/host/connection IP/kernel/saved Link count banner.
+  The banner is a local snapshot, never peer reachability proof.
+- 1 Create tunnel: GRE Native (Enter/default), WireGuard, and IPIP
+  Native. Less common FOU/GUE/IPsec live under Advanced. Without-Link
+  GRE/IPIP Native lives under Manual connection. Accept suggested private
+  Link IPs by Enter; THIS server's underlay source IP is detected from
+  the kernel route. Or enter both private IPv4 endpoints directly.
+- 2 Import setup link: choose **visible plaintext** GRE/IPIP or
+  **hidden protected** WireGuard/IPsec. Invalid/malformed/truncated
+  pastes can be retried. Import remains canonical preview/Engine apply.
+- 3 My tunnels: choose a **number**, then Status, Test, plaintext Setup
+  Link re-export, copyable two-server Connection details, or Remove.
+  Details give configured local/peer underlay IPs, tunnel IPs, GRE key
+  and ports; local/remote roles are reversed for manual peer creation.
+- 4 Test connectivity: select a numbered Link or a for all; bounded
+  observation only, not automatic repair.
+- 5 Settings, 6 Update, 7 Uninstall, 8 Exit: read-only/guided
+  instructions rather than silent installed-host mutations.
 
-With interactive stdin and stdout, running `stl` opens the bounded task menu;
-`stl menu` opens it explicitly. Non-terminal no-argument invocation keeps the
-existing deterministic command help (no scripts are prompted for input).
-The menu header only reads local OS/kernel/interface candidates and persisted
-Link counts; a candidate address is **not** a route-confirmed source or proof
-of connectivity. It performs no remote update/IP queries or network probes.
+A failed/uncertain menu operation must **not exit the terminal loop** or
+automatically repeat the mutating command. Machine CLI and JSON contracts
+remain independent of the menu's changing text.
 
-### Manage Links
+### Manage Links — confirmation and privacy
 
-Select **Manage Links** to list all locally saved Links and choose one stable
-Link ID. The Status action reuses the existing read-only `stl link status`
-backend inspection; it does not infer connectivity from saved state.
+Remove is available **only on a real interactive terminal**. A
+Link-specific read-only preview is followed by freshly typing REMOVE.
+Queued input is discarded first. The Engine compares the preview's saved
+intent under its Link lock before removing only owned resources; concurrent
+changes block removal. Ordinary scripting still uses the exact-ID
+stl link remove <id> --confirm <id> command, not terminal parsing.
 
-The Remove action is available **only on a real interactive terminal**. It
-shows a redacted, Link-specific removal preview (identity, addresses and
-underlay), requires a freshly typed **exact Link ID**, and discards queued
-terminal input before accepting confirmation. Cancelling or using a non-TTY
-stream causes no removal. On confirmation, the menu delegates to the same
-canonical Engine removal path as `stl link remove`, but passes the previewed
-Link as an expected-state condition. **Under the per-Link lock**, the Engine
-rejects removal if a concurrent Ensure changed the confirmed desired Link.
-Ownership/rollback/persistence handling is unchanged; the menu never deletes
-interfaces or firewall rules directly. Failed or uncertain removal must be
-reconciled before retrying. For non-interactive automation, use that explicit
-CLI command and its versioned `--json` result instead of scripting the menu.
+GRE/IPIP Setup Link re-export from saved nonsecret state is repeatable
+through the canonical stl link export <id>. WireGuard/IPsec private
+handoff secrets are not available from the ordinary saved Link record;
+retain the one-time protected file after creation. Normal terminal
+output/errors must never print private credentials or echo sensitive URLs.
 
 ### All-Link diagnostics center (read-only, issue #9/#10)
 
@@ -55,9 +57,9 @@ stl link diagnose --all --json
 stl link diagnose --all --timeout 10m --json
 ~~~
 
-The menu's **Tests & Diagnostics** task also accepts `all` at the Link ID
-prompt; degraded/unsupported results return to the task menu instead of
-exiting it. Ordinary per-Link `stl link diagnose <link-id> [--mtu <bytes>]
+The next menu's **Test connectivity** task accepts a Link number or
+`a` for all; degraded/unsupported results return to the task menu instead
+of exiting it. Ordinary per-Link `stl link diagnose <link-id> [--mtu <bytes>]
 [--json]` remains available with the **same** backend capability,
 identity/counter validation and Link-scoped non-fragmenting ICMP probes.
 There is no parallel probing implementation, no administrative control

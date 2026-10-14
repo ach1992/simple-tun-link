@@ -50,9 +50,11 @@ func scriptedManage(options *runtimeOptions, input string) (int, string, string)
 func TestMenuManageStatusDoesNotRemoveOrExposeDisplayName(t *testing.T) {
 	opts, fake, links := manageFixture(t, 2)
 	applyCount := len(fake.applies)
-	code, output, errText := scriptedManage(opts, "3\n"+string(links[0].ID)+"\ns\n8\n")
+	code, output, errText := scriptedManage(opts, "3\n1\n1\n0\n8\n")
 	if code != 0 || errText != "" || !strings.Contains(output, "interface verified") ||
-		!strings.Contains(output, string(links[1].ID)) || strings.Contains(output, links[0].DisplayName) {
+		!strings.Contains(output, "Saved tunnels on THIS server") ||
+		!strings.Contains(output, links[1].Addresses.Local.Addr().String()) ||
+		strings.Contains(output, links[0].DisplayName) {
 		t.Fatalf("Manage status did not safely use canonical live inspection: code=%d output=%q err=%q", code, output, errText)
 	}
 	if len(fake.applies) != applyCount || !fake.present[links[0].ID] || !fake.present[links[1].ID] {
@@ -62,10 +64,9 @@ func TestMenuManageStatusDoesNotRemoveOrExposeDisplayName(t *testing.T) {
 
 func TestMenuManageNonterminalCannotRemoveEvenWithPrewrittenConfirmation(t *testing.T) {
 	opts, fake, links := manageFixture(t, 1)
-	id := string(links[0].ID)
 	count := len(fake.applies)
-	code, output, errText := scriptedManage(opts, "3\n"+id+"\nr\n"+id+"\n8\n")
-	if code != 2 || !strings.Contains(errText, "requires an interactive terminal") ||
+	code, output, errText := scriptedManage(opts, "3\n1\n5\nREMOVE\n8\n")
+	if code != 0 || !strings.Contains(errText, "requires an interactive terminal") ||
 		strings.Contains(output+errText, links[0].DisplayName) {
 		t.Fatalf("scripted menu bypassed removal TTY boundary: code=%d out=%q err=%q", code, output, errText)
 	}
@@ -81,10 +82,10 @@ func TestMenuManageInvalidSelectionAndActionNeverMutate(t *testing.T) {
 		input string
 		code  int
 	}{
-		{"invalid id", "3\nPRIVATE-NOT-TO-ECHO\n", 2},
-		{"unknown id", "3\nlnk_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n", 2},
-		{"invalid action", "3\n" + string(links[0].ID) + "\nPRIVATE-NOT-TO-ECHO\n", 2},
-		{"back", "3\n" + string(links[0].ID) + "\n\n8\n", 0},
+		{"invalid selection", "3\nPRIVATE-NOT-TO-ECHO\n0\n8\n", 0},
+		{"unknown id", "3\nlnk_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n0\n8\n", 0},
+		{"invalid action", "3\n1\nPRIVATE-NOT-TO-ECHO\n0\n8\n", 0},
+		{"back", "3\n1\n0\n8\n", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			before := len(fake.applies)
@@ -172,13 +173,13 @@ func TestMenuManagePTYRemoveOnlySelectedSamePeerLink(t *testing.T) {
 	tty, done := startManageTTY(t, opts)
 	tty.expect("Choose a task: ")
 	tty.send("3")
-	tty.expect("Manage Link ID (Enter returns to menu): ")
-	tty.send(string(links[0].ID))
-	tty.expect("Action [s=status, r=remove, Enter=back]: ")
-	tty.send("r")
+	tty.expect("Choose tunnel number: ")
+	tty.send("1")
+	tty.expect("Choose an action: ")
+	tty.send("5")
 	tty.expect("PREVIEW ONLY")
-	tty.expect("To REMOVE, type exact Link ID")
-	tty.send(string(links[0].ID))
+	tty.expect("To permanently REMOVE this tunnel")
+	tty.send("REMOVE")
 	tty.expect("removed via canonical Engine")
 	tty.expect("Choose a task: ")
 	tty.send("8")
@@ -197,14 +198,14 @@ func TestMenuManagePTYQueuedConfirmationCannotRemove(t *testing.T) {
 	tty, done := startManageTTY(t, opts)
 	tty.expect("Choose a task: ")
 	tty.send("3")
-	tty.expect("Manage Link ID (Enter returns to menu): ")
-	tty.send(string(links[0].ID))
-	tty.expect("Action [s=status, r=remove, Enter=back]: ")
+	tty.expect("Choose tunnel number: ")
+	tty.send("1")
+	tty.expect("Choose an action: ")
 	// Pre-paste an exact Link ID before the preview and confirmation prompt.
-	if _, err := io.WriteString(tty.master, "r\n"+string(links[0].ID)+"\n"); err != nil {
+	if _, err := io.WriteString(tty.master, "5\nREMOVE\n"); err != nil {
 		t.Fatal(err)
 	}
-	tty.expect("To REMOVE, type exact Link ID")
+	tty.expect("To permanently REMOVE this tunnel")
 	tty.send("")
 	tty.expect("Removal cancelled")
 	tty.expect("Choose a task: ")
@@ -225,14 +226,16 @@ func TestMenuManagePTYRemoveFailureDoesNotClaimSuccess(t *testing.T) {
 	tty, done := startManageTTY(t, opts)
 	tty.expect("Choose a task: ")
 	tty.send("3")
-	tty.expect("Manage Link ID (Enter returns to menu): ")
-	tty.send(string(links[0].ID))
-	tty.expect("Action [s=status, r=remove, Enter=back]: ")
-	tty.send("r")
-	tty.expect("To REMOVE, type exact Link ID")
-	tty.send(string(links[0].ID))
+	tty.expect("Choose tunnel number: ")
+	tty.send("1")
+	tty.expect("Choose an action: ")
+	tty.send("5")
+	tty.expect("To permanently REMOVE this tunnel")
+	tty.send("REMOVE")
 	tty.expect("did not complete successfully")
-	manageTTYDone(t, done, 1)
+	tty.expect("Choose a task: ")
+	tty.send("8")
+	manageTTYDone(t, done, 0)
 	if strings.Contains(tty.all, "VERY_SECRET_NOT_FOR_OUTPUT") ||
 		strings.Contains(tty.all, "removed via canonical Engine") || !fake.present[links[0].ID] {
 		t.Fatalf("failed removal claimed success or leaked secret: %q", tty.all)
@@ -259,11 +262,11 @@ func TestMenuManagePTYChangedDesiredStateRejectsStalePreview(t *testing.T) {
 	tty, done := startManageTTY(t, opts)
 	tty.expect("Choose a task: ")
 	tty.send("3")
-	tty.expect("Manage Link ID (Enter returns to menu): ")
-	tty.send(string(links[0].ID))
-	tty.expect("Action [s=status, r=remove, Enter=back]: ")
-	tty.send("r")
-	tty.expect("To REMOVE, type exact Link ID")
+	tty.expect("Choose tunnel number: ")
+	tty.send("1")
+	tty.expect("Choose an action: ")
+	tty.send("5")
+	tty.expect("To permanently REMOVE this tunnel")
 	// Another writer changed the stable Link's desired configuration while
 	// the operator considered the old preview. The stale choice is not valid.
 	if err := state.NewFileStore(opts.stateRoot).Update(context.Background(), func(s *state.Snapshot) error {
@@ -277,11 +280,41 @@ func TestMenuManagePTYChangedDesiredStateRejectsStalePreview(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	tty.send(string(links[0].ID))
+	tty.send("REMOVE")
 	tty.expect("Saved Link changed since preview")
-	manageTTYDone(t, done, 1)
+	tty.expect("Choose a task: ")
+	tty.send("8")
+	manageTTYDone(t, done, 0)
 	if len(fake.applies) != 1 || !fake.present[links[0].ID] ||
 		strings.Contains(tty.all, "NEW-PRIVATE-DESIRED-NAME") {
 		t.Fatalf("stale preview removed or leaked a reconfigured Link: %q", tty.all)
+	}
+}
+
+func TestMenuManagePTYShowsCopyableConnectionDetailsAndReexportsSavedSetup(t *testing.T) {
+	opts, fake, links := manageFixture(t, 1)
+	applyCount := len(fake.applies)
+	tty, done := startManageTTY(t, opts)
+	tty.expect("Choose a task: ")
+	tty.send("3")
+	tty.expect("Choose tunnel number: ")
+	tty.send("1")
+	tty.expect("Choose an action: ")
+	tty.send("4")
+	tty.expect("TWO-SERVER CONNECTION DETAILS")
+	tty.expect("THIS server connection IPv4:")
+	tty.expect("OTHER server tunnel/private IP:")
+	tty.expect("OTHER server menu: Create tunnel -> 4 Manual -> 1 GRE Native")
+	tty.expect("Choose an action: ")
+	tty.send("3")
+	tty.expect("Setup link: stl://")
+	tty.expect("Choose an action: ")
+	tty.send("0")
+	tty.expect("Choose a task: ")
+	tty.send("8")
+	manageTTYDone(t, done, 0)
+	if len(fake.applies) != applyCount ||
+		strings.Contains(tty.all, links[0].DisplayName) {
+		t.Fatal("Manage Details/Share caused mutation or leaked untrusted display name")
 	}
 }

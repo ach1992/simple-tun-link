@@ -23,18 +23,18 @@ func runMenuTest(t *testing.T, root, input string) (int, string, string) {
 
 func TestMenuTasksAndNavigationDoNotCreateState(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "absent")
-	code, output, errOut := runMenuTest(t, root, "1\nq\n3\n\n4\n\n5\n6\n\n7\n8\n")
+	code, output, errOut := runMenuTest(t, root, "1\n0\n3\n\n4\n5\n6\n\n7\n8\n")
 	if code != 0 || errOut != "" {
 		t.Fatalf("menu failed: code=%d err=%q", code, errOut)
 	}
 	for _, item := range []string{
 		"simple-tun-link", "Host:", "OS:", "Kernel:",
 		"Local address candidate:", "Configured Links: 0",
-		"Create Tunnel", "Import Setup Link", "Manage Links",
-		"Tests & Diagnostics", "Settings", "Update", "Uninstall", "Exit",
-		"GRE Native (default)", "Create cancelled",
-		"Settings (read-only)", "Update (guided)", "Uninstall (guided)",
-		"Update cancelled", "pre-uninstall", "0 configured link(s)", "bounded probes",
+		"Create tunnel", "Import setup link", "My tunnels",
+		"Test connectivity", "Settings", "Update", "Uninstall", "Exit",
+		"GRE / Native", "CREATE TUNNEL",
+		"Settings", "Update", "Uninstall",
+		"Update cancelled", "pre-uninstall",
 	} {
 		if !strings.Contains(output, item) {
 			t.Fatalf("menu omitted %q", item)
@@ -61,7 +61,7 @@ func TestMenuConfiguredLinksAreProjectedNotRawState(t *testing.T) {
 		t.Fatalf("read-only listing failed: code=%d error=%q", code, errOut)
 	}
 	if !strings.Contains(output, "Configured Links: 1") ||
-		!strings.Contains(output, string(link.ID)) ||
+		!strings.Contains(output, link.Addresses.Local.Addr().String()) ||
 		strings.Contains(output, link.DisplayName) {
 		t.Fatal("menu failed Link summary projection or disclosed arbitrary display name")
 	}
@@ -70,11 +70,11 @@ func TestMenuConfiguredLinksAreProjectedNotRawState(t *testing.T) {
 func TestMenuRejectsOversizedOrInvalidInputsWithoutMutation(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "absent")
 	code, output, errOut := runMenuTest(t, root, strings.Repeat("VERY_PRIVATE", 20)+"\n8\n")
-	if code != 2 || !strings.Contains(errOut, "too long") || strings.Contains(output+errOut, "VERY_PRIVATE") {
+	if code != 0 || !strings.Contains(output, "short number") || strings.Contains(output+errOut, "VERY_PRIVATE") {
 		t.Fatalf("unbounded or leaked interactive input: code=%d out=%q err=%q", code, output, errOut)
 	}
-	code, output, errOut = runMenuTest(t, root, "4\ninvalid-id\n")
-	if code != 2 || !strings.Contains(errOut, "invalid Link ID") || !strings.Contains(output, "no host configuration") {
+	code, output, errOut = runMenuTest(t, root, "4\n8\n")
+	if code != 0 || !strings.Contains(output, "No saved tunnels") {
 		t.Fatalf("invalid diagnostic ID executed unexpectedly: code=%d out=%q err=%q", code, output, errOut)
 	}
 	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
@@ -123,14 +123,14 @@ func TestMenuAllLinkHealthIsReadOnlyAndReturnsToTasksOnBlockedBackend(t *testing
 	ipsec := fixtureReadLink("lnk_22222222222222222222222222222222", "10.80.80.0/31", "10.80.80.1/31", domain.BackendIPsec)
 	ipsec.Encapsulation = domain.EncapESP
 	storeReadLinks(t, root, gre, ipsec)
-	code, output, stderr := runMenuTest(t, root, "4\nall\n8\n")
+	code, output, stderr := runMenuTest(t, root, "4\na\n8\n")
 	if code != 0 || stderr != "" {
 		t.Fatalf("blocked diagnosis should return to operator task menu: %d %q %q", code, output, stderr)
 	}
 	for _, want := range []string{
-		"Diagnose Link ID or 'all'", "Links in snapshot: 2",
+		"Check all tunnels", "Links in snapshot: 2",
 		"ipsec_runtime_not_registered", "diagnostic_capability_unavailable",
-		"Some Link checks are blocked or unverified",
+		"Some checks are unknown, blocked",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("missing operator health result %q in %q", want, output)
