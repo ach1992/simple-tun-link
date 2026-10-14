@@ -29,7 +29,16 @@ type MaintenanceGuard interface {
 	Acquire(context.Context) (func() error, error)
 }
 
+// MTUManager must apply a Link's endpoint-local managed MTU only under the
+// canonical Engine locks and return a guarded rollback for every mutation.
+// observedBefore identifies a pre-existing interface in the final locked
+// backend observation and prevents new-link orphan adoption.
+type MTUManager interface {
+	Apply(context.Context, backend.Request, bool, []domain.ResourceClaim) (backend.Rollback, bool, error)
+}
+
 type Engine struct {
+	mtuManager         MTUManager
 	maintenance        MaintenanceGuard
 	backends           *backend.Registry
 	store              state.Store
@@ -76,6 +85,12 @@ func New(backends *backend.Registry, store state.Store, locks Locker) (*Engine, 
 		}
 	}
 	return e, nil
+}
+
+// SetMTUManager configures the single Engine-owned MTU writer before any
+// concurrent Link operation. Without it, a managed request fails closed.
+func (e *Engine) SetMTUManager(manager MTUManager) {
+	e.mtuManager = manager
 }
 
 // SetIPsecRetirementStore installs the local, protected credential backend for
@@ -323,6 +338,13 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 			"prior IPsec retirement receipt reserves this Link ID; create a fresh identity")
 	}
 	record, exists := snapshot.Find(desired.ID)
+	// Preserve a previously managed local MTU when older automation or a
+	// legacy Quick Link omits the new field. Only an explicitly versioned
+	// unmanaged policy may disable it. This decision happens UNDER the Link
+	// lock, so it cannot override a concurrent explicit MTU update.
+	if exists && desired.MTU == (domain.MTUPolicy{}) {
+		desired.MTU = record.Desired.MTU
+	}
 	if exists && rejectReconfiguration && record.Desired != desired {
 		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure_imported", string(desired.ID),
 			string(desired.Backend), "existing Link ID has different desired state; explicit reconfiguration is required")
@@ -491,6 +513,17 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		if _, removed := fresh.FindRemovalReceipt(link.ID); removed {
 			return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(link.ID), string(link.Backend),
 				"previous removal authorization was not invalidated")
+		}
+	}
+	// The final observed inventory (after resource locks) is authoritative
+	// for refusing to adopt an interface with no committed Link identity.
+	mtuObservedBefore := false
+	if request.Operation == backend.OperationEnsure {
+		for _, claim := range observed.ObservedResources() {
+			if claim.Kind == domain.ResourceInterface {
+				mtuObservedBefore = true
+				break
+			}
 		}
 	}
 	evidence.Stage = "validate"
@@ -669,6 +702,38 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		}
 	}
 
+	// Apply managed MTU after the backend has created/marked its exact
+	// interface, but before backend Verify, restore publication and desired
+	// state commit. Legacy/unmanaged Links never call this host writer.
+	if request.Operation == backend.OperationEnsure &&
+		(link.MTU.Mode == domain.MTUAuto || link.MTU.Mode == domain.MTUManual) {
+		evidence.Stage = "mtu_apply"
+		if e.mtuManager == nil {
+			return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo, evidence.Stage, evidence.HostMutation,
+				stlerr.New(stlerr.CodeUnsupported, "managed_mtu", string(link.ID), string(link.Backend), "Engine managed MTU writer is unavailable"))
+		}
+		mtuUndo, mtuChanged, mtuErr := e.mtuManager.Apply(ctx, request, mtuObservedBefore, resources)
+		if mtuUndo != nil {
+			backendUndo := undo
+			undo = func(undoCtx context.Context) error {
+				var errs []error
+				errs = append(errs, mtuUndo(undoCtx))
+				if backendUndo != nil {
+					errs = append(errs, backendUndo(undoCtx))
+				}
+				return errors.Join(errs...)
+			}
+		}
+		if mtuChanged {
+			changed = true
+			evidence.HostMutation = "attempted"
+		}
+		if mtuErr != nil {
+			return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo, evidence.Stage, evidence.HostMutation,
+				stlerr.Wrap(stlerr.CodeApply, "managed_mtu", string(link.ID), string(link.Backend),
+					"managed MTU could not be safely applied and verified", mtuErr))
+		}
+	}
 	evidence.Stage = "verify"
 	if _, err := impl.Verify(ctx, request); err != nil {
 		return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo, evidence.Stage, evidence.HostMutation, contextualize(err, stlerr.CodeVerify, string(request.Operation), link, "backend verification failed"))

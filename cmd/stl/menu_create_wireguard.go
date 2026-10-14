@@ -179,7 +179,13 @@ func menuCreateWireGuard(input io.Reader, reader *bufio.Reader, out, errOut io.W
 		Underlay:   desiredUnderlayV1{Local: route.Source, Peer: peer},
 		Addresses:  desiredLinkAddressesV1{Local: netip.PrefixFrom(localAddr, 31), Peer: netip.PrefixFrom(peerAddr, 31)},
 		ListenPort: localPort, PeerPort: peerPort, LocalKeepalive: localKeep, PeerKeepalive: peerKeep}
-	payload, err := json.Marshal(request)
+	// v2 explicitly selects managed Auto for new interactive creation;
+	// this endpoint-only preference is stripped from the peer Quick Link.
+	request.SchemaVersion = managedMTUSchemaVersion
+	payload, err := json.Marshal(wireGuardSenderRequestV2{
+		wireGuardSenderRequestV1: request,
+		MTU:                      domain.MTUPolicy{Mode: domain.MTUAuto},
+	})
 	if err != nil {
 		fmt.Fprintln(errOut, "Cannot encode WireGuard creator request; nothing applied.")
 		return 1

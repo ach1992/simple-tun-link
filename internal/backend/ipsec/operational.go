@@ -236,7 +236,13 @@ func (b *OperationalBackend) Plan(ctx context.Context, req core.Request, observe
 		return nil, fmt.Errorf("IPsec observed Link identity changed")
 	}
 	if req.Prior != nil && *req.Prior != req.Link {
-		return nil, fmt.Errorf("IPsec reconfiguration/rekey is not supported; use a new Link")
+		// Endpoint-local MTU policy changes are performed by the canonical
+		// Engine, not by strongSwan/VICI reconfiguration or credential churn.
+		sameConfig := *req.Prior
+		sameConfig.MTU = req.Link.MTU
+		if sameConfig != req.Link {
+			return nil, fmt.Errorf("IPsec reconfiguration/rekey is not supported; use a new Link")
+		}
 	}
 	p := operationalPlan{Profile: o.Profile, Claims: o.Profile.ResourceClaims()}
 	switch req.Operation {

@@ -30,6 +30,18 @@ type ipsecSenderRequestV1 struct {
 	Encapsulation domain.Encapsulation   `json:"encapsulation"`
 }
 
+// v2 adds a local MTU choice without reinterpreting the pinned v1 request.
+type ipsecSenderRequestV2 struct {
+	ipsecSenderRequestV1
+	MTU domain.MTUPolicy `json:"mtu,omitzero"`
+}
+
+func (r ipsecSenderRequestV2) Link(id domain.LinkID) domain.Link {
+	link := r.ipsecSenderRequestV1.Link(id)
+	link.MTU = r.MTU
+	return link
+}
+
 type ipsecSenderResult struct {
 	SchemaVersion        int                  `json:"schema_version"`
 	Operation            string               `json:"operation"`
@@ -86,30 +98,51 @@ func activeIPsecBackend(ctx context.Context, options *runtimeOptions) (*ipsecbac
 	return nil, fmt.Errorf("native-exclusive IPsec backend is not registered")
 }
 
-func decodeIPsecSenderRequest(input io.Reader) (ipsecSenderRequestV1, error) {
+func decodeIPsecSenderRequest(input io.Reader) (ipsecSenderRequestV2, error) {
 	if input == nil {
-		return ipsecSenderRequestV1{}, fmt.Errorf("missing IPsec creator request")
+		return ipsecSenderRequestV2{}, fmt.Errorf("missing IPsec creator request")
 	}
 	raw, err := io.ReadAll(io.LimitReader(input, maxDesiredLinkBytes+1))
 	if err != nil || len(raw) == 0 || len(raw) > maxDesiredLinkBytes || !utf8.Valid(raw) {
-		return ipsecSenderRequestV1{}, fmt.Errorf("invalid bounded IPsec creator input")
+		return ipsecSenderRequestV2{}, fmt.Errorf("invalid bounded IPsec creator input")
 	}
 	if err := ensureUnambiguousJSON(raw); err != nil {
-		return ipsecSenderRequestV1{}, err
+		return ipsecSenderRequestV2{}, err
+	}
+	var envelope struct {
+		SchemaVersion int `json:"schema_version"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil || envelope.SchemaVersion <= 0 {
+		return ipsecSenderRequestV2{}, fmt.Errorf("missing or invalid IPsec creator schema_version")
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
-	var value ipsecSenderRequestV1
-	if err := dec.Decode(&value); err != nil {
-		return ipsecSenderRequestV1{}, fmt.Errorf("invalid IPsec creator JSON")
+	var request ipsecSenderRequestV2
+	switch envelope.SchemaVersion {
+	case 1:
+		if err := dec.Decode(&request.ipsecSenderRequestV1); err != nil {
+			return ipsecSenderRequestV2{}, fmt.Errorf("invalid IPsec creator v1 fields")
+		}
+	case 2:
+		if err := dec.Decode(&request); err != nil {
+			return ipsecSenderRequestV2{}, fmt.Errorf("invalid IPsec creator v2 fields")
+		}
+	default:
+		return ipsecSenderRequestV2{}, stlerr.New(stlerr.CodeUnsupported, "link_create_ipsec", "", "ipsec",
+			"unsupported IPsec creator schema version")
 	}
-	if value.SchemaVersion != 1 {
-		return ipsecSenderRequestV1{}, stlerr.New(stlerr.CodeUnsupported, "link_create_ipsec", "", "ipsec", "unsupported IPsec sender request schema")
+	if request.LinkID != "" && request.LinkID.Validate() != nil {
+		return ipsecSenderRequestV2{}, fmt.Errorf("invalid IPsec Link ID")
 	}
-	if value.LinkID != "" && value.LinkID.Validate() != nil {
-		return ipsecSenderRequestV1{}, fmt.Errorf("invalid IPsec Link ID")
+	if !request.Underlay.Local.IsValid() || !request.Underlay.Peer.IsValid() ||
+		!request.Addresses.Local.IsValid() || !request.Addresses.Peer.IsValid() ||
+		(request.Encapsulation != domain.EncapESP && request.Encapsulation != domain.EncapNATT) {
+		return ipsecSenderRequestV2{}, fmt.Errorf("missing or invalid IPsec Link fields")
 	}
-	return value, nil
+	if err := request.MTU.Validate(); err != nil {
+		return ipsecSenderRequestV2{}, err
+	}
+	return request, nil
 }
 
 func (r ipsecSenderRequestV1) Link(id domain.LinkID) domain.Link {

@@ -22,6 +22,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/maintenance"
+	"github.com/ach1992/simple-tun-link/internal/managedmtu"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 	"github.com/ach1992/simple-tun-link/internal/version"
@@ -41,6 +42,7 @@ type runtimeOptions struct {
 	probeRunner linux.Runner
 	// Explicit throughput is never invoked by ordinary read-only diagnose.
 	throughputRunner   linux.BoundedRunner
+	mtuManager         app.MTUManager
 	restorePersistence app.RestorePersistence
 	executable         string
 	// Test-only deterministic identity seam; nil uses crypto-random Link IDs.
@@ -185,6 +187,7 @@ func runWithRuntimeInput(args []string, input io.Reader, stdout, stderr io.Write
 func productionRuntimeOptions() (*runtimeOptions, error) {
 	options := &runtimeOptions{stateRoot: state.DefaultRoot}
 	runner := linux.ExecRunner{}
+	options.mtuManager = managedmtu.HostMTUManager{Runner: runner, SetByIndex: linux.SetLinkMTUByIndex}
 	locks := state.NewLockManager(options.stateRoot)
 	routes := linux.RouteResolver{Runner: runner}
 	firewall := linux.IPTablesFirewall{Runner: runner, Locks: locks}
@@ -285,6 +288,7 @@ func buildRuntimeEngine(options runtimeOptions) (*app.Engine, error) {
 	if err != nil {
 		return nil, err
 	}
+	engine.SetMTUManager(options.mtuManager)
 	if options.stateRoot == state.DefaultRoot {
 		// All default-root production mutations acquire a shared lock before
 		// Link/resource locks. The installer holds its exclusive peer.

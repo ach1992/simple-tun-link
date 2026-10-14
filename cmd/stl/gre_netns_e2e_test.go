@@ -16,6 +16,7 @@ import (
 	grebackend "github.com/ach1992/simple-tun-link/internal/backend/gre"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
+	"github.com/ach1992/simple-tun-link/internal/managedmtu"
 	"github.com/ach1992/simple-tun-link/internal/state"
 )
 
@@ -137,13 +138,24 @@ func TestGRENetnsE2E(t *testing.T) {
 	options := &runtimeOptions{
 		stateRoot: root, backends: []backend.Backend{gre}, probeRunner: runner,
 	}
-	desired, err := json.Marshal(map[string]any{"schema_version": 1, "link": link})
+	version := 1
+	if action == "mtu" || action == "mtu-reapply" {
+		if multiPeer || encap != domain.EncapNative || localUnderlay.String() != "192.0.2.10" {
+			t.Fatal("managed MTU acceptance requires canonical isolated first-side native GRE fixture")
+		}
+		link.MTU = domain.MTUPolicy{Mode: domain.MTUManual, Bytes: 1300}
+		version = managedMTUSchemaVersion
+		options.mtuManager = managedmtu.HostMTUManager{
+			Runner: runner, SetByIndex: linux.SetLinkMTUByIndex,
+		}
+	}
+	desired, err := json.Marshal(map[string]any{"schema_version": version, "link": link})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var args []string
 	switch action {
-	case "ensure", "reensure", "conflict", "repair", "race":
+	case "ensure", "reensure", "conflict", "repair", "race", "mtu", "mtu-reapply":
 		args = []string{"link", "ensure", "--stdin", "--json"}
 	case "status":
 		args = []string{"link", "status", string(id), "--json"}
@@ -208,9 +220,34 @@ func TestGRENetnsE2E(t *testing.T) {
 		t.Fatalf("%s: missing expected CLI schema_version", action)
 	}
 	switch action {
-	case "ensure", "reensure", "repair":
-		if result["link_id"] != string(id) || result["changed"] != (action != "reensure") {
+	case "ensure", "reensure", "repair", "mtu", "mtu-reapply":
+		if result["link_id"] != string(id) ||
+			result["changed"] != (action != "reensure" && action != "mtu-reapply") {
 			t.Fatalf("%s: wrong idempotent ensure outcome: %s", action, stdout.String())
+		}
+		if action == "mtu" || action == "mtu-reapply" {
+			// The real Linux device, NOT the desired-state JSON, proves that
+			// canonical Engine Apply updated the exact GRE interface.
+			name, err := grebackend.InterfaceName(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			output, err := runner.Run(t.Context(), "ip", "-json", "link", "show", "dev", name)
+			if err != nil {
+				t.Fatal("managed GRE MTU inspection failed")
+			}
+			var actual []struct {
+				MTU int `json:"mtu"`
+			}
+			if err := json.Unmarshal(output.Stdout, &actual); err != nil || len(actual) != 1 || actual[0].MTU != 1300 {
+				t.Fatalf("real owned GRE MTU was not applied: %+v %v", actual, err)
+			}
+			snap, err := state.NewFileStore(root).Load(t.Context())
+			record, ok := snap.Find(id)
+			if err != nil || !ok || record.Desired.MTU != link.MTU {
+				t.Fatalf("actual managed MTU policy not persisted: %+v %v", record, err)
+			}
+			t.Logf("GRE_REAL_MANAGED_MTU=PASS desired=%d observed=%d mode=%s", link.MTU.Bytes, actual[0].MTU, action)
 		}
 	case "status":
 		if result["interface_verified"] != true || result["connectivity"] != "not_measured" || result["gre_state"] == nil {

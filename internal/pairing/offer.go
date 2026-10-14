@@ -62,6 +62,12 @@ type Offer struct {
 // canonical standard base64 text; IPsec expects a nonempty high-entropy PSK.
 // The caller must not persist a generated recipient private key on the sender.
 func NewQuickOffer(link domain.Link, credential []byte) (Offer, error) {
+	if err := link.Validate(); err != nil {
+		return Offer{}, stlerr.Wrap(stlerr.CodeInvalid, "pairing_create", "", "", "invalid local Link policy", err)
+	}
+	// A sender's managed MTU is an endpoint-local policy. Existing v1/v2/v3
+	// pairing schemas have no MTU contract: do not leak it to the receiver.
+	link.MTU = domain.MTUPolicy{}
 	version := SchemaVersion
 	if link.Backend == domain.BackendWireGuard {
 		version = WireGuardSchemaVersion
@@ -91,6 +97,9 @@ func (o Offer) validate() error {
 	}
 	if version <= SchemaVersion && o.link.WireGuard != (domain.WireGuardOptions{}) {
 		return fmt.Errorf("pairing schema v1/v2 cannot carry WireGuard public configuration")
+	}
+	if o.link.MTU != (domain.MTUPolicy{}) {
+		return fmt.Errorf("pairing schema v1/v2/v3 cannot carry endpoint-local MTU policy")
 	}
 	if o.mode != ModeQuick {
 		return fmt.Errorf("unsupported pairing exchange mode")
@@ -231,6 +240,9 @@ func (o Offer) ReceiverLink() domain.Link {
 
 func Invert(link domain.Link) domain.Link {
 	inverted := link
+	// Inversion changes endpoint ownership; a local managed MTU is never
+	// assumed to be the receiver's local MTU or symmetric path capacity.
+	inverted.MTU = domain.MTUPolicy{}
 	inverted.Underlay.Local, inverted.Underlay.Peer = link.Underlay.Peer, link.Underlay.Local
 	inverted.Addresses.Local, inverted.Addresses.Peer = link.Addresses.Peer, link.Addresses.Local
 	inverted.WireGuard.LocalPublicKey, inverted.WireGuard.PeerPublicKey =

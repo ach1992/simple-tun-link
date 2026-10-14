@@ -120,7 +120,7 @@ Creation must use a small high-value diagnostic set:
 
 Health observation and repair are separate operations. A health check must not silently mutate the system.
 
-MTU is persisted per Link and **endpoint-local**: missing field means legacy/unmanaged; explicit `auto` is Engine-managed conservative MTU based on local underlay/backend overhead; explicit `manual(bytes)` is validated Engine-managed MTU. New guided creation chooses Auto. Canonical lifecycle Apply/Verify/Undo, update and restore own mutations; read-only diagnostic probes never set MTU. Pairing must not copy the sender's local MTU or path measurement to the receiver.
+MTU is persisted per Link and **endpoint-local**: absent policy on an old saved Link means legacy/unmanaged; explicit v2 `unmanaged` opts out of management; explicit `auto` is Engine-managed conservative MTU based on local underlay/backend overhead; explicit `manual(bytes)` is validated Engine-managed MTU. Older v1 input without an MTU field cannot silently erase an existing managed policy. New guided creation chooses Auto. Canonical lifecycle Apply/Verify/Undo, update and restore own mutations; read-only diagnostic probes never set MTU. Pairing must not copy the sender's local MTU or path measurement to the receiver.
 
 ## 9. System-change principles
 
