@@ -42,9 +42,6 @@ func validateIPsecRemovalReceipts(s Snapshot) error {
 		if _, exists := s.FindPendingIPsec(r.LinkID); exists {
 			return fmt.Errorf("IPsec retired identity overlaps protected pending intent")
 		}
-		if _, exists := s.FindPendingIPsec(r.LinkID); exists {
-			return fmt.Errorf("IPsec retired identity overlaps protected pending intent")
-		}
 		if _, exists := s.FindPendingSender(r.LinkID); exists {
 			return fmt.Errorf("IPsec retired identity overlaps WireGuard pending sender intent")
 		}
