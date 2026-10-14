@@ -137,6 +137,12 @@ func TestGRENetnsE2E(t *testing.T) {
 	}
 	options := &runtimeOptions{
 		stateRoot: root, backends: []backend.Backend{gre}, probeRunner: runner,
+		// Production runtime always registers the MTU Engine writer, even for
+		// v1 reensure of a Link that previously saved a managed MTU. The
+		// test's per-action process must reflect the same invariant.
+		mtuManager: managedmtu.HostMTUManager{
+			Runner: runner, SetByIndex: linux.SetLinkMTUByIndex,
+		},
 	}
 	version := 1
 	if action == "mtu" || action == "mtu-reapply" {
@@ -145,9 +151,6 @@ func TestGRENetnsE2E(t *testing.T) {
 		}
 		link.MTU = domain.MTUPolicy{Mode: domain.MTUManual, Bytes: 1300}
 		version = managedMTUSchemaVersion
-		options.mtuManager = managedmtu.HostMTUManager{
-			Runner: runner, SetByIndex: linux.SetLinkMTUByIndex,
-		}
 	}
 	desired, err := json.Marshal(map[string]any{"schema_version": version, "link": link})
 	if err != nil {
