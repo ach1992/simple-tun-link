@@ -146,7 +146,7 @@ A future userspace carrier may legitimately introduce a data-plane helper, but i
 
 ## 5. Desired state and local persistence
 
-Persist only what is needed to recreate and manage links.
+Persist what is needed to recreate and manage successfully committed Links. Incomplete setup is not a product asset that needs same-ID resumability; an operator can start again with a fresh identity. Protected internal staging/journals may remain to bound crash side effects and must never be misinterpreted as a committed Link or permit blind deletion of uncertain resources.
 
 Direction:
 - versioned state schema; current schema v2 adds backend-specific GRE options; compatible v1 state is migrated in memory, while legacy GRE FOU/GUE/options that lacked sufficient identity are rejected for explicit regeneration rather than guessed;
@@ -157,6 +157,8 @@ Direction:
 - restrictive permissions for secret-bearing state;
 - no central database in v0.1;
 - observed kernel state is inspected, not blindly assumed from stored config.
+
+Committed Link persistence is mandatory: real installed Link traffic must return after service/OS restart without recreating the link. A pre-commit interruption can be restarted as new setup instead; normal best-effort rollback cleans only proven owned deltas, while hard crashes cannot guarantee zero filesystem/kernel traces.
 
 The installed Linux CLI uses /var/lib/simple-tun-link as its canonical
 private state root (state.json plus locks). The minimal non-interactive
@@ -370,14 +372,7 @@ Use route-aware discovery toward the actual peer and validate that the selected 
 
 ## 11. MTU and diagnostics
 
-Auto MTU is the normal path:
-1. determine underlay/interface constraints;
-2. account for backend encapsulation overhead;
-3. create/apply candidate safely;
-4. perform PMTU/DF-style probing when supported;
-5. select a stable result with a conservative fallback if probing is inconclusive.
-
-Manual MTU always remains available.
+The persisted MTU policy is per Link and endpoint-local: **unset** means legacy/unmanaged (do not silently set an old saved Link's MTU); **auto** means managed conservative overhead-aware local MTU (new guided creation default); **manual(bytes)** means managed validated local inner MTU. Apply/Verify/Undo, update and restore run only through the canonical Engine-owned transactional lifecycle under Link/resource locks, with sibling isolation. A failed update must restore a proved unchanged original interface MTU or fail explicitly on uncertain identity. Probes and PMTU estimates are observational evidence, never durable proof. Read-only diagnosis cannot change MTU. Do not copy local policy to peers via Quick Link; version public schema changes deliberately and continue loading legacy saved state safely.
 
 Keep default diagnostics small:
 - preflight;
