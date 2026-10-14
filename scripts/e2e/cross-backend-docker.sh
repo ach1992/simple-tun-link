@@ -72,11 +72,14 @@ binary_sha="$(sha256sum "$temp/stl-cross.test" | awk '{print $1}')"
 # non-secret fixture inputs and expose them read-only with ordinary 0755/0644.
 mkdir -p "$temp/source/scripts/e2e"
 git -c safe.directory="$source_root" show "$source_sha:scripts/e2e/gre-netns.sh" > "$temp/source/scripts/e2e/gre-netns.sh"
+git -c safe.directory="$source_root" show "$source_sha:scripts/e2e/throughput-bind-netns.sh" > "$temp/source/scripts/e2e/throughput-bind-netns.sh"
 git -c safe.directory="$source_root" show "$source_sha:go.mod" > "$temp/source/go.mod"
-chmod 0755 "$temp" "$temp/source" "$temp/source/scripts" "$temp/source/scripts/e2e" "$temp/source/scripts/e2e/gre-netns.sh"
+chmod 0755 "$temp" "$temp/source" "$temp/source/scripts" "$temp/source/scripts/e2e" \
+  "$temp/source/scripts/e2e/gre-netns.sh" "$temp/source/scripts/e2e/throughput-bind-netns.sh"
 chmod 0644 "$temp/source/go.mod"
 script_sha="$(sha256sum "$temp/source/scripts/e2e/gre-netns.sh" | awk '{print $1}')"
 echo "CROSS_BACKEND_COMMITTED_SCRIPT_SHA256=$script_sha"
+echo "THROUGHPUT_BIND_COMMITTED_SCRIPT_SHA256=$(sha256sum "$temp/source/scripts/e2e/throughput-bind-netns.sh" | awk '{print $1}')"
 echo "CROSS_BACKEND_SOURCE_SHA=$source_sha"
 echo "CROSS_BACKEND_TEST_BINARY_SHA256=$binary_sha"
 echo "CROSS_BACKEND_BUILDER=$(go version)"
@@ -99,6 +102,7 @@ for entry in "ubuntu:$ubuntu_image" "debian:$debian_image"; do
     -e STL_E2E_DISPOSABLE_HOST=approved -e STL_E2E_CROSS_WG=approved \
     -e STL_E2E_CROSS_IPSEC=approved \
     -e STL_E2E_CROSS_NATT=approved \
+    -e STL_E2E_THROUGHPUT_BIND=approved \
     -e STL_E2E_PREBUILT_TEST=/proof/stl-cross.test \
     -e "STL_E2E_PREBUILT_SHA256=$binary_sha" \
     -e "STL_E2E_SOURCE_SHA=$source_sha" \
@@ -124,6 +128,9 @@ for entry in "ubuntu:$ubuntu_image" "debian:$debian_image"; do
       printf "CROSS_BACKEND_GUEST_IPROUTE=%s\n" "$(ip -Version)"
       printf "CROSS_BACKEND_GUEST_WG=%s\n" "$(wg --version)"
       printf "CROSS_BACKEND_GUEST_CHARON_PACKAGE=%s\n" "$(dpkg-query -W charon-systemd)"
+      # First prove iperf3 TCP CONTROL and DATA socket binding using only
+      # fresh guest-local namespaces; no real external/WAN endpoint.
+      /bin/bash /proof/source/scripts/e2e/throughput-bind-netns.sh
       exec /bin/bash /proof/source/scripts/e2e/gre-netns.sh
     '
   echo "CROSS_BACKEND_$distro=PASS"
