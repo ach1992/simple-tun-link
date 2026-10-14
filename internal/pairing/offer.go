@@ -60,7 +60,11 @@ type Offer struct {
 // recipient credential for a one-step Quick Link. For plaintext GRE/IPIP,
 // credential must be nil. WireGuard expects its 32-byte private key in
 // canonical standard base64 text; IPsec expects a nonempty high-entropy PSK.
-// The caller must not persist a generated recipient private key on the sender.
+// Recipient credentials must never be persisted in ordinary desired State,
+// generic status/diagnostics, JSON or logs. The guided sender may retain the
+// original receiver offer only in the approved private per-Link handoff store,
+// separate from ordinary State, until the operator explicitly deletes it.
+// Other callers must handle and deliver credentials within a trusted boundary.
 func NewQuickOffer(link domain.Link, credential []byte) (Offer, error) {
 	if err := link.Validate(); err != nil {
 		return Offer{}, stlerr.Wrap(stlerr.CodeInvalid, "pairing_create", "", "", "invalid local Link policy", err)

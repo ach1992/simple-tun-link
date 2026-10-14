@@ -19,7 +19,23 @@ while (($#)); do
     *) shift ;;
   esac
 done
-[[ -n "$destination" && "$url" == 'https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.123/scripts/install.sh' ]] || exit 44
+# Fake curl models the first-hop stdout and second-hop private download.
+# Reject unexpected URLs: no real network traffic is used in this test.
+if [[ "$url" == 'https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.3/scripts/quick-install.sh' ]]; then
+  [[ -z "$destination" ]] || exit 44
+  case "${STL_TEST_FIRST_HOP:-}" in
+    no-bytes) exit 47 ;;
+    truncated) sed '$d' "$STL_TEST_QUICK_INSTALL_FILE"; exit 48 ;;
+    "") cat "$STL_TEST_QUICK_INSTALL_FILE"; exit 0 ;;
+    *) exit 49 ;;
+  esac
+fi
+case "$url" in
+  https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.123/scripts/install.sh) ;;
+  https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.3/scripts/install.sh) ;;
+  *) exit 44 ;;
+esac
+[[ -n "$destination" ]] || exit 44
 [[ -z "$STL_TEST_DOWNLOAD_FAIL" ]] || exit 45
 if [[ -n "$STL_TEST_SYNTAX_FAIL" ]]; then
   printf '%s\n' 'if (( (' > "$destination"
@@ -43,6 +59,7 @@ export PATH="$scratch/bin:$PATH"
 export STL_TEST_EXECUTIONS="$scratch/record"
 export STL_TEST_DOWNLOAD_FAIL=
 export STL_TEST_SYNTAX_FAIL=
+export STL_TEST_QUICK_INSTALL_FILE="$repo/scripts/quick-install.sh"
 : > "$STL_TEST_EXECUTIONS"
 # Offline non-tty startup should not start a menu or make a network call.
 bash "$repo/scripts/quick-install.sh" v0.1.0-rc.123 native,wireguard > "$scratch/out" 2>"$scratch/err"
@@ -114,6 +131,58 @@ if command -v script >/dev/null 2>&1; then
     exit 1
   }
 fi
+# Execute the ACTUAL published README install and update one-liners with
+# a local fake curl. The pipeline itself (not just the inner script) must
+# fail if the first HTTPS request produces zero or truncated bytes.
+mapfile -t published_commands < <(grep '^bash -o pipefail -c ' "$repo/README.md")
+[[ ${#published_commands[@]} -eq 2 ]] || {
+  echo 'README must contain precisely two pipefail-safe quick commands.' >&2
+  exit 1
+}
+for idx in 0 1; do
+  published_cmd="${published_commands[$idx]}"
+  grep -Fx -- "$published_cmd" "$repo/docs/INSTALL.md" >/dev/null || {
+    echo 'User and maintainer public bootstrap commands disagree.' >&2
+    exit 1
+  }
+  action=install
+  if [[ "$idx" == 1 ]]; then action=update; fi
+  # Positive path: the public one-liner must actually call the canonical
+  # installer, rather than treating an empty Bash command as success.
+  : > "$STL_TEST_EXECUTIONS"
+  bash -c "$published_cmd" > "$scratch/out" 2>"$scratch/err"
+  if (( EUID == 0 )); then
+    grep -q 'test fake installer' "$STL_TEST_EXECUTIONS"
+  else
+    grep -Eq "^sudo bash .* $action --version v0.1.0-rc.3 --backends native,wireguard$" "$STL_TEST_EXECUTIONS"
+  fi
+  for first_hop_failure in no-bytes truncated; do
+    : > "$STL_TEST_EXECUTIONS"
+    if STL_TEST_FIRST_HOP="$first_hop_failure" bash -c "$published_cmd" > "$scratch/out" 2>"$scratch/err"; then
+      echo "Published $action first-hop $first_hop_failure falsely succeeded." >&2
+      exit 1
+    fi
+    [[ ! -s "$STL_TEST_EXECUTIONS" ]] || {
+      echo "Published $action first-hop $first_hop_failure invoked installer/sudo." >&2
+      exit 1
+    }
+  done
+done
+# The extra public Bash pipefail boundary must preserve controlling-TTY
+# reattachment, even though the bootstrap is streamed into the inner Bash.
+if command -v script >/dev/null 2>&1; then
+  : > "$STL_TEST_EXECUTIONS"
+  script -q -e -c "${published_commands[0]}" /dev/null     < /dev/null > "$scratch/public-pty-out" 2>"$scratch/public-pty-err"
+  grep -q 'FAKE_STL_MENU_RENDERED' "$scratch/public-pty-out" || {
+    echo 'Public first-hop wrapper prevented automatic menu launch.' >&2
+    exit 1
+  }
+  grep -q 'sudo stl menu' "$STL_TEST_EXECUTIONS" || {
+    echo 'Public first-hop wrapper failed controlling-TTY handoff.' >&2
+    exit 1
+  }
+fi
+echo 'PUBLIC_FIRST_HOP_EMPTY_TRUNCATED_AND_PTY=PASS'
 # Interruption before the final complete invocation must not invoke sudo,
 # report fake success, or execute a partial install.
 before_trunc="$(wc -c < "$STL_TEST_EXECUTIONS")"

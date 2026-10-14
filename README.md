@@ -30,7 +30,7 @@ GRE keys distinguish tunnels but **do not encrypt traffic**. FOU/GUE are UDP enc
 **One-line installer for v0.1.0-rc.3** (run on each server):
 
 ~~~bash
-curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.3/scripts/quick-install.sh | bash -s -- v0.1.0-rc.3
+bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.3/scripts/quick-install.sh | bash -s -- v0.1.0-rc.3'
 ~~~
 
 This is an explicitly tag-pinned HTTPS bootstrap; review its
@@ -206,7 +206,7 @@ receiver/sender credential files. Then run the explicit, pinned
 **one-line update** on that server:
 
 ~~~bash
-curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.3/scripts/quick-install.sh | bash -s -- v0.1.0-rc.3 update
+bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.3/scripts/quick-install.sh | bash -s -- v0.1.0-rc.3 update'
 ~~~
 
 This uses the canonical installer **update** transaction, checks
