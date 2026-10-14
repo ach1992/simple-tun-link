@@ -196,6 +196,16 @@ for selected_mode in native fou gue; do
   traffic
   run_side a diagnose
   run_side b diagnose
+  if [[ "$mode" == native ]]; then
+    # Apply a v2 endpoint-local manual MTU to A only, verify kernel state,
+    # persist/reapply idempotently and prove B/traffic are unaffected.
+    run_side a mtu
+    run_side a mtu-reapply
+    run_side a reensure
+    run_side b status
+    traffic
+    echo "GRE_MANAGED_MTU_REAL_KERNEL=PASS"
+  fi
   echo "GRE_MODE_READY=$mode"
   if [[ "$mode" == native ]]; then
     # Same peer pair AND absent GRE key is ambiguous even if UDP encapsulation

@@ -146,10 +146,10 @@ A future userspace carrier may legitimately introduce a data-plane helper, but i
 
 ## 5. Desired state and local persistence
 
-Persist only what is needed to recreate and manage links.
+Persist what is needed to recreate and manage successfully committed Links. Incomplete setup is not a product asset that needs same-ID resumability; an operator can start again with a fresh identity. Protected internal staging/journals may remain to bound crash side effects and must never be misinterpreted as a committed Link or permit blind deletion of uncertain resources.
 
 Direction:
-- versioned state schema; current schema v2 adds backend-specific GRE options; compatible v1 state is migrated in memory, while legacy GRE FOU/GUE/options that lacked sufficient identity are rejected for explicit regeneration rather than guessed;
+- versioned state schema; historical v2 introduced backend-specific GRE options, and current v3 adds endpoint-local managed MTU. Compatible v1/v2 state migrates in memory without any managed MTU policy; an `mtu` field in pre-v3 state (including empty/explicit unmanaged) is rejected rather than assigned new host-write semantics. Legacy GRE FOU/GUE/options without sufficient identity remain rejected for explicit regeneration rather than guessed;
 - Links are a collection, not a singleton;
 - zero or more Links may exist on a host, including multiple independent Links to the same peer underlay endpoint pair;
 - one stable Link ID independent of interface display name and peer address;
@@ -157,6 +157,8 @@ Direction:
 - restrictive permissions for secret-bearing state;
 - no central database in v0.1;
 - observed kernel state is inspected, not blindly assumed from stored config.
+
+Committed Link persistence is mandatory: real installed Link traffic must return after service/OS restart without recreating the link. A pre-commit interruption can be restarted as new setup instead; normal best-effort rollback cleans only proven owned deltas, while hard crashes cannot guarantee zero filesystem/kernel traces.
 
 The installed Linux CLI uses /var/lib/simple-tun-link as its canonical
 private state root (state.json plus locks). The minimal non-interactive
@@ -370,14 +372,7 @@ Use route-aware discovery toward the actual peer and validate that the selected 
 
 ## 11. MTU and diagnostics
 
-Auto MTU is the normal path:
-1. determine underlay/interface constraints;
-2. account for backend encapsulation overhead;
-3. create/apply candidate safely;
-4. perform PMTU/DF-style probing when supported;
-5. select a stable result with a conservative fallback if probing is inconclusive.
-
-Manual MTU always remains available.
+The persisted MTU policy is per Link and endpoint-local: **absent in saved state** means legacy/unmanaged (no kernel MTU writes); explicit `unmanaged` in versioned v2 input opts out of managed MTU without mutating the live interface; **auto** means managed conservative overhead-aware local MTU (new guided creation default); **manual(bytes)** means managed validated local inner MTU. Older input/pairing without an MTU field preserves an existing committed local policy under the Engine lock, not silently clears it. Apply/Verify/Undo, update and restore run only through the canonical Engine-owned transactional lifecycle under Link/resource locks, with sibling isolation. A failed update must restore a proved unchanged original interface MTU or fail explicitly on uncertain identity. Probes and PMTU estimates are observational evidence, never durable proof. Read-only diagnosis cannot change MTU. Do not copy local policy to peers via Quick Link; version public schema changes deliberately and continue loading legacy saved state safely.
 
 Keep default diagnostics small:
 - preflight;

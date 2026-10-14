@@ -170,7 +170,7 @@ publish a new release are separate from this technical test evidence.
 
 ## Release validation
 
-Before v0.1 is tagged:
+Before v0.1 is tagged/published, verify the candidate released-artifact identity and real installed lifecycle, especially **a durably committed Link restoring working traffic after reboot/restart**, not only source compilation. The Owner will test real Internet/WAN/NAT peers personally **after publication** and report defects; physical WAN is not claimed as pre-publication proof. Agents may not bypass the existing external-host/platform restrictions.
 
 - validate on at least one currently maintained Ubuntu LTS and one current Debian stable release;
 - exercise amd64 and arm64 release artifacts where test capacity permits;

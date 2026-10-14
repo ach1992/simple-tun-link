@@ -37,6 +37,18 @@ type wireGuardSenderRequestV1 struct {
 	PeerKeepalive  uint16                 `json:"peer_keepalive,omitempty"`
 }
 
+// v2 adds only endpoint-local MTU. v1 remains frozen for existing automation.
+type wireGuardSenderRequestV2 struct {
+	wireGuardSenderRequestV1
+	MTU domain.MTUPolicy `json:"mtu,omitzero"`
+}
+
+func (r wireGuardSenderRequestV2) link(id domain.LinkID, local, peer string) domain.Link {
+	link := r.wireGuardSenderRequestV1.link(id, local, peer)
+	link.MTU = r.MTU
+	return link
+}
+
 type wireGuardSenderResult struct {
 	SchemaVersion        int                  `json:"schema_version"`
 	Operation            string               `json:"operation"`
@@ -48,28 +60,44 @@ type wireGuardSenderResult struct {
 	Changed              bool                 `json:"changed"`
 }
 
-func decodeWireGuardSenderRequest(in io.Reader) (wireGuardSenderRequestV1, error) {
+func decodeWireGuardSenderRequest(in io.Reader) (wireGuardSenderRequestV2, error) {
 	if in == nil {
-		return wireGuardSenderRequestV1{}, fmt.Errorf("missing WireGuard creator input")
+		return wireGuardSenderRequestV2{}, fmt.Errorf("missing WireGuard creator input")
 	}
 	raw, err := io.ReadAll(io.LimitReader(in, maxDesiredLinkBytes+1))
 	if err != nil || len(raw) == 0 || len(raw) > maxDesiredLinkBytes || !utf8.Valid(raw) {
-		return wireGuardSenderRequestV1{}, fmt.Errorf("invalid or oversized WireGuard creator input")
+		return wireGuardSenderRequestV2{}, fmt.Errorf("invalid or oversized WireGuard creator input")
 	}
 	if err = ensureUnambiguousJSON(raw); err != nil {
-		return wireGuardSenderRequestV1{}, err
+		return wireGuardSenderRequestV2{}, err
+	}
+	var envelope struct {
+		SchemaVersion int `json:"schema_version"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil || envelope.SchemaVersion <= 0 {
+		return wireGuardSenderRequestV2{}, fmt.Errorf("missing or invalid WireGuard creator schema_version")
 	}
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
-	var request wireGuardSenderRequestV1
-	if err = d.Decode(&request); err != nil {
-		return wireGuardSenderRequestV1{}, fmt.Errorf("invalid WireGuard creator fields")
-	}
-	if request.SchemaVersion != 1 {
-		return wireGuardSenderRequestV1{}, stlerr.New(stlerr.CodeUnsupported, "link_create_wireguard", "", "", "unsupported WireGuard creator schema version")
+	var request wireGuardSenderRequestV2
+	switch envelope.SchemaVersion {
+	case 1:
+		if err := d.Decode(&request.wireGuardSenderRequestV1); err != nil {
+			return wireGuardSenderRequestV2{}, fmt.Errorf("invalid WireGuard creator v1 fields")
+		}
+	case 2:
+		if err := d.Decode(&request); err != nil {
+			return wireGuardSenderRequestV2{}, fmt.Errorf("invalid WireGuard creator v2 fields")
+		}
+	default:
+		return wireGuardSenderRequestV2{}, stlerr.New(stlerr.CodeUnsupported, "link_create_wireguard", "", "",
+			"unsupported WireGuard creator schema version")
 	}
 	if request.LinkID != "" && request.LinkID.Validate() != nil {
-		return wireGuardSenderRequestV1{}, fmt.Errorf("invalid explicit Link ID")
+		return wireGuardSenderRequestV2{}, fmt.Errorf("invalid explicit Link ID")
+	}
+	if err := request.MTU.Validate(); err != nil {
+		return wireGuardSenderRequestV2{}, err
 	}
 	return request, nil
 }

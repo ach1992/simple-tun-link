@@ -412,7 +412,7 @@ func TestLifecycleCLIUnsupportedSchemaAndDomainCapabilities(t *testing.T) {
 		link    domain.Link
 		version int
 	}{
-		{"future request schema v2", base, 2},
+		{"future request schema v3", base, 3},
 		{"unsupported GRE encapsulation", func() domain.Link {
 			changed := base
 			changed.Encapsulation = domain.EncapUDP

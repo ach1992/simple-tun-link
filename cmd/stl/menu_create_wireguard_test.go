@@ -24,6 +24,7 @@ func TestGuidedWireGuardCreatesConfirmedProtectedHandoff(t *testing.T) {
 	host := &guidedTestRunner{}
 	fake := &wireGuardCreatorFake{newLifecycleFake()}
 	opts := &runtimeOptions{stateRoot: root, backends: []backend.Backend{fake}, probeRunner: host,
+		mtuManager:   guidedMTUFake{},
 		createLinkID: func() (domain.LinkID, error) { return createTestID, nil }}
 	stdin := "9\n192.0.2.20\n\nn\n51871\n51872\n25\n\n" + file + "\n" + string(createTestID) + "\n8\n"
 	var out, stderr bytes.Buffer
@@ -56,6 +57,7 @@ func TestGuidedWireGuardCancelDoesNotGeneratePrivateFileOrState(t *testing.T) {
 	host := &guidedTestRunner{}
 	fake := &wireGuardCreatorFake{newLifecycleFake()}
 	opts := &runtimeOptions{stateRoot: root, backends: []backend.Backend{fake}, probeRunner: host,
+		mtuManager:   guidedMTUFake{},
 		createLinkID: func() (domain.LinkID, error) { return createTestID, nil }}
 	stdin := "9\n192.0.2.20\n\nn\n51871\n51872\n\n\n" + file + "\nNO\n8\n"
 	var out, stderr bytes.Buffer

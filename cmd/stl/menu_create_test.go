@@ -87,9 +87,20 @@ func (b *guidedTestBackend) DiagnosticState(_ context.Context, link domain.Link)
 	return grebackend.DiagnosticState{Interface: iface, IfIndex: 17, Encapsulation: link.Encapsulation}, nil
 }
 
+// The guided test backend is a state-only fake with no Linux interface.
+// The managed MTU seam is deliberately observed separately in focused
+// HostMTUManager tests; this adapter never touches the test host network.
+type guidedMTUFake struct{}
+
+func (guidedMTUFake) Apply(_ context.Context, _ backend.Request, _ bool,
+	_ []domain.ResourceClaim) (backend.Rollback, bool, error) {
+	return nil, false, nil
+}
+
 func guidedTestOptions(root string, host *guidedTestRunner, fake *guidedTestBackend) *runtimeOptions {
 	return &runtimeOptions{
 		stateRoot: root, probeRunner: host, backends: []backend.Backend{fake},
+		mtuManager:   guidedMTUFake{},
 		createLinkID: func() (domain.LinkID, error) { return createTestID, nil },
 	}
 }
@@ -135,10 +146,15 @@ func TestGuidedGRECreateFullOperatorPathAndPairing(t *testing.T) {
 		desired.Addresses.Local.Masked() != desired.Addresses.Peer.Masked() {
 		t.Fatalf("incorrect guided intent: %+v", desired)
 	}
+	if desired.MTU.Mode != domain.MTUAuto {
+		t.Fatalf("new guided Link did not persist managed Auto MTU: %+v", desired.MTU)
+	}
 	url := regexp.MustCompile("stl://[^[:space:]]+").FindString(output)
 	offer, err := pairing.DecodeSetupLink(url)
-	if err != nil || offer.Link() != desired {
-		t.Fatalf("explicit export differs from created Link: %v", err)
+	peerOffer := desired
+	peerOffer.MTU = domain.MTUPolicy{} // endpoint-local; never copied to peer
+	if err != nil || offer.Link() != peerOffer {
+		t.Fatalf("explicit export must omit sender's MTU: %v", err)
 	}
 	peer := offer.ReceiverLink()
 	if peer.Underlay.Local != desired.Underlay.Peer || peer.Addresses.Local != desired.Addresses.Peer {

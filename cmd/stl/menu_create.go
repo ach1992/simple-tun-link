@@ -372,11 +372,12 @@ func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		fmt.Fprintln(out, "Create cancelled. No changes applied.")
 		return 0
 	}
-	// Marshal the deliberately pinned v1 public contract; never marshal
-	// domain.Link directly into automation input or introduce a second apply.
-	wire := desiredLinkRequestV1{
-		SchemaVersion: desiredLinkSchemaVersion,
-		Link: desiredLinkV1{
+	// Marshal the explicitly versioned v2 automation contract with managed
+	// local Auto MTU. The peer's setup link never inherits our MTU choice.
+	link.MTU = domain.MTUPolicy{Mode: domain.MTUAuto}
+	wire := desiredLinkRequestV2{
+		SchemaVersion: managedMTUSchemaVersion,
+		Link: desiredLinkV2{desiredLinkV1: desiredLinkV1{
 			ID: link.ID, Underlay: desiredUnderlayV1{
 				Local: link.Underlay.Local, Peer: link.Underlay.Peer,
 			}, Addresses: desiredLinkAddressesV1{
@@ -388,7 +389,7 @@ func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 				TOS: link.GRE.TOS, DisablePMTUD: link.GRE.DisablePMTUD,
 				Checksum: link.GRE.Checksum, Sequence: link.GRE.Sequence,
 			},
-		},
+		}, MTU: link.MTU},
 	}
 	payload, err := json.Marshal(wire)
 	if err != nil {

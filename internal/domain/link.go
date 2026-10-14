@@ -40,6 +40,40 @@ type LinkAddresses struct {
 	Peer  netip.Prefix `json:"peer"`
 }
 
+// MTUPolicy is a comparable endpoint-local desired-state choice. Its zero
+// value is a deliberately unmanaged legacy Link and must not change host MTU.
+// Managed settings may only be applied by the canonical Engine transaction,
+// never by read-only diagnostics or the pairing codec.
+type MTUPolicy struct {
+	Mode  MTUMode `json:"mode"`
+	Bytes int     `json:"bytes,omitempty"`
+}
+
+type MTUMode string
+
+const (
+	MTUUnmanaged         MTUMode = ""          // legacy field omitted
+	MTUUnmanagedExplicit MTUMode = "unmanaged" // v2 explicit opt-out
+	MTUAuto              MTUMode = "auto"
+	MTUManual            MTUMode = "manual"
+)
+
+func (m MTUPolicy) Validate() error {
+	switch m.Mode {
+	case MTUUnmanaged, MTUUnmanagedExplicit, MTUAuto:
+		if m.Bytes != 0 {
+			return stlerr.New(stlerr.CodeInvalid, "validate_link", "", "", "unmanaged/auto MTU must not carry manual bytes")
+		}
+	case MTUManual:
+		if m.Bytes < 68 || m.Bytes > 65535 {
+			return stlerr.New(stlerr.CodeInvalid, "validate_link", "", "", "manual MTU must be between 68 and 65535 IPv4 bytes")
+		}
+	default:
+		return stlerr.New(stlerr.CodeUnsupported, "validate_link", "", "", "unsupported MTU policy mode")
+	}
+	return nil
+}
+
 // GREOptions is the GRE-specific desired configuration carried by a Link.
 // The zero value is the simple unkeyed GRE default. KeyEnabled distinguishes
 // an explicit GRE key value of zero from an unkeyed tunnel.
@@ -108,6 +142,7 @@ type Link struct {
 	// backend-neutral JSON compact while preserving Link comparability.
 	GRE       GREOptions       `json:"gre,omitzero"`
 	WireGuard WireGuardOptions `json:"wireguard,omitzero"`
+	MTU       MTUPolicy        `json:"mtu,omitzero"`
 }
 
 // ResourceClaim is a secret-free identity for a collision-sensitive host
@@ -138,6 +173,9 @@ func (id LinkID) Validate() error {
 
 func (l Link) Validate() error {
 	if err := l.ID.Validate(); err != nil {
+		return err
+	}
+	if err := l.MTU.Validate(); err != nil {
 		return err
 	}
 	if !l.Underlay.Local.IsValid() || !l.Underlay.Peer.IsValid() {

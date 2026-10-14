@@ -21,7 +21,7 @@ The project should provide one small tool that creates the same consumer-facing 
 
 Given two Linux servers with mutually reachable underlay endpoints, an operator can install stl, create/import a link with minimal input, and obtain a stable point-to-point Link Address on both servers.
 
-A successful Link must be usable by normal IP applications and by arbitrary external software without requiring that software to understand STL backend internals.
+A successfully activated and durably committed Link must remain usable by normal IP applications and external software, and restore its working Link traffic automatically after ordinary host reboot/service restart without repeating setup or pairing.
 
 Multi-Link operation is a v0.1 requirement. A host may own zero or more independent Links, including multiple Links to the same peer underlay endpoint pair. For example, A <-> B may simultaneously use GRE Native, WireGuard, and GRE/FOU with distinct Link Addresses and resources. The model must not enforce a one-Link-per-host or one-Link-per-peer singleton. A specific combination may be rejected only when the selected backend/kernel cannot unambiguously distinguish the required resources.
 
@@ -55,7 +55,7 @@ A non-interactive CLI and machine-readable JSON output must expose the same core
 - Native GRE is the default backend and default encapsulation.
 - Keyed GRE is supported; keys are identifiers, not security.
 - FOU and GUE UDP encapsulation are supported as advanced alternatives.
-- MTU supports Auto and Manual modes.
+- MTU supports explicit managed Auto and Manual modes, while absence of a policy preserves legacy/unmanaged Links without changing their kernel MTU.
 - TTL/TOS/PMTUD and other backend-relevant knobs may be exposed under Advanced only when they materially affect real routes.
 
 ### IPIP
@@ -99,6 +99,8 @@ A secret-bearing Quick Link is explicitly **SENSITIVE** credential material. It 
 
 The pairing schema includes an explicit exchange mode so a future Secure Exchange/local-key flow can be added compatibly if later justified.
 
+An interrupted *pre-success* setup may be discarded and begun afresh with a new Link ID; v0.1 does not need to reconstruct a lost sensitive Quick Link or add an orphan-credential deletion/recovery product workflow. Ordinary cancellation attempts owned rollback, but an abrupt crash cannot guarantee atomic erasure of external effects. Existing protected internal safety journals, fail-closed ownership and basic credential secrecy remain in force. Never treat unfinished setup as a successfully committed tunnel.
+
 Setup-link data is data only. Import must never execute shell content embedded in a link.
 
 ## 8. Diagnostics and tuning
@@ -117,6 +119,8 @@ Creation must use a small high-value diagnostic set:
 - Prefer structured, bounded, redacted events tied to operation/Link/backend and stable reason code; normal users see concise output, while opt-in safe troubleshooting provides more context without exposing credentials or untrusted daemon/kernel output. Never turn on unsafe strongSwan credential-debug logging for diagnosis.
 
 Health observation and repair are separate operations. A health check must not silently mutate the system.
+
+MTU is persisted per Link and **endpoint-local**: absent policy on an old saved Link means legacy/unmanaged; explicit v2 `unmanaged` opts out of management; explicit `auto` is Engine-managed conservative MTU based on local underlay/backend overhead; explicit `manual(bytes)` is validated Engine-managed MTU. Older v1 input without an MTU field cannot silently erase an existing managed policy. New guided creation chooses Auto. Canonical lifecycle Apply/Verify/Undo, update and restore own mutations; read-only diagnostic probes never set MTU. Pairing must not copy the sender's local MTU or path measurement to the receiver.
 
 ## 9. System-change principles
 
@@ -189,6 +193,7 @@ v0.1 is complete when:
 - setup-link and manual pairing are usable and validated;
 - automatic MTU and core diagnostics produce actionable results;
 - repeated apply is idempotent and partial failures roll back owned state;
+- already committed, working Links survive host reboot/service restart with restored traffic and no new pairing; interrupted pre-commit creation can instead be restarted from scratch;
 - restart/reapply persistence works without corrupting unrelated network state;
 - machine-readable CLI output exists for core operations with an explicit schema version and stable error/exit semantics;
 - a script can converge a Link toward desired state through an idempotent automation operation without parsing interactive output;
@@ -204,3 +209,5 @@ The project license is **MIT**. The canonical CLI remains `stl`; `stlink` is a l
 For v0.1, **Quick Link** is the default one-step pairing mode for secret-bearing backends. The format remains explicitly extensible so a future Secure Exchange/local-key mode can be added without changing the core Link model. No currently open owner decision blocks Issue #2 development.
 
 For IPsec v0.1, the Owner accepts a single native-exclusive STL-owned strongSwan runtime on eligible hosts and an explicit fail-closed IPsec-only unavailability on any host with foreign/ambiguous daemon ownership. Future coexistence/isolation modes require independent validation and review. The Owner also requires actionable, redacted operator diagnostics and coherent safe logging across **every** backend and CLI/menu workflow; this is a product-wide acceptance criterion, not an IPsec-specific embellishment.
+
+2026-10-14 Owner acceptance: pre-success setup is disposable, but a fully committed working tunnel MUST be restored after reboot; basic protection against lost/unknown secrets or foreign resource deletion is not waived. The persisted MTU contract is `unset=legacy/unmanaged`, `auto`, or `manual(bytes)`, applied only under canonical local Engine ownership and never copied across pairing. Real physical WAN/NAT-router experiments are Owner-run **after** publication; do not claim them pre-tested or bypass platform restrictions. Installed released-artifact identity and successful committed-Link restart/traffic remain pre-publication acceptance. Stable publication/tag still needs separate Owner authorization.

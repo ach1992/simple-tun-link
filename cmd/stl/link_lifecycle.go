@@ -26,6 +26,7 @@ const (
 	// Input schema and response schema evolve independently. A future
 	// change to CLI output must not silently reinterpret existing requests.
 	desiredLinkSchemaVersion = 1
+	managedMTUSchemaVersion  = 2
 	maxDesiredLinkBytes      = 16 * 1024
 	lifecycleTimeLimit       = 5 * time.Minute
 	maxLinkJSONNesting       = 12
@@ -352,6 +353,24 @@ type desiredLinkRequestV1 struct {
 	Link          desiredLinkV1 `json:"link"`
 }
 
+// Input schema v2 intentionally extends only the pinned v1 Link object by
+// one endpoint-local MTU field. The v1 nested allowlist remains immutable.
+type desiredLinkRequestV2 struct {
+	SchemaVersion int           `json:"schema_version"`
+	Link          desiredLinkV2 `json:"link"`
+}
+
+type desiredLinkV2 struct {
+	desiredLinkV1
+	MTU domain.MTUPolicy `json:"mtu,omitzero"`
+}
+
+func (d desiredLinkV2) link() domain.Link {
+	link := d.desiredLinkV1.link()
+	link.MTU = d.MTU
+	return link
+}
+
 type desiredLinkV1 struct {
 	ID            domain.LinkID          `json:"id"`
 	DisplayName   string                 `json:"display_name,omitempty"`
@@ -422,20 +441,32 @@ func decodeDesiredLink(reader io.Reader) (domain.Link, error) {
 	if err := ensureUnambiguousJSON(input); err != nil {
 		return domain.Link{}, err
 	}
+	var version struct {
+		SchemaVersion int `json:"schema_version"`
+	}
+	if err := json.Unmarshal(input, &version); err != nil || version.SchemaVersion <= 0 {
+		return domain.Link{}, fmt.Errorf("missing or invalid desired Link schema_version")
+	}
 	decoder := json.NewDecoder(bytes.NewReader(input))
 	decoder.DisallowUnknownFields()
-	var request desiredLinkRequestV1
-	if err := decoder.Decode(&request); err != nil {
-		return domain.Link{}, fmt.Errorf("invalid desired Link request")
-	}
-	switch {
-	case request.SchemaVersion <= 0:
-		return domain.Link{}, fmt.Errorf("missing or invalid desired Link schema_version")
-	case request.SchemaVersion != desiredLinkSchemaVersion:
+	var link domain.Link
+	switch version.SchemaVersion {
+	case desiredLinkSchemaVersion:
+		var request desiredLinkRequestV1
+		if err := decoder.Decode(&request); err != nil {
+			return domain.Link{}, fmt.Errorf("invalid desired Link v1 request")
+		}
+		link = request.Link.link()
+	case managedMTUSchemaVersion:
+		var request desiredLinkRequestV2
+		if err := decoder.Decode(&request); err != nil {
+			return domain.Link{}, fmt.Errorf("invalid desired Link v2 request")
+		}
+		link = request.Link.link()
+	default:
 		return domain.Link{}, stlerr.New(stlerr.CodeUnsupported, "decode_link", "", "",
 			"unsupported desired Link schema version")
 	}
-	link := request.Link.link()
 	if err := link.Validate(); err != nil {
 		// Keep the existing typed CodeUnsupported (IPv6 Link Addresses,
 		// unsupported GRE encapsulations); the caller projects only its code.

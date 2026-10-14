@@ -40,6 +40,17 @@ func SetLinkUpByIndex(ctx context.Context, index int) error {
 	return routeLinkRequest(ctx, unix.RTM_NEWLINK, index, unix.IFF_UP, unix.IFF_UP, 0, nil)
 }
 
+// SetLinkMTUByIndex applies MTU to the exact index verified by the caller.
+// It never resolves a mutable interface name to perform the write.
+func SetLinkMTUByIndex(ctx context.Context, index int, mtu int) error {
+	if index <= 0 || mtu < 68 || mtu > 65535 {
+		return fmt.Errorf("valid interface index and IPv4 MTU are required")
+	}
+	var value [4]byte
+	binary.NativeEndian.PutUint32(value[:], uint32(mtu))
+	return routeLinkRequest(ctx, unix.RTM_NEWLINK, index, 0, 0, unix.IFLA_MTU, value[:])
+}
+
 // AddIPv4AddressByIndex assigns one IPv4 prefix to the exact observed kernel
 // link identity. The request is exclusive so a pre-existing address is not
 // silently adopted as state created by the current operation.
