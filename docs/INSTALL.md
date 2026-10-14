@@ -1,12 +1,19 @@
-# Install, update, and uninstall (Issue #11)
+# Install, update, and uninstall
 
-The public [`v0.1.0-rc.1` pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.1)
-is published, **not Stable**. Its tagged installer and downloaded AMD64/
-emulated ARM64 artifacts passed real independent Debian/Ubuntu installed
-lifecycle tests (Issue #11 closed). That tag predates the IPsec boot/crash
-recovery changes introduced in PR #81. The commands below show the
-placeholder `vX.Y.Z`; replace it only with an **existing published** tag.
-No installer runs during a clone, build, or ordinary `go test`.
+**For everyday installation and connecting two servers, start with the
+[README](../README.md)**. This page is the advanced installer/maintenance
+runbook, not a required first stop for a new operator.
+
+Current release-candidate line: [`v0.1.0-rc.2`](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.2)
+(**pre-release, not Stable**). It includes the IPsec recovery, diagnostics,
+managed-MTU and State v3 changes after historical `v0.1.0-rc.1`. Check the
+published release page and asset checksums before installing. The older
+rc.1 tagged-artifact lifecycle was verified separately in Issue #11;
+the newer rc.2 evidence and its limitations are in
+[Issue #12](https://github.com/ach1992/simple-tun-link/issues/12).
+Commands below use generic `vX.Y.Z` as a placeholder: replace it with an
+**actually published** tag, never a branch name. No installer runs during a
+clone, build, or ordinary `go test`.
 
 ## Supported deployment shape
 

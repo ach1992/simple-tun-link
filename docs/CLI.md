@@ -1,26 +1,21 @@
 # STL CLI — implemented read-only and explicit lifecycle commands
 
-The terminal menu supports local overview, guided **GRE Native** and
-**WireGuard/UDP** Create, Link management/status, selected diagnostics,
-preview-confirmed plaintext GRE/IPIP import, protected WireGuard v3 Quick
-Link import and conditionally admitted IPsec v2 (32-byte PSK) import.
-Focused real-kernel WireGuard bidirectional traffic and
-same-peer GRE coexistence were integrated in PR #53. Native-exclusive IPsec
-is now **conditionally operational**, with real IKEv2 ESP and NAT-T traffic
-verified in the native AMD64/ARM64 release E2E matrix (Issue #12).
-Separate [PR #81](https://github.com/ach1992/simple-tun-link/pull/81)
-test evidence records actual KVM whole-guest ESP/NAT-T automatic restore
-with two-way encrypted traffic,
-and both ESP and NAT-T abrupt-QEMU termination followed by automatic
-same-disk recovery (Issue #12). These new runtime fixes are not included in
-the published `v0.1.0-rc.1` pre-release, whose real AMD64/ARM64 installed
-artifact lifecycle has separately passed (Issue #11 closed).
-**Physical/external WAN NAT-router traversal** was not established by
-these isolated tests (Issue #12). Source integration and publication of a
-release containing these changes are distinct acceptance and approval steps.
-The versioned non-interactive ensure/remove lifecycle is implemented.
-This page distinguishes **read-only** observations from **explicit
-host-mutating** commands.
+The terminal menu supports guided **GRE Native** and **WireGuard/UDP**
+creation, Link management, diagnostics, preview-confirmed GRE/IPIP import,
+protected WireGuard v3 import, and conditionally admitted IPsec v2 import.
+**New operators should start with the [README](../README.md)** for install
+and a two-server walkthrough; this page owns precise CLI, JSON, pairing
+and advanced recovery contracts.
+
+The [`v0.1.0-rc.2` pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.2)
+contains the IPsec reboot/crash recovery, diagnostics and managed-MTU source
+improvements after historical rc.1. Real native AMD64/ARM64 multi-backend
+traffic and full-guest committed GRE/MTU reboot restoration are evidenced in
+[Issue #12](https://github.com/ach1992/simple-tun-link/issues/12).
+These isolated checks **do not prove physical WAN/NAT-router traversal**
+or a Stable release. The versioned non-interactive ensure/remove lifecycle
+is implemented. Below, **read-only** observations are distinct from commands
+that **mutate host state**.
 
 ## Task-first terminal menu
 
@@ -426,13 +421,10 @@ The [PR #81](https://github.com/ach1992/simple-tun-link/pull/81)
 full-guest KVM tests record a reboot that restored ESP and NAT-T automatically,
 including renewed IKE/CHILD SAs and
 bilateral encrypted packets; both ESP and NAT-T also passed abruptly
-SIGKILL-terminated QEMU and automatic same-disk recovery. This does **not**
-prove a physical WAN/NAT-router peer or that the older public pre-release
-contains the PR #81 recovery changes. The actual published `v0.1.0-rc.1` AMD64
-and emulated ARM64 installed-binary lifecycles passed in separate guests
-(Issue #11 closed). **External/physical WAN NAT** is separately tracked
-in Issue #12; publishing a release with the PR #81 fixes requires its own
-explicit authorization and verified release artifacts.
+SIGKILL-terminated QEMU and automatic same-disk recovery. This does **not** prove a physical WAN/NAT-router peer. The historical
+`v0.1.0-rc.1` pre-release predates PR #81; rc.2 includes those source
+improvements and has its own tagged-artifact acceptance in Issue #12.
+The physical WAN/NAT test remains an Owner-run post-publication activity.
 
 ## Explicit, optional TCP throughput — Issue #9
 
@@ -603,11 +595,10 @@ remaining task-first UI work (Issue #10) are separately tracked.
 Native-exclusive IPsec is already conditionally operational (Issue #7 closed),
 with real ESP/NAT-T E2E traffic.
 The [PR #81](https://github.com/ach1992/simple-tun-link/pull/81)
-tests separately demonstrated whole-guest KVM automatic ESP/NAT-T reboot
-recovery and genuine abrupt
-QEMU-crash recovery for **both** modes. **Physical WAN/NAT acceptance remains
-open** under Issue #12; these tests do not promote the older public
-`v0.1.0-rc.1` pre-release (Issue #11's installer acceptance is closed).
+tests separately established whole-guest KVM ESP/NAT-T reboot and abrupt
+QEMU termination recovery. These source improvements are in the rc.2
+candidate; **physical WAN/NAT acceptance remains unverified**, and the
+historical rc.1 installer lifecycle (Issue #11) is separate evidence.
 
 ## Explicit Link lifecycle commands — Issue #10
 
@@ -708,12 +699,10 @@ separately document real full-kernel KVM IPsec ESP/NAT-T automatic reboot
 and both ESP/NAT-T abrupt-VM-crash recovery. **Physical/
 external WAN NAT-router traversal** was not established by those tests
 (Issue #12). Such source acceptance does not itself authorize integration
-or publication of new release artifacts. The separately published
-`v0.1.0-rc.1` AMD64/ARM64 installed-
-artifact lifecycle passed and Issue #11 is closed; unresolved pairing,
-diagnostic and operator
-UX acceptance remains tracked under Issues #8–#10. A successful source/CLI
-test alone does not establish peer traffic or release readiness.
+or publication of new release artifacts. The historical published `v0.1.0-rc.1` installed-artifact lifecycle
+passed under Issue #11; rc.2 independently qualifies the later fixes
+under Issue #12. A successful source/CLI test alone does not establish
+peer traffic, WAN compatibility or release download integrity.
 
 ## Explicit plaintext GRE/IPIP setup-link export (Issue #8)
 
@@ -836,11 +825,10 @@ acceptance evidence separately records whole-guest ESP and NAT-T automatic
 reboot restoration with live bilateral encrypted packets,
 and genuine abrupt-QEMU SIGKILL followed by same-disk automatic recovery for
 **both ESP and NAT-T**. **Physical WAN/external NAT-router traversal** remains
-**unproven** under Issue #12. Separately, published `v0.1.0-rc.1` installer
-and ARM64-emulated/AMD64 real-guest artifact lifecycles were accepted under
-closed Issue #11, but the old pre-release contains **none of these new fixes**.
-Source acceptance, integration authorization, and publication of release
-artifacts are separate gates; none follows automatically from a passing test.
+**unproven** under Issue #12. The historical `v0.1.0-rc.1` installer lifecycle was accepted under
+Issue #11; the later fixes belong to rc.2, with separate candidate release
+testing in Issue #12. Source acceptance, integration and publication
+must still be evidenced separately.
 
 ## IPsec operational CLI and historical read-only diagnostic milestones
 

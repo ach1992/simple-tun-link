@@ -1,183 +1,144 @@
-# simple-tun-link
+# simple-tun-link (STL)
 
-**simple-tun-link** is a fast, simple, extensible point-to-point Layer-3 link engine for Linux.
+**Create and manage point-to-point IP tunnels between Linux servers.** STL provides a stable private IPv4 **Link Address** on each server, while the underlying tunnel can use GRE, IPIP, WireGuard, or conditionally available IPsec. You can create multiple independent Links, including different tunnels between the same pair of servers.
 
-It creates and manages independent **Link Addresses** between Linux servers over selected tunnel backends. Applications and higher-level transports can use those addresses like normal IPv4 addresses without needing to know whether the underlying Link uses GRE, IPIP, WireGuard, or IPsec/XFRM.
+**Latest:** [v0.1.0-rc.2](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.2) (**pre-release, not Stable**). This release includes automatic restoration of committed Links after reboot, endpoint-local managed MTU, and the IPsec/diagnostic fixes introduced after rc.1. Isolated native Linux and guest-reboot tests passed; **physical Internet/WAN/NAT-router deployments have not yet been independently validated**. Test on noncritical systems first.
 
-Canonical CLI: **stl**  
-Convenience alias: **stlink** (same executable/behavior when installed by the supported installer)
+The installed command is `stl`; `stlink` is an alias for the same program.
 
-> Status: **public v0.1.0-rc.1 pre-release; no Stable release**. The source
-> integrates GRE/IPIP Native/FOU/GUE, WireGuard v3 Quick Link, and the
-> **conditionally admitted**, native-exclusive IPsec/XFRM IKEv2 ESP/NAT-T
-> backend. Privileged six-simultaneous-Link E2E passed on native AMD64 and
-> ARM64 kernels with Ubuntu 24.04.5 and Debian 13 container userspaces
-> ([PR #77](https://github.com/ach1992/simple-tun-link/pull/77)).
-> Containers share each runner's kernel. Separate real Debian 13 and Ubuntu
-> 24.04 KVM guest kernels passed actual snapshot install/update/uninstall;
-> GRE Native and WireGuard passed whole-guest automatic restore after both
-> clean reboot and deliberately abrupt QEMU termination
-> ([Issue #11](https://github.com/ach1992/simple-tun-link/issues/11),
-> [Issue #12](https://github.com/ach1992/simple-tun-link/issues/12#issuecomment-6134259976)).
-> A real, public, installable [v0.1.0-rc.1 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.1)
-> has passed the AMD64/ARM64 release-artifact lifecycle (Issue #11 closed).
-> Subsequent [PR #81](https://github.com/ach1992/simple-tun-link/pull/81)
-> engineering evidence records real whole-guest KVM automatic IPsec ESP/NAT-T
-> reboot **and abrupt-QEMU-crash** restoration,
-> including bilateral encrypted traffic. The public pre-release does **not**
-> contain those new fixes. Physical WAN/NAT-router traversal is still
-> **unproven** (Issue #12); no stable release is authorized/published.
+## What you can create
 
-## Why
+| Tunnel backend | Carrier | Encrypted/authenticated? | Notes |
+| --- | --- | --- | --- |
+| GRE | Native, FOU/UDP, GUE/UDP | No | **Default**; easiest way to start |
+| IPIP | Native, FOU/UDP, GUE/UDP | No | Advanced plaintext alternative |
+| WireGuard | UDP | Yes | Guided encrypted Quick Link |
+| IPsec/XFRM | IKEv2 ESP / NAT-T | Yes | Advanced; only if STL-exclusive strongSwan runtime passes admission |
 
-The immediate product stays intentionally small:
+GRE keys distinguish tunnels but **do not encrypt traffic**. FOU/GUE are UDP encapsulations, not encryption. Use WireGuard or properly configured IPsec when confidentiality is required.
 
-- install quickly on two or more servers;
-- create and manage one or more independent point-to-point L3 Links;
-- allow multiple Links to different peers and multiple simultaneous Links to the same peer pair;
-- use GRE Native as the default path;
-- keep common setup automatic while preserving advanced controls;
-- provide interactive, manual, and versioned setup-link workflows;
-- diagnose MTU/connectivity problems without becoming a general network-management suite.
+## 1. Requirements
 
-STL is both a standalone tool and a reusable connectivity capability. External software of any kind can consume its stable CLI/JSON contract without reimplementing Link logic. STL does not prescribe what those consumers are or how they are built.
+- Two or more **Linux** servers you administer, with mutually reachable public/private **underlay IP addresses**. You must know the peer server's reachable IP.
+- **Ubuntu 22.04+ or Debian 11+**, on **amd64 or arm64**; kernel **5.4+**, iproute2 **5.1+**, systemd for reboot persistence. Actual backend/kernel support is checked per host. Prefer maintained distributions such as Ubuntu 24.04 LTS or Debian 13; Debian 11 requires working, signed, maintained package repositories.
+- `sudo`/root access on **both** hosts and `curl` for the download command. The installer uses the host's existing APT repositories to install missing dependencies; it does not rewrite repository settings.
+- Permit the chosen protocol between the **underlay** addresses in upstream firewalls/security groups. Native GRE uses IP protocol **47** (not TCP/UDP port 47); WireGuard uses the chosen UDP port; IPsec can require UDP **500/4500** and ESP depending on mode. STL does **not** configure cloud-provider firewalls or NAT/port forwarding for you.
+- Check that the proposed private **/31 Link Address pair** does not overlap networks/routes on either server. The Link Address is for applications **inside** the tunnel; the underlay address is what peers use to reach each other.
 
-## v0.1 backend scope
+## 2. Install on both servers
 
-| Backend | Mode | Security | v0.1 |
-|---|---|---:|---:|
-| GRE | Native | No encryption | Yes, default |
-| GRE | FOU / UDP | No encryption | Yes |
-| GRE | GUE / UDP | No encryption | Yes |
-| IPIP | Native | No encryption | Yes |
-| IPIP | FOU / UDP | No encryption | Yes |
-| IPIP | GUE / UDP | No encryption | Yes |
-| WireGuard | UDP | Encrypted/authenticated | Yes |
-| IPsec/XFRM | ESP / NAT-T | Encrypted/authenticated | Yes |
+The command below downloads the installer from the **pinned release tag**, saves and syntax-checks it in a private temporary file, and only then runs it with `sudo`. Review [the installer source](scripts/install.sh) before trusting root execution.
 
-VXLAN and Geneve are intentionally outside v0.1. They solve broader overlay/L2 use cases and can be reconsidered only when a concrete consumer needs them.
+```bash
+bash -c 'set -euo pipefail; umask 077; t=$(mktemp); trap '\''rm -f -- "$t"'\'' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 -o "$t" https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.2/scripts/install.sh; bash -n "$t"; sudo bash "$t" install --version v0.1.0-rc.2'
+```
 
-## Core terminology
+This defaults to **native GRE/IPIP** prerequisites. To include WireGuard from the start, add `--backends native,wireguard` to the final `install` command inside the wrapper. For optional IPsec dependencies, select `--backends all` **only after reviewing existing strongSwan services**: package installation can start a system service; STL refuses unsafe service ownership. The installer does not activate an IPsec tunnel by itself.
 
-- **Underlay Address** — reachable address used to establish the tunnel.
-- **Link Address** — point-to-point private address created by STL.
-- **Peer Link Address** — Link Address on the other endpoint.
-- **Backend** — GRE, IPIP, WireGuard, or IPsec/XFRM.
-- **Encapsulation** — backend-specific carrier such as Native, FOU, or GUE.
+Verify on each server:
 
-Consumer-specific concepts such as geography, product roles, orchestration policy, or application ownership are intentionally outside the STL data model. STL remains local/peer based and reusable.
+```bash
+stl version --json
+stlink version --json
+sudo stl menu
+```
 
-## Project map
+The command `sudo stl` also opens the interactive menu in a terminal. `stl help` displays all available CLI commands.
 
-- [Project specification](docs/PROJECT-SPEC.md) — canonical purpose, scope, constraints, and success criteria.
-- [Architecture](docs/ARCHITECTURE.md) — technical boundaries and runtime model.
-- [Supported environments](docs/SUPPORTED-ENVIRONMENTS.md) — platform and backend capability policy.
-- [Development](docs/DEVELOPMENT.md) — engineering rules and validation commands.
-- [Install and recovery](docs/INSTALL.md) — installer, update, guarded uninstall and operator recovery.
-- [Security](docs/SECURITY.md) — trust, credential, firewall, and setup-link rules.
-- [References and provenance](docs/REFERENCES.md) — predecessor/research inputs and license boundaries.
-- [Architecture decisions](docs/decisions/) — durable decisions and rationale.
-- GitHub Issues and milestone `v0.1.0` — authoritative unresolved work and execution backlog.
+## 3. Connect Server A and Server B (GRE Native)
 
-## Installation (pre-release)
+This is the simplest first Link; it **does not encrypt** traffic.
 
-The [installation runbook](docs/INSTALL.md) documents the one-command
-installer, checksum-verified atomic updates, the `stlink` alias, and guarded
-uninstall for the published [v0.1.0-rc.1 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.1).
-Use a real published tag; `vX.Y.Z` in examples is only a placeholder.
-The published `v0.1.0-rc.1` pre-release predates the IPsec reboot/crash
-recovery changes introduced in PR #81. Source-level acceptance does not
-certify what an installed release binary contains. For nonprivileged/offline
-test coverage, run `bash scripts/test-install.sh`.
+1. **On Server A:** run `sudo stl menu` and choose **Create Tunnel**. Keep **GRE Native** selected, enter Server B's **underlay IPv4**, review the detected local underlay address and proposed unused private **/31** pair, then confirm the displayed Link ID by typing it exactly.
+2. STL creates Server A's local Link and displays a receiver-oriented **`stl://` Setup Link**. Copy that Link to Server B using a trusted channel. Successful creation on A does **not** yet mean B is connected.
+3. **On Server B:** run `sudo stl menu`, choose **Import Setup Link**, paste the one-line `stl://` offer when prompted, inspect the redacted configuration preview, and enter the exact Link ID to confirm. Review local/peer addresses carefully before applying.
+4. **On both servers:** inspect the resulting Link using its ID and test communication between the two **Link Addresses**:
 
-## Read-only IPsec troubleshooting (pre-release)
+```bash
+sudo stl link list --json
+sudo stl link status YOUR_LINK_ID --json
+sudo stl link diagnose YOUR_LINK_ID
+sudo stl link diagnose --all
+```
 
-Use `stl doctor ipsec` for a plain-language report or `stl doctor ipsec --json`
-for stable reason identifiers, observed prerequisite state and suggested
-next steps. This command is read-only. It reports `activation_allowed:true`
-only when strict native-exclusive runtime admission independently attests
-the STL-owned strongSwan configuration, loaded service, process, VICI,
-UDP ports and relevant kernel ownership. Otherwise it reports an explicit
-blocked/unknown state and exits unsupported (4); it never installs,
-starts or adopts a service. An apparently empty process listing, non-observed
-UDP 500/4500 binding or readable XFRM inventory is not proof of ownership.
-Foreign or unverifiable strongSwan deployment blocks **only IPsec**, never
-GRE/IPIP/WireGuard. See [CLI](docs/CLI.md),
-[real IPsec acceptance](docs/operations/IPSEC-REAL-E2E.md) and
-[ADR-0005](docs/decisions/ADR-0005-scoped-vici-ipsec.md).
+For example, if the proposed Link Addresses are `10.80.20.0/31` (A) and `10.80.20.1/31` (B), applications on A should address B as `10.80.20.1`. These are **illustrative** addresses, not a fixed subnet STL always creates. Diagnostics attempt bounded real reachability checks; `status` alone verifies the local interface, **not peer connectivity**.
 
-## One-command Link health and troubleshooting
+Once successfully committed, the Link is saved and the STL-owned `simple-tun-link-restore.service` restores it after reboot when the underlay and peer are available. A setup interrupted **before successful creation** can simply be restarted as a new attempt.
 
-Inspect every configured Link from one place without repairing anything:
+## 4. Create an encrypted WireGuard Link
 
-~~~sh
-stl link diagnose --all
-stl link diagnose --all --json
-stl link diagnose --all --timeout 10m --json
-~~~
+Install both hosts with **WireGuard dependencies** (`--backends native,wireguard`). Then:
 
-The same feature is under **Tests & Diagnostics → all** in the terminal menu.
-For each GRE, IPIP or WireGuard Link, STL checks the live backend identity,
-uses bounded Link Address probes and reports observed MTU/quality/counters.
-One failing Link does not hide other Links. IPsec remains separately
-capability-gated: a blocked or unknown admission state must never be
-reported as healthy. Reports distinguish replied, blocked and unknown
-conditions with stable machine `reason_code` and safe `next_step`.
-A reply proves reachability only during the test; unknown is **not**
-silently promoted into a healthy result. Ordinary operator errors now
-include actionable, redacted recovery guidance too.
+1. On A: `sudo stl menu` -> **Create WireGuard Tunnel**. Enter B's underlay IPv4, choose valid **UDP ports** and the private Link Address pair, and select an **absolute output file** inside a root-owned/private (`0700`) directory for the receiver's one-time Quick Link.
+2. Confirm the Link ID. STL writes the **SENSITIVE** receiver handoff to a private (`0600`) file; it does **not** print that secret to normal status/JSON output.
+3. Transfer that file securely to B and use **Import Setup Link** from B's menu (or the protected stdin preview/import commands documented below). Verify the expected peer and confirm the Link ID.
+4. Run `sudo stl link diagnose YOUR_LINK_ID` on both hosts, and ensure the expected UDP path is open.
 
-See [CLI](docs/CLI.md) and [diagnostic contract](docs/DIAGNOSTICS.md).
-These read-only source-backed diagnostics are **not** a substitute for the
-separately required live release E2E tests in Issue #12.
+**Protect the handoff like a credential**: it can contain a receiver private key. Never post it in tickets/chats/logs, pass it as a command-line argument, or place it in a public directory. Peer setup and local interface status are not proof of an encrypted working connection until traffic has been tested. Advanced CLI: [pairing and recovery](docs/CLI.md#wireguard-sender-creation-recovery-and-credential-retirement).
 
-## WireGuard Quick Link (pre-release)
+## 5. Manage, test, and remove Links
 
-The menu now offers a guided encrypted WireGuard/UDP sender workflow alongside
-the default GRE Native path. The noninteractive `stl link create-wireguard`
-creates a new WireGuard Link and writes a one-time **SENSITIVE** v3 receiver
-setup URL only to an explicitly chosen, owner-private `0600` file. The peer
-uses redacted `stl link preview` and confirmed `stl link import`; failed
-sender activation can be resumed with `stl link resume-wireguard` using the
-same protected handoff. Sender creation durably stages its own private key
-and exact handoff-bound **public pending Link intent before exposing the
-SENSITIVE URL**, and successful commit consumes Pending atomically.
-Successful `stl link remove` preserves its private
-key for rollback; separate `stl link credential retire` requires a
-**Link-specific durable successful-Remove receipt** and live-resource absence,
-never an unrelated state file. [CLI instructions](docs/CLI.md) explain the
-exact commands, recovery boundaries and safety requirements. **The
-create/import workflow alone does not establish encrypted traffic or a safe
-handoff channel.** Real GRE/WireGuard traffic, distinct-peer/multi-peer
-scenarios, native AMD64/ARM64 six-Link E2E and GRE systemd restart have
-passed in their recorded test environments. GRE/WireGuard also passed
-full-guest reboot and abrupt KVM termination followed by automatic restore
-([Issue #12](https://github.com/ach1992/simple-tun-link/issues/12#issuecomment-6134259976)).
-The [PR #81](https://github.com/ach1992/simple-tun-link/pull/81)
-test record documents full-guest KVM IPsec ESP/NAT-T automatic reboot
-**and abrupt-QEMU-crash** recovery with real
-bilateral encrypted traffic and strongSwan ownership checks. The published
-[v0.1.0-rc.1 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.1)
-and its installed AMD64/ARM64 artifact lifecycle passed separate isolated
-acceptance (Issue #11 closed), but that tag predates these IPsec fixes.
-**External/physical WAN NAT-router traversal** is still unproven (Issue #12).
-No stable v0.1.0 release is yet certified. Deliver the SENSITIVE handoff
-through a trusted channel.
+All commands below act on the **local** server. `list`, `status`, `diagnose`, and `doctor` are observational; `ensure`, `remove`, and `restore` can **modify host network state**.
 
-## Development
+```bash
+sudo stl link list --json                  # All saved Links
+sudo stl link status YOUR_LINK_ID --json   # Owned local interface/status
+sudo stl link diagnose YOUR_LINK_ID       # Bounded connectivity / MTU / quality checks
+sudo stl link diagnose --all --json        # Check all saved Links independently
+sudo stl doctor ipsec                      # Read-only IPsec prerequisite/ownership check
+```
 
-The control plane is written in Go. Native backend packet traffic stays in the Linux kernel/native implementation.
+For a confirmed removal (use the exact stable ID twice):
 
-Current validation commands:
+```bash
+sudo stl link remove YOUR_LINK_ID --confirm YOUR_LINK_ID
+```
 
-~~~bash
-go test ./...
-go vet ./...
-test -z "$(gofmt -l .)"
-~~~
+For recovery of **already saved** Links after an operational problem, inspect their status first; `sudo stl link restore --all` explicitly reapplies owned saved Links. Diagnostics never repair automatically. For automation, use versioned JSON and idempotent `stl link ensure --stdin --json < desired-link.json`, following the [exact request schema](docs/CLI.md#explicit-link-lifecycle-commands--issue-10). Never parse menu text as an API.
 
-See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) before making implementation changes.
+**IPsec:** start with `sudo stl doctor ipsec`. IPsec is available only when an STL-owned, native-exclusive strongSwan setup passes checks; an existing foreign/ambiguous strongSwan deployment is **not adopted or stopped**. Installing IPsec dependencies alone does not meet that condition. Consult [IPsec operations](docs/operations/IPSEC-REAL-E2E.md) before attempting this advanced backend.
 
-## License
+## 6. Update safely
 
-Licensed under the [MIT License](LICENSE).
+To update an existing rc.1 installation to rc.2, fetch and review the installer **from rc.2**, then use the same secure one-command wrapper above with its last invocation changed from `install --version v0.1.0-rc.2` to **`update --version v0.1.0-rc.2`**. The terminal menu's Update task only shows instructions; it does not silently install anything.
+
+**Important State v3 compatibility warning:** after an rc.2 executable successfully writes **State schema v3** (used for managed local MTU), an older pre-v3 executable **cannot read that State**. **Binary-only rollback is not State rollback.** Before updating hosts with existing Links, quiesce STL mutations and keep a **consistent protected backup** of State **and separate credentials** with a tested recovery path. Do **not** manually edit `schema_version`, drop MTU fields, or delete interfaces/systemd files to force a downgrade. Prefer a compatible roll-forward if recovery is needed; follow the [full update/recovery runbook](docs/INSTALL.md#persisted-state-v3-upgrade-and-safe-rollback-boundary).
+
+## 7. Uninstall
+
+Remove Links deliberately, one at a time; **uninstall does not tear down active tunnels**:
+
+```bash
+sudo stl link list --json
+sudo stl link remove YOUR_LINK_ID --confirm YOUR_LINK_ID  # Repeat for each saved Link
+```
+
+Then use the **same trusted, inspected installer script** downloaded from the published tag:
+
+```bash
+sudo bash ./install.sh uninstall
+```
+
+The last command assumes you explicitly saved the official installer locally as `./install.sh`; the installation one-liner normally deletes its temporary copy. The uninstaller checks that no Links or Engine-owned restore unit remain and removes only its verified binary, `stlink` alias and ownership record. It **does not delete credentials/State, uninstall distro packages, or remove unrelated network resources**. See [safe uninstall steps](docs/INSTALL.md#uninstall-never-tear-down-live-links-implicitly).
+
+## Troubleshooting and safety
+
+- **No traffic:** verify each side's underlay route/firewall/security group, correct reciprocal Link Addresses, peer import, and `sudo stl link diagnose YOUR_LINK_ID`. A configured interface is not an end-to-end success signal.
+- **Backend unavailable:** inspect capability/prerequisite errors; `sudo stl doctor ipsec` is read-only. One unavailable optional backend must not disable unrelated backends.
+- **MTU problems:** use Link diagnostics and, when needed, the **endpoint-local** managed `auto` or `manual` MTU policy. Auto is a conservative local bound, **not** a measured end-to-end PMTU guarantee. Do not copy A's local MTU setting to B blindly.
+- **Partial failure:** check `list`, `status`, and the reported `reason_code`/`next_step`. Never blindly retry or delete unverified/foreign kernel resources after an uncertain committed operation; consult [operator recovery](docs/OPERATOR-RECOVERY.md).
+- **Secrets and encryption:** GRE/IPIP are plaintext. Handle WireGuard/IPsec setup offers and keys privately. STL does not guarantee NAT traversal, traffic camouflage, or unrestricted network accessibility.
+
+## More information
+
+The **README is the quick-start and everyday user guide**. Detailed reference and maintainer material stays separate:
+
+- [Full command / JSON / pairing reference](docs/CLI.md)
+- [Installer, updates, State v3 rollback, and safe uninstall](docs/INSTALL.md)
+- [Supported operating systems and capabilities](docs/SUPPORTED-ENVIRONMENTS.md)
+- [Security boundaries](docs/SECURITY.md)
+- [Diagnosing Links](docs/DIAGNOSTICS.md)
+- [Project specification / architecture](docs/PROJECT-SPEC.md) / [architecture](docs/ARCHITECTURE.md)
+- [Release files and validation](docs/RELEASE-ARTIFACTS.md)
+
+Source: [GitHub](https://github.com/ach1992/simple-tun-link) | License: [MIT](LICENSE).
