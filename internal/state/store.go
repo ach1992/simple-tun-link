@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,13 +10,15 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/ach1992/simple-tun-link/internal/domain"
 )
 
 const (
-	SchemaVersion       = 2
+	SchemaVersion       = 3
 	legacySchemaVersion = 1
+	preMTUSchemaVersion = 2
 	DefaultRoot         = "/var/lib/simple-tun-link"
 )
 
@@ -212,7 +215,17 @@ func (s *FileStore) loadUnlocked() (Snapshot, error) {
 	if info.Size() > maxStateBytes {
 		return Snapshot{}, fmt.Errorf("state file exceeds %d bytes", maxStateBytes)
 	}
-	decoder := json.NewDecoder(io.LimitReader(f, maxStateBytes+1))
+	// Parse the exact same bounded bytes for strict decoding and legacy
+	// version checks. A legacy document must not gain managed-host behavior
+	// merely because the current domain.Link type now recognizes MTU.
+	raw, err := io.ReadAll(io.LimitReader(f, maxStateBytes+1))
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("read state: %w", err)
+	}
+	if len(raw) > maxStateBytes {
+		return Snapshot{}, fmt.Errorf("state file exceeds %d bytes", maxStateBytes)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	var snapshot Snapshot
 	if err := decoder.Decode(&snapshot); err != nil {
@@ -225,6 +238,9 @@ func (s *FileStore) loadUnlocked() (Snapshot, error) {
 		}
 		return Snapshot{}, fmt.Errorf("decode state trailing data: %w", err)
 	}
+	if err := rejectLegacyMTUFields(raw, snapshot.SchemaVersion); err != nil {
+		return Snapshot{}, err
+	}
 	snapshot, err = migrateSnapshot(snapshot)
 	if err != nil {
 		return Snapshot{}, err
@@ -236,9 +252,48 @@ func (s *FileStore) loadUnlocked() (Snapshot, error) {
 	return snapshot, nil
 }
 
+// The v1/v2 state formats predate the endpoint-local MTU policy. Reject
+// its presence anywhere in a legacy state document (including pending
+// intents and journals), even with a null/empty value or alternate JSON
+// key casing. This freezes the old shapes before any state is promoted.
+func rejectLegacyMTUFields(raw []byte, version int) error {
+	if version != legacySchemaVersion && version != preMTUSchemaVersion {
+		return nil
+	}
+	var document any
+	if err := json.Unmarshal(raw, &document); err != nil {
+		return fmt.Errorf("inspect legacy state: %w", err)
+	}
+	if containsMTUField(document) {
+		return fmt.Errorf("state schema_version %d cannot contain MTU policy; use a valid pre-MTU state document", version)
+	}
+	return nil
+}
+
+func containsMTUField(value any) bool {
+	switch item := value.(type) {
+	case map[string]any:
+		for key, child := range item {
+			if strings.EqualFold(key, "mtu") || containsMTUField(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range item {
+			if containsMTUField(child) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func migrateSnapshot(snapshot Snapshot) (Snapshot, error) {
 	switch snapshot.SchemaVersion {
 	case SchemaVersion:
+		return snapshot, nil
+	case preMTUSchemaVersion:
+		snapshot.SchemaVersion = SchemaVersion
 		return snapshot, nil
 	case legacySchemaVersion:
 		if len(snapshot.PendingSenders) > 0 || len(snapshot.PendingIPsec) > 0 ||

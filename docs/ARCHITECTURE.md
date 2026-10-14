@@ -149,7 +149,7 @@ A future userspace carrier may legitimately introduce a data-plane helper, but i
 Persist what is needed to recreate and manage successfully committed Links. Incomplete setup is not a product asset that needs same-ID resumability; an operator can start again with a fresh identity. Protected internal staging/journals may remain to bound crash side effects and must never be misinterpreted as a committed Link or permit blind deletion of uncertain resources.
 
 Direction:
-- versioned state schema; current schema v2 adds backend-specific GRE options; compatible v1 state is migrated in memory, while legacy GRE FOU/GUE/options that lacked sufficient identity are rejected for explicit regeneration rather than guessed;
+- versioned state schema; historical v2 introduced backend-specific GRE options, and current v3 adds endpoint-local managed MTU. Compatible v1/v2 state migrates in memory without any managed MTU policy; an `mtu` field in pre-v3 state (including empty/explicit unmanaged) is rejected rather than assigned new host-write semantics. Legacy GRE FOU/GUE/options without sufficient identity remain rejected for explicit regeneration rather than guessed;
 - Links are a collection, not a singleton;
 - zero or more Links may exist on a host, including multiple independent Links to the same peer underlay endpoint pair;
 - one stable Link ID independent of interface display name and peer address;
