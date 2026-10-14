@@ -128,10 +128,13 @@ retains both kernel checks and executes the full preexisting IPIP matrix.
 Before privileged packet tests, each native runner also builds the exact
 clean source into checksummed linux/amd64 and linux/arm64 **snapshot**
 artifacts and executes only its own native binary through a fresh offline,
-unprivileged, nondefault-prefix installer/alias/uninstaller smoke. See
+unprivileged, nondefault-prefix installer/alias smoke. See
 `scripts/e2e/snapshot-install-smoke.sh`. This validates source/manifest/
-installed-binary identity and safe installer integration; it is **not**
-a final tagged/public artifact, network-backed installed Link lifecycle,
+installed-binary identity and offline installer integration; it does **not**
+invoke production uninstall's host-wide state/systemd preflight. That safety
+contract and offline uninstall transactions are separately exercised by
+`scripts/test-install.sh`. It is **not** a final tagged/public artifact,
+network-backed installed Link lifecycle,
 full guest reboot, or Stable release proof. Record its explicit PASS marker
 separately from kernel traffic evidence.
 

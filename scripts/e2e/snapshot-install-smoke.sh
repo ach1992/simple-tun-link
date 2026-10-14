@@ -63,12 +63,14 @@ alias_version="$("$scratch/prefix/bin/stlink" version --json)"
    $actual_version == *"\"commit\":\"$source_sha\""* ]] ||
   fail 'executable-reported identity mismatch'
 
-bash scripts/install.sh uninstall --prefix "$scratch/prefix"
-[[ ! -e $installed && ! -L "$scratch/prefix/bin/stlink" ]] ||
-  fail 'uninstall retained executable or alias'
+# Canonical uninstall is intentionally NOT invoked here: the real binary
+# checks the host's root-owned state and systemd restore-unit identity even
+# for a custom offline prefix. CI runners do not guarantee either is safe or
+# absent. The trap removes only this test's private temporary prefix.
+# Offline uninstall transaction regression is owned by test-install.sh.
 [[ -z "$(git status --porcelain)" ]] || fail 'smoke modified source checkout'
 
 printf 'SNAPSHOT_NATIVE_ARCH=%s\n' "$arch"
 printf 'SNAPSHOT_SOURCE_SHA=%s\n' "$source_sha"
 printf 'SNAPSHOT_NATIVE_BINARY_SHA256=%s\n' "$native_sha"
-echo 'SNAPSHOT_NATIVE_INSTALL_ALIAS_UNINSTALL=PASS'
+echo 'SNAPSHOT_NATIVE_INSTALL_ALIAS=PASS'
