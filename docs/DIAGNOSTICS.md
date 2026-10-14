@@ -364,12 +364,27 @@ owned interface and saved local Link Address as the source, without a
 gateway, and rechecks that the canonical desired Link has not changed. It
 holds the canonical Engine per-Link lock during the test to prevent
 concurrent STL Remove/Ensure/Restore for that Link.
-Only then may it execute one bounded iperf3 TCP client for 1–10 seconds,
-binding both the source Link Address and Linux interface via the
-`--bind local%device`/SO_BINDTODEVICE contract. A missing/unsupported
-tool, changed route, no peer reply, unverified interface, absent listener,
+Before the first throughput packet, a bounded local `iperf3 --version`
+capability gate rejects unavailable, malformed, unknown, pre-3.11, and
+unverified builds. esnet/iperf PR #1153 fixed an affected pre-3.11
+`--bind-dev` behavior that applied to the TCP control socket but not
+the separate TCP data socket. Verified 3.x versions at least 3.11 may
+execute one bounded 1–10-second iperf3 client with explicit
+`--bind <local-Link-address> --bind-dev <owned-interface>`, requesting
+SO_BINDTODEVICE for the TCP data stream. A missing/unsupported tool,
+changed route, no peer reply, unverified interface, absent listener,
 unexpected exit, output overflow or malformed/partial iperf JSON blocks
 or fails without falling back to an unbound/public-underlay test.
+
+The native regression suite additionally runs an isolated iperf3 TCP
+benchmark between fresh private Linux network namespaces inside
+disconnected disposable Ubuntu/Debian guests on native AMD64/ARM64. It
+requires **two distinct TCP socket file descriptors** to have both
+successful SO_BINDTODEVICE calls and TCP peer connects (control plus
+data), and verifies multi-megabyte transfer over the intended veth
+interface with no comparable transfer on a parallel decoy interface.
+This is local iperf3 socket/data-path proof, not an authorized physical
+WAN benchmark or production network test.
 
 The short versioned report contains **only** numeric sent/received bytes
 and Mbit/s, protocol, direction, requested duration, backend and Link ID.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,9 +9,11 @@ import (
 	"io"
 	"math"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ach1992/simple-tun-link/internal/diagnostics"
 	"github.com/ach1992/simple-tun-link/internal/domain"
@@ -24,6 +27,32 @@ const (
 	defaultThroughputSeconds = 3
 	maxThroughputSeconds     = 10
 )
+
+// iperf3 3.10 exposed --bind-dev but could leave TCP *data* sockets
+// unbound (esnet/iperf #1153, fixed in 3.11). A successful run on
+// 3.10 does not prove that high-rate traffic stayed on the chosen Link.
+// Only this known-safe 3.x release family is accepted.
+var iperf3TCPBindVersion = regexp.MustCompile(`^iperf(?:3)?[ \t]+(?:version[ \t]+)?3\.([0-9]{1,3})(?:\.([0-9]{1,3}))?(?:[ \t(]|$)`)
+
+func knownSafeIperf3TCPDeviceBinding(raw []byte) bool {
+	if len(raw) == 0 || len(raw) > 2048 || !utf8.Valid(raw) || bytes.IndexByte(raw, 0) >= 0 {
+		return false
+	}
+	// Trust only the first line, not a later injected banner/help string.
+	first := string(raw)
+	if i := strings.IndexByte(first, '\n'); i >= 0 {
+		first = first[:i]
+	}
+	if len(first) > 240 || strings.ContainsRune(first, '\r') {
+		return false
+	}
+	match := iperf3TCPBindVersion.FindStringSubmatch(first)
+	if len(match) != 3 {
+		return false
+	}
+	minor, err := strconv.Atoi(match[1])
+	return err == nil && minor >= 11
+}
 
 type linkThroughputResult struct {
 	SchemaVersion int            `json:"schema_version"`
@@ -246,14 +275,36 @@ func linkThroughputCommand(args []string, out, errOut io.Writer, opts *runtimeOp
 	if tool == nil {
 		tool = linux.ExecRunner{Timeout: time.Duration(seconds+6) * time.Second}
 	}
+	// A local, bounded version inspection MUST complete before the first
+	// iperf3 client socket is opened. Older 3.x versions could bind the
+	// control socket but silently leave the TCP data socket unbound.
+	versionCtx, versionCancel := context.WithTimeout(ctx, 3*time.Second)
+	versionOutput, versionErr := tool.RunBounded(versionCtx,
+		linux.CaptureLimits{Stdout: 2048, Stderr: 1024}, "iperf3", "--version")
+	versionTimedOut := versionCtx.Err() != nil
+	versionCancel()
+	compatible := versionErr == nil && !versionTimedOut && knownSafeIperf3TCPDeviceBinding(versionOutput.Stdout)
+	clear(versionOutput.Stdout)
+	clear(versionOutput.Stderr)
+	if !compatible {
+		code, reason := stlerr.CodeUnsupported, "throughput_tool_incompatible"
+		next := "Use iperf3 >= 3.11 with reliable TCP --bind-dev support; do not use older or unverified builds."
+		if errors.Is(versionErr, exec.ErrNotFound) {
+			reason = "throughput_tool_unavailable"
+			next = "Install iperf3 >= 3.11 before explicitly retrying; no throughput traffic was sent."
+		}
+		return throughputFailure(out, errOut, asJSON, code, reason,
+			"cannot verify local iperf3 TCP data-socket binding capability", next)
+	}
 	benchCtx, finish := context.WithTimeout(ctx, time.Duration(seconds+6)*time.Second)
 	defer finish()
-	// On Linux iperf3 -B local%dev uses SO_BINDTODEVICE. Older iperf3
-	// versions or missing bind privileges must error, not silently fall
-	// back to an unbound public-interface connection.
+	// The explicit Linux --bind-dev form requests SO_BINDTODEVICE on
+	// control AND data TCP sockets in the known-safe version family.
+	// Never fall back to address-only binding after a tool failure.
 	result, err := tool.RunBounded(benchCtx, linux.CaptureLimits{Stdout: 64 << 10, Stderr: 2048},
 		"iperf3", "--client", record.Desired.Addresses.Peer.Addr().String(),
-		"--bind", record.Desired.Addresses.Local.Addr().String()+"%"+iface,
+		"--bind", record.Desired.Addresses.Local.Addr().String(),
+		"--bind-dev", iface,
 		"--port", "5201", "--time", strconv.Itoa(seconds),
 		"--connect-timeout", "2000", "--json")
 	if err != nil || benchCtx.Err() != nil {

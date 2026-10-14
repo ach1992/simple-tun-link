@@ -456,11 +456,17 @@ The canonical local Link ID is mandatory **twice**. Allowed duration is 1–10
 seconds (default 3); only one outbound TCP client stream goes to the
 committed peer **Link Address** and fixed TCP/5201 port. No arbitrary
 destination, server launch, firewall change, UDP test, reverse traffic or
-daemon control is possible through STL. The client uses iperf3
-`--bind <local-Link-address>%<exact-owned-interface>`; on Linux this
-requests `SO_BINDTODEVICE`. An unsupported iperf3 version, unavailable
-tool, insufficient bind privilege or failed route/identity/reachability
-preflight blocks the test **without an unbound retry**. The command
+daemon control is possible through STL. Before sending TCP throughput,
+STL checks a bounded local `iperf3 --version` response and accepts only
+known-safe iperf3 **3.11 or newer in the 3.x family**. Versions 3.9 and
+3.10 (including 3.10.1), unknown builds, missing tools and failed version
+reads are **rejected without starting any throughput client**: upstream
+iperf3 prior to 3.11 could bind the control socket while leaving TCP
+data sockets unbound (esnet/iperf PR #1153). In accepted builds the client
+uses explicit `--bind <local-Link-address> --bind-dev <exact-owned-interface>`;
+on Linux this invokes `SO_BINDTODEVICE` on the data stream. Insufficient
+bind privilege or failed route/identity/reachability preflight blocks
+the test **without an unbound retry**. The command
 holds the canonical per-Link Engine lock during the short traffic window;
 STL-driven concurrent remove/reconfigure must wait.
 

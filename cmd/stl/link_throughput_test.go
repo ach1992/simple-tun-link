@@ -42,11 +42,14 @@ func (r *throughputPreflightRunner) Run(ctx context.Context, name string, args .
 }
 
 type throughputFakeTool struct {
-	calls     int
-	args      []string
-	errorText string
-	output    string
-	onCall    func()
+	calls         int // throughput client attempts only
+	versionCalls  int
+	args          []string
+	errorText     string
+	output        string
+	versionOutput string
+	versionErr    error
+	onCall        func()
 }
 
 func (f *throughputFakeTool) Run(context.Context, string, ...string) (linux.CommandResult, error) {
@@ -54,6 +57,19 @@ func (f *throughputFakeTool) Run(context.Context, string, ...string) (linux.Comm
 }
 
 func (f *throughputFakeTool) RunBounded(_ context.Context, limits linux.CaptureLimits, name string, args ...string) (linux.CommandResult, error) {
+	if name != "iperf3" {
+		return linux.CommandResult{}, errors.New("unexpected executable")
+	}
+	if len(args) == 1 && args[0] == "--version" {
+		f.versionCalls++
+		if limits.Stdout != 2048 || limits.Stderr != 1024 {
+			return linux.CommandResult{}, errors.New("unbounded version read")
+		}
+		if f.versionErr != nil {
+			return linux.CommandResult{}, f.versionErr
+		}
+		return linux.CommandResult{Stdout: []byte(f.versionOutput)}, nil
+	}
 	f.calls++
 	f.args = append([]string{name}, args...)
 	if f.onCall != nil {
@@ -72,7 +88,7 @@ func fixtureThroughput(t *testing.T) (string, domain.Link, *runtimeOptions, *thr
 	t.Helper()
 	root, link, inspector, read := fixtureDiagnose(t)
 	route := &throughputPreflightRunner{readGREProbeRunner: read}
-	tool := &throughputFakeTool{output: goodIperfJSON}
+	tool := &throughputFakeTool{output: goodIperfJSON, versionOutput: "iperf 3.16 (cJSON 1.7.15)\n"}
 	opts := &runtimeOptions{
 		stateRoot:        root,
 		backends:         []backend.Backend{inspector},
@@ -107,10 +123,12 @@ func TestThroughputExplicitOptInProvesOwnedInterfaceRouteAndNumericResult(t *tes
 		t.Fatalf("unsafe/incorrect numeric projection: %+v raw=%s", res, output)
 	}
 	expected := "iperf3 --client " + link.Addresses.Peer.Addr().String() +
-		" --bind " + link.Addresses.Local.Addr().String() + "%" + route.name +
+		" --bind " + link.Addresses.Local.Addr().String() +
+		" --bind-dev " + route.name +
 		" --port 5201 --time 3 --connect-timeout 2000 --json"
-	if tool.calls != 1 || strings.Join(tool.args, " ") != expected {
-		t.Fatalf("unbounded/unscoped iperf3 call: calls=%d argv=%s", tool.calls, tool.args)
+	if tool.versionCalls != 1 || tool.calls != 1 || strings.Join(tool.args, " ") != expected {
+		t.Fatalf("unbounded/unscoped iperf3 call: version=%d calls=%d argv=%s",
+			tool.versionCalls, tool.calls, tool.args)
 	}
 	if route.probes != 6 {
 		t.Fatalf("link reachability not verified before throughput: %d probes", route.probes)
@@ -223,5 +241,76 @@ func TestThroughputNormalDiagnoseNeverStartsTraffic(t *testing.T) {
 	code, _, errText := callThroughput([]string{"link", "diagnose", string(link.ID), "--json"}, opts)
 	if code != 0 || errText != "" || tool.calls != 0 {
 		t.Fatalf("ordinary read-only diagnostics unexpectedly invoked throughput: code=%d stderr=%s calls=%d", code, errText, tool.calls)
+	}
+}
+
+func TestThroughputIperf3VersionParserRejectsUnsafeBeforeClient(t *testing.T) {
+	for _, tc := range []struct {
+		name, output string
+		accept       bool
+	}{
+		{"too old 3.9", "iperf 3.9 (cJSON 1.7.13)\n", false},
+		{"affected 3.10", "iperf 3.10 (cJSON 1.7.13)\n", false},
+		{"affected patch 3.10.1", "iperf 3.10.1 (cJSON 1.7.13)\n", false},
+		{"patched 3.11", "iperf 3.11 (cJSON 1.7.13)\n", true},
+		{"3.11.1", "iperf 3.11.1 (cJSON 1.7.13)\n", true},
+		{"recent 3.16", "iperf 3.16 (cJSON 1.7.15)\n", true},
+		{"recent 3.21", "iperf 3.21 (cJSON 1.7.15)\n", true},
+		{"wrong major", "iperf 4.1 (cJSON 1.7.15)\n", false},
+		{"unrecognized banner", "Welcome iperf 3.16\n", false},
+		{"unrecognized executable", "not iperf3\n", false},
+		{"embedded later line", "unsupported\niperf 3.16\n", false},
+		{"pre release", "iperf 3.11-rc1\n", false},
+		{"injected zero", "iperf 3.11\x00", false},
+		{"missing", "", false},
+		{"oversized", strings.Repeat("x", 2049), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if knownSafeIperf3TCPDeviceBinding([]byte(tc.output)) != tc.accept {
+				t.Fatalf("version classified incorrectly: %q", tc.output)
+			}
+		})
+	}
+}
+
+func TestThroughputRejectsAffectedIperf3VersionsBeforeAnyClientPacket(t *testing.T) {
+	for _, version := range []string{
+		"iperf 3.9 (cJSON 1.7.13)\n", "iperf 3.10 (cJSON 1.7.13)\n",
+		"iperf 3.10.1 (cJSON 1.7.13)\n", "unknown tool version",
+		"Welcome\niperf 3.16\n",
+	} {
+		t.Run(strings.TrimSpace(version), func(t *testing.T) {
+			_, link, opts, tool, _ := fixtureThroughput(t)
+			tool.versionOutput = version
+			id := string(link.ID)
+			code, out, errText := callThroughput([]string{"link", "throughput", id, "--confirm", id, "--json"}, opts)
+			if code != 4 || tool.versionCalls != 1 || tool.calls != 0 ||
+				!strings.Contains(out, "throughput_tool_incompatible") ||
+				strings.Contains(out+errText, version) {
+				t.Fatalf("unsafe version reached client or leaked: code=%d version=%d calls=%d out=%s err=%s",
+					code, tool.versionCalls, tool.calls, out, errText)
+			}
+		})
+	}
+}
+
+func TestThroughputVersionFailureRedactedAndNoUnboundFallback(t *testing.T) {
+	_, link, opts, tool, _ := fixtureThroughput(t)
+	id := string(link.ID)
+	tool.versionErr = errors.New("secret peer_key=hidden raw version error")
+	code, out, errText := callThroughput([]string{"link", "throughput", id, "--confirm", id, "--json"}, opts)
+	if code != 4 || tool.calls != 0 || tool.versionCalls != 1 ||
+		!strings.Contains(out, "throughput_tool_incompatible") ||
+		strings.Contains(out+errText, "secret") || strings.Contains(out+errText, "peer_key") {
+		t.Fatalf("version error leaked/retried: %d %s %s", code, out, errText)
+	}
+	tool.versionErr = nil
+	tool.versionOutput = "iperf 3.16 (cJSON 1.7.15)\n"
+	tool.errorText = "secret data connection failure"
+	code, out, errText = callThroughput([]string{"link", "throughput", id, "--confirm", id, "--json"}, opts)
+	if code == 0 || tool.calls != 1 || tool.versionCalls != 2 ||
+		!strings.Contains(out, "throughput_server_unavailable") ||
+		strings.Contains(out+errText, "secret") {
+		t.Fatalf("client failure was retried or leaked: %d %s %s", code, out, errText)
 	}
 }
