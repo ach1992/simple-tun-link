@@ -63,6 +63,15 @@ func (e *Engine) CreateWireGuardSender(ctx context.Context, desired domain.Link,
 	if _, pending := snapshot.FindPendingSender(desired.ID); pending {
 		return Result{}, stlerr.New(stlerr.CodeConflict, "create_wireguard", string(desired.ID), "", "another sender transaction owns this Link ID; reconcile its pending handoff")
 	}
+	// IPsec retirement receipts reserve Link identity across ALL backends,
+	// including after the underlying PSK was retired. Refuse before creating
+	// any new local WireGuard key or exposing a receiver handoff.
+	if _, retired := snapshot.FindIPsecRemovalReceipt(desired.ID); retired {
+		return Result{}, stlerr.New(stlerr.CodeConflict, "create_wireguard", string(desired.ID), "", "prior IPsec retirement reserves this Link ID; create a new identity")
+	}
+	if _, pendingIPsec := snapshot.FindPendingIPsec(desired.ID); pendingIPsec {
+		return Result{}, stlerr.New(stlerr.CodeConflict, "create_wireguard", string(desired.ID), "", "IPsec pending intent already reserves this Link ID")
+	}
 	if _, ready := e.backends.Get(desired.Backend); !ready {
 		return Result{}, stlerr.New(stlerr.CodeUnsupported, "create_wireguard", string(desired.ID), "", "WireGuard backend unavailable")
 	}
@@ -79,6 +88,12 @@ func (e *Engine) CreateWireGuardSender(ctx context.Context, desired domain.Link,
 		}
 		if _, exists := s.FindPendingSender(desired.ID); exists {
 			return fmt.Errorf("sender staging already reserved this ID")
+		}
+		if _, retired := s.FindIPsecRemovalReceipt(desired.ID); retired {
+			return fmt.Errorf("retired IPsec identity cannot stage a WireGuard sender")
+		}
+		if _, pendingIPsec := s.FindPendingIPsec(desired.ID); pendingIPsec {
+			return fmt.Errorf("IPsec sender or recipient already reserves this Link ID")
 		}
 		s.DeleteRemovalReceipt(desired.ID)
 		s.PendingSenders = append(s.PendingSenders, state.PendingSender{Link: desired, HandoffSHA256: digest})
@@ -140,6 +155,9 @@ func (e *Engine) ResumeWireGuardSender(ctx context.Context, desired domain.Link,
 	}
 	if _, removed := snapshot.FindRemovalReceipt(desired.ID); removed {
 		return Result{}, stlerr.New(stlerr.CodeConflict, "resume_wireguard", string(desired.ID), "", "Link has been durably removed; Resume cannot resurrect it")
+	}
+	if _, retired := snapshot.FindIPsecRemovalReceipt(desired.ID); retired {
+		return Result{}, stlerr.New(stlerr.CodeConflict, "resume_wireguard", string(desired.ID), "", "prior IPsec retirement reserves this Link ID; Resume cannot resurrect it")
 	}
 	public, err := keys.LocalPublicIdentity(desired.ID)
 	if err != nil || public != desired.WireGuard.LocalPublicKey {

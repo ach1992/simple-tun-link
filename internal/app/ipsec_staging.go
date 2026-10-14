@@ -152,6 +152,13 @@ func (e *Engine) stageIPsec(ctx context.Context, desired domain.Link, secret []b
 	if _, exists := snapshot.FindRemovalReceipt(desired.ID); exists {
 		return stlerr.New(stlerr.CodeConflict, "ipsec_stage", string(desired.ID), "ipsec", "credential retirement receipt reserves Link identity")
 	}
+	// An IPsec removal receipt remains a permanent cross-backend Link-ID
+	// tombstone, including after PSK retirement. Check before PutNew OR
+	// RequireExistingExact: a previously retired identity must not acquire
+	// another protected credential or be accepted as a pending sender/peer.
+	if _, retired := snapshot.FindIPsecRemovalReceipt(desired.ID); retired {
+		return stlerr.New(stlerr.CodeConflict, "ipsec_stage", string(desired.ID), "ipsec", "prior IPsec retirement reserves Link identity; create a new Link ID")
+	}
 	if err := rejectResourceConflicts(snapshot, desired.ID, claims); err != nil {
 		return err
 	}
@@ -188,6 +195,11 @@ func (e *Engine) stageIPsec(ctx context.Context, desired domain.Link, secret []b
 			}
 			if _, receipt := s.FindRemovalReceipt(desired.ID); receipt {
 				return fmt.Errorf("removal receipt overlaps IPsec intent")
+			}
+			// Revalidate at the atomic state boundary as well as before any
+			// protected key-store side effect. Keep all receipt evidence intact.
+			if _, receipt := s.FindIPsecRemovalReceipt(desired.ID); receipt {
+				return fmt.Errorf("prior IPsec retirement overlaps staged identity")
 			}
 			if err := rejectResourceConflicts(*s, desired.ID, claims); err != nil {
 				return err

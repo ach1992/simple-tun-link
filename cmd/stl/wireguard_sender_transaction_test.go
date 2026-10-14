@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/netip"
 	"os"
@@ -261,5 +263,55 @@ func TestPendingSenderReservationBlocksOrdinaryEnsureAndSecondCreator(t *testing
 	after, err := state.NewFileStore(root).Load(context.Background())
 	if err != nil || len(after.PendingSenders) != 1 || len(after.Links) != 0 || len(fake.applies) != 0 {
 		t.Fatal("unrelated Ensure mutated still-pending sender intent")
+	}
+}
+
+// Both unretired and retired IPsec Remove receipts globally reserve the
+// identity. In particular the sender must refuse BEFORE persisting its own
+// protected WireGuard private key or publishing a SENSITIVE handoff.
+func TestWireGuardSenderIPsecRetirementRejectsBeforeKeyOrPending(t *testing.T) {
+	for _, retired := range []bool{false, true} {
+		label := "receipt_not_retired"
+		if retired {
+			label = "receipt_retired"
+		}
+		t.Run(label, func(t *testing.T) {
+			root, parent, fake, opts := newCreatorTest(t)
+			link, _ := makeLifecycleDesired(t, "e", "10.70.65.0/31")
+			pskDigest := sha256.Sum256([]byte("test-only-ipsec-retirement-identity"))
+			store := state.NewFileStore(root)
+			if err := store.Update(context.Background(), func(s *state.Snapshot) error {
+				s.IPsecRemovalReceipts = append(s.IPsecRemovalReceipts, state.IPsecRemovalReceipt{
+					LinkID: link.ID, PSKSHA256: hex.EncodeToString(pskDigest[:]), Retired: retired,
+				})
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			calledWriter := false
+			opts.writeHandoff = func(string, []byte) error {
+				calledWriter = true
+				return errors.New("SENSITIVE WRITER MUST NOT RUN")
+			}
+			output := filepath.Join(parent, "must-not-create.stl")
+			code, stdout, stderr := creatorRun([]string{
+				"link", "create-wireguard", "--stdin", "--output", output, "--json",
+			}, creatorRequest(t, link), opts)
+			if code == 0 || stderr != "" || calledWriter || len(fake.applies) != 0 ||
+				strings.Contains(stdout, "stl://") || strings.Contains(stdout, "SENSITIVE WRITER MUST NOT RUN") {
+				t.Fatalf("IPsec retired Link identity reached protected sender effects: %d %q %q", code, stdout, stderr)
+			}
+			if _, err := os.Lstat(output); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("IPsec retirement identity published a WireGuard handoff")
+			}
+			if _, err := os.Lstat(filepath.Join(root, "credentials", string(link.ID)+".wgkey")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("IPsec retirement identity published a protected WireGuard key")
+			}
+			snap, err := store.Load(context.Background())
+			if err != nil || len(snap.Links) != 0 || len(snap.PendingSenders) != 0 ||
+				len(snap.IPsecRemovalReceipts) != 1 || snap.IPsecRemovalReceipts[0].Retired != retired {
+				t.Fatal("refused sender changed canonical IPsec retirement proof", err)
+			}
+		})
 	}
 }
