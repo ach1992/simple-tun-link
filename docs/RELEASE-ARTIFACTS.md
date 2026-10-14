@@ -1,8 +1,15 @@
-# Release artifact build — Issue #11
+# Release artifact build, verification, and acceptance
 
-This is **build-only preparation**, not a publisher, release, or deployment.
-Installation and release-level system verification remain tracked under
-Issues #11 and #12.
+**For users:** installation, first tunnel and common management commands
+are in the [README](../README.md). This page describes how a maintainer
+builds and verifies release artifacts; the build script itself **does not
+publish** a tag, release, or deployment.
+
+Issue #11 owns the historical installer validation (closed); Issue #12
+tracks the latest release-candidate E2E and public download acceptance.
+The [v0.1.0-rc.2 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.2)
+includes the source changes after rc.1, with the explicit limits recorded
+in [Issue #12](https://github.com/ach1992/simple-tun-link/issues/12).
 
 ## Local build
 
@@ -59,19 +66,23 @@ host resources itself. See [install/update/uninstall runbook](INSTALL.md).
 cases, including injected after-rename update/uninstall failures. No privileged
 network operations or real release download happen in these tests.
 
-## Remaining Issue #11 and release acceptance
+## Publication versus build acceptance
 
-No tag or public GitHub release was created by this implementation. A later
-**separately authorized** publication must attach the exact source-tagged
-binaries, SHA256SUMS, LICENSE and BUILD-MANIFEST to the matching GitHub
-release, establish the tested supported-environment matrix (Issue #12), and
-record release notes/evidence. The menu's read-only Update/Uninstall
-operator handoff is already integrated ([PR #48](https://github.com/ach1992/simple-tun-link/pull/48));
-it does **not** download, execute or replace the separate installer.
-This artifact-building slice did not install or deploy STL in production.
-Privileged systemd/network E2E evidence is independently tracked in
-[Issue #12](https://github.com/ach1992/simple-tun-link/issues/12), not
-established by this artifact-building slice.
+This **build script** only produces a verified bundle; it never creates
+a public tag/release. To publish a candidate such as rc.2, a separately
+authorized publisher must bind the tag to the exact accepted source,
+attach the two binaries plus `SHA256SUMS`, `LICENSE` and
+`BUILD-MANIFEST.txt`, then **download the public files independently**
+and verify checksums, installed version/commit and installer behavior.
+
+The Update/Uninstall **menu** remains read-only guidance
+([PR #48](https://github.com/ach1992/simple-tun-link/pull/48)), never a
+second installation engine. The offline regression script cannot replace
+the release-specific guest reboot and real kernel traffic evidence in
+[Issue #12](https://github.com/ach1992/simple-tun-link/issues/12).
+Historically, Issue #11 established installation acceptance for rc.1;
+it is closed. The physical WAN/NAT acceptance remains Owner-run after
+publication, not something the test lab certifies.
 
 ## State v3 and full-guest release acceptance (Issue #12)
 

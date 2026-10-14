@@ -185,9 +185,10 @@ so use only an explicitly authorized isolated test server.
    QEMU termination, plus official native AMD64/ARM64 cross-backend E2E.
    Equivalent ARM64 whole-guest reboot/crash and physical WAN/NAT-router
    traversal remain **unverified**; QEMU SIGKILL is not physical power loss.
-   The published `v0.1.0-rc.1` pre-release predates the IPsec reboot/crash
-   recovery changes introduced in PR #81 and does **not** include them.
-   No Stable release or production deployment is established by these tests.
+   The historical `v0.1.0-rc.1` pre-release predates the IPsec reboot/crash
+   changes in PR #81; the later `v0.1.0-rc.2` release candidate includes
+   them. No Stable release, physical WAN/NAT test or production deployment
+   is established by these isolated tests.
 4. A crash during an indeterminate VICI write retains a durable public-only
    journal and stops automatic replay. It requires explicit, owner-verified
    reconciliation; never delete arbitrary observed state or auto-rekey.
@@ -336,9 +337,11 @@ Tests were manually executed in private disposable guests, not on the AI
 agent's live host networking or an external real-world NAT router.
 **Physical WAN/external NAT-router traversal** is still not accepted;
 prior platform blocks forbid any alternate cross-server connectivity bypass.
-The public `v0.1.0-rc.1` **pre-release** predates PR #81 and does **not**
-contain these fixes. Its own AMD64/ARM64 installed-artifact life-cycle checks
-passed separately (Issue #11 closed). Do not present source commits or
-isolated test results as proof of a published Stable release or an
-installed/deployed fix. Never weaken fail-closed native ownership checks
-or substitute simulated CLI-only tests for real post-reboot kernel packets.
+The historical public `v0.1.0-rc.1` **pre-release** predates PR #81 and
+does **not** contain these fixes. Its AMD64/ARM64 installed-artifact
+lifecycle checks passed separately (Issue #11 closed); rc.2 includes
+the newer source and is covered by distinct Issue #12 release evidence.
+Do not present isolated test results as proof of a Stable production release,
+physical WAN/NAT validation or deployment. Never weaken fail-closed
+native ownership checks or substitute simulated CLI-only tests for real
+post-reboot kernel packets.

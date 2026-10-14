@@ -37,8 +37,9 @@ Rules:
 
 The WireGuard adapter under `internal/backend/wireguard` supports a
 credential-protected, Engine-owned per-Link interface lifecycle and v3
-receiver import. Focused privileged traffic has been demonstrated in a
-disposable environment, but the backend is **not yet release-qualified**.
+receiver import. Focused privileged traffic and native multiarch release-candidate
+acceptance have been demonstrated in isolated environments; **physical
+WAN/NAT-router deployment remains unverified**.
 It uses Go's standard X25519 implementation and clamped
 `wg genkey`-compatible output. Generic JSON and
 formatting do not serialize private bytes; deliberate `SecretWireValue()`

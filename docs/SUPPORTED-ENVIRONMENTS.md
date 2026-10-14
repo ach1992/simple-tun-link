@@ -168,9 +168,28 @@ Physical WAN/NAT-router peer acceptance is tracked under Issue #12 and was
 not established by these isolated tests. Integration and authorization to
 publish a new release are separate from this technical test evidence.
 
-## Release validation
+## Current release-candidate validation
 
-Before v0.1 is tagged/published, verify the candidate released-artifact identity and real installed lifecycle, especially **a durably committed Link restoring working traffic after reboot/restart**, not only source compilation. The Owner will test real Internet/WAN/NAT peers personally **after publication** and report defects; physical WAN is not claimed as pre-publication proof. Agents may not bypass the existing external-host/platform restrictions.
+For [v0.1.0-rc.2](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.2),
+[Issue #12](https://github.com/ach1992/simple-tun-link/issues/12)
+records native AMD64/ARM64 cross-backend traffic and separately a
+**root installer-owned tagged rc.2 binary** tested through two genuine
+independent boots of a **single persisted ext4 guest disk**, with
+automatic GRE Link restoration, managed local MTU=1300 and observed
+bilateral Link traffic. This is a Debian-13-**derived**, network-isolated
+QEMU TCG test rootfs using Debian tools and a real kernel/systemd PID1,
+**not** an official distro installation image, separate ARM64 guest reboot
+or physical WAN/NAT-router proof. Its bundled dependency files and package
+status fixture do not substitute for real APT package provisioning.
+Earlier Debian/Ubuntu native user-space tests and independent distro guest
+installer lifecycle evidence remain separately scoped above.
+
+For every later release, independently verify the candidate published
+artifacts against its tag/source/checksums and installed executable, with
+real committed-Link reboot/restart traffic, not only compilation. The
+Owner will test real Internet/WAN/NAT peers personally **after publication**
+and report defects; physical WAN is not a pre-publication pass claim.
+Agents must not bypass external-host/platform restrictions.
 
 - validate on at least one currently maintained Ubuntu LTS and one current Debian stable release;
 - exercise amd64 and arm64 release artifacts where test capacity permits;
