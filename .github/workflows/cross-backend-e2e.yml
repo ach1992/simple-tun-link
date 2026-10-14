@@ -58,6 +58,8 @@ jobs:
           }
           echo "REAL_KERNEL_ARCH=$(uname -m)"
           echo "NATIVE_GOARCH=$(go env GOARCH)"
+      - name: Snapshot artifact and native offline installer acceptance
+        run: bash scripts/e2e/snapshot-install-smoke.sh
       - name: Ensure required tunnel modules on disposable VM
         run: |
           set -euo pipefail
