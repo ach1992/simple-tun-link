@@ -320,6 +320,17 @@ func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 				continue
 			}
 		}
+		if picked.backend == domain.BackendGRE || picked.backend == domain.BackendIPIP {
+			ready, refreshed := menuPrepareSelectedModules(input, reader, out, options, picked, report)
+			if !ready {
+				report = menuCapabilitySnapshot(options)
+				menuAcknowledge(input, reader, out)
+				continue
+			}
+			if refreshed != nil {
+				report = refreshed
+			}
+		}
 		menuScreen(out, "New tunnel / setup")
 		switch picked.backend {
 		case domain.BackendWireGuard:

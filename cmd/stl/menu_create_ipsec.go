@@ -35,9 +35,12 @@ func menuCreateIPsec(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	done()
 	if admitted != nil {
 		menuNotice(out, "WARNING", "IPsec cannot start: the STL-exclusive strongSwan runtime is not verified.")
-		fmt.Fprintln(out, "No keys, services or tunnels were changed.")
-		fmt.Fprintln(out, "Next: stl doctor ipsec (read-only detailed checks; --json for automation).")
-		menuProse(out, "You can use GRE/IPIP or WireGuard independently; existing strongSwan services will not be changed.")
+		menuSection(out, "IPsec / prerequisites")
+		menuField(out, "Packages", "strongswan-swanctl, charon-systemd, crypto plugins")
+		menuField(out, "Service", "STL-private configuration, verified unit and origin receipts")
+		menuField(out, "Next", "stl doctor ipsec --json (read-only)")
+		menuProse(out, "The installer supports optional IPsec packages, but installing packages alone does not establish STL-exclusive service ownership. Installing charon-systemd may start a vendor daemon.")
+		menuNotice(out, "INFO", "No keys, services, packages or tunnels were changed. GRE/IPIP/WireGuard remain independent.")
 		return 4
 	}
 

@@ -135,7 +135,9 @@ noninteractive creator command still requires an explicit --output.
   `/etc/os-release` as data, validates Ubuntu >=22.04 or Debian >=11, checks
   installed APT package identities via `dpkg-query`, and installs ONLY missing
   distro packages with `apt-get` from the host's existing repositories.
-  Default `--backends native` selects `iproute2` + `iptables` for GRE/IPIP.
+  Default `--backends native` selects `iproute2`, `iptables` and
+  `kmod` for GRE/IPIP and on-demand kernel module inspection/loading
+  (no modules are loaded by installation).
   `--backends native,wireguard` adds `wireguard-tools`;
   `--backends native,ipsec` adds `charon-systemd`,
   `strongswan-swanctl` and `libstrongswan-standard-plugins`
@@ -151,6 +153,28 @@ noninteractive creator command still requires an explicit --output.
   host or edits repositories. Host APT package installation is not covered by
   the STL binary rollback transaction, and STL uninstall never uninstalls host
   packages. On error it reports the partial-package-management limitation.
+
+- Unreleased Issue #101 adds a separate `prepare --backends wireguard|ipsec|native|all`
+  action to the **canonical exact-tag installer** for an existing,
+  installer-owned `/usr/local/bin/stl`. It verifies the installer-owned binary
+  record, holds the same exclusive installer lock and installs only missing
+  selected APT dependencies **without replacing the executable, updating
+  State, loading modules or provisioning strongSwan services**. This command
+  is NOT available from the currently published rc.5 installer; use only
+  after an independently reviewed later release. IPsec packages may still
+  start a distro-owned daemon and do not satisfy STL-exclusive runtime
+  admission; use an explicit operator decision on that risk.
+
+  After obtaining and reviewing the installer from a **published new release**,
+  an already installed operator can run, for example:
+
+  ```sh
+  sudo bash /path/to/verified/install.sh prepare --backends wireguard
+  ```
+
+  The command does not create a tunnel. Re-enter the Create menu to verify
+  selected backend readiness. Do not run this action using the current rc.5
+  installer, which does not recognize `prepare`.
 - Offline `--bundle --prefix /private/test` installs cannot install real host
   packages. Use the non-mutating `requirements` command to preview the exact
   packages before invoking privileged install.

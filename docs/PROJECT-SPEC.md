@@ -279,3 +279,16 @@ actual replies/loss/RTT/variation and distinguish unavailable probes from
 confirmed no replies; RX/TX counters are cumulative, not proof of current
 peer reachability. Read-only backend availability hints must not start or
 install services/modules, and cannot replace final runtime admission.
+
+Owner follow-up 2026-10-15 (Issue #101): Default installation remains
+lean. On selection of a backend, STL should identify missing prerequisites
+and, where independently safe, provide an on-demand preparation step.
+Reading statuses/diagnostics never changes the host. Loading a positively
+verified inactive, on-disk allowlisted kernel module is a **separate**,
+explicit, freshly confirmed, privileged action, followed by kernel
+reverification. Installing optional packages is separately owned by the
+canonical installer, not ad hoc menu APT logic; never silently start, adopt
+or modify a foreign VPN service. IPsec cannot be declared ready until
+native-exclusive strongSwan ownership and service origin are admitted.
+Selected optional module requirements must survive the committed Link's
+restoration after reboot; durable completion requires disposable guest proof.

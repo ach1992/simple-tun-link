@@ -150,6 +150,32 @@ The controlling user report, accepted scope and tests live in
 [Issue #99](https://github.com/ach1992/simple-tun-link/issues/99).
 The published rc.5 remains unchanged until a separately approved release.
 
+### On-demand GRE/IPIP module preparation (unreleased; Issue #101)
+
+After selecting GRE/IPIP FOU or GUE (or a native GRE/IPIP type with a
+missing kernel driver), STL first rechecks the selected prerequisites.
+If a required module is verified **on disk but inactive**, an operator
+can approve a narrow `PREPARE` step on an installed root-owned
+`sudo stl menu` in a real interactive terminal. Only the selected
+`ip_gre`, `ipip` or `fou` module is loaded with the exact fixed
+system `modprobe` executable. The kernel is checked again before the
+ordinary Create wizard resumes.
+
+The preparation step does **not** create a Link, edit State, routes,
+firewalls, services or packages. It is not triggered by opening a menu,
+running diagnostics, returning to a selection, redirected input, or
+cancelling a prompt. Kernel loading is a host-wide action which may
+outlast this invocation; STL deliberately does not auto-unload after
+failure, since another process may use the module. Availability still
+does not prove network reachability.
+
+The `v0.1.0-rc.5` binary does not contain this feature. Persisted
+reboot restoration for optional modules and on-demand package provisioning
+remain tracked under [Issue #101](https://github.com/ach1992/simple-tun-link/issues/101).
+The IPsec backend has an operational implementation, but needs verified
+STL-exclusive strongSwan service/configuration/receipt provisioning;
+installing `swanctl` alone cannot satisfy the runtime gate.
+
 ### Manage Links — confirmation and privacy
 
 Remove is available **only on a real interactive terminal**. A

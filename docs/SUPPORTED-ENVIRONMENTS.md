@@ -14,7 +14,8 @@ This document owns the v0.1 platform baseline. Runtime preflight remains authori
   after LTS expiry. STL refuses blind repository rewrites or disabling APT
   signature/expiry protection. Prefer Debian 12+ or suitable ELTS support.
 - Automatic prerequisite provisioning: native GRE/IPIP installs/verifies
-  iproute2 and iptables. Optional WireGuard selects wireguard-tools; optional
+  iproute2, iptables and kmod (module introspection and explicit on-demand
+  module loading). Optional WireGuard selects wireguard-tools; optional
   IPsec selects charon-systemd, strongswan-swanctl and
   libstrongswan-standard-plugins (OpenSSL/GCM) explicitly to avoid
   surprising an existing strongSwan daemon. The installer only requests

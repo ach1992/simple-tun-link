@@ -13,12 +13,17 @@ Usage:
   install.sh install|update --version vX.Y.Z [--backends native,wireguard,ipsec]
   install.sh install|update --bundle /path/to/release-bundle [--prefix /usr/local] [--backends all]
   install.sh requirements [--backends native,wireguard,ipsec] [--os-release-file /path/to/read-only-fixture]
+  install.sh prepare --backends native|wireguard|ipsec|all
   install.sh uninstall [--prefix /usr/local]
 
 The default backend selection is native (GRE/IPIP). Add wireguard and/or
 ipsec explicitly to provision optional dependencies. "all" selects all.
 IPsec package installation can enable/start charon-systemd: explicit opt-in
 avoids silently affecting pre-existing strongSwan services.
+The prepare action installs only missing selected packages on an existing,
+installer-owned /usr/local/bin/stl, without replacing STL or modifying Links.
+IPsec package installation may enable/start a distro daemon and DOES NOT
+provision STL's exclusive private IPsec runtime.
 No host Link or network configuration is modified by this installer.
 --bundle is for locally built/tested bundles; system dependencies are
 only installed on the real /usr/local prefix, never an offline test prefix.
@@ -29,7 +34,7 @@ fail() { printf 'stl installer: %s\n' "$*" >&2; exit 1; }
 [[ $# -ge 1 ]] || usage
 action=$1
 shift
-case "$action" in install|update|uninstall|requirements) ;; *) usage ;; esac
+case "$action" in install|update|uninstall|requirements|prepare) ;; *) usage ;; esac
 prefix=/usr/local
 version=
 bundle=
@@ -46,13 +51,15 @@ while [[ $# -gt 0 ]]; do
     *) usage ;;
   esac
 done
-if [[ $action == uninstall || $action == requirements ]]; then
+if [[ $action == uninstall || $action == requirements || $action == prepare ]]; then
   [[ -z $version && -z $bundle ]] || usage
   [[ $action != uninstall || $backends_supplied == 0 ]] || usage
+  [[ $action != prepare || $backends_supplied == 1 ]] || usage
 else
   [[ -n $version && -z $bundle || -z $version && -n $bundle ]] || usage
 fi
 [[ $action == requirements || -z $os_release_fixture ]] || usage
+[[ $action != prepare || $prefix == /usr/local ]] || fail 'package preparation is allowed only for the installer-owned /usr/local installation'
 
 # Use a data-only OS release parser. Never "source" /etc/os-release as shell
 # code, and never accept caller-controlled OS paths for privileged installs.
@@ -122,9 +129,10 @@ select_packages() {
       *) usage ;;
     esac
   done
-  # iproute2 and iptables are always required for Engine runtime and
-  # firewall guards, including a host using only WireGuard/IPsec.
-  packages=(iproute2 iptables)
+  # iproute2/iptables are the Engine/network baseline. The kmod tools
+  # provide the exact modinfo/modprobe commands used by the newly explicit
+  # optional module preflight. This is not permission to load all modules.
+  packages=(iproute2 iptables kmod)
   [[ $want_wg == 0 ]] || packages+=(wireguard-tools)
   # The standard plugin bundle supplies common cryptographic backends such
   # as OpenSSL/GCM; --no-install-recommends would omit it otherwise.
@@ -309,6 +317,16 @@ if [[ $action == install ]]; then
   [[ ! -e $record && ! -L $record && ! -e $target && ! -L $target && ! -e $alias && ! -L $alias ]] || fail 'an installed or foreign STL identity already exists; refusing takeover'
 else
   read_record
+fi
+
+# Only the existing installer-owned executable and record are admitted for
+# post-install package provisioning; never change STL binary/Link State here.
+# Runtime OS/package effects are not part of STL's binary rollback transaction.
+if [[ $action == prepare ]]; then
+  ensure_packages
+  printf 'Selected backend packages prepared; kernel modules and STL-owned service admission must be verified separately. No STL executable or Link was changed.
+'
+  exit 0
 fi
 
 # A release operation is not a Link lifecycle. Prevent uninstall unless STL's
