@@ -4,9 +4,10 @@
 [README](../README.md)**. This page is the advanced installer/maintenance
 runbook, not a required first stop for a new operator.
 
-Current release candidate: [v0.1.0-rc.3](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.3)
-(**pre-release, not Stable**). The new guided Create/Manage UI and
-repeatable private receiver handoffs are changes from rc.2.
+Current release candidate: [v0.1.0-rc.4](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.4)
+(**pre-release, not Stable**, after publication). rc.4 improves terminal
+readability and Ubuntu 22.04/systemd 249 missing-unit compatibility.
+The guided Create/Manage UI and protected receiver offers started in rc.3.
 The rc.2 IPsec, MTU and State v3 rollback boundary still applies.
 Check the published release, SHA256SUMS and exact installed commit
 before trusting the update. Earlier rc.2 release evidence and its
@@ -34,12 +35,12 @@ The same host independently returned `LoadState=not-found` with empty
 ancestors/binary and a missing unit leaf. The rc.3 parser previously
 accepted the missing-unit state only as stdout `not-found` with exit **4**,
 so the transaction failed at persistence and rolled back without
-committing the requested Link. The source-only fix in Issue #93 / PR #94
+committing the requested Link. The rc.4 fix in Issue #93 / PR #94
 confirms absence with an additional exact read-only systemd property
 inspection, rather than accepting any exit 1 or parsing localized stderr.
 This is a **supported-environment code defect**, not proof of an
 operational network/GRE or peer-address problem. Real affected-host
-acceptance remains pending a separately authorized release.
+acceptance remains Owner-run after the public rc.4 release.
 
 On **the affected host only**, an operator may collect the following
 **read-only** observations (no tunnel/systemd/firewall changes):
@@ -68,8 +69,8 @@ a possibly owned service, manually edit State or retry mutation blindly
 to "fix" this error. If a unit looks foreign, stop and review ownership
 privately before touching it. **Do not post private setup links, keys,
 tokens, unredacted private logs, or a full foreign service file.**
-Issue #93 tracks a more readable upcoming terminal diagnosis and
-reproduction tests, but that source change is **not part of rc.3**.
+Issue #93 includes rc.4's clearer terminal diagnosis and regression
+tests. These changes are **not part of rc.3**.
 
 ## Protected receiver Setup Link retention (rc.3 guided UI)
 
@@ -154,12 +155,12 @@ For a single-command install, with an explicit released tag:
 bash -c 'set -euo pipefail; umask 077; t=$(mktemp); trap '\''rm -f -- "$t"'\'' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 -o "$t" https://raw.githubusercontent.com/ach1992/simple-tun-link/vX.Y.Z/scripts/install.sh; bash -n "$t"; sudo bash "$t" install --version vX.Y.Z'
 ~~~
 
-### Operator-first one-line install (v0.1.0-rc.3)
+### Operator-first one-line install (v0.1.0-rc.4)
 
-For the current rc.3 pre-release, the user-facing one-line installer is:
+After rc.4 publication, the user-facing one-line installer is:
 
 ~~~sh
-bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.3/scripts/quick-install.sh | bash -s -- v0.1.0-rc.3'
+bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.4/scripts/quick-install.sh | bash -s -- v0.1.0-rc.4'
 ~~~
 
 This script is unprivileged initially and downloads the canonical
@@ -174,7 +175,7 @@ installer-owned STL**, use the explicit update form rather than the
 install command:
 
 ~~~sh
-bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.3/scripts/quick-install.sh | bash -s -- v0.1.0-rc.3 update'
+bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.4/scripts/quick-install.sh | bash -s -- v0.1.0-rc.4 update'
 ~~~
 
 This selects the unchanged canonical installer update transaction,
@@ -184,7 +185,7 @@ the tag. The command refuses foreign or inconsistent installed
 state rather than silently replacing it. Confirm rollback-compatible
 State and backups before starting.
 
-This rc.3 command cannot be used with an rc.2 URL/tag, since rc.2
+This rc.4 command cannot be used with an rc.2 URL/tag, since rc.2
 does not contain quick-install.sh. Verify a real release exists before
 running. It does not adopt or install strongSwan/IPsec automatically;
 do not modify existing VPN services to circumvent the admission gate.

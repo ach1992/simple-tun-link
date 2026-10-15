@@ -1,15 +1,15 @@
 # STL CLI — operator menus and stable machine commands
 
-The human menu below is part of the
-[v0.1.0-rc.3 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.3).
+The compact human menu below ships with the
+[v0.1.0-rc.4 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.4) after publication.
 The old rc.2 executable retains its older menu. Versioned
 noninteractive machine CLI/JSON contracts remain unchanged.
 
-## Next-candidate terminal presentation (Issue #93; not yet released)
+## Interactive terminal presentation (Issue #93; rc.4)
 
-The following presentation improvements are **source-only work after
-v0.1.0-rc.3**. They do **not** change the published rc.3 executable or
-claim to fix the Owner's operational host before a new tagged release.
+The following improvements were developed after rc.3 for the rc.4
+pre-release. They do **not** change an installed rc.3 executable or
+prove live WAN connectivity on the Owner's hosts.
 
 On a real compatible interactive terminal, STL redraws a single screen
 at a time rather than appending repeated menus. Human output uses
@@ -50,7 +50,7 @@ success but its resulting host state was not independently re-verified.
 It is not the original fault. Never infer a live host's cause from that
 recovery code alone; see [read-only host checks](INSTALL.md).
 
-Core operator choices (published rc.3 and the next candidate):
+Core operator choices (rc.4):
 
 - Start: stl menu (or stl in an interactive terminal). The new compact
   Home includes version, sanitized host, local IPv4 **candidate**, and
@@ -260,7 +260,7 @@ under locks. A valid plaintext token intentionally appears in the
 operator's terminal echo, so use protected mode for sensitive offers.
 No Input/preview error echoes credential bytes or tries automatic
 host mutation. Old rc.2 retains its older separate menu and prompt
-contract; this page describes the rc.3 interface.
+contract; the rc.4 screens retain these rc.3 pairing semantics.
 
 Quick Link payloads provide **no confidentiality or authenticated sender**;
 verify the offer with the intended peer through a trusted channel. Sensitive

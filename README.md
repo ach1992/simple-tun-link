@@ -2,9 +2,9 @@
 
 **Create and manage point-to-point IP tunnels between Linux servers.** STL provides a stable private IPv4 **Link Address** on each server, while the underlying tunnel can use GRE, IPIP, WireGuard, or conditionally available IPsec. You can create multiple independent Links, including different tunnels between the same pair of servers.
 
-**Developer note:** The terminal readability and persistence-error improvements tracked in [Issue #93](https://github.com/ach1992/simple-tun-link/issues/93) are not included in the published rc.3 assets. Do not run development-source binaries on operational hosts.
+The rc.4 candidate includes the terminal readability and Ubuntu 22.04/systemd 249 persistence compatibility fixes from [Issue #93](https://github.com/ach1992/simple-tun-link/issues/93). The published rc.3 remains unchanged and retains its missing-unit limitation. Use only tagged public release artifacts on operational hosts.
 
-**Current release candidate:** [v0.1.0-rc.3](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.3) (**Pre-release, not Stable**). The new operator-first menu, one-line installer and repeatable protected Setup Link sharing build on rc.2's committed-Link reboot restoration, managed MTU and backend fixes. Isolated native Linux validation does **not** prove physical Internet/WAN/NAT-router behavior; test on noncritical servers first.
+**Current public pre-release candidate** (after tagged publication): [v0.1.0-rc.4](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.4) (**Pre-release, not Stable**). The new operator-first menu, one-line installer and repeatable protected Setup Link sharing build on rc.2's committed-Link reboot restoration, managed MTU and backend fixes. Isolated native Linux validation does **not** prove physical Internet/WAN/NAT-router behavior; test on noncritical servers first.
 
 The installed command is `stl`; `stlink` is an alias for the same program.
 
@@ -29,10 +29,10 @@ GRE keys distinguish tunnels but **do not encrypt traffic**. FOU/GUE are UDP enc
 
 ## 2. Install on both servers
 
-**One-line installer for v0.1.0-rc.3** (run on each server):
+**One-line installer for v0.1.0-rc.4** (run on each server):
 
 ~~~bash
-bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.3/scripts/quick-install.sh | bash -s -- v0.1.0-rc.3'
+bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.4/scripts/quick-install.sh | bash -s -- v0.1.0-rc.4'
 ~~~
 
 This is an explicitly tag-pinned HTTPS bootstrap; review its
@@ -59,8 +59,9 @@ with a mutable branch name. A HTTPS tag and checksum are not proof
 of publisher trust.
 
 **Older v0.1.0-rc.2** used a longer installer and has the old menu.
-The new instructions and protected receiver-handoff retention
-require that the installed executable actually reports rc.3.
+Guided Create/Manage and protected receiver-offer retention require
+rc.3 or later; the improved screen layout and systemd 249 compatibility
+require rc.4. Confirm the exact installed version before using them.
 Existing private rc.2 handoffs stay in their original chosen paths.
 
 Verify when done:
@@ -160,7 +161,7 @@ chats, tickets or shell history.
 On **already published rc.2**, the older creator used a manually
 chosen private output filename, not this automatic retention.
 Keep and use that original protected file: it cannot be magically
-recovered from State by the rc.3 menu. The protected Share/Delete
+recovered from State by the rc.3/rc.4 menu. The protected Share/Delete
 actions are not available in rc.2. WireGuard creation in
 rc.2 is still the old separate menu option 9; consult the
 [CLI/pairing guide](docs/CLI.md).
@@ -178,7 +179,7 @@ retained private handoff; cleanup after Link removal needs a
 deliberate owner-private file action. Remove still requires a fresh
 confirmation and rejects changed/unowned resources.
 
-These stable CLI commands work in rc.2 and rc.3:
+These stable CLI commands work in rc.2, rc.3 and rc.4:
 
 ~~~bash
 sudo stl link list --json                  # Saved Links
@@ -202,13 +203,13 @@ not automatically retry possible partial network mutations.
 
 ## 6. Update safely
 
-**To update an already installer-owned STL to v0.1.0-rc.3**, first
+**To update an already installer-owned STL to v0.1.0-rc.4**, first
 quiesce STL mutations and protect a consistent backup of State and
 receiver/sender credential files. Then run the explicit, pinned
 **one-line update** on that server:
 
 ~~~bash
-bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.3/scripts/quick-install.sh | bash -s -- v0.1.0-rc.3 update'
+bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.4/scripts/quick-install.sh | bash -s -- v0.1.0-rc.4 update'
 ~~~
 
 This uses the canonical installer **update** transaction, checks
