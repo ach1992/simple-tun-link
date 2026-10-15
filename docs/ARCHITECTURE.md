@@ -582,7 +582,15 @@ provisioner. Missing strongSwan packages are operator-managed: STL
 refuses automatic IPsec APT whenever a required strongSwan package is
 absent, avoiding unverified vendor service hooks. The dedicated private
 unit must pass effective-systemd PRE-START attestation after
-daemon-reload and before any service execution. A verified running
+daemon-reload and before any service execution. The gate also checks the
+bounded D-Bus **effective system-manager environment** (including global
+DefaultEnvironment and runtime set-environment sources), rejects `LD_*`
+and unexpected `STRONGSWAN_*` values, and proves unit `EnvironmentFiles`,
+`PassEnvironment`, `UnsetEnvironment` and `PAMName` cannot add independent
+spawn-environment sources. Unknown/oversized replies fail closed. The
+manager's settings are **never globally modified by STL**; an administrator
+must inspect/reconcile unsafe values before retry. Post-start `/proc` process
+environment verification remains independent defense in depth. A verified running
 private service receives its boot edge only after post-start runtime
 admission, with a final owner/origin check. No vendor service is
 disabled, replaced, adopted or restarted. These protections are in

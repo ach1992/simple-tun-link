@@ -18,6 +18,11 @@ func (a NativeRuntimeAdmission) attestLoadedPreStartUnit(ctx context.Context) er
 	if ctx == nil || ctx.Err() != nil || a.Runner == nil {
 		return errors.New("native pre-start systemd admission unavailable")
 	}
+	// System-wide defaults and runtime manager settings can affect the root
+	// daemon even when the unit's own Environment is byte-exact.
+	if err := a.attestManagerEnvironment(ctx); err != nil {
+		return err
+	}
 	reply, err := a.readBus(ctx, "call", "org.freedesktop.systemd1", "/org/freedesktop/systemd1",
 		"org.freedesktop.systemd1.Manager", "LoadUnit", "s", nativeServiceName)
 	if err != nil {
@@ -37,6 +42,7 @@ func (a NativeRuntimeAdmission) attestLoadedPreStartUnit(ctx context.Context) er
 		{"Service", "Group", ""},
 		{"Service", "RootDirectory", ""},
 		{"Service", "Restart", "no"},
+		{"Service", "PAMName", ""},
 	} {
 		if a.require(ctx, path, prop.category, prop.key, prop.value) != nil {
 			return fmt.Errorf("native pre-start property %s.%s does not match the fixed profile", prop.category, prop.key)
@@ -49,6 +55,9 @@ func (a NativeRuntimeAdmission) attestLoadedPreStartUnit(ctx context.Context) er
 		{"Service", "MainPID", "u 0"},
 		{"Service", "UMask", "u 63"},
 		{"Service", "Environment", "as 1 \"STRONGSWAN_CONF=/var/lib/simple-tun-link/ipsec/strongswan.conf\""},
+		{"Service", "EnvironmentFiles", "a(sb) 0"},
+		{"Service", "PassEnvironment", "as 0"},
+		{"Service", "UnsetEnvironment", "as 0"},
 	} {
 		got, err := a.property(ctx, path, prop.category, prop.key)
 		if err != nil || got != prop.value {
@@ -92,6 +101,9 @@ func (a NativeRuntimeAdmission) attestLoadedPreStartUnit(ctx context.Context) er
 		{"Unit", "NeedDaemonReload", "b false"},
 		{"Service", "ExecStartPre", "a(sasbttttuii) 0"},
 		{"Service", "Environment", "as 1 \"STRONGSWAN_CONF=/var/lib/simple-tun-link/ipsec/strongswan.conf\""},
+		{"Service", "EnvironmentFiles", "a(sb) 0"},
+		{"Service", "PassEnvironment", "as 0"},
+		{"Service", "UnsetEnvironment", "as 0"},
 	} {
 		value, err := a.property(ctx, loaded, prop.category, prop.key)
 		if err != nil || value != prop.value {
@@ -117,5 +129,7 @@ func (a NativeRuntimeAdmission) attestPreStartUnit(ctx context.Context) error {
 	if err := nativeIKEPortsVacant(); err != nil {
 		return errors.New("foreign IKE socket appeared before first start")
 	}
-	return nil
+	// A last observation immediately before systemctl start limits a manager
+	// environment change between unit attestation and the privileged exec.
+	return a.attestManagerEnvironment(ctx)
 }

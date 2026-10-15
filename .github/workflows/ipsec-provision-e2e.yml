@@ -47,6 +47,10 @@ jobs:
           go test -c -o /tmp/stl-ipsec-native-e2e/stl-ipsec-provision-test ./internal/backend/ipsec
           go test -c -o /tmp/stl-ipsec-native-e2e/stl-ipsec-cli-test ./cmd/stl
           go build -o /tmp/stl-ipsec-native-e2e/stl-ipsec-probe ./scripts/e2e/ipsec-vici-probe
+          # Constructor writes a marker ONLY if charon-systemd executes.
+          cc -Wall -Wextra -Werror -O2 -shared -fPIC -o \
+            /tmp/stl-ipsec-native-e2e/manager-preload.so \
+            scripts/e2e/ipsec-manager-preload-marker.c
       - name: Build disposable native systemd guest
         run: |
           docker build -f scripts/e2e/ipsec-lab-ubuntu-systemd.Dockerfile -t stl-ipsec-real-provision:pr .
@@ -71,6 +75,30 @@ jobs:
             "$cid" /usr/local/bin/stl-ipsec-provision-test \
             -test.run '^TestIsolatedNativePreStartRejectsForeignDropInWithoutExecuting$' -test.v
           echo "NATIVE_FOREIGN_DROPIN_PRESTART_E2E=PASS"
+          docker rm -f "$cid" >/dev/null
+          cid=''
+      - name: Deny dangerous manager environment before first root daemon execution
+        run: |
+          set -euo pipefail
+          cid=''
+          cleanup() {
+            if [[ -n "$cid" ]]; then docker rm -f "$cid" >/dev/null 2>&1 || :; fi
+          }
+          trap cleanup EXIT
+          cid=$(docker run --rm -d --network none --privileged --cgroupns private \
+            --tmpfs /run --tmpfs /run/lock stl-ipsec-real-provision:pr)
+          for bin in stl stl-ipsec-provision-test; do
+            docker cp "/tmp/stl-ipsec-native-e2e/$bin" "$cid:/usr/local/bin/$bin"
+          done
+          docker cp /tmp/stl-ipsec-native-e2e/manager-preload.so "$cid:/run/stl-manager-preload.so"
+          docker exec "$cid" sh -c 'chown root:root /usr/local/bin/stl /usr/local/bin/stl-ipsec-provision-test /run/stl-manager-preload.so && chmod 0755 /usr/local/bin/stl /usr/local/bin/stl-ipsec-provision-test && chmod 0644 /run/stl-manager-preload.so'
+          docker exec -e STL_E2E_DISPOSABLE_HOST=approved \
+            -e STL_IPSEC_ISOLATED=approved \
+            -e STL_IPSEC_SYSTEMD_FIXTURE=approved \
+            -e STL_IPSEC_MANAGER_ENV_NEGATIVE=approved \
+            "$cid" /usr/local/bin/stl-ipsec-provision-test \
+            -test.run '^TestIsolatedNativePreStartRejectsManagerEnvironmentWithoutExecuting$' -test.v
+          echo "NATIVE_MANAGER_ENV_PRESTART_NEGATIVE_E2E=PASS"
           docker rm -f "$cid" >/dev/null
           cid=''
       - name: Real private service provisioning and ESP/NAT-T encrypted traffic

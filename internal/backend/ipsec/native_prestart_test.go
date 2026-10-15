@@ -29,6 +29,10 @@ func TestNativeFirstStartAttestsExactEffectiveUnitBeforeAnyServiceExecution(t *t
 		{"existing PID", map[string]string{"Service.MainPID": "u 555"}, false},
 		{"restart policy changed", map[string]string{"Service.Restart": "s \"always\""}, false},
 		{"environment redirected", map[string]string{"Service.Environment": "as 1 \"STRONGSWAN_CONF=/tmp/foreign.conf\""}, false},
+		{"foreign EnvironmentFile", map[string]string{"Service.EnvironmentFiles": "a(sb) 1 \"/tmp/foreign.env\" false"}, false},
+		{"foreign PassEnvironment", map[string]string{"Service.PassEnvironment": "as 1 \"LD_PRELOAD\""}, false},
+		{"foreign UnsetEnvironment", map[string]string{"Service.UnsetEnvironment": "as 1 \"PATH\""}, false},
+		{"foreign PAMName", map[string]string{"Service.PAMName": "s \"external-pam\""}, false},
 		{"daemon reload unresolved", map[string]string{"Unit.NeedDaemonReload": "b true"}, false},
 	}
 	for _, tc := range cases {
