@@ -35,7 +35,7 @@ func TestIsolatedNativePreStartRejectsManagerEnvironmentWithoutExecuting(t *test
 	if err != nil || strings.TrimSpace(string(route)) != "" {
 		t.Fatal("manager-environment guest must be disconnected")
 	}
-	const library = "/run/stl-manager-preload.so"
+	const library = "/usr/local/lib/stl-manager-preload.so"
 	const marker = "/run/stl-manager-env-charon-executed"
 	lib, err := os.Lstat(library)
 	if err != nil || !lib.Mode().IsRegular() {
