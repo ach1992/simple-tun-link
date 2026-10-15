@@ -125,15 +125,29 @@ native_preflight() {
   env STL_IPSEC_PREFLIGHT_OPERATION="$1"     /usr/local/bin/stl-ipsec-cli-test     -test.run '^TestIsolatedNativeExclusiveOperationalPreflight$' -test.v
 }
 # Explicitly restart ONLY the fixture-owned, named STL unit; no vendor unit.
-systemctl restart simple-tun-link-ipsec.service
+echo "NATIVE_SYSTEMD_RESTART_BEGIN=OBSERVED"
+if ! systemctl restart simple-tun-link-ipsec.service; then
+  echo "NATIVE_SYSTEMD_RESTART_TRANSITION=FAILED" >&2
+  exit 1
+fi
+echo "NATIVE_SYSTEMD_RESTART_TRANSITION=PASS"
 [ "$(systemctl is-active simple-tun-link-ipsec.service)" = active ] ||
   { echo "ERROR: STL-owned unit did not restart in disposable fixture" >&2; exit 1; }
 /usr/local/bin/stl doctor ipsec --json | grep -q '"activation_allowed":true' ||
   { echo "ERROR: native admission failed after fresh STL unit restart" >&2; exit 1; }
 native_preflight ensure
+echo "NATIVE_SYSTEMD_RESTORE_BEGIN=OBSERVED"
 /usr/local/bin/stl link restore --all >/dev/null ||
   { echo "ERROR: native STL state/PSK/VICI restore failed" >&2; exit 1; }
-/usr/local/bin/stl link connect-ipsec "$link" --confirm "$link" --json >/dev/null
+echo "NATIVE_SYSTEMD_RESTORE_COMMAND=PASS"
+# Canonical RestoreAll reconnects a committed IPsec Link itself. Calling
+# connect-ipsec again would turn this into a manual-connect test and could
+# conceal a missing automatic reconnect.
+if ! /usr/local/bin/stl link status "$link" --json | grep -q '"security_association_present":true'; then
+  echo "ERROR: automatic IPsec SA restoration was not verified" >&2
+  exit 1
+fi
+echo "NATIVE_SYSTEMD_AUTOMATIC_RECONNECT=PASS"
 ping -n -q -I 10.251.88.0 -c 3 -W 2 10.251.88.1
 ip netns exec stl-ipsec-native-b ping -n -q -I 10.251.88.1 -c 3 -W 2 10.251.88.0
 echo "NATIVE_SYSTEMD_ACTUAL_UNIT_RESTART_RESTORE=PASS"

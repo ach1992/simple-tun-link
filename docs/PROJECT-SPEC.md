@@ -279,3 +279,27 @@ actual replies/loss/RTT/variation and distinguish unavailable probes from
 confirmed no replies; RX/TX counters are cumulative, not proof of current
 peer reachability. Read-only backend availability hints must not start or
 install services/modules, and cannot replace final runtime admission.
+
+Owner follow-up 2026-10-15 (Issue #101): Default installation remains
+lean. On selection of a backend, STL should identify missing prerequisites
+and, where independently safe, provide an on-demand preparation step.
+Reading statuses/diagnostics never changes the host. Loading a positively
+verified inactive, on-disk allowlisted kernel module is a **separate**,
+explicit, freshly confirmed, privileged action, followed by kernel
+reverification. Installing optional packages is separately owned by the
+canonical installer, not ad hoc menu APT logic; never silently start, adopt
+or modify a foreign VPN service. When foreign systemd package lifecycle
+cannot be proven safe before APT, missing strongSwan packages require
+administrator-managed installation rather than automatic Prepare.
+IPsec cannot be declared ready until native-exclusive strongSwan
+ownership and service origin are admitted.
+Selected optional module requirements must survive the committed Link's
+restoration after reboot; durable completion requires disposable guest proof.
+When the fixed STL-exclusive IPsec source/config publisher is verified
+safe in a disposable real-systemd fixture, a separately confirmed
+installed root terminal may enable ONLY that private native service
+under existing installer/Engine locks, with no takeover, stop, disable
+or modification of vendor strongSwan services. Privileged publication
+failures must retain unambiguous reconciliation evidence and never claim
+completed rollback or readiness from partial state; the existing
+live service/process/VICI/port admission remains final authority.

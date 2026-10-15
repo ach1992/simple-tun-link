@@ -14,10 +14,16 @@ type fakeServiceBus struct {
 
 func (f *fakeServiceBus) RunBounded(ctx context.Context, limits CaptureLimits, binary string, args ...string) (CommandResult, error) {
 	if ctx == nil || ctx.Err() != nil || limits.Stdout < 16 || binary != nativeBusctl ||
-		len(args) < 2 || args[0] != "--system" {
+		len(args) < 2 || args[0] != nativeSystemdBusSelector {
 		return CommandResult{}, fmt.Errorf("unexpected bounded service probe")
 	}
 	f.commands = append(f.commands, strings.Join(args, " "))
+	if args[1] == "status" && len(args) == 3 && args[2] == "org.freedesktop.systemd1" {
+		if s, ok := f.overrides["Manager.Status"]; ok {
+			return CommandResult{Stdout: []byte(s)}, nil
+		}
+		return CommandResult{Stdout: []byte("PID=1\nUID=0\nComm=systemd\n")}, nil
+	}
 	if args[1] == "call" {
 		return CommandResult{Stdout: []byte("o \"/org/freedesktop/systemd1/unit/simple_2dtun_2dlink_2dipsec_2eservice\"\n")}, nil
 	}
@@ -29,20 +35,33 @@ func (f *fakeServiceBus) RunBounded(ctx context.Context, limits CaptureLimits, b
 		return CommandResult{Stdout: []byte(value + "\n")}, nil
 	}
 	fixed := map[string]string{
-		"Unit.LoadState":        "s \"loaded\"",
-		"Unit.ActiveState":      "s \"active\"",
-		"Unit.FragmentPath":     "s \"/etc/systemd/system/simple-tun-link-ipsec.service\"",
-		"Unit.SourcePath":       "s \"\"",
-		"Unit.UnitFileState":    "s \"static\"",
-		"Service.Type":          "s \"notify\"",
-		"Service.User":          "s \"\"",
-		"Service.Group":         "s \"\"",
-		"Service.RootDirectory": "s \"\"",
-		"Unit.DropInPaths":      "as 0",
-		"Unit.NeedDaemonReload": "b false",
-		"Service.UMask":         "u 63",
-		"Service.Environment":   "as 1 \"STRONGSWAN_CONF=/var/lib/simple-tun-link/ipsec/strongswan.conf\"",
-		"Service.MainPID":       "u 9876",
+		"Unit.LoadState":           "s \"loaded\"",
+		"Unit.ActiveState":         "s \"active\"",
+		"Unit.FragmentPath":        "s \"/etc/systemd/system/simple-tun-link-ipsec.service\"",
+		"Unit.SourcePath":          "s \"\"",
+		"Unit.UnitFileState":       "s \"static\"",
+		"Service.Type":             "s \"notify\"",
+		"Service.User":             "s \"\"",
+		"Service.Group":            "s \"\"",
+		"Service.RootDirectory":    "s \"\"",
+		"Unit.DropInPaths":         "as 0",
+		"Unit.NeedDaemonReload":    "b false",
+		"Service.UMask":            "u 63",
+		"Service.Environment":      "as 1 \"STRONGSWAN_CONF=/var/lib/simple-tun-link/ipsec/strongswan.conf\"",
+		"Service.MainPID":          "u 9876",
+		"Service.Restart":          "s \"no\"",
+		"Service.PAMName":          "s \"\"",
+		"Service.EnvironmentFiles": "a(sb) 0",
+		"Service.PassEnvironment":  "as 0",
+		"Service.UnsetEnvironment": "as 0",
+		"Manager.Environment":      "as 1 \"LANG=C\"",
+		"Service.ExecCondition":    "a(sasbttttuii) 0",
+		"Service.ExecStartPre":     "a(sasbttttuii) 0",
+		"Service.ExecStartPost":    "a(sasbttttuii) 0",
+		"Service.ExecReload":       "a(sasbttttuii) 0",
+		"Service.ExecStop":         "a(sasbttttuii) 0",
+		"Service.ExecStopPost":     "a(sasbttttuii) 0",
+		"Service.ExecStart":        "a(sasbttttuii) 1 \"/usr/sbin/charon-systemd\" 1 \"/usr/sbin/charon-systemd\" false 0 0 0 0 0 0 0",
 	}
 	value, ok := fixed[prop]
 	if !ok {

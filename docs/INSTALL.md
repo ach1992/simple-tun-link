@@ -144,22 +144,65 @@ noninteractive creator command still requires an explicit --output.
   `/etc/os-release` as data, validates Ubuntu >=22.04 or Debian >=11, checks
   installed APT package identities via `dpkg-query`, and installs ONLY missing
   distro packages with `apt-get` from the host's existing repositories.
-  Default `--backends native` selects `iproute2` + `iptables` for GRE/IPIP.
+  Default `--backends native` selects `iproute2`, `iptables` and
+  `kmod` for GRE/IPIP and on-demand kernel module inspection/loading
+  (no modules are loaded by installation).
   `--backends native,wireguard` adds `wireguard-tools`;
   `--backends native,ipsec` adds `charon-systemd`,
   `strongswan-swanctl` and `libstrongswan-standard-plugins`
   (OpenSSL/GCM algorithm backends, not guaranteed by `--no-install-recommends`).
   `--backends all` opts in to every backend dependency.
-- Installing `charon-systemd` can enable/start the daemon. To preserve foreign
-  VPN service ownership, optional IPsec dependency installation requires
-  explicit `--backends ipsec` / `--backends all` selection and refuses an
-  existing `strongswan-starter` or `charon-systemd` package whenever an IPsec package change is required, or a running
-  `charon` daemon. The installer NEVER
-  loads/removes IKE configs, changes firewall/routes or enables global tuning.
+- Missing strongSwan/IPsec packages cannot be safely installed by STL:
+  APT maintainer hooks can start unknown effective systemd units, aliases,
+  generator sources or foreign drop-ins. The candidate installer therefore
+  **refuses automatic IPsec APT** in `install`, `update` and `prepare` when
+  any required strongSwan package is missing. An administrator must verify
+  foreign service ownership and install missing packages with normal
+  OS package management first. Already installed IPsec dependencies still
+  need separate STL-private service publication and runtime admission.
+
 - Only missing packages are requested; the installer never upgrades the entire
   host or edits repositories. Host APT package installation is not covered by
   the STL binary rollback transaction, and STL uninstall never uninstalls host
   packages. On error it reports the partial-package-management limitation.
+- Unreleased Issue #101 also bundles a byte-identical copy of the
+  **canonical** installer inside the Go binary (build and CI refuse drift).
+  This allows a real installed `sudo stl menu` to inspect actual missing
+  packages using the canonical read-only requirements action, preview the
+  selected effects, and invoke that same script's `prepare` action only
+  after fresh root/real-terminal confirmation. The installer revalidates
+  owner record, lock and packages independently before any APT operation.
+  Non-root/redirected Create does not execute packages; the Engine still
+  decides actual tunnel readiness. Missing strongSwan packages require
+  manual administrator reconciliation, not an unsafe APT acknowledgement;
+  private-service provision/admission remains separate.
+- After an eligible GRE/IPIP Link is durably committed, canonical
+  `link restore --all` may reload only that Link's on-disk, allowlisted
+  missing `ip_gre`, `ipip` or `fou` module under existing restore
+  maintenance and per-Link locks. No blanket boot module list or global
+  module service is installed. A failed/unknown module restore fails the
+  affected Link, never claims traffic readiness and never unloads a
+  possibly shared driver; actual whole-guest traffic proof is a separate
+  acceptance gate.
+- Unreleased Issue #101 adds `prepare --backends native|wireguard|ipsec|all`
+  to the byte-identical canonical installer for an existing installer-owned
+  `/usr/local/bin/stl`. Eligible missing native/WireGuard packages are
+  installed with the existing lock/owner/expected-missing guards, without
+  replacing the executable, editing State, loading modules or provisioning
+  IPsec services. If any strongSwan package is missing, preparation fails
+  **before APT** and guides manual administrator installation. The currently
+  published rc.5 installer has no `prepare` action.
+
+  After obtaining and reviewing the installer from a **published new release**,
+  an already installed operator can run, for example:
+
+  ```sh
+  sudo bash /path/to/verified/install.sh prepare --backends wireguard
+  ```
+
+  The command does not create a tunnel. Re-enter the Create menu to verify
+  selected backend readiness. Do not run this action using the current rc.5
+  installer, which does not recognize `prepare`.
 - Offline `--bundle --prefix /private/test` installs cannot install real host
   packages. Use the non-mutating `requirements` command to preview the exact
   packages before invoking privileged install.
@@ -235,10 +278,11 @@ do not modify existing VPN services to circumvent the admission gate.
 Offline bootstrap failure/PTY tests: bash scripts/test-quick-install.sh.
 
 The longer direct canonical-installer example above installs only the native GRE/IPIP
-dependencies. To provision all backend packages automatically, append
-`--backends all` to the `sudo bash "$t" install --version vX.Y.Z` invocation
-in that wrapper, after checking existing strongSwan services. A fetched
-installer cannot bootstrap its own download client: `curl` is needed for the
+dependencies. `--backends all` selects all backend prerequisites for the
+installer; in the unreleased security-remediated candidate, any missing
+strongSwan package is a manual administrator prerequisite and causes the
+installer to stop before APT. Do not assume `--backends all` installs
+IPsec. A fetched installer cannot bootstrap its own download client: `curl` is needed for the
 one-command wrapper on the host before package provisioning starts.
 To preview without changing anything:
 ```sh

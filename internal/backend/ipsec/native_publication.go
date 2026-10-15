@@ -15,13 +15,14 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// This unexported, source-only primitive is deliberately NOT wired to a CLI,
-// Engine, service or activation pathway. The owner-verified host/service gate
-// must exist before an operational caller may be added.
+// The producer is called only by the separately confirmed, owner-locked
+// native provisioner; these receipt names do not grant service authority.
 const (
-	nativeOriginName  = "strongswan.conf.origin"
-	nativeOriginXattr = "user.simple_tun_link.ipsec_origin"
-	nativeOriginLimit = 512
+	nativeOriginName         = "strongswan.conf.origin"
+	nativeOriginXattr        = "user.simple_tun_link.ipsec_origin"
+	nativeOriginLimit        = 512
+	nativeConfigStageName    = ".stl-native-config.pending"
+	nativeConfigReceiptStage = ".stl-native-receipt.pending"
 )
 
 type NativeOriginAssessment string
@@ -56,7 +57,9 @@ var (
 )
 
 type nativePublishHooks struct {
-	afterReceipt    func() error // test-only failure injection; no production caller
+	stageDirSync    func(int) error // test-only fsync failure seam; nil uses unix.Fsync
+	afterStage      func() error    // test-only crash after durable pending config
+	afterReceipt    func() error    // test-only failure injection
 	beforeCanonical func() error
 	afterCanonical  func() error
 	nonceSource     io.Reader // test-only deterministic entropy seam; nil uses crypto/rand.Reader
@@ -83,11 +86,10 @@ func newNativeOriginNonce(source io.Reader) ([16]byte, error) {
 	return [16]byte{}, errNativePublicationUnknown
 }
 
-// publishNativeConfigAt is intentionally not exported and has no production
-// call site. It must only be exercised in private fixtures until the host
-// identity/ownership admission and lock integration are independently reviewed.
-// Its prepared receipt is synced BEFORE the no-replace canonical rename.
-// Post-receipt failures are never auto-retried/adopted or rolled back.
+// publishNativeConfigAt is called by the exclusive, freshly confirmed native
+// provisioner and private fixtures. Its durable fixed pending stage is inspected
+// on future attempts. Receipt is synced BEFORE the no-replace canonical rename;
+// ambiguous failures are retained for manual reconciliation, never adopted.
 func publishNativeConfigAt(root string, owner uint32, hooks nativePublishHooks) error {
 	chain, err := openNativePublicationChain(root, owner, true)
 	if err != nil {
@@ -104,6 +106,11 @@ func publishNativeConfigAt(root string, owner uint32, hooks nativePublishHooks) 
 	if err := nativeMustBeAbsent(dir, "strongswan.conf"); err != nil {
 		return err
 	}
+	for _, stage := range []string{nativeConfigStageName, nativeConfigReceiptStage} {
+		if err := nativeMustBeAbsent(dir, stage); err != nil {
+			return err
+		}
+	}
 	if !chain.trusted(owner) {
 		return errNativePublicationConflict
 	}
@@ -117,8 +124,8 @@ func publishNativeConfigAt(root string, owner uint32, hooks nativePublishHooks) 
 		return errNativePublicationUnknown
 	}
 	token := hex.EncodeToString(nonce[:])
-	configStage := ".stl-native-config-" + token + ".tmp"
-	receiptStage := ".stl-native-receipt-" + token + ".tmp"
+	configStage := nativeConfigStageName
+	receiptStage := nativeConfigReceiptStage
 	// Stage is deliberately retained on ambiguous failures: an unverified
 	// pathname must never be blindly unlinked, even if it looks STL-owned.
 	fd, err := unix.Openat(dir, configStage, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
@@ -131,7 +138,20 @@ func publishNativeConfigAt(root string, owner uint32, hooks nativePublishHooks) 
 		return errNativePublicationUnknown
 	}
 	var source unix.Stat_t
-	if unix.Fstat(fd, &source) != nil || !nativeRegularIdentity(source, owner, len(nativeExclusiveConfigV1)) || !chain.trusted(owner) {
+	if unix.Fstat(fd, &source) != nil || !nativeRegularIdentity(source, owner, len(nativeExclusiveConfigV1)) ||
+		!nativePathMatchesFD(dir, configStage, fd, source) || !chain.trusted(owner) {
+		return errNativePublicationUnknown
+	}
+	// Persist the fixed pending name BEFORE the receipt can be published.
+	// If syncing fails, retention/durability is uncertain; never retry blindly.
+	stageDirSync := unix.Fsync
+	if hooks.stageDirSync != nil {
+		stageDirSync = hooks.stageDirSync
+	}
+	if stageDirSync(dir) != nil {
+		return errNativePublicationUnknown
+	}
+	if hooks.afterStage != nil && hooks.afterStage() != nil {
 		return errNativePublicationUnknown
 	}
 	receipt := nativeOriginReceipt{SchemaVersion: 1, Nonce: token, Device: uint64(source.Dev), Inode: source.Ino,
@@ -326,6 +346,15 @@ func inspectNativeOriginAt(root string, owner uint32) NativeOriginAssessment {
 	}
 	defer c.close()
 	dir := c.parent()
+	// Canonical files being absent does not mean a prior transaction was
+	// absent: every preserved pending stage blocks a fresh provisioner.
+	for _, stage := range []string{nativeConfigStageName, nativeConfigReceiptStage} {
+		if err := nativeMustBeAbsent(dir, stage); errors.Is(err, errNativePublicationConflict) {
+			return NativeOriginConflict
+		} else if err != nil {
+			return NativeOriginUnverified
+		}
+	}
 	rfd, re := unix.Openat(dir, nativeOriginName, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if re == nil {
 		defer unix.Close(rfd)

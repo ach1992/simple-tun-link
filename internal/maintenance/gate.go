@@ -48,6 +48,18 @@ func NewInstalledGate() Gate {
 }
 
 func (g Gate) Acquire(ctx context.Context) (func() error, error) {
+	return g.acquire(ctx, unix.LOCK_SH)
+}
+
+// AcquireExclusive is for the canonical owner-confirmed IPsec provisioning
+// transaction. It blocks all shared Engine/installer operations while host
+// service sources and enablement are being established. The lock does not
+// grant permission to overwrite an untrusted foreign systemd/daemon owner.
+func (g Gate) AcquireExclusive(ctx context.Context) (func() error, error) {
+	return g.acquire(ctx, unix.LOCK_EX)
+}
+
+func (g Gate) acquire(ctx context.Context, mode int) (func() error, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("maintenance context is required")
 	}
@@ -83,7 +95,7 @@ func (g Gate) Acquire(ctx context.Context) (func() error, error) {
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		err = unix.Flock(int(f.Fd()), unix.LOCK_SH|unix.LOCK_NB)
+		err = unix.Flock(int(f.Fd()), mode|unix.LOCK_NB)
 		if err == nil {
 			break
 		}

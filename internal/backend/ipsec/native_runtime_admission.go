@@ -28,7 +28,7 @@ var nativeUnitObject = regexp.MustCompile("^/org/freedesktop/systemd1/unit/[A-Za
 type NativeRuntimeAdmission struct{ Runner BoundedCommandRunner }
 
 func NewNativeRuntimeAdmission() NativeRuntimeAdmission {
-	return NativeRuntimeAdmission{Runner: BoundedExecRunner{Timeout: 4 * time.Second}}
+	return NativeRuntimeAdmission{Runner: nativeSystemdRunner{Timeout: 4 * time.Second}}
 }
 
 func (a NativeRuntimeAdmission) readBus(ctx context.Context, args ...string) (string, error) {
@@ -36,7 +36,7 @@ func (a NativeRuntimeAdmission) readBus(ctx context.Context, args ...string) (st
 		return "", fmt.Errorf("systemd inspector unavailable")
 	}
 	result, err := a.Runner.RunBounded(ctx, CaptureLimits{Stdout: 8192, Stderr: 1024},
-		nativeBusctl, append([]string{"--system"}, args...)...)
+		nativeBusctl, append([]string{nativeSystemdBusSelector}, args...)...)
 	defer clear(result.Stdout)
 	defer clear(result.Stderr)
 	if err != nil || len(result.Stdout) == 0 || len(result.Stdout) > 8192 ||
@@ -92,6 +92,9 @@ func (a NativeRuntimeAdmission) require(ctx context.Context, path, iface, key, v
 }
 
 func (a NativeRuntimeAdmission) servicePID(ctx context.Context) (uint32, error) {
+	if err := a.attestSystemdManagerIdentity(ctx); err != nil {
+		return 0, err
+	}
 	path, err := a.loadedUnit(ctx)
 	if err != nil {
 		return 0, err

@@ -15,9 +15,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Both the writer and its test seam are unexported: no CLI/Engine/installer
-// calls this primitive. These paths and their modes are NOT service ownership,
-// activation, startup, package-management or deletion permissions.
+// This unexported publisher is reachable only through the separately
+// confirmed, exclusive native service provisioner and isolated test fixtures.
+// These paths/modes alone NEVER authorize startup or service adoption.
 const (
 	nativeUnitOriginName       = "simple-tun-link-ipsec.service.origin"
 	nativeUnitOriginXattr      = "user.simple_tun_link.ipsec_unit_origin"
@@ -95,8 +95,8 @@ func trustedNativeUnitChain(c *nativePublicationChain, owner uint32) bool {
 	return true
 }
 
-// publishNativeUnitAt is fixture-only, deliberately unreachable from the
-// operational program. Its receipt is durable BEFORE the canonical no-replace
+// publishNativeUnitAt is invoked only under verified native provisioning
+// or isolated tests. Its receipt is durable BEFORE the canonical no-replace
 // rename, so crash/retry ambiguity cannot adopt a foreign or half-written unit.
 // It neither daemon-reloads nor starts/installs a service. An ambiguous stage,
 // even an STL-shaped one, is NEVER blindly removed or retried.

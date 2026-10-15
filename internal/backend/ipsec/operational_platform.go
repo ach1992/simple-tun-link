@@ -39,7 +39,12 @@ type BoundedCommandRunner interface {
 // BoundedExecRunner is an explicit, no-shell and never-secret-logging Linux
 // command boundary. The injected runner is distinct from the main Linux
 // backend package so app.Engine can import ipsec without import cycles.
-type BoundedExecRunner struct{ Timeout time.Duration }
+type BoundedExecRunner struct {
+	Timeout time.Duration
+	// nil retains ordinary backend command behavior; only the native
+	// systemd boundary supplies an isolated, fixed subprocess environment.
+	env []string
+}
 
 type privateCapture struct {
 	output   bytes.Buffer
@@ -70,6 +75,9 @@ func (r BoundedExecRunner) RunBounded(ctx context.Context, limits CaptureLimits,
 	out := &privateCapture{max: limits.Stdout}
 	errOut := &privateCapture{max: limits.Stderr}
 	cmd := exec.CommandContext(bound, command, args...)
+	if r.env != nil {
+		cmd.Env = append([]string{}, r.env...)
+	}
 	cmd.Stdout = out
 	cmd.Stderr = errOut
 	err := cmd.Run()

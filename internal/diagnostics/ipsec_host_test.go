@@ -98,7 +98,9 @@ func TestIPsecDoctorReadOnlyAndNoFalseActivation(t *testing.T) {
 		t.Fatalf("missing durable receipt prerequisite: %+v", c)
 	}
 	if c := checkByName(t, report, "operational_runtime"); c.ReasonCode != "ipsec_runtime_not_registered" ||
-		c.Status != "blocked" || c.NextStep == "" {
+		c.Status != "blocked" || c.NextStep == "" ||
+		!strings.Contains(c.Summary, "not registered for this host") ||
+		!strings.Contains(c.NextStep, "packages alone cannot activate IPsec") {
 		t.Fatalf("missing actionable blocked runtime: %+v", c)
 	}
 	wantCalls := []string{"/usr/bin/pgrep -x charon", "/usr/bin/pgrep -x charon-systemd",

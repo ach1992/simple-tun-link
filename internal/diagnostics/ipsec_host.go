@@ -25,8 +25,10 @@ type IPsecHostCheck struct {
 }
 
 // IPsecHostReport is an independent v1, secret-safe diagnostic contract.
-// In this source-only milestone ActivationAllowed is ALWAYS false.
-// Successful commands are observations, never proof of exclusive ownership.
+// The fallback read-only inspector never admits a runtime. The actual
+// operational backend is independently registered by the production runtime
+// only after its complete, current native-exclusive ownership checks pass.
+// Successful commands here are not proof of exclusive ownership.
 type IPsecHostReport struct {
 	SchemaVersion     int              `json:"schema_version"`
 	Backend           string           `json:"backend"`
@@ -76,8 +78,8 @@ func inspectIPsecHostWithInputs(ctx context.Context, runner linux.Runner, ports 
 		"Check iproute2, kernel XFRM support and inspection permissions; do not treat missing output as vacant state."))
 	report.Checks = append(report.Checks, IPsecHostCheck{
 		Name: "operational_runtime", Status: "blocked", ReasonCode: IPsecRuntimeNotRegisteredReason,
-		Summary:  "IPsec operational activation is not implemented or registered in this build.",
-		NextStep: "Use supported GRE/IPIP/WireGuard links; IPsec activation needs independent ownership, secure logging and traffic acceptance.",
+		Summary:  "IPsec operational runtime is not registered for this host. Its native-exclusive strongSwan service, private configuration and ownership admission are not proven by this read-only inspection.",
+		NextStep: "Review each blocked prerequisite; packages alone cannot activate IPsec. Provision a separately verified STL-exclusive service, then re-run stl doctor ipsec.",
 	})
 	if err := ctx.Err(); err != nil {
 		return IPsecHostReport{}, err

@@ -129,6 +129,13 @@ func (e *Engine) restorePersisted(ctx context.Context, id domain.LinkID) (Result
 	if err := record.Desired.Validate(); err != nil {
 		return Result{}, true, contextualize(err, stlerr.CodeInvalid, "restore", record.Desired, "invalid persisted Link")
 	}
+
+	if e.restoreModules != nil {
+		if prepareErr := e.restoreModules(ctx, record.Desired); prepareErr != nil {
+			return Result{}, true, stlerr.Wrap(stlerr.CodeUnsupported, "restore", string(id), string(record.Desired.Backend),
+				"committed Link's selected kernel dependency could not be restored", prepareErr)
+		}
+	}
 	prior := record.Desired
 	result, err := e.executeLocked(ctx, backend.Request{Operation: backend.OperationEnsure, Prior: &prior, Link: record.Desired}, record, "")
 	if err != nil || record.Desired.Backend != domain.BackendIPsec {

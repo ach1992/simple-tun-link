@@ -13,12 +13,19 @@ Usage:
   install.sh install|update --version vX.Y.Z [--backends native,wireguard,ipsec]
   install.sh install|update --bundle /path/to/release-bundle [--prefix /usr/local] [--backends all]
   install.sh requirements [--backends native,wireguard,ipsec] [--os-release-file /path/to/read-only-fixture]
+  install.sh prepare --backends native|wireguard|ipsec|all
   install.sh uninstall [--prefix /usr/local]
 
 The default backend selection is native (GRE/IPIP). Add wireguard and/or
 ipsec explicitly to provision optional dependencies. "all" selects all.
-IPsec package installation can enable/start charon-systemd: explicit opt-in
-avoids silently affecting pre-existing strongSwan services.
+IPsec package installation can enable/start charon-systemd: any missing
+strongSwan packages require separate manual OS package management after
+reviewing effective foreign service ownership (no automatic APT).
+The prepare action installs only missing selected packages on an existing,
+installer-owned /usr/local/bin/stl, without replacing STL or modifying Links.
+Missing IPsec packages require administrator-managed manual installation:
+APT may start a foreign vendor daemon; STL refuses unattended installation.
+Installed strongSwan packages still require separate private IPsec admission.
 No host Link or network configuration is modified by this installer.
 --bundle is for locally built/tested bundles; system dependencies are
 only installed on the real /usr/local prefix, never an offline test prefix.
@@ -29,13 +36,15 @@ fail() { printf 'stl installer: %s\n' "$*" >&2; exit 1; }
 [[ $# -ge 1 ]] || usage
 action=$1
 shift
-case "$action" in install|update|uninstall|requirements) ;; *) usage ;; esac
+case "$action" in install|update|uninstall|requirements|prepare) ;; *) usage ;; esac
 prefix=/usr/local
 version=
 bundle=
 backends=native
 backends_supplied=0
 os_release_fixture=
+expected_missing=
+expected_missing_supplied=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version) [[ $# -ge 2 && -z $version ]] || usage; version=$2; shift 2 ;;
@@ -43,16 +52,20 @@ while [[ $# -gt 0 ]]; do
     --prefix) [[ $# -ge 2 ]] || usage; prefix=$2; shift 2 ;;
     --backends) [[ $# -ge 2 && $backends_supplied == 0 ]] || usage; backends=$2; backends_supplied=1; shift 2 ;;
     --os-release-file) [[ $# -ge 2 && -z $os_release_fixture ]] || usage; os_release_fixture=$2; shift 2 ;;
+    --expected-missing) [[ $# -ge 2 && $expected_missing_supplied == 0 ]] || usage; expected_missing=$2; expected_missing_supplied=1; shift 2 ;;
     *) usage ;;
   esac
 done
-if [[ $action == uninstall || $action == requirements ]]; then
+if [[ $action == uninstall || $action == requirements || $action == prepare ]]; then
   [[ -z $version && -z $bundle ]] || usage
   [[ $action != uninstall || $backends_supplied == 0 ]] || usage
+  [[ $action != prepare || $backends_supplied == 1 ]] || usage
 else
   [[ -n $version && -z $bundle || -z $version && -n $bundle ]] || usage
 fi
 [[ $action == requirements || -z $os_release_fixture ]] || usage
+[[ $action == prepare || $expected_missing_supplied == 0 ]] || usage
+[[ $action != prepare || $prefix == /usr/local ]] || fail 'package preparation is allowed only for the installer-owned /usr/local installation'
 
 # Use a data-only OS release parser. Never "source" /etc/os-release as shell
 # code, and never accept caller-controlled OS paths for privileged installs.
@@ -122,9 +135,10 @@ select_packages() {
       *) usage ;;
     esac
   done
-  # iproute2 and iptables are always required for Engine runtime and
-  # firewall guards, including a host using only WireGuard/IPsec.
-  packages=(iproute2 iptables)
+  # iproute2/iptables are the Engine/network baseline. The kmod tools
+  # provide the exact modinfo/modprobe commands used by the newly explicit
+  # optional module preflight. This is not permission to load all modules.
+  packages=(iproute2 iptables kmod)
   [[ $want_wg == 0 ]] || packages+=(wireguard-tools)
   # The standard plugin bundle supplies common cryptographic backends such
   # as OpenSSL/GCM; --no-install-recommends would omit it otherwise.
@@ -145,14 +159,22 @@ ensure_packages() {
   for pkg in "${packages[@]}"; do
     package_installed "$pkg" || missing+=("$pkg")
   done
+  # The menu passes its precise prior preview, which the locked canonical
+  # installer compares again BEFORE APT update, service hooks or packages.
+  # Direct CLI prepare may omit this field for manual operator workflows.
+  if [[ $expected_missing_supplied == 1 && "${missing[*]}" != "$expected_missing" ]]; then
+    fail 'selected package inventory changed since explicit confirmation; no APT attempted'
+  fi
   if (( ${#missing[@]} == 0 )); then
     printf 'STL dependencies already installed for %s %s (%s).\n' "$os_id" "$os_version" "$backends" >&2
     return
   fi
-  # Installing new IPsec packages can activate/restart an operator-owned
-  # daemon even if charon-systemd is already present. Require a truly fresh
-  # daemon environment for ANY missing IPsec package; do not opportunistically
-  # take ownership of a foreign strongSwan instance.
+  # APT maintainer hooks may start a foreign effective strongSwan unit, even
+  # when no installed vendor package/process or unit base file is visible.
+  # Exhaustively proving absence of generator/alias/drop-in sources across
+  # supported systemd versions is not safe here. Keep all missing IPsec
+  # packages an explicit administrator-owned manual operation; this installer
+  # MUST NOT invoke apt when a strongSwan package is missing.
   if [[ $want_ipsec == 1 ]]; then
     local missing_ipsec=0
     for pkg in "${missing[@]}"; do
@@ -161,22 +183,7 @@ ensure_packages() {
       esac
     done
     if [[ $missing_ipsec == 1 ]]; then
-      if package_installed strongswan-starter || package_installed charon-systemd; then
-        fail 'existing strongSwan installation requires operator-managed package reconciliation; refusing automatic package changes'
-      fi
-      # Debian 11 minimal images ship pidof but not pgrep; fail closed when
-      # neither process-identity checker is available.
-      if command -v pgrep >/dev/null; then
-        if pgrep -x charon >/dev/null || pgrep -x charon-systemd >/dev/null; then
-          fail 'existing strongSwan daemon process detected; refusing IPsec package changes'
-        fi
-      elif command -v pidof >/dev/null; then
-        if pidof charon charon-systemd >/dev/null; then
-          fail 'existing strongSwan daemon process detected; refusing IPsec package changes'
-        fi
-      else
-        fail 'cannot safely determine whether a strongSwan daemon is already running'
-      fi
+      fail 'Automatic strongSwan package installation is disabled: foreign systemd unit/drop-in/generator execution cannot be proven absent before APT. An administrator must inspect effective service ownership, install needed packages through the OS package manager, then rerun STL readiness checks. No APT attempted.'
     fi
   fi
   printf 'Installing missing STL dependency packages on %s %s: %s\n' "$os_id" "$os_version" "${missing[*]}" >&2
@@ -197,8 +204,19 @@ select_packages
 if [[ $action == requirements ]]; then
   validate_os "${os_release_fixture:-/etc/os-release}"
   printf 'distribution=%s\nversion=%s\nselected_backends=%s\npackages=%s\n'     "$os_id" "$os_version" "$backends" "${packages[*]}"
+  # Optional live-host, read-only observation for the binary-embedded menu
+  # preparer. A caller-supplied OS fixture must not be mixed with host dpkg.
+  # This is a preview, not proof that the installed package set cannot race.
+  if [[ -z $os_release_fixture ]]; then
+    command -v dpkg-query >/dev/null || fail 'cannot inspect installed packages'
+    missing=()
+    for pkg in "${packages[@]}"; do
+      package_installed "$pkg" || missing+=("$pkg")
+    done
+    printf 'missing_packages=%s\n' "${missing[*]}"
+  fi
   if [[ $want_ipsec == 1 ]]; then
-    printf 'notice=IPsec packages can enable/start charon-systemd; existing daemons need operator review\n'
+    printf 'notice=Missing IPsec packages require manual administrator installation; APT may start a foreign VPN daemon\n'
   fi
   exit 0
 fi
@@ -309,6 +327,20 @@ if [[ $action == install ]]; then
   [[ ! -e $record && ! -L $record && ! -e $target && ! -L $target && ! -e $alias && ! -L $alias ]] || fail 'an installed or foreign STL identity already exists; refusing takeover'
 else
   read_record
+fi
+
+# Only the existing installer-owned executable and record are admitted for
+# post-install package provisioning; never change STL binary/Link State here.
+# Runtime OS/package effects are not part of STL's binary rollback transaction.
+if [[ $action == prepare ]]; then
+  if [[ $expected_missing_supplied == 1 ]]; then
+    expected_missing_pattern='^([a-z0-9-]+( [a-z0-9-]+)*)?$'
+    [[ $expected_missing =~ $expected_missing_pattern ]] || fail 'untrusted expected package plan'
+  fi
+  ensure_packages
+  printf 'Selected backend packages prepared; kernel modules and STL-owned service admission must be verified separately. No STL executable or Link was changed.
+'
+  exit 0
 fi
 
 # A release operation is not a Link lifecycle. Prevent uninstall unless STL's

@@ -1,0 +1,147 @@
+# Product-native IPsec service provisioner acceptance. All actual root,
+# systemd, network namespace, kernel and strongSwan mutations happen ONLY in
+# a disconnected disposable Docker guest on a fresh hosted runner.
+name: Disposable native IPsec provisioning E2E
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/ipsec-provision-e2e.yml'
+      - 'internal/backend/ipsec/**'
+      - 'cmd/stl/**'
+      - 'internal/maintenance/**'
+      - 'scripts/e2e/ipsec-**'
+      - 'scripts/install.sh'
+
+permissions:
+  contents: read
+
+jobs:
+  real-native-service:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    timeout-minutes: 38
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Source, host and Docker isolation preflight
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          test -z "$(git status --porcelain)"
+          test ! -e /.dockerenv
+          test "$(uname -m)" = x86_64
+          docker version
+          printf 'IPSEC_NATIVE_PROVISION_SOURCE=%s\n' "$(git rev-parse HEAD)"
+      - name: Build candidate and privileged test drivers
+        run: |
+          set -euo pipefail
+          mkdir -m 0700 /tmp/stl-ipsec-native-e2e
+          go build -o /tmp/stl-ipsec-native-e2e/stl ./cmd/stl
+          go test -c -o /tmp/stl-ipsec-native-e2e/stl-ipsec-provision-test ./internal/backend/ipsec
+          go test -c -o /tmp/stl-ipsec-native-e2e/stl-ipsec-cli-test ./cmd/stl
+          go build -o /tmp/stl-ipsec-native-e2e/stl-ipsec-probe ./scripts/e2e/ipsec-vici-probe
+          # Constructor writes a marker ONLY if charon-systemd executes.
+          cc -Wall -Wextra -Werror -O2 -shared -fPIC -o \
+            /tmp/stl-ipsec-native-e2e/manager-preload.so \
+            scripts/e2e/ipsec-manager-preload-marker.c
+      - name: Build disposable native systemd guest
+        run: |
+          docker build -f scripts/e2e/ipsec-lab-ubuntu-systemd.Dockerfile -t stl-ipsec-real-provision:pr .
+      - name: Deny preexisting foreign drop-in before first private service start
+        run: |
+          set -euo pipefail
+          cid=''
+          cleanup() {
+            if [[ -n "$cid" ]]; then docker rm -f "$cid" >/dev/null 2>&1 || :; fi
+          }
+          trap cleanup EXIT
+          cid=$(docker run --rm -d --network none --privileged --cgroupns private \
+            --tmpfs /run --tmpfs /run/lock stl-ipsec-real-provision:pr)
+          for bin in stl stl-ipsec-provision-test; do
+            docker cp "/tmp/stl-ipsec-native-e2e/$bin" "$cid:/usr/local/bin/$bin"
+          done
+          docker exec "$cid" sh -c 'chown root:root /usr/local/bin/stl /usr/local/bin/stl-ipsec-provision-test && chmod 0755 /usr/local/bin/stl /usr/local/bin/stl-ipsec-provision-test'
+          docker exec -e STL_E2E_DISPOSABLE_HOST=approved \
+            -e STL_IPSEC_ISOLATED=approved \
+            -e STL_IPSEC_SYSTEMD_FIXTURE=approved \
+            -e STL_IPSEC_PRESTART_NEGATIVE=approved \
+            "$cid" /usr/local/bin/stl-ipsec-provision-test \
+            -test.run '^TestIsolatedNativePreStartRejectsForeignDropInWithoutExecuting$' -test.v
+          echo "NATIVE_FOREIGN_DROPIN_PRESTART_E2E=PASS"
+          docker rm -f "$cid" >/dev/null
+          cid=''
+      - name: Deny dangerous manager environment before first root daemon execution
+        run: |
+          set -euo pipefail
+          cid=''
+          cleanup() {
+            if [[ -n "$cid" ]]; then docker rm -f "$cid" >/dev/null 2>&1 || :; fi
+          }
+          trap cleanup EXIT
+          cid=$(docker run --rm -d --network none --privileged --cgroupns private \
+            --tmpfs /run --tmpfs /run/lock stl-ipsec-real-provision:pr)
+          for bin in stl stl-ipsec-provision-test; do
+            docker cp "/tmp/stl-ipsec-native-e2e/$bin" "$cid:/usr/local/bin/$bin"
+          done
+          docker cp /tmp/stl-ipsec-native-e2e/manager-preload.so "$cid:/usr/local/lib/stl-manager-preload.so"
+          docker exec "$cid" sh -c 'chown root:root /usr/local/bin/stl /usr/local/bin/stl-ipsec-provision-test /usr/local/lib/stl-manager-preload.so && chmod 0755 /usr/local/bin/stl /usr/local/bin/stl-ipsec-provision-test && chmod 0644 /usr/local/lib/stl-manager-preload.so'
+          docker exec -e STL_E2E_DISPOSABLE_HOST=approved \
+            -e STL_IPSEC_ISOLATED=approved \
+            -e STL_IPSEC_SYSTEMD_FIXTURE=approved \
+            -e STL_IPSEC_MANAGER_ENV_NEGATIVE=approved \
+            "$cid" /usr/local/bin/stl-ipsec-provision-test \
+            -test.run '^TestIsolatedNativePreStartRejectsManagerEnvironmentWithoutExecuting$' -test.v
+          echo "NATIVE_MANAGER_ENV_PRESTART_NEGATIVE_E2E=PASS"
+          docker rm -f "$cid" >/dev/null
+          cid=''
+      - name: Real private service provisioning and ESP/NAT-T encrypted traffic
+        run: |
+          set -euo pipefail
+          # Every mode gets a fresh disconnected container because credential
+          # and Link identity retirement is intentionally irreversible.
+          cid=''
+          cleanup() {
+            if [[ -n "$cid" ]]; then docker rm -f "$cid" >/dev/null 2>&1 || :; fi
+          }
+          trap cleanup EXIT
+          for encap in esp nat-t; do
+            cid=$(docker run --rm -d --network none --privileged --cgroupns private \
+              --tmpfs /run --tmpfs /run/lock stl-ipsec-real-provision:pr)
+            test -n "$cid"
+            for bin in stl stl-ipsec-provision-test stl-ipsec-cli-test stl-ipsec-probe; do
+              docker cp "/tmp/stl-ipsec-native-e2e/$bin" "$cid:/usr/local/bin/$bin"
+            done
+            docker exec "$cid" sh -c 'chown root:root /usr/local/bin/stl /usr/local/bin/stl-ipsec-* && chmod 0755 /usr/local/bin/stl /usr/local/bin/stl-ipsec-*'
+            docker exec -e STL_E2E_DISPOSABLE_HOST=approved \
+              -e STL_IPSEC_ISOLATED=approved \
+              -e STL_IPSEC_SYSTEMD_FIXTURE=approved \
+              -e STL_IPSEC_REAL_PROVISION=approved \
+              "$cid" /usr/local/bin/stl-ipsec-provision-test \
+              -test.run '^TestIsolatedNativeExclusiveRealProvision$' -test.v
+            docker cp scripts/e2e/ipsec-installed-systemd.sh "$cid:/tmp/stl-native-e2e.sh"
+            if ! docker exec -e STL_E2E_DISPOSABLE_HOST=approved \
+              -e STL_IPSEC_ISOLATED=approved \
+              -e STL_IPSEC_SYSTEMD_FIXTURE=approved \
+              -e STL_IPSEC_ENCAP="$encap" "$cid" bash /tmp/stl-native-e2e.sh; then
+              # Safe, bounded systemd metadata only. Journal and VICI output
+              # may contain credentials and must never be dumped into CI.
+              docker exec "$cid" systemctl show simple-tun-link-ipsec.service \
+                --property=LoadState,ActiveState,SubState,Result,MainPID,ExecMainStatus,UnitFileState,NeedDaemonReload \
+                --no-pager || true
+              docker exec "$cid" systemctl show simple-tun-link-restore.service \
+                --property=LoadState,ActiveState,SubState,Result,ExecMainStatus \
+                --no-pager || true
+              echo "NATIVE_REAL_PROVISION_E2E_FAILED_MODE=$encap"
+              exit 1
+            fi
+            echo "NATIVE_REAL_PROVISION_GUEST_$encap=PASS"
+            docker rm -f "$cid" >/dev/null
+            cid=''
+          done

@@ -576,12 +576,31 @@ that deliberately needs **no active strongSwan service**, only the protected
 State, receipt, maintenance/Link locks and matching key digest.
 Unknown effects never authorize deletion of another key or daemon object.
 
-The native config/unit **publisher functions remain unexported,
-fixture-only**: the production CLI does not install, enable or disable
-any systemd or vendor service. The production package/upgrade plan must
-address vendor strongSwan postinstall autostart side effects and cannot
-silently neutralize an existing administrator-owned service. Owner
-authorization and Issue #12 release acceptance remain separate.
+The native config/unit publisher functions are **unexported** and
+accessible to the separately confirmed native-exclusive IPsec service
+provisioner. Missing strongSwan packages are operator-managed: STL
+refuses automatic IPsec APT whenever a required strongSwan package is
+absent, avoiding unverified vendor service hooks. The dedicated private
+unit must pass effective-systemd PRE-START attestation after
+daemon-reload and before any service execution. The gate also checks the
+bounded D-Bus **effective system-manager environment** (including global
+DefaultEnvironment and runtime set-environment sources) over the system bus with a fixed minimal helper environment excluding
+inherited `DBUS_SYSTEM_BUS_ADDRESS`, `SYSTEMCTL_FORCE_BUS`, `LD_*` and other
+loader/helper overrides. Before trusting systemd D-Bus properties, the
+systemd service-name owner must attest actual `PID=1`, `UID=0` and
+`Comm=systemd` through bounded D-Bus peer credentials; any ambiguity
+fails closed. Root `systemctl` transitions explicitly select the local
+system manager, independently of the caller environment. The gate rejects `LD_*`
+and unexpected `STRONGSWAN_*` values, and proves unit `EnvironmentFiles`,
+`PassEnvironment`, `UnsetEnvironment` and `PAMName` cannot add independent
+spawn-environment sources. Unknown/oversized replies fail closed. The
+manager's settings are **never globally modified by STL**; an administrator
+must inspect/reconcile unsafe values before retry. Post-start `/proc` process
+environment verification remains independent defense in depth. A verified running
+private service receives its boot edge only after post-start runtime
+admission, with a final owner/origin check. No vendor service is
+disabled, replaced, adopted or restarted. These protections are in
+the unreleased Issue #101 candidate; the published rc.5 is unchanged.
 
 ### Native-exclusive IPsec operational proof boundary (Issue #7, 2026-10-12)
 

@@ -1,0 +1,604 @@
+#!/usr/bin/env bash
+# Release installer for simple-tun-link. Does not create/remove Links or systemd units.
+set -Eeuo pipefail
+umask 077
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage:
+  install.sh install --version vX.Y.Z [--prefix /usr/local]
+  install.sh update --version vX.Y.Z [--prefix /usr/local]
+  install.sh install|update --bundle /path/to/release-bundle [--prefix /usr/local]
+  install.sh install|update --version vX.Y.Z [--backends native,wireguard,ipsec]
+  install.sh install|update --bundle /path/to/release-bundle [--prefix /usr/local] [--backends all]
+  install.sh requirements [--backends native,wireguard,ipsec] [--os-release-file /path/to/read-only-fixture]
+  install.sh prepare --backends native|wireguard|ipsec|all
+  install.sh uninstall [--prefix /usr/local]
+
+The default backend selection is native (GRE/IPIP). Add wireguard and/or
+ipsec explicitly to provision optional dependencies. "all" selects all.
+IPsec package installation can enable/start charon-systemd: any missing
+strongSwan packages require separate manual OS package management after
+reviewing effective foreign service ownership (no automatic APT).
+The prepare action installs only missing selected packages on an existing,
+installer-owned /usr/local/bin/stl, without replacing STL or modifying Links.
+Missing IPsec packages require administrator-managed manual installation:
+APT may start a foreign vendor daemon; STL refuses unattended installation.
+Installed strongSwan packages still require separate private IPsec admission.
+No host Link or network configuration is modified by this installer.
+--bundle is for locally built/tested bundles; system dependencies are
+only installed on the real /usr/local prefix, never an offline test prefix.
+USAGE
+  exit 2
+}
+fail() { printf 'stl installer: %s\n' "$*" >&2; exit 1; }
+[[ $# -ge 1 ]] || usage
+action=$1
+shift
+case "$action" in install|update|uninstall|requirements|prepare) ;; *) usage ;; esac
+prefix=/usr/local
+version=
+bundle=
+backends=native
+backends_supplied=0
+os_release_fixture=
+expected_missing=
+expected_missing_supplied=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --version) [[ $# -ge 2 && -z $version ]] || usage; version=$2; shift 2 ;;
+    --bundle) [[ $# -ge 2 && -z $bundle ]] || usage; bundle=$2; shift 2 ;;
+    --prefix) [[ $# -ge 2 ]] || usage; prefix=$2; shift 2 ;;
+    --backends) [[ $# -ge 2 && $backends_supplied == 0 ]] || usage; backends=$2; backends_supplied=1; shift 2 ;;
+    --os-release-file) [[ $# -ge 2 && -z $os_release_fixture ]] || usage; os_release_fixture=$2; shift 2 ;;
+    --expected-missing) [[ $# -ge 2 && $expected_missing_supplied == 0 ]] || usage; expected_missing=$2; expected_missing_supplied=1; shift 2 ;;
+    *) usage ;;
+  esac
+done
+if [[ $action == uninstall || $action == requirements || $action == prepare ]]; then
+  [[ -z $version && -z $bundle ]] || usage
+  [[ $action != uninstall || $backends_supplied == 0 ]] || usage
+  [[ $action != prepare || $backends_supplied == 1 ]] || usage
+else
+  [[ -n $version && -z $bundle || -z $version && -n $bundle ]] || usage
+fi
+[[ $action == requirements || -z $os_release_fixture ]] || usage
+[[ $action == prepare || $expected_missing_supplied == 0 ]] || usage
+[[ $action != prepare || $prefix == /usr/local ]] || fail 'package preparation is allowed only for the installer-owned /usr/local installation'
+
+# Use a data-only OS release parser. Never "source" /etc/os-release as shell
+# code, and never accept caller-controlled OS paths for privileged installs.
+read_os_value() {
+  local path=$1 key=$2 line value= count=0
+  [[ -f $path && -r $path ]] || fail "OS release file is unreadable: $path"
+  while IFS= read -r line || [[ -n $line ]]; do
+    if [[ $line == "$key="* ]]; then
+      ((count+=1))
+      value=${line#*=}
+    fi
+  done < "$path"
+  [[ $count == 1 ]] || fail "OS release must define $key exactly once"
+  if [[ $value == \"*\" ]]; then value=${value:1:${#value}-2}; fi
+  [[ $value =~ ^[a-zA-Z0-9._-]+$ ]] || fail "invalid $key in OS release"
+  printf '%s' "$value"
+}
+
+validate_os() {
+  local os_file=$1 major minor
+  os_id=$(read_os_value "$os_file" ID)
+  os_version=$(read_os_value "$os_file" VERSION_ID)
+  case "$os_id" in
+    debian)
+      [[ $os_version =~ ^([0-9]+)(\.[0-9]+)?$ ]] || fail "invalid Debian version: $os_version"
+      major=${BASH_REMATCH[1]}
+      (( 10#$major >= 11 )) || fail "Debian 11 or later is required; found $os_version"
+      if (( 10#$major == 11 )); then
+        printf 'stl installer WARNING: Debian 11 LTS ended 2026-08-31; retain compatibility only with separately maintained security support. No APT source changes are made.\n' >&2
+      fi
+      ;;
+    ubuntu)
+      [[ $os_version =~ ^([0-9]+)\.([0-9]{2})$ ]] || fail "invalid Ubuntu version: $os_version"
+      major=${BASH_REMATCH[1]}
+      minor=${BASH_REMATCH[2]}
+      (( 10#$major > 22 || (10#$major == 22 && 10#$minor >= 4) )) ||
+        fail "Ubuntu 22.04 or later is required; found $os_version"
+      ;;
+    *) fail "unsupported distribution: $os_id $os_version; expected Ubuntu >=22.04 or Debian >=11" ;;
+  esac
+}
+
+# Explicit backend selection prevents unexpectedly provisioning an IPsec
+# daemon on a host that already has another strongSwan deployment.
+select_packages() {
+  local item
+  local -a requested=()
+  want_native=0
+  want_wg=0
+  want_ipsec=0
+  [[ $backends =~ ^[a-z,]+$ ]] || usage
+  # Bash read -a silently discards an empty trailing CSV item.
+  [[ $backends != ,* && $backends != *, && $backends != *,,* ]] || usage
+  IFS=',' read -ra requested <<< "$backends"
+  [[ ${#requested[@]} -gt 0 ]] || usage
+  for item in "${requested[@]}"; do
+    case "$item" in
+      native) [[ $want_native == 0 ]] || usage; want_native=1 ;;
+      wireguard) [[ $want_wg == 0 ]] || usage; want_wg=1 ;;
+      ipsec) [[ $want_ipsec == 0 ]] || usage; want_ipsec=1 ;;
+      all)
+        [[ ${#requested[@]} == 1 ]] || usage
+        want_native=1
+        want_wg=1
+        want_ipsec=1
+        ;;
+      *) usage ;;
+    esac
+  done
+  # iproute2/iptables are the Engine/network baseline. The kmod tools
+  # provide the exact modinfo/modprobe commands used by the newly explicit
+  # optional module preflight. This is not permission to load all modules.
+  packages=(iproute2 iptables kmod)
+  [[ $want_wg == 0 ]] || packages+=(wireguard-tools)
+  # The standard plugin bundle supplies common cryptographic backends such
+  # as OpenSSL/GCM; --no-install-recommends would omit it otherwise.
+  [[ $want_ipsec == 0 ]] || packages+=(charon-systemd strongswan-swanctl libstrongswan-standard-plugins)
+}
+
+package_installed() {
+  local result
+  result=$(dpkg-query -W -f='${Status}' -- "$1" 2>/dev/null) || return 1
+  [[ $result == 'install ok installed' ]]
+}
+
+ensure_packages() {
+  local pkg
+  local -a missing=()
+  command -v apt-get >/dev/null && command -v dpkg-query >/dev/null ||
+    fail 'apt-get and dpkg-query are required on supported distributions'
+  for pkg in "${packages[@]}"; do
+    package_installed "$pkg" || missing+=("$pkg")
+  done
+  # The menu passes its precise prior preview, which the locked canonical
+  # installer compares again BEFORE APT update, service hooks or packages.
+  # Direct CLI prepare may omit this field for manual operator workflows.
+  if [[ $expected_missing_supplied == 1 && "${missing[*]}" != "$expected_missing" ]]; then
+    fail 'selected package inventory changed since explicit confirmation; no APT attempted'
+  fi
+  if (( ${#missing[@]} == 0 )); then
+    printf 'STL dependencies already installed for %s %s (%s).\n' "$os_id" "$os_version" "$backends" >&2
+    return
+  fi
+  # APT maintainer hooks may start a foreign effective strongSwan unit, even
+  # when no installed vendor package/process or unit base file is visible.
+  # Exhaustively proving absence of generator/alias/drop-in sources across
+  # supported systemd versions is not safe here. Keep all missing IPsec
+  # packages an explicit administrator-owned manual operation; this installer
+  # MUST NOT invoke apt when a strongSwan package is missing.
+  if [[ $want_ipsec == 1 ]]; then
+    local missing_ipsec=0
+    for pkg in "${missing[@]}"; do
+      case "$pkg" in
+        charon-systemd|strongswan-swanctl|libstrongswan-standard-plugins) missing_ipsec=1 ;;
+      esac
+    done
+    if [[ $missing_ipsec == 1 ]]; then
+      fail 'Automatic strongSwan package installation is disabled: foreign systemd unit/drop-in/generator execution cannot be proven absent before APT. An administrator must inspect effective service ownership, install needed packages through the OS package manager, then rerun STL readiness checks. No APT attempted.'
+    fi
+  fi
+  printf 'Installing missing STL dependency packages on %s %s: %s\n' "$os_id" "$os_version" "${missing[*]}" >&2
+  DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none apt-get -o Acquire::Retries=2 update ||
+    fail 'apt package index refresh failed; STL executable is unchanged'
+  if ! DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none apt-get install -y --no-install-recommends -- "${missing[@]}"; then
+    if [[ $os_id == debian && $os_version == 11* ]]; then
+      fail 'Debian 11 post-LTS APT repositories can reference removed security packages (HTTP 404). STL executable is unchanged; use maintained signed Debian 11/ELTS sources or upgrade to Debian 12+, then retry. The installer never overrides APT verification or rewrites sources.'
+    fi
+    fail 'apt dependency installation failed; STL executable is unchanged (inspect package manager state)'
+  fi
+  for pkg in "${packages[@]}"; do
+    package_installed "$pkg" || fail "package remains unavailable after installation: $pkg"
+  done
+}
+
+select_packages
+if [[ $action == requirements ]]; then
+  validate_os "${os_release_fixture:-/etc/os-release}"
+  printf 'distribution=%s\nversion=%s\nselected_backends=%s\npackages=%s\n'     "$os_id" "$os_version" "$backends" "${packages[*]}"
+  # Optional live-host, read-only observation for the binary-embedded menu
+  # preparer. A caller-supplied OS fixture must not be mixed with host dpkg.
+  # This is a preview, not proof that the installed package set cannot race.
+  if [[ -z $os_release_fixture ]]; then
+    command -v dpkg-query >/dev/null || fail 'cannot inspect installed packages'
+    missing=()
+    for pkg in "${packages[@]}"; do
+      package_installed "$pkg" || missing+=("$pkg")
+    done
+    printf 'missing_packages=%s\n' "${missing[*]}"
+  fi
+  if [[ $want_ipsec == 1 ]]; then
+    printf 'notice=Missing IPsec packages require manual administrator installation; APT may start a foreign VPN daemon\n'
+  fi
+  exit 0
+fi
+if [[ -n $version ]]; then
+  [[ $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][a-zA-Z0-9.-]+)?$ ]] || usage
+fi
+[[ $(uname -s) == Linux ]] || fail 'STL installer supports Linux only'
+[[ $prefix == /* && $prefix != / && -d $prefix && ! -L $prefix ]] || fail 'prefix must be an existing absolute non-symlink directory'
+[[ "$(realpath -e -- "$prefix")" == "$prefix" ]] || fail 'prefix must be canonical (no symlinks or dot segments)'
+# Nondefault prefixes are isolated/offline test or custom local installations.
+[[ $prefix == /usr/local || -n $bundle || $action == uninstall ]] || fail 'a nondefault prefix requires an offline --bundle'
+[[ $prefix != /usr/local || $EUID -eq 0 ]] || fail 'installation to /usr/local requires root'
+if [[ $prefix == /usr/local && $action != uninstall ]]; then
+  # Fail early, before installing files or packages, on unsupported systems.
+  validate_os /etc/os-release
+fi
+bin_dir="$prefix/bin"
+record_dir="$prefix/lib/simple-tun-link"
+target="$bin_dir/stl"
+alias="$bin_dir/stlink"
+record="$record_dir/install-record"
+lock="$record_dir/.maintenance.lock"
+[[ -d $bin_dir && ! -L $bin_dir && -d $prefix/lib && ! -L $prefix/lib ]] || fail 'prefix must already contain safe bin and lib directories'
+
+# Default system-wide install must not traverse a writable or unowned directory.
+if [[ $prefix == /usr/local ]]; then
+  for path in / /usr /usr/local "$bin_dir" "$prefix/lib"; do
+    [[ ! -L $path && -d $path && $(stat -c %u -- "$path") == 0 ]] || fail "untrusted installation directory: $path"
+    perms=$(stat -c %a -- "$path")
+    [[ $perms =~ ^[0-7]{3,4}$ ]] && (( (8#$perms & 8#022) == 0 )) || fail "installation directory is writable by non-root: $path"
+  done
+fi
+
+if [[ $action != install ]]; then
+  [[ -d $record_dir && ! -L $record_dir ]] || fail 'no STL installer-owned installation found'
+fi
+if [[ ! -e $record_dir ]]; then
+  mkdir -m 0700 -- "$record_dir" || fail 'cannot create installer-owned metadata directory'
+fi
+[[ -d $record_dir && ! -L $record_dir ]] || fail 'untrusted installer metadata directory'
+if [[ $prefix == /usr/local ]]; then
+  [[ $(stat -c %u -- "$record_dir") == 0 ]] || fail 'installer metadata must be root-owned'
+  perms=$(stat -c %a -- "$record_dir")
+  [[ $perms =~ ^[0-7]{3,4}$ ]] && (( (8#$perms & 8#077) == 0 )) || fail 'installer metadata directory must be private'
+fi
+[[ ! -L $lock && ( ! -e $lock || -f $lock ) ]] || fail 'unsafe installer lock identity'
+exec 9>>"$lock"
+flock -x -w 30 9 || fail 'another STL installer is running'
+is_regular() { [[ -f $1 && ! -L $1 ]]; }
+hash_file() { sha256sum -- "$1" | awk '{print $1}'; }
+sync_paths() { sync -f -- "$@"; }
+failpoint() {
+  if [[ $prefix != /usr/local && ${STL_INSTALL_TEST_FAIL_AT:-} == "$1" ]]; then
+    fail "injected $1 durability/transaction failure (isolated test only)"
+  fi
+}
+# Preserve uncertain transactions and never replay them blindly. A prior
+# durable COMMITTED journal may be retired only after verifying the recorded
+# current installation identity under the exclusive maintenance gate.
+shopt -s nullglob
+recovery_dirs=("$bin_dir"/.stl-install.*)
+shopt -u nullglob
+for recovery in "${recovery_dirs[@]}"; do
+  [[ -d $recovery && ! -L $recovery ]] || fail 'unsafe retained recovery identity'
+  marker="$recovery/COMMITTED"
+  is_regular "$marker" || fail 'unreconciled STL installer recovery directory exists; inspect it before retrying'
+  saved_action=$(sed -n 's/^operation=//p' "$marker")
+  saved_hash=$(sed -n 's/^sha256=//p' "$marker")
+  [[ $saved_hash =~ ^[0-9a-f]{64}$ ]] || fail 'invalid committed recovery marker'
+  [[ $saved_action == install || $saved_action == update || $saved_action == uninstall ]] || fail 'unknown committed recovery operation'
+  # Journal v1 requires exactly three fields, in canonical order, with one
+  # trailing newline. Incomplete/corrupt markers never authorize recovery.
+  marker_body=$(cat -- "$marker") || fail 'cannot read committed recovery marker'
+  marker_expected=$(printf 'status=committed\noperation=%s\nsha256=%s' "$saved_action" "$saved_hash")
+  [[ $marker_body == "$marker_expected" && $(wc -c < "$marker") -eq $(( ${#marker_expected} + 1 )) ]] || fail 'invalid committed recovery journal structure'
+  case "$saved_action" in
+    install|update)
+      is_regular "$record" && is_regular "$target" &&
+        [[ -L $alias && $(readlink -- "$alias") == stl ]] &&
+        [[ $(hash_file "$target") == "$saved_hash" ]] || fail 'committed installation differs; preserve recovery evidence'
+      saved_record_version=$(sed -n 's/^version=//p' "$record")
+      [[ $saved_record_version =~ ^(v[0-9]+\.[0-9]+\.[0-9]+([.-][a-zA-Z0-9.-]+)?|dev-[0-9a-f]{12})$ ]] || fail 'invalid committed recovery record version'
+      record_body=$(cat -- "$record") || fail 'cannot read committed recovery record'
+      record_expected=$(printf 'format=1\nproject=simple-tun-link\nversion=%s\nsha256=%s' "$saved_record_version" "$saved_hash")
+      [[ $record_body == "$record_expected" && $(wc -c < "$record") -eq $(( ${#record_expected} + 1 )) ]] || fail 'committed recovery record identity is inconsistent'
+      ;;
+    uninstall)
+      [[ ! -e $record && ! -L $record && ! -e $target && ! -L $target && ! -e $alias && ! -L $alias ]] || fail 'committed uninstall differs; preserve recovery evidence'
+      ;;
+    *) fail 'unknown committed recovery operation' ;;
+  esac
+  rm -rf -- "$recovery" || fail 'cannot retire verified committed recovery'
+  sync_paths "$bin_dir" || fail 'cannot durably retire verified committed recovery'
+done
+read_record() {
+  is_regular "$record" || fail 'STL ownership record is missing or not regular'
+  grep -qx 'format=1' "$record" && grep -qx 'project=simple-tun-link' "$record" || fail 'invalid ownership record'
+  prior_version=$(sed -n 's/^version=//p' "$record")
+  prior_hash=$(sed -n 's/^sha256=//p' "$record")
+  [[ $prior_hash =~ ^[0-9a-f]{64}$ && $prior_version =~ ^(v[0-9]+\.[0-9]+\.[0-9]+([.-][a-zA-Z0-9.-]+)?|dev-[0-9a-f]{12})$ ]] || fail 'invalid ownership record fields'
+  is_regular "$target" || fail 'installed stl is missing or unsafe'
+  [[ $(hash_file "$target") == "$prior_hash" ]] || fail 'installed stl differs from recorded owned binary; refusing overwrite'
+  [[ -L $alias && $(readlink -- "$alias") == stl ]] || fail 'stlink alias missing or differs from installer-owned symlink'
+  prior_record_hash=$(hash_file "$record")
+}
+
+if [[ $action == install ]]; then
+  [[ ! -e $record && ! -L $record && ! -e $target && ! -L $target && ! -e $alias && ! -L $alias ]] || fail 'an installed or foreign STL identity already exists; refusing takeover'
+else
+  read_record
+fi
+
+# Only the existing installer-owned executable and record are admitted for
+# post-install package provisioning; never change STL binary/Link State here.
+# Runtime OS/package effects are not part of STL's binary rollback transaction.
+if [[ $action == prepare ]]; then
+  if [[ $expected_missing_supplied == 1 ]]; then
+    expected_missing_pattern='^([a-z0-9-]+( [a-z0-9-]+)*)?$'
+    [[ $expected_missing =~ $expected_missing_pattern ]] || fail 'untrusted expected package plan'
+  fi
+  ensure_packages
+  printf 'Selected backend packages prepared; kernel modules and STL-owned service admission must be verified separately. No STL executable or Link was changed.
+'
+  exit 0
+fi
+
+# A release operation is not a Link lifecycle. Prevent uninstall unless STL's
+# canonical read contract proves zero Links and the Engine-owned unit is absent.
+if [[ $action == uninstall ]]; then
+  # Installer holds exclusive maintenance flock. The canonical Go preflight
+  # is the single authority on durable state and systemd enablement.
+  checked=$("$target" maintenance pre-uninstall --json) || fail 'canonical uninstall preflight failed; no files removed'
+  [[ $checked == '{"schema_version":1,"ready":true}' ]] || fail 'canonical uninstall preflight did not prove safety'
+
+fi
+
+stage=
+record_tmp=
+new_hash=
+new_record_hash=
+keep_recovery=0
+
+# All failure compensation is identity-guarded. Keep previous recovery copies
+# in stage (do not mv away the only copy) until the repaired canonical state
+# and every applicable parent directory are durably synchronized.
+finish() {
+  local rc=$?
+  trap - EXIT
+  set +e
+  if [[ -n $stage && -d $stage ]]; then
+    if (( rc == 0 )); then
+      if [[ -f $stage/COMMITTED ]]; then
+        # A deliberately retained, fsynced commit marker is reconciled and
+        # retired by the next installer invocation, after verifying identity.
+        :
+      else
+        rm -rf -- "$stage" || rc=1
+        sync_paths "$bin_dir" || rc=1
+      fi
+    elif [[ -f $stage/COMMITTED ]]; then
+      keep_recovery=1
+    else
+      if [[ $action == uninstall ]]; then
+        if [[ ! -f $target || -L $target || $(hash_file "$target") != "$prior_hash" ]]; then
+          if [[ ! -e $target && ! -L $target && -f $stage/previous-stl ]] &&
+             [[ $(hash_file "$stage/previous-stl") == "$prior_hash" ]]; then
+            cp -p -- "$stage/previous-stl" "$stage/recover-stl" &&
+              sync_paths "$stage/recover-stl" "$stage" &&
+              mv -T -- "$stage/recover-stl" "$target" || keep_recovery=1
+          else
+            keep_recovery=1
+          fi
+        fi
+        if [[ ! -f $record || -L $record || $(hash_file "$record") != "$prior_record_hash" ]]; then
+          if [[ ! -e $record && ! -L $record && -f $stage/previous-record ]] &&
+             [[ $(hash_file "$stage/previous-record") == "$prior_record_hash" ]]; then
+            cp -p -- "$stage/previous-record" "$record_dir/.stl-restore-record.$$" &&
+              sync_paths "$record_dir/.stl-restore-record.$$" &&
+              mv -T -- "$record_dir/.stl-restore-record.$$" "$record" || keep_recovery=1
+          else
+            keep_recovery=1
+          fi
+        fi
+        if [[ ! -L $alias || $(readlink -- "$alias") != stl ]]; then
+          if [[ ! -e $alias && ! -L $alias ]]; then
+            ln -s stl "$alias" || keep_recovery=1
+          else
+            keep_recovery=1
+          fi
+        fi
+      else
+        if [[ -n $new_hash && -f $target && ! -L $target && $(hash_file "$target") == "$new_hash" ]]; then
+          if [[ $action == update ]]; then
+            if [[ $new_hash != "$prior_hash" ]]; then
+              if [[ -f $stage/previous-stl && $(hash_file "$stage/previous-stl") == "$prior_hash" ]]; then
+                cp -p -- "$stage/previous-stl" "$stage/recover-stl" &&
+                  sync_paths "$stage/recover-stl" "$stage" &&
+                  mv -T -- "$stage/recover-stl" "$target" || keep_recovery=1
+              else
+                keep_recovery=1
+              fi
+            fi
+          else
+            rm -- "$target" || keep_recovery=1
+          fi
+        elif [[ $action == install && ( -e $target || -L $target ) ]]; then
+          keep_recovery=1
+        elif [[ $action == update ]] &&
+             [[ ! -f $target || -L $target || $(hash_file "$target") != "$prior_hash" ]]; then
+          keep_recovery=1
+        fi
+        if [[ $action == install && -L $alias && $(readlink -- "$alias") == stl ]]; then
+          rm -- "$alias" || keep_recovery=1
+        elif [[ $action == install && ( -e $alias || -L $alias ) ]]; then
+          keep_recovery=1
+        fi
+        if [[ -n $new_record_hash && -f $record && ! -L $record && $(hash_file "$record") == "$new_record_hash" ]]; then
+          if [[ $action == update ]]; then
+            if [[ -f $stage/previous-record && $(hash_file "$stage/previous-record") == "$prior_record_hash" ]]; then
+              cp -p -- "$stage/previous-record" "$record_dir/.stl-restore-record.$$" &&
+                sync_paths "$record_dir/.stl-restore-record.$$" &&
+                mv -T -- "$record_dir/.stl-restore-record.$$" "$record" || keep_recovery=1
+            else
+              keep_recovery=1
+            fi
+          else
+            rm -- "$record" || keep_recovery=1
+          fi
+        elif [[ $action == install && ( -e $record || -L $record ) ]]; then
+          keep_recovery=1
+        elif [[ $action == update ]] &&
+             [[ ! -f $record || -L $record || $(hash_file "$record") != "$prior_record_hash" ]]; then
+          keep_recovery=1
+        fi
+      fi
+      # A successful apparent compensation is not a proven rollback until
+      # all restored files, aliases and directory entries have been fsynced.
+      if (( !keep_recovery )); then
+        [[ ! -e $target || ( -f $target && ! -L $target ) ]] || keep_recovery=1
+        if [[ -f $target ]]; then sync_paths "$target" || keep_recovery=1; fi
+        if [[ -f $record ]]; then sync_paths "$record" || keep_recovery=1; fi
+        sync_paths "$bin_dir" "$record_dir" "$stage" || keep_recovery=1
+        if [[ $prefix != /usr/local && ${STL_INSTALL_TEST_FAIL_AT:-} == compensation-sync ]]; then
+          keep_recovery=1
+        fi
+      fi
+      if (( !keep_recovery )); then
+        rm -rf -- "$stage" || keep_recovery=1
+        sync_paths "$bin_dir" || keep_recovery=1
+      fi
+    fi
+    if (( keep_recovery )); then
+      printf 'stl installer: partial failure; inspect retained recovery directory: %s\n' "$stage" >&2
+    fi
+  fi
+  if [[ -n $record_tmp ]]; then
+    rm -f -- "$record_tmp" "$record_tmp.recover"
+  fi
+  exit "$rc"
+}
+
+# All source and record materials must be synced before the first canonical
+# namespace mutation. COMMITTED is written only after both identities are
+# verified and all canonical publication/directory syncs succeeded.
+commit_marker() {
+  local committed_hash=$1
+  printf 'status=committed\noperation=%s\nsha256=%s\n' "$action" "$committed_hash" > "$stage/COMMITTED"
+  chmod 0600 "$stage/COMMITTED"
+  sync_paths "$stage/COMMITTED" "$stage" "$bin_dir" "$record_dir" || fail 'cannot durably publish committed transaction marker'
+}
+trap finish EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+stage=$(mktemp -d "$bin_dir/.stl-install.XXXXXXXX")
+
+if [[ $action == uninstall ]]; then
+  cp -p -- "$target" "$stage/previous-stl"
+  cp -p -- "$record" "$stage/previous-record"
+  [[ $(hash_file "$target") == "$prior_hash" && $(hash_file "$record") == "$prior_record_hash" ]] || fail 'installed identity changed before uninstall'
+  sync_paths "$stage/previous-stl" "$stage/previous-record" "$stage" "$bin_dir" || fail 'cannot durably preserve uninstall rollback source'
+  failpoint prepublish-sync
+  rm -- "$alias"
+  sync_paths "$bin_dir" || fail 'cannot durably retire alias'
+  # The durable previous-stl is a copy, not a hardlink. Unlink canonical
+  # instead of moving its live inode into recovery: queued processes must see
+  # /usr/local/bin/stl (deleted) after uninstall, not a recovery pathname.
+  rm -- "$target"
+  sync_paths "$bin_dir" "$stage" || fail 'cannot durably retire canonical executable'
+  rm -- "$record"
+  if [[ $prefix != /usr/local && ${STL_INSTALL_TEST_FAIL_AFTER_UNINSTALL_REMOVE:-} == 1 ]]; then
+    fail 'injected uninstall failure (isolated test only)'
+  fi
+  sync_paths "$record_dir" || fail 'cannot durably retire ownership record'
+  failpoint record-sync
+  [[ ! -e $target && ! -L $target && ! -e $alias && ! -L $alias && ! -e $record && ! -L $record ]] || fail 'uninstall identities not fully retired'
+  commit_marker "$prior_hash"
+  printf 'Uninstalled installer-owned stl/stlink only; Link state was left untouched.\n'
+  exit 0
+fi
+
+arch=$(uname -m)
+case "$arch" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) fail "unsupported architecture: $arch" ;; esac
+if [[ -n $bundle ]]; then
+  [[ -d $bundle && ! -L $bundle ]] || fail 'bundle must be a directory, not a symlink'
+  bundle=$(realpath -e -- "$bundle")
+  is_regular "$bundle/BUILD-MANIFEST.txt" || fail 'bundle manifest missing or unsafe'
+  version=$(sed -n 's/^version=//p' "$bundle/BUILD-MANIFEST.txt")
+  [[ $version =~ ^(v[0-9]+\.[0-9]+\.[0-9]+([.-][a-zA-Z0-9.-]+)?|dev-[0-9a-f]{12})$ ]] || fail 'invalid bundle version'
+fi
+asset="stl_${version}_linux_${arch}"
+for file in SHA256SUMS BUILD-MANIFEST.txt LICENSE "$asset"; do
+  if [[ -n $bundle ]]; then
+    is_regular "$bundle/$file" || fail "bundle file missing or unsafe: $file"
+    cp -- "$bundle/$file" "$stage/$file" || fail "cannot read bundle file: $file"
+  else
+    url="https://github.com/ach1992/simple-tun-link/releases/download/${version}/${file}"
+    curl -fLSs --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 -o "$stage/$file" "$url" || fail "cannot download release file: $file"
+  fi
+done
+for file in BUILD-MANIFEST.txt LICENSE "$asset"; do
+  expected=$(awk -v name="$file" '$2 == name {print $1}' "$stage/SHA256SUMS")
+  [[ $expected =~ ^[0-9a-f]{64}$ ]] || fail "missing/duplicate or malformed SHA256 entry for $file"
+  [[ $(hash_file "$stage/$file") == "$expected" ]] || fail "checksum mismatch for $file"
+done
+manifest="$stage/BUILD-MANIFEST.txt"
+grep -qx 'project=simple-tun-link' "$manifest" && grep -qx 'executable=stl' "$manifest" && grep -qx 'license=MIT' "$manifest" && grep -qx "version=$version" "$manifest" || fail 'release manifest does not describe the intended STL build'
+if [[ -z $bundle ]]; then grep -qx 'mode=tag' "$manifest" || fail 'remote release must be built from a tag'; fi
+commit=$(sed -n 's/^commit=//p' "$manifest")
+[[ $commit =~ ^[0-9a-f]{40}$ ]] || fail 'invalid release commit metadata'
+[[ $(head -n 1 "$stage/LICENSE") == 'MIT License' ]] || fail 'release LICENSE is not MIT'
+install -m 0755 -- "$stage/$asset" "$stage/incoming"
+metadata=$("$stage/incoming" version --json) || fail 'downloaded binary cannot report version metadata'
+[[ $metadata == *\"version\":\"$version\"* && $metadata == *\"commit\":\"$commit\"* ]] || fail 'release executable and manifest identity disagree'
+# Install only missing distro-native prerequisites, after authenticating the
+# exact candidate artifact and BEFORE touching the canonical STL executable.
+# Package installations are not part of the STL binary rollback transaction;
+# do not auto-remove/undo administrator-owned APT state on any failure.
+if [[ $prefix == /usr/local ]]; then ensure_packages; fi
+new_hash=$(hash_file "$stage/incoming")
+record_tmp=$(mktemp "$record_dir/.install-record.XXXXXXXX")
+printf 'format=1\nproject=simple-tun-link\nversion=%s\nsha256=%s\n' "$version" "$new_hash" > "$record_tmp"
+chmod 0600 "$record_tmp"
+new_record_hash=$(hash_file "$record_tmp")
+# The incoming executable and prepared metadata must be durable before the
+# first destructive rename. A directory sync records the recovery namespace.
+sync_paths "$stage/incoming" "$record_tmp" "$stage" "$record_dir" "$bin_dir" || fail 'cannot durably prepare incoming install transaction'
+
+if [[ $action == update ]]; then
+  cp -p -- "$target" "$stage/previous-stl"
+  cp -p -- "$record" "$stage/previous-record"
+  [[ $(hash_file "$target") == "$prior_hash" && $(hash_file "$record") == "$prior_record_hash" ]] || fail 'installed binary or record changed before update'
+  sync_paths "$stage/previous-stl" "$stage/previous-record" "$stage" "$bin_dir" || fail 'cannot durably preserve update rollback sources'
+  if [[ $prior_hash == "$new_hash" ]]; then
+    printf 'stl is already installed from this exact artifact (%s).\n' "$version"
+    exit 0
+  fi
+fi
+failpoint prepublish-sync
+# Incoming and canonical executable are in the same directory/filesystem.
+# mv -T is an atomic rename: the old executable is never truncated in place.
+mv -T -- "$stage/incoming" "$target"
+if [[ -n $bundle && $prefix != /usr/local && ${STL_INSTALL_TEST_FAIL_AFTER_SWAP:-} == 1 ]]; then
+  fail 'injected after-swap failure (offline isolated test only)'
+fi
+if [[ $action == update && -n $bundle && $prefix != /usr/local && ${STL_INSTALL_TEST_CORRUPT_BACKUP:-} == 1 ]]; then
+  printf 'damaged\n' >> "$stage/previous-stl"
+  fail 'injected damaged recovery source (offline isolated test only)'
+fi
+sync_paths "$target" "$bin_dir" || fail 'binary publication sync failed'
+failpoint post-executable-sync
+if [[ $action == install ]]; then
+  ln -s stl "$alias"
+  sync_paths "$bin_dir" || fail 'alias publication sync failed'
+fi
+if [[ $action == update ]]; then
+  [[ $(hash_file "$record") == "$prior_record_hash" ]] || fail 'install record changed during binary update; reconciliation required'
+else
+  [[ ! -e $record && ! -L $record ]] || fail 'install record appeared during installation; refusing overwrite'
+fi
+mv -T -- "$record_tmp" "$record"
+sync_paths "$record" "$record_dir" || fail 'ownership record publication sync failed'
+failpoint record-sync
+[[ $(hash_file "$record") == "$new_record_hash" && $(hash_file "$target") == "$new_hash" && -L $alias && $(readlink -- "$alias") == stl ]] || fail 'post-publication identity check failed'
+commit_marker "$new_hash"
+printf '%s stl %s for linux/%s; stlink resolves to the same executable.\n' "${action^}" "$version" "$arch"

@@ -23,14 +23,14 @@ for distro in 'ubuntu 22.04' 'ubuntu 22.10' 'ubuntu 24.04' 'ubuntu 26.04' \
   plan native
   grep -qx "distribution=$os" "$root/out" || fail "wrong distro for $distro"
   grep -qx "version=$version" "$root/out" || fail "wrong version for $distro"
-  grep -qx "packages=iproute2 iptables" "$root/out" || fail "wrong native package list on $distro"
+  grep -qx "packages=iproute2 iptables kmod" "$root/out" || fail "wrong native package list on $distro"
   plan native,wireguard
-  grep -qx "packages=iproute2 iptables wireguard-tools" "$root/out" || fail "wrong WireGuard package list on $distro"
+  grep -qx "packages=iproute2 iptables kmod wireguard-tools" "$root/out" || fail "wrong WireGuard package list on $distro"
   plan native,ipsec
-  grep -qx "packages=iproute2 iptables charon-systemd strongswan-swanctl libstrongswan-standard-plugins" "$root/out" || fail "wrong IPsec package list on $distro"
-  grep -q 'notice=IPsec packages can enable/start' "$root/out" || fail 'IPsec daemon change not flagged'
+  grep -qx "packages=iproute2 iptables kmod charon-systemd strongswan-swanctl libstrongswan-standard-plugins" "$root/out" || fail "wrong IPsec package list on $distro"
+  grep -q 'notice=Missing IPsec packages require manual administrator installation' "$root/out" || fail 'manual IPsec package risk not flagged'
   plan all
-  grep -qx "packages=iproute2 iptables wireguard-tools charon-systemd strongswan-swanctl libstrongswan-standard-plugins" "$root/out" ||
+  grep -qx "packages=iproute2 iptables kmod wireguard-tools charon-systemd strongswan-swanctl libstrongswan-standard-plugins" "$root/out" ||
     fail "wrong all-backend package list on $distro"
   if [[ $distro == 'debian 11' ]]; then
     grep -q 'Debian 11 LTS ended 2026-08-31' "$root/err" || fail 'Debian 11 security EOL warning missing'
@@ -66,5 +66,29 @@ bad bash "$installer" install --bundle "$root/missing-bundle" --prefix "$root/pr
   --os-release-file "$root/os-release"
 [[ ! -e "$root/prefix/bin/stl" ]] || fail 'fixture input modified installed identity'
 bad bash "$installer" uninstall --prefix "$root/prefix" --backends all
+
+# Read-only installed-host plan now includes a live dpkg inventory but
+# never touches APT, even when one of the selected distro packages is missing.
+live_out="$(bash "$installer" requirements --backends native 2>"$root/live.err")"
+grep -q '^missing_packages=' <<< "$live_out" ||
+  fail 'normal-host read-only requirements lost missing package field'
+# A mismatched/unsafe expected package plan must not be accepted for any
+# action other than explicit prepare, even with attacker shell variables.
+bad bash "$installer" requirements --expected-missing iptables
+bad bash "$installer" install --expected-missing iptables --bundle "$root/missing-bundle" --prefix "$root/prefix"
+
+# Package preparation must not act on a foreign or offline executable
+# and has no fixture, bundle, version or implicit backend selection.
+bad bash "$installer" prepare
+bad bash "$installer" prepare --backends native --prefix "$root/prefix"
+bad bash "$installer" prepare --backends native --bundle "$root/foreign"
+bad bash "$installer" prepare --backends wireguard --version v0.1.0
+bad bash "$installer" prepare --backends ipsec --os-release-file "$root/os-release"
+# Under test-user (non-root), even the canonical prefix must reject APT
+# before package resolution or any package-manager modifications.
+if [[ $EUID -ne 0 ]]; then
+  bad bash "$installer" prepare --backends wireguard
+fi
+[[ ! -e "$root/prefix/bin/stl" ]] || fail 'package preparation modified offline installation'
 
 printf 'Installer requirements checks PASS (Ubuntu 22.04+, Debian 11+, package plans, unsafe inputs, EOL).\n'
