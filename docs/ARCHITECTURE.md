@@ -352,8 +352,11 @@ Default backend.
   effective loaded systemd identity, root-controlled regular executable
   inode/path ancestry, process/cgroup/netns, logger configuration, private
   VICI peer and exclusive UDP socket ownership.
-  Failure disables only IPsec. Service provisioning on real hosts is
-  deliberately separate from this code and requires Owner review.
+  Failed admission blocks only IPsec. The shipped rc.6 binary already
+  includes a separately confirmed STL-exclusive service provisioner.
+  Missing-package automation and its one-consent integration with
+  this provisioner are future work in Issue #105; no backend logic is
+  duplicated in the terminal renderer.
 - Create/Import/Connect/Ensure/Status/Diagnose/Restore/Remove and protected
   PSK retirement are exercised on real isolated Debian/Ubuntu traffic;
   an actual STL systemd service restart/restore passed in disposable Ubuntu.
@@ -418,32 +421,70 @@ For WireGuard Quick Link, the initiator may generate the receiver keypair solely
 
 The format must permit later addition of a `secure_exchange` (or equivalent local-key) mode without changing the core Link model or invalidating existing Quick Link payloads. Secure Exchange is not a v0.1 requirement.
 
-## 13. Interactive UI contract
+## 13. Interactive UI and presentation boundary
 
-The menu is task-first, not protocol-dump-first.
-
-Top-level direction:
+The terminal interface is a guided client of the **same** CLI/Engine,
+not a separate network controller. The durable product journey and
+semantic styling are in
+[PROJECT-SPEC, section 15](PROJECT-SPEC.md#15-guided-operator-workflow-and-one-consent-preparation).
+[Issue #106](https://github.com/ach1992/simple-tun-link/issues/106)
+owns source-wide migration. The actual v0.1.0-rc.6 navigation is:
 
 ~~~text
-SIMPLE TUN LINK
-version / repository
-host / OS / kernel / source interface+IP / link summary
+SIMPLE TUN LINK       version / current host
+Host / IPv4 candidate / number of saved (NOT verified) Links
 
-1) Create Tunnel
-2) Import Setup Link
-3) Manage Tunnels
-4) Tests & Diagnostics
-5) Settings
-6) Update
-7) Uninstall
-0) Exit
+1  Create tunnel          New local Link and peer handoff
+2  Import setup link      Join on the other server
+3  My tunnels             View / share / test / remove
+4  Test connectivity      Read-only measurements
+5  Settings               Host / STL information
+6  Update                 Choose official release
+7  Uninstall              Guided removal
+8  Exit
 ~~~
 
-Create Tunnel then selects backend. GRE is preselected.
+The initial Create selection is GRE Native, WireGuard, IPIP Native,
+Manual and Advanced. No public-IP network request or update call
+is required merely to open the menu.
 
-Advanced settings remain progressively disclosed.
+Keep the implementation small: extend the existing
+`cmd/stl/menu_presentation.go` helpers to render meaningfully typed
+sections, short rows, actions, status and diagnostic details.
+Avoid parallel per-screen ANSI renderers and another TUI framework.
+The terminal renderer must not own IP allocation, APT, strongSwan
+service startup, route/firewall, Link commit or its rollback.
 
-Menu startup must not block on external update checks or public-IP services.
+- Distinguish **label**, **current observation**, **reason**, **scope**,
+  **action**, and **result**. Render missing/recoverable separately
+  from genuinely conflicting/foreign or unknown observations.
+- Use semantic action styling: destructive REMOVE/DELETE red+bold;
+  preparation INSTALL/PREPARE/UPDATE caution+bold; affirmative YES
+  and verified successes green+bold; navigation/SHOW blue-cyan;
+  secondary hints dim. No color-only meaning.
+- Compose one principal action per screen and put technical explanations
+  into opt-in Details. Avoid several nested paragraphs and repeated
+  next-step warnings. Clearly label unmeasured MTU, local state vs
+  actual peer traffic, and partially applied operations.
+- Layout must use **visible terminal width** to align fields/rows at
+  roughly 60, 80 and 120 columns; long prose can wrap but original
+  private/plain setup lines, URLs, opaque IDs, commands and hashes
+  remain exact and copyable. Never pass a sensitive Setup Link
+  through a generic wrapping/coloring/diagnostic formatter.
+- The existing interactive input and Engine boundaries own actual
+  fresh consent, real root TTY checks, hidden secret paste and
+  target identity rechecks. A single previewed PREPARE covers
+  selected prerequisites (including IPsec's scoped package/service
+  setup when implemented); actual Create/Import still needs its
+  own explicit confirmation. DELETE and REMOVE are separate
+  irreversible actions with distinct previews.
+- Preserve `--json`, public reason codes, exit codes and stdout/stderr
+  semantics. No ANSI in redirected/automation output, `NO_COLOR`
+  or `TERM=dumb`. Do not erase terminal scrollback.
+
+The automation-first backend preparation target is Issue #105.
+Style changes are not authorization to bypass ownership or
+to classify a failed read-only probe as permanently unsupported.
 
 ## 14. Reusable integration and extensibility
 
@@ -578,10 +619,22 @@ Unknown effects never authorize deletion of another key or daemon object.
 
 The native config/unit publisher functions are **unexported** and
 accessible to the separately confirmed native-exclusive IPsec service
-provisioner. Missing strongSwan packages are operator-managed: STL
-refuses automatic IPsec APT whenever a required strongSwan package is
-absent, avoiding unverified vendor service hooks. The dedicated private
-unit must pass effective-systemd PRE-START attestation after
+provisioner. **In published rc.6**, strongSwan packages are
+administrator-installed: automatic IPsec APT is refused because
+vendor package hooks can independently enable/start a distro service.
+**The next product contract (Issue #105) supersedes this manual UX**:
+the canonical installer first records that the host has no foreign
+strongSwan service/process/configuration or IKE port owner. After one
+previewed PREPARE consent it installs the selected signed distro packages
+using their normal maintainer hooks; the Owner accepts brief startup
+and enablement of a newly installed vendor strongSwan service. STL
+must **positively identify that service as newly introduced by this
+exact transaction**, stop/disable only that unit, and prove it is
+inactive and without an enabled boot edge before invoking the existing
+STL-private provisioner. Never modify any pre-existing/foreign unit,
+and do not add a global package-hook isolation framework. Real disposable
+Ubuntu/Debian systemd evidence must prove this lifecycle before the future released binary claims fully automatic IPsec setup.
+The dedicated private unit must pass effective-systemd PRE-START attestation after
 daemon-reload and before any service execution. The gate also checks the
 bounded D-Bus **effective system-manager environment** (including global
 DefaultEnvironment and runtime set-environment sources) over the system bus with a fixed minimal helper environment excluding
@@ -598,9 +651,12 @@ manager's settings are **never globally modified by STL**; an administrator
 must inspect/reconcile unsafe values before retry. Post-start `/proc` process
 environment verification remains independent defense in depth. A verified running
 private service receives its boot edge only after post-start runtime
-admission, with a final owner/origin check. No vendor service is
-disabled, replaced, adopted or restarted. These protections first ship
-in rc.6 via reviewed Issue #101; the historical rc.5 remains unchanged.
+admission, with a final owner/origin check. The shipped rc.6 service
+provisioner does not disable, replace, adopt or restart vendor services.
+The future approved package preparer may stop/disable only the newly
+installed vendor service positively attributed to its own APT transaction.
+The rc.6 provisions first shipped via reviewed Issue #101; historical
+rc.5 remains unchanged.
 
 ### Native-exclusive IPsec operational proof boundary (Issue #7, 2026-10-12)
 
