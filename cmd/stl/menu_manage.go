@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,68 +9,105 @@ import (
 	"strings"
 
 	"github.com/ach1992/simple-tun-link/internal/domain"
-	"github.com/ach1992/simple-tun-link/internal/state"
 )
 
-// Manage is an operator-facing selector over the existing read and Engine
-// lifecycle commands. It has no independent ownership or removal logic.
+// Manage uses a numbered human selection and the exact canonical Engine.
 func menuManage(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, options *runtimeOptions) int {
-	if code := linkReadCommand([]string{"list"}, out, errOut, options); code != 0 {
-		return code
+	links, err := savedMenuLinks(options)
+	if err != nil {
+		fmt.Fprintln(errOut, "Cannot load saved tunnels; check State directory permissions.")
+		return 1
 	}
-	fmt.Fprint(out, "Manage Link ID (Enter returns to menu): ")
-	idText, err := readMenuAnswer(reader)
-	if errors.Is(err, io.EOF) || err == nil && (idText == "" || strings.EqualFold(idText, "q")) {
+	id, _, err := chooseMenuLink(reader, out, links, false)
+	if err != nil {
+		return 1
+	}
+	if id == "" {
 		return 0
 	}
-	if err != nil || domain.LinkID(idText).Validate() != nil {
-		fmt.Fprintln(errOut, "Invalid Link ID; no changes made.")
-		return 2
+	var selected domain.Link
+	found := false
+	for _, record := range links {
+		if record.Desired.ID == id {
+			selected = record.Desired
+			found = true
+			break
+		}
 	}
-	id := domain.LinkID(idText)
-
-	root := state.DefaultRoot
-	if options != nil {
-		root = options.stateRoot
-	}
-	if root == "" {
-		fmt.Fprintln(errOut, "Local state root is unavailable; no changes made.")
-		return 1
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), readOperationTimeout)
-	snapshot, err := state.NewFileStore(root).Load(ctx)
-	cancel()
-	if err != nil {
-		fmt.Fprintln(errOut, "Cannot inspect saved Link; no changes made.")
-		return 1
-	}
-	record, found := snapshot.Find(id)
 	if !found {
-		fmt.Fprintln(errOut, "Link ID is not present in saved state; no changes made.")
-		return 2
+		return 1
 	}
-	selected := summarizeLink(record.Desired)
-	fmt.Fprintf(out, "Selected: %s | %s/%s | %s -> %s\n",
-		selected.ID, safeMenuText(string(selected.Backend)), safeMenuText(string(selected.Encapsulation)),
-		selected.LocalAddress, selected.PeerAddress)
-
-	fmt.Fprint(out, "Action [s=status, r=remove, Enter=back]: ")
-	action, err := readMenuAnswer(reader)
-	if errors.Is(err, io.EOF) || err == nil && (action == "" || strings.EqualFold(action, "b") || strings.EqualFold(action, "q")) {
-		return 0
-	}
-	if err != nil {
-		fmt.Fprintln(errOut, "Invalid Manage action; no changes made.")
-		return 2
-	}
-	switch strings.ToLower(action) {
-	case "s":
-		return linkReadCommand([]string{"status", idText}, out, errOut, options)
-	case "r":
-		return menuRemoveLink(input, reader, out, errOut, options, record.Desired)
-	default:
-		fmt.Fprintln(errOut, "Unknown Manage action; no changes made.")
-		return 2
+	fmt.Fprintf(out, "Selected: %s / %s | THIS %s | OTHER %s\n",
+		selected.Backend, selected.Encapsulation, selected.Addresses.Local, selected.Addresses.Peer)
+	for {
+		fmt.Fprintln(out, "\n  1  Status (local, read-only)")
+		fmt.Fprintln(out, "  2  Check connection (read-only)")
+		fmt.Fprintln(out, "  3  Share Setup Link (repeatable; encrypted links ask before showing)")
+		fmt.Fprintln(out, "  4  Connection details (copy both server IPs / manual setup)")
+		fmt.Fprintln(out, "  5  Remove this tunnel (asks for confirmation)")
+		fmt.Fprintln(out, "  6  Delete saved receiver Setup Link (WireGuard / IPsec only)")
+		fmt.Fprintln(out, "  0  Back")
+		fmt.Fprint(out, "Choose an action: ")
+		action, err := readMenuAnswer(reader)
+		if errors.Is(err, io.EOF) {
+			return 0
+		}
+		if err != nil {
+			fmt.Fprintln(out, "Enter a short action number.")
+			continue
+		}
+		switch strings.ToLower(action) {
+		case "", "0", "b", "q":
+			return 0
+		case "1", "s":
+			if code := linkReadCommand([]string{"status", string(id)}, out, errOut, options); code != 0 {
+				fmt.Fprintln(out, "Local status is not confirmed. The saved Link was not changed.")
+			}
+		case "2", "d":
+			if code := linkDiagnoseCommand([]string{"diagnose", string(id)}, out, errOut, options); code != 0 {
+				fmt.Fprintln(out, "No confirmed end-to-end connectivity yet; check peer setup and firewall.")
+			}
+		case "3", "e":
+			if selected.Backend == domain.BackendGRE || selected.Backend == domain.BackendIPIP {
+				fmt.Fprintln(out, "Copy the one-line stl:// Setup Link below to the OTHER server:")
+				if code := linkExportCommand([]string{"export", string(id)}, out, errOut, options); code != 0 {
+					fmt.Fprintln(out, "Setup Link cannot be rebuilt from the current saved state. No network changes made.")
+				}
+			} else {
+				// No backend/Engine mutation. Display only the exactly
+				// saved original receiver secret after a fresh TTY consent,
+				// and verify full current Link identity before disclosure.
+				menuSensitiveHandoffAction(input, reader, out, errOut, options, selected, false)
+			}
+		case "4", "i":
+			current, err := savedMenuLinks(options)
+			if err != nil {
+				fmt.Fprintln(out, "Cannot inspect current saved tunnel settings. Nothing was changed.")
+				continue
+			}
+			found := false
+			for _, record := range current {
+				if record.Desired.ID == id {
+					printManualConnectionDetails(out, record.Desired)
+					found = true
+					break
+				}
+			}
+			if !found {
+				fmt.Fprintln(out, "This tunnel is no longer saved; return to My tunnels and select again.")
+				return 0
+			}
+		case "5", "r":
+			return menuRemoveLink(input, reader, out, errOut, options, selected)
+		case "6":
+			if selected.Backend == domain.BackendGRE || selected.Backend == domain.BackendIPIP {
+				fmt.Fprintln(out, "Plaintext Setup Links are computed on request and no private receiver file exists to delete.")
+				continue
+			}
+			menuSensitiveHandoffAction(input, reader, out, errOut, options, selected, true)
+		default:
+			fmt.Fprintln(out, "Choose a number from 0 to 6.")
+		}
 	}
 }
 
@@ -98,9 +134,9 @@ func menuRemoveLink(input io.Reader, reader *bufio.Reader, out, errOut io.Writer
 		fmt.Fprintln(errOut, "Cannot establish a fresh terminal confirmation; no changes made.")
 		return 2
 	}
-	fmt.Fprintf(out, "To REMOVE, type exact Link ID %s (Enter cancels): ", selected.ID)
+	fmt.Fprint(out, "To permanently REMOVE this tunnel, type REMOVE (Enter cancels): ")
 	confirm, err := readMenuAnswer(reader)
-	if errors.Is(err, io.EOF) || err == nil && confirm != string(selected.ID) {
+	if errors.Is(err, io.EOF) || err == nil && confirm != "REMOVE" {
 		fmt.Fprintln(out, "Removal cancelled. No changes made.")
 		return 0
 	}

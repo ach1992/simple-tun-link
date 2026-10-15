@@ -170,6 +170,20 @@ publish a new release are separate from this technical test evidence.
 
 ## Current release-candidate validation
 
+The v0.1.0-rc.3 operator-first changes are tracked in
+[Issue #91](https://github.com/ach1992/simple-tun-link/issues/91)
+and [PR #92](https://github.com/ach1992/simple-tun-link/pull/92).
+The exact-HEAD PR matrix verifies isolated native AMD64 and ARM64
+six-Link GRE/IPIP/WireGuard/IPsec operation using disposable
+Ubuntu/Debian userspaces. The new one-line bootstrap/explicit update
+has its own local, CI and PTY acceptance. A public rc.3 version is
+accepted only once its final tagged artifacts, downloaded checksums
+and installed binary identity are independently checked. **These
+source-bound tests do not by themselves prove an rc.3 guest reboot
+or external physical WAN/NAT path.** The preceding rc.2 whole-guest
+Engine/persistence proof is retained separately below, not transferred
+as a claimed test of an rc.3 installed binary.
+
 For [v0.1.0-rc.2](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.2),
 [Issue #12](https://github.com/ach1992/simple-tun-link/issues/12)
 records native AMD64/ARM64 cross-backend traffic and separately a

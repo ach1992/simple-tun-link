@@ -230,7 +230,7 @@ func linkCreateWireGuardCommand(args []string, input io.Reader, out, errOut io.W
 	} else {
 		fmt.Fprintf(out, "WireGuard Link %s locally ensured; SENSITIVE v3 receiver handoff written to the explicitly requested private file.\n", id)
 		fmt.Fprintln(out, "Verify peer identity out-of-band. Receiver: preview and confirmed import of the protected setup link; check actual handshake/traffic separately.")
-		fmt.Fprintln(out, "Do not treat local Ensure as proof of bidirectional connectivity. Delete the SENSITIVE export after deliberate delivery and acceptance.")
+		fmt.Fprintln(out, "Do not treat local Ensure as proof of bidirectional connectivity. Keep the SENSITIVE export privately for reuse if needed; delete it explicitly when no longer required.")
 	}
 	return 0
 }

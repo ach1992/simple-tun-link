@@ -35,6 +35,8 @@ func (r *guidedTestRunner) Run(_ context.Context, name string, args ...string) (
 	r.calls = append(r.calls, command)
 	output := ""
 	switch command {
+	case "ip -4 -json route get 192.0.2.10":
+		output = "[{\"dst\":\"192.0.2.10\",\"dev\":\"eth0\",\"prefsrc\":\"192.0.2.20\",\"gateway\":\"192.0.2.1\",\"mtu\":1500}]"
 	case "ip -4 -json route get 192.0.2.20":
 		if r.routeFail {
 			return linux.CommandResult{}, errors.New("opaque, potentially sensitive route error")
@@ -116,15 +118,15 @@ func TestGuidedGRECreateFullOperatorPathAndPairing(t *testing.T) {
 	host := &guidedTestRunner{}
 	fake := &guidedTestBackend{lifecycleFakeBackend: newLifecycleFake()}
 	opts := guidedTestOptions(root, host, fake)
-	input := "1\n192.0.2.20\n\nn\nn\n" + string(createTestID) + "\nn\n8\n"
+	input := "1\n1\n192.0.2.20\n\nn\nYES\nn\n8\n"
 	code, output, errOut := runGuidedTest(opts, input)
 	if code != 0 || errOut != "" {
 		t.Fatalf("guided create failed: %d out=%q err=%q", code, output, errOut)
 	}
 	for _, marker := range []string{
-		"Create GRE Native (default)", "PREVIEW ONLY", "local host checked",
-		"To APPLY, type exact Link ID", "changes applied and verified",
-		"Setup link: stl://", "On the peer", "interface verified", "connectivity not measured",
+		"Create gre / native", "Review your tunnel", "Suggested tunnel IPs",
+		"Create this tunnel now?", "changes applied and verified",
+		"Setup link: stl://", "OTHER server", "interface verified", "connectivity not measured",
 		"stl link diagnose",
 	} {
 		if !strings.Contains(output, marker) {
@@ -171,10 +173,9 @@ func TestGuidedGRECreateManualSideAndAdvancedKey(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "state")
 	fake := &guidedTestBackend{lifecycleFakeBackend: newLifecycleFake()}
 	opts := guidedTestOptions(root, &guidedTestRunner{}, fake)
-	// Manual /31, use upper address locally, keyed GRE with an explicit zero,
-	// TTL 64, TOS 16, checksum enabled, no sequence.
-	input := "1\n192.0.2.20\n10.77.2.0/31\ny\ny\n0\n64\n16\ny\nn\n" +
-		string(createTestID) + "\nn\n8\n"
+	// Manual /31 with the upper host address on THIS server; explicit
+	// keyed GRE settings and a distinct advanced managed MTU selection.
+	input := "1\n1\n192.0.2.20\n10.77.2.1\n10.77.2.0\ny\n0\n64\n16\ny\nn\n1\nYES\nn\n8\n"
 	code, _, errOut := runGuidedTest(opts, input)
 	if code != 0 || errOut != "" {
 		t.Fatalf("advanced Create failed: %d %s", code, errOut)
@@ -214,9 +215,9 @@ func TestGuidedGRECreateRejectsManualHostAndPersistedCollision(t *testing.T) {
 				}
 			}
 			opts := guidedTestOptions(root, &guidedTestRunner{routes: tc.route}, fake)
-			code, _, errOut := runGuidedTest(opts, "1\n192.0.2.20\n10.88.2.0/31\n")
-			if code != 2 || !strings.Contains(errOut, "overlaps") || len(fake.applies) != 0 {
-				t.Fatalf("conflicting /31 accepted: code=%d err=%q", code, errOut)
+			code, out, errOut := runGuidedTest(opts, "1\n1\n192.0.2.20\n10.88.2.0\n10.88.2.1\nq\n8\n")
+			if code != 0 || !strings.Contains(out, "conflict") || len(fake.applies) != 0 {
+				t.Fatalf("conflicting /31 accepted: code=%d out=%q err=%q", code, out, errOut)
 			}
 			saved, err := state.NewFileStore(root).Load(context.Background())
 			expected := 0
@@ -238,12 +239,12 @@ func TestGuidedGRECreateCancelAndProbeFailuresNeverMutate(t *testing.T) {
 		greBad   bool
 		code     int
 	}{
-		{"cancel before route", "1\nq\n8\n", false, false, 0},
-		{"bad peer", "1\nSECRET-NOT-TO-ECHO\n", false, false, 2},
-		{"route unavailable", "1\n192.0.2.20\n", true, false, 4},
-		{"GRE unavailable", "1\n192.0.2.20\n", false, true, 4},
-		{"manual public subnet", "1\n192.0.2.20\n8.8.8.0/31\n", false, false, 2},
-		{"cancel at preview", "1\n192.0.2.20\n\nn\nn\nwrong-id\n8\n", false, false, 0},
+		{"cancel before route", "1\n1\nq\n8\n", false, false, 0},
+		{"bad peer", "1\n1\nSECRET-NOT-TO-ECHO\nq\n8\n", false, false, 0},
+		{"route unavailable", "1\n1\n192.0.2.20\n8\n", true, false, 0},
+		{"GRE unavailable", "1\n1\n192.0.2.20\n8\n", false, true, 0},
+		{"manual public IP", "1\n1\n192.0.2.20\n8.8.8.8\nq\n8\n", false, false, 0},
+		{"cancel at preview", "1\n1\n192.0.2.20\n\nn\nNO\n8\n", false, false, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := filepath.Join(t.TempDir(), "absent")
@@ -265,8 +266,8 @@ func TestGuidedGREApplyFailureCannotClaimSuccess(t *testing.T) {
 	fake := &guidedTestBackend{lifecycleFakeBackend: newLifecycleFake()}
 	fake.failApply = true
 	code, out, errOut := runGuidedTest(guidedTestOptions(root, &guidedTestRunner{}, fake),
-		"1\n192.0.2.20\n\nn\nn\n"+string(createTestID)+"\n")
-	if code != 1 || !strings.Contains(errOut, "did not complete") ||
+		"1\n1\n192.0.2.20\n\nn\nYES\n8\n")
+	if code != 0 || !strings.Contains(errOut, "did not complete") ||
 		strings.Contains(out+errOut, "VERY_SECRET_NOT_FOR_OUTPUT") ||
 		strings.Contains(out, "Setup link:") {
 		t.Fatalf("false success or leaked backend error: code=%d out=%q err=%q", code, out, errOut)
@@ -326,18 +327,18 @@ func TestGuidedGRECreateRealPTYConfirmedJourney(t *testing.T) {
 	}
 	expect("Choose a task: ")
 	send("1")
-	expect("Peer underlay IPv4 address: ")
+	expect("Tunnel type [1]: ")
+	send("1")
+	expect("Other server's reachable IPv4 address")
 	send("192.0.2.20")
-	expect("Link subnet (Enter=suggested;")
+	expect("Tunnel IP on THIS server")
 	send("")
-	expect("Use second /31 address locally")
+	expect("Change advanced settings")
 	send("n")
-	expect("Configure advanced GRE options?")
-	send("n")
-	expect("To APPLY, type exact Link ID")
-	send(string(createTestID))
+	expect("Create this tunnel now?")
+	send("YES")
 	expect("Setup link: stl://")
-	expect("Run active peer connectivity/MTU diagnostics now?")
+	expect("Has the OTHER server already imported")
 	send("n")
 	expect("Choose a task: ")
 	send("8")
@@ -356,7 +357,7 @@ func TestGuidedGRECreatePeerImportAndIdempotentReimport(t *testing.T) {
 	initiator := &guidedTestBackend{lifecycleFakeBackend: newLifecycleFake()}
 	receiver := &guidedTestBackend{lifecycleFakeBackend: newLifecycleFake()}
 	opts := guidedTestOptions(initiatorRoot, &guidedTestRunner{}, initiator)
-	code, out, errOut := runGuidedTest(opts, "1\n192.0.2.20\n\nn\nn\n"+string(createTestID)+"\nn\n8\n")
+	code, out, errOut := runGuidedTest(opts, "1\n1\n192.0.2.20\n\nn\nYES\nn\n8\n")
 	if code != 0 || errOut != "" {
 		t.Fatalf("initiator Create failed: %d %q", code, errOut)
 	}
@@ -364,7 +365,7 @@ func TestGuidedGRECreatePeerImportAndIdempotentReimport(t *testing.T) {
 	if encoded == "" {
 		t.Fatal("creator did not provide a setup link")
 	}
-	importScript := "2\n" + encoded + "\n" + string(createTestID) + "\n8\n"
+	importScript := "2\n1\n" + encoded + "\nYES\n8\n"
 	for attempt := 0; attempt < 2; attempt++ {
 		receiverOpts := guidedTestOptions(receiverRoot, &guidedTestRunner{}, receiver)
 		code, peerOut, peerErr := runGuidedTest(receiverOpts, importScript)
@@ -404,7 +405,7 @@ func TestGuidedGRECreateSelectsNonOverlappingAutomaticCIDR(t *testing.T) {
 	runner := &guidedTestRunner{routes: "[{\"dst\":\"10.0.0.0/8\",\"dev\":\"eth0\"},{\"dst\":\"172.16.0.0/12\",\"dev\":\"eth0\"}]"}
 	fake := &guidedTestBackend{lifecycleFakeBackend: newLifecycleFake()}
 	code, _, errOut := runGuidedTest(guidedTestOptions(root, runner, fake),
-		"1\n192.0.2.20\n\nn\nn\n"+string(createTestID)+"\nn\n8\n")
+		"1\n1\n192.0.2.20\n\nn\nYES\nn\n8\n")
 	if code != 0 || errOut != "" {
 		t.Fatalf("auto CIDR selection did not avoid existing Linux route prefixes: %d %q", code, errOut)
 	}
@@ -427,8 +428,9 @@ func TestGuidedGRECreateGeneratedIDMustNotReplaceSavedLink(t *testing.T) {
 	fake := &guidedTestBackend{lifecycleFakeBackend: newLifecycleFake()}
 	opts := guidedTestOptions(root, &guidedTestRunner{}, fake)
 	opts.createLinkID = func() (domain.LinkID, error) { return original.ID, nil }
-	code, _, errOut := runGuidedTest(opts, "1\n192.0.2.20\n\nn\n")
-	if code != 2 || len(fake.applies) != 0 || !strings.Contains(errOut, "already present") {
+	code, out, errOut := runGuidedTest(opts, "1\n1\n192.0.2.20\n\n8\n")
+	if code != 0 || len(fake.applies) != 0 || !strings.Contains(errOut, "already present") {
+		t.Log(out)
 		t.Fatalf("existing Link ID was not protected: code=%d %s", code, errOut)
 	}
 	saved, err := state.NewFileStore(root).Load(context.Background())
@@ -443,8 +445,8 @@ func TestGuidedGREPTYCancellationAndInvalidPeerNoNetworkMutation(t *testing.T) {
 		input string
 		code  int
 	}{
-		{"cancel before preflight", "1\nq\n8\n", 0},
-		{"invalid peer", "1\nBAD-INPUT\n", 2},
+		{"cancel before preflight", "1\n1\nq\n8\n", 0},
+		{"invalid peer", "1\n1\nBAD-INPUT\nq\n8\n", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			master, slave := openMenuPTY(t)
@@ -480,8 +482,8 @@ func TestGuidedGRECreatePostEnsureReadFailureMustPreserveReconciliation(t *testi
 	root := filepath.Join(t.TempDir(), "state")
 	fake := &guidedTestBackend{lifecycleFakeBackend: newLifecycleFake(), failStatus: true}
 	code, out, errOut := runGuidedTest(guidedTestOptions(root, &guidedTestRunner{}, fake),
-		"1\n192.0.2.20\n\nn\nn\n"+string(createTestID)+"\n")
-	if code == 0 || !strings.Contains(errOut, "Local Link was ensured, but live status") ||
+		"1\n1\n192.0.2.20\n\nn\nYES\n8\n")
+	if code != 0 || !strings.Contains(errOut, "Local Link was ensured, but live status") ||
 		!strings.Contains(out, "Setup link: stl://") {
 		t.Fatalf("post-apply read-only failure did not report partial outcome: %d %q %q", code, out, errOut)
 	}
@@ -495,8 +497,8 @@ func TestGuidedGRECreateDiagnosticFailureRetainsConfiguredLink(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "state")
 	fake := &guidedTestBackend{lifecycleFakeBackend: newLifecycleFake()}
 	code, out, errOut := runGuidedTest(guidedTestOptions(root, &guidedTestRunner{}, fake),
-		"1\n192.0.2.20\n\nn\nn\n"+string(createTestID)+"\ny\n")
-	if code != 4 || !strings.Contains(errOut, "Diagnostics did not succeed") ||
+		"1\n1\n192.0.2.20\n\nn\nYES\ny\n8\n")
+	if code != 0 || !strings.Contains(errOut, "Peer check could not confirm traffic") ||
 		!strings.Contains(out, "interface verified") {
 		t.Fatalf("diagnostic failure reported a misleading outcome: %d %q %q", code, out, errOut)
 	}
@@ -510,9 +512,9 @@ func TestGuidedGRECreateRejectsKnownPeerUnderlayCollision(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "absent")
 	fake := &guidedTestBackend{lifecycleFakeBackend: newLifecycleFake()}
 	code, out, errOut := runGuidedTest(guidedTestOptions(root, &guidedTestRunner{}, fake),
-		"1\n10.0.0.5\n10.0.0.4/31\n")
-	if code != 2 || !strings.Contains(errOut, "known peer underlay") ||
-		strings.Contains(out, "PREVIEW ONLY") || len(fake.applies) != 0 {
+		"1\n1\n10.0.0.5\n10.0.0.4\n10.0.0.5\nq\n8\n")
+	if code != 0 || !strings.Contains(out, "conflict") ||
+		strings.Contains(out, "Review your tunnel") || len(fake.applies) != 0 {
 		t.Fatalf("known peer underlay collision was not rejected at preflight: code=%d out=%q err=%q", code, out, errOut)
 	}
 	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {

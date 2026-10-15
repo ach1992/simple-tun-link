@@ -28,6 +28,8 @@ jobs:
           fi
       - name: Privileged E2E runner syntax (no host mutation)
         run: |
+          bash -n scripts/quick-install.sh
+          bash -n scripts/test-quick-install.sh
           bash -n scripts/e2e/gre-netns.sh
           bash -n scripts/e2e/gre-multipeer-netns.sh
           bash -n scripts/e2e/cross-backend-docker.sh
@@ -40,4 +42,6 @@ jobs:
       - name: Test
         run: go test ./...
       - name: Offline installer regression
-        run: bash scripts/test-install.sh
+        run: |
+          bash scripts/test-install.sh
+          bash scripts/test-quick-install.sh

@@ -5,11 +5,19 @@ are in the [README](../README.md). This page describes how a maintainer
 builds and verifies release artifacts; the build script itself **does not
 publish** a tag, release, or deployment.
 
-Issue #11 owns the historical installer validation (closed); Issue #12
-tracks the latest release-candidate E2E and public download acceptance.
-The [v0.1.0-rc.2 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.2)
-includes the source changes after rc.1, with the explicit limits recorded
-in [Issue #12](https://github.com/ach1992/simple-tun-link/issues/12).
+Issue #11 is historical installer acceptance, and
+[Issue #12](https://github.com/ach1992/simple-tun-link/issues/12)
+records the source/tag/download and real systemd-guest reboot evidence
+for the prior
+[v0.1.0-rc.2 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.2).
+The current [Issue #91](https://github.com/ach1992/simple-tun-link/issues/91)
+and [PR #92](https://github.com/ach1992/simple-tun-link/pull/92)
+control the new v0.1.0-rc.3 operator interface, explicit one-line
+install/update and protected receiver handoff retention. A green PR
+check is source-bound evidence only; the public release is qualified
+separately by checking its immutable tag, exact packaged binaries,
+SHA256SUMS and actual installed executable. Historical rc.2 guest
+evidence must not be presented as a new rc.3 tagged-guest boot test.
 
 ## Local build
 
@@ -69,7 +77,7 @@ network operations or real release download happen in these tests.
 ## Publication versus build acceptance
 
 This **build script** only produces a verified bundle; it never creates
-a public tag/release. To publish a candidate such as rc.2, a separately
+a public tag/release. To publish a candidate such as rc.3, a separately
 authorized publisher must bind the tag to the exact accepted source,
 attach the two binaries plus `SHA256SUMS`, `LICENSE` and
 `BUILD-MANIFEST.txt`, then **download the public files independently**
@@ -80,9 +88,14 @@ The Update/Uninstall **menu** remains read-only guidance
 second installation engine. The offline regression script cannot replace
 the release-specific guest reboot and real kernel traffic evidence in
 [Issue #12](https://github.com/ach1992/simple-tun-link/issues/12).
-Historically, Issue #11 established installation acceptance for rc.1;
-it is closed. The physical WAN/NAT acceptance remains Owner-run after
-publication, not something the test lab certifies.
+Historically, Issue #11 established rc.1 installation acceptance,
+while Issue #12 records the stronger rc.2 release and whole-guest
+systemd reboot proof. For rc.3, exact-head disposable Ubuntu AMD64/
+ARM64 six-Link traffic is recorded in PR #92's workflow checks;
+publication must additionally verify rc.3's tag, binary manifest,
+download integrity and installed identity. The physical WAN/NAT
+acceptance remains Owner-run after publication and is not certified
+by this isolated test lab.
 
 ## State v3 and full-guest release acceptance (Issue #12)
 

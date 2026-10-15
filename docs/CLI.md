@@ -1,49 +1,67 @@
-# STL CLI — implemented read-only and explicit lifecycle commands
+# STL CLI — operator menus and stable machine commands
 
-The terminal menu supports guided **GRE Native** and **WireGuard/UDP**
-creation, Link management, diagnostics, preview-confirmed GRE/IPIP import,
-protected WireGuard v3 import, and conditionally admitted IPsec v2 import.
-**New operators should start with the [README](../README.md)** for install
-and a two-server walkthrough; this page owns precise CLI, JSON, pairing
-and advanced recovery contracts.
+The human menu below is part of the
+[v0.1.0-rc.3 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.3).
+The old rc.2 executable retains its older menu. Versioned
+noninteractive machine CLI/JSON contracts remain unchanged.
 
-The [`v0.1.0-rc.2` pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.2)
-contains the IPsec reboot/crash recovery, diagnostics and managed-MTU source
-improvements after historical rc.1. Real native AMD64/ARM64 multi-backend
-traffic and full-guest committed GRE/MTU reboot restoration are evidenced in
-[Issue #12](https://github.com/ach1992/simple-tun-link/issues/12).
-These isolated checks **do not prove physical WAN/NAT-router traversal**
-or a Stable release. The versioned non-interactive ensure/remove lifecycle
-is implemented. Below, **read-only** observations are distinct from commands
-that **mutate host state**.
+Current menu choices:
 
-## Task-first terminal menu
+- Start: stl menu (or stl in an interactive terminal), with a concise
+  version/repository/host/connection IP/kernel/saved Link count banner.
+  The banner is a local snapshot, never peer reachability proof.
+- 1 Create tunnel: GRE Native (Enter/default), WireGuard, and IPIP
+  Native. Less common FOU/GUE/IPsec live under Advanced. Without-Link
+  GRE/IPIP Native lives under Manual connection. Accept suggested private
+  Link IPs by Enter; THIS server's underlay source IP is detected from
+  the kernel route. Or enter both private IPv4 endpoints directly.
+- 2 Import setup link: choose **visible plaintext** GRE/IPIP or
+  **hidden protected** WireGuard/IPsec. Invalid/malformed/truncated
+  pastes can be retried. Import remains canonical preview/Engine apply.
+- 3 My tunnels: choose a **number**, then Status, Test, repeatable
+  Setup Link Share, read-only two-server Connection details, Remove
+  or Delete saved protected receiver Setup Link. GRE/IPIP Share
+  regenerates from nonsecret State. For WireGuard/IPsec the exact
+  original private per-Link handoff is displayed **only after a fresh
+  SHOW in a real TTY**, with ownership, mode and complete saved-Link
+  identity checks. The separate explicit DELETE removes only the
+  receiver handoff, not the active tunnel or local key.
+- 4 Test connectivity: select a numbered Link or a for all; bounded
+  observation only, not automatic repair.
+- 5 Settings, 6 Update, 7 Uninstall, 8 Exit: read-only/guided
+  instructions rather than silent installed-host mutations.
 
-With interactive stdin and stdout, running `stl` opens the bounded task menu;
-`stl menu` opens it explicitly. Non-terminal no-argument invocation keeps the
-existing deterministic command help (no scripts are prompted for input).
-The menu header only reads local OS/kernel/interface candidates and persisted
-Link counts; a candidate address is **not** a route-confirmed source or proof
-of connectivity. It performs no remote update/IP queries or network probes.
+A failed/uncertain menu operation must **not exit the terminal loop** or
+automatically repeat the mutating command. Machine CLI and JSON contracts
+remain independent of the menu's changing text.
 
-### Manage Links
+### Manage Links — confirmation and privacy
 
-Select **Manage Links** to list all locally saved Links and choose one stable
-Link ID. The Status action reuses the existing read-only `stl link status`
-backend inspection; it does not infer connectivity from saved state.
+Remove is available **only on a real interactive terminal**. A
+Link-specific read-only preview is followed by freshly typing REMOVE.
+Queued input is discarded first. The Engine compares the preview's saved
+intent under its Link lock before removing only owned resources; concurrent
+changes block removal. Ordinary scripting still uses the exact-ID
+stl link remove <id> --confirm <id> command, not terminal parsing.
 
-The Remove action is available **only on a real interactive terminal**. It
-shows a redacted, Link-specific removal preview (identity, addresses and
-underlay), requires a freshly typed **exact Link ID**, and discards queued
-terminal input before accepting confirmation. Cancelling or using a non-TTY
-stream causes no removal. On confirmation, the menu delegates to the same
-canonical Engine removal path as `stl link remove`, but passes the previewed
-Link as an expected-state condition. **Under the per-Link lock**, the Engine
-rejects removal if a concurrent Ensure changed the confirmed desired Link.
-Ownership/rollback/persistence handling is unchanged; the menu never deletes
-interfaces or firewall rules directly. Failed or uncertain removal must be
-reconciled before retrying. For non-interactive automation, use that explicit
-CLI command and its versioned `--json` result instead of scripting the menu.
+GRE/IPIP Setup Link re-export from saved nonsecret State is
+repeatable through the canonical CLI export operation. The guided
+WireGuard/IPsec sender automatically retains its **original** receiver
+handoff in a separate STL-owned private state directory:
+receiver-handoffs/ (0700 parent, per-Link 0600 file). This is
+intentionally distinct from ordinary desired State and local sender
+credentials. Guided Share requires a real terminal, fresh SHOW, a
+no-follow/single-link/owner-private file check and complete match
+against the still-committed sender Link and credential kind. The
+default menu does not reveal the URL, and normal errors, inventory,
+status, diagnostics and JSON never emit receiver secrets.
+
+Deleting this file is a separate freshly confirmed DELETE operation;
+it does **not** rekey or tear down a working tunnel. Removed tunnel
+State does not automatically erase the handoff; only the operator may
+remove it. Old rc.2 or explicit CLI handoffs at other filenames are
+not automatically searched/adopted. Do not treat a missing or deleted
+receiver credential as reproducible from the normal Link State.
 
 ### All-Link diagnostics center (read-only, issue #9/#10)
 
@@ -55,9 +73,9 @@ stl link diagnose --all --json
 stl link diagnose --all --timeout 10m --json
 ~~~
 
-The menu's **Tests & Diagnostics** task also accepts `all` at the Link ID
-prompt; degraded/unsupported results return to the task menu instead of
-exiting it. Ordinary per-Link `stl link diagnose <link-id> [--mtu <bytes>]
+The rc.3 menu's **Test connectivity** task accepts a Link number or
+`a` for all; degraded/unsupported results return to the task menu instead
+of exiting it. Ordinary per-Link `stl link diagnose <link-id> [--mtu <bytes>]
 [--json]` remains available with the **same** backend capability,
 identity/counter validation and Link-scoped non-fragmenting ICMP probes.
 There is no parallel probing implementation, no administrative control
@@ -143,72 +161,59 @@ mutation results as `outcome:unconfirmed` and
 a partially applied or rolled-back Link is safe to retry without inspection,
 and it never copies backend/tool causes into operator output.
 
-### Guided GRE Native Create
+### Guided creation and straightforward GRE Native pairing
 
-Select **Create Tunnel**. GRE Native is the current guided backend; advanced
-GRE key/TTL/TOS/PMTUD/checksum/sequence controls are optional. Input the
-peer's IPv4 underlay address; STL performs a **local** Linux route lookup to
-select its source IPv4 address, gateway and interface, checks GRE capability,
-then inspects local interfaces, addresses, routes and persisted STL Links.
+In the **rc.3 operator-first menu**, choose 1 Create tunnel ->
+1 GRE Native (or press Enter to select the default). The user enters
+the OTHER server's reachable IPv4; STL detects THIS server's
+underlay/source IP from a local kernel route. The wizard automatically
+suggests two unused private Link IPs: **Enter accepts the pair**,
+or the user can enter both local and peer private IPs directly
+(including valid 10.235.1.1 and 10.235.1.2 /30 hosts). Before
+confirming, STL verifies local route, capabilities, saved Link
+reservations, peer-underlay exclusion and protocol compatibility.
+Remote conflicts cannot be inferred without inspecting the peer.
 
-STL suggests a randomized, unused RFC1918 **/31** subnet, with the first
-address used locally by default. You may choose the second address locally or
-enter an explicitly validated, non-overlapping private /31 network manually.
-A random keyed GRE receive identity is generated by default to support
-independent same-peer GRE Links; it is an **identifier, not encryption**.
-Manual unkeyed/explicit-key overrides remain possible under Advanced, subject
-to the backend's shared GRE receive-identity conflict protection.
+GRE receive keys are nonsecret identifiers (NOT encryption). Standard
+Create automatically chooses a key and generates a plaintext versioned
+Setup Link. The peer simply selects Import -> GRE/IPIP, pastes that
+line visibly, reviews its reversed local/peer IPs and enters
+**YES** to apply. A persisted GRE/IPIP sender can later re-export
+the exact Setup Link through My tunnels -> number -> Share.
+Manual -> GRE Native (or IPIP Native) avoids Setup Links only when
+both hosts are deliberately configured with reversed IPv4 endpoints
+and matching numeric GRE key, or unkeyed GRE on both. Open IP
+protocol 47 for GRE and 4 for IPIP in the relevant firewalls.
 
-Before any mutation, the menu prints the intended endpoint pair, Link ID,
-/31 addresses, GRE options and host-side changes. Applying requires typing
-the exact Link ID. On actual terminals, prequeued input is flushed before
-this prompt. Cancel or rejected input does not invoke the mutation path.
-Only after confirmation does STL submit a strict version-1 desired-Link JSON
-request to its existing link ensure command and canonical Engine; the menu
-has no independent host-mutation/ownership logic.
+The wizard shows a concise preview and requests a **fresh YES**
+before invoking the existing strict versioned link ensure command
+and canonical Engine. The menu itself owns no networking resources.
+Auto MTU is a local pre-creation estimate; real end-to-end
+connectivity and PMTU require both peer interfaces first.
+An uncertain persistence/rollback result returns to the menu but
+requires read-only reconciliation, never blind automatic retry.
 
-**Peer-side configuration cannot be fully inspected from the initiating
-host.** STL excludes the known peer underlay IPv4 from both automatic and
-manual /31 choices; other peer-side addresses/routes remain unknown.
-Verify that the selected /31 is unused on the receiving server before
-confirming. The Engine rechecks local conflicts/ownership under resource locks
-at apply; initial previews alone do not reserve resources. Successful local
-ensure triggers explicit canonical link export output containing a
-shareable, unencrypted stl:// URL and receiver-oriented copy block. On the
-peer, choose **Import Setup Link** and confirm its exact Link ID. The creator
-then shows **observed local interface status**, which is not proof of peer
-connectivity, and offers active, read-only link diagnostics after import.
-If export, status or diagnostics fail **after** ensure, the local Link may
-already exist: inspect/reconcile its Link ID rather than assuming rollback.
+The rc.3 guided Create -> WireGuard task uses the canonical
+protected v3 receiver handoff; IPsec uses protected v2. Neither
+credential is displayed by normal Create/Status/JSON. GRE/IPIP
+FOU/GUE, WireGuard and conditionally admitted IPsec live under one
+human Create menu; Advanced and Manual are separate submenus.
+Noninteractive STL without arguments still prints help, not a menu
+automation protocol.
 
-The separate guided WireGuard Create task uses a protected v3 one-time
-receiver handoff file rather than printing a private key or URL to ordinary
-terminal/JSON output. GRE/IPIP FOU/GUE and IPsec/XFRM have separate tracked
-backend/pairing work. A non-TTY stl
-invocation still prints help without prompting; stl menu is for humans,
-not an automation protocol.
-
-The Import Setup Link task reads **one bounded line** at the operator prompt.
-For an actual terminal it disables terminal echo during that one input read
-and restores terminal settings **before any preview/apply**; if this cannot
-be established safely it refuses input. Paste only after the prompt. It never
-prints the URL, decoded arbitrary display-name or secret-bearing payload.
-This is not a way to make a secret safe if it was already copied through an
-untrusted shell, process argument, clipboard, terminal logger or recording.
-
-The menu delegates decoding and preview to the same strict `link preview`
-CLI code, then shows the receiver-oriented underlay, Link Addresses and GRE
-options. Before requesting the final Link-ID confirmation, it discards
-already queued terminal input; pre-pasting multiple lines together cannot
-silently supply a confirmation before the preview was displayed. For a
-**credential-free GRE/IPIP, configured credential-bound WireGuard v3,
-or strict 32-byte-PSK IPsec v2 Quick Link**, it requires the operator to type
-the **exact stable Link ID** as a separate confirmation.
-Only then does it delegate to the existing `link import` operation, whose
-SHA-256 confirmation binds the exact reviewed URL. That Engine import can
-create a new Link or idempotently re-ensure identical state; it rejects a
-same-ID configuration change under the canonical Link lock. Cancel or
-invalid input never invokes an Engine mutation.
+For Import, the operator first chooses visible **plaintext** GRE/IPIP
+or hidden **protected** WireGuard/IPsec. The full Setup Link is a
+bounded single-line input; invalid/truncated/oversized input offers
+retry without jumping out of STL. The backend-neutral CLI preview
+returns the receiver-oriented addresses and safe credential-presence
+metadata before the menu asks for fresh **YES**. Queued confirmations
+are discarded first. The canonical CLI import then checks the
+SHA-256 exact-offer token and the Engine enforces Link identity
+under locks. A valid plaintext token intentionally appears in the
+operator's terminal echo, so use protected mode for sensitive offers.
+No Input/preview error echoes credential bytes or tries automatic
+host mutation. Old rc.2 retains its older separate menu and prompt
+contract; this page describes the rc.3 interface.
 
 Quick Link payloads provide **no confidentiality or authenticated sender**;
 verify the offer with the intended peer through a trusted channel. Sensitive
@@ -227,15 +232,23 @@ versioned `--json` commands remain the automation interface.
 
 ## WireGuard sender creation, recovery and credential retirement
 
-The guided **Create WireGuard Tunnel** menu task asks for the peer's underlay
-IPv4, locally checked RFC1918 /31 subnet, two explicit UDP listening ports,
-configurable independent keepalive intervals (Enter=disabled), and an
-**absolute, explicitly selected private handoff file path**. The destination
-parent must be owned by the effective user and private (`0700`); the output
-file must not already exist. The wizard previews only public settings,
-flushes queued terminal input and requires freshly typing the exact Link ID.
-The menu uses the SAME pinned version-1 sender request and Engine as the
-noninteractive command, not a second implementation.
+In the rc.3 guided Create -> WireGuard flow, THIS server's
+connection IP is detected from the route to the other server,
+the suggested private Link IP pair can be accepted by Enter,
+and both default UDP ports can be accepted by Enter. The menu
+automatically chooses one private receiver handoff filename per
+immutable Link ID; it never asks the beginner for a filesystem path.
+After the fresh YES confirmation, a protected directory is
+prepared and the existing canonical sender Engine stages the
+owning sender key and publishes one exact original receiver offer
+with 0600 no-clobber semantics. A failed or uncertain operation
+must be reconciled, not blindly retried or rekeyed.
+
+Advanced CLI automation is intentionally different: it still
+requires an explicit chosen absolute private --output filename
+and does not silently create a managed copy. It remains the
+same versioned public-only request, with no private bytes in
+JSON, and remains independent of the human menu's numbers.
 
 For automation, create the SENSITIVE recipient handoff and local WireGuard
 Link together through an explicit, versioned **public-only** JSON request.
@@ -365,11 +378,17 @@ stl link preview --stdin --json < /path/to/received.stl
 stl link import --stdin --confirm <import_confirmation> --json < /path/to/received.stl
 ~~~
 
-A successful local Engine result is **not** proof that two endpoints have
-handshaken or exchanged traffic. After peer acceptance, remove the sensitive
-handoff export deliberately. Saved-state `stl link export` remains
-GRE/IPIP-only: once the ephemeral recipient key is gone, it cannot be
-reconstructed from the public sender state, and STL will not fabricate one.
+A successful local Engine result is **not** proof of peer
+handshake or data traffic. For the explicit CLI output file,
+retain the original privately if a later second-server setup
+may be necessary; delete it deliberately once it is no longer
+needed. For the guided Create menu, the original receiver
+handoff is retained until a separately confirmed Delete saved
+receiver Setup Link action. Ordinary saved-state CLI export
+remains GRE/IPIP-only: this feature does not add a new public
+secret-bearing JSON/API. If the protected file is missing,
+corrupt, removed or belongs to another Link, it is not
+regenerated from public sender State.
 
 `stl link remove` deliberately **retains** the protected local WireGuard
 private key for rollback/reconciliation. After successfully removing the

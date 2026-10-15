@@ -33,16 +33,15 @@ func TestMenuImportConfirmedGREAndIdempotency(t *testing.T) {
 	source.Encapsulation = domain.EncapFOU
 	source.GRE = domain.GREOptions{KeyEnabled: true, Key: 0, UDPPort: 35555, TOS: 12}
 	url := testQuickSetupLink(t, source, nil)
-	input := "2\n" + url + "\n" + string(source.ID) + "\n" +
-		"2\n" + url + "\n" + string(source.ID) + "\n8\n"
+	input := "2\n1\n" + url + "\nYES\n" +
+		"2\n1\n" + url + "\nYES\n8\n"
 	code, output, errOut := runMenuImportTest(t, root, []backend.Backend{fake}, input)
 	if code != 0 || errOut != "" {
 		t.Fatalf("menu import failed: code=%d output=%q errors=%q", code, output, errOut)
 	}
 	for _, item := range []string{
-		"PREVIEW ONLY", string(source.ID), "Receiver underlay", "GRE:",
-		"udp_port=35555", "key_enabled=true", "peer-authenticated",
-		"changes applied and verified", "already matches desired state",
+		"Review the tunnel", "Type: gre / fou", "THIS server",
+		"GRE: no encryption", "changes applied and verified", "already matches desired state",
 	} {
 		if !strings.Contains(output, item) {
 			t.Fatalf("menu omitted necessary review or result %q", item)
@@ -70,7 +69,7 @@ func TestMenuImportCancelledDoesNotMutateOrRevealOffer(t *testing.T) {
 	url := testQuickSetupLink(t, source, nil)
 	for _, confirmation := range []string{"", "another-link", string(source.ID) + "bad"} {
 		code, out, errOut := runMenuImportTest(t, root, []backend.Backend{fake},
-			"2\n"+url+"\n"+confirmation+"\n8\n")
+			"2\n1\n"+url+"\n"+confirmation+"\n8\n")
 		if code != 0 || errOut != "" || !strings.Contains(out, "Import cancelled") ||
 			strings.Contains(out+errOut, url) || strings.Contains(out+errOut, source.DisplayName) {
 			t.Fatalf("cancelled import did not fail closed: code=%d out=%q err=%q", code, out, errOut)
@@ -88,8 +87,9 @@ func TestMenuImportRejectsOversizeAndMalformedWithoutMutation(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "no-state")
 	fake := newLifecycleFake()
 	for _, badURL := range []string{strings.Repeat("SENSITIVE_BAD", pairing.MaxLinkBytes/10), "not-a-setup-link"} {
-		code, out, errOut := runMenuImportTest(t, root, []backend.Backend{fake}, "2\n"+badURL+"\n8\n")
-		if code != 2 || errOut == "" || strings.Contains(out+errOut, badURL) || len(fake.applies) != 0 {
+		code, out, errOut := runMenuImportTest(t, root, []backend.Backend{fake}, "2\n1\n"+badURL+"\n0\n8\n")
+		if code != 0 || !(strings.Contains(out, "too long") || strings.Contains(out, "not an STL setup link")) ||
+			strings.Contains(out+errOut, badURL) || len(fake.applies) != 0 {
 			t.Fatalf("bad import was not rejected before backend: code=%d err=%q", code, errOut)
 		}
 		if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
@@ -107,7 +107,7 @@ func TestMenuImportCredentialedQuickLinkIsRedactedAndUnconfirmedDoesNotApply(t *
 	completeWireGuardFixture(t, &link, key)
 	url := testQuickSetupLink(t, link, []byte(key))
 	code, output, errOut := runMenuImportTest(t, root, []backend.Backend{fake},
-		"2\n"+url+"\n8\n")
+		"2\n2\n"+url+"\n\n8\n")
 	if code != 0 || errOut != "" || !strings.Contains(output, "SENSITIVE") ||
 		!strings.Contains(output, "Import cancelled") {
 		t.Fatalf("credentialed input was not safely declined: code=%d err=%q", code, errOut)
@@ -131,7 +131,7 @@ func TestMenuImportConflictDoesNotReconfigureExistingLink(t *testing.T) {
 	source, _ := makeLifecycleDesired(t, "d", "10.70.97.0/31")
 	original := testQuickSetupLink(t, source, nil)
 	code, _, errOut := runMenuImportTest(t, root, []backend.Backend{fake},
-		"2\n"+original+"\n"+string(source.ID)+"\n8\n")
+		"2\n1\n"+original+"\nYES\n8\n")
 	if code != 0 || errOut != "" {
 		t.Fatalf("initial menu import failed: %d %q", code, errOut)
 	}
@@ -143,8 +143,8 @@ func TestMenuImportConflictDoesNotReconfigureExistingLink(t *testing.T) {
 	changed.GRE.TOS = 14
 	different := testQuickSetupLink(t, changed, nil)
 	code, output, errOut := runMenuImportTest(t, root, []backend.Backend{fake},
-		"2\n"+different+"\n"+string(source.ID)+"\n")
-	if code != 1 || !strings.Contains(errOut, "conflict") ||
+		"2\n1\n"+different+"\nYES\n8\n")
+	if code != 0 || !strings.Contains(errOut, "conflict") ||
 		strings.Contains(output+errOut, different) || strings.Contains(output+errOut, source.DisplayName) {
 		t.Fatalf("conflicting menu import was not safe: %d %q %q", code, output, errOut)
 	}
@@ -161,7 +161,7 @@ func TestMenuImportIPIPUsesExistingImporter(t *testing.T) {
 	source.Backend, source.Encapsulation = domain.BackendIPIP, domain.EncapGUE
 	url := testQuickSetupLink(t, source, nil)
 	code, _, errOut := runMenuImportTest(t, root, []backend.Backend{fake},
-		"2\n"+url+"\n"+string(source.ID)+"\n8\n")
+		"2\n1\n"+url+"\nYES\n8\n")
 	if code != 0 || errOut != "" || !fake.present[source.ID] {
 		t.Fatalf("IPIP menu import did not delegate to canonical import: code=%d err=%q", code, errOut)
 	}
@@ -183,12 +183,12 @@ func TestMenuIPsecConfirmedOfferFailsClosedWithoutNativeService(t *testing.T) {
 		wantOutput string
 	}{
 		{"cancel", "", 0, "Import cancelled"},
-		{"confirmed, runtime unadmitted", string(link.ID), 4, "native-exclusive"},
+		{"confirmed, runtime unadmitted", "YES", 0, "native-exclusive"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			code, output, errOut := runMenuImportTest(t, root, []backend.Backend{fake},
-				"2\n"+url+"\n"+tc.confirm+"\n8\n")
+				"2\n2\n"+url+"\n"+tc.confirm+"\n8\n")
 			if code != tc.exit || !strings.Contains(output+errOut, tc.wantOutput) ||
 				!strings.Contains(output, "SENSITIVE") ||
 				!strings.Contains(output, "strongSwan") {
@@ -209,7 +209,7 @@ func TestMenuIPsecConfirmedOfferFailsClosedWithoutNativeService(t *testing.T) {
 	}
 
 	legacy := testQuickSetupLink(t, link, bytes.Repeat([]byte{0x59}, 16))
-	code, output, errOut := runMenuImportTest(t, root, []backend.Backend{fake}, "2\n"+legacy+"\n8\n")
+	code, output, errOut := runMenuImportTest(t, root, []backend.Backend{fake}, "2\n2\n"+legacy+"\n0\n8\n")
 	if code != 0 || errOut != "" || !strings.Contains(output, "preview-only") ||
 		strings.Contains(output, "To APPLY") || strings.Contains(output+errOut, legacy) {
 		t.Fatalf("legacy IPsec Quick Link was treated as importable: %d %q %q", code, output, errOut)

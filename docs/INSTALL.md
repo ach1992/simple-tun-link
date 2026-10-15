@@ -4,16 +4,41 @@
 [README](../README.md)**. This page is the advanced installer/maintenance
 runbook, not a required first stop for a new operator.
 
-Current release-candidate line: [`v0.1.0-rc.2`](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.2)
-(**pre-release, not Stable**). It includes the IPsec recovery, diagnostics,
-managed-MTU and State v3 changes after historical `v0.1.0-rc.1`. Check the
-published release page and asset checksums before installing. The older
-rc.1 tagged-artifact lifecycle was verified separately in Issue #11;
-the newer rc.2 evidence and its limitations are in
-[Issue #12](https://github.com/ach1992/simple-tun-link/issues/12).
+Current release candidate: [v0.1.0-rc.3](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.3)
+(**pre-release, not Stable**). The new guided Create/Manage UI and
+repeatable private receiver handoffs are changes from rc.2.
+The rc.2 IPsec, MTU and State v3 rollback boundary still applies.
+Check the published release, SHA256SUMS and exact installed commit
+before trusting the update. Earlier rc.2 release evidence and its
+limits are in [Issue #12](https://github.com/ach1992/simple-tun-link/issues/12).
 Commands below use generic `vX.Y.Z` as a placeholder: replace it with an
 **actually published** tag, never a branch name. No installer runs during a
 clone, build, or ordinary `go test`.
+
+## Protected receiver Setup Link retention (rc.3 guided UI)
+
+The rc.3 guided sender deliberately retains WireGuard and
+IPsec receiver Setup Links in the STL private state root's
+receiver-handoffs/ directory, separate from ordinary State and sender
+credentials. Every Link ID has a 0600 identity-bound private file
+inside an owned 0700 directory. Back up this directory together
+with State and the separately protected sender credentials when
+host disaster recovery matters. Keep all copies private.
+
+Guided My tunnels -> Share -> SHOW displays the same original offer
+after fresh real-TTY consent. Only a separate explicit DELETE erases
+this receiver file; it does not remove the active tunnel or local keys.
+Link removal or uninstall must not silently delete retained receiver
+handoffs. For an already removed Link, the owner must deliberately
+inspect and clean any remaining private handoff. The normal system
+root is /var/lib/simple-tun-link/receiver-handoffs/; only inspect
+files you own and have verified, never use wildcard deletion or
+relax owner-only permissions.
+
+Old rc.2 handoffs created with an explicit filename are still in
+that original path. The new menu does not search arbitrary old
+private paths or reconstruct a lost receiver secret. The normal
+noninteractive creator command still requires an explicit --output.
 
 ## Supported deployment shape
 
@@ -73,7 +98,43 @@ For a single-command install, with an explicit released tag:
 bash -c 'set -euo pipefail; umask 077; t=$(mktemp); trap '\''rm -f -- "$t"'\'' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 -o "$t" https://raw.githubusercontent.com/ach1992/simple-tun-link/vX.Y.Z/scripts/install.sh; bash -n "$t"; sudo bash "$t" install --version vX.Y.Z'
 ~~~
 
-The default one-command example installs only the native GRE/IPIP
+### Operator-first one-line install (v0.1.0-rc.3)
+
+For the current rc.3 pre-release, the user-facing one-line installer is:
+
+~~~sh
+bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.3/scripts/quick-install.sh | bash -s -- v0.1.0-rc.3'
+~~~
+
+This script is unprivileged initially and downloads the canonical
+installer pinned to the same explicit GitHub release tag. It checks
+syntax/availability before invoking root; the canonical installer
+checks the release SHA256SUMS and manifest before binary installation.
+When run through a pipe on a real TTY, it opens the new menu on
+/dev/tty after installing. Without a TTY, run sudo stl menu.
+The default backend prerequisite set is native,wireguard; optionally
+append native to install only GRE/IPIP prerequisites. For an **existing
+installer-owned STL**, use the explicit update form rather than the
+install command:
+
+~~~sh
+bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.3/scripts/quick-install.sh | bash -s -- v0.1.0-rc.3 update'
+~~~
+
+This selects the unchanged canonical installer update transaction,
+including identity-verified existing ownership and rollback journals.
+For a narrower prerequisite selection, append native update after
+the tag. The command refuses foreign or inconsistent installed
+state rather than silently replacing it. Confirm rollback-compatible
+State and backups before starting.
+
+This rc.3 command cannot be used with an rc.2 URL/tag, since rc.2
+does not contain quick-install.sh. Verify a real release exists before
+running. It does not adopt or install strongSwan/IPsec automatically;
+do not modify existing VPN services to circumvent the admission gate.
+Offline bootstrap failure/PTY tests: bash scripts/test-quick-install.sh.
+
+The longer direct canonical-installer example above installs only the native GRE/IPIP
 dependencies. To provision all backend packages automatically, append
 `--backends all` to the `sudo bash "$t" install --version vX.Y.Z` invocation
 in that wrapper, after checking existing strongSwan services. A fetched
