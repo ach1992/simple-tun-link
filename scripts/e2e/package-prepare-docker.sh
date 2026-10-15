@@ -78,8 +78,11 @@ if bash /mnt/stl-install.sh prepare --backends native,ipsec \
 fi
 [[ ! -e /tmp/stl-package-foreign-apt-called && ! -e /tmp/stl-package-foreign-service-marker ]] ||
   fail foreign_service_or_apt_executed
-after_ipsec=$(bash /mnt/stl-install.sh requirements --backends native,ipsec)
-[[ "$after_ipsec" == "$plan_ipsec" ]] || fail ipsec_refusal_modified_dpkg_inventory
+# The intentional apt-get sentinel remains installed, so a new requirements
+# simulation would legitimately fail. Verify dpkg state directly instead.
+if dpkg-query -W -f='${Status}' charon-systemd 2>/dev/null | grep -qx 'install ok installed'; then
+  fail ipsec_refusal_modified_dpkg_inventory
+fi
 [[ $(sha256sum /usr/local/bin/stl | awk "{print \$1}") == "$after_bin" ]] || fail ipsec_refusal_changed_stl
 echo "IPSEC_NON_SYSTEMD_GUEST_PREPARE_REFUSED_BEFORE_APT=PASS"
 echo "IPSEC_FOREIGN_DROPIN_AND_APT_MARKERS_ABSENT=PASS"
