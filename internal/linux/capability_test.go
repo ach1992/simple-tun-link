@@ -62,3 +62,37 @@ func TestCapabilityProbePropagatesCancellation(t *testing.T) {
 		t.Fatalf("error = %v, want context.Canceled", err)
 	}
 }
+
+func TestSharedFOUModuleProbeIsNotPermanentUnsupportedEvidence(t *testing.T) {
+	r := capabilityRunner{fail: map[string]bool{"ip fou show": true}}
+	report, err := (CapabilityProbe{Runner: r}).Probe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cap := range []Capability{CapabilityGREFOU, CapabilityGREGUE, CapabilityIPIPFOU, CapabilityIPIPGUE} {
+		got := report[cap]
+		if got.Available || got.ReasonCode != "fou_module_present_probe_failed" ||
+			!strings.Contains(got.Reason, "may not be loaded") {
+			t.Fatalf("FOU shared module evidence lost for %s: %+v", cap, got)
+		}
+	}
+}
+
+func TestNoModinfoDoesNotFalselyProveFOUUnsupported(t *testing.T) {
+	r := capabilityRunner{fail: map[string]bool{
+		"ip fou show": true, "modinfo -F filename fou": true,
+		"swanctl --help": true,
+	}}
+	report, err := (CapabilityProbe{Runner: r}).Probe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := report[CapabilityGREFOU]; got.Available || got.ReasonCode != "fou_probe_unconfirmed" {
+		t.Fatalf("inconclusive FOU was declared supported or permanent unsupported: %+v", got)
+	}
+	if got := report[CapabilityIPsecXFRM]; got.Available ||
+		got.ReasonCode != "swanctl_probe_unconfirmed" ||
+		strings.Contains(got.Reason, "private diagnostic") {
+		t.Fatalf("IPsec prerequisite cause was not separated: %+v", got)
+	}
+}

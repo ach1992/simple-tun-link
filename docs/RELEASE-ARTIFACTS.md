@@ -15,7 +15,7 @@ and [PR #92](https://github.com/ach1992/simple-tun-link/pull/92)
 record the published v0.1.0-rc.3 operator interface, explicit one-line
 install/update and protected receiver handoff retention. A green PR
 check is source-bound evidence only; the public release is qualified
-separately by checking its immutable tag, exact packaged binaries,
+separately by checking its recorded tag commit, exact packaged binaries,
 SHA256SUMS and actual installed executable. Historical rc.2 guest
 evidence must not be presented as a new rc.3 tagged-guest boot test.
 
@@ -24,7 +24,7 @@ and [PR #94](https://github.com/ach1992/simple-tun-link/pull/94)
 record the reviewed Ubuntu 22.04/systemd 249 absent-unit fix and
 one-screen operator presentation in the **published**
 [v0.1.0-rc.4 public pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.4).
-Its source/CI, immutable tag, five public artifacts, downloaded checksums,
+Its source/CI, recorded tag commit, five public artifacts, downloaded checksums,
 fresh public install, and actual rc.3-to-rc.4 disposable update have
 separate accepted evidence in Issue #93. Those isolated checks do **not**
 close the Owner's real affected-host systemd, reboot or WAN/NAT acceptance.
@@ -34,7 +34,8 @@ under closed [Issue #95](https://github.com/ach1992/simple-tun-link/issues/95).
 The **v0.1.0-rc.5 public pre-release** packages these changes; its
 separate tagged-asset/download/install acceptance is recorded under
 [Issue #97](https://github.com/ach1992/simple-tun-link/issues/97).
-Previous rc.4 assets stay immutable. Real host reboot/WAN/NAT
+The rc.4 asset hashes were verified at acceptance; that is not
+GitHub-enforced release immutability. Real host reboot/WAN/NAT
 acceptance remains independent in Issue #93.
 
 ## Local build
@@ -100,10 +101,25 @@ authorized publisher must bind the tag to the exact accepted source,
 attach the two binaries plus `SHA256SUMS`, `LICENSE` and
 `BUILD-MANIFEST.txt`, then **download the public files independently**
 and verify checksums, installed version/commit and installer behavior.
+For a **future release eligible for automatic in-menu root update**,
+GitHub `Enable release immutability` is an Owner-approved prerequisite:
+enable it before publication, create a draft, attach all expected assets,
+publish, and verify the official release API reports `immutable:true`.
+An old `immutable:false` release cannot be made eligible retroactively.
 
-The Update/Uninstall **menu** remains read-only guidance
-([PR #48](https://github.com/ach1992/simple-tun-link/pull/48)), never a
-second installation engine. The offline regression script cannot replace
+**Uninstall** remains a read-only preparatory menu; it cannot silently
+remove Links or protected credentials. The **post-rc.5 Update candidate**
+([Issue #99](https://github.com/ach1992/simple-tun-link/issues/99))
+can delegate to the existing canonical installer after explicit root/TTY/
+forward-only/UPDATE gates, **only** for an official GitHub release whose
+API reports `immutable:true`. False, missing or malformed immutability
+means manual verification guidance, never root execution of a downloaded
+mutable-tag script. There is no second updater or rollback engine.
+GitHub release immutability must be enabled before publishing **future**
+releases; enabling it does not retroactively change public rc.5
+(`immutable:false`). This candidate is unreleased, and all normal
+independent review, Owner merge, publication and field acceptance gates
+remain in effect. The offline regression script cannot replace
 the release-specific guest reboot and real kernel traffic evidence in
 [Issue #12](https://github.com/ach1992/simple-tun-link/issues/12).
 Historically, Issue #11 established rc.1 installation acceptance,

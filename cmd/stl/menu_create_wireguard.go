@@ -181,6 +181,6 @@ func menuCreateWireGuard(input io.Reader, reader *bufio.Reader, out, errOut io.W
 	menuScreen(out, "WireGuard / local creation complete")
 	menuNotice(out, "OK", "WireGuard saved locally. The other server still needs the receiver Setup Link.")
 	menuShowNewProtectedHandoff(input, out, options, id)
-	fmt.Fprintln(out, "After import, use Test connectivity on both servers to check the peer handshake and ping.")
+	menuProse(out, "After import, use Test connectivity on both servers to check the peer handshake and ping.")
 	return 0
 }

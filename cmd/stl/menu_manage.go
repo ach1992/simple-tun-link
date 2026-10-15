@@ -86,7 +86,7 @@ func menuManage(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		case "3", "e":
 			if selected.Backend == domain.BackendGRE || selected.Backend == domain.BackendIPIP {
 				if code := menuSharePlainLink(id, out, errOut, options); code != 0 {
-					fmt.Fprintln(out, "Setup Link cannot be rebuilt from the current saved state. No network changes made.")
+					menuProse(out, "Setup Link cannot be rebuilt from the current saved state. No network changes made.")
 				}
 			} else {
 				// No backend/Engine mutation. Display only the exactly
