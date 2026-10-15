@@ -80,7 +80,7 @@ fi
   fail foreign_service_or_apt_executed
 # The intentional apt-get sentinel remains installed, so a new requirements
 # simulation would legitimately fail. Verify dpkg state directly instead.
-if dpkg-query -W -f='${Status}' charon-systemd 2>/dev/null | grep -qx 'install ok installed'; then
+if dpkg-query -W -f="\${Status}" charon-systemd 2>/dev/null | grep -qx "install ok installed"; then
   fail ipsec_refusal_modified_dpkg_inventory
 fi
 [[ $(sha256sum /usr/local/bin/stl | awk "{print \$1}") == "$after_bin" ]] || fail ipsec_refusal_changed_stl
