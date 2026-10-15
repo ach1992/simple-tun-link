@@ -169,7 +169,7 @@ Physical WAN/NAT-router peer acceptance is tracked under Issue #12 and was
 not established by these isolated tests. Integration and authorization to
 publish a new release are separate from this technical test evidence.
 
-## Release validation boundaries (rc.3 through rc.5)
+## Release validation boundaries (rc.3 through rc.6)
 
 The v0.1.0-rc.3 operator-first changes were tracked in
 [Issue #91](https://github.com/ach1992/simple-tun-link/issues/91)
@@ -192,6 +192,11 @@ The v0.1.0-rc.5 source builds on the reviewed, merged operator UI
 CI and disposable six-Link Ubuntu 22.04 AMD64 / 24.04 ARM64 E2E.
 Its separately tagged public release/artifact acceptance is documented in
 [Issue #97](https://github.com/ach1992/simple-tun-link/issues/97).
+The rc.6 pre-release integrates [PR #100](https://github.com/ach1992/simple-tun-link/pull/100)
+and [PR #102](https://github.com/ach1992/simple-tun-link/pull/102),
+with exact-head main CI, disposable native systemd IPsec ESP/NAT-T
+and dual-architecture six-Link E2E. Public tagged assets and installed
+release qualification belong to [Issue #103](https://github.com/ach1992/simple-tun-link/issues/103).
 A source or disposable test cannot establish the real Owner-host
 reboot, provider routing, NAT or WAN properties.
 

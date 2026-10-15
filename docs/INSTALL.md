@@ -4,9 +4,11 @@
 [README](../README.md)**. This page is the advanced installer/maintenance
 runbook, not a required first stop for a new operator.
 
-Current public pre-release: [v0.1.0-rc.5](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.5)
-(**not Stable**). rc.5 improves connectivity summaries, capability hints
-and one-step protected handoff copying. rc.4 already fixed Ubuntu
+Current public pre-release: [v0.1.0-rc.6](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.6)
+(**not Stable**). rc.6 adds honest backend readiness, selected on-demand
+prerequisites, and a safer Update/Uninstall workflow. rc.5 previously
+improved connectivity summaries, capability hints, and one-step
+protected handoff copying. rc.4 already fixed Ubuntu
 22.04/systemd 249 missing-unit compatibility.
 The guided Create/Manage UI and protected receiver offers started in rc.3.
 The rc.2 IPsec, MTU and State v3 rollback boundary still applies.
@@ -73,10 +75,10 @@ tokens, unredacted private logs, or a full foreign service file.**
 Issue #93 includes rc.4's clearer terminal diagnosis and regression
 tests. These changes are **not part of rc.3**.
 
-## Planned post-rc.5 menu maintenance changes (not yet released)
+## rc.6 menu maintenance (Issue #99)
 
 [Issue #99](https://github.com/ach1992/simple-tun-link/issues/99)
-tracks an optional operator menu for listing the three newest complete
+introduced an operator menu for listing the three newest complete
 public releases. Only an official release with explicitly reported
 `immutable:true` is eligible for automatic root delegation to the
 *existing canonical installer*, after same-line forward update, installed
@@ -84,19 +86,20 @@ root/real-TTY and fresh `UPDATE` consent. `immutable:false`, missing,
 malformed or otherwise uncertain immutability is **manual-only**: never
 execute its tag-downloaded installer as root automatically. Asset names,
 Bash syntax and post-install hashes are not pre-execution source trust.
-Published rc.5 reports `immutable:false` and stays unchanged; immutable
-release policy affects **future** publications only, and enabling it
-requires an explicit repository Owner decision.
+Historical rc.5 reports `immutable:false` and stays unchanged. New
+rc.6 releases must use Owner-approved GitHub release immutability before
+publication, and the menu only auto-updates from official immutable
+releases whose API explicitly reports `immutable:true`.
 
-For Uninstall, the proposed screen guides **WireGuard/IPsec receiver
+For Uninstall, the rc.6 screen guides **WireGuard/IPsec receiver
 Setup Link KEEP-or-DELETE decisions before removing the committed tunnel**.
 If DELETE is chosen, My tunnels -> Delete receiver link needs a fresh
 `DELETE` confirmation while Link identity still exists; only then Remove.
 If KEEP is chosen, the protected file survives both removal and STL
 uninstall and must remain under administrator control. GRE/IPIP need no
 private-handoff decision. No credential erasure or mass Link wipe is
-automatic. Until reviewed, merged and published, **rc.5 Update remains
-read-only guidance**, regardless of the candidate behavior.
+automatic. The older rc.5 Update remains read-only guidance; rc.6
+applies additional immutable-release and fresh UPDATE-consent gates.
 
 ## Protected receiver Setup Link retention (rc.3 guided UI)
 
@@ -154,7 +157,7 @@ noninteractive creator command still requires an explicit --output.
   `--backends all` opts in to every backend dependency.
 - Missing strongSwan/IPsec packages cannot be safely installed by STL:
   APT maintainer hooks can start unknown effective systemd units, aliases,
-  generator sources or foreign drop-ins. The candidate installer therefore
+  generator sources or foreign drop-ins. The rc.6 installer therefore
   **refuses automatic IPsec APT** in `install`, `update` and `prepare` when
   any required strongSwan package is missing. An administrator must verify
   foreign service ownership and install missing packages with normal
@@ -165,7 +168,7 @@ noninteractive creator command still requires an explicit --output.
   host or edits repositories. Host APT package installation is not covered by
   the STL binary rollback transaction, and STL uninstall never uninstalls host
   packages. On error it reports the partial-package-management limitation.
-- Unreleased Issue #101 also bundles a byte-identical copy of the
+- rc.6 (Issue #101) also bundles a byte-identical copy of the
   **canonical** installer inside the Go binary (build and CI refuse drift).
   This allows a real installed `sudo stl menu` to inspect actual missing
   packages using the canonical read-only requirements action, preview the
@@ -184,14 +187,14 @@ noninteractive creator command still requires an explicit --output.
   affected Link, never claims traffic readiness and never unloads a
   possibly shared driver; actual whole-guest traffic proof is a separate
   acceptance gate.
-- Unreleased Issue #101 adds `prepare --backends native|wireguard|ipsec|all`
+- rc.6 (Issue #101) adds `prepare --backends native|wireguard|ipsec|all`
   to the byte-identical canonical installer for an existing installer-owned
   `/usr/local/bin/stl`. Eligible missing native/WireGuard packages are
   installed with the existing lock/owner/expected-missing guards, without
   replacing the executable, editing State, loading modules or provisioning
   IPsec services. If any strongSwan package is missing, preparation fails
-  **before APT** and guides manual administrator installation. The currently
-  published rc.5 installer has no `prepare` action.
+  **before APT** and guides manual administrator installation. The
+  historical rc.5 installer has no `prepare` action.
 
   After obtaining and reviewing the installer from a **published new release**,
   an already installed operator can run, for example:
@@ -201,8 +204,8 @@ noninteractive creator command still requires an explicit --output.
   ```
 
   The command does not create a tunnel. Re-enter the Create menu to verify
-  selected backend readiness. Do not run this action using the current rc.5
-  installer, which does not recognize `prepare`.
+  selected backend readiness. Do not run this action using the older
+  rc.5 installer, which does not recognize `prepare`.
 - Offline `--bundle --prefix /private/test` installs cannot install real host
   packages. Use the non-mutating `requirements` command to preview the exact
   packages before invoking privileged install.
@@ -226,9 +229,9 @@ asset checksum checks occur after the script starts. For manual
 install/update on such a release, independently verify that the tag
 resolves to the commit in `BUILD-MANIFEST.txt`, review the script at that
 **exact commit SHA**, and check the release asset SHA256SUMS before
-approving privileged execution. Never treat the historical convenience
-one-liners below as a replacement for source verification. The
-unreleased menu update specifically **does not** execute scripts from
+approving privileged execution. Never treat the convenience one-liners below as a replacement for
+source verification. The
+rc.6 menu Update specifically **does not** execute scripts from
 mutable or unverified GitHub releases.
 
 Read the [installer source](../scripts/install.sh) before running it as root.
@@ -239,14 +242,15 @@ the above independent source verification**:
 bash -c 'set -euo pipefail; umask 077; t=$(mktemp); trap '\''rm -f -- "$t"'\'' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 -o "$t" https://raw.githubusercontent.com/ach1992/simple-tun-link/vX.Y.Z/scripts/install.sh; bash -n "$t"; sudo bash "$t" install --version vX.Y.Z'
 ~~~
 
-### Operator-first one-line install (v0.1.0-rc.5)
+### Operator-first one-line install (v0.1.0-rc.6)
 
-The historical rc.5 one-line convenience form below assumes you have
-already verified the mutable tag and source as described above; it is
-**not** an unattended trust-verified installation path:
+First inspect the exact rc.6 installer source and independently verify
+its release provenance. Immutable publication protects against later asset/tag
+replacement but does not itself make code safe. After independent
+source/manifest review, the tag-pinned convenience form is:
 
 ~~~sh
-bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.5/scripts/quick-install.sh | bash -s -- v0.1.0-rc.5'
+bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.6/scripts/quick-install.sh | bash -s -- v0.1.0-rc.6'
 ~~~
 
 This script is unprivileged initially and downloads the canonical
@@ -261,7 +265,7 @@ installer-owned STL**, use the explicit update form rather than the
 install command:
 
 ~~~sh
-bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.5/scripts/quick-install.sh | bash -s -- v0.1.0-rc.5 update'
+bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.6/scripts/quick-install.sh | bash -s -- v0.1.0-rc.6 update'
 ~~~
 
 This selects the unchanged canonical installer update transaction,
@@ -271,7 +275,7 @@ the tag. The command refuses foreign or inconsistent installed
 state rather than silently replacing it. Confirm rollback-compatible
 State and backups before starting.
 
-This rc.5 command cannot be used with an rc.2 URL/tag, since rc.2
+This rc.6 command cannot be used with an rc.2 URL/tag, since rc.2
 does not contain quick-install.sh. Verify a real release exists before
 running. It does not adopt or install strongSwan/IPsec automatically;
 do not modify existing VPN services to circumvent the admission gate.
@@ -279,7 +283,7 @@ Offline bootstrap failure/PTY tests: bash scripts/test-quick-install.sh.
 
 The longer direct canonical-installer example above installs only the native GRE/IPIP
 dependencies. `--backends all` selects all backend prerequisites for the
-installer; in the unreleased security-remediated candidate, any missing
+installer; in rc.6, any missing
 strongSwan package is a manual administrator prerequisite and causes the
 installer to stop before APT. Do not assume `--backends all` installs
 IPsec. A fetched installer cannot bootstrap its own download client: `curl` is needed for the
@@ -316,10 +320,9 @@ No public tag/release is being created by these instructions.
 
 ## Update
 
-In the **published rc.5**, the interactive `stl menu` Update task remains
-a read-only handoff. The **unreleased post-rc.5 candidate** fetches official
-release metadata and can call the same canonical installer only when GitHub
-positively reports `immutable:true`, with fresh root/real-TTY/`UPDATE`
+The historical **rc.5** `stl menu` Update is read-only guidance.
+The **rc.6** menu Update fetches official release metadata and may
+call the same canonical installer only when GitHub positively reports `immutable:true`, with fresh root/real-TTY/`UPDATE`
 confirmation and a same-line forward RC. `immutable:false` or unknown is
 manual verification guidance only; there is no privileged remote-script
 execution for that selection. Enabling release immutability in GitHub

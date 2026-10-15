@@ -1,7 +1,7 @@
 # STL CLI — operator menus and stable machine commands
 
 The compact human menu below ships with the
-[v0.1.0-rc.5 public pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.5).
+[v0.1.0-rc.6 public pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.6).
 The old rc.2 executable retains its older menu. Versioned
 noninteractive machine CLI/JSON contracts remain unchanged.
 
@@ -76,7 +76,7 @@ Core operator choices (rc.4):
 - 4 Test connectivity: select a numbered Link or a for all; bounded
   observation only, not automatic repair.
 - 5 Settings and 7 Uninstall are read-only/guided; 8 exits.
-  Unreleased post-rc.5 Update can delegate to the canonical installer only
+  In rc.6, Update can delegate to the canonical installer only
   after a positively immutable official release and fresh root/TTY/UPDATE
   gates; every unverified/mutable release stays manual guidance only.
 
@@ -113,10 +113,10 @@ does not invalidate separately verified ping samples. Check all Links uses
 the existing all-Link diagnostic contract, not a second probe engine.
 Semantic terminal colors have matching readable noncolor labels.
 
-### Post-rc.5 maintenance UX refinement (unreleased; Issue #99)
+### rc.6 maintenance UX refinement (Issue #99)
 
-This section documents **proposed next-source behavior**, not functionality
-already included in the published rc.5 executable.
+These features first ship in rc.6 and are **not** included in the
+historical published rc.5 executable.
 
 - Capability badges no longer equate an unsuccessful read-only kernel/tool
   query with permanent lack of tunnel support. FOU/GUE share a single
@@ -139,8 +139,9 @@ already included in the published rc.5 executable.
   backups/quiescence and a fresh `UPDATE` confirmation. No parallel update
   or rollback engine exists. All other paths show manual verification
   guidance **without a privileged mutable-tag curl-to-shell command**.
-  Public rc.5 is unchanged and `immutable:false`; repository release
-  immutability needs Owner approval/enabling **before future releases**.
+  Historical rc.5 remains unchanged and `immutable:false`. rc.6's
+  automatic Update requires an Owner-approved immutable GitHub release;
+  older mutable releases remain manual-only.
 - Operator Uninstall groups next steps and the existing read-only
   `stl maintenance pre-uninstall --json` and trusted installer guidance.
   It **does not perform an automatic mass deletion**: multi-Link resource
@@ -154,9 +155,9 @@ already included in the published rc.5 executable.
 
 The controlling user report, accepted scope and tests live in
 [Issue #99](https://github.com/ach1992/simple-tun-link/issues/99).
-The published rc.5 remains unchanged until a separately approved release.
+The historical published rc.5 remains unchanged; rc.6 contains these features.
 
-### On-demand GRE/IPIP module preparation (unreleased; Issue #101)
+### rc.6 on-demand GRE/IPIP module preparation (Issue #101)
 
 For any backend, Create first takes a **read-only** selected package
 inventory using the byte-identical canonical installer embedded in the
@@ -203,7 +204,7 @@ Link while independent Links continue. Whole-guest reboot/traffic
 acceptance is still tracked under
 [Issue #101](https://github.com/ach1992/simple-tun-link/issues/101).
 
-The draft adds a separate **opt-in** IPsec service source preparer after
+rc.6 adds a separate **opt-in** IPsec service source preparer after
 successful package checks. Only an installed root real terminal can freshly
 confirm `PROVISION-IPSEC`: the program first requires no existing/conflicting
 native publication records, no foreign daemon or IKE UDP ports, and only
@@ -225,7 +226,8 @@ are retained for an administrator to reconcile. No unverified service
 is declared ready. Disposable-guest service and traffic acceptance
 remain a separately required gate.
 
-The published `v0.1.0-rc.5` binary does not contain these features.
+These features first ship in rc.6; the historical rc.5 binary does not
+contain them.
 Installing `swanctl` alone cannot satisfy the IPsec runtime gate.
 
 ### Manage Links — confirmation and privacy
@@ -421,8 +423,8 @@ local import does not initiate IKE or prove protected traffic. Legacy
 WireGuard v1/v2, IPsec v1 and IPsec v2 with non-32-byte PSKs remain
 preview-only.
 The menu makes no separate promises about working peer traffic or complete
-pairing. Settings and Uninstall are observational/preparatory; an unreleased
-Update candidate may delegate to the canonical installer only after
+pairing. Settings and Uninstall are observational/preparatory; rc.6
+Update may delegate to the canonical installer only after
 positively immutable release trust and fresh root/TTY/UPDATE consent.
 Mutable or unverified releases remain read-only guidance. Menu text
 and selection numbers are human UI, not automation contracts; existing
@@ -1083,10 +1085,9 @@ The detailed read-only checks below record the historical source-only
 diagnostic milestones and remain relevant **when native runtime admission
 fails**. Historical `activation_allowed:false` and exit-4 statements
 within that chronology do not describe a currently admitted runtime.
-Historical source-only milestones predate the unreleased Issue #101
-explicitly confirmed native-exclusive provisioner, which now calls the
-receipt-bound publishers under the installed maintenance gate. The
-currently published rc.5 remains unchanged. See
+Historical source-only milestones predate the Issue #101 native-exclusive
+provisioner included in rc.6, which calls receipt-bound publishers under
+the installed maintenance gate. The earlier rc.5 binary remains unchanged. See
 `docs/operations/IPSEC-REAL-E2E.md` for operational evidence.
 
 The command observes `charon`/`charon-systemd` processes and known

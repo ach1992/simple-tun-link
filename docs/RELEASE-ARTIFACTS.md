@@ -38,6 +38,15 @@ The rc.4 asset hashes were verified at acceptance; that is not
 GitHub-enforced release immutability. Real host reboot/WAN/NAT
 acceptance remains independent in Issue #93.
 
+The **v0.1.0-rc.6 public pre-release** incorporates reviewed and merged
+[PR #100](https://github.com/ach1992/simple-tun-link/pull/100) for safer
+Update/Uninstall and [PR #102](https://github.com/ach1992/simple-tun-link/pull/102)
+for on-demand prerequisites and native IPsec first-start security.
+Immutable publication, public artifacts and installed-release validation
+are separately tracked under [Issue #103](https://github.com/ach1992/simple-tun-link/issues/103).
+Historical rc.5 remains unchanged; actual Owner-host WAN/NAT/systemd-249
+acceptance remains open in Issue #93.
+
 ## Local build
 
 From a **clean Git source tree**, with the pinned Go toolchain and GNU
@@ -108,7 +117,7 @@ publish, and verify the official release API reports `immutable:true`.
 An old `immutable:false` release cannot be made eligible retroactively.
 
 **Uninstall** remains a read-only preparatory menu; it cannot silently
-remove Links or protected credentials. The **post-rc.5 Update candidate**
+remove Links or protected credentials. The **rc.6 Update implementation**
 ([Issue #99](https://github.com/ach1992/simple-tun-link/issues/99))
 can delegate to the existing canonical installer after explicit root/TTY/
 forward-only/UPDATE gates, **only** for an official GitHub release whose
@@ -117,10 +126,12 @@ means manual verification guidance, never root execution of a downloaded
 mutable-tag script. There is no second updater or rollback engine.
 GitHub release immutability must be enabled before publishing **future**
 releases; enabling it does not retroactively change public rc.5
-(`immutable:false`). This candidate is unreleased, and all normal
-independent review, Owner merge, publication and field acceptance gates
-remain in effect. The offline regression script cannot replace
-the release-specific guest reboot and real kernel traffic evidence in
+(`immutable:false`). From rc.6, automatic Update is limited to
+positively immutable GitHub releases; an otherwise valid mutable release
+remains manual-only. Review, publication and physical field acceptance
+remain separately scoped and must not be conflated. The offline
+regression script cannot replace release-specific guest reboot and
+real kernel traffic evidence in
 [Issue #12](https://github.com/ach1992/simple-tun-link/issues/12).
 Historically, Issue #11 established rc.1 installation acceptance,
 while Issue #12 records the stronger rc.2 release and whole-guest
