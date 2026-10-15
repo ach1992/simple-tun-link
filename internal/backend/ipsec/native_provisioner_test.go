@@ -79,3 +79,39 @@ func TestNativeIKEPortPreflightHasFixedCorrectHexIdentity(t *testing.T) {
 	// host's readiness and must not bind/listen or mutate services.
 	_ = nativeIKEPortsVacant()
 }
+
+func TestNativeVendorStatusRejectsUnverifiedNegativeEvidence(t *testing.T) {
+	cases := []struct {
+		action, state string
+		exit          int
+		want          bool
+	}{
+		{"is-active", "inactive", 3, true},
+		{"is-active", "inactive", 4, true},
+		{"is-active", "unknown", 4, true},
+		{"is-active", "active", 0, true},
+		{"is-active", "inactive", 0, false},
+		{"is-active", "active", 3, false},
+		{"is-enabled", "disabled", 1, true},
+		{"is-enabled", "not-found", 4, true},
+		{"is-enabled", "masked", 1, true},
+		{"is-enabled", "enabled", 0, true},
+		{"is-enabled", "disabled", 0, false},
+		{"is-enabled", "not-found", 1, false},
+		{"is-enabled", "static", 0, false},
+		{"is-enabled", "indirect", 0, false},
+		{"is-active", "failed", 3, false},
+	}
+	for _, tc := range cases {
+		s, e := parseNativeVendorStatus(tc.action, []byte(tc.state+"\n"), nil, tc.exit)
+		if (e == nil) != tc.want || (e == nil && s != tc.state) {
+			t.Fatalf("action=%s state=%s exit=%d allowed=%v expected=%v err=%v", tc.action, tc.state, tc.exit, e == nil, tc.want, e)
+		}
+	}
+	if _, e := parseNativeVendorStatus("is-enabled", []byte("not-found\n"), []byte("cannot inspect\n"), 4); e == nil {
+		t.Fatal("systemd stderr falsely proves foreign unit absent")
+	}
+	if _, e := parseNativeVendorStatus("is-enabled", []byte("disabled\nextra\n"), nil, 1); e == nil {
+		t.Fatal("malformed status with extra lines accepted")
+	}
+}

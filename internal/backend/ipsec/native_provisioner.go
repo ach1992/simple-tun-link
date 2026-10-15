@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -65,28 +66,69 @@ func NativeProvisionReadiness(ctx context.Context) error {
 }
 
 func readNativeVendorUnitState(ctx context.Context, action, name string) (string, error) {
-	if (action != "is-active" && action != "is-enabled") || !strings.HasSuffix(name, ".service") {
+	if ctx == nil || (action != "is-active" && action != "is-enabled") ||
+		!strings.HasSuffix(name, ".service") {
 		return "", errors.New("invalid native service observation")
 	}
-	runner := BoundedExecRunner{Timeout: 4 * time.Second}
-	result, _ := runner.RunBounded(ctx, CaptureLimits{Stdout: 128, Stderr: 128},
-		"/usr/bin/systemctl", "--system", "--no-pager", action, name)
-	// No exit status alone establishes a negative result, and unknown
-	// future output is never normalized into safe vacancy.
-	if ctx.Err() != nil || len(result.Stdout) == 0 || len(result.Stderr) > 0 {
+	// systemctl is-enabled deliberately exits nonzero for a confirmed
+	// disabled/missing vendor unit. The normal bounded runner erases stdout
+	// on nonzero exit and cannot establish safe negative evidence.
+	// Capture bounded stdout, independently validate exit status, and reject
+	// stderr/unknown content. Never infer absence from generic command error.
+	bound, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	out := &privateCapture{max: 128}
+	errOut := &privateCapture{max: 128}
+	cmd := exec.CommandContext(bound, "/usr/bin/systemctl",
+		"--system", "--no-pager", action, name)
+	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C", "LANG=C", "HOME=/root"}
+	cmd.Stdout, cmd.Stderr = out, errOut
+	runErr := cmd.Run()
+	if bound.Err() != nil || out.overflow || errOut.overflow || errOut.output.Len() != 0 {
 		return "", errors.New("unverified systemd state")
 	}
-	answer := string(result.Stdout)
+	code := 0
+	if runErr != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(runErr, &exitErr) {
+			return "", errors.New("unverified systemd exit")
+		}
+		code = exitErr.ExitCode()
+	}
+	return parseNativeVendorStatus(action, out.output.Bytes(), errOut.output.Bytes(), code)
+}
+
+// parseNativeVendorStatus is a strict independent interpreter of systemctl's
+// printed state AND its expected nonzero exit code. Failure alone cannot prove
+// that a foreign unit is disabled or missing.
+func parseNativeVendorStatus(action string, stdout, stderr []byte, code int) (string, error) {
+	if len(stderr) != 0 {
+		return "", errors.New("unverified systemd diagnostic output")
+	}
+	answer := string(stdout)
 	if !strings.HasSuffix(answer, "\n") || strings.Count(answer, "\n") != 1 {
 		return "", errors.New("unverified systemd output shape")
 	}
 	answer = strings.TrimSuffix(answer, "\n")
-	switch answer {
-	case "inactive", "unknown", "disabled", "masked", "not-found", "enabled", "static", "active", "activating", "failed", "alias", "indirect", "generated", "linked", "linked-runtime":
-		return answer, nil
-	default:
-		return "", errors.New("unrecognized systemd state")
+	switch action {
+	case "is-active":
+		if (answer == "inactive" && (code == 3 || code == 4)) ||
+			(answer == "unknown" && code == 4) {
+			return answer, nil
+		}
+		if answer == "active" && code == 0 {
+			return answer, nil
+		}
+	case "is-enabled":
+		if ((answer == "disabled" || answer == "masked") && code == 1) ||
+			(answer == "not-found" && code == 4) {
+			return answer, nil
+		}
+		if answer == "enabled" && code == 0 {
+			return answer, nil
+		}
 	}
+	return "", errors.New("unrecognized systemd status/exit combination")
 }
 
 // nativeIKEPortsVacant reads only namespace-local kernel socket inventories;
