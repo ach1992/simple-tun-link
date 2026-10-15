@@ -19,7 +19,7 @@ import (
 // not an alternative strongSwan owner or a generic service installer.
 func menuCreateIPsec(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
 	options *runtimeOptions, mode domain.Encapsulation) int {
-	fmt.Fprintf(out, "\nIPsec %s — encrypted IKEv2 tunnel (advanced)\n", mode)
+	menuSection(out, fmt.Sprintf("Create IPsec / %s", mode))
 	fmt.Fprintln(out, "This requires a verified STL-exclusive strongSwan service.")
 	if options == nil {
 		var err error
@@ -53,7 +53,7 @@ func menuCreateIPsec(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		fmt.Fprintln(errOut, "No safe route/source IP to the other server was found. No changes applied.")
 		return 4
 	}
-	fmt.Fprintf(out, "THIS server's connection IPv4 (automatic from route): %s; no need to type it.\n", route.Source)
+	menuField(out, "Local endpoint", route.Source.String()+" (automatic)")
 	snapshot, err := state.NewFileStore(createStateRoot(options)).Load(ctx)
 	if err != nil {
 		fmt.Fprintln(errOut, "Cannot inspect existing saved tunnels. No changes applied.")
@@ -104,9 +104,12 @@ func menuCreateIPsec(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		fmt.Fprintln(errOut, "Cannot prepare IPsec tunnel request; no changes applied.")
 		return 1
 	}
-	fmt.Fprintln(out, "\nReview encrypted tunnel (not yet created):")
-	fmt.Fprintf(out, "  IPsec %s | THIS server %s, tunnel IP %s\n", mode, route.Source, addresses.Local)
-	fmt.Fprintf(out, "  OTHER server %s, tunnel IP %s\n", peer, addresses.Peer)
+	menuScreen(out, "Review / confirm IPsec")
+	menuField(out, "Type", "IPsec / "+string(mode))
+	menuField(out, "This server", route.Source.String())
+	menuField(out, "Local tunnel IP", addresses.Local.String())
+	menuField(out, "Other server", peer.String())
+	menuField(out, "Remote tunnel IP", addresses.Peer.String())
 	fmt.Fprintln(out, "  Protected receiver Setup Link: retained for later sharing under STL-owned private storage")
 	fmt.Fprintln(out, "This will generate a unique protected key, stage IPsec and activate only STL-owned resources.")
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
@@ -121,6 +124,7 @@ func menuCreateIPsec(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		fmt.Fprintln(out, "Cancelled. No keys or tunnel were created.")
 		return 0
 	}
+	menuScreen(out, "Applying / creating protected IPsec tunnel")
 	handoff, err = prepareProtectedMenuHandoff(options, id)
 	if err != nil {
 		fmt.Fprintln(errOut, "Cannot safely reserve the protected Setup Link file. No new key generated.")
@@ -132,7 +136,7 @@ func menuCreateIPsec(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		fmt.Fprintln(errOut, "If a protected handoff was already staged, keep that file and reconcile before starting a new IPsec setup.")
 		return code
 	}
-	fmt.Fprintln(out, "The protected receiver Setup Link remains available: My tunnels -> tunnel number -> Share Setup Link.")
+	menuNotice(out, "OK", "Receiver offer saved privately. Retrieve it in My tunnels -> Share.")
 	fmt.Fprintln(out, "OTHER server: Import -> Protected link, then explicitly Connect IPsec and diagnose traffic.")
 	fmt.Fprintln(out, "Use Delete saved Setup Link only when you no longer need that receiver handoff.")
 	return 0

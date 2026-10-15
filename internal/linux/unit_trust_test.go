@@ -5,7 +5,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -110,7 +109,7 @@ func TestUnsafeUnitOwnershipBlocksRealEnsureBeforeSystemctl(t *testing.T) {
 		},
 	}
 	_, _, err = manager.EnsureRestore(t.Context(), "/usr/local/bin/stl")
-	if err == nil || !strings.Contains(err.Error(), "not proven root-owned") {
+	if err == nil || !testRestoreCause(err, RestoreUnitPathUntrusted, "not proven root-owned") {
 		t.Fatalf("untrusted leaf UID was not rejected by the actual trust decision: %v", err)
 	}
 	if len(runner.commands) != 0 {
@@ -132,7 +131,7 @@ func TestUnitDirectoryCreationRejectsUnsafeAncestor(t *testing.T) {
 		VerifyExecutable: func(string) error { return nil },
 	}
 	_, _, err := manager.EnsureRestore(t.Context(), "/usr/local/bin/stl")
-	if err == nil || !strings.Contains(err.Error(), "unsafe systemd restore unit directory") {
+	if err == nil || !testRestoreCause(err, RestoreUnitPathUntrusted, "unsafe systemd restore unit directory") {
 		t.Fatalf("unsafe existing ancestor accepted: %v", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(root, "new")); !errors.Is(statErr, os.ErrNotExist) {

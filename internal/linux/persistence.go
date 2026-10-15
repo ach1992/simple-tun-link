@@ -76,7 +76,7 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 		verify = VerifyTrustedSTLExecutable
 	}
 	if err := verify(stlExecutable); err != nil {
-		return nil, false, fmt.Errorf("refusing unsafe STL restore executable: %w", err)
+		return nil, false, classifyRestoreFailure(RestoreExecutableUntrusted, fmt.Errorf("refusing unsafe STL restore executable: %w", err))
 	}
 	unitDir := p.UnitDir
 	if unitDir == "" {
@@ -84,13 +84,13 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 	}
 	path := filepath.Join(unitDir, restoreSystemdUnitName)
 	if err := p.verifyUnitDirectoryForCreate(unitDir); err != nil {
-		return nil, false, fmt.Errorf("unsafe systemd restore unit directory: %w", err)
+		return nil, false, classifyRestoreFailure(RestoreUnitPathUntrusted, fmt.Errorf("unsafe systemd restore unit directory: %w", err))
 	}
 	if err := os.MkdirAll(unitDir, 0o755); err != nil {
-		return nil, false, fmt.Errorf("create systemd unit directory: %w", err)
+		return nil, false, classifyRestoreFailure(RestoreUnitPathUntrusted, fmt.Errorf("create systemd unit directory: %w", err))
 	}
 	if err := p.verifyUnitPath(path); err != nil {
-		return nil, false, fmt.Errorf("unsafe systemd restore unit identity: %w", err)
+		return nil, false, classifyRestoreFailure(RestoreUnitPathUntrusted, fmt.Errorf("unsafe systemd restore unit identity: %w", err))
 	}
 
 	prior, priorIdentity, readErr := readPinnedRegularUnit(path)
@@ -109,14 +109,14 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 	}()
 	existed := readErr == nil
 	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
-		return nil, false, fmt.Errorf("read systemd unit: %w", readErr)
+		return nil, false, classifyRestoreFailure(RestoreUnitPathUntrusted, fmt.Errorf("read systemd unit: %w", readErr))
 	}
 	if existed {
 		if !isOwnedSystemdUnit(prior) {
-			return nil, false, fmt.Errorf("refusing to overwrite non-STL systemd unit %q", restoreSystemdUnitName)
+			return nil, false, classifyRestoreFailure(RestoreUnitConflict, fmt.Errorf("refusing to overwrite non-STL systemd unit %q", restoreSystemdUnitName))
 		}
 		if err := p.guardExactPublishedUnit(path, prior); err != nil {
-			return nil, false, fmt.Errorf("refusing unverified STL unit identity: %w", err)
+			return nil, false, classifyRestoreFailure(RestoreUnitPathUntrusted, fmt.Errorf("refusing unverified STL unit identity: %w", err))
 		}
 	}
 
@@ -126,12 +126,12 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 	}
 	wasEnabled, err := p.isEnabled(ctx, systemctl, restoreSystemdUnitName)
 	if err != nil {
-		return nil, false, err
+		return nil, false, classifyRestoreFailure(RestoreEnablementUnknown, err)
 	}
 	// An enabled identity without our owned file is ambiguous. Refuse to take it
 	// over instead of assuming that STL owns systemd's enablement symlinks.
 	if !existed && wasEnabled {
-		return nil, false, fmt.Errorf("refusing to take over enabled systemd unit %q without an STL-owned unit file", restoreSystemdUnitName)
+		return nil, false, classifyRestoreFailure(RestoreUnitConflict, fmt.Errorf("refusing to take over enabled systemd unit %q without an STL-owned unit file", restoreSystemdUnitName))
 	}
 
 	fileChanged := !existed || string(prior) != content
@@ -173,7 +173,7 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 		}
 		if _, err := p.Runner.Run(ctx, systemctl, "daemon-reload"); err != nil {
 			repairErr := p.compensatePublishedUnit(ctx, systemctl, unitDir, path, []byte(content), prior, publishedIdentity, existed, wasEnabled, true, false)
-			return nil, false, errors.Join(fmt.Errorf("systemd daemon-reload: %w", err), repairErr)
+			return nil, false, classifyRestoreFailure(RestoreDaemonReloadFailed, errors.Join(fmt.Errorf("systemd daemon-reload: %w", err), repairErr))
 		}
 	}
 
@@ -192,7 +192,7 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 		}
 		if enableErr != nil {
 			repairErr := p.compensatePublishedUnit(ctx, systemctl, unitDir, path, []byte(content), prior, publishedIdentity, existed, wasEnabled, fileChanged, true)
-			return nil, false, errors.Join(fmt.Errorf("enable STL systemd unit: %w", enableErr), repairErr)
+			return nil, false, classifyRestoreFailure(RestoreEnableFailed, errors.Join(fmt.Errorf("enable STL systemd unit: %w", enableErr), repairErr))
 		}
 		enabledChanged = true
 	}

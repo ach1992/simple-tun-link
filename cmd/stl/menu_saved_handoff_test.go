@@ -89,6 +89,8 @@ func TestMenuProtectedHandoffSavedAcrossSessionAndShowOnlyWithFreshTTYConsent(t 
 	if strings.Contains(tty.all, secret) {
 		t.Fatal("cancel exposed receiver credential")
 	}
+	tty.expect("Press Enter to continue... ")
+	tty.send("")
 	tty.expect("Choose an action: ")
 	tty.send("3")
 	tty.expect("Type SHOW to confirm")
@@ -98,6 +100,8 @@ func TestMenuProtectedHandoffSavedAcrossSessionAndShowOnlyWithFreshTTYConsent(t 
 	if !strings.Contains(tty.all, secret) {
 		t.Fatal("exact original receiver offer not re-shown")
 	}
+	tty.expect("Press Enter to continue... ")
+	tty.send("")
 	tty.expect("Choose an action: ")
 	tty.send("0")
 	tty.expect("Choose a task: ")
@@ -137,6 +141,8 @@ func TestMenuProtectedHandoffDeniesScriptedOrQueuedDisclosure(t *testing.T) {
 	if strings.Contains(tty.all, secret) {
 		t.Fatal("queued terminal text bypassed fresh consent")
 	}
+	tty.expect("Press Enter to continue... ")
+	tty.send("")
 	tty.expect("Choose an action: ")
 	tty.send("0")
 	tty.expect("Choose a task: ")
@@ -162,11 +168,15 @@ func TestMenuProtectedHandoffDeleteOnlyReceiverFileWithFreshConfirmation(t *test
 	if _, err := os.Stat(path); err != nil {
 		t.Fatal("cancel destroyed protected file")
 	}
+	tty.expect("Press Enter to continue... ")
+	tty.send("")
 	tty.expect("Choose an action: ")
 	tty.send("6")
 	tty.expect("Type DELETE to confirm")
 	tty.send("DELETE")
 	tty.expect("Protected Setup Link deleted; the tunnel and its local credentials were NOT changed.")
+	tty.expect("Press Enter to continue... ")
+	tty.send("")
 	tty.expect("Choose an action: ")
 	tty.send("3")
 	tty.expect("Type SHOW to confirm")
@@ -175,6 +185,8 @@ func TestMenuProtectedHandoffDeleteOnlyReceiverFileWithFreshConfirmation(t *test
 	if strings.Contains(tty.all, secret) {
 		t.Fatal("deleted handoff displayed despite missing file")
 	}
+	tty.expect("Press Enter to continue... ")
+	tty.send("")
 	tty.expect("Choose an action: ")
 	tty.send("0")
 	tty.expect("Choose a task: ")
@@ -338,6 +350,8 @@ func TestMenuProtectedHandoffIPsecOriginalPSKRetainedBySavedIntent(t *testing.T)
 	if !strings.Contains(tty.all, encoded) {
 		t.Fatal("IPsec original PSK offer not shown on consent")
 	}
+	tty.expect("Press Enter to continue... ")
+	tty.send("")
 	tty.expect("Choose an action: ")
 	tty.send("0")
 	tty.expect("Choose a task: ")
@@ -452,6 +466,8 @@ func TestMenuProtectedHandoffDeleteRequiresFreshRealTTY(t *testing.T) {
 	tty.expect("Type DELETE to confirm")
 	tty.send("")
 	tty.expect("Cancelled. Nothing changed or disclosed.")
+	tty.expect("Press Enter to continue... ")
+	tty.send("")
 	tty.expect("Choose an action: ")
 	tty.send("0")
 	tty.expect("Choose a task: ")

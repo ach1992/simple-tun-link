@@ -112,10 +112,10 @@ func clearQueuedMenuConfirmation(input io.Reader, reader *bufio.Reader) error {
 // and import commands, with a freshly typed affirmative after the preview.
 func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, options *runtimeOptions) int {
 	for {
-		fmt.Fprintln(out, "\nIMPORT SETUP LINK — join a tunnel created on the OTHER server")
-		fmt.Fprintln(out, "  1  GRE / IPIP link (plaintext; pasted text will be visible)")
-		fmt.Fprintln(out, "  2  WireGuard / IPsec (contains secret keys; paste hidden)")
-		fmt.Fprintln(out, "  0  Back")
+		menuScreen(out, "Import Setup Link / choose type")
+		menuOption(out, "1", "GRE / IPIP", "Unencrypted; visible paste")
+		menuOption(out, "2", "WireGuard / IPsec", "Sensitive; hidden paste")
+		menuOption(out, "0", "Back", "Main menu")
 		fmt.Fprint(out, "Choose type [1]: ")
 		mode, err := readMenuAnswer(reader)
 		if errors.Is(err, io.EOF) {
@@ -135,8 +135,9 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			fmt.Fprintln(out, "Choose 1 for ordinary GRE/IPIP or 2 for protected credentials.")
 			continue
 		}
-		// Once chosen, a bad paste retries THIS prompt; the operator does
-		// not have to navigate the backend choice again.
+		// One clean screen for the paste step. Recoverable validation errors
+		// remain visible with the same prompt (without rechoosing type).
+		menuScreen(out, "Import / paste complete Setup Link")
 		for {
 			if mode == "1" {
 				fmt.Fprintln(out, "Paste the GRE/IPIP stl:// line. It is not encrypted and WILL be visible while typing.")
@@ -195,14 +196,16 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			if mode == "2" && !preview.Sensitive && !preview.HasCredential {
 				fmt.Fprintln(out, "This is an ordinary plaintext GRE/IPIP setup link; importing it in protected mode is also supported.")
 			}
-			fmt.Fprintln(out, "\nReview the tunnel you are about to add:")
-			fmt.Fprintf(out, "  Type: %s / %s\n", preview.Backend, preview.Encapsulation)
-			fmt.Fprintf(out, "  THIS server: %s (tunnel IP %s)\n", preview.LocalUnderlay, preview.LocalAddress)
-			fmt.Fprintf(out, "  OTHER server: %s (tunnel IP %s)\n", preview.PeerUnderlay, preview.PeerAddress)
+			menuScreen(out, "Import / review before applying")
+			menuField(out, "Type", fmt.Sprintf("%s / %s", preview.Backend, preview.Encapsulation))
+			menuField(out, "Local endpoint", preview.LocalUnderlay)
+			menuField(out, "Local tunnel IP", preview.LocalAddress)
+			menuField(out, "Remote endpoint", preview.PeerUnderlay)
+			menuField(out, "Remote tunnel IP", preview.PeerAddress)
 			if preview.HasCredential || preview.Sensitive {
-				fmt.Fprintln(out, "  SENSITIVE one-time receiver credential: present but HIDDEN")
+				menuNotice(out, "WARNING", "SENSITIVE receiver credential present but HIDDEN. Share only privately.")
 			} else if preview.GRE != nil {
-				fmt.Fprintln(out, "  GRE: no encryption. Its key is only an identifier.")
+				menuNotice(out, "WARNING", "GRE is unencrypted; its key is only an identifier.")
 			}
 			if preview.ImportConfirmation == "" {
 				fmt.Fprintln(out, "This offer is preview-only on this STL version. Nothing was changed; use a supported newer offer.")
@@ -229,12 +232,14 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 				fmt.Fprintln(out, "Import cancelled. No changes applied.")
 				return 0
 			}
+			menuScreen(out, "Applying / importing tunnel")
+			menuSection(out, "Importing and verifying local tunnel")
 			code := linkImportCommand([]string{"import", "--stdin", "--confirm", preview.ImportConfirmation},
 				strings.NewReader(encoded), out, errOut, options)
 			if code != 0 {
-				fmt.Fprintln(out, "Import was not confirmed. Check the reported reason, existing saved tunnels, and peer before another attempt.")
+				menuNotice(out, "FAILED", "Import not confirmed. Read the failure and inspect the current State before retry.")
 			} else {
-				fmt.Fprintln(out, "Import finished. Both servers can now use Test connectivity to check tunnel traffic.")
+				menuNotice(out, "OK", "Import completed locally. Next: test connectivity on BOTH servers.")
 			}
 			return code
 		}

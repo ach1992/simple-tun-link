@@ -130,7 +130,7 @@ func TestOperatorUnifiedCreateAllPlainBackends(t *testing.T) {
 			if test.backend == domain.BackendGRE && test.mode != domain.EncapNative && l.GRE.UDPPort == 0 {
 				t.Fatal("UDP GRE mode missing port")
 			}
-			if !strings.Contains(out, "Setup link: stl://") {
+			if !strings.Contains(out, "stl://") {
 				t.Fatal("selected mode did not provide canonical peer Setup Link")
 			}
 		})
@@ -156,7 +156,7 @@ func TestOperatorInputErrorsRemainInMenuWithoutHostMutation(t *testing.T) {
 	opts := guidedTestOptions(root, &guidedTestRunner{}, fake)
 	input := "bad-main-choice\n1\n999\n1\nBAD-IP\n192.0.2.20\n8.8.8.8\n10.235.1.1\n10.235.1.2\nn\nNO\n8\n"
 	code, out, errText := runGuidedTest(opts, input)
-	if code != 0 || len(fake.applies) != 0 || !strings.Contains(out, "Choose 1, 2, 3, 4, 5") ||
+	if code != 0 || len(fake.applies) != 0 || !strings.Contains(out, "Choose one of the listed numbers") ||
 		!strings.Contains(out, "Use a private IPv4") ||
 		!strings.Contains(out, "Enter an actual reachable IPv4") ||
 		!strings.Contains(out, "Create cancelled") ||
@@ -259,8 +259,8 @@ func TestOperatorAutoDetectsServerIPAndEnterAcceptsBothTunnelIPs(t *testing.T) {
 	code, out, errText := runGuidedTest(guidedTestOptions(root, &guidedTestRunner{}, fake),
 		"1\n1\n192.0.2.20\n\nn\nYES\nn\n8\n")
 	if code != 0 || errText != "" || len(fake.applies) != 1 ||
-		!strings.Contains(out, "THIS server's connection IP: 192.0.2.10 (detected automatically") ||
-		!strings.Contains(out, "Suggested tunnel IPs: THIS server") ||
+		!strings.Contains(out, "192.0.2.10 (automatic)") ||
+		!strings.Contains(out, "TUNNEL ADDRESSES") ||
 		!strings.Contains(out, "Tunnel IP on THIS server (Enter=use suggested;") {
 		t.Fatalf("auto IP default did not complete: %d %q %q", code, out, errText)
 	}
@@ -296,9 +296,9 @@ func TestOperatorManualKeyedGRECanReproduceSavedPeerWithoutSetupLink(t *testing.
 	if menuCode != 0 || menuErrors != "" ||
 		!strings.Contains(details, "GRE receive key:") ||
 		!strings.Contains(details, fmt.Sprint(linkA.GRE.Key)) ||
-		!strings.Contains(details, "THIS server connection IPv4:  192.0.2.10") ||
-		!strings.Contains(details, "OTHER server connection IPv4: 192.0.2.20") ||
-		!strings.Contains(details, "OTHER server tunnel/private IP: 10.235.1.2/30") ||
+		!strings.Contains(details, "Local endpoint    192.0.2.10") ||
+		!strings.Contains(details, "Remote endpoint   192.0.2.20") ||
+		!strings.Contains(details, "Remote tunnel IP  10.235.1.2/30") ||
 		!strings.Contains(details, "Other server's PEER connection IP: 192.0.2.10") ||
 		!strings.Contains(details, "Other server's OWN tunnel IP:      10.235.1.2") {
 		t.Fatalf("saved Link details lack two-server manual instructions: %d %q %q", menuCode, details, menuErrors)

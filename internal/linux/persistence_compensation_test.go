@@ -86,7 +86,7 @@ func TestGuardedDaemonReloadCompensationAfterPublishedUnit(t *testing.T) {
 				runner.changeOn = "systemctl daemon-reload"
 			}
 			_, _, err := manager.EnsureRestore(context.Background(), "/usr/local/bin/stl")
-			if err == nil || !strings.Contains(err.Error(), "systemd daemon-reload") {
+			if err == nil || !testRestoreCause(err, RestoreDaemonReloadFailed, "systemd daemon-reload") {
 				t.Fatalf("failed reload not reported: %v", err)
 			}
 			if tc.external {
@@ -143,7 +143,7 @@ func TestGuardedEnableFailureCompensation(t *testing.T) {
 				runner.changeOn = "systemctl enable " + restoreSystemdUnitName
 			}
 			_, _, err := manager.EnsureRestore(context.Background(), "/usr/local/bin/stl")
-			if err == nil || !strings.Contains(err.Error(), "enable STL systemd unit") {
+			if err == nil || !testRestoreCause(err, RestoreEnableFailed, "enable STL systemd unit") {
 				t.Fatalf("failed enable not reported: %v", err)
 			}
 			if tc.verifyFailure && !runner.checkedAfterEnable {

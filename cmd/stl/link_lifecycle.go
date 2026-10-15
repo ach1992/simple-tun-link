@@ -19,6 +19,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/app"
 	wgbackend "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
@@ -295,6 +296,14 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 			safe.ReasonCode = "rejected_before_host_apply"
 			safe.NextStep = "Correct prerequisites or conflicting intent, then inspect Link state read-only before retrying; Engine did not invoke host Apply."
 		}
+		// Report the specific trust/check boundary without disclosing a
+		// raw OS error, unit payload, path or subprocess output. The rollback
+		// outcome remains separately visible in the evidence and reason code.
+		if evidence.Stage == "persistence" {
+			if kind, ok := linux.RestoreFailureOf(observed); ok {
+				safe.NextStep = restoreFailureGuidance(kind) + " " + safe.NextStep
+			}
+		}
 		if evidence.CredentialProvision == "attempted" && evidence.Stage != "credential_provision" {
 			safe.NextStep += " A protected key write was also attempted; verify its exact identity before any retry or replacement."
 		}
@@ -318,6 +327,8 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 			fmt.Fprintln(stderr, "Link outcome uncertain and error response could not be written; inspect before retry")
 			return 1
 		}
+	} else if _, tty := menuTerminal(stderr); tty {
+		renderTerminalLifecycleFailure(stderr, safe, evidence)
 	} else {
 		fmt.Fprintln(stderr, safe.Error())
 		fmt.Fprintf(stderr, "Reason: %s\nNext: %s\n", safe.ReasonCode, safe.NextStep)
@@ -535,4 +546,26 @@ func walkJSONValue(decoder *json.Decoder, depth int) error {
 		// domain validation after duplicate/shape checks.
 	}
 	return nil
+}
+
+// These are manually authored, secret-free operational instructions.
+// Never classify a failure by searching OS stderr text or imply a check has
+// proved more than it did. Do not weaken systemd ownership/identity gates.
+func restoreFailureGuidance(kind linux.RestoreFailureKind) string {
+	switch kind {
+	case linux.RestoreExecutableUntrusted:
+		return "Persistence check: restore_executable_untrusted. Read-only: inspect ownership and symlinks with namei -l /usr/local/bin/stl; the boot executable and all parents must be trusted root-owned paths."
+	case linux.RestoreUnitPathUntrusted:
+		return "Persistence check: restore_unit_path_untrusted. Read-only: inspect namei -l /etc/systemd/system/simple-tun-link-restore.service. Do not delete or rewrite an untrusted unit."
+	case linux.RestoreUnitConflict:
+		return "Persistence check: restore_unit_identity_conflict. Read-only: inspect systemctl cat simple-tun-link-restore.service and systemctl is-enabled; this unit may be foreign or ambiguously owned. Never adopt/remove it blindly."
+	case linux.RestoreEnablementUnknown:
+		return "Persistence check: restore_enablement_unverified. Read-only: inspect ps -p 1 -o comm= and systemctl is-enabled simple-tun-link-restore.service; systemd availability, ownership or its actual status is not yet verified."
+	case linux.RestoreDaemonReloadFailed:
+		return "Persistence check: restore_daemon_reload_failed. Read-only: inspect systemctl status simple-tun-link-restore.service and journalctl -b -u simple-tun-link-restore.service --no-pager. Do not assume the unit was published."
+	case linux.RestoreEnableFailed:
+		return "Persistence check: restore_enable_failed. Read-only: inspect systemctl is-enabled simple-tun-link-restore.service and systemctl status simple-tun-link-restore.service; do not try manual enablement until ownership is reconciled."
+	default:
+		return ""
+	}
 }

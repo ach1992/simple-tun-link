@@ -4,7 +4,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -116,7 +115,7 @@ func TestUntrustedExecutableRejectedBeforeAnyUnitSideEffect(t *testing.T) {
 	runner := &recordingRunner{}
 	manager := SystemdPersistence{Runner: runner, UnitDir: unitDir}
 	_, _, err := manager.EnsureRestore(t.Context(), bin)
-	if err == nil || !strings.Contains(err.Error(), "unsafe") {
+	if err == nil || !testRestoreCause(err, RestoreExecutableUntrusted, "unsafe") {
 		t.Fatalf("untrusted executable was accepted: %v", err)
 	}
 	if len(runner.commands) != 0 {

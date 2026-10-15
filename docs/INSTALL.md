@@ -15,6 +15,46 @@ Commands below use generic `vX.Y.Z` as a placeholder: replace it with an
 **actually published** tag, never a branch name. No installer runs during a
 clone, build, or ordinary `go test`.
 
+## Read-only diagnosis when Create AND Import fail at persistence
+
+The published v0.1.0-rc.3 may show state_failed, stage=persistence,
+desired_state=no_commit_attempted, and
+rollback_completed_unverified. **This does not establish the original
+cause.** Both Create and Import require the same strict, owned systemd
+restore transaction before durable desired State commit. The final code
+is the compensation/reconciliation outcome, not proof of a GRE packet,
+peer reachability, or even a specific systemd failure.
+
+On **the affected host only**, an operator may collect the following
+**read-only** observations (no tunnel/systemd/firewall changes):
+
+~~~sh
+stl version --json
+ps -p 1 -o comm=
+systemctl --version | head -n 1
+systemctl is-enabled simple-tun-link-restore.service
+printf 'is-enabled exit=%s\n' "$?"
+systemctl show simple-tun-link-restore.service --no-pager -p LoadState -p UnitFileState -p FragmentPath -p Result
+namei -l /usr/local/bin/stl
+namei -l /etc/systemd/system/simple-tun-link-restore.service
+~~~
+
+Capture both the **exact is-enabled text and exit status** (including
+when the unit is missing). A blank/timeout/error and a verified negative
+status are not interchangeable. Verify PID 1, systemd accessibility,
+canonical installed stl path ownership, parent directory trust, and
+whether a restore unit path is already foreign or ambiguously owned.
+These observations narrow the cause; they are not instructions to
+change the reported state.
+
+Never run systemctl enable/disable, daemon-reload, delete or replace
+a possibly owned service, manually edit State or retry mutation blindly
+to "fix" this error. If a unit looks foreign, stop and review ownership
+privately before touching it. **Do not post private setup links, keys,
+tokens, unredacted private logs, or a full foreign service file.**
+Issue #93 tracks a more readable upcoming terminal diagnosis and
+reproduction tests, but that source change is **not part of rc.3**.
+
 ## Protected receiver Setup Link retention (rc.3 guided UI)
 
 The rc.3 guided sender deliberately retains WireGuard and

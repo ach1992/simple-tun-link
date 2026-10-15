@@ -124,9 +124,9 @@ func TestGuidedGRECreateFullOperatorPathAndPairing(t *testing.T) {
 		t.Fatalf("guided create failed: %d out=%q err=%q", code, output, errOut)
 	}
 	for _, marker := range []string{
-		"Create gre / native", "Review your tunnel", "Suggested tunnel IPs",
+		"CREATE GRE / NATIVE", "REVIEW / CONFIRM TUNNEL", "TUNNEL ADDRESSES",
 		"Create this tunnel now?", "changes applied and verified",
-		"Setup link: stl://", "OTHER server", "interface verified", "connectivity not measured",
+		"stl://", "OTHER server", "interface verified", "connectivity not measured",
 		"stl link diagnose",
 	} {
 		if !strings.Contains(output, marker) {
@@ -337,9 +337,11 @@ func TestGuidedGRECreateRealPTYConfirmedJourney(t *testing.T) {
 	send("n")
 	expect("Create this tunnel now?")
 	send("YES")
-	expect("Setup link: stl://")
+	expect("stl://")
 	expect("Has the OTHER server already imported")
 	send("n")
+	expect("Press Enter to continue... ")
+	send("")
 	expect("Choose a task: ")
 	send("8")
 	select {
@@ -445,8 +447,8 @@ func TestGuidedGREPTYCancellationAndInvalidPeerNoNetworkMutation(t *testing.T) {
 		input string
 		code  int
 	}{
-		{"cancel before preflight", "1\n1\nq\n8\n", 0},
-		{"invalid peer", "1\n1\nBAD-INPUT\nq\n8\n", 0},
+		{"cancel before preflight", "1\n1\nq\n\n8\n", 0},
+		{"invalid peer", "1\n1\nBAD-INPUT\nq\n\n8\n", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			master, slave := openMenuPTY(t)
@@ -484,7 +486,7 @@ func TestGuidedGRECreatePostEnsureReadFailureMustPreserveReconciliation(t *testi
 	code, out, errOut := runGuidedTest(guidedTestOptions(root, &guidedTestRunner{}, fake),
 		"1\n1\n192.0.2.20\n\nn\nYES\n8\n")
 	if code != 0 || !strings.Contains(errOut, "Local Link was ensured, but live status") ||
-		!strings.Contains(out, "Setup link: stl://") {
+		!strings.Contains(out, "stl://") {
 		t.Fatalf("post-apply read-only failure did not report partial outcome: %d %q %q", code, out, errOut)
 	}
 	saved, err := state.NewFileStore(root).Load(context.Background())

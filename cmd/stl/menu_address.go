@@ -78,10 +78,11 @@ func askLinkAddresses(p createPrompts, runner linux.Runner, snapshot state.Snaps
 		return domain.LinkAddresses{}, fmt.Errorf("cannot verify available tunnel IPs")
 	}
 	if ok {
-		fmt.Fprintf(p.out, "Suggested tunnel IPs: THIS server %s | OTHER server %s\n",
-			automatic.Addr(), automatic.Addr().Next())
+		menuSection(p.out, "Tunnel addresses")
+		menuField(p.out, "This server", automatic.Addr().String()+" (suggested)")
+		menuField(p.out, "Other server", automatic.Addr().Next().String()+" (suggested)")
 	} else {
-		fmt.Fprintln(p.out, "No unused suggestion found; enter two private tunnel IPs manually.")
+		menuNotice(p.out, "WARNING", "No unused IP pair suggested; enter two private addresses.")
 	}
 	for {
 		prompt := "Tunnel IP on THIS server (Enter=use suggested; q=back): "
@@ -132,7 +133,8 @@ func askLinkAddresses(p createPrompts, runner linux.Runner, snapshot state.Snaps
 			fmt.Fprintln(p.out, "These tunnel IPs conflict with a local address, route, or saved Link. Choose another pair.")
 			continue
 		}
-		fmt.Fprintf(p.out, "Selected tunnel IPs: THIS %s | OTHER %s\n", addresses.Local, addresses.Peer)
+		menuField(p.out, "Selected local", addresses.Local.String())
+		menuField(p.out, "Selected remote", addresses.Peer.String())
 		return addresses, nil
 	}
 }

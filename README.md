@@ -2,6 +2,8 @@
 
 **Create and manage point-to-point IP tunnels between Linux servers.** STL provides a stable private IPv4 **Link Address** on each server, while the underlying tunnel can use GRE, IPIP, WireGuard, or conditionally available IPsec. You can create multiple independent Links, including different tunnels between the same pair of servers.
 
+**Developer note:** The terminal readability and persistence-error improvements tracked in [Issue #93](https://github.com/ach1992/simple-tun-link/issues/93) are not included in the published rc.3 assets. Do not run development-source binaries on operational hosts.
+
 **Current release candidate:** [v0.1.0-rc.3](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.3) (**Pre-release, not Stable**). The new operator-first menu, one-line installer and repeatable protected Setup Link sharing build on rc.2's committed-Link reboot restoration, managed MTU and backend fixes. Isolated native Linux validation does **not** prove physical Internet/WAN/NAT-router behavior; test on noncritical servers first.
 
 The installed command is `stl`; `stlink` is an alias for the same program.

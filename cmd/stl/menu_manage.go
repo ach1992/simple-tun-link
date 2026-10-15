@@ -15,14 +15,19 @@ import (
 func menuManage(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, options *runtimeOptions) int {
 	links, err := savedMenuLinks(options)
 	if err != nil {
-		fmt.Fprintln(errOut, "Cannot load saved tunnels; check State directory permissions.")
+		menuNotice(errOut, "FAILED", "Cannot load saved tunnels; inspect local State without changing it.")
+		menuAcknowledge(input, reader, out)
 		return 1
 	}
 	id, _, err := chooseMenuLink(reader, out, links, false)
 	if err != nil {
+		menuAcknowledge(input, reader, out)
 		return 1
 	}
 	if id == "" {
+		if len(links) == 0 {
+			menuAcknowledge(input, reader, out)
+		}
 		return 0
 	}
 	var selected domain.Link
@@ -37,16 +42,21 @@ func menuManage(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 	if !found {
 		return 1
 	}
-	fmt.Fprintf(out, "Selected: %s / %s | THIS %s | OTHER %s\n",
-		selected.Backend, selected.Encapsulation, selected.Addresses.Local, selected.Addresses.Peer)
+	// Keep the selection visible on every subsequent screen. Never require
+	// a human to memorize the opaque Link ID across submenus.
 	for {
-		fmt.Fprintln(out, "\n  1  Status (local, read-only)")
-		fmt.Fprintln(out, "  2  Check connection (read-only)")
-		fmt.Fprintln(out, "  3  Share Setup Link (repeatable; encrypted links ask before showing)")
-		fmt.Fprintln(out, "  4  Connection details (copy both server IPs / manual setup)")
-		fmt.Fprintln(out, "  5  Remove this tunnel (asks for confirmation)")
-		fmt.Fprintln(out, "  6  Delete saved receiver Setup Link (WireGuard / IPsec only)")
-		fmt.Fprintln(out, "  0  Back")
+		menuScreen(out, "My tunnels / selected tunnel")
+		menuField(out, "Type", fmt.Sprintf("%s / %s", selected.Backend, selected.Encapsulation))
+		menuField(out, "Local IP", selected.Addresses.Local.String())
+		menuField(out, "Other IP", selected.Addresses.Peer.String())
+		menuSection(out, "Tunnel actions")
+		menuOption(out, "1", "Local status", "Read-only")
+		menuOption(out, "2", "Check connection", "Read-only diagnostics")
+		menuOption(out, "3", "Share Setup Link", "Copy original link safely")
+		menuOption(out, "4", "Connection details", "View both server settings")
+		menuOption(out, "5", "Remove this tunnel", "Destructive; confirm")
+		menuOption(out, "6", "Delete receiver link", "Protected offer only")
+		menuOption(out, "0", "Back", "Main menu")
 		fmt.Fprint(out, "Choose an action: ")
 		action, err := readMenuAnswer(reader)
 		if errors.Is(err, io.EOF) {
@@ -55,6 +65,12 @@ func menuManage(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		if err != nil {
 			fmt.Fprintln(out, "Enter a short action number.")
 			continue
+		}
+		if action != "" && action != "0" && !strings.EqualFold(action, "q") && !strings.EqualFold(action, "b") {
+			menuScreen(out, "Tunnel / result")
+			menuField(out, "Type", fmt.Sprintf("%s / %s", selected.Backend, selected.Encapsulation))
+			menuField(out, "Local IP", selected.Addresses.Local.String())
+			menuField(out, "Other IP", selected.Addresses.Peer.String())
 		}
 		switch strings.ToLower(action) {
 		case "", "0", "b", "q":
@@ -69,8 +85,7 @@ func menuManage(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			}
 		case "3", "e":
 			if selected.Backend == domain.BackendGRE || selected.Backend == domain.BackendIPIP {
-				fmt.Fprintln(out, "Copy the one-line stl:// Setup Link below to the OTHER server:")
-				if code := linkExportCommand([]string{"export", string(id)}, out, errOut, options); code != 0 {
+				if code := menuSharePlainLink(id, out, errOut, options); code != 0 {
 					fmt.Fprintln(out, "Setup Link cannot be rebuilt from the current saved state. No network changes made.")
 				}
 			} else {
@@ -82,7 +97,8 @@ func menuManage(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		case "4", "i":
 			current, err := savedMenuLinks(options)
 			if err != nil {
-				fmt.Fprintln(out, "Cannot inspect current saved tunnel settings. Nothing was changed.")
+				menuNotice(out, "FAILED", "Cannot read saved tunnel settings; nothing changed.")
+				menuAcknowledge(input, reader, out)
 				continue
 			}
 			found := false
@@ -98,16 +114,20 @@ func menuManage(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 				return 0
 			}
 		case "5", "r":
-			return menuRemoveLink(input, reader, out, errOut, options, selected)
+			code := menuRemoveLink(input, reader, out, errOut, options, selected)
+			menuAcknowledge(input, reader, out)
+			return code
 		case "6":
 			if selected.Backend == domain.BackendGRE || selected.Backend == domain.BackendIPIP {
-				fmt.Fprintln(out, "Plaintext Setup Links are computed on request and no private receiver file exists to delete.")
+				menuNotice(out, "INFO", "Plaintext links are generated on demand; there is no private receiver file.")
+				menuAcknowledge(input, reader, out)
 				continue
 			}
 			menuSensitiveHandoffAction(input, reader, out, errOut, options, selected, true)
 		default:
-			fmt.Fprintln(out, "Choose a number from 0 to 6.")
+			menuNotice(out, "WARNING", "Choose an available tunnel action.")
 		}
+		menuAcknowledge(input, reader, out)
 	}
 }
 
