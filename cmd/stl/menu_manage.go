@@ -76,12 +76,12 @@ func menuManage(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		case "", "0", "b", "q":
 			return 0
 		case "1", "s":
-			if code := linkReadCommand([]string{"status", string(id)}, out, errOut, options); code != 0 {
-				fmt.Fprintln(out, "Local status is not confirmed. The saved Link was not changed.")
+			if code := menuShowLocalStatus(id, out, errOut, options); code != 0 && !menuEscapeCapable(out) {
+				fmt.Fprintln(out, "Local status not confirmed. Saved tunnel unchanged.")
 			}
 		case "2", "d":
-			if code := linkDiagnoseCommand([]string{"diagnose", string(id)}, out, errOut, options); code != 0 {
-				fmt.Fprintln(out, "No confirmed end-to-end connectivity yet; check peer setup and firewall.")
+			if code := menuCheckOneConnection(id, out, errOut, options); code != 0 && !menuEscapeCapable(out) {
+				fmt.Fprintln(out, "Connection not verified; check peer setup and firewall.")
 			}
 		case "3", "e":
 			if selected.Backend == domain.BackendGRE || selected.Backend == domain.BackendIPIP {
@@ -142,19 +142,19 @@ func menuRemoveLink(input io.Reader, reader *bufio.Reader, out, errOut io.Writer
 		fmt.Fprintln(errOut, "Manage removal requires an interactive terminal; use stl link remove <id> --confirm <id> for automation. No changes made.")
 		return 2
 	}
-	fmt.Fprintln(out, "\nPREVIEW ONLY — no Link removal has occurred.")
-	fmt.Fprintf(out, "Remove only Link %s (%s/%s): %s -> %s\n",
-		selected.ID, safeMenuText(string(selected.Backend)), safeMenuText(string(selected.Encapsulation)),
-		selected.Addresses.Local, selected.Addresses.Peer)
-	fmt.Fprintf(out, "Underlay: %s -> %s\n", selected.Underlay.Local, selected.Underlay.Peer)
-	fmt.Fprintln(out, "If confirmed, the canonical Engine will verify ownership, remove this Link's owned network resources,")
-	fmt.Fprintln(out, "and reconcile saved Link state and owned persistence. Applications using this Link may disconnect.")
-	fmt.Fprintln(out, "Other Links must remain isolated. A partial/uncertain failure requires state inspection before retrying.")
+	menuSection(out, "Remove tunnel / preview")
+	menuHealthLine(out, "Current action", "WARNING", "PREVIEW ONLY - no tunnel has been removed")
+	menuField(out, "Tunnel", fmt.Sprintf("%s / %s", selected.Backend, selected.Encapsulation))
+	menuField(out, "Tunnel IPs", selected.Addresses.Local.String()+" -> "+selected.Addresses.Peer.String())
+	menuField(out, "Underlay IPs", selected.Underlay.Local.String()+" -> "+selected.Underlay.Peer.String())
+	menuNotice(out, "WARNING", "Removing this Link can disconnect applications using its tunnel IPs.")
+	fmt.Fprintln(out, "Only this Link's verified resources will be removed; other Links remain isolated.")
+	fmt.Fprintln(out, "A partial result is NOT safe to retry until its current state is inspected.")
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
 		fmt.Fprintln(errOut, "Cannot establish a fresh terminal confirmation; no changes made.")
 		return 2
 	}
-	fmt.Fprint(out, "To permanently REMOVE this tunnel, type REMOVE (Enter cancels): ")
+	fmt.Fprintf(out, "\nTo permanently REMOVE this tunnel, type %s (Enter cancels): ", menuPaint(out, menuRed, "REMOVE"))
 	confirm, err := readMenuAnswer(reader)
 	if errors.Is(err, io.EOF) || err == nil && confirm != "REMOVE" {
 		fmt.Fprintln(out, "Removal cancelled. No changes made.")
@@ -168,6 +168,11 @@ func menuRemoveLink(input io.Reader, reader *bufio.Reader, out, errOut io.Writer
 	// The confirmed desired Link is checked inside the canonical Engine's
 	// per-Link lock, before backend inspection, planning or mutation. A menu-
 	// level recheck here would be racy with concurrent Engine.Ensure.
-	return executeLinkMutationConditional("link_remove", domain.Link{}, selected.ID, false,
+	code := executeLinkMutationConditional("link_remove", domain.Link{}, selected.ID, false,
 		out, errOut, options, &selected)
+	if code == 0 {
+		menuScreen(out, "Remove / complete")
+		menuNotice(out, "OK", "Selected tunnel removed. Other Links were not selected for removal.")
+	}
+	return code
 }

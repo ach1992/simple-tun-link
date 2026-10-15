@@ -345,7 +345,8 @@ func TestOperatorManualIPIPNativeWithoutSetupLink(t *testing.T) {
 	} {
 		c, o, e := runGuidedTest(tc.opts, tc.input)
 		if c != 0 || !strings.Contains(o, "No Setup Link is needed") ||
-			!strings.Contains(e, "backend has no live diagnostic adapter") {
+			!strings.Contains(o, "backend has no live diagnostic adapter") ||
+			!strings.Contains(e, "Local Link was ensured, but live status could not be verified") {
 			t.Fatalf("IPIP manual side %d setup failed or silently lost the status warning: %d %q %q", i, c, o, e)
 		}
 	}

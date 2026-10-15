@@ -168,21 +168,23 @@ Physical WAN/NAT-router peer acceptance is tracked under Issue #12 and was
 not established by these isolated tests. Integration and authorization to
 publish a new release are separate from this technical test evidence.
 
-## Current release-candidate validation
+## Release validation boundaries (historical rc.3 and published rc.4)
 
-The v0.1.0-rc.3 operator-first changes are tracked in
+The v0.1.0-rc.3 operator-first changes were tracked in
 [Issue #91](https://github.com/ach1992/simple-tun-link/issues/91)
 and [PR #92](https://github.com/ach1992/simple-tun-link/pull/92).
-The exact-HEAD PR matrix verifies isolated native AMD64 and ARM64
-six-Link GRE/IPIP/WireGuard/IPsec operation using disposable
-Ubuntu/Debian userspaces. The new one-line bootstrap/explicit update
-has its own local, CI and PTY acceptance. A public rc.3 version is
-accepted only once its final tagged artifacts, downloaded checksums
-and installed binary identity are independently checked. **These
-source-bound tests do not by themselves prove an rc.3 guest reboot
-or external physical WAN/NAT path.** The preceding rc.2 whole-guest
-Engine/persistence proof is retained separately below, not transferred
-as a claimed test of an rc.3 installed binary.
+Their exact-HEAD matrix exercised isolated AMD64 and ARM64
+six-Link GRE/IPIP/WireGuard/IPsec operation using disposable Ubuntu/Debian
+userspaces. Source checks alone could not establish a public artifact's
+identity, a real guest reboot, or physical WAN/NAT behavior.
+
+The published [v0.1.0-rc.4 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.4)
+and [Issue #93](https://github.com/ach1992/simple-tun-link/issues/93)
+separately record immutable-tag/public-download checks, source CI, a fresh
+release installation and a disposable rc.3-to-rc.4 update. The affected
+Ubuntu 22.04/systemd 249 **operational host**, real paired WAN/NAT traffic,
+and reboot restoration of that host's own Link still require Owner field
+acceptance; prior isolated evidence is not transferred as that proof.
 
 For [v0.1.0-rc.2](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.2),
 [Issue #12](https://github.com/ach1992/simple-tun-link/issues/12)

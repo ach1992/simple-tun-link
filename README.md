@@ -2,9 +2,9 @@
 
 **Create and manage point-to-point IP tunnels between Linux servers.** STL provides a stable private IPv4 **Link Address** on each server, while the underlying tunnel can use GRE, IPIP, WireGuard, or conditionally available IPsec. You can create multiple independent Links, including different tunnels between the same pair of servers.
 
-The rc.4 candidate includes the terminal readability and Ubuntu 22.04/systemd 249 persistence compatibility fixes from [Issue #93](https://github.com/ach1992/simple-tun-link/issues/93). The published rc.3 remains unchanged and retains its missing-unit limitation. Use only tagged public release artifacts on operational hosts.
+The published rc.4 pre-release includes the terminal readability and Ubuntu 22.04/systemd 249 persistence compatibility fixes from [Issue #93](https://github.com/ach1992/simple-tun-link/issues/93). The published rc.3 remains unchanged and retains its missing-unit limitation. Use only tagged public release artifacts on operational hosts.
 
-**Current public pre-release candidate** (after tagged publication): [v0.1.0-rc.4](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.4) (**Pre-release, not Stable**). The new operator-first menu, one-line installer and repeatable protected Setup Link sharing build on rc.2's committed-Link reboot restoration, managed MTU and backend fixes. Isolated native Linux validation does **not** prove physical Internet/WAN/NAT-router behavior; test on noncritical servers first.
+**Current public pre-release:** [v0.1.0-rc.4](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.4) (**Pre-release, not Stable**). The new operator-first menu, one-line installer and repeatable protected Setup Link sharing build on rc.2's committed-Link reboot restoration, managed MTU and backend fixes. Isolated native Linux validation does **not** prove physical Internet/WAN/NAT-router behavior; test on noncritical servers first.
 
 The installed command is `stl`; `stlink` is an alias for the same program.
 

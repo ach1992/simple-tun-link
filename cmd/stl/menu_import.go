@@ -237,9 +237,13 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			code := linkImportCommand([]string{"import", "--stdin", "--confirm", preview.ImportConfirmation},
 				strings.NewReader(encoded), out, errOut, options)
 			if code != 0 {
-				menuNotice(out, "FAILED", "Import not confirmed. Read the failure and inspect the current State before retry.")
+				if !menuSessionErrorTTY(out, errOut) {
+					menuNotice(out, "WARNING", "Import unconfirmed. Inspect current State before retrying.")
+				}
 			} else {
-				menuNotice(out, "OK", "Import completed locally. Next: test connectivity on BOTH servers.")
+				menuScreen(out, "Import / complete")
+				menuNotice(out, "OK", "Tunnel imported locally. Remote connectivity is not yet verified.")
+				fmt.Fprintln(out, "Next: Test connectivity on both servers (5 peer pings and latency).")
 			}
 			return code
 		}

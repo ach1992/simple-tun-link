@@ -34,8 +34,9 @@ func menuCreateIPsec(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	_, admitted := activeIPsecBackend(pre, options)
 	done()
 	if admitted != nil {
-		fmt.Fprintln(out, "IPsec is not safely available on this server yet. No keys or tunnels created.")
-		fmt.Fprintln(out, "Run: stl doctor ipsec --json  (shows which prerequisite is missing).")
+		menuNotice(out, "WARNING", "IPsec is unavailable here: trusted strongSwan prerequisites were not verified.")
+		fmt.Fprintln(out, "No keys, services or tunnels were changed.")
+		fmt.Fprintln(out, "Next: stl doctor ipsec (read-only detailed checks; --json for automation).")
 		fmt.Fprintln(out, "You can use GRE/IPIP or WireGuard independently; existing strongSwan services will not be changed.")
 		return 4
 	}
@@ -110,8 +111,8 @@ func menuCreateIPsec(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	menuField(out, "Local tunnel IP", addresses.Local.String())
 	menuField(out, "Other server", peer.String())
 	menuField(out, "Remote tunnel IP", addresses.Peer.String())
-	fmt.Fprintln(out, "  Protected receiver Setup Link: retained for later sharing under STL-owned private storage")
-	fmt.Fprintln(out, "This will generate a unique protected key, stage IPsec and activate only STL-owned resources.")
+	menuField(out, "Receiver setup", "Saved privately; displayed here after successful Create")
+	menuNotice(out, "WARNING", "The receiver link contains a private PSK; share it only with your other server.")
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
 		fmt.Fprintln(errOut, "Cannot establish fresh terminal confirmation; no changes applied.")
 		return 2
@@ -136,8 +137,9 @@ func menuCreateIPsec(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		fmt.Fprintln(errOut, "If a protected handoff was already staged, keep that file and reconcile before starting a new IPsec setup.")
 		return code
 	}
-	menuNotice(out, "OK", "Receiver offer saved privately. Retrieve it in My tunnels -> Share.")
-	fmt.Fprintln(out, "OTHER server: Import -> Protected link, then explicitly Connect IPsec and diagnose traffic.")
-	fmt.Fprintln(out, "Use Delete saved Setup Link only when you no longer need that receiver handoff.")
+	menuScreen(out, "IPsec / local creation complete")
+	menuNotice(out, "OK", "IPsec receiver Setup Link saved privately. Pairing is not finished yet.")
+	menuShowNewProtectedHandoff(input, out, options, id)
+	fmt.Fprintln(out, "After import, explicitly Connect IPsec and check traffic on both sides.")
 	return 0
 }

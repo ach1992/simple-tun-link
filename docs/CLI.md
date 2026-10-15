@@ -1,7 +1,7 @@
 # STL CLI — operator menus and stable machine commands
 
 The compact human menu below ships with the
-[v0.1.0-rc.4 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.4) after publication.
+[published v0.1.0-rc.4 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.4).
 The old rc.2 executable retains its older menu. Versioned
 noninteractive machine CLI/JSON contracts remain unchanged.
 
@@ -81,6 +81,35 @@ Core operator choices (rc.4):
 A failed/uncertain menu operation must **not exit the terminal loop** or
 automatically repeat the mutating command. Machine CLI and JSON contracts
 remain independent of the menu's changing text.
+
+### Post-rc.4 operator UX changes (unreleased; Issue #95)
+
+The public rc.4 artifact still uses the earlier screens. An unreleased
+follow-up candidate introduces read-only per-type host availability hints
+(`Precheck OK`, `Unavailable` or `Check needed`) in Create, with a separate
+explanation choice; final Engine/strongSwan admission remains authoritative.
+No prerequisite packages or services are changed by this menu check.
+
+After successful, freshly **YES**-confirmed guided WireGuard/IPsec Create in
+a real interactive terminal, the complete original sensitive receiver Setup
+Link is shown **immediately** as one copyable line. It remains stored in an
+owner-private file; retrospective My tunnels -> Share still requires fresh
+SHOW. Scripts, redirected streams, JSON, status, errors and diagnostics do
+not disclose protected links. Retained offers are never regenerated.
+
+Local Status reports verified interface identity and **does not measure peer
+connectivity**. Test connectivity reports five bounded ICMP echo quality
+samples when probing can run, including replies/sent, packet loss, measured
+min/avg/max RTT and consecutive-reply variation. It distinguishes no echo
+reply (peer not confirmed) from unsupported/failed probing (unknown); no
+five-sample result promises long-term stability. The suggested MTU is
+labeled verified, manual or conservative/unverified; RX/TX are cumulative
+interface counters, not proof of fresh successful traffic. A single-Link
+connection test obtains cumulative counters from a **separate read-only Status
+observation**, not from the quality JSON; an unavailable Status observation
+does not invalidate separately verified ping samples. Check all Links uses
+the existing all-Link diagnostic contract, not a second probe engine.
+Semantic terminal colors have matching readable noncolor labels.
 
 ### Manage Links — confirmation and privacy
 

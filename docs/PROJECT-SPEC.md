@@ -102,8 +102,9 @@ status/diagnostic JSON, logs, or generic inventory. The approved
 Issue #91 guided sender **intentionally** retains a separate
 owner-private, immutable per-Link receiver Setup Link until explicit
 operator deletion, so it is not silently recorded in ordinary State.
-Showing it needs a fresh interactive SHOW and a verified unchanged
-sender Link identity; deleting it needs a separate DELETE.
+Later retrieval from Manage/Share needs a fresh interactive SHOW and
+verification of the unchanged sender Link identity; deleting it needs a
+separate DELETE.
 Import preview reports credential presence without disclosing it.
 
 The pairing schema includes an explicit exchange mode so a future Secure Exchange/local-key flow can be added compatibly if later justified.
@@ -263,3 +264,18 @@ Never remove the stored handoff automatically after delivery or
 a Link deletion. Users who removed a Link before deleting its handoff
 must explicitly inspect and clean their own remaining private file
 on the host. Public rc.2 predates all of these UI changes.
+
+Owner follow-up (2026-10-15, Issue #95): For newly created protected
+WireGuard/IPsec Links, the same successful real-terminal guided Create
+confirmation (**YES**) authorizes displaying the **exact** saved, validated
+receiver Setup Link on that result screen, ready to copy to the other server.
+No second SHOW step is required immediately after Create. Protected storage,
+identity checks and the separate fresh SHOW for **later** Share/DELETE stay
+intact. Redirected/non-TTY output, machine JSON, status, diagnostics and
+errors must never expose that credential. User convenience must not undermine
+ownership or rollback protections. Human connection checks should separate
+local interface identity from real peer ICMP samples (normally five), report
+actual replies/loss/RTT/variation and distinguish unavailable probes from
+confirmed no replies; RX/TX counters are cumulative, not proof of current
+peer reachability. Read-only backend availability hints must not start or
+install services/modules, and cannot replace final runtime admission.

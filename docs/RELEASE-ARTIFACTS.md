@@ -10,9 +10,9 @@ Issue #11 is historical installer acceptance, and
 records the source/tag/download and real systemd-guest reboot evidence
 for the prior
 [v0.1.0-rc.2 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.2).
-The current [Issue #91](https://github.com/ach1992/simple-tun-link/issues/91)
+[Issue #91](https://github.com/ach1992/simple-tun-link/issues/91)
 and [PR #92](https://github.com/ach1992/simple-tun-link/pull/92)
-control the new v0.1.0-rc.3 operator interface, explicit one-line
+record the published v0.1.0-rc.3 operator interface, explicit one-line
 install/update and protected receiver handoff retention. A green PR
 check is source-bound evidence only; the public release is qualified
 separately by checking its immutable tag, exact packaged binaries,
@@ -21,13 +21,16 @@ evidence must not be presented as a new rc.3 tagged-guest boot test.
 
 [Issue #93](https://github.com/ach1992/simple-tun-link/issues/93)
 and [PR #94](https://github.com/ach1992/simple-tun-link/pull/94)
-control the next **v0.1.0-rc.4 public pre-release**: one-screen operator
-presentation and fail-closed Ubuntu 22.04/systemd 249 absent-unit
-inspection. After independent source review and integration, rc.4
-needs exact-tag reproducible builds, public download checks and a
-real rc.3-to-rc.4 disposable installation/update. Neither a prior
-release E2E nor a local build proves public release artifact identity.
-External WAN/NAT and on-host persistence acceptance remain Owner-run.
+record the reviewed Ubuntu 22.04/systemd 249 absent-unit fix and
+one-screen operator presentation in the **published**
+[v0.1.0-rc.4 public pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.4).
+Its source/CI, immutable tag, five public artifacts, downloaded checksums,
+fresh public install, and actual rc.3-to-rc.4 disposable update have
+separate accepted evidence in Issue #93. Those isolated checks do **not**
+close the Owner's real affected-host systemd, reboot or WAN/NAT acceptance.
+Post-rc.4 candidate work is tracked separately in
+[Issue #95](https://github.com/ach1992/simple-tun-link/issues/95);
+it is not part of the published rc.4 artifacts.
 
 ## Local build
 

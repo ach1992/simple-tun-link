@@ -2,15 +2,18 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/netip"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
+	"golang.org/x/sys/unix"
 )
 
 func plainBackendCapability(backend domain.Backend, mode domain.Encapsulation) linux.Capability {
@@ -88,6 +91,82 @@ type tunnelOption struct {
 	manual  bool
 }
 
+// Capability hints are observational snapshots, not authorization to load
+// modules, start strongSwan, or promise final Engine/admission success.
+func menuCapabilitySnapshot(options *runtimeOptions) linux.CapabilityReport {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	report, err := (linux.CapabilityProbe{Runner: createRunner(options)}).Probe(ctx)
+	if err != nil {
+		return nil // unknown, never convert probe failure to "supported"
+	}
+	return report
+}
+
+func menuCapabilityHint(report linux.CapabilityReport, choice tunnelOption) (string, string) {
+	capability := plainBackendCapability(choice.backend, choice.mode)
+	switch choice.backend {
+	case domain.BackendWireGuard:
+		capability = linux.CapabilityWireGuard
+	case domain.BackendIPsec:
+		capability = linux.CapabilityIPsecXFRM
+	}
+	if report == nil || capability == "" {
+		return "[Check needed]", menuBlue
+	}
+	status, found := report[capability]
+	if !found {
+		return "[Check needed]", menuBlue
+	}
+	if !status.Available {
+		return "[Unavailable]", menuYellow
+	}
+	if choice.backend == domain.BackendIPsec {
+		return "[Verify service]", menuBlue
+	}
+	return "[Precheck OK]", menuGreen
+}
+
+func menuTunnelOption(out io.Writer, number, name, description string, report linux.CapabilityReport, choice tunnelOption) {
+	label, role := menuCapabilityHint(report, choice)
+	coloredStatus := menuPaint(out, role, fmt.Sprintf("%-16s", label))
+	optionNumber := menuPaint(out, menuCyan, fmt.Sprintf("%2s", number))
+	// Default layout also works in redirected output; narrow PTYs split the
+	// note rather than relying on terminal wrapping or misaligned ANSI width.
+	narrow := false
+	if file, ok := menuTerminal(out); ok {
+		if ws, err := unix.IoctlGetWinsize(int(file.Fd()), unix.TIOCGWINSZ); err == nil && ws.Col > 0 {
+			narrow = int(ws.Col) < 83
+		}
+	}
+	if narrow {
+		fmt.Fprintf(out, "  %s  %-20s %s\n      %s\n", optionNumber, name, coloredStatus, menuPaint(out, menuDim, description))
+	} else {
+		fmt.Fprintf(out, "  %s  %-20s %s %s\n", optionNumber, name, coloredStatus, menuPaint(out, menuDim, description))
+	}
+}
+
+func menuCapabilityHelp(out io.Writer, report linux.CapabilityReport) {
+	menuSection(out, "Availability / what it means")
+	fmt.Fprintln(out, "Precheck OK: basic host tools responded; actual tunnel creation is checked again.")
+	fmt.Fprintln(out, "Unavailable: this host did not pass a read-only prerequisite check now.")
+	fmt.Fprintln(out, "Check needed: the host could not be inspected; do not assume compatibility.")
+	fmt.Fprintln(out, "IPsec also requires exclusive STL-owned strongSwan runtime admission.")
+	if report != nil {
+		for _, capability := range []linux.Capability{
+			linux.CapabilityGRENative, linux.CapabilityGREFOU, linux.CapabilityGREGUE,
+			linux.CapabilityIPIPNative, linux.CapabilityIPIPFOU, linux.CapabilityIPIPGUE,
+			linux.CapabilityWireGuard, linux.CapabilityIPsecXFRM,
+		} {
+			if status, ok := report[capability]; ok && !status.Available {
+				menuField(out, string(capability), status.Reason)
+			}
+		}
+	}
+	fmt.Fprintln(out, "No modules, packages, network links or services were changed.")
+	fmt.Fprintln(out, "For blocked IPsec: stl doctor ipsec --json (read-only detailed checks).")
+}
+
 // Keep common choices on one short screen; the six less common transports
 // and no-Link workflows are visible only when the operator asks for them.
 var basicTunnelOptions = map[string]tunnelOption{
@@ -110,24 +189,25 @@ var advancedTunnelOptions = map[string]tunnelOption{
 
 // Only menu-visible selections; live capability admission still belongs to
 // the canonical backend CLI/Engine at the moment it is invoked.
-func selectTunnelSubmenu(reader *bufio.Reader, out io.Writer, manual bool) (tunnelOption, bool) {
+func selectTunnelSubmenu(input io.Reader, reader *bufio.Reader, out io.Writer, manual bool, report linux.CapabilityReport) (tunnelOption, bool) {
 	for {
 		var options map[string]tunnelOption
 		if manual {
 			options = manualTunnelOptions
 			menuScreen(out, "Manual two-server configuration")
-			menuOption(out, "1", "GRE / Native", "No encryption; optional key")
-			menuOption(out, "2", "IPIP / Native", "No encryption")
+			menuTunnelOption(out, "1", "GRE / Native", "No encryption; optional key", report, manualTunnelOptions["1"])
+			menuTunnelOption(out, "2", "IPIP / Native", "No encryption", report, manualTunnelOptions["2"])
 		} else {
 			options = advancedTunnelOptions
 			menuScreen(out, "Advanced tunnel types")
-			menuOption(out, "1", "GRE / FOU", "Unencrypted over UDP")
-			menuOption(out, "2", "GRE / GUE", "Unencrypted over UDP")
-			menuOption(out, "3", "IPIP / FOU", "Unencrypted over UDP")
-			menuOption(out, "4", "IPIP / GUE", "Unencrypted over UDP")
-			menuOption(out, "5", "IPsec / ESP", "Encrypted; requires strongSwan")
-			menuOption(out, "6", "IPsec / NAT-T", "Encrypted UDP; strongSwan")
+			menuTunnelOption(out, "1", "GRE / FOU", "Unencrypted over UDP", report, advancedTunnelOptions["1"])
+			menuTunnelOption(out, "2", "GRE / GUE", "Unencrypted over UDP", report, advancedTunnelOptions["2"])
+			menuTunnelOption(out, "3", "IPIP / FOU", "Unencrypted over UDP", report, advancedTunnelOptions["3"])
+			menuTunnelOption(out, "4", "IPIP / GUE", "Unencrypted over UDP", report, advancedTunnelOptions["4"])
+			menuTunnelOption(out, "5", "IPsec / ESP", "Encrypted; requires strongSwan", report, advancedTunnelOptions["5"])
+			menuTunnelOption(out, "6", "IPsec / NAT-T", "Encrypted UDP; strongSwan", report, advancedTunnelOptions["6"])
 		}
+		menuOption(out, "i", "Availability details", "Explain unavailable types")
 		menuOption(out, "0", "Back", "Tunnel choices")
 		fmt.Fprint(out, "Choose a type: ")
 		value, err := readMenuAnswer(reader)
@@ -141,6 +221,11 @@ func selectTunnelSubmenu(reader *bufio.Reader, out io.Writer, manual bool) (tunn
 		if value == "" || value == "0" || strings.EqualFold(value, "q") {
 			return tunnelOption{}, false
 		}
+		if strings.EqualFold(value, "i") {
+			menuCapabilityHelp(out, report)
+			menuAcknowledge(input, reader, out)
+			continue
+		}
 		if selected, ok := options[value]; ok {
 			return selected, true
 		}
@@ -151,13 +236,15 @@ func selectTunnelSubmenu(reader *bufio.Reader, out io.Writer, manual bool) (tunn
 // One Create entry for every backend. Ordinary GRE Native requires only one
 // menu number. Manual and unusual transports have their own short submenus.
 func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, options *runtimeOptions) int {
+	report := menuCapabilitySnapshot(options)
 	for {
 		menuScreen(out, "CREATE TUNNEL / choose a type")
-		menuOption(out, "1", "GRE / Native", "Default; not encrypted")
-		menuOption(out, "2", "WireGuard / UDP", "Encrypted")
-		menuOption(out, "3", "IPIP / Native", "Not encrypted")
+		menuTunnelOption(out, "1", "GRE / Native", "Default; not encrypted", report, basicTunnelOptions["1"])
+		menuTunnelOption(out, "2", "WireGuard / UDP", "Encrypted", report, basicTunnelOptions["2"])
+		menuTunnelOption(out, "3", "IPIP / Native", "Not encrypted", report, basicTunnelOptions["3"])
 		menuOption(out, "4", "Manual connection", "Set up both ends by hand")
 		menuOption(out, "5", "Advanced types", "FOU / GUE / IPsec")
+		menuOption(out, "i", "Availability details", "Explain why a type is unavailable")
 		menuOption(out, "0", "Back", "Main menu")
 		fmt.Fprint(out, "Tunnel type [1]: ")
 		value, err := readMenuAnswer(reader)
@@ -171,6 +258,11 @@ func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		if value == "0" || strings.EqualFold(value, "q") {
 			return 0
 		}
+		if strings.EqualFold(value, "i") {
+			menuCapabilityHelp(out, report)
+			menuAcknowledge(input, reader, out)
+			continue
+		}
 		if value == "" {
 			value = "1"
 		}
@@ -178,12 +270,12 @@ func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		var ok bool
 		switch value {
 		case "4":
-			picked, ok = selectTunnelSubmenu(reader, out, true)
+			picked, ok = selectTunnelSubmenu(input, reader, out, true, report)
 			if !ok {
 				continue
 			}
 		case "5":
-			picked, ok = selectTunnelSubmenu(reader, out, false)
+			picked, ok = selectTunnelSubmenu(input, reader, out, false, report)
 			if !ok {
 				continue
 			}
@@ -201,7 +293,7 @@ func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		case domain.BackendIPsec:
 			return menuCreateIPsec(input, reader, out, errOut, options, picked.mode)
 		default:
-			return menuCreatePlain(input, reader, out, errOut, options, picked.backend, picked.mode, picked.manual)
+			return menuCreatePlain(input, reader, out, errOut, options, picked.backend, picked.mode, picked.manual, report)
 		}
 	}
 }
