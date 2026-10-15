@@ -68,8 +68,39 @@ func (a NativeRuntimeAdmission) attestLoadedPreStartUnit(ctx context.Context) er
 	if err != nil || !nativeFreshExecStart.MatchString(got) {
 		return errors.New("native pre-start ExecStart differs from exact reviewed service")
 	}
-	if loaded, err := a.loadedUnit(ctx); err != nil || loaded != path {
-		return errors.New("native unit identity changed before first start")
+	// systemd can garbage-collect a loaded but still inactive, unreferenced
+	// unit between separate busctl invocations. GetUnit is a cached-unit
+	// query, not evidence of an effective source change. Re-load the same
+	// unit metadata without starting it; never waive any pre-start profile.
+	again, err := a.readBus(ctx, "call", "org.freedesktop.systemd1", "/org/freedesktop/systemd1",
+		"org.freedesktop.systemd1.Manager", "LoadUnit", "s", nativeServiceName)
+	if err != nil {
+		return errors.New("native effective unit could not be refreshed before first start")
+	}
+	loaded, err := decodeDBusString(again, "o")
+	if err != nil || loaded != path || !nativeUnitObject.MatchString(loaded) {
+		return errors.New("native unit source changed before first start")
+	}
+	// Refresh the critical execution identity after the final metadata load.
+	// These values must still match while systemd holds the returned object.
+	for _, prop := range []struct{ category, key, value string }{
+		{"Unit", "LoadState", "s \"loaded\""},
+		{"Unit", "ActiveState", "s \"inactive\""},
+		{"Unit", "FragmentPath", "s \"" + NativeExclusiveServiceUnitPath + "\""},
+		{"Unit", "SourcePath", "s \"\""},
+		{"Unit", "DropInPaths", "as 0"},
+		{"Unit", "NeedDaemonReload", "b false"},
+		{"Service", "ExecStartPre", "a(sasbttttuii) 0"},
+		{"Service", "Environment", "as 1 \"STRONGSWAN_CONF=/var/lib/simple-tun-link/ipsec/strongswan.conf\""},
+	} {
+		value, err := a.property(ctx, loaded, prop.category, prop.key)
+		if err != nil || value != prop.value {
+			return fmt.Errorf("native refreshed pre-start property %s.%s unavailable or changed", prop.category, prop.key)
+		}
+	}
+	start, err := a.property(ctx, loaded, "Service", "ExecStart")
+	if err != nil || !nativeFreshExecStart.MatchString(start) {
+		return errors.New("native refreshed pre-start ExecStart differs from fixed service")
 	}
 	return nil
 }

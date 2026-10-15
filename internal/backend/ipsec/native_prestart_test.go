@@ -60,3 +60,37 @@ func TestNativeFirstStartAttestsExactEffectiveUnitBeforeAnyServiceExecution(t *t
 		})
 	}
 }
+
+// A dormant, not-yet-started systemd unit may be garbage-collected after an
+// observational busctl invocation. The effective metadata source is refreshed
+// using LoadUnit, never accepted on a failed or changed second identity.
+type nativeSecondLoadDriftBus struct {
+	fakeServiceBus
+	loads int
+}
+
+func (b *nativeSecondLoadDriftBus) RunBounded(ctx context.Context, limits CaptureLimits,
+	binary string, args ...string) (CommandResult, error) {
+	if len(args) > 1 && args[1] == "call" {
+		b.loads++
+		if b.loads == 2 {
+			return CommandResult{Stdout: []byte("o \"/org/freedesktop/systemd1/unit/foreign_2eservice\"\n")}, nil
+		}
+	}
+	return b.fakeServiceBus.RunBounded(ctx, limits, binary, args...)
+}
+
+func TestNativePreStartRefreshRefusesChangedSystemdObjectIdentity(t *testing.T) {
+	bus := &nativeSecondLoadDriftBus{fakeServiceBus: fakeServiceBus{
+		overrides: map[string]string{
+			"Unit.ActiveState": "s \"inactive\"",
+			"Service.MainPID":  "u 0",
+		},
+	}}
+	if err := (NativeRuntimeAdmission{Runner: bus}).attestLoadedPreStartUnit(context.Background()); err == nil {
+		t.Fatal("changed second LoadUnit identity was admitted")
+	}
+	if bus.loads != 2 {
+		t.Fatalf("second effective unit was not independently checked, loads=%d", bus.loads)
+	}
+}
