@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/ach1992/simple-tun-link/internal/diagnostics"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/state"
@@ -86,13 +88,37 @@ func TestMenuHealthUsesCanonicalFivePingObservationsAcrossBackends(t *testing.T)
 	if code := menuCheckOneConnection(links[0].ID, &output, &errors, opts); code != 0 {
 		t.Fatalf("per-Link check failed: %d %s", code, errors.String())
 	}
-	for _, term := range []string{"5/5 replies", "0% packet loss", "Latency", "Ping variation", "RX/TX", "cumulative"} {
+	for _, term := range []string{"5/5 replies", "0% packet loss", "Latency", "Ping variation", "21 / 22 packets (cumulative)"} {
 		if !strings.Contains(output.String(), term) {
 			t.Fatalf("missing five-ping evidence %q: %s", term, output.String())
 		}
 	}
 	if strings.Contains(output.String(), "private_key") || strings.Contains(output.String(), "stl://") {
 		t.Fatal("secret leaked in human health")
+	}
+	probeCount := func() int {
+		count := 0
+		for _, n := range runner.probes {
+			count += n
+		}
+		return count
+	}
+	if probeCount() != 6 {
+		t.Fatalf("Per-Link health must reuse one canonical 5-sample run and MTU probe; got %d calls", probeCount())
+	}
+	// Per-Link JSON deliberately has no backend counters. Verify the UI
+	// obtains the optional cumulative values from canonical read-only Status
+	// rather than displaying a fabricated 0/0 or claiming a live transfer.
+	var wgOutput, wgErrors bytes.Buffer
+	if code := menuCheckOneConnection(links[2].ID, &wgOutput, &wgErrors, opts); code != 0 {
+		t.Fatalf("WireGuard per-Link check failed: %d %s", code, wgErrors.String())
+	}
+	if !strings.Contains(wgOutput.String(), "41 / 42 bytes (cumulative)") ||
+		!strings.Contains(wgOutput.String(), "2023-11-14 22:13 UTC (historical)") {
+		t.Fatalf("WireGuard counters/handshake were not correctly observed: %s", wgOutput.String())
+	}
+	if probeCount() != 12 {
+		t.Fatalf("A separate read-only Status check must not send extra pings; got %d calls", probeCount())
 	}
 	var all, errorsAll bytes.Buffer
 	code := menuCheckAllConnections(&all, &errorsAll, opts)
@@ -142,5 +168,38 @@ func TestMenuTypePrechecksAreHintsAndUnavailablePrecedesPeerEntry(t *testing.T) 
 		strings.Contains(out, "Other server's reachable IPv4") ||
 		strings.Contains(out, "[FAILED] Action not confirmed") || len(fake.applies) != 0 {
 		t.Fatalf("unsupported choice not explained early: code=%d out=%s err=%s", code, out, errOut)
+	}
+}
+
+// Narrow PTYs must show health details as deliberate rows, not accidental
+// terminal wrapping that interleaves status, messages and next actions.
+func TestMenuHealthNarrowTerminalHasReadableRows(t *testing.T) {
+	master, slave := openMenuPTY(t)
+	t.Setenv("NO_COLOR", "1")
+	t.Setenv("TERM", "xterm-256color")
+	if err := unix.IoctlSetWinsize(int(slave.Fd()), unix.TIOCSWINSZ, &unix.Winsize{Row: 24, Col: 48}); err != nil {
+		t.Fatal(err)
+	}
+	menuHealthLine(slave, "Suggested MTU", "WARNING",
+		"1280 bytes (conservative estimate; not peer-confirmed)")
+	result := readMenuPTYUntil(t, master, "[WARNING]", "peer-confirmed)")
+	if !strings.Contains(result, "Suggested MTU") || !strings.Contains(result, "\r\n      1280 bytes") ||
+		strings.Contains(result, "\x1b[") {
+		t.Fatalf("Narrow health output was not aligned/ANSI disabled: %q", result)
+	}
+	for _, line := range strings.Split(result, "\r\n") {
+		if len(line) > 48 {
+			t.Fatalf("Narrow health output exceeded 48 visible columns: %q", line)
+		}
+	}
+	// A short field label is still padded to 16 columns; width estimation
+	// must include that padding rather than measuring just the word "Ping".
+	if err := unix.IoctlSetWinsize(int(slave.Fd()), unix.TIOCSWINSZ, &unix.Winsize{Row: 24, Col: 80}); err != nil {
+		t.Fatal(err)
+	}
+	menuHealthLine(slave, "Ping", "WARNING", "5/5 replies; only a short observational check was run")
+	second := readMenuPTYUntil(t, master, "[WARNING]", "observational check was run")
+	if !strings.Contains(second, "Ping             [WARNING]\r\n") {
+		t.Fatalf("Long Ping detail should wrap after its status label: %q", second)
 	}
 }

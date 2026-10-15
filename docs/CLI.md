@@ -104,9 +104,12 @@ min/avg/max RTT and consecutive-reply variation. It distinguishes no echo
 reply (peer not confirmed) from unsupported/failed probing (unknown); no
 five-sample result promises long-term stability. The suggested MTU is
 labeled verified, manual or conservative/unverified; RX/TX are cumulative
-interface counters, not proof of fresh successful traffic. Check all Links
-uses the same existing per-Link diagnostic contracts, not a second probe
-engine. Semantic terminal colors have matching readable noncolor labels.
+interface counters, not proof of fresh successful traffic. A single-Link
+connection test obtains cumulative counters from a **separate read-only Status
+observation**, not from the quality JSON; an unavailable Status observation
+does not invalidate separately verified ping samples. Check all Links uses
+the existing all-Link diagnostic contract, not a second probe engine.
+Semantic terminal colors have matching readable noncolor labels.
 
 ### Manage Links — confirmation and privacy
 

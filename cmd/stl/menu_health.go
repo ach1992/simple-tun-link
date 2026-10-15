@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/ach1992/simple-tun-link/internal/diagnostics"
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"golang.org/x/sys/unix"
 )
 
 // All human health views consume existing read-only, versioned CLI reports.
@@ -21,8 +23,20 @@ func menuHealthLine(out io.Writer, label, kind, value string) {
 	case "INFO":
 		role = menuBlue
 	}
-	fmt.Fprintf(out, "  %-16s %s  %s\n", label,
-		menuPaint(out, role, "["+kind+"]"), value)
+	status := menuPaint(out, role, "["+kind+"]")
+	if tty, ok := menuTerminal(out); ok {
+		// Account for the minimum 16-column label even when its text is
+		// shorter (Ping, MTU, etc.), plus spaces and the [STATUS] brackets.
+		visibleWidth := 2 + max(16, len(label)) + 1 + len(kind) + 2 + 2 + len(value)
+		if ws, err := unix.IoctlGetWinsize(int(tty.Fd()), unix.TIOCGWINSZ); err == nil && ws.Col > 0 &&
+			visibleWidth > int(ws.Col) {
+			fmt.Fprintf(out, "  %-16s %s\n", label, status)
+			width := max(16, int(ws.Col)-6)
+			fmt.Fprintln(out, "      "+strings.ReplaceAll(wrapTerminalGuidance(value, width), "\n", "\n      "))
+			return
+		}
+	}
+	fmt.Fprintf(out, "  %-16s %s  %s\n", label, status, value)
 }
 
 func menuHealthMeasurements(out io.Writer, mtu diagnostics.MTUResult, quality diagnostics.QualityResult,
@@ -124,15 +138,40 @@ func menuPublicDiagnosticFailure(out io.Writer, raw []byte) {
 	menuNotice(out, "WARNING", "Connection check unavailable. Inspect local status and prerequisites; no changes made.")
 }
 
-type menuDiagnosticReport struct {
-	diagnostics.Report
-	State struct {
-		RXPackets           *uint64 `json:"rx_packets"`
-		TXPackets           *uint64 `json:"tx_packets"`
-		RXBytes             *uint64 `json:"rx_bytes"`
-		TXBytes             *uint64 `json:"tx_bytes"`
-		LatestHandshakeUnix *int64  `json:"latest_handshake_unix"`
-	} `json:"state"`
+// The one-Link quality JSON intentionally contains no backend traffic counters.
+// A separate canonical read-only Status observation provides optional cumulative
+// counters and handshake. It does NOT rerun ICMP probes or alter QualityResult.
+func menuReadVerifiedStatus(id domain.LinkID, options *runtimeOptions) (linkStatusResponse, []byte, int) {
+	var raw bytes.Buffer
+	code := linkReadCommand([]string{"status", string(id), "--json"}, &raw, io.Discard, options)
+	if code != 0 {
+		return linkStatusResponse{}, raw.Bytes(), code
+	}
+	var result linkStatusResponse
+	if err := json.Unmarshal(raw.Bytes(), &result); err != nil ||
+		result.SchemaVersion != jsonSchemaVersion || result.Link.ID != id || !result.InterfaceVerified {
+		return linkStatusResponse{}, nil, 1
+	}
+	return result, nil, 0
+}
+
+// A nil counter is unmeasured, including IPsec SA data where no exact-owner
+// kernel counter reader exists. A zero counter is a valid verified value.
+func menuStatusTraffic(status linkStatusResponse) (rx, tx *uint64, unit string, handshake *int64) {
+	switch {
+	case status.GREState != nil:
+		a, b := status.GREState.RXPackets, status.GREState.TXPackets
+		return &a, &b, "packets", nil
+	case status.IPIPState != nil:
+		a, b := status.IPIPState.RXPackets, status.IPIPState.TXPackets
+		return &a, &b, "packets", nil
+	case status.WireGuardState != nil:
+		a, b, last := status.WireGuardState.RXBytes, status.WireGuardState.TXBytes, status.WireGuardState.LatestHandshakeUnix
+		return &a, &b, "bytes", &last
+	case status.IPsecState != nil:
+		return status.IPsecState.RXPackets, status.IPsecState.TXPackets, status.IPsecState.CounterUnit, nil
+	}
+	return nil, nil, "", nil
 }
 
 func menuCheckOneConnection(id domain.LinkID, out, errOut io.Writer, options *runtimeOptions) int {
@@ -143,17 +182,26 @@ func menuCheckOneConnection(id domain.LinkID, out, errOut io.Writer, options *ru
 		menuPublicDiagnosticFailure(out, raw.Bytes())
 		return code
 	}
-	var result menuDiagnosticReport
+	var result diagnostics.Report
 	if err := json.Unmarshal(raw.Bytes(), &result); err != nil || result.LinkID != id || result.SchemaVersion != jsonSchemaVersion {
 		menuNotice(out, "WARNING", "Diagnostic response could not be verified; no connectivity result is claimed.")
 		return 1
 	}
 	menuHealthLine(out, "Local interface", "OK", "Identity verified (not a peer connection test)")
-	rx, tx, unit := result.State.RXPackets, result.State.TXPackets, "packets"
-	if result.State.RXBytes != nil && result.State.TXBytes != nil {
-		rx, tx, unit = result.State.RXBytes, result.State.TXBytes, "bytes"
+	status, _, statusCode := menuReadVerifiedStatus(id, options)
+	var rx, tx *uint64
+	var handshake *int64
+	var unit string
+	if statusCode == 0 {
+		rx, tx, unit, handshake = menuStatusTraffic(status)
 	}
-	menuHealthMeasurements(out, result.MTU, result.Quality, rx, tx, unit, result.State.LatestHandshakeUnix)
+	menuHealthMeasurements(out, result.MTU, result.Quality, rx, tx, unit, handshake)
+	if statusCode != 0 {
+		menuNotice(out, "WARNING", "Cumulative counters could not be checked separately; ping results are independent.")
+	}
+	if statusCode == 0 && status.IPsecState != nil {
+		menuField(out, "IPsec SA", fmt.Sprintf("observed=%t (not proof of peer traffic)", status.IPsecState.SecurityAssociationPresent))
+	}
 	menuHealthNext(out, result.Quality)
 	return 0
 }
@@ -206,45 +254,29 @@ func codeOrFailure(code int) int {
 }
 
 func menuShowLocalStatus(id domain.LinkID, out, errOut io.Writer, options *runtimeOptions) int {
-	var raw bytes.Buffer
-	code := linkReadCommand([]string{"status", string(id), "--json"}, &raw, io.Discard, options)
+	result, raw, code := menuReadVerifiedStatus(id, options)
 	menuSection(out, "Local status / not a peer ping")
 	if code != 0 {
-		menuPublicDiagnosticFailure(out, raw.Bytes())
+		menuPublicDiagnosticFailure(out, raw)
 		return code
-	}
-	var result linkStatusResponse
-	if err := json.Unmarshal(raw.Bytes(), &result); err != nil || result.Link.ID != id || result.SchemaVersion != jsonSchemaVersion || !result.InterfaceVerified {
-		menuNotice(out, "WARNING", "Local status could not be interpreted; no connection claim made.")
-		return 1
 	}
 	menuHealthLine(out, "Interface", "OK", "Local interface verified")
 	menuHealthLine(out, "Peer traffic", "UNKNOWN", "connectivity not measured; use Check connection for 5 pings")
-	var rx, tx uint64
-	unit := "packets"
-	have := false
-	switch {
-	case result.GREState != nil:
-		rx, tx, have = result.GREState.RXPackets, result.GREState.TXPackets, true
-	case result.IPIPState != nil:
-		rx, tx, have = result.IPIPState.RXPackets, result.IPIPState.TXPackets, true
-	case result.WireGuardState != nil:
-		rx, tx, unit, have = result.WireGuardState.RXBytes, result.WireGuardState.TXBytes, "bytes", true
-		v := result.WireGuardState.LatestHandshakeUnix
-		if v > 0 {
-			menuField(out, "Last handshake", time.Unix(v, 0).UTC().Format("2006-01-02 15:04 UTC")+" (historical)")
+	rx, tx, unit, handshake := menuStatusTraffic(result)
+	if rx != nil && tx != nil && unit != "" {
+		menuField(out, "Interface RX/TX", fmt.Sprintf("%d / %d %s (cumulative)", *rx, *tx, unit))
+	} else {
+		menuField(out, "Interface RX/TX", "not available from this backend")
+	}
+	if handshake != nil {
+		if *handshake > 0 {
+			menuField(out, "Last handshake", time.Unix(*handshake, 0).UTC().Format("2006-01-02 15:04 UTC")+" (historical)")
 		} else {
 			menuHealthLine(out, "WireGuard", "UNKNOWN", "No handshake observed")
 		}
-	case result.IPsecState != nil:
-		if result.IPsecState.SecurityAssociationPresent {
-			menuHealthLine(out, "IPsec SA", "INFO", "Observed; not proof of peer IP traffic")
-		} else {
-			menuHealthLine(out, "IPsec SA", "UNKNOWN", "Not observed")
-		}
 	}
-	if have {
-		menuField(out, "Interface RX/TX", fmt.Sprintf("%d / %d %s (cumulative)", rx, tx, unit))
+	if result.IPsecState != nil {
+		menuField(out, "IPsec SA", fmt.Sprintf("observed=%t (not proof of peer traffic)", result.IPsecState.SecurityAssociationPresent))
 	}
 	return 0
 }

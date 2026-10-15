@@ -334,6 +334,14 @@ func TestMenuProtectedHandoffIPsecOriginalPSKRetainedBySavedIntent(t *testing.T)
 	if err != nil || recovered != encoded {
 		t.Fatal("IPsec saved protected handoff was not reused", err)
 	}
+	// The same identity-checked immediate-copy renderer is shared by
+	// WireGuard and IPsec. Its output exists only on a real owner TTY.
+	master, slave := openMenuPTY(t)
+	menuShowNewProtectedHandoff(slave, slave, opts, link.ID)
+	shown := readMenuPTYUntil(t, master, "COPY RECEIVER SETUP LINK", "This same link stays in private storage")
+	if !strings.Contains(shown, encoded) {
+		t.Fatal("IPsec original PSK handoff was not copyable on the terminal")
+	}
 	tty, done := startManageTTY(t, opts)
 	tty.expect("Choose a task: ")
 	tty.send("3")
