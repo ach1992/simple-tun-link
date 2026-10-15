@@ -3,6 +3,7 @@ package ipsec
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 )
 
@@ -38,7 +39,7 @@ func (a NativeRuntimeAdmission) attestLoadedPreStartUnit(ctx context.Context) er
 		{"Service", "Restart", "no"},
 	} {
 		if a.require(ctx, path, prop.category, prop.key, prop.value) != nil {
-			return errors.New("native pre-start unit has foreign effective service settings")
+			return fmt.Errorf("native pre-start property %s.%s does not match the fixed profile", prop.category, prop.key)
 		}
 	}
 	for _, prop := range []struct{ category, key, value string }{
@@ -51,7 +52,7 @@ func (a NativeRuntimeAdmission) attestLoadedPreStartUnit(ctx context.Context) er
 	} {
 		got, err := a.property(ctx, path, prop.category, prop.key)
 		if err != nil || got != prop.value {
-			return errors.New("native pre-start loaded unit contains unverified overrides")
+			return fmt.Errorf("native pre-start property %s.%s unavailable or changed", prop.category, prop.key)
 		}
 	}
 	// Explicitly exclude unit-level execution overrides. A drop-in or
@@ -60,7 +61,7 @@ func (a NativeRuntimeAdmission) attestLoadedPreStartUnit(ctx context.Context) er
 		"ExecReload", "ExecStop", "ExecStopPost"} {
 		got, err := a.property(ctx, path, "Service", key)
 		if err != nil || got != "a(sasbttttuii) 0" {
-			return errors.New("native pre-start service contains foreign execution directives")
+			return fmt.Errorf("native pre-start Service.%s has foreign execution directives or unsupported property", key)
 		}
 	}
 	got, err := a.property(ctx, path, "Service", "ExecStart")

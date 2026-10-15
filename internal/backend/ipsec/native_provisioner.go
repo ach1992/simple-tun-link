@@ -265,7 +265,7 @@ func ProvisionNativeExclusive(ctx context.Context) error {
 	// effective when daemon-reload discovers our just-published unit.
 	admission := NewNativeRuntimeAdmission()
 	if err := admission.attestPreStartUnit(ctx); err != nil {
-		return errors.New("native IPsec loaded unit fails PRE-START admission; unit not started and boot edge not enabled; reconcile published sources")
+		return fmt.Errorf("native IPsec PRE-START admission denied (unit not started; boot edge not enabled): %w", err)
 	}
 	if err := transition("start"); err != nil {
 		return err
