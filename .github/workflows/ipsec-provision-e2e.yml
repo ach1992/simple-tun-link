@@ -75,10 +75,21 @@ jobs:
               "$cid" /usr/local/bin/stl-ipsec-provision-test \
               -test.run '^TestIsolatedNativeExclusiveRealProvision$' -test.v
             docker cp scripts/e2e/ipsec-installed-systemd.sh "$cid:/tmp/stl-native-e2e.sh"
-            docker exec -e STL_E2E_DISPOSABLE_HOST=approved \
+            if ! docker exec -e STL_E2E_DISPOSABLE_HOST=approved \
               -e STL_IPSEC_ISOLATED=approved \
               -e STL_IPSEC_SYSTEMD_FIXTURE=approved \
-              -e STL_IPSEC_ENCAP="$encap" "$cid" bash /tmp/stl-native-e2e.sh
+              -e STL_IPSEC_ENCAP="$encap" "$cid" bash /tmp/stl-native-e2e.sh; then
+              # Safe, bounded systemd metadata only. Journal and VICI output
+              # may contain credentials and must never be dumped into CI.
+              docker exec "$cid" systemctl show simple-tun-link-ipsec.service \
+                --property=LoadState,ActiveState,SubState,Result,MainPID,ExecMainStatus,UnitFileState,NeedDaemonReload \
+                --no-pager || true
+              docker exec "$cid" systemctl show simple-tun-link-restore.service \
+                --property=LoadState,ActiveState,SubState,Result,ExecMainStatus \
+                --no-pager || true
+              echo "NATIVE_REAL_PROVISION_E2E_FAILED_MODE=$encap"
+              exit 1
+            fi
             echo "NATIVE_REAL_PROVISION_GUEST_$encap=PASS"
             docker rm -f "$cid" >/dev/null
             cid=''
