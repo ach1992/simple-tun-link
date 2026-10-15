@@ -62,22 +62,30 @@ func TestMenuActionSemanticsAndExactCopyableTokens(t *testing.T) {
 		{"PREPARE", menuYellow}, {"UPDATE", menuYellow},
 		{"YES", menuGreen}, {"SHOW", menuBlue},
 	} {
-		got := menuPrompt(slave, "Type "+test.word+" to confirm: ")
+		got := menuActionPrompt(slave, test.word, "Type "+test.word+" to confirm: ")
 		want := "\x1b[" + test.code + "m" + test.word + "\x1b[0m"
 		if !strings.Contains(got, want) {
 			t.Fatalf("semantic action %s missing exact color/bold token: %q", test.word, got)
 		}
 	}
 	for _, test := range []struct {
-		title, role string
+		action, role string
 	}{
-		{"Remove tunnel", menuRed}, {"Delete receiver link", menuRed},
-		{"Uninstall", menuRed}, {"Install", menuYellow},
-		{"Update", menuYellow}, {"Show status", menuBlue},
+		{"REMOVE", menuRed}, {"DELETE", menuRed},
+		{"UNINSTALL", menuRed}, {"INSTALL", menuYellow},
+		{"UPDATE", menuYellow}, {"SHOW", menuBlue},
 	} {
-		if got := menuOptionRole(test.title); got != test.role {
-			t.Fatalf("%s: want %s, got %s", test.title, test.role, got)
+		if got := menuActionRole(test.action); got != test.role {
+			t.Fatalf("%s: want %s, got %s", test.action, test.role, got)
 		}
+	}
+	// Display wording never grants the styling or intent of an action.
+	// A descriptive option that happens to mention "Delete" is still neutral.
+	if got := menuActionRole("NOT_AN_ACTION"); got != menuCyan {
+		t.Fatalf("unknown action was promoted to a privileged semantic: %q", got)
+	}
+	if got := menuActionPrompt(slave, "PREPARE", "Why an update can delete stale links"); strings.Contains(got, "\x1b["+menuRed+"m") {
+		t.Fatalf("descriptive text inferred a destructive action: %q", got)
 	}
 	for _, literal := range []string{
 		"stl://receiver-sensitive-sequence", "sudo stl link show --json",
@@ -97,7 +105,7 @@ func TestMenuActionSemanticsAndExactCopyableTokens(t *testing.T) {
 		t.Fatalf("unknown state did not use the distinct unknown palette: %q", got)
 	}
 	t.Setenv("NO_COLOR", "")
-	if got := menuPrompt(slave, "Type DELETE or YES: "); got != "Type DELETE or YES: " {
+	if got := menuActionPrompt(slave, "DELETE", "Type DELETE or YES: "); got != "Type DELETE or YES: " {
 		t.Fatalf("NO_COLOR decorated action tokens: %q", got)
 	}
 	if got := menuFieldValue(slave, "Status", "Unavailable"); got != "Unavailable" {

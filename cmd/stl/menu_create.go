@@ -30,7 +30,15 @@ type createPrompts struct {
 }
 
 func (p createPrompts) ask(prompt string) (string, error) {
-	fmt.Fprint(p.out, menuPrompt(p.out, prompt))
+	return p.askWithAction(prompt, "")
+}
+
+func (p createPrompts) askAction(action, prompt string) (string, error) {
+	return p.askWithAction(prompt, action)
+}
+
+func (p createPrompts) askWithAction(prompt, action string) (string, error) {
+	fmt.Fprint(p.out, menuActionPrompt(p.out, action, prompt))
 	answer, err := readMenuAnswer(p.reader)
 	if err != nil {
 		return "", err
@@ -340,7 +348,7 @@ func menuCreatePlain(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		fmt.Fprintln(errOut, "Cannot establish a fresh terminal confirmation; nothing applied.")
 		return 2
 	}
-	confirm, err := p.ask("Create this tunnel now? Type YES to confirm (Enter=no): ")
+	confirm, err := p.askAction("YES", "Create this tunnel now? Type YES to confirm (Enter=no): ")
 	if err != nil {
 		return p.failed(err)
 	}

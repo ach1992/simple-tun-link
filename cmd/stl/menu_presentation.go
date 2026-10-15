@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -69,43 +68,20 @@ func menuActionToken(out io.Writer, action string) string {
 	return menuPaint(out, menuActionRole(action), action)
 }
 
-// Prompts may style semantic action words, while preserving their exact
-// plain content under NO_COLOR/TERM=dumb and on redirected streams.
-var menuPromptActions = regexp.MustCompile("\\b(?:REMOVE|DELETE|UNINSTALL|PREPARE|INSTALL|UPDATE|SHOW|YES)\\b")
-
-func menuPrompt(out io.Writer, prompt string) string {
+// A caller declares the action intent. We do NOT infer privilege or scope
+// from arbitrary menu wording, which might also contain informational uses
+// of words like "remove" or "update".
+func menuActionPrompt(out io.Writer, action, prompt string) string {
 	if !menuColorEnabled(out) || menuCopyable(prompt) {
 		return prompt
 	}
-	matches := menuPromptActions.FindAllStringIndex(prompt, -1)
-	var result strings.Builder
-	from := 0
-	for _, span := range matches {
-		result.WriteString(menuPaint(out, menuCyan, prompt[from:span[0]]))
-		result.WriteString(menuActionToken(out, prompt[span[0]:span[1]]))
-		from = span[1]
+	position := strings.Index(prompt, action)
+	if position < 0 {
+		return menuPaint(out, menuCyan, prompt)
 	}
-	result.WriteString(menuPaint(out, menuCyan, prompt[from:]))
-	return result.String()
-}
-
-func menuOptionRole(title string) string {
-	title = strings.ToUpper(title)
-	for _, word := range strings.FieldsFunc(title, func(r rune) bool { return r < 'A' || r > 'Z' }) {
-		switch word {
-		case "REMOVE", "DELETE", "UNINSTALL":
-			return menuRed
-		}
-	}
-	for _, word := range strings.FieldsFunc(title, func(r rune) bool { return r < 'A' || r > 'Z' }) {
-		switch word {
-		case "INSTALL", "PREPARE", "UPDATE":
-			return menuYellow
-		case "SHOW":
-			return menuBlue
-		}
-	}
-	return ""
+	return menuPaint(out, menuCyan, prompt[:position]) +
+		menuActionToken(out, action) +
+		menuPaint(out, menuCyan, prompt[position+len(action):])
 }
 
 func menuScreen(out io.Writer, title string) {
@@ -120,6 +96,16 @@ func menuScreen(out io.Writer, title string) {
 }
 
 func menuSection(out io.Writer, title string) {
+	menuSectionStyled(out, title, menuBlue)
+}
+
+// For action-specific headings use the explicitly selected action, rather
+// than guessing semantics from the heading's natural-language words.
+func menuActionSection(out io.Writer, title, action string) {
+	menuSectionStyled(out, title, menuActionRole(action))
+}
+
+func menuSectionStyled(out io.Writer, title, role string) {
 	width := 55
 	if file, ok := menuTerminal(out); ok {
 		if ws, err := unix.IoctlGetWinsize(int(file.Fd()), unix.TIOCGWINSZ); err == nil && ws.Col > 0 {
@@ -129,20 +115,23 @@ func menuSection(out io.Writer, title string) {
 			}
 		}
 	}
-	role := menuOptionRole(title)
-	if role == "" {
-		role = menuBlue
-	}
 	fmt.Fprintln(out, "\n"+menuPaint(out, role, strings.ToUpper(title)))
 	fmt.Fprintln(out, menuPaint(out, menuDim, strings.Repeat("-", width)))
 }
 
 func menuOption(out io.Writer, number, title, description string) {
+	menuOptionStyled(out, number, title, description, "")
+}
+
+func menuActionOption(out io.Writer, number, title, description, action string) {
+	menuOptionStyled(out, number, title, description, menuActionRole(action))
+}
+
+func menuOptionStyled(out io.Writer, number, title, description, role string) {
 	if !menuCopyable(description) {
 		description = menuPaint(out, menuDim, description)
 	}
 	entry := menuPaint(out, menuCyan, fmt.Sprintf("%2s", number))
-	role := menuOptionRole(title)
 	if file, ok := menuTerminal(out); ok {
 		if ws, err := unix.IoctlGetWinsize(int(file.Fd()), unix.TIOCGWINSZ); err == nil && ws.Col > 0 && ws.Col < 64 {
 			fmt.Fprintf(out, "  %s  %s\n      %s\n", entry, menuPaint(out, role, title), description)
