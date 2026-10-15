@@ -139,7 +139,15 @@ native_preflight ensure
 echo "NATIVE_SYSTEMD_RESTORE_BEGIN=OBSERVED"
 /usr/local/bin/stl link restore --all >/dev/null ||
   { echo "ERROR: native STL state/PSK/VICI restore failed" >&2; exit 1; }
-/usr/local/bin/stl link connect-ipsec "$link" --confirm "$link" --json >/dev/null
+echo "NATIVE_SYSTEMD_RESTORE_COMMAND=PASS"
+# Canonical RestoreAll reconnects a committed IPsec Link itself. Calling
+# connect-ipsec again would turn this into a manual-connect test and could
+# conceal a missing automatic reconnect.
+if ! /usr/local/bin/stl link status "$link" --json | grep -q '"security_association_present":true'; then
+  echo "ERROR: automatic IPsec SA restoration was not verified" >&2
+  exit 1
+fi
+echo "NATIVE_SYSTEMD_AUTOMATIC_RECONNECT=PASS"
 ping -n -q -I 10.251.88.0 -c 3 -W 2 10.251.88.1
 ip netns exec stl-ipsec-native-b ping -n -q -I 10.251.88.1 -c 3 -W 2 10.251.88.0
 echo "NATIVE_SYSTEMD_ACTUAL_UNIT_RESTART_RESTORE=PASS"
