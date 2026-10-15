@@ -73,6 +73,7 @@ jobs:
               -v "$PWD/scripts/install.sh:/mnt/stl-install.sh:ro" \
               -v "/tmp/stl-ipsec-native-e2e/bundle:/mnt/stl-bundle:ro" \
               -v "$PWD/scripts/e2e/ipsec-managed-prepare-systemd.sh:/mnt/managed-e2e.sh:ro" \
+              -v "$PWD/scripts/e2e/ipsec-managed-prepare-menu.exp:/mnt/managed-menu.exp:ro" \
               stl-ipsec-managed-clean:pr)
             test -n "$cid"
             docker cp /tmp/stl-ipsec-native-e2e/stl-ipsec-provision-test \

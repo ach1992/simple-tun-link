@@ -57,8 +57,8 @@ func TestUnprivilegedOrRedirectedPackagePreviewCannotConsumeCreateInput(t *testi
 	reader := strings.NewReader("PREPARE\nALLOW-IPSEC-PACKAGES\n")
 	plan := tunnelOption{backend: domain.BackendIPsec, mode: domain.EncapESP}
 	// A read-only inventory is permitted, but root operation is not.
-	// Automatic strongSwan APT is now deliberately refused even for root:
-	// a false return requests manual reconciliation, not a privileged effect.
+	// Redirected/scripted input cannot authorize managed IPsec preparation;
+	// a false return requests root-TTY PREPARE, never a privileged effect.
 	_ = menuPrepareSelectedPackages(reader, nil, &output, &errors, plan, nil)
 	if strings.Contains(output.String(), "Canonical installer verifying") ||
 		strings.Contains(output.String(), "Selected packages now pass") {

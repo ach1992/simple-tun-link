@@ -72,14 +72,15 @@ echo "IPSEC_REAL_SIGNED_APT_AND_VENDOR_NORMALIZATION=PASS"
 # ONLY this disposable container, after APT network access has completed.
 ip -4 route del default 2>/dev/null || :
 [[ -z $(ip -4 route show default) ]] || fail unexpected_guest_default_route
-STL_E2E_DISPOSABLE_HOST=approved \
-  STL_IPSEC_ISOLATED=approved \
-  STL_IPSEC_SYSTEMD_FIXTURE=approved \
-  STL_IPSEC_REAL_PROVISION=approved \
-  /usr/local/bin/stl-ipsec-provision-test \
-    -test.run '^TestIsolatedNativeExclusiveRealProvision$' -test.v
+# This must run the installed STL executable under a genuine PTY. A Go
+# test executable is a DIFFERENT inode and correctly fails the installation
+# identity gate; bypassing that gate in production would be unsafe.
+/usr/bin/expect /mnt/managed-menu.exp
 [[ $(systemctl is-active simple-tun-link-ipsec.service) == active ]] ||
   fail stl_private_ipsec_not_active
 /usr/local/bin/stl doctor ipsec --json | grep -q '"activation_allowed":true' ||
   fail private_service_not_admitted
+[[ $(systemctl is-enabled strongswan.service 2>/dev/null || :) == disabled &&
+   $(systemctl is-active strongswan.service 2>/dev/null || :) == inactive ]] ||
+  fail vendor_reactivated_during_private_admission
 echo "IPSEC_REAL_FIRST_INSTALL_AND_PRIVATE_ADMISSION=PASS"
