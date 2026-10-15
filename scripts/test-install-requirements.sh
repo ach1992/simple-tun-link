@@ -67,6 +67,16 @@ bad bash "$installer" install --bundle "$root/missing-bundle" --prefix "$root/pr
 [[ ! -e "$root/prefix/bin/stl" ]] || fail 'fixture input modified installed identity'
 bad bash "$installer" uninstall --prefix "$root/prefix" --backends all
 
+# Read-only installed-host plan now includes a live dpkg inventory but
+# never touches APT, even when one of the selected distro packages is missing.
+live_out="$(bash "$installer" requirements --backends native 2>"$root/live.err")"
+grep -q '^missing_packages=' <<< "$live_out" ||
+  fail 'normal-host read-only requirements lost missing package field'
+# A mismatched/unsafe expected package plan must not be accepted for any
+# action other than explicit prepare, even with attacker shell variables.
+bad bash "$installer" requirements --expected-missing iptables
+bad bash "$installer" install --expected-missing iptables --bundle "$root/missing-bundle" --prefix "$root/prefix"
+
 # Package preparation must not act on a foreign or offline executable
 # and has no fixture, bundle, version or implicit backend selection.
 bad bash "$installer" prepare

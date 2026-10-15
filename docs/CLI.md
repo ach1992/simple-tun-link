@@ -158,8 +158,20 @@ The published rc.5 remains unchanged until a separately approved release.
 
 ### On-demand GRE/IPIP module preparation (unreleased; Issue #101)
 
+For any backend, Create now first takes a **read-only** package
+inventory using the same canonical installer code embedded in the
+verified binary. If the selected distro dependencies are missing, a real
+installed root terminal shows exactly the missing package names, risks
+and a fresh `PREPARE` choice. Only that explicit choice runs the bundled
+canonical installer under its normal owner verification and maintenance
+lock. GRE/IPIP request baseline packages, WireGuard requests WireGuard
+dependencies, and IPsec requires an **additional typed acknowledgement**
+because its package scripts may start a distro VPN daemon. On non-root
+or redirected invocations this is only a warning; final Engine capability
+admission still applies. No arbitrary downloaded tag/script is executed.
+
 After selecting GRE/IPIP FOU or GUE (or a native GRE/IPIP type with a
-missing kernel driver), STL first rechecks the selected prerequisites.
+missing kernel driver), STL separately rechecks the selected modules.
 If a required module is verified **on disk but inactive**, an operator
 can approve a narrow `PREPARE` step on an installed root-owned
 `sudo stl menu` in a real interactive terminal. Only the selected
@@ -175,12 +187,35 @@ outlast this invocation; STL deliberately does not auto-unload after
 failure, since another process may use the module. Availability still
 does not prove network reachability.
 
-The `v0.1.0-rc.5` binary does not contain this feature. Persisted
-reboot restoration for optional modules and on-demand package provisioning
-remain tracked under [Issue #101](https://github.com/ach1992/simple-tun-link/issues/101).
-The IPsec backend has an operational implementation, but needs verified
-STL-exclusive strongSwan service/configuration/receipt provisioning;
-installing `swanctl` alone cannot satisfy the runtime gate.
+After a Link has been successfully committed, the canonical owned
+`simple-tun-link-restore.service` and Engine restore locks can load only
+that **committed GRE/IPIP Link's** allowlisted, proven-on-disk missing
+driver(s), then re-run the canonical Engine for actual kernel/Link
+verification. No global `modules-load.d` file, startup shell or implicit
+module unload is created. Unknown or failed module loads fail the affected
+Link while independent Links continue. Whole-guest reboot/traffic
+acceptance is still tracked under
+[Issue #101](https://github.com/ach1992/simple-tun-link/issues/101).
+
+The draft adds a separate **opt-in** IPsec service source preparer after
+successful package checks. Only an installed root real terminal can freshly
+confirm `PROVISION-IPSEC`: the program first requires no existing/conflicting
+native publication records, no foreign daemon or IKE UDP ports, and only
+inactive/disabled known vendor strongSwan units. It takes an exclusive
+installer/Engine maintenance gate, uses the existing no-clobber
+root-private config/unit origin publishers, creates only the canonical
+STL-native boot reference and starts only the STL unit. The complete
+runtime/service/socket/process ownership attestation must then pass
+before any IPsec Create. It NEVER stops/enables/disables/adopts any
+vendor service, copies foreign configs, or installs packages in this
+step. If any origin publication or service transition is partial or
+uncertain, **do not retry automatically**: the exact protected artifacts
+are retained for an administrator to reconcile. No unverified service
+is declared ready. Disposable-guest service and traffic acceptance
+remain a separately required gate.
+
+The published `v0.1.0-rc.5` binary does not contain these features.
+Installing `swanctl` alone cannot satisfy the IPsec runtime gate.
 
 ### Manage Links — confirmation and privacy
 

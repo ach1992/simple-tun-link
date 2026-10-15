@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	ipsecbackend "github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/state"
@@ -33,6 +34,43 @@ func menuCreateIPsec(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	pre, done := context.WithTimeout(context.Background(), 15*time.Second)
 	_, admitted := activeIPsecBackend(pre, options)
 	done()
+	if admitted != nil && menuCanUpdateNow(input, out) {
+		// The only provision action is an explicit exact-word confirmation on
+		// the installed root TTY. Never auto-start, adopt, disable or modify
+		// another strongSwan service from the read-only Create selection.
+		probeCtx, probeStop := context.WithTimeout(context.Background(), 12*time.Second)
+		preflight := ipsecbackend.NativeProvisionReadiness(probeCtx)
+		probeStop()
+		if preflight == nil {
+			menuSection(out, "IPsec / private service preparation")
+			menuField(out, "STATUS", "STL-exclusive sources are not yet provisioned")
+			menuField(out, "REASON", "No existing native origin receipts and no observed foreign daemon")
+			menuField(out, "NEXT ACTION", "Explicitly review and confirm private systemd source publication")
+			menuNotice(out, "WARNING", "This writes root-private strongSwan config and a new STL-exclusive unit/boot edge and starts ONLY that unit. Partial/uncertain filesystem or daemon changes are NOT automatically erased; owner reconciliation may be required.")
+			menuProse(out, "No vendor strongSwan unit is stopped, disabled, masked or adopted. No Link or key is created. Service startup is separate from package installation and actual tunnel Create.")
+			if e := clearQueuedMenuConfirmation(input, reader); e == nil {
+				fmt.Fprint(out, "Type PROVISION-IPSEC to prepare only this exclusive service (Enter cancels): ")
+				consent, e := readMenuAnswer(reader)
+				if e == nil && consent == "PROVISION-IPSEC" {
+					provisionCtx, finish := context.WithTimeout(context.Background(), 75*time.Second)
+					err := ipsecbackend.ProvisionNativeExclusive(provisionCtx)
+					finish()
+					if err != nil {
+						menuNotice(out, "FAILED", "STL-exclusive service provisioning incomplete or unverified; inspect trusted private source and systemd state before retrying.")
+						return 4
+					}
+					menuNotice(out, "OK", "STL-exclusive service admitted. Continuing through the canonical IPsec Create flow.")
+					opts, initErr := productionRuntimeOptions()
+					if initErr == nil {
+						options = opts
+					}
+					verifyCtx, verifyDone := context.WithTimeout(context.Background(), 15*time.Second)
+					_, admitted = activeIPsecBackend(verifyCtx, options)
+					verifyDone()
+				}
+			}
+		}
+	}
 	if admitted != nil {
 		menuNotice(out, "WARNING", "IPsec cannot start: the STL-exclusive strongSwan runtime is not verified.")
 		menuSection(out, "IPsec / prerequisites")

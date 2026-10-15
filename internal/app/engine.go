@@ -45,6 +45,7 @@ type Engine struct {
 	locks              Locker
 	restorePersistence RestorePersistence
 	restoreExecutable  string
+	restoreModules     func(context.Context, domain.Link) error
 	ipsecRetirement    interface {
 		RetireMatching(domain.LinkID, string) error
 	}
@@ -91,6 +92,13 @@ func New(backends *backend.Registry, store state.Store, locks Locker) (*Engine, 
 // concurrent Link operation. Without it, a managed request fails closed.
 func (e *Engine) SetMTUManager(manager MTUManager) {
 	e.mtuManager = manager
+}
+
+// SetRestoreModuleBootstrap wires a typed module restorer for committed Links.
+// It runs ONLY under RestoreAll's maintenance and refreshed per-Link locks,
+// never while browsing a menu or creating/removing Links.
+func (e *Engine) SetRestoreModuleBootstrap(fn func(context.Context, domain.Link) error) {
+	e.restoreModules = fn
 }
 
 // SetIPsecRetirementStore installs the local, protected credential backend for

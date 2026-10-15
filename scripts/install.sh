@@ -41,6 +41,8 @@ bundle=
 backends=native
 backends_supplied=0
 os_release_fixture=
+expected_missing=
+expected_missing_supplied=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version) [[ $# -ge 2 && -z $version ]] || usage; version=$2; shift 2 ;;
@@ -48,6 +50,7 @@ while [[ $# -gt 0 ]]; do
     --prefix) [[ $# -ge 2 ]] || usage; prefix=$2; shift 2 ;;
     --backends) [[ $# -ge 2 && $backends_supplied == 0 ]] || usage; backends=$2; backends_supplied=1; shift 2 ;;
     --os-release-file) [[ $# -ge 2 && -z $os_release_fixture ]] || usage; os_release_fixture=$2; shift 2 ;;
+    --expected-missing) [[ $# -ge 2 && $expected_missing_supplied == 0 ]] || usage; expected_missing=$2; expected_missing_supplied=1; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -59,6 +62,7 @@ else
   [[ -n $version && -z $bundle || -z $version && -n $bundle ]] || usage
 fi
 [[ $action == requirements || -z $os_release_fixture ]] || usage
+[[ $action == prepare || $expected_missing_supplied == 0 ]] || usage
 [[ $action != prepare || $prefix == /usr/local ]] || fail 'package preparation is allowed only for the installer-owned /usr/local installation'
 
 # Use a data-only OS release parser. Never "source" /etc/os-release as shell
@@ -153,6 +157,12 @@ ensure_packages() {
   for pkg in "${packages[@]}"; do
     package_installed "$pkg" || missing+=("$pkg")
   done
+  # The menu passes its precise prior preview, which the locked canonical
+  # installer compares again BEFORE APT update, service hooks or packages.
+  # Direct CLI prepare may omit this field for manual operator workflows.
+  if [[ $expected_missing_supplied == 1 && "${missing[*]}" != "$expected_missing" ]]; then
+    fail 'selected package inventory changed since explicit confirmation; no APT attempted'
+  fi
   if (( ${#missing[@]} == 0 )); then
     printf 'STL dependencies already installed for %s %s (%s).\n' "$os_id" "$os_version" "$backends" >&2
     return
@@ -172,6 +182,16 @@ ensure_packages() {
       if package_installed strongswan-starter || package_installed charon-systemd; then
         fail 'existing strongSwan installation requires operator-managed package reconciliation; refusing automatic package changes'
       fi
+      # Even a currently stopped foreign unit/drop-in may later start during
+      # APT maintainer hooks. Do not assume absence of a daemon means vacancy.
+      local unit unit_root
+      for unit in strongswan.service strongswan-starter.service charon-systemd.service ipsec.service; do
+        for unit_root in /etc/systemd/system /run/systemd/system /usr/lib/systemd/system /lib/systemd/system; do
+          if [[ -e $unit_root/$unit || -L $unit_root/$unit ]]; then
+            fail 'foreign strongSwan unit identity exists; manual service ownership review required'
+          fi
+        done
+      done
       # Debian 11 minimal images ship pidof but not pgrep; fail closed when
       # neither process-identity checker is available.
       if command -v pgrep >/dev/null; then
@@ -205,6 +225,17 @@ select_packages
 if [[ $action == requirements ]]; then
   validate_os "${os_release_fixture:-/etc/os-release}"
   printf 'distribution=%s\nversion=%s\nselected_backends=%s\npackages=%s\n'     "$os_id" "$os_version" "$backends" "${packages[*]}"
+  # Optional live-host, read-only observation for the binary-embedded menu
+  # preparer. A caller-supplied OS fixture must not be mixed with host dpkg.
+  # This is a preview, not proof that the installed package set cannot race.
+  if [[ -z $os_release_fixture ]]; then
+    command -v dpkg-query >/dev/null || fail 'cannot inspect installed packages'
+    missing=()
+    for pkg in "${packages[@]}"; do
+      package_installed "$pkg" || missing+=("$pkg")
+    done
+    printf 'missing_packages=%s\n' "${missing[*]}"
+  fi
   if [[ $want_ipsec == 1 ]]; then
     printf 'notice=IPsec packages can enable/start charon-systemd; existing daemons need operator review\n'
   fi
@@ -323,6 +354,10 @@ fi
 # post-install package provisioning; never change STL binary/Link State here.
 # Runtime OS/package effects are not part of STL's binary rollback transaction.
 if [[ $action == prepare ]]; then
+  if [[ $expected_missing_supplied == 1 ]]; then
+    expected_missing_pattern='^([a-z0-9-]+( [a-z0-9-]+)*)?$'
+    [[ $expected_missing =~ $expected_missing_pattern ]] || fail 'untrusted expected package plan'
+  fi
   ensure_packages
   printf 'Selected backend packages prepared; kernel modules and STL-owned service admission must be verified separately. No STL executable or Link was changed.
 '

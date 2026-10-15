@@ -37,6 +37,10 @@ jobs:
           bash -n scripts/e2e/wireguard-netns.sh
           bash -n scripts/e2e/ipsec-two-peer-netns.sh
           bash -n scripts/e2e/ipsec-installed-systemd.sh
+      - name: Canonical installer embedded byte-identity
+        run: |
+          bash -n scripts/install.sh
+          cmp -s scripts/install.sh cmd/stl/canonical-installer.sh
       - name: Vet
         run: go vet ./...
       - name: Test

@@ -68,6 +68,12 @@ if [[ ! -f LICENSE ]] || ! grep -q 'MIT License' LICENSE; then
   exit 1
 fi
 
+# Go's embedded package-only preparer MUST be byte-identical to the
+# canonical release installer, not a second independently updated shell.
+cmp -s scripts/install.sh cmd/stl/canonical-installer.sh || {
+  echo 'Refusing artifact: embedded canonical package installer is stale' >&2
+  exit 1
+}
 ldflags="-s -w -X github.com/ach1992/simple-tun-link/internal/version.Version=$version -X github.com/ach1992/simple-tun-link/internal/version.Commit=$commit -X github.com/ach1992/simple-tun-link/internal/version.Date=$commit_date"
 for arch in amd64 arm64; do
   filename="stl_"$version"_linux_"$arch

@@ -305,3 +305,38 @@ func TestRestoreLockWaitRespectsContextDeadline(t *testing.T) {
 		t.Fatalf("lock timeout not honored: code=%d backend=%d ctx=%v err=%q", code, b.applied, ctx.Err(), errs.String())
 	}
 }
+
+// Optional driver restoration runs only after a saved, currently committed
+// Link is re-read under the canonical Engine maintenance + per-Link locks.
+// It must never run from a read-only CLI operation or a stale removed Link.
+func TestCommittedRestoreBootstrapIsPerLinkAndFailClosed(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	link := restoreTestLink(t, "a", domain.BackendGRE, "10.80.106.0/31", "10.80.106.1/31")
+	seedRestoreState(t, root, link)
+	b := &restoreBackend{}
+	options := runtimeOptions{stateRoot: root, backends: []backend.Backend{b}}
+	engine, err := buildRuntimeEngine(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspected := 0
+	engine.SetRestoreModuleBootstrap(func(ctx context.Context, l domain.Link) error {
+		inspected++
+		if l.ID != link.ID {
+			t.Fatalf("wrong committed Link bootstrap: %s", l.ID)
+		}
+		return errors.New("unverified module")
+	})
+	if _, err := engine.RestoreAll(context.Background()); err == nil || b.applied != 0 || inspected != 1 {
+		t.Fatalf("unsupported module should fail only saved affected Link: err=%v applied=%d checked=%d", err, b.applied, inspected)
+	}
+	if err := state.NewFileStore(root).Update(context.Background(), func(snapshot *state.Snapshot) error {
+		snapshot.Delete(link.ID)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.RestoreAll(context.Background()); err != nil || inspected != 1 || b.applied != 0 {
+		t.Fatalf("removed Link was resurrected or bootstrapped: err=%v checked=%d applied=%d", err, inspected, b.applied)
+	}
+}

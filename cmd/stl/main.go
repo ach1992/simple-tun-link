@@ -291,6 +291,16 @@ func buildRuntimeEngine(options runtimeOptions) (*app.Engine, error) {
 		return nil, err
 	}
 	engine.SetMTUManager(options.mtuManager)
+	// Reboot module restoration is permitted only for the canonical, root-owned
+	// installed executable, not for tests, an offline binary, or any arbitrary
+	// state root. Engine narrows execution further to saved committed Links
+	// under its maintenance and per-Link ownership locks.
+	if options.stateRoot == state.DefaultRoot && os.Geteuid() == 0 &&
+		options.executable == "/usr/local/bin/stl" &&
+		linux.VerifyTrustedSTLExecutable(options.executable) == nil {
+		restorer := linux.CommittedTunnelModuleRestorer{Runner: linux.ExecRunner{}}
+		engine.SetRestoreModuleBootstrap(restorer.Prepare)
+	}
 	if options.stateRoot == state.DefaultRoot {
 		// All default-root production mutations acquire a shared lock before
 		// Link/resource locks. The installer holds its exclusive peer.

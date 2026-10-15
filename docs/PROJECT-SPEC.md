@@ -292,3 +292,11 @@ or modify a foreign VPN service. IPsec cannot be declared ready until
 native-exclusive strongSwan ownership and service origin are admitted.
 Selected optional module requirements must survive the committed Link's
 restoration after reboot; durable completion requires disposable guest proof.
+When the fixed STL-exclusive IPsec source/config publisher is verified
+safe in a disposable real-systemd fixture, a separately confirmed
+installed root terminal may enable ONLY that private native service
+under existing installer/Engine locks, with no takeover, stop, disable
+or modification of vendor strongSwan services. Privileged publication
+failures must retain unambiguous reconciliation evidence and never claim
+completed rollback or readiness from partial state; the existing
+live service/process/VICI/port admission remains final authority.

@@ -162,6 +162,25 @@ noninteractive creator command still requires an explicit --output.
   host or edits repositories. Host APT package installation is not covered by
   the STL binary rollback transaction, and STL uninstall never uninstalls host
   packages. On error it reports the partial-package-management limitation.
+- Unreleased Issue #101 also bundles a byte-identical copy of the
+  **canonical** installer inside the Go binary (build and CI refuse drift).
+  This allows a real installed `sudo stl menu` to inspect actual missing
+  packages using the canonical read-only requirements action, preview the
+  selected effects, and invoke that same script's `prepare` action only
+  after fresh root/real-terminal confirmation. The installer revalidates
+  owner record, lock and packages independently before any APT operation.
+  Non-root/redirected Create does not execute packages; the Engine still
+  decides actual tunnel readiness. IPsec requires a second explicit
+  acknowledgement of package-side-effects; this is not native-exclusive
+  service provision/admission.
+- After an eligible GRE/IPIP Link is durably committed, canonical
+  `link restore --all` may reload only that Link's on-disk, allowlisted
+  missing `ip_gre`, `ipip` or `fou` module under existing restore
+  maintenance and per-Link locks. No blanket boot module list or global
+  module service is installed. A failed/unknown module restore fails the
+  affected Link, never claims traffic readiness and never unloads a
+  possibly shared driver; actual whole-guest traffic proof is a separate
+  acceptance gate.
 - Unreleased Issue #101 adds a separate `prepare --backends wireguard|ipsec|native|all`
   action to the **canonical exact-tag installer** for an existing,
   installer-owned `/usr/local/bin/stl`. It verifies the installer-owned binary
