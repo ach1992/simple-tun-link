@@ -4,7 +4,7 @@
 
 The published rc.4 pre-release includes the terminal readability and Ubuntu 22.04/systemd 249 persistence compatibility fixes from [Issue #93](https://github.com/ach1992/simple-tun-link/issues/93). The published rc.3 remains unchanged and retains its missing-unit limitation. Use only tagged public release artifacts on operational hosts.
 
-**Current public pre-release:** [v0.1.0-rc.5](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.5) (**Pre-release, not Stable**). It adds clearer five-ping connectivity results, early backend-availability hints and immediately copyable protected WireGuard/IPsec receiver Setup Links after confirmed interactive creation. The rc.4 persistence fix, installer, State v3 and all four backends remain supported. Isolated native Linux validation does **not** prove physical Internet/WAN/NAT-router behavior; test on noncritical servers first.
+**Current public pre-release:** [v0.1.0-rc.6](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.6) (**Pre-release, not Stable**). rc.6 adds clearer backend readiness, opt-in on-demand selected prerequisites, and a safer Update/Uninstall guide. It also carries the previously introduced five-ping quality reports, protected WireGuard/IPsec receiver Setup Links, rc.4 persistence fix and State v3. Missing strongSwan packages still need administrator setup; private IPsec runtime requires separate verified STL-exclusive admission. Isolated Linux validation does **not** prove physical Internet/WAN/NAT-router behavior; test on noncritical servers first.
 
 The installed command is `stl`; `stlink` is an alias for the same program.
 
@@ -29,10 +29,10 @@ GRE keys distinguish tunnels but **do not encrypt traffic**. FOU/GUE are UDP enc
 
 ## 2. Install on both servers
 
-**One-line installer for v0.1.0-rc.5** (run on each server):
+**One-line installer for v0.1.0-rc.6** (run on each server):
 
 ~~~bash
-bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.5/scripts/quick-install.sh | bash -s -- v0.1.0-rc.5'
+bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.6/scripts/quick-install.sh | bash -s -- v0.1.0-rc.6'
 ~~~
 
 This is an explicitly tag-pinned HTTPS bootstrap; review its
@@ -46,6 +46,14 @@ menu automatically** in a real terminal, even when the bootstrap
 script was piped to Bash. It does not install/adopt IPsec services,
 silently edit provider firewall/NAT settings or rewrite host routes.
 Without a terminal, run sudo stl menu after installation.
+
+**On-demand prerequisites in rc.6:** Create checks only the selected backend's
+missing packages. An installed root interactive session can explicitly
+confirm `PREPARE` for eligible native/WireGuard packages and independently
+prepare verified missing GRE/IPIP kernel drivers. Committed Links may reload
+only their own trusted drivers on restore. This never configures a peer,
+firewall or IPsec service automatically; missing strongSwan packages need
+manual administrator work.
 
 To install only GRE/IPIP prerequisites, append native after the
 version argument. **An existing STL installation must use the
@@ -181,7 +189,7 @@ retained private handoff; cleanup after Link removal needs a
 deliberate owner-private file action. Remove still requires a fresh
 confirmation and rejects changed/unowned resources.
 
-These stable CLI commands work in rc.2 and later, including rc.5:
+These stable CLI commands work in rc.2 and later, including rc.6:
 
 ~~~bash
 sudo stl link list --json                  # Saved Links
@@ -205,13 +213,13 @@ not automatically retry possible partial network mutations.
 
 ## 6. Update safely
 
-**To update an already installer-owned STL to v0.1.0-rc.5**, first
+**To update an already installer-owned STL to v0.1.0-rc.6**, first
 quiesce STL mutations and protect a consistent backup of State and
 receiver/sender credential files. Then run the explicit, pinned
 **one-line update** on that server:
 
 ~~~bash
-bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.5/scripts/quick-install.sh | bash -s -- v0.1.0-rc.5 update'
+bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.6/scripts/quick-install.sh | bash -s -- v0.1.0-rc.6 update'
 ~~~
 
 This uses the canonical installer **update** transaction, checks
@@ -219,8 +227,11 @@ existing binary/record ownership before replacement, verifies
 downloaded artifact identity and checksums, and returns to the menu
 after success. It never silently modifies existing tunnel interfaces.
 A fresh installation uses the **install** one-liner in section 2,
-not update. The menu's Update task only provides guidance; it
-does not perform hidden upgrades.
+not update. The menu lists up to three official releases. Only a positively verified
+`immutable:true` GitHub release is eligible for automatic delegation to
+the canonical installer, with installed-root TTY, forward-version and
+fresh `UPDATE` safeguards. Mutable or unverified releases remain manual
+verification guidance; there are no hidden upgrades.
 
 **Important State v3 compatibility warning:** after an rc.2 executable successfully writes **State schema v3** (used for managed local MTU), an older pre-v3 executable **cannot read that State**. **Binary-only rollback is not State rollback.** Before updating hosts with existing Links, quiesce STL mutations and keep a **consistent protected backup** of State **and separate credentials** with a tested recovery path. Do **not** manually edit `schema_version`, drop MTU fields, or delete interfaces/systemd files to force a downgrade. Prefer a compatible roll-forward if recovery is needed; follow the [full update/recovery runbook](docs/INSTALL.md#persisted-state-v3-upgrade-and-safe-rollback-boundary).
 

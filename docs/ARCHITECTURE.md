@@ -599,8 +599,8 @@ must inspect/reconcile unsafe values before retry. Post-start `/proc` process
 environment verification remains independent defense in depth. A verified running
 private service receives its boot edge only after post-start runtime
 admission, with a final owner/origin check. No vendor service is
-disabled, replaced, adopted or restarted. These protections are in
-the unreleased Issue #101 candidate; the published rc.5 is unchanged.
+disabled, replaced, adopted or restarted. These protections first ship
+in rc.6 via reviewed Issue #101; the historical rc.5 remains unchanged.
 
 ### Native-exclusive IPsec operational proof boundary (Issue #7, 2026-10-12)
 
