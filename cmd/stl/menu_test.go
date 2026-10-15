@@ -28,12 +28,10 @@ func TestMenuTasksAndNavigationDoNotCreateState(t *testing.T) {
 		t.Fatalf("menu failed: code=%d err=%q", code, errOut)
 	}
 	for _, item := range []string{
-		"simple-tun-link", "Host:", "OS:", "Kernel:",
-		"Local address candidate:", "Configured Links: 0",
+		"SIMPLE TUN LINK", "Host", "IPv4 candidate", "Tunnels           0 saved",
 		"Create tunnel", "Import setup link", "My tunnels",
 		"Test connectivity", "Settings", "Update", "Uninstall", "Exit",
 		"GRE / Native", "CREATE TUNNEL",
-		"Settings", "Update", "Uninstall",
 		"Update cancelled", "pre-uninstall",
 	} {
 		if !strings.Contains(output, item) {
@@ -60,7 +58,7 @@ func TestMenuConfiguredLinksAreProjectedNotRawState(t *testing.T) {
 	if code != 0 || errOut != "" {
 		t.Fatalf("read-only listing failed: code=%d error=%q", code, errOut)
 	}
-	if !strings.Contains(output, "Configured Links: 1") ||
+	if !strings.Contains(output, "Tunnels           1 saved") ||
 		!strings.Contains(output, link.Addresses.Local.Addr().String()) ||
 		strings.Contains(output, link.DisplayName) {
 		t.Fatal("menu failed Link summary projection or disclosed arbitrary display name")

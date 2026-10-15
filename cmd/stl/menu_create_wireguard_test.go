@@ -31,7 +31,7 @@ func TestGuidedWireGuardCreatesConfirmedProtectedHandoff(t *testing.T) {
 	if code != 0 || stderr.Len() != 0 {
 		t.Fatalf("guided WG failed: %d %s %s", code, out.String(), stderr.String())
 	}
-	if !strings.Contains(out.String(), "Review WireGuard tunnel") || !strings.Contains(out.String(), "WireGuard Link") ||
+	if !strings.Contains(out.String(), "REVIEW / CONFIRM WIREGUARD") || !strings.Contains(out.String(), "WireGuard Link") ||
 		!strings.Contains(out.String(), "SENSITIVE") || strings.Contains(out.String(), "stl://") || len(fake.applies) != 1 {
 		t.Fatalf("guided create bypassed safe public preview/Engine: %s applies=%v", out.String(), fake.applies)
 	}

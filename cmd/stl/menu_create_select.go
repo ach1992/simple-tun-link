@@ -115,20 +115,20 @@ func selectTunnelSubmenu(reader *bufio.Reader, out io.Writer, manual bool) (tunn
 		var options map[string]tunnelOption
 		if manual {
 			options = manualTunnelOptions
-			fmt.Fprintln(out, "\nMANUAL CONNECTION — configure BOTH servers without a Setup Link")
-			fmt.Fprintln(out, "  1  GRE / Native (unencrypted; optional shared GRE key)")
-			fmt.Fprintln(out, "  2  IPIP / Native (unencrypted)")
+			menuScreen(out, "Manual two-server configuration")
+			menuOption(out, "1", "GRE / Native", "No encryption; optional key")
+			menuOption(out, "2", "IPIP / Native", "No encryption")
 		} else {
 			options = advancedTunnelOptions
-			fmt.Fprintln(out, "\nADVANCED TUNNEL TYPES")
-			fmt.Fprintln(out, "  1  GRE / FOU           (unencrypted UDP)")
-			fmt.Fprintln(out, "  2  GRE / GUE           (unencrypted UDP)")
-			fmt.Fprintln(out, "  3  IPIP / FOU          (unencrypted UDP)")
-			fmt.Fprintln(out, "  4  IPIP / GUE          (unencrypted UDP)")
-			fmt.Fprintln(out, "  5  IPsec / ESP         (encrypted; strongSwan required)")
-			fmt.Fprintln(out, "  6  IPsec / NAT-T       (encrypted UDP; strongSwan required)")
+			menuScreen(out, "Advanced tunnel types")
+			menuOption(out, "1", "GRE / FOU", "Unencrypted over UDP")
+			menuOption(out, "2", "GRE / GUE", "Unencrypted over UDP")
+			menuOption(out, "3", "IPIP / FOU", "Unencrypted over UDP")
+			menuOption(out, "4", "IPIP / GUE", "Unencrypted over UDP")
+			menuOption(out, "5", "IPsec / ESP", "Encrypted; requires strongSwan")
+			menuOption(out, "6", "IPsec / NAT-T", "Encrypted UDP; strongSwan")
 		}
-		fmt.Fprintln(out, "  0  Back to tunnel choices")
+		menuOption(out, "0", "Back", "Tunnel choices")
 		fmt.Fprint(out, "Choose a type: ")
 		value, err := readMenuAnswer(reader)
 		if errors.Is(err, io.EOF) {
@@ -152,20 +152,20 @@ func selectTunnelSubmenu(reader *bufio.Reader, out io.Writer, manual bool) (tunn
 // menu number. Manual and unusual transports have their own short submenus.
 func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, options *runtimeOptions) int {
 	for {
-		fmt.Fprintln(out, "\nCREATE TUNNEL — choose the connection type:")
-		fmt.Fprintln(out, "  1  GRE / Native        (default: simplest, not encrypted)")
-		fmt.Fprintln(out, "  2  WireGuard / UDP     (encrypted)")
-		fmt.Fprintln(out, "  3  IPIP / Native       (not encrypted)")
-		fmt.Fprintln(out, "  4  Manual connection   (configure both servers without Setup Link)")
-		fmt.Fprintln(out, "  5  Advanced types      (FOU/GUE/IPsec)")
-		fmt.Fprintln(out, "  0  Back to main menu")
+		menuScreen(out, "CREATE TUNNEL / choose a type")
+		menuOption(out, "1", "GRE / Native", "Default; not encrypted")
+		menuOption(out, "2", "WireGuard / UDP", "Encrypted")
+		menuOption(out, "3", "IPIP / Native", "Not encrypted")
+		menuOption(out, "4", "Manual connection", "Set up both ends by hand")
+		menuOption(out, "5", "Advanced types", "FOU / GUE / IPsec")
+		menuOption(out, "0", "Back", "Main menu")
 		fmt.Fprint(out, "Tunnel type [1]: ")
 		value, err := readMenuAnswer(reader)
 		if errors.Is(err, io.EOF) {
 			return 0
 		}
 		if err != nil {
-			fmt.Fprintln(out, "Enter a short number from the list.")
+			menuNotice(out, "WARNING", "Enter a listed tunnel number.")
 			continue
 		}
 		if value == "0" || strings.EqualFold(value, "q") {
@@ -190,10 +190,11 @@ func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		default:
 			picked, ok = basicTunnelOptions[value]
 			if !ok {
-				fmt.Fprintln(out, "Choose 1, 2, 3, 4, 5, or 0 to go back.")
+				menuNotice(out, "WARNING", "Choose one of the listed numbers.")
 				continue
 			}
 		}
+		menuScreen(out, "New tunnel / setup")
 		switch picked.backend {
 		case domain.BackendWireGuard:
 			return menuCreateWireGuard(input, reader, out, errOut, options)

@@ -30,7 +30,7 @@ type createPrompts struct {
 }
 
 func (p createPrompts) ask(prompt string) (string, error) {
-	fmt.Fprint(p.out, prompt)
+	fmt.Fprint(p.out, menuPaint(p.out, menuCyan, prompt))
 	answer, err := readMenuAnswer(p.reader)
 	if err != nil {
 		return "", err
@@ -197,7 +197,8 @@ func configureGREAdvanced(p createPrompts, options *domain.GREOptions) error {
 // diagnostic/ownership logic are all reused; it never runs network mutations.
 func menuCreatePlain(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, options *runtimeOptions, backend domain.Backend, mode domain.Encapsulation, manualPair bool) int {
 	p := createPrompts{reader: reader, out: out, errOut: errOut}
-	fmt.Fprintf(out, "\nCreate %s / %s. Type q to go back at any question.\n", backend, mode)
+	menuSection(out, fmt.Sprintf("Create %s / %s", backend, mode))
+	fmt.Fprintln(out, "Type q to go back at any question.")
 	fmt.Fprintln(out, "This type is NOT encrypted; use WireGuard for confidential traffic.")
 	peer, err := askPeerUnderlay(p)
 	if err != nil {
@@ -219,9 +220,10 @@ func menuCreatePlain(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		fmt.Fprintf(errOut, "%s/%s is not available on this server. Check kernel/iproute2 support (and FOU/GUE modules if selected). No tunnel created.\n", backend, mode)
 		return 4
 	}
-	fmt.Fprintf(out, "THIS server's connection IP: %s (detected automatically from route to the OTHER server)\n", route.Source)
-	fmt.Fprintf(out, "OTHER server's connection IP: %s\n", peer)
-	fmt.Fprintf(out, "Network device: %s (gateway %s); no need to type THIS server's IP.\n", safeMenuText(route.Device), route.Gateway)
+	menuSection(out, "Connection settings")
+	menuField(out, "This server", route.Source.String()+" (automatic)")
+	menuField(out, "Other server", peer.String())
+	menuField(out, "Network device", safeMenuText(route.Device))
 
 	root := createStateRoot(options)
 	if root == "" {
@@ -323,12 +325,14 @@ func menuCreatePlain(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		return 2
 	}
 
-	fmt.Fprintln(out, "\nReview your tunnel before making any changes:")
-	fmt.Fprintf(out, "  Type: %s / %s\n  THIS server: %s (tunnel IP %s)\n  OTHER server: %s (tunnel IP %s)\n",
-		link.Backend, link.Encapsulation, route.Source, link.Addresses.Local,
-		peer, link.Addresses.Peer)
-	fmt.Fprintln(out, "  MTU: Auto estimates a safe local value now; actual peer/MTU tests run AFTER both sides are connected.")
-	fmt.Fprintln(out, "  Transport: no encryption; do not send secrets over GRE/IPIP.")
+	menuScreen(out, "Review / confirm tunnel")
+	menuField(out, "Type", fmt.Sprintf("%s / %s", link.Backend, link.Encapsulation))
+	menuField(out, "Local endpoint", route.Source.String())
+	menuField(out, "Remote endpoint", peer.String())
+	menuField(out, "Local tunnel IP", link.Addresses.Local.String())
+	menuField(out, "Remote tunnel IP", link.Addresses.Peer.String())
+	menuNotice(out, "INFO", "Auto MTU is only a local estimate. Test the peer after pairing.")
+	menuNotice(out, "WARNING", "GRE/IPIP is not encrypted. Do not send secrets.")
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
 		fmt.Fprintln(errOut, "Cannot establish a fresh terminal confirmation; nothing applied.")
 		return 2
@@ -365,26 +369,27 @@ func menuCreatePlain(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		fmt.Fprintln(errOut, "Cannot encode Link intent; nothing applied.")
 		return 1
 	}
-	fmt.Fprintln(out, "Creating the local tunnel and saving reboot restoration...")
+	menuScreen(out, "Applying / saving local tunnel")
+	menuSection(out, "Saving local tunnel and reboot restoration")
 	if code := linkLifecycleCommand([]string{"ensure", "--stdin"}, bytes.NewReader(payload), out, errOut, options); code != 0 {
 		fmt.Fprintln(errOut, "Tunnel could not be confirmed. Do NOT immediately recreate the same ID; check saved Links and persistence/recovery guidance below.")
 		fmt.Fprintln(errOut, "If stage=persistence: check that systemd is PID 1, /etc/systemd/system and /usr/local/bin/stl have trusted root ownership, and systemctl can read its unit. Do not manually delete a possibly owned unit.")
 		return code
 	}
 	if manualPair {
-		fmt.Fprintln(out, "\nNEXT: configure the OTHER server using the details below (No Setup Link is needed):")
+		menuNotice(out, "OK", "Local tunnel saved. No Setup Link is needed; configure the other server manually.")
 		printManualConnectionDetails(out, link)
 		fmt.Fprintln(out, "You can see these details again in My tunnels -> Connection details.")
 		fmt.Fprintln(out, "You can also export a GRE/IPIP Setup Link later in My tunnels -> Share.")
 	} else {
-		fmt.Fprintln(out, "\nShare this non-secret Setup Link with the OTHER server (available again from Manage -> Share):")
-		if code := linkExportCommand([]string{"export", string(link.ID)}, out, errOut, options); code != 0 {
+		menuNotice(out, "OK", "Local tunnel saved. Copy the Setup Link below to the other server.")
+		if code := menuSharePlainLink(link.ID, out, errOut, options); code != 0 {
 			fmt.Fprintln(errOut, "Local Link was ensured, but setup export failed; use stl link export with this Link ID.")
 			return code
 		}
 		fmt.Fprintln(out, "On the other server: STL menu -> Import -> Plaintext GRE/IPIP -> paste -> review -> YES.")
 	}
-	fmt.Fprintln(out, "Local observed status (does not prove end-to-end connectivity):")
+	menuSection(out, "Local status / not a remote test")
 	if code := linkReadCommand([]string{"status", string(link.ID)}, out, errOut, options); code != 0 {
 		fmt.Fprintln(errOut, "Local Link was ensured, but live status could not be verified. Reconcile before relying on it.")
 		return code

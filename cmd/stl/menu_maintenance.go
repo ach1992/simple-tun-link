@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"io"
 	"regexp"
+	"runtime"
 
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/version"
@@ -35,17 +37,24 @@ func menuSettings(out, errOut io.Writer, options *runtimeOptions) int {
 		fmt.Fprintln(errOut, "Settings unavailable: saved state cannot be read; no changes made.")
 		return 1
 	}
-	fmt.Fprintln(out, "\nSettings (read-only)")
-	fmt.Fprintf(out, "  STL version: %s\n", safeMenuText(version.Version))
-	fmt.Fprintf(out, "  Local state root: %s\n", safeMenuText(root))
-	fmt.Fprintf(out, "  Saved Links: %d (not a connectivity check)\n", len(snapshot.Links))
-	fmt.Fprintln(out, "  Per-Link settings belong to Create/Ensure; no global host settings are changed here.")
+	menuSection(out, "Settings / read-only")
+	menuField(out, "STL version", safeMenuText(version.Version))
+	menuField(out, "Repository", "github.com/ach1992/simple-tun-link")
+	menuField(out, "OS / Architecture", runtime.GOOS+" / "+runtime.GOARCH)
+	var info unix.Utsname
+	if unix.Uname(&info) == nil {
+		menuField(out, "Kernel", safeMenuText(unix.ByteSliceToString(info.Release[:])))
+	}
+	menuField(out, "IPv4 candidate", safeMenuText(localAddressCandidate()))
+	menuField(out, "State directory", safeMenuText(root))
+	menuField(out, "Saved tunnels", fmt.Sprintf("%d (not a connection test)", len(snapshot.Links)))
+	menuNotice(out, "INFO", "Advanced tunnel/MTU settings belong to each tunnel. No host settings changed.")
 	return 0
 }
 
 func menuUpdate(reader *bufio.Reader, out, errOut io.Writer) int {
-	fmt.Fprintln(out, "\nUpdate — guided handoff to the verified release installer")
-	fmt.Fprintf(out, "Current binary version: %s\n", safeMenuText(version.Version))
+	menuSection(out, "Update / read-only instructions")
+	menuField(out, "Installed binary", safeMenuText(version.Version))
 	fmt.Fprintln(out, "This menu does not fetch or run executable code, and does not change the current installation.")
 	fmt.Fprintln(out, "Verify an official release exists at https://github.com/ach1992/simple-tun-link/releases")
 	fmt.Fprint(out, "Exact published release tag (e.g. v0.1.0; Enter cancels): ")
@@ -80,10 +89,10 @@ func menuUninstall(out, errOut io.Writer, options *runtimeOptions) int {
 		fmt.Fprintln(errOut, "Uninstall blocked: saved state cannot be inspected. No files were removed.")
 		return 1
 	}
-	fmt.Fprintln(out, "\nUninstall — safe operator handoff")
+	menuSection(out, "Uninstall / read-only instructions")
 	fmt.Fprintln(out, "This menu never deletes Links, routes, firewall rules, services or STL files.")
 	if len(snapshot.Links) != 0 {
-		fmt.Fprintf(out, "BLOCKED: %d configured Link(s) remain in saved state.\n", len(snapshot.Links))
+		menuNotice(out, "WARNING", fmt.Sprintf("BLOCKED: %d configured Link(s) remain; uninstall requires their safe removal.", len(snapshot.Links)))
 		fmt.Fprintln(out, "Review each Link, then explicitly remove it using the canonical Engine:")
 		for _, record := range snapshot.Links {
 			id := record.Desired.ID

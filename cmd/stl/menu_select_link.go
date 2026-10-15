@@ -29,20 +29,20 @@ func savedMenuLinks(options *runtimeOptions) ([]state.LinkRecord, error) {
 // the Engine still verifies exact owner and expected desired Link at removal.
 func chooseMenuLink(reader *bufio.Reader, out io.Writer, links []state.LinkRecord, allowAll bool) (domain.LinkID, bool, error) {
 	if len(links) == 0 {
-		fmt.Fprintln(out, "No saved tunnels on this server yet. Create one from the main menu.")
+		menuNotice(out, "INFO", "No saved tunnels. First create a tunnel or import a Setup Link.")
 		return "", false, nil
 	}
-	fmt.Fprintln(out, "\nSaved tunnels on THIS server (not an active connection test):")
+	menuSection(out, "Saved tunnels / not a connection test")
 	for i, record := range links {
 		l := record.Desired
-		fmt.Fprintf(out, "  %d  %-10s %-6s   %s -> %s\n",
-			i+1, safeMenuText(string(l.Backend)), safeMenuText(string(l.Encapsulation)),
-			l.Addresses.Local.Addr(), l.Addresses.Peer.Addr())
+		menuOption(out, strconv.Itoa(i+1),
+			fmt.Sprintf("%s / %s", safeMenuText(string(l.Backend)), safeMenuText(string(l.Encapsulation))),
+			fmt.Sprintf("%s -> %s", l.Addresses.Local.Addr(), l.Addresses.Peer.Addr()))
 	}
 	if allowAll {
-		fmt.Fprintln(out, "  a  Check all tunnels")
+		menuOption(out, "a", "Check all tunnels", "Read-only")
 	}
-	fmt.Fprintln(out, "  0  Back")
+	menuOption(out, "0", "Back", "Main menu")
 	for {
 		fmt.Fprint(out, "Choose tunnel number: ")
 		raw, err := readMenuAnswer(reader)
@@ -89,7 +89,8 @@ func menuDiagnose(_ io.Reader, reader *bufio.Reader, out, errOut io.Writer, opti
 	if !all && id == "" {
 		return 0
 	}
-	fmt.Fprintln(out, "Read-only check: tests local tunnel identity and bounded peer reachability; it does not repair anything.")
+	menuSection(out, "Read-only connectivity check")
+	menuNotice(out, "INFO", "Tests local identity and bounded peer reachability; never repairs anything.")
 	var code int
 	if all {
 		code = linkDiagnoseCommand([]string{"diagnose", "--all"}, out, errOut, options)

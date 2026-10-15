@@ -4,6 +4,19 @@
 set -Eeuo pipefail
 umask 077
 repo="$(cd -- "$(dirname -- "$0")/.." && pwd -P)"
+# A documented release bump must preserve the tag-pinned bootstrap and
+# installer identity without retaining an outdated hardcoded test fixture.
+mapfile -t published_commands < <(grep '^bash -o pipefail -c ' "$repo/README.md")
+[[ ${#published_commands[@]} -eq 2 ]] || {
+  echo 'README must contain precisely two pipefail-safe quick commands.' >&2
+  exit 1
+}
+if [[ "${published_commands[0]}" =~ /(v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+)/scripts/quick-install\.sh ]]; then
+  export STL_TEST_PUBLIC_TAG="${BASH_REMATCH[1]}"
+else
+  echo 'Public one-liner must pin a well-formed immutable RC tag.' >&2
+  exit 1
+fi
 scratch=$(mktemp -d)
 trap 'rm -rf -- "$scratch"' EXIT
 mkdir -p "$scratch/bin"
@@ -21,7 +34,7 @@ while (($#)); do
 done
 # Fake curl models the first-hop stdout and second-hop private download.
 # Reject unexpected URLs: no real network traffic is used in this test.
-if [[ "$url" == 'https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.3/scripts/quick-install.sh' ]]; then
+if [[ "$url" == "https://raw.githubusercontent.com/ach1992/simple-tun-link/$STL_TEST_PUBLIC_TAG/scripts/quick-install.sh" ]]; then
   [[ -z "$destination" ]] || exit 44
   case "${STL_TEST_FIRST_HOP:-}" in
     no-bytes) exit 47 ;;
@@ -30,11 +43,10 @@ if [[ "$url" == 'https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.
     *) exit 49 ;;
   esac
 fi
-case "$url" in
-  https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.123/scripts/install.sh) ;;
-  https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.3/scripts/install.sh) ;;
-  *) exit 44 ;;
-esac
+if [[ "$url" != 'https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.123/scripts/install.sh' &&
+      "$url" != "https://raw.githubusercontent.com/ach1992/simple-tun-link/$STL_TEST_PUBLIC_TAG/scripts/install.sh" ]]; then
+  exit 44
+fi
 [[ -n "$destination" ]] || exit 44
 [[ -z "$STL_TEST_DOWNLOAD_FAIL" ]] || exit 45
 if [[ -n "$STL_TEST_SYNTAX_FAIL" ]]; then
@@ -134,13 +146,13 @@ fi
 # Execute the ACTUAL published README install and update one-liners with
 # a local fake curl. The pipeline itself (not just the inner script) must
 # fail if the first HTTPS request produces zero or truncated bytes.
-mapfile -t published_commands < <(grep '^bash -o pipefail -c ' "$repo/README.md")
-[[ ${#published_commands[@]} -eq 2 ]] || {
-  echo 'README must contain precisely two pipefail-safe quick commands.' >&2
-  exit 1
-}
 for idx in 0 1; do
   published_cmd="${published_commands[$idx]}"
+  [[ "$published_cmd" == *"/$STL_TEST_PUBLIC_TAG/scripts/quick-install.sh"* &&
+     "$published_cmd" == *"bash -s -- $STL_TEST_PUBLIC_TAG"* ]] || {
+    echo 'Published installer and update commands must pin the same current RC tag.' >&2
+    exit 1
+  }
   grep -Fx -- "$published_cmd" "$repo/docs/INSTALL.md" >/dev/null || {
     echo 'User and maintainer public bootstrap commands disagree.' >&2
     exit 1
@@ -154,7 +166,7 @@ for idx in 0 1; do
   if (( EUID == 0 )); then
     grep -q 'test fake installer' "$STL_TEST_EXECUTIONS"
   else
-    grep -Eq "^sudo bash .* $action --version v0.1.0-rc.3 --backends native,wireguard$" "$STL_TEST_EXECUTIONS"
+    grep -Eq "^sudo bash .* $action --version $STL_TEST_PUBLIC_TAG --backends native,wireguard$" "$STL_TEST_EXECUTIONS"
   fi
   for first_hop_failure in no-bytes truncated; do
     : > "$STL_TEST_EXECUTIONS"

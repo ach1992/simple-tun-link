@@ -103,7 +103,8 @@ func TestSystemdPersistenceRefusesEnabledIdentityWithoutOwnedFile(t *testing.T) 
 	unitDir := t.TempDir()
 	manager := SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil }}
 	_, _, err := manager.EnsureRestore(context.Background(), "/usr/local/bin/stl")
-	if err == nil || !strings.Contains(err.Error(), "without an STL-owned unit file") {
+	kind, classified := RestoreFailureOf(err)
+	if err == nil || !classified || kind != RestoreUnitConflict || !strings.Contains(errors.Unwrap(err).Error(), "without an STL-owned unit file") {
 		t.Fatalf("expected actual enabled-without-owned-file branch, got %v", err)
 	}
 	if len(runner.commands) != 1 || !strings.HasPrefix(runner.commands[0], "systemctl is-enabled") {

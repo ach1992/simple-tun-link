@@ -38,16 +38,16 @@ func askManualGREKey(p createPrompts) (domain.GREOptions, error) {
 // evidence that the remote host is configured or reachable. No credential
 // store is read and no private/PSK key is reconstructed.
 func printManualConnectionDetails(out io.Writer, l domain.Link) {
-	fmt.Fprintln(out, "\n========= TWO-SERVER CONNECTION DETAILS (saved settings) =========")
-	fmt.Fprintf(out, "Tunnel type: %s / %s\n", l.Backend, l.Encapsulation)
-	fmt.Fprintf(out, "Saved tunnel ID: %s (use only in advanced CLI)\n", l.ID)
-	fmt.Fprintf(out, "THIS server connection IPv4:  %s\n", l.Underlay.Local)
-	fmt.Fprintf(out, "OTHER server connection IPv4: %s\n", l.Underlay.Peer)
-	fmt.Fprintf(out, "THIS server tunnel/private IP:  %s\n", l.Addresses.Local)
-	fmt.Fprintf(out, "OTHER server tunnel/private IP: %s\n", l.Addresses.Peer)
-	fmt.Fprintf(out, "Local MTU: %s (THIS server only, remote can differ)\n", humanMTUPolicy(l.MTU))
+	menuSection(out, "Two-server connection details / saved")
+	menuField(out, "Type", fmt.Sprintf("%s / %s", l.Backend, l.Encapsulation))
+	menuField(out, "Saved ID", string(l.ID)+" (advanced CLI)")
+	menuField(out, "Local endpoint", l.Underlay.Local.String())
+	menuField(out, "Remote endpoint", l.Underlay.Peer.String())
+	menuField(out, "Local tunnel IP", l.Addresses.Local.String())
+	menuField(out, "Remote tunnel IP", l.Addresses.Peer.String())
+	menuField(out, "Local MTU", humanMTUPolicy(l.MTU))
 
-	fmt.Fprintln(out, "\nCopy these values into the OTHER server when configuring it manually:")
+	menuSection(out, "Manual setup on the other server")
 	fmt.Fprintf(out, "  Other server's PEER connection IP: %s  (THIS server)\n", l.Underlay.Local)
 	fmt.Fprintf(out, "  Other server's OWN tunnel IP:      %s\n", l.Addresses.Peer.Addr())
 	fmt.Fprintf(out, "  Other server's PEER tunnel IP:     %s\n", l.Addresses.Local.Addr())
@@ -91,8 +91,8 @@ func printManualConnectionDetails(out io.Writer, l domain.Link) {
 	default:
 		fmt.Fprintln(out, "  This backend is not supported for manual setup; use its canonical Setup Link.")
 	}
-	fmt.Fprintln(out, "\nLocal status is NOT a remote connectivity test. Verify routes/firewalls and both peers before using.")
-	fmt.Fprintln(out, "================================================================")
+	menuNotice(out, "WARNING", "Saved settings are NOT a remote connectivity test. Verify both peers.")
+
 }
 
 func humanMTUPolicy(m domain.MTUPolicy) string {

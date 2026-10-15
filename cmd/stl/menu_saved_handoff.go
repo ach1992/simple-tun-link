@@ -213,7 +213,8 @@ func menuSensitiveHandoffAction(input io.Reader, reader *bufio.Reader, out, errO
 		fmt.Fprintln(out, "The ACTIVE tunnel and its current keys remain unchanged, but this same receiver offer")
 		fmt.Fprintln(out, "cannot be regenerated after deletion. Keep your own offline copy if needed.")
 	} else {
-		fmt.Fprintln(out, "\nThe receiver Setup Link contains a PRIVATE credential.")
+		menuSection(out, "Protected Setup Link / private credential")
+		fmt.Fprintln(out, "The receiver Setup Link contains a PRIVATE credential.")
 		fmt.Fprintln(out, "Displaying it is intentional: anyone viewing your terminal/screen/history can copy it.")
 		fmt.Fprintln(out, "Only display on a private terminal; it is not printed by Status or Diagnostics.")
 	}
@@ -240,7 +241,7 @@ func menuSensitiveHandoffAction(input io.Reader, reader *bufio.Reader, out, errO
 			fmt.Fprintln(errOut, "Protected handoff deletion could not be confirmed: "+err.Error())
 			return 1
 		}
-		fmt.Fprintln(out, "Protected Setup Link deleted; the tunnel and its local credentials were NOT changed.")
+		menuNotice(out, "OK", "Protected Setup Link deleted; the tunnel and its local credentials were NOT changed.")
 		return 0
 	}
 	encoded, err := validatedSavedProtectedMenuOffer(options, selected)
@@ -249,7 +250,8 @@ func menuSensitiveHandoffAction(input io.Reader, reader *bufio.Reader, out, errO
 		fmt.Fprintln(out, "If this Link was created in an older version, use its original private handoff file. No new credentials were generated.")
 		return 1
 	}
-	fmt.Fprintln(out, "\nSENSITIVE Setup Link — copy directly to your trusted OTHER server:")
+	menuScreen(out, "Sensitive Setup Link / handle privately")
+	menuNotice(out, "WARNING", "SENSITIVE Setup Link; the COMPLETE line below contains secret credentials. Share only privately.")
 	if _, err := io.WriteString(out, encoded+"\n"); err != nil {
 		fmt.Fprintln(errOut, "Could not display the complete protected Setup Link.")
 		return 1

@@ -95,7 +95,7 @@ func TestSystemctlReloadFailureDoesNotRollbackByteIdenticalExternalReplacement(t
 	runner := &replacingUnitRunner{t: t, path: path, saved: filepath.Join(dir, "owned-before-runner"), replaceAfter: "daemon-reload", failReplacementCommand: true}
 	p.Runner = runner
 	_, _, err := p.EnsureRestore(context.Background(), "/opt/stl/stl")
-	if err == nil || !strings.Contains(err.Error(), "compensation uncertain") {
+	if err == nil || !testRestoreCause(err, RestoreDaemonReloadFailed, "compensation uncertain") {
 		t.Fatalf("same-content replacement during reload was treated as owned: %v", err)
 	}
 	now, e := os.Lstat(path)

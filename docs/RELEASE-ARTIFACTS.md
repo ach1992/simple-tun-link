@@ -19,6 +19,16 @@ separately by checking its immutable tag, exact packaged binaries,
 SHA256SUMS and actual installed executable. Historical rc.2 guest
 evidence must not be presented as a new rc.3 tagged-guest boot test.
 
+[Issue #93](https://github.com/ach1992/simple-tun-link/issues/93)
+and [PR #94](https://github.com/ach1992/simple-tun-link/pull/94)
+control the next **v0.1.0-rc.4 public pre-release**: one-screen operator
+presentation and fail-closed Ubuntu 22.04/systemd 249 absent-unit
+inspection. After independent source review and integration, rc.4
+needs exact-tag reproducible builds, public download checks and a
+real rc.3-to-rc.4 disposable installation/update. Neither a prior
+release E2E nor a local build proves public release artifact identity.
+External WAN/NAT and on-host persistence acceptance remain Owner-run.
+
 ## Local build
 
 From a **clean Git source tree**, with the pinned Go toolchain and GNU

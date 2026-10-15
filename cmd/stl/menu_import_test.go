@@ -40,8 +40,8 @@ func TestMenuImportConfirmedGREAndIdempotency(t *testing.T) {
 		t.Fatalf("menu import failed: code=%d output=%q errors=%q", code, output, errOut)
 	}
 	for _, item := range []string{
-		"Review the tunnel", "Type: gre / fou", "THIS server",
-		"GRE: no encryption", "changes applied and verified", "already matches desired state",
+		"IMPORT / REVIEW BEFORE APPLYING", "Type              gre / fou", "Local endpoint",
+		"GRE is unencrypted", "changes applied and verified", "already matches desired state",
 	} {
 		if !strings.Contains(output, item) {
 			t.Fatalf("menu omitted necessary review or result %q", item)

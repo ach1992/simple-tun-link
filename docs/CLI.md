@@ -1,15 +1,62 @@
 # STL CLI — operator menus and stable machine commands
 
-The human menu below is part of the
-[v0.1.0-rc.3 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.3).
+The compact human menu below ships with the
+[v0.1.0-rc.4 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.4) after publication.
 The old rc.2 executable retains its older menu. Versioned
 noninteractive machine CLI/JSON contracts remain unchanged.
 
-Current menu choices:
+## Interactive terminal presentation (Issue #93; rc.4)
 
-- Start: stl menu (or stl in an interactive terminal), with a concise
-  version/repository/host/connection IP/kernel/saved Link count banner.
-  The banner is a local snapshot, never peer reachability proof.
+The following improvements were developed after rc.3 for the rc.4
+pre-release. They do **not** change an installed rc.3 executable or
+prove live WAN connectivity on the Owner's hosts.
+
+On a real compatible interactive terminal, STL redraws a single screen
+at a time rather than appending repeated menus. Human output uses
+semantic colors (blue section names, cyan selections/values, green
+confirmed success, yellow warnings, red failures), aligned labels and
+menu columns. Each action's result (including an incomplete operation,
+recovery guidance or the complete copyable Setup Link) remains visible
+until an operator presses Enter to return; confirmation for any mutation
+still requires the separate fresh **YES/REMOVE/SHOW/DELETE** gates.
+
+NO_COLOR (set to any value), CLICOLOR=0, TERM=dumb, or redirected
+stdout safely disable color as applicable. TERM=dumb / non-TTY also
+disable screen-clearing escapes. To retain an append-only interactive
+display for capture/troubleshooting, set STL_NO_CLEAR=1. Only the
+visible screen is cleared, not scrollback. Machine CLI/JSON never
+contains terminal color or screen-control escapes. Numeric input,
+TTY-only secret disclosure, local-versus-peer health distinctions and
+the canonical Engine's authority remain unchanged.
+
+| Journey | Human-visible step | Important safety boundary |
+|---|---|---|
+| Home | Version, sanitized host, IPv4 candidate, saved count, aligned tasks | Saved is **not** connected; source route rechecked at setup |
+| Create guided | Backend -> peer -> tunnel IPs -> optional Advanced -> clean preview -> YES -> result | No pre-confirmation mutation |
+| Create manual | GRE/IPIP Native, reciprocal endpoints, optional numeric GRE receive key | GRE key is not encryption |
+| WireGuard/IPsec | Capability and UDP setup -> review -> YES -> protected receiver offer instructions | Secret retrieval requires saved identity and fresh private SHOW |
+| Import | Plaintext or hidden protected paste -> reversed IP preview -> YES -> result | Full link required; sensitive payloads never shown by preview |
+| Manage | Numbered saved list -> selected Link actions -> result -> Enter | Status read-only; Remove is fresh TTY-only confirmation |
+| Share / Delete handoff | One uncluttered copy line; protected SHOW or DELETE separately | Never regenerate deleted receiver keys |
+| Diagnose | One Link/all -> read-only observations -> explicit next step | No automatic repair or false peer-healthy claim |
+| Settings / maintenance | Read-only host detail, update/uninstall guidance | No implicit host modification |
+| Incomplete operation | Stage, stable reason, rollback uncertainty, read-only next check | Never silently retry or delete a possibly owned unit |
+
+For failure classification, the new source may identify the specific
+trusted persistence check that failed (for example
+restore_enablement_unverified or restore_unit_identity_conflict).
+rollback_completed_unverified **still means** compensation reported
+success but its resulting host state was not independently re-verified.
+It is not the original fault. Never infer a live host's cause from that
+recovery code alone; see [read-only host checks](INSTALL.md).
+
+Core operator choices (rc.4):
+
+- Start: stl menu (or stl in an interactive terminal). The new compact
+  Home includes version, sanitized host, local IPv4 **candidate**, and
+  saved tunnel count. More detailed OS/kernel/repository facts appear
+  under Settings. The published rc.3 still prints a larger banner.
+  Neither presentation is evidence of peer reachability.
 - 1 Create tunnel: GRE Native (Enter/default), WireGuard, and IPIP
   Native. Less common FOU/GUE/IPsec live under Advanced. Without-Link
   GRE/IPIP Native lives under Manual connection. Accept suggested private
@@ -213,7 +260,7 @@ under locks. A valid plaintext token intentionally appears in the
 operator's terminal echo, so use protected mode for sensitive offers.
 No Input/preview error echoes credential bytes or tries automatic
 host mutation. Old rc.2 retains its older separate menu and prompt
-contract; this page describes the rc.3 interface.
+contract; the rc.4 screens retain these rc.3 pairing semantics.
 
 Quick Link payloads provide **no confidentiality or authenticated sender**;
 verify the offer with the intended peer through a trusted channel. Sensitive

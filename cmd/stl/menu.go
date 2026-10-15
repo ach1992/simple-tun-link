@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"runtime"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -37,30 +36,21 @@ func printMenuHeader(out io.Writer, options *runtimeOptions) {
 	if err != nil {
 		host = "unknown"
 	}
-	var u unix.Utsname
-	kernel := "unknown"
-	if unix.Uname(&u) == nil {
-		kernel = unix.ByteSliceToString(u.Release[:])
-	}
-	fmt.Fprintf(out, "simple-tun-link (STL)  |  Version: %s\n", safeMenuText(version.Version))
-	fmt.Fprintln(out, "Repository: https://github.com/ach1992/simple-tun-link")
-	fmt.Fprintf(out, "Host: %s | OS: %s/%s | Kernel: %s\n", safeMenuText(host), runtime.GOOS, runtime.GOARCH, safeMenuText(kernel))
-	fmt.Fprintf(out, "Local address candidate: %s (route verified during setup)\n", safeMenuText(localAddressCandidate()))
-
 	root := state.DefaultRoot
 	if options != nil {
 		root = options.stateRoot
 	}
-	if root == "" {
-		fmt.Fprintln(out, "Configured Links: unavailable")
-		return
+	count := "unavailable"
+	if root != "" {
+		if snapshot, err := state.NewFileStore(root).Load(context.Background()); err == nil {
+			count = fmt.Sprintf("%d saved (not yet a connectivity test)", len(snapshot.Links))
+		}
 	}
-	snapshot, err := state.NewFileStore(root).Load(context.Background())
-	if err != nil {
-		fmt.Fprintln(out, "Configured Links: unavailable (state cannot be read)")
-	} else {
-		fmt.Fprintf(out, "Configured Links: %d (saved; use Test connectivity for live status)\n", len(snapshot.Links))
-	}
+	fmt.Fprintf(out, "%s  %s\n", menuPaint(out, menuBlue, "SIMPLE TUN LINK"), menuPaint(out, menuCyan, version.Version))
+	fmt.Fprintln(out, menuPaint(out, menuDim, strings.Repeat("-", 55)))
+	menuField(out, "Host", safeMenuText(host))
+	menuField(out, "IPv4 candidate", safeMenuText(localAddressCandidate()))
+	menuField(out, "Tunnels", count)
 }
 
 // Kernel/host/interface labels must not inject terminal control or
@@ -136,6 +126,8 @@ func readMenuAnswer(in *bufio.Reader) (string, error) {
 
 // The menu calls the existing command surfaces; it does not reimplement
 // domain validation, backend ownership, diagnostics, pairing or mutation.
+// Each interactive frame replaces the previous frame. Completed actions
+// Each interactive frame replaces the previous frame. Completed actions
 func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions) int {
 	if input == nil {
 		fmt.Fprintln(errOut, "menu requires an input stream")
@@ -143,27 +135,34 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 	}
 	reader := bufio.NewReader(input)
 	for {
-		fmt.Fprintln(out, "\n------------------------------------------------------------")
+		menuScreen(out, "")
 		printMenuHeader(out, options)
-		fmt.Fprintln(out, "\nMAIN MENU")
-		fmt.Fprintln(out, "  1  Create tunnel       (choose GRE / IPIP / WireGuard / IPsec)")
-		fmt.Fprintln(out, "  2  Import setup link   (join an existing tunnel)")
-		fmt.Fprintln(out, "  3  My tunnels          (status / share / test / remove)")
-		fmt.Fprintln(out, "  4  Test connectivity   (read-only)")
-		fmt.Fprintln(out, "  5  Settings           (read-only)")
-		fmt.Fprintln(out, "  6  Update             (guided)")
-		fmt.Fprintln(out, "  7  Uninstall          (guided)")
-		fmt.Fprintln(out, "  8  Exit")
-		fmt.Fprint(out, "Choose a task: ")
+		menuSection(out, "Main menu")
+		menuOption(out, "1", "Create tunnel", "Set up a new connection")
+		menuOption(out, "2", "Import setup link", "Join the other server")
+		menuOption(out, "3", "My tunnels", "View, share, test, remove")
+		menuOption(out, "4", "Test connectivity", "Read-only connection checks")
+		menuOption(out, "5", "Settings", "Host and STL information")
+		menuOption(out, "6", "Update", "Show verified update steps")
+		menuOption(out, "7", "Uninstall", "Show safe removal steps")
+		menuOption(out, "8", "Exit", "")
+		fmt.Fprint(out, "\nChoose a task: ")
 		choice, err := readMenuAnswer(reader)
 		if errors.Is(err, io.EOF) {
 			return 0
 		}
 		if err != nil {
-			fmt.Fprintln(out, "Please enter a short number from 1 to 8. You are still in the menu.")
+			menuNotice(out, "WARNING", "Enter a short number from 1 to 8.")
+			menuAcknowledge(input, reader, out)
 			continue
 		}
+		if choice == "8" || choice == "0" || strings.EqualFold(choice, "q") {
+			fmt.Fprintln(out, "Goodbye.")
+			return 0
+		}
+		menuScreen(out, "")
 		var result int
+		needsAcknowledgement := true
 		switch choice {
 		case "1":
 			result = menuCreate(input, reader, out, errOut, options)
@@ -171,6 +170,7 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 			result = menuImport(input, reader, out, errOut, options)
 		case "3":
 			result = menuManage(input, reader, out, errOut, options)
+			needsAcknowledgement = false
 		case "4":
 			result = menuDiagnose(input, reader, out, errOut, options)
 		case "5":
@@ -179,15 +179,14 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 			result = menuUpdate(reader, out, errOut)
 		case "7":
 			result = menuUninstall(out, errOut, options)
-		case "8", "0", "q":
-			fmt.Fprintln(out, "Goodbye.")
-			return 0
 		default:
-			fmt.Fprintln(out, "Choose a number from 1 to 8.")
+			menuNotice(out, "WARNING", "Choose a number from 1 to 8.")
 		}
 		if result != 0 {
-			fmt.Fprintln(out, "\nThat action did not complete. Read the message above, then choose your next action.")
-			fmt.Fprintln(out, "No automatic retry or cleanup has been started.")
+			menuNotice(out, "FAILED", "Action not confirmed. Check the reason above; no automatic retry was started.")
+		}
+		if needsAcknowledgement {
+			menuAcknowledge(input, reader, out)
 		}
 	}
 }

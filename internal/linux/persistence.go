@@ -76,7 +76,7 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 		verify = VerifyTrustedSTLExecutable
 	}
 	if err := verify(stlExecutable); err != nil {
-		return nil, false, fmt.Errorf("refusing unsafe STL restore executable: %w", err)
+		return nil, false, classifyRestoreFailure(RestoreExecutableUntrusted, fmt.Errorf("refusing unsafe STL restore executable: %w", err))
 	}
 	unitDir := p.UnitDir
 	if unitDir == "" {
@@ -84,13 +84,13 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 	}
 	path := filepath.Join(unitDir, restoreSystemdUnitName)
 	if err := p.verifyUnitDirectoryForCreate(unitDir); err != nil {
-		return nil, false, fmt.Errorf("unsafe systemd restore unit directory: %w", err)
+		return nil, false, classifyRestoreFailure(RestoreUnitPathUntrusted, fmt.Errorf("unsafe systemd restore unit directory: %w", err))
 	}
 	if err := os.MkdirAll(unitDir, 0o755); err != nil {
-		return nil, false, fmt.Errorf("create systemd unit directory: %w", err)
+		return nil, false, classifyRestoreFailure(RestoreUnitPathUntrusted, fmt.Errorf("create systemd unit directory: %w", err))
 	}
 	if err := p.verifyUnitPath(path); err != nil {
-		return nil, false, fmt.Errorf("unsafe systemd restore unit identity: %w", err)
+		return nil, false, classifyRestoreFailure(RestoreUnitPathUntrusted, fmt.Errorf("unsafe systemd restore unit identity: %w", err))
 	}
 
 	prior, priorIdentity, readErr := readPinnedRegularUnit(path)
@@ -109,14 +109,14 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 	}()
 	existed := readErr == nil
 	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
-		return nil, false, fmt.Errorf("read systemd unit: %w", readErr)
+		return nil, false, classifyRestoreFailure(RestoreUnitPathUntrusted, fmt.Errorf("read systemd unit: %w", readErr))
 	}
 	if existed {
 		if !isOwnedSystemdUnit(prior) {
-			return nil, false, fmt.Errorf("refusing to overwrite non-STL systemd unit %q", restoreSystemdUnitName)
+			return nil, false, classifyRestoreFailure(RestoreUnitConflict, fmt.Errorf("refusing to overwrite non-STL systemd unit %q", restoreSystemdUnitName))
 		}
 		if err := p.guardExactPublishedUnit(path, prior); err != nil {
-			return nil, false, fmt.Errorf("refusing unverified STL unit identity: %w", err)
+			return nil, false, classifyRestoreFailure(RestoreUnitPathUntrusted, fmt.Errorf("refusing unverified STL unit identity: %w", err))
 		}
 	}
 
@@ -126,12 +126,12 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 	}
 	wasEnabled, err := p.isEnabled(ctx, systemctl, restoreSystemdUnitName)
 	if err != nil {
-		return nil, false, err
+		return nil, false, classifyRestoreFailure(RestoreEnablementUnknown, err)
 	}
 	// An enabled identity without our owned file is ambiguous. Refuse to take it
 	// over instead of assuming that STL owns systemd's enablement symlinks.
 	if !existed && wasEnabled {
-		return nil, false, fmt.Errorf("refusing to take over enabled systemd unit %q without an STL-owned unit file", restoreSystemdUnitName)
+		return nil, false, classifyRestoreFailure(RestoreUnitConflict, fmt.Errorf("refusing to take over enabled systemd unit %q without an STL-owned unit file", restoreSystemdUnitName))
 	}
 
 	fileChanged := !existed || string(prior) != content
@@ -173,7 +173,7 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 		}
 		if _, err := p.Runner.Run(ctx, systemctl, "daemon-reload"); err != nil {
 			repairErr := p.compensatePublishedUnit(ctx, systemctl, unitDir, path, []byte(content), prior, publishedIdentity, existed, wasEnabled, true, false)
-			return nil, false, errors.Join(fmt.Errorf("systemd daemon-reload: %w", err), repairErr)
+			return nil, false, classifyRestoreFailure(RestoreDaemonReloadFailed, errors.Join(fmt.Errorf("systemd daemon-reload: %w", err), repairErr))
 		}
 	}
 
@@ -192,7 +192,7 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 		}
 		if enableErr != nil {
 			repairErr := p.compensatePublishedUnit(ctx, systemctl, unitDir, path, []byte(content), prior, publishedIdentity, existed, wasEnabled, fileChanged, true)
-			return nil, false, errors.Join(fmt.Errorf("enable STL systemd unit: %w", enableErr), repairErr)
+			return nil, false, classifyRestoreFailure(RestoreEnableFailed, errors.Join(fmt.Errorf("enable STL systemd unit: %w", enableErr), repairErr))
 		}
 		enabledChanged = true
 	}
@@ -706,6 +706,20 @@ func (p SystemdPersistence) isEnabled(ctx context.Context, systemctl, name strin
 	case "linked", "alias", "indirect", "static", "masked", "masked-runtime", "generated", "transient":
 		return false, fmt.Errorf("refusing ambiguous or administrator-managed systemd unit state %q", state)
 	case "":
+		// Ubuntu/systemd 249 can emit no stdout and exit 1 for an
+		// absent unit, with only a localized error message on stderr.
+		// Never parse that message or accept an unknown command failure as
+		// proof of absence. A completed exit 1 is eligible for a second,
+		// strictly parsed read-only systemd unit identity inspection.
+		var status *CommandError
+		if errors.As(err, &status) && status.ExitCode == 1 &&
+			!status.TimedOut && !status.Canceled {
+			if inspectErr := p.verifyAbsentUnitBySystemdShow(ctx, systemctl, name); inspectErr == nil {
+				return false, nil
+			} else {
+				return false, fmt.Errorf("cannot independently verify missing systemd unit: %w", inspectErr)
+			}
+		}
 		if err == nil {
 			return false, fmt.Errorf("systemctl is-enabled returned no state")
 		}
@@ -716,6 +730,53 @@ func (p SystemdPersistence) isEnabled(ctx context.Context, systemctl, name strin
 		}
 		return false, fmt.Errorf("unsupported systemd enablement state %q", state)
 	}
+}
+
+// verifyAbsentUnitBySystemdShow is a narrow read-only compatibility path
+// for a completed is-enabled exit 1 with *empty* stdout. In systemd 249,
+// this can mean a missing unit, but the error text is locale-dependent and
+// cannot be used as identity evidence. An independently successful systemctl
+// show must attest ALL three exact absent-state properties. Anything else
+// (including a foreign/masked/loaded unit, truncated output, duplicate keys,
+// a failed/timed-out show, or cancellation) remains an unsafe unknown.
+//
+// EnsureRestore/RemoveRestore/IsRestoreInstalled separately guard the local
+// unit path; this extra observation never authorizes deletion or ownership.
+func (p SystemdPersistence) verifyAbsentUnitBySystemdShow(ctx context.Context, systemctl, name string) error {
+	result, err := p.Runner.Run(ctx, systemctl, "show", name, "--no-pager", "--all",
+		"-p", "LoadState", "-p", "UnitFileState", "-p", "FragmentPath")
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return fmt.Errorf("systemd missing-unit check canceled: %w", ctxErr)
+	}
+	if err != nil {
+		return fmt.Errorf("systemd missing-unit check could not complete: %w", err)
+	}
+	// Never expose or parse process stderr as a machine identity token.
+	// Keep parsing bounded and exact even with an injected Runner.
+	if len(result.Stderr) != 0 || len(result.Stdout) > 1024 {
+		return errors.New("systemd missing-unit check returned unexpected output")
+	}
+	output := strings.TrimSuffix(string(result.Stdout), "\n")
+	lines := strings.Split(output, "\n")
+	if len(lines) != 3 {
+		return errors.New("systemd missing-unit check lacks complete state properties")
+	}
+	seen := make(map[string]bool, 3)
+	for _, line := range lines {
+		switch line {
+		case "LoadState=not-found", "UnitFileState=", "FragmentPath=":
+			if seen[line] {
+				return errors.New("systemd missing-unit check returned duplicate properties")
+			}
+			seen[line] = true
+		default:
+			return errors.New("systemd missing-unit check did not prove absent unit identity")
+		}
+	}
+	if len(seen) != 3 {
+		return errors.New("systemd missing-unit check lacks required absent properties")
+	}
+	return nil
 }
 
 // When systemctl produced a recognizable token but a nil/invalid exit
