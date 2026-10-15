@@ -4,8 +4,8 @@
 [README](../README.md)**. This page is the advanced installer/maintenance
 runbook, not a required first stop for a new operator.
 
-Current release candidate: [v0.1.0-rc.4](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.4)
-(**pre-release, not Stable**, after publication). rc.4 improves terminal
+Current published pre-release: [v0.1.0-rc.4](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.4)
+(**not Stable**). rc.4 improves terminal
 readability and Ubuntu 22.04/systemd 249 missing-unit compatibility.
 The guided Create/Manage UI and protected receiver offers started in rc.3.
 The rc.2 IPsec, MTU and State v3 rollback boundary still applies.
@@ -157,7 +157,7 @@ bash -c 'set -euo pipefail; umask 077; t=$(mktemp); trap '\''rm -f -- "$t"'\'' E
 
 ### Operator-first one-line install (v0.1.0-rc.4)
 
-After rc.4 publication, the user-facing one-line installer is:
+For the published rc.4 pre-release, the one-line installer is:
 
 ~~~sh
 bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.4/scripts/quick-install.sh | bash -s -- v0.1.0-rc.4'
