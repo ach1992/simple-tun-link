@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNativeProvisionBootEdgeOnlyExactNoReplace(t *testing.T) {
@@ -114,4 +116,56 @@ func TestNativeVendorStatusRejectsUnverifiedNegativeEvidence(t *testing.T) {
 	if _, e := parseNativeVendorStatus("is-enabled", []byte("disabled\nextra\n"), nil, 1); e == nil {
 		t.Fatal("malformed status with extra lines accepted")
 	}
+}
+
+// TestIsolatedNativeExclusiveRealProvision exercises the ACTUAL production
+// provisioner and runtime admission on a fresh, disconnected, ephemeral
+// Docker PID1-systemd guest. It MUST NEVER run on the connected host. It is
+// deliberately separate from test-only source publishers (which cannot
+// establish that the product's own provisioner is safe or operational).
+func TestIsolatedNativeExclusiveRealProvision(t *testing.T) {
+	if os.Getenv("STL_E2E_DISPOSABLE_HOST") != "approved" ||
+		os.Getenv("STL_IPSEC_ISOLATED") != "approved" ||
+		os.Getenv("STL_IPSEC_SYSTEMD_FIXTURE") != "approved" ||
+		os.Getenv("STL_IPSEC_REAL_PROVISION") != "approved" {
+		t.Skip("requires explicitly authorized disposable native IPsec guest")
+	}
+	if os.Geteuid() != 0 {
+		t.Fatal("requires container root")
+	}
+	if _, err := os.Stat("/.dockerenv"); err != nil {
+		t.Fatal("must run in Docker")
+	}
+	pid1, err := os.ReadFile("/proc/1/comm")
+	if err != nil || strings.TrimSpace(string(pid1)) != "systemd" {
+		t.Fatal("container PID1 must be systemd")
+	}
+	route, err := exec.Command("/usr/sbin/ip", "-4", "route", "show", "default").Output()
+	if err != nil || strings.TrimSpace(string(route)) != "" {
+		t.Fatal("fixture must have no default IPv4 route")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 70*time.Second)
+	defer cancel()
+	if err := NativeProvisionReadiness(ctx); err != nil {
+		t.Fatalf("fresh host provisioner refused verified disposable guest: %v", err)
+	}
+	if err := ProvisionNativeExclusive(ctx); err != nil {
+		t.Fatalf("real private service provision failed: %v", err)
+	}
+	if err := NewNativeRuntimeAdmission().Authorize(ctx); err != nil {
+		t.Fatalf("post-provision admission failed: %v", err)
+	}
+	if InspectNativeExclusiveConfigOrigin() != NativeOriginVerified ||
+		InspectNativeExclusiveServiceUnitOrigin() != NativeOriginVerified ||
+		!trustedNativeBootEnablementAt("/", 0) {
+		t.Fatal("real provisioner did not establish verified private service/config receipts and boot edge")
+	}
+	if err := NativeProvisionReadiness(ctx); err == nil {
+		t.Fatal("previously provisioned/started IPsec service was incorrectly treated as a fresh vacant host")
+	}
+	if err := ProvisionNativeExclusive(ctx); err == nil {
+		t.Fatal("second full provisioner call adopted or replaced a current owned/active service")
+	}
+	t.Log("NATIVE_REAL_PROVISION_NO_REPLACE=PASS")
+	t.Log("NATIVE_REAL_PROVISION_RUNTIME_ADMITTED=PASS")
 }
