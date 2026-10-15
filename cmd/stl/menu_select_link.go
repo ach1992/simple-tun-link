@@ -89,15 +89,14 @@ func menuDiagnose(_ io.Reader, reader *bufio.Reader, out, errOut io.Writer, opti
 	if !all && id == "" {
 		return 0
 	}
-	menuSection(out, "Read-only connectivity check")
-	menuNotice(out, "INFO", "Tests local identity and bounded peer reachability; never repairs anything.")
+	menuNotice(out, "INFO", "Checking local identity and peer reachability (read-only, no repair).")
 	var code int
 	if all {
-		code = linkDiagnoseCommand([]string{"diagnose", "--all"}, out, errOut, options)
+		code = menuCheckAllConnections(out, errOut, options)
 	} else {
-		code = linkDiagnoseCommand([]string{"diagnose", string(id)}, out, errOut, options)
+		code = menuCheckOneConnection(id, out, errOut, options)
 	}
-	if code != 0 {
+	if code != 0 && !menuEscapeCapable(out) {
 		fmt.Fprintln(out, "Some checks are unknown, blocked, or without peer replies. Check the OTHER server's setup and firewall.")
 	}
 	return code

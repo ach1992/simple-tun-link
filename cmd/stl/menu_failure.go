@@ -13,27 +13,54 @@ import (
 // The error values are already canonical, reviewed, secret-safe fields; this
 // renderer never unwraps OS/subprocess errors or displays arbitrary payloads.
 func renderTerminalLifecycleFailure(out io.Writer, issue *stlerr.Error, evidence *stlerr.OperationEvidence) {
-	menuSection(out, "Operation not completed")
-	menuNotice(out, "FAILED", issue.Detail)
-	if issue.Operation != "" {
-		menuField(out, "Operation", issue.Operation)
+	menuSection(out, "Tunnel operation / incomplete")
+	if evidence != nil && evidence.HostMutation == "not_attempted" {
+		menuHealthLine(out, "Host changes", "INFO", "No backend network Apply was attempted")
+	} else {
+		menuHealthLine(out, "Host changes", "WARNING", "Outcome not fully confirmed; inspect before retrying")
 	}
 	if issue.Backend != "" {
-		menuField(out, "Tunnel type", issue.Backend)
-	}
-	if issue.ReasonCode != "" {
-		menuField(out, "Reason", issue.ReasonCode)
+		menuField(out, "Type", issue.Backend)
 	}
 	if evidence != nil {
-		menuField(out, "Failed stage", evidence.Stage)
-		status := evidence.Rollback
-		if evidence.Rollback == "completed_unverified" || evidence.Rollback == "incomplete" {
-			status += " (verify local state)"
+		switch evidence.Stage {
+		case "inspect":
+			menuHealthLine(out, "Where stopped", "WARNING", "Checking local state/prerequisites (before Apply)")
+		case "persistence":
+			menuHealthLine(out, "Where stopped", "WARNING", "Reboot restoration / systemd ownership")
+		case "preflight":
+			menuHealthLine(out, "Where stopped", "WARNING", "Preparing the tunnel; not activated")
+		default:
+			menuField(out, "Where stopped", evidence.Stage)
 		}
-		menuField(out, "Rollback", status)
+		if evidence.Rollback == "completed_unverified" || evidence.Rollback == "incomplete" {
+			menuHealthLine(out, "Rollback", "WARNING", evidence.Rollback+" (verify existing state)")
+		}
 	}
-	menuSection(out, "What to check next / read-only")
-	fmt.Fprintln(out, wrapTerminalGuidance(issue.NextStep, 72))
+	kind := "WARNING"
+	if evidence == nil || evidence.HostMutation != "not_attempted" {
+		kind = "FAILED" // attempted/uncertain host operations get the red status
+	}
+	switch issue.ReasonCode {
+	case "rejected_before_host_apply":
+		menuNotice(out, kind, "Prerequisite/ownership inspection did not pass; the exact cause is not yet verified.")
+	case "kernel_module_not_loaded":
+		menuNotice(out, kind, "A required kernel module was not loaded; nothing should be enabled automatically.")
+	default:
+		menuNotice(out, kind, issue.Detail)
+	}
+	menuSection(out, "Next step / no automatic retry")
+	fmt.Fprintln(out, wrapTerminalGuidance(issue.NextStep, 68))
+	if issue.ReasonCode != "" {
+		reference := issue.ReasonCode
+		if evidence != nil && evidence.Stage != "" {
+			reference = evidence.Stage + " / " + reference
+		}
+		if issue.Operation != "" {
+			reference = issue.Operation + " / " + reference
+		}
+		menuField(out, "Reference", reference)
+	}
 }
 
 // Wrap authored guidance without changing words or shell metacharacters.

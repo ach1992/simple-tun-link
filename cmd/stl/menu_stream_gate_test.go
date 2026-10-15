@@ -110,7 +110,7 @@ func TestBothInteractiveTTYStreamsRetainHumanFailurePage(t *testing.T) {
 	if code := testSessionFailure(t, stdout, stderr, false); code != 1 {
 		t.Fatalf("failure exit code=%d", code)
 	}
-	text := readMenuPTYUntil(t, master, "OPERATION NOT COMPLETED", "WHAT TO CHECK NEXT",
+	text := readMenuPTYUntil(t, master, "TUNNEL OPERATION / INCOMPLETE", "NEXT STEP / NO AUTOMATIC RETRY",
 		"restore_unit_identity_conflict")
 	if !strings.Contains(text, "\x1b[1;31m") ||
 		!strings.Contains(text, "[FAILED]") ||

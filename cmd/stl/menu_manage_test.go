@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -131,6 +132,11 @@ func startManageTTY(t *testing.T, opts *runtimeOptions) (*manageTTY, <-chan int)
 	return &manageTTY{t: t, master: master, chunks: chunks}, done
 }
 
+// Even synthetic receiver credentials should not end up in CI failure logs.
+func sanitizedMenuTestTranscript(value string) string {
+	return regexp.MustCompile(`stl://[^[:space:]]+`).ReplaceAllString(value, "stl://[REDACTED]")
+}
+
 func (p *manageTTY) expect(marker string) {
 	p.t.Helper()
 	deadline := time.After(5 * time.Second)
@@ -138,12 +144,12 @@ func (p *manageTTY) expect(marker string) {
 		select {
 		case chunk, ok := <-p.chunks:
 			if !ok {
-				p.t.Fatalf("PTY closed before %q; transcript=%q", marker, p.all)
+				p.t.Fatalf("PTY closed before %q; transcript=%q", marker, sanitizedMenuTestTranscript(p.all))
 			}
 			p.pending += chunk
 			p.all += chunk
 		case <-deadline:
-			p.t.Fatalf("PTY did not display %q; transcript=%q", marker, p.all)
+			p.t.Fatalf("PTY did not display %q; transcript=%q", marker, sanitizedMenuTestTranscript(p.all))
 		}
 	}
 	p.pending = p.pending[strings.Index(p.pending, marker)+len(marker):]

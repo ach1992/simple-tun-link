@@ -195,11 +195,20 @@ func configureGREAdvanced(p createPrompts, options *domain.GREOptions) error {
 // The interactive wizard is only an operator-facing composer. Host inspection,
 // collision semantics, versioned CLI decode, Engine ensure, pairing export and
 // diagnostic/ownership logic are all reused; it never runs network mutations.
-func menuCreatePlain(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, options *runtimeOptions, backend domain.Backend, mode domain.Encapsulation, manualPair bool) int {
+func menuCreatePlain(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, options *runtimeOptions, backend domain.Backend, mode domain.Encapsulation, manualPair bool, capReport linux.CapabilityReport) int {
 	p := createPrompts{reader: reader, out: out, errOut: errOut}
 	menuSection(out, fmt.Sprintf("Create %s / %s", backend, mode))
 	fmt.Fprintln(out, "Type q to go back at any question.")
 	fmt.Fprintln(out, "This type is NOT encrypted; use WireGuard for confidential traffic.")
+	// Reuse the read-only menu snapshot; Engine checks current capability and
+	// exact ownership again when applying. No duplicate host probe is needed.
+	capability := plainBackendCapability(backend, mode)
+	if capReport != nil && capability != "" && !capReport[capability].Available {
+		menuNotice(out, "WARNING", fmt.Sprintf("%s/%s is not available on this server now.", backend, mode))
+		fmt.Fprintf(errOut, "%s/%s is not available on this server. Check kernel/iproute2 support (and FOU/GUE modules if selected). No tunnel created.\n", backend, mode)
+		fmt.Fprintln(out, "Choose a different type or inspect Availability details in Create tunnel.")
+		return 4
+	}
 	peer, err := askPeerUnderlay(p)
 	if err != nil {
 		return p.failed(err)
@@ -212,12 +221,6 @@ func menuCreatePlain(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	if err != nil || !route.Source.Is4() || !route.Source.IsGlobalUnicast() ||
 		route.Source.IsLoopback() || route.Source == peer {
 		fmt.Fprintln(errOut, "Cannot establish a usable local IPv4 source and route to that peer; nothing applied.")
-		return 4
-	}
-	capabilities, err := (linux.CapabilityProbe{Runner: runner}).Probe(ctx)
-	capability := plainBackendCapability(backend, mode)
-	if err != nil || capability == "" || !capabilities[capability].Available {
-		fmt.Fprintf(errOut, "%s/%s is not available on this server. Check kernel/iproute2 support (and FOU/GUE modules if selected). No tunnel created.\n", backend, mode)
 		return 4
 	}
 	menuSection(out, "Connection settings")
@@ -372,10 +375,12 @@ func menuCreatePlain(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	menuScreen(out, "Applying / saving local tunnel")
 	menuSection(out, "Saving local tunnel and reboot restoration")
 	if code := linkLifecycleCommand([]string{"ensure", "--stdin"}, bytes.NewReader(payload), out, errOut, options); code != 0 {
-		fmt.Fprintln(errOut, "Tunnel could not be confirmed. Do NOT immediately recreate the same ID; check saved Links and persistence/recovery guidance below.")
-		fmt.Fprintln(errOut, "If stage=persistence: check that systemd is PID 1, /etc/systemd/system and /usr/local/bin/stl have trusted root ownership, and systemctl can read its unit. Do not manually delete a possibly owned unit.")
+		if !menuSessionErrorTTY(out, errOut) {
+			fmt.Fprintln(errOut, "Tunnel could not be confirmed. Do NOT immediately recreate the same ID; inspect current Link state before retrying.")
+		}
 		return code
 	}
+	menuScreen(out, "Local tunnel / created")
 	if manualPair {
 		menuNotice(out, "OK", "Local tunnel saved. No Setup Link is needed; configure the other server manually.")
 		printManualConnectionDetails(out, link)
@@ -387,10 +392,8 @@ func menuCreatePlain(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 			fmt.Fprintln(errOut, "Local Link was ensured, but setup export failed; use stl link export with this Link ID.")
 			return code
 		}
-		fmt.Fprintln(out, "On the other server: STL menu -> Import -> Plaintext GRE/IPIP -> paste -> review -> YES.")
 	}
-	menuSection(out, "Local status / not a remote test")
-	if code := linkReadCommand([]string{"status", string(link.ID)}, out, errOut, options); code != 0 {
+	if code := menuShowLocalStatus(link.ID, out, errOut, options); code != 0 {
 		fmt.Fprintln(errOut, "Local Link was ensured, but live status could not be verified. Reconcile before relying on it.")
 		return code
 	}
@@ -407,7 +410,7 @@ func menuCreatePlain(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		fmt.Fprintf(out, "After importing on the peer: stl link diagnose %s (or menu > Tests & Diagnostics).\n", link.ID)
 		return 0
 	}
-	if code := linkDiagnoseCommand([]string{"diagnose", string(link.ID)}, out, errOut, options); code != 0 {
+	if code := menuCheckOneConnection(link.ID, out, errOut, options); code != 0 {
 		fmt.Fprintln(errOut, "Peer check could not confirm traffic. Your saved local tunnel remains configured; check the other server and firewall.")
 		return code
 	}

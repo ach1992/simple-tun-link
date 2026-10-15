@@ -182,9 +182,9 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 		default:
 			menuNotice(out, "WARNING", "Choose a number from 1 to 8.")
 		}
-		if result != 0 {
-			menuNotice(out, "FAILED", "Action not confirmed. Check the reason above; no automatic retry was started.")
-		}
+		// Outcome messages live in each action; a generic FAILED banner
+		// would wrongly classify unavailable capabilities and repeat errors.
+		_ = result
 		if needsAcknowledgement {
 			menuAcknowledge(input, reader, out)
 		}

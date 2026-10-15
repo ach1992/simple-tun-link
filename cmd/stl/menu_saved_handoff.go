@@ -259,3 +259,45 @@ func menuSensitiveHandoffAction(input io.Reader, reader *bufio.Reader, out, errO
 	fmt.Fprintln(out, "Keep this credential private. It will remain saved until you explicitly delete it.")
 	return 0
 }
+
+// A freshly confirmed, successful Create is already an explicit owner choice
+// to prepare the other server. Show the exact saved offer in that SAME real
+// interactive terminal result screen so pairing does not require a second
+// trip through Manage/Share. Redirected output, error streams and automation
+// never receive credentials. Subsequent sharing keeps its own SHOW gate.
+func menuShowNewProtectedHandoff(input io.Reader, out io.Writer, options *runtimeOptions, id domain.LinkID) {
+	in, inputOK := input.(*os.File)
+	_, outputOK := menuTerminal(out)
+	if !inputOK || !terminalIsInteractive(in) || !outputOK {
+		fmt.Fprintln(out, "Copy receiver Setup Link later: My tunnels -> choose tunnel -> Share Setup Link -> SHOW.")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), readOperationTimeout)
+	defer cancel()
+	snapshot, err := state.NewFileStore(createStateRoot(options)).Load(ctx)
+	if err != nil {
+		menuNotice(out, "WARNING", "Local tunnel was saved, but its receiver link could not be verified for display.")
+		fmt.Fprintln(out, "Try My tunnels -> Share Setup Link after reviewing saved tunnel state.")
+		return
+	}
+	record, present := snapshot.Find(id)
+	if !present {
+		menuNotice(out, "WARNING", "Cannot verify the newly saved tunnel identity; receiver link was not shown.")
+		return
+	}
+	encoded, err := validatedSavedProtectedMenuOffer(options, record.Desired)
+	if err != nil {
+		menuNotice(out, "WARNING", "Saved receiver credentials could not be safely verified; nothing was displayed.")
+		fmt.Fprintln(out, "Review My tunnels -> Share Setup Link. No new credentials were generated.")
+		return
+	}
+	menuSection(out, "Copy receiver Setup Link")
+	menuNotice(out, "WARNING", "The full line below contains a private credential. Copy it to the other server privately.")
+	// NEVER use wrapping, logs or a generic printf of decoded credentials.
+	if _, err := io.WriteString(out, "\n"+encoded+"\n"); err != nil {
+		menuNotice(out, "WARNING", "Could not display the complete receiver link; open My tunnels -> Share to retry.")
+		return
+	}
+	fmt.Fprintln(out, "\nOTHER server: Import setup link -> WireGuard / IPsec -> paste -> review -> YES.")
+	fmt.Fprintln(out, "This same link stays in private storage until you explicitly delete it.")
+}

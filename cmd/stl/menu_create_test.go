@@ -49,7 +49,7 @@ func (r *guidedTestRunner) Run(_ context.Context, name string, args ...string) (
 			return linux.CommandResult{}, errors.New("GRE unavailable")
 		}
 		output = "[]"
-	case "ip -json -details link show type ipip",
+	case "wg show all dump", "ip -json -details link show type ipip",
 		"ip -json -details link show type wireguard",
 		"ip -json -details link show type xfrm", "ip fou show":
 		output = "[]"

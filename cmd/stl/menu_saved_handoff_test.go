@@ -477,3 +477,56 @@ func TestMenuProtectedHandoffDeleteRequiresFreshRealTTY(t *testing.T) {
 		t.Fatal("queued DELETE deleted protected file")
 	}
 }
+
+// The accepted new UX reuses the fresh Create YES to display the exact saved
+// receiver offer on a real TTY. Non-TTY/script/JSON paths still hide it.
+func TestGuidedWireGuardRealTTYShowsOriginalProtectedSetupImmediatelyAfterCreate(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	root := filepath.Join(t.TempDir(), "state")
+	fake := &wireGuardCreatorFake{newLifecycleFake()}
+	opts := &runtimeOptions{
+		stateRoot: root, backends: []backend.Backend{fake},
+		probeRunner: &guidedTestRunner{}, mtuManager: guidedMTUFake{},
+		createLinkID: func() (domain.LinkID, error) { return createTestID, nil },
+	}
+	tty, done := startManageTTY(t, opts)
+	tty.expect("Choose a task: ")
+	tty.send("1")
+	tty.expect("Tunnel type [1]: ")
+	tty.send("2")
+	tty.expect("Other server's reachable IPv4 address")
+	tty.send("192.0.2.20")
+	tty.expect("Tunnel IP on THIS server")
+	tty.send("")
+	tty.expect("UDP port on THIS server")
+	tty.send("51871")
+	tty.expect("UDP port on OTHER server")
+	tty.send("51872")
+	tty.expect("Change advanced keepalive")
+	tty.send("n")
+	tty.expect("Create the encrypted tunnel and private handoff file?")
+	if strings.Contains(tty.all, "stl://") {
+		t.Fatal("receiver credential disclosed before fresh Create YES")
+	}
+	tty.send("YES")
+	tty.expect("COPY RECEIVER SETUP LINK")
+	tty.expect("stl://")
+	tty.expect("This same link stays in private storage")
+	file, err := protectedMenuHandoffPath(opts, createTestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := readPrivateHandoffFile(file)
+	if err != nil || !strings.HasPrefix(original, "stl://") || !strings.Contains(tty.all, original) {
+		t.Fatalf("PTY did not show exact retained original receiver offer: %v", err)
+	}
+	tty.expect("Press Enter to continue...")
+	tty.send("")
+	tty.expect("Choose a task: ")
+	tty.send("8")
+	manageTTYDone(t, done, 0)
+	after, err := readPrivateHandoffFile(file)
+	if err != nil || after != original {
+		t.Fatalf("shown offer was changed or deleted: %v", err)
+	}
+}
