@@ -45,7 +45,7 @@ func TestNativeSystemdInventoryOnlyAndNoInducedLoading(t *testing.T) {
 		{"unit already in memory but overrides unverified", nativeSystemdLoadedFixture("loaded"), "unknown", "native_systemd_unit_unverified"},
 		{"failed unit", nativeSystemdLoadedFixture("bad-setting"), "blocked", "native_systemd_unit_conflict"},
 		{"masked unit", nativeSystemdLoadedFixture("masked"), "blocked", "native_systemd_unit_conflict"},
-		{"unprovisioned placeholder", nativeSystemdLoadedFixture("not-found"), "blocked", "native_systemd_unit_not_provisioned"},
+		{"unprovisioned placeholder", nativeSystemdLoadedFixture("not-found"), "blocked", "native_systemd_unit_not_loaded"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -13,19 +13,19 @@ Usage:
   install.sh install|update --version vX.Y.Z [--backends native,wireguard,ipsec]
   install.sh install|update --bundle /path/to/release-bundle [--prefix /usr/local] [--backends all]
   install.sh requirements [--backends native,wireguard,ipsec] [--os-release-file /path/to/read-only-fixture]
-  install.sh prepare --backends native|wireguard|ipsec|all
+  install.sh prepare --backends native|wireguard|ipsec|all [--expected-missing '...'] [--expected-apt-plan '...']
   install.sh uninstall [--prefix /usr/local]
 
 The default backend selection is native (GRE/IPIP). Add wireguard and/or
 ipsec explicitly to provision optional dependencies. "all" selects all.
-IPsec package installation can enable/start charon-systemd: any missing
-strongSwan packages require separate manual OS package management after
-reviewing effective foreign service ownership (no automatic APT).
+IPsec on a verified clean systemd host may be prepared after a fresh, exact
+package/dependency PREPARE consent. Distribution hooks can temporarily
+start/enable a newly introduced strongSwan vendor service.
 The prepare action installs only missing selected packages on an existing,
 installer-owned /usr/local/bin/stl, without replacing STL or modifying Links.
-Missing IPsec packages require administrator-managed manual installation:
-APT may start a foreign vendor daemon; STL refuses unattended installation.
-Installed strongSwan packages still require separate private IPsec admission.
+Only the proven transaction-created vendor strongSwan service may be stopped
+and disabled; pre-existing/foreign services are never modified. Private STL
+service admission remains a separate verified step under the same UI consent.
 No host Link or network configuration is modified by this installer.
 --bundle is for locally built/tested bundles; system dependencies are
 only installed on the real /usr/local prefix, never an offline test prefix.
@@ -45,6 +45,8 @@ backends_supplied=0
 os_release_fixture=
 expected_missing=
 expected_missing_supplied=0
+expected_apt_plan=
+expected_apt_plan_supplied=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version) [[ $# -ge 2 && -z $version ]] || usage; version=$2; shift 2 ;;
@@ -53,6 +55,7 @@ while [[ $# -gt 0 ]]; do
     --backends) [[ $# -ge 2 && $backends_supplied == 0 ]] || usage; backends=$2; backends_supplied=1; shift 2 ;;
     --os-release-file) [[ $# -ge 2 && -z $os_release_fixture ]] || usage; os_release_fixture=$2; shift 2 ;;
     --expected-missing) [[ $# -ge 2 && $expected_missing_supplied == 0 ]] || usage; expected_missing=$2; expected_missing_supplied=1; shift 2 ;;
+    --expected-apt-plan) [[ $# -ge 2 && $expected_apt_plan_supplied == 0 ]] || usage; expected_apt_plan=$2; expected_apt_plan_supplied=1; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -64,7 +67,7 @@ else
   [[ -n $version && -z $bundle || -z $version && -n $bundle ]] || usage
 fi
 [[ $action == requirements || -z $os_release_fixture ]] || usage
-[[ $action == prepare || $expected_missing_supplied == 0 ]] || usage
+[[ $action == prepare || ( $expected_missing_supplied == 0 && $expected_apt_plan_supplied == 0 ) ]] || usage
 [[ $action != prepare || $prefix == /usr/local ]] || fail 'package preparation is allowed only for the installer-owned /usr/local installation'
 
 # Use a data-only OS release parser. Never "source" /etc/os-release as shell
@@ -151,53 +154,253 @@ package_installed() {
   [[ $result == 'install ok installed' ]]
 }
 
+# Read-only APT resolver: give the operator the complete install/dependency
+# set BEFORE consent, and forbid upgrades, removals or unresolved candidates.
+# APT signature checks remain mandatory at execution; never allow insecure,
+# unauthenticated or trusted=yes repository shortcuts.
+apt_safety=(-o APT::Get::AllowUnauthenticated=false
+            -o Acquire::AllowInsecureRepositories=false
+            -o Acquire::AllowDowngradeToInsecureRepositories=false
+            -o APT::Get::AllowRemoveEssential=false
+            -o APT::Get::AllowChangeHeldPackages=false)
+apt_resolve_plan() {
+  local text line pkg version requested found
+  local -a planned=()
+  apt_plan=
+  (( ${#missing[@]} > 0 )) || return 0
+  text=$(LC_ALL=C apt-get -s -o Debug::NoLocking=1 "${apt_safety[@]}" \
+    install --no-install-recommends -- "${missing[@]}") ||
+    fail 'APT cannot resolve the complete selected dependency plan; no packages changed'
+  while IFS= read -r line; do
+    case "$line" in
+      Remv\ *|Purg\ *) fail 'APT plan would remove packages; no changes allowed' ;;
+      Inst\ *)
+        [[ $line =~ ^Inst[[:space:]]+([a-z0-9][a-z0-9+.-]*(:[a-z0-9-]+)?)[[:space:]] ]] ||
+          fail 'APT returned an unrecognized install identity'
+        pkg=${BASH_REMATCH[1]}
+        [[ $line =~ \(([0-9][A-Za-z0-9:.+~_-]*)[[:space:]] ]] ||
+          fail 'APT returned an unrecognized candidate version'
+        version=${BASH_REMATCH[1]}
+        # For IPsec, never promote merely APT-trusted third-party packages
+        # into "signed distro packages". The selected candidate must be
+        # labeled Debian / Debian-Security / Ubuntu by APT, in addition to
+        # APT's authenticated repository index and package checksum gates.
+        if [[ $want_ipsec == 1 ]]; then
+          case "$line" in
+            *" Debian:"*|*" Debian-Security:"*|*" Ubuntu:"*) ;;
+            *) fail 'APT selected an IPsec dependency outside the distro archive; no changes allowed' ;;
+          esac
+        fi
+        if package_installed "$pkg"; then
+          fail 'APT plan would upgrade an installed package; review separately'
+        fi
+        for requested in "${planned[@]}"; do
+          [[ $requested != "$pkg="* ]] || fail 'APT plan includes duplicate package identity'
+        done
+        planned+=("$pkg=$version")
+        ;;
+    esac
+  done <<< "$text"
+  for requested in "${missing[@]}"; do
+    found=0
+    for pkg in "${planned[@]}"; do
+      [[ $pkg != "$requested="* ]] || found=1
+    done
+    [[ $found == 1 ]] || fail 'APT plan omitted a required selected package'
+  done
+  apt_plan="${planned[*]}"
+  [[ -n $apt_plan && ${#apt_plan} -lt 16384 ]] ||
+    fail 'APT plan is empty or exceeds safe preview limits'
+}
+
+# StrongSwan candidates must originate from signed Debian/Ubuntu archives.
+# apt-get itself verifies repository metadata and package hashes at execution.
+# Reject local APT source shortcuts which deliberately bypass that guarantee.
+apt_sources_must_be_authenticated() {
+  local file
+  for file in /etc/apt/sources.list /etc/apt/sources.list.d/*.list \
+              /etc/apt/sources.list.d/*.sources; do
+    [[ -f $file ]] || continue
+    if grep -Eiq '(^|[[:space:]\[])trusted[[:space:]]*=[[:space:]]*yes([[:space:]\]]|$)|^[[:space:]]*Trusted:[[:space:]]*yes' "$file"; then
+      fail 'APT sources explicitly bypass signature verification'
+    fi
+  done
+}
+
+# Conservative CLEAN-host boundary before any strongSwan package hooks.
+# A pre-existing unit (including a disabled or masked one) is NEVER owned.
+# This is intentionally eligibility for first install, not foreign-service
+# remediation. The existing Go provisioner separately admits the STL unit.
+ipsec_clean_host_before_apt() {
+  local item dir unit proc line list
+  [[ $EUID == 0 && -d /run/systemd/system ]] ||
+    fail 'automatic IPsec requires a running root systemd host'
+  [[ ! -e /var/lib/simple-tun-link/ipsec && ! -L /var/lib/simple-tun-link/ipsec ]] ||
+    fail 'existing STL-private IPsec state requires reconciliation before APT'
+  apt_sources_must_be_authenticated
+  [[ -z $(dpkg --audit) ]] || fail 'dpkg has unfinished package configuration; repair before IPsec preparation'
+  for item in charon-systemd strongswan-swanctl libstrongswan-standard-plugins; do
+    package_installed "$item" && fail 'partial strongSwan installation is not eligible for clean-host preparation'
+  done
+  # Foreign partial/alternate distro packages must not be adopted.
+  while IFS= read -r line; do
+    [[ $line != *$'\tinstall ok installed' ]] ||
+      fail 'a foreign/alternate strongSwan package is installed'
+  done < <(dpkg-query -W -f='${binary:Package}\t${Status}\n' \
+              'charon*' 'strongswan*' 'libstrongswan*' 2>/dev/null || true)
+  for item in /etc/strongswan.conf /etc/strongswan.d /etc/swanctl \
+              /etc/ipsec.conf /etc/ipsec.secrets /etc/ipsec.d; do
+    [[ ! -e $item && ! -L $item ]] ||
+      fail 'pre-existing strongSwan/IPsec configuration is not STL-owned'
+  done
+  for unit in strongswan.service strongswan-starter.service charon-systemd.service \
+              ipsec.service simple-tun-link-ipsec.service; do
+    for dir in /etc/systemd/system /run/systemd/system /lib/systemd/system \
+               /usr/lib/systemd/system /usr/local/lib/systemd/system \
+               /run/systemd/generator /run/systemd/generator.early \
+               /run/systemd/generator.late; do
+      [[ ! -e $dir/$unit && ! -L $dir/$unit &&
+         ! -e $dir/$unit.d && ! -L $dir/$unit.d ]] ||
+        fail 'an existing vendor/STL systemd unit or override is present'
+    done
+    for dir in /etc/systemd/system/*.wants /etc/systemd/system/*.requires \
+               /run/systemd/system/*.wants /run/systemd/system/*.requires; do
+      [[ ! -e $dir/$unit && ! -L $dir/$unit ]] ||
+        fail 'a pre-existing vendor/STL service boot edge is present'
+    done
+  done
+  list=$(systemctl --system --no-pager --no-legend --plain --all \
+    --type=service list-units 'strongswan*.service' 'charon*.service' \
+    'ipsec.service' 'simple-tun-link-ipsec.service') ||
+    fail 'systemd existing loaded units could not be inventoried'
+  [[ -z $list ]] || fail 'pre-existing strongSwan/IPsec service identity detected'
+  list=$(systemctl --system --no-pager --no-legend --plain list-unit-files \
+    'strongswan*.service' 'charon*.service' 'ipsec.service' \
+    'simple-tun-link-ipsec.service') ||
+    fail 'systemd vendor unit-file inventory unavailable'
+  [[ -z $list ]] || fail 'pre-existing strongSwan/IPsec service file or alias detected'
+  for proc in /proc/[0-9]*/comm; do
+    [[ -r $proc ]] || continue
+    IFS= read -r item < "$proc" || continue
+    case "$item" in
+      charon|charon-systemd|starter|ipsec) fail 'foreign IKE process already running' ;;
+    esac
+  done
+  for item in /proc/net/udp /proc/net/udp6; do
+    [[ -r $item ]] || fail 'kernel UDP socket inventory unavailable'
+    awk 'NR>1 { split($2, a, ":"); p=a[length(a)]; if(p=="01F4" || p=="1194") exit 42 }' "$item" ||
+      fail 'IKE UDP 500/4500 is occupied or cannot be inspected'
+  done
+}
+
+# Only strongswan.service installed *by this verified transaction* is
+# eligible for vendor normalization. Package files, effective systemd source
+# and absence of foreign drop-ins must agree before ANY stop/disable.
+ipsec_normalize_new_vendor() {
+  local unit=strongswan.service fragment meta enable active owner
+  meta=$(systemctl --system --no-pager show "$unit" \
+    -p FragmentPath -p SourcePath -p DropInPaths -p NeedDaemonReload) ||
+    fail 'new vendor service could not be inspected after APT'
+  fragment=$(sed -n 's/^FragmentPath=//p' <<< "$meta")
+  [[ $fragment == /lib/systemd/system/strongswan.service ||
+     $fragment == /usr/lib/systemd/system/strongswan.service ]] ||
+    fail 'installed vendor unit path is unknown; no foreign unit will be modified'
+  [[ $(grep -c '^FragmentPath=' <<< "$meta") == 1 &&
+     $(grep -c '^SourcePath=$' <<< "$meta") == 1 &&
+     $(grep -c '^DropInPaths=$' <<< "$meta") == 1 &&
+     $(grep -c '^NeedDaemonReload=no$' <<< "$meta") == 1 ]] ||
+    fail 'new vendor unit has an unexpected effective source, drop-in or pending reload'
+  owner=$(dpkg-query -S "$fragment" 2>/dev/null || dpkg-query -S \
+    "/lib/systemd/system/strongswan.service" 2>/dev/null) ||
+    fail 'new vendor unit is not owned by an installed distro package'
+  [[ $owner == "charon-systemd: "* ]] ||
+    fail 'vendor unit belongs to a foreign package; no service modified'
+  # Reject unforeseen aliases/unit additions instead of touching them.
+  for item in strongswan-starter.service charon-systemd.service ipsec.service; do
+    [[ ! -e /etc/systemd/system/$item && ! -L /etc/systemd/system/$item ]] ||
+      fail 'a second vendor service identity appeared; reconciliation required'
+  done
+  active=$(systemctl --system --no-pager is-active "$unit" 2>/dev/null) || :
+  enable=$(systemctl --system --no-pager is-enabled "$unit" 2>/dev/null) || :
+  [[ $active == active || $active == inactive ]] ||
+    fail 'new vendor runtime state is ambiguous after APT'
+  [[ $enable == enabled || $enable == disabled ]] ||
+    fail 'new vendor boot enablement state is ambiguous after APT'
+  if [[ $active == active ]]; then
+    systemctl --system stop "$unit" ||
+      fail 'transaction-created vendor service could not be stopped; inspect persistent package effects'
+  fi
+  if [[ $enable == enabled ]]; then
+    systemctl --system disable "$unit" ||
+      fail 'transaction-created vendor service could not be disabled; inspect persistent package effects'
+  fi
+  [[ $(systemctl --system --no-pager is-active "$unit" 2>/dev/null || :) == inactive &&
+     $(systemctl --system --no-pager is-enabled "$unit" 2>/dev/null || :) == disabled ]] ||
+    fail 'new vendor service remains active or boot-enabled after preparation'
+  for item in /proc/net/udp /proc/net/udp6; do
+    awk 'NR>1 { split($2, a, ":"); p=a[length(a)]; if(p=="01F4" || p=="1194") exit 42 }' "$item" ||
+      fail 'IKE UDP owner remains after vendor normalization'
+  done
+  printf 'Transaction-created strongSwan vendor service inactive and disabled.\n' >&2
+}
+
 ensure_packages() {
-  local pkg
+  local pkg missing_ipsec=0 before_plan
   local -a missing=()
   command -v apt-get >/dev/null && command -v dpkg-query >/dev/null ||
     fail 'apt-get and dpkg-query are required on supported distributions'
   for pkg in "${packages[@]}"; do
     package_installed "$pkg" || missing+=("$pkg")
   done
-  # The menu passes its precise prior preview, which the locked canonical
-  # installer compares again BEFORE APT update, service hooks or packages.
-  # Direct CLI prepare may omit this field for manual operator workflows.
   if [[ $expected_missing_supplied == 1 && "${missing[*]}" != "$expected_missing" ]]; then
-    fail 'selected package inventory changed since explicit confirmation; no APT attempted'
+    fail 'selected package inventory changed since confirmation; no APT attempted'
   fi
   if (( ${#missing[@]} == 0 )); then
+    [[ $expected_apt_plan_supplied == 0 || -z $expected_apt_plan ]] ||
+      fail 'APT plan changed since confirmation; no APT attempted'
     printf 'STL dependencies already installed for %s %s (%s).\n' "$os_id" "$os_version" "$backends" >&2
     return
   fi
-  # APT maintainer hooks may start a foreign effective strongSwan unit, even
-  # when no installed vendor package/process or unit base file is visible.
-  # Exhaustively proving absence of generator/alias/drop-in sources across
-  # supported systemd versions is not safe here. Keep all missing IPsec
-  # packages an explicit administrator-owned manual operation; this installer
-  # MUST NOT invoke apt when a strongSwan package is missing.
-  if [[ $want_ipsec == 1 ]]; then
-    local missing_ipsec=0
-    for pkg in "${missing[@]}"; do
-      case "$pkg" in
-        charon-systemd|strongswan-swanctl|libstrongswan-standard-plugins) missing_ipsec=1 ;;
-      esac
-    done
-    if [[ $missing_ipsec == 1 ]]; then
-      fail 'Automatic strongSwan package installation is disabled: foreign systemd unit/drop-in/generator execution cannot be proven absent before APT. An administrator must inspect effective service ownership, install needed packages through the OS package manager, then rerun STL readiness checks. No APT attempted.'
-    fi
+  apt_resolve_plan
+  before_plan=$apt_plan
+  if [[ $expected_apt_plan_supplied == 1 && $before_plan != "$expected_apt_plan" ]]; then
+    fail 'APT dependency plan changed since confirmation; no APT attempted'
   fi
-  printf 'Installing missing STL dependency packages on %s %s: %s\n' "$os_id" "$os_version" "${missing[*]}" >&2
-  DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none apt-get -o Acquire::Retries=2 update ||
-    fail 'apt package index refresh failed; STL executable is unchanged'
-  if ! DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none apt-get install -y --no-install-recommends -- "${missing[@]}"; then
-    if [[ $os_id == debian && $os_version == 11* ]]; then
-      fail 'Debian 11 post-LTS APT repositories can reference removed security packages (HTTP 404). STL executable is unchanged; use maintained signed Debian 11/ELTS sources or upgrade to Debian 12+, then retry. The installer never overrides APT verification or rewrites sources.'
-    fi
-    fail 'apt dependency installation failed; STL executable is unchanged (inspect package manager state)'
+  if [[ $want_ipsec == 1 ]]; then
+    for pkg in "${missing[@]}"; do
+      case "$pkg" in charon-systemd|strongswan-swanctl|libstrongswan-standard-plugins) missing_ipsec=1 ;; esac
+    done
+  fi
+  if [[ $missing_ipsec == 1 ]]; then
+    # install/update has no PREPARE confirmation; never surprise-start a
+    # vendor daemon as an incidental release install/update side effect.
+    [[ $action == prepare && $expected_missing_supplied == 1 &&
+       $expected_apt_plan_supplied == 1 ]] ||
+      fail 'automatic IPsec requires explicit exact-plan PREPARE consent'
+    ipsec_clean_host_before_apt
+  fi
+  printf 'Installing verified missing packages on %s %s: %s\n' "$os_id" "$os_version" "$before_plan" >&2
+  DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none \
+    apt-get "${apt_safety[@]}" -o Acquire::Retries=2 update ||
+    fail 'APT index refresh failed; no STL binary or Link changed; inspect package indexes'
+  # An index refresh can change selected candidate versions/dependencies.
+  # Never execute a plan different from the one the operator approved.
+  apt_resolve_plan
+  [[ $apt_plan == "$before_plan" ]] ||
+    fail 'APT dependency plan changed after index refresh; package install cancelled'
+  if [[ $missing_ipsec == 1 ]]; then
+    ipsec_clean_host_before_apt
+  fi
+  if ! DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none \
+    apt-get "${apt_safety[@]}" install -y --no-install-recommends -- "${missing[@]}"; then
+    fail 'APT transaction incomplete; dpkg/vendor service may have changed. Inspect before retry; no Link created'
   fi
   for pkg in "${packages[@]}"; do
-    package_installed "$pkg" || fail "package remains unavailable after installation: $pkg"
+    package_installed "$pkg" || fail "selected package remains unavailable: $pkg"
   done
+  if [[ $missing_ipsec == 1 ]]; then
+    ipsec_normalize_new_vendor
+  fi
 }
 
 select_packages
@@ -214,9 +417,11 @@ if [[ $action == requirements ]]; then
       package_installed "$pkg" || missing+=("$pkg")
     done
     printf 'missing_packages=%s\n' "${missing[*]}"
+    apt_resolve_plan
+    printf 'apt_install=%s\n' "$apt_plan"
   fi
   if [[ $want_ipsec == 1 ]]; then
-    printf 'notice=Missing IPsec packages require manual administrator installation; APT may start a foreign VPN daemon\n'
+    printf 'notice=IPsec PREPARE may briefly activate a new vendor strongSwan service; only transaction-owned service normalization is permitted\n'
   fi
   exit 0
 fi
@@ -335,7 +540,11 @@ fi
 if [[ $action == prepare ]]; then
   if [[ $expected_missing_supplied == 1 ]]; then
     expected_missing_pattern='^([a-z0-9-]+( [a-z0-9-]+)*)?$'
-    [[ $expected_missing =~ $expected_missing_pattern ]] || fail 'untrusted expected package plan'
+    [[ $expected_missing =~ $expected_missing_pattern ]] || fail 'untrusted expected missing package set'
+  fi
+  if [[ $expected_apt_plan_supplied == 1 ]]; then
+    expected_apt_pattern='^([a-z0-9.+:-]+=[0-9a-zA-Z:.+~_-]+( [a-z0-9.+:-]+=[0-9a-zA-Z:.+~_-]+)*)?$'
+    [[ $expected_apt_plan =~ $expected_apt_pattern ]] || fail 'untrusted expected APT dependency plan'
   fi
   ensure_packages
   printf 'Selected backend packages prepared; kernel modules and STL-owned service admission must be verified separately. No STL executable or Link was changed.

@@ -59,7 +59,7 @@ func TestUnprivilegedOrRedirectedPackagePreviewCannotConsumeCreateInput(t *testi
 	// A read-only inventory is permitted, but root operation is not.
 	// Automatic strongSwan APT is now deliberately refused even for root:
 	// a false return requests manual reconciliation, not a privileged effect.
-	_ = menuPrepareSelectedPackages(reader, nil, &output, &errors, plan)
+	_ = menuPrepareSelectedPackages(reader, nil, &output, &errors, plan, nil)
 	if strings.Contains(output.String(), "Canonical installer verifying") ||
 		strings.Contains(output.String(), "Selected packages now pass") {
 		t.Fatalf("scripted package preview claimed mutation or success: %q", output.String())

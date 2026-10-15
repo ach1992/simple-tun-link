@@ -53,13 +53,16 @@ echo "REAL_APT_SELECTED_MISSING_ONLY=PASS"
 echo "REAL_APT_INSTALLED_BINARY_AND_RECORD_PRESERVED=PASS"
 echo "REAL_APT_STALE_CONSENT_REJECTED=PASS"
 echo "REAL_APT_IDEMPOTENT_NO_OP=PASS"
-# An IPsec package set is not automatically installed: effective foreign
-# systemd unit/drop-in/generator semantics cannot be proven safe pre-APT.
-# Replace the guest-local apt-get AFTER the successful WireGuard
-# acceptance. Because the canonical installer sanitizes PATH, a PATH shim
-# would not intercept anything and would produce a false no-APT proof.
+# This guest intentionally lacks PID1 systemd. Even with valid exact-plan
+# approval, the managed IPsec path must refuse BEFORE touching apt or
+# overwriting a foreign vendor drop-in.
 apt_bin=$(command -v apt-get)
 [[ $apt_bin == /usr/bin/apt-get ]] || fail unexpected_guest_apt_path
+plan_ipsec=$(bash /mnt/stl-install.sh requirements --backends native,ipsec)
+missing_ipsec=$(sed -n "s/^missing_packages=//p" <<< "$plan_ipsec")
+apt_ipsec=$(sed -n "s/^apt_install=//p" <<< "$plan_ipsec")
+[[ $missing_ipsec == *charon-systemd* && $apt_ipsec == *charon-systemd=* ]] ||
+  fail expected_missing_ipsec_fixture
 mv -- "$apt_bin" /tmp/stl-package-guest-apt-original
 cat > "$apt_bin" <<MOCK
 #!/bin/bash
@@ -68,18 +71,17 @@ exit 93
 MOCK
 chmod 0755 "$apt_bin"
 mkdir -p /etc/systemd/system/charon-systemd.service.d
-printf "[Service]\\nExecStartPre=/usr/bin/touch /tmp/stl-package-foreign-service-marker\\n" > /etc/systemd/system/charon-systemd.service.d/foreign.conf
-plan_ipsec=$(bash /mnt/stl-install.sh requirements --backends native,ipsec)
-missing_ipsec=$(sed -n "s/^missing_packages=//p" <<< "$plan_ipsec")
-[[ $missing_ipsec == *charon-systemd* ]] || fail expected_missing_ipsec_fixture
-if bash /mnt/stl-install.sh prepare --backends native,ipsec --expected-missing "$missing_ipsec"; then
-  fail ipsec_missing_packages_were_auto_installed
+printf "[Service]\nExecStartPre=/usr/bin/touch /tmp/stl-package-foreign-service-marker\n" > /etc/systemd/system/charon-systemd.service.d/foreign.conf
+if bash /mnt/stl-install.sh prepare --backends native,ipsec \
+      --expected-missing "$missing_ipsec" --expected-apt-plan "$apt_ipsec"; then
+  fail ipsec_non_systemd_or_foreign_effect_was_accepted
 fi
-[[ ! -e /tmp/stl-package-foreign-apt-called && ! -e /tmp/stl-package-foreign-service-marker ]] || fail foreign_service_or_apt_executed
+[[ ! -e /tmp/stl-package-foreign-apt-called && ! -e /tmp/stl-package-foreign-service-marker ]] ||
+  fail foreign_service_or_apt_executed
 after_ipsec=$(bash /mnt/stl-install.sh requirements --backends native,ipsec)
 [[ "$after_ipsec" == "$plan_ipsec" ]] || fail ipsec_refusal_modified_dpkg_inventory
 [[ $(sha256sum /usr/local/bin/stl | awk "{print \$1}") == "$after_bin" ]] || fail ipsec_refusal_changed_stl
-echo "IPSEC_MISSING_PACKAGE_APT_REFUSED_BEFORE_EFFECT=PASS"
+echo "IPSEC_NON_SYSTEMD_GUEST_PREPARE_REFUSED_BEFORE_APT=PASS"
 echo "IPSEC_FOREIGN_DROPIN_AND_APT_MARKERS_ABSENT=PASS"
 '
 echo "REAL_APT_PACKAGE_PREPARATION_GUEST=PASS source=$source_sha"

@@ -14,6 +14,27 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// A harmless systemd LOAD=not-found placeholder can be left by an earlier
+// metadata lookup. It is not the same as a loaded/foreign service. Exact
+// protected disk identities and the effective pre-start unit are still
+// independently verified before ANY service publication or activation.
+func nativeProvisionInventoryUnoccupied(raw []byte) bool {
+	if len(raw) == 0 {
+		return true
+	}
+	if len(raw) > 1024 || raw[len(raw)-1] != '\n' || strings.Count(string(raw), "\n") != 1 {
+		return false
+	}
+	for _, b := range raw {
+		if b != '\n' && (b < 0x20 || b > 0x7e) {
+			return false
+		}
+	}
+	parts := strings.Fields(string(raw))
+	return len(parts) >= 5 && parts[0] == "simple-tun-link-ipsec.service" &&
+		parts[1] == "not-found" && parts[2] == "inactive" && parts[3] == "dead"
+}
+
 // NativeProvisionReadiness is a restrictive, read-only eligibility check.
 // The only operational caller is explicit, fresh root-TTY menu consent, and
 // the producer repeats the same check under the installed maintenance lock.
@@ -38,7 +59,7 @@ func NativeProvisionReadiness(ctx context.Context) error {
 	listed, e := r.RunBounded(ctx, CaptureLimits{Stdout: 16 << 10, Stderr: 1024},
 		nativeSystemctlBinary, "--system", "--no-pager", "--no-legend", "--plain", "--full",
 		"--all", "--type=service", "list-units", "simple-tun-link-ipsec.servic?")
-	if e != nil || len(listed.Stderr) != 0 || len(listed.Stdout) != 0 {
+	if e != nil || len(listed.Stderr) != 0 || !nativeProvisionInventoryUnoccupied(listed.Stdout) {
 		return errors.New("native systemd loaded identity unavailable or occupied")
 	}
 	if err := verifyNoForeignStrongSwanProcess(0); err != nil {

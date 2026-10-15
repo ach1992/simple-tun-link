@@ -81,7 +81,7 @@ func inspectNativeSystemdLoadedUnit(ctx context.Context, runner linux.Runner) IP
 		// service. On-disk aliases and effective manager state remain
 		// separately subject to the existing fail-closed provision gate.
 		check.Status = "blocked"
-		check.ReasonCode = "native_systemd_unit_not_provisioned"
+		check.ReasonCode = "native_systemd_unit_not_loaded"
 		check.Summary = "systemd lists an in-memory placeholder for the STL IPsec service with LOAD=not-found; the service is not verified or ready."
 		check.NextStep = "Continue through the verified STL-owned provisioning workflow; absence of a trusted service and conflicting aliases must be checked before any mutation."
 	case systemdInventoryConflict:

@@ -28,7 +28,7 @@ for distro in 'ubuntu 22.04' 'ubuntu 22.10' 'ubuntu 24.04' 'ubuntu 26.04' \
   grep -qx "packages=iproute2 iptables kmod wireguard-tools" "$root/out" || fail "wrong WireGuard package list on $distro"
   plan native,ipsec
   grep -qx "packages=iproute2 iptables kmod charon-systemd strongswan-swanctl libstrongswan-standard-plugins" "$root/out" || fail "wrong IPsec package list on $distro"
-  grep -q 'notice=Missing IPsec packages require manual administrator installation' "$root/out" || fail 'manual IPsec package risk not flagged'
+  grep -q 'notice=IPsec PREPARE may briefly activate a new vendor strongSwan service' "$root/out" || fail 'IPsec package activation risk not flagged'
   plan all
   grep -qx "packages=iproute2 iptables kmod wireguard-tools charon-systemd strongswan-swanctl libstrongswan-standard-plugins" "$root/out" ||
     fail "wrong all-backend package list on $distro"
