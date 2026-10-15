@@ -1,5 +1,13 @@
 # Security Model
 
+**Version boundary:** several IPsec subsections below retain historical
+`source-only` milestone descriptions; they do not assert that the
+published v0.1.0-rc.6 conditional native-exclusive backend is still
+unregistered. The normative durable model is
+[PROJECT-SPEC](PROJECT-SPEC.md), actual shipped behavior belongs to
+the tagged source/README, and the next automatic preparation target
+is [Issue #105](https://github.com/ach1992/simple-tun-link/issues/105).
+
 ## Security is backend-specific
 
 The Link abstraction does not imply encryption.
@@ -376,6 +384,22 @@ Rules:
 - track/restore only state the tool owns;
 - validate interface identity before update/delete.
 
+**Future managed IPsec prerequisites (Issue #105):** an explicit operator
+PREPARE approval is necessary but does not by itself make arbitrary APT
+maintainer hooks safe. Debian/Ubuntu §charon-systemd§ post-install can
+**enable and start** vendor §strongswan.service§ using separate helpers.
+A scoped, verifiably supported preparation adapter must prevent foreign
+service takeover and unwanted persistent vendor enablement; it must not
+rely solely on §policy-rc.d§ if enablement can still occur. Preserve the
+existing host's foreign daemons/units, protected credentials, ports,
+routes and Links. A missing STL-private unit or unverified probe is
+**not** proof of a foreign service conflict; distinguish truly foreign,
+unknown and merely unprovisioned states and offer a qualified supported
+path when one exists. If the package transaction starts but fails, never
+claim package rollback from an STL Link/binary rollback; report observed
+partial effects and provide a safe operator-facing recovery route.
+This changes the future workflow, not immutable rc.6 behavior.
+
 ## Privilege
 
 Creation/removal of Linux network links generally requires elevated capability/root. Keep privileged operations small and explicit.
@@ -396,9 +420,11 @@ The accepted portable native-exclusive IPsec runtime must fail closed if
 an unrelated/ambiguous strongSwan process, configuration, service, IKE port,
 credential or XFRM resource is present. A successful read-only process or
 package probe is **not** a service-ownership or host-resource proof. The
-`stl doctor ipsec` read-only diagnostic is intentionally unable to activate
-IPsec while its backend remains unregistered. Never terminate a foreign
-process or reconcile external credentials as a troubleshooting shortcut.
+`stl doctor ipsec` command remains read-only even when the conditional
+operational backend is available on an admitted STL-exclusive host.
+A diagnostic observation never authorizes IPsec activation or new
+configuration. Never terminate a foreign process or reconcile external
+credentials as a troubleshooting shortcut.
 
 Across all STL backends, human failure output should include a stable,
 secret-safe reason and next action. Structured logs may retain public
