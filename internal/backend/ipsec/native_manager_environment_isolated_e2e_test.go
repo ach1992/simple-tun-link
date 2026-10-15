@@ -48,7 +48,7 @@ func TestIsolatedNativePreStartRejectsManagerEnvironmentWithoutExecuting(t *test
 	defer cancel()
 	// Calibrate the otherwise-negative marker using a harmless copied true
 	// executable with the same basename, never the real IKE daemon.
-	const calibrator = "/run/charon-systemd"
+	const calibrator = "/usr/local/lib/charon-systemd"
 	if err := exec.CommandContext(ctx, "/usr/bin/cp", "/usr/bin/true", calibrator).Run(); err != nil {
 		t.Fatalf("disposable preload signal calibration unavailable: %v", err)
 	}
