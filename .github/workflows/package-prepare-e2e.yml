@@ -1,0 +1,40 @@
+# Real APT behavior is proved in an ephemeral Docker guest. Never install
+# packages on the CI runner or a live owner/Agent server.
+name: Disposable package-only prerequisite E2E
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/package-prepare-e2e.yml'
+      - 'scripts/install.sh'
+      - 'scripts/e2e/package-prepare-docker.sh'
+      - 'scripts/build-artifacts.sh'
+      - 'cmd/stl/**'
+
+permissions:
+  contents: read
+
+jobs:
+  selected-apt:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Exact source and isolated host preflight
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          test ! -e /.dockerenv
+          test -z "$(git status --porcelain)"
+          docker version
+      - name: Real Ubuntu package-only provisioning
+        env:
+          STL_E2E_DISPOSABLE_HOST: approved
+        run: bash scripts/e2e/package-prepare-docker.sh

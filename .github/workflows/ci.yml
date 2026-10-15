@@ -37,6 +37,7 @@ jobs:
           bash -n scripts/e2e/wireguard-netns.sh
           bash -n scripts/e2e/ipsec-two-peer-netns.sh
           bash -n scripts/e2e/ipsec-installed-systemd.sh
+          bash -n scripts/e2e/package-prepare-docker.sh
       - name: Canonical installer embedded byte-identity
         run: |
           bash -n scripts/install.sh
