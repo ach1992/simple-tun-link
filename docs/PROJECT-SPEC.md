@@ -141,7 +141,7 @@ MTU is persisted per Link and **endpoint-local**: absent policy on an old saved 
 - Do not change the host's primary network manager merely to create a link.
 - Existing interfaces/configuration are never overwritten without identity validation.
 - Apply operations are idempotent.
-- Partial failure must roll back only state owned by the current operation.
+- Partial failures must undo only verified STL-owned effects. Distro package-manager changes may persist and must be reported honestly, not described as an atomic Link/binary rollback.
 - Creating, updating, repairing, or removing one Link must not mutate or disrupt another Link.
 - Concurrent Link operations must coordinate collision-sensitive resource allocation so two operations cannot claim the same interface identity, Link Address, backend key/identifier, UDP/listen port, XFRM identity, route/firewall ownership, or persistence identity.
 
@@ -216,90 +216,130 @@ v0.1 is complete when:
 
 The project license is **MIT**. The canonical CLI remains `stl`; `stlink` is a low-cost convenience alias to the same executable when installed through the supported installer.
 
-For v0.1, **Quick Link** is the default one-step pairing mode for secret-bearing backends. The format remains explicitly extensible so a future Secure Exchange/local-key mode can be added without changing the core Link model. No currently open owner decision blocks Issue #2 development.
+For v0.1, **Quick Link** is the default one-step pairing mode for secret-bearing backends. The format remains explicitly extensible so a future Secure Exchange/local-key mode can be added without changing the core Link model. Current development targets are tracked by the relevant GitHub Issues.
 
 For IPsec v0.1, the Owner accepts a single native-exclusive STL-owned strongSwan runtime on eligible hosts and an explicit fail-closed IPsec-only unavailability on any host with foreign/ambiguous daemon ownership. Future coexistence/isolation modes require independent validation and review. The Owner also requires actionable, redacted operator diagnostics and coherent safe logging across **every** backend and CLI/menu workflow; this is a product-wide acceptance criterion, not an IPsec-specific embellishment.
 
 2026-10-14 Owner acceptance: pre-success setup is disposable, but a fully committed working tunnel MUST be restored after reboot; basic protection against lost/unknown secrets or foreign resource deletion is not waived. The persisted MTU contract is `unset=legacy/unmanaged`, `auto`, or `manual(bytes)`, applied only under canonical local Engine ownership and never copied across pairing. Real physical WAN/NAT-router experiments are Owner-run **after** publication; do not claim them pre-tested or bypass platform restrictions. Installed released-artifact identity and successful committed-Link restart/traffic remain pre-publication acceptance. Stable publication/tag still needs separate Owner authorization.
 
 
-## 15. Operator-first human interface — Owner field acceptance (2026-10-14)
+## 15. Guided operator workflow and one-consent preparation
 
-The shipped v0.1.0-rc.2 backend CLI and persistence remain the machine contract; Issue #91 is a distinct human-UX improvement after real server screenshots. The ordinary TUI must offer one Create action with a numbered backend/mode choice (GRE Native default, GRE/IPIP FOU/GUE, WireGuard/UDP, and conditionally admitted IPsec), a compact version/repository/host/Link summary, private-address auto suggestion or explicit local/peer IP entry, numbered Link management/diagnostics, and obvious retry/cancel/navigation. A new one-line pinned installer workflow should open the interactive menu after a verified installation, preserving installer ownership/checksum checks.
+**Normative development target after immutable v0.1.0-rc.6.** This section
+defines the future product contract; the rc.6 README/INSTALL/CLI still
+describe what the released binary actually does. Active implementation:
+[Issue #105](https://github.com/ach1992/simple-tun-link/issues/105)
+(automatic IPsec setup), [Issue #106](https://github.com/ach1992/simple-tun-link/issues/106)
+(all-screen operator UX). Physical-host WAN/NAT/systemd-249 acceptance
+remains [Issue #93](https://github.com/ach1992/simple-tun-link/issues/93).
 
-Menu confirmations need not require typing opaque full Link IDs; a fresh affirmative response after a reviewed preview is sufficient for creation/import, and an explicit stronger remove confirmation with a stable expected-intent guard is required for destructive removal. An input error or a failed/uncertain backend operation must **not exit the TUI**; never convert a failed, unconfirmed or blocked Engine outcome into success or silently retry a possibly mutated operation. Read-only diagnostics are not automatic repair.
+### The short path to a working Link Address
 
-Plain GRE/IPIP setup links may be pasted with visible terminal input **only when an operator explicitly selects a plaintext-import path**; sensitive WireGuard/IPsec handoffs remain protected/redacted and owner-private. Persisted GRE/IPIP state can regenerate its safe pairing offer; a lost sensitive receiver handoff cannot be recreated from sender state. Never weaken protected per-Link credentials, resource identity, atomic systemd persistence, foreign-strongSwan admission or committed-Link reboot restoration merely for a simpler TUI. Explicitly describe Auto MTU as a local conservative **pre-creation policy**, not real end-to-end PMTU measurement; probe the active peer only after creation/import on both sides. Physical WAN/NAT validation is still Owner-run after publication. A later release beyond rc.2 requires separate review/integration/publication gates.
+1. Show a concise project/version/host/source-IP and saved-Link summary.
+   A saved Link is **not** proof of an active or reachable peer.
+2. One Create entry defaults to GRE Native; WireGuard/IPIP are common
+   choices, FOU/GUE/IPsec are accessible in Advanced. Select the OTHER
+   server's reachable underlay IP. Suggest THIS server's own underlay
+   source IP from the route, with bounded appropriate override.
+3. Suggest an unused private IPv4 Link Address pair (`/31` by default),
+   with direct human manual `/31` and usable `/30` pairing still supported.
+   Show public/underlay IPs separately from the private tunnel/Link IPs.
+4. Read-only check only the chosen backend's missing prerequisites.
+   If needed, show one clear package/module/STL-private-service plan,
+   affected resources, effects that may persist, and **one fresh PREPARE**
+   confirmation covering the *entire selected preparation*. Automatically
+   perform qualified work via the canonical installer, existing module
+   adapters and existing exclusive IPsec provisioner. Reinspect readiness
+   and continue the **same selected tunnel**. Already-ready backends
+   must not show another preparation prompt.
+5. Preview both endpoints, private IPs, encapsulation/port, local MTU
+   policy, and scope. Creating or importing the actual Link needs its
+   own affirmative YES. A failed or cancelled step must not claim success.
+6. On a successful local Create, present **saved/created locally** as
+   distinct from **verified peer connectivity**, and show the second
+   server's correct copyable setup. GRE/IPIP Native can pair manually,
+   with consistent GRE keys (including zero/unkeyed), and UDP FOU/GUE
+   need matching selected ports. Guided WG/IPsec Create may immediately
+   display the exact original *sensitive* receiver Setup Link only in
+   a real private terminal under the existing Create consent. A later
+   SHOW requires fresh consent, and DELETE permanently removes only
+   the identity-verified retained receiver offer; it does not remove
+   the active Link or recreate keys.
+7. Other server: protected/plain setup import and exact peer-oriented
+   preview, independent Create/Import approval and normal Engine checks.
+   Claim an actual working connection only from observed peer handshake,
+   packet/traffic or verified connectivity; five-ping/loss/RTT are
+   measurements, while local MTU Auto is an **unmeasured local policy**
+   until a peer/path probe is performed. Committed working Links must
+   survive reboot without re-pairing.
 
+### One consistent readable terminal language
 
-Owner follow-up to Issue #91 (2026-10-14): Kernel route to the other
-server determines THIS server's local underlay/source IP; Enter accepts
-the suggested pair of private Link IPs. Keep the first Create screen
-short (GRE Native, WireGuard, IPIP Native, Manual and Advanced submenus).
-Numbered Manage always offers a read-only copyable saved two-server
-configuration sheet and repeatable GRE/IPIP Setup Link export. GRE
-Native can be configured manually on the peer with a matching nonsecret
-GRE receive key (including numeric zero) or unkeyed on both sides,
-and IPIP Native can be paired manually without a Setup Link. FOU/GUE
-require canonical paired UDP Setup Links; WireGuard/IPsec still require
-the protected private receiver handoff and never recreate secrets
-from public State. Details are configured addresses, not verified
-remote host state or NAT visibility. GRE Native needs IP protocol 47;
-IPIP Native needs IP protocol 4. External WAN/NAT remains owner-tested
-after publication.
+- Task-first heading, compact aligned facts, optional concise rows,
+  visible current selection, **one main next action**, and optional
+  Details/Why for technical diagnostics. Keep author-written sentences
+  short and avoid repeated warnings and paragraph dumps.
+- Semantic tokens on a capable interactive terminal: **RED BOLD**
+  REMOVE/DELETE and destructive failure; **YELLOW BOLD**
+  PREPARE/INSTALL/UPDATE and cautions; **GREEN BOLD** verified success
+  and ordinary YES; BLUE/CYAN for SHOW, navigation and informative
+  data; secondary text dim. Color supplements explicit words and
+  never substitutes for them.
+- Responsive, visibly aligned output at ~60, 80 and 120 columns.
+  Wrap human prose only. Never alter, split, truncate, decorate or
+  log exact `stl://` handoffs, URLs, commands, opaque IDs, public keys,
+  hashes or secret-bearing values. Never leak a private receiver
+  handoff into normal logs/Status/Doctor/JSON. Respect `NO_COLOR`,
+  `TERM=dumb`, small terminals and redirected streams; no unexpected
+  ANSI/control characters or terminal-scrollback erasure.
+- A failure view distinguishes **missing/recoverable**, **unknown**,
+  **confirmed foreign conflict**, **failed before mutation** and
+  **partially/uncertainly mutated**. Show the known scope, safe reason,
+  current outcome and one actionable next step, not raw OS/daemon text.
+  An inconclusive observation alone cannot prove a permanent blocker;
+  uncertain mutable effects are not blindly retried.
+- UI renderers do not change canonical Engine, versioned JSON,
+  reason-code/exit contracts, stdout/stderr semantics or secret
+  handling; reuse the existing shared terminal presentation instead
+  of adding a second framework.
 
+### Prepared automatically, without unsafe ownership changes
 
-Owner decision 2026-10-14 (Issue #91): The **guided** new WireGuard and
-IPsec sender saves its exact original receiver handoff to an STL-owned
-owner-private receiver-handoffs/ directory, indexed by the immutable
-Link ID. The handoff remains (including after reboot) until the
-operator explicitly deletes it. The human My tunnels -> Share workflow
-must require a fresh real-TTY SHOW to display it, and a separate
-fresh DELETE removes only that verified protected file. Neither
-action changes the tunnel, generates new keys, edits public desired
-State nor exposes secrets in ordinary JSON. Reject unsafe/mismatching
-receiver files and old untracked CLI output paths; there is no
-recovery from public State if the protected offer was lost.
-Never remove the stored handoff automatically after delivery or
-a Link deletion. Users who removed a Link before deleting its handoff
-must explicitly inspect and clean their own remaining private file
-on the host. Public rc.2 predates all of these UI changes.
+- The goal is an actual usable locally addressed tunnel, not a
+  prerequisite checklist. A known manageable warning can be accepted
+  for a **scoped, qualified** action. Status/Doctor/menu navigation and
+  cancellation remain read-only; no silent root/network mutations.
+- For missing strongSwan packages, STL—not the user—must handle the
+  supported trusted distro APT dependencies after PREPARE consent,
+  accounting for package hooks that can **enable AND start** a newly
+  installed vendor service on a verified clean host. The Owner accepts
+  this possible temporary activation, which must be disclosed in the
+  PREPARE preview. Only the selected signed packages and disclosed
+  required dependencies may be installed/updated: no unrelated removals,
+  unrelated upgrades or hidden persistent service effects. Before installation STL must record that no
+  foreign service, config, IKE port owner or daemon would be displaced.
+  Only a vendor service positively attributed to this exact approved
+  package transaction may then be stopped and disabled; verify that
+  the vendor unit is inactive and has no enabled boot edge before
+  the existing STL-private daemon is provisioned. No existing or
+  ambiguous foreign service may be stopped, disabled or adopted.
+  Avoid a separate global APT hook-interception framework. If a host
+  cannot meet these conditions, give the specific reason and a safe
+  operator-approved alternative.
+- Package installation does not prove private IPsec readiness.
+  Reuse the already-implemented receipt-bound STL-exclusive
+  strongSwan service provisioner; independently verify loaded unit,
+  secure logger, process/config/VICI/socket and IKE port ownership.
+  A harmless absent/not-provisioned unit must be distinguished
+  from a confirmed conflicting one. User PREPARE consent cannot
+  convert unowned host resources into STL-owned resources.
+- A partially executed APT operation may persist packages or leave
+  dpkg in a state needing verified follow-up; do not promise atomic
+  package rollback with the STL binary or Link. Show outcome and
+  safe recovery explicitly, preferably inside STL itself.
 
-Owner follow-up (2026-10-15, Issue #95): For newly created protected
-WireGuard/IPsec Links, the same successful real-terminal guided Create
-confirmation (**YES**) authorizes displaying the **exact** saved, validated
-receiver Setup Link on that result screen, ready to copy to the other server.
-No second SHOW step is required immediately after Create. Protected storage,
-identity checks and the separate fresh SHOW for **later** Share/DELETE stay
-intact. Redirected/non-TTY output, machine JSON, status, diagnostics and
-errors must never expose that credential. User convenience must not undermine
-ownership or rollback protections. Human connection checks should separate
-local interface identity from real peer ICMP samples (normally five), report
-actual replies/loss/RTT/variation and distinguish unavailable probes from
-confirmed no replies; RX/TX counters are cumulative, not proof of current
-peer reachability. Read-only backend availability hints must not start or
-install services/modules, and cannot replace final runtime admission.
-
-Owner follow-up 2026-10-15 (Issue #101): Default installation remains
-lean. On selection of a backend, STL should identify missing prerequisites
-and, where independently safe, provide an on-demand preparation step.
-Reading statuses/diagnostics never changes the host. Loading a positively
-verified inactive, on-disk allowlisted kernel module is a **separate**,
-explicit, freshly confirmed, privileged action, followed by kernel
-reverification. Installing optional packages is separately owned by the
-canonical installer, not ad hoc menu APT logic; never silently start, adopt
-or modify a foreign VPN service. When foreign systemd package lifecycle
-cannot be proven safe before APT, missing strongSwan packages require
-administrator-managed installation rather than automatic Prepare.
-IPsec cannot be declared ready until native-exclusive strongSwan
-ownership and service origin are admitted.
-Selected optional module requirements must survive the committed Link's
-restoration after reboot; durable completion requires disposable guest proof.
-When the fixed STL-exclusive IPsec source/config publisher is verified
-safe in a disposable real-systemd fixture, a separately confirmed
-installed root terminal may enable ONLY that private native service
-under existing installer/Engine locks, with no takeover, stop, disable
-or modification of vendor strongSwan services. Privileged publication
-failures must retain unambiguous reconciliation evidence and never claim
-completed rollback or readiness from partial state; the existing
-live service/process/VICI/port admission remains final authority.
+The shipped immutable rc.6 still **does not** automate missing IPsec
+package installation. Code changes for this contract require
+real disposable-systemd/Ubuntu/Debian evidence, independent review
+and separate integration/release gates; do not claim this behavior
+in a published README until it exists.
