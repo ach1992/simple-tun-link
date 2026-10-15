@@ -89,10 +89,18 @@ missing proof or live STL-owned resource refuses retirement. Safe
 retirement is not secure physical-media erasure, and unexpected external
 privileged filesystem changes still require operator reconciliation.
 
-The caller must store the **local** private key only at its owning endpoint.
-The initiator must never persist a generated *recipient* private key as local
-state; that material belongs only in the explicitly SENSITIVE Quick Link
-until protected receiver-side import.
+Each endpoint's **local** private key belongs only in its own protected
+credential store. A generated *recipient* private key or PSK must never
+enter the initiator's ordinary desired State, generic JSON, status,
+diagnostics or logs. The guided initiator is allowed to retain the
+**original SENSITIVE receiver Setup Link** only in STL's separately
+protected, owner-private, immutable per-Link `receiver-handoffs/` store
+(as specified above). That saved handoff persists through successful
+receiver import, delivery, reboot and Link removal **until the operator
+explicitly confirms DELETE**. Neither import nor delivery authorizes
+automatic deletion; a lost/deleted receiver secret cannot be rebuilt
+from public saved Link State.
+
 Sender Create stages its **own** protected private key and a no-secret,
 SHA-256-bound public `pending_senders` reservation in ordinary state **before**
 allowing the recipient handoff to become visible. A successful canonical
@@ -125,9 +133,12 @@ to delete an orphan key or invent a new peer secret. This private-file
 recovery is not tunnel traffic, handshake or host-mutating repair.
 Configured v3 receiver import provisions the local key under canonical
 Engine locks. The guided sender generates its own protected private key and
-a separate ephemeral receiver private key only for a deliberately exported
-0600 SENSITIVE Quick Link; ordinary state retains only the receiver public
-key. Real bidirectional WireGuard traffic, public handshake/counters and a
+a distinct recipient private key for the deliberately exported `0600`
+SENSITIVE Quick Link; ordinary State retains only the receiver public
+key. In the guided flow the original receiver Setup Link is separately
+retained in the owner-private per-Link handoff store until explicit DELETE,
+not retired automatically when the receiver imports it. Real
+bidirectional WireGuard traffic, public handshake/counters and a
 same-peer GRE/WireGuard coexistence fixture were observed in isolated kernel
 E2E (PR #53, Issue #12). Broader failure, restart/persistence, multi-peer
 and release-environment acceptance remain open under Issues #6/#8/#12.
