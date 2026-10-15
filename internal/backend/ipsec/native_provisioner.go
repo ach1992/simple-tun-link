@@ -34,9 +34,9 @@ func NativeProvisionReadiness(ctx context.Context) error {
 	// Refuse an already listed same-name systemd service including stale
 	// loaded/generator/transient state. The backend's runtime ownership
 	// admission independently rejects unapproved effective unit overrides.
-	r := BoundedExecRunner{Timeout: 4 * time.Second}
+	r := nativeSystemdRunner{Timeout: 4 * time.Second}
 	listed, e := r.RunBounded(ctx, CaptureLimits{Stdout: 16 << 10, Stderr: 1024},
-		"/usr/bin/systemctl", "--system", "--no-pager", "--no-legend", "--plain", "--full",
+		nativeSystemctlBinary, "--system", "--no-pager", "--no-legend", "--plain", "--full",
 		"--all", "--type=service", "list-units", "simple-tun-link-ipsec.servic?")
 	if e != nil || len(listed.Stderr) != 0 || len(listed.Stdout) != 0 {
 		return errors.New("native systemd loaded identity unavailable or occupied")
@@ -79,9 +79,9 @@ func readNativeVendorUnitState(ctx context.Context, action, name string) (string
 	defer cancel()
 	out := &privateCapture{max: 128}
 	errOut := &privateCapture{max: 128}
-	cmd := exec.CommandContext(bound, "/usr/bin/systemctl",
+	cmd := exec.CommandContext(bound, nativeSystemctlBinary,
 		"--system", "--no-pager", action, name)
-	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C", "LANG=C", "HOME=/root"}
+	cmd.Env = nativeSystemdFixedEnvironment()
 	cmd.Stdout, cmd.Stderr = out, errOut
 	runErr := cmd.Run()
 	if bound.Err() != nil || out.overflow || errOut.overflow || errOut.output.Len() != 0 {
@@ -243,13 +243,13 @@ func ProvisionNativeExclusive(ctx context.Context) error {
 	if err := publishNativeUnitAt("/", 0, nativeUnitPublishHooks{}); err != nil {
 		return fmt.Errorf("IPsec unit publication incomplete: %w; private config remains for owner reconciliation", err)
 	}
-	runner := BoundedExecRunner{Timeout: 25 * time.Second}
+	runner := nativeSystemdRunner{Timeout: 25 * time.Second}
 	transition := func(action string) error {
-		args := []string{action}
+		args := []string{"--system", "--no-pager", action}
 		if action == "start" {
 			args = append(args, nativeServiceName)
 		}
-		result, e := runner.RunBounded(ctx, CaptureLimits{Stdout: 1024, Stderr: 1024}, "/usr/bin/systemctl", args...)
+		result, e := runner.RunBounded(ctx, CaptureLimits{Stdout: 1024, Stderr: 1024}, nativeSystemctlBinary, args...)
 		clear(result.Stdout)
 		clear(result.Stderr)
 		if e != nil {

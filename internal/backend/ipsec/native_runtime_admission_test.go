@@ -14,7 +14,7 @@ type fakeServiceBus struct {
 
 func (f *fakeServiceBus) RunBounded(ctx context.Context, limits CaptureLimits, binary string, args ...string) (CommandResult, error) {
 	if ctx == nil || ctx.Err() != nil || limits.Stdout < 16 || binary != nativeBusctl ||
-		len(args) < 2 || args[0] != "--system" {
+		len(args) < 2 || args[0] != nativeSystemdManagerAddress {
 		return CommandResult{}, fmt.Errorf("unexpected bounded service probe")
 	}
 	f.commands = append(f.commands, strings.Join(args, " "))

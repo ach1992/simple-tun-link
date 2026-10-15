@@ -77,8 +77,17 @@ func TestIsolatedNativePreStartRejectsManagerEnvironmentWithoutExecuting(t *test
 	} else {
 		clear(out)
 	}
-	if err := NewNativeRuntimeAdmission().attestManagerEnvironment(ctx); err == nil {
-		t.Fatal("production D-Bus manager inspector missed planted LD_PRELOAD")
+	// A hostile caller directs --system to a misleading bus and attempts to
+	// force systemctl off its private socket. The REAL PID1 must still be
+	// observed and the actual manager LD_PRELOAD must cause the denial.
+	t.Setenv("DBUS_SYSTEM_BUS_ADDRESS", "unix:path=/run/stl-misleading-absent-bus")
+	t.Setenv("SYSTEMCTL_FORCE_BUS", "1")
+	t.Setenv("LD_LIBRARY_PATH", "/run/stl-untrusted-loader")
+	t.Setenv("LD_PRELOAD", library)
+	t.Setenv("GCONV_PATH", "/run/stl-untrusted-gconv")
+	if err := NewNativeRuntimeAdmission().attestManagerEnvironment(ctx); err == nil ||
+		!strings.Contains(err.Error(), "contains unsafe override") {
+		t.Fatalf("production D-Bus inspector failed to attest actual hostile PID1 manager: %v", err)
 	}
 	if err := ProvisionNativeExclusive(ctx); err == nil ||
 		!strings.Contains(err.Error(), "PRE-START") {
@@ -94,8 +103,10 @@ func TestIsolatedNativePreStartRejectsManagerEnvironmentWithoutExecuting(t *test
 	if trustedNativeBootEnablementAt("/", 0) {
 		t.Fatal("manager-environment denial created an unverified boot edge")
 	}
-	status, err := exec.CommandContext(ctx, "/usr/bin/systemctl",
-		"--system", "is-active", nativeServiceName).CombinedOutput()
+	statusCmd := exec.CommandContext(ctx, nativeSystemctlBinary,
+		"--system", "is-active", nativeServiceName)
+	statusCmd.Env = nativeSystemdFixedEnvironment()
+	status, err := statusCmd.CombinedOutput()
 	if err == nil || (strings.TrimSpace(string(status)) != "inactive" &&
 		strings.TrimSpace(string(status)) != "failed") {
 		t.Fatalf("unverified private service became active: status=%q err=%v", status, err)
@@ -106,6 +117,8 @@ func TestIsolatedNativePreStartRejectsManagerEnvironmentWithoutExecuting(t *test
 	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("foreign preload executed after denied retry")
 	}
+	t.Log("NATIVE_REDIRECTED_DBUS_REAL_MANAGER_OVERRIDE_REJECTED=PASS")
+	t.Log("NATIVE_SYSTEMCTL_FORCE_BUS_AND_HELPER_LOADER_ENV_ISOLATED=PASS")
 	t.Log("NATIVE_MANAGER_ENV_LD_PRELOAD_REJECTED_BEFORE_START=PASS")
 	t.Log("NATIVE_MANAGER_ENV_CHARON_MARKER_NEVER_EXECUTED=PASS")
 	t.Log("NATIVE_MANAGER_ENV_NO_BOOT_EDGE=PASS")
