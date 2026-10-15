@@ -59,8 +59,17 @@ func menuScreen(out io.Writer, title string) {
 }
 
 func menuSection(out io.Writer, title string) {
+	width := 55
+	if file, ok := menuTerminal(out); ok {
+		if ws, err := unix.IoctlGetWinsize(int(file.Fd()), unix.TIOCGWINSZ); err == nil && ws.Col > 0 {
+			width = min(width, int(ws.Col)-4)
+			if width < 8 {
+				width = 8
+			}
+		}
+	}
 	fmt.Fprintln(out, "\n"+menuPaint(out, menuBlue, strings.ToUpper(title)))
-	fmt.Fprintln(out, menuPaint(out, menuDim, strings.Repeat("-", 55)))
+	fmt.Fprintln(out, menuPaint(out, menuDim, strings.Repeat("-", width)))
 }
 
 func menuOption(out io.Writer, number, title, description string) {

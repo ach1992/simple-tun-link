@@ -101,6 +101,7 @@ func TestNarrowTerminalKeepsMenuChoicesReadable(t *testing.T) {
 		t.Fatal(err)
 	}
 	menuOption(slave, "2", "WireGuard / UDP", "Encrypted; needs a peer")
+	menuSection(slave, "Preview")
 	if err := unix.SetNonblock(int(master.Fd()), true); err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +112,9 @@ func TestNarrowTerminalKeepsMenuChoicesReadable(t *testing.T) {
 	}
 	got := string(bytes[:n])
 	if !strings.Contains(got, "WireGuard / UDP") ||
-		!strings.Contains(got, "\r\n      Encrypted; needs a peer") {
+		!strings.Contains(got, "\r\n      Encrypted; needs a peer") ||
+		!strings.Contains(got, strings.Repeat("-", 44)) ||
+		strings.Contains(got, strings.Repeat("-", 55)) {
 		t.Fatalf("narrow terminal did not wrap the option in readable rows: %q", got)
 	}
 }
