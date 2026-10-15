@@ -28,9 +28,14 @@ Its source/CI, immutable tag, five public artifacts, downloaded checksums,
 fresh public install, and actual rc.3-to-rc.4 disposable update have
 separate accepted evidence in Issue #93. Those isolated checks do **not**
 close the Owner's real affected-host systemd, reboot or WAN/NAT acceptance.
-Post-rc.4 candidate work is tracked separately in
-[Issue #95](https://github.com/ach1992/simple-tun-link/issues/95);
-it is not part of the published rc.4 artifacts.
+The follow-up UI and diagnostic changes were independently approved
+and merged in [PR #96](https://github.com/ach1992/simple-tun-link/pull/96)
+under closed [Issue #95](https://github.com/ach1992/simple-tun-link/issues/95).
+The **v0.1.0-rc.5 public pre-release** packages these changes; its
+separate tagged-asset/download/install acceptance is recorded under
+[Issue #97](https://github.com/ach1992/simple-tun-link/issues/97).
+Previous rc.4 assets stay immutable. Real host reboot/WAN/NAT
+acceptance remains independent in Issue #93.
 
 ## Local build
 
