@@ -118,8 +118,10 @@ func TestInteractivePersistenceFailureRendersReadableSafeSections(t *testing.T) 
 	if output.Len() != 0 {
 		t.Fatal("human failure mistakenly wrote machine JSON")
 	}
+	// A PTY can split the final Reference into a later read. Do not assert
+	// fields that have not been fully received on a faster CI runner.
 	text := readMenuPTYUntil(t, master, "TUNNEL OPERATION / INCOMPLETE",
-		"NEXT STEP / NO AUTOMATIC RETRY", "restore_unit_identity_conflict")
+		"NEXT STEP / NO AUTOMATIC RETRY", "link_import / persistence / rollback_completed_unverified")
 	for _, marker := range []string{
 		"TUNNEL OPERATION / INCOMPLETE", "[FAILED]", "link_import", "persistence",
 		"rollback_completed_unverified", "restore_unit_identity_conflict",
