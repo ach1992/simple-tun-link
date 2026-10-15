@@ -168,7 +168,7 @@ Physical WAN/NAT-router peer acceptance is tracked under Issue #12 and was
 not established by these isolated tests. Integration and authorization to
 publish a new release are separate from this technical test evidence.
 
-## Release validation boundaries (historical rc.3 and published rc.4)
+## Release validation boundaries (rc.3 through rc.5)
 
 The v0.1.0-rc.3 operator-first changes were tracked in
 [Issue #91](https://github.com/ach1992/simple-tun-link/issues/91)
@@ -185,6 +185,14 @@ release installation and a disposable rc.3-to-rc.4 update. The affected
 Ubuntu 22.04/systemd 249 **operational host**, real paired WAN/NAT traffic,
 and reboot restoration of that host's own Link still require Owner field
 acceptance; prior isolated evidence is not transferred as that proof.
+
+The v0.1.0-rc.5 source builds on the reviewed, merged operator UI
+[PR #96](https://github.com/ach1992/simple-tun-link/pull/96), with Go
+CI and disposable six-Link Ubuntu 22.04 AMD64 / 24.04 ARM64 E2E.
+Its separately tagged public release/artifact acceptance is documented in
+[Issue #97](https://github.com/ach1992/simple-tun-link/issues/97).
+A source or disposable test cannot establish the real Owner-host
+reboot, provider routing, NAT or WAN properties.
 
 For [v0.1.0-rc.2](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.2),
 [Issue #12](https://github.com/ach1992/simple-tun-link/issues/12)

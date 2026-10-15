@@ -1,7 +1,7 @@
 # STL CLI — operator menus and stable machine commands
 
 The compact human menu below ships with the
-[published v0.1.0-rc.4 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.4).
+[v0.1.0-rc.5 public pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.5).
 The old rc.2 executable retains its older menu. Versioned
 noninteractive machine CLI/JSON contracts remain unchanged.
 
@@ -34,7 +34,7 @@ the canonical Engine's authority remain unchanged.
 | Home | Version, sanitized host, IPv4 candidate, saved count, aligned tasks | Saved is **not** connected; source route rechecked at setup |
 | Create guided | Backend -> peer -> tunnel IPs -> optional Advanced -> clean preview -> YES -> result | No pre-confirmation mutation |
 | Create manual | GRE/IPIP Native, reciprocal endpoints, optional numeric GRE receive key | GRE key is not encryption |
-| WireGuard/IPsec | Capability and UDP setup -> review -> YES -> protected receiver offer instructions | Secret retrieval requires saved identity and fresh private SHOW |
+| WireGuard/IPsec | Capability and UDP setup -> review -> YES -> immediately copyable protected offer in rc.5 | Real TTY and verified saved identity; later Share still needs fresh SHOW |
 | Import | Plaintext or hidden protected paste -> reversed IP preview -> YES -> result | Full link required; sensitive payloads never shown by preview |
 | Manage | Numbered saved list -> selected Link actions -> result -> Enter | Status read-only; Remove is fresh TTY-only confirmation |
 | Share / Delete handoff | One uncluttered copy line; protected SHOW or DELETE separately | Never regenerate deleted receiver keys |
@@ -82,10 +82,10 @@ A failed/uncertain menu operation must **not exit the terminal loop** or
 automatically repeat the mutating command. Machine CLI and JSON contracts
 remain independent of the menu's changing text.
 
-### Post-rc.4 operator UX changes (unreleased; Issue #95)
+### rc.5 operator UX enhancements (Issue #95)
 
-The public rc.4 artifact still uses the earlier screens. An unreleased
-follow-up candidate introduces read-only per-type host availability hints
+The historical rc.4 artifact keeps its earlier screens. rc.5 adds
+read-only per-type host availability hints
 (`Precheck OK`, `Unavailable` or `Check needed`) in Create, with a separate
 explanation choice; final Engine/strongSwan admission remains authoritative.
 No prerequisite packages or services are changed by this menu check.
@@ -270,8 +270,10 @@ An uncertain persistence/rollback result returns to the menu but
 requires read-only reconciliation, never blind automatic retry.
 
 The rc.3 guided Create -> WireGuard task uses the canonical
-protected v3 receiver handoff; IPsec uses protected v2. Neither
-credential is displayed by normal Create/Status/JSON. GRE/IPIP
+protected v3 receiver handoff; IPsec uses protected v2. Ordinary
+Status/JSON never displays either credential; rc.3/rc.4 guided Create
+only offers later SHOW, while rc.5 displays the protected offer after
+successful real-TTY Create/YES as described above. GRE/IPIP
 FOU/GUE, WireGuard and conditionally admitted IPsec live under one
 human Create menu; Advanced and Manual are separate submenus.
 Noninteractive STL without arguments still prints help, not a menu
@@ -289,7 +291,8 @@ under locks. A valid plaintext token intentionally appears in the
 operator's terminal echo, so use protected mode for sensitive offers.
 No Input/preview error echoes credential bytes or tries automatic
 host mutation. Old rc.2 retains its older separate menu and prompt
-contract; the rc.4 screens retain these rc.3 pairing semantics.
+contract; rc.4 retained rc.3 pairing semantics and rc.5 changes only the
+consented human display timing.
 
 Quick Link payloads provide **no confidentiality or authenticated sender**;
 verify the offer with the intended peer through a trusted channel. Sensitive
