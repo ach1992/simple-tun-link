@@ -623,14 +623,18 @@ provisioner. **In published rc.6**, strongSwan packages are
 administrator-installed: automatic IPsec APT is refused because
 vendor package hooks can independently enable/start a distro service.
 **The next product contract (Issue #105) supersedes this manual UX**:
-the canonical installer must select a verifiable, scoped package-hook
-service-effect isolation strategy for the supported host, do selected
-APT and prerequisite verification after a single user PREPARE, then
-invoke the existing native-exclusive provisioner. No claims of
-automatic safe installation are permitted until actual disposable
-Ubuntu/Debian systemd package hooks and post-install vendor
-inactivity/disabled status are verified. The dedicated private
-unit must pass effective-systemd PRE-START attestation after
+the canonical installer first records that the host has no foreign
+strongSwan service/process/configuration or IKE port owner. After one
+previewed PREPARE consent it installs the selected signed distro packages
+using their normal maintainer hooks; the Owner accepts brief startup
+and enablement of a newly installed vendor strongSwan service. STL
+must **positively identify that service as newly introduced by this
+exact transaction**, stop/disable only that unit, and prove it is
+inactive and without an enabled boot edge before invoking the existing
+STL-private provisioner. Never modify any pre-existing/foreign unit,
+and do not add a global package-hook isolation framework. Real disposable
+Ubuntu/Debian systemd evidence must prove this lifecycle before the future released binary claims fully automatic IPsec setup.
+The dedicated private unit must pass effective-systemd PRE-START attestation after
 daemon-reload and before any service execution. The gate also checks the
 bounded D-Bus **effective system-manager environment** (including global
 DefaultEnvironment and runtime set-environment sources) over the system bus with a fixed minimal helper environment excluding
@@ -647,9 +651,12 @@ manager's settings are **never globally modified by STL**; an administrator
 must inspect/reconcile unsafe values before retry. Post-start `/proc` process
 environment verification remains independent defense in depth. A verified running
 private service receives its boot edge only after post-start runtime
-admission, with a final owner/origin check. No vendor service is
-disabled, replaced, adopted or restarted. These protections first ship
-in rc.6 via reviewed Issue #101; the historical rc.5 remains unchanged.
+admission, with a final owner/origin check. The shipped rc.6 service
+provisioner does not disable, replace, adopt or restart vendor services.
+The future approved package preparer may stop/disable only the newly
+installed vendor service positively attributed to its own APT transaction.
+The rc.6 provisions first shipped via reviewed Issue #101; historical
+rc.5 remains unchanged.
 
 ### Native-exclusive IPsec operational proof boundary (Issue #7, 2026-10-12)
 

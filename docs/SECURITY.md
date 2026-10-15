@@ -386,13 +386,16 @@ Rules:
 
 **Future managed IPsec prerequisites (Issue #105):** an explicit operator
 PREPARE approval is necessary but does not by itself make arbitrary APT
-maintainer hooks safe. Debian/Ubuntu §charon-systemd§ post-install can
-**enable and start** vendor §strongswan.service§ using separate helpers.
-A scoped, verifiably supported preparation adapter must prevent foreign
-service takeover and unwanted persistent vendor enablement; it must not
-rely solely on §policy-rc.d§ if enablement can still occur. Preserve the
-existing host's foreign daemons/units, protected credentials, ports,
-routes and Links. A missing STL-private unit or unverified probe is
+maintainer hooks safe. Debian/Ubuntu `charon-systemd` post-install can
+**enable and start** vendor `strongswan.service` using separate helpers.
+On a confirmed clean host, the Owner accepts **temporary vendor start
+and enable** as an effect of the approved package installation. STL must
+snapshot relevant ownership before APT and may stop/disable only the
+vendor service positively proven to be **newly introduced by its own
+transaction**. Verify that unit inactive and disabled before starting
+STL-private IPsec. Do not add a global service-hook interception scheme,
+or disturb pre-existing foreign daemons/units, credentials, ports,
+routes or Links. A missing STL-private unit or unverified probe is
 **not** proof of a foreign service conflict; distinguish truly foreign,
 unknown and merely unprovisioned states and offer a qualified supported
 path when one exists. If the package transaction starts but fails, never

@@ -311,15 +311,21 @@ remains [Issue #93](https://github.com/ach1992/simple-tun-link/issues/93).
   cancellation remain read-only; no silent root/network mutations.
 - For missing strongSwan packages, STL—not the user—must handle the
   supported trusted distro APT dependencies after PREPARE consent,
-  accounting for package hooks that can **enable AND start** a vendor
-  service. Only the disclosed selected packages and required
-  dependencies may be installed/updated. No surprise removals,
-  independent unrelated changes, or hidden system-wide service effects.
-  A supported, verifiable isolation of vendor service effects is
-  required; do not stop/disable/adopt/overwrite an existing foreign VPN
-  in response to a generic warning. Where a particular host genuinely
-  cannot meet safe preparation conditions, report its *specific*
-  blocker and offer an alternative only with user approval.
+  accounting for package hooks that can **enable AND start** a newly
+  installed vendor service on a verified clean host. The Owner accepts
+  this possible temporary activation, which must be disclosed in the
+  PREPARE preview. Only the selected signed packages and disclosed
+  required dependencies may be installed/updated: no unrelated removals,
+  unrelated upgrades or hidden persistent service effects. Before installation STL must record that no
+  foreign service, config, IKE port owner or daemon would be displaced.
+  Only a vendor service positively attributed to this exact approved
+  package transaction may then be stopped and disabled; verify that
+  the vendor unit is inactive and has no enabled boot edge before
+  the existing STL-private daemon is provisioned. No existing or
+  ambiguous foreign service may be stopped, disabled or adopted.
+  Avoid a separate global APT hook-interception framework. If a host
+  cannot meet these conditions, give the specific reason and a safe
+  operator-approved alternative.
 - Package installation does not prove private IPsec readiness.
   Reuse the already-implemented receipt-bound STL-exclusive
   strongSwan service provisioner; independently verify loaded unit,
