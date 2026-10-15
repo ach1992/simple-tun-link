@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -102,19 +104,46 @@ func TestNarrowTerminalKeepsMenuChoicesReadable(t *testing.T) {
 	}
 	menuOption(slave, "2", "WireGuard / UDP", "Encrypted; needs a peer")
 	menuSection(slave, "Preview")
-	if err := unix.SetNonblock(int(master.Fd()), true); err != nil {
-		t.Fatal(err)
-	}
-	var bytes [256]byte
-	n, err := unix.Read(int(master.Fd()), bytes[:])
-	if err != nil || n == 0 {
-		t.Fatalf("narrow terminal did not receive layout: %d %v", n, err)
-	}
-	got := string(bytes[:n])
+	got := readMenuPTYUntil(t, master, "WireGuard / UDP", "Encrypted; needs a peer", strings.Repeat("-", 44))
 	if !strings.Contains(got, "WireGuard / UDP") ||
 		!strings.Contains(got, "\r\n      Encrypted; needs a peer") ||
 		!strings.Contains(got, strings.Repeat("-", 44)) ||
 		strings.Contains(got, strings.Repeat("-", 55)) {
 		t.Fatalf("narrow terminal did not wrap the option in readable rows: %q", got)
 	}
+}
+
+// A PTY may split one synchronous write into several master-side reads,
+// especially on GitHub-hosted runners. Wait for the complete bounded
+// transcript instead of mistaking a partial frame for a failed renderer.
+func readMenuPTYUntil(t *testing.T, master *os.File, required ...string) string {
+	t.Helper()
+	if err := unix.SetNonblock(int(master.Fd()), true); err != nil {
+		t.Fatal(err)
+	}
+	var transcript strings.Builder
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		var chunk [1024]byte
+		n, err := unix.Read(int(master.Fd()), chunk[:])
+		if n > 0 {
+			transcript.Write(chunk[:n])
+		}
+		complete := true
+		for _, marker := range required {
+			if !strings.Contains(transcript.String(), marker) {
+				complete = false
+				break
+			}
+		}
+		if complete {
+			return transcript.String()
+		}
+		if err != nil && !errors.Is(err, unix.EAGAIN) && !errors.Is(err, unix.EINTR) {
+			t.Fatalf("PTY failed before complete output: %v, got %q", err, transcript.String())
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("PTY did not produce %v: %q", required, transcript.String())
+	return ""
 }

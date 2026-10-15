@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/ach1992/simple-tun-link/internal/state"
 
 	"github.com/ach1992/simple-tun-link/internal/backend"
@@ -119,15 +117,8 @@ func TestInteractivePersistenceFailureRendersReadableSafeSections(t *testing.T) 
 	if output.Len() != 0 {
 		t.Fatal("human failure mistakenly wrote machine JSON")
 	}
-	if err := unix.SetNonblock(int(master.Fd()), true); err != nil {
-		t.Fatal(err)
-	}
-	var buf [4096]byte
-	n, err := unix.Read(int(master.Fd()), buf[:])
-	if err != nil || n == 0 {
-		t.Fatalf("failure was not visible in PTY: %d %v", n, err)
-	}
-	text := string(buf[:n])
+	text := readMenuPTYUntil(t, master, "OPERATION NOT COMPLETED",
+		"WHAT TO CHECK NEXT", "restore_unit_identity_conflict")
 	for _, marker := range []string{
 		"OPERATION NOT COMPLETED", "[FAILED]", "link_import", "persistence",
 		"rollback_completed_unverified", "restore_unit_identity_conflict",
