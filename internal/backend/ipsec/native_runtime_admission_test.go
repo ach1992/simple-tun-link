@@ -14,10 +14,16 @@ type fakeServiceBus struct {
 
 func (f *fakeServiceBus) RunBounded(ctx context.Context, limits CaptureLimits, binary string, args ...string) (CommandResult, error) {
 	if ctx == nil || ctx.Err() != nil || limits.Stdout < 16 || binary != nativeBusctl ||
-		len(args) < 2 || args[0] != nativeSystemdManagerAddress {
+		len(args) < 2 || args[0] != nativeSystemdBusSelector {
 		return CommandResult{}, fmt.Errorf("unexpected bounded service probe")
 	}
 	f.commands = append(f.commands, strings.Join(args, " "))
+	if args[1] == "status" && len(args) == 3 && args[2] == "org.freedesktop.systemd1" {
+		if s, ok := f.overrides["Manager.Status"]; ok {
+			return CommandResult{Stdout: []byte(s)}, nil
+		}
+		return CommandResult{Stdout: []byte("PID=1\nUID=0\nComm=systemd\n")}, nil
+	}
 	if args[1] == "call" {
 		return CommandResult{Stdout: []byte("o \"/org/freedesktop/systemd1/unit/simple_2dtun_2dlink_2dipsec_2eservice\"\n")}, nil
 	}

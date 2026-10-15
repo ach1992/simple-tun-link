@@ -16,6 +16,8 @@ func TestNativeSystemdRunnerDeniesUntrustedTransportAndExecutable(t *testing.T) 
 		{"/usr/bin/env", nil},
 		{nativeBusctl, []string{"--system", "get-property"}},
 		{nativeBusctl, []string{"--address=unix:path=/run/stl-decoy", "call"}},
+		{nativeBusctl, []string{"--system", "status", "org.freedesktop.systemd1", "--address=unix:path=/run/stl-decoy"}},
+		{nativeBusctl, []string{"--system", "get-property", "--address=unix:path=/run/stl-decoy", "a", "b", "c"}},
 		{nativeSystemctlBinary, []string{"--user", "status"}},
 		{nativeSystemctlBinary, []string{"--system", "--host=remote", "status"}},
 		{nativeSystemctlBinary, []string{"--system", "--machine=foreign", "status"}},
@@ -81,8 +83,10 @@ func TestNativeSystemdInspectorPinsPrivateManagerTransport(t *testing.T) {
 	if err := a.attestManagerEnvironment(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(fake.commands) != 1 || !strings.HasPrefix(fake.commands[0],
-		nativeSystemdManagerAddress+" get-property org.freedesktop.systemd1 ") {
-		t.Fatal("pre-start trust oracle did not select pinned local manager")
+	if len(fake.commands) != 2 || fake.commands[0] !=
+		"--system status org.freedesktop.systemd1" ||
+		!strings.HasPrefix(fake.commands[1],
+			"--system get-property org.freedesktop.systemd1 ") {
+		t.Fatal("pre-start trust oracle did not verify PID1 before reading manager environment")
 	}
 }

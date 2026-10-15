@@ -71,6 +71,9 @@ func decodeNativeManagerStringArray(raw string) ([]string, error) {
 // our existing post-start /proc/<pid>/environ admission.
 // The systemd manager is inspected read-only, never reconfigured.
 func (a NativeRuntimeAdmission) attestManagerEnvironment(ctx context.Context) error {
+	if err := a.attestSystemdManagerIdentity(ctx); err != nil {
+		return err
+	}
 	raw, err := a.readBus(ctx, "get-property", "org.freedesktop.systemd1",
 		"/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager", "Environment")
 	if err != nil {

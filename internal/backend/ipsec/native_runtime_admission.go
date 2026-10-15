@@ -36,7 +36,7 @@ func (a NativeRuntimeAdmission) readBus(ctx context.Context, args ...string) (st
 		return "", fmt.Errorf("systemd inspector unavailable")
 	}
 	result, err := a.Runner.RunBounded(ctx, CaptureLimits{Stdout: 8192, Stderr: 1024},
-		nativeBusctl, append([]string{nativeSystemdManagerAddress}, args...)...)
+		nativeBusctl, append([]string{nativeSystemdBusSelector}, args...)...)
 	defer clear(result.Stdout)
 	defer clear(result.Stderr)
 	if err != nil || len(result.Stdout) == 0 || len(result.Stdout) > 8192 ||
@@ -92,6 +92,9 @@ func (a NativeRuntimeAdmission) require(ctx context.Context, path, iface, key, v
 }
 
 func (a NativeRuntimeAdmission) servicePID(ctx context.Context) (uint32, error) {
+	if err := a.attestSystemdManagerIdentity(ctx); err != nil {
+		return 0, err
+	}
 	path, err := a.loadedUnit(ctx)
 	if err != nil {
 		return 0, err

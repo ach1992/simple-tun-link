@@ -584,12 +584,13 @@ absent, avoiding unverified vendor service hooks. The dedicated private
 unit must pass effective-systemd PRE-START attestation after
 daemon-reload and before any service execution. The gate also checks the
 bounded D-Bus **effective system-manager environment** (including global
-DefaultEnvironment and runtime set-environment sources) through the fixed
-local PID1 system-manager socket `/run/systemd/private`, not the caller's
-`DBUS_SYSTEM_BUS_ADDRESS`. Security-sensitive `busctl`/`systemctl` helpers
-run with fixed minimal environments that exclude inherited `LD_*`,
-`SYSTEMCTL_FORCE_BUS`, `DBUS_*` and loader/helper overrides; `systemctl`
-transitions explicitly select the local system manager. The gate rejects `LD_*`
+DefaultEnvironment and runtime set-environment sources) over the system bus with a fixed minimal helper environment excluding
+inherited `DBUS_SYSTEM_BUS_ADDRESS`, `SYSTEMCTL_FORCE_BUS`, `LD_*` and other
+loader/helper overrides. Before trusting systemd D-Bus properties, the
+systemd service-name owner must attest actual `PID=1`, `UID=0` and
+`Comm=systemd` through bounded D-Bus peer credentials; any ambiguity
+fails closed. Root `systemctl` transitions explicitly select the local
+system manager, independently of the caller environment. The gate rejects `LD_*`
 and unexpected `STRONGSWAN_*` values, and proves unit `EnvironmentFiles`,
 `PassEnvironment`, `UnsetEnvironment` and `PAMName` cannot add independent
 spawn-environment sources. Unknown/oversized replies fail closed. The
