@@ -34,6 +34,7 @@ func menuCreateIPsec(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	pre, done := context.WithTimeout(context.Background(), 15*time.Second)
 	_, admitted := activeIPsecBackend(pre, options)
 	done()
+	attemptedProvision := false
 	if admitted != nil && menuCanUpdateNow(input, out) {
 		// The only provision action is an explicit exact-word confirmation on
 		// the installed root TTY. Never auto-start, adopt, disable or modify
@@ -52,6 +53,7 @@ func menuCreateIPsec(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 				fmt.Fprint(out, "Type PROVISION-IPSEC to prepare only this exclusive service (Enter cancels): ")
 				consent, e := readMenuAnswer(reader)
 				if e == nil && consent == "PROVISION-IPSEC" {
+					attemptedProvision = true
 					provisionCtx, finish := context.WithTimeout(context.Background(), 75*time.Second)
 					err := ipsecbackend.ProvisionNativeExclusive(provisionCtx)
 					finish()
@@ -78,7 +80,11 @@ func menuCreateIPsec(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		menuField(out, "Service", "STL-private configuration, verified unit and origin receipts")
 		menuField(out, "Next", "stl doctor ipsec --json (read-only)")
 		menuProse(out, "The installer supports optional IPsec packages, but installing packages alone does not establish STL-exclusive service ownership. Installing charon-systemd may start a vendor daemon.")
-		menuNotice(out, "INFO", "No keys, services, packages or tunnels were changed. GRE/IPIP/WireGuard remain independent.")
+		if attemptedProvision {
+			menuNotice(out, "WARNING", "Private IPsec provisioning was attempted. Service/configuration may have changed; inspect receipts, systemd and daemon state before retry. No Link or keys created.")
+		} else {
+			menuNotice(out, "INFO", "No keys, services, packages or tunnels were changed. GRE/IPIP/WireGuard remain independent.")
+		}
 		return 4
 	}
 
