@@ -36,9 +36,19 @@ expect {
   -re {Create cancelled} { puts "IPSEC_SEPARATE_LINK_CREATE_NOT_APPLIED=PASS" }
   timeout { puts stderr "IPSEC_MENU_E2E=CREATE_CANCEL_TIMEOUT"; exit 26 }
 }
+# The operator interface correctly remains interactive after cancelling
+# Link creation. Acknowledge the result, then exit the real main menu.
+expect {
+  -re {Press Enter to continue} { send -- "\r" }
+  timeout { puts stderr "IPSEC_MENU_E2E=ACKNOWLEDGEMENT_TIMEOUT"; exit 27 }
+}
+expect {
+  -re {Choose a task:} { send -- "8\r" }
+  timeout { puts stderr "IPSEC_MENU_E2E=RETURN_TO_MAIN_TIMEOUT"; exit 29 }
+}
 expect {
   eof {}
-  timeout { puts stderr "IPSEC_MENU_E2E=UNEXPECTED_RUNNING_MENU"; exit 27 }
+  timeout { puts stderr "IPSEC_MENU_E2E=UNEXPECTED_RUNNING_MENU"; exit 30 }
 }
 catch wait result
 if {[llength $result] < 4 || [lindex $result 3] != 0} {
