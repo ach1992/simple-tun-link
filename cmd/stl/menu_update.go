@@ -31,6 +31,8 @@ var menuReleaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9
 var menuRCVersion = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)-rc\.([0-9]+)$`)
 
 type menuOfficialRelease struct {
+	ID          int64     `json:"id"`
+	Immutable   *bool     `json:"immutable"`
 	TagName     string    `json:"tag_name"`
 	Name        string    `json:"name"`
 	Draft       bool      `json:"draft"`
@@ -41,6 +43,13 @@ type menuOfficialRelease struct {
 		Size  int64  `json:"size"`
 		State string `json:"state"`
 	} `json:"assets"`
+}
+
+// A release's asset names alone are NOT source trust. GitHub guarantees
+// tag/asset immutability only for explicitly immutable published releases;
+// unknown or mutable releases remain visible but cannot run a root updater.
+func menuReleaseImmutable(release menuOfficialRelease) bool {
+	return release.ID > 0 && release.Immutable != nil && *release.Immutable
 }
 
 // The only remote input is GitHub's official releases API at a fixed
@@ -165,10 +174,16 @@ func menuInstalledVersionMatches(raw []byte, tag string) bool {
 
 // The canonical installer remains the ONLY updater/rollback authority.
 // No second install/rollback/State/network engine is implemented here.
-func menuRunCanonicalUpdate(ctx context.Context, tag string, out, errOut io.Writer) error {
+func menuRunCanonicalUpdate(ctx context.Context, release menuOfficialRelease, out, errOut io.Writer) error {
+	// Fail closed even if a future call site bypasses the menu's prompt:
+	// no downloaded shell code may execute as root for a mutable release.
+	if !menuReleaseImmutable(release) {
+		return errors.New("automatic update requires a confirmed immutable GitHub release")
+	}
 	if os.Geteuid() != 0 {
 		return errors.New("canonical update requires root")
 	}
+	tag := release.TagName
 	if !menuReleaseTag.MatchString(tag) {
 		return errors.New("invalid official release tag")
 	}
@@ -225,7 +240,7 @@ func menuRunCanonicalUpdate(ctx context.Context, tag string, out, errOut io.Writ
 	if err := syntax.Run(); err != nil {
 		return errors.New("tagged installer failed Bash syntax check")
 	}
-	menuNotice(out, "INFO", "Verified release selected; the canonical installer now owns update and rollback.")
+	menuNotice(out, "INFO", "Immutable official release selected; the canonical installer owns update and rollback.")
 	command := exec.CommandContext(ctx, "/bin/bash", path, "update", "--version", tag, "--backends", "native")
 	command.Stdout, command.Stderr, command.Stdin = out, errOut, os.Stdin
 	if err := command.Run(); err != nil {
@@ -244,9 +259,11 @@ func menuRunCanonicalUpdate(ctx context.Context, tag string, out, errOut io.Writ
 // confirmation on a real root-owned STL installation can run the canonical
 // updater. Scripts/redirected sessions always receive copyable guidance.
 func menuPrintManualUpdate(out io.Writer, selected string) {
-	menuSection(out, "Manual exact-tag update / copy")
-	fmt.Fprintln(out, "After independently verifying this tag's publication, use on the target STL server:")
-	fmt.Fprintf(out, "bash -o pipefail -c 'curl -fLSs --proto \"=https\" --proto-redir \"=https\" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/%s/scripts/quick-install.sh | bash -s -- %s update'\n", selected, selected)
+	menuSection(out, "Manual update / independent verification")
+	menuField(out, "Release", "https://github.com/ach1992/simple-tun-link/releases/tag/"+selected)
+	menuField(out, "Runbook", "https://github.com/ach1992/simple-tun-link/blob/main/docs/INSTALL.md")
+	menuProse(out, "Verify the intended source, tag and release artifact checksums independently before following the canonical installer runbook.")
+	menuProse(out, "Do not pipe a mutable-tag download into a privileged shell.")
 }
 
 func menuUpdate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, options *runtimeOptions) int {
@@ -265,6 +282,11 @@ func menuUpdate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			if release.Prerelease {
 				kind = "Pre-release"
 			}
+			if menuReleaseImmutable(release) {
+				kind += " / immutable"
+			} else {
+				kind += " / manual only"
+			}
 			menuOption(out, strconv.Itoa(i+1), release.TagName, kind)
 		}
 	}
@@ -281,8 +303,10 @@ func menuUpdate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		return 2
 	}
 	selected, official := "", false
+	var selectedRelease menuOfficialRelease
 	if n, e := strconv.Atoi(choice); e == nil && n >= 1 && n <= len(releases) {
-		selected, official = releases[n-1].TagName, true
+		selectedRelease = releases[n-1]
+		selected, official = selectedRelease.TagName, true
 	} else if choice == "m" || menuReleaseTag.MatchString(choice) {
 		if choice == "m" {
 			fmt.Fprint(out, "Exact tag (Enter cancels): ")
@@ -316,6 +340,11 @@ func menuUpdate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		menuField(out, "Recovery runbook", "https://github.com/ach1992/simple-tun-link/blob/main/docs/INSTALL.md")
 		return 0
 	}
+	if !menuReleaseImmutable(selectedRelease) {
+		menuNotice(out, "WARNING", "GitHub release immutability is false or unverified. Automatic root update is disabled.")
+		menuPrintManualUpdate(out, selected)
+		return 0
+	}
 	if !menuCanUpdateNow(input, out) {
 		menuNotice(out, "INFO", "Automatic update requires a real terminal, root and installer-owned /usr/local/bin/stl.")
 		menuPrintManualUpdate(out, selected)
@@ -334,7 +363,7 @@ func menuUpdate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 	}
 	updateCtx, stop := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer stop()
-	if err := menuRunCanonicalUpdate(updateCtx, selected, out, errOut); err != nil {
+	if err := menuRunCanonicalUpdate(updateCtx, selectedRelease, out, errOut); err != nil {
 		menuNotice(out, "FAILED", "Canonical installer did not confirm completion. Inspect installed identity/recovery before retrying.")
 		fmt.Fprintln(errOut, safeMenuText(err.Error()))
 		// The executable might have been partially replaced or rolled back.
