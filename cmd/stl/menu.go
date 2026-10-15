@@ -126,8 +126,7 @@ func readMenuAnswer(in *bufio.Reader) (string, error) {
 
 // The menu calls the existing command surfaces; it does not reimplement
 // domain validation, backend ownership, diagnostics, pairing or mutation.
-// Each interactive frame replaces the previous frame. Completed actions
-// Each interactive frame replaces the previous frame. Completed actions
+// Each interactive frame replaces the previous frame after acknowledgment.
 func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions) int {
 	if input == nil {
 		fmt.Fprintln(errOut, "menu requires an input stream")
@@ -143,7 +142,7 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 		menuOption(out, "3", "My tunnels", "View, share, test, remove")
 		menuOption(out, "4", "Test connectivity", "Read-only connection checks")
 		menuOption(out, "5", "Settings", "Host and STL information")
-		menuOption(out, "6", "Update", "Show verified update steps")
+		menuOption(out, "6", "Update", "Choose a published release")
 		menuOption(out, "7", "Uninstall", "Show safe removal steps")
 		menuOption(out, "8", "Exit", "")
 		fmt.Fprint(out, "\nChoose a task: ")
@@ -176,7 +175,7 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 		case "5":
 			result = menuSettings(out, errOut, options)
 		case "6":
-			result = menuUpdate(reader, out, errOut)
+			result = menuUpdate(input, reader, out, errOut, options)
 		case "7":
 			result = menuUninstall(out, errOut, options)
 		default:
@@ -184,7 +183,11 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 		}
 		// Outcome messages live in each action; a generic FAILED banner
 		// would wrongly classify unavailable capabilities and repeat errors.
-		_ = result
+		if result == menuUpdatedExecutable {
+			// An installer was attempted. Even an uncertain failure can leave
+			// a different on-disk binary; never resume the old menu/Engine.
+			return 0
+		}
 		if needsAcknowledgement {
 			menuAcknowledge(input, reader, out)
 		}

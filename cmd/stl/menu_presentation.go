@@ -83,8 +83,48 @@ func menuOption(out io.Writer, number, title, description string) {
 	fmt.Fprintf(out, "  %s  %-22s %s\n", entry, title, menuPaint(out, menuDim, description))
 }
 
+// Human-only width; redirected/automation output is never reformatted.
+func menuColumns(out io.Writer) int {
+	if file, ok := menuTerminal(out); ok {
+		if ws, err := unix.IoctlGetWinsize(int(file.Fd()), unix.TIOCGWINSZ); err == nil && ws.Col > 0 {
+			return int(ws.Col)
+		}
+	}
+	return 0
+}
+
+// URLs, opaque IDs and shell commands must remain exact copyable tokens.
+func menuCopyable(value string) bool {
+	return strings.Contains(value, "://") || strings.Contains(value, "stl://") ||
+		strings.HasPrefix(value, "sudo ") || strings.HasPrefix(value, "bash ") ||
+		strings.HasPrefix(value, "stl ") || strings.HasPrefix(value, "curl ")
+}
+
+// Group long *prose* on narrow real terminals, but never alter machine,
+// redirected, credential or copyable command values.
 func menuField(out io.Writer, label, value string) {
+	cols := menuColumns(out)
+	if cols >= 24 && !menuCopyable(value) &&
+		2+max(17, len(label))+1+len(value) > cols {
+		fmt.Fprintf(out, "  %s\n", label)
+		width := max(16, cols-6)
+		wrapped := "      " + strings.ReplaceAll(wrapTerminalGuidance(value, width), "\n", "\n      ")
+		fmt.Fprintln(out, menuPaint(out, menuCyan, wrapped))
+		return
+	}
 	fmt.Fprintf(out, "  %-17s %s\n", label, menuPaint(out, menuCyan, value))
+}
+
+// Human explanations are paragraphs, never machine output. Indent and
+// wrap long prose only in a real terminal; never split opaque Setup Links,
+// exact shell commands or remote URLs that operators must copy byte-for-byte.
+func menuProse(out io.Writer, message string) {
+	cols := menuColumns(out)
+	if cols >= 24 && len(message) > cols-4 && !menuCopyable(message) {
+		fmt.Fprintln(out, "  "+strings.ReplaceAll(wrapTerminalGuidance(message, max(16, cols-4)), "\n", "\n  "))
+		return
+	}
+	fmt.Fprintln(out, message)
 }
 
 // The controlling stdout session AND the destination stderr must both
@@ -113,6 +153,12 @@ func menuNotice(out io.Writer, kind, message string) {
 		role = menuYellow
 	case "FAILED":
 		role = menuRed
+	}
+	cols := menuColumns(out)
+	if cols >= 24 && len(kind)+len(message)+5 > cols && !menuCopyable(message) {
+		fmt.Fprintf(out, "\n%s\n", menuPaint(out, role, "["+kind+"]"))
+		fmt.Fprintln(out, "  "+strings.ReplaceAll(wrapTerminalGuidance(message, max(16, cols-4)), "\n", "\n  "))
+		return
 	}
 	fmt.Fprintf(out, "\n%s %s\n", menuPaint(out, role, "["+kind+"]"), message)
 }

@@ -1,23 +1,15 @@
 package main
 
 import (
-	"bufio"
 	"context"
-	"errors"
 	"fmt"
-	"golang.org/x/sys/unix"
 	"io"
-	"regexp"
 	"runtime"
 
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/version"
+	"golang.org/x/sys/unix"
 )
-
-// This is only a human-readable handoff to the independently reviewed
-// installer. No second updater/uninstaller may be implemented in the TUI,
-// and no arbitrary shell or downloaded code is executed by these handlers.
-var menuReleaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$`)
 
 func menuStateRoot(options *runtimeOptions) string {
 	if options != nil {
@@ -52,32 +44,10 @@ func menuSettings(out, errOut io.Writer, options *runtimeOptions) int {
 	return 0
 }
 
-func menuUpdate(reader *bufio.Reader, out, errOut io.Writer) int {
-	menuSection(out, "Update / read-only instructions")
-	menuField(out, "Installed binary", safeMenuText(version.Version))
-	fmt.Fprintln(out, "This menu does not fetch or run executable code, and does not change the current installation.")
-	fmt.Fprintln(out, "Verify an official release exists at https://github.com/ach1992/simple-tun-link/releases")
-	fmt.Fprint(out, "Exact published release tag (e.g. v0.1.0; Enter cancels): ")
-	tag, err := readMenuAnswer(reader)
-	if errors.Is(err, io.EOF) || err == nil && tag == "" {
-		fmt.Fprintln(out, "Update cancelled; no files changed.")
-		return 0
-	}
-	if err != nil || !menuReleaseTag.MatchString(tag) {
-		fmt.Fprintln(errOut, "Invalid release tag; no update attempted.")
-		return 2
-	}
-	fmt.Fprintf(out, "Review official release: https://github.com/ach1992/simple-tun-link/releases/tag/%s\n", tag)
-	fmt.Fprintf(out, "Exact-tag installer source: https://raw.githubusercontent.com/ach1992/simple-tun-link/%s/scripts/install.sh\n", tag)
-	fmt.Fprintln(out, "Follow https://github.com/ach1992/simple-tun-link/blob/main/docs/INSTALL.md")
-	fmt.Fprintln(out, "Download the complete installer to a private file, require successful HTTPS transfer and bash -n,")
-	fmt.Fprintln(out, "inspect release notes/source, then invoke the installer with the verified exact tag:")
-	fmt.Fprintf(out, "  sudo bash /path/to/verified/install.sh update --version %s\n", tag)
-	fmt.Fprintln(out, "After the installer reports success, verify stl version --json and stlink version --json.")
-	fmt.Fprintln(out, "No remote lookup, update, service restart or host change was performed by this menu.")
-	return 0
-}
-
+// This page cannot safely infer that "uninstall" also authorizes erasing
+// separately retained receiver secrets, unowned host resources, or unknown
+// partial Link state. The canonical Engine removes one verified Link at a
+// time; the installer separately checks the maintenance lock and receipts.
 func menuUninstall(out, errOut io.Writer, options *runtimeOptions) int {
 	root := menuStateRoot(options)
 	if root == "" {
@@ -89,33 +59,28 @@ func menuUninstall(out, errOut io.Writer, options *runtimeOptions) int {
 		fmt.Fprintln(errOut, "Uninstall blocked: saved state cannot be inspected. No files were removed.")
 		return 1
 	}
-	menuSection(out, "Uninstall / read-only instructions")
-	fmt.Fprintln(out, "This menu never deletes Links, routes, firewall rules, services or STL files.")
+	menuSection(out, "Uninstall / preparation only")
+	menuField(out, "Saved tunnels", fmt.Sprintf("%d", len(snapshot.Links)))
 	if len(snapshot.Links) != 0 {
-		menuNotice(out, "WARNING", fmt.Sprintf("BLOCKED: %d configured Link(s) remain; uninstall requires their safe removal.", len(snapshot.Links)))
-		fmt.Fprintln(out, "Review each Link, then explicitly remove it using the canonical Engine:")
 		for _, record := range snapshot.Links {
-			id := record.Desired.ID
-			// A stable Link ID is validated by the domain; no arbitrary
-			// display name/secret-bearing desired state is printed.
-			if err := id.Validate(); err != nil {
+			if err := record.Desired.ID.Validate(); err != nil {
 				fmt.Fprintln(errOut, "Saved Link identity is invalid; uninstall guidance halted.")
 				return 1
 			}
-			fmt.Fprintf(out, "  stl link remove %s --confirm %s\n", id, id)
 		}
-		fmt.Fprintln(out, "Return to Uninstall only after explicit removal and verification of every Link.")
+		menuNotice(out, "WARNING", fmt.Sprintf("Uninstall blocked: %d saved tunnel(s) must be safely removed first.", len(snapshot.Links)))
+		menuSection(out, "What to do next")
+		menuField(out, "1", "My tunnels -> select a tunnel -> Remove")
+		menuField(out, "2", "Return here after all removals are confirmed")
+		menuNotice(out, "INFO", "A one-click wipe risks shared network resources, uncertain State and irreplaceable receiver keys.")
+		menuField(out, "Advanced CLI", "stl link list --json")
 		return 0
 	}
-	fmt.Fprintln(out, "Saved Link count is zero, but that alone is NOT proof uninstall is safe.")
-	fmt.Fprintln(out, "In an operator-controlled shell, check the canonical pre-uninstall read contract:")
-	fmt.Fprintln(out, "  sudo stl maintenance pre-uninstall --json")
-	fmt.Fprintln(out, "The verified installer must additionally hold exclusive maintenance locking")
-	fmt.Fprintln(out, "and refuse ambiguous committed state or any still-owned systemd identity.")
-	fmt.Fprintln(out, "After the preflight is ready, obtain/review the trusted installer from the exact")
-	fmt.Fprintln(out, "published STL release, then run:")
-	fmt.Fprintln(out, "  sudo bash /path/to/verified/install.sh uninstall")
-	fmt.Fprintln(out, "See https://github.com/ach1992/simple-tun-link/blob/main/docs/INSTALL.md")
-	fmt.Fprintln(out, "No uninstall or host change was performed by this menu.")
+	menuNotice(out, "INFO", "No saved tunnels. This alone does not prove uninstall can proceed.")
+	menuSection(out, "Final owner checks")
+	menuField(out, "1. Read-only proof", "sudo stl maintenance pre-uninstall --json")
+	menuField(out, "2. Trusted installer", "sudo bash /path/to/verified/install.sh uninstall")
+	menuField(out, "Reference", "https://github.com/ach1992/simple-tun-link/blob/main/docs/INSTALL.md")
+	menuNotice(out, "WARNING", "Uninstall never silently deletes saved credentials or State; back them up and retire deliberately.")
 	return 0
 }

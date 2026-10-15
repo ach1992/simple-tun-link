@@ -147,7 +147,7 @@ func TestMenuTypePrechecksAreHintsAndUnavailablePrecedesPeerEntry(t *testing.T) 
 		t.Fatal(label)
 	}
 	label, _ = menuCapabilityHint(report, advancedTunnelOptions["2"])
-	if label != "[Unavailable]" {
+	if label != "[Check needed]" {
 		t.Fatal(label)
 	}
 	label, _ = menuCapabilityHint(report, advancedTunnelOptions["5"])
@@ -163,8 +163,8 @@ func TestMenuTypePrechecksAreHintsAndUnavailablePrecedesPeerEntry(t *testing.T) 
 	fake := &guidedTestBackend{lifecycleFakeBackend: newLifecycleFake()}
 	opts := guidedTestOptions(t.TempDir(), host, fake)
 	code, out, errOut := runGuidedTest(opts, "1\n1\n8\n")
-	if code != 0 || !strings.Contains(out, "[Unavailable]") ||
-		!strings.Contains(errOut, "not available on this server") ||
+	if code != 0 || !strings.Contains(out, "[Check needed]") ||
+		!strings.Contains(out, "precheck did not pass") ||
 		strings.Contains(out, "Other server's reachable IPv4") ||
 		strings.Contains(out, "[FAILED] Action not confirmed") || len(fake.applies) != 0 {
 		t.Fatalf("unsupported choice not explained early: code=%d out=%s err=%s", code, out, errOut)
@@ -201,5 +201,30 @@ func TestMenuHealthNarrowTerminalHasReadableRows(t *testing.T) {
 	second := readMenuPTYUntil(t, master, "[WARNING]", "observational check was run")
 	if !strings.Contains(second, "Ping             [WARNING]\r\n") {
 		t.Fatalf("Long Ping detail should wrap after its status label: %q", second)
+	}
+}
+
+// FOU and GUE have a shared prerequisite, so operator help must group
+// four rows into one evidence-backed cause, with concrete read-only steps.
+func TestMenuAvailabilityHelpGroupsSharedFailuresAndClearsPreviousPrompt(t *testing.T) {
+	report := linux.CapabilityReport{
+		linux.CapabilityGREFOU:    {ReasonCode: "fou_module_present_probe_failed", Reason: "FOU module is found on disk"},
+		linux.CapabilityGREGUE:    {ReasonCode: "fou_module_present_probe_failed", Reason: "FOU module is found on disk"},
+		linux.CapabilityIPIPFOU:   {ReasonCode: "fou_module_present_probe_failed", Reason: "FOU module is found on disk"},
+		linux.CapabilityIPIPGUE:   {ReasonCode: "fou_module_present_probe_failed", Reason: "FOU module is found on disk"},
+		linux.CapabilityIPsecXFRM: {ReasonCode: "swanctl_probe_unconfirmed", Reason: "swanctl check failed"},
+	}
+	var out bytes.Buffer
+	menuCapabilityHelp(&out, report)
+	result := out.String()
+	for _, label := range []string{"AVAILABILITY / EXPLANATION", "FOU/GUE x4", "IPsec x2",
+		"FOU module is found on disk", "swanctl check failed", "modinfo fou", "stl doctor ipsec --json",
+		"permanent lack of support is NOT proven"} {
+		if !strings.Contains(result, label) {
+			t.Fatalf("missing operator explanation %s: %q", label, result)
+		}
+	}
+	if strings.Count(result, "FOU module is found on disk") != 1 || strings.Contains(result, "ipip/gue") {
+		t.Fatalf("shared prerequisite repeated as separate failures: %q", result)
 	}
 }

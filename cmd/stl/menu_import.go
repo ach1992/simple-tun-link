@@ -179,8 +179,8 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			var buffer bytes.Buffer
 			if code := linkPreviewCommand([]string{"preview", "--stdin", "--json"},
 				strings.NewReader(encoded), &buffer, io.Discard); code != 0 {
-				fmt.Fprintln(out, "The setup link could not be read: it may be incomplete, altered, or from an unsupported STL version.")
-				fmt.Fprintln(out, "Copy the original COMPLETE line from the other server (Manage -> Share for GRE/IPIP) and retry.")
+				menuProse(out, "The setup link could not be read: it may be incomplete, altered, or from an unsupported STL version.")
+				menuProse(out, "Copy the original COMPLETE line from the other server (Manage -> Share for GRE/IPIP) and retry.")
 				continue
 			}
 			var preview ImportPreviewResponse
@@ -194,7 +194,7 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 				break
 			}
 			if mode == "2" && !preview.Sensitive && !preview.HasCredential {
-				fmt.Fprintln(out, "This is an ordinary plaintext GRE/IPIP setup link; importing it in protected mode is also supported.")
+				menuProse(out, "This is an ordinary plaintext GRE/IPIP setup link; importing it in protected mode is also supported.")
 			}
 			menuScreen(out, "Import / review before applying")
 			menuField(out, "Type", fmt.Sprintf("%s / %s", preview.Backend, preview.Encapsulation))
@@ -208,13 +208,13 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 				menuNotice(out, "WARNING", "GRE is unencrypted; its key is only an identifier.")
 			}
 			if preview.ImportConfirmation == "" {
-				fmt.Fprintln(out, "This offer is preview-only on this STL version. Nothing was changed; use a supported newer offer.")
+				menuProse(out, "This offer is preview-only on this STL version. Nothing was changed; use a supported newer offer.")
 				continue
 			}
 			if preview.Backend == "ipsec" {
-				fmt.Fprintln(out, "IPsec needs a verified STL-owned strongSwan service before import. Import alone does not connect IKE.")
+				menuProse(out, "IPsec needs a verified STL-owned strongSwan service before import. Import alone does not connect IKE.")
 			}
-			fmt.Fprintln(out, "Check that the underlay IPs and both tunnel IPs are correct. Import changes THIS server's configuration.")
+			menuProse(out, "Check that the underlay IPs and both tunnel IPs are correct. Import changes THIS server's configuration.")
 			if err := clearQueuedMenuConfirmation(input, reader); err != nil {
 				fmt.Fprintln(out, "Cannot establish a fresh terminal confirmation; nothing was imported.")
 				return 2

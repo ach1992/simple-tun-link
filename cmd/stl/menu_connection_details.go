@@ -29,7 +29,7 @@ func askManualGREKey(p createPrompts) (domain.GREOptions, error) {
 			fmt.Fprintf(p.out, "GRE key: %d (not an encryption key). Configure the SAME number on both servers.\n", key)
 			return domain.GREOptions{KeyEnabled: true, Key: uint32(key)}, nil
 		}
-		fmt.Fprintln(p.out, "Enter an unsigned decimal GRE key (0 through 4294967295), or press Enter for none.")
+		menuProse(p.out, "Enter an unsigned decimal GRE key (0 through 4294967295), or press Enter for none.")
 	}
 }
 
@@ -74,20 +74,20 @@ func printManualConnectionDetails(out io.Writer, l domain.Link) {
 			fmt.Fprintln(out, "  Carrier: IP protocol 4 (IPIP), NOT TCP/UDP port 4.")
 		} else {
 			fmt.Fprintf(out, "  UDP encapsulation: %s\n", l.Encapsulation)
-			fmt.Fprintln(out, "  For IPIP FOU/GUE use My tunnels -> Share Setup Link (receiver UDP port is paired automatically).")
+			menuProse(out, "  For IPIP FOU/GUE use My tunnels -> Share Setup Link (receiver UDP port is paired automatically).")
 		}
 		fmt.Fprintln(out, "  IPIP traffic is NOT encrypted or authenticated.")
 	case domain.BackendWireGuard:
-		fmt.Fprintln(out, "  WireGuard: encrypted UDP; do NOT assume these addresses alone will pair the other server.")
+		menuProse(out, "  WireGuard: encrypted UDP; do NOT assume these addresses alone will pair the other server.")
 		fmt.Fprintf(out, "  THIS server UDP listen port: %d | OTHER server UDP listen port: %d\n", l.WireGuard.ListenPort, l.WireGuard.PeerPort)
 		fmt.Fprintf(out, "  THIS server PUBLIC key: %s\n", l.WireGuard.LocalPublicKey)
 		fmt.Fprintf(out, "  OTHER server PUBLIC key: %s\n", l.WireGuard.PeerPublicKey)
-		fmt.Fprintln(out, "  The original protected receiver offer remains available via My tunnels -> Share -> SHOW.")
-		fmt.Fprintln(out, "  Deleted/lost receiver secrets cannot be regenerated from ordinary saved Link State.")
+		menuProse(out, "  The original protected receiver offer remains available via My tunnels -> Share -> SHOW.")
+		menuProse(out, "  Deleted/lost receiver secrets cannot be regenerated from ordinary saved Link State.")
 	case domain.BackendIPsec:
 		fmt.Fprintln(out, "  IPsec/IKEv2 uses an independent protected PSK and native-exclusive strongSwan.")
-		fmt.Fprintln(out, "  Public details alone are insufficient: use My tunnels -> Share -> SHOW for the protected receiver offer.")
-		fmt.Fprintln(out, "  An already staged/private receiver PSK cannot be exported from ordinary Link state.")
+		menuProse(out, "  Public details alone are insufficient: use My tunnels -> Share -> SHOW for the protected receiver offer.")
+		menuProse(out, "  An already staged/private receiver PSK cannot be exported from ordinary Link state.")
 	default:
 		fmt.Fprintln(out, "  This backend is not supported for manual setup; use its canonical Setup Link.")
 	}

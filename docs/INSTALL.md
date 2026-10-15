@@ -73,6 +73,22 @@ tokens, unredacted private logs, or a full foreign service file.**
 Issue #93 includes rc.4's clearer terminal diagnosis and regression
 tests. These changes are **not part of rc.3**.
 
+## Planned post-rc.5 menu maintenance changes (not yet released)
+
+[Issue #99](https://github.com/ach1992/simple-tun-link/issues/99)
+tracks an optional operator menu for listing the three newest public
+release tags and safely invoking the *existing canonical installer*
+after its own verification, a real root TTY, State/credential backup
+and a new explicit `UPDATE` confirmation. Manual exact-tag install/update
+commands and installer ownership/rollback guarantees remain authoritative.
+Until that code is independently reviewed, merged and published, the
+**current rc.5 Update menu stays read-only guidance**.
+
+For Uninstall, the proposed screen shortens the Link-removal checklist
+but will not silently purge configured Links, shared network resources
+or privately saved handoff credentials. Removal and irreversible
+credential retirement remain independently confirmed operations.
+
 ## Protected receiver Setup Link retention (rc.3 guided UI)
 
 The rc.3 guided sender deliberately retains WireGuard and

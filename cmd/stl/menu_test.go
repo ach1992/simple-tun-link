@@ -17,7 +17,13 @@ func runMenuTest(t *testing.T, root, input string) (int, string, string) {
 	t.Helper()
 	var output, errorsOut bytes.Buffer
 	code := runWithRuntimeInput([]string{"menu"}, strings.NewReader(input),
-		&output, &errorsOut, &runtimeOptions{stateRoot: root})
+		&output, &errorsOut, &runtimeOptions{stateRoot: root,
+			menuReleases: func(context.Context) ([]menuOfficialRelease, error) {
+				return []menuOfficialRelease{{TagName: "v0.1.0-rc.5", Prerelease: true},
+					{TagName: "v0.1.0-rc.4", Prerelease: true},
+					{TagName: "v0.1.0-rc.3", Prerelease: true}}, nil
+			},
+		})
 	return code, output.String(), errorsOut.String()
 }
 

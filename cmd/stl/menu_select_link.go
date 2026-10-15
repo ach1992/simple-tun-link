@@ -97,7 +97,7 @@ func menuDiagnose(_ io.Reader, reader *bufio.Reader, out, errOut io.Writer, opti
 		code = menuCheckOneConnection(id, out, errOut, options)
 	}
 	if code != 0 && !menuEscapeCapable(out) {
-		fmt.Fprintln(out, "Some checks are unknown, blocked, or without peer replies. Check the OTHER server's setup and firewall.")
+		menuProse(out, "Some checks are unknown, blocked, or without peer replies. Check the OTHER server's setup and firewall.")
 	}
 	return code
 }

@@ -111,6 +111,45 @@ does not invalidate separately verified ping samples. Check all Links uses
 the existing all-Link diagnostic contract, not a second probe engine.
 Semantic terminal colors have matching readable noncolor labels.
 
+### Post-rc.5 maintenance UX refinement (unreleased; Issue #99)
+
+This section documents **proposed next-source behavior**, not functionality
+already included in the published rc.5 executable.
+
+- Capability badges no longer equate an unsuccessful read-only kernel/tool
+  query with permanent lack of tunnel support. FOU/GUE share a single
+  underlying prerequisite; IPsec ESP/NAT-T share XFRM plus `swanctl` and
+  **still require separate STL-exclusive strongSwan operational admission**.
+  A found `fou` module with a failed kernel query is `Needs setup`; other
+  unconfirmed observations are `Check needed` until positively verified.
+  Details group common causes and provide safe `ip fou show`, `modinfo fou`,
+  `command -v swanctl`, `stl doctor ipsec --json` guidance without
+  loading modules, installing packages or starting services.
+- Operator Update queries at most the three latest **complete published
+  official GitHub releases** over bounded HTTPS (no tokens). A selected
+  exact tag shows the release and pinned source command. **Only a verified
+  forward RC upgrade within the same version line**, a real root interactive
+  terminal running the
+  installed `/usr/local/bin/stl`, backed-up and quiesced host State and a
+  freshly typed `UPDATE` can delegate to the **same canonical installer**
+  used in the shell; no second updater or rollback engine exists. On
+  offline/non-root/noninteractive sessions, or for ambiguous/downgrade tags,
+  the menu displays manual guidance and makes **no changes**.
+- Operator Uninstall groups next steps and the existing read-only
+  `stl maintenance pre-uninstall --json` and trusted installer guidance.
+  It **does not perform an automatic mass deletion**: multi-Link resource
+  ownership, uncertain rollback and separately retained sensitive receiver
+  credentials make irreversible all-Link purging unsafe to infer from a
+  single menu choice. Individual exact-identity Engine removal remains
+  deliberate, and confidential leftover material needs separate retirement.
+- Common human fields/notices wrap explanatory **prose only** on narrow
+  terminals; copyable Setup Links, opaque IDs, URLs and shell commands
+  remain exact. Machine JSON and CLI contracts are unchanged.
+
+The controlling user report, accepted scope and tests live in
+[Issue #99](https://github.com/ach1992/simple-tun-link/issues/99).
+The published rc.5 remains unchanged until a separately approved release.
+
 ### Manage Links — confirmation and privacy
 
 Remove is available **only on a real interactive terminal**. A

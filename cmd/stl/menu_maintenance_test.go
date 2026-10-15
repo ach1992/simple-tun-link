@@ -20,9 +20,9 @@ func TestMenuUpdateGuidancePinsExactReleaseWithoutExecutingAnything(t *testing.T
 	}
 	for _, want := range []string{
 		"releases/tag/v0.1.0",
-		"/v0.1.0/scripts/install.sh",
-		"sudo bash /path/to/verified/install.sh update --version v0.1.0",
-		"No remote lookup, update, service restart or host change",
+		"/v0.1.0/scripts/quick-install.sh",
+		"Manually entered tag was NOT verified",
+		"LATEST COMPLETE PUBLIC RELEASES",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing guided update safeguard %q: %q", want, out)
@@ -65,8 +65,9 @@ func TestMenuUninstallOnlyGuidesExistingLinkRemoval(t *testing.T) {
 	if code != 0 || errOut != "" {
 		t.Fatalf("uninstall guidance failed: code=%d err=%q", code, errOut)
 	}
-	if !strings.Contains(out, "BLOCKED: 1 configured Link") ||
-		!strings.Contains(out, "stl link remove "+string(link.ID)+" --confirm "+string(link.ID)) ||
+	if !strings.Contains(out, "Uninstall blocked: 1 saved tunnel") ||
+		!strings.Contains(out, "My tunnels -> select a tunnel -> Remove") ||
+		strings.Contains(out, string(link.ID)) ||
 		strings.Contains(out, "sudo bash /path/to/verified/install.sh uninstall") ||
 		strings.Contains(out, link.DisplayName) {
 		t.Fatalf("uninstall was not safely blocked or leaked saved data: %q", out)
@@ -84,10 +85,10 @@ func TestMenuUninstallZeroLinksIsNotProofOfSafety(t *testing.T) {
 		t.Fatalf("zero-Link handoff failed: code=%d err=%q", code, errOut)
 	}
 	for _, want := range []string{
-		"NOT proof uninstall is safe",
+		"does not prove uninstall can proceed",
 		"sudo stl maintenance pre-uninstall --json",
 		"sudo bash /path/to/verified/install.sh uninstall",
-		"No uninstall or host change was performed",
+		"Uninstall never silently deletes",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("zero-Link case silently bypassed canonical proof: %q", out)

@@ -50,6 +50,8 @@ type runtimeOptions struct {
 	// Test seam for a failure immediately after final handoff publication.
 	// Production always uses the real protected, no-clobber writer.
 	writeHandoff func(string, []byte) error
+	// Test-only read-only official release catalogue; nil uses bounded GitHub HTTPS.
+	menuReleases func(context.Context) ([]menuOfficialRelease, error)
 }
 
 func main() {

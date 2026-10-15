@@ -34,10 +34,10 @@ func menuCreateIPsec(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	_, admitted := activeIPsecBackend(pre, options)
 	done()
 	if admitted != nil {
-		menuNotice(out, "WARNING", "IPsec is unavailable here: trusted strongSwan prerequisites were not verified.")
+		menuNotice(out, "WARNING", "IPsec cannot start: the STL-exclusive strongSwan runtime is not verified.")
 		fmt.Fprintln(out, "No keys, services or tunnels were changed.")
 		fmt.Fprintln(out, "Next: stl doctor ipsec (read-only detailed checks; --json for automation).")
-		fmt.Fprintln(out, "You can use GRE/IPIP or WireGuard independently; existing strongSwan services will not be changed.")
+		menuProse(out, "You can use GRE/IPIP or WireGuard independently; existing strongSwan services will not be changed.")
 		return 4
 	}
 

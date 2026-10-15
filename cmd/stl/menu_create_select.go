@@ -119,7 +119,12 @@ func menuCapabilityHint(report linux.CapabilityReport, choice tunnelOption) (str
 		return "[Check needed]", menuBlue
 	}
 	if !status.Available {
-		return "[Unavailable]", menuYellow
+		if status.ReasonCode == "fou_module_present_probe_failed" {
+			return "[Needs setup]", menuYellow
+		}
+		// A failed read-only query is not proof that a kernel or provider
+		// permanently lacks the capability. Never guess "Unsupported".
+		return "[Check needed]", menuYellow
 	}
 	if choice.backend == domain.BackendIPsec {
 		return "[Verify service]", menuBlue
@@ -146,25 +151,54 @@ func menuTunnelOption(out io.Writer, number, name, description string, report li
 	}
 }
 
+// Explain shared prerequisites once: four UDP modes use one FOU
+// observation, and both IPsec transports share XFRM+swanctl preflight.
+// This help is observational; it never loads modules or fixes a host.
 func menuCapabilityHelp(out io.Writer, report linux.CapabilityReport) {
-	menuSection(out, "Availability / what it means")
-	fmt.Fprintln(out, "Precheck OK: basic host tools responded; actual tunnel creation is checked again.")
-	fmt.Fprintln(out, "Unavailable: this host did not pass a read-only prerequisite check now.")
-	fmt.Fprintln(out, "Check needed: the host could not be inspected; do not assume compatibility.")
-	fmt.Fprintln(out, "IPsec also requires exclusive STL-owned strongSwan runtime admission.")
-	if report != nil {
-		for _, capability := range []linux.Capability{
-			linux.CapabilityGRENative, linux.CapabilityGREFOU, linux.CapabilityGREGUE,
-			linux.CapabilityIPIPNative, linux.CapabilityIPIPFOU, linux.CapabilityIPIPGUE,
-			linux.CapabilityWireGuard, linux.CapabilityIPsecXFRM,
-		} {
-			if status, ok := report[capability]; ok && !status.Available {
-				menuField(out, string(capability), status.Reason)
+	menuScreen(out, "Availability / explanation")
+	menuSection(out, "How to read the badges")
+	menuHealthLine(out, "Precheck OK", "OK", "Basic tool query passed; actual Create is checked again")
+	menuHealthLine(out, "Needs setup", "WARNING", "A module was found, but runtime use is not confirmed")
+	menuHealthLine(out, "Check needed", "WARNING", "A read-only query failed; permanent lack of support is NOT proven")
+	menuHealthLine(out, "Verify service", "INFO", "IPsec still requires STL-exclusive strongSwan ownership")
+	menuSection(out, "Host findings / shared prerequisites")
+	if report == nil {
+		menuNotice(out, "WARNING", "Host inspection timed out or failed; no support claim is possible.")
+	} else {
+		showGroup := func(label string, capabilities ...linux.Capability) {
+			for _, c := range capabilities {
+				if status, ok := report[c]; ok && !status.Available {
+					menuField(out, label, status.Reason)
+					return
+				}
 			}
 		}
+		showGroup("GRE native", linux.CapabilityGRENative)
+		showGroup("IPIP native", linux.CapabilityIPIPNative)
+		// Group all four only if they really failed for the SAME FOU
+		// prerequisite. Otherwise do not imply that the other backend
+		// or all its UDP modes failed.
+		greFOU, grePresent := report[linux.CapabilityGREFOU]
+		ipipFOU, ipipPresent := report[linux.CapabilityIPIPFOU]
+		if grePresent && ipipPresent && !greFOU.Available && !ipipFOU.Available &&
+			greFOU.ReasonCode != "" && greFOU.ReasonCode == ipipFOU.ReasonCode &&
+			(greFOU.ReasonCode == "fou_probe_unconfirmed" ||
+				greFOU.ReasonCode == "fou_module_present_probe_failed") {
+			showGroup("FOU/GUE x4", linux.CapabilityGREFOU, linux.CapabilityGREGUE,
+				linux.CapabilityIPIPFOU, linux.CapabilityIPIPGUE)
+		} else {
+			showGroup("GRE UDP x2", linux.CapabilityGREFOU, linux.CapabilityGREGUE)
+			showGroup("IPIP UDP x2", linux.CapabilityIPIPFOU, linux.CapabilityIPIPGUE)
+		}
+		showGroup("WireGuard", linux.CapabilityWireGuard)
+		showGroup("IPsec x2", linux.CapabilityIPsecXFRM)
 	}
-	fmt.Fprintln(out, "No modules, packages, network links or services were changed.")
-	fmt.Fprintln(out, "For blocked IPsec: stl doctor ipsec --json (read-only detailed checks).")
+	menuSection(out, "Read-only checks / next steps")
+	menuField(out, "FOU/GUE", "ip fou show")
+	menuField(out, "FOU module", "modinfo fou")
+	menuField(out, "IPsec tools", "command -v swanctl")
+	menuField(out, "IPsec readiness", "stl doctor ipsec --json")
+	menuNotice(out, "INFO", "Kernel modules, packages, network Links and services were NOT changed.")
 }
 
 // Keep common choices on one short screen; the six less common transports

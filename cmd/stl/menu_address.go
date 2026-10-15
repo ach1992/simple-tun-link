@@ -94,7 +94,7 @@ func askLinkAddresses(p createPrompts, runner linux.Runner, snapshot state.Snaps
 			return domain.LinkAddresses{}, err
 		}
 		if rawLocal == "" && forceManual {
-			fmt.Fprintln(p.out, "For manual setup without a Setup Link, choose the TWO tunnel IPs yourself on both servers.")
+			menuProse(p.out, "For manual setup without a Setup Link, choose the TWO tunnel IPs yourself on both servers.")
 			continue
 		}
 		if rawLocal == "" && ok {
@@ -126,11 +126,11 @@ func askLinkAddresses(p createPrompts, runner linux.Runner, snapshot state.Snaps
 		free, err := checkManualLinkSubnet(checkCtx, runner, reserved, addresses)
 		checkCancel()
 		if err != nil {
-			fmt.Fprintln(p.out, "Could not check for address/route conflicts on this server; no changes made. Try again or press q.")
+			menuProse(p.out, "Could not check for address/route conflicts on this server; no changes made. Try again or press q.")
 			continue
 		}
 		if !free {
-			fmt.Fprintln(p.out, "These tunnel IPs conflict with a local address, route, or saved Link. Choose another pair.")
+			menuProse(p.out, "These tunnel IPs conflict with a local address, route, or saved Link. Choose another pair.")
 			continue
 		}
 		menuField(p.out, "Selected local", addresses.Local.String())

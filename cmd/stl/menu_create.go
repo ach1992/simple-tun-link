@@ -203,10 +203,10 @@ func menuCreatePlain(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	// Reuse the read-only menu snapshot; Engine checks current capability and
 	// exact ownership again when applying. No duplicate host probe is needed.
 	capability := plainBackendCapability(backend, mode)
-	if capReport != nil && capability != "" && !capReport[capability].Available {
-		menuNotice(out, "WARNING", fmt.Sprintf("%s/%s is not available on this server now.", backend, mode))
-		fmt.Fprintf(errOut, "%s/%s is not available on this server. Check kernel/iproute2 support (and FOU/GUE modules if selected). No tunnel created.\n", backend, mode)
-		fmt.Fprintln(out, "Choose a different type or inspect Availability details in Create tunnel.")
+	if status, known := capReport[capability]; capReport != nil && capability != "" && known && !status.Available {
+		menuNotice(out, "WARNING", fmt.Sprintf("%s/%s precheck did not pass; no tunnel created.", backend, mode))
+		menuField(out, "Reason", status.Reason)
+		menuField(out, "Next", "Create tunnel -> Availability details (read-only)")
 		return 4
 	}
 	peer, err := askPeerUnderlay(p)
