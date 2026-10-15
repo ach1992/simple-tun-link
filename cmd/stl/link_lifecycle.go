@@ -327,7 +327,7 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 			fmt.Fprintln(stderr, "Link outcome uncertain and error response could not be written; inspect before retry")
 			return 1
 		}
-	} else if _, tty := menuTerminal(stderr); tty {
+	} else if menuSessionErrorTTY(stdout, stderr) {
 		renderTerminalLifecycleFailure(stderr, safe, evidence)
 	} else {
 		fmt.Fprintln(stderr, safe.Error())

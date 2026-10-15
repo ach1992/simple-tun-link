@@ -87,6 +87,23 @@ func menuField(out io.Writer, label, value string) {
 	fmt.Fprintf(out, "  %-17s %s\n", label, menuPaint(out, menuCyan, value))
 }
 
+// The controlling stdout session AND the destination stderr must both
+// support terminal control before rendering a human failure page. A TTY
+// stderr alone never makes a redirected/automation stdout interactive.
+func menuSessionErrorTTY(stdout, stderr io.Writer) bool {
+	return menuEscapeCapable(stdout) && menuEscapeCapable(stderr)
+}
+
+// Preserve the stderr channel for failures, while never emitting ANSI
+// from an independently interactive stderr when stdout is redirected.
+func menuSessionErrorNotice(stdout, stderr io.Writer, message string) {
+	if !menuSessionErrorTTY(stdout, stderr) {
+		fmt.Fprintf(stderr, "\n[FAILED] %s\n", message)
+		return
+	}
+	menuNotice(stderr, "FAILED", message)
+}
+
 func menuNotice(out io.Writer, kind, message string) {
 	role := menuBlue
 	switch kind {

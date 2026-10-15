@@ -101,7 +101,8 @@ func TestRealEnginePersistenceRollbackCarriesVerifiedFailureCategory(t *testing.
 }
 
 func TestInteractivePersistenceFailureRendersReadableSafeSections(t *testing.T) {
-	master, slave := openMenuPTY(t)
+	_, stdoutTTY := openMenuPTY(t)
+	master, stderrTTY := openMenuPTY(t)
 	t.Setenv("TERM", "xterm")
 	var output bytes.Buffer
 	sensitive := &linux.RestoreFailure{
@@ -110,7 +111,7 @@ func TestInteractivePersistenceFailureRendersReadableSafeSections(t *testing.T) 
 		Stage: "persistence", HostMutation: "attempted",
 		DesiredState: "no_commit_attempted", Rollback: "completed_unverified",
 	}
-	if got := lifecycleFailureWithEvidence(&output, slave, false, stlerr.CodeState, "link_import",
+	if got := lifecycleFailureWithEvidence(stdoutTTY, stderrTTY, false, stlerr.CodeState, "link_import",
 		nil, "Import not confirmed", ev, sensitive); got != 1 {
 		t.Fatalf("unsafe return status: %d", got)
 	}

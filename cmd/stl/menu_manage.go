@@ -15,7 +15,7 @@ import (
 func menuManage(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, options *runtimeOptions) int {
 	links, err := savedMenuLinks(options)
 	if err != nil {
-		menuNotice(errOut, "FAILED", "Cannot load saved tunnels; inspect local State without changing it.")
+		menuSessionErrorNotice(out, errOut, "Cannot load saved tunnels; inspect local State without changing it.")
 		menuAcknowledge(input, reader, out)
 		return 1
 	}
