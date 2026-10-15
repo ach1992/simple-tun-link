@@ -50,6 +50,29 @@ jobs:
       - name: Build disposable native systemd guest
         run: |
           docker build -f scripts/e2e/ipsec-lab-ubuntu-systemd.Dockerfile -t stl-ipsec-real-provision:pr .
+      - name: Deny preexisting foreign drop-in before first private service start
+        run: |
+          set -euo pipefail
+          cid=''
+          cleanup() {
+            if [[ -n "$cid" ]]; then docker rm -f "$cid" >/dev/null 2>&1 || :; fi
+          }
+          trap cleanup EXIT
+          cid=$(docker run --rm -d --network none --privileged --cgroupns private \
+            --tmpfs /run --tmpfs /run/lock stl-ipsec-real-provision:pr)
+          for bin in stl stl-ipsec-provision-test; do
+            docker cp "/tmp/stl-ipsec-native-e2e/$bin" "$cid:/usr/local/bin/$bin"
+          done
+          docker exec "$cid" sh -c 'chown root:root /usr/local/bin/stl /usr/local/bin/stl-ipsec-provision-test && chmod 0755 /usr/local/bin/stl /usr/local/bin/stl-ipsec-provision-test'
+          docker exec -e STL_E2E_DISPOSABLE_HOST=approved \
+            -e STL_IPSEC_ISOLATED=approved \
+            -e STL_IPSEC_SYSTEMD_FIXTURE=approved \
+            -e STL_IPSEC_PRESTART_NEGATIVE=approved \
+            "$cid" /usr/local/bin/stl-ipsec-provision-test \
+            -test.run '^TestIsolatedNativePreStartRejectsForeignDropInWithoutExecuting$' -test.v
+          echo "NATIVE_FOREIGN_DROPIN_PRESTART_E2E=PASS"
+          docker rm -f "$cid" >/dev/null
+          cid=''
       - name: Real private service provisioning and ESP/NAT-T encrypted traffic
         run: |
           set -euo pipefail

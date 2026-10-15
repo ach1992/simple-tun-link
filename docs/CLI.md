@@ -158,26 +158,32 @@ The published rc.5 remains unchanged until a separately approved release.
 
 ### On-demand GRE/IPIP module preparation (unreleased; Issue #101)
 
-For any backend, Create now first takes a **read-only** package
-inventory using the same canonical installer code embedded in the
-verified binary. If the selected distro dependencies are missing, a real
-installed root terminal shows exactly the missing package names, risks
-and a fresh `PREPARE` choice. Only that explicit choice runs the bundled
-canonical installer under its normal owner verification and maintenance
-lock. GRE/IPIP request baseline packages, WireGuard requests WireGuard
-dependencies, and IPsec requires an **additional typed acknowledgement**
-because its package scripts may start a distro VPN daemon. On non-root
-or redirected invocations this is only a warning; final Engine capability
-admission still applies. No arbitrary downloaded tag/script is executed.
+For any backend, Create first takes a **read-only** selected package
+inventory using the byte-identical canonical installer embedded in the
+verified STL binary. Native GRE/IPIP and WireGuard dependencies can be
+prepared on demand after an installed root terminal shows the exact
+missing set and obtains a fresh `PREPARE` confirmation. The canonical
+installer holds the exclusive installed maintenance gate and rechecks the
+missing package set before APT. **Missing strongSwan packages are manual
+administrator work**: STL refuses unattended IPsec APT because a vendor
+package's systemd hooks may start foreign aliases, drop-ins or generated
+units that cannot be safely excluded across supported distributions.
+Installing the packages never authorizes STL's separate private service.
+Non-root or redirected selections remain observational and cannot
+start package mutation. Final Engine admission remains authoritative.
 
 After selecting GRE/IPIP FOU or GUE (or a native GRE/IPIP type with a
 missing kernel driver), STL separately rechecks the selected modules.
-If a required module is verified **on disk but inactive**, an operator
-can approve a narrow `PREPARE` step on an installed root-owned
-`sudo stl menu` in a real interactive terminal. Only the selected
-`ip_gre`, `ipip` or `fou` module is loaded with the exact fixed
-system `modprobe` executable. The kernel is checked again before the
-ordinary Create wizard resumes.
+If a required module is verified **on disk but inactive**, a real
+installed-root terminal may approve a separate `PREPARE`. The selected
+`ip_gre`, `ipip` or `fou` module is loaded only under an installed shared
+maintenance lease that rechecks executable identity after waiting. The
+single controlled loader uses `modprobe --config /dev/null --ignore-install`
+with a sanitized process environment and a bounded dependency preview,
+rejecting foreign install hooks and any dependency that cannot be
+attested as root-owned under the running kernel's module tree. Unknown
+or ambiguous states fail without loading. The kernel is rechecked before
+the ordinary Create wizard resumes.
 
 The preparation step does **not** create a Link, edit State, routes,
 firewalls, services or packages. It is not triggered by opening a menu,
@@ -202,12 +208,17 @@ successful package checks. Only an installed root real terminal can freshly
 confirm `PROVISION-IPSEC`: the program first requires no existing/conflicting
 native publication records, no foreign daemon or IKE UDP ports, and only
 inactive/disabled known vendor strongSwan units. It takes an exclusive
-installer/Engine maintenance gate, uses the existing no-clobber
-root-private config/unit origin publishers, creates only the canonical
-STL-native boot reference and starts only the STL unit. The complete
-runtime/service/socket/process ownership attestation must then pass
-before any IPsec Create. It NEVER stops/enables/disables/adopts any
-vendor service, copies foreign configs, or installs packages in this
+installer/Engine maintenance gate, uses the receipt-bound no-clobber
+config/unit publishers and does `daemon-reload`
+without starting the daemon. The EFFECTIVE loaded unit (including
+FragmentPath, drop-ins, execution directives and controlled environment)
+must pass PRE-START admission before the first private service start.
+Only after successful post-start process/VICI/UDP admission is the
+STL-owned boot enablement edge durably published and rechecked. A
+foreign override or partial publication never authorizes later automatic
+retry. Full native IPsec runtime admission still applies before any
+IPsec Create. It NEVER stops/enables/disables/adopts any vendor service,
+copies foreign configs, or installs packages in this
 step. If any origin publication or service transition is partial or
 uncertain, **do not retry automatically**: the exact protected artifacts
 are retained for an administrator to reconcile. No unverified service
@@ -1072,8 +1083,11 @@ The detailed read-only checks below record the historical source-only
 diagnostic milestones and remain relevant **when native runtime admission
 fails**. Historical `activation_allowed:false` and exit-4 statements
 within that chronology do not describe a currently admitted runtime.
-The production config/unit publisher remains fixture-only; this is not a
-production host installer. See `docs/operations/IPSEC-REAL-E2E.md`.
+Historical source-only milestones predate the unreleased Issue #101
+explicitly confirmed native-exclusive provisioner, which now calls the
+receipt-bound publishers under the installed maintenance gate. The
+currently published rc.5 remains unchanged. See
+`docs/operations/IPSEC-REAL-E2E.md` for operational evidence.
 
 The command observes `charon`/`charon-systemd` processes and known
 Debian/Ubuntu strongSwan systemd/SysV service-file identities with

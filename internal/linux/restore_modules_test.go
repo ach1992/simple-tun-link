@@ -55,7 +55,11 @@ func TestCommittedRestoreModulesOnlyForOwnedSavedLinkType(t *testing.T) {
 func TestCommittedRestoreModulesCheckBeforeAfterAndNoSharedUnload(t *testing.T) {
 	r := &moduleRestoreRunner{present: map[string]bool{"ip_gre": true}}
 	restore := CommittedTunnelModuleRestorer{
-		Runner:   r,
+		Runner: r,
+		Load: func(ctx context.Context, name string) error {
+			_, err := r.Run(ctx, "/sbin/modprobe", name)
+			return err
+		},
 		Present:  func(name string) (bool, error) { return r.present[name], nil },
 		Loadable: func(_ context.Context, name string) bool { return name == "fou" },
 	}

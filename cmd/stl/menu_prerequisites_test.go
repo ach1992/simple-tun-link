@@ -119,8 +119,12 @@ func (r *recordedModuleRunner) Run(_ context.Context, name string, args ...strin
 func TestOnDemandKernelLoadingUsesOnlyExactFixedArgsAndStopsAfterFailure(t *testing.T) {
 	selected := tunnelOption{domain.BackendGRE, domain.EncapFOU, false}
 	runner := &recordedModuleRunner{}
+	load := func(ctx context.Context, name string) error {
+		_, err := runner.Run(ctx, "/sbin/modprobe", name)
+		return err
+	}
 	ctx := context.Background()
-	if err := loadSelectedKernelModules(ctx, runner, selected, []string{"ip_gre", "fou"}); err != nil ||
+	if err := loadSelectedKernelModules(ctx, load, selected, []string{"ip_gre", "fou"}); err != nil ||
 		!slices.Equal(runner.calls, []string{"/sbin/modprobe ip_gre", "/sbin/modprobe fou"}) {
 		t.Fatalf("unexpected kernel commands: %v error=%v", runner.calls, err)
 	}
@@ -129,18 +133,18 @@ func TestOnDemandKernelLoadingUsesOnlyExactFixedArgsAndStopsAfterFailure(t *test
 		{"ipip"}, {"fou;touch /tmp/untrusted"},
 	} {
 		runner.calls = nil
-		if err := loadSelectedKernelModules(ctx, runner, selected, targets); err == nil ||
+		if err := loadSelectedKernelModules(ctx, load, selected, targets); err == nil ||
 			len(runner.calls) != 0 {
 			t.Fatalf("unexpected potentially unsafe mutation accepted: %v calls=%v", targets, runner.calls)
 		}
 	}
 	runner.calls = nil
 	runner.fail = "/sbin/modprobe ip_gre"
-	if err := loadSelectedKernelModules(ctx, runner, selected, []string{"ip_gre", "fou"}); err == nil ||
+	if err := loadSelectedKernelModules(ctx, load, selected, []string{"ip_gre", "fou"}); err == nil ||
 		strings.Contains(err.Error(), "private root subprocess") || len(runner.calls) != 1 {
 		t.Fatalf("failure leaked private subprocess data or continued: %v calls=%v", err, runner.calls)
 	}
-	if err := loadSelectedKernelModules(ctx, runner, tunnelOption{backend: domain.BackendIPsec}, []string{"fou"}); err == nil {
+	if err := loadSelectedKernelModules(ctx, load, tunnelOption{backend: domain.BackendIPsec}, []string{"fou"}); err == nil {
 		t.Fatal("IPsec unexpectedly obtained arbitrary modprobe capability")
 	}
 	if err := loadSelectedKernelModules(ctx, nil, selected, []string{"fou"}); err == nil {

@@ -57,9 +57,9 @@ func TestUnprivilegedOrRedirectedPackagePreviewCannotConsumeCreateInput(t *testi
 	reader := strings.NewReader("PREPARE\nALLOW-IPSEC-PACKAGES\n")
 	plan := tunnelOption{backend: domain.BackendIPsec, mode: domain.EncapESP}
 	// A read-only inventory is permitted, but root operation is not.
-	if !menuPrepareSelectedPackages(reader, nil, &output, &errors, plan) {
-		t.Fatalf("scripted input was treated as privileged preparer: %q", output.String())
-	}
+	// Automatic strongSwan APT is now deliberately refused even for root:
+	// a false return requests manual reconciliation, not a privileged effect.
+	_ = menuPrepareSelectedPackages(reader, nil, &output, &errors, plan)
 	if strings.Contains(output.String(), "Canonical installer verifying") ||
 		strings.Contains(output.String(), "Selected packages now pass") {
 		t.Fatalf("scripted package preview claimed mutation or success: %q", output.String())
@@ -88,5 +88,40 @@ func TestCanonicalPackageInstallerDoesNotSourceInheritedBashEnv(t *testing.T) {
 	}
 	if _, err := os.Stat(tmp + "/WRONG"); !os.IsNotExist(err) {
 		t.Fatalf("untrusted shell environment executed before installer: %v", err)
+	}
+}
+
+func TestMissingStrongSwanPackagePlanCannotAuthorizeAPT(t *testing.T) {
+	for _, tc := range []struct {
+		missing string
+		manual  bool
+	}{
+		{"iptables charon-systemd strongswan-swanctl", true},
+		{"libstrongswan-standard-plugins", true},
+		{"wireguard-tools", false},
+		{"iproute2 kmod", false},
+		{"", false},
+	} {
+		if got := missingStrongSwanPackages(tc.missing); got != tc.manual {
+			t.Fatalf("missing=%q manual=%t expected=%t", tc.missing, got, tc.manual)
+		}
+	}
+}
+
+func TestBlockedIPsecWarningPreservesEarlierPackageAndServiceEffects(t *testing.T) {
+	for _, attempted := range []bool{false, true} {
+		var out bytes.Buffer
+		menuIPsecBlockedNotice(&out, attempted)
+		body := out.String()
+		if !strings.Contains(body, "may have changed") && !strings.Contains(body, "may have started or enabled") {
+			t.Fatalf("unverified service/package effects were concealed: %q", body)
+		}
+		if strings.Contains(body, "No keys, services, packages or tunnels were changed") ||
+			strings.Contains(body, "No packages or services changed") {
+			t.Fatalf("false no-effect assertion after possible APT: %q", body)
+		}
+		if !strings.Contains(body, "No Link or keys") && !strings.Contains(body, "No IPsec Link or keys") {
+			t.Fatalf("failure no-Link semantics missing: %q", body)
+		}
 	}
 }

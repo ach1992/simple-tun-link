@@ -43,6 +43,14 @@ func (f *fakeServiceBus) RunBounded(ctx context.Context, limits CaptureLimits, b
 		"Service.UMask":         "u 63",
 		"Service.Environment":   "as 1 \"STRONGSWAN_CONF=/var/lib/simple-tun-link/ipsec/strongswan.conf\"",
 		"Service.MainPID":       "u 9876",
+		"Service.Restart":       "s \"no\"",
+		"Service.ExecCondition": "a(sasbttttuii) 0",
+		"Service.ExecStartPre":  "a(sasbttttuii) 0",
+		"Service.ExecStartPost": "a(sasbttttuii) 0",
+		"Service.ExecReload":    "a(sasbttttuii) 0",
+		"Service.ExecStop":      "a(sasbttttuii) 0",
+		"Service.ExecStopPost":  "a(sasbttttuii) 0",
+		"Service.ExecStart":     "a(sasbttttuii) 1 \"/usr/sbin/charon-systemd\" 1 \"/usr/sbin/charon-systemd\" false 0 0 0 0 0 0 0",
 	}
 	value, ok := fixed[prop]
 	if !ok {

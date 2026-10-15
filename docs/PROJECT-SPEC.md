@@ -288,8 +288,11 @@ verified inactive, on-disk allowlisted kernel module is a **separate**,
 explicit, freshly confirmed, privileged action, followed by kernel
 reverification. Installing optional packages is separately owned by the
 canonical installer, not ad hoc menu APT logic; never silently start, adopt
-or modify a foreign VPN service. IPsec cannot be declared ready until
-native-exclusive strongSwan ownership and service origin are admitted.
+or modify a foreign VPN service. When foreign systemd package lifecycle
+cannot be proven safe before APT, missing strongSwan packages require
+administrator-managed installation rather than automatic Prepare.
+IPsec cannot be declared ready until native-exclusive strongSwan
+ownership and service origin are admitted.
 Selected optional module requirements must survive the committed Link's
 restoration after reboot; durable completion requires disposable guest proof.
 When the fixed STL-exclusive IPsec source/config publisher is verified

@@ -19,8 +19,10 @@ import (
 // backend Ensure must independently verify the real capability afterwards.
 type CommittedTunnelModuleRestorer struct {
 	Runner Runner
-	// Test-only seams. Production always uses exact /sys/module, modinfo and
-	// root-owned fixed modprobe; no caller-provided shell strings.
+	// Test-only seams. Production invokes LoadTrustedKernelModule, which
+	// ignores foreign modprobe.d hooks, sanitizes the environment and attests
+	// every on-disk dependency before root insertion.
+	Load     func(context.Context, string) error
 	Present  func(string) (bool, error)
 	Loadable func(context.Context, string) bool
 }
@@ -85,8 +87,12 @@ func (r CommittedTunnelModuleRestorer) Prepare(ctx context.Context, link domain.
 		if !loadable(ctx, name) {
 			return fmt.Errorf("selected %s kernel dependency unavailable or not proven loadable", name)
 		}
-		if _, err := r.Runner.Run(ctx, "/sbin/modprobe", name); err != nil {
-			return fmt.Errorf("loading selected %s kernel dependency failed; no unload attempted", name)
+		load := r.Load
+		if load == nil {
+			load = LoadTrustedKernelModule
+		}
+		if err := load(ctx, name); err != nil {
+			return fmt.Errorf("loading selected %s trusted kernel dependency failed; no unload attempted", name)
 		}
 		found, err = present(name)
 		if err != nil || !found {

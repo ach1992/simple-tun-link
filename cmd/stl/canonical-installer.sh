@@ -18,12 +18,14 @@ Usage:
 
 The default backend selection is native (GRE/IPIP). Add wireguard and/or
 ipsec explicitly to provision optional dependencies. "all" selects all.
-IPsec package installation can enable/start charon-systemd: explicit opt-in
-avoids silently affecting pre-existing strongSwan services.
+IPsec package installation can enable/start charon-systemd: any missing
+strongSwan packages require separate manual OS package management after
+reviewing effective foreign service ownership (no automatic APT).
 The prepare action installs only missing selected packages on an existing,
 installer-owned /usr/local/bin/stl, without replacing STL or modifying Links.
-IPsec package installation may enable/start a distro daemon and DOES NOT
-provision STL's exclusive private IPsec runtime.
+Missing IPsec packages require administrator-managed manual installation:
+APT may start a foreign vendor daemon; STL refuses unattended installation.
+Installed strongSwan packages still require separate private IPsec admission.
 No host Link or network configuration is modified by this installer.
 --bundle is for locally built/tested bundles; system dependencies are
 only installed on the real /usr/local prefix, never an offline test prefix.
@@ -167,10 +169,12 @@ ensure_packages() {
     printf 'STL dependencies already installed for %s %s (%s).\n' "$os_id" "$os_version" "$backends" >&2
     return
   fi
-  # Installing new IPsec packages can activate/restart an operator-owned
-  # daemon even if charon-systemd is already present. Require a truly fresh
-  # daemon environment for ANY missing IPsec package; do not opportunistically
-  # take ownership of a foreign strongSwan instance.
+  # APT maintainer hooks may start a foreign effective strongSwan unit, even
+  # when no installed vendor package/process or unit base file is visible.
+  # Exhaustively proving absence of generator/alias/drop-in sources across
+  # supported systemd versions is not safe here. Keep all missing IPsec
+  # packages an explicit administrator-owned manual operation; this installer
+  # MUST NOT invoke apt when a strongSwan package is missing.
   if [[ $want_ipsec == 1 ]]; then
     local missing_ipsec=0
     for pkg in "${missing[@]}"; do
@@ -179,32 +183,7 @@ ensure_packages() {
       esac
     done
     if [[ $missing_ipsec == 1 ]]; then
-      if package_installed strongswan-starter || package_installed charon-systemd; then
-        fail 'existing strongSwan installation requires operator-managed package reconciliation; refusing automatic package changes'
-      fi
-      # Even a currently stopped foreign unit/drop-in may later start during
-      # APT maintainer hooks. Do not assume absence of a daemon means vacancy.
-      local unit unit_root
-      for unit in strongswan.service strongswan-starter.service charon-systemd.service ipsec.service; do
-        for unit_root in /etc/systemd/system /run/systemd/system /usr/lib/systemd/system /lib/systemd/system; do
-          if [[ -e $unit_root/$unit || -L $unit_root/$unit ]]; then
-            fail 'foreign strongSwan unit identity exists; manual service ownership review required'
-          fi
-        done
-      done
-      # Debian 11 minimal images ship pidof but not pgrep; fail closed when
-      # neither process-identity checker is available.
-      if command -v pgrep >/dev/null; then
-        if pgrep -x charon >/dev/null || pgrep -x charon-systemd >/dev/null; then
-          fail 'existing strongSwan daemon process detected; refusing IPsec package changes'
-        fi
-      elif command -v pidof >/dev/null; then
-        if pidof charon charon-systemd >/dev/null; then
-          fail 'existing strongSwan daemon process detected; refusing IPsec package changes'
-        fi
-      else
-        fail 'cannot safely determine whether a strongSwan daemon is already running'
-      fi
+      fail 'Automatic strongSwan package installation is disabled: foreign systemd unit/drop-in/generator execution cannot be proven absent before APT. An administrator must inspect effective service ownership, install needed packages through the OS package manager, then rerun STL readiness checks. No APT attempted.'
     fi
   fi
   printf 'Installing missing STL dependency packages on %s %s: %s\n' "$os_id" "$os_version" "${missing[*]}" >&2
@@ -237,7 +216,7 @@ if [[ $action == requirements ]]; then
     printf 'missing_packages=%s\n' "${missing[*]}"
   fi
   if [[ $want_ipsec == 1 ]]; then
-    printf 'notice=IPsec packages can enable/start charon-systemd; existing daemons need operator review\n'
+    printf 'notice=Missing IPsec packages require manual administrator installation; APT may start a foreign VPN daemon\n'
   fi
   exit 0
 fi

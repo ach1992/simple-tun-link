@@ -16,7 +16,9 @@ const NativeExclusiveServiceUnitPath = "/etc/systemd/system/simple-tun-link-ipse
 // The reviewed unit deliberately has NO ExecStartPost, ExecReload or Install
 // section. Distro strongswan.service units may run swanctl --load-all on
 // startup/reload, which would bypass per-Link ownership and secret admission.
-// This profile is only source data; no caller installs or starts it.
+// The separately confirmed native provisioner may publish these exact
+// bytes and start this reviewed private service only after effective
+// pre-start D-Bus admission; a unit file alone grants no execution right.
 //
 // RuntimeDirectoryMode and UMask are defensive intentions, NOT proof of
 // effective socket access or confinement. Prior to any operational start,

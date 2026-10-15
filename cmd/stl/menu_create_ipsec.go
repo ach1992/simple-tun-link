@@ -16,6 +16,16 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/state"
 )
 
+// The preceding selected-package workflow may have changed APT/vendor
+// service state. Never claim this entire Create attempt was effect-free.
+func menuIPsecBlockedNotice(out io.Writer, attemptedProvision bool) {
+	if attemptedProvision {
+		menuNotice(out, "WARNING", "Private IPsec provisioning was attempted. Service/configuration may have changed; inspect receipts, systemd and daemon state before retry. No Link or keys created.")
+		return
+	}
+	menuNotice(out, "WARNING", "No IPsec Link or keys were created by this step. Earlier package preparation, if approved, remains in effect and may have started or enabled a vendor strongSwan service; inspect package/systemd state before retrying. GRE/IPIP/WireGuard remain independent.")
+}
+
 // IPsec uses the existing admitted, protected sender CLI; the wizard is
 // not an alternative strongSwan owner or a generic service installer.
 func menuCreateIPsec(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
@@ -79,12 +89,8 @@ func menuCreateIPsec(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		menuField(out, "Packages", "strongswan-swanctl, charon-systemd, crypto plugins")
 		menuField(out, "Service", "STL-private configuration, verified unit and origin receipts")
 		menuField(out, "Next", "stl doctor ipsec --json (read-only)")
-		menuProse(out, "The installer supports optional IPsec packages, but installing packages alone does not establish STL-exclusive service ownership. Installing charon-systemd may start a vendor daemon.")
-		if attemptedProvision {
-			menuNotice(out, "WARNING", "Private IPsec provisioning was attempted. Service/configuration may have changed; inspect receipts, systemd and daemon state before retry. No Link or keys created.")
-		} else {
-			menuNotice(out, "INFO", "No keys, services, packages or tunnels were changed. GRE/IPIP/WireGuard remain independent.")
-		}
+		menuProse(out, "Missing strongSwan packages require administrator-managed installation and foreign systemd ownership review. Packages alone never establish STL-exclusive service admission; installing charon-systemd may start a vendor daemon.")
+		menuIPsecBlockedNotice(out, attemptedProvision)
 		return 4
 	}
 

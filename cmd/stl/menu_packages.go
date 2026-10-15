@@ -39,6 +39,16 @@ type selectedPackagePreview struct {
 	packages string
 }
 
+func missingStrongSwanPackages(missing string) bool {
+	for _, pkg := range strings.Fields(missing) {
+		switch pkg {
+		case "charon-systemd", "strongswan-swanctl", "libstrongswan-standard-plugins":
+			return true
+		}
+	}
+	return false
+}
+
 func runEmbeddedInstaller(ctx context.Context, stdout, stderr io.Writer, args ...string) error {
 	if ctx == nil || len(canonicalInstaller) == 0 {
 		return errors.New("canonical installer unavailable")
@@ -109,8 +119,10 @@ func readSelectedPackagePreview(ctx context.Context, selected tunnelOption) (sel
 	return plan, nil
 }
 
-// Creating any tunnel may require optional distro packages. The preview is
-// read-only for every selection; only an installed root terminal and a fresh
+// Creating any tunnel may require optional distro packages. Missing
+// strongSwan packages are administrator-managed because APT may trigger
+// foreign systemd service hooks; other selected packages remain automatic.
+// The preview is read-only for every selection; only an installed root terminal and a fresh
 // explicit confirmation delegate to the binary-embedded CANONICAL installer.
 // This never downloads/executes shell from a release tag or carries an APT
 // implementation into Go. Installer rechecks identity + missing set under lock.
@@ -130,6 +142,16 @@ func menuPrepareSelectedPackages(input io.Reader, reader *bufio.Reader, out, err
 	if plan.missing == "" {
 		return true
 	}
+	if selected.backend == domain.BackendIPsec && missingStrongSwanPackages(plan.missing) {
+		menuScreen(out, "IPsec / administrator-managed packages")
+		menuField(out, "STATUS", "Missing protected strongSwan dependencies")
+		menuField(out, "Missing packages", plan.missing)
+		menuField(out, "NEXT ACTION", "Inspect effective vendor systemd unit/drop-ins; install IPsec packages manually, then re-enter Create")
+		menuField(out, "Read-only verification", "stl doctor ipsec --json")
+		menuNotice(out, "WARNING", "APT package hooks may start a foreign strongSwan service. STL refuses automatic IPsec APT because foreign effective service ownership is not safely established.")
+		menuProse(out, "No APT or STL Link change was attempted here. Other selected backends retain normal on-demand Prepare. Installing packages alone does not provision the STL-exclusive IPsec service.")
+		return false
+	}
 	// Non-canonical, redirected and unprivileged sessions cannot consent to
 	// privileged package changes. Keep the chosen backend and defer final
 	// admission to the canonical Engine rather than eating scripted input.
@@ -145,10 +167,6 @@ func menuPrepareSelectedPackages(input io.Reader, reader *bufio.Reader, out, err
 	menuField(out, "REASON", "Selected distro dependencies are not installed")
 	menuField(out, "NEXT ACTION", "Review changes, type PREPARE, then continue Create")
 	menuProse(out, "Canonical installer installs missing selected packages only. APT repository metadata may be refreshed. Packages persist after cancellation/failure and are not part of binary rollback.")
-	if selected.backend == domain.BackendIPsec {
-		menuNotice(out, "WARNING", "Installing charon-systemd may enable/start the distro VPN daemon; existing foreign service or uncertain ownership blocks preparation.")
-		menuProse(out, "StrongSwan packages alone NEVER admit the STL-exclusive private IPsec service; service provisioning needs a separately verified no-clobber step.")
-	}
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
 		menuNotice(out, "WARNING", "Could not establish fresh input; no packages changed.")
 		return false
@@ -158,20 +176,6 @@ func menuPrepareSelectedPackages(input io.Reader, reader *bufio.Reader, out, err
 	if e != nil || confirmation != "PREPARE" {
 		menuNotice(out, "INFO", "Package preparation cancelled; no packages installed.")
 		return false
-	}
-	if selected.backend == domain.BackendIPsec {
-		// A separate, explicit acknowledgement for an irreversible host-wide
-		// package-manager action which may start a vendor daemon.
-		if err := clearQueuedMenuConfirmation(input, reader); err != nil {
-			menuNotice(out, "WARNING", "IPsec package acknowledgement unavailable; no packages changed.")
-			return false
-		}
-		fmt.Fprint(out, "IPsec packages may start a distro daemon and cannot be undone by STL. Type ALLOW-IPSEC-PACKAGES (Enter cancels): ")
-		acknowledgement, e := readMenuAnswer(reader)
-		if e != nil || acknowledgement != "ALLOW-IPSEC-PACKAGES" {
-			menuNotice(out, "INFO", "IPsec package preparation cancelled; no changes.")
-			return false
-		}
 	}
 	verifyCtx, stop := context.WithTimeout(context.Background(), 8*time.Second)
 	refreshed, e := readSelectedPackagePreview(verifyCtx, selected)

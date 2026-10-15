@@ -11,6 +11,7 @@ import (
 
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
+	"github.com/ach1992/simple-tun-link/internal/maintenance"
 )
 
 // The menu may only prepare explicitly selected, already-published GRE/IPIP
@@ -103,8 +104,8 @@ func menuCanPrepareKernel(input io.Reader, out io.Writer) bool {
 // A dedicated, typed subprocess seam keeps testing and the real root TTY path
 // separate. The literal module must be allowed by the selected Backend; the
 // command is never constructed from terminal input or shell interpolation.
-func loadSelectedKernelModules(ctx context.Context, runner linux.Runner, selected tunnelOption, targets []string) error {
-	if runner == nil || len(targets) == 0 || len(targets) > 2 {
+func loadSelectedKernelModules(ctx context.Context, load func(context.Context, string) error, selected tunnelOption, targets []string) error {
+	if load == nil || len(targets) == 0 || len(targets) > 2 {
 		return errors.New("no safe kernel module preparation targets")
 	}
 	allowed := plainRequiredModules(selected)
@@ -127,7 +128,7 @@ func loadSelectedKernelModules(ctx context.Context, runner linux.Runner, selecte
 		seen[name] = true
 	}
 	for _, name := range targets {
-		if _, err := runner.Run(ctx, "/sbin/modprobe", name); err != nil {
+		if err := load(ctx, name); err != nil {
 			// Prior successfully loaded modules are not unloaded: they may
 			// have become shared with another process or tunnel meanwhile.
 			return fmt.Errorf("kernel module %s load did not complete; prior loads must be inspected", name)
@@ -194,10 +195,21 @@ func menuPrepareSelectedModules(input io.Reader, reader *bufio.Reader, out io.Wr
 		menuNotice(out, "INFO", "Preparation cancelled. No modules were loaded.")
 		return false, report
 	}
-	// Recheck the exact module absence/loadability after the human confirms
-	// and before doing any host mutation; fail closed on concurrent drift.
+	// Wait for the installed maintenance lease BEFORE the last preflight.
+	// Acquisition re-attests /proc/self/exe after any installer/update wait,
+	// so a stale, replaced executable cannot mutate the host. RestoreAll
+	// already holds this same shared lease for committed Links.
+	loadCtx, stop := context.WithTimeout(context.Background(), 30*time.Second)
+	defer stop()
+	release, lockErr := maintenance.NewInstalledGate().Acquire(loadCtx)
+	if lockErr != nil {
+		menuNotice(out, "WARNING", "Installed STL maintenance identity unavailable or busy; no module loaded.")
+		return false, menuCapabilitySnapshot(options)
+	}
+	defer release()
+	// Recheck the exact module absence/loadability under the installed lease.
 	latest := menuCapabilitySnapshot(options)
-	verifyCtx, done := context.WithTimeout(context.Background(), 8*time.Second)
+	verifyCtx, done := context.WithTimeout(loadCtx, 8*time.Second)
 	defer done()
 	modulesAgain, blocked := plainModuleCandidates(selected, latest, func(name string) bool {
 		return probe.AvailableButNotLoaded(verifyCtx, name)
@@ -212,9 +224,7 @@ func menuPrepareSelectedModules(input io.Reader, reader *bufio.Reader, out io.Wr
 			return false, latest
 		}
 	}
-	loadCtx, stop := context.WithTimeout(context.Background(), 15*time.Second)
-	defer stop()
-	if err := loadSelectedKernelModules(loadCtx, linux.ExecRunner{}, selected, modules); err != nil {
+	if err := loadSelectedKernelModules(loadCtx, linux.LoadTrustedKernelModule, selected, modules); err != nil {
 		menuNotice(out, "WARNING", "Kernel module load failed or is incomplete. Inspect host state before retrying.")
 		menuField(out, "Cause", safeMenuText(err.Error()))
 		return false, menuCapabilitySnapshot(options)

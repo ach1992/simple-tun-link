@@ -243,20 +243,43 @@ func ProvisionNativeExclusive(ctx context.Context) error {
 	if err := publishNativeUnitAt("/", 0, nativeUnitPublishHooks{}); err != nil {
 		return fmt.Errorf("IPsec unit publication incomplete: %w; private config remains for owner reconciliation", err)
 	}
-	if err := publishNativeBootEdgeAt("/", 0); err != nil {
-		return fmt.Errorf("IPsec boot enablement incomplete: %w; published files retained for reconciliation", err)
-	}
 	runner := BoundedExecRunner{Timeout: 25 * time.Second}
-	for _, args := range [][]string{{"daemon-reload"}, {"start", nativeServiceName}} {
+	transition := func(action string) error {
+		args := []string{action}
+		if action == "start" {
+			args = append(args, nativeServiceName)
+		}
 		result, e := runner.RunBounded(ctx, CaptureLimits{Stdout: 1024, Stderr: 1024}, "/usr/bin/systemctl", args...)
 		clear(result.Stdout)
 		clear(result.Stderr)
 		if e != nil {
-			return errors.New("native IPsec systemd transition incomplete; inspect source and loaded daemon before further action")
+			return errors.New("native IPsec systemd transition incomplete; inspect source and loaded daemon before retry")
 		}
+		return nil
 	}
-	if err := NewNativeRuntimeAdmission().Authorize(ctx); err != nil {
-		return errors.New("native IPsec service started but exclusive runtime attestation failed; manual reconciliation required")
+	if err := transition("daemon-reload"); err != nil {
+		return err
+	}
+	// Attest the EFFECTIVE loaded unit and all executable directives BEFORE
+	// starting anything. A dormant foreign drop-in/generator can become
+	// effective when daemon-reload discovers our just-published unit.
+	admission := NewNativeRuntimeAdmission()
+	if err := admission.attestPreStartUnit(ctx); err != nil {
+		return errors.New("native IPsec loaded unit fails PRE-START admission; unit not started and boot edge not enabled; reconcile published sources")
+	}
+	if err := transition("start"); err != nil {
+		return err
+	}
+	// First prove actual process, socket and foreign-owner exclusion.
+	// Do not create any boot activation edge for an unverified first start.
+	if err := admission.Authorize(ctx); err != nil {
+		return errors.New("native IPsec first start remains unverified; boot edge NOT enabled; manual reconciliation required")
+	}
+	if err := publishNativeBootEdgeAt("/", 0); err != nil {
+		return fmt.Errorf("IPsec boot enablement incomplete: %w; published files retained for reconciliation", err)
+	}
+	if err := admission.Authorize(ctx); err != nil {
+		return errors.New("native IPsec boot-edge final attestation failed; reconcile retained private artifacts before further activation")
 	}
 	return nil
 }
