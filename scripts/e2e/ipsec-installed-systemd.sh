@@ -125,12 +125,18 @@ native_preflight() {
   env STL_IPSEC_PREFLIGHT_OPERATION="$1"     /usr/local/bin/stl-ipsec-cli-test     -test.run '^TestIsolatedNativeExclusiveOperationalPreflight$' -test.v
 }
 # Explicitly restart ONLY the fixture-owned, named STL unit; no vendor unit.
-systemctl restart simple-tun-link-ipsec.service
+echo "NATIVE_SYSTEMD_RESTART_BEGIN=OBSERVED"
+if ! systemctl restart simple-tun-link-ipsec.service; then
+  echo "NATIVE_SYSTEMD_RESTART_TRANSITION=FAILED" >&2
+  exit 1
+fi
+echo "NATIVE_SYSTEMD_RESTART_TRANSITION=PASS"
 [ "$(systemctl is-active simple-tun-link-ipsec.service)" = active ] ||
   { echo "ERROR: STL-owned unit did not restart in disposable fixture" >&2; exit 1; }
 /usr/local/bin/stl doctor ipsec --json | grep -q '"activation_allowed":true' ||
   { echo "ERROR: native admission failed after fresh STL unit restart" >&2; exit 1; }
 native_preflight ensure
+echo "NATIVE_SYSTEMD_RESTORE_BEGIN=OBSERVED"
 /usr/local/bin/stl link restore --all >/dev/null ||
   { echo "ERROR: native STL state/PSK/VICI restore failed" >&2; exit 1; }
 /usr/local/bin/stl link connect-ipsec "$link" --confirm "$link" --json >/dev/null
