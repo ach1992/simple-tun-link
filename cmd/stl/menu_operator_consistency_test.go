@@ -90,7 +90,7 @@ func TestOperatorReleaseHelpDoesNotStartInstallerOnRedirectedInput(t *testing.T)
 		t.Fatal("non-TTY update was considered privileged/confirmed")
 	}
 	var out, errOut bytes.Buffer
-	if err := menuRunCanonicalUpdate(nil, "v0.1.0;touch /tmp/side-effect", &out, &errOut); err == nil {
+	if err := menuRunCanonicalUpdate(nil, menuOfficialRelease{TagName: "v0.1.0;touch /tmp/side-effect"}, &out, &errOut); err == nil {
 		t.Fatal("unsafe tag accepted by canonical-updater delegate")
 	}
 }

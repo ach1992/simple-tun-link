@@ -75,8 +75,10 @@ Core operator choices (rc.4):
   receiver handoff, not the active tunnel or local key.
 - 4 Test connectivity: select a numbered Link or a for all; bounded
   observation only, not automatic repair.
-- 5 Settings, 6 Update, 7 Uninstall, 8 Exit: read-only/guided
-  instructions rather than silent installed-host mutations.
+- 5 Settings and 7 Uninstall are read-only/guided; 8 exits.
+  Unreleased post-rc.5 Update can delegate to the canonical installer only
+  after a positively immutable official release and fresh root/TTY/UPDATE
+  gates; every unverified/mutable release stays manual guidance only.
 
 A failed/uncertain menu operation must **not exit the terminal loop** or
 automatically repeat the mutating command. Machine CLI and JSON contracts
@@ -125,16 +127,20 @@ already included in the published rc.5 executable.
   Details group common causes and provide safe `ip fou show`, `modinfo fou`,
   `command -v swanctl`, `stl doctor ipsec --json` guidance without
   loading modules, installing packages or starting services.
-- Operator Update queries at most the three latest **complete published
-  official GitHub releases** over bounded HTTPS (no tokens). A selected
-  exact tag shows the release and pinned source command. **Only a verified
-  forward RC upgrade within the same version line**, a real root interactive
-  terminal running the
-  installed `/usr/local/bin/stl`, backed-up and quiesced host State and a
-  freshly typed `UPDATE` can delegate to the **same canonical installer**
-  used in the shell; no second updater or rollback engine exists. On
-  offline/non-root/noninteractive sessions, or for ambiguous/downgrade tags,
-  the menu displays manual guidance and makes **no changes**.
+- Operator Update lists at most three complete published official GitHub
+  releases over bounded HTTPS (no tokens), **including mutable releases
+  marked manual-only**. Only a positively confirmed `immutable:true`
+  release can be automatically selected for root execution of its canonical
+  installer. Missing, false or malformed immutability **fails closed**;
+  asset filenames, HTTPS, a Bash syntax check or later binary checks do not
+  make a mutable downloaded script trustworthy. An eligible automatic
+  update additionally requires a forward same-line RC upgrade, actual root
+  interactive terminal running installer-owned `/usr/local/bin/stl`,
+  backups/quiescence and a fresh `UPDATE` confirmation. No parallel update
+  or rollback engine exists. All other paths show manual verification
+  guidance **without a privileged mutable-tag curl-to-shell command**.
+  Public rc.5 is unchanged and `immutable:false`; repository release
+  immutability needs Owner approval/enabling **before future releases**.
 - Operator Uninstall groups next steps and the existing read-only
   `stl maintenance pre-uninstall --json` and trusted installer guidance.
   It **does not perform an automatic mass deletion**: multi-Link resource
@@ -369,8 +375,10 @@ local import does not initiate IKE or prove protected traffic. Legacy
 WireGuard v1/v2, IPsec v1 and IPsec v2 with non-32-byte PSKs remain
 preview-only.
 The menu makes no separate promises about working peer traffic or complete
-pairing. Settings is observational; Update and Uninstall provide guided,
-read-only installer handoffs and never silently mutate the host. Menu text
+pairing. Settings and Uninstall are observational/preparatory; an unreleased
+Update candidate may delegate to the canonical installer only after
+positively immutable release trust and fresh root/TTY/UPDATE consent.
+Mutable or unverified releases remain read-only guidance. Menu text
 and selection numbers are human UI, not automation contracts; existing
 versioned `--json` commands remain the automation interface.
 

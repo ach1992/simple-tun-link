@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ach1992/simple-tun-link/internal/version"
 )
 
 func sampleOfficialRelease(tag string, published time.Time) menuOfficialRelease {
@@ -134,7 +136,7 @@ func TestMenuUpdateOfflineFallbackAndRejectedInstallerInput(t *testing.T) {
 		strings.Contains(out.String()+errOut.String(), "secret network diagnostic") {
 		t.Fatalf("offline fallback was unsafe: code=%d out=%q err=%q", code, out.String(), errOut.String())
 	}
-	if err := menuRunCanonicalUpdate(context.Background(), "v0.1.0;bad", &out, &errOut); err == nil {
+	if err := menuRunCanonicalUpdate(context.Background(), menuOfficialRelease{TagName: "v0.1.0;bad"}, &out, &errOut); err == nil {
 		t.Fatal("unsafe tag reached installer")
 	}
 }
@@ -158,5 +160,102 @@ func TestMenuUpdatedExecutableIdentityVerification(t *testing.T) {
 				t.Fatalf("installed identity verification=%t, want %t", got, tc.ok)
 			}
 		})
+	}
+}
+
+func TestMenuRootUpdateRejectsMutableMissingAndAmbiguousReleaseTrust(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{"immutable", `{"id":42,"tag_name":"v0.1.0-rc.6","immutable":true}`, true},
+		{"false", `{"id":42,"tag_name":"v0.1.0-rc.6","immutable":false}`, false},
+		{"missing", `{"id":42,"tag_name":"v0.1.0-rc.6"}`, false},
+		{"null", `{"id":42,"tag_name":"v0.1.0-rc.6","immutable":null}`, false},
+		{"missing release ID", `{"tag_name":"v0.1.0-rc.6","immutable":true}`, false},
+		{"zero release ID", `{"id":0,"tag_name":"v0.1.0-rc.6","immutable":true}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var release menuOfficialRelease
+			if err := json.Unmarshal([]byte(tc.raw), &release); err != nil {
+				t.Fatal(err)
+			}
+			if got := menuReleaseImmutable(release); got != tc.want {
+				t.Fatalf("release trust %t, want %t", got, tc.want)
+			}
+			if !tc.want {
+				var out, errOut bytes.Buffer
+				err := menuRunCanonicalUpdate(context.Background(), release, &out, &errOut)
+				if err == nil || !strings.Contains(err.Error(), "confirmed immutable") || out.Len() != 0 || errOut.Len() != 0 {
+					t.Fatalf("untrusted metadata passed root-execution guard: %v; %q; %q", err, out.String(), errOut.String())
+				}
+			}
+		})
+	}
+	var release menuOfficialRelease
+	if err := json.Unmarshal([]byte(`{"id":42,"tag_name":"v0.1.0-rc.6","immutable":"true"}`), &release); err == nil {
+		t.Fatal("malformed immutable field was accepted")
+	}
+}
+
+func TestMenuMutablePublishedUpgradeRemainsVisibleButManualOnly(t *testing.T) {
+	original := version.Version
+	version.Version = "v0.1.0-rc.5"
+	t.Cleanup(func() { version.Version = original })
+	for _, tc := range []struct {
+		name      string
+		immutable *bool
+	}{
+		{"mutable", boolPointer(false)},
+		{"missing", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "absent")
+			release := sampleOfficialRelease("v0.1.0-rc.99", time.Now())
+			release.ID, release.Immutable = 123, tc.immutable
+			var out, errOut bytes.Buffer
+			opts := &runtimeOptions{stateRoot: root, menuReleases: func(context.Context) ([]menuOfficialRelease, error) {
+				return []menuOfficialRelease{release}, nil
+			}}
+			code := runWithRuntimeInput([]string{"menu"}, strings.NewReader("6\n1\n8\n"), &out, &errOut, opts)
+			if code != 0 || errOut.Len() != 0 ||
+				!strings.Contains(out.String(), "Automatic root update is disabled") ||
+				!strings.Contains(out.String(), "manual only") ||
+				!strings.Contains(out.String(), "Do not pipe a mutable-tag download") ||
+				strings.Contains(out.String(), "Type UPDATE") ||
+				strings.Contains(out.String(), "Update complete") {
+				t.Fatalf("mutable release update behavior unsafe: code=%d out=%q err=%q", code, out.String(), errOut.String())
+			}
+			if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("mutable release changed State: %v", err)
+			}
+		})
+	}
+}
+
+func boolPointer(v bool) *bool { return &v }
+
+func TestMenuImmutableReleaseStillNeedsInstalledRootRealTTY(t *testing.T) {
+	old := version.Version
+	version.Version = "v0.1.0-rc.5"
+	t.Cleanup(func() { version.Version = old })
+	root := filepath.Join(t.TempDir(), "absent")
+	release := sampleOfficialRelease("v0.1.0-rc.6", time.Now())
+	release.ID, release.Immutable = 321, boolPointer(true)
+	var out, errOut bytes.Buffer
+	opts := &runtimeOptions{stateRoot: root, menuReleases: func(context.Context) ([]menuOfficialRelease, error) {
+		return []menuOfficialRelease{release}, nil
+	}}
+	code := runWithRuntimeInput([]string{"menu"}, strings.NewReader("6\n1\n8\n"), &out, &errOut, opts)
+	if code != 0 || errOut.Len() != 0 ||
+		!strings.Contains(out.String(), "Pre-release / immutable") ||
+		!strings.Contains(out.String(), "Automatic update requires a real terminal, root") ||
+		strings.Contains(out.String(), "Automatic root update is disabled") ||
+		strings.Contains(out.String(), "Type UPDATE") || strings.Contains(out.String(), "Update complete") {
+		t.Fatalf("immutable release bypassed TTY/root gate: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("noninteractive immutable release changed State: %v", err)
 	}
 }

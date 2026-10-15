@@ -6,6 +6,7 @@ import (
 	"io"
 	"runtime"
 
+	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/version"
 	"golang.org/x/sys/unix"
@@ -62,17 +63,28 @@ func menuUninstall(out, errOut io.Writer, options *runtimeOptions) int {
 	menuSection(out, "Uninstall / preparation only")
 	menuField(out, "Saved tunnels", fmt.Sprintf("%d", len(snapshot.Links)))
 	if len(snapshot.Links) != 0 {
+		hasProtected := false
 		for _, record := range snapshot.Links {
 			if err := record.Desired.ID.Validate(); err != nil {
 				fmt.Fprintln(errOut, "Saved Link identity is invalid; uninstall guidance halted.")
 				return 1
 			}
+			if record.Desired.Backend == domain.BackendWireGuard || record.Desired.Backend == domain.BackendIPsec {
+				hasProtected = true
+			}
 		}
 		menuNotice(out, "WARNING", fmt.Sprintf("Uninstall blocked: %d saved tunnel(s) must be safely removed first.", len(snapshot.Links)))
-		menuSection(out, "What to do next")
-		menuField(out, "1", "My tunnels -> select a tunnel -> Remove")
+		if hasProtected {
+			menuSection(out, "First / protected WireGuard or IPsec receiver links")
+			menuProse(out, "BEFORE removing each such tunnel, decide whether to KEEP or DELETE its separately saved private receiver Setup Link.")
+			menuField(out, "Delete", "My tunnels -> select tunnel -> Delete receiver link -> type DELETE")
+			menuProse(out, "Deletion needs the original saved tunnel identity and a fresh confirmation; it cannot safely be done from this page after tunnel removal.")
+			menuField(out, "Keep", "The protected receiver Setup Link survives tunnel removal and STL uninstall. The administrator must protect or retire it later.")
+		}
+		menuSection(out, "Then / remove saved tunnels")
+		menuField(out, "1", "My tunnels -> select tunnel -> Remove this tunnel")
 		menuField(out, "2", "Return here after all removals are confirmed")
-		menuNotice(out, "INFO", "A one-click wipe risks shared network resources, uncertain State and irreplaceable receiver keys.")
+		menuNotice(out, "INFO", "A one-click wipe risks shared resources, uncertain State and irreplaceable private handoffs.")
 		menuField(out, "Advanced CLI", "stl link list --json")
 		return 0
 	}

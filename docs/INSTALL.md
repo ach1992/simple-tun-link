@@ -76,18 +76,27 @@ tests. These changes are **not part of rc.3**.
 ## Planned post-rc.5 menu maintenance changes (not yet released)
 
 [Issue #99](https://github.com/ach1992/simple-tun-link/issues/99)
-tracks an optional operator menu for listing the three newest public
-release tags and safely invoking the *existing canonical installer*
-after its own verification, a real root TTY, State/credential backup
-and a new explicit `UPDATE` confirmation. Manual exact-tag install/update
-commands and installer ownership/rollback guarantees remain authoritative.
-Until that code is independently reviewed, merged and published, the
-**current rc.5 Update menu stays read-only guidance**.
+tracks an optional operator menu for listing the three newest complete
+public releases. Only an official release with explicitly reported
+`immutable:true` is eligible for automatic root delegation to the
+*existing canonical installer*, after same-line forward update, installed
+root/real-TTY and fresh `UPDATE` consent. `immutable:false`, missing,
+malformed or otherwise uncertain immutability is **manual-only**: never
+execute its tag-downloaded installer as root automatically. Asset names,
+Bash syntax and post-install hashes are not pre-execution source trust.
+Published rc.5 reports `immutable:false` and stays unchanged; immutable
+release policy affects **future** publications only, and enabling it
+requires an explicit repository Owner decision.
 
-For Uninstall, the proposed screen shortens the Link-removal checklist
-but will not silently purge configured Links, shared network resources
-or privately saved handoff credentials. Removal and irreversible
-credential retirement remain independently confirmed operations.
+For Uninstall, the proposed screen guides **WireGuard/IPsec receiver
+Setup Link KEEP-or-DELETE decisions before removing the committed tunnel**.
+If DELETE is chosen, My tunnels -> Delete receiver link needs a fresh
+`DELETE` confirmation while Link identity still exists; only then Remove.
+If KEEP is chosen, the protected file survives both removal and STL
+uninstall and must remain under administrator control. GRE/IPIP need no
+private-handoff decision. No credential erasure or mass Link wipe is
+automatic. Until reviewed, merged and published, **rc.5 Update remains
+read-only guidance**, regardless of the candidate behavior.
 
 ## Protected receiver Setup Link retention (rc.3 guided UI)
 
@@ -153,7 +162,6 @@ noninteractive creator command still requires an explicit --output.
   host or edits repositories. Host APT package installation is not covered by
   the STL binary rollback transaction, and STL uninstall never uninstalls host
   packages. On error it reports the partial-package-management limitation.
-
 - Unreleased Issue #101 adds a separate `prepare --backends wireguard|ipsec|native|all`
   action to the **canonical exact-tag installer** for an existing,
   installer-owned `/usr/local/bin/stl`. It verifies the installer-owned binary
@@ -191,8 +199,21 @@ noninteractive creator command still requires an explicit --output.
 
 ## Install from an official released tag
 
+**Source-trust warning:** the published rc.5 release reports
+`immutable:false`. A tagged URL or `bash -n` syntax check does NOT
+make downloaded code safe to run with root privileges, and the release
+asset checksum checks occur after the script starts. For manual
+install/update on such a release, independently verify that the tag
+resolves to the commit in `BUILD-MANIFEST.txt`, review the script at that
+**exact commit SHA**, and check the release asset SHA256SUMS before
+approving privileged execution. Never treat the historical convenience
+one-liners below as a replacement for source verification. The
+unreleased menu update specifically **does not** execute scripts from
+mutable or unverified GitHub releases.
+
 Read the [installer source](../scripts/install.sh) before running it as root.
-For a single-command install, with an explicit released tag:
+For a single-command install, with an explicit released tag **only after
+the above independent source verification**:
 
 ~~~sh
 bash -c 'set -euo pipefail; umask 077; t=$(mktemp); trap '\''rm -f -- "$t"'\'' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 -o "$t" https://raw.githubusercontent.com/ach1992/simple-tun-link/vX.Y.Z/scripts/install.sh; bash -n "$t"; sudo bash "$t" install --version vX.Y.Z'
@@ -200,7 +221,9 @@ bash -c 'set -euo pipefail; umask 077; t=$(mktemp); trap '\''rm -f -- "$t"'\'' E
 
 ### Operator-first one-line install (v0.1.0-rc.5)
 
-For the rc.5 public pre-release, the one-line installer is:
+The historical rc.5 one-line convenience form below assumes you have
+already verified the mutable tag and source as described above; it is
+**not** an unattended trust-verified installation path:
 
 ~~~sh
 bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.5/scripts/quick-install.sh | bash -s -- v0.1.0-rc.5'
@@ -272,15 +295,22 @@ No public tag/release is being created by these instructions.
 
 ## Update
 
-The interactive `stl menu` Update task is a **guided, read-only handoff**:
-it accepts only a safe published-version tag and displays the pinned release
-and installer source. It never downloads or runs a remote script itself.
-The actual replacement is owned exclusively by this separately verified
-installer; the menu does not duplicate any install/update lifecycle.
+In the **published rc.5**, the interactive `stl menu` Update task remains
+a read-only handoff. The **unreleased post-rc.5 candidate** fetches official
+release metadata and can call the same canonical installer only when GitHub
+positively reports `immutable:true`, with fresh root/real-TTY/`UPDATE`
+confirmation and a same-line forward RC. `immutable:false` or unknown is
+manual verification guidance only; there is no privileged remote-script
+execution for that selection. Enabling release immutability in GitHub
+Settings -> Releases affects only releases published afterward.
 
-Download the installer from the **intended new released tag**, inspect it, and
-run `sudo bash ./install.sh update --version vX.Y.Z` (or use the same one-command
-pattern with `update`). The installer refuses a foreign or locally modified
+For manual operations, verify the intended source commit and published
+tag against the release manifest, verify the selected artifact against
+`SHA256SUMS`, and **inspect the downloaded installer before any privileged
+execution**. Never pipe a mutable-tag download directly into a root shell.
+After independent verification, use
+`sudo bash ./install.sh update --version vX.Y.Z`. The installer refuses
+a foreign or locally modified
 `stl`, an unrecognized/missing `stlink`, or malformed installation metadata.
 
 - Each installer is serialized with `flock`.
@@ -363,10 +393,15 @@ checking state schema and Engine compatibility.
 ## Uninstall: never tear down live Links implicitly
 
 The interactive `stl menu` Uninstall task only guides a human operator.
-When saved Links remain it lists their stable IDs and the existing
-`stl link remove` command, but never performs removal or prints
-untrusted display names. With no saved Links it explicitly says that
-the count is **not** proof of safe uninstall; the installer still performs
+When saved Links remain, it gives a private-handoff KEEP/DELETE decision
+**first** for WireGuard/IPsec; a requested `Delete receiver link` must
+occur while the exact saved tunnel still exists, with fresh `DELETE`
+confirmation. If retained, its separately protected receiver credential
+survives both Link removal and uninstall and must be secured or later
+retired by the administrator. GRE/IPIP do not require this private step.
+Then the menu guides each verified `Remove this tunnel` action, **without
+listing opaque IDs or display names**. With no saved Links, a zero count
+is **not** proof of safe uninstall; the installer still performs
 the canonical Go preflight under exclusive maintenance locking.
 
 First quiesce concurrent Link operators and inspect the saved Links:
