@@ -244,8 +244,8 @@ bash -c 'set -euo pipefail; umask 077; t=$(mktemp); trap '\''rm -f -- "$t"'\'' E
 
 ### Operator-first one-line install (v0.1.0-rc.6)
 
-First inspect the exact rc.6 installer source and signed release
-provenance. Immutable publication protects against later asset/tag
+First inspect the exact rc.6 installer source and independently verify
+its release provenance. Immutable publication protects against later asset/tag
 replacement but does not itself make code safe. After independent
 source/manifest review, the tag-pinned convenience form is:
 
