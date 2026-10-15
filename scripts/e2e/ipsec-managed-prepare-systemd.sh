@@ -49,6 +49,13 @@ fi
 [[ ! -e /usr/sbin/charon-systemd ]] || fail stale_plan_installed_anything
 echo "IPSEC_STALE_APT_DEPENDENCY_PLAN_DENIED=PASS"
 
+# Docker's stock policy-rc.d vetoes vendor service starts, hiding the
+# lifecycle that the user explicitly approved. Remove ONLY this disposable
+# guest's packaging hook veto so the real distro maintainer scripts can
+# start/enable the new vendor service. No host/CI service policy is touched.
+if [[ -f /usr/sbin/policy-rc.d ]]; then
+  mv /usr/sbin/policy-rc.d /tmp/stl-disposable-policy-rc.d
+fi
 # Only the selected exact packages may be installed, with signed metadata.
 bash /mnt/stl-install.sh prepare --backends native,ipsec \
     --expected-missing "$missing" --expected-apt-plan "$apt_plan"
@@ -60,6 +67,11 @@ dpkg-query -W -f='${Status}' charon-systemd | grep -qx 'install ok installed' ||
 [[ $(sha256sum /usr/local/lib/simple-tun-link/install-record | awk '{print $1}') == "$record" ]] ||
   fail stl_install_receipt_changed
 [[ ! -e /var/lib/simple-tun-link/ipsec ]] || fail installer_provisioned_private_service
+# The package's real vendor start hook must have run in this isolated guest
+# before STL normalized it. A no-start package simulation is not equivalent.
+started=$(systemctl show strongswan.service -p ActiveEnterTimestamp --value)
+[[ -n $started && $started != n/a ]] ||
+  fail vendor_start_hook_not_exercised
 [[ $(systemctl is-active strongswan.service 2>/dev/null || :) == inactive ]] ||
   fail vendor_not_inactive
 [[ $(systemctl is-enabled strongswan.service 2>/dev/null || :) == disabled ]] ||
