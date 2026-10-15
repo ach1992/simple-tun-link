@@ -355,7 +355,7 @@ func menuUpdate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		menuNotice(out, "WARNING", "Cannot obtain a fresh terminal confirmation; nothing changed.")
 		return 2
 	}
-	fmt.Fprintf(out, "Type %s to run the canonical installer (Enter cancels): ", menuPaint(out, menuRed, "UPDATE"))
+	fmt.Fprintf(out, "Type %s to run the canonical installer (Enter cancels): ", menuActionToken(out, "UPDATE"))
 	confirm, err := readMenuAnswer(reader)
 	if err != nil || confirm != "UPDATE" {
 		menuNotice(out, "INFO", "Update cancelled. No installer started.")

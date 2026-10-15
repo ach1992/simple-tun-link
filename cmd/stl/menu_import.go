@@ -219,7 +219,7 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 				fmt.Fprintln(out, "Cannot establish a fresh terminal confirmation; nothing was imported.")
 				return 2
 			}
-			fmt.Fprint(out, "Import this tunnel? Type YES to confirm (Enter=no): ")
+			fmt.Fprint(out, menuPrompt(out, "Import this tunnel? Type YES to confirm (Enter=no): "))
 			confirm, err := readMenuAnswer(reader)
 			if errors.Is(err, io.EOF) {
 				return 0

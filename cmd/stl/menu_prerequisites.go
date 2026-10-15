@@ -189,7 +189,7 @@ func menuPrepareSelectedModules(input io.Reader, reader *bufio.Reader, out io.Wr
 		menuNotice(out, "WARNING", "Cannot establish a fresh confirmation. Nothing changed.")
 		return false, report
 	}
-	fmt.Fprintf(out, "Type %s to load only these modules (Enter cancels): ", menuPaint(out, menuYellow, "PREPARE"))
+	fmt.Fprintf(out, "Type %s to load only these modules (Enter cancels): ", menuActionToken(out, "PREPARE"))
 	confirm, err := readMenuAnswer(reader)
 	if err != nil || confirm != "PREPARE" {
 		menuNotice(out, "INFO", "Preparation cancelled. No modules were loaded.")

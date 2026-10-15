@@ -154,7 +154,7 @@ func menuRemoveLink(input io.Reader, reader *bufio.Reader, out, errOut io.Writer
 		fmt.Fprintln(errOut, "Cannot establish a fresh terminal confirmation; no changes made.")
 		return 2
 	}
-	fmt.Fprintf(out, "\nTo permanently REMOVE this tunnel, type %s (Enter cancels): ", menuPaint(out, menuRed, "REMOVE"))
+	fmt.Fprintf(out, "\nTo permanently REMOVE this tunnel, type %s (Enter cancels): ", menuActionToken(out, "REMOVE"))
 	confirm, err := readMenuAnswer(reader)
 	if errors.Is(err, io.EOF) || err == nil && confirm != "REMOVE" {
 		fmt.Fprintln(out, "Removal cancelled. No changes made.")

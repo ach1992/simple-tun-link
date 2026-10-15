@@ -40,6 +40,71 @@ func TestMenuPresentationPlaintextAndSemanticColumns(t *testing.T) {
 	}
 }
 
+func TestMenuActionSemanticsAndExactCopyableTokens(t *testing.T) {
+	_, slave := openMenuPTY(t)
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("CLICOLOR", "1")
+	old, present := os.LookupEnv("NO_COLOR")
+	if err := os.Unsetenv("NO_COLOR"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if present {
+			_ = os.Setenv("NO_COLOR", old)
+		} else {
+			_ = os.Unsetenv("NO_COLOR")
+		}
+	})
+	for _, test := range []struct {
+		word, code string
+	}{
+		{"REMOVE", menuRed}, {"DELETE", menuRed},
+		{"PREPARE", menuYellow}, {"UPDATE", menuYellow},
+		{"YES", menuGreen}, {"SHOW", menuBlue},
+	} {
+		got := menuPrompt(slave, "Type "+test.word+" to confirm: ")
+		want := "\x1b[" + test.code + "m" + test.word + "\x1b[0m"
+		if !strings.Contains(got, want) {
+			t.Fatalf("semantic action %s missing exact color/bold token: %q", test.word, got)
+		}
+	}
+	for _, test := range []struct {
+		title, role string
+	}{
+		{"Remove tunnel", menuRed}, {"Delete receiver link", menuRed},
+		{"Uninstall", menuRed}, {"Install", menuYellow},
+		{"Update", menuYellow}, {"Show status", menuBlue},
+	} {
+		if got := menuOptionRole(test.title); got != test.role {
+			t.Fatalf("%s: want %s, got %s", test.title, test.role, got)
+		}
+	}
+	for _, literal := range []string{
+		"stl://receiver-sensitive-sequence", "sudo stl link show --json",
+		"https://example.invalid/query?a=1",
+	} {
+		if got := menuFieldValue(slave, "Copy", literal); got != literal {
+			t.Fatalf("copyable token was decorated or changed: %q", got)
+		}
+	}
+	if got := menuFieldValue(slave, "Status", "Verified"); !strings.Contains(got, "\x1b["+menuGreen+"m") {
+		t.Fatalf("verified status did not use the success palette: %q", got)
+	}
+	if got := menuFieldValue(slave, "Status", "Unavailable"); !strings.Contains(got, "\x1b["+menuCyan+"m") {
+		t.Fatalf("unavailable state did not use the distinct unavailable palette: %q", got)
+	}
+	if got := menuFieldValue(slave, "Status", "Unknown"); !strings.Contains(got, "\x1b["+menuDim+"m") {
+		t.Fatalf("unknown state did not use the distinct unknown palette: %q", got)
+	}
+	t.Setenv("NO_COLOR", "")
+	if got := menuPrompt(slave, "Type DELETE or YES: "); got != "Type DELETE or YES: " {
+		t.Fatalf("NO_COLOR decorated action tokens: %q", got)
+	}
+	if got := menuFieldValue(slave, "Status", "Unavailable"); got != "Unavailable" {
+		t.Fatalf("NO_COLOR decorated status: %q", got)
+	}
+}
+
 func TestMenuPresentationTermAndColorGates(t *testing.T) {
 	_, slave := openMenuPTY(t)
 	t.Setenv("TERM", "xterm-256color")

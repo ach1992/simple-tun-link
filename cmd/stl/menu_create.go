@@ -30,7 +30,7 @@ type createPrompts struct {
 }
 
 func (p createPrompts) ask(prompt string) (string, error) {
-	fmt.Fprint(p.out, menuPaint(p.out, menuCyan, prompt))
+	fmt.Fprint(p.out, menuPrompt(p.out, prompt))
 	answer, err := readMenuAnswer(p.reader)
 	if err != nil {
 		return "", err

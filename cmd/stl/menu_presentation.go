@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -41,10 +42,70 @@ func menuColorEnabled(out io.Writer) bool {
 }
 
 func menuPaint(out io.Writer, role, value string) string {
-	if !menuColorEnabled(out) || value == "" {
+	if !menuColorEnabled(out) || value == "" || role == "" {
 		return value
 	}
 	return "\x1b[" + role + "m" + value + "\x1b[0m"
+}
+
+// Action colors are a single menu-wide vocabulary. They never change
+// machine output or the meaning of a confirmation.
+func menuActionRole(action string) string {
+	switch action {
+	case "REMOVE", "DELETE", "UNINSTALL":
+		return menuRed
+	case "PREPARE", "INSTALL", "UPDATE":
+		return menuYellow
+	case "YES":
+		return menuGreen
+	case "SHOW":
+		return menuBlue
+	default:
+		return menuCyan
+	}
+}
+
+func menuActionToken(out io.Writer, action string) string {
+	return menuPaint(out, menuActionRole(action), action)
+}
+
+// Prompts may style semantic action words, while preserving their exact
+// plain content under NO_COLOR/TERM=dumb and on redirected streams.
+var menuPromptActions = regexp.MustCompile("\\b(?:REMOVE|DELETE|UNINSTALL|PREPARE|INSTALL|UPDATE|SHOW|YES)\\b")
+
+func menuPrompt(out io.Writer, prompt string) string {
+	if !menuColorEnabled(out) || menuCopyable(prompt) {
+		return prompt
+	}
+	matches := menuPromptActions.FindAllStringIndex(prompt, -1)
+	var result strings.Builder
+	from := 0
+	for _, span := range matches {
+		result.WriteString(menuPaint(out, menuCyan, prompt[from:span[0]]))
+		result.WriteString(menuActionToken(out, prompt[span[0]:span[1]]))
+		from = span[1]
+	}
+	result.WriteString(menuPaint(out, menuCyan, prompt[from:]))
+	return result.String()
+}
+
+func menuOptionRole(title string) string {
+	title = strings.ToUpper(title)
+	for _, word := range strings.FieldsFunc(title, func(r rune) bool { return r < 'A' || r > 'Z' }) {
+		switch word {
+		case "REMOVE", "DELETE", "UNINSTALL":
+			return menuRed
+		}
+	}
+	for _, word := range strings.FieldsFunc(title, func(r rune) bool { return r < 'A' || r > 'Z' }) {
+		switch word {
+		case "INSTALL", "PREPARE", "UPDATE":
+			return menuYellow
+		case "SHOW":
+			return menuBlue
+		}
+	}
+	return ""
 }
 
 func menuScreen(out io.Writer, title string) {
@@ -68,19 +129,29 @@ func menuSection(out io.Writer, title string) {
 			}
 		}
 	}
-	fmt.Fprintln(out, "\n"+menuPaint(out, menuBlue, strings.ToUpper(title)))
+	role := menuOptionRole(title)
+	if role == "" {
+		role = menuBlue
+	}
+	fmt.Fprintln(out, "\n"+menuPaint(out, role, strings.ToUpper(title)))
 	fmt.Fprintln(out, menuPaint(out, menuDim, strings.Repeat("-", width)))
 }
 
 func menuOption(out io.Writer, number, title, description string) {
+	if !menuCopyable(description) {
+		description = menuPaint(out, menuDim, description)
+	}
 	entry := menuPaint(out, menuCyan, fmt.Sprintf("%2s", number))
+	role := menuOptionRole(title)
 	if file, ok := menuTerminal(out); ok {
 		if ws, err := unix.IoctlGetWinsize(int(file.Fd()), unix.TIOCGWINSZ); err == nil && ws.Col > 0 && ws.Col < 64 {
-			fmt.Fprintf(out, "  %s  %s\n      %s\n", entry, title, menuPaint(out, menuDim, description))
+			fmt.Fprintf(out, "  %s  %s\n      %s\n", entry, menuPaint(out, role, title), description)
 			return
 		}
 	}
-	fmt.Fprintf(out, "  %s  %-22s %s\n", entry, title, menuPaint(out, menuDim, description))
+	// Pad the raw title before decoration. ANSI bytes must not move columns.
+	fmt.Fprintf(out, "  %s  %s %s\n", entry, menuPaint(out, role, fmt.Sprintf("%-22s", title)),
+		description)
 }
 
 // Human-only width; redirected/automation output is never reformatted.
@@ -109,10 +180,36 @@ func menuField(out io.Writer, label, value string) {
 		fmt.Fprintf(out, "  %s\n", label)
 		width := max(16, cols-6)
 		wrapped := "      " + strings.ReplaceAll(wrapTerminalGuidance(value, width), "\n", "\n      ")
-		fmt.Fprintln(out, menuPaint(out, menuCyan, wrapped))
+		fmt.Fprintln(out, menuFieldValue(out, label, wrapped))
 		return
 	}
-	fmt.Fprintf(out, "  %-17s %s\n", label, menuPaint(out, menuCyan, value))
+	fmt.Fprintf(out, "  %-17s %s\n", label, menuFieldValue(out, label, value))
+}
+
+// Exact copyable commands, private setup links and URLs are never decorated.
+func menuFieldValue(out io.Writer, label, value string) string {
+	if menuCopyable(value) {
+		return value
+	}
+	if strings.EqualFold(strings.TrimSpace(label), "Status") || strings.EqualFold(strings.TrimSpace(label), "State") {
+		v := strings.ToUpper(strings.TrimSpace(value))
+		switch {
+		case strings.HasPrefix(v, "OK"), strings.HasPrefix(v, "READY"),
+			strings.HasPrefix(v, "VERIFIED"), strings.HasPrefix(v, "CONNECTED"):
+			return menuPaint(out, menuGreen, value)
+		case strings.HasPrefix(v, "FAILED"), strings.HasPrefix(v, "ERROR"),
+			strings.HasPrefix(v, "BLOCKED"), strings.HasPrefix(v, "CONFLICT"):
+			return menuPaint(out, menuRed, value)
+		case strings.HasPrefix(v, "UNKNOWN"):
+			return menuPaint(out, menuDim, value)
+		case strings.HasPrefix(v, "UNAVAILABLE"):
+			return menuPaint(out, menuCyan, value)
+		case strings.HasPrefix(v, "WARNING"), strings.HasPrefix(v, "NEEDS"),
+			strings.HasPrefix(v, "UNVERIFIED"):
+			return menuPaint(out, menuYellow, value)
+		}
+	}
+	return menuPaint(out, menuCyan, value)
 }
 
 // Human explanations are paragraphs, never machine output. Indent and
@@ -151,8 +248,12 @@ func menuNotice(out io.Writer, kind, message string) {
 		role = menuGreen
 	case "WARNING":
 		role = menuYellow
-	case "FAILED":
+	case "FAILED", "ERROR", "CONFLICT":
 		role = menuRed
+	case "UNKNOWN":
+		role = menuDim
+	case "UNAVAILABLE":
+		role = menuCyan
 	}
 	cols := menuColumns(out)
 	if cols >= 24 && len(kind)+len(message)+5 > cols && !menuCopyable(message) {
