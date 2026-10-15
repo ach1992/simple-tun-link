@@ -186,8 +186,15 @@ Runtime-only systemd enablement, alias/linked/masked states, and ambiguous
 identities fail closed rather than pretending reboot activation is durable. Negative
 systemd enablement observations require both the expected process exit
 status and matching stdout; a partial stdout from a timed-out command
-is not authoritative. A completed final-Link unit removal must verify
-the absence of both the owned file and enabled systemd identity.
+is not authoritative. For Ubuntu/systemd 249's alternate absent-unit
+result (completed `is-enabled` exit 1 with empty stdout), a second,
+successful read-only `systemctl show` must prove all of
+`LoadState=not-found`, empty `UnitFileState`, and empty `FragmentPath`.
+A failed, interrupted, ambiguous, incomplete, or foreign-unit observation
+remains blocked; localized stderr text is never parsed as absence.
+The local canonical unit path and owner identity are independently
+validated before any mutation. A completed final-Link unit removal must
+verify the absence of both the owned file and enabled systemd identity.
 
 Every backend rollback of an already-applied change runs with a
 cancellation-detached, bounded cleanup context, including non-systemd

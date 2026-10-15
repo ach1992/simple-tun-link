@@ -706,6 +706,20 @@ func (p SystemdPersistence) isEnabled(ctx context.Context, systemctl, name strin
 	case "linked", "alias", "indirect", "static", "masked", "masked-runtime", "generated", "transient":
 		return false, fmt.Errorf("refusing ambiguous or administrator-managed systemd unit state %q", state)
 	case "":
+		// Ubuntu/systemd 249 can emit no stdout and exit 1 for an
+		// absent unit, with only a localized error message on stderr.
+		// Never parse that message or accept an unknown command failure as
+		// proof of absence. A completed exit 1 is eligible for a second,
+		// strictly parsed read-only systemd unit identity inspection.
+		var status *CommandError
+		if errors.As(err, &status) && status.ExitCode == 1 &&
+			!status.TimedOut && !status.Canceled {
+			if inspectErr := p.verifyAbsentUnitBySystemdShow(ctx, systemctl, name); inspectErr == nil {
+				return false, nil
+			} else {
+				return false, fmt.Errorf("cannot independently verify missing systemd unit: %w", inspectErr)
+			}
+		}
 		if err == nil {
 			return false, fmt.Errorf("systemctl is-enabled returned no state")
 		}
@@ -716,6 +730,53 @@ func (p SystemdPersistence) isEnabled(ctx context.Context, systemctl, name strin
 		}
 		return false, fmt.Errorf("unsupported systemd enablement state %q", state)
 	}
+}
+
+// verifyAbsentUnitBySystemdShow is a narrow read-only compatibility path
+// for a completed is-enabled exit 1 with *empty* stdout. In systemd 249,
+// this can mean a missing unit, but the error text is locale-dependent and
+// cannot be used as identity evidence. An independently successful systemctl
+// show must attest ALL three exact absent-state properties. Anything else
+// (including a foreign/masked/loaded unit, truncated output, duplicate keys,
+// a failed/timed-out show, or cancellation) remains an unsafe unknown.
+//
+// EnsureRestore/RemoveRestore/IsRestoreInstalled separately guard the local
+// unit path; this extra observation never authorizes deletion or ownership.
+func (p SystemdPersistence) verifyAbsentUnitBySystemdShow(ctx context.Context, systemctl, name string) error {
+	result, err := p.Runner.Run(ctx, systemctl, "show", name, "--no-pager", "--all",
+		"-p", "LoadState", "-p", "UnitFileState", "-p", "FragmentPath")
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return fmt.Errorf("systemd missing-unit check canceled: %w", ctxErr)
+	}
+	if err != nil {
+		return fmt.Errorf("systemd missing-unit check could not complete: %w", err)
+	}
+	// Never expose or parse process stderr as a machine identity token.
+	// Keep parsing bounded and exact even with an injected Runner.
+	if len(result.Stderr) != 0 || len(result.Stdout) > 1024 {
+		return errors.New("systemd missing-unit check returned unexpected output")
+	}
+	output := strings.TrimSuffix(string(result.Stdout), "\n")
+	lines := strings.Split(output, "\n")
+	if len(lines) != 3 {
+		return errors.New("systemd missing-unit check lacks complete state properties")
+	}
+	seen := make(map[string]bool, 3)
+	for _, line := range lines {
+		switch line {
+		case "LoadState=not-found", "UnitFileState=", "FragmentPath=":
+			if seen[line] {
+				return errors.New("systemd missing-unit check returned duplicate properties")
+			}
+			seen[line] = true
+		default:
+			return errors.New("systemd missing-unit check did not prove absent unit identity")
+		}
+	}
+	if len(seen) != 3 {
+		return errors.New("systemd missing-unit check lacks required absent properties")
+	}
+	return nil
 }
 
 // When systemctl produced a recognizable token but a nil/invalid exit

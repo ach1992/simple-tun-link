@@ -25,6 +25,22 @@ restore transaction before durable desired State commit. The final code
 is the compensation/reconciliation outcome, not proof of a GRE packet,
 peer reachability, or even a specific systemd failure.
 
+The Owner-provided Ubuntu 22.04 / systemd 249 evidence from
+2026-10-15 establishes a specific rc.3 compatibility problem:
+`is-enabled` wrote **no stdout**, returned exit **1**, and printed
+"No such file or directory" on stderr for a missing restore unit.
+The same host independently returned `LoadState=not-found` with empty
+`UnitFileState` and `FragmentPath`; `namei` showed trusted root-owned
+ancestors/binary and a missing unit leaf. The rc.3 parser previously
+accepted the missing-unit state only as stdout `not-found` with exit **4**,
+so the transaction failed at persistence and rolled back without
+committing the requested Link. The source-only fix in Issue #93 / PR #94
+confirms absence with an additional exact read-only systemd property
+inspection, rather than accepting any exit 1 or parsing localized stderr.
+This is a **supported-environment code defect**, not proof of an
+operational network/GRE or peer-address problem. Real affected-host
+acceptance remains pending a separately authorized release.
+
 On **the affected host only**, an operator may collect the following
 **read-only** observations (no tunnel/systemd/firewall changes):
 
