@@ -274,11 +274,16 @@ ipsec_clean_host_before_apt() {
     'ipsec.service' 'simple-tun-link-ipsec.service') ||
     fail 'systemd existing loaded units could not be inventoried'
   [[ -z $list ]] || fail 'pre-existing strongSwan/IPsec service identity detected'
+  # systemctl list-unit-files with a glob returns exit 1 when NO unit
+  # matched on Ubuntu/systemd 255, even though the manager query succeeded.
+  # Accept that exact negative only after the independent earlier successful
+  # list-units query and only with completely empty stdout/stderr.
+  local rc=0
   list=$(systemctl --system --no-pager --no-legend --plain list-unit-files \
     'strongswan*.service' 'charon*.service' 'ipsec.service' \
-    'simple-tun-link-ipsec.service') ||
-    fail 'systemd vendor unit-file inventory unavailable'
-  [[ -z $list ]] || fail 'pre-existing strongSwan/IPsec service file or alias detected'
+    'simple-tun-link-ipsec.service' 2>&1) || rc=$?
+  [[ ( $rc == 0 || $rc == 1 ) && -z $list ]] ||
+    fail 'systemd vendor unit-file inventory unavailable or occupied'
   for proc in /proc/[0-9]*/comm; do
     [[ -r $proc ]] || continue
     IFS= read -r item < "$proc" || continue
@@ -361,33 +366,45 @@ ensure_packages() {
     printf 'STL dependencies already installed for %s %s (%s).\n' "$os_id" "$os_version" "$backends" >&2
     return
   fi
-  apt_resolve_plan
-  before_plan=$apt_plan
-  if [[ $expected_apt_plan_supplied == 1 && $before_plan != "$expected_apt_plan" ]]; then
-    fail 'APT dependency plan changed since confirmation; no APT attempted'
-  fi
   if [[ $want_ipsec == 1 ]]; then
     for pkg in "${missing[@]}"; do
       case "$pkg" in charon-systemd|strongswan-swanctl|libstrongswan-standard-plugins) missing_ipsec=1 ;; esac
     done
   fi
+  if [[ $missing_ipsec == 1 && ( $action != prepare ||
+        $expected_missing_supplied != 1 || $expected_apt_plan_supplied != 1 ) ]]; then
+    fail 'automatic IPsec requires explicit exact-plan PREPARE consent'
+  fi
   if [[ $missing_ipsec == 1 ]]; then
-    # install/update has no PREPARE confirmation; never surprise-start a
-    # vendor daemon as an incidental release install/update side effect.
-    [[ $action == prepare && $expected_missing_supplied == 1 &&
-       $expected_apt_plan_supplied == 1 ]] ||
-      fail 'automatic IPsec requires explicit exact-plan PREPARE consent'
+    # Even APT simulation must not run before a pre-existing vendor/service
+    # conflict is excluded under the canonical installer maintenance lock.
+    ipsec_clean_host_before_apt
+  fi
+  # The initial binary install can run on a fresh OS whose APT index is
+  # deliberately empty. It has no menu dependency preview to preserve, so
+  # initialize authenticated metadata BEFORE resolving ordinary dependencies.
+  # Already-installed STL "prepare" must instead compare its prior read-only
+  # exact plan, refresh indexes and refuse any changed plan.
+  if [[ $action != prepare ]]; then
+    DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none       apt-get "${apt_safety[@]}" -o Acquire::Retries=2 update ||
+      fail 'APT index refresh failed before initial dependency install'
+  fi
+  apt_resolve_plan
+  before_plan=$apt_plan
+  if [[ $expected_apt_plan_supplied == 1 && $before_plan != "$expected_apt_plan" ]]; then
+    fail 'APT dependency plan changed since confirmation; no APT attempted'
+  fi
+  if [[ $missing_ipsec == 1 ]]; then
     ipsec_clean_host_before_apt
   fi
   printf 'Installing verified missing packages on %s %s: %s\n' "$os_id" "$os_version" "$before_plan" >&2
-  DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none \
-    apt-get "${apt_safety[@]}" -o Acquire::Retries=2 update ||
-    fail 'APT index refresh failed; no STL binary or Link changed; inspect package indexes'
-  # An index refresh can change selected candidate versions/dependencies.
-  # Never execute a plan different from the one the operator approved.
-  apt_resolve_plan
-  [[ $apt_plan == "$before_plan" ]] ||
-    fail 'APT dependency plan changed after index refresh; package install cancelled'
+  if [[ $action == prepare ]]; then
+    DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none       apt-get "${apt_safety[@]}" -o Acquire::Retries=2 update ||
+      fail 'APT index refresh failed; inspect package indexes before retry'
+    apt_resolve_plan
+    [[ $apt_plan == "$before_plan" ]] ||
+      fail 'APT dependency plan changed after index refresh; package install cancelled'
+  fi
   if [[ $missing_ipsec == 1 ]]; then
     ipsec_clean_host_before_apt
   fi
