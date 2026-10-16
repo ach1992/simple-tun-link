@@ -105,7 +105,7 @@ func readNativeVendorUnitState(ctx context.Context, action, name string) (string
 	cmd.Env = nativeSystemdFixedEnvironment()
 	cmd.Stdout, cmd.Stderr = out, errOut
 	runErr := cmd.Run()
-	if bound.Err() != nil || out.overflow || errOut.overflow || errOut.output.Len() != 0 {
+	if bound.Err() != nil || out.overflow || errOut.overflow {
 		return "", errors.New("unverified systemd state")
 	}
 	code := 0
@@ -116,7 +116,32 @@ func readNativeVendorUnitState(ctx context.Context, action, name string) (string
 		}
 		code = exitErr.ExitCode()
 	}
-	return parseNativeVendorStatus(action, out.output.Bytes(), errOut.output.Bytes(), code)
+	return interpretNativeVendorUnitState(ctx, action, name, out.output.Bytes(), errOut.output.Bytes(), code, nativeVendorUnitVerifiedMissing)
+}
+
+// This narrow test seam keeps the status/absence decision auditable without
+// mocking a privileged systemctl binary or changing production command paths.
+func interpretNativeVendorUnitState(ctx context.Context, action, name string, stdout, stderr []byte,
+	code int, verifyMissing func(context.Context, string) bool,
+) (string, error) {
+	if (action != "is-active" && action != "is-enabled") || !nativeKnownVendorUnit(name) {
+		return "", errors.New("unknown vendor unit identity or operation")
+	}
+	result, statusErr := parseNativeVendorStatus(action, stdout, stderr, code)
+	if statusErr == nil {
+		return result, nil
+	}
+	// Some systemd releases return alternate nonzero codes/diagnostics for
+	// absent units. Require independent missing effective/disk identity.
+	// A positive or malformed report can NEVER be overridden by this proof.
+	if verifyMissing != nil && nativeVendorMissingStatusFallbackEligible(stdout) &&
+		verifyMissing(ctx, name) {
+		if action == "is-active" {
+			return "unknown", nil
+		}
+		return "not-found", nil
+	}
+	return "", errors.New("systemd unit state or absence not verified")
 }
 
 // parseNativeVendorStatus is a strict independent interpreter of systemctl's

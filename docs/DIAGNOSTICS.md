@@ -24,7 +24,15 @@ moment. An unanswered but transmitted probe means **unknown**
 capability/ownership yields `blocked` or `unknown`, never a silent
 success. Conditionally unadmitted IPsec reports
 `ipsec_runtime_not_registered` with safe next step
-`stl doctor ipsec`, without activating the daemon.
+`stl doctor ipsec`, without activating the daemon. On an
+actual host, the doctor also reports `provisioning_readiness` from
+the same **read-only native-exclusive Preflight** used before IPsec
+PREPARE. A StrongSwan **unit file existing on disk** is not proof
+that a VPN service is active, enabled or using UDP 500/4500.
+The current Preflight's separate stable reason/next-step fields
+distinguish missing/ambiguous systemd identity, executable, daemon,
+port, private VICI and service-state problems. They cannot authorize
+service startup or ownership changes.
 
 Every operation remains **network-config read-only** unless it is an
 explicit Engine lifecycle command. Diagnostic probes can send bounded
