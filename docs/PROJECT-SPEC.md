@@ -318,6 +318,10 @@ remains [Issue #93](https://github.com/ach1992/simple-tun-link/issues/93).
   required dependencies may be installed/updated: no unrelated removals,
   unrelated upgrades or hidden persistent service effects. Before installation STL must record that no
   foreign service, config, IKE port owner or daemon would be displaced.
+  Verify selected package/dependency candidates against the actual APT
+  index and a signed InRelease using the distribution archive keyring,
+  not self-asserted Origin/Label or arbitrary third-party APT trust.
+  Deny applicable service alias/prefix/generic drop-ins before package hooks.
   Only a vendor service positively attributed to this exact approved
   package transaction may then be stopped and disabled; verify that
   the vendor unit is inactive and has no enabled boot edge before
@@ -342,4 +346,7 @@ The shipped immutable rc.6 still **does not** automate missing IPsec
 package installation. Code changes for this contract require
 real disposable-systemd/Ubuntu/Debian evidence, independent review
 and separate integration/release gates; do not claim this behavior
-in a published README until it exists.
+in a published README until it exists. The development branch for
+Issue #105 contains a guarded candidate and disposable Ubuntu/systemd
+test coverage; these are not proof that a published release or physical
+WAN/NAT acceptance (#93) already exists.

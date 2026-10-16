@@ -11,6 +11,30 @@ import (
 	"time"
 )
 
+func TestNativeProvisionInventorySeparatesHarmlessPlaceholderFromForeign(t *testing.T) {
+	ok := [][]byte{
+		nil,
+		[]byte("simple-tun-link-ipsec.service not-found inactive dead Unit not found\n"),
+	}
+	for _, raw := range ok {
+		if !nativeProvisionInventoryUnoccupied(raw) {
+			t.Fatalf("harmless missing service rejected: %q", raw)
+		}
+	}
+	bad := [][]byte{
+		[]byte("simple-tun-link-ipsec.service loaded inactive dead Custom service\n"),
+		[]byte("simple-tun-link-ipsec.service masked inactive dead Masked\n"),
+		[]byte("simple-tun-link-ipsec.service not-found active running Unknown\n"),
+		[]byte("simple-tun-link-ipsec.service not-found inactive dead First\nforeign.service loaded active running Second\n"),
+		[]byte("strongswan.service not-found inactive dead Vendor\n"),
+	}
+	for _, raw := range bad {
+		if nativeProvisionInventoryUnoccupied(raw) {
+			t.Fatalf("foreign or malformed service allowed: %q", raw)
+		}
+	}
+}
+
 func TestNativeProvisionBootEdgeOnlyExactNoReplace(t *testing.T) {
 	root := t.TempDir()
 	owner := uint32(os.Getuid())

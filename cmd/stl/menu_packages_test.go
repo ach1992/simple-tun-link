@@ -38,7 +38,10 @@ func TestSelectedPackagePlanIsTypedAndReadOnly(t *testing.T) {
 		if got := selectedPackageBackends(tc.sel); got != tc.want {
 			t.Fatalf("%s: %s", tc.want, got)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		// Production allows 12 seconds for the read-only APT preview.
+		// Official distro archive signature checks and candidate-index
+		// attestation can take longer than 3s on cold CI runners.
+		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 		plan, err := readSelectedPackagePreview(ctx, tc.sel)
 		cancel()
 		if err != nil {
@@ -57,9 +60,9 @@ func TestUnprivilegedOrRedirectedPackagePreviewCannotConsumeCreateInput(t *testi
 	reader := strings.NewReader("PREPARE\nALLOW-IPSEC-PACKAGES\n")
 	plan := tunnelOption{backend: domain.BackendIPsec, mode: domain.EncapESP}
 	// A read-only inventory is permitted, but root operation is not.
-	// Automatic strongSwan APT is now deliberately refused even for root:
-	// a false return requests manual reconciliation, not a privileged effect.
-	_ = menuPrepareSelectedPackages(reader, nil, &output, &errors, plan)
+	// Redirected/scripted input cannot authorize managed IPsec preparation;
+	// a false return requests root-TTY PREPARE, never a privileged effect.
+	_ = menuPrepareSelectedPackages(reader, nil, &output, &errors, plan, nil)
 	if strings.Contains(output.String(), "Canonical installer verifying") ||
 		strings.Contains(output.String(), "Selected packages now pass") {
 		t.Fatalf("scripted package preview claimed mutation or success: %q", output.String())

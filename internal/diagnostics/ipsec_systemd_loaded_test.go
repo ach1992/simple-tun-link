@@ -45,7 +45,7 @@ func TestNativeSystemdInventoryOnlyAndNoInducedLoading(t *testing.T) {
 		{"unit already in memory but overrides unverified", nativeSystemdLoadedFixture("loaded"), "unknown", "native_systemd_unit_unverified"},
 		{"failed unit", nativeSystemdLoadedFixture("bad-setting"), "blocked", "native_systemd_unit_conflict"},
 		{"masked unit", nativeSystemdLoadedFixture("masked"), "blocked", "native_systemd_unit_conflict"},
-		{"unit object missing metadata", nativeSystemdLoadedFixture("not-found"), "blocked", "native_systemd_unit_conflict"},
+		{"unprovisioned placeholder", nativeSystemdLoadedFixture("not-found"), "blocked", "native_systemd_unit_not_loaded"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -80,6 +80,8 @@ func TestNativeSystemdLoadedOutputNeverAttestsUnknownEffectiveState(t *testing.T
 		"partial":                              []byte(nativeSystemdUnitName + " loaded\n"),
 		"duplicated row":                       append(append([]byte(nil), valid...), valid...),
 		"unknown load state":                   nativeSystemdLoadedFixture("future-state"),
+		"not-found but active":                 []byte(nativeSystemdUnitName + " not-found active running Unsafe identity\n"),
+		"not-found but failed":                 []byte(nativeSystemdUnitName + " not-found inactive failed Unsafe identity\n"),
 		"unexpected name":                      []byte("strongswan.service loaded active running Foreign strongSwan daemon\n"),
 		"unexpected alias":                     []byte(nativeSystemdUnitName + " loaded active running strongswan.service\n"),
 		"dropin-like property injection":       append(append([]byte(nil), valid...), []byte("DropInPaths=/etc/systemd/system/debug.conf\n")...),
