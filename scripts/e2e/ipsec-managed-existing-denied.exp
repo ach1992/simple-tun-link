@@ -59,17 +59,23 @@ expect {
   -re {Tunnel type \[1\]:} { send -- "0\r" }
   timeout { puts stderr "IPSEC_FOREIGN_STOP_NEGATIVE=NO_CREATE_BACK"; exit 28 }
 }
+# The outer Create command has one final acknowledgement after the
+# Create submenu returns to its caller; do not confuse it with a hang.
+expect {
+  -re {Press Enter to continue} { send -- "\r" }
+  timeout { puts stderr "IPSEC_FOREIGN_STOP_NEGATIVE=NO_FINAL_ACK"; exit 29 }
+}
 expect {
   -re {Choose a task:} { send -- "8\r" }
-  timeout { puts stderr "IPSEC_FOREIGN_STOP_NEGATIVE=NO_EXIT"; exit 29 }
+  timeout { puts stderr "IPSEC_FOREIGN_STOP_NEGATIVE=NO_EXIT"; exit 30 }
 }
 expect {
   eof {}
-  timeout { puts stderr "IPSEC_FOREIGN_STOP_NEGATIVE=STILL_RUNNING"; exit 30 }
+  timeout { puts stderr "IPSEC_FOREIGN_STOP_NEGATIVE=STILL_RUNNING"; exit 31 }
 }
 catch wait result
 if {[llength $result] < 4 || [lindex $result 3] != 0} {
   puts stderr "IPSEC_FOREIGN_STOP_NEGATIVE=NONZERO_EXIT"
-  exit 31
+  exit 32
 }
 puts "IPSEC_REAL_PREEXISTING_VENDOR_LEFT_ACTIVE_AND_ENABLED=PASS"
