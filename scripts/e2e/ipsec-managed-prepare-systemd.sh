@@ -84,6 +84,18 @@ if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor* ]]; then
         done <<< "${verification:0:2048}"
       fi
     done
+    # Only the pristine, short-lived distro guest can reach this diagnostic.
+    # Package ownership/path names do not expose configuration file bytes.
+    # One positive baseline first makes future exact-head E2E failures fast.
+    for tree in /etc/strongswan.conf /etc/strongswan.d /etc/swanctl; do
+      [[ -e "$tree" ]] || continue
+      while IFS= read -r -d '' source_file; do
+        evidence=$(dpkg-query -S -- "$source_file" 2>&1) ||
+          evidence='UNOWNED'
+        printf 'IPSEC_DISTRIBUTION_CONFIG_OWNER path=%q output=%q\n' \
+          "$source_file" "$evidence"
+      done < <(find "$tree" -type f -print0)
+    done
     /usr/bin/expect /mnt/managed-existing.exp || fail operator_vendor_consent_failed
     [[ $(systemctl --system is-active strongswan.service) == inactive &&
        $(systemctl --system is-enabled strongswan.service) == disabled ]] ||
