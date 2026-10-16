@@ -408,8 +408,15 @@ ensure_packages() {
   if [[ $missing_ipsec == 1 ]]; then
     ipsec_clean_host_before_apt
   fi
+  # Enforce the exact package=version transaction the operator reviewed.
+  # Passing only the selected top-level names would let APT choose a newer
+  # transitive candidate between preview and execution.
+  local -a pinned_install=()
+  read -r -a pinned_install <<< "$before_plan"
+  [[ ${#pinned_install[@]} -gt 0 ]] ||
+    fail 'approved APT install plan is empty; nothing installed'
   if ! DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none \
-    apt-get "${apt_safety[@]}" install -y --no-install-recommends -- "${missing[@]}"; then
+    apt-get "${apt_safety[@]}" install -y --no-install-recommends -- "${pinned_install[@]}"; then
     fail 'APT transaction incomplete; dpkg/vendor service may have changed. Inspect before retry; no Link created'
   fi
   for pkg in "${packages[@]}"; do
