@@ -164,6 +164,31 @@ noninteractive creator command still requires an explicit --output.
   OS package management first. Already installed IPsec dependencies still
   need separate STL-private service publication and runtime admission.
 
+**Unreleased Issue #105 candidate (not in rc.6):** The development branch
+adds an interactive clean-host IPsec preparation path. In an installed root
+terminal, choose **Create tunnel → Advanced types → IPsec ESP/NAT-T**.
+STL shows missing packages and the resolved **complete APT dependency/version
+plan**, plus the fact that normal distro package hooks may briefly start and
+enable a newly introduced vendor strongSwan service. Typing **PREPARE** once
+authorizes only that displayed plan and qualified STL-exclusive private-service
+setup; it does not create a Link or generate peer secrets. STL rejects a
+changed plan, unknown foreign daemon/port/unit/configuration, unsafe APT
+upgrades/removals, or unverified package ownership. After successful APT, it
+stops/disables only the newly installed vendor unit that it can positively
+attribute to the approved transaction, verifies that it is inactive and
+disabled, then reuses the existing private-service admission and returns to
+the **same Create**. An actual tunnel still needs its own **YES**.
+
+Package install/enablement is **not atomic** with STL Link or binary rollback.
+If APT, vendor normalization or private-service publication fails, existing
+package/service effects or protected partial files may remain. The menu
+reports the failed stage and will not create an IPsec Link or blindly adopt
+an unknown service. Use **stl doctor ipsec --json** for a read-only snapshot
+and reconcile the specific observed conflict before retrying. Ordinary
+rc.6 binaries will still require administrator-managed strongSwan packages.
+This workflow is a development candidate pending review and new release
+authorization, **not an instruction to install it on operational hosts**.
+
 - Only missing packages are requested; the installer never upgrades the entire
   host or edits repositories. Host APT package installation is not covered by
   the STL binary rollback transaction, and STL uninstall never uninstalls host

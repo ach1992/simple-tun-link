@@ -342,4 +342,7 @@ The shipped immutable rc.6 still **does not** automate missing IPsec
 package installation. Code changes for this contract require
 real disposable-systemd/Ubuntu/Debian evidence, independent review
 and separate integration/release gates; do not claim this behavior
-in a published README until it exists.
+in a published README until it exists. The development branch for
+Issue #105 contains a guarded candidate and disposable Ubuntu/systemd
+test coverage; these are not proof that a published release or physical
+WAN/NAT acceptance (#93) already exists.

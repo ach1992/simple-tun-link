@@ -56,9 +56,37 @@ echo "IPSEC_STALE_APT_DEPENDENCY_PLAN_DENIED=PASS"
 if [[ -f /usr/sbin/policy-rc.d ]]; then
   mv /usr/sbin/policy-rc.d /tmp/stl-disposable-policy-rc.d
 fi
+# Independently observe the actual new vendor daemon while distro package
+# hooks run. This reads /proc only: polling systemctl before installation
+# could itself create a misleading "not-found" loaded-unit placeholder.
+observe_vendor_process() {
+  local proc name
+  until [[ -e /tmp/stl-vendor-observation-done ]]; do
+    for proc in /proc/[0-9]*/comm; do
+      [[ -r $proc ]] || continue
+      IFS= read -r name < "$proc" || continue
+      if [[ $name == charon-systemd ]]; then
+        : > /tmp/stl-vendor-start-observed
+        return 0
+      fi
+    done
+    sleep .025
+  done
+}
+observe_vendor_process &
+observer=$!
 # Only the selected exact packages may be installed, with signed metadata.
-bash /mnt/stl-install.sh prepare --backends native,ipsec \
-    --expected-missing "$missing" --expected-apt-plan "$apt_plan"
+if ! bash /mnt/stl-install.sh prepare --backends native,ipsec \
+    --expected-missing "$missing" --expected-apt-plan "$apt_plan"; then
+  : > /tmp/stl-vendor-observation-done
+  wait "$observer"
+  fail real_strongswan_apt_preparation_failed
+fi
+: > /tmp/stl-vendor-observation-done
+wait "$observer"
+[[ -f /tmp/stl-vendor-start-observed ]] ||
+  fail vendor_start_hook_not_exercised
+echo "IPSEC_DISTRO_VENDOR_TEMPORARY_START_OBSERVED=PASS"
 
 dpkg-query -W -f='${Status}' charon-systemd | grep -qx 'install ok installed' ||
   fail charon_not_installed
@@ -67,11 +95,6 @@ dpkg-query -W -f='${Status}' charon-systemd | grep -qx 'install ok installed' ||
 [[ $(sha256sum /usr/local/lib/simple-tun-link/install-record | awk '{print $1}') == "$record" ]] ||
   fail stl_install_receipt_changed
 [[ ! -e /var/lib/simple-tun-link/ipsec ]] || fail installer_provisioned_private_service
-# The package's real vendor start hook must have run in this isolated guest
-# before STL normalized it. A no-start package simulation is not equivalent.
-started=$(systemctl show strongswan.service -p ActiveEnterTimestamp --value)
-[[ -n $started && $started != n/a ]] ||
-  fail vendor_start_hook_not_exercised
 [[ $(systemctl is-active strongswan.service 2>/dev/null || :) == inactive ]] ||
   fail vendor_not_inactive
 [[ $(systemctl is-enabled strongswan.service 2>/dev/null || :) == disabled ]] ||
