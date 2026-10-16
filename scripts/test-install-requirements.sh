@@ -122,4 +122,60 @@ for item in "${blocked[@]}"; do
 done
 echo 'IPSEC_CANONICAL_NOT_FOUND_GHOST_VS_FOREIGN_INVENTORY=PASS'
 
+# Test the ACTUAL canonical command-invocation boundary as well as its
+# parser. A fake systemctl writes independently controlled stdout/stderr;
+# no host systemctl, package or service operation is performed.
+sed -n '/^ipsec_loaded_unit_inventory_clean() (/,/^)/p' "$installer" > "$root/ipsec-loaded-units-function.sh"
+[[ $(grep -c '^ipsec_loaded_unit_inventory_clean() (' "$root/ipsec-loaded-units-function.sh") == 1 ]] ||
+  fail 'canonical systemctl observation boundary unavailable'
+# shellcheck source=/dev/null
+source "$root/ipsec-loaded-units-function.sh"
+mkdir -p "$root/fake-systemd"
+cat > "$root/fake-systemd/systemctl" <<'EOF'
+#!/usr/bin/env bash
+[[ " $* " == *" list-units "* ]] || exit 44
+cat "$STL_TEST_SYSTEMCTL_STDOUT"
+cat "$STL_TEST_SYSTEMCTL_STDERR" >&2
+exit "$STL_TEST_SYSTEMCTL_EXIT"
+EOF
+chmod 0700 "$root/fake-systemd/systemctl"
+export STL_TEST_SYSTEMCTL_STDOUT="$root/systemctl-stdout"
+export STL_TEST_SYSTEMCTL_STDERR="$root/systemctl-stderr"
+export STL_TEST_SYSTEMCTL_EXIT=0
+original_path=$PATH
+PATH="$root/fake-systemd:$PATH"
+printf '%s' "$ghost" > "$STL_TEST_SYSTEMCTL_STDOUT"
+: > "$STL_TEST_SYSTEMCTL_STDERR"
+ipsec_loaded_unit_inventory_clean || fail 'real benign stdout-only ghost invocation rejected'
+printf 'systemctl warning: incomplete metadata' > "$STL_TEST_SYSTEMCTL_STDERR"
+if ipsec_loaded_unit_inventory_clean; then
+  fail 'real invocation accepted benign ghost despite nonempty stderr'
+fi
+# A merged-stream parser could falsely accept this stdout fragment completed
+# by stderr: require independent stderr rejection, not only shape matching.
+printf '%s' 'simple-tun-link-ipsec.service not-found inactive dead ' > "$STL_TEST_SYSTEMCTL_STDOUT"
+printf '%s\n' 'systemctl warning' > "$STL_TEST_SYSTEMCTL_STDERR"
+if ipsec_loaded_unit_inventory_clean; then
+  fail 'real invocation accepted stderr completing a truncated placeholder'
+fi
+printf '%s' "$ghost" > "$STL_TEST_SYSTEMCTL_STDOUT"
+: > "$STL_TEST_SYSTEMCTL_STDERR"
+STL_TEST_SYSTEMCTL_EXIT=7
+if ipsec_loaded_unit_inventory_clean; then
+  fail 'real invocation accepted nonzero systemctl exit'
+fi
+STL_TEST_SYSTEMCTL_EXIT=0
+printf '%s' 'simple-tun-link-ipsec.service not-found inactive dead truncated' > "$STL_TEST_SYSTEMCTL_STDOUT"
+if ipsec_loaded_unit_inventory_clean; then
+  fail 'real invocation accepted stdout lacking its final newline'
+fi
+printf '%sstrongswan.service loaded active running Foreign\n' "$ghost" > "$STL_TEST_SYSTEMCTL_STDOUT"
+if ipsec_loaded_unit_inventory_clean; then
+  fail 'real invocation accepted multiple loaded units'
+fi
+: > "$STL_TEST_SYSTEMCTL_STDOUT"
+ipsec_loaded_unit_inventory_clean || fail 'real successful empty systemctl stdout rejected'
+PATH=$original_path
+echo 'IPSEC_SYSTEMCTL_INDEPENDENT_STDOUT_STDERR_AND_EXIT_BOUNDARY=PASS'
+
 printf 'Installer requirements checks PASS (Ubuntu 22.04+, Debian 11+, package plans, unsafe inputs, EOL).\n'

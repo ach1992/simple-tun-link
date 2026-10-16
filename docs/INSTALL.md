@@ -205,8 +205,13 @@ unit from real/foreign service identities. When all selected packages
 are ready, an installed-root operator may separately type
 STOP strongswan.service to stop/disable only the independently attested,
 distro-owned unit, with a clear warning about immediate VPN interruption
-and disablement persisting across reboot. The action rechecks exact
-ownership and state under the exclusive maintenance lock. Alternatively,
+and disablement persisting across reboot. Before displaying STOP, STL
+also requires complete dpkg package state, no partial/foreign STL-private
+publication, verified vendor and alias identities, unchanged package-owned
+default configuration, and exclusive attribution of the running vendor's
+process and IKE UDP 500/4500 sockets. The **entire** eligibility check is
+repeated under the exclusive maintenance lock immediately before stopping.
+Any incompatible observation means no automatic STOP/DISABLE. Alternatively,
 repair manually and type RECHECK. Unknown/custom services, partial APT,
 foreign configuration and uncertain identity remain blocked; no generic
 stop, adoption, purge or mask. The existing public immutable v0.1.0

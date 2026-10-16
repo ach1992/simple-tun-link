@@ -51,6 +51,9 @@ jobs:
           cc -Wall -Wextra -Werror -O2 -shared -fPIC -o \
             /tmp/stl-ipsec-native-e2e/manager-preload.so \
             scripts/e2e/ipsec-manager-preload-marker.c
+          cc -Wall -Wextra -Werror -O2 -o \
+            /tmp/stl-ipsec-native-e2e/foreign-process \
+            scripts/e2e/ipsec-foreign-process-marker.c
       - name: Build disposable native systemd guest
         run: |
           docker build -f scripts/e2e/ipsec-lab-ubuntu-systemd.Dockerfile -t stl-ipsec-real-provision:pr .
@@ -67,7 +70,7 @@ jobs:
             if [[ -n "$cid" ]]; then docker rm -f "$cid" >/dev/null 2>&1 || :; fi
           }
           trap cleanup EXIT
-          for scenario in foreign foreign_alias foreign_prefix foreign_attached foreign_transient forged_origin partial ghost existing_vendor clean; do
+          for scenario in foreign foreign_alias foreign_prefix foreign_attached foreign_transient forged_origin partial ghost existing_vendor existing_vendor_foreign_config existing_vendor_foreign_alias existing_vendor_private_conflict existing_vendor_foreign_process existing_vendor_late_config clean; do
             cid=$(docker run --rm -d --network bridge --privileged \
               --cgroupns private --tmpfs /run --tmpfs /run/lock \
               -v "$PWD/scripts/install.sh:/mnt/stl-install.sh:ro" \
@@ -75,6 +78,8 @@ jobs:
               -v "$PWD/scripts/e2e/ipsec-managed-prepare-systemd.sh:/mnt/managed-e2e.sh:ro" \
               -v "$PWD/scripts/e2e/ipsec-managed-prepare-menu.exp:/mnt/managed-menu.exp:ro" \
               -v "$PWD/scripts/e2e/ipsec-managed-existing-service.exp:/mnt/managed-existing.exp:ro" \
+              -v "$PWD/scripts/e2e/ipsec-managed-existing-denied.exp:/mnt/managed-existing-denied.exp:ro" \
+              -v "/tmp/stl-ipsec-native-e2e/foreign-process:/mnt/stl-foreign-process-marker:ro" \
               stl-ipsec-managed-clean:pr)
             test -n "$cid"
             docker cp /tmp/stl-ipsec-native-e2e/stl-ipsec-provision-test \

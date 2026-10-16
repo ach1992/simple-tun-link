@@ -1,0 +1,69 @@
+#!/usr/bin/expect -f
+# Disposable systemd guest only. A genuine vendor VPN must survive every
+# foreign/ambiguous host conflict, even when an operator pastes STOP.
+set timeout 80
+log_user 1
+set env(NO_COLOR) 1
+set env(STL_NO_CLEAR) 1
+spawn /usr/local/bin/stl menu
+expect {
+  -re {Choose a task:} { send -- "1\r" }
+  timeout { puts stderr "IPSEC_FOREIGN_STOP_NEGATIVE=MAIN_TIMEOUT"; exit 20 }
+}
+expect {
+  -re {Tunnel type \[1\]:} { send -- "5\r" }
+  timeout { puts stderr "IPSEC_FOREIGN_STOP_NEGATIVE=CREATE_TIMEOUT"; exit 21 }
+}
+expect {
+  -re {Choose a type:} { send -- "5\r" }
+  timeout { puts stderr "IPSEC_FOREIGN_STOP_NEGATIVE=IPSEC_TIMEOUT"; exit 22 }
+}
+expect {
+  -re {Type PREPARE to prepare selected prerequisites} { send -- "PREPARE\r" }
+  timeout { puts stderr "IPSEC_FOREIGN_STOP_NEGATIVE=PREPARE_TIMEOUT"; exit 23 }
+}
+expect {
+  -re {Service action \(Enter cancels\):} {
+    # One case becomes unsafe AFTER preview, but BEFORE the final STOP
+    # authorization is reattested under the installed maintenance lock.
+    if {$env(STL_IPSEC_PREPARE_CASE) eq "existing_vendor_late_config"} {
+      exec /bin/mkdir -p /etc/swanctl/conf.d
+      exec /usr/bin/touch /etc/swanctl/conf.d/stl-test-foreign-after-preview.conf
+    }
+    send -- "STOP strongswan.service\r"
+  }
+  timeout { puts stderr "IPSEC_FOREIGN_STOP_NEGATIVE=SERVICE_MENU_TIMEOUT"; exit 24 }
+}
+expect {
+  -re {No eligible exact-unit STOP/DISABLE consent was provided} {
+    puts "IPSEC_FOREIGN_HOST_PREVIEW_STOP_DENIED=PASS"
+  }
+  -re {Service transition was refused or incomplete} {
+    puts "IPSEC_FOREIGN_HOST_REATTESTED_BEFORE_STOP=PASS"
+  }
+  timeout { puts stderr "IPSEC_FOREIGN_STOP_NEGATIVE=SERVICE_CHANGED_OR_STOP_WAS_NOT_DENIED"; exit 25 }
+}
+expect {
+  -re {Private IPsec admission remains blocked} {
+    puts "IPSEC_FOREIGN_HOST_PRIVATE_PROVISION_DENIED=PASS"
+  }
+  timeout { puts stderr "IPSEC_FOREIGN_STOP_NEGATIVE=PRIVATE_SERVICE_PROVISIONED"; exit 26 }
+}
+expect {
+  -re {Press Enter to continue} { send -- "\r" }
+  timeout { puts stderr "IPSEC_FOREIGN_STOP_NEGATIVE=NO_ACK"; exit 27 }
+}
+expect {
+  -re {Choose a task:} { send -- "8\r" }
+  timeout { puts stderr "IPSEC_FOREIGN_STOP_NEGATIVE=NO_EXIT"; exit 28 }
+}
+expect {
+  eof {}
+  timeout { puts stderr "IPSEC_FOREIGN_STOP_NEGATIVE=STILL_RUNNING"; exit 29 }
+}
+catch wait result
+if {[llength $result] < 4 || [lindex $result 3] != 0} {
+  puts stderr "IPSEC_FOREIGN_STOP_NEGATIVE=NONZERO_EXIT"
+  exit 30
+}
+puts "IPSEC_REAL_PREEXISTING_VENDOR_LEFT_ACTIVE_AND_ENABLED=PASS"

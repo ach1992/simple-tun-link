@@ -429,6 +429,24 @@ ipsec_only_not_found_private_placeholder() {
      ${fields[3]} == dead ]]
 }
 
+# Keep stderr independent from the stdout inventory. A command substitution
+# ordinarily strips trailing LF, so append a sentinel only to successful
+# stdout. The private 0600 temporary stderr file is always unlinked by the
+# subshell EXIT trap, including every failed verification path.
+ipsec_loaded_unit_inventory_clean() (
+  local list errfile
+  umask 077
+  errfile=$(mktemp /tmp/stl-ipsec-units.XXXXXXXX) || return 1
+  trap 'rm -f -- "$errfile"' EXIT
+  list=$(systemctl --system --no-pager --no-legend --plain --all \
+    --type=service list-units 'strongswan*.service' 'charon*.service' \
+    'ipsec.service' 'simple-tun-link-ipsec.service' 2>"$errfile" &&
+    printf '\036') || return 1
+  [[ ! -s $errfile && $list == *$'\036' ]] || return 1
+  list=${list%$'\036'}
+  [[ -z $list ]] || ipsec_only_not_found_private_placeholder "$list"
+)
+
 # Conservative CLEAN-host boundary before any strongSwan package hooks.
 # A pre-existing unit (including a disabled or masked one) is NEVER owned.
 # This is intentionally eligibility for first install, not foreign-service
@@ -470,26 +488,12 @@ ipsec_clean_host_before_apt() {
       done
     done
   done
-  # A read-only status/doctor query can leave one in-memory systemd
-  # LOAD=not-found placeholder for STL's future private unit. Unlike a
-  # loaded or foreign service, this does NOT occupy a unit definition.
-  # Capture a sentinel to preserve the command's trailing newline: Bash
-  # command substitution normally strips it, obscuring malformed output.
-  # Combined stdout/stderr must match a strict, single expected record;
-  # an error or any additional vendor/foreign unit still blocks APT.
-  list=$(systemctl --system --no-pager --no-legend --plain --all \
-    --type=service list-units 'strongswan*.service' 'charon*.service' \
-    'ipsec.service' 'simple-tun-link-ipsec.service' 2>&1 &&
-    printf '\036') ||
-    fail 'systemd existing loaded units could not be inventoried'
-  [[ $list == *$'\036' ]] ||
-    fail 'systemd loaded-unit output was incomplete'
-  list=${list%$'\036'}
-  if [[ -n $list ]]; then
-    if ! ipsec_only_not_found_private_placeholder "$list"; then
-      printf 'STL IPsec next: inspect loaded units and unit files with systemctl; any real/foreign unit must be reconciled before PREPARE. Never blindly stop another VPN.\n' >&2
-      fail 'pre-existing or ambiguous strongSwan/IPsec service identity detected'
-    fi
+  # A harmless private-unit placeholder is not a real service. Its
+  # stdout must be the sole exact record with ZERO stderr and a successful
+  # systemctl exit. All other outcomes block privileged APT.
+  if ! ipsec_loaded_unit_inventory_clean; then
+    printf 'STL IPsec next: inspect loaded units and unit files with systemctl; any real/foreign unit must be reconciled before PREPARE. Never blindly stop another VPN.\n' >&2
+    fail 'pre-existing or ambiguous strongSwan/IPsec service identity detected'
   fi
   # systemctl list-unit-files with a glob returns exit 1 when NO unit
   # matched on Ubuntu/systemd 255, even though the manager query succeeded.

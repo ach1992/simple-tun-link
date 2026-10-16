@@ -19,7 +19,7 @@ record=$(sha256sum /usr/local/lib/simple-tun-link/install-record | awk '{print $
 # isolated guest. Unlike the clean-host package case, this service belongs
 # to the operator before PREPARE. Only a fresh, separately typed exact-unit
 # STOP consent can change it; the menu must then provision STL separately.
-if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor ]]; then
+if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor* ]]; then
   if [[ -f /usr/sbin/policy-rc.d ]]; then
     mv /usr/sbin/policy-rc.d /tmp/stl-existing-vendor-policy-rc.d
   fi
@@ -38,14 +38,52 @@ if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor ]]; then
     fail existing_vendor_has_incomplete_package_install
   [[ ! -e /var/lib/simple-tun-link/ipsec ]] ||
     fail private_service_exists_before_consent
-  /usr/bin/expect /mnt/managed-existing.exp || fail operator_vendor_consent_failed
-  [[ $(systemctl --system is-active strongswan.service) == inactive &&
-     $(systemctl --system is-enabled strongswan.service) == disabled ]] ||
-    fail consented_vendor_not_stopped_disabled
-  [[ $(systemctl --system is-active simple-tun-link-ipsec.service) == active ]] ||
-    fail new_stl_private_service_not_started
-  /usr/local/bin/stl doctor ipsec --json | grep -q '"activation_allowed":true' ||
-    fail new_stl_private_service_not_admitted
+  case "${STL_IPSEC_PREPARE_CASE}" in
+    existing_vendor) ;;
+    existing_vendor_foreign_config)
+      mkdir -p /etc/swanctl/conf.d
+      printf 'foreign connection; must not be adopted\n' >/etc/swanctl/conf.d/foreign.conf
+      ;;
+    existing_vendor_foreign_alias)
+      mkdir -p /run/systemd/system.attached/strongswan-swanctl.service.d
+      printf '[Service]\nExecStartPre=/usr/bin/false\n' \
+        >/run/systemd/system.attached/strongswan-swanctl.service.d/foreign.conf
+      ;;
+    existing_vendor_private_conflict)
+      mkdir -m 0700 /var/lib/simple-tun-link/ipsec
+      ;;
+    existing_vendor_foreign_process)
+      /mnt/stl-foreign-process-marker &
+      foreign_pid=$!
+      for _ in 1 2 3 4 5; do
+        [[ $(cat /proc/$foreign_pid/comm) == charon ]] && break
+        sleep .1
+      done
+      [[ $(cat /proc/$foreign_pid/comm) == charon ]] ||
+        fail foreign_daemon_fixture_not_running
+      ;;
+    existing_vendor_late_config) ;;
+    *) fail unrecognized_existing_vendor_case ;;
+  esac
+  if [[ "${STL_IPSEC_PREPARE_CASE}" == existing_vendor ]]; then
+    /usr/bin/expect /mnt/managed-existing.exp || fail operator_vendor_consent_failed
+    [[ $(systemctl --system is-active strongswan.service) == inactive &&
+       $(systemctl --system is-enabled strongswan.service) == disabled ]] ||
+      fail consented_vendor_not_stopped_disabled
+    [[ $(systemctl --system is-active simple-tun-link-ipsec.service) == active ]] ||
+      fail new_stl_private_service_not_started
+    /usr/local/bin/stl doctor ipsec --json | grep -q '"activation_allowed":true' ||
+      fail new_stl_private_service_not_admitted
+  else
+    /usr/bin/expect /mnt/managed-existing-denied.exp || fail forbidden_vendor_stop_not_denied
+    [[ $(systemctl --system is-active strongswan.service) == active &&
+       $(systemctl --system is-enabled strongswan.service) == enabled ]] ||
+      fail existing_vendor_was_changed_despite_foreign_conflict
+    [[ ! -e /var/lib/simple-tun-link/ipsec &&
+       ! -e /etc/systemd/system/simple-tun-link-ipsec.service ]] ||
+      fail private_service_published_despite_foreign_conflict
+    echo "IPSEC_PRE_STOP_MIXED_HOST_CONFLICT_REJECTED=${STL_IPSEC_PREPARE_CASE}:PASS"
+  fi
   [[ $(sha256sum /usr/local/bin/stl | awk '{print $1}') == "$original" &&
      $(sha256sum /usr/local/lib/simple-tun-link/install-record | awk '{print $1}') == "$record" ]] ||
     fail existing_vendor_workflow_modified_STL_installation

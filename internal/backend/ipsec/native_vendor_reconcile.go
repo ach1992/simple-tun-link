@@ -137,6 +137,13 @@ func InspectVendorServiceStopPlan(ctx context.Context) (VendorServiceStopPlan, e
 	if err := nativeVendorDistroOwnership(ctx, fragment); err != nil {
 		return VendorServiceStopPlan{}, err
 	}
+	// A selected systemctl target and package-owned fragment do not prove
+	// the host is safe for destructive vendor interruption. Recheck ALL
+	// unrelated host conditions before showing STOP; the caller repeats
+	// this entire inspector under the exclusive installed maintenance lock.
+	if err := vendorStopHostSafe(ctx, active, fragment, productionVendorStopSafetyOps()); err != nil {
+		return VendorServiceStopPlan{}, err
+	}
 	return VendorServiceStopPlan{Unit: vendorServiceName, Active: active, Enabled: enabled}, nil
 }
 
@@ -146,43 +153,92 @@ func InspectVendorServiceStopPlan(ctx context.Context) (VendorServiceStopPlan, e
 // re-attested; only this allowlisted distro unit is touched. Stopping it can
 // immediately interrupt external VPN traffic, and disabling it persists
 // across reboot. On partial failure, do not blindly restore foreign state.
+type vendorStopExecutionOps struct {
+	acquire    func(context.Context) (func(), error)
+	inspect    func(context.Context) (VendorServiceStopPlan, error)
+	transition func(context.Context, string) error
+	postcheck  func(context.Context) (string, string, error)
+}
+
+// Production binds a literal allowlisted unit, the installed exclusive
+// maintenance lease, and the COMPLETE safety inspector (including packages,
+// aliases, configuration, private publication, daemon and port ownership).
+// The narrow effect seam exists only to exercise pre-effect failure tests.
+func productionVendorStopExecutionOps() vendorStopExecutionOps {
+	return vendorStopExecutionOps{
+		acquire: func(ctx context.Context) (func(), error) {
+			lease, err := maintenance.NewInstalledGate().AcquireExclusive(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return func() { lease() }, nil
+		},
+		inspect: InspectVendorServiceStopPlan,
+		transition: func(ctx context.Context, action string) error {
+			if action != "stop" && action != "disable" {
+				return errors.New("unsupported vendor service transition")
+			}
+			runner := nativeSystemdRunner{Timeout: 20 * time.Second}
+			result, err := runner.RunBounded(ctx, CaptureLimits{Stdout: 1024, Stderr: 1024},
+				nativeSystemctlBinary, "--system", "--no-pager", action, vendorServiceName)
+			clear(result.Stdout)
+			clear(result.Stderr)
+			return err
+		},
+		postcheck: func(ctx context.Context) (string, string, error) {
+			active, aerr := readNativeVendorUnitState(ctx, "is-active", vendorServiceName)
+			enabled, eerr := readNativeVendorUnitState(ctx, "is-enabled", vendorServiceName)
+			if aerr != nil || eerr != nil {
+				return "", "", errors.New("vendor post-transition service state unverified")
+			}
+			return active, enabled, nil
+		},
+	}
+}
+
 func StopDisableVerifiedVendorService(ctx context.Context, approved VendorServiceStopPlan) error {
-	if ctx == nil || ctx.Err() != nil || os.Geteuid() != 0 ||
+	if ctx == nil || ctx.Err() != nil || os.Geteuid() != 0 {
+		return errors.New("privileged vendor service transition unavailable")
+	}
+	return stopDisableVerifiedVendorWithOps(ctx, approved, productionVendorStopExecutionOps())
+}
+
+func stopDisableVerifiedVendorWithOps(ctx context.Context, approved VendorServiceStopPlan,
+	ops vendorStopExecutionOps,
+) error {
+	if ctx == nil || ctx.Err() != nil ||
 		approved.Unit != vendorServiceName ||
 		(approved.Active != "active" && approved.Active != "inactive") ||
-		(approved.Enabled != "enabled" && approved.Enabled != "disabled") {
+		(approved.Enabled != "enabled" && approved.Enabled != "disabled") ||
+		(approved.Active == "inactive" && approved.Enabled == "disabled") ||
+		ops.acquire == nil || ops.inspect == nil ||
+		ops.transition == nil || ops.postcheck == nil {
 		return errors.New("no valid explicitly selected vendor service")
 	}
-	release, err := maintenance.NewInstalledGate().AcquireExclusive(ctx)
-	if err != nil {
-		return errors.New("exclusive STL installed maintenance lease unavailable")
+	release, err := ops.acquire(ctx)
+	if err != nil || release == nil {
+		return errors.New("exclusive installed STL ownership gate unavailable")
 	}
 	defer release()
-	current, err := InspectVendorServiceStopPlan(ctx)
+
+	// Reexecute the entire read-only eligibility transaction under the
+	// exclusive lease immediately before affecting any existing VPN.
+	current, err := ops.inspect(ctx)
 	if err != nil || current != approved {
-		return errors.New("vendor identity or state changed since operator consent; no service modified")
-	}
-	runner := nativeSystemdRunner{Timeout: 20 * time.Second}
-	transition := func(action string) error {
-		result, err := runner.RunBounded(ctx, CaptureLimits{Stdout: 1024, Stderr: 1024},
-			nativeSystemctlBinary, "--system", "--no-pager", action, vendorServiceName)
-		clear(result.Stdout)
-		clear(result.Stderr)
-		return err
+		return errors.New("vendor ownership, host eligibility or state changed since operator consent; no service modified")
 	}
 	if approved.Active == "active" {
-		if err := transition("stop"); err != nil {
+		if err := ops.transition(ctx, "stop"); err != nil {
 			return errors.New("verified vendor service stop failed or uncertain; inspect effects before retry")
 		}
 	}
 	if approved.Enabled == "enabled" {
-		if err := transition("disable"); err != nil {
+		if err := ops.transition(ctx, "disable"); err != nil {
 			return errors.New("verified vendor service disable failed or uncertain; stop may have succeeded")
 		}
 	}
-	active, aerr := readNativeVendorUnitState(ctx, "is-active", vendorServiceName)
-	enabled, eerr := readNativeVendorUnitState(ctx, "is-enabled", vendorServiceName)
-	if aerr != nil || eerr != nil || active != "inactive" || enabled != "disabled" {
+	active, enabled, err := ops.postcheck(ctx)
+	if err != nil || active != "inactive" || enabled != "disabled" {
 		return fmt.Errorf("vendor stop/disable postcheck unverified; do not start STL IPsec until reconciled")
 	}
 	return nil
