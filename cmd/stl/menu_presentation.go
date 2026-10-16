@@ -32,7 +32,10 @@ func menuTerminal(out io.Writer) (*os.File, bool) {
 func menuEscapeCapable(out io.Writer) bool {
 	_, tty := menuTerminal(out)
 	term := strings.ToLower(os.Getenv("TERM"))
-	return tty && term != "" && term != "dumb"
+	_, noColor := os.LookupEnv("NO_COLOR")
+	// The terminal contract forbids ALL ANSI when NO_COLOR is present,
+	// including cursor moves and clear-screen controls.
+	return tty && !noColor && term != "" && term != "dumb"
 }
 
 func menuColorEnabled(out io.Writer) bool {
@@ -177,6 +180,14 @@ func menuField(out io.Writer, label, value string) {
 		return
 	}
 	fmt.Fprintf(out, "  %-17s %s\n", label, menuFieldValue(out, label, value))
+}
+
+// Keep the entire original token on a dedicated, undecorated line, so
+// labels cannot force a command, public key or Link ID to wrap at 60 columns.
+// The terminal may soft-wrap tokens wider than itself; we insert no breaks.
+func menuCopyLine(out io.Writer, label, exact string) {
+	fmt.Fprintf(out, "  %s\n", menuPaint(out, menuBlue, label))
+	fmt.Fprintln(out, exact)
 }
 
 // Exact copyable commands, private setup links and URLs are never decorated.

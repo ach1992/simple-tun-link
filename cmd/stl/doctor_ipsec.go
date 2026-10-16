@@ -30,6 +30,80 @@ func ipsecUnregisteredError(stdout, stderr io.Writer, jsonOutput bool, operation
 	return readCommandPublicError(stdout, stderr, jsonOutput, public)
 }
 
+// Render a compact, read-only human triage. The versioned JSON remains the
+// complete per-check reason/next-step report. A missing admitted runtime is
+// NOT evidence that another process or service is foreign-owned.
+func renderIPsecDoctorHuman(out io.Writer, report diagnostics.IPsecHostReport) {
+	if report.ActivationAllowed {
+		menuSection(out, "IPsec / runtime VERIFIED")
+		menuNotice(out, "OK", "STL native-exclusive ownership is currently admitted (read-only observation).")
+		menuProse(out, "Readiness is time-local; Link traffic still requires peer negotiation and verification.")
+		menuCopyLine(out, "Details / every observed check", "stl doctor ipsec --json")
+		return
+	}
+
+	menuSection(out, "IPsec / NOT READY")
+	var observed, unknown int
+	var blocked, uncertain []diagnostics.IPsecHostCheck
+	var conflict, runtimeMissing bool
+	for _, check := range report.Checks {
+		switch check.Status {
+		case "observed":
+			observed++
+		case "blocked":
+			if check.Name == "operational_runtime" {
+				runtimeMissing = true
+			} else {
+				blocked = append(blocked, check)
+			}
+			switch check.ReasonCode {
+			case "charon_process_observed", "strongswan_service_observed",
+				"ike_udp_ports_observed", "native_systemd_unit_conflict":
+				conflict = true
+			}
+		default:
+			unknown++
+			uncertain = append(uncertain, check)
+		}
+	}
+	blockedCount := len(blocked)
+	if runtimeMissing {
+		blockedCount++
+	}
+	menuField(out, "Checks", fmt.Sprintf("%d observed / %d blocked / %d unknown",
+		observed, blockedCount, unknown))
+	if runtimeMissing {
+		menuField(out, "Runtime", "Not admitted; no service was started")
+	}
+	// Show at most two examples per category; details are opt-in in JSON.
+	// The proven-conflict decision considers ALL checks, not just examples.
+	for _, group := range []struct {
+		label  string
+		checks []diagnostics.IPsecHostCheck
+	}{
+		{"Blocked", blocked}, {"Unknown", uncertain},
+	} {
+		for i, check := range group.checks {
+			if i >= 2 {
+				menuField(out, group.label, fmt.Sprintf("%d more checks; see JSON details", len(group.checks)-2))
+				break
+			}
+			menuField(out, group.label, check.Name+" ("+check.ReasonCode+")")
+		}
+	}
+	menuSection(out, "Next: one safe action")
+	switch {
+	case conflict:
+		menuProse(out, "A conflicting or unowned process, service or IKE port was observed. Do not stop or adopt it; inspect ownership or choose another backend.")
+	case unknown > 0:
+		menuProse(out, "Resolve incomplete read-only host observations before IPsec preparation. Inspect the full JSON report.")
+	default:
+		menuProse(out, "Run sudo stl menu, select IPsec, then review the scoped PREPARE plan. Service ownership must qualify independently.")
+	}
+	menuCopyLine(out, "Details / all reason codes and next steps", "stl doctor ipsec --json")
+	menuProse(out, "Other registered backends are independent of this IPsec limitation.")
+}
+
 // ipsecDoctorCommand is observational. It must never call the application
 // Engine, enable a service, fetch keys, invoke VICI writes or touch the host.
 // Its diagnostic result is not an IPsec activation authorization.
@@ -72,11 +146,7 @@ func ipsecDoctorCommand(args []string, stdout, stderr io.Writer, options *runtim
 					return 1
 				}
 			} else {
-				fmt.Fprintln(stdout, "IPsec native-exclusive: current STL runtime ownership VERIFIED (read-only observation)")
-				for _, check := range report.Checks {
-					fmt.Fprintf(stdout, "- [%s] %s (%s): %s\n", check.Status, check.Name, check.ReasonCode, check.Summary)
-				}
-				fmt.Fprintln(stdout, "Readiness is time-local; Link traffic requires separate negotiation and verification.")
+				renderIPsecDoctorHuman(stdout, report)
 			}
 			return 0
 		}
@@ -98,12 +168,7 @@ func ipsecDoctorCommand(args []string, stdout, stderr io.Writer, options *runtim
 			return 1
 		}
 	} else {
-		fmt.Fprintln(stdout, "IPsec native-exclusive: NOT READY (read-only checks; no host changes)")
-		for _, check := range report.Checks {
-			fmt.Fprintf(stdout, "- [%s] %s (%s): %s\n", check.Status, check.Name, check.ReasonCode, check.Summary)
-			fmt.Fprintf(stdout, "  Next: %s\n", check.NextStep)
-		}
-		fmt.Fprintln(stdout, "Other registered backends are independent of this IPsec limitation.")
+		renderIPsecDoctorHuman(stdout, report)
 	}
 	// A successful inspection is not successful IPsec readiness. Use the
 	// stable unsupported-capability exit code until operationally enabled.

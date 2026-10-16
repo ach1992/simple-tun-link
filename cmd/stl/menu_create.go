@@ -415,7 +415,8 @@ func menuCreatePlain(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		return 2
 	}
 	if !diagnose {
-		fmt.Fprintf(out, "After importing on the peer: stl link diagnose %s (or menu > Tests & Diagnostics).\n", link.ID)
+		menuCopyLine(out, "After peer import / optional connectivity check", "stl link diagnose "+string(link.ID))
+		menuProse(out, "Or use the Test connectivity menu; local Create is not peer-connectivity proof.")
 		return 0
 	}
 	if code := menuCheckOneConnection(link.ID, out, errOut, options); code != 0 {

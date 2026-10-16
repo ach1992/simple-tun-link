@@ -156,11 +156,11 @@ func TestMenuPresentationTermAndColorGates(t *testing.T) {
 	_, slave := openMenuPTY(t)
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("STL_NO_CLEAR", "0")
-	// Presence of NO_COLOR, even empty, must disable semantic color but
-	// not remove clear/formatting from an otherwise capable terminal.
+	// Presence of NO_COLOR, even empty, must disable ALL ANSI,
+	// including visible-screen clearing and cursor repositioning.
 	t.Setenv("NO_COLOR", "")
-	if menuColorEnabled(slave) || !menuEscapeCapable(slave) {
-		t.Fatal("NO_COLOR disabled terminal capability or failed to disable colors")
+	if menuColorEnabled(slave) || menuEscapeCapable(slave) {
+		t.Fatal("NO_COLOR permitted ANSI screen control or semantic color")
 	}
 	if got := menuPaint(slave, menuRed, "FAILED"); got != "FAILED" {
 		t.Fatalf("NO_COLOR produced ANSI: %q", got)

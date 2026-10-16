@@ -149,6 +149,27 @@ func readSelectedPackagePreview(ctx context.Context, selected tunnelOption) (sel
 type menuPackagePreparation struct {
 	canContinue          bool
 	approvedSelectedPlan bool
+	selected             tunnelOption
+}
+
+// Preparation approval applies only to the exact previewed backend/mode.
+func (p menuPackagePreparation) approvedFor(selected tunnelOption) bool {
+	return p.canContinue && p.approvedSelectedPlan && p.selected == selected
+}
+
+// Private typed test seam. Production always uses canonical APT planning,
+// installed root/TTY admission, and the embedded installer.
+type menuPackagePreparationOps struct {
+	preview    func(context.Context, tunnelOption) (selectedPackagePreview, error)
+	canPrepare func(io.Reader, io.Writer) bool
+	install    func(context.Context, io.Writer, io.Writer, ...string) error
+}
+
+func productionMenuPackageOps() menuPackagePreparationOps {
+	return menuPackagePreparationOps{
+		preview: readSelectedPackagePreview, canPrepare: menuCanUpdateNow,
+		install: runEmbeddedInstaller,
+	}
 }
 
 // One explicit PREPARE covers the selected package/dependency plan AND, for
@@ -156,8 +177,16 @@ type menuPackagePreparation struct {
 // separate YES. Inspecting or cancelling always remains read-only.
 func menuPrepareSelectedPackages(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
 	selected tunnelOption, options *runtimeOptions) menuPackagePreparation {
+	return menuPrepareSelectedPackagesWithOps(input, reader, out, errOut, selected, options, productionMenuPackageOps())
+}
+
+func menuPrepareSelectedPackagesWithOps(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
+	selected tunnelOption, options *runtimeOptions, ops menuPackagePreparationOps) menuPackagePreparation {
+	if ops.preview == nil || ops.canPrepare == nil || ops.install == nil {
+		return menuPackagePreparation{}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-	plan, err := readSelectedPackagePreview(ctx, selected)
+	plan, err := ops.preview(ctx, selected)
 	cancel()
 	if err != nil {
 		menuSection(out, "Selected tunnel / package check")
@@ -181,7 +210,7 @@ func menuPrepareSelectedPackages(input io.Reader, reader *bufio.Reader, out, err
 	if plan.missing == "" && !needsService {
 		return menuPackagePreparation{canContinue: true}
 	}
-	if !menuCanUpdateNow(input, out) {
+	if !ops.canPrepare(input, out) {
 		menuNotice(out, "WARNING", "Selected prerequisites need an installed root terminal for preparation.")
 		menuField(out, "Packages", plan.missing)
 		menuField(out, "NEXT ACTION", "Run sudo stl menu on the selected server")
@@ -218,7 +247,7 @@ func menuPrepareSelectedPackages(input io.Reader, reader *bufio.Reader, out, err
 	}
 	if plan.missing != "" {
 		verifyCtx, stop := context.WithTimeout(context.Background(), 12*time.Second)
-		refreshed, e := readSelectedPackagePreview(verifyCtx, selected)
+		refreshed, e := ops.preview(verifyCtx, selected)
 		stop()
 		if e != nil || refreshed.missing != plan.missing ||
 			refreshed.packages != plan.packages || refreshed.aptInstall != plan.aptInstall {
@@ -228,14 +257,14 @@ func menuPrepareSelectedPackages(input io.Reader, reader *bufio.Reader, out, err
 		prepCtx, done := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer done()
 		menuNotice(out, "INFO", "Canonical installer checking exact plan and host ownership")
-		if err := runEmbeddedInstaller(prepCtx, out, errOut, "prepare",
+		if err := ops.install(prepCtx, out, errOut, "prepare",
 			"--backends", selectedPackageBackends(selected), "--expected-missing", refreshed.missing,
 			"--expected-apt-plan", refreshed.aptInstall); err != nil {
 			menuNotice(out, "FAILED", "Package preparation incomplete or denied. APT/vendor changes may persist after an attempted transaction; inspect and reconcile before retry.")
 			return menuPackagePreparation{}
 		}
 		afterCtx, afterDone := context.WithTimeout(context.Background(), 12*time.Second)
-		after, e := readSelectedPackagePreview(afterCtx, selected)
+		after, e := ops.preview(afterCtx, selected)
 		afterDone()
 		if e != nil || after.missing != "" {
 			menuNotice(out, "FAILED", "Selected packages are not verified after APT; private service was not started.")
@@ -279,7 +308,7 @@ func menuPrepareSelectedPackages(input io.Reader, reader *bufio.Reader, out, err
 		}
 	}
 	menuNotice(out, "OK", "Selected prerequisites verified; continuing the same tunnel Create (Link confirmation is separate).")
-	return menuPackagePreparation{canContinue: true, approvedSelectedPlan: true}
+	return menuPackagePreparation{canContinue: true, approvedSelectedPlan: true, selected: selected}
 }
 
 // Embedded script must not drift from its canonical file. Package-level tests
