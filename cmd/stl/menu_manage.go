@@ -142,7 +142,7 @@ func menuRemoveLink(input io.Reader, reader *bufio.Reader, out, errOut io.Writer
 		fmt.Fprintln(errOut, "Manage removal requires an interactive terminal; use stl link remove <id> --confirm <id> for automation. No changes made.")
 		return 2
 	}
-	menuSection(out, "Remove tunnel / preview")
+	menuActionSection(out, "Remove tunnel / preview", "REMOVE")
 	menuHealthLine(out, "Current action", "WARNING", "PREVIEW ONLY - no tunnel has been removed")
 	menuField(out, "Tunnel", fmt.Sprintf("%s / %s", selected.Backend, selected.Encapsulation))
 	menuField(out, "Tunnel IPs", selected.Addresses.Local.String()+" -> "+selected.Addresses.Peer.String())

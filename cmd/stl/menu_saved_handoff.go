@@ -209,11 +209,12 @@ func menuSensitiveHandoffAction(input io.Reader, reader *bufio.Reader, out, errO
 		return 2
 	}
 	if deleteSaved {
-		fmt.Fprintln(out, "\nDelete ONLY the saved private receiver Setup Link for this tunnel?")
+		menuActionSection(out, "Delete saved private Setup Link / preview", "DELETE")
+		menuProse(out, "Delete ONLY the saved private receiver Setup Link for this tunnel?")
 		menuProse(out, "The ACTIVE tunnel and its current keys remain unchanged, but this same receiver offer")
 		fmt.Fprintln(out, "cannot be regenerated after deletion. Keep your own offline copy if needed.")
 	} else {
-		menuSection(out, "Protected Setup Link / private credential")
+		menuActionSection(out, "Protected Setup Link / private credential", "SHOW")
 		fmt.Fprintln(out, "The receiver Setup Link contains a PRIVATE credential.")
 		menuProse(out, "Displaying it is intentional: anyone viewing your terminal/screen/history can copy it.")
 		fmt.Fprintln(out, "Only display on a private terminal; it is not printed by Status or Diagnostics.")
@@ -226,7 +227,7 @@ func menuSensitiveHandoffAction(input io.Reader, reader *bufio.Reader, out, errO
 	if deleteSaved {
 		requested = "DELETE"
 	}
-	fmt.Fprintf(out, "Type %s to confirm (Enter cancels): ", requested)
+	fmt.Fprintf(out, "Type %s to confirm (Enter cancels): ", menuActionToken(out, requested))
 	value, err := readMenuAnswer(reader)
 	if errors.Is(err, io.EOF) || err == nil && value != requested {
 		fmt.Fprintln(out, "Cancelled. Nothing changed or disclosed.")

@@ -41,6 +41,44 @@ func TestMenuPresentationPlaintextAndSemanticColumns(t *testing.T) {
 	}
 }
 
+func TestSemanticStatusPaletteUsedByNoticesAndHealth(t *testing.T) {
+	master, slave := openMenuPTY(t)
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("CLICOLOR", "1")
+	old, had := os.LookupEnv("NO_COLOR")
+	_ = os.Unsetenv("NO_COLOR")
+	t.Cleanup(func() {
+		if had {
+			_ = os.Setenv("NO_COLOR", old)
+		} else {
+			_ = os.Unsetenv("NO_COLOR")
+		}
+	})
+	for _, item := range []struct{ kind, color string }{
+		{"OK", menuGreen}, {"INFO", menuBlue}, {"WARNING", menuYellow},
+		{"FAILED", menuRed}, {"UNKNOWN", menuDim}, {"UNAVAILABLE", menuCyan},
+	} {
+		if role := menuStatusRole(item.kind); role != item.color {
+			t.Fatalf("status %s: %q, want %q", item.kind, role, item.color)
+		}
+	}
+	var plain bytes.Buffer
+	menuHealthLine(&plain, "Probe", "UNKNOWN", "Not observed")
+	menuNotice(&plain, "UNAVAILABLE", "Not installed")
+	if strings.Contains(plain.String(), "\x1b[") ||
+		!strings.Contains(plain.String(), "[UNKNOWN]") ||
+		!strings.Contains(plain.String(), "[UNAVAILABLE]") {
+		t.Fatalf("plain-text status lost its explicit labels: %q", plain.String())
+	}
+	menuHealthLine(slave, "Probe", "UNKNOWN", "Not observed")
+	menuNotice(slave, "UNAVAILABLE", "Not installed")
+	got := readMenuPTYUntil(t, master, "[UNKNOWN]", "[UNAVAILABLE]")
+	if !strings.Contains(got, "\x1b["+menuDim+"m") ||
+		!strings.Contains(got, "\x1b["+menuCyan+"m") {
+		t.Fatalf("health/notice did not share semantic status palette: %q", got)
+	}
+}
+
 func TestMenuActionSemanticsAndExactCopyableTokens(t *testing.T) {
 	_, slave := openMenuPTY(t)
 	t.Setenv("TERM", "xterm-256color")
@@ -184,6 +222,25 @@ func TestNarrowTerminalKeepsMenuChoicesReadable(t *testing.T) {
 		!strings.Contains(got, strings.Repeat("-", 44)) ||
 		strings.Contains(got, strings.Repeat("-", 55)) {
 		t.Fatalf("narrow terminal did not wrap the option in readable rows: %q", got)
+	}
+}
+
+func TestMenuDescriptionWrapAndCopyableURLPreservation(t *testing.T) {
+	master, slave := openMenuPTY(t)
+	if err := unix.IoctlSetWinsize(int(slave.Fd()), unix.TIOCSWINSZ,
+		&unix.Winsize{Row: 24, Col: 60}); err != nil {
+		t.Fatal(err)
+	}
+	long := "Remove only the selected local tunnel resources and keep all other saved tunnels unchanged"
+	menuActionOption(slave, "5", "Remove this tunnel", long, "REMOVE")
+	original := "https://example.invalid/a/very/long/path/to/an/exact/recovery/guide"
+	menuOption(slave, "u", "Help URL", original)
+	got := readMenuPTYUntil(t, master, "Remove this tunnel", "resources and", original)
+	if !strings.Contains(got, "resources and\r\n      ") {
+		t.Fatalf("long prose did not wrap on a narrow screen: %q", got)
+	}
+	if !strings.Contains(got, original) {
+		t.Fatalf("exact copyable URL was changed or interrupted: %q", got)
 	}
 }
 

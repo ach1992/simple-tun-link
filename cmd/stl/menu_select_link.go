@@ -50,7 +50,7 @@ func chooseMenuLink(reader *bufio.Reader, out io.Writer, links []state.LinkRecor
 			return "", false, nil
 		}
 		if err != nil {
-			fmt.Fprintln(out, "Invalid input. Please enter a listed number.")
+			menuNotice(out, "WARNING", "Enter a listed tunnel number.")
 			continue
 		}
 		if raw == "" || raw == "0" || strings.EqualFold(raw, "q") {
@@ -72,7 +72,7 @@ func chooseMenuLink(reader *bufio.Reader, out io.Writer, links []state.LinkRecor
 				}
 			}
 		}
-		fmt.Fprintln(out, "Not a listed tunnel. Pick its number, or 0 to return.")
+		menuNotice(out, "WARNING", "Choose a listed tunnel number or 0 to return.")
 	}
 }
 

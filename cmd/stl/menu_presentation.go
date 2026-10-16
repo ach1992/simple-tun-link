@@ -128,10 +128,14 @@ func menuActionOption(out io.Writer, number, title, description, action string) 
 
 func menuOptionStyled(out io.Writer, number, title, description, role string) {
 	// Measure before styling: ANSI bytes would otherwise corrupt the
-	// length calculation. Exact links/commands are kept unbroken below.
+	// length calculation. Exact links/commands stay unbroken.
 	cols := menuColumns(out)
+	copyable := menuCopyable(description)
 	stack := cols > 0 && (cols < 64 || 6+max(22, len(title))+1+len(description) > cols)
-	if !menuCopyable(description) {
+	if stack && !copyable && cols > 24 {
+		description = strings.ReplaceAll(wrapTerminalGuidance(description, cols-6), "\n", "\n      ")
+	}
+	if !copyable {
 		description = menuPaint(out, menuDim, description)
 	}
 	entry := menuPaint(out, menuCyan, fmt.Sprintf("%2s", number))
@@ -237,20 +241,27 @@ func menuSessionErrorNotice(stdout, stderr io.Writer, message string) {
 	menuNotice(stderr, "FAILED", message)
 }
 
-func menuNotice(out io.Writer, kind, message string) {
-	role := menuBlue
+// One semantic status vocabulary is shared by notices and health rows.
+// The text labels remain present even when color is disabled.
+func menuStatusRole(kind string) string {
 	switch kind {
 	case "OK":
-		role = menuGreen
+		return menuGreen
 	case "WARNING":
-		role = menuYellow
+		return menuYellow
 	case "FAILED", "ERROR", "CONFLICT":
-		role = menuRed
+		return menuRed
 	case "UNKNOWN":
-		role = menuDim
+		return menuDim
 	case "UNAVAILABLE":
-		role = menuCyan
+		return menuCyan
+	default:
+		return menuBlue
 	}
+}
+
+func menuNotice(out io.Writer, kind, message string) {
+	role := menuStatusRole(kind)
 	cols := menuColumns(out)
 	if cols >= 24 && len(kind)+len(message)+5 > cols && !menuCopyable(message) {
 		fmt.Fprintf(out, "\n%s\n", menuPaint(out, role, "["+kind+"]"))

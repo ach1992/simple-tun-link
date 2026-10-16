@@ -122,7 +122,7 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			return 0
 		}
 		if err != nil {
-			fmt.Fprintln(out, "Invalid input; choose 0, 1 or 2.")
+			menuNotice(out, "WARNING", "Choose a listed number: 0, 1 or 2.")
 			continue
 		}
 		if mode == "" {
@@ -132,7 +132,7 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			return 0
 		}
 		if mode != "1" && mode != "2" {
-			fmt.Fprintln(out, "Choose 1 for ordinary GRE/IPIP or 2 for protected credentials.")
+			menuNotice(out, "WARNING", "Choose 1 for GRE/IPIP or 2 for a protected Setup Link.")
 			continue
 		}
 		// One clean screen for the paste step. Recoverable validation errors
@@ -157,11 +157,11 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 				return 0
 			}
 			if errors.Is(err, errMenuInputTooLong) {
-				fmt.Fprintln(out, "The pasted line is too long (maximum 24 KB). Copy only ONE complete stl:// line, without surrounding text.")
+				menuNotice(out, "WARNING", "Setup Link too long (maximum 24 KB). Copy one complete stl:// line.")
 				continue
 			}
 			if err != nil {
-				fmt.Fprintln(out, "Terminal input was interrupted; no tunnel was changed. Try again.")
+				menuNotice(out, "WARNING", "Paste interrupted. No tunnel changed; retry the same Setup Link.")
 				continue
 			}
 			encoded = strings.TrimSpace(encoded)
@@ -169,11 +169,11 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 				return 0
 			}
 			if encoded == "" {
-				fmt.Fprintln(out, "No setup link received. Paste a complete stl:// line or choose Back.")
+				menuNotice(out, "WARNING", "No Setup Link received. Paste one complete stl:// line or choose Back.")
 				continue
 			}
 			if !strings.HasPrefix(encoded, "stl://") {
-				fmt.Fprintln(out, "This is not an STL setup link. It must start with stl:// (no commands or surrounding text).")
+				menuNotice(out, "WARNING", "This is not an STL setup link. Paste the complete stl:// line.")
 				continue
 			}
 			var buffer bytes.Buffer
@@ -185,7 +185,7 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			}
 			var preview ImportPreviewResponse
 			if err := json.Unmarshal(buffer.Bytes(), &preview); err != nil {
-				fmt.Fprintln(out, "Cannot interpret the setup preview. No changes applied.")
+				menuNotice(out, "WARNING", "Setup Link preview unavailable; no changes applied.")
 				continue
 			}
 			if mode == "1" && (preview.Sensitive || preview.HasCredential) {
