@@ -91,4 +91,35 @@ if [[ $EUID -ne 0 ]]; then
 fi
 [[ ! -e "$root/prefix/bin/stl" ]] || fail 'package preparation modified offline installation'
 
+# Exercise the ACTUAL canonical function, extracted verbatim without running
+# the installer or mutating the host. A Go doctor query can leave a harmless
+# private-unit LOAD=not-found placeholder that is not a foreign service.
+sed -n '/^ipsec_only_not_found_private_placeholder() {/,/^}/p' "$installer" > "$root/ipsec-placeholder-function.sh"
+[[ $(grep -c '^ipsec_only_not_found_private_placeholder() {' "$root/ipsec-placeholder-function.sh") == 1 ]] ||
+  fail 'canonical placeholder parser unavailable'
+# shellcheck source=/dev/null
+source "$root/ipsec-placeholder-function.sh"
+ghost=$'simple-tun-link-ipsec.service not-found inactive dead simple-tun-link-ipsec.service\n'
+ipsec_only_not_found_private_placeholder "$ghost" ||
+  fail 'benign absent STL-private systemd placeholder was rejected'
+blocked=(
+  ''
+  'strongswan.service not-found inactive dead Vendor'
+  'simple-tun-link-ipsec.service loaded inactive dead User'
+  'simple-tun-link-ipsec.service not-found active running Bad'
+  'simple-tun-link-ipsec.service not-found inactive dead'
+  "$ghost"$'strongswan.service loaded active running Foreign\n'
+  $'simple-tun-link-ipsec.service not-found inactive dead Unit\nsecond\n'
+  $'simple-tun-link-ipsec.service not-found inactive dead Unit\r\n'
+  $'simple-tun-link-ipsec.service not-found inactive dead \303\251\n'
+  "$(printf 'simple-tun-link-ipsec.service not-found inactive dead %01200d\n' 0)"
+)
+for item in "${blocked[@]}"; do
+  if ipsec_only_not_found_private_placeholder "$item"; then
+    printf 'Unexpectedly accepted: %q\n' "$item" >&2
+    fail 'foreign/malformed/overlong loaded-service identity was accepted'
+  fi
+done
+echo 'IPSEC_CANONICAL_NOT_FOUND_GHOST_VS_FOREIGN_INVENTORY=PASS'
+
 printf 'Installer requirements checks PASS (Ubuntu 22.04+, Debian 11+, package plans, unsafe inputs, EOL).\n'

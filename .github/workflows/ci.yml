@@ -50,4 +50,5 @@ jobs:
       - name: Offline installer regression
         run: |
           bash scripts/test-install.sh
+          bash scripts/test-install-requirements.sh
           bash scripts/test-quick-install.sh

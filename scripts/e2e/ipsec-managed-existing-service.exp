@@ -1,0 +1,67 @@
+#!/usr/bin/expect -f
+# Runs only inside a disposable systemd container after independently
+# installing and enabling a genuine distro-owned strongswan.service.
+# Fresh PTY approval for the exact vendor unit is NOT the PREPARE token.
+set timeout 90
+log_user 1
+set env(NO_COLOR) 1
+set env(STL_NO_CLEAR) 1
+spawn /usr/local/bin/stl menu
+expect {
+  -re {Choose a task:} { send -- "1\r" }
+  timeout { puts stderr "IPSEC_EXISTING_MENU=MAIN_TIMEOUT"; exit 20 }
+}
+expect {
+  -re {Tunnel type \[1\]:} { send -- "5\r" }
+  timeout { puts stderr "IPSEC_EXISTING_MENU=CREATE_TIMEOUT"; exit 21 }
+}
+expect {
+  -re {Choose a type:} { send -- "5\r" }
+  timeout { puts stderr "IPSEC_EXISTING_MENU=IPSEC_TIMEOUT"; exit 22 }
+}
+expect {
+  -re {Type PREPARE to prepare selected prerequisites} { send -- "PREPARE\r" }
+  timeout { puts stderr "IPSEC_EXISTING_MENU=PREPARE_TIMEOUT"; exit 23 }
+}
+expect {
+  -re {Service action \(Enter cancels\):} { send -- "STOP strongswan.service\r" }
+  timeout { puts stderr "IPSEC_EXISTING_MENU=SEPARATE_STOP_CONSENT_NOT_OFFERED"; exit 24 }
+}
+expect {
+  -re {Verified distro service stopped and disabled after separate operator consent} {
+    puts "IPSEC_REAL_EXISTING_VENDOR_SEPARATELY_CONSENTED_STOP=PASS"
+  }
+  timeout { puts stderr "IPSEC_EXISTING_MENU=VENDOR_STOP_NOT_ATTESTED"; exit 25 }
+}
+expect {
+  -re {Selected prerequisites verified; continuing the same tunnel Create} {
+    puts "IPSEC_REAL_EXISTING_VENDOR_PRIVATE_ADMISSION=PASS"
+  }
+  timeout { puts stderr "IPSEC_EXISTING_MENU=PRIVATE_SERVICE_NOT_READY"; exit 26 }
+}
+expect {
+  -re {Other server's reachable IPv4 address} { send -- "q\r" }
+  timeout { puts stderr "IPSEC_EXISTING_MENU=CREATE_CONTINUATION_MISSING"; exit 27 }
+}
+expect {
+  -re {Create cancelled} { puts "IPSEC_VENDOR_STOP_DID_NOT_AUTHORIZE_LINK_CREATION=PASS" }
+  timeout { puts stderr "IPSEC_EXISTING_MENU=INDEPENDENT_LINK_CONFIRMATION_MISSING"; exit 28 }
+}
+expect {
+  -re {Press Enter to continue} { send -- "\r" }
+  timeout { puts stderr "IPSEC_EXISTING_MENU=ACK_TIMEOUT"; exit 29 }
+}
+expect {
+  -re {Choose a task:} { send -- "8\r" }
+  timeout { puts stderr "IPSEC_EXISTING_MENU=EXIT_TIMEOUT"; exit 30 }
+}
+expect {
+  eof {}
+  timeout { puts stderr "IPSEC_EXISTING_MENU=STILL_RUNNING"; exit 31 }
+}
+catch wait result
+if {[llength $result] < 4 || [lindex $result 3] != 0} {
+  puts stderr "IPSEC_EXISTING_MENU=NONZERO_EXIT"
+  exit 32
+}
+puts "IPSEC_EXISTING_REAL_ROOT_TTY=PASS"

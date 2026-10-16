@@ -348,6 +348,7 @@ Default backend.
   per eligible host; all operations use the same canonical Engine and
   durable transaction journals. No global `swanctl --load-all`, wildcard
   unload, route flush or foreign-daemon adoption.
+- Issue #112 reconciles a single harmless in-memory, not-found STL-private systemd placeholder with the Installer's guarded read-only inventory. A real existing vendor service can be stopped/disabled only after a distinct exact-unit typed confirmation, full distro-file/ownership and service-state attestation, and installed-maintenance-lock revalidation. Its effects may disrupt existing VPNs. Other services and all unknown owner/config/port states remain manual reconciliation. No generic service manager or foreign-state takeover belongs in the terminal renderer.
 - Runtime admission requires a verified on-disk config/unit receipt,
   effective loaded systemd identity, root-controlled regular executable
   inode/path ancestry, process/cgroup/netns, logger configuration, private

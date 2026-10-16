@@ -15,6 +15,44 @@ bash /mnt/stl-install.sh install --bundle /mnt/stl-bundle --backends native
 [[ -x /usr/local/bin/stl ]] || fail no_verified_installed_binary
 original=$(sha256sum /usr/local/bin/stl | awk '{print $1}')
 record=$(sha256sum /usr/local/lib/simple-tun-link/install-record | awk '{print $1}')
+# Exercise a REAL pre-existing, distro-owned StrongSwan service in an
+# isolated guest. Unlike the clean-host package case, this service belongs
+# to the operator before PREPARE. Only a fresh, separately typed exact-unit
+# STOP consent can change it; the menu must then provision STL separately.
+if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor ]]; then
+  if [[ -f /usr/sbin/policy-rc.d ]]; then
+    mv /usr/sbin/policy-rc.d /tmp/stl-existing-vendor-policy-rc.d
+  fi
+  apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    charon-systemd strongswan-swanctl libstrongswan-standard-plugins >/tmp/stl-existing-vendor-apt.log 2>&1 ||
+    fail cannot_install_real_distro_vendor_fixture
+  systemctl --system enable --now strongswan.service >/dev/null ||
+    fail cannot_start_distro_owned_vendor_fixture
+  [[ $(systemctl --system is-active strongswan.service) == active &&
+     $(systemctl --system is-enabled strongswan.service) == enabled ]] ||
+    fail existing_vendor_not_live_before_user_consent
+  plan=$(bash /mnt/stl-install.sh requirements --backends native,ipsec) ||
+    fail existing_vendor_package_inventory_unknown
+  grep -qx "missing_packages=" <<< "$plan" ||
+    fail existing_vendor_has_incomplete_package_install
+  [[ ! -e /var/lib/simple-tun-link/ipsec ]] ||
+    fail private_service_exists_before_consent
+  /usr/bin/expect /mnt/managed-existing.exp || fail operator_vendor_consent_failed
+  [[ $(systemctl --system is-active strongswan.service) == inactive &&
+     $(systemctl --system is-enabled strongswan.service) == disabled ]] ||
+    fail consented_vendor_not_stopped_disabled
+  [[ $(systemctl --system is-active simple-tun-link-ipsec.service) == active ]] ||
+    fail new_stl_private_service_not_started
+  /usr/local/bin/stl doctor ipsec --json | grep -q '"activation_allowed":true' ||
+    fail new_stl_private_service_not_admitted
+  [[ $(sha256sum /usr/local/bin/stl | awk '{print $1}') == "$original" &&
+     $(sha256sum /usr/local/lib/simple-tun-link/install-record | awk '{print $1}') == "$record" ]] ||
+    fail existing_vendor_workflow_modified_STL_installation
+  echo "IPSEC_REAL_PRIOR_DISTRIBUTION_SERVICE_EXACT_OPERATOR_CONSENT=PASS"
+  exit 0
+fi
+
 # An independently signed, APT-trusted third-party repository may spoof
 # Origin/Label Ubuntu. Even if its higher version wins normal APT selection,
 # the read-only STL preview must reject it before any package effects.
@@ -80,6 +118,22 @@ apt_plan=$(sed -n 's/^apt_install=//p' <<< "$plan")
   fail no_real_strongswan_dependency_plan
 
 case "${STL_IPSEC_PREPARE_CASE:-}" in
+  ghost)
+    # A read-only systemctl query can retain a harmless missing private-unit
+    # placeholder. Prove it is genuinely not loaded and still allow PREPARE.
+    systemctl --system --no-pager show -p LoadState simple-tun-link-ipsec.service \
+      | grep -qx 'LoadState=not-found' || fail ghost_fixture_unit_is_real
+    ghost_list=$(systemctl --system --no-pager --no-legend --plain --all \
+      --type=service list-units 'strongswan*.service' 'charon*.service' \
+      'ipsec.service' 'simple-tun-link-ipsec.service') ||
+      fail ghost_fixture_systemd_query_failed
+    [[ "$ghost_list" == "simple-tun-link-ipsec.service not-found inactive dead "* ]] ||
+      fail ghost_fixture_not_loaded_in_system_manager
+    [[ ! -e /etc/systemd/system/simple-tun-link-ipsec.service &&
+       ! -e /usr/lib/systemd/system/simple-tun-link-ipsec.service ]] ||
+      fail ghost_fixture_has_real_service
+    echo 'IPSEC_EXACT_NOT_FOUND_PLACEHOLDER_OBSERVED=PASS'
+    ;;
   foreign)
     # A dormant foreign drop-in is NOT made STL-owned by PREPARE consent.
     mkdir -p /etc/systemd/system/strongswan.service.d
@@ -128,7 +182,7 @@ case "${STL_IPSEC_PREPARE_CASE:-}" in
     echo "IPSEC_FOREIGN_UNITPATH_DROPIN_DENIED_BEFORE_APT=$STL_IPSEC_PREPARE_CASE:PASS"
     exit 0
     ;;
-  clean|partial) ;;
+  clean|partial|ghost) ;;
   *) fail invalid_case ;;
 esac
 

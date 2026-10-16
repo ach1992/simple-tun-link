@@ -199,6 +199,19 @@ packages. Stable v0.1.0 includes the reviewed selected package/service
 preparation but does not authorize mutation on operational hosts without
 the operator's own backups and explicit consent.
 
+**Unreleased Issue #112:** the Installer distinguishes a strict, single-line
+LOAD=not-found inactive/dead placeholder for STL's missing private IPsec
+unit from real/foreign service identities. When all selected packages
+are ready, an installed-root operator may separately type
+STOP strongswan.service to stop/disable only the independently attested,
+distro-owned unit, with a clear warning about immediate VPN interruption
+and disablement persisting across reboot. The action rechecks exact
+ownership and state under the exclusive maintenance lock. Alternatively,
+repair manually and type RECHECK. Unknown/custom services, partial APT,
+foreign configuration and uncertain identity remain blocked; no generic
+stop, adoption, purge or mask. The existing public immutable v0.1.0
+does not contain this Issue #112 candidate.
+
 - Only missing packages are requested; the installer never upgrades the entire
   host or edits repositories. Host APT package installation is not covered by
   the STL binary rollback transaction, and STL uninstall never uninstalls host

@@ -409,6 +409,26 @@ ipsec_reject_applicable_dropins() {
   done
 }
 
+# Classify ONLY the harmless one-line in-memory placeholder for STL's
+# own as-yet-uninstalled private service. This matches Go's independently
+# checked nativeProvisionInventoryUnoccupied boundary; no service, vendor,
+# alias, loaded unit or extra output is adopted. A missing final newline,
+# control/non-ASCII bytes or additional line fails closed.
+ipsec_only_not_found_private_placeholder() {
+  local raw=$1 line
+  local LC_ALL=C
+  local -a fields=()
+  [[ ${#raw} -le 1024 && $raw == *$'\n' ]] || return 1
+  line=${raw%$'\n'}
+  [[ -n $line && $line != *$'\n'* && $line != *[![:print:]]* ]] || return 1
+  read -r -a fields <<< "$line"
+  [[ ${#fields[@]} -ge 5 &&
+     ${fields[0]} == simple-tun-link-ipsec.service &&
+     ${fields[1]} == not-found &&
+     ${fields[2]} == inactive &&
+     ${fields[3]} == dead ]]
+}
+
 # Conservative CLEAN-host boundary before any strongSwan package hooks.
 # A pre-existing unit (including a disabled or masked one) is NEVER owned.
 # This is intentionally eligibility for first install, not foreign-service
@@ -450,11 +470,27 @@ ipsec_clean_host_before_apt() {
       done
     done
   done
+  # A read-only status/doctor query can leave one in-memory systemd
+  # LOAD=not-found placeholder for STL's future private unit. Unlike a
+  # loaded or foreign service, this does NOT occupy a unit definition.
+  # Capture a sentinel to preserve the command's trailing newline: Bash
+  # command substitution normally strips it, obscuring malformed output.
+  # Combined stdout/stderr must match a strict, single expected record;
+  # an error or any additional vendor/foreign unit still blocks APT.
   list=$(systemctl --system --no-pager --no-legend --plain --all \
     --type=service list-units 'strongswan*.service' 'charon*.service' \
-    'ipsec.service' 'simple-tun-link-ipsec.service') ||
+    'ipsec.service' 'simple-tun-link-ipsec.service' 2>&1 &&
+    printf '\036') ||
     fail 'systemd existing loaded units could not be inventoried'
-  [[ -z $list ]] || fail 'pre-existing strongSwan/IPsec service identity detected'
+  [[ $list == *$'\036' ]] ||
+    fail 'systemd loaded-unit output was incomplete'
+  list=${list%$'\036'}
+  if [[ -n $list ]]; then
+    if ! ipsec_only_not_found_private_placeholder "$list"; then
+      printf 'STL IPsec next: inspect loaded units and unit files with systemctl; any real/foreign unit must be reconciled before PREPARE. Never blindly stop another VPN.\n' >&2
+      fail 'pre-existing or ambiguous strongSwan/IPsec service identity detected'
+    fi
+  fi
   # systemctl list-unit-files with a glob returns exit 1 when NO unit
   # matched on Ubuntu/systemd 255, even though the manager query succeeded.
   # Accept that exact negative only after the independent earlier successful

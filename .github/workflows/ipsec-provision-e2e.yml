@@ -67,13 +67,14 @@ jobs:
             if [[ -n "$cid" ]]; then docker rm -f "$cid" >/dev/null 2>&1 || :; fi
           }
           trap cleanup EXIT
-          for scenario in foreign foreign_alias foreign_prefix foreign_attached foreign_transient forged_origin partial clean; do
+          for scenario in foreign foreign_alias foreign_prefix foreign_attached foreign_transient forged_origin partial ghost existing_vendor clean; do
             cid=$(docker run --rm -d --network bridge --privileged \
               --cgroupns private --tmpfs /run --tmpfs /run/lock \
               -v "$PWD/scripts/install.sh:/mnt/stl-install.sh:ro" \
               -v "/tmp/stl-ipsec-native-e2e/bundle:/mnt/stl-bundle:ro" \
               -v "$PWD/scripts/e2e/ipsec-managed-prepare-systemd.sh:/mnt/managed-e2e.sh:ro" \
               -v "$PWD/scripts/e2e/ipsec-managed-prepare-menu.exp:/mnt/managed-menu.exp:ro" \
+              -v "$PWD/scripts/e2e/ipsec-managed-existing-service.exp:/mnt/managed-existing.exp:ro" \
               stl-ipsec-managed-clean:pr)
             test -n "$cid"
             docker cp /tmp/stl-ipsec-native-e2e/stl-ipsec-provision-test \
