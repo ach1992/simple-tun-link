@@ -43,7 +43,7 @@ func printMenuHeader(out io.Writer, options *runtimeOptions) {
 	count := "unavailable"
 	if root != "" {
 		if snapshot, err := state.NewFileStore(root).Load(context.Background()); err == nil {
-			count = fmt.Sprintf("%d saved (not yet a connectivity test)", len(snapshot.Links))
+			count = fmt.Sprintf("%d saved", len(snapshot.Links))
 		}
 	}
 	fmt.Fprintf(out, "%s  %s\n", menuPaint(out, menuBlue, "SIMPLE TUN LINK"), menuPaint(out, menuCyan, version.Version))
@@ -140,7 +140,7 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 		menuOption(out, "1", "Create tunnel", "Set up a new connection")
 		menuOption(out, "2", "Import setup link", "Join the other server")
 		menuOption(out, "3", "My tunnels", "View, share, test, remove")
-		menuOption(out, "4", "Test connectivity", "Read-only connection checks")
+		menuOption(out, "4", "Test connectivity", "Check one or all saved tunnels")
 		menuOption(out, "5", "Settings", "Host and STL information")
 		menuActionOption(out, "6", "Update", "Choose a published release", "UPDATE")
 		menuActionOption(out, "7", "Uninstall", "Show safe removal steps", "UNINSTALL")
