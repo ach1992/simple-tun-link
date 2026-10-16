@@ -173,6 +173,32 @@ Installing the packages never authorizes STL's separate private service.
 Non-root or redirected selections remain observational and cannot
 start package mutation. Final Engine admission remains authoritative.
 
+#### Unreleased #105: one-consent native IPsec setup
+
+On the development branch (not in the immutable rc.6 release), selecting
+**Advanced → IPsec ESP/NAT-T** on a supported clean installed-root terminal
+presents the signed distro APT package/dependency plan, checks foreign systemd
+unit/daemon/configuration and UDP 500/4500 occupancy, and requests exactly one
+fresh **PREPARE** for package installation **and** qualified private strongSwan
+provisioning. During distro package installation, a newly introduced vendor
+service may be temporarily started/enabled by signed distro hooks; STL stops
+and disables only the verified new vendor unit before attempting its own
+receipt-bound private unit. It verifies actual runtime admission and resumes
+the selected IPsec Create. A separate **YES** still controls Link creation.
+
+**Cancellation/partial failure:** before PREPARE, no effect. After PREPARE,
+APT effects can persist even if later stages or the Link Create are cancelled;
+the UI must not describe them as rolled back. The selected APT index must be
+verified against the official distro archive signing key, not merely an APT
+trusted key or an Origin label. Alias/prefix systemd drop-ins are checked
+before package hooks. An interrupted APT transaction reports observed
+package/dpkg and vendor state, blocks automatic retry, and skips private
+service admission. Partial package, vendor-unit or
+private-receipt states are preserved for targeted diagnosis; **stl doctor
+ipsec --json** is read-only. Unknown/foreign ownership blocks only IPsec,
+not other tunnel backends. The installed rc.6 release does **not** provide
+this flow.
+
 After selecting GRE/IPIP FOU or GUE (or a native GRE/IPIP type with a
 missing kernel driver), STL separately rechecks the selected modules.
 If a required module is verified **on disk but inactive**, a real

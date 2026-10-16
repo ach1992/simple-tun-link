@@ -30,6 +30,7 @@ type nativeSystemdInventoryState int
 const (
 	systemdInventoryUnknown nativeSystemdInventoryState = iota
 	systemdInventoryNotListed
+	systemdInventoryNotFound
 	systemdInventoryListed
 	systemdInventoryConflict
 )
@@ -73,6 +74,16 @@ func inspectNativeSystemdLoadedUnit(ctx context.Context, runner linux.Runner) IP
 		check.ReasonCode = "native_systemd_unit_not_loaded"
 		check.Summary = "The proposed STL IPsec service is not listed under its primary name in systemd's current in-memory unit inventory; on-disk units and aliases remain unverified."
 		check.NextStep = "Do not install or start the source-only unit on a live host; validate unit identity, aliases, packages and systemd admission in an authorized disposable environment."
+	case systemdInventoryNotFound:
+		// A systemd entry with LOAD=not-found is not proof of a foreign
+		// unit: it may be the residue of an earlier harmless lookup.
+		// This is still BLOCKED, not permission to publish or start a
+		// service. On-disk aliases and effective manager state remain
+		// separately subject to the existing fail-closed provision gate.
+		check.Status = "blocked"
+		check.ReasonCode = "native_systemd_unit_not_loaded"
+		check.Summary = "systemd lists an in-memory placeholder for the STL IPsec service with LOAD=not-found; the service is not verified or ready."
+		check.NextStep = "Continue through the verified STL-owned provisioning workflow; absence of a trusted service and conflicting aliases must be checked before any mutation."
 	case systemdInventoryConflict:
 		return nativeSystemdLoadedConflict()
 	case systemdInventoryListed:
@@ -122,7 +133,12 @@ func parseNativeSystemdList(raw []byte) (nativeSystemdInventoryState, bool) {
 	switch fields[1] {
 	case "loaded":
 		return systemdInventoryListed, true
-	case "masked", "not-found", "bad-setting", "error":
+	case "not-found":
+		if fields[2] == "inactive" && fields[3] == "dead" {
+			return systemdInventoryNotFound, true
+		}
+		return systemdInventoryUnknown, false
+	case "masked", "bad-setting", "error":
 		return systemdInventoryConflict, true
 	default:
 		return systemdInventoryUnknown, false

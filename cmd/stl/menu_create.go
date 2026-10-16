@@ -69,7 +69,7 @@ func (p createPrompts) yesNo(prompt string) (bool, error) {
 func (p createPrompts) failed(err error) int {
 	switch {
 	case errors.Is(err, io.EOF), errors.Is(err, errCreateCancelled):
-		fmt.Fprintln(p.out, "Create cancelled. No changes applied.")
+		fmt.Fprintln(p.out, "Create cancelled. No new Link was created; completed prerequisite preparations are not rolled back.")
 		return 0
 	default:
 		fmt.Fprintln(p.errOut, "Invalid, unavailable or oversized guided input. No changes applied.")

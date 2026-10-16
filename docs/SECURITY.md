@@ -384,7 +384,7 @@ Rules:
 - track/restore only state the tool owns;
 - validate interface identity before update/delete.
 
-**Future managed IPsec prerequisites (Issue #105):** an explicit operator
+**Unreleased managed IPsec candidate (Issue #105):** an explicit operator
 PREPARE approval is necessary but does not by itself make arbitrary APT
 maintainer hooks safe. Debian/Ubuntu `charon-systemd` post-install can
 **enable and start** vendor `strongswan.service` using separate helpers.
@@ -401,7 +401,20 @@ unknown and merely unprovisioned states and offer a qualified supported
 path when one exists. If the package transaction starts but fails, never
 claim package rollback from an STL Link/binary rollback; report observed
 partial effects and provide a safe operator-facing recovery route.
-This changes the future workflow, not immutable rc.6 behavior.
+Each selected APT candidate must map to an index whose InRelease verifies
+against the official distro archive keyring, regardless of other APT trusted
+keys or self-declared Origin. Fail before APT for systemd alias, prefix or
+type-wide drop-ins in all supported system-unit load paths (including
+attached and transient paths): a later DropInPaths check cannot undo a vendor
+hook. Attest the live system manager's UnitPath against the bounded supported
+set; unknown/custom paths fail closed rather than proving a clean host.
+On APT failure report read-only dpkg/vendor classification and block retry.
+An absent alias may be reported only after the same complete UnitPath check;
+if it cannot be inspected, report its status as unknown, not absent.
+The Issue #105 development candidate implements the consent-gated
+APT and private-service path; release eligibility still depends on
+isolated systemd test evidence and separate author-independent review.
+This does not change immutable rc.6 behavior.
 
 ## Privilege
 

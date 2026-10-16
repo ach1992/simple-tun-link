@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
+	ipsecbackend "github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 )
 
@@ -35,8 +37,9 @@ func selectedPackageBackends(selected tunnelOption) string {
 }
 
 type selectedPackagePreview struct {
-	missing  string
-	packages string
+	missing    string
+	packages   string
+	aptInstall string
 }
 
 func missingStrongSwanPackages(missing string) bool {
@@ -72,7 +75,7 @@ func readSelectedPackagePreview(ctx context.Context, selected tunnelOption) (sel
 		return selectedPackagePreview{}, errors.New("unrecognized tunnel package selection")
 	}
 	var stdout, stderr bytes.Buffer
-	if err := runEmbeddedInstaller(ctx, &stdout, &stderr, "requirements", "--backends", choice); err != nil || stdout.Len() > 8192 {
+	if err := runEmbeddedInstaller(ctx, &stdout, &stderr, "requirements", "--backends", choice); err != nil || stdout.Len() > 32768 {
 		return selectedPackagePreview{}, errors.New("read-only package inventory incomplete")
 	}
 	var plan selectedPackagePreview
@@ -84,7 +87,7 @@ func readSelectedPackagePreview(ctx context.Context, selected tunnelOption) (sel
 		}
 		seen[key] = true
 		switch key {
-		case "distribution", "version", "selected_backends", "packages", "missing_packages", "notice":
+		case "distribution", "version", "selected_backends", "packages", "missing_packages", "apt_install", "notice":
 		default:
 			return selectedPackagePreview{}, errors.New("unexpected package inventory field")
 		}
@@ -97,8 +100,11 @@ func readSelectedPackagePreview(ctx context.Context, selected tunnelOption) (sel
 		if key == "missing_packages" {
 			plan.missing = value
 		}
+		if key == "apt_install" {
+			plan.aptInstall = value
+		}
 	}
-	if !seen["selected_backends"] || !seen["packages"] || !seen["missing_packages"] || !seen["distribution"] || !seen["version"] {
+	if !seen["selected_backends"] || !seen["packages"] || !seen["missing_packages"] || !seen["apt_install"] || !seen["distribution"] || !seen["version"] {
 		return selectedPackagePreview{}, errors.New("canonical package inventory missing required fields")
 	}
 	// Strings must be the canonical installer literal package vocabulary.
@@ -116,89 +122,151 @@ func readSelectedPackagePreview(ctx context.Context, selected tunnelOption) (sel
 			return selectedPackagePreview{}, errors.New("unknown or unselected missing package")
 		}
 	}
+	// The APT resolver may add transitive packages. Treat its complete
+	// package=version set as opaque, bounded data; never form shell code.
+	identity := regexp.MustCompile("^[a-z0-9][a-z0-9.+:-]*=[0-9][a-zA-Z0-9:.+~_-]*$")
+	seenAPT := map[string]bool{}
+	for _, term := range strings.Fields(plan.aptInstall) {
+		if !identity.MatchString(term) || seenAPT[strings.SplitN(term, "=", 2)[0]] {
+			return selectedPackagePreview{}, errors.New("invalid APT resolver identity")
+		}
+		seenAPT[strings.SplitN(term, "=", 2)[0]] = true
+	}
+	if (plan.missing == "") != (plan.aptInstall == "") {
+		return selectedPackagePreview{}, errors.New("APT resolver omitted missing dependencies")
+	}
+	for _, term := range strings.Fields(plan.missing) {
+		if !seenAPT[term] {
+			return selectedPackagePreview{}, errors.New("APT resolver omitted selected package")
+		}
+	}
 	return plan, nil
 }
 
-// Creating any tunnel may require optional distro packages. Missing
-// strongSwan packages are administrator-managed because APT may trigger
-// foreign systemd service hooks; other selected packages remain automatic.
-// The preview is read-only for every selection; only an installed root terminal and a fresh
-// explicit confirmation delegate to the binary-embedded CANONICAL installer.
-// This never downloads/executes shell from a release tag or carries an APT
-// implementation into Go. Installer rechecks identity + missing set under lock.
-func menuPrepareSelectedPackages(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, selected tunnelOption) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+// One explicit PREPARE covers the selected package/dependency plan AND, for
+// IPsec, qualified private-service admission. Actual Link Create has its own
+// separate YES. Inspecting or cancelling always remains read-only.
+func menuPrepareSelectedPackages(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
+	selected tunnelOption, options *runtimeOptions) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	plan, err := readSelectedPackagePreview(ctx, selected)
 	cancel()
 	if err != nil {
 		menuSection(out, "Selected tunnel / package check")
 		menuField(out, "STATUS", "Unverified")
-		menuField(out, "REASON", "Cannot safely inspect canonical distro prerequisites")
-		menuField(out, "NEXT ACTION", "Check OS/package manager; no change made")
-		// The normal Engine remains responsible for final capability admission.
-		// No package mutation is ever attempted on an uncertain snapshot.
+		menuField(out, "NEXT ACTION", "Inspect supported OS and APT metadata; no changes attempted")
+		return selected.backend != domain.BackendIPsec
+	}
+
+	// Independent service admission is a live root ownership check, not a
+	// guarantee derived from installed packages or a generic capability hint.
+	needsService := false
+	if selected.backend == domain.BackendIPsec {
+		if options == nil {
+			options, _ = productionRuntimeOptions()
+		}
+		checkCtx, stop := context.WithTimeout(context.Background(), 12*time.Second)
+		_, admitted := activeIPsecBackend(checkCtx, options)
+		stop()
+		needsService = admitted != nil
+	}
+	if plan.missing == "" && !needsService {
 		return true
 	}
-	if plan.missing == "" {
-		return true
-	}
-	if selected.backend == domain.BackendIPsec && missingStrongSwanPackages(plan.missing) {
-		menuScreen(out, "IPsec / administrator-managed packages")
-		menuField(out, "STATUS", "Missing protected strongSwan dependencies")
-		menuField(out, "Missing packages", plan.missing)
-		menuField(out, "NEXT ACTION", "Inspect effective vendor systemd unit/drop-ins; install IPsec packages manually, then re-enter Create")
-		menuField(out, "Read-only verification", "stl doctor ipsec --json")
-		menuNotice(out, "WARNING", "APT package hooks may start a foreign strongSwan service. STL refuses automatic IPsec APT because foreign effective service ownership is not safely established.")
-		menuProse(out, "No APT or STL Link change was attempted here. Other selected backends retain normal on-demand Prepare. Installing packages alone does not provision the STL-exclusive IPsec service.")
-		return false
-	}
-	// Non-canonical, redirected and unprivileged sessions cannot consent to
-	// privileged package changes. Keep the chosen backend and defer final
-	// admission to the canonical Engine rather than eating scripted input.
 	if !menuCanUpdateNow(input, out) {
-		menuNotice(out, "WARNING", "Selected packages missing: "+plan.missing)
-		menuField(out, "NEXT ACTION", "Install prerequisites using the verified installer, or open sudo stl menu to Prepare")
-		return true
+		menuNotice(out, "WARNING", "Selected prerequisites need an installed root terminal for preparation.")
+		menuField(out, "Packages", plan.missing)
+		menuField(out, "NEXT ACTION", "Run sudo stl menu on the selected server")
+		if selected.backend == domain.BackendIPsec {
+			menuField(out, "Read-only check", "stl doctor ipsec --json")
+		}
+		return selected.backend != domain.BackendIPsec
 	}
-	menuScreen(out, "Selected tunnel / prepare missing packages")
+	menuScreen(out, "Selected tunnel / PREPARE")
 	menuField(out, "Type", fmt.Sprintf("%s / %s", selected.backend, selected.mode))
-	menuField(out, "STATUS", "Needs package preparation")
-	menuField(out, "Missing packages", plan.missing)
-	menuField(out, "REASON", "Selected distro dependencies are not installed")
-	menuField(out, "NEXT ACTION", "Review changes, type PREPARE, then continue Create")
-	menuProse(out, "Canonical installer installs missing selected packages only. APT repository metadata may be refreshed. Packages persist after cancellation/failure and are not part of binary rollback.")
+	if plan.missing != "" {
+		menuField(out, "Missing packages", plan.missing)
+		menuField(out, "APT install plan", plan.aptInstall)
+	}
+	if needsService {
+		menuField(out, "Private service", "Inspect ownership; publish and start STL-exclusive IPsec unit if qualified")
+		menuNotice(out, "WARNING", "Signed APT package hooks may briefly enable/start a NEW vendor strongSwan service. STL will stop/disable ONLY that proven transaction-created unit; it never changes a pre-existing service.")
+	}
+	menuField(out, "NEXT ACTION", "Review selected changes; type PREPARE to continue")
+	menuProse(out, "APT packages may persist after an interruption. No Link, keys, or peer connection will be created during preparation.")
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
-		menuNotice(out, "WARNING", "Could not establish fresh input; no packages changed.")
+		menuNotice(out, "WARNING", "Fresh consent unavailable; no preparation attempted.")
 		return false
 	}
-	fmt.Fprintf(out, "Type %s to install the listed missing packages (Enter cancels): ", menuPaint(out, menuYellow, "PREPARE"))
+	fmt.Fprintf(out, "Type %s to prepare selected prerequisites (Enter cancels): ", menuPaint(out, menuYellow, "PREPARE"))
 	confirmation, e := readMenuAnswer(reader)
 	if e != nil || confirmation != "PREPARE" {
-		menuNotice(out, "INFO", "Package preparation cancelled; no packages installed.")
+		menuNotice(out, "INFO", "Preparation cancelled before any changes.")
 		return false
 	}
-	verifyCtx, stop := context.WithTimeout(context.Background(), 8*time.Second)
-	refreshed, e := readSelectedPackagePreview(verifyCtx, selected)
-	stop()
-	if e != nil || refreshed.missing != plan.missing || refreshed.packages != plan.packages {
-		menuNotice(out, "WARNING", "Package inventory changed since consent; no packages installed.")
-		return false
+	if plan.missing != "" {
+		verifyCtx, stop := context.WithTimeout(context.Background(), 12*time.Second)
+		refreshed, e := readSelectedPackagePreview(verifyCtx, selected)
+		stop()
+		if e != nil || refreshed.missing != plan.missing ||
+			refreshed.packages != plan.packages || refreshed.aptInstall != plan.aptInstall {
+			menuNotice(out, "WARNING", "Package/dependency plan changed since consent; no packages installed.")
+			return false
+		}
+		prepCtx, done := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer done()
+		menuNotice(out, "INFO", "Canonical installer checking exact plan and host ownership")
+		if err := runEmbeddedInstaller(prepCtx, out, errOut, "prepare",
+			"--backends", selectedPackageBackends(selected), "--expected-missing", refreshed.missing,
+			"--expected-apt-plan", refreshed.aptInstall); err != nil {
+			menuNotice(out, "FAILED", "Package preparation incomplete or denied. APT/vendor changes may persist after an attempted transaction; inspect and reconcile before retry.")
+			return false
+		}
+		afterCtx, afterDone := context.WithTimeout(context.Background(), 12*time.Second)
+		after, e := readSelectedPackagePreview(afterCtx, selected)
+		afterDone()
+		if e != nil || after.missing != "" {
+			menuNotice(out, "FAILED", "Selected packages are not verified after APT; private service was not started.")
+			return false
+		}
 	}
-	prepCtx, done := context.WithTimeout(context.Background(), 15*time.Minute)
-	defer done()
-	menuNotice(out, "INFO", "Canonical installer verifying ownership/lock and preparing packages")
-	if err := runEmbeddedInstaller(prepCtx, out, errOut, "prepare", "--backends", selectedPackageBackends(selected), "--expected-missing", refreshed.missing); err != nil {
-		menuNotice(out, "FAILED", "Package operation incomplete. Inspect apt/dpkg and strongSwan service state before retrying. No STL Link created.")
-		return false
+	if needsService {
+		original := options
+		probeCtx, probeDone := context.WithTimeout(context.Background(), 12*time.Second)
+		err := ipsecbackend.NativeProvisionReadiness(probeCtx)
+		probeDone()
+		if err != nil {
+			menuNotice(out, "FAILED", "Private IPsec admission is not qualified. Vendor/foreign identity or incomplete sources must be reconciled; no Link created.")
+			return false
+		}
+		provisionCtx, done := context.WithTimeout(context.Background(), 75*time.Second)
+		err = ipsecbackend.ProvisionNativeExclusive(provisionCtx)
+		done()
+		if err != nil {
+			menuNotice(out, "FAILED", "STL-private service publication/start is incomplete or uncertain. Preserve protected artifacts for diagnosis; no Link created.")
+			return false
+		}
+		// Rebuild registration and require actual admitted runtime; provision
+		// success is not itself proof of a ready backend.
+		options, err = productionRuntimeOptions()
+		if err != nil {
+			menuNotice(out, "FAILED", "Cannot rebuild IPsec backend after service preparation.")
+			return false
+		}
+		verifyCtx, end := context.WithTimeout(context.Background(), 15*time.Second)
+		_, err = activeIPsecBackend(verifyCtx, options)
+		end()
+		if err != nil {
+			menuNotice(out, "FAILED", "Prepared private service has not passed runtime admission.")
+			return false
+		}
+		// The selected Create must receive the refreshed admitted backend,
+		// not the pre-APT runtime snapshot that lacked strongSwan packages.
+		if original != nil {
+			*original = *options
+		}
 	}
-	afterCtx, afterDone := context.WithTimeout(context.Background(), 8*time.Second)
-	defer afterDone()
-	after, err := readSelectedPackagePreview(afterCtx, selected)
-	if err != nil || after.missing != "" {
-		menuNotice(out, "WARNING", "Canonical package operation ended, but selected package readiness is unverified.")
-		return false
-	}
-	menuNotice(out, "OK", "Selected packages now pass; continuing with independent backend/runtime checks.")
+	menuNotice(out, "OK", "Selected prerequisites verified; continuing the same tunnel Create (Link confirmation is separate).")
 	return true
 }
 

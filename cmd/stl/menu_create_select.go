@@ -320,7 +320,7 @@ func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 				continue
 			}
 		}
-		if !menuPrepareSelectedPackages(input, reader, out, errOut, picked) {
+		if !menuPrepareSelectedPackages(input, reader, out, errOut, picked, options) {
 			report = menuCapabilitySnapshot(options)
 			menuAcknowledge(input, reader, out)
 			continue
