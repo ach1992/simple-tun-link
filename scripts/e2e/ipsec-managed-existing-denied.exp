@@ -22,6 +22,17 @@ expect {
   -re {Type PREPARE to prepare selected prerequisites} { send -- "PREPARE\r" }
   timeout { puts stderr "IPSEC_FOREIGN_STOP_NEGATIVE=PREPARE_TIMEOUT"; exit 23 }
 }
+# An adversarial already-installed package fixture must first pass local
+# dpkg --verify and then fail specifically at the signed archive boundary.
+# Merely rejecting it due to corrupted dpkg metadata would be false proof.
+if {$env(STL_IPSEC_PREPARE_CASE) eq "existing_vendor_local_metadata_forgery"} {
+  expect {
+    -re {official[[:space:]]+provenance} {
+      puts "IPSEC_FORGED_INSTALLED_DPKG_REJECTED_BY_SIGNED_ARCHIVE=PASS"
+    }
+    timeout { puts stderr "IPSEC_FORGED_DPKG=NO_SIGNED_ARCHIVE_REJECTION"; exit 33 }
+  }
+}
 expect {
   -re {Service action \(Enter cancels\):} {
     # One case becomes unsafe AFTER preview, but BEFORE the final STOP

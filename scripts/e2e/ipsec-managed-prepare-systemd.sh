@@ -47,6 +47,14 @@ if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor* ]]; then
   fi
   case "${STL_IPSEC_PREPARE_CASE}" in
     existing_vendor) ;;
+    existing_vendor_optional_clean)
+      # An entirely official optional plugin package must remain eligible
+      # for the SAME separate vendor STOP after full archive attestation.
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libcharon-extauth-plugins >/tmp/stl-existing-optional-apt.log 2>&1 ||
+        fail cannot_install_clean_optional_vendor_fixture
+      [[ $(dpkg-query -W '-f=${Status}' libcharon-extauth-plugins) == 'install ok installed' ]] ||
+        fail official_optional_vendor_not_fully_configured
+      ;;
     existing_vendor_foreign_config)
       mkdir -p /etc/swanctl/conf.d
       printf 'foreign connection; must not be adopted\n' >/etc/swanctl/conf.d/foreign.conf
@@ -113,21 +121,39 @@ if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor* ]]; then
       [[ -n $metadata ]] || fail plugin_metadata_for_forgery_not_found
       printf '\n' >> "$plugin"
       spoofed_digest=$(md5sum "$plugin" | awk '{print $1}')
+      # dpkg .md5sums requires TWO spaces between each checksum and
+      # relative filename; awk's default print would make an invalid
+      # metadata file, accidentally passing a negative E2E for the wrong
+      # reason. Generate correct md5sum syntax for EVERY line.
       awk -v wanted="${plugin#/}" -v digest="$spoofed_digest" '
         $2 == wanted { $1 = digest; found = 1 }
-        { print }
+        NF == 2 { printf "%s  %s\n", $1, $2; next }
+        { exit 3 }
         END { if (!found) exit 2 }
-      ' "$metadata" > "$metadata.fixture"
+      ' "$metadata" > "$metadata.fixture" ||
+        fail cannot_construct_well_formed_dpkg_forgery_fixture
       chmod 0644 "$metadata.fixture"
       mv -f -- "$metadata.fixture" "$metadata"
-      [[ -z $(dpkg --verify libstrongswan-standard-plugins) ]] ||
+      LC_ALL=C dpkg --verify libstrongswan-standard-plugins \
+        >/tmp/stl-forged-dpkg-verify-stdout \
+        2>/tmp/stl-forged-dpkg-verify-stderr ||
+        fail forged_dpkg_metadata_failed_its_own_integrity_check
+      [[ ! -s /tmp/stl-forged-dpkg-verify-stderr ]] ||
+        fail forged_dpkg_metadata_emitted_diagnostics
+      # Missing documentation may be normal in lean distro guests; no
+      # operational file or configuration mismatch is permissible.
+      if grep -Ev '^missing[[:space:]]+/usr/share/(doc|man)/' \
+          /tmp/stl-forged-dpkg-verify-stdout |
+          grep -q .; then
         fail forged_dpkg_metadata_did_not_mask_local_tampering
-      echo 'IPSEC_INSTALLED_LOCAL_DPKG_METADATA_FORGED=OBSERVED'
+      fi
+      echo 'IPSEC_INSTALLED_LOCAL_DPKG_METADATA_VALID_BUT_FORGED=PASS'
       ;;
     existing_vendor_late_config) ;;
     *) fail unrecognized_existing_vendor_case ;;
   esac
-  if [[ "${STL_IPSEC_PREPARE_CASE}" == existing_vendor ]]; then
+  if [[ "${STL_IPSEC_PREPARE_CASE}" == existing_vendor ||
+        "${STL_IPSEC_PREPARE_CASE}" == existing_vendor_optional_clean ]]; then
     /usr/bin/expect /mnt/managed-existing.exp || fail operator_vendor_consent_failed
     [[ $(systemctl --system is-active strongswan.service) == inactive &&
        $(systemctl --system is-enabled strongswan.service) == disabled ]] ||
