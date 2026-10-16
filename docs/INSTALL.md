@@ -4,14 +4,15 @@
 [README](../README.md)**. This page is the advanced installer/maintenance
 runbook, not a required first stop for a new operator.
 
-Current public pre-release: [v0.1.0-rc.6](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.6)
-(**not Stable**). rc.6 adds honest backend readiness, selected on-demand
-prerequisites, and a safer Update/Uninstall workflow. rc.5 previously
-improved connectivity summaries, capability hints, and one-step
-protected handoff copying. rc.4 already fixed Ubuntu
-22.04/systemd 249 missing-unit compatibility.
-The guided Create/Manage UI and protected receiver offers started in rc.3.
-The rc.2 IPsec, MTU and State v3 rollback boundary still applies.
+Current public [Stable release v0.1.0](https://github.com/ach1992/simple-tun-link/releases/latest).
+Its integrated selected IPsec preparation and refined one-consent terminal
+UX are the reviewed #105/#106 changes beyond the historical immutable
+[v0.1.0-rc.6 prerelease](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.6).
+Prior milestones remain intact: rc.6 on-demand prerequisites and Update,
+rc.5 protected handoff/quality, rc.4 systemd 249 compatibility, rc.3
+guided Create/Manage, rc.2 IPsec/MTU/State v3. Real WAN/NAT/provider
+firewall and physical-host reboot acceptance remain open in
+[Issue #93](https://github.com/ach1992/simple-tun-link/issues/93).
 Check the published release, SHA256SUMS and exact installed commit
 before trusting the update. Earlier rc.2 release evidence and its
 limits are in [Issue #12](https://github.com/ach1992/simple-tun-link/issues/12).
@@ -164,7 +165,7 @@ noninteractive creator command still requires an explicit --output.
   OS package management first. Already installed IPsec dependencies still
   need separate STL-private service publication and runtime admission.
 
-**Merged Issue #105 source (unreleased; not in rc.6):** `main` now
+**Stable v0.1.0 / Issue #105 (not included in historical rc.6):** STL now
 contains an interactive clean-host IPsec preparation path. In an installed root
 terminal, choose **Create tunnel → Advanced types → IPsec ESP/NAT-T**.
 STL shows missing packages and the resolved **complete APT dependency/version
@@ -193,11 +194,10 @@ package/service effects or protected partial files may remain. The menu
 reports the failed stage and will not create an IPsec Link or blindly adopt
 an unknown service. APT failure emits read-only dpkg/package and vendor
 active/enabled/alias classifications and blocks blind retry. Use **stl doctor ipsec --json** for a read-only snapshot
-and reconcile the specific observed conflict before retrying. Ordinary
-rc.6 binaries will still require administrator-managed strongSwan packages.
-This source has passed independent #105 review and is integrated into
-`main`, but still requires separate release authorization. It is **not**
-an instruction to install it on operational hosts.
+and reconcile the specific observed conflict before retrying. Historical rc.6 binaries still require administrator-managed strongSwan
+packages. Stable v0.1.0 includes the reviewed selected package/service
+preparation but does not authorize mutation on operational hosts without
+the operator's own backups and explicit consent.
 
 - Only missing packages are requested; the installer never upgrades the entire
   host or edits repositories. Host APT package installation is not covered by
@@ -277,43 +277,54 @@ the above independent source verification**:
 bash -c 'set -euo pipefail; umask 077; t=$(mktemp); trap '\''rm -f -- "$t"'\'' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 -o "$t" https://raw.githubusercontent.com/ach1992/simple-tun-link/vX.Y.Z/scripts/install.sh; bash -n "$t"; sudo bash "$t" install --version vX.Y.Z'
 ~~~
 
-### Operator-first one-line install (v0.1.0-rc.6)
+### Permanent one-line install (latest Stable only)
 
-First inspect the exact rc.6 installer source and independently verify
-its release provenance. Immutable publication protects against later asset/tag
-replacement but does not itself make code safe. After independent
-source/manifest review, the tag-pinned convenience form is:
+The version-free `releases/latest/download/stl-bootstrap.sh` URL selects
+the newest published **Stable**, excluding RC and draft releases. GitHub
+serves a tag-bound immutable bootstrap asset generated from the reviewed
+quick installer source. That bootstrap pins its own exact release tag
+before downloading the canonical installer; it does not execute a mutable
+`main` script as root. Inspect source, SHA256SUMS and official release
+identity before installing. The public command stays unchanged:
 
 ~~~sh
-bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.6/scripts/quick-install.sh | bash -s -- v0.1.0-rc.6'
+bash -c 'set -e; umask 077; d=$(mktemp -d); trap '"'"'rm -rf -- "$d"'"'"' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 --connect-timeout 10 --max-time 120 -o "$d/stl-bootstrap.sh" https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh; test -s "$d/stl-bootstrap.sh"; bash -n "$d/stl-bootstrap.sh"; bash "$d/stl-bootstrap.sh"'
 ~~~
 
-This script is unprivileged initially and downloads the canonical
-installer pinned to the same explicit GitHub release tag. It checks
-syntax/availability before invoking root; the canonical installer
-checks the release SHA256SUMS and manifest before binary installation.
-When run through a pipe on a real TTY, it opens the new menu on
-/dev/tty after installing. Without a TTY, run sudo stl menu.
-The default backend prerequisite set is native,wireguard; optionally
-append native to install only GRE/IPIP prerequisites. For an **existing
-installer-owned STL**, use the explicit update form rather than the
-install command:
+The **first hop is downloaded to a private temporary directory**. Only
+after curl completes successfully and the file is nonempty and passes
+Bash syntax validation can it execute. Failed or partial transfers
+never execute the downloaded script; the private directory is removed
+on exit. The verified bootstrap then downloads the canonical exact-tag
+installer and checks its syntax before
+invoking root; the installer validates release SHA256SUMS, binary metadata
+and ownership/rollback rules. It reattaches a real /dev/tty to open the
+menu after installation. Without a TTY, use `sudo stl menu`.
+Default prerequisites are native and WireGuard. To update an existing
+installer-owned STL, **do not run install again**: use this equally fixed
+update command:
 
 ~~~sh
-bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.6/scripts/quick-install.sh | bash -s -- v0.1.0-rc.6 update'
+bash -c 'set -e; umask 077; d=$(mktemp -d); trap '"'"'rm -rf -- "$d"'"'"' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 --connect-timeout 10 --max-time 120 -o "$d/stl-bootstrap.sh" https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh; test -s "$d/stl-bootstrap.sh"; bash -n "$d/stl-bootstrap.sh"; bash "$d/stl-bootstrap.sh" update'
 ~~~
 
 This selects the unchanged canonical installer update transaction,
 including identity-verified existing ownership and rollback journals.
-For a narrower prerequisite selection, append native update after
-the tag. The command refuses foreign or inconsistent installed
-state rather than silently replacing it. Confirm rollback-compatible
+The two permanent commands use the default native,wireguard prerequisites.
+An advanced operator who separately obtains and verifies the immutable
+bootstrap asset may invoke it as `bash ./stl-bootstrap.sh native update`
+for a narrower backend selection. **Do not append a version or extra
+arguments to the public one-liners.** The installer refuses foreign or
+inconsistent installed state rather than silently replacing it.
+Confirm rollback-compatible
 State and backups before starting.
 
-This rc.6 command cannot be used with an rc.2 URL/tag, since rc.2
-does not contain quick-install.sh. Verify a real release exists before
-running. It does not adopt or install strongSwan/IPsec automatically;
-do not modify existing VPN services to circumvent the admission gate.
+These Stable commands contain no changing version string or variable.
+The selected release still carries its exact-version manifest. No RC is
+selected by `releases/latest`. On a supported, positively qualified clean
+host, **interactive** IPsec PREPARE may install signed distribution packages
+and provision only the verified STL-exclusive service; it will not adopt
+foreign VPN resources. The bootstrap itself does not provision IPsec.
 Offline bootstrap failure/PTY tests: bash scripts/test-quick-install.sh.
 
 The longer direct canonical-installer example above installs only the native GRE/IPIP
@@ -356,9 +367,13 @@ No public tag/release is being created by these instructions.
 ## Update
 
 The historical **rc.5** `stl menu` Update is read-only guidance.
-The **rc.6** menu Update fetches official release metadata and may
-call the same canonical installer only when GitHub positively reports `immutable:true`, with fresh root/real-TTY/`UPDATE`
-confirmation and a same-line forward RC. `immutable:false` or unknown is
+The **rc.6 and Stable v0.1.0** menu Update fetches official metadata
+and may delegate to the canonical installer only when GitHub positively
+reports `immutable:true` and a forward **RC-to-RC** transition on the
+same line, after root/TTY and fresh `UPDATE` checks. **RC-to-Stable**
+must use the permanent **manual update one-liner above** with a protected
+State/credential backup and independently checked release; selecting
+Stable in the menu does not silently run it. `immutable:false` or unknown is
 manual verification guidance only; there is no privileged remote-script
 execution for that selection. Enabling release immutability in GitHub
 Settings -> Releases affects only releases published afterward.
