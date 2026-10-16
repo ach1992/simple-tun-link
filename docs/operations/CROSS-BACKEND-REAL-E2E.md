@@ -25,7 +25,7 @@ docker build -f scripts/e2e/cross-backend.Dockerfile \
   --build-arg BASE_IMAGE=ubuntu:24.04 -t stl-cross-backend:ubuntu24 .
 docker build -f scripts/e2e/cross-backend.Dockerfile \
   --build-arg BASE_IMAGE=debian:13 -t stl-cross-backend:debian13 .
-sudo env STL_E2E_DISPOSABLE_HOST=approved \
+sudo env PATH="$PATH" STL_E2E_DISPOSABLE_HOST=approved \
   STL_E2E_IMAGE_UBUNTU=stl-cross-backend:ubuntu24 \
   STL_E2E_IMAGE_DEBIAN=stl-cross-backend:debian13 \
   bash scripts/e2e/cross-backend-docker.sh

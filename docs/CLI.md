@@ -325,12 +325,21 @@ error, never a fabricated empty successful batch. The report
 may omit unverified counters rather than reporting false zeros.
 
 Throughput is an **optional deliberate traffic-generating test**,
-not a cap on tunnel throughput. The remote operator separately
-starts a listener bound to its **peer Link Address**, for example:
+not a cap on tunnel throughput. The remote operator must first
+start a listener bound to the **remote server's own Link Address**.
+
+On the **remote peer**, replace the example private address with
+that server's actual Link Address:
 
 ~~~sh
-iperf3 --server --bind <peer-link-address> --port 5201
-stl link throughput <link-id> --confirm <link-id> --seconds 3 --json
+iperf3 --server --bind 10.80.20.1 --port 5201
+~~~
+
+On the **local client**, substitute the saved Link ID obtained from
+`stl link list` (the same ID is required twice):
+
+~~~sh
+sudo stl link throughput YOUR_LINK_ID --confirm YOUR_LINK_ID --seconds 3 --json
 ~~~
 
 The current short-test operation permits 1–10 seconds and sends one

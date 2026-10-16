@@ -39,7 +39,9 @@ For a **compatible Linux AMD64** build bundle:
 ~~~sh
 cd /path/to/new-bundle
 sha256sum --check SHA256SUMS
-./stl_dev-<commit-prefix>_linux_amd64 version --json
+version=$(sed -n 's/^version=//p' BUILD-MANIFEST.txt)
+test -n "$version"
+"./stl_${version}_linux_amd64" version --json
 ~~~
 
 Cross-compilation does not prove native arm64 execution, kernel

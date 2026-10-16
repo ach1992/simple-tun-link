@@ -399,7 +399,7 @@ framework, global polling services or a central database absent
 a concrete accepted need. The lasting product principles and
 non-goals belong in [PROJECT-SPEC.md](PROJECT-SPEC.md).
 
-## 16. Runtime portability and operator observability
+## 15. Runtime portability and operator observability
 
 ### Conditional native-exclusive IPsec
 
