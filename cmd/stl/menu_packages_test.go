@@ -38,7 +38,10 @@ func TestSelectedPackagePlanIsTypedAndReadOnly(t *testing.T) {
 		if got := selectedPackageBackends(tc.sel); got != tc.want {
 			t.Fatalf("%s: %s", tc.want, got)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		// Production allows 12 seconds for the read-only APT preview.
+		// Official distro archive signature checks and candidate-index
+		// attestation can take longer than 3s on cold CI runners.
+		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 		plan, err := readSelectedPackagePreview(ctx, tc.sel)
 		cancel()
 		if err != nil {

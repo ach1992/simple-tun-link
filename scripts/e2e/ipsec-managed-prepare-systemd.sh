@@ -30,6 +30,8 @@ Architecture: amd64
 Maintainer: Disposable test <test@localhost>
 Description: Disposable counterfeit candidate; never install
 EOF
+  chmod 0755 /tmp/stl-test-fake-package /tmp/stl-test-fake-package/DEBIAN
+  chmod 0644 /tmp/stl-test-fake-package/DEBIAN/control
   dpkg-deb --build /tmp/stl-test-fake-package "$repo/pool/charon-systemd_999.1_amd64.deb" >/dev/null
   (cd "$repo" && dpkg-scanpackages pool /dev/null >dists/noble/main/binary-amd64/Packages)
   apt-ftparchive \
