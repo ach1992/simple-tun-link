@@ -162,7 +162,7 @@ package_installed() {
 # source lists, add keys or relax APT's own signature/hash verification.
 apt_verify_distro_candidates() {
   local anchor keyring_package index_targets row description filename component architecture
-  local target release suffix pkg_version pkg version policy_line selected=0
+  local target identifier release suffix pkg_version pkg version policy_line selected=0
   local source candidate=0 matches policy
   local -A indices=() release_verified=()
   if [[ $os_id == ubuntu ]]; then
@@ -183,7 +183,7 @@ apt_verify_distro_candidates() {
   # per-version source line; never accept a matching label alone.
   index_targets=$(LC_ALL=C apt-get indextargets) ||
     fail 'APT index-to-release inventory could not be inspected'
-  description= filename= component= architecture= target=
+  description= filename= component= architecture= target= identifier=
   while IFS= read -r row || [[ -n $row ]]; do
     if [[ -n $row ]]; then
       case "$row" in
@@ -192,10 +192,11 @@ apt_verify_distro_candidates() {
         'Component: '*) component=${row#Component: } ;;
         'Architecture: '*) architecture=${row#Architecture: } ;;
         'Target-Of: '*) target=${row#Target-Of: } ;;
+        'Identifier: '*) identifier=${row#Identifier: } ;;
       esac
       continue
     fi
-    if [[ $target == deb && -n $description && -n $filename &&
+    if [[ $target == deb && $identifier == Packages && -n $description && -n $filename &&
           -n $component && -n $architecture ]]; then
       suffix="_${component}_binary-${architecture}_Packages"
       [[ $filename == /var/lib/apt/lists/* && $filename == *"$suffix" ]] ||
@@ -210,7 +211,7 @@ apt_verify_distro_candidates() {
         indices["$description"]=$release
       fi
     fi
-    description= filename= component= architecture= target=
+    description= filename= component= architecture= target= identifier=
   done <<< "$index_targets"$'\n'
   [[ ${#indices[@]} -gt 0 ]] || fail 'no APT package index mapping available'
   for pkg_version in "${planned[@]}"; do
