@@ -178,7 +178,10 @@ and dependency version must map to an index whose InRelease verifies with
 the official Debian/Ubuntu archive keyring. Third-party repositories are
 rejected even when APT trusts their key or their Origin claims Debian/Ubuntu.
 Preflight also rejects alias, prefix and generic systemd service drop-ins,
-including the strongswan-swanctl alias, before vendor hooks can execute. After successful APT, it
+including the strongswan-swanctl alias and attached/transient load paths,
+before vendor hooks can execute. STL checks the actual system manager
+UnitPath against a bounded supported list; unknown/custom paths stop
+preparation rather than pretending that the host is clean. After successful APT, it
 stops/disables only the newly installed vendor unit that it can positively
 attribute to the approved transaction, verifies that it is inactive and
 disabled, then reuses the existing private-service admission and returns to

@@ -404,8 +404,13 @@ partial effects and provide a safe operator-facing recovery route.
 Each selected APT candidate must map to an index whose InRelease verifies
 against the official distro archive keyring, regardless of other APT trusted
 keys or self-declared Origin. Fail before APT for systemd alias, prefix or
-type-wide drop-ins: a later DropInPaths check cannot undo a vendor hook.
+type-wide drop-ins in all supported system-unit load paths (including
+attached and transient paths): a later DropInPaths check cannot undo a vendor
+hook. Attest the live system manager's UnitPath against the bounded supported
+set; unknown/custom paths fail closed rather than proving a clean host.
 On APT failure report read-only dpkg/vendor classification and block retry.
+An absent alias may be reported only after the same complete UnitPath check;
+if it cannot be inspected, report its status as unknown, not absent.
 The Issue #105 development candidate implements the consent-gated
 APT and private-service path; release eligibility still depends on
 isolated systemd test evidence and separate author-independent review.

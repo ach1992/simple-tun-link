@@ -342,6 +342,52 @@ apt_sources_must_be_authenticated() {
   done
 }
 
+# Reconcile the real system manager's effective UnitPath against a bounded
+# distro-supported system-unit path set. Use the SAME inventory before distro
+# package hooks, after APT and in read-only interruption diagnosis. An unknown
+# manager path (including a SYSTEMD_UNIT_PATH override) is NOT a clean host.
+# /lib is retained as the distro usr-merge compatibility spelling.
+ipsec_system_unit_paths() {
+  local report path allowed matched=0 has_etc=0 has_vendor=0
+  local -a effective_paths=()
+  local -A seen=()
+  ipsec_system_unit_dirs=(
+    /etc/systemd/system.control /run/systemd/system.control
+    /run/systemd/transient /run/systemd/generator.early
+    /etc/systemd/system /etc/systemd/system.attached
+    /run/systemd/system /run/systemd/system.attached
+    /run/systemd/generator /usr/local/lib/systemd/system
+    /lib/systemd/system /usr/lib/systemd/system
+    /run/systemd/generator.late
+  )
+  report=$(systemctl --system --no-pager show -p UnitPath 2>/dev/null) || return 1
+  [[ $report == UnitPath=* && $report != *$'\n'* ]] || return 1
+  report=${report#UnitPath=}
+  [[ -n $report ]] || return 1
+  read -r -a effective_paths <<< "$report"
+  [[ ${#effective_paths[@]} -gt 0 ]] || return 1
+  for path in "${effective_paths[@]}"; do
+    [[ $path == /* ]] || return 1
+    matched=0
+    for allowed in "${ipsec_system_unit_dirs[@]}"; do
+      if [[ $path == "$allowed" ]]; then matched=1; break; fi
+    done
+    [[ $matched == 1 && -z ${seen[$path]+present} ]] || return 1
+    seen["$path"]=1
+    [[ $path != /etc/systemd/system ]] || has_etc=1
+    case "$path" in
+      /lib/systemd/system|/usr/lib/systemd/system) has_vendor=1 ;;
+    esac
+  done
+  [[ $has_etc == 1 && $has_vendor == 1 ]] || return 1
+  # An unexpected unreadable/non-directory unit path cannot prove absence.
+  for path in "${ipsec_system_unit_dirs[@]}"; do
+    [[ -e $path || -L $path ]] || continue
+    [[ -d $path && -r $path && -x $path ]] || return 1
+  done
+  return 0
+}
+
 # systemd merges drop-ins from a unit's real name, aliases, type-wide
 # service.d/, and dash-prefix names. A post-APT DropInPaths check is too late
 # if maintainer hooks briefly start a vendor service. Reject every applicable
@@ -349,12 +395,9 @@ apt_sources_must_be_authenticated() {
 # package may not have created yet (strongswan-swanctl.service).
 ipsec_reject_applicable_dropins() {
   local dir name
-  for dir in /etc/systemd/system /run/systemd/system \
-             /etc/systemd/system.control /run/systemd/system.control \
-             /lib/systemd/system \
-             /usr/lib/systemd/system /usr/local/lib/systemd/system \
-             /run/systemd/generator /run/systemd/generator.early \
-             /run/systemd/generator.late; do
+  ipsec_system_unit_paths ||
+    fail 'systemd effective unit search paths unverified or unsupported; no APT attempted'
+  for dir in "${ipsec_system_unit_dirs[@]}"; do
     for name in service.d strongswan.service.d strongswan-swanctl.service.d \
                 strongswan-starter.service.d strongswan-.service.d \
                 charon-systemd.service.d charon-.service.d ipsec.service.d \
@@ -396,20 +439,15 @@ ipsec_clean_host_before_apt() {
   for unit in strongswan.service strongswan-swanctl.service \
               strongswan-starter.service charon-systemd.service \
               ipsec.service simple-tun-link-ipsec.service; do
-    for dir in /etc/systemd/system /run/systemd/system \
-             /etc/systemd/system.control /run/systemd/system.control \
-             /lib/systemd/system \
-               /usr/lib/systemd/system /usr/local/lib/systemd/system \
-               /run/systemd/generator /run/systemd/generator.early \
-               /run/systemd/generator.late; do
-      [[ ! -e $dir/$unit && ! -L $dir/$unit &&
-         ! -e $dir/$unit.d && ! -L $dir/$unit.d ]] ||
+    for dir in "${ipsec_system_unit_dirs[@]}"; do
+      [[ ! -e "$dir/$unit" && ! -L "$dir/$unit" &&
+         ! -e "$dir/$unit.d" && ! -L "$dir/$unit.d" ]] ||
         fail 'an existing vendor/STL systemd unit or override is present'
-    done
-    for dir in /etc/systemd/system/*.wants /etc/systemd/system/*.requires \
-               /run/systemd/system/*.wants /run/systemd/system/*.requires; do
-      [[ ! -e $dir/$unit && ! -L $dir/$unit ]] ||
-        fail 'a pre-existing vendor/STL service boot edge is present'
+      # Boot edges may be placed in any manager-searchable unit directory.
+      for edge in "$dir"/*.wants "$dir"/*.requires; do
+        [[ ! -e "$edge/$unit" && ! -L "$edge/$unit" ]] ||
+          fail 'a pre-existing vendor/STL service boot edge is present'
+      done
     done
   done
   list=$(systemctl --system --no-pager --no-legend --plain --all \
@@ -468,12 +506,7 @@ ipsec_normalize_new_vendor() {
   # the already attested distro-owned fragment; a regular/foreign unit is not.
   ipsec_reject_applicable_dropins
   local dir alias meta_alias alias_fragment
-  for dir in /etc/systemd/system /run/systemd/system \
-             /etc/systemd/system.control /run/systemd/system.control \
-             /lib/systemd/system \
-             /usr/lib/systemd/system /usr/local/lib/systemd/system \
-             /run/systemd/generator /run/systemd/generator.early \
-             /run/systemd/generator.late; do
+  for dir in "${ipsec_system_unit_dirs[@]}"; do
     alias="$dir/strongswan-swanctl.service"
     if [[ -e $alias || -L $alias ]]; then
       [[ -L $alias && $(readlink -f -- "$alias") == "$(readlink -f -- "$fragment")" ]] ||
@@ -544,10 +577,22 @@ ipsec_report_interrupted_apt() {
   vendor_active=$(systemctl --system --no-pager is-active strongswan.service 2>/dev/null) || :
   vendor_enabled=$(systemctl --system --no-pager is-enabled strongswan.service 2>/dev/null) || :
   fragment=$(systemctl --system --no-pager show strongswan.service -p FragmentPath 2>/dev/null) || fragment=
-  alias_state=absent
-  if [[ -e /etc/systemd/system/strongswan-swanctl.service ||
-        -L /etc/systemd/system/strongswan-swanctl.service ]]; then
-    alias_state=present_unverified
+  # A single /etc location cannot establish alias absence. The manager
+  # might resolve the alias from an attached, transient or generated unit.
+  # Failure to attest the complete load-path inventory means UNKNOWN.
+  alias_state=unknown
+  if ipsec_system_unit_paths; then
+    alias_state=absent
+    local dir
+    for dir in "${ipsec_system_unit_dirs[@]}"; do
+      if [[ -e "$dir/strongswan-swanctl.service" ||
+            -L "$dir/strongswan-swanctl.service" ||
+            -e "$dir/strongswan-swanctl.service.d" ||
+            -L "$dir/strongswan-swanctl.service.d" ]]; then
+        alias_state=present_unverified
+        break
+      fi
+    done
   fi
   printf 'STL_IPSEC_APT_RECOVERY dpkg_audit=%s planned_installed=%s planned_partial=%s planned_absent=%s planned_unknown=%s\n' \
     "$audit_result" "$installed" "$partial" "$absent" "$unknown" >&2

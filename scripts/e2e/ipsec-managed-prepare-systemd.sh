@@ -94,21 +94,38 @@ case "${STL_IPSEC_PREPARE_CASE:-}" in
     echo "IPSEC_FOREIGN_PREEXISTING_DROPIN_DENIED_BEFORE_APT=PASS"
     exit 0
     ;;
-  foreign_alias|foreign_prefix)
-    dir=/etc/systemd/system/strongswan-swanctl.service.d
-    if [[ ${STL_IPSEC_PREPARE_CASE} == foreign_prefix ]]; then
-      dir=/etc/systemd/system/strongswan-.service.d
+  foreign_alias|foreign_prefix|foreign_attached|foreign_transient)
+    case "$STL_IPSEC_PREPARE_CASE" in
+      foreign_alias) dir=/etc/systemd/system/strongswan-swanctl.service.d ;;
+      foreign_prefix) dir=/etc/systemd/system/strongswan-.service.d ;;
+      foreign_attached) dir=/etc/systemd/system.attached/strongswan-swanctl.service.d ;;
+      foreign_transient) dir=/run/systemd/transient/strongswan-swanctl.service.d ;;
+    esac
+    # Confirm new negative fixture paths are in this guest manager's UnitPath.
+    if [[ $STL_IPSEC_PREPARE_CASE == foreign_attached ||
+          $STL_IPSEC_PREPARE_CASE == foreign_transient ]]; then
+      unitpaths=$(systemctl --system --no-pager show -p UnitPath) || fail missing_unitpath
+      parent=${dir%/strongswan-swanctl.service.d}
+      [[ " ${unitpaths#UnitPath=} " == *" $parent "* ]] ||
+        fail fixture_unit_path_not_in_system_manager
     fi
     mkdir -p "$dir"
     printf '[Service]\nExecStartPre=/usr/bin/touch /tmp/foreign-alias-executed\n' \
       > "$dir/foreign.conf"
+    foreign_checksum=$(sha256sum "$dir/foreign.conf" | awk '{print $1}')
     if bash /mnt/stl-install.sh prepare --backends native,ipsec \
        --expected-missing "$missing" --expected-apt-plan "$apt_plan"; then
       fail foreign_alias_override_accepted
     fi
-    [[ ! -e /tmp/foreign-alias-executed && ! -e /usr/sbin/charon-systemd ]] ||
-      fail foreign_alias_hook_or_package_touched
-    echo "IPSEC_PREEXISTING_ALIAS_OR_PREFIX_DROPIN_DENIED_BEFORE_APT=PASS"
+    [[ ! -e /tmp/foreign-alias-executed && ! -e /usr/sbin/charon-systemd &&
+       ! -e /var/lib/simple-tun-link/ipsec ]] ||
+      fail foreign_alias_hook_package_or_service_touched
+    [[ $(sha256sum "$dir/foreign.conf" | awk '{print $1}') == "$foreign_checksum" ]] ||
+      fail foreign_override_content_was_modified
+    [[ $(sha256sum /usr/local/bin/stl | awk '{print $1}') == "$original" &&
+       $(sha256sum /usr/local/lib/simple-tun-link/install-record | awk '{print $1}') == "$record" ]] ||
+      fail foreign_override_replaced_stl_installation
+    echo "IPSEC_FOREIGN_UNITPATH_DROPIN_DENIED_BEFORE_APT=$STL_IPSEC_PREPARE_CASE:PASS"
     exit 0
     ;;
   clean|partial) ;;
@@ -137,7 +154,7 @@ fi
 # must not normalize an unverified transaction or start a private service.
 if [[ ${STL_IPSEC_PREPARE_CASE:-} == partial ]]; then
   cat > /etc/apt/apt.conf.d/99-stl-test-interruption <<'EOF'
-DPkg::Post-Invoke { "if systemctl --system is-active --quiet strongswan.service; then exit 17; fi"; };
+DPkg::Post-Invoke { "if systemctl --system is-active --quiet strongswan.service; then mkdir -p /run/systemd/system.attached; if [ -L /etc/systemd/system/strongswan-swanctl.service ]; then mv /etc/systemd/system/strongswan-swanctl.service /run/systemd/system.attached/strongswan-swanctl.service; else ln -s /usr/lib/systemd/system/strongswan.service /run/systemd/system.attached/strongswan-swanctl.service; fi; exit 17; fi"; };
 EOF
   if bash /mnt/stl-install.sh prepare --backends native,ipsec \
     --expected-missing "$missing" --expected-apt-plan "$apt_plan" \
@@ -152,6 +169,14 @@ EOF
     fail no_readonly_dpkg_recovery_classification
   grep -q '^STL_IPSEC_APT_RECOVERY vendor_active=active ' /tmp/stl-partial-err ||
     fail no_readonly_vendor_recovery_classification
+  # Deliberately require an attached-path-only alias, so the previous
+  # /etc-only recovery classifier would incorrectly report "absent".
+  [[ -L /run/systemd/system.attached/strongswan-swanctl.service &&
+     ! -e /etc/systemd/system/strongswan-swanctl.service &&
+     ! -L /etc/systemd/system/strongswan-swanctl.service ]] ||
+    fail partial_alias_attached_only_fixture_not_created
+  grep -q '^STL_IPSEC_APT_RECOVERY vendor_active=active .* alias=present_unverified$' /tmp/stl-partial-err ||
+    fail partial_alias_in_attached_path_falsely_absent
   grep -q 'result=RECONCILIATION_REQUIRED retry=BLOCKED private_service=NOT_STARTED link=NOT_CREATED' \
     /tmp/stl-partial-err || fail partial_state_not_truthfully_reported
   [[ ! -e /var/lib/simple-tun-link/ipsec ]] || fail partial_attempt_created_private_service
