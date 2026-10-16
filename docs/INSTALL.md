@@ -209,8 +209,15 @@ and disablement persisting across reboot. Before displaying STOP, STL
 also requires complete dpkg package state, no partial/foreign STL-private
 publication, verified vendor and alias identities, unchanged package-owned
 default configuration, and exclusive attribution of the running vendor's
-process and IKE UDP 500/4500 sockets. The **entire** eligibility check is
-repeated under the exclusive maintenance lock immediately before stopping.
+process and IKE UDP 500/4500 sockets. The official-service proof also
+checks installed optional `libcharon-extauth-plugins` configuration owners
+and compares live vendor files with package contents authenticated through
+a distribution-signed APT `InRelease` / `Packages` chain and archive
+SHA256, rather than trusting local dpkg checksums alone. It may fetch
+public official packages read-only. If signer, package identity, index,
+file bytes or network access cannot be proved, automatic STOP is refused;
+manual reconciliation remains available. The **entire** eligibility check
+is repeated under the exclusive maintenance lock immediately before stopping.
 Any incompatible observation means no automatic STOP/DISABLE. Alternatively,
 repair manually and type RECHECK. Unknown/custom services, partial APT,
 foreign configuration and uncertain identity remain blocked; no generic

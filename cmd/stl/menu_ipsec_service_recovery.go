@@ -52,8 +52,9 @@ func menuResolveIPsecServiceConflictWithOps(input io.Reader, reader *bufio.Reade
 	menuCopyLine(out, "Read-only IPsec report", "sudo stl doctor ipsec --json")
 	menuCopyLine(out, "List loaded IPsec services", "sudo systemctl --system --no-pager --plain --all --type=service list-units 'strongswan*.service' 'charon*.service' 'ipsec.service' 'simple-tun-link-ipsec.service'")
 	menuCopyLine(out, "List service files", "sudo systemctl --system --no-pager list-unit-files 'strongswan*.service' 'charon*.service' 'ipsec.service' 'simple-tun-link-ipsec.service'")
+	menuNotice(out, "INFO", "Checking exact service and distro package identity; signed public package downloads may be required. No service is changed by this inspection.")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	plan, err := ops.inspect(ctx)
 	cancel()
 	supported := err == nil && allPackagesReady && plan.Unit == "strongswan.service" &&
@@ -104,7 +105,7 @@ func menuResolveIPsecServiceConflictWithOps(input io.Reader, reader *bufio.Reade
 	}
 	// The call is not made on queued input: preview and dangerous STOP
 	// acceptance are separate from the earlier package PREPARE token.
-	actCtx, done := context.WithTimeout(context.Background(), 55*time.Second)
+	actCtx, done := context.WithTimeout(context.Background(), 120*time.Second)
 	err = ops.stop(actCtx, plan)
 	done()
 	if err != nil {

@@ -39,7 +39,7 @@ func vendorSafeFake(block string, observed *[]string) vendorStopSafetyOps {
 }
 
 func TestVendorStopCompleteReadOnlyEligibility(t *testing.T) {
-	all := []string{"manager", "packages", "private", "aliases", "configs", "owners"}
+	all := []string{"manager", "private", "aliases", "configs", "owners", "packages"}
 	for _, blocked := range append([]string{""}, all...) {
 		t.Run("blocked_"+blocked, func(t *testing.T) {
 			var calls []string
@@ -52,7 +52,7 @@ func TestVendorStopCompleteReadOnlyEligibility(t *testing.T) {
 				t.Fatalf("complete host attestation missing: %v", calls)
 			}
 			if blocked != "" && (!slices.Contains(calls, blocked) ||
-				slices.Contains(calls, "owners") && blocked != "owners") {
+				slices.Contains(calls, "packages") && blocked != "packages") {
 				t.Fatalf("unsafe dependent checks after a failure: blocked=%s calls=%v", blocked, calls)
 			}
 		})
@@ -72,7 +72,7 @@ func TestVendorStopCompleteReadOnlyEligibility(t *testing.T) {
 
 func TestVendorStopReattestsCompleteHostAfterConsentUnderLock(t *testing.T) {
 	approved := VendorServiceStopPlan{Unit: vendorServiceName, Active: "active", Enabled: "enabled"}
-	independentChecks := []string{"manager", "packages", "private", "aliases", "configs", "owners"}
+	independentChecks := []string{"manager", "private", "aliases", "configs", "owners", "packages"}
 	for _, failure := range append([]string{""}, append(independentChecks, "state_drift", "failed_stop", "failed_disable", "failed_post")...) {
 		t.Run("change_"+failure, func(t *testing.T) {
 			var observations, transitions []string

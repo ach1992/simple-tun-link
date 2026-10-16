@@ -1,7 +1,7 @@
 #!/usr/bin/expect -f
 # Disposable systemd guest only. A genuine vendor VPN must survive every
 # foreign/ambiguous host conflict, even when an operator pastes STOP.
-set timeout 80
+set timeout 200
 log_user 1
 set env(NO_COLOR) 1
 set env(STL_NO_CLEAR) 1

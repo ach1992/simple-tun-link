@@ -69,6 +69,54 @@ if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor* ]]; then
       [[ $(cat /proc/$foreign_pid/comm) == charon ]] ||
         fail foreign_daemon_fixture_not_running
       ;;
+    existing_vendor_optional_modified)
+      # Optional official plug-in configuration must be attested just as
+      # strictly as required package configs before any real vendor STOP.
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libcharon-extauth-plugins >/tmp/stl-existing-optional-apt.log 2>&1 ||
+        fail cannot_install_optional_vendor_fixture
+      conf=/etc/strongswan.d/charon/eap-mschapv2.conf
+      [[ -f $conf ]] || fail optional_distro_conf_not_present
+      printf '\n# Disposable modified optional plugin configuration\n' >> "$conf"
+      ;;
+    existing_vendor_optional_partial)
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libcharon-extauth-plugins >/tmp/stl-existing-optional-apt.log 2>&1 ||
+        fail cannot_install_optional_vendor_fixture
+      (cd /tmp && apt-get download libcharon-extauth-plugins >/dev/null 2>&1) ||
+        fail cannot_obtain_optional_vendor_fixture
+      dpkg --unpack /tmp/libcharon-extauth-plugins_*.deb >/dev/null 2>&1 ||
+        fail cannot_construct_partial_optional_package
+      [[ -n $(dpkg --audit) ]] || fail optional_package_not_actually_partial
+      ;;
+    existing_vendor_local_metadata_forgery)
+      # Forge a *previously installed* package, not a future APT candidate:
+      # keep dpkg's own md5 metadata internally consistent with a changed
+      # package-owned runtime plugin. A signed official .deb must still win
+      # the byte comparison and forbid stopping the live vendor daemon.
+      plugin=$(dpkg -L libstrongswan-standard-plugins |
+        awk '/\/plugins\/.*\.so$/ && !found {print; found=1}')
+      [[ -f $plugin ]] || fail no_distro_plugin_for_forgery_fixture
+      metadata=''
+      for candidate in /var/lib/dpkg/info/libstrongswan-standard-plugins*.md5sums; do
+        [[ -f $candidate ]] || continue
+        if grep -qF "  ${plugin#/}" "$candidate"; then
+          metadata=$candidate
+          break
+        fi
+      done
+      [[ -n $metadata ]] || fail plugin_metadata_for_forgery_not_found
+      printf '\n' >> "$plugin"
+      spoofed_digest=$(md5sum "$plugin" | awk '{print $1}')
+      awk -v wanted="${plugin#/}" -v digest="$spoofed_digest" '
+        $2 == wanted { $1 = digest; found = 1 }
+        { print }
+        END { if (!found) exit 2 }
+      ' "$metadata" > "$metadata.fixture"
+      chmod 0644 "$metadata.fixture"
+      mv -f -- "$metadata.fixture" "$metadata"
+      [[ -z $(dpkg --verify libstrongswan-standard-plugins) ]] ||
+        fail forged_dpkg_metadata_did_not_mask_local_tampering
+      echo 'IPSEC_INSTALLED_LOCAL_DPKG_METADATA_FORGED=OBSERVED'
+      ;;
     existing_vendor_late_config) ;;
     *) fail unrecognized_existing_vendor_case ;;
   esac

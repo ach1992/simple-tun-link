@@ -51,9 +51,6 @@ func vendorStopHostSafe(ctx context.Context, state, fragment string, ops vendorS
 	if err := ops.manager(ctx); err != nil {
 		return fmt.Errorf("systemd PID1 conflict: %w", err)
 	}
-	if err := ops.packages(ctx); err != nil {
-		return fmt.Errorf("selected package state: %w", err)
-	}
 	if err := ops.private(ctx); err != nil {
 		return fmt.Errorf("private IPsec conflict: %w", err)
 	}
@@ -65,6 +62,10 @@ func vendorStopHostSafe(ctx context.Context, state, fragment string, ops vendorS
 	}
 	if err := ops.owners(ctx, state); err != nil {
 		return fmt.Errorf("IKE process/port conflict: %w", err)
+	}
+	// Authenticate distro package content only after cheap host checks pass.
+	if err := ops.packages(ctx); err != nil {
+		return fmt.Errorf("selected package state: %w", err)
 	}
 	return nil
 }
@@ -102,7 +103,91 @@ func vendorStopPackagesReady(ctx context.Context) error {
 			return fmt.Errorf("distro package %s runtime file-integrity or configuration check failed", pkg)
 		}
 	}
-	return nil
+	// dpkg verification metadata alone can come from a locally repacked .deb.
+	// Prove every live vendor file against independently signed distro archives.
+	versions := make(map[string]string)
+	for _, pkg := range []string{"charon-systemd", "strongswan-swanctl",
+		"libstrongswan-standard-plugins", "strongswan-libcharon", "libstrongswan"} {
+		version, err := vendorInstalledVersion(ctx, pkg)
+		if err != nil {
+			return fmt.Errorf("vendor package %s version not attested: %w", pkg, err)
+		}
+		versions[pkg] = version
+	}
+	// Optional package owns eap-mschapv2/xauth configuration on Ubuntu and
+	// Debian. If present, it requires all the same proofs. Residual partial
+	// status must never qualify for a consented service transition.
+	optional := "libcharon-extauth-plugins"
+	installed, err := vendorOptionalPackageInstalled(ctx, optional)
+	if err != nil {
+		return err
+	}
+	if installed {
+		version, err := vendorInstalledVersion(ctx, optional)
+		if err != nil {
+			return err
+		}
+		out, err := vendorReadOnlyCommand(ctx, "/usr/bin/dpkg", "--verify", optional)
+		if err != nil || !vendorOnlyOmittedDistroDocs(out, func(path string) bool { _, e := os.Lstat(path); return errors.Is(e, os.ErrNotExist) }) {
+			return errors.New("optional StrongSwan package integrity not attested")
+		}
+		versions[optional] = version
+	}
+	return vendorAttestDistroPackages(ctx, versions)
+}
+
+// An absent optional package is not a partial installation. Only the exact
+// dpkg-query "no packages found" response is accepted as absence. Other
+// failures (timeouts, diagnostics, malformed status, held/unpacked packages)
+// MUST NOT be treated as proof that optional config is harmless.
+func vendorOptionalPackageInstalled(ctx context.Context, pkg string) (bool, error) {
+	if ctx == nil || ctx.Err() != nil || pkg != "libcharon-extauth-plugins" {
+		return false, errors.New("invalid optional vendor package inspection")
+	}
+	cmd := exec.CommandContext(ctx, "/usr/bin/dpkg-query", "-W",
+		"-f="+"$"+"{Status}", "--", pkg)
+	cmd.Env = nativeSystemdFixedEnvironment()
+	out, diag := &privateCapture{max: 256}, &privateCapture{max: 256}
+	cmd.Stdout, cmd.Stderr = out, diag
+	err := cmd.Run()
+	exitCode := 0
+	if err != nil {
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) {
+			return false, errors.New("optional package observation failed")
+		}
+		exitCode = exit.ExitCode()
+	}
+	if out.overflow || diag.overflow {
+		return false, errors.New("optional package observation unbounded")
+	}
+	return vendorOptionalPackageStatusReceipt(pkg, exitCode, out.output.Bytes(), diag.output.Bytes())
+}
+
+func vendorOptionalPackageStatusReceipt(pkg string, code int, stdout, stderr []byte) (bool, error) {
+	if pkg != "libcharon-extauth-plugins" {
+		return false, errors.New("optional vendor package identity not allowed")
+	}
+	if code == 0 && len(stderr) == 0 && string(stdout) == "install ok installed" {
+		return true, nil
+	}
+	if code == 1 && len(stdout) == 0 &&
+		string(stderr) == "dpkg-query: no packages found matching "+pkg+"\n" {
+		return false, nil
+	}
+	return false, errors.New("optional vendor package state is ambiguous or partial")
+}
+
+func vendorInstalledVersion(ctx context.Context, pkg string) (string, error) {
+	out, err := vendorReadOnlyCommand(ctx, "/usr/bin/dpkg-query", "-W", "-f="+"$"+"{Status}\\t$"+"{Version}\\t$"+"{Architecture}", "--", pkg)
+	if err != nil {
+		return "", err
+	}
+	fields := strings.Split(string(out), "\t")
+	if len(fields) != 3 || fields[0] != "install ok installed" || (fields[2] != runtime.GOARCH && fields[2] != "all") || len(fields[1]) == 0 || len(fields[1]) > 120 || strings.ContainsAny(fields[1], " \t\n/\\") {
+		return "", errors.New("installed vendor package version or architecture unverified")
+	}
+	return fields[1], nil
 }
 
 // dpkg --verify may report optional manuals and package documents missing

@@ -2,7 +2,7 @@
 # Runs only inside a disposable systemd container after independently
 # installing and enabling a genuine distro-owned strongswan.service.
 # Fresh PTY approval for the exact vendor unit is NOT the PREPARE token.
-set timeout 90
+set timeout 200
 log_user 1
 set env(NO_COLOR) 1
 set env(STL_NO_CLEAR) 1
