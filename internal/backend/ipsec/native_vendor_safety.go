@@ -89,13 +89,53 @@ func vendorStopPackagesReady(ctx context.Context) error {
 	for _, pkg := range []string{"charon-systemd", "strongswan-swanctl",
 		"libstrongswan-standard-plugins", "libstrongswan"} {
 		out, err := vendorReadOnlyCommand(ctx, "/usr/bin/dpkg", "--verify", pkg)
-		if err != nil || len(out) != 0 {
-			// Package identity is public, but never surface dpkg's raw
-			// output or configuration bytes in owner-visible diagnostics.
-			return fmt.Errorf("distro package %s file-integrity check failed or was unverified", pkg)
+		if err != nil || !vendorOnlyOmittedDistroDocs(out, func(path string) bool {
+			_, statErr := os.Lstat(path)
+			return errors.Is(statErr, os.ErrNotExist)
+		}) {
+			// Minimal Debian/Ubuntu images may exclude optional manpages
+			// and package documentation. Only confirmed missing NON-runtime
+			// files are tolerated; changed/missing executables, libraries
+			// and configurations are always disqualifying.
+			return fmt.Errorf("distro package %s runtime file-integrity or configuration check failed", pkg)
 		}
 	}
 	return nil
+}
+
+// dpkg --verify may report optional manuals and package documents missing
+// from lean Debian/Ubuntu images. Operational configuration, binaries, and
+// libraries must NEVER be exempted. Accept only exact "missing" rows for
+// still-absent documentation. The callback is exclusively a test seam.
+func vendorOnlyOmittedDistroDocs(raw []byte, absent func(string) bool) bool {
+	if absent == nil || len(raw) > 4096 {
+		return false
+	}
+	if len(raw) == 0 {
+		return true
+	}
+	if raw[len(raw)-1] != '\n' {
+		return false
+	}
+	for _, b := range raw {
+		if b != '\n' && (b < 0x20 || b > 0x7e) {
+			return false
+		}
+	}
+	for _, row := range strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n") {
+		const missing = "missing     "
+		if !strings.HasPrefix(row, missing) {
+			return false
+		}
+		path := strings.TrimPrefix(row, missing)
+		if !(strings.HasPrefix(path, "/usr/share/doc/") ||
+			strings.HasPrefix(path, "/usr/share/man/")) ||
+			filepath.Clean(path) != path || strings.ContainsAny(path, " \t") ||
+			!absent(path) {
+			return false
+		}
+	}
+	return true
 }
 
 func vendorReadOnlyCommand(ctx context.Context, binary string, args ...string) ([]byte, error) {
