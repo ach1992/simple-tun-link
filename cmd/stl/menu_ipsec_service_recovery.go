@@ -68,6 +68,12 @@ func menuResolveIPsecServiceConflictWithOps(input io.Reader, reader *bufio.Reade
 			menuField(out, "Package state", "Incomplete or recently changed: manual package/service reconciliation required before existing-service control")
 		} else {
 			menuField(out, "Service ownership", "Not an eligible verified distro unit; no automatic service changes are permitted")
+			if err != nil {
+				// All lower-level inspector errors are redacted, fixed
+				// descriptions of missing proofs, never raw systemctl,
+				// process environment, configuration or credential bytes.
+				menuField(out, "Reason", safeMenuText(err.Error()))
+			}
 		}
 		menuProse(out, "Inspect any active or enabled service and its dependencies. If it is your VPN, plan the maintenance window, back up its configuration, stop/disable it manually with an explicit administrator decision, and resolve all remaining config/package/unit conflicts. Then type RECHECK.")
 	}

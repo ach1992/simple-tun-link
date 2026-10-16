@@ -31,6 +31,14 @@ expect {
   -re {Verified distro service stopped and disabled after separate operator consent} {
     puts "IPSEC_REAL_EXISTING_VENDOR_SEPARATELY_CONSENTED_STOP=PASS"
   }
+  -re {No eligible exact-unit STOP/DISABLE consent was provided} {
+    puts stderr "IPSEC_EXISTING_MENU=VERIFIED_VENDOR_NOT_OFFERED"
+    exit 25
+  }
+  -re {Service transition was refused or incomplete} {
+    puts stderr "IPSEC_EXISTING_MENU=CONSENTED_VENDOR_STOP_DENIED"
+    exit 25
+  }
   timeout { puts stderr "IPSEC_EXISTING_MENU=VENDOR_STOP_NOT_ATTESTED"; exit 25 }
 }
 expect {
