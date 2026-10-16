@@ -58,13 +58,30 @@ func nativeMissingVendorUnitFiles(root, name string) bool {
 	if !nativeKnownVendorUnit(name) {
 		return false
 	}
-	for _, dir := range []string{
-		"etc/systemd/system", "run/systemd/system",
-		"usr/lib/systemd/system", "lib/systemd/system",
-		"run/systemd/generator", "run/systemd/generator.early", "run/systemd/generator.late",
-	} {
-		if _, err := os.Lstat(filepath.Join(root, dir, name)); !errors.Is(err, os.ErrNotExist) {
-			return false // includes dangling symlinks, inaccessible parents and foreign files
+	// Inspect every systemd UnitPath already approved for the vendor STOP
+	// safety boundary, including attached/transient/unit-control paths.
+	// A search-path shadow, stale boot edge or dormant prefix drop-in is
+	// not independent proof that the unit is absent.
+	for _, dir := range vendorUnitSearchPaths {
+		base := filepath.Join(root, strings.TrimPrefix(dir, "/"))
+		if _, err := os.Lstat(filepath.Join(base, name)); !errors.Is(err, os.ErrNotExist) {
+			return false // includes dangling symlinks and foreign files
+		}
+		for _, suffix := range []string{"*.wants", "*.requires"} {
+			edges, err := filepath.Glob(filepath.Join(base, suffix))
+			if err != nil || len(edges) > 128 {
+				return false
+			}
+			for _, edge := range edges {
+				if _, err := os.Lstat(filepath.Join(edge, name)); !errors.Is(err, os.ErrNotExist) {
+					return false
+				}
+			}
+		}
+		for _, dropin := range []string{name + ".d", "service.d"} {
+			if _, err := os.Lstat(filepath.Join(base, dropin)); !errors.Is(err, os.ErrNotExist) {
+				return false
+			}
 		}
 	}
 	if name == "ipsec.service" || name == "strongswan.service" || name == "strongswan-starter.service" {
@@ -91,6 +108,11 @@ func nativeVendorUnitVerifiedMissing(ctx context.Context, name string) bool {
 	cmd.Stdout, cmd.Stderr = out, diag
 	if err := cmd.Run(); err != nil || bound.Err() != nil || out.overflow || diag.overflow ||
 		diag.output.Len() != 0 || !nativeMissingVendorUnitProperties(out.output.Bytes()) {
+		return false
+	}
+	// The manager may search alternate attached or transient directories.
+	// Accept absence only if the effective UnitPath set itself is verified.
+	if err := vendorStopUnitPaths(ctx); err != nil {
 		return false
 	}
 	return nativeMissingVendorUnitFiles("/", name)

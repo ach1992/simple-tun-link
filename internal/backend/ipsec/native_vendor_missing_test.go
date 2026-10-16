@@ -48,12 +48,8 @@ func TestNativeMissingVendorDiskIdentityRejectsAnyOverride(t *testing.T) {
 			if !nativeMissingVendorUnitFiles(root, unit) {
 				t.Fatal("isolated empty filesystem did not prove absence")
 			}
-			for _, parent := range []string{
-				"etc/systemd/system", "run/systemd/system",
-				"usr/lib/systemd/system", "lib/systemd/system",
-				"run/systemd/generator", "run/systemd/generator.early", "run/systemd/generator.late",
-			} {
-				path := filepath.Join(root, parent, unit)
+			for _, parent := range vendorUnitSearchPaths {
+				path := filepath.Join(root, strings.TrimPrefix(parent, "/"), unit)
 				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 					t.Fatal(err)
 				}
@@ -64,6 +60,26 @@ func TestNativeMissingVendorDiskIdentityRejectsAnyOverride(t *testing.T) {
 					t.Fatalf("dangling or foreign unit path accepted: %s", parent)
 				}
 				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, test := range []struct{ path string }{
+				{filepath.Join(root, "run/systemd/system.attached", unit)},
+				{filepath.Join(root, "etc/systemd/system", "multi-user.target.wants", unit)},
+				{filepath.Join(root, "run/systemd/system", "stl.target.requires", unit)},
+				{filepath.Join(root, "etc/systemd/system", unit+".d")},
+				{filepath.Join(root, "etc/systemd/system", "service.d")},
+			} {
+				if err := os.MkdirAll(filepath.Dir(test.path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink("/missing/foreign.service", test.path); err != nil {
+					t.Fatal(err)
+				}
+				if nativeMissingVendorUnitFiles(root, unit) {
+					t.Fatalf("foreign search path, boot edge, or drop-in accepted: %s", test.path)
+				}
+				if err := os.Remove(test.path); err != nil {
 					t.Fatal(err)
 				}
 			}
