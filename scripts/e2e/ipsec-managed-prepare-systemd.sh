@@ -50,6 +50,8 @@ if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor* ]]; then
         >/run/systemd/system.attached/strongswan-swanctl.service.d/foreign.conf
       ;;
     existing_vendor_private_conflict)
+      # Existing partial STL-private inventory must not be adopted.
+      mkdir -p /var/lib/simple-tun-link
       mkdir -m 0700 /var/lib/simple-tun-link/ipsec
       ;;
     existing_vendor_untrusted_config_owner)
@@ -71,36 +73,6 @@ if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor* ]]; then
     *) fail unrecognized_existing_vendor_case ;;
   esac
   if [[ "${STL_IPSEC_PREPARE_CASE}" == existing_vendor ]]; then
-    # Read-only CI reference: distinguish an absent optional distro package
-    # from a harmless packaging baseline difference. No file/config contents
-    # or private secrets are emitted into the workflow log.
-    for pkg in charon-systemd strongswan-swanctl libstrongswan-standard-plugins libstrongswan; do
-      verification=$(dpkg --verify "$pkg" 2>&1) && verify_rc=0 || verify_rc=$?
-      printf 'IPSEC_VENDOR_CLEAN_REFERENCE_VERIFY package=%s exit=%d output_bytes=%d\n' \
-        "$pkg" "$verify_rc" "${#verification}"
-      # This guest contains only freshly installed official test packages,
-      # not operator secrets. dpkg --verify lists *file paths and flags*,
-      # never file contents; print the bounded reference inventory so that
-      # the supported normal distro state can be distinguished from drift.
-      if [[ -n $verification ]]; then
-        while IFS= read -r row; do
-          printf 'IPSEC_VENDOR_DISTRO_VERIFY_ENTRY package=%s entry=%q\n' \
-            "$pkg" "$row"
-        done <<< "${verification:0:2048}"
-      fi
-    done
-    # Only the pristine, short-lived distro guest can reach this diagnostic.
-    # Package ownership/path names do not expose configuration file bytes.
-    # One positive baseline first makes future exact-head E2E failures fast.
-    for tree in /etc/strongswan.conf /etc/strongswan.d /etc/swanctl; do
-      [[ -e "$tree" ]] || continue
-      while IFS= read -r -d '' source_file; do
-        evidence=$(dpkg-query -S -- "$source_file" 2>&1) ||
-          evidence='UNOWNED'
-        printf 'IPSEC_DISTRIBUTION_CONFIG_OWNER path=%q output=%q\n' \
-          "$source_file" "$evidence"
-      done < <(find "$tree" -type f -print0)
-    done
     /usr/bin/expect /mnt/managed-existing.exp || fail operator_vendor_consent_failed
     [[ $(systemctl --system is-active strongswan.service) == inactive &&
        $(systemctl --system is-enabled strongswan.service) == disabled ]] ||
@@ -109,20 +81,30 @@ if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor* ]]; then
       fail new_stl_private_service_not_started
     /usr/local/bin/stl doctor ipsec --json | grep -q '"activation_allowed":true' ||
       fail new_stl_private_service_not_admitted
+    echo 'IPSEC_REAL_PRIOR_DISTRIBUTION_SERVICE_EXACT_OPERATOR_CONSENT=PASS'
   else
     /usr/bin/expect /mnt/managed-existing-denied.exp || fail forbidden_vendor_stop_not_denied
     [[ $(systemctl --system is-active strongswan.service) == active &&
        $(systemctl --system is-enabled strongswan.service) == enabled ]] ||
       fail existing_vendor_was_changed_despite_foreign_conflict
-    [[ ! -e /var/lib/simple-tun-link/ipsec &&
-       ! -e /etc/systemd/system/simple-tun-link-ipsec.service ]] ||
-      fail private_service_published_despite_foreign_conflict
+    if [[ "${STL_IPSEC_PREPARE_CASE}" == existing_vendor_private_conflict ]]; then
+      # Deliberately pre-existing empty directory must persist without a
+      # private-service publication or adoption.
+      [[ -d /var/lib/simple-tun-link/ipsec &&
+         -z $(find /var/lib/simple-tun-link/ipsec -mindepth 1 -maxdepth 1 -print -quit) ]] ||
+        fail private_conflict_was_adopted_or_modified
+    else
+      [[ ! -e /var/lib/simple-tun-link/ipsec ]] ||
+        fail private_service_published_despite_foreign_conflict
+    fi
+    [[ ! -e /etc/systemd/system/simple-tun-link-ipsec.service ]] ||
+      fail private_service_unit_published_despite_foreign_conflict
     echo "IPSEC_PRE_STOP_MIXED_HOST_CONFLICT_REJECTED=${STL_IPSEC_PREPARE_CASE}:PASS"
   fi
   [[ $(sha256sum /usr/local/bin/stl | awk '{print $1}') == "$original" &&
      $(sha256sum /usr/local/lib/simple-tun-link/install-record | awk '{print $1}') == "$record" ]] ||
     fail existing_vendor_workflow_modified_STL_installation
-  echo "IPSEC_REAL_PRIOR_DISTRIBUTION_SERVICE_EXACT_OPERATOR_CONSENT=PASS"
+  echo "IPSEC_EXISTING_VENDOR_SCENARIO_COMPLETED=PASS"
   exit 0
 fi
 
