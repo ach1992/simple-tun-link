@@ -73,6 +73,16 @@ if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor* ]]; then
       verification=$(dpkg --verify "$pkg" 2>&1) && verify_rc=0 || verify_rc=$?
       printf 'IPSEC_VENDOR_CLEAN_REFERENCE_VERIFY package=%s exit=%d output_bytes=%d\n' \
         "$pkg" "$verify_rc" "${#verification}"
+      # This guest contains only freshly installed official test packages,
+      # not operator secrets. dpkg --verify lists *file paths and flags*,
+      # never file contents; print the bounded reference inventory so that
+      # the supported normal distro state can be distinguished from drift.
+      if [[ -n $verification ]]; then
+        while IFS= read -r row; do
+          printf 'IPSEC_VENDOR_DISTRO_VERIFY_ENTRY package=%s entry=%q\n' \
+            "$pkg" "$row"
+        done <<< "${verification:0:2048}"
+      fi
     done
     /usr/bin/expect /mnt/managed-existing.exp || fail operator_vendor_consent_failed
     [[ $(systemctl --system is-active strongswan.service) == inactive &&
