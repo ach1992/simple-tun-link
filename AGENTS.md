@@ -19,16 +19,19 @@ Hard boundaries:
 - No swallowed correctness errors or unconditional success messages.
 - Operations must become idempotent and rollback owned partial state.
 - Multi-Link is first-class: support 0..N Links per host, including multiple independent Links to the same peer pair when the backend/kernel can distinguish them.
+- Do not invent product-imposed Link-count, bandwidth, transport, or external-consumer quotas; reject only real unsupported capability, conflicting resource identity, unsafe ownership, or unapproved host effects.
 - Never assume one Link per host, peer, or backend; allocate collision-safe per-Link resources and keep create/update/repair/remove isolated from other Links.
 - Interactive UI must not own engine logic. Follow
-  `docs/PROJECT-SPEC.md` section 15 and `docs/ARCHITECTURE.md`
-  section 13 for short, semantic, width-aware human screens;
+  `docs/CLI.md` interactive-operation contract and
+  `docs/ARCHITECTURE.md` section 13 for semantic, width-aware screens;
   retain NO_COLOR/nonTTY and machine/JSON compatibility.
 - Preparation should be a selected-backend, one-consent guided
   workflow using the existing canonical installer, kernel
-  adapters and exclusive IPsec provisioner (Issues #105/#106).
-  Do not duplicate service managers or substitute a generic
-  warning for verified resource-ownership boundaries.
+  adapters and exclusive IPsec provisioner. Follow the exact service
+  eligibility and separate STOP consent boundaries in
+  `docs/SECURITY.md` and `docs/decisions/ADR-0005-scoped-vici-ipsec.md`.
+  Do not duplicate service managers or substitute generic warnings
+  for verified resource-ownership boundaries.
 - Preserve standalone use plus generic reuse by arbitrary external software without designing STL around any specific future product.
 - Never make interactive text an automation API; machine-readable outputs are versioned and secret-safe, and desired-state automation is idempotent.
 - v0.1 secret-bearing pairing defaults to Quick Link: payloads are SENSITIVE, may carry receiver credentials, must never leak into ordinary logs/status/diagnostics, and must remain schema-extensible for a future secure/local-key exchange mode.

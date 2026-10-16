@@ -39,6 +39,17 @@ Do not introduce:
 - ORM/database layers in v0.1;
 - a generic plugin framework for built-in backends.
 
+Source-code reuse is separate from learning from other projects.
+Check the source's actual license and provenance before incorporating
+code or derived files into MIT-licensed STL. Public visibility is not
+a license grant; copyleft material needs an explicit compatibility
+decision rather than accidental copying. In particular, an early
+design reference, `AminMGMT/BackPack`, was identified as AGPLv3:
+**do not copy its implementation into STL's MIT-distributed code**
+without a separate reviewed licensing decision. Historical source
+audits and exact dates are recoverable from Git history, not a
+standing dependency on that project.
+
 ## External commands
 
 Command execution must:
@@ -79,225 +90,103 @@ Optional cleanup/diagnostic failures may be warnings only when the requested ope
 
 ## Testing
 
-Testing is evidence, not ceremony. Add or run a test only when its failure could reveal a real behavioral, compatibility, security, concurrency, rollback, or contract defect. Do not add tests for obvious language/compiler behavior, trivial getters/constants, documentation-only edits, or implementation details already exercised by a stronger behavioral test.
+Tests are evidence, not ceremony. Add and execute checks when they can
+catch a real behavior, security, state, compatibility, concurrency or
+rollback problem. During implementation prefer focused deterministic
+checks, then the required broad/exact-candidate gates when stable.
+Do not repeatedly run expensive whole-system suites as a proxy for
+understanding changed code. Do not add duplicate tests for trivial
+language behavior or unchanged surfaces.
 
-During implementation:
-- run the narrowest relevant package/test after a meaningful behavioral slice when early feedback is useful;
-- do not rerun the full suite after every edit;
-- do not use race, fuzz, repeated/shuffled loops, cross-compilation, or privileged E2E by default—use them only when the changed surface creates that specific risk or a prior failure justifies them;
-- when a regression is fixed, keep one focused deterministic regression where practical instead of permanently repeating large stress loops;
-- preserve still-valid evidence after unrelated edits.
+For a stable Go candidate run the repository-required acceptance
+commands (plus the exact-candidate GitHub CI):
 
-For a stable Go candidate, run the repository-required acceptance gate once: formatting, `go vet ./...`, `go test ./...`, and exact-candidate CI. Re-run broader evidence only when a later change invalidates it.
-
-### Unit tests
-Prioritize behavior with meaningful failure modes:
-- parsing/validation and malformed input;
-- address/resource allocation and collision rules;
-- setup-link encode/decode/versioning and secret redaction;
-- plan/idempotency/rollback logic;
-- public CLI/JSON/error contracts where compatibility matters.
-
-Avoid duplicate tests that prove the same branch through multiple layers unless the layer boundary itself is the risk.
-
-The Issue #12 release-level cross-backend Docker runner requires a
-strongSwan-capable disposable image for each supported userspace. It
-exercises six *simultaneously persisted* Links on the same two guest
-namespaces and state roots: GRE Native/FOU/GUE, authenticated WireGuard,
-native IKEv2/XFRM ESP, and a separately keyed IKEv2/XFRM NAT-T Link.
-The original five-Link ESP-only evidence remains valid. The native
-six-Link ESP/NAT-T coexistence gate passed the
-[2026-10-12 exact-source AMD64/ARM64 privileged matrix](https://github.com/ach1992/simple-tun-link/actions/runs/38280434443).
-On an expressly authorized disposable Docker test machine, from a clean
-committed checkout, build the task-only images and then run:
-
-~~~bash
-docker build -f scripts/e2e/cross-backend.Dockerfile \
-  --build-arg BASE_IMAGE=ubuntu:24.04 -t stl-cross-five:ubuntu24 .
-docker build -f scripts/e2e/cross-backend.Dockerfile \
-  --build-arg BASE_IMAGE=debian:trixie -t stl-cross-five:debian13 .
-sudo env PATH="$PATH" STL_E2E_DISPOSABLE_HOST=approved \
-  STL_E2E_IMAGE_UBUNTU=stl-cross-five:ubuntu24 \
-  STL_E2E_IMAGE_DEBIAN=stl-cross-five:debian13 \
-  bash scripts/e2e/cross-backend-docker.sh
+~~~sh
+test -z "$(gofmt -l .)"
+go vet ./...
+go test ./...
 ~~~
 
-The runner is **not** safe to run on a production or control-plane server.
-The image builds use the distribution's package repositories and may
-install packages inside the *images only*. The runtime guests remain
-network-disconnected with fresh, isolated namespaces. The dedicated
-PR workflow now runs this source on both real x86_64 and ARM64 GitHub-hosted
-VMs, with exact-native Go/guest architecture assertions; runner-local
-`fou` and `ipip` module activation fails closed on unsupported kernels. Six-Link acceptance
-requires *both* actual ESP and ESP-in-UDP XFRM SAs, distinct protected
-credentials, pre-negotiation plaintext rejection, actual bidirectional
-inner traffic, exact shared-state inventory, scoped ESP removal with NAT-T
-still operational, and eventual credential/SA retirement. Unavailable
-kernel/daemon support is a failure for this required test, not a PASS
-or silent SKIP. See
-`docs/operations/CROSS-BACKEND-REAL-E2E.md` for exact evidence rules
-and remaining full-guest reboot, separately booted distro-kernel and
-physical NAT-router limitations. Native ARM64 runtime is already proved
-by the dedicated ARM64 job, not by cross-compilation.
+- Unit/fake-runner tests: validators, addressing/collision, versioned
+  pairing and JSON contracts, secret redaction, Engine idempotency and
+  exact-owned rollback/error classifications.
+- Privileged Linux tests: real Link Address packets for selected
+  GRE/IPIP/WireGuard/IPsec backends, resource/credential ownership,
+  mixed/same-peer and distinct-peer Links, kernel MTU and diagnostic
+  observations. Unsupported capabilities are failures or explicit
+  unsupported results, never silent PASS.
+- Full-guest persistence tests: installed binary, trusted systemd,
+  **the same committed Link after real guest reboot** and observed
+  bilateral packets, with a separately tested crash/recovery path
+  when the release change warrants it.
+- Release qualification: verified exact-tag downloads and installed
+  identities are a separate gate from green source/CI. Physical
+  two-server WAN/NAT acceptance is an Owner-controlled test,
+  not inferred from isolated namespace/VM acceptance.
 
-### Linux integration and E2E tests
-Use disposable environments only for behavior that unit/fake tests cannot establish, especially real kernel/backend effects:
-- create/reapply/remove and actual data transfer;
-- rollback after real partial failure;
-- MTU/PMTU behavior and backend counters;
-- collision/isolation across simultaneous Links;
-- same-peer coexistence, including GRE Native + WireGuard + GRE/FOU;
-- persistence/restart behavior in a disposable systemd-capable environment;
-- backend-specific capability and mismatch behavior.
+**Privileged host/network operations require separate authorization
+and a dedicated disposable VM/guest**. The `STL_E2E_DISPOSABLE_HOST`
+opt-in flag is not authorization by itself. Never execute privileged
+E2E on a production, shared or AI Server Agent control-plane host.
+Docker guests can share their host kernel and trigger module loads;
+if this would affect an unauthorized host, use an isolated VM.
 
-Do not duplicate the full cross-backend matrix in each backend Issue. Backend Issues own focused backend proofs; Issue #12 owns release-level coexistence, multi-Link, restart/reapply, and supported-environment E2E evidence.
+Use the established reproducible runbooks instead of repeating
+long environment-specific commands or old acceptance reports here:
 
-Privileged tests may never mutate the AI Server Agent control-plane interface/routes/firewall.
+- [Cross-backend real E2E](operations/CROSS-BACKEND-REAL-E2E.md):
+  six simultaneous GRE/WireGuard/IPsec Links, sequential IPIP,
+  native architecture, collision and sibling isolation proof.
+- [IPsec real native/systemd E2E](operations/IPSEC-REAL-E2E.md):
+  positive private-runtime admission, ESP/NAT-T traffic, VICI/XFRM,
+  restart/restore and safe retirement.
+- [Release artifacts](RELEASE-ARTIFACTS.md) and
+  [Install](INSTALL.md): installer/offline regressions,
+  exact published artifact identity and compatibility/rollback.
 
-### GRE and IPIP live acceptance, without a permanent privileged CI runner
+Representative source scripts include:
 
-After obtaining **separate authorization for a dedicated disposable test VM**, run
-`sudo env STL_E2E_DISPOSABLE_HOST=approved ./scripts/e2e/gre-netns.sh`
-from a clean checkout. **Never run this on the AI Server Agent control plane,
-a shared host or production infrastructure.** The environment flag is a
-deliberate local opt-in, *not* authorization by itself.
-
-For the release-level shared-state **GRE Native + GRE/FOU + GRE/GUE +
-WireGuard** test, use the same independently approved isolated fixture with
-both opt-ins:
-
-~~~bash
-sudo env STL_E2E_DISPOSABLE_HOST=approved STL_E2E_CROSS_WG=approved ./scripts/e2e/gre-netns.sh
+~~~sh
+bash scripts/test-install-requirements.sh
+bash scripts/test-install.sh
+bash scripts/test-quick-install.sh
 ~~~
 
-This requires working kernel WireGuard support and the wg executable in
-addition to existing GRE/IPIP prerequisites. Missing wg is a capability
-failure, not a passing test. The cross test uses the same two network
-namespaces and **same per-peer state roots** for all four Links; checks the
-live four-ID persisted collection; confirms bidirectional encrypted
-WireGuard traffic and real active, probe-confirmed MTU/connectivity
-diagnosis; then removes/retires only WireGuard and checks that the three
-GRE siblings still work before continuing the original IPIP suite.
-The flags alone never authorize testing on an active control-plane host.
+For an independently authorized disposable kernel test, select the
+narrowest relevant runner (such as
+`scripts/e2e/gre-netns.sh`,
+`scripts/e2e/gre-multipeer-netns.sh` or
+`scripts/e2e/cross-backend-docker.sh`) according to the runbook.
+Record source SHA, runner/guest/kernel/toolchain identity, command,
+test result and cleanup evidence with the candidate's CI/work item.
+Do not turn an old run's outcome into a claim about a new source
+or installed release.
 
-### Reproducible Ubuntu/Debian same-peer cross-backend release E2E
+## Git and documentation ownership
 
-Issue #12 owns the combined real-kernel acceptance. Use **only an expressly
-designated disposable Docker-capable test VM**, never a shared host, production
-or the AI Server Agent. Docker containers share the host kernel and may cause
-module autoload; if that effect is forbidden, use a dedicated disposable
-VM with its own kernel instead.
+- `main` is the protected integration target. Use scoped branches,
+  reviewable PRs and repository-required CI/approval gates.
+- GitHub Issues/PRs/checks/releases own active work, implementation
+  history and exact evidence; don't mirror their changing status
+  into product or operational documents.
+- `docs/PROJECT-SPEC.md` is the **single durable product intent**
+  reference. It changes only when product-level goals, non-goals
+  or accepted architectural constraints genuinely change.
+- `docs/ARCHITECTURE.md` owns Engine/backend/system design and
+  durable resource/runtime boundaries. Accepted architectural
+  trade-offs live in short, maintainable `docs/decisions/` ADRs.
+- `docs/CLI.md` owns machine command/schemas; `docs/PAIRING.md`
+  owns setup-link encoding/inversion; `docs/SECURITY.md` owns
+  secrecy and privilege policy; `docs/DIAGNOSTICS.md`
+  owns measurement semantics.
+- `docs/INSTALL.md`, `docs/OPERATOR-RECOVERY.md`,
+  `docs/SUPPORTED-ENVIRONMENTS.md`,
+  `docs/RELEASE-ARTIFACTS.md` and `docs/operations/` own
+  their respective executable procedures and supported boundaries.
+- `README.md` is the concise user introduction, quick start
+  and navigation map. Code and tests are implementation truth.
 
-From a committed clean checkout on that test VM, prepare both task-only images
-(online packages are installed only in the disposable image builds):
-
-~~~bash
-docker build -f scripts/e2e/cross-backend.Dockerfile \
-  --build-arg BASE_IMAGE=ubuntu:24.04 -t stl-cross-backend:ubuntu24 .
-docker build -f scripts/e2e/cross-backend.Dockerfile \
-  --build-arg BASE_IMAGE=debian:13 -t stl-cross-backend:debian13 .
-sudo env STL_E2E_DISPOSABLE_HOST=approved \
-  ./scripts/e2e/cross-backend-docker.sh
-~~~
-
-The driver builds the exact clean Git revision into one test executable,
-verifies its SHA256 inside each fresh network-disconnected container, and runs
-two fresh guest namespaces with task-owned state. It performs no host-wide
-package or firewall administration, and does not mount host networking,
-Docker socket, agent credentials or systemd. The current cross-backend
-runner exercises **real** GRE Native, FOU, GUE, authenticated WireGuard,
-independently keyed IKEv2 ESP and NAT-T, and sequential IPIP using the
-canonical CLI/Engine. Live same-peer coexistence, idempotency, FOU
-remove/reapply, owned interface-loss recovery, simultaneous FOU port
-claims, foreign interface rejection, sibling packet delivery and scoped
-cleanup must pass;
-no mock/skip is accepted as proof.
-
-Keep a release receipt with guest versions, source and executable SHA,
-kernel and packet/rule observations, plus explicit missing capabilities.
-See [cross-backend evidence and outstanding gates](operations/CROSS-BACKEND-REAL-E2E.md).
-The completed privileged PR matrix has proved **native AMD64 and ARM64**
-runtime with all six Links in one session on both Ubuntu and Debian
-userspaces; these share each native runner's kernel. It has **not**
-proved whole-guest OS reboot/boot restoration, independently booted
-Ubuntu/Debian distro kernels, physical NAT-router traversal or
-power-loss durability.
-
-### GRE Native, one A host with two distinct peers
-
-After separate authorization for an isolated disposable test VM, the
-three-namespace runner can be executed from a **clean committed checkout**:
-
-~~~bash
-sudo env STL_E2E_DISPOSABLE_HOST=approved ./scripts/e2e/gre-multipeer-netns.sh
-~~~
-
-This **separate Issue #12 fixture** reuses the same production GRE test/CLI/Engine,
-with independent A-B and A-C synthetic underlay pairs, two stable Link IDs and
-one A-side desired-state directory. It checks bidirectional Link Address
-traffic, identity-checked status/diagnostics, idempotent reapply, the exact
-saved Link ID sets, A-C traffic and firewall identity after A-B removal,
-and owned cleanup. It changes no host control-plane configuration. Actual
-kernel acceptance requires a documented **successful privileged execution**;
-source/CI/Go skip alone are not a live proof. Real systemd service
-restart/restore remains a distinct release requirement.
-
-The opt-in script creates only fresh paired network namespaces, synthetic
-veth underlay and per-side temporary state; it invokes the real CLI/Engine/GRE
-backend for Native, FOU and GUE on the same synthetic underlay pair,
-using distinct GRE keys for the UDP-encapsulated siblings. The unkeyed
-same-pair FOU request must fail as a typed conflict before host mutation.
-
-The **same namespace pair and temporary state** then runs IPIP Native,
-FOU and GUE sequentially via the real CLI and IPIP backend, while all
-three existing GRE Links remain active. IPIP endpoint-pair lookup cannot
-distinguish a second IPIP mode to the same underlay pair, so the attempted
-second mode must fail with a typed conflict and without leaked UDP receive
-state. Each IPIP mode must pass create, idempotent ensure, identity-checked
-status, bidirectional Link Address traffic, read-only diagnostic counters
-and owned removal. After each removal, the GRE Links must still pass
-bidirectional traffic and their existing FOU/GUE mappings must be unchanged.
-
-The runner verifies sibling isolation and final cleanup. Cleanup runs
-even on failure. It does **not** install packages, load modules explicitly,
-reconfigure the host control-plane interface, or silently report unsupported
-FOU/GUE capabilities as passing. Kernel module autoload may still occur;
-therefore the host must be disposable.
-
-Preserve the complete log, test exit code, source SHA and printed kernel,
-iproute2, iptables and Go versions as Issue #4/#12 acceptance evidence.
-Compiling the gated Go tests and syntax-checking the script in ordinary CI
-**do not count as privileged live evidence**. The opt-in flag alone is never
-permission to test on a shared or production host. This slice validates
-GRE/IPIP cross-backend isolation. The optional WireGuard cross fixture
-covers one four-Link same-peer scenario; the separate three-namespace fixture
-targets different-peer concurrent Links. Neither source fixture, without
-real approved execution, satisfies the corresponding live acceptance.
-That narrower GRE/IPIP-only fixture was not, by itself, IPsec,
-multi-backend concurrency or ARM64 evidence. Separate completed
-Issue #12 E2E evidence now covers the native AMD64/ARM64
-Ubuntu/Debian six-Link release matrix, while earlier systemd restart
-evidence is preserved. A real whole-guest reboot/boot restore and
-remaining distinct interruption/rollback cases are still Issue #12 gates;
-installer and artifact release lifecycle belongs to Issue #11.
-
-## Git/GitHub
-
-- main is the integration target.
-- Use focused branches and reviewable PRs for substantive code; `main` is protected by required PR + CI once repository rules are applied.
-- Issues own unresolved durable work.
-- ADRs own lasting architectural decisions.
-- Do not mirror live status into docs.
-- PRs should link the Issue they implement.
-- CI evidence is tied to the candidate commit.
-
-## Documentation authority
-
-- docs/PROJECT-SPEC.md: project outcome/scope/constraints.
-- docs/ARCHITECTURE.md: technical boundary.
-- docs/decisions/: lasting rationale.
-- GitHub Issues: live unresolved work.
-- code/tests: implementation truth.
-- README: entry point/navigation.
-
-If these conflict, fix the authoritative source rather than adding explanatory duplication elsewhere.
+If sources conflict, reconcile the source that actually owns the
+contract. Prefer links over copying rules into another long
+document. A new file/ADR earns its place only when it serves
+a lasting, distinct, demonstrably useful purpose.
