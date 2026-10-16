@@ -90,7 +90,9 @@ func vendorStopPackagesReady(ctx context.Context) error {
 		"libstrongswan-standard-plugins", "libstrongswan"} {
 		out, err := vendorReadOnlyCommand(ctx, "/usr/bin/dpkg", "--verify", pkg)
 		if err != nil || len(out) != 0 {
-			return errors.New("vendor files modified or not verifiable")
+			// Package identity is public, but never surface dpkg's raw
+			// output or configuration bytes in owner-visible diagnostics.
+			return fmt.Errorf("distro package %s file-integrity check failed or was unverified", pkg)
 		}
 	}
 	return nil

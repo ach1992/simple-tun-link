@@ -66,6 +66,14 @@ if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor* ]]; then
     *) fail unrecognized_existing_vendor_case ;;
   esac
   if [[ "${STL_IPSEC_PREPARE_CASE}" == existing_vendor ]]; then
+    # Read-only CI reference: distinguish an absent optional distro package
+    # from a harmless packaging baseline difference. No file/config contents
+    # or private secrets are emitted into the workflow log.
+    for pkg in charon-systemd strongswan-swanctl libstrongswan-standard-plugins libstrongswan; do
+      verification=$(dpkg --verify "$pkg" 2>&1) && verify_rc=0 || verify_rc=$?
+      printf 'IPSEC_VENDOR_CLEAN_REFERENCE_VERIFY package=%s exit=%d output_bytes=%d\n' \
+        "$pkg" "$verify_rc" "${#verification}"
+    done
     /usr/bin/expect /mnt/managed-existing.exp || fail operator_vendor_consent_failed
     [[ $(systemctl --system is-active strongswan.service) == inactive &&
        $(systemctl --system is-enabled strongswan.service) == disabled ]] ||
