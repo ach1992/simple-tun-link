@@ -162,7 +162,7 @@ package_installed() {
 # source lists, add keys or relax APT's own signature/hash verification.
 apt_verify_distro_candidates() {
   local anchor keyring_package index_targets row description filename component architecture
-  local target identifier release suffix pkg_version pkg version policy_line selected=0
+  local target identifier release suffix index_file pkg_version pkg version policy_line selected=0
   local source candidate=0 matches policy
   local -A indices=() release_verified=()
   if [[ $os_id == ubuntu ]]; then
@@ -199,14 +199,19 @@ apt_verify_distro_candidates() {
     if [[ $target == deb && $identifier == Packages && -n $description && -n $filename &&
           -n $component && -n $architecture ]]; then
       suffix="_${component}_binary-${architecture}_Packages"
-      # Some exposed APT targets are not release-scoped distro Packages
-      # indexes. Ignore them here, but deny any SELECTED candidate without
-      # a verified index mapping below.
-      if [[ $filename != /var/lib/apt/lists/* || $filename != *"$suffix" ]]; then
+      # Debian reports logical filenames; Ubuntu may report compressed .lz4
+      # package-index paths from apt-get indextargets. Strip known APT formats.
+      index_file=$filename
+      case "$index_file" in
+        *.lz4|*.xz|*.gz|*.zst|*.bz2) index_file="${index_file%.*}" ;;
+      esac
+      # Skip NONSELECTED index targets that have no signed release mapping.
+      # The selected candidate below always fails if its mapping is absent.
+      if [[ $index_file != /var/lib/apt/lists/* || $index_file != *"$suffix" ]]; then
         description= filename= component= architecture= target= identifier=
         continue
       fi
-      release="${filename%"$suffix"}_InRelease"
+      release="${index_file%"$suffix"}_InRelease"
       # The mapped InRelease must be local and immutable by non-root users;
       # its actual cryptographic signer is checked only if selected by APT.
       if [[ -n ${indices[$description]+present} ]]; then
