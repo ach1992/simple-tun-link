@@ -130,7 +130,7 @@ func menuCreateIPsec(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		fmt.Fprintln(errOut, "Cannot establish fresh terminal confirmation; no changes applied.")
 		return 2
 	}
-	confirm, err := p.ask("Create IPsec tunnel? Type YES to confirm (Enter=no): ")
+	confirm, err := p.askAction("YES", "Create IPsec tunnel? Type YES to confirm (Enter=no): ")
 	if err != nil {
 		return p.failed(err)
 	}

@@ -95,6 +95,26 @@ func plainModuleCandidates(selected tunnelOption, report linux.CapabilityReport,
 	return missing, ""
 }
 
+// Consent is consumed once for the whole selected plan. A successful
+// package PREPARE can carry it forward without eating the next Link YES.
+func menuConfirmSelectedModules(input io.Reader, reader *bufio.Reader, out io.Writer, approvedSelectedPlan bool) bool {
+	if approvedSelectedPlan {
+		menuNotice(out, "INFO", "The preceding PREPARE included these possible modules. Rechecking exact host conditions before loading.")
+		return true
+	}
+	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
+		menuNotice(out, "WARNING", "Cannot establish a fresh confirmation. Nothing changed.")
+		return false
+	}
+	fmt.Fprintf(out, "Type %s to load only these modules (Enter cancels): ", menuActionToken(out, "PREPARE"))
+	confirm, err := readMenuAnswer(reader)
+	if err != nil || confirm != "PREPARE" {
+		menuNotice(out, "INFO", "Preparation cancelled. No modules were loaded.")
+		return false
+	}
+	return true
+}
+
 func menuCanPrepareKernel(input io.Reader, out io.Writer) bool {
 	// Reuse the exact installed binary, root and fresh interactive TTY
 	// authority gate already required for privileged menu maintenance.
@@ -137,13 +157,61 @@ func loadSelectedKernelModules(ctx context.Context, load func(context.Context, s
 	return nil
 }
 
+// Typed production dependencies expose only narrow disposable test seams.
+// The real menu always wires installed-root/TTY admission, locked mutation,
+// fresh capability/module probes and the literal allowlisted loader.
+type menuKernelPreparationOps struct {
+	snapshot   func(*runtimeOptions) linux.CapabilityReport
+	canPrepare func(io.Reader, io.Writer) bool
+	loadable   func(context.Context, string) bool
+	acquire    func(context.Context) (func(), error)
+	load       func(context.Context, string) error
+}
+
+func productionMenuKernelOps(options *runtimeOptions) menuKernelPreparationOps {
+	probe := linux.KernelModuleProbe{Runner: createRunner(options), ModinfoBinary: "/sbin/modinfo"}
+	return menuKernelPreparationOps{
+		snapshot:   menuCapabilitySnapshot,
+		canPrepare: menuCanPrepareKernel,
+		loadable:   probe.AvailableButNotLoaded,
+		acquire: func(ctx context.Context) (func(), error) {
+			release, err := maintenance.NewInstalledGate().Acquire(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return func() { release() }, nil
+		},
+		load: linux.LoadTrustedKernelModule,
+	}
+}
+
 // Return true only when the selected prerequisite now positively passed,
 // not merely because modprobe exited successfully. Plain tunnel creation
 // still uses the canonical Engine/transaction and fresh capability checks.
 func menuPrepareSelectedModules(input io.Reader, reader *bufio.Reader, out io.Writer,
-	options *runtimeOptions, selected tunnelOption, report linux.CapabilityReport,
+	options *runtimeOptions, selected tunnelOption, report linux.CapabilityReport, approval menuPackagePreparation,
 ) (bool, linux.CapabilityReport) {
+	return menuPrepareSelectedModulesWithOps(input, reader, out, options, selected, report, approval, productionMenuKernelOps(options))
+}
+
+func menuPrepareSelectedModulesWithOps(input io.Reader, reader *bufio.Reader, out io.Writer,
+	options *runtimeOptions, selected tunnelOption, report linux.CapabilityReport,
+	approval menuPackagePreparation, ops menuKernelPreparationOps,
+) (bool, linux.CapabilityReport) {
+	if ops.snapshot == nil || ops.canPrepare == nil || ops.loadable == nil || ops.acquire == nil || ops.load == nil {
+		return false, report
+	}
+	approvedSelectedPlan := approval.approvedFor(selected)
 	capability := plainBackendCapability(selected.backend, selected.mode)
+	if approvedSelectedPlan {
+		// A package transaction may have changed kernel/tool readiness.
+		// Never rely on the capability snapshot taken before APT.
+		report = ops.snapshot(options)
+		if report == nil {
+			menuNotice(out, "WARNING", "Post-package kernel readiness is unknown. No modules loaded or tunnel created.")
+			return false, nil
+		}
+	}
 	if capability == "" || len(plainRequiredModules(selected)) == 0 {
 		return true, report
 	}
@@ -156,7 +224,7 @@ func menuPrepareSelectedModules(input io.Reader, reader *bufio.Reader, out io.Wr
 	}
 	// Menu badges are time-local observations. A different operator might
 	// have loaded the module while this menu was being read.
-	if current := menuCapabilitySnapshot(options); current != nil {
+	if current := ops.snapshot(options); current != nil {
 		report = current
 		if latest, ok := current[capability]; ok && latest.Available {
 			return true, current
@@ -164,10 +232,8 @@ func menuPrepareSelectedModules(input io.Reader, reader *bufio.Reader, out io.Wr
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	runner := createRunner(options)
-	probe := linux.KernelModuleProbe{Runner: runner, ModinfoBinary: "/sbin/modinfo"}
 	modules, reason := plainModuleCandidates(selected, report, func(name string) bool {
-		return probe.AvailableButNotLoaded(ctx, name)
+		return ops.loadable(ctx, name)
 	})
 	if len(modules) == 0 {
 		menuNotice(out, "WARNING", "Selected kernel precheck did not pass; automatic preparation is unavailable.")
@@ -181,18 +247,11 @@ func menuPrepareSelectedModules(input io.Reader, reader *bufio.Reader, out io.Wr
 	menuNotice(out, "WARNING", "This loads kernel modules on THIS host only; modules may stay loaded until reboot.")
 	menuProse(out, "No Link, route, firewall rule, package, existing service or saved State is changed by this operation.")
 	menuProse(out, "The OTHER server must be prepared independently. Kernel readiness is rechecked before Create.")
-	if !menuCanPrepareKernel(input, out) {
+	if !ops.canPrepare(input, out) {
 		menuNotice(out, "INFO", "Preparation requires sudo stl menu on the installed binary and a real interactive terminal.")
 		return false, report
 	}
-	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
-		menuNotice(out, "WARNING", "Cannot establish a fresh confirmation. Nothing changed.")
-		return false, report
-	}
-	fmt.Fprintf(out, "Type %s to load only these modules (Enter cancels): ", menuPaint(out, menuYellow, "PREPARE"))
-	confirm, err := readMenuAnswer(reader)
-	if err != nil || confirm != "PREPARE" {
-		menuNotice(out, "INFO", "Preparation cancelled. No modules were loaded.")
+	if !menuConfirmSelectedModules(input, reader, out, approvedSelectedPlan) {
 		return false, report
 	}
 	// Wait for the installed maintenance lease BEFORE the last preflight.
@@ -201,18 +260,18 @@ func menuPrepareSelectedModules(input io.Reader, reader *bufio.Reader, out io.Wr
 	// already holds this same shared lease for committed Links.
 	loadCtx, stop := context.WithTimeout(context.Background(), 30*time.Second)
 	defer stop()
-	release, lockErr := maintenance.NewInstalledGate().Acquire(loadCtx)
+	release, lockErr := ops.acquire(loadCtx)
 	if lockErr != nil {
 		menuNotice(out, "WARNING", "Installed STL maintenance identity unavailable or busy; no module loaded.")
-		return false, menuCapabilitySnapshot(options)
+		return false, ops.snapshot(options)
 	}
 	defer release()
 	// Recheck the exact module absence/loadability under the installed lease.
-	latest := menuCapabilitySnapshot(options)
+	latest := ops.snapshot(options)
 	verifyCtx, done := context.WithTimeout(loadCtx, 8*time.Second)
 	defer done()
 	modulesAgain, blocked := plainModuleCandidates(selected, latest, func(name string) bool {
-		return probe.AvailableButNotLoaded(verifyCtx, name)
+		return ops.loadable(verifyCtx, name)
 	})
 	if len(modulesAgain) != len(modules) || blocked != "" {
 		menuNotice(out, "WARNING", "Host preconditions changed after confirmation. No modules loaded.")
@@ -224,12 +283,12 @@ func menuPrepareSelectedModules(input io.Reader, reader *bufio.Reader, out io.Wr
 			return false, latest
 		}
 	}
-	if err := loadSelectedKernelModules(loadCtx, linux.LoadTrustedKernelModule, selected, modules); err != nil {
+	if err := loadSelectedKernelModules(loadCtx, ops.load, selected, modules); err != nil {
 		menuNotice(out, "WARNING", "Kernel module load failed or is incomplete. Inspect host state before retrying.")
 		menuField(out, "Cause", safeMenuText(err.Error()))
-		return false, menuCapabilitySnapshot(options)
+		return false, ops.snapshot(options)
 	}
-	now := menuCapabilitySnapshot(options)
+	now := ops.snapshot(options)
 	if checked, ok := now[capability]; !ok || !checked.Available {
 		menuNotice(out, "WARNING", "Module load completed, but kernel capability is still unverified. No tunnel was created.")
 		return false, now

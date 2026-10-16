@@ -60,7 +60,7 @@ func menuUninstall(out, errOut io.Writer, options *runtimeOptions) int {
 		fmt.Fprintln(errOut, "Uninstall blocked: saved state cannot be inspected. No files were removed.")
 		return 1
 	}
-	menuSection(out, "Uninstall / preparation only")
+	menuActionSection(out, "Uninstall / preparation only", "PREPARE")
 	menuField(out, "Saved tunnels", fmt.Sprintf("%d", len(snapshot.Links)))
 	if len(snapshot.Links) != 0 {
 		hasProtected := false
@@ -78,13 +78,13 @@ func menuUninstall(out, errOut io.Writer, options *runtimeOptions) int {
 			menuSection(out, "First / protected WireGuard or IPsec receiver links")
 			menuProse(out, "BEFORE removing each such tunnel, decide whether to KEEP or DELETE its separately saved private receiver Setup Link.")
 			menuField(out, "Delete", "My tunnels -> select tunnel -> Delete receiver link -> type DELETE")
-			menuProse(out, "Deletion needs the original saved tunnel identity and a fresh confirmation; it cannot safely be done from this page after tunnel removal.")
-			menuField(out, "Keep", "The protected receiver Setup Link survives tunnel removal and STL uninstall. The administrator must protect or retire it later.")
+			menuField(out, "Keep", "The private Setup Link survives tunnel removal and STL uninstall; keep it protected.")
+			menuField(out, "Why now?", "DELETE requires the original saved tunnel and a fresh confirmation before REMOVE.")
 		}
 		menuSection(out, "Then / remove saved tunnels")
 		menuField(out, "1", "My tunnels -> select tunnel -> Remove this tunnel")
 		menuField(out, "2", "Return here after all removals are confirmed")
-		menuNotice(out, "INFO", "A one-click wipe risks shared resources, uncertain State and irreplaceable private handoffs.")
+		menuNotice(out, "INFO", "Uninstall is read-only here; only confirmed individual Link removals can proceed.")
 		menuField(out, "Advanced CLI", "stl link list --json")
 		return 0
 	}

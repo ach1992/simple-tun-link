@@ -151,6 +151,26 @@ jobs:
               docker cp "/tmp/stl-ipsec-native-e2e/$bin" "$cid:/usr/local/bin/$bin"
             done
             docker exec "$cid" sh -c 'chown root:root /usr/local/bin/stl /usr/local/bin/stl-ipsec-* && chmod 0755 /usr/local/bin/stl /usr/local/bin/stl-ipsec-*'
+            # Docker starts PID1 asynchronously. Wait for the exact
+            # production manager identity before the first-start probe;
+            # never relax attestation or retry after a partial mutation.
+            manager_ready=0
+            for attempt in {1..40}; do
+              if docker exec "$cid" /bin/bash -c '
+                info=$(/usr/bin/busctl --system status org.freedesktop.systemd1 2>/dev/null) || exit 1
+                grep -Fxq "PID=1" <<< "$info" &&
+                grep -Fxq "UID=0" <<< "$info" &&
+                grep -Fxq "Comm=systemd" <<< "$info"
+              '; then
+                manager_ready=1
+                break
+              fi
+              sleep .25
+            done
+            if [[ $manager_ready != 1 ]]; then
+              echo "DISPOSABLE_SYSTEMD_MANAGER_NOT_READY=FAIL" >&2
+              exit 1
+            fi
             docker exec -e STL_E2E_DISPOSABLE_HOST=approved \
               -e STL_IPSEC_ISOLATED=approved \
               -e STL_IPSEC_SYSTEMD_FIXTURE=approved \

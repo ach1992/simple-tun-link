@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -40,15 +41,126 @@ func TestMenuPresentationPlaintextAndSemanticColumns(t *testing.T) {
 	}
 }
 
+func TestSemanticStatusPaletteUsedByNoticesAndHealth(t *testing.T) {
+	master, slave := openMenuPTY(t)
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("CLICOLOR", "1")
+	old, had := os.LookupEnv("NO_COLOR")
+	_ = os.Unsetenv("NO_COLOR")
+	t.Cleanup(func() {
+		if had {
+			_ = os.Setenv("NO_COLOR", old)
+		} else {
+			_ = os.Unsetenv("NO_COLOR")
+		}
+	})
+	for _, item := range []struct{ kind, color string }{
+		{"OK", menuGreen}, {"INFO", menuBlue}, {"WARNING", menuYellow},
+		{"FAILED", menuRed}, {"UNKNOWN", menuDim}, {"UNAVAILABLE", menuCyan},
+	} {
+		if role := menuStatusRole(item.kind); role != item.color {
+			t.Fatalf("status %s: %q, want %q", item.kind, role, item.color)
+		}
+	}
+	var plain bytes.Buffer
+	menuHealthLine(&plain, "Probe", "UNKNOWN", "Not observed")
+	menuNotice(&plain, "UNAVAILABLE", "Not installed")
+	if strings.Contains(plain.String(), "\x1b[") ||
+		!strings.Contains(plain.String(), "[UNKNOWN]") ||
+		!strings.Contains(plain.String(), "[UNAVAILABLE]") {
+		t.Fatalf("plain-text status lost its explicit labels: %q", plain.String())
+	}
+	menuHealthLine(slave, "Probe", "UNKNOWN", "Not observed")
+	menuNotice(slave, "UNAVAILABLE", "Not installed")
+	got := readMenuPTYUntil(t, master, "[UNKNOWN]", "[UNAVAILABLE]")
+	if !strings.Contains(got, "\x1b["+menuDim+"m") ||
+		!strings.Contains(got, "\x1b["+menuCyan+"m") {
+		t.Fatalf("health/notice did not share semantic status palette: %q", got)
+	}
+}
+
+func TestMenuActionSemanticsAndExactCopyableTokens(t *testing.T) {
+	_, slave := openMenuPTY(t)
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("CLICOLOR", "1")
+	old, present := os.LookupEnv("NO_COLOR")
+	if err := os.Unsetenv("NO_COLOR"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if present {
+			_ = os.Setenv("NO_COLOR", old)
+		} else {
+			_ = os.Unsetenv("NO_COLOR")
+		}
+	})
+	for _, test := range []struct {
+		word, code string
+	}{
+		{"REMOVE", menuRed}, {"DELETE", menuRed},
+		{"PREPARE", menuYellow}, {"UPDATE", menuYellow},
+		{"YES", menuGreen}, {"SHOW", menuBlue},
+	} {
+		got := menuActionPrompt(slave, test.word, "Type "+test.word+" to confirm: ")
+		want := "\x1b[" + test.code + "m" + test.word + "\x1b[0m"
+		if !strings.Contains(got, want) {
+			t.Fatalf("semantic action %s missing exact color/bold token: %q", test.word, got)
+		}
+	}
+	for _, test := range []struct {
+		action, role string
+	}{
+		{"REMOVE", menuRed}, {"DELETE", menuRed},
+		{"UNINSTALL", menuRed}, {"INSTALL", menuYellow},
+		{"UPDATE", menuYellow}, {"SHOW", menuBlue},
+	} {
+		if got := menuActionRole(test.action); got != test.role {
+			t.Fatalf("%s: want %s, got %s", test.action, test.role, got)
+		}
+	}
+	// Display wording never grants the styling or intent of an action.
+	// A descriptive option that happens to mention "Delete" is still neutral.
+	if got := menuActionRole("NOT_AN_ACTION"); got != menuCyan {
+		t.Fatalf("unknown action was promoted to a privileged semantic: %q", got)
+	}
+	if got := menuActionPrompt(slave, "PREPARE", "Why an update can delete stale links"); strings.Contains(got, "\x1b["+menuRed+"m") {
+		t.Fatalf("descriptive text inferred a destructive action: %q", got)
+	}
+	for _, literal := range []string{
+		"stl://receiver-sensitive-sequence", "sudo stl link show --json",
+		"https://example.invalid/query?a=1",
+	} {
+		if got := menuFieldValue(slave, "Copy", literal); got != literal {
+			t.Fatalf("copyable token was decorated or changed: %q", got)
+		}
+	}
+	if got := menuFieldValue(slave, "Status", "Verified"); !strings.Contains(got, "\x1b["+menuGreen+"m") {
+		t.Fatalf("verified status did not use the success palette: %q", got)
+	}
+	if got := menuFieldValue(slave, "Status", "Unavailable"); !strings.Contains(got, "\x1b["+menuCyan+"m") {
+		t.Fatalf("unavailable state did not use the distinct unavailable palette: %q", got)
+	}
+	if got := menuFieldValue(slave, "Status", "Unknown"); !strings.Contains(got, "\x1b["+menuDim+"m") {
+		t.Fatalf("unknown state did not use the distinct unknown palette: %q", got)
+	}
+	t.Setenv("NO_COLOR", "")
+	if got := menuActionPrompt(slave, "DELETE", "Type DELETE or YES: "); got != "Type DELETE or YES: " {
+		t.Fatalf("NO_COLOR decorated action tokens: %q", got)
+	}
+	if got := menuFieldValue(slave, "Status", "Unavailable"); got != "Unavailable" {
+		t.Fatalf("NO_COLOR decorated status: %q", got)
+	}
+}
+
 func TestMenuPresentationTermAndColorGates(t *testing.T) {
 	_, slave := openMenuPTY(t)
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("STL_NO_CLEAR", "0")
-	// Presence of NO_COLOR, even empty, must disable semantic color but
-	// not remove clear/formatting from an otherwise capable terminal.
+	// Presence of NO_COLOR, even empty, must disable ALL ANSI,
+	// including visible-screen clearing and cursor repositioning.
 	t.Setenv("NO_COLOR", "")
-	if menuColorEnabled(slave) || !menuEscapeCapable(slave) {
-		t.Fatal("NO_COLOR disabled terminal capability or failed to disable colors")
+	if menuColorEnabled(slave) || menuEscapeCapable(slave) {
+		t.Fatal("NO_COLOR permitted ANSI screen control or semantic color")
 	}
 	if got := menuPaint(slave, menuRed, "FAILED"); got != "FAILED" {
 		t.Fatalf("NO_COLOR produced ANSI: %q", got)
@@ -110,6 +222,65 @@ func TestNarrowTerminalKeepsMenuChoicesReadable(t *testing.T) {
 		!strings.Contains(got, strings.Repeat("-", 44)) ||
 		strings.Contains(got, strings.Repeat("-", 55)) {
 		t.Fatalf("narrow terminal did not wrap the option in readable rows: %q", got)
+	}
+}
+
+func TestMenuDescriptionWrapAndCopyableURLPreservation(t *testing.T) {
+	master, slave := openMenuPTY(t)
+	if err := unix.IoctlSetWinsize(int(slave.Fd()), unix.TIOCSWINSZ,
+		&unix.Winsize{Row: 24, Col: 60}); err != nil {
+		t.Fatal(err)
+	}
+	long := "Remove only the selected local tunnel resources and keep all other saved tunnels unchanged"
+	menuActionOption(slave, "5", "Remove this tunnel", long, "REMOVE")
+	original := "https://example.invalid/a/very/long/path/to/an/exact/recovery/guide"
+	menuOption(slave, "u", "Help URL", original)
+	got := readMenuPTYUntil(t, master, "Remove this tunnel", "resources and", original)
+	if !strings.Contains(got, "resources and\r\n      ") {
+		t.Fatalf("long prose did not wrap on a narrow screen: %q", got)
+	}
+	if !strings.Contains(got, original) {
+		t.Fatalf("exact copyable URL was changed or interrupted: %q", got)
+	}
+}
+
+func TestMenuSemanticOptionsAtSixtyEightyAndWideColumns(t *testing.T) {
+	for _, width := range []uint16{60, 80, 120} {
+		t.Run(fmt.Sprint(width), func(t *testing.T) {
+			master, slave := openMenuPTY(t)
+			if err := unix.IoctlSetWinsize(int(slave.Fd()), unix.TIOCSWINSZ,
+				&unix.Winsize{Row: 24, Col: width}); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("TERM", "xterm-256color")
+			t.Setenv("CLICOLOR", "1")
+			old, present := os.LookupEnv("NO_COLOR")
+			_ = os.Unsetenv("NO_COLOR")
+			t.Cleanup(func() {
+				if present {
+					_ = os.Setenv("NO_COLOR", old)
+				} else {
+					_ = os.Unsetenv("NO_COLOR")
+				}
+			})
+			menuActionOption(slave, "5", "Remove this tunnel", "Scoped owned Link only", "REMOVE")
+			menuOption(slave, "6", "Update information", "Read only")
+			menuSection(slave, "Review")
+			out := readMenuPTYUntil(t, master, "Remove this tunnel", "Scoped owned Link only",
+				"Update information", strings.Repeat("-", menuRuleWidth(slave)))
+			if !strings.Contains(out, "\x1b["+menuRed+"m") {
+				t.Fatal("explicit REMOVE intent lacked red/bold TTY rendering")
+			}
+			if width == 60 && !strings.Contains(out, "\r\n      \x1b[2mScoped owned Link only") {
+				t.Fatalf("60-column description not placed below action: %q", out)
+			}
+			if width >= 80 && strings.Contains(out, "\r\n      \x1b[2mScoped owned Link only") {
+				t.Fatalf("%d-column action needlessly stacked: %q", width, out)
+			}
+			if strings.Contains(out, "\x1b["+menuYellow+"mUpdate information") {
+				t.Fatal("descriptive UPDATE wording was incorrectly treated as an action")
+			}
+		})
 	}
 }
 

@@ -52,10 +52,10 @@ func menuManage(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		menuSection(out, "Tunnel actions")
 		menuOption(out, "1", "Local status", "Read-only")
 		menuOption(out, "2", "Check connection", "Read-only diagnostics")
-		menuOption(out, "3", "Share Setup Link", "Copy original link safely")
+		menuActionOption(out, "3", "Share Setup Link", "Copy original link safely", "SHOW")
 		menuOption(out, "4", "Connection details", "View both server settings")
-		menuOption(out, "5", "Remove this tunnel", "Destructive; confirm")
-		menuOption(out, "6", "Delete receiver link", "Protected offer only")
+		menuActionOption(out, "5", "Remove this tunnel", "Destructive; confirm", "REMOVE")
+		menuActionOption(out, "6", "Delete receiver link", "Protected offer only", "DELETE")
 		menuOption(out, "0", "Back", "Main menu")
 		fmt.Fprint(out, "Choose an action: ")
 		action, err := readMenuAnswer(reader)
@@ -142,7 +142,7 @@ func menuRemoveLink(input io.Reader, reader *bufio.Reader, out, errOut io.Writer
 		fmt.Fprintln(errOut, "Manage removal requires an interactive terminal; use stl link remove <id> --confirm <id> for automation. No changes made.")
 		return 2
 	}
-	menuSection(out, "Remove tunnel / preview")
+	menuActionSection(out, "Remove tunnel / preview", "REMOVE")
 	menuHealthLine(out, "Current action", "WARNING", "PREVIEW ONLY - no tunnel has been removed")
 	menuField(out, "Tunnel", fmt.Sprintf("%s / %s", selected.Backend, selected.Encapsulation))
 	menuField(out, "Tunnel IPs", selected.Addresses.Local.String()+" -> "+selected.Addresses.Peer.String())
@@ -154,7 +154,7 @@ func menuRemoveLink(input io.Reader, reader *bufio.Reader, out, errOut io.Writer
 		fmt.Fprintln(errOut, "Cannot establish a fresh terminal confirmation; no changes made.")
 		return 2
 	}
-	fmt.Fprintf(out, "\nTo permanently REMOVE this tunnel, type %s (Enter cancels): ", menuPaint(out, menuRed, "REMOVE"))
+	fmt.Fprintf(out, "\nTo permanently REMOVE this tunnel, type %s (Enter cancels): ", menuActionToken(out, "REMOVE"))
 	confirm, err := readMenuAnswer(reader)
 	if errors.Is(err, io.EOF) || err == nil && confirm != "REMOVE" {
 		fmt.Fprintln(out, "Removal cancelled. No changes made.")

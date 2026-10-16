@@ -47,7 +47,7 @@ func printMenuHeader(out io.Writer, options *runtimeOptions) {
 		}
 	}
 	fmt.Fprintf(out, "%s  %s\n", menuPaint(out, menuBlue, "SIMPLE TUN LINK"), menuPaint(out, menuCyan, version.Version))
-	fmt.Fprintln(out, menuPaint(out, menuDim, strings.Repeat("-", 55)))
+	fmt.Fprintln(out, menuPaint(out, menuDim, strings.Repeat("-", menuRuleWidth(out))))
 	menuField(out, "Host", safeMenuText(host))
 	menuField(out, "IPv4 candidate", safeMenuText(localAddressCandidate()))
 	menuField(out, "Tunnels", count)
@@ -142,8 +142,8 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 		menuOption(out, "3", "My tunnels", "View, share, test, remove")
 		menuOption(out, "4", "Test connectivity", "Read-only connection checks")
 		menuOption(out, "5", "Settings", "Host and STL information")
-		menuOption(out, "6", "Update", "Choose a published release")
-		menuOption(out, "7", "Uninstall", "Show safe removal steps")
+		menuActionOption(out, "6", "Update", "Choose a published release", "UPDATE")
+		menuActionOption(out, "7", "Uninstall", "Show safe removal steps", "UNINSTALL")
 		menuOption(out, "8", "Exit", "")
 		fmt.Fprint(out, "\nChoose a task: ")
 		choice, err := readMenuAnswer(reader)

@@ -72,7 +72,7 @@ func TestIPsecDoctorOperatorAndMachineDiagnostics(t *testing.T) {
 	}
 	stdout.Reset()
 	code = runWithRuntime([]string{"doctor", "ipsec"}, &stdout, &stderr, opts)
-	if code != 4 || !strings.Contains(stdout.String(), "Next:") || !strings.Contains(stdout.String(), "NOT READY") {
+	if code != 4 || !strings.Contains(stdout.String(), "NEXT: ONE SAFE ACTION") || !strings.Contains(stdout.String(), "NOT READY") {
 		t.Fatalf("operator did not receive actionable failure: code %d output %q", code, stdout.String())
 	}
 	for _, call := range probe.calls {

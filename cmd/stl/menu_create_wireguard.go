@@ -156,7 +156,7 @@ func menuCreateWireGuard(input io.Reader, reader *bufio.Reader, out, errOut io.W
 		fmt.Fprintln(errOut, "Cannot establish fresh terminal confirmation; nothing applied.")
 		return 2
 	}
-	answer, err := p.ask("Create the encrypted tunnel and private handoff file? Type YES to confirm (Enter=no): ")
+	answer, err := p.askAction("YES", "Create the encrypted tunnel and private handoff file? Type YES to confirm (Enter=no): ")
 	if err != nil {
 		return p.failed(err)
 	}

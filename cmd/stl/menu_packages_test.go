@@ -62,7 +62,10 @@ func TestUnprivilegedOrRedirectedPackagePreviewCannotConsumeCreateInput(t *testi
 	// A read-only inventory is permitted, but root operation is not.
 	// Redirected/scripted input cannot authorize managed IPsec preparation;
 	// a false return requests root-TTY PREPARE, never a privileged effect.
-	_ = menuPrepareSelectedPackages(reader, nil, &output, &errors, plan, nil)
+	result := menuPrepareSelectedPackages(reader, nil, &output, &errors, plan, nil)
+	if result.canContinue || result.approvedSelectedPlan {
+		t.Fatalf("redirected IPsec input obtained preparation consent: %+v", result)
+	}
 	if strings.Contains(output.String(), "Canonical installer verifying") ||
 		strings.Contains(output.String(), "Selected packages now pass") {
 		t.Fatalf("scripted package preview claimed mutation or success: %q", output.String())

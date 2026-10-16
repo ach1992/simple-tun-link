@@ -30,7 +30,15 @@ type createPrompts struct {
 }
 
 func (p createPrompts) ask(prompt string) (string, error) {
-	fmt.Fprint(p.out, menuPaint(p.out, menuCyan, prompt))
+	return p.askWithAction(prompt, "")
+}
+
+func (p createPrompts) askAction(action, prompt string) (string, error) {
+	return p.askWithAction(prompt, action)
+}
+
+func (p createPrompts) askWithAction(prompt, action string) (string, error) {
+	fmt.Fprint(p.out, menuActionPrompt(p.out, action, prompt))
 	answer, err := readMenuAnswer(p.reader)
 	if err != nil {
 		return "", err
@@ -340,7 +348,7 @@ func menuCreatePlain(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		fmt.Fprintln(errOut, "Cannot establish a fresh terminal confirmation; nothing applied.")
 		return 2
 	}
-	confirm, err := p.ask("Create this tunnel now? Type YES to confirm (Enter=no): ")
+	confirm, err := p.askAction("YES", "Create this tunnel now? Type YES to confirm (Enter=no): ")
 	if err != nil {
 		return p.failed(err)
 	}
@@ -407,7 +415,8 @@ func menuCreatePlain(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		return 2
 	}
 	if !diagnose {
-		fmt.Fprintf(out, "After importing on the peer: stl link diagnose %s (or menu > Tests & Diagnostics).\n", link.ID)
+		menuCopyLine(out, "After peer import / optional connectivity check", "stl link diagnose "+string(link.ID))
+		menuProse(out, "Or use the Test connectivity menu; local Create is not peer-connectivity proof.")
 		return 0
 	}
 	if code := menuCheckOneConnection(link.ID, out, errOut, options); code != 0 {

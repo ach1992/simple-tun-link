@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/diagnostics"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/state"
+	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
 func TestMenuFivePingResultIsNotCumulativeTrafficOrLongTermStability(t *testing.T) {
@@ -226,5 +228,40 @@ func TestMenuAvailabilityHelpGroupsSharedFailuresAndClearsPreviousPrompt(t *test
 	}
 	if strings.Count(result, "FOU module is found on disk") != 1 || strings.Contains(result, "ipip/gue") {
 		t.Fatalf("shared prerequisite repeated as separate failures: %q", result)
+	}
+}
+
+// Diagnostic next steps can be copyable commands. Displaying a long one in
+// a narrow PTY must not insert characters or line breaks into the command.
+func TestMenuDiagnosticNextStepKeepsExactCopyableCommand(t *testing.T) {
+	command := "sudo stl doctor ipsec --json --some-very-long-option-that-must-stay-copyable"
+	response, err := json.Marshal(linkReadErrorResponse{
+		SchemaVersion: jsonSchemaVersion,
+		Error: &stlerr.Error{
+			Code:       stlerr.CodeInspect,
+			Detail:     "Local observation is incomplete",
+			ReasonCode: "observation_unverified",
+			NextStep:   command,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("NO_COLOR", "1")
+	master, slave := openMenuPTY(t)
+	if err := unix.IoctlSetWinsize(int(slave.Fd()), unix.TIOCSWINSZ,
+		&unix.Winsize{Row: 24, Col: 60}); err != nil {
+		t.Fatal(err)
+	}
+	menuPublicDiagnosticFailure(slave, response)
+	got := readMenuPTYUntil(t, master, command)
+	if !strings.Contains(got, command) || strings.Contains(got, "\x1b[") {
+		t.Fatalf("copyable diagnostic action corrupted by terminal formatting: %q", got)
+	}
+	var plain bytes.Buffer
+	menuPublicDiagnosticFailure(&plain, response)
+	if !strings.Contains(plain.String(), command+"\n") || strings.Contains(plain.String(), "\x1b[") {
+		t.Fatalf("redirected diagnostic changed exact command: %q", plain.String())
 	}
 }

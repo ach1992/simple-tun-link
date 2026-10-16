@@ -40,7 +40,7 @@ func askManualGREKey(p createPrompts) (domain.GREOptions, error) {
 func printManualConnectionDetails(out io.Writer, l domain.Link) {
 	menuSection(out, "Two-server connection details / saved")
 	menuField(out, "Type", fmt.Sprintf("%s / %s", l.Backend, l.Encapsulation))
-	menuField(out, "Saved ID", string(l.ID)+" (advanced CLI)")
+	menuCopyLine(out, "Saved ID / advanced CLI", string(l.ID))
 	menuField(out, "Local endpoint", l.Underlay.Local.String())
 	menuField(out, "Remote endpoint", l.Underlay.Peer.String())
 	menuField(out, "Local tunnel IP", l.Addresses.Local.String())
@@ -80,8 +80,8 @@ func printManualConnectionDetails(out io.Writer, l domain.Link) {
 	case domain.BackendWireGuard:
 		menuProse(out, "  WireGuard: encrypted UDP; do NOT assume these addresses alone will pair the other server.")
 		fmt.Fprintf(out, "  THIS server UDP listen port: %d | OTHER server UDP listen port: %d\n", l.WireGuard.ListenPort, l.WireGuard.PeerPort)
-		fmt.Fprintf(out, "  THIS server PUBLIC key: %s\n", l.WireGuard.LocalPublicKey)
-		fmt.Fprintf(out, "  OTHER server PUBLIC key: %s\n", l.WireGuard.PeerPublicKey)
+		menuCopyLine(out, "THIS server PUBLIC key", l.WireGuard.LocalPublicKey)
+		menuCopyLine(out, "OTHER server PUBLIC key", l.WireGuard.PeerPublicKey)
 		menuProse(out, "  The original protected receiver offer remains available via My tunnels -> Share -> SHOW.")
 		menuProse(out, "  Deleted/lost receiver secrets cannot be regenerated from ordinary saved Link State.")
 	case domain.BackendIPsec:

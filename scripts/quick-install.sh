@@ -6,7 +6,7 @@ set -Eeuo pipefail
 STL_BOOTSTRAP_STARTED=0
 bootstrap_incomplete_guard() {
   if [[ $STL_BOOTSTRAP_STARTED != 1 ]]; then
-    echo 'STL quick installer was not received completely; nothing installed.' >&2
+    echo '[FAILED] STL quick installer was not received completely; nothing installed.' >&2
     exit 2
   fi
 }
@@ -42,14 +42,14 @@ quick_install_main() {
   tmp=$(mktemp)
   trap 'rm -f -- "$tmp"' EXIT
   curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 -o "$tmp" "$source_url"
-  [[ -s $tmp ]] || { echo "STL installer was not downloaded." >&2; exit 1; }
+  [[ -s $tmp ]] || { echo "[FAILED] STL installer was not downloaded." >&2; exit 1; }
   bash -n "$tmp"
   if (( EUID == 0 )); then
     bash "$tmp" "$action" --version "$version" --backends "$backends"
   else
     sudo bash "$tmp" "$action" --version "$version" --backends "$backends"
   fi
-  echo "STL $version $action completed. Opening the menu on this terminal..."
+  echo "[OK] STL $version $action completed. Opening the menu on this terminal..."
   # When a bootstrap script is piped into bash, fd 0 is the script content,
   # not interactive menu input. Reattach to the controlling terminal only.
   if [[ -t 1 ]] && { exec {stl_menu_tty}<>/dev/tty; } 2>/dev/null; then
@@ -61,6 +61,6 @@ quick_install_main() {
       exec sudo stl menu <&"$stl_menu_tty" >&"$stl_menu_tty" 2>&1
     fi
   fi
-  echo "No interactive terminal detected. Start it later with: sudo stl menu"
+  echo "[INFO] No interactive terminal detected. Start it later with: sudo stl menu"
 }
 quick_install_main "$@"

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -169,5 +170,33 @@ func TestOnDemandKernelPreparationNeverRunsFromScriptsOrRedirects(t *testing.T) 
 		strings.Contains(out.String(), "PREPARE") ||
 		strings.Contains(errOut.String(), "private") {
 		t.Fatalf("untrusted menu escaped no-change behavior: code=%d output=%q error=%q", code, out.String(), errOut.String())
+	}
+}
+
+// Package PREPARE consent must not become a second prompt, and the
+// separately required Link YES remains unread until actual Create.
+func TestPackagePreparationConsentDoesNotConsumeLinkConfirmation(t *testing.T) {
+	input := strings.NewReader("YES\n")
+	reader := bufio.NewReader(input)
+	var output bytes.Buffer
+	if !menuConfirmSelectedModules(input, reader, &output, true) {
+		t.Fatal("approved same-selection package PREPARE unexpectedly requested another consent")
+	}
+	if got, err := readMenuAnswer(reader); err != nil || got != "YES" {
+		t.Fatalf("module preparation consumed Link confirmation: %q %v", got, err)
+	}
+	if strings.Contains(output.String(), "Type PREPARE") || !strings.Contains(output.String(), "preceding PREPARE") {
+		t.Fatalf("approved module continuation had the wrong prompt: %q", output.String())
+	}
+	// Without a prior package PREPARE, the helper must request its own
+	// exact token. Separately, the installed root-TTY gate rejects streams
+	// before even reaching this helper in the real execution path.
+	scripted := strings.NewReader("YES\n")
+	reader = bufio.NewReader(scripted)
+	output.Reset()
+	if menuConfirmSelectedModules(scripted, reader, &output, false) ||
+		!strings.Contains(output.String(), "Type PREPARE") ||
+		menuCanPrepareKernel(scripted, &output) {
+		t.Fatalf("absent prior approval bypassed module consent or root-TTY gate: %q", output.String())
 	}
 }

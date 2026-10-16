@@ -16,20 +16,13 @@ import (
 // All human health views consume existing read-only, versioned CLI reports.
 // They neither implement their own probes nor change machine CLI/JSON output.
 func menuHealthLine(out io.Writer, label, kind, value string) {
-	role := menuYellow
-	switch kind {
-	case "OK":
-		role = menuGreen
-	case "INFO":
-		role = menuBlue
-	}
-	status := menuPaint(out, role, "["+kind+"]")
+	status := menuPaint(out, menuStatusRole(kind), "["+kind+"]")
 	if tty, ok := menuTerminal(out); ok {
 		// Account for the minimum 16-column label even when its text is
 		// shorter (Ping, MTU, etc.), plus spaces and the [STATUS] brackets.
 		visibleWidth := 2 + max(16, len(label)) + 1 + len(kind) + 2 + 2 + len(value)
 		if ws, err := unix.IoctlGetWinsize(int(tty.Fd()), unix.TIOCGWINSZ); err == nil && ws.Col > 0 &&
-			visibleWidth > int(ws.Col) {
+			visibleWidth > int(ws.Col) && !menuCopyable(value) {
 			fmt.Fprintf(out, "  %-16s %s\n", label, status)
 			width := max(16, int(ws.Col)-6)
 			fmt.Fprintln(out, "      "+strings.ReplaceAll(wrapTerminalGuidance(value, width), "\n", "\n      "))
@@ -132,7 +125,7 @@ func menuPublicDiagnosticFailure(out io.Writer, raw []byte) {
 			menuField(out, "Reason", failure.Error.ReasonCode)
 		}
 		menuSection(out, "Next check")
-		fmt.Fprintln(out, wrapTerminalGuidance(failure.Error.NextStep, 68))
+		menuProse(out, failure.Error.NextStep)
 		return
 	}
 	menuNotice(out, "WARNING", "Connection check unavailable. Inspect local status and prerequisites; no changes made.")
