@@ -90,7 +90,19 @@ func nativeMissingVendorAliasesAbsent(dir string, identities map[string]bool) bo
 		return false
 	}
 	for _, entry := range entries {
-		if !strings.HasSuffix(entry.Name(), ".service") || entry.Type()&os.ModeSymlink == 0 {
+		if !strings.HasSuffix(entry.Name(), ".service") {
+			continue
+		}
+		mode := entry.Type()
+		if mode == 0 {
+			// Handle filesystems reporting DT_UNKNOWN with an exact Lstat.
+			info, e := os.Lstat(filepath.Join(dir, entry.Name()))
+			if e != nil {
+				return false
+			}
+			mode = info.Mode()
+		}
+		if mode&os.ModeSymlink == 0 {
 			continue
 		}
 		destination, err := os.Readlink(filepath.Join(dir, entry.Name()))
@@ -142,6 +154,10 @@ func nativeMissingVendorUnitFiles(root, name string) bool {
 				return false
 			}
 			for _, edge := range edges {
+				info, err := os.Lstat(edge)
+				if err != nil || !info.IsDir() {
+					return false
+				}
 				for id := range identity {
 					if _, err := os.Lstat(filepath.Join(edge, id)); !errors.Is(err, os.ErrNotExist) {
 						return false

@@ -191,6 +191,21 @@ func TestNativeMissingVendorIdentityAliasesAndDropInInheritance(t *testing.T) {
 	if !nativeMissingVendorUnitFiles(root, "charon-systemd.service") {
 		t.Fatal("unrelated service alias caused a false IPsec readiness conflict")
 	}
+	// A boot-edge directory that is itself a symlink is not an
+	// independently verified canonical manager directory.
+	link := filepath.Join(root, "etc/systemd/system/foreign.target.wants")
+	if err := os.Symlink(filepath.Join(root, "run"), link); err != nil {
+		t.Fatal(err)
+	}
+	if nativeMissingVendorUnitFiles(root, "charon-systemd.service") {
+		t.Fatal("symlinked systemd boot-edge directory was accepted as verified absent")
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if !nativeMissingVendorUnitFiles(root, "charon-systemd.service") {
+		t.Fatal("empty boot-edge cleanup did not restore positive absence")
+	}
 }
 
 func TestNativeMissingVendorFallbackNeverOverridesPositiveOrMalformedStates(t *testing.T) {
