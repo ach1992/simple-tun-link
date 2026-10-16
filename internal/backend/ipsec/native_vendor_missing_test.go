@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -83,17 +84,37 @@ func TestNativeMissingVendorDiskIdentityRejectsAnyOverride(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if unit != "charon-systemd.service" {
-				path := filepath.Join(root, "etc/init.d", strings.TrimSuffix(unit, ".service"))
-				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(path, []byte("foreign"), 0o644); err != nil {
+			// Every known vendor name, including charon-systemd, can
+			// later be synthesized by systemd-sysv-generator.
+			path := filepath.Join(root, "etc/init.d", strings.TrimSuffix(unit, ".service"))
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("foreign"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if nativeMissingVendorUnitFiles(root, unit) {
+				t.Fatal("legacy foreign SysV service accepted as missing")
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			// Every applicable systemd hierarchical prefix is a future
+			// identity even when the exact unit file is absent today.
+			for _, dropin := range nativeMissingVendorDropIns(unit) {
+				path := filepath.Join(root, "run/systemd/system", dropin)
+				if err := os.MkdirAll(path, 0o755); err != nil {
 					t.Fatal(err)
 				}
 				if nativeMissingVendorUnitFiles(root, unit) {
-					t.Fatal("legacy foreign SysV service accepted as missing")
+					t.Fatalf("dormant vendor prefix drop-in accepted: %s", dropin)
 				}
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !nativeMissingVendorUnitFiles(root, unit) {
+				t.Fatal("empty fixture did not restore proven absence after removal")
 			}
 		})
 	}
@@ -102,17 +123,120 @@ func TestNativeMissingVendorDiskIdentityRejectsAnyOverride(t *testing.T) {
 	}
 }
 
+func TestNativeMissingVendorIdentityAliasesAndDropInInheritance(t *testing.T) {
+	for _, tc := range []struct {
+		unit         string
+		expectPrefix string
+	}{
+		{"strongswan-starter.service", "strongswan-.service.d"},
+		{"charon-systemd.service", "charon-.service.d"},
+	} {
+		names := nativeMissingVendorDropIns(tc.unit)
+		if !slices.Contains(names, tc.expectPrefix) {
+			t.Fatalf("systemd dash-prefix drop-in omitted for %s: %v", tc.unit, names)
+		}
+	}
+	aliases := nativeMissingVendorIdentities("strongswan.service")
+	if !slices.Contains(aliases, "strongswan-swanctl.service") {
+		t.Fatalf("approved distro alias omitted: %v", aliases)
+	}
+	root := t.TempDir()
+	for _, tc := range []struct {
+		name, target, path string
+		isDir              bool
+	}{
+		{"official vendor alias unit", "strongswan.service", "run/systemd/system/strongswan-swanctl.service", false},
+		{"official vendor alias drop-in", "", "run/systemd/system/strongswan-swanctl.service.d", true},
+		{"official vendor alias prefix", "", "run/systemd/system/strongswan-.service.d", true},
+		{"official vendor alias boot edge", "strongswan.service", "etc/systemd/system/multi-user.target.wants/strongswan-swanctl.service", false},
+		{"arbitrary dormant service alias", "strongswan.service", "run/systemd/system/stl-foreign-vendor-alias.service", false},
+		{"arbitrary boot edge alias", "strongswan.service", "etc/systemd/system/multi-user.target.wants/stl-foreign-vendor-alias.service", false},
+		{"official SysV alias", "", "etc/init.d/strongswan-swanctl", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			full := filepath.Join(root, tc.path)
+			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if tc.isDir {
+				if err := os.Mkdir(full, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			} else if tc.target != "" {
+				if err := os.Symlink(tc.target, full); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := os.WriteFile(full, []byte("foreign"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if nativeMissingVendorUnitFiles(root, "strongswan.service") {
+				t.Fatalf("dormant alias identity accepted: %s", tc.path)
+			}
+			if err := os.Remove(full); err != nil {
+				t.Fatal(err)
+			}
+			if !nativeMissingVendorUnitFiles(root, "strongswan.service") {
+				t.Fatalf("unrelated file or previous fixture leaked into result: %s", tc.path)
+			}
+		})
+	}
+	// Do not block on another service's unrelated symlink. That would
+	// reintroduce the unnecessary host-wide readiness failure this fixes.
+	unrelated := filepath.Join(root, "etc/systemd/system/unrelated.service")
+	if err := os.Symlink("unrelated-target.service", unrelated); err != nil {
+		t.Fatal(err)
+	}
+	if !nativeMissingVendorUnitFiles(root, "charon-systemd.service") {
+		t.Fatal("unrelated service alias caused a false IPsec readiness conflict")
+	}
+}
+
 func TestNativeMissingVendorFallbackNeverOverridesPositiveOrMalformedStates(t *testing.T) {
-	for _, good := range []string{"", "inactive\n", "unknown\n", "not-found\n"} {
-		if !nativeVendorMissingStatusFallbackEligible([]byte(good)) {
-			t.Fatalf("missing-unit status rejected: %q", good)
+	for _, tc := range []struct {
+		action, stdout, stderr string
+		code                   int
+		want                   bool
+	}{
+		{"is-active", "", "", 1, true},
+		{"is-active", "inactive\n", "", 1, true},
+		{"is-active", "unknown\n", "", 4, true},
+		{"is-enabled", "", "", 1, true},
+		{"is-enabled", "not-found\n", "", 1, true},
+		{"is-enabled", "", "Failed to get unit file state for ipsec.service: No such file or directory\n", 1, true},
+		{"is-enabled", "", "Unit ipsec.service could not be found.\n", 4, true},
+		{"is-enabled", "", "Failed to get unit file state for 'ipsec.service': No such file or directory\n", 1, true},
+		{"is-active", "active\n", "", 1, false},
+		{"is-enabled", "enabled\n", "", 1, false},
+		{"is-active", "failed\n", "", 4, false},
+		{"is-active", "inactive\nactive\n", "", 1, false},
+		{"is-enabled", "not-found\nmasked\n", "", 1, false},
+		{"is-enabled", "not-found", "", 1, false},
+		{"is-enabled", "not-found\n", "unrecognized failure\n", 1, false},
+		{"is-enabled", "", "Something else went wrong\n", 1, false},
+		{"is-enabled", "", "Unit other.service could not be found.\n", 1, false},
+		{"is-enabled", "", "Unit ipsec.service could not be found.\n", 0, false},
+		{"is-enabled", "", "Unit ipsec.service could not be found.\n", 2, false},
+		{"is-active", "", "", 0, false},
+		{"is-active", "", "", 3, false},
+		{"is-enabled", "inactive\n", "", 1, false},
+		{"is-enabled", "masked\n", "", 1, false},
+		{"is-active", "\x1b[31mactive\n", "", 4, false},
+	} {
+		got := nativeVendorMissingStatusFallbackEligible(tc.action, "ipsec.service", []byte(tc.stdout), []byte(tc.stderr), tc.code)
+		if got != tc.want {
+			t.Fatalf("fallback entry mismatch action=%s code=%d stdout=%q stderr=%q: got=%t want=%t",
+				tc.action, tc.code, tc.stdout, tc.stderr, got, tc.want)
 		}
 	}
-	for _, bad := range []string{"active\n", "enabled\n", "failed\n", "masked\n", "inactive\nactive\n", "unknown", "\x1b[31mactive\n"} {
-		if nativeVendorMissingStatusFallbackEligible([]byte(bad)) {
-			t.Fatalf("conflicting or malformed status could enter absence proof: %q", bad)
-		}
+	if nativeVendorMissingStatusFallbackEligible("is-enabled", "unlisted.service", nil, nil, 1) {
+		t.Fatal("unlisted service identity permitted")
 	}
+	if nativeVendorMissingStatusFallbackEligible("start", "ipsec.service", nil, nil, 1) {
+		t.Fatal("mutating action permitted")
+	}
+
 	if nativeVendorUnitVerifiedMissing(nil, "ipsec.service") {
 		t.Fatal("nil context permitted missing-unit attestation")
 	}
@@ -158,12 +282,16 @@ func TestNativeVendorUnitInterpretationOnlyAcceptsIndependentlyVerifiedAbsence(t
 	}{
 		{"missing active alternate code", "is-active", "inactive\n", "", 1, true, "unknown"},
 		{"missing enablement alternate code", "is-enabled", "not-found\n", "", 1, true, "not-found"},
-		{"missing enablement diagnostic", "is-enabled", "", "Unit does not exist\n", 1, true, "not-found"},
+		{"missing enablement diagnostic", "is-enabled", "", "Failed to get unit file state for ipsec.service: No such file or directory\n", 1, true, "not-found"},
 		{"missing but proof failed", "is-enabled", "not-found\n", "", 1, false, ""},
 		{"active cannot be overridden", "is-active", "active\n", "", 3, true, ""},
 		{"enabled cannot be overridden", "is-enabled", "enabled\n", "", 1, true, ""},
 		{"failed cannot be overridden", "is-active", "failed\n", "", 3, true, ""},
 		{"extra lines cannot be overridden", "is-enabled", "not-found\nmasked\n", "", 1, true, ""},
+		{"positive zero exit cannot be overridden", "is-enabled", "", "", 0, true, ""},
+		{"unexpected failure exit cannot be overridden", "is-enabled", "", "", 7, true, ""},
+		{"unrelated diagnostic cannot be overridden", "is-enabled", "", "File not found\n", 1, true, ""},
+		{"mixed stdout and stderr cannot be overridden", "is-enabled", "not-found\n", "Unit ipsec.service could not be found.\n", 1, true, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			verifierCalled := 0

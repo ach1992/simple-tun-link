@@ -106,6 +106,13 @@ jobs:
             docker cp "/tmp/stl-ipsec-native-e2e/$bin" "$cid:/usr/local/bin/$bin"
           done
           docker exec "$cid" sh -c 'chown root:root /usr/local/bin/stl /usr/local/bin/stl-ipsec-provision-test && chmod 0755 /usr/local/bin/stl /usr/local/bin/stl-ipsec-provision-test'
+          # Test real systemd reload and SysV generator only in this
+          # disconnected disposable guest, before checking private startup.
+          docker cp scripts/e2e/ipsec-missing-vendor-systemd.sh "$cid:/tmp/stl-missing-vendor-e2e.sh"
+          docker exec -e STL_E2E_DISPOSABLE_GUEST=approved \
+            -e STL_IPSEC_MISSING_VENDOR_NEGATIVE=approved \
+            "$cid" /usr/bin/bash /tmp/stl-missing-vendor-e2e.sh
+          echo "NATIVE_VENDOR_MISSING_IDENTITY_REAL_SYSTEMD_E2E=PASS"
           docker exec -e STL_E2E_DISPOSABLE_HOST=approved \
             -e STL_IPSEC_ISOLATED=approved \
             -e STL_IPSEC_SYSTEMD_FIXTURE=approved \

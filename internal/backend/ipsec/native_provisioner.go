@@ -134,7 +134,7 @@ func interpretNativeVendorUnitState(ctx context.Context, action, name string, st
 	// Some systemd releases return alternate nonzero codes/diagnostics for
 	// absent units. Require independent missing effective/disk identity.
 	// A positive or malformed report can NEVER be overridden by this proof.
-	if verifyMissing != nil && nativeVendorMissingStatusFallbackEligible(stdout) &&
+	if verifyMissing != nil && nativeVendorMissingStatusFallbackEligible(action, name, stdout, stderr, code) &&
 		verifyMissing(ctx, name) {
 		if action == "is-active" {
 			return "unknown", nil

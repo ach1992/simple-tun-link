@@ -54,18 +54,87 @@ func nativeKnownVendorUnit(name string) bool {
 	return false
 }
 
+// These are the exact vendor unit identities, plus the only supported
+// distribution alias for strongswan.service. A dormant alias may be loaded
+// after a later daemon-reload even when the canonical name is missing now.
+func nativeMissingVendorIdentities(name string) []string {
+	if name == "strongswan.service" {
+		return []string{name, "strongswan-swanctl.service"}
+	}
+	return []string{name}
+}
+
+// systemd.unit(5) loads the exact unit's drop-ins, the type-wide service.d,
+// and progressively shorter dash-prefix drop-ins. For example
+// charon-systemd.service inherits charon-.service.d as well as
+// charon-systemd.service.d. All relevant names are literal allowlisted.
+func nativeMissingVendorDropIns(name string) []string {
+	dropins := []string{"service.d", name + ".d"}
+	stem := strings.TrimSuffix(name, ".service")
+	for i := strings.LastIndexByte(stem, '-'); i >= 0; i = strings.LastIndexByte(stem[:i], '-') {
+		dropins = append(dropins, stem[:i+1]+".service.d")
+	}
+	return dropins
+}
+
+// Detect arbitrary dormant symlink aliases that target a known vendor unit,
+// including when the alias is itself inside a boot-edge directory. The
+// symlink's bytes cannot be trusted; even a dangling link is a conflict.
+// Other packages' unrelated service aliases do not block STL.
+func nativeMissingVendorAliasesAbsent(dir string, identities map[string]bool) bool {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	if err != nil || len(entries) > 4096 {
+		return false
+	}
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".service") || entry.Type()&os.ModeSymlink == 0 {
+			continue
+		}
+		destination, err := os.Readlink(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			return false
+		}
+		if identities[filepath.Base(destination)] {
+			return false
+		}
+	}
+	return true
+}
+
 func nativeMissingVendorUnitFiles(root, name string) bool {
 	if !nativeKnownVendorUnit(name) {
 		return false
 	}
-	// Inspect every systemd UnitPath already approved for the vendor STOP
-	// safety boundary, including attached/transient/unit-control paths.
-	// A search-path shadow, stale boot edge or dormant prefix drop-in is
-	// not independent proof that the unit is absent.
+	ids := nativeMissingVendorIdentities(name)
+	identity := make(map[string]bool, len(ids))
+	dropins := make(map[string]bool)
+	for _, n := range ids {
+		identity[n] = true
+		for _, dropin := range nativeMissingVendorDropIns(n) {
+			dropins[dropin] = true
+		}
+	}
+
+	// Require vacancy in the complete trusted manager UnitPath inventory,
+	// including future-reload boot edges, prefix drop-ins and known/dynamic
+	// symlink aliases. Missing entries are proved with Lstat (not Stat).
 	for _, dir := range vendorUnitSearchPaths {
 		base := filepath.Join(root, strings.TrimPrefix(dir, "/"))
-		if _, err := os.Lstat(filepath.Join(base, name)); !errors.Is(err, os.ErrNotExist) {
-			return false // includes dangling symlinks and foreign files
+		for id := range identity {
+			if _, err := os.Lstat(filepath.Join(base, id)); !errors.Is(err, os.ErrNotExist) {
+				return false
+			}
+		}
+		for dirName := range dropins {
+			if _, err := os.Lstat(filepath.Join(base, dirName)); !errors.Is(err, os.ErrNotExist) {
+				return false
+			}
+		}
+		if !nativeMissingVendorAliasesAbsent(base, identity) {
+			return false
 		}
 		for _, suffix := range []string{"*.wants", "*.requires"} {
 			edges, err := filepath.Glob(filepath.Join(base, suffix))
@@ -73,19 +142,21 @@ func nativeMissingVendorUnitFiles(root, name string) bool {
 				return false
 			}
 			for _, edge := range edges {
-				if _, err := os.Lstat(filepath.Join(edge, name)); !errors.Is(err, os.ErrNotExist) {
+				for id := range identity {
+					if _, err := os.Lstat(filepath.Join(edge, id)); !errors.Is(err, os.ErrNotExist) {
+						return false
+					}
+				}
+				if !nativeMissingVendorAliasesAbsent(edge, identity) {
 					return false
 				}
 			}
 		}
-		for _, dropin := range []string{name + ".d", "service.d"} {
-			if _, err := os.Lstat(filepath.Join(base, dropin)); !errors.Is(err, os.ErrNotExist) {
-				return false
-			}
-		}
 	}
-	if name == "ipsec.service" || name == "strongswan.service" || name == "strongswan-starter.service" {
-		script := strings.TrimSuffix(name, ".service")
+	// SysV compatibility may synthesize a new generated unit on manager
+	// reload/reboot. This includes charon-systemd, not just starter/ipsec.
+	for id := range identity {
+		script := strings.TrimSuffix(id, ".service")
 		if _, err := os.Lstat(filepath.Join(root, "etc/init.d", script)); !errors.Is(err, os.ErrNotExist) {
 			return false
 		}
@@ -118,14 +189,43 @@ func nativeVendorUnitVerifiedMissing(ctx context.Context, name string) bool {
 	return nativeMissingVendorUnitFiles("/", name)
 }
 
-// Only nonpositive, otherwise unverified status outputs can enter the
-// alternate absence proof. Never reinterpret an active/enabled/failed state,
-// even when a later observation claims vacancy during a possible race.
-func nativeVendorMissingStatusFallbackEligible(raw []byte) bool {
-	switch string(raw) {
-	case "", "inactive\n", "unknown\n", "not-found\n":
-		return true
-	default:
+// Only a narrow, known nonzero missing-unit response may enter this
+// independent absence attestation. Arbitrary stderr, success exit codes,
+// unknown failures, contradictory stdout and unrelated service identities
+// must not be reinterpreted as safe absence. The subsequent effective
+// systemd-show plus full disk-identity checks are still mandatory.
+func nativeVendorMissingStatusFallbackEligible(action, name string, stdout, stderr []byte, code int) bool {
+	if !nativeKnownVendorUnit(name) || (action != "is-active" && action != "is-enabled") ||
+		(code != 1 && code != 4) {
 		return false
 	}
+	switch action {
+	case "is-active":
+		switch string(stdout) {
+		case "", "inactive\n", "unknown\n", "not-found\n":
+		default:
+			return false
+		}
+	case "is-enabled":
+		switch string(stdout) {
+		case "", "not-found\n":
+		default:
+			return false
+		}
+	}
+	if len(stderr) == 0 {
+		return true
+	}
+	// systemctl emits these exact, locale-fixed diagnostics for absent
+	// units on supported releases; no generic substring matches allowed.
+	if len(stdout) != 0 {
+		return false
+	}
+	switch string(stderr) {
+	case "Unit " + name + " could not be found.\n",
+		"Failed to get unit file state for " + name + ": No such file or directory\n",
+		"Failed to get unit file state for '" + name + "': No such file or directory\n":
+		return true
+	}
+	return false
 }
