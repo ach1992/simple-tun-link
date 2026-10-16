@@ -38,6 +38,13 @@ if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor* ]]; then
     fail existing_vendor_has_incomplete_package_install
   [[ ! -e /var/lib/simple-tun-link/ipsec ]] ||
     fail private_service_exists_before_consent
+  if [[ "${STL_IPSEC_PREPARE_CASE}" == existing_vendor ]]; then
+    # Status-only diagnostic in a disposable guest, no package secrets.
+    optional_rc=0
+    optional_state=$(LC_ALL=C dpkg-query -W '-f=${Status}' -- libcharon-extauth-plugins 2>&1) ||
+      optional_rc=$?
+    printf 'IPSEC_DISPOSABLE_OPTIONAL_DPKG_STATUS rc=%d value=%q\n' "$optional_rc" "$optional_state"
+  fi
   case "${STL_IPSEC_PREPARE_CASE}" in
     existing_vendor) ;;
     existing_vendor_foreign_config)

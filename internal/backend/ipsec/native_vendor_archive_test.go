@@ -26,6 +26,8 @@ func TestVendorOptionalPackageStatusReceiptStrict(t *testing.T) {
 	}{
 		{"official installed", 0, "install ok installed", "", true, true},
 		{"genuine absent", 1, "", "dpkg-query: no packages found matching " + pkg + "\n", false, true},
+		{"known but never installed", 0, "unknown ok not-installed", "", false, true},
+		{"misleading partial selection", 0, "install ok not-installed", "", false, false},
 		{"unpacked", 0, "install ok unpacked", "", false, false},
 		{"half configured", 0, "install ok half-configured", "", false, false},
 		{"config files remain", 0, "deinstall ok config-files", "", false, false},

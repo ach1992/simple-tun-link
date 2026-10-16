@@ -161,7 +161,28 @@ func vendorOptionalPackageInstalled(ctx context.Context, pkg string) (bool, erro
 	if out.overflow || diag.overflow {
 		return false, errors.New("optional package observation unbounded")
 	}
-	return vendorOptionalPackageStatusReceipt(pkg, exitCode, out.output.Bytes(), diag.output.Bytes())
+	installed, statusErr := vendorOptionalPackageStatusReceipt(pkg, exitCode, out.output.Bytes(), diag.output.Bytes())
+	if statusErr != nil || installed {
+		return installed, statusErr
+	}
+	// A not-installed dpkg status cannot legitimize residual plugin binaries,
+	// package file lists or default configuration left by partial removals.
+	// The separate config scanner also rejects any unowned config under /etc.
+	for _, file := range []string{
+		"/var/lib/dpkg/info/" + pkg + ".list",
+		"/var/lib/dpkg/info/" + pkg + ":" + runtime.GOARCH + ".list",
+		"/var/lib/dpkg/info/" + pkg + ".md5sums",
+		"/var/lib/dpkg/info/" + pkg + ":" + runtime.GOARCH + ".md5sums",
+		"/usr/lib/ipsec/plugins/libstrongswan-eap-mschapv2.so",
+		"/usr/lib/ipsec/plugins/libstrongswan-xauth-generic.so",
+		"/lib/ipsec/plugins/libstrongswan-eap-mschapv2.so",
+		"/lib/ipsec/plugins/libstrongswan-xauth-generic.so",
+	} {
+		if _, err := os.Lstat(file); err == nil || !errors.Is(err, os.ErrNotExist) {
+			return false, errors.New("optional vendor package has leftover files despite absent state")
+		}
+	}
+	return false, nil
 }
 
 func vendorOptionalPackageStatusReceipt(pkg string, code int, stdout, stderr []byte) (bool, error) {
@@ -173,6 +194,12 @@ func vendorOptionalPackageStatusReceipt(pkg string, code int, stdout, stderr []b
 	}
 	if code == 1 && len(stdout) == 0 &&
 		string(stderr) == "dpkg-query: no packages found matching "+pkg+"\n" {
+		return false, nil
+	}
+	// Ubuntu can retain an available-package database entry for a package
+	// never actually installed. This exact state is different from unpacked,
+	// config-files, half-configured, or any other partial package state.
+	if code == 0 && len(stderr) == 0 && string(stdout) == "unknown ok not-installed" {
 		return false, nil
 	}
 	return false, errors.New("optional vendor package state is ambiguous or partial")
