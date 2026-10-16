@@ -75,7 +75,7 @@ A non-interactive CLI and machine-readable JSON output must expose the same core
 - Native ESP and NAT-T/ESP-in-UDP behavior.
 - Credential material is secret and follows setup-link security rules.
 - v0.1 operational target: one STL-owned native-exclusive strongSwan runtime per eligible host, with standard IKE UDP 500/4500, not one daemon per Link. Preserve one shared IPsec engine and use small capability-driven packaging/service adapters across Linux distributions.
-- Existing or ambiguously owned strongSwan services, management, ports, credentials or kernel resources block only IPsec activation; never stop or adopt a foreign daemon. GRE/IPIP/WireGuard remain independently usable. An isolated multi-daemon alternative is future work, not a prerequisite for v0.1.
+- Existing or ambiguously owned strongSwan services, management, ports, credentials or kernel resources block only IPsec until independently reconciled; GRE/IPIP/WireGuard remain usable. No generic PREPARE consent may stop a pre-existing service. A separately typed exact-unit STOP consent may stop/disable only the proven distro-owned strongswan.service after an explicit immediate-VPN-disconnection warning, under the installed exclusive maintenance gate, with identity reattestation and fresh post-action admission. Other units, unknown ownership, incomplete packages and foreign configuration require guided manual remediation and RECHECK, never blind stop/adoption.
 
 ## 6. Link addressing
 
@@ -218,7 +218,7 @@ The project license is **MIT**. The canonical CLI remains `stl`; `stlink` is a l
 
 For v0.1, **Quick Link** is the default one-step pairing mode for secret-bearing backends. The format remains explicitly extensible so a future Secure Exchange/local-key mode can be added without changing the core Link model. Current development targets are tracked by the relevant GitHub Issues.
 
-For IPsec v0.1, the Owner accepts a single native-exclusive STL-owned strongSwan runtime on eligible hosts and an explicit fail-closed IPsec-only unavailability on any host with foreign/ambiguous daemon ownership. Future coexistence/isolation modes require independent validation and review. The Owner also requires actionable, redacted operator diagnostics and coherent safe logging across **every** backend and CLI/menu workflow; this is a product-wide acceptance criterion, not an IPsec-specific embellishment.
+For IPsec v0.1, the Owner accepts one STL-owned native-exclusive runtime; unresolved foreign/ambiguous ownership remains IPsec-only fail-closed. The 2026-10-16 Owner decision permits separately confirmed, exactly named STOP/DISABLE for a positively verified pre-existing official distro strongswan.service, not blanket foreign-service modification. A benign private-unit systemd LOAD=not-found placeholder is not a real service. Manual remediation plus explicit RECHECK remains available; unknown/partial states never become implicitly owned. The Owner also requires actionable, redacted operator diagnostics and coherent safe logging across **every** backend and CLI/menu workflow; this is a product-wide acceptance criterion, not an IPsec-specific embellishment.
 
 2026-10-14 Owner acceptance: pre-success setup is disposable, but a fully committed working tunnel MUST be restored after reboot; basic protection against lost/unknown secrets or foreign resource deletion is not waived. The persisted MTU contract is `unset=legacy/unmanaged`, `auto`, or `manual(bytes)`, applied only under canonical local Engine ownership and never copied across pairing. Real physical WAN/NAT-router experiments are Owner-run **after** publication; do not claim them pre-tested or bypass platform restrictions. Installed released-artifact identity and successful committed-Link restart/traffic remain pre-publication acceptance. Stable publication/tag still needs separate Owner authorization.
 
@@ -248,11 +248,7 @@ Physical-host WAN/NAT/systemd-249 acceptance remains the separate
 4. Read-only check only the chosen backend's missing prerequisites.
    If needed, show one clear package/module/STL-private-service plan,
    affected resources, effects that may persist, and **one fresh PREPARE**
-   confirmation covering the *entire selected preparation*. Automatically
-   perform qualified work via the canonical installer, existing module
-   adapters and existing exclusive IPsec provisioner. Reinspect readiness
-   and continue the **same selected tunnel**. Already-ready backends
-   must not show another preparation prompt.
+   confirmation covering the selected preparation, except stopping an existing vendor service requires a distinct exact-name STOP confirmation or manual remediation and RECHECK. The menu must distinguish a harmless private-unit not-found placeholder from a real/foreign service. Automatically perform qualified work via the canonical installer, kernel adapters and exclusive IPsec provisioner. Reinspect readiness and continue the **same selected tunnel**; actual Link creation still separately requires YES.
 5. Preview both endpoints, private IPs, encapsulation/port, local MTU
    policy, and scope. Creating or importing the actual Link needs its
    own affirmative YES. A failed or cancelled step must not claim success.

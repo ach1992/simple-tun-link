@@ -15,6 +15,221 @@ bash /mnt/stl-install.sh install --bundle /mnt/stl-bundle --backends native
 [[ -x /usr/local/bin/stl ]] || fail no_verified_installed_binary
 original=$(sha256sum /usr/local/bin/stl | awk '{print $1}')
 record=$(sha256sum /usr/local/lib/simple-tun-link/install-record | awk '{print $1}')
+# Exercise a REAL pre-existing, distro-owned StrongSwan service in an
+# isolated guest. Unlike the clean-host package case, this service belongs
+# to the operator before PREPARE. Only a fresh, separately typed exact-unit
+# STOP consent can change it; the menu must then provision STL separately.
+if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor* ]]; then
+  if [[ -f /usr/sbin/policy-rc.d ]]; then
+    mv /usr/sbin/policy-rc.d /tmp/stl-existing-vendor-policy-rc.d
+  fi
+  apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    charon-systemd strongswan-swanctl libstrongswan-standard-plugins >/tmp/stl-existing-vendor-apt.log 2>&1 ||
+    fail cannot_install_real_distro_vendor_fixture
+  systemctl --system enable --now strongswan.service >/dev/null ||
+    fail cannot_start_distro_owned_vendor_fixture
+  [[ $(systemctl --system is-active strongswan.service) == active &&
+     $(systemctl --system is-enabled strongswan.service) == enabled ]] ||
+    fail existing_vendor_not_live_before_user_consent
+  plan=$(bash /mnt/stl-install.sh requirements --backends native,ipsec) ||
+    fail existing_vendor_package_inventory_unknown
+  grep -qx "missing_packages=" <<< "$plan" ||
+    fail existing_vendor_has_incomplete_package_install
+  [[ ! -e /var/lib/simple-tun-link/ipsec ]] ||
+    fail private_service_exists_before_consent
+  if [[ "${STL_IPSEC_PREPARE_CASE}" == existing_vendor ]]; then
+    # Status-only diagnostic in a disposable guest, no package secrets.
+    optional_rc=0
+    optional_state=$(LC_ALL=C dpkg-query -W '-f=${Status}' -- libcharon-extauth-plugins 2>&1) ||
+      optional_rc=$?
+    printf 'IPSEC_DISPOSABLE_OPTIONAL_DPKG_STATUS rc=%d value=%q\n' "$optional_rc" "$optional_state"
+  fi
+  case "${STL_IPSEC_PREPARE_CASE}" in
+    existing_vendor) ;;
+    existing_vendor_optional_clean)
+      # An entirely official optional plugin package must remain eligible
+      # for the SAME separate vendor STOP after full archive attestation.
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libcharon-extauth-plugins >/tmp/stl-existing-optional-apt.log 2>&1 ||
+        fail cannot_install_clean_optional_vendor_fixture
+      [[ $(dpkg-query -W '-f=${Status}' libcharon-extauth-plugins) == 'install ok installed' ]] ||
+        fail official_optional_vendor_not_fully_configured
+      ;;
+    existing_vendor_foreign_config)
+      mkdir -p /etc/swanctl/conf.d
+      printf 'foreign connection; must not be adopted\n' >/etc/swanctl/conf.d/foreign.conf
+      ;;
+    existing_vendor_foreign_alias)
+      mkdir -p /run/systemd/system.attached/strongswan-swanctl.service.d
+      printf '[Service]\nExecStartPre=/usr/bin/false\n' \
+        >/run/systemd/system.attached/strongswan-swanctl.service.d/foreign.conf
+      ;;
+    existing_vendor_private_conflict)
+      # Existing partial STL-private inventory must not be adopted.
+      mkdir -p /var/lib/simple-tun-link
+      mkdir -m 0700 /var/lib/simple-tun-link/ipsec
+      ;;
+    existing_vendor_untrusted_config_owner)
+      # A default package-owned config with unchanged bytes must still
+      # reject STOP when its inode becomes writable by another UID.
+      chown 65534:65534 /etc/strongswan.d/charon/pgp.conf
+      ;;
+    existing_vendor_foreign_process)
+      /mnt/stl-foreign-process-marker &
+      foreign_pid=$!
+      for _ in 1 2 3 4 5; do
+        [[ $(cat /proc/$foreign_pid/comm) == charon ]] && break
+        sleep .1
+      done
+      [[ $(cat /proc/$foreign_pid/comm) == charon ]] ||
+        fail foreign_daemon_fixture_not_running
+      ;;
+    existing_vendor_optional_modified)
+      # Optional official plug-in configuration must be attested just as
+      # strictly as required package configs before any real vendor STOP.
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libcharon-extauth-plugins >/tmp/stl-existing-optional-apt.log 2>&1 ||
+        fail cannot_install_optional_vendor_fixture
+      conf=/etc/strongswan.d/charon/eap-mschapv2.conf
+      [[ -f $conf ]] || fail optional_distro_conf_not_present
+      printf '\n# Disposable modified optional plugin configuration\n' >> "$conf"
+      ;;
+    existing_vendor_optional_partial)
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libcharon-extauth-plugins >/tmp/stl-existing-optional-apt.log 2>&1 ||
+        fail cannot_install_optional_vendor_fixture
+      (cd /tmp && apt-get download libcharon-extauth-plugins >/dev/null 2>&1) ||
+        fail cannot_obtain_optional_vendor_fixture
+      dpkg --unpack /tmp/libcharon-extauth-plugins_*.deb >/dev/null 2>&1 ||
+        fail cannot_construct_partial_optional_package
+      [[ -n $(dpkg --audit) ]] || fail optional_package_not_actually_partial
+      ;;
+    existing_vendor_local_metadata_forgery)
+      # Forge a *previously installed* package, not a future APT candidate:
+      # keep dpkg's own md5 metadata internally consistent with a changed
+      # package-owned runtime plugin. A signed official .deb must still win
+      # the byte comparison and forbid stopping the live vendor daemon.
+      plugin=$(dpkg -L libstrongswan-standard-plugins |
+        awk '/\/plugins\/.*\.so$/ && !found {print; found=1}')
+      [[ -f $plugin ]] || fail no_distro_plugin_for_forgery_fixture
+      metadata=''
+      for candidate in /var/lib/dpkg/info/libstrongswan-standard-plugins*.md5sums; do
+        [[ -f $candidate ]] || continue
+        if grep -qF "  ${plugin#/}" "$candidate"; then
+          metadata=$candidate
+          break
+        fi
+      done
+      [[ -n $metadata ]] || fail plugin_metadata_for_forgery_not_found
+      printf '\n' >> "$plugin"
+      spoofed_digest=$(md5sum "$plugin" | awk '{print $1}')
+      # dpkg .md5sums requires TWO spaces between each checksum and
+      # relative filename; awk's default print would make an invalid
+      # metadata file, accidentally passing a negative E2E for the wrong
+      # reason. Generate correct md5sum syntax for EVERY line.
+      awk -v wanted="${plugin#/}" -v digest="$spoofed_digest" '
+        $2 == wanted { $1 = digest; found = 1 }
+        NF == 2 { printf "%s  %s\n", $1, $2; next }
+        { exit 3 }
+        END { if (!found) exit 2 }
+      ' "$metadata" > "$metadata.fixture" ||
+        fail cannot_construct_well_formed_dpkg_forgery_fixture
+      chmod 0644 "$metadata.fixture"
+      mv -f -- "$metadata.fixture" "$metadata"
+      LC_ALL=C dpkg --verify libstrongswan-standard-plugins \
+        >/tmp/stl-forged-dpkg-verify-stdout \
+        2>/tmp/stl-forged-dpkg-verify-stderr ||
+        fail forged_dpkg_metadata_failed_its_own_integrity_check
+      [[ ! -s /tmp/stl-forged-dpkg-verify-stderr ]] ||
+        fail forged_dpkg_metadata_emitted_diagnostics
+      # Missing documentation may be normal in lean distro guests; no
+      # operational file or configuration mismatch is permissible.
+      if grep -Ev '^missing[[:space:]]+/usr/share/(doc|man)/' \
+          /tmp/stl-forged-dpkg-verify-stdout |
+          grep -q .; then
+        fail forged_dpkg_metadata_did_not_mask_local_tampering
+      fi
+      echo 'IPSEC_INSTALLED_LOCAL_DPKG_METADATA_VALID_BUT_FORGED=PASS'
+      ;;
+    existing_vendor_plugin_world_writable|existing_vendor_plugin_parent_writable|existing_vendor_plugin_parent_symlink)
+      # Preserve official signed runtime bytes and locally consistent dpkg
+      # checksums: ONLY unsafe filesystem metadata must prevent vendor STOP.
+      plugin=$(dpkg -L libstrongswan-standard-plugins |
+        awk '/\/plugins\/.*\.so$/ && !found {print; found=1}')
+      [[ -f $plugin && ! -L $plugin ]] || fail missing_regular_plugin_metadata_fixture
+      plugin_hash=$(sha256sum "$plugin" | awk '{print $1}')
+      case "$STL_IPSEC_PREPARE_CASE" in
+        existing_vendor_plugin_world_writable)
+          chmod o+w "$plugin"
+          [[ -n $(find "$plugin" -maxdepth 0 -perm /002 -print -quit) ]] ||
+            fail runtime_plugin_writable_fixture_not_applied
+          ;;
+        existing_vendor_plugin_parent_writable)
+          plugin_parent=$(dirname "$plugin")
+          chmod g+w "$plugin_parent"
+          [[ -n $(find "$plugin_parent" -maxdepth 0 -perm /020 -print -quit) ]] ||
+            fail plugin_parent_writable_fixture_not_applied
+          ;;
+        existing_vendor_plugin_parent_symlink)
+          plugin_parent=$(dirname "$plugin")
+          [[ ! -e "${plugin_parent}.stl-fixture" ]] || fail symlink_fixture_conflict
+          mv -- "$plugin_parent" "${plugin_parent}.stl-fixture"
+          ln -s -- "$(basename "$plugin_parent").stl-fixture" "$plugin_parent"
+          [[ -L $plugin_parent ]] || fail plugin_parent_symlink_fixture_not_applied
+          ;;
+      esac
+      [[ $(sha256sum "$plugin" | awk '{print $1}') == "$plugin_hash" ]] ||
+        fail plugin_bytes_modified_by_metadata_fixture
+      LC_ALL=C dpkg --verify libstrongswan-standard-plugins \
+        >/tmp/stl-metadata-mode-dpkg-stdout \
+        2>/tmp/stl-metadata-mode-dpkg-stderr ||
+        fail metadata_only_fixture_invalidated_dpkg_status
+      [[ ! -s /tmp/stl-metadata-mode-dpkg-stderr ]] ||
+        fail metadata_only_fixture_emitted_dpkg_diagnostics
+      if grep -Ev '^missing[[:space:]]+/usr/share/(doc|man)/' \
+          /tmp/stl-metadata-mode-dpkg-stdout | grep -q .; then
+        fail metadata_only_fixture_invalidated_local_dpkg_checksums
+      fi
+      echo "IPSEC_OFFICIAL_RUNTIME_BYTES_UNCHANGED_UNSAFE_METADATA=PASS case=$STL_IPSEC_PREPARE_CASE"
+      ;;
+    existing_vendor_late_config) ;;
+    *) fail unrecognized_existing_vendor_case ;;
+  esac
+  if [[ "${STL_IPSEC_PREPARE_CASE}" == existing_vendor ||
+        "${STL_IPSEC_PREPARE_CASE}" == existing_vendor_optional_clean ]]; then
+    /usr/bin/expect /mnt/managed-existing.exp || fail operator_vendor_consent_failed
+    [[ $(systemctl --system is-active strongswan.service) == inactive &&
+       $(systemctl --system is-enabled strongswan.service) == disabled ]] ||
+      fail consented_vendor_not_stopped_disabled
+    [[ $(systemctl --system is-active simple-tun-link-ipsec.service) == active ]] ||
+      fail new_stl_private_service_not_started
+    /usr/local/bin/stl doctor ipsec --json | grep -q '"activation_allowed":true' ||
+      fail new_stl_private_service_not_admitted
+    echo 'IPSEC_REAL_PRIOR_DISTRIBUTION_SERVICE_EXACT_OPERATOR_CONSENT=PASS'
+  else
+    /usr/bin/expect /mnt/managed-existing-denied.exp || fail forbidden_vendor_stop_not_denied
+    [[ $(systemctl --system is-active strongswan.service) == active &&
+       $(systemctl --system is-enabled strongswan.service) == enabled ]] ||
+      fail existing_vendor_was_changed_despite_foreign_conflict
+    if [[ "${STL_IPSEC_PREPARE_CASE}" == existing_vendor_private_conflict ]]; then
+      # Deliberately pre-existing empty directory must persist without a
+      # private-service publication or adoption.
+      [[ -d /var/lib/simple-tun-link/ipsec &&
+         -z $(find /var/lib/simple-tun-link/ipsec -mindepth 1 -maxdepth 1 -print -quit) ]] ||
+        fail private_conflict_was_adopted_or_modified
+    else
+      [[ ! -e /var/lib/simple-tun-link/ipsec ]] ||
+        fail private_service_published_despite_foreign_conflict
+    fi
+    [[ ! -e /etc/systemd/system/simple-tun-link-ipsec.service ]] ||
+      fail private_service_unit_published_despite_foreign_conflict
+    echo "IPSEC_PRE_STOP_MIXED_HOST_CONFLICT_REJECTED=${STL_IPSEC_PREPARE_CASE}:PASS"
+  fi
+  [[ $(sha256sum /usr/local/bin/stl | awk '{print $1}') == "$original" &&
+     $(sha256sum /usr/local/lib/simple-tun-link/install-record | awk '{print $1}') == "$record" ]] ||
+    fail existing_vendor_workflow_modified_STL_installation
+  echo "IPSEC_EXISTING_VENDOR_SCENARIO_COMPLETED=PASS"
+  exit 0
+fi
+
 # An independently signed, APT-trusted third-party repository may spoof
 # Origin/Label Ubuntu. Even if its higher version wins normal APT selection,
 # the read-only STL preview must reject it before any package effects.
@@ -80,6 +295,30 @@ apt_plan=$(sed -n 's/^apt_install=//p' <<< "$plan")
   fail no_real_strongswan_dependency_plan
 
 case "${STL_IPSEC_PREPARE_CASE:-}" in
+  ghost)
+    # A read-only systemctl query can retain a harmless missing private-unit
+    # placeholder. Prove it is genuinely not loaded and still allow PREPARE.
+    systemctl --system --no-pager show -p LoadState simple-tun-link-ipsec.service \
+      | grep -qx 'LoadState=not-found' || fail ghost_fixture_unit_is_real
+    ghost_list=$(systemctl --system --no-pager --no-legend --plain --all \
+      --type=service list-units 'strongswan*.service' 'charon*.service' \
+      'ipsec.service' 'simple-tun-link-ipsec.service') ||
+      fail ghost_fixture_systemd_query_failed
+    # Some systemd versions garbage-collect missing-unit placeholders on
+    # each read-only query. Both the empty inventory and a single benign
+    # private-unit not-found record are safe; any other unit is forbidden.
+    if [[ -n $ghost_list ]]; then
+      [[ $ghost_list == 'simple-tun-link-ipsec.service not-found inactive dead '* ]] ||
+        fail ghost_fixture_unexpected_loaded_service
+      echo 'IPSEC_EXACT_NOT_FOUND_PLACEHOLDER_CACHED=PASS'
+    else
+      echo 'IPSEC_ABSENT_PLACEHOLDER_GARBAGE_COLLECTED=OBSERVED'
+    fi
+    [[ ! -e /etc/systemd/system/simple-tun-link-ipsec.service &&
+       ! -e /usr/lib/systemd/system/simple-tun-link-ipsec.service ]] ||
+      fail ghost_fixture_has_real_service
+    echo 'IPSEC_EXACT_NOT_FOUND_PLACEHOLDER_OBSERVED=PASS'
+    ;;
   foreign)
     # A dormant foreign drop-in is NOT made STL-owned by PREPARE consent.
     mkdir -p /etc/systemd/system/strongswan.service.d
@@ -128,7 +367,7 @@ case "${STL_IPSEC_PREPARE_CASE:-}" in
     echo "IPSEC_FOREIGN_UNITPATH_DROPIN_DENIED_BEFORE_APT=$STL_IPSEC_PREPARE_CASE:PASS"
     exit 0
     ;;
-  clean|partial) ;;
+  clean|partial|ghost) ;;
   *) fail invalid_case ;;
 esac
 

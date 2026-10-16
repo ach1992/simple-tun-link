@@ -199,6 +199,34 @@ packages. Stable v0.1.0 includes the reviewed selected package/service
 preparation but does not authorize mutation on operational hosts without
 the operator's own backups and explicit consent.
 
+**Unreleased Issue #112:** the Installer distinguishes a strict, single-line
+LOAD=not-found inactive/dead placeholder for STL's missing private IPsec
+unit from real/foreign service identities. When all selected packages
+are ready, an installed-root operator may separately type
+STOP strongswan.service to stop/disable only the independently attested,
+distro-owned unit, with a clear warning about immediate VPN interruption
+and disablement persisting across reboot. Before displaying STOP, STL
+also requires complete dpkg package state, no partial/foreign STL-private
+publication, verified vendor and alias identities, unchanged package-owned
+default configuration, and exclusive attribution of the running vendor's
+process and IKE UDP 500/4500 sockets. The official-service proof also
+checks installed optional `libcharon-extauth-plugins` configuration owners
+and compares live vendor files with package contents authenticated through
+a distribution-signed APT `InRelease` / `Packages` chain and archive
+SHA256, rather than trusting local dpkg checksums alone. All installed
+runtime files, package directory entries and their ancestors must also
+remain root-controlled, with only known distribution usrmerge symlinks
+accepted along runtime paths. It may fetch
+public official packages read-only. If signer, package identity, index,
+file bytes or network access cannot be proved, automatic STOP is refused;
+manual reconciliation remains available. The **entire** eligibility check
+is repeated under the exclusive maintenance lock immediately before stopping.
+Any incompatible observation means no automatic STOP/DISABLE. Alternatively,
+repair manually and type RECHECK. Unknown/custom services, partial APT,
+foreign configuration and uncertain identity remain blocked; no generic
+stop, adoption, purge or mask. The existing public immutable v0.1.0
+does not contain this Issue #112 candidate.
+
 - Only missing packages are requested; the installer never upgrades the entire
   host or edits repositories. Host APT package installation is not covered by
   the STL binary rollback transaction, and STL uninstall never uninstalls host

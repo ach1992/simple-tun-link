@@ -1093,6 +1093,12 @@ the publisher is not wired are **historical**, not the present CLI contract.
 Use [real IPsec E2E](operations/IPSEC-REAL-E2E.md) and
 [architecture](ARCHITECTURE.md) for the current ownership/activation boundary.
 
+**Unreleased Issue #112:** a harmless private-unit systemd not-found
+placeholder is not treated as a real service. Any real vendor-service
+interruption requires a separate exact-unit typed STOP/DISABLE or manual
+repair followed by RECHECK; other service/config/package conflicts
+remain fail-closed. Existing Stable v0.1.0 remains unchanged.
+
 `stl doctor ipsec` is always read-only. Without a positively attested STL
 native-exclusive strongSwan service, `--json` preserves
 `schema_version:1`, `backend:"ipsec"`, `runtime_mode:"native_exclusive"`,

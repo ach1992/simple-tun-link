@@ -57,6 +57,8 @@ STL-exclusive private-service plan. Unknown/foreign strongSwan processes,
 ports or units are never adopted. A fresh separate `YES` is still required
 to create the Link; provider firewall/NAT and remote peer setup remain manual.
 
+**Issue #112 candidate (NOT in immutable public v0.1.0):** a harmless missing STL-private systemd placeholder no longer blocks IPsec preparation. A real, verified official distro strongswan.service can be stopped/disabled only with its own exact-unit STOP consent, warning that VPN traffic may be interrupted; unknown or custom services require manual remediation and RECHECK. Private service ownership and separate Link YES are still mandatory.
+
 **Already installed?** Use the permanent **update** one-liner in
 [section 6](#6-update-safely), not `install`. The canonical installer refuses
 to adopt foreign or locally modified files. Read the [State/rollback

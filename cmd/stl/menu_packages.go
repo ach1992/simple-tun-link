@@ -231,7 +231,7 @@ func menuPrepareSelectedPackagesWithOps(input io.Reader, reader *bufio.Reader, o
 	}
 	if needsService {
 		menuField(out, "Private service", "Inspect ownership; publish and start STL-exclusive IPsec unit if qualified")
-		menuNotice(out, "WARNING", "Signed APT package hooks may briefly enable/start a NEW vendor strongSwan service. STL will stop/disable ONLY that proven transaction-created unit; it never changes a pre-existing service.")
+		menuNotice(out, "WARNING", "Signed APT package hooks may temporarily start a NEW vendor service. Existing VPN services require a SEPARATE exact-unit STOP consent after package checks, or manual reconciliation; PREPARE alone cannot stop them.")
 	}
 	menuField(out, "NEXT ACTION", "Review selected changes; type PREPARE to continue")
 	menuProse(out, "APT packages may persist after an interruption. No Link, keys, or peer connection will be created during preparation.")
@@ -277,8 +277,15 @@ func menuPrepareSelectedPackagesWithOps(input io.Reader, reader *bufio.Reader, o
 		err := ipsecbackend.NativeProvisionReadiness(probeCtx)
 		probeDone()
 		if err != nil {
-			menuNotice(out, "FAILED", "Private IPsec admission is not qualified. Vendor/foreign identity or incomplete sources must be reconciled; no Link created.")
-			return menuPackagePreparation{}
+			// A known distro-owned service might already be active or enabled.
+			// PREPARE did not authorize stopping it. Ask for a distinct exact
+			// service STOP/DISABLE consent or let the operator repair manually.
+			// Only a clean *initial* package inventory can enter automatic
+			// vendor remediation; partial APT is never treated as a safe takeover.
+			if !menuResolveIPsecServiceConflict(input, reader, out, plan.missing == "") {
+				menuNotice(out, "FAILED", "Private IPsec admission remains blocked. Reconcile the observed conflict before continuing; no Link created.")
+				return menuPackagePreparation{}
+			}
 		}
 		provisionCtx, done := context.WithTimeout(context.Background(), 75*time.Second)
 		err = ipsecbackend.ProvisionNativeExclusive(provisionCtx)
