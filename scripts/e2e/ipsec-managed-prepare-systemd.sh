@@ -127,8 +127,16 @@ case "${STL_IPSEC_PREPARE_CASE:-}" in
       --type=service list-units 'strongswan*.service' 'charon*.service' \
       'ipsec.service' 'simple-tun-link-ipsec.service') ||
       fail ghost_fixture_systemd_query_failed
-    [[ "$ghost_list" == "simple-tun-link-ipsec.service not-found inactive dead "* ]] ||
-      fail ghost_fixture_not_loaded_in_system_manager
+    # Some systemd versions garbage-collect missing-unit placeholders on
+    # each read-only query. Both the empty inventory and a single benign
+    # private-unit not-found record are safe; any other unit is forbidden.
+    if [[ -n $ghost_list ]]; then
+      [[ $ghost_list == 'simple-tun-link-ipsec.service not-found inactive dead '* ]] ||
+        fail ghost_fixture_unexpected_loaded_service
+      echo 'IPSEC_EXACT_NOT_FOUND_PLACEHOLDER_CACHED=PASS'
+    else
+      echo 'IPSEC_ABSENT_PLACEHOLDER_GARBAGE_COLLECTED=OBSERVED'
+    fi
     [[ ! -e /etc/systemd/system/simple-tun-link-ipsec.service &&
        ! -e /usr/lib/systemd/system/simple-tun-link-ipsec.service ]] ||
       fail ghost_fixture_has_real_service
