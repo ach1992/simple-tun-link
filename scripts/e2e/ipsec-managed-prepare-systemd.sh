@@ -52,6 +52,11 @@ if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor* ]]; then
     existing_vendor_private_conflict)
       mkdir -m 0700 /var/lib/simple-tun-link/ipsec
       ;;
+    existing_vendor_untrusted_config_owner)
+      # A default package-owned config with unchanged bytes must still
+      # reject STOP when its inode becomes writable by another UID.
+      chown 65534:65534 /etc/strongswan.d/charon/pgp.conf
+      ;;
     existing_vendor_foreign_process)
       /mnt/stl-foreign-process-marker &
       foreign_pid=$!

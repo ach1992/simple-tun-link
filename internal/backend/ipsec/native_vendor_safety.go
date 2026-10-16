@@ -350,6 +350,13 @@ func vendorDistroConfigOwner(pkg string) bool {
 // A third-party VPN's credentials/profiles are never stopped in the hope that
 // a subsequent private STL provisioner might happen to succeed.
 func vendorStopForeignConfigAbsent(ctx context.Context) error {
+	// An unprivileged owner of an otherwise pristine distro config tree
+	// could modify it after read-only verification. Every parent and file
+	// must be root-controlled, not merely package-listed and non-group-writable.
+	etc, err := os.Lstat("/etc")
+	if err != nil || !rootControlledExecutableMetadata(etc, true) {
+		return errors.New("system configuration ancestry not root-controlled")
+	}
 	for _, path := range []string{"/etc/ipsec.conf", "/etc/ipsec.secrets", "/etc/ipsec.d"} {
 		if _, err := os.Lstat(path); err == nil || !errors.Is(err, os.ErrNotExist) {
 			return errors.New("legacy or foreign IPsec configuration exists")
@@ -371,13 +378,13 @@ func vendorStopForeignConfigAbsent(ctx context.Context) error {
 				return errors.New("foreign symlink or unreadable distro config")
 			}
 			if info.IsDir() {
-				if info.Mode().Perm()&0o022 != 0 {
-					return errors.New("writable distro config directory")
+				if !rootControlledExecutableMetadata(info, true) {
+					return errors.New("distro config directory is not root-controlled")
 				}
 				return nil
 			}
-			if !info.Mode().IsRegular() || len(files) == 256 {
-				return errors.New("foreign distro config entry or inventory overflow")
+			if !rootControlledExecutableMetadata(info, false) || len(files) == 256 {
+				return errors.New("distro config file not root-controlled or inventory overflow")
 			}
 			files = append(files, path)
 			return nil

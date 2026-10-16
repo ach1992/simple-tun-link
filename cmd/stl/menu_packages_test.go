@@ -38,10 +38,12 @@ func TestSelectedPackagePlanIsTypedAndReadOnly(t *testing.T) {
 		if got := selectedPackageBackends(tc.sel); got != tc.want {
 			t.Fatalf("%s: %s", tc.want, got)
 		}
-		// Production allows 12 seconds for the read-only APT preview.
-		// Official distro archive signature checks and candidate-index
-		// attestation can take longer than 3s on cold CI runners.
-		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		// This test verifies selector and read-only canonical plan
+		// correctness, not a wall-clock SLA. On heavily loaded CI runners,
+		// the distro signature/index resolver can exceed production's
+		// 12-second UX budget. Do not let host load make a correctness test
+		// flaky; production still fails closed at its 12-second boundary.
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		plan, err := readSelectedPackagePreview(ctx, tc.sel)
 		cancel()
 		if err != nil {
