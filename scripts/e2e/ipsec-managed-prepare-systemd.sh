@@ -149,6 +149,47 @@ if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor* ]]; then
       fi
       echo 'IPSEC_INSTALLED_LOCAL_DPKG_METADATA_VALID_BUT_FORGED=PASS'
       ;;
+    existing_vendor_plugin_world_writable|existing_vendor_plugin_parent_writable|existing_vendor_plugin_parent_symlink)
+      # Preserve official signed runtime bytes and locally consistent dpkg
+      # checksums: ONLY unsafe filesystem metadata must prevent vendor STOP.
+      plugin=$(dpkg -L libstrongswan-standard-plugins |
+        awk '/\/plugins\/.*\.so$/ && !found {print; found=1}')
+      [[ -f $plugin && ! -L $plugin ]] || fail missing_regular_plugin_metadata_fixture
+      plugin_hash=$(sha256sum "$plugin" | awk '{print $1}')
+      case "$STL_IPSEC_PREPARE_CASE" in
+        existing_vendor_plugin_world_writable)
+          chmod o+w "$plugin"
+          [[ -n $(find "$plugin" -maxdepth 0 -perm /002 -print -quit) ]] ||
+            fail runtime_plugin_writable_fixture_not_applied
+          ;;
+        existing_vendor_plugin_parent_writable)
+          plugin_parent=$(dirname "$plugin")
+          chmod g+w "$plugin_parent"
+          [[ -n $(find "$plugin_parent" -maxdepth 0 -perm /020 -print -quit) ]] ||
+            fail plugin_parent_writable_fixture_not_applied
+          ;;
+        existing_vendor_plugin_parent_symlink)
+          plugin_parent=$(dirname "$plugin")
+          [[ ! -e "${plugin_parent}.stl-fixture" ]] || fail symlink_fixture_conflict
+          mv -- "$plugin_parent" "${plugin_parent}.stl-fixture"
+          ln -s -- "$(basename "$plugin_parent").stl-fixture" "$plugin_parent"
+          [[ -L $plugin_parent ]] || fail plugin_parent_symlink_fixture_not_applied
+          ;;
+      esac
+      [[ $(sha256sum "$plugin" | awk '{print $1}') == "$plugin_hash" ]] ||
+        fail plugin_bytes_modified_by_metadata_fixture
+      LC_ALL=C dpkg --verify libstrongswan-standard-plugins \
+        >/tmp/stl-metadata-mode-dpkg-stdout \
+        2>/tmp/stl-metadata-mode-dpkg-stderr ||
+        fail metadata_only_fixture_invalidated_dpkg_status
+      [[ ! -s /tmp/stl-metadata-mode-dpkg-stderr ]] ||
+        fail metadata_only_fixture_emitted_dpkg_diagnostics
+      if grep -Ev '^missing[[:space:]]+/usr/share/(doc|man)/' \
+          /tmp/stl-metadata-mode-dpkg-stdout | grep -q .; then
+        fail metadata_only_fixture_invalidated_local_dpkg_checksums
+      fi
+      echo "IPSEC_OFFICIAL_RUNTIME_BYTES_UNCHANGED_UNSAFE_METADATA=PASS case=$STL_IPSEC_PREPARE_CASE"
+      ;;
     existing_vendor_late_config) ;;
     *) fail unrecognized_existing_vendor_case ;;
   esac

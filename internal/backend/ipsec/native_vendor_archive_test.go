@@ -95,13 +95,15 @@ func TestVendorSignedArchiveMatchesActualFiles(t *testing.T) {
 	deb, live := vendorBuildDisposableDeb(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := vendorLiveFilesMatchOfficialArchive(ctx, deb); err != nil {
+	if err := vendorLiveFilesMatchOfficialArchiveWithPathCheck(ctx, deb,
+		func(string, byte) error { return nil }); err != nil {
 		t.Fatalf("unchanged official-style archive rejected: %v", err)
 	}
 	if err := os.WriteFile(live, []byte("locally modified bytes"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := vendorLiveFilesMatchOfficialArchive(ctx, deb); err == nil {
+	if err := vendorLiveFilesMatchOfficialArchiveWithPathCheck(ctx, deb,
+		func(string, byte) error { return nil }); err == nil {
 		t.Fatal("locally repacked/modified live bytes accepted against signed archive")
 	}
 }
@@ -117,7 +119,8 @@ func TestVendorLiveArchiveMustMatchSignedSHA256(t *testing.T) {
 		digest: hex.EncodeToString(sha[:]), repo: server.URL + "/", size: int64(len(deb))}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	if err := vendorCompareOfficialPayload(ctx, good); err != nil {
+	if err := vendorCompareOfficialPayloadWithPathCheck(ctx, good,
+		func(string, byte) error { return nil }); err != nil {
 		t.Fatalf("signed archive fixture refused: %v", err)
 	}
 	// Replacing the archive with an internally consistent local .deb cannot
@@ -126,7 +129,8 @@ func TestVendorLiveArchiveMustMatchSignedSHA256(t *testing.T) {
 	if bytes.Equal(sha[:], make([]byte, len(sha))) {
 		t.Fatal("test fixture hash unexpectedly zero")
 	}
-	if err := vendorCompareOfficialPayload(ctx, good); err == nil {
+	if err := vendorCompareOfficialPayloadWithPathCheck(ctx, good,
+		func(string, byte) error { return nil }); err == nil {
 		t.Fatal("third-party archive accepted in place of signed distro digest")
 	}
 }

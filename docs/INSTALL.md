@@ -213,7 +213,10 @@ process and IKE UDP 500/4500 sockets. The official-service proof also
 checks installed optional `libcharon-extauth-plugins` configuration owners
 and compares live vendor files with package contents authenticated through
 a distribution-signed APT `InRelease` / `Packages` chain and archive
-SHA256, rather than trusting local dpkg checksums alone. It may fetch
+SHA256, rather than trusting local dpkg checksums alone. All installed
+runtime files, package directory entries and their ancestors must also
+remain root-controlled, with only known distribution usrmerge symlinks
+accepted along runtime paths. It may fetch
 public official packages read-only. If signer, package identity, index,
 file bytes or network access cannot be proved, automatic STOP is refused;
 manual reconciliation remains available. The **entire** eligibility check

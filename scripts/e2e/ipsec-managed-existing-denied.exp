@@ -25,12 +25,19 @@ expect {
 # An adversarial already-installed package fixture must first pass local
 # dpkg --verify and then fail specifically at the signed archive boundary.
 # Merely rejecting it due to corrupted dpkg metadata would be false proof.
-if {$env(STL_IPSEC_PREPARE_CASE) eq "existing_vendor_local_metadata_forgery"} {
+if {$env(STL_IPSEC_PREPARE_CASE) eq "existing_vendor_local_metadata_forgery" ||
+    $env(STL_IPSEC_PREPARE_CASE) eq "existing_vendor_plugin_world_writable" ||
+    $env(STL_IPSEC_PREPARE_CASE) eq "existing_vendor_plugin_parent_writable" ||
+    $env(STL_IPSEC_PREPARE_CASE) eq "existing_vendor_plugin_parent_symlink"} {
   expect {
     -re {official[[:space:]]+provenance} {
-      puts "IPSEC_FORGED_INSTALLED_DPKG_REJECTED_BY_SIGNED_ARCHIVE=PASS"
+      if {$env(STL_IPSEC_PREPARE_CASE) eq "existing_vendor_local_metadata_forgery"} {
+        puts "IPSEC_FORGED_INSTALLED_DPKG_REJECTED_BY_SIGNED_ARCHIVE=PASS"
+      } else {
+        puts "IPSEC_UNSAFE_DISTRIBUTION_RUNTIME_METADATA_BLOCKS_STOP=PASS"
+      }
     }
-    timeout { puts stderr "IPSEC_FORGED_DPKG=NO_SIGNED_ARCHIVE_REJECTION"; exit 33 }
+    timeout { puts stderr "IPSEC_VENDOR=NO_SIGNED_ARCHIVE_METADATA_REJECTION"; exit 33 }
   }
 }
 expect {

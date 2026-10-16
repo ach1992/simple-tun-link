@@ -309,6 +309,12 @@ func vendorInspectSignedIndex(ctx context.Context, file, digest string, expected
 }
 
 func vendorCompareOfficialPayload(ctx context.Context, ref vendorSignedPackage) error {
+	return vendorCompareOfficialPayloadWithPathCheck(ctx, ref, vendorLiveDistroPathMetadata)
+}
+
+func vendorCompareOfficialPayloadWithPathCheck(ctx context.Context, ref vendorSignedPackage,
+	check func(string, byte) error,
+) error {
 	uri, err := url.Parse(ref.repo)
 	if err != nil || (uri.Scheme != "http" && uri.Scheme != "https") || uri.Host == "" || uri.User != nil ||
 		strings.ContainsAny(ref.filename, "\\?#") {
@@ -342,12 +348,21 @@ func vendorCompareOfficialPayload(ctx context.Context, ref vendorSignedPackage) 
 	if !strings.EqualFold(hex.EncodeToString(sum[:]), ref.digest) {
 		return errors.New("signed archive digest mismatch")
 	}
-	return vendorLiveFilesMatchOfficialArchive(ctx, data)
+	return vendorLiveFilesMatchOfficialArchiveWithPathCheck(ctx, data, check)
 }
 
 // Check the archive content against the live host, not against modifiable
 // installed-package md5 metadata. Never execute archive scripts or change dpkg.
 func vendorLiveFilesMatchOfficialArchive(ctx context.Context, deb []byte) error {
+	return vendorLiveFilesMatchOfficialArchiveWithPathCheck(ctx, deb, vendorLiveDistroPathMetadata)
+}
+
+func vendorLiveFilesMatchOfficialArchiveWithPathCheck(ctx context.Context, deb []byte,
+	check func(string, byte) error,
+) error {
+	if check == nil {
+		return errors.New("distro path metadata verifier unavailable")
+	}
 	// Fully consume the bounded unpacker output BEFORE inspecting it.
 	// Streaming tar.Next() while writing the compressed archive to a child
 	// can deadlock on early fail-closed returns with a blocked stdin writer.
@@ -380,21 +395,26 @@ func vendorLiveFilesMatchOfficialArchive(ctx context.Context, deb []byte) error 
 			strings.Contains(name, "\\") {
 			return errors.New("unexpected package archive pathname")
 		}
-		if header.Typeflag == tar.TypeDir {
-			continue
-		}
 		count++
 		if count > 2500 {
 			return errors.New("official package inventory too large")
 		}
 		live := "/" + name
 		info, e := os.Lstat(live)
-		if errors.Is(e, os.ErrNotExist) && (strings.HasPrefix(live, "/usr/share/doc/") ||
-			strings.HasPrefix(live, "/usr/share/man/")) {
+		// A lean official image can omit package documentation/manpages;
+		// the exception never extends to binaries, runtime libraries,
+		// configuration or any of their parent directories.
+		if errors.Is(e, os.ErrNotExist) && vendorOmittableDistroDoc(live) {
 			continue
 		}
 		if e != nil {
-			return errors.New("signed runtime file missing")
+			return errors.New("signed distro file or directory missing")
+		}
+		if err := check(live, header.Typeflag); err != nil {
+			return fmt.Errorf("signed vendor path metadata not trusted: %w", err)
+		}
+		if header.Typeflag == tar.TypeDir {
+			continue
 		}
 		switch header.Typeflag {
 		case tar.TypeReg, tar.TypeRegA:
