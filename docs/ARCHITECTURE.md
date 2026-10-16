@@ -107,7 +107,7 @@ Native Linux/kernel tools remain authoritative for actual dataplane state.
 
 ## 3. Go package direction
 
-Initial repository shape should grow toward:
+The shared package boundaries are:
 
 ~~~text
 cmd/stl/                 CLI entrypoint
@@ -122,7 +122,7 @@ internal/linux/          host integration boundaries
 internal/state/          atomic local desired-state store
 internal/pairing/        setup-link and copy-block formats
 internal/diagnostics/    MTU/link-quality/backend checks
-internal/ui/             interactive terminal presentation
+cmd/stl/menu_*.go        interactive terminal presentation
 internal/version/
 ~~~
 
@@ -149,7 +149,7 @@ A future userspace carrier may legitimately introduce a data-plane helper, but i
 Persist what is needed to recreate and manage successfully committed Links. Incomplete setup is not a product asset that needs same-ID resumability; an operator can start again with a fresh identity. Protected internal staging/journals may remain to bound crash side effects and must never be misinterpreted as a committed Link or permit blind deletion of uncertain resources.
 
 Direction:
-- versioned state schema; historical v2 introduced backend-specific GRE options, and current v3 adds endpoint-local managed MTU. Compatible v1/v2 state migrates in memory without any managed MTU policy; an `mtu` field in pre-v3 state (including empty/explicit unmanaged) is rejected rather than assigned new host-write semantics. Legacy GRE FOU/GUE/options without sufficient identity remain rejected for explicit regeneration rather than guessed;
+- versioned state schema; State v3 supports endpoint-local managed MTU. Compatible v1/v2 state migrates in memory without any managed MTU policy; an `mtu` field in pre-v3 state (including empty/explicit unmanaged) is rejected rather than assigned new host-write semantics. Legacy GRE FOU/GUE/options without sufficient identity remain rejected for explicit regeneration rather than guessed;
 - Links are a collection, not a singleton;
 - zero or more Links may exist on a host, including multiple independent Links to the same peer underlay endpoint pair;
 - one stable Link ID independent of interface display name and peer address;
@@ -259,10 +259,8 @@ an STL-style filename. Unrestricted concurrent root writers cannot be
 serialized without their cooperation; all avoidable observed ownership
 conflicts abort without overriding their canonical configuration.
 
-The restore unit needs an installed, durable stl executable path. Real
-backend adapters register through their own tracked implementation Issues;
-this CLI/persistence substrate does not provide a synthetic production
-tunnel backend. Future CLI commands in Issue #10 must reuse the same
+The restore unit needs an installed, durable stl executable path. All
+backends and entrypoints reuse the same canonical Engine lifecycle,
 state root, engine construction, and persistence integration.
 
 Never store plaintext private keys in generic logs/status/JSON output.
@@ -348,20 +346,22 @@ Default backend.
   per eligible host; all operations use the same canonical Engine and
   durable transaction journals. No global `swanctl --load-all`, wildcard
   unload, route flush or foreign-daemon adoption.
-- Issue #112 reconciles a single harmless in-memory, not-found STL-private systemd placeholder with the Installer's guarded read-only inventory. A real existing vendor service can be stopped/disabled only after a distinct exact-unit typed confirmation, full distro-file/ownership and service-state attestation (including optional plug-in state, signed distribution archive SHA256, matching installed runtime bytes and root-controlled runtime file/directory ancestry with narrowly approved distro symlinks rather than dpkg metadata alone), and installed-maintenance-lock revalidation of the complete package, private-publication, alias, config, process and IKE-port safety envelope. Its effects may disrupt existing VPNs. Other services and all unknown owner/config/port states remain manual reconciliation. No generic service manager or foreign-state takeover belongs in the terminal renderer.
-- Runtime admission requires a verified on-disk config/unit receipt,
-  effective loaded systemd identity, root-controlled regular executable
-  inode/path ancestry, process/cgroup/netns, logger configuration, private
-  VICI peer and exclusive UDP socket ownership.
-  Failed admission blocks only IPsec. The shipped rc.6 binary already
-  includes a separately confirmed STL-exclusive service provisioner.
-  Missing-package automation and its one-consent integration with
-  this provisioner are future work in Issue #105; no backend logic is
-  duplicated in the terminal renderer.
+- Native service classification distinguishes harmless absent/not-found
+  private-unit observations from an actual conflicting unit. Changing a
+  positively verified pre-existing official vendor `strongswan.service`
+  requires fresh exact-unit STOP confirmation under the maintenance gate;
+  uncertain/foreign services remain untouched.
+- Runtime admission requires verified config/unit origin receipts,
+  effective loaded systemd state, trusted executable and process identity,
+  private VICI/socket peer identity, safe logging and exclusive IKE UDP
+  socket ownership. Failed admission blocks only IPsec. See
+  [ADR-0005](decisions/ADR-0005-scoped-vici-ipsec.md) for the
+  exact safety/consent contract.
 - Create/Import/Connect/Ensure/Status/Diagnose/Restore/Remove and protected
   PSK retirement are exercised on real isolated Debian/Ubuntu traffic;
   an actual STL systemd service restart/restore passed in disposable Ubuntu.
-  See [real IPsec E2E](operations/IPSEC-REAL-E2E.md).
+  See [real IPsec E2E](operations/IPSEC-REAL-E2E.md) for
+  reproduction and scope of evidence, not a general WAN guarantee.
 
 ## 9. Address allocation
 
@@ -424,68 +424,29 @@ The format must permit later addition of a `secure_exchange` (or equivalent loca
 
 ## 13. Interactive UI and presentation boundary
 
-The terminal interface is a guided client of the **same** CLI/Engine,
-not a separate network controller. The durable product journey and
-semantic styling are in
-[PROJECT-SPEC, section 15](PROJECT-SPEC.md#15-guided-operator-workflow-and-one-consent-preparation).
-[Issue #106](https://github.com/ach1992/simple-tun-link/issues/106)
-completed the source-wide migration. The Stable v0.1.0 navigation is:
+The terminal UI is a client of the shared Engine and versioned machine
+commands, not a second networking manager. Its operator contract is
+documented in [CLI.md](CLI.md); reusable terminal rendering helpers
+belong in `cmd/stl/menu_presentation.go`, not separate per-backend UI
+frameworks.
 
-~~~text
-SIMPLE TUN LINK       version / current host
-Host / IPv4 candidate / number of saved (NOT verified) Links
-
-1  Create tunnel          New local Link and peer handoff
-2  Import setup link      Join on the other server
-3  My tunnels             View / share / test / remove
-4  Test connectivity      Read-only measurements
-5  Settings               Host / STL information
-6  Update                 Choose official release
-7  Uninstall              Guided removal
-8  Exit
-~~~
-
-The initial Create selection is GRE Native, WireGuard, IPIP Native,
-Manual and Advanced. No public-IP network request or update call
-is required merely to open the menu.
-
-Keep the implementation small: extend the existing
-`cmd/stl/menu_presentation.go` helpers to render meaningfully typed
-sections, short rows, actions, status and diagnostic details.
-Avoid parallel per-screen ANSI renderers and another TUI framework.
-The terminal renderer must not own IP allocation, APT, strongSwan
-service startup, route/firewall, Link commit or its rollback.
-
-- Distinguish **label**, **current observation**, **reason**, **scope**,
-  **action**, and **result**. Render missing/recoverable separately
-  from genuinely conflicting/foreign or unknown observations.
-- Use semantic action styling: destructive REMOVE/DELETE red+bold;
-  preparation INSTALL/PREPARE/UPDATE caution+bold; affirmative YES
-  and verified successes green+bold; navigation/SHOW blue-cyan;
-  secondary hints dim. No color-only meaning.
-- Compose one principal action per screen and put technical explanations
-  into opt-in Details. Avoid several nested paragraphs and repeated
-  next-step warnings. Clearly label unmeasured MTU, local state vs
-  actual peer traffic, and partially applied operations.
-- Layout must use **visible terminal width** to align fields/rows at
-  roughly 60, 80 and 120 columns; long prose can wrap but original
-  private/plain setup lines, URLs, opaque IDs, commands and hashes
-  remain exact and copyable. Never pass a sensitive Setup Link
-  through a generic wrapping/coloring/diagnostic formatter.
-- The existing interactive input and Engine boundaries own actual
-  fresh consent, real root TTY checks, hidden secret paste and
-  target identity rechecks. A single previewed PREPARE covers
-  selected prerequisites (including IPsec's scoped package/service
-  setup when implemented); actual Create/Import still needs its
-  own explicit confirmation. DELETE and REMOVE are separate
-  irreversible actions with distinct previews.
-- Preserve `--json`, public reason codes, exit codes and stdout/stderr
-  semantics. No ANSI in redirected/automation output, `NO_COLOR`
-  or `TERM=dumb`. Do not erase terminal scrollback.
-
-The automation-first backend preparation target is Issue #105.
-Style changes are not authorization to bypass ownership or
-to classify a failed read-only probe as permanently unsupported.
+- Keep a straightforward create/import/manage/test/update workflow with
+  GRE Native as the guided default and optional advanced transport controls.
+- Present observation, uncertainty, changes and the next action distinctly;
+  do not equate saved/locally verified state with peer reachability.
+- Confirm a planned host/prerequisite preparation separately from actual
+  Link creation/import. Service interruption and deletion require their
+  own specifically identified confirmation. Failed or uncertain actions
+  return to an actionable recovery path, not silent retry.
+- Use semantic color plus readable text; show one primary next action and
+  optional detail. Align for narrow and wide terminals, but never wrap,
+  truncate, color-inject or log exact IDs, commands or sensitive handoffs.
+- Keep the interface usable with `NO_COLOR`, `TERM=dumb` and
+  redirected streams; machine output must never depend on terminal colors,
+  screen redraw, prose or prompt order.
+- Menu actions never independently allocate addresses, install packages,
+  own services, commit State, or rewrite firewall/routes; they delegate
+  to the existing installer/Engine and trust boundaries.
 
 ## 14. Reusable integration and extensibility
 
@@ -522,157 +483,91 @@ Architecture may expand only when a concrete accepted capability requires it.
 
 ## 16. Runtime portability and operator observability
 
-The v0.1 IPsec architecture uses **one** canonical Engine/VICI/PSK/XFRM
-lifecycle across supported Linux distributions. Small host adapters select
-package names/versions, executable paths, service manager and security
-confinement from observed capabilities rather than from the distro name
-alone. The first runtime profile is **native-exclusive**: one STL-owned
-strongSwan service per host and multiple independent per-Link identities,
-with standard IKE/NAT-T UDP 500/4500. Do not assume a stopped service or
-empty process listing establishes exclusive rights over VICI, sockets,
-policies, SAs, XFRM links, files or future writers.
+### Conditional native-exclusive IPsec
 
-A foreign/uncertain daemon, service, existing configuration, port or kernel
-resource is an **IPsec-only fail-closed** condition. Do not stop, reconfigure
-or adopt foreign resources. GRE/IPIP/WireGuard remain independent. A more
-isolated runtime is considered only with demonstrated coexistence demand,
-real package/platform tests and new security/compatibility acceptance.
-The IPsec operational backend is **conditionally registered** only after
-full read-only native-exclusive admission; a generic read-only probe, staged
-PSK or public-only journal alone never grants permission to activate it.
+One shared Engine/VICI/PSK/XFRM lifecycle serves supported platforms; small
+capability-driven host adapters resolve package versions/paths, native
+systemd service details and relevant kernel features. The operational
+baseline is an STL-owned native-exclusive strongSwan runtime, shared by
+multiple independently identified per-Link IKEv2/XFRM connections on
+standard IKE/NAT-T UDP 500/4500.
 
-For **every backend** and interactive/non-interactive workflow, build the
-operator experience from one normalized, backend-neutral observation/result
-model rather than writing separate troubleshooting prose in each frontend:
+**Admitting IPsec requires positive combined ownership proof**, not merely
+absence of a foreign process or a matching filename. Before changing host
+state, independently attest the protected configuration and service origin
+(receipt, inode, xattr and canonical bytes), effective PID 1-loaded unit
+including overrides/environment, trusted executable and running process,
+private VICI socket and peer credentials, active CFG/journald logging and
+actual IKE port ownership. Runtime observations are time-local: revalidate
+under the Engine maintenance/Link/resource locks immediately before
+effectful transitions. Missing and unknown states are distinct from
+confirmed foreign conflicts; a harmless in-memory `not-found` placeholder
+for the STL-private unit is not a loaded or foreign service.
 
-- Human result: **what happened**, specific reason, whether the observation
-  is proven or unknown, one **safe next action**, and what (if anything)
-  was changed or rolled back. Never claim success on an unverified outcome.
-- Machine result: stable category and specific `reason_code`, typed status,
-  versioned schema, deterministic exit behavior. Presentations must not
-  depend on parsing arbitrary English exception strings. Breaking changes
-  require a schema version and migration policy; new optional fields must
-  preserve current consumer compatibility.
-- Event correlation: operation, stable public Link ID if applicable,
-  backend, stage, safe reason code, elapsed time and outcome. A bounded,
-  explicit troubleshooting mode may add pre-approved *nonsecret* metadata;
-  never dump raw command argv, untrusted stdout/stderr, config or credentials.
-  CLI stdout for `--json` is reserved for machine output; diagnostics and
-  operator logs must not corrupt it. File/journald persistence, retention,
-  rotation and verbosity are chosen only where an owned runtime needs them;
-  a new logging daemon/database is not required.
-- Confidentiality: no private keys/PSKs, SENSITIVE setup URLs, raw VICI
-  frames, XFRM SA keys, daemon/kernel error payload, user-supplied config
-  or unvalidated filesystem paths in status, logs or support exports.
-  strongSwan effective CFG logging policy must be attested before PSK load;
-  debug mode never enables DBG4 raw-secret output.
-- `status` and `doctor` are observational. Explicit repair/apply/remove
-  retain the canonical Engine authority and owned-only rollback. Unknown,
-  timeout and incomplete inventory remain distinct from true absence.
+Use bounded system-manager inspection rather than causing an absent unit
+to load just to inspect it. Verify actual manager ownership (system PID 1,
+root UID and trusted system-manager identity) and sanitize command/D-Bus
+execution context; explicit manager/environment validation must reject
+untrusted loader or `STRONGSWAN_*` overrides. STL does not rewrite global
+systemd settings to force admission. Use official distro-signed package
+indexes and archive keys for qualified installation; plan and disclose
+package-hook side effects instead of promising atomic package rollback.
+Disallow ambiguous service aliases/drop-ins and foreign startup or IKE
+port effects.
 
-The source-only doctor compatibility path still inventories `/proc/net/
-udp{,6}` read-only, reporting a blocked/unknown prerequisite when no
-operational runtime can be admitted. Once the entire dedicated
-`NativeRuntimeAdmission` passes, `stl doctor ipsec --json` instead reports
-the **time-local** positive admitted state. This is not proof an individual
-Link negotiated IKE or passed packets.
+A previewed `PREPARE` authorizes only the selected, positively qualified
+prerequisite plan; actual Link Create/Import has its own confirmation.
+For the known signed distro package transaction, a newly introduced vendor
+unit may be stopped/disabled only after verifying its exact provenance.
+For a positively verified **pre-existing official**
+`strongswan.service`, an explicit separate
+`STOP strongswan.service` consent, immediate-connection-disruption
+warning and exact reattestation under the installed exclusive maintenance
+gate are mandatory before any stop/disable. Unknown/pre-existing other
+service identities cannot be adopted, stopped or masked automatically;
+offer manual remediation followed by `RECHECK`. The same conditions
+protect GRE/IPIP/WireGuard independence: an IPsec-only conflict must not
+disable those backends.
 
-Operational origin derives from exact protected native
-`strongswan.conf`/systemd unit bytes and root-private
-receipt/inode/xattr-bound no-replace publication. The actual loaded
-`simple-tun-link-ipsec.service` and effective process
-(`/usr/sbin/charon-systemd`, cgroup/netns/environment, CFG/journald
-source), owner-restricted VICI directory/socket with `SO_PEERCRED`
-and matching UDP 500/4500 socket ownership are rechecked before effects.
-The on-disk configuration does not import global foreign
-`/etc/strongswan.conf` includes or enable daemon-managed routing.
-A read-before-write vacancy check **alone** does not grant no-clobber
-ownership: the private writer boundary and Engine locks/transactions are
-additional obligations.
+The canonical Engine issues exact per-Link VICI `load-conn`/
+`load-shared`, `unload-conn`/`unload-shared`, initiations and termination
+without bulk connection/credential reload, daemon-wide flush or foreign
+namespace takeover. It saves public-only pre-effect journals. A missing
+persisted original XFRM ifindex after kernel creation is *not* permission to
+delete a matching-name or matching-ID device; only exact receipt-bound
+identity permits a scoped reconciliation. Per-Link Remove journals record
+SA/VICI/kernel progress; an uncertain remove retains original claims
+until explicit `reconcile-ipsec`. A successful committed Remove issues an
+exact nonsecret retirement receipt for root-private PSK deletion, which
+`retire-ipsec` may complete without a live daemon.
 
-`OperationalBackend` is integrated with the canonical Engine
-maintenance -> Link -> resources locks, protected IPsec Quick Link staging,
-in-memory VICI load/unload with exact IKE connection and shared-key names,
-XFRM device creation/alias/ifindex and crash-safe reconciliation. The
-Engine durably journals XFRM pre-effect issuance, original ifindex before
-non-atomic alias, and exact owner state; unknown pre-index kernel effects
-are never deleted using a derived name. An explicit `reconcile-xfrm-ipsec`
-command can abort only a provable exact-owned device while VICI issuance
-has not begun. The Engine persists a public-only activation/reapply VICI
-issuing journal **before** each
-indeterminate secret-bearing VICI write. Unknown effects require explicit
-owner-verified reconciliation, never blind retry or adoption. Restarted
-STL-owned daemon state can reapply exactly committed Links and protected
-PSKs; tests demonstrate real service restart and continued encrypted traffic.
+The credential-bearing native runtime requires explicit, bounded effective
+logging guarantees before loading PSKs; unsafe strongSwan CFG debug and
+untrusted daemon output must not reach ordinary logs/JSON. See
+[Security](SECURITY.md) and
+[ADR-0005](decisions/ADR-0005-scoped-vici-ipsec.md) for the durable security
+decision. Reproducible isolated evidence and its environmental limits belong
+to [the IPsec E2E runbook](operations/IPSEC-REAL-E2E.md), not this design.
 
-A successful Remove requires persisted exact ownership, tracks each
-SA/VICI/kernel step in a durable per-Link Remove journal, retires only
-its own VICI/XFRM/SA state without assuming a reachable remote underlay,
-and atomically commits a **non-secret retirement receipt** together with
-the Link deletion. Unknown termination, unload or ifindex-pinned deletion
-halts ordinary operations until explicitly confirmed `reconcile-ipsec`
-reloads the exact journal and attests fresh daemon/kernel state. A separately verified root-protected PSK retirement
-then deletes only the exact matching credential and durably marks that
-receipt complete; `retire-ipsec` is a post-Remove-only idempotent retry
-that deliberately needs **no active strongSwan service**, only the protected
-State, receipt, maintenance/Link locks and matching key digest.
-Unknown effects never authorize deletion of another key or daemon object.
+### Shared observations and error contracts
 
-The native config/unit publisher functions are **unexported** and
-accessible to the separately confirmed native-exclusive IPsec service
-provisioner. **In published rc.6**, strongSwan packages are
-administrator-installed: automatic IPsec APT is refused because
-vendor package hooks can independently enable/start a distro service.
-**The next product contract (Issue #105) supersedes this manual UX**:
-the canonical installer first records that the host has no foreign
-strongSwan service/process/configuration or IKE port owner. After one
-previewed PREPARE consent it installs the selected signed distro packages
-using their normal maintainer hooks; the Owner accepts brief startup
-and enablement of a newly installed vendor strongSwan service. STL
-must **positively identify that service as newly introduced by this
-exact transaction**, stop/disable only that unit, and prove it is
-inactive and without an enabled boot edge before invoking the existing
-STL-private provisioner. Never modify any pre-existing/foreign unit,
-and do not add a global package-hook isolation framework. Real disposable
-Ubuntu/Debian systemd evidence must prove this lifecycle before the future released binary claims fully automatic IPsec setup.
-The dedicated private unit must pass effective-systemd PRE-START attestation after
-daemon-reload and before any service execution. The gate also checks the
-bounded D-Bus **effective system-manager environment** (including global
-DefaultEnvironment and runtime set-environment sources) over the system bus with a fixed minimal helper environment excluding
-inherited `DBUS_SYSTEM_BUS_ADDRESS`, `SYSTEMCTL_FORCE_BUS`, `LD_*` and other
-loader/helper overrides. Before trusting systemd D-Bus properties, the
-systemd service-name owner must attest actual `PID=1`, `UID=0` and
-`Comm=systemd` through bounded D-Bus peer credentials; any ambiguity
-fails closed. Root `systemctl` transitions explicitly select the local
-system manager, independently of the caller environment. The gate rejects `LD_*`
-and unexpected `STRONGSWAN_*` values, and proves unit `EnvironmentFiles`,
-`PassEnvironment`, `UnsetEnvironment` and `PAMName` cannot add independent
-spawn-environment sources. Unknown/oversized replies fail closed. The
-manager's settings are **never globally modified by STL**; an administrator
-must inspect/reconcile unsafe values before retry. Post-start `/proc` process
-environment verification remains independent defense in depth. A verified running
-private service receives its boot edge only after post-start runtime
-admission, with a final owner/origin check. The shipped rc.6 service
-provisioner does not disable, replace, adopt or restart vendor services.
-The future approved package preparer may stop/disable only the newly
-installed vendor service positively attributed to its own APT transaction.
-The rc.6 provisions first shipped via reviewed Issue #101; historical
-rc.5 remains unchanged.
+Every backend and CLI/menu workflow projects from a consistent result
+model, without creating per-screen diagnostic or logging engines:
 
-### Native-exclusive IPsec operational proof boundary (Issue #7, 2026-10-12)
-
-The independent Debian 13 / Ubuntu 24.04 disposable two-peer fixtures
-establish **actual canonical Engine and CLI** IKEv2, ESP/NAT-T,
-bidirectional Link Address packets, host XFRM SAs, sibling isolation,
-foreign-name and PSK mismatch rejection, exact scoped cleanup and
-protected credential retirement. The Ubuntu PID1-systemd disposable
-fixture separately establishes the **normal STL executable using its own
-native-exclusive installed unit**, real systemd service restart, protected
-state/PSK restore and successful two-way packets for ESP and NAT-T.
-See [the reproducible IPsec evidence](operations/IPSEC-REAL-E2E.md).
-
-Issue #7 was closed after conditional operational IPsec acceptance. These
-earlier container tests did not prove physical WAN/NAT-router traversal
-or whole-OS reboot/crash recovery; later whole-guest KVM evidence is recorded
-under Issue #12. Physical power-loss and external peer/router acceptance
-remain distinct from the isolated tests.
+- Human-readable outcome: **what happened**, confirmed/unknown state, the
+  specific safe reason, affected scope and one actionable next step.
+- Machine-readable outcome: stable reason/error codes, versioned schema,
+  deterministic exit behavior and redacted optional evidence. Evolve public
+  contracts through explicit compatibility/versioning decisions.
+- Correlation: safe operation, Link ID, backend, lifecycle stage, elapsed
+  time and outcome. Sensitive handoffs, private keys/PSKs, daemon frames,
+  raw command output and unvalidated paths never become logs or support
+  payloads.
+- `status` and `doctor` inspect, never mutate. `diagnose` may send
+  explicitly requested bounded probes, never secretly repair. Real
+  observed peer traffic, local interface identity and a successful
+  restore are separately reportable facts.
+- Keep `--json` stdout machine-only; optional support detail must remain
+  secret-safe and may not corrupt the structured response. Add a logging
+  daemon, database or retention machinery only when justified by an owned
+  runtime requirement.

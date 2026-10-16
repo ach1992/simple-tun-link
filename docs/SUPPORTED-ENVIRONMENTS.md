@@ -1,6 +1,8 @@
 # Supported Environments
 
-This document owns the v0.1 platform baseline. Runtime preflight remains authoritative for backend capability on a specific host.
+This document owns STL's **supported platform and capability contract**.
+It is not a list of historical release-candidate test milestones.
+Runtime preflight is authoritative for actual backend capability on a host.
 
 ## Initial platform policy
 
@@ -13,13 +15,15 @@ This document owns the v0.1 platform baseline. Runtime preflight remains authori
   Debian 11: default Bullseye security package indexes can return HTTP 404
   after LTS expiry. STL refuses blind repository rewrites or disabling APT
   signature/expiry protection. Prefer Debian 12+ or suitable ELTS support.
-- Automatic prerequisite provisioning: native GRE/IPIP installs/verifies
+- Selected prerequisite planning: native GRE/IPIP installs/verifies
   iproute2, iptables and kmod (module introspection and explicit on-demand
   module loading). Optional WireGuard selects wireguard-tools; optional
   IPsec selects charon-systemd, strongswan-swanctl and
   libstrongswan-standard-plugins (OpenSSL/GCM) explicitly to avoid
-  surprising an existing strongSwan daemon. The installer only requests
-  missing packages from the distro's own configured APT sources.
+  surprising an existing strongSwan daemon. Only missing packages are requested from the distro's configured,
+  signed APT sources. IPsec package/service preparation is separately
+  gated by observed host ownership and explicit operator approval;
+  direct installer invocations must not bypass that gate.
 - Baseline kernel: **5.4 or newer**.
 - Baseline iproute2: **5.1 or newer**.
 - Initial release architectures: **linux/amd64** and **linux/arm64**.
@@ -42,7 +46,7 @@ Requires the WireGuard kernel/module capability and the userspace `wg` tooling u
 
 ### IPsec/XFRM
 
-The accepted native-exclusive IPsec backend is **conditionally registered**
+The native-exclusive IPsec backend is **conditionally registered**
 only when current STL-origin protected configuration and service-unit files
 and inode receipts, the already loaded exact systemd unit and effective
 settings, exclusive strongSwan process/netns/cgroup/executable/configuration
@@ -50,197 +54,42 @@ and logging, protected VICI peer credentials, UDP 500/4500 and collision-free
 XFRM identity are all independently attested. A foreign/unverifiable
 same-namespace service, process, port or XFRM/VICI owner disables **only
 IPsec**, never GRE/IPIP/WireGuard. No package installation or service start
-occurs in ordinary runtime assembly. The user may stage a SENSITIVE IPsec
-Quick Link only after runtime admission.
+occurs in ordinary runtime assembly. A SENSITIVE IPsec Quick Link may be staged/activated only under
+its separately verified prerequisite and runtime admission contracts.
 
-**Observed disposable kernel/daemon acceptance (2026-10-12)**:
-- **Debian 13 (trixie) amd64**: strongSwan `6.0.1-6+deb13u7`,
-  iproute2 `6.15.0-1`, Linux kernel `6.8.0-31-generic` (shared
-  test host's kernel, not a Debian kernel claim).
-- **Ubuntu 24.04 LTS amd64**: strongSwan
-  `5.9.13-2ubuntu4.24.04.5`, iproute2 `6.1.0-1ubuntu6.4`,
-  systemd `255.4-1ubuntu8.17` for native PID1-service acceptance;
-  Linux kernel `6.8.0-31-generic` (same isolated host kernel).
+## Validation and deployment boundaries
 
-On both distributions actual IKEv2/ESP/NAT-T, kernel `espinudp`,
-bidirectional Link Address traffic, two same-underlay Links, safe sibling
-removal, mismatch/foreign-owner rejection, canonical CLI state/diagnostics
-and protected key retirement were exercised in fresh network-disconnected
-disposable containers. A real **Ubuntu native STL systemd unit** and CLI
-also passed both ESP and NAT-T with restart of the owned service, state
-restore, bidirectional traffic, exact SA/XFRM cleanup and receipt-bound PSK
-retirement. See [IPsec real E2E](operations/IPSEC-REAL-E2E.md).
+Supported OS/kernel/architecture **baselines are not a blanket promise**
+that every optional tunnel backend works on every host. Verify the
+actual kernel features, service manager, module availability, package
+state, port/interface ownership and endpoint network conditions at
+deployment time.
 
-The installer floor **Ubuntu 22.04+/Debian 11+** and kernel/iproute2 floors
-listed above are **not** operational IPsec certification for those older
-versions. Named-protocol legacy `iproute2` text parsing remains guarded
-by canonical NSS file/`getent` agreement. On the tested strongSwan 5.9/6.x
-the VICI socket can be group-mode `0770`; acceptance requires its
-root-owned **0700 immediate ancestor**, root socket owner and matching
-`SO_PEERCRED`, rejecting other/world access.
+Runtime and released-artifact acceptance must distinguish:
 
-**Deployment boundary:** distro strongSwan maintainer scripts may
-automatically enable/start vendor `strongswan.service`; the disposable
-systemd test image disables *its own* vendor service during image build.
-Never infer that a package install/upgrade on a real host is harmless or
-disable/adopt a third-party service. The earlier systemd fixture alone was
-not ARM64 runtime validation. The separate native multi-architecture matrix
-below now provides that proof, but these early fixtures **alone** do not
-certify a production installer/release artifact, physical NAT-router
-traversal, full OS reboot, independently booted distro kernels or
-power-failure recovery. Later separate guest-only evidence is distinguished
-below; none is a published tagged release or physical WAN deployment.
+- Source and unit tests from **actual native kernel traffic**.
+- Container tests (which use their runner's host kernel) from
+  independently booted distro guests and host reboot tests.
+- Whole-guest committed-Link reboot/reapply evidence from **physical
+  two-server WAN, NAT, provider-firewall and systemd 249** acceptance.
+- A valid source/build/checksum from a downloaded published release
+  installed and exercised on the target platform.
 
-## Native release-level runtime matrix (Issue #12, 2026-10-12)
+Reproducible tests, their explicit environments and their limitations
+belong to [Cross-backend E2E](operations/CROSS-BACKEND-REAL-E2E.md),
+[IPsec real E2E](operations/IPSEC-REAL-E2E.md),
+[RELEASE-ARTIFACTS.md](RELEASE-ARTIFACTS.md) and their exact GitHub
+CI/release records. The separate Owner field gate is tracked by
+[Issue #93](https://github.com/ach1992/simple-tun-link/issues/93);
+absence of field evidence must not be advertised as verified WAN
+compatibility.
 
-The [official privileged six-Link E2E run](https://github.com/ach1992/simple-tun-link/actions/runs/38280434443)
-completed **SUCCESS** at Git commit
-`a6aa71316c3b27cf5c49b7f752c41962677e871c`.
-Each GitHub-hosted disposable VM has a **real independently running Linux
-kernel** and a natively built Go test binary (not cross-compiled or emulated):
-
-| Runner architecture | Verified kernel | Native Go architecture | Container userspaces |
-| --- | --- | --- | --- |
-| x86_64 | `6.8.0-1064-azure` | `amd64` | Ubuntu 24.04.5 LTS and Debian 13 |
-| aarch64 | `6.17.0-1022-azure` | `arm64` | Ubuntu 24.04.5 LTS and Debian 13 |
-
-All **four** architecture/userspace combinations passed real bidirectional
-traffic for simultaneous GRE Native/FOU/GUE, authenticated WireGuard,
-separately keyed IKEv2/XFRM ESP and NAT-T, scoped recovery and removal,
-and sequential IPIP Native/FOU/GUE coexistence. Both real native kernels
-exercised protected credential/ownership handling, resource collisions
-and foreign-resource rejection. Each userspace completed
-`GRE_E2E_CLEANUP_EXIT=0`; both jobs completed
-`CROSS_BACKEND_DISPOSABLE_CLEANUP_EXIT=0`.
-
-This is accepted **native linux/amd64 and linux/arm64 runtime**
-evidence for the network-namespace release-level matrix. Ubuntu/Debian
-containers **share their respective runner's kernel**: **this particular
-runner workflow** did not boot independent distro kernels or exercise
-whole-guest reboot, external NAT-router traversal or power-loss recovery.
-Runtime proof is distinct from installing final downloadable release
-artifacts, which Issue #11 owns.
-
-## Supplementary source-bound native-guest acceptance (2026-10-13)
-
-The [Issue #11 release-lifecycle record](https://github.com/ach1992/simple-tun-link/issues/11#issuecomment-6133926392)
-proves actual root `/usr/local` installer **snapshot** upgrade and safe uninstall
-on two **independently booted, disposable KVM Linux kernels** built from
-clean `main@aab0cac0cd8991d792e75b421c4acfacd42258e7`:
-
-| Guest | Actual independent guest kernel | iproute2 | Result |
-| --- | --- | --- | --- |
-| Debian 13 (amd64) | `6.12.111+deb13-cloud-amd64` | `6.15.0` | **PASS** |
-| Ubuntu 24.04 LTS (amd64) | `6.8.0-142-generic` | `6.1.0` | **PASS** |
-
-Each system installed a previous source-bound `stl` snapshot, provisioned
-all explicitly selected GRE/WireGuard/IPsec distro packages through signed
-APT, atomically updated to the current snapshot, rejected a tampered
-artifact without changing the executable, and successfully completed
-idempotent update and uninstall while preserving unrelated files/packages.
-A separate Debian 13 guest proved active bidirectional GRE traffic prevents
-uninstall without stopping the Link or overwriting the executable; after
-explicit scoped Link/restore-unit removal, uninstall succeeds
-([Issue #11](https://github.com/ach1992/simple-tun-link/issues/11#issuecomment-6133986111)).
-
-The [Issue #12 crash/recovery record](https://github.com/ach1992/simple-tun-link/issues/12#issuecomment-6134259976)
-additionally proves that real **GRE Native and WireGuard** Links and protected
-receiver credentials survive a deliberately abrupt QEMU process kill and
-booting the **same persisted VM disk**; automatic systemd restoration,
-bilateral authenticated traffic, idempotent reapply and scoped cleanup
-were observed. Earlier separate full-guest clean reboot acceptance also
-passed for GRE and WireGuard.
-
-Subsequent [PR #81](https://github.com/ach1992/simple-tun-link/pull/81)
-testing independently established true Debian 13 AMD64 KVM full-kernel
-reboot for native-exclusive IPsec ESP
-and NAT-T, including automatic STL Link restoration, reestablished IKE/CHILD
-SAs, and verified two-way encrypted traffic in an isolated Ubuntu PID1
-systemd guest with ext4-persisted owner receipts. **Both ESP and NAT-T**
-additionally passed independently executed abrupt-QEMU SIGKILL while real
-bilateral encrypted traffic was active, followed by Linux ext4 journal
-recovery, automatic same-disk IPsec restore and bilateral encrypted traffic.
-These tests do **not** prove physical WAN/NAT-router traversal or release of
-this new code. Native ARM64 six-Link E2E is independently verified. The
-**published `v0.1.0-rc.1` AMD64 and emulated ARM64 installed-release-artifact
-lifecycle** also passed on independent Debian/Ubuntu full guests (closed
-Issue #11). This pre-release predates and **does not contain** PR #81 fixes.
-Physical WAN/NAT-router peer acceptance is tracked under Issue #12 and was
-not established by these isolated tests. Integration and authorization to
-publish a new release are separate from this technical test evidence.
-
-## Release validation boundaries (rc.3 through rc.6)
-
-The v0.1.0-rc.3 operator-first changes were tracked in
-[Issue #91](https://github.com/ach1992/simple-tun-link/issues/91)
-and [PR #92](https://github.com/ach1992/simple-tun-link/pull/92).
-Their exact-HEAD matrix exercised isolated AMD64 and ARM64
-six-Link GRE/IPIP/WireGuard/IPsec operation using disposable Ubuntu/Debian
-userspaces. Source checks alone could not establish a public artifact's
-identity, a real guest reboot, or physical WAN/NAT behavior.
-
-The published [v0.1.0-rc.4 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.4)
-and [Issue #93](https://github.com/ach1992/simple-tun-link/issues/93)
-separately record immutable-tag/public-download checks, source CI, a fresh
-release installation and a disposable rc.3-to-rc.4 update. The affected
-Ubuntu 22.04/systemd 249 **operational host**, real paired WAN/NAT traffic,
-and reboot restoration of that host's own Link still require Owner field
-acceptance; prior isolated evidence is not transferred as that proof.
-
-The v0.1.0-rc.5 source builds on the reviewed, merged operator UI
-[PR #96](https://github.com/ach1992/simple-tun-link/pull/96), with Go
-CI and disposable six-Link Ubuntu 22.04 AMD64 / 24.04 ARM64 E2E.
-Its separately tagged public release/artifact acceptance is documented in
-[Issue #97](https://github.com/ach1992/simple-tun-link/issues/97).
-The rc.6 pre-release integrates [PR #100](https://github.com/ach1992/simple-tun-link/pull/100)
-and [PR #102](https://github.com/ach1992/simple-tun-link/pull/102),
-with exact-head main CI, disposable native systemd IPsec ESP/NAT-T
-and dual-architecture six-Link E2E. Public tagged assets and installed
-release qualification belong to [Issue #103](https://github.com/ach1992/simple-tun-link/issues/103).
-A source or disposable test cannot establish the real Owner-host
-reboot, provider routing, NAT or WAN properties.
-
-For [v0.1.0-rc.2](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.2),
-[Issue #12](https://github.com/ach1992/simple-tun-link/issues/12)
-records native AMD64/ARM64 cross-backend traffic and separately a
-**root installer-owned tagged rc.2 binary** tested through two genuine
-independent boots of a **single persisted ext4 guest disk**, with
-automatic GRE Link restoration, managed local MTU=1300 and observed
-bilateral Link traffic. This is a Debian-13-**derived**, network-isolated
-QEMU TCG test rootfs using Debian tools and a real kernel/systemd PID1,
-**not** an official distro installation image, separate ARM64 guest reboot
-or physical WAN/NAT-router proof. Its bundled dependency files and package
-status fixture do not substitute for real APT package provisioning.
-Earlier Debian/Ubuntu native user-space tests and independent distro guest
-installer lifecycle evidence remain separately scoped above.
-
-For every later release, independently verify the candidate published
-artifacts against its tag/source/checksums and installed executable, with
-real committed-Link reboot/restart traffic, not only compilation. The
-Owner will test real Internet/WAN/NAT peers personally **after publication**
-and report defects; physical WAN is not a pre-publication pass claim.
-Agents must not bypass external-host/platform restrictions.
-
-- validate on at least one currently maintained Ubuntu LTS and one current Debian stable release;
-- exercise amd64 and arm64 release artifacts where test capacity permits;
-- record the exact tested distro/kernel/iproute2/backend versions with release evidence;
-- treat other Linux distributions as best-effort until explicitly added to the tested matrix.
-
-Unsupported or missing capability must be reported explicitly. Tests must not silently convert an unsupported backend into a pass.
-
-## Non-release XFRM inspector verification (2026-10-10)
-
-One isolated read-only-inspector probe used Debian 13 (trixie) amd64
-**host kernel 6.12.41+deb13-amd64** with an ephemeral Debian 12
-(bookworm) container containing **iproute2 6.1.0** and Go 1.27.1.
-The container used `--network none` and isolated NET_ADMIN; disposable
-XFRM interface name/if_id and policy collision cases passed and were
-removed within that container. On this iproute2 version, `ip -json xfrm
-policy/state` emits legacy text for nonempty tables and empty stdout
-for an empty table on successful exit. **This historical inspector-only
-probe**, by itself, was not a supported installation or strongSwan/IKEv2
-traffic acceptance: its image contained no strongSwan. The later
-native AMD64/ARM64 Ubuntu/Debian operational release matrix is documented
-above; **this 2026-10-10 inspector-only probe** did not boot independent
-distribution kernels or demonstrate full-guest reboot/recovery. Later
-source-bound KVM guest evidence is separately recorded above under Issue #12.
+For a release, test at least one maintained Ubuntu LTS and current
+Debian stable where practicable, execute native amd64/arm64
+artifacts with appropriate available facilities, and record exact
+distro/kernel/iproute2/backend and installed-build identity **with
+that release's verification evidence**, not in this durable baseline.
+Other Linux distributions/derivatives remain best-effort until a
+specific supported capability policy and acceptance are added.
+Unsupported capability is a visible unsupported/unknown result, never
+a silent passed test or a reason to disable an unrelated backend.

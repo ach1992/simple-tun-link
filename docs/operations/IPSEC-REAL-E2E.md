@@ -1,12 +1,13 @@
 # Real native-exclusive IPsec/IKEv2/XFRM acceptance
 
-Controlling engineering work: Issue #7. Issue #12 retains the broader
-release/architecture/reboot/platform matrix. All evidence below is from
+This is a reproducible **native IPsec safety and traffic test runbook**.
+Historical exact-source acceptance records are linked below; they are
+not live implementation status. All evidence described here comes from
 **isolated, deliberately authorized, disposable Linux Docker fixtures**, not
 a production installation or a real NAT router. Do not run privileged tests
 on a shared control-plane/production host without explicit authority.
 
-## Functional vertical delivered for independent review
+## Operational behavior tested by this runbook
 
 The normal `stl` CLI conditionally registers `ipsec.OperationalBackend`
 **only** after an entire currently loaded native-exclusive service origin
@@ -169,9 +170,10 @@ so use only an explicitly authorized isolated test server.
    units and post-install scripts that may **enable/start a foreign service**.
    This test image disables its own vendor unit on image build; the actual
    package-install/upgrade side effects on a preexisting production host
-   must never be assumed safe. Production provisioning is **not performed**
-   by this engineering PR; approved packaging/update operational guidance
-   and a host-specific safety review are still required.
+   must never be assumed safe. These disposable fixtures do **not** administer real host packages
+   or service state; use the separately qualified signed-APT and
+   exact `STOP strongswan.service` consent workflow documented in
+   [INSTALL.md](../INSTALL.md) on any authorized real host.
 2. The positive native runtime check is an audited **time-local**
    provenance/permission snapshot, not a formal lifetime mutex against
    privileged foreign root administrators. The exact protected directory,
@@ -185,10 +187,8 @@ so use only an explicitly authorized isolated test server.
    QEMU termination, plus official native AMD64/ARM64 cross-backend E2E.
    Equivalent ARM64 whole-guest reboot/crash and physical WAN/NAT-router
    traversal remain **unverified**; QEMU SIGKILL is not physical power loss.
-   The historical `v0.1.0-rc.1` pre-release predates the IPsec reboot/crash
-   changes in PR #81; the later `v0.1.0-rc.2` release candidate includes
-   them. No Stable release, physical WAN/NAT test or production deployment
-   is established by these isolated tests.
+   Even subsequent Stable publication cannot retroactively transform an
+   isolated fixture into physical WAN/NAT or production deployment proof.
 4. A crash during an indeterminate VICI write retains a durable public-only
    journal and stops automatic replay. It requires explicit, owner-verified
    reconciliation; never delete arbitrary observed state or auto-rekey.
@@ -197,7 +197,7 @@ so use only an explicitly authorized isolated test server.
    authorize any of them; applicable Owner and independent-review gates
    must be satisfied for each consequential action.
 
-## Issue #7 high-assurance R1–R5 crash/reconciliation acceptance (2026-10-12)
+## Exact-owned crash and reconciliation acceptance
 
 The operational runtime now checks the native `/usr/sbin/charon-systemd`
 executable is a root-owned regular inode with root-controlled, non-writable
@@ -230,13 +230,15 @@ journal; no wildcard cleanup or automatic credential reload is authorized.
 `retire-ipsec` operates from the protected post-Remove receipt even
 when strongSwan is STOPPED or cannot pass runtime admission.
 
-The current state file schema remains **v2** (ordinary CLI JSON remains
-`schema_version:1`). Older v2 binaries that reject unknown lifecycle
-members cannot read a journal-bearing new v2 state: **upgrade-only** during
-an unresolved journal; downgrade/rewrite is not a recovery method. Schema
-v1 files containing any lifecycle-only members, including
-`ipsec_removal_receipts`, are rejected. Existing legitimate schema-v1
-GRE/IPIP Link snapshots still migrate.
+At the original isolated journal test milestone, private State schema
+**v2** contained these optional IPsec operation journals. The
+**current persisted State schema is v3**, adding endpoint-local MTU,
+while ordinary public CLI output remains `schema_version:1`.
+Older readers rejecting newer or unknown lifecycle members may
+not safely downgrade journal-bearing State; neither editing the
+schema version nor clearing journals is a recovery method.
+Legitimate older State migrates only under the currently documented
+compatibility rules in [INSTALL.md](../INSTALL.md).
 
 ### Reproduce real isolated crash/fault matrix
 
@@ -286,7 +288,8 @@ journals. The original native PID1-systemd ESP/NAT-T acceptance above
 must still pass on the revised exact source tree. These simulated
 interruption tests are bounded reproducible fault injections, **not**
 proof of actual physical power loss, external NAT router traversal or
-production package/upgrade safety; Issue #12 retains release-level gates.
+production package/upgrade safety; release-level proof is recorded
+against the exact source/tag in GitHub and [RELEASE-ARTIFACTS.md](../RELEASE-ARTIFACTS.md).
 
 
 ### Whole-guest automatic IPsec recovery — PR #81 test evidence
@@ -340,8 +343,8 @@ prior platform blocks forbid any alternate cross-server connectivity bypass.
 The historical public `v0.1.0-rc.1` **pre-release** predates PR #81 and
 does **not** contain these fixes. Its AMD64/ARM64 installed-artifact
 lifecycle checks passed separately (Issue #11 closed); rc.2 includes
-the newer source and is covered by distinct Issue #12 release evidence.
-Do not present isolated test results as proof of a Stable production release,
-physical WAN/NAT validation or deployment. Never weaken fail-closed
+the newer source and has its own source/tag-bound acceptance history.
+Do not present isolated test results or Stable publication alone as proof
+of physical WAN/NAT validation or production deployment. Never weaken fail-closed
 native ownership checks or substitute simulated CLI-only tests for real
 post-reboot kernel packets.

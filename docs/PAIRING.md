@@ -1,10 +1,11 @@
-# Pairing format and trust boundary — Issue #8
+# Pairing format and trust boundary
 
-This document describes the first backend-neutral pairing component implemented
-by `internal/pairing`. The overall v0.1 requirements are owned by
-`docs/PROJECT-SPEC.md`, `docs/ARCHITECTURE.md`, Issue #8, ADR-0003 and ADR-0004.
-Backend-specific interface configuration and key generation remain owned by
-Issues #4–#7; CLI/import/apply orchestration remains owned by Issue #10.
+This document owns **versioned Setup Link formats, recipient inversion,
+credential-bearing payload handling, and import-preview compatibility**.
+[PROJECT-SPEC.md](PROJECT-SPEC.md) defines product intent,
+[ARCHITECTURE.md](ARCHITECTURE.md) owns the common Engine boundaries,
+[CLI.md](CLI.md) owns exact import/export commands, and
+[SECURITY.md](SECURITY.md) owns protected credential lifecycle.
 
 ## Versioned setup links
 
@@ -224,11 +225,10 @@ inherited, read-only file descriptor (`/proc/self/fd/3`), never argv or
 ordinary JSON. WireGuard status only inspects public keys, listen ports,
 peer identities and counter/handshake state.
 
-The pairing module carries validated backend options but does not itself apply
-them, implement the final interactive UI, or perform privileged installation.
-Application still goes through the canonical Engine/backend lifecycle. Pairing
-therefore remains an **independent, testable portion of Issue #8**, not Issue
-#8's full acceptance or any live tunnel-recovery requirement.
+The pairing module carries validated backend options but does not itself
+apply them, implement interactive UI or perform privileged installation.
+Actual host effects run through the canonical Engine and backend lifecycle;
+no pairing checksum or offer metadata proves peer traffic.
 
 A future `secure_exchange` mode requires an explicit protocol/schema update,
 not a reinterpretation of v1 Quick Link secrets. An unknown mode or
@@ -269,11 +269,12 @@ authentication. GRE/IPIP Link traffic remains plaintext and unauthenticated;
 WireGuard v3 encrypts Link traffic, but its SENSITIVE Quick Link must be
 delivered to the intended peer through a trusted channel.
 
-Plaintext GRE/IPIP, protected WireGuard v3 and conditionally admitted,
-protected IPsec v2 recipient import are implemented; none alone completes
-Issue #8. The IPsec path requires an exactly 32-byte PSK, an already
-verified STL-exclusive native service and separate explicit IKEv2
-initiation/traffic validation. Remaining credential recovery/edge cases
-are tracked in #8; real cross-backend and external acceptance remains #12.
-A preview confirmation digest binds exact payload bytes
-but does **not** authenticate the sender or securely transport a Quick Link.
+Plaintext GRE/IPIP, protected WireGuard v3 and conditionally admitted
+IPsec v2 recipient imports are supported by the Engine. IPsec requires
+an exactly 32-byte PSK, currently attested STL-exclusive runtime and
+separate explicit IKE initiation/packet validation. A preview or
+successful import does **not** authenticate the sender or prove
+end-to-end encrypted traffic. The exact SHA-256 confirmation digest
+binds payload bytes only; a secret-bearing Quick Link still requires
+trusted delivery and owner-private handling. See
+[SECURITY.md](SECURITY.md) and [CLI.md](CLI.md).

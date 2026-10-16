@@ -1,13 +1,13 @@
-# Diagnostics and MTU decision contract — Issue #9
+# Diagnostics and MTU decision contract
 
-This file describes the independently implementable, backend-neutral
-diagnostics core. The acceptance owner remains
-[Issue #9](https://github.com/ach1992/simple-tun-link/issues/9),
-with root outcomes in PROJECT-SPEC.md and behavior in ARCHITECTURE.md.
+This is the backend-neutral diagnostic/measurement contract.
+[PROJECT-SPEC.md](PROJECT-SPEC.md) defines the intended outcome;
+[ARCHITECTURE.md](ARCHITECTURE.md) owns Engine boundaries, and
+[CLI.md](CLI.md) owns exact user/machine command syntax.
 
 ## Scope of the current component
 
-`internal/diagnostics` currently provides:
+`internal/diagnostics` provides:
 
 - Observational, bounded inner-IPv4 MTU/PMTU candidate selection.
 - A manual MTU override with explicit underlay/encapsulation validation.
@@ -20,8 +20,10 @@ with root outcomes in PROJECT-SPEC.md and behavior in ARCHITECTURE.md.
 The pure core is OS-independent. The optional Linux adapter executes bounded
 read-only inspection commands and ICMP echo probes but **never modifies**
 network state, applies MTU, repairs a tunnel, installs software, stores keys
-or claims live backend E2E acceptance. Binding the real backend interface and
-overhead is owned by Issues #4–#7; release E2E by Issue #12.
+or claims live backend E2E acceptance. Backend adapters supply actual interface identity and encapsulation
+overhead; measured MTU remains observational. The canonical Engine
+separately applies an explicitly managed endpoint-local MTU policy
+under normal ownership and rollback rules.
 
 ## Whole-host Link diagnosis and operator recovery
 
@@ -81,9 +83,10 @@ specific verified backend reason. Generic `state_unverified`,
 reconciliation instead of suggesting blind repeated writes. Internal raw
 causes never become JSON/human strings.
 
-These source and fake-runner tests are not real privileged network
-acceptance. Issue #12 still owns the release/kernel/namespace matrix and
-Issue #7 still owns operational IPsec.
+Fake-runner tests establish bounded behavior but not privileged
+network acceptance. Exact release-native verification belongs to the
+[operations runbooks](operations/CROSS-BACKEND-REAL-E2E.md)
+and the corresponding GitHub CI/tag evidence.
 
 ## Measurement contract
 
@@ -180,8 +183,8 @@ return explicit non-success; they are not mislabeled as healthy.
 The adapter has fake-runner regressions covering live-observation composition,
 FOU overhead vs manual MTU, wrong backend, unavailable capability, stale
 ifindex, foreign interface, malformed counter identities, and cancellation.
-These tests do **not** claim real FOU/GUE data-plane acceptance (Issue #4),
-CLI/operator commands (Issue #10), or release E2E (Issue #12).
+Fake-runner regressions alone never establish real FOU/GUE packet traffic
+or installed-release compatibility.
 
 ## GRE operator diagnostic command
 
@@ -213,9 +216,8 @@ Manual MTU never bypasses the observed route/underlay ceiling.
 `stl link diagnose` emits the same versioned common report, with
 `backend: "ipip"` and an IPIP `state` field. Neither a verified interface
 nor an in-memory/fake-runner diagnostic test proves that peer traffic
-works. Backend-focused real bidirectional IPIP Native/FOU/GUE traffic was
-accepted under closed Issue #5. Additional cross-backend/release-environment
-E2E remains Issue #12; unfinished common diagnostics belongs to Issue #9.
+works. Real-kernel transport acceptance and installed-release compatibility
+are separately verifiable in the cross-backend operations runbook.
 
 ## WireGuard adapter — public handshake, counters and active diagnosis
 
@@ -233,10 +235,9 @@ underlay/credentials fail rather than assuming another overhead.
 bytes), and the common versioned MTU/quality report. A handshake timestamp
 of zero means no handshake was observed **at pre-probe inspection**; neither
 the interface's existence nor a timestamp alone proves end-to-end traffic.
-A focused, separately authorized real-kernel E2E on a disposable Debian
-host verified bidirectional WireGuard traffic, active diagnosis and GRE
-coexistence (PR #53 / Issue #12); this does **not** establish all failure,
-recovery, multi-peer or distro/architecture release acceptance.
+Real WireGuard packets, coexistence, recovery and supported-platform
+coverage require their own reproducible runtime evidence; a timestamp
+or fake-runner observation is insufficient.
 No private key or SENSITIVE setup URL is inspected or serialized.
 
 ## IPsec/XFRM adapter — admitted read-only observations
@@ -392,26 +393,22 @@ No raw iperf payload or server-supplied arbitrary text is exposed. Local
 execution uses a strict time/output budget; a completed sample proves
 neither future capacity nor continuous tunnel health. Tests use a fake
 bounded process runner and never transmit throughput traffic to real
-remote networks. Any physical WAN acceptance belongs separately to #12
-and requires its own owner/platform authorization.
+remote networks. Physical WAN tests require separately authorized Owner-host evidence;
+no disposable or fake-runner test establishes provider/NAT behavior.
 
-## Remaining Issue #9 implementation
+## Validation boundary
 
-This Linux adapter does not complete Issue #9. Still required:
+For a particular candidate/release, separately verify actual kernel
+and Link Address packets, native backend identity, MTU/restore effects
+and conditional XFRM interface packet counters when supported.
+Unsupported/unmeasured results must remain explicit; do not invent
+zero counters, present a conservative MTU as measured PMTU, or convert
+an unresponsive ICMP probe into definitive transport failure.
 
-- Additional supported-kernel/architecture runtime evidence for the
-  conditional exact-owner XFRM **interface packet** counter reader;
-  per-SA counter readings and sustained/peer-authenticated traffic are
-  not inferred from these interface statistics;
-- Safe MTU application through the Engine, never from health observation;
-- Acceptance evidence for the opt-in, strictly Link-bound throughput
-  client on authorized supported systems and separately prepared peers;
-- Additional error/rollback and distinct-peer cases, real systemd
-  restart/reapply, and supported-environment release E2E evidence (#6/#12).
-  Focused real Link Address/PMTU, WireGuard peer traffic and GRE coexistence
-  evidence is already recorded in PR #53; do not redo it by default.
-
-Keep Issue #9 OPEN until remaining acceptance is genuinely completed.
-Unprivileged mock-runner tests alone are **not** WireGuard runtime
-acceptance; the existing focused real-kernel evidence is separate from the
-remaining release-level matrix.
+The current supported-environment baseline is in
+[SUPPORTED-ENVIRONMENTS.md](SUPPORTED-ENVIRONMENTS.md); reproducible
+native E2E procedures and historical acceptance evidence are
+recorded with [operations/CROSS-BACKEND-REAL-E2E.md](operations/CROSS-BACKEND-REAL-E2E.md),
+[operations/IPSEC-REAL-E2E.md](operations/IPSEC-REAL-E2E.md)
+and the exact GitHub checks. No standing development backlog lives
+in this reference.

@@ -1,4 +1,4 @@
-# Operator failure-to-recovery workflow (Issue #10; shared evidence #9)
+# Operator failure-to-recovery workflow
 
 This guide describes the implemented canonical Engine/CLI behavior for
 `stl link ensure`, `import`, `remove` and `restore --all`. Guided menu
@@ -103,40 +103,36 @@ claimed empty `fou` inventory and no claimed free conflicting port.
 The check covers GRE Native (`ip_gre`), IPIP Native (`ipip`) and GRE/IPIP
 FOU/GUE receive mappings (`fou`).
 
-## Specific field symptom: persistence failure during first GRE creation
+## Read-only inspection after persistence failure
 
-An owner-observed rc.2 create returned reason
-rollback_completed_unverified with stage=persistence, and the first
-server's saved Link inventory was empty. That output alone cannot prove
-which step or systemd prerequisite failed; callback completion is **not**
-a separate kernel/service attestation. Before retrying, run **read-only**
-checks on THAT host (not a connected management/control-plane server):
+If Create or Import fails at persistence, or rollback reports
+`rollback_completed_unverified`, the result does **not** prove which
+systemd or backend operation failed. A missing newly created Link
+in saved State does not prove the kernel/network is clean. A rollback
+callback reporting success is not an independent service or traffic
+attestation.
+
+On the exact authorized affected host (never a control-plane
+or unrelated production server), run read-only checks:
 
 ~~~sh
 sudo stl link list --json
 systemctl --version
-systemctl is-enabled simple-tun-link-restore.service || true
-systemctl status simple-tun-link-restore.service --no-pager || true
+systemctl is-enabled simple-tun-link-restore.service
+printf 'is-enabled exit=%s\\n' "$?"
+systemctl show simple-tun-link-restore.service --no-pager -p LoadState -p UnitFileState -p FragmentPath -p Result
 stat -c '%U:%G %a %n' /usr/local/bin/stl /etc/systemd/system || true
 stat -c '%U:%G %a %n' /etc/systemd/system/simple-tun-link-restore.service || true
 ~~~
 
-If a service unit is missing after a rollback, that is not proof that
-the network or saved desired state is absent. Do not delete/replace any
-unit or kernel interface until STL ownership and saved State have been
-inspected. The canonical restore unit/executable are expected to be
-root-owned, nonsymlinked and not writable by non-root accounts; an
-untrusted path, non-systemd environment or failed daemon-reload/enable
-may block persistence, but those are **possible causes**, not
-a diagnosis of the operator's specific machine. A failed diagnostic
-or missing ICMP replies before the other endpoint imports the Link
-likewise do not prove local tunnel failure.
-
-The next menu keeps this failure visible and returns to the main menu
-without automatically retrying a potentially uncertain mutation.
-For a real-world root cause, compare the redacted command outcomes and
-systemd state on the affected original host; do not paste unredacted
-credentials, pairing URLs or sensitive host logs into a public ticket.
+A known systemd variation may represent an absent unit with empty
+`is-enabled` stdout and exit 1, requiring independently confirmed
+`LoadState=not-found` and missing unit-file/fragment identity. Neither
+an incomplete read nor local callback return alone authorizes cleanup.
+Do not overwrite, delete, enable or disable an ambiguous service or
+foreign kernel resource; reconcile exact State/owned inode identity
+before any retry. Read-only status and Link probes can narrow a
+failure without taking additional network authority.
 
 ## Operator walk-through
 
@@ -169,7 +165,7 @@ credentials, pairing URLs or sensitive host logs into a public ticket.
    read-only kernel stats probe verifies identity and both values; otherwise
    RX/TX remain "not measured", not zero. A diagnosed SA or interface
    packet count does not grant activation permission, authenticate an
-   untrusted peer or prove sustained encrypted traffic. See Issues #9 and #12.
+   untrusted peer or prove sustained encrypted traffic. See [diagnostic semantics](DIAGNOSTICS.md) and [release evidence boundaries](RELEASE-ARTIFACTS.md).
 
 Safe failures may not contain `evidence` if they occur outside the canonical
 Engine or in a legacy entry point; absence of evidence means **unknown**,
@@ -183,4 +179,4 @@ Automated tests inject deterministic failure stages, nonmutating module
 probes, cancellation, rollback success/failure, uncertain state publication
 and independent sibling operations; they are **not** a substitute for
 real privileged kernel/module, multi-distro or traffic/restart testing.
-Issue #12 owns the separate release-level privileged E2E matrix.
+Release-level privileged E2E is separately reproduced through the [cross-backend runbook](operations/CROSS-BACKEND-REAL-E2E.md) and recorded against the exact candidate.

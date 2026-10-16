@@ -1,53 +1,101 @@
 # Install, update, and uninstall
 
-**For everyday installation and connecting two servers, start with the
-[README](../README.md)**. This page is the advanced installer/maintenance
-runbook, not a required first stop for a new operator.
+For normal two-server setup start with the [README](../README.md).
+This runbook documents **current operations and recovery safeguards**,
+not the history of earlier release candidates. The active Stable
+release and its exact tag/commit are resolved from
+[GitHub Releases](https://github.com/ach1992/simple-tun-link/releases/latest)
+and verified with `stl version --json`, `BUILD-MANIFEST.txt` and
+`SHA256SUMS`; do not hardcode an old version as "current".
 
-Current public [Stable release v0.1.0](https://github.com/ach1992/simple-tun-link/releases/latest).
-Its integrated selected IPsec preparation and refined one-consent terminal
-UX are the reviewed #105/#106 changes beyond the historical immutable
-[v0.1.0-rc.6 prerelease](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.6).
-Prior milestones remain intact: rc.6 on-demand prerequisites and Update,
-rc.5 protected handoff/quality, rc.4 systemd 249 compatibility, rc.3
-guided Create/Manage, rc.2 IPsec/MTU/State v3. Real WAN/NAT/provider
-firewall and physical-host reboot acceptance remain open in
+A public release and a disposable CI pass are not evidence that a
+specific real pair of WAN/NAT hosts has passed field acceptance; that
+independent Owner gate is tracked in
 [Issue #93](https://github.com/ach1992/simple-tun-link/issues/93).
-Check the published release, SHA256SUMS and exact installed commit
-before trusting the update. Earlier rc.2 release evidence and its
-limits are in [Issue #12](https://github.com/ach1992/simple-tun-link/issues/12).
-Commands below use generic `vX.Y.Z` as a placeholder: replace it with an
-**actually published** tag, never a branch name. No installer runs during a
-clone, build, or ordinary `go test`.
+Commands using `vX.Y.Z` require a **real published** tag.
 
-## Read-only diagnosis when Create AND Import fail at persistence
+## Installation and runtime ownership
 
-The published v0.1.0-rc.3 may show state_failed, stage=persistence,
-desired_state=no_commit_attempted, and
-rollback_completed_unverified. **This does not establish the original
-cause.** Both Create and Import require the same strict, owned systemd
-restore transaction before durable desired State commit. The final code
-is the compensation/reconciliation outcome, not proof of a GRE packet,
-peer reachability, or even a specific systemd failure.
+- Supported installer environments are listed in
+  [SUPPORTED-ENVIRONMENTS.md](SUPPORTED-ENVIRONMENTS.md): Linux amd64/arm64,
+  initially Ubuntu 22.04+ and Debian 11+, with actual capability checks.
+- The supported installed executable is the root-owned
+  `/usr/local/bin/stl`. `/usr/local/bin/stlink` is an exact relative
+  alias to that executable, not a separate product. The installer
+  records its ownership in
+  `/usr/local/lib/simple-tun-link/install-record`.
+- The **Engine**, not the binary installer, owns Links, private State
+  (`/var/lib/simple-tun-link`), kernel resources, and the
+  `simple-tun-link-restore.service` lifecycle. The native IPsec
+  provisioner owns its separately attested private strongSwan runtime
+  under the same Engine/maintenance authority; neither component
+  may adopt a foreign unit.
+- The installer selects only approved missing packages from the
+  configured signed distro repositories. The default native GRE/IPIP
+  set needs `iproute2`, `iptables` and `kmod`; WireGuard adds
+  `wireguard-tools`; IPsec may need `charon-systemd`,
+  `strongswan-swanctl` and
+  `libstrongswan-standard-plugins`. `--backends all`
+  selects prerequisites, **not** permission to bypass existing
+  IPsec service/package safety constraints.
+- The canonical direct installer `install`/`update`/`prepare`
+  interface never performs uncontrolled service takeover. If
+  missing IPsec packages cannot be safely installed in that
+  context, it refuses before APT; use the guided, separately
+  confirmed IPsec Create/Advanced flow on a positively qualified
+  supported host. It plans the complete signed distro package
+  transaction and prepares the private runtime only after fresh
+  `PREPARE`. Actual Link creation still requires separate `YES`.
+  The workflow can disclose and normalize a *newly introduced*
+  vendor service under exact transaction attribution; do not
+  describe this as atomically rolled back with Link creation.
+- A **pre-existing official distro** `strongswan.service` may
+  be stopped/disabled only after independently proving its precise
+  package/runtime/service/port identity, warning of immediate VPN
+  disruption, and obtaining a distinct exact
+  `STOP strongswan.service` confirmation. The full eligibility
+  check is repeated under the exclusive maintenance lock.
+  A private service `LOAD=not-found/inactive/dead` placeholder
+  is not a real service conflict. Unknown/other foreign services,
+  config, ports or incomplete APT state require manual remediation
+  and `RECHECK`, never a generic PREPARE takeover.
+- The installed menu reuses a byte-identical bundled canonical
+  installer to check selected missing prerequisites. Native/WireGuard
+  preparation and qualified kernel-module loading are opt-in, not
+  automatic effects of viewing a menu or running diagnostics.
+  Missing selected modules can be loaded only under their verified
+  scoped approval and safely restored for a committed Link; STL
+  does not globally install a persistent modules-load rule or
+  auto-unload drivers potentially used by other software.
+- Signed package-manager mutations can persist after an interrupted
+  transaction. No whole-host upgrade, APT trust bypass or repository
+  rewriting is permitted. `uninstall` does **not** remove distro
+  packages, State, credentials or unrelated units/resources.
 
-The Owner-provided Ubuntu 22.04 / systemd 249 evidence from
-2026-10-15 establishes a specific rc.3 compatibility problem:
-`is-enabled` wrote **no stdout**, returned exit **1**, and printed
-"No such file or directory" on stderr for a missing restore unit.
-The same host independently returned `LoadState=not-found` with empty
-`UnitFileState` and `FragmentPath`; `namei` showed trusted root-owned
-ancestors/binary and a missing unit leaf. The rc.3 parser previously
-accepted the missing-unit state only as stdout `not-found` with exit **4**,
-so the transaction failed at persistence and rolled back without
-committing the requested Link. The rc.4 fix in Issue #93 / PR #94
-confirms absence with an additional exact read-only systemd property
-inspection, rather than accepting any exit 1 or parsing localized stderr.
-This is a **supported-environment code defect**, not proof of an
-operational network/GRE or peer-address problem. Real affected-host
-acceptance remains Owner-run after the public rc.4 release.
+To view missing prerequisites without mutation, use the canonical
+installer `requirements` action from a verified release or source
+checkout. A qualified already installed host can use the verified
+installer's `prepare` action for selected **supported** prerequisites:
 
-On **the affected host only**, an operator may collect the following
-**read-only** observations (no tunnel/systemd/firewall changes):
+~~~sh
+bash scripts/install.sh requirements --backends all
+sudo bash /path/to/verified/install.sh prepare --backends wireguard
+~~~
+
+Offline `--bundle --prefix /private/test` installs do not mutate
+real system packages. On Debian 11, working maintained/signed APT
+repositories are required after its LTS expiry; prefer supported
+maintained newer releases where feasible. Never disable signature
+validation to make an unsupported repository pass.
+
+## Read-only diagnosis of setup or persistence failure
+
+If Create or Import reports a failure at `persistence`, an unconfirmed
+rollback or an unfamiliar systemd state, **do not infer that the tunnel
+traffic, GRE, peer firewall or packet routing is at fault**. Both
+workflows depend on the same owned restore-unit transaction.
+
+On the affected, authorized host gather only safe observations:
 
 ~~~sh
 stl version --json
@@ -60,242 +108,49 @@ namei -l /usr/local/bin/stl
 namei -l /etc/systemd/system/simple-tun-link-restore.service
 ~~~
 
-Capture both the **exact is-enabled text and exit status** (including
-when the unit is missing). A blank/timeout/error and a verified negative
-status are not interchangeable. Verify PID 1, systemd accessibility,
-canonical installed stl path ownership, parent directory trust, and
-whether a restore unit path is already foreign or ambiguously owned.
-These observations narrow the cause; they are not instructions to
-change the reported state.
+Capture the exact return status **and stdout**: on some supported
+systemd versions a missing restore unit yields exit 1 with empty
+stdout and must be independently confirmed with
+`LoadState=not-found` plus empty unit-file/fragment properties.
+An incomplete/failed read, foreign unit or unexpected root-owned
+path does not become an absent resource. A successful cleanup
+return without independent host-state verification may still mean
+rollback is **unconfirmed**.
 
-Never run systemctl enable/disable, daemon-reload, delete or replace
-a possibly owned service, manually edit State or retry mutation blindly
-to "fix" this error. If a unit looks foreign, stop and review ownership
-privately before touching it. **Do not post private setup links, keys,
-tokens, unredacted private logs, or a full foreign service file.**
-Issue #93 includes rc.4's clearer terminal diagnosis and regression
-tests. These changes are **not part of rc.3**.
+Never manually overwrite, enable, disable or delete an uncertain
+systemd unit, rewrite private State, flush network rules, or blindly
+repeat a mutating operation. Refer to
+[OPERATOR-RECOVERY.md](OPERATOR-RECOVERY.md) and provide
+redacted observations only—never private Setup Links or keys.
 
-## rc.6 menu maintenance (Issue #99)
+## Private receiver handoffs and backup
 
-[Issue #99](https://github.com/ach1992/simple-tun-link/issues/99)
-introduced an operator menu for listing the three newest complete
-public releases. Only an official release with explicitly reported
-`immutable:true` is eligible for automatic root delegation to the
-*existing canonical installer*, after same-line forward update, installed
-root/real-TTY and fresh `UPDATE` consent. `immutable:false`, missing,
-malformed or otherwise uncertain immutability is **manual-only**: never
-execute its tag-downloaded installer as root automatically. Asset names,
-Bash syntax and post-install hashes are not pre-execution source trust.
-Historical rc.5 reports `immutable:false` and stays unchanged. New
-rc.6 releases must use Owner-approved GitHub release immutability before
-publication, and the menu only auto-updates from official immutable
-releases whose API explicitly reports `immutable:true`.
+Guided WireGuard/IPsec Create retains the original SENSITIVE
+receiver Setup Link separately in
+`/var/lib/simple-tun-link/receiver-handoffs/` with private
+`0700` directory and `0600` Link-identity-bound file.
+Only a fresh real-terminal `SHOW` displays a retained offer;
+`DELETE` independently retires just that offer and not the
+active Link or local credentials. Link removal/uninstall does
+not silently delete retained receiver secrets. Explicit
+noninteractive creators use their own operator-specified private
+`--output` path; the menu does not invent or search those files.
 
-For Uninstall, the rc.6 screen guides **WireGuard/IPsec receiver
-Setup Link KEEP-or-DELETE decisions before removing the committed tunnel**.
-If DELETE is chosen, My tunnels -> Delete receiver link needs a fresh
-`DELETE` confirmation while Link identity still exists; only then Remove.
-If KEEP is chosen, the protected file survives both removal and STL
-uninstall and must remain under administrator control. GRE/IPIP need no
-private-handoff decision. No credential erasure or mass Link wipe is
-automatic. The older rc.5 Update remains read-only guidance; rc.6
-applies additional immutable-release and fresh UPDATE-consent gates.
-
-## Protected receiver Setup Link retention (rc.3 guided UI)
-
-The rc.3 guided sender deliberately retains WireGuard and
-IPsec receiver Setup Links in the STL private state root's
-receiver-handoffs/ directory, separate from ordinary State and sender
-credentials. Every Link ID has a 0600 identity-bound private file
-inside an owned 0700 directory. Back up this directory together
-with State and the separately protected sender credentials when
-host disaster recovery matters. Keep all copies private.
-
-In rc.5, the freshly YES-confirmed successful real-TTY Create also
-displays the original offer immediately; otherwise guided My tunnels
--> Share -> SHOW displays the same offer after fresh real-TTY consent.
-Only a separate explicit DELETE erases this receiver file; it does not
-remove the active tunnel or local keys.
-Link removal or uninstall must not silently delete retained receiver
-handoffs. For an already removed Link, the owner must deliberately
-inspect and clean any remaining private handoff. The normal system
-root is /var/lib/simple-tun-link/receiver-handoffs/; only inspect
-files you own and have verified, never use wildcard deletion or
-relax owner-only permissions.
-
-Old rc.2 handoffs created with an explicit filename are still in
-that original path. The new menu does not search arbitrary old
-private paths or reconstruct a lost receiver secret. The normal
-noninteractive creator command still requires an explicit --output.
-
-## Supported deployment shape
-
-- Linux amd64 or arm64; Ubuntu 22.04+ and Debian 11+ are supported installer targets. Derivatives are not assumed compatible.
-- Root-owned `/usr/local/bin/stl` is the single executable.
-  `/usr/local/bin/stlink` is a relative symlink to `stl`, not another binary.
-- Installer bookkeeping is root-owned in
-  `/usr/local/lib/simple-tun-link/install-record` (plus a retained lock file).
-- The canonical Engine still owns every Link, `/var/lib/simple-tun-link`,
-  network resource, and `simple-tun-link-restore.service`. The installer does
-  **not** manage those resources or currently install a second systemd service.
-  Operational IPsec is **conditionally registered** only after the current
-  STL-owned native-exclusive strongSwan runtime passes independent ownership
-  and capability admission. The installer installs optional packages only;
-  it does not publish/adopt an IPsec service/configuration or guarantee
-  safe IPsec activation. See [IPsec real E2E](operations/IPSEC-REAL-E2E.md).
-- On real `/usr/local` installs/updates, the installer identifies the OS from
-  `/etc/os-release` as data, validates Ubuntu >=22.04 or Debian >=11, checks
-  installed APT package identities via `dpkg-query`, and installs ONLY missing
-  distro packages with `apt-get` from the host's existing repositories.
-  Default `--backends native` selects `iproute2`, `iptables` and
-  `kmod` for GRE/IPIP and on-demand kernel module inspection/loading
-  (no modules are loaded by installation).
-  `--backends native,wireguard` adds `wireguard-tools`;
-  `--backends native,ipsec` adds `charon-systemd`,
-  `strongswan-swanctl` and `libstrongswan-standard-plugins`
-  (OpenSSL/GCM algorithm backends, not guaranteed by `--no-install-recommends`).
-  `--backends all` opts in to every backend dependency.
-- Missing strongSwan/IPsec packages cannot be safely installed by STL:
-  APT maintainer hooks can start unknown effective systemd units, aliases,
-  generator sources or foreign drop-ins. The rc.6 installer therefore
-  **refuses automatic IPsec APT** in `install`, `update` and `prepare` when
-  any required strongSwan package is missing. An administrator must verify
-  foreign service ownership and install missing packages with normal
-  OS package management first. Already installed IPsec dependencies still
-  need separate STL-private service publication and runtime admission.
-
-**Stable v0.1.0 / Issue #105 (not included in historical rc.6):** STL now
-contains an interactive clean-host IPsec preparation path. In an installed root
-terminal, choose **Create tunnel → Advanced types → IPsec ESP/NAT-T**.
-STL shows missing packages and the resolved **complete APT dependency/version
-plan**, plus the fact that normal distro package hooks may briefly start and
-enable a newly introduced vendor strongSwan service. Typing **PREPARE** once
-authorizes only that displayed plan and qualified STL-exclusive private-service
-setup; it does not create a Link or generate peer secrets. STL rejects a
-changed plan, unknown foreign daemon/port/unit/configuration, unsafe APT
-upgrades/removals, or unverified package ownership. Every selected package
-and dependency version must map to an index whose InRelease verifies with
-the official Debian/Ubuntu archive keyring. Third-party repositories are
-rejected even when APT trusts their key or their Origin claims Debian/Ubuntu.
-Preflight also rejects alias, prefix and generic systemd service drop-ins,
-including the strongswan-swanctl alias and attached/transient load paths,
-before vendor hooks can execute. STL checks the actual system manager
-UnitPath against a bounded supported list; unknown/custom paths stop
-preparation rather than pretending that the host is clean. After successful APT, it
-stops/disables only the newly installed vendor unit that it can positively
-attribute to the approved transaction, verifies that it is inactive and
-disabled, then reuses the existing private-service admission and returns to
-the **same Create**. An actual tunnel still needs its own **YES**.
-
-Package install/enablement is **not atomic** with STL Link or binary rollback.
-If APT, vendor normalization or private-service publication fails, existing
-package/service effects or protected partial files may remain. The menu
-reports the failed stage and will not create an IPsec Link or blindly adopt
-an unknown service. APT failure emits read-only dpkg/package and vendor
-active/enabled/alias classifications and blocks blind retry. Use **stl doctor ipsec --json** for a read-only snapshot
-and reconcile the specific observed conflict before retrying. Historical rc.6 binaries still require administrator-managed strongSwan
-packages. Stable v0.1.0 includes the reviewed selected package/service
-preparation but does not authorize mutation on operational hosts without
-the operator's own backups and explicit consent.
-
-**Introduced in Stable v0.1.1 (Issue #112):** the Installer distinguishes a strict, single-line
-LOAD=not-found inactive/dead placeholder for STL's missing private IPsec
-unit from real/foreign service identities. When all selected packages
-are ready, an installed-root operator may separately type
-STOP strongswan.service to stop/disable only the independently attested,
-distro-owned unit, with a clear warning about immediate VPN interruption
-and disablement persisting across reboot. Before displaying STOP, STL
-also requires complete dpkg package state, no partial/foreign STL-private
-publication, verified vendor and alias identities, unchanged package-owned
-default configuration, and exclusive attribution of the running vendor's
-process and IKE UDP 500/4500 sockets. The official-service proof also
-checks installed optional `libcharon-extauth-plugins` configuration owners
-and compares live vendor files with package contents authenticated through
-a distribution-signed APT `InRelease` / `Packages` chain and archive
-SHA256, rather than trusting local dpkg checksums alone. All installed
-runtime files, package directory entries and their ancestors must also
-remain root-controlled, with only known distribution usrmerge symlinks
-accepted along runtime paths. It may fetch
-public official packages read-only. If signer, package identity, index,
-file bytes or network access cannot be proved, automatic STOP is refused;
-manual reconciliation remains available. The **entire** eligibility check
-is repeated under the exclusive maintenance lock immediately before stopping.
-Any incompatible observation means no automatic STOP/DISABLE. Alternatively,
-repair manually and type RECHECK. Unknown/custom services, partial APT,
-foreign configuration and uncertain identity remain blocked; no generic
-stop, adoption, purge or mask. The earlier public immutable v0.1.0
-does not contain the v0.1.1 reconciliation path.
-
-- Only missing packages are requested; the installer never upgrades the entire
-  host or edits repositories. Host APT package installation is not covered by
-  the STL binary rollback transaction, and STL uninstall never uninstalls host
-  packages. On error it reports the partial-package-management limitation.
-- rc.6 (Issue #101) also bundles a byte-identical copy of the
-  **canonical** installer inside the Go binary (build and CI refuse drift).
-  This allows a real installed `sudo stl menu` to inspect actual missing
-  packages using the canonical read-only requirements action, preview the
-  selected effects, and invoke that same script's `prepare` action only
-  after fresh root/real-terminal confirmation. The installer revalidates
-  owner record, lock and packages independently before any APT operation.
-  Non-root/redirected Create does not execute packages; the Engine still
-  decides actual tunnel readiness. Missing strongSwan packages require
-  manual administrator reconciliation, not an unsafe APT acknowledgement;
-  private-service provision/admission remains separate.
-- After an eligible GRE/IPIP Link is durably committed, canonical
-  `link restore --all` may reload only that Link's on-disk, allowlisted
-  missing `ip_gre`, `ipip` or `fou` module under existing restore
-  maintenance and per-Link locks. No blanket boot module list or global
-  module service is installed. A failed/unknown module restore fails the
-  affected Link, never claims traffic readiness and never unloads a
-  possibly shared driver; actual whole-guest traffic proof is a separate
-  acceptance gate.
-- rc.6 (Issue #101) adds `prepare --backends native|wireguard|ipsec|all`
-  to the byte-identical canonical installer for an existing installer-owned
-  `/usr/local/bin/stl`. Eligible missing native/WireGuard packages are
-  installed with the existing lock/owner/expected-missing guards, without
-  replacing the executable, editing State, loading modules or provisioning
-  IPsec services. If any strongSwan package is missing, preparation fails
-  **before APT** and guides manual administrator installation. The
-  historical rc.5 installer has no `prepare` action.
-
-  After obtaining and reviewing the installer from a **published new release**,
-  an already installed operator can run, for example:
-
-  ```sh
-  sudo bash /path/to/verified/install.sh prepare --backends wireguard
-  ```
-
-  The command does not create a tunnel. Re-enter the Create menu to verify
-  selected backend readiness. Do not run this action using the older
-  rc.5 installer, which does not recognize `prepare`.
-- Offline `--bundle --prefix /private/test` installs cannot install real host
-  packages. Use the non-mutating `requirements` command to preview the exact
-  packages before invoking privileged install.
-- Debian 11 LTS security support ended 2026-08-31. The requested minimum
-  remains supported **if working, signed, maintained APT package repositories
-  are configured on the host**, but the default Bullseye security mirror has
-  returned HTTP 404 for previously indexed packages since LTS expiry. The
-  installer fails with a specific error rather than disabling signature/expiry
-  checks, downgrading packages or silently rewriting repositories. Choose
-  Debian 12+ or an independently maintained Debian 11/ELTS source.
-- Kernel modules, iproute2 XFRM features and strongSwan runtime behavior remain
-  capability-gated; distro/package detection does not prove real tunnel traffic
-  or release qualification (Issue #12).
+A consistent operator-owned backup must include private State,
+the separate credentials store and retained handoffs where needed.
+Do not share these bytes in Issue/PR/CI logs, and do not wildcard
+delete leftover protected temporary material.
 
 ## Install from an official released tag
 
-**Source-trust warning:** the published rc.5 release reports
-`immutable:false`. A tagged URL or `bash -n` syntax check does NOT
-make downloaded code safe to run with root privileges, and the release
-asset checksum checks occur after the script starts. For manual
-install/update on such a release, independently verify that the tag
-resolves to the commit in `BUILD-MANIFEST.txt`, review the script at that
-**exact commit SHA**, and check the release asset SHA256SUMS before
-approving privileged execution. Never treat the convenience one-liners below as a replacement for
-source verification. The
-rc.6 menu Update specifically **does not** execute scripts from
-mutable or unverified GitHub releases.
+**Source trust:** a tag name, successful `bash -n`, HTTPS or
+a checksum from the same downloaded release is not an independent
+signature of the publisher. Before root execution, confirm the
+official tag's immutable publication, source commit and
+`BUILD-MANIFEST.txt`, inspect the exact-tag installer and
+cross-check the published artifact `SHA256SUMS`.
+Unverified or mutable releases require manual review and are not
+eligible for automatic privileged menu update.
 
 Read the [installer source](../scripts/install.sh) before running it as root.
 For a single-command install, with an explicit released tag **only after
@@ -355,13 +210,15 @@ and provision only the verified STL-exclusive service; it will not adopt
 foreign VPN resources. The bootstrap itself does not provision IPsec.
 Offline bootstrap failure/PTY tests: bash scripts/test-quick-install.sh.
 
-The longer direct canonical-installer example above installs only the native GRE/IPIP
-dependencies. `--backends all` selects all backend prerequisites for the
-installer; in rc.6, any missing
-strongSwan package is a manual administrator prerequisite and causes the
-installer to stop before APT. Do not assume `--backends all` installs
-IPsec. A fetched installer cannot bootstrap its own download client: `curl` is needed for the
-one-command wrapper on the host before package provisioning starts.
+The longer direct canonical-installer example above selects native
+GRE/IPIP prerequisites. `--backends all` requests every dependency
+family, but it does **not** authorize unsafe IPsec package/service
+preparation: absent qualifying strongSwan prerequisites may stop the
+direct installer with a guided alternative. For qualified
+interactive IPsec preparation use the reviewed PREPARE path,
+with a separate actual Create confirmation. `curl` is required
+for the one-command wrapper before host package preparation.
+
 To preview without changing anything:
 ```sh
 bash scripts/install.sh requirements --backends all
@@ -390,21 +247,17 @@ stl version --json
 stlink version --json
 ~~~
 
-No public tag/release is being created by these instructions.
-
 ## Update
 
-The historical **rc.5** `stl menu` Update is read-only guidance.
-The **rc.6 and Stable v0.1.0** menu Update fetches official metadata
-and may delegate to the canonical installer only when GitHub positively
-reports `immutable:true` and a forward **RC-to-RC** transition on the
-same line, after root/TTY and fresh `UPDATE` checks. **RC-to-Stable**
-must use the permanent **manual update one-liner above** with a protected
-State/credential backup and independently checked release; selecting
-Stable in the menu does not silently run it. `immutable:false` or unknown is
-manual verification guidance only; there is no privileged remote-script
-execution for that selection. Enabling release immutability in GitHub
-Settings -> Releases affects only releases published afterward.
+The menu reads official release metadata, but its automatic
+root delegation is restricted to positively verified
+`immutable:true` releases and the explicitly supported
+forward **same-line RC** transition, under installed-root/TTY
+checks and fresh `UPDATE` consent. Other upgrade paths,
+including RC-to-Stable and releases with `immutable:false` or
+unknown immutability, use the separately verified **manual
+update** route above. No menu selection is an implicit
+privileged mutable-tag download or a waiver of State backups.
 
 For manual operations, verify the intended source commit and published
 tag against the release manifest, verify the selected artifact against
@@ -564,5 +417,6 @@ bash scripts/install.sh install --bundle /path/to/build-bundle --prefix /path/to
 The test prefix must already contain `bin` and `lib` directories. An offline
 snapshot bundle is not a supported public release. Do not claim these fake
 bundle tests prove arm64 execution, real distro support, service restart,
-firewall safety, or kernel traffic. Issue #12 owns that release-quality E2E
-proof. A real public release/tag is a separate human authorization gate.
+firewall safety, or kernel traffic. Actual backend/platform release evidence belongs to the
+reproducible operations runbooks and GitHub release/check records.
+Publication remains a separately authorized action.

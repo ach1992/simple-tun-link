@@ -2,7 +2,7 @@
 
 **Create and manage point-to-point IP tunnels between Linux servers.** STL provides a stable private IPv4 **Link Address** on each server, while the underlying tunnel can use GRE, IPIP, WireGuard, or conditionally available IPsec. You can create multiple independent Links, including different tunnels between the same pair of servers.
 
-**Latest Stable:** [current published release and verified assets](https://github.com/ach1992/simple-tun-link/releases/latest). The Stable line includes the reviewed terminal UI, selected GRE/IPIP package and kernel preparation, conditionally safe signed-APT IPsec / STL-exclusive strongSwan admission, multi-Link lifecycle, MTU/diagnostics and protected WireGuard/IPsec Setup Links. The original [v0.1.0](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0) remains an immutable earlier Stable; [v0.1.1](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.1) introduced separately consented existing-vendor StrongSwan reconciliation. The historical [v0.1.0-rc.6](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.6) remains an immutable pre-release; neither older binary includes the v0.1.1 reconciliation path.
+**Latest Stable:** [Official published release and checksummed assets](https://github.com/ach1992/simple-tun-link/releases/latest). The Stable line supports guided setup, selected verified prerequisites, multi-Link operation, protected WireGuard/IPsec pairing and recovery. The supported signed-package IPsec preparation and separately confirmed official-distro service reconciliation are subject to explicit ownership and operator-consent gates; unknown or foreign resources are never silently adopted. Confirm the installed binary with `stl version --json` and the exact release manifest rather than assuming all old releases behave the same.
 
 **Field-test limitation:** isolated CI and namespace/systemd guests do **not** establish real provider WAN/NAT, physical-host reboot or cross-provider firewall reachability. [Owner field acceptance #93](https://github.com/ach1992/simple-tun-link/issues/93) stays open. Test first on authorized noncritical hosts with consistent State v3 and protected credential backups.
 
@@ -57,8 +57,6 @@ STL-exclusive private-service plan. Unknown/foreign strongSwan processes,
 ports or units are never adopted. A fresh separate `YES` is still required
 to create the Link; provider firewall/NAT and remote peer setup remain manual.
 
-**Released in Stable v0.1.1 (Issue #112; absent from v0.1.0):** a harmless missing STL-private systemd placeholder no longer blocks IPsec preparation. A real, verified official distro strongswan.service can be stopped/disabled only with its own exact-unit STOP consent, warning that VPN traffic may be interrupted; unknown or custom services require manual remediation and RECHECK. Private service ownership and separate Link YES are still mandatory.
-
 **Already installed?** Use the permanent **update** one-liner in
 [section 6](#6-update-safely), not `install`. The canonical installer refuses
 to adopt foreign or locally modified files. Read the [State/rollback
@@ -66,13 +64,6 @@ precautions](docs/INSTALL.md) before updating configured Links. `curl`
 and the outer `pipefail` ensure a missing/truncated first-hop download
 cannot silently succeed. A release redirect and checksum do not independently
 prove publisher trust; verify the official release source and metadata.
-
-**Older v0.1.0-rc.2** used a longer installer and has the old menu.
-Guided Create/Manage and protected receiver-offer retention require
-rc.3 or later; the improved screen layout and systemd 249 compatibility
-require rc.4 or later. Five-ping summaries, availability hints and instant
-protected-link display after Create require rc.5. Confirm the installed version.
-Existing private rc.2 handoffs stay in their original chosen paths.
 
 Verify when done:
 
@@ -107,8 +98,7 @@ THIS server's underlay/source IP from the Linux kernel route to that peer.
 
 **Forgot to copy the link?** You do not need to recreate the tunnel:
 on Server A, use **3 My tunnels -> number -> 3 Share**. It returns the
-same Setup Link for a saved GRE/IPIP tunnel. On the older
-rc.2 release, where the menu is different, use the CLI instead:
+same Setup Link for a saved GRE/IPIP tunnel. For non-interactive operation, use the CLI instead:
 
 ~~~bash
 sudo stl link list
@@ -152,7 +142,7 @@ press Enter for the suggested private tunnel IP pair and the default UDP
 are under advanced settings.
 
 After **YES** confirms a successful Create on a real interactive terminal,
-rc.5 immediately displays the **SENSITIVE** receiver Setup Link as one
+STL displays the **SENSITIVE** receiver Setup Link as one
 copyable line. Copy it privately to Server B: choose Import -> Protected
 link, paste with hidden input, review and confirm. It is also retained
 in an STL-owned private directory (0700 parent, 0600 per-Link file);
@@ -169,13 +159,11 @@ saved Link State. The shown link is sensitive to shoulder-surfing,
 terminal recording and scrollback; never paste into public logs,
 chats, tickets or shell history.
 
-On **already published rc.2**, the older creator used a manually
-chosen private output filename, not this automatic retention.
-Keep and use that original protected file: it cannot be magically
-recovered from State by the rc.3-or-later menu. The protected Share/Delete
-actions are not available in rc.2. WireGuard creation in
-rc.2 is still the old separate menu option 9; consult the
-[CLI/pairing guide](docs/CLI.md).
+If an earlier **noninteractive** sender created a private handoff
+at an explicitly chosen `--output` path, keep that original
+protected file: the current guided menu cannot infer or recreate
+the recipient secret from ordinary Link State. See
+[CLI and pairing](docs/CLI.md) for exact recovery boundaries.
 
 ## 5. View, share, test, and remove saved tunnels
 
@@ -190,7 +178,7 @@ retained private handoff; cleanup after Link removal needs a
 deliberate owner-private file action. Remove still requires a fresh
 confirmation and rejects changed/unowned resources.
 
-These versioned CLI commands remain supported through Stable v0.1.0:
+These versioned non-interactive CLI commands are available:
 
 ~~~bash
 sudo stl link list --json                  # Saved Links
@@ -235,7 +223,7 @@ RC-to-RC updates on the same line, **not RC-to-Stable**; use the explicit
 permanent update one-liner for RC-to-Stable with backups and verification.
 No automatic rollback, State migration or forced update is performed.
 
-**Important State v3 compatibility warning:** after an rc.2 executable successfully writes **State schema v3** (used for managed local MTU), an older pre-v3 executable **cannot read that State**. **Binary-only rollback is not State rollback.** Before updating hosts with existing Links, quiesce STL mutations and keep a **consistent protected backup** of State **and separate credentials** with a tested recovery path. Do **not** manually edit `schema_version`, drop MTU fields, or delete interfaces/systemd files to force a downgrade. Prefer a compatible roll-forward if recovery is needed; follow the [full update/recovery runbook](docs/INSTALL.md#persisted-state-v3-upgrade-and-safe-rollback-boundary).
+**Important State v3 compatibility warning:** after any compatible executable writes **State schema v3** (used for managed local MTU), an older pre-v3 executable **cannot read that State**. **Binary-only rollback is not State rollback.** Before updating hosts with existing Links, quiesce STL mutations and keep a **consistent protected backup** of State **and separate credentials** with a tested recovery path. Do **not** manually edit `schema_version`, drop MTU fields, or delete interfaces/systemd files to force a downgrade. Prefer a compatible roll-forward if recovery is needed; follow the [full update/recovery runbook](docs/INSTALL.md#persisted-state-v3-upgrade-and-safe-rollback-boundary).
 
 ## 7. Uninstall
 

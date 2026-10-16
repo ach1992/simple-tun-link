@@ -1,79 +1,40 @@
-# Release artifact build, verification, and acceptance
+# Release artifacts: build, verification and acceptance
 
-**For users:** installation, first tunnel and common management commands
-are in the [README](../README.md). This page describes how a maintainer
-builds and verifies release artifacts; the build script itself **does not
-publish** a tag, release, or deployment.
+This is a **maintainer procedure**, not a live release log. For ordinary
+installation and updates use [INSTALL.md](INSTALL.md). Exact publication
+state, tagged SHAs and successful CI/guest results belong to the
+GitHub release, associated Issues/PRs and workflow runs.
 
-Issue #11 is historical installer acceptance, and
-[Issue #12](https://github.com/ach1992/simple-tun-link/issues/12)
-records the source/tag/download and real systemd-guest reboot evidence
-for the prior
-[v0.1.0-rc.2 pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.2).
-[Issue #91](https://github.com/ach1992/simple-tun-link/issues/91)
-and [PR #92](https://github.com/ach1992/simple-tun-link/pull/92)
-record the published v0.1.0-rc.3 operator interface, explicit one-line
-install/update and protected receiver handoff retention. A green PR
-check is source-bound evidence only; the public release is qualified
-separately by checking its recorded tag commit, exact packaged binaries,
-SHA256SUMS and actual installed executable. Historical rc.2 guest
-evidence must not be presented as a new rc.3 tagged-guest boot test.
+A successful source test, a build, a published asset and a verified
+installed release are **different evidence levels**. The build script
+does not create Git tags, publish a release, install a host or authorize
+production rollout.
 
-[Issue #93](https://github.com/ach1992/simple-tun-link/issues/93)
-and [PR #94](https://github.com/ach1992/simple-tun-link/pull/94)
-record the reviewed Ubuntu 22.04/systemd 249 absent-unit fix and
-one-screen operator presentation in the **published**
-[v0.1.0-rc.4 public pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.4).
-Its source/CI, recorded tag commit, five public artifacts, downloaded checksums,
-fresh public install, and actual rc.3-to-rc.4 disposable update have
-separate accepted evidence in Issue #93. Those isolated checks do **not**
-close the Owner's real affected-host systemd, reboot or WAN/NAT acceptance.
-The follow-up UI and diagnostic changes were independently approved
-and merged in [PR #96](https://github.com/ach1992/simple-tun-link/pull/96)
-under closed [Issue #95](https://github.com/ach1992/simple-tun-link/issues/95).
-The **v0.1.0-rc.5 public pre-release** packages these changes; its
-separate tagged-asset/download/install acceptance is recorded under
-[Issue #97](https://github.com/ach1992/simple-tun-link/issues/97).
-The rc.4 asset hashes were verified at acceptance; that is not
-GitHub-enforced release immutability. Real host reboot/WAN/NAT
-acceptance remains independent in Issue #93.
+## Reproducible local artifacts
 
-The **v0.1.0-rc.6 public pre-release** incorporates reviewed and merged
-[PR #100](https://github.com/ach1992/simple-tun-link/pull/100) for safer
-Update/Uninstall and [PR #102](https://github.com/ach1992/simple-tun-link/pull/102)
-for on-demand prerequisites and native IPsec first-start security.
-Immutable publication, public artifacts and installed-release validation
-are separately tracked under [Issue #103](https://github.com/ach1992/simple-tun-link/issues/103).
-Historical rc.5 remains unchanged; actual Owner-host WAN/NAT/systemd-249
-acceptance remains open in Issue #93.
-
-## Local build
-
-From a **clean Git source tree**, with the pinned Go toolchain and GNU
-sha256sum:
+From a clean source checkout with the pinned Go toolchain and
+`sha256sum`, choose a **new** output directory:
 
 ~~~sh
 scripts/build-artifacts.sh --snapshot /path/to/existing-parent/new-bundle
 ~~~
 
-When release/tagging is separately authorized and the exact tag already
-exists at current HEAD:
+For a separately authorized exact version tag that **already exists
+at current HEAD**:
 
 ~~~sh
 scripts/build-artifacts.sh --tag vX.Y.Z /path/to/existing-parent/new-bundle
 ~~~
 
-The tag command **does not create tags or publish anything**. It refuses a
-non-existent/non-current/invalid tag. Both modes require a clean checkout and
-a new output path; no existing path is overwritten. Intermediate binaries are
-built in a private temporary directory and atomically moved into the output
-directory after verification. A failed build cleans its temporary output.
+The tag mode refuses absent/mismatched tags. The script requires a
+clean Git tree and a nonexisting destination; intermediate outputs
+are staged privately and verified before atomic publication to the
+destination. It generates static linux/amd64 and linux/arm64 binaries,
+`LICENSE`, `SHA256SUMS` and `BUILD-MANIFEST.txt` with the intended
+source, commit, version, build date and supported build platforms.
+The binary's reported version/commit must match the manifest.
 
-The bundle contains static linux/amd64 and linux/arm64 executables, the MIT
-LICENSE, a source/commit/version/build-date/platform manifest and SHA256SUMS.
-The executable carries the actual Git commit SHA, supplied version string and
-Git commit timestamp. Build date derives from Git rather than wall-clock time
-for source reproducibility. To verify:
+For a **compatible Linux AMD64** build bundle:
 
 ~~~sh
 cd /path/to/new-bundle
@@ -81,98 +42,92 @@ sha256sum --check SHA256SUMS
 ./stl_dev-<commit-prefix>_linux_amd64 version --json
 ~~~
 
-The example executable command requires compatible amd64 Linux.
-Cross-compilation is not proof of arm64 execution, kernel backend support, or
-network behavior. Issue #12 owns the Ubuntu/Debian, kernel, iproute2,
-architecture, systemd and cross-backend runtime evidence.
+Cross-compilation does not prove native arm64 execution, kernel
+support, systemd behavior or peer traffic.
 
-## Installer acceptance slice
+## Installer and publication boundaries
 
-`scripts/install.sh` consumes the existing artifact filenames and manifest
-without creating a second package format. It verifies manifest/license/
-selected-binary SHA-256, intended version/commit, and the executable's
-reported metadata before an owned installation or atomic update. It installs
-one executable, exposes `stlink` as a relative symlink, and keeps a private
-installer ownership record; a failed update attempts guarded rollback.
-Uninstall refuses configured Links, ambiguous reads, foreign/modified
-executables and leftover Engine-owned restore units, rather than removing
-host resources itself. See [install/update/uninstall runbook](INSTALL.md).
+The canonical [installer](../scripts/install.sh) verifies the chosen
+bundle manifest, MIT license, checksums, expected executable
+identity/version and installed ownership record before atomic
+install/update. Its private recovery journal distinguishes completed
+from uncertain operations. It refuses removal when saved Links,
+a restore unit, credentials/State uncertainty or a foreign executable
+makes cleanup unsafe. The installer is **not** a second Link
+lifecycle or a foreign VPN service manager.
 
-`bash scripts/test-install.sh` runs disposable nonprivileged/offline regression
-cases, including injected after-rename update/uninstall failures. No privileged
-network operations or real release download happen in these tests.
+The bounded local regression commands are:
 
-## Publication versus build acceptance
+~~~sh
+bash scripts/test-install-requirements.sh
+bash scripts/test-install.sh
+bash scripts/test-quick-install.sh
+~~~
 
-This **build script** only produces a verified bundle; it never creates
-a public tag/release. To publish a candidate such as rc.3, a separately
-authorized publisher must bind the tag to the exact accepted source,
-attach the two binaries plus `SHA256SUMS`, `LICENSE` and
-`BUILD-MANIFEST.txt`, then **download the public files independently**
-and verify checksums, installed version/commit and installer behavior.
-For a **future release eligible for automatic in-menu root update**,
-GitHub `Enable release immutability` is an Owner-approved prerequisite:
-enable it before publication, create a draft, attach all expected assets,
-publish, and verify the official release API reports `immutable:true`.
-An old `immutable:false` release cannot be made eligible retroactively.
+These use disposable files/prefixes, fake release fixtures and guarded
+failure injection; they do not prove published download identity,
+actual distro package hooks or kernel traffic.
 
-**Uninstall** remains a read-only preparatory menu; it cannot silently
-remove Links or protected credentials. The **rc.6 Update implementation**
-([Issue #99](https://github.com/ach1992/simple-tun-link/issues/99))
-can delegate to the existing canonical installer after explicit root/TTY/
-forward-only/UPDATE gates, **only** for an official GitHub release whose
-API reports `immutable:true`. False, missing or malformed immutability
-means manual verification guidance, never root execution of a downloaded
-mutable-tag script. There is no second updater or rollback engine.
-GitHub release immutability must be enabled before publishing **future**
-releases; enabling it does not retroactively change public rc.5
-(`immutable:false`). From rc.6, automatic Update is limited to
-positively immutable GitHub releases; an otherwise valid mutable release
-remains manual-only. Review, publication and physical field acceptance
-remain separately scoped and must not be conflated. The offline
-regression script cannot replace release-specific guest reboot and
-real kernel traffic evidence in
-[Issue #12](https://github.com/ach1992/simple-tun-link/issues/12).
-Historically, Issue #11 established rc.1 installation acceptance,
-while Issue #12 records the stronger rc.2 release and whole-guest
-systemd reboot proof. For rc.3, exact-head disposable Ubuntu AMD64/
-ARM64 six-Link traffic is recorded in PR #92's workflow checks;
-publication must additionally verify rc.3's tag, binary manifest,
-download integrity and installed identity. The physical WAN/NAT
-acceptance remains Owner-run after publication and is not certified
-by this isolated test lab.
+Publication requires a **separately authorized** action binding an
+accepted exact source commit to an immutable version tag and complete
+assets (the two binaries, `SHA256SUMS`, `BUILD-MANIFEST.txt`,
+`LICENSE` and the applicable fixed-tag bootstrap when supplied).
+Verify official GitHub release immutability **at publication**; a tag
+name, HTTPS or checksum uploaded by the same account alone is not
+an independent cryptographic signature of source provenance.
 
-## State v3 and full-guest release acceptance (Issue #12)
+After publication, independently download **the public assets**,
+verify each published checksum and manifest against the exact tag,
+install in an authorized isolated environment, and prove
+`stl version --json` reports the correct installed artifact.
+Exercise a fresh private-prefix install, supported update,
+failure rollback/idempotence and safe uninstall. Keep immutable
+historic releases unchanged; do not treat a prior RC's acceptance
+as evidence for a new tag.
 
-Managed MTU is persisted in **State schema v3**; it is distinct from CLI
-request schema v2 and existing pairing schemas. Valid old v1/v2 State must
-restore without a surprise MTU write, and a subsequent successful mutation
-may persist v3. An old pre-v3 executable cannot consume a v3 snapshot: test
-upgrade/rollback policy and publish the operator guidance in [INSTALL.md](INSTALL.md)
-with the release. A binary-only installer recovery is not a State migration.
+For the terminal menu's automated privileged Update, eligible
+official releases must positively report `immutable:true`
+and satisfy the separately specified root/TTY/fresh-consent and
+version-transition requirements in [INSTALL.md](INSTALL.md).
+Unknown/mutable immutability is **manual verification only**;
+no alternate privileged mutable-tag updater should be invented.
 
-Before separately authorized Stable publication, collect exact **candidate
-source/tag, build manifest, checksum and installed executable identities** for
-supported architectures. In an authorized **disposable full-system guest with
-real PID1 systemd and its own kernel**, prove the following on the **same
-persisted guest disk**, not by creating a replacement Link after reboot:
+## Committed-Link and State compatibility acceptance
 
-1. A canonical successfully committed Link has an immutable recorded Link ID,
-   State/credential identity and **actual bidirectional inner Link traffic**;
-   managed-MTU policy is applied and observed at the real Linux interface.
-2. Record the guest kernel boot ID, verify the STL-owned scheduled restore unit,
-   then reboot the **guest OS**, never the AI/test-server host or its control
-   plane. Provide the private peer underlay before the normal restore unit runs.
-3. On a distinct kernel boot ID, **before manual `ensure`, fresh pairing or
-   re-creation**, prove automatic restore of the same Link and observed MTU,
-   returned bilateral packets, idempotent subsequent reapply and scoped cleanup.
-4. Verify safe v1/v2-to-v3 state compatibility, secret-safe evidence, real
-   installed executable/manifest SHA and failure/unsupported-capability cases.
+A release with changed lifecycle/State behavior must independently
+demonstrate that valid older saved State remains readable according
+to its documented migration rules. Current State schema v3 adds
+**endpoint-local managed MTU**. Older valid v1/v2 State loads
+without surprise MTU writes; subsequent successful modification may
+persist v3. A binary-only rollback to an old v1/v2 reader
+**cannot** be assumed safe after v3 was written. Back up
+protected State, separately stored keys and receiver handoffs as
+described in [INSTALL.md](INSTALL.md) before testing an upgrade.
 
-Namespace-only kernel tests, a disposable container's systemd restart,
-source-only offline installer, older source's KVM results, and a green CI
-summary are **not** substitutes for this current-source whole-guest proof.
-Record exact distro/kernel/backend/tool versions, results and honest limits in
-[Issue #12](https://github.com/ach1992/simple-tun-link/issues/12). External
-physical WAN/NAT validation remains Owner-run **after** publication; do not
-claim it occurred or circumvent tool/platform restrictions to attempt it.
+For an accepted release's representative native guests, prefer the
+following evidence when required by its changes:
+
+1. Install and record **exact published binary/manifest identity**
+   and the guest distro/kernel/iproute2/backend versions.
+2. Commit a Link and observe **real bidirectional inner-IP traffic**,
+   actual owned resources and the selected local MTU policy.
+3. On an authorized **disposable full guest** with systemd PID 1,
+   reboot the guest OS while keeping the **same persisted disk**,
+   restore service and original committed Link identity. Do not
+   manually run fresh Pairing/Ensure as a substitute for automatic
+   restore.
+4. On the new boot ID, inspect same-Link traffic, persisted credential
+   identity, scoped sibling isolation and eventual safe cleanup.
+5. Distinguish container/netns-only traffic, independently booted
+   guests, crashed-QEMU recovery and physical two-server WAN/NAT tests;
+   none automatically proves the other.
+
+Use the reproducible [cross-backend](operations/CROSS-BACKEND-REAL-E2E.md)
+and [IPsec native](operations/IPSEC-REAL-E2E.md) procedures and
+record verified outcomes against the **exact** candidate/tag in
+GitHub checks/Issues. Tests must not reboot or alter the AI Server
+Agent/control host or use an unapproved production/physical peer.
+Physical WAN, provider firewall, real-pair and affected-host
+acceptance is a distinct Owner test under
+[Issue #93](https://github.com/ach1992/simple-tun-link/issues/93);
+do not claim it based on disposable validation.

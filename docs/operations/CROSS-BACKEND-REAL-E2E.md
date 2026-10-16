@@ -1,6 +1,6 @@
-# Issue #12: real-kernel cross-backend release E2E
+# Reproducible cross-backend real-kernel E2E
 
-This is **source-only privileged non-production acceptance**. Running it
+This is a **privileged non-production verification procedure**. Running it
 requires an expressly designated disposable Docker-capable test VM; the
 STL_E2E_DISPOSABLE_HOST=approved flag is not permission to run on an Agent
 control plane or production host. Docker shares the VM kernel, so module
@@ -9,8 +9,25 @@ no host packages, systemd units or strongSwan services are changed.
 
 ## Reproduction and identity
 
-Use the build/run commands in [DEVELOPMENT.md](../DEVELOPMENT.md).
-Review the Dockerfile and base image digest first. The root driver refuses
+On an independently authorized **disposable Docker-capable VM**,
+review the Dockerfile and base image digest, then use the following
+commands from a clean committed checkout:
+
+~~~sh
+docker build -f scripts/e2e/cross-backend.Dockerfile \
+  --build-arg BASE_IMAGE=ubuntu:24.04 -t stl-cross-backend:ubuntu24 .
+docker build -f scripts/e2e/cross-backend.Dockerfile \
+  --build-arg BASE_IMAGE=debian:13 -t stl-cross-backend:debian13 .
+sudo env STL_E2E_DISPOSABLE_HOST=approved \
+  STL_E2E_IMAGE_UBUNTU=stl-cross-backend:ubuntu24 \
+  STL_E2E_IMAGE_DEBIAN=stl-cross-backend:debian13 \
+  bash scripts/e2e/cross-backend-docker.sh
+~~~
+
+The opt-in variable alone is **not permission** to run this on a
+shared, production or agent control-plane host. Review the runner,
+its image preconditions and its actual module/namespace effects.
+ The root driver refuses
 an unclean checkout, absent images or unverified test-binary digest, and
 enforces fresh --network none containers with a read-only mount of the exact committed script/go.mod and binary,
 no Docker socket, no host systemd or foreign runtime state. Each guest uses
@@ -75,8 +92,8 @@ inspect and retire **only task-owned** resources after reviewing evidence.
 
 The isolated cross-backend image now includes `charon-systemd` and
 `strongswan-swanctl` userspace, solely inside task-created Docker images.
-Build distinct Ubuntu 24.04 and Debian 13 image tags from
-`cross-backend.Dockerfile`, as documented in `docs/DEVELOPMENT.md`.
+Build distinct Ubuntu 24.04 and Debian 13 image tags as shown in
+[Reproduction and identity](#reproduction-and-identity).
 The root driver opts in with `STL_E2E_CROSS_WG=approved`,
 `STL_E2E_CROSS_IPSEC=approved` and `STL_E2E_CROSS_NATT=approved`;
 the standalone GRE runner remains usable without optional IPsec.
@@ -165,20 +182,25 @@ markers and zero cleanup failures. A blocked job, missing capability,
 cancelled run or `SKIP` is never acceptance. Ordinary Go CI is nonprivileged
 and does not substitute for this evidence.
 
-## Remaining gates outside this package
+## Evidence boundaries and later acceptance
 
-Issue #12 stays **OPEN** for an actual full guest **OS reboot** with
-automatic restoration of normally installed STL Links, durable state,
-protected credentials and real post-reboot bilateral packets. A systemd
-service restart or fresh Docker namespace is not a guest reboot. Distinct
-interruption/rollback and unsupported-capability handling not already
-proved by existing evidence also remain Issue #12 work.
+This script establishes **real in-kernel namespace traffic and scoped
+cleanup** for the exact built source when the required markers PASS.
+Docker containers share each disposable VM's kernel, so even native
+AMD64/ARM64 successful traffic is not a full-guest reboot or a test
+of independently booted Ubuntu/Debian distro kernels. This lab's
+NAT-T result confirms kernel ESP-in-UDP, not an external provider/NAT.
 
-The completed native AMD64/ARM64 matrix above does **not** demonstrate
-independently booted Ubuntu and Debian distro kernels, physical NAT-router
-traversal or power-loss recovery. Its NAT-T evidence is actual in-kernel
-ESP-in-UDP, not a public NAT deployment. Valid earlier systemd GRE/IPsec
-and standalone IKEv2 ESP/NAT-T proofs remain separate evidence.
+Separate, exact-source whole-guest tests have demonstrated
+committed-Link reboot/restore and crash recovery; their identities
+and proof remain attached to [the GitHub acceptance record](https://github.com/ach1992/simple-tun-link/issues/12)
+rather than becoming permanent "still open" claims here. The
+physical two-server provider WAN/NAT/firewall and affected-host
+systemd 249 acceptance remains a distinct Owner field gate,
+[Issue #93](https://github.com/ach1992/simple-tun-link/issues/93).
 
-Issue #11 exclusively owns release artifacts and safe
-install/update/uninstall. No merge, tag, release or deployment is implied.
+Neither running this procedure nor writing its results authorizes
+publication, installation on a production host, network mutation
+outside the disposable fixture, or changes to protected main.
+Release artifacts and installed executable identity require their
+own evidence described in [RELEASE-ARTIFACTS.md](../RELEASE-ARTIFACTS.md).
