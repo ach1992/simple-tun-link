@@ -5,6 +5,6 @@ FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      systemd dbus iproute2 iptables kmod ca-certificates expect
+      systemd dbus iproute2 iptables kmod ca-certificates expect gnupg dpkg-dev apt-utils
 STOPSIGNAL SIGRTMIN+3
 CMD ["/usr/lib/systemd/systemd", "--system", "--log-level=warning"]

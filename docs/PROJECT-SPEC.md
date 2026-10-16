@@ -318,6 +318,10 @@ remains [Issue #93](https://github.com/ach1992/simple-tun-link/issues/93).
   required dependencies may be installed/updated: no unrelated removals,
   unrelated upgrades or hidden persistent service effects. Before installation STL must record that no
   foreign service, config, IKE port owner or daemon would be displaced.
+  Verify selected package/dependency candidates against the actual APT
+  index and a signed InRelease using the distribution archive keyring,
+  not self-asserted Origin/Label or arbitrary third-party APT trust.
+  Deny applicable service alias/prefix/generic drop-ins before package hooks.
   Only a vendor service positively attributed to this exact approved
   package transaction may then be stopped and disabled; verify that
   the vendor unit is inactive and has no enabled boot edge before

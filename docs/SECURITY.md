@@ -401,6 +401,11 @@ unknown and merely unprovisioned states and offer a qualified supported
 path when one exists. If the package transaction starts but fails, never
 claim package rollback from an STL Link/binary rollback; report observed
 partial effects and provide a safe operator-facing recovery route.
+Each selected APT candidate must map to an index whose InRelease verifies
+against the official distro archive keyring, regardless of other APT trusted
+keys or self-declared Origin. Fail before APT for systemd alias, prefix or
+type-wide drop-ins: a later DropInPaths check cannot undo a vendor hook.
+On APT failure report read-only dpkg/vendor classification and block retry.
 The Issue #105 development candidate implements the consent-gated
 APT and private-service path; release eligibility still depends on
 isolated systemd test evidence and separate author-independent review.

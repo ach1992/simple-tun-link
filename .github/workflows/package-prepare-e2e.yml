@@ -38,3 +38,19 @@ jobs:
         env:
           STL_E2E_DISPOSABLE_HOST: approved
         run: bash scripts/e2e/package-prepare-docker.sh
+      - name: Verified Debian 12 archive signer and live package index preview
+        run: |
+          set -euo pipefail
+          docker run --rm --network bridge \
+            -e STL_E2E_DISPOSABLE_GUEST=approved \
+            -v "$PWD/scripts/install.sh:/mnt/stl-install.sh:ro" \
+            debian:bookworm bash -c '
+              set -euo pipefail
+              [[ $EUID == 0 && -e /.dockerenv && $STL_E2E_DISPOSABLE_GUEST == approved ]]
+              apt-get update -qq
+              preview=$(bash /mnt/stl-install.sh requirements --backends native,ipsec)
+              grep -qx "distribution=debian" <<< "$preview"
+              grep -q "^apt_install=.*charon-systemd=" <<< "$preview"
+              ! dpkg-query -W -f="\${Status}" charon-systemd 2>/dev/null | grep -q "install ok installed"
+              echo "IPSEC_REAL_DEBIAN_SIGNED_DISTRIBUTION_CANDIDATE=PASS"
+            '

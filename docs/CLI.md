@@ -188,7 +188,12 @@ the selected IPsec Create. A separate **YES** still controls Link creation.
 
 **Cancellation/partial failure:** before PREPARE, no effect. After PREPARE,
 APT effects can persist even if later stages or the Link Create are cancelled;
-the UI must not describe them as rolled back. Partial package, vendor-unit or
+the UI must not describe them as rolled back. The selected APT index must be
+verified against the official distro archive signing key, not merely an APT
+trusted key or an Origin label. Alias/prefix systemd drop-ins are checked
+before package hooks. An interrupted APT transaction reports observed
+package/dpkg and vendor state, blocks automatic retry, and skips private
+service admission. Partial package, vendor-unit or
 private-receipt states are preserved for targeted diagnosis; **stl doctor
 ipsec --json** is read-only. Unknown/foreign ownership blocks only IPsec,
 not other tunnel backends. The installed rc.6 release does **not** provide

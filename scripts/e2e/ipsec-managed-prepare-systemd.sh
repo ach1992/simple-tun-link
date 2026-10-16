@@ -15,6 +15,52 @@ bash /mnt/stl-install.sh install --bundle /mnt/stl-bundle --backends native
 [[ -x /usr/local/bin/stl ]] || fail no_verified_installed_binary
 original=$(sha256sum /usr/local/bin/stl | awk '{print $1}')
 record=$(sha256sum /usr/local/lib/simple-tun-link/install-record | awk '{print $1}')
+# An independently signed, APT-trusted third-party repository may spoof
+# Origin/Label Ubuntu. Even if its higher version wins normal APT selection,
+# the read-only STL preview must reject it before any package effects.
+if [[ ${STL_IPSEC_PREPARE_CASE:-} == forged_origin ]]; then
+  repo=/tmp/stl-test-untrusted-apt
+  mkdir -p "$repo/pool" "$repo/dists/noble/main/binary-amd64" \
+           /tmp/stl-test-fake-package/DEBIAN /tmp/stl-test-gnupg
+  chmod 0700 /tmp/stl-test-gnupg
+  cat > /tmp/stl-test-fake-package/DEBIAN/control <<'EOF'
+Package: charon-systemd
+Version: 999.1
+Architecture: amd64
+Maintainer: Disposable test <test@localhost>
+Description: Disposable counterfeit candidate; never install
+EOF
+  dpkg-deb --build /tmp/stl-test-fake-package "$repo/pool/charon-systemd_999.1_amd64.deb" >/dev/null
+  (cd "$repo" && dpkg-scanpackages pool /dev/null >dists/noble/main/binary-amd64/Packages)
+  apt-ftparchive \
+    -o APT::FTPArchive::Release::Origin=Ubuntu \
+    -o APT::FTPArchive::Release::Label=Ubuntu \
+    -o APT::FTPArchive::Release::Suite=noble \
+    -o APT::FTPArchive::Release::Codename=noble \
+    -o APT::FTPArchive::Release::Architectures=amd64 \
+    -o APT::FTPArchive::Release::Components=main \
+    release "$repo/dists/noble" > "$repo/dists/noble/Release"
+  export GNUPGHOME=/tmp/stl-test-gnupg
+  gpg --batch --passphrase '' --quick-generate-key 'Untrusted STL test signer <fake@localhost>' rsa2048 sign 0 >/dev/null 2>&1
+  gpg --batch --output /tmp/stl-untrusted-archive.gpg --export 'Untrusted STL test signer'
+  gpg --batch --yes --clearsign --output "$repo/dists/noble/InRelease" "$repo/dists/noble/Release"
+  printf 'deb [signed-by=/tmp/stl-untrusted-archive.gpg] file:%s noble main\n' "$repo" > /etc/apt/sources.list.d/stl-test-untrusted.list
+  apt-get update -qq
+  policy=$(apt-cache policy charon-systemd)
+  grep -qx '  Candidate: 999.1' <<< "$policy" || fail attacker_did_not_win_apt_candidate
+  LC_ALL=C apt-get -s install --no-install-recommends charon-systemd \
+    | grep -q 'Inst charon-systemd (999.1 Ubuntu:' || fail spoofed_apt_origin_not_observed
+  if bash /mnt/stl-install.sh requirements --backends native,ipsec \
+      >/tmp/stl-forged-preview 2>/tmp/stl-forged-stderr; then
+    fail forged_origin_accepted_as_official_distro
+  fi
+  grep -q 'not signed by the distribution archive' /tmp/stl-forged-stderr ||
+    fail forged_origin_not_rejected_by_signer
+  [[ ! -e /usr/sbin/charon-systemd ]] || fail forged_origin_changed_packages
+  [[ ! -e /var/lib/simple-tun-link/ipsec ]] || fail forged_origin_started_private_service
+  echo 'IPSEC_FORGED_APT_ORIGIN_WITH_VALID_THIRD_PARTY_SIGNATURE_DENIED=PASS'
+  exit 0
+fi
 plan=$(bash /mnt/stl-install.sh requirements --backends native,ipsec)
 missing=$(sed -n 's/^missing_packages=//p' <<< "$plan")
 apt_plan=$(sed -n 's/^apt_install=//p' <<< "$plan")
@@ -36,7 +82,24 @@ case "${STL_IPSEC_PREPARE_CASE:-}" in
     echo "IPSEC_FOREIGN_PREEXISTING_DROPIN_DENIED_BEFORE_APT=PASS"
     exit 0
     ;;
-  clean) ;;
+  foreign_alias|foreign_prefix)
+    dir=/etc/systemd/system/strongswan-swanctl.service.d
+    if [[ ${STL_IPSEC_PREPARE_CASE} == foreign_prefix ]]; then
+      dir=/etc/systemd/system/strongswan-.service.d
+    fi
+    mkdir -p "$dir"
+    printf '[Service]\nExecStartPre=/usr/bin/touch /tmp/foreign-alias-executed\n' \
+      > "$dir/foreign.conf"
+    if bash /mnt/stl-install.sh prepare --backends native,ipsec \
+       --expected-missing "$missing" --expected-apt-plan "$apt_plan"; then
+      fail foreign_alias_override_accepted
+    fi
+    [[ ! -e /tmp/foreign-alias-executed && ! -e /usr/sbin/charon-systemd ]] ||
+      fail foreign_alias_hook_or_package_touched
+    echo "IPSEC_PREEXISTING_ALIAS_OR_PREFIX_DROPIN_DENIED_BEFORE_APT=PASS"
+    exit 0
+    ;;
+  clean|partial) ;;
   *) fail invalid_case ;;
 esac
 
@@ -56,6 +119,42 @@ echo "IPSEC_STALE_APT_DEPENDENCY_PLAN_DENIED=PASS"
 if [[ -f /usr/sbin/policy-rc.d ]]; then
   mv /usr/sbin/policy-rc.d /tmp/stl-disposable-policy-rc.d
 fi
+# Inject an APT failure after its normal dpkg package configuration/hook
+# phase. This is NOT an STL code failpoint: the actual vendor daemon may
+# already be running when apt-get reports a nonzero result. The installer
+# must not normalize an unverified transaction or start a private service.
+if [[ ${STL_IPSEC_PREPARE_CASE:-} == partial ]]; then
+  cat > /etc/apt/apt.conf.d/99-stl-test-interruption <<'EOF'
+DPkg::Post-Invoke { "if systemctl --system is-active --quiet strongswan.service; then exit 17; fi"; };
+EOF
+  if bash /mnt/stl-install.sh prepare --backends native,ipsec \
+    --expected-missing "$missing" --expected-apt-plan "$apt_plan" \
+    >/tmp/stl-partial-out 2>/tmp/stl-partial-err; then
+    fail interrupted_apt_was_reported_as_success
+  fi
+  rm -f /etc/apt/apt.conf.d/99-stl-test-interruption
+  [[ -x /usr/sbin/charon-systemd ]] || fail partial_injection_never_reached_vendor_hooks
+  [[ $(systemctl is-active strongswan.service 2>/dev/null || :) == active ]] ||
+    fail partial_injection_never_started_vendor
+  grep -q '^STL_IPSEC_APT_RECOVERY dpkg_audit=' /tmp/stl-partial-err ||
+    fail no_readonly_dpkg_recovery_classification
+  grep -q '^STL_IPSEC_APT_RECOVERY vendor_active=active ' /tmp/stl-partial-err ||
+    fail no_readonly_vendor_recovery_classification
+  grep -q 'result=RECONCILIATION_REQUIRED retry=BLOCKED private_service=NOT_STARTED link=NOT_CREATED' \
+    /tmp/stl-partial-err || fail partial_state_not_truthfully_reported
+  [[ ! -e /var/lib/simple-tun-link/ipsec ]] || fail partial_attempt_created_private_service
+  [[ $(sha256sum /usr/local/bin/stl | awk '{print $1}') == "$original" ]] ||
+    fail partial_attempt_replaced_stl_binary
+  [[ $(sha256sum /usr/local/lib/simple-tun-link/install-record | awk '{print $1}') == "$record" ]] ||
+    fail partial_attempt_mutated_stl_record
+  if bash /mnt/stl-install.sh prepare --backends native,ipsec \
+      --expected-missing "$missing" --expected-apt-plan "$apt_plan"; then
+    fail blind_retry_of_interrupted_transaction
+  fi
+  echo 'IPSEC_PARTIAL_APT_AFTER_VENDOR_HOOK_READONLY_CLASSIFIED_AND_RETRY_BLOCKED=PASS'
+  exit 0
+fi
+
 # Independently observe the actual new vendor daemon while distro package
 # hooks run. This reads /proc only: polling systemctl before installation
 # could itself create a misleading "not-found" loaded-unit placeholder.
