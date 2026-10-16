@@ -105,18 +105,17 @@ func menuActionSection(out io.Writer, title, action string) {
 	menuSectionStyled(out, title, menuActionRole(action))
 }
 
-func menuSectionStyled(out io.Writer, title, role string) {
-	width := 55
-	if file, ok := menuTerminal(out); ok {
-		if ws, err := unix.IoctlGetWinsize(int(file.Fd()), unix.TIOCGWINSZ); err == nil && ws.Col > 0 {
-			width = min(width, int(ws.Col)-4)
-			if width < 8 {
-				width = 8
-			}
-		}
+func menuRuleWidth(out io.Writer) int {
+	cols := menuColumns(out)
+	if cols <= 0 {
+		return 55
 	}
+	return max(8, min(55, cols-4))
+}
+
+func menuSectionStyled(out io.Writer, title, role string) {
 	fmt.Fprintln(out, "\n"+menuPaint(out, role, strings.ToUpper(title)))
-	fmt.Fprintln(out, menuPaint(out, menuDim, strings.Repeat("-", width)))
+	fmt.Fprintln(out, menuPaint(out, menuDim, strings.Repeat("-", menuRuleWidth(out))))
 }
 
 func menuOption(out io.Writer, number, title, description string) {
@@ -128,19 +127,20 @@ func menuActionOption(out io.Writer, number, title, description, action string) 
 }
 
 func menuOptionStyled(out io.Writer, number, title, description, role string) {
+	// Measure before styling: ANSI bytes would otherwise corrupt the
+	// length calculation. Exact links/commands are kept unbroken below.
+	cols := menuColumns(out)
+	stack := cols > 0 && (cols < 64 || 6+max(22, len(title))+1+len(description) > cols)
 	if !menuCopyable(description) {
 		description = menuPaint(out, menuDim, description)
 	}
 	entry := menuPaint(out, menuCyan, fmt.Sprintf("%2s", number))
-	if file, ok := menuTerminal(out); ok {
-		if ws, err := unix.IoctlGetWinsize(int(file.Fd()), unix.TIOCGWINSZ); err == nil && ws.Col > 0 && ws.Col < 64 {
-			fmt.Fprintf(out, "  %s  %s\n      %s\n", entry, menuPaint(out, role, title), description)
-			return
-		}
+	if stack {
+		fmt.Fprintf(out, "  %s  %s\n      %s\n", entry, menuPaint(out, role, title), description)
+		return
 	}
-	// Pad the raw title before decoration. ANSI bytes must not move columns.
-	fmt.Fprintf(out, "  %s  %s %s\n", entry, menuPaint(out, role, fmt.Sprintf("%-22s", title)),
-		description)
+	// Pad the raw title before decoration. Color changes no visible columns.
+	fmt.Fprintf(out, "  %s  %s %s\n", entry, menuPaint(out, role, fmt.Sprintf("%-22s", title)), description)
 }
 
 // Human-only width; redirected/automation output is never reformatted.

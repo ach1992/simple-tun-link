@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -183,6 +184,46 @@ func TestNarrowTerminalKeepsMenuChoicesReadable(t *testing.T) {
 		!strings.Contains(got, strings.Repeat("-", 44)) ||
 		strings.Contains(got, strings.Repeat("-", 55)) {
 		t.Fatalf("narrow terminal did not wrap the option in readable rows: %q", got)
+	}
+}
+
+func TestMenuSemanticOptionsAtSixtyEightyAndWideColumns(t *testing.T) {
+	for _, width := range []uint16{60, 80, 120} {
+		t.Run(fmt.Sprint(width), func(t *testing.T) {
+			master, slave := openMenuPTY(t)
+			if err := unix.IoctlSetWinsize(int(slave.Fd()), unix.TIOCSWINSZ,
+				&unix.Winsize{Row: 24, Col: width}); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("TERM", "xterm-256color")
+			t.Setenv("CLICOLOR", "1")
+			old, present := os.LookupEnv("NO_COLOR")
+			_ = os.Unsetenv("NO_COLOR")
+			t.Cleanup(func() {
+				if present {
+					_ = os.Setenv("NO_COLOR", old)
+				} else {
+					_ = os.Unsetenv("NO_COLOR")
+				}
+			})
+			menuActionOption(slave, "5", "Remove this tunnel", "Scoped owned Link only", "REMOVE")
+			menuOption(slave, "6", "Update information", "Read only")
+			menuSection(slave, "Review")
+			out := readMenuPTYUntil(t, master, "Remove this tunnel", "Scoped owned Link only",
+				"Update information", strings.Repeat("-", menuRuleWidth(slave)))
+			if !strings.Contains(out, "\x1b["+menuRed+"m") {
+				t.Fatal("explicit REMOVE intent lacked red/bold TTY rendering")
+			}
+			if width == 60 && !strings.Contains(out, "\r\n      \x1b[2mScoped owned Link only") {
+				t.Fatalf("60-column description not placed below action: %q", out)
+			}
+			if width >= 80 && strings.Contains(out, "\r\n      \x1b[2mScoped owned Link only") {
+				t.Fatalf("%d-column action needlessly stacked: %q", width, out)
+			}
+			if strings.Contains(out, "\x1b["+menuYellow+"mUpdate information") {
+				t.Fatal("descriptive UPDATE wording was incorrectly treated as an action")
+			}
+		})
 	}
 }
 

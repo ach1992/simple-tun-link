@@ -47,7 +47,7 @@ func printMenuHeader(out io.Writer, options *runtimeOptions) {
 		}
 	}
 	fmt.Fprintf(out, "%s  %s\n", menuPaint(out, menuBlue, "SIMPLE TUN LINK"), menuPaint(out, menuCyan, version.Version))
-	fmt.Fprintln(out, menuPaint(out, menuDim, strings.Repeat("-", 55)))
+	fmt.Fprintln(out, menuPaint(out, menuDim, strings.Repeat("-", menuRuleWidth(out))))
 	menuField(out, "Host", safeMenuText(host))
 	menuField(out, "IPv4 candidate", safeMenuText(localAddressCandidate()))
 	menuField(out, "Tunnels", count)
