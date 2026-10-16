@@ -39,6 +39,17 @@ Do not introduce:
 - ORM/database layers in v0.1;
 - a generic plugin framework for built-in backends.
 
+Source-code reuse is separate from learning from other projects.
+Check the source's actual license and provenance before incorporating
+code or derived files into MIT-licensed STL. Public visibility is not
+a license grant; copyleft material needs an explicit compatibility
+decision rather than accidental copying. In particular, an early
+design reference, `AminMGMT/BackPack`, was identified as AGPLv3:
+**do not copy its implementation into STL's MIT-distributed code**
+without a separate reviewed licensing decision. Historical source
+audits and exact dates are recoverable from Git history, not a
+standing dependency on that project.
+
 ## External commands
 
 Command execution must:

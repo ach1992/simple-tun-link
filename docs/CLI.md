@@ -53,6 +53,36 @@ discoverable.
   manual verification only. Uninstall is a guided, individually
   authorized cleanup—not a mass Link or credential purge.
 
+### Manual GRE/IPIP Native pairing (no Setup Link)
+
+The interactive menu also supports configuring the pair **manually**
+when the operators do not want to transfer a Setup Link:
+
+1. On **each** server choose **Create tunnel → Manual connection →
+   GRE Native** (or **IPIP Native**) and enter the **other** server's
+   reachable underlay IPv4.
+2. Set two non-overlapping private Link IP addresses. The values are
+   **reversed at the peer**: if A's local/peer are
+   `10.235.1.1/30` and `10.235.1.2/30`, then B's
+   local/peer must be `10.235.1.2/30` and `10.235.1.1/30`.
+3. For **GRE Native**, both sides must have the **same receive key**
+   when keyed (including an explicit numeric key of zero).
+   Press Enter at the manual key prompt on **both** ends for
+   unkeyed GRE. Retrieve an existing peer's **nonsecret**
+   key via **My tunnels → Connection details**. A GRE key
+   is **not** encryption or authentication.
+4. Permit **IP protocol 47** for GRE Native or **IP protocol 4**
+   for IPIP Native on the respective provider and host firewalls;
+   these are not TCP/UDP port numbers. Apply each local Link
+   through its own preview and fresh `YES`, then test
+   peer Link Address connectivity.
+
+The manual menu is for **Native** GRE/IPIP. Use the canonical
+**Share Setup Link → Import** flow for FOU/GUE so paired UDP
+port and encapsulation settings are preserved. WireGuard/IPsec
+receiver secrets cannot be reconstructed from Connection details;
+use the original protected receiver handoff.
+
 ## Exact CLI commands
 
 The executable's `stl help` remains the executable-level syntax source.

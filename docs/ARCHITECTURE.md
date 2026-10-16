@@ -49,12 +49,12 @@ Responsibilities:
 ### Application engine
 Coordinates lifecycle operations.
 
-Target lifecycle:
+Logical lifecycle (with owner/resource locking and reinspection):
 
 ~~~text
 Ensure(desired state)
         |
-Inspect -> Plan -> Validate -> Apply -> Verify -> Commit
+Inspect -> Plan -> Lock -> Reinspect -> Validate -> Apply -> Verify -> Commit
                                   |
                                 failure
                                   v
@@ -105,7 +105,7 @@ Owns safe interaction with:
 
 Native Linux/kernel tools remain authoritative for actual dataplane state.
 
-## 3. Go package direction
+## 3. Go package layout
 
 The shared package boundaries are:
 
@@ -126,7 +126,7 @@ cmd/stl/menu_*.go        interactive terminal presentation
 internal/version/
 ~~~
 
-Directories/packages are added only when an implementation slice needs them. Do not create empty framework packages merely to match this diagram.
+Do not introduce speculative framework packages simply to mirror a diagram.
 
 Keep implementation private under internal/ until a real second consumer demonstrates a stable public Go API requirement.
 
@@ -144,126 +144,69 @@ No Go packet copy loop sits in this path.
 
 A future userspace carrier may legitimately introduce a data-plane helper, but it remains a distinct backend/transport with its own performance and security evidence.
 
-## 5. Desired state and local persistence
+## 5. Desired state, locks and reboot restoration
 
-Persist what is needed to recreate and manage successfully committed Links. Incomplete setup is not a product asset that needs same-ID resumability; an operator can start again with a fresh identity. Protected internal staging/journals may remain to bound crash side effects and must never be misinterpreted as a committed Link or permit blind deletion of uncertain resources.
+Canonical private state is `/var/lib/simple-tun-link/state.json`;
+protected credentials, receiver handoffs, operation journals and
+resource/maintenance locks live in separately controlled private
+paths. State records **committed desired Links**, not assertions
+about live kernel state. Each Link has a stable ID; multiple Links
+share the same store without becoming a singleton.
 
-Direction:
-- versioned state schema; State v3 supports endpoint-local managed MTU. Compatible v1/v2 state migrates in memory without any managed MTU policy; an `mtu` field in pre-v3 state (including empty/explicit unmanaged) is rejected rather than assigned new host-write semantics. Legacy GRE FOU/GUE/options without sufficient identity remain rejected for explicit regeneration rather than guessed;
-- Links are a collection, not a singleton;
-- zero or more Links may exist on a host, including multiple independent Links to the same peer underlay endpoint pair;
-- one stable Link ID independent of interface display name and peer address;
-- atomic write/replace;
-- restrictive permissions for secret-bearing state;
-- no central database in v0.1;
-- observed kernel state is inspected, not blindly assumed from stored config.
+State schema **v3** adds endpoint-local managed MTU. Valid legacy
+v1/v2 State is loaded without changing previously unmanaged
+interfaces; a pre-v3 document with an unexpected `mtu` field is
+rejected rather than granted kernel-write authority. Unknown newer
+versions or contradictory identities fail closed. A new executable
+may persist v3 after a successful mutation; binary rollback to an
+old reader is **not** a State downgrade. See
+[INSTALL.md](INSTALL.md#persisted-state-v3-upgrade-and-safe-rollback-boundary).
 
-Committed Link persistence is mandatory: real installed Link traffic must return after service/OS restart without recreating the link. A pre-commit interruption can be restarted as new setup instead; normal best-effort rollback cleans only proven owned deltas, while hard crashes cannot guarantee zero filesystem/kernel traces.
+For an owned Link, the Engine takes maintenance/Link/resource locks,
+re-inspects state and host resources under those locks, then validates,
+applies, verifies and commits atomically where the underlying
+interfaces permit. Compensation is bounded and independent of
+cancellation, and touches only verified owned changes. Partial
+effects, crash-staged credentials or uncertain host publication
+remain explicit recovery material; they are never conflated with a
+successfully committed Link.
 
-The installed Linux CLI uses /var/lib/simple-tun-link as its canonical
-private state root (state.json plus locks). The minimal non-interactive
-command stl link restore --all loads this state and invokes the same
-Engine.RestoreAll / Engine.Ensure lifecycle. Unsupported backends or failed
-reapply must exit nonzero; no second restore engine is permitted.
+The installed systemd restore unit runs `stl link restore --all`
+through **the same Engine**, reapplying the exact existing Link ID,
+credentials and local MTU after reboot. The Engine owns enabling
+the restore unit before its first committed Link and retiring the
+unit after confirmed final-Link removal. The installer does not
+manage Link/network/systemd resources as a second lifecycle.
+Hosts without systemd may use nonpersistent/manual operation.
 
-On systemd hosts, the normal Engine Ensure activates one STL-owned restore
-unit before committing desired state, and Remove disables/removes the unit
-after committing the last desired Link deletion. The host persistence
-transition and desired-state commit share a narrowly scoped lock. An empty
-restore reconciles an orphaned STL-owned unit after interruption or cleanup
-failure. This does not replace or require systemd-networkd, NetworkManager,
-Netplan, or another host network manager. Hosts without systemd may use
-the ordinary engine in manual/non-persistent mode.
+### Restore-unit publication trust
 
-The owned restore unit has a 35-minute oneshot startup ceiling; the CLI
-uses a 30-minute signal-aware (SIGINT/SIGTERM) context to bound Link
-restoration and reserve time for bounded owned rollback. Persistence
-installation is restricted to a canonical root-owned executable and a
-non-writable, symlink-free directory chain. The privileged restore unit itself
-must also be a root-owned regular file with no unprivileged-writable file or
-parent-directory components; an STL ownership marker alone is insufficient.
-Runtime-only systemd enablement, alias/linked/masked states, and ambiguous
-identities fail closed rather than pretending reboot activation is durable. Negative
-systemd enablement observations require both the expected process exit
-status and matching stdout; a partial stdout from a timed-out command
-is not authoritative. For Ubuntu/systemd 249's alternate absent-unit
-result (completed `is-enabled` exit 1 with empty stdout), a second,
-successful read-only `systemctl show` must prove all of
-`LoadState=not-found`, empty `UnitFileState`, and empty `FragmentPath`.
-A failed, interrupted, ambiguous, incomplete, or foreign-unit observation
-remains blocked; localized stderr text is never parsed as absence.
-The local canonical unit path and owner identity are independently
-validated before any mutation. A completed final-Link unit removal must
-verify the absence of both the owned file and enabled systemd identity.
+Only the canonical trusted root-owned `stl` binary and exact
+STL-owned restore-unit identity can authorize persistence changes.
+The unit's content, original inode and protected parent directory
+chain are revalidated before enablement, disabling, replacement,
+rollback and cleanup. A byte-identical unit, shared name, symlink,
+unexpected mask/alias/drop-in or user-writable path **does not**
+prove STL ownership.
 
-Every backend rollback of an already-applied change runs with a
-cancellation-detached, bounded cleanup context, including non-systemd
-operations. All systemd post-publication compensation paths (durability,
-daemon-reload, enable failure, and later Engine rollback) revalidate
-**both the exact unit bytes and the original inode identity created by STL**.
-A valid marker or byte-identical unit installed by another administrator
-never grants ownership to disable, replace, delete, or re-enable it.
-An operation's originating inode identity is retained through publication,
-enablement, bounded compensation, and Undo. Both newly created staging and
-previously installed canonical units keep their original opened descriptors
-alive while their inode metadata authorizes any transition, including the
-OLD side of exchange, removal and recovery after systemctl calls. Creation
-failure cleanup and retirement-placeholder unlink also keep their originating
-descriptors open through their final ownership-sensitive checks. This prevents
-inode-number reuse (filesystem ABA) from making a new byte-identical file
-pass an os.SameFile(dev,inode) check after the former object was unlinked.
-Short-lived identities are explicitly closed at the transaction boundary;
-the published identity is held by a returned Undo closure until it becomes
-unreachable, when the os.File finalizer can close its descriptor.
-A stale Undo whose original published inode has been replaced must fail
-with an explicit conflict. This in-process protection is not a persistent
-identity token across a process restart.
+Unit creation must not overwrite an existing inode; replacement and
+retirement require supported atomic no-clobber/exchange operations,
+sync/identity verification and ownership-bound undo. Retain an
+original opened file descriptor during ownership-sensitive
+transactions to prevent inode-reuse (ABA) from authorizing cleanup
+of a newly substituted file. Uncertain publication, fsync failure,
+replacement identity or retained protected `.stl-unit-*` /
+`.stl-retire-*` material require explicit reconciliation, not
+wildcard deletion or automatic adoption.
 
-Initial installation and absent-unit deletion compensation share the same
-no-clobber hard-link publication helper. The temporary source inode is
-captured through its original opened descriptor, not a later Lstat.
-The actual source and canonical identities/content are verified before and
-after linking, and before a systemctl daemon-reload. Publication which may
-have happened without a provable STL-created inode is **post-publication
-uncertainty**, not an unchanged transaction; it must not be blindly
-compensated. A potentially independent temporary source is retained with
-an inspectable recovery location rather than unlinked, including when it
-has the expected bytes on a different inode or was edited in place.
-
-Existing-unit updates atomically exchange the incoming and existing unit
-with Linux renameat2(RENAME_EXCHANGE). Before the exchange, the current
-canonical inode and content are revalidated against the original operation
-identity. After the exchange, both the displaced original inode/content
-and the new canonical inode/content must be verified. A reversal may move
-a canonical file only when that file remains the **exact original incoming
-STL inode and bytes**, and the displaced staging object still matches the
-file observed just before exchange. Proof that the old STL inode remains
-recoverable is never permission to relocate an independently installed
-canonical unit. On insufficient proof, preserve the current canonical
-identity, retain available private recovery material and fail explicitly;
-no daemon-reload/enable is performed on an unverified outcome.
-
-Unit removal uses renameat2(RENAME_NOREPLACE) to a private recovery path,
-validates the moved inode before retirement, and verifies expected ownership
-before disabling the unit. Missing-unit compensation uses exclusive
-no-overwrite publication and verifies the restored inode before re-enabling.
-Filesystems without required atomic rename facilities fail closed; STL does
-not fall back to clobbering rename. Before every unit content read, a
-non-following, nonblocking file descriptor proves a regular inode; reads
-are bounded to 64 KiB. Symlinks, FIFOs, devices, unexpected inodes, changed
-contents, and oversized files fail closed. Protected .stl-unit-* and
-.stl-retire-* recovery names are retained when an independent identity or
-uncertain durability prevents safe cleanup. Manual reconciliation may be
-required, and no recovery path should be deleted merely because it shares
-an STL-style filename. Unrestricted concurrent root writers cannot be
-serialized without their cooperation; all avoidable observed ownership
-conflicts abort without overriding their canonical configuration.
-
-The restore unit needs an installed, durable stl executable path. All
-backends and entrypoints reuse the same canonical Engine lifecycle,
-state root, engine construction, and persistence integration.
-
-Never store plaintext private keys in generic logs/status/JSON output.
+Systemd observations distinguish absent, loaded, masked, foreign
+and unknown identities, using bounded output/exit-status checks.
+On supported systemd 249, a missing restore unit may return
+`is-enabled` exit 1 with **empty stdout**; classify absence
+only after independent read-only confirmation of
+`LoadState=not-found`, empty `UnitFileState` and empty
+`FragmentPath`. An interrupted or partial read is not vacancy.
+A successful unit commit is not proof that the remote peer replies.
 
 ## 6. Resource ownership
 
@@ -303,11 +246,11 @@ Each backend must provide enough behavior for the engine to:
 - inspect existing observed state;
 - calculate a change plan;
 - apply owned changes;
-- verify actual data-plane reachability/state;
+- verify owned local data-plane configuration/state;
 - remove owned changes;
 - expose backend-specific diagnostics.
 
-The engine owns transaction/idempotency semantics. Backend implementations must not bypass them with hidden global mutations.
+The engine owns transaction/idempotency semantics. Backends verify local owned runtime state; **they do not claim bilateral peer traffic from interface existence alone**. Backend implementations must not bypass the Engine with hidden global mutations.
 
 ## 8. Backend specifics
 
@@ -396,31 +339,22 @@ Throughput testing is opt-in.
 
 Health is observational. Repair is explicit.
 
-## 12. Setup-link format
+## 12. Setup Link integration
 
-Canonical shape is versioned and self-identifying, for example:
+The [versioned pairing codec](PAIRING.md) centralizes strict payload
+validation, creator-to-recipient inversion and optional sensitive
+receiver credentials. Setup Links carry **data only**; an integrity
+digest is not peer authentication. Preview is redacted and never
+mutates the host; explicit confirmed import uses the same Engine.
+Legacy/future schema compatibility is versioned independently of
+internal State or CLI JSON.
 
-~~~text
-stl://2.<encoded-payload>
-~~~
-
-Requirements:
-- bounded decoder/input size;
-- schema version;
-- integrity/error detection;
-- strict validation;
-- preview before apply;
-- no shell evaluation;
-- backend/encapsulation compatibility validation;
-- peer-side inversion handled centrally, not reimplemented in every backend.
-
-A human-readable configuration block is an alternate representation of the same internal pairing model.
-
-Pairing payloads carry an explicit exchange mode. v0.1 defines `quick` as the default mode for secret-bearing backends because it preserves the simplest one-step workflow and implementation. Quick payloads that contain a receiver private key or shared PSK are explicitly **SENSITIVE** credential material.
-
-For WireGuard Quick Link, the initiator may generate the receiver keypair solely to construct the payload, persist only the receiver public key, and discard the receiver private key from ordinary local state after export. The receiver stores its imported private key locally with restrictive permissions. For IPsec/PSK, the shared PSK may be carried in the sensitive Quick payload and then stored as required by both endpoints.
-
-The format must permit later addition of a `secure_exchange` (or equivalent local-key) mode without changing the core Link model or invalidating existing Quick Link payloads. Secure Exchange is not a v0.1 requirement.
+One-step `quick` pairing is currently the simple default for
+credential-bearing transports; a receiver private key or PSK in a
+Quick Link is **SENSITIVE** even when encoded. A future local-key
+exchange is an additive protocol decision, not an excuse to
+reinterpret existing payloads or persist receiver secrets in
+ordinary State.
 
 ## 13. Interactive UI and presentation boundary
 
@@ -448,106 +382,57 @@ frameworks.
   own services, commit State, or rewrite firewall/routes; they delegate
   to the existing installer/Engine and trust boundaries.
 
-## 14. Reusable integration and extensibility
+## 14. Extensibility and complexity budget
 
-STL is standalone, but its boundaries intentionally permit reuse by arbitrary external software:
+Standalone terminal and external machine consumers share one Link
+identity, Engine, backend contracts and resource lifecycle. The
+public versioned CLI/JSON boundary is preferred for external
+integration; internal Go types must not become an accidental public
+API. A future in-process API, userspace carrier or daemon needs
+demonstrated consumer value and its own compatibility/performance
+evidence, not speculative infrastructure.
 
-- core behavior is independent from terminal UI;
-- direct CLI subcommands expose deterministic operations and explicit exit semantics;
-- every machine-readable payload has a schema version;
-- Link IDs are stable and multiple Links, including same-peer Links, are first-class;
-- desired/observed state are separable and an idempotent ensure operation converges desired state;
-- backends expose common lifecycle/status semantics;
-- STL does not model external consumer topology, roles, inventory, ownership, or orchestration policy.
-
-External software should initially consume the CLI/JSON contract. If a real second in-process Go consumer appears, selected engine APIs may then be promoted from `internal/` rather than speculatively freezing a public package today.
-
-For native backends, an external consumer must not be required to remain available for established Link data-plane traffic to continue.
-
-## 15. Complexity rule
-
-Prefer:
-- one domain concept with backend adapters;
-- stdlib before dependencies;
-- explicit small interfaces where multiple implementations already exist;
-- composition over duplicated managers;
-- measured performance work.
-
-Avoid:
-- speculative abstractions;
-- generic plugin frameworks before a third-party backend exists;
-- databases/daemons/API servers before a consumer requires them;
-- duplicating Linux networking logic in pure Go when a small, validated native-tool boundary is safer.
-
-Architecture may expand only when a concrete accepted capability requires it.
+Prefer shared small interfaces, standard-library primitives and
+native Linux integration where they improve correctness or measured
+performance. Avoid alternate Link managers, a generic plugin
+framework, global polling services or a central database absent
+a concrete accepted need. The lasting product principles and
+non-goals belong in [PROJECT-SPEC.md](PROJECT-SPEC.md).
 
 ## 16. Runtime portability and operator observability
 
 ### Conditional native-exclusive IPsec
 
-One shared Engine/VICI/PSK/XFRM lifecycle serves supported platforms; small
-capability-driven host adapters resolve package versions/paths, native
-systemd service details and relevant kernel features. The operational
-baseline is an STL-owned native-exclusive strongSwan runtime, shared by
-multiple independently identified per-Link IKEv2/XFRM connections on
-standard IKE/NAT-T UDP 500/4500.
+All supported IPsec Links share a **single STL-owned**
+native-exclusive strongSwan service with individually owned
+per-Link IKEv2/XFRM identities. The Engine never takes over a
+foreign VICI namespace or uses bulk unload/reload of arbitrary
+credentials and connections.
 
-**Admitting IPsec requires positive combined ownership proof**, not merely
-absence of a foreign process or a matching filename. Before changing host
-state, independently attest the protected configuration and service origin
-(receipt, inode, xattr and canonical bytes), effective PID 1-loaded unit
-including overrides/environment, trusted executable and running process,
-private VICI socket and peer credentials, active CFG/journald logging and
-actual IKE port ownership. Runtime observations are time-local: revalidate
-under the Engine maintenance/Link/resource locks immediately before
-effectful transitions. Missing and unknown states are distinct from
-confirmed foreign conflicts; a harmless in-memory `not-found` placeholder
-for the STL-private unit is not a loaded or foreign service.
+Admission must independently prove protected config/service
+publication origin, actual effective systemd unit, trusted active
+process/executable, protected VICI peer, safe effective logging,
+IKE UDP port ownership and unambiguous kernel/XFRM resources;
+all observations are rechecked under the correct Engine locks
+before effectful changes. Unknown or foreign prerequisites block
+**IPsec only**, leaving GRE/IPIP/WireGuard usable. No positive
+doctor check alone proves encrypted peer packets.
 
-Use bounded system-manager inspection rather than causing an absent unit
-to load just to inspect it. Verify actual manager ownership (system PID 1,
-root UID and trusted system-manager identity) and sanitize command/D-Bus
-execution context; explicit manager/environment validation must reject
-untrusted loader or `STRONGSWAN_*` overrides. STL does not rewrite global
-systemd settings to force admission. Use official distro-signed package
-indexes and archive keys for qualified installation; plan and disclose
-package-hook side effects instead of promising atomic package rollback.
-Disallow ambiguous service aliases/drop-ins and foreign startup or IKE
-port effects.
+Signed package/service preparation has its own scoped approval.
+A verified **pre-existing official distro**
+`strongswan.service` requires the *separate* exact
+`STOP strongswan.service` consent, disruption warning and
+fresh eligibility proof; generic `PREPARE` never authorizes
+stopping foreign/unknown daemons. An unverified or partially
+committed XFRM/VICI mutation stays journaled for exact-owned
+reconciliation; missing original ifindex is not permission
+to delete a similarly named interface.
 
-A previewed `PREPARE` authorizes only the selected, positively qualified
-prerequisite plan; actual Link Create/Import has its own confirmation.
-For the known signed distro package transaction, a newly introduced vendor
-unit may be stopped/disabled only after verifying its exact provenance.
-For a positively verified **pre-existing official**
-`strongswan.service`, an explicit separate
-`STOP strongswan.service` consent, immediate-connection-disruption
-warning and exact reattestation under the installed exclusive maintenance
-gate are mandatory before any stop/disable. Unknown/pre-existing other
-service identities cannot be adopted, stopped or masked automatically;
-offer manual remediation followed by `RECHECK`. The same conditions
-protect GRE/IPIP/WireGuard independence: an IPsec-only conflict must not
-disable those backends.
-
-The canonical Engine issues exact per-Link VICI `load-conn`/
-`load-shared`, `unload-conn`/`unload-shared`, initiations and termination
-without bulk connection/credential reload, daemon-wide flush or foreign
-namespace takeover. It saves public-only pre-effect journals. A missing
-persisted original XFRM ifindex after kernel creation is *not* permission to
-delete a matching-name or matching-ID device; only exact receipt-bound
-identity permits a scoped reconciliation. Per-Link Remove journals record
-SA/VICI/kernel progress; an uncertain remove retains original claims
-until explicit `reconcile-ipsec`. A successful committed Remove issues an
-exact nonsecret retirement receipt for root-private PSK deletion, which
-`retire-ipsec` may complete without a live daemon.
-
-The credential-bearing native runtime requires explicit, bounded effective
-logging guarantees before loading PSKs; unsafe strongSwan CFG debug and
-untrusted daemon output must not reach ordinary logs/JSON. See
-[Security](SECURITY.md) and
-[ADR-0005](decisions/ADR-0005-scoped-vici-ipsec.md) for the durable security
-decision. Reproducible isolated evidence and its environmental limits belong
-to [the IPsec E2E runbook](operations/IPSEC-REAL-E2E.md), not this design.
+The [IPsec runtime ADR](decisions/ADR-0005-scoped-vici-ipsec.md)
+owns the rationale and consent trade-off;
+[SECURITY.md](SECURITY.md) owns precise protective rules.
+The [IPsec E2E runbook](operations/IPSEC-REAL-E2E.md) owns
+reproduction and bounded evidence.
 
 ### Shared observations and error contracts
 

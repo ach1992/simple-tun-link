@@ -1,414 +1,184 @@
-# Diagnostics and MTU decision contract
+# Diagnostics, quality and MTU contracts
 
-This is the backend-neutral diagnostic/measurement contract.
-[PROJECT-SPEC.md](PROJECT-SPEC.md) defines the intended outcome;
-[ARCHITECTURE.md](ARCHITECTURE.md) owns Engine boundaries, and
-[CLI.md](CLI.md) owns exact user/machine command syntax.
+This document defines the **measurement semantics and backend-neutral
+safety rules** in `internal/diagnostics`. For user commands and JSON
+syntax see [CLI.md](CLI.md); for changing a saved Link see the
+[canonical Engine](ARCHITECTURE.md), not a diagnostic adapter.
 
-## Scope of the current component
+## What observations can prove
 
-`internal/diagnostics` provides:
+- `link list`: saved **desired** Links, not live connectivity.
+- `link status`: a matching, STL-owned local interface and supported
+  public counters/identity, not remote packets.
+- `link diagnose <id>`: bounded probes **to the peer Link Address**
+  and observed quality/MTU data, not a durable health guarantee.
+- `link diagnose --all [--timeout 10m] [--json]`: one stable
+  ordered inventory, independent time-local Link probes and explicit
+  observed/blocked/unknown/interrupted outcomes.
+- `link throughput`: a separate, explicitly approved short TCP
+  traffic test; not a default health check or a tunnel bandwidth cap.
 
-- Observational, bounded inner-IPv4 MTU/PMTU candidate selection.
-- A manual MTU override with explicit underlay/encapsulation validation.
-- A conservative fallback that is **never described as measured**.
-- Short, bounded Link Address probe aggregation for loss, RTT and jitter.
-- One versioned `Report` with a shared human-readable `Summary()`.
-- A Linux read-only probe and route-aware preflight adapter, using the same
-  common report and algorithm, without hardcoding backend overhead.
+An ICMP reply means the particular probe reached the peer at that
+moment. An unanswered but transmitted probe means **unknown**
+(`link_probe_no_reply`), not confirmed tunnel failure. Missing
+capability/ownership yields `blocked` or `unknown`, never a silent
+success. Conditionally unadmitted IPsec reports
+`ipsec_runtime_not_registered` with safe next step
+`stl doctor ipsec`, without activating the daemon.
 
-The pure core is OS-independent. The optional Linux adapter executes bounded
-read-only inspection commands and ICMP echo probes but **never modifies**
-network state, applies MTU, repairs a tunnel, installs software, stores keys
-or claims live backend E2E acceptance. Backend adapters supply actual interface identity and encapsulation
-overhead; measured MTU remains observational. The canonical Engine
-separately applies an explicitly managed endpoint-local MTU policy
-under normal ownership and rollback rules.
+Every operation remains **network-config read-only** unless it is an
+explicit Engine lifecycle command. Diagnostic probes can send bounded
+ICMP/TCP traffic but must not apply MTU, change routes or firewall,
+load modules, start services or repair an interface.
 
-## Whole-host Link diagnosis and operator recovery
+### All-Link cancellation and observability
 
-The [operator recovery guide](OPERATOR-RECOVERY.md) covers versioned
-Engine-stage evidence, trusted no-Apply classifications, kernel module
-prerequisites and safe next actions. Health inspection never repairs.
+One trustworthy State snapshot defines the Link set; live probes
+are independent and may observe changing kernel state. Each probe
+has a bounded budget; the optional **total** deadline starts
+before State loading and runtime construction, not after.
+A late result or interrupted/unprocessed Link remains unknown.
+If cancellation prevents trusted inventory, emit the versioned
+`diagnostic_interrupted` error (exit 1), **not** a fabricated
+successful empty list. A genuinely empty saved inventory can
+complete successfully but proves no peer connectivity.
+There is no arbitrary limit on the number of configured Links.
 
-The read-only `stl link diagnose --all [--timeout 10m] [--json]`
-operator command and the menu's Diagnostics/All option share the exact
-same GRE/IPIP/WireGuard `Observe*` backend adapters used by the original
-single-Link CLI. One saved-state snapshot determines the stable Link ID set,
-but live measurements are separate and time-local. A failed/unavailable
-Link cannot prevent a different saved Link from being checked.
+Versioned v1 reports include only validated Link/backend identity,
+quality and MTU data, stable reason/next-step fields and verified
+backend counters. Unknown metrics are absent or `null` by contract;
+do not invent a zero. Never echo arbitrary Link display names,
+raw external output, private credentials or SENSITIVE Setup Links.
 
-The report is deliberately **not** a promise that the Link is continuously
-healthy. `observed/link_peer_replied` means only a verified, Link-bound
-echo was received at probe time. A validly sent but unanswered probe becomes
-`unknown/link_probe_no_reply`, not proof of permanent peer failure.
-Incomplete/no-capability measurements are likewise unknown/blocked, not
-silently successful. **When** the native-exclusive IPsec runtime cannot
-be admitted/registered, its Link stays
-`blocked/ipsec_runtime_not_registered` with canonical
-`next_step: "stl doctor ipsec"` across all-Link and per-Link status/
-diagnosis; there is no implicit service or network mutation. An already
-admitted runtime may perform bounded, read-only Link Address diagnostics
-after verifying its private owned XFRM interface and SA. An installed
-IPsec SA is not proof that the peer replied. A batch can
-be canceled and returns an explicit interrupted outcome with unknown
-remaining records **when inventory was successfully read**. If cancellation
-interrupts inventory loading before a verified Link set exists, the version-1
-public error envelope returns `reason_code: "diagnostic_interrupted"`
-and exit `1` instead of fabricating `total:0`. An actually empty saved
-Link set is reported separately and is never evidence of reachability.
+## Common Linux probe contract
 
-Each report includes only safe Link identity, versioned MTU/quality
-observations, verified counters, optional latest observed WireGuard
-handshake timestamp and a stable reason/next step. Untrusted raw command
-output and backend errors, free-form saved display names, and secrets never
-enter batch/human reports. Per-Link diagnostic duration is bounded.
-The optional **total** batch deadline starts before state loading/runtime
-setup, propagates to the state loader and Link probes, and is checked on
-both sides of synchronous initialization as well as after each probe.
-An adapter that produces a late healthy-looking result after a child or
-parent deadline cannot turn that Link green; remaining inventory is
-explicitly marked unknown. The total budget is configurable rather than
-hardcoded to an arbitrary Link count. A synchronous OS read/initialization
-call cannot always be forcibly preempted mid-operation; time it consumes
-nevertheless counts against the batch deadline and no new probe can run
-after it expires.
+Before transmitting, the read-only adapter must verify the selected
+backend's capability and exact owned interface name/ifindex, local
+Link Address, interface UP state, and route-derived physical underlay
+source/device/MTU toward the saved **underlay peer**. A replaced
+interface under a reused name or mismatched route blocks measurement.
 
-Machine errors across Link read, diagnose, ensure, import, export, retire and
-restore-dependent flows use `stlerr.WithGuidance` at the existing public
-error boundary. This maps well-defined error categories to conservative,
-stable `reason_code` and `next_step` fields while preserving any more
-specific verified backend reason. Generic `state_unverified`,
-`apply_outcome_unverified` and `rollback_incomplete` explicitly require
-reconciliation instead of suggesting blind repeated writes. Internal raw
-causes never become JSON/human strings.
+`DFProber.Probe(ctx, link, packetBytes)` probes the inner IPv4
+datagram size (including the 20-byte IPv4 plus 8-byte ICMP headers),
+never the public underlay address. The Linux `ping` adapter uses
+bound local Link IP and interface, IPv4/DF nonfragmentation and
+`-s (packetBytes - 28)` with explicit bounded argv and
+deterministic locale. Parse only a complete matching peer/sequence
+and summary; reject truncated or unexpected tool output.
 
-Fake-runner tests establish bounded behavior but not privileged
-network acceptance. Exact release-native verification belongs to the
-[operations runbooks](operations/CROSS-BACKEND-REAL-E2E.md)
-and the corresponding GitHub CI/tag evidence.
+| Probe result | Meaning |
+| --- | --- |
+| `reply` | A matching actual ICMP reply and parseable RTT |
+| `too_large` | A definite local/remote packet size rejection |
+| `timeout` | Confirmed send without reply; no PMTU upper bound established |
+| `unsupported` | Missing/unavailable probe capability |
 
-## Measurement contract
+A canceled process, malformed stdout or tool failure is not
+automatically a reply, a lost packet or a measured MTU.
 
-`DFProber.Probe(ctx, link, packetBytes)` measures an **inner IPv4
-datagram**, with `packetBytes` including the 20-byte IPv4 and 8-byte
-ICMP echo headers. The destination must be the **peer Link Address** for the
-specific stable Link ID, not merely the public underlay address. The Linux
-iputils ping adapter uses `-s (packetBytes - 28)` and ensures
-non-fragmenting/DF probing. See the
-[Linux ping documentation](https://man7.org/linux/man-pages/man8/ping.8.html).
-No shell interpolation or untrusted free-form command string may be used.
+## Backend measurement requirements
 
-An adapter must distinguish:
+| Backend | Independent verification and measured data |
+| --- | --- |
+| GRE Native/FOU/GUE | Deterministic owned interface/ifindex, mode, local IP, route, GRE options/encapsulation overhead and public packet/byte/error counters |
+| IPIP Native/FOU/GUE | Same identity and route rules; transport overhead 20/28/32 bytes for IPv4 Native/FOU/GUE |
+| WireGuard | Owned interface/ifindex, public local/peer keys, listen port, local Link IP, handshake timestamp and RX/TX bytes; IPv4 data overhead **60 bytes** |
+| IPsec ESP/NAT-T | **Admitted** STL-exclusive runtime, exact owned XFRM interface name/ifindex/`if_id`, VICI connection and matching SA before any probe; conservative overhead planning bounds **128/136 bytes** |
 
-- `reply`: an actual received echo reply for this request;
-- `too_large`: an actual local/remote fragmentation or size rejection;
-- `timeout`: a sent probe without a reply, **not proof** of path MTU;
-- `unsupported`: probe capability unavailable.
+GRE overhead is supplied by the backend from actual GRE fields,
+key/checksum/sequence, FOU and GUE encapsulation rather than guessed
+by the common measurement core. GRE keys are not authentication.
+WireGuard's zero/missing last handshake does not prove peer
+failure. IPsec ESP/NAT-T overhead is a conservative planning bound,
+not a claim about a negotiated exact transform.
 
-A tool execution failure or canceled/deadlined adapter operation is **not**
-a received reply or automatically a lost packet. Probes must honor the
-supplied context and its child deadline. Probe implementations remain
-read-only, Link-scoped, and limited to the authorized selected interface.
+IPsec **XFRM interface packet counters** are optional and distinct
+from SA/peer-authentication evidence. Before reporting RX/TX, a
+bounded `ip -s -details -json link show dev <owned-interface>`
+must independently confirm name, ifindex, `if_id`, ownership alias
+and both `stats64.rx.packets` / `stats64.tx.packets`.
+If unavailable or ambiguous, omit `rx`, `tx` and `counter_unit`;
+a verified numeric zero is valid only when actually measured.
+Other backends' verified counters keep their own supported units.
+No healthy status follows from a counter alone.
 
-## Linux read-only adapter
+## MTU selection versus MTU application
 
-`PreflightLinux(ctx, link, opts)` resolves the actual route toward the
-**underlay peer**, requires the kernel-selected source to match the requested
-underlay source, then checks that the selected backend-supplied Link interface
-is UP and owns the exact local IPv4 Link prefix. The physical underlay device
-must also be UP. Underlay MTU comes from the kernel's physical route-device
-MTU, restricted by any explicit route MTU metric. Backend overhead is required,
-positive, and passed from the backend; no common encapsulation guesses apply.
-Missing or mismatched state fails closed before any active probes.
-
-`NewLinuxDFProber` binds one Link ID and Link Address pair to its selected
-interface. A single DF echo is executed with separated argv (no shell),
-using the supported Linux `env` tool to set `LC_ALL=C` for deterministic
-`iputils ping` parsing. It forces IPv4, disables name lookup, sends exactly
-one echo with `-M do`, uses `-s (packetBytes - 28)`, and binds both
-`-I <Link-interface>` and `-I <local-Link-IP>`. The destination is the
-peer Link IP, **never the underlay peer IP**.
-
-A reply is accepted only with a confirmed one-packet summary, matching peer
-address/sequence and parseable RTT. Definite local or remote fragmentation
-returns `too_large`; a verified sent-but-unanswered summary returns
-`timeout`. Unsupported/missing tooling or malformed output cannot become
-a successful measurement or established MTU ceiling. Arbitrary command
-output/errors are not propagated into the versioned report. Cancellation
-prevents further probes.
-
-`ObserveLinux` composes this adapter with the common read-only
-`Observe` decision/report model. It does not bypass backend-specific
-capability, ownership or counter inspection; unsupported backend kinds
-remain unavailable until their own adapters are implemented.
-
-Optional nonprivileged runtime verification uses only the local loopback
-interface, without sending packets to external destinations:
-
-~~~sh
-STL_LIVE_LOOPBACK_PING=1 go test ./internal/diagnostics -run '^TestLinuxDFProberLoopbackSmoke$' -count=1
-~~~
-
-This verifies iputils syntax and parser behavior, **not** real Link
-data-plane reachability, FOU/GUE or multi-Link E2E acceptance.
-
-## GRE adapter — backend identity and counters
-
-`ObserveGRE(ctx, link, inspector, runner, manualMTU)` connects the
-backend-neutral v1 measurement and Linux DF-probe implementation to the
-already implemented GRE backend, without duplicating the MTU/quality logic.
-
-It requires a GRE Link, the backend's capability report and
-`DiagnosticState` ownership/counter inspection. Before transmitting
-any Link Address ICMP echo, it verifies the deterministic GRE interface name,
-encapsulation and positive kernel ifindex. The Linux preflight then requires
-the same ifindex in the selected Link-interface address snapshot; an interface
-replaced under a reusable name cannot be silently mixed with the earlier
-backend diagnostic view.
-
-The backend itself supplies its real worst-case overhead for native GRE,
-key, checksum, sequence, FOU/GUE UDP and GUE headers. Source route, underlay
-MTU and selected Link Address checks remain in the single Linux adapter.
-Measurements are bounded and purely observational; **no suggested MTU is
-automatically applied**. Live GRE operational interface/counter verification
-does not by itself prove traffic to a remote peer.
-
-`GREReport` preserves the common `schema_version: 1`, `link_id`,
-`mtu` and `quality` keys, adding only the GRE backend kind and
-the secret-free, identity-checked interface counters as `state`.
-Capability failures, unknown ownership and mismatched interface observations
-return explicit non-success; they are not mislabeled as healthy.
-
-The adapter has fake-runner regressions covering live-observation composition,
-FOU overhead vs manual MTU, wrong backend, unavailable capability, stale
-ifindex, foreign interface, malformed counter identities, and cancellation.
-Fake-runner regressions alone never establish real FOU/GUE packet traffic
-or installed-release compatibility.
-
-## GRE operator diagnostic command
-
-`stl link diagnose <link-id> [--mtu <inner-ipv4-bytes>] [--json]`
-requires a saved Link and an actually verified GRE backend. It composes the
-existing read-only capability/counter checks with the Linux Link-bound ICMP
-DF probe and produces the same secret-safe, versioned report. The optional
-manual MTU value is checked against the real underlay-MTU-minus-GRE-overhead
-ceiling and is **never applied automatically**. Invalid/unsupported/unknown
-state yields a structured nonzero CLI result; a configured Link is not
-silently reported as reachable.
-
-The explicit command transmits a bounded number of diagnostic echo packets
-to the *peer Link Address*. It does not modify the host, and unit tests use
-faked Linux runner responses rather than contacting any external IP.
-The CLI also keeps a lighter read-only `link status` command that
-reports identity-checked interface counters without probing connectivity.
-
-## IPIP adapter — backend identity and counters
-
-`ObserveIPIP` uses the same backend-neutral MTU, quality and Linux DF-probe
-engine as GRE. It checks IPIP capability, the backend's ownership-verified
-interface/counters, deterministic interface identity and ifindex before
-sending bounded Link Address probes. IPIP supplies transport overhead:
-20 bytes for Native, 28 for FOU and 32 for GUE over an IPv4 underlay.
-Manual MTU never bypasses the observed route/underlay ceiling.
-
-`stl link status` exposes the IPIP counters as `ipip_state`;
-`stl link diagnose` emits the same versioned common report, with
-`backend: "ipip"` and an IPIP `state` field. Neither a verified interface
-nor an in-memory/fake-runner diagnostic test proves that peer traffic
-works. Real-kernel transport acceptance and installed-release compatibility
-are separately verifiable in the cross-backend operations runbook.
-
-## WireGuard adapter — public handshake, counters and active diagnosis
-
-`ObserveWireGuard` reuses the same **read-only** Linux DF probe, RTT/loss/jitter
-and manual/Auto MTU results. It refuses to probe until the backend confirms
-the active WireGuard tool/capability and an owned, configured interface with
-matching ifindex, local/peer **public** key identities and listen port.
-Preflight rechecks the selected interface ifindex and its local Link Address.
-The WireGuard backend supplies **60 bytes** IPv4 data-packet overhead: outer
-IPv4 20 + UDP 8 + WireGuard data header/authentication tag 32. Unsupported
-underlay/credentials fail rather than assuming another overhead.
-
-`stl link diagnose` now emits `backend: "wireguard"`, a public-only `state`
-(verified interface, public identities, handshake Unix timestamp and RX/TX
-bytes), and the common versioned MTU/quality report. A handshake timestamp
-of zero means no handshake was observed **at pre-probe inspection**; neither
-the interface's existence nor a timestamp alone proves end-to-end traffic.
-Real WireGuard packets, coexistence, recovery and supported-platform
-coverage require their own reproducible runtime evidence; a timestamp
-or fake-runner observation is insufficient.
-No private key or SENSITIVE setup URL is inspected or serialized.
-
-## IPsec/XFRM adapter — admitted read-only observations
-
-`ObserveIPsec` is conditionally available **only** after the independent
-native-exclusive service admission gate succeeds. It verifies the exact
-private XFRM interface name/ifindex/if_id, owned VICI connection and an
-installed IPsec SA **before** bounded Link Address DF probes. ESP
-and NAT-T conservatively budget **128 and 136 bytes** respectively; these
-are planning bounds, **not** guaranteed negotiated-transform overheads.
-A successful ICMP response proves only a short, Link-scoped observation.
-
-The IPsec backend's `DiagnosticState` first verifies the exact owned XFRM
-interface, its Link ID, private strongSwan configuration and a matching SA.
-Only after that verification it **optionally** reads the exact interface's
-bounded `ip -s -details -json link show dev <owned-interface>` packet
-statistics. Before using any count, the read must independently match the
-XFRM name, ifindex, if_id and Link ownership alias and contain both real
-`stats64.rx.packets` and `stats64.tx.packets` values. These are **XFRM
-interface packet counts**, not SA-specific or peer-authentication proof.
-If the kernel/iproute2 response is absent, incomplete, changed, ambiguous
-or unreadable, neither value is considered measured: the all-Link v1 report
-**omits** `rx`, `tx`, `counter_unit` and human output says
-"RX/TX counters: not measured". A truly measured IPsec packet count
-(including zero) appears numerically with unit `packets`. GRE/IPIP/WireGuard
-continue to preserve their already-supported measured zero behavior and
-units without a schema version change. No status is marked healthy because
-a counter exists, and a stats read failure never invents zero traffic.
-
-IPsec state/SA existence is a current observation, not proof of fresh IKE,
-ongoing encryption, peer trust or future reachability. No diagnostic
-adapter may start a daemon, install policies, change MTU or repair state.
-
-## MTU policy
-
-`MTUConstraints.UnderlayMTU` comes from route-aware source/interface
-inspection toward the real peer. `BackendOverhead` is supplied by
-the selected backend, including its outer IP/transport/encapsulation and
-relevant variable overhead. An unknown or zero overhead is rejected rather
-than silently treated as a valid tunnel configuration. The common algorithm
-does not hardcode GRE/FOU/GUE/WireGuard/IPsec overhead guesses.
-
-For IPv4, the outer-MTU-derived upper bound is:
+The selected backend supplies its **actual outer encapsulation
+overhead** and a route-aware underlay MTU; the shared IPv4
+decision ceiling is:
 
 ~~~text
 ceiling = min(65535, underlay_route_MTU - backend_overhead)
 ~~~
 
-Inputs leaving less than 68 bytes for IPv4 are invalid. The 68-byte minimum
-and PMTU probing behavior follow
-[RFC 1191](https://www.rfc-editor.org/rfc/rfc1191).
+A nonexistent/invalid overhead or less than the minimum
+68-byte IPv4 packet allowance fails validation.
 
-In `manual` mode, the requested value must be between 68 and the
-computed ceiling; it is not silently clamped and is **not** falsely marked
-probe-verified.
+- **Manual diagnostic MTU** must be 68 through the actual ceiling;
+  it is not clamped or automatically applied.
+- **Auto measurement** first probes the ceiling, then when needed
+  a conservative `min(1280, ceiling)`, and uses at most
+  **18** DF probes to seek a reply-confirmed usable packet size.
+- Only `too_large` constrains a known upper bound; a
+  timeout cannot prove the path MTU. An actual reply establishes
+  a **sampled reachable size**, not the precise maximum.
+- If no reply confirms a valid size, report an explicitly
+  **unverified conservative fallback** or an error after a
+  definite minimum-size rejection. Never promote a fallback
+  to a measured PMTU.
 
-In `auto` mode:
+Changing kernel MTU is **not a diagnostic action**. Desired State
+v3 and input schema v2 support endpoint-local `unmanaged`,
+`auto` and `manual` policies, applied/verified/undone only by
+the canonical Engine under the usual ownership locks.
+Peer Setup Links do not copy endpoint-local MTU settings.
+Read-only diagnostic output cannot silently modify them.
 
-1. Test the computed ceiling once (fast success path).
-2. When needed, test the initial conservative candidate
-   `min(1280, ceiling)`.
-3. Use at most 18 total DF probe calls to seek a larger confirmed reachable
-   MTU (or a smaller one when the initial candidate is definitively too
-   large).
-4. A definitive `too_large` constrains the upper bound.
-   A timeout cannot establish that upper bound.
-5. Return a **probe-confirmed** MTU only where a response was observed.
-6. Otherwise return an **unverified conservative fallback**, with a
-   structured reason, bounded by any known TooLarge rejections.
-7. If the minimum supported IPv4 size is decisively rejected, return a
-   verification error rather than claiming a working MTU.
+## Short link quality and explicit throughput
 
-Probe-confirmed means **the selected packet size received a reply**,
-not that the exact maximum path MTU or end-to-end application throughput
-was proven. ICMP rate limiting, filtering, transient loss, route changes
-and dynamic backend encapsulation can limit inference. The algorithm
-is a bounded decision aid, not a permanently accurate remote path oracle.
-It may be rerun after backend/route changes. A fallback is not authority to
-mutate a Link or apply new MTU settings without the canonical Engine path.
+The default quality sample is **five** ICMP probes (maximum ten)
+using an 84-byte inner IPv4 packet when MTU permits.
+Reports distinguish confirmed sent-but-unanswered loss,
+measured min/mean/max RTT and arithmetic mean of absolute
+adjacent-successful RTT differences (loss breaks the pair).
+This is short-term variability, **not** sustained link
+availability or a general RFC 3550 jitter measurement.
+No measured samples yield unavailable/`null`, not `0 ms`
+or fabricated 100% loss.
 
-## Short quality measurements
+The opt-in `stl link throughput <id> --confirm <id>
+[--seconds <1..10>] [--json]` sends one short TCP stream
+only to the committed peer **Link Address**, port **5201**.
+The remote operator must independently authorize and start
+an iperf3 listener bound to that Link IP; STL never starts it.
+Before traffic, require exact owned interface and source IP,
+a kernel route without gateway/underlay fallback, unchanged
+Link identity and locally supported iperf3 **3.x >= 3.11**.
+The client uses `--bind` plus `--bind-dev` for the
+**actual data socket**, with no unbound retry if checks fail.
+The Engine per-Link lock prevents concurrent STL Remove/Ensure
+while the brief test runs.
 
-Quality probes use an 84-byte inner IPv4 packet (up to selected MTU):
-20 IPv4 + 8 ICMP + 56 data bytes. Default: five probes; maximum: ten.
-Successful replies generate min/mean/max RTT. Short-term jitter is the
-arithmetic mean of absolute RTT differences between **adjacent successful
-probes**; any packet loss breaks that pair. This is a diagnostics measure,
-not a full transport or RFC 3550 RTP-jitter implementation.
+The throughput report projects bounded numeric byte/Mbit/s
+rates, test duration, Link ID/backend/protocol only. Tool
+failure, missing listener, malformed JSON or unknown version
+does not become measured zero. A short benchmark does not
+establish sustained capacity or act as a tunnel-wide limiter.
 
-Only explicit sent-but-unanswered probes contribute to packet loss. A tool
-error, unavailability or local TooLarge rejection makes quality unavailable
-or partial; it does not fabricate 100% loss. Metrics without any measured
-samples are JSON `null`, not zero milliseconds/zero packet loss.
+## Testing and evidence
 
-## JSON and safety contract
+Unit/fake-runner tests verify parser, limits, error classification
+and algorithm behavior; optional local loopback smoke can
+check iputils syntax without touching external peers:
 
-`Observe(ctx, link, constraints, prober)` returns a versioned
-`Report` with top-level integer `schema_version: 1`,
-stable Link ID, MTU result and quality result. A human `Summary()`
-is derived from the same model rather than reimplementing diagnostic logic.
+~~~sh
+STL_LIVE_LOOPBACK_PING=1 go test ./internal/diagnostics -run '^TestLinuxDFProberLoopbackSmoke$' -count=1
+~~~
 
-The report contains no Link display name, private key, shared PSK, executable
-arguments, arbitrary external tool output or unvalidated backend strings.
-Errors keep their underlying cause for programmatic inspection but expose
-only known secret-safe categories/reasons. The absence of measurement remains
-visible via choice/status/reason and nullable metrics.
-
-Health observation is **not** repair. Real adapters must not use
-`Observe` to mutate another Link or the requested Link itself.
-Any explicit repair will use the canonical owned transactional Engine,
-with its separate authorization/ownership checks.
-
-## Optional explicit, traffic-generating throughput
-
-`stl link throughput <id> --confirm <same-id> [--seconds 1..10] [--json]`
-is a separate **opt-in** client operation. Unlike `diagnose`, it sends
-real TCP test traffic; it never runs by default or launches a listening
-iperf3 server. A trusted operator must separately provision/authorize an
-iperf3 listener on the remote peer's **Link Address**, TCP port 5201.
-
-The client first reuses the common read-only backend identity, bounded
-Link Address quality observation and per-backend ownership checks. It
-verifies the kernel route to the exact peer Link Address uses the measured
-owned interface and saved local Link Address as the source, without a
-gateway, and rechecks that the canonical desired Link has not changed. It
-holds the canonical Engine per-Link lock during the test to prevent
-concurrent STL Remove/Ensure/Restore for that Link.
-Before the first throughput packet, a bounded local `iperf3 --version`
-capability gate rejects unavailable, malformed, unknown, pre-3.11, and
-unverified builds. esnet/iperf PR #1153 fixed an affected pre-3.11
-`--bind-dev` behavior that applied to the TCP control socket but not
-the separate TCP data socket. Verified 3.x versions at least 3.11 may
-execute one bounded 1–10-second iperf3 client with explicit
-`--bind <local-Link-address> --bind-dev <owned-interface>`, requesting
-SO_BINDTODEVICE for the TCP data stream. A missing/unsupported tool,
-changed route, no peer reply, unverified interface, absent listener,
-unexpected exit, output overflow or malformed/partial iperf JSON blocks
-or fails without falling back to an unbound/public-underlay test.
-
-The native regression suite additionally runs an isolated iperf3 TCP
-benchmark between fresh private Linux network namespaces inside
-disconnected disposable Ubuntu/Debian guests on native AMD64/ARM64. It
-requires **two distinct TCP socket file descriptors** to have both
-successful SO_BINDTODEVICE calls and TCP peer connects (control plus
-data), and verifies multi-megabyte transfer over the intended veth
-interface with no comparable transfer on a parallel decoy interface.
-This is local iperf3 socket/data-path proof, not an authorized physical
-WAN benchmark or production network test.
-
-The short versioned report contains **only** numeric sent/received bytes
-and Mbit/s, protocol, direction, requested duration, backend and Link ID.
-No raw iperf payload or server-supplied arbitrary text is exposed. Local
-execution uses a strict time/output budget; a completed sample proves
-neither future capacity nor continuous tunnel health. Tests use a fake
-bounded process runner and never transmit throughput traffic to real
-remote networks. Physical WAN tests require separately authorized Owner-host evidence;
-no disposable or fake-runner test establishes provider/NAT behavior.
-
-## Validation boundary
-
-For a particular candidate/release, separately verify actual kernel
-and Link Address packets, native backend identity, MTU/restore effects
-and conditional XFRM interface packet counters when supported.
-Unsupported/unmeasured results must remain explicit; do not invent
-zero counters, present a conservative MTU as measured PMTU, or convert
-an unresponsive ICMP probe into definitive transport failure.
-
-The current supported-environment baseline is in
-[SUPPORTED-ENVIRONMENTS.md](SUPPORTED-ENVIRONMENTS.md); reproducible
-native E2E procedures and historical acceptance evidence are
-recorded with [operations/CROSS-BACKEND-REAL-E2E.md](operations/CROSS-BACKEND-REAL-E2E.md),
-[operations/IPSEC-REAL-E2E.md](operations/IPSEC-REAL-E2E.md)
-and the exact GitHub checks. No standing development backlog lives
-in this reference.
+Real native kernel packets, multi-Link ownership, XFRM counter
+availability, restored MTU and installed-release behavior
+need separate authorized disposable E2E evidence.
+See [cross-backend](operations/CROSS-BACKEND-REAL-E2E.md),
+[IPsec](operations/IPSEC-REAL-E2E.md) and
+[supported environments](SUPPORTED-ENVIRONMENTS.md).

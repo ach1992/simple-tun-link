@@ -1,280 +1,133 @@
-# Pairing format and trust boundary
+# Setup Link format and trust boundary
 
-This document owns **versioned Setup Link formats, recipient inversion,
-credential-bearing payload handling, and import-preview compatibility**.
-[PROJECT-SPEC.md](PROJECT-SPEC.md) defines product intent,
-[ARCHITECTURE.md](ARCHITECTURE.md) owns the common Engine boundaries,
-[CLI.md](CLI.md) owns exact import/export commands, and
-[SECURITY.md](SECURITY.md) owns protected credential lifecycle.
+This is the **wire-format and compatibility contract** for
+`internal/pairing`. User commands are documented in
+[CLI.md](CLI.md); key storage and recovery rules belong to
+[SECURITY.md](SECURITY.md). Pairing decodes and inverts
+configuration; it must **never mutate a host by previewing**.
 
-## Versioned setup links
+## Why a versioned Quick Link?
 
-GRE/IPIP/IPsec continue using the v2 setup-link transport:
+STL uses a simple one-step `quick` offer so that the receiving
+operator can configure the complementary endpoint without a
+second key-exchange round trip. That simplicity means an offer
+containing the recipient's WireGuard private key or an IPsec PSK
+is **SENSITIVE** credential material. Base64 encoding is **not
+encryption**, and the embedded SHA-256 checksum detects accidental
+damage, **not** malicious rewriting or sender identity.
+
+A future local-key/`secure_exchange` flow would need a
+separately versioned protocol, not a reinterpretation of an
+existing Quick payload. Treat Setup Links as untrusted input.
+
+## Wire formats and compatibility
+
+The canonical GRE/IPIP/IPsec v2 form is:
 
 ~~~text
 stl://2.<unpadded-base64url-of-JSON>.<lowercase-sha256-of-JSON>
 ~~~
 
-The JSON contains:
+Its JSON contains integer `schema_version:2`,
+`mode:"quick"`, creator-oriented public `link` fields
+and optional `recipient_secret` with `kind` and Base64
+`data`. Typed `link.gre` includes key presence/value,
+GRE advanced flags and FOU/GUE UDP port so that importing
+does not manufacture a collision-sensitive setting.
 
-- `schema_version`: integer `2`;
-- `mode`: explicit `"quick"`;
-- `link`: the creator-oriented backend-neutral `domain.Link`, including its
-  stable Link ID, local/peer underlay endpoints and local/peer Link Addresses;
-- `recipient_secret` (optional): a `kind` and unpadded-base64url `data`.
+Configured WireGuard uses **v3** (`stl://3.`): a public-only
+`link.wireguard` carries
+`local_public_key`, `peer_public_key`, `listen_port`,
+`peer_port`, `local_keepalive` and `peer_keepalive`.
+The receiver private key belongs only in the deliberately
+sensitive credential payload and must derive the recipient's
+declared public key; a recomputed checksum cannot bypass that
+identity requirement. Two distinct canonical public keys and
+explicit configured ports are required for new operational offers.
 
-The SHA-256 value detects accidental corruption or damage. **It is neither a
-MAC nor a signature.** Anyone who can modify a setup link can recompute its
-checksum. Base64 is encoding, **not encryption**. Treat a secret-bearing Quick
-Link as a credential, not as a shareable diagnostic artifact.
+| Offer | Decode/preview | Confirmed import |
+| --- | --- | --- |
+| GRE/IPIP v2 with valid options | Yes | Yes, after token and identity checks |
+| GRE/IPIP v1 with supported Native options | Yes | Only supported validated configurations |
+| WireGuard v3, public config + matching receiver secret | Yes | Yes, through protected credential provision |
+| Legacy credential-only WireGuard v1/v2 | Yes, redacted | **No**; missing operational public peer config |
+| IPsec v2 with nonzero exactly 32-byte PSK | Yes | Only with fresh native-exclusive admission |
+| IPsec v1 or v2 with unsupported PSK size | Yes where structurally valid | **No**; never silently rekey |
+| Unsupported version, incompatible backend/mode or invalid checksum | No | No |
 
-Version 2 adds the typed `link.gre` object required to carry GRE key/advanced
-options and the FOU/GUE UDP port without weakening strict unknown-field
-rejection.
+A legacy decoded v1 offer retains its format on intentional
+re-export. GRE FOU/GUE v1 is rejected when its missing UDP port
+would require inventing identity; v1 does not accept new v2 GRE
+fields and v1/v2 cannot carry v3 WireGuard public extensions.
 
-**Configured WireGuard Quick Links use schema v3** (`stl://3.`), not v2.
-This preserves the exact strict v2 decoding contract. V3 carries a typed,
-**public-only** `link.wireguard` with `local_public_key`, `peer_public_key`,
-`listen_port`, `peer_port`, `local_keepalive`, and
-`peer_keepalive`. These contain no private key and are centrally swapped
-with the underlay and Link Addresses when inverting an offer. New WireGuard
-Quick Links require two distinct canonical public keys, two explicit listen
-ports, and a recipient private key whose derived public key matches the
-specified recipient identity. A mismatch is rejected even if the SHA-256
-checksum was recomputed. This is a key-identity binding check, **not** sender
-authentication or transport encryption. Use a trusted channel to establish
-the setup link's origin.
+Decode bounds are **24 KiB entire input** and
+**16 KiB decoded JSON**. Require canonical Base64/checksum,
+known fields and compatible backend/mode options, no duplicate
+or case-variant keys, valid UTF-8/surrogate handling, no shell
+evaluation and no arbitrary file/command interpretation.
+Scoped IPv6 zone identifiers are not portable and are rejected;
+IPv6 underlay without zones may be valid even though IPv4
+Link Addresses are the initially supported link dataplane.
 
-The WireGuard backend, **confirmed v3 recipient import** and protected sender
-Create/Resume now use the canonical Engine: only a validated v3 Quick Link with a receiver credential
-matching its declared public key can be applied. `stl link ensure` desired
-JSON v1 remains unchanged; direct WireGuard provisioning requires an already
-protected local per-Link KeyStore credential. Legacy credential-only v1/v2
-WireGuard and v1 IPsec pairing remain preview-only. Strict IPsec v2 offers
-containing a **nonzero, exactly 32-byte PSK** are eligible for protected import only
-when STL's native-exclusive strongSwan admission passes. Other previously
-valid v2 PSK lengths remain preview-only, not silently rekeyed.
-An explicit protected-key retirement action is also available only after
-persisted Link absence and read-only live interface, WireGuard public identity
-and owned firewall absence are established. These additions do not prove
-privileged handshake/traffic, coexistence or complete release acceptance.
+## Creator / recipient perspective
 
-The decoder also preserves previously valid v1/v2 credential-only WireGuard
-offers with no public configuration for redacted preview and re-export; they
-are **not** ready-to-activate configuration. V1 GRE Native, IPIP and IPsec
-payloads remain decodable, and a decoded v1 offer retains v1 on re-export.
-Legacy v1 GRE FOU/GUE is rejected with an explicit regeneration requirement
-because v1 lacks the UDP port; inventing one would change ownership semantics.
-V1 rejects v2 GRE options, and v1/v2 reject v3 WireGuard public fields.
+The offer describes the **creator's** local/peer underlay
+endpoints and Link Addresses. `Offer.ReceiverLink()`
+centralizes inversion at the recipient, swapping those
+endpoints/addresses and—for WireGuard—the public key,
+listen/peer port and endpoint keepalive roles. Stable Link ID,
+backend/encapsulation and display name stay unchanged.
+Individual Link IDs are distinct even for same-peer Links.
 
-The decoder limits the entire input to 24 KiB and decoded JSON to 16 KiB.
-It rejects noncanonical Base64/checksum, malformed/duplicate/unknown fields,
-nested extensions without an explicit schema contract, invalid UTF-8,
-unpaired JSON UTF-16 surrogate escapes (which Go's JSON decoder otherwise
-silently replaces), truncated or mismatched checksums, unsupported mode/version,
-and incompatible backend/encapsulation/credential combinations. Valid Unicode
-surrogate pairs and explicit U+FFFD characters remain supported. IPv6 underlay
-addresses without zones remain supported; scoped IPv6 zone identifiers are
-rejected because they are host-local and unsafe to reproduce in a portable
-human-readable pairing block. It never evaluates embedded content as a command
-or path.
+The ordinary application `Link` is public configuration:
+- GRE/IPIP carry no private credential (GRE key is a
+  nonsecret identifier, not an encryption key).
+- WireGuard receiver secret is exactly a recipient-bound
+  private key and is never inserted into the initiator's
+  ordinary State.
+- IPsec v2 protected import requires a fresh, nonzero
+  256-bit PSK shared by the intended two endpoints.
 
-## Perspective and credential model
+`PreviewSetupLink` / `Offer.Preview()` return only
+receiver-facing public metadata and credential
+**presence/type**. `Offer.MarshalJSON`, `String` and
+`GoString` must remain redacted. Only deliberately
+named export methods such as `EncodeSetupLink()` and
+`HumanReadableBlock()` may produce full sensitive bytes,
+with explicit private-handling responsibility. The
+`RecipientCredential()` call returns a private copy only
+for authorized backend provisioning.
 
-An encoded offer represents the **initiator's** Link orientation. An importer
-must use `Offer.ReceiverLink()` (which centrally swaps local and peer underlay
-and Link Addresses, plus WireGuard's public keys/listen ports and per-side
-keepalive settings when present) before applying. The stable Link ID, backend,
-encapsulation, and display name remain unchanged; multiple independent Links
-to the same underlay endpoint pair retain separate IDs.
+## Preview, consent and Engine integration
 
-`NewQuickOffer(link, recipientCredential)` creates an in-memory offer.
-Recipient credentials may be present only for:
+`stl link preview --stdin --json` reads an original URL on
+**stdin** and never performs network, State or credential
+mutations. A supported importable payload emits a
+`import_confirmation` (lowercase SHA-256 of the exact
+normalized input, tolerating at most one trailing newline).
+The token binds the **bytes** reviewed, not the sender's
+authority. No secret or arbitrary display name enters
+generic JSON or logs.
 
-- WireGuard/UDP: canonical Base64 of exactly 32 private-key bytes, intended
-  exclusively for the receiving endpoint. Initiator code must not store that
-  receiver private key in ordinary initiator state.
-- IPsec/ESP or IPsec/NAT-T: a bounded PSK intended for authorized endpoints.
-  Backend code is responsible for creating a high-entropy secret and storing
-  it with restrictive permissions.
-- GRE/IPIP Native, FOU and GUE: no credential payload is accepted. GRE keys
-  and other GRE backend options are ordinary non-secret pairing data; GRE keys
-  are identifiers rather than encryption.
+`stl link import --stdin --confirm <import_confirmation>`
+re-decodes that same original URL and uses the
+canonical Link-locked Engine to activate the inverted
+recipient Link. It never replaces an existing Link ID
+with different configuration. Credential-bound import
+requires protected key/PSK storage and fresh backend
+admission; local success is not proof of peer traffic.
 
-`PreviewSetupLink(input)` is the preferred import-preview entrypoint: it
-returns redacted recipient metadata without returning an `Offer` containing a
-credential. `Offer.Preview()` is recipient-oriented and includes credential presence and
-kind **without any secret value**. `Offer.MarshalJSON`, `String`, and `GoString`
-are deliberately redacted; callers must not use the export methods for
-ordinary status/diagnostic logging. `RecipientCredential()` makes an
-independent copy available only for explicit backend import and protected
-storage. Its caller is responsible for restricting lifetime and persistence.
-
-`Offer.EncodeSetupLink()` and `Offer.HumanReadableBlock()` explicitly
-produce **potentially sensitive export material**. The latter includes the
-actual setup link alongside readable receiver-facing public settings and
-labels secret-bearing exports `SENSITIVE`. Neither method writes a file or
-sends data to an external service. The explicit `stl link create-wireguard` sender command now writes the
-one-time sensitive URL to a user-selected, same-owner private directory with
-atomic no-replace `0600` publication. **Before** this publication, the
-same canonical maintenance/Link-locked transaction has already durably
-staged the sender's own private key and the complete public pending sender
-Link plus SHA-256 of the precise SENSITIVE URL (never the receiver private
-key) in `state.json`. The Engine only applies after the handoff is visible,
-then atomically commits desired Link state while consuming Pending.
-A hard crash that leaves an intact private
-`.stl-handoff-<hex>.tmp` before atomic publication can now be reconciled
-explicitly with `stl link recover-handoff --source <original-temp>
---output <private-destination> --confirm <exact-link-id> [--json]`.
-The source must be the original same-owner, single-link `0600` temporary
-in its original `0700` directory; target must be an absent file in
-**that same directory**. The canonical Engine locks preserve the original
-sender-only pending intent, exact Link and URL SHA-256, and protected local
-WireGuard public identity or IPsec PSK before a no-clobber rename and fsync.
-This re-exposes the **original** receiver secret, never regenerates one,
-modifies host networking, or treats a pending sender as an active tunnel.
-An orphan key without the original intact URL or matching pending record
-has no automatic destructive repair. The optional JSON output includes only
-version, Link identity/backend and destination path, never URL bytes/PSK.
-`resume-wireguard` checks **every field** against the durable pending public
-Link **and** exact original handoff digest, verifying the protected sender
-private/public identity without regenerating a peer private key. Once the
-Link is committed, its exact desired state authorizes idempotent reapply.
- Ordinary Link export remains GRE/IPIP-only; after the recipient
-key is delivered it is intentionally unrecoverable from the sender's public
-saved state. All secret-bearing export files must avoid shell history,
-world-readable destinations, and ordinary logs.
-
-## CLI recipient preview via protected stdin
-
-The non-interactive operator command `stl link preview --stdin [--json]`
-reads at most the protocol's bounded setup URL size, accepting at most
-one trailing line terminator for piped input. The setup URL is **not** a
-positional argument or CLI option, which avoids automatic disclosure in
-shell history and process arguments. For an existing protected local file:
-
-~~~sh
-stl link preview --stdin --json < /path/to/private/setup-link.txt
-~~~
-
-Do not put the secret URL literally into shell command text or logs. The CLI
-uses the canonical pairing decoder and recipient inversion, then emits only
-Link ID, backend, encapsulation, public endpoint/address metadata, non-secret
-GRE knobs (including key identifier and FOU/GUE UDP port), format version,
-Quick mode, and secret **presence/type**. Arbitrary display names
-and the supplied URL are omitted. Credential data stays in memory only for
-the decode lifetime. Malformed/unsupported links produce redacted structured
-errors. No file, Link state, route, firewall, interface or backend is changed
-by previewing.
-
-The preview command never applies anything. It emits an exact-URL
-confirmation token for supported credential-free GRE/IPIP, configured,
-credential-bound v3 WireGuard, **and strict v2 IPsec with a nonzero 32-byte
-PSK** Quick Links. Token availability is a schema/credential check, **not**
-a strongSwan admission decision or proof of network reachability. V3
-preview includes the receiver's **public** key identities, listen/peer ports, and per-side
-keepalive preferences; the private key is always redacted. A token is a
-binding to the reviewed encoded input, **not sender authentication**.
-Interactive import also requires freshly typing the exact Link ID.
-Legacy WireGuard v1/v2, IPsec v1 and IPsec v2 with non-32-byte PSKs
-and IPsec v2 with all-zero PSKs remain preview-only; no import confirmation
-is issued for these offers.
-
-## Explicit GRE/IPIP export CLI
-
-`stl link export <link-id> [--json]` intentionally produces a
-versioned Quick Setup Link and a receiver-oriented human-readable block
-for an existing saved GRE or IPIP Link. It calls `pairing.NewQuickOffer`
-and the canonical pairing export API; there is no second URL encoder.
-Export itself does not inspect live host networking, mutate state or
-attempt to set up the peer. Non-secret GRE Native/FOU/GUE configuration
-(including explicit UDP port/key identifier) and IPIP Native/FOU/GUE
-configuration (whose UDP port derives from the shared Link ID)
-round-trip through the same versioned schema and receiver inversion.
-
-`stl link export` remains intentionally restricted to **credential-free
-GRE/IPIP**. It cannot recreate a receiver-only secret from public saved
-state. WireGuard and IPsec exports are denied rather than silently dropping
-recipient private keys or PSKs; the initiating caller can construct a new
-sensitive v3 WireGuard offer through the existing pairing library from an
-explicit ephemeral recipient keypair, but no guided sender-side export UX is
-part of this slice.
-Human/JSON output intentionally includes the full Setup Link URL and
-must be treated as **explicitly requested share/export material**, not
-ordinary diagnostic/status output. Even without a secret credential,
-it discloses network endpoints, Link ID and encoded display-name/config
-metadata. SHA-256 integrity does not authenticate who sent it.
-Use `link preview --stdin` at the receiving endpoint, then an
-explicit, confirmed `link import --stdin --confirm <preview-token>` for a
-supported GRE/IPIP plaintext or WireGuard v3 Quick Link. V3 WireGuard
-receiver import provisions the protected KeyStore **inside the canonical
-Engine Link lock**, not in a separate CLI-managed transaction. A matching
-pre-existing key permits idempotent retry; an existing different key is
-never overwritten. An uncertain/failed apply can leave a protected key for
-explicit reconciliation and exact-credential replay. No auto-cleanup of
-private keys is attempted during network removal.
-
-## Apply and backend integration
-
-Decoding and generating a preview **never applies a Link, starts a command,
-creates a device, or persists credentials**. The explicit importer requires the exact preview confirmation token and
-uses the canonical Engine. For WireGuard v3 the receiver secret is separately
-validated against its declared public identity, stored with mode 0600 under
-owner-private directories, and only passed to `wg set` through a verified
-inherited, read-only file descriptor (`/proc/self/fd/3`), never argv or
-ordinary JSON. WireGuard status only inspects public keys, listen ports,
-peer identities and counter/handshake state.
-
-The pairing module carries validated backend options but does not itself
-apply them, implement interactive UI or perform privileged installation.
-Actual host effects run through the canonical Engine and backend lifecycle;
-no pairing checksum or offer metadata proves peer traffic.
-
-A future `secure_exchange` mode requires an explicit protocol/schema update,
-not a reinterpretation of v1 Quick Link secrets. An unknown mode or
-schema version currently fails closed.
-
-## Confirmed setup-link import via the canonical Engine
-
-A non-interactive receiving operator may apply a reviewed credential-free
-GRE/IPIP `stl://` offer, a configured credential-bound WireGuard v3
-Quick Link, **or a strict 32-byte-PSK IPsec v2 Quick Link** with
-`stl link import`. `link preview --stdin [--json]` first
-produces a redacted receiver-side preview and, only for these structurally
-importable offers, `import_confirmation`:
-the full SHA-256 digest of the exact input setup URL after accepting
-a single optional trailing line terminator.
-
-`link import --stdin --confirm <import_confirmation> [--json]` requires
-the same URL bytes and a matching token. Invalid, changed and unsupported
-offers (including legacy WireGuard v1/v2, IPsec v1 and IPsec v2 with an
-unsupported PSK length) are rejected before backend/runtime state is
-assembled. Import uses the same `Offer.ReceiverLink` inversion as preview
-and delegates convergence to `Engine.EnsureImported` (GRE/IPIP),
-`Engine.EnsureImportedRecipient` (WireGuard v3 with protected key
-provisioning under the canonical Engine locks), or
-`Engine.StageIPsecRecipient` followed by `Engine.ActivateStagedIPsec`
-(strict IPsec v2 after fresh native-exclusive admission). The IPsec
-transaction protects the existing PSK, checks durable exact intent, and
-refuses foreign/uncertain strongSwan ownership; it does not silently start
-or adopt a foreign service.
-Under the canonical Link lock, it permits only first creation or
-idempotent re-ensure of the **exact previously committed desired state**.
-An existing Link ID with different saved configuration fails with a
-redacted conflict and remains unchanged: the preview token is not approval
-to replace an existing Link. An explicit reconfiguration must use the
-separate desired-state `link ensure` workflow. This is local, explicit network mutation; preview and export remain
-read-only. Confirmation is a reviewed-payload binding, not sender
-authentication. GRE/IPIP Link traffic remains plaintext and unauthenticated;
-WireGuard v3 encrypts Link traffic, but its SENSITIVE Quick Link must be
-delivered to the intended peer through a trusted channel.
-
-Plaintext GRE/IPIP, protected WireGuard v3 and conditionally admitted
-IPsec v2 recipient imports are supported by the Engine. IPsec requires
-an exactly 32-byte PSK, currently attested STL-exclusive runtime and
-separate explicit IKE initiation/packet validation. A preview or
-successful import does **not** authenticate the sender or prove
-end-to-end encrypted traffic. The exact SHA-256 confirmation digest
-binds payload bytes only; a secret-bearing Quick Link still requires
-trusted delivery and owner-private handling. See
-[SECURITY.md](SECURITY.md) and [CLI.md](CLI.md).
+`stl link export` intentionally re-creates a saved
+**credential-free GRE/IPIP** offer, including its network
+metadata, but does not rebuild a missing WireGuard/IPsec
+receiver credential from public saved State. Guided
+sender Share instead retains the **original** owner-private
+SENSITIVE receiver handoff with fresh `SHOW` consent.
+Sender Create stages its own key plus full public pending
+Link and exact offer digest **before** protected no-replace
+handoff publication; exact Resume or
+`recover-handoff` can reuse only intact original
+material. Unknown orphan keys, mismatched receipts or a
+missing offer are not authority to regenerate secrets or
+delete resources. Consult [SECURITY.md](SECURITY.md)
+and [CLI.md](CLI.md) for protected file/recovery commands.

@@ -211,7 +211,7 @@ GitHub work items; it must not be misrepresented as universal proof here.
 - [Install](INSTALL.md), [Supported environments](SUPPORTED-ENVIRONMENTS.md)
   and [Release artifacts](RELEASE-ARTIFACTS.md): deployment, compatibility
   and distribution procedures.
-- [Development](DEVELOPMENT.md) and [architectural decisions](decisions/):
+- [Development](DEVELOPMENT.md) and [the IPsec runtime decision](decisions/ADR-0005-scoped-vici-ipsec.md):
   contributor rules and lasting decision rationale.
 - GitHub Issues/PRs/checks/releases: outstanding work, implementation
   history, verification status and published artifact identity.
