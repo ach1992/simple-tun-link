@@ -32,10 +32,14 @@ GRE keys distinguish tunnels but **do not encrypt traffic**. FOU/GUE are UDP enc
 **Permanent one-line installer — latest verified Stable release** (run on each server):
 
 ~~~bash
-bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | bash'
+bash -c 'set -e; umask 077; d=$(mktemp -d); trap '"'"'rm -rf -- "$d"'"'"' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 --connect-timeout 10 --max-time 120 -o "$d/stl-bootstrap.sh" https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh; test -s "$d/stl-bootstrap.sh"; bash -n "$d/stl-bootstrap.sh"; bash "$d/stl-bootstrap.sh"'
 ~~~
 
-The command **never changes** between releases: GitHub's `releases/latest`
+The command **never changes** between releases. It downloads the bootstrap
+into a private temporary directory, waits for a successful complete
+transfer, verifies the file is nonempty, and checks its Bash syntax
+**before executing it**. The temporary directory is removed on exit.
+GitHub's `releases/latest`
 redirect selects the newest **published Stable** release, excluding RC and
 draft releases. Its immutable `stl-bootstrap.sh` asset internally pins that
 exact tag before obtaining the [canonical installer](scripts/install.sh).
@@ -214,7 +218,7 @@ receiver/sender credential files. Then run the explicit, pinned
 **one-line update** on that server:
 
 ~~~bash
-bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | bash -s -- update'
+bash -c 'set -e; umask 077; d=$(mktemp -d); trap '"'"'rm -rf -- "$d"'"'"' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 --connect-timeout 10 --max-time 120 -o "$d/stl-bootstrap.sh" https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh; test -s "$d/stl-bootstrap.sh"; bash -n "$d/stl-bootstrap.sh"; bash "$d/stl-bootstrap.sh" update'
 ~~~
 
 This uses the canonical installer **update** transaction, checks

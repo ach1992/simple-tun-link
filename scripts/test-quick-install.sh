@@ -1,24 +1,30 @@
 #!/usr/bin/env bash
-# Nonprivileged offline checks for the pinned one-command bootstrap.
+# Offline regression of immutable Stable bootstrap and version-free first-hop.
+# Host effects are simulated by fake curl/sudo in a private scratch dir.
 # All fake tooling and side effects remain inside a disposable directory.
 set -Eeuo pipefail
 umask 077
 repo="$(cd -- "$(dirname -- "$0")/.." && pwd -P)"
-# A documented release bump must preserve the tag-pinned bootstrap and
-# installer identity without retaining an outdated hardcoded test fixture.
-mapfile -t published_commands < <(grep '^bash -o pipefail -c ' "$repo/README.md")
+# Stable release bumps must keep the permanent first-hop install/update text.
+mapfile -t published_commands < <(grep '^bash -c ' "$repo/README.md")
 [[ ${#published_commands[@]} -eq 2 ]] || {
-  echo 'README must contain precisely two pipefail-safe quick commands.' >&2
+  echo 'README must contain precisely two fixed safe-download quick commands.' >&2
   exit 1
 }
 # Public commands must NEVER need a changing tag, branch or token.
 # The immutable Stable asset itself pins the exact release tag.
 stable_url='https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh'
-[[ "${published_commands[0]}" == *"$stable_url | bash'" &&
-   "${published_commands[1]}" == *"$stable_url | bash -s -- update'" ]] || {
-  echo 'Public install/update must use the fixed latest Stable asset URL.' >&2
-  exit 1
-}
+# Source is complete only after curl exits 0. The script must not be
+# interpreted in a pipe where a late curl error can follow root effects.
+for idx in 0 1; do
+  line="${published_commands[$idx]}"
+  [[ "$line" == *'set -e; umask 077; d=$(mktemp -d);'* &&
+     "$line" == *" -o \"\$d/stl-bootstrap.sh\" $stable_url; test -s \"\$d/stl-bootstrap.sh\"; bash -n \"\$d/stl-bootstrap.sh\"; bash \"\$d/stl-bootstrap.sh\""* &&
+     "$line" != *' | bash'* ]] || {
+    echo 'Public installer must download completely to a private file before any script execution.' >&2
+    exit 1
+  }
+done
 for public_cmd in "${published_commands[@]}"; do
   if [[ "$public_cmd" =~ v[0-9]+\.[0-9]+\.[0-9]+ ]] ||
      [[ "$public_cmd" == *raw.githubusercontent.com* ]]; then
@@ -31,7 +37,25 @@ scratch=$(mktemp -d)
 trap 'rm -rf -- "$scratch"' EXIT
 bash "$repo/scripts/render-stable-bootstrap.sh" "$STL_TEST_PUBLIC_TAG" "$scratch/stl-bootstrap.sh"
 export STL_TEST_STABLE_BOOTSTRAP="$scratch/stl-bootstrap.sh"
+export STL_TEST_FIRST_HOP_PATHS="$scratch/first-hop-paths"
+: > "$STL_TEST_FIRST_HOP_PATHS"
 bash -n "$STL_TEST_STABLE_BOOTSTRAP"
+# This nearly-complete asset remains parseable and includes the
+# privileged call, despite missing the final newline. A failing curl
+# MUST prevent its execution.
+head -c -1 "$STL_TEST_STABLE_BOOTSTRAP" > "$scratch/almost-complete.sh"
+bash -n "$scratch/almost-complete.sh"
+grep -Fx 'quick_install_main "v0.1.0" "$@"' "$scratch/almost-complete.sh" >/dev/null
+assert_first_hop_cleanup() {
+  local path
+  while IFS= read -r path; do
+    [[ ! -e $path && ! -d $(dirname -- "$path") ]] || {
+      echo "Leaked first-hop private temporary download: $path" >&2
+      exit 1
+    }
+  done < "$STL_TEST_FIRST_HOP_PATHS"
+  : > "$STL_TEST_FIRST_HOP_PATHS"
+}
 [[ "$(tail -n 1 "$STL_TEST_STABLE_BOOTSTRAP")" == 'quick_install_main "v0.1.0" "$@"' ]] || {
   echo 'Stable bootstrap did not pin its exact release tag.' >&2
   exit 1
@@ -58,14 +82,21 @@ while (($#)); do
     *) shift ;;
   esac
 done
-# Fake curl models the first-hop stdout and second-hop private download.
-# Reject unexpected URLs: no real network traffic is used in this test.
+# Simulate exact public first-hop curl output-to-file. No network.
 if [[ "$url" == "https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh" ]]; then
-  [[ -z "$destination" ]] || exit 44
+  [[ -n "$destination" ]] || exit 44
+  [[ -d $(dirname -- "$destination") &&
+     $(stat -c %a -- "$(dirname -- "$destination")") == 700 ]] || exit 46
+  printf '%s\n' "$destination" >> "$STL_TEST_FIRST_HOP_PATHS"
   case "${STL_TEST_FIRST_HOP:-}" in
-    no-bytes) exit 47 ;;
-    truncated) sed '$d' "$STL_TEST_STABLE_BOOTSTRAP"; exit 48 ;;
-    "") cat "$STL_TEST_STABLE_BOOTSTRAP"; exit 0 ;;
+    no-bytes) : > "$destination"; exit 47 ;;
+    truncated) sed '$d' "$STL_TEST_STABLE_BOOTSTRAP" > "$destination"; exit 48 ;;
+    almost-complete) head -c -1 "$STL_TEST_STABLE_BOOTSTRAP" > "$destination"; exit 48 ;;
+    complete-then-error) cat "$STL_TEST_STABLE_BOOTSTRAP" > "$destination"; exit 48 ;;
+    missing-invocation-success) sed '$d' "$STL_TEST_STABLE_BOOTSTRAP" > "$destination"; exit 0 ;;
+    empty-success) : > "$destination"; exit 0 ;;
+    syntax-error) printf '%s\n' 'if (( (' > "$destination"; exit 0 ;;
+    "") cat "$STL_TEST_STABLE_BOOTSTRAP" > "$destination"; exit 0 ;;
     *) exit 49 ;;
   esac
 fi
@@ -169,9 +200,9 @@ if command -v script >/dev/null 2>&1; then
     exit 1
   }
 fi
-# Execute the ACTUAL published README install and update one-liners with
-# a local fake curl. The pipeline itself (not just the inner script) must
-# fail if the first HTTPS request produces zero or truncated bytes.
+# Execute the ACTUAL README one-liners with fake curl/sudo. Both command
+# paths must observe complete first-hop transport and syntax validation
+# before they can start any canonical installer or privileged action.
 for idx in 0 1; do
   published_cmd="${published_commands[$idx]}"
   [[ "$published_cmd" == *"$stable_url"* ]] || {
@@ -184,8 +215,8 @@ for idx in 0 1; do
   }
   action=install
   if [[ "$idx" == 1 ]]; then action=update; fi
-  # Positive path: the public one-liner must actually call the canonical
-  # installer, rather than treating an empty Bash command as success.
+  # Positive path: successful completed bootstrap => canonical installer
+  # with correct action and exact tag, followed by private-file cleanup.
   : > "$STL_TEST_EXECUTIONS"
   bash -c "$published_cmd" > "$scratch/out" 2>"$scratch/err"
   if (( EUID == 0 )); then
@@ -193,20 +224,34 @@ for idx in 0 1; do
   else
     grep -Eq "^sudo bash .* $action --version $STL_TEST_PUBLIC_TAG --backends native,wireguard$" "$STL_TEST_EXECUTIONS"
   fi
-  for first_hop_failure in no-bytes truncated; do
+  assert_first_hop_cleanup
+  # The subtle case: the final invocation is present and parseable, but
+  # curl returns a failure after producing almost/all of the bytes.
+  # Neither install nor update may start, even briefly.
+  for first_hop_failure in no-bytes truncated almost-complete complete-then-error missing-invocation-success empty-success syntax-error; do
     : > "$STL_TEST_EXECUTIONS"
     if STL_TEST_FIRST_HOP="$first_hop_failure" bash -c "$published_cmd" > "$scratch/out" 2>"$scratch/err"; then
       echo "Published $action first-hop $first_hop_failure falsely succeeded." >&2
       exit 1
     fi
     [[ ! -s "$STL_TEST_EXECUTIONS" ]] || {
-      echo "Published $action first-hop $first_hop_failure invoked installer/sudo." >&2
+      echo "Published $action first-hop $first_hop_failure invoked installer/sudo before transport success." >&2
       exit 1
     }
+    assert_first_hop_cleanup
   done
 done
-# The extra public Bash pipefail boundary must preserve controlling-TTY
-# reattachment, even though the bootstrap is streamed into the inner Bash.
+# Separately downloaded, verified asset supports the documented advanced
+# native-only update syntax; it is NOT an argument appended to the one-liner.
+: > "$STL_TEST_EXECUTIONS"
+bash "$STL_TEST_STABLE_BOOTSTRAP" native update > "$scratch/out" 2>"$scratch/err"
+if (( EUID == 0 )); then
+  grep -q 'test fake installer' "$STL_TEST_EXECUTIONS"
+else
+  grep -Eq "^sudo bash .* update --version $STL_TEST_PUBLIC_TAG --backends native$" "$STL_TEST_EXECUTIONS"
+fi
+# A successful private-file bootstrap still must reconnect the real TTY
+# and open STL's menu, for the permanently published install command.
 if command -v script >/dev/null 2>&1; then
   : > "$STL_TEST_EXECUTIONS"
   script -q -e -c "${published_commands[0]}" /dev/null     < /dev/null > "$scratch/public-pty-out" 2>"$scratch/public-pty-err"
@@ -218,8 +263,9 @@ if command -v script >/dev/null 2>&1; then
     echo 'Public first-hop wrapper failed controlling-TTY handoff.' >&2
     exit 1
   }
+  assert_first_hop_cleanup
 fi
-echo 'PUBLIC_FIRST_HOP_EMPTY_TRUNCATED_AND_PTY=PASS'
+echo 'PUBLIC_FIRST_HOP_TRANSPORT_COMPLETE_BEFORE_EXECUTION_AND_PTY=PASS'
 # Interruption before the final complete invocation must not invoke sudo,
 # report fake success, or execute a partial install.
 before_trunc="$(wc -c < "$STL_TEST_EXECUTIONS")"

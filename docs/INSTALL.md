@@ -288,11 +288,15 @@ before downloading the canonical installer; it does not execute a mutable
 identity before installing. The public command stays unchanged:
 
 ~~~sh
-bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | bash'
+bash -c 'set -e; umask 077; d=$(mktemp -d); trap '"'"'rm -rf -- "$d"'"'"' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 --connect-timeout 10 --max-time 120 -o "$d/stl-bootstrap.sh" https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh; test -s "$d/stl-bootstrap.sh"; bash -n "$d/stl-bootstrap.sh"; bash "$d/stl-bootstrap.sh"'
 ~~~
 
-The bootstrap is received in full and parsed before its final invocation.
-It downloads the canonical exact-tag installer and checks syntax before
+The **first hop is downloaded to a private temporary directory**. Only
+after curl completes successfully and the file is nonempty and passes
+Bash syntax validation can it execute. Failed or partial transfers
+never execute the downloaded script; the private directory is removed
+on exit. The verified bootstrap then downloads the canonical exact-tag
+installer and checks its syntax before
 invoking root; the installer validates release SHA256SUMS, binary metadata
 and ownership/rollback rules. It reattaches a real /dev/tty to open the
 menu after installation. Without a TTY, use `sudo stl menu`.
@@ -301,14 +305,18 @@ installer-owned STL, **do not run install again**: use this equally fixed
 update command:
 
 ~~~sh
-bash -o pipefail -c 'curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | bash -s -- update'
+bash -c 'set -e; umask 077; d=$(mktemp -d); trap '"'"'rm -rf -- "$d"'"'"' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 --connect-timeout 10 --max-time 120 -o "$d/stl-bootstrap.sh" https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh; test -s "$d/stl-bootstrap.sh"; bash -n "$d/stl-bootstrap.sh"; bash "$d/stl-bootstrap.sh" update'
 ~~~
 
 This selects the unchanged canonical installer update transaction,
 including identity-verified existing ownership and rollback journals.
-For a narrower prerequisite selection, append native update after
-the tag. The command refuses foreign or inconsistent installed
-state rather than silently replacing it. Confirm rollback-compatible
+The two permanent commands use the default native,wireguard prerequisites.
+An advanced operator who separately obtains and verifies the immutable
+bootstrap asset may invoke it as `bash ./stl-bootstrap.sh native update`
+for a narrower backend selection. **Do not append a version or extra
+arguments to the public one-liners.** The installer refuses foreign or
+inconsistent installed state rather than silently replacing it.
+Confirm rollback-compatible
 State and backups before starting.
 
 These Stable commands contain no changing version string or variable.
