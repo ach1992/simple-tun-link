@@ -2,7 +2,7 @@
 
 **Create and manage point-to-point IP tunnels between Linux servers.** STL provides a stable private IPv4 **Link Address** on each server, while the underlying tunnel can use GRE, IPIP, WireGuard, or conditionally available IPsec. You can create multiple independent Links, including different tunnels between the same pair of servers.
 
-**Latest Stable:** [v0.1.0](https://github.com/ach1992/simple-tun-link/releases/latest) is the first stable release line. It includes the reviewed guided terminal UI, selected one-consent GRE/IPIP package + kernel preparation, conditionally safe signed-APT IPsec / STL-exclusive strongSwan admission, multi-Link lifecycle, MTU/diagnostics and protected WireGuard/IPsec Setup Links. The previous [v0.1.0-rc.6](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.6) remains an immutable historical **pre-release**; its binary does not have the subsequently merged #105/#106 flows.
+**Latest Stable:** [current published release and verified assets](https://github.com/ach1992/simple-tun-link/releases/latest). The Stable line includes the reviewed terminal UI, selected GRE/IPIP package and kernel preparation, conditionally safe signed-APT IPsec / STL-exclusive strongSwan admission, multi-Link lifecycle, MTU/diagnostics and protected WireGuard/IPsec Setup Links. The original [v0.1.0](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0) remains an immutable earlier Stable; [v0.1.1](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.1) introduced separately consented existing-vendor StrongSwan reconciliation. The historical [v0.1.0-rc.6](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.6) remains an immutable pre-release; neither older binary includes the v0.1.1 reconciliation path.
 
 **Field-test limitation:** isolated CI and namespace/systemd guests do **not** establish real provider WAN/NAT, physical-host reboot or cross-provider firewall reachability. [Owner field acceptance #93](https://github.com/ach1992/simple-tun-link/issues/93) stays open. Test first on authorized noncritical hosts with consistent State v3 and protected credential backups.
 
@@ -57,7 +57,7 @@ STL-exclusive private-service plan. Unknown/foreign strongSwan processes,
 ports or units are never adopted. A fresh separate `YES` is still required
 to create the Link; provider firewall/NAT and remote peer setup remain manual.
 
-**Issue #112 candidate (NOT in immutable public v0.1.0):** a harmless missing STL-private systemd placeholder no longer blocks IPsec preparation. A real, verified official distro strongswan.service can be stopped/disabled only with its own exact-unit STOP consent, warning that VPN traffic may be interrupted; unknown or custom services require manual remediation and RECHECK. Private service ownership and separate Link YES are still mandatory.
+**Released in Stable v0.1.1 (Issue #112; absent from v0.1.0):** a harmless missing STL-private systemd placeholder no longer blocks IPsec preparation. A real, verified official distro strongswan.service can be stopped/disabled only with its own exact-unit STOP consent, warning that VPN traffic may be interrupted; unknown or custom services require manual remediation and RECHECK. Private service ownership and separate Link YES are still mandatory.
 
 **Already installed?** Use the permanent **update** one-liner in
 [section 6](#6-update-safely), not `install`. The canonical installer refuses
