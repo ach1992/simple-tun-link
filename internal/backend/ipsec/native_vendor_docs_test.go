@@ -1,6 +1,7 @@
 package ipsec
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -53,5 +54,30 @@ func TestVendorOnlyOmittedDistroDocsStrict(t *testing.T) {
 	}
 	if vendorOnlyOmittedDistroDocs(nil, nil) {
 		t.Fatal("missing independent absence checker accepted")
+	}
+}
+
+func TestVendorDistroConfigOwnerMultiarchAttestation(t *testing.T) {
+	for _, owner := range []string{
+		"libstrongswan", "libstrongswan:" + runtime.GOARCH,
+		"strongswan-swanctl", "strongswan-swanctl:" + runtime.GOARCH,
+		"libstrongswan-standard-plugins", "charon-systemd",
+	} {
+		if !vendorDistroConfigOwner(owner) {
+			t.Fatalf("official distro configuration owner rejected: %q", owner)
+		}
+	}
+	otherArch := "arm64"
+	if runtime.GOARCH == "arm64" {
+		otherArch = "amd64"
+	}
+	for _, owner := range []string{
+		"", "libstrongswan:unknown", "libstrongswan:" + otherArch,
+		"libstrongswan:amd64:foreign", "libstrongswan-extra-plugins",
+		"outside-package", "outside-package:" + runtime.GOARCH,
+	} {
+		if vendorDistroConfigOwner(owner) {
+			t.Fatalf("foreign or different architecture owner accepted: %q", owner)
+		}
 	}
 }

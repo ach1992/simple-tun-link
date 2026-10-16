@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -48,22 +49,22 @@ func vendorStopHostSafe(ctx context.Context, state, fragment string, ops vendorS
 	// systemctl's system bus must refer to the actual local PID1 before
 	// any of its selected-service identity becomes STOP authorization.
 	if err := ops.manager(ctx); err != nil {
-		return fmt.Errorf("local systemd manager identity unverified: %w", err)
+		return fmt.Errorf("systemd PID1 conflict: %w", err)
 	}
 	if err := ops.packages(ctx); err != nil {
-		return fmt.Errorf("selected distro packages incomplete; reconcile packages manually: %w", err)
+		return fmt.Errorf("selected package state: %w", err)
 	}
 	if err := ops.private(ctx); err != nil {
-		return fmt.Errorf("STL-private IPsec state unverified; reconcile before stopping another VPN: %w", err)
+		return fmt.Errorf("private IPsec conflict: %w", err)
 	}
 	if err := ops.aliases(ctx, fragment); err != nil {
-		return fmt.Errorf("systemd alternate service/alias ownership unverified: %w", err)
+		return fmt.Errorf("unit/alias conflict: %w", err)
 	}
 	if err := ops.configs(ctx); err != nil {
-		return fmt.Errorf("existing IPsec configuration not verified as distro default; manual reconciliation required: %w", err)
+		return fmt.Errorf("IPsec config conflict: %w", err)
 	}
 	if err := ops.owners(ctx, state); err != nil {
-		return fmt.Errorf("foreign daemon or IKE socket ownership unverified: %w", err)
+		return fmt.Errorf("IKE process/port conflict: %w", err)
 	}
 	return nil
 }
@@ -325,6 +326,25 @@ func vendorStopUnitAliasesSafe(ctx context.Context, fragment string) error {
 	return nil
 }
 
+// dpkg-query -S prints multiarch owners as e.g. libstrongswan:amd64
+// on Debian/Ubuntu. Only the current package architecture and these exact
+// vetted vendor packages are eligible; alternate-arch or foreign packages
+// do not establish trust of effective daemon configuration.
+func vendorDistroConfigOwner(pkg string) bool {
+	base, arch, qualified := strings.Cut(pkg, ":")
+	if qualified && arch != runtime.GOARCH {
+		return false
+	}
+	switch base {
+	case "charon-systemd", "strongswan-swanctl",
+		"libstrongswan", "libstrongswan-standard-plugins",
+		"libcharon-extauth-plugins":
+		return true
+	default:
+		return false
+	}
+}
+
 // Only package-owned and unmodified distro default configuration is eligible.
 // A third-party VPN's credentials/profiles are never stopped in the hope that
 // a subsequent private STL provisioner might happen to succeed.
@@ -382,11 +402,7 @@ func vendorStopForeignConfigAbsent(ctx context.Context) error {
 		if !ok || !expected[path] {
 			return errors.New("unowned or unexpected vendor config file")
 		}
-		switch pkg {
-		case "charon-systemd", "strongswan-swanctl",
-			"libstrongswan", "libstrongswan-standard-plugins",
-			"libcharon-extauth-plugins":
-		default:
+		if !vendorDistroConfigOwner(pkg) {
 			return errors.New("foreign package owns vendor configuration")
 		}
 		delete(expected, path)
