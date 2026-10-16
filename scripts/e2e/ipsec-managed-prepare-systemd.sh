@@ -46,6 +46,12 @@ EOF
   gpg --batch --passphrase '' --quick-generate-key 'Untrusted STL test signer <fake@localhost>' rsa2048 sign 0 >/dev/null 2>&1
   gpg --batch --output /tmp/stl-untrusted-archive.gpg --export 'Untrusted STL test signer'
   gpg --batch --yes --clearsign --output "$repo/dists/noble/InRelease" "$repo/dists/noble/Release"
+  # APT acquires as _apt. Only these throwaway *public* repo artifacts and
+  # archive public key may be world-readable; the signing private key stays
+  # mode 0700 in the disposable guest's private GNUPGHOME.
+  chmod 0644 /tmp/stl-untrusted-archive.gpg
+  chmod 0755 "$repo" "$repo/pool" "$repo/dists" "$repo/dists/noble" "$repo/dists/noble/main" "$repo/dists/noble/main/binary-amd64"
+  chmod 0644 "$repo"/pool/*.deb "$repo/dists/noble/main/binary-amd64/Packages" "$repo/dists/noble/Release" "$repo/dists/noble/InRelease"
   printf 'deb [signed-by=/tmp/stl-untrusted-archive.gpg] file:%s noble main\n' "$repo" > /etc/apt/sources.list.d/stl-test-untrusted.list
   apt-get update -qq
   policy=$(apt-cache policy charon-systemd)
