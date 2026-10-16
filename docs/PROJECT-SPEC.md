@@ -225,13 +225,14 @@ For IPsec v0.1, the Owner accepts a single native-exclusive STL-owned strongSwan
 
 ## 15. Guided operator workflow and one-consent preparation
 
-**Normative development target after immutable v0.1.0-rc.6.** This section
-defines the future product contract; the rc.6 README/INSTALL/CLI still
-describe what the released binary actually does. Active implementation:
+**Normative v0.1 operator contract integrated after immutable rc.6.**
+Implemented in Stable v0.1.0 through
 [Issue #105](https://github.com/ach1992/simple-tun-link/issues/105)
-(automatic IPsec setup), [Issue #106](https://github.com/ach1992/simple-tun-link/issues/106)
-(all-screen operator UX). Physical-host WAN/NAT/systemd-249 acceptance
-remains [Issue #93](https://github.com/ach1992/simple-tun-link/issues/93).
+(selected native-exclusive IPsec preparation) and
+[Issue #106](https://github.com/ach1992/simple-tun-link/issues/106)
+(all-screen operator UX). Historical rc.6 artifacts remain unchanged.
+Physical-host WAN/NAT/systemd-249 acceptance remains the separate
+[Issue #93](https://github.com/ach1992/simple-tun-link/issues/93).
 
 ### The short path to a working Link Address
 

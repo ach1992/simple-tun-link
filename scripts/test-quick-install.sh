@@ -11,14 +11,40 @@ mapfile -t published_commands < <(grep '^bash -o pipefail -c ' "$repo/README.md"
   echo 'README must contain precisely two pipefail-safe quick commands.' >&2
   exit 1
 }
-if [[ "${published_commands[0]}" =~ /(v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+)/scripts/quick-install\.sh ]]; then
-  export STL_TEST_PUBLIC_TAG="${BASH_REMATCH[1]}"
-else
-  echo 'Public one-liner must pin a well-formed immutable RC tag.' >&2
+# Public commands must NEVER need a changing tag, branch or token.
+# The immutable Stable asset itself pins the exact release tag.
+stable_url='https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh'
+[[ "${published_commands[0]}" == *"$stable_url | bash'" &&
+   "${published_commands[1]}" == *"$stable_url | bash -s -- update'" ]] || {
+  echo 'Public install/update must use the fixed latest Stable asset URL.' >&2
   exit 1
-fi
+}
+for public_cmd in "${published_commands[@]}"; do
+  if [[ "$public_cmd" =~ v[0-9]+\.[0-9]+\.[0-9]+ ]] ||
+     [[ "$public_cmd" == *raw.githubusercontent.com* ]]; then
+    echo 'Public command must not contain versions or mutable main URLs.' >&2
+    exit 1
+  fi
+done
+export STL_TEST_PUBLIC_TAG=v0.1.0
 scratch=$(mktemp -d)
 trap 'rm -rf -- "$scratch"' EXIT
+bash "$repo/scripts/render-stable-bootstrap.sh" "$STL_TEST_PUBLIC_TAG" "$scratch/stl-bootstrap.sh"
+export STL_TEST_STABLE_BOOTSTRAP="$scratch/stl-bootstrap.sh"
+bash -n "$STL_TEST_STABLE_BOOTSTRAP"
+[[ "$(tail -n 1 "$STL_TEST_STABLE_BOOTSTRAP")" == 'quick_install_main "v0.1.0" "$@"' ]] || {
+  echo 'Stable bootstrap did not pin its exact release tag.' >&2
+  exit 1
+}
+bash "$repo/scripts/render-stable-bootstrap.sh" "$STL_TEST_PUBLIC_TAG" "$scratch/stl-bootstrap-repeat.sh"
+cmp -s "$STL_TEST_STABLE_BOOTSTRAP" "$scratch/stl-bootstrap-repeat.sh" || {
+  echo 'Stable bootstrap generation was not deterministic.' >&2
+  exit 1
+}
+if bash "$repo/scripts/render-stable-bootstrap.sh" 'v0.1.0-rc.7' "$scratch/rc-not-allowed.sh" >/dev/null 2>&1; then
+  echo 'RC bootstrap illegally became latest Stable.' >&2
+  exit 1
+fi
 mkdir -p "$scratch/bin"
 cat > "$scratch/bin/curl" <<'CURL'
 #!/usr/bin/env bash
@@ -34,12 +60,12 @@ while (($#)); do
 done
 # Fake curl models the first-hop stdout and second-hop private download.
 # Reject unexpected URLs: no real network traffic is used in this test.
-if [[ "$url" == "https://raw.githubusercontent.com/ach1992/simple-tun-link/$STL_TEST_PUBLIC_TAG/scripts/quick-install.sh" ]]; then
+if [[ "$url" == "https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh" ]]; then
   [[ -z "$destination" ]] || exit 44
   case "${STL_TEST_FIRST_HOP:-}" in
     no-bytes) exit 47 ;;
-    truncated) sed '$d' "$STL_TEST_QUICK_INSTALL_FILE"; exit 48 ;;
-    "") cat "$STL_TEST_QUICK_INSTALL_FILE"; exit 0 ;;
+    truncated) sed '$d' "$STL_TEST_STABLE_BOOTSTRAP"; exit 48 ;;
+    "") cat "$STL_TEST_STABLE_BOOTSTRAP"; exit 0 ;;
     *) exit 49 ;;
   esac
 fi
@@ -148,9 +174,8 @@ fi
 # fail if the first HTTPS request produces zero or truncated bytes.
 for idx in 0 1; do
   published_cmd="${published_commands[$idx]}"
-  [[ "$published_cmd" == *"/$STL_TEST_PUBLIC_TAG/scripts/quick-install.sh"* &&
-     "$published_cmd" == *"bash -s -- $STL_TEST_PUBLIC_TAG"* ]] || {
-    echo 'Published installer and update commands must pin the same current RC tag.' >&2
+  [[ "$published_cmd" == *"$stable_url"* ]] || {
+    echo 'Published commands must use the immutable latest Stable asset.' >&2
     exit 1
   }
   grep -Fx -- "$published_cmd" "$repo/docs/INSTALL.md" >/dev/null || {

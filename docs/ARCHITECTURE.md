@@ -428,7 +428,7 @@ not a separate network controller. The durable product journey and
 semantic styling are in
 [PROJECT-SPEC, section 15](PROJECT-SPEC.md#15-guided-operator-workflow-and-one-consent-preparation).
 [Issue #106](https://github.com/ach1992/simple-tun-link/issues/106)
-owns source-wide migration. The actual v0.1.0-rc.6 navigation is:
+completed the source-wide migration. The Stable v0.1.0 navigation is:
 
 ~~~text
 SIMPLE TUN LINK       version / current host

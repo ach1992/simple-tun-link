@@ -83,6 +83,13 @@ for arch in amd64 arm64; do
 done
 
 cp LICENSE "$tmp/LICENSE"
+# Stable releases ship a self-pinned bootstrap using the permanent
+# releases/latest/download/stl-bootstrap.sh URL. Never for snapshots/RCs.
+stable_bootstrap=false
+if [[ $mode == tag && $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  bash scripts/render-stable-bootstrap.sh "$version" "$tmp/stl-bootstrap.sh"
+  stable_bootstrap=true
+fi
 cat > "$tmp/BUILD-MANIFEST.txt" <<EOF
 project=simple-tun-link
 executable=stl
@@ -96,8 +103,11 @@ mode=$mode
 EOF
 (
   cd "$tmp"
-  sha256sum -- "stl_"$version"_linux_amd64" "stl_"$version"_linux_arm64" \
-    "LICENSE" "BUILD-MANIFEST.txt" > SHA256SUMS
+  entries=("stl_"$version"_linux_amd64" "stl_"$version"_linux_arm64" "LICENSE" "BUILD-MANIFEST.txt")
+  if [[ $stable_bootstrap == true ]]; then
+    entries+=("stl-bootstrap.sh")
+  fi
+  sha256sum -- "${entries[@]}" > SHA256SUMS
   sha256sum --check SHA256SUMS >/dev/null
 )
 

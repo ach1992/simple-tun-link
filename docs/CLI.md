@@ -1,9 +1,10 @@
 # STL CLI — operator menus and stable machine commands
 
-The compact human menu below ships with the
-[v0.1.0-rc.6 public pre-release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.6).
-The old rc.2 executable retains its older menu. Versioned
-noninteractive machine CLI/JSON contracts remain unchanged.
+The complete guided operator interface ships with
+[Stable v0.1.0](https://github.com/ach1992/simple-tun-link/releases/latest).
+The historical [immutable rc.6](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.0-rc.6)
+contains only its earlier feature subset. The older rc.2 retains a
+different menu. Versioned machine CLI/JSON contracts remain unchanged.
 
 ## Interactive terminal presentation (Issue #93; rc.4)
 
@@ -20,9 +21,9 @@ recovery guidance or the complete copyable Setup Link) remains visible
 until an operator presses Enter to return; confirmation for any mutation
 still requires the separate fresh **YES/REMOVE/SHOW/DELETE** gates.
 
-NO_COLOR (set to any value), CLICOLOR=0, TERM=dumb, or redirected
-stdout safely disable color as applicable. TERM=dumb / non-TTY also
-disable screen-clearing escapes. To retain an append-only interactive
+NO_COLOR (present even with an empty value), TERM=dumb and redirected
+stdout disable all ANSI including cursor/screen-clearing escapes;
+CLICOLOR=0 disables semantic color. This does not change machine output. To retain an append-only interactive
 display for capture/troubleshooting, set STL_NO_CLEAR=1. Only the
 visible screen is cleared, not scrollback. Machine CLI/JSON never
 contains terminal color or screen-control escapes. Numeric input,
@@ -173,9 +174,9 @@ Installing the packages never authorizes STL's separate private service.
 Non-root or redirected selections remain observational and cannot
 start package mutation. Final Engine admission remains authoritative.
 
-#### Unreleased #105: one-consent native IPsec setup
+#### Stable v0.1.0 / #105: one-consent native IPsec setup
 
-On merged `main` source (not in the immutable rc.6 release), selecting
+In Stable v0.1.0 (not the historical immutable rc.6 release), selecting
 **Advanced → IPsec ESP/NAT-T** on a supported clean installed-root terminal
 presents the signed distro APT package/dependency plan, checks foreign systemd
 unit/daemon/configuration and UDP 500/4500 occupancy, and requests exactly one
@@ -203,7 +204,7 @@ After selecting GRE/IPIP FOU or GUE (or a native GRE/IPIP type with a
 missing kernel driver), STL separately rechecks the selected modules.
 If a required module is verified **on disk but inactive**, the shipped
 rc.6 path asks an installed-root operator for a separate `PREPARE`.
-In the **unreleased #106 UX candidate**, when missing packages and missing
+In **Stable v0.1.0 / Issue #106**, when missing packages and missing
 modules affect the **same selected GRE/IPIP tunnel**, one PREPARE preview
 discloses both the exact APT dependency plan and the possible selected
 kernel modules. After package preparation, independently verified,
