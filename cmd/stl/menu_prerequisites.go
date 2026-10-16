@@ -95,6 +95,26 @@ func plainModuleCandidates(selected tunnelOption, report linux.CapabilityReport,
 	return missing, ""
 }
 
+// Consent is consumed once for the whole selected plan. A successful
+// package PREPARE can carry it forward without eating the next Link YES.
+func menuConfirmSelectedModules(input io.Reader, reader *bufio.Reader, out io.Writer, approvedSelectedPlan bool) bool {
+	if approvedSelectedPlan {
+		menuNotice(out, "INFO", "The preceding PREPARE included these possible modules. Rechecking exact host conditions before loading.")
+		return true
+	}
+	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
+		menuNotice(out, "WARNING", "Cannot establish a fresh confirmation. Nothing changed.")
+		return false
+	}
+	fmt.Fprintf(out, "Type %s to load only these modules (Enter cancels): ", menuActionToken(out, "PREPARE"))
+	confirm, err := readMenuAnswer(reader)
+	if err != nil || confirm != "PREPARE" {
+		menuNotice(out, "INFO", "Preparation cancelled. No modules were loaded.")
+		return false
+	}
+	return true
+}
+
 func menuCanPrepareKernel(input io.Reader, out io.Writer) bool {
 	// Reuse the exact installed binary, root and fresh interactive TTY
 	// authority gate already required for privileged menu maintenance.
@@ -141,9 +161,18 @@ func loadSelectedKernelModules(ctx context.Context, load func(context.Context, s
 // not merely because modprobe exited successfully. Plain tunnel creation
 // still uses the canonical Engine/transaction and fresh capability checks.
 func menuPrepareSelectedModules(input io.Reader, reader *bufio.Reader, out io.Writer,
-	options *runtimeOptions, selected tunnelOption, report linux.CapabilityReport,
+	options *runtimeOptions, selected tunnelOption, report linux.CapabilityReport, approvedSelectedPlan bool,
 ) (bool, linux.CapabilityReport) {
 	capability := plainBackendCapability(selected.backend, selected.mode)
+	if approvedSelectedPlan {
+		// A package transaction may have changed kernel/tool readiness.
+		// Never rely on the capability snapshot taken before APT.
+		report = menuCapabilitySnapshot(options)
+		if report == nil {
+			menuNotice(out, "WARNING", "Post-package kernel readiness is unknown. No modules loaded or tunnel created.")
+			return false, nil
+		}
+	}
 	if capability == "" || len(plainRequiredModules(selected)) == 0 {
 		return true, report
 	}
@@ -185,14 +214,7 @@ func menuPrepareSelectedModules(input io.Reader, reader *bufio.Reader, out io.Wr
 		menuNotice(out, "INFO", "Preparation requires sudo stl menu on the installed binary and a real interactive terminal.")
 		return false, report
 	}
-	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
-		menuNotice(out, "WARNING", "Cannot establish a fresh confirmation. Nothing changed.")
-		return false, report
-	}
-	fmt.Fprintf(out, "Type %s to load only these modules (Enter cancels): ", menuActionToken(out, "PREPARE"))
-	confirm, err := readMenuAnswer(reader)
-	if err != nil || confirm != "PREPARE" {
-		menuNotice(out, "INFO", "Preparation cancelled. No modules were loaded.")
+	if !menuConfirmSelectedModules(input, reader, out, approvedSelectedPlan) {
 		return false, report
 	}
 	// Wait for the installed maintenance lease BEFORE the last preflight.

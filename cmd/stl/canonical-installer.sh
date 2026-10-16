@@ -32,7 +32,7 @@ only installed on the real /usr/local prefix, never an offline test prefix.
 USAGE
   exit 2
 }
-fail() { printf 'stl installer: %s\n' "$*" >&2; exit 1; }
+fail() { printf 'stl installer [FAILED]: %s\n' "$*" >&2; exit 1; }
 [[ $# -ge 1 ]] || usage
 action=$1
 shift
@@ -97,7 +97,7 @@ validate_os() {
       major=${BASH_REMATCH[1]}
       (( 10#$major >= 11 )) || fail "Debian 11 or later is required; found $os_version"
       if (( 10#$major == 11 )); then
-        printf 'stl installer WARNING: Debian 11 LTS ended 2026-08-31; retain compatibility only with separately maintained security support. No APT source changes are made.\n' >&2
+        printf 'stl installer [WARNING]: Debian 11 LTS ended 2026-08-31; retain compatibility only with separately maintained security support. No APT source changes are made.\n' >&2
       fi
       ;;
     ubuntu)
@@ -549,7 +549,7 @@ ipsec_normalize_new_vendor() {
     awk 'NR>1 { split($2, a, ":"); p=a[length(a)]; if(p=="01F4" || p=="1194") exit 42 }' "$item" ||
       fail 'IKE UDP owner remains after vendor normalization'
   done
-  printf 'Transaction-created strongSwan vendor service inactive and disabled.\n' >&2
+  printf '[OK] Transaction-created strongSwan vendor service inactive and disabled.\n' >&2
 }
 
 # APT can fail AFTER dpkg hooks have already installed/enabled/started the
@@ -617,7 +617,7 @@ ensure_packages() {
   if (( ${#missing[@]} == 0 )); then
     [[ $expected_apt_plan_supplied == 0 || -z $expected_apt_plan ]] ||
       fail 'APT plan changed since confirmation; no APT attempted'
-    printf 'STL dependencies already installed for %s %s (%s).\n' "$os_id" "$os_version" "$backends" >&2
+    printf '[OK] STL dependencies already installed for %s %s (%s).\n' "$os_id" "$os_version" "$backends" >&2
     return
   fi
   if [[ $want_ipsec == 1 ]]; then
@@ -651,7 +651,7 @@ ensure_packages() {
   if [[ $missing_ipsec == 1 ]]; then
     ipsec_clean_host_before_apt
   fi
-  printf 'Installing verified missing packages on %s %s: %s\n' "$os_id" "$os_version" "$before_plan" >&2
+  printf '[INFO] Installing verified missing packages on %s %s: %s\n' "$os_id" "$os_version" "$before_plan" >&2
   if [[ $action == prepare ]]; then
     DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none       apt-get "${apt_safety[@]}" -o Acquire::Retries=2 update ||
       fail 'APT index refresh failed; inspect package indexes before retry'
@@ -830,8 +830,7 @@ if [[ $action == prepare ]]; then
     [[ $expected_apt_plan =~ $expected_apt_pattern ]] || fail 'untrusted expected APT dependency plan'
   fi
   ensure_packages
-  printf 'Selected backend packages prepared; kernel modules and STL-owned service admission must be verified separately. No STL executable or Link was changed.
-'
+  printf '[OK] Selected backend packages prepared; kernel readiness and private IPsec service admission (if selected) still need independent verification. No STL executable or Link was changed.\n'
   exit 0
 fi
 
@@ -961,7 +960,7 @@ finish() {
       fi
     fi
     if (( keep_recovery )); then
-      printf 'stl installer: partial failure; inspect retained recovery directory: %s\n' "$stage" >&2
+      printf 'stl installer [FAILED]: partial failure; inspect retained recovery directory: %s\n' "$stage" >&2
     fi
   fi
   if [[ -n $record_tmp ]]; then
@@ -1005,7 +1004,7 @@ if [[ $action == uninstall ]]; then
   failpoint record-sync
   [[ ! -e $target && ! -L $target && ! -e $alias && ! -L $alias && ! -e $record && ! -L $record ]] || fail 'uninstall identities not fully retired'
   commit_marker "$prior_hash"
-  printf 'Uninstalled installer-owned stl/stlink only; Link state was left untouched.\n'
+  printf '[OK] Uninstalled installer-owned stl/stlink only; Link state was left untouched.\n'
   exit 0
 fi
 
@@ -1062,7 +1061,7 @@ if [[ $action == update ]]; then
   [[ $(hash_file "$target") == "$prior_hash" && $(hash_file "$record") == "$prior_record_hash" ]] || fail 'installed binary or record changed before update'
   sync_paths "$stage/previous-stl" "$stage/previous-record" "$stage" "$bin_dir" || fail 'cannot durably preserve update rollback sources'
   if [[ $prior_hash == "$new_hash" ]]; then
-    printf 'stl is already installed from this exact artifact (%s).\n' "$version"
+    printf '[INFO] stl is already installed from this exact artifact (%s).\n' "$version"
     exit 0
   fi
 fi
@@ -1093,4 +1092,4 @@ sync_paths "$record" "$record_dir" || fail 'ownership record publication sync fa
 failpoint record-sync
 [[ $(hash_file "$record") == "$new_record_hash" && $(hash_file "$target") == "$new_hash" && -L $alias && $(readlink -- "$alias") == stl ]] || fail 'post-publication identity check failed'
 commit_marker "$new_hash"
-printf '%s stl %s for linux/%s; stlink resolves to the same executable.\n' "${action^}" "$version" "$arch"
+printf '[OK] %s stl %s for linux/%s; stlink resolves to the same executable.\n' "${action^}" "$version" "$arch"

@@ -164,8 +164,8 @@ noninteractive creator command still requires an explicit --output.
   OS package management first. Already installed IPsec dependencies still
   need separate STL-private service publication and runtime admission.
 
-**Unreleased Issue #105 candidate (not in rc.6):** The development branch
-adds an interactive clean-host IPsec preparation path. In an installed root
+**Merged Issue #105 source (unreleased; not in rc.6):** `main` now
+contains an interactive clean-host IPsec preparation path. In an installed root
 terminal, choose **Create tunnel → Advanced types → IPsec ESP/NAT-T**.
 STL shows missing packages and the resolved **complete APT dependency/version
 plan**, plus the fact that normal distro package hooks may briefly start and
@@ -195,8 +195,9 @@ an unknown service. APT failure emits read-only dpkg/package and vendor
 active/enabled/alias classifications and blocks blind retry. Use **stl doctor ipsec --json** for a read-only snapshot
 and reconcile the specific observed conflict before retrying. Ordinary
 rc.6 binaries will still require administrator-managed strongSwan packages.
-This workflow is a development candidate pending review and new release
-authorization, **not an instruction to install it on operational hosts**.
+This source has passed independent #105 review and is integrated into
+`main`, but still requires separate release authorization. It is **not**
+an instruction to install it on operational hosts.
 
 - Only missing packages are requested; the installer never upgrades the entire
   host or edits repositories. Host APT package installation is not covered by

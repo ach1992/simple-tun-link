@@ -125,7 +125,7 @@ func menuPublicDiagnosticFailure(out io.Writer, raw []byte) {
 			menuField(out, "Reason", failure.Error.ReasonCode)
 		}
 		menuSection(out, "Next check")
-		fmt.Fprintln(out, wrapTerminalGuidance(failure.Error.NextStep, 68))
+		menuProse(out, failure.Error.NextStep)
 		return
 	}
 	menuNotice(out, "WARNING", "Connection check unavailable. Inspect local status and prerequisites; no changes made.")

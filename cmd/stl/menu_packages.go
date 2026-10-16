@@ -143,11 +143,19 @@ func readSelectedPackagePreview(ctx context.Context, selected tunnelOption) (sel
 	return plan, nil
 }
 
+// A fresh, successful package PREPARE may also authorize qualified module
+// preparation for the SAME GRE/IPIP selection. A ready path without a
+// confirmation never conveys that permission.
+type menuPackagePreparation struct {
+	canContinue          bool
+	approvedSelectedPlan bool
+}
+
 // One explicit PREPARE covers the selected package/dependency plan AND, for
 // IPsec, qualified private-service admission. Actual Link Create has its own
 // separate YES. Inspecting or cancelling always remains read-only.
 func menuPrepareSelectedPackages(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
-	selected tunnelOption, options *runtimeOptions) bool {
+	selected tunnelOption, options *runtimeOptions) menuPackagePreparation {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	plan, err := readSelectedPackagePreview(ctx, selected)
 	cancel()
@@ -155,7 +163,7 @@ func menuPrepareSelectedPackages(input io.Reader, reader *bufio.Reader, out, err
 		menuSection(out, "Selected tunnel / package check")
 		menuField(out, "STATUS", "Unverified")
 		menuField(out, "NEXT ACTION", "Inspect supported OS and APT metadata; no changes attempted")
-		return selected.backend != domain.BackendIPsec
+		return menuPackagePreparation{canContinue: selected.backend != domain.BackendIPsec}
 	}
 
 	// Independent service admission is a live root ownership check, not a
@@ -171,7 +179,7 @@ func menuPrepareSelectedPackages(input io.Reader, reader *bufio.Reader, out, err
 		needsService = admitted != nil
 	}
 	if plan.missing == "" && !needsService {
-		return true
+		return menuPackagePreparation{canContinue: true}
 	}
 	if !menuCanUpdateNow(input, out) {
 		menuNotice(out, "WARNING", "Selected prerequisites need an installed root terminal for preparation.")
@@ -180,13 +188,17 @@ func menuPrepareSelectedPackages(input io.Reader, reader *bufio.Reader, out, err
 		if selected.backend == domain.BackendIPsec {
 			menuField(out, "Read-only check", "stl doctor ipsec --json")
 		}
-		return selected.backend != domain.BackendIPsec
+		return menuPackagePreparation{canContinue: selected.backend != domain.BackendIPsec}
 	}
 	menuScreen(out, "Selected tunnel / PREPARE")
 	menuField(out, "Type", fmt.Sprintf("%s / %s", selected.backend, selected.mode))
 	if plan.missing != "" {
 		menuField(out, "Missing packages", plan.missing)
 		menuField(out, "APT install plan", plan.aptInstall)
+		if selected.backend == domain.BackendGRE || selected.backend == domain.BackendIPIP {
+			menuField(out, "Possible modules", strings.Join(plainRequiredModules(selected), ", "))
+			menuProse(out, "This same PREPARE also authorizes loading ONLY the selected modules if a post-APT kernel check proves them missing and loadable. Modules may remain loaded until reboot; the other server is prepared separately.")
+		}
 	}
 	if needsService {
 		menuField(out, "Private service", "Inspect ownership; publish and start STL-exclusive IPsec unit if qualified")
@@ -196,13 +208,13 @@ func menuPrepareSelectedPackages(input io.Reader, reader *bufio.Reader, out, err
 	menuProse(out, "APT packages may persist after an interruption. No Link, keys, or peer connection will be created during preparation.")
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
 		menuNotice(out, "WARNING", "Fresh consent unavailable; no preparation attempted.")
-		return false
+		return menuPackagePreparation{}
 	}
-	fmt.Fprintf(out, "Type %s to prepare selected prerequisites (Enter cancels): ", menuPaint(out, menuYellow, "PREPARE"))
+	fmt.Fprintf(out, "Type %s to prepare selected prerequisites (Enter cancels): ", menuActionToken(out, "PREPARE"))
 	confirmation, e := readMenuAnswer(reader)
 	if e != nil || confirmation != "PREPARE" {
 		menuNotice(out, "INFO", "Preparation cancelled before any changes.")
-		return false
+		return menuPackagePreparation{}
 	}
 	if plan.missing != "" {
 		verifyCtx, stop := context.WithTimeout(context.Background(), 12*time.Second)
@@ -211,7 +223,7 @@ func menuPrepareSelectedPackages(input io.Reader, reader *bufio.Reader, out, err
 		if e != nil || refreshed.missing != plan.missing ||
 			refreshed.packages != plan.packages || refreshed.aptInstall != plan.aptInstall {
 			menuNotice(out, "WARNING", "Package/dependency plan changed since consent; no packages installed.")
-			return false
+			return menuPackagePreparation{}
 		}
 		prepCtx, done := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer done()
@@ -220,14 +232,14 @@ func menuPrepareSelectedPackages(input io.Reader, reader *bufio.Reader, out, err
 			"--backends", selectedPackageBackends(selected), "--expected-missing", refreshed.missing,
 			"--expected-apt-plan", refreshed.aptInstall); err != nil {
 			menuNotice(out, "FAILED", "Package preparation incomplete or denied. APT/vendor changes may persist after an attempted transaction; inspect and reconcile before retry.")
-			return false
+			return menuPackagePreparation{}
 		}
 		afterCtx, afterDone := context.WithTimeout(context.Background(), 12*time.Second)
 		after, e := readSelectedPackagePreview(afterCtx, selected)
 		afterDone()
 		if e != nil || after.missing != "" {
 			menuNotice(out, "FAILED", "Selected packages are not verified after APT; private service was not started.")
-			return false
+			return menuPackagePreparation{}
 		}
 	}
 	if needsService {
@@ -237,28 +249,28 @@ func menuPrepareSelectedPackages(input io.Reader, reader *bufio.Reader, out, err
 		probeDone()
 		if err != nil {
 			menuNotice(out, "FAILED", "Private IPsec admission is not qualified. Vendor/foreign identity or incomplete sources must be reconciled; no Link created.")
-			return false
+			return menuPackagePreparation{}
 		}
 		provisionCtx, done := context.WithTimeout(context.Background(), 75*time.Second)
 		err = ipsecbackend.ProvisionNativeExclusive(provisionCtx)
 		done()
 		if err != nil {
 			menuNotice(out, "FAILED", "STL-private service publication/start is incomplete or uncertain. Preserve protected artifacts for diagnosis; no Link created.")
-			return false
+			return menuPackagePreparation{}
 		}
 		// Rebuild registration and require actual admitted runtime; provision
 		// success is not itself proof of a ready backend.
 		options, err = productionRuntimeOptions()
 		if err != nil {
 			menuNotice(out, "FAILED", "Cannot rebuild IPsec backend after service preparation.")
-			return false
+			return menuPackagePreparation{}
 		}
 		verifyCtx, end := context.WithTimeout(context.Background(), 15*time.Second)
 		_, err = activeIPsecBackend(verifyCtx, options)
 		end()
 		if err != nil {
 			menuNotice(out, "FAILED", "Prepared private service has not passed runtime admission.")
-			return false
+			return menuPackagePreparation{}
 		}
 		// The selected Create must receive the refreshed admitted backend,
 		// not the pre-APT runtime snapshot that lacked strongSwan packages.
@@ -267,7 +279,7 @@ func menuPrepareSelectedPackages(input io.Reader, reader *bufio.Reader, out, err
 		}
 	}
 	menuNotice(out, "OK", "Selected prerequisites verified; continuing the same tunnel Create (Link confirmation is separate).")
-	return true
+	return menuPackagePreparation{canContinue: true, approvedSelectedPlan: true}
 }
 
 // Embedded script must not drift from its canonical file. Package-level tests

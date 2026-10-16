@@ -175,7 +175,7 @@ start package mutation. Final Engine admission remains authoritative.
 
 #### Unreleased #105: one-consent native IPsec setup
 
-On the development branch (not in the immutable rc.6 release), selecting
+On merged `main` source (not in the immutable rc.6 release), selecting
 **Advanced → IPsec ESP/NAT-T** on a supported clean installed-root terminal
 presents the signed distro APT package/dependency plan, checks foreign systemd
 unit/daemon/configuration and UDP 500/4500 occupancy, and requests exactly one
@@ -201,8 +201,15 @@ this flow.
 
 After selecting GRE/IPIP FOU or GUE (or a native GRE/IPIP type with a
 missing kernel driver), STL separately rechecks the selected modules.
-If a required module is verified **on disk but inactive**, a real
-installed-root terminal may approve a separate `PREPARE`. The selected
+If a required module is verified **on disk but inactive**, the shipped
+rc.6 path asks an installed-root operator for a separate `PREPARE`.
+In the **unreleased #106 UX candidate**, when missing packages and missing
+modules affect the **same selected GRE/IPIP tunnel**, one PREPARE preview
+discloses both the exact APT dependency plan and the possible selected
+kernel modules. After package preparation, independently verified,
+loadable missing modules can be loaded under that same consent without a
+second PREPARE; otherwise module-only preparation still requires its own
+fresh PREPARE. Link Create always retains a separate YES. The selected
 `ip_gre`, `ipip` or `fou` module is loaded only under an installed shared
 maintenance lease that rechecks executable identity after waiting. The
 single controlled loader uses `modprobe --config /dev/null --ignore-install`

@@ -320,13 +320,14 @@ func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 				continue
 			}
 		}
-		if !menuPrepareSelectedPackages(input, reader, out, errOut, picked, options) {
+		packagePrep := menuPrepareSelectedPackages(input, reader, out, errOut, picked, options)
+		if !packagePrep.canContinue {
 			report = menuCapabilitySnapshot(options)
 			menuAcknowledge(input, reader, out)
 			continue
 		}
 		if picked.backend == domain.BackendGRE || picked.backend == domain.BackendIPIP {
-			ready, refreshed := menuPrepareSelectedModules(input, reader, out, options, picked, report)
+			ready, refreshed := menuPrepareSelectedModules(input, reader, out, options, picked, report, packagePrep.approvedSelectedPlan)
 			if !ready {
 				report = menuCapabilitySnapshot(options)
 				menuAcknowledge(input, reader, out)
