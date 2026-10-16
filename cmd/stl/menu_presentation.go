@@ -206,6 +206,13 @@ func menuFieldValue(out io.Writer, label, value string) string {
 // exact shell commands or remote URLs that operators must copy byte-for-byte.
 func menuProse(out io.Writer, message string) {
 	cols := menuColumns(out)
+	if cols == 0 {
+		// A real PTY can report a zero-sized window before the terminal
+		// sends a resize. Still render bounded readable paragraphs.
+		if _, ok := menuTerminal(out); ok {
+			cols = 72
+		}
+	}
 	if cols >= 24 && len(message) > cols-4 && !menuCopyable(message) {
 		fmt.Fprintln(out, "  "+strings.ReplaceAll(wrapTerminalGuidance(message, max(16, cols-4)), "\n", "\n  "))
 		return

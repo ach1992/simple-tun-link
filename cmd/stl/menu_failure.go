@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"io"
 	"strings"
 
@@ -50,7 +49,9 @@ func renderTerminalLifecycleFailure(out io.Writer, issue *stlerr.Error, evidence
 		menuNotice(out, kind, issue.Detail)
 	}
 	menuSection(out, "Next step / no automatic retry")
-	fmt.Fprintln(out, wrapTerminalGuidance(issue.NextStep, 68))
+	// Human guidance follows the actual terminal width. Exact commands and
+	// any secret-safe copyable tokens remain unwrapped.
+	menuProse(out, issue.NextStep)
 	if issue.ReasonCode != "" {
 		reference := issue.ReasonCode
 		if evidence != nil && evidence.Stage != "" {
