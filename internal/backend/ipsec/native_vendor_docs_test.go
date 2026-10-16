@@ -62,6 +62,7 @@ func TestVendorDistroConfigOwnerMultiarchAttestation(t *testing.T) {
 		"libstrongswan", "libstrongswan:" + runtime.GOARCH,
 		"strongswan-swanctl", "strongswan-swanctl:" + runtime.GOARCH,
 		"libstrongswan-standard-plugins", "charon-systemd",
+		"strongswan-libcharon", "strongswan-libcharon:" + runtime.GOARCH,
 	} {
 		if !vendorDistroConfigOwner(owner) {
 			t.Fatalf("official distro configuration owner rejected: %q", owner)

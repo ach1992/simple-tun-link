@@ -78,7 +78,8 @@ func vendorStopPackagesReady(ctx context.Context) error {
 		return errors.New("dpkg has incomplete or uninspectable transactions")
 	}
 	for _, pkg := range []string{"iproute2", "iptables", "kmod",
-		"charon-systemd", "strongswan-swanctl", "libstrongswan-standard-plugins"} {
+		"charon-systemd", "strongswan-swanctl", "libstrongswan-standard-plugins",
+		"strongswan-libcharon", "libstrongswan"} {
 		status, err := vendorReadOnlyCommand(ctx, "/usr/bin/dpkg-query",
 			"-W", "-f="+"$"+"{Status}", "--", pkg)
 		if err != nil || string(status) != "install ok installed" {
@@ -88,7 +89,7 @@ func vendorStopPackagesReady(ctx context.Context) error {
 	// Distro conffile modifications indicate that the host may have a live
 	// externally managed IPsec configuration. Never silently stop/adopt it.
 	for _, pkg := range []string{"charon-systemd", "strongswan-swanctl",
-		"libstrongswan-standard-plugins", "libstrongswan"} {
+		"libstrongswan-standard-plugins", "strongswan-libcharon", "libstrongswan"} {
 		out, err := vendorReadOnlyCommand(ctx, "/usr/bin/dpkg", "--verify", pkg)
 		if err != nil || !vendorOnlyOmittedDistroDocs(out, func(path string) bool {
 			_, statErr := os.Lstat(path)
@@ -338,7 +339,7 @@ func vendorDistroConfigOwner(pkg string) bool {
 	switch base {
 	case "charon-systemd", "strongswan-swanctl",
 		"libstrongswan", "libstrongswan-standard-plugins",
-		"libcharon-extauth-plugins":
+		"strongswan-libcharon", "libcharon-extauth-plugins":
 		return true
 	default:
 		return false
