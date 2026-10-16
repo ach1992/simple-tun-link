@@ -199,8 +199,13 @@ apt_verify_distro_candidates() {
     if [[ $target == deb && $identifier == Packages && -n $description && -n $filename &&
           -n $component && -n $architecture ]]; then
       suffix="_${component}_binary-${architecture}_Packages"
-      [[ $filename == /var/lib/apt/lists/* && $filename == *"$suffix" ]] ||
-        fail 'APT package index identity is unexpected'
+      # Some exposed APT targets are not release-scoped distro Packages
+      # indexes. Ignore them here, but deny any SELECTED candidate without
+      # a verified index mapping below.
+      if [[ $filename != /var/lib/apt/lists/* || $filename != *"$suffix" ]]; then
+        description= filename= component= architecture= target= identifier=
+        continue
+      fi
       release="${filename%"$suffix"}_InRelease"
       # The mapped InRelease must be local and immutable by non-root users;
       # its actual cryptographic signer is checked only if selected by APT.
@@ -339,7 +344,9 @@ apt_sources_must_be_authenticated() {
 # package may not have created yet (strongswan-swanctl.service).
 ipsec_reject_applicable_dropins() {
   local dir name
-  for dir in /etc/systemd/system /run/systemd/system /lib/systemd/system \
+  for dir in /etc/systemd/system /run/systemd/system \
+             /etc/systemd/system.control /run/systemd/system.control \
+             /lib/systemd/system \
              /usr/lib/systemd/system /usr/local/lib/systemd/system \
              /run/systemd/generator /run/systemd/generator.early \
              /run/systemd/generator.late; do
@@ -384,7 +391,9 @@ ipsec_clean_host_before_apt() {
   for unit in strongswan.service strongswan-swanctl.service \
               strongswan-starter.service charon-systemd.service \
               ipsec.service simple-tun-link-ipsec.service; do
-    for dir in /etc/systemd/system /run/systemd/system /lib/systemd/system \
+    for dir in /etc/systemd/system /run/systemd/system \
+             /etc/systemd/system.control /run/systemd/system.control \
+             /lib/systemd/system \
                /usr/lib/systemd/system /usr/local/lib/systemd/system \
                /run/systemd/generator /run/systemd/generator.early \
                /run/systemd/generator.late; do
@@ -454,7 +463,9 @@ ipsec_normalize_new_vendor() {
   # the already attested distro-owned fragment; a regular/foreign unit is not.
   ipsec_reject_applicable_dropins
   local dir alias meta_alias alias_fragment
-  for dir in /etc/systemd/system /run/systemd/system /lib/systemd/system \
+  for dir in /etc/systemd/system /run/systemd/system \
+             /etc/systemd/system.control /run/systemd/system.control \
+             /lib/systemd/system \
              /usr/lib/systemd/system /usr/local/lib/systemd/system \
              /run/systemd/generator /run/systemd/generator.early \
              /run/systemd/generator.late; do

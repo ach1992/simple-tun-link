@@ -61,7 +61,11 @@ EOF
   echo 'IPSEC_FORGED_APT_ORIGIN_WITH_VALID_THIRD_PARTY_SIGNATURE_DENIED=PASS'
   exit 0
 fi
-plan=$(bash /mnt/stl-install.sh requirements --backends native,ipsec)
+if ! plan=$(bash /mnt/stl-install.sh requirements --backends native,ipsec); then
+  # Source format triage only inside this stock disposable Ubuntu guest.
+  apt-get indextargets --format 'APT_INDEX id=$(IDENTIFIER) file=$(FILENAME) component=$(COMPONENT) arch=$(ARCHITECTURE)' | head -n 16 >&2 || :
+  fail real_ipsec_readonly_signer_preview_failed
+fi
 missing=$(sed -n 's/^missing_packages=//p' <<< "$plan")
 apt_plan=$(sed -n 's/^apt_install=//p' <<< "$plan")
 [[ $missing == *charon-systemd* && $apt_plan == *charon-systemd=* ]] ||

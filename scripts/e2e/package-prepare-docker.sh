@@ -58,7 +58,12 @@ echo "REAL_APT_IDEMPOTENT_NO_OP=PASS"
 # overwriting a foreign vendor drop-in.
 apt_bin=$(command -v apt-get)
 [[ $apt_bin == /usr/bin/apt-get ]] || fail unexpected_guest_apt_path
-plan_ipsec=$(bash /mnt/stl-install.sh requirements --backends native,ipsec)
+if ! plan_ipsec=$(bash /mnt/stl-install.sh requirements --backends native,ipsec); then
+  # Diagnostic is read-only and runs only in the disposable test guest.
+  # No private source secrets are present in this stock Ubuntu fixture.
+  apt-get indextargets --format "APT_INDEX id=\$(IDENTIFIER) file=\$(FILENAME) component=\$(COMPONENT) arch=\$(ARCHITECTURE)" | head -n 16 >&2 || :
+  fail ipsec_readonly_signer_preview_failed
+fi
 missing_ipsec=$(sed -n "s/^missing_packages=//p" <<< "$plan_ipsec")
 apt_ipsec=$(sed -n "s/^apt_install=//p" <<< "$plan_ipsec")
 [[ $missing_ipsec == *charon-systemd* && $apt_ipsec == *charon-systemd=* ]] ||
