@@ -413,13 +413,36 @@ func (b *OperationalBackend) Connect(ctx context.Context, link domain.Link, owne
 	if !state.Iface.matches(p) || !state.Connection || !state.Shared {
 		return fmt.Errorf("IPsec connection is not configured and owned")
 	}
+	// The Engine holds maintenance, Link and resource locks throughout this
+	// check. Menu status is only a hint: another operator or the peer may
+	// have established the CHILD after the prompt. Read current exact SA
+	// inventory immediately before any stateful VICI Initiate call.
 	if err := b.authorize(ctx); err != nil {
 		return err
 	}
-	if err := b.Writer.Initiate(ctx, p); err != nil {
-		return err
+	return connectIPsecIfSAAbsent(ctx, p, b.hasIPsecSA, b.Writer.Initiate)
+}
+
+// The same final guard is used by every canonical Connect caller, not just
+// the menu. A verified existing peer SA is a no-op; unknown/partial XFRM
+// inventory fails closed, with no IKE request.
+func connectIPsecIfSAAbsent(ctx context.Context, p Profile,
+	observe func(context.Context, Profile) (bool, error),
+	initiate func(context.Context, Profile) error) error {
+	if ctx == nil || ctx.Err() != nil || observe == nil || initiate == nil {
+		return fmt.Errorf("IPsec Connect state unavailable")
 	}
-	return nil
+	present, err := observe(ctx, p)
+	if err != nil || ctx.Err() != nil {
+		return fmt.Errorf("exact IPsec peer SA state unverified; no IKE initiation attempted")
+	}
+	if present {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("IPsec Connect interrupted before initiation")
+	}
+	return initiate(ctx, p)
 }
 
 func (b *OperationalBackend) applyEnsure(ctx context.Context, p operationalPlan) (core.Rollback, error) {

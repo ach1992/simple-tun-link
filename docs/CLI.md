@@ -43,8 +43,9 @@ discoverable.
   a fresh exact `CONNECT` confirmation. IPsec Create/Import provisions
   both peers locally but never starts IKE automatically; after import
   on the other server, use Connect IPsec on either peer, then test.
-  An already verified SA is tested read-only without reconnecting.
-  **Test connectivity** never creates an SA, changes services or silently repairs. A human Remove requires a fresh `REMOVE`
+  An already verified matching SA never triggers a second IKE initiation.
+  **Test connectivity** never creates an SA, changes services or silently
+  repairs. A human Remove requires a fresh `REMOVE`
   after preview. **Test connectivity → A Check all tunnels** uses the
   existing versioned all-Link diagnostic report, presented as a compact
   table of peer IP, Ping replies and time-local results. Unverified or
@@ -55,9 +56,12 @@ discoverable.
   and terminal bracketed-paste framing; the encoded URL remains strictly
   decoded and private, and unexpected/incomplete controls are rejected.
   The paste itself is never echoed or displayed.
-- Missing IPsec SA is reported as `ipsec_sa_not_established`, with an
-  explicit Connect action rather than a generic ping outage; missing
-  identity or unrelated diagnostic failures remain unverified.
+- A verified IPsec SA requires BOTH inbound/outbound ESP tunnel states
+  with the expected scoped XFRM ID, exact peer underlay endpoints, valid
+  SPI and a common CHILD reqid. Partial, foreign and unreadable inventory
+  remains unknown and cannot initiate IKE or authorize peer probes.
+  Verified SA absence is reported as `ipsec_sa_not_established`, with an
+  explicit Connect action rather than a generic ping outage.
 - The interface presents short, actionable errors with distinguished
   missing, unknown, foreign and partly-mutated outcomes; no automatic
   retries of uncertain host effects. Color is semantic only. Preserve

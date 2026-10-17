@@ -17,13 +17,30 @@ import (
 // readMenuURL reads exactly one line, bounded by the canonical pairing wire
 // limit. It does not read until EOF, which would block at an interactive TTY.
 func readMenuURL(reader *bufio.Reader) (string, error) {
+	return readMenuURLWithDelimiter(reader, true)
+}
+
+// For secret-bearing Setup Links, never discard an unexpected raw CR or
+// other control before the strict paste grammar can reject it. Ordinary
+// visible GRE/IPIP paste retains its original CRLF compatibility.
+func readPrivateMenuLine(reader *bufio.Reader) (string, error) {
+	return readMenuURLWithDelimiter(reader, false)
+}
+
+func readMenuURLWithDelimiter(reader *bufio.Reader, stripCR bool) (string, error) {
+	ending := func(data []byte) string {
+		if stripCR {
+			return strings.TrimSuffix(string(data), "\r")
+		}
+		return string(data)
+	}
 	data := make([]byte, 0, 256)
 	oversized := false
 	for count := 0; count < pairing.MaxLinkBytes+64*1024; count++ {
 		b, err := reader.ReadByte()
 		if err != nil {
 			if errors.Is(err, io.EOF) && len(data) != 0 && !oversized {
-				return strings.TrimSuffix(string(data), "\r"), nil
+				return ending(data), nil
 			}
 			if oversized {
 				return "", errMenuInputTooLong
@@ -34,7 +51,7 @@ func readMenuURL(reader *bufio.Reader) (string, error) {
 			if oversized {
 				return "", errMenuInputTooLong
 			}
-			return strings.TrimSuffix(string(data), "\r"), nil
+			return ending(data), nil
 		}
 		if len(data) < pairing.MaxLinkBytes {
 			data = append(data, b)
@@ -50,15 +67,29 @@ func readMenuURL(reader *bufio.Reader) (string, error) {
 // are always restored before any preview, confirmation or network apply.
 // Nonterminal streams already have no kernel terminal echo.
 func readPrivateMenuURL(input io.Reader, reader *bufio.Reader) (url string, err error) {
+	return readPrivateMenuURLWithPrompt(input, reader, nil)
+}
+
+// The first visible secret-paste prompt MUST be printed after terminal ECHO
+// has been disabled. Keeping prompt and read inside one protected operation
+// avoids a race where the user pastes immediately when the prompt appears.
+func readPrivateMenuURLWithPrompt(input io.Reader, reader *bufio.Reader, prompt func()) (url string, err error) {
+	showPrompt := func() {
+		if prompt != nil {
+			prompt()
+		}
+	}
 	file, ok := input.(*os.File)
 	if !ok {
-		return readMenuURL(reader)
+		showPrompt()
+		return readPrivateMenuLine(reader)
 	}
 	fd := int(file.Fd())
 	before, err := unix.IoctlGetTermios(fd, unix.TCGETS)
 	if errors.Is(err, unix.ENOTTY) {
 		// An ordinary redirected file/pipe does not have terminal echo.
-		return readMenuURL(reader)
+		showPrompt()
+		return readPrivateMenuLine(reader)
 	}
 	if err != nil {
 		// An unreadable/indeterminate terminal must not silently fall back
@@ -68,6 +99,12 @@ func readPrivateMenuURL(input io.Reader, reader *bufio.Reader) (url string, err 
 	masked := *before
 	masked.Lflag &^= unix.ECHO | unix.ECHONL
 	if err := unix.IoctlSetTermios(fd, unix.TCSETS, &masked); err != nil {
+		// The terminal driver may have changed flags before reporting a
+		// failure. No protected prompt has been exposed; nevertheless
+		// attempt to restore the exact original state before refusing.
+		if unix.IoctlSetTermios(fd, unix.TCSETS, before) != nil {
+			return "", errors.New("cannot protect or restore terminal input")
+		}
 		return "", errors.New("cannot protect terminal input")
 	}
 	defer func() {
@@ -76,7 +113,8 @@ func readPrivateMenuURL(input io.Reader, reader *bufio.Reader) (url string, err 
 			err = errors.New("cannot restore terminal input settings")
 		}
 	}()
-	return readMenuURL(reader)
+	showPrompt()
+	return readPrivateMenuLine(reader)
 }
 
 // normalizeMenuSetupPaste removes only exact, known clipboard presentation
@@ -84,22 +122,32 @@ func readPrivateMenuURL(input io.Reader, reader *bufio.Reader) (url string, err 
 // opaque token; never attempt to repair a partial token or strip arbitrary
 // terminal controls from secret-bearing input.
 func normalizeMenuSetupPaste(raw string) (string, bool) {
-	value := strings.TrimSpace(raw)
+	// Validate the RAW input before any trimming. Only ASCII space is an
+	// allowed presentation separator; TrimSpace would silently discard
+	// TAB, vertical tab, form feed and other unexpected controls.
 	const start, end = "\x1b[200~", "\x1b[201~"
-	if strings.HasPrefix(value, start) && strings.HasSuffix(value, end) {
-		value = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(value, start), end))
+	value := raw
+	if strings.HasPrefix(value, start) {
+		if !strings.HasSuffix(value, end) {
+			return "", false
+		}
+		value = strings.TrimSuffix(strings.TrimPrefix(value, start), end)
 	}
-	const label = "Setup link:"
-	if len(value) >= len(label) && strings.EqualFold(value[:len(label)], label) {
-		value = strings.TrimSpace(value[len(label):])
-	}
-	// An unpaired bracket marker, hidden character, or a second line
-	// is never silently interpreted as part of a sensitive URL.
 	for _, r := range value {
-		if r < 0x20 || r == 0x7f {
+		if r < 0x20 || r > 0x7e {
 			return "", false
 		}
 	}
+	value = strings.Trim(value, " ")
+	const label = "Setup link:"
+	if len(value) >= len(label) && strings.EqualFold(value[:len(label)], label) {
+		if !strings.HasPrefix(value, label) {
+			return "", false
+		}
+		value = strings.TrimLeft(value[len(label):], " ")
+	}
+	// Raw ESC outside the exact framing is never a valid data character.
+	// The canonical Setup Link decoder still checks the entire token.
 	return value, true
 }
 
@@ -159,21 +207,25 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			menuNotice(out, "WARNING", "Choose 1 for GRE/IPIP or 2 for a protected Setup Link.")
 			continue
 		}
-		// One clean screen for the paste step. Recoverable validation errors
-		// remain visible with the same prompt (without rechoosing type).
-		menuScreen(out, "Import / paste complete Setup Link")
+		// Only display a secret-bearing paste prompt AFTER ECHO is masked.
+		// The protected operation also owns terminal restoration on every
+		// path. Validation retries do not require reselecting a type.
 		for {
-			if mode == "1" {
-				fmt.Fprintln(out, "Paste the GRE/IPIP stl:// line. It is not encrypted and WILL be visible while typing.")
-			} else {
-				fmt.Fprintln(out, "Paste the secret-bearing stl:// line. Terminal input is hidden to protect peer keys.")
+			prompt := func() {
+				menuScreen(out, "Import / paste complete Setup Link")
+				if mode == "1" {
+					fmt.Fprintln(out, "Paste the GRE/IPIP stl:// line. It is not encrypted and WILL be visible while typing.")
+				} else {
+					fmt.Fprintln(out, "Paste the secret-bearing stl:// line. Terminal input is hidden to protect peer keys.")
+				}
+				fmt.Fprintln(out, "Copy the FULL setup line, then press Enter. Enter 0 alone to return.")
+				fmt.Fprint(out, "Setup link: ")
 			}
-			fmt.Fprintln(out, "Copy the FULL setup line, then press Enter. Enter 0 alone to return.")
-			fmt.Fprint(out, "Setup link: ")
 			var encoded string
 			if mode == "2" {
-				encoded, err = readPrivateMenuURL(input, reader)
+				encoded, err = readPrivateMenuURLWithPrompt(input, reader, prompt)
 			} else {
+				prompt()
 				encoded, err = readMenuURL(reader)
 			}
 			fmt.Fprintln(out)

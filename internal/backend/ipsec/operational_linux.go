@@ -135,7 +135,7 @@ func (b *OperationalBackend) inspectDevice(ctx context.Context, p Profile) (xfrm
 	return found, nil
 }
 
-// hasIPsecSA inspects only an owned Link's non-secret XFRM interface ID.
+// hasIPsecSA verifies both directions of the exact owned ESP CHILD association.
 // iproute2 state can include encryption key bytes: clear every buffer and
 // never relay daemon/kernel output through errors, logs or diagnostics.
 func (b *OperationalBackend) hasIPsecSA(ctx context.Context, p Profile) (bool, error) {
@@ -151,9 +151,9 @@ func (b *OperationalBackend) hasIPsecSA(ctx context.Context, p Profile) (bool, e
 		return false, fmt.Errorf("cannot read IPsec SA inventory")
 	}
 	defer clear(raw)
-	seen, err := xfrmInventoryUsesIDContext(ctx, raw, p.InterfaceID, "state")
+	verified, err := matchingProfileSA(ctx, raw, p)
 	if err != nil {
-		return false, fmt.Errorf("ambiguous IPsec SA inventory")
+		return false, fmt.Errorf("IPsec peer/CHILD SA inventory unverified")
 	}
-	return seen, nil
+	return verified, nil
 }

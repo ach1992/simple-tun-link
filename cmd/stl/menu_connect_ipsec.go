@@ -117,7 +117,7 @@ func menuConnectIPsecWithActions(input io.Reader, reader *bufio.Reader, out, err
 		menuNotice(out, "WARNING", "IPsec Link changed while waiting for confirmation. No initiation started.")
 		return 1
 	}
-	menuScreen(out, "IPsec / starting IKEv2")
+	menuScreen(out, "IPsec / verifying SA and connecting if needed")
 	code := actions.connect([]string{"connect-ipsec", string(selected.ID),
 		"--confirm", string(selected.ID)}, out, errOut, options)
 	if code != 0 {

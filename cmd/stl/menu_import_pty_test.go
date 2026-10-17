@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -188,5 +189,102 @@ func TestMenuRealPTYHiddenBracketedPasteIsNormalized(t *testing.T) {
 	n, e := unix.Read(int(master.Fd()), received[:])
 	if n > 0 || (e != nil && !errors.Is(e, unix.EAGAIN)) {
 		t.Fatal("protected Setup Link bytes were echoed")
+	}
+}
+
+// Paste immediately after the *visible* secret prompt, without polling ECHO.
+// This reproduces the race in which an operator's terminal sends the
+// credential as soon as it displays "Setup link:".
+func TestMenuProtectedPromptPrecedesNoUnmaskedPaste(t *testing.T) {
+	master, slave := openMenuPTY(t)
+	fd := int(slave.Fd())
+	before, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withEcho := *before
+	withEcho.Lflag |= unix.ECHO | unix.ICANON
+	if err := unix.IoctlSetTermios(fd, unix.TCSETS, &withEcho); err != nil {
+		t.Fatal(err)
+	}
+	defer unix.IoctlSetTermios(fd, unix.TCSETS, before)
+
+	const credential = "stl://2.SENSITIVE_PTY_TEST_ONLY.no-real-key"
+	type result struct {
+		raw string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		value, readErr := readPrivateMenuURLWithPrompt(slave, bufio.NewReader(slave), func() {
+			fmt.Fprint(slave, "Setup link: ")
+		})
+		done <- result{raw: value, err: readErr}
+	}()
+
+	// The test observes only the prompt, NOT the terminal ECHO bit; the
+	// secret is sent on the very next operation after the prompt arrives.
+	visible := readMenuPTYUntil(t, master, "Setup link: ")
+	if strings.Contains(visible, credential) {
+		t.Fatal("secret exposed before paste")
+	}
+	if _, err := io.WriteString(master, "\x1b[200~Setup link: "+credential+"\x1b[201~\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-done:
+		value, ok := normalizeMenuSetupPaste(got.raw)
+		if got.err != nil || !ok || value != credential {
+			t.Fatal("immediate PTY paste failed strict normalization")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("protected prompt immediate paste blocked")
+	}
+	after, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+	if err != nil || after.Lflag&unix.ECHO == 0 || after.Lflag&unix.ECHONL != withEcho.Lflag&unix.ECHONL {
+		t.Fatal("original terminal echo state was not restored")
+	}
+	// Read all output still queued after the prompt. Newline echo is
+	// harmless, but the protected Setup Link must never appear.
+	var remainder strings.Builder
+	deadline := time.Now().Add(80 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		var buf [512]byte
+		n, e := unix.Read(int(master.Fd()), buf[:])
+		if n > 0 {
+			remainder.Write(buf[:n])
+		}
+		if e != nil && !errors.Is(e, unix.EAGAIN) && !errors.Is(e, unix.EINTR) {
+			t.Fatal("unexpected terminal output read failure")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if strings.Contains(remainder.String(), credential) || strings.Contains(remainder.String(), "SENSITIVE_PTY_TEST_ONLY") {
+		t.Fatal("immediate secret paste was echoed after prompt")
+	}
+}
+
+func TestMenuProtectedPromptRestoresEchoAfterReadError(t *testing.T) {
+	_, slave := openMenuPTY(t)
+	before, err := unix.IoctlGetTermios(int(slave.Fd()), unix.TCGETS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withEcho := *before
+	withEcho.Lflag |= unix.ECHO | unix.ECHONL
+	if err := unix.IoctlSetTermios(int(slave.Fd()), unix.TCSETS, &withEcho); err != nil {
+		t.Fatal(err)
+	}
+	defer unix.IoctlSetTermios(int(slave.Fd()), unix.TCSETS, before)
+	visible := 0
+	// A nonblocking source returns EOF from the reader while the supplied
+	// input is still a real terminal; ensure the deferred reset runs.
+	_, err = readPrivateMenuURLWithPrompt(slave, bufio.NewReader(strings.NewReader("")), func() { visible++ })
+	if !errors.Is(err, io.EOF) || visible != 1 {
+		t.Fatal("protected prompt read-error path not exercised")
+	}
+	after, err := unix.IoctlGetTermios(int(slave.Fd()), unix.TCGETS)
+	if err != nil || after.Lflag&unix.ECHO == 0 || after.Lflag&unix.ECHONL == 0 {
+		t.Fatal("input-error path failed to restore terminal flags")
 	}
 }

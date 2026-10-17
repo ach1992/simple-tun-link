@@ -291,10 +291,48 @@ func TestMenuImportPasteNormalizerRejectsAmbiguousControlBytes(t *testing.T) {
 		{"\x1b[999~stl://2.example.checksum", "", false},
 		{"stl://2.example.checksum\x00", "", false},
 		{"stl://2.example.checksum\nYES", "", false},
+		{"\tstl://2.example.checksum", "", false},
+		{"\vstl://2.example.checksum", "", false},
+		{"\fstl://2.example.checksum", "", false},
+		{"\rstl://2.example.checksum", "", false},
+		{"stl://2.example.checksum\t", "", false},
+		{"stl://2.example.checksum\v", "", false},
+		{"stl://2.example.checksum\f", "", false},
+		{"stl://2.example.checksum\r", "", false},
+		{" \tstl://2.example.checksum ", "", false},
+		{"stl://2.example.checksum\u0085", "", false},
+		{"stl://2.example.checksum\u00a0", "", false},
+		{"SETUP LINK: stl://2.example.checksum", "", false},
+		{"Setup Link: stl://2.example.checksum", "", false},
+		{"setup link: stl://2.example.checksum", "", false},
+		{"Setup link:\tstl://2.example.checksum", "", false},
+		{"\x1b[200~stl://2.example.checksum\x1b[201~\t", "", false},
+		{"\t\x1b[200~stl://2.example.checksum\x1b[201~", "", false},
+		{"\x1b[200~stl://2.example.checksum\x1b[200~\x1b[201~", "", false},
+		{"  Setup link:  stl://2.example.checksum  ", "stl://2.example.checksum", true},
 	} {
 		got, ok := normalizeMenuSetupPaste(tc.raw)
 		if got != tc.expected || ok != tc.ok {
 			t.Fatalf("unexpected protected normalizer verdict: bool=%t", ok)
 		}
+	}
+}
+
+// A CR in redirected secret input is not a presentation space. The private
+// reader must pass it unchanged to the paste validator, unlike historical
+// visible GRE/IPIP CRLF support.
+func TestProtectedInputPreservesUnexpectedRawCarriageReturn(t *testing.T) {
+	const token = "stl://2.example.checksum"
+	raw := token + "\r\n"
+	private, err := readPrivateMenuURL(strings.NewReader(raw), bufio.NewReader(strings.NewReader(raw)))
+	if err != nil || private != token+"\r" {
+		t.Fatal("private input silently stripped a control byte")
+	}
+	if normalized, ok := normalizeMenuSetupPaste(private); ok || normalized != "" {
+		t.Fatal("raw carriage return accepted in protected Setup Link")
+	}
+	visible, err := readMenuURL(bufio.NewReader(strings.NewReader(raw)))
+	if err != nil || visible != token {
+		t.Fatal("visible nonsecret GRE/IPIP CRLF behavior regressed")
 	}
 }
