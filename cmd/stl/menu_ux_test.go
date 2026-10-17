@@ -15,6 +15,7 @@ import (
 
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/pairing"
 	"github.com/ach1992/simple-tun-link/internal/state"
 )
@@ -29,6 +30,20 @@ func TestIPsecMenuRejectsManualThirtyAndAcceptsThirtyOneBeforeConfirmation(t *te
 	if strings.Count(out.String(), "IPsec requires two addresses in the same /31 pair") != 1 ||
 		strings.Contains(out.String(), "Selected local   10.235.1.1/30") {
 		t.Fatal("IPsec wizard accepted or displayed the invalid /30 pair before correction")
+	}
+}
+
+func TestIPsecManualInvalidPairGuidanceUsesValidThirtyOneExample(t *testing.T) {
+	var out bytes.Buffer
+	prompts := createPrompts{reader: bufio.NewReader(strings.NewReader("10.235.1.1\n10.235.1.3\n10.235.1.2\n10.235.1.3\n")), out: &out}
+	addresses, err := askIPsecLinkAddresses(prompts, &guidedTestRunner{},
+		state.EmptySnapshot(), netip.MustParseAddr("192.0.2.20"))
+	if err != nil || addresses.Local.String() != "10.235.1.2/31" {
+		t.Fatalf("IPsec recovery failed: addresses=%+v err=%v", addresses, err)
+	}
+	if !strings.Contains(out.String(), "for example 10.235.1.2 and 10.235.1.3") ||
+		strings.Contains(out.String(), "try 10.235.1.1 and 10.235.1.2") {
+		t.Fatalf("IPsec displayed generic /30 rather than /31 help: %q", out.String())
 	}
 }
 
@@ -137,7 +152,8 @@ func TestOperatorUnifiedCreateAllPlainBackends(t *testing.T) {
 			opts := &runtimeOptions{
 				stateRoot: root, backends: []backend.Backend{chosen},
 				probeRunner: &guidedTestRunner{}, mtuManager: guidedMTUFake{},
-				createLinkID: func() (domain.LinkID, error) { return createTestID, nil },
+				moduleObserve: func(context.Context, string) linux.KernelModuleState { return linux.KernelModuleLoaded },
+				createLinkID:  func() (domain.LinkID, error) { return createTestID, nil },
 			}
 			code, out, errText := runGuidedTest(opts, "1\n"+test.choice+"\n192.0.2.20\n\nn\nYES\nn\n8\n")
 			if code != 0 || len(f.applies) != 1 {
@@ -356,7 +372,8 @@ func TestOperatorManualIPIPNativeWithoutSetupLink(t *testing.T) {
 	build := func(root string, f backend.Backend) *runtimeOptions {
 		return &runtimeOptions{stateRoot: root, backends: []backend.Backend{f},
 			probeRunner: &guidedTestRunner{}, mtuManager: guidedMTUFake{},
-			createLinkID: func() (domain.LinkID, error) { return createTestID, nil }}
+			moduleObserve: func(context.Context, string) linux.KernelModuleState { return linux.KernelModuleLoaded },
+			createLinkID:  func() (domain.LinkID, error) { return createTestID, nil }}
 	}
 	a := build(firstRoot, f1)
 	b := build(secondRoot, f2)

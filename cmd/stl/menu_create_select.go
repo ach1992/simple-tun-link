@@ -101,57 +101,75 @@ func menuCapabilitySnapshot(options *runtimeOptions) linux.CapabilityReport {
 	if err != nil {
 		return nil // unknown, never convert probe failure to "supported"
 	}
-	// A successful ip link/fou query alone does not prove that its kernel
-	// module is loaded. Independently identify on-disk, inactive modules so
-	// the selected PREPARE path can run before the Engine's Inspect stage.
 	probe := linux.KernelModuleProbe{Runner: runner, ModinfoBinary: "/sbin/modinfo"}
-	return menuRefineModuleReadiness(report, func(name string) bool {
-		return probe.AvailableButNotLoaded(ctx, name)
+	observe := probe.Observe
+	if options != nil && options.moduleObserve != nil {
+		observe = options.moduleObserve
+	}
+	return menuRefineModuleReadiness(report, func(name string) linux.KernelModuleState {
+		return observe(ctx, name)
 	})
 }
 
-// Downgrade only positively advertised readiness when independent sysfs and
-// trusted module-file observations prove a module available but inactive.
-// Unknown/failed inspections stay unknown; this never loads a module.
-func menuRefineModuleReadiness(report linux.CapabilityReport, inactive func(string) bool) linux.CapabilityReport {
-	if report == nil || inactive == nil {
+// Each selected transport is evaluated against its own independently
+// observed kernel dependencies. A successful iproute2 inventory query alone
+// cannot establish readiness when sysfs or module artifacts are uncertain.
+// This read-only refinement never loads modules or overrides Engine admission.
+func menuRefineModuleReadiness(report linux.CapabilityReport, observe func(string) linux.KernelModuleState) linux.CapabilityReport {
+	if report == nil || observe == nil {
 		return report
 	}
-	fouCaps := []linux.Capability{
-		linux.CapabilityGREFOU, linux.CapabilityGREGUE,
-		linux.CapabilityIPIPFOU, linux.CapabilityIPIPGUE,
+	states := make(map[string]linux.KernelModuleState, 3)
+	for _, module := range []string{"ip_gre", "ipip", "fou"} {
+		states[module] = observe(module)
 	}
-	if inactive("fou") {
-		for _, cap := range fouCaps {
-			if status, ok := report[cap]; ok && status.Available {
-				report[cap] = linux.CapabilityStatus{
-					ReasonCode: "fou_module_present_probe_failed",
-					Reason:     "FOU module is available on disk but not loaded",
+	for _, backend := range []domain.Backend{domain.BackendGRE, domain.BackendIPIP} {
+		for _, mode := range []domain.Encapsulation{domain.EncapNative, domain.EncapFOU, domain.EncapGUE} {
+			choice := tunnelOption{backend: backend, mode: mode}
+			capability := plainBackendCapability(backend, mode)
+			status, known := report[capability]
+			if !known || (!status.Available && !menuModulePreparationReason(status.ReasonCode)) {
+				// Preserve independently diagnosed non-module failures.
+				continue
+			}
+			baseInactive, fouInactive := false, false
+			uncertain := false
+			for _, module := range plainRequiredModules(choice) {
+				switch states[module] {
+				case linux.KernelModuleLoaded:
+				case linux.KernelModuleLoadableInactive:
+					if module == "fou" {
+						fouInactive = true
+					} else {
+						baseInactive = true
+					}
+				case linux.KernelModuleUnavailable:
+					status = linux.CapabilityStatus{ReasonCode: "kernel_module_artifact_unavailable",
+						Reason: fmt.Sprintf("Module %s has no verified loadable artifact; inspect its host configuration", module)}
+					uncertain = true
+				default:
+					status = linux.CapabilityStatus{ReasonCode: "kernel_module_observation_unconfirmed",
+						Reason: fmt.Sprintf("Module %s readiness is unknown; inspect /sys/module and modinfo", module)}
+					uncertain = true
+				}
+				if uncertain {
+					break
 				}
 			}
-		}
-	}
-	for _, base := range []struct {
-		module string
-		cap    linux.Capability
-		modes  []linux.Capability
-	}{
-		{"ip_gre", linux.CapabilityGRENative, []linux.Capability{linux.CapabilityGREFOU, linux.CapabilityGREGUE}},
-		{"ipip", linux.CapabilityIPIPNative, []linux.Capability{linux.CapabilityIPIPFOU, linux.CapabilityIPIPGUE}},
-	} {
-		if status, ok := report[base.cap]; !ok || !status.Available || !inactive(base.module) {
-			continue
-		}
-		report[base.cap] = linux.CapabilityStatus{
-			ReasonCode: "kernel_module_not_loaded",
-			Reason:     "Base GRE/IPIP module is available on disk but not loaded",
-		}
-		for _, cap := range base.modes {
-			if status, ok := report[cap]; ok && status.Available {
-				report[cap] = linux.CapabilityStatus{
-					ReasonCode: "base_link_probe_unconfirmed",
-					Reason:     "Base GRE/IPIP module is not loaded",
-				}
+			switch {
+			case uncertain:
+				report[capability] = status
+			case fouInactive:
+				report[capability] = linux.CapabilityStatus{ReasonCode: "fou_module_present_probe_failed",
+					Reason: "FOU module is available on disk but not loaded"}
+			case baseInactive:
+				report[capability] = linux.CapabilityStatus{ReasonCode: "kernel_module_not_loaded",
+					Reason: "Base GRE/IPIP module is available on disk but not loaded"}
+			case !status.Available && status.ReasonCode == "fou_module_present_probe_failed":
+				// A failed FOU query with a verified loaded module is not a
+				// request to load it again, whatever modinfo itself reported.
+				report[capability] = linux.CapabilityStatus{ReasonCode: "fou_probe_unconfirmed",
+					Reason: "FOU module is loaded but its runtime query did not succeed"}
 			}
 		}
 	}

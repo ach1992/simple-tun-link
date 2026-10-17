@@ -7,34 +7,60 @@ import (
 	"strings"
 )
 
-// KernelModuleProbe makes an independent, non-mutating observation after a
-// kernel inventory command failed. Only a module proven absent from sysfs AND
-// present as a disk artifact may be reported as "not loaded". This is not
-// proof that loading will work, nor a replacement for actual inventory.
+// KernelModuleState describes independently observed module readiness.
+// Unavailable means that the reported on-disk artifact is demonstrably not
+// loadable; it does NOT prove the kernel capability is unsupported.
+type KernelModuleState uint8
+
+const (
+	KernelModuleUnknown KernelModuleState = iota
+	KernelModuleLoaded
+	KernelModuleLoadableInactive
+	KernelModuleUnavailable
+)
+
+// KernelModuleProbe observes only allowlisted modules, without causing host
+// changes. Neither a successful iproute2 query nor a failed modinfo invocation
+// substitutes for independent sysfs and on-disk evidence.
 type KernelModuleProbe struct {
 	Runner        Runner
 	SysModuleRoot string
 	ModinfoBinary string
+	stat          func(string) (os.FileInfo, error) // test-only read-only seam
 }
 
-func (p KernelModuleProbe) AvailableButNotLoaded(ctx context.Context, module string) bool {
-	if ctx.Err() != nil || p.Runner == nil {
-		return false
+func (p KernelModuleProbe) Observe(ctx context.Context, module string) KernelModuleState {
+	if ctx == nil || ctx.Err() != nil || p.Runner == nil {
+		return KernelModuleUnknown
 	}
 	// No caller-controlled paths or unrestricted module identifier strings.
 	switch module {
 	case "fou", "ipip", "ip_gre":
 	default:
-		return false
+		return KernelModuleUnknown
+	}
+	stat := p.stat
+	if stat == nil {
+		stat = os.Stat
 	}
 	root := p.SysModuleRoot
 	if root == "" {
 		root = "/sys/module"
 	}
-	_, err := os.Stat(filepath.Join(root, module))
-	if !os.IsNotExist(err) {
-		// Present, inaccessible or unknown is not "known not loaded".
-		return false
+	rootInfo, err := stat(root)
+	if err != nil || !rootInfo.IsDir() {
+		// Missing or inaccessible sysfs is not evidence of an absent module.
+		return KernelModuleUnknown
+	}
+	info, err := stat(filepath.Join(root, module))
+	switch {
+	case err == nil:
+		if info.IsDir() {
+			return KernelModuleLoaded
+		}
+		return KernelModuleUnknown
+	case !os.IsNotExist(err):
+		return KernelModuleUnknown
 	}
 	modinfo := p.ModinfoBinary
 	if modinfo == "" {
@@ -42,19 +68,39 @@ func (p KernelModuleProbe) AvailableButNotLoaded(ctx context.Context, module str
 	}
 	result, err := p.Runner.Run(ctx, modinfo, "-n", module)
 	if err != nil || ctx.Err() != nil {
-		return false
+		return KernelModuleUnknown
 	}
 	filename := strings.TrimSpace(string(result.Stdout))
-	// Built-in metadata is not a loadable artifact. A real module must
-	// resolve to an ordinary kernel module file in the module tree.
-	if !(strings.HasPrefix(filename, "/lib/modules/") ||
-		strings.HasPrefix(filename, "/usr/lib/modules/")) ||
+	if filename == "(builtin)" {
+		// A built-in cannot be loaded with modprobe from a module file.
+		return KernelModuleUnavailable
+	}
+	// modinfo output is untrusted diagnostic data, not permission to inspect
+	// arbitrary filesystem paths or to load anything.
+	if filepath.Clean(filename) != filename ||
+		!(strings.HasPrefix(filename, "/lib/modules/") ||
+			strings.HasPrefix(filename, "/usr/lib/modules/")) ||
 		!(strings.HasSuffix(filename, ".ko") ||
 			strings.HasSuffix(filename, ".ko.xz") ||
 			strings.HasSuffix(filename, ".ko.zst") ||
 			strings.HasSuffix(filename, ".ko.gz")) {
-		return false
+		return KernelModuleUnknown
 	}
-	info, err := os.Stat(filename)
-	return err == nil && info.Mode().IsRegular()
+	info, err = stat(filename)
+	if err == nil {
+		if info.Mode().IsRegular() {
+			return KernelModuleLoadableInactive
+		}
+		return KernelModuleUnavailable
+	}
+	if os.IsNotExist(err) {
+		return KernelModuleUnavailable // reported artifact is absent
+	}
+	return KernelModuleUnknown
+}
+
+// Existing Engine/restore callers require only the positive, narrow proof
+// that a module is inactive and loadable; all other states fail closed.
+func (p KernelModuleProbe) AvailableButNotLoaded(ctx context.Context, module string) bool {
+	return p.Observe(ctx, module) == KernelModuleLoadableInactive
 }

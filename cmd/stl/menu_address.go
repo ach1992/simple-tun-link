@@ -97,8 +97,12 @@ func askLinkAddressesWithPolicy(p createPrompts, runner linux.Runner, snapshot s
 	}
 	for {
 		prompt := "Tunnel IP on THIS server (Enter=use suggested; q=back): "
-		if !ok || forceManual {
-			prompt = "Tunnel IP on THIS server (example 10.235.1.1; q=back): "
+		if !ok || forceManual || requireIPsec31 {
+			example := "10.235.1.1"
+			if requireIPsec31 {
+				example = "10.235.1.2"
+			}
+			prompt = "Tunnel IP on THIS server (example " + example + "; q=back): "
 		}
 		rawLocal, err := p.ask(prompt)
 		if err != nil {
@@ -116,10 +120,18 @@ func askLinkAddressesWithPolicy(p createPrompts, runner linux.Runner, snapshot s
 		}
 		local, parseErr := netip.ParseAddr(rawLocal)
 		if parseErr != nil || !local.Is4() || !local.IsPrivate() {
-			fmt.Fprintln(p.out, "Use a private IPv4 address such as 10.235.1.1 (not a subnet/CIDR). Try again.")
+			example := "10.235.1.1"
+			if requireIPsec31 {
+				example = "10.235.1.2"
+			}
+			fmt.Fprintln(p.out, "Use a private IPv4 address such as "+example+" (not a subnet/CIDR). Try again.")
 			continue
 		}
-		rawPeer, err := p.ask("Tunnel IP on OTHER server (example 10.235.1.2; q=back): ")
+		peerExample := "10.235.1.2"
+		if requireIPsec31 {
+			peerExample = "10.235.1.3"
+		}
+		rawPeer, err := p.ask("Tunnel IP on OTHER server (example " + peerExample + "; q=back): ")
 		if err != nil {
 			return domain.LinkAddresses{}, err
 		}
@@ -130,7 +142,11 @@ func askLinkAddressesWithPolicy(p createPrompts, runner linux.Runner, snapshot s
 		}
 		addresses, err := manualLinkAddressPrefixes(local, peer)
 		if err != nil {
-			fmt.Fprintln(p.out, err.Error())
+			if requireIPsec31 {
+				fmt.Fprintln(p.out, "IPsec needs two different private IPv4 addresses in one /31 pair (for example 10.235.1.2 and 10.235.1.3).")
+			} else {
+				fmt.Fprintln(p.out, err.Error())
+			}
 			continue
 		}
 		if requireIPsec31 && (addresses.Local.Bits() != 31 || addresses.Peer.Bits() != 31) {

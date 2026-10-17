@@ -102,8 +102,9 @@ func (guidedMTUFake) Apply(_ context.Context, _ backend.Request, _ bool,
 func guidedTestOptions(root string, host *guidedTestRunner, fake *guidedTestBackend) *runtimeOptions {
 	return &runtimeOptions{
 		stateRoot: root, probeRunner: host, backends: []backend.Backend{fake},
-		mtuManager:   guidedMTUFake{},
-		createLinkID: func() (domain.LinkID, error) { return createTestID, nil },
+		moduleObserve: func(context.Context, string) linux.KernelModuleState { return linux.KernelModuleLoaded },
+		mtuManager:    guidedMTUFake{},
+		createLinkID:  func() (domain.LinkID, error) { return createTestID, nil },
 	}
 }
 

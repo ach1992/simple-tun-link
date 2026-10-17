@@ -23,8 +23,11 @@ func TestMenuPositiveKernelQueryWithInactiveModulesOffersPrecisePrepare(t *testi
 		linux.CapabilityIPIPGUE:    {Available: true},
 		linux.CapabilityWireGuard:  {Available: true},
 	}
-	menuRefineModuleReadiness(report, func(module string) bool {
-		return module == "ipip" || module == "fou"
+	menuRefineModuleReadiness(report, func(module string) linux.KernelModuleState {
+		if module == "ipip" || module == "fou" {
+			return linux.KernelModuleLoadableInactive
+		}
+		return linux.KernelModuleLoaded
 	})
 	if !report[linux.CapabilityGRENative].Available || !report[linux.CapabilityWireGuard].Available ||
 		report[linux.CapabilityIPIPNative].Available || report[linux.CapabilityIPIPNative].ReasonCode != "kernel_module_not_loaded" ||
@@ -33,8 +36,11 @@ func TestMenuPositiveKernelQueryWithInactiveModulesOffersPrecisePrepare(t *testi
 		t.Fatalf("independent loaded-module evidence was not applied only to affected capabilities: %+v", report)
 	}
 	selected := tunnelOption{backend: domain.BackendIPIP, mode: domain.EncapFOU}
-	modules, reason := plainModuleCandidates(selected, report, func(module string) bool {
-		return module == "ipip" || module == "fou"
+	modules, reason := plainModuleCandidates(selected, report, func(module string) linux.KernelModuleState {
+		if module == "ipip" || module == "fou" {
+			return linux.KernelModuleLoadableInactive
+		}
+		return linux.KernelModuleLoaded
 	})
 	if reason != "" || !slices.Equal(modules, []string{"ipip", "fou"}) {
 		t.Fatalf("failed to offer one scoped IPIP+FOU preparation: %v, %q", modules, reason)
@@ -50,10 +56,97 @@ func TestMenuReadinessNeverTurnsUnverifiedObservationsIntoModuleProof(t *testing
 		linux.CapabilityIPIPNative: {Available: true},
 		linux.CapabilityIPIPFOU:    {Available: true},
 	}
-	menuRefineModuleReadiness(report, func(string) bool { return false })
+	menuRefineModuleReadiness(report, func(string) linux.KernelModuleState { return linux.KernelModuleUnknown })
 	if report[linux.CapabilityGRENative].ReasonCode != "permission_denied" ||
-		!report[linux.CapabilityIPIPNative].Available || !report[linux.CapabilityIPIPFOU].Available {
+		report[linux.CapabilityIPIPNative].Available || report[linux.CapabilityIPIPFOU].Available ||
+		report[linux.CapabilityIPIPNative].ReasonCode != "kernel_module_observation_unconfirmed" {
 		t.Fatalf("inconclusive module probe changed truthful capability status: %+v", report)
+	}
+}
+
+func TestMenuSixPlainModesRequireIndependentModuleEvidence(t *testing.T) {
+	for _, family := range []struct {
+		backend domain.Backend
+		base    string
+	}{
+		{domain.BackendGRE, "ip_gre"},
+		{domain.BackendIPIP, "ipip"},
+	} {
+		for _, mode := range []domain.Encapsulation{domain.EncapNative, domain.EncapFOU, domain.EncapGUE} {
+			selected := tunnelOption{backend: family.backend, mode: mode}
+			for _, tc := range []struct {
+				name        string
+				base, fou   linux.KernelModuleState
+				queryFailed bool
+			}{
+				{"loaded and query passes", linux.KernelModuleLoaded, linux.KernelModuleLoaded, false},
+				{"loaded but query fails", linux.KernelModuleLoaded, linux.KernelModuleLoaded, true},
+				{"base inactive", linux.KernelModuleLoadableInactive, linux.KernelModuleLoaded, false},
+				{"FOU inactive", linux.KernelModuleLoaded, linux.KernelModuleLoadableInactive, false},
+				{"both inactive positive query", linux.KernelModuleLoadableInactive, linux.KernelModuleLoadableInactive, false},
+				{"both inactive failed queries", linux.KernelModuleLoadableInactive, linux.KernelModuleLoadableInactive, true},
+				{"base unknown", linux.KernelModuleUnknown, linux.KernelModuleLoadableInactive, false},
+				{"FOU unknown", linux.KernelModuleLoadableInactive, linux.KernelModuleUnknown, false},
+				{"base artifact absent", linux.KernelModuleUnavailable, linux.KernelModuleLoaded, false},
+				{"FOU artifact absent", linux.KernelModuleLoaded, linux.KernelModuleUnavailable, false},
+			} {
+				t.Run(string(family.backend)+"/"+string(mode)+"/"+tc.name, func(t *testing.T) {
+					baseCap := plainBackendCapability(family.backend, domain.EncapNative)
+					modeCap := plainBackendCapability(family.backend, mode)
+					report := linux.CapabilityReport{
+						baseCap: {Available: !tc.queryFailed, ReasonCode: string(family.backend) + "_probe_unconfirmed"},
+						modeCap: {Available: !tc.queryFailed, ReasonCode: "base_link_probe_unconfirmed"},
+					}
+					if mode == domain.EncapNative {
+						report[baseCap] = linux.CapabilityStatus{Available: !tc.queryFailed,
+							ReasonCode: string(family.backend) + "_probe_unconfirmed"}
+					}
+					states := map[string]linux.KernelModuleState{
+						"ip_gre": linux.KernelModuleLoaded,
+						"ipip":   linux.KernelModuleLoaded,
+						"fou":    tc.fou,
+					}
+					states[family.base] = tc.base
+					menuRefineModuleReadiness(report, func(name string) linux.KernelModuleState {
+						return states[name]
+					})
+					want := []string{}
+					unknown := tc.base == linux.KernelModuleUnknown || tc.base == linux.KernelModuleUnavailable
+					if mode != domain.EncapNative {
+						unknown = unknown || tc.fou == linux.KernelModuleUnknown || tc.fou == linux.KernelModuleUnavailable
+					}
+					if !unknown {
+						if tc.base == linux.KernelModuleLoadableInactive {
+							want = append(want, family.base)
+						}
+						if mode != domain.EncapNative && tc.fou == linux.KernelModuleLoadableInactive {
+							want = append(want, "fou")
+						}
+					}
+					label, _ := menuCapabilityHint(report, selected)
+					expectLabel := "[Precheck OK]"
+					if unknown || (len(want) == 0 && tc.queryFailed) {
+						expectLabel = "[Check needed]"
+					} else if len(want) > 0 {
+						expectLabel = "[Needs setup]"
+					}
+					if label != expectLabel {
+						t.Fatalf("badge=%s want=%s: report=%+v", label, expectLabel, report)
+					}
+					var calls []string
+					got, reason := plainModuleCandidates(selected, report, func(name string) linux.KernelModuleState {
+						calls = append(calls, name)
+						return states[name]
+					})
+					if !slices.Equal(got, want) {
+						t.Fatalf("planned %v want %v, reason=%s", got, want, reason)
+					}
+					if (len(want) > 0 && reason != "") || (label == "[Check needed]" && reason == "") {
+						t.Fatalf("incorrect actionable preparation reason: planned=%v reason=%q", got, reason)
+					}
+				})
+			}
+		}
 	}
 }
 
@@ -132,9 +225,12 @@ func TestOnDemandKernelModulePlanningRequiresObservedFailureAndOnDiskProof(t *te
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls []string
-			got, reason := plainModuleCandidates(tc.selected, tc.report, func(module string) bool {
+			got, reason := plainModuleCandidates(tc.selected, tc.report, func(module string) linux.KernelModuleState {
 				calls = append(calls, module)
-				return tc.loadable[module]
+				if tc.loadable[module] {
+					return linux.KernelModuleLoadableInactive
+				}
+				return linux.KernelModuleLoaded
 			})
 			if !slices.Equal(got, tc.want) || (reason != "") != tc.shouldBlock {
 				t.Fatalf("modules=%v reason=%q loadable checked=%v; want=%v block=%t",

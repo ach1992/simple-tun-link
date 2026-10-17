@@ -39,20 +39,18 @@ type combinedPrepareHost struct {
 }
 
 func (h *combinedPrepareHost) report() linux.CapabilityReport {
-	// The selected base can be unavailable until its driver is loaded.
-	// For native GRE/IPIP only one module is necessary; GRE+FOU requires
-	// two independent typed observations.
-	if h.selected.backend == domain.BackendIPIP && h.selected.mode == domain.EncapFOU {
-		return linux.CapabilityReport{
-			linux.CapabilityIPIPNative: {Available: h.loaded["ipip"], ReasonCode: "ipip_probe_unconfirmed"},
-			linux.CapabilityIPIPFOU:    {Available: h.loaded["ipip"] && h.loaded["fou"], ReasonCode: "base_link_probe_unconfirmed"},
-			linux.CapabilityGRENative:  {Available: true},
-			linux.CapabilityGREFOU:     {Available: h.loaded["fou"], ReasonCode: "fou_probe_unconfirmed"},
-		}
-	}
+	gre := h.loaded["ip_gre"]
+	ipip := h.loaded["ipip"]
+	fou := h.loaded["fou"]
+	// Both successful and failed native/UDP queries are independently
+	// representable; a base-query failure never hides the FOU dependency.
 	return linux.CapabilityReport{
-		linux.CapabilityGRENative:  {Available: h.loaded["ip_gre"], ReasonCode: "ip_gre_probe_unconfirmed"},
-		linux.CapabilityIPIPNative: {Available: h.loaded["ipip"], ReasonCode: "ipip_probe_unconfirmed"},
+		linux.CapabilityGRENative:  {Available: gre, ReasonCode: "gre_probe_unconfirmed"},
+		linux.CapabilityIPIPNative: {Available: ipip, ReasonCode: "ipip_probe_unconfirmed"},
+		linux.CapabilityGREFOU:     {Available: gre && fou, ReasonCode: "base_link_probe_unconfirmed"},
+		linux.CapabilityGREGUE:     {Available: gre && fou, ReasonCode: "base_link_probe_unconfirmed"},
+		linux.CapabilityIPIPFOU:    {Available: ipip && fou, ReasonCode: "base_link_probe_unconfirmed"},
+		linux.CapabilityIPIPGUE:    {Available: ipip && fou, ReasonCode: "base_link_probe_unconfirmed"},
 	}
 }
 
@@ -99,12 +97,15 @@ func (h *combinedPrepareHost) kernelOps() menuKernelPreparationOps {
 			return h.report()
 		},
 		canPrepare: func(io.Reader, io.Writer) bool { return true },
-		loadable: func(_ context.Context, name string) bool {
+		observe: func(_ context.Context, name string) linux.KernelModuleState {
 			h.loadableCalls++
 			if h.invalidateAtLock && h.lockHeld {
-				return false
+				return linux.KernelModuleUnknown
 			}
-			return !h.loaded[name]
+			if h.loaded[name] {
+				return linux.KernelModuleLoaded
+			}
+			return linux.KernelModuleLoadableInactive
 		},
 		acquire: func(_ context.Context) (func(), error) {
 			h.lockCount++
@@ -177,25 +178,78 @@ func TestCombinedPackageAndKernelOnePrepareThenRealCreateYES(t *testing.T) {
 	}
 }
 
-func TestCombinedPackageAndKernelTwoModulesForSameIPIPFOUSelection(t *testing.T) {
+func TestCombinedPackageAndKernelSingleConsentForEachSelectedDependencyPlan(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		selected  tunnelOption
+		preloaded []string
+		want      []string
+	}{
+		{"GRE Native", tunnelOption{backend: domain.BackendGRE, mode: domain.EncapNative}, nil, []string{"ip_gre"}},
+		{"IPIP Native", tunnelOption{backend: domain.BackendIPIP, mode: domain.EncapNative}, nil, []string{"ipip"}},
+		{"GRE FOU both inactive", tunnelOption{backend: domain.BackendGRE, mode: domain.EncapFOU}, nil, []string{"ip_gre", "fou"}},
+		{"GRE GUE both inactive", tunnelOption{backend: domain.BackendGRE, mode: domain.EncapGUE}, nil, []string{"ip_gre", "fou"}},
+		{"IPIP FOU both inactive", tunnelOption{backend: domain.BackendIPIP, mode: domain.EncapFOU}, nil, []string{"ipip", "fou"}},
+		{"IPIP GUE both inactive", tunnelOption{backend: domain.BackendIPIP, mode: domain.EncapGUE}, nil, []string{"ipip", "fou"}},
+		{"GRE FOU base loaded", tunnelOption{backend: domain.BackendGRE, mode: domain.EncapFOU}, []string{"ip_gre"}, []string{"fou"}},
+		{"IPIP GUE FOU loaded", tunnelOption{backend: domain.BackendIPIP, mode: domain.EncapGUE}, []string{"fou"}, []string{"ipip"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			host := newCombinedPrepareHost(t, tc.selected)
+			for _, module := range tc.preloaded {
+				host.loaded[module] = true
+			}
+			in := strings.NewReader("PREPARE\nYES\n")
+			reader := bufio.NewReader(in)
+			var out, errs bytes.Buffer
+			approval := menuPrepareSelectedPackagesWithOps(in, reader, &out, &errs,
+				tc.selected, nil, host.packageOps())
+			ready, checked := menuPrepareSelectedModulesWithOps(in, reader, &out, nil,
+				tc.selected, host.report(), approval, host.kernelOps())
+			capability := plainBackendCapability(tc.selected.backend, tc.selected.mode)
+			if !ready || !checked[capability].Available || !slices.Equal(host.loadCalls, tc.want) ||
+				host.lockCount != 1 || host.lockHeld {
+				t.Fatalf("incomplete plan: ready=%v calls=%v lock=%d report=%v",
+					ready, host.loadCalls, host.lockCount, checked)
+			}
+			if next, err := readMenuAnswer(reader); err != nil || next != "YES" {
+				t.Fatalf("kernel preparation consumed separate Create YES: %q %v", next, err)
+			}
+			if strings.Count(out.String(), "Type PREPARE to") != 1 ||
+				!strings.Contains(out.String(), "Possible modules") ||
+				strings.Contains(out.String(), "Type PREPARE to load") {
+				t.Fatalf("selected plan did not use one package+kernel consent: %q", out.String())
+			}
+		})
+	}
+}
+
+func TestCombinedPrepareRejectsPositiveQueryWithoutPostLoadDependencyProof(t *testing.T) {
 	selected := tunnelOption{backend: domain.BackendIPIP, mode: domain.EncapFOU}
 	host := newCombinedPrepareHost(t, selected)
+	host.installed = true
+	ops := host.kernelOps()
+	originalObserve := ops.observe
+	ops.observe = func(ctx context.Context, name string) linux.KernelModuleState {
+		if host.loaded["fou"] && name == "fou" {
+			return linux.KernelModuleUnknown
+		}
+		return originalObserve(ctx, name)
+	}
 	in := strings.NewReader("PREPARE\nYES\n")
 	reader := bufio.NewReader(in)
-	var out, errs bytes.Buffer
-	approval := menuPrepareSelectedPackagesWithOps(in, reader, &out, &errs, selected, nil, host.packageOps())
-	ok, checked := menuPrepareSelectedModulesWithOps(in, reader, &out, nil, selected,
-		host.report(), approval, host.kernelOps())
-	if !ok || !checked[linux.CapabilityIPIPFOU].Available ||
-		!slices.Equal(host.loadCalls, []string{"ipip", "fou"}) || host.lockCount != 1 {
-		t.Fatalf("combined IPIP/FOU plan failed: ok=%v host=%+v report=%+v", ok, host, checked)
+	var out bytes.Buffer
+	ready, after := menuPrepareSelectedModulesWithOps(in, reader, &out, nil,
+		selected, host.report(), menuPackagePreparation{}, ops)
+	if ready || !after[linux.CapabilityIPIPFOU].Available ||
+		!slices.Equal(host.loadCalls, []string{"ipip", "fou"}) ||
+		strings.Contains(out.String(), "Continuing to tunnel setup") ||
+		!strings.Contains(out.String(), "not verified loaded") {
+		t.Fatalf("post-load observation was not authoritative: ready=%v loads=%v output=%q",
+			ready, host.loadCalls, out.String())
 	}
 	if next, err := readMenuAnswer(reader); err != nil || next != "YES" {
-		t.Fatalf("module preparation consumed independent YES: %q %v", next, err)
-	}
-	if strings.Count(out.String(), "Type PREPARE to") != 1 ||
-		!strings.Contains(out.String(), "Possible modules") {
-		t.Fatalf("IPIP/FOU plan was not single-previewed: %q", out.String())
+		t.Fatalf("a failed post-check consumed Create confirmation: %q %v", next, err)
 	}
 }
 
