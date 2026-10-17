@@ -19,10 +19,13 @@ syntax see [CLI.md](CLI.md); for changing a saved Link see the
   traffic test; not a default health check or a tunnel bandwidth cap.
 
 An ICMP reply means the particular probe reached the peer at that
-moment. An unanswered but transmitted probe means **unknown**
-(`link_probe_no_reply`), not confirmed tunnel failure. Missing
-capability/ownership yields `blocked` or `unknown`, never a silent
-success. Conditionally unadmitted IPsec reports
+moment. A completed, valid ICMP probe with no reply contributes a
+**measured lost packet** to short quality statistics; that alone does
+not prove the whole Link is down. The overall Link outcome can remain
+**unknown** (`link_probe_no_reply`). An interrupted or malformed ping
+subprocess is **not** a confirmed lost packet. Missing capability or
+ownership yields `blocked` or `unknown`, never silent success.
+Conditionally unadmitted IPsec reports
 `ipsec_runtime_not_registered` with safe next step
 `stl doctor ipsec`, without activating the daemon. On an
 actual host, the doctor also reports `provisioning_readiness` from
@@ -147,6 +150,12 @@ Read-only diagnostic output cannot silently modify them.
 
 The default quality sample is **five** ICMP probes (maximum ten)
 using an 84-byte inner IPv4 packet when MTU permits.
+Linux `ping -W 1` retains its one-second reply window; the Go process
+allows up to two seconds for each quality sample to emit a valid exit
+summary. MTU discovery retains its separate one-second per-attempt
+allowance (at most 18 attempts). Together the default subprocess
+allowance is 28 seconds inside the 35-second per-Link diagnostic
+deadline; parent cancellation never becomes fabricated packet loss.
 Reports distinguish confirmed sent-but-unanswered loss,
 measured min/mean/max RTT and arithmetic mean of absolute
 adjacent-successful RTT differences (loss breaks the pair).
@@ -167,6 +176,15 @@ The client uses `--bind` plus `--bind-dev` for the
 **actual data socket**, with no unbound retry if checks fail.
 The Engine per-Link lock prevents concurrent STL Remove/Ensure
 while the brief test runs.
+
+The throughput operation reserves the same bounded 35-second
+diagnostic preflight, five seconds for scoped preparation, three
+seconds to verify iperf3, the requested test duration plus six
+seconds of subprocess allowance, and two seconds for result
+completion: **51 seconds plus the requested duration** overall.
+This does not increase the requested TCP traffic duration or
+introduce automatic retries. A genuinely expired operation cannot
+publish late or incomplete metrics as a successful measurement.
 
 The throughput report projects bounded numeric byte/Mbit/s
 rates, test duration, Link ID/backend/protocol only. Tool
