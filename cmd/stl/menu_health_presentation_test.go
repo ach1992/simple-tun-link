@@ -388,7 +388,9 @@ func TestCompactAllTunnelTablePreservesCopyableNextAction(t *testing.T) {
 		NextStep: action,
 	}}}
 	menuAllCheckTable(slave, report)
-	got := readMenuPTYUntil(t, master, action)
+	// Wait for the entire CRLF-delimited command, not just its last byte:
+	// PTYs may deliver the trailing newline in a separate read chunk.
+	got := readMenuPTYUntil(t, master, "\r\n"+action+"\r\n")
 	if !strings.Contains(got, "\r\n"+action+"\r\n") {
 		t.Fatalf("copyable action was split or decorated: %q", got)
 	}

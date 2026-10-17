@@ -13,6 +13,10 @@ const (
 	DefaultQualitySamples = 5
 	MaxQualitySamples     = 10
 	normalProbePacketSize = 84 // IPv4 20 + ICMP 8 + default ICMP echo data 56.
+	// iputils ping -W 1 needs additional process-exit time to report an
+	// unanswered echo. A quality sample must not turn that packet loss into
+	// probe_error merely because the ping process outlived its reply window.
+	qualityProbeAttemptTimeout = 2 * time.Second
 )
 
 type QualityStatus string
@@ -93,7 +97,7 @@ func MeasureQuality(ctx context.Context, link domain.Link, selectedMTU, count in
 		if err := ctx.Err(); err != nil {
 			return QualityResult{}, err
 		}
-		probeCtx, cancel := context.WithTimeout(ctx, probeAttemptTimeout)
+		probeCtx, cancel := context.WithTimeout(ctx, qualityProbeAttemptTimeout)
 		sample, callErr := prober.Probe(probeCtx, link, packetSize)
 		exceeded := errors.Is(probeCtx.Err(), context.DeadlineExceeded)
 		cancel()
@@ -113,7 +117,7 @@ func MeasureQuality(ctx context.Context, link domain.Link, selectedMTU, count in
 		}
 		if sample.Outcome == ProbeUnsupported || (sample.Outcome != ProbeReply &&
 			sample.Outcome != ProbeTimeout && sample.Outcome != ProbeTooLarge) ||
-			(sample.Outcome == ProbeReply && (sample.RTT < 0 || sample.RTT > probeAttemptTimeout)) {
+			(sample.Outcome == ProbeReply && (sample.RTT < 0 || sample.RTT > qualityProbeAttemptTimeout)) {
 			if out.PacketsSent != 0 {
 				out.Status = QualityPartial
 			}

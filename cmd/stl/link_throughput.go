@@ -26,7 +26,26 @@ import (
 const (
 	defaultThroughputSeconds = 3
 	maxThroughputSeconds     = 10
+
+	throughputVersionBudget     = 3 * time.Second
+	throughputBenchmarkOverhead = 6 * time.Second
+	// Allow for the installation/Link locks, two state snapshots and exact
+	// route verification outside the already bounded diagnostic phase.
+	throughputPreparationReserve = 5 * time.Second
+	// Parsing and reporting must not race the parent immediately after a
+	// benchmark that finishes within its own bounded subprocess allowance.
+	throughputCompletionReserve = 2 * time.Second
 )
+
+// A slow but in-budget 35-second diagnostic must not consume the version
+// check or the explicitly requested benchmark's execution allowance.
+// This increases only the outer cancellation budget: no extra probes,
+// retries, iperf3 traffic or on-wire duration are authorized.
+func throughputOperationBudget(seconds int) time.Duration {
+	return diagnoseOperationTimeout + throughputPreparationReserve +
+		throughputVersionBudget + time.Duration(seconds)*time.Second +
+		throughputBenchmarkOverhead + throughputCompletionReserve
+}
 
 // iperf3 3.10 exposed --bind-dev but could leave TCP *data* sockets
 // unbound (esnet/iperf #1153, fixed in 3.11). A successful run on
@@ -173,12 +192,18 @@ func parseThroughputOutput(raw []byte, id domain.LinkID, backend domain.Backend,
 // route-to-peer ownership, and a TCP client *bound to the Link device*.
 // It neither configures a server nor permits arbitrary target/port choices.
 func linkThroughputCommand(args []string, out, errOut io.Writer, opts *runtimeOptions) int {
+	return linkThroughputWithContext(context.Background(), args, out, errOut, opts)
+}
+
+// This context seam allows deterministic cancellation tests of the actual
+// opt-in command. Production always uses its own bounded background context.
+func linkThroughputWithContext(parent context.Context, args []string, out, errOut io.Writer, opts *runtimeOptions) int {
 	id, seconds, asJSON, ok := parseThroughputArgs(args)
 	if !ok {
 		return readCommandError(out, errOut, asJSON, stlerr.CodeInvalid, "link_throughput",
 			"usage: stl link throughput <link-id> --confirm <link-id> [--seconds <1..10>] [--json]")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second+time.Duration(seconds)*time.Second)
+	ctx, cancel := context.WithTimeout(parent, throughputOperationBudget(seconds))
 	defer cancel()
 
 	root := state.DefaultRoot
@@ -235,8 +260,14 @@ func linkThroughputCommand(args []string, out, errOut io.Writer, opts *runtimeOp
 	if runner == nil {
 		runner = linux.ExecRunner{}
 	}
-	measurement, err := inspectLinkDiagnostic(ctx, record.Desired, *opts, 0)
-	if err != nil || ctx.Err() != nil {
+	// A completed but unexpectedly slow inspection must not quietly consume
+	// the separate iperf3 budget. Keep the same 35-second per-Link limit
+	// enforced by standalone and all-Link read-only diagnostics.
+	diagnoseCtx, endDiagnose := context.WithTimeout(ctx, diagnoseOperationTimeout)
+	measurement, err := inspectLinkDiagnostic(diagnoseCtx, record.Desired, *opts, 0)
+	diagnoseErr := diagnoseCtx.Err()
+	endDiagnose()
+	if err != nil || diagnoseErr != nil || ctx.Err() != nil {
 		return throughputFailure(out, errOut, asJSON, stlerr.CodeInspect,
 			"throughput_identity_unverified", "owned Link identity or quality observation unavailable",
 			"Run link diagnose and resolve ownership/reachability problems before opting into throughput.")
@@ -273,12 +304,12 @@ func linkThroughputCommand(args []string, out, errOut io.Writer, opts *runtimeOp
 
 	tool := opts.throughputRunner
 	if tool == nil {
-		tool = linux.ExecRunner{Timeout: time.Duration(seconds+6) * time.Second}
+		tool = linux.ExecRunner{Timeout: time.Duration(seconds)*time.Second + throughputBenchmarkOverhead}
 	}
 	// A local, bounded version inspection MUST complete before the first
 	// iperf3 client socket is opened. Older 3.x versions could bind the
 	// control socket but silently leave the TCP data socket unbound.
-	versionCtx, versionCancel := context.WithTimeout(ctx, 3*time.Second)
+	versionCtx, versionCancel := context.WithTimeout(ctx, throughputVersionBudget)
 	versionOutput, versionErr := tool.RunBounded(versionCtx,
 		linux.CaptureLimits{Stdout: 2048, Stderr: 1024}, "iperf3", "--version")
 	versionTimedOut := versionCtx.Err() != nil
@@ -286,6 +317,11 @@ func linkThroughputCommand(args []string, out, errOut io.Writer, opts *runtimeOp
 	compatible := versionErr == nil && !versionTimedOut && knownSafeIperf3TCPDeviceBinding(versionOutput.Stdout)
 	clear(versionOutput.Stdout)
 	clear(versionOutput.Stderr)
+	if ctx.Err() != nil {
+		return throughputFailure(out, errOut, asJSON, stlerr.CodeInspect,
+			"throughput_interrupted", "operation expired during throughput tool verification",
+			"Recheck the Link and explicitly retry when host resources are available; no benchmark was started.")
+	}
 	if !compatible {
 		code, reason := stlerr.CodeUnsupported, "throughput_tool_incompatible"
 		next := "Use iperf3 >= 3.11 with reliable TCP --bind-dev support; do not use older or unverified builds."
@@ -296,7 +332,7 @@ func linkThroughputCommand(args []string, out, errOut io.Writer, opts *runtimeOp
 		return throughputFailure(out, errOut, asJSON, code, reason,
 			"cannot verify local iperf3 TCP data-socket binding capability", next)
 	}
-	benchCtx, finish := context.WithTimeout(ctx, time.Duration(seconds+6)*time.Second)
+	benchCtx, finish := context.WithTimeout(ctx, time.Duration(seconds)*time.Second+throughputBenchmarkOverhead)
 	defer finish()
 	// The explicit Linux --bind-dev form requests SO_BINDTODEVICE on
 	// control AND data TCP sockets in the known-safe version family.
@@ -307,6 +343,11 @@ func linkThroughputCommand(args []string, out, errOut io.Writer, opts *runtimeOp
 		"--bind-dev", iface,
 		"--port", "5201", "--time", strconv.Itoa(seconds),
 		"--connect-timeout", "2000", "--json")
+	if ctx.Err() != nil {
+		return throughputFailure(out, errOut, asJSON, stlerr.CodeInspect,
+			"throughput_interrupted", "operation expired before the benchmark could be verified",
+			"Recheck Link state and explicitly retry when host resources are available; no complete measurement was recorded.")
+	}
 	if err != nil || benchCtx.Err() != nil {
 		code, reason := stlerr.CodeInspect, "throughput_server_unavailable"
 		if errors.Is(err, exec.ErrNotFound) {
@@ -317,6 +358,11 @@ func linkThroughputCommand(args []string, out, errOut io.Writer, opts *runtimeOp
 			"Install compatible iperf3 and have the authorized peer explicitly listen on its Link Address TCP/5201; STL never starts a server.")
 	}
 	projected, err := parseThroughputOutput(result.Stdout, id, record.Desired.Backend, seconds)
+	if ctx.Err() != nil {
+		return throughputFailure(out, errOut, asJSON, stlerr.CodeInspect,
+			"throughput_interrupted", "operation expired before throughput results were verified",
+			"Recheck the Link and explicitly retry; the expired observation was not published.")
+	}
 	if err != nil {
 		return throughputFailure(out, errOut, asJSON, stlerr.CodeInspect,
 			"throughput_result_unverified", "no complete numeric throughput measurement",
