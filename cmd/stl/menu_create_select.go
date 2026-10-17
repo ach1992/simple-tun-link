@@ -96,9 +96,64 @@ type tunnelOption struct {
 func menuCapabilitySnapshot(options *runtimeOptions) linux.CapabilityReport {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	report, err := (linux.CapabilityProbe{Runner: createRunner(options)}).Probe(ctx)
+	runner := createRunner(options)
+	report, err := (linux.CapabilityProbe{Runner: runner}).Probe(ctx)
 	if err != nil {
 		return nil // unknown, never convert probe failure to "supported"
+	}
+	// A successful ip link/fou query alone does not prove that its kernel
+	// module is loaded. Independently identify on-disk, inactive modules so
+	// the selected PREPARE path can run before the Engine's Inspect stage.
+	probe := linux.KernelModuleProbe{Runner: runner, ModinfoBinary: "/sbin/modinfo"}
+	return menuRefineModuleReadiness(report, func(name string) bool {
+		return probe.AvailableButNotLoaded(ctx, name)
+	})
+}
+
+// Downgrade only positively advertised readiness when independent sysfs and
+// trusted module-file observations prove a module available but inactive.
+// Unknown/failed inspections stay unknown; this never loads a module.
+func menuRefineModuleReadiness(report linux.CapabilityReport, inactive func(string) bool) linux.CapabilityReport {
+	if report == nil || inactive == nil {
+		return report
+	}
+	fouCaps := []linux.Capability{
+		linux.CapabilityGREFOU, linux.CapabilityGREGUE,
+		linux.CapabilityIPIPFOU, linux.CapabilityIPIPGUE,
+	}
+	if inactive("fou") {
+		for _, cap := range fouCaps {
+			if status, ok := report[cap]; ok && status.Available {
+				report[cap] = linux.CapabilityStatus{
+					ReasonCode: "fou_module_present_probe_failed",
+					Reason:     "FOU module is available on disk but not loaded",
+				}
+			}
+		}
+	}
+	for _, base := range []struct {
+		module string
+		cap    linux.Capability
+		modes  []linux.Capability
+	}{
+		{"ip_gre", linux.CapabilityGRENative, []linux.Capability{linux.CapabilityGREFOU, linux.CapabilityGREGUE}},
+		{"ipip", linux.CapabilityIPIPNative, []linux.Capability{linux.CapabilityIPIPFOU, linux.CapabilityIPIPGUE}},
+	} {
+		if status, ok := report[base.cap]; !ok || !status.Available || !inactive(base.module) {
+			continue
+		}
+		report[base.cap] = linux.CapabilityStatus{
+			ReasonCode: "kernel_module_not_loaded",
+			Reason:     "Base GRE/IPIP module is available on disk but not loaded",
+		}
+		for _, cap := range base.modes {
+			if status, ok := report[cap]; ok && status.Available {
+				report[cap] = linux.CapabilityStatus{
+					ReasonCode: "base_link_probe_unconfirmed",
+					Reason:     "Base GRE/IPIP module is not loaded",
+				}
+			}
+		}
 	}
 	return report
 }
@@ -119,7 +174,7 @@ func menuCapabilityHint(report linux.CapabilityReport, choice tunnelOption) (str
 		return "[Check needed]", menuBlue
 	}
 	if !status.Available {
-		if status.ReasonCode == "fou_module_present_probe_failed" {
+		if status.ReasonCode == "fou_module_present_probe_failed" || status.ReasonCode == "kernel_module_not_loaded" {
 			return "[Needs setup]", menuYellow
 		}
 		// A failed read-only query is not proof that a kernel or provider

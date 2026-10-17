@@ -73,7 +73,7 @@ func menuCreateIPsec(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		fmt.Fprintln(errOut, "Cannot inspect existing saved tunnels. No changes applied.")
 		return 1
 	}
-	addresses, err := askLinkAddresses(p, runner, snapshot, peer, false)
+	addresses, err := askIPsecLinkAddresses(p, runner, snapshot, peer)
 	if err != nil {
 		return p.failed(err)
 	}

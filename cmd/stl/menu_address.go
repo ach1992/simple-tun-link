@@ -62,6 +62,17 @@ func checkManualLinkSubnet(ctx context.Context, runner linux.Runner, reservation
 // choices. Failures are reparable without restarting the wizard. The Engine
 // still performs authoritative locked re-inspection at actual apply.
 func askLinkAddresses(p createPrompts, runner linux.Runner, snapshot state.Snapshot, underlayPeer netip.Addr, forceManual bool) (domain.LinkAddresses, error) {
+	return askLinkAddressesWithPolicy(p, runner, snapshot, underlayPeer, forceManual, false)
+}
+
+// IPsec's canonical IKE/XFRM profile accepts only matched /31 selectors.
+// Reject otherwise valid /30 manual pairs while still inside the address
+// wizard, before confirmation or any protected credential/host mutation.
+func askIPsecLinkAddresses(p createPrompts, runner linux.Runner, snapshot state.Snapshot, underlayPeer netip.Addr) (domain.LinkAddresses, error) {
+	return askLinkAddressesWithPolicy(p, runner, snapshot, underlayPeer, false, true)
+}
+
+func askLinkAddressesWithPolicy(p createPrompts, runner linux.Runner, snapshot state.Snapshot, underlayPeer netip.Addr, forceManual, requireIPsec31 bool) (domain.LinkAddresses, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	proposals, err := domain.Private31Candidates()
@@ -120,6 +131,10 @@ func askLinkAddresses(p createPrompts, runner linux.Runner, snapshot state.Snaps
 		addresses, err := manualLinkAddressPrefixes(local, peer)
 		if err != nil {
 			fmt.Fprintln(p.out, err.Error())
+			continue
+		}
+		if requireIPsec31 && (addresses.Local.Bits() != 31 || addresses.Peer.Bits() != 31) {
+			fmt.Fprintln(p.out, "IPsec requires two addresses in the same /31 pair (for example 10.235.1.2 and 10.235.1.3); choose another pair.")
 			continue
 		}
 		checkCtx, checkCancel := context.WithTimeout(context.Background(), 20*time.Second)

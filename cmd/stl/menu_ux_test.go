@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -17,6 +18,29 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/pairing"
 	"github.com/ach1992/simple-tun-link/internal/state"
 )
+
+func TestIPsecMenuRejectsManualThirtyAndAcceptsThirtyOneBeforeConfirmation(t *testing.T) {
+	var out bytes.Buffer
+	prompts := createPrompts{reader: bufio.NewReader(strings.NewReader("10.235.1.1\n10.235.1.2\n10.235.1.2\n10.235.1.3\n")), out: &out}
+	addresses, err := askIPsecLinkAddresses(prompts, &guidedTestRunner{}, state.EmptySnapshot(), netip.MustParseAddr("192.0.2.20"))
+	if err != nil || addresses.Local.String() != "10.235.1.2/31" || addresses.Peer.String() != "10.235.1.3/31" {
+		t.Fatalf("IPsec address wizard did not reject /30 and accept /31: local=%s peer=%s error=%v", addresses.Local, addresses.Peer, err)
+	}
+	if strings.Count(out.String(), "IPsec requires two addresses in the same /31 pair") != 1 ||
+		strings.Contains(out.String(), "Selected local   10.235.1.1/30") {
+		t.Fatal("IPsec wizard accepted or displayed the invalid /30 pair before correction")
+	}
+}
+
+func TestIPsecMenuAutomaticPairRemainsThirtyOne(t *testing.T) {
+	var out bytes.Buffer
+	prompts := createPrompts{reader: bufio.NewReader(strings.NewReader("\n")), out: &out}
+	addresses, err := askIPsecLinkAddresses(prompts, &guidedTestRunner{}, state.EmptySnapshot(), netip.MustParseAddr("192.0.2.20"))
+	if err != nil || addresses.Local.Bits() != 31 || addresses.Peer.Bits() != 31 ||
+		addresses.Local.Masked() != addresses.Peer.Masked() {
+		t.Fatalf("IPsec default should remain the canonical matched /31: %+v err=%v", addresses, err)
+	}
+}
 
 func TestOperatorManualAdjacentPrivateAddressesAcceptThirtyAndThirtyOne(t *testing.T) {
 	valid := []struct {

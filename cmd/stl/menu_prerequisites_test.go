@@ -13,6 +13,50 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/linux"
 )
 
+func TestMenuPositiveKernelQueryWithInactiveModulesOffersPrecisePrepare(t *testing.T) {
+	report := linux.CapabilityReport{
+		linux.CapabilityGRENative:  {Available: true},
+		linux.CapabilityGREFOU:     {Available: true},
+		linux.CapabilityGREGUE:     {Available: true},
+		linux.CapabilityIPIPNative: {Available: true},
+		linux.CapabilityIPIPFOU:    {Available: true},
+		linux.CapabilityIPIPGUE:    {Available: true},
+		linux.CapabilityWireGuard:  {Available: true},
+	}
+	menuRefineModuleReadiness(report, func(module string) bool {
+		return module == "ipip" || module == "fou"
+	})
+	if !report[linux.CapabilityGRENative].Available || !report[linux.CapabilityWireGuard].Available ||
+		report[linux.CapabilityIPIPNative].Available || report[linux.CapabilityIPIPNative].ReasonCode != "kernel_module_not_loaded" ||
+		report[linux.CapabilityGREFOU].Available || report[linux.CapabilityIPIPFOU].Available ||
+		report[linux.CapabilityIPIPFOU].ReasonCode != "fou_module_present_probe_failed" {
+		t.Fatalf("independent loaded-module evidence was not applied only to affected capabilities: %+v", report)
+	}
+	selected := tunnelOption{backend: domain.BackendIPIP, mode: domain.EncapFOU}
+	modules, reason := plainModuleCandidates(selected, report, func(module string) bool {
+		return module == "ipip" || module == "fou"
+	})
+	if reason != "" || !slices.Equal(modules, []string{"ipip", "fou"}) {
+		t.Fatalf("failed to offer one scoped IPIP+FOU preparation: %v, %q", modules, reason)
+	}
+	if label, _ := menuCapabilityHint(report, tunnelOption{backend: domain.BackendIPIP, mode: domain.EncapNative}); label != "[Needs setup]" {
+		t.Fatalf("not-loaded module still shown as ready: %q", label)
+	}
+}
+
+func TestMenuReadinessNeverTurnsUnverifiedObservationsIntoModuleProof(t *testing.T) {
+	report := linux.CapabilityReport{
+		linux.CapabilityGRENative:  {ReasonCode: "permission_denied"},
+		linux.CapabilityIPIPNative: {Available: true},
+		linux.CapabilityIPIPFOU:    {Available: true},
+	}
+	menuRefineModuleReadiness(report, func(string) bool { return false })
+	if report[linux.CapabilityGRENative].ReasonCode != "permission_denied" ||
+		!report[linux.CapabilityIPIPNative].Available || !report[linux.CapabilityIPIPFOU].Available {
+		t.Fatalf("inconclusive module probe changed truthful capability status: %+v", report)
+	}
+}
+
 func TestOnDemandKernelModuleTargetsUseOnlySelectedBackend(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
