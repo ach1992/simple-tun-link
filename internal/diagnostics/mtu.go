@@ -18,7 +18,10 @@ const (
 	MaxIPv4MTU          = 65535
 	DefaultFallbackMTU  = 1280
 	MaxMTUProbeAttempts = 18
-	probeAttemptTimeout = time.Second
+	// iputils ping -W 1 may take the full second to report an unanswered
+	// echo. Give the process time to exit and emit its statistics rather
+	// than misclassifying ordinary packet loss as an interrupted probe.
+	probeAttemptTimeout = 2 * time.Second
 )
 
 // ProbeOutcome distinguishes an observed reply, an actual fragmentation/
