@@ -59,6 +59,14 @@ if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor* ]]; then
       mkdir -p /etc/swanctl/conf.d
       printf 'foreign connection; must not be adopted\n' >/etc/swanctl/conf.d/foreign.conf
       ;;
+    existing_vendor_upholds)
+      # An UpheldBy edge can restart a consented-to-STOP distro service.
+      # The foreign dependency is not owned by STL.
+      edge=/etc/systemd/system/stl-disposable.target.upholds
+      mkdir -p "$edge"
+      ln -s /usr/lib/systemd/system/strongswan.service "$edge/strongswan.service"
+      systemctl --system daemon-reload || fail cannot_reload_upheld_vendor_fixture
+      ;;
     existing_vendor_foreign_alias)
       mkdir -p /run/systemd/system.attached/strongswan-swanctl.service.d
       printf '[Service]\nExecStartPre=/usr/bin/false\n' \
@@ -331,6 +339,33 @@ case "${STL_IPSEC_PREPARE_CASE:-}" in
     [[ ! -e /tmp/foreign-service-executed &&
        ! -e /usr/sbin/charon-systemd ]] || fail foreign_hook_or_package_touched
     echo "IPSEC_FOREIGN_PREEXISTING_DROPIN_DENIED_BEFORE_APT=PASS"
+    exit 0
+    ;;
+  foreign_upholds|foreign_upholds_alias)
+    # Reject a dormant .upholds dependency before installing packages,
+    # including aliases whose filename differs from the selected unit.
+    edge=/etc/systemd/system/stl-disposable.target.upholds
+    [[ ! -e $edge && ! -L $edge ]] || fail unexpected_upheld_fixture
+    mkdir -p "$edge"
+    target=charon-systemd.service
+    if [[ $STL_IPSEC_PREPARE_CASE == foreign_upholds_alias ]]; then
+      target=stl-disposable-charon-alias.service
+    fi
+    ln -s charon-systemd.service "$edge/$target"
+    systemctl --system daemon-reload || fail cannot_reload_upheld_fixture
+    if bash /mnt/stl-install.sh prepare --backends native,ipsec \
+       --expected-missing "$missing" --expected-apt-plan "$apt_plan" \
+       >/tmp/stl-upheld-stdout 2>/tmp/stl-upheld-stderr; then
+      fail foreign_upheld_identity_accepted
+    fi
+    grep -q 'service boot edge' /tmp/stl-upheld-stderr ||
+      fail foreign_upheld_identity_rejected_for_unrelated_reason
+    [[ ! -e /usr/sbin/charon-systemd && ! -e /var/lib/simple-tun-link/ipsec ]] ||
+      fail foreign_upheld_identity_allowed_apt_or_private_publication
+    [[ $(sha256sum /usr/local/bin/stl | awk '{print $1}') == "$original" &&
+       $(sha256sum /usr/local/lib/simple-tun-link/install-record | awk '{print $1}') == "$record" ]] ||
+      fail foreign_upheld_identity_replaced_installed_binary
+    echo "IPSEC_FOREIGN_UPHOLDS_DENIED_BEFORE_APT=$STL_IPSEC_PREPARE_CASE:PASS"
     exit 0
     ;;
   foreign_alias|foreign_prefix|foreign_attached|foreign_transient)

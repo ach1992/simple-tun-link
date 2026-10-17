@@ -19,7 +19,7 @@ func TestIsolatedNativeMissingVendorFixture(t *testing.T) {
 		t.Skip("not a separately approved isolated systemd guest")
 	}
 	kind := os.Getenv("STL_IPSEC_VENDOR_MISSING_CASE")
-	if kind != "clean" && kind != "prefix" && kind != "alias" && kind != "sysv" {
+	if kind != "clean" && kind != "prefix" && kind != "alias" && kind != "sysv" && kind != "upholds" {
 		t.Skip("no recognized vendor-missing fixture")
 	}
 	if os.Geteuid() != 0 {

@@ -13,8 +13,9 @@ set -Eeuo pipefail
 prefix=/run/systemd/system/charon-.service.d
 alias=/run/systemd/system/stl-disposable-charon-alias.service
 legacy=/etc/init.d/charon-systemd
+upholds=/run/systemd/system/stl-disposable.target.upholds
 [[ ! -e $prefix && ! -L $prefix && ! -e $alias && ! -L $alias &&
-   ! -e $legacy && ! -L $legacy ]] || {
+   ! -e $legacy && ! -L $legacy && ! -e $upholds && ! -L $upholds ]] || {
   echo 'REFUSED_EXISTING_FIXTURE_IDENTITY' >&2
   exit 2
 }
@@ -27,8 +28,8 @@ verify() {
 }
 cleanup() {
   # Only these exact task-created fixtures, inside an ephemeral guest.
-  /usr/bin/rm -f -- "$prefix/foreign.conf" "$alias" "$legacy"
-  /usr/bin/rmdir -- "$prefix" 2>/dev/null || :
+  /usr/bin/rm -f -- "$prefix/foreign.conf" "$alias" "$legacy" "$upholds/charon-systemd.service"
+  /usr/bin/rmdir -- "$prefix" "$upholds" 2>/dev/null || :
   reload || :
 }
 trap cleanup EXIT
@@ -50,6 +51,17 @@ verify alias
 reload
 verify clean
 
+# A dormant UpheldBy= edge must block future-reload admission even
+# while systemctl reports the vendor service not-found.
+/usr/bin/mkdir -m 0755 "$upholds"
+/usr/bin/ln -s /usr/lib/systemd/system/charon-systemd.service "$upholds/charon-systemd.service"
+reload
+verify upholds
+/usr/bin/rm -f -- "$upholds/charon-systemd.service"
+/usr/bin/rmdir -- "$upholds"
+reload
+verify clean
+
 /usr/bin/printf '%s\n' '#!/bin/sh' '### BEGIN INIT INFO' \
   '# Provides: charon-systemd' '# Required-Start: $remote_fs' \
   '# Required-Stop: $remote_fs' '# Default-Start: 2 3 4 5' \
@@ -62,4 +74,4 @@ verify sysv
 /usr/bin/rm -f -- "$legacy"
 reload
 verify clean
-echo 'NATIVE_VENDOR_RELOADED_PREFIX_ALIAS_SYSV_GENERATOR=PASS'
+echo 'NATIVE_VENDOR_RELOADED_PREFIX_ALIAS_UPHOLDS_SYSV_GENERATOR=PASS'

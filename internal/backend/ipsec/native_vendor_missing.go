@@ -116,6 +116,29 @@ func nativeMissingVendorAliasesAbsent(dir string, identities map[string]bool) bo
 	return true
 }
 
+// Systemd's installed dependency edges live in three directory families:
+// WantedBy=, RequiredBy= and (since v249) UpheldBy=. Share this enumeration
+// between missing-vendor admission and separately consented vendor STOP,
+// so a new dependency type cannot be covered by only one safety gate.
+// An uninspectable or symlinked directory is not proof of a safe edge.
+func vendorSystemdBootEdgeDirs(base string) ([]string, error) {
+	var result []string
+	for _, suffix := range []string{"*.wants", "*.requires", "*.upholds"} {
+		dirs, err := filepath.Glob(filepath.Join(base, suffix))
+		if err != nil || len(dirs) > 128 {
+			return nil, errors.New("systemd dependency inventory unavailable")
+		}
+		for _, edge := range dirs {
+			info, err := os.Lstat(edge)
+			if err != nil || !info.IsDir() {
+				return nil, errors.New("systemd dependency directory identity unverified")
+			}
+			result = append(result, edge)
+		}
+	}
+	return result, nil
+}
+
 func nativeMissingVendorUnitFiles(root, name string) bool {
 	if !nativeKnownVendorUnit(name) {
 		return false
@@ -148,24 +171,18 @@ func nativeMissingVendorUnitFiles(root, name string) bool {
 		if !nativeMissingVendorAliasesAbsent(base, identity) {
 			return false
 		}
-		for _, suffix := range []string{"*.wants", "*.requires"} {
-			edges, err := filepath.Glob(filepath.Join(base, suffix))
-			if err != nil || len(edges) > 128 {
-				return false
+		edges, err := vendorSystemdBootEdgeDirs(base)
+		if err != nil {
+			return false
+		}
+		for _, edge := range edges {
+			for id := range identity {
+				if _, err := os.Lstat(filepath.Join(edge, id)); !errors.Is(err, os.ErrNotExist) {
+					return false
+				}
 			}
-			for _, edge := range edges {
-				info, err := os.Lstat(edge)
-				if err != nil || !info.IsDir() {
-					return false
-				}
-				for id := range identity {
-					if _, err := os.Lstat(filepath.Join(edge, id)); !errors.Is(err, os.ErrNotExist) {
-						return false
-					}
-				}
-				if !nativeMissingVendorAliasesAbsent(edge, identity) {
-					return false
-				}
+			if !nativeMissingVendorAliasesAbsent(edge, identity) {
+				return false
 			}
 		}
 	}

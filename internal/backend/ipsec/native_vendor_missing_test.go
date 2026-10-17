@@ -68,6 +68,7 @@ func TestNativeMissingVendorDiskIdentityRejectsAnyOverride(t *testing.T) {
 				{filepath.Join(root, "run/systemd/system.attached", unit)},
 				{filepath.Join(root, "etc/systemd/system", "multi-user.target.wants", unit)},
 				{filepath.Join(root, "run/systemd/system", "stl.target.requires", unit)},
+				{filepath.Join(root, "etc/systemd/system", "stl.target.upholds", unit)},
 				{filepath.Join(root, "etc/systemd/system", unit+".d")},
 				{filepath.Join(root, "etc/systemd/system", "service.d")},
 			} {
@@ -151,6 +152,7 @@ func TestNativeMissingVendorIdentityAliasesAndDropInInheritance(t *testing.T) {
 		{"official vendor alias boot edge", "strongswan.service", "etc/systemd/system/multi-user.target.wants/strongswan-swanctl.service", false},
 		{"arbitrary dormant service alias", "strongswan.service", "run/systemd/system/stl-foreign-vendor-alias.service", false},
 		{"arbitrary boot edge alias", "strongswan.service", "etc/systemd/system/multi-user.target.wants/stl-foreign-vendor-alias.service", false},
+		{"upheld alias", "strongswan.service", "etc/systemd/system/stl.target.upholds/stl-foreign-vendor-alias.service", false},
 		{"official SysV alias", "", "etc/init.d/strongswan-swanctl", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -205,6 +207,19 @@ func TestNativeMissingVendorIdentityAliasesAndDropInInheritance(t *testing.T) {
 	}
 	if !nativeMissingVendorUnitFiles(root, "charon-systemd.service") {
 		t.Fatal("empty boot-edge cleanup did not restore positive absence")
+	}
+	upholdsLink := filepath.Join(root, "etc/systemd/system/foreign.target.upholds")
+	if err := os.Symlink(filepath.Join(root, "run"), upholdsLink); err != nil {
+		t.Fatal(err)
+	}
+	if nativeMissingVendorUnitFiles(root, "charon-systemd.service") {
+		t.Fatal("symlinked systemd .upholds directory was accepted as vacant")
+	}
+	if err := os.Remove(upholdsLink); err != nil {
+		t.Fatal(err)
+	}
+	if !nativeMissingVendorUnitFiles(root, "charon-systemd.service") {
+		t.Fatal("empty .upholds cleanup did not restore positive absence")
 	}
 }
 
