@@ -90,6 +90,76 @@ func nativeVendorDistroOwnership(ctx context.Context, fragment string) error {
 	return errors.New("vendor systemd fragment is not uniquely owned by charon-systemd")
 }
 
+// A direct [Unit] Upholds= dependency in another active unit has no
+// necessary *.upholds filesystem edge. Its inverse is observable as
+// UpheldBy= on the vendor unit. Unlike Wants=/Requires=, Upholds= can
+// immediately restart a stopped vendor unit, so even separately consented
+// STOP must be refused before ANY service transition.
+//
+// systemd 247/248 predate Upholds= (introduced in 249). On those older
+// managers, systemctl may emit no property at all. Permit that omission
+// only with a separately proven old PID1 manager version. Newer missing,
+// malformed, ambiguous, duplicated or occupied properties fail closed.
+func vendorStopLegacyWithoutUpholds(raw []byte) bool {
+	if len(raw) < len("Version=247\n") || len(raw) > 120 ||
+		!strings.HasPrefix(string(raw), "Version=") || raw[len(raw)-1] != '\n' ||
+		strings.Count(string(raw), "\n") != 1 {
+		return false
+	}
+	s := strings.TrimSuffix(strings.TrimPrefix(string(raw), "Version="), "\n")
+	if !strings.HasPrefix(s, "247") && !strings.HasPrefix(s, "248") {
+		return false
+	}
+	if len(s) > 3 && !strings.ContainsAny(s[3:4], ".-+~") {
+		return false
+	}
+	for _, b := range []byte(s) {
+		if b < 0x21 || b > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+func vendorStopUpheldByReceipt(property, legacyVersion []byte) error {
+	if string(property) == "UpheldBy=\n" {
+		return nil
+	}
+	if len(property) == 0 && vendorStopLegacyWithoutUpholds(legacyVersion) {
+		return nil
+	}
+	if len(property) > len("UpheldBy=\n") &&
+		len(property) < 512 && strings.HasPrefix(string(property), "UpheldBy=") &&
+		property[len(property)-1] == '\n' && strings.Count(string(property), "\n") == 1 {
+		return errors.New("vendor UpheldBy dependency blocks STOP; reconcile the upholding service")
+	}
+	return errors.New("vendor effective UpheldBy relationship unverified; no STOP allowed")
+}
+
+func vendorStopEffectiveUpheldBySafe(ctx context.Context) error {
+	runner := nativeSystemdRunner{Timeout: 4 * time.Second}
+	// --all is required: systemctl otherwise omits unset properties even
+	// with an explicit -p filter. Require a literal, single empty receipt.
+	result, err := runner.RunBounded(ctx, CaptureLimits{Stdout: 512, Stderr: 256},
+		nativeSystemctlBinary, "--system", "--no-pager", "--all", "show",
+		vendorServiceName, "-p", "UpheldBy")
+	if err != nil || len(result.Stderr) != 0 {
+		return errors.New("vendor effective UpheldBy observation failed; no STOP allowed")
+	}
+	if len(result.Stdout) != 0 {
+		return vendorStopUpheldByReceipt(result.Stdout, nil)
+	}
+	// Distinguish the legitimate pre-v249 absence of this property from a
+	// missing/unsupported newer observation. Query the real local manager,
+	// already authenticated by vendorStopHostSafe's PID1 gate.
+	manager, err := runner.RunBounded(ctx, CaptureLimits{Stdout: 128, Stderr: 256},
+		nativeSystemctlBinary, "--system", "--no-pager", "show", "-p", "Version")
+	if err != nil || len(manager.Stderr) != 0 {
+		return errors.New("systemd manager version unavailable for UpheldBy attestation")
+	}
+	return vendorStopUpheldByReceipt(nil, manager.Stdout)
+}
+
 // InspectVendorServiceStopPlan returns a candidate only if a recognized,
 // independently vetted official distro service is currently active or
 // enabled. It performs no writes. No automatic action is allowed for an
@@ -142,6 +212,11 @@ func InspectVendorServiceStopPlan(ctx context.Context) (VendorServiceStopPlan, e
 	// unrelated host conditions before showing STOP; the caller repeats
 	// this entire inspector under the exclusive installed maintenance lock.
 	if err := vendorStopHostSafe(ctx, active, fragment, productionVendorStopSafetyOps()); err != nil {
+		return VendorServiceStopPlan{}, err
+	}
+	// Last read-only gate in BOTH the preview and the re-inspection under
+	// the installed maintenance lease immediately before STOP/DISABLE.
+	if err := vendorStopEffectiveUpheldBySafe(ctx); err != nil {
 		return VendorServiceStopPlan{}, err
 	}
 	return VendorServiceStopPlan{Unit: vendorServiceName, Active: active, Enabled: enabled}, nil

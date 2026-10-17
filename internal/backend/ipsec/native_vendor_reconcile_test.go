@@ -47,3 +47,36 @@ func TestStopDisableVerifiedVendorRejectsUnapprovedIdentity(t *testing.T) {
 		}
 	}
 }
+
+// Direct [Unit] Upholds= is represented in the selected service's effective
+// reverse UpheldBy= property, not necessarily in any *.upholds directory.
+// Empty output is NOT positive proof except on verified systemd 247/248,
+// which predate this dependency type.
+func TestVendorStopEffectiveUpheldByReceiptFailClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name, property, manager string
+		allowed                 bool
+	}{
+		{"clean supported", "UpheldBy=\n", "", true},
+		{"direct live upholder", "UpheldBy=stl-upholder.service\n", "", false},
+		{"multiple upholders", "UpheldBy=alpha.service beta.service\n", "", false},
+		{"unsupported but old 247", "", "Version=247.3-7~deb11u9\n", true},
+		{"unsupported but old 248", "", "Version=248\n", true},
+		{"unsupported new 249", "", "Version=249\n", false},
+		{"unsupported new 250", "", "Version=250\n", false},
+		{"missing both", "", "", false},
+		{"malformed 247 suffix", "", "Version=247fake\n", false},
+		{"malformed version", "", "Version=247\nVersion=248\n", false},
+		{"malformed property", "UpheldBy", "Version=247\n", false},
+		{"duplicated empty property", "UpheldBy=\nUpheldBy=\n", "Version=247\n", false},
+		{"nonempty stderr-like property", "WARNING\n", "Version=247\n", false},
+		{"nonempty UpheldBy on old version", "UpheldBy=foreign.service\n", "Version=247\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := vendorStopUpheldByReceipt([]byte(tc.property), []byte(tc.manager))
+			if (err == nil) != tc.allowed {
+				t.Fatalf("UpheldBy/manager receipt incorrectly classified: allowed=%t err=%v", tc.allowed, err)
+			}
+		})
+	}
+}

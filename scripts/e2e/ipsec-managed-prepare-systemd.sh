@@ -59,6 +59,16 @@ if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor* ]]; then
       mkdir -p /etc/swanctl/conf.d
       printf 'foreign connection; must not be adopted\n' >/etc/swanctl/conf.d/foreign.conf
       ;;
+    existing_vendor_direct_upholds)
+      # Exercise a separate ACTIVE unit's direct [Unit] Upholds=.
+      # No *.upholds filesystem link exists for this case.
+      /usr/bin/bash /mnt/stl-direct-upholder.sh ||
+        fail cannot_construct_direct_upheldby_fixture
+      ;;
+    existing_vendor_late_direct_upholds)
+      # The same dependency is introduced by the Expect operator driver
+      # AFTER preview but BEFORE typed STOP, proving locked reinspection.
+      ;;
     existing_vendor_upholds)
       # An UpheldBy edge can restart a consented-to-STOP distro service.
       # The foreign dependency is not owned by STL.
@@ -201,6 +211,16 @@ if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor* ]]; then
     existing_vendor_late_config) ;;
     *) fail unrecognized_existing_vendor_case ;;
   esac
+  if [[ "${STL_IPSEC_PREPARE_CASE}" == existing_vendor_direct_upholds ||
+        "${STL_IPSEC_PREPARE_CASE}" == existing_vendor_late_direct_upholds ]]; then
+    vendor_pid_before=$(systemctl --system --no-pager --value -p MainPID show strongswan.service) ||
+      fail cannot_read_original_vendor_pid
+    vendor_activation_before=$(systemctl --system --no-pager --value -p ActiveEnterTimestampMonotonic show strongswan.service) ||
+      fail cannot_read_original_vendor_activation
+    [[ $vendor_pid_before =~ ^[1-9][0-9]*$ &&
+       $vendor_activation_before =~ ^[1-9][0-9]*$ ]] ||
+      fail vendor_running_identity_not_proven
+  fi
   if [[ "${STL_IPSEC_PREPARE_CASE}" == existing_vendor ||
         "${STL_IPSEC_PREPARE_CASE}" == existing_vendor_optional_clean ]]; then
     /usr/bin/expect /mnt/managed-existing.exp || fail operator_vendor_consent_failed
@@ -214,6 +234,15 @@ if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor* ]]; then
     echo 'IPSEC_REAL_PRIOR_DISTRIBUTION_SERVICE_EXACT_OPERATOR_CONSENT=PASS'
   else
     /usr/bin/expect /mnt/managed-existing-denied.exp || fail forbidden_vendor_stop_not_denied
+    if [[ "${STL_IPSEC_PREPARE_CASE}" == existing_vendor_direct_upholds ||
+          "${STL_IPSEC_PREPARE_CASE}" == existing_vendor_late_direct_upholds ]]; then
+      [[ $(systemctl --system --no-pager --value -p MainPID show strongswan.service) == "$vendor_pid_before" &&
+         $(systemctl --system --no-pager --value -p ActiveEnterTimestampMonotonic show strongswan.service) == "$vendor_activation_before" ]] ||
+        fail upheld_vendor_restarted_or_was_stopped
+      [[ $(systemctl --system is-active stl-disposable-direct-upholder.service) == active ]] ||
+        fail direct_upholder_not_preserved
+      echo "IPSEC_DIRECT_UPHELDBY_ZERO_STOP_TRANSITIONS=${STL_IPSEC_PREPARE_CASE}:PASS"
+    fi
     [[ $(systemctl --system is-active strongswan.service) == active &&
        $(systemctl --system is-enabled strongswan.service) == enabled ]] ||
       fail existing_vendor_was_changed_despite_foreign_conflict
