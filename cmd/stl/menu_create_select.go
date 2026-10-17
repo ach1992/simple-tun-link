@@ -136,7 +136,8 @@ func menuRefineModuleReadiness(report linux.CapabilityReport, observe func(strin
 			uncertain := false
 			for _, module := range plainRequiredModules(choice) {
 				switch states[module] {
-				case linux.KernelModuleLoaded:
+				case linux.KernelModuleLoaded, linux.KernelModuleBuiltin:
+					// Built-in metadata alone cannot promote a failed kernel query.
 				case linux.KernelModuleLoadableInactive:
 					if module == "fou" {
 						fouInactive = true

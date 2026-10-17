@@ -55,6 +55,10 @@ func TestIPsecMenuAutomaticPairRemainsThirtyOne(t *testing.T) {
 		addresses.Local.Masked() != addresses.Peer.Masked() {
 		t.Fatalf("IPsec default should remain the canonical matched /31: %+v err=%v", addresses, err)
 	}
+	if !strings.Contains(out.String(), "Enter=use suggested") ||
+		!strings.Contains(out.String(), "manual example 10.235.1.2") {
+		t.Fatalf("IPsec omitted the automatic Enter hint or valid manual /31 guidance: %q", out.String())
+	}
 }
 
 func TestOperatorManualAdjacentPrivateAddressesAcceptThirtyAndThirtyOne(t *testing.T) {
@@ -172,6 +176,50 @@ func TestOperatorUnifiedCreateAllPlainBackends(t *testing.T) {
 			}
 			if !strings.Contains(out, "stl://") {
 				t.Fatal("selected mode did not provide canonical peer Setup Link")
+			}
+		})
+	}
+}
+
+func TestOperatorBuiltInModulesReachCanonicalCreateWithoutPrepare(t *testing.T) {
+	for _, tc := range []struct {
+		name, choice string
+		backend      domain.Backend
+		mode         domain.Encapsulation
+	}{
+		{"GRE Native", "1", domain.BackendGRE, domain.EncapNative},
+		{"IPIP Native", "3", domain.BackendIPIP, domain.EncapNative},
+		{"GRE FOU", "5\n1", domain.BackendGRE, domain.EncapFOU},
+		{"GRE GUE", "5\n2", domain.BackendGRE, domain.EncapGUE},
+		{"IPIP FOU", "5\n3", domain.BackendIPIP, domain.EncapFOU},
+		{"IPIP GUE", "5\n4", domain.BackendIPIP, domain.EncapGUE},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "state")
+			fake := newLifecycleFake()
+			var chosen backend.Backend
+			if tc.backend == domain.BackendGRE {
+				chosen = &guidedTestBackend{lifecycleFakeBackend: fake}
+			} else {
+				chosen = &ipipImportFake{lifecycleFakeBackend: fake}
+			}
+			opts := &runtimeOptions{
+				stateRoot: root, backends: []backend.Backend{chosen},
+				probeRunner: &guidedTestRunner{}, mtuManager: guidedMTUFake{},
+				moduleObserve: func(context.Context, string) linux.KernelModuleState {
+					return linux.KernelModuleBuiltin
+				},
+				createLinkID: func() (domain.LinkID, error) { return createTestID, nil },
+			}
+			code, out, errOut := runGuidedTest(opts, "1\n"+tc.choice+"\n192.0.2.20\n\nn\nYES\nn\n8\n")
+			if code != 0 || len(fake.applies) != 1 || strings.Contains(out, "Type PREPARE") ||
+				!strings.Contains(out, "[Precheck OK]") || !strings.Contains(out, "changes applied and verified") {
+				t.Fatalf("built-in kernel capability was falsely blocked: code=%d applies=%d out=%q err=%q",
+					code, len(fake.applies), out, errOut)
+			}
+			if snapshot, err := state.NewFileStore(root).Load(context.Background()); err != nil ||
+				len(snapshot.Links) != 1 || snapshot.Links[0].Desired.Backend != tc.backend {
+				t.Fatalf("built-in Create did not commit the selected Link: snapshot=%+v err=%v", snapshot, err)
 			}
 		})
 	}

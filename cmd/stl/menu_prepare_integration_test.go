@@ -26,6 +26,7 @@ type combinedPrepareHost struct {
 	selected         tunnelOption
 	installed        bool
 	loaded           map[string]bool
+	builtIn          map[string]bool
 	lockHeld         bool
 	packages         int
 	lockCount        int
@@ -39,9 +40,9 @@ type combinedPrepareHost struct {
 }
 
 func (h *combinedPrepareHost) report() linux.CapabilityReport {
-	gre := h.loaded["ip_gre"]
-	ipip := h.loaded["ipip"]
-	fou := h.loaded["fou"]
+	gre := h.loaded["ip_gre"] || h.builtIn["ip_gre"]
+	ipip := h.loaded["ipip"] || h.builtIn["ipip"]
+	fou := h.loaded["fou"] || h.builtIn["fou"]
 	// Both successful and failed native/UDP queries are independently
 	// representable; a base-query failure never hides the FOU dependency.
 	return linux.CapabilityReport{
@@ -105,6 +106,9 @@ func (h *combinedPrepareHost) kernelOps() menuKernelPreparationOps {
 			if h.loaded[name] {
 				return linux.KernelModuleLoaded
 			}
+			if h.builtIn[name] {
+				return linux.KernelModuleBuiltin
+			}
 			return linux.KernelModuleLoadableInactive
 		},
 		acquire: func(_ context.Context) (func(), error) {
@@ -116,7 +120,7 @@ func (h *combinedPrepareHost) kernelOps() menuKernelPreparationOps {
 			return func() { h.lockHeld = false }, nil
 		},
 		load: func(_ context.Context, name string) error {
-			if !h.lockHeld || !slices.Contains(plainRequiredModules(h.selected), name) || h.loaded[name] {
+			if !h.lockHeld || !slices.Contains(plainRequiredModules(h.selected), name) || h.loaded[name] || h.builtIn[name] {
 				h.t.Fatalf("module mutation outside acquired selected-plan lock: %q", name)
 			}
 			h.loadCalls = append(h.loadCalls, name)
@@ -127,7 +131,7 @@ func (h *combinedPrepareHost) kernelOps() menuKernelPreparationOps {
 }
 
 func newCombinedPrepareHost(t *testing.T, selected tunnelOption) *combinedPrepareHost {
-	return &combinedPrepareHost{t: t, selected: selected, loaded: map[string]bool{}}
+	return &combinedPrepareHost{t: t, selected: selected, loaded: map[string]bool{}, builtIn: map[string]bool{}}
 }
 
 func TestCombinedPackageAndKernelOnePrepareThenRealCreateYES(t *testing.T) {
@@ -183,21 +187,29 @@ func TestCombinedPackageAndKernelSingleConsentForEachSelectedDependencyPlan(t *t
 		name      string
 		selected  tunnelOption
 		preloaded []string
+		builtIn   []string
 		want      []string
 	}{
-		{"GRE Native", tunnelOption{backend: domain.BackendGRE, mode: domain.EncapNative}, nil, []string{"ip_gre"}},
-		{"IPIP Native", tunnelOption{backend: domain.BackendIPIP, mode: domain.EncapNative}, nil, []string{"ipip"}},
-		{"GRE FOU both inactive", tunnelOption{backend: domain.BackendGRE, mode: domain.EncapFOU}, nil, []string{"ip_gre", "fou"}},
-		{"GRE GUE both inactive", tunnelOption{backend: domain.BackendGRE, mode: domain.EncapGUE}, nil, []string{"ip_gre", "fou"}},
-		{"IPIP FOU both inactive", tunnelOption{backend: domain.BackendIPIP, mode: domain.EncapFOU}, nil, []string{"ipip", "fou"}},
-		{"IPIP GUE both inactive", tunnelOption{backend: domain.BackendIPIP, mode: domain.EncapGUE}, nil, []string{"ipip", "fou"}},
-		{"GRE FOU base loaded", tunnelOption{backend: domain.BackendGRE, mode: domain.EncapFOU}, []string{"ip_gre"}, []string{"fou"}},
-		{"IPIP GUE FOU loaded", tunnelOption{backend: domain.BackendIPIP, mode: domain.EncapGUE}, []string{"fou"}, []string{"ipip"}},
+		{"GRE Native", tunnelOption{backend: domain.BackendGRE, mode: domain.EncapNative}, nil, nil, []string{"ip_gre"}},
+		{"IPIP Native", tunnelOption{backend: domain.BackendIPIP, mode: domain.EncapNative}, nil, nil, []string{"ipip"}},
+		{"GRE FOU both inactive", tunnelOption{backend: domain.BackendGRE, mode: domain.EncapFOU}, nil, nil, []string{"ip_gre", "fou"}},
+		{"GRE GUE both inactive", tunnelOption{backend: domain.BackendGRE, mode: domain.EncapGUE}, nil, nil, []string{"ip_gre", "fou"}},
+		{"IPIP FOU both inactive", tunnelOption{backend: domain.BackendIPIP, mode: domain.EncapFOU}, nil, nil, []string{"ipip", "fou"}},
+		{"IPIP GUE both inactive", tunnelOption{backend: domain.BackendIPIP, mode: domain.EncapGUE}, nil, nil, []string{"ipip", "fou"}},
+		{"GRE FOU base loaded", tunnelOption{backend: domain.BackendGRE, mode: domain.EncapFOU}, []string{"ip_gre"}, nil, []string{"fou"}},
+		{"IPIP GUE FOU loaded", tunnelOption{backend: domain.BackendIPIP, mode: domain.EncapGUE}, []string{"fou"}, nil, []string{"ipip"}},
+		{"GRE FOU built-in base", tunnelOption{backend: domain.BackendGRE, mode: domain.EncapFOU}, nil, []string{"ip_gre"}, []string{"fou"}},
+		{"GRE GUE built-in FOU", tunnelOption{backend: domain.BackendGRE, mode: domain.EncapGUE}, nil, []string{"fou"}, []string{"ip_gre"}},
+		{"IPIP FOU built-in base", tunnelOption{backend: domain.BackendIPIP, mode: domain.EncapFOU}, nil, []string{"ipip"}, []string{"fou"}},
+		{"IPIP GUE built-in FOU", tunnelOption{backend: domain.BackendIPIP, mode: domain.EncapGUE}, nil, []string{"fou"}, []string{"ipip"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			host := newCombinedPrepareHost(t, tc.selected)
 			for _, module := range tc.preloaded {
 				host.loaded[module] = true
+			}
+			for _, module := range tc.builtIn {
+				host.builtIn[module] = true
 			}
 			in := strings.NewReader("PREPARE\nYES\n")
 			reader := bufio.NewReader(in)
@@ -224,6 +236,51 @@ func TestCombinedPackageAndKernelSingleConsentForEachSelectedDependencyPlan(t *t
 	}
 }
 
+// Built-in modules have no insertion step: a positive kernel capability
+// observation must let Create proceed without maintenance consent or loading.
+func TestCombinedPrepareAllBuiltInAndFailedQueryFailClosed(t *testing.T) {
+	selected := tunnelOption{backend: domain.BackendIPIP, mode: domain.EncapGUE}
+	host := newCombinedPrepareHost(t, selected)
+	host.installed = true
+	host.builtIn["ipip"], host.builtIn["fou"] = true, true
+	in := strings.NewReader("YES\n")
+	reader := bufio.NewReader(in)
+	var out bytes.Buffer
+	ready, checked := menuPrepareSelectedModulesWithOps(in, reader, &out, nil,
+		selected, host.report(), menuPackagePreparation{}, host.kernelOps())
+	if !ready || !checked[linux.CapabilityIPIPGUE].Available ||
+		len(host.loadCalls) != 0 || host.lockCount != 0 ||
+		strings.Contains(out.String(), "Type PREPARE") {
+		t.Fatalf("all built-in selected plan unexpectedly required loading: ready=%v host=%+v out=%q",
+			ready, host, out.String())
+	}
+	if next, err := readMenuAnswer(reader); err != nil || next != "YES" {
+		t.Fatalf("all built-in path consumed final Create YES: %q %v", next, err)
+	}
+	// A built-in marker must never repair a failed kernel capability query.
+	failed := linux.CapabilityReport{
+		linux.CapabilityIPIPNative: {ReasonCode: "ipip_probe_unconfirmed"},
+		linux.CapabilityIPIPGUE:    {ReasonCode: "base_link_probe_unconfirmed"},
+	}
+	menuRefineModuleReadiness(failed, func(string) linux.KernelModuleState {
+		return linux.KernelModuleBuiltin
+	})
+	host.lockCount = 0
+	in = strings.NewReader("YES\n")
+	reader = bufio.NewReader(in)
+	out.Reset()
+	ops := host.kernelOps()
+	ops.snapshot = func(*runtimeOptions) linux.CapabilityReport { return failed }
+	ready, checked = menuPrepareSelectedModulesWithOps(in, reader, &out, nil,
+		selected, failed, menuPackagePreparation{}, ops)
+	if ready || checked[linux.CapabilityIPIPGUE].Available ||
+		host.lockCount != 0 || len(host.loadCalls) != 0 ||
+		strings.Contains(out.String(), "Continuing to tunnel setup") {
+		t.Fatalf("built-in metadata upgraded failed capability into Create authority: ready=%v report=%v out=%q",
+			ready, checked, out.String())
+	}
+}
+
 func TestCombinedPrepareRejectsPositiveQueryWithoutPostLoadDependencyProof(t *testing.T) {
 	selected := tunnelOption{backend: domain.BackendIPIP, mode: domain.EncapFOU}
 	host := newCombinedPrepareHost(t, selected)
@@ -244,7 +301,7 @@ func TestCombinedPrepareRejectsPositiveQueryWithoutPostLoadDependencyProof(t *te
 	if ready || !after[linux.CapabilityIPIPFOU].Available ||
 		!slices.Equal(host.loadCalls, []string{"ipip", "fou"}) ||
 		strings.Contains(out.String(), "Continuing to tunnel setup") ||
-		!strings.Contains(out.String(), "not verified loaded") {
+		!strings.Contains(out.String(), "not verified ready") {
 		t.Fatalf("post-load observation was not authoritative: ready=%v loads=%v output=%q",
 			ready, host.loadCalls, out.String())
 	}

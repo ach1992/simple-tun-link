@@ -44,7 +44,10 @@ func TestKernelModuleObservationEvidenceMatrix(t *testing.T) {
 		{"modinfo path traversal", false, false, nil, nil, "/lib/modules/../../tmp/ipip.ko", false, KernelModuleUnknown, true},
 		{"modinfo artifact missing", false, false, nil, os.ErrNotExist, "/lib/modules/mock/ipip.ko", false, KernelModuleUnavailable, true},
 		{"modinfo artifact unreadable", false, false, nil, os.ErrPermission, "/lib/modules/mock/ipip.ko", false, KernelModuleUnknown, true},
-		{"built-in no loadable file", false, false, nil, nil, "(builtin)", false, KernelModuleUnavailable, true},
+		{"built-in no sysfs directory", false, false, nil, nil, "(builtin)", false, KernelModuleBuiltin, true},
+		{"built-in metadata with missing sysfs root", false, true, nil, nil, "(builtin)", false, KernelModuleUnknown, false},
+		{"built-in metadata but modinfo fails", false, false, nil, nil, "(builtin)", true, KernelModuleUnknown, true},
+		{"malformed built-in metadata", false, false, nil, nil, "(builtin) extra", false, KernelModuleUnknown, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := filepath.Join(t.TempDir(), "sys-module")

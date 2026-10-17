@@ -97,12 +97,13 @@ func askLinkAddressesWithPolicy(p createPrompts, runner linux.Runner, snapshot s
 	}
 	for {
 		prompt := "Tunnel IP on THIS server (Enter=use suggested; q=back): "
-		if !ok || forceManual || requireIPsec31 {
-			example := "10.235.1.1"
-			if requireIPsec31 {
-				example = "10.235.1.2"
-			}
-			prompt = "Tunnel IP on THIS server (example " + example + "; q=back): "
+		switch {
+		case requireIPsec31 && ok && !forceManual:
+			prompt = "Tunnel IP on THIS server (Enter=use suggested; manual example 10.235.1.2; q=back): "
+		case requireIPsec31:
+			prompt = "Tunnel IP on THIS server (example 10.235.1.2; q=back): "
+		case !ok || forceManual:
+			prompt = "Tunnel IP on THIS server (example 10.235.1.1; q=back): "
 		}
 		rawLocal, err := p.ask(prompt)
 		if err != nil {

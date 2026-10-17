@@ -22,9 +22,9 @@ type CommittedTunnelModuleRestorer struct {
 	// Test-only seams. Production invokes LoadTrustedKernelModule, which
 	// ignores foreign modprobe.d hooks, sanitizes the environment and attests
 	// every on-disk dependency before root insertion.
-	Load     func(context.Context, string) error
-	Present  func(string) (bool, error)
-	Loadable func(context.Context, string) bool
+	Load    func(context.Context, string) error
+	Present func(string) (bool, error)
+	Observe func(context.Context, string) KernelModuleState
 }
 
 func CommittedLinkKernelModules(link domain.Link) []string {
@@ -69,9 +69,9 @@ func (r CommittedTunnelModuleRestorer) Prepare(ctx context.Context, link domain.
 			}
 		}
 	}
-	loadable := r.Loadable
-	if loadable == nil {
-		loadable = (KernelModuleProbe{Runner: r.Runner, ModinfoBinary: "/sbin/modinfo"}).AvailableButNotLoaded
+	observe := r.Observe
+	if observe == nil {
+		observe = (KernelModuleProbe{Runner: r.Runner, ModinfoBinary: "/sbin/modinfo"}).Observe
 	}
 	for _, name := range needed {
 		if err := ctx.Err(); err != nil {
@@ -84,7 +84,15 @@ func (r CommittedTunnelModuleRestorer) Prepare(ctx context.Context, link domain.
 		if found {
 			continue
 		}
-		if !loadable(ctx, name) {
+		switch observe(ctx, name) {
+		case KernelModuleBuiltin:
+			// Built-in kernel code has no loadable artifact or obligatory
+			// sysfs directory. Engine Ensure must independently verify its
+			// real runtime capability before restoring the Link.
+			continue
+		case KernelModuleLoadableInactive:
+			// Only independently proven missing loadable modules may be inserted.
+		default:
 			return fmt.Errorf("selected %s kernel dependency unavailable or not proven loadable", name)
 		}
 		load := r.Load

@@ -15,6 +15,9 @@ type KernelModuleState uint8
 const (
 	KernelModuleUnknown KernelModuleState = iota
 	KernelModuleLoaded
+	// KernelModuleBuiltin is positive modinfo metadata, not proof of usable
+	// runtime capability; the calling backend must still verify it.
+	KernelModuleBuiltin
 	KernelModuleLoadableInactive
 	KernelModuleUnavailable
 )
@@ -72,8 +75,9 @@ func (p KernelModuleProbe) Observe(ctx context.Context, module string) KernelMod
 	}
 	filename := strings.TrimSpace(string(result.Stdout))
 	if filename == "(builtin)" {
-		// A built-in cannot be loaded with modprobe from a module file.
-		return KernelModuleUnavailable
+		// A built-in may have no /sys/module directory and needs no modprobe.
+		// Menu/Engine must corroborate with the actual kernel capability.
+		return KernelModuleBuiltin
 	}
 	// modinfo output is untrusted diagnostic data, not permission to inspect
 	// arbitrary filesystem paths or to load anything.
@@ -99,7 +103,7 @@ func (p KernelModuleProbe) Observe(ctx context.Context, module string) KernelMod
 	return KernelModuleUnknown
 }
 
-// Existing Engine/restore callers require only the positive, narrow proof
+// Existing backend diagnostics callers require only the positive, narrow proof
 // that a module is inactive and loadable; all other states fail closed.
 func (p KernelModuleProbe) AvailableButNotLoaded(ctx context.Context, module string) bool {
 	return p.Observe(ctx, module) == KernelModuleLoadableInactive

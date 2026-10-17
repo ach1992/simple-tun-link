@@ -60,8 +60,13 @@ func TestCommittedRestoreModulesCheckBeforeAfterAndNoSharedUnload(t *testing.T) 
 			_, err := r.Run(ctx, "/sbin/modprobe", name)
 			return err
 		},
-		Present:  func(name string) (bool, error) { return r.present[name], nil },
-		Loadable: func(_ context.Context, name string) bool { return name == "fou" },
+		Present: func(name string) (bool, error) { return r.present[name], nil },
+		Observe: func(_ context.Context, name string) KernelModuleState {
+			if name == "fou" {
+				return KernelModuleLoadableInactive
+			}
+			return KernelModuleUnknown
+		},
 	}
 	link := linkForModules(domain.BackendGRE, domain.EncapFOU)
 	if err := restore.Prepare(context.Background(), link); err != nil {
@@ -88,16 +93,16 @@ func TestCommittedRestoreModulesCheckBeforeAfterAndNoSharedUnload(t *testing.T) 
 }
 func TestCommittedRestoreModulesUnknownCannotMutate(t *testing.T) {
 	for _, tc := range []struct {
-		label    string
-		present  func(string) (bool, error)
-		loadable func(context.Context, string) bool
+		label   string
+		present func(string) (bool, error)
+		observe func(context.Context, string) KernelModuleState
 	}{
-		{"unknown", func(string) (bool, error) { return false, errors.New("uncertain sysfs") }, func(context.Context, string) bool { return true }},
-		{"not loadable", func(string) (bool, error) { return false, nil }, func(context.Context, string) bool { return false }},
+		{"unknown", func(string) (bool, error) { return false, errors.New("uncertain sysfs") }, func(context.Context, string) KernelModuleState { return KernelModuleLoadableInactive }},
+		{"not loadable", func(string) (bool, error) { return false, nil }, func(context.Context, string) KernelModuleState { return KernelModuleUnknown }},
 	} {
 		t.Run(tc.label, func(t *testing.T) {
 			r := &moduleRestoreRunner{present: map[string]bool{}}
-			loader := CommittedTunnelModuleRestorer{Runner: r, Present: tc.present, Loadable: tc.loadable}
+			loader := CommittedTunnelModuleRestorer{Runner: r, Present: tc.present, Observe: tc.observe}
 			if err := loader.Prepare(context.Background(), linkForModules(domain.BackendIPIP, domain.EncapNative)); err == nil || len(r.commands) != 0 {
 				t.Fatalf("unknown on-disk prerequisite attempted modprobe: %v cmds=%v", err, r.commands)
 			}
@@ -106,8 +111,65 @@ func TestCommittedRestoreModulesUnknownCannotMutate(t *testing.T) {
 	r := &moduleRestoreRunner{present: map[string]bool{}}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	loader := CommittedTunnelModuleRestorer{Runner: r, Present: func(string) (bool, error) { return false, nil }, Loadable: func(context.Context, string) bool { return true }}
+	loader := CommittedTunnelModuleRestorer{Runner: r, Present: func(string) (bool, error) { return false, nil }, Observe: func(context.Context, string) KernelModuleState { return KernelModuleLoadableInactive }}
 	if err := loader.Prepare(ctx, linkForModules(domain.BackendGRE, domain.EncapFOU)); err == nil || len(r.commands) != 0 {
 		t.Fatalf("canceled restore mutated host: %v cmds=%v", err, r.commands)
+	}
+}
+
+func TestCommittedRestoreBuiltInDependenciesSkipModprobe(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		kind     domain.Backend
+		mode     domain.Encapsulation
+		builtIn  []string
+		wantLoad []string
+	}{
+		{"GRE Native built-in", domain.BackendGRE, domain.EncapNative, []string{"ip_gre"}, nil},
+		{"IPIP Native built-in", domain.BackendIPIP, domain.EncapNative, []string{"ipip"}, nil},
+		{"GRE FOU base built-in", domain.BackendGRE, domain.EncapFOU, []string{"ip_gre"}, []string{"fou"}},
+		{"GRE GUE FOU built-in", domain.BackendGRE, domain.EncapGUE, []string{"fou"}, []string{"ip_gre"}},
+		{"IPIP FOU base built-in", domain.BackendIPIP, domain.EncapFOU, []string{"ipip"}, []string{"fou"}},
+		{"IPIP GUE FOU built-in", domain.BackendIPIP, domain.EncapGUE, []string{"fou"}, []string{"ipip"}},
+		{"IPIP GUE both built-in", domain.BackendIPIP, domain.EncapGUE, []string{"ipip", "fou"}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &moduleRestoreRunner{present: map[string]bool{}}
+			builtIn := map[string]bool{}
+			for _, name := range tc.builtIn {
+				builtIn[name] = true
+			}
+			restorer := CommittedTunnelModuleRestorer{
+				Runner:  runner,
+				Present: func(name string) (bool, error) { return runner.present[name], nil },
+				Observe: func(_ context.Context, name string) KernelModuleState {
+					if builtIn[name] {
+						return KernelModuleBuiltin
+					}
+					if runner.present[name] {
+						return KernelModuleLoaded
+					}
+					return KernelModuleLoadableInactive
+				},
+				Load: func(ctx context.Context, name string) error {
+					_, err := runner.Run(ctx, "/sbin/modprobe", name)
+					return err
+				},
+			}
+			link := linkForModules(tc.kind, tc.mode)
+			if err := restorer.Prepare(context.Background(), link); err != nil {
+				t.Fatal(err)
+			}
+			if err := restorer.Prepare(context.Background(), link); err != nil {
+				t.Fatalf("idempotent built-in restore failed: %v", err)
+			}
+			want := []string{}
+			for _, name := range tc.wantLoad {
+				want = append(want, "/sbin/modprobe "+name)
+			}
+			if !slices.Equal(runner.commands, want) {
+				t.Fatalf("built-in dependency was loaded or a required load was missed: got=%v want=%v", runner.commands, want)
+			}
+		})
 	}
 }

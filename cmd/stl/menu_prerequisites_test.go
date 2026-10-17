@@ -80,6 +80,14 @@ func TestMenuSixPlainModesRequireIndependentModuleEvidence(t *testing.T) {
 				queryFailed bool
 			}{
 				{"loaded and query passes", linux.KernelModuleLoaded, linux.KernelModuleLoaded, false},
+				{"built-in base positive query", linux.KernelModuleBuiltin, linux.KernelModuleLoaded, false},
+				{"built-in FOU positive query", linux.KernelModuleLoaded, linux.KernelModuleBuiltin, false},
+				{"both built-in positive query", linux.KernelModuleBuiltin, linux.KernelModuleBuiltin, false},
+				{"built-in base failed query", linux.KernelModuleBuiltin, linux.KernelModuleLoaded, true},
+				{"built-in FOU failed query", linux.KernelModuleLoaded, linux.KernelModuleBuiltin, true},
+				{"both built-in failed query", linux.KernelModuleBuiltin, linux.KernelModuleBuiltin, true},
+				{"built-in base with inactive FOU", linux.KernelModuleBuiltin, linux.KernelModuleLoadableInactive, true},
+				{"inactive base with built-in FOU", linux.KernelModuleLoadableInactive, linux.KernelModuleBuiltin, true},
 				{"loaded but query fails", linux.KernelModuleLoaded, linux.KernelModuleLoaded, true},
 				{"base inactive", linux.KernelModuleLoadableInactive, linux.KernelModuleLoaded, false},
 				{"FOU inactive", linux.KernelModuleLoaded, linux.KernelModuleLoadableInactive, false},

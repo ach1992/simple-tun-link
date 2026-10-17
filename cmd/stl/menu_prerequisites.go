@@ -76,8 +76,9 @@ func plainModuleCandidates(selected tunnelOption, report linux.CapabilityReport,
 	var missing []string
 	for _, module := range required {
 		switch observe(module) {
-		case linux.KernelModuleLoaded:
-			// Dependency is already satisfied, even when another query failed.
+		case linux.KernelModuleLoaded, linux.KernelModuleBuiltin:
+			// Nothing loadable is missing for this dependency. A failed
+			// kernel query still blocks Create after the final re-observation.
 		case linux.KernelModuleLoadableInactive:
 			missing = append(missing, module)
 		case linux.KernelModuleUnavailable:
@@ -291,8 +292,9 @@ func menuPrepareSelectedModulesWithOps(input io.Reader, reader *bufio.Reader, ou
 	postCtx, postDone := context.WithTimeout(loadCtx, 8*time.Second)
 	defer postDone()
 	for _, module := range plainRequiredModules(selected) {
-		if ops.observe(postCtx, module) != linux.KernelModuleLoaded {
-			menuNotice(out, "WARNING", "Module loading ended, but a selected dependency is not verified loaded. No tunnel was created.")
+		observed := ops.observe(postCtx, module)
+		if observed != linux.KernelModuleLoaded && observed != linux.KernelModuleBuiltin {
+			menuNotice(out, "WARNING", "Module loading ended, but a selected dependency is not verified ready. No tunnel was created.")
 			menuField(out, "Module", module)
 			return false, now
 		}
