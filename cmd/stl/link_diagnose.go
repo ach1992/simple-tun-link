@@ -15,7 +15,11 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
-const diagnoseOperationTimeout = 35 * time.Second
+// Default probes require at most 28 seconds (18 MTU x 1s, 5 quality x
+// 2s). Retain the original 35-second per-Link deadline, leaving 7 seconds
+// for verified backend inspection/preflight and scheduling overhead. Both
+// single-Link and all-Link diagnostics use this same per-Link bound.
+const diagnoseOperationTimeout = diagnostics.DefaultDiagnosticProbeBudget + 7*time.Second
 
 // linkDiagnoseCommand is explicitly active but read-only: it sends bounded
 // ICMP echo packets to the selected peer Link Address; it never repairs,

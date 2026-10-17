@@ -18,10 +18,9 @@ const (
 	MaxIPv4MTU          = 65535
 	DefaultFallbackMTU  = 1280
 	MaxMTUProbeAttempts = 18
-	// iputils ping -W 1 may take the full second to report an unanswered
-	// echo. Give the process time to exit and emit its statistics rather
-	// than misclassifying ordinary packet loss as an interrupted probe.
-	probeAttemptTimeout = 2 * time.Second
+	// MTU timeouts are only an unconfirmed size observation; preserve the
+	// original short budget rather than consuming the quality-check reserve.
+	mtuProbeAttemptTimeout = time.Second
 )
 
 // ProbeOutcome distinguishes an observed reply, an actual fragmentation/
@@ -150,7 +149,7 @@ func SelectMTU(ctx context.Context, link domain.Link, c MTUConstraints, prober D
 		if r.Attempts >= MaxMTUProbeAttempts {
 			return ProbeTimeout, nil
 		}
-		callCtx, cancel := context.WithTimeout(ctx, probeAttemptTimeout)
+		callCtx, cancel := context.WithTimeout(ctx, mtuProbeAttemptTimeout)
 		sample, callErr := prober.Probe(callCtx, link, size)
 		exceeded := errors.Is(callCtx.Err(), context.DeadlineExceeded)
 		cancel()
