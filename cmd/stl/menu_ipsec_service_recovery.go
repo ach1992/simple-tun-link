@@ -35,29 +35,40 @@ func productionMenuIPsecVendorOps() menuIPsecVendorOps {
 // operator can manually reconcile then explicitly RECHECK. Both still need
 // fresh provisioner admission and a separate Link YES afterwards.
 func menuResolveIPsecServiceConflict(input io.Reader, reader *bufio.Reader, out io.Writer,
-	allPackagesReady bool,
+	allPackagesReady bool, readinessErr error,
 ) bool {
-	return menuResolveIPsecServiceConflictWithOps(input, reader, out, allPackagesReady, productionMenuIPsecVendorOps())
+	return menuResolveIPsecServiceConflictWithOps(input, reader, out, allPackagesReady, readinessErr, productionMenuIPsecVendorOps())
 }
 
 func menuResolveIPsecServiceConflictWithOps(input io.Reader, reader *bufio.Reader, out io.Writer,
-	allPackagesReady bool, ops menuIPsecVendorOps,
+	allPackagesReady bool, readinessErr error, ops menuIPsecVendorOps,
 ) bool {
 	if ops.inspect == nil || ops.stop == nil || ops.readiness == nil {
 		return false
 	}
-	menuScreen(out, "IPsec / existing service or ownership conflict")
+	menuScreen(out, "IPsec / prerequisites and service ownership")
 	menuNotice(out, "WARNING", "IPsec readiness is blocked. Other tunnel backends remain available.")
 	menuProse(out, "A real VPN may be using systemd, ports, and credentials. Stopping a service can immediately disconnect its users. Do not delete, adopt, mask, or overwrite unknown services/configuration.")
 	menuCopyLine(out, "Read-only IPsec report", "sudo stl doctor ipsec --json")
 	menuCopyLine(out, "List loaded IPsec services", "sudo systemctl --system --no-pager --plain --all --type=service list-units 'strongswan*.service' 'charon*.service' 'ipsec.service' 'simple-tun-link-ipsec.service'")
 	menuCopyLine(out, "List service files", "sudo systemctl --system --no-pager list-unit-files 'strongswan*.service' 'charon*.service' 'ipsec.service' 'simple-tun-link-ipsec.service'")
-	menuNotice(out, "INFO", "Checking exact service and distro package identity; signed public package downloads may be required. No service is changed by this inspection.")
+	initial := ipsecReadinessCheck(readinessErr)
+	menuField(out, "Actual preflight", initial.ReasonCode)
+	menuProse(out, "Next: "+initial.NextStep)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	plan, err := ops.inspect(ctx)
-	cancel()
-	supported := err == nil && allPackagesReady && plan.Unit == "strongswan.service" &&
+	// If packages were incomplete when this PREPARE began, a vendor STOP
+	// cannot be authorized in this session. Do not perform a potentially
+	// slow signed archive/service-identity survey that cannot change the
+	// decision. Start a fresh plan after resolving the package transaction.
+	var plan ipsecbackend.VendorServiceStopPlan
+	var err error
+	if allPackagesReady {
+		menuNotice(out, "INFO", "Checking exact service and distro package identity; signed public package downloads may be required. No service is changed by this inspection.")
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		plan, err = ops.inspect(ctx)
+		cancel()
+	}
+	supported := allPackagesReady && err == nil && plan.Unit == "strongswan.service" &&
 		(plan.Active == "active" || plan.Enabled == "enabled")
 	if supported {
 		menuField(out, "Verified distro unit", plan.Unit)
@@ -66,17 +77,21 @@ func menuResolveIPsecServiceConflictWithOps(input io.Reader, reader *bufio.Reade
 		menuField(out, "Operator choices", "Type STOP strongswan.service to approve this exact change, or RECHECK after manual repair. Enter cancels.")
 	} else {
 		if !allPackagesReady {
-			menuField(out, "Package state", "Incomplete or recently changed: manual package/service reconciliation required before existing-service control")
+			menuField(out, "Package state", "Some packages were missing at the START of PREPARE; no vendor service change is authorized in this attempt.")
+			menuProse(out, "Finish the package transaction, verify it with dpkg --audit, then start a NEW IPsec Create/PREPARE plan. Do not repeat PREPARE blindly.")
+		} else if err != nil && err.Error() == "vendor service is already stopped and disabled" {
+			menuField(out, "Vendor service", "Already inactive and disabled; no STOP is needed")
+			menuProse(out, "The actual preflight blocker is listed above. Stopping or disabling strongswan.service again cannot fix it.")
 		} else {
-			menuField(out, "Service ownership", "Not an eligible verified distro unit; no automatic service changes are permitted")
+			menuField(out, "Service ownership", "No eligible verified active/enabled vendor unit for automatic STOP")
 			if err != nil {
-				// All lower-level inspector errors are redacted, fixed
-				// descriptions of missing proofs, never raw systemctl,
-				// process environment, configuration or credential bytes.
-				menuField(out, "Reason", safeMenuText(err.Error()))
+				// This inspector emits only fixed security-reviewed summaries,
+				// never raw command output, private paths or credentials.
+				menuField(out, "Vendor observation", safeMenuText(err.Error()))
 			}
+			menuProse(out, "Inspect active or enabled services and ownership. If a real VPN must be interrupted, obtain a maintenance decision and back up its configuration before any separate manual intervention.")
 		}
-		menuProse(out, "Inspect any active or enabled service and its dependencies. If it is your VPN, plan the maintenance window, back up its configuration, stop/disable it manually with an explicit administrator decision, and resolve all remaining config/package/unit conflicts. Then type RECHECK.")
+		menuProse(out, "Enter cancels. Type RECHECK only AFTER addressing the actual prerequisite; it never changes services.")
 	}
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
 		menuNotice(out, "WARNING", "Cannot establish a fresh service confirmation; no service changed.")
@@ -96,7 +111,10 @@ func menuResolveIPsecServiceConflictWithOps(input io.Reader, reader *bufio.Reade
 			menuNotice(out, "OK", "IPsec host admission now passes; continuing the selected preparation.")
 			return true
 		}
-		menuNotice(out, "WARNING", "Recheck still blocked: inspect the JSON report; do not blindly repeat PREPARE.")
+		fresh := ipsecReadinessCheck(err)
+		menuNotice(out, "WARNING", "Recheck still blocked; no service was changed. Do not blindly repeat PREPARE.")
+		menuField(out, "Actual preflight", fresh.ReasonCode)
+		menuProse(out, "Next: "+fresh.NextStep)
 		return false
 	}
 	if !supported || answer != "STOP "+plan.Unit || strings.ContainsAny(answer, "\r\n") {
@@ -118,7 +136,10 @@ func menuResolveIPsecServiceConflictWithOps(input io.Reader, reader *bufio.Reade
 	err = ops.readiness(probeCtx)
 	end()
 	if err != nil {
-		menuNotice(out, "WARNING", "Other IPsec ownership/prerequisite checks still block the new private service. Manual reconciliation is required; no Link created.")
+		menuNotice(out, "WARNING", "Other IPsec ownership/prerequisite checks still block the new private service. No Link created.")
+		fresh := ipsecReadinessCheck(err)
+		menuField(out, "Actual preflight", fresh.ReasonCode)
+		menuProse(out, "Next: "+fresh.NextStep)
 		return false
 	}
 	menuNotice(out, "OK", "Fresh private IPsec readiness passes; continuing selected preparation.")

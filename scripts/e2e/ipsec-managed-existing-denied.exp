@@ -40,6 +40,16 @@ if {$env(STL_IPSEC_PREPARE_CASE) eq "existing_vendor_local_metadata_forgery" ||
     timeout { puts stderr "IPSEC_VENDOR=NO_SIGNED_ARCHIVE_METADATA_REJECTION"; exit 33 }
   }
 }
+# Distinguish the direct relationship from an unrelated preview refusal.
+# Existing package/alias/port checks must pass before this UpheldBy gate.
+if {$env(STL_IPSEC_PREPARE_CASE) eq "existing_vendor_direct_upholds"} {
+  expect {
+    -re {UpheldBy} {
+      puts "IPSEC_DIRECT_UPHELDBY_PREVIEW_SPECIFIC_REASON=PASS"
+    }
+    timeout { puts stderr "IPSEC_DIRECT_UPHELDBY_PREVIEW_NOT_OBSERVED"; exit 34 }
+  }
+}
 expect {
   -re {Service action \(Enter cancels\):} {
     # One case becomes unsafe AFTER preview, but BEFORE the final STOP
@@ -48,15 +58,28 @@ expect {
       exec /bin/mkdir -p /etc/swanctl/conf.d
       exec /usr/bin/touch /etc/swanctl/conf.d/stl-test-foreign-after-preview.conf
     }
+    if {$env(STL_IPSEC_PREPARE_CASE) eq "existing_vendor_late_direct_upholds"} {
+      puts [exec /usr/bin/bash /mnt/stl-direct-upholder.sh]
+      puts "IPSEC_DIRECT_UPHELDBY_ADDED_AFTER_PREVIEW=PASS"
+    }
     send -- "STOP strongswan.service\r"
   }
   timeout { puts stderr "IPSEC_FOREIGN_STOP_NEGATIVE=SERVICE_MENU_TIMEOUT"; exit 24 }
 }
 expect {
   -re {No eligible exact-unit STOP/DISABLE consent was provided} {
+    if {$env(STL_IPSEC_PREPARE_CASE) eq "existing_vendor_late_direct_upholds"} {
+      puts stderr "IPSEC_LATE_DIRECT_UPHELDBY_FALSE_EARLY_DENIAL"; exit 35
+    }
     puts "IPSEC_FOREIGN_HOST_PREVIEW_STOP_DENIED=PASS"
   }
   -re {Service transition was refused or incomplete} {
+    if {$env(STL_IPSEC_PREPARE_CASE) eq "existing_vendor_direct_upholds"} {
+      puts stderr "IPSEC_EARLY_DIRECT_UPHELDBY_NOT_REJECTED_AT_PREVIEW"; exit 36
+    }
+    if {$env(STL_IPSEC_PREPARE_CASE) eq "existing_vendor_late_direct_upholds"} {
+      puts "IPSEC_DIRECT_UPHELDBY_LOCKED_RECHECK_DENIED=PASS"
+    }
     puts "IPSEC_FOREIGN_HOST_REATTESTED_BEFORE_STOP=PASS"
   }
   timeout { puts stderr "IPSEC_FOREIGN_STOP_NEGATIVE=SERVICE_CHANGED_OR_STOP_WAS_NOT_DENIED"; exit 25 }

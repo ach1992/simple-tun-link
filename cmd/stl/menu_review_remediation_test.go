@@ -169,3 +169,35 @@ func TestReviewerDoctorAt60ColumnsIsReadableAndReadOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestReviewerDoctorDoesNotMistakeInstalledDisabledVendorForLiveConflict(t *testing.T) {
+	report := diagnostics.IPsecHostReport{SchemaVersion: 1, Backend: "ipsec", RuntimeMode: "native_exclusive",
+		Checks: []diagnostics.IPsecHostCheck{
+			{Name: "strongswan_service", Status: "blocked", ReasonCode: "strongswan_service_observed",
+				Summary: "A known vendor unit file exists; activity is unverified."},
+			{Name: "operational_runtime", Status: "blocked", ReasonCode: diagnostics.IPsecRuntimeNotRegisteredReason},
+			{Name: "provisioning_readiness", Status: "blocked", ReasonCode: "ipsec_provisioning_vendor_enablement_unverified",
+				NextStep: "Inspect exact unit enablement; do not stop an inactive/disabled service."},
+		}}
+	var out bytes.Buffer
+	renderIPsecDoctorHuman(&out, report)
+	got := out.String()
+	for _, want := range []string{"Native preflight", "ipsec_provisioning_vendor_enablement_unverified",
+		"Inspect exact unit enablement", "NOT READY"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Doctor did not explain exact preflight cause %q: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "A conflicting or unowned process, service or IKE port was observed") {
+		t.Fatalf("a service file alone was promoted to an active conflict: %s", got)
+	}
+
+	report.Checks[2] = diagnostics.IPsecHostCheck{Name: "provisioning_readiness",
+		Status: "observed", ReasonCode: "ipsec_provisioning_prerequisites_verified"}
+	out.Reset()
+	renderIPsecDoctorHuman(&out, report)
+	if !strings.Contains(out.String(), "Private provisioning prerequisites pass right now") ||
+		strings.Contains(out.String(), "IPsec / runtime VERIFIED") {
+		t.Fatalf("read-only provisioning proof incorrectly claimed an active or missing service: %s", out.String())
+	}
+}

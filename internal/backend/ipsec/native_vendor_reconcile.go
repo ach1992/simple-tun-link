@@ -90,6 +90,90 @@ func nativeVendorDistroOwnership(ctx context.Context, fragment string) error {
 	return errors.New("vendor systemd fragment is not uniquely owned by charon-systemd")
 }
 
+// A direct [Unit] Upholds= dependency in another active unit has no
+// necessary *.upholds filesystem edge. Its inverse is observable as
+// UpheldBy= on the vendor unit. Unlike Wants=/Requires=, Upholds= can
+// immediately restart a stopped vendor unit, so even separately consented
+// STOP must be refused before ANY service transition.
+//
+// systemd 247/248 predate Upholds= (introduced in 249). On those older
+// managers, systemctl may emit no property at all. Permit that omission
+// only with a separately proven old PID1 manager version. Newer missing,
+// malformed, ambiguous, duplicated or occupied properties fail closed.
+func vendorStopSystemdVersion(raw []byte) (int, bool) {
+	if len(raw) < len("Version=247\n") || len(raw) > 120 ||
+		!strings.HasPrefix(string(raw), "Version=") || raw[len(raw)-1] != '\n' ||
+		strings.Count(string(raw), "\n") != 1 {
+		return 0, false
+	}
+	s := strings.TrimSuffix(strings.TrimPrefix(string(raw), "Version="), "\n")
+	if len(s) < 3 {
+		return 0, false
+	}
+	for _, b := range []byte(s) {
+		if b < 0x21 || b > 0x7e {
+			return 0, false
+		}
+	}
+	if s[0] < '1' || s[0] > '9' || s[1] < '0' || s[1] > '9' || s[2] < '0' || s[2] > '9' {
+		return 0, false
+	}
+	if len(s) > 3 && !strings.ContainsAny(s[3:4], ".-+~") {
+		return 0, false
+	}
+	return int(s[0]-'0')*100 + int(s[1]-'0')*10 + int(s[2]-'0'), true
+}
+
+func vendorStopLegacyWithoutUpholds(raw []byte) bool {
+	version, ok := vendorStopSystemdVersion(raw)
+	return ok && (version == 247 || version == 248)
+}
+
+func vendorStopUpheldByReceipt(property, legacyVersion []byte) error {
+	if string(property) == "UpheldBy=\n" {
+		return nil
+	}
+	if len(property) == 0 && vendorStopLegacyWithoutUpholds(legacyVersion) {
+		return nil
+	}
+	if len(property) > len("UpheldBy=\n") &&
+		len(property) < 512 && strings.HasPrefix(string(property), "UpheldBy=") &&
+		property[len(property)-1] == '\n' && strings.Count(string(property), "\n") == 1 {
+		return errors.New("vendor UpheldBy dependency blocks STOP; reconcile the upholding service")
+	}
+	return errors.New("vendor effective UpheldBy relationship unverified; no STOP allowed")
+}
+
+func vendorStopEffectiveUpheldBySafe(ctx context.Context) error {
+	runner := nativeSystemdRunner{Timeout: 4 * time.Second}
+	// --all is required: systemctl otherwise omits unset properties even
+	// with an explicit -p filter. Require a literal, single empty receipt.
+	result, err := runner.RunBounded(ctx, CaptureLimits{Stdout: 512, Stderr: 256},
+		nativeSystemctlBinary, "--system", "--no-pager", "--all", "show",
+		vendorServiceName, "-p", "UpheldBy")
+	if err != nil || len(result.Stderr) != 0 {
+		return errors.New("vendor effective UpheldBy observation failed; no STOP allowed")
+	}
+	if len(result.Stdout) != 0 {
+		return vendorStopUpheldByReceipt(result.Stdout, nil)
+	}
+	// Distinguish the legitimate pre-v249 absence of this property from a
+	// missing/unsupported newer observation. Query the real local manager,
+	// already authenticated by vendorStopHostSafe's PID1 gate.
+	manager, err := runner.RunBounded(ctx, CaptureLimits{Stdout: 128, Stderr: 256},
+		nativeSystemctlBinary, "--system", "--no-pager", "show", "-p", "Version")
+	if err != nil || len(manager.Stderr) != 0 {
+		return errors.New("systemd manager version unavailable for UpheldBy attestation")
+	}
+	if version, ok := vendorStopSystemdVersion(manager.Stdout); ok && (version == 249 || version == 250) {
+		// Upholds= already exists in these releases, but the UpheldBy D-Bus
+		// property does not. Use their PID1-generated dependency snapshot,
+		// never an on-disk approximation or a blind empty-property allowance.
+		return vendorStopSystemd249Dump(ctx, version)
+	}
+	return vendorStopUpheldByReceipt(nil, manager.Stdout)
+}
+
 // InspectVendorServiceStopPlan returns a candidate only if a recognized,
 // independently vetted official distro service is currently active or
 // enabled. It performs no writes. No automatic action is allowed for an
@@ -142,6 +226,11 @@ func InspectVendorServiceStopPlan(ctx context.Context) (VendorServiceStopPlan, e
 	// unrelated host conditions before showing STOP; the caller repeats
 	// this entire inspector under the exclusive installed maintenance lock.
 	if err := vendorStopHostSafe(ctx, active, fragment, productionVendorStopSafetyOps()); err != nil {
+		return VendorServiceStopPlan{}, err
+	}
+	// Last read-only gate in BOTH the preview and the re-inspection under
+	// the installed maintenance lease immediately before STOP/DISABLE.
+	if err := vendorStopEffectiveUpheldBySafe(ctx); err != nil {
 		return VendorServiceStopPlan{}, err
 	}
 	return VendorServiceStopPlan{Unit: vendorServiceName, Active: active, Enabled: enabled}, nil

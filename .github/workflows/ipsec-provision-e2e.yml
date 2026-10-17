@@ -70,12 +70,13 @@ jobs:
             if [[ -n "$cid" ]]; then docker rm -f "$cid" >/dev/null 2>&1 || :; fi
           }
           trap cleanup EXIT
-          for scenario in existing_vendor existing_vendor_optional_clean existing_vendor_foreign_config existing_vendor_foreign_alias existing_vendor_private_conflict existing_vendor_untrusted_config_owner existing_vendor_foreign_process existing_vendor_late_config existing_vendor_optional_modified existing_vendor_optional_partial existing_vendor_local_metadata_forgery existing_vendor_plugin_world_writable existing_vendor_plugin_parent_writable existing_vendor_plugin_parent_symlink foreign foreign_alias foreign_prefix foreign_attached foreign_transient forged_origin partial ghost clean; do
+          for scenario in existing_vendor existing_vendor_optional_clean existing_vendor_foreign_config existing_vendor_foreign_alias existing_vendor_upholds existing_vendor_direct_upholds existing_vendor_late_direct_upholds existing_vendor_private_conflict existing_vendor_untrusted_config_owner existing_vendor_foreign_process existing_vendor_late_config existing_vendor_optional_modified existing_vendor_optional_partial existing_vendor_local_metadata_forgery existing_vendor_plugin_world_writable existing_vendor_plugin_parent_writable existing_vendor_plugin_parent_symlink foreign foreign_alias foreign_prefix foreign_attached foreign_transient foreign_upholds foreign_upholds_alias forged_origin partial ghost clean; do
             cid=$(docker run --rm -d --network bridge --privileged \
               --cgroupns private --tmpfs /run --tmpfs /run/lock \
               -v "$PWD/scripts/install.sh:/mnt/stl-install.sh:ro" \
               -v "/tmp/stl-ipsec-native-e2e/bundle:/mnt/stl-bundle:ro" \
               -v "$PWD/scripts/e2e/ipsec-managed-prepare-systemd.sh:/mnt/managed-e2e.sh:ro" \
+              -v "$PWD/scripts/e2e/ipsec-direct-upholder-systemd.sh:/mnt/stl-direct-upholder.sh:ro" \
               -v "$PWD/scripts/e2e/ipsec-managed-prepare-menu.exp:/mnt/managed-menu.exp:ro" \
               -v "$PWD/scripts/e2e/ipsec-managed-existing-service.exp:/mnt/managed-existing.exp:ro" \
               -v "$PWD/scripts/e2e/ipsec-managed-existing-denied.exp:/mnt/managed-existing-denied.exp:ro" \
@@ -101,11 +102,21 @@ jobs:
           }
           trap cleanup EXIT
           cid=$(docker run --rm -d --network none --privileged --cgroupns private \
-            --tmpfs /run --tmpfs /run/lock stl-ipsec-real-provision:pr)
+            --tmpfs /run --tmpfs /run/lock \
+            -v "$PWD/scripts/e2e/ipsec-missing-vendor-systemd.sh:/mnt/stl-missing-vendor-e2e.sh:ro" \
+            stl-ipsec-real-provision:pr)
           for bin in stl stl-ipsec-provision-test; do
             docker cp "/tmp/stl-ipsec-native-e2e/$bin" "$cid:/usr/local/bin/$bin"
           done
           docker exec "$cid" sh -c 'chown root:root /usr/local/bin/stl /usr/local/bin/stl-ipsec-provision-test && chmod 0755 /usr/local/bin/stl /usr/local/bin/stl-ipsec-provision-test'
+          # Test real systemd reload and SysV generator only in this
+          # disconnected disposable guest, before checking private startup.
+          test -f scripts/e2e/ipsec-missing-vendor-systemd.sh
+          docker exec "$cid" /usr/bin/test -f /mnt/stl-missing-vendor-e2e.sh
+          docker exec -e STL_E2E_DISPOSABLE_GUEST=approved \
+            -e STL_IPSEC_MISSING_VENDOR_NEGATIVE=approved \
+            "$cid" /usr/bin/bash /mnt/stl-missing-vendor-e2e.sh
+          echo "NATIVE_VENDOR_MISSING_IDENTITY_REAL_SYSTEMD_E2E=PASS"
           docker exec -e STL_E2E_DISPOSABLE_HOST=approved \
             -e STL_IPSEC_ISOLATED=approved \
             -e STL_IPSEC_SYSTEMD_FIXTURE=approved \
@@ -203,3 +214,59 @@ jobs:
             docker rm -f "$cid" >/dev/null
             cid=''
           done
+
+
+  # Ubuntu 22.04 PID1 systemd 249 implements Upholds= without the UpheldBy
+  # D-Bus property. This job proves both safety and genuine clean STOP on
+  # that actual manager instead of using a mocked version string.
+  official-v249-vendor-stop:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    timeout-minutes: 28
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build exact HEAD and disposable systemd 249 guest
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          test -z "$(git status --porcelain)"
+          test ! -e /.dockerenv
+          mkdir -m 0700 /tmp/stl-ipsec-v249
+          bash scripts/build-artifacts.sh --snapshot /tmp/stl-ipsec-v249/bundle
+          docker build -f scripts/e2e/ipsec-lab-ubuntu-systemd-clean.Dockerfile \
+            --build-arg STL_UBUNTU_VERSION=22.04 -t stl-ipsec-v249:pr .
+      - name: Real Ubuntu 22.04 PID1-systemd 249 vendor STOP acceptance
+        run: |
+          set -euo pipefail
+          cid=''
+          cleanup() {
+            if [[ -n "$cid" ]]; then docker rm -f "$cid" >/dev/null 2>&1 || :; fi
+          }
+          trap cleanup EXIT
+          for scenario in existing_vendor existing_vendor_direct_upholds existing_vendor_late_direct_upholds; do
+            cid=$(docker run --rm -d --network bridge --privileged \
+              --cgroupns private --tmpfs /run --tmpfs /run/lock \
+              -v "$PWD/scripts/install.sh:/mnt/stl-install.sh:ro" \
+              -v "/tmp/stl-ipsec-v249/bundle:/mnt/stl-bundle:ro" \
+              -v "$PWD/scripts/e2e/ipsec-managed-prepare-systemd.sh:/mnt/managed-e2e.sh:ro" \
+              -v "$PWD/scripts/e2e/ipsec-direct-upholder-systemd.sh:/mnt/stl-direct-upholder.sh:ro" \
+              -v "$PWD/scripts/e2e/ipsec-managed-existing-service.exp:/mnt/managed-existing.exp:ro" \
+              -v "$PWD/scripts/e2e/ipsec-managed-existing-denied.exp:/mnt/managed-existing-denied.exp:ro" \
+              stl-ipsec-v249:pr)
+            test -n "$cid"
+            docker exec -e STL_E2E_DISPOSABLE_GUEST=approved \
+              -e STL_IPSEC_EXPECT_SYSTEMD_MAJOR=249 \
+              -e STL_IPSEC_PREPARE_CASE="$scenario" \
+              "$cid" bash /mnt/managed-e2e.sh
+            echo "REAL_SYSTEMD_249_VENDOR_STOP_$scenario=PASS"
+            docker rm -f "$cid" >/dev/null
+            cid=''
+          done
+          echo 'REAL_SYSTEMD_249_CLEAN_AND_BOTH_DIRECT_UPHOLDS=PASS'

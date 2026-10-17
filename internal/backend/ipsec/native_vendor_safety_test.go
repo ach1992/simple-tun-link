@@ -3,6 +3,8 @@ package ipsec
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -161,4 +163,102 @@ func TestVendorStopRejectsUnboundedOrMissingProductionOperations(t *testing.T) {
 			t.Fatalf("invalid service approval: %+v", candidate)
 		}
 	}
+}
+
+// The STOP safety gate and missing-unit gate must share the same systemd
+// dependency inventory while allowing only unrelated units and the ordinary
+// consented vendor .wants/.requires boot edges.
+func TestVendorStopBootEdgesProtectUpholdsWithoutRejectingUnrelatedServices(t *testing.T) {
+	root := t.TempDir()
+	base := filepath.Join(root, "etc/systemd/system")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	checkSafe := func() {
+		t.Helper()
+		if err := vendorStopBootEdgesSafeAt(root); err != nil {
+			t.Fatalf("clean or unrelated manager dependencies rejected: %v", err)
+		}
+	}
+	checkUnsafe := func() {
+		t.Helper()
+		if err := vendorStopBootEdgesSafeAt(root); err == nil {
+			t.Fatal("foreign or upheld vendor dependency admitted")
+		}
+	}
+	checkSafe()
+	for _, tc := range []struct{ dir, name string }{
+		{"stl.target.wants", "charon-systemd.service"},
+		{"stl.target.requires", "simple-tun-link-ipsec.service"},
+		{"stl.target.upholds", "charon-systemd.service"},
+		{"stl.target.upholds", "strongswan.service"},
+		{"stl.target.upholds", "strongswan-swanctl.service"},
+	} {
+		t.Run(tc.dir+"_"+tc.name, func(t *testing.T) {
+			edge := filepath.Join(base, tc.dir)
+			if err := os.MkdirAll(edge, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(edge, tc.name)
+			if err := os.Symlink("/missing/vendor.service", path); err != nil {
+				t.Fatal(err)
+			}
+			checkUnsafe()
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			checkSafe()
+		})
+	}
+	for _, name := range []string{"strongswan.service", "strongswan-swanctl.service"} {
+		// Normal official vendor enablement is not an unconditional STOP
+		// conflict: a separately consented STOP can disable such an edge.
+		for _, suffix := range []string{".wants", ".requires"} {
+			edge := filepath.Join(base, "stl.target"+suffix)
+			if err := os.MkdirAll(edge, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(edge, name)
+			if err := os.Symlink(name, path); err != nil {
+				t.Fatal(err)
+			}
+			checkSafe()
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	edge := filepath.Join(base, "stl.target.upholds")
+	unrelated := filepath.Join(edge, "unrelated.service")
+	if err := os.Symlink("/missing/unrelated.service", unrelated); err != nil {
+		t.Fatal(err)
+	}
+	checkSafe()
+	if err := os.Remove(unrelated); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, target string }{
+		{"stl-foreign-alias.service", "charon-systemd.service"},
+		{"stl-upheld-alias.service", "strongswan.service"},
+	} {
+		if err := os.Symlink(tc.target, filepath.Join(edge, tc.name)); err != nil {
+			t.Fatal(err)
+		}
+		checkUnsafe()
+		if err := os.Remove(filepath.Join(edge, tc.name)); err != nil {
+			t.Fatal(err)
+		}
+		checkSafe()
+	}
+	if err := os.Remove(edge); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "outside"), edge); err != nil {
+		t.Fatal(err)
+	}
+	checkUnsafe()
+	if err := os.Remove(edge); err != nil {
+		t.Fatal(err)
+	}
+	checkSafe()
 }

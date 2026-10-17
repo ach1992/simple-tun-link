@@ -32,6 +32,16 @@ if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor* ]]; then
   [[ $(systemctl --system is-active strongswan.service) == active &&
      $(systemctl --system is-enabled strongswan.service) == enabled ]] ||
     fail existing_vendor_not_live_before_user_consent
+  if [[ ${STL_IPSEC_EXPECT_SYSTEMD_MAJOR:-} == 249 ]]; then
+    # Prove a real v249 PID1 and missing UpheldBy property, not a mocked
+    # version string or a distribution branding claim.
+    [[ $(systemctl --version | head -n 1) == 'systemd 249'* &&
+       $(systemctl --system --no-pager show -p Version) == Version=249* ]] ||
+      fail actual_systemd_249_pid1_not_verified
+    [[ -z $(systemctl --system --no-pager --all show strongswan.service -p UpheldBy) ]] ||
+      fail v249_upheldby_property_unexpectedly_available
+    echo 'IPSEC_PID1_V249_UPHOLDS_WITHOUT_DBUS_UPHELDBY=PASS'
+  fi
   plan=$(bash /mnt/stl-install.sh requirements --backends native,ipsec) ||
     fail existing_vendor_package_inventory_unknown
   grep -qx "missing_packages=" <<< "$plan" ||
@@ -58,6 +68,24 @@ if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor* ]]; then
     existing_vendor_foreign_config)
       mkdir -p /etc/swanctl/conf.d
       printf 'foreign connection; must not be adopted\n' >/etc/swanctl/conf.d/foreign.conf
+      ;;
+    existing_vendor_direct_upholds)
+      # Exercise a separate ACTIVE unit's direct [Unit] Upholds=.
+      # No *.upholds filesystem link exists for this case.
+      /usr/bin/bash /mnt/stl-direct-upholder.sh ||
+        fail cannot_construct_direct_upheldby_fixture
+      ;;
+    existing_vendor_late_direct_upholds)
+      # The same dependency is introduced by the Expect operator driver
+      # AFTER preview but BEFORE typed STOP, proving locked reinspection.
+      ;;
+    existing_vendor_upholds)
+      # An UpheldBy edge can restart a consented-to-STOP distro service.
+      # The foreign dependency is not owned by STL.
+      edge=/etc/systemd/system/stl-disposable.target.upholds
+      mkdir -p "$edge"
+      ln -s /usr/lib/systemd/system/strongswan.service "$edge/strongswan.service"
+      systemctl --system daemon-reload || fail cannot_reload_upheld_vendor_fixture
       ;;
     existing_vendor_foreign_alias)
       mkdir -p /run/systemd/system.attached/strongswan-swanctl.service.d
@@ -193,6 +221,16 @@ if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor* ]]; then
     existing_vendor_late_config) ;;
     *) fail unrecognized_existing_vendor_case ;;
   esac
+  if [[ "${STL_IPSEC_PREPARE_CASE}" == existing_vendor_direct_upholds ||
+        "${STL_IPSEC_PREPARE_CASE}" == existing_vendor_late_direct_upholds ]]; then
+    vendor_pid_before=$(systemctl --system --no-pager --value -p MainPID show strongswan.service) ||
+      fail cannot_read_original_vendor_pid
+    vendor_activation_before=$(systemctl --system --no-pager --value -p ActiveEnterTimestampMonotonic show strongswan.service) ||
+      fail cannot_read_original_vendor_activation
+    [[ $vendor_pid_before =~ ^[1-9][0-9]*$ &&
+       $vendor_activation_before =~ ^[1-9][0-9]*$ ]] ||
+      fail vendor_running_identity_not_proven
+  fi
   if [[ "${STL_IPSEC_PREPARE_CASE}" == existing_vendor ||
         "${STL_IPSEC_PREPARE_CASE}" == existing_vendor_optional_clean ]]; then
     /usr/bin/expect /mnt/managed-existing.exp || fail operator_vendor_consent_failed
@@ -206,6 +244,15 @@ if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor* ]]; then
     echo 'IPSEC_REAL_PRIOR_DISTRIBUTION_SERVICE_EXACT_OPERATOR_CONSENT=PASS'
   else
     /usr/bin/expect /mnt/managed-existing-denied.exp || fail forbidden_vendor_stop_not_denied
+    if [[ "${STL_IPSEC_PREPARE_CASE}" == existing_vendor_direct_upholds ||
+          "${STL_IPSEC_PREPARE_CASE}" == existing_vendor_late_direct_upholds ]]; then
+      [[ $(systemctl --system --no-pager --value -p MainPID show strongswan.service) == "$vendor_pid_before" &&
+         $(systemctl --system --no-pager --value -p ActiveEnterTimestampMonotonic show strongswan.service) == "$vendor_activation_before" ]] ||
+        fail upheld_vendor_restarted_or_was_stopped
+      [[ $(systemctl --system is-active stl-disposable-direct-upholder.service) == active ]] ||
+        fail direct_upholder_not_preserved
+      echo "IPSEC_DIRECT_UPHELDBY_ZERO_STOP_TRANSITIONS=${STL_IPSEC_PREPARE_CASE}:PASS"
+    fi
     [[ $(systemctl --system is-active strongswan.service) == active &&
        $(systemctl --system is-enabled strongswan.service) == enabled ]] ||
       fail existing_vendor_was_changed_despite_foreign_conflict
@@ -331,6 +378,33 @@ case "${STL_IPSEC_PREPARE_CASE:-}" in
     [[ ! -e /tmp/foreign-service-executed &&
        ! -e /usr/sbin/charon-systemd ]] || fail foreign_hook_or_package_touched
     echo "IPSEC_FOREIGN_PREEXISTING_DROPIN_DENIED_BEFORE_APT=PASS"
+    exit 0
+    ;;
+  foreign_upholds|foreign_upholds_alias)
+    # Reject a dormant .upholds dependency before installing packages,
+    # including aliases whose filename differs from the selected unit.
+    edge=/etc/systemd/system/stl-disposable.target.upholds
+    [[ ! -e $edge && ! -L $edge ]] || fail unexpected_upheld_fixture
+    mkdir -p "$edge"
+    target=charon-systemd.service
+    if [[ $STL_IPSEC_PREPARE_CASE == foreign_upholds_alias ]]; then
+      target=stl-disposable-charon-alias.service
+    fi
+    ln -s charon-systemd.service "$edge/$target"
+    systemctl --system daemon-reload || fail cannot_reload_upheld_fixture
+    if bash /mnt/stl-install.sh prepare --backends native,ipsec \
+       --expected-missing "$missing" --expected-apt-plan "$apt_plan" \
+       >/tmp/stl-upheld-stdout 2>/tmp/stl-upheld-stderr; then
+      fail foreign_upheld_identity_accepted
+    fi
+    grep -q 'service boot edge' /tmp/stl-upheld-stderr ||
+      fail foreign_upheld_identity_rejected_for_unrelated_reason
+    [[ ! -e /usr/sbin/charon-systemd && ! -e /var/lib/simple-tun-link/ipsec ]] ||
+      fail foreign_upheld_identity_allowed_apt_or_private_publication
+    [[ $(sha256sum /usr/local/bin/stl | awk '{print $1}') == "$original" &&
+       $(sha256sum /usr/local/lib/simple-tun-link/install-record | awk '{print $1}') == "$record" ]] ||
+      fail foreign_upheld_identity_replaced_installed_binary
+    echo "IPSEC_FOREIGN_UPHOLDS_DENIED_BEFORE_APT=$STL_IPSEC_PREPARE_CASE:PASS"
     exit 0
     ;;
   foreign_alias|foreign_prefix|foreign_attached|foreign_transient)

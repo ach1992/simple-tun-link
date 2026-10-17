@@ -282,8 +282,8 @@ func menuPrepareSelectedPackagesWithOps(input io.Reader, reader *bufio.Reader, o
 			// service STOP/DISABLE consent or let the operator repair manually.
 			// Only a clean *initial* package inventory can enter automatic
 			// vendor remediation; partial APT is never treated as a safe takeover.
-			if !menuResolveIPsecServiceConflict(input, reader, out, plan.missing == "") {
-				menuNotice(out, "FAILED", "Private IPsec admission remains blocked. Reconcile the observed conflict before continuing; no Link created.")
+			if !menuResolveIPsecServiceConflict(input, reader, out, plan.missing == "", err) {
+				menuNotice(out, "FAILED", "Private IPsec admission remains blocked. Review the actual preflight reason above; no Link created.")
 				return menuPackagePreparation{}
 			}
 		}

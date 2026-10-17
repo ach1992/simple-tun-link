@@ -452,7 +452,7 @@ ipsec_loaded_unit_inventory_clean() (
 # This is intentionally eligibility for first install, not foreign-service
 # remediation. The existing Go provisioner separately admits the STL unit.
 ipsec_clean_host_before_apt() {
-  local item dir unit proc line list
+  local item dir unit proc line list edge alias target
   [[ $EUID == 0 && -d /run/systemd/system ]] ||
     fail 'automatic IPsec requires a running root systemd host'
   [[ ! -e /var/lib/simple-tun-link/ipsec && ! -L /var/lib/simple-tun-link/ipsec ]] ||
@@ -474,17 +474,40 @@ ipsec_clean_host_before_apt() {
     [[ ! -e $item && ! -L $item ]] ||
       fail 'pre-existing strongSwan/IPsec configuration is not STL-owned'
   done
-  for unit in strongswan.service strongswan-swanctl.service \
-              strongswan-starter.service charon-systemd.service \
-              ipsec.service simple-tun-link-ipsec.service; do
+  # Keep one canonical set of IPsec identities for unit files and all
+  # supported systemd dependency links. Unrelated services are allowed.
+  local -a ipsec_units=(
+    strongswan.service strongswan-swanctl.service
+    strongswan-starter.service charon-systemd.service
+    ipsec.service simple-tun-link-ipsec.service
+  )
+  for unit in "${ipsec_units[@]}"; do
     for dir in "${ipsec_system_unit_dirs[@]}"; do
       [[ ! -e "$dir/$unit" && ! -L "$dir/$unit" &&
          ! -e "$dir/$unit.d" && ! -L "$dir/$unit.d" ]] ||
         fail 'an existing vendor/STL systemd unit or override is present'
-      # Boot edges may be placed in any manager-searchable unit directory.
-      for edge in "$dir"/*.wants "$dir"/*.requires; do
+    done
+  done
+  # Inspect each dependency directory exactly once (not once per unit).
+  # Alongside WantedBy=/RequiredBy=, UpheldBy= has existed since systemd 249.
+  for dir in "${ipsec_system_unit_dirs[@]}"; do
+    for edge in "$dir"/*.wants "$dir"/*.requires "$dir"/*.upholds; do
+      if [[ -e $edge || -L $edge ]]; then
+        [[ -d $edge && ! -L $edge ]] ||
+          fail 'unverified systemd dependency directory before APT'
+      fi
+      for unit in "${ipsec_units[@]}"; do
         [[ ! -e "$edge/$unit" && ! -L "$edge/$unit" ]] ||
           fail 'a pre-existing vendor/STL service boot edge is present'
+      done
+      for alias in "$edge"/*.service; do
+        [[ -L $alias ]] || continue
+        target=$(readlink -- "$alias") ||
+          fail 'cannot inspect pre-existing service dependency alias'
+        case ${target##*/} in
+          strongswan.service|strongswan-swanctl.service|strongswan-starter.service|charon-systemd.service|ipsec.service|simple-tun-link-ipsec.service)
+            fail 'a pre-existing vendor/STL service boot edge alias is present' ;;
+        esac
       done
     done
   done
