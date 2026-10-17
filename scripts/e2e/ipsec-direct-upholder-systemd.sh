@@ -35,8 +35,26 @@ UNIT
   fail upholder_start
 [[ $(/usr/bin/systemctl --system is-active stl-disposable-direct-upholder.service) == active ]] ||
   fail upholder_not_active
-[[ $(/usr/bin/systemctl --system --no-pager --all show strongswan.service -p UpheldBy) == UpheldBy=stl-disposable-direct-upholder.service ]] ||
-  fail direct_reverse_dependency_not_visible
+if [[ ${STL_IPSEC_EXPECT_SYSTEMD_MAJOR:-} == 249 ]]; then
+  # Upholds exists on systemd 249, but UpheldBy was not exported on D-Bus.
+  # Test the same actual PID1 manager snapshot consumed by STL's fallback;
+  # do not fake or assume an unsupported effective property.
+  [[ -z $(/usr/bin/systemctl --system --no-pager --all show strongswan.service -p UpheldBy) ]] ||
+    fail v249_unexpected_upheldby_property
+  dump=$(/usr/bin/systemd-analyze --system --no-pager dump) ||
+    fail v249_manager_dump_failed
+  awk '
+    /^-> Unit strongswan.service:$/ { selected=1; next }
+    /^-> Unit / { selected=0 }
+    selected && /^\tUpheldBy: stl-disposable-direct-upholder.service \(/ { found=1 }
+    END { if (!found) exit 1 }
+  ' <<< "$dump" || fail v249_direct_upheldby_missing_from_pid1_dump
+  unset dump
+  echo 'IPSEC_REAL_PID1_V249_DIRECT_UPHELDBY_DUMP=PASS'
+else
+  [[ $(/usr/bin/systemctl --system --no-pager --all show strongswan.service -p UpheldBy) == UpheldBy=stl-disposable-direct-upholder.service ]] ||
+    fail direct_reverse_dependency_not_visible
+fi
 
 for base in /etc/systemd/system /run/systemd/system /usr/lib/systemd/system /lib/systemd/system; do
   for edge in "$base"/*.upholds; do
