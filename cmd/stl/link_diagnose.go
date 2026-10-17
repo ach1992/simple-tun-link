@@ -65,6 +65,13 @@ func linkDiagnoseCommand(args []string, stdout, stderr io.Writer, options *runti
 	measurement, err := inspectLinkDiagnostic(ctx, record.Desired, *options, manualMTU)
 	if err != nil {
 		code := stlerr.CodeOf(err)
+		if record.Desired.Backend == domain.BackendIPsec && stlerr.Public(err).ReasonCode == "ipsec_sa_not_established" {
+			public := stlerr.New(stlerr.CodeInspect, "link_diagnose", string(id), "ipsec",
+				"IPsec is configured but no matching security association exists; no ICMP probes were sent")
+			public.ReasonCode = "ipsec_sa_not_established"
+			public.NextStep = stlerr.Public(err).NextStep
+			return readCommandPublicError(stdout, stderr, jsonOutput, public)
+		}
 		if stlerr.Public(err).ReasonCode == "kernel_module_not_loaded" {
 			public := stlerr.New(code, "link_diagnose", "", "",
 				"required kernel module is available on disk but not loaded; diagnostic inventory was not verified")

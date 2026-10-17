@@ -49,8 +49,14 @@ func ObserveIPsec(ctx context.Context, link domain.Link, inspector IPsecInspecto
 		return IPsecReport{}, stlerr.New(stlerr.CodeInspect, "diagnose_ipsec", string(link.ID), "ipsec", "IPsec kernel/daemon identity does not match desired Link")
 	}
 	if !state.SecurityAssociationPresent {
-		return IPsecReport{}, stlerr.New(stlerr.CodeInspect, "diagnose_ipsec", string(link.ID), "ipsec",
-			"no matching IPsec security association is installed; Link Address probes must not proceed")
+		// A committed, exact-owner XFRM Link without an SA is a known
+		// pre-probe state, not an unexplained ICMP outage. Do not initiate
+		// IKE from this observational API.
+		public := stlerr.New(stlerr.CodeInspect, "diagnose_ipsec", string(link.ID), "ipsec",
+			"IPsec configured, but no matching security association is established; peer pings were not sent")
+		public.ReasonCode = "ipsec_sa_not_established"
+		public.NextStep = "After both servers have completed Create/Import, select My tunnels -> Connect IPsec (explicit confirmation required), then retry Test connectivity."
+		return IPsecReport{}, public
 	}
 	report, err := ObserveLinux(ctx, link, LinuxProbeOptions{
 		Runner: runner, Interface: state.Interface, ExpectedIfIndex: state.IfIndex,

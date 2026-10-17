@@ -38,13 +38,26 @@ discoverable.
   separately for future Share with fresh `SHOW`. Explicit `DELETE`
   removes only that saved handoff, not the active Link or local key.
 - My tunnels offers local Status, Link-scoped Test, Share, details and
-  identity-bound Remove. A human Remove requires a fresh `REMOVE`
+  identity-bound Remove. For saved IPsec Links only, **Connect IPsec**
+  starts IKEv2 through the canonical locked `connect-ipsec` Engine after
+  a fresh exact `CONNECT` confirmation. IPsec Create/Import provisions
+  both peers locally but never starts IKE automatically; after import
+  on the other server, use Connect IPsec on either peer, then test.
+  An already verified SA is tested read-only without reconnecting.
+  **Test connectivity** never creates an SA, changes services or silently repairs. A human Remove requires a fresh `REMOVE`
   after preview. **Test connectivity → A Check all tunnels** uses the
   existing versioned all-Link diagnostic report, presented as a compact
   table of peer IP, Ping replies and time-local results. Unverified or
   blocked checks retain their reason/next step; detailed MTU, counters
   and latency remain in the one-Link view. Test connectivity and
   ordinary Status are not repairs.
+- Protected Import tolerates only exact `Setup link:` clipboard labels
+  and terminal bracketed-paste framing; the encoded URL remains strictly
+  decoded and private, and unexpected/incomplete controls are rejected.
+  The paste itself is never echoed or displayed.
+- Missing IPsec SA is reported as `ipsec_sa_not_established`, with an
+  explicit Connect action rather than a generic ping outage; missing
+  identity or unrelated diagnostic failures remain unverified.
 - The interface presents short, actionable errors with distinguished
   missing, unknown, foreign and partly-mutated outcomes; no automatic
   retries of uncertain host effects. Color is semantic only. Preserve

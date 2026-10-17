@@ -101,7 +101,11 @@ through the explicit **SHOW** action and separately retired with
 **DELETE**; ordinary status and JSON never include the secret.
 IPsec is also available under Advanced types **only when its
 native-exclusive runtime has passed admission**. A failed IPsec
-preflight does not disable GRE/IPIP/WireGuard.
+preflight does not disable GRE/IPIP/WireGuard. For IPsec, after the
+other server has imported the protected Setup Link, choose **My tunnels
+→ Connect IPsec** on either peer and explicitly confirm `CONNECT`
+before running Test connectivity. Import alone does not initiate
+IKEv2; Test connectivity remains read-only and explains a missing SA.
 
 ## Manage Links
 

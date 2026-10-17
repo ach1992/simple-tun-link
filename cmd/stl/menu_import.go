@@ -79,6 +79,30 @@ func readPrivateMenuURL(input io.Reader, reader *bufio.Reader) (url string, err 
 	return readMenuURL(reader)
 }
 
+// normalizeMenuSetupPaste removes only exact, known clipboard presentation
+// framing. The strict canonical Setup Link decoder still validates the full
+// opaque token; never attempt to repair a partial token or strip arbitrary
+// terminal controls from secret-bearing input.
+func normalizeMenuSetupPaste(raw string) (string, bool) {
+	value := strings.TrimSpace(raw)
+	const start, end = "\x1b[200~", "\x1b[201~"
+	if strings.HasPrefix(value, start) && strings.HasSuffix(value, end) {
+		value = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(value, start), end))
+	}
+	const label = "Setup link:"
+	if len(value) >= len(label) && strings.EqualFold(value[:len(label)], label) {
+		value = strings.TrimSpace(value[len(label):])
+	}
+	// An unpaired bracket marker, hidden character, or a second line
+	// is never silently interpreted as part of a sensitive URL.
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return "", false
+		}
+	}
+	return value, true
+}
+
 // Before asking for an APPLY confirmation, discard terminal bytes that
 // might have been pasted with the setup URL. A pre-pasted second line must
 // not count as review/confirmation of details that appeared only afterwards.
@@ -164,7 +188,11 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 				menuNotice(out, "WARNING", "Paste interrupted. No tunnel changed; retry the same Setup Link.")
 				continue
 			}
-			encoded = strings.TrimSpace(encoded)
+			encoded, ok := normalizeMenuSetupPaste(encoded)
+			if !ok {
+				menuNotice(out, "WARNING", "Paste contains unexpected terminal control bytes. Copy only the complete Setup Link and retry; no changes made.")
+				continue
+			}
 			if encoded == "0" || strings.EqualFold(encoded, "q") {
 				return 0
 			}
@@ -243,7 +271,23 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			} else {
 				menuScreen(out, "Import / complete")
 				menuNotice(out, "OK", "Tunnel imported locally. Remote connectivity is not yet verified.")
-				fmt.Fprintln(out, "Next: Test connectivity on both servers (5 peer pings and latency).")
+				if preview.Backend == "ipsec" {
+					menuProse(out, "IPsec import configures the local Link; it does not start IKEv2. After both ends are configured, use My tunnels -> Connect IPsec, then Test connectivity.")
+					// A real terminal can opt in to the canonical exact-Link
+					// Connect immediately after import; it is never automatic.
+					if _, terminal := menuTerminal(out); terminal {
+						if current, loadErr := savedMenuLinks(options); loadErr == nil {
+							for _, row := range current {
+								if row.Desired.ID == preview.LinkID && row.Desired.Backend == "ipsec" {
+									menuConnectIPsec(input, reader, out, errOut, options, row.Desired)
+									break
+								}
+							}
+						}
+					}
+				} else {
+					fmt.Fprintln(out, "Next: Test connectivity on both servers (5 peer pings and latency).")
+				}
 			}
 			return code
 		}

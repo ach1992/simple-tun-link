@@ -125,3 +125,68 @@ func TestMenuConfirmationDiscardsQueuedTerminalInput(t *testing.T) {
 		t.Fatalf("queued terminal answer was not discarded: n=%d err=%v", n, err)
 	}
 }
+
+// The terminal, not just a strings.Reader fixture, must deliver exact
+// bracketed paste bytes through hidden input without echo or credential loss.
+func TestMenuRealPTYHiddenBracketedPasteIsNormalized(t *testing.T) {
+	master, slave := openMenuPTY(t)
+	fd := int(slave.Fd())
+	before, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := *before
+	restored.Lflag |= unix.ECHO | unix.ICANON
+	if err := unix.IoctlSetTermios(fd, unix.TCSETS, &restored); err != nil {
+		t.Fatal(err)
+	}
+	defer unix.IoctlSetTermios(fd, unix.TCSETS, before)
+	type outcome struct {
+		value string
+		err   error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		value, readErr := readPrivateMenuURL(slave, bufio.NewReader(slave))
+		done <- outcome{value, readErr}
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		now, e := unix.IoctlGetTermios(fd, unix.TCGETS)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if now.Lflag&unix.ECHO == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("terminal echo not disabled")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	const token = "stl://2.synthetic-credential-only.synthetic-hash"
+	if _, err := io.WriteString(master, "\x1b[200~Setup link: "+token+"\x1b[201~\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-done:
+		value, valid := normalizeMenuSetupPaste(got.value)
+		if got.err != nil || !valid || value != token {
+			t.Fatal("PTY bracketed paste not normalized safely")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("PTY protected input did not finish")
+	}
+	after, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+	if err != nil || after.Lflag&unix.ECHO == 0 {
+		t.Fatal("terminal ECHO not restored")
+	}
+	if err := unix.SetNonblock(int(master.Fd()), true); err != nil {
+		t.Fatal(err)
+	}
+	var received [512]byte
+	n, e := unix.Read(int(master.Fd()), received[:])
+	if n > 0 || (e != nil && !errors.Is(e, unix.EAGAIN)) {
+		t.Fatal("protected Setup Link bytes were echoed")
+	}
+}
