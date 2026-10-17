@@ -13,13 +13,31 @@ if (( EUID != 0 )); then
   echo 'REFUSED: isolated network acceptance requires disposable-host root' >&2
   exit 2
 fi
-for tool in go wg ip iptables ping mktemp git; do
+for tool in wg ip iptables ping mktemp sha256sum; do
   command -v "$tool" >/dev/null || { echo "MISSING_E2E_PREREQUISITE=$tool" >&2; exit 2; }
 done
 source_root="$(cd -- "$(dirname -- "$0")/../.." && pwd)"
 cd "$source_root"
 [[ -f go.mod ]] || { echo 'REFUSED: Go source is unavailable' >&2; exit 2; }
-[[ -z "$(git status --porcelain)" ]] || { echo 'REFUSED: test source must be committed and clean' >&2; exit 2; }
+# The disconnected cross-backend CI guest gets an exact-commit test binary,
+# not a writable checkout or Go toolchain. Require its pinned SHA256 identity.
+if [[ -n "${STL_E2E_PREBUILT_TEST:-}" ]]; then
+  [[ "${STL_E2E_SOURCE_SHA:-}" =~ ^[0-9a-f]{40}$ &&
+     "${STL_E2E_PREBUILT_SHA256:-}" =~ ^[0-9a-f]{64}$ &&
+     -f "$STL_E2E_PREBUILT_TEST" && -x "$STL_E2E_PREBUILT_TEST" ]] || {
+    echo 'REFUSED: unverified prebuilt WG E2E binary/source' >&2; exit 2;
+  }
+  [[ "$(sha256sum "$STL_E2E_PREBUILT_TEST" | awk '{print $1}')" == "$STL_E2E_PREBUILT_SHA256" ]] || {
+    echo 'REFUSED: prebuilt WG E2E binary hash mismatch' >&2; exit 2;
+  }
+  source_sha="$STL_E2E_SOURCE_SHA"
+else
+  for tool in go git; do
+    command -v "$tool" >/dev/null || { echo "MISSING_E2E_PREREQUISITE=$tool" >&2; exit 2; }
+  done
+  [[ -z "$(git status --porcelain)" ]] || { echo 'REFUSED: test source must be committed and clean' >&2; exit 2; }
+  source_sha="$(git rev-parse HEAD)"
+fi
 
 workdir="$(mktemp -d /tmp/stl-wg-e2e.XXXXXXXX)"
 suffix="${workdir##*.}"
@@ -57,11 +75,17 @@ if ip netns list | awk '{print $1}' | grep -Fxe "$ns_a" -e "$ns_b" >/dev/null; t
 fi
 mkdir -m 0700 "$workdir/a" "$workdir/b"
 
-printf 'WG_E2E_SOURCE_SHA=%s\n' "$(git rev-parse HEAD)"
+printf 'WG_E2E_SOURCE_SHA=%s\n' "$source_sha"
 printf 'WG_E2E_KERNEL=%s\n' "$(uname -r)"
 # No module installation/modprobe, host interfaces, host firewall changes,
 # root state-root, external peers, public credentials, or broad cleanups.
-GOTOOLCHAIN=local go test -c -o "$workdir/wg-e2e.test" ./cmd/stl
+if [[ -n "${STL_E2E_PREBUILT_TEST:-}" ]]; then
+  cp -- "$STL_E2E_PREBUILT_TEST" "$workdir/wg-e2e.test"
+  chmod 0700 "$workdir/wg-e2e.test"
+else
+  GOTOOLCHAIN=local go test -c -o "$workdir/wg-e2e.test" ./cmd/stl
+fi
+printf 'WG_E2E_BIN_SHA256=%s\n' "$(sha256sum "$workdir/wg-e2e.test" | awk '{print $1}')"
 ip netns add "$ns_a"
 created_a=1
 ip netns add "$ns_b"
@@ -121,8 +145,22 @@ ip netns exec "$ns_b" ping -n -c 3 -W 3 -I 10.83.10.1 10.83.10.0 >/dev/null
 echo 'WG_REAL_BIDIRECTIONAL_PEER_TRAFFIC=PASS'
 run_side a status
 run_side b status
+# Reproduce the Owner field defect: a nested WireGuard Link's parent
+# Underlay disappeared BEFORE the child was removed. In these disposable
+# namespaces, the veth is the exact owned parent-like underlay; deleting it
+# withdraws the route on BOTH peers while leaving the WG interfaces and
+# their original STL-marked INPUT firewall entries intact.
+assert_owned_rule_count a 1
+assert_owned_rule_count b 1
+ip -n "$ns_a" link delete stlula
+if ip -n "$ns_a" route get 192.0.2.11 >/dev/null 2>&1 ||
+   ip -n "$ns_b" route get 192.0.2.10 >/dev/null 2>&1; then
+  echo 'FAIL: original WireGuard underlay route was not withdrawn on both peers' >&2
+  exit 1
+fi
 run_side a remove
 run_side b remove
+echo 'WG_REMOVE_AFTER_PARENT_UNDERLAY_DISAPPEARED=PASS'
 assert_owned_rule_count a 0
 assert_owned_rule_count b 0
 run_side a retire
