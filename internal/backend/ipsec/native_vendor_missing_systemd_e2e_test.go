@@ -43,11 +43,24 @@ func TestIsolatedNativeMissingVendorFixture(t *testing.T) {
 	if (kind == "clean") != absent {
 		t.Fatalf("systemd %s fixture returned verified-missing=%t", kind, absent)
 	}
+	// Exercise the real production systemctl runner in addition to injected
+	// status cases, so a canonical not-found response cannot skip disk proof.
+	realState, realErr := readNativeVendorUnitState(ctx, "is-enabled", name)
+	if kind == "clean" {
+		if realErr != nil || realState != "not-found" {
+			t.Fatalf("clean real systemctl missing-unit state=%q err=%v", realState, realErr)
+		}
+	} else if realErr == nil && realState == "not-found" {
+		t.Fatalf("real systemctl admitted %s dormant vendor as not-found", kind)
+	}
 	if kind != "clean" {
-		result, err := interpretNativeVendorUnitState(ctx, "is-enabled", name,
-			[]byte("not-found\n"), nil, 1, nativeVendorUnitVerifiedMissing)
-		if err == nil || result != "" {
-			t.Fatalf("systemd %s fixture admitted foreign identity via fallback: %q %v", kind, result, err)
+		for _, exitCode := range []int{1, 4} {
+			result, err := interpretNativeVendorUnitState(ctx, "is-enabled", name,
+				[]byte("not-found\n"), nil, exitCode, nativeVendorUnitVerifiedMissing)
+			if err == nil || result != "" {
+				t.Fatalf("systemd %s fixture admitted foreign identity for code=%d: %q %v",
+					kind, exitCode, result, err)
+			}
 		}
 	}
 	if kind == "sysv" {

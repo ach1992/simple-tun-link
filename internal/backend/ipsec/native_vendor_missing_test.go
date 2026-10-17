@@ -277,7 +277,6 @@ func TestNativeVendorUnitInterpretationOnlyAcceptsIndependentlyVerifiedAbsence(t
 		{"is-active", "inactive\n", 3, "inactive"},
 		{"is-enabled", "disabled\n", 1, "disabled"},
 		{"is-active", "unknown\n", 4, "unknown"},
-		{"is-enabled", "not-found\n", 4, "not-found"},
 	} {
 		got, err := interpretNativeVendorUnitState(ctx, tc.action, "strongswan.service",
 			[]byte(tc.stdout), nil, tc.code, verifier)
@@ -297,6 +296,8 @@ func TestNativeVendorUnitInterpretationOnlyAcceptsIndependentlyVerifiedAbsence(t
 	}{
 		{"missing active alternate code", "is-active", "inactive\n", "", 1, true, "unknown"},
 		{"missing enablement alternate code", "is-enabled", "not-found\n", "", 1, true, "not-found"},
+		{"canonical missing enablement", "is-enabled", "not-found\n", "", 4, true, "not-found"},
+		{"canonical missing but disk occupied", "is-enabled", "not-found\n", "", 4, false, ""},
 		{"missing enablement diagnostic", "is-enabled", "", "Failed to get unit file state for ipsec.service: No such file or directory\n", 1, true, "not-found"},
 		{"missing but proof failed", "is-enabled", "not-found\n", "", 1, false, ""},
 		{"active cannot be overridden", "is-active", "active\n", "", 3, true, ""},
@@ -322,6 +323,9 @@ func TestNativeVendorUnitInterpretationOnlyAcceptsIndependentlyVerifiedAbsence(t
 			} else if err != nil || got != tc.want || verifierCalled != 1 {
 				t.Fatalf("known absent unit not recognized: got=%s err=%v fallbackCalls=%d", got, err, verifierCalled)
 			}
+			if tc.name == "canonical missing but disk occupied" && verifierCalled != 1 {
+				t.Fatal("canonical missing-unit result skipped disk verification")
+			}
 			if tc.stdout == "active\n" && verifierCalled != 0 {
 				t.Fatal("positive active result reached absence verifier")
 			}
@@ -331,4 +335,38 @@ func TestNativeVendorUnitInterpretationOnlyAcceptsIndependentlyVerifiedAbsence(t
 		nil, nil, 1, verifier); err == nil {
 		t.Fatal("arbitrary service authorized")
 	}
+	if state, err := interpretNativeVendorUnitState(ctx, "is-enabled", "ipsec.service",
+		[]byte("not-found\n"), nil, 4, nil); err == nil || state != "" {
+		t.Fatal("canonical not-found was admitted without an absence verifier")
+	}
+}
+
+func TestNativeCanonicalNotFoundRejectsDormantDropIn(t *testing.T) {
+	root := t.TempDir()
+	const name = "charon-systemd.service"
+	verify := func(_ context.Context, unit string) bool {
+		return nativeMissingVendorUnitFiles(root, unit)
+	}
+	ctx := context.Background()
+	check := func(wantAbsent bool) {
+		t.Helper()
+		state, err := interpretNativeVendorUnitState(ctx, "is-enabled", name,
+			[]byte("not-found\n"), nil, 4, verify)
+		if wantAbsent && (err != nil || state != "not-found") {
+			t.Fatalf("clean missing vendor not admitted: state=%q err=%v", state, err)
+		}
+		if !wantAbsent && (err == nil || state != "") {
+			t.Fatalf("dormant vendor identity admitted: state=%q err=%v", state, err)
+		}
+	}
+	check(true)
+	dropin := filepath.Join(root, "etc/systemd/system/charon-.service.d")
+	if err := os.MkdirAll(dropin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	check(false)
+	if err := os.Remove(dropin); err != nil {
+		t.Fatal(err)
+	}
+	check(true)
 }

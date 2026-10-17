@@ -129,6 +129,11 @@ func interpretNativeVendorUnitState(ctx context.Context, action, name string, st
 	}
 	result, statusErr := parseNativeVendorStatus(action, stdout, stderr, code)
 	if statusErr == nil {
+		// A canonical not-found/4 result is a systemd status, not independent
+		// proof that dormant unit, alias, drop-in and SysV identities are absent.
+		if result == "not-found" && (verifyMissing == nil || !verifyMissing(ctx, name)) {
+			return "", errors.New("systemd unit state or absence not verified")
+		}
 		return result, nil
 	}
 	// Some systemd releases return alternate nonzero codes/diagnostics for
