@@ -105,6 +105,12 @@ preflight does not disable GRE/IPIP/WireGuard.
 
 ## Manage Links
 
+For an on-demand overview of **all** saved tunnels, choose
+**4 Test connectivity → A Check all tunnels** in the menu.
+The result is a compact table of peer IPs, ICMP replies and observed
+status; a missing Ping reply alone does not prove a tunnel is down.
+Select an individual tunnel for detailed latency, MTU and counters.
+
 ~~~sh
 sudo stl link list --json                    # Saved Link inventory
 sudo stl link status YOUR_LINK_ID --json     # Owned local interface

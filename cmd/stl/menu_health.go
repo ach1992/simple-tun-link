@@ -199,12 +199,156 @@ func menuCheckOneConnection(id domain.LinkID, out, errOut io.Writer, options *ru
 	return 0
 }
 
+// A compact human view of the existing versioned, read-only all-Link
+// report. It never probes independently and never treats saved State,
+// local interface existence or missing ICMP as proof of connectivity.
+func menuAllCheckResult(check healthLinkCheck) (string, string) {
+	switch {
+	case check.Status == "observed" && check.ReasonCode == "link_peer_replied" &&
+		check.Observed != nil &&
+		check.Observed.Quality.Status == diagnostics.QualityMeasured &&
+		check.Observed.Quality.Reachable &&
+		check.Observed.Quality.PacketsReceived > 0:
+		if check.Observed.Quality.PacketsReceived < check.Observed.Quality.PacketsSent {
+			return "Packet loss", "WARNING" // some replies, but also measured loss
+		}
+		return "Replied", "OK"
+	case check.Status == "blocked":
+		return "Blocked", "WARNING"
+	case check.ReasonCode == "link_probe_no_reply" && check.Observed != nil &&
+		check.Observed.Quality.Status == diagnostics.QualityMeasured:
+		return "No reply", "WARNING" // ICMP may be filtered; not proven down
+	case check.ReasonCode == "diagnostic_interrupted":
+		return "Interrupted", "UNKNOWN"
+	default:
+		return "Unknown", "UNKNOWN"
+	}
+}
+
+func menuAllCheckPing(check healthLinkCheck) string {
+	if check.Observed == nil || check.Observed.Quality.PacketsSent == 0 {
+		return "-"
+	}
+	quality := check.Observed.Quality
+	return fmt.Sprintf("%d/%d", quality.PacketsReceived, quality.PacketsSent)
+}
+
+func menuAllCheckTable(out io.Writer, result healthCenterResponse) {
+	// Avoid terminal-induced wraps when the window is narrow or a future
+	// address family is wider than IPv4. Never truncate exact peer addresses.
+	cols := menuColumns(out)
+	narrow := cols > 0 && cols < 68
+	for _, check := range result.Checks {
+		kind := string(check.Link.Backend) + "/" + string(check.Link.Encapsulation)
+		if len(kind) > 16 || len(check.Link.PeerAddress) > 20 {
+			narrow = true
+		}
+	}
+	if !narrow {
+		fmt.Fprintln(out, "  #   Tunnel           Peer Link IP         Ping     Result")
+		fmt.Fprintln(out, "  "+strings.Repeat("-", 63))
+	}
+	for i, check := range result.Checks {
+		kind := safeMenuText(string(check.Link.Backend) + "/" + string(check.Link.Encapsulation))
+		peer := safeMenuText(check.Link.PeerAddress)
+		ping := menuAllCheckPing(check)
+		label, role := menuAllCheckResult(check)
+		resultLabel := menuPaint(out, menuStatusRole(role), label)
+		if narrow {
+			// Keep the peer token intact. Longer addresses need their own
+			// row rather than relying on the terminal's accidental wrap.
+			linkLine := fmt.Sprintf("  %d  %s  -> %s", i+1, kind, peer)
+			if cols > 0 && len(linkLine) > cols {
+				fmt.Fprintf(out, "  %d  %s\n", i+1, kind)
+				prefix := "  -> "
+				if len(prefix)+len(peer) > cols {
+					prefix = ""
+				}
+				fmt.Fprintf(out, "%s%s\n", prefix, peer)
+			} else {
+				fmt.Fprintln(out, linkLine)
+			}
+			metrics := fmt.Sprintf("     Ping: %-7s Result: %s", ping, label)
+			if cols > 0 && len(metrics) > cols {
+				fmt.Fprintf(out, "     Ping: %s\n", ping)
+				fmt.Fprintf(out, "     Result: %s\n", resultLabel)
+			} else {
+				fmt.Fprintf(out, "     Ping: %-7s Result: %s\n", ping, resultLabel)
+			}
+		} else {
+			fmt.Fprintf(out, "  %-3d %-16s %-20s %-8s %s\n", i+1, kind, peer, ping, resultLabel)
+		}
+	}
+	var summary string
+	if narrow {
+		fmt.Fprintf(out, "\nLinks in snapshot: %d\n", result.Total)
+		summary = fmt.Sprintf("Peer replied: %d | blocked: %d | unknown: %d",
+			result.Observed, result.Blocked, result.Unknown)
+	} else {
+		fmt.Fprintln(out)
+		summary = fmt.Sprintf("Links in snapshot: %d | peer replied: %d | blocked: %d | unknown: %d",
+			result.Total, result.Observed, result.Blocked, result.Unknown)
+	}
+	if result.Outcome != "complete" {
+		summary += " | run: " + safeMenuText(result.Outcome)
+	}
+	if narrow || (cols > 0 && len(summary) > cols) {
+		menuProse(out, summary)
+	} else {
+		fmt.Fprintln(out, summary)
+	}
+	menuProse(out, "Results are from this brief check only. No ICMP reply does not prove that a tunnel is disconnected.")
+
+	// Keep failures actionable without expanding every healthy row into
+	// lengthy latency/MTU/counter blocks. Per-Link Test connectivity
+	// remains the detailed observational view.
+	hasProblems := false
+	for _, check := range result.Checks {
+		if label, _ := menuAllCheckResult(check); label != "Replied" {
+			hasProblems = true
+			break
+		}
+	}
+	if hasProblems {
+		menuSection(out, "Checks needing attention")
+		for i, check := range result.Checks {
+			if label, _ := menuAllCheckResult(check); label == "Replied" {
+				continue
+			}
+			label, _ := menuAllCheckResult(check)
+			reason := safeMenuText(check.ReasonCode)
+			reasonLine := fmt.Sprintf("  %d  %s (%s)", i+1, label, reason)
+			if cols > 0 && len(reasonLine) > cols {
+				fmt.Fprintf(out, "  %d  %s\n", i+1, label)
+				if len("     Reason: ")+len(reason) > cols {
+					fmt.Fprintf(out, "     Reason:\n     %s\n", reason)
+				} else {
+					fmt.Fprintf(out, "     Reason: %s\n", reason)
+				}
+			} else {
+				fmt.Fprintln(out, reasonLine)
+			}
+			if check.NextStep != "" {
+				if menuCopyable(check.NextStep) {
+					menuCopyLine(out, "Next", check.NextStep)
+				} else {
+					menuProse(out, "Next: "+check.NextStep)
+				}
+			}
+		}
+		menuProse(out, "For MTU, latency, counters and detailed diagnosis, select one tunnel in Test connectivity.")
+	}
+}
+
 func menuCheckAllConnections(out, errOut io.Writer, options *runtimeOptions) int {
 	var raw bytes.Buffer
 	code := linkDiagnoseCommand([]string{"diagnose", "--all", "--json"}, &raw, io.Discard, options)
 	var result healthCenterResponse
 	menuSection(out, "Connectivity / all saved tunnels")
-	if err := json.Unmarshal(raw.Bytes(), &result); err != nil || result.SchemaVersion != jsonSchemaVersion || result.Operation != "link_diagnose_all" {
+	if err := json.Unmarshal(raw.Bytes(), &result); err != nil ||
+		result.SchemaVersion != jsonSchemaVersion || result.Operation != "link_diagnose_all" ||
+		result.Total != len(result.Checks) ||
+		result.Total != result.Observed+result.Blocked+result.Unknown {
 		menuPublicDiagnosticFailure(out, raw.Bytes())
 		return codeOrFailure(code)
 	}
@@ -212,27 +356,7 @@ func menuCheckAllConnections(out, errOut io.Writer, options *runtimeOptions) int
 		menuNotice(out, "INFO", "No saved tunnels to check.")
 		return code
 	}
-	for i, check := range result.Checks {
-		menuSection(out, fmt.Sprintf("Tunnel %d / %s %s", i+1, check.Link.Backend, check.Link.Encapsulation))
-		menuField(out, "Tunnel IPs", check.Link.LocalAddress+" -> "+check.Link.PeerAddress)
-		if check.Observed == nil {
-			menuHealthLine(out, "Ping", "UNKNOWN", "Not measured ("+check.Status+")")
-			menuField(out, "Reason", check.ReasonCode)
-			menuField(out, "Next", check.NextStep)
-			continue
-		}
-		menuHealthLine(out, "Local interface", "OK", "Identity verified (peer tested separately)")
-		handshake := check.Observed.LatestHandshakeUnix
-		if handshake == nil && check.Link.Backend == domain.BackendWireGuard {
-			missing := int64(0) // all-Link JSON omits a zero handshake; show it as unknown
-			handshake = &missing
-		}
-		menuHealthMeasurements(out, check.Observed.MTU, check.Observed.Quality,
-			check.Observed.RX, check.Observed.TX, check.Observed.CounterUnit, handshake)
-		menuHealthNext(out, check.Observed.Quality)
-	}
-	fmt.Fprintf(out, "\nLinks in snapshot: %d | peer replied: %d | blocked: %d | unknown: %d\n",
-		result.Total, result.Observed, result.Blocked, result.Unknown)
+	menuAllCheckTable(out, result)
 	if result.Blocked+result.Unknown > 0 {
 		menuNotice(out, "WARNING", "Some links remain unknown, blocked or without peer replies.")
 	}

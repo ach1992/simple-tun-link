@@ -65,6 +65,7 @@ func TestMenuConfiguredLinksAreProjectedNotRawState(t *testing.T) {
 		t.Fatalf("read-only listing failed: code=%d error=%q", code, errOut)
 	}
 	if !strings.Contains(output, "Tunnels           1 saved") ||
+		strings.Contains(output, "not yet a connectivity test") ||
 		!strings.Contains(output, link.Addresses.Local.Addr().String()) ||
 		strings.Contains(output, link.DisplayName) {
 		t.Fatal("menu failed Link summary projection or disclosed arbitrary display name")

@@ -125,7 +125,8 @@ func TestMenuHealthUsesCanonicalFivePingObservationsAcrossBackends(t *testing.T)
 	var all, errorsAll bytes.Buffer
 	code := menuCheckAllConnections(&all, &errorsAll, opts)
 	if code != 4 || !strings.Contains(all.String(), "Links in snapshot: 4") ||
-		!strings.Contains(all.String(), "5/5 replies") ||
+		!strings.Contains(all.String(), "5/5") ||
+		!strings.Contains(all.String(), "Replied") ||
 		!strings.Contains(all.String(), "ipsec_runtime_not_registered") ||
 		!strings.Contains(all.String(), "Some links remain unknown, blocked") {
 		t.Fatalf("mixed all-link health classification failed: code=%d out=%s err=%s", code, all.String(), errorsAll.String())
@@ -263,5 +264,174 @@ func TestMenuDiagnosticNextStepKeepsExactCopyableCommand(t *testing.T) {
 	menuPublicDiagnosticFailure(&plain, response)
 	if !strings.Contains(plain.String(), command+"\n") || strings.Contains(plain.String(), "\x1b[") {
 		t.Fatalf("redirected diagnostic changed exact command: %q", plain.String())
+	}
+}
+
+func TestCompactAllTunnelTablePreservesHonestStatusesAndActions(t *testing.T) {
+	response := healthCenterResponse{SchemaVersion: jsonSchemaVersion, Operation: "link_diagnose_all",
+		Total: 4, Observed: 1, Blocked: 1, Unknown: 2, Outcome: "complete",
+		Checks: []healthLinkCheck{
+			{
+				Link:   linkSummary{Backend: "gre", Encapsulation: "native", PeerAddress: "10.80.1.1/31"},
+				Status: "observed", ReasonCode: "link_peer_replied",
+				Observed: &healthLinkObservation{Quality: diagnostics.QualityResult{Status: diagnostics.QualityMeasured,
+					Reachable: true, PacketsSent: 5, PacketsReceived: 5}},
+			},
+			{
+				Link:   linkSummary{Backend: "wireguard", Encapsulation: "udp", PeerAddress: "10.80.2.1/31"},
+				Status: "unknown", ReasonCode: "link_probe_no_reply",
+				NextStep: "Check the peer firewall.", Observed: &healthLinkObservation{Quality: diagnostics.QualityResult{
+					Status: diagnostics.QualityMeasured, PacketsSent: 5, PacketsReceived: 0}},
+			},
+			{
+				Link:   linkSummary{Backend: "ipsec", Encapsulation: "esp", PeerAddress: "10.80.3.1/31"},
+				Status: "blocked", ReasonCode: "ipsec_runtime_not_registered",
+				NextStep: "stl doctor ipsec",
+			},
+			{
+				Link:   linkSummary{Backend: "gre", Encapsulation: "gue", PeerAddress: "10.80.4.1/31"},
+				Status: "unknown", ReasonCode: "diagnostic_interrupted",
+				NextStep: "Repeat the read-only check.",
+			},
+		}}
+	var out bytes.Buffer
+	menuAllCheckTable(&out, response)
+	got := out.String()
+	for _, term := range []string{
+		"Tunnel", "Peer Link IP", "Ping", "Result",
+		"gre/native", "wireguard/udp", "ipsec/esp", "gre/gue",
+		"5/5", "0/5", "Replied", "No reply", "Blocked", "Interrupted",
+		"ipsec_runtime_not_registered", "stl doctor ipsec",
+		"Links in snapshot: 4 | peer replied: 1 | blocked: 1 | unknown: 2",
+		"No ICMP reply does not prove",
+	} {
+		if !strings.Contains(got, term) {
+			t.Fatalf("missing %q in compact all-tunnel table: %s", term, got)
+		}
+	}
+	if strings.Count(got, "Peer Link IP") != 1 || strings.Contains(got, "Disconnected") ||
+		strings.Contains(got, "Connected") || strings.Contains(got, "\x1b[") ||
+		strings.Contains(got, "Suggested MTU") {
+		t.Fatalf("compact view was misleading, decorated or verbose: %s", got)
+	}
+	// For a contradictory response, do not promote the human label to
+	// peer-replied merely because a string claims it was observed.
+	bad := response.Checks[0]
+	bad.Observed.Quality.Reachable = false
+	if label, kind := menuAllCheckResult(bad); label != "Unknown" || kind != "UNKNOWN" {
+		t.Fatalf("inconsistent observation treated as peer reply: %s %s", label, kind)
+	}
+	bad.Observed.Quality.Reachable = true
+	bad.Observed.Quality.PacketsReceived = 1
+	if label, kind := menuAllCheckResult(bad); label != "Packet loss" || kind != "WARNING" {
+		t.Fatalf("observed packet loss was colored fully healthy: %s %s", label, kind)
+	}
+}
+
+func TestCompactAllTunnelTableUsesNarrowLayoutAndNoColor(t *testing.T) {
+	master, slave := openMenuPTY(t)
+	t.Setenv("NO_COLOR", "")
+	if err := unix.IoctlSetWinsize(int(slave.Fd()), unix.TIOCSWINSZ,
+		&unix.Winsize{Row: 30, Col: 52}); err != nil {
+		t.Fatal(err)
+	}
+	report := healthCenterResponse{Total: 1, Observed: 1, Outcome: "complete", Checks: []healthLinkCheck{{
+		Link:   linkSummary{Backend: "gre", Encapsulation: "native", PeerAddress: "10.88.9.1/31"},
+		Status: "observed", ReasonCode: "link_peer_replied",
+		Observed: &healthLinkObservation{Quality: diagnostics.QualityResult{
+			Status: diagnostics.QualityMeasured, Reachable: true, PacketsSent: 5, PacketsReceived: 5}},
+	}}}
+	menuAllCheckTable(slave, report)
+	got := readMenuPTYUntil(t, master, "gre/native", "Ping:", "Replied")
+	for _, expected := range []string{"10.88.9.1/31", "Ping:", "Result:", "5/5", "Replied"} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("narrow layout missed %q: %s", expected, got)
+		}
+	}
+	if strings.Contains(got, "\x1b[") {
+		t.Fatalf("NO_COLOR rendered ANSI: %q", got)
+	}
+}
+
+func TestCompactAllTunnelTableWrapsLargeSummaryWithoutBreakingColumns(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	master, slave := openMenuPTY(t)
+	if err := unix.IoctlSetWinsize(int(slave.Fd()), unix.TIOCSWINSZ,
+		&unix.Winsize{Row: 30, Col: 68}); err != nil {
+		t.Fatal(err)
+	}
+	// The renderer is independently tested with large counters; the caller
+	// separately validates that totals match the canonical inventory.
+	report := healthCenterResponse{
+		Total: 1000000, Observed: 1000000, Outcome: "interrupted",
+	}
+	menuAllCheckTable(slave, report)
+	got := readMenuPTYUntil(t, master, "unknown: 0", "run: interrupted")
+	for _, line := range strings.Split(got, "\r\n") {
+		if len(line) > 68 {
+			t.Fatalf("summary wrapped unintentionally: %q\n%s", line, got)
+		}
+	}
+}
+
+func TestCompactAllTunnelTablePreservesCopyableNextAction(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	master, slave := openMenuPTY(t)
+	if err := unix.IoctlSetWinsize(int(slave.Fd()), unix.TIOCSWINSZ,
+		&unix.Winsize{Row: 30, Col: 32}); err != nil {
+		t.Fatal(err)
+	}
+	action := "stl doctor ipsec --json --include-all-read-only-checks"
+	report := healthCenterResponse{Total: 1, Blocked: 1, Outcome: "complete", Checks: []healthLinkCheck{{
+		Link:   linkSummary{Backend: "ipsec", Encapsulation: "esp", PeerAddress: "10.80.3.1/31"},
+		Status: "blocked", ReasonCode: "ipsec_runtime_not_registered",
+		NextStep: action,
+	}}}
+	menuAllCheckTable(slave, report)
+	got := readMenuPTYUntil(t, master, action)
+	if !strings.Contains(got, "\r\n"+action+"\r\n") {
+		t.Fatalf("copyable action was split or decorated: %q", got)
+	}
+	if strings.Contains(got, "\x1b[") {
+		t.Fatalf("NO_COLOR added ANSI to a diagnostic action: %q", got)
+	}
+}
+
+func TestCompactAllTunnelTableAvoidsAccidentalWrapOnNarrowPTY(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	for _, tc := range []struct {
+		name     string
+		width    uint16
+		peer     string
+		received int
+		label    string
+	}{
+		{"long_peer_52", 52, "2001:0db8:85a3:0000:0000:8a2e:0370:7334/128", 5, "Replied"},
+		{"packet_loss_28", 28, "10.88.9.1/31", 1, "Packet loss"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			master, slave := openMenuPTY(t)
+			if err := unix.IoctlSetWinsize(int(slave.Fd()), unix.TIOCSWINSZ,
+				&unix.Winsize{Row: 30, Col: tc.width}); err != nil {
+				t.Fatal(err)
+			}
+			report := healthCenterResponse{Total: 1, Observed: 1, Outcome: "complete", Checks: []healthLinkCheck{{
+				Link:   linkSummary{Backend: "gre", Encapsulation: "native", PeerAddress: tc.peer},
+				Status: "observed", ReasonCode: "link_peer_replied",
+				Observed: &healthLinkObservation{Quality: diagnostics.QualityResult{
+					Status: diagnostics.QualityMeasured, Reachable: true, PacketsSent: 5,
+					PacketsReceived: tc.received}},
+			}}}
+			menuAllCheckTable(slave, report)
+			got := readMenuPTYUntil(t, master, tc.peer, "Result: "+tc.label)
+			if strings.Contains(got, "\x1b[") {
+				t.Fatalf("NO_COLOR added ANSI: %q", got)
+			}
+			for _, line := range strings.Split(got, "\r\n") {
+				if len(line) > int(tc.width) {
+					t.Fatalf("rendered %d columns on %d-column PTY: %q\n%s", len(line), tc.width, line, got)
+				}
+			}
+		})
 	}
 }
