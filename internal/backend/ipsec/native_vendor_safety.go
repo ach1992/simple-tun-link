@@ -341,6 +341,50 @@ func vendorStopUnitPaths(ctx context.Context) error {
 	return nil
 }
 
+// A separate vendor STOP may not inherit an unapproved manager dependency.
+// Existing vendor .wants/.requires links are permitted: an operator may
+// explicitly disable that official service. An .upholds link is different:
+// another unit can immediately restart the stopped vendor, so even its
+// official name/alias is unsafe. Always reject foreign IPsec units and
+// aliases in all three supported dependency directory families.
+func vendorStopBootEdgesSafeAt(root string) error {
+	foreign := map[string]bool{
+		"simple-tun-link-ipsec.service": true,
+		"strongswan-starter.service":    true,
+		"charon-systemd.service":        true,
+		"ipsec.service":                 true,
+	}
+	for _, dir := range vendorUnitSearchPaths {
+		base := filepath.Join(root, strings.TrimPrefix(dir, "/"))
+		edges, err := vendorSystemdBootEdgeDirs(base)
+		if err != nil {
+			return err
+		}
+		for _, edge := range edges {
+			protected := foreign
+			if strings.HasSuffix(edge, ".upholds") {
+				protected = map[string]bool{
+					"simple-tun-link-ipsec.service": true,
+					"strongswan-starter.service":    true,
+					"charon-systemd.service":        true,
+					"ipsec.service":                 true,
+					"strongswan.service":            true,
+					"strongswan-swanctl.service":    true,
+				}
+			}
+			for unit := range protected {
+				if _, err := os.Lstat(filepath.Join(edge, unit)); !errors.Is(err, os.ErrNotExist) {
+					return errors.New("foreign, upheld or stale IPsec systemd dependency")
+				}
+			}
+			if !nativeMissingVendorAliasesAbsent(edge, protected) {
+				return errors.New("foreign IPsec systemd dependency alias unverified")
+			}
+		}
+	}
+	return nil
+}
+
 func vendorStopUnitAliasesSafe(ctx context.Context, fragment string) error {
 	if err := vendorStopUnitPaths(ctx); err != nil {
 		return err
@@ -349,6 +393,9 @@ func vendorStopUnitAliasesSafe(ctx context.Context, fragment string) error {
 	if err != nil || resolved != "/usr/lib/systemd/system/strongswan.service" {
 		return errors.New("selected vendor fragment changed")
 	}
+	if err := vendorStopBootEdgesSafeAt("/"); err != nil {
+		return err
+	}
 	for _, dir := range vendorUnitSearchPaths {
 		// Never allow an on-disk shadow of the selected vendor in an
 		// alternate manager unit path, even before a future daemon-reload.
@@ -356,25 +403,6 @@ func vendorStopUnitAliasesSafe(ctx context.Context, fragment string) error {
 			if _, err := os.Lstat(filepath.Join(dir, vendorServiceName)); err == nil ||
 				!errors.Is(err, os.ErrNotExist) {
 				return errors.New("foreign vendor service shadow present in unit search path")
-			}
-		}
-		// A preexisting STL-private boot edge or an alternate vendor boot
-		// edge may be dormant without appearing in list-units; it is still
-		// an unapproved owner and must block stopping an existing VPN.
-		for _, suffix := range []string{"*.wants", "*.requires"} {
-			edges, err := filepath.Glob(filepath.Join(dir, suffix))
-			if err != nil || len(edges) > 128 {
-				return errors.New("systemd boot-edge paths unverified")
-			}
-			for _, edge := range edges {
-				for _, unit := range []string{"simple-tun-link-ipsec.service",
-					"strongswan-starter.service", "charon-systemd.service",
-					"ipsec.service"} {
-					if _, err := os.Lstat(filepath.Join(edge, unit)); err == nil ||
-						!errors.Is(err, os.ErrNotExist) {
-						return errors.New("foreign or stale IPsec boot edge occupies manager")
-					}
-				}
 			}
 		}
 		// The vendor package's exact swanctl alias is permitted only as a

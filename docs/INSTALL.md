@@ -207,7 +207,16 @@ The selected release still carries its exact-version manifest. No RC is
 selected by `releases/latest`. On a supported, positively qualified clean
 host, **interactive** IPsec PREPARE may install signed distribution packages
 and provision only the verified STL-exclusive service; it will not adopt
-foreign VPN resources. The bootstrap itself does not provision IPsec.
+foreign VPN resources. The bootstrap itself does not provision IPsec. The read-only
+`sudo stl doctor ipsec --json` report now includes the independent
+`provisioning_readiness` check on a real host. Installed but
+**inactive and disabled** vendor StrongSwan is not by itself a
+request to stop a service; incomplete systemd ownership, an
+occupied socket/port, foreign daemon or private publication can
+still block the separate STL-exclusive runtime. The IPsec
+menu shows the specific failed preflight reason and safe next step.
+A failed `RECHECK` does not repair anything; prefer investigating
+the reported blocker over repeating `PREPARE`.
 Offline bootstrap failure/PTY tests: bash scripts/test-quick-install.sh.
 
 The longer direct canonical-installer example above selects native

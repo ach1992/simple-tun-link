@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	ipsecbackend "github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	"github.com/ach1992/simple-tun-link/internal/diagnostics"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
@@ -46,7 +47,12 @@ func renderIPsecDoctorHuman(out io.Writer, report diagnostics.IPsecHostReport) {
 	var observed, unknown int
 	var blocked, uncertain []diagnostics.IPsecHostCheck
 	var conflict, runtimeMissing bool
+	var nativePreflight *diagnostics.IPsecHostCheck
 	for _, check := range report.Checks {
+		if check.Name == "provisioning_readiness" {
+			current := check
+			nativePreflight = &current
+		}
 		switch check.Status {
 		case "observed":
 			observed++
@@ -57,8 +63,9 @@ func renderIPsecDoctorHuman(out io.Writer, report diagnostics.IPsecHostReport) {
 				blocked = append(blocked, check)
 			}
 			switch check.ReasonCode {
-			case "charon_process_observed", "strongswan_service_observed",
-				"ike_udp_ports_observed", "native_systemd_unit_conflict":
+			case "charon_process_observed", "ike_udp_ports_observed",
+				"native_systemd_unit_conflict", "ipsec_provisioning_daemon_conflict",
+				"ipsec_provisioning_ports_conflict":
 				conflict = true
 			}
 		default:
@@ -74,6 +81,9 @@ func renderIPsecDoctorHuman(out io.Writer, report diagnostics.IPsecHostReport) {
 		observed, blockedCount, unknown))
 	if runtimeMissing {
 		menuField(out, "Runtime", "Not admitted; no service was started")
+	}
+	if nativePreflight != nil {
+		menuField(out, "Native preflight", nativePreflight.ReasonCode)
 	}
 	// Show at most two examples per category; details are opt-in in JSON.
 	// The proven-conflict decision considers ALL checks, not just examples.
@@ -95,6 +105,10 @@ func renderIPsecDoctorHuman(out io.Writer, report diagnostics.IPsecHostReport) {
 	switch {
 	case conflict:
 		menuProse(out, "A conflicting or unowned process, service or IKE port was observed. Do not stop or adopt it; inspect ownership or choose another backend.")
+	case nativePreflight != nil && nativePreflight.Status == "blocked":
+		menuProse(out, nativePreflight.NextStep)
+	case nativePreflight != nil && nativePreflight.Status == "observed":
+		menuProse(out, "Private provisioning prerequisites pass right now, but the STL-only IPsec service is not active. Continue through a fresh, confirmed PREPARE.")
 	case unknown > 0:
 		menuProse(out, "Resolve incomplete read-only host observations before IPsec preparation. Inspect the full JSON report.")
 	default:
@@ -161,6 +175,18 @@ func ipsecDoctorCommand(args []string, stdout, stderr io.Writer, options *runtim
 	if err != nil {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInspect, "doctor_ipsec",
 			"read-only IPsec host inspection did not complete; no activation was attempted")
+	}
+	// Production doctor now reports the SAME read-only native provisioning
+	// gate that PREPARE uses. Older file-presence checks can report a
+	// service-file observation without knowing whether it is active or
+	// disabled; this complete gate exposes the actual failed prerequisite.
+	// Fake-runner tests retain their hermetic contract and do not inspect
+	// the real host. No result here grants authority to change a service.
+	if options == nil || options.probeRunner == nil {
+		preflightCtx, preflightCancel := context.WithTimeout(context.Background(), 12*time.Second)
+		readiness := ipsecbackend.NativeProvisionReadiness(preflightCtx)
+		preflightCancel()
+		report.Checks = append(report.Checks, ipsecReadinessCheck(readiness))
 	}
 	if jsonOutput {
 		if err := json.NewEncoder(stdout).Encode(report); err != nil {
