@@ -153,6 +153,6 @@ func menuCreateIPsec(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	menuScreen(out, "IPsec / local creation complete")
 	menuNotice(out, "OK", "IPsec receiver Setup Link saved privately. Pairing is not finished yet.")
 	menuShowNewProtectedHandoff(input, out, options, id)
-	fmt.Fprintln(out, "After import, explicitly Connect IPsec and check traffic on both sides.")
+	fmt.Fprintln(out, "After the other server imports, choose My tunnels -> Connect IPsec on either peer, confirm CONNECT, then test traffic on both sides.")
 	return 0
 }

@@ -461,7 +461,7 @@ func linkIPsecLifecycleCommand(args []string, out, errOut io.Writer, opts *runti
 				return 1
 			}
 		} else {
-			fmt.Fprintf(out, "IPsec IKEv2 initiation accepted for Link %s; verify ESP traffic separately.\n", id)
+			fmt.Fprintf(out, "IPsec Connect completed for Link %s (IKE is not repeated when a matching SA already exists); verify ESP traffic separately.\n", id)
 		}
 		return 0
 	}

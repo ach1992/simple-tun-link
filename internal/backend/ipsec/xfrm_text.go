@@ -130,7 +130,7 @@ func xfrmUniqueJSONObject(raw json.RawMessage, retain ...string) (result map[str
 			return nil, fmt.Errorf("duplicate XFRM JSON field")
 		}
 		seen[key] = true
-		for _, reserved := range []string{"if_id", "dir", "proto", "src", "dst", "ifname", "linkinfo", "info_kind", "info_data"} {
+		for _, reserved := range []string{"if_id", "dir", "proto", "src", "dst", "mode", "reqid", "spi", "ifname", "linkinfo", "info_kind", "info_data"} {
 			if strings.EqualFold(key, reserved) && key != reserved {
 				return nil, fmt.Errorf("noncanonical XFRM JSON field")
 			}

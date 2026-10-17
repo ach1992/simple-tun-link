@@ -230,3 +230,109 @@ func TestMenuURLConsumesOneBoundedLineWithoutWaitingForEOF(t *testing.T) {
 		t.Fatalf("line reader unexpectedly consumed next menu choice: %q %v", next, err)
 	}
 }
+
+// Terminal paste can deliver the visible "Setup link:" label copied from a
+// human-readable export or the terminal's bracketed-paste framing. Those are
+// transport/presentation bytes, not part of the opaque pairing URL.
+func TestMenuImportProtectedTerminalPasteFraming(t *testing.T) {
+	link, _ := makeLifecycleDesired(t, "c", "10.70.115.0/31")
+	link.Backend, link.Encapsulation = domain.BackendWireGuard, domain.EncapUDP
+	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32))
+	completeWireGuardFixture(t, &link, key)
+	url := testQuickSetupLink(t, link, []byte(key))
+	for _, tc := range []struct {
+		name   string
+		pasted string
+	}{
+		{"raw", url},
+		{"export label", "Setup link: " + url},
+		{"terminal bracketed paste", "\x1b[200~" + url + "\x1b[201~"},
+		{"bracketed labeled export", "\x1b[200~Setup link: " + url + "\x1b[201~"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "uncreated")
+			fake := newLifecycleFake()
+			code, out, errOut := runMenuImportTest(t, root, []backend.Backend{fake},
+				"2\n2\n"+tc.pasted+"\n\n8\n")
+			if code != 0 || !strings.Contains(out, "Import cancelled") ||
+				strings.Contains(out, "not an STL setup link") ||
+				strings.Contains(out, "could not be read") {
+				t.Fatalf("framed paste failed to reach protected review: code=%d err=%q", code, errOut)
+			}
+			if strings.Contains(out+errOut, url) || strings.Contains(out+errOut, key) ||
+				strings.Contains(out+errOut, setupLinkConfirmation(url)) ||
+				strings.Contains(out+errOut, link.DisplayName) {
+				t.Fatal("protected paste leaked credential, URL or untrusted metadata")
+			}
+			if len(fake.applies) != 0 {
+				t.Fatal("unconfirmed import mutated backend")
+			}
+			if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("unconfirmed paste created state: %v", err)
+			}
+		})
+	}
+}
+
+// Never interpret an unmatched terminal escape, injected second token, or
+// arbitrary label as a trusted Setup Link. The URL codec is always strict.
+func TestMenuImportPasteNormalizerRejectsAmbiguousControlBytes(t *testing.T) {
+	for _, tc := range []struct {
+		raw      string
+		expected string
+		ok       bool
+	}{
+		{"stl://2.example.checksum", "stl://2.example.checksum", true},
+		{"\x1b[200~stl://2.example.checksum\x1b[201~", "stl://2.example.checksum", true},
+		{"Setup link: stl://2.example.checksum", "stl://2.example.checksum", true},
+		{"\x1b[200~Setup link: stl://2.example.checksum\x1b[201~", "stl://2.example.checksum", true},
+		{"\x1b[200~stl://2.example.checksum", "", false},
+		{"stl://2.example.checksum\x1b[201~", "", false},
+		{"\x1b[999~stl://2.example.checksum", "", false},
+		{"stl://2.example.checksum\x00", "", false},
+		{"stl://2.example.checksum\nYES", "", false},
+		{"\tstl://2.example.checksum", "", false},
+		{"\vstl://2.example.checksum", "", false},
+		{"\fstl://2.example.checksum", "", false},
+		{"\rstl://2.example.checksum", "", false},
+		{"stl://2.example.checksum\t", "", false},
+		{"stl://2.example.checksum\v", "", false},
+		{"stl://2.example.checksum\f", "", false},
+		{"stl://2.example.checksum\r", "", false},
+		{" \tstl://2.example.checksum ", "", false},
+		{"stl://2.example.checksum\u0085", "", false},
+		{"stl://2.example.checksum\u00a0", "", false},
+		{"SETUP LINK: stl://2.example.checksum", "", false},
+		{"Setup Link: stl://2.example.checksum", "", false},
+		{"setup link: stl://2.example.checksum", "", false},
+		{"Setup link:\tstl://2.example.checksum", "", false},
+		{"\x1b[200~stl://2.example.checksum\x1b[201~\t", "", false},
+		{"\t\x1b[200~stl://2.example.checksum\x1b[201~", "", false},
+		{"\x1b[200~stl://2.example.checksum\x1b[200~\x1b[201~", "", false},
+		{"  Setup link:  stl://2.example.checksum  ", "stl://2.example.checksum", true},
+	} {
+		got, ok := normalizeMenuSetupPaste(tc.raw)
+		if got != tc.expected || ok != tc.ok {
+			t.Fatalf("unexpected protected normalizer verdict: bool=%t", ok)
+		}
+	}
+}
+
+// A CR in redirected secret input is not a presentation space. The private
+// reader must pass it unchanged to the paste validator, unlike historical
+// visible GRE/IPIP CRLF support.
+func TestProtectedInputPreservesUnexpectedRawCarriageReturn(t *testing.T) {
+	const token = "stl://2.example.checksum"
+	raw := token + "\r\n"
+	private, err := readPrivateMenuURL(strings.NewReader(raw), bufio.NewReader(strings.NewReader(raw)))
+	if err != nil || private != token+"\r" {
+		t.Fatal("private input silently stripped a control byte")
+	}
+	if normalized, ok := normalizeMenuSetupPaste(private); ok || normalized != "" {
+		t.Fatal("raw carriage return accepted in protected Setup Link")
+	}
+	visible, err := readMenuURL(bufio.NewReader(strings.NewReader(raw)))
+	if err != nil || visible != token {
+		t.Fatal("visible nonsecret GRE/IPIP CRLF behavior regressed")
+	}
+}

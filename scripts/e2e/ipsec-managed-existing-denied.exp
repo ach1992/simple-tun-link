@@ -40,11 +40,14 @@ if {$env(STL_IPSEC_PREPARE_CASE) eq "existing_vendor_local_metadata_forgery" ||
     timeout { puts stderr "IPSEC_VENDOR=NO_SIGNED_ARCHIVE_METADATA_REJECTION"; exit 33 }
   }
 }
-# Distinguish the direct relationship from an unrelated preview refusal.
-# Existing package/alias/port checks must pass before this UpheldBy gate.
+# Require one of three *specific* proven dependency gates, not a generic
+# preflight warning: systemd 249/250 PID1 may expose either the direct
+# Upholds edge or reverse UpheldBy edge; newer systemd also reports an
+# exact vendor UpheldBy property. All forbid STOP. Unverified dependence
+# is NOT accepted as equivalent positive evidence.
 if {$env(STL_IPSEC_PREPARE_CASE) eq "existing_vendor_direct_upholds"} {
   expect {
-    -re {UpheldBy} {
+    -re {(effective (direct Upholds|reverse UpheldBy) dependency prevents vendor STOP|vendor UpheldBy dependency blocks STOP; reconcile the upholding service)} {
       puts "IPSEC_DIRECT_UPHELDBY_PREVIEW_SPECIFIC_REASON=PASS"
     }
     timeout { puts stderr "IPSEC_DIRECT_UPHELDBY_PREVIEW_NOT_OBSERVED"; exit 34 }

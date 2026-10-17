@@ -298,6 +298,11 @@ func healthBlocked(link domain.Link, reason, summary, next string) healthLinkChe
 }
 
 func healthDiagnosticFailure(link domain.Link, err error) healthLinkCheck {
+	if link.Backend == domain.BackendIPsec && stlerr.Public(err).ReasonCode == "ipsec_sa_not_established" {
+		return healthBlocked(link, "ipsec_sa_not_established",
+			"IPsec is locally configured but has no matching security association; no peer ping was attempted.",
+			"After both peers are configured, choose My tunnels -> Connect IPsec with explicit confirmation; then repeat this read-only check.")
+	}
 	if stlerr.Public(err).ReasonCode == "kernel_module_not_loaded" {
 		return healthBlocked(link, "kernel_module_not_loaded",
 			"Required kernel module is available on disk but not currently loaded; inspection was not completed.",
