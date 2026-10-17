@@ -352,3 +352,86 @@ func TestCompactAllTunnelTableUsesNarrowLayoutAndNoColor(t *testing.T) {
 		t.Fatalf("NO_COLOR rendered ANSI: %q", got)
 	}
 }
+
+func TestCompactAllTunnelTableWrapsLargeSummaryWithoutBreakingColumns(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	master, slave := openMenuPTY(t)
+	if err := unix.IoctlSetWinsize(int(slave.Fd()), unix.TIOCSWINSZ,
+		&unix.Winsize{Row: 30, Col: 68}); err != nil {
+		t.Fatal(err)
+	}
+	// The renderer is independently tested with large counters; the caller
+	// separately validates that totals match the canonical inventory.
+	report := healthCenterResponse{
+		Total: 1000000, Observed: 1000000, Outcome: "interrupted",
+	}
+	menuAllCheckTable(slave, report)
+	got := readMenuPTYUntil(t, master, "unknown: 0", "run: interrupted")
+	for _, line := range strings.Split(got, "\r\n") {
+		if len(line) > 68 {
+			t.Fatalf("summary wrapped unintentionally: %q\n%s", line, got)
+		}
+	}
+}
+
+func TestCompactAllTunnelTablePreservesCopyableNextAction(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	master, slave := openMenuPTY(t)
+	if err := unix.IoctlSetWinsize(int(slave.Fd()), unix.TIOCSWINSZ,
+		&unix.Winsize{Row: 30, Col: 32}); err != nil {
+		t.Fatal(err)
+	}
+	action := "stl doctor ipsec --json --include-all-read-only-checks"
+	report := healthCenterResponse{Total: 1, Blocked: 1, Outcome: "complete", Checks: []healthLinkCheck{{
+		Link:   linkSummary{Backend: "ipsec", Encapsulation: "esp", PeerAddress: "10.80.3.1/31"},
+		Status: "blocked", ReasonCode: "ipsec_runtime_not_registered",
+		NextStep: action,
+	}}}
+	menuAllCheckTable(slave, report)
+	got := readMenuPTYUntil(t, master, action)
+	if !strings.Contains(got, "\r\n"+action+"\r\n") {
+		t.Fatalf("copyable action was split or decorated: %q", got)
+	}
+	if strings.Contains(got, "\x1b[") {
+		t.Fatalf("NO_COLOR added ANSI to a diagnostic action: %q", got)
+	}
+}
+
+func TestCompactAllTunnelTableAvoidsAccidentalWrapOnNarrowPTY(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	for _, tc := range []struct {
+		name     string
+		width    uint16
+		peer     string
+		received int
+		label    string
+	}{
+		{"long_peer_52", 52, "2001:0db8:85a3:0000:0000:8a2e:0370:7334/128", 5, "Replied"},
+		{"packet_loss_28", 28, "10.88.9.1/31", 1, "Packet loss"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			master, slave := openMenuPTY(t)
+			if err := unix.IoctlSetWinsize(int(slave.Fd()), unix.TIOCSWINSZ,
+				&unix.Winsize{Row: 30, Col: tc.width}); err != nil {
+				t.Fatal(err)
+			}
+			report := healthCenterResponse{Total: 1, Observed: 1, Outcome: "complete", Checks: []healthLinkCheck{{
+				Link:   linkSummary{Backend: "gre", Encapsulation: "native", PeerAddress: tc.peer},
+				Status: "observed", ReasonCode: "link_peer_replied",
+				Observed: &healthLinkObservation{Quality: diagnostics.QualityResult{
+					Status: diagnostics.QualityMeasured, Reachable: true, PacketsSent: 5,
+					PacketsReceived: tc.received}},
+			}}}
+			menuAllCheckTable(slave, report)
+			got := readMenuPTYUntil(t, master, tc.peer, "Result: "+tc.label)
+			if strings.Contains(got, "\x1b[") {
+				t.Fatalf("NO_COLOR added ANSI: %q", got)
+			}
+			for _, line := range strings.Split(got, "\r\n") {
+				if len(line) > int(tc.width) {
+					t.Fatalf("rendered %d columns on %d-column PTY: %q\n%s", len(line), tc.width, line, got)
+				}
+			}
+		})
+	}
+}

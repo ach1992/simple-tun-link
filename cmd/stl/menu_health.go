@@ -236,7 +236,8 @@ func menuAllCheckPing(check healthLinkCheck) string {
 func menuAllCheckTable(out io.Writer, result healthCenterResponse) {
 	// Avoid terminal-induced wraps when the window is narrow or a future
 	// address family is wider than IPv4. Never truncate exact peer addresses.
-	narrow := menuColumns(out) > 0 && menuColumns(out) < 68
+	cols := menuColumns(out)
+	narrow := cols > 0 && cols < 68
 	for _, check := range result.Checks {
 		kind := string(check.Link.Backend) + "/" + string(check.Link.Encapsulation)
 		if len(kind) > 16 || len(check.Link.PeerAddress) > 20 {
@@ -254,24 +255,48 @@ func menuAllCheckTable(out io.Writer, result healthCenterResponse) {
 		label, role := menuAllCheckResult(check)
 		resultLabel := menuPaint(out, menuStatusRole(role), label)
 		if narrow {
-			fmt.Fprintf(out, "  %d  %s  -> %s\n", i+1, kind, peer)
-			fmt.Fprintf(out, "     Ping: %-7s Result: %s\n", ping, resultLabel)
+			// Keep the peer token intact. Longer addresses need their own
+			// row rather than relying on the terminal's accidental wrap.
+			linkLine := fmt.Sprintf("  %d  %s  -> %s", i+1, kind, peer)
+			if cols > 0 && len(linkLine) > cols {
+				fmt.Fprintf(out, "  %d  %s\n", i+1, kind)
+				prefix := "  -> "
+				if len(prefix)+len(peer) > cols {
+					prefix = ""
+				}
+				fmt.Fprintf(out, "%s%s\n", prefix, peer)
+			} else {
+				fmt.Fprintln(out, linkLine)
+			}
+			metrics := fmt.Sprintf("     Ping: %-7s Result: %s", ping, label)
+			if cols > 0 && len(metrics) > cols {
+				fmt.Fprintf(out, "     Ping: %s\n", ping)
+				fmt.Fprintf(out, "     Result: %s\n", resultLabel)
+			} else {
+				fmt.Fprintf(out, "     Ping: %-7s Result: %s\n", ping, resultLabel)
+			}
 		} else {
 			fmt.Fprintf(out, "  %-3d %-16s %-20s %-8s %s\n", i+1, kind, peer, ping, resultLabel)
 		}
 	}
+	var summary string
 	if narrow {
 		fmt.Fprintf(out, "\nLinks in snapshot: %d\n", result.Total)
-		fmt.Fprintf(out, "Peer replied: %d | blocked: %d | unknown: %d",
+		summary = fmt.Sprintf("Peer replied: %d | blocked: %d | unknown: %d",
 			result.Observed, result.Blocked, result.Unknown)
 	} else {
-		fmt.Fprintf(out, "\nLinks in snapshot: %d | peer replied: %d | blocked: %d | unknown: %d",
+		fmt.Fprintln(out)
+		summary = fmt.Sprintf("Links in snapshot: %d | peer replied: %d | blocked: %d | unknown: %d",
 			result.Total, result.Observed, result.Blocked, result.Unknown)
 	}
 	if result.Outcome != "complete" {
-		fmt.Fprintf(out, " | run: %s", safeMenuText(result.Outcome))
+		summary += " | run: " + safeMenuText(result.Outcome)
 	}
-	fmt.Fprintln(out)
+	if narrow || (cols > 0 && len(summary) > cols) {
+		menuProse(out, summary)
+	} else {
+		fmt.Fprintln(out, summary)
+	}
 	menuProse(out, "Results are from this brief check only. No ICMP reply does not prove that a tunnel is disconnected.")
 
 	// Keep failures actionable without expanding every healthy row into
@@ -291,9 +316,24 @@ func menuAllCheckTable(out io.Writer, result healthCenterResponse) {
 				continue
 			}
 			label, _ := menuAllCheckResult(check)
-			fmt.Fprintf(out, "  %d  %s (%s)\n", i+1, label, safeMenuText(check.ReasonCode))
+			reason := safeMenuText(check.ReasonCode)
+			reasonLine := fmt.Sprintf("  %d  %s (%s)", i+1, label, reason)
+			if cols > 0 && len(reasonLine) > cols {
+				fmt.Fprintf(out, "  %d  %s\n", i+1, label)
+				if len("     Reason: ")+len(reason) > cols {
+					fmt.Fprintf(out, "     Reason:\n     %s\n", reason)
+				} else {
+					fmt.Fprintf(out, "     Reason: %s\n", reason)
+				}
+			} else {
+				fmt.Fprintln(out, reasonLine)
+			}
 			if check.NextStep != "" {
-				menuProse(out, "  Next: "+check.NextStep)
+				if menuCopyable(check.NextStep) {
+					menuCopyLine(out, "Next", check.NextStep)
+				} else {
+					menuProse(out, "Next: "+check.NextStep)
+				}
 			}
 		}
 		menuProse(out, "For MTU, latency, counters and detailed diagnosis, select one tunnel in Test connectivity.")
