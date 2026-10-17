@@ -113,6 +113,8 @@ For an on-demand overview of **all** saved tunnels, choose
 **4 Test connectivity → A Check all tunnels** in the menu.
 The result is a compact table of peer IPs, ICMP replies and observed
 status; a missing Ping reply alone does not prove a tunnel is down.
+A completed unanswered ping counts as measured packet loss, while a
+canceled or failed probe remains unknown rather than invented loss.
 Select an individual tunnel for detailed latency, MTU and counters.
 
 ~~~sh
