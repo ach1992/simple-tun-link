@@ -32,6 +32,16 @@ if [[ ${STL_IPSEC_PREPARE_CASE:-} == existing_vendor* ]]; then
   [[ $(systemctl --system is-active strongswan.service) == active &&
      $(systemctl --system is-enabled strongswan.service) == enabled ]] ||
     fail existing_vendor_not_live_before_user_consent
+  if [[ ${STL_IPSEC_EXPECT_SYSTEMD_MAJOR:-} == 249 ]]; then
+    # Prove a real v249 PID1 and missing UpheldBy property, not a mocked
+    # version string or a distribution branding claim.
+    [[ $(systemctl --version | head -n 1) == 'systemd 249'* &&
+       $(systemctl --system --no-pager show -p Version) == Version=249* ]] ||
+      fail actual_systemd_249_pid1_not_verified
+    [[ -z $(systemctl --system --no-pager --all show strongswan.service -p UpheldBy) ]] ||
+      fail v249_upheldby_property_unexpectedly_available
+    echo 'IPSEC_PID1_V249_UPHOLDS_WITHOUT_DBUS_UPHELDBY=PASS'
+  fi
   plan=$(bash /mnt/stl-install.sh requirements --backends native,ipsec) ||
     fail existing_vendor_package_inventory_unknown
   grep -qx "missing_packages=" <<< "$plan" ||
