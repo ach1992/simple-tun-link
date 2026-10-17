@@ -38,13 +38,23 @@ func plainRequiredModules(selected tunnelOption) []string {
 	return nil
 }
 
-// A single failed "ip fou show" is not an instruction to run modprobe.
-// Require the backend-specific failed observation, and independent proof that
-// every targeted module is absent from /sys/module but loadable on disk.
-func plainModuleCandidates(selected tunnelOption, report linux.CapabilityReport, loadable func(string) bool) ([]string, string) {
+// A failed capability query never justifies speculative modprobe. Examine
+// EVERY module required by the selected backend independently, in dependency
+// order. Only proven inactive-and-loadable modules enter one consented plan;
+// unknown/absent artifacts block the entire plan rather than partial loading.
+func menuModulePreparationReason(code string) bool {
+	switch code {
+	case "gre_probe_unconfirmed", "ipip_probe_unconfirmed", "base_link_probe_unconfirmed",
+		"fou_probe_unconfirmed", "fou_module_present_probe_failed", "kernel_module_not_loaded":
+		return true
+	}
+	return false
+}
+
+func plainModuleCandidates(selected tunnelOption, report linux.CapabilityReport, observe func(string) linux.KernelModuleState) ([]string, string) {
 	required := plainRequiredModules(selected)
 	capability := plainBackendCapability(selected.backend, selected.mode)
-	if len(required) == 0 || report == nil || capability == "" {
+	if len(required) == 0 || report == nil || capability == "" || observe == nil {
 		return nil, "This backend has no automatically preparable kernel module"
 	}
 	actual, known := report[capability]
@@ -54,39 +64,27 @@ func plainModuleCandidates(selected tunnelOption, report linux.CapabilityReport,
 	if actual.Available {
 		return nil, ""
 	}
+	// Only module-related observations are eligible for this specific
+	// repair. A typed permission/ownership failure must not invite modprobe.
+	if !menuModulePreparationReason(actual.ReasonCode) {
+		return nil, "The selected failure is not proven repairable by module loading"
+	}
 	base := plainBackendCapability(selected.backend, domain.EncapNative)
-	baseReport, ok := report[base]
-	if !ok {
+	if _, known := report[base]; !known {
 		return nil, "Base GRE/IPIP host inspection is unknown"
 	}
 	var missing []string
-	if !baseReport.Available {
-		module := required[0]
-		if !loadable(module) {
-			return nil, "Base GRE/IPIP module is not proven loadable and inactive; no changes made"
-		}
-		missing = append(missing, module)
-	}
-	if len(required) == 2 {
-		// The base module's failure can mask the shared FOU failure on
-		// this backend. Use a DIFFERENT backend's positive native query
-		// and its typed FOU probe to prepare both modules together only
-		// when independently observed, never from a guessed missing driver.
-		fouUnconfirmed := false
-		for _, cap := range []linux.Capability{linux.CapabilityGREFOU, linux.CapabilityIPIPFOU} {
-			observation, ok := report[cap]
-			if ok && (observation.ReasonCode == "fou_module_present_probe_failed" ||
-				observation.ReasonCode == "fou_probe_unconfirmed") {
-				fouUnconfirmed = true
-			}
-		}
-		if fouUnconfirmed {
-			if !loadable("fou") {
-				return nil, "FOU module is not proven loadable and inactive; no changes made"
-			}
-			missing = append(missing, "fou")
-		} else if baseReport.Available {
-			return nil, "The cause of the selected tunnel precheck is unknown; no modules were loaded"
+	for _, module := range required {
+		switch observe(module) {
+		case linux.KernelModuleLoaded, linux.KernelModuleBuiltin:
+			// Nothing loadable is missing for this dependency. A failed
+			// kernel query still blocks Create after the final re-observation.
+		case linux.KernelModuleLoadableInactive:
+			missing = append(missing, module)
+		case linux.KernelModuleUnavailable:
+			return nil, fmt.Sprintf("Module %s has no verified loadable artifact; no changes made", module)
+		default:
+			return nil, fmt.Sprintf("Module %s readiness is unknown; no changes made", module)
 		}
 	}
 	if len(missing) == 0 {
@@ -163,7 +161,7 @@ func loadSelectedKernelModules(ctx context.Context, load func(context.Context, s
 type menuKernelPreparationOps struct {
 	snapshot   func(*runtimeOptions) linux.CapabilityReport
 	canPrepare func(io.Reader, io.Writer) bool
-	loadable   func(context.Context, string) bool
+	observe    func(context.Context, string) linux.KernelModuleState
 	acquire    func(context.Context) (func(), error)
 	load       func(context.Context, string) error
 }
@@ -173,7 +171,7 @@ func productionMenuKernelOps(options *runtimeOptions) menuKernelPreparationOps {
 	return menuKernelPreparationOps{
 		snapshot:   menuCapabilitySnapshot,
 		canPrepare: menuCanPrepareKernel,
-		loadable:   probe.AvailableButNotLoaded,
+		observe:    probe.Observe,
 		acquire: func(ctx context.Context) (func(), error) {
 			release, err := maintenance.NewInstalledGate().Acquire(ctx)
 			if err != nil {
@@ -198,7 +196,7 @@ func menuPrepareSelectedModulesWithOps(input io.Reader, reader *bufio.Reader, ou
 	options *runtimeOptions, selected tunnelOption, report linux.CapabilityReport,
 	approval menuPackagePreparation, ops menuKernelPreparationOps,
 ) (bool, linux.CapabilityReport) {
-	if ops.snapshot == nil || ops.canPrepare == nil || ops.loadable == nil || ops.acquire == nil || ops.load == nil {
+	if ops.snapshot == nil || ops.canPrepare == nil || ops.observe == nil || ops.acquire == nil || ops.load == nil {
 		return false, report
 	}
 	approvedSelectedPlan := approval.approvedFor(selected)
@@ -232,8 +230,8 @@ func menuPrepareSelectedModulesWithOps(input io.Reader, reader *bufio.Reader, ou
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	modules, reason := plainModuleCandidates(selected, report, func(name string) bool {
-		return ops.loadable(ctx, name)
+	modules, reason := plainModuleCandidates(selected, report, func(name string) linux.KernelModuleState {
+		return ops.observe(ctx, name)
 	})
 	if len(modules) == 0 {
 		menuNotice(out, "WARNING", "Selected kernel precheck did not pass; automatic preparation is unavailable.")
@@ -270,8 +268,8 @@ func menuPrepareSelectedModulesWithOps(input io.Reader, reader *bufio.Reader, ou
 	latest := ops.snapshot(options)
 	verifyCtx, done := context.WithTimeout(loadCtx, 8*time.Second)
 	defer done()
-	modulesAgain, blocked := plainModuleCandidates(selected, latest, func(name string) bool {
-		return ops.loadable(verifyCtx, name)
+	modulesAgain, blocked := plainModuleCandidates(selected, latest, func(name string) linux.KernelModuleState {
+		return ops.observe(verifyCtx, name)
 	})
 	if len(modulesAgain) != len(modules) || blocked != "" {
 		menuNotice(out, "WARNING", "Host preconditions changed after confirmation. No modules loaded.")
@@ -289,6 +287,18 @@ func menuPrepareSelectedModulesWithOps(input io.Reader, reader *bufio.Reader, ou
 		return false, ops.snapshot(options)
 	}
 	now := ops.snapshot(options)
+	// Do not treat a successful modprobe exit or iproute2 query as enough:
+	// verify every dependency is actually loaded after preparation.
+	postCtx, postDone := context.WithTimeout(loadCtx, 8*time.Second)
+	defer postDone()
+	for _, module := range plainRequiredModules(selected) {
+		observed := ops.observe(postCtx, module)
+		if observed != linux.KernelModuleLoaded && observed != linux.KernelModuleBuiltin {
+			menuNotice(out, "WARNING", "Module loading ended, but a selected dependency is not verified ready. No tunnel was created.")
+			menuField(out, "Module", module)
+			return false, now
+		}
+	}
 	if checked, ok := now[capability]; !ok || !checked.Available {
 		menuNotice(out, "WARNING", "Module load completed, but kernel capability is still unverified. No tunnel was created.")
 		return false, now

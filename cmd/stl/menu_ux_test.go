@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -14,9 +15,51 @@ import (
 
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/pairing"
 	"github.com/ach1992/simple-tun-link/internal/state"
 )
+
+func TestIPsecMenuRejectsManualThirtyAndAcceptsThirtyOneBeforeConfirmation(t *testing.T) {
+	var out bytes.Buffer
+	prompts := createPrompts{reader: bufio.NewReader(strings.NewReader("10.235.1.1\n10.235.1.2\n10.235.1.2\n10.235.1.3\n")), out: &out}
+	addresses, err := askIPsecLinkAddresses(prompts, &guidedTestRunner{}, state.EmptySnapshot(), netip.MustParseAddr("192.0.2.20"))
+	if err != nil || addresses.Local.String() != "10.235.1.2/31" || addresses.Peer.String() != "10.235.1.3/31" {
+		t.Fatalf("IPsec address wizard did not reject /30 and accept /31: local=%s peer=%s error=%v", addresses.Local, addresses.Peer, err)
+	}
+	if strings.Count(out.String(), "IPsec requires two addresses in the same /31 pair") != 1 ||
+		strings.Contains(out.String(), "Selected local   10.235.1.1/30") {
+		t.Fatal("IPsec wizard accepted or displayed the invalid /30 pair before correction")
+	}
+}
+
+func TestIPsecManualInvalidPairGuidanceUsesValidThirtyOneExample(t *testing.T) {
+	var out bytes.Buffer
+	prompts := createPrompts{reader: bufio.NewReader(strings.NewReader("10.235.1.1\n10.235.1.3\n10.235.1.2\n10.235.1.3\n")), out: &out}
+	addresses, err := askIPsecLinkAddresses(prompts, &guidedTestRunner{},
+		state.EmptySnapshot(), netip.MustParseAddr("192.0.2.20"))
+	if err != nil || addresses.Local.String() != "10.235.1.2/31" {
+		t.Fatalf("IPsec recovery failed: addresses=%+v err=%v", addresses, err)
+	}
+	if !strings.Contains(out.String(), "for example 10.235.1.2 and 10.235.1.3") ||
+		strings.Contains(out.String(), "try 10.235.1.1 and 10.235.1.2") {
+		t.Fatalf("IPsec displayed generic /30 rather than /31 help: %q", out.String())
+	}
+}
+
+func TestIPsecMenuAutomaticPairRemainsThirtyOne(t *testing.T) {
+	var out bytes.Buffer
+	prompts := createPrompts{reader: bufio.NewReader(strings.NewReader("\n")), out: &out}
+	addresses, err := askIPsecLinkAddresses(prompts, &guidedTestRunner{}, state.EmptySnapshot(), netip.MustParseAddr("192.0.2.20"))
+	if err != nil || addresses.Local.Bits() != 31 || addresses.Peer.Bits() != 31 ||
+		addresses.Local.Masked() != addresses.Peer.Masked() {
+		t.Fatalf("IPsec default should remain the canonical matched /31: %+v err=%v", addresses, err)
+	}
+	if !strings.Contains(out.String(), "Enter=use suggested") ||
+		!strings.Contains(out.String(), "manual example 10.235.1.2") {
+		t.Fatalf("IPsec omitted the automatic Enter hint or valid manual /31 guidance: %q", out.String())
+	}
+}
 
 func TestOperatorManualAdjacentPrivateAddressesAcceptThirtyAndThirtyOne(t *testing.T) {
 	valid := []struct {
@@ -113,7 +156,8 @@ func TestOperatorUnifiedCreateAllPlainBackends(t *testing.T) {
 			opts := &runtimeOptions{
 				stateRoot: root, backends: []backend.Backend{chosen},
 				probeRunner: &guidedTestRunner{}, mtuManager: guidedMTUFake{},
-				createLinkID: func() (domain.LinkID, error) { return createTestID, nil },
+				moduleObserve: func(context.Context, string) linux.KernelModuleState { return linux.KernelModuleLoaded },
+				createLinkID:  func() (domain.LinkID, error) { return createTestID, nil },
 			}
 			code, out, errText := runGuidedTest(opts, "1\n"+test.choice+"\n192.0.2.20\n\nn\nYES\nn\n8\n")
 			if code != 0 || len(f.applies) != 1 {
@@ -132,6 +176,50 @@ func TestOperatorUnifiedCreateAllPlainBackends(t *testing.T) {
 			}
 			if !strings.Contains(out, "stl://") {
 				t.Fatal("selected mode did not provide canonical peer Setup Link")
+			}
+		})
+	}
+}
+
+func TestOperatorBuiltInModulesReachCanonicalCreateWithoutPrepare(t *testing.T) {
+	for _, tc := range []struct {
+		name, choice string
+		backend      domain.Backend
+		mode         domain.Encapsulation
+	}{
+		{"GRE Native", "1", domain.BackendGRE, domain.EncapNative},
+		{"IPIP Native", "3", domain.BackendIPIP, domain.EncapNative},
+		{"GRE FOU", "5\n1", domain.BackendGRE, domain.EncapFOU},
+		{"GRE GUE", "5\n2", domain.BackendGRE, domain.EncapGUE},
+		{"IPIP FOU", "5\n3", domain.BackendIPIP, domain.EncapFOU},
+		{"IPIP GUE", "5\n4", domain.BackendIPIP, domain.EncapGUE},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "state")
+			fake := newLifecycleFake()
+			var chosen backend.Backend
+			if tc.backend == domain.BackendGRE {
+				chosen = &guidedTestBackend{lifecycleFakeBackend: fake}
+			} else {
+				chosen = &ipipImportFake{lifecycleFakeBackend: fake}
+			}
+			opts := &runtimeOptions{
+				stateRoot: root, backends: []backend.Backend{chosen},
+				probeRunner: &guidedTestRunner{}, mtuManager: guidedMTUFake{},
+				moduleObserve: func(context.Context, string) linux.KernelModuleState {
+					return linux.KernelModuleBuiltin
+				},
+				createLinkID: func() (domain.LinkID, error) { return createTestID, nil },
+			}
+			code, out, errOut := runGuidedTest(opts, "1\n"+tc.choice+"\n192.0.2.20\n\nn\nYES\nn\n8\n")
+			if code != 0 || len(fake.applies) != 1 || strings.Contains(out, "Type PREPARE") ||
+				!strings.Contains(out, "[Precheck OK]") || !strings.Contains(out, "changes applied and verified") {
+				t.Fatalf("built-in kernel capability was falsely blocked: code=%d applies=%d out=%q err=%q",
+					code, len(fake.applies), out, errOut)
+			}
+			if snapshot, err := state.NewFileStore(root).Load(context.Background()); err != nil ||
+				len(snapshot.Links) != 1 || snapshot.Links[0].Desired.Backend != tc.backend {
+				t.Fatalf("built-in Create did not commit the selected Link: snapshot=%+v err=%v", snapshot, err)
 			}
 		})
 	}
@@ -332,7 +420,8 @@ func TestOperatorManualIPIPNativeWithoutSetupLink(t *testing.T) {
 	build := func(root string, f backend.Backend) *runtimeOptions {
 		return &runtimeOptions{stateRoot: root, backends: []backend.Backend{f},
 			probeRunner: &guidedTestRunner{}, mtuManager: guidedMTUFake{},
-			createLinkID: func() (domain.LinkID, error) { return createTestID, nil }}
+			moduleObserve: func(context.Context, string) linux.KernelModuleState { return linux.KernelModuleLoaded },
+			createLinkID:  func() (domain.LinkID, error) { return createTestID, nil }}
 	}
 	a := build(firstRoot, f1)
 	b := build(secondRoot, f2)

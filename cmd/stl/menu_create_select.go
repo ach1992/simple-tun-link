@@ -96,9 +96,83 @@ type tunnelOption struct {
 func menuCapabilitySnapshot(options *runtimeOptions) linux.CapabilityReport {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	report, err := (linux.CapabilityProbe{Runner: createRunner(options)}).Probe(ctx)
+	runner := createRunner(options)
+	report, err := (linux.CapabilityProbe{Runner: runner}).Probe(ctx)
 	if err != nil {
 		return nil // unknown, never convert probe failure to "supported"
+	}
+	probe := linux.KernelModuleProbe{Runner: runner, ModinfoBinary: "/sbin/modinfo"}
+	observe := probe.Observe
+	if options != nil && options.moduleObserve != nil {
+		observe = options.moduleObserve
+	}
+	return menuRefineModuleReadiness(report, func(name string) linux.KernelModuleState {
+		return observe(ctx, name)
+	})
+}
+
+// Each selected transport is evaluated against its own independently
+// observed kernel dependencies. A successful iproute2 inventory query alone
+// cannot establish readiness when sysfs or module artifacts are uncertain.
+// This read-only refinement never loads modules or overrides Engine admission.
+func menuRefineModuleReadiness(report linux.CapabilityReport, observe func(string) linux.KernelModuleState) linux.CapabilityReport {
+	if report == nil || observe == nil {
+		return report
+	}
+	states := make(map[string]linux.KernelModuleState, 3)
+	for _, module := range []string{"ip_gre", "ipip", "fou"} {
+		states[module] = observe(module)
+	}
+	for _, backend := range []domain.Backend{domain.BackendGRE, domain.BackendIPIP} {
+		for _, mode := range []domain.Encapsulation{domain.EncapNative, domain.EncapFOU, domain.EncapGUE} {
+			choice := tunnelOption{backend: backend, mode: mode}
+			capability := plainBackendCapability(backend, mode)
+			status, known := report[capability]
+			if !known || (!status.Available && !menuModulePreparationReason(status.ReasonCode)) {
+				// Preserve independently diagnosed non-module failures.
+				continue
+			}
+			baseInactive, fouInactive := false, false
+			uncertain := false
+			for _, module := range plainRequiredModules(choice) {
+				switch states[module] {
+				case linux.KernelModuleLoaded, linux.KernelModuleBuiltin:
+					// Built-in metadata alone cannot promote a failed kernel query.
+				case linux.KernelModuleLoadableInactive:
+					if module == "fou" {
+						fouInactive = true
+					} else {
+						baseInactive = true
+					}
+				case linux.KernelModuleUnavailable:
+					status = linux.CapabilityStatus{ReasonCode: "kernel_module_artifact_unavailable",
+						Reason: fmt.Sprintf("Module %s has no verified loadable artifact; inspect its host configuration", module)}
+					uncertain = true
+				default:
+					status = linux.CapabilityStatus{ReasonCode: "kernel_module_observation_unconfirmed",
+						Reason: fmt.Sprintf("Module %s readiness is unknown; inspect /sys/module and modinfo", module)}
+					uncertain = true
+				}
+				if uncertain {
+					break
+				}
+			}
+			switch {
+			case uncertain:
+				report[capability] = status
+			case fouInactive:
+				report[capability] = linux.CapabilityStatus{ReasonCode: "fou_module_present_probe_failed",
+					Reason: "FOU module is available on disk but not loaded"}
+			case baseInactive:
+				report[capability] = linux.CapabilityStatus{ReasonCode: "kernel_module_not_loaded",
+					Reason: "Base GRE/IPIP module is available on disk but not loaded"}
+			case !status.Available && status.ReasonCode == "fou_module_present_probe_failed":
+				// A failed FOU query with a verified loaded module is not a
+				// request to load it again, whatever modinfo itself reported.
+				report[capability] = linux.CapabilityStatus{ReasonCode: "fou_probe_unconfirmed",
+					Reason: "FOU module is loaded but its runtime query did not succeed"}
+			}
+		}
 	}
 	return report
 }
@@ -119,7 +193,7 @@ func menuCapabilityHint(report linux.CapabilityReport, choice tunnelOption) (str
 		return "[Check needed]", menuBlue
 	}
 	if !status.Available {
-		if status.ReasonCode == "fou_module_present_probe_failed" {
+		if status.ReasonCode == "fou_module_present_probe_failed" || status.ReasonCode == "kernel_module_not_loaded" {
 			return "[Needs setup]", menuYellow
 		}
 		// A failed read-only query is not proof that a kernel or provider

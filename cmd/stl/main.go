@@ -40,6 +40,9 @@ type runtimeOptions struct {
 	stateRoot   string
 	backends    []backend.Backend
 	probeRunner linux.Runner
+	// Test-only module observation seam. Production uses the real read-only
+	// sysfs/modinfo probe; never expose this through CLI input.
+	moduleObserve func(context.Context, string) linux.KernelModuleState
 	// Explicit throughput is never invoked by ordinary read-only diagnose.
 	throughputRunner   linux.BoundedRunner
 	mtuManager         app.MTUManager
