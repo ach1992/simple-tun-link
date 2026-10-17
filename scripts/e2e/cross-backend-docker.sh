@@ -72,13 +72,16 @@ binary_sha="$(sha256sum "$temp/stl-cross.test" | awk '{print $1}')"
 # non-secret fixture inputs and expose them read-only with ordinary 0755/0644.
 mkdir -p "$temp/source/scripts/e2e"
 git -c safe.directory="$source_root" show "$source_sha:scripts/e2e/gre-netns.sh" > "$temp/source/scripts/e2e/gre-netns.sh"
+git -c safe.directory="$source_root" show "$source_sha:scripts/e2e/wireguard-netns.sh" > "$temp/source/scripts/e2e/wireguard-netns.sh"
 git -c safe.directory="$source_root" show "$source_sha:scripts/e2e/throughput-bind-netns.sh" > "$temp/source/scripts/e2e/throughput-bind-netns.sh"
 git -c safe.directory="$source_root" show "$source_sha:go.mod" > "$temp/source/go.mod"
 chmod 0755 "$temp" "$temp/source" "$temp/source/scripts" "$temp/source/scripts/e2e" \
-  "$temp/source/scripts/e2e/gre-netns.sh" "$temp/source/scripts/e2e/throughput-bind-netns.sh"
+  "$temp/source/scripts/e2e/gre-netns.sh" "$temp/source/scripts/e2e/wireguard-netns.sh" \
+  "$temp/source/scripts/e2e/throughput-bind-netns.sh"
 chmod 0644 "$temp/source/go.mod"
 script_sha="$(sha256sum "$temp/source/scripts/e2e/gre-netns.sh" | awk '{print $1}')"
 echo "CROSS_BACKEND_COMMITTED_SCRIPT_SHA256=$script_sha"
+echo "WG_ROUTE_DRIFT_COMMITTED_SCRIPT_SHA256=$(sha256sum "$temp/source/scripts/e2e/wireguard-netns.sh" | awk '{print $1}')"
 echo "THROUGHPUT_BIND_COMMITTED_SCRIPT_SHA256=$(sha256sum "$temp/source/scripts/e2e/throughput-bind-netns.sh" | awk '{print $1}')"
 echo "CROSS_BACKEND_SOURCE_SHA=$source_sha"
 echo "CROSS_BACKEND_TEST_BINARY_SHA256=$binary_sha"
@@ -131,7 +134,10 @@ for entry in "ubuntu:$ubuntu_image" "debian:$debian_image"; do
       # First prove iperf3 TCP CONTROL and DATA socket binding using only
       # fresh guest-local namespaces; no real external/WAN endpoint.
       /bin/bash /proof/source/scripts/e2e/throughput-bind-netns.sh
-      exec /bin/bash /proof/source/scripts/e2e/gre-netns.sh
+      /bin/bash /proof/source/scripts/e2e/gre-netns.sh
+      # Exercise source-identical WireGuard Remove AFTER the exact real
+      # underlay route and device vanish; baseline v0.1.5 refused this.
+      exec /bin/bash /proof/source/scripts/e2e/wireguard-netns.sh
     '
   echo "CROSS_BACKEND_$distro=PASS"
 done

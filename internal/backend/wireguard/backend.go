@@ -21,6 +21,7 @@ type RouteResolver interface {
 type Firewall interface {
 	HasInbound(context.Context, domain.LinkID, linux.InboundFirewallRule) (bool, error)
 	HasOwnedInbound(context.Context, domain.LinkID, bool) (bool, error)
+	FindOwnedInbound(context.Context, domain.LinkID, bool) (linux.InboundFirewallRule, bool, error)
 	EnsureInboundLocked(context.Context, domain.LinkID, linux.InboundFirewallRule) (func(context.Context) error, bool, error)
 	RemoveInboundLocked(context.Context, domain.LinkID, linux.InboundFirewallRule) (bool, error)
 }
@@ -275,6 +276,25 @@ func (b *Backend) Plan(ctx context.Context, req core.Request, observed core.Obse
 		return nil, err
 	}
 	name, _ := InterfaceName(req.Link.ID)
+	// Removal must use the original, exactly owned rule rather than derive
+	// a new firewall identity from today's route. The underlay may be an
+	// already-removed parent Link, or its route/device may have changed.
+	if req.Operation == core.OperationRemove {
+		rule, present, err := b.firewall.FindOwnedInbound(ctx, req.Link.ID, false)
+		if err != nil {
+			return nil, fmt.Errorf("cannot verify original WireGuard firewall rule: %w", err)
+		}
+		if present && (rule.Peer != req.Link.Underlay.Peer || rule.Local != req.Link.Underlay.Local ||
+			rule.Protocol != 17 || rule.DestinationPort != req.Link.WireGuard.ListenPort) {
+			return nil, stlerr.New(stlerr.CodeConflict, "wireguard_plan", string(req.Link.ID), "wireguard",
+				"owned firewall rule conflicts with committed WireGuard identity")
+		}
+		p := plan{link: req.Link, name: name, firewallRule: rule,
+			interfaceChange: obs.Target.Exists && obs.Target.Owner == req.Link.ID,
+			firewallChange:  present,
+			resources:       []domain.ResourceClaim{{Kind: domain.ResourceUDPListenPort, Key: strconv.Itoa(int(req.Link.WireGuard.ListenPort))}}}
+		return p, nil
+	}
 	route, err := b.routes.Resolve(ctx, req.Link.Underlay.Peer)
 	if err != nil {
 		return nil, fmt.Errorf("cannot resolve WireGuard underlay: %w", err)
@@ -335,12 +355,23 @@ func (b *Backend) Validate(ctx context.Context, req core.Request, observed core.
 	if err := validateLink(req.Link); err != nil {
 		return err
 	}
-	route, err := b.routes.Resolve(ctx, req.Link.Underlay.Peer)
-	if err != nil {
-		return err
-	}
-	if route.Source != req.Link.Underlay.Local || route.Device != p.route.Device {
-		return fmt.Errorf("WireGuard underlay route changed during planning")
+	if req.Operation == core.OperationRemove {
+		rule, present, err := b.firewall.FindOwnedInbound(ctx, req.Link.ID, false)
+		if err != nil {
+			return err
+		}
+		if present != p.firewallChange || (present && rule != p.firewallRule) {
+			return stlerr.New(stlerr.CodeConflict, "wireguard_validate", string(req.Link.ID), "wireguard",
+				"owned firewall identity changed during removal planning")
+		}
+	} else {
+		route, err := b.routes.Resolve(ctx, req.Link.Underlay.Peer)
+		if err != nil {
+			return err
+		}
+		if route.Source != req.Link.Underlay.Local || route.Device != p.route.Device {
+			return fmt.Errorf("WireGuard underlay route changed during planning")
+		}
 	}
 	if obs.Target.Exists {
 		if obs.Target.Owner != req.Link.ID {

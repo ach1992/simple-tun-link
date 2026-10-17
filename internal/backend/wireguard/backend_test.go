@@ -186,6 +186,9 @@ func (f *fakeFirewall) HasInbound(_ context.Context, _ domain.LinkID, r linux.In
 func (f *fakeFirewall) HasOwnedInbound(_ context.Context, _ domain.LinkID, _ bool) (bool, error) {
 	return f.exists, nil
 }
+func (f *fakeFirewall) FindOwnedInbound(_ context.Context, _ domain.LinkID, _ bool) (linux.InboundFirewallRule, bool, error) {
+	return f.rule, f.exists, nil
+}
 func (f *fakeFirewall) EnsureInboundLocked(_ context.Context, _ domain.LinkID, r linux.InboundFirewallRule) (func(context.Context) error, bool, error) {
 	prev := f.exists
 	f.exists = true
@@ -774,5 +777,45 @@ func TestWireGuardEngineRemoveCommitFailureRestoresExactOwnedState(t *testing.T)
 	}
 	if _, err = keys.Load(link.ID); err != nil {
 		t.Fatal("protected key needed for rollback was lost", err)
+	}
+}
+
+// A nested WireGuard Link must still be removable if its parent underlay
+// tunnel was removed first. Its original INPUT rule is owned by this Link;
+// the current fallback/default route is not permission to rewrite that rule.
+func TestWireGuardRemoveAfterParentRouteChangedUsesOriginalFirewallOwnership(t *testing.T) {
+	engine, b, link, _, kernel, firewall, store := engineFixture(t)
+	beforeRule := firewall.rule
+	b.routes = fakeRoute{source: netip.MustParseAddr("203.0.113.44")}
+	result, err := engine.Remove(context.Background(), link.ID)
+	if err != nil || !result.Removed || !result.Changed {
+		t.Fatalf("cannot remove committed nested WireGuard after underlay loss: result=%+v err=%v", result, err)
+	}
+	if kernel.target.Exists || firewall.exists || kernel.deletedInterfaces != 1 {
+		t.Fatalf("owned resources not removed: interface=%+v firewall=%+v", kernel.target, firewall)
+	}
+	if firewall.rule != beforeRule {
+		t.Fatal("removal switched to a route-derived firewall identity")
+	}
+	snapshot, err := store.Load(context.Background())
+	if err != nil || len(snapshot.Links) != 0 {
+		t.Fatalf("committed Link survived verified removal: %+v err=%v", snapshot.Links, err)
+	}
+}
+
+func TestWireGuardRemoveRouteDriftRejectsAlteredOwnedFirewall(t *testing.T) {
+	engine, b, link, _, kernel, firewall, store := engineFixture(t)
+	b.routes = fakeRoute{source: netip.MustParseAddr("203.0.113.44")}
+	beforeInterface := kernel.target
+	firewall.rule.InputInterface = "otherdevice"
+	if _, err := engine.Remove(context.Background(), link.ID); err == nil {
+		t.Fatal("altered firewall identity must block Remove")
+	}
+	if !reflect.DeepEqual(kernel.target, beforeInterface) || !firewall.exists || kernel.deletedInterfaces != 0 {
+		t.Fatal("unverified firewall identity permitted destructive mutation")
+	}
+	snapshot, err := store.Load(context.Background())
+	if err != nil || len(snapshot.Links) != 1 {
+		t.Fatal("failed Remove changed committed state", err)
 	}
 }
