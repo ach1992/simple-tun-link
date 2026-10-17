@@ -7,6 +7,13 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/domain"
 )
 
+// DefaultDiagnosticProbeBudget bounds the combined worst-case subprocess
+// allowance for default MTU discovery and the five-ping quality check.
+// Callers add their own time for backend inspection and preflight.
+// 18 MTU probes * 1s + 5 quality probes * 2s = 28s maximum.
+const DefaultDiagnosticProbeBudget = MaxMTUProbeAttempts*mtuProbeAttemptTimeout +
+	DefaultQualitySamples*qualityProbeAttemptTimeout
+
 // Report is the v1 diagnostic JSON envelope. There are deliberately no
 // credential fields, raw tool logs, process arguments, interface configuration,
 // mutable host-state actions or backend-specific secret/counter payloads.
