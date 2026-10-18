@@ -17,11 +17,15 @@ permissions:
 jobs:
   offline-go-and-installer:
     runs-on: ubuntu-latest
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     defaults:
       run:
         working-directory: research/spoof-diagnostics
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-go@v7
         with:
           go-version-file: research/spoof-diagnostics/go.mod
@@ -33,6 +37,7 @@ jobs:
           GOTOOLCHAIN: 'local'
           CGO_ENABLED: '0'
         run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           test -z "$(gofmt -l cmd/stl-spoofdiag)"
           go vet ./...
           go test -count=1 ./...
@@ -45,7 +50,7 @@ jobs:
         run: |
           bash -n scripts/build-offline.sh scripts/package-offline.sh scripts/install-offline.sh
           mkdir -p "$RUNNER_TEMP/spoofdiag-testroot" "$RUNNER_TEMP/spoofdiag-extracted"
-          bash scripts/package-offline.sh "$RUNNER_TEMP/spoofdiag-offline" "$GITHUB_SHA" dev-ci amd64
+          bash scripts/package-offline.sh "$RUNNER_TEMP/spoofdiag-offline" "$SOURCE_SHA" dev-ci amd64
           ( cd "$RUNNER_TEMP/spoofdiag-offline"; sha256sum -c spoofdiag-dev-ci_linux_amd64.tar.gz.sha256 )
           tar -C "$RUNNER_TEMP/spoofdiag-extracted" -xzf "$RUNNER_TEMP/spoofdiag-offline/spoofdiag-dev-ci_linux_amd64.tar.gz"
           bundle="$RUNNER_TEMP/spoofdiag-extracted/stl-spoofdiag"
@@ -83,7 +88,7 @@ jobs:
           fi
 
           # A package for the other architecture must be rejected on AMD64.
-          bash scripts/package-offline.sh "$RUNNER_TEMP/spoofdiag-arm64" "$GITHUB_SHA" dev-ci arm64
+          bash scripts/package-offline.sh "$RUNNER_TEMP/spoofdiag-arm64" "$SOURCE_SHA" dev-ci arm64
           mkdir -p "$RUNNER_TEMP/spoofdiag-arm64-extracted"
           tar -C "$RUNNER_TEMP/spoofdiag-arm64-extracted" -xzf "$RUNNER_TEMP/spoofdiag-arm64/spoofdiag-dev-ci_linux_arm64.tar.gz"
           if bash "$RUNNER_TEMP/spoofdiag-arm64-extracted/stl-spoofdiag/install-offline.sh" --verify; then
@@ -98,7 +103,7 @@ jobs:
           mkdir -p "$root/etc/stl-spoofdiag" "$root/var/lib/stl-spoofdiag"
           printf 'operator-owned' > "$root/etc/stl-spoofdiag/operator.conf"
           printf 'peer-receipts' > "$root/var/lib/stl-spoofdiag/evidence.json"
-          bash scripts/build-offline.sh "$RUNNER_TEMP/spoofdiag-prev" "$GITHUB_SHA" dev-prev-ci amd64
+          bash scripts/build-offline.sh "$RUNNER_TEMP/spoofdiag-prev" "$SOURCE_SHA" dev-prev-ci amd64
           bash "$RUNNER_TEMP/spoofdiag-prev/install-offline.sh" --install --accept --destdir "$root"
           "$root/usr/local/bin/stl-spoofdiag" version | grep -Fq 'dev-prev-ci'
           bash "$bundle/install-offline.sh" --rollback --to dev-ci --accept --destdir "$root"
@@ -136,7 +141,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: spoofdiag-lab-${{ github.sha }}
+          name: spoofdiag-lab-${{ github.event.pull_request.head.sha || github.sha }}
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
