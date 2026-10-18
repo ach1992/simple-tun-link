@@ -89,6 +89,10 @@ func requireIsolatedPrivateNamespace(ifName, exactIP string) error {
 			if !ok {
 				return errors.New("cannot parse interface address")
 			}
+			// net.IP often represents a normal IPv4 as a 16-byte
+			// IPv4-mapped address. Unmap before checking family; otherwise
+			// an owned RFC1918 veth falsely looks like public IPv6.
+			ip = ip.Unmap()
 			if ip.Is6() {
 				if !ip.IsLinkLocalUnicast() {
 					return errors.New("non-local IPv6 address in isolated lab")
