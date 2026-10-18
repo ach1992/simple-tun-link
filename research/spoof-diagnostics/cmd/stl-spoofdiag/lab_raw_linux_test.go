@@ -8,9 +8,27 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestIsolatedIPv6RouteRejectAndEgress(t *testing.T) {
+	zero := strings.Repeat("0", 32)
+	safe := zero + " 00 " + zero + " 00 " + zero + " ffffffff 00000001 00000000 00200200 lo"
+	if err := validateIsolatedIPv6Routes(safe); err != nil {
+		t.Fatal("kernel reject default wrongly classified as egress:", err)
+	}
+	for _, bad := range []string{
+		zero + " 00 " + zero + " 00 " + zero + " 00000064 00000000 00000000 00000003 sdgb0",
+		zero + " 00 " + zero + " 00 " + zero + " ffffffff 00000001 00000000 00200200 sdgb0",
+		zero + " 00 " + zero + " 00 " + zero + " ffffffff 00000001 00000000 00000000 lo",
+	} {
+		if err := validateIsolatedIPv6Routes(bad); err == nil {
+			t.Fatal("real/default IPv6 route allowed", bad)
+		}
+	}
+}
 
 func TestRawPrivatePacketHeader(t *testing.T) {
 	src := netip.MustParseAddr("10.91.1.77")

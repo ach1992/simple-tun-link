@@ -145,11 +145,35 @@ func requireIsolatedPrivateNamespace(ifName, exactIP string) error {
 	if err != nil {
 		return err
 	}
-	for _, line := range strings.Split(strings.TrimSpace(string(ipv6routes)), "\n") {
+	if err := validateIsolatedIPv6Routes(string(ipv6routes)); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Linux installs a permanent REJECT ::/0 route on lo in netns even when
+// no egress route exists. Admit that exact kernel reject entry only; never
+// admit a default route via an actual link or one without RTF_REJECT.
+func validateIsolatedIPv6Routes(raw string) error {
+	for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
 		f := strings.Fields(line)
-		if len(f) > 1 && f[0] == strings.Repeat("0", 32) && f[1] == "00" {
-			return errors.New("IPv6 default route in private network namespace")
+		if len(f) == 0 {
+			continue
 		}
+		if len(f) < 10 {
+			return errors.New("malformed IPv6 route table")
+		}
+		if f[0] != strings.Repeat("0", 32) || f[1] != "00" {
+			continue
+		}
+		flags, err := strconv.ParseUint(f[8], 16, 32)
+		if err != nil {
+			return errors.New("invalid IPv6 route flags")
+		}
+		if f[9] == "lo" && flags&0x200 != 0 && f[4] == strings.Repeat("0", 32) {
+			continue
+		}
+		return errors.New("IPv6 default egress route forbidden in private network namespace")
 	}
 	return nil
 }
