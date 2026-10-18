@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "mode": "permitted_field",
+  "peer_ipv4": "REPLACE_WITH_AUTHORIZED_PEER_PUBLIC_IPV4",
+  "control_port": 24971,
+  "data_port": 24972,
+  "approved_sources": [
+    "REPLACE_WITH_EXPLICITLY_APPROVED_SOURCE_IPV4"
+  ],
+  "payload_sizes": [
+    96,
+    384
+  ],
+  "repetitions": 1,
+  "interval_ms": 250,
+  "egress_interface": "REPLACE_WITH_SENDER_INTERFACE"
+}
