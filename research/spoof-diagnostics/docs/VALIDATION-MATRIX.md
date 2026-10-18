@@ -22,10 +22,10 @@ For a scenario to be **PASS**: report exact source SHA, release SHA, OS/kernel/a
 
 | ID | Variation / fault injected | Required discriminating evidence | Current gate |
 | --- | --- | --- | --- |
-| N01 | A→R→B baseline admitted private candidate | A capture + R forwarding + B capture + matching signed B receipt | VM acceptance pending |
+| N01 | A→R→B baseline admitted private candidate | A capture + R forwarding + B capture + matching signed B receipt | **PASS** — 6f1fc14 exact binary, two Debian 12 KVM VMs, 1/1 signed B receipt, router interface captures 1/1 |
 | N02 | B→R→A reverse independent direction | distinct identity, policy and reverse receipt | VM acceptance pending |
 | N03 | one candidate accepted, one rejected by R source ACL | separate counters; only admitted identity in signed receipt | VM acceptance pending |
-| N04 | all candidates denied | explicit no-success, no fabricated negative IP verdict | VM acceptance pending |
+| N04 | all candidates denied | explicit no-success, no fabricated negative IP verdict | **NOT_RUN / TOOL_SAFETY_GATE** (blocked private-router policy injection; no effects performed) |
 | N05 | R policy epoch changed during run | evidence tied to actual epoch; prior results not reused | VM acceptance pending |
 | N06 | R ingress source-validation / B rp_filter modes | strict, loose, disabled; independent drop observability | VM acceptance pending |
 | N07 | missing return route or R egress path | distinguish successful forward observation from failed return | VM acceptance pending |
@@ -34,10 +34,10 @@ For a scenario to be **PASS**: report exact source SHA, release SHA, OS/kernel/a
 | N10 | changing destination without re-signing plan | sender/receiver reject | unit PASS; VM pending |
 | N11 | zero candidates, duplicate, wrong direction, public IP in private plan | input error; **zero emissions** | unit PASS |
 | N12 | wrong peer certificate/CA, expired cert, wrong peer role | connection/evidence refused | targeted tests partially PASS |
-| N13 | stale challenge, replay, duplicated sample, signature/HMAC tamper | rejects; no success counter | unit PASS; VM pending |
-| N14 | zero observed, partial delivery, timeout, recipient down | `INCONCLUSIVE` / `PARTIAL`; no fake failure origin | unit PASS; VM pending |
+| N13 | stale challenge, replay, duplicated sample, signature/HMAC tamper | rejects; no success counter | **PARTIAL PASS** — Go tamper/unit tests PASS; real Debian VM B refused repeat fresh run ID using persistent replay ledger; other VM tamper scenarios pending |
+| N14 | zero observed, partial delivery, timeout, recipient down | `INCONCLUSIVE` / `PARTIAL`; no fake failure origin | **PARTIAL PASS** — real VM B signed a zero-packet receipt and offline verification returned `INCONCLUSIVE` with observed=0; disconnected/degraded VM scenarios pending |
 | N15 | policy drop, random loss, delay, reordering, duplication | rates, duration and provenance separate | VM pending |
-| N16 | MTU/DF, small/large payload, fragmentation and checksum behavior | exact packet size, MTU and independent capture | VM pending |
+| N16 | MTU/DF, small/large payload, fragmentation and checksum behavior | exact packet size, MTU and independent capture | **PARTIAL / INCONCLUSIVE**: 192-byte raw 1/1 PASS; 3 sources × 1200 bytes: A capture 3, B capture 2; receipt not independently reconciled |
 | N17 | UDP port blocked, listener wrong address/port, busy port | actionable error + no false reachability | VM pending |
 | N18 | R path switch, multi-interface and asymmetric RPF | symmetric/asymmetric path identity and no unapproved host mutation | VM pending |
 | N19 | A/B process stopped or killed mid-session | clear incomplete outcome; safe restart and no orphan listener | VM pending |
@@ -46,17 +46,17 @@ For a scenario to be **PASS**: report exact source SHA, release SHA, OS/kernel/a
 | N22 | cannot reach mTLS control but offline signed evidence possible | file-based challenge/receipt succeeds or remains inconclusive | loopback PASS; VM pending |
 | N23 | receiver B reachable but return observer C unreachable | no implicit proof of sender-return path | design/proof pending |
 | N24 | independent tests after reboot and disk/state preservation | no replay-ledger reset, predictable resume | VM pending |
-| I01 | offline fresh install without Go or network | installed binary runs; no downloads, correct arch/version | disposable-root PASS; VM pending |
+| I01 | offline fresh install without Go or network | installed binary runs; no downloads, correct arch/version | **PASS** — Debian 12 VM A exact archive, no Go, no WAN/default route |
 | I02 | upgrade, verified rollback, safe uninstall, repeat operations | integrity/ownership checked; private state survives | disposable-root PASS; VM pending |
 | I03 | broken/archive tamper, wrong architecture, symlink/foreign owner | fail before writes; safe explainable error | disposable-root PASS; VM pending |
 | I04 | interrupted install, concurrent install, disk full, read-only partition | atomicity/recovery and no foreign deletion | pending |
-| I05 | online pinned bootstrap via trusted origin, blocked network, HTTPS failure | same offline engine, explicit integrity and no execution on download error | pending |
+| I05 | online pinned bootstrap via trusted origin, blocked network, HTTPS failure | same offline engine, explicit integrity and no execution on download error | **PARTIAL** — real VM B local HTTP download/verify/install + SHA rejection PASS; public HTTPS/release/signature NOT_RUN |
 | I06 | artifact signature/provenance failure, wrong tag / stale latest | stop with clear expected vs actual, no execution | pending |
-| I07 | Debian/Ubuntu supported guest and amd64/arm64 compatibility | distro/kernel/architecture positive and negative evidence | VM / cross-arch pending |
-| U01 | menu header, no-color/nonTTY, invalid selections, malformed paths | stable controls, bounded output, actionable errors; menu remains active | pending |
+| I07 | Debian/Ubuntu supported guest and amd64/arm64 compatibility | distro/kernel/architecture positive and negative evidence | **PARTIAL** — Debian 12 amd64 2× KVM boot/installation PASS, arm64 cross-build and wrong-arch refusal PASS; arm64 VM/Ubuntu NOT_RUN |
+| U01 | menu header, no-color/nonTTY, invalid selections, malformed paths | stable controls, bounded output, actionable errors; menu remains active | **PARTIAL PASS** — VM A root-invoked invalid/help/exit PASS and Go menu-negative tests PASS; nonroot install-permission fix pending VM recheck |
 | U02 | source list/add/import/remove/replace and empty inventory | independent direction identity; no packets emitted | local unit PASS, menu pending |
 | U03 | menu challenge/receipt verify and export, positive and tampered files | no secret exposure; explicit evidence layer | pending |
-| O01 | packet captures, timestamp/correlation, exports and peer signatures | machine-readable trace sufficient for fresh reviewer | partial |
+| O01 | packet captures, timestamp/correlation, exports and peer signatures | machine-readable trace sufficient for fresh reviewer | **PARTIAL PASS** — one exact-Go source `10.91.1.77` 192-byte packet at both router TAPs and 1/1 verified signed B receipt; multi-candidate receipt reconciliation pending |
 | O02 | no host/STL side effects, teardown of VMs/files/ports | before-after snapshots, no orphaned resources | namespace infrastructure PASS; VM pending |
 | O03 | independently review code, reproducible exact-binary tests, CI | fresh-author read-only review + SHA-pinned result | pending |
 | O04 | two licensed real hosts with ISP source-identity consent | **NOT_TESTED / external approval and provider gate** | not a lab claim |

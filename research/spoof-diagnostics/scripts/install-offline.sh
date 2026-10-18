@@ -67,8 +67,8 @@ if [[ $accept != true ]]; then
   [[ $confirmation == YES ]] || { echo 'operator declined installation' >&2; exit 1; }
 fi
 
-prefix=$destdir
-[[ $prefix == / ]] || prefix=${prefix%/}
+prefix=${destdir%/}
+# An empty prefix is correct for filesystem root; avoids //usr/local/bin.
 base=$prefix/opt/stl-spoofdiag
 versions=$base/releases
 launchdir=$prefix/usr/local/bin
@@ -117,6 +117,9 @@ verify_stored_release() {
 if [[ $mode == rollback ]]; then
   [[ -d $base && -f $base/.product-id ]] || { echo 'not installed' >&2; exit 1; }
   verify_stored_release "$to_version" || exit 1
+  # Installed executables and manifests are public; private credentials live
+  # elsewhere. Preserve normal nonroot access to a verified local release.
+  chmod 0755 "$base" "$versions" "$versions/$to_version"
   next=$base/.current-rollback-$$
   [[ ! -e $next && ! -L $next ]] || { echo 'temporary rollback pointer exists' >&2; exit 1; }
   ln -s "releases/$to_version" "$next"
@@ -182,6 +185,9 @@ else
   trap - EXIT
 fi
 mkdir -p "$base"
+# umask 077 must protect staging and signing material, not prevent operators
+# from running the installed, nonsecret standalone binary via PATH.
+chmod 0755 "$base" "$versions" "$versions/$version"
 target="releases/$version"
 next=$base/.current-new-$$
 [[ ! -e $next && ! -L $next ]] || { echo 'temporary version pointer busy' >&2; exit 1; }
