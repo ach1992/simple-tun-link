@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "peer_ipv4": "REPLACE_WITH_AUTHORIZED_PEER_PUBLIC_IPV4",
+  "exact_sources": [
+    "REPLACE_WITH_EXPLICITLY_APPROVED_SOURCE_IPV4"
+  ],
+  "provider_approval_reference": "REPLACE_WITH_REAL_PROVIDER_APPROVAL_REFERENCE",
+  "source_address_authority_reference": "REPLACE_WITH_REAL_PREFIX_AUTHORITY_REFERENCE",
+  "peer_consent_reference": "REPLACE_WITH_REAL_RECEIVER_CONSENT_REFERENCE",
+  "valid_until_utc": "REPLACE_WITH_ACTUAL_APPROVAL_EXPIRATION_UTC"
+}
