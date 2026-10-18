@@ -22,6 +22,20 @@ The operator must confirm `YES` on interactive installation; use `--install --ac
 
 Sample source and evidence files contain private example addresses and illustrative **NOT_TESTED** records, not network measurements. The offline installer verifies archive-contained hashes and manifest; those hashes alone are not independent publisher authentication. Verify the full artifact against an independently trusted expected digest/signature before running it as root.
 
+## Build and validate an offline archive (developer/CI machine only)
+
+From a clean checked-out repository at the exact intended source commit:
+
+```sh
+cd research/spoof-diagnostics
+export GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local
+bash scripts/package-offline.sh /tmp/spoofdiag-package-dir "$(git rev-parse HEAD)" dev-local amd64
+cd /tmp/spoofdiag-package-dir
+sha256sum -c spoofdiag-dev-local_linux_amd64.tar.gz.sha256
+```
+
+The output archive is `spoofdiag-dev-local_linux_amd64.tar.gz`. For ARM64 replace the last argument with `arm64`, build on a Go-capable development/CI host and install only on a matching Linux architecture. A `dev-local` archive is **NOT a published GitHub release**; it is a local snapshot. Copy the archive to `/root/stl-spoofdiag/` on a specifically authorized device. The external `.sha256` file does not establish publisher authenticity by itself: compare the digest against an independently trusted manifest/source identity.
+
 ## Local source-only acceptance
 
 ```sh
