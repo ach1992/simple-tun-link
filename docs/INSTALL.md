@@ -71,6 +71,18 @@ Commands using `vX.Y.Z` require a **real published** tag.
   transaction. No whole-host upgrade, APT trust bypass or repository
   rewriting is permitted. `uninstall` does **not** remove distro
   packages, State, credentials or unrelated units/resources.
+- When another process holds `/var/lib/apt/lists/lock`, the canonical
+  installer makes at most **12 APT index-refresh attempts**, with up to
+  **55 seconds of explicit retry sleeps** (excluding the time spent inside
+  individual APT invocations), **only** for positively identified exclusive
+  lists-lock diagnostics. Unexpected warnings or repository failures stop
+  immediately. It neither deletes locks nor terminates other
+  APT processes. `DPkg::Lock::Timeout=60` is used for package installation
+  but does not replace the special lists-lock retry. If the lock persists,
+  wait for the legitimate package manager to finish and rerun the intended
+  `install` or `prepare` operation. Repository signing, broken sources,
+  unsupported dependency plans, and uncertain package transactions still
+  stop immediately. Do **not** run `apt upgrade` simply to clear a lock.
 
 To view missing prerequisites without mutation, use the canonical
 installer `requirements` action from a verified release or source
@@ -258,14 +270,30 @@ stlink version --json
 
 ## Update
 
-The menu reads official release metadata, but its automatic
-root delegation is restricted to positively verified
-`immutable:true` releases and the explicitly supported
-forward **same-line RC** transition, under installed-root/TTY
-checks and fresh `UPDATE` consent. Other upgrade paths,
-including RC-to-Stable and releases with `immutable:false` or
-unknown immutability, use the separately verified **manual
-update** route above. No menu selection is an implicit
+The menu reads official release metadata. **Only an installed executable
+that already contains the newer Stable-patch menu gate** can automatically
+delegate a forward same-major/minor Stable patch update. For example,
+`v0.1.7` → `v0.1.8` would be eligible *if both releases existed and
+the installed `v0.1.7` binary contained this fix*. These are illustrative
+version numbers, not a claim that those releases have been published.
+
+**Legacy migration (one time):** already-published `v0.1.4` and `v0.1.6`
+executables contain the original **RC-only** menu gate. They cannot
+automatically update Stable → Stable themselves, even if the target release
+is immutable or has this fix. On such hosts, first perform one independently
+verified update using the canonical manual installer instructions below.
+After installing the first release that includes this newer menu, eligible
+subsequent Stable patch releases can be selected directly in Update.
+
+All automatic menu updates additionally require positively verified
+`immutable:true` official releases, an installed-root/TTY check, and
+fresh `UPDATE` consent. Forward same-line RC transitions remain supported.
+Major/minor jumps, RC-to-Stable, downgrades, releases with
+`immutable:false` or unknown immutability, and unverified exact tags use
+the separately verified **manual update** route below after reviewing State
+compatibility.
+The menu delegates to the same canonical installer and rollback machinery;
+it does not implement a second installation engine. No menu selection is an implicit
 privileged mutable-tag download or a waiver of State backups.
 
 For manual operations, verify the intended source commit and published
@@ -276,6 +304,12 @@ After independent verification, use
 `sudo bash ./install.sh update --version vX.Y.Z`. The installer refuses
 a foreign or locally modified
 `stl`, an unrecognized/missing `stlink`, or malformed installation metadata.
+A failed **initial install** that stopped before binary publication has no
+`install-record`; calling `update` on that incomplete installation must
+fail closed. Inspect both canonical executable and alias paths plus retained
+recovery material. Use the official `install` action only after proving no
+existing installer-owned, foreign or uncertain installation remains; never
+fabricate the ownership record to make `update` pass.
 
 - Each installer is serialized with `flock`.
 - A verified executable is staged on the **same filesystem** as canonical

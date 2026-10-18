@@ -70,9 +70,10 @@ discoverable.
   `STL_NO_CLEAR=1` retains an append-only interactive display for
   troubleshooting.
 - Update delegates only to an independently verified official
-  **immutable** published installer under the installed-root/TTY and
-  fresh `UPDATE` gates. Mutable/unknown release artifacts are
-  manual verification only. Uninstall is a guided, individually
+  **immutable** published installer for forward same-line Stable patch
+  or forward RC releases, under the installed-root/TTY and fresh `UPDATE`
+  gates. Major/minor migration, RC-to-Stable, mutable or unknown release
+  artifacts require independent manual verification. Uninstall is a guided, individually
   authorized cleanup—not a mass Link or credential purge.
 
 ### Manual GRE/IPIP Native pairing (no Setup Link)

@@ -29,6 +29,7 @@ const (
 
 var menuReleaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$`)
 var menuRCVersion = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)-rc\.([0-9]+)$`)
+var menuStableVersion = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 
 type menuOfficialRelease struct {
 	ID          int64     `json:"id"`
@@ -127,9 +128,9 @@ func menuPublicReleases(ctx context.Context, options *runtimeOptions) ([]menuOff
 	return fetchMenuOfficialReleases(ctx, client, menuOfficialReleasesURL)
 }
 
-// Automated updates are limited to a forward candidate on the same
-// major/minor/patch release line. New public lines need migration review;
-// selecting one still gives the manual runbook, never a silent downgrade.
+// RC updates are limited to forward candidates on the same major/minor/patch
+// release line. Stable patch updates have their own strictly forward gate.
+// New major/minor lines need migration review, never a silent downgrade.
 func menuRCUpgrade(current, target string) bool {
 	a, b := menuRCVersion.FindStringSubmatch(current), menuRCVersion.FindStringSubmatch(target)
 	if len(a) != 5 || len(b) != 5 {
@@ -143,6 +144,28 @@ func menuRCUpgrade(current, target string) bool {
 	oldRC, errOld := strconv.ParseUint(a[4], 10, 32)
 	newRC, errNew := strconv.ParseUint(b[4], 10, 32)
 	return errOld == nil && errNew == nil && newRC > oldRC
+}
+
+// Stable patches within the same major/minor line are eligible for the
+// canonical updater. Reject cross-line migrations, prereleases, downgrades,
+// ambiguous leading-zero components, and overflowing patch versions.
+func menuStablePatchUpgrade(current, target string) bool {
+	a, b := menuStableVersion.FindStringSubmatch(current), menuStableVersion.FindStringSubmatch(target)
+	if len(a) != 4 || len(b) != 4 || a[1] != b[1] || a[2] != b[2] {
+		return false
+	}
+	oldPatch, oldErr := strconv.ParseUint(a[3], 10, 64)
+	newPatch, newErr := strconv.ParseUint(b[3], 10, 64)
+	return oldErr == nil && newErr == nil && newPatch > oldPatch
+}
+
+// Release type is checked independently of the tag spelling; the official
+// immutable-release and installed-root/TTY gates remain separate and required.
+func menuForwardMenuUpgrade(current string, release menuOfficialRelease) bool {
+	if release.Prerelease {
+		return menuRCUpgrade(current, release.TagName)
+	}
+	return menuStablePatchUpgrade(current, release.TagName)
 }
 
 func menuCanUpdateNow(input io.Reader, out io.Writer) bool {
@@ -335,9 +358,9 @@ func menuUpdate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		menuPrintManualUpdate(out, selected)
 		return 0
 	}
-	if !menuRCUpgrade(version.Version, selected) {
-		menuNotice(out, "WARNING", "This is not a confirmed forward RC upgrade. No in-place update command is recommended.")
-		menuField(out, "Recovery runbook", "https://github.com/ach1992/simple-tun-link/blob/main/docs/INSTALL.md")
+	if !menuForwardMenuUpgrade(version.Version, selectedRelease) {
+		menuNotice(out, "WARNING", "Automatic update supports newer Stable patches on the same major/minor line or forward same-line RC releases only.")
+		menuPrintManualUpdate(out, selected)
 		return 0
 	}
 	if !menuReleaseImmutable(selectedRelease) {

@@ -178,4 +178,71 @@ ipsec_loaded_unit_inventory_clean || fail 'real successful empty systemctl stdou
 PATH=$original_path
 echo 'IPSEC_SYSTEMCTL_INDEPENDENT_STDOUT_STDERR_AND_EXIT_BOUNDARY=PASS'
 
+# Exercise the canonical index-refresh helpers against a fake APT process and
+# fake clock. Never run the host's apt-get, sleep, dpkg or package hooks.
+sed -n '/^apt_update_is_only_lists_lock() {/,/^}/p' "$installer" > "$root/apt-update-functions.sh"
+sed -n '/^apt_update_indexes() {/,/^}/p' "$installer" >> "$root/apt-update-functions.sh"
+[[ $(grep -c '^apt_update_indexes() {' "$root/apt-update-functions.sh") == 1 ]] || fail 'canonical APT refresh function unavailable'
+# shellcheck source=/dev/null
+source "$root/apt-update-functions.sh"
+apt_safety=()
+fake_apt_mode=
+apt-get() {
+  [[ ${*: -1} == update ]] || { echo 'unexpected APT operation' >&2; return 77; }
+  local calls=0
+  [[ ! -f $root/apt-calls ]] || read -r calls < "$root/apt-calls"
+  printf '%s\n' "$((calls+1))" > "$root/apt-calls"
+  case "$fake_apt_mode" in
+    transient) if (( calls == 0 )); then fake_apt_lock; return 100; fi ;;
+    permanent) fake_apt_lock; return 100 ;;
+    untrusted) printf 'E: The repository is not signed.\n' >&2; return 100 ;;
+    mixed) fake_apt_lock; printf 'E: The repository is not signed.\n' >&2; return 100 ;;
+    mixed_warning) fake_apt_lock; printf 'W: GPG error: the repository signature is invalid.\n' >&2; return 100 ;;
+    mixed_err) fake_apt_lock; printf 'Err:1 https://invalid.example.invalid repository metadata failed\n' >&2; return 100 ;;
+    mixed_unrelated) fake_apt_lock; printf 'N: An unrelated package-manager notice\n' >&2; return 100 ;;
+    mixed_progress) fake_apt_lock; printf 'Hit:1 distribution repository index\n' >&2; return 100 ;;
+    missing_primary) printf 'E: Unable to lock directory /var/lib/apt/lists/\n' >&2; return 100 ;;
+    transient_progress) if (( calls == 0 )); then printf 'Reading package lists... Done\n'; fake_apt_lock; return 100; fi ;;
+    transient_old_lock) if (( calls == 0 )); then printf 'E: Could not get lock /var/lib/apt/lists/lock - open (11: Resource temporarily unavailable)\nE: Unable to lock directory /var/lib/apt/lists/\n' >&2; return 100; fi ;;
+    wrong_exit) fake_apt_lock; return 17 ;;
+    *) : ;;
+  esac
+  printf 'Reading package lists... Done\n'
+}
+fake_apt_lock() {
+  printf 'E: Could not get lock /var/lib/apt/lists/lock. It is held by process 840337 (apt-get)\nN: Be aware that removing the lock file is not a solution and may break your system.\nE: Unable to lock directory /var/lib/apt/lists/\n' >&2
+}
+sleep() {
+  [[ $1 == 5 ]] || fail 'unexpected APT retry interval'
+  printf 'wait\n' >> "$root/apt-waits"
+}
+reset_fake_apt() { rm -f "$root/apt-calls" "$root/apt-waits"; }
+reset_fake_apt
+fake_apt_mode=transient
+apt_update_indexes > "$root/apt.out" 2> "$root/apt.err" || fail 'temporary APT lists lock was not retried'
+[[ $(cat "$root/apt-calls") == 2 && $(wc -l < "$root/apt-waits") == 1 ]] || fail 'APT lock was not retried exactly once'
+grep -q 'Reading package lists' "$root/apt.out" || fail 'successful APT refresh output lost'
+for fake_apt_mode in transient_progress transient_old_lock; do
+  reset_fake_apt
+  apt_update_indexes > "$root/apt.out" 2> "$root/apt.err" || fail "expected APT lock variant was rejected: $fake_apt_mode"
+  [[ $(cat "$root/apt-calls") == 2 && $(wc -l < "$root/apt-waits") == 1 ]] ||
+    fail "legitimate APT lock variant was not retried once: $fake_apt_mode"
+done
+for fake_apt_mode in untrusted mixed mixed_warning mixed_err mixed_unrelated mixed_progress missing_primary wrong_exit; do
+  reset_fake_apt
+  if ( apt_update_indexes > "$root/apt.out" 2> "$root/apt.err" ); then
+    fail "APT refresh accepted non-lock error: $fake_apt_mode"
+  fi
+  [[ $(cat "$root/apt-calls") == 1 && ! -e $root/apt-waits ]] || fail "APT retried non-lock error: $fake_apt_mode"
+done
+reset_fake_apt
+fake_apt_mode=permanent
+if ( apt_update_indexes > "$root/apt.out" 2> "$root/apt.err" ); then
+  fail 'APT permanent lock was not bounded'
+fi
+[[ $(cat "$root/apt-calls") == 12 && $(wc -l < "$root/apt-waits") == 11 ]] || fail 'APT lock retry budget was not bounded'
+grep -q 'Do not delete APT lock files' "$root/apt.err" || fail 'permanent APT lock lacks safe recovery guidance'
+unset -f apt-get sleep fake_apt_lock reset_fake_apt
+printf 'APT_CANONICAL_LOCK_RETRY_AND_NONLOCK_FAIL_CLOSED=PASS\n'
+
 printf 'Installer requirements checks PASS (Ubuntu 22.04+, Debian 11+, package plans, unsafe inputs, EOL).\n'
