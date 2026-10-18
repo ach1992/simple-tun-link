@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -74,6 +75,58 @@ func TestUnprivilegedOrRedirectedPackagePreviewCannotConsumeCreateInput(t *testi
 	}
 	if errors.Len() != 0 {
 		t.Fatalf("leaked error: %q", errors.String())
+	}
+}
+
+// These errors are safe authored categories, not raw APT output. Their
+// guidance is advisory; a failed package preview never authorizes PREPARE.
+func TestSelectedPackagePreviewErrorsAreActionableAndRedacted(t *testing.T) {
+	tests := []struct {
+		name, stderr, reason, check string
+		ctxErr                      error
+	}{
+		{"timeout", "", "requirements_check_timeout", "host load", context.DeadlineExceeded},
+		{"interrupted", "", "requirements_check_interrupted", "Reopen Create tunnel", context.Canceled},
+		{"unsupported OS", "stl installer [FAILED]: unsupported distribution: secret", "unsupported_or_unverified_os", "/etc/os-release", nil},
+		{"APT trust", "stl installer [FAILED]: APT candidate InRelease is not signed by the distribution archive: secret", "apt_source_trust_unverified", "apt-cache policy", nil},
+		{"APT plan", "stl installer [FAILED]: APT cannot resolve the complete selected dependency plan: secret", "apt_dependency_plan_unverified", "apt-cache policy", nil},
+		{"dpkg", "stl installer [FAILED]: dpkg has unfinished package configuration: secret", "dpkg_transaction_incomplete", "dpkg --audit", nil},
+		{"untrusted raw stderr", "stl installer [FAILED]: private-token-DO-NOT-PRINT", "requirements_inventory_unverified", "/etc/os-release", nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			failure := packageInventoryFailure(tc.stderr, tc.ctxErr)
+			reason, next := packageInventoryGuidance(failure)
+			if reason != tc.reason || !strings.Contains(next, tc.check) ||
+				strings.Contains(failure.Error()+reason+next, "secret") ||
+				strings.Contains(failure.Error()+reason+next, "private-token-DO-NOT-PRINT") {
+				t.Fatalf("unsafe or inaccurate guidance: failure=%q reason=%q next=%q", failure, reason, next)
+			}
+		})
+	}
+	// Only the known authored reason may reach the menu, not an arbitrary
+	// subprocess error or a hidden credential in its text.
+	var out, errOut bytes.Buffer
+	var installs int
+	preview := func(context.Context, tunnelOption) (selectedPackagePreview, error) {
+		return selectedPackagePreview{}, packageInventoryFailure("stl installer [FAILED]: APT candidate InRelease secret-private-token", nil)
+	}
+	ops := menuPackagePreparationOps{
+		preview:    preview,
+		canPrepare: func(io.Reader, io.Writer) bool { t.Fatal("preview failure attempted privilege gate"); return false },
+		install: func(context.Context, io.Writer, io.Writer, ...string) error {
+			installs++
+			return nil
+		},
+	}
+	result := menuPrepareSelectedPackagesWithOps(strings.NewReader("PREPARE\n"), nil, &out, &errOut,
+		tunnelOption{backend: domain.BackendIPsec, mode: domain.EncapESP}, nil, ops)
+	if result.canContinue || result.approvedSelectedPlan || installs != 0 ||
+		!strings.Contains(out.String(), "apt_source_trust_unverified") ||
+		!strings.Contains(out.String(), "apt-cache policy") ||
+		!strings.Contains(out.String(), "no preparation attempted") ||
+		strings.Contains(out.String()+errOut.String(), "secret-private-token") {
+		t.Fatalf("failed preview was unsafe: result=%+v installs=%d out=%q err=%q", result, installs, out.String(), errOut.String())
 	}
 }
 

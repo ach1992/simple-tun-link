@@ -42,6 +42,66 @@ type selectedPackagePreview struct {
 	aptInstall string
 }
 
+// packagePreviewIssue is an authored operator reason and next step. Never
+// expose APT stderr, package-source URLs or arbitrary subprocess details.
+type packagePreviewIssue struct {
+	reason string
+	next   string
+}
+
+func (e *packagePreviewIssue) Error() string { return e.reason }
+
+func packageInventoryFailure(stderr string, ctxErr error) error {
+	issue := &packagePreviewIssue{}
+	switch {
+	case errors.Is(ctxErr, context.DeadlineExceeded):
+		issue.reason = "requirements_check_timeout"
+		issue.next = "The read-only check timed out. Check host load, then retry Create tunnel; no preparation was started."
+	case ctxErr != nil:
+		issue.reason = "requirements_check_interrupted"
+		issue.next = "Read-only inspection was interrupted. Reopen Create tunnel when the host is ready."
+	case strings.Contains(stderr, "unsupported distribution:"),
+		strings.Contains(stderr, "Ubuntu 22.04 or later is required"),
+		strings.Contains(stderr, "Debian 11 or later is required"),
+		strings.Contains(stderr, "OS release file is unreadable"),
+		strings.Contains(stderr, "invalid Ubuntu version"),
+		strings.Contains(stderr, "invalid Debian version"):
+		issue.reason = "unsupported_or_unverified_os"
+		issue.next = "Inspect /etc/os-release and docs/SUPPORTED-ENVIRONMENTS.md (read-only); do not change OS identity."
+	case strings.Contains(stderr, "APT sources explicitly bypass signature verification"),
+		strings.Contains(stderr, "APT candidate InRelease"),
+		strings.Contains(stderr, "APT candidate includes a non-distribution package source"),
+		strings.Contains(stderr, "APT candidate package version has no verified distribution index"),
+		strings.Contains(stderr, "distribution archive keyring"),
+		strings.Contains(stderr, "cannot verify distribution archive signatures"):
+		issue.reason = "apt_source_trust_unverified"
+		issue.next = "Inspect APT source configuration and apt-cache policy for the missing packages; do not bypass signature checks."
+	case strings.Contains(stderr, "APT cannot resolve the complete selected dependency plan"),
+		strings.Contains(stderr, "APT plan omitted"),
+		strings.Contains(stderr, "APT package index mapping"),
+		strings.Contains(stderr, "APT candidate-to-index policy"),
+		strings.Contains(stderr, "APT plan would upgrade"):
+		issue.reason = "apt_dependency_plan_unverified"
+		issue.next = "Check apt-cache policy for selected packages and configured distribution sources (read-only); no packages changed."
+	case strings.Contains(stderr, "dpkg has unfinished package configuration"):
+		issue.reason = "dpkg_transaction_incomplete"
+		issue.next = "Run dpkg --audit (read-only), then reconcile package state before starting a new PREPARE."
+	default:
+		issue.reason = "requirements_inventory_unverified"
+		issue.next = "Check /etc/os-release and apt-cache policy for selected packages; retry the read-only inventory when host checks are available."
+	}
+	return issue
+}
+
+func packageInventoryGuidance(err error) (reason, next string) {
+	var issue *packagePreviewIssue
+	if errors.As(err, &issue) {
+		return issue.reason, issue.next
+	}
+	return "requirements_inventory_unverified",
+		"Inspect /etc/os-release and apt-cache policy for selected packages (read-only); no preparation was started."
+}
+
 func missingStrongSwanPackages(missing string) bool {
 	for _, pkg := range strings.Fields(missing) {
 		switch pkg {
@@ -64,7 +124,9 @@ func runEmbeddedInstaller(ctx context.Context, stdout, stderr io.Writer, args ..
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {
-		return errors.New("canonical installer action failed or was interrupted")
+		// Preserve typed process status for the redacted operator report,
+		// but never forward child diagnostics via the returned error.
+		return fmt.Errorf("canonical installer action failed or was interrupted: %w", err)
 	}
 	return nil
 }
@@ -75,8 +137,14 @@ func readSelectedPackagePreview(ctx context.Context, selected tunnelOption) (sel
 		return selectedPackagePreview{}, errors.New("unrecognized tunnel package selection")
 	}
 	var stdout, stderr bytes.Buffer
-	if err := runEmbeddedInstaller(ctx, &stdout, &stderr, "requirements", "--backends", choice); err != nil || stdout.Len() > 32768 {
-		return selectedPackagePreview{}, errors.New("read-only package inventory incomplete")
+	if err := runEmbeddedInstaller(ctx, &stdout, &stderr, "requirements", "--backends", choice); err != nil {
+		return selectedPackagePreview{}, packageInventoryFailure(stderr.String(), ctx.Err())
+	}
+	if stdout.Len() > 32768 {
+		return selectedPackagePreview{}, &packagePreviewIssue{
+			reason: "requirements_inventory_oversized",
+			next:   "The read-only package response exceeded its limit; verify the STL binary and release integrity before retrying.",
+		}
 	}
 	var plan selectedPackagePreview
 	seen := map[string]bool{}
@@ -189,9 +257,14 @@ func menuPrepareSelectedPackagesWithOps(input io.Reader, reader *bufio.Reader, o
 	plan, err := ops.preview(ctx, selected)
 	cancel()
 	if err != nil {
+		reason, next := packageInventoryGuidance(err)
 		menuSection(out, "Selected tunnel / package check")
-		menuField(out, "STATUS", "Unverified")
-		menuField(out, "NEXT ACTION", "Inspect supported OS and APT metadata; no changes attempted")
+		menuField(out, "STATUS", "Unverified (read-only check; no preparation attempted)")
+		menuField(out, "Reason", reason)
+		menuField(out, "NEXT ACTION", next)
+		if selected.backend == domain.BackendIPsec {
+			menuField(out, "IPsec check", "stl doctor ipsec --json (read-only)")
+		}
 		return menuPackagePreparation{canContinue: selected.backend != domain.BackendIPsec}
 	}
 
@@ -251,16 +324,25 @@ func menuPrepareSelectedPackagesWithOps(input io.Reader, reader *bufio.Reader, o
 		stop()
 		if e != nil || refreshed.missing != plan.missing ||
 			refreshed.packages != plan.packages || refreshed.aptInstall != plan.aptInstall {
-			menuNotice(out, "WARNING", "Package/dependency plan changed since consent; no packages installed.")
+			menuNotice(out, "WARNING", "Package/dependency plan could not be confirmed after consent; no APT transaction started.")
+			menuField(out, "NEXT ACTION", "Review current APT package policy and start a NEW Create/PREPARE preview; the previous consent cannot be reused.")
+			if e != nil {
+				reason, _ := packageInventoryGuidance(e)
+				menuField(out, "Reason", reason)
+			}
 			return menuPackagePreparation{}
 		}
 		prepCtx, done := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer done()
-		menuNotice(out, "INFO", "Canonical installer checking exact plan and host ownership")
-		if err := ops.install(prepCtx, out, errOut, "prepare",
+		menuNotice(out, "INFO", "Canonical installer checking exact plan and host ownership; raw APT diagnostics are withheld from the menu.")
+		var childOutput menuInstallerOutput
+		childStdout, childStderr := childOutput.streams()
+		if err := ops.install(prepCtx, childStdout, childStderr, "prepare",
 			"--backends", selectedPackageBackends(selected), "--expected-missing", refreshed.missing,
 			"--expected-apt-plan", refreshed.aptInstall); err != nil {
+			childOutput.failure(out, "prepare", err, prepCtx)
 			menuNotice(out, "FAILED", "Package preparation incomplete or denied. APT/vendor changes may persist after an attempted transaction; inspect and reconcile before retry.")
+			menuField(out, "NEXT ACTION", "Inspect dpkg --audit and current APT processes (read-only). Reconcile any partial transaction before a NEW PREPARE; never retry blindly.")
 			return menuPackagePreparation{}
 		}
 		afterCtx, afterDone := context.WithTimeout(context.Background(), 12*time.Second)
@@ -268,6 +350,11 @@ func menuPrepareSelectedPackagesWithOps(input io.Reader, reader *bufio.Reader, o
 		afterDone()
 		if e != nil || after.missing != "" {
 			menuNotice(out, "FAILED", "Selected packages are not verified after APT; private service was not started.")
+			menuField(out, "NEXT ACTION", "Check dpkg --audit and apt-cache policy for selected packages, then recheck installed packages before retrying.")
+			if e != nil {
+				reason, _ := packageInventoryGuidance(e)
+				menuField(out, "Reason", reason)
+			}
 			return menuPackagePreparation{}
 		}
 	}
