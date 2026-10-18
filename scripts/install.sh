@@ -281,14 +281,20 @@ apt_safety=(-o APT::Get::AllowUnauthenticated=false
 # supported Debian/Ubuntu releases. Retry ONLY a positively classified lists
 # lock failure before the package transaction, never repository trust errors.
 apt_update_is_only_lists_lock() {
-  local output=$1 line
-  [[ $output == *'E: Could not get lock /var/lib/apt/lists/lock'* ]] || return 1
+  local output=$1 line lock_seen=0
+  # Fail closed on *every* line outside this narrow set of real APT
+  # lists-lock diagnostics. Other warnings, repository failures, progress
+  # or partial downloads must never be retried as an exclusive lock.
   while IFS= read -r line; do
     case "$line" in
-      'E: Could not get lock /var/lib/apt/lists/lock'*|'E: Unable to lock directory /var/lib/apt/lists/'*) ;;
-      E:\ *|W:\ *) return 1 ;;
+      'E: Could not get lock /var/lib/apt/lists/lock'*) lock_seen=1 ;;
+      'E: Unable to lock directory /var/lib/apt/lists/' | \
+      'N: Be aware that removing the lock file is not a solution and may break your system.' | \
+      'Reading package lists...' | 'Reading package lists... Done' | '') ;;
+      *) return 1 ;;
     esac
   done <<< "$output"
+  (( lock_seen == 1 ))
 }
 
 apt_update_indexes() {

@@ -197,7 +197,13 @@ apt-get() {
     permanent) fake_apt_lock; return 100 ;;
     untrusted) printf 'E: The repository is not signed.\n' >&2; return 100 ;;
     mixed) fake_apt_lock; printf 'E: The repository is not signed.\n' >&2; return 100 ;;
-    mixed_warning) fake_apt_lock; printf 'W: GPG error: repository signature unverified.\n' >&2; return 100 ;;
+    mixed_warning) fake_apt_lock; printf 'W: GPG error: the repository signature is invalid.\n' >&2; return 100 ;;
+    mixed_err) fake_apt_lock; printf 'Err:1 https://invalid.example.invalid repository metadata failed\n' >&2; return 100 ;;
+    mixed_unrelated) fake_apt_lock; printf 'N: An unrelated package-manager notice\n' >&2; return 100 ;;
+    mixed_progress) fake_apt_lock; printf 'Hit:1 distribution repository index\n' >&2; return 100 ;;
+    missing_primary) printf 'E: Unable to lock directory /var/lib/apt/lists/\n' >&2; return 100 ;;
+    transient_progress) if (( calls == 0 )); then printf 'Reading package lists... Done\n'; fake_apt_lock; return 100; fi ;;
+    transient_old_lock) if (( calls == 0 )); then printf 'E: Could not get lock /var/lib/apt/lists/lock - open (11: Resource temporarily unavailable)\nE: Unable to lock directory /var/lib/apt/lists/\n' >&2; return 100; fi ;;
     wrong_exit) fake_apt_lock; return 17 ;;
     *) : ;;
   esac
@@ -216,7 +222,13 @@ fake_apt_mode=transient
 apt_update_indexes > "$root/apt.out" 2> "$root/apt.err" || fail 'temporary APT lists lock was not retried'
 [[ $(cat "$root/apt-calls") == 2 && $(wc -l < "$root/apt-waits") == 1 ]] || fail 'APT lock was not retried exactly once'
 grep -q 'Reading package lists' "$root/apt.out" || fail 'successful APT refresh output lost'
-for fake_apt_mode in untrusted mixed mixed_warning wrong_exit; do
+for fake_apt_mode in transient_progress transient_old_lock; do
+  reset_fake_apt
+  apt_update_indexes > "$root/apt.out" 2> "$root/apt.err" || fail "expected APT lock variant was rejected: $fake_apt_mode"
+  [[ $(cat "$root/apt-calls") == 2 && $(wc -l < "$root/apt-waits") == 1 ]] ||
+    fail "legitimate APT lock variant was not retried once: $fake_apt_mode"
+done
+for fake_apt_mode in untrusted mixed mixed_warning mixed_err mixed_unrelated mixed_progress missing_primary wrong_exit; do
   reset_fake_apt
   if ( apt_update_indexes > "$root/apt.out" 2> "$root/apt.err" ); then
     fail "APT refresh accepted non-lock error: $fake_apt_mode"
