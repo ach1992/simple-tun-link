@@ -265,10 +265,8 @@ func menuRunCanonicalUpdate(ctx context.Context, release menuOfficialRelease, ou
 		return errors.New("tagged installer failed Bash syntax check")
 	}
 	menuNotice(out, "INFO", "Immutable official release selected; the canonical installer owns update and rollback.")
-	command := exec.CommandContext(ctx, "/bin/bash", path, "update", "--version", tag, "--backends", "native")
-	command.Stdout, command.Stderr, command.Stdin = out, errOut, os.Stdin
-	if err := command.Run(); err != nil {
-		return fmt.Errorf("canonical update unsuccessful: %w", err)
+	if err := menuRunCanonicalUpdateProcess(ctx, path, tag, out); err != nil {
+		return err
 	}
 	// Process success alone is not release delivery. Verify the newly
 	// installed executable's immutable embedded identity before saying OK.
@@ -277,6 +275,56 @@ func menuRunCanonicalUpdate(ctx context.Context, release menuOfficialRelease, ou
 		return errors.New("installer returned success but installed version/commit could not be verified")
 	}
 	return nil
+}
+
+// Execute only the previously selected installer; output is untrusted
+// (Bash/APT/other subprocesses). Keep process status and operator recovery
+// information without exposing raw child stdout/stderr to the terminal.
+func menuRunCanonicalUpdateProcess(ctx context.Context, path, tag string, out io.Writer) error {
+	var childOutput menuInstallerOutput
+	childStdout, childStderr := childOutput.streams()
+	command := exec.CommandContext(ctx, "/bin/bash", path, "update", "--version", tag, "--backends", "native")
+	command.Stdout, command.Stderr, command.Stdin = childStdout, childStderr, os.Stdin
+	// Do not let caller-controlled shell startup/loader environment execute
+	// before the canonical root installer (also used by PREPARE).
+	command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C", "LANG=C", "HOME=/root"}
+	menuNotice(out, "INFO", "Running canonical updater; raw child diagnostics are withheld from the menu.")
+	if err := command.Run(); err != nil {
+		childOutput.failure(out, "update", err, ctx)
+		return errors.New("canonical updater exited unsuccessfully or was interrupted")
+	}
+	return nil
+}
+
+// Failure detail may include network/proxy or filesystem paths. Categorize
+// only our own fixed messages; arbitrary wrapped errors are never displayed.
+func menuUpdateFailureCategory(err error) string {
+	if err == nil {
+		return ""
+	}
+	switch message := err.Error(); {
+	case strings.HasPrefix(message, "cannot download official tagged installer"):
+		return "tagged_installer_download_unverified"
+	case strings.HasPrefix(message, "official tagged installer HTTP status"):
+		return "tagged_installer_http_failure"
+	case message == "tagged installer incomplete or exceeds size limit":
+		return "tagged_installer_incomplete"
+	case message == "tagged installer failed Bash syntax check":
+		return "tagged_installer_syntax_unverified"
+	case message == "canonical updater exited unsuccessfully or was interrupted":
+		return "canonical_updater_failed_or_interrupted"
+	case message == "installer returned success but installed version/commit could not be verified":
+		return "installed_identity_unverified"
+	case strings.Contains(message, "private root staging directory"),
+		message == "cannot stage verified installer privately":
+		return "private_staging_unavailable"
+	case message == "invalid official release tag",
+		message == "automatic update requires a confirmed immutable GitHub release",
+		message == "canonical update requires root":
+		return "canonical_update_admission_blocked"
+	default:
+		return "canonical_update_completion_unverified"
+	}
 }
 
 // Remote catalogue errors are data, never trusted diagnostic text.
@@ -427,7 +475,8 @@ func menuUpdate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 	defer stop()
 	if err := menuRunCanonicalUpdate(updateCtx, selectedRelease, out, errOut); err != nil {
 		menuNotice(out, "FAILED", "Canonical installer did not confirm completion. Inspect installed identity/recovery before retrying.")
-		fmt.Fprintln(errOut, safeMenuText(err.Error()))
+		menuField(out, "Reason", menuUpdateFailureCategory(err))
+		menuField(out, "NEXT ACTION", "Inspect official release reachability, stl version --json, installed ownership and retained recovery evidence read-only; no blind retry. Child diagnostics remain private.")
 		// The executable might have been partially replaced or rolled back.
 		// Never resume the old in-memory menu after any install attempt.
 		return menuUpdatedExecutable

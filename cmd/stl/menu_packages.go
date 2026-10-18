@@ -124,7 +124,9 @@ func runEmbeddedInstaller(ctx context.Context, stdout, stderr io.Writer, args ..
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {
-		return errors.New("canonical installer action failed or was interrupted")
+		// Preserve typed process status for the redacted operator report,
+		// but never forward child diagnostics via the returned error.
+		return fmt.Errorf("canonical installer action failed or was interrupted: %w", err)
 	}
 	return nil
 }
@@ -332,10 +334,13 @@ func menuPrepareSelectedPackagesWithOps(input io.Reader, reader *bufio.Reader, o
 		}
 		prepCtx, done := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer done()
-		menuNotice(out, "INFO", "Canonical installer checking exact plan and host ownership")
-		if err := ops.install(prepCtx, out, errOut, "prepare",
+		menuNotice(out, "INFO", "Canonical installer checking exact plan and host ownership; raw APT diagnostics are withheld from the menu.")
+		var childOutput menuInstallerOutput
+		childStdout, childStderr := childOutput.streams()
+		if err := ops.install(prepCtx, childStdout, childStderr, "prepare",
 			"--backends", selectedPackageBackends(selected), "--expected-missing", refreshed.missing,
 			"--expected-apt-plan", refreshed.aptInstall); err != nil {
+			childOutput.failure(out, "prepare", err, prepCtx)
 			menuNotice(out, "FAILED", "Package preparation incomplete or denied. APT/vendor changes may persist after an attempted transaction; inspect and reconcile before retry.")
 			menuField(out, "NEXT ACTION", "Inspect dpkg --audit and current APT processes (read-only). Reconcile any partial transaction before a NEW PREPARE; never retry blindly.")
 			return menuPackagePreparation{}

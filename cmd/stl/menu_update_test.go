@@ -232,6 +232,26 @@ func TestMenuUpdateOfflineFallbackAndRejectedInstallerInput(t *testing.T) {
 
 // After privileged update execution, success requires the actual installed
 // binary to attest to the selected exact version and an embedded commit.
+func TestUpdateFailureReasonNeverExposesWrappedUntrustedContent(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{errors.New("cannot download official tagged installer: username:PRIVATE_SENTINEL@proxy.example"),
+			"tagged_installer_download_unverified"},
+		{errors.New("tagged installer failed Bash syntax check"), "tagged_installer_syntax_unverified"},
+		{errors.New("official tagged installer HTTP status 503"), "tagged_installer_http_failure"},
+		{errors.New("canonical updater exited unsuccessfully or was interrupted"), "canonical_updater_failed_or_interrupted"},
+		{errors.New("installer returned success but installed version/commit could not be verified"), "installed_identity_unverified"},
+		{errors.New("unexpected command details PRIVATE_SENTINEL"), "canonical_update_completion_unverified"},
+	} {
+		category := menuUpdateFailureCategory(tc.err)
+		if category != tc.want || strings.Contains(category, "PRIVATE_SENTINEL") {
+			t.Fatalf("unsafe update reason: %q (wanted %q)", category, tc.want)
+		}
+	}
+}
+
 func TestMenuUpdatedExecutableIdentityVerification(t *testing.T) {
 	for _, tc := range []struct {
 		name, data string

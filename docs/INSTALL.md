@@ -125,6 +125,18 @@ host details. Provide redacted reason codes and relevant command exit
 statuses instead. A completed installer alone does not prove that live
 Links can reach their peers or survive reboot.
 
+The guided PREPARE and Update menus never forward raw APT, package-hook,
+Bash or child-installer stdout/stderr to the terminal. Instead they show
+a fixed reason category, the last **reported** stage (not proof of the
+actual host effects), the child exit code when available, and a
+read-only recovery check. Quick Install likewise suppresses raw download,
+syntax-check and installer diagnostics; only fixed progress messages and
+a process exit code are displayed. Do not treat missing terminal details
+as evidence that packages, vendor services or a swapped binary are intact.
+For detailed investigation, inspect trusted host state privately and
+redact any command output before sharing it. Do not enable verbose
+secret-bearing logs as a workaround for a failed operation.
+
 ## Read-only diagnosis of setup or persistence failure
 
 If Create or Import reports a failure at `persistence`, an unconfirmed

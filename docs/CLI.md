@@ -77,6 +77,10 @@ discoverable.
   authorized cleanup—not a mass Link or credential purge.
   Operator failure pages for selected packages and official releases
   give an authored, non-secret reason category and a read-only next check.
+  Confirmed package PREPARE and immutable Update additionally classify
+  only bounded, fixed child status/stage identifiers; raw APT or Bash
+  output is withheld from human menus. The stage is explicitly reported
+  rather than treated as proof of completed host effects.
   APT/installer failures can leave partial package or executable effects;
   neither a failed PREPARE nor a failed update grants permission for a blind
   retry. Machine-readable JSON and protected handoffs remain unchanged.
