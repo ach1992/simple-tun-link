@@ -42,7 +42,23 @@ The installer must require **zero** `apt`, `pip`, `curl`, `wget`, Go toolchain o
 
 Current prototype: `scripts/online-bootstrap.sh` takes a **pinned exact** prefixed tag and an independently authenticated archive digest, downloads with HTTPS, rejects unknown archive members, and invokes the offline installer. The local `--local-url http://127.0.0.1:PORT` test route cannot be used with a published release tag and does not permit external HTTP. Verified in a temporary test-root with local HTTP: correct archive verified/installed twice; digest mismatch, invalid URL/version and network failure rejected. **No public tagged tool release, independently signed manifest, or trustworthy one-line command is presently published.** Do not advertise a working `releases/latest` alias for the standalone diagnostic.
 
-## 3a. Future release one-liner must use an immutable, authenticated bootstrap
+## 3a. One-line online installation (release-ready CLI, not yet published)
+
+From a checked-out version of this tool, after the dedicated release and its
+archive digest have been authenticated, the online installer is a one-command
+interface:
+
+```sh
+sudo bash scripts/online-bootstrap.sh --version spoofdiag-vX.Y.Z --sha256 INDEPENDENTLY_VERIFIED_64_HEX_ARCHIVE_SHA256 --install
+```
+
+The placeholders are not real release coordinates, and this is **not**
+currently a working remote-public installation. A future remote one-liner
+must fetch an immutable, independently authenticated bootstrap script or
+equivalent trusted release asset before invoking this same installer.
+The regular STL stable tag and `releases/latest` are never substituted.
+
+### Requirements for public remote one-liner
 
 Future online bootstrap, only after the tool's first validated release:
 
@@ -71,7 +87,9 @@ sudo chmod 700 /root/stl-spoofdiag
 
 Don't invent a bare install command tied to a nonexistent published release. Once scripts exist, this page must include exact verified commands with no placeholders except the user-chosen existing archive name.
 
-The *installed executable* must offer `version`, `menu`, `preflight`, `plan`, `sources`, `reports` and `diagnostics`; future field-probe actions remain permission gated. The interactive menu is a presentation layer over the same engine as CLI and versioned JSON machine output.
+The installed executable offers `version`, `menu`, `preflight`,
+`plan`, `sources`, `report` and `lab`. A general field transport
+is not implemented; `reports`/`diagnostics` are not separate CLI verbs. The interactive menu is a presentation layer over the same engine as CLI and versioned JSON machine output.
 
 ## 5. Upgrade, rollback, uninstall
 

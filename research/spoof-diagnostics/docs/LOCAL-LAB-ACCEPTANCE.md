@@ -1,6 +1,16 @@
 # Fully isolated local acceptance plan — Go diagnostic instrument
 
-Status: **one exact Go, two-real-VM raw baseline PASS; comprehensive VM acceptance remains incomplete.** Commit `6f1fc1415123adc4c22d4cfbaa411b28e69c86f4` was installed in two independently booted Debian 12 KVM VMs without Go and with a third isolated routing environment. A signed raw IPv4 UDP sample sourced from private, unassigned `10.91.1.77` reached B at `10.91.4.2`; independent router interface captures saw 1/1 at ingress and egress, B signed 1/1 peer receipt, and offline cryptographic verification passed. A separate three-candidate 1200-byte attempt showed A-router capture 3, B-router capture 2; cryptographic peer-observation reconciliation for that batch remains unverified, not a PASS. A proposed router block scenario was NOT_RUN because the external tool returned a safety gate. True return to sender, policy-drift/error scenarios, private encrypted L3, and public-ISP compatibility remain NOT_TESTED. See Issue #125 for source-identified evidence; earlier Python/inline experiments are distinct.
+Status: **one exact Go, two-real-VM raw baseline PASS; comprehensive VM acceptance remains incomplete.** Commit `6f1fc1415123adc4c22d4cfbaa411b28e69c86f4` was installed in two independently booted Debian 12 KVM VMs without Go and with a third isolated routing environment. A signed raw IPv4 UDP sample sourced from private, unassigned `10.91.1.77` reached B at `10.91.4.2`; independent router interface captures saw 1/1 at ingress and egress, B signed 1/1 peer receipt, and offline cryptographic verification passed. A separate reverse-direction private-lab test using installed Go
+`72902c481a9f53d1d6ebe9de9c4ad8732322b6de` also had router ingress
+and egress 1/1 with a signed receiver receipt 1/1. A historical
+three-candidate 1200-byte attempt showed router ingress capture **3**,
+router egress capture **2**, while the independently verified receiver-signed
+receipt reported **3/3**. These layers are inconsistent; their cause is
+**unresolved**, not a complete-path PASS. The archived signed receipt was
+also reverified on installed Go `e487b2a01c49556590bea3dac51a0d481d1ba709`
+after the historical-signature verifier repair. A proposed router block scenario was NOT_RUN because the external tool returned a safety gate. True return to sender, policy-drift/error scenarios, private encrypted L3, and public-ISP compatibility remain NOT_TESTED. See Issue #125 for source-identified evidence; this document does not
+claim fresh latest-binary raw packet acceptance or three-VM topology.
+Earlier Python/inline experiments are historical only.
 
 ## Environment
 

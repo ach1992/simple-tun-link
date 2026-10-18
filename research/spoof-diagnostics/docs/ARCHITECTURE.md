@@ -66,9 +66,38 @@ The menu and CLI invoke the same engine and expose the same validation, operatio
 
 ## 4. Private control and evidence rendezvous
 
-The Go candidate now implements a genuine, **loopback-only** TLS 1.3 mutually authenticated control channel with HMAC-authenticated UDP observations and receiver Ed25519-signed portable receipts. A separate functional **local** mode issues sender-signed, bounded/expiring challenges; the receiver independently validates its allowlist, keeps a private consumed-run ledger, verifies individually Ed25519-signed UDP packets, and signs offline receipts. Operators can verify challenge and receipt together without mTLS connectivity. **Absence of the control path is not evidence of packet rejection.** These local modes verify authentication/replay logic, NOT public-IP admission, independent physical egress, asymmetric return routing, or private L3. A separate RFC1918 RAW IPv4 adapter now exists only for detached, veth-only, no-public-route `sdg*` Linux netns using a signed private-destination challenge. At this checkpoint exact-binary A-R-B acceptance is still NOT_RUN. General public-field operation and production credential provisioning are NOT implemented.
+The Go candidate now implements a genuine, **loopback-only** TLS 1.3 mutually authenticated control channel with HMAC-authenticated UDP observations and receiver Ed25519-signed portable receipts. A separate functional **local** mode issues sender-signed, bounded/expiring challenges; the receiver independently validates its allowlist, keeps a private consumed-run ledger, verifies individually Ed25519-signed UDP packets, and signs offline receipts. Operators can verify challenge and receipt together without mTLS connectivity. **Absence of the control path is not evidence of packet rejection.** These local modes verify authentication/replay logic, NOT public-IP admission, independent physical egress, asymmetric return routing, or private L3. A separate RFC1918 RAW IPv4 adapter now exists only for detached, veth-only, no-public-route `sdg*` Linux netns using a signed private-destination challenge. Previously installed exact Go builds were executed on two independently booted,
+WAN-disconnected Debian 12 VMs: one signed packet A→B and one B→A each
+had 1/1 independent router interface captures and matching signed receiver
+receipts. An earlier multiple-candidate attempt remains **INCONCLUSIVE**:
+router ingress capture 3, egress capture 2, but receiver's signed receipt
+reports 3/3. These are historical prior-binary results, **not acceptance
+for the latest exact candidate**. General public-field operation and
+production credential provisioning are NOT implemented.
 
 Provision and protect peer keys on the appropriate private hosts. Do not package production keys, operator permit documents or observed candidate inventories into a public release.
+
+## Existing safeguards: what each one actually enforces
+
+These checks are implemented in the Go product, not merely stated in a
+warning. They are **different kinds of safeguards**, and none should be
+confused with independent proof that a provider permits any address:
+
+| Code boundary | Enforced behavior | What it does not establish |
+| --- | --- | --- |
+| `main.go:validateIP` and inventory validation | `private_lab` accepts exact RFC1918 IPv4; `approved_field_plan` accepts valid unicast public candidates **for an offline plan**. No scanning or implicit address expansion. | Field-plan acceptance does not enable the raw network sender. |
+| `lab_raw_linux.go:requireIsolatedPrivateNamespace` | Raw transport requires a detached Linux network namespace, one dedicated test-owned virtual interface, only private IPv4 addressing and routing, and no usable public/default egress. | It cannot be used as a public-network sender. |
+| `lab_raw_linux.go:makeRawIPv4UDPPacket` and private sender | Private source **and** destination, IPv4/UDP, bounded sample size and test port, signed input and a finite test set. | A successful raw-socket send call is not evidence of NIC or provider acceptance. |
+| `lab_runtime.go` TLS/UDP agents | Loopback-only TCP/UDP with mutual TLS 1.3, signed peer receipts, finite sessions and explicit peer role. | These processes do not create public-IP packets. |
+| `lab_offline.go` signed-file exchange | Ed25519 sender challenge, independently signed receiver observations, matching direction/samples/identity, time-bounded live challenge and persistent receiver replay ledger. | Archived valid signatures do not prove an external path, clocks or actual sender return. |
+| Offline/online installer scripts | Product, version, architecture, checksums, owned path, symlink/foreign-file refusal, serial upgrade and non-destructive private-state retention. | A publisher-controlled checksum alone is not independent publisher authentication. |
+
+The raw interface restrictions are **environment/packet emission controls**.
+Signature verification, replay prevention, evidence provenance and installer
+integrity are **correctness and integrity controls**. Documentation and test
+results must retain that distinction. The active product does not currently
+implement a general field-network source-spoof transport; documentation
+cannot substitute for implementation or acceptance tests.
 
 ## 5. Safe transport/test boundaries
 
@@ -88,4 +117,7 @@ Only a later Owner-approved architecture review may map validated bidirectional 
 
 ## 7. Validation and integration gates
 
-Target acceptance is a runnable **separate Go CLI/menu**, offline bundled package/install/update/uninstall and independent CI, followed by real packet 2/3-node *fully isolated* local E2E and install/recovery negative tests. Existing 22 Python tests prove the earlier Python prototype only, not a future Go port. Root STL Go tests do not replace dedicated diagnostic acceptance. Keep branch/PR DRAFT and do not publish releases or touch physical test servers before appropriate gates.
+Target acceptance is a runnable **separate Go CLI/menu**, offline bundled package/install/update/uninstall and independent CI, followed by real packet 2/3-node *fully isolated* local E2E and install/recovery negative tests. The archived Python prototype was removed from the active source tree:
+its former field-probe experiment was not an active Go product dependency
+and no feature parity or field capability is inferred from that removal.
+Git history retains the research for review. Root STL Go tests do not replace dedicated diagnostic acceptance. Keep branch/PR DRAFT and do not publish releases or touch physical test servers before appropriate gates.

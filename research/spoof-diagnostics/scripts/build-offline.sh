@@ -27,7 +27,11 @@ cp "$here/scripts/install-offline.sh" "$tmp/install-offline.sh"
 chmod 755 "$tmp/install-offline.sh"
 repo_root=$(cd "$here/../.." && pwd -P)
 cp "$repo_root/LICENSE" "$tmp/LICENSE"
-cp "$here/README-GO.md" "$tmp/README.md"
+cp "$here/README.md" "$tmp/README.md"
+# The canonical README links to these local references; bundle the exact
+# documentation instead of shipping links that break on an offline host.
+mkdir "$tmp/docs"
+cp "$here/docs/"*.md "$tmp/docs/"
 cp "$here/examples/sources-private.csv" "$tmp/sources-private.csv"
 cp "$here/examples/evidence-private.json" "$tmp/evidence-private.json"
 cat > "$tmp/BUILD-MANIFEST.txt" <<EOF
@@ -40,7 +44,7 @@ go_version=$(go version)
 source_repo=https://github.com/ach1992/simple-tun-link
 mode=standalone-research-snapshot
 EOF
-( cd "$tmp"; sha256sum -- stl-spoofdiag install-offline.sh README.md LICENSE sources-private.csv evidence-private.json BUILD-MANIFEST.txt > SHA256SUMS; sha256sum --check SHA256SUMS > /dev/null )
+( cd "$tmp"; sha256sum -- stl-spoofdiag install-offline.sh README.md LICENSE sources-private.csv evidence-private.json BUILD-MANIFEST.txt docs/*.md > SHA256SUMS; sha256sum --check SHA256SUMS > /dev/null )
 # A snapshot builds a staged package only. No tags, release mutations or network.
 mv -T -n -- "$tmp" "$output"
 trap - EXIT

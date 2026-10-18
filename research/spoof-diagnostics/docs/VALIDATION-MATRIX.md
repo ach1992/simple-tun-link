@@ -69,6 +69,9 @@ This matrix is a requirement ledger, not a claim that tests were executed. Recor
 2. Ship one self-contained offline archive per supported architecture; prove fresh installed binary behavior, upgrade/rollback/uninstall and cold-start without any Go/Python/network on guest.
 3. Build a testable online bootstrap with pinned identity and full failure matrix. It must be *functionally tested* against a controlled local artifact endpoint before publishing a GitHub one-line command; a hypothetical `releases/latest` URL is not a tested installer.
 4. Build and boot actual isolated VMs, run positive and negative policy scenarios, collect independent packet captures and signed receipts, and correct code in bounded cycles. Do not confuse an A–R–B namespace baseline with VM evidence.
-5. Independently review stable diff; inspect release provenance and Owner merge/release gates. Preserve the historical Python prototype until exact-Go feature parity is demonstrated; then remove only proven-unneeded code with reviewable evidence. Keep primary STL README a short pointer to the standalone tool, not an unsafe unverified installer.
+5. Independently review stable diff; inspect release provenance and Owner merge/release gates. The superseded Python experiment is retained in Git history, not shipped
+as a parallel implementation. This retirement is **not** evidence of
+exact Go field-function parity. Require explicit validation of any future
+feature before marking it delivered. Keep primary STL README a short pointer to the standalone tool, not an unsafe unverified installer.
 
 **Real-host answer criterion:** Only when the exact released artifact implements and securely authenticates the intended authorized cross-host mode, can be configured on two independent approved hosts, handles provider/OS prerequisites and has passed relevant isolated acceptance is it reasonable to call the program *candidate-ready for a permissioned trial*. It is **never scientifically valid** to promise real provider success from VM results. The experimental `netns-*` adapter is explicitly not a field-ready executable.

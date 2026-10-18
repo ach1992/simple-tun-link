@@ -1,6 +1,7 @@
-# STL Spoof Diagnostics — standalone Go development candidate
+# Go technical reference — standalone Spoof Diagnostics
 
-This is a **partial, lab-restricted Go diagnostic** independent of STL runtime and installation. Go supports `version`, `preflight`, `sources add`, `plan`, `report`, a basic `menu`, and actual authenticated two-agent **local** `lab` sessions with signed, portable receipts. It also supports a signed offline challenge/observation exchange when mTLS control is absent. Normal Go agents remain restricted to `127.0.0.1`; a separate **strictly network-namespace-gated** raw IPv4 RFC1918 test adapter is now available for independent local kernel acceptance. Public/real-world field probes remain disabled. No usable private L3 Link has been built. The legacy Python experiment is distinct; its test results must not be substituted for exact Go acceptance.
+This is a **partial, lab-restricted Go diagnostic** independent of STL runtime and installation. Go supports `version`, `preflight`, `sources add`, `plan`, `report`, a basic `menu`, and actual authenticated two-agent **local** `lab` sessions with signed, portable receipts. It also supports a signed offline challenge/observation exchange when mTLS control is absent. Normal Go agents remain restricted to `127.0.0.1`; a separate **strictly network-namespace-gated** raw IPv4 RFC1918 test adapter is now available for independent local kernel acceptance. Public/real-world field probes remain disabled. No usable private L3 Link has been built. The removed historical Python experiment is recoverable in Git history;
+its test results must not be substituted for exact Go acceptance.
 
 `plan` validates **only explicit sources** in CSV/JSON. The file marks sender/receiver and A_TO_B vs B_TO_A; no IP block scanning is performed. `report` evaluates JSON declarations supplied by the operator; it does **NOT** cryptographically verify their observations. Accordingly results say `UNVERIFIED_INPUT_DECLARATION` and never claim private L3.
 
@@ -126,7 +127,14 @@ stl-spoofdiag lab offline-verify --challenge /tmp/new-challenge.json \
 
 A valid signed receipt with **zero** packets is an `INCONCLUSIVE` delivery result, not proof of IP rejection. A partial receipt remains `PARTIAL`. The receiver's private `--state-dir` consumes run IDs durably and rejects reusing the same challenge; preserve it for the entire testing period. The challenge expires within 90 seconds **for live transmission and reception**; generate a fresh one for each new run. `lab offline-verify` separately accepts an archived challenge/receipt **after expiry** only if their signatures, certificates at declared observation time, roles, run ID, samples and bounded event-time relationship verify. This is historical cryptographic validation only: signer-declared timestamps are **not independently trusted clock evidence** and do **not** authorize replay of an expired challenge. Signed records do not establish physical egress, admission of the claimed IP, sender-return routing, or an STL Link.
 
-**Not yet delivered:** comprehensive VM policy/return/loss/MTU acceptance (beyond the 1/1 signed raw baseline), a fully verified multi-candidate failure matrix, production-grade peer credential provisioning, safe field-mode authorization and implementation, interrupted-upgrade recovery, independently verified publisher signatures, published tool-specific Release and a public online one-liner. A local HTTP online bootstrap is implemented and tested but unpublished. Keep `LAB_VERIFIED` and `FIELD_READY` unset until those independent gates pass.
+**Not yet delivered:** comprehensive VM policy/return/loss/MTU acceptance
+(beyond historical 1/1 private samples), a fully verified multi-candidate
+failure matrix, production-grade peer credential provisioning, general
+field implementation, power-loss/disk-full recovery validation,
+independently verified publisher signatures, and a published tool-specific
+Release with a usable public online one-liner. A tool-owned interrupted
+installer stage can be recovered under the destination lock, but actual
+power-loss acceptance remains untested. A local HTTP online bootstrap is implemented and tested but unpublished. Keep `LAB_VERIFIED` and `FIELD_READY` unset until those independent gates pass.
 
 ## Downloadable prebuilt lab archives (temporary CI artifacts, not a Release)
 
@@ -143,7 +151,7 @@ bash scripts/online-bootstrap.sh --version spoofdiag-vX.Y.Z \
   --sha256 INDEPENDENTLY_VERIFIED_64_HEX_ARCHIVE_SHA256 --install
 ```
 
-Its local test-server download, verify-only, install, idempotent reinstall, wrong-hash and unavailable-host negative controls have passed; there is **no public download claim**. For an already verified complete offline archive, unpack in a new private directory, run the included `install-offline.sh --verify`, then `--install`; the destination needs only the bundled static Go executable, Bash, basic file utilities and a matching Linux kernel/architecture, **not Go itself**. Adding automatic Go downloads or opaque regional mirrors would increase risk without a runtime need. [Full installation and release contract](docs/INSTALL-AND-RELEASE.md).
+Its local test-server download, verify-only, install, idempotent reinstall, wrong-hash and unavailable-host negative controls have passed; there is **no public download claim**. For an already verified complete offline archive, unpack in a new private directory, run the included `install-offline.sh --verify`, then `--install`; the destination needs only the bundled static Go executable, Bash, basic file utilities and a matching Linux kernel/architecture, **not Go itself**. Adding automatic Go downloads or opaque regional mirrors would increase risk without a runtime need. [Full installation and release contract](INSTALL-AND-RELEASE.md).
 
 ## Use without internet, no packages or build tools on the destination
 
@@ -165,7 +173,13 @@ Sample source and evidence files contain private example addresses and illustrat
 
 ## Interactive terminal menu and source inventory
 
-Run `stl-spoofdiag menu` for a readable header showing build/architecture, mode, testing limitations and operations. Supported interactive actions cover prerequisite checks, build identity, source list/add/import/remove/replace, declared evidence, challenge creation, signed receipt verification, disposable local credentials and help. Invalid choices, invalid paths and candidate errors are reported, then the menu remains usable; EOF exits cleanly. All actions use the same engine as direct CLI. `NO_COLOR` and piped/non-TTY use never require terminal ANSI parsing or an external UI runtime. For programmatic control, use CLI/JSON, never scrape the menu.
+Run `stl-spoofdiag menu` for a readable header showing build/architecture, mode, testing limitations and operations. Supported interactive actions cover prerequisite checks, build identity,
+source list/add/import/remove/replace, plan validation, declared evidence,
+challenge creation, both signed-receipt verification modes, disposable local
+credentials, loopback TLS sender/receiver and signed-file loopback
+sender/receiver, plus help. The guarded raw-netns transport remains an
+explicit advanced menu action (option 15) using the same checked CLI engine;
+it is never an automatic menu side effect. Invalid choices, invalid paths and candidate errors are reported, then the menu remains usable; EOF exits cleanly. All actions use the same engine as direct CLI. `NO_COLOR` and piped/non-TTY use never require terminal ANSI parsing or an external UI runtime. For programmatic control, use CLI/JSON, never scrape the menu.
 
 The corresponding non-interactive commands are `sources list --file`, `sources import --file --from`, `sources remove --file --old-*`, and `sources replace --file --old-* --ip --direction --sender --receiver`. The inventory can become empty, but an empty candidate list is **not** a runnable plan; add permitted private sources again before creating a challenge. No source operation emits probes or discovers arbitrary Internet IPs.
 
@@ -186,7 +200,8 @@ stl-spoofdiag sources add \
 stl-spoofdiag plan --file /root/stl-spoofdiag/sources.json
 ```
 
-To use an existing CSV or JSON file, use `plan --file` or menu option 3. Menu option 5 can add a single candidate to a JSON file. This **stores candidate identity only**; there is no packet transmission, IP scanning, or inference that the source is usable.
+To use an existing CSV or JSON file, use `plan --file` or menu option 3. Menu option 3 then inventory action 2 can add a single candidate to JSON;
+menu option 5 creates an offline signed challenge. This **stores candidate identity only**; there is no packet transmission, IP scanning, or inference that the source is usable.
 
 ## Build and validate an offline archive (developer/CI machine only)
 
@@ -210,6 +225,6 @@ GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go test ./...
 GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local CGO_ENABLED=0 go build ./cmd/stl-spoofdiag
 ```
 
-CI/build machines (not hosts being diagnosed) require Go >= 1.23. The generator `scripts/build-offline.sh` builds an **unpublished snapshot directory**, not a GitHub Release or production package. The standalone installer supports verified local offline install/upgrade, rollback to a previously stored version, and tool-owned binary uninstall while retaining operator private state; positive/negative lifecycle tests passed in disposable test roots. Fresh-guest interrupted-update recovery, independently authenticated publisher identity, tagged public release workflow and full isolated two/three-guest raw packet fault-matrix acceptance remain outstanding (one exact Go VM baseline PASS).
+CI/build machines (not hosts being diagnosed) require Go >= 1.23. The generator `scripts/build-offline.sh` builds an **unpublished snapshot directory**, not a GitHub Release or production package. The standalone installer supports verified local offline install/upgrade, rollback to a previously stored version, and tool-owned binary uninstall while retaining operator private state; positive/negative lifecycle tests passed in disposable test roots. Real VM power-loss/disk-full recovery, independently authenticated publisher identity, tagged public release workflow and full isolated two/three-guest raw packet fault-matrix acceptance remain outstanding (one exact Go VM baseline PASS).
 
-For architectural truth see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/INSTALL-AND-RELEASE.md](docs/INSTALL-AND-RELEASE.md). No interaction with STL runtime or installed Links is allowed.
+For architectural truth see [docs/ARCHITECTURE.md](ARCHITECTURE.md) and [docs/INSTALL-AND-RELEASE.md](INSTALL-AND-RELEASE.md). No interaction with STL runtime or installed Links is allowed.

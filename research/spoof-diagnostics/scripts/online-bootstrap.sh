@@ -67,7 +67,7 @@ fi
 actual=$(sha256sum "$archivePath" | cut -d ' ' -f1)
 [[ $actual == "$expected" ]] || fail 'archive SHA256 mismatch against independent trusted expectation; nothing executed'
 tar -tzf "$archivePath" > "$scratch/list" || fail 'invalid archive'
-expectedMembers=$'stl-spoofdiag/\nstl-spoofdiag/BUILD-MANIFEST.txt\nstl-spoofdiag/LICENSE\nstl-spoofdiag/README.md\nstl-spoofdiag/SHA256SUMS\nstl-spoofdiag/evidence-private.json\nstl-spoofdiag/install-offline.sh\nstl-spoofdiag/sources-private.csv\nstl-spoofdiag/stl-spoofdiag'
+expectedMembers=$'stl-spoofdiag/\nstl-spoofdiag/BUILD-MANIFEST.txt\nstl-spoofdiag/docs/\nstl-spoofdiag/docs/ARCHITECTURE.md\nstl-spoofdiag/docs/GO-REFERENCE.md\nstl-spoofdiag/docs/INSTALL-AND-RELEASE.md\nstl-spoofdiag/docs/LOCAL-LAB-ACCEPTANCE.md\nstl-spoofdiag/docs/VALIDATION-MATRIX.md\nstl-spoofdiag/LICENSE\nstl-spoofdiag/README.md\nstl-spoofdiag/SHA256SUMS\nstl-spoofdiag/evidence-private.json\nstl-spoofdiag/install-offline.sh\nstl-spoofdiag/sources-private.csv\nstl-spoofdiag/stl-spoofdiag'
 listed=$(sort "$scratch/list")
 [[ $listed == "$(printf '%s\n' "$expectedMembers" | sort)" ]] ||
   fail 'archive has unexpected, missing, or duplicate product members'

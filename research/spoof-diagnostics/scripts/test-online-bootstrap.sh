@@ -15,19 +15,37 @@ trap cleanup EXIT
 mkdir "$dir/root"
 bash "$here/scripts/package-offline.sh" "$dir/pkg" "$sha" dev-ci-online amd64 >/dev/null
 archive="$dir/pkg/spoofdiag-dev-ci-online_linux_amd64.tar.gz"
+# The offline package must include the README's referenced documentation.
+tar -tzf "$archive" > "$dir/package-members.txt"
+for member in stl-spoofdiag/README.md stl-spoofdiag/docs/GO-REFERENCE.md stl-spoofdiag/docs/INSTALL-AND-RELEASE.md; do
+  grep -Fxq "$member" "$dir/package-members.txt" || { echo "missing packaged document: $member" >&2; exit 1; }
+done
 expected=$(sha256sum "$archive" | cut -d ' ' -f1)
-# Python is a CI-only local HTTP server, NOT an installed tool dependency.
-command -v python3 >/dev/null || { echo 'CI test requires Python3 HTTP server' >&2; exit 1; }
-port=$(python3 - <<'PY'
-import socket
-s=socket.socket()
-s.bind(("127.0.0.1",0))
-print(s.getsockname()[1])
-s.close()
-PY
-)
-python3 -m http.server "$port" --bind 127.0.0.1 --directory "$dir/pkg" >"$dir/http.log" 2>&1 &
+# Verify the shipped reference files are checksum-covered, not decorative.
+mkdir "$dir/extracted-document-check"
+tar -xzf "$archive" -C "$dir/extracted-document-check"
+bundle="$dir/extracted-document-check/stl-spoofdiag"
+bash "$bundle/install-offline.sh" --verify > "$dir/package-verify.log"
+printf '\nTAMPERED\n' >> "$bundle/docs/GO-REFERENCE.md"
+if bash "$bundle/install-offline.sh" --verify > "$dir/tampered-doc.log" 2>&1; then
+  echo 'ERROR: modified packaged documentation was accepted' >&2
+  exit 1
+fi
+grep -Fq 'bundle checksum verification failed' "$dir/tampered-doc.log"
+# No Python on the development/test runner either: compile a temporary
+# loopback-only Go stdlib file server; it is never added to a release bundle.
+GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local CGO_ENABLED=0 \
+  go build -o "$dir/local-fixture-server" "$here/scripts/test-fixture-http/main.go"
+"$dir/local-fixture-server" --dir "$dir/pkg" --port-file "$dir/server-port" >"$dir/http.log" 2>&1 &
 pid=$!
+for _ in $(seq 1 50); do
+  if [[ -s $dir/server-port ]]; then break; fi
+  kill -0 "$pid" 2>/dev/null || { echo 'fixture HTTP server terminated prematurely' >&2; exit 1; }
+  sleep .1
+done
+[[ -s $dir/server-port ]] || { echo 'local test HTTP listener did not start' >&2; exit 1; }
+port=$(cat "$dir/server-port")
+[[ $port =~ ^[0-9]+$ ]] || { echo 'invalid fixture port' >&2; exit 1; }
 for _ in $(seq 1 50); do
   if curl -fsS -o /dev/null "http://127.0.0.1:$port/spoofdiag-dev-ci-online_linux_amd64.tar.gz"; then break; fi
   sleep .1
