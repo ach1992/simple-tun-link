@@ -25,8 +25,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: research/spoof-diagnostics/go.mod
-          cache: true
-          cache-dependency-path: research/spoof-diagnostics/go.sum
+          cache: false
       - name: Go validation with offline dependency resolution
         env:
           GOPROXY: 'off'
