@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "observations": [
+    {
+      "sample_id": "DEMO-A",
+      "run_id": "DOC-EXAMPLE-ONLY",
+      "direction": "A_TO_B",
+      "sender": "A",
+      "receiver": "B",
+      "source_ip": "10.90.3.100",
+      "packet_size": 128,
+      "policy_epoch": "example",
+      "attempted": false,
+      "environment": "private_lab"
+    },
+    {
+      "sample_id": "DEMO-B",
+      "run_id": "DOC-EXAMPLE-ONLY",
+      "direction": "B_TO_A",
+      "sender": "B",
+      "receiver": "A",
+      "source_ip": "10.90.3.101",
+      "packet_size": 128,
+      "policy_epoch": "example",
+      "attempted": false,
+      "environment": "private_lab"
+    }
+  ]
+}
