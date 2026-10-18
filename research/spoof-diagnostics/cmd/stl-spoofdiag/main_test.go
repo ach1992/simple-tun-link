@@ -129,3 +129,34 @@ func TestIndependentDirectionAndSampleIdentities(t *testing.T) {
 		t.Fatalf("directions collapsed %+v", r)
 	}
 }
+func TestAddSourceJSON(t *testing.T) {
+	d := t.TempDir()
+	path := filepath.Join(d, "sources.json")
+	a := Candidate{IP: "10.9.9.1", Direction: "A_TO_B", Sender: "A", Receiver: "B"}
+	if err := addSource(path, "private_lab", a); err != nil {
+		t.Fatal(err)
+	}
+	b := Candidate{IP: "10.9.9.2", Direction: "B_TO_A", Sender: "B", Receiver: "A"}
+	if err := addSource(path, "", b); err != nil {
+		t.Fatal(err)
+	}
+	c, err := readCandidates(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Candidates) != 2 {
+		t.Fatalf("expected two got %d", len(c.Candidates))
+	}
+	if err := addSource(path, "", a); err == nil {
+		t.Fatal("duplicate source silently accepted")
+	}
+	if err := addSource(path, "approved_field_plan", b); err == nil {
+		t.Fatal("mode change silently accepted")
+	}
+	if err := os.Symlink(path, filepath.Join(d, "link.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := addSource(filepath.Join(d, "link.json"), "", b); err == nil {
+		t.Fatal("symlink silently accepted")
+	}
+}
