@@ -296,6 +296,40 @@ class LocalTLSIntegration(unittest.TestCase):
             server.stdout.close()
             server.stderr.close()
 
+    def test_tls_client_without_certificate_is_rejected(self):
+        manifest = self.directory / "bad-client-loopback.json"
+        manifest.write_text(json.dumps(make_manifest()))
+        common = ["--config", str(manifest), "--ca", str(self.directory / "ca.crt")]
+        server = subprocess.Popen(
+            [sys.executable, str(HERE / "stl_spoof_diag.py"), "serve", *common,
+             "--cert", str(self.directory / "server.crt"), "--key", str(self.directory / "server.key")],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(json.loads(server.stdout.readline())["event"], "peer_ready")
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+            ctx.load_verify_locations(cafile=str(self.directory / "ca.crt"))
+            with socket.create_connection(("127.0.0.1", diag.load_config(manifest)["control_port"]), timeout=10) as plain:
+                plain.settimeout(10)
+                try:
+                    with ctx.wrap_socket(plain, server_hostname="127.0.0.1") as tls:
+                        tls.sendall(b"\n")
+                        try:
+                            tls.recv(1)
+                        except (ssl.SSLError, ConnectionError, OSError):
+                            pass
+                except (ssl.SSLError, ConnectionError, OSError):
+                    pass
+            server.wait(timeout=6)
+            self.assertNotEqual(server.returncode, 0, "unauthenticated TLS client must fail")
+            self.assertIn("PEER_DID_NOT_RETURN_A_CERTIFICATE", server.stderr.read().upper().replace(" ", "_"))
+        finally:
+            if server.poll() is None:
+                server.terminate()
+                server.wait(timeout=5)
+            server.stdout.close()
+            server.stderr.close()
+
     def test_mutual_tls_two_process_loopback_admission(self):
         manifest = self.directory / "loopback.json"
         manifest.write_text(json.dumps(make_manifest()))
