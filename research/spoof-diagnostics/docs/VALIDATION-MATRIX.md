@@ -1,27 +1,29 @@
 # Field Diagnostics validation and evidence ledger
 
 **Scope:** new Field selected-source implementation on a feature branch.
-**Owner instruction:** do **not** run tests now; implement theoretical
-behavior and preserve truthful evidence boundaries.
+**Current Owner decision (2026-10-19):** run normal automated builds, Go tests,
+race checks, static analysis, installer checks and CI without artificial
+restrictions. Do NOT infer real-world forged-source Field reachability or
+provider acceptance; a real public-network Field trial was not requested.
 
 | Gate | Status | What is and is not established |
 | --- | --- | --- |
 | Source refactor and obsolete lab commands removed | IMPLEMENTED IN SOURCE | Deletion alone is not runtime validation |
-| Source inventory / exact directional candidates | IMPLEMENTED IN SOURCE | No CLI scenario executed |
-| Sender-signed plan and receiver-signed grant | IMPLEMENTED IN SOURCE | Signatures not tested end-to-end |
+| Source inventory / exact directional candidates | LOCAL PASS on source candidate | Both directions and multiple exact addresses exercised offline; provider network not tested |
+| Sender-signed plan and receiver-signed grant | LOCAL PASS on source candidate | Offline identity, signed A→B/B→A challenge and receiver grant exercised; no packets emitted |
 | Normal UDP bind to an assigned selected IP | IMPLEMENTED IN SOURCE | No host or provider socket test |
 | Raw IPv4 header with selected source and explicit peer | IMPLEMENTED IN SOURCE | No CAP_NET_RAW or public-WAN test |
 | Receiver signed actual socket-source observations | IMPLEMENTED IN SOURCE | No real peer packet received |
-| Signed receipt comparison / replay protection | IMPLEMENTED IN SOURCE | No execution of replay/negative cases |
-| Go formatting and compile-only check | COMPILE-ONLY | Not a test of correctness or behavior |
-| Automated Go unit and integration suite | NOT_RUN by Owner request | No pass/fail claim |
-| Linux namespaces / local packet capture | NOT_RUN by Owner request | Previous lab results are unrelated |
+| Signed receipt comparison / replay protection | UNIT TESTED | Signed receipt pairing, overclaim/tamper controls and duplicate run ledger checked; no real peer ingress |
+| Go formatting / static analysis | LOCAL PASS on source candidate | Exact pushed-HEAD acceptance and CI are separate evidence |
+| Automated Go unit and race suites | LOCAL PASS on source candidate; CI PENDING | CI must run on exact final PR HEAD; not public-WAN proof |
+| Real-network Field packet capture | NOT_REQUESTED | Previous isolated lab results are unrelated; normal automated tests remain allowed |
 | Real two-host A↔B selective-source tests | NOT_RUN by Owner request | No connectivity evidence |
 | Provider source prefix consent / acceptance | NOT_VERIFIED | Separate external authorization needed |
 | Sender physical NIC egress / NAT rewrite | NOT_TESTED | Independent observer required |
 | Sender return path / true private L3 | NOT_TESTED | Out of scope for current diagnostic |
 | Debian/Ubuntu ARM64 runtime compatibility | NOT_TESTED for new candidate | Source target only |
-| Installer / upgrade / rollback / release candidate | NOT_RUN for new candidate | Earlier releases/CI do not validate these code changes |
+| Installer / upgrade / rollback / release candidate | LOCAL package/install/uninstall and online fixture PASS; final-HEAD CI PENDING | Earlier releases/CI do not validate these code changes |
 | Independent exact-HEAD security review | PENDING | Not ready to integrate / publish |
 
 The previous RFC1918-only detached-network-namespace and KVM tests

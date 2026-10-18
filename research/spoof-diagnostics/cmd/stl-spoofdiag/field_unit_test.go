@@ -12,8 +12,8 @@ import (
 	"time"
 )
 
-// These checks describe future unit acceptance. Per Owner instruction they
-// were authored but deliberately NOT executed for the Field candidate.
+// Automated Field protocol regression checks. These verify offline invariants,
+// not public-network source admission or real two-host reachability.
 func TestFieldSignedPlanGrantAndPacket(t *testing.T) {
 	base := t.TempDir()
 	identity := filepath.Join(base, "credentials")
