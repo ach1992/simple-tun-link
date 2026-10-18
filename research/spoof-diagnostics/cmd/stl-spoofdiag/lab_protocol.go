@@ -119,12 +119,15 @@ func readSmallRegular(path string, max int64) ([]byte, error) {
 	return data, nil
 }
 
-func labEvidenceResult(observed, expected int) string {
+func labEvidenceResult(observed, expected int, transport string) string {
 	if observed == 0 {
 		return "INCONCLUSIVE"
 	}
 	if observed < expected {
 		return "PARTIAL"
+	}
+	if transport == "isolated_private_raw" {
+		return "AUTHENTICATED_PRIVATE_NETNS_PEER_INGRESS_OBSERVED"
 	}
 	return "AUTHENTICATED_LOOPBACK_PEER_OBSERVED"
 }
@@ -277,7 +280,7 @@ func signLabReceipt(receipt labReceipt, cert tls.Certificate) (labEnvelope, erro
 
 func verifyLabReceipt(env labEnvelope, roots *x509.CertPool, peerName, expectedRun string, now time.Time) error {
 	r := env.Receipt
-	if r.SchemaVersion != schema || r.Environment != "loopback_transport" || r.RunID != expectedRun ||
+	if r.SchemaVersion != schema || (r.Environment != "loopback_transport" && r.Environment != "isolated_private_raw") || r.RunID != expectedRun ||
 		r.EgressStatus != "NOT_TESTED" || r.CandidateAdmission != "NOT_TESTED" ||
 		r.ReturnToSender != "NOT_TESTED" || r.PrivateL3 != "NOT_TESTED" {
 		return errors.New("invalid or overclaiming receipt")
@@ -326,7 +329,7 @@ func verifyLabReceipt(env labEnvelope, roots *x509.CertPool, peerName, expectedR
 	}
 	seen := map[int]bool{}
 	for _, s := range r.Observations {
-		if s.Index < 0 || s.Index >= r.ExpectedSamples || seen[s.Index] || !s.Authenticated || s.ActualPacketSource != "127.0.0.1" ||
+		if s.Index < 0 || s.Index >= r.ExpectedSamples || seen[s.Index] || !s.Authenticated || (r.Environment == "loopback_transport" && s.ActualPacketSource != "127.0.0.1") || (r.Environment == "isolated_private_raw" && s.ActualPacketSource != s.SourceCandidate) ||
 			s.PacketSize < labMinPacket || s.PacketSize > labMaxPacket ||
 			s.PolicyEpoch == "" || !validDirection(s.Direction) || validateIP(s.SourceCandidate, "private_lab") != nil {
 			return errors.New("invalid or duplicate observation")

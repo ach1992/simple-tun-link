@@ -1,6 +1,6 @@
 # Fully isolated local acceptance plan — Go diagnostic instrument
 
-Status: **full raw/VM acceptance plan, NOT completed**. A partial Go implementation now performs real mutually authenticated **127.0.0.1** two-agent control/UDP exchange, verifies signed peer receipts and supports out-of-band Ed25519-signed challenges and UDP observations. Local source-IP admission, netns/raw packet egress, asymmetric routing and actual encrypted L3 remain **NOT_RUN**. Prior Python/inline labs are not Go acceptance evidence.
+Status: **full raw/VM acceptance plan, NOT completed**. A partial Go implementation now performs real mutually authenticated **127.0.0.1** two-agent control/UDP exchange, verifies signed peer receipts and supports out-of-band Ed25519-signed challenges and UDP observations. A guarded Go raw-packet netns adapter has been added; exact-binary raw sender/receiver E2E, independent interface captures, ACL/asymmetry and actual encrypted L3 remain **NOT_RUN** at this checkpoint. A-R-B private-kernel baseline infrastructure was confirmed separately on Test Server For AI, but that ping is NOT a Go adapter result. Prior Python/inline labs are not Go acceptance evidence.
 
 ## Environment
 

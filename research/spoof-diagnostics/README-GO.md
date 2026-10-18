@@ -1,11 +1,44 @@
 # STL Spoof Diagnostics — standalone Go development candidate
 
-This is a **partial, loopback-only Go diagnostic** independent of STL runtime and installation. Go supports `version`, `preflight`, `sources add`, `plan`, `report`, a basic `menu`, and actual authenticated two-agent **local** `lab` sessions with signed, portable receipts. It also supports a signed offline challenge/observation exchange when mTLS control is absent. **All Go networking remains restricted to 127.0.0.1; no raw forged IPv4 traffic or real-world field probes are implemented.** No usable private L3 Link has been built. The legacy Python experiment is distinct; its test results must not be substituted for exact Go acceptance.
+This is a **partial, lab-restricted Go diagnostic** independent of STL runtime and installation. Go supports `version`, `preflight`, `sources add`, `plan`, `report`, a basic `menu`, and actual authenticated two-agent **local** `lab` sessions with signed, portable receipts. It also supports a signed offline challenge/observation exchange when mTLS control is absent. Normal Go agents remain restricted to `127.0.0.1`; a separate **strictly network-namespace-gated** raw IPv4 RFC1918 test adapter is now available for independent local kernel acceptance. Public/real-world field probes remain disabled. No usable private L3 Link has been built. The legacy Python experiment is distinct; its test results must not be substituted for exact Go acceptance.
 
 `plan` validates **only explicit sources** in CSV/JSON. The file marks sender/receiver and A_TO_B vs B_TO_A; no IP block scanning is performed. `report` evaluates JSON declarations supplied by the operator; it does **NOT** cryptographically verify their observations. Accordingly results say `UNVERIFIED_INPUT_DECLARATION` and never claim private L3.
 
 
-## Actual Go laboratory operation (no spoofing, 127.0.0.1 only)
+## Restricted raw IPv4 adapter — fully isolated RFC1918 network namespaces only
+
+The independent Go program also includes a research-only `lab netns-send` / `lab netns-listen` transport for **actual private IPv4 headers**. This is **not** public-provider field testing. Before calling this adapter, independently prove a detached A (sender) → R (policy router) → B (receiver) topology with no public Internet-facing NIC, default route, host bridge or public addresses. The adapter refuses the host/initial network namespace, non-virtual NICs, unexpected interfaces, public/default routes and non-RFC1918 addresses. Only task-owned `sdg*` private veth interfaces are permitted.
+
+Create a signed challenge offline from a finite explicit private-lab CSV/JSON source inventory (example source `10.91.1.77`, direction `A_TO_B`, sender `A`, receiver `B`):
+
+```sh
+stl-spoofdiag lab challenge --transport isolated_private_raw --destination-ip 10.91.2.2 \
+  --file private-sources.csv --cert identity/A.crt --key identity/A.key \
+  --ca identity/ca.crt --sender A --receiver B --packet-size 192 \
+  --out signed-private-challenge.json
+```
+
+Only inside B's independently isolated, proven-private network namespace:
+
+```sh
+stl-spoofdiag lab netns-listen --challenge signed-private-challenge.json \
+  --file private-sources.csv --cert identity/B.crt --key identity/B.key \
+  --ca identity/ca.crt --sender A --receiver B --interface sdgb0 \
+  --bind-ip 10.91.2.2 --data-port 24572 --window-seconds 8 \
+  --state-dir /private/test-owned-replay-ledger --out /private/receipt.json
+```
+
+Only inside A's independently isolated, proven-private namespace:
+
+```sh
+stl-spoofdiag lab netns-send --challenge signed-private-challenge.json \
+  --cert identity/A.crt --key identity/A.key --ca identity/ca.crt \
+  --sender A --receiver B --interface sdga0 \
+  --destination-ip 10.91.2.2 --data-port 24572
+```
+
+Verify the exported signed challenge and receipt via `lab offline-verify --challenge signed-private-challenge.json --receipt /private/receipt.json --ca identity/ca.crt`. Correlate A interface egress, R policy counters and B independent packet capture. Without those observations, a signed receipt does not prove true sender egress, provider admission, sender return or private L3. The raw adapter remains under **exact-binary local lab acceptance**, not field-ready.
+## Actual Go loopback operation (no spoofing, 127.0.0.1 only)
 
 The Go binary now has a genuine, separate sender and receiver using TLS 1.3 mutual authentication plus authenticated UDP over **loopback only**. A receiver signs the observations with its Ed25519 certificate. The sender verifies the signature, signer, run ID and sample identities. The standalone `lab verify` command can check a saved receipt against an independently recorded run ID. This proves **local authenticated transport and observation exchange** only: every claimed RFC1918 candidate remains metadata; the actual UDP source is `127.0.0.1`. Neither raw IPv4 fake-source egress, provider admission, sender return, nor private L3 has been demonstrated.
 
@@ -93,7 +126,7 @@ stl-spoofdiag lab offline-verify --challenge /tmp/new-challenge.json \
 
 A valid signed receipt with **zero** packets is an `INCONCLUSIVE` delivery result, not proof of IP rejection. A partial receipt remains `PARTIAL`. The receiver's private `--state-dir` consumes run IDs durably and rejects reusing the same challenge; preserve it for the entire testing period. The challenge expires within 90 seconds; generate a fresh one for a new run. Signed records do not establish physical egress, admission of the claimed IP, sender-return routing, or an STL Link.
 
-**Not yet delivered:** raw RFC1918 two/three-guest kernel packet admission from the exact Go binary, independent interface captures, field approval engine, practical production-grade node/key provisioning, broader interactive menu, cross-host/real-provider performance, fresh-guest interrupted-upgrade recovery and independently verified publisher signing, published tool-specific Release, and online bootstrap. Keep `LAB_VERIFIED` and `FIELD_READY` unset until those independent gates pass.
+**Not yet delivered:** verified raw RFC1918 two/three-guest packet admission and independent captures for the new Go adapter, independent interface captures, field approval engine, practical production-grade node/key provisioning, broader interactive menu, cross-host/real-provider performance, fresh-guest interrupted-upgrade recovery and independently verified publisher signing, published tool-specific Release, and online bootstrap. Keep `LAB_VERIFIED` and `FIELD_READY` unset until those independent gates pass.
 
 ## Use without internet, no packages or build tools on the destination
 

@@ -341,7 +341,7 @@ func menu() error {
 	}
 }
 func preflight() error {
-	return pretty(map[string]any{"schema_version": schema, "utc": time.Now().UTC().Format(time.RFC3339), "os": runtime.GOOS, "arch": runtime.GOARCH, "go_runtime": runtime.Version(), "probe_engine": "NOT_IMPLEMENTED_IN_GO_PORT", "field_traffic": "DISABLED", "test_network": "LOOPBACK_ONLY", "loopback_two_agent": "AVAILABLE"})
+	return pretty(map[string]any{"schema_version": schema, "utc": time.Now().UTC().Format(time.RFC3339), "os": runtime.GOOS, "arch": runtime.GOARCH, "go_runtime": runtime.Version(), "probe_engine": "LAB_PRIVATE_NETNS_RAW_ADAPTER_UNDER_VALIDATION", "field_traffic": "DISABLED", "test_network": "LOOPBACK_OR_PROVEN_ISOLATED_RFC1918_NETNS_ONLY", "loopback_two_agent": "AVAILABLE"})
 }
 func run(args []string) error {
 	if len(args) == 0 {

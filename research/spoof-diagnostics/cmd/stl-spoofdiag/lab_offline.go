@@ -30,6 +30,7 @@ type offlineChallenge struct {
 	RunID         string      `json:"run_id"`
 	Sender        string      `json:"sender"`
 	Receiver      string      `json:"receiver"`
+	DestinationIP string      `json:"destination_ip,omitempty"`
 	CreatedUTC    string      `json:"created_utc"`
 	ExpiresUnix   int64       `json:"expires_unix"`
 	Samples       []labSample `json:"samples"`
@@ -64,8 +65,14 @@ func signedChallengeFor(c offlineChallenge, cert tls.Certificate) (signedOffline
 
 func challengeSignerCertificate(env signedOfflineChallenge, roots *x509.CertPool, now time.Time) (*x509.Certificate, error) {
 	c := env.Challenge
-	if c.SchemaVersion != schema || c.Environment != "loopback_transport" {
+	if c.SchemaVersion != schema || (c.Environment != "loopback_transport" && c.Environment != "isolated_private_raw") {
 		return nil, errors.New("invalid offline challenge environment/schema")
+	}
+	if c.Environment == "isolated_private_raw" && validateIP(c.DestinationIP, "private_lab") != nil {
+		return nil, errors.New("isolated private challenge requires exact RFC1918 destination")
+	}
+	if c.Environment == "loopback_transport" && c.DestinationIP != "" {
+		return nil, errors.New("loopback challenge cannot contain a field destination")
 	}
 	if _, err := roleDirection(c.Sender, c.Receiver); err != nil {
 		return nil, err
@@ -177,9 +184,22 @@ func newOfflineChallenge(o labOptions) (signedOfflineChallenge, error) {
 		return empty, err
 	}
 	now := time.Now().UTC()
+	transport := o.Transport
+	if transport == "" {
+		transport = "loopback_transport"
+	}
+	if transport != "loopback_transport" && transport != "isolated_private_raw" {
+		return empty, errors.New("invalid offline challenge transport")
+	}
+	if transport == "isolated_private_raw" && validateIP(o.DestinationIP, "private_lab") != nil {
+		return empty, errors.New("raw lab challenge needs exact --destination-ip RFC1918")
+	}
+	if transport == "loopback_transport" && o.DestinationIP != "" {
+		return empty, errors.New("loopback challenge may not set destination-ip")
+	}
 	return signedChallengeFor(offlineChallenge{
-		SchemaVersion: schema, Environment: "loopback_transport", RunID: run,
-		Sender: o.Sender, Receiver: o.Receiver, CreatedUTC: now.Format(time.RFC3339Nano),
+		SchemaVersion: schema, Environment: transport, RunID: run,
+		Sender: o.Sender, Receiver: o.Receiver, DestinationIP: o.DestinationIP, CreatedUTC: now.Format(time.RFC3339Nano),
 		ExpiresUnix: now.Add(90 * time.Second).Unix(), Samples: samples,
 	}, cert)
 }
@@ -261,6 +281,17 @@ func offlineRunLedger(stateDir, run string) error {
 }
 
 func offlineListen(ctx context.Context, o labOptions, challengePath, stateDir string, window time.Duration, ready chan<- labReady) error {
+	return offlineListenBound(ctx, o, challengePath, stateDir, window, ready, net.IPv4(127, 0, 0, 1), "", "loopback_transport")
+}
+
+func offlineListenBound(ctx context.Context, o labOptions, challengePath, stateDir string, window time.Duration, ready chan<- labReady, bindIP net.IP, iface, transport string) error {
+	if transport == "isolated_private_raw" {
+		if err := requireIsolatedPrivateNamespace(iface, bindIP.String()); err != nil {
+			return err
+		}
+	} else if transport != "loopback_transport" || !bindIP.Equal(net.IPv4(127, 0, 0, 1)) {
+		return errors.New("offline listen mode must be loopback or proven private lab namespace")
+	}
 	allowed, err := checkLabOptions(o, true)
 	if err != nil {
 		return err
@@ -278,8 +309,8 @@ func offlineListen(ctx context.Context, o labOptions, challengePath, stateDir st
 		return err
 	}
 	plan := env.Challenge
-	if plan.Sender != o.Sender || plan.Receiver != o.Receiver {
-		return errors.New("offline challenge role mismatch")
+	if plan.Sender != o.Sender || plan.Receiver != o.Receiver || plan.Environment != transport || (transport == "isolated_private_raw" && plan.DestinationIP != bindIP.String()) {
+		return errors.New("offline challenge role/transport/owned destination mismatch")
 	}
 	// Receiver must bind every sample to its own prior exact-IP allowlist.
 	begin := labBegin{Type: "begin", SchemaVersion: schema, RunID: plan.RunID, Key: strings.Repeat("0", 64),
@@ -302,7 +333,7 @@ func offlineListen(ctx context.Context, o labOptions, challengePath, stateDir st
 	if window < time.Second || window > 120*time.Second {
 		return errors.New("offline listen window outside 1..120 seconds")
 	}
-	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: o.DataPort})
+	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: bindIP, Port: o.DataPort})
 	if err != nil {
 		return err
 	}
@@ -322,7 +353,7 @@ func offlineListen(ctx context.Context, o labOptions, challengePath, stateDir st
 	port := udp.LocalAddr().(*net.UDPAddr).Port
 	if ready != nil {
 		select {
-		case ready <- labReady{Type: "offline_ready", DataPort: port, Transport: "LOOPBACK_ONLY_SIGNED_UDP_NO_CONTROL"}:
+		case ready <- labReady{Type: "offline_ready", DataPort: port, Transport: transport}:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -353,11 +384,15 @@ func offlineListen(ctx context.Context, o labOptions, challengePath, stateDir st
 			}
 			return err
 		}
-		if addr == nil || !addr.IP.Equal(net.IPv4(127, 0, 0, 1)) {
+		if addr == nil {
 			continue
 		}
 		sample, ok := verifyOfflinePacket(buf[:n], plan, pub, seen)
 		if !ok {
+			continue
+		}
+		if (transport == "loopback_transport" && !addr.IP.Equal(net.IPv4(127, 0, 0, 1))) || (transport == "isolated_private_raw" && addr.IP.String() != sample.Candidate.IP) {
+			delete(seen, sample.Index)
 			continue
 		}
 		observations = append(observations, labSeen{
@@ -366,7 +401,7 @@ func offlineListen(ctx context.Context, o labOptions, challengePath, stateDir st
 		})
 	}
 	receipt := labReceipt{
-		SchemaVersion: schema, Environment: "loopback_transport", RunID: plan.RunID, Observer: roleName(o.Receiver), ChallengeDigest: offlineChallengeDigest(plan),
+		SchemaVersion: schema, Environment: transport, RunID: plan.RunID, Observer: roleName(o.Receiver), ChallengeDigest: offlineChallengeDigest(plan),
 		CreatedUTC: time.Now().UTC().Format(time.RFC3339Nano), ExpectedSamples: len(plan.Samples),
 		Observations: observations, EgressStatus: "NOT_TESTED", CandidateAdmission: "NOT_TESTED",
 		ReturnToSender: "NOT_TESTED", PrivateL3: "NOT_TESTED",
@@ -395,8 +430,8 @@ func offlineSend(ctx context.Context, o labOptions, challengePath string) (strin
 		return "", err
 	}
 	plan := env.Challenge
-	if plan.Sender != o.Sender || plan.Receiver != o.Receiver {
-		return "", errors.New("wrong direction")
+	if plan.Sender != o.Sender || plan.Receiver != o.Receiver || plan.Environment != "loopback_transport" {
+		return "", errors.New("loopback offline send requires matching loopback-only challenge")
 	}
 	if o.DataPort <= 0 || o.DataPort > 65535 {
 		return "", errors.New("explicit --data-port required")
@@ -461,7 +496,7 @@ func verifyOfflinePair(challengePath, receiptPath, caPath string) (map[string]an
 	if err := verifyLabReceipt(response, roots, roleName(plan.Receiver), plan.RunID, time.Now()); err != nil {
 		return nil, err
 	}
-	if response.Receipt.ExpectedSamples != len(plan.Samples) || response.Receipt.ChallengeDigest != offlineChallengeDigest(plan) {
+	if response.Receipt.ExpectedSamples != len(plan.Samples) || response.Receipt.ChallengeDigest != offlineChallengeDigest(plan) || response.Receipt.Environment != plan.Environment {
 		return nil, errors.New("receipt challenge binding mismatch")
 	}
 	for _, observed := range response.Receipt.Observations {
@@ -475,7 +510,7 @@ func verifyOfflinePair(challengePath, receiptPath, caPath string) (map[string]an
 		"challenge_signature": "VERIFIED", "receipt_signature": "VERIFIED", "control_channel": "NOT_USED",
 		"run_id": plan.RunID, "sender": roleName(plan.Sender), "peer": roleName(plan.Receiver),
 		"expected_samples": len(plan.Samples), "authenticated_peer_observations": len(response.Receipt.Observations),
-		"result":                     labEvidenceResult(len(response.Receipt.Observations), len(plan.Samples)),
+		"result":                     labEvidenceResult(len(response.Receipt.Observations), len(plan.Samples), plan.Environment),
 		"candidate_source_admission": "NOT_TESTED", "sender_egress": "NOT_TESTED",
 		"return_to_sender": "NOT_TESTED", "private_l3": "NOT_TESTED",
 	}, nil
@@ -513,6 +548,8 @@ func offlineCLI(args []string) error {
 	f.IntVar(&o.DataPort, "data-port", 24002, "127.0.0.1 UDP port")
 	f.IntVar(&o.PacketSize, "packet-size", 192, "signed packet size 128..1200")
 	f.StringVar(&o.Epoch, "epoch", "local-offline", "declared policy epoch")
+	f.StringVar(&o.Transport, "transport", "loopback_transport", "signed challenge type: loopback_transport or isolated_private_raw (NO network on challenge)")
+	f.StringVar(&o.DestinationIP, "destination-ip", "", "exact RFC1918 receiver IP for isolated_private_raw challenge")
 	f.StringVar(&o.Output, "out", "", "new output JSON file")
 	challenge := f.String("challenge", "", "existing signed challenge JSON")
 	state := f.String("state-dir", "", "receiver-only private replay-ledger directory")

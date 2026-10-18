@@ -17,11 +17,12 @@ import (
 )
 
 type labOptions struct {
-	File, Cert, Key, CA   string
-	Sender, Receiver      string
-	ControlPort, DataPort int
-	PacketSize            int
-	Epoch, Output         string
+	File, Cert, Key, CA      string
+	Transport, DestinationIP string
+	Sender, Receiver         string
+	ControlPort, DataPort    int
+	PacketSize               int
+	Epoch, Output            string
 }
 
 type labReady struct {
@@ -310,6 +311,9 @@ func labCLI(args []string) error {
 		return errors.New("usage: lab identity|serve|run|verify (LOOPBACK-ONLY)")
 	}
 	op := args[0]
+	if op == "netns-send" || op == "netns-listen" {
+		return rawPrivateCLI(args)
+	}
 	if op == "challenge" || op == "offline-listen" || op == "offline-send" || op == "offline-verify" {
 		return offlineCLI(args)
 	}
@@ -402,7 +406,7 @@ func labCLI(args []string) error {
 		"run_id":              env.Receipt.RunID,
 		"peer_signed_receipt": "VERIFIED", "peer_observer": env.Receipt.Observer,
 		"expected_samples": env.Receipt.ExpectedSamples, "peer_observed": len(env.Receipt.Observations),
-		"result":                     labEvidenceResult(len(env.Receipt.Observations), env.Receipt.ExpectedSamples),
+		"result":                     labEvidenceResult(len(env.Receipt.Observations), env.Receipt.ExpectedSamples, env.Receipt.Environment),
 		"transport":                  "127.0.0.1 mTLS-control + authenticated UDP",
 		"source_candidate_admission": "NOT_TESTED", "sender_egress": "NOT_TESTED",
 		"return_to_sender": "NOT_TESTED", "private_l3": "NOT_TESTED",
