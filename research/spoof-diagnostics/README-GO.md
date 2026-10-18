@@ -7,63 +7,63 @@ This is a **partial, loopback-only Go diagnostic** independent of STL runtime an
 
 ## Actual Go laboratory operation (no spoofing, 127.0.0.1 only)
 
-The Go binary now has a genuine, separate sender and receiver using TLS 1.3 mutual authentication plus authenticated UDP over **loopback only**. A receiver signs the observations with its Ed25519 certificate. The sender verifies the signature, signer, run ID and sample identities. The standalone \`lab verify\` command can check a saved receipt against an independently recorded run ID. This proves **local authenticated transport and observation exchange** only: every claimed RFC1918 candidate remains metadata; the actual UDP source is \`127.0.0.1\`. Neither raw IPv4 fake-source egress, provider admission, sender return, nor private L3 has been demonstrated.
+The Go binary now has a genuine, separate sender and receiver using TLS 1.3 mutual authentication plus authenticated UDP over **loopback only**. A receiver signs the observations with its Ed25519 certificate. The sender verifies the signature, signer, run ID and sample identities. The standalone `lab verify` command can check a saved receipt against an independently recorded run ID. This proves **local authenticated transport and observation exchange** only: every claimed RFC1918 candidate remains metadata; the actual UDP source is `127.0.0.1`. Neither raw IPv4 fake-source egress, provider admission, sender return, nor private L3 has been demonstrated.
 
 For disposable local development only, generate a new short-lived CA and separate A/B identities (the generated directory contains **both** nodes' private keys and the CA signing key; never copy the directory into a real server or package):
 
-\`\`\`sh
+```sh
 stl-spoofdiag lab identity --dir /tmp/new-private-spoofdiag-lab-identity
-\`\`\`
+```
 
-Use \`examples/sources-private.csv\` from this source tree or copy the shipped \`sources-private.csv\` from the verified offline package. In terminal B:
+Use `examples/sources-private.csv` from this source tree or copy the shipped `sources-private.csv` from the verified offline package. In terminal B:
 
-\`\`\`sh
+```sh
 stl-spoofdiag lab serve --file sources-private.csv \
   --cert /tmp/new-private-spoofdiag-lab-identity/B.crt \
   --key /tmp/new-private-spoofdiag-lab-identity/B.key \
   --ca /tmp/new-private-spoofdiag-lab-identity/ca.crt \
   --sender A --receiver B --control-port 24001 --data-port 24002
-\`\`\`
+```
 
 In terminal A:
 
-\`\`\`sh
+```sh
 stl-spoofdiag lab run --file sources-private.csv \
   --cert /tmp/new-private-spoofdiag-lab-identity/A.crt \
   --key /tmp/new-private-spoofdiag-lab-identity/A.key \
   --ca /tmp/new-private-spoofdiag-lab-identity/ca.crt \
   --sender A --receiver B --control-port 24001 \
   --packet-size 192 --out /tmp/new-peer-receipt.json
-\`\`\`
+```
 
-The \`run_id\` printed by A must be retained **independently**. To verify the portable receipt without contacting B:
+The `run_id` printed by A must be retained **independently**. To verify the portable receipt without contacting B:
 
-\`\`\`sh
+```sh
 stl-spoofdiag lab verify --file /tmp/new-peer-receipt.json \
   --ca /tmp/new-private-spoofdiag-lab-identity/ca.crt \
   --peer spoofdiag-b.local --run EXACT_RUN_ID_FROM_SENDER
-\`\`\`
+```
 
 To test the opposite direction, swap sender/receiver roles, their A/B certificates, and the listener's role; candidates in the CSV remain **direction-specific**, not interchangeable.
 
 ### File-based signed challenge/receipt with no mTLS control channel
 
-This separate, functional **local** flow is for demonstrating how authenticated measurements can be reunited when the normal control channel is unavailable. It does not discover a peer or test a WAN. All UDP sockets are bound to/send to \`127.0.0.1\` and the sender never claims \`PEER_OBSERVED\` solely because it sent a packet. The signed challenge carries no shared HMAC secret; each offline UDP packet is individually Ed25519-signed.
+This separate, functional **local** flow is for demonstrating how authenticated measurements can be reunited when the normal control channel is unavailable. It does not discover a peer or test a WAN. All UDP sockets are bound to/send to `127.0.0.1` and the sender never claims `PEER_OBSERVED` solely because it sent a packet. The signed challenge carries no shared HMAC secret; each offline UDP packet is individually Ed25519-signed.
 
 Terminal A creates a new expiring, signed challenge:
 
-\`\`\`sh
+```sh
 stl-spoofdiag lab challenge --file sources-private.csv \
   --cert /tmp/new-private-spoofdiag-lab-identity/A.crt \
   --key /tmp/new-private-spoofdiag-lab-identity/A.key \
   --ca /tmp/new-private-spoofdiag-lab-identity/ca.crt \
   --sender A --receiver B --packet-size 192 \
   --out /tmp/new-challenge.json
-\`\`\`
+```
 
 Transfer that signed JSON to B by an authorized out-of-band means. Terminal B validates the signature, exact allowlist and replay ledger before listening:
 
-\`\`\`sh
+```sh
 stl-spoofdiag lab offline-listen --file sources-private.csv \
   --cert /tmp/new-private-spoofdiag-lab-identity/B.crt \
   --key /tmp/new-private-spoofdiag-lab-identity/B.key \
@@ -71,29 +71,29 @@ stl-spoofdiag lab offline-listen --file sources-private.csv \
   --sender A --receiver B --challenge /tmp/new-challenge.json \
   --state-dir /tmp/new-private-replay-ledger --window-seconds 10 \
   --data-port 24002 --out /tmp/new-offline-receipt.json
-\`\`\`
+```
 
 While B listens, A invokes:
 
-\`\`\`sh
+```sh
 stl-spoofdiag lab offline-send --challenge /tmp/new-challenge.json \
   --cert /tmp/new-private-spoofdiag-lab-identity/A.crt \
   --key /tmp/new-private-spoofdiag-lab-identity/A.key \
   --ca /tmp/new-private-spoofdiag-lab-identity/ca.crt \
   --sender A --receiver B --data-port 24002
-\`\`\`
+```
 
 Finally, after transferring B's signed receipt back to the operator:
 
-\`\`\`sh
+```sh
 stl-spoofdiag lab offline-verify --challenge /tmp/new-challenge.json \
   --receipt /tmp/new-offline-receipt.json \
   --ca /tmp/new-private-spoofdiag-lab-identity/ca.crt
-\`\`\`
+```
 
-A valid signed receipt with **zero** packets is an \`INCONCLUSIVE\` delivery result, not proof of IP rejection. A partial receipt remains \`PARTIAL\`. The receiver's private \`--state-dir\` consumes run IDs durably and rejects reusing the same challenge; preserve it for the entire testing period. The challenge expires within 90 seconds; generate a fresh one for a new run. Signed records do not establish physical egress, admission of the claimed IP, sender-return routing, or an STL Link.
+A valid signed receipt with **zero** packets is an `INCONCLUSIVE` delivery result, not proof of IP rejection. A partial receipt remains `PARTIAL`. The receiver's private `--state-dir` consumes run IDs durably and rejects reusing the same challenge; preserve it for the entire testing period. The challenge expires within 90 seconds; generate a fresh one for a new run. Signed records do not establish physical egress, admission of the claimed IP, sender-return routing, or an STL Link.
 
-**Not yet delivered:** raw RFC1918 two/three-guest kernel packet admission from the exact Go binary, independent interface captures, field approval engine, practical production-grade node/key provisioning, broader interactive menu, cross-host/real-provider performance, offline lifecycle rollback/uninstall, published tool-specific Release, and online bootstrap. Keep \`LAB_VERIFIED\` and \`FIELD_READY\` unset until those independent gates pass.
+**Not yet delivered:** raw RFC1918 two/three-guest kernel packet admission from the exact Go binary, independent interface captures, field approval engine, practical production-grade node/key provisioning, broader interactive menu, cross-host/real-provider performance, fresh-guest interrupted-upgrade recovery and independently verified publisher signing, published tool-specific Release, and online bootstrap. Keep `LAB_VERIFIED` and `FIELD_READY` unset until those independent gates pass.
 
 ## Use without internet, no packages or build tools on the destination
 
@@ -109,7 +109,7 @@ stl-spoofdiag plan --file sources-private.csv
 stl-spoofdiag report --file evidence-private.json
 ```
 
-The operator must confirm `YES` on interactive installation; use `--install --accept` **only** for explicitly authorized noninteractive/test installation. No `apt`, `pip`, `curl`, `wget` or Go toolchain should run on the destination. The installer places the standalone binary but **does not automatically start an agent**, open firewall ports, create Link/network configurations or enable public-source spoofing. Local agents are started explicitly with `lab` commands; their sockets are loopback-only.
+The operator must confirm `YES` on interactive installation or lifecycle changes; use `--accept` **only** for explicitly authorized noninteractive/test operations. To upgrade, verify a new archive and invoke its `--install` command again; the old verified version stays stored locally. To revert invoke `bash install-offline.sh --rollback --to EXACT_STORED_VERSION`, or remove only verified tool-owned binaries with `bash install-offline.sh --uninstall`. Both operations preserve private configuration and evidence. Use `--destdir /existing/test-root` only for disposable test-root acceptance. No `apt`, `pip`, `curl`, `wget` or Go toolchain should run on the destination. The installer places the standalone binary but **does not automatically start an agent**, open firewall ports, create Link/network configurations or enable public-source spoofing. Local agents are started explicitly with `lab` commands; their sockets are loopback-only.
 
 Sample source and evidence files contain private example addresses and illustrative **NOT_TESTED** records, not network measurements. The offline installer verifies archive-contained hashes and manifest; those hashes alone are not independent publisher authentication. Verify the full artifact against an independently trusted expected digest/signature before running it as root.
 
@@ -154,6 +154,6 @@ GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go test ./...
 GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local CGO_ENABLED=0 go build ./cmd/stl-spoofdiag
 ```
 
-CI/build machines (not hosts being diagnosed) require Go >= 1.23. The generator `scripts/build-offline.sh` builds an **unpublished snapshot directory**, not a GitHub Release or production package. The independent release lifecycle with tagged versions, installer validation for upgrades/removal/rollback and isolated two/three-guest kernel raw packet E2E remain outstanding.
+CI/build machines (not hosts being diagnosed) require Go >= 1.23. The generator `scripts/build-offline.sh` builds an **unpublished snapshot directory**, not a GitHub Release or production package. The standalone installer supports verified local offline install/upgrade, rollback to a previously stored version, and tool-owned binary uninstall while retaining operator private state; positive/negative lifecycle tests passed in disposable test roots. Fresh-guest interrupted-update recovery, independently authenticated publisher identity, tagged public release workflow and isolated two/three-guest kernel raw packet E2E remain outstanding.
 
 For architectural truth see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/INSTALL-AND-RELEASE.md](docs/INSTALL-AND-RELEASE.md). No interaction with STL runtime or installed Links is allowed.

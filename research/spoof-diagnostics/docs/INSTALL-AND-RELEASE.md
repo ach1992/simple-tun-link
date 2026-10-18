@@ -1,6 +1,6 @@
 # Independent installer, offline package and release contract
 
-**Partially implemented contract.** A buildable standalone offline Go archive and a verifying/idempotent install script exist for local release-candidate testing; owned-path/symlink negative controls were exercised in disposable test roots. **No public tool release or validated online one-liner exists.** Rollback/uninstall management and independent publisher signature verification remain acceptance gaps; do not mistake current install smoke for full lifecycle acceptance.
+**Partially implemented contract.** A buildable standalone offline Go archive and a verifying/idempotent install script exist for local release-candidate testing; owned-path/symlink negative controls were exercised in disposable test roots. **No public tool release or validated online one-liner exists.** Upgrade, rollback and uninstall were exercised on disposable roots with foreign-file refusal and private-state preservation; independent publisher signature verification and full failure-injected fresh-guest recovery remain acceptance gaps; do not mistake current install smoke for full lifecycle acceptance.
 
 ## 1. Download/storage location on each authorized server
 
@@ -31,7 +31,7 @@ Installation paths are defaults, not a reason to overwrite a foreign file, symli
 Target deliverable: one per-architecture **self-contained archive** `spoofdiag-vX.Y.Z_linux_<arch>.tar.gz` containing:
 
 - `stl-spoofdiag` statically linked Linux executable (Go, `CGO_ENABLED=0`, stdlib-only dependencies where possible).
-- `install-offline.sh` — canonical audited installer; `--prefix`, `--verify`, `--install`, `--update`, `--rollback` and `--uninstall` behavior as supported and actually tested.
+- `install-offline.sh` — canonical audited installer; `--verify`, `--install`, `--rollback --to VERSION`, `--uninstall`, `--accept` and optional `--destdir ROOT` as implemented. There is no `--prefix`, `--update`, or private-state purge flag.
 - `BUILD-MANIFEST.txt` with exact product, version, Git commit, arch, Go version and built artifact identity.
 - `SHA256SUMS`, source `LICENSE`, tool `README.md`, architecture/operations information and example *non-secret* configuration.
 - Optional detached signature/attestation artifact with independently provisioned trusted verification identity; a SHA file served by the same account is not an independent authenticity proof.
@@ -72,9 +72,9 @@ The *installed executable* must offer `version`, `menu`, `preflight`, `plan`, `s
 ## 5. Upgrade, rollback, uninstall
 
 - Offline archive remains in `/root/stl-spoofdiag/`; an update stages a new complete version and switches tool-owned executable identity **only after** all integrity and compatible schema checks pass.
-- Store and display the previous accepted artifact identity to support a verified rollback without downloading anything.
+- Previously installed versions remain in an explicitly tool-owned release directory. `--rollback --to EXACT_STORED_VERSION` verifies that stored executable's checksum and manifest before atomically switching `current`; it does not fetch packages. `--uninstall` preflights every recognized file and refuses foreign artifacts, then removes only verified tool binary/link assets and retains private state.
 - Refuse foreign/unverifiable installation resources and incomplete ownership metadata. Stop only **tool-owned** short-lived sessions; never kill arbitrary named processes.
-- Protect config/private material as explicit operator-owned state; uninstall must offer separate code-removal and private-state-retention choices, with no secret exposed in logs.
+- Protect config/private material as explicit operator-owned state. Current `--uninstall` always retains `/etc/stl-spoofdiag` and `/var/lib/stl-spoofdiag`; deleting them is a separate deliberate manual operator action, not an automated purge.
 - No automatic updates, cron jobs, persistent listeners or unattended field tests by default. Repeat install/update/remove on disposable guests and verify recovery after injected failures.
 
 ## 6. Release procedure and acceptance

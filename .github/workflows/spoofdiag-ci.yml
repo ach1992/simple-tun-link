@@ -88,3 +88,36 @@ jobs:
             echo 'ERROR: wrong architecture accepted' >&2
             exit 1
           fi
+
+          # Fully offline lifecycle: second complete local bundle, verified
+          # upgrade, rollback, integrity refusal, foreign resource preservation,
+          # uninstall and operator configuration/evidence retention.
+          root="$RUNNER_TEMP/spoofdiag-testroot"
+          mkdir -p "$root/etc/stl-spoofdiag" "$root/var/lib/stl-spoofdiag"
+          printf 'operator-owned' > "$root/etc/stl-spoofdiag/operator.conf"
+          printf 'peer-receipts' > "$root/var/lib/stl-spoofdiag/evidence.json"
+          bash scripts/build-offline.sh "$RUNNER_TEMP/spoofdiag-prev" "$GITHUB_SHA" dev-prev-ci amd64
+          bash "$RUNNER_TEMP/spoofdiag-prev/install-offline.sh" --install --accept --destdir "$root"
+          "$root/usr/local/bin/stl-spoofdiag" version | grep -Fq 'dev-prev-ci'
+          bash "$bundle/install-offline.sh" --rollback --to dev-ci --accept --destdir "$root"
+          "$root/usr/local/bin/stl-spoofdiag" version | grep -Fq 'dev-ci'
+          # The stored executable must not be activated if its hash changed.
+          printf 'corrupted' >> "$root/opt/stl-spoofdiag/releases/dev-prev-ci/stl-spoofdiag"
+          if bash "$bundle/install-offline.sh" --rollback --to dev-prev-ci --accept --destdir "$root"; then
+            echo 'ERROR: corrupted stored release was activated' >&2
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/spoofdiag-prev/stl-spoofdiag" "$root/opt/stl-spoofdiag/releases/dev-prev-ci/stl-spoofdiag"
+          printf 'foreign' > "$root/opt/stl-spoofdiag/not-ours"
+          if bash "$bundle/install-offline.sh" --uninstall --accept --destdir "$root"; then
+            echo 'ERROR: uninstall removed or ignored foreign resource' >&2
+            exit 1
+          fi
+          test -f "$root/opt/stl-spoofdiag/not-ours"
+          rm -- "$root/opt/stl-spoofdiag/not-ours"
+          bash "$bundle/install-offline.sh" --uninstall --accept --destdir "$root"
+          bash "$bundle/install-offline.sh" --uninstall --accept --destdir "$root"
+          test ! -e "$root/opt/stl-spoofdiag"
+          test ! -e "$root/usr/local/bin/stl-spoofdiag"
+          test "$(cat "$root/etc/stl-spoofdiag/operator.conf")" = 'operator-owned'
+          test "$(cat "$root/var/lib/stl-spoofdiag/evidence.json")" = 'peer-receipts'
