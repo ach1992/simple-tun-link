@@ -1,5 +1,7 @@
 # STL Source-IP Admission Diagnostics — research-only prototype
 
+> **Development tracks:** The initial two-agent Python implementation below remains a research prototype. A separate, newer **Go-only offline operator slice** has been added under `cmd/stl-spoofdiag/`, with dedicated [Go README](README-GO.md), [architecture](docs/ARCHITECTURE.md) and [offline installation/release contract](docs/INSTALL-AND-RELEASE.md). The Go console can currently validate direction-aware CSV/JSON candidates, report evidence declarations, run preflight and display a basic menu; it **cannot** yet perform live packet probes. These two implementations must not be conflated. The final independent Go release has **not** been published; no physical-host network test is authorized. Uploaded bundles belong under `/root/stl-spoofdiag/` as operator staging, never as STL's runtime state.
+
 > **NOT an STL transport, installer, or production scanner.** This standalone
 > Python 3.10+ diagnostic belongs to the research track of issue #125. It does
 > not create an L3 Link, forward user traffic, modify routes or firewalls, or
