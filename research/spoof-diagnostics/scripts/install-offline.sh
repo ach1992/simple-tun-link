@@ -87,8 +87,19 @@ if [[ -e $base || -L $base ]]; then
   [[ -d $base && ! -L $base && -f $base/.product-id && ! -L $base/.product-id ]] || { echo 'foreign or ambiguous install location' >&2; exit 1; }
   [[ $(cat "$base/.product-id") == stl-spoofdiag ]] || { echo 'foreign installation ownership' >&2; exit 1; }
 fi
+legacy_launcher="//opt/stl-spoofdiag/current/stl-spoofdiag"
+legacy_owned_link=false
 if [[ -e $launcher || -L $launcher ]]; then
-  [[ -L $launcher && $(readlink "$launcher") == "$base/current/stl-spoofdiag" ]] || { echo 'foreign launcher; refusing to overwrite' >&2; exit 1; }
+  [[ -L $launcher ]] || { echo 'foreign launcher; refusing to overwrite' >&2; exit 1; }
+  actual_launcher=$(readlink "$launcher")
+  if [[ $actual_launcher != "$base/current/stl-spoofdiag" ]]; then
+    # Prior root-only versions installed an otherwise identical //opt link.
+    # Accept ONLY that exact historical alias with verified tool ownership.
+    [[ $prefix == "" && $actual_launcher == "$legacy_launcher" &&
+       -f $base/.product-id && ! -L $base/.product-id &&
+       $(cat "$base/.product-id") == stl-spoofdiag ]] || { echo 'foreign launcher; refusing to overwrite' >&2; exit 1; }
+    legacy_owned_link=true
+  fi
 fi
 if [[ -e $base/current || -L $base/current ]]; then
   current_target=$(readlink "$base/current" 2>/dev/null || true)
@@ -193,6 +204,13 @@ next=$base/.current-new-$$
 [[ ! -e $next && ! -L $next ]] || { echo 'temporary version pointer busy' >&2; exit 1; }
 ln -s "$target" "$next"
 mv -Tf -- "$next" "$base/current"
+if [[ $legacy_owned_link == true ]]; then
+  # Canonicalize only the exact formerly owned alias with an atomic switch.
+  alias_tmp=$launchdir/.stl-spoofdiag-alias-$$
+  [[ ! -e $alias_tmp && ! -L $alias_tmp ]] || { echo 'owned alias migration conflict' >&2; exit 1; }
+  ln -s "$base/current/stl-spoofdiag" "$alias_tmp"
+  mv -Tf -- "$alias_tmp" "$launcher"
+fi
 if [[ ! -e $launcher && ! -L $launcher ]]; then
   mkdir -p "$launchdir"
   ln -s "$base/current/stl-spoofdiag" "$launcher"
