@@ -24,7 +24,7 @@ done
 [[ -d $destdir && ! -L $destdir ]] || { echo 'existing non-symlink destination root required' >&2; exit 1; }
 
 bundle=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
-for name in stl-spoofdiag install-offline.sh README.md sources-private.csv evidence-private.json BUILD-MANIFEST.txt SHA256SUMS; do
+for name in stl-spoofdiag install-offline.sh README.md LICENSE sources-private.csv evidence-private.json BUILD-MANIFEST.txt SHA256SUMS; do
   [[ -f $bundle/$name && ! -L $bundle/$name ]] || { echo "invalid bundle member: $name" >&2; exit 1; }
 done
 ( cd "$bundle"; sha256sum --check --strict SHA256SUMS > /dev/null ) || {
