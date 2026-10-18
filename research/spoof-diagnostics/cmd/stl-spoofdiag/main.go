@@ -281,7 +281,7 @@ func menu() error {
 	s := bufio.NewScanner(os.Stdin)
 	fmt.Println("STL Spoof Diagnostics | offline research console")
 	for {
-		fmt.Print("\n1) Version  2) Preflight  3) Validate candidates  4) Classify evidence  0) Exit\nChoice: ")
+		fmt.Print("\n1) Version  2) Preflight  3) Validate candidates  4) Classify evidence  5) Add source  0) Exit\nChoice: ")
 		if !s.Scan() {
 			return s.Err()
 		}
@@ -307,6 +307,21 @@ func menu() error {
 				break
 			}
 			fmt.Printf("Validated %d explicitly listed candidates (NO network traffic).\n", len(c.Candidates))
+		case "5":
+			fields := make([]string, 6)
+			prompts := []string{"JSON path", "Mode (private_lab/approved_field_plan; blank for existing)", "Exact source IPv4", "Direction (A_TO_B/B_TO_A)", "Sender ID", "Receiver ID"}
+			for i, prompt := range prompts {
+				fmt.Print(prompt, ": ")
+				if !s.Scan() {
+					return s.Err()
+				}
+				fields[i] = strings.TrimSpace(s.Text())
+			}
+			if err := addSource(fields[0], fields[1], Candidate{IP: fields[2], Direction: fields[3], Sender: fields[4], Receiver: fields[5]}); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+			} else {
+				fmt.Println("Source saved; no traffic emitted")
+			}
 		case "4":
 			fmt.Print("Evidence JSON file: ")
 			if !s.Scan() {
@@ -330,7 +345,7 @@ func preflight() error {
 }
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: stl-spoofdiag version|preflight|plan|report|menu")
+		return errors.New("usage: stl-spoofdiag version|preflight|sources|plan|report|menu")
 	}
 	switch args[0] {
 	case "version":
@@ -339,6 +354,8 @@ func run(args []string) error {
 		return preflight()
 	case "menu":
 		return menu()
+	case "sources":
+		return sourceAdd(args[1:])
 	case "plan", "report":
 		cmd := flag.NewFlagSet(args[0], flag.ContinueOnError)
 		p := cmd.String("file", "", "existing CSV or JSON file")
