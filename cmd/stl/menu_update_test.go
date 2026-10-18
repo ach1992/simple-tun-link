@@ -102,6 +102,55 @@ func TestMenuForwardReleaseUpgradeGateRejectsDowngradesAndUnknownVersions(t *tes
 	}
 }
 
+func TestMenuForwardStablePatchAndReleaseKindGate(t *testing.T) {
+	for _, tc := range []struct {
+		name, current, target string
+		prerelease            bool
+		allowed               bool
+	}{
+		{"forward stable patch", "v0.1.4", "v0.1.6", false, true},
+		{"next stable patch", "v1.5.9", "v1.5.10", false, true},
+		{"stable same version", "v0.1.6", "v0.1.6", false, false},
+		{"stable downgrade", "v0.1.6", "v0.1.4", false, false},
+		{"stable minor jump", "v0.1.6", "v0.2.0", false, false},
+		{"stable major jump", "v0.1.6", "v1.0.0", false, false},
+		{"RC to stable", "v0.1.6-rc.2", "v0.1.6", false, false},
+		{"stable to RC", "v0.1.5", "v0.1.6-rc.2", true, false},
+		{"RC forward", "v0.1.6-rc.2", "v0.1.6-rc.3", true, true},
+		{"RC flagged stable", "v0.1.5", "v0.1.6-rc.2", false, false},
+		{"stable flagged RC", "v0.1.5", "v0.1.6", true, false},
+		{"leading zero patch", "v0.1.04", "v0.1.6", false, false},
+		{"overflow patch", "v0.1.4", "v0.1.18446744073709551616", false, false},
+		{"unknown installed", "dev-aabbcc", "v0.1.6", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			release := menuOfficialRelease{TagName: tc.target, Prerelease: tc.prerelease}
+			if got := menuForwardMenuUpgrade(tc.current, release); got != tc.allowed {
+				t.Fatalf("upgrade current=%q target=%q prerelease=%t got=%t want=%t", tc.current, tc.target, tc.prerelease, got, tc.allowed)
+			}
+		})
+	}
+}
+
+func TestMenuStableForwardUpgradeReachesRootTTYGate(t *testing.T) {
+	old := version.Version
+	version.Version = "v0.1.4"
+	t.Cleanup(func() { version.Version = old })
+	release := sampleOfficialRelease("v0.1.6", time.Now())
+	release.ID, release.Immutable, release.Prerelease = 321, boolPointer(true), false
+	var out, errOut bytes.Buffer
+	opts := &runtimeOptions{stateRoot: filepath.Join(t.TempDir(), "absent"), menuReleases: func(context.Context) ([]menuOfficialRelease, error) {
+		return []menuOfficialRelease{release}, nil
+	}}
+	code := runWithRuntimeInput([]string{"menu"}, strings.NewReader("6\n1\n8\n"), &out, &errOut, opts)
+	if code != 0 || errOut.Len() != 0 || !strings.Contains(out.String(), "Stable / immutable") ||
+		!strings.Contains(out.String(), "Automatic update requires a real terminal, root") ||
+		strings.Contains(out.String(), "No in-place update command is recommended") ||
+		strings.Contains(out.String(), "Type UPDATE") {
+		t.Fatalf("forward Stable update did not reach protected terminal gate: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+}
+
 func TestMenuUpdateChoiceIsReadOnlyOutsideRealInstalledRootTTY(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "absent")
 	var out, errOut bytes.Buffer
