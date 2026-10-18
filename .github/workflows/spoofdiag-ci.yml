@@ -132,3 +132,16 @@ jobs:
         run: |
           bash -n scripts/online-bootstrap.sh scripts/test-online-bootstrap.sh
           bash scripts/test-online-bootstrap.sh
+      - name: Retain SHA-pinned unreleased lab archives
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spoofdiag-lab-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          path: |
+            ${{ runner.temp }}/spoofdiag-offline/spoofdiag-dev-ci_linux_amd64.tar.gz
+            ${{ runner.temp }}/spoofdiag-offline/spoofdiag-dev-ci_linux_amd64.tar.gz.sha256
+            ${{ runner.temp }}/spoofdiag-arm64/spoofdiag-dev-ci_linux_arm64.tar.gz
+            ${{ runner.temp }}/spoofdiag-arm64/spoofdiag-dev-ci_linux_arm64.tar.gz.sha256
