@@ -128,6 +128,19 @@ A valid signed receipt with **zero** packets is an `INCONCLUSIVE` delivery resul
 
 **Not yet delivered:** verified raw RFC1918 two/three-guest packet admission and independent captures for the new Go adapter, independent interface captures, field approval engine, practical production-grade node/key provisioning, broader interactive menu, cross-host/real-provider performance, fresh-guest interrupted-upgrade recovery and independently verified publisher signing, published tool-specific Release, and online bootstrap. Keep `LAB_VERIFIED` and `FIELD_READY` unset until those independent gates pass.
 
+## Online and offline install: one verified engine
+
+The source contains `scripts/online-bootstrap.sh`, an online transport for the **identical** offline installation engine. It accepts only an explicitly selected `spoofdiag-vX.Y.Z` release tag and an **independently authenticated SHA256** of the exact architecture-specific archive. It downloads through HTTPS, verifies archive identity and exact safe members, then invokes `install-offline.sh`. It never downloads Go/Python, runs `go build`, or takes STL `releases/latest` as the tool version. For developer-only tests, `--local-url http://127.0.0.1:PORT` accepts an explicitly selected `dev-*` snapshot. Passing a digest served alongside the archive without an independent trust path is **not** publisher authentication.
+
+The following invocation pattern becomes executable **only after a real tagged tool release and independently verified digest exist**; values in capitals are intentionally not live or inferred:
+
+```sh
+bash scripts/online-bootstrap.sh --version spoofdiag-vX.Y.Z \
+  --sha256 INDEPENDENTLY_VERIFIED_64_HEX_ARCHIVE_SHA256 --install
+```
+
+Its local test-server download, verify-only, install, idempotent reinstall, wrong-hash and unavailable-host negative controls have passed; there is **no public download claim**. For an already verified complete offline archive, unpack in a new private directory, run the included `install-offline.sh --verify`, then `--install`; the destination needs only the bundled static Go executable, Bash, basic file utilities and a matching Linux kernel/architecture, **not Go itself**. Adding automatic Go downloads or opaque regional mirrors would increase risk without a runtime need. [Full installation and release contract](docs/INSTALL-AND-RELEASE.md).
+
 ## Use without internet, no packages or build tools on the destination
 
 Once a snapshot/release directory is built using the Go builder, place its complete files under `/root/stl-spoofdiag/` on the authorized server. Source files and archives are **inbox material**, not the installation location. On the destination, from the **verified and extracted exact archive**:
@@ -145,6 +158,12 @@ stl-spoofdiag report --file evidence-private.json
 The operator must confirm `YES` on interactive installation or lifecycle changes; use `--accept` **only** for explicitly authorized noninteractive/test operations. To upgrade, verify a new archive and invoke its `--install` command again; the old verified version stays stored locally. To revert invoke `bash install-offline.sh --rollback --to EXACT_STORED_VERSION`, or remove only verified tool-owned binaries with `bash install-offline.sh --uninstall`. Both operations preserve private configuration and evidence. Use `--destdir /existing/test-root` only for disposable test-root acceptance. No `apt`, `pip`, `curl`, `wget` or Go toolchain should run on the destination. The installer places the standalone binary but **does not automatically start an agent**, open firewall ports, create Link/network configurations or enable public-source spoofing. Local agents are started explicitly with `lab` commands; their sockets are loopback-only.
 
 Sample source and evidence files contain private example addresses and illustrative **NOT_TESTED** records, not network measurements. The offline installer verifies archive-contained hashes and manifest; those hashes alone are not independent publisher authentication. Verify the full artifact against an independently trusted expected digest/signature before running it as root.
+
+## Interactive terminal menu and source inventory
+
+Run `stl-spoofdiag menu` for a readable header showing build/architecture, mode, testing limitations and operations. Supported interactive actions cover prerequisite checks, build identity, source list/add/import/remove/replace, declared evidence, challenge creation, signed receipt verification, disposable local credentials and help. Invalid choices, invalid paths and candidate errors are reported, then the menu remains usable; EOF exits cleanly. All actions use the same engine as direct CLI. `NO_COLOR` and piped/non-TTY use never require terminal ANSI parsing or an external UI runtime. For programmatic control, use CLI/JSON, never scrape the menu.
+
+The corresponding non-interactive commands are `sources list --file`, `sources import --file --from`, `sources remove --file --old-*`, and `sources replace --file --old-* --ip --direction --sender --receiver`. The inventory can become empty, but an empty candidate list is **not** a runnable plan; add permitted private sources again before creating a challenge. No source operation emits probes or discovers arbitrary Internet IPs.
 
 ## Enter an explicit source IP manually (no network calls)
 

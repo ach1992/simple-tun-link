@@ -121,3 +121,12 @@ jobs:
           test ! -e "$root/usr/local/bin/stl-spoofdiag"
           test "$(cat "$root/etc/stl-spoofdiag/operator.conf")" = 'operator-owned'
           test "$(cat "$root/var/lib/stl-spoofdiag/evidence.json")" = 'peer-receipts'
+      - name: Online bootstrap local HTTP end-to-end and failure controls
+        env:
+          GOPROXY: 'off'
+          GOSUMDB: 'off'
+          GOTOOLCHAIN: 'local'
+          CGO_ENABLED: '0'
+        run: |
+          bash -n scripts/online-bootstrap.sh scripts/test-online-bootstrap.sh
+          bash scripts/test-online-bootstrap.sh

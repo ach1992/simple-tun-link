@@ -23,8 +23,12 @@ tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='@0' \
   cd "$tmp"
   sha256sum -- "$filename" > "${filename}.sha256"
   sha256sum --check "${filename}.sha256" >/dev/null
-  tar -tzf "$filename" | grep -Fxq 'stl-spoofdiag/install-offline.sh'
-  tar -tzf "$filename" | grep -Fxq 'stl-spoofdiag/stl-spoofdiag'
+  # Consume the complete tar listing before checking members: grep -q in
+  # a pipe closes early, giving tar SIGPIPE under set -o pipefail.
+  tar -tzf "$filename" > "$tmp/archive-members.txt"
+  grep -Fxq 'stl-spoofdiag/install-offline.sh' "$tmp/archive-members.txt"
+  grep -Fxq 'stl-spoofdiag/stl-spoofdiag' "$tmp/archive-members.txt"
+  rm -- "$tmp/archive-members.txt"
 )
 # Do not duplicate the unpacked staging directory in the output artifact.
 rm -rf -- "$tmp/stl-spoofdiag"

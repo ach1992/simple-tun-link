@@ -10,6 +10,10 @@ multiple independent Links, including different supported transports
 to the same peer. Native Linux backends carry packets without a Go
 userspace forwarding loop.
 
+## Standalone Spoof Diagnostics (experimental)
+
+A **separate Go diagnostic**, not an STL backend or tunnel, is being developed under [research/spoof-diagnostics](research/spoof-diagnostics/README-GO.md). Its [validation matrix](research/spoof-diagnostics/docs/VALIDATION-MATRIX.md) documents isolated VM tests, signed evidence, known restrictions, and remaining gates. It uses its **own** `stl-spoofdiag` binary and installer; normal `stl` installation, Links and stable releases remain unchanged. No public Spoof Diagnostics release or verified GitHub one-line command is available yet. For source-built offline archives and the tested local online-bootstrap flow see the linked instructions. Never install a GitHub main-branch script as root without independent artifact verification.
+
 ## Tunnel options
 
 | Backend | Transport | Encrypted? | Typical choice |

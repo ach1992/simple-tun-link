@@ -4,7 +4,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
@@ -111,14 +110,18 @@ func reservedFieldIP(ip netip.Addr) bool {
 	return false
 }
 
-func validateCandidates(c CandidateFile) error {
+func validateCandidates(c CandidateFile) error { return validateCandidateInventory(c, false) }
+
+// An intentionally emptied operator inventory may be edited again later;
+// runnable plans remain strictly nonempty/fail-closed.
+func validateCandidateInventory(c CandidateFile, allowEmpty bool) error {
 	if c.SchemaVersion != schema {
 		return errors.New("unsupported candidate schema")
 	}
 	if c.Mode != "private_lab" && c.Mode != "approved_field_plan" {
 		return errors.New("unsupported candidate mode")
 	}
-	if len(c.Candidates) == 0 {
+	if len(c.Candidates) == 0 && !allowEmpty {
 		return errors.New("candidate list is empty")
 	}
 	seen := make(map[string]bool)
@@ -141,7 +144,9 @@ func validateCandidates(c CandidateFile) error {
 	return nil
 }
 
-func readCandidates(path string) (CandidateFile, error) {
+func readCandidates(path string) (CandidateFile, error) { return readCandidateInventory(path, false) }
+
+func readCandidateInventory(path string, allowEmpty bool) (CandidateFile, error) {
 	var result CandidateFile
 	data, err := readSmallRegular(path, 4<<20)
 	if err != nil {
@@ -176,7 +181,7 @@ func readCandidates(path string) (CandidateFile, error) {
 	default:
 		return result, errors.New("candidate file must be .json or .csv")
 	}
-	return result, validateCandidates(result)
+	return result, validateCandidateInventory(result, allowEmpty)
 }
 
 func classify(o Observation) (Summary, error) {
@@ -277,69 +282,6 @@ func versionInfo() map[string]string {
 	return map[string]string{"product": "stl-spoofdiag", "version": version, "commit": commit, "go": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH}
 }
 
-func menu() error {
-	s := bufio.NewScanner(os.Stdin)
-	fmt.Println("STL Spoof Diagnostics | offline research console")
-	for {
-		fmt.Print("\n1) Version  2) Preflight  3) Validate candidates  4) Classify evidence  5) Add source  0) Exit\nChoice: ")
-		if !s.Scan() {
-			return s.Err()
-		}
-		switch strings.TrimSpace(s.Text()) {
-		case "0", "q":
-			return nil
-		case "1":
-			if err := pretty(versionInfo()); err != nil {
-				return err
-			}
-		case "2":
-			if err := preflight(); err != nil {
-				return err
-			}
-		case "3":
-			fmt.Print("CSV/JSON file: ")
-			if !s.Scan() {
-				return s.Err()
-			}
-			c, err := readCandidates(strings.TrimSpace(s.Text()))
-			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				break
-			}
-			fmt.Printf("Validated %d explicitly listed candidates (NO network traffic).\n", len(c.Candidates))
-		case "5":
-			fields := make([]string, 6)
-			prompts := []string{"JSON path", "Mode (private_lab/approved_field_plan; blank for existing)", "Exact source IPv4", "Direction (A_TO_B/B_TO_A)", "Sender ID", "Receiver ID"}
-			for i, prompt := range prompts {
-				fmt.Print(prompt, ": ")
-				if !s.Scan() {
-					return s.Err()
-				}
-				fields[i] = strings.TrimSpace(s.Text())
-			}
-			if err := addSource(fields[0], fields[1], Candidate{IP: fields[2], Direction: fields[3], Sender: fields[4], Receiver: fields[5]}); err != nil {
-				fmt.Fprintln(os.Stderr, err)
-			} else {
-				fmt.Println("Source saved; no traffic emitted")
-			}
-		case "4":
-			fmt.Print("Evidence JSON file: ")
-			if !s.Scan() {
-				return s.Err()
-			}
-			items, err := report(strings.TrimSpace(s.Text()))
-			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				break
-			}
-			if err := pretty(items); err != nil {
-				return err
-			}
-		default:
-			fmt.Println("Unknown command")
-		}
-	}
-}
 func preflight() error {
 	return pretty(map[string]any{"schema_version": schema, "utc": time.Now().UTC().Format(time.RFC3339), "os": runtime.GOOS, "arch": runtime.GOARCH, "go_runtime": runtime.Version(), "probe_engine": "LAB_PRIVATE_NETNS_RAW_ADAPTER_UNDER_VALIDATION", "field_traffic": "DISABLED", "test_network": "LOOPBACK_OR_PROVEN_ISOLATED_RFC1918_NETNS_ONLY", "loopback_two_agent": "AVAILABLE"})
 }
@@ -355,7 +297,7 @@ func run(args []string) error {
 	case "menu":
 		return menu()
 	case "sources":
-		return sourceAdd(args[1:])
+		return sourceCommand(args[1:])
 	case "lab":
 		return labCLI(args[1:])
 	case "plan", "report":

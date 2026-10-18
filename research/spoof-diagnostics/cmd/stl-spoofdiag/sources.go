@@ -28,7 +28,7 @@ func addSource(path, mode string, item Candidate) error {
 		if !fi.Mode().IsRegular() {
 			return errors.New("refusing non-regular or symbolic link source file")
 		}
-		prev, err := readCandidates(path)
+		prev, err := readCandidateInventory(path, true)
 		if err != nil {
 			return err
 		}

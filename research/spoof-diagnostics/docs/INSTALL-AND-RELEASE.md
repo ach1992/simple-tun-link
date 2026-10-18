@@ -38,7 +38,11 @@ Target deliverable: one per-architecture **self-contained archive** `spoofdiag-v
 
 The installer must require **zero** `apt`, `pip`, `curl`, `wget`, Go toolchain or DNS. On supported Linux, `/bin/sh`, `tar`, `sha256sum`, file/permissions utilities and a compatible kernel are explicit baseline prerequisites; verify before changing files. Build/download prerequisites are **CI-side**, not host-side. No external repository/package setup is allowed.
 
-## 3. Online one-line installation uses the SAME offline engine
+## 3. Online installation uses the SAME offline engine
+
+Current prototype: `scripts/online-bootstrap.sh` takes a **pinned exact** prefixed tag and an independently authenticated archive digest, downloads with HTTPS, rejects unknown archive members, and invokes the offline installer. The local `--local-url http://127.0.0.1:PORT` test route cannot be used with a published release tag and does not permit external HTTP. Verified in a temporary test-root with local HTTP: correct archive verified/installed twice; digest mismatch, invalid URL/version and network failure rejected. **No public tagged tool release, independently signed manifest, or trustworthy one-line command is presently published.** Do not advertise a working `releases/latest` alias for the standalone diagnostic.
+
+## 3a. Future release one-liner must use an immutable, authenticated bootstrap
 
 Future online bootstrap, only after the tool's first validated release:
 
