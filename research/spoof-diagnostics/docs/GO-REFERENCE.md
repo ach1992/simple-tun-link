@@ -1,6 +1,6 @@
 # Go technical reference — standalone Spoof Diagnostics
 
-This is a **partial, lab-restricted Go diagnostic** independent of STL runtime and installation. Go supports `version`, `preflight`, `sources add`, `plan`, `report`, a basic `menu`, and actual authenticated two-agent **local** `lab` sessions with signed, portable receipts. It also supports a signed offline challenge/observation exchange when mTLS control is absent. Normal Go agents remain restricted to `127.0.0.1`; a separate **strictly network-namespace-gated** raw IPv4 RFC1918 test adapter is now available for independent local kernel acceptance. Public/real-world field probes remain disabled. No usable private L3 Link has been built. The removed historical Python experiment is recoverable in Git history;
+This is a **partial, lab-restricted Go diagnostic** independent of STL runtime and installation. Go supports `version`, `preflight`, `sources add`, `plan`, `report`, a 15-action interactive `menu`, and actual authenticated two-agent **local** `lab` sessions with signed, portable receipts. It also supports a signed offline challenge/observation exchange when mTLS control is absent. Normal Go agents remain restricted to `127.0.0.1`; a separate **strictly network-namespace-gated** raw IPv4 RFC1918 test adapter is now available for independent local kernel acceptance. Public/real-world field probes remain disabled. No usable private L3 Link has been built. The removed historical Python experiment is recoverable in Git history;
 its test results must not be substituted for exact Go acceptance.
 
 `plan` validates **only explicit sources** in CSV/JSON. The file marks sender/receiver and A_TO_B vs B_TO_A; no IP block scanning is performed. `report` evaluates JSON declarations supplied by the operator; it does **NOT** cryptographically verify their observations. Accordingly results say `UNVERIFIED_INPUT_DECLARATION` and never claim private L3.
@@ -131,41 +131,65 @@ A valid signed receipt with **zero** packets is an `INCONCLUSIVE` delivery resul
 (beyond historical 1/1 private samples), a fully verified multi-candidate
 failure matrix, production-grade peer credential provisioning, general
 field implementation, power-loss/disk-full recovery validation,
-independently verified publisher signatures, and a published tool-specific
-Release with a usable public online one-liner. A tool-owned interrupted
+independently verified publisher signatures, and a **published** tool-specific
+Release. The versionless channel installer is implemented but remains
+`status=unpublished` until its first independently approved tool release. A tool-owned interrupted
 installer stage can be recovered under the destination lock, but actual
 power-loss acceptance remains untested. A local HTTP online bootstrap is implemented and tested but unpublished. Keep `LAB_VERIFIED` and `FIELD_READY` unset until those independent gates pass.
 
-## Downloadable prebuilt lab archives (temporary CI artifacts, not a Release)
+## Downloadable prebuilt lab archives (temporary CI artifacts, not a published release)
 
-The dedicated `Spoof Diagnostics (independent Go)` CI workflow, when green, uploads an **unreleased, short-retention** Actions artifact named `spoofdiag-lab-<exact HEAD SHA>`, containing checksummed `linux_amd64` and `linux_arm64` offline Go archives. In GitHub open **Actions → Spoof Diagnostics (independent Go) → successful SHA-pinned run → Artifacts**, download that archive on a trusted workstation, compare the embedded version/commit against the expected PR HEAD and independently verified hash, and copy only the desired architecture's full archive to `/root/stl-spoofdiag/` on an authorized isolated test guest. An Actions ZIP plus SHA file from the same untrusted account does **not** supply publisher authentication and does **not** enable field operation. The destination itself needs neither Go nor Internet. These previews expire, and the final release still needs a separate artifact review, provenance trust and Owner release authorization.
+The dedicated `Spoof Diagnostics (independent Go)` CI workflow, when green, uploads an **unreleased, short-retention** Actions artifact named `spoofdiag-lab-<exact HEAD SHA>`, containing checksummed `linux_amd64` and `linux_arm64` offline Go archives. In GitHub open **Actions → Spoof Diagnostics (independent Go) → successful SHA-pinned run → Artifacts**, download that archive on a trusted workstation, compare the embedded version/commit against the expected `dev-spoof` or topic-PR HEAD and independently verified hash, and copy only the desired architecture's full archive to `/root/stl-spoofdiag/` on an authorized isolated test guest. An Actions ZIP plus SHA file from the same untrusted account does **not** supply publisher authentication and does **not** enable field operation. The destination itself needs neither Go nor Internet. These previews expire, and the final release still needs a separate artifact review, provenance trust and Owner release authorization.
 
 ## Online and offline install: one verified engine
 
-The source contains `scripts/online-bootstrap.sh`, an online transport for the **identical** offline installation engine. It accepts only an explicitly selected `spoofdiag-vX.Y.Z` release tag and an **independently authenticated SHA256** of the exact architecture-specific archive. It downloads through HTTPS, verifies archive identity and exact safe members, then invokes `install-offline.sh`. It never downloads Go/Python, runs `go build`, or takes STL `releases/latest` as the tool version. For developer-only tests, `--local-url http://127.0.0.1:PORT` accepts an explicitly selected `dev-*` snapshot. Passing a digest served alongside the archive without an independent trust path is **not** publisher authentication.
+The **general, versionless command** is now documented in
+[the operator README](../README.md#install-online--one-general-command-no-version-number).
+`scripts/install-latest.sh` resolves **only** the selected SpoofDiag
+release through the canonical `release-channel.txt`; at present that
+channel says `status=unpublished` so it fails before installing anything.
+It does not use GitHub's shared STL `releases/latest` endpoint.
 
-The following invocation pattern becomes executable **only after a real tagged tool release and independently verified digest exist**; values in capitals are intentionally not live or inferred:
+The existing `scripts/online-bootstrap.sh` remains the **pinned engine**.
+It accepts an exact prefixed release tag and an independently trusted
+SHA256 of the architecture-specific archive, downloads only over HTTPS,
+checks archive identity and safe members, then invokes
+`install-offline.sh`. It saves verified downloads in
+`/root/stl-spoofdiag/` by default (or in an explicitly given private
+`--inbox`). The Go/Python toolchain is never downloaded. A local
+HTTP/127.0.0.1 test fixture accepts only explicit `dev-*` snapshots.
+A checksum fetched from the same publisher is not independent
+publisher-signature authentication.
 
-```sh
-bash scripts/online-bootstrap.sh --version spoofdiag-vX.Y.Z \
-  --sha256 INDEPENDENTLY_VERIFIED_64_HEX_ARCHIVE_SHA256 --install
-```
-
-Its local test-server download, verify-only, install, idempotent reinstall, wrong-hash and unavailable-host negative controls have passed; there is **no public download claim**. For an already verified complete offline archive, unpack in a new private directory, run the included `install-offline.sh --verify`, then `--install`; the destination needs only the bundled static Go executable, Bash, basic file utilities and a matching Linux kernel/architecture, **not Go itself**. Adding automatic Go downloads or opaque regional mirrors would increase risk without a runtime need. [Full installation and release contract](INSTALL-AND-RELEASE.md).
+For an already verified complete offline archive, see the
+[step-by-step beginner instructions](../README.md#install-offline--beginner-friendly-instructions).
+Always verify the expected external SHA first, extract into a **fresh**
+private versioned directory, run `install-offline.sh --verify`,
+and then `--install`. No Go runtime, `apt`, `pip` or other package
+installation is required on the target. [Full installation and
+release contract](INSTALL-AND-RELEASE.md).
 
 ## Use without internet, no packages or build tools on the destination
 
-Once a snapshot/release directory is built using the Go builder, place its complete files under `/root/stl-spoofdiag/` on the authorized server. Source files and archives are **inbox material**, not the installation location. On the destination, from the **verified and extracted exact archive**:
+Once a complete archive is transferred to
+`/root/stl-spoofdiag/`, verify its external SHA256 and extract it to a
+**new** private `extracted-<archive-name>/stl-spoofdiag/` directory.
+The installed program itself lives in `/opt/stl-spoofdiag/`, not
+in that download inbox. As root, `cd` into the package's **inner**
+`stl-spoofdiag/` directory, where the installer and sample files reside:
 
 ```sh
-cd /root/stl-spoofdiag/<verified-extracted-directory>
 bash install-offline.sh --verify
-sudo bash install-offline.sh --install
+bash install-offline.sh --install
 stl-spoofdiag version
 stl-spoofdiag menu
 stl-spoofdiag plan --file sources-private.csv
 stl-spoofdiag report --file evidence-private.json
 ```
+
+The full command sequence showing how to build the exact extraction
+directory is in [the canonical README](../README.md#install-offline--beginner-friendly-instructions);
+do not type literal `<archive-name>` placeholders.
 
 The operator must confirm `YES` on interactive installation or lifecycle changes; use `--accept` **only** for explicitly authorized noninteractive/test operations. To upgrade, verify a new archive and invoke its `--install` command again; the old verified version stays stored locally. To revert invoke `bash install-offline.sh --rollback --to EXACT_STORED_VERSION`, or remove only verified tool-owned binaries with `bash install-offline.sh --uninstall`. Both operations preserve private configuration and evidence. The installer uses standard Linux `flock` to refuse concurrent mutations of the same destination, and safely recovers precisely identified, tool-owned abandoned `.stage.XXXXXXXX` files after an interruption; unknown files or symlinks are never recursively cleared. For other interruptions (disk full, read-only mount, power loss), review and rerun the verified installer rather than deleting unrecognized resources. Use `--destdir /existing/test-root` only for disposable test-root acceptance. No `apt`, `pip`, `curl`, `wget` or Go toolchain should run on the destination. The installer places the standalone binary but **does not automatically start an agent**, open firewall ports, create Link/network configurations or enable public-source spoofing. Local agents are started explicitly with `lab` commands. Default mTLS/UDP sockets are loopback-only; separate `netns-*` commands run only in a verified isolated RFC1918 lab namespace and are not field-capable.
 
