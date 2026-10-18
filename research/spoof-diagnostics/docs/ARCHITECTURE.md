@@ -66,7 +66,7 @@ The menu and CLI invoke the same engine and expose the same validation, operatio
 
 ## 4. Private control and evidence rendezvous
 
-Normal mode uses mutually authenticated TLS to coordinate two owned agents. **Absence of a control path is not evidence the test source IP was filtered.** A separate *offline signed evidence transfer* mode is required before claiming readiness in impaired-control environments: export immutable session challenge, import signed and run-bound receive observations after the test, verify source/peer identity, freshness and replay, and separate inconclusive from failure. Cryptographic validity does not prove physical path by itself.
+The Go candidate now implements a genuine, **loopback-only** TLS 1.3 mutually authenticated control channel with HMAC-authenticated UDP observations and receiver Ed25519-signed portable receipts. A separate functional **local** mode issues sender-signed, bounded/expiring challenges; the receiver independently validates its allowlist, keeps a private consumed-run ledger, verifies individually Ed25519-signed UDP packets, and signs offline receipts. Operators can verify challenge and receipt together without mTLS connectivity. **Absence of the control path is not evidence of packet rejection.** These local modes verify authentication/replay logic, NOT public-IP admission, independent physical egress, asymmetric return routing, or private L3. A general authorized field/raw adapter and cross-host network provisioning are NOT implemented.
 
 Provision and protect peer keys on the appropriate private hosts. Do not package production keys, operator permit documents or observed candidate inventories into a public release.
 

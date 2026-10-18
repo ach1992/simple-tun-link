@@ -1,6 +1,6 @@
 # Fully isolated local acceptance plan — Go diagnostic instrument
 
-Status: **reproducible acceptance plan, not a completed VM test report**. The current Go offline console has NO network probe engine. Execute this plan only against an exact future Go candidate that implements it and only in disposable, completely isolated local guests. The earlier Turkey Python/inline namespace results do not validate the new Go code.
+Status: **full raw/VM acceptance plan, NOT completed**. A partial Go implementation now performs real mutually authenticated **127.0.0.1** two-agent control/UDP exchange, verifies signed peer receipts and supports out-of-band Ed25519-signed challenges and UDP observations. Local source-IP admission, netns/raw packet egress, asymmetric routing and actual encrypted L3 remain **NOT_RUN**. Prior Python/inline labs are not Go acceptance evidence.
 
 ## Environment
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Offline installation of the standalone Go *operator console* (no probe engine).
+# Offline installation of the standalone Go tool (local-loopback lab only; field disabled).
 # Deliberately never calls apt/curl/wget/pip/go and never mutates STL resources.
 set -euo pipefail
 umask 077
@@ -20,8 +20,9 @@ while (($#)); do
   shift
 done
 [[ $mode == verify || $mode == install ]] || usage
-[[ $destdir == /* && $destdir != *'/../'* && $destdir != *'/./'* ]] || usage
+[[ $destdir == /* && $destdir != *'/../'* && $destdir != *'/./'* && $destdir != */.. && $destdir != */. ]] || usage
 [[ -d $destdir && ! -L $destdir ]] || { echo 'existing non-symlink destination root required' >&2; exit 1; }
+[[ $(cd -P -- "$destdir" && pwd -P) == "$destdir" ]] || { echo 'non-canonical destination root' >&2; exit 1; }
 
 bundle=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 for name in stl-spoofdiag install-offline.sh README.md LICENSE sources-private.csv evidence-private.json BUILD-MANIFEST.txt SHA256SUMS; do
@@ -66,6 +67,14 @@ versions=$base/releases
 launchdir=$prefix/usr/local/bin
 launcher=$launchdir/stl-spoofdiag
 
+# Reject symlinked intermediate paths even if the leaf itself looks owned.
+# This also applies to preexisting release directories and the launcher parent.
+for d in "$prefix/opt" "$base" "$versions" "$prefix/usr" "$prefix/usr/local" "$launchdir"; do
+  if [[ -e $d || -L $d ]]; then
+    [[ -d $d && ! -L $d ]] || { echo "unsafe intermediate directory: $d" >&2; exit 1; }
+  fi
+done
+
 # Existing resources must be provably ours; preserve foreign objects.
 if [[ -e $base || -L $base ]]; then
   [[ -d $base && ! -L $base && -f $base/.product-id && ! -L $base/.product-id ]] || { echo 'foreign or ambiguous install location' >&2; exit 1; }
@@ -75,10 +84,11 @@ if [[ -e $launcher || -L $launcher ]]; then
   [[ -L $launcher && $(readlink "$launcher") == "$base/current/stl-spoofdiag" ]] || { echo 'foreign launcher; refusing to overwrite' >&2; exit 1; }
 fi
 if [[ -e $base/current || -L $base/current ]]; then
-  [[ -L $base/current && $(readlink "$base/current") == releases/* ]] || { echo 'foreign current version pointer' >&2; exit 1; }
+  current_target=$(readlink "$base/current" 2>/dev/null || true)
+  [[ -L $base/current && $current_target =~ ^releases/(dev-[a-z0-9.-]+|spoofdiag-v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?)$ ]] || { echo 'foreign or traversing current version pointer' >&2; exit 1; }
 fi
 if [[ -e $versions/$version || -L $versions/$version ]]; then
-  [[ -d $versions/$version && ! -L $versions/$version && -f $versions/$version/BUILD-MANIFEST.txt ]] || { echo 'ambiguous existing version directory' >&2; exit 1; }
+  [[ -d $versions/$version && ! -L $versions/$version && -f $versions/$version/BUILD-MANIFEST.txt && ! -L $versions/$version/BUILD-MANIFEST.txt && -f $versions/$version/stl-spoofdiag && ! -L $versions/$version/stl-spoofdiag && -f $versions/$version/SHA256SUMS && ! -L $versions/$version/SHA256SUMS ]] || { echo 'ambiguous existing version directory' >&2; exit 1; }
   cmp -s "$bundle/BUILD-MANIFEST.txt" "$versions/$version/BUILD-MANIFEST.txt" || { echo 'version identity conflict' >&2; exit 1; }
   cmp -s "$bundle/stl-spoofdiag" "$versions/$version/stl-spoofdiag" || { echo 'version binary conflict' >&2; exit 1; }
 else

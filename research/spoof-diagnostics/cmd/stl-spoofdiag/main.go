@@ -1,9 +1,11 @@
 // stl-spoofdiag is a standalone research tool. This Go port currently implements
-// offline operator validation and evidence reporting, not a field probe engine.
+// offline operator validation, local two-agent loopback measurement and signed receipts.
+// It does not provide a public field/source-spoof probe engine.
 package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -141,14 +143,13 @@ func validateCandidates(c CandidateFile) error {
 
 func readCandidates(path string) (CandidateFile, error) {
 	var result CandidateFile
-	f, err := os.Open(path)
+	data, err := readSmallRegular(path, 4<<20)
 	if err != nil {
 		return result, err
 	}
-	defer f.Close()
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".json":
-		dec := json.NewDecoder(io.LimitReader(f, 4<<20))
+		dec := json.NewDecoder(bytes.NewReader(data))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&result); err != nil {
 			return result, err
@@ -160,7 +161,7 @@ func readCandidates(path string) (CandidateFile, error) {
 	case ".csv":
 		result.SchemaVersion = schema
 		result.Mode = "private_lab"
-		r := csv.NewReader(io.LimitReader(f, 4<<20))
+		r := csv.NewReader(bytes.NewReader(data))
 		r.FieldsPerRecord = 4
 		rows, err := r.ReadAll()
 		if err != nil {
@@ -236,12 +237,11 @@ func classify(o Observation) (Summary, error) {
 }
 
 func report(path string) ([]Summary, error) {
-	f, err := os.Open(path)
+	data, err := readSmallRegular(path, 8<<20)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	dec := json.NewDecoder(io.LimitReader(f, 8<<20))
+	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	var src EvidenceFile
 	if err := dec.Decode(&src); err != nil {
@@ -341,11 +341,11 @@ func menu() error {
 	}
 }
 func preflight() error {
-	return pretty(map[string]any{"schema_version": schema, "utc": time.Now().UTC().Format(time.RFC3339), "os": runtime.GOOS, "arch": runtime.GOARCH, "go_runtime": runtime.Version(), "probe_engine": "NOT_IMPLEMENTED_IN_GO_PORT", "field_traffic": "DISABLED", "test_network": "NONE"})
+	return pretty(map[string]any{"schema_version": schema, "utc": time.Now().UTC().Format(time.RFC3339), "os": runtime.GOOS, "arch": runtime.GOARCH, "go_runtime": runtime.Version(), "probe_engine": "NOT_IMPLEMENTED_IN_GO_PORT", "field_traffic": "DISABLED", "test_network": "LOOPBACK_ONLY", "loopback_two_agent": "AVAILABLE"})
 }
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: stl-spoofdiag version|preflight|sources|plan|report|menu")
+		return errors.New("usage: stl-spoofdiag version|preflight|sources|plan|report|lab|menu")
 	}
 	switch args[0] {
 	case "version":
@@ -356,6 +356,8 @@ func run(args []string) error {
 		return menu()
 	case "sources":
 		return sourceAdd(args[1:])
+	case "lab":
+		return labCLI(args[1:])
 	case "plan", "report":
 		cmd := flag.NewFlagSet(args[0], flag.ContinueOnError)
 		p := cmd.String("file", "", "existing CSV or JSON file")

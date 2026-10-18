@@ -1,6 +1,6 @@
 # Independent installer, offline package and release contract
 
-**Design/acceptance target only.** This file does not claim that a published `spoofdiag` release or a working installer currently exists. Do not attempt the example commands until their artifacts and checks have been independently verified.
+**Partially implemented contract.** A buildable standalone offline Go archive and a verifying/idempotent install script exist for local release-candidate testing; owned-path/symlink negative controls were exercised in disposable test roots. **No public tool release or validated online one-liner exists.** Rollback/uninstall management and independent publisher signature verification remain acceptance gaps; do not mistake current install smoke for full lifecycle acceptance.
 
 ## 1. Download/storage location on each authorized server
 

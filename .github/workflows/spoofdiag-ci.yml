@@ -70,3 +70,21 @@ jobs:
             echo 'ERROR: foreign launcher was overwritten' >&2
             exit 1
           fi
+
+          # Regression: an apparently owned directory reached through a
+          # symlinked intermediate /opt path must never receive installs.
+          mkdir -p "$RUNNER_TEMP/spoofdiag-symlink/opt"
+          ln -s "$RUNNER_TEMP/spoofdiag-testroot/opt/stl-spoofdiag" "$RUNNER_TEMP/spoofdiag-symlink/opt/stl-spoofdiag"
+          if bash "$bundle/install-offline.sh" --install --accept --destdir "$RUNNER_TEMP/spoofdiag-symlink"; then
+            echo 'ERROR: symlinked install intermediate was accepted' >&2
+            exit 1
+          fi
+
+          # A package for the other architecture must be rejected on AMD64.
+          bash scripts/package-offline.sh "$RUNNER_TEMP/spoofdiag-arm64" "$GITHUB_SHA" dev-ci arm64
+          mkdir -p "$RUNNER_TEMP/spoofdiag-arm64-extracted"
+          tar -C "$RUNNER_TEMP/spoofdiag-arm64-extracted" -xzf "$RUNNER_TEMP/spoofdiag-arm64/spoofdiag-dev-ci_linux_arm64.tar.gz"
+          if bash "$RUNNER_TEMP/spoofdiag-arm64-extracted/stl-spoofdiag/install-offline.sh" --verify; then
+            echo 'ERROR: wrong architecture accepted' >&2
+            exit 1
+          fi
