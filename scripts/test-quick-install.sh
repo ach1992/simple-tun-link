@@ -118,6 +118,9 @@ set -euo pipefail
 printf 'sudo' >> "$STL_TEST_EXECUTIONS"
 printf ' %s' "$@" >> "$STL_TEST_EXECUTIONS"
 printf '\n' >> "$STL_TEST_EXECUTIONS"
+if [[ ${STL_TEST_SUDO_FAIL:-} == 1 && ${1:-} == bash ]]; then
+  exit 42
+fi
 if [[ "$#" -eq 2 && "$1" == stl && "$2" == menu ]]; then
   printf '%s\n' 'FAKE_STL_MENU_RENDERED'
 fi
@@ -181,11 +184,35 @@ for scenario in STL_TEST_DOWNLOAD_FAIL STL_TEST_SYNTAX_FAIL; do
     echo "Bootstrap incorrectly accepted $scenario" >&2
     exit 1
   fi
+  if [[ $scenario == STL_TEST_DOWNLOAD_FAIL ]]; then
+    grep -q 'download failed before execution' "$scratch/err" || { echo 'Missing download stage guidance' >&2; exit 1; }
+  else
+    grep -q 'syntax validation failed' "$scratch/err" || { echo 'Missing syntax stage guidance' >&2; exit 1; }
+  fi
 done
 [[ "$before" == "$(wc -c < "$STL_TEST_EXECUTIONS")" ]] || {
   echo 'Bad or partial installer passed privilege elevation.' >&2
   exit 1
 }
+# Failed canonical install/update is not a successful bootstrap. Fake sudo
+# exits with a controlled status after recording the action; no host effects.
+if (( EUID != 0 )); then
+  for action in install update; do
+    : > "$STL_TEST_EXECUTIONS"
+    args=()
+    [[ $action != update ]] || args=(update)
+    if STL_TEST_SUDO_FAIL=1 bash "$repo/scripts/quick-install.sh" v0.1.0-rc.123 "${args[@]}" > "$scratch/out" 2>"$scratch/err"; then
+      echo "Bootstrap falsely accepted failed canonical $action" >&2
+      exit 1
+    fi
+    grep -q 'did not complete (exit 42)' "$scratch/err" || { echo "Missing $action recovery guidance" >&2; exit 1; }
+    grep -q 'retained recovery' "$scratch/err" || { echo "Missing uncertain-transaction guidance" >&2; exit 1; }
+    if grep -q 'FAKE_STL_MENU_RENDERED' "$scratch/out" || grep -q 'sudo stl menu' "$STL_TEST_EXECUTIONS"; then
+      echo "Failed $action launched STL menu" >&2
+      exit 1
+    fi
+  done
+fi
 # The most important user journey: a bootstrap streamed to bash should
 # reattach fd 0 to the actual terminal after its install step and launch STL.
 if command -v script >/dev/null 2>&1; then

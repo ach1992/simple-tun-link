@@ -41,13 +41,24 @@ quick_install_main() {
   source_url="https://raw.githubusercontent.com/ach1992/simple-tun-link/$version/scripts/install.sh"
   tmp=$(mktemp)
   trap 'rm -f -- "$tmp"' EXIT
-  curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 -o "$tmp" "$source_url"
-  [[ -s $tmp ]] || { echo "[FAILED] STL installer was not downloaded." >&2; exit 1; }
-  bash -n "$tmp"
+  if ! curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 --retry-max-time 150 -o "$tmp" "$source_url"; then
+    echo '[FAILED] STL installer download failed before execution. Check HTTPS/DNS reachability of raw.githubusercontent.com and the exact official release; no installer started.' >&2
+    return 1
+  fi
+  [[ -s $tmp ]] || { echo '[FAILED] STL installer download is empty; no installer started. Verify the official release and retry the download.' >&2; return 1; }
+  if ! bash -n "$tmp"; then
+    echo '[FAILED] STL installer syntax validation failed; no installer started. Verify the tagged release and its installer before retrying.' >&2
+    return 1
+  fi
+  local install_status=0
   if (( EUID == 0 )); then
-    bash "$tmp" "$action" --version "$version" --backends "$backends"
+    bash "$tmp" "$action" --version "$version" --backends "$backends" || install_status=$?
   else
-    sudo bash "$tmp" "$action" --version "$version" --backends "$backends"
+    sudo bash "$tmp" "$action" --version "$version" --backends "$backends" || install_status=$?
+  fi
+  if (( install_status != 0 )); then
+    printf '[FAILED] STL %s %s did not complete (exit %d). Read the preceding installer stage/error; inspect dpkg --audit, STL install-record and any retained recovery before retrying. A partial APT or binary transaction may persist.\n' "$version" "$action" "$install_status" >&2
+    return "$install_status"
   fi
   echo "[OK] STL $version $action completed. Opening the menu on this terminal..."
   # When a bootstrap script is piped into bash, fd 0 is the script content,

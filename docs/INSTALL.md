@@ -97,6 +97,31 @@ repositories are required after its LTS expiry; prefer supported
 maintained newer releases where feasible. Never disable signature
 validation to make an unsupported repository pass.
 
+## When installer, selected PREPARE, or Update fails
+
+A failed check is not permission to repair the host automatically. The
+operator output identifies the failed stage and one safe next check;
+read-only inspection may be repeated after host conditions change, but
+package, binary and service mutations require fresh confirmation.
+
+| Stage / operator reason | Read-only next check | Mutation/retry boundary |
+| --- | --- | --- |
+| Quick install HTTPS download or installer syntax | Confirm the selected official release, HTTPS/DNS reachability to `raw.githubusercontent.com`, and the downloaded installer's authenticity | No installer started; never run an incomplete or mutable download as root |
+| `unsupported_or_unverified_os` | `cat /etc/os-release` and [supported hosts](SUPPORTED-ENVIRONMENTS.md) | Do not forge OS fields or modify distribution identity |
+| `apt_source_trust_unverified` or `apt_dependency_plan_unverified` | `apt-cache policy iproute2 iptables kmod` and inspect configured distribution sources | No verified dependency plan; never bypass signatures or edit sources automatically |
+| `requirements_check_timeout` or `requirements_inventory_unverified` | Check local load and APT metadata, then repeat the read-only Create inventory | A failed preview is not PREPARE consent |
+| `github_release_api_limited`, `release_lookup_timeout`, or `release_catalogue_invalid` | Check [official releases](https://github.com/ach1992/simple-tun-link/releases) and HTTPS reachability to `api.github.com` | No binary update began; do not substitute an unverified tag |
+| APT lists lock held by another `apt-get` | `ps -ef` for legitimate package-manager activity and `dpkg --audit` | The installer waits a bounded period. Do not delete lock files, kill APT, or run a whole-host upgrade to clear the lock |
+| Canonical PREPARE/install package transaction interrupted | `dpkg --audit`, then verify selected installed packages with `dpkg-query -W` | Package/service hooks may persist. Inspect and reconcile before beginning another transaction; never blindly retry |
+| `STL ownership record is missing or not regular` on `update` | `namei -l /usr/local/lib/simple-tun-link/install-record` and `stat` the `stl`/`stlink` installation paths | An incomplete first install is not an update; never forge ownership metadata or replace existing foreign binaries |
+| Installer partial publication or failed identity verification | Check the reported private recovery directory, installed executable identity and ownership record, without changing them | Stop before another update/uninstall; retained rollback evidence is authoritative |
+
+Avoid posting raw APT source configuration, package logs, State files, or
+private Setup Links publicly: they can contain credentials or sensitive
+host details. Provide redacted reason codes and relevant command exit
+statuses instead. A completed installer alone does not prove that live
+Links can reach their peers or survive reboot.
+
 ## Read-only diagnosis of setup or persistence failure
 
 If Create or Import reports a failure at `persistence`, an unconfirmed

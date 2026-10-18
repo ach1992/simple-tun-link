@@ -286,7 +286,7 @@ apt_update_is_only_lists_lock() {
   while IFS= read -r line; do
     case "$line" in
       'E: Could not get lock /var/lib/apt/lists/lock'*|'E: Unable to lock directory /var/lib/apt/lists/'*) ;;
-      E:\ *) return 1 ;;
+      E:\ *|W:\ *) return 1 ;;
     esac
   done <<< "$output"
 }

@@ -28,6 +28,7 @@ func menuSettings(out, errOut io.Writer, options *runtimeOptions) int {
 	snapshot, err := state.NewFileStore(root).Load(context.Background())
 	if err != nil {
 		fmt.Fprintln(errOut, "Settings unavailable: saved state cannot be read; no changes made.")
+		fmt.Fprintln(errOut, "Next: inspect the configured STL State directory ownership and permissions read-only; do not replace or delete State.")
 		return 1
 	}
 	menuSection(out, "Settings / read-only")
@@ -58,6 +59,7 @@ func menuUninstall(out, errOut io.Writer, options *runtimeOptions) int {
 	snapshot, err := state.NewFileStore(root).Load(context.Background())
 	if err != nil {
 		fmt.Fprintln(errOut, "Uninstall blocked: saved state cannot be inspected. No files were removed.")
+		fmt.Fprintln(errOut, "Next: inspect the configured STL State directory and backups read-only; reconcile ownership before attempting uninstall.")
 		return 1
 	}
 	menuActionSection(out, "Uninstall / preparation only", "PREPARE")

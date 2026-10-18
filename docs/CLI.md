@@ -75,6 +75,11 @@ discoverable.
   gates. Major/minor migration, RC-to-Stable, mutable or unknown release
   artifacts require independent manual verification. Uninstall is a guided, individually
   authorized cleanup—not a mass Link or credential purge.
+  Operator failure pages for selected packages and official releases
+  give an authored, non-secret reason category and a read-only next check.
+  APT/installer failures can leave partial package or executable effects;
+  neither a failed PREPARE nor a failed update grants permission for a blind
+  retry. Machine-readable JSON and protected handoffs remain unchanged.
 
 ### Manual GRE/IPIP Native pairing (no Setup Link)
 

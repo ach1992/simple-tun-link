@@ -82,6 +82,46 @@ func TestMenuReleaseCatalogueFailsClosedOnTruncatedOrInvalidData(t *testing.T) {
 	}
 }
 
+func TestReleaseLookupGuidanceClassifiesFailuresWithoutLeakingNetworkError(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantReason string
+		wantAction string
+	}{
+		{"timeout", context.DeadlineExceeded, "release_lookup_timeout", "api.github.com"},
+		{"rate limit", errors.New("release catalogue returned status 429"), "github_release_api_limited", "retry later"},
+		{"forbidden", errors.New("release catalogue returned status 403"), "github_release_api_limited", "retry later"},
+		{"service", errors.New("release catalogue returned status 503"), "github_release_http_503", "HTTPS"},
+		{"invalid json", errors.New("release catalogue is not valid JSON: private-API-token"), "release_catalogue_invalid", "unverified tag"},
+		{"incomplete", errors.New("no verified complete public release was found"), "no_complete_public_release", "required artifacts"},
+		{"untrusted redirect", errors.New("release API redirected outside trusted origin"), "release_origin_untrusted", "HTTPS/proxy"},
+		{"unknown", errors.New("https://username:secret@proxy.example"), "release_lookup_unverified", "api.github.com"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			reason, next := menuReleaseLookupGuidance(tc.err)
+			if reason != tc.wantReason || !strings.Contains(next, tc.wantAction) ||
+				strings.Contains(reason+next, "private-API-token") ||
+				strings.Contains(reason+next, "username:secret") {
+				t.Fatalf("lookup guidance: reason=%q next=%q", reason, next)
+			}
+			var out, errOut bytes.Buffer
+			options := &runtimeOptions{stateRoot: filepath.Join(t.TempDir(), "no-state"),
+				menuReleases: func(context.Context) ([]menuOfficialRelease, error) { return nil, tc.err }}
+			if code := runWithRuntimeInput([]string{"menu"}, strings.NewReader("6\n0\n8\n"),
+				&out, &errOut, options); code != 0 ||
+				!strings.Contains(out.String(), reason) ||
+				!strings.Contains(out.String(), tc.wantAction) ||
+				strings.Contains(out.String()+errOut.String(), "private-API-token") ||
+				strings.Contains(out.String()+errOut.String(), "username:secret") ||
+				strings.Contains(out.String(), "Update complete") {
+				t.Fatalf("unsafe failed release lookup: code=%d out=%q err=%q", code, out.String(), errOut.String())
+			}
+		})
+	}
+}
+
 func TestMenuForwardReleaseUpgradeGateRejectsDowngradesAndUnknownVersions(t *testing.T) {
 	for _, tc := range []struct {
 		current, target string

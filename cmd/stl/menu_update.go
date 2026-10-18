@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -278,6 +279,41 @@ func menuRunCanonicalUpdate(ctx context.Context, release menuOfficialRelease, ou
 	return nil
 }
 
+// Remote catalogue errors are data, never trusted diagnostic text.
+// Only exact known public categories are shown; arbitrary network errors
+// can contain tokens, proxies, or untrusted URL components.
+func menuReleaseLookupGuidance(err error) (reason, next string) {
+	if err == nil {
+		return "", ""
+	}
+	var netErr net.Error
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
+		return "release_lookup_timeout", "Check reachability of api.github.com, then retry the Update menu; no download or update was started."
+	}
+	message := err.Error()
+	const httpPrefix = "release catalogue returned status "
+	if strings.HasPrefix(message, httpPrefix) {
+		status, convErr := strconv.Atoi(strings.TrimPrefix(message, httpPrefix))
+		if convErr == nil && status >= 100 && status <= 599 {
+			if status == 403 || status == 429 {
+				return "github_release_api_limited", "GitHub returned an API access/rate-limit response. Check GitHub Releases in a browser and retry later."
+			}
+			return fmt.Sprintf("github_release_http_%d", status), "Check GitHub Releases availability and HTTPS access, then retry; no update started."
+		}
+	}
+	switch {
+	case strings.HasPrefix(message, "release catalogue is not valid JSON"),
+		message == "release catalogue could not be read within size limit":
+		return "release_catalogue_invalid", "The release response was incomplete or malformed. Check GitHub Releases and retry later; do not install an unverified tag."
+	case message == "no verified complete public release was found":
+		return "no_complete_public_release", "Open official GitHub Releases and check the required artifacts; only complete published releases may update automatically."
+	case message == "release API redirected outside trusted origin":
+		return "release_origin_untrusted", "GitHub release inspection redirected unexpectedly. Check HTTPS/proxy settings; do not override origin validation."
+	default:
+		return "release_lookup_unverified", "Check reachability of api.github.com and official GitHub Releases, then retry the read-only lookup."
+	}
+}
+
 // The interface can choose an exact official release. Only a fresh owner
 // confirmation on a real root-owned STL installation can run the canonical
 // updater. Scripts/redirected sessions always receive copyable guidance.
@@ -296,7 +332,10 @@ func menuUpdate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 	releases, lookupErr := menuPublicReleases(ctx, options)
 	cancel()
 	if lookupErr != nil {
+		reason, next := menuReleaseLookupGuidance(lookupErr)
 		menuNotice(out, "WARNING", "Cannot verify the official release list right now. No update was started.")
+		menuField(out, "Reason", reason)
+		menuField(out, "NEXT ACTION", next)
 		menuField(out, "Official releases", "https://github.com/ach1992/simple-tun-link/releases")
 	} else {
 		menuSection(out, "Latest complete public releases")

@@ -261,6 +261,7 @@ func menuPrepareSelectedModulesWithOps(input io.Reader, reader *bufio.Reader, ou
 	release, lockErr := ops.acquire(loadCtx)
 	if lockErr != nil {
 		menuNotice(out, "WARNING", "Installed STL maintenance identity unavailable or busy; no module loaded.")
+		menuField(out, "NEXT ACTION", "Check installed STL ownership and active maintenance/update operations; retry only after the competing operation has finished.")
 		return false, ops.snapshot(options)
 	}
 	defer release()
@@ -284,6 +285,7 @@ func menuPrepareSelectedModulesWithOps(input io.Reader, reader *bufio.Reader, ou
 	if err := loadSelectedKernelModules(loadCtx, ops.load, selected, modules); err != nil {
 		menuNotice(out, "WARNING", "Kernel module load failed or is incomplete. Inspect host state before retrying.")
 		menuField(out, "Cause", safeMenuText(err.Error()))
+		menuField(out, "NEXT ACTION", "Run lsmod and modinfo for the selected module(s) and Create tunnel -> Availability details (read-only); prior loads may persist.")
 		return false, ops.snapshot(options)
 	}
 	now := ops.snapshot(options)
