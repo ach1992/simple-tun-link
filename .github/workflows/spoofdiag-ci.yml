@@ -1,0 +1,55 @@
+name: Spoof Diagnostics (independent Go)
+
+on:
+  pull_request:
+    paths:
+      - 'research/spoof-diagnostics/**'
+      - '.github/workflows/spoofdiag-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'research/spoof-diagnostics/**'
+      - '.github/workflows/spoofdiag-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  offline-go-and-installer:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: research/spoof-diagnostics
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: research/spoof-diagnostics/go.mod
+          cache: true
+          cache-dependency-path: research/spoof-diagnostics/go.sum
+      - name: Go validation with offline dependency resolution
+        env:
+          GOPROXY: 'off'
+          GOSUMDB: 'off'
+          GOTOOLCHAIN: 'local'
+          CGO_ENABLED: '0'
+        run: |
+          test -z "$(gofmt -l cmd/stl-spoofdiag)"
+          go vet ./...
+          go test -count=1 ./...
+      - name: Standalone offline build / install / re-install
+        env:
+          GOPROXY: 'off'
+          GOSUMDB: 'off'
+          GOTOOLCHAIN: 'local'
+          CGO_ENABLED: '0'
+        run: |
+          bash -n scripts/build-offline.sh scripts/install-offline.sh
+          mkdir -p "$RUNNER_TEMP/spoofdiag-testroot"
+          bash scripts/build-offline.sh "$RUNNER_TEMP/spoofdiag-offline" "$GITHUB_SHA" dev-ci amd64
+          bash "$RUNNER_TEMP/spoofdiag-offline/install-offline.sh" --verify
+          bash "$RUNNER_TEMP/spoofdiag-offline/install-offline.sh" --install --accept --destdir "$RUNNER_TEMP/spoofdiag-testroot"
+          "$RUNNER_TEMP/spoofdiag-testroot/usr/local/bin/stl-spoofdiag" version
+          bash "$RUNNER_TEMP/spoofdiag-offline/install-offline.sh" --install --accept --destdir "$RUNNER_TEMP/spoofdiag-testroot"
+          "$RUNNER_TEMP/spoofdiag-testroot/usr/local/bin/stl-spoofdiag" plan --file examples/sources-private.csv
+          "$RUNNER_TEMP/spoofdiag-testroot/usr/local/bin/stl-spoofdiag" report --file examples/evidence-private.json
