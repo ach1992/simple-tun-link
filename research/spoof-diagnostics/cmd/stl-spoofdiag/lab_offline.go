@@ -482,9 +482,6 @@ func verifyOfflinePair(challengePath, receiptPath, caPath string) (map[string]an
 		return nil, err
 	}
 	plan := env.Challenge
-	if _, err := challengeSignerCertificate(env, roots, time.Now()); err != nil {
-		return nil, err
-	}
 	b, err := readSmallRegular(receiptPath, labMaxControl)
 	if err != nil {
 		return nil, err
@@ -493,7 +490,33 @@ func verifyOfflinePair(challengePath, receiptPath, caPath string) (map[string]an
 	if err := strictJSON(b, &response); err != nil {
 		return nil, err
 	}
-	if err := verifyLabReceipt(response, roots, roleName(plan.Receiver), plan.RunID, time.Now()); err != nil {
+	// Offline verification is historical, never a fresh authorization to send.
+	// Validate signature/certificate at claimed event time and tightly join
+	// signed receipt time to the signed, bounded challenge interval.
+	// The live sender/receiver continue to reject expired challenges at now.
+	created, err := time.Parse(time.RFC3339Nano, plan.CreatedUTC)
+	if err != nil {
+		return nil, errors.New("invalid archived challenge timestamp")
+	}
+	received, err := time.Parse(time.RFC3339Nano, response.Receipt.CreatedUTC)
+	if err != nil {
+		return nil, errors.New("invalid archived receipt timestamp")
+	}
+	current := time.Now()
+	expires := time.Unix(plan.ExpiresUnix, 0)
+	if created.After(current.Add(2*time.Minute)) || received.After(current.Add(2*time.Minute)) ||
+		!expires.After(created) || expires.After(created.Add(120*time.Second)) ||
+		received.Before(created.Add(-2*time.Minute)) || received.After(expires.Add(2*time.Minute)) {
+		return nil, errors.New("archived receipt timestamps inconsistent with signed challenge window")
+	}
+	// A historical signature does not provide a trusted independent clock.
+	// Choose a time strictly inside the signed 120-second authorization window
+	// solely to evaluate the signer certificate and signed challenge structure.
+	pastChallengeTime := created.Add(expires.Sub(created) / 2)
+	if _, err := challengeSignerCertificate(env, roots, pastChallengeTime); err != nil {
+		return nil, err
+	}
+	if err := verifyLabReceipt(response, roots, roleName(plan.Receiver), plan.RunID, received); err != nil {
 		return nil, err
 	}
 	if response.Receipt.ExpectedSamples != len(plan.Samples) || response.Receipt.ChallengeDigest != offlineChallengeDigest(plan) || response.Receipt.Environment != plan.Environment {
@@ -508,6 +531,7 @@ func verifyOfflinePair(challengePath, receiptPath, caPath string) (map[string]an
 	}
 	return map[string]any{
 		"challenge_signature": "VERIFIED", "receipt_signature": "VERIFIED", "control_channel": "NOT_USED",
+		"verification_mode": "HISTORICAL_SIGNED_EVIDENCE_ONLY", "wall_clock_provenance": "SIGNED_DECLARATION_NOT_INDEPENDENT_CLOCK",
 		"run_id": plan.RunID, "sender": roleName(plan.Sender), "peer": roleName(plan.Receiver),
 		"expected_samples": len(plan.Samples), "authenticated_peer_observations": len(response.Receipt.Observations),
 		"result":                     labEvidenceResult(len(response.Receipt.Observations), len(plan.Samples), plan.Environment),
