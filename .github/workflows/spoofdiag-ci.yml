@@ -43,12 +43,15 @@ jobs:
           GOTOOLCHAIN: 'local'
           CGO_ENABLED: '0'
         run: |
-          bash -n scripts/build-offline.sh scripts/install-offline.sh
-          mkdir -p "$RUNNER_TEMP/spoofdiag-testroot"
-          bash scripts/build-offline.sh "$RUNNER_TEMP/spoofdiag-offline" "$GITHUB_SHA" dev-ci amd64
-          bash "$RUNNER_TEMP/spoofdiag-offline/install-offline.sh" --verify
-          bash "$RUNNER_TEMP/spoofdiag-offline/install-offline.sh" --install --accept --destdir "$RUNNER_TEMP/spoofdiag-testroot"
+          bash -n scripts/build-offline.sh scripts/package-offline.sh scripts/install-offline.sh
+          mkdir -p "$RUNNER_TEMP/spoofdiag-testroot" "$RUNNER_TEMP/spoofdiag-extracted"
+          bash scripts/package-offline.sh "$RUNNER_TEMP/spoofdiag-offline" "$GITHUB_SHA" dev-ci amd64
+          ( cd "$RUNNER_TEMP/spoofdiag-offline"; sha256sum -c spoofdiag-dev-ci_linux_amd64.tar.gz.sha256 )
+          tar -C "$RUNNER_TEMP/spoofdiag-extracted" -xzf "$RUNNER_TEMP/spoofdiag-offline/spoofdiag-dev-ci_linux_amd64.tar.gz"
+          bundle="$RUNNER_TEMP/spoofdiag-extracted/stl-spoofdiag"
+          bash "$bundle/install-offline.sh" --verify
+          bash "$bundle/install-offline.sh" --install --accept --destdir "$RUNNER_TEMP/spoofdiag-testroot"
           "$RUNNER_TEMP/spoofdiag-testroot/usr/local/bin/stl-spoofdiag" version
-          bash "$RUNNER_TEMP/spoofdiag-offline/install-offline.sh" --install --accept --destdir "$RUNNER_TEMP/spoofdiag-testroot"
+          bash "$bundle/install-offline.sh" --install --accept --destdir "$RUNNER_TEMP/spoofdiag-testroot"
           "$RUNNER_TEMP/spoofdiag-testroot/usr/local/bin/stl-spoofdiag" plan --file examples/sources-private.csv
           "$RUNNER_TEMP/spoofdiag-testroot/usr/local/bin/stl-spoofdiag" report --file examples/evidence-private.json
