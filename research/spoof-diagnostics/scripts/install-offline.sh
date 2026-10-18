@@ -82,11 +82,67 @@ for d in "$prefix/opt" "$base" "$versions" "$prefix/usr" "$prefix/usr/local" "$l
   fi
 done
 
+# Serialize mutations by destination without a persistent lock file. The lock
+# is on the canonical opt directory and is released automatically even if
+# the installing shell is killed. Verification-only never acquires this lock.
+command -v flock >/dev/null || { echo 'missing standard util-linux flock; refusing unsafe concurrent install' >&2; exit 1; }
+if [[ ! -d $prefix/opt ]]; then
+  if [[ $mode == install ]]; then
+    mkdir -p -- "$prefix/opt"
+  elif [[ $mode == uninstall && ! -e $launcher && ! -L $launcher ]]; then
+    echo 'Already uninstalled; private state left untouched'
+    exit 0
+  else
+    echo 'not installed; cannot verify tool ownership' >&2
+    exit 1
+  fi
+fi
+exec {install_lock}< "$prefix/opt"
+if ! flock -n "$install_lock"; then
+  echo 'another installer is active under this destination; retry after it completes' >&2
+  exit 1
+fi
+
 # Existing resources must be provably ours; preserve foreign objects.
 if [[ -e $base || -L $base ]]; then
   [[ -d $base && ! -L $base && -f $base/.product-id && ! -L $base/.product-id ]] || { echo 'foreign or ambiguous install location' >&2; exit 1; }
   [[ $(cat "$base/.product-id") == stl-spoofdiag ]] || { echo 'foreign installation ownership' >&2; exit 1; }
 fi
+# A SIGKILL/power loss may leave a .stage.XXXXXXXX directory. Only after
+# acquiring the destination lock and verifying product ownership, recover
+# exactly named, owned, regular installer staging members. Unknown material
+# is NEVER recursively deleted or silently adopted.
+recover_aborted_staging() {
+  [[ -d $versions && ! -L $versions ]] || return 0
+  local stage member name
+  shopt -s nullglob dotglob
+  # Preflight ALL stages before removing any, to keep foreign content intact.
+  for stage in "$versions"/.stage.*; do
+    name=$(basename -- "$stage")
+    if [[ ! $name =~ ^\.stage\.[A-Za-z0-9]{8}$ || ! -d $stage || -L $stage ||
+          $(stat -c %u -- "$stage") != "$(id -u)" ]]; then
+      echo "unsafe or foreign abandoned install stage: $stage" >&2
+      return 1
+    fi
+    for member in "$stage"/*; do
+      name=$(basename -- "$member")
+      case "$name" in stl-spoofdiag|BUILD-MANIFEST.txt|SHA256SUMS) ;; *)
+        echo "foreign install stage member: $member" >&2; return 1 ;;
+      esac
+      if [[ ! -f $member || -L $member || $(stat -c %u -- "$member") != "$(id -u)" ]]; then
+        echo "unsafe install stage member: $member" >&2
+        return 1
+      fi
+    done
+  done
+  for stage in "$versions"/.stage.*; do
+    for member in "$stage"/*; do rm -- "$member"; done
+    rmdir -- "$stage"
+    echo "Recovered owned incomplete install stage: $stage"
+  done
+}
+recover_aborted_staging || exit 1
+
 legacy_launcher="//opt/stl-spoofdiag/current/stl-spoofdiag"
 legacy_owned_link=false
 if [[ -e $launcher || -L $launcher ]]; then

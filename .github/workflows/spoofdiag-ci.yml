@@ -115,6 +115,43 @@ jobs:
             exit 1
           fi
           cp "$RUNNER_TEMP/spoofdiag-prev/stl-spoofdiag" "$root/opt/stl-spoofdiag/releases/dev-prev-ci/stl-spoofdiag"
+
+          # Simulate a killed installer leaving a partially populated, strictly
+          # tool-owned stage. Recovery happens only with the destination lock.
+          stage="$root/opt/stl-spoofdiag/releases/.stage.ABCDEFGH"
+          mkdir "$stage"
+          printf 'partial staged executable' > "$stage/stl-spoofdiag"
+          bash "$bundle/install-offline.sh" --install --accept --destdir "$root" > "$RUNNER_TEMP/spoofdiag-stage-recovered.log"
+          grep -Fq 'Recovered owned incomplete install stage:' "$RUNNER_TEMP/spoofdiag-stage-recovered.log"
+          test ! -e "$stage"
+
+          # An unknown file must NOT be deleted under a lookalike stage.
+          foreign_stage="$root/opt/stl-spoofdiag/releases/.stage.IJKLMNOP"
+          mkdir "$foreign_stage"
+          printf 'operator-owned' > "$foreign_stage/unknown"
+          if bash "$bundle/install-offline.sh" --install --accept --destdir "$root"; then
+            echo 'ERROR: foreign interrupted stage was adopted or removed' >&2
+            exit 1
+          fi
+          test -f "$foreign_stage/unknown"
+          rm -- "$foreign_stage/unknown"
+          rmdir -- "$foreign_stage"
+
+          # Two installers of the same destination must not race current.
+          ( exec 9< "$root/opt"; flock -n 9; touch "$RUNNER_TEMP/spoofdiag-lock-ready"; sleep 5 ) &
+          lock_holder=$!
+          for i in $(seq 1 30); do
+            test ! -f "$RUNNER_TEMP/spoofdiag-lock-ready" || break
+            sleep .1
+          done
+          test -f "$RUNNER_TEMP/spoofdiag-lock-ready"
+          if bash "$bundle/install-offline.sh" --install --accept --destdir "$root" > "$RUNNER_TEMP/spoofdiag-lock-denial.log" 2>&1; then
+            echo 'ERROR: concurrent install acquired busy destination' >&2
+            exit 1
+          fi
+          grep -Fq 'another installer is active' "$RUNNER_TEMP/spoofdiag-lock-denial.log"
+          wait "$lock_holder"
+
           printf 'foreign' > "$root/opt/stl-spoofdiag/not-ours"
           if bash "$bundle/install-offline.sh" --uninstall --accept --destdir "$root"; then
             echo 'ERROR: uninstall removed or ignored foreign resource' >&2

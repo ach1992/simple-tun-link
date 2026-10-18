@@ -1,6 +1,6 @@
 # Independent installer, offline package and release contract
 
-**Partially implemented contract.** A buildable standalone offline Go archive and a verifying/idempotent install script exist for local release-candidate testing; owned-path/symlink negative controls were exercised in disposable test roots. **No public tool release or validated online one-liner exists.** Upgrade, rollback and uninstall were exercised on disposable roots with foreign-file refusal and private-state preservation; independent publisher signature verification and full failure-injected fresh-guest recovery remain acceptance gaps; do not mistake current install smoke for full lifecycle acceptance.
+**Partially implemented contract.** A buildable standalone offline Go archive and a verifying/idempotent install script exist for local release-candidate testing; owned-path/symlink negative controls were exercised in disposable test roots. **No public tool release or validated online one-liner exists.** Upgrade, rollback and uninstall were exercised both in disposable roots and on two isolated Debian 12 guests, including foreign-file refusal, private-state retention and user-accessible launcher verification. A simulated aborted staging directory was safely recovered and concurrent installer attempts were serialized on the same destination; unknown staging content was preserved and refused. Independent publisher signature verification, actual power-loss/disk-full recovery and broader guest coverage remain acceptance gaps; do not mistake current install smoke for full lifecycle acceptance.
 
 ## 1. Download/storage location on each authorized server
 
@@ -36,7 +36,7 @@ Target deliverable: one per-architecture **self-contained archive** `spoofdiag-v
 - `SHA256SUMS`, source `LICENSE`, tool `README.md`, architecture/operations information and example *non-secret* configuration.
 - Optional detached signature/attestation artifact with independently provisioned trusted verification identity; a SHA file served by the same account is not an independent authenticity proof.
 
-The installer must require **zero** `apt`, `pip`, `curl`, `wget`, Go toolchain or DNS. On supported Linux, `/bin/sh`, `tar`, `sha256sum`, file/permissions utilities and a compatible kernel are explicit baseline prerequisites; verify before changing files. Build/download prerequisites are **CI-side**, not host-side. No external repository/package setup is allowed.
+The installer must require **zero** `apt`, `pip`, `curl`, `wget`, Go toolchain or DNS. On supported Debian/Ubuntu Linux, `bash` (not merely `/bin/sh`), `tar`, `sha256sum`, `flock` from standard util-linux, core file/permissions utilities and a compatible kernel are explicit local baseline prerequisites; fail with an actionable message when missing. The Go compiler, Python, package manager and DNS are NOT install-time prerequisites. Build/download prerequisites are **CI-side**, not host-side. No external repository/package setup is allowed.
 
 ## 3. Online installation uses the SAME offline engine
 
