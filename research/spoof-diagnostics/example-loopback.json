@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "mode": "local_loopback",
+  "peer_ipv4": "127.0.0.1",
+  "control_port": 24971,
+  "data_port": 24972,
+  "approved_sources": [
+    "127.0.0.1"
+  ],
+  "payload_sizes": [
+    96,
+    384
+  ],
+  "repetitions": 2,
+  "interval_ms": 200,
+  "egress_interface": "lo"
+}
