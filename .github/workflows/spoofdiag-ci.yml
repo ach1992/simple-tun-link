@@ -55,3 +55,18 @@ jobs:
           bash "$bundle/install-offline.sh" --install --accept --destdir "$RUNNER_TEMP/spoofdiag-testroot"
           "$RUNNER_TEMP/spoofdiag-testroot/usr/local/bin/stl-spoofdiag" plan --file examples/sources-private.csv
           "$RUNNER_TEMP/spoofdiag-testroot/usr/local/bin/stl-spoofdiag" report --file examples/evidence-private.json
+
+          # Negative controls: a locally corrupted bundle and foreign launcher
+          # must be rejected without invoking network or changing STL.
+          cp -a "$bundle" "$RUNNER_TEMP/spoofdiag-corrupt"
+          printf 'tampered' >> "$RUNNER_TEMP/spoofdiag-corrupt/stl-spoofdiag"
+          if bash "$RUNNER_TEMP/spoofdiag-corrupt/install-offline.sh" --verify; then
+            echo 'ERROR: corrupted payload was accepted' >&2
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/spoofdiag-foreign/usr/local/bin"
+          printf 'foreign' > "$RUNNER_TEMP/spoofdiag-foreign/usr/local/bin/stl-spoofdiag"
+          if bash "$bundle/install-offline.sh" --install --accept --destdir "$RUNNER_TEMP/spoofdiag-foreign"; then
+            echo 'ERROR: foreign launcher was overwritten' >&2
+            exit 1
+          fi
