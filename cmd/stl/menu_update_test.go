@@ -164,7 +164,7 @@ func TestMenuUpdateChoiceIsReadOnlyOutsideRealInstalledRootTTY(t *testing.T) {
 	}}
 	code := runWithRuntimeInput([]string{"menu"}, strings.NewReader("6\n2\n8\n"), &out, &errOut, opts)
 	if code != 0 || errOut.Len() != 0 || !strings.Contains(out.String(), "v0.1.0-rc.7") ||
-		!strings.Contains(out.String(), "No in-place update command is recommended") ||
+		!strings.Contains(out.String(), "Automatic update supports newer Stable patches") ||
 		strings.Contains(out.String(), "bash -o pipefail") ||
 		strings.Contains(out.String(), "Update complete") {
 		t.Fatalf("untrusted menu tried to update: code=%d out=%s errors=%s", code, out.String(), errOut.String())
