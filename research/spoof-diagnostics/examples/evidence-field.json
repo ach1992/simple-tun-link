@@ -11,7 +11,7 @@
       "packet_size": 128,
       "policy_epoch": "example",
       "attempted": false,
-      "environment": "private_lab"
+      "environment": "field"
     },
     {
       "sample_id": "DEMO-B",
@@ -23,7 +23,7 @@
       "packet_size": 128,
       "policy_epoch": "example",
       "attempted": false,
-      "environment": "private_lab"
+      "environment": "field"
     }
   ]
 }

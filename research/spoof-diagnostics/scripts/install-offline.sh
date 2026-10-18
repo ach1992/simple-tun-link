@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Offline installation of the standalone Go tool (local-loopback lab only; field disabled).
+# Offline installation of the standalone Go tool (field candidate code; no field network tests performed).
 # Deliberately never calls apt/curl/wget/pip/go and never mutates STL resources.
 set -euo pipefail
 umask 077
@@ -32,7 +32,7 @@ fi
 [[ $(cd -P -- "$destdir" && pwd -P) == "$destdir" ]] || { echo 'non-canonical destination root' >&2; exit 1; }
 
 bundle=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
-for name in stl-spoofdiag install-offline.sh README.md LICENSE sources-private.csv evidence-private.json BUILD-MANIFEST.txt SHA256SUMS; do
+for name in stl-spoofdiag install-offline.sh README.md LICENSE sources-field.csv evidence-field.json BUILD-MANIFEST.txt SHA256SUMS; do
   [[ -f $bundle/$name && ! -L $bundle/$name ]] || { echo "invalid bundle member: $name" >&2; exit 1; }
 done
 ( cd "$bundle"; sha256sum --check --strict SHA256SUMS > /dev/null ) || {

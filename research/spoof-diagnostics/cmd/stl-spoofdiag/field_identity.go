@@ -20,7 +20,7 @@ func randomSerial() (*big.Int, error) {
 	return rand.Int(rand.Reader, max)
 }
 
-func createLabIdentity(dir string) error {
+func createFieldIdentity(dir string) error {
 	// New, private, exclusive directory: never overwrite or adopt unknown credentials.
 	if err := os.Mkdir(dir, 0700); err != nil {
 		return fmt.Errorf("identity directory must be new and private: %w", err)
@@ -35,8 +35,8 @@ func createLabIdentity(dir string) error {
 		return err
 	}
 	ca := &x509.Certificate{
-		SerialNumber: serial, Subject: pkix.Name{CommonName: "STL Spoof Diagnostics DISPOSABLE local lab CA"},
-		NotBefore: now.Add(-5 * time.Minute), NotAfter: now.Add(24 * time.Hour),
+		SerialNumber: serial, Subject: pkix.Name{CommonName: "STL Spoof Diagnostics operator-provisioned research CA"},
+		NotBefore: now.Add(-5 * time.Minute), NotAfter: now.Add(365 * 24 * time.Hour),
 		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		IsCA:     true, BasicConstraintsValid: true, MaxPathLen: 0, MaxPathLenZero: true,
 	}
@@ -44,14 +44,14 @@ func createLabIdentity(dir string) error {
 	if err != nil {
 		return err
 	}
-	if err := writeLabPEM(dir, "ca.crt", "CERTIFICATE", caDER, 0644); err != nil {
+	if err := writeFieldPEM(dir, "ca.crt", "CERTIFICATE", caDER, 0644); err != nil {
 		return err
 	}
 	caPrivate, err := x509.MarshalPKCS8PrivateKey(caKey)
 	if err != nil {
 		return err
 	}
-	if err := writeLabPEM(dir, "ca.key", "PRIVATE KEY", caPrivate, 0600); err != nil {
+	if err := writeFieldPEM(dir, "ca.key", "PRIVATE KEY", caPrivate, 0600); err != nil {
 		return err
 	}
 	for _, role := range []string{"A", "B"} {
@@ -66,7 +66,7 @@ func createLabIdentity(dir string) error {
 		dns := "spoofdiag-" + string(role[0]+('a'-'A')) + ".local"
 		leaf := &x509.Certificate{
 			SerialNumber: serial, Subject: pkix.Name{CommonName: dns}, DNSNames: []string{dns},
-			NotBefore: now.Add(-5 * time.Minute), NotAfter: now.Add(12 * time.Hour),
+			NotBefore: now.Add(-5 * time.Minute), NotAfter: now.Add(90 * 24 * time.Hour),
 			KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 			BasicConstraintsValid: true,
 		}
@@ -78,17 +78,17 @@ func createLabIdentity(dir string) error {
 		if err != nil {
 			return err
 		}
-		if err := writeLabPEM(dir, role+".crt", "CERTIFICATE", leafDER, 0644); err != nil {
+		if err := writeFieldPEM(dir, role+".crt", "CERTIFICATE", leafDER, 0644); err != nil {
 			return err
 		}
-		if err := writeLabPEM(dir, role+".key", "PRIVATE KEY", keyDER, 0600); err != nil {
+		if err := writeFieldPEM(dir, role+".key", "PRIVATE KEY", keyDER, 0600); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func writeLabPEM(dir, name, kind string, b []byte, mode os.FileMode) error {
+func writeFieldPEM(dir, name, kind string, b []byte, mode os.FileMode) error {
 	path := filepath.Join(dir, name)
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 	if err != nil {
@@ -101,7 +101,7 @@ func writeLabPEM(dir, name, kind string, b []byte, mode os.FileMode) error {
 	return f.Close()
 }
 
-func loadLabCredential(certFile, keyFile string) (tls.Certificate, error) {
+func loadFieldCredential(certFile, keyFile string) (tls.Certificate, error) {
 	stat, err := os.Lstat(keyFile)
 	if err != nil {
 		return tls.Certificate{}, err
@@ -132,7 +132,7 @@ func checkPeerName(st tls.ConnectionState, expected string) error {
 	return fmt.Errorf("unrecognized peer identity (expected %s)", expected)
 }
 
-func serverLabTLS(certificate tls.Certificate, roots *x509.CertPool, clientName string) *tls.Config {
+func serverFieldTLS(certificate tls.Certificate, roots *x509.CertPool, clientName string) *tls.Config {
 	return &tls.Config{
 		MinVersion:       tls.VersionTLS13,
 		Certificates:     []tls.Certificate{certificate},
@@ -142,7 +142,7 @@ func serverLabTLS(certificate tls.Certificate, roots *x509.CertPool, clientName 
 	}
 }
 
-func clientLabTLS(certificate tls.Certificate, roots *x509.CertPool, serverName string) *tls.Config {
+func clientFieldTLS(certificate tls.Certificate, roots *x509.CertPool, serverName string) *tls.Config {
 	return &tls.Config{
 		MinVersion:   tls.VersionTLS13,
 		ServerName:   serverName,

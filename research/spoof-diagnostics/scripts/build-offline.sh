@@ -32,8 +32,8 @@ cp "$here/README.md" "$tmp/README.md"
 # documentation instead of shipping links that break on an offline host.
 mkdir "$tmp/docs"
 cp "$here/docs/"*.md "$tmp/docs/"
-cp "$here/examples/sources-private.csv" "$tmp/sources-private.csv"
-cp "$here/examples/evidence-private.json" "$tmp/evidence-private.json"
+cp "$here/examples/sources-field.csv" "$tmp/sources-field.csv"
+cp "$here/examples/evidence-field.json" "$tmp/evidence-field.json"
 cat > "$tmp/BUILD-MANIFEST.txt" <<EOF
 project=stl-spoofdiag
 version=$version
@@ -44,7 +44,7 @@ go_version=$(go version)
 source_repo=https://github.com/ach1992/simple-tun-link
 mode=standalone-research-snapshot
 EOF
-( cd "$tmp"; sha256sum -- stl-spoofdiag install-offline.sh README.md LICENSE sources-private.csv evidence-private.json BUILD-MANIFEST.txt docs/*.md > SHA256SUMS; sha256sum --check SHA256SUMS > /dev/null )
+( cd "$tmp"; sha256sum -- stl-spoofdiag install-offline.sh README.md LICENSE sources-field.csv evidence-field.json BUILD-MANIFEST.txt docs/*.md > SHA256SUMS; sha256sum --check SHA256SUMS > /dev/null )
 # A snapshot builds a staged package only. No tags, release mutations or network.
 mv -T -n -- "$tmp" "$output"
 trap - EXIT

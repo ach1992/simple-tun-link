@@ -39,7 +39,7 @@ func addSource(path, mode string, item Candidate) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	} else if mode == "" {
-		return errors.New("new source file requires --mode private_lab or approved_field_plan")
+		return errors.New("new source file requires --mode field_candidates")
 	}
 	cfg.Candidates = append(cfg.Candidates, item)
 	if err := validateCandidates(cfg); err != nil {
@@ -73,11 +73,11 @@ func addSource(path, mode string, item Candidate) error {
 }
 func sourceAdd(args []string) error {
 	if len(args) == 0 || args[0] != "add" {
-		return errors.New("usage: sources add --file PATH --mode private_lab --ip A.B.C.D --direction A_TO_B --sender A --receiver B")
+		return errors.New("usage: sources add --file PATH --mode field_candidates --ip A.B.C.D --direction A_TO_B --sender A --receiver B")
 	}
 	f := flag.NewFlagSet("sources add", flag.ContinueOnError)
 	path := f.String("file", "", "local JSON candidate file")
-	mode := f.String("mode", "", "private_lab or approved_field_plan (required for new file)")
+	mode := f.String("mode", "", "field_candidates (required for new file)")
 	ip := f.String("ip", "", "one exact IPv4 address")
 	dir := f.String("direction", "", "A_TO_B or B_TO_A")
 	sender := f.String("sender", "", "sender node ID")

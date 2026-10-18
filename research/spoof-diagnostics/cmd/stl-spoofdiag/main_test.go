@@ -9,13 +9,13 @@ import (
 
 func ptr(b bool) *bool { return &b }
 func TestCandidateValidation(t *testing.T) {
-	c := CandidateFile{SchemaVersion: 1, Mode: "private_lab", Candidates: []Candidate{{IP: "10.9.9.1", Direction: "A_TO_B", Sender: "a", Receiver: "b"}, {IP: "10.9.9.2", Direction: "B_TO_A", Sender: "b", Receiver: "a"}}}
+	c := CandidateFile{SchemaVersion: 1, Mode: "field_candidates", Candidates: []Candidate{{IP: "10.9.9.1", Direction: "A_TO_B", Sender: "A", Receiver: "B"}, {IP: "10.9.9.2", Direction: "B_TO_A", Sender: "B", Receiver: "A"}}}
 	if err := validateCandidates(c); err != nil {
 		t.Fatal(err)
 	}
-	c.Candidates[0].IP = "1.1.1.1"
+	c.Candidates[0].IP = "203.0.113.1"
 	if validateCandidates(c) == nil {
-		t.Fatal("lab admitted public IP")
+		t.Fatal("accepted documentation-only address")
 	}
 	c.Candidates[0].IP = "10.9.9.1"
 	c.Candidates[0].Direction = "both"
@@ -29,7 +29,7 @@ func TestCandidateValidation(t *testing.T) {
 	}
 }
 func TestClassificationEvidenceLayers(t *testing.T) {
-	o := Observation{SampleID: "sample1", RunID: "run", Environment: "private_lab", Direction: "A_TO_B", Sender: "A", Receiver: "B", SourceIP: "10.9.0.2", PacketSize: 128, Epoch: "e1", Attempted: true}
+	o := Observation{SampleID: "sample1", RunID: "run", Environment: "field", Direction: "A_TO_B", Sender: "A", Receiver: "B", SourceIP: "10.9.0.2", PacketSize: 128, Epoch: "e1", Attempted: true}
 	s, _ := classify(o)
 	if s.Result != "SUBMITTED_ONLY" {
 		t.Fatalf("got %q", s.Result)
@@ -63,7 +63,7 @@ func TestClassificationEvidenceLayers(t *testing.T) {
 func TestReportRejectsDuplicate(t *testing.T) {
 	d := t.TempDir()
 	f := filepath.Join(d, "evidence.json")
-	o := Observation{SampleID: "sample1", RunID: "run", Environment: "private_lab", Direction: "A_TO_B", Sender: "A", Receiver: "B", SourceIP: "10.9.0.2", PacketSize: 128, Epoch: "e1"}
+	o := Observation{SampleID: "sample1", RunID: "run", Environment: "field", Direction: "A_TO_B", Sender: "A", Receiver: "B", SourceIP: "10.9.0.2", PacketSize: 128, Epoch: "e1"}
 	b, _ := json.Marshal(EvidenceFile{SchemaVersion: 1, Observations: []Observation{o, o}})
 	if err := os.WriteFile(f, b, 0600); err != nil {
 		t.Fatal(err)
@@ -88,11 +88,11 @@ func TestCSVImportDirectional(t *testing.T) {
 }
 func TestFieldRejectsReservedAndAcceptsRoutableExact(t *testing.T) {
 	for _, ip := range []string{"192.0.2.1", "198.51.100.2", "203.0.113.9", "100.64.1.9", "198.18.3.2", "127.0.0.1"} {
-		if err := validateIP(ip, "approved_field_plan"); err == nil {
+		if err := validateIP(ip, "field_candidates"); err == nil {
 			t.Fatalf("unsafe address allowed %s", ip)
 		}
 	}
-	if err := validateIP("1.1.1.1", "approved_field_plan"); err != nil {
+	if err := validateIP("1.1.1.1", "field_candidates"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -110,7 +110,7 @@ func TestNoNetworkForValidation(t *testing.T) {
 func TestIndependentDirectionAndSampleIdentities(t *testing.T) {
 	d := t.TempDir()
 	f := filepath.Join(d, "evidence.json")
-	o := Observation{SampleID: "a", RunID: "run", Environment: "private_lab", Direction: "A_TO_B", Sender: "A", Receiver: "B", SourceIP: "10.9.0.2", PacketSize: 128, Epoch: "e1", Attempted: true}
+	o := Observation{SampleID: "a", RunID: "run", Environment: "field", Direction: "A_TO_B", Sender: "A", Receiver: "B", SourceIP: "10.9.0.2", PacketSize: 128, Epoch: "e1", Attempted: true}
 	p := o
 	p.SampleID = "b"
 	p.Direction = "B_TO_A"
@@ -133,7 +133,7 @@ func TestAddSourceJSON(t *testing.T) {
 	d := t.TempDir()
 	path := filepath.Join(d, "sources.json")
 	a := Candidate{IP: "10.9.9.1", Direction: "A_TO_B", Sender: "A", Receiver: "B"}
-	if err := addSource(path, "private_lab", a); err != nil {
+	if err := addSource(path, "field_candidates", a); err != nil {
 		t.Fatal(err)
 	}
 	b := Candidate{IP: "10.9.9.2", Direction: "B_TO_A", Sender: "B", Receiver: "A"}
@@ -150,7 +150,7 @@ func TestAddSourceJSON(t *testing.T) {
 	if err := addSource(path, "", a); err == nil {
 		t.Fatal("duplicate source silently accepted")
 	}
-	if err := addSource(path, "approved_field_plan", b); err == nil {
+	if err := addSource(path, "invalid_mode", b); err == nil {
 		t.Fatal("mode change silently accepted")
 	}
 	if err := os.Symlink(path, filepath.Join(d, "link.json")); err != nil {

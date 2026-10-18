@@ -1,77 +1,35 @@
-# Spoof Diagnostics — delivery contract and evidence-driven acceptance matrix
+# Field Diagnostics validation and evidence ledger
 
-Scope: **standalone `stl-spoofdiag` Go product** under `research/spoof-diagnostics/`, tracking [Issue #125](https://github.com/ach1992/simple-tun-link/issues/125) and the permanent [`dev-spoof`](https://github.com/ach1992/simple-tun-link/tree/dev-spoof) development branch (former PR #130 to `main` closed without merge). No STL runtime or backend integration without the separate Owner architecture decision in #123.
+**Scope:** new Field selected-source implementation on a feature branch.
+**Owner instruction:** do **not** run tests now; implement theoretical
+behavior and preserve truthful evidence boundaries.
 
-## Accepted operator outcome
+| Gate | Status | What is and is not established |
+| --- | --- | --- |
+| Source refactor and obsolete lab commands removed | IMPLEMENTED IN SOURCE | Deletion alone is not runtime validation |
+| Source inventory / exact directional candidates | IMPLEMENTED IN SOURCE | No CLI scenario executed |
+| Sender-signed plan and receiver-signed grant | IMPLEMENTED IN SOURCE | Signatures not tested end-to-end |
+| Normal UDP bind to an assigned selected IP | IMPLEMENTED IN SOURCE | No host or provider socket test |
+| Raw IPv4 header with selected source and explicit peer | IMPLEMENTED IN SOURCE | No CAP_NET_RAW or public-WAN test |
+| Receiver signed actual socket-source observations | IMPLEMENTED IN SOURCE | No real peer packet received |
+| Signed receipt comparison / replay protection | IMPLEMENTED IN SOURCE | No execution of replay/negative cases |
+| Go formatting and compile-only check | COMPILE-ONLY | Not a test of correctness or behavior |
+| Automated Go unit and integration suite | NOT_RUN by Owner request | No pass/fail claim |
+| Linux namespaces / local packet capture | NOT_RUN by Owner request | Previous lab results are unrelated |
+| Real two-host A↔B selective-source tests | NOT_RUN by Owner request | No connectivity evidence |
+| Provider source prefix consent / acceptance | NOT_VERIFIED | Separate external authorization needed |
+| Sender physical NIC egress / NAT rewrite | NOT_TESTED | Independent observer required |
+| Sender return path / true private L3 | NOT_TESTED | Out of scope for current diagnostic |
+| Debian/Ubuntu ARM64 runtime compatibility | NOT_TESTED for new candidate | Source target only |
+| Installer / upgrade / rollback / release candidate | NOT_RUN for new candidate | Earlier releases/CI do not validate these code changes |
+| Independent exact-HEAD security review | PENDING | Not ready to integrate / publish |
 
-An operator should be able to download one architecture-specific release archive and install/use the tool **without Go, Python, package repositories, Docker, or network access** on a destination server. An online bootstrap should download, authenticate, and invoke the *same* offline installer, never download and execute arbitrary `main` scripts. Both routes must expose the same program and version. A clean terminal interface must show identity, current mode, supported operations, missing prerequisites, error explanations, verification status, and clear next action. Errors and invalid menu input must return to the menu, not terminate an otherwise healthy session.
+The previous RFC1918-only detached-network-namespace and KVM tests
+are historical evidence for a different, now-retired engine. In that
+older experiment a multiple-candidate run produced conflicting
+router and receipt counts. The anomaly remains INCONCLUSIVE.
+Read [LOCAL-LAB-ACCEPTANCE.md](LOCAL-LAB-ACCEPTANCE.md); it must not
+be used to claim public Field acceptance.
 
-Separate **source-candidate enumeration** (an explicitly authorized/owned input list) from packet submission, independently observed physical egress, authenticated receiver ingress, returnability, and actual bidirectional private L3. Store direction A→B and B→A independently and preserve sample size and policy epoch. Do not silently interpret any of these layers as proving another. Distinguish `PASS`, `FAIL`, `PARTIAL`, `INCONCLUSIVE`, `NOT_RUN`, `APPROVAL_REQUIRED`. Signed receipts prove an identified observer made a claim; independent packet capture corroborates actual ingress; neither proves what an ISP would permit.
-
-Architecture for future STL consumption: standalone diagnostic CLI/JSON engine with versioned, neutral evidence, no STL side effects. STL integration is deferred; do not embed country-specific endpoints, backend assumptions or unreviewed keys in the protocol. Avoid product-imposed source counts or bandwidth quotas; enforce only justified resource, kernel, operator-authorized scope, privacy and packet-safety limits. Test limits of the current experimental adapter must be labelled, not silently marketed as field guarantees.
-
-**Research and evidence boundaries:** The currently proven executable is laboratory restricted. No public-Internet spoofing, third-party recipient testing, public source scanning, host-wide route/firewall changes, production deployment, or bypass of a tool/provider approval. Enabling a general real-network forged-source sender requires distinct security, authorization and provider compatibility review; no permissive user-interface switch proves such permission. Any public release remains gated on exact-artifact acceptance and independent review. Source address filtering (BCP38, RFC2827/3704), kernel uRPF/rp_filter, cloud source/destination checks and provider-specific firewalls can all reject a packet even when a local sandbox passes.
-
-## Isolated acceptance topology
-
-**Required:** two *separate, booted Linux VMs* A and B on separate L2 segments connected by an isolated routing/policy VM R (minimum 3 guests in the strict topology; 2 guests suffice only for direct-peer controls). No VM WAN adapter, host bridge, host management interface, external forwarding, route to the real Internet or shared ambient credential directory. Prefer signed, pinned Debian/Ubuntu guest image, snapshot overlay per guest, ephemeral credential provisioning, fixed private per-guest IPs, and separate terminal/log capture. The sender and receiver must run the **actual final Go binary** (same SHA as installed release). Router R controls private source policy, MTU, delay/loss and simulated path differences. Verify host route/sysctl baseline before and after and task-owned VM shutdown. Linux network namespaces are a useful extra kernel test but are **not VMs** and cannot replace the VM gate.
-
-For a scenario to be **PASS**: report exact source SHA, release SHA, OS/kernel/arch, three guest identities, topology/isolation proof, inputs, expected observation, actual sender log, independently captured A egress and B ingress, signed receipt, run ID, sample counts, verdict and cleanup. A signed zero-observation receipt is `INCONCLUSIVE` unless independent evidence identifies a specific drop point. Missing control/receipt is **not** evidence of blocked source IP.
-
-## Scenario families (execute with bounded, private addresses and synthetic traffic)
-
-| ID | Variation / fault injected | Required discriminating evidence | Current gate |
-| --- | --- | --- | --- |
-| N01 | A→R→B baseline admitted private candidate | A capture + R forwarding + B capture + matching signed B receipt | **PASS** — 6f1fc14 exact binary, two Debian 12 KVM VMs, 1/1 signed B receipt, router interface captures 1/1 |
-| N02 | B→R→A reverse independent direction | distinct identity, policy and reverse receipt | **PASS (private VM laboratory only)** — exact Go `72902c4` installed on both guests, source `10.91.4.77`, independent R input/output TAP captures 1/1 and A signed receipt 1/1, run `ea55ee21b3f8b4a58626c0b7bdfcab0d` |
-| N03 | one candidate accepted, one rejected by R source ACL | separate counters; only admitted identity in signed receipt | VM acceptance pending |
-| N04 | all candidates denied | explicit no-success, no fabricated negative IP verdict | **NOT_RUN / TOOL_SAFETY_GATE** (blocked private-router policy injection; no effects performed) |
-| N05 | R policy epoch changed during run | evidence tied to actual epoch; prior results not reused | VM acceptance pending |
-| N06 | R ingress source-validation / B rp_filter modes | strict, loose, disabled; independent drop observability | VM acceptance pending |
-| N07 | missing return route or R egress path | distinguish successful forward observation from failed return | VM acceptance pending |
-| N08 | asymmetric A→B pass, B→A drop | directional matrix; no inferred symmetry | VM acceptance pending |
-| N09 | A packet source differs from signed candidate | B rejects and logs reason without success | VM acceptance pending |
-| N10 | changing destination without re-signing plan | sender/receiver reject | unit PASS; VM pending |
-| N11 | zero candidates, duplicate, wrong direction, public IP in private plan | input error; **zero emissions** | unit PASS |
-| N12 | wrong peer certificate/CA, expired cert, wrong peer role | connection/evidence refused | targeted tests partially PASS |
-| N13 | stale challenge, replay, duplicated sample, signature/HMAC tamper | rejects; no success counter | **PARTIAL PASS** — Go tamper/unit tests PASS; real Debian VM B refused repeat fresh run ID using persistent replay ledger; other VM tamper scenarios pending |
-| N14 | zero observed, partial delivery, timeout, recipient down | `INCONCLUSIVE` / `PARTIAL`; no fake failure origin | **PARTIAL PASS** — real VM B signed a zero-packet receipt and offline verification returned `INCONCLUSIVE` with observed=0; disconnected/degraded VM scenarios pending |
-| N15 | policy drop, random loss, delay, reordering, duplication | rates, duration and provenance separate | VM pending |
-| N16 | MTU/DF, small/large payload, fragmentation and checksum behavior | exact packet size, MTU and independent capture | **PARTIAL / INCONCLUSIVE**: independent 192-byte raw 1/1 captures PASS. Historical 3 private sources × 1200 bytes: R input TAP captured 3, R output TAP captured 2; independently retrieved B signed Receipt verified **3/3** cryptographically at Go `72902c4` but that conflicts with R output capture 2/3. Root cause NOT established; subsequent controlled repeat **NOT_RUN / TOOL_SAFETY_GATE** (blocked before emission). No full MTU/DF coverage. |
-| N17 | UDP port blocked, listener wrong address/port, busy port | actionable error + no false reachability | VM pending |
-| N18 | R path switch, multi-interface and asymmetric RPF | symmetric/asymmetric path identity and no unapproved host mutation | VM pending |
-| N19 | A/B process stopped or killed mid-session | clear incomplete outcome; safe restart and no orphan listener | VM pending |
-| N20 | clock skew and certificate/plan expiry | explicit time-invalid outcome, new challenge path | VM pending |
-| N21 | missing CAP_NET_RAW, interface down/renamed, wrong namespace | specific preflight refusal and corrective action | unit partially PASS; VM pending |
-| N22 | cannot reach mTLS control but offline signed evidence possible | file-based challenge/receipt succeeds or remains inconclusive | **PARTIAL PASS** — signed offline loopback agent and two-guest B receipt verification work without mTLS; Go `72902c4` also verifies expired archived challenge/receipt with event-bound historical certificate checks and strict live-expiry/replay refusal. Actual long-duration control outage remains untested. |
-| N23 | receiver B reachable but return observer C unreachable | no implicit proof of sender-return path | design/proof pending |
-| N24 | independent tests after reboot and disk/state preservation | no replay-ledger reset, predictable resume | VM pending |
-| I01 | offline fresh install without Go or network | installed binary runs; no downloads, correct arch/version | **PASS** — Debian 12 VM A exact archive, no Go, no WAN/default route |
-| I02 | upgrade, verified rollback, safe uninstall, repeat operations | integrity/ownership checked; private state survives | **PASS for tested lifecycle** — Debian 12 VM A rollbacks between `dev-vm-final2` and exact `dev-vm-archive729`, idempotent reinstall, disposable-root uninstall twice and private config/evidence retention; live latest guest installation preserved. |
-| I03 | broken/archive tamper, wrong architecture, symlink/foreign owner | fail before writes; safe explainable error | **PARTIAL PASS** — CI corrupted archive/wrong architecture/symlink controls; Debian VM A disposable-root uninstall refused a foreign file and preserved it. Wider permission matrix pending. |
-| I04 | interrupted install, concurrent install, disk full, read-only partition | atomicity/recovery and no foreign deletion | **PARTIAL PASS locally** — reproduced stale `.stage` blocking uninstall, then added exact-owned abandoned-stage recovery, unknown-member refusal and nonblocking per-destination `flock`; all passed in a disposable test root before CI. Actual SIGKILL/power-loss, disk-full, read-only guest filesystem remain NOT_RUN. |
-| I05 | Online exact SHA-pinned bootstrap and versionless reviewed channel, blocked network, HTTPS failure | same offline engine, explicit integrity, reject unpublished/wrong-tool channels and no execution on download error | **PARTIAL PASS locally** — previous VM B local HTTP download/verify/install + SHA rejection; Go fixture positive/negative versionless channel, missing release, wrong digest/tag and symlink inbox. Public released HTTPS/signature path NOT_RUN |
-| I06 | artifact signature/provenance failure, wrong tag / stale latest | stop with clear expected vs actual, no execution | pending |
-| I07 | Debian/Ubuntu supported guest and amd64/arm64 compatibility | distro/kernel/architecture positive and negative evidence | **PARTIAL** — Debian 12 amd64 two KVM boots/installation PASS; Debian 13 amd64 exact RC1 disposable-root offline verify/install/preflight/menu/uninstall PASS; ARM64 cross-build and wrong-arch refusal PASS. ARM64 guest and independently booted Ubuntu guest acceptance NOT_RUN |
-| U01 | menu header, no-color/nonTTY, invalid selections, malformed paths | stable controls, bounded output, actionable errors; menu remains active | **PASS for tested cases** — Go unit/negative tests and Debian VM B exact Go `72902c4` nonroot menu under `NO_COLOR`, unknown selection, malformed IP, help, continued workflow, EOF/exit; resized real terminal/interactive PTY still untested. |
-| U02 | source list/add/import/remove/replace and empty inventory | independent direction identity; no packets emitted | **PARTIAL PASS** — VM B nonroot menu add/list/remove and empty-inventory fail closed; Go unit tests import/replace and duplicate/wrong directions. GUI operator PTY and realistic large inventories pending. |
-| U03 | menu challenge/receipt verify and export, positive and tampered files | no secret exposure; explicit evidence layer | **PARTIAL PASS** — two independent menu-driven loopback Go processes exchanged and verified signed peer receipt; Go challenge/offline-verify and signature tamper regression tests PASS. Booted-guest exact-current-menu challenge/negative end-to-end acceptance pending |
-| O01 | packet captures, timestamp/correlation, exports and peer signatures | machine-readable trace sufficient for fresh reviewer | **PARTIAL PASS** — both independent directions 192-byte 1/1 at R TAPs with verified signed receiver receipts. Historical multi-candidate 1200-byte run signed B receipt verifies 3/3 but independent R TAP capture differs (3 ingress/2 egress); provenance mismatch remains **INCONCLUSIVE**, not full proof. |
-| O02 | no host/STL side effects, teardown of VMs/files/ports | before-after snapshots, no orphaned resources | namespace infrastructure PASS; VM pending |
-| O03 | independently review code, reproducible exact-binary tests, CI | fresh-author read-only review + SHA-pinned result | pending |
-| O04 | two licensed real hosts with ISP source-identity consent | **NOT_TESTED / external approval and provider gate** | not a lab claim |
-
-This matrix is a requirement ledger, not a claim that tests were executed. Record exact test evidence in CI/PR/#125 when a scenario is actually run. Do not mark a scenario PASS based on a different program, previous commit, namespace-only ping or unverifiable user report.
-
-## Prioritization and completion
-
-1. Fix existing failing CI before treating the candidate as releasable. Complete finite local source-inventory workflow and interactive-menu recovery.
-2. Ship one self-contained offline archive per supported architecture; prove fresh installed binary behavior, upgrade/rollback/uninstall and cold-start without any Go/Python/network on guest.
-3. Build a testable online bootstrap with pinned identity and full failure matrix. It must be *functionally tested* against a controlled local artifact endpoint before publishing a GitHub one-line command; a hypothetical `releases/latest` URL is not a tested installer.
-4. Build and boot actual isolated VMs, run positive and negative policy scenarios, collect independent packet captures and signed receipts, and correct code in bounded cycles. Do not confuse an A–R–B namespace baseline with VM evidence.
-5. Independently review stable diff; inspect release provenance and Owner merge/release gates. The superseded Python experiment is retained in Git history, not shipped
-as a parallel implementation. This retirement is **not** evidence of
-exact Go field-function parity. Require explicit validation of any future
-feature before marking it delivered. Keep the primary STL README unchanged; the only operator README and installer instructions belong to `research/spoof-diagnostics/` on `dev-spoof`.
-
-**Real-host answer criterion:** Only when the exact released artifact implements and securely authenticates the intended authorized cross-host mode, can be configured on two independent approved hosts, handles provider/OS prerequisites and has passed relevant isolated acceptance is it reasonable to call the program *candidate-ready for a permissioned trial*. It is **never scientifically valid** to promise real provider success from VM results. The experimental `netns-*` adapter is explicitly not a field-ready executable.
+The Draft SpoofDiag prerelease and the pending separate installer
+PR are not a tested public release of this new Field implementation.

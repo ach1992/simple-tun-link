@@ -61,8 +61,8 @@ jobs:
           test "$(stat -c %a "$RUNNER_TEMP/spoofdiag-testroot/opt/stl-spoofdiag")" = 755
           test "$(stat -c %a "$RUNNER_TEMP/spoofdiag-testroot/opt/stl-spoofdiag/releases/dev-ci")" = 755
           bash "$bundle/install-offline.sh" --install --accept --destdir "$RUNNER_TEMP/spoofdiag-testroot"
-          "$RUNNER_TEMP/spoofdiag-testroot/usr/local/bin/stl-spoofdiag" plan --file examples/sources-private.csv
-          "$RUNNER_TEMP/spoofdiag-testroot/usr/local/bin/stl-spoofdiag" report --file examples/evidence-private.json
+          "$RUNNER_TEMP/spoofdiag-testroot/usr/local/bin/stl-spoofdiag" plan --file examples/sources-field.csv
+          "$RUNNER_TEMP/spoofdiag-testroot/usr/local/bin/stl-spoofdiag" report --file examples/evidence-field.json
 
           # Negative controls: a locally corrupted bundle and foreign launcher
           # must be rejected without invoking network or changing STL.

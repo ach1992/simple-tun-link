@@ -12,19 +12,39 @@ STL:** installing it does not install, upgrade, configure or run STL.
 
 ## What the tool does
 
-It lets you list exact IPv4 source-address candidates for two separate
-directions (A→B and B→A), create an **offline plan** without transmitting
-anything, run local authenticated diagnostics, and verify receiver-signed
-evidence. Its results carefully separate *packet submitted*, *observed by
-receiver*, *return path observed* and *usable private L3*; one stage does
-not prove the next.
+The current development candidate replaces the former Private Lab runtime
+with a **Field** workflow for two explicitly controlled hosts, A and B.
+It accepts an **exact, operator-chosen IPv4 candidate list** independently
+for A→B and B→A; it does not enumerate CIDR ranges, scan the Internet,
+open services in the background or integrate with STL.
 
-**Current limits:** TLS/UDP peer tests run locally on loopback. Its raw IPv4
-sender runs only inside a separately isolated, private RFC1918 Linux network
-namespace; it is **not** a ready-to-use public-WAN source-spoofing tool.
-Recording a public IP in an offline plan does **not** send a packet. Real
-provider compatibility, return routing and usable private L3 are unverified.
-See the [test evidence and outstanding checks](docs/VALIDATION-MATRIX.md).
+Field stages: *sender-signed challenge → receiver-signed grant → bounded
+field sender and receiver → receiver-signed receipt → offline verification*.
+Every receiver observation records both the claimed source address inside
+the signed packet and the **actual socket source address**. A match shows
+what that receiver observed, **not** independent provider authorization,
+sender NIC egress, a return path, or a usable private L3 link.
+
+Two transport choices are available in the implementation:
+
+- `field_udp_bound`: standard IPv4 UDP; only source IPv4s actually assigned
+  to an active local network interface can be chosen. No spoofing.
+- `field_raw_ipv4`: Linux CAP_NET_RAW, an explicitly selected UP nonloopback
+  interface, and one raw IPv4 UDP packet per approved candidate. The packet
+  source is the exact signed, user-selected IPv4; the signed destination is
+  a single cooperating receiver. It is rate- and count-bounded, and requires
+  separately verified owner **and provider** permission before any public
+  forged-source trial. The command-line acknowledgement is not proof of
+  that permission.
+
+**Validation status of this candidate:** source edited and compilation
+reviewed only. **NO real two-host test, public spoof packet, provider
+acceptance test, receiver test, or L3 test has been executed.** Nothing here
+should be described as confirmed field reachability or production readiness.
+
+The source, documentation and installation package live only under
+`research/spoof-diagnostics/` on the independent development line. The
+existing unrelated STL product and its stable `main` branch are untouched.
 
 ## Install online — one general command (no version number)
 
@@ -201,38 +221,137 @@ AMD64/ARM64 architecture.
 For verified rollback and tool-only uninstall, consult
 [INSTALL-AND-RELEASE.md](docs/INSTALL-AND-RELEASE.md).
 
-## Interactive menu and offline planning
+## Field menu, selected IPs and signed exchange
 
-Run `stl-spoofdiag menu` to see 15 choices. The menu includes build
-information, prerequisite checks, managing exact source candidates,
-validating plans, signed challenges/receipts, disposable local test
-credentials, local TLS/UDP peers and an advanced **private namespace**
-laboratory option. Invalid input returns to the menu.
+`stl-spoofdiag menu` now shows 12 choices including candidate management,
+offline plan, identity provisioning, challenge/grant, field receiver/sender,
+and receipt verification. **There is no Private Lab menu or netns runtime.**
 
-To create a direction-specific **private offline plan**, for example:
+A field inventory uses the singular `field_candidates` schema, not the
+historical `private_lab` or `approved_field_plan` modes:
 
-```sh
-stl-spoofdiag sources add --file ./sources.json --mode private_lab --ip 10.91.1.77 --direction A_TO_B --sender A --receiver B
-stl-spoofdiag sources list --file ./sources.json
-stl-spoofdiag plan --file ./sources.json
+```json
+{
+  "schema_version": 1,
+  "mode": "field_candidates",
+  "candidates": [
+    {"ip": "10.40.0.7", "direction": "A_TO_B", "sender": "A", "receiver": "B"}
+  ]
+}
 ```
 
-The `approved_field_plan` mode accepts eligible globally routable IPv4
-candidates **as offline records only**; it does not activate public sending.
-The separate `report` command evaluates declared evidence and labels
-that declaration `UNVERIFIED_INPUT_DECLARATION`; cryptographic receipt
-verification uses `lab verify` or `lab offline-verify` instead.
+`10.40.0.7` is an example of an operator-owned RFC1918 candidate for
+documentation, **not** a public field result. For a public experiment,
+replace it with the exact public IPv4 legitimately authorized for the
+specific source network and destination. Each receiver also keeps its
+own exact source allowlist. Reverse-direction candidates have distinct
+`B_TO_A` roles and require a separate signed run.
+
+Source inventory editing and an offline plan never transmit anything:
+
+```sh
+stl-spoofdiag sources add --file sources.json --mode field_candidates --ip 10.40.0.7 --direction A_TO_B --sender A --receiver B
+stl-spoofdiag sources list --file sources.json
+stl-spoofdiag plan --file sources.json
+```
+
+### Theoretical two-host procedure (NOT executed)
+
+These commands describe the signed field workflow; **do not run a public
+raw-source trial without separately verified owner, peer and provider
+authorization**. Use exact IPs, user-controlled ports, and compatible
+clocks. The signed plan has a default 10-minute expiration; start the
+receiver before the sender and generate a new plan when expired.
+
+Provision identities **on a trusted offline machine**, not directly on an
+exposed server:
+
+```sh
+stl-spoofdiag field identity --dir /secure/new-field-credentials
+```
+
+This produces a private CA key and both A/B node keys. Copy `ca.crt` plus
+only `A.crt`/`A.key` to A, and `ca.crt` plus only `B.crt`/`B.key` to B,
+using private owner-controlled paths. **Never place `ca.key` or the
+opposite node's private key on either field server.** Rotate and revoke
+compromised identity material outside the research tool.
+
+On A, with its permitted candidate inventory, create an exact signed plan:
+
+```sh
+stl-spoofdiag field challenge --file sources.json \
+  --cert A.crt --key A.key --ca ca.crt \
+  --sender A --receiver B --transport field_raw_ipv4 \
+  --destination-ip RECEIVER_OWNED_IPV4 --data-port 24572 \
+  --out challenge.json
+```
+
+Transfer `challenge.json` to B. On B, validate the plan against B's own
+independent allowlist and issue a receiver-signed consent grant:
+
+```sh
+stl-spoofdiag field grant --file sources.json \
+  --challenge challenge.json --cert B.crt --key B.key --ca ca.crt \
+  --sender A --receiver B --out grant.json
+```
+
+Transfer `grant.json` back to A. On B, start the exact destination-bound,
+finite receiver (replace `RECEIVER_OWNED_IPV4` and paths):
+
+```sh
+stl-spoofdiag field listen --file sources.json \
+  --challenge challenge.json --grant grant.json \
+  --cert B.crt --key B.key --ca ca.crt \
+  --sender A --receiver B --destination-ip RECEIVER_OWNED_IPV4 \
+  --bind-ip RECEIVER_OWNED_IPV4 --data-port 24572 \
+  --state-dir /private/field-consumed-runs --out receipt.json
+```
+
+On A, **only when required permissions are independently confirmed**, the
+raw adapter uses the explicit host NIC and exact signed source inventory:
+
+```sh
+stl-spoofdiag field send --file sources.json \
+  --challenge challenge.json --grant grant.json \
+  --cert A.crt --key A.key --ca ca.crt \
+  --sender A --receiver B --destination-ip RECEIVER_OWNED_IPV4 \
+  --data-port 24572 --interface SENDER_EGRESS_NIC --provider-authorized
+```
+
+`--provider-authorized` records operator acknowledgement but **does not
+grant or verify network-provider authority**. Absent actual authorization,
+do not send any forged public-source packets. To use only the sender's
+locally assigned addresses instead, create the challenge with
+`--transport field_udp_bound` and omit `--interface` and
+`--provider-authorized` at send time.
+
+**Current field restriction:** the signed destination IPv4 must be assigned directly to the receiving host interface; server-side DNAT/1:1 public-to-private forwarding is not yet modeled and must not be represented as supported. Both the grant and listener check direct ownership before operating.
+
+After the receiver finishes, independently transfer `receipt.json` to a
+trusted machine and check the exact three-way cryptographic binding:
+
+```sh
+stl-spoofdiag field verify --challenge challenge.json \
+  --grant grant.json --receipt receipt.json --ca ca.crt
+```
+
+`SUBMITTED_ONLY` is a sender syscall outcome, not packet delivery.
+A signed receiver observation is not proof of upstream provider admission,
+physical NIC capture, sender return routing, or private L3. A valid receipt
+with zero packets is **inconclusive**, not proof that an address is blocked.
 
 ## Debian / Ubuntu compatibility
 
 **Target distribution baseline:** Debian 11+ and Ubuntu 22.04+,
-Linux `amd64`/`arm64`. An actual offline package has been tested on
+Linux `amd64`/`arm64`. An *older private-lab version*, not this new Field engine, was exercised on
 Debian **12 AMD64 VMs** and in a disposable installation root on a
 Debian **13 AMD64** host. GitHub's Ubuntu CI tests build/package
 functionality but do **not** replace independent Ubuntu guest acceptance.
 ARM64 binaries build, but full booted ARM64 guest tests are still pending.
-The advanced raw-namespace mode additionally depends on kernel-specific
-features; compatibility of any public WAN path is not established.
+The new `field_raw_ipv4` mode requires Linux raw-socket privileges and
+explicit network/provider permission. Its public-WAN compatibility is
+**NOT_TESTED**; the historical VM evidence below applies to a different
+retired lab candidate.
 
 For **STL itself**, not this tool, the separate documented baseline is
 Ubuntu 22.04+, Debian 11+, kernel 5.4+ and iproute2 5.1+; its available

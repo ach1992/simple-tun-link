@@ -1,254 +1,102 @@
-# Go technical reference — standalone Spoof Diagnostics
+# Go Field CLI reference — untested field candidate
 
-This is a **partial, lab-restricted Go diagnostic** independent of STL runtime and installation. Go supports `version`, `preflight`, `sources add`, `plan`, `report`, a 15-action interactive `menu`, and actual authenticated two-agent **local** `lab` sessions with signed, portable receipts. It also supports a signed offline challenge/observation exchange when mTLS control is absent. Normal Go agents remain restricted to `127.0.0.1`; a separate **strictly network-namespace-gated** raw IPv4 RFC1918 test adapter is now available for independent local kernel acceptance. Public/real-world field probes remain disabled. No usable private L3 Link has been built. The removed historical Python experiment is recoverable in Git history;
-its test results must not be substituted for exact Go acceptance.
+The old `lab` command, loopback two-agent mode and detached private
+namespace adapter are **removed** from the current source. The tool's
+name, independent offline installer, per-version rollback and operator
+directory structure remain.
 
-`plan` validates **only explicit sources** in CSV/JSON. The file marks sender/receiver and A_TO_B vs B_TO_A; no IP block scanning is performed. `report` evaluates JSON declarations supplied by the operator; it does **NOT** cryptographically verify their observations. Accordingly results say `UNVERIFIED_INPUT_DECLARATION` and never claim private L3.
+## Commands
 
-
-## Restricted raw IPv4 adapter — fully isolated RFC1918 network namespaces only
-
-The independent Go program also includes a research-only `lab netns-send` / `lab netns-listen` transport for **actual private IPv4 headers**. This is **not** public-provider field testing. Before calling this adapter, independently prove a detached A (sender) → R (policy router) → B (receiver) topology with no public Internet-facing NIC, default route, host bridge or public addresses. The adapter refuses the host/initial network namespace, non-virtual NICs, unexpected interfaces, public/default routes and non-RFC1918 addresses. Only task-owned `sdg*` private veth interfaces are permitted.
-
-Create a signed challenge offline from a finite explicit private-lab CSV/JSON source inventory (example source `10.91.1.77`, direction `A_TO_B`, sender `A`, receiver `B`):
-
-```sh
-stl-spoofdiag lab challenge --transport isolated_private_raw --destination-ip 10.91.2.2 \
-  --file private-sources.csv --cert identity/A.crt --key identity/A.key \
-  --ca identity/ca.crt --sender A --receiver B --packet-size 192 \
-  --out signed-private-challenge.json
-```
-
-Only inside B's independently isolated, proven-private network namespace:
-
-```sh
-stl-spoofdiag lab netns-listen --challenge signed-private-challenge.json \
-  --file private-sources.csv --cert identity/B.crt --key identity/B.key \
-  --ca identity/ca.crt --sender A --receiver B --interface sdgb0 \
-  --bind-ip 10.91.2.2 --data-port 24572 --window-seconds 8 \
-  --state-dir /private/test-owned-replay-ledger --out /private/receipt.json
-```
-
-Only inside A's independently isolated, proven-private namespace:
-
-```sh
-stl-spoofdiag lab netns-send --challenge signed-private-challenge.json \
-  --cert identity/A.crt --key identity/A.key --ca identity/ca.crt \
-  --sender A --receiver B --interface sdga0 \
-  --destination-ip 10.91.2.2 --data-port 24572
-```
-
-Verify the exported signed challenge and receipt via `lab offline-verify --challenge signed-private-challenge.json --receipt /private/receipt.json --ca identity/ca.crt`. Correlate A interface egress, R policy counters and B independent packet capture. Without those observations, a signed receipt does not prove true sender egress, provider admission, sender return or private L3. An exact Go raw RFC1918 baseline was independently captured at both router interfaces on two separate Debian 12 KVM VMs (1/1 packet with a signed B receipt), but wider fault/return-path and real-provider acceptance remains incomplete. The adapter is NOT field-ready.
-## Actual Go loopback operation (no spoofing, 127.0.0.1 only)
-
-The Go binary now has a genuine, separate sender and receiver using TLS 1.3 mutual authentication plus authenticated UDP over **loopback only**. A receiver signs the observations with its Ed25519 certificate. The sender verifies the signature, signer, run ID and sample identities. The standalone `lab verify` command can check a saved receipt against an independently recorded run ID. This proves **local authenticated transport and observation exchange** only: every claimed RFC1918 candidate remains metadata; the actual UDP source is `127.0.0.1`. This loopback mode itself does not exercise raw IPv4, provider admission, sender return or private L3. The raw RFC1918 VM experiment is evidenced separately above, and is not ISP evidence.
-
-For disposable local development only, generate a new short-lived CA and separate A/B identities (the generated directory contains **both** nodes' private keys and the CA signing key; never copy the directory into a real server or package):
-
-```sh
-stl-spoofdiag lab identity --dir /tmp/new-private-spoofdiag-lab-identity
-```
-
-Use `examples/sources-private.csv` from this source tree or copy the shipped `sources-private.csv` from the verified offline package. In terminal B:
-
-```sh
-stl-spoofdiag lab serve --file sources-private.csv \
-  --cert /tmp/new-private-spoofdiag-lab-identity/B.crt \
-  --key /tmp/new-private-spoofdiag-lab-identity/B.key \
-  --ca /tmp/new-private-spoofdiag-lab-identity/ca.crt \
-  --sender A --receiver B --control-port 24001 --data-port 24002
-```
-
-In terminal A:
-
-```sh
-stl-spoofdiag lab run --file sources-private.csv \
-  --cert /tmp/new-private-spoofdiag-lab-identity/A.crt \
-  --key /tmp/new-private-spoofdiag-lab-identity/A.key \
-  --ca /tmp/new-private-spoofdiag-lab-identity/ca.crt \
-  --sender A --receiver B --control-port 24001 \
-  --packet-size 192 --out /tmp/new-peer-receipt.json
-```
-
-The `run_id` printed by A must be retained **independently**. To verify the portable receipt without contacting B:
-
-```sh
-stl-spoofdiag lab verify --file /tmp/new-peer-receipt.json \
-  --ca /tmp/new-private-spoofdiag-lab-identity/ca.crt \
-  --peer spoofdiag-b.local --run EXACT_RUN_ID_FROM_SENDER
-```
-
-To test the opposite direction, swap sender/receiver roles, their A/B certificates, and the listener's role; candidates in the CSV remain **direction-specific**, not interchangeable.
-
-### File-based signed challenge/receipt with no mTLS control channel
-
-This separate, functional **local** flow is for demonstrating how authenticated measurements can be reunited when the normal control channel is unavailable. It does not discover a peer or test a WAN. All UDP sockets are bound to/send to `127.0.0.1` and the sender never claims `PEER_OBSERVED` solely because it sent a packet. The signed challenge carries no shared HMAC secret; each offline UDP packet is individually Ed25519-signed.
-
-Terminal A creates a new expiring, signed challenge:
-
-```sh
-stl-spoofdiag lab challenge --file sources-private.csv \
-  --cert /tmp/new-private-spoofdiag-lab-identity/A.crt \
-  --key /tmp/new-private-spoofdiag-lab-identity/A.key \
-  --ca /tmp/new-private-spoofdiag-lab-identity/ca.crt \
-  --sender A --receiver B --packet-size 192 \
-  --out /tmp/new-challenge.json
-```
-
-Transfer that signed JSON to B by an authorized out-of-band means. Terminal B validates the signature, exact allowlist and replay ledger before listening:
-
-```sh
-stl-spoofdiag lab offline-listen --file sources-private.csv \
-  --cert /tmp/new-private-spoofdiag-lab-identity/B.crt \
-  --key /tmp/new-private-spoofdiag-lab-identity/B.key \
-  --ca /tmp/new-private-spoofdiag-lab-identity/ca.crt \
-  --sender A --receiver B --challenge /tmp/new-challenge.json \
-  --state-dir /tmp/new-private-replay-ledger --window-seconds 10 \
-  --data-port 24002 --out /tmp/new-offline-receipt.json
-```
-
-While B listens, A invokes:
-
-```sh
-stl-spoofdiag lab offline-send --challenge /tmp/new-challenge.json \
-  --cert /tmp/new-private-spoofdiag-lab-identity/A.crt \
-  --key /tmp/new-private-spoofdiag-lab-identity/A.key \
-  --ca /tmp/new-private-spoofdiag-lab-identity/ca.crt \
-  --sender A --receiver B --data-port 24002
-```
-
-Finally, after transferring B's signed receipt back to the operator:
-
-```sh
-stl-spoofdiag lab offline-verify --challenge /tmp/new-challenge.json \
-  --receipt /tmp/new-offline-receipt.json \
-  --ca /tmp/new-private-spoofdiag-lab-identity/ca.crt
-```
-
-A valid signed receipt with **zero** packets is an `INCONCLUSIVE` delivery result, not proof of IP rejection. A partial receipt remains `PARTIAL`. The receiver's private `--state-dir` consumes run IDs durably and rejects reusing the same challenge; preserve it for the entire testing period. The challenge expires within 90 seconds **for live transmission and reception**; generate a fresh one for each new run. `lab offline-verify` separately accepts an archived challenge/receipt **after expiry** only if their signatures, certificates at declared observation time, roles, run ID, samples and bounded event-time relationship verify. This is historical cryptographic validation only: signer-declared timestamps are **not independently trusted clock evidence** and do **not** authorize replay of an expired challenge. Signed records do not establish physical egress, admission of the claimed IP, sender-return routing, or an STL Link.
-
-**Not yet delivered:** comprehensive VM policy/return/loss/MTU acceptance
-(beyond historical 1/1 private samples), a fully verified multi-candidate
-failure matrix, production-grade peer credential provisioning, general
-field implementation, power-loss/disk-full recovery validation,
-independently verified publisher signatures, and a **published** tool-specific
-Release. The versionless channel installer is implemented but remains
-`status=unpublished` until its first independently approved tool release. A tool-owned interrupted
-installer stage can be recovered under the destination lock, but actual
-power-loss acceptance remains untested. A local HTTP online bootstrap is implemented and tested but unpublished. Keep `LAB_VERIFIED` and `FIELD_READY` unset until those independent gates pass.
-
-## Downloadable prebuilt lab archives (temporary CI artifacts, not a published release)
-
-The dedicated `Spoof Diagnostics (independent Go)` CI workflow, when green, uploads an **unreleased, short-retention** Actions artifact named `spoofdiag-lab-<exact HEAD SHA>`, containing checksummed `linux_amd64` and `linux_arm64` offline Go archives. In GitHub open **Actions → Spoof Diagnostics (independent Go) → successful SHA-pinned run → Artifacts**, download that archive on a trusted workstation, compare the embedded version/commit against the expected `dev-spoof` or topic-PR HEAD and independently verified hash, and copy only the desired architecture's full archive to `/root/stl-spoofdiag/` on an authorized isolated test guest. An Actions ZIP plus SHA file from the same untrusted account does **not** supply publisher authentication and does **not** enable field operation. The destination itself needs neither Go nor Internet. These previews expire, and the final release still needs a separate artifact review, provenance trust and Owner release authorization.
-
-## Online and offline install: one verified engine
-
-The **general, versionless command** is now documented in
-[the operator README](../README.md#install-online--one-general-command-no-version-number).
-`scripts/install-latest.sh` resolves **only** the selected SpoofDiag
-release through the canonical `release-channel.txt`; at present that
-channel says `status=unpublished` so it fails before installing anything.
-It does not use GitHub's shared STL `releases/latest` endpoint.
-
-The existing `scripts/online-bootstrap.sh` remains the **pinned engine**.
-It accepts an exact prefixed release tag and an independently trusted
-SHA256 of the architecture-specific archive, downloads only over HTTPS,
-checks archive identity and safe members, then invokes
-`install-offline.sh`. It saves verified downloads in
-`/root/stl-spoofdiag/` by default (or in an explicitly given private
-`--inbox`). The Go/Python toolchain is never downloaded. A local
-HTTP/127.0.0.1 test fixture accepts only explicit `dev-*` snapshots.
-A checksum fetched from the same publisher is not independent
-publisher-signature authentication.
-
-For an already verified complete offline archive, see the
-[step-by-step beginner instructions](../README.md#install-offline--beginner-friendly-instructions).
-Always verify the expected external SHA first, extract into a **fresh**
-private versioned directory, run `install-offline.sh --verify`,
-and then `--install`. No Go runtime, `apt`, `pip` or other package
-installation is required on the target. [Full installation and
-release contract](INSTALL-AND-RELEASE.md).
-
-## Use without internet, no packages or build tools on the destination
-
-Once a complete archive is transferred to
-`/root/stl-spoofdiag/`, verify its external SHA256 and extract it to a
-**new** private `extracted-<archive-name>/stl-spoofdiag/` directory.
-The installed program itself lives in `/opt/stl-spoofdiag/`, not
-in that download inbox. As root, `cd` into the package's **inner**
-`stl-spoofdiag/` directory, where the installer and sample files reside:
-
-```sh
-bash install-offline.sh --verify
-bash install-offline.sh --install
+```text
 stl-spoofdiag version
+stl-spoofdiag preflight
+stl-spoofdiag sources add|list|import|remove|replace ...
+stl-spoofdiag plan --file PATH
+stl-spoofdiag report --file PATH
+stl-spoofdiag field identity --dir NEW_PRIVATE_DIR
+stl-spoofdiag field challenge --file ALLOWLIST --cert A.crt --key A.key \
+  --ca ca.crt --sender A --receiver B --transport field_raw_ipv4 \
+  --destination-ip RECEIVER_IP --data-port 24572 --out challenge.json
+stl-spoofdiag field grant --file RECEIVER_ALLOWLIST \
+  --challenge challenge.json --cert B.crt --key B.key \
+  --ca ca.crt --sender A --receiver B --out grant.json
+stl-spoofdiag field listen --file RECEIVER_ALLOWLIST \
+  --challenge challenge.json --grant grant.json \
+  --cert B.crt --key B.key --ca ca.crt \
+  --sender A --receiver B --destination-ip RECEIVER_IP \
+  --bind-ip RECEIVER_IP --data-port 24572 \
+  --state-dir PRIVATE_0700_LEDGER --out receipt.json
+stl-spoofdiag field send --file SENDER_ALLOWLIST \
+  --challenge challenge.json --grant grant.json \
+  --cert A.crt --key A.key --ca ca.crt \
+  --sender A --receiver B --destination-ip RECEIVER_IP \
+  --data-port 24572 --interface EGRESS_NIC --provider-authorized
+stl-spoofdiag field verify --challenge challenge.json \
+  --grant grant.json --receipt receipt.json --ca ca.crt
 stl-spoofdiag menu
-stl-spoofdiag plan --file sources-private.csv
-stl-spoofdiag report --file evidence-private.json
 ```
 
-The full command sequence showing how to build the exact extraction
-directory is in [the canonical README](../README.md#install-offline--beginner-friendly-instructions);
-do not type literal `<archive-name>` placeholders.
+These are documentation **examples**, not tests performed or
+instructions to send public forged-source traffic without permission.
+`--provider-authorized` is an operator acknowledgement and is insufficient
+without separately confirmed Owner, peer and provider authority.
 
-The operator must confirm `YES` on interactive installation or lifecycle changes; use `--accept` **only** for explicitly authorized noninteractive/test operations. To upgrade, verify a new archive and invoke its `--install` command again; the old verified version stays stored locally. To revert invoke `bash install-offline.sh --rollback --to EXACT_STORED_VERSION`, or remove only verified tool-owned binaries with `bash install-offline.sh --uninstall`. Both operations preserve private configuration and evidence. The installer uses standard Linux `flock` to refuse concurrent mutations of the same destination, and safely recovers precisely identified, tool-owned abandoned `.stage.XXXXXXXX` files after an interruption; unknown files or symlinks are never recursively cleared. For other interruptions (disk full, read-only mount, power loss), review and rerun the verified installer rather than deleting unrecognized resources. Use `--destdir /existing/test-root` only for disposable test-root acceptance. No `apt`, `pip`, `curl`, `wget` or Go toolchain should run on the destination. The installer places the standalone binary but **does not automatically start an agent**, open firewall ports, create Link/network configurations or enable public-source spoofing. Local agents are started explicitly with `lab` commands. Default mTLS/UDP sockets are loopback-only; separate `netns-*` commands run only in a verified isolated RFC1918 lab namespace and are not field-capable.
+For a legitimate locally assigned source-address experiment, create
+the challenge with `--transport field_udp_bound` and omit the raw
+`--interface` / `--provider-authorized` arguments when sending.
 
-Sample source and evidence files contain private example addresses and illustrative **NOT_TESTED** records, not network measurements. The offline installer verifies archive-contained hashes and manifest; those hashes alone are not independent publisher authentication. Verify the full artifact against an independently trusted expected digest/signature before running it as root.
+## Candidate JSON and CSV
 
-## Interactive terminal menu and source inventory
+JSON schema version 1 uses `mode:"field_candidates"` and an array of
+`{ip,direction,sender,receiver}` objects. Only exact IPv4 addresses
+are accepted. `sender/receiver` must be A/B or B/A and direction must
+match. Duplicates are rejected. CSV columns are
+`ip,direction,sender,receiver` and imply `field_candidates`.
+`sources` management persists private (0600) local JSON inventories;
+`plan` is network-free.
 
-Run `stl-spoofdiag menu` for a readable header showing build/architecture, mode, testing limitations and operations. Supported interactive actions cover prerequisite checks, build identity,
-source list/add/import/remove/replace, plan validation, declared evidence,
-challenge creation, both signed-receipt verification modes, disposable local
-credentials, loopback TLS sender/receiver and signed-file loopback
-sender/receiver, plus help. The guarded raw-netns transport remains an
-explicit advanced menu action (option 15) using the same checked CLI engine;
-it is never an automatic menu side effect. Invalid choices, invalid paths and candidate errors are reported, then the menu remains usable; EOF exits cleanly. All actions use the same engine as direct CLI. `NO_COLOR` and piped/non-TTY use never require terminal ANSI parsing or an external UI runtime. For programmatic control, use CLI/JSON, never scrape the menu.
+The receiving host must have the signed destination IPv4 directly assigned to an active network interface; this first implementation does not support NAT-forwarded receiver destinations. The operator must independently manage each peer's allowlist and
+provision CA and node keys on a trusted offline machine. `field identity`
+places the CA secret and both node secrets together in a new 0700
+provisioning directory for deliberate split distribution; do **not**
+copy those extra secrets to individual server hosts.
 
-The corresponding non-interactive commands are `sources list --file`, `sources import --file --from`, `sources remove --file --old-*`, and `sources replace --file --old-* --ip --direction --sender --receiver`. The inventory can become empty, but an empty candidate list is **not** a runnable plan; add permitted private sources again before creating a challenge. No source operation emits probes or discovers arbitrary Internet IPs.
+## Signed Field session internals
 
-## Enter an explicit source IP manually (no network calls)
+- Challenge signed by A (Ed25519), valid 60–900 seconds; default
+  600 seconds, 1–32 distinct samples, 128–1200 UDP data bytes/sample.
+- Receiver-signed grant is bound to the challenge SHA256 digest, run ID,
+  destination IPv4, UDP port and receiver role. Neither signed artifact
+  independently proves IP-prefix rights or provider permission.
+- Sender checks its own key matches the challenge and receiver's valid
+  grant, and checks its local exact source list.
+- Receiver checks the same signed run and its **own** source list,
+  verifies A's packet signatures and consumes the run ID in a private
+  replay ledger; reception window is finite, max 120 seconds.
+- Receiver signs actual IPv4 socket source, chosen source, per-sample
+  comparison, epoch, packet size and role/direction. Zero receipt
+  observations are still signed, but are inconclusive.
+- Archived verification checks cryptographic consistency at declared
+  artifact times, **not** independent wall-clock truth or physical egress.
 
-An operator can enter an owned **private laboratory** source and its direction without using an editor. The tool creates/updates an operator-owned JSON source list; repeated candidates, inconsistent source modes and direct symlink files are refused.
+Raw IPv4 on Linux requires `CAP_NET_RAW`, an UP non-loopback explicit NIC
+and separate provider permission. The IPv4 packet has a standard IPv4
+header, UDP port 24101 source / signed destination UDP port, DF and
+TTL 64, bounded payload, and IPv4 UDP checksum zero (legal for IPv4).
+The raw sockaddr port is zero as required by the Linux raw(7) API; the destination UDP port is encoded inside the UDP header. No host firewall, route, default interface or sysctl is modified. See https://man7.org/linux/man-pages/man7/raw.7.html for Linux IP_HDRINCL checksum and capability semantics.
+`Sendto` success is reported only as `SUBMITTED_ONLY`.
 
-```sh
-stl-spoofdiag sources add \
-  --file /root/stl-spoofdiag/sources.json \
-  --mode private_lab \
-  --ip 10.90.3.100 --direction A_TO_B --sender A --receiver B
+This candidate has **not** been verified in a live kernel/namespace,
+with two actual public hosts, or at a provider. Build/compilation is
+not proof of delivery, NAT behavior, source validity or return paths.
 
-stl-spoofdiag sources add \
-  --file /root/stl-spoofdiag/sources.json \
-  --ip 10.90.3.101 --direction B_TO_A --sender B --receiver A
+## Independent installation
 
-stl-spoofdiag plan --file /root/stl-spoofdiag/sources.json
-```
+Refer to [README.md](../README.md) for beginner-ready online and offline
+procedures. No Go, Python, package-manager or Internet access is
+required on the destination for a verified offline bundle. Build artifacts
+remain separate from STL stable version/release namespace.
 
-To use an existing CSV or JSON file, use `plan --file` or menu option 3. Menu option 3 then inventory action 2 can add a single candidate to JSON;
-menu option 5 creates an offline signed challenge. This **stores candidate identity only**; there is no packet transmission, IP scanning, or inference that the source is usable.
-
-## Build and validate an offline archive (developer/CI machine only)
-
-From a clean checked-out repository at the exact intended source commit:
-
-```sh
-cd research/spoof-diagnostics
-export GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local
-bash scripts/package-offline.sh /tmp/spoofdiag-package-dir "$(git rev-parse HEAD)" dev-local amd64
-cd /tmp/spoofdiag-package-dir
-sha256sum -c spoofdiag-dev-local_linux_amd64.tar.gz.sha256
-```
-
-The output archive is `spoofdiag-dev-local_linux_amd64.tar.gz`. For ARM64 replace the last argument with `arm64`, build on a Go-capable development/CI host and install only on a matching Linux architecture. A `dev-local` archive is **NOT a published GitHub release**; it is a local snapshot. Copy the archive to `/root/stl-spoofdiag/` on a specifically authorized device. The external `.sha256` file does not establish publisher authenticity by itself: compare the digest against an independently trusted manifest/source identity.
-
-## Local source and loopback acceptance
-
-```sh
-cd research/spoof-diagnostics
-GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go test ./...
-GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local CGO_ENABLED=0 go build ./cmd/stl-spoofdiag
-```
-
-CI/build machines (not hosts being diagnosed) require Go >= 1.23. The generator `scripts/build-offline.sh` builds an **unpublished snapshot directory**, not a GitHub Release or production package. The standalone installer supports verified local offline install/upgrade, rollback to a previously stored version, and tool-owned binary uninstall while retaining operator private state; positive/negative lifecycle tests passed in disposable test roots. Real VM power-loss/disk-full recovery, independently authenticated publisher identity, tagged public release workflow and full isolated two/three-guest raw packet fault-matrix acceptance remain outstanding (one exact Go VM baseline PASS).
-
-For architectural truth see [docs/ARCHITECTURE.md](ARCHITECTURE.md) and [docs/INSTALL-AND-RELEASE.md](INSTALL-AND-RELEASE.md). No interaction with STL runtime or installed Links is allowed.
+The `release-channel.txt` stays `status=unpublished` until its own
+reviewed and Owner-authorized release. An old Draft Release contains a
+different SHA and cannot validate this Field candidate.
