@@ -1,0 +1,3 @@
+ip,direction,sender,receiver
+10.90.3.100,A_TO_B,A,B
+10.90.3.101,B_TO_A,B,A
