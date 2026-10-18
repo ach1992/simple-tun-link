@@ -277,6 +277,43 @@ apt_safety=(-o APT::Get::AllowUnauthenticated=false
             -o Acquire::AllowDowngradeToInsecureRepositories=false
             -o APT::Get::AllowRemoveEssential=false
             -o APT::Get::AllowChangeHeldPackages=false)
+# APT's DPkg::Lock::Timeout does not cover the package-index lists lock on
+# supported Debian/Ubuntu releases. Retry ONLY a positively classified lists
+# lock failure before the package transaction, never repository trust errors.
+apt_update_is_only_lists_lock() {
+  local output=$1 line
+  [[ $output == *'E: Could not get lock /var/lib/apt/lists/lock'* ]] || return 1
+  while IFS= read -r line; do
+    case "$line" in
+      'E: Could not get lock /var/lib/apt/lists/lock'*|'E: Unable to lock directory /var/lib/apt/lists/'*) ;;
+      E:\ *) return 1 ;;
+    esac
+  done <<< "$output"
+}
+
+apt_update_indexes() {
+  local output status attempt
+  # 12 attempts with 5-second gaps: at most 55 seconds of lock-only waits.
+  for ((attempt=1; attempt<=12; attempt++)); do
+    if output=$(LC_ALL=C DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none \
+      apt-get "${apt_safety[@]}" -o Acquire::Retries=2 update 2>&1); then
+      [[ -z $output ]] || printf '%s\n' "$output"
+      return 0
+    else
+      status=$?
+    fi
+    [[ -z $output ]] || printf '%s\n' "$output" >&2
+    if (( status != 100 )) || ! apt_update_is_only_lists_lock "$output"; then
+      fail 'APT index refresh failed for a reason other than the lists lock; no package install attempted. Inspect APT output and repository trust before retrying.'
+    fi
+    if (( attempt == 12 )); then
+      fail 'APT lists lock remained busy after bounded waiting; let the other apt-get finish, then rerun this operation. Do not delete APT lock files or kill package-manager processes.'
+    fi
+    printf 'stl installer [INFO]: Another APT process holds the lists lock; waiting 5 seconds before retry %d/12.\n' "$((attempt+1))" >&2
+    sleep 5
+  done
+}
+
 apt_resolve_plan() {
   local text line pkg version requested found
   local -a planned=()
@@ -703,8 +740,7 @@ ensure_packages() {
   # Already-installed STL "prepare" must instead compare its prior read-only
   # exact plan, refresh indexes and refuse any changed plan.
   if [[ $action != prepare ]]; then
-    DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none       apt-get "${apt_safety[@]}" -o Acquire::Retries=2 update ||
-      fail 'APT index refresh failed before initial dependency install'
+    apt_update_indexes
   fi
   apt_resolve_plan
   before_plan=$apt_plan
@@ -716,8 +752,7 @@ ensure_packages() {
   fi
   printf '[INFO] Installing verified missing packages on %s %s: %s\n' "$os_id" "$os_version" "$before_plan" >&2
   if [[ $action == prepare ]]; then
-    DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none       apt-get "${apt_safety[@]}" -o Acquire::Retries=2 update ||
-      fail 'APT index refresh failed; inspect package indexes before retry'
+    apt_update_indexes
     apt_resolve_plan
     [[ $apt_plan == "$before_plan" ]] ||
       fail 'APT dependency plan changed after index refresh; package install cancelled'
@@ -734,12 +769,12 @@ ensure_packages() {
     fail 'approved APT install plan is empty; nothing installed'
   local apt_status=0
   DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none \
-    apt-get "${apt_safety[@]}" install -y --no-install-recommends -- "${pinned_install[@]}" || apt_status=$?
+    apt-get "${apt_safety[@]}" -o DPkg::Lock::Timeout=60 install -y --no-install-recommends -- "${pinned_install[@]}" || apt_status=$?
   if (( apt_status != 0 )); then
     if [[ $missing_ipsec == 1 ]]; then
       ipsec_report_interrupted_apt
     fi
-    fail 'APT transaction incomplete; no Link created and no automatic retry'
+    fail 'APT package transaction failed; no automatic retry because partial dpkg effects cannot be ruled out. Inspect dpkg --audit and active APT processes, then reconcile before retrying.'
   fi
   for pkg in "${packages[@]}"; do
     package_installed "$pkg" || fail "selected package remains unavailable: $pkg"
@@ -863,7 +898,7 @@ for recovery in "${recovery_dirs[@]}"; do
   sync_paths "$bin_dir" || fail 'cannot durably retire verified committed recovery'
 done
 read_record() {
-  is_regular "$record" || fail 'STL ownership record is missing or not regular'
+  is_regular "$record" || fail 'STL ownership record is missing or not regular; update requires a completed installer-owned installation. If initial install failed, verify stl/stlink are absent and no recovery is pending before rerunning official install; never fabricate the record or overwrite foreign files.'
   grep -qx 'format=1' "$record" && grep -qx 'project=simple-tun-link' "$record" || fail 'invalid ownership record'
   prior_version=$(sed -n 's/^version=//p' "$record")
   prior_hash=$(sed -n 's/^sha256=//p' "$record")
