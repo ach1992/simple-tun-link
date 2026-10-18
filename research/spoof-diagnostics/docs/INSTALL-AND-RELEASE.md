@@ -2,6 +2,48 @@
 
 **Partially implemented contract.** A buildable standalone offline Go archive and a verifying/idempotent install script exist for local release-candidate testing; owned-path/symlink negative controls were exercised in disposable test roots. **No public tool release or validated online one-liner exists.** Upgrade, rollback and uninstall were exercised both in disposable roots and on two isolated Debian 12 guests, including foreign-file refusal, private-state retention and user-accessible launcher verification. A simulated aborted staging directory was safely recovered and concurrent installer attempts were serialized on the same destination; unknown staging content was preserved and refused. Independent publisher signature verification, actual power-loss/disk-full recovery and broader guest coverage remain acceptance gaps; do not mistake current install smoke for full lifecycle acceptance.
 
+## Permanent tool branch and release identity
+
+`dev-spoof` is the persistent independent SpoofDiag development branch.
+SpoofDiag topic branches and pull requests **target `dev-spoof`**. They
+must not target or automatically integrate into STL `main`; `dev-spoof`
+must not be deleted as a routine branch cleanup. STL releases (`v*`)
+remain exclusively owned by the normal STL main branch process.
+
+For an approved release candidate, from a clean current `dev-spoof`
+checkout, with a new, tool-only prefixed tag:
+
+```sh
+bash scripts/prepare-release.sh spoofdiag-vX.Y.Z-rc.N /existing/parent/new-release-dir
+```
+
+This generates exactly these standalone release assets:
+
+```text
+spoofdiag-vX.Y.Z-rc.N_linux_amd64.tar.gz
+spoofdiag-vX.Y.Z-rc.N_linux_amd64.tar.gz.sha256
+spoofdiag-vX.Y.Z-rc.N_linux_arm64.tar.gz
+spoofdiag-vX.Y.Z-rc.N_linux_arm64.tar.gz.sha256
+online-bootstrap.sh
+SHA256SUMS
+RELEASE-SOURCE.txt
+```
+
+**Important naming:** the official `spoofdiag-v*` tag is already the
+filename prefix. The build and online bootstrap must **not** generate
+`spoofdiag-spoofdiag-v*` double prefixes. Development snapshots named
+`dev-*` retain the historical `spoofdiag-dev-*` filenames.
+
+Release source MUST resolve to a specific commit on `dev-spoof`, not
+automatically to STL `main`. Prepare the exact files and obtain a fresh
+independent review before creating a publicly visible GitHub **Pre-release**,
+verify checksum and provenance, and explicitly mark `prerelease: true`
+so it cannot displace the stable STL `releases/latest`. Do not invent
+remote artifacts or automatically publish from a branch push. The tool
+build script never creates tags, Release objects or deployments.
+A release tag remains immutable after publication; later changes use a
+new tool-specific version.
+
 ## 1. Download/storage location on each authorized server
 
 The operator explicitly wants to upload/download the **entire release archive** into root's home directory (not the filesystem `/`):
@@ -42,7 +84,7 @@ The installer must require **zero** `apt`, `pip`, `curl`, `wget`, Go toolchain o
 
 Current prototype: `scripts/online-bootstrap.sh` takes a **pinned exact** prefixed tag and an independently authenticated archive digest, downloads with HTTPS, rejects unknown archive members, and invokes the offline installer. The local `--local-url http://127.0.0.1:PORT` test route cannot be used with a published release tag and does not permit external HTTP. Verified in a temporary test-root with local HTTP: correct archive verified/installed twice; digest mismatch, invalid URL/version and network failure rejected. **No public tagged tool release, independently signed manifest, or trustworthy one-line command is presently published.** Do not advertise a working `releases/latest` alias for the standalone diagnostic.
 
-## 3a. One-line online installation (release-ready CLI, not yet published)
+## 3a. One-line online installation (version-pinned CLI, after publication)
 
 From a checked-out version of this tool, after the dedicated release and its
 archive digest have been authenticated, the online installer is a one-command

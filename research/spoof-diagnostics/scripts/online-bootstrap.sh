@@ -47,7 +47,12 @@ case "$(uname -m)" in
   aarch64) arch=arm64 ;;
   *) fail "no prebuilt binary available for this architecture: $(uname -m)" ;;
 esac
-archive="spoofdiag-${version}_linux_${arch}.tar.gz"
+# Keep the release asset name byte-identical to package-offline.sh.
+if [[ $version == dev-* ]]; then
+  archive="spoofdiag-${version}_linux_${arch}.tar.gz"
+else
+  archive="${version}_linux_${arch}.tar.gz"
+fi
 if [[ -n $localURL ]]; then origin=$localURL; else
   origin="https://github.com/ach1992/simple-tun-link/releases/download/$version"
 fi

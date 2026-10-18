@@ -41,10 +41,56 @@ availability can be inferred from a successful installation or a saved plan.
 | General Internet/public-IP raw sending or real-server operation | **Not implemented or validated** |
 | Two actual isolated Debian 12 VMs, earlier signed raw private-lab receipts | Partially verified; unresolved capture discrepancy |
 
-The source branch is not a public release. See the exact
+The `dev-spoof` branch is a development line, not automatically a public release.
+See the exact
 [validation matrix](docs/VALIDATION-MATRIX.md) and
 [lab evidence](docs/LOCAL-LAB-ACCEPTANCE.md) for the distinction between
 PASS, PARTIAL, NOT_RUN and blocked tests.
+
+## Independent GitHub development and release line
+
+**SpoofDiag lives on the permanent [`dev-spoof`](https://github.com/ach1992/simple-tun-link/tree/dev-spoof) branch.**
+The repository's `main` branch, default GitHub branch, stable STL
+installer, Links and STL version tags are **unchanged**. Do not merge
+`dev-spoof` into `main` or delete `dev-spoof` without a new explicit Owner
+decision.
+
+Future SpoofDiag changes use a short-lived topic branch, open a PR with
+**base `dev-spoof`** (not `main`), pass the dedicated tool CI and an
+independent exact-diff review, then integrate the approved change into
+`dev-spoof`. STL development proceeds independently on `main`. A later
+Owner-approved STL integration would be a **separate reviewed PR**; it is not
+triggered by a SpoofDiag Release or branch update.
+
+Tool-only Releases are tagged `spoofdiag-vX.Y.Z` (including
+`spoofdiag-vX.Y.Z-rc.N` while experimental) from the **exact commit on
+`dev-spoof`**, and must remain GitHub **Pre-releases** during this research
+period. Do not use STL's `v*` namespace, overwrite STL assets or publish a
+normal release that could replace STL's shared `releases/latest`. GitHub has
+**one** Releases page for this repository; use the tag prefix to select the
+correct product.
+
+The checked-in `scripts/prepare-release.sh` assembles signed-source-identity
+metadata plus checksum-verified **SpoofDiag-only** AMD64/ARM64 archives and
+the standalone downloader for review. It never publishes or deploys. A
+publicly downloadable prerelease remains gated by exact-head CI, independent
+review, package provenance verification and Owner-approved delivery.
+
+### Debian and Ubuntu compatibility
+
+| System | Intended baseline | Direct evidence |
+| --- | --- | --- |
+| Debian 11+ (AMD64/ARM64) | Standalone Linux binary, Bash/standard core tools + `flock` | Debian **12 AMD64** tested on two booted KVM guests; other versions and ARM64 guest operation not yet established |
+| Ubuntu 22.04+ (AMD64/ARM64) | Same static Go binary and installer prerequisites | GitHub Ubuntu Linux CI passed (runner OS is not equivalent to independent booted Ubuntu guests); separate distro VM matrix pending |
+
+These are **package compatibility targets, not a guarantee that all kernels,
+distributions, network namespaces or physical hosts permit every operation**.
+The private raw namespace adapter additionally requires Linux kernel raw
+socket/netns facilities and an isolated private environment. No public WAN
+source-spoof transport or provider compatibility has been established.
+For the **separate STL product**, its documented platform floor is
+Ubuntu 22.04+, Debian 11+, Linux kernel 5.4+ and iproute2 5.1+;
+its actual GRE/WireGuard/IPsec support is checked per host.
 
 ## Install — self-contained, no Go or Python on the destination
 

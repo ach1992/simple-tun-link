@@ -15,7 +15,13 @@ tmp=$(mktemp -d "$parent/.spoofdiag-package.XXXXXXXX")
 cleanup() { [[ ! -d $tmp ]] || rm -rf -- "$tmp"; }
 trap cleanup EXIT
 bash "$here/scripts/build-offline.sh" "$tmp/stl-spoofdiag" "$sha" "$version" "$arch"
-filename="spoofdiag-${version}_linux_${arch}.tar.gz"
+# dev-* snapshot archives carry a "spoofdiag-" prefix; official
+# spoofdiag-v* tags already include it and MUST NOT be doubled.
+if [[ $version == dev-* ]]; then
+  filename="spoofdiag-${version}_linux_${arch}.tar.gz"
+else
+  filename="${version}_linux_${arch}.tar.gz"
+fi
 # The archive contains one fixed private directory, not files scattered in /root.
 tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='@0' \
   -C "$tmp" -czf "$tmp/$filename" stl-spoofdiag

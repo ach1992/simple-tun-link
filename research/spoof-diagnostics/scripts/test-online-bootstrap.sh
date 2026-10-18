@@ -15,6 +15,16 @@ trap cleanup EXIT
 mkdir "$dir/root"
 bash "$here/scripts/package-offline.sh" "$dir/pkg" "$sha" dev-ci-online amd64 >/dev/null
 archive="$dir/pkg/spoofdiag-dev-ci-online_linux_amd64.tar.gz"
+# Official prefixed release tags must NOT accidentally double the prefix;
+# the online downloader derives this exact same basename.
+bash "$here/scripts/package-offline.sh" "$dir/release-pkg" "$sha" spoofdiag-v0.1.0-rc.1 amd64 > /dev/null
+candidate="$dir/release-pkg/spoofdiag-v0.1.0-rc.1_linux_amd64.tar.gz"
+test -f "$candidate"
+test ! -e "$dir/release-pkg/spoofdiag-spoofdiag-v0.1.0-rc.1_linux_amd64.tar.gz"
+( cd "$dir/release-pkg"; sha256sum -c spoofdiag-v0.1.0-rc.1_linux_amd64.tar.gz.sha256 > /dev/null )
+mkdir "$dir/release-verify"
+tar -xzf "$candidate" -C "$dir/release-verify"
+bash "$dir/release-verify/stl-spoofdiag/install-offline.sh" --verify > "$dir/release-verify.log"
 # The offline package must include the README's referenced documentation.
 tar -tzf "$archive" > "$dir/package-members.txt"
 for member in stl-spoofdiag/README.md stl-spoofdiag/docs/GO-REFERENCE.md stl-spoofdiag/docs/INSTALL-AND-RELEASE.md; do

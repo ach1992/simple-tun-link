@@ -2,11 +2,12 @@ name: Spoof Diagnostics (independent Go)
 
 on:
   pull_request:
+    branches: [dev-spoof, main]
     paths:
       - 'research/spoof-diagnostics/**'
       - '.github/workflows/spoofdiag-ci.yml'
   push:
-    branches: [main]
+    branches: [dev-spoof, main]
     paths:
       - 'research/spoof-diagnostics/**'
       - '.github/workflows/spoofdiag-ci.yml'
@@ -38,7 +39,7 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          test -z "$(gofmt -l cmd/stl-spoofdiag)"
+          test -z "$(gofmt -l cmd/stl-spoofdiag scripts/test-fixture-http)"
           go vet ./...
           go test -count=1 ./...
       - name: Standalone offline build / install / re-install
@@ -174,6 +175,24 @@ jobs:
         run: |
           bash -n scripts/online-bootstrap.sh scripts/test-online-bootstrap.sh
           bash scripts/test-online-bootstrap.sh
+      - name: Validate tool-specific prerelease assembly (no publication)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev-spoof'
+        env:
+          GOPROXY: 'off'
+          GOSUMDB: 'off'
+          GOTOOLCHAIN: 'local'
+          CGO_ENABLED: '0'
+        run: |
+          bash scripts/prepare-release.sh spoofdiag-v0.1.0-rc.1 "$RUNNER_TEMP/spoofdiag-tool-release-candidate"
+          (
+            cd "$RUNNER_TEMP/spoofdiag-tool-release-candidate"
+            sha256sum -c SHA256SUMS
+            test -f spoofdiag-v0.1.0-rc.1_linux_amd64.tar.gz
+            test -f spoofdiag-v0.1.0-rc.1_linux_arm64.tar.gz
+            test -f online-bootstrap.sh
+            test -f RELEASE-SOURCE.txt
+            test ! -f spoofdiag-spoofdiag-v0.1.0-rc.1_linux_amd64.tar.gz
+          )
       - name: Retain SHA-pinned unreleased lab archives
         if: success()
         uses: actions/upload-artifact@v4

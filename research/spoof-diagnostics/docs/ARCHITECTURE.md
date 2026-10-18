@@ -4,7 +4,7 @@ Status: **architecture contract / development target**, NOT evidence that the fu
 
 ## 1. Independence from STL
 
-- SAME GitHub repository `ach1992/simple-tun-link`, isolated under `research/spoof-diagnostics/`. The tool is not a built-in backend, an STL Link, a change to STL install/update, or an automatic transport selector.
+- SAME GitHub repository `ach1992/simple-tun-link`, isolated under `research/spoof-diagnostics/` and the permanent `dev-spoof` branch; no auto-merge into protected STL `main`. The tool is not a built-in backend, an STL Link, a change to STL install/update, or an automatic transport selector.
 - Future integration is deliberately **undecided**. Option A: preserve a standalone diagnostic and export only independently verified candidate observations for an operator configuring STL. Option B: after separate architectural approval, integrate a transport adapter beneath STL's normal private Link Address/L3 lifecycle. Neither is authorized by this research contract.
 - The research tool never creates STL-managed interfaces, routes, policies, services, credentials, or saved Links. The STL default stable release and `releases/latest` behavior remain unchanged.
 
