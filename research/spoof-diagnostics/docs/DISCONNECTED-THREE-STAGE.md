@@ -164,6 +164,27 @@ stl-spoofdiag campaign resume --dir /private/campaign
 stl-spoofdiag campaign stop --dir /private/campaign --reason "Operator stopped early"
 ```
 
+Campaign creation now stores a mandatory private `campaign-control.json`
+from the outset. If this file disappears or becomes invalid, further
+`campaign next` and `campaign send` operations **fail closed**—they do
+not infer ACTIVE from a missing file. STOP additionally publishes
+`campaign-stopped.json` as a separate terminal record, which prevents
+a stale ACTIVE control snapshot from reopening a stopped Campaign.
+
+A **historical Campaign** created before this mandatory record existed
+can be inspected offline without reactivation. To opt in explicitly
+to future Campaign steps, the local operator can use:
+
+```sh
+stl-spoofdiag campaign adopt --dir /private/legacy-campaign \
+  --reason CONFIRM_LEGACY_CAMPAIGN_SCOPE
+```
+
+This is not automatic resume, does not send traffic, and is refused
+if a terminal STOP marker exists. Verify the legacy Campaign's source,
+destination and previous evidence before adoption; lost history cannot
+be reconstructed from a self-declared migration.
+
 An early stop does **not** establish an accepted network path. Remaining
 source IPs are reported as NOT_TESTED. Pausing does not authorize sending,
 bypass the existing strict Grant or Ready checks, or replay a consumed Run.
@@ -213,8 +234,9 @@ as their evidence hashes. Files from a different direction or untrusted
 signer are rejected. Exact duplicate captures are not counted twice;
 monotonic earlier/later snapshots of one signed capture use the latest
 consistent observation set. Conflicting snapshots under one Capture ID
-are rejected. Contradictory actual-source claims for the same sample in
-different valid windows are reported as AMBIGUOUS, never an extra success.
+are rejected. Contradictory actual-source claims for the same sample within one signed
+capture **or** across distinct valid windows are reported as AMBIGUOUS,
+never an extra success.
 
 Per-direction capture input is limited to 128 signed JSON files; at most
 2,048 signed attempts are analyzed in one Campaign. The implementation

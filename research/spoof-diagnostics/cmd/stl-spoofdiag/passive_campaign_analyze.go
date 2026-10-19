@@ -89,6 +89,22 @@ func offlineRunEvidence(challengePath, senderPath, ca string, captures []string)
 				observed[i] = offlineSeen{Source: source}
 			}
 		}
+		// A conflict within one signed capture is NOT a missing sample or
+		// a valid first-source observation. Preserve its ambiguity even when
+		// an additional capture reports only one of the observed sources.
+		ambiguous, ok := summary["ambiguous_observations"].([]map[string]any)
+		if !ok {
+			return empty, errors.New("invalid signed ambiguity summary")
+		}
+		for _, item := range ambiguous {
+			i, ok := item["sample_index"].(int)
+			if !ok || i < 0 || i >= len(run.Samples) {
+				return empty, errors.New("ambiguous signed observation index outside Run")
+			}
+			previous := observed[i]
+			previous.Ambiguous = true
+			observed[i] = previous
+		}
 	}
 	for i, sighting := range observed {
 		sample := &run.Samples[i]

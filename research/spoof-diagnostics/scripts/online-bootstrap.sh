@@ -98,7 +98,10 @@ listed=$(sort "$scratch/list")
 # checksum-covered documentation member. Keep rejecting everything else.
 expectedLegacy=$(printf '%s\n' "$expectedMembers" | sort)
 expectedWithExchange=$(printf '%s\n%s\n' "$expectedMembers" 'stl-spoofdiag/docs/OFFLINE-EXCHANGE.md' | sort)
-[[ $listed == "$expectedLegacy" || $listed == "$expectedWithExchange" ]] ||
+# This standalone revision adds a disconnected A/B manual-evidence guide.
+# Preserve exact legacy and Exchange-only members, with no wildcard members.
+expectedWithDisconnected=$(printf '%s\n%s\n' "$expectedWithExchange" 'stl-spoofdiag/docs/DISCONNECTED-THREE-STAGE.md' | sort)
+[[ $listed == "$expectedLegacy" || $listed == "$expectedWithExchange" || $listed == "$expectedWithDisconnected" ]] ||
   fail 'archive has unexpected, missing, or duplicate product members'
 tar -tvzf "$archivePath" > "$scratch/member-types" || fail 'invalid archive metadata'
 if grep -E '^[^d-]' "$scratch/member-types" >/dev/null; then

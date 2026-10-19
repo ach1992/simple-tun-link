@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sort"
 	"time"
 )
 
@@ -295,9 +296,16 @@ func correlatePassive(challengePath, capturePath, senderReport, ca string) (map[
 		}
 		senderState = "SIGNED_SENDER_EVIDENCE_VERIFIED"
 	}
-	seen := make(map[int]bool)
-	var observations []map[string]any
-	matched, rewritten, unpaired := 0, 0, 0
+	// Authenticate every frame independently: sample-index de-duplication must
+	// never suppress a contradictory receiver-observed source address.
+	// Group only AFTER signature, Run ID, sample and timestamp validation.
+	type sampleClaim struct {
+		sample           fieldSample
+		firstObservedUTC string
+		sources          map[string]bool
+	}
+	claims := make(map[int]*sampleClaim)
+	invalid, duplicates, conflicts := 0, 0, 0
 	created, err := time.Parse(time.RFC3339Nano, c.CreatedUTC)
 	if err != nil {
 		return nil, err
@@ -305,45 +313,87 @@ func correlatePassive(challengePath, capturePath, senderReport, ca string) (map[
 	validAfter := created.Add(-60 * time.Second)
 	validBefore := time.Unix(c.ExpiresUnix, 0).Add(60 * time.Second)
 	for _, item := range capture.Observations {
-		observedAt, err := time.Parse(time.RFC3339Nano, item.ReceivedUTC)
-		if err != nil {
-			return nil, err
+		observedAt, e := time.Parse(time.RFC3339Nano, item.ReceivedUTC)
+		if e != nil {
+			return nil, e
 		}
 		if observedAt.Before(validAfter) || observedAt.After(validBefore) {
-			unpaired++ // a signed old/replayed packet is not current-Run reachability proof
+			invalid++ // Old captures cannot claim current-Run observations.
 			continue
 		}
 		buf, decodeErr := base64.StdEncoding.DecodeString(item.PacketBase64)
 		if decodeErr != nil {
 			return nil, decodeErr
 		}
-		sample, valid := verifyFieldPacket(buf, c, leaf.PublicKey.(ed25519.PublicKey), seen)
+		sample, valid := verifyFieldPacket(buf, c, leaf.PublicKey.(ed25519.PublicKey), make(map[int]bool))
 		if !valid {
-			unpaired++
+			invalid++
 			continue
 		}
-		match := sample.Candidate.IP == item.ActualPacketSource
+		entry, exists := claims[sample.Index]
+		if !exists {
+			claims[sample.Index] = &sampleClaim{sample: sample,
+				firstObservedUTC: item.ReceivedUTC, sources: map[string]bool{item.ActualPacketSource: true}}
+			continue
+		}
+		if entry.sources[item.ActualPacketSource] {
+			duplicates++ // Authenticated duplicate frame, same claimed UDP source.
+		} else {
+			conflicts++ // Independently signed receiver assertion disagrees.
+			entry.sources[item.ActualPacketSource] = true
+		}
+	}
+	var observations []map[string]any
+	var ambiguities []map[string]any
+	matched, rewritten := 0, 0
+	indexes := make([]int, 0, len(claims))
+	for index := range claims {
+		indexes = append(indexes, index)
+	}
+	sort.Ints(indexes)
+	for _, index := range indexes {
+		entry := claims[index]
+		addresses := make([]string, 0, len(entry.sources))
+		for ip := range entry.sources {
+			addresses = append(addresses, ip)
+		}
+		sort.Strings(addresses)
+		if len(addresses) > 1 {
+			ambiguities = append(ambiguities, map[string]any{
+				"sample_index": index, "candidate_source_ip": entry.sample.Candidate.IP,
+				"observed_sources": addresses,
+				"status":           "AMBIGUOUS_CONFLICTING_SIGNED_RECEIVER_SOURCES",
+			})
+			continue // NEVER choose first or most favorable source.
+		}
+		actual := addresses[0]
+		match := entry.sample.Candidate.IP == actual
 		if match {
 			matched++
 		} else {
 			rewritten++
 		}
 		observations = append(observations, map[string]any{
-			"sample_index": sample.Index, "candidate_source_ip": sample.Candidate.IP,
-			"actual_observed_source_ip": item.ActualPacketSource, "source_matched": match,
-			"receiver_observed_utc": item.ReceivedUTC, "status": "AUTHENTICATED_PEER_OBSERVATION",
+			"sample_index": index, "candidate_source_ip": entry.sample.Candidate.IP,
+			"actual_observed_source_ip": actual, "source_matched": match,
+			"receiver_observed_utc": entry.firstObservedUTC, "status": "AUTHENTICATED_PEER_OBSERVATION",
 		})
 	}
 	result := map[string]any{
 		"status": "SIGNED_ONE_WAY_EVIDENCE_NOT_RETURN_PATH_PROOF",
-		"run_id": c.RunID, "capture_id": capture.CaptureID, "direction": func() string { d, _ := roleDirection(c.Sender, c.Receiver); return d }(),
+		"run_id": c.RunID, "capture_id": capture.CaptureID,
+		"direction":       func() string { d, _ := roleDirection(c.Sender, c.Receiver); return d }(),
 		"planned_samples": len(c.Samples), "authenticated_observed": len(observations),
-		"source_matched": matched, "source_rewritten": rewritten,
-		"unmatched_or_duplicate_frames": unpaired,
-		"not_observed":                  len(c.Samples) - len(observations),
-		"receiver_capture_status":       capture.Status, "receiver_stop_reason": capture.StopReason,
+		"ambiguous_samples": len(ambiguities),
+		"source_matched":    matched, "source_rewritten": rewritten,
+		"invalid_or_unmatched_frames":      invalid,
+		"duplicate_authenticated_frames":   duplicates,
+		"conflicting_authenticated_frames": conflicts,
+		"unmatched_or_duplicate_frames":    invalid + duplicates + conflicts,
+		"not_observed":                     len(c.Samples) - len(observations) - len(ambiguities),
+		"receiver_capture_status":          capture.Status, "receiver_stop_reason": capture.StopReason,
 		"sender_evidence_state": senderState, "sender_evidence": sender,
-		"observations":        observations,
+		"observations": observations, "ambiguous_observations": ambiguities,
 		"not_observed_reason": "INCONCLUSIVE_NOT_PROVEN_BLOCKED",
 		"return_to_sender":    "NOT_TESTED", "private_L3": "NOT_TESTED",
 	}

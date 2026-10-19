@@ -49,7 +49,7 @@ type campaignManifest struct {
 
 func campaignCLI(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: campaign create|next|receive|send|report")
+		return errors.New("usage: campaign create|next|receive|send|report|status|pause|resume|stop|adopt")
 	}
 	op := args[0]
 	f := flag.NewFlagSet("campaign "+op, flag.ContinueOnError)
@@ -100,7 +100,7 @@ func campaignCLI(args []string) error {
 			return err
 		}
 		return pretty(result)
-	case "pause", "resume", "stop":
+	case "pause", "resume", "stop", "adopt":
 		result, err := changeCampaignControl(*dir, op, *controlReason)
 		if err != nil {
 			return err
@@ -327,8 +327,13 @@ func createCampaign(source, dir string, settings campaignManifest) (campaignMani
 			Number: seq, File: rel, Digest: digestBytes(b), Count: end - i})
 	}
 	if err := saveNewJSON(filepath.Join(dir, "campaign.json"), settings); err != nil {
-		// This marker is written last; a partial directory is never executable.
 		return empty, err
+	}
+	// Persist the initial control record. A missing or unparseable control
+	// file is always fail-closed, including after a terminal operator STOP.
+	// Crashes between these writes produce a non-runnable partial Campaign.
+	if err := initializeCampaignControl(dir, settings, "NEW_CAMPAIGN_INITIALIZED"); err != nil {
+		return empty, fmt.Errorf("failed to initialize mandatory Campaign state: %w", err)
 	}
 	return settings, nil
 }

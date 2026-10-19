@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestCampaignPauseResumeAndTerminalStopNeverSends(t *testing.T) {
@@ -21,8 +23,13 @@ func TestCampaignPauseResumeAndTerminalStopNeverSends(t *testing.T) {
 	if err != nil || before["control_state"] != "ACTIVE" {
 		t.Fatalf("bad default: %+v %v", before, err)
 	}
-	if _, err := os.Stat(campaignControlFile(dir)); !os.IsNotExist(err) {
-		t.Fatal("default status created a control file without operator request")
+	// Campaign creation owns a mandatory active control record. Merely
+	// reading status must not change its revision.
+	if st, err := os.Lstat(campaignControlFile(dir)); err != nil || !st.Mode().IsRegular() {
+		t.Fatalf("new Campaign lacks mandatory state: %v", err)
+	}
+	if before["control_revision"] != 1 {
+		t.Fatalf("status unexpectedly changed initial revision: %+v", before)
 	}
 	paused, err := changeCampaignControl(dir, "pause", "Review the first batch")
 	if err != nil || paused["state"] != "PAUSED" {
@@ -128,5 +135,99 @@ func TestCampaignControlInvalidStateFailsClosedAndFlock(t *testing.T) {
 	}
 	if _, err := campaignNext(dir, filepath.Join(ids, "A.crt"), filepath.Join(ids, "A.key"), ca, false); err == nil {
 		t.Fatal("invalid control silently defaulted to ACTIVE")
+	}
+}
+
+func TestStoppedCampaignNeverSilentlyReactivatesIfControlDisappears(t *testing.T) {
+	ids, ca := testCampaignIdentity(t)
+	source := testCandidateInventory(t, 2, "")
+	dir := filepath.Join(t.TempDir(), "campaign")
+	m, err := createCampaign(source, dir, testCampaignSettings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := changeCampaignControl(dir, "stop", "Operator explicitly ended this campaign"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(campaignStopFile(dir)); err != nil {
+		t.Fatalf("terminal marker missing: %v", err)
+	}
+	if err := os.Remove(campaignControlFile(dir)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readCampaignControl(dir, m); err == nil {
+		t.Fatal("missing STOP record reverted to ACTIVE")
+	}
+	if err := requireCampaignActive(dir, m); err == nil {
+		t.Fatal("missing STOP record allowed network operation")
+	}
+	cert, key := filepath.Join(ids, "A.crt"), filepath.Join(ids, "A.key")
+	if _, err := campaignNext(dir, cert, key, ca, false); err == nil {
+		t.Fatal("removed STOP record unlocked next")
+	}
+	if _, err := campaignSend(context.Background(), dir, cert, key, ca, "", false); err == nil {
+		t.Fatal("removed STOP record unlocked send")
+	}
+	if _, err := changeCampaignControl(dir, "resume", ""); err == nil {
+		t.Fatal("removed STOP record allowed resume")
+	}
+	if _, err := changeCampaignControl(dir, "adopt", legacyCampaignAdoption); err == nil {
+		t.Fatal("terminal marker allowed legacy adoption")
+	}
+	// Even a fake earlier ACTIVE state file does not override the separate
+	// terminal marker. A real operator may only create a NEW Campaign.
+	fake := campaignControl{Format: campaignControlFormat, CampaignID: m.CampaignID,
+		ManifestSHA256: mustCampaignDigestForTest(t, dir), State: "ACTIVE", Revision: 1,
+		Reason: "FAKE_OLD", UpdatedUTC: time.Now().UTC().Format(time.RFC3339Nano)}
+	if err := writeStagedJSON(campaignControlFile(dir), fake, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := requireCampaignActive(dir, m); err == nil {
+		t.Fatal("terminal marker ignored on ACTIVE rollback")
+	}
+}
+
+func mustCampaignDigestForTest(t *testing.T, dir string) string {
+	t.Helper()
+	b, err := readSmallRegular(filepath.Join(dir, "campaign.json"), 8<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return digestBytes(b)
+}
+
+func TestLegacyCampaignWithoutControlFailsClosedUntilExplicitAdoption(t *testing.T) {
+	ids, ca := testCampaignIdentity(t)
+	source := testCandidateInventory(t, 1, "")
+	dir := filepath.Join(t.TempDir(), "campaign")
+	m, err := createCampaign(source, dir, testCampaignSettings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate an old created Campaign without the new mandatory state.
+	if err := os.Remove(campaignControlFile(dir)); err != nil {
+		t.Fatal(err)
+	}
+	if err := requireCampaignActive(dir, m); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("absent legacy control should be fail-closed missing state: %v", err)
+	}
+	if _, err := campaignNext(dir, filepath.Join(ids, "A.crt"), filepath.Join(ids, "A.key"), ca, false); err == nil {
+		t.Fatal("missing legacy state silently enabled next")
+	}
+	if _, err := changeCampaignControl(dir, "resume", ""); err == nil {
+		t.Fatal("legacy resume bypassed explicit adoption")
+	}
+	if _, err := changeCampaignControl(dir, "adopt", "I think this was active"); err == nil {
+		t.Fatal("ambiguous legacy adoption accepted")
+	}
+	result, err := changeCampaignControl(dir, "adopt", legacyCampaignAdoption)
+	if err != nil || result["status"] != "LEGACY_CONTROL_ADOPTED_EXPLICITLY" {
+		t.Fatalf("legacy migration failed: %+v / %v", result, err)
+	}
+	if err := requireCampaignActive(dir, m); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := campaignNext(dir, filepath.Join(ids, "A.crt"), filepath.Join(ids, "A.key"), ca, false); err != nil {
+		t.Fatalf("explicitly adopted legacy Campaign did not resume normal strict plan: %v", err)
 	}
 }

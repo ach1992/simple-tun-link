@@ -342,3 +342,33 @@ func TestOfflineCompletedSenderWithoutReceiverProofRemainsInconclusive(t *testin
 		t.Fatalf("missing receiver evidence converted into false failure/success: %+v %+v", report, coverage)
 	}
 }
+
+func TestOfflineCampaignRejectsSameCaptureSourceContradictions(t *testing.T) {
+	ids, ca := testCampaignIdentity(t)
+	fixture := makeOfflineCampaignFixture(t, ids, ca, "A_TO_B", 1, 1, 1)
+	distinct := fixture.Capture
+	distinct.Observations = append([]passivePacket(nil), fixture.Capture.Observations...)
+	conflict := distinct.Observations[0]
+	conflict.Sequence = len(distinct.Observations)
+	conflict.ActualPacketSource = "10.81.0.9"
+	conflict.ReceivedUTC = time.Now().UTC().Format(time.RFC3339Nano)
+	distinct.Observations = append(distinct.Observations, conflict)
+	distinct.UpdatedUTC = time.Now().UTC().Format(time.RFC3339Nano)
+	credential, err := loadFieldCredential(filepath.Join(ids, "B.crt"), filepath.Join(ids, "B.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(fixture.CaptureDir, "capture.json")
+	if err := passiveSnapshot(path, distinct, credential, true); err != nil {
+		t.Fatal(err)
+	}
+	result, coverage, _, err := offlineCampaignDirection(fixture.Dir, fixture.CaptureDir, ca, "A_TO_B")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Runs) != 1 || result.Runs[0].ConflictingObservations != 1 ||
+		result.Runs[0].Observed != 1 || coverage[0].Ambiguous != 1 ||
+		result.Sources[0].Ambiguous != 1 || result.Sources[0].Observed != 1 {
+		t.Fatalf("same-capture contradiction counted as success: %+v / %+v", result, coverage)
+	}
+}

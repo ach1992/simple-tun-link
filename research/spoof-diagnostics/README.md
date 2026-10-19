@@ -79,7 +79,11 @@ For multiple Batches and multiple signed passive receiver windows, use the
 source coverage, deduplicate imported capture snapshots, report signed
 observation discrepancies and export JSON/CSV/HTML. Local
 `campaign status|pause|resume|stop` operations allow bounded Campaign
-checkpoints and terminal stop without triggering traffic. The legacy raw
+checkpoints and terminal stop without triggering traffic. New Campaigns
+create a mandatory private control record and a terminal STOP marker;
+missing state fails closed. An older Campaign without this record requires
+explicit `campaign adopt --reason CONFIRM_LEGACY_CAMPAIGN_SCOPE` before
+further execution; offline report access is unchanged. The legacy raw
 sender **still requires a signed receiver Grant**, and no unpaired raw-source
 transmission or unattended spoofed-source Campaign execution was enabled. Read the
 [disconnected three-stage development guide](docs/DISCONNECTED-THREE-STAGE.md)

@@ -153,3 +153,49 @@ func TestPassiveTamperingWrongRoleAndFiniteLimits(t *testing.T) {
 		t.Fatal("altered source was accepted without valid signature")
 	}
 }
+
+func TestPassiveSameSignedCaptureConflictingActualSourcesAreAmbiguous(t *testing.T) {
+	ids, ca, challenge, capture, packet := passiveFixture(t)
+	chPath := filepath.Join(t.TempDir(), "challenge.json")
+	if err := saveNewJSON(chPath, challenge); err != nil {
+		t.Fatal(err)
+	}
+	declared := challenge.Challenge.Samples[0].Candidate.IP
+	if yes, err := passiveAppend(&capture, packet, declared, time.Now().UTC()); err != nil || !yes {
+		t.Fatal(err)
+	}
+	if yes, err := passiveAppend(&capture, packet, "10.79.4.11", time.Now().UTC()); err != nil || !yes {
+		t.Fatal(err)
+	}
+	if yes, err := passiveAppend(&capture, packet, declared, time.Now().UTC()); err != nil || !yes {
+		t.Fatal(err)
+	}
+	capture.Status = "COMPLETE"
+	capture.StopReason = "WINDOW_ENDED"
+	capture.UpdatedUTC = time.Now().UTC().Format(time.RFC3339Nano)
+	credential, err := loadFieldCredential(filepath.Join(ids, "B.crt"), filepath.Join(ids, "B.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "contradiction.json")
+	if err := passiveSnapshot(path, capture, credential, false); err != nil {
+		t.Fatal(err)
+	}
+	found, err := correlatePassive(chPath, path, "", ca)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found["authenticated_observed"] != 0 || found["source_matched"] != 0 ||
+		found["source_rewritten"] != 0 || found["ambiguous_samples"] != 1 ||
+		found["duplicate_authenticated_frames"] != 1 || found["conflicting_authenticated_frames"] != 1 ||
+		found["not_observed"] != 0 {
+		t.Fatalf("conflicting signed claim was silently accepted: %+v", found)
+	}
+	ambiguities, ok := found["ambiguous_observations"].([]map[string]any)
+	if !ok || len(ambiguities) != 1 || ambiguities[0]["status"] != "AMBIGUOUS_CONFLICTING_SIGNED_RECEIVER_SOURCES" {
+		t.Fatalf("signed ambiguity was not preserved: %+v", found)
+	}
+	if observations := found["observations"].([]map[string]any); len(observations) != 0 {
+		t.Fatalf("false successful receiver observation: %+v", observations)
+	}
+}

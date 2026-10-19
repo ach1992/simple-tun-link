@@ -13,6 +13,8 @@ import (
 )
 
 const campaignControlFormat = "sdx-campaign-control-v1"
+const campaignStoppedFormat = "sdx-campaign-terminal-stop-v1"
+const legacyCampaignAdoption = "CONFIRM_LEGACY_CAMPAIGN_SCOPE"
 
 type campaignControl struct {
 	Format         string `json:"format"`
@@ -28,6 +30,64 @@ func campaignControlFile(dir string) string {
 	return filepath.Join(dir, "campaign-control.json")
 }
 
+type campaignStopRecord struct {
+	Format         string `json:"format"`
+	CampaignID     string `json:"campaign_id"`
+	ManifestSHA256 string `json:"manifest_sha256"`
+	Reason         string `json:"reason"`
+	StoppedUTC     string `json:"stopped_utc"`
+}
+
+func campaignStopFile(dir string) string { return filepath.Join(dir, "campaign-stopped.json") }
+
+// The terminal marker is distinct from the mutable progress state. A missing
+// control record can NEVER be interpreted as a fresh ACTIVE Campaign.
+func campaignStopMarker(dir, campaignID, manifestDigest string) (bool, error) {
+	raw, err := readSmallRegular(campaignStopFile(dir), 32768)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var stop campaignStopRecord
+	if err := strictJSON(raw, &stop); err != nil {
+		return false, err
+	}
+	if stop.Format != campaignStoppedFormat || stop.CampaignID != campaignID ||
+		stop.ManifestSHA256 != manifestDigest || stop.Reason == "" || len(stop.Reason) > 180 {
+		return false, errors.New("invalid or mismatched Campaign terminal marker")
+	}
+	if _, err = time.Parse(time.RFC3339Nano, stop.StoppedUTC); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// Called after the immutable manifest is published on new Campaign creation,
+// and only by an explicit operator migration for a legacy Campaign. Failure
+// leaves the Campaign non-runnable (no silent ACTIVE fallback).
+func initializeCampaignControl(dir string, m campaignManifest, reason string) error {
+	data, err := readSmallRegular(filepath.Join(dir, "campaign.json"), 8<<20)
+	if err != nil {
+		return err
+	}
+	digest := digestBytes(data)
+	hasStop, err := campaignStopMarker(dir, m.CampaignID, digest)
+	if err != nil {
+		return err
+	}
+	if hasStop {
+		return errors.New("terminally stopped Campaign cannot be initialized")
+	}
+	state := campaignControl{
+		Format: campaignControlFormat, CampaignID: m.CampaignID,
+		ManifestSHA256: digest, State: "ACTIVE", Revision: 1,
+		Reason: reason, UpdatedUTC: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	return writeStagedJSON(campaignControlFile(dir), state, false)
+}
+
 func readCampaignControl(dir string, m campaignManifest) (campaignControl, error) {
 	var zero campaignControl
 	manifestBytes, err := readSmallRegular(filepath.Join(dir, "campaign.json"), 8<<20)
@@ -35,11 +95,17 @@ func readCampaignControl(dir string, m campaignManifest) (campaignControl, error
 		return zero, err
 	}
 	expected := digestBytes(manifestBytes)
+	stopped, err := campaignStopMarker(dir, m.CampaignID, expected)
+	if err != nil {
+		return zero, err
+	}
 	path := campaignControlFile(dir)
 	raw, err := readSmallRegular(path, 32768)
 	if os.IsNotExist(err) {
-		return campaignControl{Format: campaignControlFormat, CampaignID: m.CampaignID,
-			ManifestSHA256: expected, State: "ACTIVE", Revision: 0}, nil
+		if stopped {
+			return zero, errors.New("stopped Campaign control file is missing: terminal stop remains enforced")
+		}
+		return zero, fmt.Errorf("missing Campaign control: no new Batch or send is allowed; for a LEGACY uninitialized Campaign use explicit adopt with --reason %s: %w", legacyCampaignAdoption, os.ErrNotExist)
 	}
 	if err != nil {
 		return zero, err
@@ -53,6 +119,9 @@ func readCampaignControl(dir string, m campaignManifest) (campaignControl, error
 		(control.State != "ACTIVE" && control.State != "PAUSED" && control.State != "STOPPED_BY_OPERATOR") ||
 		len(control.Reason) > 180 {
 		return zero, errors.New("campaign control is invalid or references a changed manifest")
+	}
+	if stopped && control.State != "STOPPED_BY_OPERATOR" {
+		return zero, errors.New("terminal Campaign marker prohibits reactivation or downgrade")
 	}
 	when, err := time.Parse(time.RFC3339Nano, control.UpdatedUTC)
 	if err != nil || when.After(time.Now().Add(time.Minute)) {
@@ -79,6 +148,25 @@ func changeCampaignControl(dir, verb, reason string) (map[string]any, error) {
 			return nil, err
 		}
 		current, err := readCampaignControl(dir, m)
+		if verb == "adopt" {
+			// Explicit one-time migration for a legacy Campaign with no state
+			// record. It is NEVER triggered by next/send or any automatic resume.
+			if !errors.Is(err, os.ErrNotExist) {
+				if err == nil {
+					return nil, errors.New("Campaign control already initialized")
+				}
+				return nil, err
+			}
+			if reason != legacyCampaignAdoption {
+				return nil, fmt.Errorf("explicit legacy migration requires --reason %s", legacyCampaignAdoption)
+			}
+			if err = initializeCampaignControl(dir, m, "EXPLICIT_LEGACY_OPERATOR_ADOPTION"); err != nil {
+				return nil, err
+			}
+			return map[string]any{"campaign_id": m.CampaignID, "state": "ACTIVE",
+				"revision": 1, "status": "LEGACY_CONTROL_ADOPTED_EXPLICITLY",
+				"network_calls": "NONE"}, nil
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -119,16 +207,28 @@ func changeCampaignControl(dir, verb, reason string) (map[string]any, error) {
 			return map[string]any{"campaign_id": m.CampaignID, "state": current.State,
 				"revision": current.Revision, "status": "UNCHANGED_ALREADY_IN_STATE", "network_calls": "NONE"}, nil
 		}
+		if target == "STOPPED_BY_OPERATOR" {
+			// Terminal evidence is placed before the mutable control update.
+			// An interrupted STOP is fail-closed, never a resume permission.
+			data, e := readSmallRegular(filepath.Join(dir, "campaign.json"), 8<<20)
+			if e != nil {
+				return nil, e
+			}
+			stop := campaignStopRecord{
+				Format: campaignStoppedFormat, CampaignID: m.CampaignID,
+				ManifestSHA256: digestBytes(data), Reason: reason,
+				StoppedUTC: time.Now().UTC().Format(time.RFC3339Nano),
+			}
+			if e = writeStagedJSON(campaignStopFile(dir), stop, false); e != nil {
+				return nil, e
+			}
+		}
 		current.State = target
 		current.Revision++
 		current.Reason = reason
 		current.UpdatedUTC = time.Now().UTC().Format(time.RFC3339Nano)
 		path := campaignControlFile(dir)
-		if current.Revision == 1 {
-			err = writeStagedJSON(path, current, false)
-		} else {
-			err = writeStagedJSON(path, current, true)
-		}
+		err = writeStagedJSON(path, current, true)
 		if err != nil {
 			return nil, err
 		}
