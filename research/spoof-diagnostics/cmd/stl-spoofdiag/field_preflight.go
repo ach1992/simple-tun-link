@@ -58,7 +58,12 @@ func inspectFieldPreflight(o fieldOptions, role string) (map[string]any, error) 
 			return nil, errors.New("local receiver identity differs from signed grant")
 		}
 	}
-	inv, err := readCandidates(o.File)
+	var inv CandidateFile
+	if role == "receiver" {
+		inv, err = receiverSourceSelection(ch, o.File)
+	} else {
+		inv, err = readCandidates(o.File)
+	}
 	if err != nil {
 		return nil, err
 	}

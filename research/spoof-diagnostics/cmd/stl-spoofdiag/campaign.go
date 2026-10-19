@@ -68,6 +68,10 @@ func campaignCLI(args []string) error {
 	key := f.String("key", "", "local sender key used for just-in-time challenge")
 	ca := f.String("ca", "", "trusted CA certificate")
 	retryExpired := f.Bool("retry-expired", false, "create a NEW separately consented run only after previous challenge expires")
+	hintChallenge := f.String("hint-challenge", "", "signed A_TO_B sender plan for offline reverse prioritization")
+	hintCapture := f.String("hint-capture", "", "signed passive A_TO_B receiver observations")
+	hintSender := f.String("hint-sender", "", "optional A_TO_B signed sender syscall evidence")
+	priorityOut := f.String("out", "", "new ordered B_TO_A inventory .json")
 	bind := f.String("bind-ip", "", "campaign receive: B's locally assigned destination IP (defaults to advertised destination)")
 	stateDir := f.String("state-dir", "", "campaign receive: private receiver replay-ledger directory (defaults inside campaign)")
 	forwarded := f.Bool("allow-forwarded-destination", false, "campaign receive: explicit B consent to previously configured DNAT")
@@ -75,6 +79,15 @@ func campaignCLI(args []string) error {
 	providerApproved := f.Bool("provider-authorized", false, "campaign send: operator acknowledgement, not independent provider permission")
 	if err := f.Parse(args[1:]); err != nil {
 		return err
+	}
+	if op == "prioritize" {
+		audit, err := prepareReversePriority(*file, *hintChallenge, *hintCapture, *hintSender, *ca, *priorityOut)
+		if err != nil {
+			return err
+		}
+		return pretty(map[string]any{"status": "PROVISIONAL_ORDER_ONLY_NO_REVERSE_PROOF_NO_NETWORK",
+			"ordered_file": *priorityOut, "audit": (*priorityOut)[:len(*priorityOut)-5] + ".ranking.json",
+			"source_count": len(audit.Candidates), "confidence": audit.Confidence})
 	}
 	if *dir == "" {
 		return errors.New("campaign --dir is required")
@@ -105,8 +118,8 @@ func campaignCLI(args []string) error {
 		}
 		return err
 	case "receive":
-		if *file == "" || *cert == "" || *key == "" || *ca == "" {
-			return errors.New("campaign receive requires B-owned --file allowlist and receiver --cert --key --ca")
+		if *cert == "" || *key == "" || *ca == "" {
+			return errors.New("campaign receive requires receiver --cert --key --ca; --file is optional")
 		}
 		return campaignReceive(*dir, *file, *cert, *key, *ca, *bind, *stateDir, *forwarded)
 	case "send":
@@ -130,19 +143,16 @@ func campaignCLI(args []string) error {
 	}
 }
 
-// campaignReceive uses the existing receiver-signed Field engine for exactly
-// one explicitly selected campaign batch. A receiver-controlled independent
-// allowlist is mandatory. Nothing opens a socket until Field accept/listen
-// passes signature and local-interface checks, and this is never a daemon.
+// campaignReceive uses the existing signed Field engine for one operator-approved
+// batch. B validates A's challenge and optionally applies an extra local
+// allowlist; no second copy of A's list is needed on B. No socket is opened
+// until the authenticated Field accept/listen path succeeds.
 func campaignReceive(dir, receiverAllowlist, cert, key, ca, bind, stateDir string, forwarded bool) error {
 	m, err := readCampaign(dir)
 	if err != nil {
 		return err
 	}
-	allowed, err := readCandidates(receiverAllowlist)
-	if err != nil {
-		return err
-	}
+
 	if stateDir == "" {
 		stateDir = filepath.Join(dir, "receiver-ledger")
 	}
@@ -168,8 +178,12 @@ func campaignReceive(dir, receiverAllowlist, cert, key, ca, bind, stateDir strin
 		if err := validateCampaignChallenge(dir, m, batch, ch, ca); err != nil {
 			return err
 		}
+		allowed, err := receiverSourceSelection(ch.Challenge, receiverAllowlist)
+		if err != nil {
+			return err
+		}
 		if err := validateFieldSamples(ch.Challenge.Samples, allowed, m.Sender, m.Receiver); err != nil {
-			return fmt.Errorf("receiver does not independently allow this signed candidate batch: %w", err)
+			return fmt.Errorf("receiver selection disagrees with signed batch: %w", err)
 		}
 		receiptPath, grantPath := filepath.Join(path, "receipt.json"), filepath.Join(path, "grant.json")
 		if _, err := os.Lstat(receiptPath); err == nil {
@@ -187,11 +201,14 @@ func campaignReceive(dir, receiverAllowlist, cert, key, ca, bind, stateDir strin
 			return err
 		}
 		op := "accept"
-		args := []string{op, "--file", receiverAllowlist, "--cert", cert, "--key", key, "--ca", ca,
+		args := []string{op, "--cert", cert, "--key", key, "--ca", ca,
 			"--sender", m.Sender, "--receiver", m.Receiver, "--challenge", challengePath,
 			"--destination-ip", m.DestinationIP, "--data-port", fmt.Sprint(m.DataPort),
 			"--bind-ip", bind, "--out", receiptPath, "--ready-out", filepath.Join(path, "ready.json"),
 			"--state-dir", stateDir}
+		if receiverAllowlist != "" {
+			args = append(args, "--file", receiverAllowlist)
+		}
 		if forwarded {
 			args = append(args, "--allow-forwarded-destination")
 		}

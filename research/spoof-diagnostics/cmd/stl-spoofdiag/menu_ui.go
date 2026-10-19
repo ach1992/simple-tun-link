@@ -14,7 +14,7 @@ func menu() error {
 	reader := bufio.NewReaderSize(os.Stdin, 64*1024)
 	for {
 		menuHeader()
-		fmt.Fprint(os.Stdout, "Choose [0-26] (or q): ")
+		fmt.Fprint(os.Stdout, "Choose [0-33] (or q): ")
 		answer, err := menuRead(reader)
 		if errors.Is(err, io.EOF) {
 			return nil
@@ -68,8 +68,22 @@ func menu() error {
 			result = menuCampaignReceive(reader)
 		case "20", "21", "22", "23", "24", "25", "26":
 			result = menuExchange(reader, answer)
+		case "27":
+			result = menuPassiveObserve(reader)
+		case "28":
+			result = menuPassiveCorrelate(reader)
+		case "29":
+			result = menuJobAction(reader, "status")
+		case "30":
+			result = menuJobAction(reader, "logs")
+		case "31":
+			result = menuJobAction(reader, "stop")
+		case "32":
+			result = menuReversePrioritize(reader)
+		case "33":
+			result = menuPassiveFinalCase(reader)
 		default:
-			fmt.Fprintln(os.Stderr, "Unknown option; use 0..26")
+			fmt.Fprintln(os.Stderr, "Unknown option; use 0..33")
 		}
 		if result != nil {
 			fmt.Fprintln(os.Stderr, "Operation not completed:", result)
@@ -96,6 +110,11 @@ func menuHeader() {
 	fmt.Fprintln(os.Stdout, "24) Inspect one signed bundle")
 	fmt.Fprintln(os.Stdout, "25) Import + verify inbox safely (no execution)")
 	fmt.Fprintln(os.Stdout, "26) Prepare IP list (ip.txt) to native inventory without network")
+	fmt.Fprintln(os.Stdout, "27) Detached independent receive (NO A files)")
+	fmt.Fprintln(os.Stdout, "28) Offline signed plan vs passive observation correlation")
+	fmt.Fprintln(os.Stdout, "29) Job status    30) Job logs    31) Stop finite job")
+	fmt.Fprintln(os.Stdout, "32) Sort B reverse source list using signed A evidence")
+	fmt.Fprintln(os.Stdout, "33) Offline final passive Case (one Run per direction)")
 	fmt.Fprintln(os.Stdout, " 0) Exit")
 	fmt.Fprintln(os.Stdout, "NOTE: Source match != provider permission != return-path proof.")
 	fmt.Fprintln(os.Stdout, "==============================================================")
@@ -298,7 +317,7 @@ func menuFieldOperation(r *bufio.Reader, op string) error {
 		return err
 	}
 	args = append(args, creds...)
-	if op == "challenge" || op == "grant" || op == "listen" || op == "send" {
+	if op == "challenge" || op == "send" {
 		file, err := menuAskNonempty(r, "Local source allowlist field_candidates CSV/JSON")
 		if err != nil {
 			return err
@@ -589,9 +608,12 @@ func menuFieldCheck(r *bufio.Reader) error {
 	if err != nil {
 		return err
 	}
-	file, err := menuAskNonempty(r, "Source inventory JSON/CSV")
-	if err != nil {
-		return err
+	file := ""
+	if role == "sender" {
+		file, err = menuAskNonempty(r, "Sender-owned source inventory JSON/CSV")
+		if err != nil {
+			return err
+		}
 	}
 	ch, err := menuAskNonempty(r, "Signed challenge JSON")
 	if err != nil {
@@ -610,8 +632,11 @@ func menuFieldCheck(r *bufio.Reader) error {
 		return err
 	}
 	args := append([]string{"check"}, creds...)
-	args = append(args, "--role", role, "--file", file, "--challenge", ch, "--grant", grant,
+	args = append(args, "--role", role, "--challenge", ch, "--grant", grant,
 		"--destination-ip", dest, "--data-port", fmt.Sprint(plan.Challenge.DataPort))
+	if file != "" {
+		args = append(args, "--file", file)
+	}
 	if role == "receiver" {
 		g, err := readSignedFieldGrant(grant)
 		if err != nil {
@@ -649,10 +674,6 @@ func menuFieldAccept(r *bufio.Reader) error {
 	if err != nil {
 		return err
 	}
-	file, err := menuAskNonempty(r, "Receiver-controlled exact source allowlist")
-	if err != nil {
-		return err
-	}
 	ch, err := menuAskNonempty(r, "Existing signed sender challenge JSON")
 	if err != nil {
 		return err
@@ -662,7 +683,7 @@ func menuFieldAccept(r *bufio.Reader) error {
 		return err
 	}
 	args := append([]string{"accept"}, creds...)
-	args = append(args, "--file", file, "--challenge", ch,
+	args = append(args, "--challenge", ch,
 		"--destination-ip", dest.Challenge.DestinationIP, "--data-port", fmt.Sprint(dest.Challenge.DataPort))
 	bind, err := menuAsk(r, "Receiver-local bind IPv4 (blank=advertised destination)")
 	if err != nil {
@@ -747,15 +768,11 @@ func menuCampaignSend(r *bufio.Reader) error {
 	return campaignCLI(args)
 }
 
-// The guided B-side campaign operation is intentionally foreground and
-// bounded to one batch. It reuses the CLI and its independent allowlist,
-// cryptographic grant checks, local bind checks and replay ledger.
+// The receiver approves one signed finite batch. A signed candidate set
+// already exists in the challenge; B does not reenter it or build a second
+// source inventory. The signed grant, bind checks and replay ledger remain.
 func menuCampaignReceive(r *bufio.Reader) error {
 	dir, err := menuAskNonempty(r, "Existing campaign directory transferred to receiver")
-	if err != nil {
-		return err
-	}
-	allowlist, err := menuAskNonempty(r, "Receiver-owned independently approved source allowlist")
 	if err != nil {
 		return err
 	}
@@ -775,7 +792,7 @@ func menuCampaignReceive(r *bufio.Reader) error {
 	if err != nil {
 		return err
 	}
-	args := []string{"receive", "--dir", dir, "--file", allowlist,
+	args := []string{"receive", "--dir", dir,
 		"--cert", cert, "--key", key, "--ca", ca}
 	if bind != "" {
 		manifest, err := readCampaign(dir)

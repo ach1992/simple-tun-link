@@ -20,7 +20,7 @@ func TestMenuBoundedInput(t *testing.T) {
 
 // The campaign receiver action must not run merely because paths exist.
 func TestMenuCampaignReceiverNeedsExplicitConsent(t *testing.T) {
-	input := "/not-a-real-campaign\nreceiver-sources.json\nB.crt\nB.key\nca.crt\n\nCANCEL\n"
+	input := "/not-a-real-campaign\nB.crt\nB.key\nca.crt\n\nCANCEL\n"
 	reader := bufio.NewReader(strings.NewReader(input))
 	err := menuCampaignReceive(reader)
 	if err == nil || !strings.Contains(err.Error(), "receiver operation not selected") {

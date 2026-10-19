@@ -11,7 +11,7 @@ import (
 
 func fieldCLI(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: field identity|challenge|grant|accept|check|listen|send|verify")
+		return errors.New("usage: field identity|challenge|grant|accept|check|listen|send|observe|correlate|verify")
 	}
 	op := args[0]
 	if op == "identity" {
@@ -30,6 +30,23 @@ func fieldCLI(args []string) error {
 			"caution": "contains BOTH node keys AND ca.key: distribute only each node's private key; never copy the CA private key onto field hosts"})
 	}
 	f := flag.NewFlagSet("field "+op, flag.ContinueOnError)
+	if op == "correlate" {
+		challenge := f.String("challenge", "", "A-signed sender plan, manually transferred after execution")
+		capture := f.String("capture", "", "B-signed independent passive observation file")
+		sender := f.String("sender-report", "", "optional signed sender syscall report")
+		ca := f.String("ca", "", "trusted public CA")
+		if err := f.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *challenge == "" || *capture == "" || *ca == "" {
+			return errors.New("field correlate requires --challenge --capture --ca")
+		}
+		result, err := correlatePassive(*challenge, *capture, *sender, *ca)
+		if err != nil {
+			return err
+		}
+		return pretty(result)
+	}
 	if op == "verify" {
 		challenge := f.String("challenge", "", "sender signed field challenge JSON")
 		grant := f.String("grant", "", "receiver signed consent grant JSON")
@@ -60,7 +77,7 @@ func fieldCLI(args []string) error {
 		return pretty(result)
 	}
 	o := fieldOptions{}
-	f.StringVar(&o.File, "file", "", "local exact source allowlist field_candidates JSON/CSV")
+	f.StringVar(&o.File, "file", "", "sender inventory; receiver may optionally supply a stricter local allowlist")
 	f.StringVar(&o.Cert, "cert", "", "local node certificate PEM")
 	f.StringVar(&o.Key, "key", "", "local node private key PEM")
 	f.StringVar(&o.CA, "ca", "", "trusted CA public PEM")
@@ -72,7 +89,8 @@ func fieldCLI(args []string) error {
 	f.IntVar(&o.PacketSize, "packet-size", 192, "signed UDP payload size 128..1200")
 	f.IntVar(&o.SamplesPerSource, "samples-per-source", 5, "independent signed diagnostic samples per selected IP (1..10)")
 	f.IntVar(&o.TTLSeconds, "ttl-seconds", 600, "signed challenge validity 60..900 seconds")
-	f.IntVar(&o.WindowSeconds, "window-seconds", 0, "receiver listen window 0=auto from signed sample count (max 120); or 1..120")
+	f.IntVar(&o.WindowSeconds, "window-seconds", 0, "strict listener: 0=auto max 120 seconds; passive observe: required 1..14400 seconds")
+	maxPackets := f.Int("max-packets", 1024, "passive observe: finite maximum retained diagnostic frames (1..2048)")
 	f.StringVar(&o.Epoch, "epoch", "operator-declared", "operator-defined policy epoch")
 	f.StringVar(&o.Transport, "transport", "field_udp_bound", "field_udp_bound or field_raw_ipv4")
 	f.StringVar(&o.Output, "out", "", "write a new JSON artifact without overwriting")
@@ -97,6 +115,17 @@ func fieldCLI(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	switch op {
+	case "observe":
+		if o.BindIP == "" || o.Output == "" || o.WindowSeconds == 0 {
+			return errors.New("field observe requires --bind-ip --window-seconds --out; no file or sender challenge required")
+		}
+		result, err := fieldPassiveObserve(ctx, o, *maxPackets)
+		if result != nil {
+			if printErr := pretty(result); printErr != nil {
+				return printErr
+			}
+		}
+		return err
 	case "challenge":
 		if o.File == "" || o.DestinationIP == "" || o.Output == "" {
 			return errors.New("field challenge requires --file --destination-ip --out")
@@ -114,8 +143,8 @@ func fieldCLI(args []string) error {
 			"selected_sources":      signed.Challenge.Samples,
 			"transport":             signed.Challenge.Environment, "status": "SIGNED_PLAN_ONLY_NETWORK_NOT_RUN"})
 	case "grant":
-		if o.Challenge == "" || o.File == "" || o.Output == "" {
-			return errors.New("field grant requires --challenge --file --out")
+		if o.Challenge == "" || o.Output == "" {
+			return errors.New("field grant requires --challenge --out")
 		}
 		signed, err := newFieldGrant(o)
 		if err != nil {
@@ -127,8 +156,8 @@ func fieldCLI(args []string) error {
 		return pretty(map[string]any{"run_id": signed.Grant.RunID,
 			"grant": o.Output, "status": "RECEIVER_SIGNED_APPROVAL_NOT_PROVIDER_AUTHORIZATION"})
 	case "check":
-		if o.Challenge == "" || o.Grant == "" || o.File == "" || o.DestinationIP == "" {
-			return errors.New("field check requires --challenge --grant --file --destination-ip --role")
+		if o.Challenge == "" || o.Grant == "" || o.DestinationIP == "" || (*role == "sender" && o.File == "") {
+			return errors.New("field check requires --challenge --grant --destination-ip --role (sender also needs --file)")
 		}
 		result, err := fieldPreflight(o, *role)
 		if result != nil {
@@ -138,8 +167,8 @@ func fieldCLI(args []string) error {
 		}
 		return err
 	case "accept":
-		if o.Challenge == "" || o.File == "" || o.Output == "" || o.ReadyOutput == "" || o.StateDir == "" || *grantOut == "" {
-			return errors.New("field accept requires --challenge --file --grant-out --ready-out --out --state-dir (plus B credentials)")
+		if o.Challenge == "" || o.Output == "" || o.ReadyOutput == "" || o.StateDir == "" || *grantOut == "" {
+			return errors.New("field accept requires --challenge --grant-out --ready-out --out --state-dir (plus B credentials)")
 		}
 		ch, err := readSignedFieldChallenge(o.Challenge)
 		if err != nil {
@@ -165,9 +194,9 @@ func fieldCLI(args []string) error {
 		}
 		return runFieldListener(ctx, o)
 	case "listen":
-		if o.Challenge == "" || o.Grant == "" || o.File == "" || o.BindIP == "" || o.DestinationIP == "" ||
+		if o.Challenge == "" || o.Grant == "" || o.BindIP == "" || o.DestinationIP == "" ||
 			o.Output == "" || o.StateDir == "" {
-			return errors.New("field listen requires --challenge --grant --file --bind-ip --destination-ip --out --state-dir")
+			return errors.New("field listen requires --challenge --grant --bind-ip --destination-ip --out --state-dir")
 		}
 		return runFieldListener(ctx, o)
 	case "send":

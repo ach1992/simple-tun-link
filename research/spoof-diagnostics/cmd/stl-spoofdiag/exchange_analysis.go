@@ -29,7 +29,7 @@ func (l *exchangeInputList) Set(v string) error {
 
 func exchangeCLI(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: exchange init|sources|new-case|export|inspect|import|analyze (all offline)")
+		return errors.New("usage: exchange init|sources|new-case|export|inspect|import|analyze|analyze-passive (all offline)")
 	}
 	op := args[0]
 	f := flag.NewFlagSet("exchange "+op, flag.ContinueOnError)
@@ -43,12 +43,23 @@ func exchangeCLI(args []string) error {
 	out := f.String("out", "", "new output ZIP; defaults to outbox/bundle-name")
 	inbox := f.String("inbox", "", "inbox directory to discover bundles, independent of file names")
 	reports := f.String("reports", "", "private report directory; defaults to base/reports")
+	abPlan := f.String("ab-plan", "", "A_TO_B signed A challenge/plan")
+	abSender := f.String("ab-sender", "", "A_TO_B signed A sender evidence")
+	abCapture := f.String("ab-capture", "", "A_TO_B signed B passive observations")
+	baPlan := f.String("ba-plan", "", "B_TO_A signed B challenge/plan")
+	baSender := f.String("ba-sender", "", "B_TO_A signed B sender evidence")
+	baCapture := f.String("ba-capture", "", "B_TO_A signed A passive observations")
 	var paths exchangeInputList
 	f.Var(&paths, "file", "portable bundle path; repeat in any order (1..4 or more)")
 	if err := f.Parse(args[1:]); err != nil {
 		return err
 	}
 	switch op {
+	case "analyze-passive":
+		if *reports == "" {
+			*reports = filepath.Join(*base, "reports")
+		}
+		return exchangePassiveCLI(*id, *ca, *reports, *abPlan, *abSender, *abCapture, *baPlan, *baSender, *baCapture)
 	case "sources":
 		return exchangeSourcesCLI(args[1:])
 	case "init":
@@ -362,6 +373,7 @@ type exchangeCaseReport struct {
 	CaseID                string                    `json:"case_id"`
 	Status                string                    `json:"status"`
 	Inputs                []exchangeProvenance      `json:"inputs"`
+	PassiveInputFiles     []passiveInputFile        `json:"passive_input_files,omitempty"`
 	MissingSlots          []string                  `json:"missing_slots"`
 	Conflicts             []string                  `json:"conflicts"`
 	Rejected              []string                  `json:"rejected_inputs"`

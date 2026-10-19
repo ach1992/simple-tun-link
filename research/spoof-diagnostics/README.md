@@ -16,7 +16,9 @@ The current development candidate replaces the former Private Lab runtime
 with a **Field** workflow for two explicitly controlled hosts, A and B.
 It accepts an **exact, operator-chosen IPv4 candidate list** independently
 for A→B and B→A; it does not enumerate CIDR ranges, scan the Internet,
-open services in the background or integrate with STL.
+automatically start a service or integrate with STL. A separate unmerged
+candidate introduces **explicitly operator-started finite systemd jobs**;
+no service is enabled at installation.
 
 Field stages: *sender-signed challenge → receiver-signed grant → bounded
 field sender and receiver → receiver-signed receipt → offline verification*.
@@ -51,6 +53,33 @@ The tool source and packaged documentation live under
 dedicated Spoof Diagnostics CI workflow also lives at repository level.
 The unrelated STL application, installer, `main` branch and `v*` release
 channel are outside this tool's release and integration scope.
+
+## Disconnected A/B three-stage testing (new unmerged follow-on)
+
+The Owner-approved target workflow is **A sends while B independently observes;
+the operator later copies A's saved artifacts to B; B independently performs the
+reverse test with its own candidate list; only after both tests does an offline
+analyzer prepare the final findings**. Neither host can see the other's live
+status, and B must not require A's source inventory or Challenge to start
+receiving. **This workflow is not yet end-to-end field-ready.**
+
+The new experimental `field observe` command permits a bounded local receiver
+capture with no pre-transferred A artifacts. `field correlate` authenticates
+these previously **unverified** observations after manual transfer. Finite
+`job start|status|logs|stop` operations use transient `systemd` units to
+survive SSH logout when the host's systemd/linger prerequisites are satisfied.
+An offline `campaign prioritize` action can reorder **only B's existing
+authorized B_TO_A source list**, based on verifiable exact-IP overlap with
+A_TO_B observation evidence. There is no probabilistic guarantee.
+
+`exchange analyze-passive` currently supports **one signed Run per direction**
+and creates private JSON/CSV/HTML reports; aggregating whole multi-batch
+disconnected campaigns remains future work. The legacy raw sender still
+requires its signed receiver Grant, and **no autonomous unpaired raw public
+source-forgery mode has been added**. Read the
+[disconnected three-stage development guide](docs/DISCONNECTED-THREE-STAGE.md)
+and [Issue #139](https://github.com/ach1992/simple-tun-link/issues/139)
+for exact commands, provenance and outstanding end-to-end gates.
 
 ## Offline A/B evidence exchange (unmerged follow-on candidate)
 

@@ -314,6 +314,30 @@ func newFieldChallenge(o fieldOptions) (signedFieldChallenge, error) {
 	return signedFieldChallenge{Challenge: challenge, SenderCertificatePEM: signerPEM, SignatureHex: sig}, nil
 }
 
+// B can approve A's authenticated exact per-run selection without
+// recreating the source inventory on the receiving server. A separate
+// locally curated B allowlist is an optional, stricter restriction.
+// Only call this after the signed challenge has been authenticated.
+func receiverSourceSelection(c fieldChallenge, optionalFile string) (CandidateFile, error) {
+	if optionalFile != "" {
+		return readCandidates(optionalFile)
+	}
+	inv := CandidateFile{SchemaVersion: schema, Mode: "field_candidates"}
+	seen := make(map[string]bool)
+	for _, sample := range c.Samples {
+		candidate := sample.Candidate
+		id := candidateIdentity(candidate)
+		if !seen[id] {
+			inv.Candidates = append(inv.Candidates, candidate)
+			seen[id] = true
+		}
+	}
+	if err := validateCandidates(inv); err != nil {
+		return CandidateFile{}, err
+	}
+	return inv, nil
+}
+
 func newFieldGrant(o fieldOptions) (signedFieldGrant, error) {
 	return newFieldGrantWithDestinationOwnership(o, localAssignedIPv4)
 }
@@ -356,7 +380,7 @@ func newFieldGrantWithDestinationOwnership(o fieldOptions, isLocalDestination fu
 	if err := isLocalDestination(bindIP); err != nil {
 		return zero, fmt.Errorf("receiver bind IP is not locally assigned: %w", err)
 	}
-	allowed, err := readCandidates(o.File)
+	allowed, err := receiverSourceSelection(c, o.File)
 	if err != nil {
 		return zero, err
 	}

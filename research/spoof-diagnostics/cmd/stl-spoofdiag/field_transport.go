@@ -99,8 +99,8 @@ func automaticFieldWindowSeconds(plannedSamples int) int {
 }
 
 func fieldListen(ctx context.Context, o fieldOptions, ready chan<- map[string]any) error {
-	if o.Challenge == "" || o.Grant == "" || o.File == "" || o.Output == "" || o.StateDir == "" {
-		return errors.New("field listen requires --challenge --grant --file --out --state-dir")
+	if o.Challenge == "" || o.Grant == "" || o.Output == "" || o.StateDir == "" {
+		return errors.New("field listen requires --challenge --grant --out --state-dir")
 	}
 	if o.WindowSeconds < 0 || o.WindowSeconds > 120 {
 		return errors.New("receiver window must be auto (0) or 1..120 seconds")
@@ -136,7 +136,7 @@ func fieldListen(ctx context.Context, o fieldOptions, ready chan<- map[string]an
 	if _, err := fieldPreflight(o, "receiver"); err != nil {
 		return fmt.Errorf("receiver prerequisites: %w", err)
 	}
-	allowed, err := readCandidates(o.File)
+	allowed, err := receiverSourceSelection(c.Challenge, o.File)
 	if err != nil {
 		return err
 	}
