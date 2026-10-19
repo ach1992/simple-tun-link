@@ -720,7 +720,6 @@ func menuCampaignSend(r *bufio.Reader) error {
 	return campaignCLI(args)
 }
 
- 
 // The guided B-side campaign operation is intentionally foreground and
 // bounded to one batch. It reuses the CLI and its independent allowlist,
 // cryptographic grant checks, local bind checks and replay ledger.
