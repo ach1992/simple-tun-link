@@ -127,6 +127,20 @@ func exchangeImport(base, ca string, sources []string, caseID string) ([]exchang
 	results := make([]exchangeImportResult, 0, len(sources))
 	for _, source := range sources {
 		r := exchangeImportResult{Input: source}
+		if _, sourceErr := exchangeReadSourceAnyName(source); sourceErr == nil {
+			path, n, identical, err := exchangeSourceStage(base, source)
+			if err != nil {
+				return results, err
+			}
+			r.Status = "SOURCE_INVENTORY_STAGED_NOT_AUTHORIZED"
+			if identical {
+				r.Status = "SOURCE_INVENTORY_ALREADY_STAGED"
+			}
+			r.ArchiveFile = path
+			r.Reason = fmt.Sprintf("%d exact addresses; no network or grant operation performed", n)
+			results = append(results, r)
+			continue
+		}
 		bundle, err := exchangeOpenBundle(source, ca)
 		if err == nil && caseID != "" && bundle.Manifest.CaseID != caseID {
 			r.Status = "IGNORED_DIFFERENT_CASE"

@@ -54,8 +54,8 @@ func campaignCLI(args []string) error {
 	op := args[0]
 	f := flag.NewFlagSet("campaign "+op, flag.ContinueOnError)
 	dir := f.String("dir", "", "private new/existing campaign directory")
-	file := f.String("file", "", "operator-provided exact candidate JSON/CSV")
-	direction := f.String("direction", "A_TO_B", "A_TO_B or B_TO_A; make separate campaigns for each direction")
+	file := f.String("file", "", "exact candidate TXT (SDX-IP-LIST v1), JSON or CSV")
+	direction := f.String("direction", "", "A_TO_B or B_TO_A; default uses the file direction, A_TO_B for a mixed inventory")
 	destination := f.String("destination-ip", "", "one exact receiver public/advertised IPv4")
 	transport := f.String("transport", "field_udp_bound", "field_udp_bound or field_raw_ipv4")
 	batchSize := f.Int("batch-size", fieldMaxSelectedSources, "1..32 distinct candidate IPs per signed run")
@@ -211,9 +211,20 @@ func campaignReceive(dir, receiverAllowlist, cert, key, ca, bind, stateDir strin
 
 func createCampaign(source, dir string, settings campaignManifest) (campaignManifest, error) {
 	var empty campaignManifest
-	inventory, err := readCandidates(source)
+	inventory, err := exchangeReadSourceAnyName(source)
 	if err != nil {
 		return empty, err
+	}
+	// A one-direction ip.txt (or JSON/CSV) already declares the role.
+	// Preserve the legacy A_TO_B default for a mixed-direction inventory.
+	if settings.Direction == "" {
+		settings.Direction = inventory.Candidates[0].Direction
+		for _, candidate := range inventory.Candidates[1:] {
+			if candidate.Direction != settings.Direction {
+				settings.Direction = "A_TO_B"
+				break
+			}
+		}
 	}
 	if settings.Direction != "A_TO_B" && settings.Direction != "B_TO_A" {
 		return empty, errors.New("campaign direction must be A_TO_B or B_TO_A")

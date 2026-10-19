@@ -527,7 +527,7 @@ func exchangeCreateBase(base string) error {
 			return fmt.Errorf("unsafe exchange ancestor: %q", curr)
 		}
 	}
-	for _, sub := range append([]string{""}, []string{"inbox", "outbox", "reports", "archive", "rejected"}...) {
+	for _, sub := range append([]string{""}, []string{"inbox", "outbox", "reports", "archive", "rejected", "sources"}...) {
 		target := filepath.Join(clean, sub)
 		if sub != "" {
 			if err := os.Mkdir(target, 0700); err != nil && !os.IsExist(err) {

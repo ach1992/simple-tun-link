@@ -29,7 +29,7 @@ func (l *exchangeInputList) Set(v string) error {
 
 func exchangeCLI(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: exchange init|new-case|export|inspect|import|analyze (all offline)")
+		return errors.New("usage: exchange init|sources|new-case|export|inspect|import|analyze (all offline)")
 	}
 	op := args[0]
 	f := flag.NewFlagSet("exchange "+op, flag.ContinueOnError)
@@ -49,6 +49,8 @@ func exchangeCLI(args []string) error {
 		return err
 	}
 	switch op {
+	case "sources":
+		return exchangeSourcesCLI(args[1:])
 	case "init":
 		if err := exchangeCreateBase(*base); err != nil {
 			return err
@@ -157,7 +159,7 @@ func exchangeCLI(args []string) error {
 			"reports": *reports, "received_bundle_count": len(r.Inputs),
 			"network_calls": "NONE"})
 	default:
-		return errors.New("usage: exchange init|new-case|export|inspect|import|analyze")
+		return errors.New("usage: exchange init|sources|new-case|export|inspect|import|analyze")
 	}
 }
 
@@ -398,6 +400,9 @@ func exchangeAnalyze(caseID, ca string, sources []string) (exchangeCaseReport, e
 	bundles := map[string]*exchangeBundle{}
 	conflicted := map[string]bool{}
 	for _, filename := range sources {
+		if _, sourceErr := exchangeReadSourceAnyName(filename); sourceErr == nil {
+			continue // operator inventory, not an evidentiary signed ZIP
+		}
 		b, err := exchangeOpenBundle(filename, ca)
 		if err != nil {
 			report.Rejected = append(report.Rejected, filepath.Base(filename)+": "+err.Error())

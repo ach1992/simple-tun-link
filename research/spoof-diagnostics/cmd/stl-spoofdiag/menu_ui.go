@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -13,7 +14,7 @@ func menu() error {
 	reader := bufio.NewReaderSize(os.Stdin, 64*1024)
 	for {
 		menuHeader()
-		fmt.Fprint(os.Stdout, "Choose [0-25] (or q): ")
+		fmt.Fprint(os.Stdout, "Choose [0-26] (or q): ")
 		answer, err := menuRead(reader)
 		if errors.Is(err, io.EOF) {
 			return nil
@@ -65,10 +66,10 @@ func menu() error {
 			result = menuCampaignSend(reader)
 		case "19":
 			result = menuCampaignReceive(reader)
-		case "20", "21", "22", "23", "24", "25":
+		case "20", "21", "22", "23", "24", "25", "26":
 			result = menuExchange(reader, answer)
 		default:
-			fmt.Fprintln(os.Stderr, "Unknown option; use 0..25")
+			fmt.Fprintln(os.Stderr, "Unknown option; use 0..26")
 		}
 		if result != nil {
 			fmt.Fprintln(os.Stderr, "Operation not completed:", result)
@@ -94,6 +95,7 @@ func menuHeader() {
 	fmt.Fprintln(os.Stdout, "22) Export signed case bundle   23) Analyze inbox / four bundles")
 	fmt.Fprintln(os.Stdout, "24) Inspect one signed bundle")
 	fmt.Fprintln(os.Stdout, "25) Import + verify inbox safely (no execution)")
+	fmt.Fprintln(os.Stdout, "26) Prepare IP list (ip.txt) to native inventory without network")
 	fmt.Fprintln(os.Stdout, " 0) Exit")
 	fmt.Fprintln(os.Stdout, "NOTE: Source match != provider permission != return-path proof.")
 	fmt.Fprintln(os.Stdout, "==============================================================")
@@ -489,21 +491,37 @@ func menuFieldHelp() {
 	fmt.Fprintln(os.Stdout, "Normal UDP supports local interface-owned IPv4s. Raw IPv4 needs CAP_NET_RAW, an exact NIC")
 	fmt.Fprintln(os.Stdout, "and separate proven owner/provider authorization; CLI acknowledgement is not permission proof.")
 	fmt.Fprintln(os.Stdout, "No network tests have established any real host/provider behavior for this field candidate.")
+	fmt.Fprintln(os.Stdout, "Only signed UDP diagnostics exist today; TCP, ICMP and QUIC are future, unimplemented protocol options.")
 	fmt.Fprintln(os.Stdout, "Use README.md for explicit ports, identity transfer and detailed CLI argument instructions.")
 }
 
 // The guided campaign frontend reuses the exact machine commands and never
 // maintains an independent interactive execution engine.
 func menuCampaignCreate(r *bufio.Reader) error {
-	source, err := menuAskNonempty(r, "Operator-owned exact IP source JSON/CSV")
+	source, err := menuAsk(r, "Source IP inventory path (blank=exchange/inbox/ip.txt)")
 	if err != nil {
 		return err
+	}
+	if source == "" {
+		source = filepath.Join(exchangeDefaultBase, "inbox", "ip.txt")
+	}
+	inventory, err := exchangeReadSourceAnyName(source)
+	if err != nil {
+		return err
+	}
+	// Single-direction TXT/JSON/CSV needs no extra question. Preserve
+	// the mixed-inventory menu's ability to choose either direction.
+	direction := ""
+	for _, candidate := range inventory.Candidates[1:] {
+		if candidate.Direction != inventory.Candidates[0].Direction {
+			direction, err = menuAskNonempty(r, "Choose campaign direction A_TO_B or B_TO_A (mixed inventory)")
+			if err != nil {
+				return err
+			}
+			break
+		}
 	}
 	dir, err := menuAskNonempty(r, "NEW private campaign directory")
-	if err != nil {
-		return err
-	}
-	direction, err := menuAskNonempty(r, "Direction A_TO_B or B_TO_A")
 	if err != nil {
 		return err
 	}
@@ -515,7 +533,10 @@ func menuCampaignCreate(r *bufio.Reader) error {
 	if err != nil {
 		return err
 	}
-	args := []string{"create", "--file", source, "--dir", dir, "--direction", direction, "--destination-ip", destination}
+	args := []string{"create", "--file", source, "--dir", dir, "--destination-ip", destination}
+	if direction != "" {
+		args = append(args, "--direction", direction)
+	}
 	if transport != "" {
 		args = append(args, "--transport", transport)
 	}

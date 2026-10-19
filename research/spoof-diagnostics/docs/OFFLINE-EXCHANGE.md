@@ -2,6 +2,24 @@
 
 **Scope:** standalone research tool on the independent `dev-spoof` line. No STL backend, installed service, network scan, autonomous test, tunnel, or public-source spoof trial is authorized. Owner's accepted direction: [#135](https://github.com/ach1992/simple-tun-link/issues/135). Prior signed Field evidence and bounded Campaign Manager: [PR #134](https://github.com/ach1992/simple-tun-link/pull/134). This is a stacked, **unmerged** follow-on feature: the existing RC2 public release does **not** contain it.
 
+## Simple source-IP input (additional unmerged offline candidate)
+
+On **A**, place one plain-text file at `/root/stl-spoofdiag/exchange/inbox/ip.txt`:
+
+```text
+# SDX-IP-LIST v1 direction=A_TO_B
+10.24.1.2
+10.24.1.3
+```
+
+One exact IPv4 per line. Empty lines and subsequent `#` comments are accepted. For **B→A**, use `direction=B_TO_A` and B's own file. No JSON editing, per-address role fields, range expressions or Internet discovery are required. The file parser infers roles from the single header and uses the **existing** `field_candidates` schema internally; it does not define a second Field protocol.
+
+After `exchange init`, invoke `stl-spoofdiag exchange sources inspect` to see the directional counts and finite-Batch estimate, or menu option **26** / `stl-spoofdiag exchange sources stage` to create a deterministic, private `sources/SDX-SOURCES-v1-<sha256>.json` without modifying the original. Pass that JSON to the existing `campaign create --file ...`; the Campaign Manager then generates its existing immutable per-Batch JSON files. `campaign create --file /root/stl-spoofdiag/exchange/inbox/ip.txt` also reads the text file directly. There is no extra authorization pop-up for each address: the operator supplies authorized input and the pre-existing receiver consent and execution gates remain unchanged.
+
+The existing 4 MiB candidate-input/converted-JSON budget can require splitting a very large input into multiple Campaigns; it is a parsing/storage budget, **not** a 900-second Campaign limit. The calculated `minimum_sender_seconds` is just the existing 200 ms/sample pacing sum, excluding human file transfer, setup, waiting and all receiver windows. It is **not** an ETA and confers no permission to send traffic. Each signed Run retains its own 60–900-second TTL; a multi-hour Campaign consists of separately coordinated, finite runs with durable history, never one indefinite sender/listener.
+
+TXT import, Case/evidence import, planning and staging remain offline-only. **No Field packet is transmitted by reading or staging the source list.**
+
 ## Precisely what exists in this candidate
 
 `exchange` is a **strictly offline, explicitly invoked command family** and menu actions. It consumes existing Campaign and independently signed Field evidence. It does not call `campaign next`, `field send`, `field listen`, `campaign receive`, nor initiate a network operation.

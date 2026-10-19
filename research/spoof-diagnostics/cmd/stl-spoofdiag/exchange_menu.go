@@ -7,6 +7,16 @@ import (
 
 func menuExchange(reader *bufio.Reader, option string) error {
 	switch option {
+	case "26":
+		base, err := menuAsk(reader, "Exchange base (blank=default /root/stl-spoofdiag/exchange)")
+		if err != nil {
+			return err
+		}
+		args := []string{"sources", "stage"}
+		if base != "" {
+			args = append(args, "--base", base)
+		}
+		return exchangeCLI(args)
 	case "20":
 		return exchangeCLI([]string{"new-case"})
 	case "21":

@@ -55,21 +55,29 @@ channel are outside this tool's release and integration scope.
 ## Offline A/B evidence exchange (unmerged follow-on candidate)
 
 A separate development branch adds **offline-only** `exchange` commands and
-menu items 20–25. They export each endpoint's *existing* independently
-signed Campaign/Field evidence to portable four-slot ZIPs; import validates
+menu items 20–25 for the signed Case-evidence exchange; option 26 only
+prepares the IP inventory. The exchange exports each endpoint's *existing*
+independently signed Campaign/Field evidence to portable four-slot ZIPs; import validates
 ZIP signatures and hashes, and an independent analyzer produces JSON, CSV and
 HTML reports on A, B or a third Linux machine. File names/order need no manual
 normalization. Files can be copied manually through an operator-managed path;
 no direct A↔B communication or network daemon is needed **for analysis**.
 
 The default private exchange root is `/root/stl-spoofdiag/exchange/` with
-`inbox/`, `outbox/`, `reports/`, `archive/` and `rejected/`, or another
+`inbox/`, `outbox/`, `reports/`, `archive/`, `rejected/` and `sources/`, or another
 explicit `--base`. `exchange import` is inert: it never executes test traffic
 or deletes the inbox source. All ZIPs require externally supplied public CA
 trust and each node's signed internal manifest. **Neither private node nor
 CA signing keys are exported.** Analysis refuses to call missing packets
 blocked sources, and does not claim physical egress, provider permission,
 return traffic or private-L3 connectivity.
+
+A separate **unmerged** source-input addition accepts one `ip.txt` with a
+`# SDX-IP-LIST v1 direction=A_TO_B` header and one IPv4 per line.
+`exchange sources inspect|stage` (menu 26) reuses the existing Campaign
+candidate JSON, with no per-IP setup screens and no packet send. The 900-second
+limit is per bounded run, not an overall Campaign deadline; see the
+[operator TXT instructions](docs/OFFLINE-EXCHANGE.md#simple-source-ip-input-additional-unmerged-offline-candidate).
 
 **Current gate:** this feature is under review/development and **is not in
 published RC2**. Existing short Challenge/Readiness TTLs and the manual
@@ -80,6 +88,8 @@ but has not been wired to sender/receiver traffic. Read the
 [full offline exchange reference](docs/OFFLINE-EXCHANGE.md) before relying
 on this workflow; no deployment, field packet trial, merge or release is
 implied.
+
+**Transport roadmap (not active):** TCP, ICMP and QUIC diagnostics are deferred under [Issue #137](https://github.com/ach1992/simple-tun-link/issues/137), along with any justified additional protocols. The current Field diagnostic remains UDP-only; see [architecture and limitations](docs/ARCHITECTURE.md#future-diagnostic-transport-coverage-owner-parked-not-implemented). No menu option or sender for those future probes exists yet.
 
 ## Install online — one general command (no version number)
 

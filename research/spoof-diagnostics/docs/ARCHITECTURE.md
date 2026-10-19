@@ -16,6 +16,16 @@ proposal. The existing live-run Challenge/Grant/Readiness TTL problem is
 **not** solved by the export feature. See
 [OFFLINE-EXCHANGE.md](OFFLINE-EXCHANGE.md) and controlling [Issue #135](https://github.com/ach1992/simple-tun-link/issues/135).
 
+## Future diagnostic transport coverage (Owner-parked, NOT implemented)
+
+Tracked separately in [Issue #137](https://github.com/ach1992/simple-tun-link/issues/137); do not implement as part of the offline source inventory/exchange change.
+
+**Current code supports authenticated UDP diagnostic samples only** (normal bound UDP and separately gated raw IPv4+UDP). Additional protocol probes are a later, explicitly reviewed phase: **TCP**, **ICMP**, **QUIC** (over UDP), and other protocols only if a concrete use case justifies them. The goal is to compare independently authenticated endpoint observations and, where possible, an actual *return* rather than infer bidirectional reachability from a one-way sample.
+
+Future protocol-specific checks must state exactly what their evidence proves: a TCP handshake must not be confused with arbitrary source-IP return-path proof; ICMP echo responses require correlation; and QUIC datagrams or opening a UDP port are not a negotiated QUIC connection. Keep source selection, signed A/B identities, per-run scope, durable Campaign progress, offline bundle import and the evidence confidence model **shared** rather than create duplicate transport-specific campaign engines. Consider small-file delivery with authenticated payload integrity and an observed response in owned isolated tests only if that is necessary to establish an end-to-end application-level proof.
+
+**Do not enable protocol choices in the menu or runtime until implemented and verified.** No new public forged-source probing, scans, unlimited run TTLs or unattended senders are permitted by this roadmap. Scope, provider constraints, receiver consent, negative tests and independent review remain distinct gates. This paragraph is a future feature record, not a work authorization or a claim of protocol support.
+
 ## Explicit architecture and trust boundary
 
 Two controlled roles, A and B, operate in either independently configured
