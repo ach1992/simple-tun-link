@@ -1,1 +1,5 @@
-status=unpublished
+status=published
+version=spoofdiag-v0.1.0-rc.2
+linux_amd64_sha256=5fb89271977fb62b21625ca0c696862155b5a0717eebbce045fc5fd1e2bd279d
+linux_arm64_sha256=9d661b190928159107a2bf7990c074c598d6056f82b2c5e1b32e8780f1ffd341
+bootstrap_sha256=78ba3c65cafa643c37dc93a067290c1106cdb4883245e79dada750d74a62be5b
