@@ -55,7 +55,7 @@ source_branch=dev-spoof
 source_commit=$sha
 repository=https://github.com/ach1992/simple-tun-link
 artifact_scope=research/spoof-diagnostics-only
-distribution_status=CANDIDATE_NOT_PUBLISHED
+asset_build_status=PREPARED_ONLY_SCRIPT_DOES_NOT_PUBLISH
 META
 mv -T -n -- "$stage" "$output" || fail 'could not commit isolated output directory'
 trap - EXIT

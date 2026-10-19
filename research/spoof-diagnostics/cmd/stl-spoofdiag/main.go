@@ -1,6 +1,5 @@
-// stl-spoofdiag is a standalone research tool. This Go port currently implements
-// offline operator validation, local two-agent loopback measurement and signed receipts.
-// It does not provide a public field/source-spoof probe engine.
+// stl-spoofdiag is an independent field diagnostics research tool.
+// Network behavior has NOT been validated on public providers or real peers.
 package main
 
 import (
@@ -84,19 +83,12 @@ func validDirection(d string) bool { return d == "A_TO_B" || d == "B_TO_A" }
 
 func validateIP(value string, mode string) error {
 	ip, err := netip.ParseAddr(value)
-	if err != nil || !ip.Is4() || ip.Is4In6() || ip.IsUnspecified() || ip.IsMulticast() {
-		return fmt.Errorf("invalid exact IPv4 address %q", value)
+	if err != nil || !ip.Is4() || ip.Is4In6() || ip.IsUnspecified() || ip.IsMulticast() ||
+		ip.IsLoopback() || ip.IsLinkLocalUnicast() || !ip.IsGlobalUnicast() || reservedFieldIP(ip) {
+		return fmt.Errorf("invalid exact unicast IPv4 address %q", value)
 	}
-	if mode == "private_lab" {
-		if !ip.IsPrivate() {
-			return fmt.Errorf("private_lab requires RFC1918 address: %q", value)
-		}
-	} else if mode == "approved_field_plan" {
-		if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || reservedFieldIP(ip) {
-			return fmt.Errorf("non-routable or private candidate in field plan: %q", value)
-		}
-	} else {
-		return fmt.Errorf("unknown mode %q", mode)
+	if mode != "field_candidates" {
+		return fmt.Errorf("unsupported candidate mode %q", mode)
 	}
 	return nil
 }
@@ -118,7 +110,7 @@ func validateCandidateInventory(c CandidateFile, allowEmpty bool) error {
 	if c.SchemaVersion != schema {
 		return errors.New("unsupported candidate schema")
 	}
-	if c.Mode != "private_lab" && c.Mode != "approved_field_plan" {
+	if c.Mode != "field_candidates" {
 		return errors.New("unsupported candidate mode")
 	}
 	if len(c.Candidates) == 0 && !allowEmpty {
@@ -129,8 +121,9 @@ func validateCandidateInventory(c CandidateFile, allowEmpty bool) error {
 		if !validDirection(item.Direction) {
 			return fmt.Errorf("invalid direction %q", item.Direction)
 		}
-		if strings.TrimSpace(item.Sender) == "" || strings.TrimSpace(item.Receiver) == "" || item.Sender == item.Receiver {
-			return errors.New("distinct sender and receiver are required")
+		direction, err := roleDirection(item.Sender, item.Receiver)
+		if err != nil || direction != item.Direction {
+			return errors.New("field sender/receiver must be A/B with matching direction")
 		}
 		if err := validateIP(item.IP, c.Mode); err != nil {
 			return err
@@ -165,7 +158,7 @@ func readCandidateInventory(path string, allowEmpty bool) (CandidateFile, error)
 		}
 	case ".csv":
 		result.SchemaVersion = schema
-		result.Mode = "private_lab"
+		result.Mode = "field_candidates"
 		r := csv.NewReader(bytes.NewReader(data))
 		r.FieldsPerRecord = 4
 		rows, err := r.ReadAll()
@@ -189,10 +182,10 @@ func classify(o Observation) (Summary, error) {
 	if !validDirection(o.Direction) || o.Sender == "" || o.Receiver == "" || o.Sender == o.Receiver || o.RunID == "" || o.SampleID == "" || o.Epoch == "" || o.PacketSize <= 0 {
 		return s, errors.New("missing observation identity")
 	}
-	if o.Environment != "private_lab" && o.Environment != "approved_field" {
+	if o.Environment != "field" {
 		return s, errors.New("invalid evidence environment")
 	}
-	if err := validateIP(o.SourceIP, map[bool]string{true: "private_lab", false: "approved_field_plan"}[o.Environment == "private_lab"]); err != nil {
+	if err := validateIP(o.SourceIP, "field_candidates"); err != nil {
 		return s, err
 	}
 	if o.ReturnAuthenticated != nil && *o.ReturnAuthenticated && (o.ReturnObserver == "" || o.PeerObserved == nil || !*o.PeerObserved || o.AuthVerified == nil || !*o.AuthVerified) {
@@ -283,11 +276,15 @@ func versionInfo() map[string]string {
 }
 
 func preflight() error {
-	return pretty(map[string]any{"schema_version": schema, "utc": time.Now().UTC().Format(time.RFC3339), "os": runtime.GOOS, "arch": runtime.GOARCH, "go_runtime": runtime.Version(), "probe_engine": "LAB_PRIVATE_NETNS_RAW_ADAPTER_UNDER_VALIDATION", "field_traffic": "DISABLED", "test_network": "LOOPBACK_OR_PROVEN_ISOLATED_RFC1918_NETNS_ONLY", "loopback_two_agent": "AVAILABLE"})
+	// This command deliberately performs no socket calls or packet emission.
+	return pretty(map[string]any{"schema_version": schema, "utc": time.Now().UTC().Format(time.RFC3339),
+		"os": runtime.GOOS, "arch": runtime.GOARCH, "go_runtime": runtime.Version(),
+		"field_engine": "IMPLEMENTED_UNVALIDATED", "real_network_tests": "NOT_RUN",
+		"source_selection": "EXACT_IPV4_LIST", "public_raw_permission": "OWNER_AND_PROVIDER_APPROVAL_REQUIRED"})
 }
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: stl-spoofdiag version|preflight|sources|plan|report|lab|menu")
+		return errors.New("usage: stl-spoofdiag version|preflight|sources|plan|report|field|menu")
 	}
 	switch args[0] {
 	case "version":
@@ -298,8 +295,8 @@ func run(args []string) error {
 		return menu()
 	case "sources":
 		return sourceCommand(args[1:])
-	case "lab":
-		return labCLI(args[1:])
+	case "field":
+		return fieldCLI(args[1:])
 	case "plan", "report":
 		cmd := flag.NewFlagSet(args[0], flag.ContinueOnError)
 		p := cmd.String("file", "", "existing CSV or JSON file")

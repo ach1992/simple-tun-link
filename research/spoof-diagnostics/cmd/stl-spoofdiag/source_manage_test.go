@@ -11,7 +11,7 @@ func TestCandidateInventoryLifecycleAndEmptyFailsClosed(t *testing.T) {
 	path := filepath.Join(dir, "sources.json")
 	a := Candidate{IP: "10.91.1.77", Direction: "A_TO_B", Sender: "A", Receiver: "B"}
 	b := Candidate{IP: "10.91.1.77", Direction: "B_TO_A", Sender: "B", Receiver: "A"}
-	if err := addSource(path, "private_lab", a); err != nil {
+	if err := addSource(path, "field_candidates", a); err != nil {
 		t.Fatal(err)
 	}
 	if err := addSource(path, "", b); err != nil {
@@ -52,9 +52,9 @@ func TestCandidateInventoryLifecycleAndEmptyFailsClosed(t *testing.T) {
 		t.Fatal("atomic candidate replacement failed")
 	}
 	unsafe := b
-	unsafe.IP = "8.8.8.8"
+	unsafe.IP = "198.51.100.7"
 	if err := replaceCandidate(path, b, unsafe); err == nil {
-		t.Fatal("public source accepted in private lab")
+		t.Fatal("documentation source accepted as field candidate")
 	}
 	still, err := readCandidates(path)
 	if err != nil || still.Candidates[0].IP != b.IP {
@@ -88,11 +88,11 @@ func TestCandidateImportMergeAndDuplicates(t *testing.T) {
 		t.Fatal("source/dest self import accepted")
 	}
 	field := filepath.Join(dir, "field.json")
-	if err := os.WriteFile(field, []byte(`{"schema_version":1,"mode":"approved_field_plan","candidates":[{"ip":"1.1.1.1","direction":"A_TO_B","sender":"A","receiver":"B"}]}`), 0600); err != nil {
+	if err := os.WriteFile(field, []byte(`{"schema_version":1,"mode":"field_candidates","candidates":[{"ip":"203.0.113.2","direction":"A_TO_B","sender":"A","receiver":"B"}]}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := importCandidates(path, field); err == nil {
-		t.Fatal("field inventory merged into private inventory")
+		t.Fatal("reserved field candidate admitted")
 	}
 	symlink := filepath.Join(dir, "linked.json")
 	if err := os.Symlink(path, symlink); err != nil {
