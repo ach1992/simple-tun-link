@@ -92,5 +92,8 @@ permissions. A permit string, receipt, successful packet delivery or local
 signature alone is not independent evidence of authorization.
 
 Automated Go tests and CI validate code behavior; two-real-host packet
-capture, provider acceptance, independent review and explicit release
-approval remain distinct gates. Keep draft development off protected STL `main`.
+capture, provider acceptance and independent review are separate kinds of
+evidence and cannot be inferred from CI. For this experimental pre-release,
+the Owner has explicitly authorized Master self-review in place of
+independent review; the release must say so plainly. Keep all SpoofDiag
+integration and release tags off protected STL `main`.

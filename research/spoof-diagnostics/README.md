@@ -7,7 +7,7 @@ STL:** installing it does not install, upgrade, configure or run STL.
 
 - **Product source and documentation:** `research/spoof-diagnostics/`
 - **Permanent development branch:** [`dev-spoof`](https://github.com/ach1992/simple-tun-link/tree/dev-spoof)
-- **Future standalone downloads:** [GitHub Releases](https://github.com/ach1992/simple-tun-link/releases), **only tags beginning with `spoofdiag-v`**
+- **Standalone pre-releases/downloads:** [GitHub Releases](https://github.com/ach1992/simple-tun-link/releases), **only tags beginning with `spoofdiag-v`**. Ignore STL's unprefixed `v*` releases
 - **STL's separate branch:** `main`; Spoof Diagnostics changes and PRs target `dev-spoof` and must not be merged into `main` without a new Owner decision
 
 ## What the tool does
@@ -38,17 +38,19 @@ Two transport choices are available in the implementation:
   forged-source trial. The command-line acknowledgement is not proof of
   that permission.
 
-**Validation status:** source, signed-artifact invariants and installation
-have automated local/CI coverage. The repeated-sample change adds offline
-regression checks; only CI on the final exact commit establishes that check's
-result. **NO real two-host Field traffic, public forged-source packet,
-provider acceptance, receiver-network test or private-L3 test has been
-executed for this candidate.** Do not equate a received packet with
-permission to use the selected IP or a working return path.
+**Validation status:** signed-artifact invariants, repeated samples,
+installation, packaging and CI have automated coverage. Check the exact
+published tag/commit and its GitHub Actions result for release-specific proof.
+**No real two-host Field reachability, public forged-source transmission,
+provider acceptance, receiver-network test or private-L3 acceptance was
+performed for this candidate.** A received packet does not establish
+permission to use its Source IP or prove any return path.
 
-The source, documentation and installation package live only under
-`research/spoof-diagnostics/` on the independent development line. The
-existing unrelated STL product and its stable `main` branch are untouched.
+The tool source and packaged documentation live under
+`research/spoof-diagnostics/` on the independent `dev-spoof` line; only its
+dedicated Spoof Diagnostics CI workflow also lives at repository level.
+The unrelated STL application, installer, `main` branch and `v*` release
+channel are outside this tool's release and integration scope.
 
 ## Install online — one general command (no version number)
 
@@ -67,12 +69,15 @@ the downloaded bootstrap and the correct AMD64/ARM64 archive, and invokes
 the same verified offline installer. It does **not** follow GitHub's
 `releases/latest` (that belongs to STL) or download Go, Python or STL.
 
-**Publication status:** the first Spoof Diagnostics release candidate is
-currently a **GitHub Draft**, not a public download, and the channel is
-`status=unpublished`. Until it is independently reviewed and published,
-the command intentionally stops with
-`NO_PUBLIC_SPOOFDIAG_RELEASE` **without installing anything**. Do not
-substitute STL's release or an arbitrary development artifact.
+**Publication status:** check the live
+[standalone release channel](https://github.com/ach1992/simple-tun-link/blob/dev-spoof/research/spoof-diagnostics/release-channel.txt)
+before using this command. While the channel says `status=unpublished`, it
+intentionally stops with `NO_PUBLIC_SPOOFDIAG_RELEASE`, without installing
+anything; after an approved `spoofdiag-v*` pre-release is published and its
+asset hashes are entered in the channel, the same command selects that
+version. The older `spoofdiag-v0.1.0-rc.1` Draft targets a superseded
+implementation and is **not** a substitute for the selected channel version.
+Never substitute an STL `v*` release or an arbitrary development artifact.
 
 The command downloads executable script code over HTTPS from the
 publisher-controlled `dev-spoof` branch: **only run it if you trust that
@@ -251,6 +256,13 @@ specific source network and destination. Each receiver also keeps its
 own exact source allowlist. Reverse-direction candidates have distinct
 `B_TO_A` roles and require a separate signed run.
 
+An inventory CSV/JSON may contain thousands of exact candidates (the
+current reader bounds a file to 4 MiB); this is **not** a promise that a
+single signed run covers them. Each signed run currently accepts up to 32
+distinct IPs and 1–10 samples per IP. Automated multi-run scheduling,
+long-term scoring/ranking and high-rate source testing are **not included**.
+There is no automatic source-IP discovery.
+
 Source inventory editing and an offline plan never transmit anything:
 
 ```sh
@@ -375,12 +387,9 @@ functionality but do **not** replace independent Ubuntu guest acceptance.
 ARM64 binaries build, but full booted ARM64 guest tests are still pending.
 The new `field_raw_ipv4` mode requires Linux raw-socket privileges and
 explicit network/provider permission. Its public-WAN compatibility is
-**NOT_TESTED**; the historical VM evidence below applies to a different
-retired lab candidate.
-
-For **STL itself**, not this tool, the separate documented baseline is
-Ubuntu 22.04+, Debian 11+, kernel 5.4+ and iproute2 5.1+; its available
-backends depend on each host's kernel and packages.
+**NOT_TESTED**; historical VM evidence for a retired Private Lab version is
+in [LOCAL-LAB-ACCEPTANCE.md](docs/LOCAL-LAB-ACCEPTANCE.md), not proof for
+this Field release.
 
 ## Technical documentation
 

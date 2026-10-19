@@ -110,6 +110,8 @@ procedures. No Go, Python, package-manager or Internet access is
 required on the destination for a verified offline bundle. Build artifacts
 remain separate from STL stable version/release namespace.
 
-The `release-channel.txt` stays `status=unpublished` until its own
-reviewed and Owner-authorized release. An old Draft Release contains a
-different SHA and cannot validate this Field candidate.
+The live `dev-spoof` `release-channel.txt` is authoritative for the general
+installer. It stays `status=unpublished` until a separately approved and
+published `spoofdiag-v*` pre-release has been verified and the channel is
+updated with its exact SHA256 digests. The old `rc.1` Draft contains a
+different source SHA and cannot validate the current Field candidate.

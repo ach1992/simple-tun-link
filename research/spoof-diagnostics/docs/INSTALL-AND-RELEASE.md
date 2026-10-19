@@ -5,10 +5,13 @@
 branch. This tool has **no automatic merge to STL `main`** and no dependency
 on STL's installer, `v*` tags or stable release/update workflow.
 
-**Publication status:** `spoofdiag-v0.1.0-rc.1` was assembled as a
-**GitHub Draft**, not a published Release. Its binary archives are review
-candidates, not a valid public installation endpoint. Independent exact-head
-review, provenance/acceptance and Owner release approval remain necessary.
+**Historical candidate:** `spoofdiag-v0.1.0-rc.1` was assembled as an
+unpublished Draft from an older implementation. It is not the current Field
+release and must not be selected as a public installation endpoint. The
+source commit, tag, release assets and current channel must agree before any
+new download is advertised. For the present experimental pre-release only,
+the Owner explicitly elected **Master self-review instead of an external
+independent review**; do not misrepresent that as author-separated approval.
 
 For non-developers, the canonical step-by-step instructions are the
 [tool-local README](../README.md). This document owns the exact command,
@@ -22,7 +25,8 @@ download, artifact, directory and publisher-channel contracts.
 bash -o pipefail -c 'curl -fsSL --proto "=https" https://raw.githubusercontent.com/ach1992/simple-tun-link/dev-spoof/research/spoof-diagnostics/scripts/install-latest.sh | sudo bash -s -- --accept'
 ```
 
-The command takes no version or SHA from the operator. It fetches
+The command takes no version or SHA from the operator. Its current behavior
+depends on the live `dev-spoof` channel, not when this README was built. It fetches
 [`release-channel.txt`](https://github.com/ach1992/simple-tun-link/blob/dev-spoof/research/spoof-diagnostics/release-channel.txt) over GitHub HTTPS, which
 presently contains only:
 
@@ -30,14 +34,15 @@ presently contains only:
 status=unpublished
 ```
 
-In that state the command **fails closed** with
+While the channel remains in that state, the command **fails closed** with
 `NO_PUBLIC_SPOOFDIAG_RELEASE` without any archive install, and it must
 not fall back to the STL version at `releases/latest`. This is an
 intended pre-publication result, not a defective one-liner.
 
-Once a tool-specific prerelease is independently approved, published and
-its immutable asset hashes reconciled, a subsequent **separately reviewed
-PR targeting `dev-spoof`** updates the five-line channel to:
+After a tool-specific prerelease is approved under the active Owner review
+policy, published and its immutable asset hashes reconciled, a separate
+**exact-commit-validated PR targeting `dev-spoof`** updates the five-line
+channel to:
 
 ```text
 status=published
@@ -181,9 +186,10 @@ downloaded archive is *retained* for optional future offline recovery.
   remains outstanding; never delete foreign material to force recovery.
 
 The installed executable includes `version`, `preflight`,
-`menu`, `sources`, `plan`, `report` and `lab` commands;
-`reports` and `diagnostics` are **not** additional verbs. The
-menu and the CLI invoke the same Go engine.
+`menu`, `sources`, `plan`, `report` and `field` commands.
+`field` provides `identity`, `challenge`, `grant`, `listen`, `send` and
+`verify`; the old `lab` command was removed. `reports` and `diagnostics`
+are **not** additional verbs. Menu and CLI invoke the same Go engine.
 
 ## 4. Developer and maintainer release procedure
 
@@ -221,14 +227,17 @@ The tag `spoofdiag-v*` is **already the archive filename prefix**;
 never generate `spoofdiag-spoofdiag-v*`. Unreleased `dev-*`
 snapshots instead carry filenames like `spoofdiag-dev-ci_linux_amd64.tar.gz`.
 
-Before any public publication, reconcile the exact commit and asset
-SHA256 identities, successful exact-source CI and independent
-author-separated review, verify the release acceptance evidence, and
-obtain the required Owner delivery authorization. A release created as
-**Draft** is not a public tagged download, and does **not** make the
-channel `status=published`. After a version is actually published,
-update the channel through a separate reviewed, verified PR; never
-point it at nonexistent, Draft, superseded or unauthorized assets.
+Before public publication, reconcile the exact commit, tag and asset
+SHA256 identities, successful exact-source CI and the review required for
+that particular release, then verify Owner delivery authorization. For the
+first selected-source experimental pre-release, the Owner explicitly
+accepted **internal Master self-review**, without independent
+review; retain that exception in the release notes and do not call it an
+independent approval. Future releases do not inherit this exception.
+A Release created as **Draft** is not a public tagged download and does
+**not** make the channel `status=published`. After publication, update the
+channel only through a separate verified, approved PR; never point it at
+nonexistent, Draft, superseded or unauthorized assets.
 
 GitHub has **one** `releases/latest` endpoint for the repository.
 SpoofDiag uses only its prefixed immutable tag series and an explicit

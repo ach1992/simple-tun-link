@@ -25,7 +25,7 @@ provider acceptance; a real public-network Field trial was not requested.
 | Sender return path / true private L3 | NOT_TESTED | Out of scope for current diagnostic |
 | Debian/Ubuntu ARM64 runtime compatibility | NOT_TESTED for new candidate | Source target only |
 | Installer / upgrade / rollback / release candidate | Earlier local package/install/uninstall and online fixture PASS; exact final HEAD must be rechecked | Previous commits/releases do not validate new sample-reporting changes |
-| Independent exact-HEAD security review | PENDING | Not ready to integrate / publish |
+| External author-separated review | DEFERRED BY OWNER for this experimental pre-release | Master self-review and exact-HEAD CI are required; self-review is not independent evidence |
 
 The previous RFC1918-only detached-network-namespace and KVM tests
 are historical evidence for a different, now-retired engine. In that
@@ -34,5 +34,8 @@ router and receipt counts. The anomaly remains INCONCLUSIVE.
 Read [LOCAL-LAB-ACCEPTANCE.md](LOCAL-LAB-ACCEPTANCE.md); it must not
 be used to claim public Field acceptance.
 
-The Draft SpoofDiag prerelease and the pending separate installer
-PR are not a tested public release of this new Field implementation.
+Release identity and download readiness must be checked against the live
+`spoofdiag-v*` tagged pre-release and `dev-spoof` release channel, not
+against the historical Draft RC1 or an unrelated STL `v*` release.
+Both live two-host Field behavior and provider/return-path acceptance remain
+UNTESTED even after offline build and CI pass.
