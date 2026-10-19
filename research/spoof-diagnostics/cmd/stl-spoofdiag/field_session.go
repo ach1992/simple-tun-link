@@ -22,16 +22,17 @@ import (
 // Every challenge binds the exact destination, port, packet count, source
 // candidates and peer roles. It does not assert provider source-prefix rights.
 type fieldChallenge struct {
-	SchemaVersion int           `json:"schema_version"`
-	Environment   string        `json:"environment"`
-	RunID         string        `json:"run_id"`
-	Sender        string        `json:"sender"`
-	Receiver      string        `json:"receiver"`
-	DestinationIP string        `json:"destination_ip"`
-	DataPort      int           `json:"data_port"`
-	CreatedUTC    string        `json:"created_utc"`
-	ExpiresUnix   int64         `json:"expires_unix"`
-	Samples       []fieldSample `json:"samples"`
+	SchemaVersion    int           `json:"schema_version"`
+	Environment      string        `json:"environment"`
+	RunID            string        `json:"run_id"`
+	Sender           string        `json:"sender"`
+	Receiver         string        `json:"receiver"`
+	DestinationIP    string        `json:"destination_ip"`
+	DataPort         int           `json:"data_port"`
+	CreatedUTC       string        `json:"created_utc"`
+	ExpiresUnix      int64         `json:"expires_unix"`
+	SamplesPerSource int           `json:"samples_per_source,omitempty"` // absent in historical plans means 1
+	Samples          []fieldSample `json:"samples"`
 }
 
 type signedFieldChallenge struct {
@@ -159,10 +160,17 @@ func validateFieldChallenge(c fieldChallenge, now time.Time, live bool) error {
 		return errors.New("field challenge is expired or excessively old")
 	}
 	if len(c.Samples) < 1 || len(c.Samples) > fieldMaxSamples {
-		return errors.New("invalid selected source candidate count")
+		return errors.New("invalid signed field sample count")
+	}
+	repeats := c.SamplesPerSource
+	if repeats == 0 {
+		repeats = 1 // safely verify signed plans from before repetitions existed
+	}
+	if repeats < 1 || repeats > fieldMaxPacketsPerSource {
+		return errors.New("invalid signed samples-per-source setting")
 	}
 	direction, _ := roleDirection(c.Sender, c.Receiver)
-	checked := make(map[string]bool)
+	checked := make(map[string]int)
 	for i, sample := range c.Samples {
 		if sample.Index != i || sample.Size < fieldMinPacket || sample.Size > fieldMaxPacket ||
 			sample.Epoch == "" || len(sample.Epoch) > 96 ||
@@ -172,10 +180,13 @@ func validateFieldChallenge(c fieldChallenge, now time.Time, live bool) error {
 			return errors.New("signed field challenge contains malformed source sample")
 		}
 		id := candidateIdentity(sample.Candidate)
-		if checked[id] {
-			return errors.New("duplicate source in field challenge")
+		checked[id]++
+		if checked[id] > repeats || len(checked) > fieldMaxSelectedSources {
+			return errors.New("duplicate or excessive source sample in signed challenge")
 		}
-		checked[id] = true
+	}
+	if len(c.Samples) != len(checked)*repeats {
+		return errors.New("incomplete per-source repetitions in signed challenge")
 	}
 	return nil
 }
@@ -250,14 +261,32 @@ func newFieldChallenge(o fieldOptions) (signedFieldChallenge, error) {
 	if o.TTLSeconds < 60 || o.TTLSeconds > 900 {
 		return zero, errors.New("field challenge TTL must be 60..900 seconds")
 	}
+	repeats := o.SamplesPerSource
+	if repeats == 0 {
+		repeats = 1 // preserve in-process callers predating this option
+	}
+	if repeats < 1 || repeats > fieldMaxPacketsPerSource {
+		return zero, fmt.Errorf("samples per source must be 1..%d", fieldMaxPacketsPerSource)
+	}
 	inventory, err := readCandidates(o.File)
 	if err != nil {
 		return zero, err
 	}
 	direction, _ := roleDirection(o.Sender, o.Receiver)
-	samples := make([]fieldSample, 0)
+	selected := make([]Candidate, 0)
 	for _, c := range inventory.Candidates {
 		if c.Sender == o.Sender && c.Receiver == o.Receiver && c.Direction == direction {
+			selected = append(selected, c)
+		}
+	}
+	if len(selected) == 0 || len(selected) > fieldMaxSelectedSources {
+		return zero, fmt.Errorf("a signed run needs 1..%d selected sources; batch a larger inventory into separate authorized runs", fieldMaxSelectedSources)
+	}
+	// Interleave rounds so repeated observations cover more of the test window
+	// rather than one short burst per source. Each index has a fresh nonce.
+	samples := make([]fieldSample, 0, len(selected)*repeats)
+	for round := 0; round < repeats; round++ {
+		for _, c := range selected {
 			samples = append(samples, fieldSample{Index: len(samples), Candidate: c, Size: o.PacketSize, Epoch: o.Epoch})
 		}
 	}
@@ -276,7 +305,7 @@ func newFieldChallenge(o fieldOptions) (signedFieldChallenge, error) {
 	challenge := fieldChallenge{SchemaVersion: schema, Environment: o.Transport, RunID: run,
 		Sender: o.Sender, Receiver: o.Receiver, DestinationIP: o.DestinationIP, DataPort: o.DataPort,
 		CreatedUTC: now.Format(time.RFC3339Nano), ExpiresUnix: now.Add(time.Duration(o.TTLSeconds) * time.Second).Unix(),
-		Samples: samples}
+		SamplesPerSource: repeats, Samples: samples}
 	signerPEM, sig, err := signatureFromCredential(challenge, cert)
 	if err != nil {
 		return zero, err
@@ -355,8 +384,8 @@ func checkFieldGrant(env signedFieldGrant, c fieldChallenge, roots *x509.CertPoo
 	return err
 }
 
-// Signed UDP diagnostic application payload. Exactly one sample is emitted
-// for each operator-selected IPv4; packet size is bounded to 128..1200.
+// Every signed sample has its own index and random nonce. A bounded set of
+// independent samples is emitted for each exact operator-selected IPv4.
 func makeFieldPacket(c fieldChallenge, sample fieldSample, key ed25519.PrivateKey) ([]byte, error) {
 	run, err := hex.DecodeString(c.RunID)
 	if err != nil || len(run) != 16 || sample.Index < 0 || sample.Index > 65535 ||
@@ -486,11 +515,14 @@ func verifyFieldPair(challengePath, grantPath, receiptPath, caPath string) (map[
 			matched++
 		}
 	}
+	perSource := summarizeFieldSourceObservations(c.Samples, receipt.Observations)
 	return map[string]any{
 		"run_id": c.RunID, "direction": c.Samples[0].Candidate.Direction,
 		"sender": roleName(c.Sender), "receiver": roleName(c.Receiver),
 		"challenge_signature": "VERIFIED", "receiver_grant_signature": "VERIFIED",
 		"receipt_signature": "VERIFIED", "expected_samples": len(c.Samples),
+		"samples_per_source":    effectiveFieldRepeats(c.SamplesPerSource),
+		"selected_source_count": len(perSource), "per_source": perSource,
 		"peer_authenticated_received": len(receipt.Observations),
 		"source_matched_at_peer":      matched, "source_mismatched_or_rewritten": len(receipt.Observations) - matched,
 		"submitted_at_sender":    "NOT_INDEPENDENTLY_VERIFIED",

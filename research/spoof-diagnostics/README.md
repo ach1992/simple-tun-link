@@ -30,17 +30,21 @@ Two transport choices are available in the implementation:
 - `field_udp_bound`: standard IPv4 UDP; only source IPv4s actually assigned
   to an active local network interface can be chosen. No spoofing.
 - `field_raw_ipv4`: Linux CAP_NET_RAW, an explicitly selected UP nonloopback
-  interface, and one raw IPv4 UDP packet per approved candidate. The packet
+  interface, and a finite set of individually signed UDP diagnostic samples
+  per approved candidate (default five, configurable one to ten). The packet
   source is the exact signed, user-selected IPv4; the signed destination is
   a single cooperating receiver. It is rate- and count-bounded, and requires
   separately verified owner **and provider** permission before any public
   forged-source trial. The command-line acknowledgement is not proof of
   that permission.
 
-**Validation status of this candidate:** source edited and compilation
-reviewed only. **NO real two-host test, public spoof packet, provider
-acceptance test, receiver test, or L3 test has been executed.** Nothing here
-should be described as confirmed field reachability or production readiness.
+**Validation status:** source, signed-artifact invariants and installation
+have automated local/CI coverage. The repeated-sample change adds offline
+regression checks; only CI on the final exact commit establishes that check's
+result. **NO real two-host Field traffic, public forged-source packet,
+provider acceptance, receiver-network test or private-L3 test has been
+executed for this candidate.** Do not equate a received packet with
+permission to use the selected IP or a working return path.
 
 The source, documentation and installation package live only under
 `research/spoof-diagnostics/` on the independent development line. The
@@ -283,7 +287,7 @@ stl-spoofdiag field challenge --file sources.json \
   --cert A.crt --key A.key --ca ca.crt \
   --sender A --receiver B --transport field_raw_ipv4 \
   --destination-ip RECEIVER_OWNED_IPV4 --data-port 24572 \
-  --out challenge.json
+  --samples-per-source 5 --out challenge.json
 ```
 
 Transfer `challenge.json` to B. On B, validate the plan against B's own
@@ -335,10 +339,31 @@ stl-spoofdiag field verify --challenge challenge.json \
   --grant grant.json --receipt receipt.json --ca ca.crt
 ```
 
+**Sampling precision:** `--samples-per-source` controls independent packet
+identities from 1 to 10 per selected IP (default 5). Samples are interleaved
+between selected IPs, rather than emitted in a short burst per IP. The
+receiver's default window automatically expands with the signed sample count
+(at most 120 seconds); manually forcing a shorter window may yield missing
+observations unrelated to network filtering. A signed
+run still approves at most 32 distinct selected IPs, hence at most 320 total
+datagrams with the current maximum. This is a **per-run bound**, not the
+operator's total source inventory capacity; automatic multi-run campaigns,
+historical IP scoring and continual testing are separate future features.
+
+`field verify` reports per-source `planned_samples`,
+`authenticated_peer_observations`, `exact_source_observed`,
+`different_source_observed`, `planned_but_not_observed`, the percentage
+observed versus the signed plan and the percentage of received samples with
+an exact Source IP match. The receiver only knows its own observations:
+**planned-but-not-observed is not a proven packet loss**, because a sender
+might not have submitted all planned samples. Five observations are
+preliminary diagnostic evidence, not statistical proof of path reliability.
+
 `SUBMITTED_ONLY` is a sender syscall outcome, not packet delivery.
 A signed receiver observation is not proof of upstream provider admission,
-physical NIC capture, sender return routing, or private L3. A valid receipt
-with zero packets is **inconclusive**, not proof that an address is blocked.
+physical NIC capture, sender return routing, private L3 or source authorization.
+A valid receipt with zero packets is **inconclusive**, not proof that an
+address is blocked.
 
 ## Debian / Ubuntu compatibility
 

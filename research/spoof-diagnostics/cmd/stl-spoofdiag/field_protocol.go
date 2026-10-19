@@ -20,10 +20,12 @@ import (
 )
 
 const (
-	fieldMinPacket  = 128
-	fieldMaxPacket  = 1200
-	fieldMaxSamples = 32
-	fieldMaxControl = 64 << 10
+	fieldMinPacket           = 128
+	fieldMaxPacket           = 1200
+	fieldMaxSelectedSources  = 32 // independent exact source candidates per signed run
+	fieldMaxPacketsPerSource = 10 // finite repeat ceiling; no open-ended probe loops
+	fieldMaxSamples          = fieldMaxSelectedSources * fieldMaxPacketsPerSource
+	fieldMaxControl          = 256 << 10 // signed artifacts can contain every repeated sample
 )
 
 type fieldSample struct {
@@ -222,6 +224,7 @@ func validateFieldSamples(samples []fieldSample, inventory CandidateFile, sender
 			allowed[candidateIdentity(c)] = true
 		}
 	}
+	counts := make(map[string]int)
 	for i, sample := range samples {
 		if sample.Index != i || sample.Size < fieldMinPacket || sample.Size > fieldMaxPacket ||
 			sample.Epoch == "" || len(sample.Epoch) > 96 {
@@ -232,6 +235,11 @@ func validateFieldSamples(samples []fieldSample, inventory CandidateFile, sender
 		}
 		if validateIP(sample.Candidate.IP, "field_candidates") != nil {
 			return errors.New("invalid selected source IPv4")
+		}
+		id := candidateIdentity(sample.Candidate)
+		counts[id]++
+		if counts[id] > fieldMaxPacketsPerSource || len(counts) > fieldMaxSelectedSources {
+			return errors.New("field run exceeds approved per-source repetition or selected-source bounds")
 		}
 	}
 	return nil

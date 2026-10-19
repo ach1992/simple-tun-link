@@ -58,8 +58,9 @@ func fieldCLI(args []string) error {
 	f.StringVar(&o.BindIP, "bind-ip", "", "receiver's locally assigned IPv4; must equal destination")
 	f.IntVar(&o.DataPort, "data-port", 24572, "receiver UDP port 1024..65535")
 	f.IntVar(&o.PacketSize, "packet-size", 192, "signed UDP payload size 128..1200")
+	f.IntVar(&o.SamplesPerSource, "samples-per-source", 5, "independent signed diagnostic samples per selected IP (1..10)")
 	f.IntVar(&o.TTLSeconds, "ttl-seconds", 600, "signed challenge validity 60..900 seconds")
-	f.IntVar(&o.WindowSeconds, "window-seconds", 15, "receiver listen window 1..120 seconds")
+	f.IntVar(&o.WindowSeconds, "window-seconds", 0, "receiver listen window 0=auto from signed sample count (max 120); or 1..120")
 	f.StringVar(&o.Epoch, "epoch", "operator-declared", "operator-defined policy epoch")
 	f.StringVar(&o.Transport, "transport", "field_udp_bound", "field_udp_bound or field_raw_ipv4")
 	f.StringVar(&o.Output, "out", "", "write a new JSON artifact without overwriting")
@@ -90,8 +91,10 @@ func fieldCLI(args []string) error {
 			return err
 		}
 		return pretty(map[string]any{"run_id": signed.Challenge.RunID, "challenge": o.Output,
-			"samples": len(signed.Challenge.Samples), "selected_sources": signed.Challenge.Samples,
-			"transport": signed.Challenge.Environment, "status": "SIGNED_PLAN_ONLY_NETWORK_NOT_RUN"})
+			"samples": len(signed.Challenge.Samples), "samples_per_source": signed.Challenge.SamplesPerSource,
+			"selected_source_count": len(signed.Challenge.Samples) / signed.Challenge.SamplesPerSource,
+			"selected_sources":      signed.Challenge.Samples,
+			"transport":             signed.Challenge.Environment, "status": "SIGNED_PLAN_ONLY_NETWORK_NOT_RUN"})
 	case "grant":
 		if o.Challenge == "" || o.File == "" || o.Output == "" {
 			return errors.New("field grant requires --challenge --file --out")

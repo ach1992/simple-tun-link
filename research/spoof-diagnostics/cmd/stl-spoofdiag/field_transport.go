@@ -13,13 +13,13 @@ import (
 )
 
 type fieldOptions struct {
-	File, Cert, Key, CA                             string
-	Sender, Receiver                                string
-	DestinationIP, BindIP                           string
-	Transport, Interface                            string
-	DataPort, PacketSize, TTLSeconds, WindowSeconds int
-	Epoch, Output, Challenge, Grant, StateDir       string
-	ProviderAuthorized                              bool
+	File, Cert, Key, CA                                               string
+	Sender, Receiver                                                  string
+	DestinationIP, BindIP                                             string
+	Transport, Interface                                              string
+	DataPort, PacketSize, TTLSeconds, WindowSeconds, SamplesPerSource int
+	Epoch, Output, Challenge, Grant, StateDir                         string
+	ProviderAuthorized                                                bool
 }
 
 // The source IP used by the ordinary UDP transport must actually be assigned
@@ -87,12 +87,23 @@ func readPreparedField(o fieldOptions) (signedFieldChallenge, signedFieldGrant, 
 	return c, g, roots, nil
 }
 
+// The receiver's automatic window includes the full 5 packets/second signed
+// plan duration, plus a startup margin. It never extends beyond 120 seconds.
+// A fixed 15-second default would prematurely end a repeated multi-IP run.
+func automaticFieldWindowSeconds(plannedSamples int) int {
+	window := 15 + (plannedSamples+4)/5
+	if window > 120 {
+		return 120
+	}
+	return window
+}
+
 func fieldListen(ctx context.Context, o fieldOptions, ready chan<- map[string]any) error {
 	if o.Challenge == "" || o.Grant == "" || o.File == "" || o.Output == "" || o.StateDir == "" {
 		return errors.New("field listen requires --challenge --grant --file --out --state-dir")
 	}
-	if o.WindowSeconds < 1 || o.WindowSeconds > 120 {
-		return errors.New("receiver window must be 1..120 seconds")
+	if o.WindowSeconds < 0 || o.WindowSeconds > 120 {
+		return errors.New("receiver window must be auto (0) or 1..120 seconds")
 	}
 	if o.BindIP == "" || o.BindIP != o.DestinationIP {
 		return errors.New("receiver must bind the exact signed destination IPv4")
@@ -106,6 +117,10 @@ func fieldListen(ctx context.Context, o fieldOptions, ready chan<- map[string]an
 	c, g, roots, err := readPreparedField(o)
 	if err != nil {
 		return err
+	}
+	windowSeconds := o.WindowSeconds
+	if windowSeconds == 0 {
+		windowSeconds = automaticFieldWindowSeconds(len(c.Challenge.Samples))
 	}
 	allowed, err := readCandidates(o.File)
 	if err != nil {
@@ -156,16 +171,21 @@ func fieldListen(ctx context.Context, o fieldOptions, ready chan<- map[string]an
 		}
 	}()
 	defer close(closed)
+	expiry := time.Unix(c.Challenge.ExpiresUnix, 0)
+	minimumRecommended := automaticFieldWindowSeconds(len(c.Challenge.Samples))
+	windowMayTruncate := windowSeconds < minimumRecommended ||
+		time.Until(expiry) < time.Duration(minimumRecommended)*time.Second
 	if ready != nil {
 		select {
 		case ready <- map[string]any{"status": "FIELD_RECEIVER_READY_UNVALIDATED", "bind_ip": o.BindIP,
-			"port": o.DataPort, "run_id": c.Challenge.RunID, "transport": c.Challenge.Environment}:
+			"port": o.DataPort, "run_id": c.Challenge.RunID, "transport": c.Challenge.Environment,
+			"planned_samples": len(c.Challenge.Samples), "receiver_window_seconds": windowSeconds,
+			"window_may_end_before_all_samples": windowMayTruncate}:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
-	deadline := time.Now().Add(time.Duration(o.WindowSeconds) * time.Second)
-	expiry := time.Unix(c.Challenge.ExpiresUnix, 0)
+	deadline := time.Now().Add(time.Duration(windowSeconds) * time.Second)
 	if expiry.Before(deadline) {
 		deadline = expiry
 	}
@@ -321,8 +341,11 @@ func fieldSend(ctx context.Context, o fieldOptions) (map[string]any, error) {
 	}
 	return map[string]any{
 		"run_id": c.Challenge.RunID, "status": "SUBMITTED_ONLY",
-		"transport": c.Challenge.Environment, "selected_candidate_count": len(c.Challenge.Samples),
-		"send_syscalls_succeeded": sent, "peer_ingress": "NOT_TESTED",
+		"transport":                c.Challenge.Environment,
+		"selected_candidate_count": len(c.Challenge.Samples) / effectiveFieldRepeats(c.Challenge.SamplesPerSource),
+		"samples_per_source":       effectiveFieldRepeats(c.Challenge.SamplesPerSource),
+		"planned_samples":          len(c.Challenge.Samples),
+		"send_syscalls_succeeded":  sent, "peer_ingress": "NOT_TESTED",
 		"provider_source_acceptance": "NOT_TESTED", "physical_egress": "NOT_TESTED",
 		"return_to_sender": "NOT_TESTED", "private_l3": "NOT_TESTED",
 	}, nil

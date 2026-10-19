@@ -19,15 +19,23 @@ installer or scanner is not included.
    Ed25519 identity chain and signs an exact matching grant.
 4. Both A and B verify that signed grant. B explicitly binds its own
    assigned destination IPv4 and keeps a consumed-run ledger (0700).
-5. A sends at most **one 128–1200 byte signed diagnostic datagram per
-   candidate**, at most 32 candidates/run, with at least 200 ms between
-   sends. There is no CIDR expansion, public scan or automatic retry.
+5. A sends **1–10 independently signed 128–1200 byte diagnostic datagrams
+   per selected candidate** (CLI default 5), at most 32 distinct candidates
+   per signed run and 320 total samples, with at least 200 ms between sends.
+   Samples are interleaved across candidates for temporal spacing. The signed
+   plan and grant bind the exact sample list. The receiver automatically
+   scales its default finite window to the planned sample duration, clipped
+   by the signed challenge expiry. There is no CIDR expansion,
+   public scan, automatic retry or continuous background sender.
 6. B validates each signed UDP application packet and emits a portable
    Ed25519-signed receipt. Each observation carries **both selected
    source and actual observed UDP source**, plus a boolean exact match.
 7. Offline `field verify` reconciles challenge, grant, certificate chain,
-   run ID, source/packet identity, receipt signature and time envelope.
-   It does **not** infer unobserved network behavior.
+   run ID, source/packet identity, receipt signature and time envelope, then
+   reports per-selected-IP planned/received/exact-match/rewritten/missing
+   observations and explicitly qualified percentages. A signed plan is not
+   proof that every planned packet was actually submitted. It does **not**
+   infer unobserved packet loss, provider authorization or return behavior.
 
 `field_udp_bound` uses normal Linux UDP and validates that every selected
 IPv4 is actually assigned to an active non-loopback sender interface.
@@ -51,6 +59,7 @@ There is no IP-address range enumeration.
 | Signed plan + grant | A and B keys signed the same finite run | No network or provider packet transmission |
 | `SUBMITTED_ONLY` | The sending socket call returned success | No independent physical NIC or provider egress |
 | Receiver signed observation | B's process reports a verified UDP payload | No independent NIC capture or provider path guarantee |
+| Per-IP observed/planned fraction | B received this fraction of samples listed in the signed plan | Not a packet-loss measurement without independently proving actual submissions |
 | `source_matched=true` | UDP peer address equals selected IPv4 at B's socket | Does not by itself establish upstream ISP policy or return routing |
 | `source_matched=false` | B's UDP source differs from signed selected source | Possible NAT/rewrite; root cause unverified |
 | Zero observations | B signed no validated receipt samples | `INCONCLUSIVE`, not proof that a source is blocked |
@@ -75,12 +84,13 @@ establishes a return route, even when B receives a signed request.
 
 ## Authorization and release gates
 
-The Owner's newer instruction authorizes code development and **NO TEST
-EXECUTION**. Public forged-source use still requires separate verified
-network/provider approval, operator-owned destinations and the appropriate
-platform permissions. A permit string, command-line switch or local
-signature alone is not independent authority.
+The Owner explicitly allows automated builds, CI, offline/unit and approved
+controlled validation. This does not authorize any public-WAN forged-source
+Field trial. Such use still requires separately established Owner, peer and
+provider approval, operator-owned destinations and appropriate platform
+permissions. A permit string, receipt, successful packet delivery or local
+signature alone is not independent evidence of authorization.
 
-Future review, unit tests, integration tests, two-real-host packet
-capture, provider approval and explicit release decision are distinct
-unmet gates. Keep draft development off protected STL `main`.
+Automated Go tests and CI validate code behavior; two-real-host packet
+capture, provider acceptance, independent review and explicit release
+approval remain distinct gates. Keep draft development off protected STL `main`.

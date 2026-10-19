@@ -306,6 +306,13 @@ func menuFieldOperation(r *bufio.Reader, op string) error {
 		if size != "" {
 			args = append(args, "--packet-size", size)
 		}
+		repeats, err := menuAsk(r, "Signed samples per selected IP (blank=5, range 1..10)")
+		if err != nil {
+			return err
+		}
+		if repeats != "" {
+			args = append(args, "--samples-per-source", repeats)
+		}
 		out, err := menuAskNonempty(r, "New signed challenge .json output")
 		if err != nil {
 			return err
@@ -401,6 +408,7 @@ func menuFieldVerify(r *bufio.Reader) error {
 func menuFieldHelp() {
 	fmt.Fprintln(os.Stdout, "This build contains no private-lab, local-loopback, or detached-netns diagnostic commands.")
 	fmt.Fprintln(os.Stdout, "Field protocol: sender challenge -> signed receiver grant -> listen/send -> signed receipt -> verify.")
+	fmt.Fprintln(os.Stdout, "Each approved source IP gets 5 signed samples by default (configurable 1..10 per run).")
 	fmt.Fprintln(os.Stdout, "All IP choices are exact source IPv4s in field_candidates inventory, no CIDR scanning.")
 	fmt.Fprintln(os.Stdout, "Normal UDP supports local interface-owned IPv4s. Raw IPv4 needs CAP_NET_RAW, an exact NIC")
 	fmt.Fprintln(os.Stdout, "and separate proven owner/provider authorization; CLI acknowledgement is not permission proof.")

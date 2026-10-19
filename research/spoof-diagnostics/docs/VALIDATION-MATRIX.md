@@ -15,15 +15,16 @@ provider acceptance; a real public-network Field trial was not requested.
 | Raw IPv4 header with selected source and explicit peer | IMPLEMENTED IN SOURCE | No CAP_NET_RAW or public-WAN test |
 | Receiver signed actual socket-source observations | IMPLEMENTED IN SOURCE | No real peer packet received |
 | Signed receipt comparison / replay protection | UNIT TESTED | Signed receipt pairing, overclaim/tamper controls and duplicate run ledger checked; no real peer ingress |
+| Repeated per-IP signed samples / stats | OFFLINE UNIT PASS | Independent packet indices, replay rejection, partial/rewritten/missing counters, legacy one-sample plans and maximum-size artifacts checked; no real transport evidence |
 | Go formatting / static analysis | LOCAL PASS on source candidate | Exact pushed-HEAD acceptance and CI are separate evidence |
-| Automated Go unit and race suites | LOCAL PASS on source candidate; CI PENDING | CI must run on exact final PR HEAD; not public-WAN proof |
+| Automated Go unit and race suites | LOCAL PASS on authoring candidate; exact-HEAD CI assessed separately | CI status belongs to the exact current PR commit; offline passes do not prove WAN delivery |
 | Real-network Field packet capture | NOT_REQUESTED | Previous isolated lab results are unrelated; normal automated tests remain allowed |
 | Real two-host A↔B selective-source tests | NOT_RUN by Owner request | No connectivity evidence |
 | Provider source prefix consent / acceptance | NOT_VERIFIED | Separate external authorization needed |
 | Sender physical NIC egress / NAT rewrite | NOT_TESTED | Independent observer required |
 | Sender return path / true private L3 | NOT_TESTED | Out of scope for current diagnostic |
 | Debian/Ubuntu ARM64 runtime compatibility | NOT_TESTED for new candidate | Source target only |
-| Installer / upgrade / rollback / release candidate | LOCAL package/install/uninstall and online fixture PASS; final-HEAD CI PENDING | Earlier releases/CI do not validate these code changes |
+| Installer / upgrade / rollback / release candidate | Earlier local package/install/uninstall and online fixture PASS; exact final HEAD must be rechecked | Previous commits/releases do not validate new sample-reporting changes |
 | Independent exact-HEAD security review | PENDING | Not ready to integrate / publish |
 
 The previous RFC1918-only detached-network-namespace and KVM tests

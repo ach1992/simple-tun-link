@@ -1,4 +1,4 @@
-# Go Field CLI reference — untested field candidate
+# Go Field CLI reference — offline-validated, not field-proven
 
 The old `lab` command, loopback two-agent mode and detached private
 namespace adapter are **removed** from the current source. The tool's
@@ -16,7 +16,8 @@ stl-spoofdiag report --file PATH
 stl-spoofdiag field identity --dir NEW_PRIVATE_DIR
 stl-spoofdiag field challenge --file ALLOWLIST --cert A.crt --key A.key \
   --ca ca.crt --sender A --receiver B --transport field_raw_ipv4 \
-  --destination-ip RECEIVER_IP --data-port 24572 --out challenge.json
+  --destination-ip RECEIVER_IP --data-port 24572 \
+  --samples-per-source 5 --out challenge.json
 stl-spoofdiag field grant --file RECEIVER_ALLOWLIST \
   --challenge challenge.json --cert B.crt --key B.key \
   --ca ca.crt --sender A --receiver B --out grant.json
@@ -64,7 +65,10 @@ copy those extra secrets to individual server hosts.
 ## Signed Field session internals
 
 - Challenge signed by A (Ed25519), valid 60–900 seconds; default
-  600 seconds, 1–32 distinct samples, 128–1200 UDP data bytes/sample.
+  600 seconds, 1–32 **distinct source IPs per run** with 1–10 independent
+  signed samples per IP (default 5), at most 320 total packets. Each sample
+  has an independent index and random nonce, and sample rounds are interleaved
+  over the selected IPs. Older omitted sample-count metadata means 1.
 - Receiver-signed grant is bound to the challenge SHA256 digest, run ID,
   destination IPv4, UDP port and receiver role. Neither signed artifact
   independently proves IP-prefix rights or provider permission.
@@ -72,12 +76,20 @@ copy those extra secrets to individual server hosts.
   grant, and checks its local exact source list.
 - Receiver checks the same signed run and its **own** source list,
   verifies A's packet signatures and consumes the run ID in a private
-  replay ledger; reception window is finite, max 120 seconds.
+  replay ledger; reception window defaults to an automatic finite value
+  derived from the signed sample count at 5 packets/second plus a 15-second
+  startup margin, capped at 120 seconds. `--window-seconds` may explicitly
+  override it (1–120), with a short-window warning in the readiness result.
 - Receiver signs actual IPv4 socket source, chosen source, per-sample
   comparison, epoch, packet size and role/direction. Zero receipt
   observations are still signed, but are inconclusive.
 - Archived verification checks cryptographic consistency at declared
   artifact times, **not** independent wall-clock truth or physical egress.
+  The `per_source` result reports planned, authenticated peer-observed,
+  exact-source, different-source and planned-but-unobserved counts, plus
+  percentages relative to the signed plan and received samples.
+  **These percentages are not independently verified packet-loss rates**:
+  absent sender-submission evidence prevents that conclusion.
 
 Raw IPv4 on Linux requires `CAP_NET_RAW`, an UP non-loopback explicit NIC
 and separate provider permission. The IPv4 packet has a standard IPv4
@@ -86,9 +98,10 @@ TTL 64, bounded payload, and IPv4 UDP checksum zero (legal for IPv4).
 The raw sockaddr port is zero as required by the Linux raw(7) API; the destination UDP port is encoded inside the UDP header. No host firewall, route, default interface or sysctl is modified. See https://man7.org/linux/man-pages/man7/raw.7.html for Linux IP_HDRINCL checksum and capability semantics.
 `Sendto` success is reported only as `SUBMITTED_ONLY`.
 
-This candidate has **not** been verified in a live kernel/namespace,
-with two actual public hosts, or at a provider. Build/compilation is
-not proof of delivery, NAT behavior, source validity or return paths.
+The new Field runtime has offline Go/CI validation but **not** real public
+provider or two-host Field acceptance. Automated verification is not proof
+of actual packet delivery, NAT behavior, permission to use a source prefix,
+source validity at an upstream provider or return paths.
 
 ## Independent installation
 
