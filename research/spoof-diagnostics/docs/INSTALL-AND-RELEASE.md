@@ -9,9 +9,11 @@ on STL's installer, `v*` tags or stable release/update workflow.
 unpublished Draft from an older implementation. It is not the current Field
 release and must not be selected as a public installation endpoint. The
 source commit, tag, release assets and current channel must agree before any
-new download is advertised. For the present experimental pre-release only,
-the Owner explicitly elected **Master self-review instead of an external
-independent review**; do not misrepresent that as author-separated approval.
+new download is advertised. The earlier RC2 had an Owner-approved internal
+review exception. **RC3** code received independent approval **for
+integration into `dev-spoof`**; this does not establish field-network,
+production or runtime ARM64 readiness. The experimental RC3 pre-release
+has separately verified asset SHA-256, tag and source identities.
 
 For non-developers, the canonical step-by-step instructions are the
 [tool-local README](../README.md). This document owns the exact command,
@@ -230,11 +232,14 @@ snapshots instead carry filenames like `spoofdiag-dev-ci_linux_amd64.tar.gz`.
 
 Before public publication, reconcile the exact commit, tag and asset
 SHA256 identities, successful exact-source CI and the review required for
-that particular release, then verify Owner delivery authorization. For the
-first selected-source experimental pre-release, the Owner explicitly
-accepted **internal Master self-review**, without independent
-review; retain that exception in the release notes and do not call it an
-independent approval. Future releases do not inherit this exception.
+that particular release, then verify Owner delivery authorization.
+The earlier RC2 Owner exception for internal Master self-review was
+release-specific; do not misrepresent it as independent approval.
+For RC3, the independently reviewed integration tree matches the
+squash-merged `dev-spoof` tree, its tool-only release assets were checked,
+and the Owner specifically authorized an **experimental SpoofDiag
+Pre-release**. Neither approval certifies two-host Field operation or
+production suitability. Future releases retain their own approval gates.
 A Release created as **Draft** is not a public tagged download and does
 **not** make the channel `status=published`. After publication, update the
 channel only through a separate verified, approved PR; never point it at
