@@ -11,7 +11,7 @@ import (
 
 func fieldCLI(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: field identity|challenge|grant|listen|send|verify")
+		return errors.New("usage: field identity|challenge|grant|accept|check|listen|send|verify")
 	}
 	op := args[0]
 	if op == "identity" {
@@ -34,6 +34,7 @@ func fieldCLI(args []string) error {
 		challenge := f.String("challenge", "", "sender signed field challenge JSON")
 		grant := f.String("grant", "", "receiver signed consent grant JSON")
 		receipt := f.String("receipt", "", "receiver signed packet observation JSON")
+		senderReport := f.String("sender-report", "", "optional signed sender syscall evidence JSON")
 		ca := f.String("ca", "", "trusted CA certificate PEM")
 		if err := f.Parse(args[1:]); err != nil {
 			return err
@@ -44,6 +45,17 @@ func fieldCLI(args []string) error {
 		result, err := verifyFieldPair(*challenge, *grant, *receipt, *ca)
 		if err != nil {
 			return err
+		}
+		if *senderReport != "" {
+			challenge, err := readSignedFieldChallenge(*challenge)
+			if err != nil {
+				return err
+			}
+			submissions, err := verifySenderEvidence(*senderReport, challenge.Challenge, *ca)
+			if err != nil {
+				return err
+			}
+			result["sender_evidence"] = submissions
 		}
 		return pretty(result)
 	}
@@ -66,8 +78,14 @@ func fieldCLI(args []string) error {
 	f.StringVar(&o.Output, "out", "", "write a new JSON artifact without overwriting")
 	f.StringVar(&o.Challenge, "challenge", "", "existing sender signed challenge JSON")
 	f.StringVar(&o.Grant, "grant", "", "existing receiver signed grant JSON")
+	f.StringVar(&o.ReadyFile, "ready", "", "optional receiver-signed live-listener readiness JSON for sender")
+	f.StringVar(&o.ReadyOutput, "ready-out", "", "optional receiver-signed readiness JSON emitted only after bind")
+	role := f.String("role", "", "for field check: sender or receiver")
+	grantOut := f.String("grant-out", "", "field accept: new B-signed grant JSON file")
 	f.StringVar(&o.StateDir, "state-dir", "", "private 0700 consumed-run ledger")
 	f.StringVar(&o.Interface, "interface", "", "exact source egress NIC for raw IPv4")
+	f.BoolVar(&o.ForwardedDestination, "allow-forwarded-destination", false,
+		"receiver explicitly accepts local DNAT bind differing from advertised signed destination; does not prove NAT works")
 	f.BoolVar(&o.ProviderAuthorized, "provider-authorized", false,
 		"operator acknowledgement ONLY; independent owner and provider permission still required for raw source tests")
 	if err := f.Parse(args[1:]); err != nil {
@@ -108,39 +126,83 @@ func fieldCLI(args []string) error {
 		}
 		return pretty(map[string]any{"run_id": signed.Grant.RunID,
 			"grant": o.Output, "status": "RECEIVER_SIGNED_APPROVAL_NOT_PROVIDER_AUTHORIZATION"})
+	case "check":
+		if o.Challenge == "" || o.Grant == "" || o.File == "" || o.DestinationIP == "" {
+			return errors.New("field check requires --challenge --grant --file --destination-ip --role")
+		}
+		result, err := fieldPreflight(o, *role)
+		if result != nil {
+			if printErr := pretty(result); printErr != nil {
+				return printErr
+			}
+		}
+		return err
+	case "accept":
+		if o.Challenge == "" || o.File == "" || o.Output == "" || o.ReadyOutput == "" || o.StateDir == "" || *grantOut == "" {
+			return errors.New("field accept requires --challenge --file --grant-out --ready-out --out --state-dir (plus B credentials)")
+		}
+		ch, err := readSignedFieldChallenge(o.Challenge)
+		if err != nil {
+			return err
+		}
+		o.Sender, o.Receiver = ch.Challenge.Sender, ch.Challenge.Receiver
+		o.DestinationIP, o.DataPort = ch.Challenge.DestinationIP, ch.Challenge.DataPort
+		if o.BindIP == "" {
+			o.BindIP = o.DestinationIP
+		}
+		o.Grant = *grantOut
+		grant, err := newFieldGrant(o)
+		if err != nil {
+			return err
+		}
+		if err := saveNewJSON(o.Grant, grant); err != nil {
+			return err
+		}
+		if err := pretty(map[string]any{"status": "SIGNED_GRANT_READY_TRANSFER_TO_SENDER",
+			"grant": o.Grant, "run_id": grant.Grant.RunID,
+			"note": "receiver will now start finite listening; signed grant is not physical readiness proof"}); err != nil {
+			return err
+		}
+		return runFieldListener(ctx, o)
 	case "listen":
 		if o.Challenge == "" || o.Grant == "" || o.File == "" || o.BindIP == "" || o.DestinationIP == "" ||
 			o.Output == "" || o.StateDir == "" {
 			return errors.New("field listen requires --challenge --grant --file --bind-ip --destination-ip --out --state-dir")
 		}
-		ready := make(chan map[string]any, 1)
-		done := make(chan error, 1)
-		go func() { done <- fieldListen(ctx, o, ready) }()
-		select {
-		case status := <-ready:
-			if err := pretty(status); err != nil {
-				return err
-			}
-			if err := <-done; err != nil {
-				return err
-			}
-			return pretty(map[string]any{"status": "SIGNED_FIELD_RECEIPT_WRITTEN", "receipt": o.Output,
-				"independent_verification": "field verify --challenge ... --grant ... --receipt ... --ca ..."})
-		case err := <-done:
-			return err
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+		return runFieldListener(ctx, o)
 	case "send":
-		if o.Challenge == "" || o.Grant == "" || o.File == "" || o.DestinationIP == "" {
-			return errors.New("field send requires --challenge --grant --file --destination-ip")
+		if o.Challenge == "" || o.Grant == "" || o.File == "" || o.DestinationIP == "" || o.Output == "" {
+			return errors.New("field send requires --challenge --grant --file --destination-ip --out (signed sender evidence)")
 		}
 		result, err := fieldSend(ctx, o)
-		if err != nil {
+		if result != nil {
+			if printErr := pretty(result); printErr != nil {
+				return printErr
+			}
+		}
+		return err
+	default:
+		return errors.New("unknown field operation; expected identity|challenge|grant|accept|check|listen|send|verify")
+	}
+}
+
+func runFieldListener(ctx context.Context, o fieldOptions) error {
+	ready := make(chan map[string]any, 1)
+	done := make(chan error, 1)
+	go func() { done <- fieldListen(ctx, o, ready) }()
+	select {
+	case status := <-ready:
+		if err := pretty(status); err != nil {
 			return err
 		}
-		return pretty(result)
-	default:
-		return errors.New("unknown field operation; expected identity|challenge|grant|listen|send|verify")
+		if err := <-done; err != nil {
+			return err
+		}
+		return pretty(map[string]any{"status": "SIGNED_FIELD_RECEIPT_WRITTEN",
+			"receipt": o.Output, "independent_verification": "field verify --challenge ... --grant ... --receipt ... --ca ..."})
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }

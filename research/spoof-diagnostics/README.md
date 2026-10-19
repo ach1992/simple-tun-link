@@ -54,8 +54,8 @@ channel are outside this tool's release and integration scope.
 
 ## Install online — one general command (no version number)
 
-When the Spoof Diagnostics channel has its **first reviewed, published**
-release, run this one command on the Debian/Ubuntu server:
+For the independently published Spoof Diagnostics channel, run this
+version-independent command on a Debian/Ubuntu server:
 
 ```sh
 bash -o pipefail -c 'curl -fsSL --proto "=https" https://raw.githubusercontent.com/ach1992/simple-tun-link/dev-spoof/research/spoof-diagnostics/scripts/install-latest.sh | sudo bash -s -- --accept'
@@ -69,14 +69,12 @@ the downloaded bootstrap and the correct AMD64/ARM64 archive, and invokes
 the same verified offline installer. It does **not** follow GitHub's
 `releases/latest` (that belongs to STL) or download Go, Python or STL.
 
-**Publication status:** check the live
-[standalone release channel](https://github.com/ach1992/simple-tun-link/blob/dev-spoof/research/spoof-diagnostics/release-channel.txt)
-before using this command. While the channel says `status=unpublished`, it
-intentionally stops with `NO_PUBLIC_SPOOFDIAG_RELEASE`, without installing
-anything; after an approved `spoofdiag-v*` pre-release is published and its
-asset hashes are entered in the channel, the same command selects that
-version. The older `spoofdiag-v0.1.0-rc.1` Draft targets a superseded
-implementation and is **not** a substitute for the selected channel version.
+**Publication status:** the standalone RC2 prerelease channel is published
+as of 2026-10-19. Check the [live standalone release channel](https://github.com/ach1992/simple-tun-link/blob/dev-spoof/research/spoof-diagnostics/release-channel.txt)
+before installing: new Campaign/Field improvements in a development PR are
+**not** included in RC2 until separately reviewed, integrated and released.
+If the channel is unpublished, the installer deliberately refuses the download.
+The older RC1 Draft belongs to a superseded implementation.
 Never substitute an STL `v*` release or an arbitrary development artifact.
 
 The command downloads executable script code over HTTPS from the
@@ -232,9 +230,10 @@ For verified rollback and tool-only uninstall, consult
 
 ## Field menu, selected IPs and signed exchange
 
-`stl-spoofdiag menu` now shows 12 choices including candidate management,
-offline plan, identity provisioning, challenge/grant, field receiver/sender,
-and receipt verification. **There is no Private Lab menu or netns runtime.**
+`stl-spoofdiag menu` exposes 18 operations including candidate
+management, campaign preparation/continuation/reporting, offline plan,
+identity provisioning, actual prerequisite checks, Field A/B operations,
+and signed receipt verification. **There is no Private Lab menu or netns runtime.**
 
 A field inventory uses the singular `field_candidates` schema, not the
 historical `private_lab` or `approved_field_plan` modes:
@@ -259,9 +258,11 @@ own exact source allowlist. Reverse-direction candidates have distinct
 An inventory CSV/JSON may contain thousands of exact candidates (the
 current reader bounds a file to 4 MiB); this is **not** a promise that a
 single signed run covers them. Each signed run currently accepts up to 32
-distinct IPs and 1–10 samples per IP. Automated multi-run scheduling,
-long-term scoring/ranking and high-rate source testing are **not included**.
-There is no automatic source-IP discovery.
+distinct IPs and 1–10 samples per IP. `campaign create/next/report` automates offline batching, next-run
+preparation, durable continuation and signed-evidence aggregation for large
+operator-provided lists. It does **not** discover IPs, transmit by itself,
+auto-retry grants or perform unattended high-rate probing. There is no
+automatic source-IP discovery.
 
 Source inventory editing and an offline plan never transmit anything:
 
@@ -331,7 +332,8 @@ stl-spoofdiag field send --file sources.json \
   --challenge challenge.json --grant grant.json \
   --cert A.crt --key A.key --ca ca.crt \
   --sender A --receiver B --destination-ip RECEIVER_OWNED_IPV4 \
-  --data-port 24572 --interface SENDER_EGRESS_NIC --provider-authorized
+  --data-port 24572 --interface SENDER_EGRESS_NIC --provider-authorized \
+  --out sender.json
 ```
 
 `--provider-authorized` records operator acknowledgement but **does not
@@ -341,26 +343,37 @@ locally assigned addresses instead, create the challenge with
 `--transport field_udp_bound` and omit `--interface` and
 `--provider-authorized` at send time.
 
-**Current field restriction:** the signed destination IPv4 must be assigned directly to the receiving host interface; server-side DNAT/1:1 public-to-private forwarding is not yet modeled and must not be represented as supported. Both the grant and listener check direct ownership before operating.
+**Destination topology:** direct B bind remains the default. If B is
+behind an independently owned/configured DNAT or 1:1 forwarding endpoint,
+B may explicitly issue the grant with
+`--bind-ip RECEIVER_LOCAL_IPV4 --allow-forwarded-destination`, then listen
+with the **same signed local bind** and flag. B's local IPv4 must actually
+be assigned; the externally advertised destination stays immutable in the
+challenge and grant. The program **does not create, verify or prove NAT
+forwarding**. No third-party destination is implicitly approved.
 
 After the receiver finishes, independently transfer `receipt.json` to a
 trusted machine and check the exact three-way cryptographic binding:
 
 ```sh
 stl-spoofdiag field verify --challenge challenge.json \
-  --grant grant.json --receipt receipt.json --ca ca.crt
+  --grant grant.json --receipt receipt.json --ca ca.crt \
+  --sender-report sender.json
 ```
 
 **Sampling precision:** `--samples-per-source` controls independent packet
 identities from 1 to 10 per selected IP (default 5). Samples are interleaved
 between selected IPs, rather than emitted in a short burst per IP. The
 receiver's default window automatically expands with the signed sample count
-(at most 120 seconds); manually forcing a shorter window may yield missing
-observations unrelated to network filtering. A signed
+(at most 120 seconds). An insufficient window or expiring grant is now
+rejected *before* receiving; the sender also checks read-only local
+prerequisites before initiating any sample. A signed
 run still approves at most 32 distinct selected IPs, hence at most 320 total
 datagrams with the current maximum. This is a **per-run bound**, not the
-operator's total source inventory capacity; automatic multi-run campaigns,
-historical IP scoring and continual testing are separate future features.
+operator's total source inventory capacity. Offline Campaign Manager handles
+many bounded runs and transparent signed peer-observation ordering; automatic
+source discovery, continuous daemon operation and true link quality ranking
+are not implemented.
 
 `field verify` reports per-source `planned_samples`,
 `authenticated_peer_observations`, `exact_source_observed`,
@@ -376,6 +389,82 @@ A signed receiver observation is not proof of upstream provider admission,
 physical NIC capture, sender return routing, private L3 or source authorization.
 A valid receipt with zero packets is **inconclusive**, not proof that an
 address is blocked.
+
+## Campaign Manager — many exact IPs, one bounded approved run at a time
+
+The following commands prepare files and verify records **without sending any
+network packets**. The values are examples of test-owned addresses, not proven
+real-network results. Generate a separate campaign for reverse `B_TO_A`
+direction with the receiver on A.
+
+On the sender A, create a private immutable campaign from an operator-owned
+source file, then sign the **first** short-lived batch when ready:
+
+```sh
+stl-spoofdiag campaign create --file sources.json \
+  --dir /private/campaign-A-to-B --direction A_TO_B \
+  --destination-ip RECEIVER_OWNED_IPV4 --transport field_udp_bound
+stl-spoofdiag campaign next --dir /private/campaign-A-to-B \
+  --cert A.crt --key A.key --ca ca.crt
+```
+
+`campaign next` prints an exact batch source file and signed challenge path.
+Transfer the immutable batch source file and signed challenge to B. B must
+independently approve the same exact candidates in its **own** allowlist.
+For an operator-authorized run, B can use a single foreground command to
+issue the B-signed grant and start its finite listener:
+
+```sh
+stl-spoofdiag field accept --file B-owned-allowlist.json \
+  --challenge challenge.json --cert B.crt --key B.key --ca ca.crt \
+  --grant-out grant.json --ready-out ready.json \
+  --state-dir /private/consumed-runs --out receipt.json
+```
+
+Transfer the B-signed `grant.json` **and** B-signed `ready.json` to the A
+campaign attempt directory; `ready.json` is written only after B binds its
+finite listener. B must remain listening. The ready file has a short expiry,
+so expired sessions require a new challenge and independent B approval.
+`field check --role sender|receiver` assesses interface, capability,
+cryptographic identity and expiry prerequisites **without opening sockets**.
+For an authorized sender action, A can invoke exactly **one** granted batch
+(no automatic continuation or provider-permission bypass):
+
+```sh
+stl-spoofdiag campaign send --dir /private/campaign-A-to-B \
+  --cert A.crt --key A.key --ca ca.crt
+```
+
+For `field_raw_ipv4`, `campaign send` also requires an explicitly selected
+`--interface` and `--provider-authorized`, with separately verified genuine
+permission. No field sends or listeners were executed during development.
+B's receipt is stored or copied to the `receipt.json` path printed by
+`campaign next`; A keeps `sender.json` in the same run directory. File transfer
+is currently operator-managed: there is **no always-on remote control agent
+and no background job**. A B-signed grant approves the plan and a B-signed readiness file records
+successful local listener binding, **not** a guarantee B remains reachable
+when A sends.
+
+To summarize verified evidence and prepare the **next** 32-IP-or-smaller batch:
+
+```sh
+stl-spoofdiag campaign report --dir /private/campaign-A-to-B --ca ca.crt
+stl-spoofdiag campaign next --dir /private/campaign-A-to-B \
+  --cert A.crt --key A.key --ca ca.crt
+```
+
+A batch does not advance without both its cryptographically valid completed
+receiver receipt **and** the matching completed signed sender syscall report.
+This proves consistency of both endpoint declarations, not physical delivery. An expired/incomplete run remains preserved and requires
+a **fresh, separately consented challenge** with the explicit
+`campaign next ... --retry-expired` option; the tool does not auto-replay it.
+The same directory can be resumed after CLI interruption, without a separate
+database or background service.
+
+The report preserves counts for planned samples, authenticated peer sightings,
+exact source matches and rewritten source addresses. Any observation-based
+ordering is **not** proof of physical egress, provider policy, a viable return
+route, statistical packet loss, or a future tunnel.
 
 ## Debian / Ubuntu compatibility
 

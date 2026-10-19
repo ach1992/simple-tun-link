@@ -9,6 +9,9 @@ provider acceptance; a real public-network Field trial was not requested.
 | Gate | Status | What is and is not established |
 | --- | --- | --- |
 | Source refactor and obsolete lab commands removed | IMPLEMENTED IN SOURCE | Deletion alone is not runtime validation |
+| This unmerged candidate: campaign partitioning and progress | PURE OFFLINE UNIT PASS | 1,536 exact owned IP fixture split into 48 bounded batches; verified signed completion/resumption, expiry and explicit retry without network traffic |
+| This unmerged candidate: partial sender/receiver evidence | PURE OFFLINE UNIT PASS | Fault injection preserves signed sender progress and receiver snapshots; no live host socket proof |
+| This unmerged candidate: receiver DNAT consent and raw checksum | PURE OFFLINE UNIT PASS | Locally signed bind mismatch and checksum tested with fixture data; real forwarding/provider acceptance NOT_TESTED |
 | Source inventory / exact directional candidates | LOCAL PASS on source candidate | Both directions and multiple exact addresses exercised offline; provider network not tested |
 | Sender-signed plan and receiver-signed grant | LOCAL PASS on source candidate | Offline identity, signed A→B/B→A challenge and receiver grant exercised; no packets emitted |
 | Normal UDP bind to an assigned selected IP | IMPLEMENTED IN SOURCE | No host or provider socket test |

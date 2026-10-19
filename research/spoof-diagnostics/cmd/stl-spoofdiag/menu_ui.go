@@ -13,7 +13,7 @@ func menu() error {
 	reader := bufio.NewReaderSize(os.Stdin, 64*1024)
 	for {
 		menuHeader()
-		fmt.Fprint(os.Stdout, "Choose [0-12] (or q): ")
+		fmt.Fprint(os.Stdout, "Choose [0-18] (or q): ")
 		answer, err := menuRead(reader)
 		if errors.Is(err, io.EOF) {
 			return nil
@@ -51,8 +51,20 @@ func menu() error {
 			result = menuFieldVerify(reader)
 		case "12", "h", "help":
 			menuFieldHelp()
+		case "13":
+			result = menuCampaignCreate(reader)
+		case "14":
+			result = menuCampaignNext(reader)
+		case "15":
+			result = menuCampaignReport(reader)
+		case "16":
+			result = menuFieldCheck(reader)
+		case "17":
+			result = menuFieldAccept(reader)
+		case "18":
+			result = menuCampaignSend(reader)
 		default:
-			fmt.Fprintln(os.Stderr, "Unknown option; use 0..12")
+			fmt.Fprintln(os.Stderr, "Unknown option; use 0..18")
 		}
 		if result != nil {
 			fmt.Fprintln(os.Stderr, "Operation not completed:", result)
@@ -70,6 +82,9 @@ func menuHeader() {
 	fmt.Fprintln(os.Stdout, " 7) Create sender challenge    8) Grant receiver approval")
 	fmt.Fprintln(os.Stdout, " 9) Start field receiver      10) Send bounded field samples")
 	fmt.Fprintln(os.Stdout, "11) Verify signed receipt     12) Help")
+	fmt.Fprintln(os.Stdout, "13) Prepare IP campaign       14) Prepare next batch (offline)")
+	fmt.Fprintln(os.Stdout, "15) Signed campaign report    16) Read-only field prerequisites")
+	fmt.Fprintln(os.Stdout, "17) Receiver accept + listen  18) Send ONE approved campaign batch")
 	fmt.Fprintln(os.Stdout, " 0) Exit")
 	fmt.Fprintln(os.Stdout, "NOTE: Source match != provider permission != return-path proof.")
 	fmt.Fprintln(os.Stdout, "==============================================================")
@@ -330,6 +345,27 @@ func menuFieldOperation(r *bufio.Reader, op string) error {
 				return err
 			}
 			args = append(args, "--out", out)
+			plan, err := readSignedFieldChallenge(challenge)
+			if err != nil {
+				return err
+			}
+			bind, err := menuAsk(r, "Receiver-local bind IPv4 (blank=signed destination; use private address for owned DNAT)")
+			if err != nil {
+				return err
+			}
+			if bind != "" {
+				args = append(args, "--bind-ip", bind)
+				if bind != plan.Challenge.DestinationIP {
+					ack, err := menuAsk(r, "Type FORWARDED if you independently configured this exact receiver endpoint's DNAT")
+					if err != nil {
+						return err
+					}
+					if ack != "FORWARDED" {
+						return errors.New("receiver forwarding not acknowledged")
+					}
+					args = append(args, "--allow-forwarded-destination")
+				}
+			}
 		} else {
 			grant, err := menuAskNonempty(r, "Existing receiver signed grant .json")
 			if err != nil {
@@ -349,7 +385,18 @@ func menuFieldOperation(r *bufio.Reader, op string) error {
 				args = append(args, "--data-port", port)
 			}
 			if op == "listen" {
-				args = append(args, "--bind-ip", dest)
+				g, err := readSignedFieldGrant(grant)
+				if err != nil {
+					return err
+				}
+				bind := g.Grant.BindIP
+				if bind == "" {
+					bind = dest
+				}
+				args = append(args, "--bind-ip", bind)
+				if bind != dest {
+					args = append(args, "--allow-forwarded-destination")
+				}
 				state, err := menuAskNonempty(r, "Private replay-ledger directory (0700)")
 				if err != nil {
 					return err
@@ -360,6 +407,11 @@ func menuFieldOperation(r *bufio.Reader, op string) error {
 				}
 				args = append(args, "--state-dir", state, "--out", out)
 			} else {
+				out, err := menuAskNonempty(r, "New SIGNED sender syscall evidence .json output")
+				if err != nil {
+					return err
+				}
+				args = append(args, "--out", out)
 				chosen, err := readSignedFieldChallenge(challenge)
 				if err != nil {
 					return err
@@ -414,4 +466,238 @@ func menuFieldHelp() {
 	fmt.Fprintln(os.Stdout, "and separate proven owner/provider authorization; CLI acknowledgement is not permission proof.")
 	fmt.Fprintln(os.Stdout, "No network tests have established any real host/provider behavior for this field candidate.")
 	fmt.Fprintln(os.Stdout, "Use README.md for explicit ports, identity transfer and detailed CLI argument instructions.")
+}
+
+// The guided campaign frontend reuses the exact machine commands and never
+// maintains an independent interactive execution engine.
+func menuCampaignCreate(r *bufio.Reader) error {
+	source, err := menuAskNonempty(r, "Operator-owned exact IP source JSON/CSV")
+	if err != nil {
+		return err
+	}
+	dir, err := menuAskNonempty(r, "NEW private campaign directory")
+	if err != nil {
+		return err
+	}
+	direction, err := menuAskNonempty(r, "Direction A_TO_B or B_TO_A")
+	if err != nil {
+		return err
+	}
+	destination, err := menuAskNonempty(r, "Receiver advertised IPv4 (no DNS)")
+	if err != nil {
+		return err
+	}
+	transport, err := menuAsk(r, "Transport (blank=field_udp_bound, or field_raw_ipv4)")
+	if err != nil {
+		return err
+	}
+	args := []string{"create", "--file", source, "--dir", dir, "--direction", direction, "--destination-ip", destination}
+	if transport != "" {
+		args = append(args, "--transport", transport)
+	}
+	return campaignCLI(args)
+}
+func menuCampaignNext(r *bufio.Reader) error {
+	dir, err := menuAskNonempty(r, "Existing campaign directory")
+	if err != nil {
+		return err
+	}
+	cert, err := menuAskNonempty(r, "Sender certificate .crt (only needed for new batch)")
+	if err != nil {
+		return err
+	}
+	key, err := menuAskNonempty(r, "Sender private .key (only needed for new batch)")
+	if err != nil {
+		return err
+	}
+	ca, err := menuAskNonempty(r, "Trusted CA .crt")
+	if err != nil {
+		return err
+	}
+	retry, err := menuAsk(r, "Retry an expired uncompleted run with new independent grant? (type RETRY, else no)")
+	if err != nil {
+		return err
+	}
+	args := []string{"next", "--dir", dir, "--cert", cert, "--key", key, "--ca", ca}
+	if retry == "RETRY" {
+		args = append(args, "--retry-expired")
+	}
+	return campaignCLI(args)
+}
+func menuCampaignReport(r *bufio.Reader) error {
+	dir, err := menuAskNonempty(r, "Existing campaign directory")
+	if err != nil {
+		return err
+	}
+	ca, err := menuAskNonempty(r, "Trusted CA certificate")
+	if err != nil {
+		return err
+	}
+	return campaignCLI([]string{"report", "--dir", dir, "--ca", ca})
+}
+func menuFieldCheck(r *bufio.Reader) error {
+	creds, err := menuFieldCredentials(r)
+	if err != nil {
+		return err
+	}
+	role, err := menuAskNonempty(r, "Local role (sender or receiver)")
+	if err != nil {
+		return err
+	}
+	file, err := menuAskNonempty(r, "Source inventory JSON/CSV")
+	if err != nil {
+		return err
+	}
+	ch, err := menuAskNonempty(r, "Signed challenge JSON")
+	if err != nil {
+		return err
+	}
+	grant, err := menuAskNonempty(r, "Signed receiver grant JSON")
+	if err != nil {
+		return err
+	}
+	dest, err := menuAskNonempty(r, "Signed advertised receiver destination IPv4")
+	if err != nil {
+		return err
+	}
+	plan, err := readSignedFieldChallenge(ch)
+	if err != nil {
+		return err
+	}
+	args := append([]string{"check"}, creds...)
+	args = append(args, "--role", role, "--file", file, "--challenge", ch, "--grant", grant,
+		"--destination-ip", dest, "--data-port", fmt.Sprint(plan.Challenge.DataPort))
+	if role == "receiver" {
+		g, err := readSignedFieldGrant(grant)
+		if err != nil {
+			return err
+		}
+		bind := g.Grant.BindIP
+		if bind == "" {
+			bind = dest
+		}
+		args = append(args, "--bind-ip", bind)
+		if bind != dest {
+			args = append(args, "--allow-forwarded-destination")
+		}
+	} else if plan.Challenge.Environment == "field_raw_ipv4" {
+		nic, err := menuAskNonempty(r, "Exact approved egress interface")
+		if err != nil {
+			return err
+		}
+		args = append(args, "--interface", nic)
+		ack, err := menuAsk(r, "Type PROVIDER_APPROVED only if independently authorized")
+		if err != nil {
+			return err
+		}
+		if ack == "PROVIDER_APPROVED" {
+			args = append(args, "--provider-authorized")
+		}
+	}
+	return fieldCLI(args)
+}
+
+// One-menu-operation B approval plus foreground listener; no daemon and no
+// traffic until the operator selects this deliberate Field action.
+func menuFieldAccept(r *bufio.Reader) error {
+	creds, err := menuFieldCredentials(r)
+	if err != nil {
+		return err
+	}
+	file, err := menuAskNonempty(r, "Receiver-controlled exact source allowlist")
+	if err != nil {
+		return err
+	}
+	ch, err := menuAskNonempty(r, "Existing signed sender challenge JSON")
+	if err != nil {
+		return err
+	}
+	dest, err := readSignedFieldChallenge(ch)
+	if err != nil {
+		return err
+	}
+	args := append([]string{"accept"}, creds...)
+	args = append(args, "--file", file, "--challenge", ch,
+		"--destination-ip", dest.Challenge.DestinationIP, "--data-port", fmt.Sprint(dest.Challenge.DataPort))
+	bind, err := menuAsk(r, "Receiver-local bind IPv4 (blank=advertised destination)")
+	if err != nil {
+		return err
+	}
+	if bind != "" {
+		args = append(args, "--bind-ip", bind)
+		if bind != dest.Challenge.DestinationIP {
+			ack, err := menuAsk(r, "Type FORWARDED to acknowledge separately owned/configured DNAT")
+			if err != nil {
+				return err
+			}
+			if ack != "FORWARDED" {
+				return errors.New("forwarded destination not authorized")
+			}
+			args = append(args, "--allow-forwarded-destination")
+		}
+	}
+	grant, err := menuAskNonempty(r, "New receiver grant JSON to securely transfer to A")
+	if err != nil {
+		return err
+	}
+	receipt, err := menuAskNonempty(r, "New receiver-signed receipt JSON output")
+	if err != nil {
+		return err
+	}
+	state, err := menuAskNonempty(r, "Private consumed-run ledger directory (0700)")
+	if err != nil {
+		return err
+	}
+	ready, err := menuAskNonempty(r, "New receiver-signed readiness JSON after listener binds (transfer to A)")
+	if err != nil {
+		return err
+	}
+	args = append(args, "--grant-out", grant, "--ready-out", ready, "--out", receipt, "--state-dir", state)
+	return fieldCLI(args)
+}
+
+func menuCampaignSend(r *bufio.Reader) error {
+	dir, err := menuAskNonempty(r, "Existing campaign directory on sender")
+	if err != nil {
+		return err
+	}
+	cert, err := menuAskNonempty(r, "Local sender certificate")
+	if err != nil {
+		return err
+	}
+	key, err := menuAskNonempty(r, "Local sender private key path")
+	if err != nil {
+		return err
+	}
+	ca, err := menuAskNonempty(r, "Trusted CA certificate path")
+	if err != nil {
+		return err
+	}
+	manifest, err := readCampaign(dir)
+	if err != nil {
+		return err
+	}
+	args := []string{"send", "--dir", dir, "--cert", cert, "--key", key, "--ca", ca}
+	if manifest.Transport == "field_raw_ipv4" {
+		iface, err := menuAskNonempty(r, "Authorized raw source sending interface")
+		if err != nil {
+			return err
+		}
+		ack, err := menuAsk(r, "Type PROVIDER_APPROVED only if owner AND provider permission independently verified")
+		if err != nil {
+			return err
+		}
+		if ack != "PROVIDER_APPROVED" {
+			return errors.New("no independently verified raw source authorization")
+		}
+		args = append(args, "--interface", iface, "--provider-authorized")
+	}
+	ack, err := menuAsk(r, "Type SEND_ONE to send at most ONE independently granted bounded batch")
+	if err != nil {
+		return err
+	}
+	if ack != "SEND_ONE" {
+		return errors.New("sending not selected")
+	}
+	return campaignCLI(args)
 }

@@ -12,8 +12,9 @@ import (
 )
 
 // Raw IPv4 is a privileged, bounded research-only adapter. Linux's IPv4
-// IP_HDRINCL stack fills the IPv4 checksum and total length; an IPv4 UDP
-// checksum of zero is allowed. Only the exact receiver-approved destination,
+// IP_HDRINCL stack fills the IPv4 checksum and total length. UDP carries
+// a complete nonzero checksum over the selected source/destination and bytes.
+// Only the exact receiver-approved destination,
 // port and candidate source list may reach this path via fieldSend.
 //
 // IMPORTANT: a successful Sendto does not establish that the NIC, provider,
@@ -92,8 +93,8 @@ func makeRawFieldIPv4Packet(source, destination string, port int, payload []byte
 	binary.BigEndian.PutUint16(packet[20:22], 24101)
 	binary.BigEndian.PutUint16(packet[22:24], uint16(port))
 	binary.BigEndian.PutUint16(packet[24:26], uint16(udpHeader+len(payload)))
-	// UDP checksum zero is permitted for IPv4; never for IPv6.
 	copy(packet[28:], payload)
+	binary.BigEndian.PutUint16(packet[26:28], ipv4UDPChecksum(src, dst, packet[20:]))
 	var sockaddr syscall.SockaddrInet4
 	copy(sockaddr.Addr[:], dst)
 	sockaddr.Port = 0 // Raw IPv4 sockaddr port is ignored on modern Linux; UDP header carries port.
@@ -110,4 +111,32 @@ func (s *rawFieldSocket) Send(source, destination string, port int, payload []by
 		return err
 	}
 	return syscall.Sendto(s.fd, packet, 0, &addr)
+}
+
+// RFC 768 one's-complement checksum including IPv4 pseudoheader. Explicit
+// source bytes are essential: do not checksum the host's assigned source when
+// the exact signed candidate differs. Pure code: no socket or packet emission.
+func ipv4UDPChecksum(source, destination net.IP, udp []byte) uint16 {
+	var sum uint32
+	add := func(b []byte) {
+		for i := 0; i+1 < len(b); i += 2 {
+			sum += uint32(binary.BigEndian.Uint16(b[i : i+2]))
+		}
+		if len(b)%2 == 1 {
+			sum += uint32(b[len(b)-1]) << 8
+		}
+	}
+	add(source.To4())
+	add(destination.To4())
+	sum += 17 // IPv4 protocol UDP, with preceding zero byte in pseudoheader
+	sum += uint32(len(udp))
+	add(udp)
+	for sum>>16 != 0 {
+		sum = (sum & 0xffff) + (sum >> 16)
+	}
+	result := ^uint16(sum)
+	if result == 0 {
+		return 0xffff
+	} // zero on the wire means checksum omitted
+	return result
 }

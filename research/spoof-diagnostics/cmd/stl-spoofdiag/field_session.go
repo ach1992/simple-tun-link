@@ -51,6 +51,7 @@ type fieldGrant struct {
 	Receiver        string `json:"receiver"`
 	DestinationIP   string `json:"destination_ip"`
 	DataPort        int    `json:"data_port"`
+	BindIP          string `json:"receiver_bind_ip,omitempty"`
 	CreatedUTC      string `json:"created_utc"`
 	ExpiresUnix     int64  `json:"expires_unix"`
 }
@@ -336,14 +337,24 @@ func newFieldGrantWithDestinationOwnership(o fieldOptions, isLocalDestination fu
 	if _, err = checkSignedFieldChallenge(env, roots, time.Now(), true); err != nil {
 		return zero, err
 	}
-	// A recipient must not consent to packets aimed at a third-party IP.
-	// This first Field version supports only directly assigned local IPv4,
-	// not public-to-private receiver NAT forwarding.
+	// A receiver signs the exact public/advertised destination, and may
+	// separately consent to an explicitly configured local DNAT bind. This
+	// does NOT configure, detect or assert that any NAT forwarding works.
 	if isLocalDestination == nil {
-		return zero, errors.New("receiver destination ownership checker required")
+		return zero, errors.New("receiver local-interface checker required")
 	}
-	if err := isLocalDestination(c.DestinationIP); err != nil {
-		return zero, fmt.Errorf("receiver grant destination is not locally owned: %w", err)
+	bindIP := o.BindIP
+	if bindIP == "" {
+		bindIP = c.DestinationIP
+	}
+	if bindIP != c.DestinationIP && !o.ForwardedDestination {
+		return zero, errors.New("forwarded destination requires explicit receiver --allow-forwarded-destination")
+	}
+	if err := validateIP(bindIP, "field_candidates"); err != nil {
+		return zero, err
+	}
+	if err := isLocalDestination(bindIP); err != nil {
+		return zero, fmt.Errorf("receiver bind IP is not locally assigned: %w", err)
 	}
 	allowed, err := readCandidates(o.File)
 	if err != nil {
@@ -354,7 +365,8 @@ func newFieldGrantWithDestinationOwnership(o fieldOptions, isLocalDestination fu
 	}
 	now := time.Now().UTC()
 	grant := fieldGrant{SchemaVersion: schema, RunID: c.RunID, ChallengeDigest: fieldChallengeDigest(c),
-		Receiver: c.Receiver, DestinationIP: c.DestinationIP, DataPort: c.DataPort, CreatedUTC: now.Format(time.RFC3339Nano),
+		Receiver: c.Receiver, DestinationIP: c.DestinationIP, DataPort: c.DataPort,
+		BindIP: bindIP, CreatedUTC: now.Format(time.RFC3339Nano),
 		ExpiresUnix: c.ExpiresUnix}
 	pemData, signature, err := signatureFromCredential(grant, cert)
 	if err != nil {
@@ -370,6 +382,11 @@ func checkFieldGrant(env signedFieldGrant, c fieldChallenge, roots *x509.CertPoo
 		g.DestinationIP != c.DestinationIP || g.DataPort != c.DataPort ||
 		g.ExpiresUnix != c.ExpiresUnix {
 		return errors.New("field grant is not bound to exact signed challenge")
+	}
+	if g.BindIP != "" {
+		if err := validateIP(g.BindIP, "field_candidates"); err != nil {
+			return fmt.Errorf("invalid receiver bound address: %w", err)
+		}
 	}
 	created, err := time.Parse(time.RFC3339Nano, g.CreatedUTC)
 	if err != nil || created.After(now.Add(60*time.Second)) ||
@@ -525,6 +542,8 @@ func verifyFieldPair(challengePath, grantPath, receiptPath, caPath string) (map[
 		"selected_source_count": len(perSource), "per_source": perSource,
 		"peer_authenticated_received": len(receipt.Observations),
 		"source_matched_at_peer":      matched, "source_mismatched_or_rewritten": len(receipt.Observations) - matched,
+		"receiver_status":        receipt.Status,
+		"receiver_bind_ip":       grant.Grant.BindIP,
 		"submitted_at_sender":    "NOT_INDEPENDENTLY_VERIFIED",
 		"sender_physical_egress": "NOT_TESTED", "provider_source_acceptance": "NOT_INDEPENDENTLY_VERIFIED",
 		"return_to_sender": "NOT_TESTED", "private_l3": "NOT_TESTED",

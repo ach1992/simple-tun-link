@@ -9,26 +9,39 @@ program into a VPN backend. The controlling source-IP research remains
 ## Explicit architecture and trust boundary
 
 Two controlled roles, A and B, operate in either independently configured
-`A_TO_B` or `B_TO_A` direction. Directly assigned receiver IPv4 only: NAT-forwarded public destinations are not supported by this first design. A third-party receiver, reflector, route
+`A_TO_B` or `B_TO_A` direction. Receiver may use an explicitly approved, independently
+configured local DNAT bind while the signed advertised destination remains
+fixed. Actual NAT reachability is not proven by local approval. A third-party
+receiver, reflector, route
 installer or scanner is not included.
 
 1. A holds an exact, direction-scoped `field_candidates` IPv4 inventory.
 2. A signs a short-lived challenge binding A/B roles, destination IPv4,
    destination UDP port, each source candidate, packet size and run ID.
-3. B checks that the signed destination IPv4 is directly assigned to a local, active non-loopback interface, independently checks its **own** candidate allowlist, verifies A's
-   Ed25519 identity chain and signs an exact matching grant.
-4. Both A and B verify that signed grant. B explicitly binds its own
-   assigned destination IPv4 and keeps a consumed-run ledger (0700).
+3. B verifies its own selected-source allowlist and that either the
+   directly advertised destination, or an explicitly granted forwarded
+   `receiver_bind_ip`, is actually assigned to B's active non-loopback
+   interface. It verifies A's Ed25519 identity chain and signs the precise
+   public destination and local bind in its grant.
+4. Both A and B verify the grant. B binds its locally assigned signed bind
+   address, writes an Ed25519 signed short-lived readiness file only after
+   binding, and keeps a consumed-run ledger (0700). Campaign send checks
+   both B grant and readiness; this is not live peer reachability. No host network
+   configuration or NAT management occurs.
 5. A sends **1–10 independently signed 128–1200 byte diagnostic datagrams
    per selected candidate** (CLI default 5), at most 32 distinct candidates
    per signed run and 320 total samples, with at least 200 ms between sends.
    Samples are interleaved across candidates for temporal spacing. The signed
    plan and grant bind the exact sample list. The receiver automatically
-   scales its default finite window to the planned sample duration, clipped
+   scales its default finite window to the planned sample duration plus a
+   bounded 45-second coordination allowance, clipped
    by the signed challenge expiry. There is no CIDR expansion,
    public scan, automatic retry or continuous background sender.
-6. B validates each signed UDP application packet and emits a portable
-   Ed25519-signed receipt. Each observation carries **both selected
+6. B validates each signed UDP application packet and publishes successive
+   **atomic signed receipt snapshots** (initial IN_PROGRESS, updated for each
+   peer-observed authenticated sample, then COMPLETE if the finite window
+   finishes). Sender snapshots also preserve per-index syscall attempts,
+   successes and failures as signed local declarations. Each observation carries **both selected
    source and actual observed UDP source**, plus a boolean exact match.
 7. Offline `field verify` reconciles challenge, grant, certificate chain,
    run ID, source/packet identity, receipt signature and time envelope, then
@@ -75,7 +88,8 @@ establishes a return route, even when B receives a signed request.
 - Offline installer, versionless release channel and `spoofdiag-v*`
   assets independent of STL `main` and STL `v*` releases.
 - No host service daemon, public listener automatically started,
-  automatic source discovery, third-party reflection, TUN/WireGuard,
+  automatic source discovery, unattended high-rate probing,
+  third-party reflection, TUN/WireGuard,
   tunnel switching, or STL integration.
 - No public network test or two-real-host test for this new Field code.
 - Previous private netns/KVM results are **historical for a different
