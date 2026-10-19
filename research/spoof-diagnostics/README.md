@@ -230,7 +230,7 @@ For verified rollback and tool-only uninstall, consult
 
 ## Field menu, selected IPs and signed exchange
 
-`stl-spoofdiag menu` exposes 18 operations including candidate
+`stl-spoofdiag menu` exposes 19 operations including candidate
 management, campaign preparation/continuation/reporting, offline plan,
 identity provisioning, actual prerequisite checks, Field A/B operations,
 and signed receipt verification. **There is no Private Lab menu or netns runtime.**
@@ -420,6 +420,24 @@ stl-spoofdiag field accept --file B-owned-allowlist.json \
   --grant-out grant.json --ready-out ready.json \
   --state-dir /private/consumed-runs --out receipt.json
 ```
+
+The guided **menu option 19** runs the receiving side of one campaign batch.
+An equivalent receiver-side command is available once an immutable copy of
+the campaign directory, including its signed challenge, has been transferred
+to B:
+
+```sh
+stl-spoofdiag campaign receive --dir /private/B-campaign-copy \
+  --file B-owned-allowlist.json --cert B.crt --key B.key --ca ca.crt
+```
+
+This operation is foreground-only: B uses its independent allowlist,
+approves one challenge and publishes signed grant, readiness and receipt
+artifacts under the receiver's copy of the run directory. Any artifacts
+needed by A still require operator-managed secure transfer. The menu
+requires an explicit `LISTEN_ONE` confirmation; neither the command
+nor an offline preparation step sends diagnostic traffic from A. No such
+receiver operation was run on live hosts in this development cycle.
 
 Transfer the B-signed `grant.json` **and** B-signed `ready.json` to the A
 campaign attempt directory; `ready.json` is written only after B binds its

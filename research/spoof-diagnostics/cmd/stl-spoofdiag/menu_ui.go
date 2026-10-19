@@ -13,7 +13,7 @@ func menu() error {
 	reader := bufio.NewReaderSize(os.Stdin, 64*1024)
 	for {
 		menuHeader()
-		fmt.Fprint(os.Stdout, "Choose [0-18] (or q): ")
+		fmt.Fprint(os.Stdout, "Choose [0-19] (or q): ")
 		answer, err := menuRead(reader)
 		if errors.Is(err, io.EOF) {
 			return nil
@@ -63,8 +63,10 @@ func menu() error {
 			result = menuFieldAccept(reader)
 		case "18":
 			result = menuCampaignSend(reader)
+		case "19":
+			result = menuCampaignReceive(reader)
 		default:
-			fmt.Fprintln(os.Stderr, "Unknown option; use 0..18")
+			fmt.Fprintln(os.Stderr, "Unknown option; use 0..19")
 		}
 		if result != nil {
 			fmt.Fprintln(os.Stderr, "Operation not completed:", result)
@@ -85,6 +87,7 @@ func menuHeader() {
 	fmt.Fprintln(os.Stdout, "13) Prepare IP campaign       14) Prepare next batch (offline)")
 	fmt.Fprintln(os.Stdout, "15) Signed campaign report    16) Read-only field prerequisites")
 	fmt.Fprintln(os.Stdout, "17) Receiver accept + listen  18) Send ONE approved campaign batch")
+	fmt.Fprintln(os.Stdout, "19) Campaign receiver: independently approve + listen (one batch)")
 	fmt.Fprintln(os.Stdout, " 0) Exit")
 	fmt.Fprintln(os.Stdout, "NOTE: Source match != provider permission != return-path proof.")
 	fmt.Fprintln(os.Stdout, "==============================================================")
@@ -406,6 +409,13 @@ func menuFieldOperation(r *bufio.Reader, op string) error {
 					return err
 				}
 				args = append(args, "--state-dir", state, "--out", out)
+				ready, err := menuAsk(r, "Optional NEW signed listener readiness .json (blank=skip)")
+				if err != nil {
+					return err
+				}
+				if ready != "" {
+					args = append(args, "--ready-out", ready)
+				}
 			} else {
 				out, err := menuAskNonempty(r, "New SIGNED sender syscall evidence .json output")
 				if err != nil {
@@ -455,7 +465,15 @@ func menuFieldVerify(r *bufio.Reader) error {
 	if err != nil {
 		return err
 	}
-	return fieldCLI([]string{"verify", "--challenge", c, "--grant", g, "--receipt", receipt, "--ca", ca})
+	args := []string{"verify", "--challenge", c, "--grant", g, "--receipt", receipt, "--ca", ca}
+	sender, err := menuAsk(r, "Optional sender-signed syscall report JSON (blank=skip)")
+	if err != nil {
+		return err
+	}
+	if sender != "" {
+		args = append(args, "--sender-report", sender)
+	}
+	return fieldCLI(args)
 }
 func menuFieldHelp() {
 	fmt.Fprintln(os.Stdout, "This build contains no private-lab, local-loopback, or detached-netns diagnostic commands.")
@@ -698,6 +716,64 @@ func menuCampaignSend(r *bufio.Reader) error {
 	}
 	if ack != "SEND_ONE" {
 		return errors.New("sending not selected")
+	}
+	return campaignCLI(args)
+}
+
+ 
+// The guided B-side campaign operation is intentionally foreground and
+// bounded to one batch. It reuses the CLI and its independent allowlist,
+// cryptographic grant checks, local bind checks and replay ledger.
+func menuCampaignReceive(r *bufio.Reader) error {
+	dir, err := menuAskNonempty(r, "Existing campaign directory transferred to receiver")
+	if err != nil {
+		return err
+	}
+	allowlist, err := menuAskNonempty(r, "Receiver-owned independently approved source allowlist")
+	if err != nil {
+		return err
+	}
+	cert, err := menuAskNonempty(r, "Receiver certificate .crt")
+	if err != nil {
+		return err
+	}
+	key, err := menuAskNonempty(r, "Receiver private .key path")
+	if err != nil {
+		return err
+	}
+	ca, err := menuAskNonempty(r, "Trusted public CA certificate")
+	if err != nil {
+		return err
+	}
+	bind, err := menuAsk(r, "Receiver-local bind IPv4 (blank=advertised destination)")
+	if err != nil {
+		return err
+	}
+	args := []string{"receive", "--dir", dir, "--file", allowlist,
+		"--cert", cert, "--key", key, "--ca", ca}
+	if bind != "" {
+		manifest, err := readCampaign(dir)
+		if err != nil {
+			return err
+		}
+		args = append(args, "--bind-ip", bind)
+		if bind != manifest.DestinationIP {
+			ack, err := menuAsk(r, "Type FORWARDED only for a separately owned/configured exact DNAT endpoint")
+			if err != nil {
+				return err
+			}
+			if ack != "FORWARDED" {
+				return errors.New("receiver forwarded destination not acknowledged")
+			}
+			args = append(args, "--allow-forwarded-destination")
+		}
+	}
+	ack, err := menuAsk(r, "Type LISTEN_ONE to approve one finite receiver batch (no sender traffic)")
+	if err != nil {
+		return err
+	}
+	if ack != "LISTEN_ONE" {
+		return errors.New("receiver operation not selected")
 	}
 	return campaignCLI(args)
 }

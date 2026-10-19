@@ -47,6 +47,10 @@ stl-spoofdiag campaign create --file EXACT_IP_INVENTORY --dir NEW_PRIVATE_DIR \
   --direction A_TO_B --destination-ip RECEIVER_IP --transport field_udp_bound
 stl-spoofdiag campaign next --dir EXISTING_CAMPAIGN \
   --cert A.crt --key A.key --ca ca.crt
+# Receiver B needs a transferred campaign directory AND an independently
+# approved allowlist before considering an individual bounded challenge.
+stl-spoofdiag campaign receive --dir RECEIVER_COPY_OF_CAMPAIGN \
+  --file B-owned-allowlist.json --cert B.crt --key B.key --ca ca.crt
 # campaign send requires independently B-signed grant.json AND ready.json
 # copied to the current campaign attempt, after B actually binds
 stl-spoofdiag campaign send --dir EXISTING_CAMPAIGN \
@@ -54,6 +58,11 @@ stl-spoofdiag campaign send --dir EXISTING_CAMPAIGN \
 stl-spoofdiag campaign report --dir EXISTING_CAMPAIGN --ca ca.crt
 stl-spoofdiag menu
 ```
+
+Menu option 19 provides a guided receiver-side version of `campaign receive`.
+The operator must type `LISTEN_ONE` before starting one finite receiver
+operation. Campaign files and B's independently owned allowlist remain
+separate. This is a UI code path, not evidence of live peer reachability.
 
 These are documentation **examples**, not tests performed or
 instructions to send public forged-source traffic without permission.
