@@ -4,7 +4,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -140,43 +139,24 @@ func validateCandidateInventory(c CandidateFile, allowEmpty bool) error {
 func readCandidates(path string) (CandidateFile, error) { return readCandidateInventory(path, false) }
 
 func readCandidateInventory(path string, allowEmpty bool) (CandidateFile, error) {
-	var result CandidateFile
-	data, err := readSmallRegular(path, 4<<20)
+	var empty CandidateFile
+	data, err := readSmallRegular(path, sourceMaxFile)
 	if err != nil {
-		return result, err
+		return empty, err
 	}
+	// Keep the existing managed JSON/CSV filename contract; decode and
+	// validate with the same parser used for imported operator data.
+	kind := ""
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".json":
-		dec := json.NewDecoder(bytes.NewReader(data))
-		dec.DisallowUnknownFields()
-		if err := dec.Decode(&result); err != nil {
-			return result, err
-		}
-		var extra any
-		if err := dec.Decode(&extra); err != io.EOF {
-			return result, errors.New("trailing JSON data or excessive input")
-		}
+		kind = "json"
 	case ".csv":
-		result.SchemaVersion = schema
-		result.Mode = "field_candidates"
-		r := csv.NewReader(bytes.NewReader(data))
-		r.FieldsPerRecord = 4
-		rows, err := r.ReadAll()
-		if err != nil {
-			return result, err
-		}
-		if len(rows) > 0 && strings.EqualFold(rows[0][0], "ip") {
-			rows = rows[1:]
-		}
-		for _, row := range rows {
-			result.Candidates = append(result.Candidates, Candidate{IP: strings.TrimSpace(row[0]), Direction: strings.TrimSpace(row[1]), Sender: strings.TrimSpace(row[2]), Receiver: strings.TrimSpace(row[3])})
-		}
+		kind = "csv"
 	default:
-		return result, errors.New("candidate file must be .json or .csv")
+		return empty, errors.New("candidate file must be .json or .csv")
 	}
-	return result, validateCandidateInventory(result, allowEmpty)
+	return parseCandidateInventoryBytes(data, kind, allowEmpty)
 }
-
 func classify(o Observation) (Summary, error) {
 	s := Summary{EvidenceTrust: "UNVERIFIED_INPUT_DECLARATION", SampleID: o.SampleID, SchemaVersion: schema, RunID: o.RunID, Environment: o.Environment, Direction: o.Direction, SourceIP: o.SourceIP, Sender: o.Sender, Receiver: o.Receiver, PacketSize: o.PacketSize, Epoch: o.Epoch, PrivateL3: "NOT_TESTED", ReturnStatus: "NOT_TESTED", Result: "INCONCLUSIVE"}
 	if !validDirection(o.Direction) || o.Sender == "" || o.Receiver == "" || o.Sender == o.Receiver || o.RunID == "" || o.SampleID == "" || o.Epoch == "" || o.PacketSize <= 0 {
@@ -284,7 +264,7 @@ func preflight() error {
 }
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: stl-spoofdiag version|preflight|sources|plan|report|field|menu")
+		return errors.New("usage: stl-spoofdiag version|preflight|sources|plan|report|field|campaign|exchange|job|menu")
 	}
 	switch args[0] {
 	case "version":
@@ -297,6 +277,12 @@ func run(args []string) error {
 		return sourceCommand(args[1:])
 	case "field":
 		return fieldCLI(args[1:])
+	case "campaign":
+		return campaignCLI(args[1:])
+	case "exchange":
+		return exchangeCLI(args[1:])
+	case "job":
+		return jobCLI(args[1:])
 	case "plan", "report":
 		cmd := flag.NewFlagSet(args[0], flag.ContinueOnError)
 		p := cmd.String("file", "", "existing CSV or JSON file")

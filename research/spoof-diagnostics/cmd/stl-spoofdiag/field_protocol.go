@@ -14,7 +14,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -42,6 +41,7 @@ type fieldSeen struct {
 	PacketSize         int    `json:"packet_size"`
 	Direction          string `json:"direction"`
 	PolicyEpoch        string `json:"policy_epoch"`
+	ReceivedUTC        string `json:"received_utc,omitempty"`
 	Authenticated      bool   `json:"authenticated"`
 	SourceMatched      bool   `json:"source_matched"`
 }
@@ -54,6 +54,7 @@ type fieldReceipt struct {
 	CreatedUTC         string      `json:"created_utc"`
 	ExpectedSamples    int         `json:"expected_samples"`
 	ChallengeDigest    string      `json:"challenge_digest,omitempty"`
+	Status             string      `json:"status,omitempty"`
 	Observations       []fieldSeen `json:"observations"`
 	EgressStatus       string      `json:"egress_status"`
 	CandidateAdmission string      `json:"candidate_admission"`
@@ -157,6 +158,9 @@ func verifyFieldReceipt(env fieldEnvelope, roots *x509.CertPool, peerName, expec
 	if err != nil || len(digest) != sha256.Size {
 		return errors.New("missing or invalid challenge digest")
 	}
+	if r.Status != "" && r.Status != "IN_PROGRESS" && r.Status != "PARTIAL" && r.Status != "COMPLETE" {
+		return errors.New("invalid receiver receipt status")
+	}
 	if len(r.Observations) > fieldMaxSamples || r.ExpectedSamples < 1 ||
 		r.ExpectedSamples > fieldMaxSamples || len(r.Observations) > r.ExpectedSamples {
 		return errors.New("invalid field receipt sample count")
@@ -204,6 +208,13 @@ func verifyFieldReceipt(env fieldEnvelope, roots *x509.CertPool, peerName, expec
 			net.ParseIP(obs.ActualPacketSource).To4() == nil ||
 			obs.SourceMatched != (obs.SourceCandidate == obs.ActualPacketSource) {
 			return errors.New("invalid, duplicate or overclaiming observation")
+		}
+		if obs.ReceivedUTC != "" {
+			seenAt, err := time.Parse(time.RFC3339Nano, obs.ReceivedUTC)
+			if err != nil || seenAt.After(when.Add(60*time.Second)) ||
+				seenAt.Before(when.Add(-15*time.Minute-60*time.Second)) {
+				return errors.New("invalid authenticated receiver observation time")
+			}
 		}
 		seen[obs.Index] = true
 	}
@@ -258,23 +269,7 @@ func certificateRoots(path string) (*x509.CertPool, error) {
 }
 
 func saveNewJSON(path string, v any) error {
-	if filepath.Ext(path) != ".json" {
-		return errors.New("output must be a .json path")
-	}
-	b, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	b = append(b, '\n')
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if err != nil {
-		return err
-	}
-	if _, err := f.Write(b); err != nil {
-		f.Close()
-		return err
-	}
-	return f.Close()
+	return writeStagedJSON(path, v, false)
 }
 
 func roleName(role string) string {

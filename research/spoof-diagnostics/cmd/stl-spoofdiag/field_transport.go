@@ -18,8 +18,8 @@ type fieldOptions struct {
 	DestinationIP, BindIP                                             string
 	Transport, Interface                                              string
 	DataPort, PacketSize, TTLSeconds, WindowSeconds, SamplesPerSource int
-	Epoch, Output, Challenge, Grant, StateDir                         string
-	ProviderAuthorized                                                bool
+	Epoch, Output, Challenge, Grant, StateDir, ReadyOutput, ReadyFile string
+	ProviderAuthorized, ForwardedDestination                          bool
 }
 
 // The source IP used by the ordinary UDP transport must actually be assigned
@@ -88,10 +88,10 @@ func readPreparedField(o fieldOptions) (signedFieldChallenge, signedFieldGrant, 
 }
 
 // The receiver's automatic window includes the full 5 packets/second signed
-// plan duration, plus a startup margin. It never extends beyond 120 seconds.
-// A fixed 15-second default would prematurely end a repeated multi-IP run.
+// plan duration, plus a 45-second grant-transfer/startup margin. It never extends beyond 120 seconds.
+// A short default can expire during secure, manually coordinated A/B grant transfer.
 func automaticFieldWindowSeconds(plannedSamples int) int {
-	window := 15 + (plannedSamples+4)/5
+	window := 45 + (plannedSamples+4)/5
 	if window > 120 {
 		return 120
 	}
@@ -99,14 +99,14 @@ func automaticFieldWindowSeconds(plannedSamples int) int {
 }
 
 func fieldListen(ctx context.Context, o fieldOptions, ready chan<- map[string]any) error {
-	if o.Challenge == "" || o.Grant == "" || o.File == "" || o.Output == "" || o.StateDir == "" {
-		return errors.New("field listen requires --challenge --grant --file --out --state-dir")
+	if o.Challenge == "" || o.Grant == "" || o.Output == "" || o.StateDir == "" {
+		return errors.New("field listen requires --challenge --grant --out --state-dir")
 	}
 	if o.WindowSeconds < 0 || o.WindowSeconds > 120 {
 		return errors.New("receiver window must be auto (0) or 1..120 seconds")
 	}
-	if o.BindIP == "" || o.BindIP != o.DestinationIP {
-		return errors.New("receiver must bind the exact signed destination IPv4")
+	if o.BindIP == "" {
+		return errors.New("receiver must specify a locally assigned --bind-ip")
 	}
 	if err := validateIP(o.BindIP, "field_candidates"); err != nil {
 		return err
@@ -118,11 +118,25 @@ func fieldListen(ctx context.Context, o fieldOptions, ready chan<- map[string]an
 	if err != nil {
 		return err
 	}
-	windowSeconds := o.WindowSeconds
-	if windowSeconds == 0 {
-		windowSeconds = automaticFieldWindowSeconds(len(c.Challenge.Samples))
+	expectedBind := g.Grant.BindIP
+	if expectedBind == "" {
+		expectedBind = c.Challenge.DestinationIP // historical direct-address grant
 	}
-	allowed, err := readCandidates(o.File)
+	if o.BindIP != expectedBind || (o.BindIP != o.DestinationIP && !o.ForwardedDestination) {
+		return errors.New("listener bind IP differs from signed receiver grant or forwarded-destination consent")
+	}
+	windowSeconds := o.WindowSeconds
+	recommended := automaticFieldWindowSeconds(len(c.Challenge.Samples))
+	if windowSeconds == 0 {
+		windowSeconds = recommended
+	}
+	if windowSeconds < recommended || time.Until(time.Unix(c.Challenge.ExpiresUnix, 0)) < time.Duration(recommended+5)*time.Second {
+		return errors.New("receiver window/challenge TTL too short for bounded signed run; create a fresh challenge")
+	}
+	if _, err := fieldPreflight(o, "receiver"); err != nil {
+		return fmt.Errorf("receiver prerequisites: %w", err)
+	}
+	allowed, err := receiverSourceSelection(c.Challenge, o.File)
 	if err != nil {
 		return err
 	}
@@ -159,7 +173,29 @@ func fieldListen(ctx context.Context, o fieldOptions, ready chan<- map[string]an
 		return err
 	}
 	defer listener.Close()
+	// Publish a signed zero-observation IN_PROGRESS receipt before consuming
+	// the replay ledger. After this point every verified observation is
+	// durably snapshotted; an abrupt stop can never erase earlier evidence.
+	receipt := fieldReceipt{
+		SchemaVersion: schema, Environment: c.Challenge.Environment, RunID: c.Challenge.RunID,
+		Observer: roleName(o.Receiver), ChallengeDigest: fieldChallengeDigest(c.Challenge),
+		ExpectedSamples: len(c.Challenge.Samples), Observations: []fieldSeen{},
+		EgressStatus: "NOT_TESTED", CandidateAdmission: "NOT_TESTED",
+		ReturnToSender: "NOT_TESTED", PrivateL3: "NOT_TESTED", Status: "IN_PROGRESS",
+	}
+	snapshot := func(replace bool) error {
+		receipt.CreatedUTC = time.Now().UTC().Format(time.RFC3339Nano)
+		signed, signErr := signFieldReceipt(receipt, cert)
+		if signErr != nil {
+			return signErr
+		}
+		return writeStagedJSON(o.Output, signed, replace)
+	}
+	if err := snapshot(false); err != nil {
+		return err
+	}
 	if err = fieldRunLedger(o.StateDir, c.Challenge.RunID); err != nil {
+		_ = os.Remove(o.Output) // only the newly created, unconsumed receipt
 		return err
 	}
 	closed := make(chan struct{})
@@ -175,6 +211,19 @@ func fieldListen(ctx context.Context, o fieldOptions, ready chan<- map[string]an
 	minimumRecommended := automaticFieldWindowSeconds(len(c.Challenge.Samples))
 	windowMayTruncate := windowSeconds < minimumRecommended ||
 		time.Until(expiry) < time.Duration(minimumRecommended)*time.Second
+	deadline := time.Now().Add(time.Duration(windowSeconds) * time.Second)
+	if expiry.Before(deadline) {
+		deadline = expiry
+	}
+	if o.ReadyOutput != "" {
+		signedReady, err := newSignedFieldReady(c.Challenge, g.Grant, o.BindIP, deadline, cert)
+		if err != nil {
+			return err
+		}
+		if err := saveNewJSON(o.ReadyOutput, signedReady); err != nil {
+			return fmt.Errorf("receiver cannot publish signed readiness after binding: %w", err)
+		}
+	}
 	if ready != nil {
 		select {
 		case ready <- map[string]any{"status": "FIELD_RECEIVER_READY_UNVALIDATED", "bind_ip": o.BindIP,
@@ -185,12 +234,7 @@ func fieldListen(ctx context.Context, o fieldOptions, ready chan<- map[string]an
 			return ctx.Err()
 		}
 	}
-	deadline := time.Now().Add(time.Duration(windowSeconds) * time.Second)
-	if expiry.Before(deadline) {
-		deadline = expiry
-	}
 	seen := make(map[int]bool)
-	observed := make([]fieldSeen, 0, len(c.Challenge.Samples))
 	buf := make([]byte, fieldMaxPacket+1)
 	for len(seen) < len(c.Challenge.Samples) {
 		if ctx.Err() != nil {
@@ -220,39 +264,40 @@ func fieldListen(ctx context.Context, o fieldOptions, ready chan<- map[string]an
 		// NAT/proxy/source filtering may change the observed on-wire address:
 		// preserve BOTH values, never convert signed identity into source proof.
 		actual := peer.IP.To4().String()
-		observed = append(observed, fieldSeen{
+		receipt.Observations = append(receipt.Observations, fieldSeen{
 			Index: sample.Index, SourceCandidate: sample.Candidate.IP, ActualPacketSource: actual,
 			SourceMatched: actual == sample.Candidate.IP, PacketSize: sample.Size,
 			Direction: sample.Candidate.Direction, PolicyEpoch: sample.Epoch, Authenticated: true,
+			ReceivedUTC: time.Now().UTC().Format(time.RFC3339Nano),
 		})
+		if err := snapshot(true); err != nil {
+			return fmt.Errorf("receiver evidence persistence failed (run consumed): %w", err)
+		}
 	}
-	receipt := fieldReceipt{
-		SchemaVersion: schema, Environment: c.Challenge.Environment, RunID: c.Challenge.RunID,
-		Observer: roleName(o.Receiver), ChallengeDigest: fieldChallengeDigest(c.Challenge),
-		CreatedUTC:      time.Now().UTC().Format(time.RFC3339Nano),
-		ExpectedSamples: len(c.Challenge.Samples), Observations: observed,
-		EgressStatus: "NOT_TESTED", CandidateAdmission: "NOT_TESTED", ReturnToSender: "NOT_TESTED", PrivateL3: "NOT_TESTED",
-	}
-	signed, err := signFieldReceipt(receipt, cert)
-	if err != nil {
-		return err
-	}
-	return saveNewJSON(o.Output, signed)
+	// COMPLETE means the finite receiver observation window ended, not that
+	// every planned datagram was sent, received or admitted by a provider.
+	receipt.Status = "COMPLETE"
+	return snapshot(true)
 }
 
 func fieldSend(ctx context.Context, o fieldOptions) (map[string]any, error) {
-	if o.Challenge == "" || o.Grant == "" || o.File == "" || o.DestinationIP == "" {
-		return nil, errors.New("field send requires --challenge --grant --file --destination-ip")
+	if o.Challenge == "" || o.Grant == "" || o.File == "" || o.DestinationIP == "" || o.Output == "" {
+		return nil, errors.New("field send requires signed artifacts, inventory, destination and a new --out JSON")
 	}
-	c, g, _, err := readPreparedField(o)
+	c, grant, _, err := readPreparedField(o)
 	if err != nil {
 		return nil, err
+	}
+	if o.ReadyFile != "" {
+		if _, err := verifySignedFieldReady(o.ReadyFile, c.Challenge, grant, o.CA, time.Now()); err != nil {
+			return nil, fmt.Errorf("receiver readiness not authenticated/current: %w", err)
+		}
 	}
 	selected, err := readCandidates(o.File)
 	if err != nil {
 		return nil, err
 	}
-	if err = validateFieldSamples(c.Challenge.Samples, selected, o.Sender, o.Receiver); err != nil {
+	if err := validateFieldSamples(c.Challenge.Samples, selected, o.Sender, o.Receiver); err != nil {
 		return nil, err
 	}
 	cert, _, err := checkLocalFieldCredential(o.Cert, o.Key, o.CA, o.Sender, x509.ExtKeyUsageClientAuth)
@@ -270,20 +315,16 @@ func fieldSend(ctx context.Context, o fieldOptions) (map[string]any, error) {
 	if !localLeaf.Equal(senderLeaf) {
 		return nil, errors.New("sender private key/certificate does not match signed challenge")
 	}
-	_ = g // Grant signature and binding have already been checked in readPreparedField.
-	key, ok := cert.PrivateKey.(ed25519.PrivateKey)
-	if !ok {
-		return nil, errors.New("sender must hold matching Ed25519 key")
-	}
 	if c.Challenge.Environment == "field_raw_ipv4" && (!o.ProviderAuthorized || strings.TrimSpace(o.Interface) == "") {
-		return nil, errors.New("BLOCKED_BY_PERMISSION: raw forged-source field send needs explicit verified owner/provider permission, --provider-authorized and --interface; the flag itself is not independent authorization")
+		return nil, errors.New("BLOCKED_BY_PERMISSION: raw forged-source send needs independently verified Owner/provider permission, --provider-authorized and --interface")
 	}
 	destination := net.ParseIP(c.Challenge.DestinationIP).To4()
 	if destination == nil {
-		return nil, errors.New("invalid signed field destination")
+		return nil, errors.New("invalid signed destination")
 	}
-	// Preflight every selected ordinary UDP source before sending the first
-	// packet: a later invalid source must not cause partial unanticipated sends.
+	if _, err := fieldPreflight(o, "sender"); err != nil {
+		return nil, fmt.Errorf("sender prerequisites: %w", err)
+	}
 	if c.Challenge.Environment == "field_udp_bound" {
 		for _, sample := range c.Challenge.Samples {
 			if err := localAssignedIPv4(sample.Candidate.IP); err != nil {
@@ -291,7 +332,6 @@ func fieldSend(ctx context.Context, o fieldOptions) (map[string]any, error) {
 			}
 		}
 	}
-	sent := 0
 	var raw *rawFieldSocket
 	if c.Challenge.Environment == "field_raw_ipv4" {
 		raw, err = openRawFieldSocket(o.Interface)
@@ -300,53 +340,53 @@ func fieldSend(ctx context.Context, o fieldOptions) (map[string]any, error) {
 		}
 		defer raw.Close()
 	}
-	for _, sample := range c.Challenge.Samples {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		if !time.Unix(c.Challenge.ExpiresUnix, 0).After(time.Now()) {
-			return nil, errors.New("signed field challenge expired during bounded sender run")
-		}
-		payload, err := makeFieldPacket(c.Challenge, sample, key)
-		if err != nil {
-			return nil, err
+	ev := newSenderEvidence(c.Challenge)
+	if err := signedSenderSnapshot(o.Output, ev, cert, false); err != nil {
+		return nil, err
+	}
+	submit := func(sample fieldSample, payload []byte) error {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		if raw != nil {
-			err = raw.Send(sample.Candidate.IP, c.Challenge.DestinationIP, c.Challenge.DataPort, payload)
-		} else {
-			// Standard UDP can select ONLY locally assigned IPv4 addresses.
-			// Each sample obtains a separately bound socket.
-			local := &net.UDPAddr{IP: net.ParseIP(sample.Candidate.IP), Port: 0}
-			remote := &net.UDPAddr{IP: destination, Port: c.Challenge.DataPort}
-			var conn *net.UDPConn
-			conn, err = net.DialUDP("udp4", local, remote)
-			if err == nil {
-				_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
-				_, err = conn.Write(payload)
-				conn.Close()
-			}
+			return raw.Send(sample.Candidate.IP, c.Challenge.DestinationIP, c.Challenge.DataPort, payload)
 		}
+		local := &net.UDPAddr{IP: net.ParseIP(sample.Candidate.IP), Port: 0}
+		remote := &net.UDPAddr{IP: destination, Port: c.Challenge.DataPort}
+		conn, err := net.DialUDP("udp4", local, remote)
 		if err != nil {
-			return nil, fmt.Errorf("bounded send sample %d: %w", sample.Index, err)
+			return err
 		}
-		sent++
-		// 5 or fewer diagnostic datagrams per second, never a flood or scan.
-		if idx := sample.Index; idx+1 < len(c.Challenge.Samples) {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(200 * time.Millisecond):
-			}
+		defer conn.Close()
+		if err := conn.SetWriteDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			return err
+		}
+		_, err = conn.Write(payload)
+		return err
+	}
+	pace := func() error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+			return nil
 		}
 	}
-	return map[string]any{
-		"run_id": c.Challenge.RunID, "status": "SUBMITTED_ONLY",
+	sent, sendErr := submitFieldRun(c.Challenge, &ev, cert, o.Output, submit, pace)
+	result := map[string]any{
+		"run_id": c.Challenge.RunID, "status": ev.Status,
+		"signed_sender_evidence":   o.Output,
 		"transport":                c.Challenge.Environment,
 		"selected_candidate_count": len(c.Challenge.Samples) / effectiveFieldRepeats(c.Challenge.SamplesPerSource),
 		"samples_per_source":       effectiveFieldRepeats(c.Challenge.SamplesPerSource),
 		"planned_samples":          len(c.Challenge.Samples),
-		"send_syscalls_succeeded":  sent, "peer_ingress": "NOT_TESTED",
-		"provider_source_acceptance": "NOT_TESTED", "physical_egress": "NOT_TESTED",
-		"return_to_sender": "NOT_TESTED", "private_l3": "NOT_TESTED",
-	}, nil
+		"send_syscalls_succeeded":  sent,
+		"peer_ingress":             "NOT_TESTED", "physical_egress": "NOT_TESTED",
+		"provider_source_acceptance": "NOT_TESTED", "return_to_sender": "NOT_TESTED",
+		"private_l3": "NOT_TESTED",
+	}
+	if sendErr != nil {
+		result["error"] = sendErr.Error()
+	}
+	return result, sendErr
 }

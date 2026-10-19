@@ -33,7 +33,7 @@ tar -xzf "$candidate" -C "$dir/release-verify"
 bash "$dir/release-verify/stl-spoofdiag/install-offline.sh" --verify > "$dir/release-verify.log"
 # The offline package must include the README's referenced documentation.
 tar -tzf "$archive" > "$dir/package-members.txt"
-for member in stl-spoofdiag/README.md stl-spoofdiag/docs/GO-REFERENCE.md stl-spoofdiag/docs/INSTALL-AND-RELEASE.md; do
+for member in stl-spoofdiag/README.md stl-spoofdiag/docs/GO-REFERENCE.md stl-spoofdiag/docs/INSTALL-AND-RELEASE.md stl-spoofdiag/docs/OFFLINE-EXCHANGE.md stl-spoofdiag/docs/DISCONNECTED-THREE-STAGE.md; do
   grep -Fxq "$member" "$dir/package-members.txt" || { echo "missing packaged document: $member" >&2; exit 1; }
 done
 expected=$(sha256sum "$archive" | cut -d ' ' -f1)
@@ -150,4 +150,46 @@ ln -s "$dir/channel-inbox" "$dir/alias-inbox"
 if bash "$latest" --local-url "http://127.0.0.1:$port" --destdir "$dir/channel-root" --inbox "$dir/alias-inbox" --accept >"$dir/inbox-symlink.log" 2>&1; then
   echo 'ERROR: symlinked private download inbox was accepted' >&2; exit 1
 fi
+# The exact old RC2 archive member layout must remain accepted after a
+# documentation-only extensions. Exercise Exchange-only and baseline layouts
+# through the same positive checksum-verified bootstrap validation.
+# Historical Exchange-only release lacks the disconnected A/B guide.
+mkdir -m 0700 "$dir/exchange-layout" "$dir/exchange-inbox"
+tar -xzf "$archive" -C "$dir/exchange-layout"
+rm -- "$dir/exchange-layout/stl-spoofdiag/docs/DISCONNECTED-THREE-STAGE.md"
+( cd "$dir/exchange-layout/stl-spoofdiag"
+  sha256sum -- stl-spoofdiag install-offline.sh README.md LICENSE sources-field.csv evidence-field.json BUILD-MANIFEST.txt docs/*.md > SHA256SUMS
+)
+tar -czf "$archive" -C "$dir/exchange-layout" stl-spoofdiag
+exchange_digest=$(sha256sum "$archive")
+exchange_digest=${exchange_digest%% *}
+bash "$bootstrap" --local-url "http://127.0.0.1:$port" --version dev-ci-online --sha256 "$exchange_digest" --inbox "$dir/exchange-inbox" --verify-only > "$dir/exchange-layout-verify.log"
+
+# Legacy baseline had neither of the two later documentation additions.
+mkdir -m 0700 "$dir/legacy-layout" "$dir/legacy-inbox"
+tar -xzf "$archive" -C "$dir/legacy-layout"
+rm -- "$dir/legacy-layout/stl-spoofdiag/docs/OFFLINE-EXCHANGE.md"
+( cd "$dir/legacy-layout/stl-spoofdiag"
+  sha256sum -- stl-spoofdiag install-offline.sh README.md LICENSE sources-field.csv evidence-field.json BUILD-MANIFEST.txt docs/*.md > SHA256SUMS
+)
+tar -czf "$archive" -C "$dir/legacy-layout" stl-spoofdiag
+legacy_digest=$(sha256sum "$archive")
+legacy_digest=${legacy_digest%% *}
+bash "$bootstrap" --local-url "http://127.0.0.1:$port" --version dev-ci-online --sha256 "$legacy_digest" --inbox "$dir/legacy-inbox" --verify-only > "$dir/legacy-layout-verify.log"
+
+# Even a correctly SHA256-covered archive must not contain an unexpected
+# product member: the online Bootstrap's explicit allowlist stays strict.
+mkdir -m 0700 "$dir/unexpected-layout" "$dir/unexpected-inbox"
+tar -xzf "$archive" -C "$dir/unexpected-layout"
+printf 'unexpected-member\n' > "$dir/unexpected-layout/stl-spoofdiag/docs/UNEXPECTED.md"
+( cd "$dir/unexpected-layout/stl-spoofdiag"
+  sha256sum -- stl-spoofdiag install-offline.sh README.md LICENSE sources-field.csv evidence-field.json BUILD-MANIFEST.txt docs/*.md > SHA256SUMS
+)
+tar -czf "$archive" -C "$dir/unexpected-layout" stl-spoofdiag
+unexpected_digest=$(sha256sum "$archive")
+unexpected_digest=${unexpected_digest%% *}
+if bash "$bootstrap" --local-url "http://127.0.0.1:$port" --version dev-ci-online --sha256 "$unexpected_digest" --inbox "$dir/unexpected-inbox" --verify-only > "$dir/unexpected-member.log" 2>&1; then
+  echo 'ERROR: unexpected checksum-covered archive member was accepted' >&2; exit 1
+fi
+grep -Fq 'archive has unexpected, missing, or duplicate product members' "$dir/unexpected-member.log"
 printf 'LOCAL_ONLINE_BOOTSTRAP_AND_GENERIC_CHANNEL_POSITIVE_NEGATIVE=PASS\n'

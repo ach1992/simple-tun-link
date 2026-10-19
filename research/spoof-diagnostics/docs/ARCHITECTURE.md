@@ -6,29 +6,62 @@ supersedes the now-removed Private Lab runtime on the separate
 program into a VPN backend. The controlling source-IP research remains
 [Issue #125](https://github.com/ach1992/simple-tun-link/issues/125).
 
+## Offline evidence exchange extension
+
+The separate unreleased offline-evidence candidate reuses the signed Field
+run proofs and immutable Campaign batches, without changing the active
+protocol. It adds versioned signed Case-evidence ZIPs, inert import,
+independent cross-direction analysis and an explicit staged readiness-v2
+proposal. The existing live-run Challenge/Grant/Readiness TTL problem is
+**not** solved by the export feature. See
+[OFFLINE-EXCHANGE.md](OFFLINE-EXCHANGE.md) and controlling [Issue #135](https://github.com/ach1992/simple-tun-link/issues/135).
+
+## Future diagnostic transport coverage (Owner-parked, NOT implemented)
+
+Tracked separately in [Issue #137](https://github.com/ach1992/simple-tun-link/issues/137); do not implement as part of the offline source inventory/exchange change.
+
+**Current code supports authenticated UDP diagnostic samples only** (normal bound UDP and separately gated raw IPv4+UDP). Additional protocol probes are a later, explicitly reviewed phase: **TCP**, **ICMP**, **QUIC** (over UDP), and other protocols only if a concrete use case justifies them. The goal is to compare independently authenticated endpoint observations and, where possible, an actual *return* rather than infer bidirectional reachability from a one-way sample.
+
+Future protocol-specific checks must state exactly what their evidence proves: a TCP handshake must not be confused with arbitrary source-IP return-path proof; ICMP echo responses require correlation; and QUIC datagrams or opening a UDP port are not a negotiated QUIC connection. Keep source selection, signed A/B identities, per-run scope, durable Campaign progress, offline bundle import and the evidence confidence model **shared** rather than create duplicate transport-specific campaign engines. Consider small-file delivery with authenticated payload integrity and an observed response in owned isolated tests only if that is necessary to establish an end-to-end application-level proof.
+
+**Do not enable protocol choices in the menu or runtime until implemented and verified.** No new public forged-source probing, scans, unlimited run TTLs or unattended senders are permitted by this roadmap. Scope, provider constraints, receiver consent, negative tests and independent review remain distinct gates. This paragraph is a future feature record, not a work authorization or a claim of protocol support.
+
 ## Explicit architecture and trust boundary
 
 Two controlled roles, A and B, operate in either independently configured
-`A_TO_B` or `B_TO_A` direction. Directly assigned receiver IPv4 only: NAT-forwarded public destinations are not supported by this first design. A third-party receiver, reflector, route
+`A_TO_B` or `B_TO_A` direction. Receiver may use an explicitly approved, independently
+configured local DNAT bind while the signed advertised destination remains
+fixed. Actual NAT reachability is not proven by local approval. A third-party
+receiver, reflector, route
 installer or scanner is not included.
 
 1. A holds an exact, direction-scoped `field_candidates` IPv4 inventory.
 2. A signs a short-lived challenge binding A/B roles, destination IPv4,
    destination UDP port, each source candidate, packet size and run ID.
-3. B checks that the signed destination IPv4 is directly assigned to a local, active non-loopback interface, independently checks its **own** candidate allowlist, verifies A's
-   Ed25519 identity chain and signs an exact matching grant.
-4. Both A and B verify that signed grant. B explicitly binds its own
-   assigned destination IPv4 and keeps a consumed-run ledger (0700).
+3. B verifies its own selected-source allowlist and that either the
+   directly advertised destination, or an explicitly granted forwarded
+   `receiver_bind_ip`, is actually assigned to B's active non-loopback
+   interface. It verifies A's Ed25519 identity chain and signs the precise
+   public destination and local bind in its grant.
+4. Both A and B verify the grant. B binds its locally assigned signed bind
+   address, writes an Ed25519 signed short-lived readiness file only after
+   binding, and keeps a consumed-run ledger (0700). Campaign send checks
+   both B grant and readiness; this is not live peer reachability. No host network
+   configuration or NAT management occurs.
 5. A sends **1–10 independently signed 128–1200 byte diagnostic datagrams
    per selected candidate** (CLI default 5), at most 32 distinct candidates
    per signed run and 320 total samples, with at least 200 ms between sends.
    Samples are interleaved across candidates for temporal spacing. The signed
    plan and grant bind the exact sample list. The receiver automatically
-   scales its default finite window to the planned sample duration, clipped
+   scales its default finite window to the planned sample duration plus a
+   bounded 45-second coordination allowance, clipped
    by the signed challenge expiry. There is no CIDR expansion,
    public scan, automatic retry or continuous background sender.
-6. B validates each signed UDP application packet and emits a portable
-   Ed25519-signed receipt. Each observation carries **both selected
+6. B validates each signed UDP application packet and publishes successive
+   **atomic signed receipt snapshots** (initial IN_PROGRESS, updated for each
+   peer-observed authenticated sample, then COMPLETE if the finite window
+   finishes). Sender snapshots also preserve per-index syscall attempts,
+   successes and failures as signed local declarations. Each observation carries **both selected
    source and actual observed UDP source**, plus a boolean exact match.
 7. Offline `field verify` reconciles challenge, grant, certificate chain,
    run ID, source/packet identity, receipt signature and time envelope, then
@@ -75,7 +108,8 @@ establishes a return route, even when B receives a signed request.
 - Offline installer, versionless release channel and `spoofdiag-v*`
   assets independent of STL `main` and STL `v*` releases.
 - No host service daemon, public listener automatically started,
-  automatic source discovery, third-party reflection, TUN/WireGuard,
+  automatic source discovery, unattended high-rate probing,
+  third-party reflection, TUN/WireGuard,
   tunnel switching, or STL integration.
 - No public network test or two-real-host test for this new Field code.
 - Previous private netns/KVM results are **historical for a different

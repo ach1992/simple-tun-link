@@ -235,16 +235,16 @@ func TestAutomaticFieldReceiverWindowCoversRepeatedSampleEnvelope(t *testing.T) 
 	cases := []struct {
 		count, expected int
 	}{
-		{1, 16},
-		{5, 16},
-		{10, 17},
-		{32, 22},
-		{160, 47},
-		{fieldMaxSamples, 79},
+		{1, 46},
+		{5, 46},
+		{10, 47},
+		{32, 52},
+		{160, 77},
+		{fieldMaxSamples, 109},
 	}
 	for _, test := range cases {
 		actual := automaticFieldWindowSeconds(test.count)
-		if actual != test.expected || actual < 15 {
+		if actual != test.expected || actual < 45 {
 			t.Fatalf("receiver window for %d samples: got %d, want %d",
 				test.count, actual, test.expected)
 		}
