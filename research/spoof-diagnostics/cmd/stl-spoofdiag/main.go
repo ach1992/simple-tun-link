@@ -284,7 +284,7 @@ func preflight() error {
 }
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: stl-spoofdiag version|preflight|sources|plan|report|field|campaign|menu")
+		return errors.New("usage: stl-spoofdiag version|preflight|sources|plan|report|field|campaign|exchange|menu")
 	}
 	switch args[0] {
 	case "version":
@@ -299,6 +299,8 @@ func run(args []string) error {
 		return fieldCLI(args[1:])
 	case "campaign":
 		return campaignCLI(args[1:])
+	case "exchange":
+		return exchangeCLI(args[1:])
 	case "plan", "report":
 		cmd := flag.NewFlagSet(args[0], flag.ContinueOnError)
 		p := cmd.String("file", "", "existing CSV or JSON file")

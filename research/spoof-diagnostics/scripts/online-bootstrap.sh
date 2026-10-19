@@ -93,7 +93,12 @@ actual=$(sha256sum "$archivePath" | cut -d ' ' -f1)
 tar -tzf "$archivePath" > "$scratch/list" || fail 'invalid archive'
 expectedMembers=$'stl-spoofdiag/\nstl-spoofdiag/BUILD-MANIFEST.txt\nstl-spoofdiag/docs/\nstl-spoofdiag/docs/ARCHITECTURE.md\nstl-spoofdiag/docs/GO-REFERENCE.md\nstl-spoofdiag/docs/INSTALL-AND-RELEASE.md\nstl-spoofdiag/docs/LOCAL-LAB-ACCEPTANCE.md\nstl-spoofdiag/docs/VALIDATION-MATRIX.md\nstl-spoofdiag/LICENSE\nstl-spoofdiag/README.md\nstl-spoofdiag/SHA256SUMS\nstl-spoofdiag/evidence-field.json\nstl-spoofdiag/install-offline.sh\nstl-spoofdiag/sources-field.csv\nstl-spoofdiag/stl-spoofdiag'
 listed=$(sort "$scratch/list")
-[[ $listed == "$(printf '%s\n' "$expectedMembers" | sort)" ]] ||
+# The v1 standalone release predates the optional offline exchange reference.
+# Accept its exact legacy layout OR that layout plus exactly one new,
+# checksum-covered documentation member. Keep rejecting everything else.
+expectedLegacy=$(printf '%s\n' "$expectedMembers" | sort)
+expectedWithExchange=$(printf '%s\n%s\n' "$expectedMembers" 'stl-spoofdiag/docs/OFFLINE-EXCHANGE.md' | sort)
+[[ $listed == "$expectedLegacy" || $listed == "$expectedWithExchange" ]] ||
   fail 'archive has unexpected, missing, or duplicate product members'
 tar -tvzf "$archivePath" > "$scratch/member-types" || fail 'invalid archive metadata'
 if grep -E '^[^d-]' "$scratch/member-types" >/dev/null; then

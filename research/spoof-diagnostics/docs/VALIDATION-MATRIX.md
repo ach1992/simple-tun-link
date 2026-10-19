@@ -43,3 +43,24 @@ Release identity and download readiness must be checked against the live
 against the historical Draft RC1 or an unrelated STL `v*` release.
 Both live two-host Field behavior and provider/return-path acceptance remain
 UNTESTED even after offline build and CI pass.
+
+
+## Offline evidence-exchange candidate (separate stack atop PR #134)
+
+**Unmerged and not released.** These results belong only to the offline
+feature branch, not to the PR #134 exact candidate or the published RC2.
+
+| Gate | Status | Evidence / limitation |
+| --- | --- | --- |
+| Four signer-authenticated portable ZIP roles; arbitrary filenames/order | OFFLINE UNIT PASS | Both independent directions, two batches/direction, stable report across reordered/renamed files |
+| Run/sample evidence joins | OFFLINE UNIT PASS | Per-index sender syscall vs receiver observation; missing sender proof is not treated as confirmed submit |
+| Explicit import; archive/rejected; no inbox deletion | OFFLINE UNIT PASS | Valid and invalid imports, idempotence, symlink rejection; no listener/transmitter called |
+| Malicious ZIP, tampered bytes and cross-case conflict | OFFLINE UNIT PASS | Traversal, symlink entries, corrupted archives, wrong-role manifest, conflicting signed snapshots |
+| Large exact source inventory | OFFLINE UNIT PASS | 1,536 exact IPs, 48 offline Campaign batches; export/verify; no network traffic |
+| Final verified JSON / HTML / CSV | OFFLINE UNIT PASS | Signer and ZIP provenance, missing inputs, safe HTML escaping/CSV cell prefix, idempotent report recreation |
+| Pre-run durable joint signed Case and operator activation | NOT_IMPLEMENTED | V2 schema/crypto/slot commitments proposed in OFFLINE-EXCHANGE.md; current v1 runtime still short-TTL |
+| Simultaneous live peer readiness | PHYSICALLY UNKNOWN | No zero-channel cryptographic proof of other host currently listening; needs operator timing/clock plan |
+| Real A/B Field packets, external NIC capture, return path or tunnel | NOT_RUN | No live network tests requested/authorized in this handoff |
+| Full Go tests, vet, race, Linux amd64/arm64 cross-build | LOCAL PASS (AUTHOR-TREE) | Formatting, go test ./..., go vet ./..., go test -race, static CGO=0 builds passed. CI must verify the eventual exact pushed HEAD |
+| Offline installer and channel/legacy layout | LOCAL LOOPBACK FIXTURE PASS | Dedicated bootstrap test verified install-to-temp, wrong digests, rejection paths, old and new docs layouts; not a public download or production install |
+| Independent author-separated exact-candidate review | PENDING | No merge/release/field test authorized |

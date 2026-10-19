@@ -73,6 +73,31 @@ For a legitimate locally assigned source-address experiment, create
 the challenge with `--transport field_udp_bound` and omit the raw
 `--interface` / `--provider-authorized` arguments when sending.
 
+## Offline evidence exchange commands (follow-on, unreleased)
+
+This feature is available **only in the unmerged offline-exchange candidate**,
+not in the published RC2 download. All commands below operate exclusively
+on local files and never start/extend/retry a Field test:
+
+`stl-spoofdiag exchange init [--base /absolute/private/root]`
+`stl-spoofdiag exchange new-case`
+`stl-spoofdiag exchange export --case-id CASE --campaign-dir DIR --role sender|receiver --cert NODE.crt --key NODE.key --ca ca.crt [--base PRIVATE_ROOT]`
+`stl-spoofdiag exchange inspect --file ANY_FILENAME --ca ca.crt`
+`stl-spoofdiag exchange import --ca ca.crt [--case-id CASE] [--base PRIVATE_ROOT] [--inbox DIRECTORY] [--file ANY_FILENAME ...]`
+`stl-spoofdiag exchange analyze --case-id CASE --ca ca.crt [--base PRIVATE_ROOT] [--inbox DIRECTORY] [--reports PRIVATE_DIRECTORY] [--file ANY_FILENAME ...]`
+
+Menu options 20–25 call the identical shared code. `export` must be run
+once per logical sender/receiver role on its *own* endpoint credentials;
+each direction uses an independent immutable campaign, with the same
+operator-provided Case ID. Output files are role-prefixed ZIPs, and the
+analyzer trusts only the authenticated manifest, never filenames. The
+analyzer can run without root networking privileges on a third machine
+when an alternate private base directory and trusted public CA are provided.
+
+For file layout, signatures, import safety, exact four slots, result confidence
+and the still-unsolved TTL/coordination issue, refer to
+[OFFLINE-EXCHANGE.md](OFFLINE-EXCHANGE.md). **Import is not ARM or START.**
+
 ## Candidate JSON and CSV
 
 JSON schema version 1 uses `mode:"field_candidates"` and an array of

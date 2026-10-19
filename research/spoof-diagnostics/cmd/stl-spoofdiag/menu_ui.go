@@ -13,7 +13,7 @@ func menu() error {
 	reader := bufio.NewReaderSize(os.Stdin, 64*1024)
 	for {
 		menuHeader()
-		fmt.Fprint(os.Stdout, "Choose [0-19] (or q): ")
+		fmt.Fprint(os.Stdout, "Choose [0-25] (or q): ")
 		answer, err := menuRead(reader)
 		if errors.Is(err, io.EOF) {
 			return nil
@@ -65,8 +65,10 @@ func menu() error {
 			result = menuCampaignSend(reader)
 		case "19":
 			result = menuCampaignReceive(reader)
+		case "20", "21", "22", "23", "24", "25":
+			result = menuExchange(reader, answer)
 		default:
-			fmt.Fprintln(os.Stderr, "Unknown option; use 0..19")
+			fmt.Fprintln(os.Stderr, "Unknown option; use 0..25")
 		}
 		if result != nil {
 			fmt.Fprintln(os.Stderr, "Operation not completed:", result)
@@ -88,6 +90,10 @@ func menuHeader() {
 	fmt.Fprintln(os.Stdout, "15) Signed campaign report    16) Read-only field prerequisites")
 	fmt.Fprintln(os.Stdout, "17) Receiver accept + listen  18) Send ONE approved campaign batch")
 	fmt.Fprintln(os.Stdout, "19) Campaign receiver: independently approve + listen (one batch)")
+	fmt.Fprintln(os.Stdout, "20) New offline Case ID         21) Initialize private exchange folders")
+	fmt.Fprintln(os.Stdout, "22) Export signed case bundle   23) Analyze inbox / four bundles")
+	fmt.Fprintln(os.Stdout, "24) Inspect one signed bundle")
+	fmt.Fprintln(os.Stdout, "25) Import + verify inbox safely (no execution)")
 	fmt.Fprintln(os.Stdout, " 0) Exit")
 	fmt.Fprintln(os.Stdout, "NOTE: Source match != provider permission != return-path proof.")
 	fmt.Fprintln(os.Stdout, "==============================================================")

@@ -52,6 +52,35 @@ dedicated Spoof Diagnostics CI workflow also lives at repository level.
 The unrelated STL application, installer, `main` branch and `v*` release
 channel are outside this tool's release and integration scope.
 
+## Offline A/B evidence exchange (unmerged follow-on candidate)
+
+A separate development branch adds **offline-only** `exchange` commands and
+menu items 20–25. They export each endpoint's *existing* independently
+signed Campaign/Field evidence to portable four-slot ZIPs; import validates
+ZIP signatures and hashes, and an independent analyzer produces JSON, CSV and
+HTML reports on A, B or a third Linux machine. File names/order need no manual
+normalization. Files can be copied manually through an operator-managed path;
+no direct A↔B communication or network daemon is needed **for analysis**.
+
+The default private exchange root is `/root/stl-spoofdiag/exchange/` with
+`inbox/`, `outbox/`, `reports/`, `archive/` and `rejected/`, or another
+explicit `--base`. `exchange import` is inert: it never executes test traffic
+or deletes the inbox source. All ZIPs require externally supplied public CA
+trust and each node's signed internal manifest. **Neither private node nor
+CA signing keys are exported.** Analysis refuses to call missing packets
+blocked sources, and does not claim physical egress, provider permission,
+return traffic or private-L3 connectivity.
+
+**Current gate:** this feature is under review/development and **is not in
+published RC2**. Existing short Challenge/Readiness TTLs and the manual
+pre-run transfer problem **are not yet fixed** by post-run bundle export.
+Case ID currently binds the evidence on export, not a new pre-run consent
+protocol. A separate bounded v2 preparation/activation design is documented
+but has not been wired to sender/receiver traffic. Read the
+[full offline exchange reference](docs/OFFLINE-EXCHANGE.md) before relying
+on this workflow; no deployment, field packet trial, merge or release is
+implied.
+
 ## Install online — one general command (no version number)
 
 For the independently published Spoof Diagnostics channel, run this

@@ -6,6 +6,16 @@ supersedes the now-removed Private Lab runtime on the separate
 program into a VPN backend. The controlling source-IP research remains
 [Issue #125](https://github.com/ach1992/simple-tun-link/issues/125).
 
+## Offline evidence exchange extension
+
+The separate unreleased offline-evidence candidate reuses the signed Field
+run proofs and immutable Campaign batches, without changing the active
+protocol. It adds versioned signed Case-evidence ZIPs, inert import,
+independent cross-direction analysis and an explicit staged readiness-v2
+proposal. The existing live-run Challenge/Grant/Readiness TTL problem is
+**not** solved by the export feature. See
+[OFFLINE-EXCHANGE.md](OFFLINE-EXCHANGE.md) and controlling [Issue #135](https://github.com/ach1992/simple-tun-link/issues/135).
+
 ## Explicit architecture and trust boundary
 
 Two controlled roles, A and B, operate in either independently configured
