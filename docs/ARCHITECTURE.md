@@ -142,7 +142,10 @@ Application traffic -> Linux network stack -> native backend -> underlay
 
 No Go packet copy loop sits in this path.
 
-A future userspace carrier may legitimately introduce a data-plane helper, but it remains a distinct backend/transport with its own performance and security evidence.
+A future Carrier may require a userspace data-plane helper, but this does
+not require a second Link Engine or a new L3 packet engine. Its compatibility
+with an existing backend and its host safety/performance cost must be
+justified before implementing an adapter (see section 14).
 
 ## 5. Desired state, locks and reboot restoration
 
@@ -391,6 +394,22 @@ integration; internal Go types must not become an accidental public
 API. A future in-process API, userspace carrier or daemon needs
 demonstrated consumer value and its own compatibility/performance
 evidence, not speculative infrastructure.
+
+The current `Link` selects a native backend and one of its supported
+encapsulations; it has no independent Carrier selection or generic
+composition API. Native GRE emits IP protocol 47; GRE/IPIP FOU/GUE
+require exact underlay endpoints, UDP ports and a resolved device, so
+they cannot be assumed to work unchanged through a stream/WSS relay.
+A Carrier does not by itself supply an authenticated private-IP Link.
+For any proposed composition, first verify IP/UDP/stream framing,
+dial/listen endpoint roles, required security, overhead/MTU, per-Link
+resource claims, restart and owned rollback. Keep physical underlay
+addresses, any future local Carrier endpoint and private Link Addresses
+distinct. Add only a justified adapter to the existing Engine/Backend,
+without a compulsory WireGuard/WSS combination or speculative cross-product
+of backend/Carrier pairings. Future priorities and Owner gates belong in
+[Issue #142](https://github.com/ach1992/simple-tun-link/issues/142);
+none of these Carriers is shipped in the current CLI.
 
 Prefer shared small interfaces, standard-library primitives and
 native Linux integration where they improve correctness or measured

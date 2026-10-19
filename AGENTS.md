@@ -13,6 +13,11 @@ Hard boundaries:
 - v0.1 backends are GRE, IPIP, WireGuard, and IPsec/XFRM.
 - GRE/IPIP support Native/FOU/GUE.
 - Go is the control plane; native backends keep packet data out of Go.
+- For future Carriers, reuse the existing Engine and native L3 backends;
+  no planned GOST or mandatory new userspace L3 engine. Prove framing,
+  endpoint, security, MTU and resource-ownership compatibility before
+  composing transports. See [Issue #142](https://github.com/ach1992/simple-tun-link/issues/142)
+  for current Owner gates.
 - No geography-specific data-model roles.
 - No global host tuning merely for convenience.
 - No firewall flush/default-route rewrite.
