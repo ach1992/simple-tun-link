@@ -29,7 +29,7 @@ provider acceptance; a real public-network Field trial was not requested.
 | Sender return path / true private L3 | NOT_TESTED | Out of scope for current diagnostic |
 | Debian/Ubuntu ARM64 runtime compatibility | NOT_TESTED for new candidate | Source target only |
 | Installer / upgrade / rollback / release candidate | Earlier local package/install/uninstall and online fixture PASS; exact final HEAD must be rechecked | Previous commits/releases do not validate new sample-reporting changes |
-| External author-separated review | DEFERRED BY OWNER for this experimental pre-release | Master self-review and exact-HEAD CI are required; self-review is not independent evidence |
+| External author-separated review | CHANGES_REQUIRED on prior `9e5e142`; remediation candidate pending fresh review | F1–F4 identified in independent source review. Previous verdict does not approve newer commits; merge into `dev-spoof` awaits independent re-review of exact effective diff |
 
 The previous RFC1918-only detached-network-namespace and KVM tests
 are historical evidence for a different, now-retired engine. In that
