@@ -1,8 +1,8 @@
 # SpoofDiag offline evidence exchange — v1 implementation and v2 readiness design
 
-**Scope:** standalone research tool on the independent `dev-spoof` line. No STL backend, installed service, network scan, autonomous test, tunnel, or public-source spoof trial is authorized. Owner's accepted direction: [#135](https://github.com/ach1992/simple-tun-link/issues/135). Prior signed Field evidence and bounded Campaign Manager: [PR #134](https://github.com/ach1992/simple-tun-link/pull/134). This is a stacked, **unmerged** follow-on feature: the existing RC2 public release does **not** contain it.
+**Scope:** standalone research tool on the independent `dev-spoof` line. No STL backend, installed service, network scan, autonomous test, tunnel, or public-source spoof trial is authorized. Owner's accepted direction: [#135](https://github.com/ach1992/simple-tun-link/issues/135). Signed Field/Campaign and offline Case features were integrated into `dev-spoof` by [PR #140](https://github.com/ach1992/simple-tun-link/pull/140) and published as **experimental SpoofDiag RC3**. The older RC2 archive does not include the disconnected/multi-batch follow-on.
 
-## Simple source-IP input (additional unmerged offline candidate)
+## Simple source-IP input (offline RC3)
 
 On **A**, place one plain-text file at `/root/stl-spoofdiag/exchange/inbox/ip.txt`:
 
@@ -20,7 +20,7 @@ The existing 4 MiB candidate-input/converted-JSON budget can require splitting a
 
 TXT import, Case/evidence import, planning and staging remain offline-only. **No Field packet is transmitted by reading or staging the source list.**
 
-## Precisely what exists in this candidate
+## Precisely what RC3 implements
 
 `exchange` is a **strictly offline, explicitly invoked command family** and menu actions. It consumes existing Campaign and independently signed Field evidence. It does not call `campaign next`, `field send`, `field listen`, `campaign receive`, nor initiate a network operation.
 
@@ -79,7 +79,7 @@ These commands **do not run a test**; a completed Field Campaign from the prior 
 - Archive inputs are untrusted: reject traversal, malformed JSON, symlinks, nonregular entries, duplicate ZIP names, unknown relative paths, entry size/hash differences and unsupported `format`. Extraction to operator-selected filesystem paths is forbidden; safe staging uses only whitelisted JSON names in a private randomly created temporary directory. No included code is executed.
 - Current resource policy: maximum 50,000 ZIP entries, 1 GiB total uncompressed bytes, 8 MiB campaign manifest and manifest metadata, current Field per-run JSON maximum 256 KiB. These are deliberate **memory/disk security budgets**, **not limits of 256 source candidates**: Campaign batching was tested with 1,536 exact sources. Very large archives should use a future segmented/streamed format with configurable policy rather than removing safety checks.
 - A signed `SUBMITTED` sender syscall record is **not** a physical NIC egress capture. Signed authenticated B observation is **not** independent provider authorization. Missing B observations are *inconclusive*, not proven packet loss/blocked IP. A→B and B→A may involve unrelated source identities and **two one-way observations are not a verified same-flow return path**. A useful encrypted private L3 link is not tested.
-- Existing PR #134's fresh 60–900 second Challenge and 120-second maximum listener readiness still expire during slow human file exchange. This evidence-only v1 change **does not change the active Field protocol or fix that activation defect**. This is the controlling next architecture gate.
+- The legacy strict sender's fresh 60–900 second Challenge and 120-second maximum listener readiness still expire during slow human file exchange. This evidence-only v1 change **does not change the active Field protocol or fix that activation defect**. This is the controlling next architecture gate.
 
 ## Next protocol design: durable preparation vs bounded activation
 
@@ -95,4 +95,4 @@ The existing protocol is v1. **v2 below is an explicit design proposal, not yet 
 
 ## Next implementation/acceptance gate
 
-Keep v1 portable evidence exchange backward-compatible and separate. Before enabling v2 traffic, define and independently review exact canonical Case/Preparation/Slot schemas, role-authenticated signatures, epoch/clock policy, replay ledger, cancellation/terminal states, interop/migration, and user-visible start/consent UX; verify deterministic offline negative/positive fixtures. Do not claim a live peer or successful public spoof trials from those fixtures. [#135](https://github.com/ach1992/simple-tun-link/issues/135) owns this unfinished activation design. Do not merge, release, or install this candidate absent Owner approval and required review.
+Keep v1 portable evidence exchange backward-compatible and separate. Before enabling v2 traffic, define and independently review exact canonical Case/Preparation/Slot schemas, role-authenticated signatures, epoch/clock policy, replay ledger, cancellation/terminal states, interop/migration, and user-visible start/consent UX; verify deterministic offline negative/positive fixtures. Do not claim a live peer or successful public spoof trials from those fixtures. [#135](https://github.com/ach1992/simple-tun-link/issues/135) owns this unfinished activation design. Do not implement, enable or distribute the proposed **v2 traffic activation** without separate Owner authorization and review. RC3 includes only the existing verified offline evidence workflow and unchanged strict sender gates.

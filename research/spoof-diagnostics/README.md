@@ -12,13 +12,13 @@ STL:** installing it does not install, upgrade, configure or run STL.
 
 ## What the tool does
 
-The current development candidate replaces the former Private Lab runtime
+The experimental RC3 implementation replaces the former Private Lab runtime
 with a **Field** workflow for two explicitly controlled hosts, A and B.
 It accepts an **exact, operator-chosen IPv4 candidate list** independently
 for A→B and B→A; it does not enumerate CIDR ranges, scan the Internet,
-automatically start a service or integrate with STL. A separate unmerged
-candidate introduces **explicitly operator-started finite systemd jobs**;
-no service is enabled at installation.
+automatically start a service or integrate with STL. RC3 provides
+**explicitly operator-started finite systemd jobs**; no service is enabled
+at installation. Real SSH-disconnect durability has not been verified.
 
 Field stages: *sender-signed challenge → receiver-signed grant → bounded
 field sender and receiver → receiver-signed receipt → offline verification*.
@@ -54,7 +54,7 @@ dedicated Spoof Diagnostics CI workflow also lives at repository level.
 The unrelated STL application, installer, `main` branch and `v*` release
 channel are outside this tool's release and integration scope.
 
-## Disconnected A/B three-stage testing (new unmerged follow-on)
+## Disconnected A/B three-stage testing (experimental RC3)
 
 The Owner-approved target workflow is **A sends while B independently observes;
 the operator later copies A's saved artifacts to B; B independently performs the
@@ -90,9 +90,9 @@ transmission or unattended spoofed-source Campaign execution was enabled. Read t
 and [Issue #139](https://github.com/ach1992/simple-tun-link/issues/139)
 for exact commands, provenance and outstanding end-to-end gates.
 
-## Offline A/B evidence exchange (unmerged follow-on candidate)
+## Offline A/B evidence exchange (experimental RC3)
 
-A separate development branch adds **offline-only** `exchange` commands and
+RC3 includes **offline-only** `exchange` commands and
 menu items 20–25 for the signed Case-evidence exchange; option 26 only
 prepares the IP inventory. The exchange exports each endpoint's *existing*
 independently signed Campaign/Field evidence to portable four-slot ZIPs; import validates
@@ -110,22 +110,24 @@ CA signing keys are exported.** Analysis refuses to call missing packets
 blocked sources, and does not claim physical egress, provider permission,
 return traffic or private-L3 connectivity.
 
-A separate **unmerged** source-input addition accepts one `ip.txt` with a
+RC3 also accepts one `ip.txt` with a
 `# SDX-IP-LIST v1 direction=A_TO_B` header and one IPv4 per line.
 `exchange sources inspect|stage` (menu 26) reuses the existing Campaign
 candidate JSON, with no per-IP setup screens and no packet send. The 900-second
 limit is per bounded run, not an overall Campaign deadline; see the
-[operator TXT instructions](docs/OFFLINE-EXCHANGE.md#simple-source-ip-input-additional-unmerged-offline-candidate).
+[operator TXT instructions](docs/OFFLINE-EXCHANGE.md#simple-source-ip-input-offline-rc3).
 
-**Current gate:** this feature is under review/development and **is not in
-published RC2**. Existing short Challenge/Readiness TTLs and the manual
-pre-run transfer problem **are not yet fixed** by post-run bundle export.
-Case ID currently binds the evidence on export, not a new pre-run consent
-protocol. A separate bounded v2 preparation/activation design is documented
-but has not been wired to sender/receiver traffic. Read the
-[full offline exchange reference](docs/OFFLINE-EXCHANGE.md) before relying
-on this workflow; no deployment, field packet trial, merge or release is
-implied.
+**Current gate:** These offline-only features are included in the published
+experimental RC3. The strict `field send` and `campaign send` Raw IPv4 paths
+**still require a signed receiver Grant** (plus readiness evidence when the
+strict flow requires it); source-owner, receiver and
+network-provider authorization cannot be replaced by operator acknowledgement.
+Short Challenge/Readiness TTLs and manual transfer remain a known limitation
+for the existing strict Field sender. Case ID signs post-run export grouping,
+not a new pre-run consent protocol. A proposed bounded v2 preparation design
+remains unimplemented. Read the [offline exchange reference](docs/OFFLINE-EXCHANGE.md).
+No production, real two-host Field, provider acceptance or SSH-disconnect
+endurance was established by RC3's offline release tests.
 
 **Transport roadmap (not active):** TCP, ICMP and QUIC diagnostics are deferred under [Issue #137](https://github.com/ach1992/simple-tun-link/issues/137), along with any justified additional protocols. The current Field diagnostic remains UDP-only; see [architecture and limitations](docs/ARCHITECTURE.md#future-diagnostic-transport-coverage-owner-parked-not-implemented). No menu option or sender for those future probes exists yet.
 
@@ -146,13 +148,14 @@ the downloaded bootstrap and the correct AMD64/ARM64 archive, and invokes
 the same verified offline installer. It does **not** follow GitHub's
 `releases/latest` (that belongs to STL) or download Go, Python or STL.
 
-**Publication status:** the standalone RC2 prerelease channel is published
-as of 2026-10-19. Check the [live standalone release channel](https://github.com/ach1992/simple-tun-link/blob/dev-spoof/research/spoof-diagnostics/release-channel.txt)
-before installing: new Campaign/Field improvements in a development PR are
-**not** included in RC2 until separately reviewed, integrated and released.
-If the channel is unpublished, the installer deliberately refuses the download.
-The older RC1 Draft belongs to a superseded implementation.
-Never substitute an STL `v*` release or an arbitrary development artifact.
+**Publication status:** [Spoof Diagnostics RC3](https://github.com/ach1992/simple-tun-link/releases/tag/spoofdiag-v0.1.0-rc.3)
+is published as a standalone **experimental GitHub Pre-release** from
+`dev-spoof`, merge commit `08dc870b7157dd3226d6df709deb60eeb1f8638d`.
+The [live release channel](https://github.com/ach1992/simple-tun-link/blob/dev-spoof/research/spoof-diagnostics/release-channel.txt)
+selects this exact SpoofDiag release with independently checked asset SHA-256
+values. RC2 remains an older version; RC1 was a superseded Draft.
+Do not use STL `v*` releases, or infer operational Field readiness
+from an offline-only RC3 validation.
 
 The command downloads executable script code over HTTPS from the
 publisher-controlled `dev-spoof` branch: **only run it if you trust that

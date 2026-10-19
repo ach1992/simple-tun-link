@@ -73,11 +73,12 @@ For a legitimate locally assigned source-address experiment, create
 the challenge with `--transport field_udp_bound` and omit the raw
 `--interface` / `--provider-authorized` arguments when sending.
 
-## Offline evidence exchange commands (follow-on, unreleased)
+## Offline evidence exchange commands (experimental RC3)
 
-This feature is available **only in the unmerged offline-exchange candidate**,
-not in the published RC2 download. All commands below operate exclusively
-on local files and never start/extend/retry a Field test:
+This offline-only feature was integrated via [PR #140](https://github.com/ach1992/simple-tun-link/pull/140)
+and released in **experimental SpoofDiag RC3** (not in older RC2).
+All commands below operate exclusively on local files and never
+start, extend or retry a Field test:
 
 `stl-spoofdiag exchange init [--base /absolute/private/root]`
 `stl-spoofdiag exchange sources inspect [--file ip.txt] [--base PRIVATE_ROOT]`
@@ -100,7 +101,7 @@ For file layout, signatures, import safety, exact four slots, result confidence
 and the still-unsolved TTL/coordination issue, refer to
 [OFFLINE-EXCHANGE.md](OFFLINE-EXCHANGE.md). **Import is not ARM or START.**
 
-## Plain-text `ip.txt` (additional unmerged candidate)
+## Plain-text `ip.txt` (experimental RC3)
 
 Use a single first header `# SDX-IP-LIST v1 direction=A_TO_B` followed by one exact IPv4 per line. A holds the A→B candidate list; B→A uses a separate file with `direction=B_TO_A`. The tool infers A/B roles and produces a hashed `field_candidates` JSON in private `exchange/sources/`, with no extra per-address prompts or packet transmission. The old JSON/CSV formats remain supported. `campaign create --file ip.txt` also accepts this text format directly, creating its own immutable internal batches. Direction is inferred for any single-direction inventory (including `ip.txt`); mixed-direction JSON/CSV retains the historical `A_TO_B` default unless overridden with `--direction B_TO_A`. The source file does not constitute live peer readiness or automatically start tests. A 900-second TTL applies to one run, not the full campaign. TCP, ICMP and QUIC are future-only, not supported Field transports.
 

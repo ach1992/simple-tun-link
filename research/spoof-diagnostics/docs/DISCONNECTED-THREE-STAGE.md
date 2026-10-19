@@ -1,8 +1,9 @@
 # Spoof Diagnostics — disconnected three-stage workflow (development only)
 
-Status: **unmerged feature candidate** targeting `dev-spoof`. This does not
-install or modify STL, does not enable public-network forged-source trials,
-and is **not** proof of link or tunnel readiness. Requirements and acceptance:
+Status: **merged into `dev-spoof` by PR #140; experimental standalone RC3
+pre-release published**. This does not install or modify STL, does not
+authorize public-network forged-source trials, and is **not** proof of
+real two-host operation, same-flow return path or tunnel readiness. Requirements and acceptance:
 [Issue #139](https://github.com/ach1992/simple-tun-link/issues/139).
 Historical strict Field and Campaign workflows remain separate/compatible.
 
@@ -27,7 +28,7 @@ UDP may or may not arrive; it cannot serve as a dependable control plane.
   `field send` / `campaign send` commands still require a prior signed
   B Grant. Removing that requirement in an arbitrary raw IPv4 source sender
   would be a security change, and is **not implemented or approved** in
-  this candidate. Do not mistake the new passive receiver for a fully
+  RC3. Do not mistake the new passive receiver for a fully
   field-operational no-control-path raw sender. Existing independently
   authorized/local-interface UDP and raw sender behavior is unchanged.
 - Operators must separately arrange time windows; there is no guarantee
