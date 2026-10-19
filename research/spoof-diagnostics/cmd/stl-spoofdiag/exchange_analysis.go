@@ -375,12 +375,13 @@ type exchangeDirectionReport struct {
 }
 
 type exchangeSampleResult struct {
-	Index         int    `json:"index"`
-	SourceIP      string `json:"source_ip"`
-	SenderState   string `json:"sender_state"`
-	ReceiverState string `json:"receiver_state"`
-	ActualSource  string `json:"actual_source,omitempty"`
-	SourceMatched bool   `json:"source_matched,omitempty"`
+	Index                    int      `json:"index"`
+	SourceIP                 string   `json:"source_ip"`
+	SenderState              string   `json:"sender_state"`
+	ReceiverState            string   `json:"receiver_state"`
+	ActualSource             string   `json:"actual_source,omitempty"`
+	ConflictingActualSources []string `json:"conflicting_actual_sources,omitempty"`
+	SourceMatched            bool     `json:"source_matched,omitempty"`
 }
 
 type exchangeRunResult struct {
@@ -781,7 +782,12 @@ small{color:#555}th{background:#eef}code{overflow-wrap:anywhere}</style></head>
 <h2>Conflicts / rejected</h2><p>{{range .Conflicts}}{{.}}; {{end}}{{range .Rejected}}{{.}}; {{end}}</p>
 {{range .Directions}}<h2>{{.Direction}} — {{.Status}}</h2>
 <table><tr><th>Source IP</th><th>Planned</th><th>Submitted syscall</th><th>Authenticated peer observed</th><th>Exact source</th><th>Not tested</th><th>Ambiguous</th></tr>
-{{range .Sources}}<tr><td>{{.SourceIP}}</td><td>{{.Planned}}</td><td>{{.Submitted}}</td><td>{{.Observed}}</td><td>{{.SourceMatched}}</td><td>{{.NotTested}}</td><td>{{.Ambiguous}}</td></tr>{{end}}</table>{{end}}
+{{range .Sources}}<tr><td>{{.SourceIP}}</td><td>{{.Planned}}</td><td>{{.Submitted}}</td><td>{{.Observed}}</td><td>{{.SourceMatched}}</td><td>{{.NotTested}}</td><td>{{.Ambiguous}}</td></tr>{{end}}</table>
+{{if .Runs}}<h3>Signed Run evidence</h3>
+<table><tr><th>Run ID</th><th>Status</th><th>Authenticated observations</th><th>Ambiguous signed samples</th></tr>
+{{range .Runs}}<tr><td><code>{{.RunID}}</code></td><td>{{.Status}}</td><td>{{.Observed}}</td><td>{{.ConflictingObservations}}</td></tr>{{end}}</table>
+{{range .Runs}}{{if .ConflictingObservations}}<h4>Conflicting receiver-source assertions — Run <code>{{.RunID}}</code></h4><ul>
+{{range .Samples}}{{if .ConflictingActualSources}}<li>Sample {{.Index}} (claimed source <code>{{.SourceIP}}</code>): {{range .ConflictingActualSources}}<code>{{.}}</code> {{end}} — {{.ReceiverState}}</li>{{end}}{{end}}</ul>{{end}}{{end}}{{end}}{{end}}
 {{if .PassiveBatchCoverage}}<h2>Batch coverage and checkpoints</h2><table><tr><th>Direction</th><th>Batch</th><th>Attempts</th><th>Observed</th><th>Not tested</th><th>Duplicate</th><th>Ambiguous</th><th>State</th></tr>
 {{range .PassiveBatchCoverage}}<tr><td>{{.Direction}}</td><td>{{.Batch}}</td><td>{{.Attempts}}</td><td>{{.Observed}}</td><td>{{.NotTested}}</td><td>{{.Duplicate}}</td><td>{{.Ambiguous}}</td><td>{{.State}}</td></tr>{{end}}</table>{{end}}
 <h2>Evidence limits</h2><ul>{{range .Limitations}}<li>{{.}}</li>{{end}}</ul>

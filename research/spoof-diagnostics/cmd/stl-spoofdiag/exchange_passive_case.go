@@ -81,19 +81,37 @@ func passiveCaseDirection(direction, challenge, capture, sender, ca string) (exc
 			return empty, "", "", errors.New("unsupported signed sender state")
 		}
 	}
+	// Consume BOTH authenticated outcome classes. The verifier returns a
+	// successful observation only for an unambiguous signed sample; a
+	// contradictory actual-source claim is still material evidence, not
+	// ordinary "NOT_OBSERVED" and never delivery success.
 	v, ok := correlated["observations"].([]map[string]any)
 	if !ok {
-		return empty, "", "", errors.New("invalid correlation output")
+		return empty, "", "", errors.New("invalid correlation observation output")
 	}
+	seen := make(map[int]bool, len(ch.Challenge.Samples))
 	for _, item := range v {
 		index, ok := item["sample_index"].(int)
-		if !ok || index < 0 || index >= len(run.Samples) {
-			return empty, "", "", errors.New("correlated observation index mismatch")
+		if !ok || index < 0 || index >= len(run.Samples) || seen[index] {
+			return empty, "", "", errors.New("duplicate or invalid correlated observation sample index")
 		}
 		s := &run.Samples[index]
+		claimedIP, ok := item["candidate_source_ip"].(string)
+		if !ok || claimedIP != s.SourceIP {
+			return empty, "", "", errors.New("correlated observation source differs from signed plan")
+		}
+		actual, ok := item["actual_observed_source_ip"].(string)
+		if !ok || actual == "" {
+			return empty, "", "", errors.New("correlated observation missing actual source")
+		}
+		match, ok := item["source_matched"].(bool)
+		if !ok || match != (actual == s.SourceIP) {
+			return empty, "", "", errors.New("correlated observation source match inconsistent")
+		}
+		seen[index] = true
 		s.ReceiverState = "AUTHENTICATED_OBSERVED"
-		s.ActualSource, _ = item["actual_observed_source_ip"].(string)
-		s.SourceMatched, _ = item["source_matched"].(bool)
+		s.ActualSource = actual
+		s.SourceMatched = match
 		row := bySource[s.SourceIP]
 		row.Observed++
 		run.Observed++
@@ -109,6 +127,45 @@ func passiveCaseDirection(direction, challenge, capture, sender, ca string) (exc
 			run.ObservedWithoutSubmitted++
 		}
 	}
+	ambiguities, ok := correlated["ambiguous_observations"].([]map[string]any)
+	if !ok {
+		return empty, "", "", errors.New("invalid correlation ambiguity output")
+	}
+	expectedAmbiguities, ok := correlated["ambiguous_samples"].(int)
+	if !ok || expectedAmbiguities != len(ambiguities) {
+		return empty, "", "", errors.New("correlation ambiguity count mismatch")
+	}
+	for _, item := range ambiguities {
+		index, ok := item["sample_index"].(int)
+		if !ok || index < 0 || index >= len(run.Samples) || seen[index] {
+			return empty, "", "", errors.New("duplicate or invalid ambiguous sample index")
+		}
+		s := &run.Samples[index]
+		claimedIP, ok := item["candidate_source_ip"].(string)
+		if !ok || claimedIP != s.SourceIP ||
+			item["status"] != "AMBIGUOUS_CONFLICTING_SIGNED_RECEIVER_SOURCES" {
+			return empty, "", "", errors.New("correlation ambiguity differs from signed plan")
+		}
+		actuals, ok := item["observed_sources"].([]string)
+		if !ok || len(actuals) < 2 {
+			return empty, "", "", errors.New("correlation ambiguity must include distinct source claims")
+		}
+		distinct := make(map[string]bool, len(actuals))
+		for _, actual := range actuals {
+			if actual == "" || distinct[actual] {
+				return empty, "", "", errors.New("duplicate or empty ambiguous source assertion")
+			}
+			distinct[actual] = true
+		}
+		seen[index] = true
+		s.ReceiverState = "AMBIGUOUS_CONFLICTING_SIGNED_RECEIVER_SOURCES"
+		s.ConflictingActualSources = append([]string(nil), actuals...)
+		bySource[s.SourceIP].Ambiguous++
+		run.ConflictingObservations++
+	}
+	if run.ConflictingObservations > 0 {
+		run.Status = "AMBIGUOUS_SIGNED_RECEIVER_OBSERVATIONS_NOT_DELIVERY_PROOF"
+	}
 	report := exchangeDirectionReport{Direction: direction, Status: "SIGNED_BOUNDED_RUN_NOT_CONNECTIVITY_PROOF",
 		Runs: []exchangeRunResult{run}, Sources: []exchangeSourceResult{}}
 	for _, item := range bySource {
@@ -117,6 +174,9 @@ func passiveCaseDirection(direction, challenge, capture, sender, ca string) (exc
 	sort.Slice(report.Sources, func(i, j int) bool { return report.Sources[i].SourceIP < report.Sources[j].SourceIP })
 	if run.Sender != "COMPLETE" || run.Receiver != "COMPLETE" || run.ObservedWithoutSubmitted > 0 {
 		report.Status = "PARTIAL_OR_DISCREPANT_SIGNED_EVIDENCE"
+	}
+	if run.ConflictingObservations > 0 {
+		report.Status = "AMBIGUOUS_SIGNED_RECEIVER_EVIDENCE_NOT_CONNECTIVITY_PROOF"
 	}
 	return report, ch.Challenge.RunID, fmt.Sprint(correlated["capture_id"]), nil
 }
@@ -186,6 +246,12 @@ func passiveCaseAnalyze(caseID, ca, reports string,
 	}
 	report.Status = "TWO_SIGNED_ONE_WAY_RUNS_NOT_RETURN_PATH_PROOF"
 	for _, d := range report.Directions {
+		if d.Status == "AMBIGUOUS_SIGNED_RECEIVER_EVIDENCE_NOT_CONNECTIVITY_PROOF" {
+			// Ambiguity must outrank ordinary partial/missing observations,
+			// irrespective of whether the other direction was complete.
+			report.Status = "AMBIGUOUS_SIGNED_ONE_WAY_EVIDENCE_NOT_RETURN_PATH_PROOF"
+			break
+		}
 		if d.Status != "SIGNED_BOUNDED_RUN_NOT_CONNECTIVITY_PROOF" {
 			report.Status = "PARTIAL_SIGNED_ONE_WAY_EVIDENCE_NOT_RETURN_PATH_PROOF"
 		}

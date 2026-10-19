@@ -2,6 +2,8 @@ package main
 
 import (
 	"crypto/ed25519"
+	"encoding/csv"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -139,4 +141,127 @@ func TestPassiveCaseIncompleteDirectionalInputsRefused(t *testing.T) {
 		t.Fatal("wrong B_to_A role was accepted")
 	}
 	_ = bp
+}
+
+func TestPassiveCaseConflictingSourcesPreservedInFinalReports(t *testing.T) {
+	ids, ca := testCampaignIdentity(t)
+	abPlan, abSender, abCapture := signedPassiveFixture(t, ids, ca, "A_TO_B", "10.40.0.8", "10.91.0.1")
+	baPlan, baSender, baCapture := signedPassiveFixture(t, ids, ca, "B_TO_A", "10.40.0.9", "10.91.0.2")
+	capture, err := readAndVerifyPassive(abCapture, ca, "B")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capture.Status != "COMPLETE" {
+		t.Fatalf("fixture receiver not COMPLETE: %s", capture.Status)
+	}
+	signedSenderRaw, err := readSmallRegular(abSender, fieldMaxControl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var signedSender signedFieldSenderEvidence
+	if err := strictJSON(signedSenderRaw, &signedSender); err != nil {
+		t.Fatal(err)
+	}
+	if signedSender.Evidence.Status != "COMPLETE" {
+		t.Fatalf("fixture sender not COMPLETE: %s", signedSender.Evidence.Status)
+	}
+	// The same authenticated SDF2 sample was signed by the receiver as
+	// observed from two different actual UDP source addresses.
+	secondClaim := capture.Observations[0]
+	secondClaim.Sequence = len(capture.Observations)
+	secondClaim.ActualPacketSource = "10.88.0.17"
+	secondClaim.ReceivedUTC = time.Now().UTC().Format(time.RFC3339Nano)
+	capture.Observations = append(capture.Observations, secondClaim)
+	capture.UpdatedUTC = time.Now().UTC().Format(time.RFC3339Nano)
+	receiver, err := loadFieldCredential(filepath.Join(ids, "B.crt"), filepath.Join(ids, "B.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := passiveSnapshot(abCapture, capture, receiver, true); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "reports")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	id := "abcddcba0123456789abcdef01234567"
+	// Exercise the actual CLI path, not only an internal reduction helper.
+	if err := exchangePassiveCLI(id, ca, dir, abPlan, abSender, abCapture, baPlan, baSender, baCapture); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "SDX-"+id)
+	data, err := os.ReadFile(path + "-verified.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report exchangeCaseReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(report.Status, "AMBIGUOUS") {
+		t.Fatalf("Case status concealed authenticated contradiction: %s", report.Status)
+	}
+	if len(report.Directions) != 2 {
+		t.Fatalf("expected both directions: %+v", report.Directions)
+	}
+	ab := report.Directions[0]
+	if ab.Direction != "A_TO_B" || !strings.Contains(ab.Status, "AMBIGUOUS") {
+		t.Fatalf("directional status failed to qualify conflicting evidence: %+v", ab)
+	}
+	if len(ab.Runs) != 1 || ab.Runs[0].Sender != "COMPLETE" || ab.Runs[0].Receiver != "COMPLETE" {
+		t.Fatalf("signed complete source evidence unexpectedly missing: %+v", ab.Runs)
+	}
+	run := ab.Runs[0]
+	if run.ConflictingObservations != 1 || run.Observed != 1 || run.Submitted != 2 ||
+		!strings.Contains(run.Status, "AMBIGUOUS") {
+		t.Fatalf("run concealed conflict or counted it as success: %+v", run)
+	}
+	if len(run.Samples) != 2 || !strings.Contains(run.Samples[0].ReceiverState, "AMBIGUOUS") ||
+		run.Samples[0].ActualSource != "" || run.Samples[0].SourceMatched ||
+		run.Samples[1].ReceiverState != "AUTHENTICATED_OBSERVED" {
+		t.Fatalf("per-sample signed source ambiguity lost: %+v", run.Samples)
+	}
+	if len(run.Samples[0].ConflictingActualSources) != 2 ||
+		run.Samples[0].ConflictingActualSources[0] != "10.88.0.17" ||
+		run.Samples[0].ConflictingActualSources[1] != "10.91.0.1" {
+		t.Fatalf("actual conflicting sources omitted from sample: %+v", run.Samples[0])
+	}
+	if len(ab.Sources) != 1 || ab.Sources[0].Ambiguous != 1 ||
+		ab.Sources[0].Observed != 1 || ab.Sources[0].SourceMatched != 1 ||
+		ab.Sources[0].ObservedWithSubmitted != 1 {
+		t.Fatalf("per-source contradiction omitted or over-counted: %+v", ab.Sources)
+	}
+	if report.Directions[1].Status != "SIGNED_BOUNDED_RUN_NOT_CONNECTIVITY_PROOF" {
+		t.Fatalf("healthy reverse direction incorrectly downgraded: %+v", report.Directions[1])
+	}
+	rawCSV, err := os.Open(path + "-results.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawCSV.Close()
+	rows, err := csv.NewReader(rawCSV).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 || rows[0][11] != "ambiguous_observations" ||
+		rows[1][0] != "A_TO_B" || rows[1][7] != "1" || rows[1][11] != "1" ||
+		rows[2][0] != "B_TO_A" || rows[2][7] != "2" || rows[2][11] != "0" {
+		t.Fatalf("CSV failed to preserve exact source discrepancy: %+v", rows)
+	}
+	page, err := os.ReadFile(path + "-final.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(page), report.Status) ||
+		!strings.Contains(string(page), ab.Status) ||
+		!strings.Contains(string(page), run.Status) ||
+		!strings.Contains(string(page), "Ambiguous") ||
+		!strings.Contains(string(page), "10.88.0.17") ||
+		!strings.Contains(string(page), "10.91.0.1") {
+		t.Fatal("HTML concealed signed conflicting observation")
+	}
+	// The case report must be reproducible on byte-identical evidence.
+	if _, err := passiveCaseAnalyze(id, ca, dir, abPlan, abSender, abCapture, baPlan, baSender, baCapture); err != nil {
+		t.Fatalf("offline report on identical inputs changed: %v", err)
+	}
 }
