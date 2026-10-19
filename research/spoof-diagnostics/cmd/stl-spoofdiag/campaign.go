@@ -77,6 +77,7 @@ func campaignCLI(args []string) error {
 	forwarded := f.Bool("allow-forwarded-destination", false, "campaign receive: explicit B consent to previously configured DNAT")
 	iface := f.String("interface", "", "campaign send: explicitly authorized raw egress interface")
 	providerApproved := f.Bool("provider-authorized", false, "campaign send: operator acknowledgement, not independent provider permission")
+	controlReason := f.String("reason", "", "operator reason for local pause/resume/stop")
 	if err := f.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -93,6 +94,18 @@ func campaignCLI(args []string) error {
 		return errors.New("campaign --dir is required")
 	}
 	switch op {
+	case "status":
+		result, err := campaignControlStatus(*dir, *ca)
+		if err != nil {
+			return err
+		}
+		return pretty(result)
+	case "pause", "resume", "stop":
+		result, err := changeCampaignControl(*dir, op, *controlReason)
+		if err != nil {
+			return err
+		}
+		return pretty(result)
 	case "create":
 		if *file == "" || *destination == "" {
 			return errors.New("campaign create requires --file --dir --destination-ip")
@@ -519,6 +532,9 @@ func campaignNextLocked(dir, cert, key, ca string, retryExpired bool) (map[strin
 	if err != nil {
 		return nil, err
 	}
+	if err := requireCampaignActive(dir, m); err != nil {
+		return nil, err
+	}
 	for _, batch := range m.Batches {
 		attempt, path, err := latestCampaignAttempt(dir, batch.Number)
 		if err != nil {
@@ -766,6 +782,9 @@ func campaignSend(ctx context.Context, dir, cert, key, ca, iface string, provide
 func campaignSendLocked(ctx context.Context, dir, cert, key, ca, iface string, providerApproved bool) (map[string]any, error) {
 	m, err := readCampaign(dir)
 	if err != nil {
+		return nil, err
+	}
+	if err := requireCampaignActive(dir, m); err != nil {
 		return nil, err
 	}
 	if cert == "" || key == "" || ca == "" {

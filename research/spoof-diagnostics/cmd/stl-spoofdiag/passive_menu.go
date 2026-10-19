@@ -177,3 +177,94 @@ func menuPassiveFinalCase(reader *bufio.Reader) error {
 	}
 	return exchangeCLI(args)
 }
+
+func menuCampaignCheckpoint(reader *bufio.Reader, op string) error {
+	dir, err := menuAskNonempty(reader, "Existing local campaign directory")
+	if err != nil {
+		return err
+	}
+	if op == "status" {
+		ca, err := menuAsk(reader, "Optional trusted CA .crt to verify sender progress (blank=unverified)")
+		if err != nil {
+			return err
+		}
+		args := []string{"status", "--dir", dir}
+		if ca != "" {
+			args = append(args, "--ca", ca)
+		}
+		return campaignCLI(args)
+	}
+	reason := ""
+	if op == "pause" || op == "stop" {
+		reason, err = menuAskNonempty(reader, "Reason for the local campaign hold/stop")
+		if err != nil {
+			return err
+		}
+	}
+	if op == "stop" {
+		confirmation, err := menuAsk(reader, "Type STOP_CAMPAIGN; this permanently stops future progression of this Campaign")
+		if err != nil {
+			return err
+		}
+		if confirmation != "STOP_CAMPAIGN" {
+			return errors.New("terminal Campaign stop not selected")
+		}
+	}
+	args := []string{op, "--dir", dir}
+	if reason != "" {
+		args = append(args, "--reason", reason)
+	}
+	return campaignCLI(args)
+}
+
+func menuPassiveCampaignPreview(reader *bufio.Reader) error {
+	dir, err := menuAskNonempty(reader, "Local imported sender Campaign directory")
+	if err != nil {
+		return err
+	}
+	captures, err := menuAskNonempty(reader, "Existing private directory of signed receiver observations")
+	if err != nil {
+		return err
+	}
+	ca, err := menuAskNonempty(reader, "Trusted public CA certificate")
+	if err != nil {
+		return err
+	}
+	return exchangeCLI([]string{"preview-campaign", "--campaign-dir", dir,
+		"--captures-dir", captures, "--ca", ca})
+}
+
+func menuPassiveCampaignCase(reader *bufio.Reader) error {
+	id, err := menuAskNonempty(reader, "Operator-selected 32-hex Case ID")
+	if err != nil {
+		return err
+	}
+	ca, err := menuAskNonempty(reader, "Trusted public CA certificate")
+	if err != nil {
+		return err
+	}
+	reports, err := menuAskNonempty(reader, "Existing private absolute 0700 reports directory")
+	if err != nil {
+		return err
+	}
+	abCampaign, err := menuAskNonempty(reader, "Imported A_TO_B sender Campaign directory")
+	if err != nil {
+		return err
+	}
+	abCaptures, err := menuAskNonempty(reader, "B-signed A_TO_B receiver capture directory")
+	if err != nil {
+		return err
+	}
+	baCampaign, err := menuAskNonempty(reader, "Imported B_TO_A sender Campaign directory")
+	if err != nil {
+		return err
+	}
+	baCaptures, err := menuAskNonempty(reader, "A-signed B_TO_A receiver capture directory")
+	if err != nil {
+		return err
+	}
+	return exchangeCLI([]string{"analyze-campaign-passive", "--case-id", id,
+		"--ca", ca, "--reports", reports,
+		"--ab-campaign", abCampaign, "--ab-captures", abCaptures,
+		"--ba-campaign", baCampaign, "--ba-captures", baCaptures})
+}

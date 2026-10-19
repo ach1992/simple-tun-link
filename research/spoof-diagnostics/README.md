@@ -72,11 +72,16 @@ An offline `campaign prioritize` action can reorder **only B's existing
 authorized B_TO_A source list**, based on verifiable exact-IP overlap with
 A_TO_B observation evidence. There is no probabilistic guarantee.
 
-`exchange analyze-passive` currently supports **one signed Run per direction**
-and creates private JSON/CSV/HTML reports; aggregating whole multi-batch
-disconnected campaigns remains future work. The legacy raw sender still
-requires its signed receiver Grant, and **no autonomous unpaired raw public
-source-forgery mode has been added**. Read the
+`exchange analyze-passive` still supports **one signed Run per direction**.
+For multiple Batches and multiple signed passive receiver windows, use the
+**offline-only** `exchange preview-campaign` and
+`exchange analyze-campaign-passive` commands. They preserve incomplete
+source coverage, deduplicate imported capture snapshots, report signed
+observation discrepancies and export JSON/CSV/HTML. Local
+`campaign status|pause|resume|stop` operations allow bounded Campaign
+checkpoints and terminal stop without triggering traffic. The legacy raw
+sender **still requires a signed receiver Grant**, and no unpaired raw-source
+transmission or unattended spoofed-source Campaign execution was enabled. Read the
 [disconnected three-stage development guide](docs/DISCONNECTED-THREE-STAGE.md)
 and [Issue #139](https://github.com/ach1992/simple-tun-link/issues/139)
 for exact commands, provenance and outstanding end-to-end gates.

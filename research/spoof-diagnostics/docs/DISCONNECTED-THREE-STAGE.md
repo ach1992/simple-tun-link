@@ -108,7 +108,7 @@ For B→A, B becomes sender with a new independently authorized source
 set and Run ID while A passively listens with its own local options;
 neither requires a live B-to-A control channel. Stop after an authorized
 Batch, manually exchange available A receiver evidence, run a
-**provisional per-Run** correlation, and decide whether to authorize the
+**provisional per-Batch** correlation, and decide whether to authorize the
 next Batch. Existing Campaign operations start only one bounded Batch
 at a time; the new job manager does not create a continuous sender
 loop or replay potentially consumed runs. Untested IPs must remain
@@ -141,14 +141,101 @@ verified against supplied public CA; repeats are idempotent and conflicting
 pre-existing outputs are never overwritten. The Case ID is an
 **operator-assigned post-run label**, not proof that A and B negotiated.
 
-**Important remaining development limitation:** this detached passive
-capture is currently correlated one sender Run at a time, and
-`analyze-passive` covers **one Run per direction**. The prior v1 four-ZIP
-Campaign analyzer still requires strict Grant/Receipt records and cannot
-be substituted for a multi-batch disconnected passive Case. Multi-run
-passive aggregation, campaign coverage, and the remaining independent
-sender authorization contract must be implemented and tested before
-declaring the complete three-stage product workflow delivered.
+`analyze-passive` above remains available for one Run per direction.
+Multi-Batch disconnected analysis is provided separately below. The
+strict sender Grant/Ready requirement and actual field/systemd validation
+remain open; offline analyzer tests do not prove two-host connectivity.
+
+
+## Operator-controlled Batch checkpoints (no network effects)
+
+The local control commands `campaign status|pause|resume|stop` preserve a
+bounded Campaign's operating state. Pause stops **future** `campaign next`
+and `campaign send` operations at a Batch boundary, without modifying any
+already signed plan, recording synthetic transmissions or starting a network
+service. Resume is possible from PAUSED, but STOPPED_BY_OPERATOR is terminal.
+To stop a job *currently executing* a Batch, invoke the separate
+`job stop --unit ...`, then examine signed partial evidence.
+
+```sh
+stl-spoofdiag campaign status --dir /private/campaign
+stl-spoofdiag campaign pause --dir /private/campaign --reason "Review first batch"
+stl-spoofdiag campaign resume --dir /private/campaign
+stl-spoofdiag campaign stop --dir /private/campaign --reason "Operator stopped early"
+```
+
+An early stop does **not** establish an accepted network path. Remaining
+source IPs are reported as NOT_TESTED. Pausing does not authorize sending,
+bypass the existing strict Grant or Ready checks, or replay a consumed Run.
+
+## Stage 2 checkpoint analysis — multiple Runs and captures
+
+The operator manually collects the signed receiver `*.json` artifacts into
+an **existing 0700 private directory**. The corresponding sender Campaign
+directory contains its immutable Batch inventory and the available signed
+Run plans and local sender evidence. The receiver files can contain samples
+from several Runs, and multiple receiver windows are supported. The analysis
+tool does not initiate traffic or automatically move files between servers.
+
+```sh
+stl-spoofdiag exchange preview-campaign \
+  --campaign-dir /private/copied-sender-campaign \
+  --captures-dir /private/received-observation-json \
+  --ca /private/ca.crt
+```
+
+Output is expressly PROVISIONAL: it distinguishes locally reported send
+syscalls, valid signed receiver observations, duplicates, conflicts, missing
+sender evidence, unattempted candidates, and the per-Batch progress state.
+The signed Run/sample identity is authenticated after manual evidence
+transfer; filenames and untrusted packet metadata are never proof.
+
+## Stage 3 final report — all available Batches in both directions
+
+After **both** independent trials, manually copy A→B Campaign + B captures
+and B→A Campaign + A captures to A, B or a third offline analyzer. Then:
+
+```sh
+stl-spoofdiag exchange analyze-campaign-passive \
+  --case-id 0123456789abcdef0123456789abcdef \
+  --ca /private/ca.crt --reports /private/exchange/reports \
+  --ab-campaign /private/A-to-B-campaign \
+  --ab-captures /private/B-receiver-observations \
+  --ba-campaign /private/B-to-A-campaign \
+  --ba-captures /private/A-receiver-observations
+```
+
+The pre-existing report directory must be an absolute, private `0700`
+directory. It produces immutable `SDX-<case-id>-verified.json`,
+`SDX-<case-id>-results.csv`, and `SDX-<case-id>-final.html` artifacts.
+The outputs include all available signed Runs and Batch coverage as well
+as their evidence hashes. Files from a different direction or untrusted
+signer are rejected. Exact duplicate captures are not counted twice;
+monotonic earlier/later snapshots of one signed capture use the latest
+consistent observation set. Conflicting snapshots under one Capture ID
+are rejected. Contradictory actual-source claims for the same sample in
+different valid windows are reported as AMBIGUOUS, never an extra success.
+
+Per-direction capture input is limited to 128 signed JSON files; at most
+2,048 signed attempts are analyzed in one Campaign. The implementation
+indexes *untrusted* Run IDs in already validated capture files solely to
+avoid scanning unrelated observations. Sample authenticity must still
+pass sender signature checks. Input SHA-256 hashes and operator Campaign
+IDs are recorded; the Campaign manifest and Case ID are local/operator
+scope, not cryptographic proof that A and B negotiated anything.
+
+Re-running identical analysis is idempotent. If newer evidence changes the
+report contents, choose another Case ID or separate report directory rather
+than silently replacing historical results. All missing observations are
+INCONCLUSIVE. No same-flow return path, provider acceptance or viable
+tunnel is inferred from two independent one-way results.
+
+**Remaining implementation gates:** Default Raw IPv4 sending is still
+Grant/Ready-bound. The requested one-time Campaign authorization for
+independent Raw IPv4 transmission remains an unresolved security design
+decision and is not enabled by these offline tools. Actual SSH-logout
+durability, private-VM network behavior and independent review remain
+deferred or pending.
 
 ## Evidence meaning and operational safety
 

@@ -14,7 +14,7 @@ func menu() error {
 	reader := bufio.NewReaderSize(os.Stdin, 64*1024)
 	for {
 		menuHeader()
-		fmt.Fprint(os.Stdout, "Choose [0-33] (or q): ")
+		fmt.Fprint(os.Stdout, "Choose [0-39] (or q): ")
 		answer, err := menuRead(reader)
 		if errors.Is(err, io.EOF) {
 			return nil
@@ -82,8 +82,20 @@ func menu() error {
 			result = menuReversePrioritize(reader)
 		case "33":
 			result = menuPassiveFinalCase(reader)
+		case "34":
+			result = menuPassiveCampaignPreview(reader)
+		case "35":
+			result = menuPassiveCampaignCase(reader)
+		case "36":
+			result = menuCampaignCheckpoint(reader, "status")
+		case "37":
+			result = menuCampaignCheckpoint(reader, "pause")
+		case "38":
+			result = menuCampaignCheckpoint(reader, "resume")
+		case "39":
+			result = menuCampaignCheckpoint(reader, "stop")
 		default:
-			fmt.Fprintln(os.Stderr, "Unknown option; use 0..33")
+			fmt.Fprintln(os.Stderr, "Unknown option; use 0..39")
 		}
 		if result != nil {
 			fmt.Fprintln(os.Stderr, "Operation not completed:", result)
@@ -115,6 +127,9 @@ func menuHeader() {
 	fmt.Fprintln(os.Stdout, "29) Job status    30) Job logs    31) Stop finite job")
 	fmt.Fprintln(os.Stdout, "32) Sort B reverse source list using signed A evidence")
 	fmt.Fprintln(os.Stdout, "33) Offline final passive Case (one Run per direction)")
+	fmt.Fprintln(os.Stdout, "34) Provisional offline Campaign Batch evidence")
+	fmt.Fprintln(os.Stdout, "35) Final offline multi-Batch A/B Case report")
+	fmt.Fprintln(os.Stdout, "36) Campaign status  37) Pause  38) Resume  39) Stop permanently")
 	fmt.Fprintln(os.Stdout, " 0) Exit")
 	fmt.Fprintln(os.Stdout, "NOTE: Source match != provider permission != return-path proof.")
 	fmt.Fprintln(os.Stdout, "==============================================================")

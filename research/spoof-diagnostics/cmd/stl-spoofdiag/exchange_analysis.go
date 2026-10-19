@@ -29,7 +29,7 @@ func (l *exchangeInputList) Set(v string) error {
 
 func exchangeCLI(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: exchange init|sources|new-case|export|inspect|import|analyze|analyze-passive (all offline)")
+		return errors.New("usage: exchange init|sources|new-case|export|inspect|import|analyze|analyze-passive|preview-campaign|analyze-campaign-passive (all offline)")
 	}
 	op := args[0]
 	f := flag.NewFlagSet("exchange "+op, flag.ContinueOnError)
@@ -49,12 +49,40 @@ func exchangeCLI(args []string) error {
 	baPlan := f.String("ba-plan", "", "B_TO_A signed B challenge/plan")
 	baSender := f.String("ba-sender", "", "B_TO_A signed B sender evidence")
 	baCapture := f.String("ba-capture", "", "B_TO_A signed A passive observations")
+	capturesDir := f.String("captures-dir", "", "offline imported independent receiver captures directory, existing private 0700")
+	abCampaign := f.String("ab-campaign", "", "offline A_TO_B sender campaign directory")
+	abCaptures := f.String("ab-captures", "", "offline A_TO_B receiver-signed capture files directory")
+	baCampaign := f.String("ba-campaign", "", "offline B_TO_A sender campaign directory")
+	baCaptures := f.String("ba-captures", "", "offline B_TO_A receiver-signed capture files directory")
 	var paths exchangeInputList
 	f.Var(&paths, "file", "portable bundle path; repeat in any order (1..4 or more)")
 	if err := f.Parse(args[1:]); err != nil {
 		return err
 	}
 	switch op {
+	case "preview-campaign":
+		if *campaignDir == "" || *capturesDir == "" || *ca == "" {
+			return errors.New("preview-campaign requires --campaign-dir --captures-dir --ca")
+		}
+		result, err := passiveCampaignPreview(*campaignDir, *capturesDir, *ca)
+		if err != nil {
+			return err
+		}
+		return pretty(result)
+	case "analyze-campaign-passive":
+		if *reports == "" {
+			*reports = filepath.Join(*base, "reports")
+		}
+		if *id == "" || *ca == "" || *abCampaign == "" || *abCaptures == "" || *baCampaign == "" || *baCaptures == "" {
+			return errors.New("analyze-campaign-passive requires --case-id --ca --ab-campaign --ab-captures --ba-campaign --ba-captures")
+		}
+		result, err := passiveCampaignCase(*id, *ca, *reports, *abCampaign, *abCaptures, *baCampaign, *baCaptures)
+		if err != nil {
+			return err
+		}
+		return pretty(map[string]any{"status": result.Status, "case_id": result.CaseID,
+			"batches": len(result.PassiveBatchCoverage), "reports": *reports, "network_calls": "NONE",
+			"return_path": "NOT_TESTED"})
 	case "analyze-passive":
 		if *reports == "" {
 			*reports = filepath.Join(*base, "reports")
@@ -334,6 +362,8 @@ type exchangeSourceResult struct {
 	Observed                 int    `json:"receiver_authenticated_observations"`
 	SourceMatched            int    `json:"source_matched"`
 	SourceRewritten          int    `json:"source_rewritten"`
+	NotTested                int    `json:"not_tested_samples,omitempty"`
+	Ambiguous                int    `json:"ambiguous_observations,omitempty"`
 }
 
 type exchangeDirectionReport struct {
@@ -364,6 +394,8 @@ type exchangeRunResult struct {
 	Submitted                int                    `json:"submitted_syscalls"`
 	Observed                 int                    `json:"peer_observed_samples"`
 	ObservedWithoutSubmitted int                    `json:"observed_without_submitted_syscall"`
+	DuplicateObservations    int                    `json:"duplicate_signed_observations,omitempty"`
+	ConflictingObservations  int                    `json:"conflicting_signed_observations,omitempty"`
 	Samples                  []exchangeSampleResult `json:"samples"`
 }
 
@@ -374,6 +406,7 @@ type exchangeCaseReport struct {
 	Status                string                    `json:"status"`
 	Inputs                []exchangeProvenance      `json:"inputs"`
 	PassiveInputFiles     []passiveInputFile        `json:"passive_input_files,omitempty"`
+	PassiveBatchCoverage  []passiveBatchCoverage    `json:"passive_batch_coverage,omitempty"`
 	MissingSlots          []string                  `json:"missing_slots"`
 	Conflicts             []string                  `json:"conflicts"`
 	Rejected              []string                  `json:"rejected_inputs"`
@@ -712,14 +745,14 @@ func exchangeSaveReports(dir string, report exchangeCaseReport) error {
 	var csvBuf bytes.Buffer
 	writer := csv.NewWriter(&csvBuf)
 	if err := writer.Write([]string{"direction", "campaign_id", "source_ip", "planned", "submitted_syscalls",
-		"attempted_unknown", "failed_syscalls", "receiver_observed", "source_matched", "source_rewritten"}); err != nil {
+		"attempted_unknown", "failed_syscalls", "receiver_observed", "source_matched", "source_rewritten", "not_tested_samples", "ambiguous_observations"}); err != nil {
 		return err
 	}
 	for _, d := range report.Directions {
 		for _, s := range d.Sources {
 			row := []string{s.Direction, s.CampaignID, s.SourceIP, fmt.Sprint(s.Planned), fmt.Sprint(s.Submitted),
 				fmt.Sprint(s.AttemptedUnknown), fmt.Sprint(s.Failed), fmt.Sprint(s.Observed),
-				fmt.Sprint(s.SourceMatched), fmt.Sprint(s.SourceRewritten)}
+				fmt.Sprint(s.SourceMatched), fmt.Sprint(s.SourceRewritten), fmt.Sprint(s.NotTested), fmt.Sprint(s.Ambiguous)}
 			for i := range row {
 				row[i] = exchangeSanitizeCSV(row[i])
 			}
@@ -740,15 +773,19 @@ table{border-collapse:collapse;width:100%}td,th{border:1px solid #aaa;padding:.3
 small{color:#555}th{background:#eef}code{overflow-wrap:anywhere}</style></head>
 <body><h1>Offline signed evidence: <code>{{.CaseID}}</code></h1><p><strong>{{.Status}}</strong></p>
 <p>Packet receipt is not proof of physical egress, provider permission, return path or a private L3 tunnel.</p>
-<h2>Four authenticated roles</h2><table><tr><th>Slot</th><th>ZIP SHA-256</th><th>Campaign</th></tr>
+<h2>Collected evidence roles</h2><table><tr><th>Slot</th><th>SHA-256 (if available)</th><th>Campaign</th></tr>
 {{range .Inputs}}<tr><td>{{.Slot}}</td><td><code>{{.SHA256}}</code></td><td>{{.CampaignID}}</td></tr>{{end}}</table>
+{{if .PassiveInputFiles}}<h2>Input SHA-256 evidence manifest</h2><table><tr><th>Direction</th><th>Artifact kind</th><th>SHA-256</th></tr>
+{{range .PassiveInputFiles}}<tr><td>{{.Slot}}</td><td>{{.Kind}}</td><td><code>{{.SHA256}}</code></td></tr>{{end}}</table>{{end}}
 <h2>Missing slots</h2><p>{{range .MissingSlots}}{{.}}; {{else}}None{{end}}</p>
 <h2>Conflicts / rejected</h2><p>{{range .Conflicts}}{{.}}; {{end}}{{range .Rejected}}{{.}}; {{end}}</p>
 {{range .Directions}}<h2>{{.Direction}} — {{.Status}}</h2>
-<table><tr><th>Source IP</th><th>Planned</th><th>Submitted syscall</th><th>Authenticated peer observed</th><th>Exact source</th></tr>
-{{range .Sources}}<tr><td>{{.SourceIP}}</td><td>{{.Planned}}</td><td>{{.Submitted}}</td><td>{{.Observed}}</td><td>{{.SourceMatched}}</td></tr>{{end}}</table>{{end}}
+<table><tr><th>Source IP</th><th>Planned</th><th>Submitted syscall</th><th>Authenticated peer observed</th><th>Exact source</th><th>Not tested</th><th>Ambiguous</th></tr>
+{{range .Sources}}<tr><td>{{.SourceIP}}</td><td>{{.Planned}}</td><td>{{.Submitted}}</td><td>{{.Observed}}</td><td>{{.SourceMatched}}</td><td>{{.NotTested}}</td><td>{{.Ambiguous}}</td></tr>{{end}}</table>{{end}}
+{{if .PassiveBatchCoverage}}<h2>Batch coverage and checkpoints</h2><table><tr><th>Direction</th><th>Batch</th><th>Attempts</th><th>Observed</th><th>Not tested</th><th>Duplicate</th><th>Ambiguous</th><th>State</th></tr>
+{{range .PassiveBatchCoverage}}<tr><td>{{.Direction}}</td><td>{{.Batch}}</td><td>{{.Attempts}}</td><td>{{.Observed}}</td><td>{{.NotTested}}</td><td>{{.Duplicate}}</td><td>{{.Ambiguous}}</td><td>{{.State}}</td></tr>{{end}}</table>{{end}}
 <h2>Evidence limits</h2><ul>{{range .Limitations}}<li>{{.}}</li>{{end}}</ul>
-<small>This report is reproducible from the four immutable signed bundles and the trusted CA public certificate.</small>
+<small>Offline report from operator-provided evidence and the supplied public trust anchor; unsigned campaign scope and missing artifacts are not authenticated.</small>
 </body></html>`
 	page := template.Must(template.New("case").Parse(htmlBody))
 	var html bytes.Buffer
