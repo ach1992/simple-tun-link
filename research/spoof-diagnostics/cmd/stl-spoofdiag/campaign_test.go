@@ -625,3 +625,77 @@ func TestCampaignNextSerializesConcurrentMutations(t *testing.T) {
 		t.Fatal("concurrent campaign action created a partial run")
 	}
 }
+
+// Offline cryptographic negative controls for the new B post-bind readiness
+// artifact. It is never coupled to an actual listener or socket in these tests.
+func TestSignedReceiverReadinessRejectsTamperingExpiryAndWrongSigner(t *testing.T) {
+	ids, ca := testCampaignIdentity(t)
+	sources := testCandidateInventory(t, 1, "")
+	ch, err := newFieldChallenge(fieldOptions{File: sources,
+		Cert: filepath.Join(ids, "A.crt"), Key: filepath.Join(ids, "A.key"), CA: ca,
+		Sender: "A", Receiver: "B", DestinationIP: "10.99.0.2", DataPort: 24572,
+		Transport: "field_udp_bound", PacketSize: 192, TTLSeconds: 600, Epoch: "unit"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	chPath := filepath.Join(t.TempDir(), "challenge.json")
+	if err := saveNewJSON(chPath, ch); err != nil {
+		t.Fatal(err)
+	}
+	grant, err := newFieldGrantWithDestinationOwnership(fieldOptions{
+		File: sources, Challenge: chPath, Cert: filepath.Join(ids, "B.crt"),
+		Key: filepath.Join(ids, "B.key"), CA: ca, Sender: "A", Receiver: "B",
+	}, func(string) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := loadFieldCredential(filepath.Join(ids, "B.crt"), filepath.Join(ids, "B.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready, err := newSignedFieldReady(ch.Challenge, grant.Grant, ch.Challenge.DestinationIP,
+		time.Now().Add(90*time.Second), b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	save := func(label string, obj signedFieldReady) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), label+".json")
+		if err := saveNewJSON(path, obj); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	valid := save("ready", ready)
+	if _, err := verifySignedFieldReady(valid, ch.Challenge, grant, ca, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	tampered := ready
+	tampered.Ready.BindIP = "10.99.0.123"
+	if _, err := verifySignedFieldReady(save("tamper", tampered), ch.Challenge, grant, ca, time.Now()); err == nil {
+		t.Fatal("modified receiver bind accepted without signature")
+	}
+	expired := ready
+	expired.Ready.ExpiresUnix = time.Now().Add(-time.Second).Unix()
+	pem, sig, err := signatureFromCredential(expired.Ready, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired.ReceiverCertificatePEM, expired.SignatureHex = pem, sig
+	if _, err := verifySignedFieldReady(save("expired", expired), ch.Challenge, grant, ca, time.Now()); err == nil {
+		t.Fatal("expired but properly signed receiver readiness accepted")
+	}
+	a, err := loadFieldCredential(filepath.Join(ids, "A.crt"), filepath.Join(ids, "A.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrong := ready
+	pem, sig, err = signatureFromCredential(wrong.Ready, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrong.ReceiverCertificatePEM, wrong.SignatureHex = pem, sig
+	if _, err := verifySignedFieldReady(save("wrong", wrong), ch.Challenge, grant, ca, time.Now()); err == nil {
+		t.Fatal("sender-signed artifact impersonated receiver readiness")
+	}
+}
