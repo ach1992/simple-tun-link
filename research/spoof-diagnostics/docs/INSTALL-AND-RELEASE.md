@@ -27,8 +27,9 @@ bash -o pipefail -c 'curl -fsSL --proto "=https" https://raw.githubusercontent.c
 
 The command takes no version or SHA from the operator. Its current behavior
 depends on the live `dev-spoof` channel, not when this README was built. It fetches
-[`release-channel.txt`](https://github.com/ach1992/simple-tun-link/blob/dev-spoof/research/spoof-diagnostics/release-channel.txt) over GitHub HTTPS, which
-presently contains only:
+[`release-channel.txt`](https://github.com/ach1992/simple-tun-link/blob/dev-spoof/research/spoof-diagnostics/release-channel.txt) over GitHub HTTPS. Check that live file for the
+currently selected release. **Before a release is published**, the channel
+has exactly one line:
 
 ```text
 status=unpublished
