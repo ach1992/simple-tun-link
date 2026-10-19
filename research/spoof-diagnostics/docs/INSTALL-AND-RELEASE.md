@@ -1,148 +1,237 @@
-# Independent installer, offline package and release contract
+# Standalone Spoof Diagnostics — installation and release reference
 
-**Partially implemented contract.** A buildable standalone offline Go archive and a verifying/idempotent install script exist for local release-candidate testing; owned-path/symlink negative controls were exercised in disposable test roots. **No public tool release or validated online one-liner exists.** Upgrade, rollback and uninstall were exercised both in disposable roots and on two isolated Debian 12 guests, including foreign-file refusal, private-state retention and user-accessible launcher verification. A simulated aborted staging directory was safely recovered and concurrent installer attempts were serialized on the same destination; unknown staging content was preserved and refused. Independent publisher signature verification, actual power-loss/disk-full recovery and broader guest coverage remain acceptance gaps; do not mistake current install smoke for full lifecycle acceptance.
+**Scope:** `research/spoof-diagnostics/` on the permanent
+[`dev-spoof`](https://github.com/ach1992/simple-tun-link/tree/dev-spoof)
+branch. This tool has **no automatic merge to STL `main`** and no dependency
+on STL's installer, `v*` tags or stable release/update workflow.
 
-## Permanent tool branch and release identity
+**Publication status:** `spoofdiag-v0.1.0-rc.1` was assembled as a
+**GitHub Draft**, not a published Release. Its binary archives are review
+candidates, not a valid public installation endpoint. Independent exact-head
+review, provenance/acceptance and Owner release approval remain necessary.
 
-`dev-spoof` is the persistent independent SpoofDiag development branch.
-SpoofDiag topic branches and pull requests **target `dev-spoof`**. They
-must not target or automatically integrate into STL `main`; `dev-spoof`
-must not be deleted as a routine branch cleanup. STL releases (`v*`)
-remain exclusively owned by the normal STL main branch process.
+For non-developers, the canonical step-by-step instructions are the
+[tool-local README](../README.md). This document owns the exact command,
+download, artifact, directory and publisher-channel contracts.
 
-For an approved release candidate, from a clean current `dev-spoof`
-checkout, with a new, tool-only prefixed tag:
+## 1. Versionless online installation
+
+**Public command, only after the channel says `status=published`:**
 
 ```sh
-bash scripts/prepare-release.sh spoofdiag-vX.Y.Z-rc.N /existing/parent/new-release-dir
+bash -o pipefail -c 'curl -fsSL --proto "=https" https://raw.githubusercontent.com/ach1992/simple-tun-link/dev-spoof/research/spoof-diagnostics/scripts/install-latest.sh | sudo bash -s -- --accept'
 ```
 
-This generates exactly these standalone release assets:
+The command takes no version or SHA from the operator. It fetches
+[`release-channel.txt`](https://github.com/ach1992/simple-tun-link/blob/dev-spoof/research/spoof-diagnostics/release-channel.txt) over GitHub HTTPS, which
+presently contains only:
+
+```text
+status=unpublished
+```
+
+In that state the command **fails closed** with
+`NO_PUBLIC_SPOOFDIAG_RELEASE` without any archive install, and it must
+not fall back to the STL version at `releases/latest`. This is an
+intended pre-publication result, not a defective one-liner.
+
+Once a tool-specific prerelease is independently approved, published and
+its immutable asset hashes reconciled, a subsequent **separately reviewed
+PR targeting `dev-spoof`** updates the five-line channel to:
+
+```text
+status=published
+version=spoofdiag-vX.Y.Z-rc.N
+linux_amd64_sha256=<64 lowercase hex characters>
+linux_arm64_sha256=<64 lowercase hex characters>
+bootstrap_sha256=<64 lowercase hex characters>
+```
+
+These are a **schema illustration, not valid published values**. Values
+must come from the final release asset bytes and the exact
+`scripts/online-bootstrap.sh` version at the channel commit. Do not
+use the content of an unreviewed Draft, guessed SHA, a local snapshot or
+the STL tag series. The updated channel must have exactly five keys in
+this order; unknown, duplicated, missing or malformed fields are
+rejected. The channel records one selected **approved SpoofDiag**
+version, not a public-IP scanning procedure.
+
+### What actually runs
+
+1. `scripts/install-latest.sh` obtains the exact channel, selects
+   Linux AMD64 or ARM64 and independently compares the downloaded
+   pinned bootstrap bytes to the channel's bootstrap SHA256.
+2. The existing `scripts/online-bootstrap.sh` requests an **exact
+   `spoofdiag-v*` tag** from
+   `https://github.com/ach1992/simple-tun-link/releases/download/<tag>/`.
+   It never uses `releases/latest`, `main`, or an ambiguous `latest`
+   version.
+3. The bootstrap downloads only the matching
+   `<tag>_linux_<arch>.tar.gz` archive, compares it to the channel's
+   expected SHA256, checks the archive's exact member list and types,
+   verifies the *bundle's* product/build identity fields and internal
+   checksums, and delegates installation to the same
+   `install-offline.sh` engine used offline.
+4. After validation, the verified archive is retained under
+   `/root/stl-spoofdiag/` for offline re-use, while the installed program
+   goes under `/opt/stl-spoofdiag/`.
+5. Installation only changes tool-owned executable resources, and never
+   downloads Go/Python, starts a listener or edits STL network state.
+
+The one-line command uses HTTPS and the GitHub publisher-controlled
+branch as its initial **code trust root**. Checksums from that same
+publisher provide integrity and source consistency, **not independent
+publisher-signature attestation**. Users should inspect or
+independently authenticate the bootstrap source before running it as
+root; public distribution additionally requires the separately
+recorded project provenance review.
+
+### Exact-version advanced command
+
+Users who have an **independently trusted archive SHA256** may bypass
+channel selection and invoke the reviewed version-pinned engine from
+the checked-out tool directory (or a separately authenticated copy
+of `online-bootstrap.sh`):
+
+```sh
+sudo bash scripts/online-bootstrap.sh \
+  --version spoofdiag-vX.Y.Z-rc.N \
+  --sha256 INDEPENDENTLY_VERIFIED_64_HEX_ARCHIVE_SHA256 \
+  --install
+```
+
+This is deliberately the **advanced option**, not the ordinary
+installation instruction. The source code, version and checksum are
+placeholders until a corresponding artifact is actually published.
+
+The online downloader additionally accepts `--verify-only`, `--accept`
+and `--inbox /existing/private/path`. `--destdir /existing/test-root`
+and `--local-url http://127.0.0.1:PORT` are developer/test-only;
+the local HTTP case is restricted to a `dev-*` test archive and requires
+an explicit private `--inbox`. No production HTTP downgrade.
+
+## 2. Offline installation with no server Internet
+
+The **operator-facing numbered procedure and commands** are in the
+[README's offline installation section](../README.md#install-offline--beginner-friendly-instructions).
+It explains how to:
+
+1. Identify your architecture with `uname -m`;
+2. Download the matching tool-specific release `.tar.gz` and
+   `.tar.gz.sha256` files to a trusted personal computer;
+3. Upload both via SSH/SFTP and copy them into
+   `/root/stl-spoofdiag/` with private permissions;
+4. Check the archive's SHA256, review its member list and extract into
+   a new private `extracted-<archive-name>/stl-spoofdiag/` directory;
+5. Run the **included** installer with `--verify` and `--install`;
+6. Run `stl-spoofdiag version`, `preflight` and `menu`.
+
+For example, after unpacking an independently authenticated archive:
+
+```sh
+bash /root/stl-spoofdiag/extracted-<archive-name>/stl-spoofdiag/install-offline.sh --verify
+bash /root/stl-spoofdiag/extracted-<archive-name>/stl-spoofdiag/install-offline.sh --install
+```
+
+Here `<archive-name>` is derived from the exact extracted archive
+name, **not** a literal filename or a directory the installer creates
+automatically. The README's `EXTRACT_DIR` variable makes this explicit.
+
+An offline host needs Bash, `tar`, `sha256sum`, `flock` from util-linux,
+standard file utilities, a compatible Linux kernel and the correct
+prebuilt AMD64/ARM64 binary. **No `apt`, Go, Python, `pip`, Docker,
+DNS, `curl` or `wget` is required for offline installation.**
+
+### Directory ownership
+
+| Location | Contents |
+| --- | --- |
+| `/root/stl-spoofdiag/` | Private download/archive inbox, operator-extracted packages |
+| `/opt/stl-spoofdiag/releases/<version>/` | Installed executable, exact build manifest and checksums |
+| `/opt/stl-spoofdiag/current` | Version-selecting symlink |
+| `/usr/local/bin/stl-spoofdiag` | Launcher symlink |
+| `/etc/stl-spoofdiag/` | Reserved private operator config (preserved) |
+| `/var/lib/stl-spoofdiag/` | Reserved private evidence/receipts (preserved) |
+
+A filename under `/root` is **not** an executable installation path.
+The canonical offline installer rejects unknown files, symlinks and
+foreign-owned paths; no STL binaries, Links, systemd units, routes,
+firewalls, sysctls, or stable-branch artifacts are touched. The
+downloaded archive is *retained* for optional future offline recovery.
+
+## 3. Upgrade, rollback, uninstall
+
+- **Upgrade:** obtain a newer verified archive, extract to a **new**
+  directory and execute its included `install-offline.sh --verify`
+  followed by `--install`. Older verified versions remain stored.
+- **Rollback:** with a locally verified extracted installer, run
+  `bash install-offline.sh --rollback --to EXACT_STORED_VERSION`
+  and confirm `YES`. Only installed versions whose manifests and
+  binary checksums verify can be selected.
+- **Uninstall:** with a locally verified extracted installer, run
+  `bash install-offline.sh --uninstall`, confirm `YES`.
+  It removes **only tool-owned binaries and links**; data in
+  `/etc/stl-spoofdiag/` and `/var/lib/stl-spoofdiag/` remains.
+- `--accept` is an explicit non-interactive confirmation primarily
+  for automation; otherwise the installer asks for `YES`.
+- A per-destination `flock` prevents concurrent state switches,
+  complete version directories are switched atomically, and only
+  strictly verified tool-owned interrupted stages are recoverable.
+  Actual VM power-loss, full-disk and read-only filesystem acceptance
+  remains outstanding; never delete foreign material to force recovery.
+
+The installed executable includes `version`, `preflight`,
+`menu`, `sources`, `plan`, `report` and `lab` commands;
+`reports` and `diagnostics` are **not** additional verbs. The
+menu and the CLI invoke the same Go engine.
+
+## 4. Developer and maintainer release procedure
+
+**Persistent branch:** `dev-spoof`; all new tool PRs must target this
+branch. Its deletion is blocked by the repository branch ruleset.
+STL's development and normal releases continue separately on `main`.
+
+**Release namespace:** `spoofdiag-vX.Y.Z`, with
+`spoofdiag-vX.Y.Z-rc.N` for experimental release candidates.
+A release must originate from an **exact reviewed SHA** in the
+`dev-spoof` lineage, not the default `main` HEAD or an unrelated
+STL tag. During this research period, publish only as GitHub
+**Pre-release**, never as the stable `latest` release.
+
+On a clean checkout of the accepted source, from the **tool root**:
+
+```sh
+bash scripts/prepare-release.sh spoofdiag-vX.Y.Z-rc.N /existing/parent/fresh-tool-release-dir
+```
+
+This script prepares, checksums, and retains exactly seven **tool-only**
+asset files. It does not create tags, Releases, or deployments:
 
 ```text
 spoofdiag-vX.Y.Z-rc.N_linux_amd64.tar.gz
 spoofdiag-vX.Y.Z-rc.N_linux_amd64.tar.gz.sha256
 spoofdiag-vX.Y.Z-rc.N_linux_arm64.tar.gz
 spoofdiag-vX.Y.Z-rc.N_linux_arm64.tar.gz.sha256
-online-bootstrap.sh
 SHA256SUMS
 RELEASE-SOURCE.txt
+online-bootstrap.sh
 ```
 
-**Important naming:** the official `spoofdiag-v*` tag is already the
-filename prefix. The build and online bootstrap must **not** generate
-`spoofdiag-spoofdiag-v*` double prefixes. Development snapshots named
-`dev-*` retain the historical `spoofdiag-dev-*` filenames.
+The tag `spoofdiag-v*` is **already the archive filename prefix**;
+never generate `spoofdiag-spoofdiag-v*`. Unreleased `dev-*`
+snapshots instead carry filenames like `spoofdiag-dev-ci_linux_amd64.tar.gz`.
 
-Release source MUST resolve to a specific commit on `dev-spoof`, not
-automatically to STL `main`. Prepare the exact files and obtain a fresh
-independent review before creating a publicly visible GitHub **Pre-release**,
-verify checksum and provenance, and explicitly mark `prerelease: true`
-so it cannot displace the stable STL `releases/latest`. Do not invent
-remote artifacts or automatically publish from a branch push. The tool
-build script never creates tags, Release objects or deployments.
-A release tag remains immutable after publication; later changes use a
-new tool-specific version.
+Before any public publication, reconcile the exact commit and asset
+SHA256 identities, successful exact-source CI and independent
+author-separated review, verify the release acceptance evidence, and
+obtain the required Owner delivery authorization. A release created as
+**Draft** is not a public tagged download, and does **not** make the
+channel `status=published`. After a version is actually published,
+update the channel through a separate reviewed, verified PR; never
+point it at nonexistent, Draft, superseded or unauthorized assets.
 
-## 1. Download/storage location on each authorized server
-
-The operator explicitly wants to upload/download the **entire release archive** into root's home directory (not the filesystem `/`):
-
-```text
-/root/stl-spoofdiag/
-  spoofdiag-vX.Y.Z_linux_amd64.tar.gz    # downloaded/uploaded bytes
-  SHA256SUMS                              # if distributed alongside archive
-```
-
-Keep this as a **staging/inbox** directory. Do not unzip arbitrary untrusted archives into `/` or `/root`. Do not assume `/root` itself is the executable installation location.
-
-The installer may install only its own files:
-
-```text
-/opt/stl-spoofdiag/releases/<exact-version>/  # binaries+version metadata, tool-owned
-/opt/stl-spoofdiag/current                   # exact currently accepted version
-/usr/local/bin/stl-spoofdiag                  # managed launch alias only if unowned
-/etc/stl-spoofdiag/                          # operator-owned private config, 0700
-/var/lib/stl-spoofdiag/                      # operator evidence and reports, 0700
-```
-
-Installation paths are defaults, not a reason to overwrite a foreign file, symlink or service. Config and private keys **survive** executable upgrades; they are NEVER embedded in public assets. No `stl` binary, Link state, STL installer, systemd unit, default route, iptables, nftables, sysctl or ownership record may be touched.
-
-## 2. No Internet during installation or operation
-
-Target deliverable: one per-architecture **self-contained archive** `spoofdiag-vX.Y.Z_linux_<arch>.tar.gz` containing:
-
-- `stl-spoofdiag` statically linked Linux executable (Go, `CGO_ENABLED=0`, stdlib-only dependencies where possible).
-- `install-offline.sh` — canonical audited installer; `--verify`, `--install`, `--rollback --to VERSION`, `--uninstall`, `--accept` and optional `--destdir ROOT` as implemented. There is no `--prefix`, `--update`, or private-state purge flag.
-- `BUILD-MANIFEST.txt` with exact product, version, Git commit, arch, Go version and built artifact identity.
-- `SHA256SUMS`, source `LICENSE`, tool `README.md`, architecture/operations information and example *non-secret* configuration.
-- Optional detached signature/attestation artifact with independently provisioned trusted verification identity; a SHA file served by the same account is not an independent authenticity proof.
-
-The installer must require **zero** `apt`, `pip`, `curl`, `wget`, Go toolchain or DNS. On supported Debian/Ubuntu Linux, `bash` (not merely `/bin/sh`), `tar`, `sha256sum`, `flock` from standard util-linux, core file/permissions utilities and a compatible kernel are explicit local baseline prerequisites; fail with an actionable message when missing. The Go compiler, Python, package manager and DNS are NOT install-time prerequisites. Build/download prerequisites are **CI-side**, not host-side. No external repository/package setup is allowed.
-
-## 3. Online installation uses the SAME offline engine
-
-Current prototype: `scripts/online-bootstrap.sh` takes a **pinned exact** prefixed tag and an independently authenticated archive digest, downloads with HTTPS, rejects unknown archive members, and invokes the offline installer. The local `--local-url http://127.0.0.1:PORT` test route cannot be used with a published release tag and does not permit external HTTP. Verified in a temporary test-root with local HTTP: correct archive verified/installed twice; digest mismatch, invalid URL/version and network failure rejected. **No public tagged tool release, independently signed manifest, or trustworthy one-line command is presently published.** Do not advertise a working `releases/latest` alias for the standalone diagnostic.
-
-## 3a. One-line online installation (version-pinned CLI, after publication)
-
-From a checked-out version of this tool, after the dedicated release and its
-archive digest have been authenticated, the online installer is a one-command
-interface:
-
-```sh
-sudo bash scripts/online-bootstrap.sh --version spoofdiag-vX.Y.Z --sha256 INDEPENDENTLY_VERIFIED_64_HEX_ARCHIVE_SHA256 --install
-```
-
-The placeholders are not real release coordinates, and this is **not**
-currently a working remote-public installation. A future remote one-liner
-must fetch an immutable, independently authenticated bootstrap script or
-equivalent trusted release asset before invoking this same installer.
-The regular STL stable tag and `releases/latest` are never substituted.
-
-### Requirements for public remote one-liner
-
-Future online bootstrap, only after the tool's first validated release:
-
-1. Fetch an **explicitly selected immutable `spoofdiag-v*` tag** or a trusted manifest resolver that never conflates STL `v*` tags with tool tags.
-2. Download the exact archive and its independent verification materials to `/root/stl-spoofdiag/`, using HTTPS with bounded timeouts and no shell execution of an unverified response.
-3. Verify product/tag/arch checksums and expected identity; refuse mismatches.
-4. Invoke the **same** `install-offline.sh` shipped within the verified archive.
-
-The GitHub repository has one `releases/latest` pointer. Tool releases must use **separate prefixed tags**, should remain prereleases during research and must explicitly avoid taking over STL's `latest` designation. A human-facing "install latest spoofdiag" command must resolve only the **tool's** vetted version series, never blindly use `releases/latest`.
-
-No one-liner is promised or offered as executable until exact published assets/verification have been validated. A command that downloads an arbitrary `main` shell script and immediately runs it as root is not acceptable.
-
-## 4. Offline operator sequence (after validated bundle is available)
-
-```sh
-# Copy the official complete archive from a trusted computer to the authorized host:
-sudo mkdir -p /root/stl-spoofdiag
-sudo chmod 700 /root/stl-spoofdiag
-# Example uploaded path:
-# /root/stl-spoofdiag/spoofdiag-vX.Y.Z_linux_amd64.tar.gz
-# Verify trusted release identity BEFORE unpacking/installing.
-# Extract ONLY into a new tool-specific temporary staging subdir,
-# verify manifest+checksum+archive paths, then run install-offline.sh --verify.
-# Run install-offline.sh --install only after reviewing the exact plan.
-```
-
-Don't invent a bare install command tied to a nonexistent published release. Once scripts exist, this page must include exact verified commands with no placeholders except the user-chosen existing archive name.
-
-The installed executable offers `version`, `menu`, `preflight`,
-`plan`, `sources`, `report` and `lab`. A general field transport
-is not implemented; `reports`/`diagnostics` are not separate CLI verbs. The interactive menu is a presentation layer over the same engine as CLI and versioned JSON machine output.
-
-## 5. Upgrade, rollback, uninstall
-
-- Offline archive remains in `/root/stl-spoofdiag/`; an update stages a new complete version and switches tool-owned executable identity **only after** all integrity and compatible schema checks pass.
-- Previously installed versions remain in an explicitly tool-owned release directory. `--rollback --to EXACT_STORED_VERSION` verifies that stored executable's checksum and manifest before atomically switching `current`; it does not fetch packages. `--uninstall` preflights every recognized file and refuses foreign artifacts, then removes only verified tool binary/link assets and retains private state.
-- Refuse foreign/unverifiable installation resources and incomplete ownership metadata. Stop only **tool-owned** short-lived sessions; never kill arbitrary named processes.
-- Protect config/private material as explicit operator-owned state. Current `--uninstall` always retains `/etc/stl-spoofdiag` and `/var/lib/stl-spoofdiag`; deleting them is a separate deliberate manual operator action, not an automated purge.
-- No automatic updates, cron jobs, persistent listeners or unattended field tests by default. Repeat install/update/remove on disposable guests and verify recovery after injected failures.
-
-## 6. Release procedure and acceptance
-
-Build separately for linux/amd64 and linux/arm64; reproducible source/manifest + strict archive contents allowlist and test asset checksum. Install artifacts on fresh supported offline VM, run menu/preflight, exercise bounded *private-only* two/three-VM kernel lab, negative permission and packet-capture evidence, report export/import, update/rollback/uninstall, verify unchanged STL and host network.
-
-Release workflow is **independent** of `scripts/build-artifacts.sh` and `scripts/install.sh` for STL; do not edit the canonical embedded Go/installer byte-identity pair. Publication/merge require the independent review, exact accepted source SHA, CI and Owner release gate. Until then, `LOCAL_CANDIDATE_ONLY` / `NOT_RELEASED`.
+GitHub has **one** `releases/latest` endpoint for the repository.
+SpoofDiag uses only its prefixed immutable tag series and an explicit
+channel pointer. The stable STL `releases/latest` entry and ordinary
+STL installer are never redirected. Future integration with STL is a
+**separate Owner-controlled architecture and review decision**.

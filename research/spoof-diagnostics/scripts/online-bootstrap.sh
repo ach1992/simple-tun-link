@@ -7,11 +7,11 @@ umask 077
 export LC_ALL=C
 fail(){ printf 'spoofdiag online bootstrap: %s\n' "$*" >&2; exit 1; }
 usage(){
-  echo 'Usage: online-bootstrap.sh --version spoofdiag-vX.Y.Z --sha256 EXPECTED_ARCHIVE_DIGEST [--verify-only|--install] [--accept] [--destdir CANONICAL_ROOT]' >&2
-  echo 'Test-only: --local-url http://127.0.0.1:PORT --version dev-NAME' >&2
+  echo 'Usage: online-bootstrap.sh --version spoofdiag-vX.Y.Z --sha256 EXPECTED_ARCHIVE_DIGEST [--verify-only|--install] [--accept] [--inbox PRIVATE_DIRECTORY]' >&2
+  echo 'Developer-only: --local-url http://127.0.0.1:PORT --version dev-NAME --inbox PRIVATE_DIRECTORY [--destdir TEST_ROOT]' >&2
   exit 2
 }
-version='' expected='' operation=install accept=0 destdir='' localURL=''
+version='' expected='' operation=install accept=0 destdir='' localURL='' inbox=''
 while (($#)); do
   case "$1" in
     --version) shift; (($#)) || usage; version=$1 ;;
@@ -21,6 +21,7 @@ while (($#)); do
     --accept) accept=1 ;;
     --destdir) shift; (($#)) || usage; destdir=$1 ;;
     --local-url) shift; (($#)) || usage; localURL=$1 ;;
+    --inbox) shift; (($#)) || usage; inbox=$1 ;;
     *) usage ;;
   esac
   shift
@@ -39,7 +40,7 @@ fi
 if [[ -n $destdir ]]; then
   [[ $destdir == /* && -d $destdir && ! -L $destdir ]] || fail '--destdir must be an existing absolute nonsymlink root'
 fi
-for tool in curl tar sha256sum uname mktemp grep bash sort; do
+for tool in curl tar sha256sum uname mktemp grep bash sort stat ln; do
   command -v "$tool" >/dev/null || fail "missing prerequisite: $tool (online transport only)"
 done
 case "$(uname -m)" in
@@ -56,7 +57,25 @@ fi
 if [[ -n $localURL ]]; then origin=$localURL; else
   origin="https://github.com/ach1992/simple-tun-link/releases/download/$version"
 fi
-scratch=$(mktemp -d "${TMPDIR:-/tmp}/.spoofdiag-online.XXXXXXXX") || fail 'cannot allocate private staging'
+# The operator's download inbox is distinct from the installed versioned
+# binary. Never use host /root accidentally when testing --destdir.
+if [[ -z $inbox ]]; then
+  [[ -z $destdir ]] || fail '--destdir requires explicit --inbox test directory'
+  inbox=/root/stl-spoofdiag
+  if [[ ! -e $inbox && ! -L $inbox ]]; then
+    [[ -d /root && ! -L /root ]] || fail 'unsafe root home directory'
+    mkdir -m 0700 -- "$inbox" || fail 'cannot create private root download inbox'
+  fi
+fi
+[[ $inbox == /* && $inbox != */../* && $inbox != */./* && $inbox != */.. && $inbox != */. ]] ||
+  fail '--inbox must be a canonical absolute directory'
+[[ -d $inbox && ! -L $inbox && $(cd -P -- "$inbox" && pwd -P) == "$inbox" ]] ||
+  fail 'inbox must be an existing, canonical, nonsymlink directory'
+[[ $(stat -c %u -- "$inbox") == "$(id -u)" ]] || fail 'inbox owned by a different user'
+inbox_perms=$(stat -c %a -- "$inbox")
+[[ $inbox_perms == 700 ]] || fail 'inbox must be private mode 0700'
+scratch=$(mktemp -d "$inbox/.spoofdiag-online.XXXXXXXX") ||
+  fail 'cannot allocate private staging inside the download inbox'
 on_exit(){ if [[ -d $scratch && ! -L $scratch ]]; then rm -rf -- "$scratch"; fi; }
 trap on_exit EXIT
 archivePath="$scratch/$archive"
@@ -87,6 +106,20 @@ bundle="$scratch/unpack/stl-spoofdiag"
 [[ -f "$bundle/install-offline.sh" && ! -L "$bundle/install-offline.sh" ]] || fail 'unsafe installer member'
 bash -n "$bundle/install-offline.sh" || fail 'invalid installer shell syntax'
 bash "$bundle/install-offline.sh" --verify || fail 'offline package identity/checksum verification failed'
+# Keep a verified, architecture-specific archive in the operator's inbox
+# without overwriting unknown files or following a symlink. Since scratch
+# lives under inbox this exclusive hard link is atomic on the same filesystem.
+stored="$inbox/$archive"
+if [[ -e $stored || -L $stored ]]; then
+  [[ -f $stored && ! -L $stored && $(stat -c %u -- "$stored") == "$(id -u)" ]] ||
+    fail 'foreign/nonregular archive already occupies the download path'
+  stored_digest=$(sha256sum "$stored")
+  [[ ${stored_digest%% *} == "$expected" ]] ||
+    fail 'existing inbox archive differs; refusing overwrite'
+else
+  ln -- "$archivePath" "$stored" || fail 'could not retain the verified archive safely'
+fi
+printf 'Verified archive retained at %s\n' "$stored"
 if [[ $operation == verify ]]; then
   printf 'VERIFIED_ONLY: archive SHA256=%s, version=%s, linux/%s; no install performed\n' "$actual" "$version" "$arch"
   exit 0

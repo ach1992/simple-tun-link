@@ -1,6 +1,6 @@
 # Source-IP Diagnostics — standalone architecture (Owner-approved direction)
 
-Status: **architecture contract / development target**, NOT evidence that the functionality or a release has been delivered. Controlling research owner: [Issue #125](https://github.com/ach1992/simple-tun-link/issues/125). Existing implementation candidate: [DRAFT PR #130](https://github.com/ach1992/simple-tun-link/pull/130).
+Status: **architecture contract / development target**, NOT evidence that the functionality or a release has been delivered. Controlling research owner: [Issue #125](https://github.com/ach1992/simple-tun-link/issues/125). Development line: [permanent `dev-spoof` branch](https://github.com/ach1992/simple-tun-link/tree/dev-spoof); the former PR #130 targeting STL `main` was superseded and closed without merge.
 
 ## 1. Independence from STL
 

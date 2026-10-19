@@ -12,9 +12,15 @@ cleanup(){
   if [[ -d $dir && ! -L $dir ]]; then rm -rf -- "$dir"; fi
 }
 trap cleanup EXIT
-mkdir "$dir/root"
+mkdir "$dir/root" "$dir/channel-root"
+mkdir -m 0700 "$dir/inbox" "$dir/channel-inbox"
 bash "$here/scripts/package-offline.sh" "$dir/pkg" "$sha" dev-ci-online amd64 >/dev/null
 archive="$dir/pkg/spoofdiag-dev-ci-online_linux_amd64.tar.gz"
+# Build the matching other-platform asset for an exact two-arch channel.
+bash "$here/scripts/package-offline.sh" "$dir/pkg-arm64" "$sha" dev-ci-online arm64 >/dev/null
+cp "$dir/pkg-arm64/spoofdiag-dev-ci-online_linux_arm64.tar.gz" "$dir/pkg/"
+arm64_digest=$(sha256sum "$dir/pkg/spoofdiag-dev-ci-online_linux_arm64.tar.gz")
+arm64_digest=${arm64_digest%% *}
 # Official prefixed release tags must NOT accidentally double the prefix;
 # the online downloader derives this exact same basename.
 bash "$here/scripts/package-offline.sh" "$dir/release-pkg" "$sha" spoofdiag-v0.1.0-rc.1 amd64 > /dev/null
@@ -42,6 +48,18 @@ if bash "$bundle/install-offline.sh" --verify > "$dir/tampered-doc.log" 2>&1; th
   exit 1
 fi
 grep -Fq 'bundle checksum verification failed' "$dir/tampered-doc.log"
+# A fixed HTTPS publisher channel will be unpublished until a reviewed
+# release exists. Use an explicit local-test channel only on loopback.
+bootstrap_digest=$(sha256sum "$here/scripts/online-bootstrap.sh")
+bootstrap_digest=${bootstrap_digest%% *}
+cp "$here/scripts/online-bootstrap.sh" "$dir/pkg/online-bootstrap.sh"
+cat > "$dir/pkg/release-channel.txt" <<CHANNEL
+status=local-test
+version=dev-ci-online
+linux_amd64_sha256=$expected
+linux_arm64_sha256=$arm64_digest
+bootstrap_sha256=$bootstrap_digest
+CHANNEL
 # No Python on the development/test runner either: compile a temporary
 # loopback-only Go stdlib file server; it is never added to a release bundle.
 GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local CGO_ENABLED=0 \
@@ -61,24 +79,75 @@ for _ in $(seq 1 50); do
   sleep .1
 done
 bootstrap="$here/scripts/online-bootstrap.sh"
-bash "$bootstrap" --local-url "http://127.0.0.1:$port" --version dev-ci-online --sha256 "$expected" --verify-only >"$dir/verify.log"
+bash "$bootstrap" --local-url "http://127.0.0.1:$port" --version dev-ci-online --sha256 "$expected" --inbox "$dir/inbox" --verify-only >"$dir/verify.log"
 test ! -e "$dir/root/opt/stl-spoofdiag"
-bash "$bootstrap" --local-url "http://127.0.0.1:$port" --version dev-ci-online --sha256 "$expected" --install --accept --destdir "$dir/root" >"$dir/install.log"
+bash "$bootstrap" --local-url "http://127.0.0.1:$port" --version dev-ci-online --sha256 "$expected" --inbox "$dir/inbox" --install --accept --destdir "$dir/root" >"$dir/install.log"
 "$dir/root/usr/local/bin/stl-spoofdiag" version | grep -Fq 'dev-ci-online'
-bash "$bootstrap" --local-url "http://127.0.0.1:$port" --version dev-ci-online --sha256 "$expected" --install --accept --destdir "$dir/root" >"$dir/reinstall.log"
-if bash "$bootstrap" --local-url "http://127.0.0.1:$port" --version dev-ci-online --sha256 "$(printf 'f%.0s' {1..64})" --install --accept --destdir "$dir/root" >"$dir/badsha.log" 2>&1; then
+bash "$bootstrap" --local-url "http://127.0.0.1:$port" --version dev-ci-online --sha256 "$expected" --inbox "$dir/inbox" --install --accept --destdir "$dir/root" >"$dir/reinstall.log"
+if bash "$bootstrap" --local-url "http://127.0.0.1:$port" --version dev-ci-online --sha256 "$(printf 'f%.0s' {1..64})" --inbox "$dir/inbox" --install --accept --destdir "$dir/root" >"$dir/badsha.log" 2>&1; then
   echo 'ERROR: wrong SHA accepted' >&2; exit 1
 fi
 grep -Fq 'SHA256 mismatch' "$dir/badsha.log"
-if bash "$bootstrap" --local-url http://localhost:9999 --version dev-ci-online --sha256 "$expected" --verify-only >"$dir/badurl.log" 2>&1; then
+if bash "$bootstrap" --local-url http://localhost:9999 --version dev-ci-online --sha256 "$expected" --inbox "$dir/inbox" --verify-only >"$dir/badurl.log" 2>&1; then
   echo 'ERROR: noncanonical local URL accepted' >&2; exit 1
 fi
-if bash "$bootstrap" --version latest --sha256 "$expected" --verify-only >"$dir/latest.log" 2>&1; then
+if bash "$bootstrap" --version latest --sha256 "$expected" --inbox "$dir/inbox" --verify-only >"$dir/latest.log" 2>&1; then
   echo 'ERROR: ambiguous latest accepted' >&2; exit 1
 fi
-if bash "$bootstrap" --local-url http://127.0.0.1:55555 --version dev-ci-online --sha256 "$expected" --verify-only >"$dir/down.log" 2>&1; then
+if bash "$bootstrap" --local-url http://127.0.0.1:55555 --version dev-ci-online --sha256 "$expected" --inbox "$dir/inbox" --verify-only >"$dir/down.log" 2>&1; then
   echo 'ERROR: unavailable download accepted' >&2; exit 1
 fi
 grep -Fq 'download failed' "$dir/down.log"
 test -L "$dir/root/usr/local/bin/stl-spoofdiag"
-printf 'LOCAL_ONLINE_BOOTSTRAP_POSITIVE_NEGATIVE=PASS\n'
+test -f "$dir/inbox/spoofdiag-dev-ci-online_linux_amd64.tar.gz"
+test "$(stat -c %a "$dir/inbox")" = 700
+test ! -e "$dir/inbox/.spoofdiag-online"  # no fixed leftover temp directory
+
+# New version-agnostic public-entrypoint logic exercised using a local
+# test-owned HTTP fixture; this is NOT a live HTTPS/publisher-signature test.
+latest="$here/scripts/install-latest.sh"
+bash "$latest" --local-url "http://127.0.0.1:$port" --destdir "$dir/channel-root" --inbox "$dir/channel-inbox" --verify-only >"$dir/channel-verify.log"
+test ! -e "$dir/channel-root/opt/stl-spoofdiag"
+bash "$latest" --local-url "http://127.0.0.1:$port" --destdir "$dir/channel-root" --inbox "$dir/channel-inbox" --accept >"$dir/channel-install.log"
+"$dir/channel-root/usr/local/bin/stl-spoofdiag" version | grep -Fq 'dev-ci-online'
+test -f "$dir/channel-inbox/spoofdiag-dev-ci-online_linux_amd64.tar.gz"
+# The approved channel is also idempotent.
+bash "$latest" --local-url "http://127.0.0.1:$port" --destdir "$dir/channel-root" --inbox "$dir/channel-inbox" --accept >"$dir/channel-reinstall.log"
+
+cp "$dir/pkg/release-channel.txt" "$dir/good-channel.txt"
+printf '%s\n' 'status=unpublished' >"$dir/pkg/release-channel.txt"
+if bash "$latest" --local-url "http://127.0.0.1:$port" --destdir "$dir/channel-root" --inbox "$dir/channel-inbox" --accept >"$dir/no-release.log" 2>&1; then
+  echo 'ERROR: unpublished channel performed installation' >&2; exit 1
+fi
+grep -Fq NO_PUBLIC_SPOOFDIAG_RELEASE "$dir/no-release.log"
+cp "$dir/good-channel.txt" "$dir/pkg/release-channel.txt"
+sed -i 's/^version=dev-ci-online$/version=v0.1.7/' "$dir/pkg/release-channel.txt"
+if bash "$latest" --local-url "http://127.0.0.1:$port" --destdir "$dir/channel-root" --inbox "$dir/channel-inbox" --accept >"$dir/stl-tag.log" 2>&1; then
+  echo 'ERROR: STL tag was accepted in tool channel' >&2; exit 1
+fi
+cp "$dir/good-channel.txt" "$dir/pkg/release-channel.txt"
+sed -i 's/^bootstrap_sha256=/bootstrap_sha256=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff #/' "$dir/pkg/release-channel.txt"
+if bash "$latest" --local-url "http://127.0.0.1:$port" --destdir "$dir/channel-root" --inbox "$dir/channel-inbox" --accept >"$dir/bad-bootstrap.log" 2>&1; then
+  echo 'ERROR: corrupt channel bootstrap digest was accepted' >&2; exit 1
+fi
+cp "$dir/good-channel.txt" "$dir/pkg/release-channel.txt"
+sed -i 's/^linux_amd64_sha256=/linux_amd64_sha256=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff #/' "$dir/pkg/release-channel.txt"
+if bash "$latest" --local-url "http://127.0.0.1:$port" --destdir "$dir/channel-root" --inbox "$dir/channel-inbox" --accept >"$dir/bad-channel.log" 2>&1; then
+  echo 'ERROR: malformed channel hash was accepted' >&2; exit 1
+fi
+cp "$dir/good-channel.txt" "$dir/pkg/release-channel.txt"
+# Explicit wrong-but-wellformed selected archive digest must fail *before*
+# any tool installation mutation.
+sed -i 's/^linux_amd64_sha256=.*/linux_amd64_sha256=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/' "$dir/pkg/release-channel.txt"
+if bash "$latest" --local-url "http://127.0.0.1:$port" --destdir "$dir/channel-root" --inbox "$dir/channel-inbox" --accept >"$dir/wrong-channel-sha.log" 2>&1; then
+  echo 'ERROR: valid-format wrong archive checksum was accepted' >&2; exit 1
+fi
+grep -Fq 'SHA256 mismatch' "$dir/wrong-channel-sha.log"
+cp "$dir/good-channel.txt" "$dir/pkg/release-channel.txt"
+
+# Path confusion and symlink inbox must be rejected before any download.
+ln -s "$dir/channel-inbox" "$dir/alias-inbox"
+if bash "$latest" --local-url "http://127.0.0.1:$port" --destdir "$dir/channel-root" --inbox "$dir/alias-inbox" --accept >"$dir/inbox-symlink.log" 2>&1; then
+  echo 'ERROR: symlinked private download inbox was accepted' >&2; exit 1
+fi
+printf 'LOCAL_ONLINE_BOOTSTRAP_AND_GENERIC_CHANNEL_POSITIVE_NEGATIVE=PASS\n'

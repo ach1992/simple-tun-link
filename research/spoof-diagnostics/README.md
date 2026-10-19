@@ -1,143 +1,65 @@
-# STL Spoof Diagnostics
+# Spoof Diagnostics — standalone Go tool
 
-**A standalone Linux network diagnostic, implemented in Go.** It lives in this
-repository for development convenience, but has its **own binary, menu,
-installation scripts, configuration, and release lifecycle**. Installing or
-removing this tool does not install, update, or modify Simple Tun Link (STL).
+**A separate Linux diagnostic inside the Simple Tun Link GitHub repository.**
+Spoof Diagnostics has its own executable, interactive menu, installation
+scripts, documentation, saved configuration and release series. **It is not
+STL:** installing it does not install, upgrade, configure or run STL.
 
-## What it does
+- **Product source and documentation:** `research/spoof-diagnostics/`
+- **Permanent development branch:** [`dev-spoof`](https://github.com/ach1992/simple-tun-link/tree/dev-spoof)
+- **Future standalone downloads:** [GitHub Releases](https://github.com/ach1992/simple-tun-link/releases), **only tags beginning with `spoofdiag-v`**
+- **STL's separate branch:** `main`; Spoof Diagnostics changes and PRs target `dev-spoof` and must not be merged into `main` without a new Owner decision
 
-The tool records a finite list of exact IPv4 source candidates separately for
-each direction (A→B / B→A), creates a test plan, and distinguishes these
-independent stages:
+## What the tool does
 
-1. **Configured:** a candidate is listed; no packet has been sent.
-2. **Submitted:** a local sender attempted a sample; admission is still unknown.
-3. **Peer observed:** a separate receiver authenticated and signed what it saw.
-4. **Return path / private L3:** separate observations are required. Receiving
-   a sample does not prove that applications can communicate bidirectionally.
+It lets you list exact IPv4 source-address candidates for two separate
+directions (A→B and B→A), create an **offline plan** without transmitting
+anything, run local authenticated diagnostics, and verify receiver-signed
+evidence. Its results carefully separate *packet submitted*, *observed by
+receiver*, *return path observed* and *usable private L3*; one stage does
+not prove the next.
 
-The prototype includes signed challenge/receipt files, local TLS 1.3 mutual
-authentication and UDP tests, offline report verification, and an experimental
-raw IPv4 laboratory adapter. **The currently executable raw adapter is
-restricted to detached, private-address network namespaces. It does not
-operate as a general public-network source-spoofing tool.** Real two-host
-provider compatibility, return paths, and end-to-end L3 have not been tested
-or established.
+**Current limits:** TLS/UDP peer tests run locally on loopback. Its raw IPv4
+sender runs only inside a separately isolated, private RFC1918 Linux network
+namespace; it is **not** a ready-to-use public-WAN source-spoofing tool.
+Recording a public IP in an offline plan does **not** send a packet. Real
+provider compatibility, return routing and usable private L3 are unverified.
+See the [test evidence and outstanding checks](docs/VALIDATION-MATRIX.md).
 
-No server permissions, provider behavior, usable source addresses, or route
-availability can be inferred from a successful installation or a saved plan.
+## Install online — one general command (no version number)
 
-## Current delivery status
-
-| Component | Status |
-| --- | --- |
-| Go CLI, interactive menu, source inventory, local test and signed evidence | Implemented |
-| Offline archives for Linux **amd64** and **arm64**, without Go/Python on the target | CI-built development artifacts |
-| Reinstall, upgrade, verified rollback, uninstall, preserve private data | Implemented; additional failure-injection tests pending |
-| Online downloader invoking the same offline installer | Implemented and locally tested with a test artifact server |
-| Dedicated public, immutable, authenticated tool Release | **Not published** |
-| Public IP selection for an **offline plan** | Implemented; no traffic |
-| General Internet/public-IP raw sending or real-server operation | **Not implemented or validated** |
-| Two actual isolated Debian 12 VMs, earlier signed raw private-lab receipts | Partially verified; unresolved capture discrepancy |
-
-The `dev-spoof` branch is a development line, not automatically a public release.
-See the exact
-[validation matrix](docs/VALIDATION-MATRIX.md) and
-[lab evidence](docs/LOCAL-LAB-ACCEPTANCE.md) for the distinction between
-PASS, PARTIAL, NOT_RUN and blocked tests.
-
-## Independent GitHub development and release line
-
-**SpoofDiag lives on the permanent [`dev-spoof`](https://github.com/ach1992/simple-tun-link/tree/dev-spoof) branch.**
-The repository's `main` branch, default GitHub branch, stable STL
-installer, Links and STL version tags are **unchanged**. Do not merge
-`dev-spoof` into `main` or delete `dev-spoof` without a new explicit Owner
-decision.
-
-Future SpoofDiag changes use a short-lived topic branch, open a PR with
-**base `dev-spoof`** (not `main`), pass the dedicated tool CI and an
-independent exact-diff review, then integrate the approved change into
-`dev-spoof`. STL development proceeds independently on `main`. A later
-Owner-approved STL integration would be a **separate reviewed PR**; it is not
-triggered by a SpoofDiag Release or branch update.
-
-Tool-only Releases are tagged `spoofdiag-vX.Y.Z` (including
-`spoofdiag-vX.Y.Z-rc.N` while experimental) from the **exact commit on
-`dev-spoof`**, and must remain GitHub **Pre-releases** during this research
-period. Do not use STL's `v*` namespace, overwrite STL assets or publish a
-normal release that could replace STL's shared `releases/latest`. GitHub has
-**one** Releases page for this repository; use the tag prefix to select the
-correct product.
-
-The checked-in `scripts/prepare-release.sh` assembles signed-source-identity
-metadata plus checksum-verified **SpoofDiag-only** AMD64/ARM64 archives and
-the standalone downloader for review. It never publishes or deploys. A
-publicly downloadable prerelease remains gated by exact-head CI, independent
-review, package provenance verification and Owner-approved delivery.
-
-### Debian and Ubuntu compatibility
-
-| System | Intended baseline | Direct evidence |
-| --- | --- | --- |
-| Debian 11+ (AMD64/ARM64) | Standalone Linux binary, Bash/standard core tools + `flock` | Debian **12 AMD64** tested on two booted KVM guests; other versions and ARM64 guest operation not yet established |
-| Ubuntu 22.04+ (AMD64/ARM64) | Same static Go binary and installer prerequisites | GitHub Ubuntu Linux CI passed (runner OS is not equivalent to independent booted Ubuntu guests); separate distro VM matrix pending |
-
-These are **package compatibility targets, not a guarantee that all kernels,
-distributions, network namespaces or physical hosts permit every operation**.
-The private raw namespace adapter additionally requires Linux kernel raw
-socket/netns facilities and an isolated private environment. No public WAN
-source-spoof transport or provider compatibility has been established.
-For the **separate STL product**, its documented platform floor is
-Ubuntu 22.04+, Debian 11+, Linux kernel 5.4+ and iproute2 5.1+;
-its actual GRE/WireGuard/IPsec support is checked per host.
-
-## Install — self-contained, no Go or Python on the destination
-
-The **download/inbox directory** is `/root/stl-spoofdiag/`, while the executable
-is installed separately under `/opt/stl-spoofdiag/` with a launcher at
-`/usr/local/bin/stl-spoofdiag`. Your private configuration and receipts live
-outside the versioned binary and survive an executable update or uninstall.
-The installer never downloads compilers, pip packages, or STL packages.
-
-### One-line online install (after the first dedicated release)
-
-Once a **dedicated `spoofdiag-vX.Y.Z` Release** and its independently trusted
-archive SHA256 have been published, the operator command, **from this tool's
-source directory**, is one line:
+When the Spoof Diagnostics channel has its **first reviewed, published**
+release, run this one command on the Debian/Ubuntu server:
 
 ```sh
-sudo bash scripts/online-bootstrap.sh --version spoofdiag-vX.Y.Z --sha256 INDEPENDENTLY_VERIFIED_64_HEX_ARCHIVE_SHA256 --install
+bash -o pipefail -c 'curl -fsSL --proto "=https" https://raw.githubusercontent.com/ach1992/simple-tun-link/dev-spoof/research/spoof-diagnostics/scripts/install-latest.sh | sudo bash -s -- --accept'
 ```
 
-The script selects Linux amd64/arm64, downloads the exact architecture's
-archive over HTTPS, checks its supplied trusted SHA256 and members, then invokes
-the same offline installer. It does **not** use the repository's
-`releases/latest` (which belongs to STL), download Go/Python, or download
-unverified scripts from `main`.
+**The command never needs a tag or SHA256 copied into it.** The small channel
+file at `release-channel.txt` selects only the latest *approved and
+published Spoof Diagnostics version*. The installer obtains the versioned
+bootstrap and both artifact checksums from this separate channel, verifies
+the downloaded bootstrap and the correct AMD64/ARM64 archive, and invokes
+the same verified offline installer. It does **not** follow GitHub's
+`releases/latest` (that belongs to STL) or download Go, Python or STL.
 
-**This is the implemented one-command interface, not a currently functioning
-public download link:** the required tool-specific Release and trusted digest
-are not yet available. Do not substitute the STL release tag or invent an
-archive hash. The bootstrap can be exercised in a disposable local test root;
-see [installation and release details](docs/INSTALL-AND-RELEASE.md).
+**Publication status:** the first Spoof Diagnostics release candidate is
+currently a **GitHub Draft**, not a public download, and the channel is
+`status=unpublished`. Until it is independently reviewed and published,
+the command intentionally stops with
+`NO_PUBLIC_SPOOFDIAG_RELEASE` **without installing anything**. Do not
+substitute STL's release or an arbitrary development artifact.
 
-### Offline install (works with a verified current development archive)
-
-Copy a complete architecture-matching, independently verified snapshot archive
-to `/root/stl-spoofdiag/`, and extract it in that private directory. Inside it
-is a directory named `stl-spoofdiag/` containing the executable, its checksums,
-manifest, and canonical offline installer. Then **one command** verifies
-the complete bundle and installs it after an interactive confirmation:
-
-```sh
-sudo bash /root/stl-spoofdiag/stl-spoofdiag/install-offline.sh --verify && sudo bash /root/stl-spoofdiag/stl-spoofdiag/install-offline.sh --install
-```
-
-The exact extraction and manifest-integrity checks are described in
-[INSTALL-AND-RELEASE.md](docs/INSTALL-AND-RELEASE.md). An archive checksum
-provided by the same download source is not, by itself, independent proof of
-publisher identity.
+The command downloads executable script code over HTTPS from the
+publisher-controlled `dev-spoof` branch: **only run it if you trust that
+branch and its maintainers**. GitHub HTTPS plus a checksum supplied by
+the same publisher are *not* independent publisher-signature verification.
+For inspection before execution, open
+[install-latest.sh](https://github.com/ach1992/simple-tun-link/blob/dev-spoof/research/spoof-diagnostics/scripts/install-latest.sh),
+[online-bootstrap.sh](https://github.com/ach1992/simple-tun-link/blob/dev-spoof/research/spoof-diagnostics/scripts/online-bootstrap.sh) and
+[the release channel](https://github.com/ach1992/simple-tun-link/blob/dev-spoof/research/spoof-diagnostics/release-channel.txt). Exact manual
+version-and-digest pinning remains available in the
+[technical installation reference](docs/INSTALL-AND-RELEASE.md).
 
 After installation:
 
@@ -147,34 +69,147 @@ stl-spoofdiag preflight
 stl-spoofdiag menu
 ```
 
-Target baseline: compatible Linux amd64/arm64 with Bash, tar, sha256sum,
-standard file utilities and `flock`. **No Go toolchain, Python interpreter,
-Internet access, package manager or containers are needed for offline use.**
+The online installer retains the **verified downloaded archive** in
+`/root/stl-spoofdiag/`. Installation itself goes under
+`/opt/stl-spoofdiag/`, with the command at
+`/usr/local/bin/stl-spoofdiag`. It does not start background services.
 
-## Interactive menu
+## Install offline — beginner-friendly instructions
 
-Run `stl-spoofdiag menu`. It displays product/build identity, environment,
-current capabilities, and the following actions; a failed action returns to
-the menu rather than terminating the session:
+You can install without **any Internet connection on the server** and
+without Python, Go, Docker or a package manager on the destination.
+You need a matching `spoofdiag-v*_linux_*.tar.gz` archive and its
+`.tar.gz.sha256` checksum file from the **same reviewed Spoof Diagnostics
+release**, downloaded on a trusted computer when available.
 
-- Inspect version and local prerequisites.
-- List, add, import, remove, and replace exact source candidates.
-- Validate an offline candidate plan; review declared evidence.
-- Generate disposable identities for local tests (private keys remain local).
-- Create and verify signed challenge/receipt files.
-- Start a loopback receiver and sender, including the signed offline path.
-- Verify a local TLS receiver's signed receipt; see contextual help and exit.
-- Access guarded raw IPv4 private-namespace test actions through an advanced submenu.
+### Step 1 — choose the right archive
 
-The menu does not automatically alter routes, firewalls or STL services.
-For automation, use the equivalent CLI commands and JSON; do not parse terminal
-menus. A raw private-namespace test remains an explicitly selected advanced
-operation with the same underlying CLI validation, never an unattended default.
+On the server, type:
 
-## Plan candidate addresses without sending traffic
+```sh
+uname -m
+```
 
-`sources`, `plan`, and `report` do not send packets. For the currently
-supported **private laboratory** inventory:
+- `x86_64` → choose the archive ending in `_linux_amd64.tar.gz`.
+- `aarch64` → choose the archive ending in `_linux_arm64.tar.gz`.
+
+On your computer, open the [Releases page](https://github.com/ach1992/simple-tun-link/releases).
+**Select a published `spoofdiag-v*` release, never an STL `v*`
+release.** Download **both** the correct `.tar.gz` file and the
+correspondingly named `.tar.gz.sha256` file.
+
+For example, release `spoofdiag-vX.Y.Z-rc.N` on AMD64 has these
+two filenames (the X/Y/Z/N letters are **placeholders**, not a live version):
+
+```text
+spoofdiag-vX.Y.Z-rc.N_linux_amd64.tar.gz
+spoofdiag-vX.Y.Z-rc.N_linux_amd64.tar.gz.sha256
+```
+
+Check the archive's expected SHA256 against a trusted, independently
+obtained release identity or signature. **The `.sha256` file next to an
+archive only detects a mismatch; it is not independent proof of who
+published the archive.** A draft is not a download-ready release.
+
+### Step 2 — transfer the two files
+
+Using SFTP/WinSCP or `scp`, upload those **two files** to your normal
+account's home directory on the server (for example `/home/youruser/`).
+Log in over SSH as that same account.
+
+Replace the example filename below with the **actual file you downloaded**,
+then run:
+
+```sh
+ARCHIVE='spoofdiag-vX.Y.Z-rc.N_linux_amd64.tar.gz'
+sudo install -d -m 700 /root/stl-spoofdiag
+sudo install -m 600 "$HOME/$ARCHIVE" "/root/stl-spoofdiag/$ARCHIVE"
+sudo install -m 600 "$HOME/$ARCHIVE.sha256" "/root/stl-spoofdiag/$ARCHIVE.sha256"
+```
+
+For ARM64, change only `amd64` to `arm64` in `ARCHIVE`.
+This copies the files into the private root-owned download folder;
+it does not extract them into the system directories.
+
+### Step 3 — verify, unpack and install
+
+Enter a root shell, switch to the download folder, and select the exact
+same filename again:
+
+```sh
+sudo -i
+cd /root/stl-spoofdiag
+ARCHIVE='spoofdiag-vX.Y.Z-rc.N_linux_amd64.tar.gz'
+sha256sum --check "$ARCHIVE.sha256"
+```
+
+**Do not continue unless the check prints `OK`.** First inspect the
+archive's file listing; it should contain only files inside a single
+`stl-spoofdiag/` directory:
+
+```sh
+tar -tzf "$ARCHIVE"
+```
+
+Create a **new, version-specific private extraction directory**.
+Do not unpack into `/`, `/opt` or directly on top of another version:
+
+```sh
+EXTRACT_DIR="extracted-${ARCHIVE%.tar.gz}"
+mkdir -m 700 "$EXTRACT_DIR"
+tar -xzf "$ARCHIVE" -C "$EXTRACT_DIR" --no-same-owner --no-same-permissions
+bash "$EXTRACT_DIR/stl-spoofdiag/install-offline.sh" --verify
+bash "$EXTRACT_DIR/stl-spoofdiag/install-offline.sh" --install
+```
+
+The installer will ask you to type `YES` to confirm. It checks the
+manifest, archive-contained checksums, architecture and existing file
+ownership before changing the installation. If any check fails, stop;
+**do not force the install or delete unfamiliar files**.
+
+Finally:
+
+```sh
+stl-spoofdiag version
+stl-spoofdiag preflight
+stl-spoofdiag menu
+exit
+```
+
+`exit` leaves the root shell. The interactive menu is now ready.
+**For later versions**, repeat these steps with the new archive; the
+installer preserves previously stored verified releases for rollback.
+
+### Where everything goes
+
+| Path | Purpose |
+| --- | --- |
+| `/root/stl-spoofdiag/` | Private archive/download inbox and your manually extracted package |
+| `/opt/stl-spoofdiag/releases/<version>/` | Installed versioned binaries and build metadata |
+| `/opt/stl-spoofdiag/current` | Pointer to the selected verified version |
+| `/usr/local/bin/stl-spoofdiag` | Command to launch the executable |
+| `/etc/stl-spoofdiag/` | Private operator configuration, if created |
+| `/var/lib/stl-spoofdiag/` | Private evidence/receipts, if created |
+
+The installed executable doesn't need the downloaded archive to remain in
+the inbox, but keeping the verified archive is convenient for recovery.
+Uninstalling the program **does not delete** private configuration or
+saved evidence. Offline prerequisites are Bash, `tar`, `sha256sum`,
+`flock` (util-linux), standard Linux file utilities, and the matching
+AMD64/ARM64 architecture.
+
+For verified rollback and tool-only uninstall, consult
+[INSTALL-AND-RELEASE.md](docs/INSTALL-AND-RELEASE.md).
+
+## Interactive menu and offline planning
+
+Run `stl-spoofdiag menu` to see 15 choices. The menu includes build
+information, prerequisite checks, managing exact source candidates,
+validating plans, signed challenges/receipts, disposable local test
+credentials, local TLS/UDP peers and an advanced **private namespace**
+laboratory option. Invalid input returns to the menu.
+
+To create a direction-specific **private offline plan**, for example:
 
 ```sh
 stl-spoofdiag sources add --file ./sources.json --mode private_lab --ip 10.91.1.77 --direction A_TO_B --sender A --receiver B
@@ -182,23 +217,34 @@ stl-spoofdiag sources list --file ./sources.json
 stl-spoofdiag plan --file ./sources.json
 ```
 
-For **offline public-address planning only**, `sources add --mode
-approved_field_plan` accepts a real, operator-entered, globally routable exact
-IPv4 (not a reserved example or private address), with direction and peer
-identities. This does **not** enable sending to/from that address. Empty plans,
-duplicates, malformed addresses and role inconsistencies are rejected.
-CSV input defaults to `private_lab`; use JSON when saving a field plan.
+The `approved_field_plan` mode accepts eligible globally routable IPv4
+candidates **as offline records only**; it does not activate public sending.
+The separate `report` command evaluates declared evidence and labels
+that declaration `UNVERIFIED_INPUT_DECLARATION`; cryptographic receipt
+verification uses `lab verify` or `lab offline-verify` instead.
 
-## Documentation and maintenance
+## Debian / Ubuntu compatibility
 
-- [Go reference: existing laboratory commands and signed receipts](docs/GO-REFERENCE.md)
-- [Architecture and safeguards](docs/ARCHITECTURE.md)
-- [Install, upgrade, rollback, uninstall and release contract](docs/INSTALL-AND-RELEASE.md)
-- [Validation matrix and outstanding tests](docs/VALIDATION-MATRIX.md)
-- [Reproducible VM acceptance](docs/LOCAL-LAB-ACCEPTANCE.md)
-- Source: `cmd/stl-spoofdiag/`; own packaging and install code: `scripts/`.
+**Target distribution baseline:** Debian 11+ and Ubuntu 22.04+,
+Linux `amd64`/`arm64`. An actual offline package has been tested on
+Debian **12 AMD64 VMs** and in a disposable installation root on a
+Debian **13 AMD64** host. GitHub's Ubuntu CI tests build/package
+functionality but do **not** replace independent Ubuntu guest acceptance.
+ARM64 binaries build, but full booted ARM64 guest tests are still pending.
+The advanced raw-namespace mode additionally depends on kernel-specific
+features; compatibility of any public WAN path is not established.
 
-The previous Python prototype is no longer part of the active source tree or
-runtime; its research history remains recoverable from Git. Go remains the
-single product implementation. No code under the STL runtime, STL installers,
-or protected `main` is modified by this standalone tool.
+For **STL itself**, not this tool, the separate documented baseline is
+Ubuntu 22.04+, Debian 11+, kernel 5.4+ and iproute2 5.1+; its available
+backends depend on each host's kernel and packages.
+
+## Technical documentation
+
+- [Versioned Go CLI and signed-receipt reference](docs/GO-REFERENCE.md)
+- [Architecture, guards and evidence semantics](docs/ARCHITECTURE.md)
+- [Installer, release channel, rollback and uninstall](docs/INSTALL-AND-RELEASE.md)
+- [Test/acceptance matrix](docs/VALIDATION-MATRIX.md)
+- [Historical isolated VM evidence](docs/LOCAL-LAB-ACCEPTANCE.md)
+
+The historical Python experiment remains accessible through Git history,
+but is **not** part of this standalone Go product or its runtime.
