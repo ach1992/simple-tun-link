@@ -1,8 +1,10 @@
 package wss
 
 import (
+	"bytes"
 	"encoding/base64"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -51,7 +53,7 @@ func TestRestrictedWSSCommandsAreExecutableArgumentArraysNotShells(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		root := filepath.Join("/var/lib/simple-tun-link", "carrier", "wss", string(l.ID))
+		root := filepath.Join("/var/lib/simple-tun-link", "credentials", "wss", string(l.ID))
 		if cmd.Binary != "/opt/stl/wstunnel" || len(cmd.Args) < 5 {
 			t.Fatalf("missing explicit executable/arguments %+v", cmd)
 		}
@@ -149,5 +151,26 @@ func TestWSSDialWithoutDNSOverrideRequiresPhysicalIPCertificateSAN(t *testing.T)
 	args := strings.Join(cmd.Args, " ")
 	if strings.Contains(args, "--tls-sni-override") || !strings.Contains(args, "--tls-verify-certificate") {
 		t.Fatalf("IP SAN path must verify physical endpoint with no unverified SNI override: %s", args)
+	}
+}
+
+// TestPinnedV11RestrictionFixture makes the actual v11 executable parser
+// acceptance use byte-for-byte output of Build, not a hand-edited
+// permissive policy. The fixture is also consumed by the opt-in disposable
+// network-namespace test in scripts/e2e/wss-v11-compat.sh.
+func TestPinnedV11RestrictionFixture(t *testing.T) {
+	link := wssTestLink()
+	link.WireGuard.ListenPort = 53000
+	c := composition.Carrier{Kind: composition.WSS, Role: composition.Listen, PublicTCPPort: 59443, CredentialOwner: link.ID}
+	actual, err := Build(link, c, "/opt/stl/wstunnel", "/var/lib/simple-tun-link")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := os.ReadFile("testdata/restrictions-v11.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(actual.ServerRestrictions, expected) {
+		t.Fatalf("wstunnel v11 executable test policy drifted from the canonical WSS renderer")
 	}
 }

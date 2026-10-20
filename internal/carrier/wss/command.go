@@ -48,7 +48,7 @@ func Build(link domain.Link, carrier composition.Carrier, binary, privateRoot st
 	if strings.ContainsAny(binary, "\n\r\x00") || strings.ContainsAny(privateRoot, "\n\r\x00") {
 		return Command{}, fmt.Errorf("invalid WSS resource path")
 	}
-	root := filepath.Join(privateRoot, "carrier", "wss", string(path.CredentialOwner))
+	root := filepath.Join(privateRoot, "credentials", "wss", string(path.CredentialOwner))
 	ca := filepath.Join(root, "server-ca.pem")
 	clientCA := filepath.Join(root, "client-ca.pem")
 	clientCert := filepath.Join(root, "client-cert.pem")

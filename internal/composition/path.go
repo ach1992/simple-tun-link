@@ -173,9 +173,22 @@ func Build(link domain.Link, carrier Carrier) (Path, error) {
 			plan.WGPeerEndpoint = plan.WSSLocalUDP
 			plan.WSSRemoteWGUDPPort = link.WireGuard.PeerPort
 		case Listen:
-			if carrier.LocalForwardUDP != 0 || carrier.TLSServerName != "" {
-				return Path{}, fmt.Errorf("WSS listening side cannot configure a dial-side loopback forwarder or TLS server name")
+			if carrier.LocalForwardUDP != 0 {
+				return Path{}, fmt.Errorf("WSS listening side cannot configure a dial-side loopback forwarder")
 			}
+			// The listener's certificate must have the exact IP SAN or
+			// selected canonical DNS SAN expected by its remote dialer.
+			name := carrier.TLSServerName
+			if name == "" {
+				name = link.Underlay.Local.String()
+			}
+			if !validTLSName(name) {
+				return Path{}, fmt.Errorf("WSS listener requires a canonical certificate identity")
+			}
+			if parsed, err := netip.ParseAddr(name); err == nil && parsed != link.Underlay.Local {
+				return Path{}, fmt.Errorf("WSS listener IP certificate identity must match its physical TCP bind IP")
+			}
+			plan.TLSName = name
 			plan.WSSLocalTCP = netip.AddrPortFrom(link.Underlay.Local, carrier.PublicTCPPort)
 			plan.WSSRemoteWGUDPPort = link.WireGuard.ListenPort
 			// No public/physical WG endpoint may be invented here.

@@ -1,0 +1,13 @@
+restrictions:
+  - name: "STL exact Link"
+    match:
+      - !PathPrefix "^stl0123456789abcdef0123456789abcdef$"
+    allow:
+      - !Tunnel
+        protocol:
+          - Udp
+        port:
+          - 53000
+        host: "^127\\.0\\.0\\.1$"
+        cidr:
+          - 127.0.0.1/32

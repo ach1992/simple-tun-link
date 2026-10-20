@@ -434,12 +434,31 @@ A first internal, secret-free `internal/composition` path planner records:
   dial/listen roles, per-Link TLS identity and deterministic per-Link resource
   reservations. All other WSS/backend combinations fail closed.
 
-The `internal/carrier/wss` adapter currently **renders only** a restricted
-mTLS wstunnel argv and one exact client-certificate-path-to-loopback-WG-UDP
-server policy. It does not provision keys, launch services or enable a new
-Carrier in the public Link schema. Current shipped/native Link behavior is
-unchanged; this staging is intentionally not runnable as an STL-managed WSS
-Link until the following *non-optional* integration work passes:
+The `internal/carrier/wss` adapter renders a restricted mTLS wstunnel
+argv and one exact client-certificate-path-to-loopback-WG-UDP server policy.
+It also provides **read-only**, fail-closed local checks: a no-symlink
+per-Link TLS credential inspection under
+`$stateRoot/credentials/wss/<LinkID>/` (private 0700 directories, singly
+linked 0600 CA/cert/key files, valid CA/certificate purpose and identity),
+and a no-symlink pinned executable hash/owner/inode inspection.
+The caller must supply a separately approved upstream SHA-256 and
+revalidate the exact objects before actually starting the helper; file
+inspection alone proves neither a peer's trust decision nor executable
+lifecycle ownership.
+
+An **opt-in disposable namespace acceptance**
+(`scripts/e2e/wss-v11-compat.sh`) checks the real upstream
+`wstunnel v11.0.0` executable on Linux x86_64 against a pinned hash,
+using the renderer's exact committed server-policy fixture. It tests
+a permitted UDP echo and denies foreign client CN, untrusted CA, a
+different remote UDP port, an untrusted server CA and TCP forwarding.
+This is upstream helper/Policy compatibility evidence **only**, not
+an STL-managed WireGuard Link or a multi-host throughput result.
+
+The adapter still does **not** provision TLS credentials, start services
+or enable a Carrier in the public Link schema. Current shipped/native
+Link behavior is unchanged; staging is intentionally not runnable as
+an STL-managed WSS Link until these non-optional steps pass:
 
 1. Use a verified, pinned/offline-capable helper and a protected per-Link
    TLS issuance/rotation/trust store; verify server SAN/IP, client CN,
