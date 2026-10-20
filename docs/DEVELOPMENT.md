@@ -175,9 +175,19 @@ scripts/e2e/wss-v11-compat.sh /absolute/path/to/wstunnel 6a1d6ab8f4537823d0a8157
 ~~~
 
 The runner independently enforces that executable SHA-256 and exact
-`wstunnel-cli 11.0.0` version, creates short-lived test certificates,
-and uses unprivileged `unshare -Urn` with IP/loopback sockets confined
-to that new network namespace. It needs Bash, OpenSSL, Python 3,
+`wstunnel-cli 11.0.0` version, creates short-lived test certificates
+and **public test-only** bearer headers, and uses unprivileged
+`unshare -Urn` with IP/loopback sockets confined to a newly
+verified user+network namespace. Even a direct call to the internal
+`--inside` mode fails before any IP operation without the independent
+binary/namespace-launch evidence. The test checks the real version's
+**mTLS + per-Link bearer + exact path** behavior, including the
+reviewed missing-CN-with-forged-path bypass attempt *without*
+the bearer. The upstream v11 does not enforce strict CN identity
+when a certificate has no CN; approved admission requires the
+additional secret, as described in
+[ARCHITECTURE.md](ARCHITECTURE.md).
+It needs Bash, OpenSSL, Python 3,
 `ip`, `ss`, `sha256sum`, `timeout` and unprivileged user namespace
 support. It never installs system packages, starts a host service,
 changes host routing/firewall or touches real peers. The upstream

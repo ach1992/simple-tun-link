@@ -1,6 +1,8 @@
-// Package wss renders the first evidence-backed carrier's restricted,
-// secret-free executable invocation. It does NOT spawn a daemon, provision TLS
-// material, enforce the firewall, or authorize an STL Link: the existing Engine
+// Package wss renders the first evidence-backed carrier's restricted
+// executable invocation. A server policy includes a sensitive per-Link
+// bearer token, but secret bytes are never placed in process arguments.
+// It does NOT spawn a daemon, provision TLS material, enforce the firewall,
+// or authorize an STL Link: the existing Engine
 // must own those transitions before this may be wired into the live backend.
 package wss
 
@@ -23,23 +25,38 @@ type Command struct {
 	Binary string
 	Args   []string
 	Env    []string
-	// ServerRestrictions must be durably materialized in a verified private
-	// per-Link path before launching the server; absent on the dial side.
+	// ServerRestrictions CONTAINS A LIVE SECRET when present. It must
+	// remain in a protected 0600 owner-controlled path, never in logs or
+	// public output, and be cleared from memory when no longer needed.
+	// It is absent on the dial side; the client reads its header from a
+	// separate protected file (never argv/env secret material).
 	ServerRestrictions []byte
 }
 
-// Build constructs an explicit wstunnel v11.0.0 mTLS invocation from a validated
-// composition path. The producer of TLS keys/certificates MUST issue the dial
-// side's client certificate CN equal to clientCN(link ID) and validate this
-// against its trusted issuer. The server restriction uses that exact CN.
-// This function is deliberately NOT a credential or executable trust verifier.
-func Build(link domain.Link, carrier composition.Carrier, binary, privateRoot string) (Command, error) {
+// Build constructs a v11.0.0 mTLS invocation with a second, independent
+// high-entropy per-Link bearer credential. Upstream v11 skips CN-to-path
+// matching when the client certificate has no extractable CN, so PathPrefix
+// alone is NOT authorization. A TLS-trusted client must ALSO know the
+// per-Link token; this is the enforced authorization identity, with CN/path
+// matching a secondary defense when CN is present. A client missing CN but
+// possessing the bearer is not distinguishable by upstream v11: issuance,
+// rotation/revocation and secret protection must account for that.
+//
+// The token must originate from a cryptographically secure 32-byte random
+// secret generated out of band and securely provisioned to BOTH endpoints.
+// This rendering function does no provisioning, validation of installed
+// credentials, executable verification or process launch. The returned
+// server restriction is SECRET and must not be logged or stored unprotected.
+func Build(link domain.Link, carrier composition.Carrier, binary, privateRoot, authorizationToken string) (Command, error) {
 	path, err := composition.Build(link, carrier)
 	if err != nil {
 		return Command{}, err
 	}
 	if path.Kind != composition.WSS || path.CredentialOwner.Validate() != nil {
 		return Command{}, fmt.Errorf("WSS command requires a validated WSS Carrier and Link owner")
+	}
+	if !validAuthorizationToken(authorizationToken) {
+		return Command{}, fmt.Errorf("WSS requires a valid private per-Link authorization token")
 	}
 	if !filepath.IsAbs(binary) || filepath.Clean(binary) != binary || !filepath.IsAbs(privateRoot) ||
 		filepath.Clean(privateRoot) != privateRoot || privateRoot == "/" {
@@ -56,6 +73,7 @@ func Build(link domain.Link, carrier composition.Carrier, binary, privateRoot st
 	serverCert := filepath.Join(root, "server-cert.pem")
 	serverKey := filepath.Join(root, "server-key.pem")
 	restrict := filepath.Join(root, "restrictions.yaml")
+	authorizationHeaders := filepath.Join(root, "authorization-headers")
 	command := Command{Binary: binary}
 	switch path.Role {
 	case composition.Dial:
@@ -77,7 +95,8 @@ func Build(link domain.Link, carrier composition.Carrier, binary, privateRoot st
 			// DNS SAN. The default uses verified physical peer IP identity.
 			command.Args = append(command.Args, "--tls-sni-override", path.TLSName)
 		}
-		command.Args = append(command.Args, "-L", forward, uri.String())
+		command.Args = append(command.Args, "--http-headers-file", authorizationHeaders,
+			"-L", forward, uri.String())
 		command.Env = []string{"SSL_CERT_FILE=" + ca}
 	case composition.Listen:
 		if !path.WSSLocalTCP.IsValid() || path.WSSPeerTCP.IsValid() ||
@@ -90,7 +109,7 @@ func Build(link domain.Link, carrier composition.Carrier, binary, privateRoot st
 			"--tls-private-key", serverKey,
 			"--tls-client-ca-certs", clientCA,
 			"--restrict-config", restrict, uri.String()}
-		command.ServerRestrictions = restrictedServerPolicy(path.CredentialOwner, path.WSSRemoteWGUDPPort)
+		command.ServerRestrictions = restrictedServerPolicy(path.CredentialOwner, path.WSSRemoteWGUDPPort, authorizationToken)
 	default:
 		return Command{}, fmt.Errorf("unknown WSS role")
 	}
@@ -103,17 +122,34 @@ func clientCN(id domain.LinkID) string {
 	return "stl" + string(id)[4:]
 }
 
-// restrictedServerPolicy allows a single certificate CN upgrade prefix and
-// ONLY a UDP forward to this exact Link's loopback WG port. No reverse
-// tunnel, TCP forwarding, SOCKS, wildcards or foreign per-Link UDP target.
-func restrictedServerPolicy(id domain.LinkID, udp uint16) []byte {
+// validAuthorizationToken accepts one unambiguous 256-bit random value.
+// This also prohibits regex/YAML metacharacters and log/header injection.
+func validAuthorizationToken(token string) bool {
+	if len(token) != 64 {
+		return false
+	}
+	for _, ch := range token {
+		if !((ch >= 'a' && ch <= 'f') || (ch >= '0' && ch <= '9')) {
+			return false
+		}
+	}
+	return true
+}
+
+// restrictedServerPolicy requires BOTH an exact requested Link path and a
+// strong per-Link bearer token, plus mTLS enforced by wstunnel itself.
+// PathPrefix is NOT proof of CN identity in wstunnel v11 when CN extraction
+// fails. No reverse tunnel, TCP, SOCKS, foreign port or foreign host allowed.
+// This output contains the bearer secret; treat as private credential bytes.
+func restrictedServerPolicy(id domain.LinkID, udp uint16, token string) []byte {
 	return []byte(fmt.Sprintf(
-		"restrictions:\n  - name: \"STL exact Link\"\n"+
+		"restrictions:\n  - name: \"STL private Link authorization\"\n"+
 			"    match:\n      - !PathPrefix \"^%s$\"\n"+
+			"      - !Authorization \"^Bearer %s$\"\n"+
 			"    allow:\n      - !Tunnel\n"+
 			"        protocol:\n          - Udp\n"+
 			"        port:\n          - %d\n"+
 			"        host: \"^127\\\\.0\\\\.0\\\\.1$\"\n"+
 			"        cidr:\n          - 127.0.0.1/32\n",
-		clientCN(id), udp))
+		clientCN(id), token, udp))
 }

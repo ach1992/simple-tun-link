@@ -10,10 +10,12 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,8 +32,9 @@ const maxPEMBytes = 1 << 20
 // CredentialIdentity contains only public fingerprint evidence. It is not
 // certificate/key material, and by itself is not runtime TLS authorization.
 type CredentialIdentity struct {
-	CertificateSHA256 string
-	TrustCASHA256     string
+	CertificateSHA256   string
+	TrustCASHA256       string
+	AuthorizationSHA256 string
 }
 
 // InspectCredentials reads exactly the selected Link's protected TLS files,
@@ -106,20 +109,87 @@ func InspectCredentials(link domain.Link, carrier composition.Carrier, stateRoot
 		roleUsage = x509.ExtKeyUsageServerAuth
 	}
 	if !hasExtKeyUsage(leaf, roleUsage) {
-		return CredentialIdentity{}, fmt.Errorf("WSS certificate has wrong TLS key usage")
+		return CredentialIdentity{}, fmt.Errorf("WSS certificate has wrong TLS extended key usage")
+	}
+	// Both TLS 1.2 ECDHE and TLS 1.3 client/server authentication
+	// require a signature-capable local leaf. Reject certificates that
+	// explicitly restrict usage to encryption or key agreement despite
+	// advertising a compatible TLS extended purpose.
+	if leaf.KeyUsage&x509.KeyUsageDigitalSignature == 0 {
+		// A zero Go KeyUsage is ambiguous: either no extension (no
+		// restriction) or a present but empty extension (forbidden).
+		// Check the original X.509 extension before admitting it.
+		for _, extension := range leaf.Extensions {
+			if extension.Id.Equal(asn1.ObjectIdentifier{2, 5, 29, 15}) {
+				return CredentialIdentity{}, fmt.Errorf("WSS certificate key usage forbids TLS digital signatures")
+			}
+		}
 	}
 	if path.Role == composition.Dial {
 		if leaf.Subject.CommonName != clientCN(link.ID) {
 			return CredentialIdentity{}, fmt.Errorf("WSS client certificate identity does not match the exact Link")
 		}
-	} else if err := leaf.VerifyHostname(path.TLSName); err != nil {
-		return CredentialIdentity{}, fmt.Errorf("WSS server certificate SAN does not match its intended peer identity")
+	} else {
+		if err := leaf.VerifyHostname(path.TLSName); err != nil {
+			return CredentialIdentity{}, fmt.Errorf("WSS server certificate SAN does not match its intended peer identity")
+		}
+		// STL's per-Link server-identity contract requires an exact DNS
+		// SAN, not just a generic wildcard match accepted by TLS.
+		if _, err := netip.ParseAddr(path.TLSName); err != nil {
+			exact := false
+			for _, dnsName := range leaf.DNSNames {
+				if dnsName == path.TLSName {
+					exact = true
+					break
+				}
+			}
+			if !exact {
+				return CredentialIdentity{}, fmt.Errorf("WSS server certificate must contain the exact selected DNS SAN")
+			}
+		}
+	}
+	// The bearer is an independent per-Link authorization factor because
+	// wstunnel v11 can skip CN-to-path matching for a missing-CN leaf.
+	// Read it only from the same protected per-Link inode directory and
+	// never expose the value in errors or public inspection results.
+	authFile := "authorization-headers"
+	if path.Role == composition.Listen {
+		authFile = "authorization-token"
+	}
+	auth, err := readPrivateFile(linkfd, authFile)
+	if err != nil {
+		return CredentialIdentity{}, fmt.Errorf("protected per-Link WSS authorization material is unavailable: %w", err)
+	}
+	defer clear(auth)
+	var token []byte
+	if path.Role == composition.Dial {
+		const prefix = "Authorization: Bearer "
+		if !bytes.HasPrefix(auth, []byte(prefix)) || len(auth) != len(prefix)+64+1 ||
+			auth[len(auth)-1] != '\n' {
+			return CredentialIdentity{}, fmt.Errorf("invalid protected WSS client authorization header format")
+		}
+		token = auth[len(prefix) : len(auth)-1]
+	} else {
+		if len(auth) != 65 || auth[len(auth)-1] != '\n' {
+			return CredentialIdentity{}, fmt.Errorf("invalid protected WSS server authorization secret format")
+		}
+		token = auth[:len(auth)-1]
+	}
+	if len(token) != 64 {
+		return CredentialIdentity{}, fmt.Errorf("invalid per-Link WSS authorization secret")
+	}
+	for _, b := range token {
+		if !((b >= '0' && b <= '9') || (b >= 'a' && b <= 'f')) {
+			return CredentialIdentity{}, fmt.Errorf("invalid per-Link WSS authorization secret")
+		}
 	}
 	certSum := sha256.Sum256(leaf.Raw)
 	caSum := sha256.Sum256(ca)
+	authSum := sha256.Sum256(token)
 	return CredentialIdentity{
-		CertificateSHA256: hex.EncodeToString(certSum[:]),
-		TrustCASHA256:     hex.EncodeToString(caSum[:]),
+		CertificateSHA256:   hex.EncodeToString(certSum[:]),
+		TrustCASHA256:       hex.EncodeToString(caSum[:]),
+		AuthorizationSHA256: hex.EncodeToString(authSum[:]),
 	}, nil
 }
 

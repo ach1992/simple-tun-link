@@ -1,7 +1,8 @@
 restrictions:
-  - name: "STL exact Link"
+  - name: "STL private Link authorization"
     match:
       - !PathPrefix "^stl0123456789abcdef0123456789abcdef$"
+      - !Authorization "^Bearer aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa$"
     allow:
       - !Tunnel
         protocol:

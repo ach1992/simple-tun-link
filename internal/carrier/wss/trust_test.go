@@ -24,7 +24,12 @@ import (
 
 type fixtureTLS struct{ ca, cert, key []byte }
 
-func issueFixtureTLS(t *testing.T, cn string, isServer, expired bool) fixtureTLS {
+func issueFixtureTLS(t *testing.T, cn string, isServer, expired bool, keyUsages ...x509.KeyUsage) fixtureTLS {
+	return issueFixtureTLSWithDNS(t, cn, isServer, expired, "server.example", keyUsages...)
+}
+
+func issueFixtureTLSWithDNS(t *testing.T, cn string, isServer, expired bool,
+	dnsSAN string, keyUsages ...x509.KeyUsage) fixtureTLS {
 	t.Helper()
 	now := time.Now()
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -55,13 +60,19 @@ func issueFixtureTLS(t *testing.T, cn string, isServer, expired bool) fixtureTLS
 		BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}
+	if len(keyUsages) > 0 {
+		if len(keyUsages) != 1 {
+			t.Fatal("one KeyUsage override at most")
+		}
+		leaf.KeyUsage = keyUsages[0]
+	}
 	if expired {
 		leaf.NotBefore, leaf.NotAfter = now.Add(-48*time.Hour), now.Add(-24*time.Hour)
 	}
 	if isServer {
 		leaf.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
 		leaf.IPAddresses = []net.IP{net.ParseIP("198.51.100.21")}
-		leaf.DNSNames = []string{"server.example"}
+		leaf.DNSNames = []string{dnsSAN}
 	}
 	certDER, err := x509.CreateCertificate(rand.Reader, leaf, ca, &leafKey.PublicKey, caKey)
 	if err != nil {
@@ -103,6 +114,15 @@ func writeTLSFixture(t *testing.T, root string, id domain.LinkID, role compositi
 			t.Fatal(err)
 		}
 	}
+	authFile := "authorization-headers"
+	auth := []byte("Authorization: Bearer " + fixtureAuthorizationToken + "\n")
+	if role == composition.Listen {
+		authFile = "authorization-token"
+		auth = []byte(fixtureAuthorizationToken + "\n")
+	}
+	if err := os.WriteFile(filepath.Join(dir, authFile), auth, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	return dir
 }
 
@@ -116,6 +136,19 @@ func carrierForTLS(l domain.Link, role composition.Role) composition.Carrier {
 
 func TestInspectCredentialsRejectsUnsafeMaterials(t *testing.T) {
 	for _, role := range []composition.Role{composition.Dial, composition.Listen} {
+		t.Run(string(role)+"-wrong-key-usage", func(t *testing.T) {
+			l := wssTestLink()
+			cn := clientCN(l.ID)
+			if role == composition.Listen {
+				cn = "stl-server"
+			}
+			root := t.TempDir()
+			writeTLSFixture(t, root, l.ID, role,
+				issueFixtureTLS(t, cn, role == composition.Listen, false, x509.KeyUsageKeyEncipherment))
+			if _, err := InspectCredentials(l, carrierForTLS(l, role), root); err == nil {
+				t.Fatal("accepted a TLS identity that cannot sign the handshake")
+			}
+		})
 		t.Run(string(role)+"-valid", func(t *testing.T) {
 			l := wssTestLink()
 			cn := clientCN(l.ID)
@@ -128,7 +161,7 @@ func TestInspectCredentialsRejectsUnsafeMaterials(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(got.CertificateSHA256) != 64 || len(got.TrustCASHA256) != 64 {
+			if len(got.CertificateSHA256) != 64 || len(got.TrustCASHA256) != 64 || len(got.AuthorizationSHA256) != 64 {
 				t.Fatal("bad secret-free fingerprints")
 			}
 		})
@@ -161,6 +194,31 @@ func TestInspectCredentialsRejectsUnsafeMaterials(t *testing.T) {
 		{"non-CA-trust", clientCN(l.ID), false, func(t *testing.T, dir, root string) {
 			f := issueFixtureTLS(t, "not-a-ca", false, false)
 			if err := os.WriteFile(filepath.Join(dir, "server-ca.pem"), f.cert, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"missing-bearer-file", clientCN(l.ID), false, func(t *testing.T, dir, root string) {
+			if err := os.Remove(filepath.Join(dir, "authorization-headers")); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"bearer-symlink", clientCN(l.ID), false, func(t *testing.T, dir, root string) {
+			p := filepath.Join(dir, "authorization-headers")
+			backup := filepath.Join(dir, "backup-authorization")
+			if err := os.Rename(p, backup); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(backup, p); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"bearer-exposed", clientCN(l.ID), false, func(t *testing.T, dir, root string) {
+			if err := os.Chmod(filepath.Join(dir, "authorization-headers"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"bearer-invalid", clientCN(l.ID), false, func(t *testing.T, dir, root string) {
+			if err := os.WriteFile(filepath.Join(dir, "authorization-headers"), []byte("Authorization: Bearer x\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}},
@@ -219,6 +277,30 @@ func TestInspectCredentialsRejectsUnsafeMaterials(t *testing.T) {
 		role.TLSServerName = "wrong.example"
 		if _, err := InspectCredentials(link, role, root); err == nil {
 			t.Fatal("server certificate without selected DNS SAN accepted")
+		}
+	})
+	t.Run("server-wildcard-SAN-not-exact", func(t *testing.T) {
+		root := t.TempDir()
+		l := wssTestLink()
+		f := issueFixtureTLSWithDNS(t, "stl-server", true, false, "*.example")
+		role := carrierForTLS(l, composition.Listen)
+		role.TLSServerName = "server.example"
+		writeTLSFixture(t, root, l.ID, composition.Listen, f)
+		if _, err := InspectCredentials(l, role, root); err == nil {
+			t.Fatal("wildcard DNS SAN passed exact per-Link identity policy")
+		}
+	})
+	t.Run("server-invalid-bearer", func(t *testing.T) {
+		root := t.TempDir()
+		l := wssTestLink()
+		dir := writeTLSFixture(t, root, l.ID, composition.Listen,
+			issueFixtureTLS(t, "stl-server", true, false))
+		if err := os.WriteFile(filepath.Join(dir, "authorization-token"),
+			[]byte("invalid\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := InspectCredentials(l, carrierForTLS(l, composition.Listen), root); err == nil {
+			t.Fatal("accepted invalid server Link authorization token")
 		}
 	})
 	t.Run("server-SAN-mismatch", func(t *testing.T) {
