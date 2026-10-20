@@ -118,6 +118,8 @@ internal/backend/gre/
 internal/backend/ipip/
 internal/backend/wireguard/
 internal/backend/ipsec/
+internal/composition/    typed, fail-closed Provider/Carrier path admission
+internal/carrier/wss/    restricted WSS command/policy rendering (not activated)
 internal/linux/          host integration boundaries
 internal/state/          atomic local desired-state store
 internal/pairing/        setup-link and copy-block formats
@@ -410,6 +412,61 @@ without a compulsory WireGuard/WSS combination or speculative cross-product
 of backend/Carrier pairings. Future priorities and Owner gates belong in
 [Issue #142](https://github.com/ach1992/simple-tun-link/issues/142);
 none of these Carriers is shipped in the current CLI.
+
+### Approved direction: lean L3 Provider and Carrier composition
+
+The Owner selected the **lean composition** direction for the next
+implementation phase ([Issue #142](https://github.com/ach1992/simple-tun-link/issues/142)).
+The existing Engine, Link identity and backend transaction remain the only
+authority for state, locking, resource claims, Apply/Verify, rollback and
+reboot restore. Provider and Carrier are **separate compatibility concerns**,
+not necessarily separate OS processes or a new public framework. The native
+backend path must have zero helper/data-plane overhead.
+
+A first internal, secret-free `internal/composition` path planner records:
+- actual physical `Underlay`, private `LinkAddresses`, and (only when
+  justified) a **different** local loopback UDP endpoint;
+- exact outer payload framing and role; an outer transport supporting UDP
+  does **not** imply the kernel GRE/IPIP FOU/GUE endpoint/source contracts
+  are compatible with its forwarding semantics;
+- one explicitly supported experimental WSS+kernel-WireGuard combination,
+  with either physical-IP SAN or exact DNS certificate identity, separate
+  dial/listen roles, per-Link TLS identity and deterministic per-Link resource
+  reservations. All other WSS/backend combinations fail closed.
+
+The `internal/carrier/wss` adapter currently **renders only** a restricted
+mTLS wstunnel argv and one exact client-certificate-path-to-loopback-WG-UDP
+server policy. It does not provision keys, launch services or enable a new
+Carrier in the public Link schema. Current shipped/native Link behavior is
+unchanged; this staging is intentionally not runnable as an STL-managed WSS
+Link until the following *non-optional* integration work passes:
+
+1. Use a verified, pinned/offline-capable helper and a protected per-Link
+   TLS issuance/rotation/trust store; verify server SAN/IP, client CN,
+   certificate chains and strict destination allowlist before activation.
+2. Make a composed **one-Link** backend plan own helper process/unit,
+   private files, dedicated TCP/UDP listeners, kernel WG interface/port,
+   exact input/firewall isolation, MTU and crash-recovery evidence. The
+   passive `linux.TCPListenerProbe` reserves TCP ports host-wide; socket
+   vacancy or a deterministic pathname alone is not ownership.
+3. Enforce isolation of kernel WG's public UDP listen socket; setting the
+   WireGuard peer to loopback does **not** bind its kernel socket to
+   loopback. Preserve other services, rules, default routes and native
+   WireGuard's existing scoped physical admission behavior.
+4. Extend State/pairing/machine input only with explicit versioned
+   compatibility and secret-safe peer handoff; old executables must never
+   interpret a composed Link as native WG. A new State/Quick Link schema
+   is **not** implemented or published at this stage.
+5. Prove real two-peer private IP and process/boot recovery in disposable
+   test environments, negative security/foreign-resource cases and exact
+   loss/MTU/performance; independently authorize any physical-host trial,
+   main merge and release. Standalone WSS+WG field evidence is a reference,
+   **not** STL-managed Carrier acceptance.
+
+Future WG+Paqet or other provider/Carrier pairs must pass equivalent
+source, framing, underlay/security and lifecycle checks before admission.
+No compulsory WireGuard/WSS pipeline, universal plugin ABI, second Engine,
+generic TUN loop, automatic failover or new GOST integration is introduced.
 
 Prefer shared small interfaces, standard-library primitives and
 native Linux integration where they improve correctness or measured
