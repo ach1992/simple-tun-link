@@ -270,16 +270,19 @@ fresh destination. For a future officially published archive only:
 
 ~~~sh
 # On the destination as root (sudo -i), after transferring the selected archive:
+set -euo pipefail
+umask 077
 cd /root/stl-transfer   # root-owned 0700 transfer directory
 archive=stl_vX.Y.Z_linux_amd64_local-install.tar.gz  # use arm64 on aarch64
 trusted_sha256=PASTE_INDEPENDENTLY_VERIFIED_64_HEX_SHA256
 # First isolate the transferred bytes: an open writer of the original cannot
 # modify the private snapshot used for authentication or script execution.
 verified_dir=$(mktemp -d /root/stl-verified.XXXXXXXX)
+[[ -n "$verified_dir" && "$verified_dir" == /root/stl-verified.* &&
+   -d "$verified_dir" && ! -L "$verified_dir" ]] ||
+  { printf 'Private verified archive staging failed\n' >&2; exit 1; }
 install -m 0600 -- "$archive" "$verified_dir/$archive"
-cd "$verified_dir"
-set -euo pipefail
-umask 077
+cd -- "$verified_dir"
 printf '%s  %s\n' "$trusted_sha256" "$archive" | sha256sum --check -
 # Materialize the complete authenticated script privately before execution.
 tar -xOzf "$archive" install.sh > ./verified-installer.sh

@@ -124,14 +124,17 @@ not independently authenticate the publisher.
 
 On the target, copy the archive into a root-owned /root/stl-transfer (0700).
 The destination /root/stl must NOT exist yet. As root:
+    set -euo pipefail
+    umask 077
     cd /root/stl-transfer
     archive="stl_${version}_linux_${arch}_local-install.tar.gz"
     trusted_sha256=PASTE_INDEPENDENTLY_VERIFIED_64_HEX_SHA256
     verified_dir=\$(mktemp -d /root/stl-verified.XXXXXXXX)
+    [[ -n "\$verified_dir" && "\$verified_dir" == /root/stl-verified.* &&
+       -d "\$verified_dir" && ! -L "\$verified_dir" ]] ||
+      { printf 'Private verified archive staging failed\n' >&2; exit 1; }
     install -m 0600 -- "\$archive" "\$verified_dir/\$archive"
-    cd "\$verified_dir"
-    set -euo pipefail
-    umask 077
+    cd -- "\$verified_dir"
     printf '%s  %s\n' "\$trusted_sha256" "\$archive" | sha256sum -c -
     tar -xOzf "\$archive" install.sh > ./verified-installer.sh
     chmod 0600 ./verified-installer.sh

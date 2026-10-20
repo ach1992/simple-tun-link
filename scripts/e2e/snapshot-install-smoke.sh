@@ -78,6 +78,87 @@ for packaged_arch in amd64 arm64; do
   bash -n "$unpack/install.sh" || fail 'local installer syntax invalid'
   [[ -x "$unpack/stl_dev-${short_sha}_linux_${packaged_arch}" ]] || fail 'local binary not executable'
 done
+
+# The operator's first trust-boundary commands must fail closed before checksum
+# or privileged script execution. Exercise actual documented/generated commands
+# with scoped stubs, never a root filesystem path or production APT operation.
+python3 - "$source_root" "$scratch" <<'PY_OPERATOR'
+from pathlib import Path
+import os
+import subprocess
+import sys
+import textwrap
+
+repo, scratch = map(Path, sys.argv[1:])
+examples = {
+    "install-doc": (repo / "docs/INSTALL.md").read_text(),
+    "release-doc": (repo / "docs/RELEASE-ARTIFACTS.md").read_text(),
+    "generated-local": (scratch / "archive-amd64/LOCAL-INSTALL.txt").read_text(),
+}
+scenarios = ("success", "transfer-cd-fail", "mktemp-fail", "mktemp-empty",
+             "copy-fail", "verified-cd-fail")
+for name, content in examples.items():
+    lines = content.splitlines()
+    mkidx = next(i for i, line in enumerate(lines)
+                 if line.strip() == "verified_dir=$(mktemp -d /root/stl-verified.XXXXXXXX)")
+    begin = max(i for i in range(mkidx)
+                if lines[i].strip() == "set -euo pipefail")
+    end = next(i for i in range(mkidx, len(lines))
+               if lines[i].strip() == 'cd -- "$verified_dir"')
+    prefix = textwrap.dedent("\n".join(lines[begin:end + 1]))
+    assert prefix.startswith("set -euo pipefail\numask 077\n"), name
+    assert prefix.index("cd /root/stl-transfer") < prefix.index("verified_dir=$("), name
+    assert prefix.index('[[ -n "$verified_dir"') < prefix.index("install -m 0600"), name
+    for scenario in scenarios:
+        base = scratch / "operator-failclosed" / name / scenario
+        base.mkdir(parents=True)
+        transfer = base / "transfer"
+        if scenario != "transfer-cd-fail":
+            transfer.mkdir(mode=0o700)
+        procedure = (prefix
+            .replace("/root/stl-transfer", str(transfer))
+            .replace("/root/stl-verified.XXXXXXXX", str(base / "stl-verified.XXXXXXXX"))
+            .replace("/root/stl-verified.*", str(base / "stl-verified.*")))
+        # Only the staging prefix is run. Mock the copy, never any downstream
+        # checksum, tar, installer, system path or privileged operation.
+        mocks = r'''
+install() {
+  printf 'COPY %s\n' "$*" >> "$STL_OPERATOR_TRACE"
+  [[ $STL_OPERATOR_SCENARIO != copy-fail ]]
+}
+mktemp() {
+  if [[ $STL_OPERATOR_SCENARIO == mktemp-fail ]]; then return 80; fi
+  if [[ $STL_OPERATOR_SCENARIO == mktemp-empty ]]; then printf ''; return 0; fi
+  command mktemp "$@"
+}
+cd() {
+  if [[ $STL_OPERATOR_SCENARIO == verified-cd-fail &&
+        "$*" == *"stl-verified."* ]]; then return 81; fi
+  builtin cd "$@"
+}
+'''
+        trace = base / "trace"
+        env = dict(os.environ, STL_OPERATOR_SCENARIO=scenario,
+                   STL_OPERATOR_TRACE=str(trace))
+        run = subprocess.run(
+            ["bash", "-c", mocks + "\n" + procedure +
+             "\nprintf 'PREFIX_COMPLETE\\n'\n"],
+            cwd=base, env=env, capture_output=True, text=True)
+        completed = "PREFIX_COMPLETE" in run.stdout
+        assert (run.returncode == 0) == (scenario == "success"), (
+            name, scenario, run.returncode, run.stderr)
+        assert completed == (scenario == "success"), (name, scenario)
+        copied = trace.exists()
+        assert copied == (scenario in ("copy-fail", "verified-cd-fail", "success")), (
+            name, scenario)
+        if scenario == "mktemp-empty":
+            assert "Private verified archive staging failed" in run.stderr, name
+        if copied:
+            assert str(base / "stl-verified.") in trace.read_text(), (
+                name, scenario, "unsafe copy destination")
+print("OPERATOR_ALL_THREE_PROCEDURES_FAILURE_SEAMS=PASS")
+PY_OPERATOR
+
 # Reject adversarial transfer archives before extraction or execution.
 # Synthetic local fixtures exercise unchanged member names with unsafe types,
 # unbounded payloads, duplicate/traversal members and altered checksums.

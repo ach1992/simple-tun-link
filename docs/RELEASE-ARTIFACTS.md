@@ -74,6 +74,8 @@ a claim that `v0.1.7` has these assets):
 ~~~sh
 # On the target as root, transfer the archive to private /root/stl-transfer.
 # Verify the checksum against an independently trusted immutable release.
+set -euo pipefail
+umask 077
 cd /root/stl-transfer
 version=vX.Y.Z
 arch=amd64  # arm64 for aarch64 targets
@@ -81,10 +83,11 @@ archive="stl_${version}_linux_${arch}_local-install.tar.gz"
 trusted_sha256=PASTE_INDEPENDENTLY_VERIFIED_64_HEX_SHA256
 # Isolate bytes from any pre-existing writer of the transferred original.
 verified_dir=$(mktemp -d /root/stl-verified.XXXXXXXX)
+[[ -n "$verified_dir" && "$verified_dir" == /root/stl-verified.* &&
+   -d "$verified_dir" && ! -L "$verified_dir" ]] ||
+  { printf 'Private verified archive staging failed\n' >&2; exit 1; }
 install -m 0600 -- "$archive" "$verified_dir/$archive"
-cd "$verified_dir"
-set -euo pipefail
-umask 077
+cd -- "$verified_dir"
 printf '%s  %s\n' "$trusted_sha256" "$archive" | sha256sum --check -
 tar -xOzf "$archive" install.sh > ./verified-installer.sh
 chmod 0600 ./verified-installer.sh
