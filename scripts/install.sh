@@ -504,7 +504,7 @@ apt_sources_must_be_authenticated() {
   for file in /etc/apt/sources.list /etc/apt/sources.list.d/*.list \
               /etc/apt/sources.list.d/*.sources; do
     [[ -f $file ]] || continue
-    if grep -Eiq '(^|[[:space:]\[])trusted[[:space:]]*=[[:space:]]*yes([[:space:]\]]|$)|^[[:space:]]*Trusted:[[:space:]]*yes' "$file"; then
+    if grep -Eiq '(^|[[:space:]]|\[)trusted[[:space:]]*=[[:space:]]*yes([[:space:]]|\]|$)|^[[:space:]]*Trusted:[[:space:]]*yes([[:space:]]|$)' "$file"; then
       fail 'APT sources explicitly bypass signature verification'
     fi
   done
