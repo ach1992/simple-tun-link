@@ -68,18 +68,31 @@ mirror_apt=$(command -v apt-get)
 mv -- "$mirror_apt" /tmp/stl-package-guest-apt-mirror-original
 cat > "$mirror_apt" <<MOCK
 #!/bin/bash
-printf "E: Failed to fetch configured mirror metadata\\n" >&2
-exit 100
+# Let the verified read-only dependency preview run against the real signed
+# package indexes. Only the later index-refresh simulates mirror failure.
+for argument in "\$@"; do
+  if [[ \$argument == update ]]; then
+    printf "E: Failed to fetch configured mirror metadata\\n" >&2
+    exit 100
+  fi
+done
+exec /tmp/stl-package-guest-apt-mirror-original "\$@"
 MOCK
 chmod 0755 "$mirror_apt"
 if bash /mnt/stl-install.sh prepare --backends native,wireguard \
      --expected-missing wireguard-tools > /tmp/stl-apt-mirror-error.log 2>&1; then
   fail missing_package_accepted_unreachable_mirror
 fi
-grep -q "APT_INDEX_REFRESH failed; missing selected packages: wireguard-tools" \
-  /tmp/stl-apt-mirror-error.log || fail missing_mirror_failure_stage
-grep -q "manually select an accessible official signed Debian/Ubuntu mirror" \
-  /tmp/stl-apt-mirror-error.log || fail missing_signed_mirror_operator_guidance
+if ! grep -q "APT_INDEX_REFRESH failed; missing selected packages: wireguard-tools" \
+     /tmp/stl-apt-mirror-error.log; then
+  sed -n "1,60p" /tmp/stl-apt-mirror-error.log >&2
+  fail missing_mirror_failure_stage
+fi
+if ! grep -q "manually select an accessible official signed Debian/Ubuntu mirror" \
+     /tmp/stl-apt-mirror-error.log; then
+  sed -n "1,60p" /tmp/stl-apt-mirror-error.log >&2
+  fail missing_signed_mirror_operator_guidance
+fi
 mv -- /tmp/stl-package-guest-apt-mirror-original "$mirror_apt"
 echo "APT_MIRROR_OUTAGE_GUIDED_RECOVERY_FIXTURE=PASS"
 bash /mnt/stl-install.sh prepare --backends native,wireguard --expected-missing wireguard-tools
