@@ -116,14 +116,29 @@ for arch in amd64 arm64; do
   cat > "$package_dir/LOCAL-INSTALL.txt" <<EOF_LOCAL
 STL local installation (version $version, linux/$arch)
 
-Download this exact archive from the official matching STL GitHub release,
-verify its digest against a separately trusted release identity, then copy
-it onto the destination server. Extract only into a private root-owned
-folder (for example /root/stl) after inspecting the archive's file list.
+Download this archive and the separately published release-wide SHA256SUMS
+from the immutable, verified matching STL release. Confirm the archive SHA256
+against an independently trusted release identity before executing any
+script bytes from the archive. A hash in the same compromised download does
+not independently authenticate the publisher.
 
-From that folder, before invoking the installer as root:
+On the target, copy the archive into a root-owned /root/stl-transfer (0700).
+The destination /root/stl must NOT exist yet. As root:
+    cd /root/stl-transfer
+    archive="stl_${version}_linux_${arch}_local-install.tar.gz"
+    trusted_sha256=PASTE_INDEPENDENTLY_VERIFIED_64_HEX_SHA256
+    printf '%s  %s\n' "\$trusted_sha256" "\$archive" | sha256sum -c -
+    set -o pipefail
+    tar -xOzf "\$archive" install.sh | bash -s -- unpack \
+      --archive "\$PWD/\$archive" --destination /root/stl --sha256 "\$trusted_sha256"
+    cd /root/stl
     sha256sum --check SHA256SUMS
     bash -n install.sh
+
+The canonical unpack mode checks exact six regular members, names, sizes,
+outer digest, fresh private destination, extracted modes and internal hashes.
+It does not install STL or call APT. Never extract unverified tar members
+directly as root; use the checked unpack path.
 
 For a NEW host with native GRE/IPIP and WireGuard selected:
     sudo bash ./install.sh install --bundle . --backends native,wireguard

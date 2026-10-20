@@ -72,15 +72,21 @@ identity **before extraction**. Illustrative checks for a new version (not
 a claim that `v0.1.7` has these assets):
 
 ~~~sh
+# On the target as root, transfer the archive to private /root/stl-transfer.
+# Confirm the checksum independently against a trusted immutable release.
+cd /root/stl-transfer
 version=vX.Y.Z
-arch=amd64  # choose arm64 on aarch64 target
+arch=amd64  # arm64 for aarch64 targets
 archive="stl_${version}_linux_${arch}_local-install.tar.gz"
-sha256sum --check --ignore-missing SHA256SUMS
-# Exactly six expected simple relative filenames; do not extract unexpected paths.
-tar -tzf "$archive"
-# Extract only into an existing fresh trusted 0700 destination on the target.
-# Then: cd /root/stl && sha256sum --check SHA256SUMS && bash -n install.sh
-# And: bash ./install.sh install --bundle /root/stl --backends native,wireguard
+trusted_sha256=PASTE_INDEPENDENTLY_VERIFIED_64_HEX_SHA256
+printf '%s  %s\n' "$trusted_sha256" "$archive" | sha256sum --check -
+set -o pipefail
+tar -xOzf "$archive" install.sh | bash -s -- unpack \
+  --archive "$PWD/$archive" --destination /root/stl --sha256 "$trusted_sha256"
+cd /root/stl
+sha256sum --check SHA256SUMS
+bash -n install.sh
+bash ./install.sh install --bundle /root/stl --backends native,wireguard
 ~~~
 
 A checksum and binary from the same compromised source are **not independent
@@ -88,6 +94,13 @@ authenticity proof**. The administrator must confirm the official immutable
 tag, the canonical same-tag installer and the release provenance before root
 execution. On Linux, the canonical real-prefix installer insists that its
 local bundle folder is `0700`, root-owned, and has trusted ancestors.
+
+The canonical installer `unpack` mode, streamed only after independent
+outer-digest verification, checks exact regular members, sizes, owners and
+fresh private destination before extraction. It does not install packages
+or alter host Links. Adversarial type/link/size/traversal/duplicate fixtures
+are included in the native snapshot regression; Python is a test-only tool,
+not a runtime dependency.
 
 Archive validation and native local-install smoke regression run in
 `scripts/e2e/snapshot-install-smoke.sh`; `scripts/test-install.sh` verifies

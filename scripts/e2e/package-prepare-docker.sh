@@ -32,6 +32,9 @@ grep -qx "commit=$source_sha" "$root/bundle/BUILD-MANIFEST.txt" || fail wrong_bu
 ) || fail bundle_checksum_mismatch
 archive="$root/bundle/stl_dev-${short_sha}_linux_${arch}_local-install.tar.gz"
 [[ -f $archive ]] || fail missing_local_install_archive
+archive_name=$(basename -- "$archive")
+archive_digest=$(awk -v name="$archive_name" '$2 == name {print $1}' "$root/bundle/SHA256SUMS")
+[[ $archive_digest =~ ^[0-9a-f]{64}$ ]] || fail missing_outer_archive_checksum
 
 # The exact one-architecture release archive and canonical source are mounted
 # read-only. Block GitHub names inside the disposable guest, while signed
@@ -45,6 +48,7 @@ docker run --rm --network bridge \
   -e STL_E2E_DISPOSABLE_GUEST=approved \
   -e STL_E2E_BUNDLE_VERSION="dev-${short_sha}" \
   -e STL_E2E_BUNDLE_ARCH="$arch" \
+  -e STL_E2E_ARCHIVE_SHA256="$archive_digest" \
   -v "$archive:/mnt/stl-local-install.tar.gz:ro" \
   -v "$PWD/scripts/install.sh:/mnt/stl-install.sh:ro" \
   "$image" /bin/bash -c '
@@ -52,17 +56,16 @@ set -Eeuo pipefail
 fail() { echo "REAL_PACKAGE_PREPARE_GUEST_FAILED=$1" >&2; exit 1; }
 [[ $EUID == 0 && -f /.dockerenv && ${STL_E2E_DISPOSABLE_GUEST:-} == approved ]] || fail not_disposable_guest
 test ! -e /usr/local/bin/stl || fail untrusted_existing_stl
-# A read-only CI bind mount can have an unprivileged host UID. Verify the
-# expected members before extracting into a private root-owned directory;
-# never weaken the real-prefix source ownership gate.
-install -d -m 0700 /root/stl-e2e-bundle
-members=$(tar -tzf /mnt/stl-local-install.tar.gz) || fail archive_listing_failed
-expected=$(printf "%s\n" "stl_${STL_E2E_BUNDLE_VERSION}_linux_${STL_E2E_BUNDLE_ARCH}" \
-  install.sh LICENSE BUILD-MANIFEST.txt LOCAL-INSTALL.txt SHA256SUMS)
-[[ $members == "$expected" ]] || fail unsafe_archive_members
-tar --extract --gzip --file /mnt/stl-local-install.tar.gz \
-  --directory /root/stl-e2e-bundle --no-same-owner --no-same-permissions || fail archive_extract_failed
-(cd /root/stl-e2e-bundle && sha256sum --check SHA256SUMS >/dev/null) || fail archive_checksum_failed
+# Copy an externally checksummed read-only fixture into a fresh private
+# root-owned transfer folder; execute the same canonical streamed unpack
+# action documented for operators, before any installation or APT action.
+install -d -m 0700 /root/stl-e2e-transfer
+source_archive="/root/stl-e2e-transfer/stl_${STL_E2E_BUNDLE_VERSION}_linux_${STL_E2E_BUNDLE_ARCH}_local-install.tar.gz"
+cp -- /mnt/stl-local-install.tar.gz "$source_archive"
+[[ $(sha256sum "$source_archive" | awk "{print \$1}") == "$STL_E2E_ARCHIVE_SHA256" ]] ||
+  fail transferred_archive_digest_mismatch
+tar -xOzf "$source_archive" install.sh |
+  bash -s -- unpack --archive "$source_archive" --destination /root/stl-e2e-bundle --sha256 "$STL_E2E_ARCHIVE_SHA256"
 cmp -s /mnt/stl-install.sh /root/stl-e2e-bundle/install.sh || fail noncanonical_archived_installer
 bash /root/stl-e2e-bundle/install.sh install --bundle /root/stl-e2e-bundle --backends native
 test -x /usr/local/bin/stl && test -L /usr/local/bin/stlink || fail canonical_install_failed
@@ -70,6 +73,79 @@ before_bin=$(sha256sum /usr/local/bin/stl | awk "{print \$1}")
 before_record=$(sha256sum /usr/local/lib/simple-tun-link/install-record | awk "{print \$1}")
 snapshot=$(bash /mnt/stl-install.sh requirements --backends native,wireguard)
 grep -Fxq "missing_packages=wireguard-tools" <<< "$snapshot" || fail unexpected_live_dpkg_plan
+
+# APT source bypasses must be rejected for native/WireGuard, before ANY
+# package-manager operation. These temporary source entries and mocks live
+# only inside this disposable Docker guest.
+apt_bin=$(command -v apt-get)
+[[ $apt_bin == /usr/bin/apt-get ]] || fail unexpected_guest_apt_path
+mv -- "$apt_bin" /tmp/stl-e2e-source-apt-original
+printf "#!/bin/bash\\ntouch /tmp/stl-e2e-source-apt-called\\nexit 97\\n" > "$apt_bin"
+chmod 0755 "$apt_bin"
+printf "deb [trusted=yes] http://127.0.0.1/ nonexisting main\\n" > /etc/apt/sources.list.d/stl-e2e-untrusted.list
+if bash /mnt/stl-install.sh prepare --backends native,wireguard \
+    --expected-missing wireguard-tools > /tmp/stl-e2e-source-error 2>&1; then
+  fail trusted_one_line_source_was_accepted
+fi
+grep -q "APT sources explicitly bypass signature verification" /tmp/stl-e2e-source-error ||
+  fail trusted_one_line_source_wrong_refusal
+rm /etc/apt/sources.list.d/stl-e2e-untrusted.list
+printf "Types: deb\\nURIs: http://127.0.0.1/\\nSuites: nonexisting\\nComponents: main\\nTrusted: yes\\n" > /etc/apt/sources.list.d/stl-e2e-untrusted.sources
+if bash /mnt/stl-install.sh prepare --backends native,wireguard \
+    --expected-missing wireguard-tools > /tmp/stl-e2e-source-error 2>&1; then
+  fail trusted_deb822_source_was_accepted
+fi
+grep -q "APT sources explicitly bypass signature verification" /tmp/stl-e2e-source-error ||
+  fail trusted_deb822_source_wrong_refusal
+rm /etc/apt/sources.list.d/stl-e2e-untrusted.sources
+[[ ! -e /tmp/stl-e2e-source-apt-called ]] || fail untrusted_source_reached_apt
+mv -- /tmp/stl-e2e-source-apt-original "$apt_bin"
+echo "APT_NATIVE_WG_TRUSTED_SOURCE_BYPASS_REFUSED=PASS"
+
+# An otherwise valid native/WG dependency preview must not acquire trust
+# from a foreign candidate source merely claiming to be a normal APT index.
+apt_cache=$(command -v apt-cache)
+[[ $apt_cache == /usr/bin/apt-cache ]] || fail unexpected_guest_apt_cache_path
+candidate_version=$(apt-cache policy wireguard-tools | sed -n "s/^  Candidate: //p")
+[[ -n $candidate_version && $candidate_version != "(none)" ]] || fail missing_candidate_version
+mv -- "$apt_cache" /tmp/stl-e2e-source-apt-cache-original
+cat > "$apt_cache" <<MOCK
+#!/bin/bash
+printf "  Candidate: %s\\n     %s 500\\n        500 http://thirdparty.invalid fake/main amd64 Packages\\n" "$candidate_version" "$candidate_version"
+MOCK
+chmod 0755 "$apt_cache"
+if bash /mnt/stl-install.sh prepare --backends native,wireguard \
+    --expected-missing wireguard-tools > /tmp/stl-e2e-source-error 2>&1; then
+  fail foreign_candidate_source_was_accepted
+fi
+grep -q "APT candidate includes a non-distribution package source" /tmp/stl-e2e-source-error ||
+  fail foreign_candidate_wrong_refusal
+mv -- /tmp/stl-e2e-source-apt-cache-original "$apt_cache"
+echo "APT_NATIVE_WG_FOREIGN_CANDIDATE_SOURCE_REFUSED=PASS"
+
+# Corrupt cached signed InRelease evidence while keeping signed Packages
+# indexes available for APT -s. The selected candidate must then fail gpgv,
+# before any package install. Restore original signed metadata afterward.
+mkdir -m 0700 /root/stl-e2e-index-backup
+shopt -s nullglob
+index_signatures=(/var/lib/apt/lists/*_InRelease)
+shopt -u nullglob
+[[ ${#index_signatures[@]} -gt 0 ]] || fail missing_signed_index_fixture
+for signed_file in "${index_signatures[@]}"; do
+  cp -p -- "$signed_file" "/root/stl-e2e-index-backup/$(basename -- "$signed_file")"
+  printf "unsigned fixture\\n" > "$signed_file"
+done
+if bash /mnt/stl-install.sh prepare --backends native,wireguard \
+    --expected-missing wireguard-tools > /tmp/stl-e2e-source-error 2>&1; then
+  fail unsigned_candidate_index_was_accepted
+fi
+grep -q "APT candidate InRelease is not signed by the distribution archive" /tmp/stl-e2e-source-error ||
+  { sed -n "1,30p" /tmp/stl-e2e-source-error >&2; fail unsigned_candidate_wrong_refusal; }
+for signed_file in "${index_signatures[@]}"; do
+  cp -p -- "/root/stl-e2e-index-backup/$(basename -- "$signed_file")" "$signed_file"
+done
+echo "APT_NATIVE_WG_UNSIGNED_CANDIDATE_REFUSED=PASS"
+
 # A controlled mirror-outage fixture proves the real installer reports the
 # missing package and failed stage without attempting an unsigned fallback.
 # Restore the original APT binary before testing signed-repository recovery.

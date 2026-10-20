@@ -114,7 +114,10 @@ and distro `wireguard-tools`; optional IPsec needs selected signed distro
 strongSwan packages and separate service/consent checks. WSS and Paqet are
 **not shipped Carriers** and require no download. The future per-architecture
 `*_local-install.tar.gz` archives are under development and **not present in
-v0.1.7**. See [exact download, validation, mirror and rollback steps](docs/INSTALL.md)
+v0.1.7**. For a future archive, independently verify its exact release digest
+first, then use the **same canonical installer** streamed from that trusted
+archive in `unpack` mode; it checks member types, sizes and a fresh private
+extraction path before regular `install|update --bundle`. See [exact download, validation, mirror and rollback steps](docs/INSTALL.md)
 and [release package inventory](docs/RELEASE-ARTIFACTS.md).
 
 

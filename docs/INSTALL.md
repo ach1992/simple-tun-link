@@ -75,7 +75,9 @@ Commands using `vX.Y.Z` require a **real published** tag.
   installer makes at most **12 APT index-refresh attempts**, with up to
   **55 seconds of explicit retry sleeps** (excluding the time spent inside
   individual APT invocations), **only** for positively identified exclusive
-  lists-lock diagnostics. Unexpected warnings or repository failures stop
+  lists-lock diagnostics. `APT::Update::Error-Mode=any` treats partial
+  mirror/index-download failures as errors instead of silently accepting
+  stale indexes. Unexpected warnings or repository failures stop
   immediately. It neither deletes locks nor terminates other
   APT processes. `DPkg::Lock::Timeout=60` is used for package installation
   but does not replace the special lists-lock retry. If the lock persists,
@@ -259,16 +261,41 @@ For a future released version that actually publishes an architecture-specific
 `stl_vX.Y.Z_linux_arm64_local-install.tar.gz`, the downloadable archive will
 contain `install.sh`, the matching single-arch binary, `LICENSE`,
 `BUILD-MANIFEST.txt`, `LOCAL-INSTALL.txt`, and a complete internal `SHA256SUMS`.
-The *separate* official release-wide `SHA256SUMS` will identify the archive
-itself. On the Internet-connected device, verify its exact tag/source and
-published digest using a trustworthy independent reference; on the server,
-inspect the exact six expected archive member names **before extraction** and
-extract only into an administrator-owned `0700` directory. Then check
-`sha256sum --check SHA256SUMS`, `bash -n install.sh` and use **the same**
-`bash ./install.sh install|update --bundle /root/stl --backends <selected>`
-canonical command as above. The archive is an additional release artifact,
-not a new installation engine, bundled Carrier set or permission to change
-host network settings. **No such archive is published at `v0.1.7`.**
+The *separate* official release-wide `SHA256SUMS` identifies the complete
+archive. Verify its exact tag/source and digest against an independently
+trusted publisher reference on the Internet-connected device, then transfer
+the selected archive into a **root-owned, 0700** `/root/stl-transfer` on the
+destination. Do not create `/root/stl` ahead of time: extraction requires a
+fresh destination. For a future officially published archive only:
+
+~~~sh
+# On the destination as root (sudo -i), after transferring the selected archive:
+cd /root/stl-transfer
+archive=stl_vX.Y.Z_linux_amd64_local-install.tar.gz  # use arm64 on aarch64
+trusted_sha256=PASTE_INDEPENDENTLY_VERIFIED_64_HEX_SHA256
+printf '%s  %s\n' "$trusted_sha256" "$archive" | sha256sum --check -
+set -o pipefail
+tar -xOzf "$archive" install.sh | bash -s -- unpack \
+  --archive "$PWD/$archive" --destination /root/stl --sha256 "$trusted_sha256"
+cd /root/stl
+sha256sum --check SHA256SUMS
+bash -n install.sh
+bash ./install.sh install --bundle /root/stl --backends native,wireguard
+stl version --json
+~~~
+
+**Do not run the script streamed from an archive before independently
+confirming its exact publisher identity and SHA256**. The canonical
+`unpack` operation validates the outer digest, six exact regular-file
+names/types, declared size caps, private owner/path, a fresh destination,
+internal checksum names/content and executable identity before an install
+may begin. It performs **no** APT or binary installation. For a verified
+already installer-owned host, run the existing `update --bundle /root/stl`
+instead of silently replacing a different version via `install`.
+
+The archive is an additional release artifact, not a second installation
+engine, bundled Carrier set or permission to change host networking.
+**No such archive is published at `v0.1.7`.**
 
 ### Signed regional APT recovery when required prerequisites are missing
 
