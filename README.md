@@ -115,9 +115,12 @@ strongSwan packages and separate service/consent checks. WSS and Paqet are
 **not shipped Carriers** and require no download. The future per-architecture
 `*_local-install.tar.gz` archives are under development and **not present in
 v0.1.7**. For a future archive, independently verify its exact release digest
-first, then use the **same canonical installer** streamed from that trusted
-archive in `unpack` mode; it checks member types, sizes and a fresh private
-extraction path before regular `install|update --bundle`. See [exact download, validation, mirror and rollback steps](docs/INSTALL.md)
+first, copy the transferred archive into a **new root-private directory** as
+a mode-`0600` file, recheck its trusted digest there, and stream the **same
+canonical installer** from that protected copy in `unpack` mode. Unpack
+independently authenticates an operation-private snapshot, checks member types,
+sizes and a fresh private destination, then regular `install|update --bundle`
+is used. See [exact download, validation, mirror and rollback steps](docs/INSTALL.md)
 and [release package inventory](docs/RELEASE-ARTIFACTS.md).
 
 

@@ -73,12 +73,16 @@ a claim that `v0.1.7` has these assets):
 
 ~~~sh
 # On the target as root, transfer the archive to private /root/stl-transfer.
-# Confirm the checksum independently against a trusted immutable release.
+# Verify the checksum against an independently trusted immutable release.
 cd /root/stl-transfer
 version=vX.Y.Z
 arch=amd64  # arm64 for aarch64 targets
 archive="stl_${version}_linux_${arch}_local-install.tar.gz"
 trusted_sha256=PASTE_INDEPENDENTLY_VERIFIED_64_HEX_SHA256
+# Isolate bytes from any pre-existing writer of the transferred original.
+verified_dir=$(mktemp -d /root/stl-verified.XXXXXXXX)
+install -m 0600 -- "$archive" "$verified_dir/$archive"
+cd "$verified_dir"
 printf '%s  %s\n' "$trusted_sha256" "$archive" | sha256sum --check -
 set -o pipefail
 tar -xOzf "$archive" install.sh | bash -s -- unpack \
@@ -95,11 +99,15 @@ tag, the canonical same-tag installer and the release provenance before root
 execution. On Linux, the canonical real-prefix installer insists that its
 local bundle folder is `0700`, root-owned, and has trusted ancestors.
 
-The canonical installer `unpack` mode, streamed only after independent
-outer-digest verification, checks exact regular members, sizes, owners and
-fresh private destination before extraction. It does not install packages
-or alter host Links. Adversarial type/link/size/traversal/duplicate fixtures
-are included in the native snapshot regression; Python is a test-only tool,
+The canonical installer `unpack` mode is streamed only from the newly
+root-private, mode-`0600` copy **after** its independently trusted SHA256
+verification. Its own operation-local `0700` snapshot is separately
+authenticated; only those protected bytes are inspected and extracted.
+The guard rejects writable source archives and writable ancestors, checks
+exact regular members, sizes, owners and a fresh private destination. It
+does not install packages or alter host Links. Adversarial
+type/link/size/traversal/duplicate/writable-source fixtures are included
+in snapshot and disposable-guest regressions; Python is a test-only tool,
 not a runtime dependency.
 
 Archive validation and native local-install smoke regression run in

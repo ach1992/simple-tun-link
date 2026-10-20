@@ -64,6 +64,8 @@ for packaged_arch in amd64 arm64; do
   # size and private destination, on BOTH generated architectures.
   tar -xOzf "$archive" install.sh |
     bash -s -- unpack --archive "$archive" --destination "$unpack" --sha256 "$outer_digest"
+  [[ -z $(find "$scratch" -maxdepth 1 -name '.stl-unpack.*' -print -quit) ]] ||
+    fail 'successful unpack retained an internal private snapshot'
   (cd "$unpack" && sha256sum --check SHA256SUMS >/dev/null) || fail 'local package checksum failed'
   cmp -s scripts/install.sh "$unpack/install.sh" || fail 'local installer differs from canonical source'
   bash -n "$unpack/install.sh" || fail 'local installer syntax invalid'
@@ -143,6 +145,25 @@ for mutation in symlink hardlink device setuid oversize traversal duplicate bad-
     fail "unsafe archive left an extract directory: $mutation"
 done
 echo 'SNAPSHOT_UNSAFE_ARCHIVE_TYPES_SIZE_AND_NAMES_REFUSED=PASS'
+
+# A correctly signed archive can still have unsafe filesystem permissions.
+# Reject owner-controlled 0620/0666 inputs before creating the destination;
+# callers may not confuse UID equality with exclusive write permission.
+for unsafe_mode in 0620 0666; do
+  chmod "$unsafe_mode" -- "$archive"
+  unsafe_destination="$scratch/adversarial/archive-permission-$unsafe_mode"
+  if bash scripts/install.sh unpack --archive "$archive" --destination "$unsafe_destination" \
+      --sha256 "$outer_digest" > "$scratch/adversarial/permission-$unsafe_mode.log" 2>&1; then
+    fail "writable archive mode was accepted: $unsafe_mode"
+  fi
+  grep -q 'local source archive is writable by group or others' \
+    "$scratch/adversarial/permission-$unsafe_mode.log" ||
+    fail "writable archive was rejected for an unrelated reason: $unsafe_mode"
+  [[ ! -e $unsafe_destination ]] ||
+    fail "writable archive left an extract directory: $unsafe_mode"
+done
+chmod 0600 -- "$archive"
+echo 'SNAPSHOT_WRITABLE_SOURCE_ARCHIVE_REFUSED=PASS'
 
 # Never overwrite an existing directory, even with correct official bytes.
 mkdir -m 0700 "$scratch/adversarial/existing"

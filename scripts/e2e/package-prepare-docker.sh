@@ -62,10 +62,31 @@ test ! -e /usr/local/bin/stl || fail untrusted_existing_stl
 install -d -m 0700 /root/stl-e2e-transfer
 source_archive="/root/stl-e2e-transfer/stl_${STL_E2E_BUNDLE_VERSION}_linux_${STL_E2E_BUNDLE_ARCH}_local-install.tar.gz"
 cp -- /mnt/stl-local-install.tar.gz "$source_archive"
-[[ $(sha256sum "$source_archive" | awk "{print \$1}") == "$STL_E2E_ARCHIVE_SHA256" ]] ||
+# Root ownership alone must never admit an archive writable by other users.
+chmod 0666 -- "$source_archive"
+if bash /mnt/stl-install.sh unpack --archive "$source_archive" \
+    --destination /root/stl-e2e-unsafe --sha256 "$STL_E2E_ARCHIVE_SHA256" \
+    > /tmp/stl-e2e-archive-permission.log 2>&1; then
+  fail root_owned_world_writable_archive_was_accepted
+fi
+grep -q "local source archive is writable by group or others" \
+  /tmp/stl-e2e-archive-permission.log || fail archive_mode_wrong_refusal
+[[ ! -e /root/stl-e2e-unsafe ]] || fail writable_source_created_destination
+chmod 0600 -- "$source_archive"
+echo "ROOT_OWNED_WORLD_WRITABLE_ARCHIVE_REFUSED=PASS"
+
+# Follow the documented operator boundary: a newly root-private *copy*
+# becomes the independently hashed source of the streamed canonical script.
+# An actor holding an old descriptor to the transferred file cannot mutate it.
+install -d -m 0700 /root/stl-e2e-verified
+verified_archive="/root/stl-e2e-verified/$(basename -- "$source_archive")"
+install -m 0600 -- "$source_archive" "$verified_archive"
+[[ $(sha256sum "$verified_archive" | awk "{print \$1}") == "$STL_E2E_ARCHIVE_SHA256" ]] ||
   fail transferred_archive_digest_mismatch
-tar -xOzf "$source_archive" install.sh |
-  bash -s -- unpack --archive "$source_archive" --destination /root/stl-e2e-bundle --sha256 "$STL_E2E_ARCHIVE_SHA256"
+tar -xOzf "$verified_archive" install.sh |
+  bash -s -- unpack --archive "$verified_archive" --destination /root/stl-e2e-bundle --sha256 "$STL_E2E_ARCHIVE_SHA256"
+[[ -z $(find /root -maxdepth 1 -name ".stl-unpack.*" -print -quit) ]] ||
+  fail authenticated_unpacked_snapshot_retained
 cmp -s /mnt/stl-install.sh /root/stl-e2e-bundle/install.sh || fail noncanonical_archived_installer
 bash /root/stl-e2e-bundle/install.sh install --bundle /root/stl-e2e-bundle --backends native
 test -x /usr/local/bin/stl && test -L /usr/local/bin/stlink || fail canonical_install_failed
@@ -99,8 +120,25 @@ grep -q "APT sources explicitly bypass signature verification" /tmp/stl-e2e-sour
   fail trusted_deb822_source_wrong_refusal
 rm /etc/apt/sources.list.d/stl-e2e-untrusted.sources
 [[ ! -e /tmp/stl-e2e-source-apt-called ]] || fail untrusted_source_reached_apt
+
+# Legitimate disabled source entries are harmless: classic comments and
+# Deb822 Enabled: no must not prevent *real* signed selected APT recovery.
+printf "# deb [trusted=yes] http://127.0.0.1/ nonexisting main\\n" \
+  > /etc/apt/sources.list.d/stl-e2e-inactive.list
+printf "Types: deb\\nURIs: http://127.0.0.1/\\nSuites: nonexisting\\nComponents: main\\nTrusted: yes\\nEnabled: no\\n" \
+  > /etc/apt/sources.list.d/stl-e2e-inactive.sources
+if bash /mnt/stl-install.sh prepare --backends native,wireguard \
+    --expected-missing wireguard-tools > /tmp/stl-e2e-source-error 2>&1; then
+  fail incomplete_fake_apt_precondition_unexpected_success
+fi
+[[ -e /tmp/stl-e2e-source-apt-called ]] ||
+  { cat /tmp/stl-e2e-source-error >&2; fail inactive_sources_wrongly_blocked_before_apt; }
+grep -q "APT_DEPENDENCY_PLAN failed" /tmp/stl-e2e-source-error ||
+  fail inactive_sources_failed_before_package_planning
+rm /tmp/stl-e2e-source-apt-called
 mv -- /tmp/stl-e2e-source-apt-original "$apt_bin"
 echo "APT_NATIVE_WG_TRUSTED_SOURCE_BYPASS_REFUSED=PASS"
+echo "APT_INACTIVE_TRUST_ENTRIES_PERMIT_PACKAGE_PLAN=PASS"
 
 # An otherwise valid native/WG dependency preview must not acquire trust
 # from a foreign candidate source merely claiming to be a normal APT index.

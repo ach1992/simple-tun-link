@@ -70,7 +70,7 @@ case "$action" in
           permissions=$(stat -c %a -- "$path")
           [[ $permissions =~ ^[0-7]{3,4}$ ]] ||
             fail "invalid archive/extract ancestor mode: $path"
-          if (( (8#$permissions & 8#022) != 0 && (8#$permissions & 8#1000) == 0 )); then
+          if (( (8#$permissions & 8#022) != 0 )); then
             fail "untrusted writable archive/extract ancestor: $path"
           fi
         done
@@ -78,12 +78,17 @@ case "$action" in
       [[ $(stat -c %u -- "$archive") == 0 ]] ||
         fail 'privileged extraction requires a root-owned transferred archive'
     fi
-    archive_bytes=$(stat -c %s -- "$archive")
-    (( archive_bytes > 0 && archive_bytes <= 134217728 )) ||
+    permissions=$(stat -c %a -- "$archive")
+    [[ $permissions =~ ^[0-7]{3,4}$ ]] &&
+      (( (8#$permissions & 8#022) == 0 )) ||
+      fail 'local source archive is writable by group or others'
+    [[ $(stat -c %u -- "$archive") == "$EUID" ]] ||
+      fail 'local source archive ownership is unsafe'
+    # Bound the untrusted transfer BEFORE allocating the private snapshot.
+    # Check its copied size again before any tar inspection.
+    source_bytes=$(stat -c %s -- "$archive")
+    (( source_bytes > 0 && source_bytes <= 134217728 )) ||
       fail 'local archive exceeds the 128 MiB compressed-size bound'
-    actual_digest=$(sha256sum -- "$archive" | awk '{print $1}')
-    [[ $actual_digest == "$expected_digest" ]] ||
-      fail 'local archive SHA256 differs from the independently confirmed release digest'
 
     archive_name=$(basename -- "$archive")
     [[ $archive_name =~ ^stl_(v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?|dev-[0-9a-f]{12})_linux_(amd64|arm64)_local-install\.tar\.gz$ ]] ||
@@ -92,7 +97,40 @@ case "$action" in
     arch=${BASH_REMATCH[3]}
     names=("stl_${version}_linux_${arch}" install.sh LICENSE BUILD-MANIFEST.txt LOCAL-INSTALL.txt SHA256SUMS)
     expected_names=$(printf '%s\n' "${names[@]}")
-    listed=$(LC_ALL=C tar -tzf "$archive" --quoting-style=escape) ||
+
+    # Copy the supplied archive to a private newly created operation-local
+    # snapshot BEFORE authenticating it. Only this root/user-owned 0700
+    # directory's 0600 copy is ever hashed, inspected or extracted. Even an
+    # already-open writer to the transferred original cannot alter this copy.
+    stage=$(mktemp -d "$parent/.stl-unpack.XXXXXXXX") ||
+      fail 'cannot stage a private immutable-for-operation archive snapshot'
+    snapshot="$stage/$archive_name"
+    unpack_complete=0
+    destination_created=0
+    unpack_cleanup() {
+      if [[ -d $stage && ! -L $stage ]]; then
+        rm -rf --one-file-system -- "$stage"
+      fi
+      if [[ $unpack_complete != 1 && $destination_created == 1 &&
+            -d $destination && ! -L $destination ]]; then
+        rm -rf --one-file-system -- "$destination"
+      fi
+    }
+    trap unpack_cleanup EXIT
+    cp -- "$archive" "$snapshot" ||
+      fail 'cannot copy archive into private verification snapshot'
+    chmod 0600 -- "$snapshot" || fail 'cannot restrict private archive snapshot'
+    [[ -f $snapshot && ! -L $snapshot &&
+       $(stat -c %u -- "$snapshot") == "$EUID" ]] ||
+      fail 'private archive snapshot identity is unsafe'
+    archive_bytes=$(stat -c %s -- "$snapshot")
+    (( archive_bytes > 0 && archive_bytes <= 134217728 )) ||
+      fail 'local archive exceeds the 128 MiB compressed-size bound'
+    actual_digest=$(sha256sum -- "$snapshot" | awk '{print $1}')
+    [[ $actual_digest == "$expected_digest" ]] ||
+      fail 'local archive SHA256 differs from the independently confirmed release digest'
+
+    listed=$(LC_ALL=C tar -tzf "$snapshot" --quoting-style=escape) ||
       fail 'cannot inspect archive member names'
     [[ $listed == "$expected_names" ]] ||
       fail 'local archive has unexpected, duplicate or unsafe member names'
@@ -100,7 +138,7 @@ case "$action" in
     # GNU tar verbose listing supplies file type, declared size and owner.
     # Reject every symlink/hardlink/sparse/device/directory member, including
     # type substitutions with correct names, before writing a single file.
-    metadata=$(LC_ALL=C tar -tvzf "$archive" --numeric-owner --full-time --quoting-style=escape) ||
+    metadata=$(LC_ALL=C tar -tvzf "$snapshot" --numeric-owner --full-time --quoting-style=escape) ||
       fail 'cannot inspect archive metadata'
     mapfile -t details <<< "$metadata"
     [[ ${#details[@]} == ${#names[@]} ]] ||
@@ -120,14 +158,8 @@ case "$action" in
     # Extraction is exclusive to a newly created private directory; tar is
     # never allowed to overwrite existing names or restore archive owners.
     mkdir -m 0700 -- "$destination" || fail 'cannot create private extract directory'
-    unpack_complete=0
-    unpack_cleanup() {
-      if [[ $unpack_complete != 1 && -d $destination && ! -L $destination ]]; then
-        rm -rf --one-file-system -- "$destination"
-      fi
-    }
-    trap unpack_cleanup EXIT
-    tar --extract --gzip --file "$archive" --directory "$destination" \
+    destination_created=1
+    tar --extract --gzip --file "$snapshot" --directory "$destination" \
       --no-same-owner --no-same-permissions --keep-old-files ||
       fail 'local archive extraction failed'
     for name in "${names[@]}"; do
@@ -157,7 +189,7 @@ case "$action" in
     bash -n "$destination/install.sh" ||
       fail 'extracted canonical installer syntax invalid'
     unpack_complete=1
-    trap - EXIT
+    # EXIT cleanup removes only the private authenticated snapshot on success.
     printf '[OK] Verified and extracted six regular release files into %s; no installation or APT operation occurred.\n' "$destination"
     exit 0
     ;;
@@ -496,15 +528,81 @@ apt_resolve_plan() {
   apt_verify_distro_candidates
 }
 
-# Every selected package candidate must originate from signed official Debian/Ubuntu archives.
-# apt-get itself verifies repository metadata and package hashes at execution.
-# Reject local APT source shortcuts which deliberately bypass that guarantee.
+# Every selected candidate must originate from signed official Debian/Ubuntu
+# archives. Reject *active* sources with explicit trust bypass, not old
+# commented .list entries or disabled Deb822 stanzas. APT remains responsible
+# for validating all other repository syntax; signed candidate checks are
+# independently enforced later for the complete dependency plan.
 apt_sources_must_be_authenticated() {
-  local file
+  local file format status
   for file in /etc/apt/sources.list /etc/apt/sources.list.d/*.list \
               /etc/apt/sources.list.d/*.sources; do
     [[ -f $file ]] || continue
-    if grep -Eiq '(^|[[:space:]]|\[)trusted[[:space:]]*=[[:space:]]*yes([[:space:]]|\]|$)|^[[:space:]]*Trusted:[[:space:]]*yes([[:space:]]|$)' "$file"; then
+    [[ -r $file ]] || fail 'APT source inventory could not be read'
+    case "$file" in *.sources) format=deb822 ;; *) format=list ;; esac
+    if LC_ALL=C awk -v format="$format" '
+      function trim(v) {
+        sub(/^[[:space:]]+/, "", v)
+        sub(/[[:space:]]+$/, "", v)
+        return v
+      }
+      function record_field(  v) {
+        v = tolower(trim(value))
+        if (key == "trusted" && v == "yes") trusted = 1
+        if (key == "enabled") {
+          # Any duplicate/ambiguous Enabled fields fail closed.
+          if (seen_enabled) disabled = 0
+          else disabled = (v == "no")
+          seen_enabled = 1
+        }
+        key = ""; value = ""
+      }
+      function end_stanza() {
+        record_field()
+        if (trusted && !disabled) rejected = 1
+        trusted = disabled = seen_enabled = 0
+      }
+      {
+        line = $0
+        if (format == "list") {
+          # APT treats every # and all remaining text as a comment.
+          sub(/#.*/, "", line)
+          line = trim(line)
+          if (line !~ /^deb(-src)?[[:space:]]+/) next
+          sub(/^deb(-src)?[[:space:]]+/, "", line)
+          if (substr(line, 1, 1) != "[") next
+          closing = index(line, "]")
+          if (closing < 2) next
+          options = tolower(substr(line, 2, closing - 2))
+          if (options ~ /(^|[[:space:]])trusted[[:space:]]*=[[:space:]]*yes([[:space:]]|$)/)
+            rejected = 1
+          next
+        }
+        # Deb822 entries end at a blank line; an Enabled: no disables only
+        # the stanza containing it. Whole-line comments are ignored.
+        if (line ~ /^[[:space:]]*$/) { end_stanza(); next }
+        if (line ~ /^[[:space:]]*#/) next
+        if (line ~ /^[[:space:]]/ && key != "") {
+          value = value " " trim(line)
+          next
+        }
+        record_field()
+        if (line ~ /^[[:alnum:]][[:alnum:]-]*[[:space:]]*:/) {
+          colon = index(line, ":")
+          key = tolower(trim(substr(line, 1, colon - 1)))
+          value = trim(substr(line, colon + 1))
+        }
+      }
+      END {
+        if (format == "deb822") end_stanza()
+        if (rejected) exit 77
+      }
+    ' "$file"; then
+      :
+    else
+      status=$?
+      [[ $status == 77 ]] ||
+        fail 'APT source inventory could not be inspected'
       fail 'APT sources explicitly bypass signature verification'
     fi
   done

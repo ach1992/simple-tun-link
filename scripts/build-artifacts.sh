@@ -127,6 +127,9 @@ The destination /root/stl must NOT exist yet. As root:
     cd /root/stl-transfer
     archive="stl_${version}_linux_${arch}_local-install.tar.gz"
     trusted_sha256=PASTE_INDEPENDENTLY_VERIFIED_64_HEX_SHA256
+    verified_dir=\$(mktemp -d /root/stl-verified.XXXXXXXX)
+    install -m 0600 -- "\$archive" "\$verified_dir/\$archive"
+    cd "\$verified_dir"
     printf '%s  %s\n' "\$trusted_sha256" "\$archive" | sha256sum -c -
     set -o pipefail
     tar -xOzf "\$archive" install.sh | bash -s -- unpack \
@@ -135,8 +138,11 @@ The destination /root/stl must NOT exist yet. As root:
     sha256sum --check SHA256SUMS
     bash -n install.sh
 
-The canonical unpack mode checks exact six regular members, names, sizes,
-outer digest, fresh private destination, extracted modes and internal hashes.
+The newly copied root-private 0600 archive is the source of both digest
+verification and the streamed installer: never execute from a writable
+transfer source. Unpack itself makes an operation-local private archive copy,
+authenticates and extracts only those protected bytes, and checks exact six
+regular members, names, sizes, fresh destination and internal checksums.
 It does not install STL or call APT. Never extract unverified tar members
 directly as root; use the checked unpack path.
 
