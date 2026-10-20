@@ -123,27 +123,32 @@ grep -q "APT candidate includes a non-distribution package source" /tmp/stl-e2e-
 mv -- /tmp/stl-e2e-source-apt-cache-original "$apt_cache"
 echo "APT_NATIVE_WG_FOREIGN_CANDIDATE_SOURCE_REFUSED=PASS"
 
-# Corrupt cached signed InRelease evidence while keeping signed Packages
-# indexes available for APT -s. The selected candidate must then fail gpgv,
-# before any package install. Restore original signed metadata afterward.
-mkdir -m 0700 /root/stl-e2e-index-backup
-shopt -s nullglob
-index_signatures=(/var/lib/apt/lists/*_InRelease)
-shopt -u nullglob
-[[ ${#index_signatures[@]} -gt 0 ]] || fail missing_signed_index_fixture
-for signed_file in "${index_signatures[@]}"; do
-  cp -p -- "$signed_file" "/root/stl-e2e-index-backup/$(basename -- "$signed_file")"
-  printf "unsigned fixture\\n" > "$signed_file"
-done
+# Preserve the real configured signed APT indexes for its dependency
+# simulation. Substitute only the cryptographic signer result in this
+# disposable guest to prove STL refuses a candidate whose InRelease cannot
+# verify against the installed official archive keyring.
+signer_bin=$(command -v gpgv)
+[[ $signer_bin == /usr/bin/gpgv ]] || fail unexpected_guest_gpgv_path
+mv -- "$signer_bin" /tmp/stl-e2e-gpgv-original
+cat > "$signer_bin" <<MOCK
+#!/bin/bash
+# Only the STL direct official-release verification call is denied; preserve
+# unrelated APT verifier behavior in the disposable package-plan fixture.
+if [[ \$1 == --quiet && \$2 == --keyring ]]; then
+  touch /tmp/stl-e2e-gpgv-denied
+  exit 92
+fi
+exec /tmp/stl-e2e-gpgv-original "\$@"
+MOCK
+chmod 0755 "$signer_bin"
 if bash /mnt/stl-install.sh prepare --backends native,wireguard \
     --expected-missing wireguard-tools > /tmp/stl-e2e-source-error 2>&1; then
   fail unsigned_candidate_index_was_accepted
 fi
+[[ -e /tmp/stl-e2e-gpgv-denied ]] || fail candidate_signer_was_not_invoked
 grep -q "APT candidate InRelease is not signed by the distribution archive" /tmp/stl-e2e-source-error ||
   { sed -n "1,30p" /tmp/stl-e2e-source-error >&2; fail unsigned_candidate_wrong_refusal; }
-for signed_file in "${index_signatures[@]}"; do
-  cp -p -- "/root/stl-e2e-index-backup/$(basename -- "$signed_file")" "$signed_file"
-done
+mv -- /tmp/stl-e2e-gpgv-original "$signer_bin"
 echo "APT_NATIVE_WG_UNSIGNED_CANDIDATE_REFUSED=PASS"
 
 # A controlled mirror-outage fixture proves the real installer reports the
