@@ -47,6 +47,56 @@ test -n "$version"
 Cross-compilation does not prove native arm64 execution, kernel
 support, systemd behavior or peer traffic.
 
+### Single-architecture transferable local-install archives (new build output)
+
+In addition to the existing version-pinned root assets, each newly built
+release/snapshot produces **two separate** files:
+
+- `stl_<version>_linux_amd64_local-install.tar.gz`
+- `stl_<version>_linux_arm64_local-install.tar.gz`
+
+Each contains **exactly** six regular leaf files: `install.sh` (a copy of the
+canonical installer/embedded source at that same commit), one matching
+`stl_<version>_linux_<arch>` executable, `BUILD-MANIFEST.txt`, `LICENSE`,
+`LOCAL-INSTALL.txt`, and an internal `SHA256SUMS` for the other five files.
+The release-wide `SHA256SUMS` includes both complete archive digests, in
+addition to all existing published files. Tar metadata uses stable member
+ordering, timestamps and numeric root ownership. Neither optional helpers,
+distro `.deb` packages, live TLS credentials, nor both architectures are
+included in a single local package. A source checkout generates archives;
+**only a separately authorized immutable release uploads them**.
+
+A maintainer using a new **verified published tag** and trusted source must
+check the selected archive against that tag's independently verified release
+identity **before extraction**. Illustrative checks for a new version (not
+a claim that `v0.1.7` has these assets):
+
+~~~sh
+version=vX.Y.Z
+arch=amd64  # choose arm64 on aarch64 target
+archive="stl_${version}_linux_${arch}_local-install.tar.gz"
+sha256sum --check --ignore-missing SHA256SUMS
+# Exactly six expected simple relative filenames; do not extract unexpected paths.
+tar -tzf "$archive"
+# Extract only into an existing fresh trusted 0700 destination on the target.
+# Then: cd /root/stl && sha256sum --check SHA256SUMS && bash -n install.sh
+# And: bash ./install.sh install --bundle /root/stl --backends native,wireguard
+~~~
+
+A checksum and binary from the same compromised source are **not independent
+authenticity proof**. The administrator must confirm the official immutable
+tag, the canonical same-tag installer and the release provenance before root
+execution. On Linux, the canonical real-prefix installer insists that its
+local bundle folder is `0700`, root-owned, and has trusted ancestors.
+
+Archive validation and native local-install smoke regression run in
+`scripts/e2e/snapshot-install-smoke.sh`; `scripts/test-install.sh` verifies
+same-version idempotence, version/hash refusal, transactional update/rollback
+and foreign-identity rejection. These isolated tests do not prove APT mirror
+availability, real package-hook effects, multi-host Link traffic or reboot.
+For current **published** release `v0.1.7`, the archive is absent; use the
+[exact existing asset/manual installer checklist](INSTALL.md#exact-current-published-stable-inventory-v017).
+
 ## Installer and publication boundaries
 
 The canonical [installer](../scripts/install.sh) verifies the chosen
@@ -72,8 +122,9 @@ actual distro package hooks or kernel traffic.
 
 Publication requires a **separately authorized** action binding an
 accepted exact source commit to an immutable version tag and complete
-assets (the two binaries, `SHA256SUMS`, `BUILD-MANIFEST.txt`,
-`LICENSE` and the applicable fixed-tag bootstrap when supplied).
+assets (the two binaries, architecture-specific local-install archives,
+`SHA256SUMS`, `BUILD-MANIFEST.txt`, `LICENSE` and the applicable
+fixed-tag bootstrap when supplied).
 Verify official GitHub release immutability **at publication**; a tag
 name, HTTPS or checksum uploaded by the same account alone is not
 an independent cryptographic signature of source provenance.

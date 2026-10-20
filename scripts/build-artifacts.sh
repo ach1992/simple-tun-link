@@ -101,9 +101,61 @@ platforms=linux/amd64 linux/arm64
 source=https://github.com/ach1992/simple-tun-link
 mode=$mode
 EOF
+# Ship a separate directly transferable, architecture-specific local package.
+# The packaged installer is byte-identical to the canonical embedded version;
+# the package contains no dependency binaries, host secrets or foreign helpers.
+# Per-package checksums list ONLY files contained in that one archive. The
+# release-wide checksums additionally authenticate each complete archive.
+for arch in amd64 arm64; do
+  filename="stl_${version}_linux_${arch}"
+  archive="stl_${version}_linux_${arch}_local-install.tar.gz"
+  package_dir="$tmp/.package-$arch"
+  mkdir -m 0700 -- "$package_dir"
+  cp -- scripts/install.sh "$package_dir/install.sh"
+  cp -- "$tmp/$filename" "$tmp/LICENSE" "$tmp/BUILD-MANIFEST.txt" "$package_dir/"
+  cat > "$package_dir/LOCAL-INSTALL.txt" <<EOF_LOCAL
+STL local installation (version $version, linux/$arch)
+
+Download this exact archive from the official matching STL GitHub release,
+verify its digest against a separately trusted release identity, then copy
+it onto the destination server. Extract only into a private root-owned
+folder (for example /root/stl) after inspecting the archive's file list.
+
+From that folder, before invoking the installer as root:
+    sha256sum --check SHA256SUMS
+    bash -n install.sh
+
+For a NEW host with native GRE/IPIP and WireGuard selected:
+    sudo bash ./install.sh install --bundle . --backends native,wireguard
+For an already installer-owned host with a newer, verified release:
+    sudo bash ./install.sh update --bundle . --backends native,wireguard
+Then check: stl version --json
+
+Existing selected packages are reused. Only missing selected distro
+prerequisites may use the host's configured, signed APT repositories.
+If APT repositories are unreachable, inspect them and manually choose a
+suitable official signed regional mirror; STL never rewrites sources.
+IPsec package/service preparation needs its separate exact-plan consent.
+Do not download/activate optional WSS or Paqet helpers: neither ships yet.
+EOF_LOCAL
+  (
+    cd "$package_dir"
+    sha256sum -- "$filename" install.sh LICENSE BUILD-MANIFEST.txt LOCAL-INSTALL.txt > SHA256SUMS
+    sha256sum --check SHA256SUMS >/dev/null
+  )
+  # Fixed member list, no absolute paths, no symlinks, canonical ordering,
+  # stable timestamps and owner metadata. Never archive the staging dir itself.
+  tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
+    -C "$package_dir" -cf - \
+    "$filename" install.sh LICENSE BUILD-MANIFEST.txt LOCAL-INSTALL.txt SHA256SUMS \
+    | gzip -n > "$tmp/$archive"
+  rm -rf -- "$package_dir"
+done
 (
   cd "$tmp"
-  entries=("stl_"$version"_linux_amd64" "stl_"$version"_linux_arm64" "LICENSE" "BUILD-MANIFEST.txt")
+  entries=("stl_${version}_linux_amd64" "stl_${version}_linux_arm64" "LICENSE" "BUILD-MANIFEST.txt"
+    "stl_${version}_linux_amd64_local-install.tar.gz"
+    "stl_${version}_linux_arm64_local-install.tar.gz")
   if [[ $stable_bootstrap == true ]]; then
     entries+=("stl-bootstrap.sh")
   fi

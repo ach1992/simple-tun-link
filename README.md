@@ -68,6 +68,56 @@ For IPsec, preparation may require separately approved signed packages
 and an exclusively attested private service. STL must not silently
 take over another VPN installation.
 
+### Local installation without international GitHub access
+
+If a target server cannot reach GitHub, download the files **on another device**
+from the same official tag, transfer them to a root-private `/root/stl/`
+folder and run the canonical installer locally. No GitHub access, Go or Rust
+compiler is required on the destination. For the **currently published
+`v0.1.7` Stable** release (not a future unpublished bundle):
+
+| Select/download on the Internet-connected device | Exact official `v0.1.7` source | Required? |
+| --- | --- | --- |
+| `stl_v0.1.7_linux_amd64` for `uname -m` = `x86_64` **OR** `stl_v0.1.7_linux_arm64` for `aarch64` | [Versioned release assets](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.7) | One architecture only |
+| `SHA256SUMS`, `BUILD-MANIFEST.txt`, `LICENSE` | [Versioned release assets](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.7) | All three |
+| `scripts/install.sh` from the **same `v0.1.7` source tag** | [Exact-tag canonical installer](https://github.com/ach1992/simple-tun-link/blob/v0.1.7/scripts/install.sh) | Required separately; **not** an asset in that release |
+| `stl-bootstrap.sh` | [Versioned release assets](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.7) | Online use only; **not needed** locally |
+
+Verify the release/tag and separately obtained installer source, transfer the
+required files as regular files, and on the destination host run:
+
+~~~sh
+uname -m                     # choose only the matching architecture above
+sudo install -d -m 0700 /root/stl
+# Upload the selected files into /root/stl/ via SFTP/SCP before continuing.
+sudo -i                      # commands below are from a root shell
+cd /root/stl
+sha256sum --check --ignore-missing SHA256SUMS
+bash -n install.sh
+bash ./install.sh install --bundle /root/stl --backends native,wireguard
+stl version --json
+~~~
+
+The verified local folder must be owned by root, not a symlink, and mode
+`0700`; the archive/release's own checksum file alone is **not** an
+independent signature. On existing installer-owned installations, use an
+explicit `update` for a newer version; a verified exact same-version `install`
+is a no-op on releases with the new local-bundle support. The installer reuses
+present prerequisites and uses only the server's configured **signed** APT
+sources if a selected distro package is missing. If these sources cannot be
+reached, the operator can **manually** choose an accessible officially signed
+Debian/Ubuntu Iranian or regional mirror; STL never changes APT sources or
+weakens package signatures.
+
+Native GRE/IPIP needs **no extra GitHub helper**; WireGuard uses kernel support
+and distro `wireguard-tools`; optional IPsec needs selected signed distro
+strongSwan packages and separate service/consent checks. WSS and Paqet are
+**not shipped Carriers** and require no download. The future per-architecture
+`*_local-install.tar.gz` archives are under development and **not present in
+v0.1.7**. See [exact download, validation, mirror and rollback steps](docs/INSTALL.md)
+and [release package inventory](docs/RELEASE-ARTIFACTS.md).
+
+
 ## Connect Server A and Server B
 
 1. On **Server A**, run `sudo stl menu` and select **Create tunnel →

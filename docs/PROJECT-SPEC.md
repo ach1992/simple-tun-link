@@ -116,6 +116,14 @@ operator-initiated attempt; safety and credential protection still apply.
   prerequisites. One unavailable or conflicting optional backend should
   not disable unrelated transports. Maintain practical supported-platform
   adapters rather than proliferating separate implementations.
+- **Transferable, low-dependency installation.** Supported STL releases
+  should be installable from exact-version verified local files transferred
+  from another device when the target cannot access international GitHub.
+  Reuse installed prerequisites; for missing selected distro packages use
+  only configured, verified signed repositories. Never automatically rewrite
+  APT sources, weaken signatures, force whole-host upgrades or download
+  unselected future Carrier helpers. One canonical installer owns the
+  transactional executable/install-record lifecycle.
 - **Simple by default, powerful when chosen.** Make the common path easy,
   keep advanced transport/host settings discoverable, and avoid either
   hiding real capabilities or forcing expert configuration on beginners.

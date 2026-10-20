@@ -27,8 +27,10 @@ Only the proven transaction-created vendor strongSwan service may be stopped
 and disabled; pre-existing/foreign services are never modified. Private STL
 service admission remains a separate verified step under the same UI consent.
 No host Link or network configuration is modified by this installer.
---bundle is for locally built/tested bundles; system dependencies are
-only installed on the real /usr/local prefix, never an offline test prefix.
+--bundle uses verified local release files without downloading from GitHub.
+Missing selected distro packages may use only currently configured signed APT;
+failed repositories require operator-controlled mirror remediation.
+System packages are never installed for an isolated nondefault test prefix.
 USAGE
   exit 2
 }
@@ -310,7 +312,7 @@ apt_update_indexes() {
     fi
     [[ -z $output ]] || printf '%s\n' "$output" >&2
     if (( status != 100 )) || ! apt_update_is_only_lists_lock "$output"; then
-      fail 'APT index refresh failed for a reason other than the lists lock; no package install attempted. Inspect APT output and repository trust before retrying.'
+      fail "APT_INDEX_REFRESH failed; missing selected packages: ${missing[*]}. No package install attempted. Inspect the APT output and signature trust. If current repositories are unreachable, manually select an accessible official signed Debian/Ubuntu mirror (including a suitable Iranian/regional mirror), update your APT configuration yourself, then rerun. STL will not edit repositories or disable signatures."
     fi
     if (( attempt == 12 )); then
       fail 'APT lists lock remained busy after bounded waiting; let the other apt-get finish, then rerun this operation. Do not delete APT lock files or kill package-manager processes.'
@@ -327,7 +329,7 @@ apt_resolve_plan() {
   (( ${#missing[@]} > 0 )) || return 0
   text=$(LC_ALL=C apt-get -s -o Debug::NoLocking=1 "${apt_safety[@]}" \
     install --no-install-recommends -- "${missing[@]}") ||
-    fail 'APT cannot resolve the complete selected dependency plan; no packages changed'
+    fail "APT_DEPENDENCY_PLAN failed; missing selected packages: ${missing[*]}. No packages changed. Inspect the signed configured repositories and their candidate indexes. If unreachable, manually configure an accessible appropriately signed regional mirror; do not bypass APT verification."
   while IFS= read -r line; do
     case "$line" in
       Remv\ *|Purg\ *) fail 'APT plan would remove packages; no changes allowed' ;;
@@ -780,7 +782,7 @@ ensure_packages() {
     if [[ $missing_ipsec == 1 ]]; then
       ipsec_report_interrupted_apt
     fi
-    fail 'APT package transaction failed; no automatic retry because partial dpkg effects cannot be ruled out. Inspect dpkg --audit and active APT processes, then reconcile before retrying.'
+    fail "APT_PACKAGE_INSTALL failed; missing selected packages: ${missing[*]}. No automatic retry: partial dpkg/service effects are possible. Inspect dpkg --audit and active APT processes, reconcile first, and if sources were unreachable manually configure a trusted signed Debian/Ubuntu regional mirror; STL will not rewrite sources."
   fi
   for pkg in "${packages[@]}"; do
     package_installed "$pkg" || fail "selected package remains unavailable: $pkg"
@@ -915,8 +917,17 @@ read_record() {
   prior_record_hash=$(hash_file "$record")
 }
 
+# Repeating the SAME verified local release on a safely installer-owned
+# installation is a no-op, not an attempted takeover. Reuse the existing
+# identity/rollback checks of update; never interpret `install` as consent
+# to silently replace an older or foreign STL release.
+exact_reinstall=0
 if [[ $action == install ]]; then
-  [[ ! -e $record && ! -L $record && ! -e $target && ! -L $target && ! -e $alias && ! -L $alias ]] || fail 'an installed or foreign STL identity already exists; refusing takeover'
+  if [[ -e $record || -L $record || -e $target || -L $target || -e $alias || -L $alias ]]; then
+    read_record
+    exact_reinstall=1
+    action=update
+  fi
 else
   read_record
 fi
@@ -1117,6 +1128,26 @@ case "$arch" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) fail "unsupporte
 if [[ -n $bundle ]]; then
   [[ -d $bundle && ! -L $bundle ]] || fail 'bundle must be a directory, not a symlink'
   bundle=$(realpath -e -- "$bundle")
+  if [[ $prefix == /usr/local ]]; then
+    # No untrusted ancestors can substitute source files between validation
+    # and root-owned publication. /tmp with a root-owned sticky directory is
+    # usable, but the final release folder itself must be root-private.
+    path=/
+    IFS='/' read -ra components <<< "${bundle#/}"
+    for component in "${components[@]}"; do
+      [[ -n $component ]] || fail 'invalid local bundle directory'
+      path="${path%/}/$component"
+      [[ -d $path && ! -L $path && $(stat -c %u -- "$path") == 0 ]] ||
+        fail "untrusted local bundle directory owner or path: $path"
+      perms=$(stat -c %a -- "$path")
+      [[ $perms =~ ^[0-7]{3,4}$ ]] || fail 'invalid local bundle directory mode'
+      if [[ $path == "$bundle" ]]; then
+        (( (8#$perms & 8#077) == 0 )) || fail 'local release bundle must be root-private (0700)'
+      elif (( (8#$perms & 8#022) != 0 && (8#$perms & 8#1000) == 0 )); then
+        fail "untrusted writable local bundle ancestor: $path"
+      fi
+    done
+  fi
   is_regular "$bundle/BUILD-MANIFEST.txt" || fail 'bundle manifest missing or unsafe'
   version=$(sed -n 's/^version=//p' "$bundle/BUILD-MANIFEST.txt")
   [[ $version =~ ^(v[0-9]+\.[0-9]+\.[0-9]+([.-][a-zA-Z0-9.-]+)?|dev-[0-9a-f]{12})$ ]] || fail 'invalid bundle version'
@@ -1145,6 +1176,24 @@ commit=$(sed -n 's/^commit=//p' "$manifest")
 install -m 0755 -- "$stage/$asset" "$stage/incoming"
 metadata=$("$stage/incoming" version --json) || fail 'downloaded binary cannot report version metadata'
 [[ $metadata == *\"version\":\"$version\"* && $metadata == *\"commit\":\"$commit\"* ]] || fail 'release executable and manifest identity disagree'
+incoming_hash=$(hash_file "$stage/incoming")
+if [[ $action == update ]]; then
+  if [[ $exact_reinstall == 1 ]]; then
+    [[ $prior_version == "$version" && $prior_hash == "$incoming_hash" ]] ||
+      fail 'install found a different installer-owned STL artifact; use an explicit reviewed update, never silent replacement'
+  elif [[ $prior_version == "$version" ]]; then
+    [[ $prior_hash == "$incoming_hash" ]] ||
+      fail 'same release version has different executable bytes; refusing mutable/repacked tag'
+  else
+    # Normal automatic local updates accept only a strictly newer stable
+    # numeric release. RC/snapshot version transitions require a separately
+    # reviewed migration path, not guessed semver or silent downgrade.
+    [[ $prior_version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+      fail 'cannot prove safe upgrade ordering for non-Stable release versions'
+    first=$(printf '%s\n%s\n' "$prior_version" "$version" | LC_ALL=C sort -V | head -n 1)
+    [[ $first == "$prior_version" ]] || fail "refusing downgrade from $prior_version to $version"
+  fi
+fi
 # Install only missing distro-native prerequisites, after authenticating the
 # exact candidate artifact and BEFORE touching the canonical STL executable.
 # Package installations are not part of the STL binary rollback transaction;
