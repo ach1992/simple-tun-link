@@ -457,6 +457,15 @@ token in the process argv or environment. The server's generated
 protected 0600 secret; its bytes must never be logged, exposed in
 normal diagnostics or checked into the repository. Only a publicly known
 **test-only** bearer appears in the committed golden-policy fixture.
+Upstream wstunnel v11 prints restriction rules (server) and authorization
+HTTP headers (client) at DEBUG/TRACE, so such verbosity is **unsafe** with
+this bearer-backed policy. Both generated invocations pin the explicit
+global `--log-lvl INFO` flag, which takes precedence over an inherited
+`RUST_LOG=DEBUG`; normal operational INFO/WARN/ERROR remains available.
+Future process owners must preserve this flag and may not enable
+DEBUG/TRACE unless an independently reviewed upstream patch or redaction
+strategy prevents leaking credentials. Protecting both credential files
+remains mandatory: log filtering cannot replace file permissions.
 Issuance, peer exchange, token rotation and revocation are future
 Carrier runtime gates, not implemented or authorized here.
 
@@ -481,7 +490,11 @@ through its internal entrypoint. It tests a permitted UDP echo and
 denies a foreign client CN (even with the correct bearer), an untrusted
 client CA, a different remote UDP port, an untrusted server CA,
 TCP forwarding, and a trusted-CA no-CN certificate that explicitly
-forges the authorized path **without the valid Link bearer**.
+forges the authorized path **without the valid Link bearer**;
+a trusted missing-CN certificate **with** the valid bearer is a positive
+check of the explicitly narrower authorization contract. Client denials
+are isolated from unrelated retries, and the runner asserts that inherited
+`RUST_LOG=DEBUG` does **not** leak the public test bearer to helper logs.
 This is upstream helper/Policy compatibility evidence **only**, not
 an STL-managed WireGuard Link or a multi-host throughput result.
 

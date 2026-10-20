@@ -18,6 +18,11 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/domain"
 )
 
+// safeWstunnelLogLevel must remain explicit: upstream v11 DEBUG/TRACE
+// can print bearer-bearing restriction rules and HTTP upgrade requests.
+// An explicit clap --log-lvl wins over inherited RUST_LOG on both roles.
+const safeWstunnelLogLevel = "INFO"
+
 // Command is an argv/env specification, never a shell fragment. The caller
 // must first validate exact owner, executable hash, binary path, root-owned
 // credential directory, certificate chain/SAN/CN and restrictive mode.
@@ -88,7 +93,7 @@ func Build(link domain.Link, carrier composition.Carrier, binary, privateRoot, a
 		uri := url.URL{Scheme: "wss", Host: path.WSSPeerTCP.String()}
 		// Use the actual verified peer certificate DNS SAN; a physical IP
 		// underlay must not be misrepresented as a DNS address.
-		command.Args = []string{"client", "--tls-verify-certificate",
+		command.Args = []string{"client", "--log-lvl", safeWstunnelLogLevel, "--tls-verify-certificate",
 			"--tls-certificate", clientCert, "--tls-private-key", clientKey}
 		if path.TLSName != path.WSSPeerTCP.Addr().String() {
 			// Only override SNI/peer hostname for an explicitly selected
@@ -105,7 +110,7 @@ func Build(link domain.Link, carrier composition.Carrier, binary, privateRoot, a
 			return Command{}, fmt.Errorf("invalid WSS listener topology")
 		}
 		uri := url.URL{Scheme: "wss", Host: path.WSSLocalTCP.String()}
-		command.Args = []string{"server", "--tls-certificate", serverCert,
+		command.Args = []string{"server", "--log-lvl", safeWstunnelLogLevel, "--tls-certificate", serverCert,
 			"--tls-private-key", serverKey,
 			"--tls-client-ca-certs", clientCA,
 			"--restrict-config", restrict, uri.String()}

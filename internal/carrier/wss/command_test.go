@@ -60,12 +60,16 @@ func TestRestrictedWSSCommandsAreExecutableArgumentArraysNotShells(t *testing.T)
 		if cmd.Binary != "/opt/stl/wstunnel" || len(cmd.Args) < 5 {
 			t.Fatalf("missing explicit executable/arguments %+v", cmd)
 		}
+		if strings.Contains(strings.Join(cmd.Args, "\x00"), fixtureAuthorizationToken) ||
+			strings.Contains(strings.Join(cmd.Env, "\x00"), fixtureAuthorizationToken) {
+			t.Fatal("WSS bearer must never appear in argv or environment")
+		}
 		if strings.Contains(strings.Join(cmd.Args, " "), " --tls-sni-disable") ||
 			strings.Contains(strings.Join(cmd.Args, " "), " --insecure") {
 			t.Fatalf("TLS verification bypass is forbidden: %+v", cmd.Args)
 		}
 		if tc.role == composition.Dial {
-			want := []string{"client", "--tls-verify-certificate",
+			want := []string{"client", "--log-lvl", "INFO", "--tls-verify-certificate",
 				"--tls-certificate", filepath.Join(root, "client-cert.pem"),
 				"--tls-private-key", filepath.Join(root, "client-key.pem"),
 				"--tls-sni-override", "server.example",
@@ -81,7 +85,7 @@ func TestRestrictedWSSCommandsAreExecutableArgumentArraysNotShells(t *testing.T)
 				t.Fatalf("missing per-Link explicit server-trust store: %+v", cmd)
 			}
 		} else {
-			want := []string{"server",
+			want := []string{"server", "--log-lvl", "INFO",
 				"--tls-certificate", filepath.Join(root, "server-cert.pem"),
 				"--tls-private-key", filepath.Join(root, "server-key.pem"),
 				"--tls-client-ca-certs", filepath.Join(root, "client-ca.pem"),

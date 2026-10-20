@@ -57,6 +57,9 @@ if [[ "${1:-}" == "--inside" ]]; then
   verify_pinned "$bin"
   isolated_namespace_required "$tmp"
   [[ -d "$tmp" && ! -L "$tmp" ]] || { echo 'Untrusted test fixture directory' >&2; exit 2; }
+  # Deliberately inherited unsafe debug configuration. Explicit --log-lvl
+  # INFO in both roles must override it, including in this real binary test.
+  export RUST_LOG=DEBUG
   cd "$tmp"
   ip link set lo up
   # Documentation-only physical underlay endpoints, local to this netns.
@@ -100,7 +103,7 @@ while True:
 PY
   python3 echo.py >echo.log 2>&1 &
   pids+=("$!")
-  timeout 50s "$bin" server \
+  timeout 50s "$bin" server --log-lvl INFO \
     --tls-certificate server.pem \
     --tls-private-key server.key \
     --tls-client-ca-certs ca.pem \
@@ -126,13 +129,21 @@ PY
       # this trusted-CA credential when it lacks the Link secret.
       extra+=(--http-upgrade-path-prefix "$CN")
     fi
-    SSL_CERT_FILE="$ca_bundle" timeout 35s "$bin" client \
+    SSL_CERT_FILE="$ca_bundle" timeout 35s "$bin" client --log-lvl INFO \
       --tls-verify-certificate --tls-certificate "$who.pem" \
       --tls-private-key "$who.key" "${extra[@]}" \
       -L "udp://127.0.0.1:$local_port:127.0.0.1:$dst?timeout_sec=0" \
       wss://198.51.100.21:59443 >"$who.$local_port.log" 2>&1 &
     pids+=("$!")
     sleep 0.2
+  }
+  # Keep each policy denial attributable to its own client. In particular,
+  # no rejected background client may retry during a later negative case.
+  stop_udp_clients() {
+    local pid
+    for pid in "${pids[@]:2}"; do kill "$pid" 2>/dev/null || :; done
+    for pid in "${pids[@]:2}"; do wait "$pid" 2>/dev/null || :; done
+    pids=("${pids[0]}" "${pids[1]}")
   }
   cat > check.py <<'PY'
 import socket, sys, time
@@ -156,21 +167,27 @@ print("ALLOW_PASS" if allow else "DENY_PASS", port)
 PY
   launch_udp good 53001 53000
   python3 check.py 53001 allow
+  stop_udp_clients
   # The other trusted certificate has the correct bearer, but its
   # DIFFERENT CN is still rejected by the upstream path restriction.
   launch_udp other 53002 53000
   python3 check.py 53002 deny
+  stop_udp_clients
   launch_udp evil 53003 53000
   python3 check.py 53003 deny
+  stop_udp_clients
   launch_udp good 53004 53009
   python3 check.py 53004 deny
+  stop_udp_clients
   launch_udp good 53005 53000 evil-ca.pem
   python3 check.py 53005 deny
+  stop_udp_clients
   # Reviewer REQUIRED-01: trusted CA, missing CN, explicitly authorized
   # upgrade path, but WITHOUT the independent private Link secret.
   prior_denials=$(grep -ci 'not allowed destination' server.log || true)
   launch_udp missingcn 53007 53000 ca.pem none
   python3 check.py 53007 deny
+  stop_udp_clients
   later_denials=$(grep -ci 'not allowed destination' server.log || true)
   if (( later_denials <= prior_denials )); then
     echo 'Missing-CN request did not prove rejection by server policy' >&2
@@ -181,13 +198,20 @@ PY
   prior_denials=$later_denials
   launch_udp missingcn 53008 53000 ca.pem authorization-headers-wrong
   python3 check.py 53008 deny
+  stop_udp_clients
   later_denials=$(grep -ci 'not allowed destination' server.log || true)
   if (( later_denials <= prior_denials )); then
     echo 'Wrong bearer did not prove rejection by server policy' >&2
     exit 1
   fi
 
-  SSL_CERT_FILE=ca.pem timeout 15s "$bin" client \
+  # The revised contract intentionally permits a CA-trusted no-CN
+  # certificate IF it also knows the private per-Link bearer and path.
+  launch_udp missingcn 53010 53000
+  python3 check.py 53010 allow
+  stop_udp_clients
+
+  SSL_CERT_FILE=ca.pem timeout 15s "$bin" client --log-lvl INFO \
     --tls-verify-certificate --tls-certificate good.pem \
     --tls-private-key good.key \
     --http-headers-file authorization-headers \
@@ -222,6 +246,21 @@ PY
     echo "Missing mTLS unknown issuer rejection" >&2
     exit 1
   }
+  # An upstream v11 DEBUG-level restriction dump or HTTP request would
+  # contain this known, publicly documented test token. Never print it.
+  python3 - <<'PY_LOG'
+from pathlib import Path
+header = Path("authorization-headers").read_text()
+if not header.startswith("Authorization: Bearer "):
+    raise SystemExit("Missing test authorization header")
+token = header.removeprefix("Authorization: Bearer ").strip()
+if len(token) != 64:
+    raise SystemExit("Malformed test authorization bearer")
+for log in sorted(Path(".").glob("*.log")):
+    if token in log.read_text(errors="replace"):
+        raise SystemExit(f"Sensitive authorization test bearer leaked into helper log: {log.name}")
+print("WSTUNNEL_V11_SAFE_LOGGING=PASS")
+PY_LOG
   echo 'WSTUNNEL_V11_PINNED_POLICY_ACCEPTANCE=PASS'
   exit 0
 fi
