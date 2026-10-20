@@ -33,7 +33,14 @@ set -Eeuo pipefail
 fail() { echo "REAL_PACKAGE_PREPARE_GUEST_FAILED=$1" >&2; exit 1; }
 [[ $EUID == 0 && -f /.dockerenv && ${STL_E2E_DISPOSABLE_GUEST:-} == approved ]] || fail not_disposable_guest
 test ! -e /usr/local/bin/stl || fail untrusted_existing_stl
-bash /mnt/stl-install.sh install --bundle /mnt/stl-bundle --backends native
+# A CI bind mount inherits the unprivileged host runner UID. The real host
+# installer correctly refuses that source as untrusted for root publication.
+# Copy the already checksummed, read-only fixture into a private root-owned
+# guest directory instead of weakening the production security gate.
+install -d -m 0700 /root/stl-e2e-bundle
+cp -a /mnt/stl-bundle/. /root/stl-e2e-bundle/
+chown -R 0:0 /root/stl-e2e-bundle
+bash /mnt/stl-install.sh install --bundle /root/stl-e2e-bundle --backends native
 test -x /usr/local/bin/stl && test -L /usr/local/bin/stlink || fail canonical_install_failed
 before_bin=$(sha256sum /usr/local/bin/stl | awk "{print \$1}")
 before_record=$(sha256sum /usr/local/lib/simple-tun-link/install-record | awk "{print \$1}")

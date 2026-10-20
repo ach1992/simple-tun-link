@@ -11,7 +11,13 @@ fail() { echo "IPSEC_MANAGED_APT_E2E_FAILED=$1" >&2; exit 1; }
 [[ ! -f /usr/sbin/charon-systemd && ! -e /etc/systemd/system/strongswan.service ]] ||
   fail strongswan_not_clean_before_test
 [[ -r /mnt/stl-install.sh && -d /mnt/stl-bundle ]] || fail missing_readonly_bundle
-bash /mnt/stl-install.sh install --bundle /mnt/stl-bundle --backends native
+# Release bundle input remains read-only mounted from the runner. The guest
+# must use a root-owned 0700 source; a user-owned host bind mount must not be
+# silently promoted into a trusted root installer input.
+install -d -m 0700 /root/stl-e2e-bundle
+cp -a /mnt/stl-bundle/. /root/stl-e2e-bundle/
+chown -R 0:0 /root/stl-e2e-bundle
+bash /mnt/stl-install.sh install --bundle /root/stl-e2e-bundle --backends native
 [[ -x /usr/local/bin/stl ]] || fail no_verified_installed_binary
 original=$(sha256sum /usr/local/bin/stl | awk '{print $1}')
 record=$(sha256sum /usr/local/lib/simple-tun-link/install-record | awk '{print $1}')
