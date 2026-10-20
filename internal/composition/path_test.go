@@ -176,7 +176,13 @@ func TestWSSRejectsUnprovenProviderOrAmbiguousRoleAndAuthentication(t *testing.T
 			v.TLSServerName = ""
 			return v
 		}()},
-		{"listen-with-client-server-name", wg, func() Carrier { v := accepted; v.Role = Listen; v.LocalForwardUDP = 0; return v }()},
+		{"listen-with-unrelated-ip-san", wg, func() Carrier {
+			v := accepted
+			v.Role = Listen
+			v.LocalForwardUDP = 0
+			v.TLSServerName = "192.0.2.9"
+			return v
+		}()},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

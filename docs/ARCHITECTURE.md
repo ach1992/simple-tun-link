@@ -434,16 +434,80 @@ A first internal, secret-free `internal/composition` path planner records:
   dial/listen roles, per-Link TLS identity and deterministic per-Link resource
   reservations. All other WSS/backend combinations fail closed.
 
-The `internal/carrier/wss` adapter currently **renders only** a restricted
-mTLS wstunnel argv and one exact client-certificate-path-to-loopback-WG-UDP
-server policy. It does not provision keys, launch services or enable a new
-Carrier in the public Link schema. Current shipped/native Link behavior is
-unchanged; this staging is intentionally not runnable as an STL-managed WSS
-Link until the following *non-optional* integration work passes:
+The `internal/carrier/wss` adapter renders a restricted mTLS wstunnel
+argv and an exact per-Link protected bearer-token/path-to-loopback-WG-UDP
+policy. **Security boundary:** wstunnel v11.0.0 extracts the mTLS client
+certificate CN only when it is present; a certificate with no parseable
+CN can explicitly request another HTTP upgrade path. Therefore
+`!PathPrefix` by itself is **not certificate identity authorization**.
+The acceptance contract is **both** valid client-CA mTLS **and** possession
+of an independent randomly generated 256-bit authorization token scoped
+to the Link. The server additionally checks the exact link path and
+permitted UDP/loopback destination. The CN check is defense in depth
+when present, **not** sufficient or guaranteed alone. A trusted
+certificate without CN that possesses the correct per-Link bearer can
+still authenticate under this explicit model; no promise of strict
+certificate-leaf CN pinning is made for upstream v11. This contract
+must be independently reviewed before a runnable Carrier is admitted.
+
+The client reads its `authorization-headers` from a verified private
+0600 per-Link file using `--http-headers-file`; it never includes the
+token in the process argv or environment. The server's generated
+`restrictions.yaml` **contains the private token** and must remain a
+protected 0600 secret; its bytes must never be logged, exposed in
+normal diagnostics or checked into the repository. Only a publicly known
+**test-only** bearer appears in the committed golden-policy fixture.
+Upstream wstunnel v11 prints restriction rules (server) and authorization
+HTTP headers (client) at DEBUG/TRACE, so such verbosity is **unsafe** with
+this bearer-backed policy. Both generated invocations pin the explicit
+global `--log-lvl INFO` flag, which takes precedence over an inherited
+`RUST_LOG=DEBUG`; normal operational INFO/WARN/ERROR remains available.
+Future process owners must preserve this flag and may not enable
+DEBUG/TRACE unless an independently reviewed upstream patch or redaction
+strategy prevents leaking credentials. Protecting both credential files
+remains mandatory: log filtering cannot replace file permissions.
+Issuance, peer exchange, token rotation and revocation are future
+Carrier runtime gates, not implemented or authorized here.
+
+The adapter also provides **read-only**, fail-closed local checks:
+no-symlink per-Link TLS credential inspection under
+`$stateRoot/credentials/wss/<LinkID>/` (private 0700 directories,
+singly linked 0600 CA/cert/key **and bearer files**, valid CA/leaf
+certificate usage including digital signatures and exact selected SAN),
+and no-symlink pinned executable hash/owner/inode inspection.
+The caller must supply a separately approved upstream SHA-256 and
+revalidate the exact objects before actually starting the helper; file
+inspection alone proves neither a peer's trust decision nor executable
+lifecycle ownership.
+
+An **opt-in disposable namespace acceptance**
+(`scripts/e2e/wss-v11-compat.sh`) checks the real upstream
+`wstunnel v11.0.0` executable on Linux x86_64 against a pinned hash,
+using the renderer's exact committed server-policy fixture. The
+runner checks binary identity and a new user+network namespace before
+**any** private network modification, including when directly invoked
+through its internal entrypoint. It tests a permitted UDP echo and
+denies a foreign client CN (even with the correct bearer), an untrusted
+client CA, a different remote UDP port, an untrusted server CA,
+TCP forwarding, and a trusted-CA no-CN certificate that explicitly
+forges the authorized path **without the valid Link bearer**;
+a trusted missing-CN certificate **with** the valid bearer is a positive
+check of the explicitly narrower authorization contract. Client denials
+are isolated from unrelated retries, and the runner asserts that inherited
+`RUST_LOG=DEBUG` does **not** leak the public test bearer to helper logs.
+This is upstream helper/Policy compatibility evidence **only**, not
+an STL-managed WireGuard Link or a multi-host throughput result.
+
+The adapter still does **not** provision TLS credentials, start services
+or enable a Carrier in the public Link schema. Current shipped/native
+Link behavior is unchanged; staging is intentionally not runnable as
+an STL-managed WSS Link until these non-optional steps pass:
 
 1. Use a verified, pinned/offline-capable helper and a protected per-Link
-   TLS issuance/rotation/trust store; verify server SAN/IP, client CN,
-   certificate chains and strict destination allowlist before activation.
+   TLS and per-Link bearer issuance/rotation/trust store; verify exact
+   server SAN/IP, TLS certificate chains, bearer pairing/revocation
+   and strict destination allowlist before activation. Explicitly
+   evaluate the narrowed bearer+mTLS identity model before release.
 2. Make a composed **one-Link** backend plan own helper process/unit,
    private files, dedicated TCP/UDP listeners, kernel WG interface/port,
    exact input/firewall isolation, MTU and crash-recovery evidence. The

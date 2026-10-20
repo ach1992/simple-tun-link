@@ -1,8 +1,10 @@
 package wss
 
 import (
+	"bytes"
 	"encoding/base64"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -11,6 +13,9 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/composition"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 )
+
+// Public fixture only; do not use this constant as a real bearer credential.
+const fixtureAuthorizationToken = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 func wssTestLink() domain.Link {
 	local, peer := make([]byte, 32), make([]byte, 32)
@@ -47,23 +52,28 @@ func TestRestrictedWSSCommandsAreExecutableArgumentArraysNotShells(t *testing.T)
 		if tc.role == composition.Dial {
 			c.TLSServerName = "server.example"
 		}
-		cmd, err := Build(l, c, "/opt/stl/wstunnel", "/var/lib/simple-tun-link")
+		cmd, err := Build(l, c, "/opt/stl/wstunnel", "/var/lib/simple-tun-link", fixtureAuthorizationToken)
 		if err != nil {
 			t.Fatal(err)
 		}
-		root := filepath.Join("/var/lib/simple-tun-link", "carrier", "wss", string(l.ID))
+		root := filepath.Join("/var/lib/simple-tun-link", "credentials", "wss", string(l.ID))
 		if cmd.Binary != "/opt/stl/wstunnel" || len(cmd.Args) < 5 {
 			t.Fatalf("missing explicit executable/arguments %+v", cmd)
+		}
+		if strings.Contains(strings.Join(cmd.Args, "\x00"), fixtureAuthorizationToken) ||
+			strings.Contains(strings.Join(cmd.Env, "\x00"), fixtureAuthorizationToken) {
+			t.Fatal("WSS bearer must never appear in argv or environment")
 		}
 		if strings.Contains(strings.Join(cmd.Args, " "), " --tls-sni-disable") ||
 			strings.Contains(strings.Join(cmd.Args, " "), " --insecure") {
 			t.Fatalf("TLS verification bypass is forbidden: %+v", cmd.Args)
 		}
 		if tc.role == composition.Dial {
-			want := []string{"client", "--tls-verify-certificate",
+			want := []string{"client", "--log-lvl", "INFO", "--tls-verify-certificate",
 				"--tls-certificate", filepath.Join(root, "client-cert.pem"),
 				"--tls-private-key", filepath.Join(root, "client-key.pem"),
-				"--tls-sni-override", "server.example", "-L",
+				"--tls-sni-override", "server.example",
+				"--http-headers-file", filepath.Join(root, "authorization-headers"), "-L",
 				"udp://127.0.0.1:51321:127.0.0.1:51821?timeout_sec=0",
 				"wss://203.0.113.34:443",
 			}
@@ -75,7 +85,7 @@ func TestRestrictedWSSCommandsAreExecutableArgumentArraysNotShells(t *testing.T)
 				t.Fatalf("missing per-Link explicit server-trust store: %+v", cmd)
 			}
 		} else {
-			want := []string{"server",
+			want := []string{"server", "--log-lvl", "INFO",
 				"--tls-certificate", filepath.Join(root, "server-cert.pem"),
 				"--tls-private-key", filepath.Join(root, "server-key.pem"),
 				"--tls-client-ca-certs", filepath.Join(root, "client-ca.pem"),
@@ -88,6 +98,7 @@ func TestRestrictedWSSCommandsAreExecutableArgumentArraysNotShells(t *testing.T)
 			policy := string(cmd.ServerRestrictions)
 			for _, part := range []string{
 				"^stl0123456789abcdef0123456789abcdef$",
+				"!Authorization", "^Bearer " + fixtureAuthorizationToken + "$",
 				"!Tunnel", "          - Udp", "          - 51820",
 				"host:", "127.0.0.1/32",
 			} {
@@ -119,7 +130,7 @@ func TestWSSCommandBuilderRejectsNonWSSOrUntrustedResourceNames(t *testing.T) {
 		{dial, "/opt/stl/wstunnel", "/tmp/../var/lib/simple-tun-link"},
 	}
 	for i, tc := range tests {
-		if _, err := Build(l, tc.carrier, tc.binary, tc.root); err == nil {
+		if _, err := Build(l, tc.carrier, tc.binary, tc.root, fixtureAuthorizationToken); err == nil {
 			t.Fatalf("unsafe case %d accepted", i)
 		}
 	}
@@ -136,18 +147,57 @@ func TestWSSDialWithoutDNSOverrideRequiresPhysicalIPCertificateSAN(t *testing.T)
 	if p.TLSName != l.Underlay.Peer.String() {
 		t.Fatalf("default peer identity not public IP: %s", p.TLSName)
 	}
-	cmd, err := Build(l, carrier, "/opt/stl/wstunnel", "/var/lib/simple-tun-link")
+	cmd, err := Build(l, carrier, "/opt/stl/wstunnel", "/var/lib/simple-tun-link", fixtureAuthorizationToken)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// An explicit certificate IP SAN equal to the dialed address
 	// is also valid; it must not create an unsupported SNI override.
 	carrier.TLSServerName = l.Underlay.Peer.String()
-	if explicit, err := Build(l, carrier, "/opt/stl/wstunnel", "/var/lib/simple-tun-link"); err != nil || !reflect.DeepEqual(explicit.Args, cmd.Args) {
+	if explicit, err := Build(l, carrier, "/opt/stl/wstunnel", "/var/lib/simple-tun-link", fixtureAuthorizationToken); err != nil || !reflect.DeepEqual(explicit.Args, cmd.Args) {
 		t.Fatalf("explicit physical IP SAN not equivalent to omitted override: %v", err)
 	}
 	args := strings.Join(cmd.Args, " ")
 	if strings.Contains(args, "--tls-sni-override") || !strings.Contains(args, "--tls-verify-certificate") {
 		t.Fatalf("IP SAN path must verify physical endpoint with no unverified SNI override: %s", args)
+	}
+}
+
+// TestPinnedV11RestrictionFixture makes the actual v11 executable parser
+// acceptance use byte-for-byte output of Build, not a hand-edited
+// permissive policy. The fixture is also consumed by the opt-in disposable
+// network-namespace test in scripts/e2e/wss-v11-compat.sh.
+func TestPinnedV11RestrictionFixture(t *testing.T) {
+	link := wssTestLink()
+	link.WireGuard.ListenPort = 53000
+	c := composition.Carrier{Kind: composition.WSS, Role: composition.Listen, PublicTCPPort: 59443, CredentialOwner: link.ID}
+	actual, err := Build(link, c, "/opt/stl/wstunnel", "/var/lib/simple-tun-link", fixtureAuthorizationToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := os.ReadFile("testdata/restrictions-v11.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(actual.ServerRestrictions, expected) {
+		t.Fatalf("wstunnel v11 executable test policy drifted from the canonical WSS renderer")
+	}
+}
+
+func TestWSSRejectsUnsafeBearerTokens(t *testing.T) {
+	l := wssTestLink()
+	for _, role := range []composition.Role{composition.Dial, composition.Listen} {
+		c := composition.Carrier{Kind: composition.WSS, Role: role,
+			PublicTCPPort: 8443, CredentialOwner: l.ID}
+		if role == composition.Dial {
+			c.LocalForwardUDP = 51321
+		}
+		for _, bad := range []string{"", "example", strings.Repeat("A", 64),
+			strings.Repeat("a", 63), strings.Repeat("g", 64),
+			strings.Repeat("a", 64) + "\n"} {
+			if _, err := Build(l, c, "/opt/stl/wstunnel", "/var/lib/simple-tun-link", bad); err == nil {
+				t.Fatalf("unsafe token accepted for role %s", role)
+			}
+		}
 	}
 }
