@@ -16,6 +16,9 @@ const (
 	ResourceLinkSubnet    = "link-subnet"
 	ResourceBackendID     = "backend-id"
 	ResourceUDPListenPort = "udp-listen-port"
+	// TCP listener claims are host-wide reservations in the first composed
+	// Carrier. Address-specific sharing requires its own later proof.
+	ResourceTCPListenPort = "tcp-listen-port"
 	ResourceXFRMID        = "xfrm-id"
 	ResourceRoute         = "route"
 	ResourceFirewall      = "firewall"
@@ -42,10 +45,10 @@ func validateResourceClaim(r ResourceClaim) error {
 		if err != nil || prefix.Masked().String() != r.Key {
 			return fmt.Errorf("link-subnet resource key must be a canonical masked prefix")
 		}
-	case ResourceUDPListenPort:
+	case ResourceUDPListenPort, ResourceTCPListenPort:
 		port, err := strconv.Atoi(r.Key)
 		if err != nil || port < 1 || port > 65535 || strconv.Itoa(port) != r.Key {
-			return fmt.Errorf("udp-listen-port resource key must be a canonical port number")
+			return fmt.Errorf("%s resource key must be a canonical port number", r.Kind)
 		}
 	}
 	return nil

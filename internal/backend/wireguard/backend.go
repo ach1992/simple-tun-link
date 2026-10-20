@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	core "github.com/ach1992/simple-tun-link/internal/backend"
+	"github.com/ach1992/simple-tun-link/internal/composition"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
@@ -273,6 +274,12 @@ func (b *Backend) Plan(ctx context.Context, req core.Request, observed core.Obse
 		return nil, fmt.Errorf("unexpected WireGuard observation")
 	}
 	if err := validateLink(req.Link); err != nil {
+		return nil, err
+	}
+	// The shipped WireGuard path stays a native, zero-Carrier composition.
+	// Future outer Carriers must be admitted explicitly and may not tunnel
+	// via a fake localhost physical Underlay or inherit native firewall rules.
+	if _, err := composition.Build(req.Link, composition.Carrier{}); err != nil {
 		return nil, err
 	}
 	name, _ := InterfaceName(req.Link.ID)

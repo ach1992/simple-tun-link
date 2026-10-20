@@ -14,9 +14,13 @@ Hard boundaries:
 - GRE/IPIP support Native/FOU/GUE.
 - Go is the control plane; native backends keep packet data out of Go.
 - For future Carriers, reuse the existing Engine and native L3 backends;
-  no planned GOST or mandatory new userspace L3 engine. Prove framing,
-  endpoint, security, MTU and resource-ownership compatibility before
-  composing transports. See [Issue #142](https://github.com/ach1992/simple-tun-link/issues/142)
+  no planned GOST or mandatory new userspace L3 engine. The approved
+  direction is **lean Provider/Carrier composition**: keep one Link/Engine
+  lifecycle, no speculative plugin ABI and no runtime Carrier without
+  proven framing, physical/local/private endpoints, security, MTU and
+  resource-ownership compatibility. Internal planning/rendering does not
+  grant permission to start a helper or advertise a public Carrier.
+  See [Issue #142](https://github.com/ach1992/simple-tun-link/issues/142)
   for current Owner gates.
 - No geography-specific data-model roles.
 - No global host tuning merely for convenience.
