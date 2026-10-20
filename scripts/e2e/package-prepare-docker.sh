@@ -83,8 +83,16 @@ verified_archive="/root/stl-e2e-verified/$(basename -- "$source_archive")"
 install -m 0600 -- "$source_archive" "$verified_archive"
 [[ $(sha256sum "$verified_archive" | awk "{print \$1}") == "$STL_E2E_ARCHIVE_SHA256" ]] ||
   fail transferred_archive_digest_mismatch
-tar -xOzf "$verified_archive" install.sh |
-  bash -s -- unpack --archive "$verified_archive" --destination /root/stl-e2e-bundle --sha256 "$STL_E2E_ARCHIVE_SHA256"
+# Fully receive the authenticated installer into the same private directory
+# before execution; do not pipeline a large script to an early-exiting bash.
+bootstrap="/root/stl-e2e-verified/bootstrap-install.sh"
+tar -xOzf "$verified_archive" install.sh > "$bootstrap" ||
+  fail incomplete_archive_installer
+chmod 0600 "$bootstrap"
+bash -n "$bootstrap" || fail malformed_archived_installer
+cmp -s /mnt/stl-install.sh "$bootstrap" || fail noncanonical_preexecution_installer
+bash "$bootstrap" unpack --archive "$verified_archive" \
+  --destination /root/stl-e2e-bundle --sha256 "$STL_E2E_ARCHIVE_SHA256"
 [[ -z $(find /root -maxdepth 1 -name ".stl-unpack.*" -print -quit) ]] ||
   fail authenticated_unpacked_snapshot_retained
 cmp -s /mnt/stl-install.sh /root/stl-e2e-bundle/install.sh || fail noncanonical_archived_installer

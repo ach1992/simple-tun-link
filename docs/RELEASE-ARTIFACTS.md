@@ -83,9 +83,13 @@ trusted_sha256=PASTE_INDEPENDENTLY_VERIFIED_64_HEX_SHA256
 verified_dir=$(mktemp -d /root/stl-verified.XXXXXXXX)
 install -m 0600 -- "$archive" "$verified_dir/$archive"
 cd "$verified_dir"
+set -euo pipefail
+umask 077
 printf '%s  %s\n' "$trusted_sha256" "$archive" | sha256sum --check -
-set -o pipefail
-tar -xOzf "$archive" install.sh | bash -s -- unpack \
+tar -xOzf "$archive" install.sh > ./verified-installer.sh
+chmod 0600 ./verified-installer.sh
+bash -n ./verified-installer.sh
+bash ./verified-installer.sh unpack \
   --archive "$PWD/$archive" --destination /root/stl --sha256 "$trusted_sha256"
 cd /root/stl
 sha256sum --check SHA256SUMS
@@ -99,9 +103,9 @@ tag, the canonical same-tag installer and the release provenance before root
 execution. On Linux, the canonical real-prefix installer insists that its
 local bundle folder is `0700`, root-owned, and has trusted ancestors.
 
-The canonical installer `unpack` mode is streamed only from the newly
-root-private, mode-`0600` copy **after** its independently trusted SHA256
-verification. Its own operation-local `0700` snapshot is separately
+The canonical installer is completely extracted into the same root-private
+mode-`0600` directory and executed **only after** the archive's independently
+trusted SHA256 verification; it is never executed through an unfinished pipe. Its own operation-local `0700` snapshot is separately
 authenticated; only those protected bytes are inspected and extracted.
 The guard rejects writable source archives and writable ancestors, checks
 exact regular members, sizes, owners and a fresh private destination. It

@@ -62,8 +62,15 @@ for packaged_arch in amd64 arm64; do
   unpack="$scratch/archive-$packaged_arch"
   # Exercise the canonical pre-extraction guard, including exact member type,
   # size and private destination, on BOTH generated architectures.
-  tar -xOzf "$archive" install.sh |
-    bash -s -- unpack --archive "$archive" --destination "$unpack" --sha256 "$outer_digest"
+  # Consume the complete authenticated installer before executing it.
+  # Streaming directly to bash can close early and SIGPIPE tar once the
+  # canonical script exceeds the pipe buffer (exit code 141).
+  bootstrap="$scratch/bootstrap-$packaged_arch.sh"
+  tar -xOzf "$archive" install.sh > "$bootstrap" ||
+    fail 'could not extract canonical installer from verified archive'
+  cmp -s scripts/install.sh "$bootstrap" || fail 'untrusted archive installer'
+  bash -n "$bootstrap" || fail 'archive installer syntax invalid'
+  bash "$bootstrap" unpack --archive "$archive" --destination "$unpack" --sha256 "$outer_digest"
   [[ -z $(find "$scratch" -maxdepth 1 -name '.stl-unpack.*' -print -quit) ]] ||
     fail 'successful unpack retained an internal private snapshot'
   (cd "$unpack" && sha256sum --check SHA256SUMS >/dev/null) || fail 'local package checksum failed'

@@ -278,9 +278,14 @@ trusted_sha256=PASTE_INDEPENDENTLY_VERIFIED_64_HEX_SHA256
 verified_dir=$(mktemp -d /root/stl-verified.XXXXXXXX)
 install -m 0600 -- "$archive" "$verified_dir/$archive"
 cd "$verified_dir"
+set -euo pipefail
+umask 077
 printf '%s  %s\n' "$trusted_sha256" "$archive" | sha256sum --check -
-set -o pipefail
-tar -xOzf "$archive" install.sh | bash -s -- unpack \
+# Materialize the complete authenticated script privately before execution.
+tar -xOzf "$archive" install.sh > ./verified-installer.sh
+chmod 0600 ./verified-installer.sh
+bash -n ./verified-installer.sh
+bash ./verified-installer.sh unpack \
   --archive "$PWD/$archive" --destination /root/stl --sha256 "$trusted_sha256"
 cd /root/stl
 sha256sum --check SHA256SUMS
@@ -289,7 +294,7 @@ bash ./install.sh install --bundle /root/stl --backends native,wireguard
 stl version --json
 ~~~
 
-**Do not run the script streamed from an archive before independently
+**Do not execute a script extracted from an archive before independently
 confirming its exact publisher identity and SHA256**. The administrator
 first makes a new root-owned, mode-`0700` verified directory and a mode-`0600`
 copy: never hash a writable transfer and later execute different bytes.

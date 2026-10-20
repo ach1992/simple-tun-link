@@ -130,17 +130,21 @@ The destination /root/stl must NOT exist yet. As root:
     verified_dir=\$(mktemp -d /root/stl-verified.XXXXXXXX)
     install -m 0600 -- "\$archive" "\$verified_dir/\$archive"
     cd "\$verified_dir"
+    set -euo pipefail
+    umask 077
     printf '%s  %s\n' "\$trusted_sha256" "\$archive" | sha256sum -c -
-    set -o pipefail
-    tar -xOzf "\$archive" install.sh | bash -s -- unpack \
+    tar -xOzf "\$archive" install.sh > ./verified-installer.sh
+    chmod 0600 ./verified-installer.sh
+    bash -n ./verified-installer.sh
+    bash ./verified-installer.sh unpack \
       --archive "\$PWD/\$archive" --destination /root/stl --sha256 "\$trusted_sha256"
     cd /root/stl
     sha256sum --check SHA256SUMS
     bash -n install.sh
 
 The newly copied root-private 0600 archive is the source of both digest
-verification and the streamed installer: never execute from a writable
-transfer source. Unpack itself makes an operation-local private archive copy,
+verification and the completely extracted private installer: never execute
+from a writable transfer source. Unpack itself makes an operation-local private archive copy,
 authenticates and extracts only those protected bytes, and checks exact six
 regular members, names, sizes, fresh destination and internal checksums.
 It does not install STL or call APT. Never extract unverified tar members
