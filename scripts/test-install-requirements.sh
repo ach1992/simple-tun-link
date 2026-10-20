@@ -189,6 +189,8 @@ apt_safety=()
 fake_apt_mode=
 apt-get() {
   [[ ${*: -1} == update ]] || { echo 'unexpected APT operation' >&2; return 77; }
+  local strict=0
+  [[ " $* " != *' APT::Update::Error-Mode=any '* ]] || strict=1
   local calls=0
   [[ ! -f $root/apt-calls ]] || read -r calls < "$root/apt-calls"
   printf '%s\n' "$((calls+1))" > "$root/apt-calls"
@@ -205,6 +207,10 @@ apt-get() {
     transient_progress) if (( calls == 0 )); then printf 'Reading package lists... Done\n'; fake_apt_lock; return 100; fi ;;
     transient_old_lock) if (( calls == 0 )); then printf 'E: Could not get lock /var/lib/apt/lists/lock - open (11: Resource temporarily unavailable)\nE: Unable to lock directory /var/lib/apt/lists/\n' >&2; return 100; fi ;;
     wrong_exit) fake_apt_lock; return 17 ;;
+    partial_index)
+      printf 'W: Failed to fetch repository index; using old index files instead.\n' >&2
+      [[ $strict == 1 ]] && return 100
+      return 0 ;;
     *) : ;;
   esac
   printf 'Reading package lists... Done\n'
@@ -228,12 +234,16 @@ for fake_apt_mode in transient_progress transient_old_lock; do
   [[ $(cat "$root/apt-calls") == 2 && $(wc -l < "$root/apt-waits") == 1 ]] ||
     fail "legitimate APT lock variant was not retried once: $fake_apt_mode"
 done
-for fake_apt_mode in untrusted mixed mixed_warning mixed_err mixed_unrelated mixed_progress missing_primary wrong_exit; do
+for fake_apt_mode in untrusted mixed mixed_warning mixed_err mixed_unrelated mixed_progress missing_primary wrong_exit partial_index; do
   reset_fake_apt
   if ( apt_update_indexes > "$root/apt.out" 2> "$root/apt.err" ); then
     fail "APT refresh accepted non-lock error: $fake_apt_mode"
   fi
   [[ $(cat "$root/apt-calls") == 1 && ! -e $root/apt-waits ]] || fail "APT retried non-lock error: $fake_apt_mode"
+  if [[ $fake_apt_mode == partial_index ]]; then
+    grep -q 'APT_INDEX_REFRESH failed; missing selected packages:' "$root/apt.err" ||
+      fail 'partial APT index failure passed without actionable diagnostics'
+  fi
 done
 reset_fake_apt
 fake_apt_mode=permanent
@@ -244,5 +254,6 @@ fi
 grep -q 'Do not delete APT lock files' "$root/apt.err" || fail 'permanent APT lock lacks safe recovery guidance'
 unset -f apt-get sleep fake_apt_lock reset_fake_apt
 printf 'APT_CANONICAL_LOCK_RETRY_AND_NONLOCK_FAIL_CLOSED=PASS\n'
+printf 'APT_PARTIAL_INDEX_ERROR_MODE_ANY=PASS\n'
 
 printf 'Installer requirements checks PASS (Ubuntu 22.04+, Debian 11+, package plans, unsafe inputs, EOL).\n'

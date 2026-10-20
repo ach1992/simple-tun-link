@@ -52,3 +52,5 @@ jobs:
           bash scripts/test-install.sh
           bash scripts/test-install-requirements.sh
           bash scripts/test-quick-install.sh
+      - name: Transferable architecture-specific local bundle smoke
+        run: GOTOOLCHAIN=local bash scripts/e2e/snapshot-install-smoke.sh

@@ -7,7 +7,7 @@ umask 077
 fail() { printf 'SNAPSHOT_INSTALL_SMOKE_FAILED=%s\n' "$1" >&2; exit 1; }
 [[ $EUID -ne 0 ]] || fail 'run as an unprivileged user'
 [[ $(uname -s) == Linux ]] || fail 'Linux required'
-for tool in git go sha256sum cmp mktemp; do
+for tool in git go sha256sum cmp mktemp python3; do
   command -v "$tool" >/dev/null || fail "missing $tool"
 done
 
@@ -25,7 +25,12 @@ case "$(uname -m):$(go env GOARCH)" in
   *) fail 'native amd64/arm64 kernel and Go architecture required' ;;
 esac
 
-scratch="$(mktemp -d /tmp/stl-snapshot-install.XXXXXXXX)"
+# Shared /tmp may be a small tmpfs occupied by concurrent CI/tool jobs.
+# Prefer the available disk-backed temporary location; do not clean other
+# processes' scratch directories to obtain build capacity.
+export TMPDIR="${TMPDIR:-/var/tmp}"
+[[ -d $TMPDIR && -w $TMPDIR ]] || fail 'writable private scratch parent required'
+scratch="$(mktemp -d "$TMPDIR/stl-snapshot-install.XXXXXXXX")"
 trap 'rm -rf -- "$scratch"' EXIT
 mkdir -m 0700 "$scratch/prefix" "$scratch/prefix/bin" "$scratch/prefix/lib"
 
@@ -46,15 +51,237 @@ native_binary="$scratch/bundle/stl_dev-${short_sha}_linux_${arch}"
 [[ -x $native_binary ]] || fail 'native artifact missing'
 native_sha="$(sha256sum "$native_binary" | awk '{print $1}')"
 
+# Verify that each transferable package has precisely the allowed leaf files:
+# no traversal, links, extra helper downloads, or mixed architecture binaries.
+for packaged_arch in amd64 arm64; do
+  archive="$scratch/bundle/stl_dev-${short_sha}_linux_${packaged_arch}_local-install.tar.gz"
+  [[ -f $archive ]] || fail "missing local installation archive $packaged_arch"
+  archive_name=$(basename -- "$archive")
+  outer_digest=$(awk -v name="$archive_name" '$2 == name {print $1}' "$scratch/bundle/SHA256SUMS")
+  [[ $outer_digest =~ ^[0-9a-f]{64}$ ]] || fail 'missing outer archive checksum'
+  unpack="$scratch/archive-$packaged_arch"
+  # Exercise the canonical pre-extraction guard, including exact member type,
+  # size and private destination, on BOTH generated architectures.
+  # Consume the complete authenticated installer before executing it.
+  # Streaming directly to bash can close early and SIGPIPE tar once the
+  # canonical script exceeds the pipe buffer (exit code 141).
+  bootstrap="$scratch/bootstrap-$packaged_arch.sh"
+  tar -xOzf "$archive" install.sh > "$bootstrap" ||
+    fail 'could not extract canonical installer from verified archive'
+  cmp -s scripts/install.sh "$bootstrap" || fail 'untrusted archive installer'
+  bash -n "$bootstrap" || fail 'archive installer syntax invalid'
+  bash "$bootstrap" unpack --archive "$archive" --destination "$unpack" --sha256 "$outer_digest"
+  [[ -z $(find "$scratch" -maxdepth 1 -name '.stl-unpack.*' -print -quit) ]] ||
+    fail 'successful unpack retained an internal private snapshot'
+  (cd "$unpack" && sha256sum --check SHA256SUMS >/dev/null) || fail 'local package checksum failed'
+  cmp -s scripts/install.sh "$unpack/install.sh" || fail 'local installer differs from canonical source'
+  bash -n "$unpack/install.sh" || fail 'local installer syntax invalid'
+  [[ -x "$unpack/stl_dev-${short_sha}_linux_${packaged_arch}" ]] || fail 'local binary not executable'
+done
+
+# The operator's first trust-boundary commands must fail closed before checksum
+# or privileged script execution. Exercise actual documented/generated commands
+# with scoped stubs, never a root filesystem path or production APT operation.
+python3 - "$source_root" "$scratch" <<'PY_OPERATOR'
+from pathlib import Path
+import os
+import subprocess
+import sys
+import textwrap
+
+repo, scratch = map(Path, sys.argv[1:])
+examples = {
+    "install-doc": (repo / "docs/INSTALL.md").read_text(),
+    "release-doc": (repo / "docs/RELEASE-ARTIFACTS.md").read_text(),
+    "generated-local": (scratch / "archive-amd64/LOCAL-INSTALL.txt").read_text(),
+}
+scenarios = ("success", "transfer-cd-fail", "mktemp-fail", "mktemp-empty",
+             "copy-fail", "verified-cd-fail")
+for name, content in examples.items():
+    lines = content.splitlines()
+    mkidx = next(i for i, line in enumerate(lines)
+                 if line.strip() == "verified_dir=$(mktemp -d /root/stl-verified.XXXXXXXX)")
+    begin = max(i for i in range(mkidx)
+                if lines[i].strip() == "set -euo pipefail")
+    end = next(i for i in range(mkidx, len(lines))
+               if lines[i].strip() == 'cd -- "$verified_dir"')
+    prefix = textwrap.dedent("\n".join(lines[begin:end + 1]))
+    assert prefix.startswith("set -euo pipefail\numask 077\n"), name
+    assert prefix.index("cd /root/stl-transfer") < prefix.index("verified_dir=$("), name
+    assert prefix.index('[[ -n "$verified_dir"') < prefix.index("install -m 0600"), name
+    for scenario in scenarios:
+        base = scratch / "operator-failclosed" / name / scenario
+        base.mkdir(parents=True)
+        transfer = base / "transfer"
+        if scenario != "transfer-cd-fail":
+            transfer.mkdir(mode=0o700)
+        procedure = (prefix
+            .replace("/root/stl-transfer", str(transfer))
+            .replace("/root/stl-verified.XXXXXXXX", str(base / "stl-verified.XXXXXXXX"))
+            .replace("/root/stl-verified.*", str(base / "stl-verified.*")))
+        # Only the staging prefix is run. Mock the copy, never any downstream
+        # checksum, tar, installer, system path or privileged operation.
+        mocks = r'''
+install() {
+  printf 'COPY %s\n' "$*" >> "$STL_OPERATOR_TRACE"
+  [[ $STL_OPERATOR_SCENARIO != copy-fail ]]
+}
+mktemp() {
+  if [[ $STL_OPERATOR_SCENARIO == mktemp-fail ]]; then return 80; fi
+  if [[ $STL_OPERATOR_SCENARIO == mktemp-empty ]]; then printf ''; return 0; fi
+  command mktemp "$@"
+}
+cd() {
+  if [[ $STL_OPERATOR_SCENARIO == verified-cd-fail &&
+        "$*" == *"stl-verified."* ]]; then return 81; fi
+  builtin cd "$@"
+}
+'''
+        trace = base / "trace"
+        env = dict(os.environ, STL_OPERATOR_SCENARIO=scenario,
+                   STL_OPERATOR_TRACE=str(trace))
+        run = subprocess.run(
+            ["bash", "-c", mocks + "\n" + procedure +
+             "\nprintf 'PREFIX_COMPLETE\\n'\n"],
+            cwd=base, env=env, capture_output=True, text=True)
+        completed = "PREFIX_COMPLETE" in run.stdout
+        assert (run.returncode == 0) == (scenario == "success"), (
+            name, scenario, run.returncode, run.stderr)
+        assert completed == (scenario == "success"), (name, scenario)
+        copied = trace.exists()
+        assert copied == (scenario in ("copy-fail", "verified-cd-fail", "success")), (
+            name, scenario)
+        if scenario == "mktemp-empty":
+            assert "Private verified archive staging failed" in run.stderr, name
+        if copied:
+            assert str(base / "stl-verified.") in trace.read_text(), (
+                name, scenario, "unsafe copy destination")
+print("OPERATOR_ALL_THREE_PROCEDURES_FAILURE_SEAMS=PASS")
+PY_OPERATOR
+
+# Reject adversarial transfer archives before extraction or execution.
+# Synthetic local fixtures exercise unchanged member names with unsafe types,
+# unbounded payloads, duplicate/traversal members and altered checksums.
+python3 - "$scratch/adversarial" "dev-$short_sha" "$arch" <<'PY'
+from pathlib import Path
+import hashlib
+import io
+import sys
+import tarfile
+
+base, version, arch = sys.argv[1:]
+root = Path(base)
+binary = f"stl_{version}_linux_{arch}"
+names = [binary, "install.sh", "LICENSE", "BUILD-MANIFEST.txt",
+         "LOCAL-INSTALL.txt", "SHA256SUMS"]
+files = {
+    binary: b"#!/bin/sh\nexit 0\n",
+    "install.sh": b"#!/bin/bash\nexit 0\n",
+    "LICENSE": b"MIT License\n",
+    "BUILD-MANIFEST.txt": f"project=simple-tun-link\nversion={version}\n".encode(),
+    "LOCAL-INSTALL.txt": b"fixture\n",
+}
+files["SHA256SUMS"] = "".join(
+    hashlib.sha256(files[name]).hexdigest() + "  " + name + "\n"
+    for name in names[:-1]
+).encode()
+
+for mutation in ("symlink", "hardlink", "device", "setuid", "oversize",
+                 "traversal", "duplicate", "bad-checksum"):
+    directory = root / mutation
+    directory.mkdir(parents=True, mode=0o700)
+    archive = directory / f"{binary}_local-install.tar.gz"
+    with tarfile.open(archive, "w:gz", format=tarfile.GNU_FORMAT) as tar:
+        for name in names + (["LICENSE"] if mutation == "duplicate" else []):
+            data = files[name]
+            info = tarfile.TarInfo(
+                "../escape" if mutation == "traversal" and name == "LOCAL-INSTALL.txt"
+                else name
+            )
+            info.uid = info.gid = info.mtime = 0
+            info.mode = (0o4755 if mutation == 'setuid' and name == binary
+                         else (0o700 if name == binary else 0o600))
+            if mutation == "symlink" and name == "install.sh":
+                info.type = tarfile.SYMTYPE
+                info.linkname = "../../escape"
+            elif mutation == "hardlink" and name == "LICENSE":
+                info.type = tarfile.LNKTYPE
+                info.linkname = "../../escape"
+            elif mutation == "device" and name == "LICENSE":
+                info.type = tarfile.CHRTYPE
+                info.devmajor, info.devminor = 1, 3
+            else:
+                if mutation == "oversize" and name == "LICENSE":
+                    data = b"X" * 65537
+                if mutation == "bad-checksum" and name == "SHA256SUMS":
+                    data = (b"0" * 64) + data[64:]
+                info.size = len(data)
+                info.type = tarfile.REGTYPE
+                tar.addfile(info, io.BytesIO(data))
+                continue
+            info.size = 0
+            tar.addfile(info)
+PY
+for mutation in symlink hardlink device setuid oversize traversal duplicate bad-checksum; do
+  fake="$scratch/adversarial/$mutation/stl_dev-${short_sha}_linux_${arch}_local-install.tar.gz"
+  digest=$(sha256sum -- "$fake" | awk '{print $1}')
+  if bash scripts/install.sh unpack --archive "$fake" --destination "$scratch/adversarial/unsafe-$mutation" \
+      --sha256 "$digest" > "$scratch/adversarial/$mutation.log" 2>&1; then
+    fail "unsafe archive unexpectedly extracted: $mutation"
+  fi
+  [[ ! -e "$scratch/adversarial/unsafe-$mutation" ]] ||
+    fail "unsafe archive left an extract directory: $mutation"
+done
+echo 'SNAPSHOT_UNSAFE_ARCHIVE_TYPES_SIZE_AND_NAMES_REFUSED=PASS'
+
+# A correctly signed archive can still have unsafe filesystem permissions.
+# Reject owner-controlled 0620/0666 inputs before creating the destination;
+# callers may not confuse UID equality with exclusive write permission.
+for unsafe_mode in 0620 0666; do
+  chmod "$unsafe_mode" -- "$archive"
+  unsafe_destination="$scratch/adversarial/archive-permission-$unsafe_mode"
+  if bash scripts/install.sh unpack --archive "$archive" --destination "$unsafe_destination" \
+      --sha256 "$outer_digest" > "$scratch/adversarial/permission-$unsafe_mode.log" 2>&1; then
+    fail "writable archive mode was accepted: $unsafe_mode"
+  fi
+  grep -q 'local source archive is writable by group or others' \
+    "$scratch/adversarial/permission-$unsafe_mode.log" ||
+    fail "writable archive was rejected for an unrelated reason: $unsafe_mode"
+  [[ ! -e $unsafe_destination ]] ||
+    fail "writable archive left an extract directory: $unsafe_mode"
+done
+chmod 0600 -- "$archive"
+echo 'SNAPSHOT_WRITABLE_SOURCE_ARCHIVE_REFUSED=PASS'
+
+# Never overwrite an existing directory, even with correct official bytes.
+mkdir -m 0700 "$scratch/adversarial/existing"
+printf 'owned sentinel\n' > "$scratch/adversarial/existing/keep"
+if bash scripts/install.sh unpack --archive "$archive" --destination "$scratch/adversarial/existing" \
+    --sha256 "$outer_digest" > "$scratch/adversarial/existing.log" 2>&1; then
+  fail 'existing extraction destination was overwritten'
+fi
+grep -qx 'owned sentinel' "$scratch/adversarial/existing/keep" ||
+  fail 'existing extraction destination was modified'
+echo 'SNAPSHOT_EXISTING_DESTINATION_PRESERVED=PASS'
+native_package="$scratch/archive-$arch"
+
 # Offline nondefault prefix: no package installation, /usr/local writes,
 # privileged systemd calls, daemon activation, or network operations.
-bash scripts/install.sh install --bundle "$scratch/bundle" --prefix "$scratch/prefix"
+bash "$native_package/install.sh" install --bundle "$native_package" --prefix "$scratch/prefix"
 installed="$scratch/prefix/bin/stl"
 [[ -f $installed && -x $installed && -L "$scratch/prefix/bin/stlink" ]] ||
   fail 'installed executable or alias missing'
 [[ "$(readlink "$scratch/prefix/bin/stlink")" == stl ]] ||
   fail 'alias does not point to the canonical binary'
 cmp -s "$native_binary" "$installed" || fail 'installed binary differs from snapshot'
+# Same-version local re-install is a safe no-op even through the copied script.
+installed_inode=$(stat -c %i "$installed")
+record="$scratch/prefix/lib/simple-tun-link/install-record"
+record_hash=$(sha256sum "$record" | awk '{print $1}')
+bash "$native_package/install.sh" install --bundle "$native_package" --prefix "$scratch/prefix"
+[[ $(stat -c %i "$installed") == "$installed_inode" &&
+   $(sha256sum "$record" | awk '{print $1}') == "$record_hash" ]] ||
+  fail 'same-version local re-install modified the installed identity'
 actual_version="$("$installed" version --json)"
 alias_version="$("$scratch/prefix/bin/stlink" version --json)"
 [[ $actual_version == "$alias_version" ]] || fail 'alias version mismatch'
@@ -74,3 +301,5 @@ printf 'SNAPSHOT_NATIVE_ARCH=%s\n' "$arch"
 printf 'SNAPSHOT_SOURCE_SHA=%s\n' "$source_sha"
 printf 'SNAPSHOT_NATIVE_BINARY_SHA256=%s\n' "$native_sha"
 echo 'SNAPSHOT_NATIVE_INSTALL_ALIAS=PASS'
+echo 'SNAPSHOT_TRANSFERABLE_ARCH_BUNDLE=PASS'
+echo 'SNAPSHOT_LOCAL_REINSTALL_NOOP=PASS'

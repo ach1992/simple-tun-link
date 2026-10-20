@@ -75,7 +75,9 @@ Commands using `vX.Y.Z` require a **real published** tag.
   installer makes at most **12 APT index-refresh attempts**, with up to
   **55 seconds of explicit retry sleeps** (excluding the time spent inside
   individual APT invocations), **only** for positively identified exclusive
-  lists-lock diagnostics. Unexpected warnings or repository failures stop
+  lists-lock diagnostics. `APT::Update::Error-Mode=any` treats partial
+  mirror/index-download failures as errors instead of silently accepting
+  stale indexes. Unexpected warnings or repository failures stop
   immediately. It neither deletes locks nor terminates other
   APT processes. `DPkg::Lock::Timeout=60` is used for package installation
   but does not replace the special lists-lock retry. If the lock persists,
@@ -189,6 +191,160 @@ A consistent operator-owned backup must include private State,
 the separate credentials store and retained handoffs where needed.
 Do not share these bytes in Issue/PR/CI logs, and do not wildcard
 delete leftover protected temporary material.
+
+## Local download and transfer (no GitHub access on the target server)
+
+The server **may have network connectivity to its configured distro APT
+mirrors**. "Offline" here means STL itself must install/update from a verified
+local artifact, without depending on an international GitHub connection. Do
+not disable HTTPS or force an air-gapped `.deb` mirror when signed APT works.
+
+### Exact current published Stable inventory: v0.1.7
+
+On a different device with access to GitHub, first choose **one** architecture
+from the destination's `uname -m` (`x86_64` = `amd64`, `aarch64` = `arm64`).
+Download these exact official files from the immutable, source-reviewed
+[`v0.1.7` release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.7):
+
+| Selected feature | Required download | Official location / transfer placement |
+| --- | --- | --- |
+| STL core, Linux x86_64 | [`stl_v0.1.7_linux_amd64`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.7/stl_v0.1.7_linux_amd64) | `/root/stl/stl_v0.1.7_linux_amd64` (instead of arm64) |
+| STL core, Linux aarch64 | [`stl_v0.1.7_linux_arm64`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.7/stl_v0.1.7_linux_arm64) | `/root/stl/stl_v0.1.7_linux_arm64` (instead of amd64) |
+| All selected STL core installations | [`SHA256SUMS`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.7/SHA256SUMS), [`BUILD-MANIFEST.txt`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.7/BUILD-MANIFEST.txt), [`LICENSE`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.7/LICENSE) | All three regular files directly in `/root/stl/` |
+| Local canonical installer | [`scripts/install.sh` from tag `v0.1.7`](https://github.com/ach1992/simple-tun-link/blob/v0.1.7/scripts/install.sh) | Save from the exact-tag source as `/root/stl/install.sh`; **not a `v0.1.7` release asset** |
+| Stable online bootstrap (not local) | `stl-bootstrap.sh` in the same release | Not required when running `install.sh` locally |
+
+`v0.1.7` has **no** complete prepackaged local archive. Do not download a
+made-up `*_local-install.tar.gz` asset under that tag. Review the exact-tag
+installer source and independently check trusted published/tag identity before
+root execution. `SHA256SUMS` is integrity metadata **from the same release**,
+not a publisher signature or a defense against a compromised release account.
+
+Transfer **only** your chosen architecture executable plus `SHA256SUMS`,
+`BUILD-MANIFEST.txt`, `LICENSE`, and `install.sh` over SFTP/SCP or removable
+storage to a root-owned `0700` directory. For example:
+
+~~~sh
+# On the destination as root (sudo -i), before transferring:
+install -d -m 0700 /root/stl
+# On the OTHER device, after downloading all selected files:
+# scp stl_v0.1.7_linux_amd64 SHA256SUMS BUILD-MANIFEST.txt LICENSE install.sh root@TARGET_HOST:/root/stl/
+# On the destination as root (sudo -i), after the transfer:
+cd /root/stl
+ls -la
+sha256sum --check --ignore-missing SHA256SUMS
+bash -n install.sh
+bash ./install.sh install --bundle /root/stl --backends native,wireguard
+stl version --json
+~~~
+
+The release-wide `SHA256SUMS` includes unused binaries and the online
+bootstrap; `--ignore-missing` verifies only the chosen locally transferred
+assets. Never interpret this as independent source authenticity. When STL was
+already installed by the canonical installer, run `update --bundle /root/stl`
+for an explicitly verified newer version rather than a new install. On
+releases with the new package support, repeating an identical verified
+`install` is a no-op; do not assume this behavior exists in `v0.1.7`.
+
+### Exact optional component checklist
+
+| Enable only if needed | External GitHub downloads | Local/system requirements |
+| --- | --- | --- |
+| GRE/IPIP Native, FOU/GUE | **None** besides STL core | Locally inspect kernel capability, `iproute2`, `iptables`, `kmod`; install genuinely missing distro packages via signed APT |
+| Native kernel WireGuard | **None** besides STL core | Kernel capability and distro `wireguard-tools` (`wg`) if selected |
+| Native IPsec/XFRM | **None** besides STL core | Only selected signed distro `charon-systemd`, `strongswan-swanctl`, `libstrongswan-standard-plugins`, under separate exact-plan PREPARE and foreign-service protection; direct `--backends all` is not consent |
+| WSS (future, **not shipped**) | **No current STL Carrier asset**; after separate approval, exact pinned `wstunnel` helper tag, arch, checksum/license, compatible STL tag and protected per-Link placement must be published | No helper download or activation yet; upstream `wstunnel v11.0.0` security test alone is not a released runtime |
+| Paqet/PCK (research only, **not shipped**) | **None** | Not an STL prerequisite; do not compile or stage it by default |
+
+For a future released version that actually publishes an architecture-specific
+`stl_vX.Y.Z_linux_amd64_local-install.tar.gz` **or**
+`stl_vX.Y.Z_linux_arm64_local-install.tar.gz`, the downloadable archive will
+contain `install.sh`, the matching single-arch binary, `LICENSE`,
+`BUILD-MANIFEST.txt`, `LOCAL-INSTALL.txt`, and a complete internal `SHA256SUMS`.
+The *separate* official release-wide `SHA256SUMS` identifies the complete
+archive. Verify its exact tag/source and digest against an independently
+trusted publisher reference on the Internet-connected device, then transfer
+the selected archive into a **root-owned, 0700** `/root/stl-transfer` on the
+destination. Do not create `/root/stl` ahead of time: extraction requires a
+fresh destination. For a future officially published archive only:
+
+~~~sh
+# On the destination as root (sudo -i), after transferring the selected archive:
+set -euo pipefail
+umask 077
+cd /root/stl-transfer   # root-owned 0700 transfer directory
+archive=stl_vX.Y.Z_linux_amd64_local-install.tar.gz  # use arm64 on aarch64
+trusted_sha256=PASTE_INDEPENDENTLY_VERIFIED_64_HEX_SHA256
+# First isolate the transferred bytes: an open writer of the original cannot
+# modify the private snapshot used for authentication or script execution.
+verified_dir=$(mktemp -d /root/stl-verified.XXXXXXXX)
+[[ -n "$verified_dir" && "$verified_dir" == /root/stl-verified.* &&
+   -d "$verified_dir" && ! -L "$verified_dir" ]] ||
+  { printf 'Private verified archive staging failed\n' >&2; exit 1; }
+install -m 0600 -- "$archive" "$verified_dir/$archive"
+cd -- "$verified_dir"
+printf '%s  %s\n' "$trusted_sha256" "$archive" | sha256sum --check -
+# Materialize the complete authenticated script privately before execution.
+tar -xOzf "$archive" install.sh > ./verified-installer.sh
+chmod 0600 ./verified-installer.sh
+bash -n ./verified-installer.sh
+bash ./verified-installer.sh unpack \
+  --archive "$PWD/$archive" --destination /root/stl --sha256 "$trusted_sha256"
+cd /root/stl
+sha256sum --check SHA256SUMS
+bash -n install.sh
+bash ./install.sh install --bundle /root/stl --backends native,wireguard
+stl version --json
+~~~
+
+**Do not execute a script extracted from an archive before independently
+confirming its exact publisher identity and SHA256**. The administrator
+first makes a new root-owned, mode-`0700` verified directory and a mode-`0600`
+copy: never hash a writable transfer and later execute different bytes.
+The canonical `unpack` operation also rejects group/world-writable source
+archives and untrusted writable ancestors, then authenticates **its own
+private immutable-for-operation copy** and uses exactly that copy for every
+member inspection and extraction. It validates six exact regular members,
+size bounds, owners, a fresh destination, internal checksums and executable
+identity. It performs **no** APT or binary installation. For a verified
+already installer-owned host, run the existing `update --bundle /root/stl`
+instead of silently replacing a different version via `install`.
+
+The archive is an additional release artifact, not a second installation
+engine, bundled Carrier set or permission to change host networking.
+**No such archive is published at `v0.1.7`.**
+
+### Signed regional APT recovery when required prerequisites are missing
+
+If all selected distro prerequisites are installed, no `apt update`, `apt
+install`, distro download or unrelated restart is needed. Otherwise the
+canonical installer uses only the host's existing configured, signed
+Debian/Ubuntu sources and rejects unauthenticated or upgrade/removal plans.
+A failed `APT_INDEX_REFRESH`, `APT_DEPENDENCY_PLAN`, or
+`APT_PACKAGE_INSTALL` identifies the missing selected packages and stage.
+
+1. Read `cat /etc/os-release`, `apt-cache policy <missing-package>` and
+   inspect `/etc/apt/sources.list` and `/etc/apt/sources.list.d/` without
+   changing them. Inspect `dpkg --audit` and running APT tasks first if an
+   install may have started; do not blindly retry a partially failed dpkg
+   transaction or delete lock files.
+2. If connectivity to the existing mirror is the cause, **the operator**
+   chooses an accessible Debian/Ubuntu official-archive mirror (an Iranian
+   or regional mirror is fine), appropriate to the host distro/codename,
+   architecture and enabled security channels. Back up the actual sources
+   and edit them manually; preserve distro keyrings and the signed
+   `InRelease` / Release verification and official repository identity.
+3. Confirm signed metadata/package candidate integrity using the host APT
+   tools, then rerun the same verified local STL operation. Never enable
+   `trusted=yes`, `AllowUnauthenticated`, disabled signature/expiry checks,
+   arbitrary signing keys, or an unattended whole-host upgrade to force
+   success. Changing a mirror does **not** independently establish trust.
+
+These are operator-owned system configuration changes, **not** an STL installer
+action. Debian 11's expired ordinary security support remains a separate
+availability/security limitation; a mirror cannot recreate unsupported
+signed packages. See [supported systems](SUPPORTED-ENVIRONMENTS.md) and
+existing IPsec recovery and consent procedures below.
 
 ## Install from an official released tag
 

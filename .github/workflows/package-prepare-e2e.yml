@@ -17,7 +17,17 @@ permissions:
 jobs:
   selected-apt:
     if: github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            image: ubuntu:24.04
+          - runner: ubuntu-24.04-arm
+            image: ubuntu:24.04
+          - runner: ubuntu-22.04
+            image: debian:bookworm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
@@ -34,23 +44,8 @@ jobs:
           test ! -e /.dockerenv
           test -z "$(git status --porcelain)"
           docker version
-      - name: Real Ubuntu package-only provisioning
+      - name: Real native-arch local archive and signed APT provisioning
         env:
           STL_E2E_DISPOSABLE_HOST: approved
+          STL_E2E_BASE_IMAGE: ${{ matrix.image }}
         run: bash scripts/e2e/package-prepare-docker.sh
-      - name: Verified Debian 12 archive signer and live package index preview
-        run: |
-          set -euo pipefail
-          docker run --rm --network bridge \
-            -e STL_E2E_DISPOSABLE_GUEST=approved \
-            -v "$PWD/scripts/install.sh:/mnt/stl-install.sh:ro" \
-            debian:bookworm bash -c '
-              set -euo pipefail
-              [[ $EUID == 0 && -e /.dockerenv && $STL_E2E_DISPOSABLE_GUEST == approved ]]
-              apt-get update -qq
-              preview=$(bash /mnt/stl-install.sh requirements --backends native,ipsec)
-              grep -qx "distribution=debian" <<< "$preview"
-              grep -q "^apt_install=.*charon-systemd=" <<< "$preview"
-              ! dpkg-query -W -f="\${Status}" charon-systemd 2>/dev/null | grep -q "install ok installed"
-              echo "IPSEC_REAL_DEBIAN_SIGNED_DISTRIBUTION_CANDIDATE=PASS"
-            '

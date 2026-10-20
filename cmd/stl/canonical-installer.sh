@@ -7,6 +7,7 @@ export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 usage() {
   cat >&2 <<'USAGE'
 Usage:
+  install.sh unpack --archive /private/stl_vX.Y.Z_linux_ARCH_local-install.tar.gz --destination /new/private/dir --sha256 VERIFIED_64_HEX_DIGEST
   install.sh install --version vX.Y.Z [--prefix /usr/local]
   install.sh update --version vX.Y.Z [--prefix /usr/local]
   install.sh install|update --bundle /path/to/release-bundle [--prefix /usr/local]
@@ -27,8 +28,12 @@ Only the proven transaction-created vendor strongSwan service may be stopped
 and disabled; pre-existing/foreign services are never modified. Private STL
 service admission remains a separate verified step under the same UI consent.
 No host Link or network configuration is modified by this installer.
---bundle is for locally built/tested bundles; system dependencies are
-only installed on the real /usr/local prefix, never an offline test prefix.
+--bundle uses verified local release files without downloading from GitHub.
+Unpack requires a verified SHA256 from independently trusted release metadata,
+then checks regular-file members and a fresh private destination without APT.
+Missing selected distro packages may use only currently configured signed APT;
+failed repositories require operator-controlled mirror remediation.
+System packages are never installed for an isolated nondefault test prefix.
 USAGE
   exit 2
 }
@@ -36,7 +41,161 @@ fail() { printf 'stl installer [FAILED]: %s\n' "$*" >&2; exit 1; }
 [[ $# -ge 1 ]] || usage
 action=$1
 shift
-case "$action" in install|update|uninstall|requirements|prepare) ;; *) usage ;; esac
+case "$action" in
+  unpack)
+    # Source this exact-tag canonical script from a separately authenticated
+    # archive, then use it to validate/extract that archive. No second installer.
+    [[ $# == 6 && $1 == --archive && $3 == --destination && $5 == --sha256 ]] || usage
+    archive=$2 destination=$4 expected_digest=$6
+    [[ $expected_digest =~ ^[0-9a-f]{64}$ ]] || fail 'expected archive SHA256 must be 64 lowercase hex characters'
+    [[ $archive == /* && -f $archive && ! -L $archive &&
+       $(realpath -e -- "$archive") == "$archive" ]] ||
+      fail 'archive must be an existing canonical absolute regular file'
+    [[ $destination == /* && $destination != / && ! -e $destination &&
+       ! -L $destination ]] || fail 'extract destination must be a new absolute path'
+    parent=$(dirname -- "$destination")
+    [[ -d $parent && ! -L $parent && $(realpath -e -- "$parent") == "$parent" ]] ||
+      fail 'extract parent must be an existing canonical directory'
+    if [[ $EUID == 0 ]]; then
+      # Source and destination parent chains must not be replaceable by
+      # unprivileged users during privileged extraction.
+      for base in "$(dirname -- "$archive")" "$parent"; do
+        path=/
+        IFS=/ read -ra parts <<< "${base#/}"
+        for component in "${parts[@]}"; do
+          [[ -z $component ]] && continue
+          path="${path%/}/$component"
+          [[ -d $path && ! -L $path && $(stat -c %u -- "$path") == 0 ]] ||
+            fail "untrusted archive/extract ancestor: $path"
+          permissions=$(stat -c %a -- "$path")
+          [[ $permissions =~ ^[0-7]{3,4}$ ]] ||
+            fail "invalid archive/extract ancestor mode: $path"
+          if (( (8#$permissions & 8#022) != 0 )); then
+            fail "untrusted writable archive/extract ancestor: $path"
+          fi
+        done
+      done
+      [[ $(stat -c %u -- "$archive") == 0 ]] ||
+        fail 'privileged extraction requires a root-owned transferred archive'
+    fi
+    permissions=$(stat -c %a -- "$archive")
+    [[ $permissions =~ ^[0-7]{3,4}$ ]] &&
+      (( (8#$permissions & 8#022) == 0 )) ||
+      fail 'local source archive is writable by group or others'
+    [[ $(stat -c %u -- "$archive") == "$EUID" ]] ||
+      fail 'local source archive ownership is unsafe'
+    # Bound the untrusted transfer BEFORE allocating the private snapshot.
+    # Check its copied size again before any tar inspection.
+    source_bytes=$(stat -c %s -- "$archive")
+    (( source_bytes > 0 && source_bytes <= 134217728 )) ||
+      fail 'local archive exceeds the 128 MiB compressed-size bound'
+
+    archive_name=$(basename -- "$archive")
+    [[ $archive_name =~ ^stl_(v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?|dev-[0-9a-f]{12})_linux_(amd64|arm64)_local-install\.tar\.gz$ ]] ||
+      fail 'unexpected local archive filename/version/architecture'
+    version=${BASH_REMATCH[1]}
+    arch=${BASH_REMATCH[3]}
+    names=("stl_${version}_linux_${arch}" install.sh LICENSE BUILD-MANIFEST.txt LOCAL-INSTALL.txt SHA256SUMS)
+    expected_names=$(printf '%s\n' "${names[@]}")
+
+    # Copy the supplied archive to a private newly created operation-local
+    # snapshot BEFORE authenticating it. Only this root/user-owned 0700
+    # directory's 0600 copy is ever hashed, inspected or extracted. Even an
+    # already-open writer to the transferred original cannot alter this copy.
+    stage=$(mktemp -d "$parent/.stl-unpack.XXXXXXXX") ||
+      fail 'cannot stage a private immutable-for-operation archive snapshot'
+    snapshot="$stage/$archive_name"
+    unpack_complete=0
+    destination_created=0
+    unpack_cleanup() {
+      if [[ -d $stage && ! -L $stage ]]; then
+        rm -rf --one-file-system -- "$stage"
+      fi
+      if [[ $unpack_complete != 1 && $destination_created == 1 &&
+            -d $destination && ! -L $destination ]]; then
+        rm -rf --one-file-system -- "$destination"
+      fi
+    }
+    trap unpack_cleanup EXIT
+    cp -- "$archive" "$snapshot" ||
+      fail 'cannot copy archive into private verification snapshot'
+    chmod 0600 -- "$snapshot" || fail 'cannot restrict private archive snapshot'
+    [[ -f $snapshot && ! -L $snapshot &&
+       $(stat -c %u -- "$snapshot") == "$EUID" ]] ||
+      fail 'private archive snapshot identity is unsafe'
+    archive_bytes=$(stat -c %s -- "$snapshot")
+    (( archive_bytes > 0 && archive_bytes <= 134217728 )) ||
+      fail 'local archive exceeds the 128 MiB compressed-size bound'
+    actual_digest=$(sha256sum -- "$snapshot" | awk '{print $1}')
+    [[ $actual_digest == "$expected_digest" ]] ||
+      fail 'local archive SHA256 differs from the independently confirmed release digest'
+
+    listed=$(LC_ALL=C tar -tzf "$snapshot" --quoting-style=escape) ||
+      fail 'cannot inspect archive member names'
+    [[ $listed == "$expected_names" ]] ||
+      fail 'local archive has unexpected, duplicate or unsafe member names'
+
+    # GNU tar verbose listing supplies file type, declared size and owner.
+    # Reject every symlink/hardlink/sparse/device/directory member, including
+    # type substitutions with correct names, before writing a single file.
+    metadata=$(LC_ALL=C tar -tvzf "$snapshot" --numeric-owner --full-time --quoting-style=escape) ||
+      fail 'cannot inspect archive metadata'
+    mapfile -t details <<< "$metadata"
+    [[ ${#details[@]} == ${#names[@]} ]] ||
+      fail 'local archive has unexpected member metadata'
+    for i in "${!names[@]}"; do
+      IFS=$' \t' read -r mode owner size date time name extra <<< "${details[$i]}"
+      [[ $mode =~ ^-[rwx-]{9}$ && $owner == 0/0 &&
+         $size =~ ^[0-9]+$ && $name == "${names[$i]}" && -z $extra ]] ||
+        fail 'local archive has non-regular, linked or malformed file metadata'
+      case "$name" in
+        stl_*) limit=134217728 ;;
+        install.sh) limit=1048576 ;;
+        *) limit=65536 ;;
+      esac
+      (( 10#$size <= limit )) || fail "local archive has oversized member: $name"
+    done
+    # Extraction is exclusive to a newly created private directory; tar is
+    # never allowed to overwrite existing names or restore archive owners.
+    mkdir -m 0700 -- "$destination" || fail 'cannot create private extract directory'
+    destination_created=1
+    tar --extract --gzip --file "$snapshot" --directory "$destination" \
+      --no-same-owner --no-same-permissions --keep-old-files ||
+      fail 'local archive extraction failed'
+    for name in "${names[@]}"; do
+      file="$destination/$name"
+      [[ -f $file && ! -L $file && $(stat -c %u -- "$file") == "$EUID" ]] ||
+        fail "extracted file identity is unsafe: $name"
+      permissions=$(stat -c %a -- "$file")
+      [[ $permissions =~ ^[0-7]{3,4}$ ]] &&
+        (( (8#$permissions & 8#077) == 0 )) ||
+        fail "extracted file is not private: $name"
+    done
+    [[ -x "$destination/${names[0]}" ]] ||
+      fail 'extracted STL binary is not executable'
+    mapfile -t checksum_lines < "$destination/SHA256SUMS"
+    [[ ${#checksum_lines[@]} == 5 ]] ||
+      fail 'local internal checksum inventory is incomplete'
+    for i in 0 1 2 3 4; do
+      line=${checksum_lines[$i]}
+      [[ ${line:0:64} =~ ^[0-9a-f]{64}$ &&
+         ${line:64:2} == '  ' && ${line:66} == "${names[$i]}" ]] ||
+        fail 'local internal checksum inventory names are unsafe'
+    done
+    (cd "$destination" && sha256sum --check SHA256SUMS >/dev/null) ||
+      fail 'local archive payload checksum mismatch'
+    grep -Fxq "version=$version" "$destination/BUILD-MANIFEST.txt" ||
+      fail 'extracted local release version does not match archive'
+    bash -n "$destination/install.sh" ||
+      fail 'extracted canonical installer syntax invalid'
+    unpack_complete=1
+    # EXIT cleanup removes only the private authenticated snapshot on success.
+    printf '[OK] Verified and extracted six regular release files into %s; no installation or APT operation occurred.\n' "$destination"
+    exit 0
+    ;;
+  install|update|uninstall|requirements|prepare) ;;
+  *) usage ;;
+esac
 prefix=/usr/local
 version=
 bundle=
@@ -302,7 +461,8 @@ apt_update_indexes() {
   # 12 attempts with 5-second gaps: at most 55 seconds of lock-only waits.
   for ((attempt=1; attempt<=12; attempt++)); do
     if output=$(LC_ALL=C DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none \
-      apt-get "${apt_safety[@]}" -o Acquire::Retries=2 update 2>&1); then
+      apt-get "${apt_safety[@]}" -o Acquire::Retries=2 \
+      -o APT::Update::Error-Mode=any update 2>&1); then
       [[ -z $output ]] || printf '%s\n' "$output"
       return 0
     else
@@ -310,7 +470,7 @@ apt_update_indexes() {
     fi
     [[ -z $output ]] || printf '%s\n' "$output" >&2
     if (( status != 100 )) || ! apt_update_is_only_lists_lock "$output"; then
-      fail 'APT index refresh failed for a reason other than the lists lock; no package install attempted. Inspect APT output and repository trust before retrying.'
+      fail "APT_INDEX_REFRESH failed; missing selected packages: ${missing[*]}. No package install attempted. Inspect the APT output and signature trust. If current repositories are unreachable, manually select an accessible official signed Debian/Ubuntu mirror (including a suitable Iranian/regional mirror), update your APT configuration yourself, then rerun. STL will not edit repositories or disable signatures."
     fi
     if (( attempt == 12 )); then
       fail 'APT lists lock remained busy after bounded waiting; let the other apt-get finish, then rerun this operation. Do not delete APT lock files or kill package-manager processes.'
@@ -325,9 +485,10 @@ apt_resolve_plan() {
   local -a planned=()
   apt_plan=
   (( ${#missing[@]} > 0 )) || return 0
+  apt_sources_must_be_authenticated
   text=$(LC_ALL=C apt-get -s -o Debug::NoLocking=1 "${apt_safety[@]}" \
     install --no-install-recommends -- "${missing[@]}") ||
-    fail 'APT cannot resolve the complete selected dependency plan; no packages changed'
+    fail "APT_DEPENDENCY_PLAN failed; missing selected packages: ${missing[*]}. No packages changed. Inspect the signed configured repositories and their candidate indexes. If unreachable, manually configure an accessible appropriately signed regional mirror; do not bypass APT verification."
   while IFS= read -r line; do
     case "$line" in
       Remv\ *|Purg\ *) fail 'APT plan would remove packages; no changes allowed' ;;
@@ -338,16 +499,12 @@ apt_resolve_plan() {
         [[ $line =~ \(([0-9][A-Za-z0-9:.+~_-]*)[[:space:]] ]] ||
           fail 'APT returned an unrecognized candidate version'
         version=${BASH_REMATCH[1]}
-        # For IPsec, never promote merely APT-trusted third-party packages
-        # into "signed distro packages". The selected candidate must be
-        # labeled Debian / Debian-Security / Ubuntu by APT, in addition to
-        # APT's authenticated repository index and package checksum gates.
-        if [[ $want_ipsec == 1 ]]; then
-          case "$line" in
-            *" Debian:"*|*" Debian-Security:"*|*" Ubuntu:"*) ;;
-            *) fail 'APT selected an IPsec dependency outside the distro archive; no changes allowed' ;;
-          esac
-        fi
+        # All selected dependencies must come from a signed official distro
+        # index, not an APT-trusted third-party source claiming the same label.
+        case "$line" in
+          *" Debian:"*|*" Debian-Security:"*|*" Ubuntu:"*) ;;
+          *) fail 'APT selected a dependency outside the distribution archive; no changes allowed' ;;
+        esac
         if package_installed "$pkg"; then
           fail 'APT plan would upgrade an installed package; review separately'
         fi
@@ -368,18 +525,84 @@ apt_resolve_plan() {
   apt_plan="${planned[*]}"
   [[ -n $apt_plan && ${#apt_plan} -lt 16384 ]] ||
     fail 'APT plan is empty or exceeds safe preview limits'
-  [[ $want_ipsec == 0 ]] || apt_verify_distro_candidates
+  apt_verify_distro_candidates
 }
 
-# StrongSwan candidates must originate from signed Debian/Ubuntu archives.
-# apt-get itself verifies repository metadata and package hashes at execution.
-# Reject local APT source shortcuts which deliberately bypass that guarantee.
+# Every selected candidate must originate from signed official Debian/Ubuntu
+# archives. Reject *active* sources with explicit trust bypass, not old
+# commented .list entries or disabled Deb822 stanzas. APT remains responsible
+# for validating all other repository syntax; signed candidate checks are
+# independently enforced later for the complete dependency plan.
 apt_sources_must_be_authenticated() {
-  local file
+  local file format status
   for file in /etc/apt/sources.list /etc/apt/sources.list.d/*.list \
               /etc/apt/sources.list.d/*.sources; do
     [[ -f $file ]] || continue
-    if grep -Eiq '(^|[[:space:]\[])trusted[[:space:]]*=[[:space:]]*yes([[:space:]\]]|$)|^[[:space:]]*Trusted:[[:space:]]*yes' "$file"; then
+    [[ -r $file ]] || fail 'APT source inventory could not be read'
+    case "$file" in *.sources) format=deb822 ;; *) format=list ;; esac
+    if LC_ALL=C awk -v format="$format" '
+      function trim(v) {
+        sub(/^[[:space:]]+/, "", v)
+        sub(/[[:space:]]+$/, "", v)
+        return v
+      }
+      function record_field(  v) {
+        v = tolower(trim(value))
+        if (key == "trusted" && v == "yes") trusted = 1
+        if (key == "enabled") {
+          # Any duplicate/ambiguous Enabled fields fail closed.
+          if (seen_enabled) disabled = 0
+          else disabled = (v == "no")
+          seen_enabled = 1
+        }
+        key = ""; value = ""
+      }
+      function end_stanza() {
+        record_field()
+        if (trusted && !disabled) rejected = 1
+        trusted = disabled = seen_enabled = 0
+      }
+      {
+        line = $0
+        if (format == "list") {
+          # APT treats every # and all remaining text as a comment.
+          sub(/#.*/, "", line)
+          line = trim(line)
+          if (line !~ /^deb(-src)?[[:space:]]+/) next
+          sub(/^deb(-src)?[[:space:]]+/, "", line)
+          if (substr(line, 1, 1) != "[") next
+          closing = index(line, "]")
+          if (closing < 2) next
+          options = tolower(substr(line, 2, closing - 2))
+          if (options ~ /(^|[[:space:]])trusted[[:space:]]*=[[:space:]]*yes([[:space:]]|$)/)
+            rejected = 1
+          next
+        }
+        # Deb822 entries end at a blank line; an Enabled: no disables only
+        # the stanza containing it. Whole-line comments are ignored.
+        if (line ~ /^[[:space:]]*$/) { end_stanza(); next }
+        if (line ~ /^[[:space:]]*#/) next
+        if (line ~ /^[[:space:]]/ && key != "") {
+          value = value " " trim(line)
+          next
+        }
+        record_field()
+        if (line ~ /^[[:alnum:]][[:alnum:]-]*[[:space:]]*:/) {
+          colon = index(line, ":")
+          key = tolower(trim(substr(line, 1, colon - 1)))
+          value = trim(substr(line, colon + 1))
+        }
+      }
+      END {
+        if (format == "deb822") end_stanza()
+        if (rejected) exit 77
+      }
+    ' "$file"; then
+      :
+    else
+      status=$?
+      [[ $status == 77 ]] ||
+        fail 'APT source inventory could not be inspected'
       fail 'APT sources explicitly bypass signature verification'
     fi
   done
@@ -726,6 +949,9 @@ ensure_packages() {
     printf '[OK] STL dependencies already installed for %s %s (%s).\n' "$os_id" "$os_version" "$backends" >&2
     return
   fi
+  # Source-level trust bypasses must fail before even the first APT refresh.
+  # This also covers native/WireGuard, without gating the already-installed path.
+  apt_sources_must_be_authenticated
   if [[ $want_ipsec == 1 ]]; then
     for pkg in "${missing[@]}"; do
       case "$pkg" in charon-systemd|strongswan-swanctl|libstrongswan-standard-plugins) missing_ipsec=1 ;; esac
@@ -780,7 +1006,7 @@ ensure_packages() {
     if [[ $missing_ipsec == 1 ]]; then
       ipsec_report_interrupted_apt
     fi
-    fail 'APT package transaction failed; no automatic retry because partial dpkg effects cannot be ruled out. Inspect dpkg --audit and active APT processes, then reconcile before retrying.'
+    fail "APT_PACKAGE_INSTALL failed; missing selected packages: ${missing[*]}. No automatic retry: partial dpkg/service effects are possible. Inspect dpkg --audit and active APT processes, reconcile first, and if sources were unreachable manually configure a trusted signed Debian/Ubuntu regional mirror; STL will not rewrite sources."
   fi
   for pkg in "${packages[@]}"; do
     package_installed "$pkg" || fail "selected package remains unavailable: $pkg"
@@ -915,8 +1141,17 @@ read_record() {
   prior_record_hash=$(hash_file "$record")
 }
 
+# Repeating the SAME verified local release on a safely installer-owned
+# installation is a no-op, not an attempted takeover. Reuse the existing
+# identity/rollback checks of update; never interpret `install` as consent
+# to silently replace an older or foreign STL release.
+exact_reinstall=0
 if [[ $action == install ]]; then
-  [[ ! -e $record && ! -L $record && ! -e $target && ! -L $target && ! -e $alias && ! -L $alias ]] || fail 'an installed or foreign STL identity already exists; refusing takeover'
+  if [[ -e $record || -L $record || -e $target || -L $target || -e $alias || -L $alias ]]; then
+    read_record
+    exact_reinstall=1
+    action=update
+  fi
 else
   read_record
 fi
@@ -1117,6 +1352,26 @@ case "$arch" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) fail "unsupporte
 if [[ -n $bundle ]]; then
   [[ -d $bundle && ! -L $bundle ]] || fail 'bundle must be a directory, not a symlink'
   bundle=$(realpath -e -- "$bundle")
+  if [[ $prefix == /usr/local ]]; then
+    # No untrusted ancestors can substitute source files between validation
+    # and root-owned publication. /tmp with a root-owned sticky directory is
+    # usable, but the final release folder itself must be root-private.
+    path=/
+    IFS='/' read -ra components <<< "${bundle#/}"
+    for component in "${components[@]}"; do
+      [[ -n $component ]] || fail 'invalid local bundle directory'
+      path="${path%/}/$component"
+      [[ -d $path && ! -L $path && $(stat -c %u -- "$path") == 0 ]] ||
+        fail "untrusted local bundle directory owner or path: $path"
+      perms=$(stat -c %a -- "$path")
+      [[ $perms =~ ^[0-7]{3,4}$ ]] || fail 'invalid local bundle directory mode'
+      if [[ $path == "$bundle" ]]; then
+        (( (8#$perms & 8#077) == 0 )) || fail 'local release bundle must be root-private (0700)'
+      elif (( (8#$perms & 8#022) != 0 && (8#$perms & 8#1000) == 0 )); then
+        fail "untrusted writable local bundle ancestor: $path"
+      fi
+    done
+  fi
   is_regular "$bundle/BUILD-MANIFEST.txt" || fail 'bundle manifest missing or unsafe'
   version=$(sed -n 's/^version=//p' "$bundle/BUILD-MANIFEST.txt")
   [[ $version =~ ^(v[0-9]+\.[0-9]+\.[0-9]+([.-][a-zA-Z0-9.-]+)?|dev-[0-9a-f]{12})$ ]] || fail 'invalid bundle version'
@@ -1145,6 +1400,16 @@ commit=$(sed -n 's/^commit=//p' "$manifest")
 install -m 0755 -- "$stage/$asset" "$stage/incoming"
 metadata=$("$stage/incoming" version --json) || fail 'downloaded binary cannot report version metadata'
 [[ $metadata == *\"version\":\"$version\"* && $metadata == *\"commit\":\"$commit\"* ]] || fail 'release executable and manifest identity disagree'
+incoming_hash=$(hash_file "$stage/incoming")
+if [[ $action == update ]]; then
+  if [[ $exact_reinstall == 1 ]]; then
+    [[ $prior_version == "$version" && $prior_hash == "$incoming_hash" ]] ||
+      fail 'install found a different installer-owned STL artifact; use an explicit reviewed update, never silent replacement'
+  elif [[ $prior_version == "$version" ]]; then
+    [[ $prior_hash == "$incoming_hash" ]] ||
+      fail 'same release version has different executable bytes; refusing mutable/repacked tag'
+  fi
+fi
 # Install only missing distro-native prerequisites, after authenticating the
 # exact candidate artifact and BEFORE touching the canonical STL executable.
 # Package installations are not part of the STL binary rollback transaction;

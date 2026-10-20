@@ -52,6 +52,7 @@ MANIFEST
 }
 bundle v0.1.0 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 bundle v0.1.1 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+bundle v0.1.0-rc.1 cccccccccccccccccccccccccccccccccccccccc
 [[ $(uname -m) == x86_64 ]] || { echo 'SKIP: amd64 offline installer test fixture'; exit 0; }
 
 # Unowned binaries and aliases are never taken over.
@@ -70,6 +71,25 @@ bash "$installer" install --bundle "$root/v0.1.0" --prefix "$prefix"
 [[ -f $prefix/bin/stl && -L $prefix/bin/stlink && $(readlink "$prefix/bin/stlink") == stl ]] || fail 'canonical binary/alias not installed'
 original=$(sha "$prefix/bin/stl")
 [[ $original == "$(sha "$root/v0.1.0/stl_v0.1.0_linux_amd64")" ]] || fail 'wrong installed build'
+# Repeating exactly the same verified local version through the one-command
+# install entrypoint is an identity-preserving no-op (no new executable inode,
+# record write, or service or distro package preparation).
+initial_inode=$(stat -c %i "$prefix/bin/stl")
+initial_record=$(sha "$prefix/lib/simple-tun-link/install-record")
+initial_record_mtime=$(stat -c %Y "$prefix/lib/simple-tun-link/install-record")
+bash "$installer" install --bundle "$root/v0.1.0" --prefix "$prefix"
+[[ $(sha "$prefix/bin/stl") == "$original" && $(stat -c %i "$prefix/bin/stl") == "$initial_inode" &&
+   $(sha "$prefix/lib/simple-tun-link/install-record") == "$initial_record" &&
+   $(stat -c %Y "$prefix/lib/simple-tun-link/install-record") == "$initial_record_mtime" ]] ||
+  fail 'same-version local install did not preserve owned identities'
+# A new version still requires explicit update; an existing version with
+# repacked bytes must not be silently admitted as the same published tag.
+cp -a "$root/v0.1.0" "$root/repacked"
+printf '\n# syntactically valid but repacked artifact\n' >> "$root/repacked/stl_v0.1.0_linux_amd64"
+(cd "$root/repacked" && sha256sum stl_v0.1.0_linux_amd64 LICENSE BUILD-MANIFEST.txt > SHA256SUMS)
+expect_failure bash "$installer" install --bundle "$root/repacked" --prefix "$prefix"
+expect_failure bash "$installer" update --bundle "$root/repacked" --prefix "$prefix"
+[[ $(sha "$prefix/bin/stl") == "$original" ]] || fail 'repacked artifact changed the owned binary'
 expect_failure bash "$installer" install --bundle "$root/v0.1.1" --prefix "$prefix"
 expect_failure bash "$installer" update --bundle "$root/corrupt" --prefix "$prefix"
 [[ $(sha "$prefix/bin/stl") == "$original" ]] || fail 'corrupt update modified binary'
@@ -85,6 +105,23 @@ bash "$installer" update --bundle "$root/v0.1.1" --prefix "$prefix"
 [[ $(sha "$prefix/bin/stl") == "$(sha "$root/v0.1.1/stl_v0.1.1_linux_amd64")" ]] || fail 'new binary was not published'
 [[ $(grep '^version=' "$prefix/lib/simple-tun-link/install-record") == version=v0.1.1 ]] || fail 'record not updated'
 bash "$installer" update --bundle "$root/v0.1.1" --prefix "$prefix" # idempotent no-op
+# The pre-existing explicit manual-update route intentionally permits a
+# separately reviewed rollback and RC-to-Stable migration; do not silently
+# narrow that contract when implementing same-version local INSTALL no-op.
+rollback_prefix="$root/manual-rollback-prefix"
+mkdir -p "$rollback_prefix/bin" "$rollback_prefix/lib"
+bash "$installer" install --bundle "$root/v0.1.1" --prefix "$rollback_prefix"
+bash "$installer" update --bundle "$root/v0.1.0" --prefix "$rollback_prefix"
+[[ $(grep '^version=' "$rollback_prefix/lib/simple-tun-link/install-record") == version=v0.1.0 &&
+   $(sha "$rollback_prefix/bin/stl") == "$original" ]] ||
+  fail 'explicit safe manual-update rollback route was removed'
+rc_prefix="$root/manual-rc-to-stable-prefix"
+mkdir -p "$rc_prefix/bin" "$rc_prefix/lib"
+bash "$installer" install --bundle "$root/v0.1.0-rc.1" --prefix "$rc_prefix"
+bash "$installer" update --bundle "$root/v0.1.0" --prefix "$rc_prefix"
+[[ $(grep '^version=' "$rc_prefix/lib/simple-tun-link/install-record") == version=v0.1.0 &&
+   $(sha "$rc_prefix/bin/stl") == "$original" ]] ||
+  fail 'explicit RC-to-Stable manual-update contract was removed'
 
 # The canonical reader (not a duplicate state parser) guards uninstall.
 expect_failure env STL_INSTALL_TEST_LINKS=1 bash "$installer" uninstall --prefix "$prefix"
