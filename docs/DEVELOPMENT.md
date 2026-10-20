@@ -162,6 +162,41 @@ test result and cleanup evidence with the candidate's CI/work item.
 Do not turn an old run's outcome into a claim about a new source
 or installed release.
 
+### Optional WSS v11 executable compatibility
+
+The WSS Carrier is **not active in STL**. To verify the first helper's
+real parser/TLS/restricted-UDP forwarding behavior on a disposable Linux
+x86_64 test host, extract the official `wstunnel v11.0.0` Linux amd64
+archive and verify it against the upstream release `checksums.txt`.
+Then, with the extracted binary at an **absolute path**, run:
+
+~~~sh
+scripts/e2e/wss-v11-compat.sh /absolute/path/to/wstunnel 6a1d6ab8f4537823d0a8157416b264fa1313253574143e3900eba93e17c6de49
+~~~
+
+The runner independently enforces that executable SHA-256 and exact
+`wstunnel-cli 11.0.0` version, creates short-lived test certificates
+and **public test-only** bearer headers, and uses unprivileged
+`unshare -Urn` with IP/loopback sockets confined to a newly
+verified user+network namespace. Even a direct call to the internal
+`--inside` mode fails before any IP operation without the independent
+binary/namespace-launch evidence. The test checks the real version's
+**mTLS + per-Link bearer + exact path** behavior, including the
+reviewed missing-CN-with-forged-path bypass attempt *without*
+the bearer. The upstream v11 does not enforce strict CN identity
+when a certificate has no CN; approved admission requires the
+additional secret, as described in
+[ARCHITECTURE.md](ARCHITECTURE.md).
+It needs Bash, OpenSSL, Python 3,
+`ip`, `ss`, `sha256sum`, `timeout` and unprivileged user namespace
+support. It never installs system packages, starts a host service,
+changes host routing/firewall or touches real peers. The upstream
+release and the generated fixture policy are deliberately pinned;
+a different architecture/version requires a separately verified
+acceptance envelope, not an arbitrary latest download. This optional
+test does not replace native regression tests or actual STL-managed
+two-peer acceptance.
+
 ## Git and documentation ownership
 
 - `main` is the protected integration target. Use scoped branches,
