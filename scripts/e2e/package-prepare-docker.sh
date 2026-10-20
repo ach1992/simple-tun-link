@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Real APT package-only preparation acceptance. ALL package manager mutations
-# run as root ONLY in a fresh disposable Ubuntu Docker container. Nothing is
+# run as root ONLY in a fresh disposable Debian/Ubuntu Docker guest. Nothing is
 # installed, upgraded or provisioned on the GitHub Actions host.
 set -Eeuo pipefail
 umask 077
@@ -8,7 +8,16 @@ umask 077
 fail() { echo "REAL_PACKAGE_PREPARE_FAILED=$1" >&2; exit 1; }
 [[ ${STL_E2E_DISPOSABLE_HOST:-} == approved ]] || fail missing_disposable_runner_optin
 [[ $EUID -ne 0 && ! -e /.dockerenv ]] || fail host_must_be_unprivileged_vm
-[[ $(uname -m) == x86_64 ]] || fail native_amd64_guest_required
+case $(uname -m) in
+  x86_64) arch=amd64 ;;
+  aarch64) arch=arm64 ;;
+  *) fail unsupported_native_arch ;;
+esac
+image=${STL_E2E_BASE_IMAGE:-ubuntu:24.04}
+case $image in
+  ubuntu:24.04|debian:bookworm) ;;
+  *) fail unsupported_disposable_guest_image ;;
+esac
 for tool in docker git sha256sum go; do command -v "$tool" >/dev/null || fail missing_host_tool; done
 [[ -z $(git status --porcelain) ]] || fail dirty_source
 source_sha=$(git rev-parse HEAD)
@@ -21,7 +30,7 @@ grep -qx "commit=$source_sha" "$root/bundle/BUILD-MANIFEST.txt" || fail wrong_bu
  cd "$root/bundle"
  sha256sum -c SHA256SUMS >/dev/null
 ) || fail bundle_checksum_mismatch
-archive="$root/bundle/stl_dev-${short_sha}_linux_amd64_local-install.tar.gz"
+archive="$root/bundle/stl_dev-${short_sha}_linux_${arch}_local-install.tar.gz"
 [[ -f $archive ]] || fail missing_local_install_archive
 
 # The exact one-architecture release archive and canonical source are mounted
@@ -35,9 +44,10 @@ docker run --rm --network bridge \
   --add-host github-releases.githubusercontent.com:127.0.0.1 \
   -e STL_E2E_DISPOSABLE_GUEST=approved \
   -e STL_E2E_BUNDLE_VERSION="dev-${short_sha}" \
+  -e STL_E2E_BUNDLE_ARCH="$arch" \
   -v "$archive:/mnt/stl-local-install.tar.gz:ro" \
   -v "$PWD/scripts/install.sh:/mnt/stl-install.sh:ro" \
-  ubuntu:24.04 /bin/bash -c '
+  "$image" /bin/bash -c '
 set -Eeuo pipefail
 fail() { echo "REAL_PACKAGE_PREPARE_GUEST_FAILED=$1" >&2; exit 1; }
 [[ $EUID == 0 && -f /.dockerenv && ${STL_E2E_DISPOSABLE_GUEST:-} == approved ]] || fail not_disposable_guest
@@ -47,7 +57,7 @@ test ! -e /usr/local/bin/stl || fail untrusted_existing_stl
 # never weaken the real-prefix source ownership gate.
 install -d -m 0700 /root/stl-e2e-bundle
 members=$(tar -tzf /mnt/stl-local-install.tar.gz) || fail archive_listing_failed
-expected=$(printf "%s\n" "stl_${STL_E2E_BUNDLE_VERSION}_linux_amd64" \
+expected=$(printf "%s\n" "stl_${STL_E2E_BUNDLE_VERSION}_linux_${STL_E2E_BUNDLE_ARCH}" \
   install.sh LICENSE BUILD-MANIFEST.txt LOCAL-INSTALL.txt SHA256SUMS)
 [[ $members == "$expected" ]] || fail unsafe_archive_members
 tar --extract --gzip --file /mnt/stl-local-install.tar.gz \
@@ -162,4 +172,4 @@ fi
 echo "IPSEC_NON_SYSTEMD_GUEST_PREPARE_REFUSED_BEFORE_APT=PASS"
 echo "IPSEC_FOREIGN_DROPIN_AND_APT_MARKERS_ABSENT=PASS"
 '
-echo "REAL_APT_PACKAGE_PREPARATION_GUEST=PASS source=$source_sha"
+echo "REAL_APT_PACKAGE_PREPARATION_GUEST=PASS source=$source_sha arch=$arch guest=$image"
