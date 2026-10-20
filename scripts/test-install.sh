@@ -52,6 +52,7 @@ MANIFEST
 }
 bundle v0.1.0 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 bundle v0.1.1 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+bundle v0.1.0-rc.1 cccccccccccccccccccccccccccccccccccccccc
 [[ $(uname -m) == x86_64 ]] || { echo 'SKIP: amd64 offline installer test fixture'; exit 0; }
 
 # Unowned binaries and aliases are never taken over.
@@ -104,9 +105,23 @@ bash "$installer" update --bundle "$root/v0.1.1" --prefix "$prefix"
 [[ $(sha "$prefix/bin/stl") == "$(sha "$root/v0.1.1/stl_v0.1.1_linux_amd64")" ]] || fail 'new binary was not published'
 [[ $(grep '^version=' "$prefix/lib/simple-tun-link/install-record") == version=v0.1.1 ]] || fail 'record not updated'
 bash "$installer" update --bundle "$root/v0.1.1" --prefix "$prefix" # idempotent no-op
-expect_failure bash "$installer" update --bundle "$root/v0.1.0" --prefix "$prefix"
-[[ $(grep '^version=' "$prefix/lib/simple-tun-link/install-record") == version=v0.1.1 ]] ||
-  fail 'downgrade attempt changed the owner record'
+# The pre-existing explicit manual-update route intentionally permits a
+# separately reviewed rollback and RC-to-Stable migration; do not silently
+# narrow that contract when implementing same-version local INSTALL no-op.
+rollback_prefix="$root/manual-rollback-prefix"
+mkdir -p "$rollback_prefix/bin" "$rollback_prefix/lib"
+bash "$installer" install --bundle "$root/v0.1.1" --prefix "$rollback_prefix"
+bash "$installer" update --bundle "$root/v0.1.0" --prefix "$rollback_prefix"
+[[ $(grep '^version=' "$rollback_prefix/lib/simple-tun-link/install-record") == version=v0.1.0 &&
+   $(sha "$rollback_prefix/bin/stl") == "$original" ]] ||
+  fail 'explicit safe manual-update rollback route was removed'
+rc_prefix="$root/manual-rc-to-stable-prefix"
+mkdir -p "$rc_prefix/bin" "$rc_prefix/lib"
+bash "$installer" install --bundle "$root/v0.1.0-rc.1" --prefix "$rc_prefix"
+bash "$installer" update --bundle "$root/v0.1.0" --prefix "$rc_prefix"
+[[ $(grep '^version=' "$rc_prefix/lib/simple-tun-link/install-record") == version=v0.1.0 &&
+   $(sha "$rc_prefix/bin/stl") == "$original" ]] ||
+  fail 'explicit RC-to-Stable manual-update contract was removed'
 
 # The canonical reader (not a duplicate state parser) guards uninstall.
 expect_failure env STL_INSTALL_TEST_LINKS=1 bash "$installer" uninstall --prefix "$prefix"

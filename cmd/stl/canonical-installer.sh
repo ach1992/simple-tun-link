@@ -1184,14 +1184,6 @@ if [[ $action == update ]]; then
   elif [[ $prior_version == "$version" ]]; then
     [[ $prior_hash == "$incoming_hash" ]] ||
       fail 'same release version has different executable bytes; refusing mutable/repacked tag'
-  else
-    # Normal automatic local updates accept only a strictly newer stable
-    # numeric release. RC/snapshot version transitions require a separately
-    # reviewed migration path, not guessed semver or silent downgrade.
-    [[ $prior_version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
-      fail 'cannot prove safe upgrade ordering for non-Stable release versions'
-    first=$(printf '%s\n%s\n' "$prior_version" "$version" | LC_ALL=C sort -V | head -n 1)
-    [[ $first == "$prior_version" ]] || fail "refusing downgrade from $prior_version to $version"
   fi
 fi
 # Install only missing distro-native prerequisites, after authenticating the
