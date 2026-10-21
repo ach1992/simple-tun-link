@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -139,7 +140,7 @@ func (p WSSWGIngressPlan) ProbeWSSWGFirewallCoexistence(ctx context.Context, run
 		if err != nil {
 			// Never include raw stdout/stderr: firewall comments may contain
 			// foreign application credentials or private host metadata.
-			return nil, fmt.Errorf("WSS WG %s readback failed: %w", stage, err)
+			return nil, safeWSSWGReadbackFailure(stage, executable, err)
 		}
 		if len(bytes.TrimSpace(result.Stderr)) != 0 {
 			return nil, fmt.Errorf("WSS WG %s readback reported unexpected stderr", stage)
@@ -174,6 +175,101 @@ func (p WSSWGIngressPlan) ProbeWSSWGFirewallCoexistence(ctx context.Context, run
 	return p.CheckWSSWGFirewallCoexistence(e)
 }
 
+// safeWSSWGReadbackFailure never formats or unwraps untrusted runner error
+// text. It preserves only explicit safe sentinel classifications and a
+// reconstructed CommandError using the *fixed* executable name, verified
+// boolean flags and numeric status; no arbitrary cause, stderr or argv.
+func safeWSSWGReadbackFailure(stage, executable string, err error) error {
+	switch {
+	case errors.Is(err, ErrOutputLimit):
+		return fmt.Errorf("WSS WG %s readback exceeded output limit: %w", stage, ErrOutputLimit)
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("WSS WG %s readback timed out: %w", stage, context.DeadlineExceeded)
+	case errors.Is(err, context.Canceled):
+		return fmt.Errorf("WSS WG %s readback canceled: %w", stage, context.Canceled)
+	}
+	var commandErr *CommandError
+	if errors.As(err, &commandErr) && commandErr != nil {
+		clean := &CommandError{
+			Command:  executable,
+			ExitCode: commandErr.ExitCode,
+			TimedOut: commandErr.TimedOut,
+			Canceled: commandErr.Canceled,
+		}
+		return fmt.Errorf("WSS WG %s readback failed: %w", stage, clean)
+	}
+	return fmt.Errorf("WSS WG %s readback failed (unclassified)", stage)
+}
+
+// checkWSSWGUniqueJSONMembers rejects duplicate JSON keys and case-folded
+// aliases at every object depth before encoding/json v1 can overwrite or
+// merge any of them (v1 also matches struct field names case-insensitively). The
+// caller already caps the input size; recursion is also bounded to prevent
+// an attacker-controlled nested snapshot from exhausting the Go stack.
+func checkWSSWGUniqueJSONMembers(raw []byte) error {
+	d := json.NewDecoder(bytes.NewReader(raw))
+	if err := walkWSSWGJSON(d, 0); err != nil {
+		return err
+	}
+	if _, err := d.Token(); err != io.EOF {
+		return fmt.Errorf("WSS WG nft JSON has trailing content")
+	}
+	return nil
+}
+
+func walkWSSWGJSON(d *json.Decoder, depth int) error {
+	if depth > 128 {
+		return fmt.Errorf("WSS WG nft JSON nesting exceeds inspection depth")
+	}
+	tok, err := d.Token()
+	if err != nil {
+		return fmt.Errorf("WSS WG nft JSON token is invalid")
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delim {
+	case '{':
+		seen := make(map[string]struct{})
+		for d.More() {
+			keyToken, err := d.Token()
+			if err != nil {
+				return fmt.Errorf("WSS WG nft JSON object key is invalid")
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return fmt.Errorf("WSS WG nft JSON object key is not a string")
+			}
+			identity := strings.ToLower(key)
+			if _, exists := seen[identity]; exists {
+				return fmt.Errorf("WSS WG nft JSON has a duplicate object member")
+			}
+			seen[identity] = struct{}{}
+			if err := walkWSSWGJSON(d, depth+1); err != nil {
+				return err
+			}
+		}
+		end, err := d.Token()
+		if err != nil || end != json.Delim('}') {
+			return fmt.Errorf("WSS WG nft JSON object is unterminated")
+		}
+	case '[':
+		for d.More() {
+			if err := walkWSSWGJSON(d, depth+1); err != nil {
+				return err
+			}
+		}
+		end, err := d.Token()
+		if err != nil || end != json.Delim(']') {
+			return fmt.Errorf("WSS WG nft JSON array is unterminated")
+		}
+	default:
+		return fmt.Errorf("WSS WG nft JSON has an unexpected delimiter")
+	}
+	return nil
+}
+
 type wssWGHostChain struct {
 	Family string          `json:"family"`
 	Table  string          `json:"table"`
@@ -206,6 +302,9 @@ func (p WSSWGIngressPlan) CheckWSSWGNFTCoexistence(raw []byte) error {
 	if len(raw) == 0 || len(raw) > 8<<20 {
 		return fmt.Errorf("WSS WG nft ruleset snapshot absent or exceeds bounded inspection size")
 	}
+	if err := checkWSSWGUniqueJSONMembers(raw); err != nil {
+		return err
+	}
 	var dump wssNFTDump
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
@@ -215,6 +314,7 @@ func (p WSSWGIngressPlan) CheckWSSWGNFTCoexistence(raw []byte) error {
 	if err := d.Decode(new(any)); err != io.EOF {
 		return fmt.Errorf("WSS WG nft ruleset has trailing data")
 	}
+	metadata := 0
 	tables := map[string]bool{}
 	chains := map[string]wssWGHostChain{}
 	ruleCount := map[string]int{}
@@ -225,8 +325,16 @@ func (p WSSWGIngressPlan) CheckWSSWGNFTCoexistence(raw []byte) error {
 		for kind, data := range item {
 			switch kind {
 			case "metainfo":
-				if !json.Valid(data) {
-					return fmt.Errorf("WSS WG nft metadata is invalid")
+				metadata++
+				var info struct {
+					Version           string `json:"version"`
+					ReleaseName       string `json:"release_name"`
+					JSONSchemaVersion int    `json:"json_schema_version"`
+				}
+				if metadata != 1 ||
+					decodeWSSNFTObject(data, &info) != nil ||
+					info.Version == "" || info.JSONSchemaVersion != 1 {
+					return fmt.Errorf("WSS WG nft metadata is absent, malformed or unsupported")
 				}
 			case "table":
 				var t struct {
@@ -273,6 +381,9 @@ func (p WSSWGIngressPlan) CheckWSSWGNFTCoexistence(raw []byte) error {
 				return fmt.Errorf("WSS WG nft ruleset has unsupported object kind")
 			}
 		}
+	}
+	if metadata != 1 {
+		return fmt.Errorf("WSS WG nft ruleset must contain exactly one valid metadata object")
 	}
 	for key, c := range chains {
 		if !tables[wssWGChainKey(c.Family, c.Table, "")] {

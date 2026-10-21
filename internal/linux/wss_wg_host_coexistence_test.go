@@ -3,6 +3,7 @@ package linux
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -34,7 +35,7 @@ func wssHostEvidence(raw string) WSSWGFirewallEvidence {
 func wssHostInventory(t *testing.T, table, chain, hook string, priority int, policy string, rule bool) string {
 	t.Helper()
 	objects := []any{
-		map[string]any{"metainfo": map[string]any{"json_schema_version": 1}},
+		map[string]any{"metainfo": map[string]any{"version": "1.1.3", "json_schema_version": 1}},
 		map[string]any{"table": map[string]any{"family": "inet", "name": table}},
 	}
 	c := map[string]any{"family": "inet", "table": table, "name": chain}
@@ -71,6 +72,52 @@ func TestWSSWGHostCoexistenceAcceptsOnlyBoundedReadOnlyEvidence(t *testing.T) {
 	// expected public table name and marker; even a pristine clone collides.
 	if err := p.CheckWSSWGNFTCoexistence([]byte(wssHostInventory(t, p.tableName(), "ingress", "input", -250, "accept", true))); err == nil {
 		t.Fatal("adopted same-name existing nft guard")
+	}
+}
+
+func TestWSSWGHostCoexistenceRejectsDuplicateOrIncompleteNFTJSON(t *testing.T) {
+	p := wssGuardFixture(t)
+	valid := wssHostInventory(t, "foreign", "INPUT", "input", 0, "accept", true)
+	if err := p.CheckWSSWGNFTCoexistence([]byte(valid)); err != nil {
+		t.Fatalf("canonical non-empty nft inventory was rejected: %v", err)
+	}
+	if err := p.CheckWSSWGNFTCoexistence([]byte(wssHostEmptyRuleset)); err != nil {
+		t.Fatalf("canonical empty nft inventory was rejected: %v", err)
+	}
+	meta := `{"metainfo":{"version":"1.1.3","json_schema_version":1}}`
+	for _, tt := range []struct {
+		name string
+		raw  string
+	}{
+		{"duplicate-top-level-nftables", `{"nftables":[{"table":{"family":"inet","name":"foreign"}}],"nftables":[` + meta + `]} `},
+		{"duplicate-entry-object-name", `{"nftables":[{"table":{"family":"inet","name":"foreign"},"table":{"family":"inet","name":"safe"}},` + meta + `]} `},
+		{"case-alias-top-level", `{"nftables":[` + meta + `],"NFTABLES":[` + meta + `]}`},
+		{"duplicate-metadata-object-name", `{"nftables":[{"metainfo":{},"metainfo":{"version":"1.1.3","json_schema_version":1}}]}`},
+		{"duplicate-metadata-version", strings.Replace(wssHostEmptyRuleset, `"version":"1.1.3"`, `"version":"unknown","version":"1.1.3"`, 1)},
+		{"duplicate-schema-key", strings.Replace(wssHostEmptyRuleset, `"json_schema_version":1`, `"json_schema_version":2,"json_schema_version":1`, 1)},
+		{"duplicate-chain-hook", strings.Replace(valid, `"hook":"input"`, `"hook":"prerouting","hook":"input"`, 1)},
+		{"case-alias-chain-hook", strings.Replace(valid, `"hook":"input"`, `"Hook":"prerouting","hook":"input"`, 1)},
+		{"duplicate-chain-priority", strings.Replace(valid, `"prio":0`, `"prio":-300,"prio":0`, 1)},
+		{"duplicate-rule-member", strings.Replace(valid, `"accept":null`, `"accept":null,"accept":null`, 1)},
+		{"empty-nftables-array", `{"nftables":[]}`},
+		{"null-metainfo", `{"nftables":[{"metainfo":null}]}`},
+		{"empty-metainfo", `{"nftables":[{"metainfo":{}}]}`},
+		{"metainfo-no-version", `{"nftables":[{"metainfo":{"json_schema_version":1}}]}`},
+		{"metainfo-null-version", `{"nftables":[{"metainfo":{"version":null,"json_schema_version":1}}]}`},
+		{"metainfo-no-schema-version", `{"nftables":[{"metainfo":{"version":"1.1.3"}}]}`},
+		{"metainfo-unknown-schema", `{"nftables":[{"metainfo":{"version":"1.1.3","json_schema_version":2}}]}`},
+		{"duplicated-metainfo-entry", `{"nftables":[` + meta + `,` + meta + `]}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			// A negative fixture must be syntactically well-formed to prove
+			// semantic rejection instead of accidentally testing JSON syntax.
+			if !json.Valid([]byte(tt.raw)) {
+				t.Fatal("invalid negative test fixture")
+			}
+			if err := p.CheckWSSWGNFTCoexistence([]byte(tt.raw)); err == nil {
+				t.Fatal("malformed, duplicated or incomplete nft snapshot was admitted")
+			}
+		})
 	}
 }
 
@@ -151,8 +198,10 @@ func TestWSSWGHostCoexistenceRejectsUnverifiedMixedIPTables(t *testing.T) {
 }
 
 type wssHostReadbackRunner struct {
-	calls []string
-	fail  string
+	calls   []string
+	fail    string
+	failErr error
+	stderr  string
 }
 
 func (r *wssHostReadbackRunner) Run(_ context.Context, _ string, _ ...string) (CommandResult, error) {
@@ -166,7 +215,13 @@ func (r *wssHostReadbackRunner) RunBounded(_ context.Context, limits CaptureLimi
 		return CommandResult{}, fmt.Errorf("unsafe readback ceiling")
 	}
 	if command == r.fail {
+		if r.failErr != nil {
+			return CommandResult{}, r.failErr
+		}
 		return CommandResult{}, fmt.Errorf("permission denied")
+	}
+	if r.stderr != "" {
+		return CommandResult{Stderr: []byte(r.stderr)}, nil
 	}
 	switch command {
 	case "nft -j list ruleset":
@@ -203,6 +258,63 @@ func TestWSSWGHostProbeUsesOnlyBoundedReadOnlyCommands(t *testing.T) {
 	}
 	if err := p.ProbeWSSWGFirewallCoexistence(context.Background(), nil); err == nil {
 		t.Fatal("nil bounded runner admitted")
+	}
+}
+
+func TestWSSWGHostProbeErrorsNeverForwardRunnerDiagnostics(t *testing.T) {
+	p := wssGuardFixture(t)
+	const secret = "SENSITIVE_FOREIGN_FIREWALL_DIAGNOSTIC_TOKEN"
+	sentinel := errors.New("runner-" + secret)
+	tests := []struct {
+		name        string
+		input       error
+		is          error
+		wantExit    int
+		wantTimeout bool
+		wantCancel  bool
+	}{
+		{"arbitrary-error", fmt.Errorf("private stderr %s: %w", secret, sentinel), nil, 0, false, false},
+		{"output-limit", fmt.Errorf("%s: %w", secret, ErrOutputLimit), ErrOutputLimit, 0, false, false},
+		{"deadline-exceeded", fmt.Errorf("%s: %w", secret, context.DeadlineExceeded), context.DeadlineExceeded, 0, false, false},
+		{"canceled", fmt.Errorf("%s: %w", secret, context.Canceled), context.Canceled, 0, false, false},
+		{"typed-command-error", &CommandError{Command: secret, ExitCode: 37, cause: sentinel}, nil, 37, false, false},
+		{"typed-wrapped-command-error", fmt.Errorf("%s: %w", secret, &CommandError{Command: secret, ExitCode: 53, cause: sentinel}), nil, 53, false, false},
+		{"typed-command-timeout", &CommandError{Command: secret, ExitCode: -1, TimedOut: true, cause: sentinel}, nil, 0, true, false},
+		{"typed-command-canceled", &CommandError{Command: secret, ExitCode: -1, Canceled: true, cause: sentinel}, nil, 0, false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &wssHostReadbackRunner{fail: "nft -j list ruleset", failErr: tt.input}
+			err := p.ProbeWSSWGFirewallCoexistence(context.Background(), r)
+			if err == nil {
+				t.Fatal("untrusted runner error was admitted")
+			}
+			if strings.Contains(err.Error(), secret) || strings.Contains(fmt.Sprintf("%+v", err), secret) ||
+				errors.Is(err, sentinel) {
+				t.Fatalf("untrusted runner diagnostic leaked via returned error: %v", err)
+			}
+			if !strings.Contains(err.Error(), "WSS WG nft readback") {
+				t.Fatalf("fixed diagnostic stage lost: %v", err)
+			}
+			if tt.is != nil && !errors.Is(err, tt.is) {
+				t.Fatalf("safe typed sentinel %v was lost: %v", tt.is, err)
+			}
+			if tt.wantExit != 0 || tt.wantTimeout || tt.wantCancel {
+				var safe *CommandError
+				if !errors.As(err, &safe) || (tt.wantExit != 0 && safe.ExitCode != tt.wantExit) ||
+					safe.Command != "nft" || safe.Unwrap() != nil ||
+					safe.TimedOut != tt.wantTimeout || safe.Canceled != tt.wantCancel {
+					t.Fatalf("safe numeric exit information was lost or polluted: %v", err)
+				}
+			}
+		})
+	}
+	// Even a successful runner may return warning/error output carrying
+	// sensitive firewall metadata. The stage-only error must not leak it.
+	r := &wssHostReadbackRunner{stderr: secret}
+	err := p.ProbeWSSWGFirewallCoexistence(context.Background(), r)
+	if err == nil || strings.Contains(err.Error(), secret) {
+		t.Fatalf("runner stderr was exposed: %v", err)
 	}
 }
 

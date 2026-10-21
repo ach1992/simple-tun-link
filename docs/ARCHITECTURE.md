@@ -531,7 +531,11 @@ readbacks (`nft -j list ruleset`, the IPv4/IPv6 iptables backend versions,
 and both legacy iptables-save inventories). It refuses same-name nft table
 collisions, nonempty foreign prerouting/ingress or equal/earlier input hooks,
 unknown nft objects/flowtables, active legacy chains/policies, mixed
-frontends and incomplete readbacks. A conventional later-priority
+frontends and incomplete readbacks. It rejects duplicate JSON member names
+at every nesting level and requires one valid nft metadata object (supported
+JSON schema version 1); a canonical metadata-only empty ruleset is valid.
+Runner errors expose only fixed stages and recognized sanitized status
+categories, never arbitrary runner output. A conventional later-priority
 iptables-nft INPUT `ACCEPT` does not by itself override the earlier DROP.
 The disposable real-kernel-WG lab also checks live full-ruleset admission,
 foreign early-hook rejection and subsequent recovery inside its own namespace.
