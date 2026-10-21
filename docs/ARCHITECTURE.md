@@ -509,6 +509,40 @@ are isolated from unrelated retries, and the runner asserts that inherited
 This is upstream helper/Policy compatibility evidence **only**, not
 an STL-managed WireGuard Link or a multi-host throughput result.
 
+A separate **non-runnable WSS-only kernel UDP ingress design gate** in
+`internal/linux/wss_wg_ingress.go` produces a single exact nftables
+`inet` table/hook/drop-rule transaction per Link and verifies the complete
+table/chain/rule structure from `nft -j list table`. The guard denies
+non-loopback IPv4/IPv6 packets to the selected kernel WireGuard UDP listen
+port, before ordinary filter priority, while retaining the normal host
+policy for all other traffic. Unlike an appended iptables DROP, its
+separate early-priority hook cannot be bypassed merely by a pre-existing
+filter-chain ACCEPT. Table and chain use **exclusive nft `create`
+semantics in the same atomic batch**: a pre-existing same-name foreign
+nft table must cause the whole batch to fail without modifying it,
+regardless of a prior absence check. The table name and public
+comment are **collision markers, not ownership proofs**; a matching
+on-disk name or readback cannot authorize adoption, deletion, or
+runtime activation.
+
+An explicitly opt-in, rootless **disposable namespace** test
+(`scripts/e2e/wss-wg-ingress-netns.sh`) executes the same unit-tested
+nft batch beside a real kernel WireGuard UDP listener. The outer
+launcher records its user/network namespaces and a private random
+guard; internal `--isolated` entry requires that evidence and a
+separate mapped-root user/network namespace before any host effect.
+The lab deliberately collides with a foreign same-name table/chain
+inside the disposable namespace and verifies exact unchanged objects.
+It checks IPv4/IPv6 ingress-drop counters with a pre-existing ordinary
+ACCEPT and verifies actual nft JSON readback using the Go validator.
+This is limited to the tested network namespace/kernel/netfilter
+semantics: it does not prove that every host's foreign-prerouting
+configuration is compatible, provide an Engine-held ownership lock,
+create a durable pre-effect journal, secure crash rollback, or prove
+a two-peer authenticated WG handshake. Do not enable it on a
+physical/production host or wire it into the Engine before the
+remaining security, restore and authorization gates below.
+
 The adapter still does **not** provision TLS credentials, start services
 or enable a Carrier in the public Link schema. Current shipped/native
 Link behavior is unchanged; staging is intentionally not runnable as
