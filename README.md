@@ -70,59 +70,33 @@ take over another VPN installation.
 
 ### Local installation without international GitHub access
 
-If a target server cannot reach GitHub, download the files **on another device**
-from the same official tag, transfer them to a root-private `/root/stl/`
-folder and run the canonical installer locally. No GitHub access, Go or Rust
-compiler is required on the destination. For the **currently published
-`v0.1.7` Stable** release (not a future unpublished bundle):
+For a published Stable release that includes the architecture-specific
+`stl_<version>_linux_amd64_local-install.tar.gz` or
+`stl_<version>_linux_arm64_local-install.tar.gz` package (introduced in
+the v0.1.8 release line), download **one matching architecture** from
+the [official versioned release](https://github.com/ach1992/simple-tun-link/releases/latest)
+on another device. Also obtain the release-wide `SHA256SUMS` and verify
+the exact version, Git source identity and archive digest from a trusted
+publisher reference **before** executing any installer as root. A checksum
+in the same compromised download does not independently authenticate
+its publisher.
 
-| Select/download on the Internet-connected device | Exact official `v0.1.7` source | Required? |
-| --- | --- | --- |
-| `stl_v0.1.7_linux_amd64` for `uname -m` = `x86_64` **OR** `stl_v0.1.7_linux_arm64` for `aarch64` | [Versioned release assets](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.7) | One architecture only |
-| `SHA256SUMS`, `BUILD-MANIFEST.txt`, `LICENSE` | [Versioned release assets](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.7) | All three |
-| `scripts/install.sh` from the **same `v0.1.7` source tag** | [Exact-tag canonical installer](https://github.com/ach1992/simple-tun-link/blob/v0.1.7/scripts/install.sh) | Required separately; **not** an asset in that release |
-| `stl-bootstrap.sh` | [Versioned release assets](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.7) | Online use only; **not needed** locally |
+Transfer the verified archive to a root-private directory on the server.
+The archive contains the canonical `install.sh`, the matching STL
+binary, `LICENSE`, `BUILD-MANIFEST.txt`, `LOCAL-INSTALL.txt` and
+its internal `SHA256SUMS`. The [local install procedure](docs/INSTALL.md#single-architecture-local-install-from-a-published-release)
+shows safe private staging, immutable-snapshot `unpack`, and canonical
+`install|update --bundle` commands. A target does **not** need GitHub,
+Go, Rust or access to foreign download sites. Installed prerequisites
+are reused; genuinely missing selected distro packages use only the
+host's configured, signed APT sources. Operator selection of an official
+regional mirror is manual, never an automatic rewrite or a signature
+bypass. IPsec still requires its own approved service/package preparation.
 
-Verify the release/tag and separately obtained installer source, transfer the
-required files as regular files, and on the destination host run:
-
-~~~sh
-uname -m                     # choose only the matching architecture above
-sudo install -d -m 0700 /root/stl
-# Upload the selected files into /root/stl/ via SFTP/SCP before continuing.
-sudo -i                      # commands below are from a root shell
-cd /root/stl
-sha256sum --check --ignore-missing SHA256SUMS
-bash -n install.sh
-bash ./install.sh install --bundle /root/stl --backends native,wireguard
-stl version --json
-~~~
-
-The verified local folder must be owned by root, not a symlink, and mode
-`0700`; the archive/release's own checksum file alone is **not** an
-independent signature. On existing installer-owned installations, use an
-explicit `update` for a newer version; a verified exact same-version `install`
-is a no-op on releases with the new local-bundle support. The installer reuses
-present prerequisites and uses only the server's configured **signed** APT
-sources if a selected distro package is missing. If these sources cannot be
-reached, the operator can **manually** choose an accessible officially signed
-Debian/Ubuntu Iranian or regional mirror; STL never changes APT sources or
-weakens package signatures.
-
-Native GRE/IPIP needs **no extra GitHub helper**; WireGuard uses kernel support
-and distro `wireguard-tools`; optional IPsec needs selected signed distro
-strongSwan packages and separate service/consent checks. WSS and Paqet are
-**not shipped Carriers** and require no download. The future per-architecture
-`*_local-install.tar.gz` archives are under development and **not present in
-v0.1.7**. For a future archive, independently verify its exact release digest
-first, copy the transferred archive into a **new root-private directory** as
-a mode-`0600` file, recheck its trusted digest there, then **completely extract and execute**
-the same canonical installer from that protected copy in `unpack` mode. Unpack
-independently authenticates an operation-private snapshot, checks member types,
-sizes and a fresh private destination, then regular `install|update --bundle`
-is used. See [exact download, validation, mirror and rollback steps](docs/INSTALL.md)
-and [release package inventory](docs/RELEASE-ARTIFACTS.md).
-
+For installations pinned to **v0.1.7**, which has no packaged local
+archive, use the [historical separate-file procedure](docs/INSTALL.md#legacy-manual-inventory-v017-no-local-archive).
+GRE/IPIP and WireGuard need no GitHub helper beyond STL itself; the
+optional WSS/Paqet Carriers are **not shipped** and require no download.
 
 ## Connect Server A and Server B
 

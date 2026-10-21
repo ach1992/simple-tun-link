@@ -122,8 +122,10 @@ Archive validation and native local-install smoke regression run in
 same-version idempotence, version/hash refusal, transactional update/rollback
 and foreign-identity rejection. These isolated tests do not prove APT mirror
 availability, real package-hook effects, multi-host Link traffic or reboot.
-For current **published** release `v0.1.7`, the archive is absent; use the
-[exact existing asset/manual installer checklist](INSTALL.md#exact-current-published-stable-inventory-v017).
+The historical `v0.1.7` release contains no local-install archive;
+for that exact tag use its [legacy separate-file inventory](INSTALL.md#legacy-manual-inventory-v017-no-local-archive).
+For newer Stable tags, verify that the actual published release includes
+the claimed local-install archives and their release-wide checksums.
 
 ## Installer and publication boundaries
 
