@@ -114,6 +114,32 @@ for arch in amd64 arm64; do
   cp -- scripts/install.sh "$package_dir/install.sh"
   cp -- "$tmp/$filename" "$tmp/LICENSE" "$tmp/BUILD-MANIFEST.txt" "$package_dir/"
   cat > "$package_dir/LOCAL-INSTALL.txt" <<EOF_LOCAL
+STL verified local archive (version $version, linux/$arch)
+
+For the simplest installation, download the ONE official matching release
+file stl_${version}_linux_${arch}_local-install.sh instead of this tar.gz.
+Transfer the .sh file unchanged into /root/stl/ and, with that ONE file
+present, run as an administrator:
+    sudo bash -c 'bash /root/stl/*_local-install.sh'
+
+The .sh file embeds these exact archive bytes and a build-bound digest; it
+verifies a private copy, delegates safe unpack to the canonical install.sh,
+then installs, safely no-ops, or updates newer Stable STL in one invocation.
+It uses no GitHub downloads on the target; only genuinely missing native and
+WireGuard packages may use the host's preconfigured signed APT repositories.
+IPsec still requires its own separate approved PREPARE/service flow.
+
+If you intentionally use this tar.gz alone, consult the maintainer/operator
+manual archive procedure at docs/INSTALL.md of the exact release source.
+It remains the canonical format for legacy/archive users, not a shell script.
+
+Verify official source/tag and publisher identity on the downloading device
+before running any privileged installer. SHA256SUMS from that same publisher,
+or the digest embedded in the .sh file, detects corruption but does NOT
+provide an independent publisher signature against a compromised account.
+Do not use anonymous mirrors or unverifiable repackaged installers.
+WSS/Paqet helpers are NOT included or approved for use.
+EOF_LOCAL
 STL local installation (version $version, linux/$arch)
 
 Download this archive and the separately published release-wide SHA256SUMS
@@ -178,12 +204,29 @@ EOF_LOCAL
     "$filename" install.sh LICENSE BUILD-MANIFEST.txt LOCAL-INSTALL.txt SHA256SUMS \
     | gzip -n > "$tmp/$archive"
   rm -rf -- "$package_dir"
+
+  # One-file copy-as-is local UX: a small build-bound shell bootstrap followed
+  # by the EXACT tested archive bytes. The bootstrap only verifies/stages and
+  # dispatches to the canonical installer; do not create another install engine.
+  local_entry="stl_${version}_linux_${arch}_local-install.sh"
+  archive_digest=$(sha256sum -- "$tmp/$archive" | awk '{print $1}')
+  archive_bytes=$(stat -c %s -- "$tmp/$archive")
+  sed -e "s|@VERSION@|$version|g" \
+      -e "s|@COMMIT@|$commit|g" \
+      -e "s|@ARCH@|$arch|g" \
+      -e "s|@ARCHIVE@|$archive|g" \
+      -e "s|@DIGEST@|$archive_digest|g" \
+      -e "s|@BYTES@|$archive_bytes|g" \
+      scripts/local-install-entrypoint.sh > "$tmp/$local_entry"
+  cat -- "$tmp/$archive" >> "$tmp/$local_entry"
 done
 (
   cd "$tmp"
   entries=("stl_${version}_linux_amd64" "stl_${version}_linux_arm64" "LICENSE" "BUILD-MANIFEST.txt"
     "stl_${version}_linux_amd64_local-install.tar.gz"
-    "stl_${version}_linux_arm64_local-install.tar.gz")
+    "stl_${version}_linux_arm64_local-install.tar.gz"
+    "stl_${version}_linux_amd64_local-install.sh"
+    "stl_${version}_linux_arm64_local-install.sh")
   if [[ $stable_bootstrap == true ]]; then
     entries+=("stl-bootstrap.sh")
   fi

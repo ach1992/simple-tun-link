@@ -68,35 +68,43 @@ For IPsec, preparation may require separately approved signed packages
 and an exclusively attested private service. STL must not silently
 take over another VPN installation.
 
-### Local installation without international GitHub access
+### Local installation without GitHub access on the server
 
-For a published Stable release that includes the architecture-specific
-`stl_<version>_linux_amd64_local-install.tar.gz` or
-`stl_<version>_linux_arm64_local-install.tar.gz` package (introduced in
-the v0.1.8 release line), download **one matching architecture** from
-the [official versioned release](https://github.com/ach1992/simple-tun-link/releases/latest)
-on another device. Also obtain the release-wide `SHA256SUMS` and verify
-the exact version, Git source identity and archive digest from a trusted
-publisher reference **before** executing any installer as root. A checksum
-in the same compromised download does not independently authenticate
-its publisher.
+**One file, one folder, one command** on a release that actually publishes the
+new `*_local-install.sh` files. On an Internet-connected device, choose **one**
+architecture-specific file from that release's official assets:
 
-Transfer the verified archive to a root-private directory on the server.
-The archive contains the canonical `install.sh`, the matching STL
-binary, `LICENSE`, `BUILD-MANIFEST.txt`, `LOCAL-INSTALL.txt` and
-its internal `SHA256SUMS`. The [local install procedure](docs/INSTALL.md#single-architecture-local-install-from-a-published-release)
-shows safe private staging, immutable-snapshot `unpack`, and canonical
-`install|update --bundle` commands. A target does **not** need GitHub,
-Go, Rust or access to foreign download sites. Installed prerequisites
-are reused; genuinely missing selected distro packages use only the
-host's configured, signed APT sources. Operator selection of an official
-regional mirror is manual, never an automatic rewrite or a signature
-bypass. IPsec still requires its own approved service/package preparation.
+| Destination CPU (`uname -m`) | Download from the exact official release |
+| --- | --- |
+| `x86_64` | `stl_<version>_linux_amd64_local-install.sh` |
+| `aarch64` | `stl_<version>_linux_arm64_local-install.sh` |
 
-For installations pinned to **v0.1.7**, which has no packaged local
-archive, use the [historical separate-file procedure](docs/INSTALL.md#legacy-manual-inventory-v017-no-local-archive).
-GRE/IPIP and WireGuard need no GitHub helper beyond STL itself; the
-optional WSS/Paqet Carriers are **not shipped** and require no download.
+Upload the single file **as-is** into `/root/stl/` on the server (e.g. through
+SFTP); the folder and file must be root-owned and not writable by other users.
+With just that one file in the folder, run:
+
+~~~sh
+sudo bash -c 'bash /root/stl/*_local-install.sh'
+~~~
+
+The launcher recognizes the CPU, privately verifies/extracts its embedded
+release archive, and invokes the canonical installer. It handles a new install,
+a no-op for the same verified artifact, or a newer **Stable-to-Stable** update;
+it then opens the menu on a terminal (otherwise use `sudo stl menu`). It never
+fetches STL from GitHub on the destination. Already-installed prerequisites
+are reused; only missing native/WireGuard distro packages may use the configured
+**signed APT repositories**. IPsec preparation is separate. No WSS/Paqet
+Carrier is shipped.
+
+**Availability:** the published [v0.1.8 Stable](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.8)
+contains the verified `.tar.gz` bundles, **not** this new `.sh` entrypoint.
+Do not use this command with that archive or assume a not-yet-published asset
+exists. The [installation guide](docs/INSTALL.md#local-installation-choose-a-published-asset)
+lists the actual v0.1.8 files, manual fallback, release-link patterns for the
+new file and actionable errors. Download only from a verified official release
+and independently establish publisher/tag provenance before root execution;
+embedded or same-account checksums are integrity checks, not an independent
+publisher signature.
 
 ## Connect Server A and Server B
 
