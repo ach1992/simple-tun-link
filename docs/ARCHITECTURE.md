@@ -433,6 +433,17 @@ A first internal, secret-free `internal/composition` path planner records:
   with either physical-IP SAN or exact DNS certificate identity, separate
   dial/listen roles, per-Link TLS identity and deterministic per-Link resource
   reservations. All other WSS/backend combinations fail closed.
+- the internal, non-runnable `ValidateWSSPeerPair` check verifies that two
+  independently valid endpoint plans have reciprocal physical/private
+  addresses, WireGuard peer keys and UDP ports, one dial/listen role, and the
+  same exact WSS TCP endpoint and selected TLS name. WSS-only path
+  validation also rejects private IPv4 routes overlapping loopback, link-local
+  and other locally reserved ranges (without requiring RFC1918); it leaves
+  Native address validation unchanged. The peer check intentionally does not
+  claim support for a translated/NAT peer address, validate private
+  credential matching, inspect host resources or establish a live Link.
+  A future public pairing version must not treat this check as sufficient
+  evidence to activate a Carrier.
 
 The `internal/carrier/wss` adapter renders a restricted mTLS wstunnel
 argv and an exact per-Link protected bearer-token/path-to-loopback-WG-UDP
