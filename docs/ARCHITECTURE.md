@@ -525,6 +525,24 @@ comment are **collision markers, not ownership proofs**; a matching
 on-disk name or readback cannot authorize adoption, deletion, or
 runtime activation.
 
+A separate **non-runnable, read-only host coexistence probe** in
+`internal/linux/wss_wg_host_coexistence.go` uses bounded direct command
+readbacks (`nft -j list ruleset`, the IPv4/IPv6 iptables backend versions,
+and both legacy iptables-save inventories). It refuses same-name nft table
+collisions, nonempty foreign prerouting/ingress or equal/earlier input hooks,
+unknown nft objects/flowtables, active legacy chains/policies, mixed
+frontends and incomplete readbacks. A conventional later-priority
+iptables-nft INPUT `ACCEPT` does not by itself override the earlier DROP.
+The disposable real-kernel-WG lab also checks live full-ruleset admission,
+foreign early-hook rejection and subsequent recovery inside its own namespace.
+This is **point-in-time compatibility evidence only**, not effective host
+admission: neither the host-wide snapshot nor a successful read-only probe
+provides atomicity against later firewall changes, exclusive WG-port or
+nft ownership, legacy-policy proof when inspection is denied, a durable
+journal, crash compensation or permission to apply a guard. A future
+runnable Engine integration must evaluate real host ownership and rule drift
+under the proper locks; ambiguous mixed firewalls remain blocked.
+
 An explicitly opt-in, rootless **disposable namespace** test
 (`scripts/e2e/wss-wg-ingress-netns.sh`) executes the same unit-tested
 nft batch beside a real kernel WireGuard UDP listener. The outer

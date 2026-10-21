@@ -181,6 +181,28 @@ cmp -s "$testdir/before.json" "$testdir/after.json" || {
 echo 'FOREIGN_CHAIN_NO_MUTATION=PASS'
 nft delete table inet "$table"
 
+# Exercise a read-only WHOLE-ruleset coexistence preflight before the
+# proposed owned guard exists. iptables-nft installs a conventional later
+# priority INPUT ACCEPT; this alone must not be mistaken for a bypass.
+iptables -I INPUT 1 -p udp --dport 51820 -j ACCEPT
+nft -j list ruleset > "$testdir/snapshot.json"
+STL_WSS_HOST_NFT_JSON="$testdir/snapshot.json" go test ./internal/linux -run '^TestWSSWGHostCoexistenceIsolatedNftReadback$' -count=1
+echo 'NFT_CONVENTIONAL_INPUT_ACCEPT_OBSERVED=PASS'
+
+# A separate, foreign pre-guard hook must be rejected without modifying it.
+nft -f - <<'EOF_HOST_FOREIGN'
+create table inet foreign_wss_pre
+create chain inet foreign_wss_pre early { type filter hook input priority -300; policy accept; }
+add rule inet foreign_wss_pre early udp dport 51820 counter accept
+EOF_HOST_FOREIGN
+nft -j list ruleset > "$testdir/snapshot.json"
+STL_WSS_HOST_NFT_JSON="$testdir/snapshot.json" STL_WSS_HOST_EXPECT_REJECT=yes go test ./internal/linux -run '^TestWSSWGHostCoexistenceIsolatedNftReadback$' -count=1
+echo 'NFT_FOREIGN_EARLY_INPUT_REJECTED=PASS'
+nft delete table inet foreign_wss_pre
+nft -j list ruleset > "$testdir/snapshot.json"
+STL_WSS_HOST_NFT_JSON="$testdir/snapshot.json" go test ./internal/linux -run '^TestWSSWGHostCoexistenceIsolatedNftReadback$' -count=1
+echo 'NFT_POST_FOREIGN_REMOVAL_RECOVERED=PASS'
+
 # Only the following clean-state creation is accepted; all of the above
 # collisions were deliberately refused before any test-owned guard exists.
 nft -f "$batch"
@@ -188,9 +210,8 @@ nft -j list table inet "$table" > "$testdir/snapshot.json"
 cd "$source_root"
 STL_WSS_INGRESS_E2E_NFT_JSON="$testdir/snapshot.json" go test ./internal/linux -run '^TestWSSWGIngressVerifyIsolatedRuntimeSnapshot$' -count=1
 
-# Prove a pre-existing ACCEPT in the conventional filter INPUT chain is not
+# Prove the existing ACCEPT in the conventional filter INPUT chain is not
 # sufficient to bypass an earlier-priority guard DROP in a distinct nft chain.
-iptables -I INPUT 1 -p udp --dport 51820 -j ACCEPT
 python3 - <<'PY'
 import socket
 socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(b'LOCAL4', ('127.0.0.1',51820))
