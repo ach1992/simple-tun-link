@@ -1,3 +1,3 @@
-add table inet stlwss_09506b2028cc50fd
-add chain inet stlwss_09506b2028cc50fd ingress { type filter hook input priority -250; policy accept; }
+create table inet stlwss_09506b2028cc50fd
+create chain inet stlwss_09506b2028cc50fd ingress { type filter hook input priority -250; policy accept; }
 add rule inet stlwss_09506b2028cc50fd ingress iifname != "lo" udp dport 51820 counter drop comment "stl:lnk_0123456789abcdef0123456789abcdef:wg-udp-guard:51820"

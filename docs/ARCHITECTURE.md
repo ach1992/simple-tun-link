@@ -517,15 +517,24 @@ non-loopback IPv4/IPv6 packets to the selected kernel WireGuard UDP listen
 port, before ordinary filter priority, while retaining the normal host
 policy for all other traffic. Unlike an appended iptables DROP, its
 separate early-priority hook cannot be bypassed merely by a pre-existing
-filter-chain ACCEPT. The table name and public comment are **collision
-markers, not ownership proofs**; a matching on-disk name or readback
-cannot authorize adoption, deletion, or runtime activation.
+filter-chain ACCEPT. Table and chain use **exclusive nft `create`
+semantics in the same atomic batch**: a pre-existing same-name foreign
+nft table must cause the whole batch to fail without modifying it,
+regardless of a prior absence check. The table name and public
+comment are **collision markers, not ownership proofs**; a matching
+on-disk name or readback cannot authorize adoption, deletion, or
+runtime activation.
 
 An explicitly opt-in, rootless **disposable namespace** test
 (`scripts/e2e/wss-wg-ingress-netns.sh`) executes the same unit-tested
-nft batch beside a real kernel WireGuard UDP listener. It checks
-IPv4/IPv6 ingress-drop counters with a pre-existing ordinary ACCEPT
-and verifies the actual nft JSON readback using the Go validator.
+nft batch beside a real kernel WireGuard UDP listener. The outer
+launcher records its user/network namespaces and a private random
+guard; internal `--isolated` entry requires that evidence and a
+separate mapped-root user/network namespace before any host effect.
+The lab deliberately collides with a foreign same-name table/chain
+inside the disposable namespace and verifies exact unchanged objects.
+It checks IPv4/IPv6 ingress-drop counters with a pre-existing ordinary
+ACCEPT and verifies actual nft JSON readback using the Go validator.
 This is limited to the tested network namespace/kernel/netfilter
 semantics: it does not prove that every host's foreign-prerouting
 configuration is compatible, provide an Engine-held ownership lock,

@@ -57,8 +57,10 @@ func (p WSSWGIngressPlan) ruleComment() string {
 }
 
 // NFTBatch returns the exact single nftables transaction for an *absent*
-// per-Link table. It never executes anything. An existing table must NOT be
-// adopted, flushed, replaced or deleted by matching its name or marker.
+// per-Link table. Exclusive nft "create" operations must fail atomically
+// if a foreign table/chain already exists (even after an absence preflight).
+// It never executes anything. An existing table must NOT be adopted, flushed,
+// replaced or deleted by matching its name or marker.
 //
 // An inet/input chain at priority -250 gives a UDP DROP on non-loopback
 // interfaces, regardless of an earlier ACCEPT in the standard INPUT filter
@@ -72,8 +74,8 @@ func (p WSSWGIngressPlan) NFTBatch() (string, error) {
 	}
 	table := p.tableName()
 	return fmt.Sprintf(
-		"add table inet %s\n"+
-			"add chain inet %s ingress { type filter hook input priority %d; policy accept; }\n"+
+		"create table inet %s\n"+
+			"create chain inet %s ingress { type filter hook input priority %d; policy accept; }\n"+
 			"add rule inet %s ingress iifname != \"lo\" udp dport %d counter drop comment \"%s\"\n",
 		table, table, wssWGIngressPriority, table, p.ListenPort, p.ruleComment(),
 	), nil

@@ -43,6 +43,10 @@ func TestWSSWGIngressRenderMatchesCommittedNftTransaction(t *testing.T) {
 	if err != nil || got != string(want) {
 		t.Fatalf("nft batch does not match executable isolated-lab fixture: error=%v, got=%q, want=%q", err, got, want)
 	}
+	if !strings.HasPrefix(got, "create table inet ") ||
+		!strings.Contains(got, "\ncreate chain inet ") {
+		t.Fatal("ingress transaction lost atomic, exclusive table/chain creation")
+	}
 	if !strings.Contains(got, "hook input priority -250; policy accept;") ||
 		!strings.Contains(got, `iifname != "lo" udp dport 51820 counter drop`) {
 		t.Fatal("ingress rule lost its exact non-loopback filter priority/port")
