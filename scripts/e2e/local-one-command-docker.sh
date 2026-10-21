@@ -43,6 +43,40 @@ APT_STUB
          $(sha256sum /usr/local/lib/simple-tun-link/install-record | cut -d' ' -f1) == "$before_record" ]] ||
         fail no_op_changed_files_or_used_apt
       ;;
+    stable-update)
+      # Separate un-released test-tagged binaries exercise real automatic
+      # Stable-to-Stable routing, exact ownership, and downgrade refusal.
+      apt-get update -o APT::Update::Error-Mode=any >/dev/null
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        iproute2 iptables kmod wireguard-tools >/dev/null
+      cat > /usr/sbin/apt-get <<'APT_STUB'
+#!/bin/sh
+printf 'APT_WAS_CALLED\n' > /tmp/stl-apt-was-called
+exit 88
+APT_STUB
+      chmod 0755 /usr/sbin/apt-get
+      cp -- /mnt/stl-older.sh "/root/stl/$STL_E2E_OLDER_NAME"
+      rm -- "/root/stl/$STL_E2E_ENTRY_NAME"
+      sudo bash -c 'bash /root/stl/*_local-install.sh'
+      /usr/local/bin/stl version --json | grep -Fq '"version":"v999.0.0"' ||
+        fail initial_test_stable_version
+      rm -- "/root/stl/$STL_E2E_OLDER_NAME"
+      cp -- /mnt/stl-newer.sh "/root/stl/$STL_E2E_NEWER_NAME"
+      sudo bash -c 'bash /root/stl/*_local-install.sh'
+      /usr/local/bin/stl version --json | grep -Fq '"version":"v999.0.1"' ||
+        fail stable_update_did_not_replace_owned_binary
+      after_sha=$(sha256sum /usr/local/bin/stl | cut -d' ' -f1)
+      rm -- "/root/stl/$STL_E2E_NEWER_NAME"
+      cp -- /mnt/stl-older.sh "/root/stl/$STL_E2E_OLDER_NAME"
+      if sudo bash -c 'bash /root/stl/*_local-install.sh' > /tmp/stl-downgrade-failure 2>&1; then
+        fail automatic_downgrade_accepted
+      fi
+      grep -q 'refusing automatic downgrade/channel change' /tmp/stl-downgrade-failure ||
+        fail missing_downgrade_refusal_diagnosis
+      [[ $(sha256sum /usr/local/bin/stl | cut -d' ' -f1) == "$after_sha" ]] ||
+        fail downgrade_changed_installed_binary
+      [[ ! -e /tmp/stl-apt-was-called ]] || fail stable_update_used_apt_without_missing_packages
+      ;;
     blocked-mirror)
       [[ ! -e /usr/local/bin/stl ]] || fail existing_stl
       if sudo bash -c 'bash /root/stl/*_local-install.sh' > /tmp/stl-mirror-failure 2>&1; then
@@ -112,4 +146,37 @@ for scenario in missing-packages preinstalled-no-apt blocked-mirror untrusted-fo
     "$image" /bin/bash /mnt/stl-guest-driver.sh guest
   printf 'LOCAL_ONE_COMMAND_%s=PASS (%s linux/%s)\n' "$scenario" "$image" "$arch"
 done
+
+# Build two test-tagged artifacts only inside an ephemeral private clone.
+# Never publish/push these tags or modify the source worktree's tag namespace.
+fixture=$(mktemp -d /var/tmp/stl-local-stable-e2e.XXXXXXXX)
+trap 'rm -rf -- "$fixture"' EXIT
+git clone --quiet --local --no-hardlinks -- "$PWD" "$fixture/repo"
+[[ $(git -C "$fixture/repo" rev-parse HEAD) == "$(git rev-parse HEAD)" ]] ||
+  fail 'ephemeral release fixture has the wrong candidate HEAD'
+for stable in v999.0.0 v999.0.1; do
+  [[ -z $(git -C "$fixture/repo" tag -l "$stable") ]] || fail 'synthetic test tag exists'
+  git -C "$fixture/repo" tag "$stable"
+  (cd "$fixture/repo" && bash scripts/build-artifacts.sh --tag "$stable" "$fixture/$stable" >/dev/null)
+done
+older_name="stl_v999.0.0_linux_${arch}_local-install.sh"
+newer_name="stl_v999.0.1_linux_${arch}_local-install.sh"
+[[ -f "$fixture/v999.0.0/$older_name" && -f "$fixture/v999.0.1/$newer_name" ]] ||
+  fail 'missing synthetic stable update artifacts'
+docker run --rm --network bridge \
+  --add-host github.com:127.0.0.1 \
+  --add-host api.github.com:127.0.0.1 \
+  --add-host objects.githubusercontent.com:127.0.0.1 \
+  --add-host github-releases.githubusercontent.com:127.0.0.1 \
+  -e STL_E2E_DISPOSABLE_GUEST=approved \
+  -e STL_E2E_SCENARIO=stable-update \
+  -e STL_E2E_ENTRY_NAME="$entry_name" \
+  -e STL_E2E_OLDER_NAME="$older_name" \
+  -e STL_E2E_NEWER_NAME="$newer_name" \
+  -v "$entry:/mnt/stl-entry.sh:ro" \
+  -v "$fixture/v999.0.0/$older_name:/mnt/stl-older.sh:ro" \
+  -v "$fixture/v999.0.1/$newer_name:/mnt/stl-newer.sh:ro" \
+  -v "$guest_script:/mnt/stl-guest-driver.sh:ro" \
+  "$image" /bin/bash /mnt/stl-guest-driver.sh guest
+printf 'LOCAL_ONE_COMMAND_STABLE_UPDATE_AND_DOWNGRADE_REFUSAL=PASS (%s linux/%s)\n' "$image" "$arch"
 
