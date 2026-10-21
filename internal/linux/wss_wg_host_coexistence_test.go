@@ -84,6 +84,11 @@ func TestWSSWGHostCoexistenceRejectsDuplicateOrIncompleteNFTJSON(t *testing.T) {
 	if err := p.CheckWSSWGNFTCoexistence([]byte(wssHostEmptyRuleset)); err != nil {
 		t.Fatalf("canonical empty nft inventory was rejected: %v", err)
 	}
+	// Restrict the *keys*, not legitimate non-ASCII names or other values.
+	withUnicodeValues := `{"nftables":[{"metainfo":{"version":"1.1.3","release_name":"نسخه","json_schema_version":1}},{"table":{"family":"inet","name":"شبکه"}}]}`
+	if err := p.CheckWSSWGNFTCoexistence([]byte(withUnicodeValues)); err != nil {
+		t.Fatalf("valid UTF-8 nft values were rejected: %v", err)
+	}
 	meta := `{"metainfo":{"version":"1.1.3","json_schema_version":1}}`
 	for _, tt := range []struct {
 		name string
@@ -92,11 +97,17 @@ func TestWSSWGHostCoexistenceRejectsDuplicateOrIncompleteNFTJSON(t *testing.T) {
 		{"duplicate-top-level-nftables", `{"nftables":[{"table":{"family":"inet","name":"foreign"}}],"nftables":[` + meta + `]} `},
 		{"duplicate-entry-object-name", `{"nftables":[{"table":{"family":"inet","name":"foreign"},"table":{"family":"inet","name":"safe"}},` + meta + `]} `},
 		{"case-alias-top-level", `{"nftables":[` + meta + `],"NFTABLES":[` + meta + `]}`},
+		{"unicode-alias-top-level", `{"nftables":[{"table":{"family":"inet","name":"foreign"}}],"nftable\u017f":[` + meta + `]}`},
+		{"unicode-alias-alone", `{"nftable\u017f":[` + meta + `]}`},
+		{"unicode-alias-entry", `{"nftables":[{"meta\u0131nfo":{"version":"1.1.3","json_schema_version":1}}]}`},
 		{"duplicate-metadata-object-name", `{"nftables":[{"metainfo":{},"metainfo":{"version":"1.1.3","json_schema_version":1}}]}`},
 		{"duplicate-metadata-version", strings.Replace(wssHostEmptyRuleset, `"version":"1.1.3"`, `"version":"unknown","version":"1.1.3"`, 1)},
+		{"unicode-alias-metadata-version", strings.Replace(wssHostEmptyRuleset, `"version":"1.1.3"`, `"version":"hidden","ver\u017fion":"1.1.3"`, 1)},
 		{"duplicate-schema-key", strings.Replace(wssHostEmptyRuleset, `"json_schema_version":1`, `"json_schema_version":2,"json_schema_version":1`, 1)},
 		{"duplicate-chain-hook", strings.Replace(valid, `"hook":"input"`, `"hook":"prerouting","hook":"input"`, 1)},
 		{"case-alias-chain-hook", strings.Replace(valid, `"hook":"input"`, `"Hook":"prerouting","hook":"input"`, 1)},
+		{"unicode-alias-chain-policy", strings.Replace(valid, `"policy":"accept"`, `"policy":"drop","pol\u0131cy":"accept"`, 1)},
+		{"unicode-key-nested-expression", strings.Replace(valid, `"accept":null`, `"accept":null,"مبهم":null`, 1)},
 		{"duplicate-chain-priority", strings.Replace(valid, `"prio":0`, `"prio":-300,"prio":0`, 1)},
 		{"duplicate-rule-member", strings.Replace(valid, `"accept":null`, `"accept":null,"accept":null`, 1)},
 		{"empty-nftables-array", `{"nftables":[]}`},

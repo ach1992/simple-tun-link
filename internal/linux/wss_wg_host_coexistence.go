@@ -201,11 +201,11 @@ func safeWSSWGReadbackFailure(stage, executable string, err error) error {
 	return fmt.Errorf("WSS WG %s readback failed (unclassified)", stage)
 }
 
-// checkWSSWGUniqueJSONMembers rejects duplicate JSON keys and case-folded
-// aliases at every object depth before encoding/json v1 can overwrite or
-// merge any of them (v1 also matches struct field names case-insensitively). The
-// caller already caps the input size; recursion is also bounded to prevent
-// an attacker-controlled nested snapshot from exhausting the Go stack.
+// checkWSSWGUniqueJSONMembers rejects duplicate ASCII object members and
+// ASCII case aliases at every depth. Non-ASCII member names are unsupported
+// nft JSON identifiers: rejecting them before encoding/json v1 decoding also
+// prevents Unicode simple-fold aliases from hiding security-relevant fields.
+// UTF-8 field values remain valid. Input size and recursion depth are bounded.
 func checkWSSWGUniqueJSONMembers(raw []byte) error {
 	d := json.NewDecoder(bytes.NewReader(raw))
 	if err := walkWSSWGJSON(d, 0); err != nil {
@@ -240,6 +240,11 @@ func walkWSSWGJSON(d *json.Decoder, depth int) error {
 			key, ok := keyToken.(string)
 			if !ok {
 				return fmt.Errorf("WSS WG nft JSON object key is not a string")
+			}
+			for _, r := range key {
+				if r > 0x7f {
+					return fmt.Errorf("WSS WG nft JSON has an unsupported non-ASCII object member")
+				}
 			}
 			identity := strings.ToLower(key)
 			if _, exists := seen[identity]; exists {
