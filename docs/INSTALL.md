@@ -192,45 +192,98 @@ the separate credentials store and retained handoffs where needed.
 Do not share these bytes in Issue/PR/CI logs, and do not wildcard
 delete leftover protected temporary material.
 
-## Local download and transfer (no GitHub access on the target server)
+## Local installation: choose a published asset
 
-The server **may have network connectivity to its configured distro APT
-mirrors**. "Offline" here means STL itself must install/update from a verified
-local artifact, without depending on an international GitHub connection. Do
-not disable HTTPS or force an air-gapped `.deb` mirror when signed APT works.
+### One transferred file and one trusted command (new release format)
 
-### Single-architecture local install from a published release
+**The new `*_local-install.sh` format is implemented for future releases and
+candidate snapshots, not the immutable published v0.1.8 tag.** First open the
+[official GitHub Releases](https://github.com/ach1992/simple-tun-link/releases)
+on another device, select a reviewed immutable *exact* release, and confirm
+that the matching `.sh` is actually listed. Do not treat `vX.Y.Z` below as a
+real, available tag.
 
-Use the [official Latest Stable release](https://github.com/ach1992/simple-tun-link/releases/latest)
-to select the **published exact tag** and verify its manifest and
-release-wide checksums. For versions that actually include transferable
-archives (introduced in the v0.1.8 release line), download **one**
-`stl_<version>_linux_amd64_local-install.tar.gz` for an `x86_64` host
-or `stl_<version>_linux_arm64_local-install.tar.gz` for `aarch64`,
-alongside the exact release's `SHA256SUMS`.
-
-The first package-enabled Stable is **v0.1.8**. Its exact official
-versioned download checklist is:
-
-| Destination architecture | Download on another device | Transfer to |
+| Server CPU | Exactly ONE file to download (release asset name) | Official exact-version link pattern |
 | --- | --- | --- |
-| `x86_64` / Linux AMD64 | [`stl_v0.1.8_linux_amd64_local-install.tar.gz`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.8/stl_v0.1.8_linux_amd64_local-install.tar.gz) | `/root/stl-transfer/` |
-| `aarch64` / Linux ARM64 | [`stl_v0.1.8_linux_arm64_local-install.tar.gz`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.8/stl_v0.1.8_linux_arm64_local-install.tar.gz) | `/root/stl-transfer/` |
-| Either selected architecture | [`SHA256SUMS`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.8/SHA256SUMS), plus its [versioned release/manifest](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.8) | Verify selected archive on the downloading device |
+| `x86_64` | `stl_vX.Y.Z_linux_amd64_local-install.sh` | `https://github.com/ach1992/simple-tun-link/releases/download/vX.Y.Z/stl_vX.Y.Z_linux_amd64_local-install.sh` |
+| `aarch64` | `stl_vX.Y.Z_linux_arm64_local-install.sh` | `https://github.com/ach1992/simple-tun-link/releases/download/vX.Y.Z/stl_vX.Y.Z_linux_arm64_local-install.sh` |
 
-Download **only one** architecture-specific archive; its installer,
-binary, `LICENSE`, manifest, `LOCAL-INSTALL.txt` and internal
-`SHA256SUMS` are already inside it. For later releases, resolve the
-matching exact tag/assets rather than relying on filenames from v0.1.8.
-Do not infer that an earlier release has these files: inspect
-the actual release assets. Authenticity of the tag/publisher and digest
-must be independently established before any privileged execution.
-Transfer into a protected root-owned directory and follow the
-[verified private-copy and canonical unpack procedure](#verified-archive-unpack-procedure)
-below, then run `install` for a new STL-owned installation or
-`update` for a newer verified release on an existing STL-owned host.
-A repeat same-version `install` is a no-op in versions with local-bundle
-support. A prior release's manual installer remains available below.
+Substitute **the exact published tag**, then transfer the selected single file
+**without renaming, extracting or making it executable** into `/root/stl/`.
+Create `/root/stl/` using your SFTP client as root if necessary. No additional
+manifest, checksum file, compiler or separate shell helper is required on the
+*target*. The folder/file must be owned by root, not group/other writable;
+typical root-SFTP file modes `0600`/`0644` work, and the directory must
+be root-owned `0700`. With **only one** matching `*_local-install.sh` present,
+run the exact command as **root**, or use the separately shown genuine `sudo`
+variant from a non-root administrator account:
+
+~~~sh
+bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}") || exit 1; [[ $n =~ ^[0-9]+$ && $n -gt 0 && $n -le 134250000 ]] || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; head -c "$n" -- "${f[0]}" > "$d/${f[0]##*/}"; [[ $(stat -c %s -- "$d/${f[0]##*/}") == "$n" ]]; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; bash "$d/${f[0]##*/}"'
+~~~
+
+For a sudo-capable **non-root** administrator, use this command instead
+(the user must already have genuine `sudo` access):
+
+~~~sh
+sudo bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}") || exit 1; [[ $n =~ ^[0-9]+$ && $n -gt 0 && $n -le 134250000 ]] || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; head -c "$n" -- "${f[0]}" > "$d/${f[0]##*/}"; [[ $(stat -c %s -- "$d/${f[0]##*/}") == "$n" ]]; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; bash "$d/${f[0]##*/}"'
+~~~
+
+These commands verify ownership, source type, modes, installer count and the
+1..134250000-byte file-size bound **before** private bounded copying or
+execution of transferred shell bytes.
+An unsafe folder/file, symlink or extra matching installer is refused, not
+run. The trusted command is necessarily longer than directly invoking an
+unauthenticated transferred script; it is still one copyable invocation and
+requires no checksum variable, unpack, chmod or second installer. It is not
+an independent publisher signature: verify the official file before transfer.
+
+A non-interactive success prints `[OK]` and `stl version --json`, followed by
+`sudo stl menu` guidance. On an interactive terminal, the normal menu opens.
+A new host installs; an existing verified same-version installation is a no-op;
+a newer Stable replaces an older installer-owned Stable through the canonical
+atomic update. Downgrades and channel changes fail closed and require explicit
+reviewed manual canonical action. The launcher **does not modify Links,
+credentials, State, unrelated services or networking**, and it does not stage
+IPsec/WSS/Paqet. Only genuinely missing selected native and WireGuard distro
+packages may trigger the host's configured signed APT path; fully installed
+prerequisites require no APT/network operation.
+
+**If it fails:** “wrong file” means download the other architecture; “SHA256
+mismatch” means re-download and verify the official publisher/release; an
+untrusted folder/file means re-transfer as root to `/root/stl/`; a foreign or
+incomplete install requires inspecting the canonical install record/recovery
+without overwriting it. If APT cannot fetch **signed** selected packages,
+inspect the reported missing package/plan and manually configure an accessible
+properly signed distro mirror, then rerun the same command. STL never changes
+APT sources or permits `trusted=yes`/signature bypass. See
+[signed APT recovery](#signed-regional-apt-recovery-when-required-prerequisites-are-missing).
+
+**Trust boundary:** identify the real publisher (`ach1992/simple-tun-link`),
+exact tag/commit and the official release asset *on the downloading device*
+using a trusted channel/source review. A release-wide `SHA256SUMS` may also be
+checked there but, when delivered by the same publisher, is **not** an
+independent digital signature. The generated single-file launcher internally
+checks its embedded archive's build-bound SHA256, manifest, exact architecture,
+binary identity and safe private extraction. It cannot cryptographically
+authenticate a completely replaced malicious launcher whose publisher was
+never independently verified; do not execute an unauthenticated mirror.
+
+### Current v0.1.8 Stable: older archive transfer
+
+The actual published [v0.1.8 release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.8)
+requires the original manually verified `.tar.gz` process. It **does not**
+contain the one-command `.sh` format:
+
+| CPU | Exact official file | Transfer placement |
+| --- | --- | --- |
+| `x86_64` | [`stl_v0.1.8_linux_amd64_local-install.tar.gz`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.8/stl_v0.1.8_linux_amd64_local-install.tar.gz) | `/root/stl-transfer/` |
+| `aarch64` | [`stl_v0.1.8_linux_arm64_local-install.tar.gz`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.8/stl_v0.1.8_linux_arm64_local-install.tar.gz) | `/root/stl-transfer/` |
+| Either | [`SHA256SUMS`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.8/SHA256SUMS) | Verify selected archive on the downloading device |
+
+The original [authenticated manual unpack procedure](#verified-archive-unpack-procedure)
+remains below for published archives and existing automation. Prefer the
+single-file format only after its own independently verified release exists.
 
 ### Legacy manual inventory: v0.1.7 (no local archive)
 

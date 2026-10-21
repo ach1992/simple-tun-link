@@ -47,85 +47,44 @@ test -n "$version"
 Cross-compilation does not prove native arm64 execution, kernel
 support, systemd behavior or peer traffic.
 
-### Single-architecture transferable local-install archives (new build output)
+### Single-file local installers and legacy archives (build output)
 
-In addition to the existing version-pinned root assets, each newly built
-release/snapshot produces **two separate** files:
+Every tagged or snapshot build emits two architecture-specific `.sh` files
+in addition to the existing `.tar.gz` packages, binaries, manifest, license
+and checksum inventory:
 
-- `stl_<version>_linux_amd64_local-install.tar.gz`
-- `stl_<version>_linux_arm64_local-install.tar.gz`
+- `stl_<version>_linux_amd64_local-install.sh`
+- `stl_<version>_linux_arm64_local-install.sh`
 
-Each contains **exactly** six regular leaf files: `install.sh` (a copy of the
-canonical installer/embedded source at that same commit), one matching
-`stl_<version>_linux_<arch>` executable, `BUILD-MANIFEST.txt`, `LICENSE`,
-`LOCAL-INSTALL.txt`, and an internal `SHA256SUMS` for the other five files.
-The release-wide `SHA256SUMS` includes both complete archive digests, in
-addition to all existing published files. Tar metadata uses stable member
-ordering, timestamps and numeric root ownership. Neither optional helpers,
-distro `.deb` packages, live TLS credentials, nor both architectures are
-included in a single local package. A source checkout generates archives;
-**only a separately authorized immutable release uploads them**.
+Each single file contains a build-bound minimal launcher plus the **exact**
+corresponding six-member `*_local-install.tar.gz` byte sequence. Its embedded
+digest is checked *before* the canonical `unpack` action is invoked. The
+**trusted operator command** checks local file/directory ownership, modes,
+symlinks and file count *before* snapshotting or executing transferred bytes;
+the launcher then stages its received private bytes and delegates installation to the sole
+canonical `scripts/install.sh`. No independent installer engine is added.
+The archive keeps the exact six regular members: one binary, canonical
+`install.sh`, `LICENSE`, `BUILD-MANIFEST.txt`, `LOCAL-INSTALL.txt`, and
+`SHA256SUMS` (covering the other five). Both `.sh` and `.tar.gz` are included
+in the release-wide SHA256SUMS; they are **build outputs, not published assets**
+until an approved tag/release is actually published.
 
-A maintainer using a new **verified published tag** and trusted source must
-check the selected archive against that tag's independently verified release
-identity **before extraction**. Illustrative checks for a new version (not
-a claim that `v0.1.7` has these assets):
+The literal *operator* command, file inventory, trust boundary, error recovery
+and existing `v0.1.8` manual archive procedure are owned by
+[INSTALL.md](INSTALL.md#local-installation-choose-a-published-asset).
+Do not maintain a competing installation runbook here. The new single-file
+launcher cannot provide an independent publisher signature: exact-tag
+publisher provenance must be confirmed out-of-band before execution.
+The canonical `unpack` still checks private source ownership, its operation-
+local immutable snapshot, full outer digest, regular member types/order,
+strict size bounds, safe extraction and internal checksum coverage.
 
-~~~sh
-# On the target as root, transfer the archive to private /root/stl-transfer.
-# Verify the checksum against an independently trusted immutable release.
-set -euo pipefail
-umask 077
-cd /root/stl-transfer
-version=vX.Y.Z
-arch=amd64  # arm64 for aarch64 targets
-archive="stl_${version}_linux_${arch}_local-install.tar.gz"
-trusted_sha256=PASTE_INDEPENDENTLY_VERIFIED_64_HEX_SHA256
-# Isolate bytes from any pre-existing writer of the transferred original.
-verified_dir=$(mktemp -d /root/stl-verified.XXXXXXXX)
-[[ -n "$verified_dir" && "$verified_dir" == /root/stl-verified.* &&
-   -d "$verified_dir" && ! -L "$verified_dir" ]] ||
-  { printf 'Private verified archive staging failed\n' >&2; exit 1; }
-install -m 0600 -- "$archive" "$verified_dir/$archive"
-cd -- "$verified_dir"
-printf '%s  %s\n' "$trusted_sha256" "$archive" | sha256sum --check -
-tar -xOzf "$archive" install.sh > ./verified-installer.sh
-chmod 0600 ./verified-installer.sh
-bash -n ./verified-installer.sh
-bash ./verified-installer.sh unpack \
-  --archive "$PWD/$archive" --destination /root/stl --sha256 "$trusted_sha256"
-cd /root/stl
-sha256sum --check SHA256SUMS
-bash -n install.sh
-bash ./install.sh install --bundle /root/stl --backends native,wireguard
-~~~
-
-A checksum and binary from the same compromised source are **not independent
-authenticity proof**. The administrator must confirm the official immutable
-tag, the canonical same-tag installer and the release provenance before root
-execution. On Linux, the canonical real-prefix installer insists that its
-local bundle folder is `0700`, root-owned, and has trusted ancestors.
-
-The canonical installer is completely extracted into the same root-private
-mode-`0600` directory and executed **only after** the archive's independently
-trusted SHA256 verification; it is never executed through an unfinished pipe. Its own operation-local `0700` snapshot is separately
-authenticated; only those protected bytes are inspected and extracted.
-The guard rejects writable source archives and writable ancestors, checks
-exact regular members, sizes, owners and a fresh private destination. It
-does not install packages or alter host Links. Adversarial
-type/link/size/traversal/duplicate/writable-source fixtures are included
-in snapshot and disposable-guest regressions; Python is a test-only tool,
-not a runtime dependency.
-
-Archive validation and native local-install smoke regression run in
-`scripts/e2e/snapshot-install-smoke.sh`; `scripts/test-install.sh` verifies
-same-version idempotence, version/hash refusal, transactional update/rollback
-and foreign-identity rejection. These isolated tests do not prove APT mirror
-availability, real package-hook effects, multi-host Link traffic or reboot.
-The historical `v0.1.7` release contains no local-install archive;
-for that exact tag use its [legacy separate-file inventory](INSTALL.md#legacy-manual-inventory-v017-no-local-archive).
-For newer Stable tags, verify that the actual published release includes
-the claimed local-install archives and their release-wide checksums.
+CI exercises exact candidate checksums, native-architecture single-file
+install/no-op, changed-arch and tampered transfer refusal, plus the existing
+canonical transactional rollback/foreign ownership tests. Disposable native
+Debian/Ubuntu guest tests separately prove real selected signed-APT behavior.
+Tests cannot substitute for actual publication, physical host acceptance,
+reboot restoration or multi-host WAN traffic.
 
 ## Installer and publication boundaries
 
@@ -152,8 +111,8 @@ actual distro package hooks or kernel traffic.
 
 Publication requires a **separately authorized** action binding an
 accepted exact source commit to an immutable version tag and complete
-assets (the two binaries, architecture-specific local-install archives,
-`SHA256SUMS`, `BUILD-MANIFEST.txt`, `LICENSE` and the applicable
+assets (the two binaries, architecture-specific single-file installers and
+legacy local archives, `SHA256SUMS`, `BUILD-MANIFEST.txt`, `LICENSE` and the applicable
 fixed-tag bootstrap when supplied).
 Verify official GitHub release immutability **at publication**; a tag
 name, HTTPS or checksum uploaded by the same account alone is not

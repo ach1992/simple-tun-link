@@ -79,85 +79,50 @@ for packaged_arch in amd64 arm64; do
   [[ -x "$unpack/stl_dev-${short_sha}_linux_${packaged_arch}" ]] || fail 'local binary not executable'
 done
 
-# The operator's first trust-boundary commands must fail closed before checksum
-# or privileged script execution. Exercise actual documented/generated commands
-# with scoped stubs, never a root filesystem path or production APT operation.
-python3 - "$source_root" "$scratch" <<'PY_OPERATOR'
-from pathlib import Path
-import os
-import subprocess
-import sys
-import textwrap
+# The single-file entrypoint is source/arch bound and consists of a strict
+# one-command bootstrap plus EXACTLY the checked legacy archive bytes.
+for packaged_arch in amd64 arm64; do
+  archive="$scratch/bundle/stl_dev-${short_sha}_linux_${packaged_arch}_local-install.tar.gz"
+  one_file="$scratch/bundle/stl_dev-${short_sha}_linux_${packaged_arch}_local-install.sh"
+  [[ -f $one_file ]] || fail "missing one-file installer: $packaged_arch"
+  tail -c "$(stat -c %s -- "$archive")" -- "$one_file" | cmp -s - "$archive" ||
+    fail "one-file embedded archive is not exact: $packaged_arch"
+  one_file_sha=$(awk -v name="$(basename -- "$one_file")" '$2 == name {print $1}' "$scratch/bundle/SHA256SUMS")
+  [[ $one_file_sha =~ ^[0-9a-f]{64}$ &&
+     $(sha256sum -- "$one_file" | awk '{print $1}') == "$one_file_sha" ]] ||
+    fail "missing/wrong release-wide one-file checksum: $packaged_arch"
+done
+one_file="$scratch/bundle/stl_dev-${short_sha}_linux_${arch}_local-install.sh"
+foreign_arch=arm64
+[[ $arch == amd64 ]] || foreign_arch=amd64
+foreign="$scratch/bundle/stl_dev-${short_sha}_linux_${foreign_arch}_local-install.sh"
+if bash "$foreign" --prefix "$scratch/prefix" > "$scratch/wrong-arch.log" 2>&1; then
+  fail 'wrong-architecture one-command installer was accepted'
+fi
+grep -q 'wrong file for' "$scratch/wrong-arch.log" || fail 'missing wrong-arch guidance'
 
-repo, scratch = map(Path, sys.argv[1:])
-examples = {
-    "install-doc": (repo / "docs/INSTALL.md").read_text(),
-    "release-doc": (repo / "docs/RELEASE-ARTIFACTS.md").read_text(),
-    "generated-local": (scratch / "archive-amd64/LOCAL-INSTALL.txt").read_text(),
-}
-scenarios = ("success", "transfer-cd-fail", "mktemp-fail", "mktemp-empty",
-             "copy-fail", "verified-cd-fail")
-for name, content in examples.items():
-    lines = content.splitlines()
-    mkidx = next(i for i, line in enumerate(lines)
-                 if line.strip() == "verified_dir=$(mktemp -d /root/stl-verified.XXXXXXXX)")
-    begin = max(i for i in range(mkidx)
-                if lines[i].strip() == "set -euo pipefail")
-    end = next(i for i in range(mkidx, len(lines))
-               if lines[i].strip() == 'cd -- "$verified_dir"')
-    prefix = textwrap.dedent("\n".join(lines[begin:end + 1]))
-    assert prefix.startswith("set -euo pipefail\numask 077\n"), name
-    assert prefix.index("cd /root/stl-transfer") < prefix.index("verified_dir=$("), name
-    assert prefix.index('[[ -n "$verified_dir"') < prefix.index("install -m 0600"), name
-    for scenario in scenarios:
-        base = scratch / "operator-failclosed" / name / scenario
-        base.mkdir(parents=True)
-        transfer = base / "transfer"
-        if scenario != "transfer-cd-fail":
-            transfer.mkdir(mode=0o700)
-        procedure = (prefix
-            .replace("/root/stl-transfer", str(transfer))
-            .replace("/root/stl-verified.XXXXXXXX", str(base / "stl-verified.XXXXXXXX"))
-            .replace("/root/stl-verified.*", str(base / "stl-verified.*")))
-        # Only the staging prefix is run. Mock the copy, never any downstream
-        # checksum, tar, installer, system path or privileged operation.
-        mocks = r'''
-install() {
-  printf 'COPY %s\n' "$*" >> "$STL_OPERATOR_TRACE"
-  [[ $STL_OPERATOR_SCENARIO != copy-fail ]]
-}
-mktemp() {
-  if [[ $STL_OPERATOR_SCENARIO == mktemp-fail ]]; then return 80; fi
-  if [[ $STL_OPERATOR_SCENARIO == mktemp-empty ]]; then printf ''; return 0; fi
-  command mktemp "$@"
-}
-cd() {
-  if [[ $STL_OPERATOR_SCENARIO == verified-cd-fail &&
-        "$*" == *"stl-verified."* ]]; then return 81; fi
-  builtin cd "$@"
-}
-'''
-        trace = base / "trace"
-        env = dict(os.environ, STL_OPERATOR_SCENARIO=scenario,
-                   STL_OPERATOR_TRACE=str(trace))
-        run = subprocess.run(
-            ["bash", "-c", mocks + "\n" + procedure +
-             "\nprintf 'PREFIX_COMPLETE\\n'\n"],
-            cwd=base, env=env, capture_output=True, text=True)
-        completed = "PREFIX_COMPLETE" in run.stdout
-        assert (run.returncode == 0) == (scenario == "success"), (
-            name, scenario, run.returncode, run.stderr)
-        assert completed == (scenario == "success"), (name, scenario)
-        copied = trace.exists()
-        assert copied == (scenario in ("copy-fail", "verified-cd-fail", "success")), (
-            name, scenario)
-        if scenario == "mktemp-empty":
-            assert "Private verified archive staging failed" in run.stderr, name
-        if copied:
-            assert str(base / "stl-verified.") in trace.read_text(), (
-                name, scenario, "unsafe copy destination")
-print("OPERATOR_ALL_THREE_PROCEDURES_FAILURE_SEAMS=PASS")
-PY_OPERATOR
+# Transfer corruption must fail before invoking canonical installation. The
+# filename is preserved, as the real operator copies official bytes as-is.
+mkdir -m 0700 "$scratch/tamper"
+tampered="$scratch/tamper/$(basename -- "$one_file")"
+cp -- "$one_file" "$tampered"
+printf x | dd of="$tampered" bs=1 seek=$(($(stat -c %s -- "$tampered") - 1)) \
+  conv=notrunc status=none
+if bash "$tampered" --prefix "$scratch/prefix" > "$scratch/tamper.log" 2>&1; then
+  fail 'tampered one-file archive unexpectedly installed'
+fi
+grep -q 'embedded archive SHA256 mismatch' "$scratch/tamper.log" ||
+  fail 'tampered file did not fail at the digest gate'
+[[ ! -e "$scratch/prefix/bin/stl" ]] || fail 'tampering installed an executable'
+chmod 0666 "$tampered"
+if bash "$tampered" --prefix "$scratch/prefix" > "$scratch/untrusted.log" 2>&1; then
+  fail 'writable one-file transfer unexpectedly installed'
+fi
+grep -q 'writable by other users' "$scratch/untrusted.log" ||
+  fail 'world-writable file did not fail at source-ownership boundary'
+# A source with independently changed header+payload could recalculate its own
+# hash: the official, independently trusted publisher identity is essential.
+echo 'SNAPSHOT_ONE_FILE_ARCH_DIGEST_PERMISSIONS_AND_IDENTITY=PASS'
 
 # Reject adversarial transfer archives before extraction or execution.
 # Synthetic local fixtures exercise unchanged member names with unsafe types,
@@ -267,7 +232,7 @@ native_package="$scratch/archive-$arch"
 
 # Offline nondefault prefix: no package installation, /usr/local writes,
 # privileged systemd calls, daemon activation, or network operations.
-bash "$native_package/install.sh" install --bundle "$native_package" --prefix "$scratch/prefix"
+bash "$one_file" --prefix "$scratch/prefix"
 installed="$scratch/prefix/bin/stl"
 [[ -f $installed && -x $installed && -L "$scratch/prefix/bin/stlink" ]] ||
   fail 'installed executable or alias missing'
@@ -278,7 +243,7 @@ cmp -s "$native_binary" "$installed" || fail 'installed binary differs from snap
 installed_inode=$(stat -c %i "$installed")
 record="$scratch/prefix/lib/simple-tun-link/install-record"
 record_hash=$(sha256sum "$record" | awk '{print $1}')
-bash "$native_package/install.sh" install --bundle "$native_package" --prefix "$scratch/prefix"
+bash "$one_file" --prefix "$scratch/prefix"
 [[ $(stat -c %i "$installed") == "$installed_inode" &&
    $(sha256sum "$record" | awk '{print $1}') == "$record_hash" ]] ||
   fail 'same-version local re-install modified the installed identity'
@@ -302,4 +267,5 @@ printf 'SNAPSHOT_SOURCE_SHA=%s\n' "$source_sha"
 printf 'SNAPSHOT_NATIVE_BINARY_SHA256=%s\n' "$native_sha"
 echo 'SNAPSHOT_NATIVE_INSTALL_ALIAS=PASS'
 echo 'SNAPSHOT_TRANSFERABLE_ARCH_BUNDLE=PASS'
+echo 'SNAPSHOT_LITERAL_ONE_FILE_ENTRYPOINT=PASS'
 echo 'SNAPSHOT_LOCAL_REINSTALL_NOOP=PASS'

@@ -114,57 +114,34 @@ for arch in amd64 arm64; do
   cp -- scripts/install.sh "$package_dir/install.sh"
   cp -- "$tmp/$filename" "$tmp/LICENSE" "$tmp/BUILD-MANIFEST.txt" "$package_dir/"
   cat > "$package_dir/LOCAL-INSTALL.txt" <<EOF_LOCAL
-STL local installation (version $version, linux/$arch)
+STL verified local archive (version $version, linux/$arch)
 
-Download this archive and the separately published release-wide SHA256SUMS
-from the immutable, verified matching STL release. Confirm the archive SHA256
-against an independently trusted release identity before executing any
-script bytes from the archive. A hash in the same compromised download does
-not independently authenticate the publisher.
+For the simplest installation, download the ONE official matching release
+file stl_${version}_linux_${arch}_local-install.sh instead of this tar.gz.
+Transfer the .sh file unchanged into /root/stl/ and, with that ONE file
+present, run as an administrator:
+    As root: use the one-command trusted preflight in this release's README.
+    Or, as a non-root administrator, use the documented sudo variant.
+    Do NOT run the transferred shell file directly as root: its own source
+    checks cannot defend against malicious instructions injected before them.
 
-On the target, copy the archive into a root-owned /root/stl-transfer (0700).
-The destination /root/stl must NOT exist yet. As root:
-    set -euo pipefail
-    umask 077
-    cd /root/stl-transfer
-    archive="stl_${version}_linux_${arch}_local-install.tar.gz"
-    trusted_sha256=PASTE_INDEPENDENTLY_VERIFIED_64_HEX_SHA256
-    verified_dir=\$(mktemp -d /root/stl-verified.XXXXXXXX)
-    [[ -n "\$verified_dir" && "\$verified_dir" == /root/stl-verified.* &&
-       -d "\$verified_dir" && ! -L "\$verified_dir" ]] ||
-      { printf 'Private verified archive staging failed\n' >&2; exit 1; }
-    install -m 0600 -- "\$archive" "\$verified_dir/\$archive"
-    cd -- "\$verified_dir"
-    printf '%s  %s\n' "\$trusted_sha256" "\$archive" | sha256sum -c -
-    tar -xOzf "\$archive" install.sh > ./verified-installer.sh
-    chmod 0600 ./verified-installer.sh
-    bash -n ./verified-installer.sh
-    bash ./verified-installer.sh unpack \
-      --archive "\$PWD/\$archive" --destination /root/stl --sha256 "\$trusted_sha256"
-    cd /root/stl
-    sha256sum --check SHA256SUMS
-    bash -n install.sh
+The .sh file embeds these exact archive bytes and a build-bound digest; it
+verifies a private copy, delegates safe unpack to the canonical install.sh,
+then installs, safely no-ops, or updates newer Stable STL in one invocation.
+It uses no GitHub downloads on the target; only genuinely missing native and
+WireGuard packages may use the host's preconfigured signed APT repositories.
+IPsec still requires its own separate approved PREPARE/service flow.
 
-The newly copied root-private 0600 archive is the source of both digest
-verification and the completely extracted private installer: never execute
-from a writable transfer source. Unpack itself makes an operation-local private archive copy,
-authenticates and extracts only those protected bytes, and checks exact six
-regular members, names, sizes, fresh destination and internal checksums.
-It does not install STL or call APT. Never extract unverified tar members
-directly as root; use the checked unpack path.
+If you intentionally use this tar.gz alone, consult the maintainer/operator
+manual archive procedure at docs/INSTALL.md of the exact release source.
+It remains the canonical format for legacy/archive users, not a shell script.
 
-For a NEW host with native GRE/IPIP and WireGuard selected:
-    sudo bash ./install.sh install --bundle . --backends native,wireguard
-For an already installer-owned host with a newer, verified release:
-    sudo bash ./install.sh update --bundle . --backends native,wireguard
-Then check: stl version --json
-
-Existing selected packages are reused. Only missing selected distro
-prerequisites may use the host's configured, signed APT repositories.
-If APT repositories are unreachable, inspect them and manually choose a
-suitable official signed regional mirror; STL never rewrites sources.
-IPsec package/service preparation needs its separate exact-plan consent.
-Do not download/activate optional WSS or Paqet helpers: neither ships yet.
+Verify official source/tag and publisher identity on the downloading device
+before running any privileged installer. SHA256SUMS from that same publisher,
+or the digest embedded in the .sh file, detects corruption but does NOT
+provide an independent publisher signature against a compromised account.
+Do not use anonymous mirrors or unverifiable repackaged installers.
+WSS/Paqet helpers are NOT included or approved for use.
 EOF_LOCAL
   (
     cd "$package_dir"
@@ -178,12 +155,29 @@ EOF_LOCAL
     "$filename" install.sh LICENSE BUILD-MANIFEST.txt LOCAL-INSTALL.txt SHA256SUMS \
     | gzip -n > "$tmp/$archive"
   rm -rf -- "$package_dir"
+
+  # One-file copy-as-is local UX: a small build-bound shell bootstrap followed
+  # by the EXACT tested archive bytes. The bootstrap only verifies/stages and
+  # dispatches to the canonical installer; do not create another install engine.
+  local_entry="stl_${version}_linux_${arch}_local-install.sh"
+  archive_digest=$(sha256sum -- "$tmp/$archive" | awk '{print $1}')
+  archive_bytes=$(stat -c %s -- "$tmp/$archive")
+  sed -e "s|@VERSION@|$version|g" \
+      -e "s|@COMMIT@|$commit|g" \
+      -e "s|@ARCH@|$arch|g" \
+      -e "s|@ARCHIVE@|$archive|g" \
+      -e "s|@DIGEST@|$archive_digest|g" \
+      -e "s|@BYTES@|$archive_bytes|g" \
+      scripts/local-install-entrypoint.sh > "$tmp/$local_entry"
+  cat -- "$tmp/$archive" >> "$tmp/$local_entry"
 done
 (
   cd "$tmp"
   entries=("stl_${version}_linux_amd64" "stl_${version}_linux_arm64" "LICENSE" "BUILD-MANIFEST.txt"
     "stl_${version}_linux_amd64_local-install.tar.gz"
-    "stl_${version}_linux_arm64_local-install.tar.gz")
+    "stl_${version}_linux_arm64_local-install.tar.gz"
+    "stl_${version}_linux_amd64_local-install.sh"
+    "stl_${version}_linux_arm64_local-install.sh")
   if [[ $stable_bootstrap == true ]]; then
     entries+=("stl-bootstrap.sh")
   fi

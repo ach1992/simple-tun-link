@@ -119,6 +119,9 @@ operator-initiated attempt; safety and credential protection still apply.
 - **Transferable, low-dependency installation.** Supported STL releases
   should be installable from exact-version verified local files transferred
   from another device when the target cannot access international GitHub.
+  Prefer a single architecture-specific file transferred unchanged into one
+  root-local folder and installed via one short command, while retaining the
+  canonical source-validation and transactional safety boundary.
   Reuse installed prerequisites; for missing selected distro packages use
   only configured, verified signed repositories. Never automatically rewrite
   APT sources, weaken signatures, force whole-host upgrades or download

@@ -6,7 +6,7 @@ set -Eeuo pipefail
 umask 077
 repo="$(cd -- "$(dirname -- "$0")/.." && pwd -P)"
 # Stable release bumps must keep the permanent first-hop install/update text.
-mapfile -t published_commands < <(grep '^bash -c ' "$repo/README.md")
+mapfile -t published_commands < <(grep '^bash -c .*stl-bootstrap.sh' "$repo/README.md")
 [[ ${#published_commands[@]} -eq 2 ]] || {
   echo 'README must contain precisely two fixed safe-download quick commands.' >&2
   exit 1

@@ -34,6 +34,8 @@ jobs:
           bash -n scripts/e2e/gre-multipeer-netns.sh
           bash -n scripts/e2e/cross-backend-docker.sh
           bash -n scripts/e2e/snapshot-install-smoke.sh
+          bash -n scripts/e2e/local-one-command-docker.sh
+          bash -n scripts/local-install-entrypoint.sh
           bash -n scripts/e2e/wireguard-netns.sh
           bash -n scripts/e2e/ipsec-two-peer-netns.sh
           bash -n scripts/e2e/ipsec-installed-systemd.sh
