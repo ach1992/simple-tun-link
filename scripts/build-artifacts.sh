@@ -140,58 +140,6 @@ provide an independent publisher signature against a compromised account.
 Do not use anonymous mirrors or unverifiable repackaged installers.
 WSS/Paqet helpers are NOT included or approved for use.
 EOF_LOCAL
-STL local installation (version $version, linux/$arch)
-
-Download this archive and the separately published release-wide SHA256SUMS
-from the immutable, verified matching STL release. Confirm the archive SHA256
-against an independently trusted release identity before executing any
-script bytes from the archive. A hash in the same compromised download does
-not independently authenticate the publisher.
-
-On the target, copy the archive into a root-owned /root/stl-transfer (0700).
-The destination /root/stl must NOT exist yet. As root:
-    set -euo pipefail
-    umask 077
-    cd /root/stl-transfer
-    archive="stl_${version}_linux_${arch}_local-install.tar.gz"
-    trusted_sha256=PASTE_INDEPENDENTLY_VERIFIED_64_HEX_SHA256
-    verified_dir=\$(mktemp -d /root/stl-verified.XXXXXXXX)
-    [[ -n "\$verified_dir" && "\$verified_dir" == /root/stl-verified.* &&
-       -d "\$verified_dir" && ! -L "\$verified_dir" ]] ||
-      { printf 'Private verified archive staging failed\n' >&2; exit 1; }
-    install -m 0600 -- "\$archive" "\$verified_dir/\$archive"
-    cd -- "\$verified_dir"
-    printf '%s  %s\n' "\$trusted_sha256" "\$archive" | sha256sum -c -
-    tar -xOzf "\$archive" install.sh > ./verified-installer.sh
-    chmod 0600 ./verified-installer.sh
-    bash -n ./verified-installer.sh
-    bash ./verified-installer.sh unpack \
-      --archive "\$PWD/\$archive" --destination /root/stl --sha256 "\$trusted_sha256"
-    cd /root/stl
-    sha256sum --check SHA256SUMS
-    bash -n install.sh
-
-The newly copied root-private 0600 archive is the source of both digest
-verification and the completely extracted private installer: never execute
-from a writable transfer source. Unpack itself makes an operation-local private archive copy,
-authenticates and extracts only those protected bytes, and checks exact six
-regular members, names, sizes, fresh destination and internal checksums.
-It does not install STL or call APT. Never extract unverified tar members
-directly as root; use the checked unpack path.
-
-For a NEW host with native GRE/IPIP and WireGuard selected:
-    sudo bash ./install.sh install --bundle . --backends native,wireguard
-For an already installer-owned host with a newer, verified release:
-    sudo bash ./install.sh update --bundle . --backends native,wireguard
-Then check: stl version --json
-
-Existing selected packages are reused. Only missing selected distro
-prerequisites may use the host's configured, signed APT repositories.
-If APT repositories are unreachable, inspect them and manually choose a
-suitable official signed regional mirror; STL never rewrites sources.
-IPsec package/service preparation needs its separate exact-plan consent.
-Do not download/activate optional WSS or Paqet helpers: neither ships yet.
-EOF_LOCAL
   (
     cd "$package_dir"
     sha256sum -- "$filename" install.sh LICENSE BUILD-MANIFEST.txt LOCAL-INSTALL.txt > SHA256SUMS
