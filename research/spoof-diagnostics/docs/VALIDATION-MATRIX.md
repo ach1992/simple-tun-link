@@ -9,6 +9,7 @@ provider acceptance; a real public-network Field trial was not requested.
 | Gate | Status | What is and is not established |
 | --- | --- | --- |
 | Source refactor and obsolete lab commands removed | IMPLEMENTED IN SOURCE | Deletion alone is not runtime validation |
+| This unmerged candidate: guided campaign receiver menu | SOURCE IMPLEMENTED; OFFLINE REGRESSION ADDED | Menu option 19 prompts for receiver-owned allowlist, identity, optional bind and explicit LISTEN_ONE consent. No socket or real A/B test has been run for this UI flow |
 | This unmerged candidate: campaign partitioning and progress | PURE OFFLINE UNIT PASS | 1,536 exact owned IP fixture split into 48 bounded batches; verified signed completion/resumption, expiry and explicit retry without network traffic |
 | This unmerged candidate: partial sender/receiver evidence | PURE OFFLINE UNIT PASS | Fault injection preserves signed sender progress and receiver snapshots; no live host socket proof |
 | This unmerged candidate: receiver DNAT consent and raw checksum | PURE OFFLINE UNIT PASS | Locally signed bind mismatch and checksum tested with fixture data; real forwarding/provider acceptance NOT_TESTED |
