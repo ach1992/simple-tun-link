@@ -199,7 +199,40 @@ mirrors**. "Offline" here means STL itself must install/update from a verified
 local artifact, without depending on an international GitHub connection. Do
 not disable HTTPS or force an air-gapped `.deb` mirror when signed APT works.
 
-### Exact current published Stable inventory: v0.1.7
+### Single-architecture local install from a published release
+
+Use the [official Latest Stable release](https://github.com/ach1992/simple-tun-link/releases/latest)
+to select the **published exact tag** and verify its manifest and
+release-wide checksums. For versions that actually include transferable
+archives (introduced in the v0.1.8 release line), download **one**
+`stl_<version>_linux_amd64_local-install.tar.gz` for an `x86_64` host
+or `stl_<version>_linux_arm64_local-install.tar.gz` for `aarch64`,
+alongside the exact release's `SHA256SUMS`.
+
+The first package-enabled Stable is **v0.1.8**. Its exact official
+versioned download checklist is:
+
+| Destination architecture | Download on another device | Transfer to |
+| --- | --- | --- |
+| `x86_64` / Linux AMD64 | [`stl_v0.1.8_linux_amd64_local-install.tar.gz`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.8/stl_v0.1.8_linux_amd64_local-install.tar.gz) | `/root/stl-transfer/` |
+| `aarch64` / Linux ARM64 | [`stl_v0.1.8_linux_arm64_local-install.tar.gz`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.8/stl_v0.1.8_linux_arm64_local-install.tar.gz) | `/root/stl-transfer/` |
+| Either selected architecture | [`SHA256SUMS`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.8/SHA256SUMS), plus its [versioned release/manifest](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.8) | Verify selected archive on the downloading device |
+
+Download **only one** architecture-specific archive; its installer,
+binary, `LICENSE`, manifest, `LOCAL-INSTALL.txt` and internal
+`SHA256SUMS` are already inside it. For later releases, resolve the
+matching exact tag/assets rather than relying on filenames from v0.1.8.
+Do not infer that an earlier release has these files: inspect
+the actual release assets. Authenticity of the tag/publisher and digest
+must be independently established before any privileged execution.
+Transfer into a protected root-owned directory and follow the
+[verified private-copy and canonical unpack procedure](#verified-archive-unpack-procedure)
+below, then run `install` for a new STL-owned installation or
+`update` for a newer verified release on an existing STL-owned host.
+A repeat same-version `install` is a no-op in versions with local-bundle
+support. A prior release's manual installer remains available below.
+
+### Legacy manual inventory: v0.1.7 (no local archive)
 
 On a different device with access to GitHub, first choose **one** architecture
 from the destination's `uname -m` (`x86_64` = `amd64`, `aarch64` = `arm64`).
@@ -256,7 +289,7 @@ releases with the new package support, repeating an identical verified
 | WSS (future, **not shipped**) | **No current STL Carrier asset**; after separate approval, exact pinned `wstunnel` helper tag, arch, checksum/license, compatible STL tag and protected per-Link placement must be published | No helper download or activation yet; upstream `wstunnel v11.0.0` security test alone is not a released runtime |
 | Paqet/PCK (research only, **not shipped**) | **None** | Not an STL prerequisite; do not compile or stage it by default |
 
-For a future released version that actually publishes an architecture-specific
+For an actually published version that contains an architecture-specific
 `stl_vX.Y.Z_linux_amd64_local-install.tar.gz` **or**
 `stl_vX.Y.Z_linux_arm64_local-install.tar.gz`, the downloadable archive will
 contain `install.sh`, the matching single-arch binary, `LICENSE`,
@@ -266,7 +299,10 @@ archive. Verify its exact tag/source and digest against an independently
 trusted publisher reference on the Internet-connected device, then transfer
 the selected archive into a **root-owned, 0700** `/root/stl-transfer` on the
 destination. Do not create `/root/stl` ahead of time: extraction requires a
-fresh destination. For a future officially published archive only:
+fresh destination. The following procedure is only for a verified,
+actually published archive:
+
+#### Verified archive unpack procedure
 
 ~~~sh
 # On the destination as root (sudo -i), after transferring the selected archive:
