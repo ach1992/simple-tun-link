@@ -194,7 +194,7 @@ delete leftover protected temporary material.
 
 ## Local installation: choose a published asset
 
-### One transferred file and one short command (new release format)
+### One transferred file and one trusted command (new release format)
 
 **The new `*_local-install.sh` format is implemented for future releases and
 candidate snapshots, not the immutable published v0.1.8 tag.** First open the
@@ -213,12 +213,29 @@ Substitute **the exact published tag**, then transfer the selected single file
 Create `/root/stl/` using your SFTP client as root if necessary. No additional
 manifest, checksum file, compiler or separate shell helper is required on the
 *target*. The folder/file must be owned by root, not group/other writable;
-typical root-SFTP file modes 0600/0644 work. With **only one** matching
-`*_local-install.sh` present, run the literal command as a sudo-capable user:
+typical root-SFTP file modes `0600`/`0644` work, and the directory must
+be root-owned `0700`. With **only one** matching `*_local-install.sh` present,
+run the exact command as **root**, or use the separately shown genuine `sudo`
+variant from a non-root administrator account:
 
 ~~~sh
-sudo bash -c 'bash /root/stl/*_local-install.sh'
+bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; cp -- "${f[0]}" "$d/${f[0]##*/}"; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; bash "$d/${f[0]##*/}"'
 ~~~
+
+For a sudo-capable **non-root** administrator, use this command instead
+(the user must already have genuine `sudo` access):
+
+~~~sh
+sudo bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; cp -- "${f[0]}" "$d/${f[0]##*/}"; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; bash "$d/${f[0]##*/}"'
+~~~
+
+These commands perform a **trusted pre-execution** `stat`/type/mode/count
+check before they make a private copy and execute any transferred shell bytes.
+An unsafe folder/file, symlink or extra matching installer is refused, not
+run. The trusted command is necessarily longer than directly invoking an
+unauthenticated transferred script; it is still one copyable invocation and
+requires no checksum variable, unpack, chmod or second installer. It is not
+an independent publisher signature: verify the official file before transfer.
 
 A non-interactive success prints `[OK]` and `stl version --json`, followed by
 `sudo stl menu` guidance. On an interactive terminal, the normal menu opens.

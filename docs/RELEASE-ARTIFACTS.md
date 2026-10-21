@@ -58,8 +58,10 @@ and checksum inventory:
 
 Each single file contains a build-bound minimal launcher plus the **exact**
 corresponding six-member `*_local-install.tar.gz` byte sequence. Its embedded
-digest is checked *before* the canonical `unpack` action is invoked; the
-launcher stages bytes privately and delegates installation to the sole
+digest is checked *before* the canonical `unpack` action is invoked. The
+**trusted operator command** checks local file/directory ownership, modes,
+symlinks and file count *before* snapshotting or executing transferred bytes;
+the launcher then stages its received private bytes and delegates installation to the sole
 canonical `scripts/install.sh`. No independent installer engine is added.
 The archive keeps the exact six regular members: one binary, canonical
 `install.sh`, `LICENSE`, `BUILD-MANIFEST.txt`, `LOCAL-INSTALL.txt`, and

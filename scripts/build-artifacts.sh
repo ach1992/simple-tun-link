@@ -120,7 +120,10 @@ For the simplest installation, download the ONE official matching release
 file stl_${version}_linux_${arch}_local-install.sh instead of this tar.gz.
 Transfer the .sh file unchanged into /root/stl/ and, with that ONE file
 present, run as an administrator:
-    sudo bash -c 'bash /root/stl/*_local-install.sh'
+    As root: use the one-command trusted preflight in this release's README.
+    Or, as a non-root administrator, use the documented sudo variant.
+    Do NOT run the transferred shell file directly as root: its own source
+    checks cannot defend against malicious instructions injected before them.
 
 The .sh file embeds these exact archive bytes and a build-bound digest; it
 verifies a private copy, delegates safe unpack to the canonical install.sh,

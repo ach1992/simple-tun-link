@@ -52,6 +52,7 @@ MANIFEST
 }
 bundle v0.1.0 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 bundle v0.1.1 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+bundle v0.1.2 dddddddddddddddddddddddddddddddddddddddd
 bundle v0.1.0-rc.1 cccccccccccccccccccccccccccccccccccccccc
 [[ $(uname -m) == x86_64 ]] || { echo 'SKIP: amd64 offline installer test fixture'; exit 0; }
 
@@ -270,6 +271,67 @@ printf 'release\n' > "$root/release-gate"
 wait "$holder"
 wait "$updater" || fail 'installer failed after shared maintenance gate released'
 [[ $(sha "$concurrent/bin/stl") == "$(sha "$root/v0.1.1/stl_v0.1.1_linux_amd64")" ]] || fail 'queued update did not publish after release'
+
+# One-file automatic Stable policy runs inside the canonical lock. Existing
+# ordinary `install` does not implicitly upgrade, and explicitly reviewed
+# `update` still admits a manual rollback (exercised earlier in this suite).
+auto="$root/automatic-stable"
+mkdir -p "$auto/bin" "$auto/lib"
+bash "$installer" install --auto-stable --bundle "$root/v0.1.0" --prefix "$auto" > /dev/null
+expect_failure bash "$installer" install --bundle "$root/v0.1.1" --prefix "$auto"
+bash "$installer" install --auto-stable --bundle "$root/v0.1.1" --prefix "$auto" > /dev/null
+[[ $(grep '^version=' "$auto/lib/simple-tun-link/install-record") == version=v0.1.1 ]] ||
+  fail 'locked auto-stable failed to upgrade an installer-owned Stable'
+expect_failure bash "$installer" install --auto-stable --bundle "$root/v0.1.0" --prefix "$auto"
+grep -q 'refusing automatic downgrade/channel change' "$root/err" ||
+  fail 'automatic downgrade did not fail at the locked policy boundary'
+expect_failure bash "$installer" install --auto-stable --bundle "$root/v0.1.0-rc.1" --prefix "$auto"
+expect_failure bash "$installer" update --auto-stable --bundle "$root/v0.1.2" --prefix "$auto"
+auto_inode=$(stat -c %i "$auto/bin/stl")
+auto_record_hash=$(sha "$auto/lib/simple-tun-link/install-record")
+bash "$installer" install --auto-stable --bundle "$root/v0.1.1" --prefix "$auto" > /dev/null
+[[ $(stat -c %i "$auto/bin/stl") == "$auto_inode" &&
+   $(sha "$auto/lib/simple-tun-link/install-record") == "$auto_record_hash" ]] ||
+  fail 'automatic same-artifact no-op modified installer ownership'
+
+# Two launchers both eligible against the old v0.1.0 must serialize their
+# decisions, never downgrading a completed v0.1.2 even if the older request
+# entered while another updater held the maintenance lock.
+racing="$root/racing-automatic-stable"
+mkdir -p "$racing/bin" "$racing/lib"
+bash "$installer" install --auto-stable --bundle "$root/v0.1.0" --prefix "$racing" > /dev/null
+exec 7>>"$racing/lib/simple-tun-link/.maintenance.lock"
+flock -x 7
+bash "$installer" install --auto-stable --bundle "$root/v0.1.2" --prefix "$racing" > "$root/auto-newer.log" 2>&1 &
+newer=$!
+sleep 0.12
+bash "$installer" install --auto-stable --bundle "$root/v0.1.1" --prefix "$racing" > "$root/auto-older.log" 2>&1 &
+older=$!
+sleep 0.12
+[[ $(grep '^version=' "$racing/lib/simple-tun-link/install-record") == version=v0.1.0 ]] ||
+  fail 'automatic update changed the install record while lock held'
+flock -u 7
+wait "$newer" || { cat "$root/auto-newer.log" >&2; fail newer_automatic_update_failed; }
+# If newer runs first, older must be refused; if older ran first, newer must
+# still win. Either ordering leaves the exact latest artifact installed.
+wait "$older" || grep -q 'refusing automatic downgrade/channel change' "$root/auto-older.log" ||
+  fail 'contending older installer failed for an unrelated reason'
+[[ $(grep '^version=' "$racing/lib/simple-tun-link/install-record") == version=v0.1.2 &&
+   $(sha "$racing/bin/stl") == "$(sha "$root/v0.1.2/stl_v0.1.2_linux_amd64")" ]] ||
+  fail 'competing automatic installs left a downgraded artifact'
+# Two further same-artifact concurrent attempts must leave the executable
+# inode and its protected install record intact.
+racing_inode=$(stat -c %i "$racing/bin/stl")
+racing_record=$(sha "$racing/lib/simple-tun-link/install-record")
+bash "$installer" install --auto-stable --bundle "$root/v0.1.2" --prefix "$racing" > "$root/auto-identical-a.log" 2>&1 &
+pid_a=$!
+bash "$installer" install --auto-stable --bundle "$root/v0.1.2" --prefix "$racing" > "$root/auto-identical-b.log" 2>&1 &
+pid_b=$!
+wait "$pid_a" || fail 'first simultaneous same-artifact install failed'
+wait "$pid_b" || fail 'second simultaneous same-artifact install failed'
+[[ $(stat -c %i "$racing/bin/stl") == "$racing_inode" &&
+   $(sha "$racing/lib/simple-tun-link/install-record") == "$racing_record" ]] ||
+  fail 'concurrent same-artifact reinstall modified installed identity'
 
 # The full offline suite also covers the distro-aware APT planner.
 bash "$(dirname "$0")/test-install-requirements.sh"

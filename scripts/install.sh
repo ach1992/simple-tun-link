@@ -11,6 +11,7 @@ Usage:
   install.sh install --version vX.Y.Z [--prefix /usr/local]
   install.sh update --version vX.Y.Z [--prefix /usr/local]
   install.sh install|update --bundle /path/to/release-bundle [--prefix /usr/local]
+  install.sh install --auto-stable --bundle /path/to/verified-local-bundle [--prefix /usr/local]
   install.sh install|update --version vX.Y.Z [--backends native,wireguard,ipsec]
   install.sh install|update --bundle /path/to/release-bundle [--prefix /usr/local] [--backends all]
   install.sh requirements [--backends native,wireguard,ipsec] [--os-release-file /path/to/read-only-fixture]
@@ -29,6 +30,10 @@ and disabled; pre-existing/foreign services are never modified. Private STL
 service admission remains a separate verified step under the same UI consent.
 No host Link or network configuration is modified by this installer.
 --bundle uses verified local release files without downloading from GitHub.
+--auto-stable is for one-file local launchers: under the existing exclusive
+maintenance lock, allow fresh installs, identical verified artifacts and
+newer Stable-to-Stable updates only. Ordinary explicit update still supports
+a separately reviewed downgrade or RC transition.
 Unpack requires a verified SHA256 from independently trusted release metadata,
 then checks regular-file members and a fresh private destination without APT.
 Missing selected distro packages may use only currently configured signed APT;
@@ -199,6 +204,7 @@ esac
 prefix=/usr/local
 version=
 bundle=
+auto_stable=0
 backends=native
 backends_supplied=0
 os_release_fixture=
@@ -210,6 +216,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --version) [[ $# -ge 2 && -z $version ]] || usage; version=$2; shift 2 ;;
     --bundle) [[ $# -ge 2 && -z $bundle ]] || usage; bundle=$2; shift 2 ;;
+    --auto-stable) [[ $auto_stable == 0 ]] || usage; auto_stable=1; shift ;;
     --prefix) [[ $# -ge 2 ]] || usage; prefix=$2; shift 2 ;;
     --backends) [[ $# -ge 2 && $backends_supplied == 0 ]] || usage; backends=$2; backends_supplied=1; shift 2 ;;
     --os-release-file) [[ $# -ge 2 && -z $os_release_fixture ]] || usage; os_release_fixture=$2; shift 2 ;;
@@ -225,6 +232,7 @@ if [[ $action == uninstall || $action == requirements || $action == prepare ]]; 
 else
   [[ -n $version && -z $bundle || -z $version && -n $bundle ]] || usage
 fi
+[[ $auto_stable == 0 || ( $action == install && -n $bundle ) ]] || usage
 [[ $action == requirements || -z $os_release_fixture ]] || usage
 [[ $action == prepare || ( $expected_missing_supplied == 0 && $expected_apt_plan_supplied == 0 ) ]] || usage
 [[ $action != prepare || $prefix == /usr/local ]] || fail 'package preparation is allowed only for the installer-owned /usr/local installation'
@@ -1149,7 +1157,10 @@ exact_reinstall=0
 if [[ $action == install ]]; then
   if [[ -e $record || -L $record || -e $target || -L $target || -e $alias || -L $alias ]]; then
     read_record
-    exact_reinstall=1
+    # Ordinary install never implicitly upgrades a different artifact.
+    # A one-file --auto-stable caller instead uses the locked version policy
+    # below, after the incoming artifact has been verified.
+    if [[ $auto_stable == 0 ]]; then exact_reinstall=1; fi
     action=update
   fi
 else
@@ -1401,6 +1412,17 @@ install -m 0755 -- "$stage/$asset" "$stage/incoming"
 metadata=$("$stage/incoming" version --json) || fail 'downloaded binary cannot report version metadata'
 [[ $metadata == *\"version\":\"$version\"* && $metadata == *\"commit\":\"$commit\"* ]] || fail 'release executable and manifest identity disagree'
 incoming_hash=$(hash_file "$stage/incoming")
+# Evaluate one-file automatic-update policy ONLY after read_record and the
+# incoming manifest/binary have been authenticated, while holding the same
+# canonical maintenance lock as the eventual publication. Two concurrent
+# launchers cannot both authorize against a stale install record.
+if [[ $auto_stable == 1 && $action == update && $prior_version != "$version" ]]; then
+  if [[ ! $prior_version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ||
+        ! $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+     ! dpkg --compare-versions "${prior_version#v}" lt "${version#v}"; then
+    fail "refusing automatic downgrade/channel change ($prior_version -> $version); use an explicit verified canonical update only when authorized"
+  fi
+fi
 if [[ $action == update ]]; then
   if [[ $exact_reinstall == 1 ]]; then
     [[ $prior_version == "$version" && $prior_hash == "$incoming_hash" ]] ||

@@ -96,27 +96,10 @@ grep -Fxq -- "version=$version" "$stage/bundle/BUILD-MANIFEST.txt" &&
   grep -Fxq -- "commit=$commit" "$stage/bundle/BUILD-MANIFEST.txt" ||
   fail 'embedded bundle version or source commit mismatch'
 
-# Choose only the operation; the canonical installer independently validates
-# foreign ownership, State/recovery, checksum and binary identity under lock.
-action=install
-record="$prefix/lib/simple-tun-link/install-record"
-if [[ -e $record || -L $record ]]; then
-  [[ -f $record && ! -L $record ]] || fail 'existing STL ownership record is unsafe'
-  installed_version=$(sed -n 's/^version=//p' "$record")
-  [[ $installed_version =~ ^(v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?|dev-[0-9a-f]{12})$ ]] ||
-    fail 'existing STL install record is malformed; inspect it before updating'
-  action=update
-  if [[ $installed_version != "$version" ]]; then
-    # Automatic updates are intentionally stable-to-newer-stable only. An RC,
-    # snapshot, or a downgrade needs the explicit canonical reviewed workflow.
-    if [[ ! $installed_version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ||
-          ! $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
-        ! dpkg --compare-versions "${installed_version#v}" lt "${version#v}"; then
-      fail "refusing automatic downgrade/channel change ($installed_version -> $version); use explicit verified canonical update only when authorized"
-    fi
-  fi
-fi
-bash "$stage/bundle/install.sh" "$action" --bundle "$stage/bundle" \
+# The one-file route uses the canonical installer's restricted automatic
+# Stable policy *under the maintenance lock*. Do not inspect the install
+# record here: any pre-lock decision would race a concurrent installer.
+bash "$stage/bundle/install.sh" install --auto-stable --bundle "$stage/bundle" \
   --prefix "$prefix" --backends native,wireguard
 "$prefix/bin/stl" version --json || fail 'installed executable identity check failed'
 if [[ $prefix == /usr/local ]]; then

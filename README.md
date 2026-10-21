@@ -80,14 +80,22 @@ architecture-specific file from that release's official assets:
 | `aarch64` | `stl_<version>_linux_arm64_local-install.sh` |
 
 Upload the single file **as-is** into `/root/stl/` on the server (e.g. through
-SFTP); the folder and file must be root-owned and not writable by other users.
-With just that one file in the folder, run:
+SFTP); the folder must be root-owned mode `0700` and the file root-owned
+mode `0600` or `0644`. With just one file in the folder, run **as root**
+(the command itself is a trusted pre-execution check, before any transferred
+shell instruction):
 
 ~~~sh
-sudo bash -c 'bash /root/stl/*_local-install.sh'
+bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; cp -- "${f[0]}" "$d/${f[0]##*/}"; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; bash "$d/${f[0]##*/}"'
 ~~~
 
-The launcher recognizes the CPU, privately verifies/extracts its embedded
+If using a non-root sudo-capable administrator, run the same command with
+`sudo` placed before `bash -c` (see the [installation guide](docs/INSTALL.md#local-installation-choose-a-published-asset)).
+The preflight rejects unsafe modes/symlinks and snapshots the transferred
+file into a root-private directory **before** executing it. It does not prove
+publisher authenticity by itself: verify the official source and release on
+the Internet-connected downloading device. The launcher then recognizes the
+CPU, privately verifies/extracts its embedded
 release archive, and invokes the canonical installer. It handles a new install,
 a no-op for the same verified artifact, or a newer **Stable-to-Stable** update;
 it then opens the menu on a terminal (otherwise use `sudo stl menu`). It never
