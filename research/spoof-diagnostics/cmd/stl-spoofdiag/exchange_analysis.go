@@ -29,7 +29,7 @@ func (l *exchangeInputList) Set(v string) error {
 
 func exchangeCLI(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: exchange init|new-case|export|inspect|import|analyze (all offline)")
+		return errors.New("usage: exchange init|sources|case|new-case|export|inspect|import|analyze (all offline)")
 	}
 	op := args[0]
 	f := flag.NewFlagSet("exchange "+op, flag.ContinueOnError)
@@ -49,6 +49,10 @@ func exchangeCLI(args []string) error {
 		return err
 	}
 	switch op {
+	case "sources":
+		return exchangeSourcesCLI(args[1:])
+	case "case":
+		return exchangeCaseCLI(args[1:])
 	case "init":
 		if err := exchangeCreateBase(*base); err != nil {
 			return err
@@ -157,7 +161,7 @@ func exchangeCLI(args []string) error {
 			"reports": *reports, "received_bundle_count": len(r.Inputs),
 			"network_calls": "NONE"})
 	default:
-		return errors.New("usage: exchange init|new-case|export|inspect|import|analyze")
+		return errors.New("usage: exchange init|sources|case|new-case|export|inspect|import|analyze")
 	}
 }
 
@@ -398,6 +402,12 @@ func exchangeAnalyze(caseID, ca string, sources []string) (exchangeCaseReport, e
 	bundles := map[string]*exchangeBundle{}
 	conflicted := map[string]bool{}
 	for _, filename := range sources {
+		if _, err := exchangeReadSourceAnyName(filename); err == nil {
+			continue // source inventory is unapproved input, not signed outcome evidence
+		}
+		if _, err := exchangeRecognizeCase(filename, ca); err == nil {
+			continue // signed/unsigned Case preparation is not post-run evidence
+		}
 		b, err := exchangeOpenBundle(filename, ca)
 		if err != nil {
 			report.Rejected = append(report.Rejected, filepath.Base(filename)+": "+err.Error())

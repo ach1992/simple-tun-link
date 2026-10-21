@@ -127,6 +127,41 @@ func exchangeImport(base, ca string, sources []string, caseID string) ([]exchang
 	results := make([]exchangeImportResult, 0, len(sources))
 	for _, source := range sources {
 		r := exchangeImportResult{Input: source}
+		if _, sourceErr := exchangeReadSourceAnyName(source); sourceErr == nil {
+			staged, n, duplicate, err := exchangeSourceStage(base, source)
+			if err != nil {
+				return results, err
+			}
+			r.Status, r.ArchiveFile = "SOURCE_INVENTORY_STAGED_NOT_APPROVED", staged
+			if duplicate {
+				r.Status = "SOURCE_INVENTORY_ALREADY_STAGED_NOT_APPROVED"
+			}
+			r.Reason = fmt.Sprintf("%d exact candidates; source file is not permission or a receiver allowlist", n)
+			results = append(results, r)
+			continue
+		}
+		if part, prepErr := exchangeRecognizeCase(source, ca); prepErr == nil {
+			if caseID != "" && part.CaseID != caseID {
+				r.Status = "IGNORED_DIFFERENT_CASE"
+				results = append(results, r)
+				continue
+			}
+			staged, duplicate, err := exchangeStageCase(base, part)
+			if err != nil {
+				return results, err
+			}
+			r.CaseID, r.ArchiveFile = part.CaseID, staged
+			r.Status = "CASE_DEFINITION_STAGED_UNAPPROVED"
+			if part.Type == "SIGNED_CASE_FRAGMENT" {
+				r.Status = "SIGNED_CASE_FRAGMENT_STAGED_NOT_DUAL_APPROVED"
+				r.Slot = part.Node
+			}
+			if duplicate {
+				r.Reason = "idempotent stage; identical content"
+			}
+			results = append(results, r)
+			continue
+		}
 		bundle, err := exchangeOpenBundle(source, ca)
 		if err == nil && caseID != "" && bundle.Manifest.CaseID != caseID {
 			r.Status = "IGNORED_DIFFERENT_CASE"
