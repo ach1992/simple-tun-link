@@ -196,19 +196,20 @@ delete leftover protected temporary material.
 
 ### One transferred file and one trusted command (new release format)
 
-**The new `*_local-install.sh` format is implemented for future releases and
-candidate snapshots, not the immutable published v0.1.8 tag.** First open the
-[official GitHub Releases](https://github.com/ach1992/simple-tun-link/releases)
-on another device, select a reviewed immutable *exact* release, and confirm
-that the matching `.sh` is actually listed. Do not treat `vX.Y.Z` below as a
-real, available tag.
+**[Stable v0.1.9](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.9)
+is the first release with the self-contained `*_local-install.sh` format.**
+Open the official release on an Internet-connected device and verify its tag,
+publisher and exact published asset before privileged use. The matching file
+already embeds all required STL core files; no extra STL binary, installer,
+manifest or checksum transfer is necessary. Optional future Carrier helpers
+are *not* included or supported by this release.
 
-| Server CPU | Exactly ONE file to download (release asset name) | Official exact-version link pattern |
+| Server CPU | Exactly ONE file to download | Exact official release asset |
 | --- | --- | --- |
-| `x86_64` | `stl_vX.Y.Z_linux_amd64_local-install.sh` | `https://github.com/ach1992/simple-tun-link/releases/download/vX.Y.Z/stl_vX.Y.Z_linux_amd64_local-install.sh` |
-| `aarch64` | `stl_vX.Y.Z_linux_arm64_local-install.sh` | `https://github.com/ach1992/simple-tun-link/releases/download/vX.Y.Z/stl_vX.Y.Z_linux_arm64_local-install.sh` |
+| `x86_64` | `stl_v0.1.9_linux_amd64_local-install.sh` | [Download AMD64](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.9/stl_v0.1.9_linux_amd64_local-install.sh) |
+| `aarch64` | `stl_v0.1.9_linux_arm64_local-install.sh` | [Download ARM64](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.9/stl_v0.1.9_linux_arm64_local-install.sh) |
 
-Substitute **the exact published tag**, then transfer the selected single file
+Transfer the selected single file
 **without renaming, extracting or making it executable** into `/root/stl/`.
 Create `/root/stl/` using your SFTP client as root if necessary. No additional
 manifest, checksum file, compiler or separate shell helper is required on the
@@ -269,11 +270,12 @@ binary identity and safe private extraction. It cannot cryptographically
 authenticate a completely replaced malicious launcher whose publisher was
 never independently verified; do not execute an unauthenticated mirror.
 
-### Current v0.1.8 Stable: older archive transfer
+### Older v0.1.8 release: manual archive transfer
 
-The actual published [v0.1.8 release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.8)
-requires the original manually verified `.tar.gz` process. It **does not**
-contain the one-command `.sh` format:
+For operators deliberately using the older
+[v0.1.8 release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.8),
+installation requires the original manually verified `.tar.gz` process.
+That historical release **does not** contain the one-command `.sh` format:
 
 | CPU | Exact official file | Transfer placement |
 | --- | --- | --- |
@@ -283,7 +285,8 @@ contain the one-command `.sh` format:
 
 The original [authenticated manual unpack procedure](#verified-archive-unpack-procedure)
 remains below for published archives and existing automation. Prefer the
-single-file format only after its own independently verified release exists.
+v0.1.9 single-file format above for new installations, after verifying the
+published file and its official provenance.
 
 ### Legacy manual inventory: v0.1.7 (no local archive)
 
@@ -554,10 +557,10 @@ stlink version --json
 
 The menu reads official release metadata. **Only an installed executable
 that already contains the newer Stable-patch menu gate** can automatically
-delegate a forward same-major/minor Stable patch update. For example,
-`v0.1.7` → `v0.1.8` would be eligible *if both releases existed and
-the installed `v0.1.7` binary contained this fix*. These are illustrative
-version numbers, not a claim that those releases have been published.
+delegate a forward same-major/minor Stable patch update. A later Stable patch is eligible only when the **installed** executable
+contains this newer menu gate *and* the target release passes immutable-tag,
+lineage and fresh-consent checks. Publication of a newer version alone never
+retroactively adds an update capability to an older executable.
 
 **Legacy migration (one time):** already-published `v0.1.4` and `v0.1.6`
 executables contain the original **RC-only** menu gate. They cannot

@@ -70,14 +70,16 @@ take over another VPN installation.
 
 ### Local installation without GitHub access on the server
 
-**One file, one folder, one command** on a release that actually publishes the
-new `*_local-install.sh` files. On an Internet-connected device, choose **one**
-architecture-specific file from that release's official assets:
+For **[Stable v0.1.9](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.9)**,
+local installation needs **one file, one folder and one command**.
+Download only **one** official architecture-specific release asset on another
+device. It already contains the matching STL binary, the canonical installer
+and all STL-owned core metadata; no second STL file is needed on the server:
 
 | Destination CPU (`uname -m`) | Download from the exact official release |
 | --- | --- |
-| `x86_64` | `stl_<version>_linux_amd64_local-install.sh` |
-| `aarch64` | `stl_<version>_linux_arm64_local-install.sh` |
+| `x86_64` | [`stl_v0.1.9_linux_amd64_local-install.sh`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.9/stl_v0.1.9_linux_amd64_local-install.sh) |
+| `aarch64` | [`stl_v0.1.9_linux_arm64_local-install.sh`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.9/stl_v0.1.9_linux_arm64_local-install.sh) |
 
 Upload the single file **as-is** into `/root/stl/` on the server (e.g. through
 SFTP); the folder must be root-owned mode `0700` and the file root-owned
@@ -105,15 +107,18 @@ are reused; only missing native/WireGuard distro packages may use the configured
 **signed APT repositories**. IPsec preparation is separate. No WSS/Paqet
 Carrier is shipped.
 
-**Availability:** the published [v0.1.8 Stable](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.8)
-contains the verified `.tar.gz` bundles, **not** this new `.sh` entrypoint.
-Do not use this command with that archive or assume a not-yet-published asset
-exists. The [installation guide](docs/INSTALL.md#local-installation-choose-a-published-asset)
-lists the actual v0.1.8 files, manual fallback, release-link patterns for the
-new file and actionable errors. Download only from a verified official release
-and independently establish publisher/tag provenance before root execution;
-embedded or same-account checksums are integrity checks, not an independent
-publisher signature.
+**Availability:** [v0.1.9](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.9)
+is the first Stable release with the self-contained `.sh` installers.
+The older [v0.1.8](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.8)
+contains only `.tar.gz` local archives and requires a different manual
+procedure; never invoke this command on an archive. The
+[installation guide](docs/INSTALL.md#local-installation-choose-a-published-asset)
+provides the exact v0.1.9 files, the legacy procedure and actionable errors.
+Verify publisher/tag provenance on the downloading device before root execution;
+embedded or same-account checksums prove integrity, not independent publisher
+authenticity. Future approved optional Carrier companions may be transferred
+beside the core file, but none is needed, bundled, recognized or activated by
+the v0.1.9 core installer.
 
 ## Connect Server A and Server B
 

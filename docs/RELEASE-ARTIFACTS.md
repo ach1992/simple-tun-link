@@ -66,11 +66,13 @@ canonical `scripts/install.sh`. No independent installer engine is added.
 The archive keeps the exact six regular members: one binary, canonical
 `install.sh`, `LICENSE`, `BUILD-MANIFEST.txt`, `LOCAL-INSTALL.txt`, and
 `SHA256SUMS` (covering the other five). Both `.sh` and `.tar.gz` are included
-in the release-wide SHA256SUMS; they are **build outputs, not published assets**
-until an approved tag/release is actually published.
+in the release-wide SHA256SUMS; building alone does **not** publish them.
+The first official Stable release with the new `.sh` assets is
+[v0.1.9](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.9).
+The older v0.1.8 release contained only the legacy `.tar.gz` archives.
 
 The literal *operator* command, file inventory, trust boundary, error recovery
-and existing `v0.1.8` manual archive procedure are owned by
+and legacy `v0.1.8` manual archive procedure are owned by
 [INSTALL.md](INSTALL.md#local-installation-choose-a-published-asset).
 Do not maintain a competing installation runbook here. The new single-file
 launcher cannot provide an independent publisher signature: exact-tag
