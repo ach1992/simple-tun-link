@@ -66,6 +66,20 @@ APT_STUB
       install -d -m 0755 /etc/sudoers.d
       printf 'stloperator ALL=(root) NOPASSWD: /usr/bin/bash\n' > /etc/sudoers.d/stl-e2e
       chmod 0440 /etc/sudoers.d/stl-e2e
+      # The *genuine* sudo path must also refuse an oversized source before
+      # allocating staging or touching an existing STL installation.
+      file="/root/stl/$STL_E2E_ENTRY_NAME"
+      mv -- "$file" /root/stl-sudo-original
+      truncate -s 134250001 -- "$file"
+      chmod 0600 -- "$file"
+      if run_sudo_operator > /tmp/stl-sudo-oversize-failure 2>&1; then
+        fail real_sudo_accepted_oversized_source
+      fi
+      grep -q 'installer file size must be 1..134250000 bytes' /tmp/stl-sudo-oversize-failure ||
+        fail real_sudo_size_refusal_wrong_diagnostic
+      [[ ! -e /usr/local/bin/stl ]] || fail real_sudo_oversize_modified_installation
+      rm -- "$file"
+      mv -- /root/stl-sudo-original "$file"
       run_sudo_operator
       [[ -x /usr/local/bin/stl ]] || fail real_sudo_installer_not_run
       ;;
@@ -111,6 +125,44 @@ APT_STUB
       grep -Eqi 'APT|mirror|repository|package' /tmp/stl-mirror-failure ||
         { cat /tmp/stl-mirror-failure >&2; fail mirror_failure_has_no_diagnosis; }
       [[ ! -e /usr/local/bin/stl ]] || fail changed_executable_after_failed_mirror
+      ;;
+    preflight-size)
+      # A sparse oversized or empty transferred file MUST be rejected before
+      # mktemp/head/cmp and before any installation or APT effect. No 134 MB
+      # payload is actually written to the guest's disk.
+      file="/root/stl/$STL_E2E_ENTRY_NAME"
+      mv -- "$file" /root/stl-size-original
+      for size in 0 134250001; do
+        truncate -s "$size" -- "$file"
+        chmod 0600 -- "$file"
+        [[ $(stat -c %s -- "$file") == "$size" ]] || fail sparse_fixture_wrong_size
+        if run_root_operator > /tmp/stl-preflight-size-failure 2>&1; then
+          fail "accepted_invalid_preflight_size_$size"
+        fi
+        grep -q 'installer file size must be 1..134250000 bytes' /tmp/stl-preflight-size-failure ||
+          { cat /tmp/stl-preflight-size-failure >&2; fail preflight_size_wrong_diagnostic; }
+        shopt -s nullglob
+        stage_dirs=(/root/.stl-preflight.*)
+        shopt -u nullglob
+        [[ ${#stage_dirs[@]} == 0 ]] || fail preflight_allocated_staging_before_size_check
+        [[ ! -e /usr/local/bin/stl &&
+           ! -e /usr/local/lib/simple-tun-link/install-record ]] ||
+          fail preflight_size_rejection_modified_installation
+      done
+      # A truncated but non-empty transferred payload within the size limit
+      # must fail the verified archive boundary, not install a broken build.
+      cp -- /root/stl-size-original "$file"
+      original_size=$(stat -c %s -- "$file")
+      (( original_size > 100 )) || fail invalid_fixture_size
+      truncate -s "$((original_size - 13))" -- "$file"
+      if run_root_operator > /tmp/stl-truncated-failure 2>&1; then
+        fail accepted_truncated_embedded_payload
+      fi
+      grep -Eq 'SHA256 mismatch|invalid or oversized payload' /tmp/stl-truncated-failure ||
+        { cat /tmp/stl-truncated-failure >&2; fail truncated_wrong_integrity_diagnostic; }
+      [[ ! -e /usr/local/bin/stl &&
+         ! -e /usr/local/lib/simple-tun-link/install-record ]] ||
+        fail truncated_payload_modified_installation
       ;;
     untrusted-foreign)
       # Inject an executable prelude into the incoming file. An unchanged
@@ -200,9 +252,10 @@ sudo_line=$(grep '^sudo bash -c .*stl-preflight' docs/INSTALL.md)
 [[ -n $root_line && $sudo_line == "sudo $root_line" ]] || fail operator_docs_drift
 printf '%s\n' "$root_line" | bash -n || fail malformed_root_operator_command
 printf '%s\n' "$sudo_line" | bash -n || fail malformed_sudo_operator_command
-for scenario in missing-packages preinstalled-no-apt blocked-mirror untrusted-foreign sudo-operator; do
+for scenario in missing-packages preinstalled-no-apt blocked-mirror preflight-size untrusted-foreign sudo-operator; do
   network=bridge
-  [[ $scenario == blocked-mirror || $scenario == untrusted-foreign ]] && network=none
+  [[ $scenario == blocked-mirror || $scenario == untrusted-foreign ||
+     $scenario == preflight-size ]] && network=none
   docker run --rm --network "$network" \
     --add-host github.com:127.0.0.1 \
     --add-host api.github.com:127.0.0.1 \
