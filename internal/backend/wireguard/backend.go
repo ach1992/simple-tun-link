@@ -42,6 +42,8 @@ type Options struct {
 	SetUp              func(context.Context, int) error
 	DeleteLink         func(context.Context, int) error
 	LookupIndex        func(string) (int, error)
+	// WSSHost is only supplied to NewWSS. Native WireGuard remains unchanged.
+	WSSHost WSSHost
 }
 
 type Backend struct {
@@ -56,13 +58,14 @@ type Backend struct {
 	setUp              func(context.Context, int) error
 	deleteLink         func(context.Context, int) error
 	lookupIndex        func(string) (int, error)
+	wssHost            WSSHost
 }
 
 func New(opts Options) (*Backend, error) {
 	if opts.Runner == nil || opts.Routes == nil || opts.Firewall == nil || opts.Collisions == nil || opts.Keys == nil {
 		return nil, fmt.Errorf("WireGuard requires runner, route, firewall, collision and private-key storage")
 	}
-	b := &Backend{runner: opts.Runner, routes: opts.Routes, firewall: opts.Firewall, collisions: opts.Collisions, keys: opts.Keys, ipBinary: opts.IPBinary, wgBinary: opts.WGBinary,
+	b := &Backend{wssHost: opts.WSSHost, runner: opts.Runner, routes: opts.Routes, firewall: opts.Firewall, collisions: opts.Collisions, keys: opts.Keys, ipBinary: opts.IPBinary, wgBinary: opts.WGBinary,
 		setAlias: opts.SetAlias, addAddress: opts.AddAddress, setUp: opts.SetUp, deleteLink: opts.DeleteLink, lookupIndex: opts.LookupIndex}
 	if b.ipBinary == "" {
 		b.ipBinary = "ip"
@@ -94,11 +97,24 @@ func New(opts Options) (*Backend, error) {
 	return b, nil
 }
 
-func (*Backend) Kind() domain.Backend { return domain.BackendWireGuard }
+func (b *Backend) Kind() domain.Backend {
+	if b.wssHost != nil {
+		return domain.BackendWireGuardWSS
+	}
+	return domain.BackendWireGuard
+}
+
+func NewWSS(opts Options) (*Backend, error) {
+	if opts.WSSHost == nil {
+		return nil, fmt.Errorf("WSS requires an admitted host runtime")
+	}
+	return New(opts)
+}
 
 type observation struct {
-	Target observedLink
-	Links  []observedLink
+	Target                      observedLink
+	Links                       []observedLink
+	GuardPresent, HelperPresent bool
 }
 
 func (o observation) ObservedResources() []domain.ResourceClaim {
@@ -122,9 +138,12 @@ type plan struct {
 	firewallRule                    linux.InboundFirewallRule
 	resources                       []domain.ResourceClaim
 	interfaceChange, firewallChange bool
+	guardChange, helperChange       bool
 }
 
-func (p plan) Empty() bool { return !p.interfaceChange && !p.firewallChange }
+func (p plan) Empty() bool {
+	return !p.interfaceChange && !p.firewallChange && !p.guardChange && !p.helperChange
+}
 func (p plan) Resources() []domain.ResourceClaim {
 	return append([]domain.ResourceClaim(nil), p.resources...)
 }
@@ -161,6 +180,16 @@ func (b *Backend) Inspect(ctx context.Context, link domain.Link) (core.Observati
 		obs.Target = links[i]
 		obs.Links[i] = links[i]
 		break
+	}
+	if b.wssHost != nil {
+		obs.GuardPresent, err = b.wssHost.GuardPresent(ctx, link)
+		if err != nil {
+			return nil, err
+		}
+		obs.HelperPresent, err = b.wssHost.HelperPresent(ctx, link)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return obs, nil
 }
@@ -279,8 +308,11 @@ func (b *Backend) Plan(ctx context.Context, req core.Request, observed core.Obse
 	// The shipped WireGuard path stays a native, zero-Carrier composition.
 	// Future outer Carriers must be admitted explicitly and may not tunnel
 	// via a fake localhost physical Underlay or inherit native firewall rules.
-	if _, err := composition.Build(req.Link, composition.Carrier{}); err != nil {
+	if _, err := composition.Build(req.Link, composition.CarrierForLink(req.Link)); err != nil {
 		return nil, err
+	}
+	if b.wssHost != nil {
+		return b.planWSS(ctx, req, obs)
 	}
 	name, _ := InterfaceName(req.Link.ID)
 	// Removal must use the original, exactly owned rule rather than derive
@@ -361,6 +393,9 @@ func (b *Backend) Validate(ctx context.Context, req core.Request, observed core.
 	}
 	if err := validateLink(req.Link); err != nil {
 		return err
+	}
+	if b.wssHost != nil {
+		return b.validateWSS(ctx, req, obs, p)
 	}
 	if req.Operation == core.OperationRemove {
 		rule, present, err := b.firewall.FindOwnedInbound(ctx, req.Link.ID, false)
@@ -502,6 +537,9 @@ func (b *Backend) Verify(ctx context.Context, req core.Request) (core.Observatio
 	current, err := b.Inspect(ctx, req.Link)
 	if err != nil {
 		return nil, err
+	}
+	if b.wssHost != nil {
+		return b.verifyWSS(req, current.(observation))
 	}
 	obs := current.(observation)
 	owned, err := b.firewall.HasOwnedInbound(ctx, req.Link.ID, false)

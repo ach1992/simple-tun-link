@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ach1992/simple-tun-link/internal/composition"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
@@ -140,7 +141,7 @@ func validateLink(link domain.Link) error {
 	if err := link.Validate(); err != nil {
 		return err
 	}
-	if link.Backend != domain.BackendWireGuard || link.Encapsulation != domain.EncapUDP {
+	if (link.Backend != domain.BackendWireGuard && link.Backend != domain.BackendWireGuardWSS) || link.Encapsulation != domain.EncapUDP {
 		return stlerr.New(stlerr.CodeUnsupported, "wireguard", string(link.ID), string(link.Backend), "WireGuard backend requires UDP")
 	}
 	if !link.Underlay.Local.Is4() || !link.Underlay.Peer.Is4() {
@@ -174,5 +175,12 @@ func desiredResources(link domain.Link, name string, firewall domain.ResourceCla
 }
 
 func endpoint(link domain.Link) string {
+	if link.Backend == domain.BackendWireGuardWSS {
+		path, err := composition.Build(link, composition.CarrierForLink(link))
+		if err != nil || path.Role == composition.Listen {
+			return ""
+		}
+		return path.WGPeerEndpoint.String()
+	}
 	return net.JoinHostPort(link.Underlay.Peer.String(), strconv.Itoa(int(link.WireGuard.PeerPort)))
 }

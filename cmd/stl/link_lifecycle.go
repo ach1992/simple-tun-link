@@ -28,6 +28,7 @@ const (
 	// change to CLI output must not silently reinterpret existing requests.
 	desiredLinkSchemaVersion = 1
 	managedMTUSchemaVersion  = 2
+	desiredWSSSchemaVersion  = 3
 	maxDesiredLinkBytes      = 16 * 1024
 	lifecycleTimeLimit       = 5 * time.Minute
 	maxLinkJSONNesting       = 12
@@ -257,7 +258,7 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 			safe.ObjectID = observedPublic.ObjectID
 		}
 		switch domain.Backend(observedPublic.Backend) {
-		case domain.BackendGRE, domain.BackendIPIP, domain.BackendWireGuard, domain.BackendIPsec:
+		case domain.BackendGRE, domain.BackendIPIP, domain.BackendWireGuard, domain.BackendWireGuardWSS, domain.BackendIPsec:
 			safe.Backend = observedPublic.Backend
 		}
 	}
@@ -371,6 +372,25 @@ type desiredLinkRequestV2 struct {
 	Link          desiredLinkV2 `json:"link"`
 }
 
+// Input schema v3 adds ONLY the authenticated WireGuard-over-WSS public
+// settings. Frozen v1/v2 requests never acquire new mutation capabilities.
+type desiredLinkRequestV3 struct {
+	SchemaVersion int           `json:"schema_version"`
+	Link          desiredLinkV3 `json:"link"`
+}
+type desiredLinkV3 struct {
+	desiredLinkV2
+	WireGuard domain.WireGuardOptions `json:"wireguard"`
+	WSS       domain.WSSOptions       `json:"wss"`
+}
+
+func (d desiredLinkV3) link() domain.Link {
+	link := d.desiredLinkV2.link()
+	link.WireGuard = d.WireGuard
+	link.WSS = d.WSS
+	return link
+}
+
 type desiredLinkV2 struct {
 	desiredLinkV1
 	MTU domain.MTUPolicy `json:"mtu,omitzero"`
@@ -474,6 +494,16 @@ func decodeDesiredLink(reader io.Reader) (domain.Link, error) {
 			return domain.Link{}, fmt.Errorf("invalid desired Link v2 request")
 		}
 		link = request.Link.link()
+	case desiredWSSSchemaVersion:
+		var request desiredLinkRequestV3
+		if err := decoder.Decode(&request); err != nil {
+			return domain.Link{}, fmt.Errorf("invalid desired WSS Link v3 request")
+		}
+		link = request.Link.link()
+		if link.Backend != domain.BackendWireGuardWSS {
+			return domain.Link{}, stlerr.New(stlerr.CodeUnsupported, "decode_link", "", "",
+				"desired Link v3 is reserved for wireguard-wss")
+		}
 	default:
 		return domain.Link{}, stlerr.New(stlerr.CodeUnsupported, "decode_link", "", "",
 			"unsupported desired Link schema version")

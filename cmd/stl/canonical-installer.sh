@@ -47,6 +47,151 @@ fail() { printf 'stl installer [FAILED]: %s\n' "$*" >&2; exit 1; }
 action=$1
 shift
 case "$action" in
+  companion-wss)
+    # Internal optional-companion operation. The ONE approved local STL
+    # installer calls this after verifying/installing the core executable.
+    # No Link, network, nft rule or service is created here.
+    [[ $# == 2 || $# == 4 ]] || usage
+    [[ $1 == --archive ]] || usage
+    companion_source=$2
+    companion_prefix=/usr/local
+    if [[ $# == 4 ]]; then
+      [[ $3 == --prefix ]] || usage
+      companion_prefix=$4
+    fi
+    [[ $companion_prefix == /* && $companion_prefix != / &&
+       -d $companion_prefix && ! -L $companion_prefix &&
+       $(realpath -e -- "$companion_prefix") == "$companion_prefix" ]] ||
+      fail 'unsafe WSS installation prefix'
+    case $(uname -m) in
+      x86_64) companion_arch=amd64
+        companion_archive_sha=9708a99717b5a951453c2ff7c14c25d3418d02ca7fcb96fdb382a8f2083bab5e
+        companion_exe_sha=6a1d6ab8f4537823d0a8157416b264fa1313253574143e3900eba93e17c6de49 ;;
+      aarch64) companion_arch=arm64
+        companion_archive_sha=b86abf73e340ed0c3ff9a77a5458aa27213784920ec65513132b36def45edc94
+        companion_exe_sha=c0fa96ec1ceb9275137939159f095d1063b0365641e9d63f84d032c23c7c81ed ;;
+      *) fail 'official WSS companion supports only linux/amd64 and linux/arm64' ;;
+    esac
+    expected_name=wstunnel_11.0.0_linux_${companion_arch}.tar.gz
+    [[ $companion_source == /* && ! -L $companion_source &&
+       -f $companion_source && $(basename -- "$companion_source") == "$expected_name" &&
+       $(realpath -e -- "$companion_source") == "$companion_source" ]] ||
+       fail 'official WSS companion archive must be a canonical regular file with its exact release filename'
+    [[ $(stat -c %u -- "$companion_source") == "$EUID" ]] ||
+       fail 'WSS archive must be owned by the current administrator'
+    source_mode=$(stat -c %a -- "$companion_source")
+    [[ $source_mode =~ ^[0-7]{3,4}$ ]] && (( (8#$source_mode & 8#022) == 0 )) ||
+       fail 'WSS archive has unsafe mode'
+    bytes=$(stat -c %s -- "$companion_source")
+    (( bytes > 1024 && bytes < 100000000 )) || fail 'WSS archive size is unsafe'
+    [[ $companion_prefix != /usr/local || $EUID == 0 ]] ||
+       fail 'system-wide WSS companion installation requires root'
+    # Verify the transferred archive chain and prefix chain, never executing
+    # a file beneath a root-owned-but-untrusted writable directory.
+    if [[ $EUID == 0 ]]; then
+      for ancestor in "$(dirname -- "$companion_source")" "$companion_prefix"; do
+        step=/
+        IFS=/ read -ra components <<< "${ancestor#/}"
+        for component in "${components[@]}"; do
+          [[ -z $component ]] && continue
+          step="${step%/}/$component"
+          [[ -d $step && ! -L $step && $(stat -c %u -- "$step") == 0 ]] ||
+             fail "WSS archive/installation ancestor untrusted: $step"
+          mode=$(stat -c %a -- "$step")
+          [[ $mode =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 8#022) == 0 )) ||
+             fail "WSS archive/installation ancestor writable: $step"
+        done
+      done
+    fi
+    companion_dir="$companion_prefix/lib/simple-tun-link"
+    companion_lock="$companion_dir/.maintenance.lock"
+    core_record="$companion_dir/install-record"
+    core_binary="$companion_prefix/bin/stl"
+    [[ -d $companion_dir && ! -L $companion_dir &&
+       -f $core_record && ! -L $core_record &&
+       -f $core_binary && ! -L $core_binary ]] ||
+       fail 'WSS companion requires an existing installer-owned STL core'
+    [[ $(stat -c %u -- "$core_record") == "$EUID" &&
+       $(stat -c %u -- "$companion_dir") == "$EUID" ]] ||
+       fail 'STL installer core ownership is unverified'
+    [[ ! -L $companion_lock ]] || fail 'untrusted core maintenance lock'
+    exec 9>> "$companion_lock"
+    flock -x -w 30 9 || fail 'WSS companion requires exclusive STL maintenance lock'
+    grep -qx 'format=1' "$core_record" &&
+      grep -qx 'project=simple-tun-link' "$core_record" ||
+      fail 'STL core install record does not identify an owned installation'
+    core_hash=$(sed -n 's/^sha256=//p' "$core_record")
+    [[ $core_hash =~ ^[0-9a-f]{64}$ &&
+       $(sha256sum -- "$core_binary" | awk '{print $1}') == "$core_hash" ]] ||
+      fail 'STL core executable differs from its ownership record'
+    target_dir="$companion_prefix/libexec/stl"
+    target="$target_dir/wstunnel"
+    own_record="$companion_dir/wss-companion-record"
+    # Immutable-for-operation snapshot, with all untrusted parsing after
+    # pinned hash verification. No extraction into the user's directory.
+    stage=$(mktemp -d "$companion_dir/.wss-install.XXXXXXXX") ||
+       fail 'cannot allocate private WSS staging'
+    trap '[[ -d $stage && ! -L $stage ]] && rm -rf --one-file-system -- "$stage"' EXIT
+    cp -- "$companion_source" "$stage/$expected_name"
+    chmod 0600 "$stage/$expected_name"
+    [[ $(stat -c %s -- "$stage/$expected_name") == "$bytes" &&
+       $(sha256sum -- "$stage/$expected_name" | awk '{print $1}') == "$companion_archive_sha" ]] ||
+       fail 'official upstream wstunnel archive SHA-256 mismatch'
+    [[ $(tar -tzf "$stage/$expected_name") == $'LICENSE\nREADME.md\nwstunnel' ]] ||
+       fail 'WSS companion archive contains unexpected members'
+    tar -xOzf "$stage/$expected_name" wstunnel > "$stage/wstunnel" ||
+       fail 'WSS companion extraction failed'
+    [[ $(sha256sum -- "$stage/wstunnel" | awk '{print $1}') == "$companion_exe_sha" ]] ||
+       fail 'official upstream executable SHA-256 mismatch'
+    chmod 0755 "$stage/wstunnel"
+    [[ $("$stage/wstunnel" --version) == 'wstunnel-cli 11.0.0' ]] ||
+       fail 'WSS companion version differs from pinned upstream'
+    if [[ -e $own_record || -L $own_record || -e $target || -L $target ]]; then
+       [[ -f $own_record && ! -L $own_record &&
+          -f $target && ! -L $target &&
+          $(stat -c %u -- "$target") == "$EUID" &&
+          $(stat -c %u -- "$own_record") == "$EUID" ]] ||
+         fail 'foreign or interrupted WSS companion identity; do not adopt it'
+       expected_companion_record=$(printf 'format=1\nproject=simple-tun-link\ncompanion=wstunnel\nversion=11.0.0\narchive_sha256=%s\nsha256=%s' "$companion_archive_sha" "$companion_exe_sha")
+       [[ $(cat -- "$own_record") == "$expected_companion_record" ]] ||
+         fail 'WSS companion record does not match the approved pinned version'
+       [[ $(sha256sum -- "$target" | awk '{print $1}') == "$companion_exe_sha" ]] ||
+         fail 'installed companion executable drift'
+       printf '[OK] Approved wstunnel v11.0.0 companion is already installed.\n'
+       exit 0
+    fi
+    for base in "$companion_prefix/libexec" "$target_dir"; do
+      if [[ ! -e $base && ! -L $base ]]; then
+        mkdir -m 0755 -- "$base" || fail 'cannot create private STL companion directory'
+      fi
+      [[ -d $base && ! -L $base &&
+         $(stat -c %u -- "$base") == "$EUID" ]] ||
+         fail 'WSS executable ancestor is not installer-owned'
+      mode=$(stat -c %a -- "$base")
+      [[ $mode =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 8#022) == 0 )) ||
+         fail 'WSS executable ancestor writable by another user'
+    done
+    # The archive and binary are both checked before making either public.
+    incoming_record="$stage/incoming-record"
+    printf 'format=1\nproject=simple-tun-link\ncompanion=wstunnel\nversion=11.0.0\narchive_sha256=%s\nsha256=%s\n' "$companion_archive_sha" "$companion_exe_sha" > "$incoming_record"
+    chmod 0600 "$incoming_record"
+    sync -f "$stage/wstunnel" "$incoming_record" "$stage" "$target_dir" "$companion_dir" ||
+       fail 'WSS companion prepublication sync failed'
+    # Exact no-replace only: a foreign wstunnel must never be truncated.
+    [[ ! -e $target && ! -L $target && ! -e $own_record && ! -L $own_record ]] ||
+       fail 'WSS companion pathname raced with a foreign owner'
+    mv -T -n -- "$stage/wstunnel" "$target"
+    [[ -f $target && ! -L $target &&
+       $(sha256sum -- "$target" | awk '{print $1}') == "$companion_exe_sha" ]] ||
+       fail 'WSS companion publication not confirmed'
+    sync -f "$target" "$target_dir" || fail 'WSS companion binary durability unverified'
+    mv -T -n -- "$incoming_record" "$own_record"
+    [[ -f $own_record && ! -L $own_record ]] ||
+       fail 'WSS companion ownership record publication unverified'
+    sync -f "$own_record" "$companion_dir" || fail 'WSS companion record durability unverified'
+    printf '[OK] Installed pinned official wstunnel v11.0.0 for optional STL-managed WSS Links.\n'
+    exit 0
+    ;;
   unpack)
     # Source this exact-tag canonical script from a separately authenticated
     # archive, then use it to validate/extract that archive. No second installer.

@@ -22,6 +22,9 @@ func (b *Backend) Apply(ctx context.Context, req core.Request, observed core.Obs
 	if !ok {
 		return nil, fmt.Errorf("unexpected WireGuard plan")
 	}
+	if b.wssHost != nil {
+		return b.applyWSS(ctx, req, obs, p)
+	}
 	switch req.Operation {
 	case core.OperationEnsure:
 		return b.applyEnsure(ctx, req, obs, p)
@@ -157,8 +160,13 @@ func (b *Backend) createOwnedInterface(ctx context.Context, link domain.Link, na
 	// bytes in argv, stdout, shell history or generic runtime state.
 	args := []string{"set", name, "listen-port", strconv.Itoa(int(link.WireGuard.ListenPort)),
 		"private-key", "/proc/self/fd/3", "peer", link.WireGuard.PeerPublicKey,
-		"endpoint", endpoint(link), "allowed-ips", netip.PrefixFrom(link.Addresses.Peer.Addr(), 32).String(),
-		"persistent-keepalive", strconv.Itoa(int(link.WireGuard.LocalKeepalive))}
+	}
+	if ep := endpoint(link); ep != "" {
+		args = append(args, "endpoint", ep)
+	}
+	args = append(args,
+		"allowed-ips", netip.PrefixFrom(link.Addresses.Peer.Addr(), 32).String(),
+		"persistent-keepalive", strconv.Itoa(int(link.WireGuard.LocalKeepalive)))
 	progress.ConfigAttempted = true
 	if _, err := b.runner.RunWithFiles(ctx, b.wgBinary, []*os.File{file}, args...); err != nil {
 		return progress, fmt.Errorf("cannot configure WireGuard public peer settings")
@@ -222,7 +230,7 @@ func createdStateMatches(state observedLink, link domain.Link, name string, p cr
 		}
 		// Before the interface is activated, verify the configured peer
 		// endpoint as well. Later authenticated roaming is not drift.
-		if !p.UpAttempted && state.Endpoint != endpoint(link) {
+		if !p.UpAttempted && endpoint(link) != "" && state.Endpoint != endpoint(link) {
 			return false
 		}
 	} else {

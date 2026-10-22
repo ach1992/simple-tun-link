@@ -16,7 +16,8 @@ import (
 )
 
 const (
-	SchemaVersion       = 3
+	SchemaVersion       = 4
+	preWSSSchemaVersion = 3
 	legacySchemaVersion = 1
 	preMTUSchemaVersion = 2
 	DefaultRoot         = "/var/lib/simple-tun-link"
@@ -238,6 +239,9 @@ func (s *FileStore) loadUnlocked() (Snapshot, error) {
 		}
 		return Snapshot{}, fmt.Errorf("decode state trailing data: %w", err)
 	}
+	if snapshot.SchemaVersion <= preWSSSchemaVersion && bytes.Contains(bytes.ToLower(raw), []byte(`"wss":`)) {
+		return Snapshot{}, fmt.Errorf("legacy State cannot carry a WSS carrier")
+	}
 	if err := rejectLegacyMTUFields(raw, snapshot.SchemaVersion); err != nil {
 		return Snapshot{}, err
 	}
@@ -291,6 +295,9 @@ func containsMTUField(value any) bool {
 func migrateSnapshot(snapshot Snapshot) (Snapshot, error) {
 	switch snapshot.SchemaVersion {
 	case SchemaVersion:
+		return snapshot, nil
+	case preWSSSchemaVersion:
+		snapshot.SchemaVersion = SchemaVersion
 		return snapshot, nil
 	case preMTUSchemaVersion:
 		snapshot.SchemaVersion = SchemaVersion

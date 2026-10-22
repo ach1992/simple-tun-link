@@ -47,6 +47,10 @@ func (p WSSWGIngressPlan) validate() error {
 	return nil
 }
 
+// TableName identifies a reserved, per-Link nft object. It is not
+// permission to adopt or delete a table with a matching name.
+func (p WSSWGIngressPlan) TableName() string { return p.tableName() }
+
 func (p WSSWGIngressPlan) tableName() string {
 	hash := sha256.Sum256([]byte(p.LinkID))
 	return fmt.Sprintf("stlwss_%x", hash[:8])

@@ -102,6 +102,17 @@ grep -Fxq -- "version=$version" "$stage/bundle/BUILD-MANIFEST.txt" &&
 bash "$stage/bundle/install.sh" install --auto-stable --bundle "$stage/bundle" \
   --prefix "$prefix" --backends native,wireguard
 "$prefix/bin/stl" version --json || fail 'installed executable identity check failed'
+# WSS remains optional. The official upstream release tarball, when put
+# BESIDE this one-file installer, is verified/staged by the SAME canonical
+# installer without asking the operator to extract or install anything else.
+# Absence is not an error and never changes existing Native STL behavior.
+companion="${source%/*}/wstunnel_11.0.0_linux_${architecture}.tar.gz"
+if [[ -e $companion || -L $companion ]]; then
+  if ! bash "$stage/bundle/install.sh" companion-wss --archive "$companion" --prefix "$prefix"; then
+    fail 'core STL installation succeeded, but optional WSS companion was NOT verified as installed; correct the trusted companion file and re-run this same installer (no Link was created)'
+  fi
+  printf '[OK] Optional WSS Carrier helper is installed; WireGuard over WSS can now be configured.\n'
+fi
 if [[ $prefix == /usr/local ]]; then
   if [[ -t 0 && -t 1 ]]; then
     "$prefix/bin/stl" menu

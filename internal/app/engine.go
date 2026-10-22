@@ -170,6 +170,24 @@ func (e *Engine) EnsureWithWireGuardCredential(ctx context.Context, desired doma
 	})
 }
 
+// EnsureWithWSSCredential stages the WireGuard key and the endpoint-local mTLS
+// material under the exact same canonical Engine maintenance and Link locks
+// that govern the subsequent WSS kernel/firewall/sidecar transition.
+func (e *Engine) EnsureWithWSSCredential(ctx context.Context, desired domain.Link,
+	credential []byte, store RecipientCredentialStore, stageTLS func() error) (Result, error) {
+	if desired.Backend != domain.BackendWireGuardWSS || store == nil || stageTLS == nil ||
+		desired.WireGuard.ListenPort == 0 || desired.WireGuard.PeerPort == 0 {
+		return Result{}, stlerr.New(stlerr.CodeUnsupported, "wss_credential", string(desired.ID),
+			string(desired.Backend), "WSS requires protected WireGuard and mTLS provisioning")
+	}
+	return e.ensureWithProvision(ctx, desired, true, func() error {
+		if err := store.EnsureRecipient(desired.ID, credential, desired.WireGuard.LocalPublicKey); err != nil {
+			return err
+		}
+		return stageTLS()
+	})
+}
+
 func (e *Engine) ensureWithPolicy(ctx context.Context, desired domain.Link, rejectReconfiguration bool) (Result, error) {
 	return e.ensureWithProvision(ctx, desired, rejectReconfiguration, nil)
 }
