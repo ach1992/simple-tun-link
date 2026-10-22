@@ -289,12 +289,39 @@ if [[ -n "${STL_WSS_R2_AMBIGUOUS_TEST:-}" ]]; then
   ip netns exec alpha /usr/sbin/nft -j list table inet "$guard" >/dev/null
   echo "SUCCESS AMBIGUOUS_WSS_HOST_EFFECT_PRESERVED_AND_JOURNALED: $kind"
   if [[ $(printenv STL_WSS_R3_ORIGINAL_TEST || :) == 1 ]];then
+    if [[ "$kind" == nft-* ]];then
+      # A dispatched, then failed/timed-out/canceled first nft guard
+      # creation did not establish that ANY original WG kernel object
+      # was created, let alone that this same object was later deleted
+      # by a verified ifindex transaction. A separate later CLI
+      # process MUST NOT treat empty local WG/UDP inventories as proof.
+      if invoke alpha link reconcile-wss-original "$id" --confirm "$id" > "$lab/alpha/ambiguous-nft-no-original-witness-denied.log" 2>&1;then
+        echo "FAIL: ambiguous nft-only outcome synthesized original WG deletion witness" >&2;exit 1
+      fi
+      jq -e '(.links|length)==0 and (.wss_crash_operations|length)==1' "$lab/alpha-state/state.json" >/dev/null
+      ip netns exec alpha /usr/sbin/nft -j list table inet "$guard" >/dev/null
+      echo "DENY_PASS AMBIGUOUS_NFT_ONLY_CRASH_RETAINS_GUARD_JOURNAL_AND_CREDENTIALS: $kind"
+      exit 0
+    fi
     # The deliberately failing external command was a ONE-TIME injected
     # post-effect fault. Reattempt recovery in a new CLI invocation after
     # that fault has ended; otherwise the test continually sabotages its
     # own cleanup and cannot distinguish product recovery from a persistent
     # broken nft/systemd binary.
     unset STL_WSS_R2_AMBIGUOUS_TEST
+    if [[ "$kind" == nft-* ]];then
+      # In these three modes the only confirmed effect is the nft guard.
+      # A vanished local WG listener does not certify that no original WG
+      # was moved DOWN into another namespace, so no WSS journal/guard
+      # clearance can be minted after process loss.
+      if invoke alpha link reconcile-wss-original "$id" --confirm "$id" > "$lab/alpha/ambiguous-no-kernel-witness-denied.log" 2>&1;then
+        echo "FAIL: ambiguous guard-only effect was cleared by name/local-vacancy heuristic" >&2;exit 1
+      fi
+      jq -e '(.links|length)==0 and (.wss_crash_operations|length)==1' "$lab/alpha-state/state.json" >/dev/null
+      ip netns exec alpha nft -j list table inet "$guard" >/dev/null
+      echo "DENY_PASS AMBIGUOUS_NFT_ORIGINAL_QUARANTINE: $kind"
+      exit 0
+    fi
     invoke alpha link reconcile-wss-original "$id" --confirm "$id"
     if invoke alpha link reconcile-wss-original "$id" --confirm "$id" > "$lab/alpha/original-repeat-denied.log" 2>&1;then
       echo "repeat recovery falsely found an original live journal" >&2;exit 1
