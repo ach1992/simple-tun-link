@@ -309,19 +309,6 @@ if [[ -n "${STL_WSS_R2_AMBIGUOUS_TEST:-}" ]]; then
     # own cleanup and cannot distinguish product recovery from a persistent
     # broken nft/systemd binary.
     unset STL_WSS_R2_AMBIGUOUS_TEST
-    if [[ "$kind" == nft-* ]];then
-      # In these three modes the only confirmed effect is the nft guard.
-      # A vanished local WG listener does not certify that no original WG
-      # was moved DOWN into another namespace, so no WSS journal/guard
-      # clearance can be minted after process loss.
-      if invoke alpha link reconcile-wss-original "$id" --confirm "$id" > "$lab/alpha/ambiguous-no-kernel-witness-denied.log" 2>&1;then
-        echo "FAIL: ambiguous guard-only effect was cleared by name/local-vacancy heuristic" >&2;exit 1
-      fi
-      jq -e '(.links|length)==0 and (.wss_crash_operations|length)==1' "$lab/alpha-state/state.json" >/dev/null
-      ip netns exec alpha nft -j list table inet "$guard" >/dev/null
-      echo "DENY_PASS AMBIGUOUS_NFT_ORIGINAL_QUARANTINE: $kind"
-      exit 0
-    fi
     invoke alpha link reconcile-wss-original "$id" --confirm "$id"
     if invoke alpha link reconcile-wss-original "$id" --confirm "$id" > "$lab/alpha/original-repeat-denied.log" 2>&1;then
       echo "repeat recovery falsely found an original live journal" >&2;exit 1

@@ -740,22 +740,50 @@ recovery without changing ordinary Link automatic replay:
   object is always quarantined with its ingress guard and journal; STL cannot
   delete it by guessed name, even if it might be the original creation.
 - Under canonical Engine locks, identity readback gates the exact
-  original helper, kernel interface and guard in that order. The guard
-  remains until consistent global WG interface, key and listen-port
-  inventories prove no matching identity anywhere. All guard deletions,
-  including ordinary Remove and Ensure rollback, enforce that gate.
-  Final strict host vacancy precedes State/journal commit.
-  Committed Remove publishes the original retirement receipt; committed
-  repair preserves its Link.
+  original helper, kernel interface and guard in that order.
+  **Network namespace-local** WG interface/key/listen-port inventories
+  alone are NOT host-global evidence. A WG interface can move to another
+  namespace but retain a UDP socket in its original birthplace
+  namespace; when the moved WG is DOWN, even that socket vanishes
+  until the interface is raised elsewhere. Thus every nft guard
+  deletion must additionally have a fresh, same-transaction witness
+  of a successfully deleted **exact original nonce-tagged WG ifindex**,
+  and complete UDP socket enumeration in the guarded birthplace
+  namespace must still show no listener at the protected port.
+  Empty WG/UDP inventories cannot mint a deletion witness after
+  a crash. Original Crash Journal and credentials therefore remain
+  quarantined if that witness was lost; this is a deliberate safety
+  limitation, including guard-only or post-deletion crash windows,
+  rather than fabricated automatic recovery. Confirmed original
+  helper/WG/guard compensation and final strict vacancy precede
+  State/journal commit. Committed Remove publishes the original
+  retirement receipt; committed repair preserves its Link.
 
 Unverifiable/foreign effects are quarantined, not adopted by name.
 Physical systemd/field/ARM64 WSS and independent review remain separate
 from isolated executable proof.
 
+For reproducible **27-scenario rootless real-kernel acceptance** on a
+disposable amd64 Linux test host with the pinned local fixture already
+prepared, run `bash scripts/e2e/wss-managed-wireguard-matrix.sh` from
+a clean exact-HEAD checkout as an unprivileged user. It builds the
+current tagged test CLI, serially reuses the existing locked namespace
+harness, records per-case ignored local logs and prints exact HEAD/TREE.
+This is an **opt-in acceptance script**, not a post-install action,
+CI requirement or permission to change a physical production host.
+The existing fixture/prerequisite admission still applies.
+
 The rootless test `STL_WSS_R2_CRASH_TEST=1 bash
 scripts/e2e/wss-managed-wireguard-r1.sh` sends SIGKILL after a
-**real** nft guard creation and before Go State commit. In that disposable
-namespace only, it proves journal durability and denial, explicitly
-cleans its own guard, verifies vacancy-only recovery, and reuses the
-original credentials for genuine ICMP/TCP/UDP over WSS. This does not
-prove a real-systemd reboot or physical two-host recovery.
+**real** nft guard creation and before Go State commit. It proves
+durable journal reservation and fail-closed rejection of a guard-only
+Crash without an original-kernel deletion witness; it does **not**
+claim successful vacancy-only reconciliation or credential retry.
+The same harness exercises original tagged partial WG compensation,
+end-to-end genuine ICMP/TCP/UDP over WSS in normal Create/Remove,
+and migrated WG objects both UP and DOWN via
+`STL_WSS_R5_MIGRATED_WG_TEST=active|down`, proving that neither
+namespace-local absence nor temporarily missing UDP socket alone
+can retire an nft ingress guard or original WSS credentials.
+The harness uses disposable rootless kernel WireGuard+nft with a
+systemd **shim**, not real PID1 reboot or physical two-host recovery.
