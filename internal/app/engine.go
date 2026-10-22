@@ -15,6 +15,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/hostidentity"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
@@ -46,7 +47,10 @@ type Engine struct {
 	restorePersistence RestorePersistence
 	restoreExecutable  string
 	restoreModules     func(context.Context, domain.Link) error
-	wssRetirement      interface {
+	// Trusted current kernel lifetime source. Tests in package app can
+	// inject deterministic boot transitions; production has no override.
+	kernelBootID  func() (string, error)
+	wssRetirement interface {
 		RetireAfterRemove(context.Context, domain.Link, state.WSSFileIdentity) error
 		CaptureIdentity(context.Context, domain.Link) (state.WSSFileIdentity, error)
 		VerifyAbsent(context.Context, domain.Link) error
@@ -70,7 +74,8 @@ func New(backends *backend.Registry, store state.Store, locks Locker) (*Engine, 
 	if backends == nil || store == nil || locks == nil {
 		return nil, fmt.Errorf("backends, store, and locks are required")
 	}
-	e := &Engine{backends: backends, store: store, locks: locks}
+	e := &Engine{backends: backends, store: store, locks: locks,
+		kernelBootID: hostidentity.CurrentKernelBootID}
 	if impl, exists := backends.Get(domain.BackendIPsec); exists {
 		// An operational IPsec backend can be used only inside this Engine's
 		// canonical mutation/journal authority, not by a parallel CLI writer.

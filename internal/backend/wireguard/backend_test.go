@@ -31,6 +31,7 @@ type fakeKernel struct {
 	publicKeyOverride string // malformed literal for explicit inspection-denial tests
 	presharedDrift    bool
 	addressExtra      map[string]any
+	extraIPV6         bool
 	deletedInterfaces int
 }
 
@@ -62,6 +63,9 @@ func (f *fakeKernel) Run(_ context.Context, binary string, args ...string) (linu
 				row[key] = value
 			}
 			addrs = append(addrs, row)
+		}
+		if f.extraIPV6 {
+			addrs = append(addrs, map[string]any{"family": "inet6", "local": "fe80::1234", "prefixlen": 64})
 		}
 		raw, _ := json.Marshal([]any{map[string]any{"ifindex": f.target.IfIndex, "ifname": f.target.Name, "addr_info": addrs}})
 		return linux.CommandResult{Stdout: raw}, nil

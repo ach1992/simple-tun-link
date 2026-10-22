@@ -302,6 +302,25 @@ No namespace-local inventory is labeled a complete host-wide proof.
 Partial compensation preserves its journal and conservative host
 protection.
 
+A separately confirmed `arm-wss-cold-boot` checkpoint writes
+the real kernel-provided boot UUID into the original, durable WSS
+journal under canonical locks, without changing host resources.
+After a **separately Owner-approved full kernel reboot** destroys
+the original WG generation across all network namespaces,
+`reconcile-wss-cold-boot` compares the new kernel boot ID
+against that immutable pre-reboot checkpoint, authenticates
+the original committed owner and issuance-time fingerprints, and
+verifies strict CURRENT-boot helper/nft/WG/socket vacancy. It may
+then atomically consume only the exact journal and publish the
+original receipt for a committed Remove. It neither restarts the
+host nor removes kernel/firewall/service objects and can never
+infer a reboot from a missing local interface/socket. An unarmed,
+same-boot, tampered, unknown or competing-resource case retains
+all journal/resource/credential quarantine. Read the explicit Owner
+authorization, backup, namespace and rollback procedure in
+`docs/OPERATOR-RECOVERY.md`. The local malicious-root
+threat boundary remains unchanged.
+
 A separate `reconcile-wss-repair-vacant` operation verifies all
 original issuance-time private fingerprints AND host vacancy before
 clearing a committed Ensure/repair journal while preserving the Link.

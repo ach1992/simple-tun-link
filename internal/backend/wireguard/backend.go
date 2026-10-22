@@ -572,7 +572,7 @@ func (b *Backend) Verify(ctx context.Context, req core.Request) (core.Observatio
 		return nil, err
 	}
 	if b.wssHost != nil {
-		return b.verifyWSS(req, current.(observation))
+		return b.verifyWSS(ctx, req, current.(observation))
 	}
 	obs := current.(observation)
 	owned, err := b.firewall.HasOwnedInbound(ctx, req.Link.ID, false)

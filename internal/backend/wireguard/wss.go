@@ -35,6 +35,33 @@ func wssHelperClaim(id domain.LinkID) domain.ResourceClaim {
 	return domain.ResourceClaim{Kind: domain.ResourceBackendID, Key: "wss/helper/" + string(id)}
 }
 
+// requireCompleteWSSOriginal is the ONE destructive/operational acceptance
+// gate for a live canonical original WSS WG. Crash compensation intentionally
+// accepts some genuine partial intermediate states via a separate subset
+// predicate, but normal Ensure/Remove/Verify must never adopt a partial or
+// drifted WG device. It independently re-reads exact ifindex-bound IPv4
+// metadata and sensitive PSK absence: generic read-only WG diagnostics can
+// omit IPv6/peer/broadcast/lifetime extras, so .matches alone is insufficient.
+// Endpoint is deliberately NOT pinned: authenticated WG roaming is valid.
+func (b *Backend) requireCompleteWSSOriginal(ctx context.Context, link domain.Link,
+	wg observedLink, name string) error {
+	alias, err := linux.WSSOwnerTag(link.ID, core.WSSOrigin(ctx))
+	if err != nil || !wg.Exists || wg.IfIndex <= 0 || wg.Name != name ||
+		wg.Alias != alias || wg.Owner != link.ID ||
+		!wg.matches(link, name) || wg.FwMark != 0 {
+		return fmt.Errorf("original WSS WireGuard owner/config/mark mismatch")
+	}
+	address, err := b.originalWSSAddresses(ctx, name, wg.IfIndex)
+	if err != nil || len(address) != 1 || address[0] != link.Addresses.Local ||
+		!slices.Equal(address, wg.IPv4Addresses) {
+		return fmt.Errorf("original WSS WireGuard address metadata drift")
+	}
+	if err := b.requireOriginalWSSNoPSK(ctx, wg); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
 func (b *Backend) planWSS(ctx context.Context, req core.Request, obs observation) (core.Plan, error) {
 	path, err := composition.Build(req.Link, composition.CarrierForLink(req.Link))
 	if err != nil {
@@ -93,8 +120,8 @@ func (b *Backend) validateWSS(ctx context.Context, req core.Request, obs observa
 			domain.ResourceClaim{Kind: domain.ResourceInterface, Key: p.name}, req.OwnedResources); err != nil {
 			return err
 		}
-		if !obs.Target.matches(req.Link, p.name) {
-			return fmt.Errorf("WireGuard interface drift; preserving original state")
+		if err := b.requireCompleteWSSOriginal(ctx, req.Link, obs.Target, p.name); err != nil {
+			return fmt.Errorf("WireGuard interface drift; preserving original state: %w", err)
 		}
 	}
 	// An existing same-name nft table or systemd service is NOT proof of
@@ -156,7 +183,7 @@ func (b *Backend) applyWSS(ctx context.Context, req core.Request, obs observatio
 		return b.ensureWSS(ctx, req, obs, p)
 	}
 	if req.Operation == core.OperationRemove {
-		return b.removeWSS(ctx, req, p)
+		return b.removeWSS(ctx, req, obs, p)
 	}
 	return nil, fmt.Errorf("unsupported WSS operation")
 }
@@ -248,7 +275,7 @@ func (b *Backend) ensureWSS(ctx context.Context, req core.Request, obs observati
 	return undo, nil
 }
 
-func (b *Backend) removeWSS(ctx context.Context, req core.Request, p plan) (core.Rollback, error) {
+func (b *Backend) removeWSS(ctx context.Context, req core.Request, obs observation, p plan) (core.Rollback, error) {
 	if p.interfaceChange {
 		if err := b.requireRecreationCredential(req.Link); err != nil {
 			return nil, err
@@ -288,8 +315,15 @@ func (b *Backend) removeWSS(ctx context.Context, req core.Request, p plan) (core
 			return undo, err
 		}
 		target := current.(observation).Target
-		if !target.matches(req.Link, p.name) || target.IfIndex <= 0 {
-			return undo, fmt.Errorf("WSS WG identity drift before Remove")
+		// The original ifindex is pinned by the Engine's locked initial
+		// observation. A newly installed same-name/same-alias WG must not
+		// silently become the target of the original deletion transaction.
+		if !obs.Target.Exists || obs.Target.IfIndex <= 0 ||
+			target.IfIndex != obs.Target.IfIndex {
+			return undo, fmt.Errorf("original WSS WG ifindex changed before Remove")
+		}
+		if err := b.requireCompleteWSSOriginal(ctx, req.Link, target, p.name); err != nil {
+			return undo, fmt.Errorf("WSS WG identity drift before Remove: %w", err)
 		}
 		if err := b.deleteLink(ctx, target.IfIndex); err != nil {
 			return nil, fmt.Errorf("%w: kernel WG Delete outcome unverified", core.ErrIndeterminateHostEffect)
@@ -325,12 +359,15 @@ func (b *Backend) removeWSS(ctx context.Context, req core.Request, p plan) (core
 	return undo, nil
 }
 
-func (b *Backend) verifyWSS(req core.Request, obs observation) (core.Observation, error) {
+func (b *Backend) verifyWSS(ctx context.Context, req core.Request, obs observation) (core.Observation, error) {
 	name, _ := InterfaceName(req.Link.ID)
 	switch req.Operation {
 	case core.OperationEnsure:
-		if !obs.GuardPresent || !obs.HelperPresent || !obs.Target.matches(req.Link, name) {
+		if !obs.GuardPresent || !obs.HelperPresent {
 			return nil, fmt.Errorf("WSS sidecar/ingress/kernel WireGuard are not concurrently ready")
+		}
+		if err := b.requireCompleteWSSOriginal(ctx, req.Link, obs.Target, name); err != nil {
+			return nil, fmt.Errorf("WSS full original WireGuard verification failed: %w", err)
 		}
 	case core.OperationRemove:
 		if obs.GuardPresent || obs.HelperLoaded || (obs.Target.Exists && obs.Target.Owner == req.Link.ID) {
@@ -370,8 +407,9 @@ func (b *Backend) CrashHostVacant(ctx context.Context, observed core.Observation
 	// Require a witness issued after this transaction deleted that exact
 	// original kernel object. Read-only vacancy reconciliation of an
 	// unproven prior crash remains quarantined for manual recovery.
-	if !core.HasWSSWGDeletionWitness(ctx, current.WSSLink.ID) {
-		return false, fmt.Errorf("original WSS WG kernel deletion witness absent; preserve crash journal and private material")
+	if !core.HasWSSWGDeletionWitness(ctx, current.WSSLink.ID) &&
+		!core.HasWSSColdBootExtinctionWitness(ctx, current.WSSLink.ID) {
+		return false, fmt.Errorf("original WSS WG kernel deletion/cold-boot witness absent; preserve crash journal and private material")
 	}
 	staging, err := linux.WSSStagingName(current.WSSLink.ID, core.WSSOrigin(ctx))
 	if err != nil {

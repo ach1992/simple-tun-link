@@ -475,6 +475,36 @@ its receipt retryable; a retired Link ID cannot be reused. Arbitrary
 must be separately retired from their external storage after confirmation.
 The state schema is v4; older binaries must not attempt to manage WSS Links.
 
+### Owner-gated WSS whole-kernel-reset reconciliation (unreleased)
+
+When a durable WSS crash journal has lost its original, in-process
+kernel deletion proof, **do not** clear it from missing local WG/UDP
+observations. A moved DOWN interface can become active again. A
+real full-kernel reboot, separately planned and authorized by the
+Owner, terminates ALL original kernel WG objects across namespaces.
+
+```sh
+# Before the separately authorized full-host reboot:
+sudo stl link arm-wss-cold-boot LINK_ID --confirm LINK_ID --json
+# After that real reboot and independently verified current host absence:
+sudo stl link reconcile-wss-cold-boot LINK_ID --confirm LINK_ID --json
+```
+
+The first command durably checkpoints the kernel boot UUID into the
+original protected journal, **does not reboot**, changes no host
+resources and retires no credentials. The second refuses the same
+kernel boot or unarmed journal, rereads original State ownership,
+claims and committed credential identity, confirms complete current-
+boot helper/nft/WG/socket vacancy and commits the exact one-time
+State transition without modifying host networking. Committed Remove
+produces a fingerprint-bound receipt; separate `retire-wss`
+is still necessary and fail closed. For committed Ensure/repair the
+committed Link and credentials remain intact for authorized restore.
+Owner approval is **mandatory for the external whole-host reboot**;
+the CLI never schedules, performs or authorizes it. Read full
+preflight, namespace ownership, backup, failure and rollback plan in
+[operator recovery](OPERATOR-RECOVERY.md#unreleased-wss-executable-manual-cold-kernel-reboot-recovery).
+
 ### WSS R2: crash-safe preparation and explicit vacancy reconciliation
 
 Interrupted WSS Ensure/Remove or repair may leave a **durable,
@@ -501,9 +531,10 @@ This initial-Ensure command never changes any host object or credential.
 The present R5 safety implementation deliberately **does not issue a
 retirement witness from namespace-local absence**; a pre-kernel,
 guard-only crash can therefore remain quarantined even if the guard
-was later removed externally. Operator-directed, separately attested
-maintenance is required where no original kernel-deletion witness can
-be reconstructed. No stale journal may be silently replayed.
+was later removed externally. The explicit Owner-approved cold-kernel-reset
+recovery path above is now implemented for a lost witness; without
+its durable pre-reboot checkpoint and strict post-boot checks, the
+original journal remains quarantined. No stale journal may be silently replayed.
 
 For a **previously committed Remove**, whose host effects have entirely
 disappeared, use a separate confirmation path:

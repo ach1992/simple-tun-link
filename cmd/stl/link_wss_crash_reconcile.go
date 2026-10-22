@@ -29,6 +29,12 @@ func linkWSSCrashRepairVacantCommand(args []string, out, errOut io.Writer, opts 
 func linkWSSCrashOriginalCommand(args []string, out, errOut io.Writer, opts *runtimeOptions) int {
 	return linkWSSCrashCommandMode(args, out, errOut, opts, "original")
 }
+func linkWSSColdBootArmCommand(args []string, out, errOut io.Writer, opts *runtimeOptions) int {
+	return linkWSSCrashCommandMode(args, out, errOut, opts, "cold-boot-arm")
+}
+func linkWSSColdBootReconcileCommand(args []string, out, errOut io.Writer, opts *runtimeOptions) int {
+	return linkWSSCrashCommandMode(args, out, errOut, opts, "cold-boot")
+}
 func linkWSSCrashCommand(args []string, out, errOut io.Writer, opts *runtimeOptions, removed bool) int {
 	mode := "initial-vacant"
 	if removed {
@@ -40,6 +46,8 @@ func linkWSSCrashCommandMode(args []string, out, errOut io.Writer, opts *runtime
 	removed := mode == "removed"
 	repair := mode == "repair-vacant"
 	original := mode == "original"
+	coldBootArm := mode == "cold-boot-arm"
+	coldBoot := mode == "cold-boot"
 	command := "reconcile-wss-vacant"
 	if removed {
 		command = "reconcile-wss-removed"
@@ -47,6 +55,10 @@ func linkWSSCrashCommandMode(args []string, out, errOut io.Writer, opts *runtime
 		command = "reconcile-wss-repair-vacant"
 	} else if original {
 		command = "reconcile-wss-original"
+	} else if coldBootArm {
+		command = "arm-wss-cold-boot"
+	} else if coldBoot {
+		command = "reconcile-wss-cold-boot"
 	}
 	isJSON := len(args) == 4 && args[3] == "--json"
 	if !((len(args) == 3 || isJSON) && args[1] == "--confirm" && args[0] == args[2]) {
@@ -70,7 +82,11 @@ func linkWSSCrashCommandMode(args []string, out, errOut io.Writer, opts *runtime
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if removed {
+	if coldBootArm {
+		err = engine.ArmWSSColdBootRecovery(ctx, id)
+	} else if coldBoot {
+		err = engine.ReconcileWSSCrashColdBoot(ctx, id)
+	} else if removed {
 		err = engine.ReconcileWSSCrashRemoved(ctx, id)
 	} else if repair {
 		err = engine.ReconcileWSSCrashRepairVacant(ctx, id)
@@ -85,6 +101,22 @@ func linkWSSCrashCommandMode(args []string, out, errOut io.Writer, opts *runtime
 			details = "WSS journal retained: original-object identity, scoped compensation or final host vacancy unverified. Earlier exact-owner host compensation may have been applied; reinspect and retry only with this original journal"
 		}
 		return readCommandError(out, errOut, isJSON, stlerr.CodeOf(err), "wss_crash_reconcile", details)
+	}
+	if coldBootArm {
+		if isJSON {
+			return encodeWSSColdBootResult(out, id, true)
+		}
+		fmt.Fprintf(out, "WSS Link %s cold-boot recovery checkpoint durably armed; original journal, firewall, kernel, services, credentials and owner claims unchanged.\n", id)
+		fmt.Fprintln(out, "No reboot performed. Arrange separate Owner-approved whole-kernel reboot after host/service impact review, then use reconcile-wss-cold-boot; ordinary recovery remains fail closed.")
+		return 0
+	}
+	if coldBoot {
+		if isJSON {
+			return encodeWSSColdBootResult(out, id, false)
+		}
+		fmt.Fprintf(out, "WSS Link %s original cold-boot generation extinct; current-boot host vacancy verified; exact journal/State transition committed without host mutation.\n", id)
+		fmt.Fprintln(out, "For committed Remove, retire-wss still requires the original credential receipt and fresh strict absence.")
+		return 0
 	}
 	if original && isJSON {
 		payload := struct {
@@ -122,6 +154,21 @@ func linkWSSCrashCommandMode(args []string, out, errOut io.Writer, opts *runtime
 		fmt.Fprintf(out, "WSS Link %s Removed from durable State after verified absence; original retirement receipt committed. No host files, services or kernel resources changed. Use retire-wss to retire the exact original credentials.\n", id)
 	} else {
 		fmt.Fprintf(out, "WSS Link %s pre-effect journal cleared after host vacancy proof. No host resources or credentials modified. Retry only the original Link identity and protected handoff.\n", id)
+	}
+	return 0
+}
+
+// Versioned no-secret result. Armed does not mean a reboot occurred.
+func encodeWSSColdBootResult(out io.Writer, id domain.LinkID, armed bool) int {
+	payload := map[string]any{
+		"schema_version": 1, "link_id": id,
+		"recovery_method":      "owner_approved_cold_boot",
+		"checkpoint_persisted": armed, "journal_cleared": !armed,
+		"host_mutated": false, "reboot_performed": false,
+		"kernel_reset_verified": !armed,
+	}
+	if err := json.NewEncoder(out).Encode(payload); err != nil {
+		return 1
 	}
 	return 0
 }

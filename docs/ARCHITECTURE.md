@@ -759,11 +759,32 @@ recovery without changing ordinary Link automatic replay:
   State/journal commit. Committed Remove publishes the original
   retirement receipt; committed repair preserves its Link.
 
+**Durable cold-boot recovery phase:** an explicitly confirmed
+`arm-wss-cold-boot` command adds only
+`cold_boot_armed_from` (the current, kernel-issued UUID) to
+the original validated State v4 pre-effect journal. It is never a
+host deletion witness and it cannot be changed after a reboot.
+An independently Owner-authorized full-host kernel reboot terminates
+the entire original WG kernel generation across all old network
+namespaces, including moved-UP/DOWN devices. On a different boot,
+`reconcile-wss-cold-boot` revalidates original journal/committed
+claims, private issuance identity, current-kernel helper/guard/WG/UDP
+absence and exact Boot-ID change before its atomic State transition.
+This path does NOT delete any host objects or retire credentials; a
+committed Remove receives an exact immutable retirement receipt.
+A container/unit/process restart or a spoofable operator-supplied
+boot UUID is not sufficient. If any prerequisite fails, retain
+quarantine. Rootless acceptance simulates kernel-boot UUID change
+under a disposable private procfs mount and explicitly cleans its
+own ephemeral kernel objects; it does not constitute physical reboot
+acceptance. See OPERATOR-RECOVERY.md for Owner consent, affected
+namespaces, backups and rollback.
+
 Unverifiable/foreign effects are quarantined, not adopted by name.
 Physical systemd/field/ARM64 WSS and independent review remain separate
 from isolated executable proof.
 
-For reproducible **27-scenario rootless real-kernel acceptance** on a
+For reproducible **31-scenario rootless real-kernel acceptance** on a
 disposable amd64 Linux test host with the pinned local fixture already
 prepared, run `bash scripts/e2e/wss-managed-wireguard-matrix.sh` from
 a clean exact-HEAD checkout as an unprivileged user. It builds the

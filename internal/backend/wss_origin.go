@@ -62,3 +62,32 @@ func HasWSSWGDeletionWitness(ctx context.Context, id domain.LinkID) bool {
 	proof, ok := ctx.Value(wssWGDeletionKey{}).(wssWGDeletionProof)
 	return ok && proof.id == id && proof.nonce != "" && proof.nonce == WSSOrigin(ctx)
 }
+
+// A separate, in-memory proof kind can be issued by the Engine ONLY after
+// comparing a durable pre-reboot boot ID against the fixed kernel-provided
+// current boot ID in a later invocation. All original kernel WireGuard
+// instances (in ANY network namespace) are necessarily extinct after a
+// complete kernel reboot; current-boot replacement resources still need
+// strict independent readback. This witness NEVER permits guard mutation.
+type wssColdBootExtinctionProof struct {
+	id    domain.LinkID
+	nonce string
+}
+type wssColdBootKey struct{}
+
+func WithWSSColdBootExtinct(ctx context.Context, id domain.LinkID) (context.Context, error) {
+	if ctx == nil || id.Validate() != nil || WSSOrigin(ctx) == "" {
+		return nil, errors.New("WSS cold-boot generation witness missing")
+	}
+	return context.WithValue(ctx, wssColdBootKey{}, wssColdBootExtinctionProof{
+		id: id, nonce: WSSOrigin(ctx),
+	}), nil
+}
+
+func HasWSSColdBootExtinctionWitness(ctx context.Context, id domain.LinkID) bool {
+	if ctx == nil {
+		return false
+	}
+	proof, ok := ctx.Value(wssColdBootKey{}).(wssColdBootExtinctionProof)
+	return ok && proof.id == id && proof.nonce != "" && proof.nonce == WSSOrigin(ctx)
+}

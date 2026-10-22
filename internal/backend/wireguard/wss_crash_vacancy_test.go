@@ -45,6 +45,13 @@ func TestWSSCrashVacancyDeniesUnexpectedGlobalKernelIdentity(t *testing.T) {
 	if vacant, vacancyErr := b.CrashHostVacant(ctx, observation); vacancyErr == nil || vacant {
 		t.Fatal("namespace-local empty state was accepted without original deletion witness")
 	}
+	bootWitness, witnessErr := core.WithWSSColdBootExtinct(ctx, link.ID)
+	if witnessErr != nil {
+		t.Fatal(witnessErr)
+	}
+	if cleared, err := b.CrashHostVacant(bootWitness, observation); err != nil || !cleared {
+		t.Fatalf("old-kernel verified extinct and truly vacant host was refused: %v", err)
+	}
 	ctx, err = core.WithWSSWGDeleted(ctx, link.ID)
 	if err != nil {
 		t.Fatal(err)

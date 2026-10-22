@@ -9,6 +9,7 @@ import (
 
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/hostidentity"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
@@ -96,6 +97,118 @@ func (e *Engine) ReconcileWSSCrashRepairVacant(ctx context.Context, id domain.Li
 func (e *Engine) ReconcileWSSCrashOriginal(ctx context.Context, id domain.LinkID) error {
 	return e.reconcileWSSCrashMode(ctx, id, "original")
 }
+
+// ArmWSSColdBootRecovery stores a durable, NONDESTRUCTIVE kernel boot
+// checkpoint for the EXACT journal and committed WSS generation. This is an
+// operator-confirmed maintenance gate, not an instruction to reboot or
+// a certificate that a resource has disappeared. A later true kernel reboot
+// can prove old WG instances extinct in ALL network namespaces, including
+// migrated-DOWN interfaces invisible to local wg/ss readback.
+func (e *Engine) ArmWSSColdBootRecovery(ctx context.Context, id domain.LinkID) error {
+	if err := id.Validate(); err != nil {
+		return stlerr.New(stlerr.CodeInvalid, "wss_cold_boot_arm", string(id), "wireguard-wss", "invalid WSS Link ID")
+	}
+	maintenance, err := e.acquireMaintenance(ctx)
+	if err != nil {
+		return err
+	}
+	defer maintenance()
+	unlock, err := e.locks.Acquire(ctx, []domain.ResourceClaim{linkLock(id)})
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	s, err := e.store.Load(ctx)
+	if err != nil {
+		return err
+	}
+	op, ok := s.FindWSSCrashOperation(id)
+	if !ok {
+		return stlerr.New(stlerr.CodeConflict, "wss_cold_boot_arm", string(id), "wireguard-wss",
+			"no original WSS pre-effect crash journal exists")
+	}
+	claims, err := resourceLockClaims(op.Resources)
+	if err != nil {
+		return err
+	}
+	release, err := e.locks.Acquire(ctx, claims)
+	if err != nil {
+		return err
+	}
+	defer release()
+	s, err = e.store.Load(ctx)
+	if err != nil {
+		return err
+	}
+	latest, ok := s.FindWSSCrashOperation(id)
+	if !ok || !sameWSSCrashOperation(latest, op) {
+		return fmt.Errorf("WSS journal changed during cold-boot recovery admission")
+	}
+	record, exists := s.Find(id)
+	if exists != op.HadCommittedLink || (exists &&
+		(record.Desired != op.Intent || record.WSSOrigin != op.OriginalHostNonce)) {
+		return fmt.Errorf("original committed WSS owner mismatch before cold-boot recovery admission")
+	}
+	if exists {
+		if err := record.WSSFiles.VerifyLink(op.Intent); err != nil {
+			return err
+		}
+		if e.wssRetirement == nil {
+			return fmt.Errorf("protected original WSS credential attestation unavailable")
+		}
+		identity, verifyErr := e.wssRetirement.CaptureIdentity(ctx, op.Intent)
+		if verifyErr != nil || identity != record.WSSFiles {
+			return fmt.Errorf("original WSS issuance identity changed before cold-boot recovery admission")
+		}
+		for _, claim := range op.Resources {
+			if !slices.Contains(record.OwnedResources, claim) {
+				return fmt.Errorf("WSS cold-boot recovery cannot arm unowned original claims")
+			}
+		}
+	}
+	if e.kernelBootID == nil {
+		return fmt.Errorf("trusted Linux kernel boot generation reader unavailable")
+	}
+	boot, err := e.kernelBootID()
+	if err != nil || !hostidentity.ValidBootID(boot) {
+		return fmt.Errorf("cannot arm WSS cold-boot recovery without trusted kernel boot identity")
+	}
+	if op.ColdBootArmedFrom != "" {
+		if op.ColdBootArmedFrom != boot {
+			return fmt.Errorf("WSS cold-boot recovery armed in a previous boot; cannot overwrite recovery checkpoint")
+		}
+		return nil // repeat within the same boot is nonmutating, never re-arms.
+	}
+	return e.store.Update(ctx, func(snapshot *state.Snapshot) error {
+		entry, ok := snapshot.FindWSSCrashOperation(id)
+		if !ok || !sameWSSCrashOperation(entry, op) {
+			return fmt.Errorf("WSS crash journal changed before durable recovery arm")
+		}
+		currentRecord, currentExists := snapshot.Find(id)
+		if currentExists != exists || (exists && (currentRecord.Desired != record.Desired ||
+			currentRecord.WSSOrigin != record.WSSOrigin ||
+			currentRecord.WSSFiles != record.WSSFiles ||
+			!slices.Equal(currentRecord.OwnedResources, record.OwnedResources))) {
+			return fmt.Errorf("WSS committed owner changed before durable recovery arm")
+		}
+		for i := range snapshot.WSSCrashOperations {
+			if snapshot.WSSCrashOperations[i].Intent.ID == id {
+				snapshot.WSSCrashOperations[i].ColdBootArmedFrom = boot
+				return nil
+			}
+		}
+		return fmt.Errorf("WSS journal disappeared before durable cold-boot arm")
+	})
+}
+
+// ReconcileWSSCrashColdBoot consumes the durable cold-boot checkpoint ONLY
+// in a later kernel boot, after a separate read-only strict host vacancy
+// inspection and exact committed credential identity check. It performs NO
+// host mutation, credential removal, reboot or foreign-object cleanup.
+func (e *Engine) ReconcileWSSCrashColdBoot(ctx context.Context, id domain.LinkID) error {
+	return e.reconcileWSSCrashMode(ctx, id, "cold-boot")
+}
+
 func (e *Engine) reconcileWSSCrash(ctx context.Context, id domain.LinkID, removed bool) error {
 	mode := "initial-vacant"
 	if removed {
@@ -107,7 +220,8 @@ func (e *Engine) reconcileWSSCrashMode(ctx context.Context, id domain.LinkID, mo
 	removed := mode == "removed"
 	repair := mode == "repair-vacant"
 	originalRecovery := mode == "original"
-	if mode != "removed" && mode != "repair-vacant" && mode != "initial-vacant" && !originalRecovery {
+	coldBoot := mode == "cold-boot"
+	if mode != "removed" && mode != "repair-vacant" && mode != "initial-vacant" && !originalRecovery && !coldBoot {
 		return stlerr.New(stlerr.CodeInvalid, "wss_reconcile", string(id), "wireguard-wss", "unsupported WSS recovery operation")
 	}
 	if err := id.Validate(); err != nil {
@@ -132,7 +246,7 @@ func (e *Engine) reconcileWSSCrashMode(ctx context.Context, id domain.LinkID, mo
 		return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id), "wireguard-wss",
 			"no durable WSS crash journal exists")
 	}
-	if originalRecovery {
+	if originalRecovery || coldBoot {
 		removed = op.Operation == "remove"
 		repair = op.Operation == "ensure" && op.HadCommittedLink
 	}
@@ -218,6 +332,28 @@ func (e *Engine) reconcileWSSCrashMode(ctx context.Context, id domain.LinkID, mo
 		return stlerr.New(stlerr.CodeState, "wss_reconcile", string(id),
 			"wireguard-wss", "invalid original WSS journal host-object identity")
 	}
+	var recoveredBoot string
+	if coldBoot {
+		if !hostidentity.ValidBootID(op.ColdBootArmedFrom) {
+			return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id), "wireguard-wss",
+				"cold-boot recovery not armed in a durable original journal")
+		}
+		if e.kernelBootID == nil {
+			return fmt.Errorf("trusted kernel boot identity reader unavailable")
+		}
+		recoveredBoot, err = e.kernelBootID()
+		if err != nil || !hostidentity.ValidBootID(recoveredBoot) ||
+			recoveredBoot == op.ColdBootArmedFrom {
+			return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id), "wireguard-wss",
+				"no independently verified kernel reboot after recovery was armed")
+		}
+		// Only CrashHostVacant may consume this typed proof. It never
+		// authorizes deleting a guard or a same-name kernel object.
+		inspectionCtx, err = backend.WithWSSColdBootExtinct(inspectionCtx, id)
+		if err != nil {
+			return err
+		}
+	}
 	observed, err := impl.Inspect(inspectionCtx, op.Intent)
 	if err != nil {
 		return stlerr.Wrap(stlerr.CodeInspect, "wss_reconcile", string(id),
@@ -275,6 +411,12 @@ func (e *Engine) reconcileWSSCrashMode(ctx context.Context, id domain.LinkID, mo
 		return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id), "wireguard-wss",
 			"WSS resources remain or identity uncertain; preserve journal and host material")
 	}
+	if coldBoot {
+		currentBoot, bootErr := e.kernelBootID()
+		if bootErr != nil || currentBoot != recoveredBoot {
+			return fmt.Errorf("kernel boot generation changed before WSS recovery commit")
+		}
+	}
 	return e.store.Update(ctx, func(s *state.Snapshot) error {
 		entry, ok := s.FindWSSCrashOperation(id)
 		if !ok || !sameWSSCrashOperation(entry, op) {
@@ -321,5 +463,7 @@ func (e *Engine) reconcileWSSCrashMode(ctx context.Context, id domain.LinkID, mo
 func sameWSSCrashOperation(a, b state.WSSCrashOperation) bool {
 	return a.Intent == b.Intent && a.Operation == b.Operation && a.Nonce == b.Nonce &&
 		a.HadCommittedLink == b.HadCommittedLink &&
-		a.OriginalHostNonce == b.OriginalHostNonce && slices.Equal(a.Resources, b.Resources)
+		a.OriginalHostNonce == b.OriginalHostNonce &&
+		a.ColdBootArmedFrom == b.ColdBootArmedFrom &&
+		slices.Equal(a.Resources, b.Resources)
 }

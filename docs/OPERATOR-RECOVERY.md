@@ -214,19 +214,22 @@ rejects an **unmarked staging object**:
    STL does not currently create a durable pre-alias ifindex witness
    and **cannot ordinarily supply that proof itself**.
 3. If this proof cannot be obtained, **do not delete the object**.
-   Keep guard + journal quarantine and arrange separately authorized
-   maintenance or an independently verified host/network namespace
-   teardown under an impact and rollback plan. A host restart is not
-   automatically safe for other Links, and is not authorized by this
-   recovery command. Absence or a reset must be verified anew;
-   never assume an unobserved side effect completed.
+   Keep guard + journal quarantine. The implemented two-stage
+   cold-boot recovery procedure below can establish the extinction of
+   the old WG kernel generation across ALL namespaces without deleting
+   a possibly foreign interface by name. It requires a separate
+   Owner-approved full-host reboot, strict postboot readback, and
+   checkpoint continuity; THIS command does not authorize any reboot.
+   Never assume a reboot, teardown or absence from an unobserved effect.
 4. The normal `reconcile-wss-original` command cannot retroactively
    prove a kernel deletion made outside its original, trusted
    nonce/ifindex-verified transaction. It must refuse to consume the
    journal merely because an earlier ambiguous or unmarked kernel effect
-   has disappeared. An independently attested out-of-band cleanup and
-   separate Owner-approved host/State reconciliation plan may be
-   needed; STL does not yet provide an automated manual-proof import.
+   has disappeared. The implemented and owner-gated
+   `arm-wss-cold-boot` / `reconcile-wss-cold-boot` pair is
+   the positive-evidence whole-kernel-reset alternative below; it never
+   accepts a token, a fabricated boot ID or a namespace-local empty
+   inventory as deletion provenance.
    Never remove a durable reservation or fingerprint from State based
    solely on a name or empty inventory. Foreign resources and
    unrelated nft/firewall objects remain out of scope.
@@ -267,3 +270,111 @@ or modifying production networking; neither a reboot nor this command
 is blanket authorization. The disposable real-kernel namespace tests
 cover both moved-UP and moved-DOWN cases; physical host namespace
 coexistence remains a distinct operator acceptance gate.
+
+## Unreleased WSS: executable manual cold-kernel-reboot recovery
+
+**Use only for an unresolved original WSS Crash Journal whose ordinary
+nonce/ifindex compensation cannot prove success**: guard-only initial
+Ensure, interrupted committed repair, post-original-WG-deletion Remove,
+or unmarked/possibly moved original. This procedure is a new, explicit
+**whole-host operational maintenance gate**, not automatic crash
+replay, not arbitrary State editing, not permission to reboot production.
+
+A real Linux **kernel reboot** destroys every old-generation WireGuard
+interface and socket, including interfaces moved to any network
+namespace (UP or DOWN), and ephemeral nft/kernel resources. A process,
+container or systemd-unit restart is **not** a kernel reboot. STL reads
+the fixed `/proc/sys/kernel/random/boot_id` from kernel procfs
+and requires a DIFFERENT canonical boot ID from the protected State
+checkpoint committed **before** the reboot. This is positive
+old-generation extinction evidence, not proof that other managers
+did not create NEW objects after reboot.
+
+1. **Owner authorization and impact plan (outside STL):** obtain
+   explicit approval for the affected host's full reboot, list other
+   Links, SSH/out-of-band rescue access, web services, active namespaces
+   and privileged network managers; reserve a maintenance window.
+   Record a restore-tested, access-restricted backup of the canonical
+   State root **including original journal, receipts and protected
+   credentials**. Record all relevant namespace managers and prevent
+   privileged concurrent replacement of the reserved WSS resources.
+   Do not infer a safe restart from a green rootless test.
+2. **Arm checkpoint on the currently running kernel (no host effects):**
+
+   ```sh
+   sudo stl link arm-wss-cold-boot LINK_ID --confirm LINK_ID --json
+   ```
+
+   Require `checkpoint_persisted:true`,
+   `journal_cleared:false`, `host_mutated:false` and
+   `reboot_performed:false`. This writes the current kernel boot
+   UUID to the exact original, fsynced journal under canonical Engine
+   maintenance/Link/resource locks. It does NOT remove the guard,
+   alter kernel interfaces, touch systemd, reboot, remove private
+   files, or release any reservation. A repeated arm on the SAME boot
+   is idempotent; a subsequent re-arm in a different boot is refused.
+   A checkpoint cannot be manufactured by CLI arguments, environment,
+   uploaded evidence, empty WG/UDP observations, or operator text.
+3. **Separately approved full-host kernel reboot:** perform it using
+   the Owner's established out-of-band change/rollback mechanism;
+   STL intentionally offers **no reboot button or command**. A host
+   reboot affects independent services and Links; include their
+   reinstatement in the maintenance plan. Do not delete a guarded
+   or unmarked original WG manually as a substitute.
+4. **After restart, read-only verify first:** confirm the expected host
+   and physical connectivity; inspect original Link/journal, loaded
+   systemd helper unit, nft ingress guard, public-only WireGuard and
+   UDP socket inventories, and privileged managers. Any NEW occupied
+   resource matching a reserved port, identity or unit must be
+   investigated rather than deleted or adopted by STL.
+5. **Atomic protected State reconciliation only AFTER proof:**
+
+   ```sh
+   sudo stl link reconcile-wss-cold-boot LINK_ID --confirm LINK_ID --json
+   ```
+
+   The actual CLI reloads the exact journal and original committed
+   Link/claims, checks original issuance-time private file SHA-256
+   identity for committed operations, compares the current trusted
+   boot ID with the durable pre-reboot one, refuses an unarmed or
+   same-boot journal, and independently inspects helper, nft, WG,
+   reserved key/listen port and UDP sockets for conflicting
+   current-boot resources. With all proofs valid it performs ONE
+   atomic State update and **no host changes**. For initial Ensure
+   it consumes only that journal. For committed Ensure/repair it
+   retains the identical committed Link, nonce, claims and protected
+   credentials; approved `link restore --all` may then recreate
+   owned effects. For committed Remove it deletes only the original
+   committed State Link and creates its immutable original credential-
+   bound receipt; credential removal is still a SEPARATE
+   `link retire-wss LINK_ID --confirm LINK_ID` operation after
+   a fresh full-host absence and file identity check. Never reuse
+   an already retired Link ID.
+6. **Failure and rollback:** if the reboot did not actually occur,
+   the boot-ID read fails, journal/owner/claims change, original private
+   fingerprint mismatches, a helper/guard/WG/socket reappears or the
+   State commit is uncertain, preserve the original journal,
+   reservations and credentials. Do **not** re-arm over a different
+   checkpoint, remove a guard, edit State JSON, scrub secrets, blindly
+   rerun RestoreAll for the blocked Link, or claim success. Maintain
+   the old protected backups for forensic restore with a separately
+   authorized reconciliation plan. Reboot-before-reconcile is
+   reversible at the control-plane checkpoint level only;
+   reinstating unrelated host services is the Owner's explicit
+   operations rollback responsibility.
+
+**Coexistence/race limit:** this recovery proves old-kernel WG
+generation extinction across ALL old namespaces without enumerating
+each one. It does NOT grant exclusive control of the NEW kernel.
+A privileged actor who replaces a resource, spoofs a nonce or swaps
+an ifindex between readback and deletion can defeat the normal host
+ownership assumptions. Establish exclusive scoped privileged host
+ownership/maintenance and verify newly created namespaces separately.
+A forged/mounted procfs boot UUID by malicious root is outside the
+local-root trust boundary and not an attestation by an external verifier.
+
+The disposable E2E simulates the boot-ID transition **only in a
+private rootless mount namespace AFTER explicitly deleting all test-
+owned old-kernel effects**. It validates the actual production CLI
+State protocol across new CLI processes, but is **not proof of a
+physical kernel reboot**, service restore or provider WAN acceptance.

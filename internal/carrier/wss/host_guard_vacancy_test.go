@@ -108,6 +108,24 @@ func TestWSSHostRemoveGuardFailsClosedBeforeNFTDeletion(t *testing.T) {
 			t.Fatalf("guard proof missing but unsafe host command dispatched: %s", call)
 		}
 	}
+	// Kernel reset is permission to verify read-only State vacancy, NOT
+	// a same-operation proof for removing an nft ingress rule.
+	coldBootContext, err := core.WithWSSColdBootExtinct(ctx, l.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coldBootRunner := &wssGuardVacancyStub{
+		table: guard.TableName(), port: l.WireGuard.ListenPort, comment: noWitnessRunner.comment,
+		other: l.WireGuard.PeerPublicKey,
+	}
+	if undo, err := (Host{Runner: coldBootRunner}).RemoveGuard(coldBootContext, l); err == nil || undo != nil {
+		t.Fatal("old-kernel extinction witness was improperly accepted for live ingress guard deletion")
+	}
+	for _, call := range coldBootRunner.calls {
+		if !strings.HasPrefix(call, "nft -j list") {
+			t.Fatalf("cold-boot witness attempted a host side effect: %s", call)
+		}
+	}
 	ctx, err = core.WithWSSWGDeleted(ctx, l.ID)
 	if err != nil {
 		t.Fatal(err)

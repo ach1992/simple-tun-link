@@ -8,6 +8,7 @@ import (
 
 	"github.com/ach1992/simple-tun-link/internal/composition"
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/hostidentity"
 )
 
 // WSSCrashOperation is a durable, secret-free PRE-EFFECT intent. It is
@@ -19,6 +20,10 @@ type WSSCrashOperation struct {
 	Resources         []domain.ResourceClaim `json:"resources"`
 	HadCommittedLink  bool                   `json:"had_committed_link"`
 	OriginalHostNonce string                 `json:"original_host_nonce,omitempty"`
+	// Explicit operator-armed recovery phase: original kernel boot identity
+	// durably observed BEFORE an independently approved cold reboot. This
+	// marker is not evidence of any resource absence within that boot.
+	ColdBootArmedFrom string `json:"cold_boot_armed_from,omitempty"`
 }
 
 func (s Snapshot) FindWSSCrashOperation(id domain.LinkID) (WSSCrashOperation, bool) {
@@ -83,6 +88,9 @@ func validateWSSCrashOperations(s Snapshot) error {
 		nonce, err := hex.DecodeString(op.Nonce)
 		if err != nil || len(nonce) != 16 || hex.EncodeToString(nonce) != op.Nonce {
 			return fmt.Errorf("invalid WSS pre-effect transaction nonce")
+		}
+		if op.ColdBootArmedFrom != "" && !hostidentity.ValidBootID(op.ColdBootArmedFrom) {
+			return fmt.Errorf("invalid WSS cold-boot recovery checkpoint")
 		}
 		if len(op.Resources) == 0 {
 			return fmt.Errorf("empty WSS pre-effect resource reservation")
