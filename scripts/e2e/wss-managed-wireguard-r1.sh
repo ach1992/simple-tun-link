@@ -554,6 +554,7 @@ if [[ -n "$(printenv STL_WSS_R5_MIGRATED_WG_TEST || :)" ]]; then
     jq --arg boot "$oldboot" '.wss_crash_operations[0].cold_boot_armed_from=$boot' "$lab/alpha-state/state.json" > "$fake_journal"
     chmod 0600 "$fake_journal"
     mv -- "$fake_journal" "$lab/alpha-state/state.json"
+    jq -e '(.wss_crash_operations[0].cold_boot_armed_from|length)==36 and ((.wss_crash_operations[0].cold_boot_source//"")=="")' "$lab/alpha-state/state.json" >/dev/null
     virtual_boot=$(mktemp /tmp/stl-wss-moved-down-boot-XXXXXXXX)
     printf '%s\n' '22222222-2222-4222-8222-222222222222' > "$virtual_boot"
     mount --bind "$virtual_boot" /proc/sys/kernel/random/boot_id
@@ -561,7 +562,7 @@ if [[ -n "$(printenv STL_WSS_R5_MIGRATED_WG_TEST || :)" ]]; then
     if invoke alpha link reconcile-wss-cold-boot "$id" --confirm "$id" > "$lab/alpha/moved-down-virtual-boot-denied.log" 2>&1; then
       echo "FAIL: container Boot ID change released hidden live original WG" >&2; exit 1
     fi
-    jq -e '(.links|length)==1 and (.wss_crash_operations|length)==1 and (.removal_receipts//[]|length)==0' "$lab/alpha-state/state.json" >/dev/null
+    jq -e '(.links|length)==1 and (.wss_crash_operations|length)==1 and (.removal_receipts//[]|length)==0 and ((.wss_crash_operations[0].cold_boot_source//"")=="")' "$lab/alpha-state/state.json" >/dev/null
     ip netns exec beta wg show interfaces | grep -qx 'stlwg0123456789'
     ip netns exec alpha nft -j list table inet "$guard" >/dev/null
     test -d "$lab/alpha-state/credentials/wss/$id"

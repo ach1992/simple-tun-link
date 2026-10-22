@@ -491,8 +491,13 @@ sudo stl link reconcile-wss-cold-boot LINK_ID --confirm LINK_ID --json
 ```
 
 The first command durably checkpoints the kernel boot UUID into the
-original protected journal, **does not reboot**, changes no host
-resources and retires no credentials. Both commands fail closed unless
+original protected journal together with the versioned trusted
+`cold_boot_source` marker, **does not reboot**, changes no host
+resources and retires no credentials. UUID-only checkpoints recorded
+by earlier candidate builds lack this marker and cannot be re-armed or
+reconciled by the cold-boot route: preserve their original protected
+State/journal and follow the Owner-gated manual recovery plan. Both
+commands fail closed unless
 running in the initial host PID namespace with an unshadowed original
 kernel procfs `/proc/sys/kernel/random/boot_id` (no bind-mounted or
 container-generated UUID). A root shell inside a container cannot

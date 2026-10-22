@@ -760,10 +760,15 @@ recovery without changing ordinary Link automatic replay:
   retirement receipt; committed repair preserves its Link.
 
 **Durable cold-boot recovery phase:** an explicitly confirmed
-`arm-wss-cold-boot` command adds only
-`cold_boot_armed_from` (the current, kernel-issued UUID) to
-the original validated State v4 pre-effect journal. It is never a
-host deletion witness and it cannot be changed after a reboot.
+`arm-wss-cold-boot` command atomically adds
+`cold_boot_armed_from` (the current, kernel-issued UUID) **and**
+`cold_boot_source` (`linux-initial-pid-unshadowed-procfs-v1`) to the
+original validated State v4 pre-effect journal. The versioned source
+marker is written only after successful live host-provenance checks;
+it is not a cryptographic attestation against a privileged State writer.
+It is never a host deletion witness and it cannot be changed after a reboot.
+Legacy UUID-only checkpoints remain loadable and preserve reservations,
+but CANNOT authorize Reconcile or be automatically re-armed/upgraded.
 An independently Owner-authorized full-host kernel reboot terminates
 the entire original WG kernel generation across all old network
 namespaces, including moved-UP/DOWN devices. Cold-boot admission

@@ -296,9 +296,13 @@ PID namespace, missing procfs evidence, or ambiguous host setup is
 reconcile via this manual path; original journals and credentials stay
 quarantined. The same verified host-kernel source must yield a DIFFERENT
 canonical UUID from the protected State checkpoint committed **before**
-the actual full-kernel reboot. This is old-generation extinction
-evidence, not proof that other managers did not create NEW objects
-after reboot.
+the actual full-kernel reboot. The checkpoint must also record the
+versioned trusted-source admission marker `cold_boot_source` =
+`linux-initial-pid-unshadowed-procfs-v1`, written in the SAME durable
+transaction as the old boot UUID. A UUID alone from a previous STL
+candidate is not authenticated host provenance and cannot be used by
+this recovery route. This is old-generation extinction evidence, not
+proof that other managers did not create NEW objects after reboot.
 
 1. **Owner authorization and impact plan (outside STL):** obtain
    explicit approval for the affected host's full reboot, list other
@@ -317,12 +321,14 @@ after reboot.
 
    Require `checkpoint_persisted:true`,
    `journal_cleared:false`, `host_mutated:false` and
-   `reboot_performed:false`. This writes the current kernel boot
-   UUID to the exact original, fsynced journal under canonical Engine
-   maintenance/Link/resource locks. It does NOT remove the guard,
+   `reboot_performed:false`. This atomically writes the current kernel
+   boot UUID **and the v1 trusted-source provenance marker** to the exact
+   original, fsynced journal under canonical Engine maintenance/Link/
+   resource locks. It does NOT remove the guard,
    alter kernel interfaces, touch systemd, reboot, remove private
    files, or release any reservation. A repeated arm on the SAME boot
-   is idempotent; a subsequent re-arm in a different boot is refused.
+   is idempotent only for a checkpoint already bearing the trusted-source
+   marker; a subsequent re-arm in a different boot is refused.
    A checkpoint cannot be manufactured by CLI arguments, environment,
    uploaded evidence, empty WG/UDP observations, or operator text.
    If the process is containerized or its procfs origin cannot be
@@ -376,9 +382,10 @@ after reboot.
    an already retired Link ID.
 6. **Failure and rollback:** if the reboot did not actually occur,
    the boot-ID read fails, journal/owner/claims change, original private
-   fingerprint mismatches, a helper/guard/WG/socket reappears or the
-   State commit is uncertain, preserve the original journal,
-   reservations and credentials. Do **not** re-arm over a different
+   fingerprint mismatches, a helper/guard/WG/socket reappears, the
+   original checkpoint has only a legacy UUID without trusted-source
+   provenance, or the State commit is uncertain, preserve the original
+   journal, reservations and credentials. Do **not** re-arm over a different
    checkpoint, remove a guard, edit State JSON, scrub secrets, blindly
    rerun RestoreAll for the blocked Link, or claim success. Maintain
    the old protected backups for forensic restore with a separately
@@ -386,6 +393,20 @@ after reboot.
    reversible at the control-plane checkpoint level only;
    reinstating unrelated host services is the Owner's explicit
    operations rollback responsibility.
+
+**Legacy checkpoint quarantine (pre-provenance candidate):** an
+original State journal with a valid `cold_boot_armed_from` but no
+`cold_boot_source` remains fully readable for diagnostics and
+strict original-object workflows; it does **not** authorize cold-boot
+Reconcile. Even re-running `arm-wss-cold-boot` in a trusted environment
+on the same observed boot will refuse to stamp a legacy checkpoint.
+Do not erase, edit or manually add the marker, copy a fresh checkpoint
+onto it, reissue credentials, force-delete guards or claim that another
+reboot alone can unlock a legacy record. Preserve the exact State root
+and protected backups and arrange a separate Owner-approved original-
+object/State reconciliation plan. The normal two-phase cold-boot route
+requires an initially unarmed journal and a fresh trusted Arm **before**
+a separately approved actual kernel reboot.
 
 **Coexistence/race limit:** this recovery proves old-kernel WG
 generation extinction across ALL old namespaces without enumerating

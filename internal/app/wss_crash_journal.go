@@ -174,6 +174,11 @@ func (e *Engine) ArmWSSColdBootRecovery(ctx context.Context, id domain.LinkID) e
 		return fmt.Errorf("cannot arm WSS cold-boot recovery without trusted kernel boot identity")
 	}
 	if op.ColdBootArmedFrom != "" {
+		// Legacy UUID-only checkpoints were created before trusted procfs
+		// admission. Never turn one into a v1 witness, even on the SAME boot.
+		if op.ColdBootSource != hostidentity.VerifiedHostBootSourceV1 {
+			return fmt.Errorf("legacy WSS cold-boot checkpoint lacks trusted source provenance; journal retained")
+		}
 		if op.ColdBootArmedFrom != boot {
 			return fmt.Errorf("WSS cold-boot recovery armed in a previous boot; cannot overwrite recovery checkpoint")
 		}
@@ -194,6 +199,7 @@ func (e *Engine) ArmWSSColdBootRecovery(ctx context.Context, id domain.LinkID) e
 		for i := range snapshot.WSSCrashOperations {
 			if snapshot.WSSCrashOperations[i].Intent.ID == id {
 				snapshot.WSSCrashOperations[i].ColdBootArmedFrom = boot
+				snapshot.WSSCrashOperations[i].ColdBootSource = hostidentity.VerifiedHostBootSourceV1
 				return nil
 			}
 		}
@@ -334,6 +340,10 @@ func (e *Engine) reconcileWSSCrashMode(ctx context.Context, id domain.LinkID, mo
 	}
 	var recoveredBoot string
 	if coldBoot {
+		if op.ColdBootSource != hostidentity.VerifiedHostBootSourceV1 {
+			return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id), "wireguard-wss",
+				"cold-boot checkpoint lacks verified host-kernel source provenance; original journal retained")
+		}
 		if !hostidentity.ValidBootID(op.ColdBootArmedFrom) {
 			return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id), "wireguard-wss",
 				"cold-boot recovery not armed in a durable original journal")
@@ -465,5 +475,6 @@ func sameWSSCrashOperation(a, b state.WSSCrashOperation) bool {
 		a.HadCommittedLink == b.HadCommittedLink &&
 		a.OriginalHostNonce == b.OriginalHostNonce &&
 		a.ColdBootArmedFrom == b.ColdBootArmedFrom &&
+		a.ColdBootSource == b.ColdBootSource &&
 		slices.Equal(a.Resources, b.Resources)
 }

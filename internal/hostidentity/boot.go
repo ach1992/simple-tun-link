@@ -21,6 +21,13 @@ const (
 	initialPIDNamespace = "pid:[4026531836]"
 )
 
+// VerifiedHostBootSourceV1 identifies checkpoints created by the first
+// host-provenance-aware cold-boot admission protocol. This is a versioned
+// record of trusted-source checks, NOT a substitute for them and not a
+// cryptographic attestation against a privileged State-root writer.
+// Pre-v1 checkpoints have no such record and must never be auto-upgraded.
+const VerifiedHostBootSourceV1 = "linux-initial-pid-unshadowed-procfs-v1"
+
 // ErrUntrustedKernelBootSource is a fail-closed maintenance-only result.
 // It never permits a previously reserved WSS crash journal to be consumed.
 var ErrUntrustedKernelBootSource = errors.New("host kernel boot identity provenance unverified")

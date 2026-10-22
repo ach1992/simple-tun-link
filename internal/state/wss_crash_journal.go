@@ -24,6 +24,10 @@ type WSSCrashOperation struct {
 	// durably observed BEFORE an independently approved cold reboot. This
 	// marker is not evidence of any resource absence within that boot.
 	ColdBootArmedFrom string `json:"cold_boot_armed_from,omitempty"`
+	// Version of the trusted host-kernel source admission used at Arm.
+	// Empty with an existing Boot ID is a readable LEGACY checkpoint,
+	// never evidence for cold-boot Reconcile or permission to re-arm.
+	ColdBootSource string `json:"cold_boot_source,omitempty"`
 }
 
 func (s Snapshot) FindWSSCrashOperation(id domain.LinkID) (WSSCrashOperation, bool) {
@@ -91,6 +95,13 @@ func validateWSSCrashOperations(s Snapshot) error {
 		}
 		if op.ColdBootArmedFrom != "" && !hostidentity.ValidBootID(op.ColdBootArmedFrom) {
 			return fmt.Errorf("invalid WSS cold-boot recovery checkpoint")
+		}
+		// Old journals must LOAD successfully to preserve their protected
+		// reservations and enable separate original-object recovery. But
+		// their pre-provenance boot UUID must never authorize clearance.
+		if op.ColdBootSource != "" && (op.ColdBootSource != hostidentity.VerifiedHostBootSourceV1 ||
+			op.ColdBootArmedFrom == "") {
+			return fmt.Errorf("invalid WSS cold-boot source provenance")
 		}
 		if len(op.Resources) == 0 {
 			return fmt.Errorf("empty WSS pre-effect resource reservation")

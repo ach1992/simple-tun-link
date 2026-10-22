@@ -307,7 +307,15 @@ the real kernel-provided boot UUID into the original, durable WSS
 journal under canonical locks, without changing host resources.
 Host-kernel provenance is checked before Arm, Reconcile and the final
 commit: **initial PID namespace**, unshadowed procfs mount root and
-boot-ID path, live procfs file type and stable mount inventory. A
+boot-ID path, live procfs file type and stable mount inventory.
+Successful Arm atomically persists both the Boot ID and a versioned
+`cold_boot_source` witness (`linux-initial-pid-unshadowed-procfs-v1`).
+Reconcile requires this ORIGINAL recorded witness in addition to a
+currently trusted, different host-kernel Boot ID. A legacy UUID-only
+checkpoint is still readable but never auto-upgraded, re-armed or
+accepted as extinction proof, even if a subsequent process runs in a
+trusted host environment. Original journal, reservations, guard and
+private material remain quarantined for Owner-gated manual resolution. A
 container-restart UUID (including systemd-nspawn's bind-mounted one),
 synthetic procfile, missing/ambiguous procfs evidence or nested PID
 namespace never authorizes generation extinction. Journal, guard,

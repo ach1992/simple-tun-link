@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ach1992/simple-tun-link/internal/backend"
+	"github.com/ach1992/simple-tun-link/internal/hostidentity"
 	"github.com/ach1992/simple-tun-link/internal/state"
 )
 
@@ -68,7 +69,7 @@ func TestWSSColdBootManualCheckpointAndRecoveryAcrossFreshProcesses(t *testing.T
 				causeCrash(t, func() { _, _ = before.Ensure(ctx, link) })
 			}
 			pending, exists := mustLoadCrashSnapshot(t, store).FindWSSCrashOperation(link.ID)
-			if !exists || pending.ColdBootArmedFrom != "" {
+			if !exists || pending.ColdBootArmedFrom != "" || pending.ColdBootSource != "" {
 				t.Fatal("pre-effect journal was not retained before explicit recovery arm")
 			}
 			if err := before.ReconcileWSSCrashColdBoot(ctx, link.ID); err == nil {
@@ -79,6 +80,7 @@ func TestWSSColdBootManualCheckpointAndRecoveryAcrossFreshProcesses(t *testing.T
 			}
 			armed, exists := mustLoadCrashSnapshot(t, store).FindWSSCrashOperation(link.ID)
 			if !exists || armed.ColdBootArmedFrom != testWSSBootBefore ||
+				armed.ColdBootSource != hostidentity.VerifiedHostBootSourceV1 ||
 				!reflect.DeepEqual(armed.Intent, pending.Intent) ||
 				!reflect.DeepEqual(armed.Resources, pending.Resources) {
 				t.Fatal("arming mutated original intent/claims or lost protected checkpoint")
@@ -136,6 +138,80 @@ func TestWSSColdBootManualCheckpointAndRecoveryAcrossFreshProcesses(t *testing.T
 			}
 			if err := after.ReconcileWSSCrashColdBoot(ctx, link.ID); err == nil {
 				t.Fatal("repeat recovery consumed a journal twice")
+			}
+		})
+	}
+}
+
+// A pre-provenance STL version could arm a UUID from a virtualized procfs.
+// Upgrading the binary or relocating protected State to the native host may
+// then yield a DIFFERENT genuine host UUID without any kernel reboot. Legacy
+// records stay loadable but must not authorize State release or be re-armed.
+func TestWSSLegacyVirtualBootCheckpointNeverAuthorizesHostExtinction(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		committed bool
+		remove    bool
+	}{
+		{"initial-ensure", false, false},
+		{"committed-repair", true, false},
+		{"committed-remove", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			root := t.TempDir()
+			host := &crashWSSBackend{fakeBackend: newFakeBackend()}
+			before, store := restartedWSSRecoveryEngine(t, root, host, testWSSBootBefore)
+			link := journalTestLink(t)
+			if tc.committed {
+				if _, err := before.Ensure(ctx, link); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.committed && !tc.remove {
+				delete(host.present, link.ID)
+			}
+			host.crashAfterHost = true
+			if tc.remove {
+				causeCrash(t, func() { _, _ = before.Remove(ctx, link.ID) })
+			} else {
+				causeCrash(t, func() { _, _ = before.Ensure(ctx, link) })
+			}
+			// Model the previous binary's durable UUID-only checkpoint.
+			// No validation or writer may silently add the new source marker.
+			if err := store.Update(ctx, func(s *state.Snapshot) error {
+				for i := range s.WSSCrashOperations {
+					if s.WSSCrashOperations[i].Intent.ID == link.ID {
+						s.WSSCrashOperations[i].ColdBootArmedFrom = testWSSBootBefore
+						return nil
+					}
+				}
+				return errors.New("original journal unexpectedly missing")
+			}); err != nil {
+				t.Fatal(err)
+			}
+			// The namespace-local inventory can be empty while the original
+			// migrated-DOWN kernel object survives elsewhere; admission must
+			// reject BEFORE consulting local vacancy as authority.
+			delete(host.present, link.ID)
+			legacy := mustLoadCrashSnapshot(t, store)
+			op, ok := legacy.FindWSSCrashOperation(link.ID)
+			if !ok || op.ColdBootSource != "" || op.ColdBootArmedFrom != testWSSBootBefore {
+				t.Fatal("legacy journal was dropped or silently upgraded")
+			}
+			for _, boot := range []string{testWSSBootBefore, testWSSBootAfter} {
+				current, _ := restartedWSSRecoveryEngine(t, root, host, boot)
+				if err := current.ArmWSSColdBootRecovery(ctx, link.ID); err == nil ||
+					!strings.Contains(err.Error(), "legacy") {
+					t.Fatalf("legacy checkpoint was rearmed on boot %s: %v", boot, err)
+				}
+				if err := current.ReconcileWSSCrashColdBoot(ctx, link.ID); err == nil ||
+					!strings.Contains(err.Error(), "source provenance") {
+					t.Fatalf("legacy checkpoint certified host extinction on boot %s: %v", boot, err)
+				}
+				if got := mustLoadCrashSnapshot(t, store); !reflect.DeepEqual(got, legacy) {
+					t.Fatal("rejected legacy checkpoint mutated original State, journal, claims, receipts or credential identity")
+				}
 			}
 		})
 	}

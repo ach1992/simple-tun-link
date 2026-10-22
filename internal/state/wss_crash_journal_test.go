@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/hostidentity"
 )
 
 func crashJournalStateFixture(t *testing.T) (domain.Link, WSSCrashOperation) {
@@ -85,6 +86,54 @@ func TestWSSCrashJournalStrictDurableStateAndInvalidRecords(t *testing.T) {
 		t.Fatal("duplicate WSS crash transaction accepted")
 	}
 }
+func TestWSSColdBootSourceSchemaKeepsLegacyReadableButUntrusted(t *testing.T) {
+	_, original := crashJournalStateFixture(t)
+	for _, tc := range []struct {
+		name   string
+		boot   string
+		source string
+		valid  bool
+	}{
+		{"unarmed", "", "", true},
+		{"legacy-uuid-only", "11111111-1111-4111-8111-111111111111", "", true},
+		{"new-trusted-source", "11111111-1111-4111-8111-111111111111", hostidentity.VerifiedHostBootSourceV1, true},
+		{"source-without-checkpoint", "", hostidentity.VerifiedHostBootSourceV1, false},
+		{"unknown-source-version", "11111111-1111-4111-8111-111111111111", "future-source-v2", false},
+		{"invalid-legacy-uuid", "not-a-uuid", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			store := NewFileStore(root)
+			entry := original
+			entry.ColdBootArmedFrom, entry.ColdBootSource = tc.boot, tc.source
+			err := store.Update(context.Background(), func(s *Snapshot) error {
+				s.WSSCrashOperations = append(s.WSSCrashOperations, entry)
+				return nil
+			})
+			if (err == nil) != tc.valid {
+				t.Fatalf("checkpoint validation valid=%t expected=%t: %v", err == nil, tc.valid, err)
+			}
+			if !tc.valid {
+				return
+			}
+			restored, err := store.Load(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			saved, exists := restored.FindWSSCrashOperation(entry.Intent.ID)
+			if !exists || saved.ColdBootArmedFrom != tc.boot || saved.ColdBootSource != tc.source {
+				t.Fatal("durable WSS checkpoint lost provenance or silently upgraded")
+			}
+			if tc.name == "legacy-uuid-only" {
+				raw, err := os.ReadFile(filepath.Join(root, "state.json"))
+				if err != nil || strings.Contains(string(raw), "cold_boot_source") {
+					t.Fatal("legacy checkpoint was silently stamped with verified-source version")
+				}
+			}
+		})
+	}
+}
+
 func TestLegacyStateCannotGainWSSJournalThroughWhitespaceOrCasing(t *testing.T) {
 	for _, k := range []string{"wss_crash_operations", "WsS_CrAsH_OpErAtIoNs", "wss"} {
 		raw := []byte("{\"schema_version\":3,\"links\":[],\"" + k + "\" : []}")
