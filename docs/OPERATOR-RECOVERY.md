@@ -283,12 +283,22 @@ replay, not arbitrary State editing, not permission to reboot production.
 A real Linux **kernel reboot** destroys every old-generation WireGuard
 interface and socket, including interfaces moved to any network
 namespace (UP or DOWN), and ephemeral nft/kernel resources. A process,
-container or systemd-unit restart is **not** a kernel reboot. STL reads
-the fixed `/proc/sys/kernel/random/boot_id` from kernel procfs
-and requires a DIFFERENT canonical boot ID from the protected State
-checkpoint committed **before** the reboot. This is positive
-old-generation extinction evidence, not proof that other managers
-did not create NEW objects after reboot.
+container or systemd-unit restart is **not** a kernel reboot. STL now
+accepts `/proc/sys/kernel/random/boot_id` **only** from the original,
+unshadowed kernel `procfs` mount in the **initial host PID namespace**
+(Linux `PID_NS_INIT_INO`). It checks real filesystem type, complete
+`/proc/self/mountinfo` coverage, absence of any bind mount/submount on
+`/proc/sys/kernel/random/boot_id` or its ancestor path, and namespace/
+mount stability around the read. A virtualized UUID (including
+`systemd-nspawn`'s independently generated container boot ID), nested
+PID namespace, missing procfs evidence, or ambiguous host setup is
+**not** evidence of a kernel reboot. Such environments cannot arm or
+reconcile via this manual path; original journals and credentials stay
+quarantined. The same verified host-kernel source must yield a DIFFERENT
+canonical UUID from the protected State checkpoint committed **before**
+the actual full-kernel reboot. This is old-generation extinction
+evidence, not proof that other managers did not create NEW objects
+after reboot.
 
 1. **Owner authorization and impact plan (outside STL):** obtain
    explicit approval for the affected host's full reboot, list other
@@ -315,6 +325,11 @@ did not create NEW objects after reboot.
    is idempotent; a subsequent re-arm in a different boot is refused.
    A checkpoint cannot be manufactured by CLI arguments, environment,
    uploaded evidence, empty WG/UDP observations, or operator text.
+   If the process is containerized or its procfs origin cannot be
+   verified, **stop**: re-running as root inside that container does
+   not bypass admission and no synthetic boot ID may be substituted.
+   A native, attested host execution environment is required before
+   using this recovery path.
    **After successfully arming, make an additional private, verified
    backup of the now-checkpointed protected State**; a backup made
    before arming does not contain the checkpoint and cannot by itself
@@ -382,8 +397,12 @@ ownership/maintenance and verify newly created namespaces separately.
 A forged/mounted procfs boot UUID by malicious root is outside the
 local-root trust boundary and not an attestation by an external verifier.
 
-The disposable E2E simulates the boot-ID transition **only in a
-private rootless mount namespace AFTER explicitly deleting all test-
-owned old-kernel effects**. It validates the actual production CLI
-State protocol across new CLI processes, but is **not proof of a
-physical kernel reboot**, service restore or provider WAN acceptance.
+The disposable E2E attempts a **virtual Boot ID change** through a
+bind mount strictly inside private rootless namespaces. The production
+CLI must now reject both cold-boot Arm and Reconcile in that untrusted
+PID/mount environment, leaving the actual crash journal, kernel guard
+and/or private issuance untouched. Separate deterministic Engine tests
+exercise post-reboot State transitions using injected boot-generation
+values; these **do not** authenticate a physical host reboot.
+No actual PID1/kernel reboot, service restore or provider WAN
+acceptance is claimed.

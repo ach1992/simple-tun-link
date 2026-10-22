@@ -80,8 +80,8 @@ done
 for mode in fwmark ipv6; do
   run_case "ordinary-wg-drift-$mode" "STL_WSS_R7_DRIFT_TEST=$mode"
 done
-run_case coldboot-guard STL_WSS_R2_CRASH_TEST=1 STL_WSS_R7_COLD_BOOT_TEST=guard
-run_case coldboot-remove STL_WSS_R2_REMOVE_CRASH_TEST=guard STL_WSS_R7_COLD_BOOT_TEST=remove
+run_case virtual-boot-deny-guard STL_WSS_R2_CRASH_TEST=1 STL_WSS_R7_COLD_BOOT_TEST=guard
+run_case virtual-boot-deny-remove STL_WSS_R2_REMOVE_CRASH_TEST=guard STL_WSS_R7_COLD_BOOT_TEST=remove
 [[ $count == 31 ]] || { echo "Incomplete WSS matrix $count/31" >&2; exit 3; }
 [[ $(git rev-parse HEAD) == "$sha" && $(git rev-parse HEAD^{tree}) == "$tree" &&
    -z $(git status --porcelain=v1 --untracked-files=all) ]] || {

@@ -305,6 +305,13 @@ protection.
 A separately confirmed `arm-wss-cold-boot` checkpoint writes
 the real kernel-provided boot UUID into the original, durable WSS
 journal under canonical locks, without changing host resources.
+Host-kernel provenance is checked before Arm, Reconcile and the final
+commit: **initial PID namespace**, unshadowed procfs mount root and
+boot-ID path, live procfs file type and stable mount inventory. A
+container-restart UUID (including systemd-nspawn's bind-mounted one),
+synthetic procfile, missing/ambiguous procfs evidence or nested PID
+namespace never authorizes generation extinction. Journal, guard,
+claims and private credentials remain quarantined in these cases.
 After a **separately Owner-approved full kernel reboot** destroys
 the original WG generation across all network namespaces,
 `reconcile-wss-cold-boot` compares the new kernel boot ID

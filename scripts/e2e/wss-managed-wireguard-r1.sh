@@ -349,34 +349,33 @@ if [[ ${STL_WSS_R2_CRASH_TEST:-0} == 1 ]]; then
   ip netns exec alpha /usr/sbin/nft -j list table inet "$guard" >/dev/null
   echo "DENY_PASS PRECOMMIT_JOURNAL_BLOCKED_RETRY_AND_LIVE_GUARD_RECONCILIATION"
   if [[ ${STL_WSS_R7_COLD_BOOT_TEST:-} == guard ]]; then
-    invoke alpha link arm-wss-cold-boot "$link_id" --confirm "$link_id" --json > "$lab/alpha/coldboot-arm.json"
-    head -n 1 "$lab/alpha/coldboot-arm.json" | jq -e '.checkpoint_persisted and (.journal_cleared|not) and (.host_mutated|not) and (.reboot_performed|not)' >/dev/null
-    jq -e '(.wss_crash_operations|length)==1 and (.wss_crash_operations[0].cold_boot_armed_from|length)==36' "$lab/alpha-state/state.json" >/dev/null
-    if invoke alpha link reconcile-wss-cold-boot "$link_id" --confirm "$link_id" > "$lab/alpha/no-reboot-denied.log" 2>&1; then
-      echo "FAIL: unmodified kernel boot identity unlocked guard-only crash" >&2;exit 1
+    # The fixture is a nested PID namespace, not the host initial PID
+    # namespace: even a plausible UUID must NOT authorize cold-boot Arm.
+    if invoke alpha link arm-wss-cold-boot "$link_id" --confirm "$link_id" --json > "$lab/alpha/coldboot-untrusted-arm-denied.log" 2>&1; then
+      echo "FAIL: container admitted cold-boot arming" >&2; exit 1
     fi
-    # Simulate a complete kernel-reboot extinction only inside the
-    # harness-owned rootless USER+MOUNT+NET namespace. On a real host,
-    # ALL old network namespace objects disappear at kernel reboot;
-    # here we first delete ONLY the test-owned alpha nft guard.
-    ip netns exec alpha nft delete table inet "$guard"
-    [[ -z "$(ip netns exec alpha wg show interfaces)" ]]
+    jq -e '(.wss_crash_operations|length)==1 and ((.wss_crash_operations[0].cold_boot_armed_from//"")=="")' "$lab/alpha-state/state.json" >/dev/null
+    if invoke alpha link reconcile-wss-cold-boot "$link_id" --confirm "$link_id" > "$lab/alpha/unarmed-denied.log" 2>&1; then
+      echo "FAIL: unarmed journal was consumed" >&2; exit 1
+    fi
     original_boot=$(cat /proc/sys/kernel/random/boot_id)
-    # This synthetic root is a disposable private mount namespace.
-    # Never reuse a mutable shared lab filename across E2E runs.
+    # Simulate a systemd-nspawn-style virtual boot_id in this disposable
+    # mount namespace; the actual host kernel is NOT rebooted. Keep the
+    # original nft guard live: no host effect should be manufactured to
+    # make State reconciliation appear safe.
     simulated_boot=$(mktemp /tmp/stl-wss-guard-boot-XXXXXXXX)
     printf '%s\n' '22222222-2222-4222-8222-222222222222' > "$simulated_boot"
     mount --bind "$simulated_boot" /proc/sys/kernel/random/boot_id
     [[ $(cat /proc/sys/kernel/random/boot_id) != "$original_boot" ]]
-    echo "TEST_ONLY_ISOLATED_PROCFS_BOOT_ID_SIMULATION_NOT_A_REAL_REBOOT"
-    invoke alpha link reconcile-wss-cold-boot "$link_id" --confirm "$link_id" --json > "$lab/alpha/coldboot-reconcile.json"
-    head -n 1 "$lab/alpha/coldboot-reconcile.json" | jq -e '.journal_cleared and .kernel_reset_verified and (.host_mutated|not)' >/dev/null
-    jq -e '(.links|length)==0 and (.wss_crash_operations|length)==0' "$lab/alpha-state/state.json" >/dev/null
-    # Guard-only initial Ensure exact-credential retry must no longer be
-    # permanently stranded after a demonstrably different kernel boot.
-    invoke alpha link ensure --stdin < "$lab/alpha/recovery-ensure.json"
-    jq -e '(.links|length)==1 and (.wss_crash_operations//[]|length)==0' "$lab/alpha-state/state.json" >/dev/null
-    echo "PASS WSS_GUARD_ONLY_COLD_BOOT_ARM_SIMULATED_KERNEL_RESET_RECONCILE_RETRY"
+    if invoke alpha link arm-wss-cold-boot "$link_id" --confirm "$link_id" --json > "$lab/alpha/coldboot-synthetic-arm-denied.log" 2>&1; then
+      echo "FAIL: bind-mounted synthetic boot ID admitted cold-boot arm" >&2; exit 1
+    fi
+    if invoke alpha link reconcile-wss-cold-boot "$link_id" --confirm "$link_id" > "$lab/alpha/coldboot-synthetic-reconcile-denied.log" 2>&1; then
+      echo "FAIL: synthetic boot-ID change consumed original journal" >&2; exit 1
+    fi
+    jq -e '(.links|length)==0 and (.wss_crash_operations|length)==1' "$lab/alpha-state/state.json" >/dev/null
+    ip netns exec alpha nft -j list table inet "$guard" >/dev/null
+    echo "DENY_PASS WSS_GUARD_ONLY_CONTAINER_AND_BIND_MOUNT_BOOT_ID_KEEP_JOURNAL_GUARD"
     exit 0
   fi
   original_case=$(printenv STL_WSS_R3_FOREIGN_TEST || :)
@@ -542,6 +541,34 @@ if [[ -n "$(printenv STL_WSS_R5_MIGRATED_WG_TEST || :)" ]]; then
       echo "FAIL: moved DOWN WG still has UDP socket" >&2; exit 1;
     fi
     echo "PROVEN CROSS_NETNS_MOVED_DOWN_WG_HIDES_INTERFACE_AND_SOCKET"
+    # Reproduce the reviewer's dangerous sequence: the original WG is
+    # hidden, DOWN in beta, and its birthplace UDP socket is absent.
+    # The test-owned protected State gets a MOCK previously armed marker
+    # (no production bypass, no runtime code path). A container boot ID
+    # changes independently while the SAME kernel WG still exists.
+    if invoke alpha link arm-wss-cold-boot "$id" --confirm "$id" > "$lab/alpha/moved-down-coldboot-arm-denied.log" 2>&1; then
+      echo "FAIL: nested PID namespace admitted host reboot checkpoint" >&2; exit 1
+    fi
+    oldboot=$(cat /proc/sys/kernel/random/boot_id)
+    fake_journal=$(mktemp "$lab/alpha-state/.test-only-checkpoint-XXXXXXXX")
+    jq --arg boot "$oldboot" '.wss_crash_operations[0].cold_boot_armed_from=$boot' "$lab/alpha-state/state.json" > "$fake_journal"
+    chmod 0600 "$fake_journal"
+    mv -- "$fake_journal" "$lab/alpha-state/state.json"
+    virtual_boot=$(mktemp /tmp/stl-wss-moved-down-boot-XXXXXXXX)
+    printf '%s\n' '22222222-2222-4222-8222-222222222222' > "$virtual_boot"
+    mount --bind "$virtual_boot" /proc/sys/kernel/random/boot_id
+    [[ $(cat /proc/sys/kernel/random/boot_id) != "$oldboot" ]]
+    if invoke alpha link reconcile-wss-cold-boot "$id" --confirm "$id" > "$lab/alpha/moved-down-virtual-boot-denied.log" 2>&1; then
+      echo "FAIL: container Boot ID change released hidden live original WG" >&2; exit 1
+    fi
+    jq -e '(.links|length)==1 and (.wss_crash_operations|length)==1 and (.removal_receipts//[]|length)==0' "$lab/alpha-state/state.json" >/dev/null
+    ip netns exec beta wg show interfaces | grep -qx 'stlwg0123456789'
+    ip netns exec alpha nft -j list table inet "$guard" >/dev/null
+    test -d "$lab/alpha-state/credentials/wss/$id"
+    umount /proc/sys/kernel/random/boot_id
+    [[ $(cat /proc/sys/kernel/random/boot_id) == "$oldboot" ]]
+    rm -- "$virtual_boot"
+    echo "DENY_PASS MIGRATED_DOWN_ORIGINAL_RETAINED_ACROSS_VIRTUAL_CONTAINER_BOOT_ID"
   else
     ip -n beta link set stlwg0123456789 up
     ip netns exec alpha ss -H -u -l -n | grep -Fq ':51821'
@@ -755,35 +782,24 @@ if [[ -n "$(printenv STL_WSS_R2_REMOVE_CRASH_TEST || :)" ]];then
     echo "vacancy-only recovery erased committed WSS Remove history";exit 1
   fi
   if [[ ${STL_WSS_R7_COLD_BOOT_TEST:-} == remove && "$point" == guard ]]; then
-    invoke alpha link arm-wss-cold-boot "$id" --confirm "$id" --json > "$lab/alpha/remove-coldboot-arm.json"
-    head -n 1 "$lab/alpha/remove-coldboot-arm.json" | jq -e '.checkpoint_persisted and (.journal_cleared|not)' >/dev/null
-    if invoke alpha link reconcile-wss-cold-boot "$id" --confirm "$id" > "$lab/alpha/remove-no-reboot-denied.log" 2>&1; then
-      echo "FAIL: same-boot post-WG-deletion journal was cleared" >&2;exit 1
+    # A crashed committed Remove has a real kernel-deletion uncertainty.
+    # This nested PID namespace cannot prove the old HOST kernel died.
+    if invoke alpha link arm-wss-cold-boot "$id" --confirm "$id" --json > "$lab/alpha/remove-coldboot-untrusted-arm-denied.log" 2>&1; then
+      echo "FAIL: nested PID namespace admitted cold-boot checkpoint" >&2; exit 1
     fi
-    guard=$(python3 -c 'import hashlib;print("stlwss_"+hashlib.sha256(b"lnk_0123456789abcdef0123456789abcdef").hexdigest()[:16])')
-    # The guard fault fires AFTER the original WSS nft delete transaction:
-    # the guard may ALREADY be gone, unlike the initial guard-only crash.
-    # Never claim a host resource was cleaned unless inspection sees it.
-    if ip netns exec alpha nft -j list table inet "$guard" >/dev/null 2>&1; then
-      ip netns exec alpha nft delete table inet "$guard"
-    fi
-    if ip netns exec alpha ip link show stlwg0123456789 >/dev/null 2>&1; then
-      echo "FAIL: original kernel WG still live when simulating reset" >&2; exit 1;
-    fi
+    jq -e '(.links|length)==1 and (.wss_crash_operations|length)==1 and (.removal_receipts|length)==0' "$lab/alpha-state/state.json" >/dev/null
+    test -d "$lab/alpha-state/credentials/wss/$id"
     original_boot=$(cat /proc/sys/kernel/random/boot_id)
     simulated_boot=$(mktemp /tmp/stl-wss-remove-boot-XXXXXXXX)
     printf '%s\n' '22222222-2222-4222-8222-222222222222' > "$simulated_boot"
     mount --bind "$simulated_boot" /proc/sys/kernel/random/boot_id
     [[ $(cat /proc/sys/kernel/random/boot_id) != "$original_boot" ]]
-    echo "TEST_ONLY_ISOLATED_PROCFS_BOOT_ID_SIMULATION_NOT_A_REAL_REBOOT"
-    invoke alpha link reconcile-wss-cold-boot "$id" --confirm "$id" --json > "$lab/alpha/remove-coldboot-reconcile.json"
-    head -n 1 "$lab/alpha/remove-coldboot-reconcile.json" | jq -e '.journal_cleared and .kernel_reset_verified and (.host_mutated|not)' >/dev/null
-    jq -e '(.links|length)==0 and (.wss_crash_operations|length)==0 and (.removal_receipts|length)==1' "$lab/alpha-state/state.json" >/dev/null
+    if invoke alpha link reconcile-wss-cold-boot "$id" --confirm "$id" --json > "$lab/alpha/remove-coldboot-synthetic-reconcile-denied.log" 2>&1; then
+      echo "FAIL: virtual boot ID released committed Remove State" >&2; exit 1
+    fi
+    jq -e '(.links|length)==1 and (.wss_crash_operations|length)==1 and (.removal_receipts|length)==0' "$lab/alpha-state/state.json" >/dev/null
     test -d "$lab/alpha-state/credentials/wss/$id"
-    invoke alpha link retire-wss "$id" --confirm "$id"
-    jq -e '.removal_receipts[0].retired==true' "$lab/alpha-state/state.json" >/dev/null
-    test ! -e "$lab/alpha-state/credentials/wss/$id"
-    echo "PASS WSS_POST_DELETE_CRASH_COLD_BOOT_RECOVER_ORIGINAL_RECEIPT_AND_CREDENTIAL_RETIREMENT"
+    echo "DENY_PASS WSS_POST_DELETE_CRASH_VIRTUAL_BOOT_ID_PRESERVES_JOURNAL_RECEIPT_AND_CREDENTIALS"
     exit 0
   fi
   if [[ $(printenv STL_WSS_R3_ORIGINAL_TEST || :) == 1 ]];then
