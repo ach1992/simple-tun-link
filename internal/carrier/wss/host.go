@@ -193,6 +193,18 @@ func (h Host) inspectUnit(ctx context.Context, link domain.Link) (unitState, err
 		values[pieces[0]] = pieces[1]
 	}
 	if values["LoadState"] == "not-found" {
+		// A truncated query or conflicting asynchronous state is not
+		// evidence of a fully collected transient unit.
+		for _, k := range []string{"LoadState", "ActiveState", "Transient", "ExecStart", "Environment", "CollectMode"} {
+			if _, ok := values[k]; !ok {
+				return unitState{}, fmt.Errorf("incomplete systemd not-found observation")
+			}
+		}
+		if values["ActiveState"] != "inactive" || values["Transient"] != "no" ||
+			values["ExecStart"] != "" || values["Environment"] != "" ||
+			values["CollectMode"] != "inactive" {
+			return unitState{}, fmt.Errorf("systemd not-found observation is contradictory")
+		}
 		return unitState{}, nil
 	}
 	if values["LoadState"] != "loaded" || values["Transient"] != "yes" ||

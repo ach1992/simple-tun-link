@@ -997,7 +997,11 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		// ambiguity, retain the host state and report a non-success requiring
 		// reconciliation; blindly undoing a published intent is destructive.
 		visible, loadErr := e.store.Load(context.WithoutCancel(ctx))
-		published := loadErr == nil && stateMatchesOperation(visible, request, resources, wssFiles)
+		publicationFiles := wssFiles
+		if request.Operation == backend.OperationRemove {
+			publicationFiles = prior.WSSFiles
+		}
+		published := loadErr == nil && stateMatchesOperation(visible, request, resources, publicationFiles)
 		oldState := loadErr == nil && stateMatchesPrior(visible, link.ID, prior)
 		var publicationErr *state.PublicationError
 		indeterminate := errors.As(commitErr, &publicationErr)
@@ -1330,7 +1334,9 @@ func stateMatchesOperation(snapshot state.Snapshot, request backend.Request,
 		if request.Link.Backend == domain.BackendWireGuardWSS {
 			receipt, present := snapshot.FindRemovalReceipt(request.Link.ID)
 			return present && receipt.Backend == request.Link.Backend &&
-				receipt.WSSLink == request.Link && receipt.WSSFiles.VerifyLink(request.Link) == nil
+				receipt.WSSLink == request.Link &&
+				receipt.WSSFiles == originalFiles &&
+				receipt.WSSFiles.VerifyLink(request.Link) == nil
 		}
 		return true
 	}

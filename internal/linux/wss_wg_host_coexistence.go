@@ -12,8 +12,8 @@ import (
 )
 
 // WSSWGFirewallEvidence is a point-in-time, read-only host firewall inventory
-// for the candidate STL-managed WSS/WireGuard ingress. The future caller must
-// obtain successful, bounded readbacks of:
+// for the candidate STL-managed WSS/WireGuard ingress. The owning Host
+// runtime obtains successful, bounded readbacks of:
 //   - nft -j list ruleset
 //   - iptables -V and ip6tables -V
 //   - iptables-legacy-save and ip6tables-legacy-save (without -c)

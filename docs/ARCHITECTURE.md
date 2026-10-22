@@ -716,7 +716,8 @@ A separately confirmed `stl link reconcile-wss-removed ID --confirm ID`
 handles a committed Remove only when the exact original Link, immutable
 committed owner claims, original credential fingerprints and pre-effect
 journal still match. Independent inspection must confirm the nft guard,
-kernel WG interface and **loaded** helper unit are all absent. Only then
+kernel WG interface, **loaded** helper unit, and the original public
+WireGuard key/listener (including on other interfaces) are all absent. Only then
 does one durable State update consume the journal, delete the previously
 committed Link and publish its original fingerprint-bound retirement receipt.
 No host file/service/kernel resource is mutated; `retire-wss` subsequently

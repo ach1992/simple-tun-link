@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 
 	core "github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/composition"
@@ -321,8 +322,37 @@ func (b *Backend) CrashHostVacant(ctx context.Context, observed core.Observation
 	if !ok {
 		return false, fmt.Errorf("unexpected WSS host observation type")
 	}
+	if current.WSSLink.Backend != domain.BackendWireGuardWSS ||
+		current.WSSLink.Validate() != nil {
+		return false, fmt.Errorf("WSS crash vacancy has no original valid public Link")
+	}
 	if current.Target.Exists || current.GuardPresent || current.HelperLoaded {
 		return false, nil
+	}
+	// A Link interface may disappear while its originally configured key or
+	// WG listen port survives under a different interface. A vacancy receipt
+	// must not silently release the original resource reservation in that case.
+	// Global public-only WireGuard readbacks are also mandatory.
+	for _, entry := range []struct{ field, want string }{
+		{"public-key", current.WSSLink.WireGuard.LocalPublicKey},
+		{"listen-port", strconv.Itoa(int(current.WSSLink.WireGuard.ListenPort))},
+	} {
+		out, err := b.runner.Run(ctx, b.wgBinary, "show", "all", entry.field)
+		if err != nil {
+			return false, fmt.Errorf("cannot verify global WSS crash %s vacancy", entry.field)
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(out.Stdout)), "\n") {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			fields := strings.Fields(line)
+			if len(fields) != 2 {
+				return false, fmt.Errorf("malformed global WSS %s readback", entry.field)
+			}
+			if fields[1] == entry.want {
+				return false, nil
+			}
+		}
 	}
 	return true, nil
 }

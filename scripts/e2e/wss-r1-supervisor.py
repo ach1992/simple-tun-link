@@ -71,7 +71,7 @@ try:
         op,unit=args[:2];info=read(unit)
         if op=="show":
             if not info:
-                print("LoadState=not-found\nActiveState=inactive\nTransient=no\nDescription=\nExecStart=\nEnvironment=")
+                print("LoadState=not-found\nActiveState=inactive\nTransient=no\nDescription=\nExecStart=\nEnvironment=\nCollectMode=inactive")
             else:
                 print("LoadState=loaded")
                 print("ActiveState="+("active" if active(info["pid"]) else "failed"))

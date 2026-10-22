@@ -79,3 +79,41 @@ func TestWSSUnitPropertiesRequireExactRestartAndSandbox(t *testing.T) {
 		})
 	}
 }
+
+type wssUnitAbsentStub struct{ result string }
+
+func (r wssUnitAbsentStub) Run(context.Context, string, ...string) (linux.CommandResult, error) {
+	return linux.CommandResult{}, fmt.Errorf("only bounded systemd inspection")
+}
+func (r wssUnitAbsentStub) RunBounded(_ context.Context, _ linux.CaptureLimits, name string, args ...string) (linux.CommandResult, error) {
+	if name != "systemctl" || len(args) < 3 || args[0] != "show" {
+		return linux.CommandResult{}, fmt.Errorf("unexpected unit inspection")
+	}
+	return linux.CommandResult{Stdout: []byte(r.result)}, nil
+}
+func TestWSSUnitNotFoundReadbackRequiresCompleteConsistentState(t *testing.T) {
+	link := wssTestLink()
+	link.Backend = domain.BackendWireGuardWSS
+	link.WSS = domain.WSSOptions{Role: "listen", TCPPort: 59443}
+	valid := "LoadState=not-found\nActiveState=inactive\nTransient=no\nDescription=\nExecStart=\nEnvironment=\nCollectMode=inactive\n"
+	for name, data := range map[string]string{
+		"valid":                valid,
+		"no-collect-mode":      strings.Replace(valid, "CollectMode=inactive\n", "", 1),
+		"unexpected-active":    strings.Replace(valid, "ActiveState=inactive", "ActiveState=active", 1),
+		"unexpected-transient": strings.Replace(valid, "Transient=no", "Transient=yes", 1),
+		"late-exec":            strings.Replace(valid, "ExecStart=", "ExecStart=/usr/bin/foreign", 1),
+		"malformed":            strings.Replace(valid, "LoadState=not-found\n", "", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := Host{Runner: wssUnitAbsentStub{data}}
+			unit, err := h.inspectUnit(context.Background(), link)
+			if name == "valid" {
+				if err != nil || unit.loaded {
+					t.Fatalf("valid not-found rejected: %v", err)
+				}
+			} else if err == nil {
+				t.Fatalf("untrusted absent-unit observation accepted: %+v", unit)
+			}
+		})
+	}
+}
