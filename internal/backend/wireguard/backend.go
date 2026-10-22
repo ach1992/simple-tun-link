@@ -112,9 +112,9 @@ func NewWSS(opts Options) (*Backend, error) {
 }
 
 type observation struct {
-	Target                      observedLink
-	Links                       []observedLink
-	GuardPresent, HelperPresent bool
+	Target                                    observedLink
+	Links                                     []observedLink
+	GuardPresent, HelperPresent, HelperLoaded bool
 }
 
 func (o observation) ObservedResources() []domain.ResourceClaim {
@@ -187,6 +187,10 @@ func (b *Backend) Inspect(ctx context.Context, link domain.Link) (core.Observati
 			return nil, err
 		}
 		obs.HelperPresent, err = b.wssHost.HelperPresent(ctx, link)
+		if err != nil {
+			return nil, err
+		}
+		obs.HelperLoaded, err = b.wssHost.HelperLoaded(ctx, link)
 		if err != nil {
 			return nil, err
 		}

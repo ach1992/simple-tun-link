@@ -58,12 +58,12 @@ func (e *Engine) retireWSSCredentialLocked(ctx context.Context, id domain.LinkID
 	}
 	receipt, ok := snapshot.FindRemovalReceipt(id)
 	if !ok || receipt.Backend != domain.BackendWireGuardWSS ||
-		receipt.LocalPublicKey == "" || receipt.WSSListenPort == 0 {
+		receipt.LocalPublicKey == "" || receipt.WSSLink.Validate() != nil ||
+		receipt.WSSLink.ID != id || receipt.WSSLink.Backend != receipt.Backend ||
+		receipt.WSSLink.WireGuard.LocalPublicKey != receipt.LocalPublicKey {
 		return fmt.Errorf("no exact WSS removal authorization in committed State")
 	}
-	identity := domain.Link{ID: id, Backend: domain.BackendWireGuardWSS,
-		WireGuard: domain.WireGuardOptions{LocalPublicKey: receipt.LocalPublicKey, ListenPort: receipt.WSSListenPort},
-		WSS:       domain.WSSOptions{Role: receipt.WSSRole}}
+	identity := receipt.WSSLink
 	if receipt.Retired {
 		// Retry is read-only: an already-consumed receipt never grants
 		// permission to delete a newly created file using the same Link ID.

@@ -23,6 +23,10 @@ if [[ "${1:-}" != --inside && "${1:-}" != --nsroot ]]; then
   export STL_WSS_R1_TEST_GUARD="$token"
   cp -- "$repo/scripts/e2e/wss-managed-wireguard-r1.sh" "$lab/wss-real-e2e.sh"
   cp -- "$repo/scripts/e2e/wss-negative-probe.py" "$lab/wss-negative-probe.py"
+  # Always stage the exact source-tracked disposable supervisor. Never rely
+  # on a stale, untracked prior lab copy as an acceptance dependency.
+  install -m 0755 "$repo/scripts/e2e/wss-r1-supervisor.py" "$lab/bin/shims/systemd_shim.py"
+
 
   rm -rf -- "$lab/alpha-state" "$lab/beta-state" "$lab/alpha/runtime" "$lab/beta/runtime"
   mkdir -p "$lab/run-netns" "$lab/alpha" "$lab/beta"
@@ -203,6 +207,15 @@ invoke beta link ensure --stdin < "$lab/beta/ensure.json"
 sleep 7
 ip netns exec beta ping -I 10.75.0.2 -c 2 -W 3 10.75.0.1
 echo "SUCCESS HELPER CRASH RECOVERED BY STL ENGINE"
+# A failed/restarting transient unit is still an owned resource. Remove
+# must stop/collect it, not mistake an inactive process for absent service
+# and prematurely retire the private TLS material.
+crash_unit="$lab/beta/runtime/stl-wss-0123456789abcdef0123456789abcdef.service.json"
+crash_pid=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["pid"])' "$crash_unit")
+kill -9 "$crash_pid"
+sleep 0.15
+[[ -f $crash_unit ]] || { echo "expected a failed-but-loaded transient unit"; exit 1; }
+echo "WSS REMOVE AFTER FAILED HELPER:"
 echo "WSS SCOPED REMOVAL:"
 id=lnk_0123456789abcdef0123456789abcdef
 invoke beta link remove "$id" --confirm "$id"

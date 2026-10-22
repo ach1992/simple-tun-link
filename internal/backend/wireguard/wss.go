@@ -20,6 +20,7 @@ import (
 type WSSHost interface {
 	GuardPresent(context.Context, domain.Link) (bool, error)
 	HelperPresent(context.Context, domain.Link) (bool, error)
+	HelperLoaded(context.Context, domain.Link) (bool, error)
 	Preflight(context.Context, domain.Link, bool) error
 	EnsureGuard(context.Context, domain.Link) (core.Rollback, error)
 	StartHelper(context.Context, domain.Link) (core.Rollback, error)
@@ -62,7 +63,7 @@ func (b *Backend) planWSS(ctx context.Context, req core.Request, obs observation
 	case core.OperationRemove:
 		p.interfaceChange = obs.Target.Exists && obs.Target.Owner == req.Link.ID
 		p.guardChange = obs.GuardPresent
-		p.helperChange = obs.HelperPresent
+		p.helperChange = obs.HelperLoaded
 		p.resources = claims
 	default:
 		return nil, fmt.Errorf("unsupported WSS operation")
@@ -99,7 +100,7 @@ func (b *Backend) validateWSS(ctx context.Context, req core.Request, obs observa
 			return err
 		}
 	}
-	if obs.HelperPresent {
+	if obs.HelperLoaded {
 		if err := linux.RequireOwned(req.Link.ID, wssHelperClaim(req.Link.ID), req.OwnedResources); err != nil {
 			return err
 		}
@@ -271,7 +272,7 @@ func (b *Backend) verifyWSS(req core.Request, obs observation) (core.Observation
 			return nil, fmt.Errorf("WSS sidecar/ingress/kernel WireGuard are not concurrently ready")
 		}
 	case core.OperationRemove:
-		if obs.GuardPresent || obs.HelperPresent || (obs.Target.Exists && obs.Target.Owner == req.Link.ID) {
+		if obs.GuardPresent || obs.HelperLoaded || (obs.Target.Exists && obs.Target.Owner == req.Link.ID) {
 			return nil, fmt.Errorf("WSS resources remain after Remove")
 		}
 	default:

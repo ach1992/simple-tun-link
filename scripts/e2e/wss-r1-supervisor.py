@@ -64,7 +64,10 @@ try:
                 print("ExecStart={ path="+info["argv"][0]+" ; argv[]="+" ".join(info["argv"])+" ; }")
                 print("Environment="+" ".join(k+"="+v for k,v in sorted(info["env"].items())))
         elif op=="stop":
-            if info:stop(info)
+            if info:
+                stop(info)
+                # systemd transient --collect removes a stopped unit.
+                proc_file(unit).unlink()
         elif op=="restart":
             if not info:raise RuntimeError("Cannot restart missing WSS unit")
             stop(info);launch(info)

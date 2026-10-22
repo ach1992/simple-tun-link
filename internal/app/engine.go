@@ -897,7 +897,7 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 				snapshot.RemovalReceipts = append(snapshot.RemovalReceipts, state.RemovalReceipt{
 					LinkID: link.ID, Backend: domain.BackendWireGuardWSS,
 					LocalPublicKey: link.WireGuard.LocalPublicKey,
-					WSSRole:        link.WSS.Role, WSSListenPort: link.WireGuard.ListenPort})
+					WSSLink:        link})
 			}
 			if link.Backend == domain.BackendIPsec {
 				if ipsecRetirementDigest == "" {

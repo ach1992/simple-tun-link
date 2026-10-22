@@ -153,9 +153,11 @@ func (h Host) inspectUnit(ctx context.Context, link domain.Link) (unitState, err
 		return unitState{}, fmt.Errorf("cannot inspect the protected WSS unit identity")
 	}
 	defer clear(cmd.ServerRestrictions)
-	if !matchesExactWSSExecStart(values["ExecStart"], cmd) ||
-		strings.TrimSpace(values["Environment"]) != strings.Join(cmd.Env, " ") {
-		return unitState{}, fmt.Errorf("WSS unit does not match exact owner-selected credentials or command")
+	if !matchesExactWSSExecStart(values["ExecStart"], cmd) {
+		return unitState{}, fmt.Errorf("WSS unit argv differs from Link identity")
+	}
+	if strings.TrimSpace(values["Environment"]) != strings.Join(cmd.Env, " ") {
+		return unitState{}, fmt.Errorf("WSS unit TLS trust environment differs from Link identity")
 	}
 	if values["ActiveState"] != "active" && values["ActiveState"] != "inactive" &&
 		values["ActiveState"] != "failed" && values["ActiveState"] != "activating" {
@@ -189,6 +191,13 @@ func matchesExactWSSExecStart(observed string, expected Command) bool {
 func (h Host) HelperPresent(ctx context.Context, link domain.Link) (bool, error) {
 	s, err := h.inspectUnit(ctx, link)
 	return s.active, err
+}
+
+// HelperLoaded reports even an inactive/failed but still registered transient
+// unit. It must be stopped and collected before credential retirement.
+func (h Host) HelperLoaded(ctx context.Context, link domain.Link) (bool, error) {
+	s, err := h.inspectUnit(ctx, link)
+	return s.loaded, err
 }
 
 func (h Host) Preflight(ctx context.Context, link domain.Link, guardPresent bool) error {
@@ -444,22 +453,43 @@ func (h Host) StopHelper(ctx context.Context, link domain.Link) (core.Rollback, 
 	if err != nil {
 		return nil, err
 	}
-	if !unit.loaded || !unit.active {
+	if !unit.loaded {
 		return func(context.Context) error { return nil }, nil
 	}
 	_, err = h.runner().Run(ctx, "systemctl", "stop", h.unitName(link))
 	if err != nil {
 		return nil, fmt.Errorf("stop WSS helper: %w", err)
 	}
-	undo := func(c context.Context) error { _, err := h.StartHelper(c, link); return err }
-	active, err := h.HelperPresent(ctx, link)
-	if err != nil {
-		return undo, err
+	undo := func(c context.Context) error {
+		if !unit.active {
+			return nil
+		}
+		_, err := h.StartHelper(c, link)
+		return err
 	}
-	if active {
-		return undo, fmt.Errorf("WSS service still active after stop")
+	// --collect is asynchronous on real systemd. An inactive/failed unit
+	// still reserves this identity and may have a queued Restart job; only
+	// the exact unit's verified disappearance permits key retirement.
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		loaded, err := h.HelperLoaded(ctx, link)
+		if err != nil {
+			return undo, err
+		}
+		if !loaded {
+			return undo, nil
+		}
+		select {
+		case <-ctx.Done():
+			return undo, ctx.Err()
+		case <-deadline.C:
+			return undo, fmt.Errorf("stopped WSS unit was not collected; preserving credentials")
+		case <-ticker.C:
+		}
 	}
-	return undo, nil
 }
 
 // WritePrivateNoReplace is for already verified owner-private credential
