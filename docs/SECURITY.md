@@ -246,3 +246,17 @@ networking and nft guards operate in rootless namespaces; a disposable
 process supervisor **simulates systemd control only**, so those tests do not
 prove a real host's systemd reboot restore. Physical two-server testing,
 independent review, Main merge and publication remain distinct gates.
+
+### R2 WSS crash-journal security boundary
+
+The pre-effect journal records a public transaction reservation, **not
+proof of original host ownership**. Neither a table name, ifalias,
+systemd unit name, public WG key nor journal nonce alone authorizes
+cleanup. A failed/uncertain journal fsync prevents Backend Apply.
+Automatic Ensure/Remove/reboot replay cannot cross an unresolved
+transaction. Vacancy-only reconciliation is read-only until an
+exact journal-only State commit; any observed or uncertain host effect
+blocks it. It preserves all private credentials and never changes
+firewall, network or systemd state. Stronger orphan compensation
+requires independently proven original-object identity and a separate
+review/authorization gate.

@@ -682,3 +682,37 @@ retirement receipt **in the same State commit**, and securely retires
 protected Link-local TLS/bearer/WG credentials after separate host-absence
 proof. A crash before a completed receipt requires owner-scoped recovery;
 no foreign adoption or generic host cleanup is permitted.
+
+### R2 — durable WSS pre-effect crash quarantine (stacked candidate)
+
+The canonical Engine prepares a secret-free `wss_crash_operations`
+record in State v4, after final resource-lock admission and **before**
+calling the WSS Backend Apply. It stores the endpoint-local public Link,
+operation, random nonce, prior-commit flag, and complete planned resource
+claims. This is a **reservation/quarantine**, not proof of nft/kernel/systemd
+ownership and not authorization to delete a named object.
+
+Journal publication and fsync must succeed before the first host effect.
+Successful Ensure/Remove consumes the *exact* record in the same atomic
+State commit as the Link change. Crash/failed compensation/unknown host
+state retains the journal, blocks automatic Link replay and reserves
+resources from other Links. Restore may continue independent,
+non-conflicting Links; an empty State with a pending journal must not
+remove the host restore unit.
+
+`stl link reconcile-wss-vacant ID --confirm ID` is restricted to an
+uncommitted initial Ensure. It locks the same resources, refreshes the
+transaction and requires read-only proof that no matching kernel WG
+interface, nft ingress guard or loaded helper unit remains. Only then
+does it clear the journal. It **never** changes host resources, deletes
+secrets, adopts named objects or reconciles an interrupted committed
+repair/Remove. Those remain quarantined for separately approved,
+identity-attested reconciliation.
+
+The rootless test `STL_WSS_R2_CRASH_TEST=1 bash
+scripts/e2e/wss-managed-wireguard-r1.sh` sends SIGKILL after a
+**real** nft guard creation and before Go State commit. In that disposable
+namespace only, it proves journal durability and denial, explicitly
+cleans its own guard, verifies vacancy-only recovery, and reuses the
+original credentials for genuine ICMP/TCP/UDP over WSS. This does not
+prove a real-systemd reboot or physical two-host recovery.

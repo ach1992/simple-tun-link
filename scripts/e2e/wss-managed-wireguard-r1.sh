@@ -26,6 +26,20 @@ if [[ "${1:-}" != --inside && "${1:-}" != --nsroot ]]; then
   # Always stage the exact source-tracked disposable supervisor. Never rely
   # on a stale, untracked prior lab copy as an acceptance dependency.
   install -m 0755 "$repo/scripts/e2e/wss-r1-supervisor.py" "$lab/bin/shims/systemd_shim.py"
+  if [[ ${STL_WSS_R2_CRASH_TEST:-0} == 1 ]]; then
+    # All effects stay in disposable rootless namespaces. Do not override a
+    # foreign executable: the staging dir is task-owned and non-shared.
+    if [[ -e "$lab/bin/shims/nft" || -L "$lab/bin/shims/nft" ]]; then
+      [[ -f "$lab/bin/shims/nft" && ! -L "$lab/bin/shims/nft" &&
+         $(stat -c %u "$lab/bin/shims/nft") == $(id -u) &&
+         $(stat -c %a "$lab/bin/shims/nft") == 755 ]] &&
+         cmp -s "$lab/bin/shims/nft" "$repo/scripts/e2e/wss-r2-nft-crash.py" || {
+           echo "foreign nft test executable; refusing to overwrite" >&2; exit 2;
+         }
+    else
+      install -m 0755 "$repo/scripts/e2e/wss-r2-nft-crash.py" "$lab/bin/shims/nft"
+    fi
+  fi
 
 
   rm -rf -- "$lab/alpha-state" "$lab/beta-state" "$lab/alpha/runtime" "$lab/beta/runtime"
@@ -141,7 +155,37 @@ invoke(){
     exec /usr/local/bin/stl-lab -test.run ^TestWSSLabCLI$ -test.v=false
   ' _ "$lab/$side-state"
 }
-invoke alpha link create-wss --stdin --output /var/lib/stl-r1-state/handoff/receiver.json < "$lab/alpha/create.json"
+if [[ ${STL_WSS_R2_CRASH_TEST:-0} == 1 ]]; then
+  echo "WSS R2: INJECT HARD CRASH AFTER REAL NFT GUARD CREATION, BEFORE STATE COMMIT"
+  export STL_WSS_R2_CRASH_AFTER_GUARD=1
+  if invoke alpha link create-wss --stdin --output /var/lib/stl-r1-state/handoff/receiver.json < "$lab/alpha/create.json" > "$lab/alpha/injected-crash.log" 2>&1; then
+    echo "WSS R2 FAILED: host mutation did not kill the CLI" >&2; exit 1
+  fi
+  unset STL_WSS_R2_CRASH_AFTER_GUARD
+  link_id=lnk_0123456789abcdef0123456789abcdef
+  guard=$(python3 -c 'import hashlib;print("stlwss_"+hashlib.sha256(b"lnk_0123456789abcdef0123456789abcdef").hexdigest()[:16])')
+  jq -e '.links|length==0' "$lab/alpha-state/state.json" >/dev/null
+  jq -e '.wss_crash_operations | length==1 and .[0].operation=="ensure" and .[0].intent.backend=="wireguard-wss" and (.[0].nonce|length)==32' "$lab/alpha-state/state.json" >/dev/null
+  ip netns exec alpha /usr/sbin/nft -j list table inet "$guard" | jq -e '[.nftables[] | .rule? | .comment? | strings | select(startswith("stl:"))] | length==1' >/dev/null
+  jq -c '{"schema_version":3,"link":.wss_crash_operations[0].intent}' "$lab/alpha-state/state.json" > "$lab/alpha/recovery-ensure.json"
+  if invoke alpha link ensure --stdin < "$lab/alpha/recovery-ensure.json" > "$lab/alpha/recovery-blocked.log" 2>&1; then
+    echo "WSS R2 FAILED: prepared crash transaction was silently replayed" >&2;exit 1
+  fi
+  if invoke alpha link reconcile-wss-vacant "$link_id" --confirm "$link_id" > "$lab/alpha/guard-clear-denied.log" 2>&1; then
+    echo "WSS R2 FAILED: reconciliation adopted/deleted a live nft guard" >&2;exit 1
+  fi
+  ip netns exec alpha /usr/sbin/nft -j list table inet "$guard" >/dev/null
+  echo "DENY_PASS PRECOMMIT_JOURNAL_BLOCKED_RETRY_AND_LIVE_GUARD_RECONCILIATION"
+  # Exactly this disposable test's created, initially empty guard; explicit
+  # test-owner cleanup is done by the harness, NEVER by reconcile-wss-vacant.
+  ip netns exec alpha /usr/sbin/nft delete table inet "$guard"
+  invoke alpha link reconcile-wss-vacant "$link_id" --confirm "$link_id"
+  jq -e '(.wss_crash_operations // []) | length==0' "$lab/alpha-state/state.json" >/dev/null
+  invoke alpha link ensure --stdin < "$lab/alpha/recovery-ensure.json"
+  echo "SUCCESS PRECOMMIT_NFT_HARD_CRASH_JOURNAL_VACANCY_AND_EXACT_RETRY"
+else
+  invoke alpha link create-wss --stdin --output /var/lib/stl-r1-state/handoff/receiver.json < "$lab/alpha/create.json"
+fi
 test -f "$lab/alpha-state/handoff/receiver.json"
 invoke beta link preview-wss --stdin --json < "$lab/alpha-state/handoff/receiver.json" | tee "$lab/beta/preview.json"
 confirm=$(grep -m1 '^{' "$lab/beta/preview.json" | jq -r .confirmation_sha256)

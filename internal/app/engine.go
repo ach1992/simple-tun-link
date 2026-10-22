@@ -267,6 +267,10 @@ func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.
 	if err != nil {
 		return Result{}, stlerr.Wrap(stlerr.CodeState, "remove", string(id), "", "cannot load local state", err)
 	}
+	if _, pending := snapshot.FindWSSCrashOperation(id); pending {
+		return Result{}, stlerr.New(stlerr.CodeConflict, "remove", string(id), "",
+			"WSS pre-effect crash journal blocks Remove until explicit reconciliation")
+	}
 	record, ok := snapshot.Find(id)
 	if !ok {
 		return Result{}, stlerr.New(stlerr.CodeInvalid, "remove", string(id), "", "Link is not present in local state")
@@ -371,6 +375,10 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 	snapshot, err := e.store.Load(ctx)
 	if err != nil {
 		return Result{}, stlerr.Wrap(stlerr.CodeState, "ensure", string(desired.ID), string(desired.Backend), "cannot load local state", err)
+	}
+	if _, pending := snapshot.FindWSSCrashOperation(desired.ID); pending {
+		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID),
+			string(desired.Backend), "WSS pre-effect crash journal requires explicit, owner-verified reconciliation")
 	}
 	if _, pending := snapshot.FindPendingSender(desired.ID); pending {
 		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID), string(desired.Backend),
@@ -511,6 +519,11 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 	fresh, err := e.store.Load(ctx)
 	if err != nil {
 		return Result{}, stlerr.Wrap(stlerr.CodeState, string(request.Operation), string(link.ID), string(link.Backend), "cannot reload local state", err)
+	}
+	if _, pending := fresh.FindWSSCrashOperation(link.ID); pending {
+		return Result{}, stlerr.New(stlerr.CodeConflict, string(request.Operation),
+			string(link.ID), string(link.Backend),
+			"unfinished WSS pre-effect journal: no host mutation permitted")
 	}
 	if link.Backend == domain.BackendIPsec {
 		if _, previousXFRM := fresh.FindIPsecXFRMOperation(link.ID); previousXFRM {
@@ -739,6 +752,16 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 			}
 		}
 	}
+	var preparedWSS state.WSSCrashOperation
+	if changed && link.Backend == domain.BackendWireGuardWSS {
+		// WSS creates an nft guard before kernel WG; power loss at ANY
+		// subsequent step must retain a durable quarantine/reservation.
+		var prepareErr error
+		preparedWSS, prepareErr = e.prepareWSSCrash(ctx, request, prior, resources)
+		if prepareErr != nil {
+			return Result{}, prepareErr
+		}
+	}
 	var undo backend.Rollback
 	if changed {
 		evidence.Stage = "apply"
@@ -915,6 +938,17 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		default:
 			return fmt.Errorf("unsupported operation %q", request.Operation)
 		}
+		if preparedWSS.Nonce != "" {
+			operation, ok := snapshot.FindWSSCrashOperation(link.ID)
+			if !ok || operation.Nonce != preparedWSS.Nonce || operation.Intent != preparedWSS.Intent ||
+				operation.Operation != preparedWSS.Operation || operation.HadCommittedLink != preparedWSS.HadCommittedLink ||
+				!slices.Equal(operation.Resources, preparedWSS.Resources) {
+				return fmt.Errorf("WSS durable crash journal changed during host operation")
+			}
+			if !snapshot.DeleteWSSCrashOperation(link.ID) {
+				return fmt.Errorf("WSS pre-effect journal cannot be consumed atomically")
+			}
+		}
 		remaining = len(snapshot.Links)
 		return nil
 	})
@@ -1086,6 +1120,27 @@ func rejectResourceConflicts(snapshot state.Snapshot, id domain.LinkID, wanted [
 						"",
 						fmt.Sprintf("resource %s conflicts with Link %s", wantedClaim.Kind, record.Desired.ID),
 					)
+				}
+			}
+		}
+	}
+	// An interrupted WSS transaction still reserves ALL planned addresses,
+	// listeners, interface identities and host effects. Otherwise a
+	// different Link could reuse those resources before reconciliation.
+	for _, pending := range snapshot.WSSCrashOperations {
+		if pending.Intent.ID == id {
+			continue
+		}
+		for _, wantedClaim := range wanted {
+			for _, reserved := range pending.Resources {
+				conflict, err := domain.ResourceClaimsConflict(wantedClaim, reserved)
+				if err != nil {
+					return stlerr.Wrap(stlerr.CodeState, "validate_resources", string(id), "",
+						"cannot compare interrupted WSS resource reservation", err)
+				}
+				if conflict {
+					return stlerr.New(stlerr.CodeConflict, "validate_resources", string(id), "",
+						"resource reserved by unresolved WSS crash operation")
 				}
 			}
 		}

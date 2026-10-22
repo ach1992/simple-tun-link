@@ -28,6 +28,13 @@ func (e *Engine) RestoreAll(ctx context.Context) ([]Result, error) {
 		return nil, stlerr.Wrap(stlerr.CodeState, "restore_all", "", "", "cannot load persisted Links", err)
 	}
 
+	// A crash journal is NOT a committed, healthy Link, and an empty
+	// desired-State snapshot with pending effects is not proof that the
+	// host can be cleaned up or ordinary restore safely replayed.
+	if len(snapshot.WSSCrashOperations) > 0 && len(snapshot.Links) == 0 {
+		return nil, stlerr.New(stlerr.CodeConflict, "restore_all", "", "wireguard-wss",
+			"unresolved WSS pre-effect transaction prevents empty-State restore-unit cleanup")
+	}
 	if len(snapshot.Links) == 0 && e.restorePersistence != nil {
 		// Recheck under the same narrowly scoped lock used by every desired
 		// state/persistence transition. A missing file or mount is not proof
@@ -74,6 +81,12 @@ func (e *Engine) RestoreAll(ctx context.Context) ([]Result, error) {
 	results := make([]Result, 0, len(snapshot.Links))
 	var perLinkFailures []error
 	for _, record := range snapshot.Links {
+		if _, unresolved := snapshot.FindWSSCrashOperation(record.Desired.ID); unresolved {
+			perLinkFailures = append(perLinkFailures, stlerr.New(stlerr.CodeConflict,
+				"restore", string(record.Desired.ID), "wireguard-wss",
+				"committed WSS Link has unfinished pre-effect operation"))
+			continue
+		}
 		if err := ctx.Err(); err != nil {
 			return results, stlerr.Wrap(stlerr.CodeState, "restore_all", "", "", "restore canceled or timed out", errors.Join(err, errors.Join(perLinkFailures...)))
 		}

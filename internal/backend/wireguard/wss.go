@@ -285,3 +285,20 @@ func (b *Backend) verifyWSS(req core.Request, obs observation) (core.Observation
 func wssOwned(claims []domain.ResourceClaim, id domain.LinkID) bool {
 	return slices.Contains(claims, wssGuardClaim(id)) && slices.Contains(claims, wssHelperClaim(id))
 }
+
+// CrashHostVacant is ONLY a read-only strict vacancy test for a pre-effect
+// WSS journal. A matching name, alias, certificate or public peer key
+// must never be treated as sufficient proof to delete or adopt anything.
+func (b *Backend) CrashHostVacant(ctx context.Context, observed core.Observation) (bool, error) {
+	if b.wssHost == nil {
+		return false, fmt.Errorf("WSS host controller not configured")
+	}
+	current, ok := observed.(observation)
+	if !ok {
+		return false, fmt.Errorf("unexpected WSS host observation type")
+	}
+	if current.Target.Exists || current.GuardPresent || current.HelperLoaded {
+		return false, nil
+	}
+	return true, nil
+}

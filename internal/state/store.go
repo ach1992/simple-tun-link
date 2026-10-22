@@ -51,6 +51,7 @@ type Snapshot struct {
 	IPsecXFRMOperations    []IPsecXFRMOperation    `json:"ipsec_xfrm_operations,omitempty"`
 	IPsecRemovalReceipts   []IPsecRemovalReceipt   `json:"ipsec_removal_receipts,omitempty"`
 	RemovalReceipts        []RemovalReceipt        `json:"removal_receipts,omitempty"`
+	WSSCrashOperations     []WSSCrashOperation     `json:"wss_crash_operations,omitempty"`
 }
 
 func EmptySnapshot() Snapshot {
@@ -121,6 +122,12 @@ func (s *Snapshot) normalize() {
 		return s.IPsecRemovalReceipts[i].LinkID < s.IPsecRemovalReceipts[j].LinkID
 	})
 	sort.Slice(s.RemovalReceipts, func(i, j int) bool { return s.RemovalReceipts[i].LinkID < s.RemovalReceipts[j].LinkID })
+	for i := range s.WSSCrashOperations {
+		s.WSSCrashOperations[i].Resources = normalizeClaims(s.WSSCrashOperations[i].Resources)
+	}
+	sort.Slice(s.WSSCrashOperations, func(i, j int) bool {
+		return s.WSSCrashOperations[i].Intent.ID < s.WSSCrashOperations[j].Intent.ID
+	})
 }
 
 type Store interface {
@@ -239,8 +246,10 @@ func (s *FileStore) loadUnlocked() (Snapshot, error) {
 		}
 		return Snapshot{}, fmt.Errorf("decode state trailing data: %w", err)
 	}
-	if snapshot.SchemaVersion <= preWSSSchemaVersion && bytes.Contains(bytes.ToLower(raw), []byte(`"wss":`)) {
-		return Snapshot{}, fmt.Errorf("legacy State cannot carry a WSS carrier")
+	if snapshot.SchemaVersion <= preWSSSchemaVersion {
+		if err := rejectLegacyWSSFields(raw); err != nil {
+			return Snapshot{}, err
+		}
 	}
 	if err := rejectLegacyMTUFields(raw, snapshot.SchemaVersion); err != nil {
 		return Snapshot{}, err
@@ -254,6 +263,42 @@ func (s *FileStore) loadUnlocked() (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	return snapshot, nil
+}
+
+// Older State schemas may not gain WSS host effects through JSON whitespace,
+// alternate key casing, or nested Link option fields during migration.
+// Detect keys via actual JSON structure instead of a fragile raw substring.
+func rejectLegacyWSSFields(raw []byte) error {
+	var document any
+	if err := json.Unmarshal(raw, &document); err != nil {
+		return fmt.Errorf("inspect legacy WSS State: %w", err)
+	}
+	var contains func(any) bool
+	contains = func(value any) bool {
+		switch current := value.(type) {
+		case map[string]any:
+			for key, child := range current {
+				if strings.EqualFold(key, "wss") ||
+					strings.EqualFold(key, "wss_crash_operations") {
+					return true
+				}
+				if contains(child) {
+					return true
+				}
+			}
+		case []any:
+			for _, child := range current {
+				if contains(child) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if contains(document) {
+		return fmt.Errorf("legacy State cannot carry WSS configuration or host effects")
+	}
+	return nil
 }
 
 // The v1/v2 state formats predate the endpoint-local MTU policy. Reject
@@ -421,7 +466,10 @@ func validateSnapshot(snapshot Snapshot) error {
 	if err := validateIPsecXFRMOperations(snapshot); err != nil {
 		return err
 	}
-	return validateIPsecRemovalReceipts(snapshot)
+	if err := validateIPsecRemovalReceipts(snapshot); err != nil {
+		return err
+	}
+	return validateWSSCrashOperations(snapshot)
 }
 
 func cloneRecord(record LinkRecord) LinkRecord {

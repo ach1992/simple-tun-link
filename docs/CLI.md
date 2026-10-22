@@ -462,3 +462,26 @@ its receipt retryable; a retired Link ID cannot be reused. Arbitrary
 **operator-selected exported handoff paths** remain operator-managed and
 must be separately retired from their external storage after confirmation.
 The state schema is v4; older binaries must not attempt to manage WSS Links.
+
+### WSS R2: crash-safe preparation and explicit vacancy reconciliation
+
+Interrupted WSS Ensure/Remove or repair may leave a **durable,
+nonsecret** pre-effect journal. Until resolved, the Link and its
+planned resource identities are reserved against automatic replay and
+conflicting allocations.
+
+Only when all host effects are absent after an **initial,
+uncommitted** Ensure may the original Link ID be released for an
+exact-credential retry:
+
+```sh
+sudo stl link reconcile-wss-vacant LINK_ID --confirm LINK_ID --json
+```
+
+The command removes only that exact journal record after confirming
+kernel WG, nft and helper vacancy. It **does not** delete or adopt
+host resources, retire credentials, recreate handoffs or bypass the
+committed-Link/Remove recovery gate. If host effects are present or
+inspection fails, leave the journal intact and obtain separately
+approved owner-scoped recovery; never hand-edit State or perform
+name-matched cleanup.

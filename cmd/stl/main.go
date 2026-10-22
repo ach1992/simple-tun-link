@@ -130,6 +130,9 @@ func runWithRuntimeInput(args []string, input io.Reader, stdout, stderr io.Write
 		if len(args) >= 2 && (args[1] == "list" || args[1] == "status") {
 			return linkReadCommand(args[1:], stdout, stderr, options)
 		}
+		if len(args) >= 2 && args[1] == "reconcile-wss-vacant" {
+			return linkWSSCrashVacantCommand(args[2:], stdout, stderr, options)
+		}
 		if len(args) >= 2 && args[1] == "retire-wss" {
 			return linkWSSRetireCommand(args[2:], stdout, stderr, options)
 		}
