@@ -263,6 +263,12 @@ func (b *Backend) inspectPublicWG(ctx context.Context, o *observedLink) error {
 	if err != nil {
 		return err
 	}
+	// wg(8) spells an unconfigured peer property "(none)". This is
+	// different from a foreign value and must be normalized to absence
+	// before verifying a legitimately interrupted partial wg set.
+	if o.AllowedIPs == "(none)" {
+		o.AllowedIPs = ""
+	}
 	keep, err := parsePeerAttribute(keepalive, o.Peers[0])
 	if err != nil {
 		return err
@@ -275,6 +281,9 @@ func (b *Backend) inspectPublicWG(ctx context.Context, o *observedLink) error {
 		o.Keepalive = uint16(n)
 	}
 	o.Endpoint, err = parsePeerAttribute(endpoints, o.Peers[0])
+	if o.Endpoint == "(none)" {
+		o.Endpoint = ""
+	}
 	return err
 }
 

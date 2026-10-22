@@ -526,14 +526,24 @@ The canonical Engine holds maintenance, Link and resource locks. The
 128-bit original creation nonce appears in the nft guard rule, systemd
 unit description and kernel WG alias. WG creation first uses an exclusive
 unpredictable nonce-derived staging name; it is then tagged by ifindex
-and only then renamed to the stable name. A crash between creation and
-alias publication therefore leaves an original staging identity whose
-configuration must still be strictly empty/down and address-free.
+and only then renamed to the stable name. Linux does not publish
+the alias atomically with the kernel NEWLINK. An unmarked staging
+interface, even if nonce-named, empty and down, has no reliable proof
+that STL created it; it may have been created by another actor between
+the guard and STL's exclusive NEWLINK. The command **always rejects**
+such a pre-alias object, retains the ingress guard and original journal,
+and never deletes that possibly foreign interface. A genuinely original
+pre-alias crash requires separate out-of-band identity-attested operator
+recovery (see `OPERATOR-RECOVERY.md`); guessing from name or empty
+configuration is unsafe. Nonce-tagged originals instead permit only
+verified intermediate subsets of the originally intended WG configuration.
 
 Owner-verifiable effects are compensated in protective order: **collect
 original helper, remove original WG by rechecked ifindex, remove original
-nft guard LAST**. Strict global WG key and port vacancy is required
-before deleting the guard, and complete host vacancy must be established
+nft guard LAST**. Complete, mutually consistent WireGuard interface,
+public-key and UDP-port inventories must establish global vacancy
+immediately before **every** WSS guard deletion (including ordinary
+Remove and Ensure rollback), and complete host vacancy must be established
 before consuming the journal in one State transaction. Initial Ensure
 releases its uncommitted journal; committed repair preserves original
 Link/fingerprints; committed Remove commits the original retirement

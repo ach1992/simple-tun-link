@@ -180,3 +180,57 @@ probes, cancellation, rollback success/failure, uncertain state publication
 and independent sibling operations; they are **not** a substitute for
 real privileged kernel/module, multi-distro or traffic/restart testing.
 Release-level privileged E2E is separately reproduced through the [cross-backend runbook](operations/CROSS-BACKEND-REAL-E2E.md) and recorded against the exact candidate.
+
+## Unreleased WSS: unmarked pre-alias kernel staging quarantine
+
+A managed-WSS Create can be interrupted after exclusive WireGuard
+`RTM_NEWLINK` but before publishing the original owner `ifalias`.
+The unpredictable, nonce-derived staging **name is not evidence of
+creation**. An identical unconfigured WG interface may have been created
+by another actor before STL dispatched `RTM_NEWLINK`, or may have
+replaced the original interface later. Its empty/down state, type, name
+and saved journal are not independently sufficient to delete it.
+
+When `stl link reconcile-wss-original LINK_ID --confirm LINK_ID`
+rejects an **unmarked staging object**:
+
+1. Stop ordinary Create/Ensure/Restore retry for that Link. Preserve the
+   exact protected original crash journal, the verified nft ingress
+   guard, and the existing kernel object; do not adopt or re-label it.
+   Read-only `stl link list --json`, `ip -details -json link show type
+   wireguard`, `ip -json address show`, and public-only `wg show`
+   can collect diagnostics, but **none establishes pre-alias creation
+   provenance**.
+2. This is a **separate, privileged, manual identity-attestation
+   boundary**, not a weaker mode of `reconcile-wss-original`. Before
+   any targeted manual kernel deletion, require independent,
+   trustworthy evidence of the *actual original* exclusive NEWLINK
+   creation and its exact network namespace plus ifindex/generation,
+   and fresh evidence proving the currently addressed object is still
+   that same object (no replacement or ifindex reuse). A log that
+   merely records the requested staging name, or an ambiguous/missing
+   ACK, is not this evidence. Have the Owner explicitly authorize the
+   identified manual host effect and its impact on other active Links.
+   STL does not currently create a durable pre-alias ifindex witness
+   and **cannot ordinarily supply that proof itself**.
+3. If this proof cannot be obtained, **do not delete the object**.
+   Keep guard + journal quarantine and arrange separately authorized
+   maintenance or an independently verified host/network namespace
+   teardown under an impact and rollback plan. A host restart is not
+   automatically safe for other Links, and is not authorized by this
+   recovery command. Absence or a reset must be verified anew;
+   never assume an unobserved side effect completed.
+4. Only after the original unmarked effect has been independently
+   resolved, use the existing `reconcile-wss-original` command with
+   explicit confirmation. It still revalidates the original guard
+   nonce, global WG interface/public-key/listen-port vacancy and final
+   host absence before committing the journal/State transaction.
+   Foreign resources and unrelated nft/firewall objects remain out
+   of scope. If any required readback is incomplete, retain quarantine.
+
+When the original WG alias *was* published, the existing command can
+verify its nonce and ifindex and compensate only intended original
+intermediate configuration; extra keys, peers, AllowedIPs, addresses
+or unexpected UDP listeners are refused. This manual pre-alias gate is
+an honest limitation of this unreleased candidate, not a promise that
+all pre-commit crash objects are automatically recoverable.

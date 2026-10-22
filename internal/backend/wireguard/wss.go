@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
-	"strings"
 
 	core "github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/composition"
@@ -358,38 +357,16 @@ func (b *Backend) CrashHostVacant(ctx context.Context, observed core.Observation
 	return b.crashWSSGlobalKernelVacant(ctx, current.WSSLink)
 }
 
-// crashWSSGlobalKernelVacant is reusable immediately BEFORE an original
-// ingress guard is deleted. It must not rely on a per-Link interface name:
-// another interface can hold the original UDP listen-port/public key even
-// after the original one is safely collected.
+// crashWSSGlobalKernelVacant is the same complete global inventory proof
+// enforced by the WSS host immediately before every nft guard deletion.
 func (b *Backend) crashWSSGlobalKernelVacant(ctx context.Context, link domain.Link) (bool, error) {
 	if link.Backend != domain.BackendWireGuardWSS || link.Validate() != nil {
 		return false, fmt.Errorf("global WSS identity is invalid")
 	}
-	// A Link interface may disappear while its originally configured key or
-	// WG listen port survives under a different interface. A vacancy receipt
-	// must not silently release the original resource reservation in that case.
-	// Global public-only WireGuard readbacks are also mandatory.
-	for _, entry := range []struct{ field, want string }{
-		{"public-key", link.WireGuard.LocalPublicKey},
-		{"listen-port", strconv.Itoa(int(link.WireGuard.ListenPort))},
-	} {
-		out, err := b.runner.Run(ctx, b.wgBinary, "show", "all", entry.field)
-		if err != nil {
-			return false, fmt.Errorf("cannot verify global WSS crash %s vacancy", entry.field)
-		}
-		for _, line := range strings.Split(strings.TrimSpace(string(out.Stdout)), "\n") {
-			if strings.TrimSpace(line) == "" {
-				continue
-			}
-			fields := strings.Fields(line)
-			if len(fields) != 2 {
-				return false, fmt.Errorf("malformed global WSS %s readback", entry.field)
-			}
-			if fields[1] == entry.want {
-				return false, nil
-			}
-		}
+	bounded, ok := b.runner.(linux.BoundedRunner)
+	if !ok {
+		return false, fmt.Errorf("bounded WireGuard inventory runner unavailable")
 	}
-	return true, nil
+	return linux.WSSGlobalWGKernelVacant(ctx, bounded, b.wgBinary,
+		link.WireGuard.LocalPublicKey, link.WireGuard.ListenPort)
 }

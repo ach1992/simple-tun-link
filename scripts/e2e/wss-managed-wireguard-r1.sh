@@ -41,7 +41,36 @@ if [[ "${1:-}" != --inside && "${1:-}" != --nsroot ]]; then
        install -m 0755 "$repo/scripts/e2e/wss-r2-wg-crash.py" "$lab/bin/shims/wg"
     fi
   fi
-
+  if [[ ${STL_WSS_R4_PARTIAL_WG_TEST:-} == key-port ]]; then
+    [[ -z "${STL_WSS_R4_GUARD_INTERLOPER:-}" && -z "${STL_WSS_R2_AMBIGUOUS_TEST:-}" ]] || {
+      echo "WSS R4 partial-original injection is exclusive" >&2; exit 2;
+    }
+    if [[ -e "$lab/bin/shims/wg" || -L "$lab/bin/shims/wg" ]]; then
+      [[ -f "$lab/bin/shims/wg" && ! -L "$lab/bin/shims/wg" &&
+         $(stat -c %u "$lab/bin/shims/wg") == $(id -u) &&
+         ( $(head -n 2 "$lab/bin/shims/wg" | tail -n 1) == '"""Bounded test-only WG host-effect crash; rootless namespace only."""' ||
+           $(head -n 2 "$lab/bin/shims/wg" | tail -n 1) == '"""Disposable namespace-only foreign WG listener injection at Remove guard gate.' ) ]] || {
+           echo "foreign WG test executable; refusing to overwrite" >&2; exit 2;
+         }
+    fi
+    install -m 0755 "$repo/scripts/e2e/wss-r4-partial-wg.py" "$lab/bin/shims/wg"
+  fi
+  if [[ ${STL_WSS_R4_GUARD_INTERLOPER:-} == port ]]; then
+    [[ -z "${STL_WSS_R2_AMBIGUOUS_TEST:-}" && -z "${STL_WSS_R2_REMOVE_CRASH_TEST:-}" ]] || {
+      echo "WSS R4 foreign guard injection is exclusive" >&2; exit 2;
+    }
+    # The previous WSS test may leave its own known crash shim; never
+    # overwrite an unknown or symlinked executor, even in ignored test data.
+    if [[ -e "$lab/bin/shims/wg" || -L "$lab/bin/shims/wg" ]]; then
+      [[ -f "$lab/bin/shims/wg" && ! -L "$lab/bin/shims/wg" &&
+         $(stat -c %u "$lab/bin/shims/wg") == $(id -u) &&
+         ( $(head -n 2 "$lab/bin/shims/wg" | tail -n 1) == '"""Bounded test-only WG host-effect crash; rootless namespace only."""' ||
+           $(head -n 2 "$lab/bin/shims/wg" | tail -n 1) == '"""Disposable namespace-only partial wg set followed by a hard process crash.' ) ]] || {
+           echo "foreign WG test executable; refusing to overwrite" >&2; exit 2;
+         }
+    fi
+    install -m 0755 "$repo/scripts/e2e/wss-r4-guard-interloper.py" "$lab/bin/shims/wg"
+  fi
 
   if [[ $(printenv STL_WSS_R2_DRIFT_TEST || :) == legacy ]];then
     for name in iptables-legacy-save ip6tables-legacy-save;do
@@ -161,6 +190,34 @@ invoke(){
     exec /usr/local/bin/stl-lab -test.run ^TestWSSLabCLI$ -test.v=false
   ' _ "$lab/$side-state"
 }
+if [[ ${STL_WSS_R4_PARTIAL_WG_TEST:-} == key-port ]]; then
+  echo "WSS R4: CRASH AFTER PARTIAL ORIGINAL KERNEL WG CONFIGURATION"
+  id=lnk_0123456789abcdef0123456789abcdef
+  guard=$(python3 -c 'import hashlib;print("stlwss_"+hashlib.sha256(b"lnk_0123456789abcdef0123456789abcdef").hexdigest()[:16])')
+  if invoke alpha link create-wss --stdin --output /var/lib/stl-r1-state/handoff/receiver.json < "$lab/alpha/create.json" > "$lab/alpha/partial-original-crash.log" 2>&1; then
+    echo "FAIL: injected original partial wg set unexpectedly completed" >&2; exit 1;
+  fi
+  jq -e '(.links|length)==0 and (.wss_crash_operations|length)==1' "$lab/alpha-state/state.json" >/dev/null
+  ip netns exec alpha wg show stlwg0123456789 public-key | grep -Eq '^[A-Za-z0-9+/]{43}=$'
+  ip netns exec alpha wg show stlwg0123456789 listen-port | grep -q '^51821$'
+  [[ -z "$(ip netns exec alpha wg show stlwg0123456789 peers)" ]]
+  ip netns exec alpha /usr/sbin/nft -j list table inet "$guard" >/dev/null
+  jq -c '{"schema_version":3,"link":.wss_crash_operations[0].intent}' "$lab/alpha-state/state.json" > "$lab/alpha/partial-retry.json"
+  if invoke alpha link ensure --stdin < "$lab/alpha/partial-retry.json" > "$lab/alpha/partial-retry-denied.log" 2>&1; then
+    echo "FAIL: partial original crash allowed ordinary operation replay" >&2; exit 1;
+  fi
+  invoke alpha link reconcile-wss-original "$id" --confirm "$id"
+  if ip netns exec alpha ip link show stlwg0123456789 >/dev/null 2>&1 ||
+    ip netns exec alpha /usr/sbin/nft list table inet "$guard" >/dev/null 2>&1; then
+    echo "FAIL: original partial configuration or guard survived recovery" >&2; exit 1;
+  fi
+  jq -e '(.links|length)==0 and (.wss_crash_operations//[]|length)==0' "$lab/alpha-state/state.json" >/dev/null
+  if invoke alpha link reconcile-wss-original "$id" --confirm "$id" > "$lab/alpha/partial-repeat-denied.log" 2>&1; then
+    echo "FAIL: original partial journal was consumed twice" >&2; exit 1;
+  fi
+  echo "SUCCESS NONCE_TAGGED_ORIGINAL_PARTIAL_WG_CRASH_RECOVERY"
+  exit 0
+fi
 if [[ -n "${STL_WSS_R2_AMBIGUOUS_TEST:-}" ]]; then
   case "$STL_WSS_R2_AMBIGUOUS_TEST" in
     nft-error|nft-timeout|nft-cancel|helper-error|helper-timeout|helper-cancel|helper-crash|kernel-crash) ;;
@@ -294,8 +351,8 @@ with open(path,"w") as f:json.dump(d,f)
 FOREIGN
   fi
   if [[ "$original_case" == guard || "$original_case" == wg ||
-        "$original_case" == wg-global || "$original_case" == staged-foreign ||
-        "$original_case" == helper ]];then
+        "$original_case" == wg-global || "$original_case" == staged ||
+        "$original_case" == staged-foreign || "$original_case" == helper ]];then
     if invoke alpha link reconcile-wss-original "$link_id" --confirm "$link_id" > "$lab/alpha/foreign-recovery-denied.log" 2>&1;then
       echo "FOREIGN HOST RESOURCE WAS MUTATED/ADOPTED" >&2;exit 1
     fi
@@ -304,6 +361,7 @@ FOREIGN
     case "$original_case" in
       wg) ip netns exec alpha ip -details link show stlwg0123456789 | grep -F 'ffffffffffffffffffffffffffffffff' >/dev/null ;;
       wg-global) ip netns exec alpha wg show foreignwg0 listen-port | grep -q '^51821$' ;;
+      staged) ip netns exec alpha ip -details link show "$stage" | grep -q "wireguard" ;;
       staged-foreign) ip netns exec alpha ip -details link show "$stage" | grep -q 'state UNKNOWN\|state UP' ;;
       helper) test -f "$lab/alpha/runtime/stl-wss-0123456789abcdef0123456789abcdef.service.json" ;;
       guard) ip netns exec alpha nft -j list table inet "$guard" | jq -e '[.nftables[]|.rule?.comment? | strings | select(endswith("ffffffffffffffffffffffffffffffff"))]|length==1' >/dev/null ;;
@@ -320,7 +378,7 @@ FOREIGN
       echo "WSS original-owner compensation did not collect its nft guard" >&2;exit 1
     fi
     echo "SUCCESS ORIGINAL_NFT_GUARD_HOST_COMPENSATION"
-    if [[ "$original_case" == staged || "$original_case" == staged-tagged ]];then
+    if [[ "$original_case" == staged-tagged ]];then
       if ip netns exec alpha ip link show "$stage" >/dev/null 2>&1;then
         echo "original nonce-derived staging kernel object survived recovery" >&2;exit 1
       fi
@@ -548,6 +606,27 @@ cp -- "$alpha_unit" "$alpha_saved"
 test_owned_blocker="$lab/alpha-state/credentials/wss/$id/owned-test-retirement-blocker"
 printf 'isolated-test-only\n' > "$test_owned_blocker"
 chmod 0600 "$test_owned_blocker"
+if [[ ${STL_WSS_R4_GUARD_INTERLOPER:-} == port ]]; then
+  [[ ! -e "$lab/beta/enable-foreign-guard-interloper" ]] || {
+    echo "foreign injection marker preexists" >&2; exit 2;
+  }
+  : > "$lab/beta/enable-foreign-guard-interloper"
+  if invoke beta link remove "$id" --confirm "$id" > "$lab/beta/foreign-after-delete.log" 2>&1; then
+    echo "FAIL: foreign WG listener did not prevent WSS nft guard retirement" >&2; exit 1
+  fi
+  test ! -e "$lab/beta/enable-foreign-guard-interloper" || {
+    echo "FAIL: foreign WG injection did not execute at last guard gate" >&2; exit 1
+  }
+  ip netns exec beta wg show foreignwg0 listen-port | grep -q '^51822$'
+  ip netns exec beta /usr/sbin/nft -j list table inet "$guard" | jq -e '
+    [.nftables[] | .rule?.comment? | strings | select(startswith("stl:"))] | length==1' >/dev/null
+  jq -e '(.links|length)==1 and (.wss_crash_operations|length)==1' "$lab/beta-state/state.json" >/dev/null
+  if invoke beta link retire-wss "$id" --confirm "$id" > "$lab/beta/unsafe-foreign-retire-denied.log" 2>&1; then
+    echo "FAIL: foreign listener permitted committed retirement" >&2;exit 1
+  fi
+  echo "DENY_PASS FOREIGN_WG_PORT_AFTER_ORIGINAL_DELETE_PRESERVES_NFT_GUARD_AND_CRASH_JOURNAL"
+  exit 0
+fi
 invoke beta link remove "$id" --confirm "$id"
 if invoke alpha link remove "$id" --confirm "$id" > "$lab/alpha/pending-retirement-expected.log" 2>&1;then
     echo "FAIL: test-only unexpected private file did not block immediate credential retirement" >&2;exit 1

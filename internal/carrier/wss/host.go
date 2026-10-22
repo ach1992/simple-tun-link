@@ -407,6 +407,21 @@ func (h Host) RemoveGuard(ctx context.Context, link domain.Link) (core.Rollback,
 	if !present {
 		return func(context.Context) error { return nil }, nil
 	}
+	// This is the unique last-mile deletion boundary. Both ordinary
+	// Remove and all compensating/rollback paths call RemoveGuard, including
+	// the EnsureGuard undo closure. A foreign listener, incomplete/malformed
+	// global observation, or cancellation MUST retain the ingress protection.
+	clear, err := linux.WSSGlobalWGKernelVacant(ctx, h.runner(), "wg",
+		link.WireGuard.LocalPublicKey, link.WireGuard.ListenPort)
+	if err != nil {
+		return nil, fmt.Errorf("cannot prove global WG vacancy before WSS ingress guard deletion: %w", err)
+	}
+	if !clear {
+		return nil, fmt.Errorf("global WG key or UDP port still occupied; preserve WSS ingress guard")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := h.runNFT(ctx, "delete table inet "+guard.TableName()+"\n"); err != nil {
 		return nil, fmt.Errorf("%w: nft guard delete outcome uncertain", core.ErrIndeterminateHostEffect)
 	}

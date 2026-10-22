@@ -102,6 +102,35 @@ func parseAddresses(raw []byte, name string, ifindex int) ([]netip.Prefix, error
 	return out, nil
 }
 
+func parseOriginalWSSAddresses(raw []byte, name string, ifindex int) ([]netip.Prefix, error) {
+	// Ordinary iproute2 address diagnostics may ignore unknown families, but
+	// destructive original-object recovery must reject duplicate/case-aliased
+	// JSON members and any additional address family, not just IPv4 drift.
+	if len(raw) > 1<<20 || linux.ValidateWSSWGJSONMembers(raw) != nil {
+		return nil, fmt.Errorf("WSS original address inventory malformed or oversized")
+	}
+	var rows []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &rows); err != nil || len(rows) != 1 {
+		return nil, fmt.Errorf("WSS original address inventory is incomplete")
+	}
+	info, ok := rows[0]["addr_info"]
+	if !ok || string(info) == "null" {
+		return nil, fmt.Errorf("WSS original address inventory missing entries")
+	}
+	var entries []struct {
+		Family string `json:"family"`
+	}
+	if err := json.Unmarshal(info, &entries); err != nil || entries == nil {
+		return nil, fmt.Errorf("WSS original address inventory malformed")
+	}
+	for _, entry := range entries {
+		if entry.Family != "inet" {
+			return nil, fmt.Errorf("WSS original interface has unexpected address family")
+		}
+	}
+	return parseAddresses(raw, name, ifindex)
+}
+
 func parsePeerAttribute(raw []byte, peer string) (string, error) {
 	text := strings.TrimSpace(string(raw))
 	if text == "" {

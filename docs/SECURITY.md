@@ -269,18 +269,27 @@ The unreleased R3 candidate adds explicitly confirmed
 `reconcile-wss-original`: original 128-bit creation nonce must match
 nft rule and systemd unit description, while Linux WireGuard creation
 uses an unpredictable nonce-derived staging name followed by ifindex-
-targeted alias publication and rename. Staging-only interfaces must
-remain unconfigured, down and address-free; same-name foreign objects
-are rejected.
+targeted alias publication and rename. An unmarked staging interface
+has no independently attested origin: its random name and empty/down
+appearance are never delete authority.
+STL quarantines it along with the journal and ingress guard.
 A dispatched RTM_NEWLINK whose ACK/timeout/cancellation cannot prove
 whether the staging object was created is treated as an indeterminate
 host effect. Its original ingress nft guard and durable crash journal
-MUST survive; normal rollback is prohibited until the original staged
-object is inspected in an explicitly confirmed recovery. This ordering
-is exercised by an actual rootless kernel-creation-then-lost-ACK test. The helper is collected before deleting the rechecked
-original WG ifindex; global WG key/listen-port absence is mandatory
-before finally removing the protective guard. Partial compensation
-preserves its journal and conservative host protection.
+MUST survive; normal rollback is prohibited until original staging
+ownership is independently attested outside the unsafe name-only path.
+The ordinary `reconcile-wss-original` command rejects untagged staging,
+including an actual pre-alias crash. See `OPERATOR-RECOVERY.md` for the
+separate manual identity-attestation gate; never delete on heuristic
+name/configuration evidence. This ordering is exercised by the rootless
+kernel-creation-then-lost-ACK test.
+
+The helper is collected before deleting a rechecked, nonce-tagged
+original WG ifindex. Complete and consistent global WireGuard
+interface/public-key/listen-port readback is mandatory before EVERY
+protective guard deletion, including ordinary Remove and Ensure rollback.
+Partial compensation preserves its journal and conservative host
+protection.
 
 A separate `reconcile-wss-repair-vacant` operation verifies all
 original issuance-time private fingerprints AND host vacancy before

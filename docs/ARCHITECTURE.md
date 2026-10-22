@@ -734,13 +734,19 @@ recovery without changing ordinary Link automatic replay:
   transaction nonce. nft rule and transient systemd description bind
   to this original identity. An exclusive kernel WG create uses a 70-bit
   nonce-derived staging name first, then sets the alias BY IFINDEX and
-  renames: this avoids a bare public-name creation window.
+  renames: this avoids a bare public-name creation window. Because Linux
+  does not atomically publish IFLA_IFALIAS on initial WG NEWLINK, the nonce-
+  derived name ALONE cannot attest pre-alias ownership. An unmarked staging
+  object is always quarantined with its ingress guard and journal; STL cannot
+  delete it by guessed name, even if it might be the original creation.
 - Under canonical Engine locks, identity readback gates the exact
   original helper, kernel interface and guard in that order. The guard
-  remains until the originally reserved global WG key/listen port
-  cannot be found anywhere, and final strict host vacancy precedes
-  State/journal commit. Committed Remove publishes the original
-  retirement receipt; committed repair preserves its Link.
+  remains until consistent global WG interface, key and listen-port
+  inventories prove no matching identity anywhere. All guard deletions,
+  including ordinary Remove and Ensure rollback, enforce that gate.
+  Final strict host vacancy precedes State/journal commit.
+  Committed Remove publishes the original retirement receipt; committed
+  repair preserves its Link.
 
 Unverifiable/foreign effects are quarantined, not adopted by name.
 Physical systemd/field/ARM64 WSS and independent review remain separate

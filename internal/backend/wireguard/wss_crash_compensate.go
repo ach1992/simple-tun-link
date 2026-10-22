@@ -3,7 +3,8 @@ package wireguard
 import (
 	"context"
 	"fmt"
-	"strings"
+	"net/netip"
+	"slices"
 
 	core "github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/domain"
@@ -112,14 +113,9 @@ func (b *Backend) CrashCompensateOriginal(ctx context.Context, link domain.Link,
 		}
 	}
 	if next.GuardPresent {
-		// Never remove the original ingress protection while another WG
-		// interface still holds the original UDP port or public identity.
-		// A strict global readback is needed even after the local ifindex
-		// and transient helper have been collected.
-		clear, err := b.crashWSSGlobalKernelVacant(ctx, link)
-		if err != nil || !clear {
-			return fmt.Errorf("cannot prove global WG key/UDP-port vacancy before guard removal: %w", err)
-		}
+		// The Host's unique last-mile guard-removal boundary performs a
+		// strict global key/UDP-port inventory immediately before nft delete.
+		// Do not check earlier here and then rely on stale preconditions.
 		if _, err := b.wssHost.RemoveGuard(ctx, link); err != nil {
 			return fmt.Errorf("cannot collect exactly tagged WSS guard: %w", err)
 		}
@@ -127,60 +123,38 @@ func (b *Backend) CrashCompensateOriginal(ctx context.Context, link domain.Link,
 	return nil // Engine must separately inspect ALL host vacancy and commit.
 }
 
-// verifyOriginalCrashWG is read-only and checks every kernel WireGuard
-// object before any original-object compensation is attempted. The initial
-// staged name carries the original random 70-bit nonce-derived identity;
-// it may ONLY be empty/down/untagged (prior to alias) or carry the original
-// full 128-bit nonce alias. No same-name foreign replacement is adopted.
+// verifyOriginalCrashWG rejects ANY untagged staging object. A derived
+// name, even when random, is not proof of creation: a foreign same-name WG
+// may appear after the guard and before STL's exclusive kernel NEWLINK.
+// An actual pre-alias crash therefore remains quarantined, pending
+// independently attested, out-of-band operator recovery. Never guess.
 func (b *Backend) verifyOriginalCrashWG(ctx context.Context, link domain.Link,
 	observed observation, alias, staging, name string) error {
-	canonical := 0
-	temp := 0
+	canonical, temp := 0, 0
 	for _, candidate := range observed.Links {
-		if candidate.Name == name {
+		switch {
+		case candidate.Name == name:
 			canonical++
 			if !observed.Target.Exists || candidate.IfIndex != observed.Target.IfIndex ||
 				candidate.IfIndex <= 0 || candidate.Alias != alias || candidate.Owner != link.ID {
 				return fmt.Errorf("foreign original WG public-name replacement")
 			}
-		} else if candidate.Name == staging {
+		case candidate.Name == staging:
 			temp++
-			if candidate.IfIndex <= 0 || candidate.Up ||
-				(candidate.Alias != "" && candidate.Alias != alias) ||
-				(candidate.Alias == alias && candidate.Owner != link.ID) ||
-				(candidate.Alias == "" && candidate.Owner != "") {
+			if candidate.Alias == "" {
+				return fmt.Errorf("unmarked WSS staging interface has no independently attested original ownership; retain guard and journal")
+			}
+			if candidate.IfIndex <= 0 || candidate.Alias != alias || candidate.Owner != link.ID || candidate.Up {
 				return fmt.Errorf("original WG staged ifindex/nonce identity mismatched")
 			}
-			for _, field := range []string{"public-key", "listen-port", "peers"} {
-				out, err := b.runner.Run(ctx, b.wgBinary, "show", staging, field)
-				if err != nil {
-					return fmt.Errorf("incomplete original staging WG %s readback", field)
-				}
-				value := strings.TrimSpace(string(out.Stdout))
-				switch field {
-				case "public-key":
-					if value != "(none)" {
-						return fmt.Errorf("staging WG public key is not original unconfigured state")
-					}
-				case "listen-port":
-					if value != "off" && value != "0" {
-						return fmt.Errorf("staging WG unexpectedly listens on UDP")
-					}
-				case "peers":
-					if value != "" {
-						return fmt.Errorf("staging WG has unexpected peer configuration")
-					}
-				}
+			if err := b.inspectPublicWG(ctx, &candidate); err != nil {
+				return fmt.Errorf("incomplete original marked staging WG readback: %w", err)
 			}
-			address, err := b.runner.Run(ctx, b.ipBinary, "-json", "address", "show", "dev", staging)
-			if err != nil {
-				return fmt.Errorf("staged kernel WG address cannot be attested")
+			addresses, err := b.originalWSSAddresses(ctx, staging, candidate.IfIndex)
+			if err != nil || len(addresses) != 0 || !candidate.emptyConfig() || candidate.Endpoint != "" {
+				return fmt.Errorf("marked staging WG has foreign or ambiguous configuration")
 			}
-			addrs, err := parseAddresses(address.Stdout, staging, candidate.IfIndex)
-			if err != nil || len(addrs) != 0 {
-				return fmt.Errorf("staging WG carries foreign addresses")
-			}
-		} else if candidate.Alias == alias {
+		case candidate.Alias == alias:
 			return fmt.Errorf("original WSS kernel nonce moved to a different interface")
 		}
 	}
@@ -192,19 +166,71 @@ func (b *Backend) verifyOriginalCrashWG(ctx context.Context, link domain.Link,
 		if target.Name != name || target.IfIndex <= 0 || target.Alias != alias || target.Owner != link.ID {
 			return fmt.Errorf("original public WG owner alias or ifindex mismatched")
 		}
-		if target.emptyConfig() {
-			if target.Up || len(target.IPv4Addresses) != 0 {
-				return fmt.Errorf("unconfigured original WG was unexpectedly activated")
-			}
-		} else if target.configuredFor(link) {
-			if len(target.IPv4Addresses) > 1 ||
-				(len(target.IPv4Addresses) == 1 && target.IPv4Addresses[0] != link.Addresses.Local) ||
-				(target.Up && len(target.IPv4Addresses) != 1) {
-				return fmt.Errorf("original configured WG address/up state is foreign")
-			}
-		} else {
+		addrs, err := b.originalWSSAddresses(ctx, name, target.IfIndex)
+		if err != nil || !slices.Equal(addrs, target.IPv4Addresses) {
+			return fmt.Errorf("original public WG address readback incomplete or changed")
+		}
+		if !originalWSSWGConfigSubset(target, link) {
 			return fmt.Errorf("original kernel WG public configuration drift is unverified")
 		}
 	}
 	return nil
+}
+
+// Only independently nonce-tagged and correctly ifindex-identified original
+// WG objects may be compensated. Each accepted field is absent or a subset
+// of the exact intended original wg set; link addressing/up requires the
+// complete intended peer configuration to have been installed first.
+func originalWSSWGConfigSubset(actual observedLink, link domain.Link) bool {
+	wg := link.WireGuard
+	if actual.PublicKey != "" && actual.PublicKey != wg.LocalPublicKey {
+		return false
+	}
+	if actual.ListenPort != 0 && actual.ListenPort != wg.ListenPort {
+		return false
+	}
+	if len(actual.Peers) > 1 || (len(actual.Peers) == 1 && actual.Peers[0] != wg.PeerPublicKey) {
+		return false
+	}
+	if len(actual.Peers) == 0 && (actual.AllowedIPs != "" || actual.Endpoint != "" || actual.Keepalive != 0) {
+		return false
+	}
+	if actual.AllowedIPs != "" && actual.AllowedIPs != netip.PrefixFrom(link.Addresses.Peer.Addr(), 32).String() {
+		return false
+	}
+	if actual.Keepalive != 0 && actual.Keepalive != wg.LocalKeepalive {
+		return false
+	}
+	// WSS uses an exact local helper endpoint; configured, up WG may later
+	// learn a different authenticated endpoint through roaming.
+	if actual.Endpoint != "" && actual.Endpoint != endpoint(link) &&
+		!(actual.Up && actual.configuredFor(link)) {
+		return false
+	}
+	fullyConfigured := actual.configuredFor(link)
+	if len(actual.IPv4Addresses) > 1 ||
+		(len(actual.IPv4Addresses) == 1 &&
+			(actual.IPv4Addresses[0] != link.Addresses.Local || !fullyConfigured)) {
+		return false
+	}
+	if actual.Up && (!fullyConfigured || len(actual.IPv4Addresses) != 1) {
+		return false
+	}
+	// A peer before any private-key-derived public identity is not a
+	// plausible prefix of the original kernel configuration sequence.
+	if len(actual.Peers) > 0 && actual.PublicKey == "" {
+		return false
+	}
+	return true
+}
+
+// Re-read all addresses with the exact ifindex. Generic diagnostics extract
+// IPv4 and may ignore IPv6; compensation must reject any additional address,
+// missing addr_info member, or change between two readbacks.
+func (b *Backend) originalWSSAddresses(ctx context.Context, name string, ifindex int) ([]netip.Prefix, error) {
+	out, err := b.runner.Run(ctx, b.ipBinary, "-json", "address", "show", "dev", name)
+	if err != nil || ctx.Err() != nil {
+		return nil, fmt.Errorf("original WG address inventory unavailable")
+	}
+	return parseOriginalWSSAddresses(out.Stdout, name, ifindex)
 }

@@ -53,7 +53,7 @@ func (f *fakeKernel) Run(_ context.Context, binary string, args ...string) (linu
 		}(), "linkinfo": map[string]any{"info_kind": "wireguard"}}})
 		return linux.CommandResult{Stdout: raw}, nil
 	case binary == "ip" && len(args) == 5 && args[0] == "-json" && args[1] == "address":
-		var addrs []any
+		addrs := []any{}
 		for _, v := range f.target.IPv4Addresses {
 			addrs = append(addrs, map[string]any{"family": "inet", "local": v.Addr().String(), "prefixlen": v.Bits()})
 		}
@@ -66,7 +66,13 @@ func (f *fakeKernel) Run(_ context.Context, binary string, args ...string) (linu
 		if f.fail == "wg-observation" {
 			return linux.CommandResult{}, errors.New("synthetic wg unavailable")
 		}
-		return linux.CommandResult{Stdout: []byte(f.target.Name + "\n")}, nil
+		var interfaces []string
+		for _, candidate := range append(append([]observedLink(nil), f.others...), f.target) {
+			if candidate.Exists {
+				interfaces = append(interfaces, candidate.Name)
+			}
+		}
+		return linux.CommandResult{Stdout: []byte(strings.Join(interfaces, " ") + "\n")}, nil
 	case binary == "wg" && len(args) == 3 && args[0] == "show":
 		iface, field := args[1], args[2]
 		if iface == "all" {
@@ -108,15 +114,27 @@ func (f *fakeKernel) Run(_ context.Context, binary string, args ...string) (linu
 			value = strings.Join(f.target.Peers, "\n")
 		case "allowed-ips":
 			if len(f.target.Peers) == 1 {
-				value = f.target.Peers[0] + "\t" + f.target.AllowedIPs
+				allowed := f.target.AllowedIPs
+				if allowed == "" {
+					allowed = "(none)"
+				}
+				value = f.target.Peers[0] + "\t" + allowed
 			}
 		case "endpoints":
 			if len(f.target.Peers) == 1 {
-				value = f.target.Peers[0] + "\t" + f.target.Endpoint
+				ep := f.target.Endpoint
+				if ep == "" {
+					ep = "(none)"
+				}
+				value = f.target.Peers[0] + "\t" + ep
 			}
 		case "persistent-keepalive":
 			if len(f.target.Peers) == 1 {
-				value = f.target.Peers[0] + "\t" + strconv.Itoa(int(f.target.Keepalive))
+				keepalive := strconv.Itoa(int(f.target.Keepalive))
+				if f.target.Keepalive == 0 {
+					keepalive = "off"
+				}
+				value = f.target.Peers[0] + "\t" + keepalive
 			}
 		case "latest-handshakes":
 			if len(f.target.Peers) == 1 {
@@ -133,6 +151,12 @@ func (f *fakeKernel) Run(_ context.Context, binary string, args ...string) (linu
 	}
 	return linux.CommandResult{}, errors.New("unexpected fake command")
 }
+
+// Test runner's output is bounded by the deterministic fake inventory.
+func (f *fakeKernel) RunBounded(ctx context.Context, _ linux.CaptureLimits, binary string, args ...string) (linux.CommandResult, error) {
+	return f.Run(ctx, binary, args...)
+}
+
 func (f *fakeKernel) RunWithFiles(_ context.Context, binary string, files []*os.File, args ...string) (linux.CommandResult, error) {
 	if binary != "wg" || len(files) != 1 || len(args) != 14 || args[0] != "set" || args[4] != "private-key" || args[5] != "/proc/self/fd/3" {
 		return linux.CommandResult{}, fmt.Errorf("unexpected fake WG configuration command")
