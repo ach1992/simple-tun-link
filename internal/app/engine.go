@@ -479,6 +479,14 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 	}()
 	request.OwnedResources = append([]domain.ResourceClaim(nil), prior.OwnedResources...)
 	link := request.Link
+	if link.Backend == domain.BackendWireGuardWSS && prior.Desired.ID == link.ID {
+		var contextErr error
+		ctx, contextErr = backend.WithWSSOrigin(ctx, prior.WSSOrigin)
+		if contextErr != nil {
+			return Result{}, stlerr.New(stlerr.CodeState, "wss_original_object",
+				string(link.ID), "wireguard-wss", "committed Link lacks original WSS creation-object identity")
+		}
+	}
 	impl, ok := e.backends.Get(link.Backend)
 	if !ok {
 		return Result{}, stlerr.New(stlerr.CodeUnsupported, string(request.Operation), string(link.ID), string(link.Backend), "backend is not registered")
@@ -781,6 +789,13 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		if prepareErr != nil {
 			return Result{}, prepareErr
 		}
+		if prior.Desired.ID != link.ID {
+			ctx, prepareErr = backend.WithWSSOrigin(ctx, preparedWSS.Nonce)
+			if prepareErr != nil {
+				return Result{}, stlerr.New(stlerr.CodeState, "wss_original_object",
+					string(link.ID), "wireguard-wss", "journal original-object nonce invalid after publication")
+			}
+		}
 	}
 	var undo backend.Rollback
 	if changed {
@@ -938,7 +953,11 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 			if _, removed := snapshot.FindRemovalReceipt(link.ID); removed {
 				return fmt.Errorf("obsolete removal receipt survives ensure")
 			}
-			snapshot.Upsert(state.LinkRecord{Desired: link, OwnedResources: resources, WSSFiles: wssFiles})
+			originalNonce := prior.WSSOrigin
+			if link.Backend == domain.BackendWireGuardWSS && prior.Desired.ID != link.ID {
+				originalNonce = preparedWSS.Nonce
+			}
+			snapshot.Upsert(state.LinkRecord{Desired: link, OwnedResources: resources, WSSFiles: wssFiles, WSSOrigin: originalNonce})
 		case backend.OperationRemove:
 			if _, operational := impl.(*ipsec.OperationalBackend); operational && link.Backend == domain.BackendIPsec {
 				journal, present := snapshot.FindIPsecRemoveOperation(link.ID)
@@ -979,6 +998,7 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 			operation, ok := snapshot.FindWSSCrashOperation(link.ID)
 			if !ok || operation.Nonce != preparedWSS.Nonce || operation.Intent != preparedWSS.Intent ||
 				operation.Operation != preparedWSS.Operation || operation.HadCommittedLink != preparedWSS.HadCommittedLink ||
+				operation.OriginalHostNonce != preparedWSS.OriginalHostNonce ||
 				!slices.Equal(operation.Resources, preparedWSS.Resources) {
 				return fmt.Errorf("WSS durable crash journal changed during host operation")
 			}
@@ -1001,7 +1021,12 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		if request.Operation == backend.OperationRemove {
 			publicationFiles = prior.WSSFiles
 		}
-		published := loadErr == nil && stateMatchesOperation(visible, request, resources, publicationFiles)
+		publishedOrigin := prior.WSSOrigin
+		if link.Backend == domain.BackendWireGuardWSS && request.Operation == backend.OperationEnsure &&
+			prior.Desired.ID != link.ID {
+			publishedOrigin = preparedWSS.Nonce
+		}
+		published := loadErr == nil && stateMatchesOperation(visible, request, resources, publicationFiles, publishedOrigin)
 		oldState := loadErr == nil && stateMatchesPrior(visible, link.ID, prior)
 		var publicationErr *state.PublicationError
 		indeterminate := errors.As(commitErr, &publicationErr)
@@ -1325,7 +1350,7 @@ func restoreLockClaim() domain.ResourceClaim {
 // stateMatchesOperation proves the attempted desired-state record became
 // visible; equality covers both requested intent and all owned resource claims.
 func stateMatchesOperation(snapshot state.Snapshot, request backend.Request,
-	resources []domain.ResourceClaim, originalFiles state.WSSFileIdentity) bool {
+	resources []domain.ResourceClaim, originalFiles state.WSSFileIdentity, originalNonce string) bool {
 	record, exists := snapshot.Find(request.Link.ID)
 	if request.Operation == backend.OperationRemove {
 		if exists {
@@ -1341,7 +1366,8 @@ func stateMatchesOperation(snapshot state.Snapshot, request backend.Request,
 		return true
 	}
 	return exists && record.Desired == request.Link &&
-		record.WSSFiles == originalFiles && slices.Equal(record.OwnedResources, resources)
+		record.WSSFiles == originalFiles && record.WSSOrigin == originalNonce &&
+		slices.Equal(record.OwnedResources, resources)
 }
 
 func stateMatchesPrior(snapshot state.Snapshot, id domain.LinkID, prior state.LinkRecord) bool {
@@ -1350,6 +1376,6 @@ func stateMatchesPrior(snapshot state.Snapshot, id domain.LinkID, prior state.Li
 		return !exists
 	}
 	return exists && record.Desired == prior.Desired &&
-		record.WSSFiles == prior.WSSFiles &&
+		record.WSSFiles == prior.WSSFiles && record.WSSOrigin == prior.WSSOrigin &&
 		slices.Equal(record.OwnedResources, prior.OwnedResources)
 }

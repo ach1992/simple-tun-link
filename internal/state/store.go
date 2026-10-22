@@ -3,6 +3,7 @@ package state
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,6 +40,7 @@ type LinkRecord struct {
 	Desired        domain.Link            `json:"desired"`
 	OwnedResources []domain.ResourceClaim `json:"owned_resources,omitempty"`
 	WSSFiles       WSSFileIdentity        `json:"wss_file_digests,omitzero"`
+	WSSOrigin      string                 `json:"wss_original_object_nonce,omitempty"`
 }
 
 type Snapshot struct {
@@ -443,11 +445,15 @@ func validateSnapshot(snapshot Snapshot) error {
 			return fmt.Errorf("duplicate Link ID %q", record.Desired.ID)
 		}
 		if record.Desired.Backend == domain.BackendWireGuardWSS {
+			raw, nonceErr := hex.DecodeString(record.WSSOrigin)
+			if nonceErr != nil || len(raw) != 16 || hex.EncodeToString(raw) != record.WSSOrigin {
+				return fmt.Errorf("committed WSS Link lacks valid original host-object nonce")
+			}
 			if err := record.WSSFiles.VerifyLink(record.Desired); err != nil {
 				return fmt.Errorf("committed WSS Link missing original credential fingerprints: %w", err)
 			}
-		} else if record.WSSFiles != (WSSFileIdentity{}) {
-			return fmt.Errorf("native Link cannot carry WSS credential fingerprints")
+		} else if record.WSSFiles != (WSSFileIdentity{}) || record.WSSOrigin != "" {
+			return fmt.Errorf("native Link cannot carry WSS credential or original host-object identity")
 		}
 		seen[record.Desired.ID] = struct{}{}
 		for _, claim := range record.OwnedResources {

@@ -29,12 +29,18 @@ func (e *Engine) prepareWSSCrash(ctx context.Context, request backend.Request,
 		Nonce: hex.EncodeToString(nonce[:]), Resources: append([]domain.ResourceClaim(nil), claims...),
 		HadCommittedLink: prior.Desired.ID == request.Link.ID,
 	}
+	if op.HadCommittedLink {
+		op.OriginalHostNonce = prior.WSSOrigin
+	}
 	err := e.store.Update(ctx, func(s *state.Snapshot) error {
 		if _, exists := s.FindWSSCrashOperation(request.Link.ID); exists {
 			return fmt.Errorf("existing WSS crash journal requires reconciliation")
 		}
 		previous, exists := s.Find(request.Link.ID)
-		if exists != op.HadCommittedLink || (exists && previous.Desired != prior.Desired) {
+		if exists != op.HadCommittedLink || (exists && (previous.Desired != prior.Desired ||
+			previous.WSSFiles != prior.WSSFiles ||
+			previous.WSSOrigin != prior.WSSOrigin ||
+			!slices.Equal(previous.OwnedResources, prior.OwnedResources))) {
 			return fmt.Errorf("committed WSS Link changed before pre-effect journal")
 		}
 		if request.Operation == backend.OperationRemove && (!exists || previous.Desired != request.Link) {
@@ -75,7 +81,35 @@ func (e *Engine) ReconcileWSSCrashVacant(ctx context.Context, id domain.LinkID) 
 func (e *Engine) ReconcileWSSCrashRemoved(ctx context.Context, id domain.LinkID) error {
 	return e.reconcileWSSCrash(ctx, id, true)
 }
+
+// ReconcileWSSCrashRepairVacant preserves an exact previously committed
+// Link/credentials/claims while clearing ONLY an interrupted Ensure journal
+// after independent proof that ALL original host resources are absent.
+func (e *Engine) ReconcileWSSCrashRepairVacant(ctx context.Context, id domain.LinkID) error {
+	return e.reconcileWSSCrashMode(ctx, id, "repair-vacant")
+}
+
+// ReconcileWSSCrashOriginal performs explicitly confirmed, bounded
+// original-object compensation on an unresolved journal. It never silently
+// uses resource names as authority, nor replays the original Ensure/Remove.
+// Unsafe/foreign/unknown objects keep the exact journal quarantined.
+func (e *Engine) ReconcileWSSCrashOriginal(ctx context.Context, id domain.LinkID) error {
+	return e.reconcileWSSCrashMode(ctx, id, "original")
+}
 func (e *Engine) reconcileWSSCrash(ctx context.Context, id domain.LinkID, removed bool) error {
+	mode := "initial-vacant"
+	if removed {
+		mode = "removed"
+	}
+	return e.reconcileWSSCrashMode(ctx, id, mode)
+}
+func (e *Engine) reconcileWSSCrashMode(ctx context.Context, id domain.LinkID, mode string) error {
+	removed := mode == "removed"
+	repair := mode == "repair-vacant"
+	originalRecovery := mode == "original"
+	if mode != "removed" && mode != "repair-vacant" && mode != "initial-vacant" && !originalRecovery {
+		return stlerr.New(stlerr.CodeInvalid, "wss_reconcile", string(id), "wireguard-wss", "unsupported WSS recovery operation")
+	}
 	if err := id.Validate(); err != nil {
 		return stlerr.New(stlerr.CodeInvalid, "wss_reconcile", string(id), "wireguard-wss", "invalid Link ID")
 	}
@@ -98,24 +132,37 @@ func (e *Engine) reconcileWSSCrash(ctx context.Context, id domain.LinkID, remove
 		return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id), "wireguard-wss",
 			"no durable WSS crash journal exists")
 	}
+	if originalRecovery {
+		removed = op.Operation == "remove"
+		repair = op.Operation == "ensure" && op.HadCommittedLink
+	}
 	wantOperation := "ensure"
 	if removed {
 		wantOperation = "remove"
 	}
-	if op.Operation != wantOperation || op.HadCommittedLink != removed {
+	if op.Operation != wantOperation || op.HadCommittedLink != (removed || repair) {
 		return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id), "wireguard-wss",
 			"WSS recovery mode does not match exact original transaction")
 	}
 	record, committed := snapshot.Find(id)
-	if committed != removed || (committed && record.Desired != op.Intent) {
+	if committed != (removed || repair) || (committed && record.Desired != op.Intent) {
 		return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id), "wireguard-wss",
 			"committed Link does not match original WSS pre-effect identity")
 	}
-	if removed {
+	if removed || repair {
+		if _, err := backend.WithWSSOrigin(ctx, record.WSSOrigin); err != nil ||
+			op.OriginalHostNonce != record.WSSOrigin {
+			return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id),
+				"wireguard-wss", "original committed WSS host-object provenance does not match its journal")
+		}
 		if err := record.WSSFiles.VerifyLink(op.Intent); err != nil {
 			return err
 		}
-		// A pending Remove must originate from committed owner claims.
+		if repair && !slices.Equal(record.OwnedResources, op.Resources) {
+			return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id),
+				"wireguard-wss", "committed WSS Ensure original resource reservations changed")
+		}
+		// A pending operation must originate from committed owner claims.
 		// A planned ResourceClaim is only a reservation until a matching
 		// committed source verifies its original ownership.
 		for _, claim := range op.Resources {
@@ -144,8 +191,8 @@ func (e *Engine) reconcileWSSCrash(ctx context.Context, id domain.LinkID, remove
 			"journal changed while acquiring resource locks")
 	}
 	freshRecord, exists := fresh.Find(id)
-	if exists != removed || (exists && (freshRecord.Desired != op.Intent ||
-		freshRecord.WSSFiles != record.WSSFiles ||
+	if exists != (removed || repair) || (exists && (freshRecord.Desired != op.Intent ||
+		freshRecord.WSSFiles != record.WSSFiles || freshRecord.WSSOrigin != record.WSSOrigin ||
 		!slices.Equal(freshRecord.OwnedResources, record.OwnedResources))) {
 		return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id), "wireguard-wss",
 			"committed WSS Link changed during recovery")
@@ -162,12 +209,55 @@ func (e *Engine) reconcileWSSCrash(ctx context.Context, id domain.LinkID, remove
 		return stlerr.New(stlerr.CodeUnsupported, "wss_reconcile", string(id), "wireguard-wss",
 			"WSS backend lacks strict host vacancy readback")
 	}
-	observed, err := impl.Inspect(ctx, op.Intent)
+	original := op.Nonce
+	if removed || repair {
+		original = record.WSSOrigin
+	}
+	inspectionCtx, err := backend.WithWSSOrigin(ctx, original)
+	if err != nil {
+		return stlerr.New(stlerr.CodeState, "wss_reconcile", string(id),
+			"wireguard-wss", "invalid original WSS journal host-object identity")
+	}
+	observed, err := impl.Inspect(inspectionCtx, op.Intent)
 	if err != nil {
 		return stlerr.Wrap(stlerr.CodeInspect, "wss_reconcile", string(id),
-			"wireguard-wss", "cannot establish safe WSS resource absence", err)
+			"wireguard-wss", "cannot establish safe WSS original host resource identity", err)
 	}
-	vacant, err := verifier.CrashHostVacant(ctx, observed)
+	// Even a read-only empty-host clearance for an EXISTING committed Link
+	// must bind the original issued private-file contents. State fingerprint
+	// metadata alone is not proof the files still match that issuance.
+	if removed || repair {
+		if e.wssRetirement == nil {
+			return stlerr.New(stlerr.CodeState, "wss_reconcile", string(id),
+				"wireguard-wss", "original committed WSS credential attestation unavailable")
+		}
+		issued, verifyErr := e.wssRetirement.CaptureIdentity(inspectionCtx, op.Intent)
+		if verifyErr != nil || issued != record.WSSFiles {
+			return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id),
+				"wireguard-wss", "original committed WSS private issuance identity changed")
+		}
+	}
+	if originalRecovery {
+		compensator, ok := impl.(interface {
+			CrashCompensateOriginal(context.Context, domain.Link, backend.Observation) error
+		})
+		if !ok {
+			return stlerr.New(stlerr.CodeUnsupported, "wss_reconcile", string(id),
+				"wireguard-wss", "backend lacks original-object attested compensation")
+		}
+		// All readbacks and destructive effects occur strictly under
+		// canonical locks and after the immutable journal/State checks.
+		if err := compensator.CrashCompensateOriginal(inspectionCtx, op.Intent, observed); err != nil {
+			return stlerr.Wrap(stlerr.CodeConflict, "wss_reconcile", string(id),
+				"wireguard-wss", "original WSS host cleanup unverified; retaining journal", err)
+		}
+		observed, err = impl.Inspect(inspectionCtx, op.Intent)
+		if err != nil {
+			return stlerr.Wrap(stlerr.CodeInspect, "wss_reconcile", string(id),
+				"wireguard-wss", "post-compensation host inventory incomplete", err)
+		}
+	}
+	vacant, err := verifier.CrashHostVacant(inspectionCtx, observed)
 	if err != nil {
 		return stlerr.Wrap(stlerr.CodeInspect, "wss_reconcile", string(id),
 			"wireguard-wss", "cannot verify complete WSS vacancy", err)
@@ -184,6 +274,7 @@ func (e *Engine) reconcileWSSCrash(ctx context.Context, id domain.LinkID, remove
 		if removed {
 			saved, ok := s.Find(id)
 			if !ok || saved.Desired != op.Intent || saved.WSSFiles != record.WSSFiles ||
+				saved.WSSOrigin != record.WSSOrigin ||
 				!slices.Equal(saved.OwnedResources, record.OwnedResources) {
 				return fmt.Errorf("original committed WSS Remove authority changed")
 			}
@@ -198,6 +289,17 @@ func (e *Engine) reconcileWSSCrash(ctx context.Context, id domain.LinkID, remove
 				LocalPublicKey: op.Intent.WireGuard.LocalPublicKey,
 				WSSLink:        op.Intent, WSSFiles: saved.WSSFiles,
 			})
+		} else if repair {
+			saved, ok := s.Find(id)
+			if !ok || saved.Desired != record.Desired || saved.WSSFiles != record.WSSFiles ||
+				saved.WSSOrigin != record.WSSOrigin ||
+				!slices.Equal(saved.OwnedResources, record.OwnedResources) ||
+				!slices.Equal(saved.OwnedResources, op.Resources) {
+				return fmt.Errorf("original committed WSS Ensure authority changed")
+			}
+			if _, exists := s.FindRemovalReceipt(id); exists {
+				return fmt.Errorf("committed Ensure overlaps retired Link identity")
+			}
 		} else if _, exists := s.Find(id); exists {
 			return fmt.Errorf("new WSS Link was committed during vacancy reconciliation")
 		}
@@ -209,5 +311,6 @@ func (e *Engine) reconcileWSSCrash(ctx context.Context, id domain.LinkID, remove
 }
 func sameWSSCrashOperation(a, b state.WSSCrashOperation) bool {
 	return a.Intent == b.Intent && a.Operation == b.Operation && a.Nonce == b.Nonce &&
-		a.HadCommittedLink == b.HadCommittedLink && slices.Equal(a.Resources, b.Resources)
+		a.HadCommittedLink == b.HadCommittedLink &&
+		a.OriginalHostNonce == b.OriginalHostNonce && slices.Equal(a.Resources, b.Resources)
 }

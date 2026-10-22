@@ -8,6 +8,7 @@ import (
 	"errors"
 	"github.com/ach1992/simple-tun-link/internal/composition"
 	"net/netip"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -22,6 +23,9 @@ type crashWSSBackend struct {
 	crashAfterHost         bool
 	store                  *state.FileStore
 	journalObservedAtApply bool
+	knownOriginalNonce     map[domain.LinkID]string
+	denyOriginalRecovery   bool
+	recoveryCount          int
 }
 
 type fakeWSSIssuance struct{}
@@ -34,6 +38,17 @@ func (fakeWSSIssuance) RetireAfterRemove(context.Context, domain.Link, state.WSS
 	return nil
 }
 func (fakeWSSIssuance) VerifyAbsent(context.Context, domain.Link) error { return nil }
+
+// Simulates content changes under unchanged original credential filenames:
+// a signed State fingerprint by itself is not live-file identity evidence.
+type driftedWSSIssuance struct{ fakeWSSIssuance }
+
+func (driftedWSSIssuance) CaptureIdentity(context.Context, domain.Link) (state.WSSFileIdentity, error) {
+	digest := strings.Repeat("b", 64)
+	return state.WSSFileIdentity{
+		Certificate: digest, TLSKey: digest, TrustCA: digest, Authorization: digest, Restrictions: digest,
+	}, nil
+}
 
 func (b *crashWSSBackend) Kind() domain.Backend { return domain.BackendWireGuardWSS }
 func (b *crashWSSBackend) Plan(_ context.Context, req backend.Request, observed backend.Observation) (backend.Plan, error) {
@@ -74,6 +89,34 @@ func (b *crashWSSBackend) Apply(ctx context.Context, req backend.Request, obs ba
 		}
 		b.journalObservedAtApply = true
 	}
+	nonce := backend.WSSOrigin(ctx)
+	if nonce == "" {
+		return nil, errors.New("WSS backend lost durable original object provenance")
+	}
+	if b.knownOriginalNonce == nil {
+		b.knownOriginalNonce = map[domain.LinkID]string{}
+	}
+	original, recorded := b.knownOriginalNonce[req.Link.ID]
+	if !recorded || (original != nonce && req.Operation == backend.OperationEnsure) {
+		// This isolated fake cannot observe Linux object generations.
+		// A NEW initial-Ensure journal following verified, externally
+		// reconciled complete vacancy legitimately mints a fresh origin.
+		// Never apply this exception to committed repair or live effects.
+		snapshot, err := b.store.Load(ctx)
+		if err != nil {
+			return nil, err
+		}
+		op, ok := snapshot.FindWSSCrashOperation(req.Link.ID)
+		if !ok || op.HadCommittedLink || req.Operation != backend.OperationEnsure {
+			return nil, errors.New("WSS original generation mismatch while committed")
+		}
+		if _, live := b.present[req.Link.ID]; live {
+			return nil, errors.New("WSS original generation mismatch while live")
+		}
+		b.knownOriginalNonce[req.Link.ID] = nonce
+	} else if original != nonce {
+		return nil, errors.New("WSS creation nonce unexpectedly rotated")
+	}
 	undo, err := b.fakeBackend.Apply(ctx, req, obs, p)
 	if b.crashAfterHost {
 		b.crashAfterHost = false
@@ -84,6 +127,23 @@ func (b *crashWSSBackend) Apply(ctx context.Context, req backend.Request, obs ba
 func (b *crashWSSBackend) CrashHostVacant(_ context.Context, obs backend.Observation) (bool, error) {
 	current := obs.(fakeObservation)
 	return !current.present, nil
+}
+func (b *crashWSSBackend) CrashCompensateOriginal(ctx context.Context, link domain.Link, obs backend.Observation) error {
+	if b.denyOriginalRecovery || b.knownOriginalNonce[link.ID] != backend.WSSOrigin(ctx) {
+		return errors.New("untrusted original-object identity; preserving host resources")
+	}
+	delete(b.present, link.ID)
+	if b.store != nil {
+		snapshot, err := b.store.Load(ctx)
+		if err != nil {
+			return err
+		}
+		if _, committed := snapshot.Find(link.ID); !committed {
+			delete(b.knownOriginalNonce, link.ID)
+		}
+	}
+	b.recoveryCount++
+	return nil
 }
 func journalTestLink(t *testing.T) domain.Link {
 	t.Helper()
@@ -357,5 +417,209 @@ func TestWSSInterruptedRemoveDoesNotBlockIndependentGREBootRestore(t *testing.T)
 	}
 	if _, exists := mustLoadCrashSnapshot(t, store).FindWSSCrashOperation(wssLink.ID); !exists {
 		t.Fatal("boot restore erased unfinished WSS journal")
+	}
+}
+
+// The previous reconciliation dispatcher had no possible transition for
+// ensure + HadCommittedLink=true, permanently stranding an existing Link
+// even AFTER the original host objects were independently absent.
+func TestWSSCommittedRepairVacantPreservesOriginalOwnerAndRecreates(t *testing.T) {
+	ctx := context.Background()
+	host := &crashWSSBackend{fakeBackend: newFakeBackend()}
+	engine, store := crashWSSEngine(t, host)
+	host.store = store
+	link := journalTestLink(t)
+	if _, err := engine.Ensure(ctx, link); err != nil {
+		t.Fatal(err)
+	}
+	original := mustLoadCrashSnapshot(t, store)
+	record, ok := original.Find(link.ID)
+	if !ok || len(record.OwnedResources) < 6 {
+		t.Fatal("missing original committed WSS owner")
+	}
+	// Simulate a legitimate missing helper/interface needing repair, then
+	// a crash after that repair has already changed host effects.
+	delete(host.present, link.ID)
+	host.crashAfterHost = true
+	causeCrash(t, func() { _, _ = engine.Ensure(ctx, link) })
+	interrupted := mustLoadCrashSnapshot(t, store)
+	pending, found := interrupted.FindWSSCrashOperation(link.ID)
+	if !found || pending.Operation != "ensure" || !pending.HadCommittedLink ||
+		pending.OriginalHostNonce != record.WSSOrigin {
+		t.Fatalf("committed WSS repair journal missing original host-object provenance: %+v", pending)
+	}
+	if err := store.Update(ctx, func(s *state.Snapshot) error {
+		for i := range s.WSSCrashOperations {
+			if s.WSSCrashOperations[i].Intent.ID == link.ID {
+				s.WSSCrashOperations[i].OriginalHostNonce = strings.Repeat("f", 32)
+			}
+		}
+		return nil
+	}); err == nil {
+		t.Fatal("committed WSS journal was permitted to drop its original-object link")
+	}
+	if _, err := engine.Remove(ctx, link.ID); err == nil {
+		t.Fatal("live repair journal allowed Remove")
+	}
+	if _, err := engine.Ensure(ctx, link); err == nil {
+		t.Fatal("live repair journal allowed replay")
+	}
+	if err := engine.ReconcileWSSCrashRepairVacant(ctx, link.ID); err == nil {
+		t.Fatal("live resources were adopted as empty")
+	}
+	if err := engine.ReconcileWSSCrashVacant(ctx, link.ID); err == nil {
+		t.Fatal("initial-Ensure recovery accepted a committed repair")
+	}
+	if err := engine.ReconcileWSSCrashRemoved(ctx, link.ID); err == nil {
+		t.Fatal("Remove recovery consumed a committed repair")
+	}
+	// A separately corroborated absence does not transfer host-object
+	// ownership. Replaced same-name credentials must STILL block clearing
+	// the committed repair journal even though no host object remains.
+	delete(host.present, link.ID)
+	engine.SetWSSRetirementStore(driftedWSSIssuance{})
+	if err := engine.ReconcileWSSCrashRepairVacant(ctx, link.ID); err == nil {
+		t.Fatal("vacant repair cleared journal with replaced credential generation")
+	}
+	if _, ok := mustLoadCrashSnapshot(t, store).FindWSSCrashOperation(link.ID); !ok {
+		t.Fatal("credential mismatch erased crash quarantine")
+	}
+	engine.SetWSSRetirementStore(fakeWSSIssuance{})
+	if err := engine.ReconcileWSSCrashRepairVacant(ctx, link.ID); err != nil {
+		t.Fatalf("vacant committed Ensure remains stranded: %v", err)
+	}
+	current := mustLoadCrashSnapshot(t, store)
+	saved, exists := current.Find(link.ID)
+	if !exists || !reflect.DeepEqual(saved, record) {
+		t.Fatal("recovery rewrote original committed Link, fingerprints or owner claims")
+	}
+	if len(current.RemovalReceipts) != 0 {
+		t.Fatal("committed repair fabricated credential retirement authorization")
+	}
+	if _, found := current.FindWSSCrashOperation(link.ID); found {
+		t.Fatal("repair crash journal not durably consumed")
+	}
+	if err := engine.ReconcileWSSCrashRepairVacant(ctx, link.ID); err == nil {
+		t.Fatal("repeat recovery falsely claimed a pending transaction")
+	}
+	if _, err := engine.Ensure(ctx, link); err != nil {
+		t.Fatalf("normal Ensure did not rebuild original Link: %v", err)
+	}
+	after := mustLoadCrashSnapshot(t, store)
+	again, exists := after.Find(link.ID)
+	if !exists || !reflect.DeepEqual(again, record) {
+		t.Fatal("normal Ensure changed the original issuance/ownership contract")
+	}
+}
+
+// The actual rootless kernel/WSS E2E exercises original nft, staged kernel,
+// helper and Remove compensation. These isolated Engine tests additionally
+// assert durable State/receipt and foreign-drift rejection around every
+// original-object compensation and repeated operation.
+func TestWSSOriginalObjectCompensationRejectsForeignAndCommitsExactState(t *testing.T) {
+	ctx := context.Background()
+	host := &crashWSSBackend{fakeBackend: newFakeBackend(), crashAfterHost: true}
+	engine, store := crashWSSEngine(t, host)
+	host.store = store
+	link := journalTestLink(t)
+	causeCrash(t, func() { _, _ = engine.Ensure(ctx, link) })
+	before := mustLoadCrashSnapshot(t, store)
+	pending, ok := before.FindWSSCrashOperation(link.ID)
+	if !ok || pending.Operation != "ensure" || pending.HadCommittedLink {
+		t.Fatal("initial-Ensure crash missing original journal")
+	}
+	// A same-public-name effect with a mismatched provenance is not
+	// permission to run ANY recovery host writer.
+	host.denyOriginalRecovery = true
+	if err := engine.ReconcileWSSCrashOriginal(ctx, link.ID); err == nil {
+		t.Fatal("same-name foreign object was adopted")
+	}
+	if host.recoveryCount != 0 {
+		t.Fatal("untrusted original object was mutated")
+	}
+	if _, ok := (mustLoadCrashSnapshot(t, store)).FindWSSCrashOperation(link.ID); !ok {
+		t.Fatal("failed original reconciliation erased durable quarantine")
+	}
+	host.denyOriginalRecovery = false
+	if err := engine.ReconcileWSSCrashOriginal(ctx, link.ID); err != nil {
+		t.Fatalf("proven original live effect not recovered: %v", err)
+	}
+	clean := mustLoadCrashSnapshot(t, store)
+	if _, ok := clean.FindWSSCrashOperation(link.ID); ok {
+		t.Fatal("original crash journal not atomically consumed")
+	}
+	if _, ok := clean.Find(link.ID); ok {
+		t.Fatal("uncommitted crash falsely published Link")
+	}
+	if len(clean.RemovalReceipts) != 0 {
+		t.Fatal("initial Ensure compensation fabricated retirement receipt")
+	}
+	if host.recoveryCount != 1 {
+		t.Fatalf("host mutation count after safe compensation: %d", host.recoveryCount)
+	}
+	if err := engine.ReconcileWSSCrashOriginal(ctx, link.ID); err == nil {
+		t.Fatal("repeat original recovery falsely reported a pending transaction")
+	}
+	if _, err := engine.Ensure(ctx, link); err != nil {
+		t.Fatalf("retry original Link after recovery: %v", err)
+	}
+	committed := mustLoadCrashSnapshot(t, store)
+	rec, ok := committed.Find(link.ID)
+	if !ok || len(rec.WSSOrigin) != 32 {
+		t.Fatal("new Link lacks original issuance-time host provenance")
+	}
+	// Original creation nonce stays constant across committed repair,
+	// whereas the new transaction's journal nonce is independent.
+	delete(host.present, link.ID)
+	host.crashAfterHost = true
+	causeCrash(t, func() { _, _ = engine.Ensure(ctx, link) })
+	interrupted := mustLoadCrashSnapshot(t, store)
+	repair, ok := interrupted.FindWSSCrashOperation(link.ID)
+	if !ok || !repair.HadCommittedLink || repair.Nonce == rec.WSSOrigin {
+		t.Fatal("committed repair lost independent operation vs original nonce")
+	}
+	if err := engine.ReconcileWSSCrashOriginal(ctx, link.ID); err != nil {
+		t.Fatalf("original committed repair not completed: %v", err)
+	}
+	repaired := mustLoadCrashSnapshot(t, store)
+	preserved, ok := repaired.Find(link.ID)
+	if !ok || !reflect.DeepEqual(preserved, rec) || len(repaired.RemovalReceipts) != 0 {
+		t.Fatal("original committed Link/fingerprints/claims changed during repair")
+	}
+	if _, err := engine.RestoreAll(ctx); err != nil {
+		t.Fatalf("recovered original committed Link not restorable: %v", err)
+	}
+	// Simulate a Remove interrupted before its kernel object was removed.
+	// The exact original nonce belongs to the committed Link, not Remove's
+	// fresh journal nonce. Recovery must produce one original receipt.
+	host.crashAfterHost = true
+	causeCrash(t, func() { _, _ = engine.Remove(ctx, link.ID) })
+	// fake Remove already removed its host object; this synthetic host
+	// effect models an interrupted Remove that left an original WG live.
+	host.present[link.ID] = append([]domain.ResourceClaim(nil), rec.OwnedResources...)
+	host.denyOriginalRecovery = true
+	if err := engine.ReconcileWSSCrashOriginal(ctx, link.ID); err == nil {
+		t.Fatal("foreign Remove adopted")
+	}
+	if _, ok := (mustLoadCrashSnapshot(t, store)).Find(link.ID); !ok {
+		t.Fatal("foreign Remove lost committed State")
+	}
+	host.denyOriginalRecovery = false
+	if err := engine.ReconcileWSSCrashOriginal(ctx, link.ID); err != nil {
+		t.Fatalf("exact original committed Remove not reconciled: %v", err)
+	}
+	finalized := mustLoadCrashSnapshot(t, store)
+	if _, ok := finalized.Find(link.ID); ok {
+		t.Fatal("committed Remove did not retire Link State")
+	}
+	if _, ok := finalized.FindWSSCrashOperation(link.ID); ok {
+		t.Fatal("committed Remove journal retained")
+	}
+	receipt, ok := finalized.FindRemovalReceipt(link.ID)
+	if !ok || receipt.WSSLink != link || receipt.WSSFiles != rec.WSSFiles || receipt.Retired {
+		t.Fatal("committed Remove lost exact immutable retirement authorization")
+	}
+	if err := engine.ReconcileWSSCrashOriginal(ctx, link.ID); err == nil {
+		t.Fatal("repeated original Remove recovery created another receipt")
 	}
 }

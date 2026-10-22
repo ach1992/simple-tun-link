@@ -83,6 +83,10 @@ func (b *Backend) validateWSS(ctx context.Context, req core.Request, obs observa
 			"changing a live WSS Link configuration is not admitted; remove and provision a new Link")
 	}
 	if obs.Target.Exists {
+		original, err := linux.WSSOwnerTag(req.Link.ID, core.WSSOrigin(ctx))
+		if err != nil || obs.Target.Alias != original {
+			return fmt.Errorf("original WSS kernel interface provenance mismatch")
+		}
 		if obs.Target.Owner != req.Link.ID {
 			return fmt.Errorf("WireGuard interface is foreign; WSS cannot adopt it")
 		}
@@ -329,13 +333,38 @@ func (b *Backend) CrashHostVacant(ctx context.Context, observed core.Observation
 	if current.Target.Exists || current.GuardPresent || current.HelperLoaded {
 		return false, nil
 	}
+	staging, err := linux.WSSStagingName(current.WSSLink.ID, core.WSSOrigin(ctx))
+	if err != nil {
+		return false, fmt.Errorf("cannot verify WSS original staging provenance")
+	}
+	original, err := linux.WSSOwnerTag(current.WSSLink.ID, core.WSSOrigin(ctx))
+	if err != nil {
+		return false, fmt.Errorf("cannot verify WSS original alias provenance")
+	}
+	for _, entry := range current.Links {
+		if entry.Name == staging || entry.Alias == original {
+			return false, nil
+		}
+	}
+	// Absence also requires public-only global WireGuard key/port evidence.
+	return b.crashWSSGlobalKernelVacant(ctx, current.WSSLink)
+}
+
+// crashWSSGlobalKernelVacant is reusable immediately BEFORE an original
+// ingress guard is deleted. It must not rely on a per-Link interface name:
+// another interface can hold the original UDP listen-port/public key even
+// after the original one is safely collected.
+func (b *Backend) crashWSSGlobalKernelVacant(ctx context.Context, link domain.Link) (bool, error) {
+	if link.Backend != domain.BackendWireGuardWSS || link.Validate() != nil {
+		return false, fmt.Errorf("global WSS identity is invalid")
+	}
 	// A Link interface may disappear while its originally configured key or
 	// WG listen port survives under a different interface. A vacancy receipt
 	// must not silently release the original resource reservation in that case.
 	// Global public-only WireGuard readbacks are also mandatory.
 	for _, entry := range []struct{ field, want string }{
-		{"public-key", current.WSSLink.WireGuard.LocalPublicKey},
-		{"listen-port", strconv.Itoa(int(current.WSSLink.WireGuard.ListenPort))},
+		{"public-key", link.WireGuard.LocalPublicKey},
+		{"listen-port", strconv.Itoa(int(link.WireGuard.ListenPort))},
 	} {
 		out, err := b.runner.Run(ctx, b.wgBinary, "show", "all", entry.field)
 		if err != nil {

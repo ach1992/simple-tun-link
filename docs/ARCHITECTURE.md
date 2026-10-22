@@ -723,9 +723,28 @@ committed Link and publish its original fingerprint-bound retirement receipt.
 No host file/service/kernel resource is mutated; `retire-wss` subsequently
 requires complete host absence and exact original file SHA-256 hashes.
 
-Interrupted repairs of a committed live Link, removal with surviving host
-resources, or unknown observation remain quarantined, pending separately
-authorized original-object-identity reconciliation.
+The unreleased R3 candidate adds explicitly confirmed original-object
+recovery without changing ordinary Link automatic replay:
+- `reconcile-wss-repair-vacant` verifies the committed Link, original
+  private-file contents, locked resource claims and complete host
+  vacancy. Only its committed Ensure journal is consumed; desired State
+  and original ownership remain intact for RestoreAll.
+- `reconcile-wss-original` derives original host nonce from the initial
+  journal or committed Link, separate from fresh repair/Remove journal
+  transaction nonce. nft rule and transient systemd description bind
+  to this original identity. An exclusive kernel WG create uses a 70-bit
+  nonce-derived staging name first, then sets the alias BY IFINDEX and
+  renames: this avoids a bare public-name creation window.
+- Under canonical Engine locks, identity readback gates the exact
+  original helper, kernel interface and guard in that order. The guard
+  remains until the originally reserved global WG key/listen port
+  cannot be found anywhere, and final strict host vacancy precedes
+  State/journal commit. Committed Remove publishes the original
+  retirement receipt; committed repair preserves its Link.
+
+Unverifiable/foreign effects are quarantined, not adopted by name.
+Physical systemd/field/ARM64 WSS and independent review remain separate
+from isolated executable proof.
 
 The rootless test `STL_WSS_R2_CRASH_TEST=1 bash
 scripts/e2e/wss-managed-wireguard-r1.sh` sends SIGKILL after a

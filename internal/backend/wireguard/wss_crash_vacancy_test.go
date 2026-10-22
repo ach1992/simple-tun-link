@@ -37,28 +37,32 @@ func TestWSSCrashVacancyDeniesUnexpectedGlobalKernelIdentity(t *testing.T) {
 	if err := link.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	ctx, err := core.WithWSSOrigin(context.Background(), "0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
 	observation := observation{WSSLink: link}
-	ok, err := b.CrashHostVacant(context.Background(), observation)
+	ok, err := b.CrashHostVacant(ctx, observation)
 	if err != nil || !ok {
 		t.Fatalf("empty host was not proven vacant: %v", err)
 	}
 	kernel.others = []observedLink{{Exists: true, Name: "another-if", PublicKey: link.WireGuard.LocalPublicKey, ListenPort: 65532}}
-	ok, err = b.CrashHostVacant(context.Background(), observation)
+	ok, err = b.CrashHostVacant(ctx, observation)
 	if err != nil || ok {
 		t.Fatalf("same private identity survived on another interface: vacant=%t err=%v", ok, err)
 	}
 	kernel.others = []observedLink{{Exists: true, Name: "another-if", PublicKey: "other", ListenPort: link.WireGuard.ListenPort}}
-	ok, err = b.CrashHostVacant(context.Background(), observation)
+	ok, err = b.CrashHostVacant(ctx, observation)
 	if err != nil || ok {
 		t.Fatalf("reserved kernel UDP listener moved: vacant=%t err=%v", ok, err)
 	}
 	kernel.others = []observedLink{{Exists: true, Name: "untrusted if name", PublicKey: "other", ListenPort: 65531}}
-	ok, err = b.CrashHostVacant(context.Background(), observation)
+	ok, err = b.CrashHostVacant(ctx, observation)
 	if err == nil || ok {
 		t.Fatalf("malformed global WG output verified absent: vacant=%t err=%v", ok, err)
 	}
 	observation.WSSLink = domain.Link{}
-	if ok, err = b.CrashHostVacant(context.Background(), observation); err == nil || ok {
+	if ok, err = b.CrashHostVacant(ctx, observation); err == nil || ok {
 		t.Fatal("missing committed public WSS identity verified absent")
 	}
 }

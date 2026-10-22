@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	core "github.com/ach1992/simple-tun-link/internal/backend"
 	wgbackend "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/carrier/wss"
 	"github.com/ach1992/simple-tun-link/internal/domain"
@@ -145,6 +146,11 @@ func linkWSSDiagnoseCommand(args []string, out, errOut io.Writer, opts *runtimeO
 	bounded, ok := runner.(linux.BoundedRunner)
 	if !ok {
 		return readCommandError(out, errOut, isJSON, stlerr.CodeInspect, "diagnose_wss", "bounded host inspection unavailable")
+	}
+	ctx, err = core.WithWSSOrigin(ctx, record.WSSOrigin)
+	if err != nil {
+		return readCommandError(out, errOut, isJSON, stlerr.CodeInspect, "diagnose_wss",
+			"original committed WSS host-object provenance unavailable")
 	}
 	details, err := observeWSSLink(ctx, opts.stateRoot, bounded, record.Desired)
 	if err != nil {

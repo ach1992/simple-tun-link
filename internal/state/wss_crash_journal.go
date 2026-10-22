@@ -13,11 +13,12 @@ import (
 // WSSCrashOperation is a durable, secret-free PRE-EFFECT intent. It is
 // NOT proof of ownership of any nft table, kernel interface or systemd unit.
 type WSSCrashOperation struct {
-	Intent           domain.Link            `json:"intent"`
-	Operation        string                 `json:"operation"`
-	Nonce            string                 `json:"nonce"`
-	Resources        []domain.ResourceClaim `json:"resources"`
-	HadCommittedLink bool                   `json:"had_committed_link"`
+	Intent            domain.Link            `json:"intent"`
+	Operation         string                 `json:"operation"`
+	Nonce             string                 `json:"nonce"`
+	Resources         []domain.ResourceClaim `json:"resources"`
+	HadCommittedLink  bool                   `json:"had_committed_link"`
+	OriginalHostNonce string                 `json:"original_host_nonce,omitempty"`
 }
 
 func (s Snapshot) FindWSSCrashOperation(id domain.LinkID) (WSSCrashOperation, bool) {
@@ -106,8 +107,10 @@ func validateWSSCrashOperations(s Snapshot) error {
 			}
 		}
 		committed, exists := s.Find(id)
-		if exists != op.HadCommittedLink || (exists && committed.Desired != op.Intent) {
-			return fmt.Errorf("WSS pre-effect journal mismatches committed Link")
+		if exists != op.HadCommittedLink || (exists && (committed.Desired != op.Intent ||
+			committed.WSSOrigin != op.OriginalHostNonce)) ||
+			(!exists && op.OriginalHostNonce != "") {
+			return fmt.Errorf("WSS pre-effect journal mismatches original committed host-object nonce or Link")
 		}
 		if op.Operation == "remove" && !exists {
 			return fmt.Errorf("WSS Remove cannot be prepared without committed Link")

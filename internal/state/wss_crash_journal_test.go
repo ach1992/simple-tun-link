@@ -59,12 +59,13 @@ func TestWSSCrashJournalStrictDurableStateAndInvalidRecords(t *testing.T) {
 		t.Fatal("WSS crash journal exposes secret material")
 	}
 	mutations := map[string]func(*WSSCrashOperation){
-		"duplicate":         func(o *WSSCrashOperation) { o.Resources = append(o.Resources, o.Resources[0]) },
-		"wrong-backend":     func(o *WSSCrashOperation) { o.Intent.Backend = domain.BackendGRE },
-		"invalid-nonce":     func(o *WSSCrashOperation) { o.Nonce = "not-a-nonce" },
-		"invalid-operation": func(o *WSSCrashOperation) { o.Operation = "adopt" },
-		"unexpected-prior":  func(o *WSSCrashOperation) { o.HadCommittedLink = true },
-		"empty-reservation": func(o *WSSCrashOperation) { o.Resources = nil },
+		"duplicate":           func(o *WSSCrashOperation) { o.Resources = append(o.Resources, o.Resources[0]) },
+		"wrong-backend":       func(o *WSSCrashOperation) { o.Intent.Backend = domain.BackendGRE },
+		"invalid-nonce":       func(o *WSSCrashOperation) { o.Nonce = "not-a-nonce" },
+		"invalid-operation":   func(o *WSSCrashOperation) { o.Operation = "adopt" },
+		"unexpected-prior":    func(o *WSSCrashOperation) { o.HadCommittedLink = true },
+		"unexpected-original": func(o *WSSCrashOperation) { o.OriginalHostNonce = strings.Repeat("c", 32) },
+		"empty-reservation":   func(o *WSSCrashOperation) { o.Resources = nil },
 	}
 	for label, modify := range mutations {
 		t.Run(label, func(t *testing.T) {

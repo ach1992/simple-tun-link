@@ -199,6 +199,22 @@ if [[ -n "${STL_WSS_R2_AMBIGUOUS_TEST:-}" ]]; then
   fi
   ip netns exec alpha /usr/sbin/nft -j list table inet "$guard" >/dev/null
   echo "SUCCESS AMBIGUOUS_WSS_HOST_EFFECT_PRESERVED_AND_JOURNALED: $kind"
+  if [[ $(printenv STL_WSS_R3_ORIGINAL_TEST || :) == 1 ]];then
+    invoke alpha link reconcile-wss-original "$id" --confirm "$id"
+    if invoke alpha link reconcile-wss-original "$id" --confirm "$id" > "$lab/alpha/original-repeat-denied.log" 2>&1;then
+      echo "repeat recovery falsely found an original live journal" >&2;exit 1
+    fi
+    jq -e '(.wss_crash_operations//[]|length)==0 and (.links|length)==0' "$lab/alpha-state/state.json" >/dev/null
+    if ip netns exec alpha /usr/sbin/nft list table inet "$guard" >/dev/null 2>&1;then
+      echo "original compensation did not remove its journal-tagged nft guard" >&2;exit 1
+    fi
+    if ip netns exec alpha ip link show stlwg0123456789 >/dev/null 2>&1;then
+      echo "original compensation did not collect its kernel WG interface" >&2;exit 1
+    fi
+    export STL_R1_SIDE_ROOT="$lab/alpha"
+    systemctl show stl-wss-0123456789abcdef0123456789abcdef.service | grep -q '^LoadState=not-found'
+    echo "SUCCESS ORIGINAL_LIVE_HOST_CRASH_RECOVERY: $kind"
+  fi
   exit 0
 fi
 
@@ -223,10 +239,93 @@ if [[ ${STL_WSS_R2_CRASH_TEST:-0} == 1 ]]; then
   fi
   ip netns exec alpha /usr/sbin/nft -j list table inet "$guard" >/dev/null
   echo "DENY_PASS PRECOMMIT_JOURNAL_BLOCKED_RETRY_AND_LIVE_GUARD_RECONCILIATION"
-  # Exactly this disposable test's created, initially empty guard; explicit
-  # test-owner cleanup is done by the harness, NEVER by reconcile-wss-vacant.
-  ip netns exec alpha /usr/sbin/nft delete table inet "$guard"
-  invoke alpha link reconcile-wss-vacant "$link_id" --confirm "$link_id"
+  original_case=$(printenv STL_WSS_R3_FOREIGN_TEST || :)
+  case "$original_case" in
+    ''|guard|wg|wg-global|staged|staged-tagged|staged-foreign|helper) ;;
+    *) echo "unsupported original-provenance test case" >&2;exit 2 ;;
+  esac
+  nonce=$(jq -r '.wss_crash_operations[0].nonce' "$lab/alpha-state/state.json")
+  stage=$(python3 - "$link_id" "$nonce" <<'STAGING'
+import sys,hashlib,base64
+digest=hashlib.sha256((sys.argv[1]+":wss:"+sys.argv[2]).encode()).digest()
+print("w"+base64.b32encode(digest).decode().lower()[:14])
+STAGING
+)
+  if [[ "$original_case" == guard ]];then
+    # Test-only replacement: exact SAME table/chain/rule and public name,
+    # with a DIFFERENT original creation nonce. The replacement is foreign
+    # despite its matching packet policy and untrusted public names.
+    ip netns exec alpha /usr/sbin/nft delete table inet "$guard"
+    ip netns exec alpha /usr/sbin/nft -f - <<NFT
+create table inet $guard
+create chain inet $guard ingress { type filter hook input priority -250; policy accept; }
+add rule inet $guard ingress iifname != "lo" udp dport 51821 counter drop comment "stl:$link_id:wg-udp-guard:51821:tx:ffffffffffffffffffffffffffffffff"
+NFT
+  elif [[ "$original_case" == wg ]];then
+    ip netns exec alpha ip link add stlwg0123456789 type wireguard
+    ip netns exec alpha ip link set stlwg0123456789 alias "stl:$link_id:tx:ffffffffffffffffffffffffffffffff"
+  elif [[ "$original_case" == wg-global ]];then
+    # The original WSS ifindex is absent. Another (foreign) WG interface
+    # holds the same reserved UDP port; removing the guard would expose it.
+    ip netns exec alpha ip link add foreignwg0 type wireguard
+    ip netns exec alpha wg set foreignwg0 listen-port 51821
+  elif [[ "$original_case" == staged || "$original_case" == staged-tagged || "$original_case" == staged-foreign ]];then
+    ip netns exec alpha ip link add "$stage" type wireguard
+    if [[ "$original_case" == staged-tagged ]];then
+      ip netns exec alpha ip link set "$stage" alias "stl:$link_id:tx:$nonce"
+    elif [[ "$original_case" == staged-foreign ]];then
+      ip netns exec alpha ip link set "$stage" up
+    fi
+  elif [[ "$original_case" == helper ]];then
+    python3 - "$lab/alpha/runtime/stl-wss-0123456789abcdef0123456789abcdef.service.json" <<'FOREIGN'
+import json,sys
+path=sys.argv[1]
+d={"unit":"stl-wss-0123456789abcdef0123456789abcdef.service",
+   "pid":-1,"argv":["/usr/local/libexec/stl/wstunnel"],
+   "description":"STL-WSS-foreign-replacement","env":{},
+   "properties":{},"collect":True}
+with open(path,"w") as f:json.dump(d,f)
+FOREIGN
+  fi
+  if [[ "$original_case" == guard || "$original_case" == wg ||
+        "$original_case" == wg-global || "$original_case" == staged-foreign ||
+        "$original_case" == helper ]];then
+    if invoke alpha link reconcile-wss-original "$link_id" --confirm "$link_id" > "$lab/alpha/foreign-recovery-denied.log" 2>&1;then
+      echo "FOREIGN HOST RESOURCE WAS MUTATED/ADOPTED" >&2;exit 1
+    fi
+    jq -e '(.links|length)==0 and (.wss_crash_operations|length)==1' "$lab/alpha-state/state.json" >/dev/null
+    ip netns exec alpha /usr/sbin/nft -j list table inet "$guard" >/dev/null
+    case "$original_case" in
+      wg) ip netns exec alpha ip -details link show stlwg0123456789 | grep -F 'ffffffffffffffffffffffffffffffff' >/dev/null ;;
+      wg-global) ip netns exec alpha wg show foreignwg0 listen-port | grep -q '^51821$' ;;
+      staged-foreign) ip netns exec alpha ip -details link show "$stage" | grep -q 'state UNKNOWN\|state UP' ;;
+      helper) test -f "$lab/alpha/runtime/stl-wss-0123456789abcdef0123456789abcdef.service.json" ;;
+      guard) ip netns exec alpha nft -j list table inet "$guard" | jq -e '[.nftables[]|.rule?.comment? | strings | select(endswith("ffffffffffffffffffffffffffffffff"))]|length==1' >/dev/null ;;
+    esac
+    echo "DENY_PASS FOREIGN_SAME_NAME_ORIGINAL_RESOURCE_PRESERVED: $original_case"
+    exit 0
+  fi
+  if [[ $(printenv STL_WSS_R3_ORIGINAL_TEST || :) == 1 ]];then
+    invoke alpha link reconcile-wss-original "$link_id" --confirm "$link_id"
+    if invoke alpha link reconcile-wss-original "$link_id" --confirm "$link_id" > "$lab/alpha/original-repeat-denied.log" 2>&1;then
+      echo "initial original recovery repeated after journal consumption" >&2;exit 1
+    fi
+    if ip netns exec alpha /usr/sbin/nft list table inet "$guard" >/dev/null 2>&1;then
+      echo "WSS original-owner compensation did not collect its nft guard" >&2;exit 1
+    fi
+    echo "SUCCESS ORIGINAL_NFT_GUARD_HOST_COMPENSATION"
+    if [[ "$original_case" == staged || "$original_case" == staged-tagged ]];then
+      if ip netns exec alpha ip link show "$stage" >/dev/null 2>&1;then
+        echo "original nonce-derived staging kernel object survived recovery" >&2;exit 1
+      fi
+      echo "SUCCESS ORIGINAL_STAGED_KERNEL_WG_CRASH_RECOVERY: $original_case"
+      exit 0
+    fi
+  else
+    # Historical R2 vacancy-only test with separate harness-owned cleanup.
+    ip netns exec alpha /usr/sbin/nft delete table inet "$guard"
+    invoke alpha link reconcile-wss-vacant "$link_id" --confirm "$link_id"
+  fi
   jq -e '(.wss_crash_operations // []) | length==0' "$lab/alpha-state/state.json" >/dev/null
   invoke alpha link ensure --stdin < "$lab/alpha/recovery-ensure.json"
   echo "SUCCESS PRECOMMIT_NFT_HARD_CRASH_JOURNAL_VACANCY_AND_EXACT_RETRY"
@@ -340,7 +439,30 @@ pid=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["pid"])' "$
 kill -9 "$pid"
 sleep 0.3
 jq -c '{"schema_version":3,"link":.links[0].desired}' "$lab/beta-state/state.json" > "$lab/beta/ensure.json"
-invoke beta link ensure --stdin < "$lab/beta/ensure.json"
+if [[ $(printenv STL_WSS_R3_REPAIR_TEST || :) == 1 ]];then
+  echo "R3 COMMITTED LINK HELPER REPAIR CRASH"
+  if invoke beta link ensure --stdin < "$lab/beta/ensure.json" > "$lab/beta/committed-repair-killed.log" 2>&1;then
+    echo "helper repair unexpectedly completed despite hard kill" >&2;exit 1
+  fi
+  jq -e '(.links|length)==1 and (.wss_crash_operations|length)==1 and .wss_crash_operations[0].operation=="ensure" and .wss_crash_operations[0].had_committed_link==true' "$lab/beta-state/state.json" >/dev/null
+  original_nonce=$(jq -r '.links[0].wss_original_object_nonce' "$lab/beta-state/state.json")
+  if invoke beta link restore --all > "$lab/beta/repair-restore-denied.log" 2>&1;then
+    echo "unsafe committed repair was replayed on RestoreAll" >&2;exit 1
+  fi
+  if invoke beta link reconcile-wss-vacant lnk_0123456789abcdef0123456789abcdef --confirm lnk_0123456789abcdef0123456789abcdef > "$lab/beta/repair-wrong-mode-denied.log" 2>&1;then
+    echo "initial-Ensure recovery accepted committed repair" >&2;exit 1
+  fi
+  invoke beta link reconcile-wss-original lnk_0123456789abcdef0123456789abcdef --confirm lnk_0123456789abcdef0123456789abcdef
+  jq -e '(.links|length)==1 and (.wss_crash_operations//[]|length)==0' "$lab/beta-state/state.json" >/dev/null
+  test "$(jq -r '.links[0].wss_original_object_nonce' "$lab/beta-state/state.json")" == "$original_nonce"
+  if invoke beta link reconcile-wss-original lnk_0123456789abcdef0123456789abcdef --confirm lnk_0123456789abcdef0123456789abcdef > "$lab/beta/repair-repeat-denied.log" 2>&1;then
+    echo "repeat original repair recovery falsely found a journal" >&2;exit 1
+  fi
+  invoke beta link restore --all
+  echo "SUCCESS ORIGINAL_COMMITTED_WSS_REPAIR_CRASH_AND_RESTORE_ALL"
+else
+  invoke beta link ensure --stdin < "$lab/beta/ensure.json"
+fi
 sleep 7
 ip netns exec beta ping -I 10.75.0.2 -c 2 -W 3 10.75.0.1
 echo "SUCCESS HELPER CRASH RECOVERED BY STL ENGINE"
@@ -371,6 +493,22 @@ if [[ -n "$(printenv STL_WSS_R2_REMOVE_CRASH_TEST || :)" ]];then
   fi
   if invoke alpha link reconcile-wss-vacant "$id" --confirm "$id" > "$lab/alpha/remove-vacancy-denied.log" 2>&1;then
     echo "vacancy-only recovery erased committed WSS Remove history";exit 1
+  fi
+  if [[ $(printenv STL_WSS_R3_ORIGINAL_TEST || :) == 1 ]];then
+    invoke alpha link reconcile-wss-original "$id" --confirm "$id"
+    if invoke alpha link reconcile-wss-original "$id" --confirm "$id" > "$lab/alpha/original-repeat-denied.log" 2>&1;then
+      echo "interrupted Remove recovery repeated after receipt publication" >&2;exit 1
+    fi
+    jq -e '(.links|length)==0 and (.wss_crash_operations//[]|length)==0 and (.removal_receipts|length)==1' "$lab/alpha-state/state.json" >/dev/null
+    invoke alpha link retire-wss "$id" --confirm "$id"
+    jq -e '.removal_receipts[0].retired==true' "$lab/alpha-state/state.json" >/dev/null
+    test ! -e "$lab/alpha-state/credentials/wss/$id"
+    if ip netns exec alpha ip link show stlwg0123456789 >/dev/null 2>&1 ||
+      ip netns exec alpha /usr/sbin/nft list table inet "$guard" >/dev/null 2>&1;then
+      echo "original Remove left kernel/guard objects live" >&2;exit 1
+    fi
+    echo "SUCCESS ORIGINAL_INTERRUPTED_COMMITTED_REMOVE_RECOVERED: $point"
+    exit 0
   fi
   if [[ "$point" == stop ]];then
     if invoke alpha link reconcile-wss-removed "$id" --confirm "$id" > "$lab/alpha/stop-vacancy-denied.log" 2>&1;then

@@ -62,11 +62,16 @@ func (h Host) runner() linux.BoundedRunner {
 	}
 	return linux.ExecRunner{}
 }
-func (h Host) guard(link domain.Link) (linux.WSSWGIngressPlan, error) {
-	return linux.NewWSSWGIngressPlan(link.ID, link.WireGuard.ListenPort)
+func (h Host) guard(ctx context.Context, link domain.Link) (linux.WSSWGIngressPlan, error) {
+	p, err := linux.NewWSSWGIngressPlan(link.ID, link.WireGuard.ListenPort)
+	if err != nil {
+		return p, err
+	}
+	p.OriginalNonce = core.WSSOrigin(ctx)
+	return p, nil
 }
 func (h Host) GuardPresent(ctx context.Context, link domain.Link) (bool, error) {
-	guard, err := h.guard(link)
+	guard, err := h.guard(ctx, link)
 	if err != nil {
 		return false, err
 	}
@@ -165,8 +170,14 @@ func decodeStrictWSSJSON(raw []byte, out any) error {
 	return nil
 }
 
-func (h Host) unitName(link domain.Link) string        { return "stl-wss-" + string(link.ID)[4:] + ".service" }
-func (h Host) unitDescription(link domain.Link) string { return "STL-WSS-" + string(link.ID) }
+func (h Host) unitName(link domain.Link) string { return "stl-wss-" + string(link.ID)[4:] + ".service" }
+func (h Host) unitDescription(ctx context.Context, link domain.Link) string {
+	name := "STL-WSS-" + string(link.ID)
+	if nonce := core.WSSOrigin(ctx); nonce != "" {
+		name += ":tx:" + nonce
+	}
+	return name
+}
 
 type unitState struct{ loaded, active bool }
 
@@ -208,7 +219,7 @@ func (h Host) inspectUnit(ctx context.Context, link domain.Link) (unitState, err
 		return unitState{}, nil
 	}
 	if values["LoadState"] != "loaded" || values["Transient"] != "yes" ||
-		values["Description"] != h.unitDescription(link) {
+		values["Description"] != h.unitDescription(ctx, link) {
 		return unitState{}, fmt.Errorf("foreign or unexpected WSS unit identity")
 	}
 	// A matching unit name, binary pathname or service description alone
@@ -295,7 +306,7 @@ func (h Host) Preflight(ctx context.Context, link domain.Link, guardPresent bool
 	if _, err := InspectPinnedExecutable(h.binary(), h.digest()); err != nil {
 		return fmt.Errorf("WSS approved helper: %w", err)
 	}
-	guard, err := h.guard(link)
+	guard, err := h.guard(ctx, link)
 	if err != nil {
 		return err
 	}
@@ -356,7 +367,7 @@ func (h Host) EnsureGuard(ctx context.Context, link domain.Link) (core.Rollback,
 	if present {
 		return func(context.Context) error { return nil }, nil
 	}
-	guard, _ := h.guard(link)
+	guard, _ := h.guard(ctx, link)
 	batch, err := guard.NFTBatch()
 	if err != nil {
 		return nil, err
@@ -385,7 +396,7 @@ func (h Host) EnsureGuard(ctx context.Context, link domain.Link) (core.Rollback,
 	return undo, nil
 }
 func (h Host) RemoveGuard(ctx context.Context, link domain.Link) (core.Rollback, error) {
-	guard, err := h.guard(link)
+	guard, err := h.guard(ctx, link)
 	if err != nil {
 		return nil, err
 	}
@@ -504,7 +515,7 @@ func (h Host) StartHelper(ctx context.Context, link domain.Link) (core.Rollback,
 	} else {
 		args := []string{
 			"--unit=" + strings.TrimSuffix(h.unitName(link), ".service"),
-			"--description=" + h.unitDescription(link),
+			"--description=" + h.unitDescription(ctx, link),
 			"--collect", "--property=Restart=on-failure", "--property=RestartSec=2s",
 			"--property=Type=exec", "--property=NoNewPrivileges=yes",
 			"--property=PrivateTmp=yes", "--property=ProtectSystem=strict",

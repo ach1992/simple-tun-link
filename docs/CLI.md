@@ -499,8 +499,51 @@ does not mutate host networking or protected files. The receipt can
 delete only SHA-256-matching original issuance-time TLS/auth material,
 never a same-name or same-mode replacement.
 
-If a host effect is present, ownership cannot be independently verified,
-or a committed repair was interrupted, neither vacancy command is a
-general cleanup mechanism. Keep the journal and request separately
-authorized, identity-attested resource reconciliation. Never hand-edit
-State or adopt/delete a host object by its public name.
+If a host effect is present or ownership cannot be independently
+verified, neither *vacancy-only* command is a general cleanup mechanism.
+The unreleased R3 candidate adds two separately confirmed recovery modes.
+
+For an interrupted **committed Ensure/repair** whose original host effects
+are all absent, use:
+
+`sh
+sudo stl link reconcile-wss-repair-vacant LINK_ID --confirm LINK_ID --json
+sudo stl link restore --all
+`
+
+The repair-vacant command confirms the original committed Link, claims
+and actual issuance-time credential file contents, then removes only
+its pending repair journal. Original desired Link, object nonce, claims
+and fingerprints remain unchanged. No host object is modified.
+
+For a **live, originally attributable interrupted host effect**, use:
+
+`sh
+sudo stl link reconcile-wss-original LINK_ID --confirm LINK_ID --json
+`
+
+The canonical Engine holds maintenance, Link and resource locks. The
+128-bit original creation nonce appears in the nft guard rule, systemd
+unit description and kernel WG alias. WG creation first uses an exclusive
+unpredictable nonce-derived staging name; it is then tagged by ifindex
+and only then renamed to the stable name. A crash between creation and
+alias publication therefore leaves an original staging identity whose
+configuration must still be strictly empty/down and address-free.
+
+Owner-verifiable effects are compensated in protective order: **collect
+original helper, remove original WG by rechecked ifindex, remove original
+nft guard LAST**. Strict global WG key and port vacancy is required
+before deleting the guard, and complete host vacancy must be established
+before consuming the journal in one State transaction. Initial Ensure
+releases its uncommitted journal; committed repair preserves original
+Link/fingerprints; committed Remove commits the original retirement
+receipt, to be consumed later with `retire-wss`.
+
+Failures during compensation retain the journal for an explicitly
+confirmed repeat inspection. Foreign same-name objects, incomplete or
+contradictory readback and foreign global WG port/key owners never
+authorize cleanup. Nonce labels do not defend against malicious local
+root with access to protected State and arbitrary host mutation.
+The rootless tests use real kernel WG and nft but a disposable systemd
+shim; real-systemd reboot, two-host field use, ARM64 WSS and independent
+review remain separate acceptance gates.

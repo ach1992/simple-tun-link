@@ -36,6 +36,7 @@ func (b *Backend) Apply(ctx context.Context, req core.Request, observed core.Obs
 }
 
 type creationProgress struct {
+	OriginalAlias                     string
 	IfIndex                           int
 	Created, Marked                   bool
 	ConfigAttempted, ConfigConfirmed  bool
@@ -126,26 +127,76 @@ func (b *Backend) applyRemove(ctx context.Context, req core.Request, p plan) (co
 
 func (b *Backend) createOwnedInterface(ctx context.Context, link domain.Link, name string) (creationProgress, error) {
 	progress := creationProgress{}
-	if _, err := b.runner.Run(ctx, b.ipBinary, "link", "add", name, "type", "wireguard"); err != nil {
-		return progress, fmt.Errorf("cannot create WireGuard interface: %w", err)
+	var index int
+	if b.wssHost != nil {
+		nonce := core.WSSOrigin(ctx)
+		original, err := linux.WSSOwnerTag(link.ID, nonce)
+		if err != nil {
+			return progress, fmt.Errorf("WSS original kernel object provenance unavailable")
+		}
+		staging, err := linux.WSSStagingName(link.ID, nonce)
+		if err != nil {
+			return progress, err
+		}
+		// Linux ignores IFLA_IFALIAS on RTM_NEWLINK. The first kernel
+		// effect instead uses a nonce-derived unguessable staging name.
+		// Set alias by ifindex, then rename, closing every bare-name gap.
+		if err := linux.CreateWSSWireGuardStaged(ctx, staging); err != nil {
+			return progress, fmt.Errorf("WSS exclusive staged kernel creation uncertain: %w", err)
+		}
+		progress.Created = true
+		index, err = b.lookupIndex(staging)
+		if err != nil || index <= 0 {
+			return progress, fmt.Errorf("WSS original staged ifindex unobserved; retain crash journal")
+		}
+		progress.IfIndex = index
+		observed, err := b.Inspect(ctx, link)
+		if err != nil {
+			return progress, err
+		}
+		identified := false
+		for _, candidate := range observed.(observation).Links {
+			if candidate.Name == staging && candidate.IfIndex == index && candidate.Alias == "" &&
+				!candidate.Up && candidate.Owner == "" {
+				identified = true
+			}
+		}
+		if !identified {
+			return progress, fmt.Errorf("WSS original kernel staging identity changed")
+		}
+		if err := b.setAlias(ctx, index, original); err != nil {
+			return progress, fmt.Errorf("WSS creation staging tag uncertain: %w", err)
+		}
+		progress.Marked = true
+		progress.OriginalAlias = original
+		// If the rename is interrupted, the nonce-derived staging name
+		// and journal-tagged alias still identify the original ifindex.
+		if err := linux.RenameLinkByIndex(ctx, index, name); err != nil {
+			return progress, fmt.Errorf("WSS tagged kernel rename uncertain: %w", err)
+		}
+	} else {
+		if _, err := b.runner.Run(ctx, b.ipBinary, "link", "add", name, "type", "wireguard"); err != nil {
+			return progress, fmt.Errorf("cannot create WireGuard interface: %w", err)
+		}
+		progress.Created = true
+		var err error
+		index, err = b.lookupIndex(name)
+		if err != nil || index <= 0 {
+			return progress, fmt.Errorf("cannot resolve created WireGuard ifindex")
+		}
+		progress.IfIndex = index
+		if err := b.verifyCreation(ctx, link, name, progress); err != nil {
+			return progress, err
+		}
+		alias, err := linux.OwnerTag(link.ID)
+		if err != nil {
+			return progress, err
+		}
+		if err := b.setAlias(ctx, index, alias); err != nil {
+			return progress, fmt.Errorf("cannot mark WireGuard ownership: %w", err)
+		}
+		progress.Marked = true
 	}
-	progress.Created = true
-	index, err := b.lookupIndex(name)
-	if err != nil || index <= 0 {
-		return progress, fmt.Errorf("cannot resolve created WireGuard ifindex")
-	}
-	progress.IfIndex = index
-	if err := b.verifyCreation(ctx, link, name, progress); err != nil {
-		return progress, err
-	}
-	alias, err := linux.OwnerTag(link.ID)
-	if err != nil {
-		return progress, err
-	}
-	if err := b.setAlias(ctx, index, alias); err != nil {
-		return progress, fmt.Errorf("cannot mark WireGuard ownership: %w", err)
-	}
-	progress.Marked = true
 	if err := b.verifyCreation(ctx, link, name, progress); err != nil {
 		return progress, err
 	}
@@ -214,7 +265,10 @@ func createdStateMatches(state observedLink, link domain.Link, name string, p cr
 	alias := ""
 	owner := domain.LinkID("")
 	if p.Marked {
-		alias, _ = linux.OwnerTag(link.ID)
+		alias = p.OriginalAlias
+		if alias == "" {
+			alias, _ = linux.OwnerTag(link.ID)
+		}
 		owner = link.ID
 	}
 	if state.Alias != alias || state.Owner != owner {

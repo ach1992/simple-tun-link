@@ -265,5 +265,22 @@ receipt without modifying any host object. Retirement requires absence of
 any **loaded**, including failed/inactive, helper unit, and SHA-256 matching
 each originally issued TLS/authorization private file. Same-name/mode
 replacement material must survive, even when a receipt remains pending.
-Stronger cleanup of a **live** orphan still needs independent
-original-object proof and a separate security/Owner authorization gate.
+The unreleased R3 candidate adds explicitly confirmed
+`reconcile-wss-original`: original 128-bit creation nonce must match
+nft rule and systemd unit description, while Linux WireGuard creation
+uses an unpredictable nonce-derived staging name followed by ifindex-
+targeted alias publication and rename. Staging-only interfaces must
+remain unconfigured, down and address-free; same-name foreign objects
+are rejected. The helper is collected before deleting the rechecked
+original WG ifindex; global WG key/listen-port absence is mandatory
+before finally removing the protective guard. Partial compensation
+preserves its journal and conservative host protection.
+
+A separate `reconcile-wss-repair-vacant` operation verifies all
+original issuance-time private fingerprints AND host vacancy before
+clearing a committed Ensure/repair journal while preserving the Link.
+No automatic reboot RestoreAll may bypass a pending journal.
+Staging names and public nonce markers are not intended to defeat a
+malicious local root administrator who can rewrite protected State and
+forge kernel objects; actual systemd, two-host and ARM64 WSS field
+acceptance and independent review remain separate gates.

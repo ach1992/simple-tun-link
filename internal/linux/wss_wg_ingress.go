@@ -3,6 +3,7 @@ package linux
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,8 +24,9 @@ const wssWGIngressPriority = -250
 // peer endpoint is 127.0.0.1. Table names and comments alone are never
 // ownership proofs; uncertain host effects must remain quarantined.
 type WSSWGIngressPlan struct {
-	LinkID     domain.LinkID
-	ListenPort uint16
+	LinkID        domain.LinkID
+	ListenPort    uint16
+	OriginalNonce string
 }
 
 func NewWSSWGIngressPlan(id domain.LinkID, listenPort uint16) (WSSWGIngressPlan, error) {
@@ -42,6 +44,12 @@ func (p WSSWGIngressPlan) validate() error {
 	if p.ListenPort == 0 {
 		return fmt.Errorf("WSS WireGuard ingress requires a nonzero kernel UDP listen port")
 	}
+	if p.OriginalNonce != "" {
+		raw, err := hex.DecodeString(p.OriginalNonce)
+		if err != nil || len(raw) != 16 || hex.EncodeToString(raw) != p.OriginalNonce {
+			return fmt.Errorf("invalid WSS original nft guard identity")
+		}
+	}
 	return nil
 }
 
@@ -55,7 +63,11 @@ func (p WSSWGIngressPlan) tableName() string {
 }
 
 func (p WSSWGIngressPlan) ruleComment() string {
-	return "stl:" + string(p.LinkID) + ":wg-udp-guard:" + strconv.Itoa(int(p.ListenPort))
+	tag := "stl:" + string(p.LinkID) + ":wg-udp-guard:" + strconv.Itoa(int(p.ListenPort))
+	if p.OriginalNonce != "" {
+		tag += ":tx:" + p.OriginalNonce
+	}
+	return tag
 }
 
 // NFTBatch returns the exact single nftables transaction for an *absent*

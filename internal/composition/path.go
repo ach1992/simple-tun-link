@@ -85,8 +85,9 @@ type Path struct {
 // readiness. WSS's host admission must separately demonstrate a pinned
 // executable, strict mTLS, exact destination restrictions, kernel WG UDP
 // ingress isolation and ownership-safe helper process/systemd management.
-// Until those adapters are operational, this package must not be treated
-// as enabling a new CLI/State/pairing Carrier.
+// The unreleased WSS candidate has a managed host runtime, but composition
+// alone never authorizes host effects; its Engine recovery, independent
+// review and release gates remain separate.
 func CarrierForLink(link domain.Link) Carrier {
 	if link.Backend != domain.BackendWireGuardWSS {
 		return Carrier{}

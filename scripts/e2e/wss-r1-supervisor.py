@@ -97,6 +97,9 @@ try:
         elif op=="restart":
             if not info:raise RuntimeError("Cannot restart missing WSS unit")
             stop(info);launch(info)
+            if os.environ.get("STL_WSS_R3_REPAIR_TEST")=="1":
+                os.kill(os.getppid(),signal.SIGKILL)
+                sys.exit(1)
         else:raise RuntimeError("unsupported operation")
     else:raise RuntimeError("Not disposable systemd shim")
 except Exception as e:

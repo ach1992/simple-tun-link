@@ -120,7 +120,12 @@ func parsePeerAttribute(raw []byte, peer string) (string, error) {
 
 func (o observedLink) matches(link domain.Link, name string) bool {
 	alias, err := linux.OwnerTag(link.ID)
-	return err == nil && o.Exists && o.Name == name && o.Owner == link.ID && o.Alias == alias && o.Up &&
+	match := err == nil && o.Alias == alias
+	if link.Backend == domain.BackendWireGuardWSS {
+		original, _, valid := linux.ParseWSSOwnerTag(o.Alias)
+		match = valid && original == link.ID
+	}
+	return match && o.Exists && o.Name == name && o.Owner == link.ID && o.Up &&
 		len(o.IPv4Addresses) == 1 && o.IPv4Addresses[0] == link.Addresses.Local && o.configuredFor(link)
 }
 
