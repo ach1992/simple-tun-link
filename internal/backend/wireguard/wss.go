@@ -207,6 +207,14 @@ func (b *Backend) ensureWSS(ctx context.Context, req core.Request, obs observati
 		var err error
 		progress, err = b.createOwnedInterface(ctx, req.Link, p.name)
 		if err != nil {
+			if errors.Is(err, core.ErrIndeterminateHostEffect) {
+				// A kernel NEWLINK can succeed before the caller sees an
+				// ACK or before an ifindex can be captured. NEVER undo the
+				// only ingress firewall while that outcome is uncertain.
+				// Keep durable journal and original nonce-derived staging
+				// identity for explicit owner-attested compensation.
+				return nil, err
+			}
 			return undo, err
 		}
 	}

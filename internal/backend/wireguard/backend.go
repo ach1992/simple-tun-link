@@ -59,6 +59,9 @@ type Backend struct {
 	deleteLink         func(context.Context, int) error
 	lookupIndex        func(string) (int, error)
 	wssHost            WSSHost
+	// Test-only seam for a dispatched-but-unacknowledged kernel NEWLINK:
+	// production always uses linux.CreateWSSWireGuardStaged.
+	wssCreateStaged func(context.Context, string) error
 }
 
 func New(opts Options) (*Backend, error) {

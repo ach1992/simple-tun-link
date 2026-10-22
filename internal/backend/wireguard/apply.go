@@ -141,8 +141,16 @@ func (b *Backend) createOwnedInterface(ctx context.Context, link domain.Link, na
 		// Linux ignores IFLA_IFALIAS on RTM_NEWLINK. The first kernel
 		// effect instead uses a nonce-derived unguessable staging name.
 		// Set alias by ifindex, then rename, closing every bare-name gap.
-		if err := linux.CreateWSSWireGuardStaged(ctx, staging); err != nil {
-			return progress, fmt.Errorf("WSS exclusive staged kernel creation uncertain: %w", err)
+		create := b.wssCreateStaged
+		if create == nil {
+			create = linux.CreateWSSWireGuardStaged
+		}
+		if err := create(ctx, staging); err != nil {
+			// An RTM_NEWLINK ACK error/cancellation does not prove the
+			// exclusive kernel object was NOT created. Guard must stay
+			// installed until original-object recovery proves vacancy.
+			return progress, fmt.Errorf("%w: staged kernel WG create ACK uncertain: %v",
+				core.ErrIndeterminateHostEffect, err)
 		}
 		progress.Created = true
 		index, err = b.lookupIndex(staging)

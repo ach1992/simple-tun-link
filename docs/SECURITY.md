@@ -271,7 +271,13 @@ nft rule and systemd unit description, while Linux WireGuard creation
 uses an unpredictable nonce-derived staging name followed by ifindex-
 targeted alias publication and rename. Staging-only interfaces must
 remain unconfigured, down and address-free; same-name foreign objects
-are rejected. The helper is collected before deleting the rechecked
+are rejected.
+A dispatched RTM_NEWLINK whose ACK/timeout/cancellation cannot prove
+whether the staging object was created is treated as an indeterminate
+host effect. Its original ingress nft guard and durable crash journal
+MUST survive; normal rollback is prohibited until the original staged
+object is inspected in an explicitly confirmed recovery. This ordering
+is exercised by an actual rootless kernel-creation-then-lost-ACK test. The helper is collected before deleting the rechecked
 original WG ifindex; global WG key/listen-port absence is mandatory
 before finally removing the protective guard. Partial compensation
 preserves its journal and conservative host protection.
