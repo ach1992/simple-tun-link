@@ -164,6 +164,7 @@ func (b *Backend) applyWSS(ctx context.Context, req core.Request, obs observatio
 func (b *Backend) ensureWSS(ctx context.Context, req core.Request, obs observation, p plan) (core.Rollback, error) {
 	var undos []core.Rollback
 	var progress creationProgress
+	verifiedKernelDeletion := false
 	undo := func(c context.Context) error {
 		for i := len(undos) - 1; i >= 0; i-- {
 			if undos[i] == nil {
@@ -183,7 +184,16 @@ func (b *Backend) ensureWSS(ctx context.Context, req core.Request, obs observati
 	if p.guardChange {
 		revert, err := b.wssHost.EnsureGuard(ctx, req.Link)
 		if revert != nil {
-			undos = append(undos, revert)
+			undos = append(undos, func(c context.Context) error {
+				if !verifiedKernelDeletion {
+					return fmt.Errorf("WSS original kernel deletion not established; retain ingress guard")
+				}
+				witnessed, witnessErr := core.WithWSSWGDeleted(c, req.Link.ID)
+				if witnessErr != nil {
+					return witnessErr
+				}
+				return revert(witnessed)
+			})
 		}
 		if err != nil {
 			if errors.Is(err, core.ErrIndeterminateHostEffect) {
@@ -197,9 +207,13 @@ func (b *Backend) ensureWSS(ctx context.Context, req core.Request, obs observati
 			return undo, fmt.Errorf("WSS WG drift blocks recreation")
 		}
 		revert := func(c context.Context) error {
-			if progress.Created {
-				return b.rollbackCreatedInterface(c, req.Link, p.name, progress)
+			if !progress.Created {
+				return nil
 			}
+			if err := b.rollbackCreatedInterface(c, req.Link, p.name, progress); err != nil {
+				return err
+			}
+			verifiedKernelDeletion = true
 			return nil
 		}
 		undos = append(undos, revert)
@@ -241,6 +255,7 @@ func (b *Backend) removeWSS(ctx context.Context, req core.Request, p plan) (core
 		}
 	}
 	var undos []core.Rollback
+	verifiedKernelDeletion := false
 	undo := func(c context.Context) error {
 		for i := len(undos) - 1; i >= 0; i-- {
 			if undos[i] == nil {
@@ -279,14 +294,24 @@ func (b *Backend) removeWSS(ctx context.Context, req core.Request, p plan) (core
 		if err := b.deleteLink(ctx, target.IfIndex); err != nil {
 			return nil, fmt.Errorf("%w: kernel WG Delete outcome unverified", core.ErrIndeterminateHostEffect)
 		}
+		verifiedKernelDeletion = true
 		undos = append(undos, func(c context.Context) error {
 			_, err := b.createOwnedInterface(c, req.Link, p.name)
 			return err
 		})
 	}
-	// With kernel WG gone, the exact owned nft guard can be removed safely.
+	// Only a successful, exact original index-targeted kernel deletion can
+	// authorize lifting the UDP guard. A missing/migrated WG interface, even
+	// when its socket is momentarily down, is NOT retirement proof.
 	if p.guardChange {
-		revert, err := b.wssHost.RemoveGuard(ctx, req.Link)
+		if !verifiedKernelDeletion {
+			return undo, fmt.Errorf("WSS kernel original was not verifiably deleted; ingress guard retained")
+		}
+		witnessed, witnessErr := core.WithWSSWGDeleted(ctx, req.Link.ID)
+		if witnessErr != nil {
+			return undo, witnessErr
+		}
+		revert, err := b.wssHost.RemoveGuard(witnessed, req.Link)
 		if err != nil && errors.Is(err, core.ErrIndeterminateHostEffect) {
 			return nil, err
 		}
@@ -339,6 +364,14 @@ func (b *Backend) CrashHostVacant(ctx context.Context, observed core.Observation
 	}
 	if current.Target.Exists || current.GuardPresent || current.HelperLoaded {
 		return false, nil
+	}
+	// A namespace-local empty interface inventory AND empty birthplace UDP
+	// socket set cannot prove that a moved, DOWN original WG is absent.
+	// Require a witness issued after this transaction deleted that exact
+	// original kernel object. Read-only vacancy reconciliation of an
+	// unproven prior crash remains quarantined for manual recovery.
+	if !core.HasWSSWGDeletionWitness(ctx, current.WSSLink.ID) {
+		return false, fmt.Errorf("original WSS WG kernel deletion witness absent; preserve crash journal and private material")
 	}
 	staging, err := linux.WSSStagingName(current.WSSLink.ID, core.WSSOrigin(ctx))
 	if err != nil {

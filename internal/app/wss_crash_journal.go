@@ -239,7 +239,7 @@ func (e *Engine) reconcileWSSCrashMode(ctx context.Context, id domain.LinkID, mo
 	}
 	if originalRecovery {
 		compensator, ok := impl.(interface {
-			CrashCompensateOriginal(context.Context, domain.Link, backend.Observation) error
+			CrashCompensateOriginal(context.Context, domain.Link, backend.Observation) (bool, error)
 		})
 		if !ok {
 			return stlerr.New(stlerr.CodeUnsupported, "wss_reconcile", string(id),
@@ -247,9 +247,18 @@ func (e *Engine) reconcileWSSCrashMode(ctx context.Context, id domain.LinkID, mo
 		}
 		// All readbacks and destructive effects occur strictly under
 		// canonical locks and after the immutable journal/State checks.
-		if err := compensator.CrashCompensateOriginal(inspectionCtx, op.Intent, observed); err != nil {
+		originalDeleted, compensateErr := compensator.CrashCompensateOriginal(inspectionCtx, op.Intent, observed)
+		if compensateErr != nil {
 			return stlerr.Wrap(stlerr.CodeConflict, "wss_reconcile", string(id),
-				"wireguard-wss", "original WSS host cleanup unverified; retaining journal", err)
+				"wireguard-wss", "original WSS host cleanup unverified; retaining journal", compensateErr)
+		}
+		if !originalDeleted {
+			return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id), "wireguard-wss",
+				"original WSS kernel deletion not verified; retain original crash journal")
+		}
+		inspectionCtx, err = backend.WithWSSWGDeleted(inspectionCtx, op.Intent.ID)
+		if err != nil {
+			return err
 		}
 		observed, err = impl.Inspect(inspectionCtx, op.Intent)
 		if err != nil {

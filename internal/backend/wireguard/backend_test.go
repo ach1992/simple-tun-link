@@ -29,6 +29,8 @@ type fakeKernel struct {
 	wantSecret        string
 	exposedSecret     bool
 	publicKeyOverride string // malformed literal for explicit inspection-denial tests
+	presharedDrift    bool
+	addressExtra      map[string]any
 	deletedInterfaces int
 }
 
@@ -55,7 +57,11 @@ func (f *fakeKernel) Run(_ context.Context, binary string, args ...string) (linu
 	case binary == "ip" && len(args) == 5 && args[0] == "-json" && args[1] == "address":
 		addrs := []any{}
 		for _, v := range f.target.IPv4Addresses {
-			addrs = append(addrs, map[string]any{"family": "inet", "local": v.Addr().String(), "prefixlen": v.Bits()})
+			row := map[string]any{"family": "inet", "local": v.Addr().String(), "prefixlen": v.Bits()}
+			for key, value := range f.addressExtra {
+				row[key] = value
+			}
+			addrs = append(addrs, row)
 		}
 		raw, _ := json.Marshal([]any{map[string]any{"ifindex": f.target.IfIndex, "ifname": f.target.Name, "addr_info": addrs}})
 		return linux.CommandResult{Stdout: raw}, nil
@@ -110,6 +116,18 @@ func (f *fakeKernel) Run(_ context.Context, binary string, args ...string) (linu
 			}
 		case "listen-port":
 			value = strconv.Itoa(int(f.target.ListenPort))
+		case "fwmark":
+			value = "off"
+			if f.target.FwMark != 0 {
+				value = fmt.Sprintf("0x%x", f.target.FwMark)
+			}
+		case "preshared-keys":
+			if len(f.target.Peers) == 1 {
+				value = f.target.Peers[0] + "\t(none)"
+				if f.presharedDrift {
+					value = f.target.Peers[0] + "\t" + strings.Repeat("X", 43) + "="
+				}
+			}
 		case "peers":
 			value = strings.Join(f.target.Peers, "\n")
 		case "allowed-ips":
@@ -154,6 +172,9 @@ func (f *fakeKernel) Run(_ context.Context, binary string, args ...string) (linu
 
 // Test runner's output is bounded by the deterministic fake inventory.
 func (f *fakeKernel) RunBounded(ctx context.Context, _ linux.CaptureLimits, binary string, args ...string) (linux.CommandResult, error) {
+	if binary == "ss" && reflect.DeepEqual(args, []string{"-H", "-u", "-l", "-n"}) {
+		return linux.CommandResult{}, nil // fixed synthetic host has no UDP sockets
+	}
 	return f.Run(ctx, binary, args...)
 }
 

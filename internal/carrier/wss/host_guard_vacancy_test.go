@@ -20,6 +20,7 @@ type wssGuardVacancyStub struct {
 	local, other   string
 	malformed      string
 	wgCanceled     context.CancelFunc
+	socketOccupied bool
 	calls          []string
 }
 
@@ -46,6 +47,11 @@ func (r *wssGuardVacancyStub) RunBounded(_ context.Context, _ linux.CaptureLimit
 		}
 		raw, _ := json.Marshal(map[string]any{"nftables": rows})
 		return linux.CommandResult{Stdout: raw}, nil
+	case call == "ss -H -u -l -n":
+		if r.socketOccupied {
+			return linux.CommandResult{Stdout: []byte(fmt.Sprintf("UNCONN 0 0 0.0.0.0:%d 0.0.0.0:*\n", r.port))}, nil
+		}
+		return linux.CommandResult{}, nil
 	case call == "wg show interfaces":
 		return linux.CommandResult{Stdout: []byte("foreign0\n")}, nil
 	case call == "wg show all public-key":
@@ -85,6 +91,27 @@ func TestWSSHostRemoveGuardFailsClosedBeforeNFTDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	guard.OriginalNonce = core.WSSOrigin(ctx)
+	// Even an empty namespace-local WG/socket inventory is not enough
+	// without the original index-targeted deletion that preceded this
+	// guard boundary in the actual Engine transaction.
+	noWitnessRunner := &wssGuardVacancyStub{
+		table: guard.TableName(), port: l.WireGuard.ListenPort,
+		comment: "stl:" + string(l.ID) + ":wg-udp-guard:" +
+			strconv.Itoa(int(l.WireGuard.ListenPort)) + ":tx:" + core.WSSOrigin(ctx),
+		other: l.WireGuard.PeerPublicKey,
+	}
+	if undo, err := (Host{Runner: noWitnessRunner}).RemoveGuard(ctx, l); err == nil || undo != nil {
+		t.Fatal("WSS guard removal admitted absent original kernel-deletion witness")
+	}
+	for _, call := range noWitnessRunner.calls {
+		if !strings.HasPrefix(call, "nft -j list") {
+			t.Fatalf("guard proof missing but unsafe host command dispatched: %s", call)
+		}
+	}
+	ctx, err = core.WithWSSWGDeleted(ctx, l.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		name, local, malformed string
 		canceled               bool
@@ -94,6 +121,7 @@ func TestWSSHostRemoveGuardFailsClosedBeforeNFTDeletion(t *testing.T) {
 		{"missing_key_inventory", "", "key", false},
 		{"failed_port_inventory", "", "port", false},
 		{"canceled_inventory", "", "", true},
+		{"birthplace_udp_socket", "", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			run := &wssGuardVacancyStub{
@@ -101,6 +129,7 @@ func TestWSSHostRemoveGuardFailsClosedBeforeNFTDeletion(t *testing.T) {
 				comment: "stl:" + string(l.ID) + ":wg-udp-guard:" + strconv.Itoa(int(l.WireGuard.ListenPort)) + ":tx:" + core.WSSOrigin(ctx),
 				port:    l.WireGuard.ListenPort,
 				local:   tc.local, malformed: tc.malformed, other: l.WireGuard.PeerPublicKey,
+				socketOccupied: tc.name == "birthplace_udp_socket",
 			}
 			currentCtx := ctx
 			if tc.canceled {
@@ -117,7 +146,8 @@ func TestWSSHostRemoveGuardFailsClosedBeforeNFTDeletion(t *testing.T) {
 				t.Fatalf("guard removal proceeded without vacancy: err=%v", err)
 			}
 			for _, call := range run.calls {
-				if !strings.HasPrefix(call, "nft -j list") && !strings.HasPrefix(call, "wg show") {
+				if !strings.HasPrefix(call, "nft -j list") && !strings.HasPrefix(call, "wg show") &&
+					call != "ss -H -u -l -n" {
 					t.Fatalf("unsafe command dispatched: %s", call)
 				}
 			}

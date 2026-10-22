@@ -470,17 +470,28 @@ nonsecret** pre-effect journal. Until resolved, the Link and its
 planned resource identities are reserved against automatic replay and
 conflicting allocations.
 
-Only when all host effects are absent after an **initial,
-uncommitted** Ensure may the original Link ID be released for an
+A **verified original-kernel deletion witness**, not merely the
+absence of local `wg` interfaces, a socket or a helper, is necessary
+before a previously interrupted WSS transaction can be cleared.
+Namespace migration can hide an existing but DOWN WireGuard object
+without leaving a visible UDP socket. The following explicit
+reconciliation commands fail closed and retain the original journal
+when that positive witness is unavailable, even if the local
+inventories look empty. An initial, uncommitted Ensure with proven
+original absence may otherwise have been eligible for an
 exact-credential retry:
 
 ```sh
 sudo stl link reconcile-wss-vacant LINK_ID --confirm LINK_ID --json
 ```
 
-This initial-Ensure command clears only the exact journal entry after
-strict absence verification of kernel WG, nft guard and **loaded**
-systemd helper. It does not alter any host object or credential.
+This initial-Ensure command never changes any host object or credential.
+The present R5 safety implementation deliberately **does not issue a
+retirement witness from namespace-local absence**; a pre-kernel,
+guard-only crash can therefore remain quarantined even if the guard
+was later removed externally. Operator-directed, separately attested
+maintenance is required where no original kernel-deletion witness can
+be reconstructed. No stale journal may be silently replayed.
 
 For a **previously committed Remove**, whose host effects have entirely
 disappeared, use a separate confirmation path:
@@ -494,8 +505,10 @@ sudo stl link retire-wss LINK_ID --confirm LINK_ID
 The Remove path requires the exact original committed Link, resource
 claims, private TLS/authorization fingerprints and pre-effect journal,
 and independently proves the absence of all helper/WG/nft resources.
-It commits State deletion plus the immutable retirement receipt; it
-does not mutate host networking or protected files. The receipt can
+It commits State deletion plus the immutable retirement receipt only
+after an independently witnessed original WG deletion; missing
+namespace-local resources alone cannot authorize that transition.
+It does not mutate host networking or protected files. The receipt can
 delete only SHA-256-matching original issuance-time TLS/auth material,
 never a same-name or same-mode replacement.
 
@@ -512,9 +525,11 @@ sudo stl link restore --all
 `
 
 The repair-vacant command confirms the original committed Link, claims
-and actual issuance-time credential file contents, then removes only
-its pending repair journal. Original desired Link, object nonce, claims
-and fingerprints remain unchanged. No host object is modified.
+and actual issuance-time credential file contents. It does not issue
+its own original WG deletion witness, so unknown previously interrupted
+cleanup remains quarantined. A verified successful original-object
+recovery can instead clear the pending journal without changing the
+Link, object nonce, claims or fingerprints.
 
 For a **live, originally attributable interrupted host effect**, use:
 
@@ -540,11 +555,17 @@ verified intermediate subsets of the originally intended WG configuration.
 
 Owner-verifiable effects are compensated in protective order: **collect
 original helper, remove original WG by rechecked ifindex, remove original
-nft guard LAST**. Complete, mutually consistent WireGuard interface,
-public-key and UDP-port inventories must establish global vacancy
-immediately before **every** WSS guard deletion (including ordinary
-Remove and Ensure rollback), and complete host vacancy must be established
-before consuming the journal in one State transaction. Initial Ensure
+nft guard LAST**. All three namespace-local WG inventories must agree,
+AND a bounded UDP listener inventory must confirm that the protected
+port is unoccupied in the guarded/birthplace namespace. These checks
+are necessary but **not sufficient**: a moved DOWN WG interface has no
+socket until brought back UP. Guard deletion additionally requires
+a same-transaction, original-nonce-bound witness of successful,
+ifindex-targeted kernel deletion; read-only vacancy reconciliation
+cannot fabricate such a witness from State, alias, interface names or
+absence. Without complete proof the nft guard, journal and credentials
+remain quarantined, even if this rejects some formerly permitted
+guard-only/after-delete crash recovery flows. Initial Ensure
 releases its uncommitted journal; committed repair preserves original
 Link/fingerprints; committed Remove commits the original retirement
 receipt, to be consumed later with `retire-wss`.

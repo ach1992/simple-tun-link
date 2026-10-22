@@ -42,6 +42,7 @@ func TestWSSGuardVacancyGlobalAgreementAndFailClosed(t *testing.T) {
 		"wg show interfaces":      "foreign0",
 		"wg show all public-key":  "foreign0 " + other + "\n",
 		"wg show all listen-port": "foreign0 51872\n",
+		"ss -H -u -l -n":          "UNCONN 0 0 0.0.0.0:51872 0.0.0.0:*\n",
 	}
 	cases := []struct {
 		name    string
@@ -61,6 +62,25 @@ func TestWSSGuardVacancyGlobalAgreementAndFailClosed(t *testing.T) {
 		{"matching_udp", func(m map[string]string) {
 			m["wg show all listen-port"] = "foreign0 51871"
 		}, true, false},
+		// A wireguard interface created in this (guard) namespace may
+		// disappear from wg show when moved to another namespace, while
+		// its live UDP socket stays here. Namespace-local wg inventories
+		// alone would falsely authorize deletion.
+		{"migrated_live_socket", func(m map[string]string) {
+			m["wg show interfaces"] = ""
+			m["wg show all public-key"] = ""
+			m["wg show all listen-port"] = ""
+			m["ss -H -u -l -n"] = "UNCONN 0 0 0.0.0.0:51871 0.0.0.0:*\n"
+		}, true, false},
+		{"migrated_live_socket_ipv6", func(m map[string]string) {
+			m["wg show interfaces"] = ""
+			m["wg show all public-key"] = ""
+			m["wg show all listen-port"] = ""
+			m["ss -H -u -l -n"] = "UNCONN 0 0 [::]:51871 [::]:*\n"
+		}, true, false},
+		{"malformed_socket_inventory", func(m map[string]string) {
+			m["ss -H -u -l -n"] = "INCOMPLETE\n"
+		}, true, true},
 		{"missing_key_row", func(m map[string]string) { m["wg show all public-key"] = "" }, true, true},
 		{"missing_port_row", func(m map[string]string) { m["wg show all listen-port"] = "" }, true, true},
 		{"unknown_interface", func(m map[string]string) {
@@ -99,7 +119,7 @@ func TestWSSGuardVacancyGlobalAgreementAndFailClosed(t *testing.T) {
 			if (err != nil) != tt.wantErr || (err == nil && clear == tt.deny) {
 				t.Fatalf("clear=%t err=%v want deny=%t wantErr=%t", clear, err, tt.deny, tt.wantErr)
 			}
-			if len(run.calls) > 3 {
+			if len(run.calls) > 4 {
 				t.Fatal("unexpected repeated inventory reads")
 			}
 		})
@@ -131,5 +151,9 @@ func TestWSSGuardVacancyGlobalAgreementAndFailClosed(t *testing.T) {
 	run := &wssVacancyRunner{result: original, fail: "wg show all public-key"}
 	if clear, err := WSSGlobalWGKernelVacant(context.Background(), run, "wg", local, 51871); err == nil || clear {
 		t.Fatalf("unavailable global inventory proved vacancy: %v", err)
+	}
+	run = &wssVacancyRunner{result: original, fail: "ss -H -u -l -n"}
+	if clear, err := WSSGlobalWGKernelVacant(context.Background(), run, "wg", local, 51871); err == nil || clear {
+		t.Fatalf("unavailable birthplace socket inventory proved vacancy: %v", err)
 	}
 }

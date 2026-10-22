@@ -25,6 +25,7 @@ type observedLink struct {
 	IPv4Addresses        []netip.Prefix
 	PublicKey            string
 	ListenPort           uint16
+	FwMark               uint32
 	Peers                []string
 	AllowedIPs, Endpoint string
 	Keepalive            uint16
@@ -123,9 +124,37 @@ func parseOriginalWSSAddresses(raw []byte, name string, ifindex int) ([]netip.Pr
 	if err := json.Unmarshal(info, &entries); err != nil || entries == nil {
 		return nil, fmt.Errorf("WSS original address inventory malformed")
 	}
-	for _, entry := range entries {
+	var memberRows []map[string]json.RawMessage
+	if err := json.Unmarshal(info, &memberRows); err != nil || memberRows == nil ||
+		len(memberRows) != len(entries) {
+		return nil, fmt.Errorf("WSS original address rows invalid")
+	}
+	for i, entry := range entries {
 		if entry.Family != "inet" {
 			return nil, fmt.Errorf("WSS original interface has unexpected address family")
+		}
+		// iproute2 may emit these *canonical* attributes for a local IPv4
+		// address added by STL. Unexpected peer/broadcast, extra labels,
+		// changed scope, finite lifetimes, protocol or flags forbid deletion.
+		for field, value := range memberRows[i] {
+			switch field {
+			case "family", "local", "prefixlen":
+			case "scope":
+				if string(value) != `"global"` {
+					return nil, fmt.Errorf("WSS original address scope drift")
+				}
+			case "label":
+				var label string
+				if json.Unmarshal(value, &label) != nil || label != name {
+					return nil, fmt.Errorf("WSS original address label drift")
+				}
+			case "valid_life_time", "preferred_life_time":
+				if string(value) != "4294967295" {
+					return nil, fmt.Errorf("WSS original address lifetime drift")
+				}
+			default:
+				return nil, fmt.Errorf("WSS original address has unsupported attributes")
+			}
 		}
 	}
 	return parseAddresses(raw, name, ifindex)

@@ -402,6 +402,19 @@ FOREIGN
     exit 0
   fi
   if [[ $(printenv STL_WSS_R3_ORIGINAL_TEST || :) == 1 ]];then
+    if [[ -z "$original_case" ]];then
+      # The original guard was created, but the host process died
+      # before it could independently attest a WG creation attempt.
+      # No index-targeted original WG deletion exists: absence cannot
+      # authorize dropping the nft guard, even under a valid journal.
+      if invoke alpha link reconcile-wss-original "$link_id" --confirm "$link_id" > "$lab/alpha/no-original-delete-witness-denied.log" 2>&1;then
+        echo "FAIL: guard-only crash was cleared using empty-local-WG heuristics" >&2;exit 1
+      fi
+      jq -e '(.links|length)==0 and (.wss_crash_operations|length)==1' "$lab/alpha-state/state.json" >/dev/null
+      ip netns exec alpha nft -j list table inet "$guard" >/dev/null
+      echo "DENY_PASS GUARD_ONLY_CRASH_RETAINS_ORIGINAL_JOURNAL_AND_FIREWALL"
+      exit 0
+    fi
     invoke alpha link reconcile-wss-original "$link_id" --confirm "$link_id"
     if invoke alpha link reconcile-wss-original "$link_id" --confirm "$link_id" > "$lab/alpha/original-repeat-denied.log" 2>&1;then
       echo "initial original recovery repeated after journal consumption" >&2;exit 1
@@ -418,15 +431,89 @@ FOREIGN
       exit 0
     fi
   else
-    # Historical R2 vacancy-only test with separate harness-owned cleanup.
-    ip netns exec alpha /usr/sbin/nft delete table inet "$guard"
-    invoke alpha link reconcile-wss-vacant "$link_id" --confirm "$link_id"
+    # A durable guard-only initial-Ensure journal cannot reconstruct the
+    # proof of an actual original kernel deletion after a crash. Refuse
+    # its historical automatic "no local WG" clearance; leave the exact
+    # guard and journal quarantined pending separately attested recovery.
+    if invoke alpha link reconcile-wss-vacant "$link_id" --confirm "$link_id" > "$lab/alpha/no-vacancy-certificate-denied.log" 2>&1;then
+      echo "FAIL: guard-only crash was cleared without original kernel deletion witness" >&2;exit 1
+    fi
+    jq -e '(.links|length)==0 and (.wss_crash_operations|length)==1' "$lab/alpha-state/state.json" >/dev/null
+    ip netns exec alpha nft -j list table inet "$guard" >/dev/null
+    echo "DENY_PASS GUARD_ONLY_INITIAL_ENSURE_JOURNAL_UNDER_QUARANTINE"
+    exit 0
   fi
   jq -e '(.wss_crash_operations // []) | length==0' "$lab/alpha-state/state.json" >/dev/null
   invoke alpha link ensure --stdin < "$lab/alpha/recovery-ensure.json"
   echo "SUCCESS PRECOMMIT_NFT_HARD_CRASH_JOURNAL_VACANCY_AND_EXACT_RETRY"
 else
   invoke alpha link create-wss --stdin --output /var/lib/stl-r1-state/handoff/receiver.json < "$lab/alpha/create.json"
+fi
+if [[ -n "$(printenv STL_WSS_R5_MIGRATED_WG_TEST || :)" ]]; then
+  # The original guarded namespace is alpha; the still-owned kernel WG
+  # is moved to beta. The move itself brings it DOWN, so the birthplace
+  # socket disappears until it is raised again in beta.
+  mode=$STL_WSS_R5_MIGRATED_WG_TEST
+  case "$mode" in down|active) ;; *) echo "invalid migration mode" >&2; exit 2;; esac
+  id=lnk_0123456789abcdef0123456789abcdef
+  guard=$(python3 -c 'import hashlib;print("stlwss_"+hashlib.sha256(b"lnk_0123456789abcdef0123456789abcdef").hexdigest()[:16])')
+  ip -n alpha link set stlwg0123456789 netns beta
+  [[ -z "$(ip netns exec alpha wg show interfaces)" ]]
+  ip netns exec beta wg show interfaces | grep -qx 'stlwg0123456789'
+  if [[ $mode == down ]]; then
+    if ip netns exec alpha ss -H -u -l -n | grep -Fq ':51821'; then
+      echo "FAIL: moved DOWN WG still has UDP socket" >&2; exit 1;
+    fi
+    echo "PROVEN CROSS_NETNS_MOVED_DOWN_WG_HIDES_INTERFACE_AND_SOCKET"
+  else
+    ip -n beta link set stlwg0123456789 up
+    ip netns exec alpha ss -H -u -l -n | grep -Fq ':51821'
+    if ip netns exec beta ss -H -u -l -n | grep -Fq ':51821'; then
+      echo "FAIL: moved WG socket escaped its original guarded namespace" >&2; exit 1;
+    fi
+    echo "PROVEN CROSS_NETNS_WG_BIRTHPLACE_SOCKET_REMAINS"
+  fi
+  if invoke alpha link remove "$id" --confirm "$id" > "$lab/alpha/migrated-remove-denied.log" 2>&1; then
+    echo "FAIL: hidden WG object permitted WSS guard deletion" >&2; exit 1;
+  fi
+  jq -e '(.links|length)==1 and (.wss_crash_operations|length)==1' "$lab/alpha-state/state.json" >/dev/null
+  ip netns exec alpha nft -j list table inet "$guard" >/dev/null
+  test -d "$lab/alpha-state/credentials/wss/$id"
+  if [[ $mode == down ]]; then
+    ip -n beta link set stlwg0123456789 up
+    ip netns exec alpha ss -H -u -l -n | grep -Fq ':51821'
+    echo "PROVEN MOVED_DOWN_WG_CAN_RECREATE_ORIGIN_SOCKET"
+  fi
+  if invoke alpha link reconcile-wss-removed "$id" --confirm "$id" > "$lab/alpha/migrated-reconcile-denied.log" 2>&1; then
+    echo "FAIL: live migrated WG permitted crash/Remove reconciliation" >&2; exit 1;
+  fi
+  ip -n beta link delete stlwg0123456789
+  if ip netns exec alpha ss -H -u -l -n | grep -Fq ':51821'; then
+    echo "FAIL: UDP socket survived moved interface deletion" >&2; exit 1;
+  fi
+  # External deletion without the Engine's generation-pinned witness is
+  # still not proof the same object remained un-replaced or cannot return.
+  # No automatic journal/credential release on apparent empty host.
+  if invoke alpha link reconcile-wss-removed "$id" --confirm "$id" > "$lab/alpha/migrated-unattested-absence-denied.log" 2>&1; then
+    echo "FAIL: unproven external deletion retired original WSS credentials" >&2; exit 1;
+  fi
+  jq -e '(.links|length)==1 and (.wss_crash_operations|length)==1' "$lab/alpha-state/state.json" >/dev/null
+  ip netns exec alpha nft -j list table inet "$guard" >/dev/null
+  test -d "$lab/alpha-state/credentials/wss/$id"
+  # The harness alone may delete its exact disposable nft table to
+  # emulate externally lost protection. State/credential vacancy MUST
+  # still refuse to infer original-generation retirement from no socket.
+  ip netns exec alpha nft delete table inet "$guard"
+  if invoke alpha link reconcile-wss-removed "$id" --confirm "$id" > "$lab/alpha/migrated-missing-guard-denied.log" 2>&1; then
+    echo "FAIL: externally missing guard fabricated original kernel-deletion witness" >&2; exit 1;
+  fi
+  if invoke alpha link reconcile-wss-original "$id" --confirm "$id" > "$lab/alpha/migrated-no-original-witness-denied.log" 2>&1; then
+    echo "FAIL: absent original after external deletion consumed owner journal" >&2; exit 1;
+  fi
+  jq -e '(.links|length)==1 and (.wss_crash_operations|length)==1' "$lab/alpha-state/state.json" >/dev/null
+  test -d "$lab/alpha-state/credentials/wss/$id"
+  echo "DENY_PASS CROSS_NETNS_MIGRATED_WG_QUARANTINE mode=$mode"
+  exit 0
 fi
 test -f "$lab/alpha-state/handoff/receiver.json"
 invoke beta link preview-wss --stdin --json < "$lab/alpha-state/handoff/receiver.json" | tee "$lab/beta/preview.json"
@@ -591,6 +678,18 @@ if [[ -n "$(printenv STL_WSS_R2_REMOVE_CRASH_TEST || :)" ]];then
     echo "vacancy-only recovery erased committed WSS Remove history";exit 1
   fi
   if [[ $(printenv STL_WSS_R3_ORIGINAL_TEST || :) == 1 ]];then
+    if [[ "$point" == guard ]];then
+      # The original kernel was deleted in a PREVIOUS process before
+      # its nft transaction crashed. That process-local proof was lost;
+      # the new process must not invent it from absent WG/UDP.
+      if invoke alpha link reconcile-wss-original "$id" --confirm "$id" > "$lab/alpha/no-original-removal-witness-denied.log" 2>&1;then
+        echo "FAIL: cross-process guard deletion fabricated a kernel witness" >&2;exit 1
+      fi
+      jq -e '(.links|length)==1 and (.wss_crash_operations|length)==1 and (.removal_receipts|length)==0' "$lab/alpha-state/state.json" >/dev/null
+      test -d "$lab/alpha-state/credentials/wss/$id"
+      echo "DENY_PASS POST_GUARD_CRASH_RETAINS_REMOVE_JOURNAL_AND_CREDENTIALS"
+      exit 0
+    fi
     invoke alpha link reconcile-wss-original "$id" --confirm "$id"
     if invoke alpha link reconcile-wss-original "$id" --confirm "$id" > "$lab/alpha/original-repeat-denied.log" 2>&1;then
       echo "interrupted Remove recovery repeated after receipt publication" >&2;exit 1
@@ -617,12 +716,12 @@ if [[ -n "$(printenv STL_WSS_R2_REMOVE_CRASH_TEST || :)" ]];then
     if ip netns exec alpha ip link show stlwg0123456789 >/dev/null 2>&1;then
       echo "kernel WG lingered after final remove phase";exit 1
     fi
-    invoke alpha link reconcile-wss-removed "$id" --confirm "$id"
-    jq -e '(.links|length)==0 and (.wss_crash_operations//[]|length)==0 and (.removal_receipts|length)==1 and (.removal_receipts[0].retired//false)==false' "$lab/alpha-state/state.json" >/dev/null
-    invoke alpha link retire-wss "$id" --confirm "$id"
-    jq -e '.removal_receipts[0].retired==true' "$lab/alpha-state/state.json" >/dev/null
-    test ! -e "$lab/alpha-state/credentials/wss/$id"
-    echo "SUCCESS EXACT_HOST_VACANT_COMMITTED_REMOVE_AND_ORIGINAL_CREDENTIAL_RETIREMENT"
+    if invoke alpha link reconcile-wss-removed "$id" --confirm "$id" > "$lab/alpha/removed-no-original-witness-denied.log" 2>&1;then
+      echo "FAIL: post-guard crash clearance lacked original kernel-deletion witness" >&2;exit 1
+    fi
+    jq -e '(.links|length)==1 and (.wss_crash_operations|length)==1 and (.removal_receipts|length)==0' "$lab/alpha-state/state.json" >/dev/null
+    test -d "$lab/alpha-state/credentials/wss/$id"
+    echo "DENY_PASS POST_GUARD_REMOVE_CRASH_RETAINS_ORIGINAL_WSS_CREDENTIALS"
   fi
   echo "SUCCESS HARD_CRASH_COMMITTED_WSS_REMOVE_JOURNAL_QUARANTINE: $point"
   exit 0

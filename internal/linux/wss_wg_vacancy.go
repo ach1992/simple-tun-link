@@ -8,12 +8,16 @@ import (
 	"strings"
 )
 
-// WSSGlobalWGKernelVacant proves that no kernel WireGuard interface holds
-// either a protected WSS Link public key or its UDP listen port. All three
-// independent, bounded wg inventories must agree on the exact interface set.
-// This is the last fail-closed gate for EVERY owned WSS nft guard deletion.
-// It does not prove resource ownership, and it must run after helper/kernel
-// retirement and immediately before the nft delete transaction.
+// WSSGlobalWGKernelVacant combines namespace-local WireGuard interface
+// inventories with the socket inventory of the CALLING (nft-guard) network
+// namespace. WireGuard interfaces can migrate to another namespace while
+// their ciphertext UDP socket remains in their birthplace namespace:
+// 'wg show all' in the birthplace namespace cannot see those interfaces.
+// Requiring a separate complete UDP socket census there prevents a live
+// migrated interface from making the protective guard look disposable.
+// All checks fail closed and run immediately before guard removal or
+// crash/credential vacancy reconciliation. No interface-name lookup alone
+// proves global host absence, provenance or authority to delete a socket.
 func WSSGlobalWGKernelVacant(ctx context.Context, runner BoundedRunner, wgBinary, publicKey string, port uint16) (bool, error) {
 	if ctx.Err() != nil {
 		return false, ctx.Err()
@@ -87,6 +91,29 @@ func WSSGlobalWGKernelVacant(ctx context.Context, runner BoundedRunner, wgBinary
 		if len(seen) != len(names) {
 			return false, fmt.Errorf("incomplete global WG %s inventory", field)
 		}
+	}
+	// A moved kernel WireGuard interface is invisible to every 'wg show'
+	// inventory above, yet its *active UDP socket* is still in the original
+	// guard namespace. Never infer protected port vacancy from wg interface
+	// enumeration alone. ss uses kernel socket diagnostics in this namespace
+	// (both IPv4 and IPv6); any listener at the protected port blocks deletion,
+	// whether WireGuard or foreign. A failure, stderr diagnostic, truncation
+	// or malformed row is UNKNOWN, not vacant.
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	sockets, err := runner.RunBounded(ctx, CaptureLimits{Stdout: 1 << 20, Stderr: 64 << 10},
+		"ss", "-H", "-u", "-l", "-n")
+	if err != nil || ctx.Err() != nil || len(sockets.Stdout) > 1<<20 ||
+		len(sockets.Stderr) != 0 {
+		return false, fmt.Errorf("guard-namespace UDP socket inventory incomplete or canceled")
+	}
+	ports, err := parseUDPListeners(string(sockets.Stdout))
+	if err != nil {
+		return false, fmt.Errorf("guard-namespace UDP socket inventory malformed")
+	}
+	if _, used := ports[port]; used {
+		occupied = true
 	}
 	if err := ctx.Err(); err != nil {
 		return false, err

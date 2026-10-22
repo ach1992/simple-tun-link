@@ -1,6 +1,7 @@
 package wireguard
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/netip"
@@ -22,28 +23,28 @@ import (
 // is never adopted or deleted. The destructive sequence is helper -> WG
 // -> nft, never releasing the public-WG ingress guard while an uncertain
 // dependent helper/kernel listener remains.
-func (b *Backend) CrashCompensateOriginal(ctx context.Context, link domain.Link, observed core.Observation) error {
+func (b *Backend) CrashCompensateOriginal(ctx context.Context, link domain.Link, observed core.Observation) (bool, error) {
 	if b.wssHost == nil || link.Backend != domain.BackendWireGuardWSS {
-		return fmt.Errorf("WSS original host compensation is unavailable")
+		return false, fmt.Errorf("WSS original host compensation is unavailable")
 	}
 	alias, err := linux.WSSOwnerTag(link.ID, core.WSSOrigin(ctx))
 	if err != nil {
-		return fmt.Errorf("missing verified original WSS host identity")
+		return false, fmt.Errorf("missing verified original WSS host identity")
 	}
 	staging, err := linux.WSSStagingName(link.ID, core.WSSOrigin(ctx))
 	if err != nil {
-		return err
+		return false, err
 	}
 	current, ok := observed.(observation)
 	if !ok || current.WSSLink != link {
-		return fmt.Errorf("WSS original host observation does not match journal")
+		return false, fmt.Errorf("WSS original host observation does not match journal")
 	}
 	name, err := InterfaceName(link.ID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err := b.verifyOriginalCrashWG(ctx, link, current, alias, staging, name); err != nil {
-		return err
+		return false, err
 	}
 	wgLive := current.Target.Exists
 	for _, candidate := range current.Links {
@@ -52,10 +53,10 @@ func (b *Backend) CrashCompensateOriginal(ctx context.Context, link domain.Link,
 		}
 	}
 	if (wgLive || current.HelperLoaded) && !current.GuardPresent {
-		return fmt.Errorf("original kernel/helper resource survives without verified protective WSS ingress")
+		return false, fmt.Errorf("original kernel/helper resource survives without verified protective WSS ingress")
 	}
 	if !wgLive && !current.HelperLoaded && !current.GuardPresent {
-		return nil
+		return false, nil
 	}
 
 	// Validate complete, still-current helper/nft owner readbacks before
@@ -63,19 +64,19 @@ func (b *Backend) CrashCompensateOriginal(ctx context.Context, link domain.Link,
 	// no resource discovery or cleanup by name alone is allowed.
 	if current.HelperLoaded {
 		if _, err := b.wssHost.StopHelper(ctx, link); err != nil {
-			return fmt.Errorf("cannot safely stop and collect original WSS helper: %w", err)
+			return false, fmt.Errorf("cannot safely stop and collect original WSS helper: %w", err)
 		}
 	}
 	updated, err := b.Inspect(ctx, link)
 	if err != nil {
-		return fmt.Errorf("cannot reobserve WSS resources after helper collection: %w", err)
+		return false, fmt.Errorf("cannot reobserve WSS resources after helper collection: %w", err)
 	}
 	next := updated.(observation)
 	if next.HelperLoaded {
-		return fmt.Errorf("original helper remains loaded after Stop")
+		return false, fmt.Errorf("original helper remains loaded after Stop")
 	}
 	if err := b.verifyOriginalCrashWG(ctx, link, next, alias, staging, name); err != nil {
-		return err
+		return false, err
 	}
 	// Reinspection checks ifindex as well as the original alias and full
 	// WG public configuration immediately before index-targeted deletion.
@@ -90,37 +91,44 @@ func (b *Backend) CrashCompensateOriginal(ctx context.Context, link domain.Link,
 	}
 	if index > 0 {
 		if !next.GuardPresent {
-			return fmt.Errorf("protective original nft ingress absent before kernel WG compensation")
+			return false, fmt.Errorf("protective original nft ingress absent before kernel WG compensation")
 		}
 		if err := b.deleteLink(ctx, index); err != nil {
-			return fmt.Errorf("kernel WG deletion outcome uncertain; preserve nft guard: %w", err)
+			return false, fmt.Errorf("kernel WG deletion outcome uncertain; preserve nft guard: %w", err)
 		}
 	}
 	updated, err = b.Inspect(ctx, link)
 	if err != nil {
-		return fmt.Errorf("cannot establish WG disappearance after original compensation: %w", err)
+		return false, fmt.Errorf("cannot establish WG disappearance after original compensation: %w", err)
 	}
 	next = updated.(observation)
 	if err := b.verifyOriginalCrashWG(ctx, link, next, alias, staging, name); err != nil {
-		return err
+		return false, err
 	}
 	if next.Target.Exists || next.HelperLoaded {
-		return fmt.Errorf("original kernel WG or helper survived; preserve ingress guard")
+		return false, fmt.Errorf("original kernel WG or helper survived; preserve ingress guard")
 	}
 	for _, candidate := range next.Links {
 		if candidate.Name == staging {
-			return fmt.Errorf("original staged kernel WG remains; preserve nft guard")
+			return false, fmt.Errorf("original staged kernel WG remains; preserve nft guard")
 		}
+	}
+	if index <= 0 {
+		return false, fmt.Errorf("original WG generation not verifiably deleted; preserve journal and ingress guard")
 	}
 	if next.GuardPresent {
-		// The Host's unique last-mile guard-removal boundary performs a
-		// strict global key/UDP-port inventory immediately before nft delete.
-		// Do not check earlier here and then rely on stale preconditions.
-		if _, err := b.wssHost.RemoveGuard(ctx, link); err != nil {
-			return fmt.Errorf("cannot collect exactly tagged WSS guard: %w", err)
+		// Guard removal requires a fresh witness from the exact original
+		// nonce/ifindex deletion performed above, plus independent socket
+		// and namespace-local WG inventories immediately before nft delete.
+		witnessed, witnessErr := core.WithWSSWGDeleted(ctx, link.ID)
+		if witnessErr != nil {
+			return false, witnessErr
+		}
+		if _, err := b.wssHost.RemoveGuard(witnessed, link); err != nil {
+			return false, fmt.Errorf("cannot collect exactly tagged WSS guard: %w", err)
 		}
 	}
-	return nil // Engine must separately inspect ALL host vacancy and commit.
+	return true, nil // Engine must separately inspect ALL host vacancy and commit.
 }
 
 // verifyOriginalCrashWG rejects ANY untagged staging object. A derived
@@ -150,6 +158,9 @@ func (b *Backend) verifyOriginalCrashWG(ctx context.Context, link domain.Link,
 			if err := b.inspectPublicWG(ctx, &candidate); err != nil {
 				return fmt.Errorf("incomplete original marked staging WG readback: %w", err)
 			}
+			if err := b.requireOriginalWSSNoPSK(ctx, candidate); err != nil {
+				return err
+			}
 			addresses, err := b.originalWSSAddresses(ctx, staging, candidate.IfIndex)
 			if err != nil || len(addresses) != 0 || !candidate.emptyConfig() || candidate.Endpoint != "" {
 				return fmt.Errorf("marked staging WG has foreign or ambiguous configuration")
@@ -173,6 +184,38 @@ func (b *Backend) verifyOriginalCrashWG(ctx context.Context, link domain.Link,
 		if !originalWSSWGConfigSubset(target, link) {
 			return fmt.Errorf("original kernel WG public configuration drift is unverified")
 		}
+		if err := b.requireOriginalWSSNoPSK(ctx, target); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// 'wg show INTERFACE preshared-keys' is the only wireguard-tools query that
+// can attest the absence of peer PSK configuration. Its output is SENSITIVE:
+// consume through a bounded runner, never retain it in observedLink/State,
+// stringify/log it, publish it in a diagnostic, or echo it in an error.
+// For a configured peer, only the literal (none) is an acceptable PSK.
+func (b *Backend) requireOriginalWSSNoPSK(ctx context.Context, wg observedLink) error {
+	bounded, ok := b.runner.(linux.BoundedRunner)
+	if !ok || ctx.Err() != nil {
+		return fmt.Errorf("original WG preshared-key attestation unavailable")
+	}
+	out, err := bounded.RunBounded(ctx, linux.CaptureLimits{Stdout: 4096, Stderr: 4096},
+		b.wgBinary, "show", wg.Name, "preshared-keys")
+	defer clear(out.Stdout)
+	defer clear(out.Stderr)
+	if err != nil || ctx.Err() != nil || len(out.Stderr) != 0 {
+		return fmt.Errorf("original WG preshared-key attestation unavailable")
+	}
+	rows := bytes.Fields(out.Stdout)
+	if len(wg.Peers) == 0 && len(rows) == 0 {
+		return nil
+	}
+	if len(wg.Peers) != 1 || len(rows) != 2 ||
+		!bytes.Equal(rows[0], []byte(wg.Peers[0])) ||
+		!bytes.Equal(rows[1], []byte("(none)")) {
+		return fmt.Errorf("original WG preshared-key configuration is not independently verified absent")
 	}
 	return nil
 }
@@ -187,6 +230,9 @@ func originalWSSWGConfigSubset(actual observedLink, link domain.Link) bool {
 		return false
 	}
 	if actual.ListenPort != 0 && actual.ListenPort != wg.ListenPort {
+		return false
+	}
+	if actual.FwMark != 0 {
 		return false
 	}
 	if len(actual.Peers) > 1 || (len(actual.Peers) == 1 && actual.Peers[0] != wg.PeerPublicKey) {

@@ -233,6 +233,21 @@ func (b *Backend) inspectPublicWG(ctx context.Context, o *observedLink) error {
 		}
 		o.ListenPort = uint16(n)
 	}
+	mark, err := get("fwmark")
+	if err != nil {
+		return err
+	}
+	value := strings.TrimSpace(string(mark))
+	if value != "off" {
+		if !strings.HasPrefix(value, "0x") {
+			return fmt.Errorf("invalid WireGuard firewall mark observation")
+		}
+		number, parseErr := strconv.ParseUint(value, 0, 32)
+		if parseErr != nil || number == 0 {
+			return fmt.Errorf("invalid WireGuard firewall mark observation")
+		}
+		o.FwMark = uint32(number)
+	}
 	peers, err := get("peers")
 	if err != nil {
 		return err

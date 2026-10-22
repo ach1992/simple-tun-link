@@ -407,6 +407,14 @@ func (h Host) RemoveGuard(ctx context.Context, link domain.Link) (core.Rollback,
 	if !present {
 		return func(context.Context) error { return nil }, nil
 	}
+	// The disappearance of a WG interface from this network namespace, and
+	// even the absence of a UDP listener, is NOT proof that the original
+	// kernel object was deleted. Moved DOWN WG devices have no socket, but
+	// can be brought UP later in another namespace with a socket back here.
+	// Require in-transaction proof of index-targeted original deletion.
+	if !core.HasWSSWGDeletionWitness(ctx, link.ID) {
+		return nil, fmt.Errorf("original WSS WG deletion not attested; retaining ingress guard")
+	}
 	// This is the unique last-mile deletion boundary. Both ordinary
 	// Remove and all compensating/rollback paths call RemoveGuard, including
 	// the EnsureGuard undo closure. A foreign listener, incomplete/malformed

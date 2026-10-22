@@ -334,6 +334,13 @@ func (b *Backend) rollbackCreatedInterface(ctx context.Context, link domain.Link
 				return fmt.Errorf("WireGuard ifindex was reused; preserving foreign interface")
 			}
 		}
+		if b.wssHost != nil {
+			// This is not a verified deletion. The original WG may have
+			// moved to another namespace and become administratively DOWN,
+			// so neither a local wg inventory nor an ss socket scan can
+			// authorize WSS nft guard removal.
+			return fmt.Errorf("original WSS kernel interface not visible; cannot attest targeted deletion")
+		}
 		return nil
 	}
 	if !createdStateMatches(obs.Target, link, name, p) {

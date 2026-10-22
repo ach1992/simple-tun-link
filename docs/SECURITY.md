@@ -285,9 +285,20 @@ name/configuration evidence. This ordering is exercised by the rootless
 kernel-creation-then-lost-ACK test.
 
 The helper is collected before deleting a rechecked, nonce-tagged
-original WG ifindex. Complete and consistent global WireGuard
-interface/public-key/listen-port readback is mandatory before EVERY
+original WG ifindex. Complete and consistent namespace-local WireGuard
+interface/public-key/listen-port readback, plus a bounded UDP socket
+readback in the guarded birthplace namespace, is mandatory before EVERY
 protective guard deletion, including ordinary Remove and Ensure rollback.
+Linux can move WireGuard interfaces into another network namespace while
+retaining the original UDP socket; when the moved interface is DOWN,
+even the socket disappears until it is brought UP again. Therefore
+these readbacks do not establish whole-host vacancy. A fresh
+original-nonce-bound, index-targeted **successful kernel deletion**
+witness is additionally required before lifting a live nft guard or
+consuming a WSS crash journal to authorize credential retirement.
+Missing provenance, even if the namespace appears empty, retains the
+guard/journal/credentials for independently authorized manual recovery.
+No namespace-local inventory is labeled a complete host-wide proof.
 Partial compensation preserves its journal and conservative host
 protection.
 

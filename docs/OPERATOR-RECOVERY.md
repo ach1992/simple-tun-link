@@ -220,13 +220,16 @@ rejects an **unmarked staging object**:
    automatically safe for other Links, and is not authorized by this
    recovery command. Absence or a reset must be verified anew;
    never assume an unobserved side effect completed.
-4. Only after the original unmarked effect has been independently
-   resolved, use the existing `reconcile-wss-original` command with
-   explicit confirmation. It still revalidates the original guard
-   nonce, global WG interface/public-key/listen-port vacancy and final
-   host absence before committing the journal/State transaction.
-   Foreign resources and unrelated nft/firewall objects remain out
-   of scope. If any required readback is incomplete, retain quarantine.
+4. The normal `reconcile-wss-original` command cannot retroactively
+   prove a kernel deletion made outside its original, trusted
+   nonce/ifindex-verified transaction. It must refuse to consume the
+   journal merely because an earlier ambiguous or unmarked kernel effect
+   has disappeared. An independently attested out-of-band cleanup and
+   separate Owner-approved host/State reconciliation plan may be
+   needed; STL does not yet provide an automated manual-proof import.
+   Never remove a durable reservation or fingerprint from State based
+   solely on a name or empty inventory. Foreign resources and
+   unrelated nft/firewall objects remain out of scope.
 
 When the original WG alias *was* published, the existing command can
 verify its nonce and ifindex and compensate only intended original
@@ -234,3 +237,33 @@ intermediate configuration; extra keys, peers, AllowedIPs, addresses
 or unexpected UDP listeners are refused. This manual pre-alias gate is
 an honest limitation of this unreleased candidate, not a promise that
 all pre-commit crash objects are automatically recoverable.
+
+## Unreleased WSS: namespace migration and kernel deletion witnesses
+
+A Linux WireGuard interface may be created in network namespace A and
+moved to B while its UDP socket remains in its **birthplace** A. When
+the moved interface is DOWN the UDP listener in A also temporarily
+vanishes; bringing the same object UP in B recreates that socket in A.
+Thus neither `wg show all` in A nor `ss -u -l -n` in A can attest that
+the original kernel object was actually destroyed.
+
+In this candidate, removing the WSS nft ingress guard requires the
+same-transaction original nonce/ifindex verification and a successful
+index-targeted kernel deletion **in addition** to a fresh, bounded
+birthplace UDP socket readback. This also applies to Ensure rollback.
+A separate read-only crash reconciliation cannot invent this witness;
+a previously interrupted transaction with no trustworthy deletion
+witness stays quarantined, even if its local inventories look empty.
+The same restriction protects original receipt/credential retirement.
+Do not temporarily drop the nft guard, move a foreign WG object,
+recreate its listener, force-delete the journal, or retire private
+material to make automatic reconciliation appear successful.
+
+An externally moved or ambiguously deleted original WG object requires
+a separately scoped, Owner-approved manual identity/recovery procedure
+with proof of the actual original generation and all affected network
+namespaces. Do not try to fix an unreleasable guard/journal by restarting
+or modifying production networking; neither a reboot nor this command
+is blanket authorization. The disposable real-kernel namespace tests
+cover both moved-UP and moved-DOWN cases; physical host namespace
+coexistence remains a distinct operator acceptance gate.

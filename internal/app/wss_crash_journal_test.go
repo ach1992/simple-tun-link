@@ -128,22 +128,23 @@ func (b *crashWSSBackend) CrashHostVacant(_ context.Context, obs backend.Observa
 	current := obs.(fakeObservation)
 	return !current.present, nil
 }
-func (b *crashWSSBackend) CrashCompensateOriginal(ctx context.Context, link domain.Link, obs backend.Observation) error {
+func (b *crashWSSBackend) CrashCompensateOriginal(ctx context.Context, link domain.Link, obs backend.Observation) (bool, error) {
 	if b.denyOriginalRecovery || b.knownOriginalNonce[link.ID] != backend.WSSOrigin(ctx) {
-		return errors.New("untrusted original-object identity; preserving host resources")
+		return false, errors.New("untrusted original-object identity; preserving host resources")
 	}
+	_, deleted := b.present[link.ID]
 	delete(b.present, link.ID)
 	if b.store != nil {
 		snapshot, err := b.store.Load(ctx)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if _, committed := snapshot.Find(link.ID); !committed {
 			delete(b.knownOriginalNonce, link.ID)
 		}
 	}
 	b.recoveryCount++
-	return nil
+	return deleted, nil
 }
 func journalTestLink(t *testing.T) domain.Link {
 	t.Helper()
