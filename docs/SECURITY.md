@@ -205,3 +205,44 @@ Keep Go modules, third-party binaries and CI/installer dependencies
 minimal and provenance-checked. Use GitHub **private vulnerability
 reporting / Security Advisories** for suspected security defects,
 rather than disclosing exploit details in a public Issue.
+
+## WireGuard over WSS/TLS R1 (candidate security boundary)
+
+WSS is a link-scoped carrier around the **real kernel WireGuard** backend,
+not a second VPN engine or a generic bypass route. The listener requires
+trusted mTLS: separate 2-month leaf certificates (server/client purpose),
+a 3-month Link-specific CA, exact server identity/SAN and verified private
+keys. One independently generated 256-bit per-Link bearer and fixed destination
+restrictions protect each authorized WSS forwarding path. Do not assert
+strict leaf-CN pinning: the per-Link CA **plus independent bearer/path scope**
+is the accepted security model. CA signing material is never persisted.
+
+All private keys/authorization files are owner-private 0600 beneath
+verified descriptor-traversed directories; bearer values must never reach
+argv, ordinary State, public diagnostics or normal logs. Wstunnel v11.0.0
+must match the release archive and executable digests pinned in the installer;
+foreign executables are never adopted. Installer ownership and path admission
+are rechecked at runtime. Systemd starts exact link-owned transient processes
+with bounded readiness and scoped stop; process running is not proof of
+successful mTLS handshake or end-to-end traffic.
+
+Before the kernel WireGuard UDP port is created, a Link-specific nftables
+ingress guard drops non-loopback direct UDP to that port; only the loopback
+forwarder may reach the socket. Host firewall coexistence, foreign services,
+UDP/TCP port collisions and owner claims must be checked before mutation.
+No global firewall flush or system-wide service restart is allowed. The
+Engine journals/verifies its one Link; rollback/Remove can affect only
+resources attributable to that identity. WSS Remove writes a nonsecret,
+exact Link-specific credential-retirement receipt in the same durable State
+transaction as Link deletion. It then verifies all host resources absent,
+retiring the credential files; if interrupted, receipt-bound retire-wss is
+the explicit recovery action. External user-chosen exported copies remain
+the operator's data-retention responsibility.
+
+Security is not bypassed by CLI/menu success messages. Real accepted mTLS,
+kernel WG handshake, scoped ingress, private ICMP/TCP/UDP and cleanup must
+be independently tested. In isolated tests the actual transport, kernel
+networking and nft guards operate in rootless namespaces; a disposable
+process supervisor **simulates systemd control only**, so those tests do not
+prove a real host's systemd reboot restore. Physical two-server testing,
+independent review, Main merge and publication remain distinct gates.

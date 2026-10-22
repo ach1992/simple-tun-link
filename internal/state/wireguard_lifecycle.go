@@ -29,6 +29,8 @@ type RemovalReceipt struct {
 	Backend        domain.Backend `json:"backend"`
 	LocalPublicKey string         `json:"local_public_key"`
 	Retired        bool           `json:"retired,omitempty"`
+	WSSRole        string         `json:"wss_role,omitempty"`
+	WSSListenPort  uint16         `json:"wss_listen_port,omitempty"`
 }
 
 func (s Snapshot) FindPendingSender(id domain.LinkID) (PendingSender, bool) {
@@ -95,9 +97,16 @@ func validateWireGuardLifecycle(s Snapshot) error {
 	}
 	removed := make(map[domain.LinkID]bool, len(s.RemovalReceipts))
 	for _, receipt := range s.RemovalReceipts {
-		if receipt.LinkID.Validate() != nil || receipt.Backend != domain.BackendWireGuard ||
+		if receipt.LinkID.Validate() != nil || (receipt.Backend != domain.BackendWireGuard && receipt.Backend != domain.BackendWireGuardWSS) ||
 			!validReceiptPublicKey(receipt.LocalPublicKey) {
 			return fmt.Errorf("invalid WireGuard removal receipt")
+		}
+		if receipt.Backend == domain.BackendWireGuardWSS {
+			if (receipt.WSSRole != "listen" && receipt.WSSRole != "dial") || receipt.WSSListenPort == 0 {
+				return fmt.Errorf("invalid WSS credential removal receipt")
+			}
+		} else if receipt.WSSRole != "" || receipt.WSSListenPort != 0 {
+			return fmt.Errorf("native WG removal receipt cannot contain WSS fields")
 		}
 		if removed[receipt.LinkID] {
 			return fmt.Errorf("duplicate WireGuard removal receipt")

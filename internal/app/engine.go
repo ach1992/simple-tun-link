@@ -46,7 +46,11 @@ type Engine struct {
 	restorePersistence RestorePersistence
 	restoreExecutable  string
 	restoreModules     func(context.Context, domain.Link) error
-	ipsecRetirement    interface {
+	wssRetirement      interface {
+		RetireAfterRemove(context.Context, domain.Link) error
+		VerifyAbsent(context.Context, domain.Link) error
+	}
+	ipsecRetirement interface {
 		RetireMatching(domain.LinkID, string) error
 	}
 }
@@ -104,6 +108,15 @@ func (e *Engine) SetRestoreModuleBootstrap(fn func(context.Context, domain.Link)
 // SetIPsecRetirementStore installs the local, protected credential backend for
 // post-Remove receipt-bound deletion, independent of running strongSwan.
 // Configure only during Engine assembly, before concurrent operations.
+// SetWSSRetirementStore wires exact credential deletion under the Engine's
+// receipt, state and resource lock gates. Failure leaves the receipt retryable.
+func (e *Engine) SetWSSRetirementStore(retirer interface {
+	RetireAfterRemove(context.Context, domain.Link) error
+	VerifyAbsent(context.Context, domain.Link) error
+}) {
+	e.wssRetirement = retirer
+}
+
 func (e *Engine) SetIPsecRetirementStore(store interface {
 	RetireMatching(domain.LinkID, string) error
 }) {
@@ -316,6 +329,14 @@ func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.
 					DesiredState: "committed", Rollback: "not_attempted"})
 		}
 	}
+	if prior.Backend == domain.BackendWireGuardWSS {
+		if err := e.retireWSSCredentialLocked(ctx, id); err != nil {
+			return result, stlerr.WithEvidence(
+				stlerr.Wrap(stlerr.CodeState, "remove", string(id), string(prior.Backend),
+					"WSS Link removal was committed but TLS/WG credential retirement is pending; retry exact receipt-bound retirement", err),
+				stlerr.OperationEvidence{Stage: "credential_retirement", HostMutation: "attempted", DesiredState: "committed", Rollback: "not_attempted"})
+		}
+	}
 	if prior.Backend == domain.BackendIPsec {
 		if err := e.retireIPsecCredentialLocked(ctx, id); err != nil {
 			hostMutation := "not_attempted"
@@ -386,6 +407,10 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 	// Invalidate historical removal authority BEFORE a new attempt (even
 	// one which later fails apply) can stage a key or host resources. An
 	// old receipt must never authorize deleting an active retry's key.
+	if receipt, found := snapshot.FindRemovalReceipt(desired.ID); found && receipt.Backend == domain.BackendWireGuardWSS {
+		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID), string(desired.Backend),
+			"retired WSS Link identity is reserved permanently; create a new Link ID")
+	}
 	if _, receipt := snapshot.FindRemovalReceipt(desired.ID); receipt {
 		if err := e.store.Update(ctx, func(fresh *state.Snapshot) error {
 			if _, pending := fresh.FindPendingSender(desired.ID); pending {
@@ -864,6 +889,15 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 			}
 			if !snapshot.Delete(link.ID) {
 				return state.ErrNotFound
+			}
+			if link.Backend == domain.BackendWireGuardWSS {
+				if _, exists := snapshot.FindRemovalReceipt(link.ID); exists {
+					return fmt.Errorf("conflicting WSS removal receipt already exists")
+				}
+				snapshot.RemovalReceipts = append(snapshot.RemovalReceipts, state.RemovalReceipt{
+					LinkID: link.ID, Backend: domain.BackendWireGuardWSS,
+					LocalPublicKey: link.WireGuard.LocalPublicKey,
+					WSSRole:        link.WSS.Role, WSSListenPort: link.WireGuard.ListenPort})
 			}
 			if link.Backend == domain.BackendIPsec {
 				if ipsecRetirementDigest == "" {

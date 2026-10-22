@@ -107,7 +107,7 @@ func readPrivateHandoffFile(path string) (string, error) {
 }
 
 func validatedSavedProtectedMenuOffer(options *runtimeOptions, selected domain.Link) (string, error) {
-	if selected.Backend != domain.BackendWireGuard && selected.Backend != domain.BackendIPsec {
+	if selected.Backend != domain.BackendWireGuard && selected.Backend != domain.BackendIPsec && selected.Backend != domain.BackendWireGuardWSS {
 		return "", fmt.Errorf("this backend does not use protected handoff files")
 	}
 	root := createStateRoot(options)
@@ -128,6 +128,17 @@ func validatedSavedProtectedMenuOffer(options *runtimeOptions, selected domain.L
 	raw, err := readPrivateHandoffFile(path)
 	if err != nil {
 		return "", err
+	}
+	if selected.Backend == domain.BackendWireGuardWSS {
+		offer, _, err := decodeWSSOffer(strings.NewReader(raw))
+		if err != nil {
+			return "", fmt.Errorf("stored WSS handoff is invalid")
+		}
+		defer offer.clear()
+		if offer.Sender != selected {
+			return "", fmt.Errorf("stored WSS handoff does not match the current sender Link")
+		}
+		return raw, nil
 	}
 	offer, err := pairing.DecodeSetupLink(raw)
 	if err != nil {
@@ -205,7 +216,7 @@ func menuSensitiveHandoffAction(input io.Reader, reader *bufio.Reader, out, errO
 		fmt.Fprintln(errOut, "Protected Setup Links require a real interactive terminal. No credential disclosed or deleted.")
 		return 2
 	}
-	if selected.Backend != domain.BackendWireGuard && selected.Backend != domain.BackendIPsec {
+	if selected.Backend != domain.BackendWireGuard && selected.Backend != domain.BackendIPsec && selected.Backend != domain.BackendWireGuardWSS {
 		return 2
 	}
 	if deleteSaved {

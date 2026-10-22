@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -119,7 +120,7 @@ type unitState struct{ loaded, active bool }
 
 func (h Host) inspectUnit(ctx context.Context, link domain.Link) (unitState, error) {
 	out, err := h.runner().RunBounded(ctx, linux.CaptureLimits{Stdout: 64 << 10, Stderr: 64 << 10},
-		"systemctl", "show", h.unitName(link), "--property=LoadState,ActiveState,Description,Transient,ExecStart", "--no-pager")
+		"systemctl", "show", h.unitName(link), "--property=LoadState,ActiveState,Description,Transient,ExecStart,Environment", "--no-pager")
 	if err != nil {
 		return unitState{}, fmt.Errorf("cannot inspect WSS helper unit: %w", err)
 	}
@@ -141,9 +142,20 @@ func (h Host) inspectUnit(ctx context.Context, link domain.Link) (unitState, err
 		return unitState{}, nil
 	}
 	if values["LoadState"] != "loaded" || values["Transient"] != "yes" ||
-		values["Description"] != h.unitDescription(link) ||
-		!strings.Contains(values["ExecStart"], "path="+h.binary()+" ") {
+		values["Description"] != h.unitDescription(link) {
 		return unitState{}, fmt.Errorf("foreign or unexpected WSS unit identity")
+	}
+	// A matching unit name, binary pathname or service description alone
+	// is NOT authority to stop/restart a potentially foreign process.
+	// Require the exact non-secret argv AND TLS trust-root environment.
+	cmd, err := h.command(link)
+	if err != nil {
+		return unitState{}, fmt.Errorf("cannot inspect the protected WSS unit identity")
+	}
+	defer clear(cmd.ServerRestrictions)
+	if !matchesExactWSSExecStart(values["ExecStart"], cmd) ||
+		strings.TrimSpace(values["Environment"]) != strings.Join(cmd.Env, " ") {
+		return unitState{}, fmt.Errorf("WSS unit does not match exact owner-selected credentials or command")
 	}
 	if values["ActiveState"] != "active" && values["ActiveState"] != "inactive" &&
 		values["ActiveState"] != "failed" && values["ActiveState"] != "activating" {
@@ -151,6 +163,29 @@ func (h Host) inspectUnit(ctx context.Context, link domain.Link) (unitState, err
 	}
 	return unitState{loaded: true, active: values["ActiveState"] == "active"}, nil
 }
+
+// ExecStart is systemd's typed show-property representation, not a shell
+// command. Values after argv[] are runtime status metadata, never extra argv.
+// All STL-generated WSS arguments are single whitespace-free elements.
+func matchesExactWSSExecStart(observed string, expected Command) bool {
+	if expected.Binary == "" || len(expected.Args) == 0 {
+		return false
+	}
+	if strings.Count(observed, "argv[]=") != 1 {
+		return false
+	}
+	if !strings.Contains(observed, "path="+expected.Binary+" ") {
+		return false
+	}
+	remainder := strings.SplitN(observed, "argv[]=", 2)[1]
+	if i := strings.Index(remainder, " ;"); i >= 0 {
+		remainder = remainder[:i]
+	}
+	actual := strings.Fields(strings.TrimSpace(remainder))
+	wanted := append([]string{expected.Binary}, expected.Args...)
+	return slices.Equal(actual, wanted)
+}
+
 func (h Host) HelperPresent(ctx context.Context, link domain.Link) (bool, error) {
 	s, err := h.inspectUnit(ctx, link)
 	return s.active, err
@@ -503,3 +538,9 @@ func (h Host) Diagnose(ctx context.Context, link domain.Link) (HelperDiagnostics
 
 var _ = sha256.Sum256
 var _ = hex.EncodeToString
+
+// InspectPinnedExecutableForOperator is read-only menu admission. Runtime
+// revalidates the executable identity under the canonical Engine Link lock.
+func InspectPinnedExecutableForOperator(h Host) (ExecutableIdentity, error) {
+	return InspectPinnedExecutable(h.binary(), h.digest())
+}

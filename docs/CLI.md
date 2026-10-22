@@ -388,3 +388,77 @@ bandwidth quota.
 For detailed MTU/quality semantics see
 [DIAGNOSTICS.md](DIAGNOSTICS.md). For uncertain Engine outcomes
 before retry see [OPERATOR-RECOVERY.md](OPERATOR-RECOVERY.md).
+
+## Development R1 — WireGuard over WSS/TLS
+
+This is the candidate behavior for Issue #142, not a declaration that R1
+is in Stable. Start the **guided** path using STL menu:
+Create tunnel → WireGuard / WSS + TLS. Choose the listener or dialer,
+route-derived local/public addresses, private Link IPv4 /30 or /31 pair,
+WireGuard UDP listen/peer ports, WSS TCP port, private forwarding UDP port and
+TLS server identity. The menu checks the optional pinned helper, shows an
+effect summary, and requires fresh YES before host mutation. On the receiver,
+Import setup link → WireGuard / WSS + TLS uses hidden paste, receiver-facing
+preview and a separate YES. Existing Native/FOU/GUE/IPsec menus are unchanged.
+
+For noninteractive automation on the **listening** machine, place this public
+JSON in a temporary input file or pass on stdin, with real interface/underlay
+values. It deliberately contains **no credentials**:
+
+~~~json
+{
+  "schema_version": 1,
+  "underlay": {"local": "198.51.100.21", "peer": "203.0.113.22"},
+  "addresses": {"local": "10.75.0.1/30", "peer": "10.75.0.2/30"},
+  "listen_port": 51821,
+  "peer_port": 51822,
+  "role": "listen",
+  "tcp_port": 443,
+  "remote_forward_udp_port": 53001,
+  "local_keepalive": 25,
+  "peer_keepalive": 25
+}
+~~~
+
+Create a private **0700** directory for the sensitive receiver file, then:
+~~~sh
+sudo stl link create-wss --stdin --output /root/private-stl/wss-receiver.json < public-wss-request.json
+~~~
+This generates both WireGuard identities, two separate TLS leaf keys signed
+by a fresh ephemeral Link CA, and an independent 256-bit bearer token. The
+**original** recipient file is sensitive: transmit through an authenticated
+encrypted channel, never paste into Issue/PR/log/terminal history. On the
+receiver, inspect the transported file's receiver address/role and obtain
+the printed byte-specific preview digest:
+~~~sh
+sudo stl link preview-wss --stdin --json < /root/private-stl/wss-receiver.json
+sudo stl link import-wss --stdin --confirm LOWERCASE_64_CHAR_SHA256 < /root/private-stl/wss-receiver.json
+~~~
+The receiver's private settings and role are inverted; the first server
+does not need a second setup transaction. Both operations run via the same
+canonical Engine and exact per-Link locks. Both locally ensured endpoints
+are still not proof of an actual Link; check the following on **each**:
+~~~sh
+sudo stl link diagnose-wss lnk_0123456789abcdef0123456789abcdef --json
+ping -I LOCAL_PRIVATE_IP PEER_PRIVATE_IP
+~~~
+Diagnostics report Helper/Guard readiness, kernel WG handshake timestamp
+and transfer byte counts separately; process readiness alone cannot attest
+mTLS or application delivery. TCP/UDP/private ICMP should be tested before
+using the Link for workload routing. On a restarted host, the already
+persisted Link can be reconciled through the existing Engine restore or a
+versioned desired-State v3 Ensure request. Never regenerate a WSS offer to
+resume an already allocated Link identity.
+
+~~~sh
+sudo stl link remove LINK_ID --confirm LINK_ID
+# Only if Remove committed but returned an explicit retirement failure:
+sudo stl link retire-wss LINK_ID --confirm LINK_ID
+~~~
+Remove first verifies owner-scoped helper/guard/kernel absence, then retires
+the Link's protected TLS/bearer/WG secrets under the same Engine locks using
+the durable exact removal receipt. A failed secret-retirement phase leaves
+its receipt retryable; a retired Link ID cannot be reused. Arbitrary
+**operator-selected exported handoff paths** remain operator-managed and
+must be separately retired from their external storage after confirmation.
+The state schema is v4; older binaries must not attempt to manage WSS Links.

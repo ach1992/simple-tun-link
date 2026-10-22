@@ -77,30 +77,25 @@ case "$action" in
        -f $companion_source && $(basename -- "$companion_source") == "$expected_name" &&
        $(realpath -e -- "$companion_source") == "$companion_source" ]] ||
        fail 'official WSS companion archive must be a canonical regular file with its exact release filename'
-    [[ $(stat -c %u -- "$companion_source") == "$EUID" ]] ||
-       fail 'WSS archive must be owned by the current administrator'
-    source_mode=$(stat -c %a -- "$companion_source")
-    [[ $source_mode =~ ^[0-7]{3,4}$ ]] && (( (8#$source_mode & 8#022) == 0 )) ||
-       fail 'WSS archive has unsafe mode'
+    # The source archive may live beside a user-downloaded one-file
+    # installer. The raw source and its directory are NOT trusted; only
+    # an immutable private snapshot after pinned SHA-256 is executable.
     bytes=$(stat -c %s -- "$companion_source")
     (( bytes > 1024 && bytes < 100000000 )) || fail 'WSS archive size is unsafe'
     [[ $companion_prefix != /usr/local || $EUID == 0 ]] ||
        fail 'system-wide WSS companion installation requires root'
-    # Verify the transferred archive chain and prefix chain, never executing
-    # a file beneath a root-owned-but-untrusted writable directory.
+    # Verify the destination ancestor chain; source is untrusted input.
     if [[ $EUID == 0 ]]; then
-      for ancestor in "$(dirname -- "$companion_source")" "$companion_prefix"; do
-        step=/
-        IFS=/ read -ra components <<< "${ancestor#/}"
-        for component in "${components[@]}"; do
-          [[ -z $component ]] && continue
-          step="${step%/}/$component"
-          [[ -d $step && ! -L $step && $(stat -c %u -- "$step") == 0 ]] ||
-             fail "WSS archive/installation ancestor untrusted: $step"
-          mode=$(stat -c %a -- "$step")
-          [[ $mode =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 8#022) == 0 )) ||
-             fail "WSS archive/installation ancestor writable: $step"
-        done
+      step=/
+      IFS=/ read -ra components <<< "${companion_prefix#/}"
+      for component in "${components[@]}"; do
+        [[ -z $component ]] && continue
+        step="${step%/}/$component"
+        [[ -d $step && ! -L $step && $(stat -c %u -- "$step") == 0 ]] ||
+           fail "WSS destination ancestor untrusted: $step"
+        mode=$(stat -c %a -- "$step")
+        [[ $mode =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 8#022) == 0 )) ||
+           fail "WSS destination ancestor writable: $step"
       done
     fi
     companion_dir="$companion_prefix/lib/simple-tun-link"

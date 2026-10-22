@@ -666,3 +666,19 @@ model, without creating per-screen diagnostic or logging engines:
   secret-safe and may not corrupt the structured response. Add a logging
   daemon, database or retention machinery only when justified by an owned
   runtime requirement.
+
+## R1 WireGuard over WSS (implementation candidate)
+
+One canonical Link identity has Backend wireguard-wss (never Native WG
+fallback), Encapsulation UDP, WireGuardOptions and endpoint-local WSSOptions.
+Composition derives precisely WSS over kernel WireGuard, rejecting unsupported
+Carriers. The existing Engine locks, desired-State v4 and resource claims
+govern all effects. The WSS Backend applies in dependency order:
+admit pinned helper/private mTLS + firewall coexistence → create private
+nft kernel-WG UDP ingress guard → create owner-tagged WG Interface →
+start one owner-scoped systemd WSS helper → read back and durably commit
+Link State. Remove performs the reverse, records the exact private-key
+retirement receipt **in the same State commit**, and securely retires
+protected Link-local TLS/bearer/WG credentials after separate host-absence
+proof. A crash before a completed receipt requires owner-scoped recovery;
+no foreign adoption or generic host cleanup is permitted.

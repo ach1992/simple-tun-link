@@ -38,6 +38,8 @@ jobs:
           bash -n scripts/local-install-entrypoint.sh
           bash -n scripts/e2e/wireguard-netns.sh
           bash -n scripts/e2e/wss-wg-ingress-netns.sh
+          bash -n scripts/e2e/wss-managed-wireguard-r1.sh
+          python3 -c 'import ast,sys; [ast.parse(open(p).read()) for p in sys.argv[1:]]' scripts/e2e/wss-negative-probe.py scripts/e2e/wss-r1-supervisor.py
           bash -n scripts/e2e/ipsec-two-peer-netns.sh
           bash -n scripts/e2e/ipsec-installed-systemd.sh
           bash -n scripts/e2e/ipsec-managed-prepare-systemd.sh

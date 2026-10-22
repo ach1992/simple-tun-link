@@ -15,13 +15,26 @@ archive_sha256='@DIGEST@'
 archive_bytes=@BYTES@
 
 prefix=/usr/local
-if [[ $# == 2 && $1 == --prefix ]]; then
-  # An explicitly selected nondefault prefix is for isolated local tests or
-  # custom installations; canonical installer still applies all ownership gates.
-  prefix=$2
-elif [[ $# != 0 ]]; then
-  fail 'usage: bash stl_<version>_linux_<arch>_local-install.sh [--prefix /existing/isolated/prefix]'
-fi
+prefix_set=0
+enable_wss=0
+# An optional archive alone never consents to Carrier installation.
+while (( $# > 0 )); do
+  case "$1" in
+    --prefix)
+      [[ $# -ge 2 && $prefix_set == 0 ]] ||
+        fail 'provide --prefix once with an absolute path'
+      prefix=$2
+      prefix_set=1
+      shift 2
+      ;;
+    --with-wss)
+      [[ $enable_wss == 0 ]] || fail 'duplicate --with-wss'
+      enable_wss=1
+      shift
+      ;;
+    *) fail 'usage: bash stl_<version>_linux_<arch>_local-install.sh [--prefix /existing/isolated/prefix] [--with-wss]' ;;
+  esac
+done
 [[ $(uname -s) == Linux ]] || fail 'Linux required'
 case $(uname -m) in
   x86_64) actual_arch=amd64 ;;
@@ -64,6 +77,21 @@ source_bytes=$(stat -c %s -- "$source")
 (( source_bytes > archive_bytes && source_bytes <= 134250000 )) ||
   fail 'local installer has an invalid or oversized payload'
 
+# A missing or corrupt selected companion fails BEFORE core installation.
+# Canonical installer also verifies archive, executable, record and paths.
+companion="${source%/*}/wstunnel_11.0.0_linux_${architecture}.tar.gz"
+if [[ $enable_wss == 1 ]]; then
+  [[ -f $companion && ! -L $companion ]] ||
+    fail "WSS selected but official $(basename -- "$companion") absent; core unchanged"
+  case $architecture in
+    amd64) expected_companion_sha=9708a99717b5a951453c2ff7c14c25d3418d02ca7fcb96fdb382a8f2083bab5e ;;
+    arm64) expected_companion_sha=b86abf73e340ed0c3ff9a77a5458aa27213784920ec65513132b36def45edc94 ;;
+    *) fail 'unsupported optional WSS companion architecture' ;;
+  esac
+  [[ $(sha256sum -- "$companion" | awk '{print $1}') == "$expected_companion_sha" ]] ||
+    fail 'selected optional WSS archive SHA-256 mismatch; core unchanged'
+fi
+
 # Take a private immutable-for-this-operation copy of the entire transferred
 # file before reading its embedded archive; no GitHub/download step is needed.
 if [[ $EUID == 0 ]]; then
@@ -102,16 +130,13 @@ grep -Fxq -- "version=$version" "$stage/bundle/BUILD-MANIFEST.txt" &&
 bash "$stage/bundle/install.sh" install --auto-stable --bundle "$stage/bundle" \
   --prefix "$prefix" --backends native,wireguard
 "$prefix/bin/stl" version --json || fail 'installed executable identity check failed'
-# WSS remains optional. The official upstream release tarball, when put
-# BESIDE this one-file installer, is verified/staged by the SAME canonical
-# installer without asking the operator to extract or install anything else.
-# Absence is not an error and never changes existing Native STL behavior.
-companion="${source%/*}/wstunnel_11.0.0_linux_${architecture}.tar.gz"
-if [[ -e $companion || -L $companion ]]; then
+# Only --with-wss selects optional WSS; file presence is not consent.
+if [[ $enable_wss == 1 ]]; then
   if ! bash "$stage/bundle/install.sh" companion-wss --archive "$companion" --prefix "$prefix"; then
-    fail 'core STL installation succeeded, but optional WSS companion was NOT verified as installed; correct the trusted companion file and re-run this same installer (no Link was created)'
+    fail 'core installed but selected WSS companion admission failed; no WSS Link created'
   fi
-  printf '[OK] Optional WSS Carrier helper is installed; WireGuard over WSS can now be configured.\n'
+  printf '[OK] Selected pinned WSS helper installed; explicit Link setup is still required.
+'
 fi
 if [[ $prefix == /usr/local ]]; then
   if [[ -t 0 && -t 1 ]]; then

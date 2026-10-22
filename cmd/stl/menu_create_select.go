@@ -352,6 +352,7 @@ func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		menuTunnelOption(out, "3", "IPIP / Native", "Not encrypted", report, basicTunnelOptions["3"])
 		menuOption(out, "4", "Manual connection", "Set up both ends by hand")
 		menuOption(out, "5", "Advanced types", "FOU / GUE / IPsec")
+		menuOption(out, "6", "WireGuard / WSS + TLS", "Encrypted WSS Carrier (optional pinned helper)")
 		menuOption(out, "i", "Availability details", "Explain why a type is unavailable")
 		menuOption(out, "0", "Back", "Main menu")
 		fmt.Fprint(out, "Tunnel type [1]: ")
@@ -373,6 +374,18 @@ func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		}
 		if value == "" {
 			value = "1"
+		}
+		if value == "6" {
+			// Same kernel WireGuard packages, separately admitted optional WSS.
+			picked := basicTunnelOptions["2"]
+			prep := menuPrepareSelectedPackages(input, reader, out, errOut, picked, options)
+			if !prep.canContinue {
+				report = menuCapabilitySnapshot(options)
+				menuAcknowledge(input, reader, out)
+				continue
+			}
+			menuScreen(out, "New tunnel / WireGuard over WSS")
+			return menuCreateWSS(input, reader, out, errOut, options)
 		}
 		var picked tunnelOption
 		var ok bool

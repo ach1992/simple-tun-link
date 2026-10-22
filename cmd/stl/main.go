@@ -29,7 +29,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/version"
 )
 
-const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl menu\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link diagnose <link-id> [--mtu <bytes>] [--json]\n  stl link diagnose --all [--timeout <duration>] [--json]\n  stl link throughput <link-id> --confirm <link-id> [--seconds <1..10>] [--json]\n  stl link preview --stdin [--json]\n  stl link import --stdin --confirm <preview-token> [--json]\n  stl link export <link-id> [--json]\n  stl link create-wireguard --stdin --output <private-file> [--json]\n  stl link create-wss --stdin --output <private-file> [--json]\n  stl link preview-wss --stdin [--json]\n  stl link import-wss --stdin --confirm <preview-sha256> [--json]\n  stl link resume-wss --stdin --confirm <preview-sha256> [--json]\n  stl link create-ipsec --stdin --output <private-file> [--json]\n  stl link activate-ipsec <link-id> --confirm <link-id> [--json]\n  stl link connect-ipsec <link-id> --confirm <link-id> [--json]\n  stl link retire-ipsec <link-id> --confirm <link-id> [--json]\n  stl link reconcile-ipsec <link-id> --confirm <link-id> [--json]\n  stl link reconcile-xfrm-ipsec <link-id> --confirm <link-id> [--json]\n  stl link resume-wireguard --stdin --confirm <setup-digest> [--json]\n  stl link recover-handoff --source <private-temp> --output <private-file> --confirm <link-id> [--json]\n  stl link credential retire <link-id> --confirm <link-id> --public-key <local-public-key> [--json]\n  stl link ensure --stdin [--json]\n  stl link remove <link-id> --confirm <link-id> [--json]\n  stl link restore --all\n  stl doctor ipsec [--json]\n  stl maintenance pre-uninstall --json\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
+const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl menu\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link diagnose <link-id> [--mtu <bytes>] [--json]\n  stl link diagnose --all [--timeout <duration>] [--json]\n  stl link throughput <link-id> --confirm <link-id> [--seconds <1..10>] [--json]\n  stl link preview --stdin [--json]\n  stl link import --stdin --confirm <preview-token> [--json]\n  stl link export <link-id> [--json]\n  stl link create-wireguard --stdin --output <private-file> [--json]\n  stl link create-wss --stdin --output <private-file> [--json]\n  stl link preview-wss --stdin [--json]\n  stl link diagnose-wss <link-id> [--json]\n  stl link retire-wss <link-id> --confirm <link-id> [--json]\n  stl link import-wss --stdin --confirm <preview-sha256> [--json]\n  stl link resume-wss --stdin --confirm <preview-sha256> [--json]\n  stl link create-ipsec --stdin --output <private-file> [--json]\n  stl link activate-ipsec <link-id> --confirm <link-id> [--json]\n  stl link connect-ipsec <link-id> --confirm <link-id> [--json]\n  stl link retire-ipsec <link-id> --confirm <link-id> [--json]\n  stl link reconcile-ipsec <link-id> --confirm <link-id> [--json]\n  stl link reconcile-xfrm-ipsec <link-id> --confirm <link-id> [--json]\n  stl link resume-wireguard --stdin --confirm <setup-digest> [--json]\n  stl link recover-handoff --source <private-temp> --output <private-file> --confirm <link-id> [--json]\n  stl link credential retire <link-id> --confirm <link-id> --public-key <local-public-key> [--json]\n  stl link ensure --stdin [--json]\n  stl link remove <link-id> --confirm <link-id> [--json]\n  stl link restore --all\n  stl doctor ipsec [--json]\n  stl maintenance pre-uninstall --json\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
 
 const jsonSchemaVersion = 1
 
@@ -129,6 +129,12 @@ func runWithRuntimeInput(args []string, input io.Reader, stdout, stderr io.Write
 	case "link":
 		if len(args) >= 2 && (args[1] == "list" || args[1] == "status") {
 			return linkReadCommand(args[1:], stdout, stderr, options)
+		}
+		if len(args) >= 2 && args[1] == "retire-wss" {
+			return linkWSSRetireCommand(args[2:], stdout, stderr, options)
+		}
+		if len(args) >= 2 && args[1] == "diagnose-wss" {
+			return linkWSSDiagnoseCommand(args[1:], stdout, stderr, options)
 		}
 		if len(args) >= 2 && args[1] == "diagnose" {
 			return linkDiagnoseCommand(args[1:], stdout, stderr, options)
@@ -312,6 +318,26 @@ func buildRuntimeEngine(options runtimeOptions) (*app.Engine, error) {
 		return nil, err
 	}
 	engine.SetMTUManager(options.mtuManager)
+	if _, hasWSS := registry.Get(domain.BackendWireGuardWSS); hasWSS {
+		keys, err := wgbackend.NewKeyStore(options.stateRoot)
+		if err != nil {
+			return nil, fmt.Errorf("initialize WSS retirement key store: %w", err)
+		}
+		runner := options.probeRunner
+		if runner == nil {
+			runner = linux.ExecRunner{}
+		}
+		bounded, ok := runner.(linux.BoundedRunner)
+		if !ok {
+			return nil, fmt.Errorf("WSS retirement requires bounded host inventory")
+		}
+		guard := wireGuardRetirementGuard{runner: runner,
+			firewall: linux.IPTablesFirewall{Runner: runner}}
+		engine.SetWSSRetirementStore(wssCredentialRetirement{
+			root: options.stateRoot, host: wss.Host{StateRoot: options.stateRoot, Runner: bounded},
+			keys: keys, guard: guard,
+		})
+	}
 	// Reboot module restoration is permitted only for the canonical, root-owned
 	// installed executable, not for tests, an offline binary, or any arbitrary
 	// state root. Engine narrows execution further to saved committed Links

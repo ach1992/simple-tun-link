@@ -131,3 +131,23 @@ material. Unknown orphan keys, mismatched receipts or a
 missing offer are not authority to regenerate secrets or
 delete resources. Consult [SECURITY.md](SECURITY.md)
 and [CLI.md](CLI.md) for protected file/recovery commands.
+
+## WireGuard over WSS R1 confidential peer JSON (distinct from stl:// Quick Link)
+
+WSS R1 deliberately does **not** reinterpret existing v1/v2/v3 stl://
+payloads. Its bounded JSON receiver file uses schema_version=1,
+sender/receiver public Link objects, receiver_wireguard_private_key and
+receiver_tls (four receiver-local mTLS CA/leaf/key/bearer files). WSS fields
+are stored in versioned ordinary State v4 **without** private material.
+The creator generates both endpoint keys and the independent Link-specific
+authorization token once. The CA signing key is intentionally discarded,
+not stored with the receiver file. Receiver import checks exact reciprocal
+peer roles, addresses, ports and WireGuard key identity.
+
+The separate preview-wss command has no host effect. Its lowercase SHA-256
+confirmation binds the exact reviewed private JSON byte sequence (ignoring
+a single trailing newline); it does **not** prove sender authority. Transport
+the original handoff by an authenticated encrypted channel and verify peer
+details out of band. A copied WSS JSON file is a secret, **not** a shareable
+public Setup Link. Reissuing a revoked or retired Link requires a fresh ID,
+CA, leaf identities and bearer; do not recycle any retired credentials.
