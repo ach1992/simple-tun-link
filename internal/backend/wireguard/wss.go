@@ -89,6 +89,9 @@ func (b *Backend) planWSS(ctx context.Context, req core.Request, obs observation
 		p.resources = append(desiredResources(req.Link, name, wssGuardClaim(req.Link.ID)), path.CarrierClaims()...)
 	case core.OperationRemove:
 		p.interfaceChange = obs.Target.Exists && obs.Target.Owner == req.Link.ID
+		if p.interfaceChange {
+			p.wssOriginalRemoveIfIndex = obs.Target.IfIndex
+		}
 		p.guardChange = obs.GuardPresent
 		p.helperChange = obs.HelperLoaded
 		p.resources = claims
@@ -136,7 +139,26 @@ func (b *Backend) validateWSS(ctx context.Context, req core.Request, obs observa
 			return err
 		}
 	}
+	// A committed original can be moved DOWN into a different namespace.
+	// Source-namespace WG/UDP vacancy NEVER proves old-kernel extinction.
+	// A newly trusted kernel generation, durably bound to this original
+	// Link by Engine, is the only admission for a missing committed WSS WG.
+	if req.Prior != nil && !obs.Target.Exists {
+		if !core.HasWSSColdBootExtinctionWitness(ctx, req.Link.ID) {
+			return fmt.Errorf("committed WSS original WG absent locally without verified original-kernel extinction; quarantine Link")
+		}
+		// After reboot, do not delete or adopt a current-generation guard,
+		// helper, socket or replacement interface that may be foreign.
+		vacant, err := b.CrashHostVacant(ctx, obs)
+		if err != nil || !vacant {
+			return fmt.Errorf("post-reboot WSS original vacancy unverified; preserve committed Link: %w", errors.Join(err, core.ErrIndeterminateHostEffect))
+		}
+	}
 	if req.Operation == core.OperationRemove {
+		if p.interfaceChange != (obs.Target.Exists && obs.Target.Owner == req.Link.ID) ||
+			(p.interfaceChange && (p.wssOriginalRemoveIfIndex <= 0 || p.wssOriginalRemoveIfIndex != obs.Target.IfIndex)) {
+			return fmt.Errorf("WSS original deletion plan changed under resource lock")
+		}
 		if p.interfaceChange {
 			if err := b.requireRecreationCredential(req.Link); err != nil {
 				return err
@@ -370,8 +392,13 @@ func (b *Backend) verifyWSS(ctx context.Context, req core.Request, obs observati
 			return nil, fmt.Errorf("WSS full original WireGuard verification failed: %w", err)
 		}
 	case core.OperationRemove:
-		if obs.GuardPresent || obs.HelperLoaded || (obs.Target.Exists && obs.Target.Owner == req.Link.ID) {
-			return nil, fmt.Errorf("WSS resources remain after Remove")
+		if !core.HasWSSWGDeletionWitness(ctx, req.Link.ID) &&
+			!core.HasWSSColdBootExtinctionWitness(ctx, req.Link.ID) {
+			return nil, fmt.Errorf("WSS original termination witness missing after Remove")
+		}
+		vacant, err := b.CrashHostVacant(ctx, obs)
+		if err != nil || !vacant {
+			return nil, fmt.Errorf("WSS original-generation retirement/host vacancy unverified: %w", errors.Join(err, core.ErrIndeterminateHostEffect))
 		}
 	default:
 		return nil, fmt.Errorf("unsupported WSS Verify")

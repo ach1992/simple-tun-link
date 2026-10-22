@@ -45,7 +45,7 @@ run_case() {
     -u STL_WSS_R3_ORIGINAL_TEST -u STL_WSS_R3_REPAIR_TEST \
     -u STL_WSS_R3_FOREIGN_TEST -u STL_WSS_R4_PARTIAL_WG_TEST \
     -u STL_WSS_R4_GUARD_INTERLOPER -u STL_WSS_R5_MIGRATED_WG_TEST \
-    -u STL_WSS_R7_COLD_BOOT_TEST -u STL_WSS_R7_DRIFT_TEST \
+    -u STL_WSS_R7_COLD_BOOT_TEST -u STL_WSS_R7_DRIFT_TEST -u STL_WSS_R8_MIGRATED_ORDINARY_TEST \
     "$@" bash scripts/e2e/wss-managed-wireguard-r1.sh > "$out/$label.log" 2>&1; then
     count=$((count+1))
     echo "PASS $label"
@@ -82,9 +82,12 @@ for mode in fwmark ipv6; do
 done
 run_case virtual-boot-deny-guard STL_WSS_R2_CRASH_TEST=1 STL_WSS_R7_COLD_BOOT_TEST=guard
 run_case virtual-boot-deny-remove STL_WSS_R2_REMOVE_CRASH_TEST=guard STL_WSS_R7_COLD_BOOT_TEST=remove
-[[ $count == 31 ]] || { echo "Incomplete WSS matrix $count/31" >&2; exit 3; }
+for mode in active externally-lost;do
+  run_case "ordinary-migrated-$mode" "STL_WSS_R8_MIGRATED_ORDINARY_TEST=$mode"
+done
+[[ $count == 33 ]] || { echo "Incomplete WSS matrix $count/33" >&2; exit 3; }
 [[ $(git rev-parse HEAD) == "$sha" && $(git rev-parse HEAD^{tree}) == "$tree" &&
    -z $(git status --porcelain=v1 --untracked-files=all) ]] || {
   echo "Source changed during WSS acceptance; do not trust results" >&2; exit 3;
 }
-echo "PASS WSS_31_31_ROOTLESS_REAL_KERNEL_E2E HEAD=$sha TREE=$tree"
+echo "PASS WSS_33_33_ROOTLESS_REAL_KERNEL_E2E HEAD=$sha TREE=$tree"

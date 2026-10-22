@@ -64,8 +64,10 @@ func HasWSSWGDeletionWitness(ctx context.Context, id domain.LinkID) bool {
 }
 
 // A separate, in-memory proof kind can be issued by the Engine ONLY after
-// comparing a durable pre-reboot boot ID against the fixed kernel-provided
-// current boot ID in a later invocation. All original kernel WireGuard
+// comparing a durable, source-attested prior kernel boot ID (either the
+// explicitly armed original Crash Journal or committed WSS Link's verified
+// birth-generation record) against the fixed kernel-provided current boot ID
+// in a later invocation. All original kernel WireGuard
 // instances (in ANY network namespace) are necessarily extinct after a
 // complete kernel reboot; current-boot replacement resources still need
 // strict independent readback. This witness NEVER permits guard mutation.

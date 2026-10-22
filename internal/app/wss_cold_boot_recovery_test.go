@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ach1992/simple-tun-link/internal/backend"
+	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/hostidentity"
 	"github.com/ach1992/simple-tun-link/internal/state"
 )
@@ -60,7 +61,9 @@ func TestWSSColdBootManualCheckpointAndRecoveryAcrossFreshProcesses(t *testing.T
 				original, _ = mustLoadCrashSnapshot(t, store).Find(link.ID)
 			}
 			if tc.committed && !tc.remove {
-				delete(host.present, link.ID)
+				// Sidecar/resource drift with the original WG still visible:
+				// a missing committed WG may not be recreated in the same boot.
+				host.present[link.ID] = []domain.ResourceClaim{}
 			}
 			host.crashAfterHost = true
 			if tc.remove {
@@ -169,7 +172,9 @@ func TestWSSLegacyVirtualBootCheckpointNeverAuthorizesHostExtinction(t *testing.
 				}
 			}
 			if tc.committed && !tc.remove {
-				delete(host.present, link.ID)
+				// Sidecar/resource drift with the original WG still visible:
+				// a missing committed WG may not be recreated in the same boot.
+				host.present[link.ID] = []domain.ResourceClaim{}
 			}
 			host.crashAfterHost = true
 			if tc.remove {

@@ -121,6 +121,11 @@ type observation struct {
 	GuardPresent, HelperPresent, HelperLoaded bool
 }
 
+// WSSOriginalIfIndex describes only the source-namespace observation; zero
+// means UNKNOWN, not globally extinct. Engine must require positive proof
+// before normal committed WSS recreation or retirement.
+func (o observation) WSSOriginalIfIndex() int { return o.Target.IfIndex }
+
 func (o observation) ObservedResources() []domain.ResourceClaim {
 	if !o.Target.Exists {
 		return nil
@@ -143,6 +148,9 @@ type plan struct {
 	resources                       []domain.ResourceClaim
 	interfaceChange, firewallChange bool
 	guardChange, helperChange       bool
+	// Set only when Remove originally observed a committed WG ifindex.
+	// A successful Apply for this plan deletes that exact index, not a name.
+	wssOriginalRemoveIfIndex int
 }
 
 func (p plan) Empty() bool {
@@ -151,6 +159,11 @@ func (p plan) Empty() bool {
 func (p plan) Resources() []domain.ResourceClaim {
 	return append([]domain.ResourceClaim(nil), p.resources...)
 }
+
+// WSSOriginalRemoveIndex is bound to the plan and not an authorization by
+// itself. Engine may issue an in-transaction deletion witness only AFTER a
+// successful locked Apply that checked and deleted this original ifindex.
+func (p plan) WSSOriginalRemoveIndex() int { return p.wssOriginalRemoveIfIndex }
 
 func (b *Backend) Inspect(ctx context.Context, link domain.Link) (core.Observation, error) {
 	name, err := InterfaceName(link.ID)

@@ -61,7 +61,8 @@ func (e *Engine) retireWSSCredentialLocked(ctx context.Context, id domain.LinkID
 		receipt.LocalPublicKey == "" || receipt.WSSLink.Validate() != nil ||
 		receipt.WSSLink.ID != id || receipt.WSSLink.Backend != receipt.Backend ||
 		receipt.WSSLink.WireGuard.LocalPublicKey != receipt.LocalPublicKey ||
-		receipt.WSSFiles.VerifyLink(receipt.WSSLink) != nil {
+		receipt.WSSFiles.VerifyLink(receipt.WSSLink) != nil ||
+		!state.ValidWSSOriginalTerminationProof(receipt.WSSOriginalTermination) {
 		return fmt.Errorf("no exact WSS removal authorization in committed State")
 	}
 	identity := receipt.WSSLink

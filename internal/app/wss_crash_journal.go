@@ -41,6 +41,8 @@ func (e *Engine) prepareWSSCrash(ctx context.Context, request backend.Request,
 		if exists != op.HadCommittedLink || (exists && (previous.Desired != prior.Desired ||
 			previous.WSSFiles != prior.WSSFiles ||
 			previous.WSSOrigin != prior.WSSOrigin ||
+			previous.WSSKernelBootID != prior.WSSKernelBootID ||
+			previous.WSSKernelBootSource != prior.WSSKernelBootSource ||
 			!slices.Equal(previous.OwnedResources, prior.OwnedResources))) {
 			return fmt.Errorf("committed WSS Link changed before pre-effect journal")
 		}
@@ -193,6 +195,8 @@ func (e *Engine) ArmWSSColdBootRecovery(ctx context.Context, id domain.LinkID) e
 		if currentExists != exists || (exists && (currentRecord.Desired != record.Desired ||
 			currentRecord.WSSOrigin != record.WSSOrigin ||
 			currentRecord.WSSFiles != record.WSSFiles ||
+			currentRecord.WSSKernelBootID != record.WSSKernelBootID ||
+			currentRecord.WSSKernelBootSource != record.WSSKernelBootSource ||
 			!slices.Equal(currentRecord.OwnedResources, record.OwnedResources))) {
 			return fmt.Errorf("WSS committed owner changed before durable recovery arm")
 		}
@@ -313,6 +317,8 @@ func (e *Engine) reconcileWSSCrashMode(ctx context.Context, id domain.LinkID, mo
 	freshRecord, exists := fresh.Find(id)
 	if exists != (removed || repair) || (exists && (freshRecord.Desired != op.Intent ||
 		freshRecord.WSSFiles != record.WSSFiles || freshRecord.WSSOrigin != record.WSSOrigin ||
+		freshRecord.WSSKernelBootID != record.WSSKernelBootID ||
+		freshRecord.WSSKernelBootSource != record.WSSKernelBootSource ||
 		!slices.Equal(freshRecord.OwnedResources, record.OwnedResources))) {
 		return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id), "wireguard-wss",
 			"committed WSS Link changed during recovery")
@@ -436,6 +442,8 @@ func (e *Engine) reconcileWSSCrashMode(ctx context.Context, id domain.LinkID, mo
 			saved, ok := s.Find(id)
 			if !ok || saved.Desired != op.Intent || saved.WSSFiles != record.WSSFiles ||
 				saved.WSSOrigin != record.WSSOrigin ||
+				saved.WSSKernelBootID != record.WSSKernelBootID ||
+				saved.WSSKernelBootSource != record.WSSKernelBootSource ||
 				!slices.Equal(saved.OwnedResources, record.OwnedResources) {
 				return fmt.Errorf("original committed WSS Remove authority changed")
 			}
@@ -445,15 +453,29 @@ func (e *Engine) reconcileWSSCrashMode(ctx context.Context, id domain.LinkID, mo
 			if !s.Delete(id) {
 				return fmt.Errorf("failed to delete original committed WSS Link")
 			}
+			termination := ""
+			if coldBoot {
+				termination = state.WSSOriginalKernelGenerationExtinct
+			} else if originalRecovery {
+				termination = state.WSSOriginalScopedCompensation
+			} else if backend.HasWSSWGDeletionWitness(inspectionCtx, id) {
+				termination = state.WSSOriginalExactIfIndexDeleted
+			}
+			if !state.ValidWSSOriginalTerminationProof(termination) {
+				return fmt.Errorf("WSS crash reconciliation lacks positive original termination evidence")
+			}
 			s.RemovalReceipts = append(s.RemovalReceipts, state.RemovalReceipt{
 				LinkID: id, Backend: domain.BackendWireGuardWSS,
 				LocalPublicKey: op.Intent.WireGuard.LocalPublicKey,
 				WSSLink:        op.Intent, WSSFiles: saved.WSSFiles,
+				WSSOriginalTermination: termination,
 			})
 		} else if repair {
 			saved, ok := s.Find(id)
 			if !ok || saved.Desired != record.Desired || saved.WSSFiles != record.WSSFiles ||
 				saved.WSSOrigin != record.WSSOrigin ||
+				saved.WSSKernelBootID != record.WSSKernelBootID ||
+				saved.WSSKernelBootSource != record.WSSKernelBootSource ||
 				!slices.Equal(saved.OwnedResources, record.OwnedResources) ||
 				!slices.Equal(saved.OwnedResources, op.Resources) {
 				return fmt.Errorf("original committed WSS Ensure authority changed")

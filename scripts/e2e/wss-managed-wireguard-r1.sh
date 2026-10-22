@@ -525,6 +525,73 @@ if [[ -n "${STL_WSS_R7_DRIFT_TEST:-}" ]]; then
   echo "DENY_PASS REAL_KERNEL_ORDINARY_WSS_ENSURE_REMOVE_DRIFT: $mode"
   exit 0
 fi
+if [[ -n "$(printenv STL_WSS_R8_MIGRATED_ORDINARY_TEST || :)" ]]; then
+  # Distinct from the earlier journaled crash case: an ordinary committed
+  # Link is already moved DOWN when its FIRST Ensure/RestoreAll/Remove runs.
+  # Both sidecar-active and externally lost sidecar+guard states must deny.
+  mode=$STL_WSS_R8_MIGRATED_ORDINARY_TEST
+  case "$mode" in active|externally-lost) ;; *) echo "invalid ordinary WSS migration test" >&2;exit 2;; esac
+  id=lnk_0123456789abcdef0123456789abcdef
+  wg=stlwg0123456789
+  unit=stl-wss-0123456789abcdef0123456789abcdef.service
+  guard=$(python3 -c 'import hashlib;print("stlwss_"+hashlib.sha256(b"lnk_0123456789abcdef0123456789abcdef").hexdigest()[:16])')
+  jq -c '{"schema_version":3,"link":.links[0].desired}' "$lab/alpha-state/state.json" > "$lab/alpha/missing-original-ensure.json"
+  jq -e '(.links|length)==1 and (.wss_crash_operations//[]|length)==0 and (.removal_receipts//[]|length)==0' "$lab/alpha-state/state.json" >/dev/null
+  ip -n alpha link set "$wg" netns beta
+  [[ -z "$(ip netns exec alpha wg show interfaces)" ]]
+  ip netns exec beta wg show interfaces | grep -qx "$wg"
+  if ip netns exec alpha ss -H -u -l -n | grep -Fq ':51821';then
+    echo "FAIL: moved DOWN original still has active UDP socket" >&2;exit 1
+  fi
+  if [[ $mode == externally-lost ]]; then
+    # These losses happen BEFORE any Remove journal is prepared.
+    STL_R1_SIDE_ROOT="$lab/alpha" systemctl stop "$unit"
+    STL_R1_SIDE_ROOT="$lab/alpha" systemctl show "$unit" | grep -q '^LoadState=not-found'
+    ip netns exec alpha nft delete table inet "$guard"
+    if ip netns exec alpha nft list table inet "$guard" >/dev/null 2>&1;then
+      echo "FAIL: externally removed guard still present" >&2;exit 1
+    fi
+  else
+    STL_R1_SIDE_ROOT="$lab/alpha" systemctl show "$unit" | grep -q '^LoadState=loaded'
+    ip netns exec alpha nft -j list table inet "$guard" >/dev/null
+  fi
+  previous=$(sha256sum "$lab/alpha-state/state.json" | cut -d' ' -f1)
+  if invoke alpha link ensure --stdin < "$lab/alpha/missing-original-ensure.json" > "$lab/alpha/ordinary-hidden-ensure-denied.log" 2>&1;then
+    echo "FAIL: ordinary Ensure re-created a hidden same-kernel original" >&2;exit 1
+  fi
+  if invoke alpha link restore --all > "$lab/alpha/ordinary-hidden-restore-denied.log" 2>&1;then
+    echo "FAIL: RestoreAll re-created a hidden same-kernel original" >&2;exit 1
+  fi
+  if invoke alpha link remove "$id" --confirm "$id" > "$lab/alpha/ordinary-hidden-remove-denied.log" 2>&1;then
+    echo "FAIL: ordinary first Remove retired an original moved DOWN" >&2;exit 1
+  fi
+  if invoke alpha link retire-wss "$id" --confirm "$id" > "$lab/alpha/ordinary-hidden-retire-denied.log" 2>&1;then
+    echo "FAIL: original protected credentials retired without receipt" >&2;exit 1
+  fi
+  [[ $(sha256sum "$lab/alpha-state/state.json" | cut -d' ' -f1) == "$previous" ]]
+  jq -e '(.links|length)==1 and (.wss_crash_operations//[]|length)==0 and (.removal_receipts//[]|length)==0' "$lab/alpha-state/state.json" >/dev/null
+  ip netns exec beta wg show interfaces | grep -qx "$wg"
+  test -d "$lab/alpha-state/credentials/wss/$id"
+  if [[ $mode == active ]];then
+    ip netns exec alpha nft -j list table inet "$guard" >/dev/null
+  else
+    if ip netns exec alpha nft list table inet "$guard" >/dev/null 2>&1;then
+      echo "FAIL: denied operations manufactured lost guard" >&2;exit 1
+    fi
+  fi
+  # The original may be reactivated; earlier local-only absence must NOT
+  # have consumed its owner State or private credential generation.
+  ip -n beta link set "$wg" up
+  ip netns exec alpha ss -H -u -l -n | grep -Fq ':51821'
+  if invoke alpha link remove "$id" --confirm "$id" > "$lab/alpha/reactivated-original-remove-denied.log" 2>&1;then
+    echo "FAIL: reactivated cross-netns original was silently retired" >&2;exit 1
+  fi
+  [[ $(sha256sum "$lab/alpha-state/state.json" | cut -d' ' -f1) == "$previous" ]]
+  ip netns exec beta wg show interfaces | grep -qx "$wg"
+  test -d "$lab/alpha-state/credentials/wss/$id"
+  echo "DENY_PASS ORDINARY_WSS_MIGRATED_DOWN_FIRST_ENSURE_RESTORE_REMOVE_RECEIPT mode=$mode"
+  exit 0
+fi
 if [[ -n "$(printenv STL_WSS_R5_MIGRATED_WG_TEST || :)" ]]; then
   # The original guarded namespace is alpha; the still-owned kernel WG
   # is moved to beta. The move itself brings it DOWN, so the birthplace
@@ -746,8 +813,18 @@ if [[ $(printenv STL_WSS_R3_REPAIR_TEST || :) == 1 ]];then
   if invoke beta link reconcile-wss-original lnk_0123456789abcdef0123456789abcdef --confirm lnk_0123456789abcdef0123456789abcdef > "$lab/beta/repair-repeat-denied.log" 2>&1;then
     echo "repeat original repair recovery falsely found a journal" >&2;exit 1
   fi
-  invoke beta link restore --all
-  echo "SUCCESS ORIGINAL_COMMITTED_WSS_REPAIR_CRASH_AND_RESTORE_ALL"
+  # Original-object compensation already deleted beta's kernel WG. The
+  # new committed-source safety gate must NOT manufacture a new same-kernel
+  # original from the empty local inventory: these nested namespaces have
+  # no trusted host-kernel provenance and no actual host reboot occurred.
+  if invoke beta link restore --all > "$lab/beta/repair-compensated-same-boot-restore-denied.log" 2>&1;then
+    echo "FAIL: compensated original WG was immediately recreated without trusted kernel reboot" >&2;exit 1
+  fi
+  jq -e '(.links|length)==1 and (.wss_crash_operations//[]|length)==0 and (.removal_receipts//[]|length)==0' "$lab/beta-state/state.json" >/dev/null
+  [[ -z "$(ip netns exec beta wg show interfaces)" ]]
+  test -d "$lab/beta-state/credentials/wss/lnk_0123456789abcdef0123456789abcdef"
+  echo "DENY_PASS WSS_COMMITTED_REPAIR_COMPENSATED_ORIGINAL_REQUIRES_TRUSTED_REBOOT_TO_RESTORE"
+  exit 0
 else
   invoke beta link ensure --stdin < "$lab/beta/ensure.json"
 fi

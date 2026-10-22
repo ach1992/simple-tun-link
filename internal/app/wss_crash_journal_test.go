@@ -63,7 +63,11 @@ func (b *crashWSSBackend) Plan(_ context.Context, req backend.Request, observed 
 	}
 	claims = append(claims, path.CarrierClaims()...)
 	if req.Operation == backend.OperationRemove {
-		return fakePlan{empty: !observed.(fakeObservation).present, resources: claims}, nil
+		index := 0
+		if observed.(fakeObservation).present {
+			index = 100 // deterministic simulated exact original ifindex
+		}
+		return fakePlan{empty: index == 0, resources: claims, wssRemoveOriginalIndex: index}, nil
 	}
 	claims = append(claims,
 		domain.ResourceClaim{Kind: domain.ResourceInterface, Key: "stlwg" + string(link.ID)[4:14]},
@@ -324,8 +328,24 @@ func TestWSSCommittedRemoveCrashRemainsQuarantined(t *testing.T) {
 	if host.applyCount != 2 {
 		t.Fatal("crash journal failed to prevent host mutation")
 	}
-	if err := engine.ReconcileWSSCrashRemoved(ctx, link.ID); err != nil {
-		t.Fatalf("failed to finalize strictly vacant original Remove: %v", err)
+	// The original kernel index was already deleted by the CRASHED process.
+	// That process-local proof died with it. A fresh process cannot infer
+	// original-generation extinction from locally empty WG/UDP observations.
+	if err := engine.ReconcileWSSCrashRemoved(ctx, link.ID); err == nil {
+		t.Fatal("crashed process deletion witness was recovered from local absence")
+	}
+	if got := mustLoadCrashSnapshot(t, store); len(got.WSSCrashOperations) != 1 || len(got.RemovalReceipts) != 0 {
+		t.Fatal("unwitnessed Remove changed protected journal or issued retirement receipt")
+	}
+	// Deterministic manual two-phase Engine checkpoint using injected boot
+	// generations; it does NOT assert a genuine host reboot took place.
+	engine.kernelBootID = func() (string, error) { return testWSSBootBefore, nil }
+	if err := engine.ArmWSSColdBootRecovery(ctx, link.ID); err != nil {
+		t.Fatal(err)
+	}
+	engine.kernelBootID = func() (string, error) { return testWSSBootAfter, nil }
+	if err := engine.ReconcileWSSCrashColdBoot(ctx, link.ID); err != nil {
+		t.Fatalf("failed to finalize witnessed cold-boot original Remove: %v", err)
 	}
 	clean := mustLoadCrashSnapshot(t, store)
 	if _, ok := clean.Find(link.ID); ok {
@@ -428,6 +448,7 @@ func TestWSSCommittedRepairVacantPreservesOriginalOwnerAndRecreates(t *testing.T
 	ctx := context.Background()
 	host := &crashWSSBackend{fakeBackend: newFakeBackend()}
 	engine, store := crashWSSEngine(t, host)
+	engine.kernelBootID = func() (string, error) { return testWSSBootBefore, nil }
 	host.store = store
 	link := journalTestLink(t)
 	if _, err := engine.Ensure(ctx, link); err != nil {
@@ -438,9 +459,9 @@ func TestWSSCommittedRepairVacantPreservesOriginalOwnerAndRecreates(t *testing.T
 	if !ok || len(record.OwnedResources) < 6 {
 		t.Fatal("missing original committed WSS owner")
 	}
-	// Simulate a legitimate missing helper/interface needing repair, then
-	// a crash after that repair has already changed host effects.
-	delete(host.present, link.ID)
+	// Simulate a missing owned helper while the original WG stays visible.
+	// An entirely missing original in the same kernel must NEVER recreate.
+	host.present[link.ID] = []domain.ResourceClaim{}
 	host.crashAfterHost = true
 	causeCrash(t, func() { _, _ = engine.Ensure(ctx, link) })
 	interrupted := mustLoadCrashSnapshot(t, store)
@@ -503,13 +524,21 @@ func TestWSSCommittedRepairVacantPreservesOriginalOwnerAndRecreates(t *testing.T
 	if err := engine.ReconcileWSSCrashRepairVacant(ctx, link.ID); err == nil {
 		t.Fatal("repeat recovery falsely claimed a pending transaction")
 	}
+	if _, err := engine.Ensure(ctx, link); err == nil {
+		t.Fatal("same-kernel Ensure recreated a committed but locally absent original")
+	}
+	// A distinct trusted generation (deterministic injection, not a host
+	// reboot) can admit legitimate post-reboot restore of the same Link.
+	engine.kernelBootID = func() (string, error) { return testWSSBootAfter, nil }
 	if _, err := engine.Ensure(ctx, link); err != nil {
-		t.Fatalf("normal Ensure did not rebuild original Link: %v", err)
+		t.Fatalf("trusted new generation did not rebuild original Link: %v", err)
 	}
 	after := mustLoadCrashSnapshot(t, store)
 	again, exists := after.Find(link.ID)
-	if !exists || !reflect.DeepEqual(again, record) {
-		t.Fatal("normal Ensure changed the original issuance/ownership contract")
+	if !exists || again.Desired != record.Desired || again.WSSOrigin != record.WSSOrigin ||
+		again.WSSFiles != record.WSSFiles || !reflect.DeepEqual(again.OwnedResources, record.OwnedResources) ||
+		again.WSSKernelBootID != testWSSBootAfter {
+		t.Fatal("post-reboot Ensure changed original issuance/ownership or lost updated trusted boot generation")
 	}
 }
 
@@ -521,6 +550,7 @@ func TestWSSOriginalObjectCompensationRejectsForeignAndCommitsExactState(t *test
 	ctx := context.Background()
 	host := &crashWSSBackend{fakeBackend: newFakeBackend(), crashAfterHost: true}
 	engine, store := crashWSSEngine(t, host)
+	engine.kernelBootID = func() (string, error) { return testWSSBootBefore, nil }
 	host.store = store
 	link := journalTestLink(t)
 	causeCrash(t, func() { _, _ = engine.Ensure(ctx, link) })
@@ -569,9 +599,10 @@ func TestWSSOriginalObjectCompensationRejectsForeignAndCommitsExactState(t *test
 	if !ok || len(rec.WSSOrigin) != 32 {
 		t.Fatal("new Link lacks original issuance-time host provenance")
 	}
-	// Original creation nonce stays constant across committed repair,
-	// whereas the new transaction's journal nonce is independent.
-	delete(host.present, link.ID)
+	// Original creation nonce stays constant across a repair of still-
+	// visible WG with missing helper/resources; the new transaction's
+	// journal nonce is independent. Never recreate a hidden same-boot WG.
+	host.present[link.ID] = []domain.ResourceClaim{}
 	host.crashAfterHost = true
 	causeCrash(t, func() { _, _ = engine.Ensure(ctx, link) })
 	interrupted := mustLoadCrashSnapshot(t, store)
@@ -587,8 +618,12 @@ func TestWSSOriginalObjectCompensationRejectsForeignAndCommitsExactState(t *test
 	if !ok || !reflect.DeepEqual(preserved, rec) || len(repaired.RemovalReceipts) != 0 {
 		t.Fatal("original committed Link/fingerprints/claims changed during repair")
 	}
+	if _, err := engine.RestoreAll(ctx); err == nil {
+		t.Fatal("same-kernel RestoreAll created a second original after compensation removed the visible WG")
+	}
+	engine.kernelBootID = func() (string, error) { return testWSSBootAfter, nil }
 	if _, err := engine.RestoreAll(ctx); err != nil {
-		t.Fatalf("recovered original committed Link not restorable: %v", err)
+		t.Fatalf("genuine-generation simulated RestoreAll did not restore WSS: %v", err)
 	}
 	// Simulate a Remove interrupted before its kernel object was removed.
 	// The exact original nonce belongs to the committed Link, not Remove's

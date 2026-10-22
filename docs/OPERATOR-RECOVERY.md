@@ -257,7 +257,12 @@ birthplace UDP socket readback. This also applies to Ensure rollback.
 A separate read-only crash reconciliation cannot invent this witness;
 a previously interrupted transaction with no trustworthy deletion
 witness stays quarantined, even if its local inventories look empty.
-The same restriction protects original receipt/credential retirement.
+The same restriction protects original receipt/credential retirement,
+including the otherwise dangerous case in which nft guard and WSS helper
+were removed externally BEFORE the first ordinary Remove. With a moved-
+DOWN original the State, claims and protected credentials remain reserved.
+Legacy retirement receipts without an exact-index deletion or trusted-
+old-generation extinction marker remain readable but cannot retire files.
 Do not temporarily drop the nft guard, move a foreign WG object,
 recreate its listener, force-delete the journal, or retire private
 material to make automatic reconciliation appear successful.
@@ -270,6 +275,43 @@ or modifying production networking; neither a reboot nor this command
 is blanket authorization. The disposable real-kernel namespace tests
 cover both moved-UP and moved-DOWN cases; physical host namespace
 coexistence remains a distinct operator acceptance gate.
+
+## Unreleased WSS: ordinary missing-original quarantine
+
+For an already committed WSS Link, a missing local WireGuard interface or
+empty birthplace UDP-socket inventory is **not** proof its original kernel
+object died: it may have moved into another netns and been left DOWN. This
+risk applies BEFORE the very first ordinary `link remove` and without any
+Crash Journal, even if the original WSS helper and nft guard were externally
+stopped or deleted. Ordinary `ensure`, `restore --all`, and `remove` now fail
+closed instead of creating a second WG, erasing the committed owner State
+or issuing a credential-retirement receipt. No automated remediation should
+install a new original, delete a potentially foreign guard, or discard the
+protected original key, TLS certificate or bearer material.
+
+A successful native-host committed WSS Ensure records the verified host
+`wss_kernel_boot_id` and versioned `wss_kernel_boot_source` in the exact
+Link record (no operator override). On a **genuine full host reboot**,
+ordinary RestoreAll may recreate an absent original only if the protected
+record contains those trusted pre-reboot fields, the same host's current
+source is independently trusted and different, and strict fresh current-
+boot vacancy confirms no foreign replacement/guard/helper. An absent or
+legacy/untrusted birth marker is not retroactively certified. Original
+objects still visible can be managed under the usual full nonce/ifindex/
+configuration attestation, but missing originals remain quarantined.
+
+Ordinary successful Remove publishes a receipt with versioned
+`wss_original_termination` provenance for an exact original-ifindex delete
+or a trusted old-kernel extinction plus strict current-host vacancy.
+Original-object crash compensation and separately armed manual cold-boot
+recovery have distinct verified termination reasons. `retire-wss` refuses
+legacy receipts without proof, even when the local interface, guard and
+helper all appear absent. Preserve the exact State root and encrypted
+backups; physically moving this State to a DIFFERENT still-live host does
+not prove the original host kernel stopped. Establish an Owner-approved
+manual recovery when the trusted generation is unavailable, and do not
+manually edit or backfill UUIDs/receipts. The separate manual journaled
+recovery below applies only when its own admission gates can be met.
 
 ## Unreleased WSS: executable manual cold-kernel-reboot recovery
 

@@ -302,6 +302,24 @@ No namespace-local inventory is labeled a complete host-wide proof.
 Partial compensation preserves its journal and conservative host
 protection.
 
+**Ordinary WSS original-generation safety:** a committed Link may have its
+original WG interface moved DOWN to another netns, so no source-namespace
+interface or UDP socket appears. `Ensure`, `RestoreAll` and FIRST `Remove`
+MUST NOT infer vacancy or old-kernel extinction from those local reports,
+even if a foreign actor previously removed the original nft guard and
+stopped the helper. A new per-Link durable trusted-kernel-generation birth
+record permits an absent original only after a different, independently
+trusted host boot and strict current-host vacancy. Legacy/untrusted birth
+records cannot unlock that route. The original State, resource claims,
+credentials and existing ingress guard are otherwise retained untouched.
+Successful Remove publishes a versioned `wss_original_termination`
+provenance field only after exact-original ifindex deletion or trusted old-
+kernel extinction; legacy receipts without such proof never authorize
+`retire-wss`. A receipt or local-only empty inventory cannot make a moved
+WG disappear. Guard deletion still requires the fresh exact-index witness,
+not merely kernel-generation proof. See the operator runbook for quarantine
+and full-host reboot Owner decisions.
+
 A separately confirmed `arm-wss-cold-boot` checkpoint writes
 the real kernel-provided boot UUID into the original, durable WSS
 journal under canonical locks, without changing host resources.

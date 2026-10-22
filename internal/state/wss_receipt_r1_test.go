@@ -22,7 +22,8 @@ func TestR1WSSRetirementReceiptPreservesExactPublicIdentityWithoutSecrets(t *tes
 	issued := WSSFileIdentity{Certificate: digest, TLSKey: digest, TrustCA: digest,
 		Authorization: digest, Restrictions: digest}
 	receipt := RemovalReceipt{LinkID: link.ID, Backend: link.Backend,
-		LocalPublicKey: link.WireGuard.LocalPublicKey, WSSLink: link, WSSFiles: issued}
+		LocalPublicKey: link.WireGuard.LocalPublicKey, WSSLink: link, WSSFiles: issued,
+		WSSOriginalTermination: WSSOriginalExactIfIndexDeleted}
 	root := filepath.Join(t.TempDir(), "state")
 	store := NewFileStore(root)
 	ctx := context.Background()
@@ -53,6 +54,13 @@ func TestR1WSSRetirementReceiptPreservesExactPublicIdentityWithoutSecrets(t *tes
 	if err := json.Unmarshal(raw, &clean); err != nil {
 		t.Fatal(err)
 	}
+	legacy := receipt
+	legacy.WSSOriginalTermination = ""
+	legacySnapshot := EmptySnapshot()
+	legacySnapshot.RemovalReceipts = []RemovalReceipt{legacy}
+	if err := validateSnapshot(legacySnapshot); err != nil {
+		t.Fatalf("legacy receipt must remain readable, but ineligible for Engine retirement: %v", err)
+	}
 	for label, alter := range map[string]func(*RemovalReceipt){
 		"missing-original-link": func(r *RemovalReceipt) { r.WSSLink = domain.Link{} },
 		"wrong-underlay":        func(r *RemovalReceipt) { r.WSSLink.Underlay.Local = domain.Underlay{}.Local },
@@ -60,6 +68,7 @@ func TestR1WSSRetirementReceiptPreservesExactPublicIdentityWithoutSecrets(t *tes
 		"wrong-receipt-owner":   func(r *RemovalReceipt) { r.LinkID = "lnk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
 		"wrong-backend":         func(r *RemovalReceipt) { r.WSSLink.Backend = domain.BackendWireGuard },
 		"unexpected-native-wss": func(r *RemovalReceipt) { r.Backend = domain.BackendWireGuard },
+		"unknown-termination":   func(r *RemovalReceipt) { r.WSSOriginalTermination = "invalid-source" },
 	} {
 		t.Run(label, func(t *testing.T) {
 			s := EmptySnapshot()

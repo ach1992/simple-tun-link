@@ -20,14 +20,22 @@ type fakeObservation struct {
 }
 
 func (o fakeObservation) ObservedResources() []domain.ResourceClaim { return o.resources }
+func (o fakeObservation) WSSOriginalIfIndex() int {
+	if o.present {
+		return 100
+	}
+	return 0
+}
 
 type fakePlan struct {
-	empty     bool
-	resources []domain.ResourceClaim
+	empty                  bool
+	resources              []domain.ResourceClaim
+	wssRemoveOriginalIndex int
 }
 
 func (p fakePlan) Empty() bool                       { return p.empty }
 func (p fakePlan) Resources() []domain.ResourceClaim { return p.resources }
+func (p fakePlan) WSSOriginalRemoveIndex() int       { return p.wssRemoveOriginalIndex }
 
 type fakeBackend struct {
 	mu             sync.Mutex

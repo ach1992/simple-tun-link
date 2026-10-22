@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/hostidentity"
 )
 
 const (
@@ -41,6 +42,11 @@ type LinkRecord struct {
 	OwnedResources []domain.ResourceClaim `json:"owned_resources,omitempty"`
 	WSSFiles       WSSFileIdentity        `json:"wss_file_digests,omitzero"`
 	WSSOrigin      string                 `json:"wss_original_object_nonce,omitempty"`
+	// Attested birth/current kernel generation of the original WSS object.
+	// Empty values in pre-provenance or untrusted environments are readable,
+	// but cannot authorize recreation or retirement from local absence.
+	WSSKernelBootID     string `json:"wss_kernel_boot_id,omitempty"`
+	WSSKernelBootSource string `json:"wss_kernel_boot_source,omitempty"`
 }
 
 type Snapshot struct {
@@ -452,7 +458,13 @@ func validateSnapshot(snapshot Snapshot) error {
 			if err := record.WSSFiles.VerifyLink(record.Desired); err != nil {
 				return fmt.Errorf("committed WSS Link missing original credential fingerprints: %w", err)
 			}
-		} else if record.WSSFiles != (WSSFileIdentity{}) || record.WSSOrigin != "" {
+			if record.WSSKernelBootSource != "" && (record.WSSKernelBootSource != hostidentity.VerifiedHostBootSourceV1 ||
+				!hostidentity.ValidBootID(record.WSSKernelBootID)) ||
+				(record.WSSKernelBootSource == "" && record.WSSKernelBootID != "") {
+				return fmt.Errorf("committed WSS Link has invalid trusted kernel generation provenance")
+			}
+		} else if record.WSSFiles != (WSSFileIdentity{}) || record.WSSOrigin != "" ||
+			record.WSSKernelBootID != "" || record.WSSKernelBootSource != "" {
 			return fmt.Errorf("native Link cannot carry WSS credential or original host-object identity")
 		}
 		seen[record.Desired.ID] = struct{}{}

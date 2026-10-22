@@ -475,6 +475,26 @@ its receipt retryable; a retired Link ID cannot be reused. Arbitrary
 must be separately retired from their external storage after confirmation.
 The state schema is v4; older binaries must not attempt to manage WSS Links.
 
+### Ordinary committed WSS original-generation admission (unreleased)
+
+A committed `wireguard-wss` Link whose original WG interface is missing
+from the local network namespace CANNOT be automatically recreated by
+`link ensure` or `link restore --all`, nor removed by `link remove`, from
+that absence alone. The original may survive DOWN in a different namespace
+and later reactivate. This is true even if its nft guard and helper were
+removed externally before the first `Remove` (no Crash Journal yet).
+STL preserves committed State, owned claims and credentials and reports
+failure before mutation. On a supported native host, an earlier trusted,
+versioned kernel birth checkpoint stored with the committed Link and a
+DIFFERENT currently attested host kernel generation plus strict host vacancy
+can authorize legitimate post-reboot recovery. Missing/untrusted legacy
+birth records cannot be silently upgraded or used as extinction evidence.
+Successful ordinary WSS Remove creates a receipt containing explicit
+`wss_original_termination` proof. `retire-wss` refuses legacy or missing-
+proof receipts, not just live interfaces or matching keys. A full host
+reboot or manual State reconciliation requires separate Owner action;
+never edit State JSON or delete a foreign guard to force an apparent success.
+
 ### Owner-gated WSS whole-kernel-reset reconciliation (unreleased)
 
 When a durable WSS crash journal has lost its original, in-process
@@ -556,11 +576,13 @@ sudo stl link retire-wss LINK_ID --confirm LINK_ID
 ```
 
 The Remove path requires the exact original committed Link, resource
-claims, private TLS/authorization fingerprints and pre-effect journal,
-and independently proves the absence of all helper/WG/nft resources.
-It commits State deletion plus the immutable retirement receipt only
-after an independently witnessed original WG deletion; missing
-namespace-local resources alone cannot authorize that transition.
+claims, private TLS/authorization fingerprints and pre-effect journal.
+Absence of helper/WG/nft resources is necessary but NOT sufficient:
+this read-only recovery command cannot invent the original ifindex-
+deletion proof lost with an earlier process. If no positive original-
+object or attested kernel-generation evidence survives, it fails closed
+without deleting State or publishing any receipt; use the separately
+Owner-gated cold-boot or exact-object recovery path instead.
 It does not mutate host networking or protected files. The receipt can
 delete only SHA-256-matching original issuance-time TLS/auth material,
 never a same-name or same-mode replacement.
