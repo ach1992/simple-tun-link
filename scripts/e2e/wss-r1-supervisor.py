@@ -48,8 +48,24 @@ try:
         info={"unit":unit,"argv":cmd,
             "description":next(x[len("--description="):] for x in options if x.startswith("--description=")),
             "env":dict(x[len("--setenv="):].split("=",1) for x in options if x.startswith("--setenv=")),
-            "pid":0}
+            "pid":0,
+            "properties":dict(x[len("--property="):].split("=",1)
+                for x in options if x.startswith("--property=")),
+            "collect":"--collect" in options}
         launch(info)
+        kind=os.environ.get("STL_WSS_R2_AMBIGUOUS_TEST","")
+        if kind=="helper-crash":
+            os.kill(os.getppid(),signal.SIGKILL)
+            sys.exit(1)
+        if kind=="helper-cancel":
+            os.kill(os.getppid(),signal.SIGINT)
+            time.sleep(12)
+            sys.exit(1)
+        if kind=="helper-error":
+            raise RuntimeError("injected post-launch systemd-run error")
+        if kind=="helper-timeout":
+            time.sleep(14)
+            raise RuntimeError("injected late systemd-run response")
     elif name=="systemctl":
         if len(args)<2:raise RuntimeError("missing systemctl operation")
         op,unit=args[:2];info=read(unit)
@@ -63,11 +79,21 @@ try:
                 print("Description="+info["description"])
                 print("ExecStart={ path="+info["argv"][0]+" ; argv[]="+" ".join(info["argv"])+" ; }")
                 print("Environment="+" ".join(k+"="+v for k,v in sorted(info["env"].items())))
+                props=info["properties"]
+                print("Type="+props["Type"])
+                print("Restart="+props["Restart"])
+                print("RestartUSec="+props["RestartSec"])
+                for security in ("NoNewPrivileges","PrivateTmp","ProtectSystem","ProtectHome"):
+                    print(security+"="+props[security])
+                print("CollectMode="+("inactive-or-failed" if info["collect"] else "inactive"))
         elif op=="stop":
             if info:
                 stop(info)
                 # systemd transient --collect removes a stopped unit.
                 proc_file(unit).unlink()
+                if os.environ.get("STL_WSS_R2_REMOVE_CRASH_TEST","")=="stop":
+                    os.kill(os.getppid(),signal.SIGKILL)
+                    sys.exit(1)
         elif op=="restart":
             if not info:raise RuntimeError("Cannot restart missing WSS unit")
             stop(info);launch(info)

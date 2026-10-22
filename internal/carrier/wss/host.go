@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -75,29 +76,68 @@ func (h Host) GuardPresent(ctx context.Context, link domain.Link) (bool, error) 
 	if err != nil {
 		return false, fmt.Errorf("nft table inventory unavailable: %w", err)
 	}
+	// nft -j list tables MUST yield one supported metadata entry plus
+	// a non-null table array. encoding/json alone silently accepts null,
+	// absent members, duplicate keys and unexpected object types.
+	if err := linux.ValidateWSSWGJSONMembers(out.Stdout); err != nil {
+		return false, fmt.Errorf("ambiguous nft table inventory: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(out.Stdout))
+	decoder.DisallowUnknownFields()
 	var inventory struct {
 		Nftables []map[string]json.RawMessage `json:"nftables"`
 	}
-	if err := json.Unmarshal(out.Stdout, &inventory); err != nil {
-		return false, fmt.Errorf("invalid nft inventory")
+	if err := decoder.Decode(&inventory); err != nil || inventory.Nftables == nil {
+		return false, fmt.Errorf("incomplete nft table inventory")
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return false, fmt.Errorf("nft inventory has trailing content")
 	}
 	found := false
+	meta := 0
+	seen := map[string]bool{}
 	for _, entry := range inventory.Nftables {
 		if len(entry) != 1 {
-			return false, fmt.Errorf("unexpected nft table inventory entry")
+			return false, fmt.Errorf("ambiguous nft table inventory entry")
 		}
-		if raw, ok := entry["table"]; ok {
-			var row struct {
-				Family string `json:"family"`
-				Name   string `json:"name"`
-			}
-			if json.Unmarshal(raw, &row) != nil || row.Family == "" || row.Name == "" {
-				return false, fmt.Errorf("unverified nft inventory metadata")
-			}
-			if row.Name == guard.TableName() && row.Family == "inet" {
-				found = true
+		for kind, raw := range entry {
+			switch kind {
+			case "metainfo":
+				var m struct {
+					Version           string `json:"version"`
+					ReleaseName       string `json:"release_name"`
+					JSONSchemaVersion int    `json:"json_schema_version"`
+				}
+				if decodeStrictWSSJSON(raw, &m) != nil || m.Version == "" ||
+					m.JSONSchemaVersion != 1 || meta != 0 {
+					return false, fmt.Errorf("unsupported nft inventory metadata")
+				}
+				meta++
+			case "table":
+				var row struct {
+					Family string `json:"family"`
+					Name   string `json:"name"`
+					Handle uint64 `json:"handle,omitempty"`
+				}
+				if decodeStrictWSSJSON(raw, &row) != nil || row.Name == "" ||
+					!slices.Contains([]string{"inet", "ip", "ip6", "arp", "bridge", "netdev"}, row.Family) {
+					return false, fmt.Errorf("invalid nft table inventory row")
+				}
+				key := row.Family + "\x00" + row.Name
+				if seen[key] {
+					return false, fmt.Errorf("duplicate nft table identity")
+				}
+				seen[key] = true
+				if row.Name == guard.TableName() && row.Family == "inet" {
+					found = true
+				}
+			default:
+				return false, fmt.Errorf("nft table inventory contains unsupported object")
 			}
 		}
+	}
+	if meta != 1 {
+		return false, fmt.Errorf("missing nft table inventory metadata")
 	}
 	if !found {
 		return false, nil
@@ -113,6 +153,18 @@ func (h Host) GuardPresent(ctx context.Context, link domain.Link) (bool, error) 
 	return true, nil
 }
 
+func decodeStrictWSSJSON(raw []byte, out any) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(out); err != nil {
+		return err
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return fmt.Errorf("trailing JSON object")
+	}
+	return nil
+}
+
 func (h Host) unitName(link domain.Link) string        { return "stl-wss-" + string(link.ID)[4:] + ".service" }
 func (h Host) unitDescription(link domain.Link) string { return "STL-WSS-" + string(link.ID) }
 
@@ -120,7 +172,9 @@ type unitState struct{ loaded, active bool }
 
 func (h Host) inspectUnit(ctx context.Context, link domain.Link) (unitState, error) {
 	out, err := h.runner().RunBounded(ctx, linux.CaptureLimits{Stdout: 64 << 10, Stderr: 64 << 10},
-		"systemctl", "show", h.unitName(link), "--property=LoadState,ActiveState,Description,Transient,ExecStart,Environment", "--no-pager")
+		"systemctl", "show", h.unitName(link),
+		"--property=LoadState,ActiveState,Description,Transient,ExecStart,Environment,Type,Restart,RestartUSec,NoNewPrivileges,PrivateTmp,ProtectSystem,ProtectHome,CollectMode",
+		"--no-pager")
 	if err != nil {
 		return unitState{}, fmt.Errorf("cannot inspect WSS helper unit: %w", err)
 	}
@@ -159,11 +213,28 @@ func (h Host) inspectUnit(ctx context.Context, link domain.Link) (unitState, err
 	if strings.TrimSpace(values["Environment"]) != strings.Join(cmd.Env, " ") {
 		return unitState{}, fmt.Errorf("WSS unit TLS trust environment differs from Link identity")
 	}
+	if err := verifyWSSUnitSecurityProperties(values); err != nil {
+		return unitState{}, err
+	}
 	if values["ActiveState"] != "active" && values["ActiveState"] != "inactive" &&
 		values["ActiveState"] != "failed" && values["ActiveState"] != "activating" {
 		return unitState{}, fmt.Errorf("unexpected WSS helper service state")
 	}
 	return unitState{loaded: true, active: values["ActiveState"] == "active"}, nil
+}
+
+func verifyWSSUnitSecurityProperties(values map[string]string) error {
+	for key, want := range map[string]string{
+		"Type": "exec", "Restart": "on-failure", "RestartUSec": "2s",
+		"NoNewPrivileges": "yes", "PrivateTmp": "yes",
+		"ProtectSystem": "strict", "ProtectHome": "yes",
+		"CollectMode": "inactive-or-failed",
+	} {
+		if values[key] != want {
+			return fmt.Errorf("WSS helper unit security/restart property differs: %s", key)
+		}
+	}
+	return nil
 }
 
 // ExecStart is systemd's typed show-property representation, not a shell
@@ -212,14 +283,23 @@ func (h Host) Preflight(ctx context.Context, link domain.Link, guardPresent bool
 	if _, err := InspectPinnedExecutable(h.binary(), h.digest()); err != nil {
 		return fmt.Errorf("WSS approved helper: %w", err)
 	}
-	if !guardPresent {
-		guard, err := h.guard(link)
+	guard, err := h.guard(link)
+	if err != nil {
+		return err
+	}
+	if guardPresent {
+		actual, err := h.GuardPresent(ctx, link)
 		if err != nil {
 			return err
 		}
-		if err := guard.ProbeWSSWGFirewallCoexistence(ctx, h.runner()); err != nil {
-			return err
+		if !actual {
+			return fmt.Errorf("expected committed WSS guard is absent")
 		}
+		if err := guard.ProbeWSSWGFirewallCoexistenceWithOwnedGuard(ctx, h.runner()); err != nil {
+			return fmt.Errorf("WSS existing-guard host firewall reinspection: %w", err)
+		}
+	} else if err := guard.ProbeWSSWGFirewallCoexistence(ctx, h.runner()); err != nil {
+		return err
 	}
 	if path.Role == composition.Listen {
 		claim := domain.ResourceClaim{Kind: domain.ResourceTCPListenPort,
@@ -270,7 +350,12 @@ func (h Host) EnsureGuard(ctx context.Context, link domain.Link) (core.Rollback,
 		return nil, err
 	}
 	if err := h.runNFT(ctx, batch); err != nil {
-		return nil, err
+		// A dispatched nft transaction can succeed despite its client
+		// returning an error. The journal preserves uncertain ownership.
+		probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		_, _ = h.GuardPresent(probeCtx, link)
+		cancel()
+		return nil, fmt.Errorf("%w: nft guard dispatch outcome is uncertain", core.ErrIndeterminateHostEffect)
 	}
 	// Once the atomic CREATE succeeded, returning an undo is mandatory
 	// even if the next readback cannot be completed.
@@ -300,7 +385,7 @@ func (h Host) RemoveGuard(ctx context.Context, link domain.Link) (core.Rollback,
 		return func(context.Context) error { return nil }, nil
 	}
 	if err := h.runNFT(ctx, "delete table inet "+guard.TableName()+"\n"); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: nft guard delete outcome uncertain", core.ErrIndeterminateHostEffect)
 	}
 	undo := func(c context.Context) error { _, err := h.EnsureGuard(c, link); return err }
 	present, err = h.GuardPresent(ctx, link)
@@ -424,7 +509,10 @@ func (h Host) StartHelper(ctx context.Context, link domain.Link) (core.Rollback,
 		_, err = h.runner().Run(ctx, "systemd-run", args...)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("start STL-owned WSS helper: %w", err)
+		probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		_, _ = h.inspectUnit(probeCtx, link)
+		cancel()
+		return nil, fmt.Errorf("%w: WSS helper start outcome is uncertain", core.ErrIndeterminateHostEffect)
 	}
 	undo := func(c context.Context) error { _, err := h.StopHelper(c, link); return err }
 	deadline := time.NewTimer(5 * time.Second)
@@ -458,7 +546,7 @@ func (h Host) StopHelper(ctx context.Context, link domain.Link) (core.Rollback, 
 	}
 	_, err = h.runner().Run(ctx, "systemctl", "stop", h.unitName(link))
 	if err != nil {
-		return nil, fmt.Errorf("stop WSS helper: %w", err)
+		return nil, fmt.Errorf("%w: WSS helper stop outcome uncertain", core.ErrIndeterminateHostEffect)
 	}
 	undo := func(c context.Context) error {
 		if !unit.active {
@@ -484,9 +572,9 @@ func (h Host) StopHelper(ctx context.Context, link domain.Link) (core.Rollback, 
 		}
 		select {
 		case <-ctx.Done():
-			return undo, ctx.Err()
+			return nil, fmt.Errorf("%w: WSS Stop cancellation before unit collection", core.ErrIndeterminateHostEffect)
 		case <-deadline.C:
-			return undo, fmt.Errorf("stopped WSS unit was not collected; preserving credentials")
+			return nil, fmt.Errorf("%w: WSS Stop did not collect loaded unit", core.ErrIndeterminateHostEffect)
 		case <-ticker.C:
 		}
 	}

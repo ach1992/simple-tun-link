@@ -14,16 +14,14 @@ import (
 
 const wssWGIngressPriority = -250
 
-// WSSWGIngressPlan describes one optional WSS-only kernel WireGuard UDP
-// ingress guard. This is a pure, non-runnable plan: the shipped Engine does
-// not invoke it. A kernel WireGuard listen-port binds more than loopback even
-// when its configured peer endpoint is 127.0.0.1.
-//
-// The table name and rule comment are collision markers, NOT proof of
-// ownership. An eventual caller needs Engine resource locks, a durable
-// pre-effect journal, exact foreign-object checks, compensation, post-apply
-// verification, boot restore and a security/host-effects approval before
-// applying or deleting anything.
+// WSSWGIngressPlan renders the exact nft ingress guard used by the
+// unreleased, STL-managed WSS+kernel-WireGuard candidate. It is a pure
+// plan and does not independently execute host effects. The canonical
+// Engine invokes the scoped host executor only after resource/ownership
+// admission and durable WSS pre-effect intent, with crash quarantine.
+// A kernel WG listener binds more than loopback even when its configured
+// peer endpoint is 127.0.0.1. Table names and comments alone are never
+// ownership proofs; uncertain host effects must remain quarantined.
 type WSSWGIngressPlan struct {
 	LinkID     domain.LinkID
 	ListenPort uint16

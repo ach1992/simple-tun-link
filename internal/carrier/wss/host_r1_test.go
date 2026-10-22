@@ -64,11 +64,18 @@ func TestR1RetirementRequiresPrivateDirectoryAndNeverDeletesForeign(t *testing.T
 		t.Fatal(err)
 	}
 	private := filepath.Join(root, "credentials", "wss", string(id))
+	if err := WritePrivateNoReplace(filepath.Join(private, "restrictions.yaml"), []byte("test-only-original-policy\n")); err != nil {
+		t.Fatal(err)
+	}
+	issued, err := CaptureFileIdentity(root, link)
+	if err != nil {
+		t.Fatal(err)
+	}
 	outsider := filepath.Join(private, "foreign-credential")
 	if err := os.WriteFile(outsider, []byte("preserve"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := RetireOwnedTLS(root, link); err == nil {
+	if err := RetireOwnedTLS(root, link, issued); err == nil {
 		t.Fatal("deleted directory with unowned file")
 	}
 	if raw, err := os.ReadFile(outsider); err != nil || string(raw) != "preserve" {
@@ -77,7 +84,7 @@ func TestR1RetirementRequiresPrivateDirectoryAndNeverDeletesForeign(t *testing.T
 	if err := os.Remove(outsider); err != nil {
 		t.Fatal(err)
 	}
-	if err := RetireOwnedTLS(root, link); err != nil {
+	if err := RetireOwnedTLS(root, link, issued); err != nil {
 		t.Fatal(err)
 	}
 	if absent, err := TLSAbsent(root, link); err != nil || !absent {
@@ -95,5 +102,66 @@ func TestR1RetirementRequiresPrivateDirectoryAndNeverDeletesForeign(t *testing.T
 	}
 	if absent, err := TLSAbsent(root, link); err != nil || absent {
 		t.Fatal("reappeared credential treated absent")
+	}
+}
+
+// An unconsumed receipt may never authorize removal of a replacement private
+// file even when its name/owner/mode match the original issued generation.
+func TestWSSRetirementBindsExactOriginalFilesAndPartialDeletion(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := wssTestLink()
+	link.Backend = domain.BackendWireGuardWSS
+	link.WSS = domain.WSSOptions{Role: "listen", TCPPort: 59443, TLSServerName: "198.51.100.21"}
+	listen, other, err := GeneratePair(link.ID, "198.51.100.21")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listen.Clear()
+	defer other.Clear()
+	if err := Stage(root, link, listen); err != nil {
+		t.Fatal(err)
+	}
+	folder := filepath.Join(root, "credentials", "wss", string(link.ID))
+	if err := WritePrivateNoReplace(filepath.Join(folder, "restrictions.yaml"), []byte("original-restriction-identity\n")); err != nil {
+		t.Fatal(err)
+	}
+	issued, err := CaptureFileIdentity(root, link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := filepath.Join(folder, "authorization-token")
+	if err := os.Remove(original); err != nil {
+		t.Fatal(err)
+	}
+	replacement := []byte(strings.Repeat("b", 64) + "\n")
+	if err := os.WriteFile(original, replacement, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RetireOwnedTLS(root, link, issued); err == nil {
+		t.Fatal("pending receipt deleted a same-name valid-mode replacement")
+	}
+	actual, err := os.ReadFile(original)
+	if err != nil || string(actual) != string(replacement) {
+		t.Fatalf("replacement lost: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(folder, "server-key.pem")); err != nil {
+		t.Fatal("other original secrets were deleted before preflight rejected replacement", err)
+	}
+	// An earlier interrupted retirement may have deleted an original file.
+	// Missing is idempotent; a newly appearing replacement is still rejected.
+	if err := os.Remove(original); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(folder, "client-ca.pem")); err != nil {
+		t.Fatal(err)
+	}
+	if err := RetireOwnedTLS(root, link, issued); err != nil {
+		t.Fatalf("could not finish an exact partial original deletion: %v", err)
+	}
+	if absent, err := TLSAbsent(root, link); err != nil || !absent {
+		t.Fatalf("TLS still present: %v", err)
 	}
 }

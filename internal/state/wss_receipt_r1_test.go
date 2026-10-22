@@ -18,8 +18,11 @@ func TestR1WSSRetirementReceiptPreservesExactPublicIdentityWithoutSecrets(t *tes
 	if err := link.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	digest := strings.Repeat("a", 64)
+	issued := WSSFileIdentity{Certificate: digest, TLSKey: digest, TrustCA: digest,
+		Authorization: digest, Restrictions: digest}
 	receipt := RemovalReceipt{LinkID: link.ID, Backend: link.Backend,
-		LocalPublicKey: link.WireGuard.LocalPublicKey, WSSLink: link}
+		LocalPublicKey: link.WireGuard.LocalPublicKey, WSSLink: link, WSSFiles: issued}
 	root := filepath.Join(t.TempDir(), "state")
 	store := NewFileStore(root)
 	ctx := context.Background()

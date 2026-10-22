@@ -629,6 +629,17 @@ A successful installer update by itself neither validates a newly running
 Link nor proves persistence after reboot; those are separate Engine/release
 acceptance steps.
 
+**State v4 is a separate, non-downgrade-safe boundary.** The unreleased
+WSS-managed runtime writes schema v4 even on hosts with only Native Links
+once State is updated. A pre-v4 STL binary must not parse, restore or mutate
+that snapshot; failure to read State does **not** prove no Links are configured.
+Safe rollback requires an independently verified, unchanged, consistent and
+credential-matched pre-v4 backup, and proof that no later operation committed
+a newer recovery/ownership identity. Otherwise use a v4-capable forward fix.
+Restoring only an old binary while retaining schema v4 is NOT a valid rollback.
+Never manually rewrite schema_version or strip pre-effect journals, original
+WSS fingerprints, receipts or resource claims.
+
 **Do not treat installer binary rollback as State rollback.** Once any new
 runtime has written schema v3, pre-v3 STL executables cannot read that State
 and must fail closed. On a failed new-version rollout, prefer a verified

@@ -13,6 +13,7 @@ import (
 	wgbackend "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/carrier/wss"
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
@@ -26,7 +27,10 @@ type wssCredentialRetirement struct {
 // This callback is called ONLY by the canonical Engine with its Link and
 // maintenance locks, an exact durable post-Remove receipt and absent desired
 // Link. It does not inspect or delete arbitrary host files.
-func (r wssCredentialRetirement) RetireAfterRemove(ctx context.Context, link domain.Link) error {
+func (r wssCredentialRetirement) CaptureIdentity(_ context.Context, link domain.Link) (state.WSSFileIdentity, error) {
+	return wss.CaptureFileIdentity(r.root, link)
+}
+func (r wssCredentialRetirement) RetireAfterRemove(ctx context.Context, link domain.Link, files state.WSSFileIdentity) error {
 	if r.keys == nil || link.Backend != domain.BackendWireGuardWSS || link.ID.Validate() != nil {
 		return fmt.Errorf("WSS credential retirement runtime not trusted")
 	}
@@ -40,14 +44,14 @@ func (r wssCredentialRetirement) RetireAfterRemove(ctx context.Context, link dom
 	if nft {
 		return fmt.Errorf("WSS nft guard remains live; refusing credential deletion")
 	}
-	sidecar, err := r.host.HelperPresent(ctx, link)
+	sidecar, err := r.host.HelperLoaded(ctx, link)
 	if err != nil {
 		return fmt.Errorf("cannot inspect WSS helper: %w", err)
 	}
 	if sidecar {
-		return fmt.Errorf("WSS helper remains live; refusing credential deletion")
+		return fmt.Errorf("WSS helper unit remains loaded; refusing credential deletion")
 	}
-	if err := wss.RetireOwnedTLS(r.root, link); err != nil {
+	if err := wss.RetireOwnedTLS(r.root, link, files); err != nil {
 		return err
 	}
 	if _, err := r.keys.RetireExact(link.ID, link.WireGuard.LocalPublicKey); err != nil {
@@ -66,7 +70,7 @@ func (r wssCredentialRetirement) VerifyAbsent(ctx context.Context, link domain.L
 	if err != nil || guard {
 		return fmt.Errorf("retired WSS nft guard is live or unverified")
 	}
-	service, err := r.host.HelperPresent(ctx, link)
+	service, err := r.host.HelperLoaded(ctx, link)
 	if err != nil || service {
 		return fmt.Errorf("retired WSS helper is live or unverified")
 	}

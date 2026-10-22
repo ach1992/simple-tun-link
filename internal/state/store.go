@@ -38,6 +38,7 @@ func (e *PublicationError) Unwrap() error { return e.Cause }
 type LinkRecord struct {
 	Desired        domain.Link            `json:"desired"`
 	OwnedResources []domain.ResourceClaim `json:"owned_resources,omitempty"`
+	WSSFiles       WSSFileIdentity        `json:"wss_file_digests,omitzero"`
 }
 
 type Snapshot struct {
@@ -440,6 +441,13 @@ func validateSnapshot(snapshot Snapshot) error {
 		}
 		if _, exists := seen[record.Desired.ID]; exists {
 			return fmt.Errorf("duplicate Link ID %q", record.Desired.ID)
+		}
+		if record.Desired.Backend == domain.BackendWireGuardWSS {
+			if err := record.WSSFiles.VerifyLink(record.Desired); err != nil {
+				return fmt.Errorf("committed WSS Link missing original credential fingerprints: %w", err)
+			}
+		} else if record.WSSFiles != (WSSFileIdentity{}) {
+			return fmt.Errorf("native Link cannot carry WSS credential fingerprints")
 		}
 		seen[record.Desired.ID] = struct{}{}
 		for _, claim := range record.OwnedResources {

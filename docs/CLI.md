@@ -478,10 +478,29 @@ exact-credential retry:
 sudo stl link reconcile-wss-vacant LINK_ID --confirm LINK_ID --json
 ```
 
-The command removes only that exact journal record after confirming
-kernel WG, nft and helper vacancy. It **does not** delete or adopt
-host resources, retire credentials, recreate handoffs or bypass the
-committed-Link/Remove recovery gate. If host effects are present or
-inspection fails, leave the journal intact and obtain separately
-approved owner-scoped recovery; never hand-edit State or perform
-name-matched cleanup.
+This initial-Ensure command clears only the exact journal entry after
+strict absence verification of kernel WG, nft guard and **loaded**
+systemd helper. It does not alter any host object or credential.
+
+For a **previously committed Remove**, whose host effects have entirely
+disappeared, use a separate confirmation path:
+
+```sh
+sudo stl link reconcile-wss-removed LINK_ID --confirm LINK_ID --json
+# Only after that State-only commit:
+sudo stl link retire-wss LINK_ID --confirm LINK_ID
+```
+
+The Remove path requires the exact original committed Link, resource
+claims, private TLS/authorization fingerprints and pre-effect journal,
+and independently proves the absence of all helper/WG/nft resources.
+It commits State deletion plus the immutable retirement receipt; it
+does not mutate host networking or protected files. The receipt can
+delete only SHA-256-matching original issuance-time TLS/auth material,
+never a same-name or same-mode replacement.
+
+If a host effect is present, ownership cannot be independently verified,
+or a committed repair was interrupted, neither vacancy command is a
+general cleanup mechanism. Keep the journal and request separately
+authorized, identity-attested resource reconciliation. Never hand-edit
+State or adopt/delete a host object by its public name.

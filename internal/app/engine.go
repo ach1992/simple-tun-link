@@ -47,7 +47,8 @@ type Engine struct {
 	restoreExecutable  string
 	restoreModules     func(context.Context, domain.Link) error
 	wssRetirement      interface {
-		RetireAfterRemove(context.Context, domain.Link) error
+		RetireAfterRemove(context.Context, domain.Link, state.WSSFileIdentity) error
+		CaptureIdentity(context.Context, domain.Link) (state.WSSFileIdentity, error)
 		VerifyAbsent(context.Context, domain.Link) error
 	}
 	ipsecRetirement interface {
@@ -111,7 +112,8 @@ func (e *Engine) SetRestoreModuleBootstrap(fn func(context.Context, domain.Link)
 // SetWSSRetirementStore wires exact credential deletion under the Engine's
 // receipt, state and resource lock gates. Failure leaves the receipt retryable.
 func (e *Engine) SetWSSRetirementStore(retirer interface {
-	RetireAfterRemove(context.Context, domain.Link) error
+	RetireAfterRemove(context.Context, domain.Link, state.WSSFileIdentity) error
+	CaptureIdentity(context.Context, domain.Link) (state.WSSFileIdentity, error)
 	VerifyAbsent(context.Context, domain.Link) error
 }) {
 	e.wssRetirement = retirer
@@ -595,6 +597,24 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		return Result{}, contextualize(err, stlerr.CodeValidate, string(request.Operation), link, "backend validation failed")
 	}
 
+	// Existing credential hashes are immutable. Re-Ensure cannot silently
+	// authorize a same-name replacement as a new issuance generation.
+	if link.Backend == domain.BackendWireGuardWSS && request.Operation == backend.OperationEnsure &&
+		prior.Desired.ID == link.ID {
+		if e.wssRetirement == nil {
+			return Result{}, stlerr.New(stlerr.CodeState, "wss_identity", string(link.ID), "wireguard-wss",
+				"protected WSS identity attestation not configured")
+		}
+		original, err := e.wssRetirement.CaptureIdentity(ctx, link)
+		if err != nil {
+			return Result{}, stlerr.Wrap(stlerr.CodeState, "wss_identity", string(link.ID), "wireguard-wss",
+				"cannot verify original WSS credential contents", err)
+		}
+		if original != prior.WSSFiles {
+			return Result{}, stlerr.New(stlerr.CodeConflict, "wss_identity", string(link.ID), "wireguard-wss",
+				"original WSS credential generation changed")
+		}
+	}
 	ipsecRetirementDigest := ""
 	if request.Operation == backend.OperationRemove && link.Backend == domain.BackendIPsec {
 		fingerprint, ok := impl.(interface {
@@ -813,6 +833,23 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo, evidence.Stage, evidence.HostMutation, contextualize(err, stlerr.CodeVerify, string(request.Operation), link, "backend verification failed"))
 	}
 
+	wssFiles := state.WSSFileIdentity{}
+	if link.Backend == domain.BackendWireGuardWSS && request.Operation == backend.OperationEnsure {
+		if e.wssRetirement == nil {
+			return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo,
+				"wss_credential_identity", "attempted", fmt.Errorf("WSS identity backend unavailable"))
+		}
+		var captureErr error
+		wssFiles, captureErr = e.wssRetirement.CaptureIdentity(ctx, link)
+		if captureErr != nil {
+			return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo,
+				"wss_credential_identity", "attempted", fmt.Errorf("cannot capture original WSS credential identities: %w", captureErr))
+		}
+		if prior.Desired.ID == link.ID && prior.WSSFiles != wssFiles {
+			return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo,
+				"wss_credential_identity", "attempted", fmt.Errorf("WSS issued credential fingerprints drifted"))
+		}
+	}
 	// Serialize only the host-wide persistence transition and state commit.
 	// Backend inspection/apply stays per-Link to preserve Multi-Link concurrency.
 	var persistenceUndo func(context.Context) error
@@ -901,7 +938,7 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 			if _, removed := snapshot.FindRemovalReceipt(link.ID); removed {
 				return fmt.Errorf("obsolete removal receipt survives ensure")
 			}
-			snapshot.Upsert(state.LinkRecord{Desired: link, OwnedResources: resources})
+			snapshot.Upsert(state.LinkRecord{Desired: link, OwnedResources: resources, WSSFiles: wssFiles})
 		case backend.OperationRemove:
 			if _, operational := impl.(*ipsec.OperationalBackend); operational && link.Backend == domain.BackendIPsec {
 				journal, present := snapshot.FindIPsecRemoveOperation(link.ID)
@@ -920,7 +957,7 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 				snapshot.RemovalReceipts = append(snapshot.RemovalReceipts, state.RemovalReceipt{
 					LinkID: link.ID, Backend: domain.BackendWireGuardWSS,
 					LocalPublicKey: link.WireGuard.LocalPublicKey,
-					WSSLink:        link})
+					WSSLink:        link, WSSFiles: prior.WSSFiles})
 			}
 			if link.Backend == domain.BackendIPsec {
 				if ipsecRetirementDigest == "" {
@@ -960,7 +997,7 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		// ambiguity, retain the host state and report a non-success requiring
 		// reconciliation; blindly undoing a published intent is destructive.
 		visible, loadErr := e.store.Load(context.WithoutCancel(ctx))
-		published := loadErr == nil && stateMatchesOperation(visible, request, resources)
+		published := loadErr == nil && stateMatchesOperation(visible, request, resources, wssFiles)
 		oldState := loadErr == nil && stateMatchesPrior(visible, link.ID, prior)
 		var publicationErr *state.PublicationError
 		indeterminate := errors.As(commitErr, &publicationErr)
@@ -1283,12 +1320,22 @@ func restoreLockClaim() domain.ResourceClaim {
 
 // stateMatchesOperation proves the attempted desired-state record became
 // visible; equality covers both requested intent and all owned resource claims.
-func stateMatchesOperation(snapshot state.Snapshot, request backend.Request, resources []domain.ResourceClaim) bool {
+func stateMatchesOperation(snapshot state.Snapshot, request backend.Request,
+	resources []domain.ResourceClaim, originalFiles state.WSSFileIdentity) bool {
 	record, exists := snapshot.Find(request.Link.ID)
 	if request.Operation == backend.OperationRemove {
-		return !exists
+		if exists {
+			return false
+		}
+		if request.Link.Backend == domain.BackendWireGuardWSS {
+			receipt, present := snapshot.FindRemovalReceipt(request.Link.ID)
+			return present && receipt.Backend == request.Link.Backend &&
+				receipt.WSSLink == request.Link && receipt.WSSFiles.VerifyLink(request.Link) == nil
+		}
+		return true
 	}
-	return exists && record.Desired == request.Link && slices.Equal(record.OwnedResources, resources)
+	return exists && record.Desired == request.Link &&
+		record.WSSFiles == originalFiles && slices.Equal(record.OwnedResources, resources)
 }
 
 func stateMatchesPrior(snapshot state.Snapshot, id domain.LinkID, prior state.LinkRecord) bool {
@@ -1296,5 +1343,7 @@ func stateMatchesPrior(snapshot state.Snapshot, id domain.LinkID, prior state.Li
 	if prior.Desired.ID == "" {
 		return !exists
 	}
-	return exists && record.Desired == prior.Desired && slices.Equal(record.OwnedResources, prior.OwnedResources)
+	return exists && record.Desired == prior.Desired &&
+		record.WSSFiles == prior.WSSFiles &&
+		slices.Equal(record.OwnedResources, prior.OwnedResources)
 }

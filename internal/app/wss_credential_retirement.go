@@ -60,7 +60,8 @@ func (e *Engine) retireWSSCredentialLocked(ctx context.Context, id domain.LinkID
 	if !ok || receipt.Backend != domain.BackendWireGuardWSS ||
 		receipt.LocalPublicKey == "" || receipt.WSSLink.Validate() != nil ||
 		receipt.WSSLink.ID != id || receipt.WSSLink.Backend != receipt.Backend ||
-		receipt.WSSLink.WireGuard.LocalPublicKey != receipt.LocalPublicKey {
+		receipt.WSSLink.WireGuard.LocalPublicKey != receipt.LocalPublicKey ||
+		receipt.WSSFiles.VerifyLink(receipt.WSSLink) != nil {
 		return fmt.Errorf("no exact WSS removal authorization in committed State")
 	}
 	identity := receipt.WSSLink
@@ -72,7 +73,7 @@ func (e *Engine) retireWSSCredentialLocked(ctx context.Context, id domain.LinkID
 		}
 		return nil
 	}
-	if err := e.wssRetirement.RetireAfterRemove(ctx, identity); err != nil {
+	if err := e.wssRetirement.RetireAfterRemove(ctx, identity, receipt.WSSFiles); err != nil {
 		return fmt.Errorf("WSS post-Remove credentials are not confirmed retired: %w", err)
 	}
 	if err := e.store.Update(ctx, func(s *state.Snapshot) error {

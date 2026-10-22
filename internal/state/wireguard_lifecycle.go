@@ -30,7 +30,8 @@ type RemovalReceipt struct {
 	LocalPublicKey string         `json:"local_public_key"`
 	Retired        bool           `json:"retired,omitempty"`
 	// Exact public Link is needed for post-Remove helper identity verification.
-	WSSLink domain.Link `json:"wss_link,omitzero"`
+	WSSLink  domain.Link     `json:"wss_link,omitzero"`
+	WSSFiles WSSFileIdentity `json:"wss_file_digests,omitzero"`
 }
 
 func (s Snapshot) FindPendingSender(id domain.LinkID) (PendingSender, bool) {
@@ -105,10 +106,11 @@ func validateWireGuardLifecycle(s Snapshot) error {
 			if receipt.WSSLink.Validate() != nil ||
 				receipt.WSSLink.Backend != domain.BackendWireGuardWSS ||
 				receipt.WSSLink.ID != receipt.LinkID ||
-				receipt.WSSLink.WireGuard.LocalPublicKey != receipt.LocalPublicKey {
+				receipt.WSSLink.WireGuard.LocalPublicKey != receipt.LocalPublicKey ||
+				receipt.WSSFiles.VerifyLink(receipt.WSSLink) != nil {
 				return fmt.Errorf("invalid WSS credential removal receipt")
 			}
-		} else if receipt.WSSLink != (domain.Link{}) {
+		} else if receipt.WSSLink != (domain.Link{}) || receipt.WSSFiles != (WSSFileIdentity{}) {
 			return fmt.Errorf("native WireGuard receipt cannot carry WSS Link fields")
 		}
 		if removed[receipt.LinkID] {

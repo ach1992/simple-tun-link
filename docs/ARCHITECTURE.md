@@ -676,9 +676,14 @@ Carriers. The existing Engine locks, desired-State v4 and resource claims
 govern all effects. The WSS Backend applies in dependency order:
 admit pinned helper/private mTLS + firewall coexistence → create private
 nft kernel-WG UDP ingress guard → create owner-tagged WG Interface →
-start one owner-scoped systemd WSS helper → read back and durably commit
-Link State. Remove performs the reverse, records the exact private-key
-retirement receipt **in the same State commit**, and securely retires
+start one owner-scoped systemd WSS helper → verify complete host firewall,
+exact systemd sandbox/restart properties and original TLS/bearer fingerprints
+→ commit Link State and consume the exact pre-effect journal.
+Dispatched nft/systemd errors are treated as potentially effectful:
+the journal stays durable, and WG ingress protection is not rolled back
+while an uncertain dependent helper could remain live. Remove performs the reverse, records the exact issued TLS/bearer
+material hashes in its private-key retirement receipt **in the same
+State commit**, and securely retires
 protected Link-local TLS/bearer/WG credentials after separate host-absence
 proof. A crash before a completed receipt requires owner-scoped recovery;
 no foreign adoption or generic host cleanup is permitted.
@@ -704,10 +709,22 @@ remove the host restore unit.
 uncommitted initial Ensure. It locks the same resources, refreshes the
 transaction and requires read-only proof that no matching kernel WG
 interface, nft ingress guard or loaded helper unit remains. Only then
-does it clear the journal. It **never** changes host resources, deletes
-secrets, adopts named objects or reconciles an interrupted committed
-repair/Remove. Those remain quarantined for separately approved,
-identity-attested reconciliation.
+does it clear the journal. It **never** modifies host objects, deletes
+secrets or adopts name-matched objects.
+
+A separately confirmed `stl link reconcile-wss-removed ID --confirm ID`
+handles a committed Remove only when the exact original Link, immutable
+committed owner claims, original credential fingerprints and pre-effect
+journal still match. Independent inspection must confirm the nft guard,
+kernel WG interface and **loaded** helper unit are all absent. Only then
+does one durable State update consume the journal, delete the previously
+committed Link and publish its original fingerprint-bound retirement receipt.
+No host file/service/kernel resource is mutated; `retire-wss` subsequently
+requires complete host absence and exact original file SHA-256 hashes.
+
+Interrupted repairs of a committed live Link, removal with surviving host
+resources, or unknown observation remain quarantined, pending separately
+authorized original-object-identity reconciliation.
 
 The rootless test `STL_WSS_R2_CRASH_TEST=1 bash
 scripts/e2e/wss-managed-wireguard-r1.sh` sends SIGKILL after a

@@ -161,13 +161,18 @@ func (b *Backend) ensureWSS(ctx context.Context, req core.Request, obs observati
 	var undos []core.Rollback
 	var progress creationProgress
 	undo := func(c context.Context) error {
-		var errs []error
 		for i := len(undos) - 1; i >= 0; i-- {
-			if undos[i] != nil {
-				errs = append(errs, undos[i](c))
+			if undos[i] == nil {
+				continue
+			}
+			if err := undos[i](c); err != nil {
+				// WSS layers have a safety dependency: if a helper cannot
+				// be collected, NEVER remove its kernel WG/UDP guard; if
+				// WG cannot be undone, never remove the ingress guard.
+				return fmt.Errorf("WSS dependency rollback halted, preserving lower protection: %w", err)
 			}
 		}
-		return errors.Join(errs...)
+		return nil
 	}
 	// The guard MUST be effective before kernel WG binds its host-wide UDP
 	// socket. Reverse-order compensation removes the guard last.
@@ -177,6 +182,9 @@ func (b *Backend) ensureWSS(ctx context.Context, req core.Request, obs observati
 			undos = append(undos, revert)
 		}
 		if err != nil {
+			if errors.Is(err, core.ErrIndeterminateHostEffect) {
+				return nil, err
+			}
 			return undo, err
 		}
 	}
@@ -199,6 +207,11 @@ func (b *Backend) ensureWSS(ctx context.Context, req core.Request, obs observati
 	}
 	if p.helperChange {
 		revert, err := b.wssHost.StartHelper(ctx, req.Link)
+		if err != nil && errors.Is(err, core.ErrIndeterminateHostEffect) {
+			// Could be a live helper. Never undo the kernel socket's
+			// protective nft guard while a dependent effect is unknown.
+			return nil, err
+		}
 		if revert != nil {
 			undos = append(undos, revert)
 		}
@@ -217,16 +230,24 @@ func (b *Backend) removeWSS(ctx context.Context, req core.Request, p plan) (core
 	}
 	var undos []core.Rollback
 	undo := func(c context.Context) error {
-		var errs []error
 		for i := len(undos) - 1; i >= 0; i-- {
-			if undos[i] != nil {
-				errs = append(errs, undos[i](c))
+			if undos[i] == nil {
+				continue
+			}
+			if err := undos[i](c); err != nil {
+				// WSS layers have a safety dependency: if a helper cannot
+				// be collected, NEVER remove its kernel WG/UDP guard; if
+				// WG cannot be undone, never remove the ingress guard.
+				return fmt.Errorf("WSS dependency rollback halted, preserving lower protection: %w", err)
 			}
 		}
-		return errors.Join(errs...)
+		return nil
 	}
 	if p.helperChange {
 		revert, err := b.wssHost.StopHelper(ctx, req.Link)
+		if err != nil && errors.Is(err, core.ErrIndeterminateHostEffect) {
+			return nil, err // keep the kernel/guard relationship intact
+		}
 		if revert != nil {
 			undos = append(undos, revert)
 		}
@@ -244,7 +265,7 @@ func (b *Backend) removeWSS(ctx context.Context, req core.Request, p plan) (core
 			return undo, fmt.Errorf("WSS WG identity drift before Remove")
 		}
 		if err := b.deleteLink(ctx, target.IfIndex); err != nil {
-			return undo, err
+			return nil, fmt.Errorf("%w: kernel WG Delete outcome unverified", core.ErrIndeterminateHostEffect)
 		}
 		undos = append(undos, func(c context.Context) error {
 			_, err := b.createOwnedInterface(c, req.Link, p.name)
@@ -254,6 +275,9 @@ func (b *Backend) removeWSS(ctx context.Context, req core.Request, p plan) (core
 	// With kernel WG gone, the exact owned nft guard can be removed safely.
 	if p.guardChange {
 		revert, err := b.wssHost.RemoveGuard(ctx, req.Link)
+		if err != nil && errors.Is(err, core.ErrIndeterminateHostEffect) {
+			return nil, err
+		}
 		if revert != nil {
 			undos = append(undos, revert)
 		}

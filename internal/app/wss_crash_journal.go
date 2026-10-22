@@ -64,14 +64,26 @@ func (e *Engine) prepareWSSCrash(ctx context.Context, request backend.Request,
 // A journal with ANY observed host effect remains quarantined until a
 // separately reviewed, identity-attested compensation is available.
 func (e *Engine) ReconcileWSSCrashVacant(ctx context.Context, id domain.LinkID) error {
+	return e.reconcileWSSCrash(ctx, id, false)
+}
+
+// ReconcileWSSCrashRemoved finalizes a previously committed WSS Remove
+// ONLY when the exact original Link and all THREE host resources (WG
+// interface, nft table and loaded systemd helper) are independently absent.
+// It commits deletion + immutable retirement receipt in one State update.
+// No command to mutate host networking, systemd or protected files is issued.
+func (e *Engine) ReconcileWSSCrashRemoved(ctx context.Context, id domain.LinkID) error {
+	return e.reconcileWSSCrash(ctx, id, true)
+}
+func (e *Engine) reconcileWSSCrash(ctx context.Context, id domain.LinkID, removed bool) error {
 	if err := id.Validate(); err != nil {
 		return stlerr.New(stlerr.CodeInvalid, "wss_reconcile", string(id), "wireguard-wss", "invalid Link ID")
 	}
-	maintenanceRelease, err := e.acquireMaintenance(ctx)
+	maintenance, err := e.acquireMaintenance(ctx)
 	if err != nil {
 		return err
 	}
-	defer maintenanceRelease()
+	defer maintenance()
 	linkRelease, err := e.locks.Acquire(ctx, []domain.ResourceClaim{linkLock(id)})
 	if err != nil {
 		return err
@@ -81,24 +93,43 @@ func (e *Engine) ReconcileWSSCrashVacant(ctx context.Context, id domain.LinkID) 
 	if err != nil {
 		return err
 	}
-	op, ok := snapshot.FindWSSCrashOperation(id)
-	if !ok {
+	op, found := snapshot.FindWSSCrashOperation(id)
+	if !found {
 		return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id), "wireguard-wss",
-			"no outstanding WSS crash journal exists")
+			"no durable WSS crash journal exists")
 	}
-	if op.Operation != "ensure" || op.HadCommittedLink {
+	wantOperation := "ensure"
+	if removed {
+		wantOperation = "remove"
+	}
+	if op.Operation != wantOperation || op.HadCommittedLink != removed {
 		return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id), "wireguard-wss",
-			"committed-Link or Remove crash requires separate identity-attested recovery")
+			"WSS recovery mode does not match exact original transaction")
 	}
-	if _, committed := snapshot.Find(id); committed {
+	record, committed := snapshot.Find(id)
+	if committed != removed || (committed && record.Desired != op.Intent) {
 		return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id), "wireguard-wss",
-			"WSS Link has committed State; cannot treat as vacant precommit attempt")
+			"committed Link does not match original WSS pre-effect identity")
 	}
-	locks, err := resourceLockClaims(op.Resources)
+	if removed {
+		if err := record.WSSFiles.VerifyLink(op.Intent); err != nil {
+			return err
+		}
+		// A pending Remove must originate from committed owner claims.
+		// A planned ResourceClaim is only a reservation until a matching
+		// committed source verifies its original ownership.
+		for _, claim := range op.Resources {
+			if !slices.Contains(record.OwnedResources, claim) {
+				return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id),
+					"wireguard-wss", "WSS Remove journal includes unowned resource reservations")
+			}
+		}
+	}
+	claims, err := resourceLockClaims(op.Resources)
 	if err != nil {
 		return err
 	}
-	release, err := e.locks.Acquire(ctx, locks)
+	release, err := e.locks.Acquire(ctx, claims)
 	if err != nil {
 		return err
 	}
@@ -110,48 +141,68 @@ func (e *Engine) ReconcileWSSCrashVacant(ctx context.Context, id domain.LinkID) 
 	current, ok := fresh.FindWSSCrashOperation(id)
 	if !ok || !sameWSSCrashOperation(current, op) {
 		return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id), "wireguard-wss",
-			"WSS crash journal changed while acquiring resource locks")
+			"journal changed while acquiring resource locks")
 	}
-	if _, committed := fresh.Find(id); committed {
+	freshRecord, exists := fresh.Find(id)
+	if exists != removed || (exists && (freshRecord.Desired != op.Intent ||
+		freshRecord.WSSFiles != record.WSSFiles ||
+		!slices.Equal(freshRecord.OwnedResources, record.OwnedResources))) {
 		return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id), "wireguard-wss",
-			"Link became committed while inspecting pre-effect recovery")
+			"committed WSS Link changed during recovery")
 	}
 	impl, ok := e.backends.Get(domain.BackendWireGuardWSS)
 	if !ok {
 		return stlerr.New(stlerr.CodeUnsupported, "wss_reconcile", string(id), "wireguard-wss",
-			"WSS backend is unavailable; cannot prove host vacancy")
+			"WSS backend not registered; host absence cannot be proved")
 	}
 	verifier, ok := impl.(interface {
 		CrashHostVacant(context.Context, backend.Observation) (bool, error)
 	})
 	if !ok {
 		return stlerr.New(stlerr.CodeUnsupported, "wss_reconcile", string(id), "wireguard-wss",
-			"WSS backend lacks independent host-vacancy attestation")
+			"WSS backend lacks strict host vacancy readback")
 	}
 	observed, err := impl.Inspect(ctx, op.Intent)
 	if err != nil {
 		return stlerr.Wrap(stlerr.CodeInspect, "wss_reconcile", string(id),
-			"wireguard-wss", "cannot prove WSS host inventory", err)
+			"wireguard-wss", "cannot establish safe WSS resource absence", err)
 	}
 	vacant, err := verifier.CrashHostVacant(ctx, observed)
 	if err != nil {
 		return stlerr.Wrap(stlerr.CodeInspect, "wss_reconcile", string(id),
-			"wireguard-wss", "WSS host vacancy proof incomplete", err)
+			"wireguard-wss", "cannot verify complete WSS vacancy", err)
 	}
 	if !vacant {
 		return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id), "wireguard-wss",
-			"WSS host resources may remain; keeping durable crash journal; no deletion or adoption")
+			"WSS resources remain or identity uncertain; preserve journal and host material")
 	}
 	return e.store.Update(ctx, func(s *state.Snapshot) error {
-		entry, exists := s.FindWSSCrashOperation(id)
-		if !exists || !sameWSSCrashOperation(entry, op) {
-			return fmt.Errorf("WSS transaction changed before vacancy clearance")
+		entry, ok := s.FindWSSCrashOperation(id)
+		if !ok || !sameWSSCrashOperation(entry, op) {
+			return fmt.Errorf("WSS journal changed before recovery commit")
 		}
-		if _, committed := s.Find(id); committed {
-			return fmt.Errorf("WSS Link committed while reconciling vacancy")
+		if removed {
+			saved, ok := s.Find(id)
+			if !ok || saved.Desired != op.Intent || saved.WSSFiles != record.WSSFiles ||
+				!slices.Equal(saved.OwnedResources, record.OwnedResources) {
+				return fmt.Errorf("original committed WSS Remove authority changed")
+			}
+			if _, exists := s.FindRemovalReceipt(id); exists {
+				return fmt.Errorf("pre-existing WSS retirement authorization")
+			}
+			if !s.Delete(id) {
+				return fmt.Errorf("failed to delete original committed WSS Link")
+			}
+			s.RemovalReceipts = append(s.RemovalReceipts, state.RemovalReceipt{
+				LinkID: id, Backend: domain.BackendWireGuardWSS,
+				LocalPublicKey: op.Intent.WireGuard.LocalPublicKey,
+				WSSLink:        op.Intent, WSSFiles: saved.WSSFiles,
+			})
+		} else if _, exists := s.Find(id); exists {
+			return fmt.Errorf("new WSS Link was committed during vacancy reconciliation")
 		}
 		if !s.DeleteWSSCrashOperation(id) {
-			return fmt.Errorf("WSS crash journal disappearance not committed")
+			return fmt.Errorf("WSS crash journal was not atomically consumed")
 		}
 		return nil
 	})

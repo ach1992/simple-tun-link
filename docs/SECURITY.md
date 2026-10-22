@@ -257,6 +257,13 @@ Automatic Ensure/Remove/reboot replay cannot cross an unresolved
 transaction. Vacancy-only reconciliation is read-only until an
 exact journal-only State commit; any observed or uncertain host effect
 blocks it. It preserves all private credentials and never changes
-firewall, network or systemd state. Stronger orphan compensation
-requires independently proven original-object identity and a separate
-review/authorization gate.
+firewall, network or systemd state. A committed interrupted Remove may only be finalized by
+`reconcile-wss-removed` after exact original owner/claim verification
+and read-only proof the helper, nft guard and kernel WG are ALL absent.
+It durably commits the original issuance-time fingerprint-bound retirement
+receipt without modifying any host object. Retirement requires absence of
+any **loaded**, including failed/inactive, helper unit, and SHA-256 matching
+each originally issued TLS/authorization private file. Same-name/mode
+replacement material must survive, even when a receipt remains pending.
+Stronger cleanup of a **live** orphan still needs independent
+original-object proof and a separate security/Owner authorization gate.

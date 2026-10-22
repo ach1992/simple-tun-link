@@ -24,6 +24,17 @@ type crashWSSBackend struct {
 	journalObservedAtApply bool
 }
 
+type fakeWSSIssuance struct{}
+
+func (fakeWSSIssuance) CaptureIdentity(_ context.Context, _ domain.Link) (state.WSSFileIdentity, error) {
+	digest := strings.Repeat("a", 64)
+	return state.WSSFileIdentity{Certificate: digest, TLSKey: digest, TrustCA: digest, Authorization: digest, Restrictions: digest}, nil
+}
+func (fakeWSSIssuance) RetireAfterRemove(context.Context, domain.Link, state.WSSFileIdentity) error {
+	return nil
+}
+func (fakeWSSIssuance) VerifyAbsent(context.Context, domain.Link) error { return nil }
+
 func (b *crashWSSBackend) Kind() domain.Backend { return domain.BackendWireGuardWSS }
 func (b *crashWSSBackend) Plan(_ context.Context, req backend.Request, observed backend.Observation) (backend.Plan, error) {
 	path, err := composition.Build(req.Link, composition.CarrierForLink(req.Link))
@@ -110,6 +121,7 @@ func crashWSSEngine(t *testing.T, b *crashWSSBackend) (*Engine, *state.FileStore
 	if err != nil {
 		t.Fatal(err)
 	}
+	engine.SetWSSRetirementStore(fakeWSSIssuance{})
 	return engine, store
 }
 func causeCrash(t *testing.T, fn func()) {
@@ -249,7 +261,27 @@ func TestWSSCommittedRemoveCrashRemainsQuarantined(t *testing.T) {
 		t.Fatal("interrupted WSS Remove was silently reversed")
 	}
 	if host.applyCount != 2 {
-		t.Fatal("WSS crash journal failed to prevent another host mutation")
+		t.Fatal("crash journal failed to prevent host mutation")
+	}
+	if err := engine.ReconcileWSSCrashRemoved(ctx, link.ID); err != nil {
+		t.Fatalf("failed to finalize strictly vacant original Remove: %v", err)
+	}
+	clean := mustLoadCrashSnapshot(t, store)
+	if _, ok := clean.Find(link.ID); ok {
+		t.Fatal("original WSS Link still committed after proven removal")
+	}
+	if _, ok := clean.FindWSSCrashOperation(link.ID); ok {
+		t.Fatal("crash journal not atomically consumed")
+	}
+	receipt, ok := clean.FindRemovalReceipt(link.ID)
+	if !ok || receipt.Retired || receipt.WSSLink != link || receipt.WSSFiles.VerifyLink(link) != nil {
+		t.Fatal("exact original WSS issuance-time retirement receipt missing")
+	}
+	if host.applyCount != 2 {
+		t.Fatal("vacancy-only committed Remove mutated the host")
+	}
+	if err := engine.RetireWSSCredential(ctx, link.ID); err != nil {
+		t.Fatalf("failed to consume original durable credential receipt: %v", err)
 	}
 }
 
@@ -294,6 +326,7 @@ func TestWSSInterruptedRemoveDoesNotBlockIndependentGREBootRestore(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	engine.SetWSSRetirementStore(fakeWSSIssuance{})
 	wss.store = store
 	wssLink := journalTestLink(t)
 	greLink := linkFor(t, "gre-independent", "10.80.30.0/31", "10.80.30.1/31")

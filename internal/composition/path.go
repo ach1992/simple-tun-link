@@ -49,7 +49,8 @@ const (
 // Carrier is endpoint-local, comparable and entirely public/secret-free.
 // CredentialOwner binds an out-of-band protected per-Link TLS identity; it is
 // NOT a credential, file path, arbitrary executable, CA material or authority
-// to start an external process. None of this is yet a public Link JSON schema.
+// to start an external process. The runtime WSS Link JSON contract is
+// explicitly bounded to WireGuard/WSS and versioned separately.
 type Carrier struct {
 	Kind            Kind
 	Role            Role

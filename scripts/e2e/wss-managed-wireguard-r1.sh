@@ -26,22 +26,28 @@ if [[ "${1:-}" != --inside && "${1:-}" != --nsroot ]]; then
   # Always stage the exact source-tracked disposable supervisor. Never rely
   # on a stale, untracked prior lab copy as an acceptance dependency.
   install -m 0755 "$repo/scripts/e2e/wss-r1-supervisor.py" "$lab/bin/shims/systemd_shim.py"
-  if [[ ${STL_WSS_R2_CRASH_TEST:-0} == 1 ]]; then
+  if [[ ${STL_WSS_R2_CRASH_TEST:-0} == 1 || -n "${STL_WSS_R2_AMBIGUOUS_TEST:-}" || -n "${STL_WSS_R2_REMOVE_CRASH_TEST:-}" ]]; then
     # All effects stay in disposable rootless namespaces. Do not override a
     # foreign executable: the staging dir is task-owned and non-shared.
     if [[ -e "$lab/bin/shims/nft" || -L "$lab/bin/shims/nft" ]]; then
       [[ -f "$lab/bin/shims/nft" && ! -L "$lab/bin/shims/nft" &&
          $(stat -c %u "$lab/bin/shims/nft") == $(id -u) &&
-         $(stat -c %a "$lab/bin/shims/nft") == 755 ]] &&
-         cmp -s "$lab/bin/shims/nft" "$repo/scripts/e2e/wss-r2-nft-crash.py" || {
+         $(head -n 2 "$lab/bin/shims/nft" | tail -n 1) == '"""Disposable namespace-only crash injection at the FIRST successful nft' ]] || {
            echo "foreign nft test executable; refusing to overwrite" >&2; exit 2;
          }
-    else
-      install -m 0755 "$repo/scripts/e2e/wss-r2-nft-crash.py" "$lab/bin/shims/nft"
+    fi
+    install -m 0755 "$repo/scripts/e2e/wss-r2-nft-crash.py" "$lab/bin/shims/nft"
+    if [[ $(printenv STL_WSS_R2_AMBIGUOUS_TEST || :) == kernel-crash ]]; then
+       install -m 0755 "$repo/scripts/e2e/wss-r2-wg-crash.py" "$lab/bin/shims/wg"
     fi
   fi
 
 
+  if [[ $(printenv STL_WSS_R2_DRIFT_TEST || :) == legacy ]];then
+    for name in iptables-legacy-save ip6tables-legacy-save;do
+      install -m 0755 "$repo/scripts/e2e/wss-r2-legacy-drift.py" "$lab/bin/shims/$name"
+    done
+  fi
   rm -rf -- "$lab/alpha-state" "$lab/beta-state" "$lab/alpha/runtime" "$lab/beta/runtime"
   mkdir -p "$lab/run-netns" "$lab/alpha" "$lab/beta"
   readlink /proc/self/ns/net > "$lab/host-ns-id"
@@ -155,6 +161,47 @@ invoke(){
     exec /usr/local/bin/stl-lab -test.run ^TestWSSLabCLI$ -test.v=false
   ' _ "$lab/$side-state"
 }
+if [[ -n "${STL_WSS_R2_AMBIGUOUS_TEST:-}" ]]; then
+  case "$STL_WSS_R2_AMBIGUOUS_TEST" in
+    nft-error|nft-timeout|nft-cancel|helper-error|helper-timeout|helper-cancel|helper-crash|kernel-crash) ;;
+    *) echo "invalid isolated fault mode" >&2; exit 2;;
+  esac
+  kind=$STL_WSS_R2_AMBIGUOUS_TEST
+  echo "INJECT DISPATCHED-THEN-ERROR: $kind"
+  if invoke alpha link create-wss --stdin --output /var/lib/stl-r1-state/handoff/receiver.json < "$lab/alpha/create.json" > "$lab/alpha/ambiguous-effect.log" 2>&1;then
+    echo "Unexpected success after injected command failure" >&2;exit 1
+  fi
+  id=lnk_0123456789abcdef0123456789abcdef
+  guard=$(python3 -c 'import hashlib;print("stlwss_"+hashlib.sha256(b"lnk_0123456789abcdef0123456789abcdef").hexdigest()[:16])')
+  jq -e '.links|length==0' "$lab/alpha-state/state.json" >/dev/null
+  jq -e '(.wss_crash_operations|length)==1 and .wss_crash_operations[0].operation=="ensure"' "$lab/alpha-state/state.json" >/dev/null
+  ip netns exec alpha /usr/sbin/nft -j list table inet "$guard" >/dev/null
+  if [[ "$kind" == helper-* ]];then
+    ip netns exec alpha ip link show stlwg0123456789 >/dev/null
+    export STL_R1_SIDE_ROOT="$lab/alpha"
+    systemctl show "stl-wss-0123456789abcdef0123456789abcdef.service" | grep -q '^LoadState=loaded'
+    echo "DENY_PASS AMBIGUOUS_HELPER_REMAINS_WITH_NFT_PROTECTION"
+  elif [[ "$kind" == kernel-crash ]];then
+    ip netns exec alpha ip link show stlwg0123456789 >/dev/null
+    echo "DENY_PASS CRASH_AFTER_REAL_KERNEL_WG_CHANGE_RETAINS_JOURNAL_AND_GUARD"
+  else
+    if ip netns exec alpha ip link show stlwg0123456789 >/dev/null 2>&1;then
+      echo "kernel WG created despite uncertain nft guard" >&2;exit 1
+    fi
+    echo "DENY_PASS AMBIGUOUS_NFT_GUARD_NOT_DELETED"
+  fi
+  jq -c '{"schema_version":3,"link":.wss_crash_operations[0].intent}' "$lab/alpha-state/state.json" > "$lab/alpha/ambiguous-retry.json"
+  if invoke alpha link ensure --stdin < "$lab/alpha/ambiguous-retry.json" > "$lab/alpha/ambiguous-retry.log" 2>&1;then
+    echo "replayed uncertain WSS mutation" >&2;exit 1
+  fi
+  if invoke alpha link reconcile-wss-vacant "$id" --confirm "$id" > "$lab/alpha/ambiguous-clear.log" 2>&1;then
+    echo "live orphan was adopted by vacancy reconciliation" >&2;exit 1
+  fi
+  ip netns exec alpha /usr/sbin/nft -j list table inet "$guard" >/dev/null
+  echo "SUCCESS AMBIGUOUS_WSS_HOST_EFFECT_PRESERVED_AND_JOURNALED: $kind"
+  exit 0
+fi
+
 if [[ ${STL_WSS_R2_CRASH_TEST:-0} == 1 ]]; then
   echo "WSS R2: INJECT HARD CRASH AFTER REAL NFT GUARD CREATION, BEFORE STATE COMMIT"
   export STL_WSS_R2_CRASH_AFTER_GUARD=1
@@ -190,6 +237,52 @@ test -f "$lab/alpha-state/handoff/receiver.json"
 invoke beta link preview-wss --stdin --json < "$lab/alpha-state/handoff/receiver.json" | tee "$lab/beta/preview.json"
 confirm=$(grep -m1 '^{' "$lab/beta/preview.json" | jq -r .confirmation_sha256)
 invoke beta link import-wss --stdin --confirm "$confirm" < "$lab/alpha-state/handoff/receiver.json"
+
+if [[ -n "$(printenv STL_WSS_R2_DRIFT_TEST || :)" ]];then
+  mode=$STL_WSS_R2_DRIFT_TEST
+  case "$mode" in firewall|legacy|unit) ;; *) echo "unsupported drift mode" >&2;exit 2;;esac
+  echo "WSS R2 EXISTING GUARD DRIFT INJECTION: $mode"
+  jq -c '{"schema_version":3,"link":.links[0].desired}' "$lab/alpha-state/state.json" > "$lab/alpha/drift-ensure.json"
+  case "$mode" in
+    firewall)
+      ip netns exec alpha /usr/sbin/nft -f - <<'NFT'
+create table inet foreign_pre_wss
+create chain inet foreign_pre_wss early_input { type filter hook input priority -350; policy accept; }
+add rule inet foreign_pre_wss early_input meta l4proto udp counter accept
+NFT
+      ;;
+    legacy) export STL_WSS_R2_LEGACY_DRIFT=1 ;;
+    unit)
+      python3 - "$lab/alpha/runtime/stl-wss-0123456789abcdef0123456789abcdef.service.json" <<'PYTHON'
+import json,sys
+p=sys.argv[1]
+d=json.load(open(p))
+d["properties"]["PrivateTmp"]="no"
+with open(p,"w") as fp:json.dump(d,fp)
+PYTHON
+      ;;
+  esac
+  if invoke alpha link ensure --stdin <"$lab/alpha/drift-ensure.json" >"$lab/alpha/drift-ensure-denied.log" 2>&1;then
+    echo "existing WSS guard bypassed foreign host drift" >&2;exit 1
+  fi
+  if invoke alpha link restore --all >"$lab/alpha/drift-restore-denied.log" 2>&1;then
+    echo "WSS boot restore bypassed foreign host drift" >&2;exit 1
+  fi
+  export STL_R1_SIDE_ROOT="$lab/alpha"
+  if [[ "$mode" == firewall ]];then
+    ip netns exec alpha /usr/sbin/nft -j list table inet foreign_pre_wss >/dev/null
+    ip netns exec alpha /usr/sbin/nft delete table inet foreign_pre_wss
+  elif [[ "$mode" == legacy ]];then
+    unset STL_WSS_R2_LEGACY_DRIFT
+  else
+    systemctl show stl-wss-0123456789abcdef0123456789abcdef.service | grep -q '^PrivateTmp=no'
+  fi
+  guard=$(python3 -c 'import hashlib;print("stlwss_"+hashlib.sha256(b"lnk_0123456789abcdef0123456789abcdef").hexdigest()[:16])')
+  ip netns exec alpha /usr/sbin/nft -j list table inet "$guard" >/dev/null
+  echo "DENY_PASS EXISTING_GUARD_FIREWALL_OR_UNIT_DRIFT: $mode"
+  exit 0
+fi
+
 echo "INTERFACES:"
 ip netns exec alpha ip -brief addr
 ip netns exec beta ip -brief addr
@@ -260,10 +353,78 @@ kill -9 "$crash_pid"
 sleep 0.15
 [[ -f $crash_unit ]] || { echo "expected a failed-but-loaded transient unit"; exit 1; }
 echo "WSS REMOVE AFTER FAILED HELPER:"
+if [[ -n "$(printenv STL_WSS_R2_REMOVE_CRASH_TEST || :)" ]];then
+  case "$STL_WSS_R2_REMOVE_CRASH_TEST" in
+    stop|guard) ;;
+    *) echo "unsupported isolated Remove crash point";exit 2;;
+  esac
+  point=$STL_WSS_R2_REMOVE_CRASH_TEST
+  export STL_R1_SIDE_ROOT="$lab/alpha"
+  echo "WSS R2: CRASH DURING REMOVE AT $point"
+  id=lnk_0123456789abcdef0123456789abcdef
+  if invoke alpha link remove "$id" --confirm "$id" > "$lab/alpha/remove-hard-crash.log" 2>&1;then
+    echo "interrupted WSS Remove unexpectedly completed";exit 1
+  fi
+  jq -e '(.links|length)==1 and .wss_crash_operations[0].operation=="remove" and .wss_crash_operations[0].had_committed_link==true' "$lab/alpha-state/state.json" >/dev/null
+  if invoke alpha link remove "$id" --confirm "$id" > "$lab/alpha/remove-retry-denied.log" 2>&1;then
+    echo "replayed ambiguous WSS Remove";exit 1
+  fi
+  if invoke alpha link reconcile-wss-vacant "$id" --confirm "$id" > "$lab/alpha/remove-vacancy-denied.log" 2>&1;then
+    echo "vacancy-only recovery erased committed WSS Remove history";exit 1
+  fi
+  if [[ "$point" == stop ]];then
+    if invoke alpha link reconcile-wss-removed "$id" --confirm "$id" > "$lab/alpha/stop-vacancy-denied.log" 2>&1;then
+      echo "completed Remove while live kernel WG and ingress guard remain";exit 1
+    fi
+    ip netns exec alpha ip link show stlwg0123456789 >/dev/null
+    guard=$(python3 -c 'import hashlib;print("stlwss_"+hashlib.sha256(b"lnk_0123456789abcdef0123456789abcdef").hexdigest()[:16])')
+    ip netns exec alpha /usr/sbin/nft -j list table inet "$guard" >/dev/null
+  else
+    if ip netns exec alpha ip link show stlwg0123456789 >/dev/null 2>&1;then
+      echo "kernel WG lingered after final remove phase";exit 1
+    fi
+    invoke alpha link reconcile-wss-removed "$id" --confirm "$id"
+    jq -e '(.links|length)==0 and (.wss_crash_operations//[]|length)==0 and (.removal_receipts|length)==1 and (.removal_receipts[0].retired//false)==false' "$lab/alpha-state/state.json" >/dev/null
+    invoke alpha link retire-wss "$id" --confirm "$id"
+    jq -e '.removal_receipts[0].retired==true' "$lab/alpha-state/state.json" >/dev/null
+    test ! -e "$lab/alpha-state/credentials/wss/$id"
+    echo "SUCCESS EXACT_HOST_VACANT_COMMITTED_REMOVE_AND_ORIGINAL_CREDENTIAL_RETIREMENT"
+  fi
+  echo "SUCCESS HARD_CRASH_COMMITTED_WSS_REMOVE_JOURNAL_QUARANTINE: $point"
+  exit 0
+fi
+
 echo "WSS SCOPED REMOVAL:"
 id=lnk_0123456789abcdef0123456789abcdef
+# This is an isolated, test-owned noncredential file to force a committed
+# Remove receipt with pending retirement. Never touch a real host State.
+alpha_unit="$lab/alpha/runtime/stl-wss-0123456789abcdef0123456789abcdef.service.json"
+alpha_saved="$lab/alpha/test-only-original-transient-unit.json"
+cp -- "$alpha_unit" "$alpha_saved"
+test_owned_blocker="$lab/alpha-state/credentials/wss/$id/owned-test-retirement-blocker"
+printf 'isolated-test-only\n' > "$test_owned_blocker"
+chmod 0600 "$test_owned_blocker"
 invoke beta link remove "$id" --confirm "$id"
-invoke alpha link remove "$id" --confirm "$id"
+if invoke alpha link remove "$id" --confirm "$id" > "$lab/alpha/pending-retirement-expected.log" 2>&1;then
+    echo "FAIL: test-only unexpected private file did not block immediate credential retirement" >&2;exit 1
+fi
+jq -e '(.links|length)==0 and (.removal_receipts|length)==1 and (.removal_receipts[0].retired//false)==false' "$lab/alpha-state/state.json" >/dev/null
+test -d "$lab/alpha-state/credentials/wss/$id"
+rm -- "$test_owned_blocker"
+test ! -e "$alpha_unit"
+python3 - "$alpha_saved" "$alpha_unit" <<'PYTHON'
+import json,sys
+d=json.load(open(sys.argv[1]))
+d["pid"]=-1
+with open(sys.argv[2],"w") as f:json.dump(d,f)
+PYTHON
+chmod 0600 "$alpha_unit"
+if invoke alpha link retire-wss "$id" --confirm "$id" > "$lab/alpha/failed-loaded-retire-denied.log" 2>&1;then
+    echo "FAIL: failed-but-loaded exact helper permitted credential retirement" >&2;exit 1
+fi
+test -d "$lab/alpha-state/credentials/wss/$id"
+rm -- "$alpha_unit"
+echo "DENY_PASS FAILED_BUT_LOADED_HELPER_BLOCKS_PENDING_CREDENTIAL_RETIREMENT"
 if ip netns exec alpha ip link show stlwg0123456789 >/dev/null 2>&1 ||
   ip netns exec beta ip link show stlwg0123456789 >/dev/null 2>&1; then
    echo "FAILED WG interface cleanup" >&2; exit 1

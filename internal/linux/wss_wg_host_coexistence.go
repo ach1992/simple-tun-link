@@ -12,7 +12,7 @@ import (
 )
 
 // WSSWGFirewallEvidence is a point-in-time, read-only host firewall inventory
-// for the NON-RUNNABLE WSS/WireGuard ingress design. The future caller must
+// for the candidate STL-managed WSS/WireGuard ingress. The future caller must
 // obtain successful, bounded readbacks of:
 //   - nft -j list ruleset
 //   - iptables -V and ip6tables -V
@@ -30,14 +30,33 @@ type WSSWGFirewallEvidence struct {
 }
 
 // CheckWSSWGFirewallCoexistence rejects known and unknown host firewall
-// interference with the proposed *new* per-Link WG ingress guard. A nil
+// interference with the requested per-Link WG ingress guard. A nil
 // error means only that the supplied snapshots exhibit no classified
 // conflict. It does NOT grant activation, prove effective packet isolation,
 // certify snapshot freshness, reserve ports, or establish table ownership.
-// A future Engine caller must coordinate resource locks, a durable journal,
+// The owning Engine coordinates resource locks and a durable journal,
 // actual host capabilities, exclusive apply, readback, drift, compensation
 // and independent Owner security/host-effects approval.
 func (p WSSWGIngressPlan) CheckWSSWGFirewallCoexistence(e WSSWGFirewallEvidence) error {
+	return p.checkWSSWGFirewallCoexistence(e, false)
+}
+
+// Existing-guard admission never skips host-wide inspection. The complete
+// ruleset must still contain exactly our verified guard; only that precise
+// table's rules may be excluded from foreign-hook analysis. Names/markers
+// alone do not establish ownership: callers must separately hold committed
+// exact owner claims before selecting this path.
+func (p WSSWGIngressPlan) CheckWSSWGFirewallCoexistenceWithOwnedGuard(e WSSWGFirewallEvidence) error {
+	return p.checkWSSWGFirewallCoexistence(e, true)
+}
+func (p WSSWGIngressPlan) checkWSSWGFirewallCoexistence(e WSSWGFirewallEvidence, existing bool) error {
+	if existing {
+		filtered, err := p.filterVerifiedWSSWGOwnGuard(e.NFTRuleset)
+		if err != nil {
+			return err
+		}
+		e.NFTRuleset = filtered
+	}
 	if err := p.CheckWSSWGNFTCoexistence(e.NFTRuleset); err != nil {
 		return err
 	}
@@ -129,6 +148,12 @@ func inspectWSSWGLegacySave(saved []byte) error {
 // host under its own admission locks and durable intent before any effects.
 // The trusted caller must use a trusted execution PATH/binary provenance.
 func (p WSSWGIngressPlan) ProbeWSSWGFirewallCoexistence(ctx context.Context, runner BoundedRunner) error {
+	return p.probeWSSWGFirewallCoexistence(ctx, runner, false)
+}
+func (p WSSWGIngressPlan) ProbeWSSWGFirewallCoexistenceWithOwnedGuard(ctx context.Context, runner BoundedRunner) error {
+	return p.probeWSSWGFirewallCoexistence(ctx, runner, true)
+}
+func (p WSSWGIngressPlan) probeWSSWGFirewallCoexistence(ctx context.Context, runner BoundedRunner, existing bool) error {
 	if err := p.validate(); err != nil {
 		return err
 	}
@@ -172,6 +197,9 @@ func (p WSSWGIngressPlan) ProbeWSSWGFirewallCoexistence(ctx context.Context, run
 	// from a missing/failed legacy snapshot in the pure verifier.
 	e.LegacySaveV4 = append([]byte{}, e.LegacySaveV4...)
 	e.LegacySaveV6 = append([]byte{}, e.LegacySaveV6...)
+	if existing {
+		return p.CheckWSSWGFirewallCoexistenceWithOwnedGuard(e)
+	}
 	return p.CheckWSSWGFirewallCoexistence(e)
 }
 
@@ -206,6 +234,11 @@ func safeWSSWGReadbackFailure(stage, executable string, err error) error {
 // nft JSON identifiers: rejecting them before encoding/json v1 decoding also
 // prevents Unicode simple-fold aliases from hiding security-relevant fields.
 // UTF-8 field values remain valid. Input size and recursion depth are bounded.
+// ValidateWSSWGJSONMembers provides the same strict, bounded parser for
+// table-inventory readback. A duplicate/case-alias JSON member never
+// establishes absence or ownership.
+func ValidateWSSWGJSONMembers(raw []byte) error { return checkWSSWGUniqueJSONMembers(raw) }
+
 func checkWSSWGUniqueJSONMembers(raw []byte) error {
 	d := json.NewDecoder(bytes.NewReader(raw))
 	if err := walkWSSWGJSON(d, 0); err != nil {
@@ -300,6 +333,68 @@ func wssWGChainKey(family, table, name string) string {
 // Rejecting a chain is deliberately conservative: it needs an explicit
 // compatibility review, not a global flush, override or foreign adoption.
 // Common later-priority INPUT ACCEPT rules cannot bypass the earlier DROP.
+// filterVerifiedWSSWGOwnGuard removes only the structurally exact,
+// complete own table from host-policy analysis. The included nft ruleset
+// must independently identify all three objects; if any are missing,
+// altered or duplicated the entire admission fails closed.
+func (p WSSWGIngressPlan) filterVerifiedWSSWGOwnGuard(raw []byte) ([]byte, error) {
+	if len(raw) == 0 || len(raw) > 8<<20 {
+		return nil, fmt.Errorf("missing bounded WSS host ruleset")
+	}
+	if err := checkWSSWGUniqueJSONMembers(raw); err != nil {
+		return nil, err
+	}
+	var dump wssNFTDump
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&dump); err != nil || dump.Nftables == nil {
+		return nil, fmt.Errorf("invalid WSS full ruleset")
+	}
+	if err := dec.Decode(new(any)); err != io.EOF {
+		return nil, fmt.Errorf("trailing WSS full ruleset")
+	}
+	remaining := wssNFTDump{Nftables: []map[string]json.RawMessage{}}
+	own := wssNFTDump{Nftables: []map[string]json.RawMessage{}}
+	for _, item := range dump.Nftables {
+		if len(item) != 1 {
+			return nil, fmt.Errorf("ambiguous WSS nft ruleset object")
+		}
+		for kind, value := range item {
+			if kind == "metainfo" {
+				remaining.Nftables = append(remaining.Nftables, item)
+				own.Nftables = append(own.Nftables, item)
+				continue
+			}
+			matching := false
+			switch kind {
+			case "table", "chain", "rule":
+				var identity struct {
+					Family string `json:"family"`
+					Name   string `json:"name"`
+					Table  string `json:"table"`
+				}
+				if err := json.Unmarshal(value, &identity); err != nil {
+					return nil, fmt.Errorf("invalid WSS nft object identity")
+				}
+				matching = identity.Family == "inet" && (identity.Name == p.tableName() || identity.Table == p.tableName())
+			}
+			if matching {
+				own.Nftables = append(own.Nftables, item)
+			} else {
+				remaining.Nftables = append(remaining.Nftables, item)
+			}
+		}
+	}
+	ownRaw, err := json.Marshal(own)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.VerifyNFTJSON(ownRaw); err != nil {
+		return nil, fmt.Errorf("owned WSS guard differs in full host ruleset: %w", err)
+	}
+	return json.Marshal(remaining)
+}
+
 func (p WSSWGIngressPlan) CheckWSSWGNFTCoexistence(raw []byte) error {
 	if err := p.validate(); err != nil {
 		return err

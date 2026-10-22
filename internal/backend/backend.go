@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 
 	"github.com/ach1992/simple-tun-link/internal/domain"
 )
@@ -49,6 +50,11 @@ type Plan interface {
 // mutates state, it must return a non-nil Rollback even on a later error so the
 // engine can restore only that owned delta.
 type Rollback func(context.Context) error
+
+// ErrIndeterminateHostEffect marks an operation already dispatched to the
+// host whose result is not proven. The Engine must preserve all dependent
+// layers and its durable pre-effect journal: never run a partial rollback.
+var ErrIndeterminateHostEffect = errors.New("dispatched host mutation outcome unverified")
 
 // Backend is the minimum lifecycle boundary needed by the core engine. It is
 // private under internal/ and is not a dynamic/public plugin API. Validate runs
