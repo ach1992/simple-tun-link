@@ -315,6 +315,15 @@ did not create NEW objects after reboot.
    is idempotent; a subsequent re-arm in a different boot is refused.
    A checkpoint cannot be manufactured by CLI arguments, environment,
    uploaded evidence, empty WG/UDP observations, or operator text.
+   **After successfully arming, make an additional private, verified
+   backup of the now-checkpointed protected State**; a backup made
+   before arming does not contain the checkpoint and cannot by itself
+   authorize postboot reconciliation if restored. Protect access to
+   both backups and reconcile any intentional restoration under the
+   original recorded Owner maintenance plan. If the host had already
+   rebooted before any checkpoint was armed, the CLI cannot backdate
+   a lost boot identity: a further separately authorized full-kernel
+   reboot is required for this conservative manual route.
 3. **Separately approved full-host kernel reboot:** perform it using
    the Owner's established out-of-band change/rollback mechanism;
    STL intentionally offers **no reboot button or command**. A host

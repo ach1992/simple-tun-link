@@ -362,8 +362,9 @@ if [[ ${STL_WSS_R2_CRASH_TEST:-0} == 1 ]]; then
     ip netns exec alpha nft delete table inet "$guard"
     [[ -z "$(ip netns exec alpha wg show interfaces)" ]]
     original_boot=$(cat /proc/sys/kernel/random/boot_id)
-    simulated_boot="$lab/alpha/disposable-after-reboot-boot-id"
-    [[ ! -e "$simulated_boot" && ! -L "$simulated_boot" ]] || { echo "foreign test boot evidence" >&2;exit 2; }
+    # This synthetic root is a disposable private mount namespace.
+    # Never reuse a mutable shared lab filename across E2E runs.
+    simulated_boot=$(mktemp /tmp/stl-wss-guard-boot-XXXXXXXX)
     printf '%s\n' '22222222-2222-4222-8222-222222222222' > "$simulated_boot"
     mount --bind "$simulated_boot" /proc/sys/kernel/random/boot_id
     [[ $(cat /proc/sys/kernel/random/boot_id) != "$original_boot" ]]
@@ -770,8 +771,7 @@ if [[ -n "$(printenv STL_WSS_R2_REMOVE_CRASH_TEST || :)" ]];then
       echo "FAIL: original kernel WG still live when simulating reset" >&2; exit 1;
     fi
     original_boot=$(cat /proc/sys/kernel/random/boot_id)
-    simulated_boot="$lab/alpha/disposable-after-remove-boot-id"
-    [[ ! -e "$simulated_boot" && ! -L "$simulated_boot" ]] || { echo "foreign boot simulator" >&2;exit 2; }
+    simulated_boot=$(mktemp /tmp/stl-wss-remove-boot-XXXXXXXX)
     printf '%s\n' '22222222-2222-4222-8222-222222222222' > "$simulated_boot"
     mount --bind "$simulated_boot" /proc/sys/kernel/random/boot_id
     [[ $(cat /proc/sys/kernel/random/boot_id) != "$original_boot" ]]
