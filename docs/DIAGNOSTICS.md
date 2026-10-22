@@ -12,9 +12,13 @@ syntax see [CLI.md](CLI.md); for changing a saved Link see the
   public counters/identity, not remote packets.
 - `link diagnose <id>`: bounded probes **to the peer Link Address**
   and observed quality/MTU data, not a durable health guarantee.
-- `link diagnose --all [--timeout 10m] [--json]`: one stable
-  ordered inventory, independent time-local Link probes and explicit
-  observed/blocked/unknown/interrupted outcomes.
+- `link diagnose --all [--timeout 10m] [--parallel 1..4] [--json]`: one
+  stable ordered inventory, independent time-local Link probes and
+  explicit observed/blocked/unknown/interrupted outcomes. Default
+  parallelism is `1`; an operator may opt into up to four simultaneous
+  read-only backend observations/peer pings. The per-Link and overall
+  timeout contracts still apply, and the JSON schema/ordered output
+  do not depend on which Link finishes first.
 - `link throughput`: a separate, explicitly approved short TCP
   traffic test; not a default health check or a tunnel bandwidth cap.
 
