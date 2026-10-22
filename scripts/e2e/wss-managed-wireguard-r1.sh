@@ -200,6 +200,12 @@ if [[ -n "${STL_WSS_R2_AMBIGUOUS_TEST:-}" ]]; then
   ip netns exec alpha /usr/sbin/nft -j list table inet "$guard" >/dev/null
   echo "SUCCESS AMBIGUOUS_WSS_HOST_EFFECT_PRESERVED_AND_JOURNALED: $kind"
   if [[ $(printenv STL_WSS_R3_ORIGINAL_TEST || :) == 1 ]];then
+    # The deliberately failing external command was a ONE-TIME injected
+    # post-effect fault. Reattempt recovery in a new CLI invocation after
+    # that fault has ended; otherwise the test continually sabotages its
+    # own cleanup and cannot distinguish product recovery from a persistent
+    # broken nft/systemd binary.
+    unset STL_WSS_R2_AMBIGUOUS_TEST
     invoke alpha link reconcile-wss-original "$id" --confirm "$id"
     if invoke alpha link reconcile-wss-original "$id" --confirm "$id" > "$lab/alpha/original-repeat-denied.log" 2>&1;then
       echo "repeat recovery falsely found an original live journal" >&2;exit 1
