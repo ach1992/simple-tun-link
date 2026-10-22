@@ -95,6 +95,12 @@ func inspectLinkDiagnostic(ctx context.Context, link domain.Link, options runtim
 		return linkDiagnostic{report: m, mtu: m.MTU, quality: m.Quality,
 			rx: m.State.RXBytes, tx: m.State.TXBytes, counterUnit: "bytes",
 			handshakeUTC: m.State.LatestHandshakeUnix}, nil
+	case domain.BackendWireGuardWSS:
+		// A WSS Link is NOT interchangeable with Native WireGuard for
+		// generic DF/MTU probing. Its TLS carrier/guard/forwarding must
+		// be independently observed, without inventing active replies.
+		return linkDiagnostic{}, stlerr.New(stlerr.CodeUnsupported, "link_diagnose", string(link.ID), string(link.Backend),
+			"active WSS diagnosis is unavailable; use dedicated stl link diagnose-wss for read-only WSS and WireGuard status")
 	default:
 		return linkDiagnostic{}, stlerr.New(stlerr.CodeUnsupported, "link_diagnose", string(link.ID), string(link.Backend),
 			"active diagnosis is not implemented for this backend")

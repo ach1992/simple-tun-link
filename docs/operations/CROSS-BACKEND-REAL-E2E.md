@@ -71,7 +71,18 @@ merely compile or print a success-looking JSON response:
    malformed output, skipped packet stage or incomplete
    cleanup is **not acceptance**.
 
+The same existing two-namespace GRE Native/FOU/GUE fixture now also
+runs the opt-in `link diagnose --all --parallel 3 --timeout 60s --json`
+through the actual CLI dispatcher on **both** sides while all three
+owned kernel GRE Links carry real private-IP packets. Its exact, ordered
+three-Link output must show independently verified peer echo replies,
+interface counters, and no unknown/blocked entry; the test is not
+satisfied by a mocked observer or a healthy-looking exit alone.
+Parallel mode is still opt-in; this does not modify any Link or host
+firewall and does not prove physical WAN/provider behavior.
+
 The fixture emits packet/ownership markers including
+`GRE_THREE_LINK_PARALLEL_DIAGNOSE_REAL_KERNEL=PASS`,
 `SIX_SAME_PEER_GRE_NATIVE_FOU_GUE_WG_ESP_NATT=PASS`,
 `FOU_RECOVERY_PRESERVES_ESP_AND_NATT=PASS`,
 `REMOVE_ESP_PRESERVES_NATT_AND_GRE_WG=PASS`

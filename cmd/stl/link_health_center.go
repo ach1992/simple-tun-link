@@ -10,6 +10,8 @@ import (
 	"os/signal"
 	"slices"
 	"sort"
+	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -55,33 +57,50 @@ type healthLinkObservation struct {
 	LatestHandshakeUnix *int64  `json:"latest_handshake_unix,omitempty"`
 }
 
-func parseHealthCenterArgs(args []string) (jsonOutput bool, timeout time.Duration, ok bool) {
+// Diagnostic parallelism limits concurrent observer subprocesses, NOT
+// how many Links a user may configure. Default remains strictly serial for
+// existing automation, and an operator can opt into at most four probes.
+const maxHealthParallel = 4
+
+func parseHealthCenterArgs(args []string) (jsonOutput bool, timeout time.Duration, parallel int, ok bool) {
 	if len(args) < 2 || args[0] != "diagnose" || args[1] != "--all" {
-		return false, 0, false
+		return false, 0, 0, false
 	}
-	seenJSON, seenTimeout := false, false
+	parallel = 1
+	seenJSON, seenTimeout, seenParallel := false, false, false
 	for i := 2; i < len(args); i++ {
 		switch args[i] {
 		case "--json":
 			if seenJSON {
-				return false, 0, false
+				return false, 0, 0, false
 			}
 			seenJSON = true
 		case "--timeout":
 			if seenTimeout || i+1 >= len(args) {
-				return false, 0, false
+				return false, 0, 0, false
 			}
 			d, err := time.ParseDuration(args[i+1])
 			if err != nil || d <= 0 {
-				return false, 0, false
+				return false, 0, 0, false
 			}
 			timeout, seenTimeout = d, true
 			i++
+		case "--parallel":
+			if seenParallel || i+1 >= len(args) {
+				return false, 0, 0, false
+			}
+			count, err := strconv.Atoi(args[i+1])
+			if err != nil || count < 1 || count > maxHealthParallel ||
+				args[i+1] != strconv.Itoa(count) {
+				return false, 0, 0, false
+			}
+			parallel, seenParallel = count, true
+			i++
 		default:
-			return false, 0, false
+			return false, 0, 0, false
 		}
 	}
-	return seenJSON, timeout, true
+	return seenJSON, timeout, parallel, true
 }
 
 // healthCenterServices is a narrow deterministic test seam around the three
@@ -99,10 +118,10 @@ func linkDiagnoseAllCommand(args []string, stdout, stderr io.Writer, options *ru
 
 func linkDiagnoseAllWithServices(args []string, stdout, stderr io.Writer, options *runtimeOptions, services healthCenterServices) int {
 	jsonOutput := slices.Contains(args, "--json")
-	_, timeout, valid := parseHealthCenterArgs(args)
+	_, timeout, parallel, valid := parseHealthCenterArgs(args)
 	if !valid {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, "link_diagnose_all",
-			"usage: stl link diagnose --all [--timeout <duration>] [--json]")
+			"usage: stl link diagnose --all [--timeout <duration>] [--parallel <1..4>] [--json]")
 	}
 	// The operator's total budget and signal cancellation begin BEFORE
 	// loading inventory or preparing the diagnostic runtime. No probe gets
@@ -186,52 +205,8 @@ func linkDiagnoseAllWithServices(args []string, stdout, stderr io.Writer, option
 			return inspectLinkDiagnostic(ctx, link, options, 0)
 		}
 	}
-	for _, link := range links {
-		var check healthLinkCheck
-		switch {
-		case ctx.Err() != nil:
-			response.Outcome = "interrupted"
-			check = healthUnavailable(link, "diagnostic_interrupted",
-				"Batch diagnosis stopped before this Link could be observed.",
-				"Review current Link state and rerun the read-only check with a suitable --timeout.")
-		case link.Backend == domain.BackendIPsec && !hasOperationalIPsec(*options):
-			// Same condition, reason and machine action as per-Link status
-			// and diagnose; detailed read-only evidence lives in doctor.
-			check = healthBlocked(link, diagnostics.IPsecRuntimeNotRegisteredReason,
-				"IPsec operational runtime is unregistered. Run stl doctor ipsec to examine prerequisites without activation.",
-				ipsecDoctorNextStep)
-		case !runtimeAvailable:
-			check = healthUnavailable(link, "diagnostic_runtime_unavailable",
-				"Diagnostic runtime could not be initialized; no live observation was attempted.",
-				"Check host backend dependencies and local runtime availability without changing Link state.")
-		default:
-			// Independent bounded per-Link work; no global request timeout is
-			// imposed by default. Operators may configure an overall budget.
-			probeCtx, cancel := context.WithTimeout(ctx, diagnoseOperationTimeout)
-			measurement, problem := services.observe(probeCtx, link, *options)
-			probeErr := probeCtx.Err()
-			cancel()
-			// A late healthy-looking result cannot override an expired
-			// parent or child deadline, even if an adapter ignored ctx.
-			// After parent expiry every remaining Link stays unknown.
-			if ctx.Err() != nil {
-				response.Outcome = "interrupted"
-				check = healthUnavailable(link, "diagnostic_interrupted",
-					"Batch deadline expired while this Link was being observed; the outcome is unverified.",
-					"Recheck the Link after reviewing the batch --timeout; no repair was attempted.")
-			} else if probeErr != nil {
-				check = healthUnavailable(link, "diagnostic_interrupted",
-					"Per-Link observation deadline expired; the outcome is unverified.",
-					"Review Link status and repeat read-only diagnosis before considering any changes.")
-			} else if problem != nil {
-				check = healthDiagnosticFailure(link, problem)
-				if ctx.Err() != nil {
-					response.Outcome = "interrupted"
-				}
-			} else {
-				check = healthFromMeasurement(link, measurement)
-			}
-		}
+	checks := healthObserveAll(ctx, links, *options, runtimeAvailable, parallel, services.observe)
+	for _, check := range checks {
 		switch check.Status {
 		case "observed":
 			response.Observed++
@@ -367,4 +342,110 @@ func healthFromMeasurement(link domain.Link, measurement linkDiagnostic) healthL
 		check.Observed = observed
 		return check
 	}
+}
+
+func healthObserveOne(ctx context.Context, link domain.Link, options runtimeOptions, runtimeAvailable bool,
+	observe func(context.Context, domain.Link, runtimeOptions) (linkDiagnostic, error)) healthLinkCheck {
+	var check healthLinkCheck
+	switch {
+	case ctx.Err() != nil:
+		check = healthUnavailable(link, "diagnostic_interrupted",
+			"Batch diagnosis stopped before this Link could be observed.",
+			"Review current Link state and rerun the read-only check with a suitable --timeout.")
+	case link.Backend == domain.BackendWireGuardWSS:
+		// Managed WSS has an independent read-only helper/guard/WG status
+		// projection. The common active PMTU/ICMP adapter does not yet
+		// prove the WSS carrier's full identity and overhead; never
+		// synthesize peer reachability or invoke a native-WG probe here.
+		check = healthBlocked(link, "wss_active_diagnostics_not_implemented",
+			"Managed WSS Link requires its dedicated read-only helper, ingress guard and WireGuard inspection; no active peer probe was attempted.",
+			"Run stl link diagnose-wss LINK_ID --json for local WSS status; separately verify authenticated private peer traffic.")
+	case link.Backend == domain.BackendIPsec && !hasOperationalIPsec(options):
+		// Same condition, reason and machine action as per-Link status
+		// and diagnose; detailed read-only evidence lives in doctor.
+		check = healthBlocked(link, diagnostics.IPsecRuntimeNotRegisteredReason,
+			"IPsec operational runtime is unregistered. Run stl doctor ipsec to examine prerequisites without activation.",
+			ipsecDoctorNextStep)
+	case !runtimeAvailable:
+		check = healthUnavailable(link, "diagnostic_runtime_unavailable",
+			"Diagnostic runtime could not be initialized; no live observation was attempted.",
+			"Check host backend dependencies and local runtime availability without changing Link state.")
+	default:
+		// Independent bounded per-Link work; no global request timeout is
+		// imposed by default. Operators may configure an overall budget.
+		probeCtx, cancel := context.WithTimeout(ctx, diagnoseOperationTimeout)
+		measurement, problem := observe(probeCtx, link, options)
+		probeErr := probeCtx.Err()
+		cancel()
+		// A late healthy-looking result cannot override an expired
+		// parent or child deadline, even if an adapter ignored ctx.
+		// After parent expiry every remaining Link stays unknown.
+		if ctx.Err() != nil {
+			check = healthUnavailable(link, "diagnostic_interrupted",
+				"Batch deadline expired while this Link was being observed; the outcome is unverified.",
+				"Recheck the Link after reviewing the batch --timeout; no repair was attempted.")
+		} else if probeErr != nil {
+			check = healthUnavailable(link, "diagnostic_interrupted",
+				"Per-Link observation deadline expired; the outcome is unverified.",
+				"Review Link status and repeat read-only diagnosis before considering any changes.")
+		} else if problem != nil {
+			check = healthDiagnosticFailure(link, problem)
+		} else {
+			check = healthFromMeasurement(link, measurement)
+		}
+	}
+	return check
+}
+
+// The snapshot is immutable for this run. Every observer is read-only and
+// owns a separate per-Link context; no worker writes report counters or
+// reorders output. The fixed worker ceiling bounds concurrent host probes.
+func healthObserveAll(ctx context.Context, links []domain.Link, options runtimeOptions,
+	runtimeAvailable bool, parallel int,
+	observe func(context.Context, domain.Link, runtimeOptions) (linkDiagnostic, error)) []healthLinkCheck {
+	checks := make([]healthLinkCheck, len(links))
+	if parallel <= 1 || len(links) < 2 {
+		for i, link := range links {
+			checks[i] = healthObserveOne(ctx, link, options, runtimeAvailable, observe)
+		}
+		return checks
+	}
+
+	jobs := make(chan int)
+	var workers sync.WaitGroup
+	for range min(parallel, len(links)) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for i := range jobs {
+				checks[i] = healthObserveOne(ctx, links[i], options, runtimeAvailable, observe)
+			}
+		}()
+	}
+	submitted := 0
+dispatch:
+	for i := range links {
+		// Under cancellation, no new external diagnostic subprocess starts.
+		if ctx.Err() != nil {
+			break
+		}
+		select {
+		case jobs <- i:
+			submitted++
+		case <-ctx.Done():
+			break dispatch
+		}
+	}
+	close(jobs)
+	workers.Wait()
+
+	// Explicitly mark every Link that was never submitted. No omitted
+	// identity or optimistic "healthy" result is allowed on a timed-out
+	// inventory, including when the previous Link ignored cancellation.
+	for i := submitted; i < len(links); i++ {
+		checks[i] = healthUnavailable(links[i], "diagnostic_interrupted",
+			"Batch diagnosis stopped before this Link could be observed.",
+			"Review current Link state and rerun the read-only check with a suitable --timeout.")
+	}
+	return checks
 }

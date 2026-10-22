@@ -14,6 +14,7 @@ import (
 
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	grebackend "github.com/ach1992/simple-tun-link/internal/backend/gre"
+	"github.com/ach1992/simple-tun-link/internal/diagnostics"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/managedmtu"
@@ -164,6 +165,14 @@ func TestGRENetnsE2E(t *testing.T) {
 		args = []string{"link", "status", string(id), "--json"}
 	case "diagnose":
 		args = []string{"link", "diagnose", string(id), "--json"}
+	case "parallel-health":
+		// The existing disposable three-GRE Link fixture gives this
+		// operator command authentic kernel identities and peer ICMP.
+		// No fake observer, new host privilege or mutable adapter is used.
+		if multiPeer {
+			t.Fatal("parallel health acceptance uses the three-mode two-peer fixture")
+		}
+		args = []string{"link", "diagnose", "--all", "--parallel", "3", "--timeout", "60s", "--json"}
 	case "remove":
 		args = []string{"link", "remove", string(id), "--confirm", string(id), "--json"}
 	case "list", "multi-list", "multi-survivor":
@@ -256,6 +265,39 @@ func TestGRENetnsE2E(t *testing.T) {
 		if result["interface_verified"] != true || result["connectivity"] != "not_measured" || result["gre_state"] == nil {
 			t.Fatalf("status must verify real GRE ownership without claiming traffic: %s", stdout.String())
 		}
+	case "parallel-health":
+		var batch healthCenterResponse
+		if err := json.Unmarshal(stdout.Bytes(), &batch); err != nil {
+			t.Fatalf("parallel real-kernel health JSON invalid: %v", err)
+		}
+		if batch.SchemaVersion != jsonSchemaVersion || batch.Operation != "link_diagnose_all" ||
+			batch.Outcome != "complete" || batch.Total != 3 || batch.Observed != 3 ||
+			batch.Unknown != 0 || batch.Blocked != 0 || len(batch.Checks) != 3 {
+			t.Fatalf("parallel real-kernel Link inventory incomplete: %+v", batch)
+		}
+		wantIDs := []domain.LinkID{
+			"lnk_11111111111111111111111111111111",
+			"lnk_22222222222222222222222222222222",
+			"lnk_33333333333333333333333333333333",
+		}
+		wantModes := []domain.Encapsulation{domain.EncapNative, domain.EncapFOU, domain.EncapGUE}
+		for i, check := range batch.Checks {
+			if check.Link.ID != wantIDs[i] || check.Link.Backend != domain.BackendGRE ||
+				check.Link.Encapsulation != wantModes[i] ||
+				check.Status != "observed" || check.ReasonCode != "link_peer_replied" ||
+				check.Observed == nil || check.Observed.MTU.SelectedMTU < 1280 ||
+				check.Observed.Quality.Status != diagnostics.QualityMeasured ||
+				!check.Observed.Quality.Reachable ||
+				check.Observed.Quality.PacketsSent != diagnostics.DefaultQualitySamples ||
+				check.Observed.Quality.PacketsReceived < 1 ||
+				check.Observed.Quality.PacketsReceived > check.Observed.Quality.PacketsSent ||
+				check.Observed.CounterUnit != "packets" ||
+				check.Observed.RX == nil || check.Observed.TX == nil ||
+				*check.Observed.RX == 0 || *check.Observed.TX == 0 {
+				t.Fatalf("parallel real-kernel peer proof missing or Link order changed: index=%d check=%+v", i, check)
+			}
+		}
+		t.Log("GRE_THREE_LINK_PARALLEL_HEALTH_REAL_KERNEL=PASS")
 	case "diagnose":
 		quality, ok := result["quality"].(map[string]any)
 		if !ok || quality["reachable"] != true {

@@ -229,6 +229,15 @@ for selected_mode in native fou gue; do
 done
 echo "GRE_SAME_UNDERLAY_MULTI_LINK=PASS"
 
+# Use the existing three live kernel GRE Native/FOU/GUE Links and their
+# independent same-peer private IP traffic as end-to-end acceptance for
+# the opt-in bounded concurrent read-only health CLI. This runs in the
+# approved disposable namespace guest, not on an Agent/production host.
+select_mode native
+run_side a parallel-health
+run_side b parallel-health
+echo 'GRE_THREE_LINK_PARALLEL_DIAGNOSE_REAL_KERNEL=PASS'
+
 # Extend the SAME disposable two-namespace topology with IPIP acceptance.
 # This is a release-level cross-backend proof, not a parallel host networking
 # harness. Linux IPIP endpoint-pair lookup forbids simultaneous IPIP modes

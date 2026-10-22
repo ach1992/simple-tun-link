@@ -129,7 +129,7 @@ stl version [--json]
 stl link list [--json]
 stl link status <link-id> [--json]
 stl link diagnose <link-id> [--mtu <bytes>] [--json]
-stl link diagnose --all [--timeout <duration>] [--json]
+stl link diagnose --all [--timeout <duration>] [--parallel <1..4>] [--json]
 stl link throughput <link-id> --confirm <link-id> [--seconds <1..10>] [--json]
 
 stl link preview --stdin [--json]
@@ -350,7 +350,13 @@ path measurement is available. `link diagnose --all` uses one
 stable, ordered saved-State inventory and independent Link checks;
 `--timeout` accepts a positive Go duration such as `10m`
 and starts before inventory loading. Each Link has a bounded
-probe budget; there is **no arbitrary Link-count cap**.
+probe budget; there is **no arbitrary Link-count cap**. The optional
+`--parallel 1..4` (default `1`) observes up to four **independent**
+Links concurrently using the same saved-State snapshot and overall
+`--timeout`. This limits concurrent diagnostic subprocesses, **not**
+the number of Links. Results always remain sorted by Link ID regardless
+of completion order. More concurrent probes can increase short-lived
+host/network load; no Link/route/firewall/service is changed.
 If a run is interrupted, incomplete or unprocessed Links remain
 unknown. An interruption before trustworthy inventory produces an
 error, never a fabricated empty successful batch. The report
@@ -444,8 +450,14 @@ ping -I LOCAL_PRIVATE_IP PEER_PRIVATE_IP
 ~~~
 Diagnostics report Helper/Guard readiness, kernel WG handshake timestamp
 and transfer byte counts separately; process readiness alone cannot attest
-mTLS or application delivery. TCP/UDP/private ICMP should be tested before
-using the Link for workload routing. On a restarted host, the already
+mTLS or application delivery. The generic `link diagnose <id>` active
+PMTU/ICMP implementation is **not** yet WSS-carrier-aware, and the
+`link diagnose --all [--parallel 1..4]` health center marks managed WSS
+Links as **blocked**, reason `wss_active_diagnostics_not_implemented`,
+while independently checking supported native Links; neither command
+claims WSS reachability without a verified active carrier adapter.
+Use dedicated `link diagnose-wss` for local WSS status and separately
+test TCP/UDP/private ICMP before workload routing. On a restarted host, the already
 persisted Link can be reconciled through the existing Engine restore or a
 versioned desired-State v3 Ensure request. Never regenerate a WSS offer to
 resume an already allocated Link identity.
