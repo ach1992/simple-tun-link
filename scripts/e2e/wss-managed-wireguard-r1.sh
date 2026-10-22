@@ -9,6 +9,38 @@ else
 fi
 if [[ "${1:-}" != --inside && "${1:-}" != --nsroot ]]; then
   [[ $(id -u) != 0 ]] || { echo "Run as an unprivileged user (rootless network namespaces only)" >&2; exit 2; }
+  # This task has one reusable, mutable test fixture: rootless peers share
+  # private state folders, injected executables and /run/netns bind source.
+  # Serialize the ENTIRE launcher + nested namespace lifetime, not just
+  # individual test cases. Otherwise simultaneous jobs can replace each
+  # other's public fixtures and falsely fail in State or cross-clean peers.
+  [[ -d "$lab" && ! -L "$lab" && $(stat -c %u -- "$lab") == $(id -u) ]] || {
+    echo "WSS test fixture root is not an owned directory" >&2; exit 2;
+  }
+  lock="$lab/.wss-e2e.lock"
+  if [[ -L $lock || ( -e $lock && ( ! -f $lock || $(stat -c %u -- "$lock") != $(id -u) ) ) ]]; then
+    echo "WSS test fixture lock has foreign ownership/type" >&2; exit 2;
+  fi
+  ( umask 077; : >> "$lock" ) || { echo "WSS test fixture lock unavailable" >&2; exit 2; }
+  exec 9>>"$lock"
+  flock -n -x 9 || {
+    echo "WSS test fixture already owned by another run; no state was reset" >&2; exit 3;
+  }
+  # A SIGKILL before namespace cleanup can leave a namespace mount marker.
+  # Do not blindly delete files that might still have live mount consumers.
+  # A fresh, empty namespace scratch directory is required to begin.
+  if [[ -e "$lab/run-netns" || -L "$lab/run-netns" ]]; then
+    [[ -d "$lab/run-netns" && ! -L "$lab/run-netns" &&
+       $(stat -c %u -- "$lab/run-netns") == $(id -u) ]] || {
+      echo "WSS test namespace scratch has foreign ownership/type" >&2; exit 2;
+    }
+    marker=$(find "$lab/run-netns" -mindepth 1 -maxdepth 1 -print -quit) || {
+      echo "Cannot inspect WSS test namespace scratch" >&2; exit 2;
+    }
+    [[ -z $marker ]] || {
+      echo "WSS test namespace scratch is not empty; reconcile old test resources first" >&2; exit 3;
+    }
+  fi
   for file in "$lab/bin/wstunnel" "$lab/bin/stl-lab" "$lab/bin/wg-extract/usr/bin/wg"               "$lab/bin/iptables-extract/usr/sbin/xtables-nft-multi" "$lab/bin/shims/systemctl"; do
     [[ -f $file || -L $file ]] || { echo "Missing isolated test prerequisite: $file" >&2; exit 2; }
   done
@@ -147,8 +179,6 @@ mount -t tmpfs tmpfs /var/lib
 mkdir -m 0700 /var/lib/stl-r1-state
 export PATH="$lab/bin/shims:$lab/bin/wg-extract/usr/bin:$lab/bin/iptables-extract/usr/sbin:$PATH"
 export LD_LIBRARY_PATH="$lab/bin/iptables-extract/usr/lib/x86_64-linux-gnu"
-ip netns add alpha
-ip netns add beta
 cleanup(){
  for side in alpha beta; do
     for f in "$lab/$side"/runtime/*.json; do
@@ -161,6 +191,8 @@ cleanup(){
  ip netns delete beta 2>/dev/null || :
 }
 trap cleanup EXIT
+ip netns add alpha
+ip netns add beta
 ip link add veth-alpha type veth peer name veth-beta
 ip link set veth-alpha netns alpha
 ip link set veth-beta netns beta
