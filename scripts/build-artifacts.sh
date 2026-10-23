@@ -141,7 +141,13 @@ before running any privileged installer. SHA256SUMS from that same publisher,
 or the digest embedded in the .sh file, detects corruption but does NOT
 provide an independent publisher signature against a compromised account.
 Do not use anonymous mirrors or unverifiable repackaged installers.
-WSS/Paqet helpers are NOT included or approved for use.
+An OPTIONAL approved upstream wstunnel v11.0.0 archive may be placed beside
+this single-file installer. Explicit --with-wss on the SAME single-file
+installer command selects WSS; merely placing an optional archive has no
+effect. The canonical installer verifies the exact architecture-specific file, verifies both archive and extracted executable
+SHA-256 and installs it under the canonical installer-owned path.
+See docs/INSTALL.md for official download filename and mandatory trust checks.
+Other helpers (including Paqet) are NOT included in STL.
 EOF_LOCAL
   (
     cd "$package_dir"

@@ -3,6 +3,7 @@ package state
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,10 +14,12 @@ import (
 	"strings"
 
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/hostidentity"
 )
 
 const (
-	SchemaVersion       = 3
+	SchemaVersion       = 4
+	preWSSSchemaVersion = 3
 	legacySchemaVersion = 1
 	preMTUSchemaVersion = 2
 	DefaultRoot         = "/var/lib/simple-tun-link"
@@ -37,6 +40,21 @@ func (e *PublicationError) Unwrap() error { return e.Cause }
 type LinkRecord struct {
 	Desired        domain.Link            `json:"desired"`
 	OwnedResources []domain.ResourceClaim `json:"owned_resources,omitempty"`
+	WSSFiles       WSSFileIdentity        `json:"wss_file_digests,omitzero"`
+	WSSOrigin      string                 `json:"wss_original_object_nonce,omitempty"`
+	// Attested birth/current kernel generation of the original WSS object.
+	// Empty values in pre-provenance or untrusted environments are readable,
+	// but cannot authorize recreation or retirement from local absence.
+	WSSKernelBootID     string `json:"wss_kernel_boot_id,omitempty"`
+	WSSKernelBootSource string `json:"wss_kernel_boot_source,omitempty"`
+	// A single-use, recovery-scoped old-kernel extinction witness from a
+	// trusted manual Arm + Reconcile. It is NOT original birth provenance.
+	WSSColdBootRestore WSSColdBootRestore `json:"wss_cold_boot_restore,omitzero"`
+	// An explicit operator transition after independent replacement. This
+	// retains the ORIGINAL committed State, ownership and private issuance,
+	// but permanently bars automatic Restore and ordinary Ensure. Never
+	// infer that an original kernel object was deleted from this marker.
+	WSSSupersededBy domain.LinkID `json:"wss_superseded_by,omitempty"`
 }
 
 type Snapshot struct {
@@ -50,6 +68,7 @@ type Snapshot struct {
 	IPsecXFRMOperations    []IPsecXFRMOperation    `json:"ipsec_xfrm_operations,omitempty"`
 	IPsecRemovalReceipts   []IPsecRemovalReceipt   `json:"ipsec_removal_receipts,omitempty"`
 	RemovalReceipts        []RemovalReceipt        `json:"removal_receipts,omitempty"`
+	WSSCrashOperations     []WSSCrashOperation     `json:"wss_crash_operations,omitempty"`
 }
 
 func EmptySnapshot() Snapshot {
@@ -120,6 +139,12 @@ func (s *Snapshot) normalize() {
 		return s.IPsecRemovalReceipts[i].LinkID < s.IPsecRemovalReceipts[j].LinkID
 	})
 	sort.Slice(s.RemovalReceipts, func(i, j int) bool { return s.RemovalReceipts[i].LinkID < s.RemovalReceipts[j].LinkID })
+	for i := range s.WSSCrashOperations {
+		s.WSSCrashOperations[i].Resources = normalizeClaims(s.WSSCrashOperations[i].Resources)
+	}
+	sort.Slice(s.WSSCrashOperations, func(i, j int) bool {
+		return s.WSSCrashOperations[i].Intent.ID < s.WSSCrashOperations[j].Intent.ID
+	})
 }
 
 type Store interface {
@@ -187,12 +212,36 @@ func (s *FileStore) Update(ctx context.Context, mutate func(*Snapshot) error) er
 	if err != nil {
 		return err
 	}
+	// Already committed logical supersession is immutable for the life of
+	// its original Link record. Another writer cannot silently reenable
+	// automatic WSS resurrection by rewriting the marker.
+	originalSupersessions := make(map[domain.LinkID]domain.LinkID)
+	for _, record := range snapshot.Links {
+		if record.WSSSupersededBy != "" {
+			originalSupersessions[record.Desired.ID] = record.WSSSupersededBy
+		}
+	}
 	if err := mutate(&snapshot); err != nil {
 		return err
 	}
 	snapshot.normalize()
 	if err := validateSnapshot(snapshot); err != nil {
 		return err
+	}
+	for id, replacement := range originalSupersessions {
+		if retained, found := snapshot.Find(id); found {
+			if retained.WSSSupersededBy != replacement {
+				return fmt.Errorf("committed WSS supersession cannot be revoked or retargeted")
+			}
+		} else {
+			// Removing the old original is allowed only through the existing
+			// exact-provenance Engine Remove and its atomic retirement receipt.
+			receipt, found := snapshot.FindRemovalReceipt(id)
+			if !found || receipt.Backend != domain.BackendWireGuardWSS ||
+				!ValidWSSOriginalTerminationProof(receipt.WSSOriginalTermination) {
+				return fmt.Errorf("superseded WSS original removed without termination receipt")
+			}
+		}
 	}
 	return s.writeAtomic(snapshot)
 }
@@ -238,6 +287,11 @@ func (s *FileStore) loadUnlocked() (Snapshot, error) {
 		}
 		return Snapshot{}, fmt.Errorf("decode state trailing data: %w", err)
 	}
+	if snapshot.SchemaVersion <= preWSSSchemaVersion {
+		if err := rejectLegacyWSSFields(raw); err != nil {
+			return Snapshot{}, err
+		}
+	}
 	if err := rejectLegacyMTUFields(raw, snapshot.SchemaVersion); err != nil {
 		return Snapshot{}, err
 	}
@@ -250,6 +304,42 @@ func (s *FileStore) loadUnlocked() (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	return snapshot, nil
+}
+
+// Older State schemas may not gain WSS host effects through JSON whitespace,
+// alternate key casing, or nested Link option fields during migration.
+// Detect keys via actual JSON structure instead of a fragile raw substring.
+func rejectLegacyWSSFields(raw []byte) error {
+	var document any
+	if err := json.Unmarshal(raw, &document); err != nil {
+		return fmt.Errorf("inspect legacy WSS State: %w", err)
+	}
+	var contains func(any) bool
+	contains = func(value any) bool {
+		switch current := value.(type) {
+		case map[string]any:
+			for key, child := range current {
+				if strings.EqualFold(key, "wss") ||
+					strings.EqualFold(key, "wss_crash_operations") {
+					return true
+				}
+				if contains(child) {
+					return true
+				}
+			}
+		case []any:
+			for _, child := range current {
+				if contains(child) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if contains(document) {
+		return fmt.Errorf("legacy State cannot carry WSS configuration or host effects")
+	}
+	return nil
 }
 
 // The v1/v2 state formats predate the endpoint-local MTU policy. Reject
@@ -291,6 +381,9 @@ func containsMTUField(value any) bool {
 func migrateSnapshot(snapshot Snapshot) (Snapshot, error) {
 	switch snapshot.SchemaVersion {
 	case SchemaVersion:
+		return snapshot, nil
+	case preWSSSchemaVersion:
+		snapshot.SchemaVersion = SchemaVersion
 		return snapshot, nil
 	case preMTUSchemaVersion:
 		snapshot.SchemaVersion = SchemaVersion
@@ -389,6 +482,34 @@ func validateSnapshot(snapshot Snapshot) error {
 		if _, exists := seen[record.Desired.ID]; exists {
 			return fmt.Errorf("duplicate Link ID %q", record.Desired.ID)
 		}
+		if record.Desired.Backend == domain.BackendWireGuardWSS {
+			raw, nonceErr := hex.DecodeString(record.WSSOrigin)
+			if nonceErr != nil || len(raw) != 16 || hex.EncodeToString(raw) != record.WSSOrigin {
+				return fmt.Errorf("committed WSS Link lacks valid original host-object nonce")
+			}
+			if err := record.WSSFiles.VerifyLink(record.Desired); err != nil {
+				return fmt.Errorf("committed WSS Link missing original credential fingerprints: %w", err)
+			}
+			if record.WSSKernelBootSource != "" && (record.WSSKernelBootSource != hostidentity.VerifiedHostBootSourceV1 ||
+				!hostidentity.ValidBootID(record.WSSKernelBootID)) ||
+				(record.WSSKernelBootSource == "" && record.WSSKernelBootID != "") {
+				return fmt.Errorf("committed WSS Link has invalid trusted kernel generation provenance")
+			}
+			if err := record.WSSColdBootRestore.Validate(); err != nil {
+				return fmt.Errorf("committed WSS Link has invalid manual cold-boot restore authorization: %w", err)
+			}
+			if record.WSSSupersededBy != "" &&
+				(record.WSSSupersededBy.Validate() != nil || record.WSSSupersededBy == record.Desired.ID) {
+				return fmt.Errorf("committed WSS Link has invalid supersession target")
+			}
+			if record.WSSColdBootRestore != (WSSColdBootRestore{}) && record.WSSKernelBootSource != "" {
+				return fmt.Errorf("manual cold-boot restore proof cannot coexist with attested original birth")
+			}
+		} else if record.WSSFiles != (WSSFileIdentity{}) || record.WSSOrigin != "" ||
+			record.WSSKernelBootID != "" || record.WSSKernelBootSource != "" ||
+			record.WSSColdBootRestore != (WSSColdBootRestore{}) || record.WSSSupersededBy != "" {
+			return fmt.Errorf("native Link cannot carry WSS credential or original host-object identity")
+		}
 		seen[record.Desired.ID] = struct{}{}
 		for _, claim := range record.OwnedResources {
 			if err := claim.Validate(); err != nil {
@@ -414,7 +535,10 @@ func validateSnapshot(snapshot Snapshot) error {
 	if err := validateIPsecXFRMOperations(snapshot); err != nil {
 		return err
 	}
-	return validateIPsecRemovalReceipts(snapshot)
+	if err := validateIPsecRemovalReceipts(snapshot); err != nil {
+		return err
+	}
+	return validateWSSCrashOperations(snapshot)
 }
 
 func cloneRecord(record LinkRecord) LinkRecord {

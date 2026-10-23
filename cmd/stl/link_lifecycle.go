@@ -28,6 +28,7 @@ const (
 	// change to CLI output must not silently reinterpret existing requests.
 	desiredLinkSchemaVersion = 1
 	managedMTUSchemaVersion  = 2
+	desiredWSSSchemaVersion  = 3
 	maxDesiredLinkBytes      = 16 * 1024
 	lifecycleTimeLimit       = 5 * time.Minute
 	maxLinkJSONNesting       = 12
@@ -257,7 +258,7 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 			safe.ObjectID = observedPublic.ObjectID
 		}
 		switch domain.Backend(observedPublic.Backend) {
-		case domain.BackendGRE, domain.BackendIPIP, domain.BackendWireGuard, domain.BackendIPsec:
+		case domain.BackendGRE, domain.BackendIPIP, domain.BackendWireGuard, domain.BackendWireGuardWSS, domain.BackendIPsec:
 			safe.Backend = observedPublic.Backend
 		}
 	}
@@ -306,6 +307,25 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 		}
 		if evidence.CredentialProvision == "attempted" && evidence.Stage != "credential_provision" {
 			safe.NextStep += " A protected key write was also attempted; verify its exact identity before any retry or replacement."
+		}
+	}
+	// Only explicitly typed Engine WSS identity/journal denials get a
+	// specific operator action. Never parse raw backend text or infer
+	// absence from a failed inspection, and never override a post-Apply
+	// ambiguity with an apparently safe retry instruction.
+	if observedPublic != nil && observedPublic.Code == stlerr.CodeConflict &&
+		observedPublic.Backend == string(domain.BackendWireGuardWSS) &&
+		domain.LinkID(observedPublic.ObjectID).Validate() == nil &&
+		(evidence == nil || evidence.HostMutation == "not_attempted") {
+		switch observedPublic.ReasonCode {
+		case "wss_original_superseded":
+			safe.ReasonCode = "wss_original_superseded"
+			safe.NextStep = "This WSS original was explicitly superseded and cannot be automatically restored or re-ensured. Inspect stl link plan-wss-replacement " +
+				observedPublic.ObjectID + " --json and check the new Link on both peers. Preserve old resource claims and credentials pending exact proven retirement."
+		case "wss_crash_quarantined", "wss_original_unverified":
+			safe.ReasonCode = observedPublic.ReasonCode
+			safe.NextStep = "The old original may remain active in another network namespace. Do not repeat blocked Ensure/Remove or erase the original State, journal, guard or credentials. Run stl link plan-wss-replacement " +
+				observedPublic.ObjectID + " --json for safe original reconciliation or a new independent WSS peer pair with disjoint resources; no reboot is required for that separate Link when host admission succeeds."
 		}
 	}
 	out := lifecycleFailureResponse{
@@ -369,6 +389,25 @@ type desiredLinkRequestV1 struct {
 type desiredLinkRequestV2 struct {
 	SchemaVersion int           `json:"schema_version"`
 	Link          desiredLinkV2 `json:"link"`
+}
+
+// Input schema v3 adds ONLY the authenticated WireGuard-over-WSS public
+// settings. Frozen v1/v2 requests never acquire new mutation capabilities.
+type desiredLinkRequestV3 struct {
+	SchemaVersion int           `json:"schema_version"`
+	Link          desiredLinkV3 `json:"link"`
+}
+type desiredLinkV3 struct {
+	desiredLinkV2
+	WireGuard domain.WireGuardOptions `json:"wireguard"`
+	WSS       domain.WSSOptions       `json:"wss"`
+}
+
+func (d desiredLinkV3) link() domain.Link {
+	link := d.desiredLinkV2.link()
+	link.WireGuard = d.WireGuard
+	link.WSS = d.WSS
+	return link
 }
 
 type desiredLinkV2 struct {
@@ -474,6 +513,16 @@ func decodeDesiredLink(reader io.Reader) (domain.Link, error) {
 			return domain.Link{}, fmt.Errorf("invalid desired Link v2 request")
 		}
 		link = request.Link.link()
+	case desiredWSSSchemaVersion:
+		var request desiredLinkRequestV3
+		if err := decoder.Decode(&request); err != nil {
+			return domain.Link{}, fmt.Errorf("invalid desired WSS Link v3 request")
+		}
+		link = request.Link.link()
+		if link.Backend != domain.BackendWireGuardWSS {
+			return domain.Link{}, stlerr.New(stlerr.CodeUnsupported, "decode_link", "", "",
+				"desired Link v3 is reserved for wireguard-wss")
+		}
 	default:
 		return domain.Link{}, stlerr.New(stlerr.CodeUnsupported, "decode_link", "", "",
 			"unsupported desired Link schema version")

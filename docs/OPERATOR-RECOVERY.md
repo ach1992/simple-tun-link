@@ -180,3 +180,394 @@ probes, cancellation, rollback success/failure, uncertain state publication
 and independent sibling operations; they are **not** a substitute for
 real privileged kernel/module, multi-distro or traffic/restart testing.
 Release-level privileged E2E is separately reproduced through the [cross-backend runbook](operations/CROSS-BACKEND-REAL-E2E.md) and recorded against the exact candidate.
+
+## Unreleased WSS: unmarked pre-alias kernel staging quarantine
+
+A managed-WSS Create can be interrupted after exclusive WireGuard
+`RTM_NEWLINK` but before publishing the original owner `ifalias`.
+The unpredictable, nonce-derived staging **name is not evidence of
+creation**. An identical unconfigured WG interface may have been created
+by another actor before STL dispatched `RTM_NEWLINK`, or may have
+replaced the original interface later. Its empty/down state, type, name
+and saved journal are not independently sufficient to delete it.
+
+When `stl link reconcile-wss-original LINK_ID --confirm LINK_ID`
+rejects an **unmarked staging object**:
+
+1. Stop ordinary Create/Ensure/Restore retry for that Link. Preserve the
+   exact protected original crash journal, the verified nft ingress
+   guard, and the existing kernel object; do not adopt or re-label it.
+   Read-only `stl link list --json`, `ip -details -json link show type
+   wireguard`, `ip -json address show`, and public-only `wg show`
+   can collect diagnostics, but **none establishes pre-alias creation
+   provenance**.
+2. This is a **separate, privileged, manual identity-attestation
+   boundary**, not a weaker mode of `reconcile-wss-original`. Before
+   any targeted manual kernel deletion, require independent,
+   trustworthy evidence of the *actual original* exclusive NEWLINK
+   creation and its exact network namespace plus ifindex/generation,
+   and fresh evidence proving the currently addressed object is still
+   that same object (no replacement or ifindex reuse). A log that
+   merely records the requested staging name, or an ambiguous/missing
+   ACK, is not this evidence. Have the Owner explicitly authorize the
+   identified manual host effect and its impact on other active Links.
+   STL does not currently create a durable pre-alias ifindex witness
+   and **cannot ordinarily supply that proof itself**.
+3. If this proof cannot be obtained, **do not delete the object**.
+   Keep guard + journal quarantine. The implemented two-stage
+   cold-boot recovery procedure below can establish the extinction of
+   the old WG kernel generation across ALL namespaces without deleting
+   a possibly foreign interface by name. It requires a separate
+   Owner-approved full-host reboot, strict postboot readback, and
+   checkpoint continuity; THIS command does not authorize any reboot.
+   Never assume a reboot, teardown or absence from an unobserved effect.
+4. The normal `reconcile-wss-original` command cannot retroactively
+   prove a kernel deletion made outside its original, trusted
+   nonce/ifindex-verified transaction. It must refuse to consume the
+   journal merely because an earlier ambiguous or unmarked kernel effect
+   has disappeared. The implemented and owner-gated
+   `arm-wss-cold-boot` / `reconcile-wss-cold-boot` pair is
+   the positive-evidence whole-kernel-reset alternative below; it never
+   accepts a token, a fabricated boot ID or a namespace-local empty
+   inventory as deletion provenance.
+   Never remove a durable reservation or fingerprint from State based
+   solely on a name or empty inventory. Foreign resources and
+   unrelated nft/firewall objects remain out of scope.
+
+When the original WG alias *was* published, the existing command can
+verify its nonce and ifindex and compensate only intended original
+intermediate configuration; extra keys, peers, AllowedIPs, addresses
+or unexpected UDP listeners are refused. For a committed LEGACY repair
+without trusted original birth, even verified exact original-object
+compensation must preserve the ORIGINAL crash journal and protected
+credentials as the continuation checkpoint. The command's JSON result
+reports `journal_cleared:false` and
+`manual_cold_boot_required:true`; the host resources may already have
+been safely removed, but this alone cannot prove every hidden
+same-kernel WG extinct. Do not repeat original compensation on empty
+inventories, treat this as a credential retirement authorization or run
+ordinary RestoreAll. The operator must use this retained journal with a
+trusted native-host Arm, separately authorized actual whole-kernel
+reboot and cold-boot Reconcile to obtain one-use restore authority. This manual pre-alias gate is
+an honest limitation of this unreleased candidate, not a promise that
+all pre-commit crash objects are automatically recoverable.
+
+## Unreleased WSS: namespace migration and kernel deletion witnesses
+
+A Linux WireGuard interface may be created in network namespace A and
+moved to B while its UDP socket remains in its **birthplace** A. When
+the moved interface is DOWN the UDP listener in A also temporarily
+vanishes; bringing the same object UP in B recreates that socket in A.
+Thus neither `wg show all` in A nor `ss -u -l -n` in A can attest that
+the original kernel object was actually destroyed.
+
+In this candidate, removing the WSS nft ingress guard requires the
+same-transaction original nonce/ifindex verification and a successful
+index-targeted kernel deletion **in addition** to a fresh, bounded
+birthplace UDP socket readback. This also applies to Ensure rollback.
+A separate read-only crash reconciliation cannot invent this witness;
+a previously interrupted transaction with no trustworthy deletion
+witness stays quarantined, even if its local inventories look empty.
+The same restriction protects original receipt/credential retirement,
+including the otherwise dangerous case in which nft guard and WSS helper
+were removed externally BEFORE the first ordinary Remove. With a moved-
+DOWN original the State, claims and protected credentials remain reserved.
+Legacy retirement receipts without an exact-index deletion or trusted-
+old-generation extinction marker remain readable but cannot retire files.
+Do not temporarily drop the nft guard, move a foreign WG object,
+recreate its listener, force-delete the journal, or retire private
+material to make automatic reconciliation appear successful.
+
+An externally moved or ambiguously deleted original WG object requires
+a separately scoped, Owner-approved manual identity/recovery procedure
+with proof of the actual original generation and all affected network
+namespaces. Do not try to fix an unreleasable guard/journal by restarting
+or modifying production networking; neither a reboot nor this command
+is blanket authorization. The disposable real-kernel namespace tests
+cover both moved-UP and moved-DOWN cases; physical host namespace
+coexistence remains a distinct operator acceptance gate.
+
+## Unreleased WSS: ordinary missing-original quarantine
+
+For an already committed WSS Link, a missing local WireGuard interface or
+empty birthplace UDP-socket inventory is **not** proof its original kernel
+object died: it may have moved into another netns and been left DOWN. This
+risk applies BEFORE the very first ordinary `link remove` and without any
+Crash Journal, even if the original WSS helper and nft guard were externally
+stopped or deleted. Ordinary `ensure`, `restore --all`, and `remove` now fail
+closed instead of creating a second WG, erasing the committed owner State
+or issuing a credential-retirement receipt. No automated remediation should
+install a new original, delete a potentially foreign guard, or discard the
+protected original key, TLS certificate or bearer material.
+
+An Ensure that verifiably CREATES a NEW WG original on a trusted native
+host records its observed `wss_kernel_boot_id` and versioned
+`wss_kernel_boot_source` in the exact Link record (no operator
+override). Successful ordinary no-op Ensure or sidecar-only repair of
+a visible legacy original NEVER invents or upgrades historical birth
+provenance. Its unchanged result does not conceal a new authority. On a **genuine full host reboot**,
+ordinary RestoreAll may recreate an absent original only if the protected
+record contains those trusted pre-reboot fields, the same host's current
+source is independently trusted and different, and strict fresh current-
+boot vacancy confirms no foreign replacement/guard/helper. An absent or
+legacy/untrusted birth marker is not retroactively certified. Original
+objects still visible can be managed under the usual full nonce/ifindex/
+configuration attestation, but missing originals remain quarantined.
+
+Ordinary successful Remove publishes a receipt with versioned
+`wss_original_termination` provenance for an exact original-ifindex delete
+or a trusted old-kernel extinction plus strict current-host vacancy.
+Original-object crash compensation and separately armed manual cold-boot
+recovery have distinct verified termination reasons. `retire-wss` refuses
+legacy receipts without proof, even when the local interface, guard and
+helper all appear absent. Preserve the exact State root and encrypted
+backups; physically moving this State to a DIFFERENT still-live host does
+not prove the original host kernel stopped. Establish an Owner-approved
+manual recovery when the trusted generation is unavailable, and do not
+manually edit or backfill UUIDs/receipts. The separate manual journaled
+recovery below applies only when its own admission gates can be met.
+
+## Unreleased WSS: no-reboot, fully independent replacement
+
+The normal objective is to **restore the original when safely possible**.
+If the original remains indeterminate, the operator need not keep the
+application offline merely because an unsafe in-place replay is denied.
+First run the read-only `stl link plan-wss-replacement OLD_LINK_ID --json`.
+It reports saved journal/commit/receipt status without claiming that a
+missing source-namespace WG, absent UDP listener or a dead peer proves
+the original kernel object is gone. Follow ordinary owner-attested
+repair or `reconcile-wss-original` only where its exact provenance and
+host mutation gates can be met.
+
+Ordinary lifecycle calls that encounter a pending crash journal or a
+committed original that vanished from the local namespace return the
+versioned reason `wss_crash_quarantined` or
+`wss_original_unverified` (before backend Apply) with a specific
+`plan-wss-replacement` next step. These reasons do not certify that
+an old kernel interface is dead, and do not imply permission to delete.
+
+When recovery is blocked, use a new WSS Link with a NEW ID, fresh
+credential issuance, separate private-IP subnet and disjoint exclusive
+UDP/TCP/forwarding/interface/guard/helper identities. The existing
+`create-wss` and recipient `preview-wss` / `import-wss` workflows
+are the only new-Link writers; their normal Engine resource collision
+and protected-credential admission must pass. The new peer handoff
+still requires separate authenticated operator delivery, bilateral
+verification and private-IP traffic proof before switching workloads.
+
+For an **already committed original**, do not leave it as an ordinary
+desired active Link just because its independent replacement now works.
+After verifying both endpoints and the replacement's private-IP
+traffic, explicitly confirm the durable logical quarantine separately
+on each server:
+
+~~~sh
+sudo stl link supersede-wss OLD_ID --replacement NEW_ID --confirm OLD_ID --json
+sudo stl link plan-wss-replacement OLD_ID --json
+~~~
+
+Only a *committed, independent, disjoint* replacement permits this
+State-only transition. The old WSS record gains immutable
+`wss_superseded_by: NEW_ID`; all original claims, issuance fingerprints,
+credentials, original birth provenance, and pre-existing crash journal
+remain as before. This is `quarantined_old`: not original deletion,
+credential retirement, a successful connectivity check, an automatic
+switchover or host mutation. RestoreAll and ordinary Ensure will not
+resurrect the old original, even after a new kernel generation; status,
+diagnostics and list distinguish it from an active Link. For initial
+Ensure failures with **no committed** original, there is no desired
+State to supersede, so retain the original crash journal instead.
+
+This is **independent operator-driven replacement**, not a generic
+automatic failover controller. No physical reboot is executed or presumed.
+
+For an unresolved original, leave the old crash journal, reserved claims,
+historical fingerprints, protected files and possible hidden host
+effects untouched. Do not reuse original WG/TLS keys, Link ID or
+possibly occupied ports/addresses; do not forge old termination receipts
+or call `retire-wss` on an indeterminate original. The original may
+still be live in another namespace. Existing independent Links continue
+to operate, but unresolved originals remain visible as protected
+configured or journaled work until independently reconciled. If no
+disjoint safe resources or peer admission are possible, report the
+failure accurately; no-reboot replacement cannot be guaranteed under
+all provider/kernel configurations.
+
+## Unreleased WSS: executable manual cold-kernel-reboot recovery
+
+**Use only for an unresolved original WSS Crash Journal whose ordinary
+nonce/ifindex compensation cannot prove success**: guard-only initial
+Ensure, interrupted committed repair, post-original-WG-deletion Remove,
+or unmarked/possibly moved original. This procedure is a new, explicit
+**whole-host operational maintenance gate**, not automatic crash
+replay, not arbitrary State editing, not permission to reboot production.
+
+A real Linux **kernel reboot** destroys every old-generation WireGuard
+interface and socket, including interfaces moved to any network
+namespace (UP or DOWN), and ephemeral nft/kernel resources. A process,
+container or systemd-unit restart is **not** a kernel reboot. STL now
+accepts `/proc/sys/kernel/random/boot_id` **only** from the original,
+unshadowed kernel `procfs` mount in the **initial host PID namespace**
+(Linux `PID_NS_INIT_INO`). It checks real filesystem type, complete
+`/proc/self/mountinfo` coverage, absence of any bind mount/submount on
+`/proc/sys/kernel/random/boot_id` or its ancestor path, and namespace/
+mount stability around the read. A virtualized UUID (including
+`systemd-nspawn`'s independently generated container boot ID), nested
+PID namespace, missing procfs evidence, or ambiguous host setup is
+**not** evidence of a kernel reboot. Such environments cannot arm or
+reconcile via this manual path; original journals and credentials stay
+quarantined. The same verified host-kernel source must yield a DIFFERENT
+canonical UUID from the protected State checkpoint committed **before**
+the actual full-kernel reboot. The checkpoint must also record the
+versioned trusted-source admission marker `cold_boot_source` =
+`linux-initial-pid-unshadowed-procfs-v1`, written in the SAME durable
+transaction as the old boot UUID. A UUID alone from a previous STL
+candidate is not authenticated host provenance and cannot be used by
+this recovery route. This is old-generation extinction evidence, not
+proof that other managers did not create NEW objects after reboot.
+
+1. **Owner authorization and impact plan (outside STL):** obtain
+   explicit approval for the affected host's full reboot, list other
+   Links, SSH/out-of-band rescue access, web services, active namespaces
+   and privileged network managers; reserve a maintenance window.
+   Record a restore-tested, access-restricted backup of the canonical
+   State root **including original journal, receipts and protected
+   credentials**. Record all relevant namespace managers and prevent
+   privileged concurrent replacement of the reserved WSS resources.
+   Do not infer a safe restart from a green rootless test.
+2. **Arm checkpoint on the currently running kernel (no host effects):**
+
+   ```sh
+   sudo stl link arm-wss-cold-boot LINK_ID --confirm LINK_ID --json
+   ```
+
+   Require `checkpoint_persisted:true`,
+   `journal_cleared:false`, `host_mutated:false` and
+   `reboot_performed:false`. This atomically writes the current kernel
+   boot UUID **and the v1 trusted-source provenance marker** to the exact
+   original, fsynced journal under canonical Engine maintenance/Link/
+   resource locks. It does NOT remove the guard,
+   alter kernel interfaces, touch systemd, reboot, remove private
+   files, or release any reservation. A repeated arm on the SAME boot
+   is idempotent only for a checkpoint already bearing the trusted-source
+   marker; a subsequent re-arm in a different boot is refused.
+   A checkpoint cannot be manufactured by CLI arguments, environment,
+   uploaded evidence, empty WG/UDP observations, or operator text.
+   If the process is containerized or its procfs origin cannot be
+   verified, **stop**: re-running as root inside that container does
+   not bypass admission and no synthetic boot ID may be substituted.
+   A native, attested host execution environment is required before
+   using this recovery path.
+   **After successfully arming, make an additional private, verified
+   backup of the now-checkpointed protected State**; a backup made
+   before arming does not contain the checkpoint and cannot by itself
+   authorize postboot reconciliation if restored. Protect access to
+   both backups and reconcile any intentional restoration under the
+   original recorded Owner maintenance plan. If the host had already
+   rebooted before any checkpoint was armed, the CLI cannot backdate
+   a lost boot identity: a further separately authorized full-kernel
+   reboot is required for this conservative manual route.
+3. **Separately approved full-host kernel reboot:** perform it using
+   the Owner's established out-of-band change/rollback mechanism;
+   STL intentionally offers **no reboot button or command**. A host
+   reboot affects independent services and Links; include their
+   reinstatement in the maintenance plan. Do not delete a guarded
+   or unmarked original WG manually as a substitute.
+4. **After restart, read-only verify first:** confirm the expected host
+   and physical connectivity; inspect original Link/journal, loaded
+   systemd helper unit, nft ingress guard, public-only WireGuard and
+   UDP socket inventories, and privileged managers. Any NEW occupied
+   resource matching a reserved port, identity or unit must be
+   investigated rather than deleted or adopted by STL.
+5. **Atomic protected State reconciliation only AFTER proof:**
+
+   ```sh
+   sudo stl link reconcile-wss-cold-boot LINK_ID --confirm LINK_ID --json
+   ```
+
+   The actual CLI reloads the exact journal and original committed
+   Link/claims, checks original issuance-time private file SHA-256
+   identity for committed operations, compares the current trusted
+   boot ID with the durable pre-reboot one, refuses an unarmed or
+   same-boot journal, and independently inspects helper, nft, WG,
+   reserved key/listen port and UDP sockets for conflicting
+   current-boot resources. With all proofs valid it performs ONE
+   atomic State update and **no host changes**. For initial Ensure
+   it consumes only that journal. For committed Ensure/repair it
+   retains the identical committed Link, nonce, claims and protected
+   credentials. A LEGACY/untrusted committed original has no trusted
+   historical birth source: the reconciliation instead durably issues
+   one `wss_cold_boot_restore` proof bound to the original journal's
+   trusted pre-reboot Arm and the independently attested post-reboot
+   generation, never silently backfills `wss_kernel_boot_*`. With a
+   freshly trusted kernel source, no visible original and verified
+   complete current-host vacancy, approved `link restore --all`
+   can create one NEW WG original with the existing nonce, claims and
+   private issuance. Before the first host effect its witness is
+   atomically marked SPENT with a NEW pre-effect journal. Only a
+   successful original creation clears it and records the honest new
+   birth source. If interrupted, preserve the spent proof and journal;
+   even after an apparently successful rollback, automatic repeated
+   restore is NOT authorized. Arm that NEW journal and follow a
+   separately approved full-host reboot before retrying. Without the
+   manual verified generation, legacy committed repair-only
+   `reconcile-wss-repair-vacant` refuses to consume its last journal;
+   an ordinary no-op Ensure cannot promote a healthy legacy Link.
+   For committed Remove it deletes only the original
+   committed State Link and creates its immutable original credential-
+   bound receipt; credential removal is still a SEPARATE
+   `link retire-wss LINK_ID --confirm LINK_ID` operation after
+   a fresh full-host absence and file identity check. Never reuse
+   an already retired Link ID.
+6. **Failure and rollback:** if the reboot did not actually occur,
+   the boot-ID read fails, journal/owner/claims change, original private
+   fingerprint mismatches, a helper/guard/WG/socket reappears, the
+   original checkpoint has only a legacy UUID without trusted-source
+   provenance, or the State commit is uncertain, preserve the original
+   journal, reservations and credentials. Do **not** re-arm over a different
+   checkpoint, remove a guard, edit State JSON, scrub secrets, blindly
+   rerun RestoreAll for the blocked Link, or claim success. In a legacy
+   committed repair, an interrupted first Restore leaves a spent
+   recovery witness and NEW crash journal; the prior old-kernel proof
+   cannot be reused to create another potentially hidden WG. Another
+   explicitly authorized full-host reboot with a newly armed checkpoint
+   is required to certify that interrupted NEW kernel generation extinct. Maintain
+   the old protected backups for forensic restore with a separately
+   authorized reconciliation plan. Reboot-before-reconcile is
+   reversible at the control-plane checkpoint level only;
+   reinstating unrelated host services is the Owner's explicit
+   operations rollback responsibility.
+
+**Legacy checkpoint quarantine (pre-provenance candidate):** an
+original State journal with a valid `cold_boot_armed_from` but no
+`cold_boot_source` remains fully readable for diagnostics and
+strict original-object workflows; it does **not** authorize cold-boot
+Reconcile. Even re-running `arm-wss-cold-boot` in a trusted environment
+on the same observed boot will refuse to stamp a legacy checkpoint.
+Do not erase, edit or manually add the marker, copy a fresh checkpoint
+onto it, reissue credentials, force-delete guards or claim that another
+reboot alone can unlock a legacy record. Preserve the exact State root
+and protected backups and arrange a separate Owner-approved original-
+object/State reconciliation plan. The normal two-phase cold-boot route
+requires an initially unarmed journal and a fresh trusted Arm **before**
+a separately approved actual kernel reboot.
+
+**Coexistence/race limit:** this recovery proves old-kernel WG
+generation extinction across ALL old namespaces without enumerating
+each one. It does NOT grant exclusive control of the NEW kernel.
+A privileged actor who replaces a resource, spoofs a nonce or swaps
+an ifindex between readback and deletion can defeat the normal host
+ownership assumptions. Establish exclusive scoped privileged host
+ownership/maintenance and verify newly created namespaces separately.
+A forged/mounted procfs boot UUID by malicious root is outside the
+local-root trust boundary and not an attestation by an external verifier.
+
+The disposable E2E attempts a **virtual Boot ID change** through a
+bind mount strictly inside private rootless namespaces. The production
+CLI must now reject both cold-boot Arm and Reconcile in that untrusted
+PID/mount environment, leaving the actual crash journal, kernel guard
+and/or private issuance untouched. Separate deterministic Engine tests
+exercise post-reboot State transitions using injected boot-generation
+values; these **do not** authenticate a physical host reboot.
+No actual PID1/kernel reboot, service restore or provider WAN
+acceptance is claimed.

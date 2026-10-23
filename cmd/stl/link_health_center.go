@@ -352,6 +352,14 @@ func healthObserveOne(ctx context.Context, link domain.Link, options runtimeOpti
 		check = healthUnavailable(link, "diagnostic_interrupted",
 			"Batch diagnosis stopped before this Link could be observed.",
 			"Review current Link state and rerun the read-only check with a suitable --timeout.")
+	case link.Backend == domain.BackendWireGuardWSS:
+		// Managed WSS has an independent read-only helper/guard/WG status
+		// projection. The common active PMTU/ICMP adapter does not yet
+		// prove the WSS carrier's full identity and overhead; never
+		// synthesize peer reachability or invoke a native-WG probe here.
+		check = healthBlocked(link, "wss_active_diagnostics_not_implemented",
+			"Managed WSS Link requires its dedicated read-only helper, ingress guard and WireGuard inspection; no active peer probe was attempted.",
+			"Run stl link diagnose-wss LINK_ID --json for local WSS status; separately verify authenticated private peer traffic.")
 	case link.Backend == domain.BackendIPsec && !hasOperationalIPsec(options):
 		// Same condition, reason and machine action as per-Link status
 		// and diagnose; detailed read-only evidence lives in doctor.

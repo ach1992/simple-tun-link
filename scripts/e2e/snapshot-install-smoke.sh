@@ -101,6 +101,28 @@ if bash "$foreign" --prefix "$scratch/prefix" > "$scratch/wrong-arch.log" 2>&1; 
 fi
 grep -q 'wrong file for' "$scratch/wrong-arch.log" || fail 'missing wrong-arch guidance'
 
+# Optional WSS is strictly opt-in. A requested missing companion must
+# fail before the core install; neither ordinary presence nor unrelated
+# artifacts become permission to install an unselected feature.
+if bash "$one_file" --prefix "$scratch/prefix" --with-wss > "$scratch/selected-wss-missing.log" 2>&1; then
+  fail 'missing selected WSS helper was accepted'
+fi
+grep -q 'WSS selected but official' "$scratch/selected-wss-missing.log" ||
+  fail 'missing selected WSS helper was not explained'
+[[ ! -e "$scratch/prefix/bin/stl" ]] ||
+  fail 'missing selected companion unexpectedly installed core'
+mkdir -m 0700 "$scratch/invalid-wss"
+cp -- "$one_file" "$scratch/invalid-wss/$(basename -- "$one_file")"
+printf not-official > "$scratch/invalid-wss/wstunnel_11.0.0_linux_${arch}.tar.gz"
+if bash "$scratch/invalid-wss/$(basename -- "$one_file")" --prefix "$scratch/prefix" --with-wss > "$scratch/selected-wss-hash.log" 2>&1; then
+  fail 'mismatched selected WSS helper was accepted'
+fi
+grep -q 'selected optional WSS archive SHA-256 mismatch' "$scratch/selected-wss-hash.log" ||
+  fail 'selected WSS helper checksum failure not attributed'
+[[ ! -e "$scratch/prefix/bin/stl" ]] ||
+  fail 'invalid selected companion unexpectedly installed core'
+echo 'SNAPSHOT_OPTIONAL_WSS_EXPLICIT_SELECTION_AND_EARLY_REJECTION=PASS'
+
 # Transfer corruption must fail before invoking canonical installation. The
 # filename is preserved, as the real operator copies official bytes as-is.
 mkdir -m 0700 "$scratch/tamper"

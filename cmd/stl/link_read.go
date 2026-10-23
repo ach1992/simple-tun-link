@@ -27,6 +27,8 @@ type linkSummary struct {
 	Encapsulation domain.Encapsulation `json:"encapsulation"`
 	LocalAddress  string               `json:"local_address"`
 	PeerAddress   string               `json:"peer_address"`
+	Disposition   string               `json:"disposition,omitempty"`
+	SupersededBy  domain.LinkID        `json:"superseded_by,omitempty"`
 }
 
 func summarizeLink(link domain.Link) linkSummary {
@@ -119,7 +121,12 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 	if !isStatus {
 		items := make([]linkSummary, 0, len(snapshot.Links))
 		for _, item := range snapshot.Links {
-			items = append(items, summarizeLink(item.Desired))
+			summary := summarizeLink(item.Desired)
+			if item.WSSSupersededBy != "" {
+				summary.Disposition = "quarantined_old"
+				summary.SupersededBy = item.WSSSupersededBy
+			}
+			items = append(items, summary)
 		}
 		if jsonOutput {
 			if err := json.NewEncoder(stdout).Encode(linkListResponse{SchemaVersion: jsonSchemaVersion, Links: items}); err != nil {
@@ -130,7 +137,11 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 		}
 		fmt.Fprintln(stdout, "Configured Links (not a live connectivity check):")
 		for _, item := range items {
-			fmt.Fprintf(stdout, "%s  %s/%s  %s -> %s\n", item.ID, item.Backend, item.Encapsulation, item.LocalAddress, item.PeerAddress)
+			fmt.Fprintf(stdout, "%s  %s/%s  %s -> %s", item.ID, item.Backend, item.Encapsulation, item.LocalAddress, item.PeerAddress)
+			if item.Disposition == "quarantined_old" {
+				fmt.Fprintf(stdout, "  [quarantined_old -> %s; NOT auto-restored]", item.SupersededBy)
+			}
+			fmt.Fprintln(stdout)
 		}
 		fmt.Fprintf(stdout, "%d configured link(s)\n", len(items))
 		return 0
@@ -139,6 +150,14 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 	record, ok := snapshot.Find(id)
 	if !ok {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, "link_status", "Link ID is not present in local desired state")
+	}
+	if record.WSSSupersededBy != "" {
+		blocked := stlerr.New(stlerr.CodeConflict, "link_status", string(id), "wireguard-wss",
+			"original WSS Link has been durably superseded; no active status is asserted")
+		blocked.ReasonCode = "wss_original_superseded"
+		blocked.NextStep = "Inspect stl link plan-wss-replacement " + string(id) + " --json and verify replacement " +
+			string(record.WSSSupersededBy) + " on both peers. Do not treat this original as active or reuse its reserved resources."
+		return readCommandPublicError(stdout, stderr, jsonOutput, blocked)
 	}
 	if options == nil {
 		options, err = productionRuntimeOptions()

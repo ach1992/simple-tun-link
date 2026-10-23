@@ -19,6 +19,14 @@ syntax see [CLI.md](CLI.md); for changing a saved Link see the
   read-only backend observations/peer pings. The per-Link and overall
   timeout contracts still apply, and the JSON schema/ordered output
   do not depend on which Link finishes first.
+- Managed WireGuard-over-WSS is diagnosed separately with
+  `link diagnose-wss <id> [--json]` for bounded, read-only
+  helper/nft/kernel WG status. The **shared active** `link diagnose <id>`
+  does not yet implement WSS carrier-aware PMTU/ICMP measurement, and
+  `link diagnose --all` reports that Link explicitly **blocked** with
+  reason `wss_active_diagnostics_not_implemented`. Neither native
+  WireGuard handshake counters nor the separate status command are
+  treated as proof of active WSS-carried peer responses.
 - `link throughput`: a separate, explicitly approved short TCP
   traffic test; not a default health check or a tunnel bandwidth cap.
 
@@ -98,6 +106,7 @@ automatically a reply, a lost packet or a measured MTU.
 | GRE Native/FOU/GUE | Deterministic owned interface/ifindex, mode, local IP, route, GRE options/encapsulation overhead and public packet/byte/error counters |
 | IPIP Native/FOU/GUE | Same identity and route rules; transport overhead 20/28/32 bytes for IPv4 Native/FOU/GUE |
 | WireGuard | Owned interface/ifindex, public local/peer keys, listen port, local Link IP, handshake timestamp and RX/TX bytes; IPv4 data overhead **60 bytes** |
+| WireGuard over WSS (development) | Separate `diagnose-wss` reports read-only helper/ingress/WG status and handshake/counters; generic active PMTU/ICMP is **blocked** until a safe WSS-specific probe with verified carrier overhead and ownership exists |
 | IPsec ESP/NAT-T | **Admitted** STL-exclusive runtime, exact owned XFRM interface name/ifindex/`if_id`, VICI connection and matching SA before any probe; conservative overhead planning bounds **128/136 bytes** |
 
 GRE overhead is supplied by the backend from actual GRE fields,

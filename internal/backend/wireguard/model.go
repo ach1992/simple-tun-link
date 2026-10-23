@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ach1992/simple-tun-link/internal/composition"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
@@ -24,6 +25,7 @@ type observedLink struct {
 	IPv4Addresses        []netip.Prefix
 	PublicKey            string
 	ListenPort           uint16
+	FwMark               uint32
 	Peers                []string
 	AllowedIPs, Endpoint string
 	Keepalive            uint16
@@ -101,6 +103,63 @@ func parseAddresses(raw []byte, name string, ifindex int) ([]netip.Prefix, error
 	return out, nil
 }
 
+func parseOriginalWSSAddresses(raw []byte, name string, ifindex int) ([]netip.Prefix, error) {
+	// Ordinary iproute2 address diagnostics may ignore unknown families, but
+	// destructive original-object recovery must reject duplicate/case-aliased
+	// JSON members and any additional address family, not just IPv4 drift.
+	if len(raw) > 1<<20 || linux.ValidateWSSWGJSONMembers(raw) != nil {
+		return nil, fmt.Errorf("WSS original address inventory malformed or oversized")
+	}
+	var rows []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &rows); err != nil || len(rows) != 1 {
+		return nil, fmt.Errorf("WSS original address inventory is incomplete")
+	}
+	info, ok := rows[0]["addr_info"]
+	if !ok || string(info) == "null" {
+		return nil, fmt.Errorf("WSS original address inventory missing entries")
+	}
+	var entries []struct {
+		Family string `json:"family"`
+	}
+	if err := json.Unmarshal(info, &entries); err != nil || entries == nil {
+		return nil, fmt.Errorf("WSS original address inventory malformed")
+	}
+	var memberRows []map[string]json.RawMessage
+	if err := json.Unmarshal(info, &memberRows); err != nil || memberRows == nil ||
+		len(memberRows) != len(entries) {
+		return nil, fmt.Errorf("WSS original address rows invalid")
+	}
+	for i, entry := range entries {
+		if entry.Family != "inet" {
+			return nil, fmt.Errorf("WSS original interface has unexpected address family")
+		}
+		// iproute2 may emit these *canonical* attributes for a local IPv4
+		// address added by STL. Unexpected peer/broadcast, extra labels,
+		// changed scope, finite lifetimes, protocol or flags forbid deletion.
+		for field, value := range memberRows[i] {
+			switch field {
+			case "family", "local", "prefixlen":
+			case "scope":
+				if string(value) != `"global"` {
+					return nil, fmt.Errorf("WSS original address scope drift")
+				}
+			case "label":
+				var label string
+				if json.Unmarshal(value, &label) != nil || label != name {
+					return nil, fmt.Errorf("WSS original address label drift")
+				}
+			case "valid_life_time", "preferred_life_time":
+				if string(value) != "4294967295" {
+					return nil, fmt.Errorf("WSS original address lifetime drift")
+				}
+			default:
+				return nil, fmt.Errorf("WSS original address has unsupported attributes")
+			}
+		}
+	}
+	return parseAddresses(raw, name, ifindex)
+}
+
 func parsePeerAttribute(raw []byte, peer string) (string, error) {
 	text := strings.TrimSpace(string(raw))
 	if text == "" {
@@ -119,7 +178,12 @@ func parsePeerAttribute(raw []byte, peer string) (string, error) {
 
 func (o observedLink) matches(link domain.Link, name string) bool {
 	alias, err := linux.OwnerTag(link.ID)
-	return err == nil && o.Exists && o.Name == name && o.Owner == link.ID && o.Alias == alias && o.Up &&
+	match := err == nil && o.Alias == alias
+	if link.Backend == domain.BackendWireGuardWSS {
+		original, _, valid := linux.ParseWSSOwnerTag(o.Alias)
+		match = valid && original == link.ID
+	}
+	return match && o.Exists && o.Name == name && o.Owner == link.ID && o.Up &&
 		len(o.IPv4Addresses) == 1 && o.IPv4Addresses[0] == link.Addresses.Local && o.configuredFor(link)
 }
 
@@ -140,7 +204,7 @@ func validateLink(link domain.Link) error {
 	if err := link.Validate(); err != nil {
 		return err
 	}
-	if link.Backend != domain.BackendWireGuard || link.Encapsulation != domain.EncapUDP {
+	if (link.Backend != domain.BackendWireGuard && link.Backend != domain.BackendWireGuardWSS) || link.Encapsulation != domain.EncapUDP {
 		return stlerr.New(stlerr.CodeUnsupported, "wireguard", string(link.ID), string(link.Backend), "WireGuard backend requires UDP")
 	}
 	if !link.Underlay.Local.Is4() || !link.Underlay.Peer.Is4() {
@@ -174,5 +238,12 @@ func desiredResources(link domain.Link, name string, firewall domain.ResourceCla
 }
 
 func endpoint(link domain.Link) string {
+	if link.Backend == domain.BackendWireGuardWSS {
+		path, err := composition.Build(link, composition.CarrierForLink(link))
+		if err != nil || path.Role == composition.Listen {
+			return ""
+		}
+		return path.WGPeerEndpoint.String()
+	}
 	return net.JoinHostPort(link.Underlay.Peer.String(), strconv.Itoa(int(link.WireGuard.PeerPort)))
 }

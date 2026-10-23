@@ -4,3 +4,6 @@
 *.test
 *.prof
 .DS_Store
+
+# Disposable WireGuard/WSS rootless E2E harness assets (never commit keys/binaries).
+/.r1-lab/

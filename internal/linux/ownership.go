@@ -20,6 +20,9 @@ func ParseOwnerTag(tag string) (domain.LinkID, bool) {
 	if !strings.HasPrefix(tag, ownerTagPrefix) {
 		return "", false
 	}
+	if id, _, valid := ParseWSSOwnerTag(tag); valid {
+		return id, true
+	}
 	id := domain.LinkID(strings.TrimPrefix(tag, ownerTagPrefix))
 	if err := id.Validate(); err != nil {
 		return "", false

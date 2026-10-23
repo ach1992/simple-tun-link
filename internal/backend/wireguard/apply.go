@@ -22,6 +22,9 @@ func (b *Backend) Apply(ctx context.Context, req core.Request, observed core.Obs
 	if !ok {
 		return nil, fmt.Errorf("unexpected WireGuard plan")
 	}
+	if b.wssHost != nil {
+		return b.applyWSS(ctx, req, obs, p)
+	}
 	switch req.Operation {
 	case core.OperationEnsure:
 		return b.applyEnsure(ctx, req, obs, p)
@@ -33,6 +36,7 @@ func (b *Backend) Apply(ctx context.Context, req core.Request, observed core.Obs
 }
 
 type creationProgress struct {
+	OriginalAlias                     string
 	IfIndex                           int
 	Created, Marked                   bool
 	ConfigAttempted, ConfigConfirmed  bool
@@ -123,26 +127,84 @@ func (b *Backend) applyRemove(ctx context.Context, req core.Request, p plan) (co
 
 func (b *Backend) createOwnedInterface(ctx context.Context, link domain.Link, name string) (creationProgress, error) {
 	progress := creationProgress{}
-	if _, err := b.runner.Run(ctx, b.ipBinary, "link", "add", name, "type", "wireguard"); err != nil {
-		return progress, fmt.Errorf("cannot create WireGuard interface: %w", err)
+	var index int
+	if b.wssHost != nil {
+		nonce := core.WSSOrigin(ctx)
+		original, err := linux.WSSOwnerTag(link.ID, nonce)
+		if err != nil {
+			return progress, fmt.Errorf("WSS original kernel object provenance unavailable")
+		}
+		staging, err := linux.WSSStagingName(link.ID, nonce)
+		if err != nil {
+			return progress, err
+		}
+		// Linux ignores IFLA_IFALIAS on RTM_NEWLINK. The first kernel
+		// effect instead uses a nonce-derived unguessable staging name.
+		// Set alias by ifindex, then rename, closing every bare-name gap.
+		create := b.wssCreateStaged
+		if create == nil {
+			create = linux.CreateWSSWireGuardStaged
+		}
+		if err := create(ctx, staging); err != nil {
+			// An RTM_NEWLINK ACK error/cancellation does not prove the
+			// exclusive kernel object was NOT created. Guard must stay
+			// installed until original-object recovery proves vacancy.
+			return progress, fmt.Errorf("%w: staged kernel WG create ACK uncertain: %v",
+				core.ErrIndeterminateHostEffect, err)
+		}
+		progress.Created = true
+		index, err = b.lookupIndex(staging)
+		if err != nil || index <= 0 {
+			return progress, fmt.Errorf("WSS original staged ifindex unobserved; retain crash journal")
+		}
+		progress.IfIndex = index
+		observed, err := b.Inspect(ctx, link)
+		if err != nil {
+			return progress, err
+		}
+		identified := false
+		for _, candidate := range observed.(observation).Links {
+			if candidate.Name == staging && candidate.IfIndex == index && candidate.Alias == "" &&
+				!candidate.Up && candidate.Owner == "" {
+				identified = true
+			}
+		}
+		if !identified {
+			return progress, fmt.Errorf("WSS original kernel staging identity changed")
+		}
+		if err := b.setAlias(ctx, index, original); err != nil {
+			return progress, fmt.Errorf("WSS creation staging tag uncertain: %w", err)
+		}
+		progress.Marked = true
+		progress.OriginalAlias = original
+		// If the rename is interrupted, the nonce-derived staging name
+		// and journal-tagged alias still identify the original ifindex.
+		if err := linux.RenameLinkByIndex(ctx, index, name); err != nil {
+			return progress, fmt.Errorf("WSS tagged kernel rename uncertain: %w", err)
+		}
+	} else {
+		if _, err := b.runner.Run(ctx, b.ipBinary, "link", "add", name, "type", "wireguard"); err != nil {
+			return progress, fmt.Errorf("cannot create WireGuard interface: %w", err)
+		}
+		progress.Created = true
+		var err error
+		index, err = b.lookupIndex(name)
+		if err != nil || index <= 0 {
+			return progress, fmt.Errorf("cannot resolve created WireGuard ifindex")
+		}
+		progress.IfIndex = index
+		if err := b.verifyCreation(ctx, link, name, progress); err != nil {
+			return progress, err
+		}
+		alias, err := linux.OwnerTag(link.ID)
+		if err != nil {
+			return progress, err
+		}
+		if err := b.setAlias(ctx, index, alias); err != nil {
+			return progress, fmt.Errorf("cannot mark WireGuard ownership: %w", err)
+		}
+		progress.Marked = true
 	}
-	progress.Created = true
-	index, err := b.lookupIndex(name)
-	if err != nil || index <= 0 {
-		return progress, fmt.Errorf("cannot resolve created WireGuard ifindex")
-	}
-	progress.IfIndex = index
-	if err := b.verifyCreation(ctx, link, name, progress); err != nil {
-		return progress, err
-	}
-	alias, err := linux.OwnerTag(link.ID)
-	if err != nil {
-		return progress, err
-	}
-	if err := b.setAlias(ctx, index, alias); err != nil {
-		return progress, fmt.Errorf("cannot mark WireGuard ownership: %w", err)
-	}
-	progress.Marked = true
 	if err := b.verifyCreation(ctx, link, name, progress); err != nil {
 		return progress, err
 	}
@@ -157,8 +219,13 @@ func (b *Backend) createOwnedInterface(ctx context.Context, link domain.Link, na
 	// bytes in argv, stdout, shell history or generic runtime state.
 	args := []string{"set", name, "listen-port", strconv.Itoa(int(link.WireGuard.ListenPort)),
 		"private-key", "/proc/self/fd/3", "peer", link.WireGuard.PeerPublicKey,
-		"endpoint", endpoint(link), "allowed-ips", netip.PrefixFrom(link.Addresses.Peer.Addr(), 32).String(),
-		"persistent-keepalive", strconv.Itoa(int(link.WireGuard.LocalKeepalive))}
+	}
+	if ep := endpoint(link); ep != "" {
+		args = append(args, "endpoint", ep)
+	}
+	args = append(args,
+		"allowed-ips", netip.PrefixFrom(link.Addresses.Peer.Addr(), 32).String(),
+		"persistent-keepalive", strconv.Itoa(int(link.WireGuard.LocalKeepalive)))
 	progress.ConfigAttempted = true
 	if _, err := b.runner.RunWithFiles(ctx, b.wgBinary, []*os.File{file}, args...); err != nil {
 		return progress, fmt.Errorf("cannot configure WireGuard public peer settings")
@@ -206,7 +273,10 @@ func createdStateMatches(state observedLink, link domain.Link, name string, p cr
 	alias := ""
 	owner := domain.LinkID("")
 	if p.Marked {
-		alias, _ = linux.OwnerTag(link.ID)
+		alias = p.OriginalAlias
+		if alias == "" {
+			alias, _ = linux.OwnerTag(link.ID)
+		}
 		owner = link.ID
 	}
 	if state.Alias != alias || state.Owner != owner {
@@ -222,7 +292,7 @@ func createdStateMatches(state observedLink, link domain.Link, name string, p cr
 		}
 		// Before the interface is activated, verify the configured peer
 		// endpoint as well. Later authenticated roaming is not drift.
-		if !p.UpAttempted && state.Endpoint != endpoint(link) {
+		if !p.UpAttempted && endpoint(link) != "" && state.Endpoint != endpoint(link) {
 			return false
 		}
 	} else {
@@ -263,6 +333,13 @@ func (b *Backend) rollbackCreatedInterface(ctx context.Context, link domain.Link
 			if other.IfIndex == p.IfIndex {
 				return fmt.Errorf("WireGuard ifindex was reused; preserving foreign interface")
 			}
+		}
+		if b.wssHost != nil {
+			// This is not a verified deletion. The original WG may have
+			// moved to another namespace and become administratively DOWN,
+			// so neither a local wg inventory nor an ss socket scan can
+			// authorize WSS nft guard removal.
+			return fmt.Errorf("original WSS kernel interface not visible; cannot attest targeted deletion")
 		}
 		return nil
 	}

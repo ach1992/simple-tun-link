@@ -205,3 +205,160 @@ Keep Go modules, third-party binaries and CI/installer dependencies
 minimal and provenance-checked. Use GitHub **private vulnerability
 reporting / Security Advisories** for suspected security defects,
 rather than disclosing exploit details in a public Issue.
+
+## WireGuard over WSS/TLS R1 (candidate security boundary)
+
+WSS is a link-scoped carrier around the **real kernel WireGuard** backend,
+not a second VPN engine or a generic bypass route. The listener requires
+trusted mTLS: separate 2-month leaf certificates (server/client purpose),
+a 3-month Link-specific CA, exact server identity/SAN and verified private
+keys. One independently generated 256-bit per-Link bearer and fixed destination
+restrictions protect each authorized WSS forwarding path. Do not assert
+strict leaf-CN pinning: the per-Link CA **plus independent bearer/path scope**
+is the accepted security model. CA signing material is never persisted.
+
+All private keys/authorization files are owner-private 0600 beneath
+verified descriptor-traversed directories; bearer values must never reach
+argv, ordinary State, public diagnostics or normal logs. Wstunnel v11.0.0
+must match the release archive and executable digests pinned in the installer;
+foreign executables are never adopted. Installer ownership and path admission
+are rechecked at runtime. Systemd starts exact link-owned transient processes
+with bounded readiness and scoped stop; process running is not proof of
+successful mTLS handshake or end-to-end traffic.
+
+Before the kernel WireGuard UDP port is created, a Link-specific nftables
+ingress guard drops non-loopback direct UDP to that port; only the loopback
+forwarder may reach the socket. Host firewall coexistence, foreign services,
+UDP/TCP port collisions and owner claims must be checked before mutation.
+No global firewall flush or system-wide service restart is allowed. The
+Engine journals/verifies its one Link; rollback/Remove can affect only
+resources attributable to that identity. WSS Remove writes a nonsecret,
+exact Link-specific credential-retirement receipt in the same durable State
+transaction as Link deletion. It then verifies all host resources absent,
+retiring the credential files; if interrupted, receipt-bound retire-wss is
+the explicit recovery action. External user-chosen exported copies remain
+the operator's data-retention responsibility.
+
+Security is not bypassed by CLI/menu success messages. Real accepted mTLS,
+kernel WG handshake, scoped ingress, private ICMP/TCP/UDP and cleanup must
+be independently tested. In isolated tests the actual transport, kernel
+networking and nft guards operate in rootless namespaces; a disposable
+process supervisor **simulates systemd control only**, so those tests do not
+prove a real host's systemd reboot restore. Physical two-server testing,
+independent review, Main merge and publication remain distinct gates.
+
+### R2 WSS crash-journal security boundary
+
+The pre-effect journal records a public transaction reservation, **not
+proof of original host ownership**. Neither a table name, ifalias,
+systemd unit name, public WG key nor journal nonce alone authorizes
+cleanup. A failed/uncertain journal fsync prevents Backend Apply.
+Automatic Ensure/Remove/reboot replay cannot cross an unresolved
+transaction. Vacancy-only reconciliation is read-only until an
+exact journal-only State commit; any observed or uncertain host effect
+blocks it. It preserves all private credentials and never changes
+firewall, network or systemd state. A committed interrupted Remove may only be finalized by
+`reconcile-wss-removed` after exact original owner/claim verification
+and read-only proof the helper, nft guard and kernel WG are ALL absent.
+It durably commits the original issuance-time fingerprint-bound retirement
+receipt without modifying any host object. Retirement requires absence of
+any **loaded**, including failed/inactive, helper unit, and SHA-256 matching
+each originally issued TLS/authorization private file. Same-name/mode
+replacement material must survive, even when a receipt remains pending.
+The unreleased R3 candidate adds explicitly confirmed
+`reconcile-wss-original`: original 128-bit creation nonce must match
+nft rule and systemd unit description, while Linux WireGuard creation
+uses an unpredictable nonce-derived staging name followed by ifindex-
+targeted alias publication and rename. An unmarked staging interface
+has no independently attested origin: its random name and empty/down
+appearance are never delete authority.
+STL quarantines it along with the journal and ingress guard.
+A dispatched RTM_NEWLINK whose ACK/timeout/cancellation cannot prove
+whether the staging object was created is treated as an indeterminate
+host effect. Its original ingress nft guard and durable crash journal
+MUST survive; normal rollback is prohibited until original staging
+ownership is independently attested outside the unsafe name-only path.
+The ordinary `reconcile-wss-original` command rejects untagged staging,
+including an actual pre-alias crash. See `OPERATOR-RECOVERY.md` for the
+separate manual identity-attestation gate; never delete on heuristic
+name/configuration evidence. This ordering is exercised by the rootless
+kernel-creation-then-lost-ACK test.
+
+The helper is collected before deleting a rechecked, nonce-tagged
+original WG ifindex. Complete and consistent namespace-local WireGuard
+interface/public-key/listen-port readback, plus a bounded UDP socket
+readback in the guarded birthplace namespace, is mandatory before EVERY
+protective guard deletion, including ordinary Remove and Ensure rollback.
+Linux can move WireGuard interfaces into another network namespace while
+retaining the original UDP socket; when the moved interface is DOWN,
+even the socket disappears until it is brought UP again. Therefore
+these readbacks do not establish whole-host vacancy. A fresh
+original-nonce-bound, index-targeted **successful kernel deletion**
+witness is additionally required before lifting a live nft guard or
+consuming a WSS crash journal to authorize credential retirement.
+Missing provenance, even if the namespace appears empty, retains the
+guard/journal/credentials for independently authorized manual recovery.
+No namespace-local inventory is labeled a complete host-wide proof.
+Partial compensation preserves its journal and conservative host
+protection.
+
+**Ordinary WSS original-generation safety:** a committed Link may have its
+original WG interface moved DOWN to another netns, so no source-namespace
+interface or UDP socket appears. `Ensure`, `RestoreAll` and FIRST `Remove`
+MUST NOT infer vacancy or old-kernel extinction from those local reports,
+even if a foreign actor previously removed the original nft guard and
+stopped the helper. A new per-Link durable trusted-kernel-generation birth
+record permits an absent original only after a different, independently
+trusted host boot and strict current-host vacancy. Legacy/untrusted birth
+records cannot unlock that route. The original State, resource claims,
+credentials and existing ingress guard are otherwise retained untouched.
+Successful Remove publishes a versioned `wss_original_termination`
+provenance field only after exact-original ifindex deletion or trusted old-
+kernel extinction; legacy receipts without such proof never authorize
+`retire-wss`. A receipt or local-only empty inventory cannot make a moved
+WG disappear. Guard deletion still requires the fresh exact-index witness,
+not merely kernel-generation proof. See the operator runbook for quarantine
+and full-host reboot Owner decisions.
+
+A separately confirmed `arm-wss-cold-boot` checkpoint writes
+the real kernel-provided boot UUID into the original, durable WSS
+journal under canonical locks, without changing host resources.
+Host-kernel provenance is checked before Arm, Reconcile and the final
+commit: **initial PID namespace**, unshadowed procfs mount root and
+boot-ID path, live procfs file type and stable mount inventory.
+Successful Arm atomically persists both the Boot ID and a versioned
+`cold_boot_source` witness (`linux-initial-pid-unshadowed-procfs-v1`).
+Reconcile requires this ORIGINAL recorded witness in addition to a
+currently trusted, different host-kernel Boot ID. A legacy UUID-only
+checkpoint is still readable but never auto-upgraded, re-armed or
+accepted as extinction proof, even if a subsequent process runs in a
+trusted host environment. Original journal, reservations, guard and
+private material remain quarantined for Owner-gated manual resolution. A
+container-restart UUID (including systemd-nspawn's bind-mounted one),
+synthetic procfile, missing/ambiguous procfs evidence or nested PID
+namespace never authorizes generation extinction. Journal, guard,
+claims and private credentials remain quarantined in these cases.
+After a **separately Owner-approved full kernel reboot** destroys
+the original WG generation across all network namespaces,
+`reconcile-wss-cold-boot` compares the new kernel boot ID
+against that immutable pre-reboot checkpoint, authenticates
+the original committed owner and issuance-time fingerprints, and
+verifies strict CURRENT-boot helper/nft/WG/socket vacancy. It may
+then atomically consume only the exact journal and publish the
+original receipt for a committed Remove. It neither restarts the
+host nor removes kernel/firewall/service objects and can never
+infer a reboot from a missing local interface/socket. An unarmed,
+same-boot, tampered, unknown or competing-resource case retains
+all journal/resource/credential quarantine. Read the explicit Owner
+authorization, backup, namespace and rollback procedure in
+`docs/OPERATOR-RECOVERY.md`. The local malicious-root
+threat boundary remains unchanged.
+
+A separate `reconcile-wss-repair-vacant` operation verifies all
+original issuance-time private fingerprints AND host vacancy before
+clearing a committed Ensure/repair journal while preserving the Link.
+No automatic reboot RestoreAll may bypass a pending journal.
+Staging names and public nonce markers are not intended to defeat a
+malicious local root administrator who can rewrite protected State and
+forge kernel objects; actual systemd, two-host and ARM64 WSS field
+acceptance and independent review remain separate gates.

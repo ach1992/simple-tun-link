@@ -629,6 +629,17 @@ A successful installer update by itself neither validates a newly running
 Link nor proves persistence after reboot; those are separate Engine/release
 acceptance steps.
 
+**State v4 is a separate, non-downgrade-safe boundary.** The unreleased
+WSS-managed runtime writes schema v4 even on hosts with only Native Links
+once State is updated. A pre-v4 STL binary must not parse, restore or mutate
+that snapshot; failure to read State does **not** prove no Links are configured.
+Safe rollback requires an independently verified, unchanged, consistent and
+credential-matched pre-v4 backup, and proof that no later operation committed
+a newer recovery/ownership identity. Otherwise use a v4-capable forward fix.
+Restoring only an old binary while retaining schema v4 is NOT a valid rollback.
+Never manually rewrite schema_version or strip pre-effect journals, original
+WSS fingerprints, receipts or resource claims.
+
 **Do not treat installer binary rollback as State rollback.** Once any new
 runtime has written schema v3, pre-v3 STL executables cannot read that State
 and must fail closed. On a failed new-version rollout, prefer a verified
@@ -748,3 +759,55 @@ bundle tests prove arm64 execution, real distro support, service restart,
 firewall safety, or kernel traffic. Actual backend/platform release evidence belongs to the
 reproducible operations runbooks and GitHub release/check records.
 Publication remains a separately authorized action.
+
+## Optional pinned WSS companion (WireGuard over WSS R1 candidate)
+
+Core STL remains the official single-file local installer. WSS is **optional**.
+For the R1 development candidate (not a Stable release claim), obtain the
+official upstream **wstunnel v11.0.0** Linux archive for the target CPU:
+- x86_64: wstunnel_11.0.0_linux_amd64.tar.gz, archive SHA-256
+  9708a99717b5a951453c2ff7c14c25d3418d02ca7fcb96fdb382a8f2083bab5e.
+- aarch64: wstunnel_11.0.0_linux_arm64.tar.gz, archive SHA-256
+  b86abf73e340ed0c3ff9a77a5458aa27213784920ec65513132b36def45edc94.
+
+Upstream source: https://github.com/erebe/wstunnel/releases/tag/v11.0.0.
+Do not rename or extract this file. Put it **beside** the official single-file
+STL local installer and run the **same single-file installer** with the
+explicit --with-wss option. Mere archive presence is not consent to install
+an optional Carrier. When selected, the installer detects that exact filename, snapshots the archive into
+installer-controlled private staging, validates SHA-256 of the entire archive
+and the extracted executable plus exact version, then stages the helper at
+/usr/local/libexec/stl/wstunnel with an ownership record. No network download,
+helper unpack step, alternate helper installer or WSS effect is required of the
+operator. Ordinary STL users, including those leaving an unselected
+companion beside the installer, get unchanged core behavior. A bad archive, wrong CPU or foreign target binary fails closed.
+
+The one-command selected-Carrier form is:
+
+~~~sh
+sudo bash /root/stl/stl_vX.Y.Z_linux_amd64_local-install.sh --with-wss
+~~~
+
+Replace vX.Y.Z with a **real published** version; no WSS R1 Stable
+release is claimed. Missing or mismatched selected archives are rejected
+before the core installer is started.
+
+For an **already installer-owned** STL candidate, the equivalent standalone
+administrator recovery action is available (not the normal first-use path):
+~~~sh
+sudo bash scripts/install.sh companion-wss --archive /absolute/path/wstunnel_11.0.0_linux_amd64.tar.gz --prefix /usr/local
+~~~
+Run that action only using the verified canonical installer from the exact
+candidate being tested. Never copy binaries into /usr/local/libexec/stl or
+forge the installer record manually; the read-only Engine admission checks the
+whole trusted executable path, digest and ownership before each activation.
+
+WSS uses real kernel WireGuard plus TLS/mTLS. The selected TCP endpoint must
+be reachable across the two servers; kernel WireGuard UDP must **not** be
+exposed publicly and is restricted by STL's scoped nftables guard. Conflicts
+with other host firewalls/interfaces/services cause refusal, not takeover.
+A completed local installation does NOT prove WSS connectivity, mTLS peer
+acceptance or a WireGuard handshake. See the exact pairing examples in
+[CLI.md](CLI.md), evidence gates in Issue #142 and the scope in
+[SECURITY.md](SECURITY.md). Do not deploy an unreleased R1 candidate as a
+replacement for an existing Stable production Link.

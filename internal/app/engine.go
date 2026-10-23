@@ -15,6 +15,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/hostidentity"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
@@ -46,7 +47,15 @@ type Engine struct {
 	restorePersistence RestorePersistence
 	restoreExecutable  string
 	restoreModules     func(context.Context, domain.Link) error
-	ipsecRetirement    interface {
+	// Trusted current kernel lifetime source. Tests in package app can
+	// inject deterministic boot transitions; production has no override.
+	kernelBootID  func() (string, error)
+	wssRetirement interface {
+		RetireAfterRemove(context.Context, domain.Link, state.WSSFileIdentity) error
+		CaptureIdentity(context.Context, domain.Link) (state.WSSFileIdentity, error)
+		VerifyAbsent(context.Context, domain.Link) error
+	}
+	ipsecRetirement interface {
 		RetireMatching(domain.LinkID, string) error
 	}
 }
@@ -65,7 +74,8 @@ func New(backends *backend.Registry, store state.Store, locks Locker) (*Engine, 
 	if backends == nil || store == nil || locks == nil {
 		return nil, fmt.Errorf("backends, store, and locks are required")
 	}
-	e := &Engine{backends: backends, store: store, locks: locks}
+	e := &Engine{backends: backends, store: store, locks: locks,
+		kernelBootID: hostidentity.CurrentKernelBootID}
 	if impl, exists := backends.Get(domain.BackendIPsec); exists {
 		// An operational IPsec backend can be used only inside this Engine's
 		// canonical mutation/journal authority, not by a parallel CLI writer.
@@ -104,6 +114,16 @@ func (e *Engine) SetRestoreModuleBootstrap(fn func(context.Context, domain.Link)
 // SetIPsecRetirementStore installs the local, protected credential backend for
 // post-Remove receipt-bound deletion, independent of running strongSwan.
 // Configure only during Engine assembly, before concurrent operations.
+// SetWSSRetirementStore wires exact credential deletion under the Engine's
+// receipt, state and resource lock gates. Failure leaves the receipt retryable.
+func (e *Engine) SetWSSRetirementStore(retirer interface {
+	RetireAfterRemove(context.Context, domain.Link, state.WSSFileIdentity) error
+	CaptureIdentity(context.Context, domain.Link) (state.WSSFileIdentity, error)
+	VerifyAbsent(context.Context, domain.Link) error
+}) {
+	e.wssRetirement = retirer
+}
+
 func (e *Engine) SetIPsecRetirementStore(store interface {
 	RetireMatching(domain.LinkID, string) error
 }) {
@@ -167,6 +187,24 @@ func (e *Engine) EnsureWithWireGuardCredential(ctx context.Context, desired doma
 	}
 	return e.ensureWithProvision(ctx, desired, true, func() error {
 		return store.EnsureRecipient(desired.ID, credential, desired.WireGuard.LocalPublicKey)
+	})
+}
+
+// EnsureWithWSSCredential stages the WireGuard key and the endpoint-local mTLS
+// material under the exact same canonical Engine maintenance and Link locks
+// that govern the subsequent WSS kernel/firewall/sidecar transition.
+func (e *Engine) EnsureWithWSSCredential(ctx context.Context, desired domain.Link,
+	credential []byte, store RecipientCredentialStore, stageTLS func() error) (Result, error) {
+	if desired.Backend != domain.BackendWireGuardWSS || store == nil || stageTLS == nil ||
+		desired.WireGuard.ListenPort == 0 || desired.WireGuard.PeerPort == 0 {
+		return Result{}, stlerr.New(stlerr.CodeUnsupported, "wss_credential", string(desired.ID),
+			string(desired.Backend), "WSS requires protected WireGuard and mTLS provisioning")
+	}
+	return e.ensureWithProvision(ctx, desired, true, func() error {
+		if err := store.EnsureRecipient(desired.ID, credential, desired.WireGuard.LocalPublicKey); err != nil {
+			return err
+		}
+		return stageTLS()
 	})
 }
 
@@ -236,6 +274,12 @@ func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.
 	if err != nil {
 		return Result{}, stlerr.Wrap(stlerr.CodeState, "remove", string(id), "", "cannot load local state", err)
 	}
+	if _, pending := snapshot.FindWSSCrashOperation(id); pending {
+		blocked := stlerr.New(stlerr.CodeConflict, "remove", string(id), string(domain.BackendWireGuardWSS),
+			"WSS pre-effect crash journal blocks Remove until explicit reconciliation")
+		blocked.ReasonCode = "wss_crash_quarantined"
+		return Result{}, blocked
+	}
 	record, ok := snapshot.Find(id)
 	if !ok {
 		return Result{}, stlerr.New(stlerr.CodeInvalid, "remove", string(id), "", "Link is not present in local state")
@@ -298,6 +342,14 @@ func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.
 					DesiredState: "committed", Rollback: "not_attempted"})
 		}
 	}
+	if prior.Backend == domain.BackendWireGuardWSS {
+		if err := e.retireWSSCredentialLocked(ctx, id); err != nil {
+			return result, stlerr.WithEvidence(
+				stlerr.Wrap(stlerr.CodeState, "remove", string(id), string(prior.Backend),
+					"WSS Link removal was committed but TLS/WG credential retirement is pending; retry exact receipt-bound retirement", err),
+				stlerr.OperationEvidence{Stage: "credential_retirement", HostMutation: "attempted", DesiredState: "committed", Rollback: "not_attempted"})
+		}
+	}
 	if prior.Backend == domain.BackendIPsec {
 		if err := e.retireIPsecCredentialLocked(ctx, id); err != nil {
 			hostMutation := "not_attempted"
@@ -332,6 +384,18 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 	snapshot, err := e.store.Load(ctx)
 	if err != nil {
 		return Result{}, stlerr.Wrap(stlerr.CodeState, "ensure", string(desired.ID), string(desired.Backend), "cannot load local state", err)
+	}
+	if stored, exists := snapshot.Find(desired.ID); exists && stored.WSSSupersededBy != "" {
+		blocked := stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID),
+			string(desired.Backend), "superseded WSS original remains protected; ordinary Ensure cannot reactivate it")
+		blocked.ReasonCode = "wss_original_superseded"
+		return Result{}, blocked
+	}
+	if _, pending := snapshot.FindWSSCrashOperation(desired.ID); pending {
+		blocked := stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID),
+			string(desired.Backend), "WSS pre-effect crash journal requires explicit, owner-verified reconciliation")
+		blocked.ReasonCode = "wss_crash_quarantined"
+		return Result{}, blocked
 	}
 	if _, pending := snapshot.FindPendingSender(desired.ID); pending {
 		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID), string(desired.Backend),
@@ -368,6 +432,10 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 	// Invalidate historical removal authority BEFORE a new attempt (even
 	// one which later fails apply) can stage a key or host resources. An
 	// old receipt must never authorize deleting an active retry's key.
+	if receipt, found := snapshot.FindRemovalReceipt(desired.ID); found && receipt.Backend == domain.BackendWireGuardWSS {
+		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID), string(desired.Backend),
+			"retired WSS Link identity is reserved permanently; create a new Link ID")
+	}
 	if _, receipt := snapshot.FindRemovalReceipt(desired.ID); receipt {
 		if err := e.store.Update(ctx, func(fresh *state.Snapshot) error {
 			if _, pending := fresh.FindPendingSender(desired.ID); pending {
@@ -426,6 +494,47 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 	}()
 	request.OwnedResources = append([]domain.ResourceClaim(nil), prior.OwnedResources...)
 	link := request.Link
+	var trustedWSSBoot string
+	var manualWSSRestore, newWSSOriginal bool
+	if link.Backend == domain.BackendWireGuardWSS {
+		// This source is optional for initial provisioning in unsupported
+		// namespaces. Without provenance, absence of the original can NEVER
+		// authorize an automatic future Remove/RestoreAll.
+		if e.kernelBootID != nil {
+			if boot, readErr := e.kernelBootID(); readErr == nil && hostidentity.ValidBootID(boot) {
+				trustedWSSBoot = boot
+			}
+		}
+		if prior.Desired.ID == link.ID {
+			var contextErr error
+			ctx, contextErr = backend.WithWSSOrigin(ctx, prior.WSSOrigin)
+			if contextErr != nil {
+				return Result{}, stlerr.New(stlerr.CodeState, "wss_original_object",
+					string(link.ID), "wireguard-wss", "committed Link lacks original WSS creation-object identity")
+			}
+			// A manually reconciled legacy repair has an independent, narrowly
+			// scoped one-use kernel-extinction witness. It cannot authorize
+			// Remove or same-kernel repair after it has been spent.
+			if prior.WSSColdBootRestore != (state.WSSColdBootRestore{}) {
+				if request.Operation != backend.OperationEnsure ||
+					!prior.WSSColdBootRestore.AvailableOn(trustedWSSBoot) {
+					return Result{}, fmt.Errorf("WSS manual cold-boot restore authorization unavailable or already spent")
+				}
+				manualWSSRestore = true
+			}
+			// Ordinary trusted-birth admission remains distinct from manual
+			// legacy recovery. Neither local emptiness nor an ordinary no-op
+			// may mint birth-generation evidence.
+			if manualWSSRestore || (prior.WSSKernelBootSource == hostidentity.VerifiedHostBootSourceV1 &&
+				hostidentity.ValidBootID(prior.WSSKernelBootID) && trustedWSSBoot != "" &&
+				trustedWSSBoot != prior.WSSKernelBootID) {
+				ctx, contextErr = backend.WithWSSColdBootExtinct(ctx, link.ID)
+				if contextErr != nil {
+					return Result{}, contextErr
+				}
+			}
+		}
+	}
 	impl, ok := e.backends.Get(link.Backend)
 	if !ok {
 		return Result{}, stlerr.New(stlerr.CodeUnsupported, string(request.Operation), string(link.ID), string(link.Backend), "backend is not registered")
@@ -468,6 +577,60 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 	fresh, err := e.store.Load(ctx)
 	if err != nil {
 		return Result{}, stlerr.Wrap(stlerr.CodeState, string(request.Operation), string(link.ID), string(link.Backend), "cannot reload local state", err)
+	}
+	if stored, exists := fresh.Find(link.ID); exists && stored.WSSSupersededBy != "" &&
+		request.Operation == backend.OperationEnsure {
+		blocked := stlerr.New(stlerr.CodeConflict, "ensure", string(link.ID),
+			"wireguard-wss", "superseded WSS original cannot be restored or re-ensured")
+		blocked.ReasonCode = "wss_original_superseded"
+		return Result{}, blocked
+	}
+	if _, pending := fresh.FindWSSCrashOperation(link.ID); pending {
+		return Result{}, stlerr.New(stlerr.CodeConflict, string(request.Operation),
+			string(link.ID), string(link.Backend),
+			"unfinished WSS pre-effect journal: no host mutation permitted")
+	}
+	if link.Backend == domain.BackendWireGuardWSS && prior.Desired.ID == link.ID {
+		current, present := fresh.Find(link.ID)
+		if !present || current.Desired != prior.Desired || current.WSSOrigin != prior.WSSOrigin ||
+			current.WSSFiles != prior.WSSFiles || current.WSSKernelBootID != prior.WSSKernelBootID ||
+			current.WSSKernelBootSource != prior.WSSKernelBootSource ||
+			current.WSSColdBootRestore != prior.WSSColdBootRestore ||
+			current.WSSSupersededBy != prior.WSSSupersededBy ||
+			!slices.Equal(current.OwnedResources, prior.OwnedResources) {
+			return Result{}, fmt.Errorf("committed WSS original generation changed after resource locks")
+		}
+	}
+	if link.Backend == domain.BackendWireGuardWSS && prior.Desired.ID == link.ID {
+		indexObs, ok := observed.(interface{ WSSOriginalIfIndex() int })
+		if !ok {
+			return Result{}, fmt.Errorf("WSS backend lacks explicit original-ifindex observation")
+		}
+		if indexObs.WSSOriginalIfIndex() <= 0 {
+			if !backend.HasWSSColdBootExtinctionWitness(ctx, link.ID) {
+				blocked := stlerr.New(stlerr.CodeConflict, "wss_original", string(link.ID),
+					string(domain.BackendWireGuardWSS),
+					"original committed WSS WG missing locally in this kernel generation; preserve State and credentials")
+				blocked.ReasonCode = "wss_original_unverified"
+				return Result{}, blocked
+			}
+			verifier, ok := impl.(interface {
+				CrashHostVacant(context.Context, backend.Observation) (bool, error)
+			})
+			if !ok {
+				return Result{}, fmt.Errorf("WSS backend lacks strict post-reboot global vacancy verification")
+			}
+			vacant, vacancyErr := verifier.CrashHostVacant(ctx, observed)
+			if vacancyErr != nil || !vacant {
+				return Result{}, fmt.Errorf("WSS post-reboot original host vacancy is unverified: %w", errors.Join(vacancyErr, backend.ErrIndeterminateHostEffect))
+			}
+			newWSSOriginal = request.Operation == backend.OperationEnsure
+		} else if manualWSSRestore {
+			// Reconciliation proved vacancy. A subsequently visible object
+			// might be foreign or an interrupted new creation, not a
+			// historical original that may be silently adopted.
+			return Result{}, fmt.Errorf("WSS manually recovered original is unexpectedly visible; preserve authorization and inspect ownership")
+		}
 	}
 	if link.Backend == domain.BackendIPsec {
 		if _, previousXFRM := fresh.FindIPsecXFRMOperation(link.ID); previousXFRM {
@@ -539,6 +702,24 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		return Result{}, contextualize(err, stlerr.CodeValidate, string(request.Operation), link, "backend validation failed")
 	}
 
+	// Existing credential hashes are immutable. Re-Ensure cannot silently
+	// authorize a same-name replacement as a new issuance generation.
+	if link.Backend == domain.BackendWireGuardWSS && request.Operation == backend.OperationEnsure &&
+		prior.Desired.ID == link.ID {
+		if e.wssRetirement == nil {
+			return Result{}, stlerr.New(stlerr.CodeState, "wss_identity", string(link.ID), "wireguard-wss",
+				"protected WSS identity attestation not configured")
+		}
+		original, err := e.wssRetirement.CaptureIdentity(ctx, link)
+		if err != nil {
+			return Result{}, stlerr.Wrap(stlerr.CodeState, "wss_identity", string(link.ID), "wireguard-wss",
+				"cannot verify original WSS credential contents", err)
+		}
+		if original != prior.WSSFiles {
+			return Result{}, stlerr.New(stlerr.CodeConflict, "wss_identity", string(link.ID), "wireguard-wss",
+				"original WSS credential generation changed")
+		}
+	}
 	ipsecRetirementDigest := ""
 	if request.Operation == backend.OperationRemove && link.Backend == domain.BackendIPsec {
 		fingerprint, ok := impl.(interface {
@@ -556,6 +737,14 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		ipsecRetirementDigest = digest
 	}
 	changed := !plan.Empty()
+	if link.Backend == domain.BackendWireGuardWSS && request.Operation == backend.OperationEnsure {
+		if prior.Desired.ID != link.ID {
+			newWSSOriginal = true
+		}
+		if newWSSOriginal && (!changed || trustedWSSBoot == "" && manualWSSRestore) {
+			return Result{}, fmt.Errorf("WSS missing original requires a verifiable non-empty new-generation Apply")
+		}
+	}
 	if activateIPsec {
 		if !changed {
 			return Result{}, stlerr.New(stlerr.CodeConflict, "ipsec_activate", string(link.ID), "ipsec", "staged IPsec activation has no vacant resources to create")
@@ -696,6 +885,27 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 			}
 		}
 	}
+	var preparedWSS state.WSSCrashOperation
+	postPreparePrior := prior
+	if changed && link.Backend == domain.BackendWireGuardWSS {
+		// WSS creates an nft guard before kernel WG; power loss at ANY
+		// subsequent step must retain a durable quarantine/reservation.
+		var prepareErr error
+		preparedWSS, prepareErr = e.prepareWSSCrash(ctx, request, prior, resources, manualWSSRestore)
+		if prepareErr != nil {
+			return Result{}, prepareErr
+		}
+		if manualWSSRestore {
+			postPreparePrior.WSSColdBootRestore.Spent = true
+		}
+		if prior.Desired.ID != link.ID {
+			ctx, prepareErr = backend.WithWSSOrigin(ctx, preparedWSS.Nonce)
+			if prepareErr != nil {
+				return Result{}, stlerr.New(stlerr.CodeState, "wss_original_object",
+					string(link.ID), "wireguard-wss", "journal original-object nonce invalid after publication")
+			}
+		}
+	}
 	var undo backend.Rollback
 	if changed {
 		evidence.Stage = "apply"
@@ -707,6 +917,38 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		}
 		if undo == nil {
 			return Result{}, stlerr.New(stlerr.CodeInternal, string(request.Operation), string(link.ID), string(link.Backend), "backend changed state without providing rollback")
+		}
+	}
+
+	// Ordinary WSS Remove must carry positive original-kernel termination
+	// evidence before Verify/State/receipt publication. The index witness
+	// is issued only after successful Apply that deleted the plan-pinned
+	// original kernel ifindex. No-op (missing-WG) Remove requires trusted
+	// old-generation extinction from the committed Link, not local vacancy.
+	wssOriginalTermination := ""
+	verificationCtx := ctx
+	if link.Backend == domain.BackendWireGuardWSS && request.Operation == backend.OperationRemove {
+		originalIfIndex := 0
+		if pinned, ok := plan.(interface{ WSSOriginalRemoveIndex() int }); ok {
+			originalIfIndex = pinned.WSSOriginalRemoveIndex()
+		}
+		if originalIfIndex > 0 && changed {
+			indexObs, ok := observed.(interface{ WSSOriginalIfIndex() int })
+			if !ok || indexObs.WSSOriginalIfIndex() != originalIfIndex {
+				return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo, "wss_remove_proof", evidence.HostMutation,
+					fmt.Errorf("WSS deletion plan does not match the original locked ifindex"))
+			}
+			witness, witnessErr := backend.WithWSSWGDeleted(ctx, link.ID)
+			if witnessErr != nil {
+				return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo, "wss_remove_proof", evidence.HostMutation, witnessErr)
+			}
+			verificationCtx = witness // Never leak a deletion witness to rollback callbacks.
+			wssOriginalTermination = state.WSSOriginalExactIfIndexDeleted
+		} else if backend.HasWSSColdBootExtinctionWitness(ctx, link.ID) {
+			wssOriginalTermination = state.WSSOriginalKernelGenerationExtinct
+		} else {
+			return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo, "wss_remove_proof", evidence.HostMutation,
+				fmt.Errorf("WSS original ifindex deletion/kernel generation proof missing; retain committed Link and credentials"))
 		}
 	}
 
@@ -743,10 +985,57 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		}
 	}
 	evidence.Stage = "verify"
-	if _, err := impl.Verify(ctx, request); err != nil {
+	if _, err := impl.Verify(verificationCtx, request); err != nil {
 		return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo, evidence.Stage, evidence.HostMutation, contextualize(err, stlerr.CodeVerify, string(request.Operation), link, "backend verification failed"))
 	}
+	if link.Backend == domain.BackendWireGuardWSS && request.Operation == backend.OperationRemove {
+		// A second, read-only global vacancy test at the RECEIPT boundary
+		// must agree with the exact-Index or original-generation witness.
+		verifier, ok := impl.(interface {
+			CrashHostVacant(context.Context, backend.Observation) (bool, error)
+		})
+		if !ok {
+			return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo, "wss_retirement_proof", evidence.HostMutation,
+				fmt.Errorf("WSS backend lacks original-generation vacancy verifier"))
+		}
+		current, inspectErr := impl.Inspect(verificationCtx, link)
+		if inspectErr != nil {
+			return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo, "wss_retirement_proof", evidence.HostMutation, inspectErr)
+		}
+		vacant, vacancyErr := verifier.CrashHostVacant(verificationCtx, current)
+		if vacancyErr != nil || !vacant {
+			return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo, "wss_retirement_proof", evidence.HostMutation,
+				fmt.Errorf("WSS original generation/current host vacancy unverified; preserve owner receipt: %w", errors.Join(vacancyErr, backend.ErrIndeterminateHostEffect)))
+		}
+	}
+	// Reverify generation after the complete host operation and BEFORE any
+	// successful durable State transition. Never retain an assumed proof if
+	// the kernel source changed or became untrusted during the operation.
+	if trustedWSSBoot != "" {
+		confirmed, readErr := e.kernelBootID()
+		if readErr != nil || confirmed != trustedWSSBoot {
+			return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo, "wss_boot_identity", evidence.HostMutation,
+				fmt.Errorf("original WSS kernel generation changed during lifecycle transaction"))
+		}
+	}
 
+	wssFiles := state.WSSFileIdentity{}
+	if link.Backend == domain.BackendWireGuardWSS && request.Operation == backend.OperationEnsure {
+		if e.wssRetirement == nil {
+			return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo,
+				"wss_credential_identity", "attempted", fmt.Errorf("WSS identity backend unavailable"))
+		}
+		var captureErr error
+		wssFiles, captureErr = e.wssRetirement.CaptureIdentity(ctx, link)
+		if captureErr != nil {
+			return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo,
+				"wss_credential_identity", "attempted", fmt.Errorf("cannot capture original WSS credential identities: %w", captureErr))
+		}
+		if prior.Desired.ID == link.ID && prior.WSSFiles != wssFiles {
+			return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo,
+				"wss_credential_identity", "attempted", fmt.Errorf("WSS issued credential fingerprints drifted"))
+		}
+	}
 	// Serialize only the host-wide persistence transition and state commit.
 	// Backend inspection/apply stays per-Link to preserve Multi-Link concurrency.
 	var persistenceUndo func(context.Context) error
@@ -835,7 +1124,37 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 			if _, removed := snapshot.FindRemovalReceipt(link.ID); removed {
 				return fmt.Errorf("obsolete removal receipt survives ensure")
 			}
-			snapshot.Upsert(state.LinkRecord{Desired: link, OwnedResources: resources})
+			originalNonce := prior.WSSOrigin
+			birthBoot, birthSource := prior.WSSKernelBootID, prior.WSSKernelBootSource
+			restoreProof := prior.WSSColdBootRestore
+			if link.Backend == domain.BackendWireGuardWSS {
+				if prior.Desired.ID != link.ID {
+					originalNonce = preparedWSS.Nonce
+				} else {
+					current, ok := snapshot.Find(link.ID)
+					if !ok || current.Desired != prior.Desired ||
+						current.WSSFiles != prior.WSSFiles || current.WSSOrigin != prior.WSSOrigin ||
+						current.WSSKernelBootID != prior.WSSKernelBootID ||
+						current.WSSKernelBootSource != prior.WSSKernelBootSource ||
+						current.WSSColdBootRestore != postPreparePrior.WSSColdBootRestore ||
+						!slices.Equal(current.OwnedResources, prior.OwnedResources) {
+						return fmt.Errorf("committed WSS original generation changed during Ensure")
+					}
+				}
+				// Never stamp a visible legacy original on ordinary no-op or
+				// sidecar-only repair. Only verified creation of a genuinely
+				// new original in this transaction may set new birth proof.
+				if newWSSOriginal && trustedWSSBoot != "" {
+					birthBoot, birthSource = trustedWSSBoot, hostidentity.VerifiedHostBootSourceV1
+				}
+				if manualWSSRestore {
+					restoreProof = state.WSSColdBootRestore{} // spent after successful creation
+				}
+			}
+			snapshot.Upsert(state.LinkRecord{Desired: link, OwnedResources: resources,
+				WSSFiles: wssFiles, WSSOrigin: originalNonce,
+				WSSKernelBootID: birthBoot, WSSKernelBootSource: birthSource,
+				WSSColdBootRestore: restoreProof})
 		case backend.OperationRemove:
 			if _, operational := impl.(*ipsec.OperationalBackend); operational && link.Backend == domain.BackendIPsec {
 				journal, present := snapshot.FindIPsecRemoveOperation(link.ID)
@@ -844,8 +1163,31 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 					return fmt.Errorf("IPsec Remove still requires durable owner-scoped reconciliation")
 				}
 			}
+			if link.Backend == domain.BackendWireGuardWSS {
+				if !state.ValidWSSOriginalTerminationProof(wssOriginalTermination) {
+					return fmt.Errorf("WSS Remove lacks original generation retirement proof")
+				}
+				current, exists := snapshot.Find(link.ID)
+				if !exists || current.Desired != prior.Desired || current.WSSOrigin != prior.WSSOrigin ||
+					current.WSSFiles != prior.WSSFiles || current.WSSKernelBootID != prior.WSSKernelBootID ||
+					current.WSSKernelBootSource != prior.WSSKernelBootSource ||
+					current.WSSColdBootRestore != prior.WSSColdBootRestore ||
+					!slices.Equal(current.OwnedResources, prior.OwnedResources) {
+					return fmt.Errorf("WSS original owner changed before retirement receipt publication")
+				}
+			}
 			if !snapshot.Delete(link.ID) {
 				return state.ErrNotFound
+			}
+			if link.Backend == domain.BackendWireGuardWSS {
+				if _, exists := snapshot.FindRemovalReceipt(link.ID); exists {
+					return fmt.Errorf("conflicting WSS removal receipt already exists")
+				}
+				snapshot.RemovalReceipts = append(snapshot.RemovalReceipts, state.RemovalReceipt{
+					LinkID: link.ID, Backend: domain.BackendWireGuardWSS,
+					LocalPublicKey: link.WireGuard.LocalPublicKey,
+					WSSLink:        link, WSSFiles: prior.WSSFiles,
+					WSSOriginalTermination: wssOriginalTermination})
 			}
 			if link.Backend == domain.BackendIPsec {
 				if ipsecRetirementDigest == "" {
@@ -863,6 +1205,18 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		default:
 			return fmt.Errorf("unsupported operation %q", request.Operation)
 		}
+		if preparedWSS.Nonce != "" {
+			operation, ok := snapshot.FindWSSCrashOperation(link.ID)
+			if !ok || operation.Nonce != preparedWSS.Nonce || operation.Intent != preparedWSS.Intent ||
+				operation.Operation != preparedWSS.Operation || operation.HadCommittedLink != preparedWSS.HadCommittedLink ||
+				operation.OriginalHostNonce != preparedWSS.OriginalHostNonce ||
+				!slices.Equal(operation.Resources, preparedWSS.Resources) {
+				return fmt.Errorf("WSS durable crash journal changed during host operation")
+			}
+			if !snapshot.DeleteWSSCrashOperation(link.ID) {
+				return fmt.Errorf("WSS pre-effect journal cannot be consumed atomically")
+			}
+		}
 		remaining = len(snapshot.Links)
 		return nil
 	})
@@ -874,8 +1228,18 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		// ambiguity, retain the host state and report a non-success requiring
 		// reconciliation; blindly undoing a published intent is destructive.
 		visible, loadErr := e.store.Load(context.WithoutCancel(ctx))
-		published := loadErr == nil && stateMatchesOperation(visible, request, resources)
-		oldState := loadErr == nil && stateMatchesPrior(visible, link.ID, prior)
+		publicationFiles := wssFiles
+		if request.Operation == backend.OperationRemove {
+			publicationFiles = prior.WSSFiles
+		}
+		publishedOrigin := prior.WSSOrigin
+		if link.Backend == domain.BackendWireGuardWSS && request.Operation == backend.OperationEnsure &&
+			prior.Desired.ID != link.ID {
+			publishedOrigin = preparedWSS.Nonce
+		}
+		published := loadErr == nil && stateMatchesOperation(visible, request, resources, publicationFiles,
+			publishedOrigin, trustedWSSBoot, newWSSOriginal, manualWSSRestore, prior, wssOriginalTermination)
+		oldState := loadErr == nil && stateMatchesPrior(visible, link.ID, postPreparePrior)
 		var publicationErr *state.PublicationError
 		indeterminate := errors.As(commitErr, &publicationErr)
 		if published || indeterminate || !oldState {
@@ -1038,6 +1402,27 @@ func rejectResourceConflicts(snapshot state.Snapshot, id domain.LinkID, wanted [
 			}
 		}
 	}
+	// An interrupted WSS transaction still reserves ALL planned addresses,
+	// listeners, interface identities and host effects. Otherwise a
+	// different Link could reuse those resources before reconciliation.
+	for _, pending := range snapshot.WSSCrashOperations {
+		if pending.Intent.ID == id {
+			continue
+		}
+		for _, wantedClaim := range wanted {
+			for _, reserved := range pending.Resources {
+				conflict, err := domain.ResourceClaimsConflict(wantedClaim, reserved)
+				if err != nil {
+					return stlerr.Wrap(stlerr.CodeState, "validate_resources", string(id), "",
+						"cannot compare interrupted WSS resource reservation", err)
+				}
+				if conflict {
+					return stlerr.New(stlerr.CodeConflict, "validate_resources", string(id), "",
+						"resource reserved by unresolved WSS crash operation")
+				}
+			}
+		}
+	}
 	// Uncommitted IPsec PSK reservations are canonical public Link intents.
 	// Their claims must block all other backends until an explicit, owned
 	// activation/reconciliation path exists; file names alone grant no rights.
@@ -1176,12 +1561,40 @@ func restoreLockClaim() domain.ResourceClaim {
 
 // stateMatchesOperation proves the attempted desired-state record became
 // visible; equality covers both requested intent and all owned resource claims.
-func stateMatchesOperation(snapshot state.Snapshot, request backend.Request, resources []domain.ResourceClaim) bool {
+func stateMatchesOperation(snapshot state.Snapshot, request backend.Request,
+	resources []domain.ResourceClaim, originalFiles state.WSSFileIdentity, originalNonce, verifiedBoot string,
+	newOriginal, manualRestore bool, prior state.LinkRecord, terminationProof string) bool {
 	record, exists := snapshot.Find(request.Link.ID)
 	if request.Operation == backend.OperationRemove {
-		return !exists
+		if exists {
+			return false
+		}
+		if request.Link.Backend == domain.BackendWireGuardWSS {
+			receipt, present := snapshot.FindRemovalReceipt(request.Link.ID)
+			return present && receipt.Backend == request.Link.Backend &&
+				receipt.WSSLink == request.Link &&
+				receipt.WSSOriginalTermination == terminationProof &&
+				state.ValidWSSOriginalTerminationProof(receipt.WSSOriginalTermination) &&
+				receipt.WSSFiles == originalFiles &&
+				receipt.WSSFiles.VerifyLink(request.Link) == nil
+		}
+		return true
 	}
-	return exists && record.Desired == request.Link && slices.Equal(record.OwnedResources, resources)
+	bootID, bootSource := prior.WSSKernelBootID, prior.WSSKernelBootSource
+	restoreProof := prior.WSSColdBootRestore
+	if request.Link.Backend == domain.BackendWireGuardWSS {
+		if newOriginal && verifiedBoot != "" {
+			bootID, bootSource = verifiedBoot, hostidentity.VerifiedHostBootSourceV1
+		}
+		if manualRestore {
+			restoreProof = state.WSSColdBootRestore{}
+		}
+	}
+	return exists && record.Desired == request.Link &&
+		record.WSSFiles == originalFiles && record.WSSOrigin == originalNonce &&
+		record.WSSKernelBootID == bootID && record.WSSKernelBootSource == bootSource &&
+		record.WSSColdBootRestore == restoreProof &&
+		slices.Equal(record.OwnedResources, resources)
 }
 
 func stateMatchesPrior(snapshot state.Snapshot, id domain.LinkID, prior state.LinkRecord) bool {
@@ -1189,5 +1602,10 @@ func stateMatchesPrior(snapshot state.Snapshot, id domain.LinkID, prior state.Li
 	if prior.Desired.ID == "" {
 		return !exists
 	}
-	return exists && record.Desired == prior.Desired && slices.Equal(record.OwnedResources, prior.OwnedResources)
+	return exists && record.Desired == prior.Desired &&
+		record.WSSFiles == prior.WSSFiles && record.WSSOrigin == prior.WSSOrigin &&
+		record.WSSKernelBootID == prior.WSSKernelBootID &&
+		record.WSSKernelBootSource == prior.WSSKernelBootSource &&
+		record.WSSColdBootRestore == prior.WSSColdBootRestore &&
+		slices.Equal(record.OwnedResources, prior.OwnedResources)
 }

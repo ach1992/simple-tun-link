@@ -24,11 +24,34 @@ type PendingSender struct {
 // published ONLY after the canonical Remove has durably completed, never on
 // state publication uncertainty or orphan credential creation. A retired
 // receipt is retained as a non-secret idempotency witness.
+// WSS retirement is authorized only after a specific original-generation
+// termination witness has been durably committed with the removal receipt.
+// Empty proof denotes a readable LEGACY receipt and never permits retirement.
+const (
+	WSSOriginalExactIfIndexDeleted     = "original-ifindex-deleted-v1"
+	WSSOriginalKernelGenerationExtinct = "trusted-kernel-generation-extinct-v1"
+	WSSOriginalScopedCompensation      = "original-scoped-compensated-v1"
+)
+
+func ValidWSSOriginalTerminationProof(value string) bool {
+	switch value {
+	case WSSOriginalExactIfIndexDeleted, WSSOriginalKernelGenerationExtinct, WSSOriginalScopedCompensation:
+		return true
+	default:
+		return false
+	}
+}
+
 type RemovalReceipt struct {
 	LinkID         domain.LinkID  `json:"link_id"`
 	Backend        domain.Backend `json:"backend"`
 	LocalPublicKey string         `json:"local_public_key"`
 	Retired        bool           `json:"retired,omitempty"`
+	// Exact public Link is needed for post-Remove helper identity verification.
+	WSSLink  domain.Link     `json:"wss_link,omitzero"`
+	WSSFiles WSSFileIdentity `json:"wss_file_digests,omitzero"`
+	// True original-kernel termination provenance, not merely local vacancy.
+	WSSOriginalTermination string `json:"wss_original_termination,omitempty"`
 }
 
 func (s Snapshot) FindPendingSender(id domain.LinkID) (PendingSender, bool) {
@@ -95,9 +118,22 @@ func validateWireGuardLifecycle(s Snapshot) error {
 	}
 	removed := make(map[domain.LinkID]bool, len(s.RemovalReceipts))
 	for _, receipt := range s.RemovalReceipts {
-		if receipt.LinkID.Validate() != nil || receipt.Backend != domain.BackendWireGuard ||
+		if receipt.LinkID.Validate() != nil || (receipt.Backend != domain.BackendWireGuard && receipt.Backend != domain.BackendWireGuardWSS) ||
 			!validReceiptPublicKey(receipt.LocalPublicKey) {
 			return fmt.Errorf("invalid WireGuard removal receipt")
+		}
+		if receipt.Backend == domain.BackendWireGuardWSS {
+			if receipt.WSSLink.Validate() != nil ||
+				receipt.WSSLink.Backend != domain.BackendWireGuardWSS ||
+				receipt.WSSLink.ID != receipt.LinkID ||
+				receipt.WSSLink.WireGuard.LocalPublicKey != receipt.LocalPublicKey ||
+				receipt.WSSFiles.VerifyLink(receipt.WSSLink) != nil ||
+				(receipt.WSSOriginalTermination != "" && !ValidWSSOriginalTerminationProof(receipt.WSSOriginalTermination)) {
+				return fmt.Errorf("invalid WSS credential removal receipt")
+			}
+		} else if receipt.WSSLink != (domain.Link{}) || receipt.WSSFiles != (WSSFileIdentity{}) ||
+			receipt.WSSOriginalTermination != "" {
+			return fmt.Errorf("native WireGuard receipt cannot carry WSS Link fields")
 		}
 		if removed[receipt.LinkID] {
 			return fmt.Errorf("duplicate WireGuard removal receipt")

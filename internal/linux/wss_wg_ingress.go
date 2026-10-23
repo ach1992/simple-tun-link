@@ -3,6 +3,7 @@ package linux
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,19 +15,18 @@ import (
 
 const wssWGIngressPriority = -250
 
-// WSSWGIngressPlan describes one optional WSS-only kernel WireGuard UDP
-// ingress guard. This is a pure, non-runnable plan: the shipped Engine does
-// not invoke it. A kernel WireGuard listen-port binds more than loopback even
-// when its configured peer endpoint is 127.0.0.1.
-//
-// The table name and rule comment are collision markers, NOT proof of
-// ownership. An eventual caller needs Engine resource locks, a durable
-// pre-effect journal, exact foreign-object checks, compensation, post-apply
-// verification, boot restore and a security/host-effects approval before
-// applying or deleting anything.
+// WSSWGIngressPlan renders the exact nft ingress guard used by the
+// unreleased, STL-managed WSS+kernel-WireGuard candidate. It is a pure
+// plan and does not independently execute host effects. The canonical
+// Engine invokes the scoped host executor only after resource/ownership
+// admission and durable WSS pre-effect intent, with crash quarantine.
+// A kernel WG listener binds more than loopback even when its configured
+// peer endpoint is 127.0.0.1. Table names and comments alone are never
+// ownership proofs; uncertain host effects must remain quarantined.
 type WSSWGIngressPlan struct {
-	LinkID     domain.LinkID
-	ListenPort uint16
+	LinkID        domain.LinkID
+	ListenPort    uint16
+	OriginalNonce string
 }
 
 func NewWSSWGIngressPlan(id domain.LinkID, listenPort uint16) (WSSWGIngressPlan, error) {
@@ -44,8 +44,18 @@ func (p WSSWGIngressPlan) validate() error {
 	if p.ListenPort == 0 {
 		return fmt.Errorf("WSS WireGuard ingress requires a nonzero kernel UDP listen port")
 	}
+	if p.OriginalNonce != "" {
+		raw, err := hex.DecodeString(p.OriginalNonce)
+		if err != nil || len(raw) != 16 || hex.EncodeToString(raw) != p.OriginalNonce {
+			return fmt.Errorf("invalid WSS original nft guard identity")
+		}
+	}
 	return nil
 }
+
+// TableName identifies a reserved, per-Link nft object. It is not
+// permission to adopt or delete a table with a matching name.
+func (p WSSWGIngressPlan) TableName() string { return p.tableName() }
 
 func (p WSSWGIngressPlan) tableName() string {
 	hash := sha256.Sum256([]byte(p.LinkID))
@@ -53,7 +63,11 @@ func (p WSSWGIngressPlan) tableName() string {
 }
 
 func (p WSSWGIngressPlan) ruleComment() string {
-	return "stl:" + string(p.LinkID) + ":wg-udp-guard:" + strconv.Itoa(int(p.ListenPort))
+	tag := "stl:" + string(p.LinkID) + ":wg-udp-guard:" + strconv.Itoa(int(p.ListenPort))
+	if p.OriginalNonce != "" {
+		tag += ":tx:" + p.OriginalNonce
+	}
+	return tag
 }
 
 // NFTBatch returns the exact single nftables transaction for an *absent*

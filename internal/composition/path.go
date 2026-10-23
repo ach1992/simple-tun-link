@@ -49,7 +49,8 @@ const (
 // Carrier is endpoint-local, comparable and entirely public/secret-free.
 // CredentialOwner binds an out-of-band protected per-Link TLS identity; it is
 // NOT a credential, file path, arbitrary executable, CA material or authority
-// to start an external process. None of this is yet a public Link JSON schema.
+// to start an external process. The runtime WSS Link JSON contract is
+// explicitly bounded to WireGuard/WSS and versioned separately.
 type Carrier struct {
 	Kind            Kind
 	Role            Role
@@ -84,8 +85,18 @@ type Path struct {
 // readiness. WSS's host admission must separately demonstrate a pinned
 // executable, strict mTLS, exact destination restrictions, kernel WG UDP
 // ingress isolation and ownership-safe helper process/systemd management.
-// Until those adapters are operational, this package must not be treated
-// as enabling a new CLI/State/pairing Carrier.
+// The unreleased WSS candidate has a managed host runtime, but composition
+// alone never authorizes host effects; its Engine recovery, independent
+// review and release gates remain separate.
+func CarrierForLink(link domain.Link) Carrier {
+	if link.Backend != domain.BackendWireGuardWSS {
+		return Carrier{}
+	}
+	return Carrier{Kind: WSS, Role: Role(link.WSS.Role),
+		PublicTCPPort: link.WSS.TCPPort, LocalForwardUDP: link.WSS.ForwardUDPPort,
+		TLSServerName: link.WSS.TLSServerName, CredentialOwner: link.ID}
+}
+
 func Build(link domain.Link, carrier Carrier) (Path, error) {
 	if err := link.Validate(); err != nil {
 		return Path{}, err
@@ -101,6 +112,9 @@ func Build(link domain.Link, carrier Carrier) (Path, error) {
 	}
 	switch carrier.Kind {
 	case Direct:
+		if link.Backend == domain.BackendWireGuardWSS {
+			return Path{}, fmt.Errorf("wireguard-wss cannot use the native WireGuard path")
+		}
 		if carrier != (Carrier{}) {
 			return Path{}, fmt.Errorf("native path must not carry a carrier role, endpoint or identity")
 		}
@@ -115,7 +129,7 @@ func Build(link domain.Link, carrier Carrier) (Path, error) {
 		// Precisely one proven inner framing/topology is supported today.
 		// A matching UDP wire shape alone does not establish GRE FOU/GUE
 		// endpoint/device/source compatibility.
-		if link.Backend != domain.BackendWireGuard || link.Encapsulation != domain.EncapUDP {
+		if (link.Backend != domain.BackendWireGuard && link.Backend != domain.BackendWireGuardWSS) || link.Encapsulation != domain.EncapUDP {
 			return Path{}, fmt.Errorf("WSS composition is supported only for kernel WireGuard UDP")
 		}
 		// The shipped WG route/firewall adapters currently require IPv4
@@ -224,7 +238,7 @@ func Build(link domain.Link, carrier Carrier) (Path, error) {
 
 func nativePayload(link domain.Link) (Payload, error) {
 	switch link.Backend {
-	case domain.BackendWireGuard:
+	case domain.BackendWireGuard, domain.BackendWireGuardWSS:
 		if link.Encapsulation == domain.EncapUDP {
 			return UDPDatagrams, nil
 		}

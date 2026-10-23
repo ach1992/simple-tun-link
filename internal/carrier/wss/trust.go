@@ -1,9 +1,9 @@
 package wss
 
-// Read-only admission for the first WSS Carrier candidate. No code in this
-// file provisions/updates keys, spawns processes, changes firewall rules,
-// adopts files or authorizes a committed STL Link. Future activation must
-// revalidate the same exact inode identities inside the Engine transaction.
+// Read-only private-material and identity inspection for the unreleased
+// STL-managed WSS+kernel-WireGuard candidate. This file does not provision
+// keys or spawn processes; callers must hold canonical admission/owner
+// locks, verify exact credential generation and reject unsafe host drift.
 
 import (
 	"bytes"
