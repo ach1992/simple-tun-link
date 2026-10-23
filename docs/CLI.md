@@ -488,7 +488,10 @@ failure before mutation. On a supported native host, an earlier trusted,
 versioned kernel birth checkpoint stored with the committed Link and a
 DIFFERENT currently attested host kernel generation plus strict host vacancy
 can authorize legitimate post-reboot recovery. Missing/untrusted legacy
-birth records cannot be silently upgraded or used as extinction evidence.
+birth records cannot be silently upgraded or used as extinction evidence:
+a healthy visible original no-op Ensure or sidecar repair preserves these
+empty fields and does not report a covert authority change. Only creation
+of a verified NEW original can record its newly witnessed birth.
 Successful ordinary WSS Remove creates a receipt containing explicit
 `wss_original_termination` proof. `retire-wss` refuses legacy or missing-
 proof receipts, not just live interfaces or matching keys. A full host
@@ -526,7 +529,19 @@ recovery runbook on an independently verified host. The second refuses the same
 kernel boot or unarmed journal, rereads original State ownership,
 claims and committed credential identity, confirms complete current-
 boot helper/nft/WG/socket vacancy and commits the exact one-time
-State transition without modifying host networking. Committed Remove
+State transition without modifying host networking. For an original
+committed LEGACY repair, it preserves all original identities and issues
+a dedicated `wss_cold_boot_restore` one-use witness in State; it does
+NOT silently invent original birth provenance. A subsequent authorized
+`link restore --all` may create the missing original only with a trusted
+current kernel source, independently empty host inventory and the
+exact original committed issuance/claims. The witness is durably SPENT
+alongside a new pre-effect crash journal before any host mutation;
+successful creation replaces it with the actual NEW birth source.
+If that restore crashes, the original journal and spent token prohibit
+automatic replay until another independently armed and Owner-approved
+full-host reboot. Ordinary no-op Ensure, Remove and legacy journal-only
+clearance cannot consume or renew the authority. Committed Remove
 produces a fingerprint-bound receipt; separate `retire-wss`
 is still necessary and fail closed. For committed Ensure/repair the
 committed Link and credentials remain intact for authorized restore.

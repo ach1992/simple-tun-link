@@ -19,7 +19,7 @@ import (
 // after final Inspect/Validate, and never for unrelated backends.
 // A prepared record is a fail-closed reservation, NOT host ownership proof.
 func (e *Engine) prepareWSSCrash(ctx context.Context, request backend.Request,
-	prior state.LinkRecord, claims []domain.ResourceClaim) (state.WSSCrashOperation, error) {
+	prior state.LinkRecord, claims []domain.ResourceClaim, consumeColdBootRestore bool) (state.WSSCrashOperation, error) {
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return state.WSSCrashOperation{}, stlerr.New(stlerr.CodeState, "wss_prepare", string(request.Link.ID),
@@ -43,6 +43,7 @@ func (e *Engine) prepareWSSCrash(ctx context.Context, request backend.Request,
 			previous.WSSOrigin != prior.WSSOrigin ||
 			previous.WSSKernelBootID != prior.WSSKernelBootID ||
 			previous.WSSKernelBootSource != prior.WSSKernelBootSource ||
+			previous.WSSColdBootRestore != prior.WSSColdBootRestore ||
 			!slices.Equal(previous.OwnedResources, prior.OwnedResources))) {
 			return fmt.Errorf("committed WSS Link changed before pre-effect journal")
 		}
@@ -52,6 +53,21 @@ func (e *Engine) prepareWSSCrash(ctx context.Context, request backend.Request,
 		if request.Operation == backend.OperationEnsure {
 			if err := rejectResourceConflicts(*s, request.Link.ID, claims); err != nil {
 				return err
+			}
+		}
+		if consumeColdBootRestore {
+			if !op.HadCommittedLink || previous.WSSColdBootRestore == (state.WSSColdBootRestore{}) ||
+				previous.WSSColdBootRestore.Spent {
+				return fmt.Errorf("manual WSS restore authorization was not available for reservation")
+			}
+			// In the SAME durable transaction as the new pre-effect journal,
+			// irrevocably spend the proof before ANY new WG generation can
+			// exist. A crash or moved-DOWN new WG cannot replay this token.
+			for i := range s.Links {
+				if s.Links[i].Desired.ID == request.Link.ID {
+					s.Links[i].WSSColdBootRestore.Spent = true
+					break
+				}
 			}
 		}
 		s.WSSCrashOperations = append(s.WSSCrashOperations, op)
@@ -197,6 +213,7 @@ func (e *Engine) ArmWSSColdBootRecovery(ctx context.Context, id domain.LinkID) e
 			currentRecord.WSSFiles != record.WSSFiles ||
 			currentRecord.WSSKernelBootID != record.WSSKernelBootID ||
 			currentRecord.WSSKernelBootSource != record.WSSKernelBootSource ||
+			currentRecord.WSSColdBootRestore != record.WSSColdBootRestore ||
 			!slices.Equal(currentRecord.OwnedResources, record.OwnedResources))) {
 			return fmt.Errorf("WSS committed owner changed before durable recovery arm")
 		}
@@ -273,6 +290,13 @@ func (e *Engine) reconcileWSSCrashMode(ctx context.Context, id domain.LinkID, mo
 		return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id), "wireguard-wss",
 			"committed Link does not match original WSS pre-effect identity")
 	}
+	if repair && !coldBoot && record.WSSKernelBootSource == "" {
+		// Without either a trusted birth generation or a completed manual
+		// generation transition, consuming the last journal would strand the
+		// committed Link permanently. Keep it for Owner-gated cold-boot Arm.
+		return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id),
+			"wireguard-wss", "legacy committed WSS repair requires trusted manual cold-boot recovery before journal clearance")
+	}
 	if removed || repair {
 		if _, err := backend.WithWSSOrigin(ctx, record.WSSOrigin); err != nil ||
 			op.OriginalHostNonce != record.WSSOrigin {
@@ -319,6 +343,7 @@ func (e *Engine) reconcileWSSCrashMode(ctx context.Context, id domain.LinkID, mo
 		freshRecord.WSSFiles != record.WSSFiles || freshRecord.WSSOrigin != record.WSSOrigin ||
 		freshRecord.WSSKernelBootID != record.WSSKernelBootID ||
 		freshRecord.WSSKernelBootSource != record.WSSKernelBootSource ||
+		freshRecord.WSSColdBootRestore != record.WSSColdBootRestore ||
 		!slices.Equal(freshRecord.OwnedResources, record.OwnedResources))) {
 		return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id), "wireguard-wss",
 			"committed WSS Link changed during recovery")
@@ -444,6 +469,7 @@ func (e *Engine) reconcileWSSCrashMode(ctx context.Context, id domain.LinkID, mo
 				saved.WSSOrigin != record.WSSOrigin ||
 				saved.WSSKernelBootID != record.WSSKernelBootID ||
 				saved.WSSKernelBootSource != record.WSSKernelBootSource ||
+				saved.WSSColdBootRestore != record.WSSColdBootRestore ||
 				!slices.Equal(saved.OwnedResources, record.OwnedResources) {
 				return fmt.Errorf("original committed WSS Remove authority changed")
 			}
@@ -476,12 +502,27 @@ func (e *Engine) reconcileWSSCrashMode(ctx context.Context, id domain.LinkID, mo
 				saved.WSSOrigin != record.WSSOrigin ||
 				saved.WSSKernelBootID != record.WSSKernelBootID ||
 				saved.WSSKernelBootSource != record.WSSKernelBootSource ||
+				saved.WSSColdBootRestore != record.WSSColdBootRestore ||
 				!slices.Equal(saved.OwnedResources, record.OwnedResources) ||
 				!slices.Equal(saved.OwnedResources, op.Resources) {
 				return fmt.Errorf("original committed WSS Ensure authority changed")
 			}
 			if _, exists := s.FindRemovalReceipt(id); exists {
 				return fmt.Errorf("committed Ensure overlaps retired Link identity")
+			}
+			if coldBoot && saved.WSSKernelBootSource == "" {
+				if saved.WSSColdBootRestore != (state.WSSColdBootRestore{}) && !saved.WSSColdBootRestore.Spent {
+					return fmt.Errorf("unspent WSS restore authorization cannot be overwritten")
+				}
+				// The original's birth fields remain genuinely unknown. The
+				// narrowly scoped repair witness was authenticated by the
+				// original journal, trusted pre/post boot IDs, protected
+				// issuance identity and current-host vacancy above.
+				saved.WSSColdBootRestore = state.WSSColdBootRestore{
+					ArmedFrom: op.ColdBootArmedFrom, ReconciledAt: recoveredBoot,
+					Source: hostidentity.VerifiedHostBootSourceV1,
+				}
+				s.Upsert(saved)
 			}
 		} else if _, exists := s.Find(id); exists {
 			return fmt.Errorf("new WSS Link was committed during vacancy reconciliation")

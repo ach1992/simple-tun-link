@@ -415,8 +415,25 @@ proof that other managers did not create NEW objects after reboot.
    atomic State update and **no host changes**. For initial Ensure
    it consumes only that journal. For committed Ensure/repair it
    retains the identical committed Link, nonce, claims and protected
-   credentials; approved `link restore --all` may then recreate
-   owned effects. For committed Remove it deletes only the original
+   credentials. A LEGACY/untrusted committed original has no trusted
+   historical birth source: the reconciliation instead durably issues
+   one `wss_cold_boot_restore` proof bound to the original journal's
+   trusted pre-reboot Arm and the independently attested post-reboot
+   generation, never silently backfills `wss_kernel_boot_*`. With a
+   freshly trusted kernel source, no visible original and verified
+   complete current-host vacancy, approved `link restore --all`
+   can create one NEW WG original with the existing nonce, claims and
+   private issuance. Before the first host effect its witness is
+   atomically marked SPENT with a NEW pre-effect journal. Only a
+   successful original creation clears it and records the honest new
+   birth source. If interrupted, preserve the spent proof and journal;
+   even after an apparently successful rollback, automatic repeated
+   restore is NOT authorized. Arm that NEW journal and follow a
+   separately approved full-host reboot before retrying. Without the
+   manual verified generation, legacy committed repair-only
+   `reconcile-wss-repair-vacant` refuses to consume its last journal;
+   an ordinary no-op Ensure cannot promote a healthy legacy Link.
+   For committed Remove it deletes only the original
    committed State Link and creates its immutable original credential-
    bound receipt; credential removal is still a SEPARATE
    `link retire-wss LINK_ID --confirm LINK_ID` operation after
@@ -429,7 +446,12 @@ proof that other managers did not create NEW objects after reboot.
    provenance, or the State commit is uncertain, preserve the original
    journal, reservations and credentials. Do **not** re-arm over a different
    checkpoint, remove a guard, edit State JSON, scrub secrets, blindly
-   rerun RestoreAll for the blocked Link, or claim success. Maintain
+   rerun RestoreAll for the blocked Link, or claim success. In a legacy
+   committed repair, an interrupted first Restore leaves a spent
+   recovery witness and NEW crash journal; the prior old-kernel proof
+   cannot be reused to create another potentially hidden WG. Another
+   explicitly authorized full-host reboot with a newly armed checkpoint
+   is required to certify that interrupted NEW kernel generation extinct. Maintain
    the old protected backups for forensic restore with a separately
    authorized reconciliation plan. Reboot-before-reconcile is
    reversible at the control-plane checkpoint level only;

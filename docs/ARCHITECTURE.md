@@ -692,10 +692,14 @@ no foreign adoption or generic host cleanup is permitted.
 
 A committed WSS Link now durably records the **original host-kernel
 Boot ID plus trusted source version** (`wss_kernel_boot_id`,
-`wss_kernel_boot_source`) when the native host's initial PID namespace and
-unshadowed procfs can be attested at successful Ensure. In an untrusted
-container/unsupported host the fields remain absent and are **not**
-retroactively fabricated. Such records are readable and an existing fully
+`wss_kernel_boot_source`) only when a NEW original WG generation was
+actually created and verified during Ensure and the native host's initial
+PID namespace and unshadowed procfs can be attested. A successful no-op
+Ensure, or a sidecar-only repair with the original WG still visible, must
+NEVER rewrite or retroactively promote a legacy/untrusted birth record,
+even when today's host Boot ID is trusted. The result's `changed:false`
+therefore never hides a promotion of future kernel-extinction authority.
+In an untrusted container/unsupported host the fields remain absent. Such records are readable and an existing fully
 attested visible original can still be managed, but a locally MISSING
 original cannot authorize ordinary recreation/RestoreAll/Remove until an
 independently verified generation transition is available.
@@ -785,7 +789,11 @@ recovery without changing ordinary Link automatic replay:
 - `reconcile-wss-repair-vacant` verifies the committed Link, original
   private-file contents, locked resource claims and complete host
   vacancy. Only its committed Ensure journal is consumed; desired State
-  and original ownership remain intact for RestoreAll.
+  and original ownership remain intact. For LEGACY committed originals
+  without trusted birth generation, journal-only repair vacancy cannot
+  authorize a subsequent RestoreAll. It must keep the journal for the
+  separately armed manual cold-boot route instead of silently clearing
+  the only viable recovery checkpoint.
 - `reconcile-wss-original` derives original host nonce from the initial
   journal or committed Link, separate from fresh repair/Remove journal
   transaction nonce. nft rule and transient systemd description bind
@@ -836,7 +844,23 @@ shadowed procfs and unverified mount provenance fail closed. On an
 attested different host-kernel boot, `reconcile-wss-cold-boot`
 revalidates original journal/committed claims, private issuance
 identity, current-kernel helper/guard/WG/UDP absence and exact Boot-ID
-change before its atomic State transition.
+change before its atomic State transition. For a committed LEGACY
+Ensure/repair lacking original birth provenance, the same atomic
+transaction consumes the journal and issues a narrowly scoped
+`wss_cold_boot_restore` proof containing the original attested Arm Boot
+ID, verified reconciliation Boot ID and v1 source. It does NOT forge the
+historical `wss_kernel_boot_*` fields or authorize ordinary Remove.
+On a trusted later host generation, missing original WG and complete
+current-host vacancy permit ONE new original creation through Engine
+Ensure/RestoreAll. The proof is durably marked `spent` IN THE SAME
+pre-effect transaction as its fresh crash journal, BEFORE Apply, so a
+crash or namespace-migrated new WG cannot use it twice. Verified
+successful recreation replaces the spent proof with an honestly
+observed NEW original birth Boot ID. An interrupted attempt keeps its
+journal and spent proof quarantined; a separately armed, approved
+subsequent whole-host reboot is required before retrying the legacy
+recovery route. The witness cannot be silently renewed by no-op Ensure,
+ordinary reconciliation, local vacancy, or process/container restart.
 This path does NOT delete any host objects or retire credentials; a
 committed Remove receives an exact immutable retirement receipt.
 A container/unit/process restart or a spoofable operator-supplied

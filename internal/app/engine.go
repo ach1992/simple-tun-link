@@ -485,6 +485,7 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 	request.OwnedResources = append([]domain.ResourceClaim(nil), prior.OwnedResources...)
 	link := request.Link
 	var trustedWSSBoot string
+	var manualWSSRestore, newWSSOriginal bool
 	if link.Backend == domain.BackendWireGuardWSS {
 		// This source is optional for initial provisioning in unsupported
 		// namespaces. Without provenance, absence of the original can NEVER
@@ -501,13 +502,22 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 				return Result{}, stlerr.New(stlerr.CodeState, "wss_original_object",
 					string(link.ID), "wireguard-wss", "committed Link lacks original WSS creation-object identity")
 			}
-			// The old original kernel can be considered extinct only with
-			// a durable attested birth generation and a FRESH trusted current
-			// generation. A container restart, process restart, UUID-only
-			// legacy record or vanished local interface grants no witness.
-			if prior.WSSKernelBootSource == hostidentity.VerifiedHostBootSourceV1 &&
+			// A manually reconciled legacy repair has an independent, narrowly
+			// scoped one-use kernel-extinction witness. It cannot authorize
+			// Remove or same-kernel repair after it has been spent.
+			if prior.WSSColdBootRestore != (state.WSSColdBootRestore{}) {
+				if request.Operation != backend.OperationEnsure ||
+					!prior.WSSColdBootRestore.AvailableOn(trustedWSSBoot) {
+					return Result{}, fmt.Errorf("WSS manual cold-boot restore authorization unavailable or already spent")
+				}
+				manualWSSRestore = true
+			}
+			// Ordinary trusted-birth admission remains distinct from manual
+			// legacy recovery. Neither local emptiness nor an ordinary no-op
+			// may mint birth-generation evidence.
+			if manualWSSRestore || (prior.WSSKernelBootSource == hostidentity.VerifiedHostBootSourceV1 &&
 				hostidentity.ValidBootID(prior.WSSKernelBootID) && trustedWSSBoot != "" &&
-				trustedWSSBoot != prior.WSSKernelBootID {
+				trustedWSSBoot != prior.WSSKernelBootID) {
 				ctx, contextErr = backend.WithWSSColdBootExtinct(ctx, link.ID)
 				if contextErr != nil {
 					return Result{}, contextErr
@@ -568,6 +578,7 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		if !present || current.Desired != prior.Desired || current.WSSOrigin != prior.WSSOrigin ||
 			current.WSSFiles != prior.WSSFiles || current.WSSKernelBootID != prior.WSSKernelBootID ||
 			current.WSSKernelBootSource != prior.WSSKernelBootSource ||
+			current.WSSColdBootRestore != prior.WSSColdBootRestore ||
 			!slices.Equal(current.OwnedResources, prior.OwnedResources) {
 			return Result{}, fmt.Errorf("committed WSS original generation changed after resource locks")
 		}
@@ -591,6 +602,12 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 			if vacancyErr != nil || !vacant {
 				return Result{}, fmt.Errorf("WSS post-reboot original host vacancy is unverified: %w", errors.Join(vacancyErr, backend.ErrIndeterminateHostEffect))
 			}
+			newWSSOriginal = request.Operation == backend.OperationEnsure
+		} else if manualWSSRestore {
+			// Reconciliation proved vacancy. A subsequently visible object
+			// might be foreign or an interrupted new creation, not a
+			// historical original that may be silently adopted.
+			return Result{}, fmt.Errorf("WSS manually recovered original is unexpectedly visible; preserve authorization and inspect ownership")
 		}
 	}
 	if link.Backend == domain.BackendIPsec {
@@ -698,6 +715,14 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		ipsecRetirementDigest = digest
 	}
 	changed := !plan.Empty()
+	if link.Backend == domain.BackendWireGuardWSS && request.Operation == backend.OperationEnsure {
+		if prior.Desired.ID != link.ID {
+			newWSSOriginal = true
+		}
+		if newWSSOriginal && (!changed || trustedWSSBoot == "" && manualWSSRestore) {
+			return Result{}, fmt.Errorf("WSS missing original requires a verifiable non-empty new-generation Apply")
+		}
+	}
 	if activateIPsec {
 		if !changed {
 			return Result{}, stlerr.New(stlerr.CodeConflict, "ipsec_activate", string(link.ID), "ipsec", "staged IPsec activation has no vacant resources to create")
@@ -839,13 +864,17 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		}
 	}
 	var preparedWSS state.WSSCrashOperation
+	postPreparePrior := prior
 	if changed && link.Backend == domain.BackendWireGuardWSS {
 		// WSS creates an nft guard before kernel WG; power loss at ANY
 		// subsequent step must retain a durable quarantine/reservation.
 		var prepareErr error
-		preparedWSS, prepareErr = e.prepareWSSCrash(ctx, request, prior, resources)
+		preparedWSS, prepareErr = e.prepareWSSCrash(ctx, request, prior, resources, manualWSSRestore)
 		if prepareErr != nil {
 			return Result{}, prepareErr
+		}
+		if manualWSSRestore {
+			postPreparePrior.WSSColdBootRestore.Spent = true
 		}
 		if prior.Desired.ID != link.ID {
 			ctx, prepareErr = backend.WithWSSOrigin(ctx, preparedWSS.Nonce)
@@ -1075,17 +1104,35 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 			}
 			originalNonce := prior.WSSOrigin
 			birthBoot, birthSource := prior.WSSKernelBootID, prior.WSSKernelBootSource
+			restoreProof := prior.WSSColdBootRestore
 			if link.Backend == domain.BackendWireGuardWSS {
 				if prior.Desired.ID != link.ID {
 					originalNonce = preparedWSS.Nonce
+				} else {
+					current, ok := snapshot.Find(link.ID)
+					if !ok || current.Desired != prior.Desired ||
+						current.WSSFiles != prior.WSSFiles || current.WSSOrigin != prior.WSSOrigin ||
+						current.WSSKernelBootID != prior.WSSKernelBootID ||
+						current.WSSKernelBootSource != prior.WSSKernelBootSource ||
+						current.WSSColdBootRestore != postPreparePrior.WSSColdBootRestore ||
+						!slices.Equal(current.OwnedResources, prior.OwnedResources) {
+						return fmt.Errorf("committed WSS original generation changed during Ensure")
+					}
 				}
-				if trustedWSSBoot != "" {
+				// Never stamp a visible legacy original on ordinary no-op or
+				// sidecar-only repair. Only verified creation of a genuinely
+				// new original in this transaction may set new birth proof.
+				if newWSSOriginal && trustedWSSBoot != "" {
 					birthBoot, birthSource = trustedWSSBoot, hostidentity.VerifiedHostBootSourceV1
+				}
+				if manualWSSRestore {
+					restoreProof = state.WSSColdBootRestore{} // spent after successful creation
 				}
 			}
 			snapshot.Upsert(state.LinkRecord{Desired: link, OwnedResources: resources,
 				WSSFiles: wssFiles, WSSOrigin: originalNonce,
-				WSSKernelBootID: birthBoot, WSSKernelBootSource: birthSource})
+				WSSKernelBootID: birthBoot, WSSKernelBootSource: birthSource,
+				WSSColdBootRestore: restoreProof})
 		case backend.OperationRemove:
 			if _, operational := impl.(*ipsec.OperationalBackend); operational && link.Backend == domain.BackendIPsec {
 				journal, present := snapshot.FindIPsecRemoveOperation(link.ID)
@@ -1102,6 +1149,7 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 				if !exists || current.Desired != prior.Desired || current.WSSOrigin != prior.WSSOrigin ||
 					current.WSSFiles != prior.WSSFiles || current.WSSKernelBootID != prior.WSSKernelBootID ||
 					current.WSSKernelBootSource != prior.WSSKernelBootSource ||
+					current.WSSColdBootRestore != prior.WSSColdBootRestore ||
 					!slices.Equal(current.OwnedResources, prior.OwnedResources) {
 					return fmt.Errorf("WSS original owner changed before retirement receipt publication")
 				}
@@ -1168,8 +1216,8 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 			publishedOrigin = preparedWSS.Nonce
 		}
 		published := loadErr == nil && stateMatchesOperation(visible, request, resources, publicationFiles,
-			publishedOrigin, trustedWSSBoot, prior, wssOriginalTermination)
-		oldState := loadErr == nil && stateMatchesPrior(visible, link.ID, prior)
+			publishedOrigin, trustedWSSBoot, newWSSOriginal, manualWSSRestore, prior, wssOriginalTermination)
+		oldState := loadErr == nil && stateMatchesPrior(visible, link.ID, postPreparePrior)
 		var publicationErr *state.PublicationError
 		indeterminate := errors.As(commitErr, &publicationErr)
 		if published || indeterminate || !oldState {
@@ -1493,7 +1541,7 @@ func restoreLockClaim() domain.ResourceClaim {
 // visible; equality covers both requested intent and all owned resource claims.
 func stateMatchesOperation(snapshot state.Snapshot, request backend.Request,
 	resources []domain.ResourceClaim, originalFiles state.WSSFileIdentity, originalNonce, verifiedBoot string,
-	prior state.LinkRecord, terminationProof string) bool {
+	newOriginal, manualRestore bool, prior state.LinkRecord, terminationProof string) bool {
 	record, exists := snapshot.Find(request.Link.ID)
 	if request.Operation == backend.OperationRemove {
 		if exists {
@@ -1511,12 +1559,19 @@ func stateMatchesOperation(snapshot state.Snapshot, request backend.Request,
 		return true
 	}
 	bootID, bootSource := prior.WSSKernelBootID, prior.WSSKernelBootSource
-	if request.Link.Backend == domain.BackendWireGuardWSS && verifiedBoot != "" {
-		bootID, bootSource = verifiedBoot, hostidentity.VerifiedHostBootSourceV1
+	restoreProof := prior.WSSColdBootRestore
+	if request.Link.Backend == domain.BackendWireGuardWSS {
+		if newOriginal && verifiedBoot != "" {
+			bootID, bootSource = verifiedBoot, hostidentity.VerifiedHostBootSourceV1
+		}
+		if manualRestore {
+			restoreProof = state.WSSColdBootRestore{}
+		}
 	}
 	return exists && record.Desired == request.Link &&
 		record.WSSFiles == originalFiles && record.WSSOrigin == originalNonce &&
 		record.WSSKernelBootID == bootID && record.WSSKernelBootSource == bootSource &&
+		record.WSSColdBootRestore == restoreProof &&
 		slices.Equal(record.OwnedResources, resources)
 }
 
@@ -1529,5 +1584,6 @@ func stateMatchesPrior(snapshot state.Snapshot, id domain.LinkID, prior state.Li
 		record.WSSFiles == prior.WSSFiles && record.WSSOrigin == prior.WSSOrigin &&
 		record.WSSKernelBootID == prior.WSSKernelBootID &&
 		record.WSSKernelBootSource == prior.WSSKernelBootSource &&
+		record.WSSColdBootRestore == prior.WSSColdBootRestore &&
 		slices.Equal(record.OwnedResources, prior.OwnedResources)
 }

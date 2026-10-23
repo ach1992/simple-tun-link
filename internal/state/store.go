@@ -47,6 +47,9 @@ type LinkRecord struct {
 	// but cannot authorize recreation or retirement from local absence.
 	WSSKernelBootID     string `json:"wss_kernel_boot_id,omitempty"`
 	WSSKernelBootSource string `json:"wss_kernel_boot_source,omitempty"`
+	// A single-use, recovery-scoped old-kernel extinction witness from a
+	// trusted manual Arm + Reconcile. It is NOT original birth provenance.
+	WSSColdBootRestore WSSColdBootRestore `json:"wss_cold_boot_restore,omitzero"`
 }
 
 type Snapshot struct {
@@ -463,8 +466,15 @@ func validateSnapshot(snapshot Snapshot) error {
 				(record.WSSKernelBootSource == "" && record.WSSKernelBootID != "") {
 				return fmt.Errorf("committed WSS Link has invalid trusted kernel generation provenance")
 			}
+			if err := record.WSSColdBootRestore.Validate(); err != nil {
+				return fmt.Errorf("committed WSS Link has invalid manual cold-boot restore authorization: %w", err)
+			}
+			if record.WSSColdBootRestore != (WSSColdBootRestore{}) && record.WSSKernelBootSource != "" {
+				return fmt.Errorf("manual cold-boot restore proof cannot coexist with attested original birth")
+			}
 		} else if record.WSSFiles != (WSSFileIdentity{}) || record.WSSOrigin != "" ||
-			record.WSSKernelBootID != "" || record.WSSKernelBootSource != "" {
+			record.WSSKernelBootID != "" || record.WSSKernelBootSource != "" ||
+			record.WSSColdBootRestore != (WSSColdBootRestore{}) {
 			return fmt.Errorf("native Link cannot carry WSS credential or original host-object identity")
 		}
 		seen[record.Desired.ID] = struct{}{}
