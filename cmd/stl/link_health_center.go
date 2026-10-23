@@ -166,8 +166,12 @@ func linkDiagnoseAllWithServices(args []string, stdout, stderr io.Writer, option
 			"cannot read persisted Link inventory")
 	}
 	links := make([]domain.Link, 0, len(snapshot.Links))
+	quarantined := make(map[domain.LinkID]domain.LinkID)
 	for _, entry := range snapshot.Links {
 		links = append(links, entry.Desired)
+		if entry.Desired.Backend == domain.BackendWireGuardWSS && entry.WSSSupersededBy != "" {
+			quarantined[entry.Desired.ID] = entry.WSSSupersededBy
+		}
 	}
 	sort.Slice(links, func(i, j int) bool { return links[i].ID < links[j].ID })
 	response := healthCenterResponse{
@@ -206,7 +210,22 @@ func linkDiagnoseAllWithServices(args []string, stdout, stderr io.Writer, option
 		}
 	}
 	checks := healthObserveAll(ctx, links, *options, runtimeAvailable, parallel, services.observe)
-	for _, check := range checks {
+	for i, check := range checks {
+		// Supersession is a durable disposition from the SAME verified State
+		// snapshot, not an observed peer or a generic unavailable WSS probe.
+		// Preserve interrupted/unknown rows if the diagnostic budget expired.
+		// No live host operation is introduced by this projection.
+		if successor, ok := quarantined[check.Link.ID]; ok {
+			if check.ReasonCode != "diagnostic_interrupted" {
+				check = healthBlocked(links[i], "wss_original_superseded",
+					"Original managed WSS Link is durably superseded and quarantined; no active peer health was verified.",
+					"Inspect stl link plan-wss-replacement "+string(check.Link.ID)+" --json and verify successor "+
+						string(successor)+" independently on both peers; never reuse original reserved resources.")
+			}
+			check.Link.Disposition = "quarantined_old"
+			check.Link.SupersededBy = successor
+			checks[i] = check
+		}
 		switch check.Status {
 		case "observed":
 			response.Observed++

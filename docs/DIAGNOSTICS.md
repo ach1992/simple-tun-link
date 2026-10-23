@@ -23,10 +23,15 @@ syntax see [CLI.md](CLI.md); for changing a saved Link see the
   `link diagnose-wss <id> [--json]` for bounded, read-only
   helper/nft/kernel WG status. The **shared active** `link diagnose <id>`
   does not yet implement WSS carrier-aware PMTU/ICMP measurement, and
-  `link diagnose --all` reports that Link explicitly **blocked** with
-  reason `wss_active_diagnostics_not_implemented`. Neither native
-  WireGuard handshake counters nor the separate status command are
-  treated as proof of active WSS-carried peer responses.
+  `link diagnose --all` reports an ordinary managed WSS Link
+  **blocked** with reason `wss_active_diagnostics_not_implemented`.
+  A durably superseded original is instead **blocked** with reason
+  `wss_original_superseded`; its Link summary includes
+  `disposition: quarantined_old` and the protected `superseded_by`
+  ID from the same read-only State snapshot. Interrupted checks remain
+  unknown, and no generic active WSS peer probe is attempted. Neither
+  native WireGuard handshake counters nor local status alone prove
+  active WSS-carried peer responses.
 - `link throughput`: a separate, explicitly approved short TCP
   traffic test; not a default health check or a tunnel bandwidth cap.
 
