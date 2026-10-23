@@ -230,3 +230,67 @@ func TestWSSFailedReplacementNeverMarksOriginalSuperseded(t *testing.T) {
 		t.Fatal("GRE sibling was accepted as WSS replacement")
 	}
 }
+
+// Independently committed replacements must not recycle either endpoint's
+// WireGuard key or collide through a non-identical reserved network claim.
+func TestWSSSupersessionRejectsSharedCrossKeysAndOverlappingClaims(t *testing.T) {
+	original := journalTestLink(t)
+	replacement := testIndependentWSSLink(t, original)
+	issuer := testPerLinkIssuance{}
+	originalFiles, err := issuer.CaptureIdentity(context.Background(), original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacementFiles, err := issuer.CaptureIdentity(context.Background(), replacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := state.LinkRecord{Desired: original,
+		WSSOrigin: hex.EncodeToString(bytes.Repeat([]byte{1}, 16)),
+		WSSFiles:  originalFiles,
+		OwnedResources: []domain.ResourceClaim{
+			{Kind: domain.ResourceInterface, Key: "original-wss"},
+			{Kind: domain.ResourceLinkSubnet, Key: "192.0.2.0/24"},
+		},
+	}
+	next := state.LinkRecord{Desired: replacement,
+		WSSOrigin: hex.EncodeToString(bytes.Repeat([]byte{2}, 16)),
+		WSSFiles:  replacementFiles,
+		OwnedResources: []domain.ResourceClaim{
+			{Kind: domain.ResourceInterface, Key: "replacement-wss"},
+			{Kind: domain.ResourceLinkSubnet, Key: "198.51.100.0/24"},
+		},
+	}
+	if !independentWSSReplacement(old, next) {
+		t.Fatal("disjoint baseline replacement rejected")
+	}
+	t.Run("reused_original_local_as_new_peer", func(t *testing.T) {
+		reused := next
+		reused.Desired.WireGuard.PeerPublicKey = old.Desired.WireGuard.LocalPublicKey
+		if err := reused.Desired.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		if independentWSSReplacement(old, reused) {
+			t.Fatal("replacement reused original local WireGuard key as peer")
+		}
+	})
+	t.Run("reused_original_peer_as_new_local", func(t *testing.T) {
+		reused := next
+		reused.Desired.WireGuard.LocalPublicKey = old.Desired.WireGuard.PeerPublicKey
+		if err := reused.Desired.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		if independentWSSReplacement(old, reused) {
+			t.Fatal("replacement reused original peer WireGuard key as local")
+		}
+	})
+	t.Run("overlapping_nonidentical_claims", func(t *testing.T) {
+		reused := next
+		reused.OwnedResources = append([]domain.ResourceClaim(nil), next.OwnedResources...)
+		reused.OwnedResources = append(reused.OwnedResources,
+			domain.ResourceClaim{Kind: domain.ResourceLinkSubnet, Key: "192.0.2.128/25"})
+		if independentWSSReplacement(old, reused) {
+			t.Fatal("overlapping nonidentical resource claims were accepted")
+		}
+	})
+}

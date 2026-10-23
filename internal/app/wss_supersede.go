@@ -98,6 +98,8 @@ func independentWSSReplacement(old, next state.LinkRecord) bool {
 	if a.Backend != domain.BackendWireGuardWSS || b.Backend != domain.BackendWireGuardWSS ||
 		a.ID == b.ID || a.WSS.Role != b.WSS.Role ||
 		a.WireGuard.LocalPublicKey == b.WireGuard.LocalPublicKey ||
+		a.WireGuard.LocalPublicKey == b.WireGuard.PeerPublicKey ||
+		a.WireGuard.PeerPublicKey == b.WireGuard.LocalPublicKey ||
 		a.WireGuard.PeerPublicKey == b.WireGuard.PeerPublicKey ||
 		a.WireGuard.ListenPort == b.WireGuard.ListenPort ||
 		a.WireGuard.PeerPort == b.WireGuard.PeerPort ||
@@ -112,13 +114,14 @@ func independentWSSReplacement(old, next state.LinkRecord) bool {
 		len(old.OwnedResources) == 0 || len(next.OwnedResources) == 0 {
 		return false
 	}
-	originalClaims := map[string]struct{}{}
-	for _, claim := range old.OwnedResources {
-		originalClaims[claim.Canonical()] = struct{}{}
-	}
-	for _, claim := range next.OwnedResources {
-		if _, conflict := originalClaims[claim.Canonical()]; conflict {
-			return false
+	// Use the same semantic exclusion rule as Engine provisioning: CIDR
+	// reservations can overlap even if their canonical strings differ.
+	for _, original := range old.OwnedResources {
+		for _, candidate := range next.OwnedResources {
+			conflict, err := domain.ResourceClaimsConflict(original, candidate)
+			if err != nil || conflict {
+				return false
+			}
 		}
 	}
 	return true
