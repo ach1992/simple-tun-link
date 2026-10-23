@@ -56,6 +56,7 @@ if [[ "${1:-}" != --inside && "${1:-}" != --nsroot ]]; then
   cp -- "$repo/scripts/e2e/wss-managed-wireguard-r1.sh" "$lab/wss-real-e2e.sh"
   cp -- "$repo/scripts/e2e/wss-negative-probe.py" "$lab/wss-negative-probe.py"
   cp -- "$repo/scripts/e2e/wss-r9-replacement.sh" "$lab/wss-r9-replacement.sh"
+  cp -- "$repo/scripts/e2e/wss-r10-journal-replacement.sh" "$lab/wss-r10-journal-replacement.sh"
   # Always stage the exact source-tracked disposable supervisor. Never rely
   # on a stale, untracked prior lab copy as an acceptance dependency.
   install -m 0755 "$repo/scripts/e2e/wss-r1-supervisor.py" "$lab/bin/shims/systemd_shim.py"
@@ -290,6 +291,14 @@ if [[ -n "${STL_WSS_R2_AMBIGUOUS_TEST:-}" ]]; then
   fi
   ip netns exec alpha /usr/sbin/nft -j list table inet "$guard" >/dev/null
   echo "SUCCESS AMBIGUOUS_WSS_HOST_EFFECT_PRESERVED_AND_JOURNALED: $kind"
+  if [[ ${STL_WSS_R10_JOURNAL_REPLACEMENT_TEST:-0} == 1 ]]; then
+    [[ "$kind" == kernel-crash ]] || { echo "R10 requires a real original kernel crash" >&2; exit 2; }
+    # The original fault must end before independently creating new host
+    # effects; otherwise the new Link is sabotaged by the same test shim.
+    unset STL_WSS_R2_AMBIGUOUS_TEST
+    source /lab/wss-r10-journal-replacement.sh
+    exit 0
+  fi
   if [[ $(printenv STL_WSS_R3_ORIGINAL_TEST || :) == 1 ]];then
     if [[ "$kind" == nft-* ]];then
       # A dispatched, then failed/timed-out/canceled first nft guard

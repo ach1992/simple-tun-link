@@ -909,7 +909,7 @@ Unverifiable/foreign effects are quarantined, not adopted by name.
 Physical systemd/field/ARM64 WSS and independent review remain separate
 from isolated executable proof.
 
-For reproducible **35-scenario rootless real-kernel acceptance** on a
+For reproducible **36-scenario rootless real-kernel acceptance** on a
 disposable amd64 Linux test host with the pinned local fixture already
 prepared, run `bash scripts/e2e/wss-managed-wireguard-matrix.sh` from
 a clean exact-HEAD checkout as an unprivileged user. It builds the
@@ -938,6 +938,16 @@ nonce-verified exact per-Link nft guards**: a foreign, modified or
 unclaimed pre-guard hook still fails closed. These are disposable Linux
 kernel tests with a systemd **shim**, not physical reboot, field two-host
 acceptance, ARM64 WSS dataplane acceptance or automatic failover.
+
+The R10 additional case exercises a **real original pre-commit WG crash**
+where the old journal, original kernel WG and nonce-tagged nft guard remain
+without any committed old Link. Only a byte-exact verified original journal
+and structurally exact DROP-only old guard can coexist with a newly issued,
+disjoint WSS peer pair. The new pair carries genuine ICMP and UDP traffic
+without clearing the old crash journal/credentials/guard, adopting a foreign
+host object, manufacturing a committed old Link or superseding an uncommitted
+original. Host-wide firewall filtering never treats journal reservation or
+table name by itself as deletion/ownership authority.
 
 The rootless test `STL_WSS_R2_CRASH_TEST=1 bash
 scripts/e2e/wss-managed-wireguard-r1.sh` sends SIGKILL after a

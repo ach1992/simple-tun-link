@@ -46,7 +46,7 @@ run_case() {
     -u STL_WSS_R3_FOREIGN_TEST -u STL_WSS_R4_PARTIAL_WG_TEST \
     -u STL_WSS_R4_GUARD_INTERLOPER -u STL_WSS_R5_MIGRATED_WG_TEST \
     -u STL_WSS_R7_COLD_BOOT_TEST -u STL_WSS_R7_DRIFT_TEST -u STL_WSS_R8_MIGRATED_ORDINARY_TEST \
-    -u STL_WSS_R9_REPLACEMENT_TEST \
+    -u STL_WSS_R9_REPLACEMENT_TEST -u STL_WSS_R10_JOURNAL_REPLACEMENT_TEST \
     "$@" bash scripts/e2e/wss-managed-wireguard-r1.sh > "$out/$label.log" 2>&1; then
     count=$((count+1))
     echo "PASS $label"
@@ -90,9 +90,10 @@ done
 # and the failure-after-new-Apply path, both with an independent active peer.
 run_case replacement-no-reboot STL_WSS_R9_REPLACEMENT_TEST=success
 run_case replacement-new-apply-failure STL_WSS_R9_REPLACEMENT_TEST=fail-apply
-[[ $count == 35 ]] || { echo "Incomplete WSS matrix $count/35" >&2; exit 3; }
+run_case crash-journal-independent-replacement STL_WSS_R2_AMBIGUOUS_TEST=kernel-crash STL_WSS_R10_JOURNAL_REPLACEMENT_TEST=1
+[[ $count == 36 ]] || { echo "Incomplete WSS matrix $count/36" >&2; exit 3; }
 [[ $(git rev-parse HEAD) == "$sha" && $(git rev-parse HEAD^{tree}) == "$tree" &&
    -z $(git status --porcelain=v1 --untracked-files=all) ]] || {
   echo "Source changed during WSS acceptance; do not trust results" >&2; exit 3;
 }
-echo "PASS WSS_35_35_ROOTLESS_REAL_KERNEL_E2E HEAD=$sha TREE=$tree"
+echo "PASS WSS_36_36_ROOTLESS_REAL_KERNEL_E2E HEAD=$sha TREE=$tree"

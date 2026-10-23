@@ -295,10 +295,14 @@ func (h Host) HelperLoaded(ctx context.Context, link domain.Link) (bool, error) 
 	return s.loaded, err
 }
 
-// verifiedSiblingGuards accepts no name-only or journal-only host objects.
-// Original generations are read from canonical persisted State, never from a
-// current new-Link nonce. The caller is already in Engine maintenance and
-// resource-lock admission; it also re-reads the entire nft ruleset afterward.
+// verifiedSiblingGuards accepts only structurally verified, nonoverlapping
+// STL drop-only nft guards. For committed siblings the original generation
+// comes from protected owner State. For an UNCOMMITTED initial WSS Ensure,
+// its still-protected pre-effect reservation + original transaction nonce
+// can identify an exact existing guard without authorizing its adoption,
+// cleanup, credential retirement or journal deletion. Neither a journal nor
+// a matching nft name alone is host ownership proof. The caller is in Engine
+// maintenance/resource admission and re-inspects the full nft ruleset.
 func (h Host) verifiedSiblingGuards(ctx context.Context, exclude domain.LinkID) ([]linux.WSSWGIngressPlan, error) {
 	snapshot, err := state.NewFileStore(h.StateRoot).Load(ctx)
 	if err != nil {
@@ -330,6 +334,36 @@ func (h Host) verifiedSiblingGuards(ctx context.Context, exclude domain.LinkID) 
 		}
 		result = append(result, plan)
 	}
+	for _, pending := range snapshot.WSSCrashOperations {
+		if pending.Intent.ID == exclude || pending.HadCommittedLink ||
+			pending.Operation != "ensure" || pending.Intent.Backend != domain.BackendWireGuardWSS {
+			continue
+		}
+		// No committed owner exists here: the exact journal nonce is from
+		// the original, pre-effect, fsynced intent. This is strictly an
+		// earlier-DROP-only firewall coexistence admission; it cannot grant
+		// destructive rights over uncertain crashed host resources.
+		originalCtx, err := core.WithWSSOrigin(ctx, pending.Nonce)
+		if err != nil {
+			return nil, fmt.Errorf("initial WSS journal lacks valid guard transaction identity: %w", err)
+		}
+		present, err := h.GuardPresent(originalCtx, pending.Intent)
+		if err != nil {
+			return nil, fmt.Errorf("initial WSS journal guard inspection failed: %w", err)
+		}
+		if !present {
+			continue
+		}
+		claim := domain.ResourceClaim{Kind: domain.ResourceFirewall, Key: "wss/nft/" + string(pending.Intent.ID)}
+		if err := linux.RequireOwned(pending.Intent.ID, claim, pending.Resources); err != nil {
+			return nil, fmt.Errorf("initial WSS journal lacks full guard reservation: %w", err)
+		}
+		plan, err := h.guard(originalCtx, pending.Intent)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, plan)
+	}
 	return result, nil
 }
 
@@ -349,11 +383,12 @@ func (h Host) Preflight(ctx context.Context, link domain.Link, guardPresent bool
 	if err != nil {
 		return err
 	}
-	// A different committed STL WSS guard is not a foreign pre-hook.
-	// Exclude it only when protected State still claims the exact guard
-	// AND fresh host readback verifies its original nonce and entire nft
-	// structure. Missing sibling guards grant no authority; altered/foreign
-	// same-name tables fail closed.
+	// Distinct committed STL WSS guards and surviving guards reserved by
+	// an incomplete INITIAL journal are not arbitrary foreign pre-hooks.
+	// Exclude only fully nonce/structure-verified exact per-Link DROP guards
+	// backed by their protected State or original journal reservation.
+	// This never clears a crash, deletes an original or adopts a foreign
+	// same-name table. All other foreign earlier hooks fail closed.
 	verified, err := h.verifiedSiblingGuards(ctx, link.ID)
 	if err != nil {
 		return err
