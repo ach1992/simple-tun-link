@@ -618,8 +618,14 @@ The repair-vacant command confirms the original committed Link, claims
 and actual issuance-time credential file contents. It does not issue
 its own original WG deletion witness, so unknown previously interrupted
 cleanup remains quarantined. A verified successful original-object
-recovery can instead clear the pending journal without changing the
-Link, object nonce, claims or fingerprints.
+recovery may clear the pending journal without changing the Link,
+object nonce, claims or fingerprints ONLY when the committed original
+has trusted historical birth provenance. Legacy committed repairs
+instead retain the original journal even after exact original-object
+compensation and strict host vacancy. The JSON result truthfully reports
+`journal_cleared:false` and `manual_cold_boot_required:true`;
+use Owner-gated, separately armed whole-kernel reboot recovery to
+create one future original rather than invent a birth identity.
 
 For a **live, originally attributable interrupted host effect**, use:
 
@@ -640,7 +646,16 @@ such a pre-alias object, retains the ingress guard and original journal,
 and never deletes that possibly foreign interface. A genuinely original
 pre-alias crash requires separate out-of-band identity-attested operator
 recovery (see `OPERATOR-RECOVERY.md`); guessing from name or empty
-configuration is unsafe. Nonce-tagged originals instead permit only
+configuration is unsafe. For a committed legacy repair, even after
+precise original-object compensation and full host vacancy, the
+original journal is RETAINED for separately authorized cold-boot Arm and
+Reconcile: `reconcile-wss-original --json` reports
+`journal_cleared:false`, `manual_cold_boot_required:true`.
+A second compensation cannot consume that journal by missing inventory
+alone; ordinary RestoreAll remains blocked. For a trusted birth-attested
+original, the exact successful compensation may consume its journal
+without falsifying old-kernel extinction or permitting same-kernel
+recreation. Nonce-tagged originals instead permit only
 verified intermediate subsets of the originally intended WG configuration.
 
 Owner-verifiable effects are compensated in protective order: **collect

@@ -104,6 +104,8 @@ func (e *Engine) ReconcileWSSCrashRemoved(ctx context.Context, id domain.LinkID)
 // ReconcileWSSCrashRepairVacant preserves an exact previously committed
 // Link/credentials/claims while clearing ONLY an interrupted Ensure journal
 // after independent proof that ALL original host resources are absent.
+// A legacy committed original lacking trusted birth provenance must instead
+// retain its journal for independently armed whole-kernel recovery.
 func (e *Engine) ReconcileWSSCrashRepairVacant(ctx context.Context, id domain.LinkID) error {
 	return e.reconcileWSSCrashMode(ctx, id, "repair-vacant")
 }
@@ -290,10 +292,12 @@ func (e *Engine) reconcileWSSCrashMode(ctx context.Context, id domain.LinkID, mo
 		return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id), "wireguard-wss",
 			"committed Link does not match original WSS pre-effect identity")
 	}
-	if repair && !coldBoot && record.WSSKernelBootSource == "" {
+	if repair && !coldBoot && !originalRecovery && record.WSSKernelBootSource == "" {
 		// Without either a trusted birth generation or a completed manual
 		// generation transition, consuming the last journal would strand the
 		// committed Link permanently. Keep it for Owner-gated cold-boot Arm.
+		// Identity-attested original compensation is allowed to complete
+		// separately but must NOT consume the sole legacy recovery journal.
 		return stlerr.New(stlerr.CodeConflict, "wss_reconcile", string(id),
 			"wireguard-wss", "legacy committed WSS repair requires trusted manual cold-boot recovery before journal clearance")
 	}
@@ -526,6 +530,16 @@ func (e *Engine) reconcileWSSCrashMode(ctx context.Context, id domain.LinkID, mo
 			}
 		} else if _, exists := s.Find(id); exists {
 			return fmt.Errorf("new WSS Link was committed during vacancy reconciliation")
+		}
+		// The verified original compensation may delete the exact WG and
+		// guard, but it does NOT prove other hidden same-kernel originals
+		// extinct. A legacy committed repair has NO birth proof, so do not
+		// consume its only durable Arm/Reconcile continuation checkpoint.
+		// Host compensation has completed and been verified at this point;
+		// preserve journal, claims and credentials until a distinct trusted
+		// whole-kernel transition can issue a one-use restore witness.
+		if repair && originalRecovery && record.WSSKernelBootSource == "" {
+			return nil
 		}
 		if !s.DeleteWSSCrashOperation(id) {
 			return fmt.Errorf("WSS crash journal was not atomically consumed")

@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
@@ -118,6 +119,19 @@ func linkWSSCrashCommandMode(args []string, out, errOut io.Writer, opts *runtime
 		fmt.Fprintln(out, "For committed Remove, retire-wss still requires the original credential receipt and fresh strict absence.")
 		return 0
 	}
+	// A committed legacy Ensure/repair may finish EXACT original host
+	// compensation yet retain its journal as the only safe path to a
+	// separately armed real-kernel-reset recovery. Re-read protected State
+	// rather than pretending that successful host cleanup means clearance.
+	originalJournalRetained := false
+	if original {
+		snapshot, readErr := state.NewFileStore(opts.stateRoot).Load(ctx)
+		if readErr != nil {
+			return readCommandError(out, errOut, isJSON, stlerr.CodeState,
+				"wss_crash_reconcile", "original host compensation completed, but durable journal readback is unavailable; inspect protected State")
+		}
+		_, originalJournalRetained = snapshot.FindWSSCrashOperation(id)
+	}
 	if original && isJSON {
 		payload := struct {
 			SchemaVersion                  int           `json:"schema_version"`
@@ -126,7 +140,8 @@ func linkWSSCrashCommandMode(args []string, out, errOut io.Writer, opts *runtime
 			JournalCleared                 bool          `json:"journal_cleared"`
 			HostVacantVerified             bool          `json:"host_vacant_verified"`
 			ScopedHostCompensationPossible bool          `json:"scoped_host_compensation_possible"`
-		}{1, id, true, true, true, true}
+			ManualColdBootRequired         bool          `json:"manual_cold_boot_required,omitempty"`
+		}{1, id, true, !originalJournalRetained, true, true, originalJournalRetained}
 		if err := json.NewEncoder(out).Encode(payload); err != nil {
 			return 1
 		}
@@ -147,7 +162,11 @@ func linkWSSCrashCommandMode(args []string, out, errOut io.Writer, opts *runtime
 			return 1
 		}
 	} else if original {
-		fmt.Fprintf(out, "WSS Link %s original-host-object compensation verified, complete host vacancy proved, and exact journal/State transition committed. No foreign or name-only resource cleanup authorized.\n", id)
+		if originalJournalRetained {
+			fmt.Fprintf(out, "WSS Link %s original host-object compensation and vacancy verified; legacy committed repair journal, claims and credentials RETAINED. No automatic RestoreAll: arrange separately authorized Arm, real whole-kernel reboot and cold-boot Reconcile before recreation.\n", id)
+		} else {
+			fmt.Fprintf(out, "WSS Link %s original-host-object compensation verified, complete host vacancy proved, and exact journal/State transition committed. No foreign or name-only resource cleanup authorized.\n", id)
+		}
 	} else if repair {
 		fmt.Fprintf(out, "WSS Link %s committed Ensure journal cleared after complete host vacancy proof. Original committed Link, owner claims and credential identities preserved; normal Ensure/RestoreAll may now recreate the Link. No host objects touched.\n", id)
 	} else if removed {

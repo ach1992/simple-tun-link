@@ -253,3 +253,69 @@ func TestWSSLegacyColdBootRestoreRejectsUntrustedCurrentBoot(t *testing.T) {
 		}
 	}
 }
+
+// Exact original-object compensation is still useful on an unsupported host.
+// It must remove only confirmed original objects while retaining the last
+// legacy journal for a later trusted manual kernel-reset continuation.
+func TestWSSLegacyOriginalCompensationRetainsManualColdBootCheckpoint(t *testing.T) {
+	ctx, root, host, originalEngine, store, link, original := legacyWSSWithVisibleOriginal(t)
+	host.present[link.ID] = []domain.ResourceClaim{}
+	host.crashAfterHost = true
+	causeCrash(t, func() { _, _ = originalEngine.Ensure(ctx, link) })
+	start := mustLoadCrashSnapshot(t, store)
+	journal, pending := start.FindWSSCrashOperation(link.ID)
+	if !pending || !journal.HadCommittedLink || journal.Operation != "ensure" {
+		t.Fatal("original interrupted committed repair journal not durably published")
+	}
+	if err := originalEngine.ReconcileWSSCrashOriginal(ctx, link.ID); err != nil {
+		t.Fatalf("positive scoped original compensation denied: %v", err)
+	}
+	if host.recoveryCount != 1 {
+		t.Fatal("precise original-object deletion was skipped")
+	}
+	cleared := mustLoadCrashSnapshot(t, store)
+	kept, exists := cleared.FindWSSCrashOperation(link.ID)
+	rec, committed := cleared.Find(link.ID)
+	if !exists || !committed || !reflect.DeepEqual(kept, journal) ||
+		!reflect.DeepEqual(rec, original) || len(cleared.RemovalReceipts) != 0 {
+		t.Fatal("compensating legacy original discarded its only viable recovery journal or altered identity")
+	}
+	if _, visible := host.present[link.ID]; visible {
+		t.Fatal("scoped host compensation did not remove the original object")
+	}
+	for _, retry := range []func() error{
+		func() error { return originalEngine.ReconcileWSSCrashOriginal(ctx, link.ID) },
+		func() error { return originalEngine.ReconcileWSSCrashRepairVacant(ctx, link.ID) },
+		func() error { _, err := originalEngine.RestoreAll(ctx); return err },
+		func() error { _, err := originalEngine.Remove(ctx, link.ID); return err },
+	} {
+		if err := retry(); err == nil {
+			t.Fatal("compensated same-kernel legacy original was replayed or journal released")
+		}
+		if next := mustLoadCrashSnapshot(t, store); !reflect.DeepEqual(next, cleared) {
+			t.Fatal("denial changed original Link/journal/credentials")
+		}
+	}
+	arm, _ := restartedWSSRecoveryEngine(t, root, host, testWSSBootBefore)
+	if err := arm.ArmWSSColdBootRecovery(ctx, link.ID); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := restartedWSSRecoveryEngine(t, root, host, testWSSBootAfter)
+	if err := after.ReconcileWSSCrashColdBoot(ctx, link.ID); err != nil {
+		t.Fatalf("trusted later manual recovery was stranded after compensated original: %v", err)
+	}
+	authorized, ok := mustLoadCrashSnapshot(t, store).Find(link.ID)
+	if !ok || authorized.WSSColdBootRestore == (state.WSSColdBootRestore{}) ||
+		authorized.WSSKernelBootSource != "" || authorized.WSSOrigin != original.WSSOrigin {
+		t.Fatal("trusted recovery forged original birth or lost explicit one-use restore authority")
+	}
+	if _, err := after.RestoreAll(ctx); err != nil {
+		t.Fatalf("approved future original recreation still blocked: %v", err)
+	}
+	restored, ok := mustLoadCrashSnapshot(t, store).Find(link.ID)
+	if !ok || restored.WSSKernelBootID != testWSSBootAfter ||
+		restored.WSSColdBootRestore != (state.WSSColdBootRestore{}) ||
+		restored.WSSFiles != original.WSSFiles || restored.WSSOrigin != original.WSSOrigin {
+		t.Fatal("original generation or protected issuance identity was not restored")
+	}
+}

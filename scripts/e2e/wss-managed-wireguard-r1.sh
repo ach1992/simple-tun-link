@@ -821,11 +821,22 @@ if [[ $(printenv STL_WSS_R3_REPAIR_TEST || :) == 1 ]];then
   if invoke beta link reconcile-wss-vacant lnk_0123456789abcdef0123456789abcdef --confirm lnk_0123456789abcdef0123456789abcdef > "$lab/beta/repair-wrong-mode-denied.log" 2>&1;then
     echo "initial-Ensure recovery accepted committed repair" >&2;exit 1
   fi
-  invoke beta link reconcile-wss-original lnk_0123456789abcdef0123456789abcdef --confirm lnk_0123456789abcdef0123456789abcdef
-  jq -e '(.links|length)==1 and (.wss_crash_operations//[]|length)==0' "$lab/beta-state/state.json" >/dev/null
+  invoke beta link reconcile-wss-original lnk_0123456789abcdef0123456789abcdef --confirm lnk_0123456789abcdef0123456789abcdef --json > "$lab/beta/repair-original-result.log"
+  grep -m1 '^{' "$lab/beta/repair-original-result.log" | jq -e '.original_object_recovery==true and .journal_cleared==false and .manual_cold_boot_required==true and .host_vacant_verified==true' >/dev/null
+  # In the untrusted rootless PID namespace this committed original has
+  # NO trustworthy birth Boot ID. Exact original-object compensation must
+  # finish, but the journal must remain for an Owner-gated real kernel
+  # reboot: clearing it would strand RestoreAll with no extinction proof.
+  jq -e '(.links|length)==1 and (.wss_crash_operations|length)==1 and .wss_crash_operations[0].operation=="ensure" and .wss_crash_operations[0].had_committed_link==true and (.links[0].wss_kernel_boot_source//"") == ""' "$lab/beta-state/state.json" >/dev/null
   test "$(jq -r '.links[0].wss_original_object_nonce' "$lab/beta-state/state.json")" == "$original_nonce"
   if invoke beta link reconcile-wss-original lnk_0123456789abcdef0123456789abcdef --confirm lnk_0123456789abcdef0123456789abcdef > "$lab/beta/repair-repeat-denied.log" 2>&1;then
-    echo "repeat original repair recovery falsely found a journal" >&2;exit 1
+    echo "unwitnessed repeated original compensation cleared the retained legacy journal" >&2;exit 1
+  fi
+  if invoke beta link reconcile-wss-repair-vacant lnk_0123456789abcdef0123456789abcdef --confirm lnk_0123456789abcdef0123456789abcdef > "$lab/beta/repair-legacy-vacant-denied.log" 2>&1;then
+    echo "legacy journal-only absence consumed cold-boot recovery checkpoint" >&2;exit 1
+  fi
+  if invoke beta link arm-wss-cold-boot lnk_0123456789abcdef0123456789abcdef --confirm lnk_0123456789abcdef0123456789abcdef > "$lab/beta/repair-untrusted-boot-arm-denied.log" 2>&1;then
+    echo "rootless virtual boot incorrectly admitted manual checkpoint" >&2;exit 1
   fi
   # Original-object compensation already deleted beta's kernel WG. The
   # new committed-source safety gate must NOT manufacture a new same-kernel
@@ -834,10 +845,10 @@ if [[ $(printenv STL_WSS_R3_REPAIR_TEST || :) == 1 ]];then
   if invoke beta link restore --all > "$lab/beta/repair-compensated-same-boot-restore-denied.log" 2>&1;then
     echo "FAIL: compensated original WG was immediately recreated without trusted kernel reboot" >&2;exit 1
   fi
-  jq -e '(.links|length)==1 and (.wss_crash_operations//[]|length)==0 and (.removal_receipts//[]|length)==0' "$lab/beta-state/state.json" >/dev/null
+  jq -e '(.links|length)==1 and (.wss_crash_operations|length)==1 and (.removal_receipts//[]|length)==0' "$lab/beta-state/state.json" >/dev/null
   [[ -z "$(ip netns exec beta wg show interfaces)" ]]
   test -d "$lab/beta-state/credentials/wss/lnk_0123456789abcdef0123456789abcdef"
-  echo "DENY_PASS WSS_COMMITTED_REPAIR_COMPENSATED_ORIGINAL_REQUIRES_TRUSTED_REBOOT_TO_RESTORE"
+  echo "DENY_PASS WSS_COMMITTED_REPAIR_EXACT_ORIGINAL_COMPENSATED_LEGACY_JOURNAL_RETAINED_FOR_TRUSTED_REBOOT"
   exit 0
 else
   invoke beta link ensure --stdin < "$lab/beta/ensure.json"

@@ -237,7 +237,18 @@ rejects an **unmarked staging object**:
 When the original WG alias *was* published, the existing command can
 verify its nonce and ifindex and compensate only intended original
 intermediate configuration; extra keys, peers, AllowedIPs, addresses
-or unexpected UDP listeners are refused. This manual pre-alias gate is
+or unexpected UDP listeners are refused. For a committed LEGACY repair
+without trusted original birth, even verified exact original-object
+compensation must preserve the ORIGINAL crash journal and protected
+credentials as the continuation checkpoint. The command's JSON result
+reports `journal_cleared:false` and
+`manual_cold_boot_required:true`; the host resources may already have
+been safely removed, but this alone cannot prove every hidden
+same-kernel WG extinct. Do not repeat original compensation on empty
+inventories, treat this as a credential retirement authorization or run
+ordinary RestoreAll. The operator must use this retained journal with a
+trusted native-host Arm, separately authorized actual whole-kernel
+reboot and cold-boot Reconcile to obtain one-use restore authority. This manual pre-alias gate is
 an honest limitation of this unreleased candidate, not a promise that
 all pre-commit crash objects are automatically recoverable.
 
@@ -289,9 +300,12 @@ or issuing a credential-retirement receipt. No automated remediation should
 install a new original, delete a potentially foreign guard, or discard the
 protected original key, TLS certificate or bearer material.
 
-A successful native-host committed WSS Ensure records the verified host
-`wss_kernel_boot_id` and versioned `wss_kernel_boot_source` in the exact
-Link record (no operator override). On a **genuine full host reboot**,
+An Ensure that verifiably CREATES a NEW WG original on a trusted native
+host records its observed `wss_kernel_boot_id` and versioned
+`wss_kernel_boot_source` in the exact Link record (no operator
+override). Successful ordinary no-op Ensure or sidecar-only repair of
+a visible legacy original NEVER invents or upgrades historical birth
+provenance. Its unchanged result does not conceal a new authority. On a **genuine full host reboot**,
 ordinary RestoreAll may recreate an absent original only if the protected
 record contains those trusted pre-reboot fields, the same host's current
 source is independently trusted and different, and strict fresh current-

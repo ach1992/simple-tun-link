@@ -822,7 +822,16 @@ recovery without changing ordinary Link automatic replay:
   rather than fabricated automatic recovery. Confirmed original
   helper/WG/guard compensation and final strict vacancy precede
   State/journal commit. Committed Remove publishes the original
-  retirement receipt; committed repair preserves its Link.
+  retirement receipt; committed repair preserves its Link. When that
+  committed original lacks trusted birth provenance, successful positive
+  compensation MUST ALSO retain its ORIGINAL crash journal, never turn
+  scoped deletion into a claim of full-kernel extinction, and never
+  represent journal retention as a completed restore authorization.
+  The CLI reports `journal_cleared:false` and
+  `manual_cold_boot_required:true`. An independently trusted native
+  host may later Arm that exact retained journal, obtain separate
+  permission for a full-kernel reboot, and Reconcile into a one-use
+  restore authority; untrusted/container origins cannot bypass this gate.
 
 **Durable cold-boot recovery phase:** an explicitly confirmed
 `arm-wss-cold-boot` command atomically adds
