@@ -454,7 +454,12 @@ mTLS or application delivery. The generic `link diagnose <id>` active
 PMTU/ICMP implementation is **not** yet WSS-carrier-aware, and the
 `link diagnose --all [--parallel 1..4]` health center marks managed WSS
 Links as **blocked**, reason `wss_active_diagnostics_not_implemented`,
-while independently checking supported native Links; neither command
+while independently checking supported native Links. A previously committed,
+durably superseded WSS original instead has reason
+`wss_original_superseded`, saved Link disposition `quarantined_old`
+and `superseded_by` in the batch JSON. It is **not** reported healthy,
+re-ensured or tested by a generic native-WG probe. An interrupted batch
+still reports unobserved entries as unknown. Neither command
 claims WSS reachability without a verified active carrier adapter.
 Use dedicated `link diagnose-wss` for local WSS status and separately
 test TCP/UDP/private ICMP before workload routing. On a restarted host, the already
