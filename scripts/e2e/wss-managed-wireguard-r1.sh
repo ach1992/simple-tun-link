@@ -600,6 +600,20 @@ if [[ -n "$(printenv STL_WSS_R5_MIGRATED_WG_TEST || :)" ]]; then
   case "$mode" in down|active) ;; *) echo "invalid migration mode" >&2; exit 2;; esac
   id=lnk_0123456789abcdef0123456789abcdef
   guard=$(python3 -c 'import hashlib;print("stlwss_"+hashlib.sha256(b"lnk_0123456789abcdef0123456789abcdef").hexdigest()[:16])')
+  # Preserve the original R5 intent: migration AFTER a real, interrupted
+  # Remove has durably published a valid pre-effect journal. The test-only
+  # systemctl stop shim crashes the Remove process before deleting WG/nft.
+  # R8 separately tests migration BEFORE the FIRST ordinary Remove (without
+  # any journal). Never mint a malformed/synthetic crash journal here.
+  [[ ${STL_WSS_R2_REMOVE_CRASH_TEST:-} == stop ]] || {
+    echo "R5 moved-original case requires the isolated pre-migration stop-crash injector" >&2;exit 2
+  }
+  if invoke alpha link remove "$id" --confirm "$id" > "$lab/alpha/pre-migration-original-remove-crash.log" 2>&1;then
+    echo "FAIL: simulated pre-migration original Remove did not crash" >&2;exit 1
+  fi
+  jq -e '(.links|length)==1 and (.wss_crash_operations|length)==1 and .wss_crash_operations[0].operation=="remove" and .wss_crash_operations[0].had_committed_link==true and (.removal_receipts//[]|length)==0' "$lab/alpha-state/state.json" >/dev/null
+  ip netns exec alpha ip link show stlwg0123456789 >/dev/null
+  ip netns exec alpha nft -j list table inet "$guard" >/dev/null
   ip -n alpha link set stlwg0123456789 netns beta
   [[ -z "$(ip netns exec alpha wg show interfaces)" ]]
   ip netns exec beta wg show interfaces | grep -qx 'stlwg0123456789'

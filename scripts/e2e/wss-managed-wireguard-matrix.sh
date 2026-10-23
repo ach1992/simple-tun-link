@@ -75,7 +75,7 @@ for mode in firewall legacy unit; do
   run_case "drift-$mode" "STL_WSS_R2_DRIFT_TEST=$mode"
 done
 for mode in down active; do
-  run_case "moved-$mode" "STL_WSS_R5_MIGRATED_WG_TEST=$mode"
+  run_case "moved-$mode" "STL_WSS_R5_MIGRATED_WG_TEST=$mode" STL_WSS_R2_REMOVE_CRASH_TEST=stop
 done
 for mode in fwmark ipv6; do
   run_case "ordinary-wg-drift-$mode" "STL_WSS_R7_DRIFT_TEST=$mode"

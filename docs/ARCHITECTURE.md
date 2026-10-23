@@ -870,9 +870,14 @@ claim successful vacancy-only reconciliation or credential retry.
 The same harness exercises original tagged partial WG compensation,
 end-to-end genuine ICMP/TCP/UDP over WSS in normal Create/Remove,
 and migrated WG objects both UP and DOWN via
-`STL_WSS_R5_MIGRATED_WG_TEST=active|down`, proving that neither
-namespace-local absence nor temporarily missing UDP socket alone
-can retire an nft ingress guard or original WSS credentials. Two
+`STL_WSS_R5_MIGRATED_WG_TEST=active|down` **with** the independently
+fenced `STL_WSS_R2_REMOVE_CRASH_TEST=stop`: these R5 scenarios first
+create a genuine, fsynced original Remove Crash Journal while the WG
+is still visible, then move the surviving original across namespaces.
+No synthetic/malformed journal is manufactured for their positive
+quarantine checks. Neither namespace-local absence nor temporarily
+missing UDP socket alone can retire an nft ingress guard or original
+WSS credentials. Two
 additional test cases move the committed original WG DOWN before any
 ordinary operation, with its helper/guard respectively active or removed
 externally before the first Remove. Ordinary Ensure/RestoreAll/Remove/
