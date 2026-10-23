@@ -275,8 +275,10 @@ func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.
 		return Result{}, stlerr.Wrap(stlerr.CodeState, "remove", string(id), "", "cannot load local state", err)
 	}
 	if _, pending := snapshot.FindWSSCrashOperation(id); pending {
-		return Result{}, stlerr.New(stlerr.CodeConflict, "remove", string(id), "",
+		blocked := stlerr.New(stlerr.CodeConflict, "remove", string(id), string(domain.BackendWireGuardWSS),
 			"WSS pre-effect crash journal blocks Remove until explicit reconciliation")
+		blocked.ReasonCode = "wss_crash_quarantined"
+		return Result{}, blocked
 	}
 	record, ok := snapshot.Find(id)
 	if !ok {
@@ -384,8 +386,10 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 		return Result{}, stlerr.Wrap(stlerr.CodeState, "ensure", string(desired.ID), string(desired.Backend), "cannot load local state", err)
 	}
 	if _, pending := snapshot.FindWSSCrashOperation(desired.ID); pending {
-		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID),
+		blocked := stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID),
 			string(desired.Backend), "WSS pre-effect crash journal requires explicit, owner-verified reconciliation")
+		blocked.ReasonCode = "wss_crash_quarantined"
+		return Result{}, blocked
 	}
 	if _, pending := snapshot.FindPendingSender(desired.ID); pending {
 		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID), string(desired.Backend),
@@ -590,7 +594,11 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		}
 		if indexObs.WSSOriginalIfIndex() <= 0 {
 			if !backend.HasWSSColdBootExtinctionWitness(ctx, link.ID) {
-				return Result{}, fmt.Errorf("original committed WSS WG missing locally in this kernel generation; preserve State and credentials")
+				blocked := stlerr.New(stlerr.CodeConflict, "wss_original", string(link.ID),
+					string(domain.BackendWireGuardWSS),
+					"original committed WSS WG missing locally in this kernel generation; preserve State and credentials")
+				blocked.ReasonCode = "wss_original_unverified"
+				return Result{}, blocked
 			}
 			verifier, ok := impl.(interface {
 				CrashHostVacant(context.Context, backend.Observation) (bool, error)

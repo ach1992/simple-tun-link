@@ -309,6 +309,21 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 			safe.NextStep += " A protected key write was also attempted; verify its exact identity before any retry or replacement."
 		}
 	}
+	// Only explicitly typed Engine WSS identity/journal denials get a
+	// specific operator action. Never parse raw backend text or infer
+	// absence from a failed inspection, and never override a post-Apply
+	// ambiguity with an apparently safe retry instruction.
+	if observedPublic != nil && observedPublic.Code == stlerr.CodeConflict &&
+		observedPublic.Backend == string(domain.BackendWireGuardWSS) &&
+		domain.LinkID(observedPublic.ObjectID).Validate() == nil &&
+		(evidence == nil || evidence.HostMutation == "not_attempted") {
+		switch observedPublic.ReasonCode {
+		case "wss_crash_quarantined", "wss_original_unverified":
+			safe.ReasonCode = observedPublic.ReasonCode
+			safe.NextStep = "The old original may remain active in another network namespace. Do not repeat blocked Ensure/Remove or erase the original State, journal, guard or credentials. Run stl link plan-wss-replacement " +
+				observedPublic.ObjectID + " --json for safe original reconciliation or a new independent WSS peer pair with disjoint resources; no reboot is required for that separate Link when host admission succeeds."
+		}
+	}
 	out := lifecycleFailureResponse{
 		SchemaVersion:          jsonSchemaVersion,
 		Error:                  safe,

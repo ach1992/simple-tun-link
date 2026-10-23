@@ -744,6 +744,19 @@ rootless namespace tests deliberately cannot authenticate a physical reboot.
 Host-local protected State/backups must not be copied to a different
 still-active physical host and mistaken for proof the old kernel died.
 
+A quarantined old WSS original must not become a global prohibition
+on independently created Links. A NEW WSS Link with distinct Link ID,
+fresh protected WG/WSS identities, distinct exclusive UDP/TCP/forward
+ports, private Link addresses/subnet and per-Link host claims can use
+the unchanged canonical Engine transaction and secure peer handoff
+without a host reboot. Normal locks and committed/journal reservation
+conflict checks still reject any reused original resources; the old
+Link/journal and credentials remain untouched. The additive read-only
+`plan-wss-replacement` CLI reports this operator workflow and
+classifies uncommitted or committed crash journals, without attesting
+hidden-original deletion or proving bilateral traffic. It does not
+create a second Link controller or auto-switch consumer routes.
+
 ### R2 — durable WSS pre-effect crash quarantine (stacked candidate)
 
 The canonical Engine prepares a secret-free `wss_crash_operations`

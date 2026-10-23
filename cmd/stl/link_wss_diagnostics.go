@@ -136,6 +136,13 @@ func linkWSSDiagnoseCommand(args []string, out, errOut io.Writer, opts *runtimeO
 		return readCommandError(out, errOut, isJSON, stlerr.CodeState, "diagnose_wss", "saved Link State unavailable")
 	}
 	record, ok := snapshot.Find(id)
+	if _, pending := snapshot.FindWSSCrashOperation(id); pending {
+		public := stlerr.New(stlerr.CodeConflict, "diagnose_wss", string(id), "wireguard-wss",
+			"the original WSS operation has an unresolved crash journal; live readiness cannot be attested")
+		public.ReasonCode = "wss_crash_quarantined"
+		public.NextStep = "Use stl link plan-wss-replacement " + string(id) + " --json for safe original reconciliation or a disjoint new Link. Do not discard the journal, original claims or credentials."
+		return readCommandPublicError(out, errOut, isJSON, public)
+	}
 	if !ok || record.Desired.Backend != domain.BackendWireGuardWSS {
 		return readCommandError(out, errOut, isJSON, stlerr.CodeInvalid, "diagnose_wss", "requested identity is not a saved WSS Link")
 	}
@@ -154,7 +161,11 @@ func linkWSSDiagnoseCommand(args []string, out, errOut io.Writer, opts *runtimeO
 	}
 	details, err := observeWSSLink(ctx, opts.stateRoot, bounded, record.Desired)
 	if err != nil {
-		return readCommandError(out, errOut, isJSON, stlerr.CodeInspect, "diagnose_wss", "cannot establish trustworthy WSS host observations")
+		public := stlerr.New(stlerr.CodeInspect, "diagnose_wss", string(id), "wireguard-wss",
+			"cannot establish trustworthy WSS host observations; original disappearance and peer health are unverified")
+		public.ReasonCode = "wss_host_observation_unverified"
+		public.NextStep = "Recheck local permissions, WSS helper, guard and peer diagnostics. If genuinely unrecoverable, inspect stl link plan-wss-replacement " + string(id) + " --json before creating a fresh independent Link. Do not assume the old WG was deleted."
+		return readCommandPublicError(out, errOut, isJSON, public)
 	}
 	if isJSON {
 		if err := json.NewEncoder(out).Encode(details); err != nil {

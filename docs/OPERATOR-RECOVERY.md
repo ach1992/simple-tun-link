@@ -327,6 +327,48 @@ manual recovery when the trusted generation is unavailable, and do not
 manually edit or backfill UUIDs/receipts. The separate manual journaled
 recovery below applies only when its own admission gates can be met.
 
+## Unreleased WSS: no-reboot, fully independent replacement
+
+The normal objective is to **restore the original when safely possible**.
+If the original remains indeterminate, the operator need not keep the
+application offline merely because an unsafe in-place replay is denied.
+First run the read-only `stl link plan-wss-replacement OLD_LINK_ID --json`.
+It reports saved journal/commit/receipt status without claiming that a
+missing source-namespace WG, absent UDP listener or a dead peer proves
+the original kernel object is gone. Follow ordinary owner-attested
+repair or `reconcile-wss-original` only where its exact provenance and
+host mutation gates can be met.
+
+Ordinary lifecycle calls that encounter a pending crash journal or a
+committed original that vanished from the local namespace return the
+versioned reason `wss_crash_quarantined` or
+`wss_original_unverified` (before backend Apply) with a specific
+`plan-wss-replacement` next step. These reasons do not certify that
+an old kernel interface is dead, and do not imply permission to delete.
+
+When recovery is blocked, use a new WSS Link with a NEW ID, fresh
+credential issuance, separate private-IP subnet and disjoint exclusive
+UDP/TCP/forwarding/interface/guard/helper identities. The existing
+`create-wss` and recipient `preview-wss` / `import-wss` workflows
+are the only new-Link writers; their normal Engine resource collision
+and protected-credential admission must pass. The new peer handoff
+still requires separate authenticated operator delivery, bilateral
+verification and private-IP traffic proof before switching workloads.
+This is **independent replacement**, not a mutation of the original
+Link or automatic failover. No physical reboot is executed or presumed.
+
+For an unresolved original, leave the old crash journal, reserved claims,
+historical fingerprints, protected files and possible hidden host
+effects untouched. Do not reuse original WG/TLS keys, Link ID or
+possibly occupied ports/addresses; do not forge old termination receipts
+or call `retire-wss` on an indeterminate original. The original may
+still be live in another namespace. Existing independent Links continue
+to operate, but unresolved originals remain visible as protected
+configured or journaled work until independently reconciled. If no
+disjoint safe resources or peer admission are possible, report the
+failure accurately; no-reboot replacement cannot be guaranteed under
+all provider/kernel configurations.
+
 ## Unreleased WSS: executable manual cold-kernel-reboot recovery
 
 **Use only for an unresolved original WSS Crash Journal whose ordinary

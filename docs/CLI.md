@@ -475,6 +475,58 @@ its receipt retryable; a retired Link ID cannot be reused. Arbitrary
 must be separately retired from their external storage after confirmation.
 The state schema is v4; older binaries must not attempt to manage WSS Links.
 
+### No-reboot WSS recovery and independent replacement plan (unreleased)
+
+When an original WSS Link fails after a crash, **inspect and recover it first**.
+A failed handshake, a DOWN interface, an absent interface in one namespace,
+or a failed helper does not establish that the original kernel WireGuard object
+has been deleted: it may have moved into another network namespace.
+
+~~~sh
+sudo stl link plan-wss-replacement OLD_LINK_ID --json
+~~~
+
+This is **read-only**. The schema-v1 report distinguishes
+`crash_journal_quarantined` (including an interrupted initial Create
+without a committed Link), `committed_health_unverified` (not proof of
+failure), and `removed_identity_reserved`. It reports whether the
+original's State/resource reservation and crash journal remain, and gives
+explicit recovery and replacement steps. It performs NO kernel, nft,
+systemd, credential, State or reboot mutation. The result never certifies
+current host-wide vacancy or deletion of a hidden original. A blocked
+`diagnose-wss` reports `wss_crash_quarantined` with this command as the
+next step; an untrustworthy live inspection reports
+`wss_host_observation_unverified`. A blocked ordinary Ensure/Remove
+on a committed locally missing original reports
+`wss_original_unverified`; an unfinished original journal reports
+`wss_crash_quarantined` before host Apply. Each points to the read-only
+replacement plan rather than instructing blind retry. These are
+**errors**, not successful connectivity checks.
+
+If the original cannot be safely restored or removed, an operator may
+provision a **fully separate** WSS Link on both peers without first
+rebooting the host, using the normal menu or `create-wss`,
+`preview-wss`, and `import-wss` above. Pick a new Link ID,
+fresh WG/WSS credentials and new private Link subnet, and separately
+admitted WG UDP listen/peer ports, WSS TCP and forwarding resources.
+Send the sensitive new peer handoff through an authenticated channel.
+Only after both sides are created and private-IP traffic is verified
+should external workloads be redirected to the new addresses. The
+canonical Engine rejects shared reserved claims and verifies actual
+host collisions; a plan is not permission to overwrite them.
+
+The old crash journal, committed Link when present, host-resource
+reservations and original credential identities **remain quarantined**
+until positively proven original-object compensation, deletion and
+receipt-bound retirement. They are not silently deleted, adopted or
+retroactively certified by the new Link. A quarantined old committed
+Link can still appear in the configured inventory; this is **not**
+a claim that it is operational. If no safe independent ports/subnet,
+peer handoff or host admission exists, report the exact obstacle:
+the no-reboot path is not an unconditional guarantee. A real host
+reboot remains a separately approved exceptional recovery route,
+not a prerequisite for trying a disjoint new Link.
+
 ### Ordinary committed WSS original-generation admission (unreleased)
 
 A committed `wireguard-wss` Link whose original WG interface is missing

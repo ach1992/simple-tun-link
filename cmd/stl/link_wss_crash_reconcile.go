@@ -101,7 +101,10 @@ func linkWSSCrashCommandMode(args []string, out, errOut io.Writer, opts *runtime
 		if original {
 			details = "WSS journal retained: original-object identity, scoped compensation or final host vacancy unverified. Earlier exact-owner host compensation may have been applied; reinspect and retry only with this original journal"
 		}
-		return readCommandError(out, errOut, isJSON, stlerr.CodeOf(err), "wss_crash_reconcile", details)
+		public := stlerr.New(stlerr.CodeOf(err), "wss_crash_reconcile", string(id), "wireguard-wss", details)
+		public.ReasonCode = "wss_crash_reconciliation_unverified"
+		public.NextStep = "Do not replay or erase the original. Inspect stl link plan-wss-replacement " + string(id) + " --json for scoped recovery and a safe independent no-reboot replacement path; do not reuse reserved old resources."
+		return readCommandPublicError(out, errOut, isJSON, public)
 	}
 	if coldBootArm {
 		if isJSON {
@@ -163,7 +166,8 @@ func linkWSSCrashCommandMode(args []string, out, errOut io.Writer, opts *runtime
 		}
 	} else if original {
 		if originalJournalRetained {
-			fmt.Fprintf(out, "WSS Link %s original host-object compensation and vacancy verified; legacy committed repair journal, claims and credentials RETAINED. No automatic RestoreAll: arrange separately authorized Arm, real whole-kernel reboot and cold-boot Reconcile before recreation.\n", id)
+			fmt.Fprintf(out, "WSS Link %s original host-object compensation and vacancy verified; legacy committed repair journal, claims and credentials RETAINED. In-place RestoreAll is blocked without separately authorized trusted old-kernel recovery.\n", id)
+			fmt.Fprintf(out, "To avoid a host reboot, inspect stl link plan-wss-replacement %s --json and create a genuinely independent WSS Link with disjoint resources and a fresh verified peer handoff. Never delete or reuse the old reserved identity.\n", id)
 		} else {
 			fmt.Fprintf(out, "WSS Link %s original-host-object compensation verified, complete host vacancy proved, and exact journal/State transition committed. No foreign or name-only resource cleanup authorized.\n", id)
 		}
