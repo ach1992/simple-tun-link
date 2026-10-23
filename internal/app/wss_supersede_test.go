@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"net/netip"
 	"reflect"
 	"testing"
@@ -293,4 +294,137 @@ func TestWSSSupersessionRejectsSharedCrossKeysAndOverlappingClaims(t *testing.T)
 			t.Fatal("overlapping nonidentical resource claims were accepted")
 		}
 	})
+}
+
+// The real Store can rename state.json successfully, then fail a later fsync.
+// This wrapper mirrors that reported uncertainty after writing the real
+// FileStore, so an Engine retry must not trust merely visible JSON.
+type wssUncertainPublicationStore struct {
+	state.Store
+	failures int
+	updates  int
+}
+
+func (s *wssUncertainPublicationStore) Update(ctx context.Context, mutate func(*state.Snapshot) error) error {
+	s.updates++
+	if err := s.Store.Update(ctx, mutate); err != nil {
+		return err
+	}
+	if s.failures > 0 {
+		s.failures--
+		return &state.PublicationError{Cause: errors.New("test post-rename fsync failure")}
+	}
+	return nil
+}
+
+func TestWSSSupersessionRetryConfirmsPostRenameDurability(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	host := &crashWSSBackend{fakeBackend: newFakeBackend()}
+	engine, realStore := testSupersessionEngine(t, root, host, newFakeBackend(), testWSSBootBefore)
+	old := journalTestLink(t)
+	next := testIndependentWSSLink(t, old)
+	for _, link := range []domain.Link{old, next} {
+		if _, err := engine.Ensure(ctx, link); err != nil {
+			t.Fatalf("cannot prepare committed pair: %v", err)
+		}
+	}
+	original, found := mustLoadCrashSnapshot(t, realStore).Find(old.ID)
+	if !found {
+		t.Fatal("original missing")
+	}
+	hostChanges := host.applyCount
+	fault := &wssUncertainPublicationStore{Store: realStore, failures: 2}
+	engine.store = fault
+	for i := 0; i < 2; i++ {
+		changed, err := engine.SupersedeWSSOriginal(ctx, old.ID, next.ID)
+		if changed || stlerr.CodeOf(err) != stlerr.CodeState {
+			t.Fatalf("retry %d falsely confirmed unfsynced marker: changed=%t err=%v", i, changed, err)
+		}
+		visible, ok := mustLoadCrashSnapshot(t, realStore).Find(old.ID)
+		if !ok || visible.WSSSupersededBy != next.ID {
+			t.Fatal("test failed to reproduce visible post-rename marker")
+		}
+		if host.applyCount != hostChanges {
+			t.Fatal("supersession attempted a kernel Apply")
+		}
+	}
+	changed, err := engine.SupersedeWSSOriginal(ctx, old.ID, next.ID)
+	if changed || err != nil || fault.updates != 3 {
+		t.Fatalf("retry did not confirm durability through Store.Update: changed=%t updates=%d err=%v", changed, fault.updates, err)
+	}
+	changed, err = engine.SupersedeWSSOriginal(ctx, old.ID, next.ID)
+	if changed || err != nil || fault.updates != 4 {
+		t.Fatalf("fully durable idempotent retry failed: changed=%t updates=%d err=%v", changed, fault.updates, err)
+	}
+	original.WSSSupersededBy = next.ID
+	observed := mustLoadCrashSnapshot(t, realStore)
+	retained, ok := observed.Find(old.ID)
+	if !ok || !reflect.DeepEqual(retained, original) ||
+		len(observed.WSSCrashOperations) != 0 || len(observed.RemovalReceipts) != 0 {
+		t.Fatal("durability retry changed original owner, journal or credentials")
+	}
+	if host.applyCount != hostChanges {
+		t.Fatal("durability retry touched host resources")
+	}
+
+	// A new trusted host generation must only restore the genuine successor.
+	host.present = make(map[domain.LinkID][]domain.ResourceClaim)
+	after, _ := testSupersessionEngine(t, root, host, newFakeBackend(), testWSSBootAfter)
+	results, err := after.RestoreAll(ctx)
+	if err != nil || len(results) != 1 || results[0].LinkID != next.ID {
+		t.Fatalf("durability-confirmed quarantine resurrected old after reboot: %+v %v", results, err)
+	}
+	if _, exists := host.present[old.ID]; exists {
+		t.Fatal("old original was resurrected")
+	}
+}
+
+func TestWSSSupersessionRejectsReusedTrustCAAcrossRoles(t *testing.T) {
+	for _, role := range []string{"listen", "dial"} {
+		t.Run(role, func(t *testing.T) {
+			original := journalTestLink(t)
+			replacement := testIndependentWSSLink(t, original)
+			if role == "dial" {
+				original.WSS.Role, replacement.WSS.Role = "dial", "dial"
+				original.WSS.ForwardUDPPort = 53001
+				replacement.WSS.ForwardUDPPort = 53002
+			}
+			for _, link := range []domain.Link{original, replacement} {
+				if err := link.Validate(); err != nil {
+					t.Fatalf("invalid %s pair: %v", role, err)
+				}
+			}
+			issuer := testPerLinkIssuance{}
+			oldFiles, err := issuer.CaptureIdentity(context.Background(), original)
+			if err != nil {
+				t.Fatal(err)
+			}
+			newFiles, err := issuer.CaptureIdentity(context.Background(), replacement)
+			if err != nil {
+				t.Fatal(err)
+			}
+			old := state.LinkRecord{
+				Desired: original, WSSFiles: oldFiles,
+				WSSOrigin:      hex.EncodeToString(bytes.Repeat([]byte{5}, 16)),
+				OwnedResources: []domain.ResourceClaim{{Kind: domain.ResourceInterface, Key: "old-if"}},
+			}
+			next := state.LinkRecord{
+				Desired: replacement, WSSFiles: newFiles,
+				WSSOrigin:      hex.EncodeToString(bytes.Repeat([]byte{6}, 16)),
+				OwnedResources: []domain.ResourceClaim{{Kind: domain.ResourceInterface, Key: "next-if"}},
+			}
+			if old.WSSFiles.VerifyLink(old.Desired) != nil || next.WSSFiles.VerifyLink(next.Desired) != nil ||
+				!independentWSSReplacement(old, next) {
+				t.Fatal("fully fresh canonical WSS pair was not admitted")
+			}
+			next.WSSFiles.TrustCA = old.WSSFiles.TrustCA
+			if next.WSSFiles.VerifyLink(next.Desired) != nil {
+				t.Fatal("reused TrustCA fixture should remain otherwise valid")
+			}
+			if independentWSSReplacement(old, next) {
+				t.Fatal("shared per-Link trust anchor was accepted")
+			}
+		})
+	}
 }

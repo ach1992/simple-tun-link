@@ -47,11 +47,25 @@ func (e *Engine) SupersedeWSSOriginal(ctx context.Context, oldID, replacementID 
 			"wireguard-wss", "original is not a committed WSS Link")
 	}
 	if old.WSSSupersededBy != "" {
-		if old.WSSSupersededBy == replacementID {
-			return false, nil // already durably superseded; no host effects
+		if old.WSSSupersededBy != replacementID {
+			return false, stlerr.New(stlerr.CodeConflict, "wss_supersede", string(oldID),
+				"wireguard-wss", "original is already superseded; changing its successor is forbidden")
 		}
-		return false, stlerr.New(stlerr.CodeConflict, "wss_supersede", string(oldID),
-			"wireguard-wss", "original is already superseded; changing its successor is forbidden")
+		// A visible marker is not evidence of a durable one: a prior
+		// rename can succeed while the subsequent directory fsync fails.
+		// Re-publish the unchanged, freshly checked snapshot under the
+		// canonical Store lock before confirming an idempotent retry.
+		if err := e.store.Update(ctx, func(s *state.Snapshot) error {
+			current, exists := s.Find(oldID)
+			if !exists || !reflect.DeepEqual(current, old) {
+				return fmt.Errorf("superseded original State changed before durability confirmation")
+			}
+			return nil
+		}); err != nil {
+			return false, stlerr.Wrap(stlerr.CodeState, "wss_supersede", string(oldID),
+				"wireguard-wss", "existing supersession marker durability unconfirmed; retry without changing old resources", err)
+		}
+		return false, nil // idempotent, now durably confirmed; no host effects
 	}
 	next, found := before.Find(replacementID)
 	if !found || next.Desired.Backend != domain.BackendWireGuardWSS ||
@@ -110,6 +124,7 @@ func independentWSSReplacement(old, next state.LinkRecord) bool {
 		old.WSSFiles == next.WSSFiles ||
 		old.WSSFiles.Certificate == next.WSSFiles.Certificate ||
 		old.WSSFiles.TLSKey == next.WSSFiles.TLSKey ||
+		old.WSSFiles.TrustCA == next.WSSFiles.TrustCA ||
 		old.WSSFiles.Authorization == next.WSSFiles.Authorization ||
 		len(old.OwnedResources) == 0 || len(next.OwnedResources) == 0 {
 		return false

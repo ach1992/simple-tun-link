@@ -909,7 +909,7 @@ Unverifiable/foreign effects are quarantined, not adopted by name.
 Physical systemd/field/ARM64 WSS and independent review remain separate
 from isolated executable proof.
 
-For reproducible **33-scenario rootless real-kernel acceptance** on a
+For reproducible **35-scenario rootless real-kernel acceptance** on a
 disposable amd64 Linux test host with the pinned local fixture already
 prepared, run `bash scripts/e2e/wss-managed-wireguard-matrix.sh` from
 a clean exact-HEAD checkout as an unprivileged user. It builds the
@@ -918,6 +918,26 @@ harness, records per-case ignored local logs and prints exact HEAD/TREE.
 This is an **opt-in acceptance script**, not a post-install action,
 CI requirement or permission to change a physical production host.
 The existing fixture/prerequisite admission still applies.
+
+The two R9 cases extend the earlier 33-case suite with the actual
+**no-reboot independent replacement** lifecycle: original WSS peer pair,
+a simultaneously healthy unrelated STL-managed WSS peer pair, original
+WireGuard moved **DOWN** into another isolated namespace while its
+committed State, old ingress guard and protected credentials survive, and
+denied reuse of its UDP reservation. They create an entirely new
+per-Link WSS pair with fresh key and CA issuance and disjoint addresses
+and ports. The success case proves genuine bilateral private-IP ICMP/UDP
+traffic before separately invoking `supersede-wss` on both endpoints,
+then checks old Ensure/status/credential retirement denial, independent
+Restore, healthy sibling traffic and exact original resource retention.
+The failure case injects an error **after new real helper/WG/guard Apply**,
+retains its crash journal, and proves this failed new attempt cannot
+supersede the protected old WSS original. The extension also requires
+strict host-wide firewall admission of other **fully State-owned,
+nonce-verified exact per-Link nft guards**: a foreign, modified or
+unclaimed pre-guard hook still fails closed. These are disposable Linux
+kernel tests with a systemd **shim**, not physical reboot, field two-host
+acceptance, ARM64 WSS dataplane acceptance or automatic failover.
 
 The rootless test `STL_WSS_R2_CRASH_TEST=1 bash
 scripts/e2e/wss-managed-wireguard-r1.sh` sends SIGKILL after a

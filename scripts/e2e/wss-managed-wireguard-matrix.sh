@@ -46,6 +46,7 @@ run_case() {
     -u STL_WSS_R3_FOREIGN_TEST -u STL_WSS_R4_PARTIAL_WG_TEST \
     -u STL_WSS_R4_GUARD_INTERLOPER -u STL_WSS_R5_MIGRATED_WG_TEST \
     -u STL_WSS_R7_COLD_BOOT_TEST -u STL_WSS_R7_DRIFT_TEST -u STL_WSS_R8_MIGRATED_ORDINARY_TEST \
+    -u STL_WSS_R9_REPLACEMENT_TEST \
     "$@" bash scripts/e2e/wss-managed-wireguard-r1.sh > "$out/$label.log" 2>&1; then
     count=$((count+1))
     echo "PASS $label"
@@ -85,9 +86,13 @@ run_case virtual-boot-deny-remove STL_WSS_R2_REMOVE_CRASH_TEST=guard STL_WSS_R7_
 for mode in active externally-lost;do
   run_case "ordinary-migrated-$mode" "STL_WSS_R8_MIGRATED_ORDINARY_TEST=$mode"
 done
-[[ $count == 33 ]] || { echo "Incomplete WSS matrix $count/33" >&2; exit 3; }
+# Includes the genuinely new, same-kernel, no-reboot replacement workflow
+# and the failure-after-new-Apply path, both with an independent active peer.
+run_case replacement-no-reboot STL_WSS_R9_REPLACEMENT_TEST=success
+run_case replacement-new-apply-failure STL_WSS_R9_REPLACEMENT_TEST=fail-apply
+[[ $count == 35 ]] || { echo "Incomplete WSS matrix $count/35" >&2; exit 3; }
 [[ $(git rev-parse HEAD) == "$sha" && $(git rev-parse HEAD^{tree}) == "$tree" &&
    -z $(git status --porcelain=v1 --untracked-files=all) ]] || {
   echo "Source changed during WSS acceptance; do not trust results" >&2; exit 3;
 }
-echo "PASS WSS_33_33_ROOTLESS_REAL_KERNEL_E2E HEAD=$sha TREE=$tree"
+echo "PASS WSS_35_35_ROOTLESS_REAL_KERNEL_E2E HEAD=$sha TREE=$tree"

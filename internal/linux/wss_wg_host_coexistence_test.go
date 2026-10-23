@@ -348,3 +348,107 @@ func TestWSSWGHostCoexistenceIsolatedNftReadback(t *testing.T) {
 		t.Fatalf("expected read-only nft compatibility observation rejected: %v", err)
 	}
 }
+
+// A different STL-owned WSS ingress guard is a real hooked nft table,
+// but the current Link may coexist only when its entire structure and nonce
+// are independently attested; merely matching public table names is unsafe.
+func TestWSSWGCoexistenceExcludesOnlyVerifiedCommittedSiblingGuards(t *testing.T) {
+	old := wssGuardFixture(t)
+	next, err := NewWSSWGIngressPlan("lnk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 51831)
+	if err != nil {
+		t.Fatal(err)
+	}
+	complete := validWSSNFTSnapshot()
+	evidence := wssHostEvidence(complete)
+	if err := next.CheckWSSWGFirewallCoexistence(evidence); err == nil {
+		t.Fatal("unattested earlier nft hook was accepted")
+	}
+	if err := next.CheckWSSWGFirewallCoexistenceWithVerifiedGuards(evidence, []WSSWGIngressPlan{old}); err != nil {
+		t.Fatalf("exact sibling guard was rejected: %v", err)
+	}
+	t.Run("claimed_but_missing", func(t *testing.T) {
+		if err := next.CheckWSSWGFirewallCoexistenceWithVerifiedGuards(wssHostEvidence(wssHostEmptyRuleset), []WSSWGIngressPlan{old}); err == nil {
+			t.Fatal("missing originally attested guard was silently excluded")
+		}
+	})
+	t.Run("nonce_mismatch", func(t *testing.T) {
+		fake := old
+		fake.OriginalNonce = strings.Repeat("1", 32)
+		if err := next.CheckWSSWGFirewallCoexistenceWithVerifiedGuards(evidence, []WSSWGIngressPlan{fake}); err == nil {
+			t.Fatal("unverified original generation was accepted")
+		}
+	})
+	t.Run("port_mismatch", func(t *testing.T) {
+		fake := old
+		fake.ListenPort++
+		if err := next.CheckWSSWGFirewallCoexistenceWithVerifiedGuards(evidence, []WSSWGIngressPlan{fake}); err == nil {
+			t.Fatal("shared table with different WG UDP listener was accepted")
+		}
+	})
+	t.Run("duplicate_attestation", func(t *testing.T) {
+		if err := next.CheckWSSWGFirewallCoexistenceWithVerifiedGuards(evidence, []WSSWGIngressPlan{old, old}); err == nil {
+			t.Fatal("duplicated provenance was accepted")
+		}
+	})
+	t.Run("altered_rule", func(t *testing.T) {
+		changed := strings.Replace(complete, `{"drop":null}`, `{"accept":null}`, 1)
+		if changed == complete {
+			t.Fatal("invalid mutation fixture")
+		}
+		if err := next.CheckWSSWGFirewallCoexistenceWithVerifiedGuards(wssHostEvidence(changed), []WSSWGIngressPlan{old}); err == nil {
+			t.Fatal("same-name but mutated nft table was trusted")
+		}
+	})
+	t.Run("foreign_pre_input", func(t *testing.T) {
+		var prior, foreign struct {
+			Nftables []map[string]json.RawMessage `json:"nftables"`
+		}
+		if err := json.Unmarshal([]byte(complete), &prior); err != nil {
+			t.Fatal(err)
+		}
+		other := wssHostInventory(t, "foreign", "early", "input", -300, "accept", true)
+		if err := json.Unmarshal([]byte(other), &foreign); err != nil {
+			t.Fatal(err)
+		}
+		prior.Nftables = append(prior.Nftables, foreign.Nftables[1:]...)
+		data, err := json.Marshal(prior)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := next.CheckWSSWGFirewallCoexistenceWithVerifiedGuards(wssHostEvidence(string(data)), []WSSWGIngressPlan{old}); err == nil {
+			t.Fatal("unrelated earlier-hook firewall rule bypassed sibling exclusion")
+		}
+	})
+	t.Run("two_distinct_owned_guards", func(t *testing.T) {
+		second, err := NewWSSWGIngressPlan("lnk_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", 51841)
+		if err != nil {
+			t.Fatal(err)
+		}
+		secondRaw := strings.ReplaceAll(complete, old.TableName(), second.TableName())
+		secondRaw = strings.ReplaceAll(secondRaw, string(old.LinkID), string(second.LinkID))
+		secondRaw = strings.ReplaceAll(secondRaw, "51820", "51841")
+		if err := second.VerifyNFTJSON([]byte(secondRaw)); err != nil {
+			t.Fatalf("second canonical guard invalid: %v", err)
+		}
+		var first, extra struct {
+			Nftables []map[string]json.RawMessage `json:"nftables"`
+		}
+		if err := json.Unmarshal([]byte(complete), &first); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal([]byte(secondRaw), &extra); err != nil {
+			t.Fatal(err)
+		}
+		first.Nftables = append(first.Nftables, extra.Nftables[1:]...)
+		both, err := json.Marshal(first)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := next.CheckWSSWGFirewallCoexistenceWithVerifiedGuards(wssHostEvidence(string(both)), []WSSWGIngressPlan{old, second}); err != nil {
+			t.Fatalf("two independent attested WSS guards were not composable: %v", err)
+		}
+		if err := next.CheckWSSWGFirewallCoexistenceWithVerifiedGuards(wssHostEvidence(string(both)), []WSSWGIngressPlan{old}); err == nil {
+			t.Fatal("other real earlier guard was wrongly excluded")
+		}
+	})
+}

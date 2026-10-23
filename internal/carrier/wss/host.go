@@ -23,6 +23,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/credentials"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
+	"github.com/ach1992/simple-tun-link/internal/state"
 	"golang.org/x/sys/unix"
 )
 
@@ -294,6 +295,44 @@ func (h Host) HelperLoaded(ctx context.Context, link domain.Link) (bool, error) 
 	return s.loaded, err
 }
 
+// verifiedSiblingGuards accepts no name-only or journal-only host objects.
+// Original generations are read from canonical persisted State, never from a
+// current new-Link nonce. The caller is already in Engine maintenance and
+// resource-lock admission; it also re-reads the entire nft ruleset afterward.
+func (h Host) verifiedSiblingGuards(ctx context.Context, exclude domain.LinkID) ([]linux.WSSWGIngressPlan, error) {
+	snapshot, err := state.NewFileStore(h.StateRoot).Load(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("cannot verify protected WSS sibling State: %w", err)
+	}
+	var result []linux.WSSWGIngressPlan
+	for _, record := range snapshot.Links {
+		if record.Desired.Backend != domain.BackendWireGuardWSS || record.Desired.ID == exclude {
+			continue
+		}
+		originalCtx, err := core.WithWSSOrigin(ctx, record.WSSOrigin)
+		if err != nil {
+			return nil, fmt.Errorf("committed WSS sibling lacks trusted guard identity: %w", err)
+		}
+		present, err := h.GuardPresent(originalCtx, record.Desired)
+		if err != nil {
+			return nil, fmt.Errorf("committed WSS sibling guard inspection failed: %w", err)
+		}
+		if !present {
+			continue
+		}
+		claim := domain.ResourceClaim{Kind: domain.ResourceFirewall, Key: "wss/nft/" + string(record.Desired.ID)}
+		if err := linux.RequireOwned(record.Desired.ID, claim, record.OwnedResources); err != nil {
+			return nil, fmt.Errorf("WSS sibling nft guard is not reserved in protected State: %w", err)
+		}
+		plan, err := h.guard(originalCtx, record.Desired)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, plan)
+	}
+	return result, nil
+}
+
 func (h Host) Preflight(ctx context.Context, link domain.Link, guardPresent bool) error {
 	carrier := composition.CarrierForLink(link)
 	path, err := composition.Build(link, carrier)
@@ -310,6 +349,15 @@ func (h Host) Preflight(ctx context.Context, link domain.Link, guardPresent bool
 	if err != nil {
 		return err
 	}
+	// A different committed STL WSS guard is not a foreign pre-hook.
+	// Exclude it only when protected State still claims the exact guard
+	// AND fresh host readback verifies its original nonce and entire nft
+	// structure. Missing sibling guards grant no authority; altered/foreign
+	// same-name tables fail closed.
+	verified, err := h.verifiedSiblingGuards(ctx, link.ID)
+	if err != nil {
+		return err
+	}
 	if guardPresent {
 		actual, err := h.GuardPresent(ctx, link)
 		if err != nil {
@@ -318,11 +366,10 @@ func (h Host) Preflight(ctx context.Context, link domain.Link, guardPresent bool
 		if !actual {
 			return fmt.Errorf("expected committed WSS guard is absent")
 		}
-		if err := guard.ProbeWSSWGFirewallCoexistenceWithOwnedGuard(ctx, h.runner()); err != nil {
-			return fmt.Errorf("WSS existing-guard host firewall reinspection: %w", err)
-		}
-	} else if err := guard.ProbeWSSWGFirewallCoexistence(ctx, h.runner()); err != nil {
-		return err
+		verified = append(verified, guard)
+	}
+	if err := guard.ProbeWSSWGFirewallCoexistenceWithVerifiedGuards(ctx, h.runner(), verified); err != nil {
+		return fmt.Errorf("WSS scoped host firewall coexistence: %w", err)
 	}
 	if path.Role == composition.Listen {
 		claim := domain.ResourceClaim{Kind: domain.ResourceTCPListenPort,

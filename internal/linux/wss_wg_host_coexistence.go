@@ -38,7 +38,7 @@ type WSSWGFirewallEvidence struct {
 // actual host capabilities, exclusive apply, readback, drift, compensation
 // and independent Owner security/host-effects approval.
 func (p WSSWGIngressPlan) CheckWSSWGFirewallCoexistence(e WSSWGFirewallEvidence) error {
-	return p.checkWSSWGFirewallCoexistence(e, false)
+	return p.checkWSSWGFirewallCoexistence(e, nil)
 }
 
 // Existing-guard admission never skips host-wide inspection. The complete
@@ -47,11 +47,29 @@ func (p WSSWGIngressPlan) CheckWSSWGFirewallCoexistence(e WSSWGFirewallEvidence)
 // alone do not establish ownership: callers must separately hold committed
 // exact owner claims before selecting this path.
 func (p WSSWGIngressPlan) CheckWSSWGFirewallCoexistenceWithOwnedGuard(e WSSWGFirewallEvidence) error {
-	return p.checkWSSWGFirewallCoexistence(e, true)
+	return p.checkWSSWGFirewallCoexistence(e, []WSSWGIngressPlan{p})
 }
-func (p WSSWGIngressPlan) checkWSSWGFirewallCoexistence(e WSSWGFirewallEvidence, existing bool) error {
-	if existing {
-		filtered, err := p.filterVerifiedWSSWGOwnGuard(e.NFTRuleset)
+
+// Only callers that have independently matched each candidate's protected
+// State claim, original nonce and current complete nft table may provide
+// these guards. This exclusion is NOT table-name based trust.
+func (p WSSWGIngressPlan) CheckWSSWGFirewallCoexistenceWithVerifiedGuards(
+	e WSSWGFirewallEvidence, guards []WSSWGIngressPlan,
+) error {
+	return p.checkWSSWGFirewallCoexistence(e, guards)
+}
+
+func (p WSSWGIngressPlan) checkWSSWGFirewallCoexistence(e WSSWGFirewallEvidence, guards []WSSWGIngressPlan) error {
+	seen := map[string]bool{}
+	for _, owned := range guards {
+		if err := owned.validate(); err != nil {
+			return err
+		}
+		if seen[owned.tableName()] {
+			return fmt.Errorf("duplicate WSS guard attestation")
+		}
+		seen[owned.tableName()] = true
+		filtered, err := owned.filterVerifiedWSSWGOwnGuard(e.NFTRuleset)
 		if err != nil {
 			return err
 		}
@@ -148,12 +166,19 @@ func inspectWSSWGLegacySave(saved []byte) error {
 // host under its own admission locks and durable intent before any effects.
 // The trusted caller must use a trusted execution PATH/binary provenance.
 func (p WSSWGIngressPlan) ProbeWSSWGFirewallCoexistence(ctx context.Context, runner BoundedRunner) error {
-	return p.probeWSSWGFirewallCoexistence(ctx, runner, false)
+	return p.probeWSSWGFirewallCoexistence(ctx, runner, nil)
 }
 func (p WSSWGIngressPlan) ProbeWSSWGFirewallCoexistenceWithOwnedGuard(ctx context.Context, runner BoundedRunner) error {
-	return p.probeWSSWGFirewallCoexistence(ctx, runner, true)
+	return p.probeWSSWGFirewallCoexistence(ctx, runner, []WSSWGIngressPlan{p})
 }
-func (p WSSWGIngressPlan) probeWSSWGFirewallCoexistence(ctx context.Context, runner BoundedRunner, existing bool) error {
+func (p WSSWGIngressPlan) ProbeWSSWGFirewallCoexistenceWithVerifiedGuards(
+	ctx context.Context, runner BoundedRunner, guards []WSSWGIngressPlan,
+) error {
+	return p.probeWSSWGFirewallCoexistence(ctx, runner, guards)
+}
+func (p WSSWGIngressPlan) probeWSSWGFirewallCoexistence(
+	ctx context.Context, runner BoundedRunner, guards []WSSWGIngressPlan,
+) error {
 	if err := p.validate(); err != nil {
 		return err
 	}
@@ -197,10 +222,7 @@ func (p WSSWGIngressPlan) probeWSSWGFirewallCoexistence(ctx context.Context, run
 	// from a missing/failed legacy snapshot in the pure verifier.
 	e.LegacySaveV4 = append([]byte{}, e.LegacySaveV4...)
 	e.LegacySaveV6 = append([]byte{}, e.LegacySaveV6...)
-	if existing {
-		return p.CheckWSSWGFirewallCoexistenceWithOwnedGuard(e)
-	}
-	return p.CheckWSSWGFirewallCoexistence(e)
+	return p.CheckWSSWGFirewallCoexistenceWithVerifiedGuards(e, guards)
 }
 
 // safeWSSWGReadbackFailure never formats or unwraps untrusted runner error

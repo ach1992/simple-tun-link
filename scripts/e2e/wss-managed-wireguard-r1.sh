@@ -55,6 +55,7 @@ if [[ "${1:-}" != --inside && "${1:-}" != --nsroot ]]; then
   export STL_WSS_R1_TEST_GUARD="$token"
   cp -- "$repo/scripts/e2e/wss-managed-wireguard-r1.sh" "$lab/wss-real-e2e.sh"
   cp -- "$repo/scripts/e2e/wss-negative-probe.py" "$lab/wss-negative-probe.py"
+  cp -- "$repo/scripts/e2e/wss-r9-replacement.sh" "$lab/wss-r9-replacement.sh"
   # Always stage the exact source-tracked disposable supervisor. Never rely
   # on a stale, untracked prior lab copy as an acceptance dependency.
   install -m 0755 "$repo/scripts/e2e/wss-r1-supervisor.py" "$lab/bin/shims/systemd_shim.py"
@@ -187,6 +188,7 @@ cleanup(){
       kill "$pid" 2>/dev/null || :
     done
  done
+ ip netns delete gamma 2>/dev/null || :
  ip netns delete alpha 2>/dev/null || :
  ip netns delete beta 2>/dev/null || :
 }
@@ -705,6 +707,12 @@ test -f "$lab/alpha-state/handoff/receiver.json"
 invoke beta link preview-wss --stdin --json < "$lab/alpha-state/handoff/receiver.json" | tee "$lab/beta/preview.json"
 confirm=$(grep -m1 '^{' "$lab/beta/preview.json" | jq -r .confirmation_sha256)
 invoke beta link import-wss --stdin --confirm "$confirm" < "$lab/alpha-state/handoff/receiver.json"
+
+if [[ -n "${STL_WSS_R9_REPLACEMENT_TEST:-}" ]]; then
+  # Runs only after the normal real original pair was fully committed.
+  source /lab/wss-r9-replacement.sh
+  exit 0
+fi
 
 if [[ -n "$(printenv STL_WSS_R2_DRIFT_TEST || :)" ]];then
   mode=$STL_WSS_R2_DRIFT_TEST
