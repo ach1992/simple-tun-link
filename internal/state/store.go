@@ -50,6 +50,11 @@ type LinkRecord struct {
 	// A single-use, recovery-scoped old-kernel extinction witness from a
 	// trusted manual Arm + Reconcile. It is NOT original birth provenance.
 	WSSColdBootRestore WSSColdBootRestore `json:"wss_cold_boot_restore,omitzero"`
+	// An explicit operator transition after independent replacement. This
+	// retains the ORIGINAL committed State, ownership and private issuance,
+	// but permanently bars automatic Restore and ordinary Ensure. Never
+	// infer that an original kernel object was deleted from this marker.
+	WSSSupersededBy domain.LinkID `json:"wss_superseded_by,omitempty"`
 }
 
 type Snapshot struct {
@@ -207,12 +212,36 @@ func (s *FileStore) Update(ctx context.Context, mutate func(*Snapshot) error) er
 	if err != nil {
 		return err
 	}
+	// Already committed logical supersession is immutable for the life of
+	// its original Link record. Another writer cannot silently reenable
+	// automatic WSS resurrection by rewriting the marker.
+	originalSupersessions := make(map[domain.LinkID]domain.LinkID)
+	for _, record := range snapshot.Links {
+		if record.WSSSupersededBy != "" {
+			originalSupersessions[record.Desired.ID] = record.WSSSupersededBy
+		}
+	}
 	if err := mutate(&snapshot); err != nil {
 		return err
 	}
 	snapshot.normalize()
 	if err := validateSnapshot(snapshot); err != nil {
 		return err
+	}
+	for id, replacement := range originalSupersessions {
+		if retained, found := snapshot.Find(id); found {
+			if retained.WSSSupersededBy != replacement {
+				return fmt.Errorf("committed WSS supersession cannot be revoked or retargeted")
+			}
+		} else {
+			// Removing the old original is allowed only through the existing
+			// exact-provenance Engine Remove and its atomic retirement receipt.
+			receipt, found := snapshot.FindRemovalReceipt(id)
+			if !found || receipt.Backend != domain.BackendWireGuardWSS ||
+				!ValidWSSOriginalTerminationProof(receipt.WSSOriginalTermination) {
+				return fmt.Errorf("superseded WSS original removed without termination receipt")
+			}
+		}
 	}
 	return s.writeAtomic(snapshot)
 }
@@ -469,12 +498,16 @@ func validateSnapshot(snapshot Snapshot) error {
 			if err := record.WSSColdBootRestore.Validate(); err != nil {
 				return fmt.Errorf("committed WSS Link has invalid manual cold-boot restore authorization: %w", err)
 			}
+			if record.WSSSupersededBy != "" &&
+				(record.WSSSupersededBy.Validate() != nil || record.WSSSupersededBy == record.Desired.ID) {
+				return fmt.Errorf("committed WSS Link has invalid supersession target")
+			}
 			if record.WSSColdBootRestore != (WSSColdBootRestore{}) && record.WSSKernelBootSource != "" {
 				return fmt.Errorf("manual cold-boot restore proof cannot coexist with attested original birth")
 			}
 		} else if record.WSSFiles != (WSSFileIdentity{}) || record.WSSOrigin != "" ||
 			record.WSSKernelBootID != "" || record.WSSKernelBootSource != "" ||
-			record.WSSColdBootRestore != (WSSColdBootRestore{}) {
+			record.WSSColdBootRestore != (WSSColdBootRestore{}) || record.WSSSupersededBy != "" {
 			return fmt.Errorf("native Link cannot carry WSS credential or original host-object identity")
 		}
 		seen[record.Desired.ID] = struct{}{}

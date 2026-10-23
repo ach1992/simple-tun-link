@@ -354,8 +354,32 @@ are the only new-Link writers; their normal Engine resource collision
 and protected-credential admission must pass. The new peer handoff
 still requires separate authenticated operator delivery, bilateral
 verification and private-IP traffic proof before switching workloads.
-This is **independent replacement**, not a mutation of the original
-Link or automatic failover. No physical reboot is executed or presumed.
+
+For an **already committed original**, do not leave it as an ordinary
+desired active Link just because its independent replacement now works.
+After verifying both endpoints and the replacement's private-IP
+traffic, explicitly confirm the durable logical quarantine separately
+on each server:
+
+~~~sh
+sudo stl link supersede-wss OLD_ID --replacement NEW_ID --confirm OLD_ID --json
+sudo stl link plan-wss-replacement OLD_ID --json
+~~~
+
+Only a *committed, independent, disjoint* replacement permits this
+State-only transition. The old WSS record gains immutable
+`wss_superseded_by: NEW_ID`; all original claims, issuance fingerprints,
+credentials, original birth provenance, and pre-existing crash journal
+remain as before. This is `quarantined_old`: not original deletion,
+credential retirement, a successful connectivity check, an automatic
+switchover or host mutation. RestoreAll and ordinary Ensure will not
+resurrect the old original, even after a new kernel generation; status,
+diagnostics and list distinguish it from an active Link. For initial
+Ensure failures with **no committed** original, there is no desired
+State to supersede, so retain the original crash journal instead.
+
+This is **independent operator-driven replacement**, not a generic
+automatic failover controller. No physical reboot is executed or presumed.
 
 For an unresolved original, leave the old crash journal, reserved claims,
 historical fingerprints, protected files and possible hidden host

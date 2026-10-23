@@ -318,6 +318,10 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 		domain.LinkID(observedPublic.ObjectID).Validate() == nil &&
 		(evidence == nil || evidence.HostMutation == "not_attempted") {
 		switch observedPublic.ReasonCode {
+		case "wss_original_superseded":
+			safe.ReasonCode = "wss_original_superseded"
+			safe.NextStep = "This WSS original was explicitly superseded and cannot be automatically restored or re-ensured. Inspect stl link plan-wss-replacement " +
+				observedPublic.ObjectID + " --json and check the new Link on both peers. Preserve old resource claims and credentials pending exact proven retirement."
 		case "wss_crash_quarantined", "wss_original_unverified":
 			safe.ReasonCode = observedPublic.ReasonCode
 			safe.NextStep = "The old original may remain active in another network namespace. Do not repeat blocked Ensure/Remove or erase the original State, journal, guard or credentials. Run stl link plan-wss-replacement " +

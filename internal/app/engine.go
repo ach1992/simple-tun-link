@@ -385,6 +385,12 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 	if err != nil {
 		return Result{}, stlerr.Wrap(stlerr.CodeState, "ensure", string(desired.ID), string(desired.Backend), "cannot load local state", err)
 	}
+	if stored, exists := snapshot.Find(desired.ID); exists && stored.WSSSupersededBy != "" {
+		blocked := stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID),
+			string(desired.Backend), "superseded WSS original remains protected; ordinary Ensure cannot reactivate it")
+		blocked.ReasonCode = "wss_original_superseded"
+		return Result{}, blocked
+	}
 	if _, pending := snapshot.FindWSSCrashOperation(desired.ID); pending {
 		blocked := stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID),
 			string(desired.Backend), "WSS pre-effect crash journal requires explicit, owner-verified reconciliation")
@@ -572,6 +578,13 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 	if err != nil {
 		return Result{}, stlerr.Wrap(stlerr.CodeState, string(request.Operation), string(link.ID), string(link.Backend), "cannot reload local state", err)
 	}
+	if stored, exists := fresh.Find(link.ID); exists && stored.WSSSupersededBy != "" &&
+		request.Operation == backend.OperationEnsure {
+		blocked := stlerr.New(stlerr.CodeConflict, "ensure", string(link.ID),
+			"wireguard-wss", "superseded WSS original cannot be restored or re-ensured")
+		blocked.ReasonCode = "wss_original_superseded"
+		return Result{}, blocked
+	}
 	if _, pending := fresh.FindWSSCrashOperation(link.ID); pending {
 		return Result{}, stlerr.New(stlerr.CodeConflict, string(request.Operation),
 			string(link.ID), string(link.Backend),
@@ -583,6 +596,7 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 			current.WSSFiles != prior.WSSFiles || current.WSSKernelBootID != prior.WSSKernelBootID ||
 			current.WSSKernelBootSource != prior.WSSKernelBootSource ||
 			current.WSSColdBootRestore != prior.WSSColdBootRestore ||
+			current.WSSSupersededBy != prior.WSSSupersededBy ||
 			!slices.Equal(current.OwnedResources, prior.OwnedResources) {
 			return Result{}, fmt.Errorf("committed WSS original generation changed after resource locks")
 		}

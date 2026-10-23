@@ -515,6 +515,37 @@ should external workloads be redirected to the new addresses. The
 canonical Engine rejects shared reserved claims and verifies actual
 host collisions; a plan is not permission to overwrite them.
 
+**Important: prevent old-Link resurrection after the next reboot.**
+For an *already committed* old WSS Link, after the new Link is fully
+committed **and bilateral private-IP traffic has been independently
+verified**, explicitly mark the old one as logically superseded:
+~~~sh
+sudo stl link supersede-wss OLD_LINK_ID --replacement NEW_LINK_ID --confirm OLD_LINK_ID --json
+sudo stl link plan-wss-replacement OLD_LINK_ID --json
+~~~
+Run this separately on each endpoint with locally matching committed
+old/new WSS IDs. Confirmation requires the exact original ID and
+verifies that the new Link has independent WSS identity, protected
+issuance, owned resources and no unfinished crash journal. The marker
+`wss_superseded_by` is written atomically on the original committed
+State, **not** in a fabricated Crash Journal or retirement receipt.
+The result is `outcome: quarantined_old` (not a claim that peer traffic
+was tested by STL); `old_restore_blocked: true`,
+`original_deletion_proven: false`, `host_mutated: false`, and
+`replacement_traffic_verified: false`. Ordinary Ensure and
+post-reboot RestoreAll will not replay the superseded original, even
+after a trusted new kernel generation; the old Link still retains its
+original claims and credentials. `link list --json` marks it
+`disposition: quarantined_old`, and `link status` /
+`link diagnose-wss` refuse to present it as active. Marking is
+idempotent but cannot be silently reversed or retargeted. A failed
+new-Link Apply never qualifies for supersession.
+
+For an *uncommitted* original with only an initial-Ensure crash journal,
+there is no committed desired Link for RestoreAll to replay; keep its
+journal and reservations until independently reconciled. The explicit
+supersede-wss command therefore applies only to committed originals.
+
 The old crash journal, committed Link when present, host-resource
 reservations and original credential identities **remain quarantined**
 until positively proven original-object compensation, deletion and

@@ -167,7 +167,7 @@ func TestWSSReplacementPlanReportsPersistedCrashAndDiagnosisAction(t *testing.T)
 // Host-Apply ambiguity or a foreign backend cannot claim safe recovery.
 func TestWSSLifecycleFailureGuidanceIsIdentityAndStageBound(t *testing.T) {
 	const id = "lnk_1234567890abcdef1234567890abcdef"
-	for _, reason := range []string{"wss_crash_quarantined", "wss_original_unverified"} {
+	for _, reason := range []string{"wss_crash_quarantined", "wss_original_unverified", "wss_original_superseded"} {
 		for _, tc := range []struct {
 			name, backend, mutation string
 			wantSpecific            bool

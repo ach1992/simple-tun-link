@@ -81,6 +81,12 @@ func (e *Engine) RestoreAll(ctx context.Context) ([]Result, error) {
 	results := make([]Result, 0, len(snapshot.Links))
 	var perLinkFailures []error
 	for _, record := range snapshot.Links {
+		if record.WSSSupersededBy != "" {
+			// A superseded original is retained as protected State, not as a
+			// desired active service. This applies even after a trusted new
+			// kernel generation or a manual cold-boot witness.
+			continue
+		}
 		if _, unresolved := snapshot.FindWSSCrashOperation(record.Desired.ID); unresolved {
 			perLinkFailures = append(perLinkFailures, stlerr.New(stlerr.CodeConflict,
 				"restore", string(record.Desired.ID), "wireguard-wss",
@@ -135,6 +141,9 @@ func (e *Engine) restorePersisted(ctx context.Context, id domain.LinkID) (Result
 		return Result{}, false, stlerr.Wrap(stlerr.CodeState, "restore", string(id), "", "cannot reload persisted Link intent", err)
 	}
 	record, exists := fresh.Find(id)
+	if exists && record.WSSSupersededBy != "" {
+		return Result{}, false, nil
+	}
 	if !exists {
 		// Remove won before restore: skip rather than resurrecting the Link.
 		return Result{}, false, nil

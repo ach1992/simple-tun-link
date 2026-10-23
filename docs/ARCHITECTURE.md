@@ -754,8 +754,20 @@ conflict checks still reject any reused original resources; the old
 Link/journal and credentials remain untouched. The additive read-only
 `plan-wss-replacement` CLI reports this operator workflow and
 classifies uncommitted or committed crash journals, without attesting
-hidden-original deletion or proving bilateral traffic. It does not
-create a second Link controller or auto-switch consumer routes.
+hidden-original deletion or proving bilateral traffic. After an
+independent WSS peer pair is committed and manually verified on both
+hosts, `supersede-wss` requires explicit old-ID confirmation and
+atomically marks the ORIGINAL committed State with a durable
+`wss_superseded_by` successor ID. The original record, claims, boot
+provenance, private issuance and any crash journal are retained.
+The marker cannot be silently cleared or retargeted; subsequent
+RestoreAll, RestorePersisted and ordinary Ensure fail/skip closed
+rather than resurrecting the original in a new kernel generation.
+The machine result reports `quarantined_old` and does not claim
+a deleted original or verified peer traffic. Authorized original
+compensation and receipt-bound retirement remain separate.
+This does not create a second Link controller or auto-switch consumer
+routes.
 
 ### R2 — durable WSS pre-effect crash quarantine (stacked candidate)
 

@@ -136,6 +136,14 @@ func linkWSSDiagnoseCommand(args []string, out, errOut io.Writer, opts *runtimeO
 		return readCommandError(out, errOut, isJSON, stlerr.CodeState, "diagnose_wss", "saved Link State unavailable")
 	}
 	record, ok := snapshot.Find(id)
+	if ok && record.WSSSupersededBy != "" {
+		blocked := stlerr.New(stlerr.CodeConflict, "diagnose_wss", string(id), "wireguard-wss",
+			"original WSS Link has been explicitly superseded; do not treat it as active")
+		blocked.ReasonCode = "wss_original_superseded"
+		blocked.NextStep = "Verify replacement " + string(record.WSSSupersededBy) +
+			" on both peers; inspect stl link plan-wss-replacement " + string(id) + " --json before original cleanup."
+		return readCommandPublicError(out, errOut, isJSON, blocked)
+	}
 	if _, pending := snapshot.FindWSSCrashOperation(id); pending {
 		public := stlerr.New(stlerr.CodeConflict, "diagnose_wss", string(id), "wireguard-wss",
 			"the original WSS operation has an unresolved crash journal; live readiness cannot be attested")

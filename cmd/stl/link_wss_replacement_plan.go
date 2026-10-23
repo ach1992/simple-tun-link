@@ -22,6 +22,8 @@ type WSSReplacementPlan struct {
 	CrashJournalRetained   bool          `json:"crash_journal_retained"`
 	OldResourcesReserved   bool          `json:"old_resources_reserved"`
 	OldIdentityReserved    bool          `json:"old_identity_reserved"`
+	SupersededBy           domain.LinkID `json:"superseded_by,omitempty"`
+	OldRestoreBlocked      bool          `json:"old_restore_blocked"`
 	HostMutated            bool          `json:"host_mutated"`
 	OriginalDeletionProven bool          `json:"original_deletion_proven"`
 	RebootPerformed        bool          `json:"reboot_performed"`
@@ -50,6 +52,16 @@ func planWSSReplacement(snapshot state.Snapshot, id domain.LinkID) (WSSReplaceme
 		CrashJournalRetained: pending, OldResourcesReserved: committed || pending, OldIdentityReserved: true,
 		Steps: []string{},
 	}
+	if committed && record.WSSSupersededBy != "" {
+		result.RecoveryState = "superseded_quarantined"
+		result.SupersededBy = record.WSSSupersededBy
+		result.OldRestoreBlocked = true
+		result.Steps = append(result.Steps,
+			"Original committed WSS owner is durably quarantined and will NOT be automatically restored after reboot. Do not attempt original Ensure, adopt an old helper or erase reserved original resources.",
+			"Inspect replacement "+string(record.WSSSupersededBy)+" on both endpoints, and verify real private-IP traffic before moving applications. Logical supersession is not evidence of successful connectivity or original kernel deletion.",
+			"Original reconciliation and receipt-bound private-credential retirement require independent exact original kernel extinction proof; keep its original State, journal (if present), guard claims and fingerprints meanwhile.")
+		return result, true
+	}
 	switch {
 	case pending:
 		result.RecoveryState = "crash_journal_quarantined"
@@ -71,6 +83,7 @@ func planWSSReplacement(snapshot state.Snapshot, id domain.LinkID) (WSSReplaceme
 		"If recovery is not possible, prepare an independent WSS peer pair on the intended listener: stl link create-wss --stdin --output <private-file>. Choose a NEW Link ID, new WG/WSS keys, distinct private Link subnet and unused WG UDP / WSS TCP / forwarding ports; never copy the old Link's secrets or claims.",
 		"Transfer the generated sensitive receiver handoff through an authenticated encrypted channel; run stl link preview-wss --stdin --json and stl link import-wss --stdin --confirm <preview-sha256> on the peer. The Engine must validate every resource conflict before host Apply.",
 		"Verify both newly configured peers with stl link diagnose-wss <new-link-id> --json and actual private-IP peer traffic before shifting workloads. Successful local Ensure alone is not connectivity proof.",
+		"For a COMMITTED old WSS original, after verified bilateral replacement traffic, explicitly persist the old logical quarantine on this endpoint: stl link supersede-wss "+string(id)+" --replacement <new-link-id> --confirm "+string(id)+". Repeat the scoped confirmation on the other peer as appropriate; it does not terminate the kernel original.",
 		"Keep the old original's State/journal, original ownership reservations and protected credentials untouched until exact original deletion/retirement can be independently proved. A new independent Link need not reboot the host, but is NOT guaranteed if suitable disjoint resources, peer handoff or safe host admission are unavailable.",
 	)
 	return result, true
