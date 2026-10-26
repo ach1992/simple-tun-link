@@ -480,6 +480,49 @@ its receipt retryable; a retired Link ID cannot be reused. Arbitrary
 must be separately retired from their external storage after confirmation.
 The state schema is v4; older binaries must not attempt to manage WSS Links.
 
+### Ubuntu AppArmor confinement of `wg` (WSS host preflight)
+
+Some Ubuntu releases, including Ubuntu 26.04, enforce a separate `wg`
+AppArmor profile. Its packaged file rule may allow `wg` to read keys only
+under `/etc/wireguard/`, whereas STL intentionally stores per-Link private
+WireGuard credentials under `/var/lib/simple-tun-link/credentials/` and
+passes an already-verified file descriptor to `wg`. If the active profile
+does not permit that file, `wg set` may fail with `fopen: Permission denied`
+**after** STL has created an nft ingress guard and an original kernel WG
+interface. The protected crash journal then correctly blocks a blind import
+retry; the generic CLI failure does not prove rollback or host vacancy.
+
+Before the first WSS Create/Import on a confined host, the operator should
+check `aa-status` and inspect `/etc/apparmor.d/wg` for the effective
+`wg` profile. With **explicit host-security approval**, use the packaged
+`include if exists <local/wg>` integration point, not a change to the
+vendor-owned `wg` profile. A narrowly scoped **read-only** site addition in
+`/etc/apparmor.d/local/wg` can admit only STL's protected WireGuard keys:
+
+~~~text
+owner /var/lib/simple-tun-link/credentials/lnk_*.wgkey r,
+~~~
+
+If that local file already exists, preserve its contents and review the
+merged policy. Have the host administrator validate and reload **only**
+the `wg` profile through the supported `apparmor_parser` workflow, then
+verify it stays in `enforce` mode. Never turn AppArmor off, switch the
+profile to complain/unconfined, loosen private-key file permissions, move
+secret files to a publicly accessible location, or alter SSH/default routes.
+The `owner` rule does not override Linux DAC: STL's root-owned 0700
+credential directory and 0600 key files remain prerequisites.
+
+If the journal already exists and either the WG interface or nft guard is
+present, **do not** re-run `import-wss` or invoke vacancy-only reconciliation
+just because the AppArmor rule is now corrected. Inspect the read-only
+`stl link plan-wss-replacement LINK_ID --json`; any original-resource
+reconciliation must independently verify its journal nonce, kernel ifindex,
+owned nft guard and helper state under the Engine's exact-object safety
+checks and the owner's explicit authorization. Only then retry the original
+protected handoff. See
+[Ubuntu AppArmor administration](https://ubuntu.com/server/docs/security-apparmor/)
+and [Ubuntu WireGuard bug 2151123](https://bugs.launchpad.net/bugs/2151123).
+
 ### No-reboot WSS recovery and independent replacement plan (unreleased)
 
 When an original WSS Link fails after a crash, **inspect and recover it first**.
