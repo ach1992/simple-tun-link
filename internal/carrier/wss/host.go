@@ -205,6 +205,27 @@ func (h Host) inspectUnit(ctx context.Context, link domain.Link) (unitState, err
 		values[pieces[0]] = pieces[1]
 	}
 	if values["LoadState"] == "not-found" {
+		// A missing unit on real systemd 249 and 259 omits ExecStart
+		// entirely, even when explicitly requested in --property. Do not
+		// mistake this documented absence for an incomplete readback: admit
+		// it only with an independently complete, exact default not-found
+		// identity and security-property snapshot. Loaded units still require
+		// an explicit, fully verified ExecStart and every sandbox property.
+		if _, hasExec := values["ExecStart"]; !hasExec {
+			for _, k := range []string{"Description", "Type", "Restart", "NoNewPrivileges",
+				"PrivateTmp", "ProtectSystem", "ProtectHome"} {
+				if _, present := values[k]; !present {
+					return unitState{}, fmt.Errorf("incomplete systemd not-found observation")
+				}
+			}
+			if values["Description"] != h.unitName(link) ||
+				values["Type"] != "" || values["Restart"] != "no" ||
+				values["NoNewPrivileges"] != "no" || values["PrivateTmp"] != "no" ||
+				values["ProtectSystem"] != "no" || values["ProtectHome"] != "no" {
+				return unitState{}, fmt.Errorf("contradictory systemd not-found defaults")
+			}
+			values["ExecStart"] = ""
+		}
 		// A truncated query or conflicting asynchronous state is not
 		// evidence of a fully collected transient unit.
 		for _, k := range []string{"LoadState", "ActiveState", "Transient", "ExecStart", "Environment", "CollectMode"} {
