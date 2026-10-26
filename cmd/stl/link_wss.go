@@ -170,6 +170,19 @@ func makeWSSPair(r wssCreateRequest, id domain.LinkID, localPub, peerPub string)
 func wssCommandError(operation string, jsonOut bool, id domain.LinkID, code stlerr.Code, reason string, out, errOut io.Writer) int {
 	return wireGuardCreationError(out, errOut, jsonOut, code, id, operation+": "+reason)
 }
+
+// wssActivationFailure preserves the canonical Engine's typed, secret-free
+// lifecycle evidence instead of collapsing all host failures to state_unverified.
+// The legacy operation/error code and generic detail remain stable; raw
+// backend/process/credential errors must never reach the CLI output.
+func wssActivationFailure(operation string, jsonOut bool, id domain.LinkID,
+	result app.Result, cause error, detail string, out, errOut io.Writer) int {
+	if result.LinkID.Validate() != nil {
+		result.LinkID = id
+	}
+	return lifecycleFailureWithEvidence(out, errOut, jsonOut, stlerr.CodeState,
+		"link_create_wireguard", &result, operation+": "+detail, stlerr.EvidenceOf(cause), cause)
+}
 func wssEngine(options *runtimeOptions) (*app.Engine, *wg.KeyStore, error) {
 	if options == nil {
 		return nil, nil, fmt.Errorf("WSS runtime unavailable")
@@ -271,7 +284,7 @@ func linkWSSCommand(args []string, in io.Reader, out, errOut io.Writer, options 
 			result, err = engine.Ensure(ctx, offer.Sender)
 		}
 		if err != nil {
-			return wssCommandError(operation, jsonOut, offer.Sender.ID, stlerr.CodeState,
+			return wssActivationFailure(operation, jsonOut, offer.Sender.ID, result, err,
 				"activation not verified; preserve original private handoff and inspect owned State before retry", out, errOut)
 		}
 		return writeWSSResult(operation, result, jsonOut, out, errOut, "")
@@ -369,7 +382,7 @@ func createWSS(in io.Reader, output string, out, errOut io.Writer, jsonOut bool,
 		return writeSensitiveHandoff(output, append(encoded, '\n'))
 	})
 	if err != nil {
-		return wssCommandError(operation, jsonOut, id, stlerr.CodeState,
+		return wssActivationFailure(operation, jsonOut, id, result, err,
 			"WSS activation unconfirmed; preserve any published handoff and protected credentials for exact resume", out, errOut)
 	}
 	return writeWSSResult(operation, result, jsonOut, out, errOut, output)

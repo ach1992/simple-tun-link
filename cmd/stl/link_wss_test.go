@@ -3,13 +3,16 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/netip"
 	"strings"
 	"testing"
 
+	"github.com/ach1992/simple-tun-link/internal/app"
 	wg "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/carrier/wss"
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
 func testWSSCreateRequest() wssCreateRequest {
@@ -74,5 +77,62 @@ func TestR1WSSOfferRoundTripAndSecretsStayOutOfState(t *testing.T) {
 	other.RemoteForwardUDPPort = 53006
 	if _, _, err = makeWSSPair(other, other.LinkID, senderPub, peerPub); err == nil {
 		t.Fatal("accepted remote listening side with an irrelevant UDP forwarder")
+	}
+}
+
+func TestWSSActivationErrorRetainsTypedEvidenceWithoutLeakingCause(t *testing.T) {
+	const sentinel = "DO_NOT_EXPOSE_UNTRUSTED_CREDENTIAL_DETAIL"
+	id := domain.LinkID("lnk_0123456789abcdef0123456789abcdef")
+	observed := stlerr.Wrap(stlerr.CodeApply, "ensure", string(id),
+		string(domain.BackendWireGuardWSS), sentinel, fmt.Errorf("%s", sentinel))
+	tests := []struct {
+		name       string
+		evidence   stlerr.OperationEvidence
+		reasonCode string
+	}{
+		{
+			name: "partial-apply-rollback-incomplete",
+			evidence: stlerr.OperationEvidence{
+				Stage: "apply", HostMutation: "attempted", DesiredState: "no_commit_attempted",
+				Rollback: "incomplete", CredentialProvision: "attempted",
+			},
+			reasonCode: "rollback_incomplete",
+		},
+		{
+			name: "rejected-before-host-apply",
+			evidence: stlerr.OperationEvidence{
+				Stage: "validate", HostMutation: "not_attempted",
+				DesiredState: "no_commit_attempted", Rollback: "not_required",
+			},
+			reasonCode: "rejected_before_host_apply",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := stlerr.WithEvidence(observed, tt.evidence)
+			var stdout, stderr bytes.Buffer
+			rc := wssActivationFailure("import-wss", true, id, app.Result{}, err,
+				"activation not verified; preserve original private handoff and inspect owned State before retry",
+				&stdout, &stderr)
+			if rc != 1 || stderr.Len() != 0 {
+				t.Fatalf("unexpected CLI return code or stderr: code=%d, stderr=%q", rc, stderr.String())
+			}
+			if strings.Contains(stdout.String(), sentinel) {
+				t.Fatal("untrusted secret-bearing cause leaked into JSON")
+			}
+			var output lifecycleFailureResponse
+			if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+				t.Fatal(err)
+			}
+			if output.Error == nil || output.Error.Code != stlerr.CodeState ||
+				output.Error.Operation != "link_create_wireguard" ||
+				output.Error.ReasonCode != tt.reasonCode ||
+				output.Error.Detail != "import-wss: activation not verified; preserve original private handoff and inspect owned State before retry" ||
+				output.Error.Evidence == nil || *output.Error.Evidence != tt.evidence ||
+				output.Outcome != "unconfirmed" || !output.ReconciliationRequired ||
+				output.PartialResult == nil || output.PartialResult.LinkID != id {
+				t.Fatalf("missing safe field-recovery evidence: %#v", output)
+			}
+		})
 	}
 }
