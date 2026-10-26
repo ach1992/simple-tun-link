@@ -96,8 +96,24 @@ func TestWSSUnitNotFoundReadbackRequiresCompleteConsistentState(t *testing.T) {
 	link.Backend = domain.BackendWireGuardWSS
 	link.WSS = domain.WSSOptions{Role: "listen", TCPPort: 59443}
 	valid := "LoadState=not-found\nActiveState=inactive\nTransient=no\nDescription=\nExecStart=\nEnvironment=\nCollectMode=inactive\n"
+	// Real systemd 249 (Ubuntu 22.04) and 259 (Ubuntu 26.04)
+	// omit ExecStart completely when LoadState=not-found.
+	realUnit := (Host{}).unitName(link)
+	real249 := fmt.Sprintf("Type=\nRestart=no\nRestartUSec=100ms\nEnvironment=\nPrivateTmp=no\nProtectHome=no\nProtectSystem=no\nNoNewPrivileges=no\nDescription=%s\nLoadState=not-found\nActiveState=inactive\nTransient=no\nCollectMode=inactive\n", realUnit)
+	real259 := fmt.Sprintf("Description=%s\nLoadState=not-found\nActiveState=inactive\nTransient=no\nCollectMode=inactive\nType=\nRestart=no\nRestartUSec=100ms\nEnvironment=\nPrivateTmp=no\nProtectHome=no\nProtectSystem=no\nNoNewPrivileges=no\n", realUnit)
 	for name, data := range map[string]string{
 		"valid":                valid,
+		"systemd249-no-exec":   real249,
+		"systemd259-no-exec":   real259,
+		"missing-description":  strings.Replace(real249, "Description="+realUnit+"\n", "", 1),
+		"foreign-description":  strings.Replace(real249, "Description="+realUnit, "Description=foreign-unit", 1),
+		"missing-type":         strings.Replace(real249, "Type=\n", "", 1),
+		"missing-restart":      strings.Replace(real249, "Restart=no\n", "", 1),
+		"foreign-restart":      strings.Replace(real249, "Restart=no", "Restart=always", 1),
+		"missing-sandbox":      strings.Replace(real249, "NoNewPrivileges=no\n", "", 1),
+		"foreign-sandbox":      strings.Replace(real249, "NoNewPrivileges=no", "NoNewPrivileges=yes", 1),
+		"missing-collect":      strings.Replace(real249, "CollectMode=inactive\n", "", 1),
+		"foreign-exec":         strings.Replace(real249, "Environment=\n", "ExecStart=/bin/foreign\nEnvironment=\n", 1),
 		"no-collect-mode":      strings.Replace(valid, "CollectMode=inactive\n", "", 1),
 		"unexpected-active":    strings.Replace(valid, "ActiveState=inactive", "ActiveState=active", 1),
 		"unexpected-transient": strings.Replace(valid, "Transient=no", "Transient=yes", 1),
@@ -107,7 +123,7 @@ func TestWSSUnitNotFoundReadbackRequiresCompleteConsistentState(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			h := Host{Runner: wssUnitAbsentStub{data}}
 			unit, err := h.inspectUnit(context.Background(), link)
-			if name == "valid" {
+			if name == "valid" || name == "systemd249-no-exec" || name == "systemd259-no-exec" {
 				if err != nil || unit.loaded {
 					t.Fatalf("valid not-found rejected: %v", err)
 				}
