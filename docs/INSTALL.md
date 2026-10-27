@@ -200,10 +200,10 @@ delete leftover protected temporary material.
 was the first release with the self-contained `*_local-install.sh` format.**
 Use the [latest published Stable](https://github.com/ach1992/simple-tun-link/releases/latest)
 for a new installation. As a concrete example, the approved immutable
-**v0.1.11** (27 October 2026) publishes the exact download files below.
+**v0.1.12** publishes the exact download files below.
 When a new release becomes Latest, select that new release's **actual tag**,
 matching architecture and source-verified file instead of blindly reusing
-v0.1.11.
+v0.1.12.
 Open the official release on an Internet-connected device and verify its tag,
 publisher and exact published asset before privileged use. The matching file
 already embeds all required STL core files; no extra STL binary, installer,
@@ -214,8 +214,8 @@ through a separately verified, explicit
 
 | Server CPU | Exactly ONE file to download | Exact official release asset |
 | --- | --- | --- |
-| `x86_64` | `stl_v0.1.11_linux_amd64_local-install.sh` | [Official v0.1.11 AMD64 file](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.11/stl_v0.1.11_linux_amd64_local-install.sh) |
-| `aarch64` | `stl_v0.1.11_linux_arm64_local-install.sh` | [Official v0.1.11 ARM64 file](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.11/stl_v0.1.11_linux_arm64_local-install.sh) |
+| `x86_64` | `stl_v0.1.12_linux_amd64_local-install.sh` | [Official v0.1.12 AMD64 file](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.12/stl_v0.1.12_linux_amd64_local-install.sh) |
+| `aarch64` | `stl_v0.1.12_linux_arm64_local-install.sh` | [Official v0.1.12 ARM64 file](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.12/stl_v0.1.12_linux_arm64_local-install.sh) |
 
 Transfer the selected single file
 **without renaming, extracting or making it executable** into `/root/stl/`.
@@ -630,6 +630,45 @@ fabricate the ownership record to make `update` pass.
 - Update does not restart systemd, change the kernel, or reapply Links.
   Runtime/backend/state compatibility must be reviewed before each release.
 
+### Existing managed WSS Dial helper after updating to v0.1.12
+
+The v0.1.12 WSS Dial reconnect wakeup is attached to **newly created**
+verified STL-owned transient helper units, not to the installed STL binary
+itself. A successful v0.1.11 → v0.1.12 core update **does not refresh
+already loaded** WSS units; even a plain `systemctl restart` of an old
+loaded unit keeps its old properties. The WSS Listen role does not need a
+wakeup, and an existing working Link does not need to be recreated or
+re-paired. Do not stop a service merely to make its version match.
+
+For an **explicitly authorized maintenance window** on a Dial host, record
+the exact Link ID, confirm `stl version --json` and its installer record,
+then inspect `stl link status LINK_ID --json` and verify that the actual
+helper unit is the expected STL-owned WSS Dial unit, with no foreign systemd
+lifecycle hooks. Preserve consistent private State/credential backups and
+original SSH/default routes. Only after the exact managed unit is verified:
+stop **that unit alone**, confirm systemd has completely collected it
+(`LoadState=not-found`), and use the canonical
+`sudo stl link restore --all` to reconcile persisted Links. **Restore --all
+is mutating and applies to every persisted Link**: first verify all saved
+Links are in scope and maintenance is approved; never use it to blindly
+refresh one Link on a multi-Link host. When no safe maintenance window or
+full-restore scope exists, leave the old helper running and defer activation.
+
+After an authorized refresh, recheck the original Link ID and verified
+WireGuard interface/guard, the Dial unit's `ExecStartPost` and
+`ExecStartPostEx` readback, real two-way private traffic, SSH and routes.
+The systemd extended property must describe only the reviewed bounded
+`ignore-failure` ICMP wakeup. If stop/restore/update fails or any original
+resource identity is uncertain, preserve credentials and State; use the
+[identity-checked rollback guidance](OPERATOR-RECOVERY.md#managed-wss-dialer-restart-reliability-stable-v0112)
+instead of deleting the Link/unit or rerunning arbitrary host commands.
+
+The actual IRPT-101 ↔ DE-Hamed-Test field trials of the **reviewed source**
+measured 15.5s consecutive loss on the old v0.1.11 loaded Dial unit versus
+0.5s in each of two v0.1.12-source candidate trials. Exact public v0.1.12
+asset installation and physical version-specific reboot are **separate**
+checks; see [Issue #93](https://github.com/ach1992/simple-tun-link/issues/93).
+
 ### Persisted State v3: upgrade and safe rollback boundary
 
 The private `/var/lib/simple-tun-link/state.json` format is versioned **separately**
@@ -815,7 +854,7 @@ Its closing fragment will therefore read
 That fragment is an illustration of the end of the command, **not** a
 standalone command or a replacement for the complete trusted preflight.
 The wrapper snapshots the optional archive into **the same private
-directory** as the STL installer, because official Stable v0.1.11
+directory** as the STL installer, because the official one-file installer
 resolves that companion relative to the executable file it was given.
 The canonical installer re-verifies its pinned hash before admitting it.
 Do **not** bypass the root-owned preflight for either file merely to
