@@ -197,17 +197,21 @@ delete leftover protected temporary material.
 ### One transferred file and one trusted command (new release format)
 
 **[Stable v0.1.9](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.9)
-is the first release with the self-contained `*_local-install.sh` format.**
+was the first release with the self-contained `*_local-install.sh` format.**
+Use the [latest published Stable](https://github.com/ach1992/simple-tun-link/releases/latest)
+for a new installation; replace `vX.Y.Z` below with that release's exact tag.
 Open the official release on an Internet-connected device and verify its tag,
 publisher and exact published asset before privileged use. The matching file
 already embeds all required STL core files; no extra STL binary, installer,
-manifest or checksum transfer is necessary. Optional future Carrier helpers
-are *not* included or supported by this release.
+manifest or checksum transfer is necessary. Optional Carrier helpers are
+*not* included in the core archive. From Stable v0.1.10, WSS is supported
+through a separately verified, explicit
+`--with-wss` companion selection; Paqet remains unshipped.
 
 | Server CPU | Exactly ONE file to download | Exact official release asset |
 | --- | --- | --- |
-| `x86_64` | `stl_v0.1.9_linux_amd64_local-install.sh` | [Download AMD64](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.9/stl_v0.1.9_linux_amd64_local-install.sh) |
-| `aarch64` | `stl_v0.1.9_linux_arm64_local-install.sh` | [Download ARM64](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.9/stl_v0.1.9_linux_arm64_local-install.sh) |
+| `x86_64` | `stl_vX.Y.Z_linux_amd64_local-install.sh` | [Latest official Stable release assets](https://github.com/ach1992/simple-tun-link/releases/latest) |
+| `aarch64` | `stl_vX.Y.Z_linux_arm64_local-install.sh` | [Latest official Stable release assets](https://github.com/ach1992/simple-tun-link/releases/latest) |
 
 Transfer the selected single file
 **without renaming, extracting or making it executable** into `/root/stl/`.
@@ -246,8 +250,10 @@ a newer Stable replaces an older installer-owned Stable through the canonical
 atomic update. Downgrades and channel changes fail closed and require explicit
 reviewed manual canonical action. The launcher **does not modify Links,
 credentials, State, unrelated services or networking**, and it does not stage
-IPsec/WSS/Paqet. Only genuinely missing selected native and WireGuard distro
-packages may trigger the host's configured signed APT path; fully installed
+IPsec or Paqet; a WSS helper is staged only if explicitly selected with
+`--with-wss` and independently verified. Only genuinely missing selected
+native and WireGuard distro packages may trigger the host's configured signed
+APT path; fully installed
 prerequisites require no APT/network operation.
 
 **If it fails:** “wrong file” means download the other architecture; “SHA256
@@ -342,7 +348,7 @@ releases with the new package support, repeating an identical verified
 | GRE/IPIP Native, FOU/GUE | **None** besides STL core | Locally inspect kernel capability, `iproute2`, `iptables`, `kmod`; install genuinely missing distro packages via signed APT |
 | Native kernel WireGuard | **None** besides STL core | Kernel capability and distro `wireguard-tools` (`wg`) if selected |
 | Native IPsec/XFRM | **None** besides STL core | Only selected signed distro `charon-systemd`, `strongswan-swanctl`, `libstrongswan-standard-plugins`, under separate exact-plan PREPARE and foreign-service protection; direct `--backends all` is not consent |
-| WSS (future, **not shipped**) | **No current STL Carrier asset**; after separate approval, exact pinned `wstunnel` helper tag, arch, checksum/license, compatible STL tag and protected per-Link placement must be published | No helper download or activation yet; upstream `wstunnel v11.0.0` security test alone is not a released runtime |
+| WireGuard over WSS (optional since **v0.1.10**) | No WSS binary is included in the STL core file; obtain the exact official `wstunnel v11.0.0` architecture archive separately with the pinned SHA-256 specified below | Pass explicit `--with-wss` to the canonical one-file installer; kernel WireGuard, mTLS identity, scoped nft ingress guard and host ownership preflight are required |
 | Paqet/PCK (research only, **not shipped**) | **None** | Not an STL prerequisite; do not compile or stage it by default |
 
 For an actually published version that contains an architecture-specific
@@ -629,9 +635,9 @@ A successful installer update by itself neither validates a newly running
 Link nor proves persistence after reboot; those are separate Engine/release
 acceptance steps.
 
-**State v4 is a separate, non-downgrade-safe boundary.** The unreleased
-WSS-managed runtime writes schema v4 even on hosts with only Native Links
-once State is updated. A pre-v4 STL binary must not parse, restore or mutate
+**State v4 is a separate, non-downgrade-safe boundary.** The
+Stable v0.1.10+ WSS-capable runtime writes schema v4 even on hosts
+with only Native Links once State is updated. A pre-v4 STL binary must not parse, restore or mutate
 that snapshot; failure to read State does **not** prove no Links are configured.
 Safe rollback requires an independently verified, unchanged, consistent and
 credential-matched pre-v4 backup, and proof that no later operation committed
@@ -760,10 +766,10 @@ firewall safety, or kernel traffic. Actual backend/platform release evidence bel
 reproducible operations runbooks and GitHub release/check records.
 Publication remains a separately authorized action.
 
-## Optional pinned WSS companion (WireGuard over WSS R1 candidate)
+## Optional pinned WSS companion (available in Stable v0.1.10+)
 
 Core STL remains the official single-file local installer. WSS is **optional**.
-For the R1 development candidate (not a Stable release claim), obtain the
+For official Stable v0.1.10 or later, obtain the
 official upstream **wstunnel v11.0.0** Linux archive for the target CPU:
 - x86_64: wstunnel_11.0.0_linux_amd64.tar.gz, archive SHA-256
   9708a99717b5a951453c2ff7c14c25d3418d02ca7fcb96fdb382a8f2083bab5e.
@@ -788,8 +794,8 @@ The one-command selected-Carrier form is:
 sudo bash /root/stl/stl_vX.Y.Z_linux_amd64_local-install.sh --with-wss
 ~~~
 
-Replace vX.Y.Z with a **real published** version; no WSS R1 Stable
-release is claimed. Missing or mismatched selected archives are rejected
+Replace vX.Y.Z with a **real published** Stable version supporting WSS
+(v0.1.10 or newer). Missing or mismatched selected archives are rejected
 before the core installer is started.
 
 For an **already installer-owned** STL candidate, the equivalent standalone
@@ -809,5 +815,6 @@ with other host firewalls/interfaces/services cause refusal, not takeover.
 A completed local installation does NOT prove WSS connectivity, mTLS peer
 acceptance or a WireGuard handshake. See the exact pairing examples in
 [CLI.md](CLI.md), evidence gates in Issue #142 and the scope in
-[SECURITY.md](SECURITY.md). Do not deploy an unreleased R1 candidate as a
-replacement for an existing Stable production Link.
+[SECURITY.md](SECURITY.md). Do not treat a development-only source build
+or a locally selected helper as a published Stable artifact; verify the installed exact release and
+authenticated private connectivity before production use.

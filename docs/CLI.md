@@ -416,10 +416,11 @@ For detailed MTU/quality semantics see
 [DIAGNOSTICS.md](DIAGNOSTICS.md). For uncertain Engine outcomes
 before retry see [OPERATOR-RECOVERY.md](OPERATOR-RECOVERY.md).
 
-## Development R1 — WireGuard over WSS/TLS
+## Managed WireGuard over WSS/TLS (Stable v0.1.10+)
 
-This is the candidate behavior for Issue #142, not a declaration that R1
-is in Stable. Start the **guided** path using STL menu:
+The managed WSS carrier first shipped in official Stable v0.1.10;
+source changes after a release are not available in that prior binary.
+Start the **guided** path using STL menu:
 Create tunnel → WireGuard / WSS + TLS. Choose the listener or dialer,
 route-derived local/public addresses, private Link IPv4 /30 or /31 pair,
 WireGuard UDP listen/peer ports, WSS TCP port, private forwarding UDP port and
@@ -547,7 +548,7 @@ protected handoff. See
 [Ubuntu AppArmor administration](https://ubuntu.com/server/docs/security-apparmor/)
 and [Ubuntu WireGuard bug 2151123](https://bugs.launchpad.net/bugs/2151123).
 
-### No-reboot WSS recovery and independent replacement plan (unreleased)
+### No-reboot WSS recovery and independent replacement plan (Stable v0.1.10+)
 
 When an original WSS Link fails after a crash, **inspect and recover it first**.
 A failed handshake, a DOWN interface, an absent interface in one namespace,
@@ -630,7 +631,7 @@ the no-reboot path is not an unconditional guarantee. A real host
 reboot remains a separately approved exceptional recovery route,
 not a prerequisite for trying a disjoint new Link.
 
-### Ordinary committed WSS original-generation admission (unreleased)
+### Ordinary committed WSS original-generation admission (Stable v0.1.10+)
 
 A committed `wireguard-wss` Link whose original WG interface is missing
 from the local network namespace CANNOT be automatically recreated by
@@ -653,7 +654,7 @@ proof receipts, not just live interfaces or matching keys. A full host
 reboot or manual State reconciliation requires separate Owner action;
 never edit State JSON or delete a foreign guard to force an apparent success.
 
-### Owner-gated WSS whole-kernel-reset reconciliation (unreleased)
+### Owner-gated WSS whole-kernel-reset reconciliation (Stable v0.1.10+)
 
 When a durable WSS crash journal has lost its original, in-process
 kernel deletion proof, **do not** clear it from missing local WG/UDP
@@ -703,7 +704,7 @@ committed Link and credentials remain intact for authorized restore.
 Owner approval is **mandatory for the external whole-host reboot**;
 the CLI never schedules, performs or authorizes it. Read full
 preflight, namespace ownership, backup, failure and rollback plan in
-[operator recovery](OPERATOR-RECOVERY.md#unreleased-wss-executable-manual-cold-kernel-reboot-recovery).
+[operator recovery](OPERATOR-RECOVERY.md#managed-wss-executable-manual-cold-kernel-reboot-recovery).
 
 ### WSS R2: crash-safe preparation and explicit vacancy reconciliation
 
@@ -759,7 +760,8 @@ never a same-name or same-mode replacement.
 
 If a host effect is present or ownership cannot be independently
 verified, neither *vacancy-only* command is a general cleanup mechanism.
-The unreleased R3 candidate adds two separately confirmed recovery modes.
+The current WSS-capable Stable runtime provides two separately confirmed
+recovery modes.
 
 For an interrupted **committed Ensure/repair** whose original host effects
 are all absent, use:
@@ -836,5 +838,5 @@ contradictory readback and foreign global WG port/key owners never
 authorize cleanup. Nonce labels do not defend against malicious local
 root with access to protected State and arbitrary host mutation.
 The rootless tests use real kernel WG and nft but a disposable systemd
-shim; real-systemd reboot, two-host field use, ARM64 WSS and independent
-review remain separate acceptance gates.
+shim; disposable tests alone never prove field/systemd reboot behavior or all
+architectures; physical acceptance and release reviews are separately recorded.

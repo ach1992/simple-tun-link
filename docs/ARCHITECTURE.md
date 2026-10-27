@@ -667,7 +667,7 @@ model, without creating per-screen diagnostic or logging engines:
   daemon, database or retention machinery only when justified by an owned
   runtime requirement.
 
-## R1 WireGuard over WSS (implementation candidate)
+## WireGuard over WSS (implemented in Stable v0.1.10+)
 
 One canonical Link identity has Backend wireguard-wss (never Native WG
 fallback), Encapsulation UDP, WireGuardOptions and endpoint-local WSSOptions.
@@ -688,7 +688,7 @@ protected Link-local TLS/bearer/WG credentials after separate host-absence
 proof. A crash before a completed receipt requires owner-scoped recovery;
 no foreign adoption or generic host cleanup is permitted.
 
-### Ordinary committed WSS original-generation lifecycle (unreleased)
+### Ordinary committed WSS original-generation lifecycle (Stable v0.1.10+)
 
 A committed WSS Link now durably records the **original host-kernel
 Boot ID plus trusted source version** (`wss_kernel_boot_id`,
@@ -769,7 +769,7 @@ compensation and receipt-bound retirement remain separate.
 This does not create a second Link controller or auto-switch consumer
 routes.
 
-### R2 — durable WSS pre-effect crash quarantine (stacked candidate)
+### R2 — durable WSS pre-effect crash quarantine (shipped in Stable v0.1.10+)
 
 The canonical Engine prepares a secret-free `wss_crash_operations`
 record in State v4, after final resource-lock admission and **before**

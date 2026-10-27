@@ -181,7 +181,7 @@ and independent sibling operations; they are **not** a substitute for
 real privileged kernel/module, multi-distro or traffic/restart testing.
 Release-level privileged E2E is separately reproduced through the [cross-backend runbook](operations/CROSS-BACKEND-REAL-E2E.md) and recorded against the exact candidate.
 
-## Unreleased WSS: unmarked pre-alias kernel staging quarantine
+## Managed WSS: unmarked pre-alias kernel staging quarantine
 
 A managed-WSS Create can be interrupted after exclusive WireGuard
 `RTM_NEWLINK` but before publishing the original owner `ifalias`.
@@ -249,10 +249,10 @@ inventories, treat this as a credential retirement authorization or run
 ordinary RestoreAll. The operator must use this retained journal with a
 trusted native-host Arm, separately authorized actual whole-kernel
 reboot and cold-boot Reconcile to obtain one-use restore authority. This manual pre-alias gate is
-an honest limitation of this unreleased candidate, not a promise that
+an honest limitation of the managed WSS runtime, not a promise that
 all pre-commit crash objects are automatically recoverable.
 
-## Unreleased WSS: namespace migration and kernel deletion witnesses
+## Managed WSS: namespace migration and kernel deletion witnesses
 
 A Linux WireGuard interface may be created in network namespace A and
 moved to B while its UDP socket remains in its **birthplace** A. When
@@ -287,7 +287,7 @@ is blanket authorization. The disposable real-kernel namespace tests
 cover both moved-UP and moved-DOWN cases; physical host namespace
 coexistence remains a distinct operator acceptance gate.
 
-## Unreleased WSS: ordinary missing-original quarantine
+## Managed WSS: ordinary missing-original quarantine
 
 For an already committed WSS Link, a missing local WireGuard interface or
 empty birthplace UDP-socket inventory is **not** proof its original kernel
@@ -327,7 +327,7 @@ manual recovery when the trusted generation is unavailable, and do not
 manually edit or backfill UUIDs/receipts. The separate manual journaled
 recovery below applies only when its own admission gates can be met.
 
-## Unreleased WSS: no-reboot, fully independent replacement
+## Managed WSS: no-reboot, fully independent replacement
 
 The normal objective is to **restore the original when safely possible**.
 If the original remains indeterminate, the operator need not keep the
@@ -393,7 +393,7 @@ disjoint safe resources or peer admission are possible, report the
 failure accurately; no-reboot replacement cannot be guaranteed under
 all provider/kernel configurations.
 
-## Unreleased WSS: executable manual cold-kernel-reboot recovery
+## Managed WSS: executable manual cold-kernel-reboot recovery
 
 **Use only for an unresolved original WSS Crash Journal whose ordinary
 nonce/ifindex compensation cannot prove success**: guard-only initial
