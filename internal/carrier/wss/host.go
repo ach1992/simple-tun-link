@@ -185,7 +185,7 @@ type unitState struct{ loaded, active bool }
 func (h Host) inspectUnit(ctx context.Context, link domain.Link) (unitState, error) {
 	out, err := h.runner().RunBounded(ctx, linux.CaptureLimits{Stdout: 64 << 10, Stderr: 64 << 10},
 		"systemctl", "show", h.unitName(link),
-		"--property=LoadState,ActiveState,Description,Transient,ExecStart,Environment,Type,Restart,RestartUSec,NoNewPrivileges,PrivateTmp,ProtectSystem,ProtectHome,CollectMode",
+		"--property=LoadState,ActiveState,Description,Transient,ExecStart,ExecStartPost,Environment,Type,Restart,RestartUSec,NoNewPrivileges,PrivateTmp,ProtectSystem,ProtectHome,CollectMode",
 		"--no-pager")
 	if err != nil {
 		return unitState{}, fmt.Errorf("cannot inspect WSS helper unit: %w", err)
@@ -259,6 +259,12 @@ func (h Host) inspectUnit(ctx context.Context, link domain.Link) (unitState, err
 		return unitState{}, fmt.Errorf("WSS unit TLS trust environment differs from Link identity")
 	}
 	if err := verifyWSSUnitSecurityProperties(values); err != nil {
+		return unitState{}, err
+	}
+	// Real systemd 249 and 259 omit an entirely unset ExecStartPost from
+	// show output even when queried explicitly. Preserve exact pre-wakeup
+	// legacy units while rejecting any unexpected nonempty post-start action.
+	if err := verifyWSSRestartProbe(values["ExecStartPost"], link); err != nil {
 		return unitState{}, err
 	}
 	if values["ActiveState"] != "active" && values["ActiveState"] != "inactive" &&
@@ -639,6 +645,10 @@ func (h Host) StartHelper(ctx context.Context, link domain.Link) (core.Rollback,
 	if unit.loaded {
 		_, err = h.runner().Run(ctx, "systemctl", "restart", h.unitName(link))
 	} else {
+		probe, probeErr := h.restartProbeProperty(link)
+		if probeErr != nil {
+			return nil, probeErr
+		}
 		args := []string{
 			"--unit=" + strings.TrimSuffix(h.unitName(link), ".service"),
 			"--description=" + h.unitDescription(ctx, link),
@@ -646,6 +656,9 @@ func (h Host) StartHelper(ctx context.Context, link domain.Link) (core.Rollback,
 			"--property=Type=exec", "--property=NoNewPrivileges=yes",
 			"--property=PrivateTmp=yes", "--property=ProtectSystem=strict",
 			"--property=ProtectHome=yes",
+		}
+		if probe != "" {
+			args = append(args, probe)
 		}
 		for _, env := range command.Env {
 			if !strings.HasPrefix(env, "SSL_CERT_FILE=") {

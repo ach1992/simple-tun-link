@@ -60,3 +60,36 @@ jobs:
           bash scripts/test-quick-install.sh
       - name: Transferable architecture-specific local bundle smoke
         run: GOTOOLCHAIN=local bash scripts/e2e/snapshot-install-smoke.sh
+
+  # No connected server is touched. Prove the literal service property on
+  # disposable GitHub-hosted systemd 249 and a newer systemd environment.
+  wss-reconnect-systemd:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 5
+    steps:
+      - name: New transient service post-start command survives controlled restart
+        shell: bash
+        run: |
+          set -euo pipefail
+          unit="stl-wss-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.service"
+          trap 'sudo systemctl stop "$unit" >/dev/null 2>&1 || :' EXIT
+          sudo systemd-run --unit="${unit%.service}" --collect \
+            --description='STL disposable post-start policy acceptance' \
+            --property=Type=exec \
+            --property=Restart=on-failure \
+            --property=RestartSec=2s \
+            --property='ExecStartPost=-/usr/bin/true' \
+            /usr/bin/sleep 90
+          sudo systemctl show "$unit" -p ExecStartPost --value | grep -Fq 'argv[]=/usr/bin/true'
+          sudo systemctl show "$unit" -p ExecStartPost --value | grep -Fq 'ignore_errors=yes'
+          test "$(sudo systemctl show "$unit" -p ActiveState --value)" = active
+          sudo systemctl restart "$unit"
+          sudo systemctl show "$unit" -p ExecStartPost --value | grep -Fq 'argv[]=/usr/bin/true'
+          sudo systemctl show "$unit" -p ExecStartPost --value | grep -Fq 'ignore_errors=yes'
+          test "$(sudo systemctl show "$unit" -p ActiveState --value)" = active
+          echo 'DISPOSABLE_SYSTEMD_EXECSTARTPOST_RESTART=PASS'
