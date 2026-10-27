@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	wgbackend "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/diagnostics"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
@@ -122,6 +123,15 @@ func throughputMeasuredInterface(m linkDiagnostic) string {
 		return r.State.Interface
 	case diagnostics.IPsecReport:
 		return r.State.Interface
+	case diagnostics.Report:
+		// The only generic Report on this path is from exact-owner WSS
+		// diagnostics after scoped helper/guard/kernel WG + private
+		// interface/route preflight. No unverified Native WG inference.
+		name, err := wgbackend.InterfaceName(r.LinkID)
+		if err == nil {
+			return name
+		}
+		return ""
 	default:
 		return ""
 	}

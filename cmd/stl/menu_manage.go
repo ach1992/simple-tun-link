@@ -52,10 +52,14 @@ func menuManage(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		menuSection(out, "Tunnel actions")
 		menuOption(out, "1", "Local status", "Read-only")
 		menuOption(out, "2", "Check connection", "Read-only diagnostics")
-		menuActionOption(out, "3", "Share Setup Link", "Copy original link safely", "SHOW")
+		if selected.Backend == domain.BackendWireGuardWSS {
+			menuActionOption(out, "3", "Share Setup Link", "Original sender offer only; may require private file", "SHOW")
+		} else {
+			menuActionOption(out, "3", "Share Setup Link", "Copy original link safely", "SHOW")
+		}
 		menuOption(out, "4", "Connection details", "View both server settings")
 		menuActionOption(out, "5", "Remove this tunnel", "Destructive; confirm", "REMOVE")
-		menuActionOption(out, "6", "Delete receiver link", "Protected offer only", "DELETE")
+		menuActionOption(out, "6", "Delete receiver link", "Only the original menu-saved private offer", "DELETE")
 		if selected.Backend == domain.BackendIPsec {
 			menuActionOption(out, "7", "Connect IPsec", "Explicit IKEv2 initiation after peer import", "CONNECT")
 		}

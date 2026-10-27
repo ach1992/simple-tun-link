@@ -41,6 +41,9 @@ type runtimeOptions struct {
 	stateRoot   string
 	backends    []backend.Backend
 	probeRunner linux.Runner
+	// Test-only owner-scoped WSS host observation seam. Nil uses real nft,
+	// systemd and kernel WireGuard readback after exact saved-State admission.
+	wssObserver func(context.Context, string, linux.BoundedRunner, domain.Link) (WSSLinkDiagnostics, error)
 	// Test-only module observation seam. Production uses the real read-only
 	// sysfs/modinfo probe; never expose this through CLI input.
 	moduleObserve func(context.Context, string) linux.KernelModuleState

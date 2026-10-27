@@ -181,7 +181,7 @@ func TestMenuProtectedHandoffDeleteOnlyReceiverFileWithFreshConfirmation(t *test
 	tty.send("3")
 	tty.expect("Type SHOW to confirm")
 	tty.send("SHOW")
-	tty.expect("Cannot show the protected Setup Link:")
+	tty.expect("Protected Setup Link could not be verified")
 	if strings.Contains(tty.all, secret) {
 		t.Fatal("deleted handoff displayed despite missing file")
 	}

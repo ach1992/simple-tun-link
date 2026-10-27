@@ -12,6 +12,7 @@ import (
 	ipipbackend "github.com/ach1992/simple-tun-link/internal/backend/ipip"
 	ipsecbackend "github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	wgbackend "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
+	"github.com/ach1992/simple-tun-link/internal/diagnostics"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
@@ -53,6 +54,7 @@ type linkStatusResponse struct {
 	GREState          *grebackend.DiagnosticState   `json:"gre_state,omitempty"`
 	IPIPState         *ipipbackend.DiagnosticState  `json:"ipip_state,omitempty"`
 	WireGuardState    *wgbackend.DiagnosticState    `json:"wireguard_state,omitempty"`
+	WSSState          *WSSLinkDiagnostics           `json:"wss_state,omitempty"`
 	IPsecState        *ipsecbackend.DiagnosticState `json:"ipsec_state,omitempty"`
 }
 
@@ -164,6 +166,34 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 		if err != nil {
 			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeState, "link_status", "cannot initialize read-only backend inspection")
 		}
+	}
+	// Managed WSS does not register as Native WireGuard. Its separately
+	// attested helper/guard/kernel observer still belongs in the SAME
+	// public status contract and the SAME terminal menu.
+	if record.Desired.Backend == domain.BackendWireGuardWSS {
+		observed, runner, err := trustedWSSObservation(ctx, record.Desired, *options)
+		if err != nil {
+			return readStatusInspectionError(ctx, stdout, stderr, jsonOutput, err)
+		}
+		iface, err := wgbackend.InterfaceName(id)
+		if err != nil {
+			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInspect, "link_status", "WSS interface identity unverified")
+		}
+		if _, err := diagnostics.VerifyPrivateLinkIdentity(ctx, record.Desired, iface, runner); err != nil {
+			return readStatusInspectionError(ctx, stdout, stderr, jsonOutput, err)
+		}
+		response := linkStatusResponse{SchemaVersion: jsonSchemaVersion, Link: summarizeLink(record.Desired),
+			InterfaceVerified: observed.KernelWireGuardPresent, Connectivity: "not_measured", WSSState: &observed}
+		if jsonOutput {
+			if err := json.NewEncoder(stdout).Encode(response); err != nil {
+				fmt.Fprintln(stderr, "cannot encode WSS link status")
+				return 1
+			}
+		} else {
+			fmt.Fprintf(stdout, "Link %s: managed WSS WireGuard interface %s verified; helper=%t guard=%t handshake=%t, RX=%d TX=%d bytes (connectivity not measured)\n",
+				id, iface, observed.WSSHelperActive, observed.WGIngressGuardActive, observed.WireGuardHandshakeObserved, observed.RXBytes, observed.TXBytes)
+		}
+		return 0
 	}
 	var selected backend.Backend
 	for _, item := range options.backends {

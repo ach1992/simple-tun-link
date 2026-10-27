@@ -34,13 +34,16 @@ func TestHealthCenterPersistedSupersessionIsExplicitWithoutPeerProbe(t *testing.
 
 	for _, parallel := range []string{"1", "3"} {
 		t.Run("parallel_"+parallel, func(t *testing.T) {
-			var nativeCalls, forbiddenWSSCalls atomic.Int32
+			var nativeCalls, wssCalls, forbiddenOriginalCalls atomic.Int32
 			deps := healthCenterServices{
 				observe: func(_ context.Context, link domain.Link, _ runtimeOptions) (linkDiagnostic, error) {
-					if link.ID != native.ID {
-						forbiddenWSSCalls.Add(1)
-					} else {
+					switch link.ID {
+					case native.ID:
 						nativeCalls.Add(1)
+					case nextID:
+						wssCalls.Add(1)
+					default:
+						forbiddenOriginalCalls.Add(1)
 					}
 					return parallelHealthMeasured(), nil
 				},
@@ -52,8 +55,8 @@ func TestHealthCenterPersistedSupersessionIsExplicitWithoutPeerProbe(t *testing.
 			var report healthCenterResponse
 			if err := json.Unmarshal([]byte(raw), &report); err != nil || code != 4 ||
 				stderr != "" || report.Outcome != "complete" || report.Total != 3 ||
-				report.Blocked != 2 || report.Observed != 1 || report.Unknown != 0 ||
-				forbiddenWSSCalls.Load() != 0 || nativeCalls.Load() != 1 {
+				report.Blocked != 1 || report.Observed != 2 || report.Unknown != 0 ||
+				forbiddenOriginalCalls.Load() != 0 || nativeCalls.Load() != 1 || wssCalls.Load() != 1 {
 				t.Fatalf("batch did not correctly isolate original and native peer: %d %+v %q %v", code, report, stderr, err)
 			}
 			if strings.Contains(raw, "NEVER_LEAK") || strings.Contains(raw, "private_key") ||
@@ -72,10 +75,10 @@ func TestHealthCenterPersistedSupersessionIsExplicitWithoutPeerProbe(t *testing.
 				t.Fatalf("superseded old WSS was presented as ordinary WSS: %+v", old)
 			}
 			replacement := seen[nextID]
-			if replacement.Status != "blocked" ||
-				replacement.ReasonCode != "wss_active_diagnostics_not_implemented" ||
+			if replacement.Status != "observed" ||
+				replacement.ReasonCode != "link_peer_replied" ||
 				replacement.Link.Disposition != "" || replacement.Link.SupersededBy != "" ||
-				replacement.Observed != nil {
+				replacement.Observed == nil {
 				t.Fatalf("unquarantined new WSS changed diagnostic semantics: %+v", replacement)
 			}
 			healthy := seen[native.ID]
@@ -88,7 +91,7 @@ func TestHealthCenterPersistedSupersessionIsExplicitWithoutPeerProbe(t *testing.
 			if humanCode != 4 || humanErr != "" ||
 				!strings.Contains(human, string(oldID)+" wireguard-wss/udp: blocked/wss_original_superseded") ||
 				!strings.Contains(human, string(nextID)) ||
-				!strings.Contains(human, "peer replied: 1 | blocked: 2 | unknown: 0") ||
+				!strings.Contains(human, "peer replied: 2 | blocked: 1 | unknown: 0") ||
 				strings.Contains(human, "NEVER_LEAK") {
 				t.Fatalf("human batch concealed quarantine or claimed healthy original: %d %q %q", humanCode, human, humanErr)
 			}

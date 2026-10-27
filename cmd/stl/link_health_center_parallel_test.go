@@ -285,27 +285,31 @@ func TestHealthCenterParallelRealDispatchAndBackendSafeProjection(t *testing.T) 
 // An unimplemented active carrier probe is blocked, never "observed"
 // because native WireGuard counters happened to be nonzero. It cannot
 // consume one of the bounded worker's probe subprocesses.
-func TestHealthCenterWSSActiveProbeBoundaryAfterMerge(t *testing.T) {
+func TestHealthCenterWSSUsesCarrierAwareObserverNotNativeGuess(t *testing.T) {
 	wss := fixtureReadLink("lnk_00000000000000000000000000000001",
 		"10.96.10.0/31", "10.96.10.1/31", domain.BackendGRE)
 	wss.Backend = domain.BackendWireGuardWSS
 	gre := fixtureReadLink("lnk_00000000000000000000000000000002",
 		"10.96.20.0/31", "10.96.20.1/31", domain.BackendGRE)
-	var nativeCalls atomic.Int32
+	var nativeCalls, wssCalls atomic.Int32
 	checks := healthObserveAll(context.Background(), []domain.Link{wss, gre},
 		runtimeOptions{}, true, 2,
 		func(_ context.Context, link domain.Link, _ runtimeOptions) (linkDiagnostic, error) {
-			if link.ID != gre.ID {
-				t.Fatal("managed WSS was routed to a generic Native probe")
+			switch link.ID {
+			case gre.ID:
+				nativeCalls.Add(1)
+			case wss.ID:
+				wssCalls.Add(1)
+			default:
+				t.Fatal("unexpected Link observation")
 			}
-			nativeCalls.Add(1)
 			return parallelHealthMeasured(), nil
 		})
-	if len(checks) != 2 || checks[0].Status != "blocked" ||
-		checks[0].ReasonCode != "wss_active_diagnostics_not_implemented" ||
-		checks[0].Observed != nil || !strings.Contains(checks[0].NextStep, "diagnose-wss") ||
+	if len(checks) != 2 || checks[0].Status != "observed" ||
+		checks[0].ReasonCode != "link_peer_replied" || checks[0].Observed == nil ||
 		checks[1].Status != "observed" || checks[1].ReasonCode != "link_peer_replied" ||
-		nativeCalls.Load() != 1 {
-		t.Fatalf("WSS diagnosis contract breached: checks=%+v calls=%d", checks, nativeCalls.Load())
+		nativeCalls.Load() != 1 || wssCalls.Load() != 1 {
+		t.Fatalf("carrier-aware five-ping observer was not used for WSS: checks=%+v native=%d wss=%d",
+			checks, nativeCalls.Load(), wssCalls.Load())
 	}
 }

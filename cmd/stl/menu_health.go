@@ -158,6 +158,9 @@ func menuStatusTraffic(status linkStatusResponse) (rx, tx *uint64, unit string, 
 	case status.IPIPState != nil:
 		a, b := status.IPIPState.RXPackets, status.IPIPState.TXPackets
 		return &a, &b, "packets", nil
+	case status.WSSState != nil:
+		a, b, last := status.WSSState.RXBytes, status.WSSState.TXBytes, status.WSSState.LastHandshakeUnix
+		return &a, &b, "bytes", &last
 	case status.WireGuardState != nil:
 		a, b, last := status.WireGuardState.RXBytes, status.WireGuardState.TXBytes, status.WireGuardState.LatestHandshakeUnix
 		return &a, &b, "bytes", &last
@@ -189,6 +192,9 @@ func menuCheckOneConnection(id domain.LinkID, out, errOut io.Writer, options *ru
 		rx, tx, unit, handshake = menuStatusTraffic(status)
 	}
 	menuHealthMeasurements(out, result.MTU, result.Quality, rx, tx, unit, handshake)
+	if result.MTU.Mode == "not_measured" {
+		menuHealthLine(out, "Path MTU", "INFO", "Not measured for WSS; this check used five private ICMP probes")
+	}
 	if statusCode != 0 {
 		menuNotice(out, "WARNING", "Cumulative counters could not be checked separately; ping results are independent.")
 	}
@@ -378,6 +384,18 @@ func menuShowLocalStatus(id domain.LinkID, out, errOut io.Writer, options *runti
 		return code
 	}
 	menuHealthLine(out, "Interface", "OK", "Local interface verified")
+	if result.WSSState != nil {
+		if result.WSSState.WSSHelperActive {
+			menuHealthLine(out, "WSS helper", "OK", "Managed helper active")
+		} else {
+			menuHealthLine(out, "WSS helper", "WARNING", "Helper not observed as active")
+		}
+		if result.WSSState.WGIngressGuardActive {
+			menuHealthLine(out, "WG ingress", "OK", "Scoped UDP protection active")
+		} else {
+			menuHealthLine(out, "WG ingress", "WARNING", "Scoped UDP guard not observed")
+		}
+	}
 	menuHealthLine(out, "Peer traffic", "UNKNOWN", "connectivity not measured; use Check connection for 5 pings")
 	rx, tx, unit, handshake := menuStatusTraffic(result)
 	if rx != nil && tx != nil && unit != "" {

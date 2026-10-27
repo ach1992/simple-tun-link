@@ -19,19 +19,36 @@ syntax see [CLI.md](CLI.md); for changing a saved Link see the
   read-only backend observations/peer pings. The per-Link and overall
   timeout contracts still apply, and the JSON schema/ordered output
   do not depend on which Link finishes first.
-- Managed WireGuard-over-WSS is diagnosed separately with
-  `link diagnose-wss <id> [--json]` for bounded, read-only
-  helper/nft/kernel WG status. The **shared active** `link diagnose <id>`
-  does not yet implement WSS carrier-aware PMTU/ICMP measurement, and
-  `link diagnose --all` reports an ordinary managed WSS Link
-  **blocked** with reason `wss_active_diagnostics_not_implemented`.
-  A durably superseded original is instead **blocked** with reason
-  `wss_original_superseded`; its Link summary includes
-  `disposition: quarantined_old` and the protected `superseded_by`
-  ID from the same read-only State snapshot. Interrupted checks remain
-  unknown, and no generic active WSS peer probe is attempted. Neither
-  native WireGuard handshake counters nor local status alone prove
-  active WSS-carried peer responses.
+- Managed WireGuard-over-WSS uses the **same** read-only local
+  `link status <id>`, bounded `link diagnose <id>` five-ICMP check
+  and `link diagnose --all` health inventory as other backends. Before
+  sending peer echo packets, STL independently verifies the **exact saved
+  WSS Link identity**, original per-Link provenance, absence of unresolved
+  crash/supersession, its scoped WSS helper and firewall guard, its
+  private WireGuard device, local IPv4 address and exact private peer
+  route. A verified active WSS peer echo is a **time-local ICMP
+  observation**, not a promise of continuous connectivity or proof that
+  every TLS/Bearer authentication scenario was tested.
+- WSS `link status` includes read-only `wss_state` with helper,
+  guard, WG handshake and byte counters, but still reports
+  `connectivity: not_measured` (no peer ping by Status). The separate
+  `link diagnose-wss <id> [--json]` retains detailed carrier-specific
+  host observations; it does not run peer ICMP.
+- **WSS PMTU is not measured** by these five pings: WSS/TLS
+  carrier overhead is not a fixed Native WireGuard overhead. WSS quality
+  reports `mtu.mode: not_measured`, `selected_mtu: 0` and
+  `verified: false`; zero here is a sentinel for **unknown**, not a
+  usable 0-byte MTU or a claim of PMTU discovery. Do not report or apply
+  a guessed WSS PMTU. An explicit `--mtu` request for WSS is refused
+  rather than ignored.
+- Durably superseded WSS originals remain **blocked** in the
+  all-Link inventory with reason `wss_original_superseded`;
+  `disposition: quarantined_old` and `superseded_by` remain
+  protected. Crash-uncertain/original-ownership-inconclusive WSS
+  Links are **not actively pinged**. An interrupted check remains
+  unknown, and helper/handshake counters alone never fabricate peer
+  replies. Native/other backend checks remain independent.
+
 - `link throughput`: a separate, explicitly approved short TCP
   traffic test; not a default health check or a tunnel bandwidth cap.
 
@@ -82,8 +99,11 @@ raw external output, private credentials or SENSITIVE Setup Links.
 
 Before transmitting, the read-only adapter must verify the selected
 backend's capability and exact owned interface name/ifindex, local
-Link Address, interface UP state, and route-derived physical underlay
-source/device/MTU toward the saved **underlay peer**. A replaced
+Link Address and interface UP state. Native backends additionally verify
+the route-derived physical underlay source/device/MTU toward the saved
+**underlay peer**; managed WSS first verifies its carrier/guard/kernel
+provenance and the **private** peer route and source, without estimating
+underlay PMTU. A replaced
 interface under a reused name or mismatched route blocks measurement.
 
 `DFProber.Probe(ctx, link, packetBytes)` probes the inner IPv4
@@ -111,7 +131,7 @@ automatically a reply, a lost packet or a measured MTU.
 | GRE Native/FOU/GUE | Deterministic owned interface/ifindex, mode, local IP, route, GRE options/encapsulation overhead and public packet/byte/error counters |
 | IPIP Native/FOU/GUE | Same identity and route rules; transport overhead 20/28/32 bytes for IPv4 Native/FOU/GUE |
 | WireGuard | Owned interface/ifindex, public local/peer keys, listen port, local Link IP, handshake timestamp and RX/TX bytes; IPv4 data overhead **60 bytes** |
-| WireGuard over WSS (development) | Separate `diagnose-wss` reports read-only helper/ingress/WG status and handshake/counters; generic active PMTU/ICMP is **blocked** until a safe WSS-specific probe with verified carrier overhead and ownership exists |
+| WireGuard over WSS | Status and dedicated `diagnose-wss` show owner-verified helper/guard/kernel WG handshake and byte counters; standard diagnose sends **five bounded private ICMP probes** after WSS and private route/identity verification; **carrier PMTU remains unknown** |
 | IPsec ESP/NAT-T | **Admitted** STL-exclusive runtime, exact owned XFRM interface name/ifindex/`if_id`, VICI connection and matching SA before any probe; conservative overhead planning bounds **128/136 bytes** |
 
 GRE overhead is supplied by the backend from actual GRE fields,

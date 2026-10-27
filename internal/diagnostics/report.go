@@ -64,6 +64,9 @@ func (r Report) Summary() string {
 	if r.Quality.Status == QualityUnavailable && r.Quality.Reason != QualityReasonNone {
 		status += "; reason=" + string(r.Quality.Reason)
 	}
+	if r.MTU.SelectedMTU == 0 {
+		return fmt.Sprintf("Link %s: PMTU not measured (carrier-specific); %s", r.LinkID, status)
+	}
 	return fmt.Sprintf("Link %s: suggested inner IPv4 MTU %d (%s; ceiling %d); %s",
 		r.LinkID, r.MTU.SelectedMTU, selection, r.MTU.CeilingMTU, status)
 }
