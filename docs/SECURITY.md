@@ -265,7 +265,7 @@ receipt without modifying any host object. Retirement requires absence of
 any **loaded**, including failed/inactive, helper unit, and SHA-256 matching
 each originally issued TLS/authorization private file. Same-name/mode
 replacement material must survive, even when a receipt remains pending.
-The unreleased R3 candidate adds explicitly confirmed
+The Stable WSS recovery flow includes explicitly confirmed
 `reconcile-wss-original`: original 128-bit creation nonce must match
 nft rule and systemd unit description, while Linux WireGuard creation
 uses an unpredictable nonce-derived staging name followed by ifindex-

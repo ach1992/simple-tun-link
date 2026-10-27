@@ -809,7 +809,7 @@ file/service/kernel resource is mutated by the read-only vacancy command;
 `retire-wss` additionally checks the durable receipt's positive proof and
 original file SHA-256 identities.
 
-The unreleased R3 candidate adds explicitly confirmed original-object
+The Stable WSS recovery flow includes explicitly confirmed original-object
 recovery without changing ordinary Link automatic replay:
 - `reconcile-wss-repair-vacant` verifies the committed Link, original
   private-file contents, locked resource claims and complete host

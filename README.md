@@ -10,6 +10,11 @@ multiple independent Links, including different supported transports
 to the same peer. Native Linux backends carry packets without a Go
 userspace forwarding loop.
 
+**First connection:** Install the same supported Stable release on both hosts,
+run `sudo stl menu`, create a tunnel on the first server, privately share its
+Setup Link, import it on the second, then choose **Test connectivity** on both.
+STL does not claim that a Link works merely because it was saved.
+
 ## Tunnel options
 
 | Backend | Transport | Encrypted? | Typical choice |
@@ -17,6 +22,7 @@ userspace forwarding loop.
 | **GRE** | Native, FOU/UDP, GUE/UDP | No | Simplest default; fast plaintext L3 connectivity |
 | **IPIP** | Native, FOU/UDP, GUE/UDP | No | Alternative plaintext L3 encapsulation |
 | **WireGuard** | UDP | Yes | Encrypted point-to-point connection |
+| **WireGuard over WSS/TLS** | WSS over TCP + private kernel WG | Yes (mTLS and WireGuard) | Optional managed Carrier when the peer can reach a selected TLS TCP port |
 | **IPsec** | IKEv2/XFRM, ESP or NAT-T | Yes | Advanced encrypted transport; requires a verified STL-owned strongSwan runtime |
 
 GRE keys and UDP encapsulation do **not** encrypt or authenticate traffic.
@@ -38,6 +44,10 @@ name alone. See [supported environments](docs/SUPPORTED-ENVIRONMENTS.md).
 Allow the selected underlay transport in the relevant host/provider rules:
 GRE Native uses **IP protocol 47** (not TCP port 47); WireGuard uses
 the selected UDP port; IPsec typically needs UDP **500/4500** and/or ESP.
+For **WSS**, open the chosen TLS **TCP** port on the listening host and
+install the explicitly selected, verified `wstunnel v11.0.0` companion on
+both endpoints. STL protects the **kernel WireGuard UDP port** with a
+Link-scoped ingress guard; do **not** publish that port to the Internet.
 Use non-overlapping private Link Address subnets.
 
 ## Install on both servers
@@ -70,28 +80,38 @@ take over another VPN installation.
 
 ### Local installation without GitHub access on the server
 
-From **v0.1.9 onward**, official Stable releases support local installation
-with **one STL core file, one folder and one command**. Choose the
-[current published Stable](https://github.com/ach1992/simple-tun-link/releases/latest)
-and substitute its real tag for `vX.Y.Z` in the filenames below.
+Official Stable releases from **v0.1.9 onward** support one self-contained
+core installer. For a concrete example, **v0.1.11 (27 October 2026)**
+has these files; when a newer Stable is published, use its corresponding
+version from [official Latest Stable](https://github.com/ach1992/simple-tun-link/releases/latest).
+WSS is optional and needs **one separate verified companion archive**.
 Download only **one** official architecture-specific release asset on another
 device. It already contains the matching STL binary, the canonical installer
 and all STL-owned core metadata; no second STL file is needed on the server:
 
 | Destination CPU (`uname -m`) | Download from the exact official release |
 | --- | --- |
-| `x86_64` | `stl_vX.Y.Z_linux_amd64_local-install.sh` from the [exact Stable release](https://github.com/ach1992/simple-tun-link/releases/latest) |
-| `aarch64` | `stl_vX.Y.Z_linux_arm64_local-install.sh` from the [exact Stable release](https://github.com/ach1992/simple-tun-link/releases/latest) |
+| `x86_64` | [`stl_v0.1.11_linux_amd64_local-install.sh`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.11/stl_v0.1.11_linux_amd64_local-install.sh) |
+| `aarch64` | [`stl_v0.1.11_linux_arm64_local-install.sh`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.11/stl_v0.1.11_linux_arm64_local-install.sh) |
 
 Upload the single file **as-is** into `/root/stl/` on the server (e.g. through
 SFTP); the folder must be root-owned mode `0700` and the file root-owned
-mode `0600` or `0644`. With just one file in the folder, run **as root**
+mode `0600` or `0644`. Keep **exactly one** matching
+`*_local-install.sh` in that folder (move any older installer elsewhere; the
+optional WSS companion may coexist). Run **as root**
 (the command itself is a trusted pre-execution check, before any transferred
 shell instruction):
 
 ~~~sh
-bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}") || exit 1; [[ $n =~ ^[0-9]+$ && $n -gt 0 && $n -le 134250000 ]] || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; head -c "$n" -- "${f[0]}" > "$d/${f[0]##*/}"; [[ $(stat -c %s -- "$d/${f[0]##*/}") == "$n" ]]; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; bash "$d/${f[0]##*/}"'
+bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}") || exit 1; [[ $n =~ ^[0-9]+$ && $n -gt 0 && $n -le 134250000 ]] || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; head -c "$n" -- "${f[0]}" > "$d/${f[0]##*/}"; [[ $(stat -c %s -- "$d/${f[0]##*/}") == "$n" ]]; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; bash "$d/${f[0]##*/}" "$@"' stl
 ~~~
+
+The final `stl` labels the `bash -c` invocation; to explicitly install
+the separately verified optional WSS helper, append ` --with-wss` after
+that final `stl`. Do not append it for a normal core-only install.
+The archive must already be beside the installer. The
+[full root/sudo procedure](docs/INSTALL.md#one-transferred-file-and-one-trusted-command-new-release-format)
+explains the same verified preflight.
 
 If using a non-root sudo-capable administrator, run the same command with
 `sudo` placed before `bash -c` (see the [installation guide](docs/INSTALL.md#local-installation-choose-a-published-asset)).
@@ -115,10 +135,8 @@ and `--with-wss`; it is not bundled with core STL. Paqet is not shipped.
 is the first Stable release with the self-contained `.sh` installers.
 The older [v0.1.8](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.8)
 contains only `.tar.gz` local archives and requires a different manual
-procedure; never invoke this command on an archive. The
-[installation guide](docs/INSTALL.md#local-installation-choose-a-published-asset)
-provides current-version file selection, the historical v0.1.9 format
-example, the legacy procedure and actionable errors.
+procedure; never invoke this command on an archive. See [historical and current installation procedures](docs/INSTALL.md#local-installation-choose-a-published-asset)
+for recovery, exact file selection and older-version instructions.
 Verify publisher/tag provenance on the downloading device before root execution;
 embedded or same-account checksums prove integrity, not independent publisher
 authenticity. The v0.1.9 core installer did not support optional WSS;
@@ -163,6 +181,40 @@ other server has imported the protected Setup Link, choose **My tunnels
 → Connect IPsec** on either peer and explicitly confirm `CONNECT`
 before running Test connectivity. Import alone does not initiate
 IKEv2; Test connectivity remains read-only and explains a missing SA.
+
+### WireGuard over WSS/TLS (optional, Stable v0.1.10+)
+
+This uses **real kernel WireGuard** carried through a per-Link WSS/TLS
+helper, not an OpenVPN/proxy fallback. WSS requires a separate official
+[`wstunnel v11.0.0` archive](https://github.com/erebe/wstunnel/releases/tag/v11.0.0)
+matching the host CPU. Copy that unchanged archive beside the STL
+single-file local installer on **both servers**, verify its pinned checksum,
+and explicitly select `--with-wss` using the
+[trusted installation procedure](docs/INSTALL.md#optional-pinned-wss-companion-available-in-stable-v0110).
+Merely copying the helper does not install it. Regular online/core STL
+installation does **not** fetch or enable this helper.
+
+1. On the first host open **Create tunnel → 6 WireGuard / WSS + TLS**.
+   Enter the peer's reachable address, select **Listen WSS** or **Dial WSS**,
+   the listener's reachable TLS TCP port (default `443`), distinct local/peer
+   protected WG UDP ports, private IPs and TLS server identity. Review the
+   planned owned changes and type `YES`.
+2. Transfer the resulting **SENSITIVE receiver Setup Link** through an
+   authenticated private channel. On the second host use **Import setup
+   link → 3 WireGuard / WSS + TLS**, hidden-paste the original offer,
+   review the inverted roles/settings and type `YES`.
+3. On **both** hosts choose **My tunnels → Check connection**, or
+   **Test connectivity → A Check all tunnels**. Verify real private peer
+   traffic. `Local status` alone only verifies owned local state; WSS
+   carrier **path MTU is not measured** by the five-ping check.
+
+The sender may retrieve its **original** saved offer from **My tunnels →
+Share Setup Link → SHOW**. A CLI-created sender must supply its original
+private `--output` file; the importing receiver cannot regenerate keys or
+the sender's offer. `DELETE` affects only the verified menu-owned offer,
+**not** an active Link or an unrelated CLI file. See
+[guided/CLI WSS details](docs/CLI.md#managed-wireguard-over-wsstls-stable-v0110)
+and [sensitive setup security](docs/SECURITY.md).
 
 ## Manage Links
 
@@ -218,9 +270,12 @@ command instead of reinstalling:
 bash -c 'set -e; umask 077; d=$(mktemp -d); trap '"'"'rm -rf -- "$d"'"'"' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 --connect-timeout 10 --max-time 120 -o "$d/stl-bootstrap.sh" https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh; test -s "$d/stl-bootstrap.sh"; bash -n "$d/stl-bootstrap.sh"; bash "$d/stl-bootstrap.sh" update'
 ~~~
 
-Installer binary rollback is **not** State rollback. Once a newer
-runtime persists State schema v3, older pre-v3 binaries cannot read it.
-See [safe update/rollback instructions](docs/INSTALL.md#persisted-state-v3-upgrade-and-safe-rollback-boundary).
+Installer binary rollback is **not** State rollback. Stable v0.1.10+
+uses State **v4** for WSS-capable management; an older pre-v4 binary cannot
+be assumed safe even on a host that has only Native Links. Preserve a
+credential-matched private backup and follow
+[safe State/rollback instructions](docs/INSTALL.md#persisted-state-v3-upgrade-and-safe-rollback-boundary).
+Never downgrade an active managed WSS Link by replacing only its binary.
 
 Uninstall never removes active Links or erases private credentials
 implicitly. Remove each owned Link deliberately before using the

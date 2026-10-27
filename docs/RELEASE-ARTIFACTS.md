@@ -140,13 +140,16 @@ no alternate privileged mutable-tag updater should be invented.
 
 A release with changed lifecycle/State behavior must independently
 demonstrate that valid older saved State remains readable according
-to its documented migration rules. Current State schema v3 adds
-**endpoint-local managed MTU**. Older valid v1/v2 State loads
-without surprise MTU writes; subsequent successful modification may
-persist v3. A binary-only rollback to an old v1/v2 reader
-**cannot** be assumed safe after v3 was written. Back up
-protected State, separately stored keys and receiver handoffs as
-described in [INSTALL.md](INSTALL.md) before testing an upgrade.
+to its documented migration rules. The published WSS-capable runtime
+(Stable v0.1.10+) uses **State v4**; State v3 originally added **endpoint-local managed MTU**. Older valid
+v1/v2 documents can be read under their versioned migration rules,
+but a subsequent successful mutation may persist a newer schema.
+A binary-only rollback to a pre-v4 reader **cannot** be assumed safe
+after State v4 was written, even when the host has only Native Links.
+Preserve a consistent State-and-credential backup with original handoffs
+and validate exact recovery provenance as described in
+[INSTALL.md](INSTALL.md#persisted-state-v3-upgrade-and-safe-rollback-boundary)
+before testing a downgrade or roll-forward.
 
 For an accepted release's representative native guests, prefer the
 following evidence when required by its changes:

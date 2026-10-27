@@ -6,6 +6,10 @@ on:
   pull_request:
     paths:
       - '.github/workflows/package-prepare-e2e.yml'
+      # These contain the literal privileged offline-preflight commands
+      # executed inside disposable guests; doc edits must not evade E2E.
+      - 'README.md'
+      - 'docs/INSTALL.md'
       - 'scripts/install.sh'
       - 'scripts/e2e/package-prepare-docker.sh'
       - 'scripts/build-artifacts.sh'
