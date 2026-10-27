@@ -40,6 +40,7 @@ jobs:
           bash -n scripts/e2e/wss-wg-ingress-netns.sh
           bash -n scripts/e2e/wss-managed-wireguard-r1.sh
           bash -n scripts/e2e/wss-managed-wireguard-matrix.sh
+          bash -n scripts/e2e/wss-reconnect-systemd.sh
           python3 -c 'import ast,sys; [ast.parse(open(p).read()) for p in sys.argv[1:]]' scripts/e2e/wss-negative-probe.py scripts/e2e/wss-r1-supervisor.py scripts/e2e/wss-r2-nft-crash.py scripts/e2e/wss-r2-legacy-drift.py scripts/e2e/wss-r2-wg-crash.py scripts/e2e/wss-r4-partial-wg.py scripts/e2e/wss-r4-guard-interloper.py
           bash -n scripts/e2e/ipsec-two-peer-netns.sh
           bash -n scripts/e2e/ipsec-installed-systemd.sh
@@ -72,28 +73,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 5
     steps:
-      - name: New transient service post-start command survives controlled restart
+      - uses: actions/checkout@v7
+      - name: Exact extended execution flags, controlled restart and bounded ping
         shell: bash
-        run: |
-          set -euo pipefail
-          unit="stl-wss-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.service"
-          # The probe must fail benignly without sending traffic into any
-          # existing interface on this disposable GitHub runner.
-          test -x /usr/bin/ping
-          test ! -e /sys/class/net/stlwg0123456789
-          trap 'sudo systemctl stop "$unit" >/dev/null 2>&1 || :' EXIT
-          sudo systemd-run --unit="${unit%.service}" --collect \
-            --description='STL disposable post-start policy acceptance' \
-            --property=Type=exec \
-            --property=Restart=on-failure \
-            --property=RestartSec=2s \
-            --property='ExecStartPost=-/usr/bin/ping -q -n -I stlwg0123456789 -s 8 -c 8 -i 0.25 -W 1 10.99.1.2' \
-            /usr/bin/sleep 90
-          sudo systemctl show "$unit" -p ExecStartPost --value | grep -Fq 'argv[]=/usr/bin/ping -q -n -I stlwg0123456789 -s 8 -c 8 -i 0.25 -W 1 10.99.1.2'
-          sudo systemctl show "$unit" -p ExecStartPost --value | grep -Fq 'ignore_errors=yes'
-          test "$(sudo systemctl show "$unit" -p ActiveState --value)" = active
-          sudo systemctl restart "$unit"
-          sudo systemctl show "$unit" -p ExecStartPost --value | grep -Fq 'argv[]=/usr/bin/ping -q -n -I stlwg0123456789 -s 8 -c 8 -i 0.25 -W 1 10.99.1.2'
-          sudo systemctl show "$unit" -p ExecStartPost --value | grep -Fq 'ignore_errors=yes'
-          test "$(sudo systemctl show "$unit" -p ActiveState --value)" = active
-          echo 'DISPOSABLE_SYSTEMD_EXECSTARTPOST_RESTART=PASS'
+        run: bash scripts/e2e/wss-reconnect-systemd.sh

@@ -35,7 +35,7 @@ func dialRestartProbe(link domain.Link) (Command, error) {
 	// the canonical validated Link ID, never from an operator shell string.
 	iface := "stlwg" + id[4:14]
 	return Command{Binary: "/usr/bin/ping", Args: []string{
-		"-q", "-n", "-I", iface, "-s", "8", "-c", "8", "-i", "0.25", "-W", "1", peer.String(),
+		"-q", "-n", "-I", iface, "-s", "8", "-c", "8", "-i", "0.25", "-W", "1", "-w", "3", peer.String(),
 	}}, nil
 }
 
@@ -50,23 +50,56 @@ func (h Host) restartProbeProperty(link domain.Link) (string, error) {
 	return "--property=ExecStartPost=-" + strings.Join(append([]string{cmd.Binary}, cmd.Args...), " "), nil
 }
 
-// Accept old pre-wakeup units without granting permission to modify or adopt
-// them. Their already-running argv, per-Link TLS and systemd security policy
-// must still match exactly; updating the executable does not silently edit a
-// live transient unit. The new policy applies only after an owner-authorized
-// unit re-creation, not by pretending existing units were upgraded.
-func verifyWSSRestartProbe(observed string, link domain.Link) error {
+// Admit verified legacy units only when BOTH post-start properties are truly
+// absent/empty. The legacy D-Bus property (ExecStartPost) omits execution flags
+// other than ignore_errors; ExecStartPostEx exposes *all* flags, including '+',
+// which can bypass sandbox restrictions. Never trust a command when only one
+// property is present, the properties disagree, or any extra flag is set.
+// Existing units are not silently recreated when STL is upgraded.
+func verifyWSSRestartProbe(legacy, extended string, link domain.Link) error {
 	expected, err := dialRestartProbe(link)
 	if err != nil {
 		return err
 	}
-	if observed == "" {
-		return nil
-	} // verified legacy unit
-	if expected.Binary == "" || strings.Count(observed, "argv[]=") != 1 ||
-		!strings.Contains(observed, "ignore_errors=yes") ||
-		!matchesExactWSSExecStart(observed, expected) {
-		return fmt.Errorf("WSS post-start probe differs from exact Link identity")
+	if legacy == "" && extended == "" {
+		return nil // genuinely unset post-start command in a verified legacy unit
+	}
+	if expected.Binary == "" ||
+		!matchesExactWSSCommandReadback(legacy, expected, "ignore_errors", "yes") ||
+		!matchesExactWSSCommandReadback(extended, expected, "flags", "ignore-failure") {
+		return fmt.Errorf("WSS post-start command or execution flags differ from exact Link identity")
 	}
 	return nil
+}
+
+// systemctl show renders each command as one structured record. Check the
+// complete property shape, exact argv, all fields once, and the entire flag
+// set (not just a substring): unknown/missing fields or additional records
+// are not proof of STL-owned executable identity. Status fields are runtime
+// observations; only their presence/nonemptiness is required.
+func matchesExactWSSCommandReadback(observed string, cmd Command, policyKey, policyValue string) bool {
+	if cmd.Binary == "" || len(cmd.Args) == 0 ||
+		!strings.HasPrefix(observed, "{ ") || !strings.HasSuffix(observed, " }") {
+		return false
+	}
+	body := strings.TrimSuffix(strings.TrimPrefix(observed, "{ "), " }")
+	parts := strings.Split(body, " ; ")
+	wantKeys := []string{"path", "argv[]", policyKey, "start_time", "stop_time", "pid", "code", "status"}
+	if len(parts) != len(wantKeys) {
+		return false
+	}
+	for i, key := range wantKeys {
+		// The main ExecStart has no execution flags; systemctl renders
+		// its extended flag list as the valid, empty "flags=" member.
+		allowEmpty := i == 2 && key == "flags" && policyValue == ""
+		if !strings.HasPrefix(parts[i], key+"=") || (len(parts[i]) == len(key)+1 && !allowEmpty) {
+			return false
+		}
+	}
+	if parts[0] != "path="+cmd.Binary ||
+		parts[1] != "argv[]="+strings.Join(append([]string{cmd.Binary}, cmd.Args...), " ") ||
+		parts[2] != policyKey+"="+policyValue {
+		return false
+	}
+	return true
 }

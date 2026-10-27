@@ -185,7 +185,7 @@ type unitState struct{ loaded, active bool }
 func (h Host) inspectUnit(ctx context.Context, link domain.Link) (unitState, error) {
 	out, err := h.runner().RunBounded(ctx, linux.CaptureLimits{Stdout: 64 << 10, Stderr: 64 << 10},
 		"systemctl", "show", h.unitName(link),
-		"--property=LoadState,ActiveState,Description,Transient,ExecStart,ExecStartPost,Environment,Type,Restart,RestartUSec,NoNewPrivileges,PrivateTmp,ProtectSystem,ProtectHome,CollectMode",
+		"--property=LoadState,ActiveState,Description,Transient,ExecStart,ExecStartEx,ExecStartPost,ExecStartPostEx,Environment,Type,Restart,RestartUSec,NoNewPrivileges,PrivateTmp,ProtectSystem,ProtectHome,CollectMode",
 		"--no-pager")
 	if err != nil {
 		return unitState{}, fmt.Errorf("cannot inspect WSS helper unit: %w", err)
@@ -205,6 +205,9 @@ func (h Host) inspectUnit(ctx context.Context, link domain.Link) (unitState, err
 		values[pieces[0]] = pieces[1]
 	}
 	if values["LoadState"] == "not-found" {
+		if values["ExecStartEx"] != "" || values["ExecStartPost"] != "" || values["ExecStartPostEx"] != "" {
+			return unitState{}, fmt.Errorf("contradictory execution commands on missing WSS unit")
+		}
 		// A missing unit on real systemd 249 and 259 omits ExecStart
 		// entirely, even when explicitly requested in --property. Do not
 		// mistake this documented absence for an incomplete readback: admit
@@ -252,8 +255,9 @@ func (h Host) inspectUnit(ctx context.Context, link domain.Link) (unitState, err
 		return unitState{}, fmt.Errorf("cannot inspect the protected WSS unit identity")
 	}
 	defer clear(cmd.ServerRestrictions)
-	if !matchesExactWSSExecStart(values["ExecStart"], cmd) {
-		return unitState{}, fmt.Errorf("WSS unit argv differs from Link identity")
+	if !matchesExactWSSExecStart(values["ExecStart"], cmd) ||
+		!matchesExactWSSCommandReadback(values["ExecStartEx"], cmd, "flags", "") {
+		return unitState{}, fmt.Errorf("WSS unit argv or execution flags differ from Link identity")
 	}
 	if strings.TrimSpace(values["Environment"]) != strings.Join(cmd.Env, " ") {
 		return unitState{}, fmt.Errorf("WSS unit TLS trust environment differs from Link identity")
@@ -261,10 +265,11 @@ func (h Host) inspectUnit(ctx context.Context, link domain.Link) (unitState, err
 	if err := verifyWSSUnitSecurityProperties(values); err != nil {
 		return unitState{}, err
 	}
-	// Real systemd 249 and 259 omit an entirely unset ExecStartPost from
-	// show output even when queried explicitly. Preserve exact pre-wakeup
-	// legacy units while rejecting any unexpected nonempty post-start action.
-	if err := verifyWSSRestartProbe(values["ExecStartPost"], link); err != nil {
+	// Real systemd 249 and 259 omit both unset post-start properties even
+	// when requested. Accept verified legacy units, but never a new command
+	// unless both the legacy argv/ignore-error and the extended full execution
+	// flags agree exactly; this gate precedes any Stop/Restart.
+	if err := verifyWSSRestartProbe(values["ExecStartPost"], values["ExecStartPostEx"], link); err != nil {
 		return unitState{}, err
 	}
 	if values["ActiveState"] != "active" && values["ActiveState"] != "inactive" &&

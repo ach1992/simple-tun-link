@@ -702,7 +702,8 @@ physical restart caused 30 missed half-second private probes (~15 seconds);
 that measurement does not establish a universal delay or an STL defect.
 
 The candidate dialer transient unit attaches a **bounded, best-effort**
-`ExecStartPost` ICMP wakeup: eight small probes, 250 ms apart, bound to the
+`ExecStartPost` ICMP wakeup: eight small probes, 250 ms apart, with a
+three-second hard wall-clock deadline (`ping -w 3`), bound to the
 exact STL-owned WireGuard interface and sent only toward the selected private
 peer Link Address. The command uses no shell, bearer, plaintext secret,
 route change, kernel configuration change or continuous worker. The
@@ -711,11 +712,14 @@ cannot make the WSS helper enter a restart loop. The authoritative health
 check remains real private application traffic; a started helper or executed
 probe never proves reconnection. The listener does not initiate this probe.
 
-Unit readback must verify the exact post-start command and ignore-failure
-policy before claiming an owned unit; a prior trusted unit with an *empty*
-post-start property remains a compatible legacy unit. Updating the STL binary
-alone cannot retrofit a running legacy transient unit, and must not stop or
-replace it implicitly. An owner-authorized, identity-checked helper refresh
+Unit readback must cross-check the legacy `ExecStartPost` and extended
+`ExecStartPostEx` properties: complete path/argv, exactly `ignore-failure`
+with no privileged, shell or environment-expansion modifiers. The main helper's
+`ExecStartEx` must also have an empty execution-flag set. Verified legacy
+units with *both* post-start properties absent/empty remain compatible; any
+contradictory, partial or malformed readback is foreign and cannot authorize
+Stop/Restart. Updating the STL binary alone cannot retrofit a running
+legacy transient unit, and must not stop or replace it implicitly. An owner-authorized, identity-checked helper refresh
 and real field measurement are separate release/acceptance gates. No
 zero-downtime claim or automatic Live-Link migration is implied.
 

@@ -262,8 +262,9 @@ a local WireGuard datagram; a 25-second keepalive can leave a variable idle
 reconnect gap after a helper restart. Inspect the original field evidence in
 GitHub Issue #93 rather than treating process startup as traffic readiness.
 
-A proposed future dialer startup wakeup sends only a small, bounded private
-ICMP burst from the existing WireGuard interface. It changes no Link ID,
+A proposed future dialer startup wakeup sends only eight small private ICMP
+probes at 250 ms intervals with an explicit three-second total deadline
+(`ping -w 3`) from the existing WireGuard interface. It changes no Link ID,
 credentials, State, route, firewall or kernel WireGuard settings, and does
 not run on the WSS listener. Failure of the wakeup cannot make the helper
 fail; inspect real traffic to judge whether reconnection improved.
