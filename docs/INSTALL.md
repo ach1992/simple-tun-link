@@ -233,14 +233,14 @@ run the exact command as **root**, or use the separately shown genuine `sudo`
 variant from a non-root administrator account:
 
 ~~~sh
-bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}") || exit 1; [[ $n =~ ^[0-9]+$ && $n -gt 0 && $n -le 134250000 ]] || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; head -c "$n" -- "${f[0]}" > "$d/${f[0]##*/}"; [[ $(stat -c %s -- "$d/${f[0]##*/}") == "$n" ]]; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; bash "$d/${f[0]##*/}" "$@"' stl
+bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}") || exit 1; [[ $n =~ ^[0-9]+$ && $n -gt 0 && $n -le 134250000 ]] || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; head -c "$n" -- "${f[0]}" > "$d/${f[0]##*/}"; [[ $(stat -c %s -- "$d/${f[0]##*/}") == "$n" ]]; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; for x in "$@"; do if [[ $x == --with-wss ]]; then case $(uname -m) in x86_64) a=amd64;; aarch64) a=arm64;; *) echo "STL: unsupported WSS CPU" >&2; exit 1;; esac; w="/root/stl/wstunnel_11.0.0_linux_${a}.tar.gz"; [[ -f $w && ! -L $w && $(stat -c %u:%a "$w") =~ ^0:(600|644)$ && $(stat -c %h "$w") == 1 ]] || { echo "STL: missing or unsafe optional WSS archive" >&2; exit 1; }; z=$(stat -c %s "$w"); [[ $z =~ ^[0-9]+$ && $z -gt 1024 && $z -lt 100000000 ]] || { echo "STL: optional WSS archive size is unsafe" >&2; exit 1; }; head -c "$z" -- "$w" > "$d/${w##*/}"; [[ $(stat -c %s -- "$d/${w##*/}") == "$z" ]] && cmp -s -- "$w" "$d/${w##*/}" || { echo "STL: WSS archive changed during protected copy" >&2; exit 1; }; break; fi; done; bash "$d/${f[0]##*/}" "$@"' stl
 ~~~
 
 For a sudo-capable **non-root** administrator, use this command instead
 (the user must already have genuine `sudo` access):
 
 ~~~sh
-sudo bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}") || exit 1; [[ $n =~ ^[0-9]+$ && $n -gt 0 && $n -le 134250000 ]] || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; head -c "$n" -- "${f[0]}" > "$d/${f[0]##*/}"; [[ $(stat -c %s -- "$d/${f[0]##*/}") == "$n" ]]; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; bash "$d/${f[0]##*/}" "$@"' stl
+sudo bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}") || exit 1; [[ $n =~ ^[0-9]+$ && $n -gt 0 && $n -le 134250000 ]] || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; head -c "$n" -- "${f[0]}" > "$d/${f[0]##*/}"; [[ $(stat -c %s -- "$d/${f[0]##*/}") == "$n" ]]; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; for x in "$@"; do if [[ $x == --with-wss ]]; then case $(uname -m) in x86_64) a=amd64;; aarch64) a=arm64;; *) echo "STL: unsupported WSS CPU" >&2; exit 1;; esac; w="/root/stl/wstunnel_11.0.0_linux_${a}.tar.gz"; [[ -f $w && ! -L $w && $(stat -c %u:%a "$w") =~ ^0:(600|644)$ && $(stat -c %h "$w") == 1 ]] || { echo "STL: missing or unsafe optional WSS archive" >&2; exit 1; }; z=$(stat -c %s "$w"); [[ $z =~ ^[0-9]+$ && $z -gt 1024 && $z -lt 100000000 ]] || { echo "STL: optional WSS archive size is unsafe" >&2; exit 1; }; head -c "$z" -- "$w" > "$d/${w##*/}"; [[ $(stat -c %s -- "$d/${w##*/}") == "$z" ]] && cmp -s -- "$w" "$d/${w##*/}" || { echo "STL: WSS archive changed during protected copy" >&2; exit 1; }; break; fi; done; bash "$d/${f[0]##*/}" "$@"' stl
 ~~~
 
 These commands verify ownership, source type, modes, installer count and the
@@ -249,9 +249,13 @@ execution of transferred shell bytes.
 An unsafe folder/file, symlink or extra matching installer is refused, not
 run. The trailing `stl` is the fixed `bash -c` argument label; for an
 **explicit WSS companion selection only**, append ` --with-wss` after
-that final `stl`. The trusted command forwards this one supported launcher
-flag after the original safety checks. Without the flag, the optional
-archive is not activated. The command is necessarily longer than directly
+that final `stl`. Only with that flag, the trusted command also checks the matching
+optional archive's root ownership, mode, single hardlink, filename/CPU,
+size and exact copied bytes **before executing the private snapshot**.
+It places the selected helper beside the private STL launcher (not
+just beside the original downloaded STL file); the official launcher
+then checks pinned archive and extracted executable SHA-256. Without
+the flag, the optional archive is neither copied nor installed. The command is necessarily longer than directly
 invoking an unauthenticated transferred script; it is still one copyable
 invocation and requires no checksum variable, unpack, chmod or second installer.
 It is not an independent publisher signature: verify the official file before transfer.
@@ -810,9 +814,12 @@ Its closing fragment will therefore read
 `bash "$d/${f[0]##*/}" "$@"' stl --with-wss`.
 That fragment is an illustration of the end of the command, **not** a
 standalone command or a replacement for the complete trusted preflight.
-It still verifies and snapshots the exact transferred installer **before
-execution**, then explicitly forwards `--with-wss` to the selected helper
-admission. Do **not** bypass that preflight merely to shorten the command.
+The wrapper snapshots the optional archive into **the same private
+directory** as the STL installer, because official Stable v0.1.11
+resolves that companion relative to the executable file it was given.
+The canonical installer re-verifies its pinned hash before admitting it.
+Do **not** bypass the root-owned preflight for either file merely to
+shorten the command.
 Use the real file for the host's CPU and a published Stable version with WSS
 support (v0.1.10 or newer). Missing or mismatched selected archives are rejected
 before the core installer is started. An existing verified WSS installation

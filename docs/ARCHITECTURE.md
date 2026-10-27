@@ -411,7 +411,11 @@ distinct. Add only a justified adapter to the existing Engine/Backend,
 without a compulsory WireGuard/WSS combination or speculative cross-product
 of backend/Carrier pairings. Future priorities and Owner gates belong in
 [Issue #142](https://github.com/ach1992/simple-tun-link/issues/142);
-none of these Carriers is shipped in the current CLI.
+a generic Native-Backend/Carrier compatibility matrix is **not**
+shipped as an arbitrary CLI combination. The separately managed
+**WireGuard-over-WSS** path has shipped since Stable v0.1.10 and is
+documented below; it does not establish general Carrier composition
+or imply that additional research Carriers are available.
 
 ### Approved direction: lean L3 Provider and Carrier composition
 

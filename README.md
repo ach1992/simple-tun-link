@@ -103,14 +103,18 @@ optional WSS companion may coexist). Run **as root**
 shell instruction):
 
 ~~~sh
-bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}") || exit 1; [[ $n =~ ^[0-9]+$ && $n -gt 0 && $n -le 134250000 ]] || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; head -c "$n" -- "${f[0]}" > "$d/${f[0]##*/}"; [[ $(stat -c %s -- "$d/${f[0]##*/}") == "$n" ]]; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; bash "$d/${f[0]##*/}" "$@"' stl
+bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}") || exit 1; [[ $n =~ ^[0-9]+$ && $n -gt 0 && $n -le 134250000 ]] || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; head -c "$n" -- "${f[0]}" > "$d/${f[0]##*/}"; [[ $(stat -c %s -- "$d/${f[0]##*/}") == "$n" ]]; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; for x in "$@"; do if [[ $x == --with-wss ]]; then case $(uname -m) in x86_64) a=amd64;; aarch64) a=arm64;; *) echo "STL: unsupported WSS CPU" >&2; exit 1;; esac; w="/root/stl/wstunnel_11.0.0_linux_${a}.tar.gz"; [[ -f $w && ! -L $w && $(stat -c %u:%a "$w") =~ ^0:(600|644)$ && $(stat -c %h "$w") == 1 ]] || { echo "STL: missing or unsafe optional WSS archive" >&2; exit 1; }; z=$(stat -c %s "$w"); [[ $z =~ ^[0-9]+$ && $z -gt 1024 && $z -lt 100000000 ]] || { echo "STL: optional WSS archive size is unsafe" >&2; exit 1; }; head -c "$z" -- "$w" > "$d/${w##*/}"; [[ $(stat -c %s -- "$d/${w##*/}") == "$z" ]] && cmp -s -- "$w" "$d/${w##*/}" || { echo "STL: WSS archive changed during protected copy" >&2; exit 1; }; break; fi; done; bash "$d/${f[0]##*/}" "$@"' stl
 ~~~
 
 The final `stl` labels the `bash -c` invocation; to explicitly install
 the separately verified optional WSS helper, append ` --with-wss` after
 that final `stl`. Do not append it for a normal core-only install.
-The archive must already be beside the installer. The
-[full root/sudo procedure](docs/INSTALL.md#one-transferred-file-and-one-trusted-command-new-release-format)
+The archive must already be beside the installer. When WSS is
+explicitly selected, the trusted preflight makes a bounded root-private
+snapshot of **both** files together; the canonical launcher then checks
+the pinned archive and executable SHA-256. It rejects absent, unsafe or
+changed archives instead of silently installing core without WSS.
+The [full root/sudo procedure](docs/INSTALL.md#one-transferred-file-and-one-trusted-command-new-release-format)
 explains the same verified preflight.
 
 If using a non-root sudo-capable administrator, run the same command with
