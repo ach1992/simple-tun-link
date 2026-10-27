@@ -692,7 +692,7 @@ protected Link-local TLS/bearer/WG credentials after separate host-absence
 proof. A crash before a completed receipt requires owner-scoped recovery;
 no foreign adoption or generic host cleanup is permitted.
 
-### Dialer restart packet wakeup (post-v0.1.11 candidate; not yet released)
+### Dialer restart packet wakeup (Stable v0.1.12+)
 
 An upstream wstunnel v11 UDP listener creates a WSS forwarding session only
 when a UDP datagram arrives from its local kernel-WireGuard peer. After the
@@ -701,7 +701,7 @@ may send nothing until the next configured keepalive. An observed v0.1.10
 physical restart caused 30 missed half-second private probes (~15 seconds);
 that measurement does not establish a universal delay or an STL defect.
 
-The candidate dialer transient unit attaches a **bounded, best-effort**
+A newly created managed Dial transient unit attaches a **bounded, best-effort**
 `ExecStartPost` ICMP wakeup: eight small probes, 250 ms apart, with a
 three-second hard wall-clock deadline (`ping -w 3`), bound to the
 exact STL-owned WireGuard interface and sent only toward the selected private
@@ -725,7 +725,10 @@ A rejected ownership gate that dispatches no `systemctl` restart must not
 be treated as an ambiguous service mutation. Updating the STL binary alone cannot retrofit a
 running legacy transient unit, and must not stop or replace it implicitly.
 An owner-authorized, identity-checked helper refresh and real field measurement
-are separate release/acceptance gates. No
+are separate operational/acceptance gates. The reviewed source passed two
+actual DE Dial helper-only restart trials on the original managed IR↔DE pair
+([Issue #93](https://github.com/ach1992/simple-tun-link/issues/93#issuecomment-6454853897));
+this does not prove every installation or reboot. No
 zero-downtime claim or automatic Live-Link migration is implied.
 
 ### Ordinary committed WSS original-generation lifecycle (Stable v0.1.10+)

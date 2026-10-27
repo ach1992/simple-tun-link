@@ -73,7 +73,11 @@ It opens the guided menu on an interactive terminal; otherwise run:
 sudo stl menu
 ~~~
 
-Verify the installed version with `stl version --json`.
+Verify the installed version with `stl version --json`. When updating an
+existing managed WSS Dial Link from an older Stable, replacing the STL binary
+alone does **not** recreate its running systemd helper or activate the
+new dialer reconnect wakeup. See the separately approved
+[managed WSS upgrade procedure](docs/INSTALL.md#existing-managed-wss-dial-helper-after-updating-to-v0112).
 For IPsec, preparation may require separately approved signed packages
 and an exclusively attested private service. STL must not silently
 take over another VPN installation.
@@ -81,9 +85,9 @@ take over another VPN installation.
 ### Local installation without GitHub access on the server
 
 Official Stable releases from **v0.1.9 onward** support one self-contained
-core installer. For a concrete example, **v0.1.11 (27 October 2026)**
-has these files; when a newer Stable is published, use its corresponding
-version from [official Latest Stable](https://github.com/ach1992/simple-tun-link/releases/latest).
+core installer. The current example, **v0.1.12**, uses the files below.
+For later releases, always select the corresponding tag and architecture from
+[official Latest Stable](https://github.com/ach1992/simple-tun-link/releases/latest).
 WSS is optional and needs **one separate verified companion archive**.
 Download only **one** official architecture-specific release asset on another
 device. It already contains the matching STL binary, the canonical installer
@@ -91,8 +95,8 @@ and all STL-owned core metadata; no second STL file is needed on the server:
 
 | Destination CPU (`uname -m`) | Download from the exact official release |
 | --- | --- |
-| `x86_64` | [`stl_v0.1.11_linux_amd64_local-install.sh`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.11/stl_v0.1.11_linux_amd64_local-install.sh) |
-| `aarch64` | [`stl_v0.1.11_linux_arm64_local-install.sh`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.11/stl_v0.1.11_linux_arm64_local-install.sh) |
+| `x86_64` | [`stl_v0.1.12_linux_amd64_local-install.sh`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.12/stl_v0.1.12_linux_amd64_local-install.sh) |
+| `aarch64` | [`stl_v0.1.12_linux_arm64_local-install.sh`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.12/stl_v0.1.12_linux_arm64_local-install.sh) |
 
 Upload the single file **as-is** into `/root/stl/` on the server (e.g. through
 SFTP); the folder must be root-owned mode `0700` and the file root-owned
