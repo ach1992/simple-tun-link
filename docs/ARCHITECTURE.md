@@ -715,12 +715,17 @@ probe never proves reconnection. The listener does not initiate this probe.
 Unit readback must cross-check the legacy `ExecStartPost` and extended
 `ExecStartPostEx` properties: complete path/argv, exactly `ignore-failure`
 with no privileged, shell or environment-expansion modifiers. The main helper's
-`ExecStartEx` must also have an empty execution-flag set. Verified legacy
-units with *both* post-start properties absent/empty remain compatible; any
-contradictory, partial or malformed readback is foreign and cannot authorize
-Stop/Restart. Updating the STL binary alone cannot retrofit a running
-legacy transient unit, and must not stop or replace it implicitly. An owner-authorized, identity-checked helper refresh
-and real field measurement are separate release/acceptance gates. No
+`ExecStartEx` must also have an empty execution-flag set. The same readback
+checks that **all other executable service lifecycle hooks are unset**, including
+Condition, StartPre, Reload, ReloadPost (where available), Stop and StopPost,
+with their extended forms. A foreign hook cannot authorize managed Stop/Restart.
+Verified legacy units with *both* post-start properties absent/empty remain
+compatible; contradictory, partial or malformed command readback is foreign.
+A rejected ownership gate that dispatches no `systemctl` restart must not
+be treated as an ambiguous service mutation. Updating the STL binary alone cannot retrofit a
+running legacy transient unit, and must not stop or replace it implicitly.
+An owner-authorized, identity-checked helper refresh and real field measurement
+are separate release/acceptance gates. No
 zero-downtime claim or automatic Live-Link migration is implied.
 
 ### Ordinary committed WSS original-generation lifecycle (Stable v0.1.10+)

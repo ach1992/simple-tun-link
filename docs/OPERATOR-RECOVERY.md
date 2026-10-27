@@ -268,6 +268,11 @@ probes at 250 ms intervals with an explicit three-second total deadline
 credentials, State, route, firewall or kernel WireGuard settings, and does
 not run on the WSS listener. Failure of the wakeup cannot make the helper
 fail; inspect real traffic to judge whether reconnection improved.
+Before an STL-owned WSS helper can be stopped or restarted, exact systemd
+readback must find no additional executable lifecycle hooks (Condition,
+StartPre, Reload, Stop, StopPost and the supported extended variants); only
+the exact verified main command and optional dialer wakeup are permitted.
+Unset hooks on older supported systemd versions remain compatible.
 
 **Existing v0.1.11 transient units do not gain new post-start commands by
 updating their CLI executable.** Never delete an existing WSS helper, recreate

@@ -3,6 +3,7 @@ package wss
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -86,8 +87,17 @@ func (r wssUnitAbsentStub) Run(context.Context, string, ...string) (linux.Comman
 	return linux.CommandResult{}, fmt.Errorf("only bounded systemd inspection")
 }
 func (r wssUnitAbsentStub) RunBounded(_ context.Context, _ linux.CaptureLimits, name string, args ...string) (linux.CommandResult, error) {
-	if name != "systemctl" || len(args) < 3 || args[0] != "show" {
+	if name != "systemctl" || len(args) != 4 || args[0] != "show" ||
+		!strings.HasPrefix(args[2], "--property=") || args[3] != "--no-pager" {
 		return linux.CommandResult{}, fmt.Errorf("unexpected unit inspection")
+	}
+	// A test passes only if the actual systemctl command requests every
+	// executable lifecycle hook that the admission logic subsequently checks.
+	requested := strings.Split(strings.TrimPrefix(args[2], "--property="), ",")
+	for _, hook := range strings.Split(wssForbiddenUnitExecHooks, ",") {
+		if !slices.Contains(requested, hook) {
+			return linux.CommandResult{}, fmt.Errorf("missing lifecycle-hook readback: %s", hook)
+		}
 	}
 	return linux.CommandResult{Stdout: []byte(r.result)}, nil
 }
@@ -102,25 +112,27 @@ func TestWSSUnitNotFoundReadbackRequiresCompleteConsistentState(t *testing.T) {
 	real249 := fmt.Sprintf("Type=\nRestart=no\nRestartUSec=100ms\nEnvironment=\nPrivateTmp=no\nProtectHome=no\nProtectSystem=no\nNoNewPrivileges=no\nDescription=%s\nLoadState=not-found\nActiveState=inactive\nTransient=no\nCollectMode=inactive\n", realUnit)
 	real259 := fmt.Sprintf("Description=%s\nLoadState=not-found\nActiveState=inactive\nTransient=no\nCollectMode=inactive\nType=\nRestart=no\nRestartUSec=100ms\nEnvironment=\nPrivateTmp=no\nProtectHome=no\nProtectSystem=no\nNoNewPrivileges=no\n", realUnit)
 	for name, data := range map[string]string{
-		"valid":                 valid,
-		"systemd249-no-exec":    real249,
-		"systemd259-no-exec":    real259,
-		"missing-description":   strings.Replace(real249, "Description="+realUnit+"\n", "", 1),
-		"foreign-description":   strings.Replace(real249, "Description="+realUnit, "Description=foreign-unit", 1),
-		"missing-type":          strings.Replace(real249, "Type=\n", "", 1),
-		"missing-restart":       strings.Replace(real249, "Restart=no\n", "", 1),
-		"foreign-restart":       strings.Replace(real249, "Restart=no", "Restart=always", 1),
-		"missing-sandbox":       strings.Replace(real249, "NoNewPrivileges=no\n", "", 1),
-		"foreign-sandbox":       strings.Replace(real249, "NoNewPrivileges=no", "NoNewPrivileges=yes", 1),
-		"missing-collect":       strings.Replace(real249, "CollectMode=inactive\n", "", 1),
-		"foreign-exec":          strings.Replace(real249, "Environment=\n", "ExecStart=/bin/foreign\nEnvironment=\n", 1),
-		"contradictory-main-ex": strings.Replace(real249, "Environment=\n", "ExecStartEx={ path=/bin/sh }\nEnvironment=\n", 1),
-		"contradictory-post-ex": strings.Replace(real249, "Environment=\n", "ExecStartPostEx={ path=/bin/sh }\nEnvironment=\n", 1),
-		"no-collect-mode":       strings.Replace(valid, "CollectMode=inactive\n", "", 1),
-		"unexpected-active":     strings.Replace(valid, "ActiveState=inactive", "ActiveState=active", 1),
-		"unexpected-transient":  strings.Replace(valid, "Transient=no", "Transient=yes", 1),
-		"late-exec":             strings.Replace(valid, "ExecStart=", "ExecStart=/usr/bin/foreign", 1),
-		"malformed":             strings.Replace(valid, "LoadState=not-found\n", "", 1),
+		"valid":                        valid,
+		"systemd249-no-exec":           real249,
+		"systemd259-no-exec":           real259,
+		"missing-description":          strings.Replace(real249, "Description="+realUnit+"\n", "", 1),
+		"foreign-description":          strings.Replace(real249, "Description="+realUnit, "Description=foreign-unit", 1),
+		"missing-type":                 strings.Replace(real249, "Type=\n", "", 1),
+		"missing-restart":              strings.Replace(real249, "Restart=no\n", "", 1),
+		"foreign-restart":              strings.Replace(real249, "Restart=no", "Restart=always", 1),
+		"missing-sandbox":              strings.Replace(real249, "NoNewPrivileges=no\n", "", 1),
+		"foreign-sandbox":              strings.Replace(real249, "NoNewPrivileges=no", "NoNewPrivileges=yes", 1),
+		"missing-collect":              strings.Replace(real249, "CollectMode=inactive\n", "", 1),
+		"foreign-exec":                 strings.Replace(real249, "Environment=\n", "ExecStart=/bin/foreign\nEnvironment=\n", 1),
+		"contradictory-main-ex":        strings.Replace(real249, "Environment=\n", "ExecStartEx={ path=/bin/sh }\nEnvironment=\n", 1),
+		"contradictory-post-ex":        strings.Replace(real249, "Environment=\n", "ExecStartPostEx={ path=/bin/sh }\nEnvironment=\n", 1),
+		"foreign-missing-unit-pre":     strings.Replace(real249, "Environment=\n", "ExecStartPre={ path=/bin/sh }\nEnvironment=\n", 1),
+		"foreign-missing-unit-stop-ex": strings.Replace(real249, "Environment=\n", "ExecStopPostEx={ path=/bin/sh }\nEnvironment=\n", 1),
+		"no-collect-mode":              strings.Replace(valid, "CollectMode=inactive\n", "", 1),
+		"unexpected-active":            strings.Replace(valid, "ActiveState=inactive", "ActiveState=active", 1),
+		"unexpected-transient":         strings.Replace(valid, "Transient=no", "Transient=yes", 1),
+		"late-exec":                    strings.Replace(valid, "ExecStart=", "ExecStart=/usr/bin/foreign", 1),
+		"malformed":                    strings.Replace(valid, "LoadState=not-found\n", "", 1),
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := Host{Runner: wssUnitAbsentStub{data}}

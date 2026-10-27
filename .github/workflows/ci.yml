@@ -74,6 +74,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
       - name: Exact extended execution flags, controlled restart and bounded ping
         shell: bash
         run: bash scripts/e2e/wss-reconnect-systemd.sh

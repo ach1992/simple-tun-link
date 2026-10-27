@@ -83,6 +83,83 @@ func TestWSSLoadedDialUnitRejectsForeignPoststartAndAllowsExactLegacy(t *testing
 	if _, err := host.StopHelper(context.Background(), link); err == nil || counter.mutations != 0 {
 		t.Fatalf("foreign flags must block Stop before mutation, err=%v mutating calls=%d", err, counter.mutations)
 	}
+	// systemd 249/259 omit entirely unset executable hook properties. Also
+	// admit explicit empty properties: both forms are valid, no commands run.
+	for _, property := range strings.Split(wssForbiddenUnitExecHooks, ",") {
+		t.Run("empty-hook-"+property, func(t *testing.T) {
+			h := host
+			h.Runner = wssUnitAbsentStub{result: unit + property + "=\n"}
+			u, err := h.inspectUnit(context.Background(), link)
+			if err != nil || !u.loaded || !u.active {
+				t.Fatalf("valid empty lifecycle hook rejected: %v", err)
+			}
+		})
+		t.Run("foreign-hook-"+property, func(t *testing.T) {
+			foreign := unit + property + "={ path=/usr/bin/true ; argv[]=/usr/bin/true ; flags= ; }\n"
+			h := host
+			h.Runner = wssUnitAbsentStub{result: foreign}
+			if _, err := h.inspectUnit(context.Background(), link); err == nil {
+				t.Fatalf("foreign %s command admitted", property)
+			}
+		})
+	}
+	// Tests for incomplete or contradictory hook observations must fail
+	// closed even when the main and allowed post-start commands match.
+	for name, observation := range map[string]string{
+		"foreign-legacy-only":   unit + "ExecStop={ path=/bin/sh }\nExecStopEx=\n",
+		"foreign-extended-only": unit + "ExecStop=\nExecStopEx={ path=/bin/sh }\n",
+		"ambiguous-duplicate":   unit + "ExecStop={ path=/bin/sh }\nExecStop={ path=/usr/bin/true }\n",
+		"malformed-whitespace":  unit + "ExecStop= \n",
+		"truncated-mandatory":   strings.Replace(unit, "Type=exec\n", "", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := host
+			h.Runner = wssUnitAbsentStub{result: observation}
+			if _, err := h.inspectUnit(context.Background(), link); err == nil {
+				t.Fatal("admitted partial, malformed or contradictory loaded unit")
+			}
+		})
+	}
+	for _, property := range []string{"ExecCondition", "ExecStartPre", "ExecStop", "ExecStopPost", "ExecReload", "ExecReloadPostEx"} {
+		t.Run("stop-before-mutation-"+property, func(t *testing.T) {
+			active := unit + property + "={ path=/usr/bin/true }\n"
+			counter := &wssStopDispatchCounter{observation: active}
+			h := host
+			h.Runner = counter
+			if _, err := h.StopHelper(context.Background(), link); err == nil || counter.mutations != 0 {
+				t.Fatalf("foreign %s passed Stop authority gate: err=%v calls=%d", property, err, counter.mutations)
+			}
+		})
+		t.Run("restart-before-mutation-"+property, func(t *testing.T) {
+			inactive := strings.Replace(unit, "ActiveState=active", "ActiveState=inactive", 1) +
+				property + "={ path=/usr/bin/true }\n"
+			counter := &wssStopDispatchCounter{observation: inactive}
+			h := host
+			h.Runner = counter
+			dispatched, err := h.restartVerifiedLoadedHelper(context.Background(), link)
+			if err == nil || dispatched || counter.mutations != 0 {
+				t.Fatalf("foreign %s passed Restart authority gate: err=%v dispatched=%t calls=%d", property, err, dispatched, counter.mutations)
+			}
+		})
+	}
+	// Preserve the valid inactive managed unit state used by StartHelper.
+	inactive := strings.Replace(unit, "ActiveState=active", "ActiveState=inactive", 1)
+	host.Runner = wssUnitAbsentStub{result: inactive}
+	if got, err := host.inspectUnit(context.Background(), link); err != nil || !got.loaded || got.active {
+		t.Fatalf("valid inactive WSS unit rejected: %+v, %v", got, err)
+	}
+	// A valid loaded but inactive unit must actually dispatch exactly one
+	// scoped restart. A valid already-active unit must dispatch no mutation.
+	recorder := &wssVerifiedRestartRecorder{observation: inactive}
+	host.Runner = recorder
+	if dispatched, err := host.restartVerifiedLoadedHelper(context.Background(), link); err != nil || !dispatched || recorder.restartCalls != 1 {
+		t.Fatalf("valid loaded restart was not dispatched exactly once: dispatched=%t calls=%d err=%v", dispatched, recorder.restartCalls, err)
+	}
+	recorder = &wssVerifiedRestartRecorder{observation: unit}
+	host.Runner = recorder
+	if dispatched, err := host.restartVerifiedLoadedHelper(context.Background(), link); err != nil || dispatched || recorder.restartCalls != 0 {
+		t.Fatalf("active managed helper should not be restarted: dispatched=%t calls=%d err=%v", dispatched, recorder.restartCalls, err)
+	}
 	// Private source stays private; no test file is written into the repository.
 	if _, err := os.Stat(filepath.Join(root, "credentials", "wss", string(link.ID))); err != nil {
 		t.Fatal(err)
@@ -103,4 +180,23 @@ func (r *wssStopDispatchCounter) RunBounded(_ context.Context, _ linux.CaptureLi
 		return linux.CommandResult{}, fmt.Errorf("unexpected unit inspection")
 	}
 	return linux.CommandResult{Stdout: []byte(r.observation)}, nil
+}
+
+// The positive dispatch recorder never invokes real systemctl; all physical
+// helper tests remain separate Owner-gated acceptance steps.
+type wssVerifiedRestartRecorder struct {
+	observation  string
+	restartCalls int
+}
+
+func (r *wssVerifiedRestartRecorder) Run(_ context.Context, name string, args ...string) (linux.CommandResult, error) {
+	if name != "systemctl" || len(args) != 2 || args[0] != "restart" || !strings.HasPrefix(args[1], "stl-wss-") {
+		return linux.CommandResult{}, fmt.Errorf("unexpected restart mutation")
+	}
+	r.restartCalls++
+	return linux.CommandResult{}, nil
+}
+
+func (r *wssVerifiedRestartRecorder) RunBounded(ctx context.Context, limits linux.CaptureLimits, name string, args ...string) (linux.CommandResult, error) {
+	return wssUnitAbsentStub{result: r.observation}.RunBounded(ctx, limits, name, args...)
 }

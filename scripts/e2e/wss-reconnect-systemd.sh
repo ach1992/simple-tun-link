@@ -12,9 +12,11 @@ command -v ip >/dev/null
 
 unit="stl-wss-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.service"
 ns="stl-wss-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+snapshot="$(mktemp -t stl-wss-disposable-show.XXXXXXXX)"
 cleanup() {
   sudo systemctl stop "$unit" >/dev/null 2>&1 || :
   sudo ip netns del "$ns" >/dev/null 2>&1 || :
+  rm -f "$snapshot"
 }
 trap cleanup EXIT
 
@@ -55,6 +57,25 @@ verify_unit() {
 verify_unit
 sudo systemctl restart "$unit"
 verify_unit
+
+# Verify every unsupported executable lifecycle hook is absent on a real
+# disposable transient unit; systemd 249 omits unknown newer properties.
+# Include both legacy and extended forms and never inspect a field host.
+foreign_hooks='ExecCondition,ExecConditionEx,ExecStartPre,ExecStartPreEx,ExecReload,ExecReloadEx,ExecReloadPost,ExecReloadPostEx,ExecStop,ExecStopEx,ExecStopPost,ExecStopPostEx'
+IFS=',' read -ra hooks <<< "$foreign_hooks"
+for hook in "${hooks[@]}"; do
+  observed="$(sudo systemctl show "$unit" --property="$hook" --value)"
+  if [ -n "$observed" ]; then
+    echo "Unexpected lifecycle hook: $hook" >&2
+    exit 1
+  fi
+done
+sudo systemctl show "$unit" --no-pager \
+  --property="LoadState,ActiveState,Description,Transient,ExecStart,ExecStartEx,ExecStartPost,ExecStartPostEx,Environment,Type,Restart,RestartUSec,NoNewPrivileges,PrivateTmp,ProtectSystem,ProtectHome,CollectMode,${foreign_hooks}" > "$snapshot"
+# The Go test uses the production parser and exact command/flag verifiers
+# against the actual saved systemctl output from each disposable runner.
+STL_WSS_DISPOSABLE_UNIT_READBACK="$snapshot" \
+  go test ./internal/carrier/wss -run '^TestWSSDisposableSystemdUnitReadback$' -count=1
 
 # Exercise the same ping arguments under safe interfaces and measure true
 # wall-clock time. These probes never target the real field private Link.
