@@ -199,7 +199,11 @@ delete leftover protected temporary material.
 **[Stable v0.1.9](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.9)
 was the first release with the self-contained `*_local-install.sh` format.**
 Use the [latest published Stable](https://github.com/ach1992/simple-tun-link/releases/latest)
-for a new installation; replace `vX.Y.Z` below with that release's exact tag.
+for a new installation. As a concrete example, the approved immutable
+**v0.1.11** (27 October 2026) publishes the exact download files below.
+When a new release becomes Latest, select that new release's **actual tag**,
+matching architecture and source-verified file instead of blindly reusing
+v0.1.11.
 Open the official release on an Internet-connected device and verify its tag,
 publisher and exact published asset before privileged use. The matching file
 already embeds all required STL core files; no extra STL binary, installer,
@@ -210,38 +214,47 @@ through a separately verified, explicit
 
 | Server CPU | Exactly ONE file to download | Exact official release asset |
 | --- | --- | --- |
-| `x86_64` | `stl_vX.Y.Z_linux_amd64_local-install.sh` | [Latest official Stable release assets](https://github.com/ach1992/simple-tun-link/releases/latest) |
-| `aarch64` | `stl_vX.Y.Z_linux_arm64_local-install.sh` | [Latest official Stable release assets](https://github.com/ach1992/simple-tun-link/releases/latest) |
+| `x86_64` | `stl_v0.1.11_linux_amd64_local-install.sh` | [Official v0.1.11 AMD64 file](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.11/stl_v0.1.11_linux_amd64_local-install.sh) |
+| `aarch64` | `stl_v0.1.11_linux_arm64_local-install.sh` | [Official v0.1.11 ARM64 file](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.11/stl_v0.1.11_linux_arm64_local-install.sh) |
 
 Transfer the selected single file
 **without renaming, extracting or making it executable** into `/root/stl/`.
 Create `/root/stl/` using your SFTP client as root if necessary. No additional
 manifest, checksum file, compiler or separate shell helper is required on the
-*target*. The folder/file must be owned by root, not group/other writable;
-typical root-SFTP file modes `0600`/`0644` work, and the directory must
-be root-owned `0700`. With **only one** matching `*_local-install.sh` present,
+*target*. For WSS alone, the separate verified `wstunnel` archive is an
+additional optional file. The folder/file must be owned by root, not
+group/other writable; typical root-SFTP file modes `0600`/`0644` work,
+and the directory must be root-owned `0700`.
+**Keep exactly one matching `*_local-install.sh`** in `/root/stl/`: move
+older installers to a separate private directory before running the glob.
+The pinned WSS companion archive may coexist with that one installer.
+With this one matching installer present,
 run the exact command as **root**, or use the separately shown genuine `sudo`
 variant from a non-root administrator account:
 
 ~~~sh
-bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}") || exit 1; [[ $n =~ ^[0-9]+$ && $n -gt 0 && $n -le 134250000 ]] || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; head -c "$n" -- "${f[0]}" > "$d/${f[0]##*/}"; [[ $(stat -c %s -- "$d/${f[0]##*/}") == "$n" ]]; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; bash "$d/${f[0]##*/}"'
+bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}") || exit 1; [[ $n =~ ^[0-9]+$ && $n -gt 0 && $n -le 134250000 ]] || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; head -c "$n" -- "${f[0]}" > "$d/${f[0]##*/}"; [[ $(stat -c %s -- "$d/${f[0]##*/}") == "$n" ]]; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; bash "$d/${f[0]##*/}" "$@"' stl
 ~~~
 
 For a sudo-capable **non-root** administrator, use this command instead
 (the user must already have genuine `sudo` access):
 
 ~~~sh
-sudo bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}") || exit 1; [[ $n =~ ^[0-9]+$ && $n -gt 0 && $n -le 134250000 ]] || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; head -c "$n" -- "${f[0]}" > "$d/${f[0]##*/}"; [[ $(stat -c %s -- "$d/${f[0]##*/}") == "$n" ]]; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; bash "$d/${f[0]##*/}"'
+sudo bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}") || exit 1; [[ $n =~ ^[0-9]+$ && $n -gt 0 && $n -le 134250000 ]] || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; head -c "$n" -- "${f[0]}" > "$d/${f[0]##*/}"; [[ $(stat -c %s -- "$d/${f[0]##*/}") == "$n" ]]; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; bash "$d/${f[0]##*/}" "$@"' stl
 ~~~
 
 These commands verify ownership, source type, modes, installer count and the
 1..134250000-byte file-size bound **before** private bounded copying or
 execution of transferred shell bytes.
 An unsafe folder/file, symlink or extra matching installer is refused, not
-run. The trusted command is necessarily longer than directly invoking an
-unauthenticated transferred script; it is still one copyable invocation and
-requires no checksum variable, unpack, chmod or second installer. It is not
-an independent publisher signature: verify the official file before transfer.
+run. The trailing `stl` is the fixed `bash -c` argument label; for an
+**explicit WSS companion selection only**, append ` --with-wss` after
+that final `stl`. The trusted command forwards this one supported launcher
+flag after the original safety checks. Without the flag, the optional
+archive is not activated. The command is necessarily longer than directly
+invoking an unauthenticated transferred script; it is still one copyable
+invocation and requires no checksum variable, unpack, chmod or second installer.
+It is not an independent publisher signature: verify the official file before transfer.
 
 A non-interactive success prints `[OK]` and `stl version --json`, followed by
 `sudo stl menu` guidance. On an interactive terminal, the normal menu opens.
@@ -291,8 +304,8 @@ That historical release **does not** contain the one-command `.sh` format:
 
 The original [authenticated manual unpack procedure](#verified-archive-unpack-procedure)
 remains below for published archives and existing automation. Prefer the
-v0.1.9 single-file format above for new installations, after verifying the
-published file and its official provenance.
+latest published Stable single-file format above for new installations,
+after verifying the exact asset and its official provenance.
 
 ### Legacy manual inventory: v0.1.7 (no local archive)
 
@@ -788,24 +801,31 @@ helper unpack step, alternate helper installer or WSS effect is required of the
 operator. Ordinary STL users, including those leaving an unselected
 companion beside the installer, get unchanged core behavior. A bad archive, wrong CPU or foreign target binary fails closed.
 
-The one-command selected-Carrier form is:
+**Run the verified trusted preflight one-liner shown in the local-install
+section**, but **append `--with-wss` after its final `stl` argument**.
+After copying the verified `wstunnel` archive beside the selected STL
+file, take **the complete original preflight command above** (root or
+`sudo`) and append exactly ` --with-wss` after the last `stl`.
+Its closing fragment will therefore read
+`bash "$d/${f[0]##*/}" "$@"' stl --with-wss`.
+That fragment is an illustration of the end of the command, **not** a
+standalone command or a replacement for the complete trusted preflight.
+It still verifies and snapshots the exact transferred installer **before
+execution**, then explicitly forwards `--with-wss` to the selected helper
+admission. Do **not** bypass that preflight merely to shorten the command.
+Use the real file for the host's CPU and a published Stable version with WSS
+support (v0.1.10 or newer). Missing or mismatched selected archives are rejected
+before the core installer is started. An existing verified WSS installation
+does not need a new sidecar merely to upgrade its core STL executable.
 
-~~~sh
-sudo bash /root/stl/stl_vX.Y.Z_linux_amd64_local-install.sh --with-wss
-~~~
-
-Replace vX.Y.Z with a **real published** Stable version supporting WSS
-(v0.1.10 or newer). Missing or mismatched selected archives are rejected
-before the core installer is started.
-
-For an **already installer-owned** STL candidate, the equivalent standalone
+For an **already installer-owned** STL installation, the equivalent standalone
 administrator recovery action is available (not the normal first-use path):
 ~~~sh
 sudo bash scripts/install.sh companion-wss --archive /absolute/path/wstunnel_11.0.0_linux_amd64.tar.gz --prefix /usr/local
 ~~~
 Run that action only using the verified canonical installer from the exact
-candidate being tested. Never copy binaries into /usr/local/libexec/stl or
-forge the installer record manually; the read-only Engine admission checks the
+release being operated or a separately authorized test candidate. Never
+copy binaries into `/usr/local/libexec/stl` or forge the installer record manually; the read-only Engine admission checks the
 whole trusted executable path, digest and ownership before each activation.
 
 WSS uses real kernel WireGuard plus TLS/mTLS. The selected TCP endpoint must

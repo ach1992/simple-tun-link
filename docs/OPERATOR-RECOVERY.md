@@ -261,8 +261,8 @@ vanishes; bringing the same object UP in B recreates that socket in A.
 Thus neither `wg show all` in A nor `ss -u -l -n` in A can attest that
 the original kernel object was actually destroyed.
 
-In this candidate, removing the WSS nft ingress guard requires the
-same-transaction original nonce/ifindex verification and a successful
+In the Stable managed WSS runtime, removing the WSS nft ingress guard
+requires the same-transaction original nonce/ifindex verification and a successful
 index-targeted kernel deletion **in addition** to a fresh, bounded
 birthplace UDP socket readback. This also applies to Ensure rollback.
 A separate read-only crash reconciliation cannot invent this witness;
