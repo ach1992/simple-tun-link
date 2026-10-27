@@ -78,6 +78,12 @@ try:
                 print("Transient=yes")
                 print("Description="+info["description"])
                 print("ExecStart={ path="+info["argv"][0]+" ; argv[]="+" ".join(info["argv"])+" ; }")
+                probe=info["properties"].get("ExecStartPost", "")
+                if probe:
+                    post=probe.lstrip("-").split(" ")
+                    print("ExecStartPost={ path="+post[0]+" ; argv[]="+" ".join(post)+" ; ignore_errors="+("yes" if probe.startswith("-") else "no")+" ; }")
+                else:
+                    print("ExecStartPost=")
                 print("Environment="+" ".join(k+"="+v for k,v in sorted(info["env"].items())))
                 props=info["properties"]
                 print("Type="+props["Type"])

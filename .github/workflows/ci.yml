@@ -40,6 +40,7 @@ jobs:
           bash -n scripts/e2e/wss-wg-ingress-netns.sh
           bash -n scripts/e2e/wss-managed-wireguard-r1.sh
           bash -n scripts/e2e/wss-managed-wireguard-matrix.sh
+          bash -n scripts/e2e/wss-reconnect-systemd.sh
           python3 -c 'import ast,sys; [ast.parse(open(p).read()) for p in sys.argv[1:]]' scripts/e2e/wss-negative-probe.py scripts/e2e/wss-r1-supervisor.py scripts/e2e/wss-r2-nft-crash.py scripts/e2e/wss-r2-legacy-drift.py scripts/e2e/wss-r2-wg-crash.py scripts/e2e/wss-r4-partial-wg.py scripts/e2e/wss-r4-guard-interloper.py
           bash -n scripts/e2e/ipsec-two-peer-netns.sh
           bash -n scripts/e2e/ipsec-installed-systemd.sh
@@ -60,3 +61,23 @@ jobs:
           bash scripts/test-quick-install.sh
       - name: Transferable architecture-specific local bundle smoke
         run: GOTOOLCHAIN=local bash scripts/e2e/snapshot-install-smoke.sh
+
+  # No connected server is touched. Prove the literal service property on
+  # disposable GitHub-hosted systemd 249 and a newer systemd environment.
+  wss-reconnect-systemd:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Exact extended execution flags, controlled restart and bounded ping
+        shell: bash
+        run: bash scripts/e2e/wss-reconnect-systemd.sh

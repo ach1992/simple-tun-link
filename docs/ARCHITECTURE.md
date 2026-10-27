@@ -692,6 +692,42 @@ protected Link-local TLS/bearer/WG credentials after separate host-absence
 proof. A crash before a completed receipt requires owner-scoped recovery;
 no foreign adoption or generic host cleanup is permitted.
 
+### Dialer restart packet wakeup (post-v0.1.11 candidate; not yet released)
+
+An upstream wstunnel v11 UDP listener creates a WSS forwarding session only
+when a UDP datagram arrives from its local kernel-WireGuard peer. After the
+**dialer** helper is restarted externally, an otherwise idle WireGuard peer
+may send nothing until the next configured keepalive. An observed v0.1.10
+physical restart caused 30 missed half-second private probes (~15 seconds);
+that measurement does not establish a universal delay or an STL defect.
+
+The candidate dialer transient unit attaches a **bounded, best-effort**
+`ExecStartPost` ICMP wakeup: eight small probes, 250 ms apart, with a
+three-second hard wall-clock deadline (`ping -w 3`), bound to the
+exact STL-owned WireGuard interface and sent only toward the selected private
+peer Link Address. The command uses no shell, bearer, plaintext secret,
+route change, kernel configuration change or continuous worker. The
+ignore-failure prefix ensures an offline peer or missing `ping` executable
+cannot make the WSS helper enter a restart loop. The authoritative health
+check remains real private application traffic; a started helper or executed
+probe never proves reconnection. The listener does not initiate this probe.
+
+Unit readback must cross-check the legacy `ExecStartPost` and extended
+`ExecStartPostEx` properties: complete path/argv, exactly `ignore-failure`
+with no privileged, shell or environment-expansion modifiers. The main helper's
+`ExecStartEx` must also have an empty execution-flag set. The same readback
+checks that **all other executable service lifecycle hooks are unset**, including
+Condition, StartPre, Reload, ReloadPost (where available), Stop and StopPost,
+with their extended forms. A foreign hook cannot authorize managed Stop/Restart.
+Verified legacy units with *both* post-start properties absent/empty remain
+compatible; contradictory, partial or malformed command readback is foreign.
+A rejected ownership gate that dispatches no `systemctl` restart must not
+be treated as an ambiguous service mutation. Updating the STL binary alone cannot retrofit a
+running legacy transient unit, and must not stop or replace it implicitly.
+An owner-authorized, identity-checked helper refresh and real field measurement
+are separate release/acceptance gates. No
+zero-downtime claim or automatic Live-Link migration is implied.
+
 ### Ordinary committed WSS original-generation lifecycle (Stable v0.1.10+)
 
 A committed WSS Link now durably records the **original host-kernel

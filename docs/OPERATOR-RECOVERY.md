@@ -252,6 +252,37 @@ reboot and cold-boot Reconcile to obtain one-use restore authority. This manual 
 an honest limitation of the managed WSS runtime, not a promise that
 all pre-commit crash objects are automatically recoverable.
 
+## Managed WSS dialer restart reliability (candidate; not in v0.1.11)
+
+A running WSS helper and an established authenticated private Link are
+different observations. On a prior DE dialer-only restart, real IR private
+half-second probes missed 30 consecutive packets (~15 seconds) and later
+recovered automatically. The upstream UDP forwarding session is started on
+a local WireGuard datagram; a 25-second keepalive can leave a variable idle
+reconnect gap after a helper restart. Inspect the original field evidence in
+GitHub Issue #93 rather than treating process startup as traffic readiness.
+
+A proposed future dialer startup wakeup sends only eight small private ICMP
+probes at 250 ms intervals with an explicit three-second total deadline
+(`ping -w 3`) from the existing WireGuard interface. It changes no Link ID,
+credentials, State, route, firewall or kernel WireGuard settings, and does
+not run on the WSS listener. Failure of the wakeup cannot make the helper
+fail; inspect real traffic to judge whether reconnection improved.
+Before an STL-owned WSS helper can be stopped or restarted, exact systemd
+readback must find no additional executable lifecycle hooks (Condition,
+StartPre, Reload, Stop, StopPost and the supported extended variants); only
+the exact verified main command and optional dialer wakeup are permitted.
+Unset hooks on older supported systemd versions remain compatible.
+
+**Existing v0.1.11 transient units do not gain new post-start commands by
+updating their CLI executable.** Never delete an existing WSS helper, recreate
+a Link, or reboot a physical field host merely to exercise this candidate.
+Wait for independent review and separate operator approval to refresh the
+exact verified owned helper. Then use timestamped two-way private packet
+measurements, report contiguous loss and validate preserved SSH, routes and
+security ownership. Do not claim zero packet loss from a green `ping` exit
+code or a running service.
+
 ## Managed WSS: namespace migration and kernel deletion witnesses
 
 A Linux WireGuard interface may be created in network namespace A and

@@ -182,29 +182,49 @@ func (h Host) unitDescription(ctx context.Context, link domain.Link) string {
 
 type unitState struct{ loaded, active bool }
 
+// Exhaustive executable service-hook inventory for systemd 249 and 259,
+// excluding only the owned ExecStart/ExecStartEx and
+// ExecStartPost/ExecStartPostEx pairs. systemd 249 does not expose the newer
+// ExecReloadPost pair; its absent property is permitted, but any observed
+// command is forbidden. Use ONE list for both readback and admission so no
+// executable hook can be observed without also being checked.
+const wssForbiddenUnitExecHooks = "ExecCondition,ExecConditionEx,ExecStartPre,ExecStartPreEx,ExecReload,ExecReloadEx,ExecReloadPost,ExecReloadPostEx,ExecStop,ExecStopEx,ExecStopPost,ExecStopPostEx"
+
+func verifyWSSNoForeignExecHooks(values map[string]string) error {
+	for _, property := range strings.Split(wssForbiddenUnitExecHooks, ",") {
+		// Unset exec commands are omitted by systemctl show on supported
+		// systemd versions; some observations may return an empty value.
+		// Neither a blank nor a missing unsupported version-specific hook
+		// grants permission to execute a nonempty foreign hook.
+		if values[property] != "" {
+			return fmt.Errorf("foreign WSS helper lifecycle command: %s", property)
+		}
+	}
+	return nil
+}
+
 func (h Host) inspectUnit(ctx context.Context, link domain.Link) (unitState, error) {
 	out, err := h.runner().RunBounded(ctx, linux.CaptureLimits{Stdout: 64 << 10, Stderr: 64 << 10},
 		"systemctl", "show", h.unitName(link),
-		"--property=LoadState,ActiveState,Description,Transient,ExecStart,Environment,Type,Restart,RestartUSec,NoNewPrivileges,PrivateTmp,ProtectSystem,ProtectHome,CollectMode",
+		"--property=LoadState,ActiveState,Description,Transient,ExecStart,ExecStartEx,ExecStartPost,ExecStartPostEx,Environment,Type,Restart,RestartUSec,NoNewPrivileges,PrivateTmp,ProtectSystem,ProtectHome,CollectMode,"+wssForbiddenUnitExecHooks,
 		"--no-pager")
 	if err != nil {
 		return unitState{}, fmt.Errorf("cannot inspect WSS helper unit: %w", err)
 	}
-	values := map[string]string{}
-	for _, line := range strings.Split(strings.TrimSpace(string(out.Stdout)), "\n") {
-		if line == "" {
-			continue
-		}
-		pieces := strings.SplitN(line, "=", 2)
-		if len(pieces) != 2 {
-			return unitState{}, fmt.Errorf("unexpected systemd unit observation")
-		}
-		if _, exists := values[pieces[0]]; exists {
-			return unitState{}, fmt.Errorf("ambiguous systemd unit observation")
-		}
-		values[pieces[0]] = pieces[1]
+	values, err := parseWSSUnitReadback(out.Stdout)
+	if err != nil {
+		return unitState{}, err
+	}
+	// Reject all unexpected executable lifecycle hooks before any loaded/
+	// missing-unit decision. A foreign pre/start/stop/reload hook must never
+	// acquire the privilege of a managed systemctl stop or restart.
+	if err := verifyWSSNoForeignExecHooks(values); err != nil {
+		return unitState{}, err
 	}
 	if values["LoadState"] == "not-found" {
+		if values["ExecStartEx"] != "" || values["ExecStartPost"] != "" || values["ExecStartPostEx"] != "" {
+			return unitState{}, fmt.Errorf("contradictory execution commands on missing WSS unit")
+		}
 		// A missing unit on real systemd 249 and 259 omits ExecStart
 		// entirely, even when explicitly requested in --property. Do not
 		// mistake this documented absence for an incomplete readback: admit
@@ -252,8 +272,9 @@ func (h Host) inspectUnit(ctx context.Context, link domain.Link) (unitState, err
 		return unitState{}, fmt.Errorf("cannot inspect the protected WSS unit identity")
 	}
 	defer clear(cmd.ServerRestrictions)
-	if !matchesExactWSSExecStart(values["ExecStart"], cmd) {
-		return unitState{}, fmt.Errorf("WSS unit argv differs from Link identity")
+	if !matchesExactWSSExecStart(values["ExecStart"], cmd) ||
+		!matchesExactWSSCommandReadback(values["ExecStartEx"], cmd, "flags", "") {
+		return unitState{}, fmt.Errorf("WSS unit argv or execution flags differ from Link identity")
 	}
 	if strings.TrimSpace(values["Environment"]) != strings.Join(cmd.Env, " ") {
 		return unitState{}, fmt.Errorf("WSS unit TLS trust environment differs from Link identity")
@@ -261,11 +282,39 @@ func (h Host) inspectUnit(ctx context.Context, link domain.Link) (unitState, err
 	if err := verifyWSSUnitSecurityProperties(values); err != nil {
 		return unitState{}, err
 	}
+	// Real systemd 249 and 259 omit both unset post-start properties even
+	// when requested. Accept verified legacy units, but never a new command
+	// unless both the legacy argv/ignore-error and the extended full execution
+	// flags agree exactly; this gate precedes any Stop/Restart.
+	if err := verifyWSSRestartProbe(values["ExecStartPost"], values["ExecStartPostEx"], link); err != nil {
+		return unitState{}, err
+	}
 	if values["ActiveState"] != "active" && values["ActiveState"] != "inactive" &&
 		values["ActiveState"] != "failed" && values["ActiveState"] != "activating" {
 		return unitState{}, fmt.Errorf("unexpected WSS helper service state")
 	}
 	return unitState{loaded: true, active: values["ActiveState"] == "active"}, nil
+}
+
+// The same parser handles production's bounded systemctl readback and
+// disposable CI's actual systemd output. Do not trim a raw value, because
+// whitespace on an unexpected ExecStop/Pre hook is not an empty command.
+func parseWSSUnitReadback(raw []byte) (map[string]string, error) {
+	values := map[string]string{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line == "" {
+			continue
+		}
+		pieces := strings.SplitN(line, "=", 2)
+		if len(pieces) != 2 {
+			return nil, fmt.Errorf("unexpected systemd unit observation")
+		}
+		if _, exists := values[pieces[0]]; exists {
+			return nil, fmt.Errorf("ambiguous systemd unit observation")
+		}
+		values[pieces[0]] = pieces[1]
+	}
+	return values, nil
 }
 
 func verifyWSSUnitSecurityProperties(values map[string]string) error {
@@ -637,8 +686,26 @@ func (h Host) StartHelper(ctx context.Context, link domain.Link) (core.Rollback,
 		return nil, err
 	}
 	if unit.loaded {
-		_, err = h.runner().Run(ctx, "systemctl", "restart", h.unitName(link))
+		// Reinspect immediately before the destructive restart dispatch.
+		// A later lifecycle-hook drift is not trusted merely because an
+		// earlier preflight snapshot matched the managed Link.
+		dispatched, restartErr := h.restartVerifiedLoadedHelper(ctx, link)
+		if !dispatched {
+			if restartErr != nil {
+				// A rejected ownership gate proves no systemctl restart was
+				// dispatched, not an ambiguous restart outcome.
+				return nil, restartErr
+			}
+			// Another actor already restored the verified unit; STL made
+			// no change and must not register an undo that could stop it.
+			return func(context.Context) error { return nil }, nil
+		}
+		err = restartErr
 	} else {
+		probe, probeErr := h.restartProbeProperty(link)
+		if probeErr != nil {
+			return nil, probeErr
+		}
 		args := []string{
 			"--unit=" + strings.TrimSuffix(h.unitName(link), ".service"),
 			"--description=" + h.unitDescription(ctx, link),
@@ -646,6 +713,9 @@ func (h Host) StartHelper(ctx context.Context, link domain.Link) (core.Rollback,
 			"--property=Type=exec", "--property=NoNewPrivileges=yes",
 			"--property=PrivateTmp=yes", "--property=ProtectSystem=strict",
 			"--property=ProtectHome=yes",
+		}
+		if probe != "" {
+			args = append(args, probe)
 		}
 		for _, env := range command.Env {
 			if !strings.HasPrefix(env, "SSL_CERT_FILE=") {
@@ -685,6 +755,27 @@ func (h Host) StartHelper(ctx context.Context, link domain.Link) (core.Rollback,
 		}
 	}
 }
+
+// restartVerifiedLoadedHelper owns the actual restart dispatch. Keep the
+// complete loaded-unit ownership gate inside this path, not only in the
+// StartHelper preflight, so a foreign lifecycle hook cannot execute. The
+// dispatched bit distinguishes a rejected pre-dispatch check from an uncertain
+// systemctl effect; never journal a known no-restart ownership rejection.
+func (h Host) restartVerifiedLoadedHelper(ctx context.Context, link domain.Link) (dispatched bool, err error) {
+	unit, err := h.inspectUnit(ctx, link)
+	if err != nil {
+		return false, err
+	}
+	if !unit.loaded {
+		return false, fmt.Errorf("WSS helper disappeared before managed restart")
+	}
+	if unit.active { // independently restored since the earlier inspection
+		return false, nil
+	}
+	_, err = h.runner().Run(ctx, "systemctl", "restart", h.unitName(link))
+	return true, err
+}
+
 func (h Host) StopHelper(ctx context.Context, link domain.Link) (core.Rollback, error) {
 	unit, err := h.inspectUnit(ctx, link)
 	if err != nil {
