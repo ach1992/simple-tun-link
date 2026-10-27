@@ -209,6 +209,14 @@ func linkDiagnoseAllWithServices(args []string, stdout, stderr io.Writer, option
 			return inspectLinkDiagnostic(ctx, link, options, 0)
 		}
 	}
+	// Avoid even attempting a peer probe on a durably superseded original.
+	observer := services.observe
+	services.observe = func(ctx context.Context, link domain.Link, options runtimeOptions) (linkDiagnostic, error) {
+		if _, superseded := quarantined[link.ID]; superseded {
+			return linkDiagnostic{}, stlerr.New(stlerr.CodeConflict, "link_diagnose_all", string(link.ID), "", "superseded WSS original is quarantined")
+		}
+		return observer(ctx, link, options)
+	}
 	checks := healthObserveAll(ctx, links, *options, runtimeAvailable, parallel, services.observe)
 	for i, check := range checks {
 		// Supersession is a durable disposition from the SAME verified State
@@ -254,8 +262,12 @@ func linkDiagnoseAllWithServices(args []string, stdout, stderr io.Writer, option
 				check.Link.ID, check.Link.Backend, check.Link.Encapsulation,
 				check.Status, check.ReasonCode, check.Summary, check.NextStep)
 			if check.Observed != nil {
-				fmt.Fprintf(stdout, "  MTU=%d, probes=%d, replies=%d",
-					check.Observed.MTU.SelectedMTU, check.Observed.Quality.PacketsSent,
+				if check.Observed.MTU.SelectedMTU > 0 {
+					fmt.Fprintf(stdout, "  MTU=%d", check.Observed.MTU.SelectedMTU)
+				} else {
+					fmt.Fprint(stdout, "  MTU=not_measured")
+				}
+				fmt.Fprintf(stdout, ", probes=%d, replies=%d", check.Observed.Quality.PacketsSent,
 					check.Observed.Quality.PacketsReceived)
 				if check.Observed.RX != nil && check.Observed.TX != nil &&
 					check.Observed.CounterUnit != "" {
@@ -371,14 +383,7 @@ func healthObserveOne(ctx context.Context, link domain.Link, options runtimeOpti
 		check = healthUnavailable(link, "diagnostic_interrupted",
 			"Batch diagnosis stopped before this Link could be observed.",
 			"Review current Link state and rerun the read-only check with a suitable --timeout.")
-	case link.Backend == domain.BackendWireGuardWSS:
-		// Managed WSS has an independent read-only helper/guard/WG status
-		// projection. The common active PMTU/ICMP adapter does not yet
-		// prove the WSS carrier's full identity and overhead; never
-		// synthesize peer reachability or invoke a native-WG probe here.
-		check = healthBlocked(link, "wss_active_diagnostics_not_implemented",
-			"Managed WSS Link requires its dedicated read-only helper, ingress guard and WireGuard inspection; no active peer probe was attempted.",
-			"Run stl link diagnose-wss LINK_ID --json for local WSS status; separately verify authenticated private peer traffic.")
+
 	case link.Backend == domain.BackendIPsec && !hasOperationalIPsec(options):
 		// Same condition, reason and machine action as per-Link status
 		// and diagnose; detailed read-only evidence lives in doctor.

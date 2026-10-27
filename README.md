@@ -167,12 +167,25 @@ The result is a compact table of peer IPs, ICMP replies and observed
 status; a missing Ping reply alone does not prove a tunnel is down.
 A completed unanswered ping counts as measured packet loss, while a
 canceled or failed probe remains unknown rather than invented loss.
-Select an individual tunnel for detailed latency, MTU and counters.
+Select an individual tunnel for detailed latency, supported MTU data
+and counters. **Managed WireGuard/WSS** uses these same Status, five-ping,
+Check all and Connection details actions: it verifies the scoped
+helper/guard, real kernel WG identity and private peer route before
+pinging; WSS carrier **path MTU is not measured** by that check.
+`stl link diagnose-wss YOUR_LINK_ID --json` still provides detailed
+local WSS helper, guard, WireGuard handshake and traffic counters.
+
+For WSS receiver setup, the original **sender** may Share a protected
+offer retained by the menu, or enter the original CLI `--output`
+private file after an explicit `SHOW`. The importing receiver
+cannot regenerate an old sender-private Setup Link from ordinary
+State. Missing and unsafe offers are reported separately; ordinary
+Status/Diagnostics never expose secret material.
 
 ~~~sh
 sudo stl link list --json                    # Saved Link inventory
 sudo stl link status YOUR_LINK_ID --json     # Owned local interface
-sudo stl link diagnose YOUR_LINK_ID --json   # Peer Link Address probe / MTU
+sudo stl link diagnose YOUR_LINK_ID --json   # Peer ICMP; WSS PMTU not measured
 sudo stl link diagnose --all --json          # Check all saved Links
 sudo stl doctor ipsec --json                 # Read-only IPsec prerequisite check
 ~~~

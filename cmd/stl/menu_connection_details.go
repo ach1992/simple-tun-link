@@ -84,6 +84,24 @@ func printManualConnectionDetails(out io.Writer, l domain.Link) {
 		menuCopyLine(out, "OTHER server PUBLIC key", l.WireGuard.PeerPublicKey)
 		menuProse(out, "  The original protected receiver offer remains available via My tunnels -> Share -> SHOW.")
 		menuProse(out, "  Deleted/lost receiver secrets cannot be regenerated from ordinary saved Link State.")
+	case domain.BackendWireGuardWSS:
+		// Public per-Link topology is safe to inspect on either peer. It
+		// never substitutes for the original sensitive receiver offer.
+		menuField(out, "WSS role", l.WSS.Role+" (this server)")
+		menuField(out, "WSS TLS TCP port", strconv.Itoa(int(l.WSS.TCPPort)))
+		if l.WSS.TLSServerName != "" {
+			menuField(out, "TLS server name", safeMenuText(l.WSS.TLSServerName))
+		}
+		if l.WSS.Role == "dial" {
+			menuField(out, "Local WSS forward UDP", strconv.Itoa(int(l.WSS.ForwardUDPPort))+" (loopback only)")
+		}
+		menuField(out, "WG UDP local / peer", fmt.Sprintf("%d / %d (private, guarded)", l.WireGuard.ListenPort, l.WireGuard.PeerPort))
+		menuCopyLine(out, "THIS server WG PUBLIC key", l.WireGuard.LocalPublicKey)
+		menuCopyLine(out, "OTHER server WG PUBLIC key", l.WireGuard.PeerPublicKey)
+		menuProse(out, "  OTHER server role is the reverse (listen/dial). WireGuard stays private behind authenticated WSS/TLS.")
+		menuProse(out, "  WSS cannot be paired from this public-only view. Use the ORIGINAL sender's protected receiver offer.")
+		menuProse(out, "  If this server IMPORTED the Link, request the original offer from its creator; never regenerate active private keys.")
+		menuProse(out, "  Run Check connection for peer ICMP; Connection details alone do not prove traffic.")
 	case domain.BackendIPsec:
 		fmt.Fprintln(out, "  IPsec/IKEv2 uses an independent protected PSK and native-exclusive strongSwan.")
 		menuProse(out, "  Public details alone are insufficient: use My tunnels -> Share -> SHOW for the protected receiver offer.")

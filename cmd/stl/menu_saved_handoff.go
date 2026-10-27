@@ -19,6 +19,8 @@ import (
 
 const protectedMenuHandoffDir = "receiver-handoffs"
 
+var errProtectedMenuOfferMissing = errors.New("original protected receiver Setup Link not saved here")
+
 // The path is private, deterministic for each immutable Link ID, and never
 // recorded in the public desired-state snapshot. A successful guided sender
 // Create stores its exact original receiver offer here (not a regenerated key).
@@ -70,11 +72,17 @@ func prepareProtectedMenuHandoff(options *runtimeOptions, id domain.LinkID) (str
 // regular file with extra hardlinks/incorrect ownership/mode.
 func readPrivateHandoffFile(path string) (string, error) {
 	dir, err := openPrivateHandoffParent(filepath.Dir(path))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", errProtectedMenuOfferMissing
+	}
 	if err != nil {
 		return "", fmt.Errorf("protected handoff directory not trusted")
 	}
 	defer unix.Close(dir)
 	fd, err := unix.Openat(dir, filepath.Base(path), unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	if errors.Is(err, unix.ENOENT) {
+		return "", errProtectedMenuOfferMissing
+	}
 	if err != nil {
 		return "", fmt.Errorf("saved protected receiver handoff not available")
 	}
@@ -118,8 +126,11 @@ func validatedSavedProtectedMenuOffer(options *runtimeOptions, selected domain.L
 		return "", fmt.Errorf("cannot verify current saved Link identity")
 	}
 	current, ok := snapshot.Find(selected.ID)
-	if !ok || current.Desired != selected {
-		return "", fmt.Errorf("saved Link changed or is no longer present")
+	if !ok || current.Desired != selected || current.WSSSupersededBy != "" {
+		return "", fmt.Errorf("saved Link changed, was superseded or is no longer present")
+	}
+	if _, pending := snapshot.FindWSSCrashOperation(selected.ID); pending {
+		return "", fmt.Errorf("WSS Link has an unresolved protected operation")
 	}
 	path, err := protectedMenuHandoffPath(options, selected.ID)
 	if err != nil {
@@ -167,6 +178,44 @@ func validatedSavedProtectedMenuOffer(options *runtimeOptions, selected domain.L
 		if len(secret) != 32 || keyErr != nil || keys.RequireExistingExact(selected.ID, secret) != nil {
 			return "", fmt.Errorf("protected receiver PSK cannot be matched to the stored sender credential")
 		}
+	}
+	return raw, nil
+}
+
+// A CLI-created WSS sender deliberately owns its original offer at the
+// operator-selected --output filename, not at the menu's private path.
+// Reading it requires an explicit TTY SHOW and the exact same sender/State
+// identity and private-file trust checks; it never creates/reissues keys or
+// copies the offer into another persistent location.
+func validatedExternalWSSMenuOffer(options *runtimeOptions, selected domain.Link, privatePath string) (string, error) {
+	if selected.Backend != domain.BackendWireGuardWSS || !filepath.IsAbs(privatePath) ||
+		filepath.Clean(privatePath) != privatePath || privatePath == "/" {
+		return "", fmt.Errorf("enter the original absolute private file path of the WSS sender")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), readOperationTimeout)
+	defer cancel()
+	snapshot, err := state.NewFileStore(createStateRoot(options)).Load(ctx)
+	if err != nil {
+		return "", fmt.Errorf("current WSS Link identity is unverified")
+	}
+	current, present := snapshot.Find(selected.ID)
+	if !present || current.Desired != selected || current.WSSSupersededBy != "" {
+		return "", fmt.Errorf("saved sender Link changed, was superseded or is missing")
+	}
+	if _, pending := snapshot.FindWSSCrashOperation(selected.ID); pending {
+		return "", fmt.Errorf("original WSS Link has an unresolved operation")
+	}
+	raw, err := readPrivateHandoffFile(privatePath)
+	if err != nil {
+		return "", fmt.Errorf("original handoff is missing or failed private ownership/mode checks")
+	}
+	offer, _, err := decodeWSSOffer(strings.NewReader(raw))
+	if err != nil {
+		return "", fmt.Errorf("original file is not a versioned WSS receiver offer")
+	}
+	defer offer.clear()
+	if offer.Sender != selected {
+		return "", fmt.Errorf("private offer is not the original sender offer for this saved Link")
 	}
 	return raw, nil
 }
@@ -249,6 +298,12 @@ func menuSensitiveHandoffAction(input io.Reader, reader *bufio.Reader, out, errO
 		return 2
 	}
 	if deleteSaved {
+		if selected.Backend == domain.BackendWireGuardWSS {
+			if _, err := validatedSavedProtectedMenuOffer(options, selected); errors.Is(err, errProtectedMenuOfferMissing) {
+				menuNotice(out, "INFO", "No original receiver offer was saved by the menu on this host; nothing to delete. Tunnel and keys unchanged.")
+				return 0
+			}
+		}
 		if err := secureDeleteProtectedMenuHandoff(options, selected); err != nil {
 			fmt.Fprintln(errOut, "Protected handoff deletion could not be confirmed: "+err.Error())
 			return 1
@@ -257,9 +312,30 @@ func menuSensitiveHandoffAction(input io.Reader, reader *bufio.Reader, out, errO
 		return 0
 	}
 	encoded, err := validatedSavedProtectedMenuOffer(options, selected)
+	if errors.Is(err, errProtectedMenuOfferMissing) && selected.Backend == domain.BackendWireGuardWSS {
+		menuNotice(out, "INFO", "No original receiver offer is saved in this menu on this server.")
+		menuProse(out, "If YOU created this Link using CLI create-wss, provide its original --output file.")
+		menuProse(out, "If you IMPORTED the Link, request the original offer from its creator. No keys can be regenerated here.")
+		if err := clearQueuedMenuConfirmation(input, reader); err != nil {
+			menuNotice(out, "WARNING", "Cannot safely read a fresh private file path; no credential displayed.")
+			return 2
+		}
+		fmt.Fprint(out, "Original sender-private file path (Enter=back): ")
+		path, readErr := readMenuAnswer(reader)
+		if errors.Is(readErr, io.EOF) || readErr == nil && path == "" {
+			menuNotice(out, "INFO", "No original offer selected. Tunnel remains unchanged.")
+			return 0
+		}
+		if readErr != nil {
+			menuNotice(out, "WARNING", "Invalid private file path; nothing disclosed.")
+			return 2
+		}
+		encoded, err = validatedExternalWSSMenuOffer(options, selected, path)
+	}
 	if err != nil {
-		fmt.Fprintln(errOut, "Cannot show the protected Setup Link: "+err.Error())
-		menuProse(out, "If this Link was created in an older version, use its original private handoff file. No new credentials were generated.")
+		menuNotice(out, "WARNING", "Protected Setup Link could not be verified; nothing disclosed.")
+		menuField(out, "Reason", err.Error())
+		menuProse(out, "Keep the original private handoff; never regenerate an active Link's credentials just to share it.")
 		return 1
 	}
 	menuScreen(out, "Sensitive Setup Link / handle privately")
@@ -310,6 +386,6 @@ func menuShowNewProtectedHandoff(input io.Reader, out io.Writer, options *runtim
 		menuNotice(out, "WARNING", "Could not display the complete receiver link; open My tunnels -> Share to retry.")
 		return
 	}
-	fmt.Fprintln(out, "\nOTHER server: Import setup link -> WireGuard / IPsec -> paste -> review -> YES.")
+	fmt.Fprintln(out, "\nOTHER server: Import setup link -> select matching backend -> private paste -> review -> YES.")
 	fmt.Fprintln(out, "This same link stays in private storage until you explicitly delete it.")
 }

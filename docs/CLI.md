@@ -33,10 +33,31 @@ discoverable.
   services require manual remediation and `RECHECK`.
 - After successful local Create, show saved/local success separately
   from measured peer traffic. GRE/IPIP plaintext offers can be exported
-  again. The original SENSITIVE WireGuard/IPsec receiver handoff is
-  shown after successful creation in a real terminal, and retained
+  again. The original SENSITIVE WireGuard/IPsec/WSS receiver handoff is
+  shown after successful menu creation in a real terminal, and retained
   separately for future Share with fresh `SHOW`. Explicit `DELETE`
   removes only that saved handoff, not the active Link or local key.
+- For WSS Links, **Local status** uses the same read-only per-Link
+  status contract as Native (with WSS helper/guard/kernel state), while
+  **Check connection** sends five short private-IP ICMP probes after
+  verifying WSS ownership and private route. All-Link diagnostics
+  likewise include ordinary active WSS Links. WSS-carrier path MTU is
+  **not measured**, so the display never invents a PMTU suggestion.
+  The separate `link diagnose-wss` command remains available for
+  detailed helper/guard/handshake observations.
+- WSS **Share Setup Link** never recreates credentials. On the
+  original **sender**, the original menu-saved offer is available
+  after a fresh `SHOW`; when created via CLI with an independent
+  `--output` file instead, the sender may specify that existing
+  root-private original file path after `SHOW`, subject to exact
+  sender-Link binding, ownership, anti-symlink and private-mode checks.
+  An **importing receiver** does not automatically own or reconstruct
+  the original sender's offer. Missing originals are explained
+  without calling an absent directory unsafe or exposing secrets.
+  Delete receiver link removes only a verified **menu-saved**
+  receiver offer, never an unrelated CLI file, running tunnel or
+  existing keys. Status, diagnostics, noninteractive/JSON output and
+  cancellation never disclose the private Setup Link.
 - My tunnels offers local Status, Link-scoped Test, Share, details and
   identity-bound Remove. For saved IPsec Links only, **Connect IPsec**
   starts IKEv2 through the canonical locked `connect-ipsec` Engine after
@@ -450,19 +471,22 @@ ping -I LOCAL_PRIVATE_IP PEER_PRIVATE_IP
 ~~~
 Diagnostics report Helper/Guard readiness, kernel WG handshake timestamp
 and transfer byte counts separately; process readiness alone cannot attest
-mTLS or application delivery. The generic `link diagnose <id>` active
-PMTU/ICMP implementation is **not** yet WSS-carrier-aware, and the
-`link diagnose --all [--parallel 1..4]` health center marks managed WSS
-Links as **blocked**, reason `wss_active_diagnostics_not_implemented`,
-while independently checking supported native Links. A previously committed,
-durably superseded WSS original instead has reason
-`wss_original_superseded`, saved Link disposition `quarantined_old`
-and `superseded_by` in the batch JSON. It is **not** reported healthy,
-re-ensured or tested by a generic native-WG probe. An interrupted batch
-still reports unobserved entries as unknown. Neither command
-claims WSS reachability without a verified active carrier adapter.
-Use dedicated `link diagnose-wss` for local WSS status and separately
-test TCP/UDP/private ICMP before workload routing. On a restarted host, the already
+mTLS or application delivery. The generic `link diagnose <id>` now sends **five** bounded
+owner-scoped private-IP ICMP probes for verified managed WSS Links.
+`link status <id>` verifies local WSS helper/guard/WG ownership and
+counters without pinging; `link diagnose --all [--parallel 1..4]`
+reports measured WSS peer replies independently of any other Links.
+WSS **PMTU is not measured** or guessed from Native WireGuard
+overhead; an explicit WSS `--mtu` attempt is unsupported.
+A previously committed, durably superseded WSS original still has
+reason `wss_original_superseded`, saved Link disposition
+`quarantined_old` and `superseded_by` in the batch JSON. It is
+**not** actively probed or treated as a healthy current Link.
+An interrupted batch still reports unobserved entries as unknown.
+
+Use dedicated `link diagnose-wss` for detailed WSS host status.
+Short ICMP health does not replace actual bidirectional application
+TCP/UDP tests before workload routing. On a restarted host, the already
 persisted Link can be reconciled through the existing Engine restore or a
 versioned desired-State v3 Ensure request. Never regenerate a WSS offer to
 resume an already allocated Link identity.
