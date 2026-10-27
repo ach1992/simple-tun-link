@@ -206,7 +206,7 @@ minimal and provenance-checked. Use GitHub **private vulnerability
 reporting / Security Advisories** for suspected security defects,
 rather than disclosing exploit details in a public Issue.
 
-## WireGuard over WSS/TLS R1 (candidate security boundary)
+## WireGuard over WSS/TLS (Stable v0.1.10+ security boundary)
 
 WSS is a link-scoped carrier around the **real kernel WireGuard** backend,
 not a second VPN engine or a generic bypass route. The listener requires

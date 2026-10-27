@@ -70,16 +70,18 @@ take over another VPN installation.
 
 ### Local installation without GitHub access on the server
 
-For **[Stable v0.1.9](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.9)**,
-local installation needs **one file, one folder and one command**.
+From **v0.1.9 onward**, official Stable releases support local installation
+with **one STL core file, one folder and one command**. Choose the
+[current published Stable](https://github.com/ach1992/simple-tun-link/releases/latest)
+and substitute its real tag for `vX.Y.Z` in the filenames below.
 Download only **one** official architecture-specific release asset on another
 device. It already contains the matching STL binary, the canonical installer
 and all STL-owned core metadata; no second STL file is needed on the server:
 
 | Destination CPU (`uname -m`) | Download from the exact official release |
 | --- | --- |
-| `x86_64` | [`stl_v0.1.9_linux_amd64_local-install.sh`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.9/stl_v0.1.9_linux_amd64_local-install.sh) |
-| `aarch64` | [`stl_v0.1.9_linux_arm64_local-install.sh`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.9/stl_v0.1.9_linux_arm64_local-install.sh) |
+| `x86_64` | `stl_vX.Y.Z_linux_amd64_local-install.sh` from the [exact Stable release](https://github.com/ach1992/simple-tun-link/releases/latest) |
+| `aarch64` | `stl_vX.Y.Z_linux_arm64_local-install.sh` from the [exact Stable release](https://github.com/ach1992/simple-tun-link/releases/latest) |
 
 Upload the single file **as-is** into `/root/stl/` on the server (e.g. through
 SFTP); the folder must be root-owned mode `0700` and the file root-owned
@@ -104,8 +106,10 @@ a no-op for the same verified artifact, or a newer **Stable-to-Stable** update;
 it then opens the menu on a terminal (otherwise use `sudo stl menu`). It never
 fetches STL from GitHub on the destination. Already-installed prerequisites
 are reused; only missing native/WireGuard distro packages may use the configured
-**signed APT repositories**. IPsec preparation is separate. No WSS/Paqet
-Carrier is shipped.
+**signed APT repositories**. IPsec preparation is separate. Since
+**Stable v0.1.10**, managed WireGuard over WSS is an **optional**, explicitly
+selected Carrier requiring the separately pinned `wstunnel v11.0.0` archive
+and `--with-wss`; it is not bundled with core STL. Paqet is not shipped.
 
 **Availability:** [v0.1.9](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.9)
 is the first Stable release with the self-contained `.sh` installers.
@@ -113,12 +117,13 @@ The older [v0.1.8](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.
 contains only `.tar.gz` local archives and requires a different manual
 procedure; never invoke this command on an archive. The
 [installation guide](docs/INSTALL.md#local-installation-choose-a-published-asset)
-provides the exact v0.1.9 files, the legacy procedure and actionable errors.
+provides current-version file selection, the historical v0.1.9 format
+example, the legacy procedure and actionable errors.
 Verify publisher/tag provenance on the downloading device before root execution;
 embedded or same-account checksums prove integrity, not independent publisher
-authenticity. Future approved optional Carrier companions may be transferred
-beside the core file, but none is needed, bundled, recognized or activated by
-the v0.1.9 core installer.
+authenticity. The v0.1.9 core installer did not support optional WSS;
+from v0.1.10, the version-pinned WSS companion can be transferred beside the
+core installer and activated **only** with explicit `--with-wss`.
 
 ## Connect Server A and Server B
 
