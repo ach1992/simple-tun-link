@@ -119,6 +119,7 @@ func TestWSSStatusAndMenuFivePingUseSameCanonicalActiveDiagnostics(t *testing.T)
 		all.Observed != 1 || all.Blocked != 0 || all.Unknown != 0 ||
 		len(all.Checks) != 1 || all.Checks[0].ReasonCode != "link_peer_replied" ||
 		all.Checks[0].Observed == nil || all.Checks[0].Observed.MTU.SelectedMTU != 0 ||
+		!strings.Contains(all.Checks[0].NextStep, "PMTU was not measured") ||
 		r.probes != 15 {
 		t.Fatalf("WSS all-Link health incorrectly blocked: code=%d all=%+v stderr=%q probes=%d", code, all, errText, r.probes)
 	}

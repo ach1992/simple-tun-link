@@ -354,10 +354,14 @@ func healthFromMeasurement(link domain.Link, measurement linkDiagnostic) healthL
 	}
 	switch {
 	case measurement.quality.Status == diagnostics.QualityMeasured && measurement.quality.Reachable:
+		next := "No automatic action; use per-Link diagnosis for counters and detailed PMTU/quality evidence."
+		if link.Backend == domain.BackendWireGuardWSS {
+			next = "No automatic action; inspect WSS helper/guard and peer quality separately. WSS carrier PMTU was not measured."
+		}
 		return healthLinkCheck{
 			Link: summarizeLink(link), Status: "observed", ReasonCode: "link_peer_replied",
 			Summary:  "The verified Link received a peer echo reply during bounded probes; future traffic is not guaranteed.",
-			NextStep: "No automatic action; use per-Link diagnosis for counters and detailed PMTU/quality evidence.",
+			NextStep: next,
 			Observed: observed,
 		}
 	case measurement.quality.Status == diagnostics.QualityMeasured:
