@@ -833,13 +833,24 @@ never belongs in ordinary Link State, diagnostics or arguments. Opt-in
 tests additionally exercise an **actual pinned official Hysteria binary**
 for config staging/readback without spawning a helper.
 
-The Engine still does **not** call these protected credential/config
-functions. A future effectful caller MUST hold the canonical maintenance,
-Link and resource locks and first have durably journaled the complete
-anticipated effects. These source-only APIs cannot certify peer matching,
-live UDP vacancy or a safe process start. The future Engine must bind and
-re-inspect the exact Plan, installed executable/config and credentials
-before starting/restarting a helper, then prove actual owned host effects.
+The Engine does not **stage** protected QUIC credentials/config or start
+any Helper. A source-only, read-only `Engine.InspectQUICCrashMaterials` now
+reads the exact existing QUIC journal, obtains its configured protected
+State root from the canonical FileStore, and checks the corresponding
+role-private credential/config SHA-256 and official executable hash/device/
+inode against **all seven** immutable expected identities while holding
+maintenance -> Link -> resource locks. It derives the complete helper Plan
+from the journal, refusing caller-proposed alternate TLS, peer, role or
+local port. An unrecognized State-root provider, incomplete journal, absent
+or drifted file and mismatched identity fail closed with secret-safe errors.
+This is a single read-only observation, **not** durable ownership or a permit
+for a future mutation; the lock releases on return and any external writer
+may still change those files. A future effectful caller MUST first hold the
+canonical locks, journal anticipated effects BEFORE any protected file or
+host write, then stage/revalidate exact identity at the actual use boundary,
+prove original object ownership and reconcile uncertain partial effects.
+These source-only APIs cannot certify peer matching, live UDP vacancy or
+safe process start.
 Changing a Dial TLS peer name before a committed Engine Plan is bound
 cannot be inferred from the client's leaf certificate alone; the exact
 protected config and later durable State identity must provide that bind.

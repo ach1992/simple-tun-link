@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"runtime"
 
-	"github.com/ach1992/simple-tun-link/internal/linux"
+	"github.com/ach1992/simple-tun-link/internal/pinnedexec"
 )
 
 const (
@@ -19,9 +19,9 @@ const (
 // identity for a separately installed official helper. It cannot install,
 // start or admit a managed Link. The eventual Engine process owner must pin
 // this same executable identity at startup and through service restore.
-func InspectPinnedHysteria(binary string) (linux.PinnedExecutableIdentity, error) {
+func InspectPinnedHysteria(binary string) (pinnedexec.Identity, error) {
 	if runtime.GOOS != "linux" {
-		return linux.PinnedExecutableIdentity{}, fmt.Errorf("Hysteria helper supported only on Linux")
+		return pinnedexec.Identity{}, fmt.Errorf("Hysteria helper supported only on Linux")
 	}
 	var digest string
 	switch runtime.GOARCH {
@@ -30,7 +30,7 @@ func InspectPinnedHysteria(binary string) (linux.PinnedExecutableIdentity, error
 	case "arm64":
 		digest = PinnedARM64SHA256
 	default:
-		return linux.PinnedExecutableIdentity{}, fmt.Errorf("no approved Hysteria helper for this architecture")
+		return pinnedexec.Identity{}, fmt.Errorf("no approved Hysteria helper for this architecture")
 	}
-	return linux.InspectPinnedExecutable(binary, digest)
+	return pinnedexec.Inspect(binary, digest)
 }

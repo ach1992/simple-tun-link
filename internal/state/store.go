@@ -175,6 +175,11 @@ func NewFileStore(root string) *FileStore {
 	}
 }
 
+// RootDir is the exact configured State root, also used by protected
+// per-Link credential storage. It is a path locator, not an ownership
+// certificate; individual filesystem readers still enforce private access.
+func (s *FileStore) RootDir() string { return s.root }
+
 // HasCommittedState distinguishes a durable empty desired-state snapshot from
 // absent state (for example an unavailable mount). Absence is never proof that
 // an existing restore unit may safely be removed.
