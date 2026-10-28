@@ -144,19 +144,8 @@ func Build(link domain.Link, carrier Carrier) (Path, error) {
 		// Other OS-special ranges are not usable private unicast Link routes.
 		// Do not impose RFC1918-only addressing or change Native behavior.
 		for _, private := range []netip.Prefix{link.Addresses.Local, link.Addresses.Peer} {
-			if !private.Addr().IsGlobalUnicast() {
-				return Path{}, fmt.Errorf("WSS private Link Address must be a routable unicast IPv4 address")
-			}
-			for _, reserved := range [...]netip.Prefix{
-				netip.MustParsePrefix("0.0.0.0/8"),
-				netip.MustParsePrefix("127.0.0.0/8"),
-				netip.MustParsePrefix("169.254.0.0/16"),
-				netip.MustParsePrefix("224.0.0.0/4"),
-				netip.MustParsePrefix("240.0.0.0/4"),
-			} {
-				if private.Overlaps(reserved) {
-					return Path{}, fmt.Errorf("WSS private Link route overlaps a non-routable or locally reserved IPv4 range")
-				}
+			if err := ValidateComposedPrivateIPv4Route(private); err != nil {
+				return Path{}, fmt.Errorf("WSS %w", err)
 			}
 		}
 		// A virtual Link route must never capture either underlay endpoint:

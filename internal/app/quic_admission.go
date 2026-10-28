@@ -58,9 +58,13 @@ func (e *Engine) CheckQUICPreparation(ctx context.Context, plan composition.QUIC
 	}
 	addresses := provider.Addresses
 	if !addresses.Local.IsValid() || !addresses.Peer.IsValid() ||
-		!validQUICLinkAddress(addresses.Local) || !validQUICLinkAddress(addresses.Peer) ||
 		addresses.Local.Addr() == addresses.Peer.Addr() {
 		return nil, invalid("invalid distinct IPv4 WireGuard Link Addresses")
+	}
+	for _, private := range []netip.Prefix{addresses.Local, addresses.Peer} {
+		if err := composition.ValidateComposedPrivateIPv4Route(private); err != nil {
+			return nil, invalid("QUIC private Link route overlaps reserved space or lacks unicast eligibility")
+		}
 	}
 	if provider.WireGuard.PeerPort == 0 {
 		return nil, invalid("native WireGuard peer UDP port is required")
@@ -145,11 +149,6 @@ func (e *Engine) CheckQUICPreparation(ctx context.Context, plan composition.QUIC
 		return nil, unknown("live collision inspection was interrupted")
 	}
 	return claims, nil
-}
-
-func validQUICLinkAddress(prefix netip.Prefix) bool {
-	return prefix.Addr().Is4() && prefix.Bits() > 0 && prefix.Bits() <= 32 &&
-		!prefix.Addr().IsUnspecified() && !prefix.Addr().IsMulticast()
 }
 
 func quicLinkIdentityReserved(s state.Snapshot, id domain.LinkID) bool {

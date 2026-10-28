@@ -745,12 +745,16 @@ A separate **read-only source-only** `app.Engine.CheckQUICPreparation` now
 consumes `quic.Plan.LocalAdmission`'s validated, port-only projection and
 composes it with `composition.WireGuardProviderClaims`, the same
 native WireGuard interface/address/local UDP/public-key claims consumed by
-shipped native/WSS planning. Within canonical Engine maintenance, Link and
-resource locks it refreshes State, checks conflicting committed/pending Links
+shipped native/WSS planning. Both local and peer private IPv4 Link routes
+reuse WSS's global-unicast and reserved-prefix overlap checks (including
+loopback and link-local), without imposing RFC1918-only addressing.
+Within canonical Engine maintenance, Link and resource locks it refreshes
+State, checks conflicting committed/pending Links
 (including unresolved WSS claims), and uses the existing live
 `linux.CollisionInspector` contract for local interfaces, addresses, routes
-and **both** local UDP listeners. It refuses shared strongSwan UDP/500 or
-UDP/4500 when any committed/pending IPsec intent is present even if the
+and **both** locally bound UDP ports, including connected UDP sockets,
+from an all-state IPv4/IPv6 socket inventory. It refuses shared strongSwan
+UDP/500 or UDP/4500 when any committed/pending IPsec intent is present even if the
 shared daemon is temporarily not listening: those fixed ports are not in
 IPsec's per-Link exclusive claims. The actual live socket inventory is still
 required regardless of persisted State, including when a daemon has no

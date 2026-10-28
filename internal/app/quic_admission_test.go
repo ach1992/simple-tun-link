@@ -292,3 +292,39 @@ func TestQUICAdmissionFailsClosedOnOccupiedAndUnknownHost(t *testing.T) {
 		t.Fatalf("unknown host inventory accepted or leaked private evidence: %v", err)
 	}
 }
+
+func TestQUICAdmissionRejectsReservedLocalAndPeerLinkRoutes(t *testing.T) {
+	ctx := context.Background()
+	e, _ := newEngine(t, newFakeBackend())
+	plan, provider := quicReadinessFixture()
+	for _, tc := range []struct {
+		name, local, peer string
+	}{
+		{"peer-loopback", "10.96.20.0/31", "127.0.0.1/32"},
+		{"local-loopback", "127.0.0.2/32", "10.96.20.1/31"},
+		{"peer-link-local", "10.96.20.0/31", "169.254.1.1/32"},
+		{"local-link-local", "169.254.2.3/32", "10.96.20.1/31"},
+		{"peer-subnet-overlaps-loopback", "10.96.20.0/31", "126.0.0.2/7"},
+		{"local-subnet-overlaps-link-local", "169.253.2.3/14", "10.96.20.1/31"},
+		{"peer-zero-net", "10.96.20.0/31", "0.1.2.3/8"},
+		{"peer-multicast", "10.96.20.0/31", "224.0.0.9/32"},
+		{"peer-reserved-high", "10.96.20.0/31", "240.0.0.9/32"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := provider
+			candidate.Addresses.Local = netip.MustParsePrefix(tc.local)
+			candidate.Addresses.Peer = netip.MustParsePrefix(tc.peer)
+			probe := &quicVacancyProbe{}
+			if _, err := e.CheckQUICPreparation(ctx, plan, candidate, probe); stlerr.CodeOf(err) != stlerr.CodeInvalid || probe.calls != 0 {
+				t.Fatalf("reserved %s private Link route accepted or host touched: %v, calls=%d", tc.name, err, probe.calls)
+			}
+		})
+	}
+	// Do not accidentally impose RFC1918-only address policy on the
+	// existing composed-Link contract: valid unicast non-RFC1918 is allowed.
+	public := provider
+	public.Addresses.Peer = netip.MustParsePrefix("198.51.100.20/31")
+	if _, err := e.CheckQUICPreparation(ctx, plan, public, &quicVacancyProbe{}); err != nil {
+		t.Fatalf("ordinary unicast Link route was unnecessarily restricted: %v", err)
+	}
+}

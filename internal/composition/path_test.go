@@ -262,3 +262,28 @@ func mustDirectPath(t *testing.T, l domain.Link) Path {
 	}
 	return p
 }
+
+// Source-only QUIC must share WSS routing restrictions, without changing
+// existing WSS messages or tightening unrelated native WireGuard behavior.
+func TestComposedPrivateRouteValidationPreservesNativeAndWSSErrors(t *testing.T) {
+	original := testLink(domain.BackendWireGuard, domain.EncapUDP)
+	carrier := Carrier{Kind: WSS, Role: Dial, PublicTCPPort: 443,
+		LocalForwardUDP: 51321, TLSServerName: "server.example", CredentialOwner: original.ID}
+	for _, tc := range []struct {
+		name, private, message string
+	}{
+		{"loopback-address", "127.0.0.1/32", "WSS private Link Address must be a routable unicast IPv4 address"},
+		{"overlapping-loopback-prefix", "126.0.0.2/7", "WSS private Link route overlaps a non-routable or locally reserved IPv4 range"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			link := original
+			link.Addresses.Peer = netip.MustParsePrefix(tc.private)
+			if _, err := Build(link, carrier); err == nil || err.Error() != tc.message {
+				t.Fatalf("original WSS route error changed: %v", err)
+			}
+			if _, err := Build(link, Carrier{}); err != nil {
+				t.Fatalf("unrelated native address policy changed: %v", err)
+			}
+		})
+	}
+}

@@ -162,9 +162,14 @@ func (s HostSnapshotter) Snapshot(ctx context.Context) (hostSnapshot, error) {
 		})
 	}
 
-	ssResult, err := s.Runner.Run(ctx, ssBinary, "-H", "-u", "-l", "-n")
+	// All-state UDP inventory includes connected, locally bound sockets;
+	// the listener-only -l view can falsely report an exclusive port as free.
+	ssResult, err := s.Runner.Run(ctx, ssBinary, "-H", "-u", "-a", "-n")
 	if err != nil {
-		return hostSnapshot{}, fmt.Errorf("inspect UDP listeners: %w", err)
+		return hostSnapshot{}, fmt.Errorf("inspect local UDP sockets: %w", err)
+	}
+	if len(ssResult.Stderr) != 0 {
+		return hostSnapshot{}, fmt.Errorf("local UDP socket inventory contains unverified diagnostics")
 	}
 	udpPorts, err := parseUDPListeners(string(ssResult.Stdout))
 	if err != nil {
