@@ -698,6 +698,15 @@ GRE/IPIP/FOU/GUE or public-IP fallback is admitted. The binary and
 generated config are not silently installed or started, and the existing
 WSS/native Link schema, CLI, on-host helpers and v0.1.12 release are unchanged.
 
+A separate, still **non-runnable** per-Link credential issuer creates two
+independent ephemeral CA signing authorities (server and client) and their
+role-specific TLS leaf identities plus a random 256-bit Link bearer. Only
+the appropriate leaf key, peer trust anchor and bearer are returned for each
+role; the CA signing keys are not exported or persisted. Bundles are sensitive
+in-memory data, **not** authorization to stage files, import credentials or
+start a helper. Safe Engine-owned protected staging, retirement and rotation
+are deliberately outstanding.
+
 The adapter's opted-in disposable loopback compatibility test uses a
 pinned, hash-checked official Hysteria binary and independently generated
 ephemeral CA, server and client certificates, plus an unrelated secret
