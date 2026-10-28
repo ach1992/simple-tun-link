@@ -157,16 +157,20 @@ func openRoleDir(root string, id domain.LinkID, create bool) (int, error) {
 // requireExclusiveRole refuses mixing client and server private identities
 // under one Link directory. Peers must keep independent local State roots.
 func requireExclusiveRole(fd int, role Role) error {
-	var foreign [2]string
+	var opposite Role
 	switch role {
 	case Listen:
-		foreign = [2]string{"client-cert.pem", "client-key.pem"}
+		opposite = Dial
 	case Dial:
-		foreign = [2]string{"server-cert.pem", "server-key.pem"}
+		opposite = Listen
 	default:
 		return fmt.Errorf("invalid QUIC credential role")
 	}
-	for _, name := range foreign {
+	foreign, _ := roleFiles(opposite)
+	// Both roles share authorization-token. Only the three role-specific
+	// TLS files from the opposite role must be absent. Other managed files,
+	// including a future helper.json, are not role evidence.
+	for _, name := range foreign[:3] {
 		var st unix.Stat_t
 		err := unix.Fstatat(fd, name, &st, unix.AT_SYMLINK_NOFOLLOW)
 		if err == nil || err != unix.ENOENT {
