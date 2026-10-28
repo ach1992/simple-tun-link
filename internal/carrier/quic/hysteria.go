@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ach1992/simple-tun-link/internal/composition"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 )
 
@@ -223,25 +224,5 @@ func validToken(s string) bool {
 }
 
 func validTLSName(name string, peer netip.Addr) bool {
-	if name == "" || len(name) > 253 || strings.TrimSpace(name) != name ||
-		strings.ContainsAny(name, "/\\:@ \t\r\n\x00") {
-		return false
-	}
-	if addr, err := netip.ParseAddr(name); err == nil {
-		return addr.Is4() && addr.Zone() == "" && addr == peer
-	}
-	if strings.HasSuffix(name, ".") || !strings.Contains(name, ".") {
-		return false
-	}
-	for _, part := range strings.Split(name, ".") {
-		if len(part) == 0 || len(part) > 63 || part[0] == '-' || part[len(part)-1] == '-' {
-			return false
-		}
-		for _, ch := range part {
-			if !(ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9' || ch == '-') {
-				return false
-			}
-		}
-	}
-	return true
+	return composition.ValidQUICTLSName(name, peer)
 }

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/ach1992/simple-tun-link/internal/composition"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 )
 
@@ -214,5 +215,44 @@ func TestQUICLocalAdmissionProjectsExactlyTheValidatedCarrierClaims(t *testing.T
 		if err != nil || !reflect.DeepEqual(projected, direct) {
 			t.Fatalf("role %s projected claims diverge from renderer: %v / %v / %v", role, projected, direct, err)
 		}
+	}
+}
+
+func TestQUICHostPlanBindsExactPublicPhysicalRoleAndTLS(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		role    Role
+		localWG uint16
+	}{
+		{"dial", Dial, 51821},
+		{"listen", Listen, 51820},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := fixturePlan(tc.role)
+			switch tc.role {
+			case Dial:
+				p.LocalForwardUDPPort, p.PeerWGUDPPort = 52211, 51820
+			case Listen:
+				p.LocalWGUDPPort = tc.localWG
+			}
+			bound, err := p.HostPlan(tc.localWG)
+			if err != nil || bound.Physical != p.Underlay || bound.TLSName != p.TLSName ||
+				bound.Local.LinkID != p.LinkID || bound.Local.Role != composition.Role(tc.role) {
+				t.Fatalf("physical/TLS QUIC Plan lost: %+v %v", bound, err)
+			}
+			if _, err := bound.Local.CarrierClaims(); err != nil {
+				t.Fatal(err)
+			}
+			bad := p
+			bad.Underlay = netip.MustParseAddrPort("127.0.0.1:443")
+			if _, err := bad.HostPlan(tc.localWG); err == nil {
+				t.Fatal("host-effect journal admitted a loopback physical underlay")
+			}
+			bad = p
+			bad.TLSName = "203.0.113.46"
+			if _, err := bad.HostPlan(tc.localWG); err == nil {
+				t.Fatal("host-effect journal omitted exact physical TLS SAN binding")
+			}
+		})
 	}
 }

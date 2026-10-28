@@ -719,11 +719,12 @@ A separate read-only `InspectPinnedHysteria` verifies the optional installed
 binary using exact upstream AMD64/ARM64 SHA-256, owner/mode/inode and
 no-symlink path checks. It reuses the Linux trusted-executable inspection
 shared with WSS; neither the optional binary nor certificates are installed
-by these APIs. **No canonical Engine/State QUIC transaction, crash journal,
-committed Link resource claims, service process owner or reboot identity
-binding is yet connected to them.** A future runtime Engine must durably commit and
-re-check exact credential fingerprints under locks and journal partial
-effects before treating protected files or a helper as owned.
+by these APIs. The **source-only, non-runnable** canonical QUIC pre-effect
+journal described below can now durably reserve the proposed identities,
+but it neither calls these protected APIs nor attests/owns their actual
+files, executable, service or kernel generation. A future runtime Engine
+must recheck exact credential and executable fingerprints under locks and
+prove partial effects independently before treating any resource as owned.
 
 A follow-up, still **non-runnable** public-topology admission function,
 `quic.Plan.CarrierClaims(localKernelWGUDPPort)`, now proposes the exact
@@ -737,9 +738,11 @@ The helper, per-Link TLS-identity and scoped nft guard have distinct
 secret-free resource identities. Listen rejects a mismatched local
 WireGuard/ACL port and either role rejects an intra-Link helper/WG
 socket-port collision; renderer validation shares the role/port contract.
-These are candidate claim identities **only**: no durable QUIC
-State/claim, journal, actual socket reservation, nft rule, service identity,
-certificate admission, helper start or public QUIC Link activation exists.
+These are **only proposed identities**, not host ownership; the bounded
+source-only Engine journal below can also durably preserve these claims.
+There is still no committed runnable QUIC Link, actual socket reservation,
+nft rule, service identity, certificate admission, helper start or public
+QUIC Link activation.
 
 A separate **read-only source-only** `app.Engine.CheckQUICPreparation` now
 consumes `quic.Plan.LocalAdmission`'s validated, port-only projection and
@@ -765,10 +768,52 @@ This check performs no QUIC staging, State mutation, journal, or runtime
 operation. Its locks are released before it returns; a clean preview is not
 an exclusive reservation, a service/binary/TLS attestation, global
 cross-namespace WireGuard identity proof or permission for any host effect.
-Future Engine-owned staging must repeat and strengthen admission under held
-locks, durably publish a full pre-effect journal before the first protected
-file/host mutation, bind exact immutable Plan and fingerprint identities and
-provide fail-closed partial-effect recovery.
+
+The separate **source-only** `Engine.PrepareQUICCrash` now reuses that
+same canonical locked admission to durably write one **pre-effect QUIC
+intent** in the existing private, atomic desired-State v4 FileStore. The
+first journal is **for a NEW, uncommitted Link only**. It captures the
+complete public endpoint-local role and physical QUIC/TLS Plan (not only
+local UDP port projections), private Link Addresses, public WireGuard
+configuration and exactly
+derived provider + carrier claims, a unique Engine-issued nonce, the
+**expected-only** role-specific TLS certificate/CA/bearer fingerprints,
+helper-config SHA-256, and expected pinned-executable path/SHA-256/inode.
+Before writing it the Engine validates local/peer private routes and rules
+out the physical QUIC endpoint being swallowed by either private route.
+The final State collision check and journal publication occur under
+maintenance -> Link -> resource -> shared restore-persistence locks. The
+restore lock also serializes ordinary last-Link Remove and empty-State
+RestoreAll unit cleanup: both must retain an existing owned reboot restore
+unit while any unresolved QUIC journal remains. Ordinary independent Link
+removal still succeeds; the unit is retired only after no committed Link or
+protected QUIC/WSS pre-effect reservation remains. A source-only QUIC journal
+does **not** install a restore unit that was absent to begin with. These
+locks and expected identities do not attest that credential files, the
+binary, peer authentication or a process/kernel owner actually exist.
+
+An unresolved QUIC journal survives State reload and publication
+uncertainty, reserves its **full local resources** against unrelated Links,
+rejects duplicate/new use of its Link ID, and blocks ordinary Ensure/Remove
+and empty-State restore-unit retirement. Its content cannot be altered or
+silently removed through the normal FileStore.Update path: **no automatic
+replay, rollback, replacement, or deletion** of an uncertain QUIC generation
+is authorized. The additive `quic_crash_operations` field uses the same
+State v4 store; legacy v1-v3 documents cannot graft a QUIC journal during
+migration, and older strict readers lacking this field fail closed rather
+than silently ignore an unknown pending operation. Release-level State
+compatibility must be verified before this source-only writer becomes
+available in installed versions.
+
+This first journal merely establishes the durable **pre-effect boundary**.
+No CLI, installer, managed native-WG or Hysteria helper calls it; it does
+not stage any protected file or perform host effects. In particular,
+check-then-commit locks do not remain held after the call, and a stored
+nonce/claim is **NOT** an actual port reservation, executable spawn permit
+or proof of ownership. Later reviewed code must re-validate actual
+credentials and binary/config under held locks, supply an ownership-aware
+host-effect transaction and exact partial-effect recovery/remove/retirement
+before exposing an operable QUIC Link.
 
 The separate **source-only** `quic.StageHelperConfig` and read-only
 `quic.InspectHelperConfig` provide checked, deterministic `helper.json`
@@ -788,12 +833,13 @@ never belongs in ordinary Link State, diagnostics or arguments. Opt-in
 tests additionally exercise an **actual pinned official Hysteria binary**
 for config staging/readback without spawning a helper.
 
-The Engine still does **not** call these functions. The caller MUST hold
-the canonical maintenance/Link/resource locks and first durably journal
+The Engine still does **not** call these protected credential/config
+functions. A future effectful caller MUST hold the canonical maintenance,
+Link and resource locks and first have durably journaled the complete
 anticipated effects. These source-only APIs cannot certify peer matching,
-live UDP vacancy or a safe process start. The future Engine must commit
-and re-inspect the exact Plan, helper executable/config and credentials
-before starting/restarting the helper, then prove real owned host effects.
+live UDP vacancy or a safe process start. The future Engine must bind and
+re-inspect the exact Plan, installed executable/config and credentials
+before starting/restarting a helper, then prove actual owned host effects.
 Changing a Dial TLS peer name before a committed Engine Plan is bound
 cannot be inferred from the client's leaf certificate alone; the exact
 protected config and later durable State identity must provide that bind.
@@ -976,6 +1022,14 @@ claims. This is a **reservation/quarantine**, not proof of nft/kernel/systemd
 ownership and not authorization to delete a named object.
 
 Journal publication and fsync must succeed before the first host effect.
+In the current development candidate, the WSS journal writer also takes
+the existing shared restore-persistence lock **after** maintenance, Link
+and resource locks and holds it through durable State publication, just
+like the source-only QUIC journal. This prevents last-Link Remove or
+empty-State RestoreAll from deleting an existing owned reboot unit based
+on a snapshot predating an unresolved WSS journal. The restore lock is
+released before backend Apply; unrelated Links remain independent. This
+synchronization correction is not part of the installed Stable v0.1.12.
 Successful Ensure/Remove consumes the *exact* record in the same atomic
 State commit as the Link change. Crash/failed compensation/unknown host
 state retains the journal, blocks automatic Link replay and reserves

@@ -43,6 +43,15 @@ type QUICHostCollisionInspector interface {
 // global kernel identity vacancy or authorize recovery/deletion of old links.
 func (e *Engine) CheckQUICPreparation(ctx context.Context, plan composition.QUICLocalAdmission,
 	provider QUICWireGuardProvider, host QUICHostCollisionInspector) ([]domain.ResourceClaim, error) {
+	return e.checkQUICPreparation(ctx, plan, provider, host, nil)
+}
+
+// checkQUICPreparation shares the exact canonical lock/host admission path
+// between read-only preview and durable journal publication. Only the latter
+// supplies an under-lock callback; successful preview alone remains inert.
+func (e *Engine) checkQUICPreparation(ctx context.Context, plan composition.QUICLocalAdmission,
+	provider QUICWireGuardProvider, host QUICHostCollisionInspector,
+	afterVacant func([]domain.ResourceClaim) error) ([]domain.ResourceClaim, error) {
 	const operation = "quic_preparation"
 	invalid := func(detail string) error {
 		return stlerr.New(stlerr.CodeInvalid, operation, string(plan.LinkID), "quic", detail)
@@ -148,10 +157,20 @@ func (e *Engine) CheckQUICPreparation(ctx context.Context, plan composition.QUIC
 	if ctx.Err() != nil {
 		return nil, unknown("live collision inspection was interrupted")
 	}
+	if afterVacant != nil {
+		// No caller may publish and then perform host effects after this
+		// function has returned; the resource locks are released on exit.
+		if err := afterVacant(claims); err != nil {
+			return nil, err
+		}
+	}
 	return claims, nil
 }
 
 func quicLinkIdentityReserved(s state.Snapshot, id domain.LinkID) bool {
+	if _, ok := s.FindQUICCrashOperation(id); ok {
+		return true
+	}
 	if _, ok := s.Find(id); ok {
 		return true
 	}
