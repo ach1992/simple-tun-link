@@ -725,6 +725,26 @@ connected to them.** A future runtime Engine must durably commit and
 re-check exact credential fingerprints under locks and journal partial
 effects before treating protected files or a helper as owned.
 
+A follow-up, still **non-runnable** public-topology admission function,
+`quic.Plan.CarrierClaims(localKernelWGUDPPort)`, now proposes the exact
+host-wide exclusive UDP reservations for a future composed Engine plan:
+the **local native kernel-WireGuard UDP listen port** plus either the Dial
+role's `127.0.0.1` helper forwarder port or the Listen role's physical
+QUIC UDP listener. The Dial peer's remote WireGuard destination port is
+**not** a local reservation. Existing STL UDP-port collision semantics
+apply conservatively across bind addresses and native/WSS/QUIC adapters.
+The helper, per-Link TLS-identity and scoped nft guard have distinct
+secret-free resource identities. Listen rejects a mismatched local
+WireGuard/ACL port and either role rejects an intra-Link helper/WG
+socket-port collision; renderer validation shares the role/port contract.
+These are candidate claim identities **only**: no Engine lock, durable
+State/claim, journal, real socket reservation, nft rule, service identity,
+certificate admission, helper start or public QUIC Link activation has
+been performed. The future canonical Engine must union the carrier claims
+with the complete native WireGuard/provider/interface/address claims,
+independently verify host ownership and record the entire pre-effect
+reservation before any mutation.
+
 The adapter's opt-in disposable loopback compatibility test uses the
 pinned, hash-checked official Hysteria binary with **Go-issued per-Link
 TLS/mTLS credentials and bearer**, not manually authored helper JSON or

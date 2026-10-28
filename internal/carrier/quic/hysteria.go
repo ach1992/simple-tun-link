@@ -148,6 +148,9 @@ func Build(plan Plan, binary, privateRoot, authorizationToken string) (Command, 
 	if !validTLSName(plan.TLSName, plan.Underlay.Addr()) {
 		return Command{}, errors.New("QUIC requires the exact physical IP SAN or canonical DNS TLS identity")
 	}
+	if err := plan.validateRolePorts(); err != nil {
+		return Command{}, err
+	}
 	root := filepath.Join(privateRoot, "credentials", "quic", string(plan.LinkID))
 	ca := filepath.Join(root, "server-ca.pem")
 	clientCA := filepath.Join(root, "client-ca.pem")
@@ -161,9 +164,6 @@ func Build(plan Plan, binary, privateRoot, authorizationToken string) (Command, 
 	var config any
 	switch plan.Role {
 	case Dial:
-		if plan.LocalForwardUDPPort == 0 || plan.PeerWGUDPPort == 0 || plan.LocalWGUDPPort != 0 {
-			return Command{}, errors.New("QUIC dial requires only its loopback forwarding port and remote kernel-WG UDP port")
-		}
 		config = clientConfig{
 			Server: plan.Underlay.String(),
 			Auth:   authorizationToken,
@@ -177,9 +177,6 @@ func Build(plan Plan, binary, privateRoot, authorizationToken string) (Command, 
 		}
 		result.Args = append(result.Args, "client")
 	case Listen:
-		if plan.LocalWGUDPPort == 0 || plan.LocalForwardUDPPort != 0 || plan.PeerWGUDPPort != 0 {
-			return Command{}, errors.New("QUIC listen requires only its local kernel-WG UDP port")
-		}
 		sniGuard := "strict"
 		if _, err := netip.ParseAddr(plan.TLSName); err == nil {
 			// IP-literal clients do not necessarily send an SNI hostname; their
