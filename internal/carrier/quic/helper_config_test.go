@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"sync"
 	"testing"
 
@@ -96,8 +95,17 @@ func TestQUICProtectedHelperConfigStagingAndStrictReadback(t *testing.T) {
 			if !bytes.Contains(raw, []byte("\"tls\"")) || !bytes.Contains(raw, []byte("\"auth\"")) {
 				t.Fatal("helper config does not contain scoped Hysteria TLS and authorization")
 			}
-			if strings.Contains(fmt.Sprintf("%+v", got), fixtureToken) ||
-				strings.Contains(fmt.Sprintf("%+v", again), "PRIVATE KEY") {
+			bearer, err := os.ReadFile(filepath.Join(filepath.Dir(path), "authorization-token"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer clear(bearer)
+			token := bytes.TrimSpace(bearer)
+			if !bytes.Contains(raw, token) {
+				t.Fatal("config did not use its actual protected authorization token")
+			}
+			formatted := []byte(fmt.Sprintf("%+v / %#v", got, again))
+			if bytes.Contains(formatted, token) || bytes.Contains(formatted, []byte("PRIVATE KEY")) {
 				t.Fatal("public helper identity exposed protected content")
 			}
 		})
