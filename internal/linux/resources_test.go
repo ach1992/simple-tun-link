@@ -129,3 +129,35 @@ func TestCollisionInspectorIncludesBareHostRoutes(t *testing.T) {
 		t.Fatalf("bare host route was not reserved: %+v %v", conflicts, err)
 	}
 }
+
+func TestLiveUDPVacancyIncludesNativeIPsecWithoutPerLinkClaims(t *testing.T) {
+	for _, port := range []string{"500", "4500", "51821", "52211"} {
+		t.Run(port, func(t *testing.T) {
+			runner := resourceRunner{output: map[string]string{
+				"ip -json link show": "[]", "ip -json address show": "[]",
+				"ip -json route show table all": "[]",
+				"ss -H -u -l -n":                "UNCONN 0 0 0.0.0.0:" + port + " 0.0.0.0:*\n",
+			}}
+			inspector := CollisionInspector{Snapshotter: HostSnapshotter{Runner: runner}}
+			vacant, err := inspector.Vacant(context.Background(), []domain.ResourceClaim{
+				{Kind: domain.ResourceUDPListenPort, Key: port},
+			})
+			if err != nil || vacant {
+				t.Fatalf("live UDP %s listener treated as vacant: %t, %v", port, vacant, err)
+			}
+		})
+	}
+	// Missing host evidence is not proof of vacancy.
+	inspector := CollisionInspector{Snapshotter: HostSnapshotter{Runner: resourceRunner{
+		err: map[string]error{"ss -H -u -l -n": fmt.Errorf("cannot inspect")},
+		output: map[string]string{
+			"ip -json link show": "[]", "ip -json address show": "[]",
+			"ip -json route show table all": "[]",
+		},
+	}}}
+	if vacant, err := inspector.Vacant(context.Background(), []domain.ResourceClaim{
+		{Kind: domain.ResourceUDPListenPort, Key: "500"},
+	}); err == nil || vacant {
+		t.Fatalf("ambiguous listener inventory accepted: %t, %v", vacant, err)
+	}
+}

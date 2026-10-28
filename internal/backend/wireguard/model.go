@@ -220,21 +220,15 @@ func validateLink(link domain.Link) error {
 }
 
 func InterfaceName(id domain.LinkID) (string, error) {
-	if err := id.Validate(); err != nil {
-		return "", err
-	}
-	return "stlwg" + string(id)[4:14], nil
+	return composition.WireGuardInterfaceName(id)
 }
 
-func desiredResources(link domain.Link, name string, firewall domain.ResourceClaim) []domain.ResourceClaim {
-	return []domain.ResourceClaim{
-		{Kind: domain.ResourceInterface, Key: name},
-		{Kind: domain.ResourceLinkAddress, Key: link.Addresses.Local.Addr().String()},
-		{Kind: domain.ResourceLinkSubnet, Key: link.Addresses.Local.Masked().String()},
-		{Kind: domain.ResourceUDPListenPort, Key: strconv.Itoa(int(link.WireGuard.ListenPort))},
-		{Kind: domain.ResourceBackendID, Key: "wireguard/local-public/" + link.WireGuard.LocalPublicKey},
-		firewall,
+func desiredResources(link domain.Link, firewall domain.ResourceClaim) ([]domain.ResourceClaim, error) {
+	claims, err := composition.WireGuardProviderClaims(link.ID, link.Addresses.Local, link.WireGuard)
+	if err != nil {
+		return nil, err
 	}
+	return append(claims, firewall), nil
 }
 
 func endpoint(link domain.Link) string {

@@ -212,6 +212,18 @@ type CollisionInspector struct {
 	Extra       map[string]ResourceProbe
 }
 
+// Vacant is the read-only common-host admission surface for an optional
+// composed Carrier. It never treats inspection failures as an empty host.
+// It does not prove identity absence in other network namespaces or grant
+// permission to create, replace or delete a named resource.
+func (i CollisionInspector) Vacant(ctx context.Context, claims []domain.ResourceClaim) (bool, error) {
+	observed, err := i.Inspect(ctx, claims)
+	if err != nil {
+		return false, err
+	}
+	return len(observed) == 0, nil
+}
+
 func (i CollisionInspector) Inspect(ctx context.Context, claims []domain.ResourceClaim) ([]ObservedResource, error) {
 	snapshot, err := i.Snapshotter.Snapshot(ctx)
 	if err != nil {
