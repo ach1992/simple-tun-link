@@ -17,13 +17,12 @@ import (
 	"io"
 	"net/netip"
 	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/ach1992/simple-tun-link/internal/composition"
 	"github.com/ach1992/simple-tun-link/internal/credentials"
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/linux"
 	"golang.org/x/sys/unix"
 )
 
@@ -262,71 +261,12 @@ func hasExtKeyUsage(cert *x509.Certificate, required x509.ExtKeyUsage) bool {
 	return false
 }
 
-// ExecutableIdentity is read-only fingerprint and inode evidence, never a
-// permission to spawn the program after the descriptor has been closed.
-type ExecutableIdentity struct {
-	SHA256 string
-	Device uint64
-	Inode  uint64
-}
+// ExecutableIdentity retains the WSS API while sharing strict inode and
+// SHA-256 inspection with optional Carriers.
+type ExecutableIdentity = linux.PinnedExecutableIdentity
 
-// InspectPinnedExecutable refuses symlink paths, writable ancestor
-// substitution opportunities, foreign-owned/linked binaries and hashes not
-// matching the *externally approved* expected digest. Supplying a random
-// digest is NOT an approved supply-chain pin: the caller must use a reviewed
-// upstream release manifest and revalidate the identity at actual spawn time.
+// InspectPinnedExecutable is read-only. Runtime revalidates a previously
+// approved exact helper object before starting its managed process.
 func InspectPinnedExecutable(binary, expectedSHA256 string) (ExecutableIdentity, error) {
-	if !filepath.IsAbs(binary) || filepath.Clean(binary) != binary || binary == "/" ||
-		len(expectedSHA256) != 64 || strings.Trim(expectedSHA256, "0123456789abcdef") != "" {
-		return ExecutableIdentity{}, fmt.Errorf("pinned helper requires clean absolute path and exact lowercase SHA-256")
-	}
-	parts := strings.Split(strings.TrimPrefix(binary, "/"), "/")
-	parent, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return ExecutableIdentity{}, err
-	}
-	defer func() {
-		if parent >= 0 {
-			unix.Close(parent)
-		}
-	}()
-	for _, component := range parts[:len(parts)-1] {
-		fd, err := unix.Openat(parent, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-		if err != nil {
-			return ExecutableIdentity{}, fmt.Errorf("helper binary directory traversal is not trusted")
-		}
-		var st unix.Stat_t
-		if err := unix.Fstat(fd, &st); err != nil ||
-			st.Mode&unix.S_IFMT != unix.S_IFDIR ||
-			(st.Uid != 0 && st.Uid != uint32(os.Geteuid())) ||
-			(st.Mode&0o022 != 0 && st.Mode&unix.S_ISVTX == 0) {
-			unix.Close(fd)
-			return ExecutableIdentity{}, fmt.Errorf("helper binary path is not owner-controlled")
-		}
-		unix.Close(parent)
-		parent = fd
-	}
-	fd, err := unix.Openat(parent, parts[len(parts)-1], unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return ExecutableIdentity{}, fmt.Errorf("trusted helper executable cannot be opened")
-	}
-	file := os.NewFile(uintptr(fd), "pinned-wstunnel-helper")
-	defer file.Close()
-	var st unix.Stat_t
-	if err := unix.Fstat(fd, &st); err != nil ||
-		st.Mode&unix.S_IFMT != unix.S_IFREG ||
-		st.Uid != uint32(os.Geteuid()) ||
-		st.Mode&0o022 != 0 || st.Mode&0o111 == 0 || st.Mode&0o6000 != 0 ||
-		st.Nlink != 1 || st.Size <= 0 || st.Size > 100<<20 {
-		return ExecutableIdentity{}, fmt.Errorf("helper executable owner/mode/identity invalid")
-	}
-	h := sha256.New()
-	if _, err := io.Copy(h, io.LimitReader(file, 100<<20+1)); err != nil {
-		return ExecutableIdentity{}, fmt.Errorf("cannot hash pinned helper executable")
-	}
-	actual := hex.EncodeToString(h.Sum(nil))
-	if actual != expectedSHA256 {
-		return ExecutableIdentity{}, fmt.Errorf("pinned helper executable SHA-256 mismatch")
-	}
-	return ExecutableIdentity{SHA256: actual, Device: uint64(st.Dev), Inode: st.Ino}, nil
+	return linux.InspectPinnedExecutable(binary, expectedSHA256)
 }

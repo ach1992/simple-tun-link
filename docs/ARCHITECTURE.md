@@ -702,10 +702,28 @@ A separate, still **non-runnable** per-Link credential issuer creates two
 independent ephemeral CA signing authorities (server and client) and their
 role-specific TLS leaf identities plus a random 256-bit Link bearer. Only
 the appropriate leaf key, peer trust anchor and bearer are returned for each
-role; the CA signing keys are not exported or persisted. Bundles are sensitive
-in-memory data, **not** authorization to stage files, import credentials or
-start a helper. Safe Engine-owned protected staging, retirement and rotation
-are deliberately outstanding.
+role; the CA signing keys are not exported or persisted. Bundles are
+sensitive in-memory data, not authorization to import credentials, rotate
+identities or start a helper. A source-only preparation
+component now provides explicit, caller-locked `StageCredentials` and
+read-only `InspectCredentials`: per-Link/role exact four-file material under
+`$stateRoot/credentials/quic/<LinkID>/`, verified no-symlink `0700`
+directories, singly linked `0600` files, no-replace/idempotent bytes, TLS
+leaf purpose and exact server SAN checks, protected CA/bearer checks and
+public-only SHA-256 readback identities. Unexpected opposite-role material,
+credential drift and uncertain readback fail closed; a partial publication is
+**preserved**, not automatically deleted or overwritten. Local inspection
+cannot prove cross-host CA matching or authenticate a peer.
+
+A separate read-only `InspectPinnedHysteria` verifies the optional installed
+binary using exact upstream AMD64/ARM64 SHA-256, owner/mode/inode and
+no-symlink path checks. It reuses the Linux trusted-executable inspection
+shared with WSS; neither the optional binary nor certificates are installed
+by these APIs. **No canonical Engine/State transaction, QUIC journal, Link
+resource claims, service process owner or reboot identity binding is yet
+connected to them.** A future runtime Engine must durably commit and
+re-check exact credential fingerprints under locks and journal partial
+effects before treating protected files or a helper as owned.
 
 The adapter's opt-in disposable loopback compatibility test uses the
 pinned, hash-checked official Hysteria binary with **Go-issued per-Link
