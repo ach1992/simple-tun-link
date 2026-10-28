@@ -9,12 +9,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -268,6 +268,14 @@ func TestPinnedHysteriaRejectionEvidenceFailsClosed(t *testing.T) {
 // UDP forwarding. All sockets stay on loopback and never touch STL State,
 // WireGuard, nftables, systemd, kernel routes or physical peer servers.
 func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
+	for _, tlsName := range []string{"quic-probe.invalid", "127.0.0.1"} {
+		t.Run(tlsName, func(t *testing.T) {
+			runPinnedHysteriaLoopbackScenario(t, tlsName)
+		})
+	}
+}
+
+func runPinnedHysteriaLoopbackScenario(t *testing.T, tlsName string) {
 	bin := os.Getenv("STL_QUIC_HYSTERIA_BIN")
 	if bin == "" {
 		t.Skip("set STL_QUIC_HYSTERIA_BIN to the separately SHA-256 verified official app/v2.13.0 binary")
@@ -284,69 +292,53 @@ func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
 		t.Fatalf("not an approved pinned official v2.13.0 helper: SHA256=%s", archDigest)
 	}
 	clear(raw)
-	if _, err := exec.LookPath("openssl"); err != nil {
-		t.Skip("OpenSSL is required only for isolated, ephemeral E2E TLS test credentials")
-	}
 	root := t.TempDir()
 	link := domainTestLinkID()
 	private := filepath.Join(root, "credentials", "quic", string(link))
 	if err := os.MkdirAll(private, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	// Generate credentials purely for this disposable loopback scenario.
-	openssl := func(args ...string) {
+	// The real Go issuer supplies the exact Hysteria config's TLS/mTLS and
+	// independent per-Link bearer; no OpenSSL fixture or stored CA keys.
+	serverBundle, clientBundle, err := GeneratePair(link, tlsName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverBundle.Clear()
+	defer clientBundle.Clear()
+	secrets := clientBundle.ProtectedFiles()
+	token := strings.TrimSuffix(string(secrets["authorization-token"]), "\n")
+	clearProtectedCopies(secrets)
+	if !validToken(token) {
+		t.Fatal("issued QUIC authorization token malformed")
+	}
+	stage := func(bundle *CredentialBundle) {
 		t.Helper()
-		ctx, cancel := context.WithTimeout(context.Background(), 18*time.Second)
-		defer cancel()
-		c := exec.CommandContext(ctx, "openssl", args...)
-		c.Dir = private
-		// Never put any key or secret bytes in Go test output.
-		c.Stdout, c.Stderr = io.Discard, io.Discard
-		if err := c.Run(); err != nil {
-			t.Fatalf("OpenSSL test fixture step failed (%s): %v", args[0], err)
+		files := bundle.ProtectedFiles()
+		defer clearProtectedCopies(files)
+		for name, raw := range files {
+			path := filepath.Join(private, name)
+			if existing, err := os.ReadFile(path); err == nil {
+				same := bytes.Equal(existing, raw)
+				clear(existing)
+				if !same {
+					t.Fatalf("role credential collision %s", name)
+				}
+				continue
+			} else if !errors.Is(err, os.ErrNotExist) {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
-	openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes",
-		"-keyout", filepath.Join(private, "ca.key"),
-		"-out", filepath.Join(private, "ca.crt"),
-		"-days", "1", "-subj", "/CN=STL QUIC Test Only CA",
-		"-addext", "basicConstraints=critical,CA:TRUE",
-		"-addext", "keyUsage=critical,keyCertSign,cRLSign")
-	for _, item := range []struct {
-		prefix, subject, eku, extra string
-	}{
-		{"server", "/CN=quic-probe.invalid", "serverAuth", "subjectAltName=DNS:quic-probe.invalid\n"},
-		{"client", "/CN=stl-local-client", "clientAuth", ""},
-	} {
-		key := filepath.Join(private, item.prefix+".key")
-		csr := filepath.Join(private, item.prefix+".csr")
-		crt := filepath.Join(private, item.prefix+".crt")
-		openssl("req", "-newkey", "rsa:2048", "-nodes", "-keyout", key,
-			"-out", csr, "-subj", item.subject)
-		ext := filepath.Join(private, item.prefix+".ext")
-		if err := os.WriteFile(ext, []byte("extendedKeyUsage="+item.eku+
-			"\nkeyUsage=digitalSignature,keyEncipherment\n"+item.extra), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		openssl("x509", "-req", "-in", csr,
-			"-CA", filepath.Join(private, "ca.crt"),
-			"-CAkey", filepath.Join(private, "ca.key"), "-CAcreateserial",
-			"-out", crt, "-days", "1", "-extfile", ext)
-	}
-	for name, value := range map[string]string{
-		"server-ca.pem": "ca.crt", "client-ca.pem": "ca.crt",
-		"server-cert.pem": "server.crt", "server-key.pem": "server.key",
-		"client-cert.pem": "client.crt", "client-key.pem": "client.key",
-	} {
-		b, err := os.ReadFile(filepath.Join(private, value))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(private, name), b, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		clear(b)
-	}
+	// Only this disposable same-process local test combines two otherwise
+	// separate host role directories. Both copies of the token must agree.
+	stage(&serverBundle)
+	stage(&clientBundle)
+	serverBundle.Clear()
+	clientBundle.Clear()
 	reserve := func() uint16 {
 		t.Helper()
 		s, err := net.ListenPacket("udp4", "127.0.0.1:0")
@@ -385,19 +377,13 @@ func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
 		}
 	}()
 	defer func() { echo.Close(); wg.Wait() }()
-	// Separate per-Link credential: intentionally NOT copied into Plan.
-	tokenBytes := make([]byte, 32)
-	if _, err := rand.Read(tokenBytes); err != nil {
-		t.Fatal(err)
-	}
-	token := hex.EncodeToString(tokenBytes)
-	clear(tokenBytes)
+	// Issued token remains separate from the public Plan.
 	serverPort := reserve()
 	clientPort := reserve()
 	echoPort := uint16(echo.LocalAddr().(*net.UDPAddr).Port)
 	base := Plan{
 		LinkID: link, Underlay: netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), serverPort),
-		TLSName: "quic-probe.invalid",
+		TLSName: tlsName,
 	}
 	srv := base
 	srv.Role = Listen
@@ -414,7 +400,8 @@ func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	saveConfig := func(cmd Command, name string) string {
+	saveConfig := func(cmd *Command, name string) string {
+		defer cmd.Clear()
 		t.Helper()
 		b := cmd.ProtectedConfigBytes()
 		defer clear(b)
@@ -426,8 +413,8 @@ func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
 	}
 	// The two roles share a credential directory in this disposable single
 	// process fixture only. Real hosts use disjoint protected State roots.
-	serverPath := saveConfig(serverCmd, "server")
-	clientPath := saveConfig(clientCmd, "client")
+	serverPath := saveConfig(&serverCmd, "server")
+	clientPath := saveConfig(&clientCmd, "client")
 	run := func(command Command, conf, name string) *pinnedHelper {
 		t.Helper()
 		args := append([]string(nil), command.Args...)
@@ -496,7 +483,7 @@ func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
 				break
 			}
 			if retry == 3 {
-				for _, name := range []string{"server", "client", "bad-auth", "bad-destination"} {
+				for _, name := range []string{"server", "client", "bad-auth", "bad-mtls", "bad-destination"} {
 					raw, logErr := os.ReadFile(filepath.Join(root, name+".log"))
 					if logErr == nil {
 						// Never print arbitrary upstream logs on a failure path.
@@ -551,15 +538,59 @@ func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	badAuthPath := saveConfig(badAuthCmd, "bad-auth")
+	badAuthPath := saveConfig(&badAuthCmd, "bad-auth")
 	badAuthProcess := run(badAuthCmd, badAuthPath, "bad-auth")
 	badAuthProcess.waitRejected(t, "bearer")
-	// Rejected bearer must not be counted as a remotely authenticated peer.
+	// The server must not mistake a bad bearer for an authorized client.
 	observedServerLog := serverProcess.logBytes(t)
 	if n := bytes.Count(observedServerLog, []byte("client connected")); n != 1 {
 		t.Fatal("invalid bearer unexpectedly authenticated a QUIC client")
 	}
 	clear(observedServerLog)
+	// A correct bearer is insufficient without the exact per-Link client CA.
+	// Use a different isolated per-Link issuer while trusting the genuine
+	// server CA; this checks actual upstream client-certificate rejection.
+	foreignLink := domain.LinkID("lnk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	foreignServer, foreignClient, err := GeneratePair(foreignLink, base.TLSName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer foreignServer.Clear()
+	defer foreignClient.Clear()
+	foreignRoot := filepath.Join(root, "credentials", "quic", string(foreignLink))
+	if err := os.MkdirAll(foreignRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	foreignFiles := foreignClient.ProtectedFiles()
+	serverCA, err := os.ReadFile(filepath.Join(private, "server-ca.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	clear(foreignFiles["server-ca.pem"])
+	foreignFiles["server-ca.pem"] = serverCA
+	for name, raw := range foreignFiles {
+		if err := os.WriteFile(filepath.Join(foreignRoot, name), raw, 0o600); err != nil {
+			clearProtectedCopies(foreignFiles)
+			t.Fatal(err)
+		}
+	}
+	clearProtectedCopies(foreignFiles)
+	foreignPlan := dial
+	foreignPlan.LinkID = foreignLink
+	foreignPlan.LocalForwardUDPPort = reserve()
+	foreignCmd, err := Build(foreignPlan, bin, root, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignConfig := saveConfig(&foreignCmd, "bad-mtls")
+	foreignProcess := run(foreignCmd, foreignConfig, "bad-mtls")
+	foreignProcess.waitRejected(t, "client-ca")
+	observedServerLog = serverProcess.logBytes(t)
+	if n := bytes.Count(observedServerLog, []byte("client connected")); n != 1 {
+		t.Fatal("foreign client CA unexpectedly authenticated a QUIC client")
+	}
+	clear(observedServerLog)
+
 	forbidden, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -572,7 +603,7 @@ func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	forbiddenPath := saveConfig(forbiddenCmd, "bad-destination")
+	forbiddenPath := saveConfig(&forbiddenCmd, "bad-destination")
 	forbiddenProcess := run(forbiddenCmd, forbiddenPath, "bad-destination")
 	admitted := serverProcess.waitClientAdmissions(t, 2)
 	if len(admitted) != 2 || admitted[0].Addr == admitted[1].Addr {
@@ -609,7 +640,7 @@ func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
 		t.Fatal("allowed destination control failed after ACL rejection")
 	}
 	// Explicitly keep sensitive helper configs out of logging and reporting.
-	for _, name := range []string{"server", "client", "bad-auth", "bad-destination"} {
+	for _, name := range []string{"server", "client", "bad-auth", "bad-mtls", "bad-destination"} {
 		b, err := os.ReadFile(filepath.Join(root, name+".log"))
 		if err != nil {
 			t.Fatal(err)
@@ -618,7 +649,7 @@ func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
 			t.Fatal("Hysteria INFO log exposed live per-Link credentials")
 		}
 	}
-	t.Logf("pinned Hysteria v2.13.0 generated JSON E2E: TLS/mTLS + bearer UDP 100/100; invalid token and foreign UDP target denied")
+	t.Logf("pinned Hysteria v2.13.0 generated JSON E2E: issued TLS/mTLS + bearer UDP 100/100; invalid token, foreign client CA and UDP destination denied")
 }
 
 func domainTestLinkID() domain.LinkID {
