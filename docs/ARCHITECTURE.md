@@ -671,6 +671,54 @@ model, without creating per-screen diagnostic or logging engines:
   daemon, database or retention machinery only when justified by an owned
   runtime requirement.
 
+## Optional QUIC/UDP Carrier admission study (not a shipped Backend)
+
+[Issue #142](https://github.com/ach1992/simple-tun-link/issues/142) owns the
+decision, research and release/host gates for a **second** Carrier. Current
+physical IRPT-101 ↔ DE-Hamed-Test research established DE-initiated UDP/KCP
+payload delivery and DE-first QUIC Initial reachability, but **did not prove
+an authenticated QUIC 1-RTT session or a secure managed WireGuard Link over
+the physical public path**. TCP proxy/wrapper alternatives reuse the already
+working WSS TCP underlay; UDP QUIC can add a genuinely distinct *conditional*
+path. Paqet/PCK and destination-port hopping remain Owner-parked. No
+automatic Carrier fallback is implied.
+
+The **non-runnable** `internal/carrier/quic` adapter first targets an
+optionally installed, exact-SHA256-verified upstream Hysteria **app/v2.13.0**
+helper. It produces only public endpoint/role topology and a sensitive
+strictly scoped **JSON configuration** (never a ready-to-run STL Link),
+with separate Dial and Listen roles, an explicit physical QUIC UDP socket
+and a distinct Dial-side `127.0.0.1` UDP socket for **kernel WireGuard**
+forwarding. The protected config requires verified server TLS identity,
+client-certificate authentication through a restricted client CA, a second
+independent per-Link random authorization secret, and a server ACL accepting
+only the selected `127.0.0.1:<owned-kernel-WG-UDP-port>` destination with a
+final deny-all. No HTTP, SOCKS, unrestricted forwarding, proxy, TUN, Native
+GRE/IPIP/FOU/GUE or public-IP fallback is admitted. The binary and
+generated config are not silently installed or started, and the existing
+WSS/native Link schema, CLI, on-host helpers and v0.1.12 release are unchanged.
+
+The adapter's opted-in disposable loopback compatibility test uses a
+pinned, hash-checked official Hysteria binary and independently generated
+ephemeral CA, server and client certificates, plus an unrelated secret
+supplied separately from the public Plan. It validates actual QUIC
+TLS/mTLS/authenticated **100/100 loopback-forwarded UDP echoes at 1200 bytes** with the
+**JSON emitted by the Go builder**, and checks that incorrect authorization
+and an unlisted UDP destination cannot carry traffic. Additional local
+source tests exercised a verified IP-literal server SAN. These are **local
+Layer-A helper/serialization results**, not physical Layer B/C acceptance
+or a security audit of unrelated upstream features.
+
+Before a public `wireguard-quic` (or equivalent explicitly approved) Link
+is enabled, the original Engine must own compatible provider/carrier
+composition and Link identity/State, an exact binary/credential trust
+chain and optional offline helper installation, bounded helper systemd
+ownership, physical UDP and loopback port reservation, the kernel WG
+ingress guard, crash journaling, true wire 1-RTT and private L3 tests,
+independent multi-Link coexistence, restore/remove and safe rollback.
+Enable only one precise combination after validating these gates; do
+not build a generic plugin API or a second packet Engine preemptively.
+
 ## WireGuard over WSS (implemented in Stable v0.1.10+)
 
 One canonical Link identity has Backend wireguard-wss (never Native WG
