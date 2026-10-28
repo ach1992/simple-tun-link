@@ -74,3 +74,20 @@ func (p Plan) CarrierClaims(localKernelWGUDPPort uint16) ([]domain.ResourceClaim
 	}
 	return projection.CarrierClaims()
 }
+
+// HostPlan is a complete, public-only journal projection of the exact QUIC
+// Plan. It does not prove credentials, socket vacancy or authorization for
+// helper/host effects, which remain the canonical Engine's responsibility.
+func (p Plan) HostPlan(localKernelWGUDPPort uint16) (composition.QUICHostPlan, error) {
+	local, err := p.LocalAdmission(localKernelWGUDPPort)
+	if err != nil {
+		return composition.QUICHostPlan{}, err
+	}
+	full := composition.QUICHostPlan{
+		Local: local, Physical: p.Underlay, TLSName: p.TLSName,
+	}
+	if err := full.Validate(); err != nil {
+		return composition.QUICHostPlan{}, err
+	}
+	return full, nil
+}

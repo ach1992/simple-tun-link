@@ -274,6 +274,10 @@ func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.
 	if err != nil {
 		return Result{}, stlerr.Wrap(stlerr.CodeState, "remove", string(id), "", "cannot load local state", err)
 	}
+	if _, pending := snapshot.FindQUICCrashOperation(id); pending {
+		return Result{}, stlerr.New(stlerr.CodeConflict, "remove", string(id), "quic",
+			"unresolved QUIC pre-effect journal blocks Remove without exact-owned reconciliation")
+	}
 	if _, pending := snapshot.FindWSSCrashOperation(id); pending {
 		blocked := stlerr.New(stlerr.CodeConflict, "remove", string(id), string(domain.BackendWireGuardWSS),
 			"WSS pre-effect crash journal blocks Remove until explicit reconciliation")
@@ -390,6 +394,10 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 			string(desired.Backend), "superseded WSS original remains protected; ordinary Ensure cannot reactivate it")
 		blocked.ReasonCode = "wss_original_superseded"
 		return Result{}, blocked
+	}
+	if _, pending := snapshot.FindQUICCrashOperation(desired.ID); pending {
+		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID), "quic",
+			"unresolved QUIC pre-effect journal blocks ordinary Ensure")
 	}
 	if _, pending := snapshot.FindWSSCrashOperation(desired.ID); pending {
 		blocked := stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID),
@@ -584,6 +592,11 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 			"wireguard-wss", "superseded WSS original cannot be restored or re-ensured")
 		blocked.ReasonCode = "wss_original_superseded"
 		return Result{}, blocked
+	}
+	if _, pending := fresh.FindQUICCrashOperation(link.ID); pending {
+		return Result{}, stlerr.New(stlerr.CodeConflict, string(request.Operation),
+			string(link.ID), string(link.Backend),
+			"unfinished QUIC pre-effect journal: no host mutation permitted")
 	}
 	if _, pending := fresh.FindWSSCrashOperation(link.ID); pending {
 		return Result{}, stlerr.New(stlerr.CodeConflict, string(request.Operation),
@@ -1419,6 +1432,28 @@ func rejectResourceConflicts(snapshot state.Snapshot, id domain.LinkID, wanted [
 				if conflict {
 					return stlerr.New(stlerr.CodeConflict, "validate_resources", string(id), "",
 						"resource reserved by unresolved WSS crash operation")
+				}
+			}
+		}
+	}
+	// An uncommitted QUIC transaction is not a healthy Link, but its full
+	// local WG/helper/interface/address resources remain reserved across
+	// process restarts until exact-owned recovery is available. Never infer
+	// that a missing live listener makes its intent dispensable.
+	for _, pending := range snapshot.QUICCrashOperations {
+		if pending.Plan.Local.LinkID == id {
+			continue
+		}
+		for _, wantedClaim := range wanted {
+			for _, reserved := range pending.Resources {
+				conflict, err := domain.ResourceClaimsConflict(wantedClaim, reserved)
+				if err != nil {
+					return stlerr.Wrap(stlerr.CodeState, "validate_resources", string(id), "",
+						"cannot compare interrupted QUIC resource reservation", err)
+				}
+				if conflict {
+					return stlerr.New(stlerr.CodeConflict, "validate_resources", string(id), "",
+						"resource reserved by unresolved QUIC crash operation")
 				}
 			}
 		}

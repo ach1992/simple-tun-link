@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -69,6 +70,7 @@ type Snapshot struct {
 	IPsecRemovalReceipts   []IPsecRemovalReceipt   `json:"ipsec_removal_receipts,omitempty"`
 	RemovalReceipts        []RemovalReceipt        `json:"removal_receipts,omitempty"`
 	WSSCrashOperations     []WSSCrashOperation     `json:"wss_crash_operations,omitempty"`
+	QUICCrashOperations    []QUICCrashOperation    `json:"quic_crash_operations,omitempty"`
 }
 
 func EmptySnapshot() Snapshot {
@@ -144,6 +146,11 @@ func (s *Snapshot) normalize() {
 	}
 	sort.Slice(s.WSSCrashOperations, func(i, j int) bool {
 		return s.WSSCrashOperations[i].Intent.ID < s.WSSCrashOperations[j].Intent.ID
+	})
+	// Do not normalize away duplicate/trimmed QUIC claims: such journals
+	// must fail validation instead of silently weakening their reservation.
+	sort.Slice(s.QUICCrashOperations, func(i, j int) bool {
+		return s.QUICCrashOperations[i].Plan.Local.LinkID < s.QUICCrashOperations[j].Plan.Local.LinkID
 	})
 }
 
@@ -221,12 +228,26 @@ func (s *FileStore) Update(ctx context.Context, mutate func(*Snapshot) error) er
 			originalSupersessions[record.Desired.ID] = record.WSSSupersededBy
 		}
 	}
+	// An unresolved QUIC pre-effect operation is immutable/quarantined
+	// until a separately reviewed exact-ownership reconciliation exists.
+	// Clone claim slices to detect in-place mutation by future Store callers.
+	originalQUIC := make([]QUICCrashOperation, len(snapshot.QUICCrashOperations))
+	for i, op := range snapshot.QUICCrashOperations {
+		originalQUIC[i] = op
+		originalQUIC[i].Resources = append([]domain.ResourceClaim(nil), op.Resources...)
+	}
 	if err := mutate(&snapshot); err != nil {
 		return err
 	}
 	snapshot.normalize()
 	if err := validateSnapshot(snapshot); err != nil {
 		return err
+	}
+	for _, old := range originalQUIC {
+		current, found := snapshot.FindQUICCrashOperation(old.Plan.Local.LinkID)
+		if !found || !reflect.DeepEqual(old, current) {
+			return fmt.Errorf("QUIC pre-effect journal cannot be altered or cleared without exact-owned reconciliation")
+		}
 	}
 	for id, replacement := range originalSupersessions {
 		if retained, found := snapshot.Find(id); found {
@@ -306,8 +327,8 @@ func (s *FileStore) loadUnlocked() (Snapshot, error) {
 	return snapshot, nil
 }
 
-// Older State schemas may not gain WSS host effects through JSON whitespace,
-// alternate key casing, or nested Link option fields during migration.
+// Older State schemas may not gain WSS or QUIC host effects through JSON
+// whitespace, alternate key casing, or nested Link fields during migration.
 // Detect keys via actual JSON structure instead of a fragile raw substring.
 func rejectLegacyWSSFields(raw []byte) error {
 	var document any
@@ -320,7 +341,8 @@ func rejectLegacyWSSFields(raw []byte) error {
 		case map[string]any:
 			for key, child := range current {
 				if strings.EqualFold(key, "wss") ||
-					strings.EqualFold(key, "wss_crash_operations") {
+					strings.EqualFold(key, "wss_crash_operations") ||
+					strings.EqualFold(key, "quic_crash_operations") {
 					return true
 				}
 				if contains(child) {
@@ -538,7 +560,10 @@ func validateSnapshot(snapshot Snapshot) error {
 	if err := validateIPsecRemovalReceipts(snapshot); err != nil {
 		return err
 	}
-	return validateWSSCrashOperations(snapshot)
+	if err := validateWSSCrashOperations(snapshot); err != nil {
+		return err
+	}
+	return validateQUICCrashOperations(snapshot)
 }
 
 func cloneRecord(record LinkRecord) LinkRecord {

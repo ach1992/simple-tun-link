@@ -31,6 +31,10 @@ func (e *Engine) RestoreAll(ctx context.Context) ([]Result, error) {
 	// A crash journal is NOT a committed, healthy Link, and an empty
 	// desired-State snapshot with pending effects is not proof that the
 	// host can be cleaned up or ordinary restore safely replayed.
+	if len(snapshot.QUICCrashOperations) > 0 && len(snapshot.Links) == 0 {
+		return nil, stlerr.New(stlerr.CodeConflict, "restore_all", "", "quic",
+			"unresolved QUIC pre-effect intent prevents empty-State restore-unit cleanup")
+	}
 	if len(snapshot.WSSCrashOperations) > 0 && len(snapshot.Links) == 0 {
 		return nil, stlerr.New(stlerr.CodeConflict, "restore_all", "", "wireguard-wss",
 			"unresolved WSS pre-effect transaction prevents empty-State restore-unit cleanup")
@@ -44,6 +48,10 @@ func (e *Engine) RestoreAll(ctx context.Context) ([]Result, error) {
 			return nil, stlerr.Wrap(stlerr.CodeState, "restore_all", "", "", "cannot lock restore persistence", lockErr)
 		}
 		fresh, reconcileErr := e.store.Load(ctx)
+		if reconcileErr == nil && len(fresh.Links) == 0 && len(fresh.QUICCrashOperations) > 0 {
+			reconcileErr = stlerr.New(stlerr.CodeConflict, "restore_all", "", "quic",
+				"unresolved QUIC pre-effect intent prevents restore-unit cleanup")
+		}
 		if reconcileErr == nil && len(fresh.Links) == 0 {
 			committed := false
 			if witness, ok := e.store.(interface {
@@ -85,6 +93,11 @@ func (e *Engine) RestoreAll(ctx context.Context) ([]Result, error) {
 			// A superseded original is retained as protected State, not as a
 			// desired active service. This applies even after a trusted new
 			// kernel generation or a manual cold-boot witness.
+			continue
+		}
+		if _, unresolved := snapshot.FindQUICCrashOperation(record.Desired.ID); unresolved {
+			perLinkFailures = append(perLinkFailures, stlerr.New(stlerr.CodeConflict,
+				"restore", string(record.Desired.ID), "quic", "unresolved QUIC pre-effect journal blocks automatic Link replay"))
 			continue
 		}
 		if _, unresolved := snapshot.FindWSSCrashOperation(record.Desired.ID); unresolved {
