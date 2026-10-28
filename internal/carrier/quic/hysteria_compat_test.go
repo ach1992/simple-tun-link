@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -69,21 +70,118 @@ func (h *pinnedHelper) waitReady(t *testing.T) {
 	t.Fatalf("%s helper did not produce the post-authentication UDP listener readiness marker", h.name)
 }
 
+// Hysteria v2.13.0 emits tab-separated server INFO/WARN events with
+// structured JSON fields. Do not mistake generic log text for ACL proof.
+type pinnedServerEvent struct {
+	Addr      string `json:"addr"`
+	ID        string `json:"id"`
+	SessionID uint32 `json:"sessionID"`
+	Error     string `json:"error"`
+}
+
+func pinnedServerLogEvents(log []byte, name string) ([]pinnedServerEvent, error) {
+	var result []pinnedServerEvent
+	tag := []byte("\t" + name)
+	for _, line := range bytes.Split(log, []byte("\n")) {
+		lastTab := bytes.LastIndexByte(line, '\t')
+		if lastTab < 0 || !bytes.HasSuffix(line[:lastTab], tag) {
+			continue
+		}
+		var item pinnedServerEvent
+		if err := json.Unmarshal(line[lastTab+1:], &item); err != nil ||
+			item.Addr == "" || item.ID == "" {
+			return nil, fmt.Errorf("malformed Hysteria %s event", name)
+		}
+		result = append(result, item)
+	}
+	return result, nil
+}
+
+// Prove rejection using upstream's exact "rejected" error for the
+// authenticated forbidden QUIC client, not absent UDP response alone.
+func pinnedACLRejected(log []byte, client pinnedServerEvent) (bool, error) {
+	events, err := pinnedServerLogEvents(log, "UDP error")
+	if err != nil {
+		return false, err
+	}
+	for _, event := range events {
+		if event.Addr == client.Addr && event.ID == client.ID && event.Error == "rejected" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (h *pinnedHelper) waitACLRejected(t *testing.T, client pinnedServerEvent) {
+	t.Helper()
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		log := h.logBytes(t)
+		rejected, err := pinnedACLRejected(log, client)
+		clear(log)
+		if err != nil {
+			t.Fatalf("pinned Hysteria ACL log cannot be parsed: %v", err)
+		}
+		if rejected {
+			if exited, e := h.exited(); exited {
+				t.Fatalf("server exited after supposed ACL rejection: %v", e)
+			}
+			return
+		}
+		if exited, e := h.exited(); exited {
+			t.Fatalf("server exited before ACL rejection: %v", e)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatal("server did not record a correlated ACL rejection; UDP timeout is not proof")
+}
+
+// Missing helpers, unrelated forwarding errors and other client sessions
+// must not satisfy the ACL policy rejection assertion.
+func TestPinnedHysteriaServerACLRejectionEvidenceFailsClosed(t *testing.T) {
+	client := pinnedServerEvent{Addr: "127.0.0.1:52001", ID: "user"}
+	const warn = "2026-10-28\tWARN\t"
+	for _, tc := range []struct {
+		name string
+		log  string
+		want bool
+	}{
+		{"absent-helper", "", false},
+		{"admission-only", "2026-10-28\tINFO\tclient connected\t{\"addr\":\"127.0.0.1:52001\",\"id\":\"user\"}\n", false},
+		{"unrelated-timeout", warn + "UDP error\t{\"addr\":\"127.0.0.1:52001\",\"id\":\"user\",\"sessionID\":9,\"error\":\"i/o timeout\"}\n", false},
+		{"wrong-client", warn + "UDP error\t{\"addr\":\"127.0.0.1:52002\",\"id\":\"user\",\"sessionID\":9,\"error\":\"rejected\"}\n", false},
+		{"wrong-id", warn + "UDP error\t{\"addr\":\"127.0.0.1:52001\",\"id\":\"other\",\"sessionID\":9,\"error\":\"rejected\"}\n", false},
+		{"non-event-text", "UDP error rejected with no structured event", false},
+		{"exact-reject", warn + "UDP error\t{\"addr\":\"127.0.0.1:52001\",\"id\":\"user\",\"sessionID\":9,\"error\":\"rejected\"}\n", true},
+	} {
+		got, err := pinnedACLRejected([]byte(tc.log), client)
+		if err != nil || got != tc.want {
+			t.Fatalf("%s got=%t want=%t err=%v", tc.name, got, tc.want, err)
+		}
+	}
+	if _, err := pinnedACLRejected([]byte(warn+"UDP error\t{invalid-json}\n"), client); err == nil {
+		t.Fatal("malformed ACL event must fail closed")
+	}
+}
+
 // Hysteria v2.13.0 emits this server INFO event only after successful
 // TLS/mTLS and bearer authentication. Check the server separately rather
 // than assuming that a client-local UDP port proves remote admission.
-func (h *pinnedHelper) waitClientAdmissions(t *testing.T, want int) {
+func (h *pinnedHelper) waitClientAdmissions(t *testing.T, want int) []pinnedServerEvent {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		log := h.logBytes(t)
-		count := bytes.Count(log, []byte("client connected"))
+		events, parseErr := pinnedServerLogEvents(log, "client connected")
 		clear(log)
-		if count >= want {
+		if parseErr != nil {
+			t.Fatalf("QUIC server admission event is unparseable: %v", parseErr)
+		}
+		if len(events) >= want {
 			if exited, err := h.exited(); exited {
-				t.Fatalf("QUIC server exited after recording %d authenticated sessions: %v", count, err)
+				t.Fatalf("QUIC server exited after recording %d authenticated sessions: %v", len(events), err)
 			}
-			return
+			return events
 		}
 		if exited, err := h.exited(); exited {
 			t.Fatalf("QUIC server exited while awaiting authenticated session: %v", err)
@@ -91,6 +189,7 @@ func (h *pinnedHelper) waitClientAdmissions(t *testing.T, want int) {
 		time.Sleep(25 * time.Millisecond)
 	}
 	t.Fatalf("QUIC server did not record %d authenticated sessions", want)
+	return nil
 }
 
 // Actual upstream v2.13.0 client initialization is eager; a failed TLS
@@ -400,14 +499,12 @@ func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
 				for _, name := range []string{"server", "client", "bad-auth", "bad-destination"} {
 					raw, logErr := os.ReadFile(filepath.Join(root, name+".log"))
 					if logErr == nil {
-						if bytes.Contains(raw, []byte(token)) {
-							t.Fatal("secret appeared in Hysteria INFO log")
-						}
-						text := string(raw)
-						if len(text) > 1300 {
-							text = text[len(text)-1300:]
-						}
-						t.Logf("%s Hysteria helper diagnostic: %s", name, text)
+						// Never print arbitrary upstream logs on a failure path.
+						t.Logf("%s helper evidence: ready=%t auth-http-404=%t udp-error=%t",
+							name, bytes.Contains(raw, []byte("UDP forwarding listening")),
+							bytes.Contains(raw, []byte("authentication error, HTTP status code: 404")),
+							bytes.Contains(raw, []byte("UDP error")))
+						clear(raw)
 					}
 				}
 				t.Fatalf("pinned QUIC helper could not relay byte-identical UDP payload %d; successful=%d", i, success)
@@ -477,14 +574,26 @@ func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
 	}
 	forbiddenPath := saveConfig(forbiddenCmd, "bad-destination")
 	forbiddenProcess := run(forbiddenCmd, forbiddenPath, "bad-destination")
-	serverProcess.waitClientAdmissions(t, 2)
+	admitted := serverProcess.waitClientAdmissions(t, 2)
+	if len(admitted) != 2 || admitted[0].Addr == admitted[1].Addr {
+		t.Fatal("forbidden client needs a distinct authenticated QUIC session")
+	}
+	beforeLog := serverProcess.logBytes(t)
+	alreadyRejected, err := pinnedACLRejected(beforeLog, admitted[1])
+	clear(beforeLog)
+	if err != nil || alreadyRejected {
+		t.Fatal("forbidden client's ACL rejection appeared before its test packet")
+	}
 	noAck(forbiddenProcess, restricted.LocalForwardUDPPort, "unlisted-destination")
+	serverProcess.waitACLRejected(t, admitted[1])
 	if err := forbidden.SetReadDeadline(time.Now().Add(300 * time.Millisecond)); err != nil {
 		t.Fatal(err)
 	}
 	data := make([]byte, 256)
 	if _, _, err := forbidden.ReadFrom(data); err == nil {
 		t.Fatal("unlisted UDP endpoint received unauthorized data")
+	} else if !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("forbidden UDP endpoint returned unexpected error: %v", err)
 	}
 	// A valid destination through the same authenticated server must still
 	// work after the forbidden destination attempt; deny-all is scoped.
