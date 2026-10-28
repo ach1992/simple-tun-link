@@ -79,7 +79,7 @@ func GeneratePair(id domain.LinkID, tlsName string) (listen, dial CredentialBund
 		return CredentialBundle{}, CredentialBundle{}, fmt.Errorf("issue QUIC client authority: %w", err)
 	}
 	serverCert, serverKey, err := generateLeaf(serverCA, serverCAKey,
-		"STL QUIC server", tlsName, x509.ExtKeyUsageServerAuth, now)
+		"STL QUIC server "+string(id), tlsName, x509.ExtKeyUsageServerAuth, now)
 	if err != nil {
 		clear(serverCAPEM)
 		clear(clientCAPEM)
