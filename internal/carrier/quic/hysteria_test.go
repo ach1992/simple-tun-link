@@ -173,6 +173,13 @@ func TestHysteriaConfigReturnsIndependentProtectedBytesAndMasksFormatting(t *tes
 			t.Fatalf("secret must be redacted in accidental formatting: %s", rep)
 		}
 	}
+	// Clearing the original builder-owned secret must neither retain a
+	// hidden second copy nor erase caller-owned protected staging bytes.
+	c.Clear()
+	if c.ProtectedConfigBytes() != nil || len(b) == 0 || !bytes.Contains(b, []byte(fixtureToken)) {
+		t.Fatal("Command Clear did not release original secret independently of caller copies")
+	}
+	c.Clear() // idempotent retirement
 	clear(a)
 	clear(b)
 }

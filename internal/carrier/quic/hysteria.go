@@ -59,8 +59,22 @@ type Command struct {
 // ProtectedConfigBytes returns a separate mutable copy of secret-bearing JSON.
 // The owner must write it atomically into a checked 0600 protected file,
 // clear the copy, and enforce exact helper/credential identity before startup.
+// A Command with live secret-bearing contents has one owner: do not copy it.
 func (c Command) ProtectedConfigBytes() []byte {
 	return append([]byte(nil), c.sensitiveConfig...)
+}
+
+// Clear explicitly erases the original secret-bearing builder buffer after
+// staging, regardless of the lifetime of separately returned caller copies.
+// Like CredentialBundle, copied Command values can alias this backing array:
+// preserve single-owner semantics until Engine integration provides the
+// verified protected staging boundary.
+func (c *Command) Clear() {
+	if c == nil {
+		return
+	}
+	clear(c.sensitiveConfig)
+	c.sensitiveConfig = nil
 }
 
 // String and GoString keep routine accidental formatting from exposing the
