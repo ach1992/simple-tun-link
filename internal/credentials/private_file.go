@@ -59,50 +59,82 @@ func requirePrivateFD(dirfd int) error {
 // ReadPrivateFile requires a singly linked, regular, bounded 0600 inode.
 // Data belongs to the caller and must be cleared after use.
 func ReadPrivateFile(dirfd int, name string) ([]byte, error) {
+	f, raw, err := openCheckedPrivateFile(dirfd, name)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return raw, nil
+}
+
+// openCheckedPrivateFile keeps the validated file descriptor open with its
+// read bytes. On an idempotent retry, synchronizing this very descriptor
+// avoids looking up a possibly substituted pathname after comparison.
+// The caller must close f and erase the returned bytes.
+func openCheckedPrivateFile(dirfd int, name string) (*os.File, []byte, error) {
 	if !safeChild(name) || requirePrivateFD(dirfd) != nil {
-		return nil, fmt.Errorf("invalid private credential reader")
+		return nil, nil, fmt.Errorf("invalid private credential reader")
 	}
 	fd, err := unix.Openat(dirfd, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, fmt.Errorf("protected credential is not readable")
+		return nil, nil, fmt.Errorf("protected credential is not readable")
 	}
 	f := os.NewFile(uintptr(fd), "protected-credential")
-	defer f.Close()
 	var st unix.Stat_t
 	if err := unix.Fstat(fd, &st); err != nil ||
 		st.Mode&unix.S_IFMT != unix.S_IFREG ||
 		st.Uid != uint32(os.Geteuid()) || st.Mode&0o777 != 0o600 ||
 		st.Nlink != 1 || st.Size < 1 || st.Size > MaxPrivateFileBytes {
-		return nil, fmt.Errorf("credential inode/mode/size invalid")
+		f.Close()
+		return nil, nil, fmt.Errorf("credential inode/mode/size invalid")
 	}
 	raw, err := io.ReadAll(io.LimitReader(f, MaxPrivateFileBytes+1))
 	if err != nil || len(raw) < 1 || len(raw) > MaxPrivateFileBytes {
 		clear(raw)
-		return nil, fmt.Errorf("cannot read bounded private credential")
+		f.Close()
+		return nil, nil, fmt.Errorf("cannot read bounded private credential")
 	}
-	return raw, nil
+	return f, raw, nil
 }
 
 // WritePrivateNoReplace publishes only to an already verified private
 // directory using O_EXCL; an existing file is accepted only when its exact
-// content and inode are trustworthy. Never remove a partial file on failure:
-// the eventual Engine owner must journal and reconcile it first.
+// content and inode are trustworthy AND the same inode has been synced.
+// Never remove a partial file on failure: the eventual Engine owner must
+// journal and reconcile it first.
 func WritePrivateNoReplace(dirfd int, name string, raw []byte) error {
+	return writePrivateNoReplaceWithSync(dirfd, name, raw, unix.Fsync, unix.Fsync)
+}
+
+// The non-exported sync seams permit deterministic failure/order tests.
+// Production always uses real Linux fsync for both the file and parent.
+func writePrivateNoReplaceWithSync(dirfd int, name string, raw []byte,
+	syncFile, syncDirectory func(int) error) error {
 	if !safeChild(name) || len(raw) == 0 || len(raw) > MaxPrivateFileBytes ||
-		requirePrivateFD(dirfd) != nil {
+		requirePrivateFD(dirfd) != nil || syncFile == nil || syncDirectory == nil {
 		return fmt.Errorf("invalid private credential publication")
 	}
 	fd, err := unix.Openat(dirfd, name, unix.O_CREAT|unix.O_EXCL|unix.O_WRONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
 	if err == unix.EEXIST {
-		existing, readErr := ReadPrivateFile(dirfd, name)
+		existingFile, existing, readErr := openCheckedPrivateFile(dirfd, name)
 		if readErr != nil {
 			return readErr
 		}
+		defer existingFile.Close()
 		defer clear(existing)
 		if !bytes.Equal(existing, raw) {
 			return fmt.Errorf("different protected credential already exists")
 		}
-		return unix.Fsync(dirfd)
+		// An interrupted previous write can have the correct cached bytes
+		// despite failed/missing file-data fsync. Sync the exact checked
+		// inode, not a newly resolved path, before the parent directory.
+		if err := syncFile(int(existingFile.Fd())); err != nil {
+			return fmt.Errorf("existing private credential sync failed; preserve for reconciliation: %w", err)
+		}
+		if err := syncDirectory(dirfd); err != nil {
+			return fmt.Errorf("private credential directory sync failed; preserve for reconciliation: %w", err)
+		}
+		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("private credential no-replace creation failed")
@@ -113,15 +145,15 @@ func WritePrivateNoReplace(dirfd int, name string, raw []byte) error {
 		f.Close()
 		return fmt.Errorf("private credential write incomplete; preserve for reconciliation")
 	}
-	if err := f.Sync(); err != nil {
+	if err := syncFile(fd); err != nil {
 		f.Close()
-		return fmt.Errorf("private credential sync failed; preserve for reconciliation")
+		return fmt.Errorf("private credential sync failed; preserve for reconciliation: %w", err)
 	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("private credential close failed; preserve for reconciliation")
 	}
-	if err := unix.Fsync(dirfd); err != nil {
-		return fmt.Errorf("private credential directory sync failed; preserve for reconciliation")
+	if err := syncDirectory(dirfd); err != nil {
+		return fmt.Errorf("private credential directory sync failed; preserve for reconciliation: %w", err)
 	}
 	return nil
 }

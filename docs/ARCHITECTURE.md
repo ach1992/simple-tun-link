@@ -745,6 +745,34 @@ with the complete native WireGuard/provider/interface/address claims,
 independently verify host ownership and record the entire pre-effect
 reservation before any mutation.
 
+The separate **source-only** `quic.StageHelperConfig` and read-only
+`quic.InspectHelperConfig` provide checked, deterministic `helper.json`
+publication for each Link's already-protected credential generation. Before
+staging, they validate the complete role/local UDP claim proposal, admit the
+exact official SHA-256-pinned Hysteria executable, read the appropriate
+role's protected 0600 certificate/key/CA and bearer through private
+descriptor-relative access, validate the TLS/Link identity and regenerate
+the exact role-specific Hysteria JSON. `helper.json` is then created only
+with no-replace 0600 semantics, and readback must match the exact freshly
+rendered bytes. Existing differing or untrusted files, opposite-role CA,
+permission/inode changes, or changed authenticated topology are refused
+without deleting/replacing uncertain material. Only secret-free
+`HelperConfigIdentity` evidence (config SHA-256, credential fingerprints
+and verified executable inode/hash) is returned; plaintext authorization
+never belongs in ordinary Link State, diagnostics or arguments. Opt-in
+tests additionally exercise an **actual pinned official Hysteria binary**
+for config staging/readback without spawning a helper.
+
+The Engine still does **not** call these functions. The caller MUST hold
+the canonical maintenance/Link/resource locks and first durably journal
+anticipated effects. These source-only APIs cannot certify peer matching,
+live UDP vacancy or a safe process start. The future Engine must commit
+and re-inspect the exact Plan, helper executable/config and credentials
+before starting/restarting the helper, then prove real owned host effects.
+Changing a Dial TLS peer name before a committed Engine Plan is bound
+cannot be inferred from the client's leaf certificate alone; the exact
+protected config and later durable State identity must provide that bind.
+
 The adapter's opt-in disposable loopback compatibility test uses the
 pinned, hash-checked official Hysteria binary with **Go-issued per-Link
 TLS/mTLS credentials and bearer**, not manually authored helper JSON or
