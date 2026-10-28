@@ -16,9 +16,9 @@ import (
 // come from a previously validated quic.Plan.HostPlan and anticipated
 // credential/config/executable fingerprints. This function generates the
 // transaction nonce and exact native+carrier claims, rechecks the fresh host
-// and State under canonical maintenance→Link→resource locks, then durably
-// writes the first pre-effect reservation BEFORE any other future writer
-// may stage protected files or mutate Linux resources.
+// and State under maintenance -> Link -> resource locks, then acquires the
+// shared restore-persistence lock to publish the durable pre-effect intent
+// BEFORE any future writer may stage files or mutate Linux resources.
 //
 // No protected file is written, service installed, helper spawned, firewall
 // configured, WG interface created, actual binary inspected, or credential
@@ -51,6 +51,15 @@ func (e *Engine) PrepareQUICCrash(ctx context.Context, intent state.QUICCrashOpe
 				return stlerr.New(stlerr.CodeInvalid, operation, string(id), "quic",
 					"incomplete canonical QUIC pre-effect identity or fingerprint binding")
 			}
+			// The shared restore unit must not be retired between the final
+			// State check and this journal publication. Take its existing lock
+			// AFTER Link/resource locks, matching ordinary Remove and RestoreAll.
+			releaseRestore, lockErr := e.locks.Acquire(ctx, []domain.ResourceClaim{restoreLockClaim()})
+			if lockErr != nil {
+				return stlerr.New(stlerr.CodeState, operation, string(id), "quic",
+					"cannot serialize QUIC journal with restore persistence")
+			}
+			defer releaseRestore()
 			// FileStore.Update is a serialized durable state publication; a
 			// concurrent state writer outside the initial snapshot still cannot
 			// bypass the exact post-lock recheck before the journal is appended.

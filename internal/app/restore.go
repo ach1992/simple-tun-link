@@ -52,6 +52,10 @@ func (e *Engine) RestoreAll(ctx context.Context) ([]Result, error) {
 			reconcileErr = stlerr.New(stlerr.CodeConflict, "restore_all", "", "quic",
 				"unresolved QUIC pre-effect intent prevents restore-unit cleanup")
 		}
+		if reconcileErr == nil && len(fresh.Links) == 0 && len(fresh.WSSCrashOperations) > 0 {
+			reconcileErr = stlerr.New(stlerr.CodeConflict, "restore_all", "", "wireguard-wss",
+				"unresolved WSS pre-effect intent prevents restore-unit cleanup")
+		}
 		if reconcileErr == nil && len(fresh.Links) == 0 {
 			committed := false
 			if witness, ok := e.store.(interface {

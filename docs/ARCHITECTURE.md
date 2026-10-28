@@ -781,10 +781,16 @@ derived provider + carrier claims, a unique Engine-issued nonce, the
 helper-config SHA-256, and expected pinned-executable path/SHA-256/inode.
 Before writing it the Engine validates local/peer private routes and rules
 out the physical QUIC endpoint being swallowed by either private route.
-A final State collision check and publication occur under the canonical
-maintenance -> Link -> resource locks. This is not an attestation that
-those credential files or the binary actually exist, and not evidence of
-successful QUIC peer authentication or a process/kernel owner.
+The final State collision check and journal publication occur under
+maintenance -> Link -> resource -> shared restore-persistence locks. The
+restore lock also serializes ordinary last-Link Remove and empty-State
+RestoreAll unit cleanup: both must retain an existing owned reboot restore
+unit while any unresolved QUIC journal remains. Ordinary independent Link
+removal still succeeds; the unit is retired only after no committed Link or
+protected QUIC/WSS pre-effect reservation remains. A source-only QUIC journal
+does **not** install a restore unit that was absent to begin with. These
+locks and expected identities do not attest that credential files, the
+binary, peer authentication or a process/kernel owner actually exist.
 
 An unresolved QUIC journal survives State reload and publication
 uncertainty, reserves its **full local resources** against unrelated Links,

@@ -1230,7 +1230,9 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 				return fmt.Errorf("WSS pre-effect journal cannot be consumed atomically")
 			}
 		}
-		remaining = len(snapshot.Links)
+		// Pending pre-effect journals still need the host restore entry point
+		// even after the last ordinary Link is durably removed.
+		remaining = len(snapshot.Links) + len(snapshot.QUICCrashOperations) + len(snapshot.WSSCrashOperations)
 		return nil
 	})
 	if commitErr != nil {
@@ -1295,9 +1297,9 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 	if undo != nil {
 		evidence.Rollback = "not_attempted"
 	}
-	// After the final desired Link is durably deleted, its owned reboot unit
-	// is no longer needed. An uncertain cleanup is reported as partial failure;
-	// never roll a removed Link back solely to conceal a unit cleanup error.
+	// Only after the final Link and protected pre-effect reservations are
+	// durably gone can the owned reboot unit be removed. Cleanup uncertainty
+	// is a partial failure; never roll back a committed Link removal for it.
 	evidence.Stage = "persistence_cleanup"
 	if request.Operation == backend.OperationRemove && remaining == 0 && e.restorePersistence != nil {
 		// The final owned unit cleanup may mutate systemd/unit files even

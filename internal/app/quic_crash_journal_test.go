@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -239,5 +240,229 @@ func TestPrepareQUICCrashConcurrentSameLinkOnlyOneDurableWinner(t *testing.T) {
 	fresh, err := store.Load(ctx)
 	if err != nil || len(fresh.QUICCrashOperations) != 1 {
 		t.Fatalf("concurrent publication duplicated journal: %+v %v", fresh, err)
+	}
+}
+
+// A test-only observer proves that QUIC publication participates in the
+// same restore-persistence lock as ordinary Remove and empty-State RestoreAll.
+// The underlying real file LockManager still enforces cross-Engine exclusion.
+type quicRestoreLockObserver struct {
+	Locker
+	attempted chan struct{}
+	held      atomic.Bool
+}
+
+func (o *quicRestoreLockObserver) Acquire(ctx context.Context, claims []domain.ResourceClaim) (func() error, error) {
+	if len(claims) != 1 || claims[0] != restoreLockClaim() {
+		return o.Locker.Acquire(ctx, claims)
+	}
+	if o.attempted != nil {
+		select {
+		case o.attempted <- struct{}{}:
+		default:
+		}
+	}
+	release, err := o.Locker.Acquire(ctx, claims)
+	if err != nil {
+		return nil, err
+	}
+	o.held.Store(true)
+	return func() error {
+		err := release()
+		o.held.Store(false)
+		return err
+	}, nil
+}
+
+type quicPublicationGateStore struct {
+	state.Store
+	lock    *quicRestoreLockObserver
+	entered chan struct{}
+	proceed <-chan struct{}
+}
+
+func (g *quicPublicationGateStore) Update(ctx context.Context, mutate func(*state.Snapshot) error) error {
+	close(g.entered)
+	if !g.lock.held.Load() {
+		return errors.New("QUIC publication attempted outside shared restore lock")
+	}
+	select {
+	case <-g.proceed:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return g.Store.Update(ctx, mutate)
+}
+
+// The gate pauses QUIC exactly at State publication while it owns the
+// restore lock. A concurrent last-Link Remove reaches the same lock before
+// QUIC is unblocked; it must then see the pending journal in committed State,
+// remove only the unrelated Link and KEEP the original host restore unit.
+func TestLastLinkRemoveCannotRetireRestoreWhenQUICJournalPublishesFirst(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	p := &fakeRestorePersistence{}
+	e, store := persistentTestEngine(t, newFakeBackend(), p)
+	link := linkFor(t, "remove-with-quic-intent", "10.80.192.0/31", "10.80.192.1/31")
+	if _, err := e.Ensure(ctx, link); err != nil {
+		t.Fatal(err)
+	}
+
+	publisher := *e
+	publisherLock := &quicRestoreLockObserver{Locker: e.locks}
+	publisher.locks = publisherLock
+	proceed := make(chan struct{})
+	defer func() {
+		select {
+		case <-proceed:
+		default:
+			close(proceed)
+		}
+	}()
+	entered := make(chan struct{})
+	publisher.store = &quicPublicationGateStore{Store: store, lock: publisherLock, entered: entered, proceed: proceed}
+	published := make(chan error, 1)
+	go func() {
+		_, err := publisher.PrepareQUICCrash(ctx, quicCrashIntentFixture(), &quicVacancyProbe{})
+		published <- err
+	}()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("QUIC publication did not reach controlled gate")
+	}
+	if !publisherLock.held.Load() {
+		t.Fatal("publisher did not hold shared restore lock before State publication")
+	}
+
+	remover := *e
+	removeAttempt := make(chan struct{}, 1)
+	remover.locks = &quicRestoreLockObserver{Locker: e.locks, attempted: removeAttempt}
+	removed := make(chan error, 1)
+	go func() {
+		_, err := remover.Remove(ctx, link.ID)
+		removed <- err
+	}()
+	select {
+	case <-removeAttempt:
+	case <-ctx.Done():
+		t.Fatal("last-Link Remove did not reach shared restore lock")
+	}
+	close(proceed)
+	if err := <-published; err != nil {
+		t.Fatalf("QUIC journal publication failed: %v", err)
+	}
+	if err := <-removed; err != nil {
+		t.Fatalf("independent ordinary Link removal failed: %v", err)
+	}
+	fresh, err := store.Load(ctx)
+	if err != nil || len(fresh.Links) != 0 || len(fresh.QUICCrashOperations) != 1 {
+		t.Fatalf("last-Link removal lost pending QUIC State: %+v %v", fresh, err)
+	}
+	p.mu.Lock()
+	active, removes := p.active, p.removes
+	p.mu.Unlock()
+	if !active || removes != 0 {
+		t.Fatalf("Remove retired shared restore unit despite QUIC journal: active=%t removes=%d", active, removes)
+	}
+}
+
+// RestoreAll first sees an empty snapshot, but the QUIC publisher commits
+// before its restore-persistence lock is available. Its under-lock recheck
+// must refuse cleanup rather than deleting the still-needed existing unit.
+func TestRestoreAllEmptyStateCleanupCannotRaceQUICPublication(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	p := &fakeRestorePersistence{active: true}
+	e, store := persistentTestEngine(t, newFakeBackend(), p)
+	if err := store.Update(ctx, func(*state.Snapshot) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	publisher := *e
+	publisherLock := &quicRestoreLockObserver{Locker: e.locks}
+	publisher.locks = publisherLock
+	proceed := make(chan struct{})
+	defer func() {
+		select {
+		case <-proceed:
+		default:
+			close(proceed)
+		}
+	}()
+	entered := make(chan struct{})
+	publisher.store = &quicPublicationGateStore{Store: store, lock: publisherLock, entered: entered, proceed: proceed}
+	published := make(chan error, 1)
+	go func() {
+		_, err := publisher.PrepareQUICCrash(ctx, quicCrashIntentFixture(), &quicVacancyProbe{})
+		published <- err
+	}()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("QUIC publication did not reach controlled gate")
+	}
+	if !publisherLock.held.Load() {
+		t.Fatal("publisher did not protect journal publication with restore lock")
+	}
+	restorer := *e
+	cleanupAttempt := make(chan struct{}, 1)
+	restorer.locks = &quicRestoreLockObserver{Locker: e.locks, attempted: cleanupAttempt}
+	restored := make(chan error, 1)
+	go func() {
+		_, err := restorer.RestoreAll(ctx)
+		restored <- err
+	}()
+	select {
+	case <-cleanupAttempt:
+	case <-ctx.Done():
+		t.Fatal("empty-State RestoreAll did not reach restore lock")
+	}
+	close(proceed)
+	if err := <-published; err != nil {
+		t.Fatalf("QUIC publication failed: %v", err)
+	}
+	if err := <-restored; stlerr.CodeOf(err) != stlerr.CodeConflict {
+		t.Fatalf("RestoreAll did not reject concurrently published intent: %v", err)
+	}
+	fresh, err := store.Load(ctx)
+	if err != nil || len(fresh.Links) != 0 || len(fresh.QUICCrashOperations) != 1 {
+		t.Fatalf("RestoreAll damaged QUIC journal: %+v %v", fresh, err)
+	}
+	p.mu.Lock()
+	active, removes := p.active, p.removes
+	p.mu.Unlock()
+	if !active || removes != 0 {
+		t.Fatalf("RestoreAll deleted original unit despite journal: active=%t removes=%d", active, removes)
+	}
+}
+
+// Removing the last ordinary Link is allowed with a non-conflicting QUIC
+// journal. Unlike an entirely empty State, it must leave persistence active.
+func TestLastOrdinaryLinkRemoveKeepsPendingQUICAndOwnedRestoreUnit(t *testing.T) {
+	ctx := context.Background()
+	p := &fakeRestorePersistence{}
+	e, store := persistentTestEngine(t, newFakeBackend(), p)
+	link := linkFor(t, "last-with-quic-intent", "10.80.194.0/31", "10.80.194.1/31")
+	if _, err := e.Ensure(ctx, link); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := e.PrepareQUICCrash(ctx, quicCrashIntentFixture(), &quicVacancyProbe{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed, err := e.Remove(ctx, link.ID)
+	if err != nil || !removed.Removed {
+		t.Fatalf("unrelated Link removal must succeed: %+v %v", removed, err)
+	}
+	fresh, err := store.Load(ctx)
+	if err != nil || len(fresh.Links) != 0 || len(fresh.QUICCrashOperations) != 1 ||
+		!reflect.DeepEqual(fresh.QUICCrashOperations[0], journal) {
+		t.Fatalf("Remove altered durable QUIC intent: %+v %v", fresh, err)
+	}
+	p.mu.Lock()
+	active, removes := p.active, p.removes
+	p.mu.Unlock()
+	if !active || removes != 0 {
+		t.Fatalf("last ordinary Link removed shared restore unit: active=%t removes=%d", active, removes)
 	}
 }
