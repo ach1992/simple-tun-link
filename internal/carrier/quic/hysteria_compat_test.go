@@ -21,6 +21,147 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/domain"
 )
 
+// pinnedHelper represents one exact started Hysteria process with a
+// separately retained exit result. A UDP read timeout is never sufficient
+// evidence of authorization rejection: negative tests must observe an
+// upstream-specific failure after the helper actually attempted admission.
+type pinnedHelper struct {
+	name    string
+	logPath string
+	done    chan struct{}
+	waitErr error // published by closing done; do not read until done closes
+}
+
+func (h *pinnedHelper) exited() (bool, error) {
+	select {
+	case <-h.done:
+		return true, h.waitErr
+	default:
+		return false, nil
+	}
+}
+
+func (h *pinnedHelper) logBytes(t *testing.T) []byte {
+	t.Helper()
+	b, err := os.ReadFile(h.logPath)
+	if err != nil {
+		t.Fatalf("%s helper log unavailable: %v", h.name, err)
+	}
+	return b // Private test fixture only: never print raw log bytes.
+}
+
+func (h *pinnedHelper) waitReady(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		log := h.logBytes(t)
+		ready := bytes.Contains(log, []byte("UDP forwarding listening"))
+		clear(log)
+		exited, err := h.exited()
+		if exited {
+			t.Fatalf("%s helper exited instead of completing QUIC authentication and local UDP bind: %v", h.name, err)
+		}
+		if ready {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("%s helper did not produce the post-authentication UDP listener readiness marker", h.name)
+}
+
+// Hysteria v2.13.0 emits this server INFO event only after successful
+// TLS/mTLS and bearer authentication. Check the server separately rather
+// than assuming that a client-local UDP port proves remote admission.
+func (h *pinnedHelper) waitClientAdmissions(t *testing.T, want int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		log := h.logBytes(t)
+		count := bytes.Count(log, []byte("client connected"))
+		clear(log)
+		if count >= want {
+			if exited, err := h.exited(); exited {
+				t.Fatalf("QUIC server exited after recording %d authenticated sessions: %v", count, err)
+			}
+			return
+		}
+		if exited, err := h.exited(); exited {
+			t.Fatalf("QUIC server exited while awaiting authenticated session: %v", err)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("QUIC server did not record %d authenticated sessions", want)
+}
+
+// Actual upstream v2.13.0 client initialization is eager; a failed TLS
+// handshake or bearer rejection terminates initialization before opening the
+// local forwarder. Require its *specific* fatal reason, not an absent socket.
+func (h *pinnedHelper) waitRejected(t *testing.T, reason string) {
+	t.Helper()
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		exited, err := h.exited()
+		if exited {
+			log := h.logBytes(t)
+			defer clear(log)
+			if err == nil {
+				t.Fatalf("%s helper exited successfully despite expected rejection", h.name)
+			}
+			if !pinnedRejectionEvidence(log, reason) {
+				// Print only Boolean evidence, never private credentials or
+				// untrusted error text from the helper log.
+				t.Fatalf("%s helper exit is not proven %s rejection (init-failed=%t, auth-http-404=%t, tls-certificate=%t)",
+					h.name, reason, bytes.Contains(log, []byte("failed to initialize client")),
+					bytes.Contains(log, []byte("authentication error, HTTP status code: 404")),
+					bytes.Contains(log, []byte("certificate")))
+			}
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("%s helper did not complete the expected %s rejection within the bounded window", h.name, reason)
+}
+
+func pinnedRejectionEvidence(log []byte, reason string) bool {
+	if !bytes.Contains(log, []byte("failed to initialize client")) {
+		return false
+	}
+	switch reason {
+	case "bearer":
+		return bytes.Contains(log, []byte("authentication error, HTTP status code: 404"))
+	case "client-ca":
+		return bytes.Contains(log, []byte("CRYPTO_ERROR")) &&
+			bytes.Contains(log, []byte("remote")) &&
+			bytes.Contains(log, []byte("unknown certificate authority"))
+	default:
+		return false
+	}
+}
+
+// A missing/unstarted helper, a configuration failure and unrelated network
+// timeouts must NEVER satisfy the security-negative proof requirements.
+func TestPinnedHysteriaRejectionEvidenceFailsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		reason string
+		log    string
+		ok     bool
+	}{
+		{"bearer", "", false},
+		{"bearer", "failed to initialize client: timeout", false},
+		{"bearer", "authentication error, HTTP status code: 404", false},
+		{"bearer", "failed to initialize client: authentication error, HTTP status code: 404", true},
+		{"client-ca", "", false},
+		{"client-ca", "failed to initialize client: timeout", false},
+		{"client-ca", "failed to initialize client: certificate rejected", false},
+		{"client-ca", "failed to initialize client: CRYPTO_ERROR (remote): tls: unknown certificate authority", true},
+		{"other", "failed to initialize client: certificate rejected", false},
+	} {
+		if got := pinnedRejectionEvidence([]byte(tc.log), tc.reason); got != tc.ok {
+			t.Fatalf("incorrect %s log rejection classification: got=%v want=%v", tc.reason, got, tc.ok)
+		}
+	}
+}
+
 // TestPinnedHysteriaRealQUICLoopback is deliberately opt-in: CI without a
 // pinned official helper skips it, rather than fetching/trusting the network.
 // It runs the exact restricted JSON rendered by Build through the actual
@@ -28,6 +169,14 @@ import (
 // UDP forwarding. All sockets stay on loopback and never touch STL State,
 // WireGuard, nftables, systemd, kernel routes or physical peer servers.
 func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
+	for _, tlsName := range []string{"quic-probe.invalid", "127.0.0.1"} {
+		t.Run(tlsName, func(t *testing.T) {
+			runPinnedHysteriaLoopbackScenario(t, tlsName)
+		})
+	}
+}
+
+func runPinnedHysteriaLoopbackScenario(t *testing.T, tlsName string) {
 	bin := os.Getenv("STL_QUIC_HYSTERIA_BIN")
 	if bin == "" {
 		t.Skip("set STL_QUIC_HYSTERIA_BIN to the separately SHA-256 verified official app/v2.13.0 binary")
@@ -52,7 +201,7 @@ func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
 	}
 	// The real Go issuer supplies the exact Hysteria config's TLS/mTLS and
 	// independent per-Link bearer; no OpenSSL fixture or stored CA keys.
-	serverBundle, clientBundle, err := GeneratePair(link, "quic-probe.invalid")
+	serverBundle, clientBundle, err := GeneratePair(link, tlsName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +213,7 @@ func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
 	if !validToken(token) {
 		t.Fatal("issued QUIC authorization token malformed")
 	}
-	stage := func(bundle CredentialBundle) {
+	stage := func(bundle *CredentialBundle) {
 		t.Helper()
 		files := bundle.ProtectedFiles()
 		defer clearProtectedCopies(files)
@@ -87,8 +236,8 @@ func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
 	}
 	// Only this disposable same-process local test combines two otherwise
 	// separate host role directories. Both copies of the token must agree.
-	stage(serverBundle)
-	stage(clientBundle)
+	stage(&serverBundle)
+	stage(&clientBundle)
 	serverBundle.Clear()
 	clientBundle.Clear()
 	reserve := func() uint16 {
@@ -135,7 +284,7 @@ func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
 	echoPort := uint16(echo.LocalAddr().(*net.UDPAddr).Port)
 	base := Plan{
 		LinkID: link, Underlay: netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), serverPort),
-		TLSName: "quic-probe.invalid",
+		TLSName: tlsName,
 	}
 	srv := base
 	srv.Role = Listen
@@ -152,7 +301,8 @@ func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	saveConfig := func(cmd Command, name string) string {
+	saveConfig := func(cmd *Command, name string) string {
+		defer cmd.Clear()
 		t.Helper()
 		b := cmd.ProtectedConfigBytes()
 		defer clear(b)
@@ -164,9 +314,9 @@ func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
 	}
 	// The two roles share a credential directory in this disposable single
 	// process fixture only. Real hosts use disjoint protected State roots.
-	serverPath := saveConfig(serverCmd, "server")
-	clientPath := saveConfig(clientCmd, "client")
-	run := func(command Command, conf, name string) {
+	serverPath := saveConfig(&serverCmd, "server")
+	clientPath := saveConfig(&clientCmd, "client")
+	run := func(command Command, conf, name string) *pinnedHelper {
 		t.Helper()
 		args := append([]string(nil), command.Args...)
 		for i := range args {
@@ -176,29 +326,37 @@ func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		c := exec.CommandContext(ctx, bin, args...)
-		out, err := os.OpenFile(filepath.Join(root, name+".log"), os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
+		path := filepath.Join(root, name+".log")
+		out, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 		if err != nil {
 			cancel()
 			t.Fatal(err)
 		}
 		c.Stdout, c.Stderr = out, out
 		if err := c.Start(); err != nil {
-			out.Close()
+			_ = out.Close()
 			cancel()
-			t.Fatalf("%s helper failed to start: %v", name, err)
+			t.Fatalf("%s helper could not launch: %v", name, err)
 		}
+		p := &pinnedHelper{name: name, logPath: path, done: make(chan struct{})}
+		go func() {
+			p.waitErr = c.Wait()
+			close(p.done)
+		}()
 		t.Cleanup(func() {
 			cancel()
-			_ = c.Wait()
+			<-p.done
 			_ = out.Close()
 		})
+		return p
 	}
-	run(serverCmd, serverPath, "server")
-	time.Sleep(350 * time.Millisecond)
-	run(clientCmd, clientPath, "client")
-	// Hysteria binds the selected loopback UDP listener asynchronously.
-	// Give the verified helper a bounded startup window before probing it.
-	time.Sleep(1400 * time.Millisecond)
+	serverProcess := run(serverCmd, serverPath, "server")
+	clientProcess := run(clientCmd, clientPath, "client")
+	clientProcess.waitReady(t)
+	if exited, _ := serverProcess.exited(); exited {
+		t.Fatal("positive control server exited before authentication completed")
+	}
+	serverProcess.waitClientAdmissions(t, 1)
 	conn, err := net.Dial("udp4", net.JoinHostPort("127.0.0.1", fmt.Sprint(clientPort)))
 	if err != nil {
 		t.Fatal(err)
@@ -249,8 +407,9 @@ func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
 	}
 	// Negative tests exercise actual JSON generated by Build, not a
 	// hand-written alternate Hysteria ACL or client configuration.
-	noAck := func(localPort uint16, label string) {
+	noAck := func(p *pinnedHelper, localPort uint16, label string) {
 		t.Helper()
+		p.waitReady(t)
 		c, err := net.Dial("udp4", net.JoinHostPort("127.0.0.1", fmt.Sprint(localPort)))
 		if err != nil {
 			t.Fatal(err)
@@ -263,8 +422,13 @@ func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
 			t.Fatal(err)
 		}
 		buf := make([]byte, 100)
-		if _, err := c.Read(buf); err == nil {
-			t.Fatalf("%s unexpectedly forwarded forbidden private payload", label)
+		if n, err := c.Read(buf); err == nil {
+			t.Fatalf("%s unexpectedly forwarded %d bytes of forbidden private payload", label, n)
+		} else if !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("%s failed for a transport/process error rather than a verified destination denial: %v", label, err)
+		}
+		if exited, err := p.exited(); exited {
+			t.Fatalf("%s client exited during ACL check: %v", label, err)
 		}
 	}
 	badToken := token[:len(token)-1] + "0"
@@ -277,10 +441,15 @@ func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	badAuthPath := saveConfig(badAuthCmd, "bad-auth")
-	run(badAuthCmd, badAuthPath, "bad-auth")
-	time.Sleep(400 * time.Millisecond)
-	noAck(rejectedAuth.LocalForwardUDPPort, "invalid-token")
+	badAuthPath := saveConfig(&badAuthCmd, "bad-auth")
+	badAuthProcess := run(badAuthCmd, badAuthPath, "bad-auth")
+	badAuthProcess.waitRejected(t, "bearer")
+	// The server must not mistake a bad bearer for an authorized client.
+	observedServerLog := serverProcess.logBytes(t)
+	if n := bytes.Count(observedServerLog, []byte("client connected")); n != 1 {
+		t.Fatal("invalid bearer unexpectedly authenticated a QUIC client")
+	}
+	clear(observedServerLog)
 	// A correct bearer is insufficient without the exact per-Link client CA.
 	// Use a different isolated per-Link issuer while trusting the genuine
 	// server CA; this checks actual upstream client-certificate rejection.
@@ -316,10 +485,15 @@ func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	foreignConfig := saveConfig(foreignCmd, "bad-mtls")
-	run(foreignCmd, foreignConfig, "bad-mtls")
-	time.Sleep(400 * time.Millisecond)
-	noAck(foreignPlan.LocalForwardUDPPort, "untrusted-client-certificate")
+	foreignConfig := saveConfig(&foreignCmd, "bad-mtls")
+	foreignProcess := run(foreignCmd, foreignConfig, "bad-mtls")
+	foreignProcess.waitRejected(t, "client-ca")
+	observedServerLog = serverProcess.logBytes(t)
+	if n := bytes.Count(observedServerLog, []byte("client connected")); n != 1 {
+		t.Fatal("foreign client CA unexpectedly authenticated a QUIC client")
+	}
+	clear(observedServerLog)
+
 	forbidden, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -332,10 +506,10 @@ func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	forbiddenPath := saveConfig(forbiddenCmd, "bad-destination")
-	run(forbiddenCmd, forbiddenPath, "bad-destination")
-	time.Sleep(400 * time.Millisecond)
-	noAck(restricted.LocalForwardUDPPort, "unlisted-destination")
+	forbiddenPath := saveConfig(&forbiddenCmd, "bad-destination")
+	forbiddenProcess := run(forbiddenCmd, forbiddenPath, "bad-destination")
+	serverProcess.waitClientAdmissions(t, 2)
+	noAck(forbiddenProcess, restricted.LocalForwardUDPPort, "unlisted-destination")
 	if err := forbidden.SetReadDeadline(time.Now().Add(300 * time.Millisecond)); err != nil {
 		t.Fatal(err)
 	}
@@ -343,8 +517,21 @@ func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
 	if _, _, err := forbidden.ReadFrom(data); err == nil {
 		t.Fatal("unlisted UDP endpoint received unauthorized data")
 	}
+	// A valid destination through the same authenticated server must still
+	// work after the forbidden destination attempt; deny-all is scoped.
+	if err := conn.SetDeadline(time.Now().Add(1500 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	canary := []byte("allowed-after-acl-rejection")
+	if _, err := conn.Write(canary); err != nil {
+		t.Fatal(err)
+	}
+	reply := make([]byte, len(canary)+8)
+	if n, err := conn.Read(reply); err != nil || !bytes.Equal(reply[:n], canary) {
+		t.Fatal("allowed destination control failed after ACL rejection")
+	}
 	// Explicitly keep sensitive helper configs out of logging and reporting.
-	for _, name := range []string{"server", "client", "bad-auth", "bad-destination"} {
+	for _, name := range []string{"server", "client", "bad-auth", "bad-mtls", "bad-destination"} {
 		b, err := os.ReadFile(filepath.Join(root, name+".log"))
 		if err != nil {
 			t.Fatal(err)

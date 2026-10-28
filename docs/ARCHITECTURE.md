@@ -707,16 +707,19 @@ in-memory data, **not** authorization to stage files, import credentials or
 start a helper. Safe Engine-owned protected staging, retirement and rotation
 are deliberately outstanding.
 
-The adapter's opted-in disposable loopback compatibility test uses a
-pinned, hash-checked official Hysteria binary and independently generated
-ephemeral CA, server and client certificates, plus an unrelated secret
-supplied separately from the public Plan. It validates actual QUIC
-TLS/mTLS/authenticated **100/100 loopback-forwarded UDP echoes at 1200 bytes** with the
-**JSON emitted by the Go builder**, and checks that incorrect authorization
-and an unlisted UDP destination cannot carry traffic. Additional local
-source tests exercised a verified IP-literal server SAN. These are **local
-Layer-A helper/serialization results**, not physical Layer B/C acceptance
-or a security audit of unrelated upstream features.
+The adapter's opt-in disposable loopback compatibility test uses the
+pinned, hash-checked official Hysteria binary with **Go-issued per-Link
+TLS/mTLS credentials and bearer**, not manually authored helper JSON or
+OpenSSL-generated identities. Both DNS and literal loopback IPv4 SANs
+complete a genuine QUIC session and **100/100 byte-identical 1200-byte UDP
+echoes**. Security-negative evidence is not inferred from UDP timeout alone:
+the test requires the bad-bearer client's exact upstream HTTP 404 auth
+failure, the foreign-client-CA client's QUIC TLS remote unknown-CA failure,
+and server-side proof that the ACL-rejected client was first authenticated,
+while the unlisted UDP destination receives nothing and the original
+allowed destination remains functional. Every helper INFO log is checked
+for credential leaks. These are **local helper/serialization results**,
+not physical WAN, kernel WireGuard L3 or STL-managed lifecycle acceptance.
 
 Before a public `wireguard-quic` (or equivalent explicitly approved) Link
 is enabled, the original Engine must own compatible provider/carrier
