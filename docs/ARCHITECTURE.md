@@ -715,10 +715,13 @@ complete a genuine QUIC session and **100/100 byte-identical 1200-byte UDP
 echoes**. Security-negative evidence is not inferred from UDP timeout alone:
 the test requires the bad-bearer client's exact upstream HTTP 404 auth
 failure, the foreign-client-CA client's QUIC TLS remote unknown-CA failure,
-and server-side proof that the ACL-rejected client was first authenticated,
-while the unlisted UDP destination receives nothing and the original
-allowed destination remains functional. Every helper INFO log is checked
-for credential leaks. These are **local helper/serialization results**,
+and confirmation that the forbidden client first authenticated and
+then generated an exact server-side UDP WARN event with the ACL's `rejected`
+error, matching that client's QUIC address and authentication identity.
+The unlisted UDP destination must receive nothing; the original allowed
+destination must still work. Every helper INFO log is checked for
+credential leaks, and failure diagnostics never echo raw helper logs.
+These are **local helper/serialization results**,
 not physical WAN, kernel WireGuard L3 or STL-managed lifecycle acceptance.
 
 Before a public `wireguard-quic` (or equivalent explicitly approved) Link
