@@ -833,27 +833,43 @@ never belongs in ordinary Link State, diagnostics or arguments. Opt-in
 tests additionally exercise an **actual pinned official Hysteria binary**
 for config staging/readback without spawning a helper.
 
-The Engine does not **stage** protected QUIC credentials/config or start
-any Helper. A source-only, read-only `Engine.InspectQUICCrashMaterials` now
-reads the exact existing QUIC journal, obtains its configured protected
-State root from the canonical FileStore, and checks the corresponding
-role-private credential/config SHA-256 and official executable hash/device/
-inode against **all seven** immutable expected identities while holding
-maintenance -> Link -> resource locks. It derives the complete helper Plan
-from the journal, refusing caller-proposed alternate TLS, peer, role or
-local port. An unrecognized State-root provider, incomplete journal, absent
-or drifted file and mismatched identity fail closed with secret-safe errors.
-This is a single read-only observation, **not** durable ownership or a permit
-for a future mutation; the lock releases on return and any external writer
-may still change those files. A future effectful caller MUST first hold the
-canonical locks, journal anticipated effects BEFORE any protected file or
-host write, then stage/revalidate exact identity at the actual use boundary,
-prove original object ownership and reconcile uncertain partial effects.
-These source-only APIs cannot certify peer matching, live UDP vacancy or
-safe process start.
-Changing a Dial TLS peer name before a committed Engine Plan is bound
-cannot be inferred from the client's leaf certificate alone; the exact
-protected config and later durable State identity must provide that bind.
+The source-only `quic.PreviewHelperConfig` calculates the anticipated
+seven-field public credential/config/executable identity from an in-memory
+role-specific bundle, exact Plan and State root, using the same certificate,
+bearer, Hysteria renderer and official executable admission as protected
+staging. Preview performs no private-file publication. The calling
+Engine workflow must first publish the complete immutable pre-effect
+journal containing these expected values via `PrepareQUICCrash`; a preview
+alone does not reserve a Link or establish ownership.
+
+`Engine.StageQUICCrashMaterials` is a new **source-only, non-runnable**
+canonical writer for an already-existing, unresolved QUIC journal. It
+shares the read-only `Engine.InspectQUICCrashMaterials`' exact journal-to-Plan
+reconstruction and maintenance -> Link -> resource locks, including a fresh
+State recheck after those locks are acquired. Before its **first write**,
+it previews the supplied private bundle and officially pinned executable
+and checks **all seven** immutable journal identities. Only an exact match
+can enter existing no-replace `StageCredentials` and `StageHelperConfig`
+0600 role-private publication/readback. Wrong credentials, TLS/role/root,
+helper config or executable are refused; after any uncertain write failure
+the entire original journal and any possibly partial private files remain
+for separate explicit owner-scoped reconciliation, never auto-deleted.
+
+The companion read-only `Engine.InspectQUICCrashMaterials` still verifies
+on-disk credentials/config SHA-256 and executable hash/device/inode against
+the journal under the same locks. Neither successful staging nor inspection
+**consumes the journal** or proves an object is owned by its nonce/generation:
+the journal contains expected fingerprints but no exclusive created-file
+receipt or host-object ownership witness. These calls do **not** start a
+Helper, install a unit, create kernel WG/nft objects, certify peer trust,
+reserve an actual UDP socket or expose a runnable QUIC Carrier. Future
+effectful runtime code must separately revalidate exact identities at the
+actual execution/start boundary, prove generation-specific effect ownership
+and supply crash-safe recovery/removal before enabling any Link. An existing
+journal keeps the shared restore unit from being retired; material staging
+does not need to republish State or acquire the restore-persistence lock.
+Changing a Dial TLS peer name cannot be inferred from its leaf certificate
+alone; the exact journal Plan and derived helper config bind it.
 
 The adapter's opt-in disposable loopback compatibility test uses the
 pinned, hash-checked official Hysteria binary with **Go-issued per-Link
