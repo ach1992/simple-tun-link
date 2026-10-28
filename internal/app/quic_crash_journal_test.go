@@ -243,16 +243,16 @@ func TestPrepareQUICCrashConcurrentSameLinkOnlyOneDurableWinner(t *testing.T) {
 	}
 }
 
-// A test-only observer proves that QUIC publication participates in the
-// same restore-persistence lock as ordinary Remove and empty-State RestoreAll.
+// A test-only observer proves that crash-journal publication participates in
+// the same restore-persistence lock as ordinary Remove and empty-State RestoreAll.
 // The underlying real file LockManager still enforces cross-Engine exclusion.
-type quicRestoreLockObserver struct {
+type sharedRestoreLockObserver struct {
 	Locker
 	attempted chan struct{}
 	held      atomic.Bool
 }
 
-func (o *quicRestoreLockObserver) Acquire(ctx context.Context, claims []domain.ResourceClaim) (func() error, error) {
+func (o *sharedRestoreLockObserver) Acquire(ctx context.Context, claims []domain.ResourceClaim) (func() error, error) {
 	if len(claims) != 1 || claims[0] != restoreLockClaim() {
 		return o.Locker.Acquire(ctx, claims)
 	}
@@ -274,24 +274,37 @@ func (o *quicRestoreLockObserver) Acquire(ctx context.Context, claims []domain.R
 	}, nil
 }
 
-type quicPublicationGateStore struct {
+type sharedJournalPublicationGateStore struct {
 	state.Store
-	lock    *quicRestoreLockObserver
-	entered chan struct{}
-	proceed <-chan struct{}
+	lock             *sharedRestoreLockObserver
+	entered          chan struct{}
+	proceed          <-chan struct{}
+	publicationError error
 }
 
-func (g *quicPublicationGateStore) Update(ctx context.Context, mutate func(*state.Snapshot) error) error {
+func (g *sharedJournalPublicationGateStore) Update(ctx context.Context, mutate func(*state.Snapshot) error) error {
 	close(g.entered)
 	if !g.lock.held.Load() {
-		return errors.New("QUIC publication attempted outside shared restore lock")
+		return errors.New("journal publication attempted outside shared restore lock")
 	}
 	select {
 	case <-g.proceed:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	return g.Store.Update(ctx, mutate)
+	if err := g.Store.Update(ctx, func(s *state.Snapshot) error {
+		// Assert the lock is STILL owned while FileStore runs the actual
+		// transaction, not merely when our outer test hook was entered.
+		if !g.lock.held.Load() {
+			return errors.New("journal mutation executed without restore lock")
+		}
+		return mutate(s)
+	}); err != nil {
+		return err
+	}
+	// Simulate a real post-rename persistence uncertainty for WSS tests:
+	// State remains durable, but the interrupted Ensure must never Apply.
+	return g.publicationError
 }
 
 // The gate pauses QUIC exactly at State publication while it owns the
@@ -309,7 +322,7 @@ func TestLastLinkRemoveCannotRetireRestoreWhenQUICJournalPublishesFirst(t *testi
 	}
 
 	publisher := *e
-	publisherLock := &quicRestoreLockObserver{Locker: e.locks}
+	publisherLock := &sharedRestoreLockObserver{Locker: e.locks}
 	publisher.locks = publisherLock
 	proceed := make(chan struct{})
 	defer func() {
@@ -320,7 +333,7 @@ func TestLastLinkRemoveCannotRetireRestoreWhenQUICJournalPublishesFirst(t *testi
 		}
 	}()
 	entered := make(chan struct{})
-	publisher.store = &quicPublicationGateStore{Store: store, lock: publisherLock, entered: entered, proceed: proceed}
+	publisher.store = &sharedJournalPublicationGateStore{Store: store, lock: publisherLock, entered: entered, proceed: proceed}
 	published := make(chan error, 1)
 	go func() {
 		_, err := publisher.PrepareQUICCrash(ctx, quicCrashIntentFixture(), &quicVacancyProbe{})
@@ -337,7 +350,7 @@ func TestLastLinkRemoveCannotRetireRestoreWhenQUICJournalPublishesFirst(t *testi
 
 	remover := *e
 	removeAttempt := make(chan struct{}, 1)
-	remover.locks = &quicRestoreLockObserver{Locker: e.locks, attempted: removeAttempt}
+	remover.locks = &sharedRestoreLockObserver{Locker: e.locks, attempted: removeAttempt}
 	removed := make(chan error, 1)
 	go func() {
 		_, err := remover.Remove(ctx, link.ID)
@@ -379,7 +392,7 @@ func TestRestoreAllEmptyStateCleanupCannotRaceQUICPublication(t *testing.T) {
 		t.Fatal(err)
 	}
 	publisher := *e
-	publisherLock := &quicRestoreLockObserver{Locker: e.locks}
+	publisherLock := &sharedRestoreLockObserver{Locker: e.locks}
 	publisher.locks = publisherLock
 	proceed := make(chan struct{})
 	defer func() {
@@ -390,7 +403,7 @@ func TestRestoreAllEmptyStateCleanupCannotRaceQUICPublication(t *testing.T) {
 		}
 	}()
 	entered := make(chan struct{})
-	publisher.store = &quicPublicationGateStore{Store: store, lock: publisherLock, entered: entered, proceed: proceed}
+	publisher.store = &sharedJournalPublicationGateStore{Store: store, lock: publisherLock, entered: entered, proceed: proceed}
 	published := make(chan error, 1)
 	go func() {
 		_, err := publisher.PrepareQUICCrash(ctx, quicCrashIntentFixture(), &quicVacancyProbe{})
@@ -406,7 +419,7 @@ func TestRestoreAllEmptyStateCleanupCannotRaceQUICPublication(t *testing.T) {
 	}
 	restorer := *e
 	cleanupAttempt := make(chan struct{}, 1)
-	restorer.locks = &quicRestoreLockObserver{Locker: e.locks, attempted: cleanupAttempt}
+	restorer.locks = &sharedRestoreLockObserver{Locker: e.locks, attempted: cleanupAttempt}
 	restored := make(chan error, 1)
 	go func() {
 		_, err := restorer.RestoreAll(ctx)

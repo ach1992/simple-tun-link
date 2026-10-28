@@ -1022,6 +1022,14 @@ claims. This is a **reservation/quarantine**, not proof of nft/kernel/systemd
 ownership and not authorization to delete a named object.
 
 Journal publication and fsync must succeed before the first host effect.
+In the current development candidate, the WSS journal writer also takes
+the existing shared restore-persistence lock **after** maintenance, Link
+and resource locks and holds it through durable State publication, just
+like the source-only QUIC journal. This prevents last-Link Remove or
+empty-State RestoreAll from deleting an existing owned reboot unit based
+on a snapshot predating an unresolved WSS journal. The restore lock is
+released before backend Apply; unrelated Links remain independent. This
+synchronization correction is not part of the installed Stable v0.1.12.
 Successful Ensure/Remove consumes the *exact* record in the same atomic
 State commit as the Link change. Crash/failed compensation/unknown host
 state retains the journal, blocks automatic Link replay and reserves

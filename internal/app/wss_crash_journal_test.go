@@ -12,10 +12,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/state"
+	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
 type crashWSSBackend struct {
@@ -657,5 +659,180 @@ func TestWSSOriginalObjectCompensationRejectsForeignAndCommitsExactState(t *test
 	}
 	if err := engine.ReconcileWSSCrashOriginal(ctx, link.ID); err == nil {
 		t.Fatal("repeated original Remove recovery created another receipt")
+	}
+}
+
+// The same production WSS + GRE Engine exercises the actual crash journal
+// publication, the file-backed shared lock manager, and the existing
+// persistence boundary. A simulated post-publication failure keeps the
+// protected WSS journal without initiating any fake backend host Apply.
+func wssPersistenceRaceEngine(t *testing.T, p *fakeRestorePersistence) (*Engine, *state.FileStore, *crashWSSBackend) {
+	t.Helper()
+	wss := &crashWSSBackend{fakeBackend: newFakeBackend()}
+	registry, err := backend.NewRegistry(wss, newFakeBackend())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	store := state.NewFileStore(root)
+	e, err := NewWithRestorePersistence(registry, store, state.NewLockManager(root), p, "/usr/local/bin/stl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.SetWSSRetirementStore(fakeWSSIssuance{})
+	wss.store = store
+	return e, store, wss
+}
+
+func wssHeldPublicationGate(e *Engine, store *state.FileStore) (*Engine, *sharedRestoreLockObserver, chan struct{}, chan struct{}) {
+	publisher := *e
+	observer := &sharedRestoreLockObserver{Locker: e.locks}
+	publisher.locks = observer
+	entered, proceed := make(chan struct{}), make(chan struct{})
+	publisher.store = &sharedJournalPublicationGateStore{
+		Store: store, lock: observer, entered: entered, proceed: proceed,
+		publicationError: &state.PublicationError{Cause: errors.New("injected WSS journal post-publication uncertainty")},
+	}
+	return &publisher, observer, entered, proceed
+}
+
+func wssMustRetainUncommittedJournalAndUnit(t *testing.T, ctx context.Context, store *state.FileStore,
+	p *fakeRestorePersistence, wss *crashWSSBackend, id domain.LinkID) {
+	t.Helper()
+	fresh, err := store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, present := fresh.FindWSSCrashOperation(id)
+	if !present || op.Intent.ID != id || op.Operation != string(backend.OperationEnsure) ||
+		op.HadCommittedLink || len(op.Resources) < 7 || len(op.Nonce) != 32 {
+		t.Fatalf("WSS journal was lost or malformed: %+v", fresh)
+	}
+	if _, committed := fresh.Find(id); committed {
+		t.Fatal("uncertain WSS publication was incorrectly committed as healthy Link")
+	}
+	p.mu.Lock()
+	active, removes := p.active, p.removes
+	p.mu.Unlock()
+	if !active || removes != 0 {
+		t.Fatalf("shared restore unit retired despite WSS intent: active=%t removes=%d", active, removes)
+	}
+	if wss.applyCount != 0 {
+		t.Fatalf("WSS backend mutated host after uncertain publication: applies=%d", wss.applyCount)
+	}
+}
+
+// With an existing STL-owned restore unit and committed empty State, publish
+// a WSS journal under the shared restore lock while empty-State RestoreAll
+// waits for it. Its fresh locked check must observe the journal and refuse
+// to delete the unit. This is a deterministic interleaving, not a sleep race.
+func TestWSSPublicationSerializesWithEmptyRestoreAllCleanup(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	p := &fakeRestorePersistence{active: true}
+	e, store, wss := wssPersistenceRaceEngine(t, p)
+	if err := store.Update(ctx, func(*state.Snapshot) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	publisher, observer, entered, proceed := wssHeldPublicationGate(e, store)
+	defer func() {
+		select {
+		case <-proceed:
+		default:
+			close(proceed)
+		}
+	}()
+	link := journalTestLink(t)
+	published := make(chan error, 1)
+	go func() { _, err := publisher.Ensure(ctx, link); published <- err }()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("WSS journal publication was not reached")
+	}
+	if !observer.held.Load() {
+		t.Fatal("WSS journal publication did not hold restoreLockClaim at FileStore boundary")
+	}
+	restorer := *e
+	cleanupAttempt := make(chan struct{}, 1)
+	restorer.locks = &sharedRestoreLockObserver{Locker: e.locks, attempted: cleanupAttempt}
+	restored := make(chan error, 1)
+	go func() { _, err := restorer.RestoreAll(ctx); restored <- err }()
+	select {
+	case <-cleanupAttempt:
+	case <-ctx.Done():
+		t.Fatal("empty-State RestoreAll never reached persistence cleanup lock")
+	}
+	close(proceed)
+	if err := <-published; stlerr.CodeOf(err) != stlerr.CodeState {
+		t.Fatalf("uncertain WSS publication returned unexpected result: %v", err)
+	}
+	if err := <-restored; stlerr.CodeOf(err) != stlerr.CodeConflict {
+		t.Fatalf("RestoreAll ignored a concurrent WSS crash journal: %v", err)
+	}
+	wssMustRetainUncommittedJournalAndUnit(t, ctx, store, p, wss, link.ID)
+}
+
+// An independent ordinary final Link may still be removed, but must retain
+// the original installed reboot unit when a different WSS Link's durable
+// pre-effect journal wins the shared persistence lock first.
+func TestWSSPublicationSerializesWithIndependentLastLinkRemove(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	p := &fakeRestorePersistence{}
+	e, store, wss := wssPersistenceRaceEngine(t, p)
+	ordinary := linkFor(t, "gre-with-wss-intent", "10.80.196.0/31", "10.80.196.1/31")
+	if _, err := e.Ensure(ctx, ordinary); err != nil {
+		t.Fatal(err)
+	}
+	publisher, observer, entered, proceed := wssHeldPublicationGate(e, store)
+	defer func() {
+		select {
+		case <-proceed:
+		default:
+			close(proceed)
+		}
+	}()
+	link := journalTestLink(t)
+	published := make(chan error, 1)
+	go func() { _, err := publisher.Ensure(ctx, link); published <- err }()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("WSS journal publication was not reached")
+	}
+	if !observer.held.Load() {
+		t.Fatal("WSS journal publication did not hold restoreLockClaim at FileStore boundary")
+	}
+	remover := *e
+	removeAttempt := make(chan struct{}, 1)
+	remover.locks = &sharedRestoreLockObserver{Locker: e.locks, attempted: removeAttempt}
+	removed := make(chan error, 1)
+	go func() {
+		result, err := remover.Remove(ctx, ordinary.ID)
+		if err == nil && !result.Removed {
+			err = errors.New("ordinary Link not removed")
+		}
+		removed <- err
+	}()
+	select {
+	case <-removeAttempt:
+	case <-ctx.Done():
+		t.Fatal("independent Link Remove never reached persistence cleanup lock")
+	}
+	close(proceed)
+	if err := <-published; stlerr.CodeOf(err) != stlerr.CodeState {
+		t.Fatalf("uncertain WSS publication returned unexpected result: %v", err)
+	}
+	if err := <-removed; err != nil {
+		t.Fatalf("unrelated ordinary Link removal must succeed: %v", err)
+	}
+	wssMustRetainUncommittedJournalAndUnit(t, ctx, store, p, wss, link.ID)
+	fresh, err := store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := fresh.Find(ordinary.ID); exists || len(fresh.Links) != 0 {
+		t.Fatalf("unrelated final Link not durably removed: %+v", fresh.Links)
 	}
 }

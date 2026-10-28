@@ -15,8 +15,9 @@ import (
 )
 
 // prepareWSSCrash journals the complete public WSS transaction BEFORE the
-// first host effect. Called only under canonical Link AND resource locks,
-// after final Inspect/Validate, and never for unrelated backends.
+// first host effect. Called under canonical maintenance -> Link -> resource
+// locks after final Inspect/Validate, it acquires the shared restore-unit
+// lock across durable State publication before any backend Apply.
 // A prepared record is a fail-closed reservation, NOT host ownership proof.
 func (e *Engine) prepareWSSCrash(ctx context.Context, request backend.Request,
 	prior state.LinkRecord, claims []domain.ResourceClaim, consumeColdBootRestore bool) (state.WSSCrashOperation, error) {
@@ -33,6 +34,17 @@ func (e *Engine) prepareWSSCrash(ctx context.Context, request backend.Request,
 	if op.HadCommittedLink {
 		op.OriginalHostNonce = prior.WSSOrigin
 	}
+	// The restore unit is shared across independent Links. Serialize this
+	// first journal publication with final-Link Remove and empty RestoreAll
+	// cleanup. Take this lock AFTER Link/resource locks and release it before
+	// backend Apply, preserving existing multi-Link and rollback behavior.
+	releaseRestore, lockErr := e.locks.Acquire(ctx, []domain.ResourceClaim{restoreLockClaim()})
+	if lockErr != nil {
+		return state.WSSCrashOperation{}, stlerr.New(stlerr.CodeState, "wss_prepare",
+			string(request.Link.ID), string(request.Link.Backend),
+			"cannot serialize WSS journal with restore persistence")
+	}
+	defer releaseRestore()
 	err := e.store.Update(ctx, func(s *state.Snapshot) error {
 		if _, exists := s.FindWSSCrashOperation(request.Link.ID); exists {
 			return fmt.Errorf("existing WSS crash journal requires reconciliation")
