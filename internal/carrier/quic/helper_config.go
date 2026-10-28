@@ -7,7 +7,7 @@ import (
 	"fmt"
 
 	"github.com/ach1992/simple-tun-link/internal/credentials"
-	"github.com/ach1992/simple-tun-link/internal/linux"
+	"github.com/ach1992/simple-tun-link/internal/pinnedexec"
 	"golang.org/x/sys/unix"
 )
 
@@ -17,10 +17,10 @@ import (
 type HelperConfigIdentity struct {
 	ConfigSHA256 string
 	Credentials  CredentialIdentity
-	Executable   linux.PinnedExecutableIdentity
+	Executable   pinnedexec.Identity
 }
 
-type helperVerifier func(string) (linux.PinnedExecutableIdentity, error)
+type helperVerifier func(string) (pinnedexec.Identity, error)
 
 // StageHelperConfig writes the deterministic secret-bearing Hysteria config
 // ONLY after verifying the exact role's existing protected credentials and
