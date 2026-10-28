@@ -2,8 +2,8 @@ package quic
 
 import (
 	"fmt"
-	"strconv"
 
+	"github.com/ach1992/simple-tun-link/internal/composition"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 )
 
@@ -29,56 +29,48 @@ func (p Plan) validateRolePorts() error {
 	return nil
 }
 
-// CarrierClaims proposes the exclusive local resources required by a future
-// Engine-managed QUIC/WireGuard Link. The caller supplies the *local* kernel
-// WireGuard UDP listen port from its planned native provider; PeerWGUDPPort is
-// remote on Dial and must NEVER be reserved as a local socket.
-//
-// Claims are secret-free collision/lock identities, not evidence that any
-// kernel socket, firewall guard, helper, TLS file or process exists or is owned.
-// The canonical Engine must union these with native WireGuard/provider claims,
-// take its maintenance/Link/resource locks, verify host ownership and journal
-// the complete reservation before a single host effect. This function does
-// not persist State, stage files, install helpers, or enable QUIC.
-func (p Plan) CarrierClaims(localKernelWGUDPPort uint16) ([]domain.ResourceClaim, error) {
+// LocalAdmission translates a FULL source QUIC Plan into the minimum local
+// resource identity required for Engine-locked, read-only collision checks.
+// It validates the full TLS endpoint/role first. A caller must never treat
+// the projection as authority to stage credentials or start a helper.
+func (p Plan) LocalAdmission(localKernelWGUDPPort uint16) (composition.QUICLocalAdmission, error) {
 	if err := validMaterialScope(p); err != nil {
-		return nil, err
+		return composition.QUICLocalAdmission{}, err
 	}
 	if localKernelWGUDPPort == 0 {
-		return nil, fmt.Errorf("QUIC requires the local kernel WireGuard UDP listen port")
+		return composition.QUICLocalAdmission{}, fmt.Errorf("QUIC requires the local kernel WireGuard UDP listen port")
 	}
-
 	if err := p.validateRolePorts(); err != nil {
-		return nil, err
+		return composition.QUICLocalAdmission{}, err
 	}
 	if p.Role == Listen && p.LocalWGUDPPort != localKernelWGUDPPort {
-		return nil, fmt.Errorf("QUIC Listen local kernel WG UDP port must match its exclusive ACL destination")
+		return composition.QUICLocalAdmission{}, fmt.Errorf("QUIC Listen local kernel WG UDP port must match its exclusive ACL destination")
 	}
-	var helperListenUDPPort uint16
+	localHelper := p.Underlay.Port()
 	if p.Role == Dial {
-		helperListenUDPPort = p.LocalForwardUDPPort
-	} else {
-		helperListenUDPPort = p.Underlay.Port()
+		localHelper = p.LocalForwardUDPPort
 	}
-	// Existing STL UDP claims conservatively reserve the whole local UDP port,
-	// not one bind address. Two listeners inside one Link cannot share it even
-	// when one is bound to the physical IP and the other to loopback.
-	if helperListenUDPPort == localKernelWGUDPPort {
-		return nil, fmt.Errorf("QUIC helper and kernel WireGuard UDP listeners must use distinct local ports")
+	projection := composition.QUICLocalAdmission{
+		LinkID: p.LinkID, Role: composition.Role(p.Role),
+		LocalWGUDPPort:     localKernelWGUDPPort,
+		LocalHelperUDPPort: localHelper,
 	}
+	if p.Role == Dial {
+		projection.RemoteWGUDPPort = p.PeerWGUDPPort
+	}
+	if _, err := projection.CarrierClaims(); err != nil {
+		return composition.QUICLocalAdmission{}, err
+	}
+	return projection, nil
+}
 
-	link := string(p.LinkID)
-	claims := []domain.ResourceClaim{
-		{Kind: domain.ResourceBackendID, Key: "quic/helper/" + link},
-		{Kind: domain.ResourceBackendID, Key: "quic/tls-identity/" + link},
-		{Kind: domain.ResourceFirewall, Key: "quic/nft/" + link},
-		{Kind: domain.ResourceUDPListenPort, Key: strconv.Itoa(int(localKernelWGUDPPort))},
-		{Kind: domain.ResourceUDPListenPort, Key: strconv.Itoa(int(helperListenUDPPort))},
+// CarrierClaims proposes only local exclusive QUIC resources for a future
+// Engine plan; the remote peer's WireGuard destination is NOT locally owned.
+// The exact same claims are consumed by read-only Engine admission.
+func (p Plan) CarrierClaims(localKernelWGUDPPort uint16) ([]domain.ResourceClaim, error) {
+	projection, err := p.LocalAdmission(localKernelWGUDPPort)
+	if err != nil {
+		return nil, err
 	}
-	for _, claim := range claims {
-		if err := claim.Validate(); err != nil {
-			return nil, fmt.Errorf("invalid QUIC local carrier reservation: %w", err)
-		}
-	}
-	return claims, nil
+	return projection.CarrierClaims()
 }

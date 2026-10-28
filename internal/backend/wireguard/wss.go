@@ -86,7 +86,11 @@ func (b *Backend) planWSS(ctx context.Context, req core.Request, obs observation
 		}
 		p.route = route
 		p.interfaceChange = !obs.Target.matches(req.Link, name)
-		p.resources = append(desiredResources(req.Link, name, wssGuardClaim(req.Link.ID)), path.CarrierClaims()...)
+		providerClaims, err := desiredResources(req.Link, wssGuardClaim(req.Link.ID))
+		if err != nil {
+			return nil, err
+		}
+		p.resources = append(providerClaims, path.CarrierClaims()...)
 	case core.OperationRemove:
 		p.interfaceChange = obs.Target.Exists && obs.Target.Owner == req.Link.ID
 		if p.interfaceChange {

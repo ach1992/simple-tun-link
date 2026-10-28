@@ -414,7 +414,11 @@ func (b *Backend) Plan(ctx context.Context, req core.Request, observed core.Obse
 		if err != nil {
 			return nil, err
 		}
-		p.resources = desiredResources(req.Link, name, firewallClaim)
+		providerClaims, err := desiredResources(req.Link, firewallClaim)
+		if err != nil {
+			return nil, err
+		}
+		p.resources = providerClaims
 		p.interfaceChange = !obs.Target.matches(req.Link, name)
 		p.firewallChange = !firewallPresent
 	case core.OperationRemove:

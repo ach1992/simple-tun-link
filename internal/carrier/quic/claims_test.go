@@ -191,3 +191,28 @@ func TestQUICCarrierClaimsCollideWithExistingUDPAndKeepIndependentLinks(t *testi
 		t.Fatal("same Link reuses a helper/credential/guard identity")
 	}
 }
+
+func TestQUICLocalAdmissionProjectsExactlyTheValidatedCarrierClaims(t *testing.T) {
+	for _, role := range []Role{Dial, Listen} {
+		p := fixturePlan(role)
+		wgPort := uint16(51820)
+		if role == Dial {
+			p.LocalForwardUDPPort = 52211
+			p.PeerWGUDPPort = 51830
+		} else {
+			p.LocalWGUDPPort = wgPort
+		}
+		projection, err := p.LocalAdmission(wgPort)
+		if err != nil {
+			t.Fatal(err)
+		}
+		projected, err := projection.CarrierClaims()
+		if err != nil {
+			t.Fatal(err)
+		}
+		direct, err := p.CarrierClaims(wgPort)
+		if err != nil || !reflect.DeepEqual(projected, direct) {
+			t.Fatalf("role %s projected claims diverge from renderer: %v / %v / %v", role, projected, direct, err)
+		}
+	}
+}

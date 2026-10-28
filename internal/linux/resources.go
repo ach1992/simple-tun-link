@@ -162,9 +162,14 @@ func (s HostSnapshotter) Snapshot(ctx context.Context) (hostSnapshot, error) {
 		})
 	}
 
-	ssResult, err := s.Runner.Run(ctx, ssBinary, "-H", "-u", "-l", "-n")
+	// All-state UDP inventory includes connected, locally bound sockets;
+	// the listener-only -l view can falsely report an exclusive port as free.
+	ssResult, err := s.Runner.Run(ctx, ssBinary, "-H", "-u", "-a", "-n")
 	if err != nil {
-		return hostSnapshot{}, fmt.Errorf("inspect UDP listeners: %w", err)
+		return hostSnapshot{}, fmt.Errorf("inspect local UDP sockets: %w", err)
+	}
+	if len(ssResult.Stderr) != 0 {
+		return hostSnapshot{}, fmt.Errorf("local UDP socket inventory contains unverified diagnostics")
 	}
 	udpPorts, err := parseUDPListeners(string(ssResult.Stdout))
 	if err != nil {
@@ -210,6 +215,18 @@ func parseUDPListeners(text string) (map[uint16]ObservedResource, error) {
 type CollisionInspector struct {
 	Snapshotter HostSnapshotter
 	Extra       map[string]ResourceProbe
+}
+
+// Vacant is the read-only common-host admission surface for an optional
+// composed Carrier. It never treats inspection failures as an empty host.
+// It does not prove identity absence in other network namespaces or grant
+// permission to create, replace or delete a named resource.
+func (i CollisionInspector) Vacant(ctx context.Context, claims []domain.ResourceClaim) (bool, error) {
+	observed, err := i.Inspect(ctx, claims)
+	if err != nil {
+		return false, err
+	}
+	return len(observed) == 0, nil
 }
 
 func (i CollisionInspector) Inspect(ctx context.Context, claims []domain.ResourceClaim) ([]ObservedResource, error) {

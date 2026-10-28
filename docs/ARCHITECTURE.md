@@ -719,9 +719,9 @@ A separate read-only `InspectPinnedHysteria` verifies the optional installed
 binary using exact upstream AMD64/ARM64 SHA-256, owner/mode/inode and
 no-symlink path checks. It reuses the Linux trusted-executable inspection
 shared with WSS; neither the optional binary nor certificates are installed
-by these APIs. **No canonical Engine/State transaction, QUIC journal, Link
-resource claims, service process owner or reboot identity binding is yet
-connected to them.** A future runtime Engine must durably commit and
+by these APIs. **No canonical Engine/State QUIC transaction, crash journal,
+committed Link resource claims, service process owner or reboot identity
+binding is yet connected to them.** A future runtime Engine must durably commit and
 re-check exact credential fingerprints under locks and journal partial
 effects before treating protected files or a helper as owned.
 
@@ -737,13 +737,38 @@ The helper, per-Link TLS-identity and scoped nft guard have distinct
 secret-free resource identities. Listen rejects a mismatched local
 WireGuard/ACL port and either role rejects an intra-Link helper/WG
 socket-port collision; renderer validation shares the role/port contract.
-These are candidate claim identities **only**: no Engine lock, durable
-State/claim, journal, real socket reservation, nft rule, service identity,
-certificate admission, helper start or public QUIC Link activation has
-been performed. The future canonical Engine must union the carrier claims
-with the complete native WireGuard/provider/interface/address claims,
-independently verify host ownership and record the entire pre-effect
-reservation before any mutation.
+These are candidate claim identities **only**: no durable QUIC
+State/claim, journal, actual socket reservation, nft rule, service identity,
+certificate admission, helper start or public QUIC Link activation exists.
+
+A separate **read-only source-only** `app.Engine.CheckQUICPreparation` now
+consumes `quic.Plan.LocalAdmission`'s validated, port-only projection and
+composes it with `composition.WireGuardProviderClaims`, the same
+native WireGuard interface/address/local UDP/public-key claims consumed by
+shipped native/WSS planning. Both local and peer private IPv4 Link routes
+reuse WSS's global-unicast and reserved-prefix overlap checks (including
+loopback and link-local), without imposing RFC1918-only addressing.
+Within canonical Engine maintenance, Link and resource locks it refreshes
+State, checks conflicting committed/pending Links
+(including unresolved WSS claims), and uses the existing live
+`linux.CollisionInspector` contract for local interfaces, addresses, routes
+and **both** locally bound UDP ports, including connected UDP sockets,
+from an all-state IPv4/IPv6 socket inventory. It refuses shared strongSwan
+UDP/500 or UDP/4500 when any committed/pending IPsec intent is present even if the
+shared daemon is temporarily not listening: those fixed ports are not in
+IPsec's per-Link exclusive claims. The actual live socket inventory is still
+required regardless of persisted State, including when a daemon has no
+per-Link record. Other unique per-Link helper, firewall and WG public-key
+claims are proposals, **not** independently attested live host identities.
+
+This check performs no QUIC staging, State mutation, journal, or runtime
+operation. Its locks are released before it returns; a clean preview is not
+an exclusive reservation, a service/binary/TLS attestation, global
+cross-namespace WireGuard identity proof or permission for any host effect.
+Future Engine-owned staging must repeat and strengthen admission under held
+locks, durably publish a full pre-effect journal before the first protected
+file/host mutation, bind exact immutable Plan and fingerprint identities and
+provide fail-closed partial-effect recovery.
 
 The separate **source-only** `quic.StageHelperConfig` and read-only
 `quic.InspectHelperConfig` provide checked, deterministic `helper.json`

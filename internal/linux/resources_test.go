@@ -11,6 +11,7 @@ import (
 
 type resourceRunner struct {
 	output map[string]string
+	stderr map[string]string
 	err    map[string]error
 }
 
@@ -23,7 +24,7 @@ func (r resourceRunner) Run(_ context.Context, name string, args ...string) (Com
 	if !ok {
 		return CommandResult{}, fmt.Errorf("unexpected command %s", key)
 	}
-	return CommandResult{Stdout: []byte(out)}, nil
+	return CommandResult{Stdout: []byte(out), Stderr: []byte(r.stderr[key])}, nil
 }
 
 func TestCollisionInspectorFindsCommonHostCollisionsAndOwner(t *testing.T) {
@@ -31,7 +32,7 @@ func TestCollisionInspectorFindsCommonHostCollisionsAndOwner(t *testing.T) {
 		"ip -json link show":            `[{"ifname":"stl0","ifalias":"stl:lnk_0123456789abcdef0123456789abcdef"},{"ifname":"eth0"}]`,
 		"ip -json address show":         `[{"ifname":"stl0","addr_info":[{"local":"10.80.20.0","prefixlen":31}]},{"ifname":"eth0","addr_info":[{"local":"192.0.2.10","prefixlen":24}]}]`,
 		"ip -json route show table all": `[{"dst":"10.80.30.0/24","dev":"eth0"},{"dst":"default","dev":"eth0"},{"dst":"0.0.0.0/0","dev":"eth0"}]`,
-		"ss -H -u -l -n":                "UNCONN 0 0 0.0.0.0:4500 0.0.0.0:*\n",
+		"ss -H -u -a -n":                "UNCONN 0 0 0.0.0.0:4500 0.0.0.0:*\n",
 	}}
 	inspector := CollisionInspector{Snapshotter: HostSnapshotter{Runner: runner}}
 	claims := []domain.ResourceClaim{
@@ -75,7 +76,7 @@ func TestCollisionInspectorRequiresExplicitProbeForSpecificKinds(t *testing.T) {
 		"ip -json link show":            "[]",
 		"ip -json address show":         "[]",
 		"ip -json route show table all": "[]",
-		"ss -H -u -l -n":                "",
+		"ss -H -u -a -n":                "",
 	}}
 	claim := domain.ResourceClaim{Kind: domain.ResourceBackendID, Key: "gre:key:100"}
 	inspector := CollisionInspector{Snapshotter: HostSnapshotter{Runner: runner}}
@@ -119,7 +120,7 @@ func TestCollisionInspectorIncludesBareHostRoutes(t *testing.T) {
 		"ip -json link show":            "[]",
 		"ip -json address show":         "[]",
 		"ip -json route show table all": `[{"dst":"10.88.2.1","dev":"eth0"}]`,
-		"ss -H -u -l -n":                "",
+		"ss -H -u -a -n":                "",
 	}}
 	inspector := CollisionInspector{Snapshotter: HostSnapshotter{Runner: runner}}
 	conflicts, err := inspector.Inspect(context.Background(), []domain.ResourceClaim{
@@ -127,5 +128,91 @@ func TestCollisionInspectorIncludesBareHostRoutes(t *testing.T) {
 	})
 	if err != nil || len(conflicts) != 1 || conflicts[0].Claim.Key != "10.88.2.1/32" {
 		t.Fatalf("bare host route was not reserved: %+v %v", conflicts, err)
+	}
+}
+
+func TestLiveUDPVacancyIncludesNativeIPsecWithoutPerLinkClaims(t *testing.T) {
+	for _, port := range []string{"500", "4500", "51821", "52211"} {
+		t.Run(port, func(t *testing.T) {
+			runner := resourceRunner{output: map[string]string{
+				"ip -json link show": "[]", "ip -json address show": "[]",
+				"ip -json route show table all": "[]",
+				"ss -H -u -a -n":                "UNCONN 0 0 0.0.0.0:" + port + " 0.0.0.0:*\n",
+			}}
+			inspector := CollisionInspector{Snapshotter: HostSnapshotter{Runner: runner}}
+			vacant, err := inspector.Vacant(context.Background(), []domain.ResourceClaim{
+				{Kind: domain.ResourceUDPListenPort, Key: port},
+			})
+			if err != nil || vacant {
+				t.Fatalf("live UDP %s listener treated as vacant: %t, %v", port, vacant, err)
+			}
+		})
+	}
+	// Missing host evidence is not proof of vacancy.
+	inspector := CollisionInspector{Snapshotter: HostSnapshotter{Runner: resourceRunner{
+		err: map[string]error{"ss -H -u -a -n": fmt.Errorf("cannot inspect")},
+		output: map[string]string{
+			"ip -json link show": "[]", "ip -json address show": "[]",
+			"ip -json route show table all": "[]",
+		},
+	}}}
+	if vacant, err := inspector.Vacant(context.Background(), []domain.ResourceClaim{
+		{Kind: domain.ResourceUDPListenPort, Key: "500"},
+	}); err == nil || vacant {
+		t.Fatalf("ambiguous listener inventory accepted: %t, %v", vacant, err)
+	}
+}
+
+// A connected UDP socket is not listed by ss -l, but it still owns its
+// local port. QUIC's two local UDP claims must not mistake it for vacancy.
+func TestLiveUDPVacancyIncludesConnectedBoundSockets(t *testing.T) {
+	for _, tc := range []struct {
+		name, port, row string
+	}{
+		{"dial-helper-ipv4", "52211", "ESTAB 0 0 127.0.0.1:52211 127.0.0.1:9000\n"},
+		{"kernel-wg-ipv4", "51821", "ESTAB 0 0 192.0.2.50:51821 198.51.100.51:51820\n"},
+		{"dial-helper-ipv6", "52211", "ESTAB 0 0 [::1]:52211 [::1]:9000\n"},
+		{"kernel-wg-ipv6", "51821", "ESTAB 0 0 [::1]:51821 [::1]:51820\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := resourceRunner{output: map[string]string{
+				"ip -json link show": "[]", "ip -json address show": "[]",
+				"ip -json route show table all": "[]",
+				"ss -H -u -l -n":                "", // reproduce the pre-fix blind spot
+				"ss -H -u -a -n":                tc.row,
+			}}
+			inspector := CollisionInspector{Snapshotter: HostSnapshotter{Runner: runner}}
+			vacant, err := inspector.Vacant(context.Background(), []domain.ResourceClaim{
+				{Kind: domain.ResourceUDPListenPort, Key: tc.port},
+			})
+			if err != nil || vacant {
+				t.Fatalf("connected bound UDP %s mistakenly vacant: vacant=%t err=%v", tc.port, vacant, err)
+			}
+		})
+	}
+}
+
+func TestLiveUDPVacancyFailsClosedOnMalformedOrPartialAllStateInventory(t *testing.T) {
+	for _, tc := range []struct {
+		name, stdout, stderr string
+	}{
+		{"missing-peer-column", "ESTAB 0 0 127.0.0.1:52211\n", ""},
+		{"invalid-connected-port", "ESTAB 0 0 [::1]:bad [::1]:9000\n", ""},
+		{"warning-with-valid-row", "ESTAB 0 0 127.0.0.1:52211 127.0.0.1:9000\n", "ss warning may contain sensitive detail"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := resourceRunner{output: map[string]string{
+				"ip -json link show": "[]", "ip -json address show": "[]",
+				"ip -json route show table all": "[]",
+				"ss -H -u -a -n":                tc.stdout,
+			}, stderr: map[string]string{"ss -H -u -a -n": tc.stderr}}
+			inspector := CollisionInspector{Snapshotter: HostSnapshotter{Runner: runner}}
+			vacant, err := inspector.Vacant(context.Background(), []domain.ResourceClaim{
+				{Kind: domain.ResourceUDPListenPort, Key: "51821"},
+			})
+			if err == nil || vacant || strings.Contains(err.Error(), tc.stderr) && tc.stderr != "" {
+				t.Fatalf("unverified all-state UDP inventory was trusted or leaked: %t %v", vacant, err)
+			}
+		})
 	}
 }

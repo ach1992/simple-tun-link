@@ -63,7 +63,7 @@ func (r *guidedTestRunner) Run(_ context.Context, name string, args ...string) (
 		} else {
 			output = r.routes
 		}
-	case "ss -H -u -l -n":
+	case "ss -H -u -a -n":
 		output = ""
 	default:
 		return linux.CommandResult{}, errors.New("nonrequired optional capability")
