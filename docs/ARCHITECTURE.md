@@ -831,6 +831,20 @@ vacancy checks, exact original-object creation witnesses, positive
 ifindex/guard/service ownership, dependency-ordered rollback and
 reboot/reconciliation gates; a source-only plan is not a permit.
 
+A shared, still **read-only** whole-host firewall-coexistence probe now
+supports both WSS and QUIC candidate WG ingress guards. It reuses the
+existing bounded five-query nft/IPv4+IPv6-iptables/legacy inspection and
+its strict early-hook rejection. Only independently attested, exact
+current WSS or QUIC sibling guards may be excluded, with a complete
+nonce (when present)/port/table/rule live readback; missing, foreign,
+drifted, duplicated, overlapping UDP-port or self-claimed NEW Link
+guards fail closed. Separate WSS and QUIC
+namespaces do not authorize automatic trust or cleanup. The future
+canonical Engine must prove each committed sibling's original State,
+host and generation ownership before supplying any exclusion; this
+source-only probe cannot establish that evidence itself or grant an
+nft transaction, kernel effect or host mutation.
+
 The separate **source-only** `quic.StageHelperConfig` and read-only
 `quic.InspectHelperConfig` provide checked, deterministic `helper.json`
 publication for each Link's already-protected credential generation. Before

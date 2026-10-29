@@ -29,6 +29,82 @@ type WSSWGFirewallEvidence struct {
 	LegacySaveV6 []byte
 }
 
+// WGFirewallEvidence is the exact same bounded IPv4/IPv6+nft evidence
+// required by both per-Link WSS and QUIC kernel WG ingress candidates.
+// Keep the original WSS name as an alias for source compatibility.
+type WGFirewallEvidence = WSSWGFirewallEvidence
+
+func verifiedWGGuardSpecs(wss []WSSWGIngressPlan, quic []QUICWGIngressPlan) []wgIngressSpec {
+	guards := make([]wgIngressSpec, 0, len(wss)+len(quic))
+	for _, p := range wss {
+		guards = append(guards, p.spec())
+	}
+	for _, p := range quic {
+		guards = append(guards, p.spec())
+	}
+	return guards
+}
+
+// An exclusion list is only a promise from an independently attested
+// committed sibling: the caller must have matched State claims, exact
+// journal nonce and the complete current live nft object. This helper
+// validates the supplied actual nft readback before any exclusion; it
+// cannot itself certify original creation/ownership from table names.
+func checkNewWGSiblingGuards(target wgIngressSpec, guards []wgIngressSpec) error {
+	if err := target.validate(); err != nil {
+		return err
+	}
+	// Exclusive WG UDP listen ports are host-wide, not per carrier or nft
+	// table. Include the proposed NEW guard in the same uniqueness census
+	// so two separately attested siblings cannot silently share one port.
+	// This gate runs before any Probe host query or nft exclusion.
+	ports := map[uint16]struct{}{target.listenPort: {}}
+	for _, guard := range guards {
+		if err := guard.validate(); err != nil {
+			return err
+		}
+		if guard.tableName() == target.tableName() {
+			return fmt.Errorf("new kernel WG ingress cannot exclude its own table identity")
+		}
+		if _, duplicate := ports[guard.listenPort]; duplicate {
+			return fmt.Errorf("kernel WG ingress UDP port overlaps the proposed guard or a separately guarded sibling")
+		}
+		ports[guard.listenPort] = struct{}{}
+	}
+	return nil
+}
+
+// CheckWSSWGFirewallCoexistenceWithVerifiedSiblings adds separately
+// attested QUIC guard siblings without changing any original WSS API.
+func (p WSSWGIngressPlan) CheckWSSWGFirewallCoexistenceWithVerifiedSiblings(
+	e WGFirewallEvidence, wss []WSSWGIngressPlan, quic []QUICWGIngressPlan,
+) error {
+	guards := verifiedWGGuardSpecs(wss, quic)
+	if err := checkNewWGSiblingGuards(p.spec(), guards); err != nil {
+		return err
+	}
+	return p.spec().checkWGFirewallCoexistence(e, guards)
+}
+
+// CheckQUICWGFirewallCoexistence verifies a NEW QUIC guard's host-wide
+// nft/legacy policy: no foreign early hook is adopted as an owned sibling.
+func (p QUICWGIngressPlan) CheckQUICWGFirewallCoexistence(e WGFirewallEvidence) error {
+	return p.spec().checkWGFirewallCoexistence(e, nil)
+}
+
+// CheckQUICWGFirewallCoexistenceWithVerifiedSiblings excludes only exact
+// original WSS/QUIC guard snapshots positively attested by the caller.
+// It deliberately refuses self-exclusion for a proposed NEW QUIC guard.
+func (p QUICWGIngressPlan) CheckQUICWGFirewallCoexistenceWithVerifiedSiblings(
+	e WGFirewallEvidence, wss []WSSWGIngressPlan, quic []QUICWGIngressPlan,
+) error {
+	guards := verifiedWGGuardSpecs(wss, quic)
+	if err := checkNewWGSiblingGuards(p.spec(), guards); err != nil {
+		return err
+	}
+	return p.spec().checkWGFirewallCoexistence(e, guards)
+}
+
 // CheckWSSWGFirewallCoexistence rejects known and unknown host firewall
 // interference with the requested per-Link WG ingress guard. A nil
 // error means only that the supplied snapshots exhibit no classified
@@ -60,22 +136,29 @@ func (p WSSWGIngressPlan) CheckWSSWGFirewallCoexistenceWithVerifiedGuards(
 }
 
 func (p WSSWGIngressPlan) checkWSSWGFirewallCoexistence(e WSSWGFirewallEvidence, guards []WSSWGIngressPlan) error {
+	return p.spec().checkWGFirewallCoexistence(e, verifiedWGGuardSpecs(guards, nil))
+}
+
+func (p wgIngressSpec) checkWGFirewallCoexistence(e WGFirewallEvidence, guards []wgIngressSpec) error {
+	if err := p.validate(); err != nil {
+		return err
+	}
 	seen := map[string]bool{}
 	for _, owned := range guards {
 		if err := owned.validate(); err != nil {
 			return err
 		}
 		if seen[owned.tableName()] {
-			return fmt.Errorf("duplicate WSS guard attestation")
+			return fmt.Errorf("duplicate kernel WG ingress guard attestation")
 		}
 		seen[owned.tableName()] = true
-		filtered, err := owned.filterVerifiedWSSWGOwnGuard(e.NFTRuleset)
+		filtered, err := owned.filterVerifiedWGOwnGuard(e.NFTRuleset)
 		if err != nil {
 			return err
 		}
 		e.NFTRuleset = filtered
 	}
-	if err := p.CheckWSSWGNFTCoexistence(e.NFTRuleset); err != nil {
+	if err := p.CheckWGNFTCoexistence(e.NFTRuleset); err != nil {
 		return err
 	}
 	for _, entry := range []struct {
@@ -179,13 +262,53 @@ func (p WSSWGIngressPlan) ProbeWSSWGFirewallCoexistenceWithVerifiedGuards(
 func (p WSSWGIngressPlan) probeWSSWGFirewallCoexistence(
 	ctx context.Context, runner BoundedRunner, guards []WSSWGIngressPlan,
 ) error {
+	return p.spec().probeWGFirewallCoexistence(ctx, runner, verifiedWGGuardSpecs(guards, nil))
+}
+
+// ProbeQUICWGFirewallCoexistence reads only bounded, fixed host inventory
+// commands; no host or firewall mutation, grant, State write or effect.
+func (p QUICWGIngressPlan) ProbeQUICWGFirewallCoexistence(
+	ctx context.Context, runner BoundedRunner,
+) error {
+	return p.spec().probeWGFirewallCoexistence(ctx, runner, nil)
+}
+
+func (p QUICWGIngressPlan) ProbeQUICWGFirewallCoexistenceWithVerifiedSiblings(
+	ctx context.Context, runner BoundedRunner, wss []WSSWGIngressPlan, quic []QUICWGIngressPlan,
+) error {
+	guards := verifiedWGGuardSpecs(wss, quic)
+	if err := checkNewWGSiblingGuards(p.spec(), guards); err != nil {
+		return err
+	}
+	return p.spec().probeWGFirewallCoexistence(ctx, runner, guards)
+}
+
+func (p WSSWGIngressPlan) ProbeWSSWGFirewallCoexistenceWithVerifiedSiblings(
+	ctx context.Context, runner BoundedRunner, wss []WSSWGIngressPlan, quic []QUICWGIngressPlan,
+) error {
+	guards := verifiedWGGuardSpecs(wss, quic)
+	if err := checkNewWGSiblingGuards(p.spec(), guards); err != nil {
+		return err
+	}
+	return p.spec().probeWGFirewallCoexistence(ctx, runner, guards)
+}
+
+func (p wgIngressSpec) probeWGFirewallCoexistence(
+	ctx context.Context, runner BoundedRunner, guards []wgIngressSpec,
+) error {
 	if err := p.validate(); err != nil {
 		return err
 	}
-	if runner == nil {
-		return fmt.Errorf("WSS WG host firewall probe requires a bounded runner")
+	if runner == nil || ctx == nil {
+		return fmt.Errorf("kernel WG host firewall probe requires context and a bounded runner")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	read := func(stage, executable string, cap int, args ...string) ([]byte, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("kernel WG host firewall probe canceled before %s readback", stage)
+		}
 		result, err := runner.RunBounded(ctx, CaptureLimits{Stdout: cap, Stderr: 64 << 10}, executable, args...)
 		if err != nil {
 			// Never include raw stdout/stderr: firewall comments may contain
@@ -194,6 +317,9 @@ func (p WSSWGIngressPlan) probeWSSWGFirewallCoexistence(
 		}
 		if len(bytes.TrimSpace(result.Stderr)) != 0 {
 			return nil, fmt.Errorf("WSS WG %s readback reported unexpected stderr", stage)
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("kernel WG host firewall %s observation canceled", stage)
 		}
 		return result.Stdout, nil
 	}
@@ -222,7 +348,10 @@ func (p WSSWGIngressPlan) probeWSSWGFirewallCoexistence(
 	// from a missing/failed legacy snapshot in the pure verifier.
 	e.LegacySaveV4 = append([]byte{}, e.LegacySaveV4...)
 	e.LegacySaveV6 = append([]byte{}, e.LegacySaveV6...)
-	return p.CheckWSSWGFirewallCoexistenceWithVerifiedGuards(e, guards)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return p.checkWGFirewallCoexistence(e, guards)
 }
 
 // safeWSSWGReadbackFailure never formats or unwraps untrusted runner error
@@ -360,6 +489,13 @@ func wssWGChainKey(family, table, name string) string {
 // must independently identify all three objects; if any are missing,
 // altered or duplicated the entire admission fails closed.
 func (p WSSWGIngressPlan) filterVerifiedWSSWGOwnGuard(raw []byte) ([]byte, error) {
+	return p.spec().filterVerifiedWGOwnGuard(raw)
+}
+
+func (p wgIngressSpec) filterVerifiedWGOwnGuard(raw []byte) ([]byte, error) {
+	if err := p.validate(); err != nil {
+		return nil, err
+	}
 	if len(raw) == 0 || len(raw) > 8<<20 {
 		return nil, fmt.Errorf("missing bounded WSS host ruleset")
 	}
@@ -418,6 +554,10 @@ func (p WSSWGIngressPlan) filterVerifiedWSSWGOwnGuard(raw []byte) ([]byte, error
 }
 
 func (p WSSWGIngressPlan) CheckWSSWGNFTCoexistence(raw []byte) error {
+	return p.spec().CheckWGNFTCoexistence(raw)
+}
+
+func (p wgIngressSpec) CheckWGNFTCoexistence(raw []byte) error {
 	if err := p.validate(); err != nil {
 		return err
 	}
