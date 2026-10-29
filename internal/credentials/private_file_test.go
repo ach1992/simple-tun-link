@@ -277,3 +277,27 @@ func TestPrivateNoReplaceRejectsUntrustedExistingInodeBeforeSync(t *testing.T) {
 		})
 	}
 }
+
+// The create-only API exists specifically for an Engine journal's first
+// generation. It cannot accept a matching old inode (even if another
+// component correctly accepts an exact idempotent retry).
+func TestPrivateCreateOnlyRequiresExclusiveOriginatingInode(t *testing.T) {
+	dirfd, dir := privateTestDir(t)
+	path := filepath.Join(dir, "helper.json")
+	original := []byte("test-only-generation-config\n")
+	id, err := WritePrivateCreateOnly(dirfd, "helper.json", original)
+	if err != nil || id.Device == 0 || id.Inode == 0 {
+		t.Fatalf("exclusive create did not report originating identity: %+v %v", id, err)
+	}
+	requirePrivateFileUnchanged(t, path, original, id.Device, id.Inode)
+	if _, err := WritePrivateCreateOnly(dirfd, "helper.json", original); err == nil {
+		t.Fatal("matching pre-existing inode falsely gained create-time ownership")
+	}
+	if _, err := WritePrivateCreateOnly(dirfd, "helper.json", []byte("different bytes")); err == nil {
+		t.Fatal("different existing bytes falsely gained create-time ownership")
+	}
+	requirePrivateFileUnchanged(t, path, original, id.Device, id.Inode)
+	if err := WritePrivateNoReplace(dirfd, "helper.json", original); err != nil {
+		t.Fatal("existing general-purpose idempotent writer lost its established behavior:", err)
+	}
+}
