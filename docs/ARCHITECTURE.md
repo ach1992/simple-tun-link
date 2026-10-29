@@ -842,34 +842,43 @@ Engine workflow must first publish the complete immutable pre-effect
 journal containing these expected values via `PrepareQUICCrash`; a preview
 alone does not reserve a Link or establish ownership.
 
-`Engine.StageQUICCrashMaterials` is a new **source-only, non-runnable**
-canonical writer for an already-existing, unresolved QUIC journal. It
-shares the read-only `Engine.InspectQUICCrashMaterials`' exact journal-to-Plan
-reconstruction and maintenance -> Link -> resource locks, including a fresh
-State recheck after those locks are acquired. Before its **first write**,
-it previews the supplied private bundle and officially pinned executable
-and checks **all seven** immutable journal identities. Only an exact match
-can enter existing no-replace `StageCredentials` and `StageHelperConfig`
-0600 role-private publication/readback. Wrong credentials, TLS/role/root,
-helper config or executable are refused; after any uncertain write failure
-the entire original journal and any possibly partial private files remain
-for separate explicit owner-scoped reconciliation, never auto-deleted.
+`Engine.StageQUICCrashMaterials` is the **source-only, non-runnable** canonical
+writer for an already durable, unresolved QUIC journal. Its public
+implementation now requires **positive create-time generation provenance** in
+addition to seven expected fingerprints. It reconstructs the journal's exact
+Plan, checks the immutable nonce, performs the same official-binary and
+private-bundle preview before any protected Link directory is created, and
+rechecks State under canonical maintenance -> Link -> resource locks.
 
-The companion read-only `Engine.InspectQUICCrashMaterials` still verifies
-on-disk credentials/config SHA-256 and executable hash/device/inode against
-the journal under the same locks. Neither successful staging nor inspection
-**consumes the journal** or proves an object is owned by its nonce/generation:
-the journal contains expected fingerprints but no exclusive created-file
-receipt or host-object ownership witness. These calls do **not** start a
-Helper, install a unit, create kernel WG/nft objects, certify peer trust,
-reserve an actual UDP socket or expose a runnable QUIC Carrier. Future
-effectful runtime code must separately revalidate exact identities at the
-actual execution/start boundary, prove generation-specific effect ownership
-and supply crash-safe recovery/removal before enabling any Link. An existing
-journal keeps the shared restore unit from being retired; material staging
-does not need to republish State or acquire the restore-persistence lock.
+A **fresh** Link credential directory is created with exclusive
+descriptor-relative `mkdirat` (not reused merely because file contents
+match). After parent fsync, STL writes the five role-private 0600 files
+using the existing no-replace, fsynced credential/config components. It
+captures directory and file device/inode/digest evidence, then publishes a
+private 0600 `generation-owner.json` sidecar (schema v1) with a durable
+no-replace write and readback. This sidecar binds the **Engine-issued immutable
+journal nonce**, Link, role, expected seven-field identity and **all five
+creation-generation inodes**. It does not contain plaintext keys or bearer.
+Every idempotent retry must inspect the same durable receipt and all five
+matching actual inodes; it must NOT restage or adopt a pre-existing directory,
+even when its credentials and helper JSON match the journal. A crash after
+exclusive directory creation but before the sidecar becomes durable leaves
+uncertain files quarantined. No automatic deletion, adoption or blind retry
+occurs. This approach changes no State v4 schema.
+
+The read-only public `Engine.InspectQUICCrashMaterials` now requires both the
+positive journal-bound receipt and actual protected config/credential and
+pinned executable identity. The raw protected-storage helpers remain
+uncommitted building blocks, not independent ownership grants. Neither
+successful staging nor inspection **consumes the journal**, proves any actual
+systemd/kernel/nft object or Hysteria process ownership, authenticates the
+remote peer or launches any helper. Future runtime implementation must
+re-attest exact helper bytes and protected materials at the process
+activation boundary and record positive host-specific create/absence witnesses.
+Interrupted, unknown or foreign host effects keep the journal unresolved;
+the existing restore/Engine locking must be reused rather than duplicated.
 Changing a Dial TLS peer name cannot be inferred from its leaf certificate
-alone; the exact journal Plan and derived helper config bind it.
+alone: the exact journal Plan and rendered helper config remain binding.
 
 The adapter's opt-in disposable loopback compatibility test uses the
 pinned, hash-checked official Hysteria binary with **Go-issued per-Link

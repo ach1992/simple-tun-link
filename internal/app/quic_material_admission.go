@@ -22,7 +22,25 @@ import (
 // prove host/kernel ownership or peer trust, unblock the journal, stage files,
 // start a helper or authorize any backend effect.
 func (e *Engine) InspectQUICCrashMaterials(ctx context.Context, id domain.LinkID) error {
-	return e.inspectQUICCrashMaterials(ctx, id, quic.InspectHelperConfig)
+	const action = "quic_inspect_crash_materials"
+	return e.withQUICCrashMaterialLocks(ctx, id, action, func(root string, plan quic.Plan,
+		port uint16, op state.QUICCrashOperation) error {
+		expected := quicExpectedMaterialIdentity(op)
+		if quic.InspectGenerationReceipt(root, plan, op.Nonce, expected) != nil {
+			return stlerr.New(stlerr.CodeState, action, string(id), "quic",
+				"QUIC material generation lacks an exact durable create-time ownership receipt")
+		}
+		got, err := quic.InspectHelperConfig(root, plan, port, op.ExecutablePath)
+		if err != nil || ctx.Err() != nil {
+			return stlerr.New(stlerr.CodeState, action, string(id), "quic",
+				"protected QUIC material or pinned executable cannot be verified")
+		}
+		if got != expected {
+			return stlerr.New(stlerr.CodeConflict, action, string(id), "quic",
+				"QUIC material identities differ from the immutable journal")
+		}
+		return nil
+	})
 }
 
 // Only tests supply the read-only inspector; production always verifies the
@@ -62,7 +80,22 @@ func (e *Engine) inspectQUICCrashMaterials(ctx context.Context, id domain.LinkID
 // journal, start Hysteria, install services, create WG/nft, certify a foreign
 // host owner, or enable a runnable QUIC Link.
 func (e *Engine) StageQUICCrashMaterials(ctx context.Context, id domain.LinkID, bundle quic.CredentialBundle) error {
-	return e.stageQUICCrashMaterials(ctx, id, bundle, quic.StageExpectedMaterials)
+	const action = "quic_stage_crash_materials"
+	return e.withQUICCrashMaterialLocks(ctx, id, action, func(root string, plan quic.Plan,
+		port uint16, op state.QUICCrashOperation) error {
+		expected := quicExpectedMaterialIdentity(op)
+		actual, err := quic.StageJournalGeneration(ctx, root, plan, port, op.ExecutablePath,
+			op.Nonce, bundle, expected)
+		if err != nil || ctx.Err() != nil {
+			return stlerr.New(stlerr.CodeState, action, string(id), "quic",
+				"QUIC material generation staging or create-time ownership is uncertain; preserve journal and files")
+		}
+		if actual != expected {
+			return stlerr.New(stlerr.CodeConflict, action, string(id), "quic",
+				"QUIC staged material identity does not match the immutable journal")
+		}
+		return nil
+	})
 }
 
 // Test-only seam. The public path always executes real protected and pinned

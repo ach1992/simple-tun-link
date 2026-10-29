@@ -100,6 +100,7 @@ func TestPinnedHysteriaCanonicalEngineMaterialStagingWhenAvailable(t *testing.T)
 
 			expectedNames := map[string]bool{
 				"authorization-token": true, "helper.json": true,
+				"generation-owner.json": true,
 			}
 			if role == composition.Listen {
 				expectedNames["server-cert.pem"] = true
