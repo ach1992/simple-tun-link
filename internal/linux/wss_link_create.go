@@ -62,9 +62,27 @@ func WSSStagingName(id domain.LinkID, nonce string) (string, error) {
 // as atomic: an alias is separately set by *ifindex* before renaming the
 // interface to its stable public Link name.
 func CreateWSSWireGuardStaged(ctx context.Context, name string) error {
-	if len(name) != 15 || name[0] != 'w' || strings.ContainsAny(name, "/:\x00\r\n \t") {
+	if !validWireGuardStagingName(name, 'w') {
 		return fmt.Errorf("invalid exact WSS temporary kernel identity")
 	}
+	return createWireGuardStaged(ctx, name)
+}
+
+// The kernel create primitive is shared between WSS and QUIC; the separate
+// exported callers enforce distinct, nonce-generated name namespaces.
+func validWireGuardStagingName(name string, prefix byte) bool {
+	if len(name) != 15 || name[0] != prefix {
+		return false
+	}
+	for i := 1; i < len(name); i++ {
+		if !((name[i] >= 'a' && name[i] <= 'z') || (name[i] >= '2' && name[i] <= '7')) {
+			return false
+		}
+	}
+	return true
+}
+
+func createWireGuardStaged(ctx context.Context, name string) error {
 	linkInfo := appendNetlinkAttr(nil, unix.IFLA_INFO_KIND, []byte("wireguard\x00"))
 	attrs := appendNetlinkAttr(nil, unix.IFLA_IFNAME, append([]byte(name), 0))
 	attrs = appendNetlinkAttr(attrs, unix.IFLA_LINKINFO|unix.NLA_F_NESTED, linkInfo)

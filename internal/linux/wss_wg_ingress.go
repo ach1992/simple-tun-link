@@ -37,17 +37,42 @@ func NewWSSWGIngressPlan(id domain.LinkID, listenPort uint16) (WSSWGIngressPlan,
 	return p, nil
 }
 
-func (p WSSWGIngressPlan) validate() error {
-	if err := p.LinkID.Validate(); err != nil {
-		return fmt.Errorf("WSS WireGuard ingress Link identity: %w", err)
+// wgIngressSpec is one private renderer/verifier for WSS and QUIC. The
+// transport discriminator is fixed by typed constructors, not caller input;
+// it keeps nft names and nonce-bound ownership markers distinct per Carrier.
+type wgIngressSpec struct {
+	linkID        domain.LinkID
+	listenPort    uint16
+	originalNonce string
+	carrier       string
+}
+
+func (p WSSWGIngressPlan) spec() wgIngressSpec {
+	return wgIngressSpec{
+		linkID: p.LinkID, listenPort: p.ListenPort,
+		originalNonce: p.OriginalNonce, carrier: "wss",
 	}
-	if p.ListenPort == 0 {
-		return fmt.Errorf("WSS WireGuard ingress requires a nonzero kernel UDP listen port")
+}
+
+func (p WSSWGIngressPlan) validate() error { return p.spec().validate() }
+
+func (p wgIngressSpec) validate() error {
+	if p.carrier != "wss" && p.carrier != "quic" {
+		return fmt.Errorf("unsupported kernel WireGuard ingress Carrier")
 	}
-	if p.OriginalNonce != "" {
-		raw, err := hex.DecodeString(p.OriginalNonce)
-		if err != nil || len(raw) != 16 || hex.EncodeToString(raw) != p.OriginalNonce {
-			return fmt.Errorf("invalid WSS original nft guard identity")
+	if err := p.linkID.Validate(); err != nil {
+		return fmt.Errorf("kernel WireGuard ingress Link identity: %w", err)
+	}
+	if p.listenPort == 0 {
+		return fmt.Errorf("kernel WireGuard ingress requires a nonzero UDP listen port")
+	}
+	if p.carrier == "quic" && p.originalNonce == "" {
+		return fmt.Errorf("QUIC ingress requires the original journal nonce")
+	}
+	if p.originalNonce != "" {
+		raw, err := hex.DecodeString(p.originalNonce)
+		if err != nil || len(raw) != 16 || hex.EncodeToString(raw) != p.originalNonce {
+			return fmt.Errorf("invalid original nft guard journal identity")
 		}
 	}
 	return nil
@@ -55,17 +80,26 @@ func (p WSSWGIngressPlan) validate() error {
 
 // TableName identifies a reserved, per-Link nft object. It is not
 // permission to adopt or delete a table with a matching name.
-func (p WSSWGIngressPlan) TableName() string { return p.tableName() }
+func (p WSSWGIngressPlan) TableName() string   { return p.tableName() }
+func (p WSSWGIngressPlan) tableName() string   { return p.spec().tableName() }
+func (p WSSWGIngressPlan) ruleComment() string { return p.spec().ruleComment() }
 
-func (p WSSWGIngressPlan) tableName() string {
-	hash := sha256.Sum256([]byte(p.LinkID))
-	return fmt.Sprintf("stlwss_%x", hash[:8])
+func (p wgIngressSpec) tableName() string {
+	if p.carrier == "wss" {
+		hash := sha256.Sum256([]byte(p.linkID))
+		return fmt.Sprintf("stlwss_%x", hash[:8])
+	}
+	hash := sha256.Sum256([]byte("quic:" + string(p.linkID)))
+	return fmt.Sprintf("stlquic_%x", hash[:8])
 }
 
-func (p WSSWGIngressPlan) ruleComment() string {
-	tag := "stl:" + string(p.LinkID) + ":wg-udp-guard:" + strconv.Itoa(int(p.ListenPort))
-	if p.OriginalNonce != "" {
-		tag += ":tx:" + p.OriginalNonce
+func (p wgIngressSpec) ruleComment() string {
+	tag := "stl:" + string(p.linkID) + ":wg-udp-guard:" + strconv.Itoa(int(p.listenPort))
+	if p.carrier == "quic" {
+		tag = "stl:quic:" + string(p.linkID) + ":wg-udp-guard:" + strconv.Itoa(int(p.listenPort))
+	}
+	if p.originalNonce != "" {
+		tag += ":tx:" + p.originalNonce
 	}
 	return tag
 }
@@ -82,7 +116,9 @@ func (p WSSWGIngressPlan) ruleComment() string {
 // continues to encounter its ordinary host policy. This does not prove
 // compatibility with every foreign nft/prerouting/bridge ruleset, nor protect
 // against later rule changes or other network namespaces.
-func (p WSSWGIngressPlan) NFTBatch() (string, error) {
+func (p WSSWGIngressPlan) NFTBatch() (string, error) { return p.spec().NFTBatch() }
+
+func (p wgIngressSpec) NFTBatch() (string, error) {
 	if err := p.validate(); err != nil {
 		return "", err
 	}
@@ -91,7 +127,7 @@ func (p WSSWGIngressPlan) NFTBatch() (string, error) {
 		"create table inet %s\n"+
 			"create chain inet %s ingress { type filter hook input priority %d; policy accept; }\n"+
 			"add rule inet %s ingress iifname != \"lo\" udp dport %d counter drop comment \"%s\"\n",
-		table, table, wssWGIngressPriority, table, p.ListenPort, p.ruleComment(),
+		table, table, wssWGIngressPriority, table, p.listenPort, p.ruleComment(),
 	), nil
 }
 
@@ -150,9 +186,17 @@ func wssJSONEqual(actual json.RawMessage, expected string) bool {
 // and one nft metadata object. It is read-only evidence about one table,
 // NOT proof of original ownership, physical packet isolation, or the absence
 // of higher-priority foreign hooks. On any ambiguity it rejects the result.
-func (p WSSWGIngressPlan) VerifyNFTJSON(raw []byte) error {
+func (p WSSWGIngressPlan) VerifyNFTJSON(raw []byte) error { return p.spec().VerifyNFTJSON(raw) }
+
+func (p wgIngressSpec) VerifyNFTJSON(raw []byte) error {
 	if err := p.validate(); err != nil {
 		return err
+	}
+	// Existing WSS Host callers already run this exact member validator.
+	// Keep the shared QUIC readback safe when invoked directly as well:
+	// JSON v1 decoding alone otherwise accepts duplicate/casefolded keys.
+	if len(raw) == 0 || len(raw) > 1<<20 || checkWSSWGUniqueJSONMembers(raw) != nil {
+		return fmt.Errorf("kernel WG ingress readback is oversized or ambiguous")
 	}
 	var dump wssNFTDump
 	decoder := json.NewDecoder(bytes.NewReader(raw))
@@ -204,7 +248,7 @@ func (p WSSWGIngressPlan) VerifyNFTJSON(raw []byte) error {
 				if len(r.Expr[0]) != 1 ||
 					!wssJSONEqual(r.Expr[0]["match"], `{"op":"!=","left":{"meta":{"key":"iifname"}},"right":"lo"}`) ||
 					len(r.Expr[1]) != 1 ||
-					!wssJSONEqual(r.Expr[1]["match"], fmt.Sprintf(`{"op":"==","left":{"payload":{"protocol":"udp","field":"dport"}},"right":%d}`, p.ListenPort)) ||
+					!wssJSONEqual(r.Expr[1]["match"], fmt.Sprintf(`{"op":"==","left":{"payload":{"protocol":"udp","field":"dport"}},"right":%d}`, p.listenPort)) ||
 					len(r.Expr[2]) != 1 || len(r.Expr[3]) != 1 {
 					return fmt.Errorf("WSS ingress matching conditions were altered")
 				}
