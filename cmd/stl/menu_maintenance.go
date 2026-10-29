@@ -1,12 +1,17 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"runtime"
+	"time"
 
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/version"
 	"golang.org/x/sys/unix"
@@ -46,11 +51,43 @@ func menuSettings(out, errOut io.Writer, options *runtimeOptions) int {
 	return 0
 }
 
-// This page cannot safely infer that "uninstall" also authorizes erasing
-// separately retained receiver secrets, unowned host resources, or unknown
-// partial Link state. The canonical Engine removes one verified Link at a
-// time; the installer separately checks the maintenance lock and receipts.
-func menuUninstall(out, errOut io.Writer, options *runtimeOptions) int {
+// The menu owns explicit consent, not the resource/installer lifecycle.
+type menuUninstallOps struct {
+	canAct    func(io.Reader, io.Writer) bool
+	preflight func(context.Context) error
+	install   func(context.Context, io.Writer, io.Writer, ...string) error
+	verify    func() bool
+}
+
+func installedSTLAbsent() bool {
+	for _, path := range []string{"/usr/local/bin/stl", "/usr/local/bin/stlink",
+		"/usr/local/lib/simple-tun-link/install-record"} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			return false
+		}
+	}
+	return true
+}
+
+func productionMenuUninstallOps() menuUninstallOps {
+	return menuUninstallOps{
+		canAct: menuCanUpdateNow,
+		preflight: func(ctx context.Context) error {
+			return inspectUninstallReady(ctx, state.DefaultRoot,
+				linux.SystemdPersistence{Runner: linux.ExecRunner{}}, trustedStatePath)
+		},
+		install: runEmbeddedInstaller,
+		verify:  installedSTLAbsent,
+	}
+}
+
+// No silent cleanup of saved Links, credentials, foreign services or State.
+func menuUninstall(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, options *runtimeOptions) int {
+	return menuUninstallWithOps(input, reader, out, errOut, options, productionMenuUninstallOps())
+}
+
+func menuUninstallWithOps(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
+	options *runtimeOptions, ops menuUninstallOps) int {
 	root := menuStateRoot(options)
 	if root == "" {
 		fmt.Fprintln(errOut, "Uninstall blocked: local state root is not configured.")
@@ -62,7 +99,7 @@ func menuUninstall(out, errOut io.Writer, options *runtimeOptions) int {
 		fmt.Fprintln(errOut, "Next: inspect the configured STL State directory and backups read-only; reconcile ownership before attempting uninstall.")
 		return 1
 	}
-	menuActionSection(out, "Uninstall / preparation only", "PREPARE")
+	menuActionSection(out, "Uninstall / verified canonical removal", "UNINSTALL")
 	menuField(out, "Saved tunnels", fmt.Sprintf("%d", len(snapshot.Links)))
 	if len(snapshot.Links) != 0 {
 		hasProtected := false
@@ -90,11 +127,69 @@ func menuUninstall(out, errOut io.Writer, options *runtimeOptions) int {
 		menuField(out, "Advanced CLI", "stl link list --json")
 		return 0
 	}
-	menuNotice(out, "INFO", "No saved tunnels. This alone does not prove uninstall can proceed.")
-	menuSection(out, "Final owner checks")
-	menuField(out, "1. Read-only proof", "sudo stl maintenance pre-uninstall --json")
-	menuField(out, "2. Trusted installer", "sudo bash /path/to/verified/install.sh uninstall")
-	menuField(out, "Reference", "https://github.com/ach1992/simple-tun-link/blob/main/docs/INSTALL.md")
-	menuNotice(out, "WARNING", "Uninstall never silently deletes saved credentials or State; back them up and retire deliberately.")
-	return 0
+	if !uninstallSnapshotEmpty(snapshot) {
+		menuNotice(out, "WARNING", "Saved pending operations remain even though no Link is listed.")
+		menuField(out, "Reason", "saved_or_pending_links")
+		menuField(out, "NEXT ACTION", "Use STL's Link/recovery workflow to reconcile pending operations before Uninstall.")
+		return 0
+	}
+	menuNotice(out, "INFO", "Zero saved Links. STL will inspect private State and the restore unit.")
+	if ops.canAct == nil || ops.preflight == nil || ops.install == nil || ops.verify == nil {
+		menuNotice(out, "WARNING", "Canonical Uninstall is unavailable; nothing changed.")
+		return 0
+	}
+	if !ops.canAct(input, out) {
+		menuField(out, "Reason", "installed_root_terminal_required")
+		menuField(out, "Read-only proof", "sudo stl maintenance pre-uninstall --json")
+		menuField(out, "NEXT ACTION", "Run sudo stl menu on this host and choose Uninstall (7); no external installer download is needed.")
+		return 0
+	}
+	previewCtx, done := context.WithTimeout(context.Background(), 20*time.Second)
+	checkErr := ops.preflight(previewCtx)
+	done()
+	retireUnit := errors.Is(checkErr, errOwnedRestoreUnitPresent)
+	if checkErr != nil && !retireUnit {
+		reason, next := uninstallGateGuidance(checkErr)
+		menuNotice(out, "WARNING", "Canonical Uninstall preflight rejected this host; no changes attempted.")
+		menuField(out, "Reason", reason)
+		menuField(out, "NEXT ACTION", next)
+		return 0
+	}
+	if retireUnit {
+		menuField(out, "Verification", "Zero saved Links and pending operations; an STL-owned restore unit remains")
+		menuNotice(out, "WARNING", "UNINSTALL will first retire the verified STL-owned restore unit under exclusive maintenance lock. Foreign or uncertain units are never removed.")
+	} else {
+		menuField(out, "Verification", "No saved Links, pending operations or restore unit; check repeats under exclusive lock")
+	}
+	menuNotice(out, "WARNING", "Uninstall removes the STL executable, alias and install record. Protected State, credentials and shared packages are retained.")
+	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
+		menuNotice(out, "WARNING", "Fresh terminal confirmation unavailable; no removal attempted.")
+		return 2
+	}
+	fmt.Fprintf(out, "Type %s to uninstall STL (Enter cancels): ", menuActionToken(out, "UNINSTALL"))
+	confirm, err := readMenuAnswer(reader)
+	if err != nil || confirm != "UNINSTALL" {
+		menuNotice(out, "INFO", "Uninstall cancelled. Nothing changed.")
+		return 0
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	var child menuInstallerOutput
+	childOut, childErr := child.streams()
+	menuNotice(out, "INFO", "Canonical installer verifying ownership and removing only STL-owned binaries. Raw child output is hidden.")
+	installerArgs := []string{"uninstall"}
+	if retireUnit {
+		installerArgs = append(installerArgs, "--retire-owned-restore")
+	}
+	installErr := ops.install(ctx, childOut, childErr, installerArgs...)
+	if installErr != nil {
+		child.failure(out, "uninstall", installErr, ctx)
+		menuNotice(out, "FAILED", "Uninstall was not confirmed. Inspect installed identity and recovery evidence.")
+	} else if !ops.verify() {
+		menuNotice(out, "FAILED", "Installer returned success but the STL installation remains; inspect executable and record.")
+	} else {
+		menuNotice(out, "OK", "STL uninstalled. The menu is closing; protected State and credentials are preserved.")
+	}
+	// After any installer invocation, the running binary may have changed.
+	return menuUpdatedExecutable
 }

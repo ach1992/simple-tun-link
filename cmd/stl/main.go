@@ -95,6 +95,9 @@ func runWithRuntimeInput(args []string, input io.Reader, stdout, stderr io.Write
 
 	switch args[0] {
 	case "maintenance":
+		if isMaintenanceTransition(args[1:]) {
+			return maintenanceTransitionCommand(args[1:], stdout, stderr)
+		}
 		return uninstallPreflightCommand(args[1:], stdout, stderr)
 	case "doctor":
 		return ipsecDoctorCommand(args[1:], stdout, stderr, options)

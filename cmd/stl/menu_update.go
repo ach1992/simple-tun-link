@@ -16,9 +16,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
+	"github.com/ach1992/simple-tun-link/internal/linux"
+	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/version"
 )
 
@@ -54,6 +55,29 @@ func menuReleaseImmutable(release menuOfficialRelease) bool {
 	return release.ID > 0 && release.Immutable != nil && *release.Immutable
 }
 
+func menuReleaseComplete(release menuOfficialRelease) bool {
+	if release.Draft || release.PublishedAt.IsZero() ||
+		!menuReleaseTag.MatchString(release.TagName) {
+		return false
+	}
+	names := make(map[string]bool, len(release.Assets))
+	for _, asset := range release.Assets {
+		if asset.Size > 0 && asset.State == "uploaded" {
+			names[asset.Name] = true
+		}
+	}
+	for _, want := range []string{
+		"stl_" + release.TagName + "_linux_amd64",
+		"stl_" + release.TagName + "_linux_arm64",
+		"BUILD-MANIFEST.txt", "SHA256SUMS", "LICENSE",
+	} {
+		if !names[want] {
+			return false
+		}
+	}
+	return true
+}
+
 // The only remote input is GitHub's official releases API at a fixed
 // HTTPS origin. Tag names become arguments/data, NEVER executable shell.
 // No credentials, state, systemctl calls or kernel reads are sent.
@@ -83,20 +107,8 @@ func fetchMenuOfficialReleases(ctx context.Context, client *http.Client, endpoin
 	got := make([]menuOfficialRelease, 0, len(raw))
 	seen := map[string]bool{}
 	for _, release := range raw {
-		if release.Draft || release.PublishedAt.IsZero() ||
-			!menuReleaseTag.MatchString(release.TagName) || seen[release.TagName] {
+		if !menuReleaseComplete(release) || seen[release.TagName] {
 			continue
-		}
-		names := map[string]bool{}
-		for _, asset := range release.Assets {
-			if asset.Size > 0 && asset.State == "uploaded" {
-				names[asset.Name] = true
-			}
-		}
-		if !names["stl_"+release.TagName+"_linux_amd64"] ||
-			!names["stl_"+release.TagName+"_linux_arm64"] ||
-			!names["BUILD-MANIFEST.txt"] || !names["SHA256SUMS"] || !names["LICENSE"] {
-			continue // incomplete/unpublished bundles cannot be selected
 		}
 		seen[release.TagName] = true
 		got = append(got, release)
@@ -104,8 +116,8 @@ func fetchMenuOfficialReleases(ctx context.Context, client *http.Client, endpoin
 	sort.SliceStable(got, func(i, j int) bool {
 		return got[i].PublishedAt.After(got[j].PublishedAt)
 	})
-	if len(got) > 3 {
-		got = got[:3]
+	if len(got) > 10 {
+		got = got[:10]
 	}
 	if len(got) == 0 {
 		return nil, errors.New("no verified complete public release was found")
@@ -169,6 +181,19 @@ func menuForwardMenuUpgrade(current string, release menuOfficialRelease) bool {
 	return menuStablePatchUpgrade(current, release.TagName)
 }
 
+// Only verified same-line older Stable releases whose historical State
+// reader is explicitly known may be selected for a controlled downgrade.
+func menuStablePatchDowngrade(current, target string) bool {
+	a, b := menuStableVersion.FindStringSubmatch(current), menuStableVersion.FindStringSubmatch(target)
+	if len(a) != 4 || len(b) != 4 || a[1] != b[1] || a[2] != b[2] {
+		return false
+	}
+	previous, e1 := strconv.ParseUint(a[3], 10, 64)
+	selected, e2 := strconv.ParseUint(b[3], 10, 64)
+	_, contract := publishedStateSchema(target)
+	return e1 == nil && e2 == nil && contract == nil && selected < previous
+}
+
 func menuCanUpdateNow(input io.Reader, out io.Writer) bool {
 	in, inOK := input.(*os.File)
 	_, outOK := menuTerminal(out)
@@ -199,8 +224,8 @@ func menuInstalledVersionMatches(raw []byte, tag string) bool {
 // The canonical installer remains the ONLY updater/rollback authority.
 // No second install/rollback/State/network engine is implemented here.
 func menuRunCanonicalUpdate(ctx context.Context, release menuOfficialRelease, out, errOut io.Writer) error {
-	// Fail closed even if a future call site bypasses the menu's prompt:
-	// no downloaded shell code may execute as root for a mutable release.
+	// Run the CURRENT installed, byte-identical embedded canonical installer,
+	// never arbitrary older downloaded shell source during a downgrade.
 	if !menuReleaseImmutable(release) {
 		return errors.New("automatic update requires a confirmed immutable GitHub release")
 	}
@@ -208,68 +233,19 @@ func menuRunCanonicalUpdate(ctx context.Context, release menuOfficialRelease, ou
 		return errors.New("canonical update requires root")
 	}
 	tag := release.TagName
-	if !menuReleaseTag.MatchString(tag) {
-		return errors.New("invalid official release tag")
+	if !menuReleaseTag.MatchString(tag) ||
+		(!menuForwardMenuUpgrade(version.Version, release) &&
+			(release.Prerelease || !menuStablePatchDowngrade(version.Version, tag))) {
+		return errors.New("invalid or incompatible official release selection")
 	}
-	// Never execute a newly downloaded root script from user-controlled
-	// TMPDIR or a shared writable directory. The supported distro's
-	// root-private home is an isolated, non-symlink parent.
-	parent, err := os.Lstat("/root")
-	if err != nil || !parent.IsDir() || parent.Mode()&os.ModeSymlink != 0 ||
-		parent.Mode().Perm()&0o077 != 0 {
-		return errors.New("trusted private root staging directory is not available")
+	var child menuInstallerOutput
+	stdout, stderr := child.streams()
+	menuNotice(out, "INFO", "Running embedded canonical installer with exact release verification and State ownership locks.")
+	if err := runEmbeddedInstaller(ctx, stdout, stderr, "update", "--version", tag, "--backends", "native"); err != nil {
+		child.failure(out, "update", err, ctx)
+		return errors.New("canonical updater exited unsuccessfully or was interrupted")
 	}
-	identity, ok := parent.Sys().(*syscall.Stat_t)
-	if !ok || identity.Uid != 0 {
-		return errors.New("private root staging directory has untrusted owner")
-	}
-	dir, err := os.MkdirTemp("/root", "stl-update-")
-	if err != nil {
-		return errors.New("cannot stage verified installer privately")
-	}
-	defer os.RemoveAll(dir)
-	path := filepath.Join(dir, "install.sh")
-	raw := "https://raw.githubusercontent.com/ach1992/simple-tun-link/" + tag + "/scripts/install.sh"
-	client := &http.Client{
-		Timeout: 25 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if req.URL.Scheme != "https" || req.URL.Host != "raw.githubusercontent.com" || len(via) > 2 {
-				return errors.New("tagged installer redirected outside trusted HTTPS origin")
-			}
-			return nil
-		},
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("cannot download official tagged installer: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("official tagged installer HTTP status %d", resp.StatusCode)
-	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	n, err := io.Copy(file, io.LimitReader(resp.Body, menuReleaseBytesLimit+1))
-	closeErr := file.Close()
-	if err != nil || closeErr != nil || n == 0 || n > menuReleaseBytesLimit {
-		return errors.New("tagged installer incomplete or exceeds size limit")
-	}
-	syntax := exec.CommandContext(ctx, "/bin/bash", "-n", path)
-	if err := syntax.Run(); err != nil {
-		return errors.New("tagged installer failed Bash syntax check")
-	}
-	menuNotice(out, "INFO", "Immutable official release selected; the canonical installer owns update and rollback.")
-	if err := menuRunCanonicalUpdateProcess(ctx, path, tag, out); err != nil {
-		return err
-	}
-	// Process success alone is not release delivery. Verify the newly
-	// installed executable's immutable embedded identity before saying OK.
+	// Process success alone is not delivery; verify installed binary identity.
 	verified, err := exec.CommandContext(ctx, "/usr/local/bin/stl", "version", "--json").Output()
 	if err != nil || !menuInstalledVersionMatches(verified, tag) {
 		return errors.New("installer returned success but installed version/commit could not be verified")
@@ -394,6 +370,16 @@ func menuUpdate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			}
 			if menuReleaseImmutable(release) {
 				kind += " / immutable"
+				switch {
+				case release.TagName == version.Version:
+					kind += " / installed"
+				case menuForwardMenuUpgrade(version.Version, release):
+					kind += " / upgrade"
+				case !release.Prerelease && menuStablePatchDowngrade(version.Version, release.TagName):
+					kind += " / downgrade (requires empty Links)"
+				default:
+					kind += " / check compatibility"
+				}
 			} else {
 				kind += " / manual only"
 			}
@@ -441,13 +427,34 @@ func menuUpdate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		return 0
 	}
 	if !official {
-		menuNotice(out, "WARNING", "Manually entered tag was NOT verified by this menu. Inspect official release before running anything.")
-		menuPrintManualUpdate(out, selected)
-		return 0
+		// Exact manual entry is a selector, NOT permission to trust an
+		// arbitrary tag. Validate the exact official API release and its
+		// complete artifact set; offline/test catalogues never auto-adopt it.
+		for _, listed := range releases {
+			if listed.TagName == selected {
+				selectedRelease, official = listed, true
+				break
+			}
+		}
+		if !official && (options == nil || options.menuReleases == nil) {
+			ctx, stop := context.WithTimeout(context.Background(), 7*time.Second)
+			exact, err := fetchMenuReleaseTag(ctx, selected)
+			stop()
+			if err == nil {
+				selectedRelease, official = exact, true
+			}
+		}
+		if !official {
+			menuNotice(out, "WARNING", "Manually entered tag was NOT verified as a complete official immutable release. Nothing changed.")
+			menuPrintManualUpdate(out, selected)
+			return 0
+		}
 	}
-	if !menuForwardMenuUpgrade(version.Version, selectedRelease) {
-		menuNotice(out, "WARNING", "Automatic update supports newer Stable patches on the same major/minor line or forward same-line RC releases only.")
-		menuPrintManualUpdate(out, selected)
+	downgrade := !selectedRelease.Prerelease && menuStablePatchDowngrade(version.Version, selectedRelease.TagName)
+	if !menuForwardMenuUpgrade(version.Version, selectedRelease) && !downgrade {
+		menuNotice(out, "WARNING", "This release is not a verified compatible same-line upgrade/downgrade; no installer started.")
+		menuField(out, "Reason", "release_version_contract_unsupported")
+		menuField(out, "NEXT ACTION", "Choose another verified Stable from the list; switching major/minor or older unknown State readers requires a compatibility review.")
 		return 0
 	}
 	if !menuReleaseImmutable(selectedRelease) {
@@ -460,14 +467,30 @@ func menuUpdate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		menuPrintManualUpdate(out, selected)
 		return 0
 	}
-	menuNotice(out, "WARNING", "An update replaces the installed binary. Back up State and protected credentials first; active Links must be quiesced.")
+	token := "UPDATE"
+	if downgrade {
+		token = "DOWNGRADE"
+		ctx, stop := context.WithTimeout(context.Background(), 20*time.Second)
+		err := inspectUninstallReady(ctx, state.DefaultRoot,
+			linux.SystemdPersistence{Runner: linux.ExecRunner{}}, trustedStatePath)
+		stop()
+		if err != nil {
+			reason, next := uninstallGateGuidance(err)
+			menuNotice(out, "WARNING", "Downgrade requires no saved Links, pending operations or STL restore unit. No change started.")
+			menuField(out, "Reason", reason)
+			menuField(out, "NEXT ACTION", next)
+			return 0
+		}
+		menuNotice(out, "INFO", "The current Engine will preserve or safely convert an EMPTY State for the older verified schema under its maintenance lock.")
+	}
+	menuNotice(out, "WARNING", "The selected version replaces the installed binary. Back up State and protected credentials first; active Links must be quiesced.")
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
 		menuNotice(out, "WARNING", "Cannot obtain a fresh terminal confirmation; nothing changed.")
 		return 2
 	}
-	fmt.Fprintf(out, "Type %s to run the canonical installer (Enter cancels): ", menuActionToken(out, "UPDATE"))
+	fmt.Fprintf(out, "Type %s to run the canonical installer (Enter cancels): ", menuActionToken(out, token))
 	confirm, err := readMenuAnswer(reader)
-	if err != nil || confirm != "UPDATE" {
+	if err != nil || confirm != token {
 		menuNotice(out, "INFO", "Update cancelled. No installer started.")
 		return 0
 	}
@@ -481,6 +504,6 @@ func menuUpdate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		// Never resume the old in-memory menu after any install attempt.
 		return menuUpdatedExecutable
 	}
-	menuNotice(out, "OK", "Update complete. Exit this process and reopen STL to use the new executable.")
+	menuNotice(out, "OK", "Version change complete. Exit this process and reopen STL to use the selected executable.")
 	return menuUpdatedExecutable
 }

@@ -243,10 +243,11 @@ func TestEngineLastLinkRemovalRejectsUnverifiedDisablePostcondition(t *testing.T
 	if err != nil || len(snapshot.Links) != 0 || b.live || b.undos != 0 {
 		t.Fatalf("committed removed Link was rolled back: saved=%+v backendLive=%t undos=%d err=%v", snapshot, b.live, b.undos, err)
 	}
-	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("test did not exercise removal with orphan enablement: %v", err)
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatalf("owned unit must be retained when disablement cannot be verified: %v", err)
 	}
-	expectSystemdOperations(t, runner.commands, "systemctl is-enabled ", "systemctl disable ", "systemctl daemon-reload", "systemctl is-enabled ")
+	expectSystemdOperations(t, runner.commands, "systemctl is-enabled ", "systemctl disable ",
+		"systemctl is-enabled ", "systemctl daemon-reload", "systemctl enable ", "systemctl is-enabled ")
 }
 
 // A substituted incoming inode must abort BEFORE reload and preserve Engine

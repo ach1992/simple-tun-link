@@ -184,6 +184,14 @@ func (b *Backend) Inspect(ctx context.Context, link domain.Link) (core.Observati
 	return obs, nil
 }
 
+// These reasons are authored, credential-free operator categories, not
+// interpretations of arbitrary kernel output or a remote Setup Link.
+func grePlanningIssue(link domain.Link, code stlerr.Code, reason, next, detail string, cause error) *stlerr.Error {
+	issue := stlerr.Wrap(code, "gre_plan", string(link.ID), string(domain.BackendGRE), detail, cause)
+	issue.ReasonCode, issue.NextStep = reason, next
+	return issue
+}
+
 func (b *Backend) Plan(ctx context.Context, req core.Request, observed core.Observation) (core.Plan, error) {
 	obs, ok := observed.(observation)
 	if !ok {
@@ -195,10 +203,14 @@ func (b *Backend) Plan(ctx context.Context, req core.Request, observed core.Obse
 	name, _ := InterfaceName(req.Link.ID)
 	route, err := b.routes.Resolve(ctx, req.Link.Underlay.Peer)
 	if err != nil {
-		return nil, fmt.Errorf("resolve GRE underlay route: %w", err)
+		return nil, grePlanningIssue(req.Link, stlerr.CodePlan, "gre_underlay_route_unverified",
+			"On the receiver, check the route to the sender public IPv4 with ip -4 route get PEER_IP. Verify local underlay routing first; no tunnel was applied.",
+			"cannot verify the kernel route to GRE peer", err)
 	}
 	if route.Source != req.Link.Underlay.Local {
-		return nil, fmt.Errorf("selected local underlay does not match kernel route source")
+		return nil, grePlanningIssue(req.Link, stlerr.CodePlan, "gre_underlay_source_mismatch",
+			"The kernel-selected outgoing source IPv4 differs from the local underlay IPv4 expected by this Setup Link. Inspect ip -4 route get PEER_IP on this receiver and correct the endpoint/route before re-importing.",
+			"selected GRE underlay source does not match the kernel route", nil)
 	}
 	protocol, destinationPort := uint8(greProtocol), uint16(0)
 	if req.Link.Encapsulation == domain.EncapFOU || req.Link.Encapsulation == domain.EncapGUE {
@@ -210,21 +222,29 @@ func (b *Backend) Plan(ctx context.Context, req core.Request, observed core.Obse
 	}
 	firewallPresent, err := b.firewall.HasInbound(ctx, req.Link.ID, rule)
 	if err != nil {
-		return nil, fmt.Errorf("inspect GRE firewall rule: %w", err)
+		return nil, grePlanningIssue(req.Link, stlerr.CodeInspect, "gre_firewall_readback_unverified",
+			"STL could not confirm its exact GRE ingress firewall rule. Inspect firewall service/readback availability and STL ownership without changing other rules; no tunnel was applied.",
+			"cannot verify GRE ingress firewall rule", err)
 	}
 	anyOwnedFirewall, err := b.firewall.HasOwnedInbound(ctx, req.Link.ID, false)
 	if err != nil {
-		return nil, fmt.Errorf("inspect GRE firewall ownership: %w", err)
+		return nil, grePlanningIssue(req.Link, stlerr.CodeInspect, "gre_firewall_ownership_unverified",
+			"STL could not verify existing GRE firewall ownership. Inspect STL Link status and firewall service availability read-only; do not adopt or flush another owner's rules.",
+			"cannot verify GRE firewall ownership", err)
 	}
 	if !firewallPresent && anyOwnedFirewall {
-		return nil, stlerr.New(stlerr.CodeConflict, "gre_plan", string(req.Link.ID), string(req.Link.Backend), "an owned GRE firewall rule exists for a different underlay route; reconciliation is required")
+		return nil, grePlanningIssue(req.Link, stlerr.CodeConflict, "gre_firewall_route_drift",
+			"An earlier STL-owned firewall rule targets a different route. Inspect this Link and its route in STL before retrying; never replace the rule blindly.",
+			"existing owned GRE firewall does not match this underlay route", nil)
 	}
 
 	p := plan{link: req.Link, name: name, route: route, firewallRule: rule}
 	if mapping, managed := desiredFOUMapping(req.Link, route); managed {
 		exact, collision := mappingAtPort(obs.Mappings, mapping)
 		if collision {
-			return nil, stlerr.New(stlerr.CodeConflict, "gre_plan", string(req.Link.ID), string(req.Link.Backend), "GRE FOU/GUE receive port is occupied by a different mapping")
+			return nil, grePlanningIssue(req.Link, stlerr.CodeConflict, "gre_receive_port_occupied",
+				"The selected GRE FOU/GUE UDP receive port is already mapped differently. Select a non-conflicting port or reconcile the exact owned mapping in STL.",
+				"GRE FOU/GUE receive port is already occupied", nil)
 		}
 		p.fouMapping, p.fouManaged, p.fouPresent = mapping, true, exact
 	}
