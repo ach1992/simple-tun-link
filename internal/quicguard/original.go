@@ -52,7 +52,15 @@ func stageOriginal(ctx context.Context, engine *app.Engine, id domain.LinkID,
 func publishOriginal(ctx context.Context, runner linux.BoundedRunner,
 	id domain.LinkID, nonce string, wg domain.WireGuardOptions,
 	apply func(context.Context, string) error) error {
-	if ctx == nil || runner == nil || apply == nil || wg.Validate() != nil || wg.PeerPort == 0 {
+	return publishOriginalWithNetworkNS(ctx, runner, id, nonce, wg, apply, currentNetworkNamespace)
+}
+
+// Package-private namespace-read seam for deterministic failure tests only.
+// StageOriginal always uses the real calling-thread namespace reader.
+func publishOriginalWithNetworkNS(ctx context.Context, runner linux.BoundedRunner,
+	id domain.LinkID, nonce string, wg domain.WireGuardOptions,
+	apply func(context.Context, string) error, readNetworkNS func() (string, error)) error {
+	if ctx == nil || runner == nil || apply == nil || readNetworkNS == nil || wg.Validate() != nil || wg.PeerPort == 0 {
 		return fmt.Errorf("original QUIC ingress requires valid Engine-owned WG identity and host inputs")
 	}
 	// All preflight readers, the exclusive CREATE and strict readback must
@@ -60,8 +68,8 @@ func publishOriginal(ctx context.Context, runner linux.BoundedRunner,
 	// OS-thread-scoped; a process-level /proc/self label is insufficient.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	originalNS, err := currentNetworkNamespace()
-	if err != nil {
+	originalNS, err := readNetworkNS()
+	if err != nil || !validNetworkNamespaceID(originalNS) {
 		return fmt.Errorf("original QUIC ingress network namespace unverified")
 	}
 	plan, err := linux.NewQUICWGIngressPlan(id, wg.ListenPort, nonce)
@@ -103,7 +111,7 @@ func publishOriginal(ctx context.Context, runner linux.BoundedRunner,
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if now, nsErr := currentNetworkNamespace(); nsErr != nil || now != originalNS {
+	if now, nsErr := readNetworkNS(); nsErr != nil || !validNetworkNamespaceID(now) || now != originalNS {
 		return fmt.Errorf("original QUIC ingress namespace changed before host effect")
 	}
 
@@ -114,14 +122,14 @@ func publishOriginal(ctx context.Context, runner linux.BoundedRunner,
 	}
 	// Once dispatched, even an unexpected namespace drift is an uncertain
 	// effect, never evidence that the original guard is absent or removable.
-	if now, nsErr := currentNetworkNamespace(); nsErr != nil || now != originalNS {
+	if now, nsErr := readNetworkNS(); nsErr != nil || !validNetworkNamespaceID(now) || now != originalNS {
 		return errEffectUncertain
 	}
 	present, err := linux.InspectWGIngressGuard(ctx, runner, plan)
 	if err != nil || !present {
 		return errEffectUncertain
 	}
-	if now, nsErr := currentNetworkNamespace(); nsErr != nil || now != originalNS {
+	if now, nsErr := readNetworkNS(); nsErr != nil || !validNetworkNamespaceID(now) || now != originalNS {
 		return errEffectUncertain
 	}
 	return nil

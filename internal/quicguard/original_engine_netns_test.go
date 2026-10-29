@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ach1992/simple-tun-link/internal/app"
 	"github.com/ach1992/simple-tun-link/internal/backend"
@@ -54,10 +56,12 @@ func (r appIsolatedNFTGuardRunner) RunBounded(ctx context.Context, lim linux.Cap
 }
 
 type siblingNetworkNSObservation struct {
-	Observation OriginalGuardObservation
-	ProcessNS   string
-	ThreadNS    string
-	Err         error
+	Observation    OriginalGuardObservation
+	ProcessNS      string
+	ThreadNS       string
+	WorkerTID      int
+	ThreadReleased bool
+	Err            error
 }
 
 // This runs ONLY inside the explicitly disposable user/net/mount test harness.
@@ -65,6 +69,16 @@ type siblingNetworkNSObservation struct {
 // Its /proc/self/ns/net label stays at the process leader, whereas nft
 // subprocesses inherit the network namespace of the locked calling thread.
 func inspectOriginalInSiblingThreadNS(ctx context.Context, engine *app.Engine, id domain.LinkID) siblingNetworkNSObservation {
+	return inspectOriginalInSiblingThreadNSWithOps(ctx, engine, id, unix.Unshare, unix.Setns)
+}
+
+// Test-only fault injection. A failed restoration must NEVER release a thread
+// carrying a changed network namespace to unrelated Go work.
+func inspectOriginalInSiblingThreadNSWithOps(ctx context.Context, engine *app.Engine, id domain.LinkID,
+	enter func(int) error, restore func(int, int) error) siblingNetworkNSObservation {
+	if enter == nil || restore == nil {
+		return siblingNetworkNSObservation{Err: fmt.Errorf("disposable namespace operations required")}
+	}
 	// Reserve TWO different locked threads before choosing the worker. One
 	// cannot both be the process leader, so the discriminating /proc/self
 	// versus /proc/thread-self test never depends on scheduler luck.
@@ -77,12 +91,21 @@ func inspectOriginalInSiblingThreadNS(ctx context.Context, engine *app.Engine, i
 	for i := 0; i < 2; i++ {
 		go func() {
 			runtime.LockOSThread()
-			defer runtime.UnlockOSThread()
 			worker := lockedWorker{tid: unix.Gettid(), proceed: make(chan bool, 1)}
 			ready <- worker
-			if <-worker.proceed {
-				result <- inspectOriginalOnLockedThread(ctx, engine, id)
+			if !<-worker.proceed {
+				runtime.UnlockOSThread() // no namespace change on the unused thread
+				return
 			}
+			observed, safeToUnlock := inspectOriginalOnLockedThread(ctx, engine, id, enter, restore)
+			observed.WorkerTID = worker.tid
+			observed.ThreadReleased = safeToUnlock
+			if safeToUnlock {
+				runtime.UnlockOSThread()
+			}
+			// If restore failed, exit the goroutine STILL locked: Go will
+			// terminate its OS thread rather than reuse the contaminated ns.
+			result <- observed
 		}()
 	}
 	first, second := <-ready, <-ready
@@ -94,7 +117,12 @@ func inspectOriginalInSiblingThreadNS(ctx context.Context, engine *app.Engine, i
 	return <-result
 }
 
-func inspectOriginalOnLockedThread(ctx context.Context, engine *app.Engine, id domain.LinkID) (observed siblingNetworkNSObservation) {
+// safeToUnlock is true only when no namespace change happened, or when the
+// original namespace was restored and independently checked. The caller
+// MUST terminate this goroutine without UnlockOSThread when it is false.
+func inspectOriginalOnLockedThread(ctx context.Context, engine *app.Engine, id domain.LinkID,
+	enter func(int) error, restore func(int, int) error) (observed siblingNetworkNSObservation, safeToUnlock bool) {
+	safeToUnlock = true
 	if unix.Gettid() == os.Getpid() {
 		observed.Err = fmt.Errorf("sibling observer unexpectedly used the process leader")
 		return
@@ -105,29 +133,68 @@ func inspectOriginalOnLockedThread(ctx context.Context, engine *app.Engine, id d
 		return
 	}
 	defer originalFD.Close()
+	originalNS, err := currentNetworkNamespace()
+	if err != nil {
+		observed.Err = fmt.Errorf("read original test-thread namespace: %w", err)
+		return
+	}
 	observed.ProcessNS, err = os.Readlink("/proc/self/ns/net")
 	if err != nil {
 		observed.Err = fmt.Errorf("read process namespace: %w", err)
 		return
 	}
-	if err := unix.Unshare(unix.CLONE_NEWNET); err != nil {
+	if err := enter(unix.CLONE_NEWNET); err != nil {
+		// Failed Unshare did not change namespace; releasing is safe.
 		observed.Err = fmt.Errorf("enter disposable sibling network namespace: %w", err)
 		return
 	}
+	safeToUnlock = false // namespace changed: only verified Setns may release
 	defer func() {
-		if err := unix.Setns(int(originalFD.Fd()), unix.CLONE_NEWNET); err != nil {
+		if err := restore(int(originalFD.Fd()), unix.CLONE_NEWNET); err != nil {
 			observed.Err = fmt.Errorf("restore original test-thread namespace: %w", err)
+			return
 		}
+		after, err := currentNetworkNamespace()
+		if err != nil || after != originalNS {
+			observed.Err = fmt.Errorf("original test-thread namespace restoration unverified")
+			return
+		}
+		safeToUnlock = true
 	}()
 	observed.ThreadNS, err = currentNetworkNamespace()
 	if err != nil {
 		observed.Err = err
 		return
 	}
+	if observed.ThreadNS == originalNS {
+		observed.Err = fmt.Errorf("disposable sibling namespace not isolated")
+		return
+	}
 	observed.Observation, observed.Err = inspectPendingOriginal(ctx, engine, id,
 		appIsolatedNFTGuardRunner{},
 		func() (string, error) { return testBootID, nil }, currentNetworkNamespace)
 	return
+}
+
+// A locked goroutine that exits without UnlockOSThread must retire its
+// contaminated worker thread, not leave it available for unrelated work.
+func assertRetiredTestThread(t *testing.T, tid int) {
+	t.Helper()
+	if tid <= 0 {
+		t.Fatal("invalid disposable worker TID")
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		_, err := os.Stat(fmt.Sprintf("/proc/self/task/%d", tid))
+		if errors.Is(err, os.ErrNotExist) {
+			return
+		}
+		if err != nil {
+			t.Fatalf("disposable worker thread inventory unreadable: %v", err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("failed-restore disposable thread %d was not retired", tid)
 }
 
 type isolatedVacancyProbe struct{}
@@ -283,11 +350,43 @@ func TestQUICOriginalGuardEngineMaterialAndRealNFTInDisposableNetNS(t *testing.T
 				sibling.ThreadNS == sibling.ProcessNS ||
 				sibling.Observation.NetworkNS != sibling.ThreadNS ||
 				sibling.Observation.Status != GuardNotVisible ||
-				sibling.Observation.Handles != (linux.WGIngressLiveHandles{}) {
+				sibling.Observation.Handles != (linux.WGIngressLiveHandles{}) || !sibling.ThreadReleased {
 				t.Fatalf("thread-scoped nft observation mislabeled sibling namespace: %+v", sibling)
 			}
-			// The original namespace and guard were left intact by the
-			// sibling read; neither result grants owner/recovery authority.
+			// Early Unshare failure MUST unlock an unmodified worker.
+			early := inspectOriginalInSiblingThreadNSWithOps(ctx, engine, local.LinkID,
+				func(int) error { return errors.New("injected unshare failure") }, unix.Setns)
+			if early.Err == nil || !strings.Contains(early.Err.Error(), "enter disposable sibling network namespace") ||
+				!early.ThreadReleased || early.ThreadNS != "" {
+				t.Fatalf("failed Unshare incorrectly quarantined or changed the thread: %+v", early)
+			}
+
+			// Deterministically fail restoration AFTER a real Unshare.
+			// This test is isolated in a user/net/mount namespace; its
+			// contaminated OS thread must die, never return to the Go pool.
+			failedRestore := inspectOriginalInSiblingThreadNSWithOps(ctx, engine, local.LinkID,
+				unix.Unshare, func(int, int) error { return errors.New("injected setns failure") })
+			if failedRestore.Err == nil ||
+				!strings.Contains(failedRestore.Err.Error(), "restore original test-thread namespace") ||
+				failedRestore.ThreadNS == failedRestore.ProcessNS || failedRestore.ThreadNS == "" ||
+				failedRestore.ThreadReleased {
+				t.Fatalf("failed Setns released a modified OS thread: %+v", failedRestore)
+			}
+			assertRetiredTestThread(t, failedRestore.WorkerTID)
+
+			// Even a restoration API that incorrectly reports success is
+			// insufficient: exact thread-local namespace reinspection must
+			// fail closed and retire the un-restored worker.
+			falseSuccess := inspectOriginalInSiblingThreadNSWithOps(ctx, engine, local.LinkID,
+				unix.Unshare, func(int, int) error { return nil })
+			if falseSuccess.Err == nil ||
+				!strings.Contains(falseSuccess.Err.Error(), "restoration unverified") ||
+				falseSuccess.ThreadReleased {
+				t.Fatalf("unverified restoration released a changed namespace thread: %+v", falseSuccess)
+			}
+			assertRetiredTestThread(t, falseSuccess.WorkerTID)
+			// The original namespace and guard were left intact by all
+			// sibling tests; none grants owner/recovery authority.
 			recheck, recheckErr := inspectPendingOriginal(ctx, engine, local.LinkID,
 				appIsolatedNFTGuardRunner{}, readBoot, readNS)
 			if recheckErr != nil || recheck != observed {

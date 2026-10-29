@@ -168,6 +168,70 @@ func TestOriginalGuardPinsPreflightCreateAndReadbackToOneOSThread(t *testing.T) 
 	}
 }
 
+func TestOriginalGuardNamespaceDriftIsNeverAnEffectOrOwnershipPermit(t *testing.T) {
+	// These inputs simulate readback drift; the real production namespace
+	// reader is fixed by publishOriginal. No test changes an OS namespace.
+	for _, tc := range []struct {
+		name         string
+		driftAt      int
+		dispatches   int
+		uncertain    bool
+		readbackDone bool
+		wantReads    int
+	}{
+		{"before dispatch", 2, 0, false, false, 2},
+		{"after dispatch before readback", 3, 1, true, false, 3},
+		{"after strict readback", 4, 1, true, true, 4},
+		{"stable namespace", 0, 1, false, true, 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner, wg := guardFixture(t)
+			reads := 0
+			readNS := func() (string, error) {
+				reads++
+				if reads == tc.driftAt {
+					return "net:[4026532999]", nil
+				}
+				return "net:[4026532789]", nil
+			}
+			dispatched := 0
+			err := publishOriginalWithNetworkNS(context.Background(), runner, fixtureID, fixtureNonce, wg,
+				func(_ context.Context, batch string) error {
+					dispatched++
+					if !strings.HasPrefix(batch, "create table inet "+runner.table) {
+						t.Fatal("unexpected nft CREATE identity")
+					}
+					runner.present = true // test-owned, not deleted or adopted
+					return nil
+				}, readNS)
+			if dispatched != tc.dispatches || reads != tc.wantReads ||
+				runner.present != (tc.dispatches == 1) {
+				t.Fatalf("namespace drift host effect mismatch: dispatched=%d reads=%d present=%t err=%v",
+					dispatched, reads, runner.present, err)
+			}
+			if tc.driftAt == 0 {
+				if err != nil {
+					t.Fatalf("stable namespace rejected: %v", err)
+				}
+			} else if err == nil || errors.Is(err, errEffectUncertain) != tc.uncertain {
+				t.Fatalf("namespace drift incorrectly authorized effect/cleanup: %v", err)
+			}
+			strictReadback := false
+			for _, call := range runner.calls {
+				if call == "nft -j list table inet "+runner.table {
+					strictReadback = true
+				}
+				if strings.Contains(call, "delete") || strings.Contains(call, "flush") {
+					t.Fatalf("namespace drift triggered destructive host command: %q", call)
+				}
+			}
+			if strictReadback != tc.readbackDone {
+				t.Fatalf("unexpected post-effect readback: got %t want %t", strictReadback, tc.readbackDone)
+			}
+		})
+	}
+}
+
 func TestOriginalGuardStrictCreateAndOneTimeReadback(t *testing.T) {
 	runner, wg := guardFixture(t)
 	applied := 0
