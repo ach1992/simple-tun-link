@@ -35,6 +35,9 @@ type SystemdPersistence struct {
 	afterUnitTransition func(string)
 	syncUnitDirectory   func(string) error
 	restoreAfterFailure func(string, string, []byte, bool) error
+	// Isolated tests simulate trusted root-owned units via VerifyUnitPath;
+	// only targeted systemctl Runner tests opt back into effective inspection.
+	forceEffectiveInspectionForTest bool
 }
 
 // unitPublicationError distinguishes an error before the atomic rename from
@@ -128,6 +131,12 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 	if systemctl == "" {
 		systemctl = "systemctl"
 	}
+	if existed {
+		if err := p.verifyEffectiveRestoreUnit(ctx, systemctl, path); err != nil {
+			return nil, false, classifyRestoreFailure(RestoreUnitConflict,
+				fmt.Errorf("refusing to adopt noncanonical effective systemd restore unit: %w", err))
+		}
+	}
 	wasEnabled, err := p.isEnabled(ctx, systemctl, restoreSystemdUnitName)
 	if err != nil {
 		return nil, false, classifyRestoreFailure(RestoreEnablementUnknown, err)
@@ -137,7 +146,21 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 	if !existed && wasEnabled {
 		return nil, false, classifyRestoreFailure(RestoreUnitConflict, fmt.Errorf("refusing to take over enabled systemd unit %q without an STL-owned unit file", restoreSystemdUnitName))
 	}
+	if !existed {
+		// No canonical file is not proof of an empty effective service:
+		// vendor/runtime/prefix-wide drop-ins can still be manager-loaded.
+		if err := p.verifyAbsentEffectiveRestoreUnit(ctx, systemctl); err != nil {
+			return nil, false, classifyRestoreFailure(RestoreUnitConflict,
+				fmt.Errorf("refusing to adopt missing unit with unverified effective identity: %w", err))
+		}
+	}
 
+	if existed {
+		if err := p.verifyEffectiveRestoreUnit(ctx, systemctl, path); err != nil {
+			return nil, false, classifyRestoreFailure(RestoreUnitConflict,
+				fmt.Errorf("systemd effective unit changed during enablement inspection: %w", err))
+		}
+	}
 	fileChanged := !existed || string(prior) != content
 	// Start with the inspected original identity; publication may replace it.
 	if fileChanged {
@@ -180,11 +203,34 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 			return nil, false, classifyRestoreFailure(RestoreDaemonReloadFailed, errors.Join(fmt.Errorf("systemd daemon-reload: %w", err), repairErr))
 		}
 	}
+	// Especially on first install, previously foreign drop-ins can become
+	// effective only after STL publishes the canonical fragment. Refuse
+	// enablement until the manager attests the complete fresh configuration.
+	if err := p.verifyEffectiveRestoreUnit(ctx, systemctl, path); err != nil {
+		// The still-pinned STL-origin inode may be restored/removed via the
+		// EXISTING compensation mechanism. No enable/disable was attempted,
+		// so a foreign drop-in is never enabled or disabled by this repair.
+		var repairErr error
+		if fileChanged {
+			repairErr = p.compensatePublishedUnit(ctx, systemctl, unitDir, path,
+				[]byte(content), prior, publishedIdentity, existed, wasEnabled, true, false)
+		}
+		return nil, false, classifyRestoreFailure(RestoreUnitConflict,
+			errors.Join(fmt.Errorf("systemd effective unit unverified after restore-unit publication: %w", err), repairErr))
+	}
 
 	enabledChanged := false
 	if !wasEnabled {
 		if err := p.guardExactPublishedIdentity(path, []byte(content), publishedIdentity); err != nil {
 			return nil, false, fmt.Errorf("cannot enable changed STL unit identity: %w", err)
+		}
+		if err := p.verifyEffectiveRestoreUnit(ctx, systemctl, path); err != nil {
+			var repairErr error
+			if fileChanged {
+				repairErr = p.compensatePublishedUnit(ctx, systemctl, unitDir, path,
+					[]byte(content), prior, publishedIdentity, existed, wasEnabled, true, false)
+			}
+			return nil, false, errors.Join(fmt.Errorf("refusing to enable changed effective systemd unit: %w", err), repairErr)
 		}
 		_, enableErr := p.Runner.Run(ctx, systemctl, "enable", restoreSystemdUnitName)
 		if enableErr == nil {
@@ -202,6 +248,9 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 	}
 	if err := p.guardExactPublishedIdentity(path, []byte(content), publishedIdentity); err != nil {
 		return nil, false, fmt.Errorf("cannot verify owned STL restore unit after activation: %w", err)
+	}
+	if err := p.verifyEffectiveRestoreUnit(ctx, systemctl, path); err != nil {
+		return nil, false, fmt.Errorf("systemd effective configuration changed after activation; manual reconciliation required: %w", err)
 	}
 	if !fileChanged && !enabledChanged {
 		return func(context.Context) error { return nil }, false, nil
@@ -410,6 +459,13 @@ func (p SystemdPersistence) IsRestoreInstalled(ctx context.Context) (bool, error
 		if err := p.guardExactPublishedUnit(unitPath, content); err != nil {
 			return false, fmt.Errorf("unverified systemd restore unit identity: %w", err)
 		}
+		systemctl := p.SystemctlBinary
+		if systemctl == "" {
+			systemctl = "systemctl"
+		}
+		if err := p.verifyEffectiveRestoreUnit(ctx, systemctl, unitPath); err != nil {
+			return false, fmt.Errorf("untrusted effective systemd restore unit: %w", err)
+		}
 		return true, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
@@ -428,6 +484,9 @@ func (p SystemdPersistence) IsRestoreInstalled(ctx context.Context) (bool, error
 	}
 	if enabled {
 		return false, fmt.Errorf("enabled systemd restore identity lacks an STL-owned unit")
+	}
+	if err := p.verifyAbsentEffectiveRestoreUnit(ctx, systemctl); err != nil {
+		return false, fmt.Errorf("missing restore unit effective identity unverified: %w", err)
 	}
 	return false, nil
 }
@@ -464,6 +523,9 @@ func (p SystemdPersistence) RemoveRestore(ctx context.Context) error {
 		if enabled {
 			return fmt.Errorf("refusing to claim complete cleanup: enabled systemd restore identity lacks an STL-owned unit")
 		}
+		if err := p.verifyAbsentEffectiveRestoreUnit(ctx, systemctl); err != nil {
+			return fmt.Errorf("refusing missing unit with unverified manager configuration: %w", err)
+		}
 		if err := p.verifyPriorUnit(path, nil, false); err != nil {
 			return fmt.Errorf("cannot verify missing restore unit still absent: %w", err)
 		}
@@ -478,6 +540,9 @@ func (p SystemdPersistence) RemoveRestore(ctx context.Context) error {
 	if err := p.guardExactPublishedIdentity(path, prior, priorIdentity); err != nil {
 		return fmt.Errorf("refusing to remove unverified owned unit: %w", err)
 	}
+	if err := p.verifyEffectiveRestoreUnit(ctx, systemctl, path); err != nil {
+		return fmt.Errorf("refusing to retire foreign/stale effective systemd unit: %w", err)
+	}
 
 	wasEnabled, err := p.isEnabled(ctx, systemctl, restoreSystemdUnitName)
 	if err != nil {
@@ -486,8 +551,17 @@ func (p SystemdPersistence) RemoveRestore(ctx context.Context) error {
 	if err := p.guardExactPublishedIdentity(path, prior, priorIdentity); err != nil {
 		return fmt.Errorf("unit identity changed during systemd enablement inspection; refusing disable: %w", err)
 	}
+	if err := p.verifyEffectiveRestoreUnit(ctx, systemctl, path); err != nil {
+		return fmt.Errorf("effective systemd unit changed before disable; refusing retirement: %w", err)
+	}
 	if wasEnabled {
 		if _, err := p.Runner.Run(ctx, systemctl, "disable", restoreSystemdUnitName); err != nil {
+			// If a different effective configuration appeared during the
+			// external call, do not automatically re-enable that foreign unit.
+			if inspectErr := p.verifyEffectiveRestoreUnit(ctx, systemctl, path); inspectErr != nil {
+				return errors.Join(fmt.Errorf("disable STL systemd unit: %w", err),
+					fmt.Errorf("effect after foreign systemd mutation is uncertain: %w", inspectErr))
+			}
 			repairErr := p.compensateRemovedUnit(ctx, systemctl, unitDir, path, prior, priorIdentity, wasEnabled)
 			return errors.Join(fmt.Errorf("disable STL systemd unit: %w", err), repairErr)
 		}
@@ -505,6 +579,9 @@ func (p SystemdPersistence) RemoveRestore(ctx context.Context) error {
 	}
 	if err := p.guardExactPublishedIdentity(path, prior, priorIdentity); err != nil {
 		return fmt.Errorf("STL unit identity changed before owned removal; cleanup incomplete: %w", err)
+	}
+	if err := p.verifyEffectiveRestoreUnit(ctx, systemctl, path); err != nil {
+		return fmt.Errorf("effective systemd unit changed before filesystem retirement; cleanup incomplete: %w", err)
 	}
 	if err := p.retireOwnedUnit(unitDir, path, prior, "delete", priorIdentity); err != nil {
 		// Guarded compensation is safe even after an identity conflict:
@@ -527,6 +604,9 @@ func (p SystemdPersistence) RemoveRestore(ctx context.Context) error {
 	}
 	if stillEnabled {
 		return fmt.Errorf("STL restore unit cleanup incomplete: unit remains enabled after removal")
+	}
+	if err := p.verifyAbsentEffectiveRestoreUnit(ctx, systemctl); err != nil {
+		return fmt.Errorf("STL restore unit cleanup incomplete: effective manager unit was not proven absent: %w", err)
 	}
 	return nil
 }

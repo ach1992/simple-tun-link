@@ -828,8 +828,17 @@ identified orphan unit, rechecks absence and then permits core binary
 uninstall. A public STL marker alone is never ownership evidence: the exact
 canonical restore-unit template (all directives and the installed executable
 `/usr/local/bin/stl`), trusted file/parent path, pinned inode and systemd
-enablement must match. Independently authored, altered, foreign or otherwise
-ambiguous units are preserved and require explicit reconciliation.
+enablement must match. In addition, a bounded read-only inspection of the
+**manager-loaded effective unit** must confirm the exact canonical
+`FragmentPath`, an empty `DropInPaths`, `NeedDaemonReload=no`,
+`LoadState=loaded`, and the canonical effective `ExecStart` before any
+owned disable or removal. The installed Engine rechecks this evidence after
+external systemctl inspections and before deleting the main unit; a missing
+unit must independently show an absent effective identity without leftover
+drop-ins. Unknown, altered, stale, or foreign effective configurations must
+not be adopted, disabled or deleted by STL. Foreign drop-ins are never purged
+by STL. These checks are deliberately fail-closed; preserve any uncertain
+host resources and reconcile them explicitly.
 Interrupted/uncertain systemctl or foreign units remain blocked.
 Do **not** delete interfaces, route/firewall rules, or the restore unit
 manually as a shortcut.
@@ -847,8 +856,15 @@ sudo bash ./install.sh uninstall
 Uninstall calls `stl maintenance pre-uninstall --json` under the exclusive
 maintenance lock. That Go command distinguishes a never-used host from a
 missing state snapshot in an existing root and uses the canonical systemd
-installed/enabled checks. Missing, malformed, symlinked or otherwise ambiguous
-state fails closed. Uninstall removes only the hash-verified installer-owned canonical executable,
+installed/enabled checks. The original private `state.json` bytes are
+also inspected before *any* Uninstall or owned-orphan retirement decision.
+Unknown, duplicate, JSON-escaped duplicate, or case-aliased State fields that
+could conceal saved Links, pending operations or receipts are rejected even
+when the ordinary State loader would decode zero Links. The inspector checks
+the same file's identity and bytes again after the Engine preflight.
+Missing, malformed, symlinked or otherwise ambiguous State fails closed;
+the installed binary/record and committed State remain untouched.
+Uninstall removes only the hash-verified installer-owned canonical executable,
 its exact `stlink -> stl` symlink, and the installer ownership record. It keeps
 the installer lock and does **not** delete committed `/var/lib/simple-tun-link`
 State, retained protected credentials, optional companion binaries, other

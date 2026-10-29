@@ -115,59 +115,87 @@ func publishedStateSchema(tag string) (int, error) {
 	}
 }
 
-// canonicalEmptyStateSchema parses the original persisted JSON as an object
-// stream, not a map or Snapshot. Go's json map/struct decoding accepts
-// duplicate keys and case-insensitive aliases; neither may grant authority
-// to erase a State file while downleveling. Only two exactly named, unique
-// members with a real empty JSON array are eligible. No State schema changes.
-func canonicalEmptyStateSchema(raw []byte) (int, error) {
-	refuse := func() (int, error) {
-		return 0, errors.New("State is not a unique, canonical empty snapshot; downgrade refused")
+// strictStateTopLevelFields is shared only by DESTRUCTIVE maintenance
+// admission: Uninstall and the empty-only downlevel conversion. FileStore
+// retains its existing ordinary load/migration behavior. Decode JSON keys
+// from the original token stream so duplicate or case-insensitive aliases
+// cannot hide Links, operation journals or removal receipts in a Go map or
+// struct. Only exact field names in the published Snapshot schema are valid.
+func strictStateTopLevelFields(raw []byte) (map[string]json.RawMessage, error) {
+	refuse := func() (map[string]json.RawMessage, error) {
+		return nil, errors.New("ambiguous or noncanonical State JSON; destructive maintenance refused")
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
-	first, err := dec.Token()
-	if err != nil || first != json.Delim('{') {
+	start, err := dec.Token()
+	if err != nil || start != json.Delim('{') {
 		return refuse()
 	}
-	var schema, sawSchema, sawLinks = 0, false, false
+	fields := make(map[string]json.RawMessage)
 	for dec.More() {
-		tok, err := dec.Token()
+		token, err := dec.Token()
 		if err != nil {
 			return refuse()
 		}
-		key, ok := tok.(string)
+		key, ok := token.(string)
 		if !ok {
 			return refuse()
 		}
+		// This is the exact currently published state.Snapshot field set.
+		// Any future field requires an explicit maintenance admission review;
+		// never silently grant destructive permission to an unknown schema.
 		switch key {
-		case "schema_version":
-			if sawSchema {
-				return refuse()
-			}
-			sawSchema = true
-			if err := dec.Decode(&schema); err != nil || (schema != 3 && schema != 4) {
-				return refuse()
-			}
-		case "links":
-			if sawLinks {
-				return refuse()
-			}
-			sawLinks = true
-			var links []json.RawMessage
-			if err := dec.Decode(&links); err != nil || links == nil || len(links) != 0 {
-				return refuse()
-			}
+		case "schema_version", "links", "pending_senders", "pending_ipsec",
+			"ipsec_vici_operations", "ipsec_reapply_operations",
+			"ipsec_remove_operations", "ipsec_xfrm_operations",
+			"ipsec_removal_receipts", "removal_receipts",
+			"wss_crash_operations", "quic_crash_operations":
 		default:
-			// Unknown keys, case variants and aliases all deny admission.
 			return refuse()
 		}
+		if _, duplicate := fields[key]; duplicate {
+			return refuse()
+		}
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return refuse()
+		}
+		fields[key] = value
 	}
-	last, err := dec.Token()
-	if err != nil || last != json.Delim('}') || !sawSchema || !sawLinks {
+	end, err := dec.Token()
+	if err != nil || end != json.Delim('}') {
 		return refuse()
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return refuse()
+	}
+	// These are nonoptional in every supported, STL-generated State.
+	if len(fields["schema_version"]) == 0 || len(fields["links"]) == 0 {
+		return refuse()
+	}
+	// A null (or non-array) Links field decodes as empty/nil in Go's
+	// Snapshot, but is not an STL-generated, unambiguous zero-Link list.
+	var links []json.RawMessage
+	if err := json.Unmarshal(fields["links"], &links); err != nil || links == nil {
+		return refuse()
+	}
+	return fields, nil
+}
+
+// canonicalEmptyStateSchema reuses the same original-byte ambiguity guard
+// as Uninstall, then tightens the proof to ONLY the two mandatory members.
+func canonicalEmptyStateSchema(raw []byte) (int, error) {
+	fields, err := strictStateTopLevelFields(raw)
+	if err != nil || len(fields) != 2 {
+		return 0, errors.New("State is not a unique, canonical empty snapshot; downgrade refused")
+	}
+	var schema int
+	if err := json.Unmarshal(fields["schema_version"], &schema); err != nil ||
+		(schema != 3 && schema != 4) {
+		return 0, errors.New("State schema is not eligible for downgrade")
+	}
+	var links []json.RawMessage
+	if err := json.Unmarshal(fields["links"], &links); err != nil || links == nil || len(links) != 0 {
+		return 0, errors.New("State still contains Link data; downgrade refused")
 	}
 	return schema, nil
 }

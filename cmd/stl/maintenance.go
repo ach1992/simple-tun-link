@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
+	"golang.org/x/sys/unix"
 )
 
 var errOwnedRestoreUnitPresent = errors.New("Engine restore unit is still installed; reconcile it through STL")
@@ -119,6 +121,36 @@ func uninstallSnapshotEmpty(s state.Snapshot) bool {
 		len(s.QUICCrashOperations) == 0
 }
 
+// readUnambiguousUninstallState pins the actual regular inode and inspects
+// the ORIGINAL bounded JSON bytes, not FileStore's permissive decoded
+// Snapshot. Under its existing maintenance lock, Uninstall must not decide
+// zero Links from a duplicate or aliased field that json.Unmarshal hides.
+func readUnambiguousUninstallState(path string, expected os.FileInfo) ([]byte, error) {
+	const maxStateBytes = 16 << 20 // FileStore's current authoritative bound.
+	if !expected.Mode().IsRegular() || expected.Size() <= 0 || expected.Size() > maxStateBytes {
+		return nil, errors.New("uninstall State size/type is untrusted")
+	}
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, errors.New("cannot pin original State for Uninstall")
+	}
+	file := os.NewFile(uintptr(fd), path)
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(expected, opened) ||
+		opened.Mode().Perm()&0o077 != 0 || opened.Size() != expected.Size() {
+		return nil, errors.New("Uninstall State identity or privacy changed")
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, maxStateBytes+1))
+	if err != nil || len(raw) == 0 || len(raw) > maxStateBytes || int64(len(raw)) != opened.Size() {
+		return nil, errors.New("Uninstall State read is incomplete or untrusted")
+	}
+	if _, err := strictStateTopLevelFields(raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
 // inspectUninstallState accepts a *strictly verified* lock-only footprint as
 // a never-committed state. Any pending intent or non-STL file fails closed.
 // This is observational; only the canonical installer may clean the footprint
@@ -156,9 +188,13 @@ func inspectUninstallState(ctx context.Context, root string, trust func(string) 
 	}
 	if root == state.DefaultRoot {
 		stat, ok := entry.Sys().(*syscall.Stat_t)
-		if !ok || stat.Uid != 0 {
-			return false, fmt.Errorf("Link state snapshot is not root-owned")
+		if !ok || stat.Uid != 0 || stat.Nlink != 1 {
+			return false, fmt.Errorf("Link state snapshot owner or hardlink identity is untrusted")
 		}
+	}
+	original, err := readUnambiguousUninstallState(path, entry)
+	if err != nil {
+		return false, fmt.Errorf("cannot prove unambiguous committed Link state: %w", err)
 	}
 	store := state.NewFileStore(root)
 	committed, err := store.HasCommittedState(ctx)
@@ -175,6 +211,10 @@ func inspectUninstallState(ctx context.Context, root string, trust func(string) 
 	after, err := os.Lstat(path)
 	if err != nil || !os.SameFile(entry, after) {
 		return false, fmt.Errorf("Link state identity changed during uninstall preflight")
+	}
+	verified, err := readUnambiguousUninstallState(path, entry)
+	if err != nil || !bytes.Equal(original, verified) {
+		return false, fmt.Errorf("Link state changed during uninstall preflight")
 	}
 	return true, nil
 }
@@ -253,7 +293,7 @@ func uninstallGateGuidance(err error) (string, string) {
 		return "restore_unit_present", "A retained STL restore unit must be reconciled through STL before Uninstall; inspect its installed/enabled status read-only."
 	case strings.Contains(message, "cannot prove restore-unit absence"):
 		return "restore_unit_unverified", "Inspect systemctl show simple-tun-link-restore.service read-only; STL cannot prove the service is absent."
-	case strings.Contains(message, "untrusted state"), strings.Contains(message, "cannot decode valid committed Link state"), strings.Contains(message, "cannot prove durable committed Link state"):
+	case strings.Contains(message, "untrusted state"), strings.Contains(message, "cannot decode valid committed Link state"), strings.Contains(message, "cannot prove durable committed Link state"), strings.Contains(message, "cannot prove unambiguous committed Link state"):
 		return "state_integrity_unverified", "STL could not verify private State. Preserve existing files; inspect ownership and State integrity before retrying."
 	default:
 		return "uninstall_preflight_unverified", "STL could not prove safe uninstall prerequisites. Check saved Links, retained operations, STL State and restore-unit status read-only."
