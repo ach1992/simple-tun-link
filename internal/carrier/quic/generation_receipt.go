@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -56,7 +55,7 @@ func generationFiles(role Role) ([]string, error) {
 }
 
 func directoryInventory(fd int, expected []string, receiptPresent bool) error {
-	dup, err := unix.Dup(fd)
+	dup, err := unix.Openat(fd, ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return fmt.Errorf("cannot inspect protected generation inventory")
 	}
@@ -122,7 +121,11 @@ func privateFileWitness(dirfd int, name string) (fileWitness, error) {
 	return fileWitness{Device: uint64(st.Dev), Inode: st.Ino, SHA256: hex.EncodeToString(digest[:])}, nil
 }
 
-func captureGenerationReceipt(root string, plan Plan, nonce string, expected HelperConfigIdentity) (generationReceipt, error) {
+// captureGenerationReceiptFD observes only one already pinned directory. It
+// never attributes inode provenance by itself; the FIRST creation path also
+// compares each witness with its original successful O_EXCL result.
+func captureGenerationReceiptFD(fd int, plan Plan, nonce string, expected HelperConfigIdentity,
+	receiptPresent bool) (generationReceipt, error) {
 	if !validGenerationNonce(nonce) || validMaterialScope(plan) != nil {
 		return generationReceipt{}, fmt.Errorf("invalid QUIC journal generation identity")
 	}
@@ -130,15 +133,10 @@ func captureGenerationReceipt(root string, plan Plan, nonce string, expected Hel
 	if err != nil {
 		return generationReceipt{}, err
 	}
-	fd, err := openRoleDir(root, plan.LinkID, false)
-	if err != nil {
-		return generationReceipt{}, err
-	}
-	defer unix.Close(fd)
 	if err := requireExclusiveRole(fd, plan.Role); err != nil {
 		return generationReceipt{}, err
 	}
-	if err := directoryInventory(fd, files, false); err != nil {
+	if err := directoryInventory(fd, files, receiptPresent); err != nil {
 		return generationReceipt{}, err
 	}
 	var dir unix.Stat_t
@@ -162,10 +160,9 @@ func captureGenerationReceipt(root string, plan Plan, nonce string, expected Hel
 	return receipt, nil
 }
 
-// InspectGenerationReceipt verifies a complete, durable, nonce-bound positive
-// create-time witness. This is necessary, NOT sufficient, for host resources
-// ownership or running a helper. A missing receipt never permits adoption of
-// identical old credentials/config; the Engine journal remains quarantined.
+// InspectGenerationReceipt never adopts matching bytes without the durable
+// exact-nonce receipt. Receipt, inventory and all five inode witnesses are
+// read through the SAME pinned directory FD, followed by final inventory.
 func InspectGenerationReceipt(root string, plan Plan, nonce string, expected HelperConfigIdentity) error {
 	if !validGenerationNonce(nonce) || validMaterialScope(plan) != nil {
 		return fmt.Errorf("invalid QUIC journal generation identity")
@@ -174,17 +171,19 @@ func InspectGenerationReceipt(root string, plan Plan, nonce string, expected Hel
 	if err != nil {
 		return err
 	}
+	defer unix.Close(fd)
+	return inspectGenerationReceiptFD(fd, plan, nonce, expected)
+}
+
+func inspectGenerationReceiptFD(fd int, plan Plan, nonce string, expected HelperConfigIdentity) error {
 	names, err := generationFiles(plan.Role)
 	if err != nil {
-		unix.Close(fd)
 		return err
 	}
 	if err := directoryInventory(fd, names, true); err != nil {
-		unix.Close(fd)
 		return err
 	}
 	raw, err := credentials.ReadPrivateFile(fd, generationReceiptName)
-	unix.Close(fd)
 	if err != nil {
 		return fmt.Errorf("QUIC generation ownership receipt unavailable")
 	}
@@ -192,8 +191,7 @@ func InspectGenerationReceipt(root string, plan Plan, nonce string, expected Hel
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	var recorded generationReceipt
-	if err := decoder.Decode(&recorded); err != nil ||
-		decoder.Decode(new(any)) != io.EOF {
+	if err := decoder.Decode(&recorded); err != nil || decoder.Decode(new(any)) != io.EOF {
 		return fmt.Errorf("QUIC generation ownership receipt is invalid")
 	}
 	if recorded.SchemaVersion != 1 || recorded.LinkID != plan.LinkID ||
@@ -201,41 +199,33 @@ func InspectGenerationReceipt(root string, plan Plan, nonce string, expected Hel
 		recorded.Expected != expected {
 		return fmt.Errorf("QUIC generation receipt does not bind immutable journal")
 	}
-	actual, err := captureGenerationReceiptForReadback(root, plan, nonce, expected)
+	actual, err := captureGenerationReceiptFD(fd, plan, nonce, expected, true)
 	if err != nil || !reflect.DeepEqual(recorded, actual) {
 		return fmt.Errorf("QUIC generation receipt does not match protected inode readback")
+	}
+	if err := directoryInventory(fd, names, true); err != nil {
+		return fmt.Errorf("QUIC generation inventory changed after receipt inspection")
 	}
 	return nil
 }
 
-// Receipt verification compares the 5 actual material inodes but never
-// reinterprets the receipt itself as one of the original five files.
-func captureGenerationReceiptForReadback(root string, plan Plan, nonce string, expected HelperConfigIdentity) (generationReceipt, error) {
-	fd, err := openRoleDir(root, plan.LinkID, false)
-	if err != nil {
-		return generationReceipt{}, err
+// generationDirectoryPinned requires the current canonical child path to
+// remain the exact inode opened immediately after exclusive mkdirat.
+func generationDirectoryPinned(parent, fd int, name string, created unix.Stat_t) error {
+	var open, child unix.Stat_t
+	if err := unix.Fstat(fd, &open); err != nil ||
+		open.Mode&unix.S_IFMT != unix.S_IFDIR || open.Mode&0o777 != 0o700 ||
+		open.Uid != uint32(os.Geteuid()) ||
+		open.Dev != created.Dev || open.Ino != created.Ino ||
+		open.Mode != created.Mode || open.Uid != created.Uid {
+		return fmt.Errorf("originating QUIC generation directory FD identity changed")
 	}
-	defer unix.Close(fd)
-	files, err := generationFiles(plan.Role)
-	if err != nil {
-		return generationReceipt{}, err
+	if err := unix.Fstatat(parent, name, &child, unix.AT_SYMLINK_NOFOLLOW); err != nil ||
+		child.Dev != created.Dev || child.Ino != created.Ino ||
+		child.Mode != created.Mode || child.Uid != created.Uid {
+		return fmt.Errorf("QUIC generation directory path was replaced")
 	}
-	var dir unix.Stat_t
-	if err := unix.Fstat(fd, &dir); err != nil || dir.Mode&unix.S_IFMT != unix.S_IFDIR ||
-		dir.Mode&0o777 != 0o700 || dir.Uid != uint32(os.Geteuid()) {
-		return generationReceipt{}, errors.New("QUIC generation directory identity unsafe")
-	}
-	receipt := generationReceipt{SchemaVersion: 1, LinkID: plan.LinkID, Nonce: nonce,
-		Role: plan.Role, DirectoryDevice: uint64(dir.Dev), DirectoryInode: dir.Ino,
-		Expected: expected, Files: make(map[string]fileWitness, len(files))}
-	for _, name := range files {
-		file, err := privateFileWitness(fd, name)
-		if err != nil {
-			return generationReceipt{}, err
-		}
-		receipt.Files[name] = file
-	}
-	return receipt, nil
+	return nil
 }
 
 // StageJournalGeneration is a source-only writer for an exact immutable
@@ -249,9 +239,25 @@ func StageJournalGeneration(ctx context.Context, root string, plan Plan, localWG
 	return stageJournalGeneration(ctx, root, plan, localWGUDPPort, binary, nonce, bundle, expected, InspectPinnedHysteria)
 }
 
+// generationStageHooks allow deterministic, isolated foreign-file and
+// directory interleavings. Production always passes nil.
+type generationStageHooks struct {
+	afterMkdir    func() error
+	beforeFile    func(string) error
+	afterFile     func(string) error
+	beforeReceipt func() error
+}
+
 func stageJournalGeneration(ctx context.Context, root string, plan Plan, localWGUDPPort uint16,
 	binary, nonce string, bundle CredentialBundle, expected HelperConfigIdentity,
 	verify helperVerifier) (HelperConfigIdentity, error) {
+	return stageJournalGenerationWithHooks(ctx, root, plan, localWGUDPPort, binary,
+		nonce, bundle, expected, verify, nil)
+}
+
+func stageJournalGenerationWithHooks(ctx context.Context, root string, plan Plan, localWGUDPPort uint16,
+	binary, nonce string, bundle CredentialBundle, expected HelperConfigIdentity,
+	verify helperVerifier, hooks *generationStageHooks) (HelperConfigIdentity, error) {
 	if ctx == nil || !validGenerationNonce(nonce) || validMaterialScope(plan) != nil {
 		return HelperConfigIdentity{}, fmt.Errorf("invalid QUIC journal generation preflight")
 	}
@@ -264,6 +270,19 @@ func stageJournalGeneration(ctx context.Context, root string, plan Plan, localWG
 	}
 	if err := ctx.Err(); err != nil {
 		return HelperConfigIdentity{}, err
+	}
+	// Render privately before any filesystem mutation; the same existing
+	// renderer validates the four credentials and complete Hysteria config.
+	material := bundle.ProtectedFiles()
+	defer clearRoleFiles(material)
+	config, credID, err := renderHelperConfigFromFiles(root, plan, binary, material)
+	if err != nil || credID != expected.Credentials {
+		return HelperConfigIdentity{}, fmt.Errorf("QUIC generation role credentials are not expected")
+	}
+	defer clear(config)
+	sum := sha256.Sum256(config)
+	if hex.EncodeToString(sum[:]) != expected.ConfigSHA256 {
+		return HelperConfigIdentity{}, fmt.Errorf("QUIC generation helper config identity drift")
 	}
 	credsParent, err := credentials.OpenProtected(root, true)
 	if err != nil {
@@ -286,43 +305,122 @@ func stageJournalGeneration(ctx context.Context, root string, plan Plan, localWG
 		if err != nil || got != expected {
 			return HelperConfigIdentity{}, fmt.Errorf("existing QUIC generation identity drift")
 		}
+		// Reconfirm the exact nonce-bound receipt AFTER independent semantic
+		// inspection; a concurrent file/directory substitution must not turn
+		// a formerly valid receipt into an accepted successful retry.
+		if err := InspectGenerationReceipt(root, plan, nonce, expected); err != nil {
+			return HelperConfigIdentity{}, fmt.Errorf("existing QUIC generation changed during retry")
+		}
 		return got, nil
 	}
 	if err != nil {
 		return HelperConfigIdentity{}, fmt.Errorf("cannot create fresh exclusive QUIC generation")
 	}
-	// No retry or cleanup if this fsync fails: a private, unreceipted
-	// directory may now exist and must remain quarantined.
+	// Open the just-created directory immediately, BEFORE any file staging.
+	// The original FD is retained through creation, receipt and verification.
+	fd, err := unix.Openat(quicDir, string(plan.LinkID),
+		unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return HelperConfigIdentity{}, fmt.Errorf("created QUIC generation cannot be pinned")
+	}
+	defer unix.Close(fd)
+	var origin unix.Stat_t
+	if err := unix.Fstat(fd, &origin); err != nil ||
+		generationDirectoryPinned(quicDir, fd, string(plan.LinkID), origin) != nil {
+		return HelperConfigIdentity{}, fmt.Errorf("new QUIC generation directory identity unverified")
+	}
+	// Any failure leaves this uncertain generation in place; NEVER cleanup.
 	if err := unix.Fsync(quicDir); err != nil {
 		return HelperConfigIdentity{}, fmt.Errorf("QUIC generation directory creation durability uncertain")
 	}
-	if err := ctx.Err(); err != nil {
+	if hooks != nil && hooks.afterMkdir != nil {
+		if err := hooks.afterMkdir(); err != nil {
+			return HelperConfigIdentity{}, fmt.Errorf("QUIC generation interrupted after mkdir")
+		}
+	}
+	if err := generationDirectoryPinned(quicDir, fd, string(plan.LinkID), origin); err != nil {
 		return HelperConfigIdentity{}, err
 	}
-	got, err := stageExpectedMaterials(ctx, root, plan, localWGUDPPort, binary, bundle, expected, verify)
-	if err != nil || got != expected || ctx.Err() != nil {
-		return HelperConfigIdentity{}, fmt.Errorf("QUIC generation incomplete; private files retained without ownership receipt")
-	}
-	recorded, err := captureGenerationReceipt(root, plan, nonce, expected)
+	names, err := generationFiles(plan.Role)
 	if err != nil {
-		return HelperConfigIdentity{}, fmt.Errorf("QUIC generation ownership readback incomplete")
+		return HelperConfigIdentity{}, err
+	}
+	created := make(map[string]fileWitness, len(names))
+	for _, name := range names {
+		if err := ctx.Err(); err != nil {
+			return HelperConfigIdentity{}, fmt.Errorf("QUIC generation interrupted; unreceipted files retained")
+		}
+		if err := generationDirectoryPinned(quicDir, fd, string(plan.LinkID), origin); err != nil {
+			return HelperConfigIdentity{}, err
+		}
+		if hooks != nil && hooks.beforeFile != nil {
+			if err := hooks.beforeFile(name); err != nil {
+				return HelperConfigIdentity{}, fmt.Errorf("QUIC generation interrupted before file creation")
+			}
+		}
+		raw := material[name]
+		if name == "helper.json" {
+			raw = config
+		}
+		original, err := credentials.WritePrivateCreateOnly(fd, name, raw)
+		if err != nil {
+			return HelperConfigIdentity{}, fmt.Errorf("QUIC generation first creation failed; unreceipted material retained")
+		}
+		observed, err := privateFileWitness(fd, name)
+		sum := sha256.Sum256(raw)
+		if err != nil || observed.Device != original.Device ||
+			observed.Inode != original.Inode || observed.SHA256 != hex.EncodeToString(sum[:]) {
+			return HelperConfigIdentity{}, fmt.Errorf("QUIC generation created file identity unverified")
+		}
+		created[name] = observed
+		if hooks != nil && hooks.afterFile != nil {
+			if err := hooks.afterFile(name); err != nil {
+				return HelperConfigIdentity{}, fmt.Errorf("QUIC generation interrupted after file creation")
+			}
+		}
+	}
+	if hooks != nil && hooks.beforeReceipt != nil {
+		if err := hooks.beforeReceipt(); err != nil {
+			return HelperConfigIdentity{}, fmt.Errorf("QUIC generation interrupted before receipt publication")
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return HelperConfigIdentity{}, fmt.Errorf("QUIC generation cancelled before receipt; material retained")
+	}
+	if err := generationDirectoryPinned(quicDir, fd, string(plan.LinkID), origin); err != nil {
+		return HelperConfigIdentity{}, err
+	}
+	recorded, err := captureGenerationReceiptFD(fd, plan, nonce, expected, false)
+	if err != nil || recorded.DirectoryDevice != uint64(origin.Dev) ||
+		recorded.DirectoryInode != origin.Ino || !reflect.DeepEqual(created, recorded.Files) {
+		return HelperConfigIdentity{}, fmt.Errorf("QUIC generation originating file witnesses changed before receipt")
 	}
 	raw, err := json.Marshal(recorded)
 	if err != nil {
 		return HelperConfigIdentity{}, fmt.Errorf("cannot serialize QUIC generation ownership receipt")
 	}
-	fd, err := openRoleDir(root, plan.LinkID, false)
-	if err != nil {
-		return HelperConfigIdentity{}, err
-	}
-	err = credentials.WritePrivateNoReplace(fd, generationReceiptName, raw)
-	unix.Close(fd)
+	_, err = credentials.WritePrivateCreateOnly(fd, generationReceiptName, raw)
 	clear(raw)
 	if err != nil {
 		return HelperConfigIdentity{}, fmt.Errorf("QUIC ownership receipt publication uncertain")
 	}
-	if err := InspectGenerationReceipt(root, plan, nonce, expected); err != nil {
+	if err := inspectGenerationReceiptFD(fd, plan, nonce, expected); err != nil {
 		return HelperConfigIdentity{}, fmt.Errorf("QUIC ownership receipt readback failed")
+	}
+	if err := generationDirectoryPinned(quicDir, fd, string(plan.LinkID), origin); err != nil {
+		return HelperConfigIdentity{}, err
+	}
+	// Existing protected-file semantic inspection and exact helper identity
+	// remain mandatory before returning a successful Stage result.
+	got, err := inspectHelperConfig(root, plan, localWGUDPPort, binary, verify)
+	if err != nil || got != expected {
+		return HelperConfigIdentity{}, fmt.Errorf("QUIC generated private material semantic attestation failed")
+	}
+	if err := generationDirectoryPinned(quicDir, fd, string(plan.LinkID), origin); err != nil {
+		return HelperConfigIdentity{}, err
+	}
+	if err := inspectGenerationReceiptFD(fd, plan, nonce, expected); err != nil {
+		return HelperConfigIdentity{}, fmt.Errorf("QUIC final generation receipt drift")
 	}
 	return got, nil
 }

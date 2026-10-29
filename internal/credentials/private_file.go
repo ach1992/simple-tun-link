@@ -97,6 +97,59 @@ func openCheckedPrivateFile(dirfd int, name string) (*os.File, []byte, error) {
 	return f, raw, nil
 }
 
+// CreatedPrivateIdentity is the inode actually opened with O_EXCL, not a
+// later path readback. A caller may use it to prove that one generation
+// exclusively created each of its private files.
+type CreatedPrivateIdentity struct {
+	Device uint64
+	Inode  uint64
+}
+
+// WritePrivateCreateOnly is intentionally stricter than WritePrivateNoReplace:
+// EEXIST always fails, including for byte-identical contents. The original
+// created descriptor stays pinned through write, fsync and pathname identity
+// checks. An uncertain result leaves the file in place for owner reconciliation.
+func WritePrivateCreateOnly(dirfd int, name string, raw []byte) (CreatedPrivateIdentity, error) {
+	if !safeChild(name) || len(raw) == 0 || len(raw) > MaxPrivateFileBytes ||
+		requirePrivateFD(dirfd) != nil {
+		return CreatedPrivateIdentity{}, fmt.Errorf("invalid create-only private publication")
+	}
+	fd, err := unix.Openat(dirfd, name, unix.O_CREAT|unix.O_EXCL|unix.O_WRONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return CreatedPrivateIdentity{}, fmt.Errorf("private create-only file already exists or cannot be opened")
+	}
+	f := os.NewFile(uintptr(fd), "created-private-file")
+	defer f.Close()
+	var created, current, child unix.Stat_t
+	if err := unix.Fstat(fd, &created); err != nil ||
+		created.Mode&unix.S_IFMT != unix.S_IFREG || created.Mode&0o777 != 0o600 ||
+		created.Uid != uint32(os.Geteuid()) || created.Nlink != 1 {
+		return CreatedPrivateIdentity{}, fmt.Errorf("new private file has untrusted creation identity")
+	}
+	n, err := f.Write(raw)
+	if err != nil || n != len(raw) {
+		return CreatedPrivateIdentity{}, fmt.Errorf("new private file write incomplete")
+	}
+	if err := f.Sync(); err != nil {
+		return CreatedPrivateIdentity{}, fmt.Errorf("new private file durability uncertain")
+	}
+	if err := unix.Fstat(fd, &current); err != nil ||
+		current.Dev != created.Dev || current.Ino != created.Ino ||
+		current.Mode != created.Mode || current.Nlink != 1 ||
+		current.Size != int64(len(raw)) {
+		return CreatedPrivateIdentity{}, fmt.Errorf("new private inode changed after write")
+	}
+	if err := unix.Fsync(dirfd); err != nil {
+		return CreatedPrivateIdentity{}, fmt.Errorf("new private file directory durability uncertain")
+	}
+	if err := unix.Fstatat(dirfd, name, &child, unix.AT_SYMLINK_NOFOLLOW); err != nil ||
+		child.Dev != created.Dev || child.Ino != created.Ino ||
+		child.Mode != current.Mode || child.Nlink != 1 || child.Size != current.Size {
+		return CreatedPrivateIdentity{}, fmt.Errorf("new private file path changed after creation")
+	}
+	return CreatedPrivateIdentity{Device: uint64(created.Dev), Inode: created.Ino}, nil
+}
+
 // WritePrivateNoReplace publishes only to an already verified private
 // directory using O_EXCL; an existing file is accepted only when its exact
 // content and inode are trustworthy AND the same inode has been synced.

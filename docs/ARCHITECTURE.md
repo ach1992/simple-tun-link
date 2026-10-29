@@ -852,16 +852,28 @@ rechecks State under canonical maintenance -> Link -> resource locks.
 
 A **fresh** Link credential directory is created with exclusive
 descriptor-relative `mkdirat` (not reused merely because file contents
-match). After parent fsync, STL writes the five role-private 0600 files
-using the existing no-replace, fsynced credential/config components. It
-captures directory and file device/inode/digest evidence, then publishes a
-private 0600 `generation-owner.json` sidecar (schema v1) with a durable
-no-replace write and readback. This sidecar binds the **Engine-issued immutable
+match). STL immediately opens and pins the original directory FD and
+device/inode, checks the original canonical parent entry, then syncs the
+parent. The FIRST creation of each of the five role-private 0600 files
+uses strict exclusive `O_CREAT|O_EXCL` publication through **that pinned
+directory FD**, recording the very inode created by each successful open,
+synchronizing its data and directory, and verifying its original identity
+against immediate and final no-symlink readback. Even byte-identical
+`EEXIST` fails closed; generic no-replace/idempotent component staging is
+**not** permitted to manufacture first-generation ownership. Before any
+receipt publication STL rechecks all five original inode witnesses, the
+complete inventory and the still-pinned originating directory/parent identity.
+Only then does it publish the private 0600 `generation-owner.json` sidecar
+(schema v1), also through exclusive create-only publication, and perform
+same-FD receipt/inventory/inode readback. This sidecar binds the **Engine-issued immutable
 journal nonce**, Link, role, expected seven-field identity and **all five
 creation-generation inodes**. It does not contain plaintext keys or bearer.
-Every idempotent retry must inspect the same durable receipt and all five
-matching actual inodes; it must NOT restage or adopt a pre-existing directory,
-even when its credentials and helper JSON match the journal. A crash after
+Every idempotent retry is a separately gated **existing-generation** path:
+it must inspect the same durable receipt and all five matching actual inodes;
+it must NOT restage or adopt a pre-existing directory merely because its
+credentials and helper JSON match the journal. The receipt, files and final
+inventory are inspected with one held directory FD, rather than mixing
+independent canonical-path resolutions. A crash after
 exclusive directory creation but before the sidecar becomes durable leaves
 uncertain files quarantined. No automatic deletion, adoption or blind retry
 occurs. This approach changes no State v4 schema.
