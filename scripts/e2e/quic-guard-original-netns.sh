@@ -56,10 +56,8 @@ copy_libraries "$nft_binary"
 cp -L -- /lib64/ld-linux-x86-64.so.2 "$root/lib64/ld-linux-x86-64.so.2"
 
 cd "$repo"
-GOTOOLCHAIN=local go test -c -o "$root/linux-test" ./internal/linux
-GOTOOLCHAIN=local go test -c -o "$root/app-test" ./internal/app
-copy_libraries "$root/linux-test"
-copy_libraries "$root/app-test"
+GOTOOLCHAIN=local go test -c -o "$root/guard-test" ./internal/quicguard
+copy_libraries "$root/guard-test"
 
 export STL_QUIC_PARENT_NETNS="$(readlink /proc/self/ns/net)"
 export STL_QUIC_PARENT_USERNS="$(readlink /proc/self/ns/user)"
@@ -69,7 +67,7 @@ export STL_QUIC_TEST_ROOT="$root"
 
 unshare --user --map-root-user --net --mount --pid --fork bash -euo pipefail -c '
   mount -t proc proc "$STL_QUIC_TEST_ROOT/proc"
-  chroot "$STL_QUIC_TEST_ROOT" /linux-test -test.run "^TestQUICOriginalGuardRealNFTDisposableUserNetNS$" -test.v
-  chroot "$STL_QUIC_TEST_ROOT" /app-test -test.run "^TestQUICOriginalGuardEngineMaterialAndRealNFTInDisposableNetNS$" -test.v
+  chroot "$STL_QUIC_TEST_ROOT" /guard-test -test.run "^TestQUICOriginalGuardRealNFTDisposableUserNetNS$" -test.v
+  chroot "$STL_QUIC_TEST_ROOT" /guard-test -test.run "^TestQUICOriginalGuardEngineMaterialAndRealNFTInDisposableNetNS$" -test.v
 '
 echo 'QUIC guard isolated original nft and Engine-material integration: PASS'

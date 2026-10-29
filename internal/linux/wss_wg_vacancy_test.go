@@ -9,10 +9,11 @@ import (
 )
 
 type wssVacancyRunner struct {
-	result map[string]string
-	fail   string
-	cancel context.CancelFunc
-	calls  []string
+	result    map[string]string
+	fail      string
+	cancel    context.CancelFunc
+	calls     []string
+	stderrFor string
 }
 
 func (r *wssVacancyRunner) Run(ctx context.Context, binary string, args ...string) (CommandResult, error) {
@@ -31,6 +32,9 @@ func (r *wssVacancyRunner) RunBounded(_ context.Context, _ CaptureLimits, binary
 	out, exists := r.result[command]
 	if !exists {
 		return CommandResult{}, errors.New("unexpected inventory request")
+	}
+	if command == r.stderrFor {
+		return CommandResult{Stdout: []byte(out), Stderr: []byte("SENSITIVE_FOREIGN_WG_STDERR")}, nil
 	}
 	return CommandResult{Stdout: []byte(out)}, nil
 }
@@ -155,5 +159,34 @@ func TestWSSGuardVacancyGlobalAgreementAndFailClosed(t *testing.T) {
 	run = &wssVacancyRunner{result: original, fail: "ss -H -u -l -n"}
 	if clear, err := WSSGlobalWGKernelVacant(context.Background(), run, "wg", local, 51871); err == nil || clear {
 		t.Fatalf("unavailable birthplace socket inventory proved vacancy: %v", err)
+	}
+}
+
+// The same live-WG vacancy reader protects both legacy WSS guard retirement
+// and the new QUIC pre-create admission. Successful exit with ANY stderr is
+// ambiguous, never proof of vacant original keys/ports or migratable sockets.
+func TestWSSGlobalWGKernelVacantRejectsEachSuccessfulWGDiagnostic(t *testing.T) {
+	key := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("a", 32)))
+	for _, command := range []string{"wg show interfaces", "wg show all public-key", "wg show all listen-port"} {
+		t.Run(command, func(t *testing.T) {
+			r := &wssVacancyRunner{result: map[string]string{
+				"wg show interfaces":      "",
+				"wg show all public-key":  "",
+				"wg show all listen-port": "",
+				"ss -H -u -l -n":          "",
+			}, stderrFor: command}
+			vacant, err := WSSGlobalWGKernelVacant(context.Background(), r, "wg", key, 51871)
+			if err == nil || vacant || strings.Contains(err.Error(), "SENSITIVE_FOREIGN_WG_STDERR") {
+				t.Fatalf("successful but ambiguous WG inventory accepted/leaked: vacant=%t err=%v", vacant, err)
+			}
+		})
+	}
+	ordinary := &wssVacancyRunner{result: map[string]string{
+		"wg show interfaces": "", "wg show all public-key": "",
+		"wg show all listen-port": "", "ss -H -u -l -n": "",
+	}}
+	vacant, err := WSSGlobalWGKernelVacant(context.Background(), ordinary, "wg", key, 51871)
+	if err != nil || !vacant {
+		t.Fatalf("clean empty WG inventory rejected: %v", err)
 	}
 }

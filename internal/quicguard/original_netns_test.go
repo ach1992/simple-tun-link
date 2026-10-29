@@ -1,8 +1,9 @@
-package linux
+package quicguard
 
 import (
 	"context"
 	"fmt"
+	"github.com/ach1992/simple-tun-link/internal/linux"
 	"os"
 	"os/exec"
 	"reflect"
@@ -12,33 +13,32 @@ import (
 // This opt-in test validates a REAL nft CREATE/strict readback in an
 // unshared user+network namespace. The development host has no iptables
 // and wg binaries in its chroot, so the iptables and WG/socket snapshots
-// are simulated;
-// the actual nft transaction and all nft readbacks remain real. Do not
+// are simulated; the actual nft transaction and all nft readbacks remain real. Do not
 // treat this as production-policy or end-to-end QUIC acceptance.
-type isolatedNftGuardRunner struct{ ExecRunner }
+type isolatedNftGuardRunner struct{ linux.ExecRunner }
 
-func (r isolatedNftGuardRunner) RunBounded(ctx context.Context, limit CaptureLimits, name string, args ...string) (CommandResult, error) {
+func (r isolatedNftGuardRunner) RunBounded(ctx context.Context, limit linux.CaptureLimits, name string, args ...string) (linux.CommandResult, error) {
 	if name == "nft" {
 		return r.ExecRunner.RunBounded(ctx, limit, name, args...)
 	}
 	switch {
 	case name == "iptables" && reflect.DeepEqual(args, []string{"-V"}):
-		return CommandResult{Stdout: []byte("iptables v1.8.11 (nf_tables)\n")}, nil
+		return linux.CommandResult{Stdout: []byte("iptables v1.8.11 (nf_tables)\n")}, nil
 	case name == "ip6tables" && reflect.DeepEqual(args, []string{"-V"}):
-		return CommandResult{Stdout: []byte("ip6tables v1.8.11 (nf_tables)\n")}, nil
+		return linux.CommandResult{Stdout: []byte("ip6tables v1.8.11 (nf_tables)\n")}, nil
 	case name == "iptables-legacy-save" && len(args) == 0:
-		return CommandResult{Stdout: []byte{}}, nil
+		return linux.CommandResult{Stdout: []byte{}}, nil
 	case name == "ip6tables-legacy-save" && len(args) == 0:
-		return CommandResult{Stdout: []byte{}}, nil
+		return linux.CommandResult{Stdout: []byte{}}, nil
 	case name == "wg" && (reflect.DeepEqual(args, []string{"show", "interfaces"}) ||
 		reflect.DeepEqual(args, []string{"show", "all", "public-key"}) ||
 		reflect.DeepEqual(args, []string{"show", "all", "listen-port"})):
-		return CommandResult{Stdout: []byte{}}, nil
+		return linux.CommandResult{Stdout: []byte{}}, nil
 	case name == "ss" && (reflect.DeepEqual(args, []string{"-H", "-u", "-l", "-n"}) ||
 		reflect.DeepEqual(args, []string{"-H", "-u", "-a", "-n"})):
-		return CommandResult{Stdout: []byte{}}, nil
+		return linux.CommandResult{Stdout: []byte{}}, nil
 	}
-	return CommandResult{}, fmt.Errorf("unexpected isolated firewall query")
+	return linux.CommandResult{}, fmt.Errorf("unexpected isolated firewall query")
 }
 
 func TestQUICOriginalGuardRealNFTDisposableUserNetNS(t *testing.T) {
@@ -52,13 +52,13 @@ func TestQUICOriginalGuardRealNFTDisposableUserNetNS(t *testing.T) {
 		self == parentNet || user == parentUser || os.Geteuid() != 0 {
 		t.Fatal("refuse nft mutation without explicitly verified fresh user and network namespaces")
 	}
-	plan, err := NewQUICWGIngressPlan(wssTestLinkID, 51820, quicTestNonce)
+	plan, err := linux.NewQUICWGIngressPlan(fixtureID, 51820, fixtureNonce)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
 	runner := isolatedNftGuardRunner{}
-	if err := publishQUICWGIngressOriginalWithNFT(ctx, runner, plan, testQUICIngressPublicKey()); err != nil {
+	if err := publishOriginal(ctx, runner, fixtureID, fixtureNonce, testWG(), runOriginalNFTCreate); err != nil {
 		t.Fatalf("isolated original create: %v", err)
 	}
 	t.Cleanup(func() {
@@ -66,11 +66,11 @@ func TestQUICOriginalGuardRealNFTDisposableUserNetNS(t *testing.T) {
 			t.Errorf("scoped disposable guard deletion: %v", err)
 		}
 	})
-	present, err := InspectWGIngressGuard(ctx, runner, plan)
+	present, err := linux.InspectWGIngressGuard(ctx, runner, plan)
 	if err != nil || !present {
 		t.Fatalf("isolated created guard readback mismatch: %v", err)
 	}
-	if err := publishQUICWGIngressOriginalWithNFT(ctx, runner, plan, testQUICIngressPublicKey()); err == nil {
+	if err := publishOriginal(ctx, runner, fixtureID, fixtureNonce, testWG(), runOriginalNFTCreate); err == nil {
 		t.Fatal("original publisher adopted exact existing nft table on retry")
 	}
 }

@@ -1,17 +1,24 @@
-package app
+package quicguard
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
+	"net/netip"
 	"os"
 	"os/exec"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/ach1992/simple-tun-link/internal/app"
+	"github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/carrier/quic"
 	"github.com/ach1992/simple-tun-link/internal/composition"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
+	"github.com/ach1992/simple-tun-link/internal/state"
 )
 
 // Isolated-only test adapter: real kernel nft CREATE/list readback, with
@@ -44,14 +51,55 @@ func (r appIsolatedNFTGuardRunner) RunBounded(ctx context.Context, lim linux.Cap
 	return linux.CommandResult{}, fmt.Errorf("unexpected isolated nft test query")
 }
 
-type isolatedGuardDiagnosticHost struct {
-	linux.QUICWGIngressHost
-	lastErr error
+type isolatedVacancyProbe struct{}
+
+func (isolatedVacancyProbe) Vacant(context.Context, []domain.ResourceClaim) (bool, error) {
+	return true, nil
 }
 
-func (h *isolatedGuardDiagnosticHost) PublishOriginalQUICWGIngress(ctx context.Context, id domain.LinkID, nonce string, wg domain.WireGuardOptions) error {
-	h.lastErr = h.QUICWGIngressHost.PublishOriginalQUICWGIngress(ctx, id, nonce, wg)
-	return h.lastErr
+func isolatedEngine(t *testing.T) (*app.Engine, *state.FileStore) {
+	t.Helper()
+	root := t.TempDir()
+	store := state.NewFileStore(root)
+	registry, err := backend.NewRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := app.New(registry, store, state.NewLockManager(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return engine, store
+}
+
+func isolatedIntent(role composition.Role) state.QUICCrashOperation {
+	local := composition.QUICLocalAdmission{
+		LinkID: "lnk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Role: role,
+		LocalWGUDPPort: 51821, LocalHelperUDPPort: 52211, RemoteWGUDPPort: 51820,
+	}
+	wg := domain.WireGuardOptions{
+		LocalPublicKey: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x21}, 32)),
+		PeerPublicKey:  base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x32}, 32)),
+		ListenPort:     51821, PeerPort: 52211,
+	}
+	if role == composition.Listen {
+		local.LocalWGUDPPort = 51820
+		local.LocalHelperUDPPort = 443
+		local.RemoteWGUDPPort = 0
+		wg.ListenPort = 51820
+		wg.PeerPort = 51821
+	}
+	return state.QUICCrashOperation{
+		Plan: composition.QUICHostPlan{Local: local,
+			Physical: netip.MustParseAddrPort("198.51.100.60:443"), TLSName: "198.51.100.60"},
+		Addresses: domain.LinkAddresses{
+			Local: netip.MustParsePrefix("10.96.20.0/31"), Peer: netip.MustParsePrefix("10.96.20.1/31")},
+		WireGuard:         wg,
+		CertificateSHA256: strings.Repeat("a", 64), TrustCASHA256: strings.Repeat("b", 64),
+		AuthorizationSHA256: strings.Repeat("c", 64), HelperConfigSHA256: strings.Repeat("d", 64),
+		ExecutablePath: "/opt/hysteria", ExecutableSHA256: strings.Repeat("e", 64),
+		ExecutableDevice: 1, ExecutableInode: 2,
+	}
 }
 
 func TestQUICOriginalGuardEngineMaterialAndRealNFTInDisposableNetNS(t *testing.T) {
@@ -78,9 +126,8 @@ func TestQUICOriginalGuardEngineMaterialAndRealNFTInDisposableNetNS(t *testing.T
 	for _, role := range []composition.Role{composition.Dial, composition.Listen} {
 		t.Run(string(role), func(t *testing.T) {
 			ctx := context.Background()
-			backend := newFakeBackend()
-			engine, store := newEngine(t, backend)
-			intent := materialJournalForRole(role)
+			engine, store := isolatedEngine(t)
+			intent := isolatedIntent(role)
 			listener, dialer, err := quic.GeneratePair(intent.Plan.Local.LinkID, intent.Plan.TLSName)
 			if err != nil {
 				t.Fatal(err)
@@ -111,7 +158,7 @@ func TestQUICOriginalGuardEngineMaterialAndRealNFTInDisposableNetNS(t *testing.T
 			intent.ExecutableSHA256 = expected.Executable.SHA256
 			intent.ExecutableDevice = expected.Executable.Device
 			intent.ExecutableInode = expected.Executable.Inode
-			prepared, err := engine.PrepareQUICCrash(ctx, intent, &quicVacancyProbe{})
+			prepared, err := engine.PrepareQUICCrash(ctx, intent, isolatedVacancyProbe{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -122,9 +169,8 @@ func TestQUICOriginalGuardEngineMaterialAndRealNFTInDisposableNetNS(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			host := &isolatedGuardDiagnosticHost{QUICWGIngressHost: linux.QUICWGIngressHost{Runner: appIsolatedNFTGuardRunner{}}}
-			if err := engine.StageQUICCrashIngressGuard(ctx, local.LinkID, host); err != nil {
-				t.Fatalf("real isolated guarded creation: Engine %v; Linux %v", err, host.lastErr)
+			if err := stageOriginal(ctx, engine, local.LinkID, appIsolatedNFTGuardRunner{}, runOriginalNFTCreate); err != nil {
+				t.Fatalf("Engine-bound real isolated guarded creation failed: %v", err)
 			}
 			guard, err := linux.NewQUICWGIngressPlan(local.LinkID, local.LocalWGUDPPort, prepared.Nonce)
 			if err != nil {
@@ -141,12 +187,12 @@ func TestQUICOriginalGuardEngineMaterialAndRealNFTInDisposableNetNS(t *testing.T
 			if err != nil || !present {
 				t.Fatalf("real nft original readback failed: %v", err)
 			}
-			if err := engine.StageQUICCrashIngressGuard(ctx, local.LinkID, host); err == nil {
+			if err := stageOriginal(ctx, engine, local.LinkID, appIsolatedNFTGuardRunner{}, runOriginalNFTCreate); err == nil {
 				t.Fatal("re-run silently adopted the same nft table")
 			}
 			after, err := store.Load(ctx)
 			if err != nil || !reflect.DeepEqual(snapshot, after) || len(after.QUICCrashOperations) != 1 ||
-				backend.applyCount != 0 || len(backend.present) != 0 {
+				len(after.Links) != 0 {
 				t.Fatalf("guard effect erased immutable journal or committed a fake Link: %v", err)
 			}
 		})

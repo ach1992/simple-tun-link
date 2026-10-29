@@ -929,11 +929,18 @@ alone: the exact journal Plan and rendered helper config remain binding.
 
 A separate, **not yet wired to CLI, RestoreAll or a public Link backend**
 QUIC ingress origin step now provides the first host-effect implementation:
-`Engine.StageQUICCrashIngressGuard` reuses the already durable, immutable
-QUIC journal and the Engine's maintenance/Link/resource locking. It first
+`quicguard.StageOriginal(ctx, engine, linkID)` is the sole exported
+production nft CREATE entrypoint, with no caller-selectable publisher,
+Runner, plan, nonce or create-result witness. It calls
+`Engine.WithQUICCrashIngressAdmission` synchronously to reuse the durable,
+immutable QUIC journal and canonical maintenance/Link/resource locks. The
+Engine callback is an *admission scope*, not independent proof of host
+creation: success as an actual ingress creation witness requires the fixed
+host command and complete strict readback inside the Stage entrypoint. It first
 re-attests the original protected five-file credential/config generation
-receipt and the exact SHA-256/inode-pinned Hysteria binary; the Linux adapter
-reconstructs the nonce/port-bound QUIC nft plan from State, reuses the
+receipt and the exact SHA-256/inode-pinned Hysteria binary; the private
+quicguard writer reconstructs the nonce/port-bound nft plan from Engine-
+attested State; Linux read-only inspection reuses the
 shared WSS/QUIC bounded nft table inventory and full five-query firewall
 coexistence preflight, checks complete *current-host* WireGuard public-key,
 listen-port and guard-namespace UDP listener/socket vacancy via the existing
@@ -955,7 +962,7 @@ rejects other early WSS/QUIC hooks until their independently verified
 original owner State + host evidence can be passed to the already shared
 sibling coexistence machinery; do not work around this by disabling WSS.
 
-This bounded source step has no operational caller and is **not** a running
+This bounded source step has no CLI or runtime caller and is **not** a running
 QUIC Link. Future implementation must add durable original nft generation
 ownership, exact kernel WG/UDP and process/systemd witness, separate
 activation-time executable/credential re-attestation, and dependency-aware

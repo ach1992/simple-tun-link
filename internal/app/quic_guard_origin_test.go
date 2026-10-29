@@ -14,9 +14,9 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
-type testQUICOriginalGuardHost struct{ calls int }
+type testQUICOriginalAdmissionCallback struct{ calls int }
 
-func (h *testQUICOriginalGuardHost) PublishOriginalQUICWGIngress(context.Context, domain.LinkID, string, domain.WireGuardOptions) error {
+func (h *testQUICOriginalAdmissionCallback) invoke(context.Context, domain.LinkID, string, domain.WireGuardOptions) error {
 	h.calls++
 	return nil
 }
@@ -36,7 +36,7 @@ func TestQUICOriginalGuardEngineRequiresJournalMaterialsAndExactOrigin(t *testin
 				t.Fatal(err)
 			}
 			inspect, publish := 0, 0
-			err = engine.stageQUICCrashIngressGuard(ctx, op.Plan.Local.LinkID,
+			err = engine.withQUICCrashIngressAdmission(ctx, op.Plan.Local.LinkID,
 				func(root string, plan quic.Plan, port uint16, got state.QUICCrashOperation) error {
 					inspect++
 					recreated, e := plan.HostPlan(port)
@@ -48,14 +48,14 @@ func TestQUICOriginalGuardEngineRequiresJournalMaterialsAndExactOrigin(t *testin
 				}, func(_ context.Context, id domain.LinkID, nonce string, wg domain.WireGuardOptions) error {
 					publish++
 					if inspect != 1 || id != op.Plan.Local.LinkID || nonce != op.Nonce || wg != op.WireGuard {
-						t.Fatal("original guard publisher lacks exact journal-bound and attested identity")
+						t.Fatal("Engine admission callback lacks exact journal-bound and attested identity")
 					}
 					return nil
 				})
 			after, e := store.Load(ctx)
 			if err != nil || e != nil || inspect != 1 || publish != 1 || backend.applyCount != 0 ||
 				!reflect.DeepEqual(prior, after) || len(after.QUICCrashOperations) != 1 {
-				t.Fatalf("guard effect did not preserve pending durable journal: %v %v", err, e)
+				t.Fatalf("Engine admission did not preserve pending durable journal: %v %v", err, e)
 			}
 		})
 	}
@@ -65,12 +65,12 @@ func TestQUICOriginalGuardEngineNeverRunsWithoutJournalOrTrustedMaterials(t *tes
 	ctx := context.Background()
 	engine, store := newEngine(t, newFakeBackend())
 	intent := materialJournalForRole(composition.Listen)
-	host := &testQUICOriginalGuardHost{}
-	if err := engine.StageQUICCrashIngressGuard(ctx, intent.Plan.Local.LinkID, nil); stlerr.CodeOf(err) != stlerr.CodeInvalid {
-		t.Fatalf("nil host accepted: %v", err)
+	host := &testQUICOriginalAdmissionCallback{}
+	if err := engine.WithQUICCrashIngressAdmission(ctx, intent.Plan.Local.LinkID, nil); stlerr.CodeOf(err) != stlerr.CodeInvalid {
+		t.Fatalf("nil admission callback accepted: %v", err)
 	}
-	if err := engine.StageQUICCrashIngressGuard(ctx, intent.Plan.Local.LinkID, host); stlerr.CodeOf(err) != stlerr.CodeConflict || host.calls != 0 {
-		t.Fatalf("absent journal guard called host: %v", err)
+	if err := engine.WithQUICCrashIngressAdmission(ctx, intent.Plan.Local.LinkID, host.invoke); stlerr.CodeOf(err) != stlerr.CodeConflict || host.calls != 0 {
+		t.Fatalf("absent journal admission invoked effect callback: %v", err)
 	}
 	op, err := engine.PrepareQUICCrash(ctx, intent, &quicVacancyProbe{})
 	if err != nil {
@@ -82,18 +82,18 @@ func TestQUICOriginalGuardEngineNeverRunsWithoutJournalOrTrustedMaterials(t *tes
 	}
 	// Public production path cannot fabricate receipts/materials; it must
 	// fail closed before any network or firewall effect.
-	if err := engine.StageQUICCrashIngressGuard(ctx, op.Plan.Local.LinkID, host); stlerr.CodeOf(err) != stlerr.CodeState || host.calls != 0 {
+	if err := engine.WithQUICCrashIngressAdmission(ctx, op.Plan.Local.LinkID, host.invoke); stlerr.CodeOf(err) != stlerr.CodeState || host.calls != 0 {
 		t.Fatalf("untrusted real material created guard: %v", err)
 	}
 	secret := "SENSITIVE_QUIC_ORIGINAL_HOST_ERROR"
 	called := false
-	err = engine.stageQUICCrashIngressGuard(ctx, op.Plan.Local.LinkID,
+	err = engine.withQUICCrashIngressAdmission(ctx, op.Plan.Local.LinkID,
 		func(string, quic.Plan, uint16, state.QUICCrashOperation) error { return errors.New(secret) },
 		func(context.Context, domain.LinkID, string, domain.WireGuardOptions) error { called = true; return nil })
 	if stlerr.CodeOf(err) != stlerr.CodeState || called || strings.Contains(err.Error(), secret) {
 		t.Fatalf("material failure leaked or created host guard: %v", err)
 	}
-	err = engine.stageQUICCrashIngressGuard(ctx, op.Plan.Local.LinkID,
+	err = engine.withQUICCrashIngressAdmission(ctx, op.Plan.Local.LinkID,
 		func(string, quic.Plan, uint16, state.QUICCrashOperation) error { return nil },
 		func(context.Context, domain.LinkID, string, domain.WireGuardOptions) error {
 			called = true
