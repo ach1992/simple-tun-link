@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
+	"golang.org/x/sys/unix"
 )
 
 const fixtureID = domain.LinkID("lnk_0123456789abcdef0123456789abcdef")
@@ -124,6 +126,110 @@ func guardFixture(t *testing.T) (*guardTestRunner, domain.WireGuardOptions) {
 		t.Fatalf("nft snapshot test fixture is foreign: %v", err)
 	}
 	return &guardTestRunner{table: table, exact: exact, nftRules: []byte(emptyRuleset)}, wg
+}
+
+// threadWitnessReader verifies that every host preflight/readback query
+// executes on the same OS thread that dispatches the original nft CREATE.
+type threadWitnessReader struct {
+	*guardTestRunner
+	originTID int
+	migrated  bool
+}
+
+func (r *threadWitnessReader) RunBounded(ctx context.Context, lim linux.CaptureLimits, name string, args ...string) (linux.CommandResult, error) {
+	current := unix.Gettid()
+	if r.originTID == 0 {
+		r.originTID = current
+	} else if current != r.originTID {
+		r.migrated = true
+	}
+	return r.guardTestRunner.RunBounded(ctx, lim, name, args...)
+}
+
+func TestOriginalGuardPinsPreflightCreateAndReadbackToOneOSThread(t *testing.T) {
+	fixture, wg := guardFixture(t)
+	runner := &threadWitnessReader{guardTestRunner: fixture}
+	applied := 0
+	err := publishOriginal(context.Background(), runner, fixtureID, fixtureNonce, wg,
+		func(context.Context, string) error {
+			applied++
+			if runner.originTID == 0 || unix.Gettid() != runner.originTID {
+				t.Fatal("nft CREATE migrated away from preflight network namespace thread")
+			}
+			// Under goroutine rescheduling, the publisher must remain bound
+			// to the same OS thread until strict post-effect readback.
+			runtime.Gosched()
+			fixture.present = true
+			return nil
+		})
+	if err != nil || applied != 1 || runner.migrated {
+		t.Fatalf("original QUIC ingress OS-thread affinity lost: %v dispatches=%d migrated=%t",
+			err, applied, runner.migrated)
+	}
+}
+
+func TestOriginalGuardNamespaceDriftIsNeverAnEffectOrOwnershipPermit(t *testing.T) {
+	// These inputs simulate readback drift; the real production namespace
+	// reader is fixed by publishOriginal. No test changes an OS namespace.
+	for _, tc := range []struct {
+		name         string
+		driftAt      int
+		dispatches   int
+		uncertain    bool
+		readbackDone bool
+		wantReads    int
+	}{
+		{"before dispatch", 2, 0, false, false, 2},
+		{"after dispatch before readback", 3, 1, true, false, 3},
+		{"after strict readback", 4, 1, true, true, 4},
+		{"stable namespace", 0, 1, false, true, 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner, wg := guardFixture(t)
+			reads := 0
+			readNS := func() (string, error) {
+				reads++
+				if reads == tc.driftAt {
+					return "net:[4026532999]", nil
+				}
+				return "net:[4026532789]", nil
+			}
+			dispatched := 0
+			err := publishOriginalWithNetworkNS(context.Background(), runner, fixtureID, fixtureNonce, wg,
+				func(_ context.Context, batch string) error {
+					dispatched++
+					if !strings.HasPrefix(batch, "create table inet "+runner.table) {
+						t.Fatal("unexpected nft CREATE identity")
+					}
+					runner.present = true // test-owned, not deleted or adopted
+					return nil
+				}, readNS)
+			if dispatched != tc.dispatches || reads != tc.wantReads ||
+				runner.present != (tc.dispatches == 1) {
+				t.Fatalf("namespace drift host effect mismatch: dispatched=%d reads=%d present=%t err=%v",
+					dispatched, reads, runner.present, err)
+			}
+			if tc.driftAt == 0 {
+				if err != nil {
+					t.Fatalf("stable namespace rejected: %v", err)
+				}
+			} else if err == nil || errors.Is(err, errEffectUncertain) != tc.uncertain {
+				t.Fatalf("namespace drift incorrectly authorized effect/cleanup: %v", err)
+			}
+			strictReadback := false
+			for _, call := range runner.calls {
+				if call == "nft -j list table inet "+runner.table {
+					strictReadback = true
+				}
+				if strings.Contains(call, "delete") || strings.Contains(call, "flush") {
+					t.Fatalf("namespace drift triggered destructive host command: %q", call)
+				}
+			}
+			if strictReadback != tc.readbackDone {
+				t.Fatalf("unexpected post-effect readback: got %t want %t", strictReadback, tc.readbackDone)
+			}
+		})
+	}
 }
 
 func TestOriginalGuardStrictCreateAndOneTimeReadback(t *testing.T) {

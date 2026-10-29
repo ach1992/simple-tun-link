@@ -967,7 +967,14 @@ internally as `quicguard.InspectPendingOriginal(ctx, engine, linkID)`. It
 reuses the canonical Engine's existing maintenance/Link/resource locks and
 requires the immutable original journal and current protected generation
 attestation. It uses the fixed actual nft reader, a trusted kernel boot-ID
-source and a before/after stable current network-namespace label; its strict
+source and a before/after stable OS-thread-scoped network-namespace label
+from `/proc/thread-self/ns/net`. The observer locks its OS thread for the
+entire nft subprocess sequence, so the namespace label describes the same
+thread context in which `nft` executes (unlike `/proc/self/ns/net`, which
+can describe a different thread). The original guard CREATE also locks its
+thread across live preflight, `nft` effect and strict readback and fails
+closed on namespace drift (quarantining effects dispatched before drift).
+Neither lock nor the label proves original ownership. The strict
 nft table census and full exact table readback must agree on the original
 object handles. The only successful statuses are **not visible in this
 observed namespace** and **matching shape, ownership unverified** (the latter
