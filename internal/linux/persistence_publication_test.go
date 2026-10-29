@@ -68,7 +68,7 @@ func TestEnsureRestoresFirstPublishedUnitOnDurabilityFailure(t *testing.T) {
 func TestEnsureRestoresPriorOwnedEnabledUnitAfterPublicationFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, restoreSystemdUnitName)
-	old := []byte(managedSystemdMarker + "\n[Unit]\nDescription=old owned restore\n")
+	old := ownedRestoreUnitFixture(t, "/opt/stl/stl")
 	if err := os.WriteFile(path, old, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestEnsureReportsFailedUnitPublicationCompensation(t *testing.T) {
 func TestEnsureReportsUnitReloadFailureAfterRestoringOwnedPrior(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, restoreSystemdUnitName)
-	old := []byte(managedSystemdMarker + "\n[Unit]\nDescription=old\n")
+	old := ownedRestoreUnitFixture(t, "/opt/stl/stl")
 	if err := os.WriteFile(path, old, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestUnitPublicationCompensationAfterCallerCancellation(t *testing.T) {
 func TestUnitPublicationRejectsUnprovenRestoration(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, restoreSystemdUnitName)
-	old := []byte(managedSystemdMarker + "\n[Unit]\nDescription=old\n")
+	old := ownedRestoreUnitFixture(t, "/opt/stl/stl")
 	if err := os.WriteFile(path, old, 0o644); err != nil {
 		t.Fatal(err)
 	}

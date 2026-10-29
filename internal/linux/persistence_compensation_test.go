@@ -59,7 +59,7 @@ func newCompensationFixture(t *testing.T, existing, enabled bool) (string, strin
 	path := filepath.Join(dir, restoreSystemdUnitName)
 	prior := []byte(nil)
 	if existing {
-		prior = []byte(managedSystemdMarker + "\n[Unit]\nDescription=previous owned unit\n")
+		prior = ownedRestoreUnitFixture(t, "/opt/stl-previous/stl")
 		if err := os.WriteFile(path, prior, 0o644); err != nil {
 			t.Fatal(err)
 		}

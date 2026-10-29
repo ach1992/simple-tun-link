@@ -16,7 +16,7 @@ Usage:
   install.sh install|update --bundle /path/to/release-bundle [--prefix /usr/local] [--backends all]
   install.sh requirements [--backends native,wireguard,ipsec] [--os-release-file /path/to/read-only-fixture]
   install.sh prepare --backends native|wireguard|ipsec|all [--expected-missing '...'] [--expected-apt-plan '...']
-  install.sh uninstall [--prefix /usr/local]
+  install.sh uninstall [--prefix /usr/local] [--retire-owned-restore]
 
 The default backend selection is native (GRE/IPIP). Add wireguard and/or
 ipsec explicitly to provision optional dependencies. "all" selects all.
@@ -345,6 +345,7 @@ prefix=/usr/local
 version=
 bundle=
 auto_stable=0
+retire_owned_restore=0
 backends=native
 backends_supplied=0
 os_release_fixture=
@@ -357,6 +358,7 @@ while [[ $# -gt 0 ]]; do
     --version) [[ $# -ge 2 && -z $version ]] || usage; version=$2; shift 2 ;;
     --bundle) [[ $# -ge 2 && -z $bundle ]] || usage; bundle=$2; shift 2 ;;
     --auto-stable) [[ $auto_stable == 0 ]] || usage; auto_stable=1; shift ;;
+    --retire-owned-restore) [[ $retire_owned_restore == 0 ]] || usage; retire_owned_restore=1; shift ;;
     --prefix) [[ $# -ge 2 ]] || usage; prefix=$2; shift 2 ;;
     --backends) [[ $# -ge 2 && $backends_supplied == 0 ]] || usage; backends=$2; backends_supplied=1; shift 2 ;;
     --os-release-file) [[ $# -ge 2 && -z $os_release_fixture ]] || usage; os_release_fixture=$2; shift 2 ;;
@@ -373,6 +375,7 @@ else
   [[ -n $version && -z $bundle || -z $version && -n $bundle ]] || usage
 fi
 [[ $auto_stable == 0 || ( $action == install && -n $bundle ) ]] || usage
+[[ $retire_owned_restore == 0 || $action == uninstall ]] || usage
 [[ $action == requirements || -z $os_release_fixture ]] || usage
 [[ $action == prepare || ( $expected_missing_supplied == 0 && $expected_apt_plan_supplied == 0 ) ]] || usage
 [[ $action != prepare || $prefix == /usr/local ]] || fail 'package preparation is allowed only for the installer-owned /usr/local installation'
@@ -1324,14 +1327,30 @@ if [[ $action == prepare ]]; then
   exit 0
 fi
 
-# A release operation is not a Link lifecycle. Prevent uninstall unless STL's
-# canonical read contract proves zero Links and the Engine-owned unit is absent.
+# A release operation is not a Link lifecycle. Only the explicit root
+# UNINSTALL option can reconcile a verified STL-owned orphan restore unit.
+# The same installed Engine and inherited exclusive maintenance lock own it.
 if [[ $action == uninstall ]]; then
+  if [[ $retire_owned_restore == 1 ]]; then
+    [[ $prefix == /usr/local ]] || fail 'orphan restore retirement requires canonical installed STL'
+    reconciled=$("$target" maintenance retire-orphan-restore --json) ||
+      fail 'STL-owned orphan restore-unit retirement was not verified; no binary removed'
+    [[ $reconciled == '{"schema_version":1,"ready":true}' ]] ||
+      fail 'canonical restore-unit retirement did not verify completion'
+  fi
   # Installer holds exclusive maintenance flock. The canonical Go preflight
   # is the single authority on durable state and systemd enablement.
   checked=$("$target" maintenance pre-uninstall --json) || fail 'canonical uninstall preflight failed; no files removed'
   [[ $checked == '{"schema_version":1,"ready":true}' ]] || fail 'canonical uninstall preflight did not prove safety'
-
+  # Retire only the canonical lock-only footprint left by an attempt that
+  # never committed State. Go rechecks every file identity under this exact
+  # exclusive installer lock. Committed State/credentials are never deleted.
+  if [[ $prefix == /usr/local ]]; then
+    retired=$("$target" maintenance retire-empty-state --json) ||
+      fail 'STL-owned orphan State locks could not be safely retired; no binary removed'
+    [[ $retired == '{"schema_version":1,"ready":true}' ]] ||
+      fail 'canonical orphan cleanup did not verify completion'
+  fi
 fi
 
 stage=
@@ -1572,6 +1591,27 @@ if [[ $action == update ]]; then
       fail 'same release version has different executable bytes; refusing mutable/repacked tag'
   fi
 fi
+# A requested downgrade is not a blind binary replacement. The CURRENT
+# installed Engine must prove an empty, non-journaled, restore-unit-free State
+# and prepare only the known lossless empty v4->v3 representation if required.
+# This runs under the SAME exclusive maintenance lock as the later binary
+# swap; the old target installer never owns this new safety/migration logic.
+if [[ $action == update && $prior_version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ &&
+      $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] &&
+   dpkg --compare-versions "${version#v}" lt "${prior_version#v}"; then
+  if [[ $prefix == /usr/local ]]; then
+    case "$prior_version" in
+      v0.1.8|v0.1.9|v0.1.10|v0.1.11|v0.1.12)
+        fail 'legacy_binary_bridge_required: the currently installed Stable cannot perform the new guarded downgrade. First UPDATE to the next published official Stable using its permanent installer (no old tag suffix); then choose the older verified Stable from that new installed menu. No binary or State was changed.'
+        ;;
+    esac
+    staged=$("$target" maintenance stage-downgrade --target "$version" --json) ||
+      fail 'STL State/Link compatibility check blocked requested downgrade; no binary replaced'
+    [[ $staged == '{"schema_version":1,"ready":true}' ]] ||
+      fail 'canonical downgrade State stage did not verify completion'
+  fi
+fi
+
 # Install only missing distro-native prerequisites, after authenticating the
 # exact candidate artifact and BEFORE touching the canonical STL executable.
 # Package installations are not part of the STL binary rollback transaction;

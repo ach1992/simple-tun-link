@@ -132,7 +132,7 @@ func TestSystemdPersistencePreservesPriorEnablementOnRollback(t *testing.T) {
 	unitDir := t.TempDir()
 	runner := &recordingRunner{enabled: map[string]bool{restoreSystemdUnitName: true}}
 	manager := SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil }}
-	oldContent := managedSystemdMarker + "\n[Unit]\nDescription=old\n"
+	oldContent := string(ownedRestoreUnitFixture(t, "/opt/stl/stl"))
 	if err := os.WriteFile(filepath.Join(unitDir, restoreSystemdUnitName), []byte(oldContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +347,7 @@ func TestRemoveRestoreMissingAndExistingIdentityPolicy(t *testing.T) {
 		{name: "missing disabled", wantCommands: 1},
 		{name: "missing enabled orphan", enabled: true, wantError: "lacks an STL-owned unit", wantCommands: 1},
 		{name: "missing inspection fails", failInspect: true, wantError: "cannot verify absent", wantCommands: 1},
-		{name: "existing owned enabled", existing: "owned", enabled: true, wantCommands: 4},
+		{name: "existing owned enabled", existing: "owned", enabled: true, wantCommands: 5},
 		{name: "existing foreign", existing: "foreign", enabled: true, wantError: "non-STL", wantCommands: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
