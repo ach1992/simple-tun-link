@@ -18,6 +18,8 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
+var errOwnedRestoreUnitPresent = errors.New("Engine restore unit is still installed; reconcile it through STL")
+
 // uninstallUnitInspector uses the same identity and enablement semantics as
 // canonical Engine persistence. This is a read-only proof, not cleanup.
 type uninstallUnitInspector interface {
@@ -193,12 +195,44 @@ func inspectUninstallReady(ctx context.Context, root string, unit uninstallUnitI
 		return fmt.Errorf("cannot prove restore-unit absence: %w", err)
 	}
 	if installed {
-		return fmt.Errorf("Engine restore unit is still installed; reconcile it through stl")
+		return errOwnedRestoreUnitPresent
 	}
 	// Re-observe canonical state after the potentially blocking systemctl call.
 	// Exclusive maintenance exclusion prevents STL mutations meanwhile.
 	if _, err := inspectUninstallState(ctx, root, trust); err != nil {
 		return err
+	}
+	return nil
+}
+
+// retireOrphanRestoreUnit is an explicitly confirmed installer reconciliation,
+// not a way to tear down persistence for a working Link. The caller holds the
+// inherited exclusive canonical maintenance lock before reaching this code.
+func retireOrphanRestoreUnit(ctx context.Context, root string, unit interface {
+	uninstallUnitInspector
+	RemoveRestore(context.Context) error
+}, trust func(string) error) error {
+	if unit == nil || trust == nil {
+		return errors.New("restore-unit retirement prerequisites unavailable")
+	}
+	if _, err := inspectUninstallState(ctx, root, trust); err != nil {
+		return err
+	}
+	present, err := unit.IsRestoreInstalled(ctx)
+	if err != nil {
+		return fmt.Errorf("restore-unit ownership or enablement unverified: %w", err)
+	}
+	if present {
+		if err := unit.RemoveRestore(ctx); err != nil {
+			return fmt.Errorf("owned restore-unit retirement incomplete: %w", err)
+		}
+	}
+	present, err = unit.IsRestoreInstalled(ctx)
+	if err != nil || present {
+		return errors.New("restore-unit retirement absence is unverified")
+	}
+	if _, err := inspectUninstallState(ctx, root, trust); err != nil {
+		return fmt.Errorf("State changed during restore-unit retirement: %w", err)
 	}
 	return nil
 }

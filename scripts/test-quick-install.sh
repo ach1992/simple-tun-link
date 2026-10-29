@@ -102,9 +102,44 @@ if [[ "$url" == "https://github.com/ach1992/simple-tun-link/releases/latest/down
     *) exit 49 ;;
   esac
 fi
+if [[ "$url" == "https://api.github.com/repos/ach1992/simple-tun-link/releases/tags/v0.1.9" ]]; then
+  [[ -n "$destination" ]] || exit 44
+  case "${STL_TEST_RELEASE_CASE:-}" in
+    network-error) printf 'INTERNAL_CREDENTIAL=DO_NOT_LEAK\n' >&2; exit 47 ;;
+    redirect) printf '302'; exit 0 ;;
+    truncated) printf '{"id":123' > "$destination"; printf '200'; exit 0 ;;
+    empty) : > "$destination"; printf '200'; exit 0 ;;
+    oversized) head -c 262145 /dev/zero > "$destination"; printf '200'; exit 0 ;;
+  esac
+  tag=v0.1.9
+  immutable=true
+  draft=false
+  prerelease=false
+  assets=present
+  case "${STL_TEST_RELEASE_CASE:-}" in
+    mismatched-tag) tag=v0.1.10 ;;
+    mutable) immutable=false ;;
+    unpublished) draft=true ;;
+    prerelease) prerelease=true ;;
+    incomplete) assets=missing ;;
+    duplicate-json) ;;
+    unknown) exit 44 ;;
+  esac
+  if [[ "$assets" == missing ]]; then
+    assets_json='[]'
+  else
+    assets_json='[{"name":"stl_v0.1.9_linux_amd64","size":111,"state":"uploaded"},{"name":"stl_v0.1.9_linux_arm64","size":111,"state":"uploaded"},{"name":"BUILD-MANIFEST.txt","size":111,"state":"uploaded"},{"name":"SHA256SUMS","size":111,"state":"uploaded"},{"name":"LICENSE","size":111,"state":"uploaded"}]'
+  fi
+  extra=
+  [[ "${STL_TEST_RELEASE_CASE:-}" != duplicate-json ]] || extra=',"immutable":false'
+  printf '{"id":123,"tag_name":"%s","immutable":%s,"draft":%s,"prerelease":%s,"published_at":"2026-10-21T15:46:41Z","assets":%s%s}\n' \
+    "$tag" "$immutable" "$draft" "$prerelease" "$assets_json" "$extra" > "$destination"
+  printf '200'
+  exit 0
+fi
+# No user-selected historical tag may ever supply executable installer shell.
 if [[ "$url" != 'https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.123/scripts/install.sh' &&
-      "$url" != "https://raw.githubusercontent.com/ach1992/simple-tun-link/$STL_TEST_PUBLIC_TAG/scripts/install.sh" &&
-      "$url" != 'https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.9/scripts/install.sh' ]]; then
+      "$url" != "https://raw.githubusercontent.com/ach1992/simple-tun-link/$STL_TEST_PUBLIC_TAG/scripts/install.sh" ]]; then
   exit 44
 fi
 [[ -n "$destination" ]] || exit 44
@@ -289,6 +324,23 @@ for idx in 0 1 2; do
     }
     assert_first_hop_cleanup
   done
+done
+# A selected historical tag is NEVER a shell path. Rejected metadata must
+# fail before execution, including transport failure, redirects and truncation.
+for release_case in network-error redirect truncated empty oversized mismatched-tag mutable unpublished prerelease incomplete duplicate-json; do
+  : > "$STL_TEST_EXECUTIONS"
+  if STL_TEST_RELEASE_CASE="$release_case" bash "$STL_TEST_STABLE_BOOTSTRAP" v0.1.9 > "$scratch/out" 2> "$scratch/err"; then
+    echo "Unverified release $release_case accepted by official bootstrap." >&2
+    exit 1
+  fi
+  [[ ! -s "$STL_TEST_EXECUTIONS" ]] || {
+    echo "Unverified release $release_case invoked the canonical installer." >&2
+    exit 1
+  }
+  if grep -q 'DO_NOT_LEAK' "$scratch/out" "$scratch/err"; then
+    echo "Release API error leaked private response." >&2
+    exit 1
+  fi
 done
 # Separately downloaded, verified asset supports the documented advanced
 # native-only update syntax; it is NOT an argument appended to the one-liner.

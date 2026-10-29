@@ -90,11 +90,12 @@ func TestRemoveVerifiesPostconditionRatherThanTrustingDisableSuccess(t *testing.
 	if err == nil || !strings.Contains(err.Error(), "remains enabled") {
 		t.Fatalf("successful disable without verified postcondition was accepted: %v", err)
 	}
-	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("test did not exercise fully published file deletion: %v", statErr)
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Fatalf("unverified disablement must preserve owned unit: %v", statErr)
 	}
 	expectSystemdOperations(t, runner.commands,
-		"systemctl is-enabled ", "systemctl disable ", "systemctl daemon-reload", "systemctl is-enabled ")
+		"systemctl is-enabled ", "systemctl disable ", "systemctl is-enabled ",
+		"systemctl daemon-reload", "systemctl enable ", "systemctl is-enabled ")
 }
 
 type mutationDuringDisableRunner struct {
@@ -133,5 +134,5 @@ func TestRemoveNeverDeletesExternallyChangedOwnedUnit(t *testing.T) {
 	if err != nil || string(got) != string(foreign) {
 		t.Fatalf("external file was overwritten: %q %v", got, err)
 	}
-	expectSystemdOperations(t, runner.commands, "systemctl is-enabled ", "systemctl disable ")
+	expectSystemdOperations(t, runner.commands, "systemctl is-enabled ", "systemctl disable ", "systemctl is-enabled ")
 }

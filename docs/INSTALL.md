@@ -472,13 +472,14 @@ cross-check the published artifact `SHA256SUMS`.
 Unverified or mutable releases require manual review and are not
 eligible for automatic privileged menu update.
 
-Read the [installer source](../scripts/install.sh) before running it as root.
-For a single-command install, with an explicit released tag **only after
-the above independent source verification**:
-
-~~~sh
-bash -c 'set -euo pipefail; umask 077; t=$(mktemp); trap '\''rm -f -- "$t"'\'' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 -o "$t" https://raw.githubusercontent.com/ach1992/simple-tun-link/vX.Y.Z/scripts/install.sh; bash -n "$t"; sudo bash "$t" install --version vX.Y.Z'
-~~~
+Read the [canonical installer source](../scripts/install.sh) and the
+official release contract before running any privileged installer.
+**Do not use a raw, caller-selected historical tag as root shell source**:
+HTTPS and `bash -n` alone cannot authenticate a published immutable release.
+Use the permanent, current-immutable Stable bootstrap below, optionally
+passing a verified exact historical Stable tag as **data**. To audit the
+installer manually, obtain the current immutable Stable's canonical source
+and cross-check its publisher/tag identity before any root execution.
 
 ### Permanent short one-line installer (Latest Stable or an exact Stable tag)
 
@@ -504,14 +505,21 @@ bash -c 'set -e; d=$(mktemp -d); cleanup(){ rm -rf -- "$d"; }; trap cleanup EXIT
 ~~~
 
 The **first hop is downloaded to a private temporary directory**. Only
-after curl completes successfully and the file is nonempty and passes
-Bash syntax validation can it execute. Failed or partial transfers
-never execute the downloaded script; the private directory is removed
-on exit. The verified bootstrap then downloads the canonical exact-tag
-installer and checks its syntax before
-invoking root; the installer validates release SHA256SUMS, binary metadata
-and ownership/rollback rules. It reattaches a real /dev/tty to open the
-menu after installation. Without a TTY, use `sudo stl menu`.
+after curl completes successfully and the file is nonempty and passes Bash
+syntax validation can it execute. Failed or partial transfers never execute
+the downloaded script; the temporary directory is removed on exit. An
+optional historical Stable suffix is checked against the official exact-tag
+GitHub release API before privilege elevation; it requires Python 3 and a
+published, complete, `immutable:true` non-prerelease release. Missing,
+mismatched, truncated, redirected, unavailable or mutable metadata fails
+closed. **The executable canonical installer is always downloaded from the
+bootstrap's own immutable Latest Stable tag**, never from the separately
+selected older tag. That older version remains data (`--version`) for the
+canonical installer, which independently validates release SHA256SUMS, binary
+metadata and installed ownership/rollback rules. The bootstrap reattaches a
+real /dev/tty to open the menu after installation. Without a TTY, use
+`sudo stl menu`. This source change reaches users only after a new release
+publishes its corresponding permanent bootstrap asset.
 Default prerequisites are native and WireGuard. To update an existing
 installer-owned STL, **do not run install again**: use this equally fixed
 update command:
@@ -548,8 +556,7 @@ A failed `RECHECK` does not repair anything; prefer investigating
 the reported blocker over repeating `PREPARE`.
 Offline bootstrap failure/PTY tests: bash scripts/test-quick-install.sh.
 
-The longer direct canonical-installer example above selects native
-GRE/IPIP prerequisites. `--backends all` requests every dependency
+The canonical installer selects native GRE/IPIP prerequisites by default. `--backends all` requests every dependency
 family, but it does **not** authorize unsafe IPsec package/service
 preparation: absent qualifying strongSwan prerequisites may stop the
 direct installer with a guided alternative. For qualified
@@ -562,7 +569,13 @@ To preview without changing anything:
 bash scripts/install.sh requirements --backends all
 ```
 
-The one-command wrapper completes and syntax-checks the exact-tag installer download into a private temporary file **before invoking sudo**; a partial/failed download is never streamed into a privileged shell. The downloaded installer then fetches `SHA256SUMS`, `BUILD-MANIFEST.txt`, `LICENSE`, and the one
+The permanent one-command wrapper completes and syntax-checks the
+**current immutable bootstrap's pinned canonical installer** in a private
+temporary file **before invoking sudo**; a partial/failed download is never
+streamed into a privileged shell. An optional older exact-version suffix
+first passes official immutable-release metadata verification and is used
+only as an installer argument. The canonical installer then fetches
+`SHA256SUMS`, `BUILD-MANIFEST.txt`, `LICENSE`, and the one
 architecture-specific `stl_vX.Y.Z_linux_<arch>` executable from the **fixed
 project GitHub release URL** over HTTPS. It checks the relevant SHA-256 entries,
 MIT/commit/version metadata, and the executable's `version --json` identity
@@ -602,13 +615,30 @@ verified update using the canonical manual installer instructions below.
 After installing the first release that includes this newer menu, eligible
 subsequent Stable patch releases can be selected directly in Update.
 
-All automatic menu updates additionally require positively verified
-`immutable:true` official releases, an installed-root/TTY check, and
-fresh `UPDATE` consent. Forward same-line RC transitions remain supported.
-Major/minor jumps, RC-to-Stable, downgrades, releases with
-`immutable:false` or unknown immutability, and unverified exact tags use
-the separately verified **manual update** route below after reviewing State
-compatibility.
+All menu-driven updates and compatible requested downgrades require
+positively verified `immutable:true` official releases, installed-root/TTY
+checks, exact selected release identity and fresh action-specific consent
+(`UPDATE` or `DOWNGRADE`). Forward same-line RC transitions remain supported.
+A same-line Stable **downgrade** is only eligible when the installed Engine
+itself implements the current guarded compatibility command and confirms
+zero saved Links, no pending journals/receipts, no owned restore unit and an
+explicitly known historical State reader. The only supported downlevel
+conversion is a strictly empty v4-to-v3 snapshot; never strip a live Link or
+unknown State fields. Major/minor jumps, RC-to-Stable, mutable or unverified
+releases and unsafe downlevel State remain blocked, not silently installed.
+
+**Bridge from an already-installed v0.1.12 (and older Stable):** the published
+v0.1.12 binary lacks the new `maintenance stage-downgrade` command. It
+cannot perform a direct v0.1.12-to-v0.1.9 downgrade, even when the newer
+installer source is separately downloaded. After a **successor Stable that
+includes these changes is independently reviewed and officially published**,
+first invoke the unchanged permanent Latest Stable **update** command above
+to install that successor. Then open `sudo stl menu`, select the exact older
+immutable Stable and confirm its controlled `DOWNGRADE` after STL validates
+State compatibility. This is an explicit two-step managed transition, not a
+claim that v0.1.12 already provides the new action. Until that publication,
+the bridge is unavailable. Never skip State/Link checks or replace a binary
+manually to simulate this migration.
 The menu delegates to the same canonical installer and rollback machinery;
 it does not implement a second installation engine. No menu selection is an implicit
 privileged mutable-tag download or a waiver of State backups.
@@ -783,14 +813,23 @@ sudo stl link list --json
 For each existing Link ID, explicitly inspect it, then remove it through
 `stl link remove <link-id> --confirm <link-id>`; the canonical Engine owns
 resource and persistence cleanup. Verify no Links remain. A failed removal,
-ambiguous state, or remaining `simple-tun-link-restore.service` requires
-resolution via the Link/Engine workflow **before** uninstall. Do **not** delete
-interfaces, route/firewall rules, or the restore unit manually as a shortcut.
+ambiguous state or unverified restore-unit identity requires
+safe Link/Engine reconciliation **before** uninstall. If the only obstacle
+is a positively verified STL-owned restore unit with zero saved Links and
+no pending operations, the new menu presents an **explicit
+`UNINSTALL` confirmation** and passes that consent to the canonical
+installer. Under its exclusive maintenance lock, the installed Engine
+rechecks State and guarded systemd ownership, disables/retires only the
+identified orphan unit, rechecks absence and then permits core binary
+uninstall. Interrupted/uncertain systemctl or foreign units remain blocked.
+Do **not** delete interfaces, route/firewall rules, or the restore unit
+manually as a shortcut.
 
-After the Link state is proven empty and the Engine-owned restore unit is gone,
-open `sudo stl menu`, choose **Uninstall**, and type **UNINSTALL** after the
-verified preview. No separate installer download or manual lock-directory
-cleanup is required. Advanced offline/legacy fallback:
+After Link State is proven empty, open `sudo stl menu`, choose
+**Uninstall**, and type **UNINSTALL** after the verified preview.
+An owned orphan restore unit can be retired through this same confirmed
+workflow in the successor release; no separate installer download or manual
+lock-directory cleanup is needed. Advanced offline/legacy fallback:
 
 ~~~sh
 sudo bash ./install.sh uninstall
@@ -802,8 +841,12 @@ missing state snapshot in an existing root and uses the canonical systemd
 installed/enabled checks. Missing, malformed, symlinked or otherwise ambiguous
 state fails closed. Uninstall removes only the hash-verified installer-owned canonical executable,
 its exact `stlink -> stl` symlink, and the installer ownership record. It keeps
-the installer lock and does **not** delete `/var/lib/simple-tun-link`, other
+the installer lock and does **not** delete committed `/var/lib/simple-tun-link`
+State, retained protected credentials, optional companion binaries, other
 systemd units, network resources, arbitrary `stl` files, or host packages.
+Only exactly verified uncommitted lock-only State residue may be retired
+and only an explicitly confirmed, separately verified orphan restore unit
+may be disabled and deleted. Uninstall is **not** a universal data purge.
 This deliberate separation prevents an installer from inventing a second
 Link-removal lifecycle. Empty historic state may be archived or retired later
 through a distinct explicit audited operation, not silent uninstall.

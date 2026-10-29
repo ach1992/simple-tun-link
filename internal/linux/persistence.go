@@ -478,7 +478,19 @@ func (p SystemdPersistence) RemoveRestore(ctx context.Context) error {
 	}
 	if wasEnabled {
 		if _, err := p.Runner.Run(ctx, systemctl, "disable", restoreSystemdUnitName); err != nil {
-			return fmt.Errorf("disable STL systemd unit: %w", err)
+			repairErr := p.compensateRemovedUnit(ctx, systemctl, unitDir, path, prior, priorIdentity, wasEnabled)
+			return errors.Join(fmt.Errorf("disable STL systemd unit: %w", err), repairErr)
+		}
+		// A successful systemctl exit is not proof of durable disablement.
+		// Refuse to delete this owned unit if enablement cannot be observed.
+		enabled, inspectErr := p.isEnabled(ctx, systemctl, restoreSystemdUnitName)
+		if inspectErr != nil || enabled {
+			reason := errors.New("owned restore unit remains enabled after disable")
+			if inspectErr != nil {
+				reason = fmt.Errorf("owned restore-unit disablement inspection failed: %w", inspectErr)
+			}
+			repairErr := p.compensateRemovedUnit(ctx, systemctl, unitDir, path, prior, priorIdentity, wasEnabled)
+			return errors.Join(reason, repairErr)
 		}
 	}
 	if err := p.guardExactPublishedIdentity(path, prior, priorIdentity); err != nil {

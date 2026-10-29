@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -146,14 +147,20 @@ func menuUninstallWithOps(input io.Reader, reader *bufio.Reader, out, errOut io.
 	previewCtx, done := context.WithTimeout(context.Background(), 20*time.Second)
 	checkErr := ops.preflight(previewCtx)
 	done()
-	if checkErr != nil {
+	retireUnit := errors.Is(checkErr, errOwnedRestoreUnitPresent)
+	if checkErr != nil && !retireUnit {
 		reason, next := uninstallGateGuidance(checkErr)
 		menuNotice(out, "WARNING", "Canonical Uninstall preflight rejected this host; no changes attempted.")
 		menuField(out, "Reason", reason)
 		menuField(out, "NEXT ACTION", next)
 		return 0
 	}
-	menuField(out, "Verification", "No saved Links, pending operations or restore unit; check repeats under exclusive lock")
+	if retireUnit {
+		menuField(out, "Verification", "Zero saved Links and pending operations; an STL-owned restore unit remains")
+		menuNotice(out, "WARNING", "UNINSTALL will first retire the verified STL-owned restore unit under exclusive maintenance lock. Foreign or uncertain units are never removed.")
+	} else {
+		menuField(out, "Verification", "No saved Links, pending operations or restore unit; check repeats under exclusive lock")
+	}
 	menuNotice(out, "WARNING", "Uninstall removes the STL executable, alias and install record. Protected State, credentials and shared packages are retained.")
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
 		menuNotice(out, "WARNING", "Fresh terminal confirmation unavailable; no removal attempted.")
@@ -170,7 +177,11 @@ func menuUninstallWithOps(input io.Reader, reader *bufio.Reader, out, errOut io.
 	var child menuInstallerOutput
 	childOut, childErr := child.streams()
 	menuNotice(out, "INFO", "Canonical installer verifying ownership and removing only STL-owned binaries. Raw child output is hidden.")
-	installErr := ops.install(ctx, childOut, childErr, "uninstall")
+	installerArgs := []string{"uninstall"}
+	if retireUnit {
+		installerArgs = append(installerArgs, "--retire-owned-restore")
+	}
+	installErr := ops.install(ctx, childOut, childErr, installerArgs...)
 	if installErr != nil {
 		child.failure(out, "uninstall", installErr, ctx)
 		menuNotice(out, "FAILED", "Uninstall was not confirmed. Inspect installed identity and recovery evidence.")

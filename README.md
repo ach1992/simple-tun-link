@@ -64,8 +64,13 @@ bash -c 'set -e; d=$(mktemp -d); cleanup(){ rm -rf -- "$d"; }; trap cleanup EXIT
 
 The wrapper downloads the release's tag-pinned bootstrap into a private
 temporary directory and checks download completion and shell syntax
-before running it. The canonical installer verifies checksums, build
-identity and installed-file ownership. A checksum supplied by the
+before running it. For a requested older exact Stable suffix, the **new
+bootstrap** verifies the official complete immutable release via the GitHub
+API (Python 3 required) *before* root execution. It executes only the
+bootstrap's currently pinned canonical installer; the selected older tag
+is an artifact/version argument, never executable older shell source.
+The canonical installer verifies checksums, build identity and installed-file
+ownership. A checksum supplied by the
 same publisher is **not** an independent publisher signature: review
 the official release, source and installer before privileged execution.
 
@@ -298,7 +303,15 @@ bash -c 'set -e; d=$(mktemp -d); cleanup(){ rm -rf -- "$d"; }; trap cleanup EXIT
 
 Installer binary rollback is **not** State rollback. Stable v0.1.10+
 uses State **v4** for WSS-capable management; an older pre-v4 binary cannot
-be assumed safe even on a host that has only Native Links. Preserve a
+be assumed safe even on a host that has only Native Links. In particular,
+the already-published v0.1.12 does not know the new controlled `DOWNGRADE`
+operation. Once a successor Stable containing this feature has been reviewed
+and published, first use the permanent Latest Stable `update` command to
+upgrade the installed Engine; only then use its menu to request an older
+published immutable Stable, subject to zero-Link and State ownership gates.
+The new Uninstall menu also handles a verified owned orphan restore unit
+after `UNINSTALL` consent, retaining committed State, credentials, optional
+companions and packages. Preserve a
 credential-matched private backup and follow
 [safe State/rollback instructions](docs/INSTALL.md#persisted-state-v3-upgrade-and-safe-rollback-boundary).
 Never downgrade an active managed WSS Link by replacing only its binary.

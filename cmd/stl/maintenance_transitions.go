@@ -213,14 +213,14 @@ func stageEmptyStateForDowngrade(root, target string) error {
 // maintenance lock. These private commands are not a second install engine.
 func maintenanceTransitionCommand(args []string, out, errOut io.Writer) int {
 	action, target := "", ""
-	if len(args) == 2 && args[0] == "retire-empty-state" && args[1] == "--json" {
+	if len(args) == 2 && (args[0] == "retire-empty-state" || args[0] == "retire-orphan-restore") && args[1] == "--json" {
 		action = args[0]
 	} else if len(args) == 4 && args[0] == "stage-downgrade" &&
 		args[1] == "--target" && args[3] == "--json" {
 		action, target = args[0], args[2]
 	} else {
 		return readCommandError(out, errOut, true, stlerr.CodeInvalid,
-			"maintenance_transition", "usage: maintenance retire-empty-state --json OR stage-downgrade --target vX.Y.Z --json")
+			"maintenance_transition", "usage: maintenance retire-orphan-restore --json OR retire-empty-state --json OR stage-downgrade --target vX.Y.Z --json")
 	}
 	fail := func(reason, next string) int {
 		e := stlerr.New(stlerr.CodeState, action, "", "", "Safe STL maintenance transition was not verified")
@@ -235,15 +235,20 @@ func maintenanceTransitionCommand(args []string, out, errOut io.Writer) int {
 	}
 	ctx, done := context.WithTimeout(context.Background(), 15*time.Second)
 	defer done()
-	if err := inspectUninstallReady(ctx, state.DefaultRoot,
-		linux.SystemdPersistence{Runner: linux.ExecRunner{}}, trustedStatePath); err != nil {
-		reason, next := uninstallGateGuidance(err)
-		return fail(reason, next)
+	manager := linux.SystemdPersistence{Runner: linux.ExecRunner{}}
+	if action != "retire-orphan-restore" {
+		if err := inspectUninstallReady(ctx, state.DefaultRoot, manager, trustedStatePath); err != nil {
+			reason, next := uninstallGateGuidance(err)
+			return fail(reason, next)
+		}
 	}
 	var err error
-	if action == "retire-empty-state" {
+	switch action {
+	case "retire-orphan-restore":
+		err = retireOrphanRestoreUnit(ctx, state.DefaultRoot, manager, trustedStatePath)
+	case "retire-empty-state":
 		err = retireOrphanStateRoot(state.DefaultRoot, trustedStatePath)
-	} else {
+	default:
 		err = stageEmptyStateForDowngrade(state.DefaultRoot, target)
 	}
 	if err != nil {
@@ -259,5 +264,6 @@ func maintenanceTransitionCommand(args []string, out, errOut io.Writer) int {
 // Only these exact actions can reach the private mutating transition route.
 func isMaintenanceTransition(args []string) bool {
 	return len(args) > 0 && (strings.EqualFold(args[0], "retire-empty-state") ||
+		strings.EqualFold(args[0], "retire-orphan-restore") ||
 		strings.EqualFold(args[0], "stage-downgrade"))
 }

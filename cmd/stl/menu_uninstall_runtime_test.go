@@ -23,6 +23,7 @@ func TestMenuCanonicalUninstallConsentPreflightAndStaleExit(t *testing.T) {
 	}{
 		{"cancel", "\n", nil, nil, true, 0, 0, "Uninstall cancelled"},
 		{"success", "UNINSTALL\n", nil, nil, true, 1, menuUpdatedExecutable, "STL uninstalled"},
+		{"owned orphan restore", "UNINSTALL\n", errOwnedRestoreUnitPresent, nil, true, 1, menuUpdatedExecutable, "verified STL-owned restore unit"},
 		{"preflight", "UNINSTALL\n", errors.New("saved Links or pending operations remain"), nil, true, 0, 0, "saved_or_pending_links"},
 		{"failed process", "UNINSTALL\n", nil, errors.New("private-key=DO_NOT_LEAK"), true, 1, menuUpdatedExecutable, "Uninstall was not confirmed"},
 		{"failed verification", "UNINSTALL\n", nil, nil, false, 1, menuUpdatedExecutable, "installation remains"},
@@ -37,8 +38,12 @@ func TestMenuCanonicalUninstallConsentPreflightAndStaleExit(t *testing.T) {
 				preflight: func(context.Context) error { return tc.preflightErr },
 				install: func(_ context.Context, stdout, stderr io.Writer, args ...string) error {
 					calls++
-					if len(args) != 1 || args[0] != "uninstall" {
-						t.Fatalf("wrong canonical installer invocation: %v", args)
+					wantArgs := "uninstall"
+					if errors.Is(tc.preflightErr, errOwnedRestoreUnitPresent) {
+						wantArgs += " --retire-owned-restore"
+					}
+					if strings.Join(args, " ") != wantArgs {
+						t.Fatalf("wrong canonical installer invocation: got %q want %q", args, wantArgs)
 					}
 					_, _ = io.WriteString(stderr, "private-token=DO_NOT_LEAK\n")
 					return tc.installErr

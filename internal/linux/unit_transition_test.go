@@ -151,7 +151,7 @@ func TestAtomicRemoveDoesNotDeleteChangedIdentityAfterLastGuard(t *testing.T) {
 	if e != nil || string(got) != string(foreign) {
 		t.Fatalf("foreign unit deleted after final guard: %q %v", got, e)
 	}
-	expectSystemdOperations(t, runner.commands, "systemctl is-enabled ", "systemctl disable ")
+	expectSystemdOperations(t, runner.commands, "systemctl is-enabled ", "systemctl disable ", "systemctl is-enabled ")
 }
 
 func TestAtomicRestoreDeleteDoesNotRemoveChangedIdentity(t *testing.T) {
