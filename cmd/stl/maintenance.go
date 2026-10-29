@@ -13,7 +13,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
+	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
@@ -121,6 +123,120 @@ func uninstallSnapshotEmpty(s state.Snapshot) bool {
 		len(s.QUICCrashOperations) == 0
 }
 
+// Uninstall removes only the verified installer-owned core binary and record;
+// it deliberately keeps State and historical retirement tombstones. A receipt
+// cannot be treated as a pending credential merely because it is retained:
+// only a VALID, fully retired original receipt can be left behind. Loading the
+// committed Snapshot above verifies all receipt identities and uniqueness.
+// Keep uninstallSnapshotEmpty stricter for downgrade: older State readers must
+// not discard even retired historical reservations or receipts.
+func uninstallSnapshotReady(s state.Snapshot) bool {
+	withoutReceipts := s
+	withoutReceipts.RemovalReceipts = nil
+	withoutReceipts.IPsecRemovalReceipts = nil
+	if !uninstallSnapshotEmpty(withoutReceipts) {
+		return false
+	}
+	for _, receipt := range s.RemovalReceipts {
+		if !receipt.Retired {
+			return false
+		}
+		if receipt.Backend == domain.BackendWireGuardWSS &&
+			!state.ValidWSSOriginalTerminationProof(receipt.WSSOriginalTermination) {
+			return false
+		}
+	}
+	for _, receipt := range s.IPsecRemovalReceipts {
+		if !receipt.Retired {
+			return false
+		}
+	}
+	return true
+}
+
+// Only destructive maintenance relies on Retired receipt fields. Reject
+// duplicate or case-aliased keys at EVERY nesting level before a typed
+// Snapshot can hide an unfinished receipt behind a later "retired":true.
+// Preserve the ordinary FileStore reader contract outside this gate.
+func verifyMaintenanceJSONUnique(raw []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if err := walkMaintenanceJSONValue(decoder, 0); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("ambiguous nested State JSON; maintenance refused")
+	}
+	return nil
+}
+
+// encoding/json v1 matches decoded struct field names using Unicode
+// SimpleFold (including long-s and Kelvin-sign aliases), not ToLower.
+// Normalize each rune to the smallest member of its SimpleFold cycle,
+// mirroring encoding/json.foldName without quadratic key comparisons.
+// This is a maintenance-only ambiguity check, not a change to State decoding.
+func maintenanceJSONFoldFieldName(name string) string {
+	return strings.Map(func(r rune) rune {
+		for {
+			next := unicode.SimpleFold(r)
+			if next <= r {
+				return next
+			}
+			r = next
+		}
+	}, name)
+}
+
+func walkMaintenanceJSONValue(decoder *json.Decoder, depth int) error {
+	if depth > 64 {
+		return errors.New("State JSON nesting is too deep for maintenance")
+	}
+	value, err := decoder.Token()
+	if err != nil {
+		return errors.New("State JSON token cannot be verified")
+	}
+	delim, isDelim := value.(json.Delim)
+	if !isDelim {
+		return nil // Primitive values are checked by the canonical typed reader.
+	}
+	switch delim {
+	case '{':
+		seen := make(map[string]struct{})
+		for decoder.More() {
+			field, err := decoder.Token()
+			if err != nil {
+				return errors.New("State JSON key cannot be verified")
+			}
+			key, ok := field.(string)
+			if !ok {
+				return errors.New("State JSON object key is invalid")
+			}
+			folded := maintenanceJSONFoldFieldName(key)
+			if _, duplicate := seen[folded]; duplicate {
+				return errors.New("duplicate or aliased nested State field; maintenance refused")
+			}
+			seen[folded] = struct{}{}
+			if err := walkMaintenanceJSONValue(decoder, depth+1); err != nil {
+				return err
+			}
+		}
+		if end, err := decoder.Token(); err != nil || end != json.Delim('}') {
+			return errors.New("State JSON object termination is invalid")
+		}
+	case '[':
+		for decoder.More() {
+			if err := walkMaintenanceJSONValue(decoder, depth+1); err != nil {
+				return err
+			}
+		}
+		if end, err := decoder.Token(); err != nil || end != json.Delim(']') {
+			return errors.New("State JSON array termination is invalid")
+		}
+	default:
+		return errors.New("State JSON contains an unexpected delimiter")
+	}
+	return nil
+}
+
 // readUnambiguousUninstallState pins the actual regular inode and inspects
 // the ORIGINAL bounded JSON bytes, not FileStore's permissive decoded
 // Snapshot. Under its existing maintenance lock, Uninstall must not decide
@@ -144,6 +260,9 @@ func readUnambiguousUninstallState(path string, expected os.FileInfo) ([]byte, e
 	raw, err := io.ReadAll(io.LimitReader(file, maxStateBytes+1))
 	if err != nil || len(raw) == 0 || len(raw) > maxStateBytes || int64(len(raw)) != opened.Size() {
 		return nil, errors.New("Uninstall State read is incomplete or untrusted")
+	}
+	if err := verifyMaintenanceJSONUnique(raw); err != nil {
+		return nil, err
 	}
 	if _, err := strictStateTopLevelFields(raw); err != nil {
 		return nil, err
@@ -205,7 +324,13 @@ func inspectUninstallState(ctx context.Context, root string, trust func(string) 
 	if err != nil {
 		return false, fmt.Errorf("cannot decode valid committed Link state")
 	}
-	if !uninstallSnapshotEmpty(snapshot) {
+	if !uninstallSnapshotReady(snapshot) {
+		withoutReceipts := snapshot
+		withoutReceipts.RemovalReceipts = nil
+		withoutReceipts.IPsecRemovalReceipts = nil
+		if uninstallSnapshotEmpty(withoutReceipts) {
+			return false, errors.New("protected credential retirement remains unfinished or unverified")
+		}
 		return false, fmt.Errorf("saved Links or pending operations remain; use Engine reconciliation before uninstall")
 	}
 	after, err := os.Lstat(path)
@@ -289,6 +414,10 @@ func uninstallGateGuidance(err error) (string, string) {
 		return "state_root_unverified", "STL found an existing State folder without state.json and with unfamiliar files. Do not delete them manually; inspect STL state ownership before retrying."
 	case strings.Contains(message, "saved Links or pending operations remain"):
 		return "saved_or_pending_links", "Open My tunnels in STL and remove each verified Link; reconcile pending operations through STL before retrying Uninstall."
+	case strings.Contains(message, "protected credential retirement remains"):
+		return "credential_retirement_pending", "The Link was removed but a protected credential retirement receipt is unfinished or unverified. Use the exact STL receipt-bound retire-wss, credential retire, or retire-ipsec recovery operation as applicable; never delete State or credentials manually."
+	case strings.Contains(message, "downgrade requires a canonical empty State"):
+		return "downgrade_state_history_retained", "Downgrade requires a truly empty, canonical State with no historical retirement receipts. Keep the current v4-capable STL and preserve State; do not delete receipts to force an older binary."
 	case strings.Contains(message, "Engine restore unit is still installed"):
 		return "restore_unit_present", "A retained STL restore unit must be reconciled through STL before Uninstall; inspect its installed/enabled status read-only."
 	case strings.Contains(message, "cannot prove restore-unit absence"):

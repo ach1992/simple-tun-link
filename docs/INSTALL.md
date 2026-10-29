@@ -872,6 +872,21 @@ when the ordinary State loader would decode zero Links. The inspector checks
 the same file's identity and bytes again after the Engine preflight.
 Missing, malformed, symlinked or otherwise ambiguous State fails closed;
 the installed binary/record and committed State remain untouched.
+After a Link is removed, its **fully retired, individually validated** WSS,
+WireGuard or IPsec credential receipts are historical non-secret identity
+reservations, not active Links. The newer source-level inspector admits these
+retired receipts for **core-only Uninstall** while preserving their original
+State bytes, but rejects any unfinished retirement, pending journal, missing
+WSS original-termination proof, duplicate or case-aliased nested receipt
+field. **Availability:** official published `v0.1.13` does *not* include this
+later fix; users need a separately reviewed/published successor before its
+installed-menu Uninstall can apply this receipt-aware admission.
+A preflight refusal with `credential_retirement_pending` means to finish the
+specific receipt-bound STL credential-retirement workflow, **not** delete the
+State folder. This exception is never a State-erasure grant: a requested
+**Downgrade still requires a canonical truly empty State**, with zero
+historical receipts (even retired), because older readers cannot safely
+inherit those reservations.
 Uninstall removes only the hash-verified installer-owned canonical executable,
 its exact `stlink -> stl` symlink, and the installer ownership record. It keeps
 the installer lock and does **not** delete committed `/var/lib/simple-tun-link`

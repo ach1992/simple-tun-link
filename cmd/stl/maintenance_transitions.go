@@ -280,6 +280,33 @@ func stageEmptyStateForDowngrade(root, target string) error {
 	return nil
 }
 
+// The Uninstall gate can preserve fully retired receipts. Downgrade cannot:
+// pre-v4 readers and lossless empty-v4-to-v3 staging accept ONLY canonical
+// empty original State. Check it before asking for DOWNGRADE confirmation,
+// and recheck under the canonical installer's exclusive lock.
+func inspectDowngradeReady(ctx context.Context, root string, unit uninstallUnitInspector,
+	trust func(string) error) error {
+	if err := inspectUninstallReady(ctx, root, unit, trust); err != nil {
+		return err
+	}
+	path := filepath.Join(root, "state.json")
+	entry, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return errors.New("downgrade requires a canonical empty State without retained receipts")
+	}
+	raw, err := readUnambiguousUninstallState(path, entry)
+	if err != nil {
+		return errors.New("downgrade requires a canonical empty State without retained receipts")
+	}
+	if _, err := canonicalEmptyStateSchema(raw); err != nil {
+		return errors.New("downgrade requires a canonical empty State without retained receipts")
+	}
+	return nil
+}
+
 // Called by the already-owner-verified canonical installer under its exclusive
 // maintenance lock. These private commands are not a second install engine.
 func maintenanceTransitionCommand(args []string, out, errOut io.Writer) int {
@@ -308,7 +335,13 @@ func maintenanceTransitionCommand(args []string, out, errOut io.Writer) int {
 	defer done()
 	manager := linux.SystemdPersistence{Runner: linux.ExecRunner{}}
 	if action != "retire-orphan-restore" {
-		if err := inspectUninstallReady(ctx, state.DefaultRoot, manager, trustedStatePath); err != nil {
+		var err error
+		if action == "stage-downgrade" {
+			err = inspectDowngradeReady(ctx, state.DefaultRoot, manager, trustedStatePath)
+		} else {
+			err = inspectUninstallReady(ctx, state.DefaultRoot, manager, trustedStatePath)
+		}
+		if err != nil {
 			reason, next := uninstallGateGuidance(err)
 			return fail(reason, next)
 		}

@@ -471,7 +471,7 @@ func menuUpdate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 	if downgrade {
 		token = "DOWNGRADE"
 		ctx, stop := context.WithTimeout(context.Background(), 20*time.Second)
-		err := inspectUninstallReady(ctx, state.DefaultRoot,
+		err := inspectDowngradeReady(ctx, state.DefaultRoot,
 			linux.SystemdPersistence{Runner: linux.ExecRunner{}}, trustedStatePath)
 		stop()
 		if err != nil {
