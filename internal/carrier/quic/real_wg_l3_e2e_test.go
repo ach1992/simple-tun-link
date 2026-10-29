@@ -3,6 +3,7 @@ package quic
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -16,6 +17,18 @@ import (
 
 // This fixture is ONLY consumed by the disposable network-namespace E2E.
 // It does not create a managed Link, spawn services or own host resources.
+func disposableQUICIngressPlan(role string) (linux.QUICWGIngressPlan, error) {
+	link := domain.LinkID("lnk_b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0")
+	switch role {
+	case "server":
+		return linux.NewQUICWGIngressPlan(link, 51820, "00112233445566778899aabbccddeeff")
+	case "client":
+		return linux.NewQUICWGIngressPlan(link, 51821, "ffeeddccbbaa99887766554433221100")
+	default:
+		return linux.QUICWGIngressPlan{}, fmt.Errorf("disposable QUIC guard role must be client or server")
+	}
+}
+
 func TestPinnedHysteriaKernelWGPairFixture(t *testing.T) {
 	if os.Getenv("STL_QUIC_WG_L3_FIXTURE") != "approved" {
 		t.Skip("requires isolated QUIC + native WireGuard launcher")
@@ -103,21 +116,24 @@ func TestPinnedHysteriaKernelWGPairFixture(t *testing.T) {
 			t.Fatalf("protected %s config must be a private 0600 regular file", entry.name)
 		}
 	}
-	// This is only a test-owned disposable nft CREATE plan, not an Engine
-	// journal or an original ownership receipt. Executed exclusively in the
-	// sibling namespace by the opt-in launcher after namespace attestation.
-	guard, err := linux.NewQUICWGIngressPlan(link, 51820, "00112233445566778899aabbccddeeff")
-	if err != nil {
-		t.Fatal("isolated QUIC ingress guard plan unavailable")
+	// Both kernel WG listeners bind all local interfaces. Each physical
+	// endpoint therefore needs its OWN QUIC ingress guard and nonce. The
+	// batches are only test-owned and exclusively applied inside disposable
+	// network namespaces, never by an Engine host transaction.
+	for _, role := range []string{"server", "client"} {
+		guard, err := disposableQUICIngressPlan(role)
+		if err != nil {
+			t.Fatal("isolated QUIC ingress plan unavailable")
+		}
+		batch, err := guard.NFTBatch()
+		if err != nil {
+			t.Fatal("isolated QUIC ingress batch invalid")
+		}
+		if err := os.WriteFile(filepath.Join(root, "guard-"+role+".nft"), []byte(batch), 0o600); err != nil {
+			t.Fatal("isolated private nft ingress batch could not be staged")
+		}
 	}
-	batch, err := guard.NFTBatch()
-	if err != nil {
-		t.Fatal("isolated QUIC guard batch invalid")
-	}
-	if err := os.WriteFile(filepath.Join(root, "guard.nft"), []byte(batch), 0o600); err != nil {
-		t.Fatal("isolated private nft guard batch could not be staged")
-	}
-	t.Log("PASS: two distinct protected role configurations and shared QUIC nft guard plan")
+	t.Log("PASS: protected role configurations and independent QUIC nft guard plans")
 }
 
 // After the launcher applies the exact test-only nft batch, this entrypoint
@@ -134,8 +150,8 @@ func TestPinnedHysteriaKernelWGGuardReadback(t *testing.T) {
 		parentUser == "" || parentNet == "" || currentUser == parentUser || currentNet == parentNet {
 		t.Fatal("QUIC nft readback cannot run outside disposable user/net namespace")
 	}
-	link := domain.LinkID("lnk_b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0")
-	guard, err := linux.NewQUICWGIngressPlan(link, 51820, "00112233445566778899aabbccddeeff")
+	role := os.Getenv("STL_QUIC_WG_L3_GUARD_ROLE")
+	guard, err := disposableQUICIngressPlan(role)
 	if err != nil {
 		t.Fatal("disposable QUIC guard plan invalid")
 	}
@@ -143,5 +159,5 @@ func TestPinnedHysteriaKernelWGGuardReadback(t *testing.T) {
 	if err != nil || !observed {
 		t.Fatal("disposable live QUIC nft guard differs from exact planned table")
 	}
-	t.Log("PASS: actual kernel nft table/chain/rule strictly match the QUIC guard plan")
+	t.Logf("PASS: actual %s kernel nft table/chain/rule match the scoped QUIC guard", role)
 }

@@ -204,8 +204,9 @@ client/server and native Linux WireGuard packet path across two disposable
 network namespaces. It stages two independent role-private 0600 TLS/mTLS,
 bearer and Hysteria configurations through the existing renderer and exact
 pinned-executable verifier, then creates only isolated veth, WireGuard and
-source-rendered nftables resources. An actual QUIC ingress guard rejects
-physical-interface packets to the WireGuard UDP port while permitting
+source-rendered nftables resources. Distinct nonce-bound QUIC ingress
+guards on **both endpoints** reject physical-interface packets to each
+kernel WireGuard UDP port while permitting
 loopback Hysteria forwarding. The test verifies two-way ICMP, a byte-exact
 64-KiB TCP echo, 16 byte-exact 1200-byte UDP echoes, nonzero WireGuard
 handshake/transfer counters, loss of traffic after stopping the QUIC helper,

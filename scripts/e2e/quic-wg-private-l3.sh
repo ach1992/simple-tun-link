@@ -158,23 +158,50 @@ nsenter -t "$sibling" -n -- ip address add 10.247.0.2/30 dev stlqwgb
 ip link set stlqwga up
 nsenter -t "$sibling" -n -- ip link set stlqwgb up
 
-# Apply only the source-generated QUIC ingress plan inside the disposable
-# sibling namespace. This test-only CREATE is NOT an Engine ownership proof.
-table=$(awk 'NR==1 && $1=="create" && $2=="table" && $3=="inet" { print $4 }' "$lab/guard.nft")
-[[ "$table" =~ ^stlquic_[a-f0-9]{16}$ ]] || fail "invalid source-generated nft table"
-nsenter -t "$sibling" -n -- nft -f "$lab/guard.nft" ||
-  fail "disposable exact QUIC ingress guard CREATE failed"
-if ! STL_QUIC_WG_L3_GUARD_CHECK=approved nsenter -t "$sibling" -n -- "$lab/quic-test" \
-  -test.run '^TestPinnedHysteriaKernelWGGuardReadback$' -test.v > "$lab/guard-check.log" 2>&1; then
-  grep -E 'real_wg_l3_e2e_test.go:|^--- FAIL:|^FAIL' "$lab/guard-check.log" | head -8 || true
-  fail "disposable nft guard strict kernel readback failed"
-fi
-printf 'stl-guard-negative' > /dev/udp/172.31.247.2/51820 ||
-  fail "disposable physical WG-port probe could not be sent"
-nsenter -t "$sibling" -n -- nft -a list chain inet "$table" ingress > "$lab/guard-counter.txt"
-grep -Eq 'counter packets [1-9][0-9]* bytes [1-9][0-9]* drop' "$lab/guard-counter.txt" ||
-  fail "physical WG UDP did not hit the exact guard drop counter"
-echo "QUIC_WG_PHYSICAL_UDP_GUARD=PASS"
+# Both kernel WG listeners bind all interfaces. Each endpoint needs an
+# independently nonced source-generated nft guard, with strict readback.
+# This is only test-owned and never grants original resource ownership.
+guard_endpoint() {
+  local role=$1
+  local port='' physical='' table=''
+  local -a in_role_ns=()
+  if [[ "$role" == server ]]; then
+    port=51820
+    physical=172.31.247.2
+    in_role_ns=(nsenter -t "$sibling" -n --)
+  elif [[ "$role" == client ]]; then
+    port=51821
+    physical=172.31.247.1
+  else
+    fail "invalid disposable guard role"
+  fi
+  local batch="$lab/guard-$role.nft"
+  table=$(awk 'NR==1 && $1=="create" && $2=="table" && $3=="inet" { print $4 }' "$batch")
+  [[ "$table" =~ ^stlquic_[a-f0-9]{16}$ ]] ||
+    fail "invalid source-generated nft guard for role"
+  "${in_role_ns[@]}" nft -f "$batch" ||
+    fail "disposable role-specific QUIC guard CREATE failed"
+  if ! env STL_QUIC_WG_L3_GUARD_CHECK=approved STL_QUIC_WG_L3_GUARD_ROLE="$role" \
+     "${in_role_ns[@]}" "$lab/quic-test" -test.run '^TestPinnedHysteriaKernelWGGuardReadback$' \
+     -test.v > "$lab/guard-$role-check.log" 2>&1; then
+    grep -E 'real_wg_l3_e2e_test.go:|^--- FAIL:|^FAIL' "$lab/guard-$role-check.log" | head -8 || true
+    fail "disposable role-specific nft guard strict readback failed"
+  fi
+  if [[ "$role" == server ]]; then
+    printf 'stl-server-guard-probe' > "/dev/udp/$physical/$port" ||
+      fail "disposable physical server WG-port probe could not be sent"
+  else
+    nsenter -t "$sibling" -n -- bash -c \
+      'printf "stl-client-guard-probe" > /dev/udp/172.31.247.1/51821' ||
+      fail "disposable physical client WG-port probe could not be sent"
+  fi
+  "${in_role_ns[@]}" nft -a list chain inet "$table" ingress > "$lab/guard-$role-counter.txt"
+  grep -Eq 'counter packets [1-9][0-9]* bytes [1-9][0-9]* drop' "$lab/guard-$role-counter.txt" ||
+    fail "physical WG UDP did not hit the role-specific guard drop counter"
+}
+guard_endpoint server
+guard_endpoint client
+echo "QUIC_WG_BOTH_PHYSICAL_UDP_GUARDS=PASS"
 
 link=lnk_b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0
 server_conf="$lab/server/credentials/quic/$link/helper.json"

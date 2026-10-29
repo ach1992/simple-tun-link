@@ -1015,9 +1015,10 @@ A separate opt-in test-only
 `scripts/e2e/quic-wg-private-l3.sh` lab now proves that the
 same pinned Hysteria v2.13.0 config renderer, disjoint protected role
 material, native kernel WireGuard devices and source-generated QUIC nft
-guard can carry **real bilateral private-IP ICMP, TCP and UDP** across
-a disposable veth underlay joining two network namespaces. Direct
-physical-interface WG UDP is dropped by the isolated nft guard; private
+guards on **both endpoints** can carry **real bilateral private-IP ICMP,
+TCP and UDP** across a disposable veth underlay joining two network
+namespaces. Direct physical-interface WG UDP is dropped by each
+isolated nft guard; private
 traffic stops when the QUIC client helper is stopped and resumes on
 restarting it with unchanged WG identity. It uses no managed Engine
 activation: the test-only nft CREATE and WG/helper start are scoped
