@@ -7,30 +7,113 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/carrier/quic"
 	"github.com/ach1992/simple-tun-link/internal/composition"
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/pinnedexec"
+	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
 // InspectQUICCrashMaterials is a read-only, source-only trust check for an
 // existing durable QUIC pre-effect journal. It derives the exact public
-// Hysteria Plan, protected State root, and executable path from the journal,
-// NOT from caller-supplied replacements. Under maintenance -> Link ->
-// resource locks it inspects the actual no-follow, role-private credentials,
-// regenerated helper config and officially pinned executable, then compares
-// every returned public identity against the immutable journal.
+// Hysteria Plan, protected State root and executable path from the journal.
+// Under maintenance -> Link -> resource locks it rechecks current State and
+// all seven immutable credential/config/executable identities.
 //
 // A clean observation does NOT bind the executable's future process lifetime,
-// prove foreign host/kernel ownership or peer trust, unblock the journal,
-// stage files, start a helper or authorize any backend effect. A future
-// effectful transaction must reattest at the actual operation boundary.
+// prove host/kernel ownership or peer trust, unblock the journal, stage files,
+// start a helper or authorize any backend effect.
 func (e *Engine) InspectQUICCrashMaterials(ctx context.Context, id domain.LinkID) error {
 	return e.inspectQUICCrashMaterials(ctx, id, quic.InspectHelperConfig)
 }
 
-// The sole injection is a test-only read-only inspection seam. The exported
-// Engine entry point always uses QUIC's actual pinned-file verifier.
+// Only tests supply the read-only inspector; production always verifies the
+// actual protected files and officially pinned executable.
 func (e *Engine) inspectQUICCrashMaterials(ctx context.Context, id domain.LinkID,
 	inspect func(string, quic.Plan, uint16, string) (quic.HelperConfigIdentity, error)) error {
 	const action = "quic_inspect_crash_materials"
+	if inspect == nil {
+		return stlerr.New(stlerr.CodeInvalid, action, string(id), "quic", "material inspector is required")
+	}
+	return e.withQUICCrashMaterialLocks(ctx, id, action, func(root string, plan quic.Plan,
+		port uint16, op state.QUICCrashOperation) error {
+		identity, err := inspect(root, plan, port, op.ExecutablePath)
+		if err != nil || ctx.Err() != nil {
+			// Underlying filesystem/certificate errors may carry sensitive paths.
+			return stlerr.New(stlerr.CodeState, action, string(id), "quic",
+				"protected QUIC credentials, helper config or pinned executable are not verifiably present")
+		}
+		if identity != quicExpectedMaterialIdentity(op) {
+			return stlerr.New(stlerr.CodeConflict, action, string(id), "quic",
+				"protected QUIC material differs from the immutable pre-effect journal")
+		}
+		return nil
+	})
+}
+
+// StageQUICCrashMaterials is the SOURCE-ONLY canonical Engine entry point for
+// journal-bound protected QUIC credential and helper-config publication.
+// The complete immutable pre-effect journal must ALREADY exist. The operation
+// rechecks it under canonical locks and refuses any supplied secret, Plan or
+// pinned helper identity differing from the recorded seven fingerprints
+// BEFORE the first protected file write. Existing no-replace 0600 staging and
+// strict readback are reused without opening a second material owner.
+//
+// On any failure the original journal and all possible partial artifacts stay
+// quarantined for future exact-owned recovery. Success does not consume the
+// journal, start Hysteria, install services, create WG/nft, certify a foreign
+// host owner, or enable a runnable QUIC Link.
+func (e *Engine) StageQUICCrashMaterials(ctx context.Context, id domain.LinkID, bundle quic.CredentialBundle) error {
+	return e.stageQUICCrashMaterials(ctx, id, bundle, quic.StageExpectedMaterials)
+}
+
+// Test-only seam. The public path always executes real protected and pinned
+// executable admission. An injected stage cannot relax journal/lock checks.
+func (e *Engine) stageQUICCrashMaterials(ctx context.Context, id domain.LinkID,
+	bundle quic.CredentialBundle,
+	stage func(context.Context, string, quic.Plan, uint16, string, quic.CredentialBundle, quic.HelperConfigIdentity) (quic.HelperConfigIdentity, error)) error {
+	const action = "quic_stage_crash_materials"
+	if stage == nil {
+		return stlerr.New(stlerr.CodeInvalid, action, string(id), "quic", "protected QUIC stager is required")
+	}
+	return e.withQUICCrashMaterialLocks(ctx, id, action, func(root string, plan quic.Plan,
+		port uint16, op state.QUICCrashOperation) error {
+		expected := quicExpectedMaterialIdentity(op)
+		actual, err := stage(ctx, root, plan, port, op.ExecutablePath, bundle, expected)
+		if err != nil || ctx.Err() != nil {
+			return stlerr.New(stlerr.CodeState, action, string(id), "quic",
+				"protected QUIC staging failed or is uncertain; preserve pre-effect journal and any private files")
+		}
+		if actual != expected {
+			return stlerr.New(stlerr.CodeConflict, action, string(id), "quic",
+				"staged QUIC material did not match immutable pre-effect journal")
+		}
+		return nil
+	})
+}
+
+func quicExpectedMaterialIdentity(op state.QUICCrashOperation) quic.HelperConfigIdentity {
+	return quic.HelperConfigIdentity{
+		ConfigSHA256: op.HelperConfigSHA256,
+		Credentials: quic.CredentialIdentity{
+			CertificateSHA256:   op.CertificateSHA256,
+			TrustCASHA256:       op.TrustCASHA256,
+			AuthorizationSHA256: op.AuthorizationSHA256,
+		},
+		Executable: pinnedexec.Identity{
+			SHA256: op.ExecutableSHA256,
+			Device: op.ExecutableDevice,
+			Inode:  op.ExecutableInode,
+		},
+	}
+}
+
+// withQUICCrashMaterialLocks is the single Engine authority for both
+// read-only attestation and protected-file staging. Both reconstruct the
+// exact immutable Plan and use maintenance -> Link -> resource locks. The
+// shared restore-persistence lock is unnecessary here: the already-durable,
+// unresolved journal remains unchanged and continues to prevent last-owner
+// restore-unit retirement. No caller is permitted to clear or replay it.
+func (e *Engine) withQUICCrashMaterialLocks(ctx context.Context, id domain.LinkID, action string,
+	use func(string, quic.Plan, uint16, state.QUICCrashOperation) error) error {
 	invalid := func(detail string) error {
 		return stlerr.New(stlerr.CodeInvalid, action, string(id), "quic", detail)
 	}
@@ -40,8 +123,8 @@ func (e *Engine) inspectQUICCrashMaterials(ctx context.Context, id domain.LinkID
 	conflict := func(detail string) error {
 		return stlerr.New(stlerr.CodeConflict, action, string(id), "quic", detail)
 	}
-	if e == nil || ctx == nil || inspect == nil || id.Validate() != nil {
-		return invalid("canonical Engine, valid Link ID and material inspector are required")
+	if e == nil || ctx == nil || use == nil || id.Validate() != nil {
+		return invalid("canonical Engine, valid Link ID and material operation are required")
 	}
 	rootProvider, ok := e.store.(interface{ RootDir() string })
 	if !ok {
@@ -89,9 +172,8 @@ func (e *Engine) inspectQUICCrashMaterials(ctx context.Context, id domain.LinkID
 	if !present || !reflect.DeepEqual(latest, op) {
 		return conflict("QUIC journal changed while acquiring its resource locks")
 	}
-	// Rebuild exactly the source Plan already validated by the Hysteria
-	// renderer. The durable projection must round-trip without any invented
-	// role, TLS SAN, local port or remote destination.
+	// Reconstruct the full public Hysteria topology from the durable binding,
+	// never accept an alternate role, peer, TLS name, local port or binary path.
 	local := op.Plan.Local
 	plan := quic.Plan{
 		LinkID: id, Role: quic.Role(local.Role),
@@ -111,22 +193,7 @@ func (e *Engine) inspectQUICCrashMaterials(ctx context.Context, id domain.LinkID
 		return unavailable("QUIC journal cannot reconstruct the exact protected helper topology")
 	}
 	if ctx.Err() != nil {
-		return unavailable("QUIC material inspection interrupted")
+		return unavailable("QUIC material operation interrupted")
 	}
-	identity, err := inspect(root, plan, local.LocalWGUDPPort, op.ExecutablePath)
-	if err != nil || ctx.Err() != nil {
-		// Never include underlying filesystem/certificate errors: they can
-		// contain sensitive file paths or credential-bearing diagnostics.
-		return unavailable("protected QUIC credentials, helper config or pinned executable are not verifiably present")
-	}
-	if identity.Credentials.CertificateSHA256 != op.CertificateSHA256 ||
-		identity.Credentials.TrustCASHA256 != op.TrustCASHA256 ||
-		identity.Credentials.AuthorizationSHA256 != op.AuthorizationSHA256 ||
-		identity.ConfigSHA256 != op.HelperConfigSHA256 ||
-		identity.Executable.SHA256 != op.ExecutableSHA256 ||
-		identity.Executable.Device != op.ExecutableDevice ||
-		identity.Executable.Inode != op.ExecutableInode {
-		return conflict("protected QUIC material differs from the immutable pre-effect journal")
-	}
-	return nil
+	return use(root, plan, local.LocalWGUDPPort, op)
 }
