@@ -90,12 +90,70 @@ func (p SystemdPersistence) verifyEffectiveRestoreUnit(ctx context.Context, syst
 	}
 	// The manager's normalized ExecStart has dynamic last-run metadata.
 	// Its single command, arguments and error handling must be canonical.
+	if !canonicalEffectiveRestoreExecStart(props["ExecStart"]) {
+		return errors.New("systemd effective restore command is not the canonical STL command")
+	}
+	return nil
+}
+
+// canonicalEffectiveRestoreExecStart recognizes the single normalized
+// systemd command; dynamic runtime metadata is permitted only after the
+// exact executable/argv/error-policy prefix.
+func canonicalEffectiveRestoreExecStart(effective string) bool {
 	const command = "/usr/local/bin/stl"
 	want := "{ path=" + command + " ; argv[]=" + command + " link restore --all ; ignore_errors=no ; "
-	effective := props["ExecStart"]
-	if !strings.HasPrefix(effective, want) || !strings.HasSuffix(effective, " }") ||
-		strings.Count(effective, "argv[]=") != 1 || strings.Count(effective, "{ path=") != 1 {
-		return errors.New("systemd effective restore command is not the canonical STL command")
+	return strings.HasPrefix(effective, want) && strings.HasSuffix(effective, " }") &&
+		strings.Count(effective, "argv[]=") == 1 && strings.Count(effective, "{ path=") == 1
+}
+
+// verifyCompensationReloadSafe is read-only authorization for daemon-reload
+// AFTER an operation has positively pinned and restored/retired ONLY its own
+// unit inode. During that file transition, the manager may still report the
+// old canonical service or not-found, and NeedDaemonReload may temporarily
+// be yes. Neither state confers authority to enable/disable a service:
+// verifyEffectiveRestoreUnit must run AGAIN after the reload before that.
+// Reject observed drop-ins, foreign fragments or commands BEFORE reload;
+// never use reload to normalize an already untrusted manager identity.
+func (p SystemdPersistence) verifyCompensationReloadSafe(ctx context.Context, systemctl, path string, ownFileChanged bool) error {
+	if p.skipEffectiveInspectionForTest() {
+		return nil
+	}
+	props, err := p.readSystemdEffectiveProperties(ctx, systemctl,
+		"LoadState", "FragmentPath", "DropInPaths", "NeedDaemonReload")
+	if err != nil {
+		return err
+	}
+	if props["DropInPaths"] != "" || (props["NeedDaemonReload"] != "no" &&
+		!(ownFileChanged && props["NeedDaemonReload"] == "yes")) {
+		return errors.New("systemd compensation reload refused: foreign drop-ins or unexplained stale manager state")
+	}
+	switch props["LoadState"] {
+	case "not-found":
+		if props["FragmentPath"] != "" {
+			return errors.New("systemd compensation reload refused: foreign missing-unit fragment")
+		}
+	case "loaded":
+		if props["FragmentPath"] != filepath.Clean(path) {
+			return errors.New("systemd compensation reload refused: foreign loaded fragment")
+		}
+		// The absent-unit 4-property query has no ExecStart on some
+		// supported systemd versions. Query ExecStart separately only
+		// when LoadState=loaded, and require a coherent second snapshot.
+		loaded, err := p.readSystemdEffectiveProperties(ctx, systemctl,
+			"LoadState", "FragmentPath", "DropInPaths", "NeedDaemonReload", "ExecStart")
+		if err != nil {
+			return err
+		}
+		for _, key := range []string{"LoadState", "FragmentPath", "DropInPaths", "NeedDaemonReload"} {
+			if props[key] != loaded[key] {
+				return errors.New("systemd compensation reload refused: manager identity changed during inspection")
+			}
+		}
+		if !canonicalEffectiveRestoreExecStart(loaded["ExecStart"]) {
+			return errors.New("systemd compensation reload refused: foreign loaded executable")
+		}
+	default:
+		return errors.New("systemd compensation reload refused: unknown loaded-unit state")
 	}
 	return nil
 }

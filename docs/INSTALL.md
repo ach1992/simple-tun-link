@@ -837,8 +837,16 @@ external systemctl inspections and before deleting the main unit; a missing
 unit must independently show an absent effective identity without leftover
 drop-ins. Unknown, altered, stale, or foreign effective configurations must
 not be adopted, disabled or deleted by STL. Foreign drop-ins are never purged
-by STL. These checks are deliberately fail-closed; preserve any uncertain
-host resources and reconcile them explicitly.
+by STL. These checks also cover **failed-operation compensation**: after
+partial enable/disable, the manager-loaded unit is re-attested before any
+compensating systemctl operation; after guarded source-inode restoration, a
+read-only manager check must precede daemon-reload and a fresh full canonical
+check must precede any re-enable. If a foreign drop-in appears during
+recovery, STL refuses to enable/disable that effective service, preserves
+foreign configuration, and reports explicitly incomplete recovery. A proven
+STL-owned source file may still be restored without granting authority to
+re-enable the service. These checks are deliberately fail-closed; preserve
+any uncertain host resources and reconcile them explicitly.
 Interrupted/uncertain systemctl or foreign units remain blocked.
 Do **not** delete interfaces, route/firewall rules, or the restore unit
 manually as a shortcut.

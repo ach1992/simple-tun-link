@@ -295,15 +295,30 @@ func (p SystemdPersistence) compensatePublishedUnit(ctx context.Context, systemc
 	// an error. Only disable after verifying this operation's exact owned
 	// unit; never disable an ambiguous identity if unit ownership changed.
 	if enableAttempted && !wasEnabled {
+		// A failed/partial enable can install foreign effective drop-ins
+		// without changing the STL-origin main-file inode. Never disable
+		// the now-foreign service based on the earlier admission alone.
+		if err := p.verifyEffectiveRestoreUnit(repairCtx, systemctl, path); err != nil {
+			return fmt.Errorf("systemd unit compensation uncertain: refusing disable of changed effective unit: %w", err)
+		}
+		if err := p.guardExactPublishedIdentity(path, published, publishedIdentity); err != nil {
+			return fmt.Errorf("systemd unit compensation uncertain before disable: %w", err)
+		}
 		if _, err := p.Runner.Run(repairCtx, systemctl, "disable", restoreSystemdUnitName); err != nil {
 			return fmt.Errorf("systemd unit compensation incomplete: disable owned enablement: %w", err)
 		}
 		if err := p.guardExactPublishedIdentity(path, published, publishedIdentity); err != nil {
 			return fmt.Errorf("systemd unit compensation uncertain after disable: %w", err)
 		}
+		if err := p.verifyEffectiveRestoreUnit(repairCtx, systemctl, path); err != nil {
+			return fmt.Errorf("systemd unit compensation uncertain after disable: effective unit changed: %w", err)
+		}
 		enabled, err := p.isEnabled(repairCtx, systemctl, restoreSystemdUnitName)
 		if err != nil {
 			return fmt.Errorf("systemd unit compensation incomplete: inspect disable outcome: %w", err)
+		}
+		if err := p.verifyEffectiveRestoreUnit(repairCtx, systemctl, path); err != nil {
+			return fmt.Errorf("systemd unit compensation uncertain after enablement inspection: %w", err)
 		}
 		if enabled {
 			return fmt.Errorf("systemd unit compensation incomplete: owned unit remains enabled after disable")
@@ -343,15 +358,33 @@ func (p SystemdPersistence) compensatePublishedUnit(ctx context.Context, systemc
 			return fmt.Errorf("systemd unit compensation incomplete: %w", err)
 		}
 	}
+	// The originating inode check permits file restoration, not arbitrary
+	// systemctl effects. Before reload, inspect the manager's current unit
+	// and refuse foreign drop-ins even if our file was safely restored.
+	if err := p.verifyCompensationReloadSafe(repairCtx, systemctl, path, fileChanged); err != nil {
+		return fmt.Errorf("systemd unit compensation uncertain: refusing reload of changed effective unit: %w", err)
+	}
 	if _, err := p.Runner.Run(repairCtx, systemctl, "daemon-reload"); err != nil {
 		return fmt.Errorf("systemd unit compensation incomplete: daemon-reload failed: %w", err)
 	}
 	if err := verifyRestoredPrior(); err != nil {
 		return fmt.Errorf("systemd unit compensation incomplete after daemon-reload: %w", err)
 	}
+	verifyRestoredEffective := func() error {
+		if existed {
+			return p.verifyEffectiveRestoreUnit(repairCtx, systemctl, path)
+		}
+		return p.verifyAbsentEffectiveRestoreUnit(repairCtx, systemctl)
+	}
+	if err := verifyRestoredEffective(); err != nil {
+		return fmt.Errorf("systemd unit compensation uncertain after reload: effective unit changed: %w", err)
+	}
 	enabled, err := p.isEnabled(repairCtx, systemctl, restoreSystemdUnitName)
 	if err != nil {
 		return fmt.Errorf("systemd unit compensation incomplete: inspect enablement: %w", err)
+	}
+	if err := verifyRestoredEffective(); err != nil {
+		return fmt.Errorf("systemd unit compensation uncertain after enablement inspection: %w", err)
 	}
 	if enabled != wasEnabled {
 		return fmt.Errorf("systemd unit compensation incomplete: prior enablement was not preserved")
@@ -649,23 +682,45 @@ func (p SystemdPersistence) compensateRemovedUnit(ctx context.Context, systemctl
 	if err := p.guardExactPublishedIdentity(path, prior, owned); err != nil {
 		return fmt.Errorf("STL unit removal compensation incomplete: %w", err)
 	}
+	// Restoring a positively owned source file does not authorize reload
+	// or re-enable if the manager's effective configuration has drifted.
+	if err := p.verifyCompensationReloadSafe(repairCtx, systemctl, path, recovered != nil); err != nil {
+		return fmt.Errorf("STL unit removal compensation uncertain: refusing reload of changed effective unit: %w", err)
+	}
 	if _, err := p.Runner.Run(repairCtx, systemctl, "daemon-reload"); err != nil {
 		return fmt.Errorf("STL unit removal compensation incomplete: reload: %w", err)
 	}
 	if err := p.guardExactPublishedIdentity(path, prior, owned); err != nil {
 		return fmt.Errorf("STL unit removal compensation uncertain after reload: %w", err)
 	}
+	if err := p.verifyEffectiveRestoreUnit(repairCtx, systemctl, path); err != nil {
+		return fmt.Errorf("STL unit removal compensation uncertain: refusing foreign effective unit after reload: %w", err)
+	}
 	if wasEnabled {
+		// This is the actual authorization boundary for recovering prior
+		// enablement. A stale main-file pin alone does not permit enable.
+		if err := p.guardExactPublishedIdentity(path, prior, owned); err != nil {
+			return fmt.Errorf("STL unit removal compensation uncertain before re-enable: %w", err)
+		}
+		if err := p.verifyEffectiveRestoreUnit(repairCtx, systemctl, path); err != nil {
+			return fmt.Errorf("STL unit removal compensation uncertain before re-enable: %w", err)
+		}
 		if _, err := p.Runner.Run(repairCtx, systemctl, "enable", restoreSystemdUnitName); err != nil {
 			return fmt.Errorf("STL unit removal compensation incomplete: re-enable: %w", err)
 		}
 		if err := p.guardExactPublishedIdentity(path, prior, owned); err != nil {
 			return fmt.Errorf("STL unit removal compensation uncertain after re-enable: %w", err)
 		}
+		if err := p.verifyEffectiveRestoreUnit(repairCtx, systemctl, path); err != nil {
+			return fmt.Errorf("STL unit removal compensation uncertain after re-enable: %w", err)
+		}
 	}
 	enabled, err := p.isEnabled(repairCtx, systemctl, restoreSystemdUnitName)
 	if err != nil {
 		return fmt.Errorf("STL unit removal compensation incomplete: enablement verification: %w", err)
+	}
+	if err := p.verifyEffectiveRestoreUnit(repairCtx, systemctl, path); err != nil {
+		return fmt.Errorf("STL unit removal compensation uncertain after enablement verification: %w", err)
 	}
 	if enabled != wasEnabled {
 		return fmt.Errorf("STL unit removal compensation incomplete: previous enablement was not restored")

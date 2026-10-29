@@ -34,6 +34,9 @@ type effectiveLoadedUnitRunner struct {
 	addDropInAfterIsEnabled                             bool
 	addDropInAfterDisable                               bool
 	addDropInAfterDaemonReload                          bool
+	// Test-only interleaving: independent privileged configuration
+	// changes may become visible while a systemctl call is in flight.
+	afterSystemctl func([]string, CommandResult, error) (CommandResult, error)
 }
 
 func (r *effectiveLoadedUnitRunner) showText() string {
@@ -71,6 +74,13 @@ func (r *effectiveLoadedUnitRunner) Run(ctx context.Context, name string, args .
 				}
 				text = "LoadState=not-found\nFragmentPath=\nDropInPaths=" + r.dropIns +
 					"\nNeedDaemonReload=" + need + "\n"
+			} else {
+				// A four-property query never returns an unrequested
+				// ExecStart, even while the main file is present.
+				text = strings.TrimPrefix(text, "ExecStart="+r.execStart+"\n")
+				if r.execStart == "" {
+					text = strings.Join(strings.Split(text, "\n")[1:], "\n")
+				}
 			}
 		}
 		result := CommandResult{Stdout: []byte(text), Stderr: r.showStderr}
@@ -88,6 +98,9 @@ func (r *effectiveLoadedUnitRunner) Run(ctx context.Context, name string, args .
 	}
 	if len(args) == 1 && args[0] == "daemon-reload" && r.addDropInAfterDaemonReload {
 		r.dropIns = "/run/systemd/system/simple-tun-link-restore.service.d/foreign.conf"
+	}
+	if r.afterSystemctl != nil {
+		return r.afterSystemctl(args, result, err)
 	}
 	return result, err
 }
@@ -348,6 +361,346 @@ func TestNewUnitPublicationCompensatesWhenForeignDropInAppears(t *testing.T) {
 	if runner.dropIns == "" {
 		t.Fatal("test lost foreign drop-in evidence")
 	}
+}
+
+// These tests execute the actual recovery entrypoints, not only the effective
+// inspector. In every case the canonical main-file inode initially passes
+// ownership admission; the independent change occurs INSIDE an external
+// systemctl operation that runs after the initial admission.
+func foreignEffectiveCompensationFixture(t *testing.T) (string, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "independent-override.conf")
+	contents := "[Service]\nExecStart=\nExecStart=/usr/bin/false\n"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path, contents
+}
+
+func assertForeignDropInUntouched(t *testing.T, path, want string) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != want {
+		t.Fatalf("foreign drop-in modified: %v %q", err, got)
+	}
+}
+
+func countRunnerSystemctl(commands []string, verb string) int {
+	count := 0
+	for _, command := range commands {
+		if strings.HasPrefix(command, "systemctl "+verb+" ") || command == "systemctl "+verb {
+			count++
+		}
+	}
+	return count
+}
+
+// Review A-N1-C1 scenario 1: successful disable, followed by a FAILED
+// enablement query that also races with an independent drop-in publication.
+// The recovery path must not re-enable the newly foreign effective service.
+func TestCompensationRefusesForeignDropInDuringFailedPostDisableInspection(t *testing.T) {
+	path, runner, p := effectiveUnitFixture(t)
+	before, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign, foreignContents := foreignEffectiveCompensationFixture(t)
+	disabled := false
+	runner.afterSystemctl = func(args []string, result CommandResult, err error) (CommandResult, error) {
+		if len(args) == 2 && args[0] == "disable" {
+			disabled = true
+		}
+		if disabled && len(args) == 2 && args[0] == "is-enabled" {
+			runner.dropIns = foreign
+			return CommandResult{Stdout: []byte("disabled\n")},
+				&CommandError{Command: "systemctl", ExitCode: 1, TimedOut: true}
+		}
+		return result, err
+	}
+	err = p.RemoveRestore(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "uncertain") {
+		t.Fatalf("late foreign drift did not report uncertain recovery: %v", err)
+	}
+	now, statErr := os.Lstat(path)
+	if statErr != nil || !os.SameFile(before, now) {
+		t.Fatalf("late drift deleted or replaced original canonical inode: %v", statErr)
+	}
+	if runner.enabled[restoreSystemdUnitName] {
+		t.Fatal("test did not exercise successful disable")
+	}
+	if countRunnerSystemctl(runner.commands, "disable") != 1 ||
+		countRunnerSystemctl(runner.commands, "enable") != 0 ||
+		countRunnerSystemctl(runner.commands, "daemon-reload") != 0 {
+		t.Fatalf("foreign service was mutated during compensation: %v", runner.commands)
+	}
+	assertForeignDropInUntouched(t, foreign, foreignContents)
+}
+
+// Review A-N1-C1 scenario 2: enable partially succeeds on a newly published
+// STL inode, but the command returns error after independent DropInPaths drift.
+// No compensation disable OR unproven deletion of the still-present source
+// can be authorized by the earlier pinned-file admission.
+func TestCompensationRefusesForeignDropInDuringPartialEnableFailure(t *testing.T) {
+	path, runner, p := absentEffectiveUnitFixture(t)
+	foreign, foreignContents := foreignEffectiveCompensationFixture(t)
+	runner.afterSystemctl = func(args []string, result CommandResult, err error) (CommandResult, error) {
+		if len(args) == 2 && args[0] == "enable" {
+			runner.dropIns = foreign
+			return result, errors.New("injected enable failure after partial enablement")
+		}
+		return result, err
+	}
+	undo, changed, err := p.EnsureRestore(context.Background(), "/usr/local/bin/stl")
+	kind, typed := RestoreFailureOf(err)
+	if err == nil || !typed || kind != RestoreEnableFailed || errors.Unwrap(err) == nil ||
+		!strings.Contains(errors.Unwrap(err).Error(), "uncertain") || undo != nil || changed {
+		t.Fatalf("foreign partial enable unexpectedly reconciled: changed=%t err=%v detail=%v", changed, err, errors.Unwrap(err))
+	}
+	got, readErr := os.ReadFile(path)
+	if readErr != nil || string(got) != string(ownedRestoreUnitFixture(t, "/usr/local/bin/stl")) {
+		t.Fatalf("unproven recovery overwrote/deleted published canonical file: %v", readErr)
+	}
+	if !runner.enabled[restoreSystemdUnitName] {
+		t.Fatal("test did not exercise partial enablement")
+	}
+	if countRunnerSystemctl(runner.commands, "disable") != 0 ||
+		countRunnerSystemctl(runner.commands, "enable") != 1 ||
+		countRunnerSystemctl(runner.commands, "daemon-reload") != 1 {
+		t.Fatalf("foreign unit reached compensation systemctl operations: %v", runner.commands)
+	}
+	assertForeignDropInUntouched(t, foreign, foreignContents)
+}
+
+// Review A-N1-C1 scenario 3: canonical removal happened, but daemon-reload
+// failed while an independent drop-in appeared. Source-file restoration is
+// allowed only through the positively pinned STL template. It must not be
+// followed by another reload or re-enable of the now-foreign effective unit.
+func TestCompensationRestoresOnlyOwnedFileAfterRetireReloadDrift(t *testing.T) {
+	path, runner, p := effectiveUnitFixture(t)
+	foreign, foreignContents := foreignEffectiveCompensationFixture(t)
+	runner.afterSystemctl = func(args []string, result CommandResult, err error) (CommandResult, error) {
+		if len(args) == 1 && args[0] == "daemon-reload" {
+			runner.dropIns = foreign
+			return result, errors.New("injected reload failure after external config change")
+		}
+		return result, err
+	}
+	err := p.RemoveRestore(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "daemon-reload after remove") ||
+		!strings.Contains(err.Error(), "uncertain") {
+		t.Fatalf("removal race not reported as incomplete: %v", err)
+	}
+	got, readErr := os.ReadFile(path)
+	if readErr != nil || string(got) != string(ownedRestoreUnitFixture(t, "/usr/local/bin/stl")) {
+		t.Fatalf("owned source file not safely restored: %v", readErr)
+	}
+	if runner.enabled[restoreSystemdUnitName] {
+		t.Fatal("foreign effective configuration re-enabled during recovery")
+	}
+	if countRunnerSystemctl(runner.commands, "disable") != 1 ||
+		countRunnerSystemctl(runner.commands, "enable") != 0 ||
+		countRunnerSystemctl(runner.commands, "daemon-reload") != 1 {
+		t.Fatalf("foreign unit was mutated by compensating systemctl: %v", runner.commands)
+	}
+	assertForeignDropInUntouched(t, foreign, foreignContents)
+}
+
+// Another critical window: disable has already partially succeeded and
+// reported an error, compensating daemon-reload succeeds but introduces an
+// independently authored drop-in. A new effective inspection must stop
+// re-enable, preserving the original proven canonical inode.
+func TestCompensationReattestsAfterReloadBeforeReenable(t *testing.T) {
+	path, runner, p := effectiveUnitFixture(t)
+	before, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign, foreignContents := foreignEffectiveCompensationFixture(t)
+	runner.afterSystemctl = func(args []string, result CommandResult, err error) (CommandResult, error) {
+		if len(args) == 2 && args[0] == "disable" {
+			return result, errors.New("disable reported error after side effect")
+		}
+		if len(args) == 1 && args[0] == "daemon-reload" {
+			runner.dropIns = foreign
+		}
+		return result, err
+	}
+	err = p.RemoveRestore(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "uncertain") {
+		t.Fatalf("unverified post-reload identity re-enabled: %v", err)
+	}
+	now, statErr := os.Lstat(path)
+	if statErr != nil || !os.SameFile(before, now) {
+		t.Fatalf("owned original canonical file was replaced: %v", statErr)
+	}
+	if runner.enabled[restoreSystemdUnitName] {
+		t.Fatal("foreign effective unit was re-enabled")
+	}
+	if countRunnerSystemctl(runner.commands, "enable") != 0 ||
+		countRunnerSystemctl(runner.commands, "disable") != 1 ||
+		countRunnerSystemctl(runner.commands, "daemon-reload") != 1 {
+		t.Fatalf("foreign effective unit reached compensation enable: %v", runner.commands)
+	}
+	assertForeignDropInUntouched(t, foreign, foreignContents)
+}
+
+// Confirm the shared compensation boundary is also used by an Engine Undo,
+// not just synchronous failure paths. The original successful install must
+// remain intact when a foreign drop-in is introduced before Undo.
+func TestEngineUndoRefusesForeignDropInWithoutDisablingUnit(t *testing.T) {
+	path, runner, p := absentEffectiveUnitFixture(t)
+	undo, changed, err := p.EnsureRestore(context.Background(), "/usr/local/bin/stl")
+	if err != nil || !changed || undo == nil {
+		t.Fatalf("cannot establish canonical unit for rollback test: %v", err)
+	}
+	foreign, contents := foreignEffectiveCompensationFixture(t)
+	runner.dropIns = foreign
+	commandsBefore := len(runner.commands)
+	err = undo(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "uncertain") {
+		t.Fatalf("undo of now-foreign effective unit did not fail closed: %v", err)
+	}
+	if len(runner.commands) != commandsBefore+1 || !strings.Contains(runner.commands[commandsBefore], " show ") {
+		t.Fatalf("foreign Undo attempted systemctl mutation: %v", runner.commands[commandsBefore:])
+	}
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatalf("foreign effective unit's canonical main inode disappeared: %v", err)
+	}
+	if !runner.enabled[restoreSystemdUnitName] {
+		t.Fatal("foreign effective unit was disabled by Undo")
+	}
+	assertForeignDropInUntouched(t, foreign, contents)
+}
+
+// Positive control: the same partially failed enable/disable operations
+// must preserve the previously accepted rollback when the effective unit
+// remains canonical and has no foreign drop-ins.
+// The compensation disable can succeed, yet its subsequent is-enabled
+// observation can race with a new foreign drop-in. Even a valid "disabled"
+// status cannot authorize source removal without another effective-unit
+// attestation.
+func TestPublishedCompensationRefusesDriftDuringPostDisableStatus(t *testing.T) {
+	path, runner, p := absentEffectiveUnitFixture(t)
+	undo, changed, err := p.EnsureRestore(context.Background(), "/usr/local/bin/stl")
+	if err != nil || !changed || undo == nil {
+		t.Fatalf("cannot establish owned unit: %v", err)
+	}
+	foreign, contents := foreignEffectiveCompensationFixture(t)
+	disabled := false
+	runner.afterSystemctl = func(args []string, result CommandResult, err error) (CommandResult, error) {
+		if len(args) == 2 && args[0] == "disable" {
+			disabled = true
+		}
+		if disabled && len(args) == 2 && args[0] == "is-enabled" {
+			runner.dropIns = foreign
+		}
+		return result, err
+	}
+	previous := countRunnerSystemctl(runner.commands, "daemon-reload")
+	err = undo(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "uncertain") {
+		t.Fatalf("foreign effective unit was reconciled from stale status: %v", err)
+	}
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatalf("source was removed after foreign drop-in: %v", err)
+	}
+	if runner.enabled[restoreSystemdUnitName] {
+		t.Fatal("test did not exercise successful compensating disable")
+	}
+	if countRunnerSystemctl(runner.commands, "disable") != 1 ||
+		countRunnerSystemctl(runner.commands, "daemon-reload") != previous {
+		t.Fatalf("foreign drop-in reached unverified second compensation mutation: %v", runner.commands)
+	}
+	assertForeignDropInUntouched(t, foreign, contents)
+}
+
+// If independently authored configuration appears DURING a compensating
+// enable itself, no preceding read-only proof can make that privileged race
+// atomic. Detect the drift immediately afterward, leave the proven original
+// main inode in place, and report recovery as unresolved, not successful.
+func TestCompensationReportsDriftDuringReenable(t *testing.T) {
+	path, runner, p := effectiveUnitFixture(t)
+	before, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign, contents := foreignEffectiveCompensationFixture(t)
+	runner.afterSystemctl = func(args []string, result CommandResult, err error) (CommandResult, error) {
+		if len(args) == 2 && args[0] == "disable" {
+			return result, errors.New("partial disable error")
+		}
+		if len(args) == 2 && args[0] == "enable" {
+			runner.dropIns = foreign
+		}
+		return result, err
+	}
+	err = p.RemoveRestore(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "uncertain") {
+		t.Fatalf("post-enable foreign drift was not reported: %v", err)
+	}
+	now, statErr := os.Lstat(path)
+	if statErr != nil || !os.SameFile(before, now) {
+		t.Fatalf("previously owned canonical inode lost: %v", statErr)
+	}
+	if countRunnerSystemctl(runner.commands, "enable") != 1 ||
+		countRunnerSystemctl(runner.commands, "disable") != 1 ||
+		countRunnerSystemctl(runner.commands, "daemon-reload") != 1 {
+		t.Fatalf("unexpected further systemd mutation after re-enable drift: %v", runner.commands)
+	}
+	assertForeignDropInUntouched(t, foreign, contents)
+}
+
+func TestEffectiveCompensationRetainsCanonicalRollback(t *testing.T) {
+	t.Run("partially failed enable on new owned unit", func(t *testing.T) {
+		path, runner, p := absentEffectiveUnitFixture(t)
+		runner.afterSystemctl = func(args []string, result CommandResult, err error) (CommandResult, error) {
+			if len(args) == 2 && args[0] == "enable" {
+				return result, errors.New("partial enable reported an error")
+			}
+			return result, err
+		}
+		_, changed, err := p.EnsureRestore(context.Background(), "/usr/local/bin/stl")
+		kind, typed := RestoreFailureOf(err)
+		if err == nil || changed || !typed || kind != RestoreEnableFailed {
+			t.Fatalf("failed enable not reported: %v", err)
+		}
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("canonical compensation did not retire published unit: %v", err)
+		}
+		if runner.enabled[restoreSystemdUnitName] {
+			t.Fatal("canonical failed enablement not rolled back")
+		}
+		if countRunnerSystemctl(runner.commands, "disable") != 1 {
+			t.Fatalf("canonical compensation did not undo partial enable: %v", runner.commands)
+		}
+	})
+	t.Run("partially failed disable of canonical enabled unit", func(t *testing.T) {
+		path, runner, p := effectiveUnitFixture(t)
+		before, err := os.Lstat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runner.afterSystemctl = func(args []string, result CommandResult, err error) (CommandResult, error) {
+			if len(args) == 2 && args[0] == "disable" {
+				return result, errors.New("partial disable reported an error")
+			}
+			return result, err
+		}
+		err = p.RemoveRestore(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "disable STL systemd unit") {
+			t.Fatalf("failed disable did not preserve initial error: %v", err)
+		}
+		now, statErr := os.Lstat(path)
+		if statErr != nil || !os.SameFile(before, now) {
+			t.Fatalf("original canonical inode not preserved: %v", statErr)
+		}
+		if !runner.enabled[restoreSystemdUnitName] {
+			t.Fatal("canonical compensation did not restore prior enablement")
+		}
+		if countRunnerSystemctl(runner.commands, "enable") != 1 {
+			t.Fatalf("canonical compensation did not re-enable prior unit: %v", runner.commands)
+		}
+	})
 }
 
 func TestFreshAbsentEffectiveUnitAllowsFirstInstallAndGuardedRetirement(t *testing.T) {
