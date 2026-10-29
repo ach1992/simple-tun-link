@@ -67,6 +67,8 @@ func TestUninstallPreflightReasonDoesNotRevealRawFailure(t *testing.T) {
 	for _, tc := range []struct{ message, reason string }{
 		{"existing Link state root has no committed state snapshot: secret", "state_root_unverified"},
 		{"saved Links or pending operations remain", "saved_or_pending_links"},
+		{"protected credential retirement remains unfinished or unverified", "credential_retirement_pending"},
+		{"downgrade requires a canonical empty State without retained receipts", "downgrade_state_history_retained"},
 		{"Engine restore unit is still installed", "restore_unit_present"},
 		{"cannot prove restore-unit absence: secret", "restore_unit_unverified"},
 		{"untrusted state root: secret", "state_integrity_unverified"},

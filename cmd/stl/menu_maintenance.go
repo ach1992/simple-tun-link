@@ -127,13 +127,25 @@ func menuUninstallWithOps(input io.Reader, reader *bufio.Reader, out, errOut io.
 		menuField(out, "Advanced CLI", "stl link list --json")
 		return 0
 	}
-	if !uninstallSnapshotEmpty(snapshot) {
-		menuNotice(out, "WARNING", "Saved pending operations remain even though no Link is listed.")
-		menuField(out, "Reason", "saved_or_pending_links")
-		menuField(out, "NEXT ACTION", "Use STL's Link/recovery workflow to reconcile pending operations before Uninstall.")
+	if !uninstallSnapshotReady(snapshot) {
+		withoutReceipts := snapshot
+		withoutReceipts.RemovalReceipts = nil
+		withoutReceipts.IPsecRemovalReceipts = nil
+		if uninstallSnapshotEmpty(withoutReceipts) {
+			menuNotice(out, "WARNING", "An unfinished protected credential retirement receipt remains; Uninstall cannot proceed.")
+			menuField(out, "Reason", "credential_retirement_pending")
+			menuField(out, "NEXT ACTION", "Use STL's exact receipt-bound credential retirement for the removed Link. Preserve State and credentials; do not delete files manually.")
+		} else {
+			menuNotice(out, "WARNING", "Saved pending operations remain even though no Link is listed.")
+			menuField(out, "Reason", "saved_or_pending_links")
+			menuField(out, "NEXT ACTION", "Use STL's Link/recovery workflow to reconcile pending operations before Uninstall.")
+		}
 		return 0
 	}
 	menuNotice(out, "INFO", "Zero saved Links. STL will inspect private State and the restore unit.")
+	if count := len(snapshot.RemovalReceipts) + len(snapshot.IPsecRemovalReceipts); count > 0 {
+		menuField(out, "Retired receipts", fmt.Sprintf("%d history record(s) kept in protected State; no deletion", count))
+	}
 	if ops.canAct == nil || ops.preflight == nil || ops.install == nil || ops.verify == nil {
 		menuNotice(out, "WARNING", "Canonical Uninstall is unavailable; nothing changed.")
 		return 0
