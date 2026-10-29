@@ -197,6 +197,47 @@ acceptance envelope, not an arbitrary latest download. This optional
 test does not replace native regression tests or actual STL-managed
 two-peer acceptance.
 
+### Optional QUIC over real kernel WireGuard private-L3 lab
+
+The strictly opt-in runner proves the actual pinned Hysteria v2.13.0
+client/server and native Linux WireGuard packet path across two disposable
+network namespaces. It stages two independent role-private 0600 TLS/mTLS,
+bearer and Hysteria configurations through the existing renderer and exact
+pinned-executable verifier, then creates only isolated veth, WireGuard and
+source-rendered nftables resources. An actual QUIC ingress guard rejects
+physical-interface packets to the WireGuard UDP port while permitting
+loopback Hysteria forwarding. The test verifies two-way ICMP, a byte-exact
+64-KiB TCP echo, 16 byte-exact 1200-byte UDP echoes, nonzero WireGuard
+handshake/transfer counters, loss of traffic after stopping the QUIC helper,
+and recovery with the same WireGuard key/interface after restarting it.
+
+Provide **two separate local test fixtures**: a regular absolute executable
+of the official pinned SHA-256 Hysteria v2.13.0 for this architecture, and
+an absolute executable of the distro-provided WireGuard tool (`wg`). The
+launcher never downloads executables or modifies installed packages.
+
+~~~sh
+STL_QUIC_WG_L3_E2E=approved bash scripts/e2e/quic-wg-private-l3.sh \
+  /absolute/path/to/pinned-hysteria \
+  /absolute/path/to/wg
+~~~
+
+Requires Linux user/net/mount namespace support and `unshare`, `nsenter`,
+`ip`, `nft`, `ping`, `python3`, `openssl` and a native WireGuard-capable kernel.
+A private launcher nonce and namespace identity are verified before any
+network effect; protected test credentials are generated under the
+unprivileged launcher UID. The runner cleans the private fixture and all
+child processes; the network objects disappear with their namespaces.
+No physical endpoint, STL State, installed daemon, host route/firewall or
+managed Link is touched.
+
+**Evidence boundary:** the nft batch is test-owned, sourced from the
+production renderer but deliberately not obtained through a canonical
+Engine transaction. The lab does not establish durable nft ownership,
+systemd supervision, actual STL Link commit/remove, crash/reboot restore,
+multi-Link independence, field WAN compatibility or a release gate.
+See Issue #142 for those separate outstanding requirements.
+
 ## Git and documentation ownership
 
 - `main` is the protected integration target. Use scoped branches,
