@@ -9,6 +9,7 @@ import (
 
 	"github.com/ach1992/simple-tun-link/internal/carrier/quic"
 	"github.com/ach1992/simple-tun-link/internal/composition"
+	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
 // This deliberately opt-in integration test exercises the real PUBLIC Engine
@@ -147,6 +148,49 @@ func TestPinnedHysteriaCanonicalEngineMaterialStagingWhenAvailable(t *testing.T)
 				after.QUICCrashOperations[0].Nonce != prepared.Nonce ||
 				backend.applyCount != 0 || len(backend.present) != 0 {
 				t.Fatal("source-only Engine staging changed journal, committed Links or backend effects")
+			}
+
+			// Public Engine negative case: a foreign, byte-identical five-file
+			// generation must not be adopted without its original receipt.
+			// The carrier's deterministic hook tests additionally replace it
+			// BETWEEN receipt and semantic readback within one inspection.
+			foreign := privateDir + "-foreign"
+			if err := os.Mkdir(foreign, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for name := range expectedNames {
+				if name == "generation-owner.json" {
+					continue
+				}
+				raw, err := os.ReadFile(filepath.Join(privateDir, name))
+				if err != nil {
+					t.Fatal(err)
+				}
+				err = os.WriteFile(filepath.Join(foreign, name), raw, 0o600)
+				clear(raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Rename(privateDir, privateDir+"-original"); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(foreign, privateDir); err != nil {
+				t.Fatal(err)
+			}
+			if err := engine.InspectQUICCrashMaterials(ctx, local.LinkID); stlerr.CodeOf(err) != stlerr.CodeState {
+				t.Fatalf("public Engine adopted a foreign same-byte QUIC generation: %v", err)
+			}
+			if _, err := os.Lstat(filepath.Join(privateDir, "generation-owner.json")); !os.IsNotExist(err) {
+				t.Fatalf("foreign generation received an ownership receipt: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(privateDir+"-original", "generation-owner.json")); err != nil {
+				t.Fatalf("original generation was erased: %v", err)
+			}
+			final, err := store.Load(ctx)
+			if err != nil || !reflect.DeepEqual(before, final) ||
+				backend.applyCount != 0 || len(backend.present) != 0 {
+				t.Fatal("foreign generation inspection mutated canonical journal or backend")
 			}
 		})
 	}

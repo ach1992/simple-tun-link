@@ -26,14 +26,13 @@ func (e *Engine) InspectQUICCrashMaterials(ctx context.Context, id domain.LinkID
 	return e.withQUICCrashMaterialLocks(ctx, id, action, func(root string, plan quic.Plan,
 		port uint16, op state.QUICCrashOperation) error {
 		expected := quicExpectedMaterialIdentity(op)
-		if quic.InspectGenerationReceipt(root, plan, op.Nonce, expected) != nil {
-			return stlerr.New(stlerr.CodeState, action, string(id), "quic",
-				"QUIC material generation lacks an exact durable create-time ownership receipt")
-		}
-		got, err := quic.InspectHelperConfig(root, plan, port, op.ExecutablePath)
+		// Receipt and semantic credentials/config must belong to the same
+		// pinned directory generation, including a final canonical path
+		// and inode re-attestation before any successful read-only result.
+		got, err := quic.InspectJournalGeneration(root, plan, port, op.ExecutablePath, op.Nonce, expected)
 		if err != nil || ctx.Err() != nil {
 			return stlerr.New(stlerr.CodeState, action, string(id), "quic",
-				"protected QUIC material or pinned executable cannot be verified")
+				"protected QUIC generation ownership, material or pinned executable cannot be verified")
 		}
 		if got != expected {
 			return stlerr.New(stlerr.CodeConflict, action, string(id), "quic",

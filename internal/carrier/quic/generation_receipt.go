@@ -162,17 +162,137 @@ func captureGenerationReceiptFD(fd int, plan Plan, nonce string, expected Helper
 
 // InspectGenerationReceipt never adopts matching bytes without the durable
 // exact-nonce receipt. Receipt, inventory and all five inode witnesses are
-// read through the SAME pinned directory FD, followed by final inventory.
+// read through one pinned directory FD. The canonical path must still name
+// that generation when inspection returns.
 func InspectGenerationReceipt(root string, plan Plan, nonce string, expected HelperConfigIdentity) error {
 	if !validGenerationNonce(nonce) || validMaterialScope(plan) != nil {
 		return fmt.Errorf("invalid QUIC journal generation identity")
 	}
-	fd, err := openRoleDir(root, plan.LinkID, false)
+	return withPinnedGenerationDir(root, plan.LinkID, func(fd int) error {
+		return inspectGenerationReceiptFD(fd, plan, nonce, expected)
+	})
+}
+
+// InspectJournalGeneration is the Engine's read-only generation-bound
+// ownership AND semantic inspection. Neither the verified receipt nor any
+// private material is accepted from a separately resolved directory.
+func InspectJournalGeneration(root string, plan Plan, localWGUDPPort uint16, binary, nonce string,
+	expected HelperConfigIdentity) (HelperConfigIdentity, error) {
+	return inspectJournalGeneration(root, plan, localWGUDPPort, binary, nonce, expected, InspectPinnedHysteria, nil)
+}
+
+// Test-only injection points for deterministic directory/file replacement
+// at exact inspection boundaries; production always supplies nil.
+type generationInspectHooks struct {
+	beforeReceipt func() error
+	afterReceipt  func() error
+	afterSemantic func() error
+}
+
+func inspectJournalGeneration(root string, plan Plan, localWGUDPPort uint16, binary, nonce string,
+	expected HelperConfigIdentity, verify helperVerifier, hooks *generationInspectHooks) (HelperConfigIdentity, error) {
+	if !validGenerationNonce(nonce) || validMaterialScope(plan) != nil ||
+		helperConfigPreflight(root, plan, localWGUDPPort, binary) != nil {
+		return HelperConfigIdentity{}, fmt.Errorf("invalid QUIC generation inspection intent")
+	}
+	var actual HelperConfigIdentity
+	err := withPinnedGenerationDir(root, plan.LinkID, func(fd int) error {
+		if hooks != nil && hooks.beforeReceipt != nil {
+			if err := hooks.beforeReceipt(); err != nil {
+				return fmt.Errorf("QUIC generation inspection interrupted")
+			}
+		}
+		if err := inspectGenerationReceiptFD(fd, plan, nonce, expected); err != nil {
+			return err
+		}
+		if hooks != nil && hooks.afterReceipt != nil {
+			if err := hooks.afterReceipt(); err != nil {
+				return fmt.Errorf("QUIC generation inspection interrupted")
+			}
+		}
+		got, err := inspectHelperConfigFD(fd, root, plan, localWGUDPPort, binary, verify)
+		if err != nil || got != expected {
+			return fmt.Errorf("QUIC generation semantic material differs from immutable journal")
+		}
+		if hooks != nil && hooks.afterSemantic != nil {
+			if err := hooks.afterSemantic(); err != nil {
+				return fmt.Errorf("QUIC generation inspection interrupted")
+			}
+		}
+		// A same-byte file inode replacement during the semantic read must
+		// not survive a final receipt and inventory re-attestation.
+		if err := inspectGenerationReceiptFD(fd, plan, nonce, expected); err != nil {
+			return err
+		}
+		actual = got
+		return nil
+	})
+	if err != nil {
+		return HelperConfigIdentity{}, err
+	}
+	return actual, nil
+}
+
+// withPinnedGenerationDir retains one verified credentials -> quic -> Link
+// FD chain through the callback. A final fresh canonical traversal must
+// match all three held directory identities, not only the leaf entry: an
+// independent actor can replace a parent while preserving an old FD chain.
+// It never creates, removes or changes private directory entries.
+func withPinnedGenerationDir(root string, id domain.LinkID, inspect func(int) error) error {
+	if id.Validate() != nil || inspect == nil {
+		return fmt.Errorf("invalid QUIC generation inspection target")
+	}
+	creds, err := credentials.OpenProtected(root, false)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(creds)
+	parent, err := credentials.OpenOwnedPrivateDir(creds, "quic", false)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(parent)
+	fd, err := credentials.OpenOwnedPrivateDir(parent, string(id), false)
 	if err != nil {
 		return err
 	}
 	defer unix.Close(fd)
-	return inspectGenerationReceiptFD(fd, plan, nonce, expected)
+	var original unix.Stat_t
+	if err := unix.Fstat(fd, &original); err != nil ||
+		generationDirectoryPinned(parent, fd, string(id), original) != nil {
+		return fmt.Errorf("QUIC generation directory was replaced before inspection")
+	}
+	if err := inspect(fd); err != nil {
+		return err
+	}
+	if err := generationDirectoryPinned(parent, fd, string(id), original); err != nil {
+		return err
+	}
+	freshCreds, err := credentials.OpenProtected(root, false)
+	if err != nil {
+		return fmt.Errorf("QUIC generation canonical private parent was replaced")
+	}
+	defer unix.Close(freshCreds)
+	if !sameGenerationDirectoryFD(creds, freshCreds) {
+		return fmt.Errorf("QUIC generation canonical credentials parent changed")
+	}
+	freshParent, err := credentials.OpenOwnedPrivateDir(freshCreds, "quic", false)
+	if err != nil {
+		return fmt.Errorf("QUIC generation canonical QUIC parent was replaced")
+	}
+	defer unix.Close(freshParent)
+	if !sameGenerationDirectoryFD(parent, freshParent) {
+		return fmt.Errorf("QUIC generation canonical QUIC parent changed")
+	}
+	return generationDirectoryPinned(freshParent, fd, string(id), original)
+}
+
+func sameGenerationDirectoryFD(first, second int) bool {
+	var a, b unix.Stat_t
+	return unix.Fstat(first, &a) == nil && unix.Fstat(second, &b) == nil &&
+		a.Mode&unix.S_IFMT == unix.S_IFDIR && b.Mode&unix.S_IFMT == unix.S_IFDIR &&
+		a.Dev == b.Dev && a.Ino == b.Ino && a.Mode == b.Mode &&
+		a.Uid == b.Uid
 }
 
 func inspectGenerationReceiptFD(fd int, plan Plan, nonce string, expected HelperConfigIdentity) error {

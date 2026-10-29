@@ -88,6 +88,13 @@ func renderHelperConfigFromProtected(root string, plan Plan, binary string) ([]b
 		return nil, CredentialIdentity{}, err
 	}
 	defer unix.Close(fd)
+	return renderHelperConfigFromFD(fd, root, plan, binary)
+}
+
+// renderHelperConfigFromFD retains the caller's exact generation directory.
+// The journal-bound inspector must not reopen the canonical path between
+// receipt verification, credential rendering and helper.json readback.
+func renderHelperConfigFromFD(fd int, root string, plan Plan, binary string) ([]byte, CredentialIdentity, error) {
 	if err := requireExclusiveRole(fd, plan.Role); err != nil {
 		return nil, CredentialIdentity{}, err
 	}
@@ -194,6 +201,21 @@ func inspectHelperConfig(root string, plan Plan, localWGUDPPort uint16, binary s
 	if err := helperConfigPreflight(root, plan, localWGUDPPort, binary); err != nil {
 		return HelperConfigIdentity{}, err
 	}
+	fd, err := openRoleDir(root, plan.LinkID, false)
+	if err != nil {
+		return HelperConfigIdentity{}, err
+	}
+	defer unix.Close(fd)
+	return inspectHelperConfigFD(fd, root, plan, localWGUDPPort, binary, verify)
+}
+
+// inspectHelperConfigFD verifies the approved executable and ALL private
+// semantic material using the SAME caller-owned directory generation FD.
+func inspectHelperConfigFD(fd int, root string, plan Plan, localWGUDPPort uint16, binary string,
+	verify helperVerifier) (HelperConfigIdentity, error) {
+	if err := helperConfigPreflight(root, plan, localWGUDPPort, binary); err != nil {
+		return HelperConfigIdentity{}, err
+	}
 	if verify == nil {
 		return HelperConfigIdentity{}, fmt.Errorf("QUIC pinned helper inspection unavailable")
 	}
@@ -201,19 +223,11 @@ func inspectHelperConfig(root string, plan Plan, localWGUDPPort uint16, binary s
 	if err != nil {
 		return HelperConfigIdentity{}, fmt.Errorf("QUIC official helper admission failed: %w", err)
 	}
-	expected, credID, err := renderHelperConfigFromProtected(root, plan, binary)
+	expected, credID, err := renderHelperConfigFromFD(fd, root, plan, binary)
 	if err != nil {
 		return HelperConfigIdentity{}, err
 	}
 	defer clear(expected)
-	fd, err := openRoleDir(root, plan.LinkID, false)
-	if err != nil {
-		return HelperConfigIdentity{}, err
-	}
-	defer unix.Close(fd)
-	if err := requireExclusiveRole(fd, plan.Role); err != nil {
-		return HelperConfigIdentity{}, err
-	}
 	actual, err := credentials.ReadPrivateFile(fd, "helper.json")
 	if err != nil {
 		return HelperConfigIdentity{}, err

@@ -880,8 +880,13 @@ occurs. This approach changes no State v4 schema.
 
 The read-only public `Engine.InspectQUICCrashMaterials` now requires both the
 positive journal-bound receipt and actual protected config/credential and
-pinned executable identity. The raw protected-storage helpers remain
-uncommitted building blocks, not independent ownership grants. Neither
+pinned executable identity. Receipt, exact five-file inode witnesses,
+private credential semantics and helper JSON are inspected using a **single
+held generation directory FD**, with a final receipt recheck and canonical
+credentials/QUIC/Link path identity revalidation. A replaced directory,
+ancestor or same-byte foreign inode fails closed; an independent successful
+read from another directory can never complete the ownership attestation.
+The raw protected-storage helpers remain uncommitted building blocks, not independent ownership grants. Neither
 successful staging nor inspection **consumes the journal**, proves any actual
 systemd/kernel/nft object or Hysteria process ownership, authenticates the
 remote peer or launches any helper. Future runtime implementation must
