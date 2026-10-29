@@ -1011,6 +1011,29 @@ credential leaks, and failure diagnostics never echo raw helper logs.
 These are **local helper/serialization results**,
 not physical WAN, kernel WireGuard L3 or STL-managed lifecycle acceptance.
 
+A separate opt-in test-only
+`scripts/e2e/quic-wg-private-l3.sh` lab now proves that the
+same pinned Hysteria v2.13.0 config renderer, disjoint protected role
+material, native kernel WireGuard devices and source-generated QUIC nft
+guards on **both endpoints** can carry **real bilateral private-IP ICMP,
+TCP and UDP** across a disposable veth underlay joining two network
+namespaces. Both guards are created and strictly verified
+**before** either kernel WG listener starts, and distinct physical UDP
+DROP probes validate the two live guards after activation. Private
+traffic stops when the QUIC client helper is stopped and resumes on
+restarting it with unchanged WG identity. A test-only PID-1 controller,
+exact-pidfd supervisor, parent-death kill boundary and separate-session
+fixture-creating janitor contain both normal and abnormal laboratory
+termination; eight fault modes also exercise supervisor SIGKILL before
+preparation, after protected-material staging and with live helpers. The source
+scripts and reproducible evidence are described in
+[DEVELOPMENT.md](DEVELOPMENT.md). It uses no managed Engine
+activation: the test-only nft CREATE and WG/helper start are scoped
+explicitly to the disposable lab and do NOT grant original resource
+ownership, transaction/journal clearance, systemd/reboot recovery or
+physical-host acceptance. The operational and reproduction contract is
+in [DEVELOPMENT.md](DEVELOPMENT.md).
+
 Before a public `wireguard-quic` (or equivalent explicitly approved) Link
 is enabled, the original Engine must own compatible provider/carrier
 composition and Link identity/State, an exact binary/credential trust
