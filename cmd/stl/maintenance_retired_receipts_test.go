@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -95,6 +97,70 @@ func TestRetiredWSSReceiptAllowsCoreUninstallButNeverDownlevelState(t *testing.T
 			}
 		})
 	}
+
+	// Go encoding/json uses Unicode SimpleFold (not strings.ToLower) to
+	// match object fields. Both literal and JSON-escaped long-s are an alias
+	// for ASCII s in the WSS termination proof member name. Neither field
+	// order can grant Uninstall admission from ambiguous original bytes.
+	proofKey := regexp.MustCompile("\"wss_original_termination\"\\s*:\\s*\"original-ifindex-deleted-v1\"")
+	if !proofKey.Match(raw) {
+		t.Fatal("canonical retired WSS receipt proof missing from fixture")
+	}
+	proofMember := func(name, proof string) string {
+		return "\"" + name + "\":\"" + proof + "\""
+	}
+	for _, alias := range []struct{ name, key string }{
+		{"literal Unicode long-s", "w\u017fs_original_termination"},
+		{"JSON-escaped Unicode long-s", "w\\u017fs_original_termination"},
+	} {
+		for _, order := range []struct {
+			name                           string
+			canonicalFirst, validCanonical bool
+		}{
+			{"canonical empty then aliased valid", true, false},
+			{"aliased valid then canonical empty", false, false},
+			{"canonical valid then aliased empty", true, true},
+			{"aliased empty then canonical valid", false, true},
+		} {
+			t.Run(alias.name+"/"+order.name, func(t *testing.T) {
+				proof := state.WSSOriginalExactIfIndexDeleted
+				canonicalValue, aliasValue := "", proof
+				if order.validCanonical {
+					canonicalValue, aliasValue = proof, ""
+				}
+				canonical := proofMember("wss_original_termination", canonicalValue)
+				aliased := proofMember(alias.key, aliasValue)
+				replacement := aliased + "," + canonical
+				if order.canonicalFirst {
+					replacement = canonical + "," + aliased
+				}
+				ambiguous := proofKey.ReplaceAllLiteral(raw, []byte(replacement))
+				if bytes.Equal(ambiguous, raw) {
+					t.Fatal("Unicode case-aliased receipt was not injected")
+				}
+				if err := os.WriteFile(statePath, ambiguous, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := verifyMaintenanceJSONUnique(ambiguous); err == nil {
+					t.Fatal("Unicode-equivalent WSS proof fields bypassed original JSON uniqueness gate")
+				}
+				unit := &countingUninstallUnit{}
+				if err := inspectUninstallReady(ctx, root, unit, untrustedRoot); err == nil {
+					t.Fatal("Unicode-aliased original WSS proof authorized core Uninstall")
+				}
+				if unit.inspections != 0 {
+					t.Fatal("ambiguous receipt was allowed to reach systemd inspection")
+				}
+				if current, err := os.ReadFile(statePath); err != nil || !bytes.Equal(current, ambiguous) {
+					t.Fatal("failed preflight modified the ambiguous original State", err)
+				}
+				if err := os.WriteFile(statePath, raw, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+
 	if err := store.Update(ctx, func(s *state.Snapshot) error {
 		s.RemovalReceipts[0].Retired = false
 		return nil
@@ -200,5 +266,43 @@ func TestDowngradePreflightStillRequiresCanonicalEmptySnapshot(t *testing.T) {
 		if raw, err := os.ReadFile(path); err != nil || string(raw) != tc.content {
 			t.Fatal("downgrade preflight modified original State", err)
 		}
+	}
+}
+
+// The canonical encoding/json v1 decoder uses Unicode SimpleFold to match
+// struct fields. Keep the admission scanner equivalent to strings.EqualFold
+// (which uses the same SimpleFold relation), NOT Unicode lowercase or full
+// multi-rune fold/normalization. This guard runs on arbitrary nested keys.
+func TestMaintenanceJSONFieldFoldMatchesGoDecoder(t *testing.T) {
+	names := []string{
+		"retired", "Retired", "RETIRED",
+		"wss_original_termination", "w\u017fs_original_termination",
+		"link_id", "lin\u212a_id",
+		"\u03a3", "\u03c3", "\u03c2",
+		"Stra\u00dfe", "STRASSE", "SS", "\u00df",
+		"i", "I", "\u0130", "\u0131",
+		"caf\u00e9", "cafe\u0301",
+	}
+	for _, a := range names {
+		for _, b := range names {
+			want := strings.EqualFold(a, b)
+			got := maintenanceJSONFoldFieldName(a) == maintenanceJSONFoldFieldName(b)
+			if got != want {
+				t.Fatalf("maintenance field fold disagrees with JSON decoder: %q and %q: got %t want %t", a, b, got, want)
+			}
+		}
+	}
+
+	// Confirm the real typed encoding/json reader binds Unicode-aliased
+	// original-proof members to the same Go field with last-value-wins.
+	// The maintenance scanner must reject the ambiguous bytes first.
+	conflict := []byte(fmt.Sprintf("{%q:%q,%q:%q}", "wss_original_termination", "", "w\u017fs_original_termination", state.WSSOriginalExactIfIndexDeleted))
+	var decoded state.RemovalReceipt
+	if err := json.Unmarshal(conflict, &decoded); err != nil ||
+		decoded.WSSOriginalTermination != state.WSSOriginalExactIfIndexDeleted {
+		t.Fatalf("typed decoder did not reproduce Unicode-alias overwrite: %+v; %v", decoded, err)
+	}
+	if err := verifyMaintenanceJSONUnique(conflict); err == nil {
+		t.Fatal("maintenance scanner accepted contradictory Unicode-aliased WSS proof fields")
 	}
 }

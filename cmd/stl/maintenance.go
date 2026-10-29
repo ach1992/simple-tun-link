@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
@@ -168,6 +169,23 @@ func verifyMaintenanceJSONUnique(raw []byte) error {
 	return nil
 }
 
+// encoding/json v1 matches decoded struct field names using Unicode
+// SimpleFold (including long-s and Kelvin-sign aliases), not ToLower.
+// Normalize each rune to the smallest member of its SimpleFold cycle,
+// mirroring encoding/json.foldName without quadratic key comparisons.
+// This is a maintenance-only ambiguity check, not a change to State decoding.
+func maintenanceJSONFoldFieldName(name string) string {
+	return strings.Map(func(r rune) rune {
+		for {
+			next := unicode.SimpleFold(r)
+			if next <= r {
+				return next
+			}
+			r = next
+		}
+	}, name)
+}
+
 func walkMaintenanceJSONValue(decoder *json.Decoder, depth int) error {
 	if depth > 64 {
 		return errors.New("State JSON nesting is too deep for maintenance")
@@ -192,7 +210,7 @@ func walkMaintenanceJSONValue(decoder *json.Decoder, depth int) error {
 			if !ok {
 				return errors.New("State JSON object key is invalid")
 			}
-			folded := strings.ToLower(key)
+			folded := maintenanceJSONFoldFieldName(key)
 			if _, duplicate := seen[folded]; duplicate {
 				return errors.New("duplicate or aliased nested State field; maintenance refused")
 			}
