@@ -927,6 +927,32 @@ the existing restore/Engine locking must be reused rather than duplicated.
 Changing a Dial TLS peer name cannot be inferred from its leaf certificate
 alone: the exact journal Plan and rendered helper config remain binding.
 
+A separate, **not yet wired to CLI, RestoreAll or a public Link backend**
+QUIC ingress origin step now provides the first host-effect implementation:
+`Engine.StageQUICCrashIngressGuard` reuses the already durable, immutable
+QUIC journal and the Engine's maintenance/Link/resource locking. It first
+re-attests the original protected five-file credential/config generation
+receipt and the exact SHA-256/inode-pinned Hysteria binary; the Linux adapter
+reconstructs the nonce/port-bound QUIC nft plan from State, reuses the
+shared WSS/QUIC bounded nft table inventory and full five-query firewall
+coexistence preflight, then performs an exclusive `create table` nft
+transaction followed by strict full-table readback. A **pre-existing table,
+even with identical bytes/marker**, is never adopted as this attempt's
+original. An unsuccessful or ambiguous dispatched nft operation is not
+rolled back: the same QUIC journal and possible guard remain quarantined
+without any inferred deletion rights. This is a **single-call creation
+witness**, not a durable table-handle ownership receipt or permission to
+retire the guard later. The current first-generation preflight deliberately
+rejects other early WSS/QUIC hooks until their independently verified
+original owner State + host evidence can be passed to the already shared
+sibling coexistence machinery; do not work around this by disabling WSS.
+
+This bounded source step has no operational caller and is **not** a running
+QUIC Link. Future implementation must add durable original nft generation
+ownership, exact kernel WG/UDP and process/systemd witness, separate
+activation-time executable/credential re-attestation, and dependency-aware
+safe rollback/reboot/retirement before enabling a committed private L3 Link.
+
 The adapter's opt-in disposable loopback compatibility test uses the
 pinned, hash-checked official Hysteria binary with **Go-issued per-Link
 TLS/mTLS credentials and bearer**, not manually authored helper JSON or
