@@ -1017,10 +1017,17 @@ same pinned Hysteria v2.13.0 config renderer, disjoint protected role
 material, native kernel WireGuard devices and source-generated QUIC nft
 guards on **both endpoints** can carry **real bilateral private-IP ICMP,
 TCP and UDP** across a disposable veth underlay joining two network
-namespaces. Direct physical-interface WG UDP is dropped by each
-isolated nft guard; private
+namespaces. Both guards are created and strictly verified
+**before** either kernel WG listener starts, and distinct physical UDP
+DROP probes validate the two live guards after activation. Private
 traffic stops when the QUIC client helper is stopped and resumes on
-restarting it with unchanged WG identity. It uses no managed Engine
+restarting it with unchanged WG identity. A test-only PID-1 controller,
+exact-pidfd supervisor, parent-death kill boundary and separate-session
+fixture-creating janitor contain both normal and abnormal laboratory
+termination; eight fault modes also exercise supervisor SIGKILL before
+preparation, after protected-material staging and with live helpers. The source
+scripts and reproducible evidence are described in
+[DEVELOPMENT.md](DEVELOPMENT.md). It uses no managed Engine
 activation: the test-only nft CREATE and WG/helper start are scoped
 explicitly to the disposable lab and do NOT grant original resource
 ownership, transaction/journal clearance, systemd/reboot recovery or

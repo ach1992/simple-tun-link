@@ -206,8 +206,10 @@ bearer and Hysteria configurations through the existing renderer and exact
 pinned-executable verifier, then creates only isolated veth, WireGuard and
 source-rendered nftables resources. Distinct nonce-bound QUIC ingress
 guards on **both endpoints** reject physical-interface packets to each
-kernel WireGuard UDP port while permitting
-loopback Hysteria forwarding. The test verifies two-way ICMP, a byte-exact
+kernel WireGuard UDP port while permitting loopback Hysteria
+forwarding. Both guards are created and strictly verified **before**
+either native WG listener activates. The test then verifies two-way
+ICMP, a byte-exact
 64-KiB TCP echo, 16 byte-exact 1200-byte UDP echoes, nonzero WireGuard
 handshake/transfer counters, loss of traffic after stopping the QUIC helper,
 and recovery with the same WireGuard key/interface after restarting it.
@@ -223,14 +225,43 @@ STL_QUIC_WG_L3_E2E=approved bash scripts/e2e/quic-wg-private-l3.sh \
   /absolute/path/to/wg
 ~~~
 
-Requires Linux user/net/mount namespace support and `unshare`, `nsenter`,
-`ip`, `nft`, `ping`, `python3`, `openssl` and a native WireGuard-capable kernel.
-A private launcher nonce and namespace identity are verified before any
-network effect; protected test credentials are generated under the
-unprivileged launcher UID. The runner cleans the private fixture and all
-child processes; the network objects disappear with their namespaces.
-No physical endpoint, STL State, installed daemon, host route/firewall or
+Requires Linux user/net/mount/**PID** namespace and pidfd support,
+Python with `os.pidfd_open` and `signal.pidfd_send_signal`, `unshare` with
+`--kill-child` and `--mount-proc`, `nsenter`, `ip`, `nft`, `ping`, `go`,
+`sha256sum`, and a native WireGuard-capable kernel. The private nonce,
+mapped UID, network/user/PID namespace identity and PID-1 controller
+are verified before kernel effects. Role-private files are staged under
+the original unprivileged UID.
+
+The disposable PID-1 controller bounds Hysteria, the Python echo worker
+and the sibling namespace anchor, even after uncatchable termination.
+The original-user supervisor holds an **exact child pidfd**, sets a
+parent-death kill boundary and enforces a bounded lab runtime.
+An independent-session janitor **creates** the 0700 private fixture
+before the supervisor stages any secret; it monitors supervisor death
+through a close-on-exec anonymous socket and retires only its own
+inode-verified fixture after child termination. This remains test-only
+supervision, not the STL production process manager. No physical
+endpoint, canonical State, installed daemon, host route/firewall or
 managed Link is touched.
+
+Reproduce eight authorized, disposable failure modes (early preflight,
+early isolated setup, after-helper failure, controller TERM, controller
+SIGKILL, and supervisor SIGKILL before preparation, after protected
+material staging, or after helper startup) with the same pinned fixtures:
+
+~~~sh
+STL_QUIC_WG_L3_E2E=approved python3 -B \
+  scripts/e2e/quic-wg-private-l3-failures.py \
+  "$PWD/scripts/e2e/quic-wg-private-l3.sh" \
+  /absolute/path/to/pinned-hysteria \
+  /absolute/path/to/wg
+~~~
+
+The failure suite also requires `lsns` for read-only verification that
+the exact task PID/network namespaces disappear and the private fixture
+is retired. Signal delivery is limited to the driver's own exact pidfd;
+no process-name cleanup or host-wide network mutations are performed.
 
 **Evidence boundary:** the nft batch is test-owned, sourced from the
 production renderer but deliberately not obtained through a canonical

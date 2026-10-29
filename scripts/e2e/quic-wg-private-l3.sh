@@ -12,7 +12,7 @@ fail() { echo "FAIL: $1" >&2; exit 1; }
 [[ "${STL_QUIC_WG_L3_E2E:-}" == approved ]] || refuse "explicit disposable QUIC L3 E2E opt-in missing"
 repo=$(cd -- "$(dirname -- "$0")/../.." && pwd -P)
 [[ -f "$repo/go.mod" ]] || refuse "repository identity unavailable"
-for tool in unshare nsenter nft ip ping go python3 readlink stat mktemp sha256sum openssl awk grep; do
+for tool in unshare nsenter nft ip ping go python3 readlink stat sha256sum awk grep; do
   command -v "$tool" >/dev/null || refuse "isolated-test prerequisite unavailable: $tool"
 done
 
@@ -30,40 +30,12 @@ if [[ "$1" != --isolated ]]; then
   actual=$(sha256sum -- "$helper" | cut -d' ' -f1)
   [[ "$actual" == "$expected" ]] || refuse "Hysteria v2.13.0 official SHA-256 mismatch"
 
-  lab=$(mktemp -d /tmp/stl-quic-wg-l3.XXXXXXXX)
-  cleanup_parent() {
-    local code=$?
-    trap - EXIT
-    if [[ "$lab" == /tmp/stl-quic-wg-l3.* && -d "$lab" && ! -L "$lab" &&
-          -O "$lab" && "$(stat -c '%a' "$lab")" == 700 ]]; then
-      rm -rf -- "$lab"
-    fi
-    exit "$code"
-  }
-  trap cleanup_parent EXIT
-  printf '%s\n%s\n' "$(readlink /proc/self/ns/user)" "$(readlink /proc/self/ns/net)" > "$lab/parent-namespaces"
-  nonce=$(openssl rand -hex 16)
-  [[ "$nonce" =~ ^[a-f0-9]{32}$ ]] || refuse "namespace guard generation failed"
-  printf '%s\n' "$nonce" > "$lab/nonce"
-  chmod 0600 "$lab/parent-namespaces" "$lab/nonce"
-
-  # Build the exact test once before entering disposable namespaces.
-  (cd "$repo" && GOTOOLCHAIN=local go test -c -o "$lab/quic-test" ./internal/carrier/quic)
-  export STL_QUIC_WG_L3_ROOT="$lab" STL_QUIC_HYSTERIA_BIN="$helper"
-  export STL_QUIC_WG_L3_WG_BINARY="$wg" STL_QUIC_WG_L3_NONCE="$nonce"
-  export STL_QUIC_PARENT_USERNS="$(readlink /proc/self/ns/user)"
-  export STL_QUIC_PARENT_NETNS="$(readlink /proc/self/ns/net)"
-  # Stage protected files while running as the original unprivileged
-  # operator: pinnedexec can attest every parent directory's actual owner.
-  # Only the native network data path executes after namespace creation.
-  if ! STL_QUIC_WG_L3_FIXTURE=approved "$lab/quic-test" -test.run '^TestPinnedHysteriaKernelWGPairFixture$' -test.v \
-    > "$lab/fixture.log" 2>&1; then
-    grep -E 'real_wg_l3_e2e_test.go:|^--- FAIL:|^FAIL' "$lab/fixture.log" | head -8 || true
-    fail "protected role material staging failed"
-  fi
-  unshare --user --map-root-user --net --mount --fork bash "$0" --isolated
-  echo "QUIC_KERNEL_WIREGUARD_PRIVATE_L3_ISOLATED=PASS"
-  exit 0
+  # After preflight and the official executable digest check, replace the
+  # initial launcher with one exact-process supervisor. It owns both the
+  # private fixture and a separate-session janitor that survives SIGKILL.
+  # No privileged host/network effect occurs before the child namespace gate.
+  exec python3 "$repo/scripts/e2e/quic-wg-private-l3-supervisor.py" \
+    "$repo" "$helper" "$wg" "$repo/scripts/e2e/quic-wg-private-l3.sh"
 fi
 
 lab="$STL_QUIC_WG_L3_ROOT"
@@ -78,13 +50,18 @@ wg="$STL_QUIC_WG_L3_WG_BINARY"
   refuse "private launcher-owned namespace fixture missing"
 parent_user=$(sed -n '1p' "$lab/parent-namespaces")
 parent_net=$(sed -n '2p' "$lab/parent-namespaces")
+parent_pid=$(sed -n '3p' "$lab/parent-namespaces")
+[[ "$parent_pid" == "${STL_QUIC_PARENT_PIDNS:-}" && "$parent_pid" == pid:* ]] ||
+  refuse "disposable parent PID namespace identity unavailable"
 current_user=$(readlink /proc/self/ns/user)
 current_net=$(readlink /proc/self/ns/net)
 mapped_root=$(awk 'NF==3 { n++; if ($1==0 && $3==1 && $2 ~ /^[0-9]+$/) ok++ } END { print (n==1 && ok==1) ? "yes" : "no" }' /proc/self/uid_map)
 [[ "$(id -u)" == 0 && "$mapped_root" == yes &&
    "$current_user" != "$parent_user" && "$current_net" != "$parent_net" &&
-   "$current_net" != "$(readlink /proc/1/ns/net)" ]] ||
-  refuse "not in the disposable mapped-root user/network namespace"
+   "$$" -eq 1 && "$(readlink /proc/self/ns/pid)" != "$parent_pid" &&
+   "$(readlink /proc/1/ns/pid)" == "$(readlink /proc/self/ns/pid)" &&
+   "$(readlink /proc/1/ns/net)" == "$current_net" ]] ||
+  refuse "not the PID-1 controller of the disposable user/network namespace"
 
 # Verify that a re-entry lacking the parent-owned guard cannot perform
 # even one native network operation inside the already disposable namespace.
@@ -103,16 +80,29 @@ sibling=''
 app_server=''
 cleanup_child() {
   local code=$?
-  trap - EXIT
+  trap - EXIT TERM
+  # Only direct children of this verified PID-1 lab controller. Since their
+  # PIDs are not reaped until the wait loop, numeric PID reuse is impossible.
   for pid in "$client" "$server" "$app_server" "$sibling"; do
-    if [[ -n "$pid" ]]; then kill "$pid" 2>/dev/null || true; fi
+    if [[ -n "$pid" ]]; then kill -TERM "$pid" 2>/dev/null || true; fi
   done
+  sleep 0.2
   for pid in "$client" "$server" "$app_server" "$sibling"; do
-    if [[ -n "$pid" ]]; then wait "$pid" 2>/dev/null || true; fi
+    if [[ -n "$pid" ]]; then
+      kill -KILL "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+    fi
   done
   exit "$code"
 }
 trap cleanup_child EXIT
+# PID namespace init must explicitly respond to TERM. SIGKILL is handled
+# by kernel PID-1 teardown and the unshare/parent-death supervision chain.
+trap 'exit 143' TERM
+
+if [[ "${STL_QUIC_WG_L3_FAULT:-}" == setup-fail ]]; then
+  fail "injected isolated setup failure before native network effects"
+fi
 
 # Protected credentials/configs were already staged and re-attested
 # by their normal production verifier under the original user identity.
@@ -139,6 +129,58 @@ nsenter -t "$sibling" -n -- ip link set stlqvb up
 ping -n -c 2 -W 1 172.31.247.2 > "$lab/underlay-ping.log" 2>&1 ||
   fail "isolated veth physical underlay failed"
 
+# Both kernel WG listeners bind all interfaces. Each endpoint needs an
+# independently nonced source-generated nft guard, with strict readback.
+# This is only test-owned and never grants original resource ownership.
+guard_endpoint() {
+  local role=$1 phase=$2
+  local port='' physical='' table=''
+  local -a in_role_ns=()
+  if [[ "$role" == server ]]; then
+    port=51820
+    physical=172.31.247.2
+    in_role_ns=(nsenter -t "$sibling" -n --)
+  elif [[ "$role" == client ]]; then
+    port=51821
+    physical=172.31.247.1
+  else
+    fail "invalid disposable guard role"
+  fi
+  local batch="$lab/guard-$role.nft"
+  table=$(awk 'NR==1 && $1=="create" && $2=="table" && $3=="inet" { print $4 }' "$batch")
+  [[ "$table" =~ ^stlquic_[a-f0-9]{16}$ ]] ||
+    fail "invalid source-generated nft guard for role"
+  if [[ "$phase" == install ]]; then
+    "${in_role_ns[@]}" nft -f "$batch" ||
+      fail "disposable role-specific QUIC guard CREATE failed"
+    if ! env STL_QUIC_WG_L3_GUARD_CHECK=approved STL_QUIC_WG_L3_GUARD_ROLE="$role" \
+       "${in_role_ns[@]}" "$lab/quic-test" -test.run '^TestPinnedHysteriaKernelWGGuardReadback$' \
+       -test.v > "$lab/guard-$role-check.log" 2>&1; then
+      grep -E 'real_wg_l3_e2e_test.go:|^--- FAIL:|^FAIL' "$lab/guard-$role-check.log" | head -8 || true
+      fail "disposable role-specific nft guard strict readback failed"
+    fi
+    return 0
+  fi
+  [[ "$phase" == probe ]] || fail "invalid disposable ingress guard phase"
+  if [[ "$role" == server ]]; then
+    printf 'stl-server-guard-probe' > "/dev/udp/$physical/$port" ||
+      fail "disposable physical server WG-port probe could not be sent"
+  else
+    nsenter -t "$sibling" -n -- bash -c \
+      'printf "stl-client-guard-probe" > /dev/udp/172.31.247.1/51821' ||
+      fail "disposable physical client WG-port probe could not be sent"
+  fi
+  "${in_role_ns[@]}" nft -a list chain inet "$table" ingress > "$lab/guard-$role-counter.txt"
+  grep -Eq 'counter packets [1-9][0-9]* bytes [1-9][0-9]* drop' "$lab/guard-$role-counter.txt" ||
+    fail "physical WG UDP did not hit the role-specific guard drop counter"
+}
+
+# Source-generated nft CREATE and strict readback MUST precede even the
+# first actual kernel WireGuard listener socket/effect in this lab.
+guard_endpoint server install
+guard_endpoint client install
+echo "QUIC_WG_GUARDS_VERIFIED_BEFORE_WG_ACTIVATION=PASS"
+
 # Genuine Linux kernel WireGuard devices, NOT a userspace fake.
 ip link add stlqwga type wireguard
 nsenter -t "$sibling" -n -- ip link add stlqwgb type wireguard
@@ -158,49 +200,8 @@ nsenter -t "$sibling" -n -- ip address add 10.247.0.2/30 dev stlqwgb
 ip link set stlqwga up
 nsenter -t "$sibling" -n -- ip link set stlqwgb up
 
-# Both kernel WG listeners bind all interfaces. Each endpoint needs an
-# independently nonced source-generated nft guard, with strict readback.
-# This is only test-owned and never grants original resource ownership.
-guard_endpoint() {
-  local role=$1
-  local port='' physical='' table=''
-  local -a in_role_ns=()
-  if [[ "$role" == server ]]; then
-    port=51820
-    physical=172.31.247.2
-    in_role_ns=(nsenter -t "$sibling" -n --)
-  elif [[ "$role" == client ]]; then
-    port=51821
-    physical=172.31.247.1
-  else
-    fail "invalid disposable guard role"
-  fi
-  local batch="$lab/guard-$role.nft"
-  table=$(awk 'NR==1 && $1=="create" && $2=="table" && $3=="inet" { print $4 }' "$batch")
-  [[ "$table" =~ ^stlquic_[a-f0-9]{16}$ ]] ||
-    fail "invalid source-generated nft guard for role"
-  "${in_role_ns[@]}" nft -f "$batch" ||
-    fail "disposable role-specific QUIC guard CREATE failed"
-  if ! env STL_QUIC_WG_L3_GUARD_CHECK=approved STL_QUIC_WG_L3_GUARD_ROLE="$role" \
-     "${in_role_ns[@]}" "$lab/quic-test" -test.run '^TestPinnedHysteriaKernelWGGuardReadback$' \
-     -test.v > "$lab/guard-$role-check.log" 2>&1; then
-    grep -E 'real_wg_l3_e2e_test.go:|^--- FAIL:|^FAIL' "$lab/guard-$role-check.log" | head -8 || true
-    fail "disposable role-specific nft guard strict readback failed"
-  fi
-  if [[ "$role" == server ]]; then
-    printf 'stl-server-guard-probe' > "/dev/udp/$physical/$port" ||
-      fail "disposable physical server WG-port probe could not be sent"
-  else
-    nsenter -t "$sibling" -n -- bash -c \
-      'printf "stl-client-guard-probe" > /dev/udp/172.31.247.1/51821' ||
-      fail "disposable physical client WG-port probe could not be sent"
-  fi
-  "${in_role_ns[@]}" nft -a list chain inet "$table" ingress > "$lab/guard-$role-counter.txt"
-  grep -Eq 'counter packets [1-9][0-9]* bytes [1-9][0-9]* drop' "$lab/guard-$role-counter.txt" ||
-    fail "physical WG UDP did not hit the role-specific guard drop counter"
-}
-guard_endpoint server
-guard_endpoint client
+guard_endpoint server probe
+guard_endpoint client probe
 echo "QUIC_WG_BOTH_PHYSICAL_UDP_GUARDS=PASS"
 
 link=lnk_b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0
@@ -228,6 +229,27 @@ start_client() {
 }
 start_client
 grep -Fq 'client connected' "$lab/server.log" || fail "server mTLS/bearer admission was not observed"
+
+# Fault modes are admitted only after the disposable PID-1, nonce, owner
+# and namespace gates, and only after both real helpers have started.
+if [[ -n "${STL_QUIC_WG_L3_FAULT:-}" ]]; then
+  echo "QUIC_L3_FAULT_READY PIDNS=$(readlink /proc/self/ns/pid) NETNS=$(readlink /proc/self/ns/net) SIBLINGNS=$(readlink /proc/$sibling/ns/net)"
+fi
+case "${STL_QUIC_WG_L3_FAULT:-}" in
+  after-helper-fail) fail "injected failure with live QUIC helpers" ;;
+  child-term)
+    kill -TERM "$$"
+    fail "isolated PID-1 TERM handler failed"
+    ;;
+  child-kill)
+    kill -KILL "$$"
+    fail "isolated PID-1 uncatchable termination failed"
+    ;;
+  supervisor-hold)
+    sleep 90
+    fail "abnormal supervisor test did not interrupt the lab"
+    ;;
+esac
 
 # The private ICMP echo must traverse the kernel WG peer, its UDP datagrams
 # locally redirected by the Hysteria client, encrypted QUIC on the veth,
