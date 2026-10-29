@@ -15,8 +15,8 @@ import (
 )
 
 // Isolated-only test adapter: real kernel nft CREATE/list readback, with
-// synthetic iptables-version/empty-legacy snapshots because no iptables
-// binaries are installed in the disposable Dev environment. NOT evidence
+// synthetic iptables-version/empty-legacy and empty WG/UDP-socket snapshots
+// because iptables and wg tools are not installed in the disposable chroot. NOT evidence
 // of physical-host firewall compatibility or a running Hysteria service.
 type appIsolatedNFTGuardRunner struct{ linux.ExecRunner }
 
@@ -33,6 +33,13 @@ func (r appIsolatedNFTGuardRunner) RunBounded(ctx context.Context, lim linux.Cap
 		return linux.CommandResult{Stdout: []byte{}}, nil
 	case name == "ip6tables-legacy-save" && len(args) == 0:
 		return linux.CommandResult{Stdout: []byte{}}, nil
+	case name == "wg" && (reflect.DeepEqual(args, []string{"show", "interfaces"}) ||
+		reflect.DeepEqual(args, []string{"show", "all", "public-key"}) ||
+		reflect.DeepEqual(args, []string{"show", "all", "listen-port"})):
+		return linux.CommandResult{Stdout: []byte{}}, nil
+	case name == "ss" && (reflect.DeepEqual(args, []string{"-H", "-u", "-l", "-n"}) ||
+		reflect.DeepEqual(args, []string{"-H", "-u", "-a", "-n"})):
+		return linux.CommandResult{Stdout: []byte{}}, nil
 	}
 	return linux.CommandResult{}, fmt.Errorf("unexpected isolated nft test query")
 }
@@ -42,8 +49,8 @@ type isolatedGuardDiagnosticHost struct {
 	lastErr error
 }
 
-func (h *isolatedGuardDiagnosticHost) PublishOriginalQUICWGIngress(ctx context.Context, id domain.LinkID, nonce string, port uint16) error {
-	h.lastErr = h.QUICWGIngressHost.PublishOriginalQUICWGIngress(ctx, id, nonce, port)
+func (h *isolatedGuardDiagnosticHost) PublishOriginalQUICWGIngress(ctx context.Context, id domain.LinkID, nonce string, wg domain.WireGuardOptions) error {
+	h.lastErr = h.QUICWGIngressHost.PublishOriginalQUICWGIngress(ctx, id, nonce, wg)
 	return h.lastErr
 }
 

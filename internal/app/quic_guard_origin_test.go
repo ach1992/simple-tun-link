@@ -16,7 +16,7 @@ import (
 
 type testQUICOriginalGuardHost struct{ calls int }
 
-func (h *testQUICOriginalGuardHost) PublishOriginalQUICWGIngress(context.Context, domain.LinkID, string, uint16) error {
+func (h *testQUICOriginalGuardHost) PublishOriginalQUICWGIngress(context.Context, domain.LinkID, string, domain.WireGuardOptions) error {
 	h.calls++
 	return nil
 }
@@ -45,9 +45,9 @@ func TestQUICOriginalGuardEngineRequiresJournalMaterialsAndExactOrigin(t *testin
 						t.Fatalf("Engine trust admission substituted original journal: %v", e)
 					}
 					return nil
-				}, func(_ context.Context, id domain.LinkID, nonce string, port uint16) error {
+				}, func(_ context.Context, id domain.LinkID, nonce string, wg domain.WireGuardOptions) error {
 					publish++
-					if inspect != 1 || id != op.Plan.Local.LinkID || nonce != op.Nonce || port != op.WireGuard.ListenPort {
+					if inspect != 1 || id != op.Plan.Local.LinkID || nonce != op.Nonce || wg != op.WireGuard {
 						t.Fatal("original guard publisher lacks exact journal-bound and attested identity")
 					}
 					return nil
@@ -89,13 +89,16 @@ func TestQUICOriginalGuardEngineNeverRunsWithoutJournalOrTrustedMaterials(t *tes
 	called := false
 	err = engine.stageQUICCrashIngressGuard(ctx, op.Plan.Local.LinkID,
 		func(string, quic.Plan, uint16, state.QUICCrashOperation) error { return errors.New(secret) },
-		func(context.Context, domain.LinkID, string, uint16) error { called = true; return nil })
+		func(context.Context, domain.LinkID, string, domain.WireGuardOptions) error { called = true; return nil })
 	if stlerr.CodeOf(err) != stlerr.CodeState || called || strings.Contains(err.Error(), secret) {
 		t.Fatalf("material failure leaked or created host guard: %v", err)
 	}
 	err = engine.stageQUICCrashIngressGuard(ctx, op.Plan.Local.LinkID,
 		func(string, quic.Plan, uint16, state.QUICCrashOperation) error { return nil },
-		func(context.Context, domain.LinkID, string, uint16) error { called = true; return errors.New(secret) })
+		func(context.Context, domain.LinkID, string, domain.WireGuardOptions) error {
+			called = true
+			return errors.New(secret)
+		})
 	if stlerr.CodeOf(err) != stlerr.CodeState || !called || strings.Contains(err.Error(), secret) {
 		t.Fatalf("uncertain host dispatch leaked or discarded quarantine: %v", err)
 	}

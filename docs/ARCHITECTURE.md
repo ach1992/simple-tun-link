@@ -935,8 +935,16 @@ re-attests the original protected five-file credential/config generation
 receipt and the exact SHA-256/inode-pinned Hysteria binary; the Linux adapter
 reconstructs the nonce/port-bound QUIC nft plan from State, reuses the
 shared WSS/QUIC bounded nft table inventory and full five-query firewall
-coexistence preflight, then performs an exclusive `create table` nft
-transaction followed by strict full-table readback. A **pre-existing table,
+coexistence preflight, checks complete *current-host* WireGuard public-key,
+listen-port and guard-namespace UDP listener/socket vacancy via the existing
+WSS WG inspector plus an all-state (`ss -a`) UDP census for connected sockets,
+then performs an exclusive `create table` nft transaction followed by strict
+full-table readback. A missing/ambiguous/occupied live inventory fails
+closed **before dispatch**; the previous journal's vacancy snapshot cannot
+be reused as a present-time creation permit. As with all snapshot-based
+admission, a foreign process can race a readback after it completes;
+final runnable activation must still use its own dependency-aware original
+resource ownership and post-effect checks. A **pre-existing table,
 even with identical bytes/marker**, is never adopted as this attempt's
 original. An unsuccessful or ambiguous dispatched nft operation is not
 rolled back: the same QUIC journal and possible guard remain quarantined

@@ -11,7 +11,8 @@ import (
 
 // This opt-in test validates a REAL nft CREATE/strict readback in an
 // unshared user+network namespace. The development host has no iptables
-// binaries, so only the iptables compatibility snapshots are simulated;
+// and wg binaries in its chroot, so the iptables and WG/socket snapshots
+// are simulated;
 // the actual nft transaction and all nft readbacks remain real. Do not
 // treat this as production-policy or end-to-end QUIC acceptance.
 type isolatedNftGuardRunner struct{ ExecRunner }
@@ -28,6 +29,13 @@ func (r isolatedNftGuardRunner) RunBounded(ctx context.Context, limit CaptureLim
 	case name == "iptables-legacy-save" && len(args) == 0:
 		return CommandResult{Stdout: []byte{}}, nil
 	case name == "ip6tables-legacy-save" && len(args) == 0:
+		return CommandResult{Stdout: []byte{}}, nil
+	case name == "wg" && (reflect.DeepEqual(args, []string{"show", "interfaces"}) ||
+		reflect.DeepEqual(args, []string{"show", "all", "public-key"}) ||
+		reflect.DeepEqual(args, []string{"show", "all", "listen-port"})):
+		return CommandResult{Stdout: []byte{}}, nil
+	case name == "ss" && (reflect.DeepEqual(args, []string{"-H", "-u", "-l", "-n"}) ||
+		reflect.DeepEqual(args, []string{"-H", "-u", "-a", "-n"})):
 		return CommandResult{Stdout: []byte{}}, nil
 	}
 	return CommandResult{}, fmt.Errorf("unexpected isolated firewall query")
@@ -50,7 +58,7 @@ func TestQUICOriginalGuardRealNFTDisposableUserNetNS(t *testing.T) {
 	}
 	ctx := context.Background()
 	runner := isolatedNftGuardRunner{}
-	if err := PublishQUICWGIngressOriginal(ctx, runner, plan); err != nil {
+	if err := publishQUICWGIngressOriginalWithNFT(ctx, runner, plan, testQUICIngressPublicKey()); err != nil {
 		t.Fatalf("isolated original create: %v", err)
 	}
 	t.Cleanup(func() {
@@ -62,7 +70,7 @@ func TestQUICOriginalGuardRealNFTDisposableUserNetNS(t *testing.T) {
 	if err != nil || !present {
 		t.Fatalf("isolated created guard readback mismatch: %v", err)
 	}
-	if err := PublishQUICWGIngressOriginal(ctx, runner, plan); err == nil {
+	if err := publishQUICWGIngressOriginalWithNFT(ctx, runner, plan, testQUICIngressPublicKey()); err == nil {
 		t.Fatal("original publisher adopted exact existing nft table on retry")
 	}
 }

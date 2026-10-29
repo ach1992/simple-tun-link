@@ -22,8 +22,11 @@ type QUICWGIngressHost struct {
 	Runner BoundedRunner
 }
 
-func (h QUICWGIngressHost) PublishOriginalQUICWGIngress(ctx context.Context, id domain.LinkID, nonce string, port uint16) error {
-	plan, err := NewQUICWGIngressPlan(id, port, nonce)
+func (h QUICWGIngressHost) PublishOriginalQUICWGIngress(ctx context.Context, id domain.LinkID, nonce string, wg domain.WireGuardOptions) error {
+	if wg.Validate() != nil || wg.PeerPort == 0 {
+		return fmt.Errorf("unverified QUIC WireGuard public peer and local identity")
+	}
+	plan, err := NewQUICWGIngressPlan(id, wg.ListenPort, nonce)
 	if err != nil {
 		return err
 	}
@@ -31,25 +34,25 @@ func (h QUICWGIngressHost) PublishOriginalQUICWGIngress(ctx context.Context, id 
 	if runner == nil {
 		runner = ExecRunner{}
 	}
-	return PublishQUICWGIngressOriginal(ctx, runner, plan)
+	return publishQUICWGIngressOriginalWithNFT(ctx, runner, plan, wg.LocalPublicKey)
 }
 
-// PublishQUICWGIngressOriginal is only for the initial, held-Engine-lock,
+// publishQUICWGIngressOriginalWithNFT is only for the initial, held-Engine-lock,
 // pre-effect-journal-bound generation. An already present table is ALWAYS
 // rejected even if its exact bytes match. A failed/ambiguous transaction is
 // quarantined, not undone. This is not a standalone host or Link manager.
-func PublishQUICWGIngressOriginal(ctx context.Context, runner BoundedRunner, plan QUICWGIngressPlan) error {
-	return publishQUICWGIngressOriginal(ctx, runner, plan, runQUICWGGuardNFTCreate)
+func publishQUICWGIngressOriginalWithNFT(ctx context.Context, runner BoundedRunner, plan QUICWGIngressPlan, localPublicKey string) error {
+	return publishQUICWGIngressOriginal(ctx, runner, plan, localPublicKey, runQUICWGGuardNFTCreate)
 }
 
-func publishQUICWGIngressOriginal(ctx context.Context, runner BoundedRunner, plan QUICWGIngressPlan,
+func publishQUICWGIngressOriginal(ctx context.Context, runner BoundedRunner, plan QUICWGIngressPlan, localPublicKey string,
 	apply func(context.Context, string) error) error {
 	if ctx == nil || runner == nil || apply == nil {
 		return fmt.Errorf("original QUIC ingress needs a bounded runner and transaction context")
 	}
 	batch, err := plan.NFTBatch()
-	if err != nil {
-		return err
+	if err != nil || !validWSSWGPublicKey(localPublicKey) {
+		return fmt.Errorf("original QUIC guard requires a valid journal-bound WG identity")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -65,6 +68,27 @@ func publishQUICWGIngressOriginal(ctx context.Context, runner BoundedRunner, pla
 	}
 	if occupied {
 		return fmt.Errorf("original QUIC ingress table already exists; no same-byte adoption")
+	}
+	// The journal's historical host vacancy is not sufficient: an unrelated
+	// application may have bound this UDP port after its publication. Reuse
+	// WSS's complete WG key/port and migrated-socket inspector, plus an
+	// additional all-state UDP socket census (connected sockets are not in
+	// ss -l). Neither a matching public key nor a same-name process is owned.
+	vacant, err := WSSGlobalWGKernelVacant(ctx, runner, "wg", localPublicKey, plan.ListenPort)
+	if err != nil || !vacant {
+		return fmt.Errorf("original QUIC WG or UDP ingress port vacancy unverified")
+	}
+	sockets, err := runner.RunBounded(ctx, CaptureLimits{Stdout: 1 << 20, Stderr: 64 << 10},
+		"ss", "-H", "-u", "-a", "-n")
+	if err != nil || ctx.Err() != nil || len(sockets.Stdout) > 1<<20 || len(sockets.Stderr) != 0 {
+		return fmt.Errorf("original QUIC all-state UDP socket census unavailable")
+	}
+	ports, err := parseUDPListeners(string(sockets.Stdout))
+	if err != nil {
+		return fmt.Errorf("original QUIC all-state UDP socket census malformed")
+	}
+	if _, occupied := ports[plan.ListenPort]; occupied {
+		return fmt.Errorf("original QUIC UDP ingress port already occupied")
 	}
 	if err := ctx.Err(); err != nil {
 		return err

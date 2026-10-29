@@ -2,8 +2,8 @@
 # Bounded QUIC initial ingress integration: real nft create/readback in a
 # new user/net/pid/mount namespace, and official pinned materials in a
 # privately owned disposable chroot. Host iptables is NOT tested here:
-# two test runners supply explicit empty legacy snapshots because this Dev
-# image lacks iptables; this is not production firewall acceptance.
+# test adapters supply empty iptables legacy and WG/socket inventories because
+# this minimal chroot lacks iptables/wg; not production firewall acceptance.
 set -euo pipefail
 
 if [[ $# != 1 ]]; then

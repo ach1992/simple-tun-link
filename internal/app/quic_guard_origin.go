@@ -14,7 +14,7 @@ import (
 // provides the immutable journal-derived identity, never caller-substituted
 // guard names, rules or ingress ports.
 type QUICIngressOriginalPublisher interface {
-	PublishOriginalQUICWGIngress(context.Context, domain.LinkID, string, uint16) error
+	PublishOriginalQUICWGIngress(context.Context, domain.LinkID, string, domain.WireGuardOptions) error
 }
 
 // StageQUICCrashIngressGuard is the first, still non-runnable QUIC host
@@ -46,7 +46,7 @@ func (e *Engine) StageQUICCrashIngressGuard(ctx context.Context, id domain.LinkI
 // credentials/config and executable and uses the real bounded host reader.
 func (e *Engine) stageQUICCrashIngressGuard(ctx context.Context, id domain.LinkID,
 	inspect func(string, quic.Plan, uint16, state.QUICCrashOperation) error,
-	publish func(context.Context, domain.LinkID, string, uint16) error) error {
+	publish func(context.Context, domain.LinkID, string, domain.WireGuardOptions) error) error {
 	const action = "quic_stage_crash_ingress"
 	if inspect == nil || publish == nil {
 		return stlerr.New(stlerr.CodeInvalid, action, string(id), "quic",
@@ -58,7 +58,7 @@ func (e *Engine) stageQUICCrashIngressGuard(ctx context.Context, id domain.LinkI
 				return stlerr.New(stlerr.CodeState, action, string(id), "quic",
 					"QUIC original material or executable generation unverified; preserve journal")
 			}
-			if err := publish(ctx, id, op.Nonce, op.WireGuard.ListenPort); err != nil || ctx.Err() != nil {
+			if err := publish(ctx, id, op.Nonce, op.WireGuard); err != nil || ctx.Err() != nil {
 				return stlerr.New(stlerr.CodeState, action, string(id), "quic",
 					"QUIC original ingress creation failed or uncertain; preserve journal and host protection")
 			}
