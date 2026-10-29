@@ -480,7 +480,7 @@ the above independent source verification**:
 bash -c 'set -euo pipefail; umask 077; t=$(mktemp); trap '\''rm -f -- "$t"'\'' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 -o "$t" https://raw.githubusercontent.com/ach1992/simple-tun-link/vX.Y.Z/scripts/install.sh; bash -n "$t"; sudo bash "$t" install --version vX.Y.Z'
 ~~~
 
-### Permanent one-line install (latest Stable only)
+### Permanent short one-line installer (Latest Stable or an exact Stable tag)
 
 The version-free `releases/latest/download/stl-bootstrap.sh` URL selects
 the newest published **Stable**, excluding RC and draft releases. GitHub
@@ -491,7 +491,16 @@ before downloading the canonical installer; it does not execute a mutable
 identity before installing. The public command stays unchanged:
 
 ~~~sh
-bash -c 'set -e; umask 077; d=$(mktemp -d); trap '"'"'rm -rf -- "$d"'"'"' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 --connect-timeout 10 --max-time 120 -o "$d/stl-bootstrap.sh" https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh; test -s "$d/stl-bootstrap.sh"; bash -n "$d/stl-bootstrap.sh"; bash "$d/stl-bootstrap.sh"'
+bash -c 'set -e; d=$(mktemp -d); cleanup(){ rm -rf -- "$d"; }; trap cleanup EXIT; curl -fsSLo "$d/stl.sh" --proto "=https" --proto-redir "=https" https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh; test -s "$d/stl.sh"; bash -n "$d/stl.sh"; bash "$d/stl.sh" "$@"' stl
+~~~
+
+To install a specific published Stable, append its tag to that same
+command (for example the final suffix stl v0.1.9 instead of stl). The one-line
+entry point stays unchanged across releases. With no suffix, the immutable
+Latest Stable asset supplies its exact pinned default version.
+
+~~~sh
+bash -c 'set -e; d=$(mktemp -d); cleanup(){ rm -rf -- "$d"; }; trap cleanup EXIT; curl -fsSLo "$d/stl.sh" --proto "=https" --proto-redir "=https" https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh; test -s "$d/stl.sh"; bash -n "$d/stl.sh"; bash "$d/stl.sh" "$@"' stl v0.1.9
 ~~~
 
 The **first hop is downloaded to a private temporary directory**. Only
@@ -508,16 +517,16 @@ installer-owned STL, **do not run install again**: use this equally fixed
 update command:
 
 ~~~sh
-bash -c 'set -e; umask 077; d=$(mktemp -d); trap '"'"'rm -rf -- "$d"'"'"' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 --connect-timeout 10 --max-time 120 -o "$d/stl-bootstrap.sh" https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh; test -s "$d/stl-bootstrap.sh"; bash -n "$d/stl-bootstrap.sh"; bash "$d/stl-bootstrap.sh" update'
+bash -c 'set -e; d=$(mktemp -d); cleanup(){ rm -rf -- "$d"; }; trap cleanup EXIT; curl -fsSLo "$d/stl.sh" --proto "=https" --proto-redir "=https" https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh; test -s "$d/stl.sh"; bash -n "$d/stl.sh"; bash "$d/stl.sh" "$@"' stl update
 ~~~
 
 This selects the unchanged canonical installer update transaction,
 including identity-verified existing ownership and rollback journals.
-The two permanent commands use the default native,wireguard prerequisites.
+The three published examples (latest install, exact Stable, latest update) use the default native,wireguard prerequisites.
 An advanced operator who separately obtains and verifies the immutable
 bootstrap asset may invoke it as `bash ./stl-bootstrap.sh native update`
-for a narrower backend selection. **Do not append a version or extra
-arguments to the public one-liners.** The installer refuses foreign or
+for a narrower backend selection. **Append only a validated exact Stable tag where documented**; use STL Update
+for installed-version switching and do not append unrecognized arguments. The installer refuses foreign or
 inconsistent installed state rather than silently replacing it.
 Confirm rollback-compatible
 State and backups before starting.
@@ -748,7 +757,12 @@ checking state schema and Engine compatibility.
 
 ## Uninstall: never tear down live Links implicitly
 
-The interactive `stl menu` Uninstall task only guides a human operator.
+The interactive `sudo stl menu` Uninstall task now performs the canonical
+verified binary removal after a fresh `UNINSTALL` confirmation on the installed
+root terminal. The embedded installer holds the exclusive maintenance lock,
+checks Link/State/restore ownership, and never silently removes active Links,
+private credentials or foreign host resources. A genuinely STL-generated
+lock-only footprint with no committed State is retired by STL itself.
 When saved Links remain, it gives a private-handoff KEEP/DELETE decision
 **first** for WireGuard/IPsec; a requested `Delete receiver link` must
 occur while the exact saved tunnel still exists, with fresh `DELETE`
@@ -773,7 +787,10 @@ ambiguous state, or remaining `simple-tun-link-restore.service` requires
 resolution via the Link/Engine workflow **before** uninstall. Do **not** delete
 interfaces, route/firewall rules, or the restore unit manually as a shortcut.
 
-After the Link state is proven empty and the Engine-owned restore unit is gone:
+After the Link state is proven empty and the Engine-owned restore unit is gone,
+open `sudo stl menu`, choose **Uninstall**, and type **UNINSTALL** after the
+verified preview. No separate installer download or manual lock-directory
+cleanup is required. Advanced offline/legacy fallback:
 
 ~~~sh
 sudo bash ./install.sh uninstall

@@ -309,6 +309,22 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 			safe.NextStep += " A protected key write was also attempted; verify its exact identity before any retry or replacement."
 		}
 	}
+	// GRE Plan has a narrow allowlist of typed, authored and secret-safe
+	// backend reasons. Preserve the precise failed pre-Apply prerequisite
+	// instead of overwriting it with the generic rejected_before_host_apply.
+	if observedPublic != nil && evidence != nil &&
+		evidence.Stage == "plan" && evidence.HostMutation == "not_attempted" &&
+		observedPublic.Backend == string(domain.BackendGRE) {
+		switch observedPublic.ReasonCode {
+		case "gre_underlay_route_unverified", "gre_underlay_source_mismatch",
+			"gre_firewall_readback_unverified", "gre_firewall_ownership_unverified",
+			"gre_firewall_route_drift", "gre_receive_port_occupied":
+			if observedPublic.NextStep != "" {
+				safe.ReasonCode = observedPublic.ReasonCode
+				safe.NextStep = observedPublic.NextStep
+			}
+		}
+	}
 	// Only explicitly typed Engine WSS identity/journal denials get a
 	// specific operator action. Never parse raw backend text or infer
 	// absence from a failed inspection, and never override a post-Apply

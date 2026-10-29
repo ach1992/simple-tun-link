@@ -55,6 +55,12 @@ func (v *menuInstallerOutput) observeLine(line string) {
 	switch {
 	case strings.HasPrefix(line, "stl installer [FAILED]: partial failure; inspect retained recovery directory:"):
 		v.stage, v.reason = "binary_recovery", "retained_recovery_requires_inspection"
+	case strings.HasPrefix(line, "stl installer [FAILED]: STL State/Link compatibility check blocked requested downgrade"):
+		v.stage, v.reason = "state_compatibility", "downgrade_state_incompatible"
+	case strings.HasPrefix(line, "stl installer [FAILED]: STL-owned orphan State locks could not be safely retired"):
+		v.stage, v.reason = "orphan_state_cleanup", "uninstall_orphan_cleanup_unverified"
+	case strings.HasPrefix(line, "stl installer [FAILED]: canonical uninstall preflight failed"):
+		v.stage, v.reason = "uninstall_preflight", "uninstall_preflight_unverified"
 	case strings.HasPrefix(line, "stl installer [FAILED]: STL ownership record is missing or not regular"):
 		v.stage, v.reason = "installation_ownership", "installer_ownership_unverified"
 	case strings.HasPrefix(line, "stl installer [FAILED]: APT package transaction failed"):
@@ -102,9 +108,16 @@ func (v *menuInstallerOutput) failure(out io.Writer, action string, err error, c
 	menuField(out, "Reported stage", stage)
 	menuField(out, "Child exit code", status)
 	menuField(out, "Reason", reason)
-	if action == "prepare" {
+	switch {
+	case action == "prepare":
 		menuField(out, "NEXT ACTION", "Inspect dpkg --audit and installed selected packages; APT or vendor services may have changed. Reconcile before a NEW PREPARE.")
-	} else {
+	case reason == "downgrade_state_incompatible":
+		menuField(out, "NEXT ACTION", "The target release cannot safely read existing STL State. Open My tunnels to remove verified Links and use STL recovery for pending operations; retry Downgrade only after STL proves an empty compatible State.")
+	case reason == "uninstall_orphan_cleanup_unverified":
+		menuField(out, "NEXT ACTION", "STL found leftover State contents it cannot prove are its own locks. Preserve them and inspect State ownership; do not delete arbitrary files to force Uninstall.")
+	case reason == "uninstall_preflight_unverified":
+		menuField(out, "NEXT ACTION", "Use My tunnels to remove verified Links, then inspect STL restore unit and State ownership in STL before retrying Uninstall.")
+	default:
 		menuField(out, "NEXT ACTION", "Inspect stl version --json, installation ownership record and retained private recovery journal; package or binary changes may persist. Do not retry blindly.")
 	}
 }

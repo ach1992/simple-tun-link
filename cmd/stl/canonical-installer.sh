@@ -1331,7 +1331,15 @@ if [[ $action == uninstall ]]; then
   # is the single authority on durable state and systemd enablement.
   checked=$("$target" maintenance pre-uninstall --json) || fail 'canonical uninstall preflight failed; no files removed'
   [[ $checked == '{"schema_version":1,"ready":true}' ]] || fail 'canonical uninstall preflight did not prove safety'
-
+  # Retire only the canonical lock-only footprint left by an attempt that
+  # never committed State. Go rechecks every file identity under this exact
+  # exclusive installer lock. Committed State/credentials are never deleted.
+  if [[ $prefix == /usr/local ]]; then
+    retired=$("$target" maintenance retire-empty-state --json) ||
+      fail 'STL-owned orphan State locks could not be safely retired; no binary removed'
+    [[ $retired == '{"schema_version":1,"ready":true}' ]] ||
+      fail 'canonical orphan cleanup did not verify completion'
+  fi
 fi
 
 stage=
@@ -1572,6 +1580,22 @@ if [[ $action == update ]]; then
       fail 'same release version has different executable bytes; refusing mutable/repacked tag'
   fi
 fi
+# A requested downgrade is not a blind binary replacement. The CURRENT
+# installed Engine must prove an empty, non-journaled, restore-unit-free State
+# and prepare only the known lossless empty v4->v3 representation if required.
+# This runs under the SAME exclusive maintenance lock as the later binary
+# swap; the old target installer never owns this new safety/migration logic.
+if [[ $action == update && $prior_version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ &&
+      $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] &&
+   dpkg --compare-versions "${version#v}" lt "${prior_version#v}"; then
+  if [[ $prefix == /usr/local ]]; then
+    staged=$("$target" maintenance stage-downgrade --target "$version" --json) ||
+      fail 'STL State/Link compatibility check blocked requested downgrade; no binary replaced'
+    [[ $staged == '{"schema_version":1,"ready":true}' ]] ||
+      fail 'canonical downgrade State stage did not verify completion'
+  fi
+fi
+
 # Install only missing distro-native prerequisites, after authenticating the
 # exact candidate artifact and BEFORE touching the canonical STL executable.
 # Package installations are not part of the STL binary rollback transaction;

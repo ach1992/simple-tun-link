@@ -143,7 +143,7 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 		menuOption(out, "4", "Test connectivity", "Check one or all saved tunnels")
 		menuOption(out, "5", "Settings", "Host and STL information")
 		menuActionOption(out, "6", "Update", "Choose a published release", "UPDATE")
-		menuActionOption(out, "7", "Uninstall", "Show safe removal steps", "UNINSTALL")
+		menuActionOption(out, "7", "Uninstall", "Verify and remove installed STL", "UNINSTALL")
 		menuOption(out, "8", "Exit", "")
 		fmt.Fprint(out, "\nChoose a task: ")
 		choice, err := readMenuAnswer(reader)
@@ -177,7 +177,7 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 		case "6":
 			result = menuUpdate(input, reader, out, errOut, options)
 		case "7":
-			result = menuUninstall(out, errOut, options)
+			result = menuUninstall(input, reader, out, errOut, options)
 		default:
 			menuNotice(out, "WARNING", "Choose a number from 1 to 8.")
 		}

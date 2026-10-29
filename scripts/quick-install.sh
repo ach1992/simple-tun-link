@@ -16,24 +16,31 @@ quick_install_main() {
   STL_BOOTSTRAP_STARTED=1
   umask 077
   usage() {
-    echo "Usage: bash quick-install.sh <existing-published-tag> [native|native,wireguard] [update]" >&2
-    echo "For an already installer-owned STL: bash quick-install.sh <tag> update" >&2
+    echo "Usage: STL bootstrap [optional-exact-stable-tag] [native|native,wireguard] [update]" >&2
     exit 2
   }
-  [[ $# -ge 1 && $# -le 3 ]] || usage
+  [[ $# -ge 1 && $# -le 4 ]] || usage
   version=$1
+  shift
+  # The immutable Latest Stable bootstrap pins the default tag. One optional
+  # explicit published Stable tag follows the same short public command;
+  # never interpolate a path, branch, arbitrary tag or user shell code.
+  if [[ $# -gt 0 && $1 =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+    version=$1
+    shift
+  fi
   backends=native,wireguard
   action=install
-  [[ $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || usage
-  if [[ $# -ge 2 ]]; then
-    case "$2" in
-      native|native,wireguard) backends=$2 ;;
+  [[ $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ && $# -le 2 ]] || usage
+  if [[ $# -ge 1 ]]; then
+    case "$1" in
+      native|native,wireguard) backends=$1 ;;
       update) action=update ;;
       *) usage ;;
     esac
   fi
-  if [[ $# == 3 ]]; then
-    [[ $action == install && $3 == update ]] || usage
+  if [[ $# -eq 2 ]]; then
+    [[ $action == install && $2 == update ]] || usage
     action=update
   fi
   # Do not trust a mutable latest endpoint. Download the canonical installer

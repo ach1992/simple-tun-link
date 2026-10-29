@@ -87,10 +87,10 @@ func TestMenuUninstallZeroLinksIsNotProofOfSafety(t *testing.T) {
 		t.Fatalf("zero-Link handoff failed: code=%d err=%q", code, errOut)
 	}
 	for _, want := range []string{
-		"does not prove uninstall can proceed",
-		"sudo stl maintenance pre-uninstall --json",
-		"sudo bash /path/to/verified/install.sh uninstall",
-		"Uninstall never silently deletes",
+		"Zero saved Links",
+		"installed_root_terminal_required",
+		"sudo stl menu",
+		"no external installer download is needed",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("zero-Link case silently bypassed canonical proof: %q", out)

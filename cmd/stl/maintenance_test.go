@@ -37,9 +37,37 @@ func TestUninstallPreflightCanonicalStateAndUnit(t *testing.T) {
 	if err := os.Mkdir(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := inspectUninstallReady(ctx, root, unitAbsent, testTrust); err == nil ||
-		!strings.Contains(err.Error(), "no committed state") {
-		t.Fatalf("existing root with missing state must fail closed, got %v", err)
+	if err := inspectUninstallReady(ctx, root, unitAbsent, testTrust); err != nil {
+		t.Fatalf("verified empty root should be safe: %v", err)
+	}
+	locks := filepath.Join(root, "locks")
+	if err := os.Mkdir(locks, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lock := filepath.Join(locks, strings.Repeat("a", 64)+".lock")
+	if err := os.WriteFile(lock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := inspectUninstallReady(ctx, root, unitAbsent, testTrust); err != nil {
+		t.Fatalf("STL-generated lock-only root must not strand Uninstall: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(locks, "other"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := inspectUninstallReady(ctx, root, unitAbsent, testTrust); err == nil {
+		t.Fatal("unknown file inside orphan locks was accepted")
+	}
+	if err := os.Remove(filepath.Join(locks, "other")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "foreign"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := inspectUninstallReady(ctx, root, unitAbsent, testTrust); err == nil {
+		t.Fatal("unknown state-root entry was accepted")
+	}
+	if err := os.Remove(filepath.Join(root, "foreign")); err != nil {
+		t.Fatal(err)
 	}
 	store := state.NewFileStore(root)
 	if err := store.Update(ctx, func(s *state.Snapshot) error { return nil }); err != nil {

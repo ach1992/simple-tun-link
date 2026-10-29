@@ -10,10 +10,13 @@ multiple independent Links, including different supported transports
 to the same peer. Native Linux backends carry packets without a Go
 userspace forwarding loop.
 
-**First connection:** Install the same supported Stable release on both hosts,
+**First connection:** Prefer the same supported Stable release on both hosts,
 run `sudo stl menu`, create a tunnel on the first server, privately share its
 Setup Link, import it on the second, then choose **Test connectivity** on both.
 STL does not claim that a Link works merely because it was saved.
+Version equality is recommended but **not intrinsically required for GRE**: the
+v0.1.9 and v0.1.12 GRE Setup Link codec is compatible. Host routing,
+firewall ownership and kernel capabilities must still pass on both endpoints.
 
 ## Tunnel options
 
@@ -56,7 +59,7 @@ Use the current [official Stable release](https://github.com/ach1992/simple-tun-
 The permanent Stable installer URL remains the same across releases:
 
 ~~~bash
-bash -c 'set -e; umask 077; d=$(mktemp -d); trap '"'"'rm -rf -- "$d"'"'"' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 --connect-timeout 10 --max-time 120 -o "$d/stl-bootstrap.sh" https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh; test -s "$d/stl-bootstrap.sh"; bash -n "$d/stl-bootstrap.sh"; bash "$d/stl-bootstrap.sh"'
+bash -c 'set -e; d=$(mktemp -d); cleanup(){ rm -rf -- "$d"; }; trap cleanup EXIT; curl -fsSLo "$d/stl.sh" --proto "=https" --proto-redir "=https" https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh; test -s "$d/stl.sh"; bash -n "$d/stl.sh"; bash "$d/stl.sh" "$@"' stl
 ~~~
 
 The wrapper downloads the release's tag-pinned bootstrap into a private
@@ -82,40 +85,20 @@ For IPsec, preparation may require separately approved signed packages
 and an exclusively attested private service. STL must not silently
 take over another VPN installation.
 
-### Install a specific published version (including an older Stable)
+### Install an exact older published Stable
 
-The permanent one-line command above always selects the **latest Stable**.
-For another version, choose its exact [official published release](https://github.com/ach1992/simple-tun-link/releases)
-and verify its tag, installer source and SHA-256 before root execution. The
-versioned canonical installer downloads that release's checksummed binary and
-checks its manifest and embedded commit identity. For example, to install the
-**official v0.1.9** on a clean host (AMD64 or ARM64):
+Use the **same one-line installer** above and append only the desired Stable
+version at the end. For example, select the official **v0.1.9**:
 
 ~~~bash
-curl -fLSs --proto '=https' --proto-redir '=https' --tlsv1.2 \
-  -o stl-install-v0.1.9.sh \
-  https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.9/scripts/install.sh
-printf '%s\n' 'b72fcfef1e1dbebc3b305d5912424b7de3f30d62c1f6f882e963e2753fb251ae  stl-install-v0.1.9.sh' | sha256sum -c -
-sudo bash ./stl-install-v0.1.9.sh install --version v0.1.9
-stl version --json
+bash -c 'set -e; d=$(mktemp -d); cleanup(){ rm -rf -- "$d"; }; trap cleanup EXIT; curl -fsSLo "$d/stl.sh" --proto "=https" --proto-redir "=https" https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh; test -s "$d/stl.sh"; bash -n "$d/stl.sh"; bash "$d/stl.sh" "$@"' stl v0.1.9
 ~~~
 
-**Stop unless SHA-256 reports `OK`; do not execute an unverifiable source.**
-For any other official tag, replace **both** the exact tag and installer
-filename, independently obtain and verify that tag's correct SHA-256, then
-use `install --version <that-tag>`. The digest above belongs **only** to
-`v0.1.9`; do not reuse it for other versions. The tag-specific installer
-works on both supported architectures and picks the matching binary.
-
-**Replacing a newer installation with an older version is not a fresh install.**
-Use the verified canonical Uninstall procedure below, make sure no owned
-Links, pending resources or restore unit remain, and check State schema
-compatibility before installing the older release. In particular, `v0.1.9`
-uses State schema 3, while `v0.1.12` uses schema 4; a binary downgrade
-cannot silently translate or erase newer State. Do not delete unknown State,
-credentials or network objects to force a version switch. See the
-[Uninstall runbook](docs/INSTALL.md#uninstall-never-tear-down-live-links-implicitly)
-and [tracked operator UX improvements](https://github.com/ach1992/simple-tun-link/issues/176).
+Use no suffix for Latest Stable. The same trusted bootstrap fetches and
+verifies the selected official release; no local file preparation is needed.
+For an already installed host, use **Update** in the STL menu to upgrade or
+request a downgrade after its State and Link checks. A binary change must never
+silently erase Links or protected State. See [Issue #176](https://github.com/ach1992/simple-tun-link/issues/176).
 
 ### Local installation without GitHub access on the server
 
@@ -310,7 +293,7 @@ credentials and saved receiver handoffs, then run the Stable **update**
 command instead of reinstalling:
 
 ~~~bash
-bash -c 'set -e; umask 077; d=$(mktemp -d); trap '"'"'rm -rf -- "$d"'"'"' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 --connect-timeout 10 --max-time 120 -o "$d/stl-bootstrap.sh" https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh; test -s "$d/stl-bootstrap.sh"; bash -n "$d/stl-bootstrap.sh"; bash "$d/stl-bootstrap.sh" update'
+bash -c 'set -e; d=$(mktemp -d); cleanup(){ rm -rf -- "$d"; }; trap cleanup EXIT; curl -fsSLo "$d/stl.sh" --proto "=https" --proto-redir "=https" https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh; test -s "$d/stl.sh"; bash -n "$d/stl.sh"; bash "$d/stl.sh" "$@"' stl update
 ~~~
 
 Installer binary rollback is **not** State rollback. Stable v0.1.10+

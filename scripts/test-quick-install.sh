@@ -7,8 +7,8 @@ umask 077
 repo="$(cd -- "$(dirname -- "$0")/.." && pwd -P)"
 # Stable release bumps must keep the permanent first-hop install/update text.
 mapfile -t published_commands < <(grep '^bash -c .*stl-bootstrap.sh' "$repo/README.md")
-[[ ${#published_commands[@]} -eq 2 ]] || {
-  echo 'README must contain precisely two fixed safe-download quick commands.' >&2
+[[ ${#published_commands[@]} -eq 3 ]] || {
+  echo 'README must contain three verified, stable-prefix quick commands (latest, exact, update).' >&2
   exit 1
 }
 # Public commands must NEVER need a changing tag, branch or token.
@@ -16,19 +16,21 @@ mapfile -t published_commands < <(grep '^bash -c .*stl-bootstrap.sh' "$repo/READ
 stable_url='https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh'
 # Source is complete only after curl exits 0. The script must not be
 # interpreted in a pipe where a late curl error can follow root effects.
-for idx in 0 1; do
+for idx in 0 1 2; do
   line="${published_commands[$idx]}"
-  [[ "$line" == *'set -e; umask 077; d=$(mktemp -d);'* &&
-     "$line" == *" -o \"\$d/stl-bootstrap.sh\" $stable_url; test -s \"\$d/stl-bootstrap.sh\"; bash -n \"\$d/stl-bootstrap.sh\"; bash \"\$d/stl-bootstrap.sh\""* &&
+  [[ "$line" == *'set -e; d=$(mktemp -d);'* &&
+     "$line" == *"curl -fsSLo \"\$d/stl.sh\" --proto \"=https\" --proto-redir \"=https\" $stable_url; test -s \"\$d/stl.sh\"; bash -n \"\$d/stl.sh\"; bash \"\$d/stl.sh\" \"\$@\""* &&
      "$line" != *' | bash'* ]] || {
     echo 'Public installer must download completely to a private file before any script execution.' >&2
     exit 1
   }
 done
-for public_cmd in "${published_commands[@]}"; do
-  if [[ "$public_cmd" =~ v[0-9]+\.[0-9]+\.[0-9]+ ]] ||
+for idx in 0 1 2; do
+  public_cmd="${published_commands[$idx]}"
+  if [[ "$idx" != 1 && "$public_cmd" =~ v[0-9]+\.[0-9]+\.[0-9]+ ]] ||
+     [[ "$idx" == 1 && "$public_cmd" != *' stl v0.1.9' ]] ||
      [[ "$public_cmd" == *raw.githubusercontent.com* ]]; then
-    echo 'Public command must not contain versions or mutable main URLs.' >&2
+    echo 'Only the exact-version example may append an immutable release tag.' >&2
     exit 1
   fi
 done
@@ -77,7 +79,7 @@ destination=
 url=
 while (($#)); do
   case "$1" in
-    -o) destination=$2; shift 2 ;;
+    -o|-fsSLo) destination=$2; shift 2 ;;
     https://*) url=$1; shift ;;
     *) shift ;;
   esac
@@ -101,7 +103,8 @@ if [[ "$url" == "https://github.com/ach1992/simple-tun-link/releases/latest/down
   esac
 fi
 if [[ "$url" != 'https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.0-rc.123/scripts/install.sh' &&
-      "$url" != "https://raw.githubusercontent.com/ach1992/simple-tun-link/$STL_TEST_PUBLIC_TAG/scripts/install.sh" ]]; then
+      "$url" != "https://raw.githubusercontent.com/ach1992/simple-tun-link/$STL_TEST_PUBLIC_TAG/scripts/install.sh" &&
+      "$url" != 'https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.9/scripts/install.sh' ]]; then
   exit 44
 fi
 [[ -n "$destination" ]] || exit 44
@@ -241,10 +244,10 @@ if command -v script >/dev/null 2>&1; then
     exit 1
   }
 fi
-# Execute the ACTUAL README one-liners with fake curl/sudo. Both command
-# paths must observe complete first-hop transport and syntax validation
+# Execute all three published commands through the real short downloader.
+# Every action needs complete first-hop transport and syntax validation
 # before they can start any canonical installer or privileged action.
-for idx in 0 1; do
+for idx in 0 1 2; do
   published_cmd="${published_commands[$idx]}"
   [[ "$published_cmd" == *"$stable_url"* ]] || {
     echo 'Published commands must use the immutable latest Stable asset.' >&2
@@ -255,15 +258,20 @@ for idx in 0 1; do
     exit 1
   }
   action=install
-  if [[ "$idx" == 1 ]]; then action=update; fi
+  expected_tag=$STL_TEST_PUBLIC_TAG
+  if [[ "$idx" == 1 ]]; then expected_tag=v0.1.9; fi
+  if [[ "$idx" == 2 ]]; then action=update; fi
   # Positive path: successful completed bootstrap => canonical installer
   # with correct action and exact tag, followed by private-file cleanup.
   : > "$STL_TEST_EXECUTIONS"
-  bash -c "$published_cmd" > "$scratch/out" 2>"$scratch/err"
+  if ! bash -c "$published_cmd" > "$scratch/out" 2>"$scratch/err"; then
+    echo "Published installer failed: $(cat "$scratch/err")" >&2
+    exit 1
+  fi
   if (( EUID == 0 )); then
     grep -q 'test fake installer' "$STL_TEST_EXECUTIONS"
   else
-    grep -Eq "^sudo bash .* $action --version $STL_TEST_PUBLIC_TAG --backends native,wireguard$" "$STL_TEST_EXECUTIONS"
+    grep -Eq "^sudo bash .* $action --version $expected_tag --backends native,wireguard$" "$STL_TEST_EXECUTIONS"
   fi
   assert_first_hop_cleanup
   # The subtle case: the final invocation is present and parseable, but
