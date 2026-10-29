@@ -54,6 +54,11 @@ func checkNewWGSiblingGuards(target wgIngressSpec, guards []wgIngressSpec) error
 	if err := target.validate(); err != nil {
 		return err
 	}
+	// Exclusive WG UDP listen ports are host-wide, not per carrier or nft
+	// table. Include the proposed NEW guard in the same uniqueness census
+	// so two separately attested siblings cannot silently share one port.
+	// This gate runs before any Probe host query or nft exclusion.
+	ports := map[uint16]struct{}{target.listenPort: {}}
 	for _, guard := range guards {
 		if err := guard.validate(); err != nil {
 			return err
@@ -61,9 +66,10 @@ func checkNewWGSiblingGuards(target wgIngressSpec, guards []wgIngressSpec) error
 		if guard.tableName() == target.tableName() {
 			return fmt.Errorf("new kernel WG ingress cannot exclude its own table identity")
 		}
-		if guard.listenPort == target.listenPort {
-			return fmt.Errorf("new kernel WG ingress UDP port overlaps a separately guarded sibling")
+		if _, duplicate := ports[guard.listenPort]; duplicate {
+			return fmt.Errorf("kernel WG ingress UDP port overlaps the proposed guard or a separately guarded sibling")
 		}
+		ports[guard.listenPort] = struct{}{}
 	}
 	return nil
 }

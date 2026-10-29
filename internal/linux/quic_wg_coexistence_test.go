@@ -100,6 +100,52 @@ func TestQUICWGCoexistenceOnlyExcludesExactAttestedWSSAndQUICGuards(t *testing.T
 	}
 }
 
+// mutateWGIngressDropVerdict changes the single exact attested table's
+// DROP verdict, not the first DROP in a mixed WSS+QUIC host ruleset.
+// Validate the rule's carrier/nonce/port-bound marker so a mislabeled
+// negative test cannot accidentally exercise a different sibling.
+func mutateWGIngressDropVerdict(t *testing.T, original []byte, p wgIngressSpec) []byte {
+	t.Helper()
+	var dump wssNFTDump
+	if err := json.Unmarshal(original, &dump); err != nil {
+		t.Fatal(err)
+	}
+	changed := 0
+	for _, object := range dump.Nftables {
+		raw, ok := object["rule"]
+		if !ok {
+			continue
+		}
+		var rule wssNFTRule
+		if err := json.Unmarshal(raw, &rule); err != nil {
+			t.Fatal(err)
+		}
+		if rule.Table != p.tableName() {
+			continue
+		}
+		if rule.Comment != p.ruleComment() || rule.Family != "inet" ||
+			rule.Chain != "ingress" || len(rule.Expr) != 4 ||
+			len(rule.Expr[3]) != 1 || string(rule.Expr[3]["drop"]) != "null" {
+			t.Fatal("intended sibling did not have the expected original DROP rule")
+		}
+		rule.Expr[3] = map[string]json.RawMessage{"accept": json.RawMessage("null")}
+		altered, err := json.Marshal(rule)
+		if err != nil {
+			t.Fatal(err)
+		}
+		object["rule"] = altered
+		changed++
+	}
+	if changed != 1 {
+		t.Fatalf("expected exactly one altered %s sibling verdict, changed %d", p.carrier, changed)
+	}
+	result, err := json.Marshal(dump)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
 func TestQUICWGCoexistenceRejectsForeignSiblingDriftWithoutMutation(t *testing.T) {
 	w, q, next, good := testWGCoexistenceGuards(t)
 	allowed := func(e WGFirewallEvidence, ws []WSSWGIngressPlan, qs []QUICWGIngressPlan) error {
@@ -146,9 +192,11 @@ func TestQUICWGCoexistenceRejectsForeignSiblingDriftWithoutMutation(t *testing.T
 		{"foreign-legacy-policy", func(e *WGFirewallEvidence, _ *[]WSSWGIngressPlan, _ *[]QUICWGIngressPlan) {
 			e.LegacySaveV4 = []byte("*filter\n:INPUT DROP [0:0]\nCOMMIT\n")
 		}},
+		{"altered-wss-drop", func(e *WGFirewallEvidence, _ *[]WSSWGIngressPlan, _ *[]QUICWGIngressPlan) {
+			e.NFTRuleset = mutateWGIngressDropVerdict(t, e.NFTRuleset, w.spec())
+		}},
 		{"altered-quic-drop", func(e *WGFirewallEvidence, _ *[]WSSWGIngressPlan, _ *[]QUICWGIngressPlan) {
-			e.NFTRuleset = []byte(strings.Replace(string(e.NFTRuleset), `{"drop":null}`,
-				`{"accept":null}`, 1))
+			e.NFTRuleset = mutateWGIngressDropVerdict(t, e.NFTRuleset, q.spec())
 		}},
 		{"duplicate-casefolded-nft-member", func(e *WGFirewallEvidence, _ *[]WSSWGIngressPlan, _ *[]QUICWGIngressPlan) {
 			e.NFTRuleset = []byte(strings.Replace(string(e.NFTRuleset), `"hook":"input"`,
@@ -256,5 +304,87 @@ func TestQUICWGCoexistenceProbeUsesOnlyFiveReadOnlyHostQueries(t *testing.T) {
 	runner = &quicCoexistenceRunner{nft: e.NFTRuleset}
 	if err := next.ProbeQUICWGFirewallCoexistence(ctx, runner); err == nil || len(runner.calls) != 0 {
 		t.Fatal("canceled QUIC host probe queried a host or returned success")
+	}
+}
+
+// Regression for independent high-assurance finding: different verified
+// sibling tables can still claim the same global kernel WG UDP port. Both
+// source-check and bounded-probe paths must reject BEFORE querying the host.
+func TestWGMixedCarrierSiblingsRejectEveryPairwiseUDPPortCollision(t *testing.T) {
+	const sharedPort uint16 = 51820
+	originalWSS := wssGuardFixture(t)
+	originalWSS.OriginalNonce = quicTestNonce
+	siblingWSS, err := NewWSSWGIngressPlan("lnk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", sharedPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	siblingWSS.OriginalNonce = quicTestNonce
+	originalQUIC, err := NewQUICWGIngressPlan("lnk_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", sharedPort, quicTestNonce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	siblingQUIC, err := NewQUICWGIngressPlan("lnk_cccccccccccccccccccccccccccccccc", sharedPort, quicTestNonce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newWSS, err := NewWSSWGIngressPlan("lnk_dddddddddddddddddddddddddddddddd", 51833)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newQUIC, err := NewQUICWGIngressPlan("lnk_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", 51832, quicTestNonce)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name string
+		wss  []WSSWGIngressPlan
+		quic []QUICWGIngressPlan
+	}{
+		{"wss-quic", []WSSWGIngressPlan{originalWSS}, []QUICWGIngressPlan{originalQUIC}},
+		{"wss-wss", []WSSWGIngressPlan{originalWSS, siblingWSS}, nil},
+		{"quic-quic", nil, []QUICWGIngressPlan{originalQUIC, siblingQUIC}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Each separate original guard has a genuinely valid, complete
+			// nonce-bound nft readback. An invalid fixture must not be the
+			// accidental reason that duplicate-port admission fails.
+			var snap []string
+			for _, p := range tc.wss {
+				snap = append(snap, wgIngressSnapshot(t, p.spec()))
+			}
+			for _, p := range tc.quic {
+				snap = append(snap, wgIngressSnapshot(t, p.spec()))
+			}
+			if len(snap) != 2 {
+				t.Fatal("expected exactly two distinct sibling nft guards")
+			}
+			evidence := wssHostEvidence(combineWGIngressSnapshots(t, snap...))
+			t.Run("new-quic-source", func(t *testing.T) {
+				if err := newQUIC.CheckQUICWGFirewallCoexistenceWithVerifiedSiblings(evidence, tc.wss, tc.quic); err == nil {
+					t.Fatal("pairwise sibling global UDP port overlap accepted by NEW QUIC source admission")
+				}
+			})
+			t.Run("new-wss-source", func(t *testing.T) {
+				if err := newWSS.CheckWSSWGFirewallCoexistenceWithVerifiedSiblings(evidence, tc.wss, tc.quic); err == nil {
+					t.Fatal("pairwise sibling global UDP port overlap accepted by NEW WSS source admission")
+				}
+			})
+			t.Run("new-quic-probe", func(t *testing.T) {
+				runner := &quicCoexistenceRunner{nft: evidence.NFTRuleset}
+				if err := newQUIC.ProbeQUICWGFirewallCoexistenceWithVerifiedSiblings(context.Background(), runner, tc.wss, tc.quic); err == nil ||
+					len(runner.calls) != 0 {
+					t.Fatalf("NEW QUIC pairwise collision probed host or was accepted: err=%v calls=%v", err, runner.calls)
+				}
+			})
+			t.Run("new-wss-probe", func(t *testing.T) {
+				runner := &quicCoexistenceRunner{nft: evidence.NFTRuleset}
+				if err := newWSS.ProbeWSSWGFirewallCoexistenceWithVerifiedSiblings(context.Background(), runner, tc.wss, tc.quic); err == nil ||
+					len(runner.calls) != 0 {
+					t.Fatalf("NEW WSS pairwise collision probed host or was accepted: err=%v calls=%v", err, runner.calls)
+				}
+			})
+		})
 	}
 }
