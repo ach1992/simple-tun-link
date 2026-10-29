@@ -815,6 +815,22 @@ credentials and binary/config under held locks, supply an ownership-aware
 host-effect transaction and exact partial-effect recovery/remove/retirement
 before exposing an operable QUIC Link.
 
+A further **source-only** QUIC host-generation identity projection now
+reuses the existing WSS nft ingress guard renderer, strict JSON verifier
+and exclusive kernel WireGuard netlink create primitive. QUIC derives
+distinct `stlquic_*` nft tables and nonce-bound rule comments, a
+`stl:quic:<LinkID>:tx:<nonce>` kernel alias candidate and a separate
+nonce-derived `q*` original-staging interface name. The projection
+`linux.PlanQUICWGHostOrigin` binds all three to the same immutable journal
+nonce and local kernel WG UDP port. Unlike legacy WSS read-only guard
+plans, QUIC requires a valid nonce from the start; neither matching
+table names nor markers prove their own creation. This change performs
+no nft, netlink, systemd, helper or State operation. Before any future
+host effect, the canonical Engine still needs its post-journal live
+vacancy checks, exact original-object creation witnesses, positive
+ifindex/guard/service ownership, dependency-ordered rollback and
+reboot/reconciliation gates; a source-only plan is not a permit.
+
 The separate **source-only** `quic.StageHelperConfig` and read-only
 `quic.InspectHelperConfig` provide checked, deterministic `helper.json`
 publication for each Link's already-protected credential generation. Before
