@@ -962,6 +962,25 @@ rejects other early WSS/QUIC hooks until their independently verified
 original owner State + host evidence can be passed to the already shared
 sibling coexistence machinery; do not work around this by disabling WSS.
 
+A separate **read-only, journal-bound host observation** is available
+internally as `quicguard.InspectPendingOriginal(ctx, engine, linkID)`. It
+reuses the canonical Engine's existing maintenance/Link/resource locks and
+requires the immutable original journal and current protected generation
+attestation. It uses the fixed actual nft reader, a trusted kernel boot-ID
+source and a before/after stable current network-namespace label; its strict
+nft table census and full exact table readback must agree on the original
+object handles. The only successful statuses are **not visible in this
+observed namespace** and **matching shape, ownership unverified** (the latter
+includes Table/Chain/Rule handles). Any missing, changed or ambiguous input
+is an error, not proof of absence or ownership. Kernel nft handles can be
+reused, same-byte foreign tables may appear identical, and namespace-local
+observation cannot prove absence on an entire host. This diagnostic never
+updates State, adopts or removes a resource, starts any Helper, clears the
+journal, or grants durable recovery/retirement authority. Its strict host
+boot-ID source intentionally fails closed in unsupported nested PID/proc
+mount environments; disposable namespace integration uses a clearly
+synthetic boot-ID *test seam only*, with actual kernel nft operations.
+
 This bounded source step has no CLI or runtime caller and is **not** a running
 QUIC Link. Future implementation must add durable original nft generation
 ownership, exact kernel WG/UDP and process/systemd witness, separate

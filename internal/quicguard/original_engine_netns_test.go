@@ -169,9 +169,66 @@ func TestQUICOriginalGuardEngineMaterialAndRealNFTInDisposableNetNS(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
+			readBoot := func() (string, error) { return testBootID, nil }
+			readNS := func() (string, error) { return currentNetworkNamespace() }
+			absent, err := inspectPendingOriginal(ctx, engine, local.LinkID, appIsolatedNFTGuardRunner{}, readBoot, readNS)
+			if err != nil || absent.Status != GuardNotVisible || absent.Handles != (linux.WGIngressLiveHandles{}) {
+				t.Fatalf("pre-create read-only journal/host absence was not correctly scoped: %+v err=%v", absent, err)
+			}
 			if err := stageOriginal(ctx, engine, local.LinkID, appIsolatedNFTGuardRunner{}, runOriginalNFTCreate); err != nil {
 				t.Fatalf("Engine-bound real isolated guarded creation failed: %v", err)
 			}
+			observed, err := inspectPendingOriginal(ctx, engine, local.LinkID, appIsolatedNFTGuardRunner{}, readBoot, readNS)
+			if err != nil || observed.Status != GuardMatchingShapeUnowned ||
+				observed.KernelBootID != testBootID || observed.NetworkNS == "" ||
+				observed.LinkID != local.LinkID || observed.ListenPort != local.LocalWGUDPPort ||
+				observed.Handles.Table == 0 || observed.Handles.Chain == 0 || observed.Handles.Rule == 0 {
+				t.Fatalf("post-create readonly nft handles not recovered from original journal: %+v err=%v", observed, err)
+			}
+			// A repeat read can see the same exact bytes and kernel handles,
+			// but still does not establish durable original ownership.
+			next, err := inspectPendingOriginal(ctx, engine, local.LinkID, appIsolatedNFTGuardRunner{}, readBoot, readNS)
+			if err != nil || next != observed {
+				t.Fatalf("read-only recovery result unstable: %+v %+v err=%v", observed, next, err)
+			}
+			// A plausible but unsupported/replaced host-generation or
+			// namespace witness must never be promoted into observation.
+			changingBootCalls := 0
+			changingBoot := func() (string, error) {
+				changingBootCalls++
+				if changingBootCalls == 1 {
+					return testBootID, nil
+				}
+				return "abcdef01-2345-6789-abcd-ef0123456789", nil
+			}
+			changingNSCalls := 0
+			changingNS := func() (string, error) {
+				changingNSCalls++
+				if changingNSCalls == 1 {
+					return testNetNS, nil
+				}
+				return "net:[4026532999]", nil
+			}
+			failures := []struct {
+				name string
+				boot func() (string, error)
+				ns   func() (string, error)
+			}{
+				{"malformed-boot", func() (string, error) { return "untrusted", nil }, readNS},
+				{"changed-boot", changingBoot, readNS},
+				{"malformed-netns", readBoot, func() (string, error) { return "net:[0]", nil }},
+				{"changed-netns", readBoot, changingNS},
+			}
+			for _, failure := range failures {
+				t.Run(failure.name, func(t *testing.T) {
+					value, obsErr := inspectPendingOriginal(ctx, engine, local.LinkID,
+						appIsolatedNFTGuardRunner{}, failure.boot, failure.ns)
+					if obsErr == nil || value != (OriginalGuardObservation{}) {
+						t.Fatalf("ambiguous host lifetime was accepted: %+v %v", value, obsErr)
+					}
+				})
+			}
+
 			guard, err := linux.NewQUICWGIngressPlan(local.LinkID, local.LocalWGUDPPort, prepared.Nonce)
 			if err != nil {
 				t.Fatal(err)
