@@ -71,6 +71,10 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 	if err != nil {
 		return nil, false, err
 	}
+	if !p.trustsRestoreUnitContent([]byte(content)) {
+		return nil, false, classifyRestoreFailure(RestoreExecutableUntrusted,
+			fmt.Errorf("restore unit does not match the exact supported canonical template and installed executable"))
+	}
 	verify := p.VerifyExecutable
 	if verify == nil {
 		verify = VerifyTrustedSTLExecutable
@@ -112,8 +116,8 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 		return nil, false, classifyRestoreFailure(RestoreUnitPathUntrusted, fmt.Errorf("read systemd unit: %w", readErr))
 	}
 	if existed {
-		if !isOwnedSystemdUnit(prior) {
-			return nil, false, classifyRestoreFailure(RestoreUnitConflict, fmt.Errorf("refusing to overwrite non-STL systemd unit %q", restoreSystemdUnitName))
+		if !p.trustsRestoreUnitContent(prior) {
+			return nil, false, classifyRestoreFailure(RestoreUnitConflict, fmt.Errorf("refusing to overwrite noncanonical or non-STL systemd unit %q", restoreSystemdUnitName))
 		}
 		if err := p.guardExactPublishedUnit(path, prior); err != nil {
 			return nil, false, classifyRestoreFailure(RestoreUnitPathUntrusted, fmt.Errorf("refusing unverified STL unit identity: %w", err))
@@ -215,8 +219,12 @@ func (p SystemdPersistence) EnsureRestore(ctx context.Context, stlExecutable str
 // rollback closure returned to Engine. Every destructive action is gated by
 // the exact STL-owned contents published by this operation.
 func (p SystemdPersistence) compensatePublishedUnit(ctx context.Context, systemctl, unitDir, path string, published, prior []byte, publishedIdentity os.FileInfo, existed, wasEnabled, fileChanged, enableAttempted bool) error {
-	if existed && !isOwnedSystemdUnit(prior) {
-		return fmt.Errorf("systemd unit compensation incomplete: prior unit ownership is unproven")
+	// Prior full-template admission was performed by EnsureRestore before
+	// any publication. This low-level compensation gate additionally checks
+	// the originating marker; actual authority is its pinned inode and exact
+	// bytes, not the public marker alone.
+	if existed && !hasSTLUnitMarker(prior) {
+		return fmt.Errorf("systemd unit compensation incomplete: prior unit marker is absent")
 	}
 	// For Engine rollback, keep its already-bounded cleanup budget. For a
 	// canceled original caller (such as a timed-out daemon-reload), grant a
@@ -318,9 +326,11 @@ func (p SystemdPersistence) restorePublishedUnitWithSeam(dir, path string, publi
 	return restored, err
 }
 
-// guardExactPublishedUnit refuses symlinks, nonregular files, foreign content
-// and unexpected edits. A marker alone is never sufficient proof that a
-// changed unit still belongs to this operation.
+// guardExactPublishedUnit is an internal pinned-byte/path guard for an
+// already admitted unit or an operation's originating publication. It does
+// not independently admit foreign systemd text: EnsureRestore,
+// IsRestoreInstalled and RemoveRestore require full canonical-unit admission
+// before authorizing any effect.
 func (p SystemdPersistence) guardExactPublishedUnit(path string, expected []byte) error {
 	if err := p.verifyUnitPath(path); err != nil {
 		return fmt.Errorf("untrusted privileged systemd unit path: %w", err)
@@ -337,8 +347,8 @@ func (p SystemdPersistence) guardExactPublishedUnit(path string, expected []byte
 			return fmt.Errorf("opened systemd unit lost trusted root ownership: %w", err)
 		}
 	}
-	if !isOwnedSystemdUnit(current) || !bytes.Equal(current, expected) {
-		return fmt.Errorf("current unit is not the exact STL-owned content published by this operation")
+	if !hasSTLUnitMarker(current) || !bytes.Equal(current, expected) {
+		return fmt.Errorf("current unit is not the exact marker-bearing content inspected by this operation")
 	}
 	return nil
 }
@@ -394,8 +404,8 @@ func (p SystemdPersistence) IsRestoreInstalled(ctx context.Context) (bool, error
 	unitPath := filepath.Join(unitDir, restoreSystemdUnitName)
 	content, _, err := readRegularUnit(unitPath)
 	if err == nil {
-		if !isOwnedSystemdUnit(content) {
-			return false, fmt.Errorf("unowned systemd restore unit identity")
+		if !p.trustsRestoreUnitContent(content) {
+			return false, fmt.Errorf("unowned or noncanonical systemd restore unit identity")
 		}
 		if err := p.guardExactPublishedUnit(unitPath, content); err != nil {
 			return false, fmt.Errorf("unverified systemd restore unit identity: %w", err)
@@ -462,8 +472,8 @@ func (p SystemdPersistence) RemoveRestore(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("read systemd unit: %w", err)
 	}
-	if !isOwnedSystemdUnit(prior) {
-		return fmt.Errorf("refusing to remove non-STL systemd unit %q", restoreSystemdUnitName)
+	if !p.trustsRestoreUnitContent(prior) {
+		return fmt.Errorf("refusing to remove noncanonical or non-STL systemd unit %q", restoreSystemdUnitName)
 	}
 	if err := p.guardExactPublishedIdentity(path, prior, priorIdentity); err != nil {
 		return fmt.Errorf("refusing to remove unverified owned unit: %w", err)
@@ -825,8 +835,51 @@ WantedBy=multi-user.target
 `, managedSystemdMarker, stlExecutable), nil
 }
 
+// hasSTLUnitMarker is ONLY a low-level historical/public marker check,
+// never sufficient to admit an independently existing unit for systemctl
+// disable, removal or replacement.
+func hasSTLUnitMarker(content []byte) bool {
+	return bytes.HasPrefix(content, []byte(managedSystemdMarker+"\n"))
+}
+
+// isOwnedSystemdUnit recognizes only the exact canonical STL-rendered
+// service template, not arbitrary root-owned text bearing the public marker.
+// Every directive, its order, and the single restore command must match.
+// This includes the unchanged officially published v0.1.8-v0.1.12 template.
 func isOwnedSystemdUnit(content []byte) bool {
-	return strings.HasPrefix(string(content), managedSystemdMarker+"\n")
+	if !hasSTLUnitMarker(content) {
+		return false
+	}
+	var command string
+	for _, line := range bytes.Split(content, []byte("\n")) {
+		if !bytes.HasPrefix(line, []byte("ExecStart=")) {
+			continue
+		}
+		if command != "" {
+			return false
+		}
+		command = string(bytes.TrimPrefix(line, []byte("ExecStart=")))
+	}
+	const restoreArgs = " link restore --all"
+	if !strings.HasSuffix(command, restoreArgs) {
+		return false
+	}
+	rendered, err := renderRestoreSystemdUnit(strings.TrimSuffix(command, restoreArgs))
+	return err == nil && bytes.Equal(content, []byte(rendered))
+}
+
+// Default production persistence has ONE supported executable identity.
+// Isolated non-default UnitDir instances retain the renderer's validated
+// path flexibility for explicit test/fixture and alternate-unit contexts.
+func (p SystemdPersistence) trustsRestoreUnitContent(content []byte) bool {
+	if !isOwnedSystemdUnit(content) {
+		return false
+	}
+	if p.UnitDir == "" || filepath.Clean(p.UnitDir) == "/etc/systemd/system" {
+		expected, err := renderRestoreSystemdUnit("/usr/local/bin/stl")
+		return err == nil && bytes.Equal(content, []byte(expected))
+	}
+	return true
 }
 
 func syncOwnedDir(path string) error {

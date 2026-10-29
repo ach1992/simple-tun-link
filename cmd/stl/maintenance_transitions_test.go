@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,6 +77,18 @@ func TestEmptyStateVersionedDowngradeIsLosslessAndPrivate(t *testing.T) {
 		{"v4 to v3", `{"schema_version":4,"links":[]}`, "v0.1.9", true, 3},
 		{"v4 to v4", `{"schema_version":4,"links":[]}`, "v0.1.10", true, 4},
 		{"already v3", `{"schema_version":3,"links":[]}`, "v0.1.9", true, 3},
+		{"valid reordered empty State", ` { "links": [  ], "schema_version": 4 } `, "v0.1.9", true, 3},
+		{"duplicate links, nonempty then empty", `{"schema_version":4,"links":[{"id":"retained"}],"links":[]}`, "v0.1.9", false, 4},
+		{"duplicate links, empty then nonempty", `{"schema_version":4,"links":[],"links":[{"id":"retained"}]}`, "v0.1.9", false, 4},
+		{"duplicate links, both empty", `{"schema_version":4,"links":[],"links":[]}`, "v0.1.9", false, 4},
+		{"duplicate schema version", `{"schema_version":3,"schema_version":4,"links":[]}`, "v0.1.9", false, 4},
+		{"case variant of links", `{"schema_version":4,"Links":[]}`, "v0.1.9", false, 4},
+		{"case variant duplicate of links", `{"schema_version":4,"Links":[{"id":"retained"}],"links":[]}`, "v0.1.9", false, 4},
+		{"escaped duplicate semantic key", `{"schema_version":4,"links":[{"id":"retained"}],"lin\u006bs":[]}`, "v0.1.9", false, 4},
+		{"case variant duplicate of schema", `{"schema_version":4,"Schema_Version":3,"links":[]}`, "v0.1.9", false, 4},
+		{"null links is not an empty list", `{"schema_version":4,"links":null}`, "v0.1.9", false, 4},
+		{"empty retained crash journal", `{"schema_version":4,"links":[],"quic_crash_operations":[]}`, "v0.1.9", false, 4},
+		{"retained removal receipts", `{"schema_version":4,"links":[],"removal_receipts":[{"id":"retained"}]}`, "v0.1.9", false, 4},
 		{"unknown target", `{"schema_version":4,"links":[]}`, "v0.1.7", false, 4},
 		{"pending journal", `{"schema_version":4,"links":[],"wss_crash_operations":[{"private":"do-not-drop"}]}`, "v0.1.9", false, 4},
 		{"foreign field", `{"schema_version":4,"links":[],"unrecognized":42}`, "v0.1.9", false, 4},
@@ -100,6 +113,13 @@ func TestEmptyStateVersionedDowngradeIsLosslessAndPrivate(t *testing.T) {
 				t.Fatal("unsafe input State changed despite refusal")
 			}
 			if tc.ok {
+				var originalSchema struct {
+					SchemaVersion int `json:"schema_version"`
+				}
+				if err := json.Unmarshal(current, &originalSchema); err != nil ||
+					originalSchema.SchemaVersion != tc.want {
+					t.Fatalf("downlevel schema was not exact: got=%+v err=%v", originalSchema, err)
+				}
 				store := state.NewFileStore(root)
 				snap, err := store.Load(context.Background())
 				if err != nil || !uninstallSnapshotEmpty(snap) {

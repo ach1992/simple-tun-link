@@ -132,7 +132,7 @@ func TestSystemdPersistencePreservesPriorEnablementOnRollback(t *testing.T) {
 	unitDir := t.TempDir()
 	runner := &recordingRunner{enabled: map[string]bool{restoreSystemdUnitName: true}}
 	manager := SystemdPersistence{Runner: runner, UnitDir: unitDir, VerifyExecutable: func(string) error { return nil }, VerifyUnitPath: func(string) error { return nil }}
-	oldContent := managedSystemdMarker + "\n[Unit]\nDescription=old\n"
+	oldContent := string(ownedRestoreUnitFixture(t, "/opt/stl/stl"))
 	if err := os.WriteFile(filepath.Join(unitDir, restoreSystemdUnitName), []byte(oldContent), 0o644); err != nil {
 		t.Fatal(err)
 	}

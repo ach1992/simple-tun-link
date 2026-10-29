@@ -115,6 +115,63 @@ func publishedStateSchema(tag string) (int, error) {
 	}
 }
 
+// canonicalEmptyStateSchema parses the original persisted JSON as an object
+// stream, not a map or Snapshot. Go's json map/struct decoding accepts
+// duplicate keys and case-insensitive aliases; neither may grant authority
+// to erase a State file while downleveling. Only two exactly named, unique
+// members with a real empty JSON array are eligible. No State schema changes.
+func canonicalEmptyStateSchema(raw []byte) (int, error) {
+	refuse := func() (int, error) {
+		return 0, errors.New("State is not a unique, canonical empty snapshot; downgrade refused")
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	first, err := dec.Token()
+	if err != nil || first != json.Delim('{') {
+		return refuse()
+	}
+	var schema, sawSchema, sawLinks = 0, false, false
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return refuse()
+		}
+		key, ok := tok.(string)
+		if !ok {
+			return refuse()
+		}
+		switch key {
+		case "schema_version":
+			if sawSchema {
+				return refuse()
+			}
+			sawSchema = true
+			if err := dec.Decode(&schema); err != nil || (schema != 3 && schema != 4) {
+				return refuse()
+			}
+		case "links":
+			if sawLinks {
+				return refuse()
+			}
+			sawLinks = true
+			var links []json.RawMessage
+			if err := dec.Decode(&links); err != nil || links == nil || len(links) != 0 {
+				return refuse()
+			}
+		default:
+			// Unknown keys, case variants and aliases all deny admission.
+			return refuse()
+		}
+	}
+	last, err := dec.Token()
+	if err != nil || last != json.Delim('}') || !sawSchema || !sawLinks {
+		return refuse()
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return refuse()
+	}
+	return schema, nil
+}
+
 // A downgrade with even one Link, journal or retained resource receipt is
 // intentionally refused by inspectUninstallReady. Converting an EMPTY v4
 // snapshot to v3 is safe because there are exactly two keys and no data to
@@ -147,23 +204,9 @@ func stageEmptyStateForDowngrade(root, target string) error {
 	if err != nil || !os.SameFile(info, after) {
 		return errors.New("State identity changed before downgrade")
 	}
-	var fields map[string]json.RawMessage
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&fields); err != nil || len(fields) != 2 {
-		return errors.New("State has unknown or retained data; downgrade refused")
-	}
-	if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
-		return errors.New("State has trailing data; downgrade refused")
-	}
-	var current int
-	if err := json.Unmarshal(fields["schema_version"], &current); err != nil ||
-		(current != 3 && current != 4) {
-		return errors.New("State schema is not eligible for downgrade")
-	}
-	var links []json.RawMessage
-	if err := json.Unmarshal(fields["links"], &links); err != nil || len(links) != 0 {
-		return errors.New("State still contains Link data; downgrade refused")
+	current, err := canonicalEmptyStateSchema(raw)
+	if err != nil {
+		return err
 	}
 	if current <= schema {
 		return nil

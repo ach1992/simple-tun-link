@@ -624,7 +624,11 @@ itself implements the current guarded compatibility command and confirms
 zero saved Links, no pending journals/receipts, no owned restore unit and an
 explicitly known historical State reader. The only supported downlevel
 conversion is a strictly empty v4-to-v3 snapshot; never strip a live Link or
-unknown State fields. Major/minor jumps, RC-to-Stable, mutable or unverified
+unknown State fields. The original JSON must have exactly one `schema_version`
+and one genuinely empty `links` array; duplicate keys (including JSON-escaped
+duplicates), case aliases, null arrays, unknown fields and any retained
+journal/receipt are rejected without replacing the State. Major/minor jumps,
+RC-to-Stable, mutable or unverified
 releases and unsafe downlevel State remain blocked, not silently installed.
 
 **Bridge from an already-installed v0.1.12 (and older Stable):** the published
@@ -821,7 +825,12 @@ no pending operations, the new menu presents an **explicit
 installer. Under its exclusive maintenance lock, the installed Engine
 rechecks State and guarded systemd ownership, disables/retires only the
 identified orphan unit, rechecks absence and then permits core binary
-uninstall. Interrupted/uncertain systemctl or foreign units remain blocked.
+uninstall. A public STL marker alone is never ownership evidence: the exact
+canonical restore-unit template (all directives and the installed executable
+`/usr/local/bin/stl`), trusted file/parent path, pinned inode and systemd
+enablement must match. Independently authored, altered, foreign or otherwise
+ambiguous units are preserved and require explicit reconciliation.
+Interrupted/uncertain systemctl or foreign units remain blocked.
 Do **not** delete interfaces, route/firewall rules, or the restore unit
 manually as a shortcut.
 
