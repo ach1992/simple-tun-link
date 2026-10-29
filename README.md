@@ -82,6 +82,41 @@ For IPsec, preparation may require separately approved signed packages
 and an exclusively attested private service. STL must not silently
 take over another VPN installation.
 
+### Install a specific published version (including an older Stable)
+
+The permanent one-line command above always selects the **latest Stable**.
+For another version, choose its exact [official published release](https://github.com/ach1992/simple-tun-link/releases)
+and verify its tag, installer source and SHA-256 before root execution. The
+versioned canonical installer downloads that release's checksummed binary and
+checks its manifest and embedded commit identity. For example, to install the
+**official v0.1.9** on a clean host (AMD64 or ARM64):
+
+~~~bash
+curl -fLSs --proto '=https' --proto-redir '=https' --tlsv1.2 \
+  -o stl-install-v0.1.9.sh \
+  https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.9/scripts/install.sh
+printf '%s\n' 'b72fcfef1e1dbebc3b305d5912424b7de3f30d62c1f6f882e963e2753fb251ae  stl-install-v0.1.9.sh' | sha256sum -c -
+sudo bash ./stl-install-v0.1.9.sh install --version v0.1.9
+stl version --json
+~~~
+
+**Stop unless SHA-256 reports `OK`; do not execute an unverifiable source.**
+For any other official tag, replace **both** the exact tag and installer
+filename, independently obtain and verify that tag's correct SHA-256, then
+use `install --version <that-tag>`. The digest above belongs **only** to
+`v0.1.9`; do not reuse it for other versions. The tag-specific installer
+works on both supported architectures and picks the matching binary.
+
+**Replacing a newer installation with an older version is not a fresh install.**
+Use the verified canonical Uninstall procedure below, make sure no owned
+Links, pending resources or restore unit remain, and check State schema
+compatibility before installing the older release. In particular, `v0.1.9`
+uses State schema 3, while `v0.1.12` uses schema 4; a binary downgrade
+cannot silently translate or erase newer State. Do not delete unknown State,
+credentials or network objects to force a version switch. See the
+[Uninstall runbook](docs/INSTALL.md#uninstall-never-tear-down-live-links-implicitly)
+and [tracked operator UX improvements](https://github.com/ach1992/simple-tun-link/issues/176).
+
 ### Local installation without GitHub access on the server
 
 Official Stable releases from **v0.1.9 onward** support one self-contained
