@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -58,6 +59,11 @@ func inspectPendingOriginal(ctx context.Context, engine *app.Engine, id domain.L
 	var observation OriginalGuardObservation
 	err := engine.WithQUICCrashIngressAdmission(ctx, id,
 		func(c context.Context, link domain.LinkID, nonce string, wg domain.WireGuardOptions) error {
+			// os/exec inherits the calling OS thread's network namespace.
+			// Pin both labels and every nft subprocess to that SAME thread.
+			// /proc/self/ns/net labels the process leader, which can differ.
+			runtime.LockOSThread()
+			defer runtime.UnlockOSThread()
 			plan, err := linux.NewQUICWGIngressPlan(link, wg.ListenPort, nonce)
 			if err != nil || wg.Validate() != nil || wg.PeerPort == 0 {
 				return fmt.Errorf("original QUIC journal guard identity invalid")
@@ -98,6 +104,7 @@ func inspectPendingOriginal(ctx context.Context, engine *app.Engine, id domain.L
 
 // A namespace inode is useful as a scope LABEL, not as a cryptographic or
 // permanent host-identity proof. The kernel issues net:[decimal-inode].
+// Call only on a locked OS thread throughout the corresponding nft inspection.
 func validNetworkNamespaceID(value string) bool {
 	if !strings.HasPrefix(value, "net:[") || !strings.HasSuffix(value, "]") {
 		return false
@@ -116,7 +123,7 @@ func validNetworkNamespaceID(value string) bool {
 }
 
 func currentNetworkNamespace() (string, error) {
-	id, err := os.Readlink("/proc/self/ns/net")
+	id, err := os.Readlink("/proc/thread-self/ns/net")
 	if err != nil || !validNetworkNamespaceID(id) {
 		return "", fmt.Errorf("current network namespace unverified")
 	}

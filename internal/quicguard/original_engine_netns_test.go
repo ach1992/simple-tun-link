@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/state"
+	"golang.org/x/sys/unix"
 )
 
 // Isolated-only test adapter: real kernel nft CREATE/list readback, with
@@ -49,6 +51,83 @@ func (r appIsolatedNFTGuardRunner) RunBounded(ctx context.Context, lim linux.Cap
 		return linux.CommandResult{Stdout: []byte{}}, nil
 	}
 	return linux.CommandResult{}, fmt.Errorf("unexpected isolated nft test query")
+}
+
+type siblingNetworkNSObservation struct {
+	Observation OriginalGuardObservation
+	ProcessNS   string
+	ThreadNS    string
+	Err         error
+}
+
+// This runs ONLY inside the explicitly disposable user/net/mount test harness.
+// A Go process can have different network namespaces on distinct OS threads.
+// Its /proc/self/ns/net label stays at the process leader, whereas nft
+// subprocesses inherit the network namespace of the locked calling thread.
+func inspectOriginalInSiblingThreadNS(ctx context.Context, engine *app.Engine, id domain.LinkID) siblingNetworkNSObservation {
+	// Reserve TWO different locked threads before choosing the worker. One
+	// cannot both be the process leader, so the discriminating /proc/self
+	// versus /proc/thread-self test never depends on scheduler luck.
+	type lockedWorker struct {
+		tid     int
+		proceed chan bool
+	}
+	ready := make(chan lockedWorker, 2)
+	result := make(chan siblingNetworkNSObservation, 1)
+	for i := 0; i < 2; i++ {
+		go func() {
+			runtime.LockOSThread()
+			defer runtime.UnlockOSThread()
+			worker := lockedWorker{tid: unix.Gettid(), proceed: make(chan bool, 1)}
+			ready <- worker
+			if <-worker.proceed {
+				result <- inspectOriginalOnLockedThread(ctx, engine, id)
+			}
+		}()
+	}
+	first, second := <-ready, <-ready
+	if first.tid == os.Getpid() {
+		first, second = second, first
+	}
+	second.proceed <- false
+	first.proceed <- true
+	return <-result
+}
+
+func inspectOriginalOnLockedThread(ctx context.Context, engine *app.Engine, id domain.LinkID) (observed siblingNetworkNSObservation) {
+	if unix.Gettid() == os.Getpid() {
+		observed.Err = fmt.Errorf("sibling observer unexpectedly used the process leader")
+		return
+	}
+	originalFD, err := os.Open("/proc/thread-self/ns/net")
+	if err != nil {
+		observed.Err = fmt.Errorf("open original thread namespace: %w", err)
+		return
+	}
+	defer originalFD.Close()
+	observed.ProcessNS, err = os.Readlink("/proc/self/ns/net")
+	if err != nil {
+		observed.Err = fmt.Errorf("read process namespace: %w", err)
+		return
+	}
+	if err := unix.Unshare(unix.CLONE_NEWNET); err != nil {
+		observed.Err = fmt.Errorf("enter disposable sibling network namespace: %w", err)
+		return
+	}
+	defer func() {
+		if err := unix.Setns(int(originalFD.Fd()), unix.CLONE_NEWNET); err != nil {
+			observed.Err = fmt.Errorf("restore original test-thread namespace: %w", err)
+		}
+	}()
+	observed.ThreadNS, err = currentNetworkNamespace()
+	if err != nil {
+		observed.Err = err
+		return
+	}
+	observed.Observation, observed.Err = inspectPendingOriginal(ctx, engine, id,
+		appIsolatedNFTGuardRunner{},
+		func() (string, error) { return testBootID, nil }, currentNetworkNamespace)
+	return
 }
 
 type isolatedVacancyProbe struct{}
@@ -178,12 +257,41 @@ func TestQUICOriginalGuardEngineMaterialAndRealNFTInDisposableNetNS(t *testing.T
 			if err := stageOriginal(ctx, engine, local.LinkID, appIsolatedNFTGuardRunner{}, runOriginalNFTCreate); err != nil {
 				t.Fatalf("Engine-bound real isolated guarded creation failed: %v", err)
 			}
+			guard, err := linux.NewQUICWGIngressPlan(local.LinkID, local.LocalWGUDPPort, prepared.Nonce)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Safe test-owned, namespace-private deletion only. Never a
+			// production recovery pattern or ownership proof after restart.
+			t.Cleanup(func() {
+				if e := exec.Command("nft", "delete", "table", "inet", guard.TableName()).Run(); e != nil {
+					t.Errorf("disposable original nft cleanup: %v", e)
+				}
+			})
 			observed, err := inspectPendingOriginal(ctx, engine, local.LinkID, appIsolatedNFTGuardRunner{}, readBoot, readNS)
 			if err != nil || observed.Status != GuardMatchingShapeUnowned ||
 				observed.KernelBootID != testBootID || observed.NetworkNS == "" ||
 				observed.LinkID != local.LinkID || observed.ListenPort != local.LocalWGUDPPort ||
 				observed.Handles.Table == 0 || observed.Handles.Chain == 0 || observed.Handles.Rule == 0 {
 				t.Fatalf("post-create readonly nft handles not recovered from original journal: %+v err=%v", observed, err)
+			}
+			// The SAME process now observes a separate network namespace on
+			// another locked OS thread. The old /proc/self label incorrectly
+			// described the first namespace, even when nft read the second.
+			sibling := inspectOriginalInSiblingThreadNS(ctx, engine, local.LinkID)
+			if sibling.Err != nil || sibling.ProcessNS != observed.NetworkNS ||
+				sibling.ThreadNS == sibling.ProcessNS ||
+				sibling.Observation.NetworkNS != sibling.ThreadNS ||
+				sibling.Observation.Status != GuardNotVisible ||
+				sibling.Observation.Handles != (linux.WGIngressLiveHandles{}) {
+				t.Fatalf("thread-scoped nft observation mislabeled sibling namespace: %+v", sibling)
+			}
+			// The original namespace and guard were left intact by the
+			// sibling read; neither result grants owner/recovery authority.
+			recheck, recheckErr := inspectPendingOriginal(ctx, engine, local.LinkID,
+				appIsolatedNFTGuardRunner{}, readBoot, readNS)
+			if recheckErr != nil || recheck != observed {
+				t.Fatalf("original namespace was altered by sibling read: %+v %v", recheck, recheckErr)
 			}
 			// A repeat read can see the same exact bytes and kernel handles,
 			// but still does not establish durable original ownership.
@@ -229,17 +337,6 @@ func TestQUICOriginalGuardEngineMaterialAndRealNFTInDisposableNetNS(t *testing.T
 				})
 			}
 
-			guard, err := linux.NewQUICWGIngressPlan(local.LinkID, local.LocalWGUDPPort, prepared.Nonce)
-			if err != nil {
-				t.Fatal(err)
-			}
-			// Safe test-owned, namespace-private deletion only. Never a
-			// production recovery pattern or ownership proof after restart.
-			t.Cleanup(func() {
-				if e := exec.Command("nft", "delete", "table", "inet", guard.TableName()).Run(); e != nil {
-					t.Errorf("disposable original nft cleanup: %v", e)
-				}
-			})
 			present, err := linux.InspectWGIngressGuard(ctx, appIsolatedNFTGuardRunner{}, guard)
 			if err != nil || !present {
 				t.Fatalf("real nft original readback failed: %v", err)

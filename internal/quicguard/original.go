@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -54,6 +55,15 @@ func publishOriginal(ctx context.Context, runner linux.BoundedRunner,
 	if ctx == nil || runner == nil || apply == nil || wg.Validate() != nil || wg.PeerPort == 0 {
 		return fmt.Errorf("original QUIC ingress requires valid Engine-owned WG identity and host inputs")
 	}
+	// All preflight readers, the exclusive CREATE and strict readback must
+	// execute in one network namespace. In Go, network namespaces are
+	// OS-thread-scoped; a process-level /proc/self label is insufficient.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	originalNS, err := currentNetworkNamespace()
+	if err != nil {
+		return fmt.Errorf("original QUIC ingress network namespace unverified")
+	}
 	plan, err := linux.NewQUICWGIngressPlan(id, wg.ListenPort, nonce)
 	if err != nil {
 		return fmt.Errorf("invalid journal-bound QUIC ingress identity")
@@ -93,14 +103,25 @@ func publishOriginal(ctx context.Context, runner linux.BoundedRunner,
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if now, nsErr := currentNetworkNamespace(); nsErr != nil || now != originalNS {
+		return fmt.Errorf("original QUIC ingress namespace changed before host effect")
+	}
 
 	// `create table` rejects a concurrent same-name table atomically. A
 	// failure AFTER dispatch is uncertain and never triggers unsafe cleanup.
 	if err := apply(ctx, batch); err != nil {
 		return errEffectUncertain
 	}
+	// Once dispatched, even an unexpected namespace drift is an uncertain
+	// effect, never evidence that the original guard is absent or removable.
+	if now, nsErr := currentNetworkNamespace(); nsErr != nil || now != originalNS {
+		return errEffectUncertain
+	}
 	present, err := linux.InspectWGIngressGuard(ctx, runner, plan)
 	if err != nil || !present {
+		return errEffectUncertain
+	}
+	if now, nsErr := currentNetworkNamespace(); nsErr != nil || now != originalNS {
 		return errEffectUncertain
 	}
 	return nil

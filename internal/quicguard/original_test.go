@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
+	"golang.org/x/sys/unix"
 )
 
 const fixtureID = domain.LinkID("lnk_0123456789abcdef0123456789abcdef")
@@ -124,6 +126,46 @@ func guardFixture(t *testing.T) (*guardTestRunner, domain.WireGuardOptions) {
 		t.Fatalf("nft snapshot test fixture is foreign: %v", err)
 	}
 	return &guardTestRunner{table: table, exact: exact, nftRules: []byte(emptyRuleset)}, wg
+}
+
+// threadWitnessReader verifies that every host preflight/readback query
+// executes on the same OS thread that dispatches the original nft CREATE.
+type threadWitnessReader struct {
+	*guardTestRunner
+	originTID int
+	migrated  bool
+}
+
+func (r *threadWitnessReader) RunBounded(ctx context.Context, lim linux.CaptureLimits, name string, args ...string) (linux.CommandResult, error) {
+	current := unix.Gettid()
+	if r.originTID == 0 {
+		r.originTID = current
+	} else if current != r.originTID {
+		r.migrated = true
+	}
+	return r.guardTestRunner.RunBounded(ctx, lim, name, args...)
+}
+
+func TestOriginalGuardPinsPreflightCreateAndReadbackToOneOSThread(t *testing.T) {
+	fixture, wg := guardFixture(t)
+	runner := &threadWitnessReader{guardTestRunner: fixture}
+	applied := 0
+	err := publishOriginal(context.Background(), runner, fixtureID, fixtureNonce, wg,
+		func(context.Context, string) error {
+			applied++
+			if runner.originTID == 0 || unix.Gettid() != runner.originTID {
+				t.Fatal("nft CREATE migrated away from preflight network namespace thread")
+			}
+			// Under goroutine rescheduling, the publisher must remain bound
+			// to the same OS thread until strict post-effect readback.
+			runtime.Gosched()
+			fixture.present = true
+			return nil
+		})
+	if err != nil || applied != 1 || runner.migrated {
+		t.Fatalf("original QUIC ingress OS-thread affinity lost: %v dispatches=%d migrated=%t",
+			err, applied, runner.migrated)
+	}
 }
 
 func TestOriginalGuardStrictCreateAndOneTimeReadback(t *testing.T) {
