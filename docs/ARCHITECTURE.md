@@ -927,6 +927,47 @@ the existing restore/Engine locking must be reused rather than duplicated.
 Changing a Dial TLS peer name cannot be inferred from its leaf certificate
 alone: the exact journal Plan and rendered helper config remain binding.
 
+A separate, **not yet wired to CLI, RestoreAll or a public Link backend**
+QUIC ingress origin step now provides the first host-effect implementation:
+`quicguard.StageOriginal(ctx, engine, linkID)` is the sole exported
+production nft CREATE entrypoint, with no caller-selectable publisher,
+Runner, plan, nonce or create-result witness. It calls
+`Engine.WithQUICCrashIngressAdmission` synchronously to reuse the durable,
+immutable QUIC journal and canonical maintenance/Link/resource locks. The
+Engine callback is an *admission scope*, not independent proof of host
+creation: success as an actual ingress creation witness requires the fixed
+host command and complete strict readback inside the Stage entrypoint. It first
+re-attests the original protected five-file credential/config generation
+receipt and the exact SHA-256/inode-pinned Hysteria binary; the private
+quicguard writer reconstructs the nonce/port-bound nft plan from Engine-
+attested State; Linux read-only inspection reuses the
+shared WSS/QUIC bounded nft table inventory and full five-query firewall
+coexistence preflight, checks complete *current-host* WireGuard public-key,
+listen-port and guard-namespace UDP listener/socket vacancy via the existing
+WSS WG inspector plus an all-state (`ss -a`) UDP census for connected sockets,
+then performs an exclusive `create table` nft transaction followed by strict
+full-table readback. A missing/ambiguous/occupied live inventory fails
+closed **before dispatch**; the previous journal's vacancy snapshot cannot
+be reused as a present-time creation permit. As with all snapshot-based
+admission, a foreign process can race a readback after it completes;
+final runnable activation must still use its own dependency-aware original
+resource ownership and post-effect checks. A **pre-existing table,
+even with identical bytes/marker**, is never adopted as this attempt's
+original. An unsuccessful or ambiguous dispatched nft operation is not
+rolled back: the same QUIC journal and possible guard remain quarantined
+without any inferred deletion rights. This is a **single-call creation
+witness**, not a durable table-handle ownership receipt or permission to
+retire the guard later. The current first-generation preflight deliberately
+rejects other early WSS/QUIC hooks until their independently verified
+original owner State + host evidence can be passed to the already shared
+sibling coexistence machinery; do not work around this by disabling WSS.
+
+This bounded source step has no CLI or runtime caller and is **not** a running
+QUIC Link. Future implementation must add durable original nft generation
+ownership, exact kernel WG/UDP and process/systemd witness, separate
+activation-time executable/credential re-attestation, and dependency-aware
+safe rollback/reboot/retirement before enabling a committed private L3 Link.
+
 The adapter's opt-in disposable loopback compatibility test uses the
 pinned, hash-checked official Hysteria binary with **Go-issued per-Link
 TLS/mTLS credentials and bearer**, not manually authored helper JSON or

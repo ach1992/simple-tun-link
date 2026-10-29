@@ -31,7 +31,7 @@ func WSSGlobalWGKernelVacant(ctx context.Context, runner BoundedRunner, wgBinary
 		}
 		out, err := runner.RunBounded(ctx,
 			CaptureLimits{Stdout: 1 << 20, Stderr: 64 << 10}, wgBinary, args...)
-		if err != nil || ctx.Err() != nil || len(out.Stdout) > 1<<20 || len(out.Stderr) > 64<<10 {
+		if err != nil || ctx.Err() != nil || len(out.Stdout) > 1<<20 || len(out.Stderr) != 0 {
 			return nil, fmt.Errorf("global WG inventory incomplete or canceled")
 		}
 		return out.Stdout, nil
@@ -139,4 +139,24 @@ func validWSSWGPublicKey(key string) bool {
 		}
 	}
 	return false
+}
+
+// QUICWGAllStateUDPPortVacant is read-only. A prior journal-time vacancy
+// cannot attest a socket at the actual effect boundary. Connected UDP
+// sockets must be included, not just listeners from ss -l. Any diagnostic,
+// malformed row or canceled inventory is UNKNOWN, never empty.
+func QUICWGAllStateUDPPortVacant(ctx context.Context, runner BoundedRunner, port uint16) (bool, error) {
+	if ctx == nil || runner == nil || port == 0 || ctx.Err() != nil {
+		return false, fmt.Errorf("current QUIC UDP socket inventory requires valid inputs")
+	}
+	out, err := runner.RunBounded(ctx, CaptureLimits{Stdout: 1 << 20, Stderr: 64 << 10}, "ss", "-H", "-u", "-a", "-n")
+	if err != nil || ctx.Err() != nil || len(out.Stdout) > 1<<20 || len(out.Stderr) != 0 {
+		return false, fmt.Errorf("current QUIC UDP socket inventory incomplete or unavailable")
+	}
+	ports, err := parseUDPListeners(string(out.Stdout))
+	if err != nil {
+		return false, fmt.Errorf("current QUIC UDP socket inventory malformed")
+	}
+	_, occupied := ports[port]
+	return !occupied, nil
 }
