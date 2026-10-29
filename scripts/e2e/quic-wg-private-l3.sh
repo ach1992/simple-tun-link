@@ -81,18 +81,11 @@ app_server=''
 cleanup_child() {
   local code=$?
   trap - EXIT TERM
-  # Only direct children of this verified PID-1 lab controller. Since their
-  # PIDs are not reaped until the wait loop, numeric PID reuse is impossible.
-  for pid in "$client" "$server" "$app_server" "$sibling"; do
-    if [[ -n "$pid" ]]; then kill -TERM "$pid" 2>/dev/null || true; fi
-  done
-  sleep 0.2
-  for pid in "$client" "$server" "$app_server" "$sibling"; do
-    if [[ -n "$pid" ]]; then
-      kill -KILL "$pid" 2>/dev/null || true
-      wait "$pid" 2>/dev/null || true
-    fi
-  done
+  # This shell has already proved it is PID 1 in the dedicated disposable
+  # PID namespace. Its exit is the authoritative kernel teardown of every
+  # helper, echo and sibling worker, even after an uncatchable SIGKILL.
+  # Do not signal numeric child PIDs after they might have been reaped.
+  # The exact-pidfd outer supervisor bounds the PID-1 termination path.
   exit "$code"
 }
 trap cleanup_child EXIT
