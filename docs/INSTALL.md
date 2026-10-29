@@ -200,10 +200,10 @@ delete leftover protected temporary material.
 was the first release with the self-contained `*_local-install.sh` format.**
 Use the [latest published Stable](https://github.com/ach1992/simple-tun-link/releases/latest)
 for a new installation. As a concrete example, the approved immutable
-**v0.1.12** publishes the exact download files below.
+**v0.1.13** publishes the exact download files below.
 When a new release becomes Latest, select that new release's **actual tag**,
 matching architecture and source-verified file instead of blindly reusing
-v0.1.12.
+v0.1.13.
 Open the official release on an Internet-connected device and verify its tag,
 publisher and exact published asset before privileged use. The matching file
 already embeds all required STL core files; no extra STL binary, installer,
@@ -214,8 +214,8 @@ through a separately verified, explicit
 
 | Server CPU | Exactly ONE file to download | Exact official release asset |
 | --- | --- | --- |
-| `x86_64` | `stl_v0.1.12_linux_amd64_local-install.sh` | [Official v0.1.12 AMD64 file](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.12/stl_v0.1.12_linux_amd64_local-install.sh) |
-| `aarch64` | `stl_v0.1.12_linux_arm64_local-install.sh` | [Official v0.1.12 ARM64 file](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.12/stl_v0.1.12_linux_arm64_local-install.sh) |
+| `x86_64` | `stl_v0.1.13_linux_amd64_local-install.sh` | [Official v0.1.13 AMD64 file](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.13/stl_v0.1.13_linux_amd64_local-install.sh) |
+| `aarch64` | `stl_v0.1.13_linux_arm64_local-install.sh` | [Official v0.1.13 ARM64 file](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.13/stl_v0.1.13_linux_arm64_local-install.sh) |
 
 Transfer the selected single file
 **without renaming, extracting or making it executable** into `/root/stl/`.
@@ -634,15 +634,15 @@ releases and unsafe downlevel State remain blocked, not silently installed.
 **Bridge from an already-installed v0.1.12 (and older Stable):** the published
 v0.1.12 binary lacks the new `maintenance stage-downgrade` command. It
 cannot perform a direct v0.1.12-to-v0.1.9 downgrade, even when the newer
-installer source is separately downloaded. After a **successor Stable that
-includes these changes is independently reviewed and officially published**,
-first invoke the unchanged permanent Latest Stable **update** command above
-to install that successor. Then open `sudo stl menu`, select the exact older
-immutable Stable and confirm its controlled `DOWNGRADE` after STL validates
-State compatibility. This is an explicit two-step managed transition, not a
-claim that v0.1.12 already provides the new action. Until that publication,
-the bridge is unavailable. Never skip State/Link checks or replace a binary
-manually to simulate this migration.
+installer source is separately downloaded. Official **v0.1.13** contains the
+reviewed guarded release-selection workflow: first invoke the unchanged
+permanent Latest Stable **update** command above to upgrade the installed
+Engine. Then open `sudo stl menu`, select the exact older immutable Stable
+and confirm `DOWNGRADE` only after STL validates zero Links, State schema,
+pending journal, restore-unit and resource compatibility. This is an explicit
+two-step managed transition, not a claim that v0.1.12 already provides the
+action. Never skip State/Link checks or replace a binary manually to simulate
+this migration.
 The menu delegates to the same canonical installer and rollback machinery;
 it does not implement a second installation engine. No menu selection is an implicit
 privileged mutable-tag download or a waiver of State backups.

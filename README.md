@@ -15,7 +15,7 @@ run `sudo stl menu`, create a tunnel on the first server, privately share its
 Setup Link, import it on the second, then choose **Test connectivity** on both.
 STL does not claim that a Link works merely because it was saved.
 Version equality is recommended but **not intrinsically required for GRE**: the
-v0.1.9 and v0.1.12 GRE Setup Link codec is compatible. Host routing,
+v0.1.9 and v0.1.13 GRE Setup Link codec is compatible. Host routing,
 firewall ownership and kernel capabilities must still pass on both endpoints.
 
 ## Tunnel options
@@ -108,7 +108,7 @@ silently erase Links or protected State. See [Issue #176](https://github.com/ach
 ### Local installation without GitHub access on the server
 
 Official Stable releases from **v0.1.9 onward** support one self-contained
-core installer. The current example, **v0.1.12**, uses the files below.
+core installer. The current example, **v0.1.13**, uses the files below.
 For later releases, always select the corresponding tag and architecture from
 [official Latest Stable](https://github.com/ach1992/simple-tun-link/releases/latest).
 WSS is optional and needs **one separate verified companion archive**.
@@ -118,8 +118,8 @@ and all STL-owned core metadata; no second STL file is needed on the server:
 
 | Destination CPU (`uname -m`) | Download from the exact official release |
 | --- | --- |
-| `x86_64` | [`stl_v0.1.12_linux_amd64_local-install.sh`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.12/stl_v0.1.12_linux_amd64_local-install.sh) |
-| `aarch64` | [`stl_v0.1.12_linux_arm64_local-install.sh`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.12/stl_v0.1.12_linux_arm64_local-install.sh) |
+| `x86_64` | [`stl_v0.1.13_linux_amd64_local-install.sh`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.13/stl_v0.1.13_linux_amd64_local-install.sh) |
+| `aarch64` | [`stl_v0.1.13_linux_arm64_local-install.sh`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.13/stl_v0.1.13_linux_arm64_local-install.sh) |
 
 Upload the single file **as-is** into `/root/stl/` on the server (e.g. through
 SFTP); the folder must be root-owned mode `0700` and the file root-owned
@@ -304,11 +304,11 @@ bash -c 'set -e; d=$(mktemp -d); cleanup(){ rm -rf -- "$d"; }; trap cleanup EXIT
 Installer binary rollback is **not** State rollback. Stable v0.1.10+
 uses State **v4** for WSS-capable management; an older pre-v4 binary cannot
 be assumed safe even on a host that has only Native Links. In particular,
-the already-published v0.1.12 does not know the new controlled `DOWNGRADE`
-operation. Once a successor Stable containing this feature has been reviewed
-and published, first use the permanent Latest Stable `update` command to
-upgrade the installed Engine; only then use its menu to request an older
-published immutable Stable, subject to zero-Link and State ownership gates.
+installed v0.1.12 and earlier binaries do not know the guarded `DOWNGRADE`
+operation. First use the permanent Latest Stable `update` command to install
+official v0.1.13 (or a newer verified Stable); only then request an older
+published immutable Stable through the installed menu, subject to zero-Link
+and State/resource ownership gates.
 The new Uninstall menu also handles a verified owned orphan restore unit
 after `UNINSTALL` consent, retaining committed State, credentials, optional
 companions and packages. Preserve a
