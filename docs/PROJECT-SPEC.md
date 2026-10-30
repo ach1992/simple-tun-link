@@ -58,16 +58,21 @@ removal must not disrupt unrelated Links.
 setup-creator identity.** For a backend with asymmetric Dial/Listen roles,
 either eligible endpoint may be selected as the public initiator for each Link;
 the other endpoint receives the complementary role during pairing. The
-operator must have an explicit role choice wherever that backend supports one.
-Symmetric native tunnels need no artificial Dial/Listen role; their backend's
-actual initiation semantics must be explained rather than forced into a
-universal client/server model. Private application traffic starting from both
-ends is separate from the direction of public connection establishment.
+guided path should not require a direction choice: it may supply a provisional
+per-Link suggestion that is independent of which server created the offer, with
+an accessible optional manual override. Symmetric native tunnels need no
+artificial Dial/Listen role; their backend's actual initiation semantics must
+be explained rather than forced into a universal client/server model. Private
+application traffic starting from both ends is separate from the direction
+of public connection establishment.
 
-Automatic role suggestions or selection may be added when bounded peer and
-network evidence justifies them, but must not silently override an explicit
-choice, infer direction from server location or imply that a selected direction
-is reachable. A Link with no demonstrated reachable direction must report
+Address scope and deterministic endpoint ordering may provide an **unverified**
+provisional suggestion before pairing. They cannot prove a publicly reachable
+listener, and must not be mistaken for authenticated network discovery.
+Automatic reachability-based selection or runtime failover requires both peers'
+cooperation, bounded authenticated evidence and an explicit transition plan;
+it must not silently override a manual choice, infer geography or change a
+committed Link. A Link with no demonstrated reachable direction must report
 that limitation rather than claim success.
 
 A successfully committed working Link must survive ordinary service restart

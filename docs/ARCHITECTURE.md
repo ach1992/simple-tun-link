@@ -104,12 +104,21 @@ initiate from either end once the Link is usable.
   keepalive/roaming behavior instead of a universal fixed initiator.
   IPsec/IKEv2 uses explicit peer-local initiation (the committed Link can
   be connected from either configured endpoint), not a geographical role.
-- Role choice is a **per-Link** supported transport capability. An operator's
-  manual choice takes precedence. Any future `auto` mode needs bounded,
-  safe reachability evidence for both candidates, an explicit selected plan
-  and peer coordination, and truthful failure when no route is proven.
-  Source address, DNS response, local socket readiness or private application
-  direction alone cannot prove peer-authenticated public establishment.
+- Role choice is a **per-Link** supported transport capability. In the
+  human-guided path the default is a **provisional orientation suggestion**
+  derived symmetrically from known endpoint address scope and deterministic
+  canonical IPv4 ordering if both endpoints have the same scope. The creator
+  never has to choose a direction to continue; selecting 1 (Listen) or 2
+  (Dial) at the same prompt overrides the suggestion and takes precedence. The
+  resolved `dial`/`listen` roles enter the existing creator/recipient offer,
+  not a new persisted `auto` role. The default is **not** a peer test,
+  guaranteed listener accessibility or automatic failover. Source address,
+  DNS response, local socket readiness or private application direction alone
+  cannot prove peer-authenticated public establishment.
+- Future *reachability-based* automatic direction changes need a separately
+  versioned, bounded, peer-coordinated authenticated probe and safe
+  rollback/ownership. Neither a proposed default nor a manual override
+  permits success reporting without observed authenticated private traffic.
 - A role change on a committed Link is a topology/lifecycle operation, not
   permission to mutate it silently or reuse foreign listener resources.
   Observe actual ownership, credentials and peer agreement under canonical

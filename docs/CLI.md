@@ -11,16 +11,19 @@ For Setup Link versions, inversion and payload security use
 
 ## Interactive operation
 
-**Choose the public connection initiator per Link, not per country.** For
-WSS and QUIC/Salamander, the Create menu asks whether **THIS** server
-will `Dial` the peer's physical TCP/UDP listener or `Listen` for the peer.
-The server that creates the private Setup Link may take either role; the
-imported peer gets the complementary role. This is independent of which
-private application starts sending first. Do not assume that being a
-sender/creator means being a dialer or that either public orientation is
-reachable without a peer-authenticated test. The current CLI offers an
-explicit manual choice; it does **not** automatically select, probe both
-public roles or switch a committed Link between roles.
+**Direction is optional in ordinary guided creation.** For WSS and
+QUIC/Salamander, Enter accepts STL's **provisional public Dial/Listen
+suggestion**; typing `1` (Listen) or `2` (Dial) at that same prompt
+overrides it, so either server may be the public initiator. The suggestion
+uses endpoint address scope, with canonical IPv4 ordering when both
+addresses have the same scope. It is **not** a peer-authenticated reachability probe, cannot
+detect firewall/NAT asymmetry, and does not silently fall back to the other
+direction. Review shows the concrete orientation before fresh `YES` and
+peer handoff. The Setup Link creator may be `Dial` or `Listen`; its imported
+peer gets the complementary role. Private application traffic may start
+from either end once the Link is usable. Noninteractive versioned request
+schemas continue to accept concrete explicit roles: there is no new JSON
+`auto` mode or runtime role-switching contract.
 
 GRE/IPIP Native/FOU/GUE use reciprocal physical endpoint configuration,
 not Dial/Listen. Native WireGuard uses peer endpoints and keepalive;
@@ -439,10 +442,11 @@ before retry see [OPERATOR-RECOVERY.md](OPERATOR-RECOVERY.md).
 The managed WSS carrier first shipped in official Stable v0.1.10;
 source changes after a release are not available in that prior binary.
 Start the **guided** path using STL menu:
-Create tunnel → WireGuard / WSS + TLS. Choose the listener or dialer,
-route-derived local/public addresses, private Link IPv4 /30 or /31 pair,
-WireGuard UDP listen/peer ports, WSS TCP port, private forwarding UDP port and
-TLS server identity. The menu checks the optional pinned helper, shows an
+Create tunnel → WireGuard / WSS + TLS. Enter the peer public address and
+private Link IPv4 /30 or /31 pair, then accept the provisional public
+direction with Enter or select `1` Listen / `2` Dial in the same prompt.
+The next prompts collect WireGuard UDP listen/peer ports, WSS TCP port,
+private forwarding UDP port and TLS server identity. The menu checks the optional pinned helper, shows an
 effect summary, and requires fresh YES before host mutation. On the receiver,
 Import setup link → WireGuard / WSS + TLS uses hidden paste, receiver-facing
 preview and a separate YES. Existing Native/FOU/GUE/IPsec menus are unchanged.
@@ -872,10 +876,11 @@ verified host capabilities and a reachable physical UDP listener.
 
 ### Guided setup and the three address/port roles
 
-Choose **Create tunnel → WireGuard / QUIC + TLS**. Select which server
-listens on the physical UDP endpoint, the two private Link Addresses, each
-endpoint's kernel WireGuard UDP port, and the Dial endpoint's private
-loopback forwarding port. Choose **Plain** (the unchanged default) or
+Choose **Create tunnel → WireGuard / QUIC + TLS**. First enter the peer
+underlay address and two private Link Addresses. Then Enter accepts the
+provisional physical direction suggestion, while `1` Listen / `2` Dial
+overrides it in the same step. Next enter the kernel WireGuard UDP ports
+and the Dial endpoint's private loopback forwarding port. Choose **Plain** (the unchanged default) or
 **Salamander** for the QUIC packet representation. Salamander uses a fresh
 per-Link secret generated and transferred through the protected peer offer;
 the menu never asks for a password or exposes it in public output. Both peers

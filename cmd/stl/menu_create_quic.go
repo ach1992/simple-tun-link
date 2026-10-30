@@ -58,20 +58,9 @@ func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, er
 	if err != nil {
 		return p.failed(err)
 	}
-	menuSection(out, "QUIC roles / which side accepts public TLS?")
-	menuProse(out, "Either server can create this Link. Choose the public listener based on reachability, not location; the other server will dial.")
-	menuOption(out, "1", "Listen QUIC", "THIS server accepts the selected UDP port")
-	menuOption(out, "2", "Dial QUIC", "OTHER server accepts the UDP port")
-	choice, err := p.ask("Choose [1]: ")
+	role, roleSource, err := askCarrierRole(p, "QUIC", route.Source, peer)
 	if err != nil {
 		return p.failed(err)
-	}
-	role := "listen"
-	if choice == "2" {
-		role = "dial"
-	} else if choice != "" && choice != "1" {
-		menuNotice(out, "WARNING", "Choose 1 or 2.")
-		return 2
 	}
 	obfuscation, err := askQUICObfuscation(p)
 	if err != nil {
@@ -137,7 +126,9 @@ func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, er
 	menuScreen(out, "Review / confirm WireGuard over QUIC")
 	menuField(out, "Backend", "WireGuard / QUIC + TLS")
 	menuField(out, "This server", route.Source.String()+" ("+role+")")
+	menuField(out, "Direction choice", roleSource)
 	menuField(out, "Other server", peer.String())
+	menuNotice(out, "INFO", "Public reachability is unverified until the peer is paired and private traffic succeeds.")
 	menuField(out, "TLS UDP port", strconv.Itoa(int(udp)))
 	menuField(out, "QUIC obfuscation", publicQUICObfuscation(obfuscation))
 	menuField(out, "Kernel WG UDP", fmt.Sprintf("this %d / peer %d", localWG, peerWG))
