@@ -3,6 +3,7 @@ package quicwgorigin
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -67,14 +68,15 @@ func originalGuard() quicguard.OriginalGuardObservation {
 }
 
 type mockKernel struct {
-	created   bool
-	alias     string
-	index     int
-	name      string
-	events    []string
-	occupied  bool
-	noWG      bool
-	badListen bool
+	created       bool
+	alias         string
+	index         int
+	name          string
+	events        []string
+	occupied      bool
+	noWG          bool
+	badListen     bool
+	badGlobalPort bool
 }
 
 func (f *mockKernel) Run(ctx context.Context, name string, args ...string) (linux.CommandResult, error) {
@@ -91,8 +93,22 @@ func (f *mockKernel) RunBounded(ctx context.Context, lim linux.CaptureLimits,
 		if f.noWG {
 			return linux.CommandResult{}, errors.New("missing wg executable")
 		}
+		if f.badGlobalPort {
+			return linux.CommandResult{Stdout: []byte("foreign0\n")}, nil
+		}
 		return linux.CommandResult{}, nil
 	case name == "wg" && len(args) == 3 && args[0] == "show" && args[1] == "all":
+		if f.badGlobalPort {
+			switch args[2] {
+			case "public-key":
+				// Valid, distinct nonzero WireGuard public key, so only
+				// the malformed listen-port row must block admission.
+				other := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x5a}, 32))
+				return linux.CommandResult{Stdout: []byte("foreign0 " + other + "\n")}, nil
+			case "listen-port":
+				return linux.CommandResult{Stdout: []byte("foreign0 off\n")}, nil
+			}
+		}
 		return linux.CommandResult{}, nil
 	case name == "wg" && len(args) == 3 && args[0] == "show" && args[1] == f.name:
 		switch args[2] {
@@ -218,6 +234,7 @@ func TestOriginalKernelWGPreEffectFailClosed(t *testing.T) {
 		}},
 		{"foreign-staging", func(_ string, f *mockKernel, _ *kernelOps) { f.occupied = true }},
 		{"unavailable-wg-inventory", func(_ string, f *mockKernel, _ *kernelOps) { f.noWG = true }},
+		{"noncanonical-global-listen-port", func(_ string, f *mockKernel, _ *kernelOps) { f.badGlobalPort = true }},
 		{"canceled-context", func(_ string, _ *mockKernel, _ *kernelOps) {}},
 	}
 	for _, tc := range cases {

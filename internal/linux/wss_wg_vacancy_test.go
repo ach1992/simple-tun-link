@@ -66,6 +66,17 @@ func TestWSSGuardVacancyGlobalAgreementAndFailClosed(t *testing.T) {
 		{"matching_udp", func(m map[string]string) {
 			m["wg show all listen-port"] = "foreign0 51871"
 		}, true, false},
+		// wireguard-tools prints a numeric zero for an unconfigured
+		// listen-port; "off" belongs to the separate fwmark field.
+		{"unconfigured_numeric_zero", func(m map[string]string) {
+			m["wg show all listen-port"] = "foreign0 0\n"
+		}, false, false},
+		{"noncanonical_off_listen_port", func(m map[string]string) {
+			m["wg show all listen-port"] = "foreign0 off\n"
+		}, true, true},
+		{"noncanonical_leading_zero_listen_port", func(m map[string]string) {
+			m["wg show all listen-port"] = "foreign0 00\n"
+		}, true, true},
 		// A wireguard interface created in this (guard) namespace may
 		// disappear from wg show when moved to another namespace, while
 		// its live UDP socket stays here. Namespace-local wg inventories
