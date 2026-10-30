@@ -2,10 +2,11 @@
 """Exact-process lifetime boundary for the opt-in, disposable managed QUIC CLI/kernel lab.
 
 This is not a general launcher or an STL runtime service. The original
-unprivileged janitor creates and owns the private fixture before any
+janitor creates and owns the private fixture before any
 sensitive staging; an anonymous socket witnesses controller death. A pidfd binds cleanup to the
 exact unshare child, never to a recycled numeric PID. The child itself is
 PID 1 in a disposable PID namespace, so killing it destroys all descendants.
+Root launch is admitted only for the same-repository GitHub-hosted PR fixture.
 """
 import array
 import ctypes
@@ -33,6 +34,127 @@ MAX_TERMINATION_MS = 8000
 
 def reject(message):
     raise RuntimeError(message)
+
+
+def github_hosted_root_gate(check_event=False, repo=None):
+    required = {
+        "STL_RUN_PRIVILEGED_E2E": "1",
+        "STL_QUIC_MANAGED_ROOT_LAUNCH": "github-hosted-pr",
+        "GITHUB_ACTIONS": "true",
+        "RUNNER_ENVIRONMENT": "github-hosted",
+        "GITHUB_REPOSITORY": "ach1992/simple-tun-link",
+        "GITHUB_EVENT_NAME": "pull_request",
+    }
+    if any(os.environ.get(key) != expected for key, expected in required.items()) or any(
+            not re.fullmatch(r"[1-9][0-9]*", os.environ.get(key, ""))
+            for key in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT")):
+        reject("root launch requires the actual opted-in GitHub-hosted repository PR job")
+    if not check_event:
+        return
+    workspace = os.environ.get("GITHUB_WORKSPACE", "")
+    event_path = os.environ.get("GITHUB_EVENT_PATH", "")
+    if not os.path.isabs(workspace) or os.path.realpath(workspace) != os.path.realpath(repo) or not os.path.isabs(event_path):
+        reject("root fixture source or GitHub event provenance differs")
+    descriptor = os.open(event_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    with os.fdopen(descriptor, "rb") as source:
+        metadata = os.fstat(source.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= 8 << 20:
+            reject("bounded GitHub PR event is unavailable")
+        event = json.loads(source.read((8 << 20) + 1))
+    if not isinstance(event, dict):
+        reject("actual GitHub PR event is unavailable")
+    pull = event.get("pull_request", {})
+    expected = required["GITHUB_REPOSITORY"]
+    try:
+        repositories = (event["repository"]["full_name"], pull["head"]["repo"]["full_name"], pull["base"]["repo"]["full_name"])
+    except (KeyError, TypeError):
+        reject("same-repository PR provenance unavailable")
+    if any(repository != expected for repository in repositories):
+        reject("root fixture requires a same-repository PR")
+
+
+def fixture_witness(name, maximum=512):
+    descriptor = os.open("/lab/" + name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    with os.fdopen(descriptor, "rb") as source:
+        entry = os.fstat(source.fileno())
+        if (not stat.S_ISREG(entry.st_mode) or entry.st_uid != 0 or stat.S_IMODE(entry.st_mode) != 0o600
+                or entry.st_nlink != 1 or not 0 < entry.st_size <= maximum):
+            reject("private namespace witness metadata differs")
+        raw = source.read(maximum + 1)
+    if len(raw) != entry.st_size:
+        reject("private namespace witness changed")
+    return raw.decode("ascii")
+
+
+def safe_cli_failure(raw):
+    """Project fixed public/fixture enums only, never private command output."""
+    reasons = {
+        "none", "other_redacted", "deadline", "cancelled", "permission", "missing",
+        "nft_inventory_unavailable", "nft_inventory_ambiguous", "nft_inventory_shape",
+        "nft_inventory_metadata", "nft_inventory_members", "nft_inventory_handle",
+        "nft_table_unavailable", "nft_table_shape", "nft_table_identity",
+        "helper_parent_trust", "helper_open", "helper_metadata", "helper_digest",
+        "helper_readback", "manager_rpc", "underlay_source", "guard_scope", "guard_journal",
+        "material_receipt_missing", "material_receipt_rejected",
+        "nft_stderr", "legacy_stderr", "iptables_version_stderr", "iptables_backend",
+        "nft_foreign_early_hook", "nft_ruleset_schema", "nft_chain_policy",
+        "guard_observation_changed", "legacy_readback_failed", "legacy_policy_unverified",
+    }
+    public_fields = {
+        "code": {"invalid", "unsupported", "conflict", "inspect_failed", "plan_failed", "validation_failed",
+                 "apply_failed", "verify_failed", "state_failed", "rollback_failed", "internal"},
+        "reason_code": {"rejected_before_host_apply", "credential_provision_outcome_unverified", "kernel_module_not_loaded",
+                        "state_publication_uncertain", "post_commit_cleanup_incomplete", "rollback_incomplete",
+                        "rollback_completed_unverified", "operation_deadline_exceeded_before_apply",
+                        "operation_cancelled_before_apply", "apply_outcome_unverified", "state_unverified"},
+        "stage": {"preflight", "inspect", "plan", "validate", "apply", "verify", "persistence", "commit",
+                  "persistence_cleanup", "credential_provision", "credential_retirement"},
+        "host_mutation": {"not_attempted", "attempted"},
+        "desired_state": {"no_commit_attempted", "prior_preserved", "visible_unconfirmed", "committed"},
+        "rollback": {"not_required", "not_attempted", "completed_unverified", "incomplete"},
+        "credential_provision": {"not_attempted", "attempted"},
+    }
+    fixture_fields = {
+        "stage": {"not_reached", "inspect", "plan", "begin", "handoff", "validate", "apply", "verify"},
+        "result": {"not_reached", "ok", "failed"},
+        "reason": reasons, "check_reason": reasons, "helper_identity": reasons,
+        "state_load": reasons, "key_readback": reasons, "material_verified": reasons,
+        "check": {"guard_readback", "helper_readback", "guard_preflight"},
+        "material_directory": {"absent", "unreadable", "regular", "directory", "other"},
+        "material_config": {"absent", "unreadable", "regular", "directory", "other"},
+        "material_receipt": {"absent", "unreadable", "regular", "directory", "other"},
+        "handoff": {"absent", "unreadable", "regular", "directory", "other"},
+    }
+    public, fixture = {}, {}
+
+    def project(value, fields):
+        return {key: item if type(item) is str and item in fields[key] else "unrecognized"
+                for key, item in value.items() if key in fields}
+
+    # A failing command does not justify forwarding its raw stdout/stderr.
+    for line in raw[:1 << 20].splitlines()[:256]:
+        if len(line) > 8192:
+            continue
+        marker = b"QUIC_MANAGED_FIXTURE_DIAGNOSTIC="
+        try:
+            if line.startswith(marker):
+                value = json.loads(line[len(marker):])
+                if isinstance(value, dict):
+                    fixture = project(value, fixture_fields)
+                    fixture.update({key: value[key] for key in ("boot_readable", "committed", "journal_present", "key_matches")
+                                    if type(value.get(key)) is bool})
+            elif line.startswith(b"{"):
+                value = json.loads(line)
+                if not isinstance(value, dict) or not isinstance(value.get("error"), dict):
+                    continue
+                error = value["error"]
+                public = project(error, public_fields)
+                evidence = error.get("evidence")
+                if isinstance(evidence, dict):
+                    public.update(project(evidence, public_fields))
+        except (ValueError, TypeError):
+            continue
+    return {"public": public, "fixture": fixture}
 
 
 def death_with_parent(parent_pid):
@@ -69,8 +191,10 @@ def janitor(watch_socket):
     # never an unowned private directory left behind by the parent.
     os.setsid()
     root = tempfile.mkdtemp(prefix="stl-quic-managed.", dir="/tmp")
+    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     original_stat = os.lstat(root)
     if not exact_fixture(root, original_stat):
+        os.close(root_fd)
         os.rmdir(root)  # Our newly created, still-empty directory only.
         reject("new private test fixture identity invalid")
     try:
@@ -108,8 +232,14 @@ def janitor(watch_socket):
                     pass
                 if not poll.poll(MAX_TERMINATION_MS):
                     reject("exact disposable namespace supervisor did not terminate")
-        if not exact_fixture(root, original_stat):
+        pinned = os.fstat(root_fd)
+        if not exact_fixture(root, original_stat) or (pinned.st_dev, pinned.st_ino) != (original_stat.st_dev, original_stat.st_ino):
             reject("private fixture identity changed before retirement")
+        # The janitor has never entered the child's mount namespace. Its view
+        # contains only this pinned directory, not the guest's read-only host
+        # bind mounts. The fd-based rmtree refuses substituted symlink trees.
+        if not shutil.rmtree.avoids_symlink_attacks:
+            reject("descriptor-safe private fixture retirement unavailable")
         shutil.rmtree(root)
         if os.path.lexists(root):
             reject("private fixture still present after retirement")
@@ -121,6 +251,7 @@ def janitor(watch_socket):
     finally:
         if pidfd is not None:
             os.close(pidfd)
+        os.close(root_fd)
         watch_socket.close()
 
 
@@ -170,8 +301,17 @@ def copy_verified_wg(source, destination):
 
 
 def outer(repo, helper, wg_binary, launcher):
-    if os.geteuid() == 0 or not all(pathlib.Path(p).is_absolute() for p in (repo, helper, wg_binary, launcher)):
-        reject("owned absolute source/helper paths and unprivileged caller required")
+    if os.environ.get("STL_RUN_PRIVILEGED_E2E") != "1" or not all(pathlib.Path(p).is_absolute() for p in (repo, helper, wg_binary, launcher)):
+        reject("explicit opt-in and owned absolute source/helper paths required")
+    origin_uid = os.geteuid()
+    namespace_mode = "rootless"
+    if origin_uid == 0:
+        github_hosted_root_gate(check_event=True, repo=repo)
+        namespace_mode = "github-hosted-root"
+    elif os.environ.get("STL_QUIC_MANAGED_ROOT_LAUNCH"):
+        reject("root fixture authorization cannot change an unprivileged mapping")
+    if not shutil.rmtree.avoids_symlink_attacks:
+        reject("descriptor-safe disposable cleanup is required")
     parent_sock, watch_sock = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
     watcher = os.fork()
     if watcher == 0:
@@ -197,8 +337,10 @@ def outer(repo, helper, wg_binary, launcher):
         data.mkdir(mode=0o700)
         nonce = secrets.token_hex(16)
         (data / "namespace-guard").write_text(nonce + "\n", encoding="ascii")
-        (data / "parent-namespaces").write_text("".join(os.readlink("/proc/self/ns/" + name) + "\n" for name in ("user", "net", "pid")), encoding="ascii")
-        for name in ("namespace-guard", "parent-namespaces"):
+        (data / "parent-namespaces").write_text("".join(os.readlink("/proc/self/ns/" + name) + "\n" for name in ("user", "net", "pid", "mnt")), encoding="ascii")
+        (data / "origin-uid").write_text(str(origin_uid) + "\n", encoding="ascii")
+        (data / "namespace-mode").write_text(namespace_mode + "\n", encoding="ascii")
+        for name in ("namespace-guard", "parent-namespaces", "origin-uid", "namespace-mode"):
             os.chmod(data / name, 0o600)
         shutil.copyfile(helper, data / "hysteria")
         os.chmod(data / "hysteria", 0o700)
@@ -209,7 +351,13 @@ def outer(repo, helper, wg_binary, launcher):
         os.chmod(data / "driver.py", 0o700)
         env = os.environ.copy()
         env.update({"STL_QUIC_MANAGED_ROOT": root, "STL_QUIC_MANAGED_LAB": nonce,
-                    "GOTOOLCHAIN": "local", "CGO_ENABLED": "0"})
+                    "GOTOOLCHAIN": "local", "CGO_ENABLED": "0", "GOFLAGS": "-mod=readonly -modcacherw -buildvcs=false", "GOWORK": "off", "GOENV": "off"})
+        # All build output/caches belong to the same private fixture. Compile
+        # the immutable checkout without rewriting go.mod/go.sum or shared caches.
+        for key, directory in (("GOCACHE", "build-cache"), ("GOMODCACHE", "module-cache"), ("GOTMPDIR", "build-tmp"), ("GOPATH", "build-gopath")):
+            path = pathlib.Path(root, directory)
+            path.mkdir(mode=0o700)
+            env[key] = str(path)
         owner = os.getpid()
         with open(pathlib.Path(root, "build.log"), "wb") as log:
             build = subprocess.run(["go", "test", "-c", "-tags", "stl_e2e_lab", "-o", str(data / "stl-lab"), "./cmd/stl"],
@@ -249,15 +397,26 @@ def outer(repo, helper, wg_binary, launcher):
 
 
 def namespace_gate():
-    token = pathlib.Path("/lab/namespace-guard").read_text().strip()
+    token = fixture_witness("namespace-guard", 33).strip()
     if not re.fullmatch(r"[a-f0-9]{32}", token) or os.environ.get("STL_QUIC_MANAGED_LAB") != token or os.geteuid() != 0:
         reject("disposable test witness unavailable")
-    parents = pathlib.Path("/lab/parent-namespaces").read_text().splitlines()
-    if len(parents) != 3 or any(os.readlink("/proc/self/ns/" + name) == parent for name, parent in zip(("user", "net", "pid"), parents)):
+    parents = fixture_witness("parent-namespaces").splitlines()
+    if len(parents) != 4 or any(os.readlink("/proc/self/ns/" + name) == parent for name, parent in zip(("user", "net", "pid", "mnt"), parents)):
         reject("test process shares a parent namespace")
+    origin = fixture_witness("origin-uid", 11).strip()
+    namespace_mode = fixture_witness("namespace-mode", 32).strip()
+    if not re.fullmatch(r"0|[1-9][0-9]{0,9}", origin):
+        reject("original mapping witness invalid")
     uid_map = pathlib.Path("/proc/self/uid_map").read_text().split()
-    if len(uid_map) != 3 or uid_map[0] != "0" or int(uid_map[1]) <= 0 or uid_map[2] != "1":
+    if uid_map != ["0", origin, "1"]:
         reject("independent one-user mapping required")
+    if origin == "0":
+        if namespace_mode != "github-hosted-root":
+            reject("root fixture mapping has no hosted-runner witness")
+        github_hosted_root_gate()
+    elif namespace_mode != "rootless":
+        reject("unprivileged fixture mapping mode differs")
+    return namespace_mode
 
 
 def process_start(pid):
@@ -418,10 +577,11 @@ def echo_client(source, remote, port):
 
 
 def run_lab():
-    namespace_gate()
+    namespace_mode = namespace_gate()
     if os.getpid() != 1:
         reject("only the disposable namespace PID 1 may control this fixture")
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    print("QUIC_MANAGED_NAMESPACE_MODE=" + namespace_mode, flush=True)
     print("QUIC_MANAGED_EVIDENCE=public-CLI+Engine+real-kernel-WG+nft+official-Hysteria; systemd-and-boot-source=TEST-SHIM", flush=True)
     for peer in ("alpha", "beta"):
         pathlib.Path("/lab/" + peer + "-state").mkdir(mode=0o700)
@@ -483,15 +643,12 @@ def run_lab():
         logfile = pathlib.Path("/lab/" + peer + "-command-" + str(sequence) + ".log")
         logfile.write_bytes(result.stdout); os.chmod(logfile, 0o600)
         if (result.returncode == 0) != succeeds:
-            # Emit only fixed public error metadata, never raw process output.
-            reason = ""
-            for line in result.stdout.splitlines():
-                if line.startswith(b"{"):
-                    try:
-                        error = json.loads(line).get("error", {})
-                        reason = ":" + str(error.get("code", "")) + ":" + str(error.get("reason_code", ""))
-                    except (ValueError, AttributeError):
-                        pass
+            # State and file-presence facts are sampled read-only after failure;
+            # they are diagnostics, never authority to resume or remove anything.
+            diagnostic = safe_cli_failure(result.stdout)
+            print("QUIC_MANAGED_FAILURE_DIAGNOSTIC=" + json.dumps(diagnostic, sort_keys=True, separators=(",", ":")), flush=True)
+            public = diagnostic["public"]
+            reason = ":" + public.get("code", "unavailable") + ":" + public.get("reason_code", "unavailable")
             reject("managed CLI unexpected result: " + peer + "/" + args[0] + reason)
         for line in result.stdout.splitlines():
             if line.startswith(b"{"):

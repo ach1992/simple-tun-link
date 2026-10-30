@@ -2,6 +2,7 @@ package quichelper
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	core "github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/carrier/quic"
 	"golang.org/x/sys/unix"
 )
@@ -253,6 +255,11 @@ func observeManagedProcess(ctx context.Context, s unitSpec, v map[string]string)
 }
 
 func startManagedUnit(ctx context.Context, s unitSpec) error {
+	_, err := managerCommand(ctx, "systemd-run", managedStartArguments(s)...)
+	return err
+}
+
+func managedStartArguments(s unitSpec) []string {
 	args := []string{"--system", "--unit=" + s.Name, "--description=" + s.Description, "--service-type=exec", "--quiet"}
 	props := managedSecurityProperties(s)
 	keys := make([]string, 0, len(props))
@@ -274,6 +281,79 @@ func startManagedUnit(ctx context.Context, s unitSpec) error {
 	}
 	args = append(args, "--", s.Binary)
 	args = append(args, s.Args...)
-	_, err := managerCommand(ctx, "systemd-run", args...)
-	return err
+	return args
+}
+
+func managedTerminalFailure(obs managedUnitObservation) bool {
+	return obs.Loaded && !obs.Active && obs.Values["ActiveState"] == "failed" && obs.Values["SubState"] == "failed"
+}
+
+// A stop job does not leave UNIT_FAILED, and CollectMode=inactive deliberately
+// retains that state. Only an independently reverified terminal managed unit
+// may be reset; the caller separately proves its canonical committed/created
+// ownership and exact journal. Reset may unload a transient definition, so its
+// successful return always means a fresh, strict vacancy observation, never
+// permission to start an old cached definition.
+// https://github.com/systemd/systemd/blob/v249/src/core/unit.c (unit_stop, unit_may_gc)
+// https://github.com/systemd/systemd/blob/v249/src/core/service.c (service_reset_failed)
+func resetFailedManagedUnit(ctx context.Context, s unitSpec) error {
+	if ctx == nil {
+		return fmt.Errorf("managed QUIC reset context unavailable")
+	}
+	bounded, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	before, err := inspectManagedUnit(bounded, s)
+	if before.Process != nil {
+		_ = before.Process.Close()
+	}
+	if err != nil {
+		return err
+	}
+	if !before.Loaded {
+		return nil
+	}
+	if !managedTerminalFailure(before) {
+		return fmt.Errorf("managed QUIC reset requires its verified terminal failed state")
+	}
+	// Never reset all failures or accept a caller-supplied pattern. The name
+	// above has just passed exact Id/Names/argv/policy and effective graph checks.
+	if _, err := managerCommand(bounded, "systemctl", "--system", "reset-failed", s.Name, "--no-pager"); err != nil {
+		return errors.Join(core.ErrIndeterminateHostEffect, err)
+	}
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		// Collection can remove the fragment between a loaded-state query and
+		// a path/dump inspection. Poll only the exact manager definition until
+		// it reports vacancy; the final full inspection below still proves all
+		// paths, effective dependencies and manager identity before success.
+		values, err := queryManagedUnit(bounded, s.Name)
+		if err != nil {
+			return errors.Join(core.ErrIndeterminateHostEffect, err)
+		}
+		if values["LoadState"] == "not-found" {
+			if err := verifyUnitVacant(values, s); err != nil {
+				return errors.Join(core.ErrIndeterminateHostEffect, err)
+			}
+			after, err := inspectManagedUnit(bounded, s)
+			if after.Process != nil {
+				_ = after.Process.Close()
+			}
+			if err != nil || after.Loaded || after.Host != before.Host {
+				return errors.Join(core.ErrIndeterminateHostEffect, err, fmt.Errorf("managed QUIC terminal reset vacancy or host identity changed"))
+			}
+			return nil
+		}
+		if err := verifyManagedUnitProperties(values, s, false); err != nil {
+			return errors.Join(core.ErrIndeterminateHostEffect, err)
+		}
+		if state := values["ActiveState"] + "/" + values["SubState"]; state != "failed/failed" && state != "inactive/dead" {
+			return errors.Join(core.ErrIndeterminateHostEffect, fmt.Errorf("managed QUIC terminal reset reached an unexpected loaded state"))
+		}
+		select {
+		case <-bounded.Done():
+			return errors.Join(core.ErrIndeterminateHostEffect, bounded.Err())
+		case <-ticker.C:
+		}
+	}
 }

@@ -198,16 +198,23 @@ func quicCommandError(operation string, jsonOut bool, id domain.LinkID, code stl
 	return lifecycleFailure(out, errOut, jsonOut, code, "link_"+operation, result, operation+": "+reason)
 }
 
-// quicActivationFailure preserves the canonical Engine's typed, secret-free
-// lifecycle evidence instead of collapsing all host failures to state_unverified.
-// The legacy operation/error code and generic detail remain stable; raw
-// backend/process/credential errors must never reach the CLI output.
+// quicActivationFailure preserves the canonical Engine's typed category and
+// lifecycle evidence. Only known categories and the authored detail reach the
+// public surface; raw backend/process/credential errors remain private.
 func quicActivationFailure(operation string, jsonOut bool, id domain.LinkID,
 	result app.Result, cause error, detail string, out, errOut io.Writer) int {
 	if result.LinkID.Validate() != nil {
 		result.LinkID = id
 	}
-	return lifecycleFailureWithEvidence(out, errOut, jsonOut, stlerr.CodeState,
+	code := stlerr.CodeOf(cause)
+	switch code {
+	case stlerr.CodeInvalid, stlerr.CodeUnsupported, stlerr.CodeConflict,
+		stlerr.CodeInspect, stlerr.CodePlan, stlerr.CodeValidate, stlerr.CodeApply,
+		stlerr.CodeVerify, stlerr.CodeState, stlerr.CodeRollback, stlerr.CodeInternal:
+	default:
+		code = stlerr.CodeInternal
+	}
+	return lifecycleFailureWithEvidence(out, errOut, jsonOut, code,
 		"link_"+operation, &result, operation+": "+detail, stlerr.EvidenceOf(cause), cause)
 }
 func quicEngine(options *runtimeOptions) (*app.Engine, *wg.KeyStore, error) {

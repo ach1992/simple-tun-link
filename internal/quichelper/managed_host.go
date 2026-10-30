@@ -55,6 +55,7 @@ type managedHostOps struct {
 	host              func() (hostIdentity, error)
 	inspect           func(context.Context, unitSpec) (managedUnitObservation, error)
 	start             func(context.Context, unitSpec) error
+	resetFailed       func(context.Context, unitSpec) error
 	action            func(context.Context, string, string) error
 	material          func(context.Context, string, quic.Plan, uint16, string, string, quic.HelperConfigIdentity, bool) (retainedMaterial, error)
 	executable        func(string, string) (*os.File, pinnedexec.Identity, error)
@@ -75,7 +76,7 @@ func NewHost(root string, store state.Store) (*Host, error) {
 		return nil, err
 	}
 	return &Host{root: root, store: store, guard: guard, ops: managedHostOps{
-		host: currentHostIdentity, inspect: inspectManagedUnit, start: startManagedUnit,
+		host: currentHostIdentity, inspect: inspectManagedUnit, start: startManagedUnit, resetFailed: resetFailedManagedUnit,
 		action: func(ctx context.Context, action, name string) error {
 			if action != "start" && action != "stop" {
 				return fmt.Errorf("unsupported managed QUIC lifecycle action")
@@ -433,12 +434,8 @@ func (h *Host) StartHelper(ctx context.Context, link domain.Link) (core.Rollback
 	if err != nil {
 		return nil, err
 	}
-	if err := s.material.VerifyForLaunch(ctx); err != nil {
-		return nil, managedError(link, "helper_start", "material_invalid", "QUIC launch requires valid original TLS material and exact helper configuration", err, false)
-	}
-	guard, err := h.guard.GuardPresent(ctx, link)
-	if err != nil || !guard {
-		return nil, managedError(link, "helper_start", "guard_unverified", "QUIC helper start requires its independently verified ingress guard", err, false)
+	if err := h.verifyLaunch(ctx, s); err != nil {
+		return nil, err
 	}
 	obs, err := h.inspect(ctx, link)
 	if err != nil {
@@ -450,6 +447,24 @@ func (h *Host) StartHelper(ctx context.Context, link domain.Link) (core.Rollback
 	spec, err := h.spec(ctx, link)
 	if err != nil {
 		return nil, err
+	}
+	if managedTerminalFailure(obs) {
+		if err := h.collectTerminalFailure(ctx, link); err != nil {
+			return nil, managedError(link, "helper_start", "terminal_reset_unverified", "terminal QUIC helper could not be independently reset and collected before launch", err, errors.Is(err, core.ErrIndeterminateHostEffect))
+		}
+		// ResetFailed clears the start limit and can collect the transient
+		// definition. Revalidate the retained launch inputs after that effect,
+		// then choose from a new observation rather than the cached loaded bit.
+		if _, err := h.scope(ctx, link, true); err != nil {
+			return nil, h.startFailure(ctx, s, spec, "start_after_reset_unverified", "terminal QUIC helper was collected but launch admission changed; preserve the operation journal", err)
+		}
+		if err := h.verifyLaunch(ctx, s); err != nil {
+			return nil, h.startFailure(ctx, s, spec, "start_after_reset_unverified", "terminal QUIC helper was collected but its original material or guard is no longer launchable; preserve the operation journal", err)
+		}
+		obs, err = h.inspect(ctx, link)
+		if err != nil || obs.Loaded {
+			return nil, h.startFailure(ctx, s, spec, "start_after_reset_unverified", "QUIC helper vacancy changed after terminal reset; preserve the operation journal", err)
+		}
 	}
 	if obs.Loaded {
 		err = h.ops.action(ctx, "start", spec.Name)
@@ -466,6 +481,56 @@ func (h *Host) StartHelper(ctx context.Context, link domain.Link) (core.Rollback
 		return nil, h.startFailure(ctx, s, spec, "start_unverified", "QUIC helper did not reach an independently verified running state; preserve the operation journal", err)
 	}
 	return func(c context.Context) error { _, err := h.StopHelper(c, link); return err }, nil
+}
+
+func (h *Host) verifyLaunch(ctx context.Context, s *managedScope) error {
+	if err := s.material.VerifyForLaunch(ctx); err != nil {
+		return managedError(s.link, "helper_start", "material_invalid", "QUIC launch requires valid original TLS material and exact helper configuration", err, false)
+	}
+	guard, err := h.guard.GuardPresent(ctx, s.link)
+	if err != nil || !guard {
+		return managedError(s.link, "helper_start", "guard_unverified", "QUIC helper start requires its independently verified ingress guard", err, false)
+	}
+	return nil
+}
+
+// This is the only managed reset admission. A receipt or a failed name alone
+// never authorizes it: refresh the durable owner, retained material, manager,
+// exact unit policy and effective dependency graph immediately before dispatch.
+// Successful reset is followed by a strict unloaded observation, not merely a
+// dead PID. No source-only first-start path calls this method.
+func (h *Host) collectTerminalFailure(ctx context.Context, link domain.Link) error {
+	if _, err := h.scope(ctx, link, true); err != nil {
+		return err
+	}
+	obs, err := h.inspect(ctx, link)
+	if err != nil {
+		return err
+	}
+	if !obs.Loaded {
+		return nil
+	}
+	if !managedTerminalFailure(obs) {
+		return fmt.Errorf("managed QUIC terminal state changed before reset")
+	}
+	spec, err := h.spec(ctx, link)
+	if err != nil {
+		return err
+	}
+	if err := h.ops.resetFailed(ctx, spec); err != nil {
+		return err
+	}
+	if _, err := h.scope(ctx, link, true); err != nil {
+		return errors.Join(core.ErrIndeterminateHostEffect, err)
+	}
+	after, err := h.inspect(ctx, link)
+	if err != nil {
+		return errors.Join(core.ErrIndeterminateHostEffect, err)
+	}
+	if after.Loaded {
+		return errors.Join(core.ErrIndeterminateHostEffect, fmt.Errorf("managed QUIC unit remained loaded after terminal reset"))
+	}
+	return nil
 }
 
 func (h *Host) startFailure(ctx context.Context, s *managedScope, spec unitSpec, reason, detail string, cause error) error {
@@ -517,6 +582,12 @@ func (h *Host) StopHelper(ctx context.Context, link domain.Link) (core.Rollback,
 	if !obs.Loaded {
 		return func(context.Context) error { return nil }, nil
 	}
+	if managedTerminalFailure(obs) {
+		if err := h.collectTerminalFailure(ctx, link); err != nil {
+			return nil, managedError(link, "helper_stop", "terminal_reset_unverified", "terminal QUIC helper absence could not be verified after its scoped reset; retain its guard and journal", err, errors.Is(err, core.ErrIndeterminateHostEffect))
+		}
+		return func(context.Context) error { return nil }, nil
+	}
 	spec, err := h.spec(ctx, link)
 	if err != nil {
 		return nil, err
@@ -545,6 +616,9 @@ func (h *Host) waitUnit(ctx context.Context, link domain.Link, active bool) erro
 		}
 		if active && obs.Active || !active && !obs.Loaded {
 			return nil
+		}
+		if !active && managedTerminalFailure(obs) {
+			return h.collectTerminalFailure(bounded, link)
 		}
 		select {
 		case <-bounded.Done():

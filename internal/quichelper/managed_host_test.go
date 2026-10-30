@@ -77,16 +77,18 @@ func (g *fakeManagedGuard) Attest(context.Context, domain.Link) (linux.WGIngress
 }
 
 type managedHostFixture struct {
-	host           *Host
-	store          *managedMemoryStore
-	link           domain.Link
-	op             state.QUICCrashOperation
-	identity       hostIdentity
-	material       *fakeManagedMaterial
-	binary         string
-	loaded, active bool
-	starts, stops  int
-	startErr       error
+	host                                    *Host
+	store                                   *managedMemoryStore
+	link                                    domain.Link
+	op                                      state.QUICCrashOperation
+	identity                                hostIdentity
+	material                                *fakeManagedMaterial
+	binary                                  string
+	loaded, active, failed                  bool
+	starts, stops                           int
+	transientStarts, existingStarts, resets int
+	materialForRemoval                      bool
+	startErr                                error
 }
 
 func newManagedHostFixture(t *testing.T) *managedHostFixture {
@@ -115,30 +117,52 @@ func newManagedHostFixture(t *testing.T) *managedHostFixture {
 		executable: func(_ string, digest string) (*os.File, pinnedexec.Identity, error) {
 			return pinnedexec.Open(f.binary, digest)
 		},
-		material: func(context.Context, string, quic.Plan, uint16, string, string, quic.HelperConfigIdentity, bool) (retainedMaterial, error) {
+		material: func(_ context.Context, _ string, _ quic.Plan, _ uint16, _, _ string, _ quic.HelperConfigIdentity, removing bool) (retainedMaterial, error) {
+			f.materialForRemoval = removing
 			return f.material, nil
 		},
 		start: func(context.Context, unitSpec) error {
 			f.starts++
+			f.transientStarts++
 			if f.startErr != nil {
 				return f.startErr
 			}
-			f.loaded, f.active = true, true
+			f.loaded, f.active, f.failed = true, true, false
+			return nil
+		},
+		resetFailed: func(_ context.Context, s unitSpec) error {
+			if s.Name != "stl-quic-"+string(f.link.ID)[4:]+".service" || !f.loaded || !f.failed || f.active {
+				return errors.New("reset was not scoped to the original terminal failed unit")
+			}
+			f.resets++
+			f.loaded, f.active, f.failed = false, false, false
 			return nil
 		},
 		action: func(_ context.Context, action, _ string) error {
 			if action == "stop" {
 				f.stops++
-				f.loaded, f.active = false, false
-			} else {
+				// systemd stop leaves a terminal failed unit loaded when
+				// CollectMode=inactive; only its scoped reset collects it.
+				if !f.failed {
+					f.loaded, f.active = false, false
+				}
+			} else if action == "start" {
 				f.starts++
-				f.loaded, f.active = true, true
+				f.existingStarts++
+				f.loaded, f.active, f.failed = true, true, false
+			} else {
+				return errors.New("unexpected lifecycle action")
 			}
 			return nil
 		},
 		events: func(context.Context, string, string, string) ([]HelperEvent, error) { return nil, nil },
 		inspect: func(_ context.Context, s unitSpec) (managedUnitObservation, error) {
 			o := managedUnitObservation{Loaded: f.loaded, Active: f.active, Host: f.identity, Values: managedRunningProperties(s)}
+			if f.failed {
+				o.Values["ActiveState"], o.Values["SubState"], o.Values["MainPID"], o.Values["Result"] = "failed", "failed", "0", "start-limit-hit"
+			} else if !f.active {
+				o.Values["ActiveState"], o.Values["SubState"], o.Values["MainPID"] = "inactive", "dead", "0"
+			}
 			if f.active {
 				fd, err := unix.PidfdOpen(os.Getpid(), 0)
 				if err != nil {
@@ -164,6 +188,27 @@ func (f *managedHostFixture) context(t *testing.T) context.Context {
 		t.Fatal(err)
 	}
 	return ctx
+}
+
+func (f *managedHostFixture) beginCommitted(t *testing.T, operation string) (context.Context, func() error) {
+	t.Helper()
+	g := state.QUICGeneration{Version: 1, OriginNonce: f.op.Nonce, MaterialNonce: f.op.Nonce,
+		KernelBootID: f.identity.BootID, KernelBootSource: hostidentity.VerifiedHostBootSourceV1, NetworkNS: f.identity.NetworkNS,
+		WGIfIndex: 10, GuardTableHandle: 1, GuardChainHandle: 2, GuardRuleHandle: 3,
+		Files: materialFiles(f.material.Identity()), ExecutablePath: quic.DefaultExecutable,
+		ExecutableSHA256: f.op.ExecutableSHA256, ExecutableDevice: f.op.ExecutableDevice, ExecutableInode: f.op.ExecutableInode}
+	if err := g.Validate(f.link); err != nil {
+		t.Fatal(err)
+	}
+	f.op.Managed.Operation, f.op.Managed.HadCommittedLink, f.op.Managed.OriginalGeneration = operation, true, g
+	f.store.snapshot.Links = []state.LinkRecord{{Desired: f.link, QUICGeneration: g}}
+	f.store.snapshot.QUICCrashOperations = []state.QUICCrashOperation{f.op}
+	ctx := core.WithQUICGeneration(f.context(t), g)
+	ctx, release, err := f.host.Begin(ctx, f.link, &g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ctx, release
 }
 
 func TestManagedScopeRetainsDescriptorsAcrossPublicationAndReleaseNeverStops(t *testing.T) {
@@ -234,7 +279,7 @@ func TestManagedExplicitRollbackStopsOnlyTheAdmittedCreatedUnit(t *testing.T) {
 }
 
 func TestManagedFreshScopeNeverAdoptsPreexistingUnitOrFabricatedJournal(t *testing.T) {
-	for _, change := range []string{"preexisting", "missing-journal", "changed-journal", "host-drift", "closed", "invalid-launch", "missing-guard", "cancel"} {
+	for _, change := range []string{"preexisting", "preexisting-failed", "missing-journal", "changed-journal", "host-drift", "closed", "invalid-launch", "missing-guard", "cancel"} {
 		t.Run(change, func(t *testing.T) {
 			f := newManagedHostFixture(t)
 			ctx, release, err := f.host.Begin(f.context(t), f.link, nil)
@@ -245,6 +290,8 @@ func TestManagedFreshScopeNeverAdoptsPreexistingUnitOrFabricatedJournal(t *testi
 			switch change {
 			case "preexisting":
 				f.loaded, f.active = true, true
+			case "preexisting-failed":
+				f.loaded, f.failed = true, true
 			case "missing-journal":
 				f.store.snapshot.QUICCrashOperations = nil
 			case "changed-journal":
@@ -265,7 +312,7 @@ func TestManagedFreshScopeNeverAdoptsPreexistingUnitOrFabricatedJournal(t *testi
 			if _, err := f.host.StartHelper(ctx, f.link); err == nil {
 				t.Fatal("unverified effect admitted")
 			}
-			if f.starts != 0 || f.stops != 0 {
+			if f.starts != 0 || f.stops != 0 || f.resets != 0 {
 				t.Fatal("refusal performed a lifecycle effect")
 			}
 		})
@@ -342,5 +389,190 @@ func TestManagedRuntimeAndPureRendererUseExactlyOneJSONFormatArgument(t *testing
 	}
 	if count != 1 {
 		t.Fatal("managed log-format flag duplicated or absent")
+	}
+}
+
+func TestManagedRemoveCollectsCommittedTerminalFailureWithExpiredMaterial(t *testing.T) {
+	f := newManagedHostFixture(t)
+	f.loaded, f.failed = true, true
+	f.material.launchErr = errors.New("original TLS certificate has expired")
+	ctx, release := f.beginCommitted(t, "remove")
+	defer release()
+	undo, err := f.host.StopHelper(ctx, f.link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.materialForRemoval || f.resets != 1 || f.stops != 0 || f.loaded || f.starts != 0 {
+		t.Fatal("expired exact generation did not collect only its terminal failed helper")
+	}
+	if !f.host.guard.(*fakeManagedGuard).present || len(f.store.snapshot.QUICCrashOperations) != 1 {
+		t.Fatal("helper collection also removed guard or consumed the canonical journal")
+	}
+	if err := undo(ctx); err != nil || f.starts != 0 {
+		t.Fatal("a previously failed helper was incorrectly relaunched by rollback")
+	}
+}
+
+func TestManagedStopCollectsTerminalFailureReachedAfterStopDispatch(t *testing.T) {
+	f := newManagedHostFixture(t)
+	f.loaded, f.active = true, true
+	ctx, release := f.beginCommitted(t, "remove")
+	defer release()
+	f.host.ops.action = func(_ context.Context, action, _ string) error {
+		if action != "stop" {
+			return errors.New("unexpected action")
+		}
+		f.stops++
+		f.active, f.failed = false, true
+		return nil
+	}
+	if _, err := f.host.StopHelper(ctx, f.link); err != nil {
+		t.Fatal(err)
+	}
+	if f.stops != 1 || f.resets != 1 || f.loaded {
+		t.Fatal("terminal failure after the stop job remained loaded")
+	}
+}
+
+func TestManagedStartRecreatesCollectedTerminalFailureAndStartsExistingInactiveUnit(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "inactive-definition", true: "collected-terminal-failure"}[failed], func(t *testing.T) {
+			f := newManagedHostFixture(t)
+			f.loaded, f.failed = true, failed
+			ctx, release := f.beginCommitted(t, "ensure")
+			defer release()
+			if _, err := f.host.StartHelper(ctx, f.link); err != nil {
+				t.Fatal(err)
+			}
+			if !f.loaded || !f.active || f.starts != 1 {
+				t.Fatal("controlled helper recovery did not verify one current process")
+			}
+			if failed && (f.resets != 1 || f.transientStarts != 1 || f.existingStarts != 0) {
+				t.Fatal("collected transient definition was restarted from stale loaded observation")
+			}
+			if !failed && (f.resets != 0 || f.transientStarts != 0 || f.existingStarts != 1) {
+				t.Fatal("owned inactive definition was reset or recreated unnecessarily")
+			}
+		})
+	}
+}
+
+func TestManagedTerminalStartRequiresCurrentMaterialBeforeReset(t *testing.T) {
+	f := newManagedHostFixture(t)
+	f.loaded, f.failed = true, true
+	ctx, release := f.beginCommitted(t, "ensure")
+	defer release()
+	f.material.launchErr = errors.New("expired certificate")
+	if _, err := f.host.StartHelper(ctx, f.link); err == nil {
+		t.Fatal("expired generation reached controlled start")
+	}
+	if f.resets != 0 || f.starts != 0 || !f.loaded {
+		t.Fatal("invalid launch reset an otherwise retained terminal failure")
+	}
+}
+
+func TestManagedTerminalResetRechecksCanonicalAdmissionAndEffectivePolicy(t *testing.T) {
+	for _, drift := range []string{"journal", "material", "host", "foreign-hook", "incoming-upholds", "source-only-description", "reactivated"} {
+		t.Run(drift, func(t *testing.T) {
+			f := newManagedHostFixture(t)
+			f.loaded, f.failed = true, true
+			ctx, release := f.beginCommitted(t, "remove")
+			defer release()
+			inspect, calls := f.host.ops.inspect, 0
+			f.host.ops.inspect = func(c context.Context, s unitSpec) (managedUnitObservation, error) {
+				obs, err := inspect(c, s)
+				calls++
+				if calls == 1 {
+					switch drift {
+					case "journal":
+						f.store.snapshot.QUICCrashOperations = nil
+					case "material":
+						f.material.verifyErr = errors.New("protected material replaced")
+					case "host":
+						f.identity.ManagerStartTime++
+					case "reactivated":
+						f.failed, f.active = false, true
+					}
+				} else {
+					switch drift {
+					case "foreign-hook":
+						obs.Values["ExecStopPost"] = "foreign command"
+					case "incoming-upholds":
+						obs.Values["UpheldBy"] = "foreign.service"
+					case "source-only-description":
+						obs.Values["Description"] = "STL-QUIC-" + string(f.link.ID) + ":tx:" + f.op.Nonce
+					}
+					if policyErr := verifyManagedUnitProperties(obs.Values, s, false); policyErr != nil {
+						return obs, policyErr
+					}
+				}
+				return obs, err
+			}
+			_, err := f.host.StopHelper(ctx, f.link)
+			if err == nil || errors.Is(err, core.ErrIndeterminateHostEffect) {
+				t.Fatal("pre-dispatch reset refusal lost its nonmutating boundary")
+			}
+			if f.resets != 0 || f.stops != 0 || f.starts != 0 {
+				t.Fatal("drifted terminal identity reached a lifecycle command")
+			}
+		})
+	}
+}
+
+func TestManagedTerminalResetUncertaintyNeverClearsJournalOrGuard(t *testing.T) {
+	for _, failure := range []string{"dispatch", "readback", "still-loaded", "changed-journal", "canceled", "launch-expired-after-reset"} {
+		t.Run(failure, func(t *testing.T) {
+			f := newManagedHostFixture(t)
+			f.loaded, f.failed = true, true
+			operation := "remove"
+			if failure == "launch-expired-after-reset" {
+				operation = "ensure"
+			}
+			ctx, release := f.beginCommitted(t, operation)
+			defer release()
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			privateCause := errors.New("private manager stderr secret canary")
+			reset := f.host.ops.resetFailed
+			f.host.ops.resetFailed = func(c context.Context, s unitSpec) error {
+				if failure == "dispatch" {
+					f.resets++
+					return errors.Join(core.ErrIndeterminateHostEffect, &managerFailure{Kind: "timeout", cause: privateCause})
+				}
+				if err := reset(c, s); err != nil {
+					return err
+				}
+				switch failure {
+				case "readback":
+					f.host.ops.inspect = func(context.Context, unitSpec) (managedUnitObservation, error) {
+						return managedUnitObservation{}, privateCause
+					}
+				case "still-loaded":
+					f.loaded = true
+				case "changed-journal":
+					f.store.snapshot.QUICCrashOperations[0].Nonce = strings.Repeat("b", 32)
+				case "canceled":
+					cancel()
+				case "launch-expired-after-reset":
+					f.material.launchErr = privateCause
+				}
+				return nil
+			}
+			var err error
+			if operation == "ensure" {
+				_, err = f.host.StartHelper(ctx, f.link)
+			} else {
+				_, err = f.host.StopHelper(ctx, f.link)
+			}
+			if err == nil || !errors.Is(err, core.ErrIndeterminateHostEffect) {
+				t.Fatal("reset dispatch/readback uncertainty lost its quarantine classification")
+			}
+			if f.resets != 1 || f.starts != 0 || f.stops != 0 || !f.host.guard.(*fakeManagedGuard).present || len(f.store.snapshot.QUICCrashOperations) != 1 {
+				t.Fatal("uncertain terminal collection continued into an unrelated effect or consumed its journal")
+			}
+			if strings.Contains(err.Error(), privateCause.Error()) {
+				t.Fatal("reset failure exposed private command output")
+			}
+		})
 	}
 }

@@ -205,6 +205,80 @@ func TestQUICActivationErrorRetainsEvidenceWithoutRawCause(t *testing.T) {
 	if strings.Contains(out.String(), secret) || !strings.Contains(out.String(), "rollback_incomplete") {
 		t.Fatal("typed operation evidence lost or private cause leaked")
 	}
+	var response lifecycleFailureResponse
+	if json.Unmarshal(out.Bytes(), &response) != nil || response.Error == nil || response.Error.Code != stlerr.CodeApply {
+		t.Fatal("canonical Apply failure was relabeled as a State failure")
+	}
+}
+
+func TestQUICActivationFailurePreservesTypedCategories(t *testing.T) {
+	const secret = "PRIVATE_QUIC_CAUSE_MUST_NOT_REACH_OUTPUT"
+	const detail = "activation unconfirmed; preserve original material and inspect owned State"
+	id := testQUICCreateRequest().LinkID
+	cases := []struct {
+		name                               string
+		code                               stlerr.Code
+		stage, mutation, desired, rollback string
+		exit                               int
+	}{
+		{"invalid-before-apply", stlerr.CodeInvalid, "preflight", "not_attempted", "no_commit_attempted", "not_required", 2},
+		{"unsupported-before-apply", stlerr.CodeUnsupported, "preflight", "not_attempted", "no_commit_attempted", "not_required", 4},
+		{"inspection-before-apply", stlerr.CodeInspect, "inspect", "not_attempted", "no_commit_attempted", "not_required", 1},
+		{"conflict-before-apply", stlerr.CodeConflict, "plan", "not_attempted", "no_commit_attempted", "not_required", 1},
+		{"validation-before-apply", stlerr.CodeValidate, "validate", "not_attempted", "no_commit_attempted", "not_required", 1},
+		{"apply-uncertain", stlerr.CodeApply, "apply", "attempted", "no_commit_attempted", "not_attempted", 1},
+		{"verification-after-apply", stlerr.CodeVerify, "verify", "attempted", "no_commit_attempted", "completed_unverified", 1},
+		{"state-publication-after-apply", stlerr.CodeState, "commit", "attempted", "visible_unconfirmed", "not_attempted", 1},
+		{"rollback-after-apply", stlerr.CodeRollback, "apply", "attempted", "no_commit_attempted", "incomplete", 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			evidence := stlerr.OperationEvidence{Stage: tc.stage, HostMutation: tc.mutation, DesiredState: tc.desired, Rollback: tc.rollback}
+			cause := stlerr.WithEvidence(stlerr.Wrap(tc.code, "ensure", string(id), string(domain.BackendWireGuardQUIC), secret, fmt.Errorf("%s", secret)), evidence)
+			for _, machine := range []bool{true, false} {
+				var out, errOut bytes.Buffer
+				if exit := quicActivationFailure("create-quic", machine, id, app.Result{}, cause, detail, &out, &errOut); exit != tc.exit {
+					t.Fatalf("typed failure exit=%d, want %d", exit, tc.exit)
+				}
+				if strings.Contains(out.String()+errOut.String(), secret) {
+					t.Fatal("private cause or backend detail leaked")
+				}
+				if !machine {
+					if out.Len() != 0 || !strings.Contains(errOut.String(), string(tc.code)+":") {
+						t.Fatal("human failure category or channel changed")
+					}
+					continue
+				}
+				var response lifecycleFailureResponse
+				if errOut.Len() != 0 || json.Unmarshal(out.Bytes(), &response) != nil || response.Error == nil {
+					t.Fatal("machine failure is not one public JSON record")
+				}
+				if response.Error.Code != tc.code || response.Error.Detail != "create-quic: "+detail ||
+					response.Error.Evidence == nil || *response.Error.Evidence != evidence {
+					t.Fatal("canonical category, authored detail or stage evidence was lost")
+				}
+			}
+		})
+	}
+}
+
+func TestQUICActivationFailureUnknownCategoryIsInternalAndPrivate(t *testing.T) {
+	const secret = "UNRECOGNIZED_CODE_AND_CAUSE_MUST_STAY_PRIVATE"
+	id := testQUICCreateRequest().LinkID
+	for _, cause := range []error{
+		stlerr.Wrap(stlerr.Code(secret), "ensure", string(id), string(domain.BackendWireGuardQUIC), secret, fmt.Errorf("%s", secret)),
+		fmt.Errorf("%s", secret),
+	} {
+		var out, errOut bytes.Buffer
+		if exit := quicActivationFailure("import-quic", true, id, app.Result{}, cause, "activation unconfirmed", &out, &errOut); exit != 1 || errOut.Len() != 0 {
+			t.Fatal("unknown cause did not remain a failed JSON operation")
+		}
+		var response lifecycleFailureResponse
+		if json.Unmarshal(out.Bytes(), &response) != nil || response.Error == nil || response.Error.Code != stlerr.CodeInternal ||
+			strings.Contains(out.String(), secret) {
+			t.Fatal("unknown category or private cause escaped the safe fallback")
+		}
+	}
 }
 
 func TestQUICColdBootRecoveryRequiresExactConfirmationBeforeRuntime(t *testing.T) {

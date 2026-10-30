@@ -3,10 +3,21 @@
 # explicitly a test-only shim; this does not demonstrate systemd or reboot.
 set -euo pipefail
 refuse() { echo "QUIC managed lab refused: $1" >&2; exit 2; }
+github_root_gate() {
+  [[ ${STL_RUN_PRIVILEGED_E2E:-} == 1 && ${STL_QUIC_MANAGED_ROOT_LAUNCH:-} == github-hosted-pr &&
+     ${GITHUB_ACTIONS:-} == true && ${RUNNER_ENVIRONMENT:-} == github-hosted &&
+     ${GITHUB_REPOSITORY:-} == ach1992/simple-tun-link && ${GITHUB_EVENT_NAME:-} == pull_request &&
+     ${GITHUB_RUN_ID:-} =~ ^[1-9][0-9]*$ && ${GITHUB_RUN_ATTEMPT:-} =~ ^[1-9][0-9]*$ ]] ||
+    refuse 'root launch is confined to the opted-in GitHub-hosted repository PR job'
+}
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 if [[ "${1:-}" != --isolated ]]; then
   [[ $# == 0 && ${STL_RUN_PRIVILEGED_E2E:-} == 1 ]] || refuse 'explicit disposable E2E opt-in required'
-  [[ $(id -u) != 0 ]] || refuse 'run as an unprivileged user'
+  if [[ $(id -u) == 0 ]]; then
+    github_root_gate
+  else
+    [[ -z ${STL_QUIC_MANAGED_ROOT_LAUNCH:-} ]] || refuse 'root mode requires the original root caller'
+  fi
   helper=${STL_QUIC_HYSTERIA_BIN:-}
   [[ $helper == /* && -f $helper && ! -L $helper && $(stat -c %u -- "$helper") == $(id -u) ]] || refuse 'owned official helper fixture required'
   wg_binary=${STL_QUIC_WG_BINARY:-}
@@ -27,17 +38,31 @@ fi
 # An internal flag alone never permits host mutation. The independent parent
 # created the exact private directory and nonce before entering all namespaces.
 fixture=${STL_QUIC_MANAGED_ROOT:-}
-[[ $fixture =~ ^/tmp/stl-quic-managed\.[A-Za-z0-9_-]{8}$ && -d $fixture && ! -L $fixture &&
+[[ $# == 1 && $fixture =~ ^/tmp/stl-quic-managed\.[A-Za-z0-9_-]{8}$ && -d $fixture && ! -L $fixture &&
    $(stat -c '%u:%a' -- "$fixture") == 0:700 && -f $fixture/data/namespace-guard &&
    -f $fixture/data/parent-namespaces && ${STL_QUIC_MANAGED_LAB:-} =~ ^[a-f0-9]{32}$ ]] || refuse 'private fixture witness missing'
+for witness in namespace-guard parent-namespaces origin-uid namespace-mode; do
+  [[ -f $fixture/data/$witness && ! -L $fixture/data/$witness &&
+     $(stat -c '%u:%a:%h' -- "$fixture/data/$witness") == 0:600:1 ]] || refuse 'private namespace witness metadata differs'
+done
 [[ $(cat "$fixture/data/namespace-guard") == "$STL_QUIC_MANAGED_LAB" ]] || refuse 'fixture nonce differs'
 mapfile -t parents < "$fixture/data/parent-namespaces"
-[[ ${#parents[@]} == 3 && $(id -u) == 0 && $$ == 1 &&
+[[ ${#parents[@]} == 4 && $(id -u) == 0 && $$ == 1 &&
    $(readlink /proc/self/ns/user) != "${parents[0]}" &&
    $(readlink /proc/self/ns/net) != "${parents[1]}" &&
    $(readlink /proc/self/ns/pid) != "${parents[2]}" &&
-   $(readlink /proc/1/ns/pid) == "$(readlink /proc/self/ns/pid)" ]] || refuse 'independent rootless PID-1/user/network namespace required'
-[[ $(awk 'NF==3 {n++; if($1==0 && $2>0 && $3==1) ok++} END {print(n==1&&ok==1)?"yes":"no"}' /proc/self/uid_map) == yes ]] || refuse 'one-user rootless mapping required'
+   $(readlink /proc/self/ns/mnt) != "${parents[3]}" &&
+   $(readlink /proc/1/ns/pid) == "$(readlink /proc/self/ns/pid)" ]] || refuse 'independent PID-1/user/network/mount namespaces required'
+origin_uid=$(cat "$fixture/data/origin-uid")
+namespace_mode=$(cat "$fixture/data/namespace-mode")
+[[ $origin_uid =~ ^(0|[1-9][0-9]{0,9})$ ]] || refuse 'original UID witness invalid'
+[[ $(awk -v origin="$origin_uid" 'NF==3 {n++; if($1==0 && $2==origin && $3==1) ok++} END {print(n==1&&ok==1)?"yes":"no"}' /proc/self/uid_map) == yes ]] || refuse 'exact one-user mapping required'
+if [[ $origin_uid == 0 ]]; then
+  [[ $namespace_mode == github-hosted-root ]] || refuse 'root namespace mode differs'
+  github_root_gate
+else
+  [[ $namespace_mode == rootless ]] || refuse 'unprivileged namespace mode differs'
+fi
 # Negative control must fail before even a mount or a network command.
 if env -u STL_QUIC_MANAGED_LAB bash "$0" --isolated >/dev/null 2>&1; then refuse 'untrusted reentry admitted'; fi
 

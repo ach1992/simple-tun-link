@@ -240,13 +240,16 @@ STL_QUIC_WG_BINARY=/absolute/path/wg \
 bash scripts/e2e/quic-managed-wireguard.sh
 ```
 
-Use an unprivileged account with Linux user, network, mount and PID namespace
-support. The helper must match its exact official architecture pin. `wg`
-defaults to the installed command; the optional absolute test tool is copied
-from a retained verified regular file into the private fixture and its bytes
-are rechecked. No host executable is installed or overwritten. Other
-prerequisites are Go, Python 3, util-linux, iproute2, nftables, iptables and
-ping. Missing prerequisites fail before any network effect.
+The unprivileged entry requires Linux user, network, mount and PID namespace
+support and successful IPv4 and IPv6 legacy-firewall inventory in that
+namespace. Some kernels deny the IPv4 proc inventory to a mapped unprivileged
+UID. That capability failure is not an empty firewall or a successful test;
+production firewall checks remain in force. The helper must match its exact
+official architecture pin. `wg` defaults to the installed command; the
+optional absolute test tool is copied from a retained verified regular file
+into the private fixture and its bytes are rechecked. No host executable is
+installed or overwritten. Other prerequisites are Go, Python 3, util-linux,
+iproute2, nftables, iptables and ping.
 
 The build tag `stl_e2e_lab` exists only for test binaries. Separate public CLI
 processes run the canonical Engine, actual private credential staging,
@@ -263,10 +266,15 @@ retained pidfds bound cleanup to the created namespace lifetime and exact
 private directory. No name-only host cleanup is permitted.
 
 CI runs this harness on disposable amd64 and arm64 GitHub-hosted runners.
-Any temporary runner-specific namespace-policy preparation is confined to
-that job and restored afterward. Unsupported capability fails visibly; it
-is not a passed traffic test. Exact commands, source SHA, runner/kernel/tool
-identity, real results and cleanup belong to the associated CI/Issue record.
+Its explicitly gated root launch preserves a one-user 0-to-0 mapping inside
+fresh user, network, mount and PID namespaces, so ordinary owner permissions
+permit the complete legacy inventory. The harness verifies the actual
+same-repository pull-request event and records its launch mode. Connected
+Agent servers do not receive this privileged mode, and copying CI environment
+values onto another host is not an authorized test procedure. No global
+namespace-policy change is required. Unsupported capability fails visibly;
+it is not a passed traffic test. Exact commands, source SHA,
+runner/kernel/tool identity, results and cleanup belong to CI/Issue records.
 
 Mixed WSS/QUIC guard provenance fixtures also run separately:
 

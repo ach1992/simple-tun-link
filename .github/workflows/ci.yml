@@ -107,26 +107,21 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Verify disposable rootless namespace capability
-        id: namespace
+      - name: Verify hosted-root disposable namespace capability
         shell: bash
         run: |
+          test "$GITHUB_ACTIONS" = true
           test "$RUNNER_ENVIRONMENT" = github-hosted
           test "$GITHUB_REPOSITORY" = ach1992/simple-tun-link
-          if ! timeout 10 unshare --user --map-root-user --net /bin/true >/dev/null 2>&1; then
-            # Only this ephemeral ARM64 runner's known Ubuntu 24.04 policy.
-            # Restore it unconditionally after validation; no connected host
-            # policy is changed by the lab or any production executable.
-            if [ "$(uname -m)" = aarch64 ] && [ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ] && [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1 ]; then
-              echo 'policy_changed=true' >> "$GITHUB_OUTPUT"
-              sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-            fi
-            if ! timeout 10 unshare --user --map-root-user --net /bin/true >/dev/null 2>&1; then
-              echo 'QUIC_MANAGED_NAMESPACE_CAPABILITY=UNAVAILABLE; managed architecture acceptance=NOT_RUN' | tee -a "$GITHUB_STEP_SUMMARY"
-              exit 1
-            fi
+          test "$GITHUB_EVENT_NAME" = pull_request
+          # Root's 0->0 user mapping preserves the ordinary owner-DAC read of
+          # legacy proc inventory. All four runtime namespaces remain separate;
+          # no firewall inventory is replaced and no host policy is relaxed.
+          if ! sudo timeout 10 unshare --user --map-root-user --net --mount --pid --fork --kill-child --mount-proc /usr/bin/true >/dev/null 2>&1; then
+            echo 'QUIC_MANAGED_NAMESPACE_CAPABILITY=UNAVAILABLE; mode=github-hosted-root; managed architecture acceptance=NOT_RUN' | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
-          echo 'QUIC_MANAGED_NAMESPACE_CAPABILITY=AVAILABLE; actual managed acceptance follows' >> "$GITHUB_STEP_SUMMARY"
+          echo 'QUIC_MANAGED_NAMESPACE_CAPABILITY=AVAILABLE; mode=github-hosted-root; actual managed acceptance follows' >> "$GITHUB_STEP_SUMMARY"
       - name: Disposable hosted-runner kernel prerequisites
         shell: bash
         run: |
@@ -135,11 +130,29 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends iproute2 iptables nftables wireguard-tools iputils-ping util-linux kmod
           sudo modprobe wireguard
-      - name: Managed two-peer multi-Link QUIC acceptance with explicit namespace shim
+      - name: Managed two-peer multi-Link QUIC acceptance in hosted-root namespaces
         shell: bash
         run: |
+          test "$GITHUB_ACTIONS" = true
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$GITHUB_REPOSITORY" = ach1992/simple-tun-link
+          test "$GITHUB_EVENT_NAME" = pull_request
+          go_binary="$(command -v go)"
+          [[ "$go_binary" = /* && -x "$go_binary" ]]
+          toolchain_dir="$(dirname "$go_binary")"
+          required_toolchain="$(awk '$1 == "toolchain" {print $2}' go.mod)"
+          [[ "$required_toolchain" =~ ^go[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$(GOTOOLCHAIN=local "$go_binary" env GOVERSION)" = "$required_toolchain"
           fixture="$(mktemp -d "$RUNNER_TEMP/stl-quic-official.XXXXXXXX")"
-          trap 'rm -rf -- "$fixture"' EXIT
+          fixture_identity="$(stat -c '%d:%i' -- "$fixture")"
+          cleanup_official_fixture() {
+            [[ -d "$fixture" && ! -L "$fixture" && "$(stat -c '%d:%i' -- "$fixture")" = "$fixture_identity" ]] || {
+              echo 'Owned official fixture identity changed; cleanup refused' >&2
+              return 1
+            }
+            sudo rm -rf --one-file-system -- "$fixture"
+          }
+          trap cleanup_official_fixture EXIT
           case "$(uname -m)" in
             x86_64) arch=amd64; digest=907ba8c9693edb104b20582681fb7dc15639d5b64a9cbb616a7b539190a86691 ;;
             aarch64) arch=arm64; digest=a68a61a84452ca250ce0368202521965ca9cc9d801a404f1dc9008ac6cf677a7 ;;
@@ -150,9 +163,16 @@ jobs:
             --output "$fixture/hysteria-linux-$arch"
           printf '%s  %s\n' "$digest" "$fixture/hysteria-linux-$arch" | sha256sum --check --status
           chmod 0700 "$fixture/hysteria-linux-$arch"
-          STL_RUN_PRIVILEGED_E2E=1 STL_QUIC_HYSTERIA_BIN="$fixture/hysteria-linux-$arch" \
-            bash scripts/e2e/quic-managed-wireguard.sh
-      - name: Restore disposable runner namespace policy
-        if: always() && steps.namespace.outputs.policy_changed == 'true'
-        shell: bash
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1
+          sudo chown 0:0 -- "$fixture" "$fixture/hysteria-linux-$arch"
+          sudo chmod 0700 -- "$fixture" "$fixture/hysteria-linux-$arch"
+          # Forward actual CI provenance values; the outer fixture also reads
+          # this real event file and verifies both PR repositories. These
+          # values must never be synthesized on a connected server.
+          sudo env -i PATH="$toolchain_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+            GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
+            GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_EVENT_NAME="$GITHUB_EVENT_NAME" \
+            GITHUB_EVENT_PATH="$GITHUB_EVENT_PATH" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+            GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
+            STL_RUN_PRIVILEGED_E2E=1 STL_QUIC_MANAGED_ROOT_LAUNCH=github-hosted-pr \
+            STL_QUIC_HYSTERIA_BIN="$fixture/hysteria-linux-$arch" \
+            /usr/bin/bash scripts/e2e/quic-managed-wireguard.sh
