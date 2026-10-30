@@ -18,9 +18,14 @@ overrides it, so either server may be the public initiator. The suggestion
 uses endpoint address scope, with canonical IPv4 ordering when both
 addresses have the same scope. It is **not** a peer-authenticated reachability probe, cannot
 detect firewall/NAT asymmetry, and does not silently fall back to the other
-direction. Review shows the concrete orientation before fresh `YES` and
-peer handoff. The Setup Link creator may be `Dial` or `Listen`; its imported
-peer gets the complementary role. Private application traffic may start
+direction. Review shows both concrete endpoint roles and the selected physical public
+listener (address, port and protocol) before fresh `YES` and peer handoff.
+An invalid direction entry is explained and re-prompted in place; `q` cancels.
+If the listener cannot be reached, inspect both peer diagnostics and safely
+retire/recreate the incomplete Link with a different orientation; do not
+assume the existing Link will switch roles automatically. The Setup Link
+creator may be `Dial` or `Listen`; its imported peer gets the complementary
+role. Private application traffic may start
 from either end once the Link is usable. Noninteractive versioned request
 schemas continue to accept concrete explicit roles: there is no new JSON
 `auto` mode or runtime role-switching contract.

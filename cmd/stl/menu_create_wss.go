@@ -121,10 +121,7 @@ func menuCreateWSSWithHost(input io.Reader, reader *bufio.Reader, out, errOut io
 	}
 	menuScreen(out, "Review / confirm WireGuard over WSS")
 	menuField(out, "Backend", "WireGuard / WSS + TLS")
-	menuField(out, "This server", route.Source.String()+" ("+role+")")
-	menuField(out, "Direction choice", roleSource)
-	menuField(out, "Other server", peer.String())
-	menuNotice(out, "INFO", "Public reachability is unverified until the peer is paired and private traffic succeeds.")
+	showCarrierDirectionReview(out, route.Source, peer, role, roleSource, "TCP", tcp)
 	menuField(out, "TLS TCP port", strconv.Itoa(int(tcp)))
 	menuField(out, "Kernel WG UDP", fmt.Sprintf("this %d / peer %d", localWG, peerWG))
 	menuField(out, "Private IPs", addresses.Local.String()+" <-> "+addresses.Peer.String())

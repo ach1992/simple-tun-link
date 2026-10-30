@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net/netip"
 	"strings"
 )
@@ -39,21 +40,40 @@ func askCarrierRole(p createPrompts, carrier string, local, peer netip.Addr) (ro
 	suggested, basis := recommendCarrierRole(local, peer)
 	menuSection(p.out, carrier+" / public connection direction")
 	menuProse(p.out, fmt.Sprintf("Suggested: THIS server will %s (%s).", strings.ToUpper(suggested), basis))
-	menuProse(p.out, "This is an unverified suggestion, not a reachability check. The OTHER server receives the opposite role.")
+	menuProse(p.out, "Unverified default: no WAN test. Address ordering cannot predict reachability.")
+	menuProse(p.out, "If you know which server accepts inbound traffic, select that server as Listen.")
 	menuOption(p.out, "1", "Listen", "THIS server accepts public connections")
 	menuOption(p.out, "2", "Dial", "OTHER server accepts public connections")
-	answer, err := p.ask("Direction [Enter=suggested; 1=listen; 2=dial]: ")
-	if err != nil {
-		return "", "", err
+	for {
+		answer, err := p.ask("Direction [Enter=suggested; 1=listen; 2=dial]: ")
+		if err != nil {
+			return "", "", err
+		}
+		switch answer {
+		case "":
+			return suggested, "suggested (unverified)", nil
+		case "1":
+			return "listen", "manual override", nil
+		case "2":
+			return "dial", "manual override", nil
+		default:
+			menuNotice(p.out, "WARNING", "Choose Enter, 1 (this server listens), 2 (this server dials), or q to cancel.")
+		}
 	}
-	switch answer {
-	case "":
-		return suggested, "suggested (unverified)", nil
-	case "1":
-		return "listen", "manual override", nil
-	case "2":
-		return "dial", "manual override", nil
-	default:
-		return "", "", fmt.Errorf("use Enter, 1 or 2 to choose the public connection direction")
+}
+
+// Review must identify the concrete public listener as well as both peer roles.
+// Neither the symmetric offline default nor a manual choice proves that the
+// selected public listener is reachable from the other endpoint.
+func showCarrierDirectionReview(out io.Writer, local, peer netip.Addr, role, source, protocol string, port uint16) {
+	peerRole, listener := "listen", peer
+	if role == "listen" {
+		peerRole, listener = "dial", local
 	}
+	menuField(out, "This server", local.String()+" ("+role+")")
+	menuField(out, "Other server", peer.String()+" ("+peerRole+")")
+	menuField(out, "Direction choice", source)
+	menuField(out, "Public listener", fmt.Sprintf("%s:%d/%s", listener, port, protocol))
+	menuNotice(out, "INFO", "Public reachability is unverified until the peer is paired and private traffic succeeds.")
+	menuProse(out, "Listener unreachable? Diagnose both peers; to change direction, safely retire and recreate the incomplete Link. No automatic role switch.")
 }

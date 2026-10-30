@@ -125,10 +125,7 @@ func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, er
 	}
 	menuScreen(out, "Review / confirm WireGuard over QUIC")
 	menuField(out, "Backend", "WireGuard / QUIC + TLS")
-	menuField(out, "This server", route.Source.String()+" ("+role+")")
-	menuField(out, "Direction choice", roleSource)
-	menuField(out, "Other server", peer.String())
-	menuNotice(out, "INFO", "Public reachability is unverified until the peer is paired and private traffic succeeds.")
+	showCarrierDirectionReview(out, route.Source, peer, role, roleSource, "UDP", udp)
 	menuField(out, "TLS UDP port", strconv.Itoa(int(udp)))
 	menuField(out, "QUIC obfuscation", publicQUICObfuscation(obfuscation))
 	menuField(out, "Kernel WG UDP", fmt.Sprintf("this %d / peer %d", localWG, peerWG))
