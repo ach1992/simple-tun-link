@@ -22,6 +22,9 @@ type GuardObservationStatus string
 const (
 	GuardNotVisible           GuardObservationStatus = "not_visible_in_observed_namespace"
 	GuardMatchingShapeUnowned GuardObservationStatus = "matching_shape_ownership_unverified"
+	// A durable single-call CREATE witness matches this boot/netns/handle set.
+	// Even this is NOT a permission to retire/recreate a kernel object.
+	GuardRecordedOriginalWitness GuardObservationStatus = "recorded_original_creation_consistent_no_retirement_authority"
 )
 
 // OriginalGuardObservation is a CURRENT read-only inspection of an unresolved
@@ -58,7 +61,7 @@ func inspectPendingOriginal(ctx context.Context, engine *app.Engine, id domain.L
 	}
 	var observation OriginalGuardObservation
 	err := engine.WithQUICCrashIngressAdmission(ctx, id,
-		func(c context.Context, link domain.LinkID, nonce string, wg domain.WireGuardOptions) error {
+		func(c context.Context, _ string, link domain.LinkID, nonce string, wg domain.WireGuardOptions) error {
 			// os/exec inherits the calling OS thread's network namespace.
 			// Pin both labels and every nft subprocess to that SAME thread.
 			// /proc/self/ns/net labels the process leader, which can differ.
