@@ -20,7 +20,7 @@ import (
 // internal/quicguard.StageOriginal performs the real CREATE and strict
 // readback before returning success. No CLI invokes this source-only path.
 func (e *Engine) WithQUICCrashIngressAdmission(ctx context.Context, id domain.LinkID,
-	perform func(context.Context, domain.LinkID, string, domain.WireGuardOptions) error) error {
+	perform func(context.Context, string, domain.LinkID, string, domain.WireGuardOptions) error) error {
 	if perform == nil {
 		return stlerr.New(stlerr.CodeInvalid, "quic_admit_crash_ingress", string(id), "quic",
 			"QUIC original guard admission needs a bounded effect callback")
@@ -41,7 +41,7 @@ func (e *Engine) WithQUICCrashIngressAdmission(ctx context.Context, id domain.Li
 // the fixed production quicguard writer independently validates post-effect nft.
 func (e *Engine) withQUICCrashIngressAdmission(ctx context.Context, id domain.LinkID,
 	inspect func(string, quic.Plan, uint16, state.QUICCrashOperation) error,
-	perform func(context.Context, domain.LinkID, string, domain.WireGuardOptions) error) error {
+	perform func(context.Context, string, domain.LinkID, string, domain.WireGuardOptions) error) error {
 	const action = "quic_admit_crash_ingress"
 	if inspect == nil || perform == nil {
 		return stlerr.New(stlerr.CodeInvalid, action, string(id), "quic",
@@ -53,7 +53,7 @@ func (e *Engine) withQUICCrashIngressAdmission(ctx context.Context, id domain.Li
 				return stlerr.New(stlerr.CodeState, action, string(id), "quic",
 					"QUIC original material or executable generation unverified; preserve journal")
 			}
-			if err := perform(ctx, id, op.Nonce, op.WireGuard); err != nil || ctx.Err() != nil {
+			if err := perform(ctx, root, id, op.Nonce, op.WireGuard); err != nil || ctx.Err() != nil {
 				return stlerr.New(stlerr.CodeState, action, string(id), "quic",
 					"QUIC original ingress creation failed or uncertain; preserve journal and host protection")
 			}

@@ -955,9 +955,37 @@ resource ownership and post-effect checks. A **pre-existing table,
 even with identical bytes/marker**, is never adopted as this attempt's
 original. An unsuccessful or ambiguous dispatched nft operation is not
 rolled back: the same QUIC journal and possible guard remain quarantined
-without any inferred deletion rights. This is a **single-call creation
-witness**, not a durable table-handle ownership receipt or permission to
-retire the guard later. The current first-generation preflight deliberately
+without any inferred deletion rights. The source-only creation path now adds
+a **durable original-CREATE witness** only after the exclusive nft transaction
+and same-thread strict nft inventory/table/chain/rule-handle readback succeed.
+It binds the exact immutable journal Link ID, nonce, WG UDP port, table,
+verified kernel boot ID and calling-thread network namespace to a single,
+exclusively created 0600 file in the canonical owner-private
+`credentials/quic-guard-origins/` directory. Descriptor-relative no-symlink
+creation, fsync, exact inode/path confirmation and canonical JSON readback are
+required before reporting success. An absent, replaced or ambiguous receipt
+never grants ownership merely because an equal-looking nft table exists.
+
+`quicguard.InspectRecordedOriginal` is a separate **read-only** Engine-locked
+comparison of this file to the immutable protected journal, the actual
+current kernel boot/network namespace and strictly observed nft handles. It
+re-attests the original file inode and directory over host inspection and
+reports only `recorded_original_creation_consistent_no_retirement_authority`.
+An inode substitution during readback, mismatched boot/namespace, changed
+numerical nft handle values, unverified original material or mismatching
+current nft shape rejects the observation; the journal is not cleared.
+**Recycled nft handles with identical numerical values, or privileged
+replacement with matching current shape and identifiers, may be
+indistinguishable from uninterrupted originals.** A positive result is
+only bounded consistency between a recorded CREATE event and a current
+observation; it does **not** prove continuous kernel-object ownership
+after process death, reboot or replacement, and never authorizes adoption,
+deletion, replacement, replay, restart, retirement or recovery.
+A crash between nft CREATE and receipt publication remains an
+intentionally unresolved orphan requiring separately approved
+reconciliation rather than blind retry.
+
+The current first-generation preflight deliberately
 rejects other early WSS/QUIC hooks until their independently verified
 original owner State + host evidence can be passed to the already shared
 sibling coexistence machinery; do not work around this by disabling WSS.
@@ -989,8 +1017,9 @@ mount environments; disposable namespace integration uses a clearly
 synthetic boot-ID *test seam only*, with actual kernel nft operations.
 
 This bounded source step has no CLI or runtime caller and is **not** a running
-QUIC Link. Future implementation must add durable original nft generation
-ownership, exact kernel WG/UDP and process/systemd witness, separate
+QUIC Link. Future implementation must add safe continuously verified nft
+lifecycle ownership and retirement (the recorded birth witness is insufficient),
+exact kernel WG/UDP and process/systemd witness, separate
 activation-time executable/credential re-attestation, and dependency-aware
 safe rollback/reboot/retirement before enabling a committed private L3 Link.
 

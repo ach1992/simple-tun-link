@@ -47,6 +47,10 @@ type runtimeOptions struct {
 	// Test-only module observation seam. Production uses the real read-only
 	// sysfs/modinfo probe; never expose this through CLI input.
 	moduleObserve func(context.Context, string) linux.KernelModuleState
+	// Test-only package inventory seam. Nil uses the canonical embedded
+	// requirements check in production. PREPARE and its consent/installer
+	// actions are never overridden by this preview callback.
+	packagePreview func(context.Context, tunnelOption) (selectedPackagePreview, error)
 	// Explicit throughput is never invoked by ordinary read-only diagnose.
 	throughputRunner   linux.BoundedRunner
 	mtuManager         app.MTUManager

@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
@@ -53,6 +54,34 @@ func (r appIsolatedNFTGuardRunner) RunBounded(ctx context.Context, lim linux.Cap
 		return linux.CommandResult{Stdout: []byte{}}, nil
 	}
 	return linux.CommandResult{}, fmt.Errorf("unexpected isolated nft test query")
+}
+
+// A disposable test-only foreign writer replaces the receipt inode with
+// EXACTLY the same bytes while the live nft subprocesses are executing.
+type sameByteReceiptSubstitutionRunner struct {
+	appIsolatedNFTGuardRunner
+	path    string
+	changed bool
+}
+
+func (r *sameByteReceiptSubstitutionRunner) RunBounded(ctx context.Context,
+	limits linux.CaptureLimits, name string, args ...string) (linux.CommandResult, error) {
+	out, err := r.appIsolatedNFTGuardRunner.RunBounded(ctx, limits, name, args...)
+	if err == nil && !r.changed && name == "nft" &&
+		reflect.DeepEqual(args, []string{"-j", "list", "tables"}) {
+		raw, readErr := os.ReadFile(r.path)
+		if readErr != nil {
+			return linux.CommandResult{}, readErr
+		}
+		if moveErr := os.Rename(r.path, r.path+".old"); moveErr != nil {
+			return linux.CommandResult{}, moveErr
+		}
+		if writeErr := os.WriteFile(r.path, raw, 0o600); writeErr != nil {
+			return linux.CommandResult{}, writeErr
+		}
+		r.changed = true
+	}
+	return out, err
 }
 
 type siblingNetworkNSObservation struct {
@@ -321,7 +350,7 @@ func TestQUICOriginalGuardEngineMaterialAndRealNFTInDisposableNetNS(t *testing.T
 			if err != nil || absent.Status != GuardNotVisible || absent.Handles != (linux.WGIngressLiveHandles{}) {
 				t.Fatalf("pre-create read-only journal/host absence was not correctly scoped: %+v err=%v", absent, err)
 			}
-			if err := stageOriginal(ctx, engine, local.LinkID, appIsolatedNFTGuardRunner{}, runOriginalNFTCreate); err != nil {
+			if err := stageOriginalWithBoot(ctx, engine, local.LinkID, appIsolatedNFTGuardRunner{}, runOriginalNFTCreate, readBoot); err != nil {
 				t.Fatalf("Engine-bound real isolated guarded creation failed: %v", err)
 			}
 			guard, err := linux.NewQUICWGIngressPlan(local.LinkID, local.LocalWGUDPPort, prepared.Nonce)
@@ -341,6 +370,13 @@ func TestQUICOriginalGuardEngineMaterialAndRealNFTInDisposableNetNS(t *testing.T
 				observed.LinkID != local.LinkID || observed.ListenPort != local.LocalWGUDPPort ||
 				observed.Handles.Table == 0 || observed.Handles.Chain == 0 || observed.Handles.Rule == 0 {
 				t.Fatalf("post-create readonly nft handles not recovered from original journal: %+v err=%v", observed, err)
+			}
+			recorded, recordErr := inspectRecordedOriginal(ctx, engine, local.LinkID,
+				appIsolatedNFTGuardRunner{}, readBoot, readNS)
+			if recordErr != nil || recorded.Status != GuardRecordedOriginalWitness ||
+				recorded.Handles != observed.Handles || recorded.NetworkNS != observed.NetworkNS ||
+				recorded.KernelBootID != observed.KernelBootID {
+				t.Fatalf("durable original CREATE witness not readable with live kernel evidence: %+v %v", recorded, recordErr)
 			}
 			// The SAME process now observes a separate network namespace on
 			// another locked OS thread. The old /proc/self label incorrectly
@@ -440,8 +476,17 @@ func TestQUICOriginalGuardEngineMaterialAndRealNFTInDisposableNetNS(t *testing.T
 			if err != nil || !present {
 				t.Fatalf("real nft original readback failed: %v", err)
 			}
-			if err := stageOriginal(ctx, engine, local.LinkID, appIsolatedNFTGuardRunner{}, runOriginalNFTCreate); err == nil {
+			if err := stageOriginalWithBoot(ctx, engine, local.LinkID, appIsolatedNFTGuardRunner{}, runOriginalNFTCreate, readBoot); err == nil {
 				t.Fatal("re-run silently adopted the same nft table")
+			}
+			receiptPath := filepath.Join(store.RootDir(), "credentials",
+				originReceiptDir, originReceiptName(local.LinkID))
+			swap := &sameByteReceiptSubstitutionRunner{path: receiptPath}
+			changed, changedErr := inspectRecordedOriginal(ctx, engine, local.LinkID,
+				swap, readBoot, readNS)
+			if !swap.changed || changedErr == nil || changed != (OriginalGuardObservation{}) {
+				t.Fatalf("same-byte receipt inode substitution was not refused: changed=%t evidence=%+v err=%v",
+					swap.changed, changed, changedErr)
 			}
 			after, err := store.Load(ctx)
 			if err != nil || !reflect.DeepEqual(snapshot, after) || len(after.QUICCrashOperations) != 1 ||

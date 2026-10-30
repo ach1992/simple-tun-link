@@ -99,12 +99,23 @@ func (guidedMTUFake) Apply(_ context.Context, _ backend.Request, _ bool,
 	return nil, false, nil
 }
 
+// Wizard/PTY tests exercise the real guided UI and Engine, not the host's
+// variable-time APT dependency resolver. The canonical read-only inventory
+// remains independently covered in menu_packages_test.go.
+func readyGuidedPackagePreview(_ context.Context, selected tunnelOption) (selectedPackagePreview, error) {
+	if selectedPackageBackends(selected) == "" {
+		return selectedPackagePreview{}, errors.New("invalid guided test package selection")
+	}
+	return selectedPackagePreview{}, nil // no prerequisites missing in the fixture
+}
+
 func guidedTestOptions(root string, host *guidedTestRunner, fake *guidedTestBackend) *runtimeOptions {
 	return &runtimeOptions{
 		stateRoot: root, probeRunner: host, backends: []backend.Backend{fake},
-		moduleObserve: func(context.Context, string) linux.KernelModuleState { return linux.KernelModuleLoaded },
-		mtuManager:    guidedMTUFake{},
-		createLinkID:  func() (domain.LinkID, error) { return createTestID, nil },
+		packagePreview: readyGuidedPackagePreview,
+		moduleObserve:  func(context.Context, string) linux.KernelModuleState { return linux.KernelModuleLoaded },
+		mtuManager:     guidedMTUFake{},
+		createLinkID:   func() (domain.LinkID, error) { return createTestID, nil },
 	}
 }
 

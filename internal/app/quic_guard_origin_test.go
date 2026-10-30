@@ -16,7 +16,7 @@ import (
 
 type testQUICOriginalAdmissionCallback struct{ calls int }
 
-func (h *testQUICOriginalAdmissionCallback) invoke(context.Context, domain.LinkID, string, domain.WireGuardOptions) error {
+func (h *testQUICOriginalAdmissionCallback) invoke(context.Context, string, domain.LinkID, string, domain.WireGuardOptions) error {
 	h.calls++
 	return nil
 }
@@ -45,9 +45,9 @@ func TestQUICOriginalGuardEngineRequiresJournalMaterialsAndExactOrigin(t *testin
 						t.Fatalf("Engine trust admission substituted original journal: %v", e)
 					}
 					return nil
-				}, func(_ context.Context, id domain.LinkID, nonce string, wg domain.WireGuardOptions) error {
+				}, func(_ context.Context, originRoot string, id domain.LinkID, nonce string, wg domain.WireGuardOptions) error {
 					publish++
-					if inspect != 1 || id != op.Plan.Local.LinkID || nonce != op.Nonce || wg != op.WireGuard {
+					if inspect != 1 || originRoot != store.RootDir() || id != op.Plan.Local.LinkID || nonce != op.Nonce || wg != op.WireGuard {
 						t.Fatal("Engine admission callback lacks exact journal-bound and attested identity")
 					}
 					return nil
@@ -89,13 +89,16 @@ func TestQUICOriginalGuardEngineNeverRunsWithoutJournalOrTrustedMaterials(t *tes
 	called := false
 	err = engine.withQUICCrashIngressAdmission(ctx, op.Plan.Local.LinkID,
 		func(string, quic.Plan, uint16, state.QUICCrashOperation) error { return errors.New(secret) },
-		func(context.Context, domain.LinkID, string, domain.WireGuardOptions) error { called = true; return nil })
+		func(context.Context, string, domain.LinkID, string, domain.WireGuardOptions) error {
+			called = true
+			return nil
+		})
 	if stlerr.CodeOf(err) != stlerr.CodeState || called || strings.Contains(err.Error(), secret) {
 		t.Fatalf("material failure leaked or created host guard: %v", err)
 	}
 	err = engine.withQUICCrashIngressAdmission(ctx, op.Plan.Local.LinkID,
 		func(string, quic.Plan, uint16, state.QUICCrashOperation) error { return nil },
-		func(context.Context, domain.LinkID, string, domain.WireGuardOptions) error {
+		func(context.Context, string, domain.LinkID, string, domain.WireGuardOptions) error {
 			called = true
 			return errors.New(secret)
 		})

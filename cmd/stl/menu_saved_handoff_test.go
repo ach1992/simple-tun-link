@@ -26,6 +26,7 @@ func guidedSavedWireGuardFixture(t *testing.T) (*runtimeOptions, domain.Link, st
 	opts := &runtimeOptions{
 		stateRoot: root, backends: []backend.Backend{fake}, probeRunner: &guidedTestRunner{},
 		mtuManager: guidedMTUFake{}, createLinkID: func() (domain.LinkID, error) { return createTestID, nil },
+		packagePreview: readyGuidedPackagePreview,
 	}
 	script := "1\n2\n192.0.2.20\n\n51871\n51872\nn\nYES\n8\n"
 	var out, errs bytes.Buffer
@@ -495,7 +496,8 @@ func TestGuidedWireGuardRealTTYShowsOriginalProtectedSetupImmediatelyAfterCreate
 	opts := &runtimeOptions{
 		stateRoot: root, backends: []backend.Backend{fake},
 		probeRunner: &guidedTestRunner{}, mtuManager: guidedMTUFake{},
-		createLinkID: func() (domain.LinkID, error) { return createTestID, nil },
+		createLinkID:   func() (domain.LinkID, error) { return createTestID, nil },
+		packagePreview: readyGuidedPackagePreview,
 	}
 	tty, done := startManageTTY(t, opts)
 	tty.expect("Choose a task: ")
