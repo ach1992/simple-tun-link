@@ -182,6 +182,14 @@ func verifyUnitProperties(v map[string]string, s unitSpec) error {
 	}
 	for key, want := range specSecurityProperties(s) {
 		got, ok := v[key]
+		// systemctl 249's EnvironmentFiles a(sb) printer emits one line per
+		// file and none for an empty array, even with --all. This exception is
+		// specific to that typed property; all other security fields still
+		// require explicit readback. Any observed file is forbidden.
+		// https://github.com/systemd/systemd/blob/v249/src/systemctl/systemctl-show.c
+		if key == "EnvironmentFiles" && !ok {
+			continue
+		}
 		if !ok || got != want {
 			return fmt.Errorf("original QUIC unit security differs: %s", key)
 		}

@@ -166,3 +166,23 @@ func TestManagerSGXContextRequiresPreExecRemovalAndCannotReachChild(t *testing.T
 		t.Fatalf("removed manager value survived process verification or leaked: %v", err)
 	}
 }
+
+func TestEnvironmentFilesEmptyArrayOmissionOnly(t *testing.T) {
+	spec := testUnitSpec(t)
+	values := runningProperties(spec)
+	delete(values, "EnvironmentFiles")
+	if err := verifyUnitProperties(values, spec); err != nil {
+		t.Fatalf("systemctl empty tuple-array omission rejected: %v", err)
+	}
+	for _, foreign := range []string{"/run/foreign.env (ignore_errors=no)", "/run/foreign.env (ignore_errors=yes)", " "} {
+		values["EnvironmentFiles"] = foreign
+		if err := verifyUnitProperties(values, spec); err == nil {
+			t.Fatal("observed foreign EnvironmentFile accepted")
+		}
+	}
+	delete(values, "EnvironmentFiles")
+	delete(values, "RootDirectory")
+	if err := verifyUnitProperties(values, spec); err == nil {
+		t.Fatal("EnvironmentFiles exception weakened unrelated mandatory empty property")
+	}
+}
