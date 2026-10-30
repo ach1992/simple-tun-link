@@ -971,14 +971,19 @@ comparison of this file to the immutable protected journal, the actual
 current kernel boot/network namespace and strictly observed nft handles. It
 re-attests the original file inode and directory over host inspection and
 reports only `recorded_original_creation_consistent_no_retirement_authority`.
-An inode substitution during readback, mismatched boot/namespace, reused
-handle, unverified original material or changed nft object rejects the
-observation; the journal is not cleared. Even successful recorded CREATE
-provenance does **not** prove continuous ownership after process death,
-reboot, privileged replacement or handle recycling, and never authorizes
-adoption, restart, deletion or cleanup. A crash between nft CREATE and
-receipt publication remains an intentionally unresolved orphan requiring
-separately approved reconciliation rather than blind retry.
+An inode substitution during readback, mismatched boot/namespace, changed
+numerical nft handle values, unverified original material or mismatching
+current nft shape rejects the observation; the journal is not cleared.
+**Recycled nft handles with identical numerical values, or privileged
+replacement with matching current shape and identifiers, may be
+indistinguishable from uninterrupted originals.** A positive result is
+only bounded consistency between a recorded CREATE event and a current
+observation; it does **not** prove continuous kernel-object ownership
+after process death, reboot or replacement, and never authorizes adoption,
+deletion, replacement, replay, restart, retirement or recovery.
+A crash between nft CREATE and receipt publication remains an
+intentionally unresolved orphan requiring separately approved
+reconciliation rather than blind retry.
 
 The current first-generation preflight deliberately
 rejects other early WSS/QUIC hooks until their independently verified
