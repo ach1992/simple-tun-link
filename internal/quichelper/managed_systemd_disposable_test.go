@@ -90,6 +90,18 @@ func TestQUICHelperDisposableSystemdManaged(t *testing.T) {
 		t.Fatalf("fresh caller could not verify the post-launcher managed process: %v", err)
 	}
 	retained = append(retained, first.Process)
+	// Use the production reader against the real journal, not a synthetic argv
+	// or manager adapter. The bounded sleep writes no stdout, so a valid exact
+	// current-invocation query must succeed with no events. A dashed --boot
+	// regression fails here even though all process-policy checks can pass.
+	checkJournal := func(obs managedUnitObservation) {
+		t.Helper()
+		events, err := readHelperEvents(ctx, spec.Name, obs.Values["InvocationID"], obs.Host.BootID)
+		if err != nil || len(events) != 0 {
+			t.Fatalf("real current-invocation journal read failed or included unrelated events: count=%d err=%v", len(events), err)
+		}
+	}
+	checkJournal(first)
 	limitRaw, err := managerCommand(ctx, "systemctl", "--system", "show", spec.Name, "--property=StartLimitIntervalUSec,StartLimitBurst", "--no-pager", "--all")
 	if err != nil {
 		t.Fatalf("fixture start-limit readback failed: %v", err)
@@ -158,6 +170,7 @@ func TestQUICHelperDisposableSystemdManaged(t *testing.T) {
 	if restarted.Process.Observation.ExecutableDevice != uint64(executable.Dev) || restarted.Process.Observation.ExecutableInode != executable.Ino {
 		t.Fatal("managed restart changed canonical executable identity")
 	}
+	checkJournal(restarted)
 	// The fixture-only limit permits the initial invocation and one automatic
 	// restart. Killing this exact second pidfd reaches a real terminal failure
 	// on both systemd249 and newer, while the production GC policy is unchanged.
@@ -231,7 +244,7 @@ func TestQUICHelperDisposableSystemdManaged(t *testing.T) {
 		case <-ticker.C:
 		}
 	}
-	t.Log("managed canonical launch survived launcher exit; real journal environment, pidfd-bound restart, terminal start-limit retention, scoped reset with strict collection, canonical recreation and explicit stop verified")
+	t.Log("managed canonical launch survived launcher exit; real current-invocation journal reads before/after restart, pidfd-bound restart, terminal start-limit retention, scoped reset with strict collection, canonical recreation and explicit stop verified")
 }
 
 func startDisposableManagedWithLimit(ctx context.Context, spec unitSpec) error {
