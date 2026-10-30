@@ -16,7 +16,7 @@ import (
 // setup token. This path enforces hidden paste and fresh confirmation.
 func menuImportQUIC(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, opts *runtimeOptions) int {
 	menuScreen(out, "Import QUIC / sensitive peer offer")
-	menuNotice(out, "WARNING", "Paste the COMPLETE one-line JSON handoff privately. It contains WireGuard and mTLS private keys.")
+	menuNotice(out, "WARNING", "Paste the COMPLETE one-line JSON handoff privately. It contains WireGuard, mTLS and carrier secrets.")
 	raw, err := readPrivateMenuURLWithPrompt(input, reader, func() {
 		fmt.Fprint(out, "Paste protected QUIC receiver JSON (terminal echo off): ")
 	})
@@ -57,10 +57,11 @@ func menuImportQUIC(input io.Reader, reader *bufio.Reader, out, errOut io.Writer
 		WGPeerPort         uint16        `json:"peer_wireguard_udp_port"`
 		TLSListener        string        `json:"tls_listener_name"`
 		Confirm            string        `json:"confirmation_sha256"`
+		Obfuscation        string        `json:"obfuscation"`
 	}
 	plan, planErr := quicPlanForLink(offer.Receiver)
 	if json.Unmarshal(preview.Bytes(), &details) != nil || details.LinkID != offer.Receiver.ID ||
-		details.Confirm == "" || planErr != nil || details.TLSListener != plan.TLSName ||
+		details.Confirm == "" || details.Obfuscation != publicQUICObfuscation(offer.Receiver.QUIC.Obfuscation) || planErr != nil || details.TLSListener != plan.TLSName ||
 		details.PeerUnderlay != offer.Receiver.Underlay.Peer.String() || details.PeerPrivateIP != offer.Receiver.Addresses.Peer.String() ||
 		details.UDPPort != offer.Receiver.QUIC.UDPPort || details.ForwardUDPPort != offer.Receiver.QUIC.ForwardUDPPort ||
 		details.PeerForwardUDPPort != offer.Sender.QUIC.ForwardUDPPort {
@@ -78,6 +79,7 @@ func menuImportQUIC(input io.Reader, reader *bufio.Reader, out, errOut io.Writer
 	menuField(out, "PEER private IP", details.PeerPrivateIP)
 	menuField(out, "TLS QUIC UDP port", fmt.Sprintf("%d", details.UDPPort))
 	menuField(out, "TLS listener identity", details.TLSListener)
+	menuField(out, "QUIC obfuscation", details.Obfuscation)
 	menuField(out, "Loopback forwarding UDP", fmt.Sprintf("this %d / peer %d (0 = no forwarder)", details.ForwardUDPPort, details.PeerForwardUDPPort))
 	menuField(out, "Guarded WireGuard UDP", fmt.Sprintf("this %d / peer %d", details.WGListenPort, details.WGPeerPort))
 	menuNotice(out, "WARNING", "Private keys will be staged; the Engine will create an owned WG interface, nft guard and QUIC helper. Peer traffic must then be checked independently.")

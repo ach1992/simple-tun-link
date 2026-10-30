@@ -63,6 +63,13 @@ For QUIC, permit only the selected public **UDP** listener through the
 underlay firewall; its kernel WireGuard UDP ports remain guarded. Local
 activation, peer authentication and actual private traffic are verified
 separately.
+The QUIC mode is explicit: **Plain** remains the default; **Salamander**
+uses the pinned helper's supported packet obfuscation with a fresh protected
+per-Link secret. Both peers must use the same mode. TLS/mTLS and WireGuard
+authentication remain required, and no mode guarantees reachability in either
+dial direction. Follow the [versioned CLI contract](docs/CLI.md#managed-wireguard-over-quictls)
+for the installed release; successful source or local tests do not establish
+physical-path acceptance.
 
 ## Install on both servers
 
@@ -328,6 +335,9 @@ uses State **v4** for WSS-capable management. Stable **v0.1.16**
 writes **State v5** on the next State mutation, including on hosts with
 only Native Links; a pre-v5 binary must not manage that snapshot. A valid
 older snapshot remains readable, and reading alone does not rewrite it.
+The current Salamander-capable runtime writes **State v6**; even v0.1.17
+cannot manage a retained v6 snapshot. Read the [current rollback boundary](docs/INSTALL.md#state-v6-explicit-quic-obfuscation-and-rollback)
+before upgrading or requesting a downgrade.
 For the earlier v4 boundary, an older pre-v4 binary cannot
 be assumed safe even on a host that has only Native Links. In particular,
 installed v0.1.12 and earlier binaries do not know the guarded `DOWNGRADE`

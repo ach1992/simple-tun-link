@@ -74,6 +74,15 @@ func TestEmptyStateVersionedDowngradeIsLosslessAndPrivate(t *testing.T) {
 		ok                bool
 		want              int
 	}{
+		{"v6 to verified v17 State5", `{"schema_version":6,"links":[]}`, "v0.1.17", true, 5},
+		{"v5 already compatible", `{"schema_version":5,"links":[]}`, "v0.1.17", true, 5},
+		{"v6 retained receipt", `{"schema_version":6,"links":[],"removal_receipts":[{"retired":true}]}`, "v0.1.17", false, 6},
+		{"v6 even empty receipt field", `{"schema_version":6,"links":[],"removal_receipts":[]}`, "v0.1.17", false, 6},
+		{"v6 pending operation", `{"schema_version":6,"links":[],"quic_crash_operations":[{}]}`, "v0.1.17", false, 6},
+		{"v6 active link", `{"schema_version":6,"links":[{}]}`, "v0.1.17", false, 6},
+		{"v6 ambiguous alias", `{"schema_version":6,"links":[],"Links":[]}`, "v0.1.17", false, 6},
+		{"v6 unsupported direct boundary", `{"schema_version":6,"links":[]}`, "v0.1.12", false, 6},
+		{"unverified v16 target", `{"schema_version":6,"links":[]}`, "v0.1.16", false, 6},
 		{"v4 to v3", `{"schema_version":4,"links":[]}`, "v0.1.9", true, 3},
 		{"v4 to v4", `{"schema_version":4,"links":[]}`, "v0.1.10", true, 4},
 		{"already v3", `{"schema_version":3,"links":[]}`, "v0.1.9", true, 3},
@@ -175,7 +184,7 @@ func TestEmptyStateDowngradeCannotFollowSymlink(t *testing.T) {
 }
 
 func TestUnsupportedPublishedStateSchemaIsExplicit(t *testing.T) {
-	for _, tag := range []string{"v0.1.7", "v1.0.0", "v0.1.9-rc.1", "latest", "../main"} {
+	for _, tag := range []string{"v0.1.7", "v0.1.13", "v0.1.14", "v0.1.15", "v0.1.16", "v1.0.0", "v0.1.9-rc.1", "latest", "../main"} {
 		if _, err := publishedStateSchema(tag); err == nil {
 			t.Fatalf("unsupported target granted schema authority: %s", tag)
 		}
@@ -184,7 +193,7 @@ func TestUnsupportedPublishedStateSchemaIsExplicit(t *testing.T) {
 		tag    string
 		schema int
 	}{
-		{"v0.1.8", 3}, {"v0.1.9", 3}, {"v0.1.10", 4}, {"v0.1.12", 4},
+		{"v0.1.8", 3}, {"v0.1.9", 3}, {"v0.1.10", 4}, {"v0.1.12", 4}, {"v0.1.17", 5},
 	} {
 		got, err := publishedStateSchema(tc.tag)
 		if err != nil || got != tc.schema {

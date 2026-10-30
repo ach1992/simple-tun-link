@@ -59,6 +59,11 @@ syntax see [CLI.md](CLI.md); for changing a saved Link see the
   `link diagnose` and the all-Link inventory use five bounded private ICMP
   probes only after exact ownership and private-route verification.
   Unresolved QUIC operations remain quarantined and are not actively probed.
+  The public mode label distinguishes `plain` and `salamander` without exposing
+  the obfuscation secret. A selected mode is desired configuration, not an
+  observation of peer authentication or path reachability. The unchanged
+  trusted unit/invocation/boot/transport and output-bound journal rules apply
+  to both modes.
   Carrier PMTU is not measured, and diagnostic `--mtu` is refused. The
   lifecycle's conservative auto MTU and pinned-helper capacity bound are
   separate configuration rules, described in [ARCHITECTURE.md](ARCHITECTURE.md).

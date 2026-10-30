@@ -72,6 +72,10 @@ func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, er
 		menuNotice(out, "WARNING", "Choose 1 or 2.")
 		return 2
 	}
+	obfuscation, err := askQUICObfuscation(p)
+	if err != nil {
+		return p.failed(err)
+	}
 	udp, err := askPortDefault(p, "Public QUIC/TLS UDP port [443]: ", 443)
 	if err != nil {
 		return p.failed(err)
@@ -119,7 +123,7 @@ func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, er
 	if err != nil {
 		return p.failed(err)
 	}
-	request := quicCreateRequest{SchemaVersion: 1, LinkID: id, Underlay: desiredUnderlayV1{Local: route.Source, Peer: peer},
+	request := quicCreateRequest{SchemaVersion: 2, Obfuscation: publicQUICObfuscation(obfuscation), LinkID: id, Underlay: desiredUnderlayV1{Local: route.Source, Peer: peer},
 		Addresses:  desiredLinkAddressesV1{Local: addresses.Local, Peer: addresses.Peer},
 		ListenPort: localWG, PeerPort: peerWG, Role: role, UDPPort: udp,
 		LocalKeepalive: 25, PeerKeepalive: 25,
@@ -134,6 +138,7 @@ func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, er
 	menuField(out, "This server", route.Source.String()+" ("+role+")")
 	menuField(out, "Other server", peer.String())
 	menuField(out, "TLS UDP port", strconv.Itoa(int(udp)))
+	menuField(out, "QUIC obfuscation", publicQUICObfuscation(obfuscation))
 	menuField(out, "Kernel WG UDP", fmt.Sprintf("this %d / peer %d", localWG, peerWG))
 	menuField(out, "Private IPs", addresses.Local.String()+" <-> "+addresses.Peer.String())
 	menuField(out, "Private MTU", "Auto: conservative 1280-byte start; peer PMTU remains unmeasured")
@@ -167,4 +172,24 @@ func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, er
 	menuShowNewProtectedHandoff(input, out, opts, id)
 	menuProse(out, "On the peer: transfer the sensitive offer privately, run stl link preview-quic --stdin and then stl link import-quic --stdin --confirm SHA256; verify private traffic.")
 	return 0
+}
+
+// The menu collects the same typed choice as creator schema v2; credentials
+// remain generated and staged by the canonical QUIC lifecycle.
+func askQUICObfuscation(p createPrompts) (string, error) {
+	menuSection(p.out, "QUIC packet representation")
+	menuOption(p.out, "1", "Plain", "standard QUIC packets (default)")
+	menuOption(p.out, "2", "Salamander", "shared per-Link obfuscation; TLS authentication remains required")
+	answer, err := p.ask("QUIC obfuscation [1]: ")
+	if err != nil {
+		return "", err
+	}
+	switch answer {
+	case "", "1":
+		return "", nil
+	case "2":
+		return "salamander", nil
+	default:
+		return "", fmt.Errorf("choose QUIC obfuscation 1 or 2")
+	}
 }

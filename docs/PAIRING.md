@@ -139,7 +139,7 @@ payloads. Its bounded JSON receiver file uses schema_version=1,
 sender/receiver public Link objects, receiver_wireguard_private_key and
 receiver_tls (four receiver-local mTLS CA/leaf/key/bearer files). WSS fields
 were introduced in versioned ordinary State v4 **without** private material
-and remain readable in the current State v5 schema.
+and remain readable in the current State v6 schema.
 The creator generates both endpoint keys and the independent Link-specific
 authorization token once. The CA signing key is intentionally discarded,
 not stored with the receiver file. Receiver import checks exact reciprocal
@@ -153,11 +153,16 @@ details out of band. A copied WSS JSON file is a secret, **not** a shareable
 public Setup Link. Reissuing a revoked or retired Link requires a fresh ID,
 CA, leaf identities and bearer; do not recycle any retired credentials.
 
-## Managed QUIC confidential peer JSON (distinct schema 1)
+## Managed QUIC confidential peer JSON (distinct schemas 1 and 2)
 
-Managed QUIC uses a dedicated private JSON handoff with `schema_version:1`,
-public `sender` and `receiver` Links, `receiver_wireguard_private_key`, and
-four receiver-local `receiver_tls` byte values. It is not a native
+Managed QUIC uses a dedicated private JSON handoff with public `sender` and
+`receiver` Links, `receiver_wireguard_private_key`, and receiver-local
+`receiver_tls` byte values. Frozen schema **1** permits Plain only and four
+credential files. Schema **2** adds the matched `quic.obfuscation` choice;
+Salamander carries a fifth private `obfs-secret` file, generated independently
+from the bearer. A missing or explicit `plain` choice has the original empty
+internal representation. A schema-1 offer rejects the new field even when
+empty and cannot carry the additional secret. It is not a native
 `stl://` v1/v2/v3 offer and is not a WSS offer. Each public Link explicitly
 selects `wireguard-quic` and its endpoint-local role, forwarding port and
 MTU policy. Validation checks reciprocal physical/private addresses,
@@ -167,13 +172,15 @@ leaf/key pairing, credential lifetime and the complete allowed field set.
 A receiver must preview the original bytes and confirm their SHA-256 before
 import. The sender publishes only a protected no-clobber private handoff,
 after its own material is durably staged under the Engine's managed
-pre-effect journal. It retains no CA signing key. The receiver private key
-and bearer never enter public State or normal command output. Treat every
+pre-effect journal. It retains no CA signing key. The receiver private key, bearer and obfuscation secret never enter public
+State or normal command output. Treat every
 external copy as a live secret and transfer it through an authenticated
 private channel.
 
 Saved handoff sharing verifies the original public topology and protected
-sender generation before showing the original token. Repeated import can
+sender generation before showing the original token, including both shared
+secret fingerprints for Salamander. Retaining the old bearer while replacing
+the obfuscation secret is not authority to re-export a new offer. Repeated import can
 reuse only the same committed recipient identity and material. Sender
 Resume uses the original sender Link and existing credentials; it cannot
 silently replace keys or consume an unresolved operation. See

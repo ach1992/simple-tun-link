@@ -708,23 +708,43 @@ realm, masquerading configuration, arbitrary helper option or public WG
 fallback is accepted. Ephemeral CA signing keys are never exported or
 persisted; each peer receives only its own leaf key and peer trust anchor.
 
+The public mode is explicit: empty internal `QUICOptions.Obfuscation` is
+Plain; `salamander` selects only the pinned upstream's supported Salamander
+wrapper. New public input may spell Plain as `plain` and normalizes it before
+identity checks. Both peers must agree on the mode. A fresh independent
+256-bit obfuscation secret is generated for Salamander; it is never reused
+from the bearer or TLS material. Old Plain configuration bytes, file sets
+and generation identities remain unchanged. Mode changes require a fresh
+paired Link, not an in-place configuration edit or automatic fallback.
+
 Role-specific material lives below
-`$stateRoot/credentials/quic/<LinkID>/`: four protected credential files,
-`helper.json` and a nonce-bound generation receipt. The existing descriptor-
+`$stateRoot/credentials/quic/<LinkID>/`: four protected credential files
+for Plain, a fifth `obfs-secret` credential for Salamander, and in both modes
+`helper.json` plus a nonce-bound generation receipt. The existing descriptor-
 relative private store enforces 0700 directories, single-link 0600 regular
 files, no symlink traversal and no replacement of existing material. The
 WG private key stays in the existing per-Link KeyStore. Public State contains
-fingerprints and original file identity, never keys, bearer or receiver
-handoff bytes. A sensitive receiver offer has its own explicit schema and
+fingerprints and original file identity, never keys, bearer, obfuscation
+secret or receiver handoff bytes. A sensitive receiver offer has its own explicit schema and
 cannot be interpreted by native or WSS pairing readers.
 
 ### Canonical transaction and original-generation provenance
 
-Persisted **State v5** adds managed QUIC generation and completion metadata.
-Valid v1–v4 State remains readable under its existing migration rules, but
-legacy documents cannot graft managed QUIC authority. A pre-v5 binary cannot
-safely manage State after a v5 publication; binary-only downgrade is not an
-accepted rollback procedure.
+Persisted **State v6** adds the explicit obfuscation/material identity to
+managed QUIC, whose generation and completion metadata were introduced in
+State v5. Valid v1–v5 State remains readable under its existing migration
+rules without a read-time write. A document at version 5 or older cannot
+graft `obfuscation` or `obfuscation_sha256`, even as an empty field, into
+Links, plans, generations, operations or receipts. Existing Plain material
+and generation identities remain valid; later successful State mutations
+write v6. Binary-only downgrade to a pre-v6 reader cannot manage a retained
+v6 snapshot. The canonical maintenance path permits only the verified
+**canonical two-field empty v6 → v5** transition for **v0.1.17**; any Link,
+journal, receipt, extra member or ambiguity refuses that transition.
+
+Creator and private offer schema v2 plus desired input schema v5 expose the
+new mode. Frozen creator/offer v1 and desired v4 remain Plain-only. These
+versions are independent of State and public response schemas.
 
 A fresh managed Ensure follows the existing Engine transaction:
 
@@ -732,7 +752,8 @@ A fresh managed Ensure follows the existing Engine transaction:
    locks, reload State, and reject conflicting saved, pending or live claims.
 2. Durably publish the exact versioned managed pre-effect journal before
    writing protected material or dispatching any host effect.
-3. Stage and reattest the exact WG/TLS/bearer/config generation. A sender's
+3. Stage and reattest the exact WG/TLS/bearer/optional-obfuscation/config
+   generation. A sender's
    optional protected handoff publication occurs after local material is
    durable and before first host Apply. Retain executable/material witnesses
    through final verification and State publication.

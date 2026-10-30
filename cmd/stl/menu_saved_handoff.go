@@ -249,7 +249,18 @@ func quicOfferMatchesSenderGeneration(offer quicOffer, record state.LinkRecord) 
 		return false
 	}
 	digest := sha256.Sum256(token[:64])
-	return hex.EncodeToString(digest[:]) == record.QUICGeneration.Files.Authorization
+	if hex.EncodeToString(digest[:]) != record.QUICGeneration.Files.Authorization {
+		return false
+	}
+	secret, present := offer.ReceiverTLS["obfs-secret"]
+	if offer.Sender.QUIC.Obfuscation == "" {
+		return !present && record.QUICGeneration.Files.ObfuscationSHA256 == ""
+	}
+	if len(secret) != 65 || secret[64] != '\n' {
+		return false
+	}
+	digest = sha256.Sum256(secret[:64])
+	return hex.EncodeToString(digest[:]) == record.QUICGeneration.Files.ObfuscationSHA256
 }
 
 // QUIC CLI handoffs use the same explicit private-file disclosure boundary.
