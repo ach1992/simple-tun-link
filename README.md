@@ -26,7 +26,7 @@ firewall ownership and kernel capabilities must still pass on both endpoints.
 | **IPIP** | Native, FOU/UDP, GUE/UDP | No | Alternative plaintext L3 encapsulation |
 | **WireGuard** | UDP | Yes | Encrypted point-to-point connection |
 | **WireGuard over WSS/TLS** | WSS over TCP + private kernel WG | Yes (mTLS and WireGuard) | Optional managed Carrier when the peer can reach a selected TLS TCP port |
-| **WireGuard over QUIC/TLS** (release candidate) | QUIC over UDP + private kernel WG | Yes (mTLS and WireGuard) | Optional managed Carrier with the separately pinned Hysteria companion |
+| **WireGuard over QUIC/TLS** | QUIC over UDP + private kernel WG | Yes (mTLS and WireGuard) | Optional managed Carrier with the separately pinned Hysteria companion |
 | **IPsec** | IKEv2/XFRM, ESP or NAT-T | Yes | Advanced encrypted transport; requires a verified STL-owned strongSwan runtime |
 
 GRE keys and UDP encapsulation do **not** encrypt or authenticate traffic.
@@ -54,10 +54,11 @@ both endpoints. STL protects the **kernel WireGuard UDP port** with a
 Link-scoped ingress guard; do **not** publish that port to the Internet.
 Use non-overlapping private Link Address subnets.
 
-The managed QUIC implementation is a **release candidate**, not a feature of
-the published v0.1.15 installer. Its prerequisites, confidential peer setup,
-diagnostics and recovery are documented in
-[managed QUIC](docs/CLI.md#managed-wireguard-over-quictls-release-candidate).
+Managed WireGuard over QUIC/TLS is available starting with **Stable v0.1.16**.
+Both endpoints require the separately pinned Hysteria companion and supported
+host capabilities. Its prerequisites, confidential peer setup, diagnostics
+and recovery are documented in
+[managed QUIC](docs/CLI.md#managed-wireguard-over-quictls).
 For QUIC, permit only the selected public **UDP** listener through the
 underlay firewall; its kernel WireGuard UDP ports remain guarded. Local
 activation, peer authentication and actual private traffic are verified
@@ -122,24 +123,25 @@ See [Issue #176](https://github.com/ach1992/simple-tun-link/issues/176).
 ### Local installation without GitHub access on the server
 
 Official Stable releases from **v0.1.9 onward** support one self-contained
-core installer. The current example, **v0.1.15**, uses the files below.
+core installer. The current example, **v0.1.16**, uses the files below.
 For later releases, always select the corresponding tag and architecture from
 [official Latest Stable](https://github.com/ach1992/simple-tun-link/releases/latest).
-WSS is optional and needs **one separate verified companion archive**.
+WSS and QUIC are optional: each selected Carrier needs its own separately
+verified companion file.
 Download only **one** official architecture-specific release asset on another
 device. It already contains the matching STL binary, the canonical installer
 and all STL-owned core metadata; no second STL file is needed on the server:
 
 | Destination CPU (`uname -m`) | Download from the exact official release |
 | --- | --- |
-| `x86_64` | [`stl_v0.1.15_linux_amd64_local-install.sh`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.15/stl_v0.1.15_linux_amd64_local-install.sh) |
-| `aarch64` | [`stl_v0.1.15_linux_arm64_local-install.sh`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.15/stl_v0.1.15_linux_arm64_local-install.sh) |
+| `x86_64` | [`stl_v0.1.16_linux_amd64_local-install.sh`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.16/stl_v0.1.16_linux_amd64_local-install.sh) |
+| `aarch64` | [`stl_v0.1.16_linux_arm64_local-install.sh`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.16/stl_v0.1.16_linux_arm64_local-install.sh) |
 
 Upload the single file **as-is** into `/root/stl/` on the server (e.g. through
 SFTP); the folder must be root-owned mode `0700` and the file root-owned
 mode `0600` or `0644`. Keep **exactly one** matching
 `*_local-install.sh` in that folder (move any older installer elsewhere; the
-optional WSS companion may coexist). Run **as root**
+selected optional companions may coexist). Run **as root**
 (the command itself is a trusted pre-execution check, before any transferred
 shell instruction):
 
@@ -147,14 +149,18 @@ shell instruction):
 bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}") || exit 1; [[ $n =~ ^[0-9]+$ && $n -gt 0 && $n -le 134250000 ]] || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; head -c "$n" -- "${f[0]}" > "$d/${f[0]##*/}"; [[ $(stat -c %s -- "$d/${f[0]##*/}") == "$n" ]]; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; for x in "$@"; do case "$x" in --with-wss|--with-quic) case $(uname -m) in x86_64) a=amd64;; aarch64) a=arm64;; *) echo "STL: unsupported companion CPU" >&2; exit 1;; esac; if [[ $x == --with-wss ]]; then w="/root/stl/wstunnel_11.0.0_linux_${a}.tar.gz"; else w="/root/stl/hysteria-linux-${a}"; fi;; *) continue;; esac; [[ -f $w && ! -L $w && $(stat -c %u:%a "$w") =~ ^0:(600|644)$ && $(stat -c %h "$w") == 1 ]] || { echo "STL: missing or unsafe selected companion" >&2; exit 1; }; z=$(stat -c %s "$w"); [[ $z =~ ^[0-9]+$ && $z -gt 1024 && $z -lt 100000000 ]] || { echo "STL: companion size is unsafe" >&2; exit 1; }; head -c "$z" -- "$w" > "$d/${w##*/}"; [[ $(stat -c %s -- "$d/${w##*/}") == "$z" ]] && cmp -s -- "$w" "$d/${w##*/}" || { echo "STL: companion changed during protected copy" >&2; exit 1; }; done; bash "$d/${f[0]##*/}" "$@"' stl
 ~~~
 
-The final `stl` labels the `bash -c` invocation; to explicitly install
-the separately verified optional WSS helper, append ` --with-wss` after
-that final `stl`. Do not append it for a normal core-only install.
-The archive must already be beside the installer. When WSS is
-explicitly selected, the trusted preflight makes a bounded root-private
-snapshot of **both** files together; the canonical launcher then checks
-the pinned archive and executable SHA-256. It rejects absent, unsafe or
-changed archives instead of silently installing core without WSS.
+The final `stl` labels the `bash -c` invocation. To select an optional
+companion, append ` --with-wss` for the pinned `wstunnel v11.0.0` archive
+or ` --with-quic` for the pinned Hysteria `app/v2.13.0` executable after
+that final `stl`. Supply both flags only when selecting both companions;
+use neither for a core-only install. The exact architecture-matched files
+must already be beside the installer. The trusted preflight makes a bounded
+root-private snapshot of the installer and each selected companion; the
+canonical launcher then checks their pinned digests. It rejects absent,
+unsafe or changed selected files instead of silently omitting a companion.
+The [QUIC companion instructions](docs/INSTALL.md#optional-pinned-quic-companion)
+give its exact filenames and provenance requirements. Merely placing a helper
+beside the installer neither selects it nor creates a Link.
 The [full root/sudo procedure](docs/INSTALL.md#one-transferred-file-and-one-trusted-command-new-release-format)
 explains the same verified preflight.
 
@@ -174,7 +180,9 @@ are reused; only missing native/WireGuard distro packages may use the configured
 **signed APT repositories**. IPsec preparation is separate. Since
 **Stable v0.1.10**, managed WireGuard over WSS is an **optional**, explicitly
 selected Carrier requiring the separately pinned `wstunnel v11.0.0` archive
-and `--with-wss`; it is not bundled with core STL. Paqet is not shipped.
+and `--with-wss`; it is not bundled with core STL. **Stable v0.1.16** adds
+the separately pinned Hysteria companion selected with `--with-quic` for
+managed QUIC. Paqet is not shipped.
 
 **Availability:** [v0.1.9](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.9)
 is the first Stable release with the self-contained `.sh` installers.
@@ -316,7 +324,7 @@ bash -c 'set -e; d=$(mktemp -d); cleanup(){ rm -rf -- "$d"; }; trap cleanup EXIT
 ~~~
 
 Installer binary rollback is **not** State rollback. Stable v0.1.10–v0.1.15
-uses State **v4** for WSS-capable management. The managed QUIC candidate
+uses State **v4** for WSS-capable management. Stable **v0.1.16**
 writes **State v5** on the next State mutation, including on hosts with
 only Native Links; a pre-v5 binary must not manage that snapshot. A valid
 older snapshot remains readable, and reading alone does not rewrite it.

@@ -503,7 +503,8 @@ the durable exact removal receipt. A failed secret-retirement phase leaves
 its receipt retryable; a retired Link ID cannot be reused. Arbitrary
 **operator-selected exported handoff paths** remain operator-managed and
 must be separately retired from their external storage after confirmation.
-WSS management first used State v4; the managed QUIC candidate uses State v5.
+WSS management first used State v4; Stable v0.1.16 introduces State v5
+for managed QUIC and subsequent State mutations on all backends.
 Older binaries must not manage snapshots written by an unsupported newer schema.
 
 ### Ubuntu AppArmor confinement of `wg` (WSS host preflight)
@@ -842,12 +843,12 @@ The rootless tests use real kernel WG and nft but a disposable systemd
 shim; disposable tests alone never prove field/systemd reboot behavior or all
 architectures; physical acceptance and release reviews are separately recorded.
 
-## Managed WireGuard over QUIC/TLS (release candidate)
+## Managed WireGuard over QUIC/TLS
 
-The `wireguard-quic` backend uses native kernel WireGuard inside one
-per-Link authenticated Hysteria/QUIC UDP carrier. It is a release candidate;
-Stable v0.1.15 does not expose these commands. Both endpoints need the
-[explicit pinned companion](INSTALL.md#optional-pinned-quic-companion-release-candidate),
+Available starting with **Stable v0.1.16**, the `wireguard-quic` backend
+uses native kernel WireGuard inside one per-Link authenticated
+Hysteria/QUIC UDP carrier. Both endpoints need the
+[explicit pinned companion](INSTALL.md#optional-pinned-quic-companion),
 verified host capabilities and a reachable physical UDP listener.
 
 ### Guided setup and the three address/port roles

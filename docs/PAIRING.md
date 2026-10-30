@@ -177,4 +177,4 @@ sender generation before showing the original token. Repeated import can
 reuse only the same committed recipient identity and material. Sender
 Resume uses the original sender Link and existing credentials; it cannot
 silently replace keys or consume an unresolved operation. See
-[the QUIC command contract](CLI.md#managed-wireguard-over-quictls-release-candidate).
+[the QUIC command contract](CLI.md#managed-wireguard-over-quictls).
