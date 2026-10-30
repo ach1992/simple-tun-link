@@ -59,14 +59,13 @@ its separately verified prerequisite and runtime admission contracts.
 
 ### Managed WireGuard over QUIC/TLS
 
-This optional carrier is implemented in the managed QUIC release candidate;
-it is not included in published Stable v0.1.15. It requires real kernel
-WireGuard, `wg`, iproute2, nftables, usable loopback UDP, IPv4 underlay and
+Available starting with **Stable v0.1.16**, this optional carrier requires
+real kernel WireGuard, `wg`, iproute2, nftables, usable loopback UDP, IPv4 underlay and
 private Link routes, and the exact official Hysteria **app/v2.13.0** binary
 for linux/amd64 or linux/arm64. The companion is separately selected and
 pinned by digest; its mere presence never enables a Link. Source compilation
 or a process reporting the expected version does not establish executable
-trust. See [companion installation](INSTALL.md#optional-pinned-quic-companion-release-candidate).
+trust. See [companion installation](INSTALL.md#optional-pinned-quic-companion).
 
 Managed helpers require systemd **249 or newer** with the exact effective
 unit, process, sandbox and dependency observations accepted by preflight.

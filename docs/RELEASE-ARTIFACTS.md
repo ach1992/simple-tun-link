@@ -153,7 +153,7 @@ before testing a downgrade or roll-forward.
 
 ### Managed QUIC / State v5 acceptance
 
-The managed QUIC candidate advances current State to **v5**. Verify valid
+Stable **v0.1.16** introduces State **v5**. Verify valid
 v1–v4 migration, rejection of managed-authority fields grafted into old
 schemas, preservation of source-only quarantine, and exact generation-bound
 Ensure/Restore/Remove/retirement/reconciliation. A pre-v5 binary-only rollback

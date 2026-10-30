@@ -199,35 +199,38 @@ delete leftover protected temporary material.
 **[Stable v0.1.9](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.9)
 was the first release with the self-contained `*_local-install.sh` format.**
 Use the [latest published Stable](https://github.com/ach1992/simple-tun-link/releases/latest)
-for a new installation. As a concrete example, the approved immutable
-**v0.1.15** publishes the exact download files below.
+for a new installation. The **v0.1.16** local-install files are listed below.
 When a new release becomes Latest, select that new release's **actual tag**,
 matching architecture and source-verified file instead of blindly reusing
-v0.1.15.
+an older example.
 Open the official release on an Internet-connected device and verify its tag,
 publisher and exact published asset before privileged use. The matching file
 already embeds all required STL core files; no extra STL binary, installer,
 manifest or checksum transfer is necessary. Optional Carrier helpers are
 *not* included in the core archive. From Stable v0.1.10, WSS is supported
 through a separately verified, explicit
-`--with-wss` companion selection; Paqet remains unshipped.
+`--with-wss` companion selection. Stable v0.1.16 adds managed QUIC through
+the separately pinned Hysteria companion selected with `--with-quic`;
+Paqet remains unshipped.
 
 | Server CPU | Exactly ONE file to download | Exact official release asset |
 | --- | --- | --- |
-| `x86_64` | `stl_v0.1.15_linux_amd64_local-install.sh` | [Official v0.1.15 AMD64 file](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.15/stl_v0.1.15_linux_amd64_local-install.sh) |
-| `aarch64` | `stl_v0.1.15_linux_arm64_local-install.sh` | [Official v0.1.15 ARM64 file](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.15/stl_v0.1.15_linux_arm64_local-install.sh) |
+| `x86_64` | `stl_v0.1.16_linux_amd64_local-install.sh` | [Official v0.1.16 AMD64 file](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.16/stl_v0.1.16_linux_amd64_local-install.sh) |
+| `aarch64` | `stl_v0.1.16_linux_arm64_local-install.sh` | [Official v0.1.16 ARM64 file](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.16/stl_v0.1.16_linux_arm64_local-install.sh) |
 
 Transfer the selected single file
 **without renaming, extracting or making it executable** into `/root/stl/`.
 Create `/root/stl/` using your SFTP client as root if necessary. No additional
 manifest, checksum file, compiler or separate shell helper is required on the
-*target*. For WSS alone, the separate verified `wstunnel` archive is an
-additional optional file. The folder/file must be owned by root, not
+*target*. Each explicitly selected optional Carrier requires a separate
+verified architecture-matched companion: the `wstunnel` archive for WSS
+or the Hysteria executable for QUIC. Selecting both requires both files.
+The folder/file must be owned by root, not
 group/other writable; typical root-SFTP file modes `0600`/`0644` work,
 and the directory must be root-owned `0700`.
 **Keep exactly one matching `*_local-install.sh`** in `/root/stl/`: move
 older installers to a separate private directory before running the glob.
-The pinned WSS companion archive may coexist with that one installer.
+Either or both selected companion files may coexist with that one installer.
 With this one matching installer present,
 run the exact command as **root**, or use the separately shown genuine `sudo`
 variant from a non-root administrator account:
@@ -247,15 +250,17 @@ These commands verify ownership, source type, modes, installer count and the
 1..134250000-byte file-size bound **before** private bounded copying or
 execution of transferred shell bytes.
 An unsafe folder/file, symlink or extra matching installer is refused, not
-run. The trailing `stl` is the fixed `bash -c` argument label; for an
-**explicit WSS companion selection only**, append ` --with-wss` after
-that final `stl`. Only with that flag, the trusted command also checks the matching
-optional archive's root ownership, mode, single hardlink, filename/CPU,
-size and exact copied bytes **before executing the private snapshot**.
-It places the selected helper beside the private STL launcher (not
-just beside the original downloaded STL file); the official launcher
-then checks pinned archive and extracted executable SHA-256. Without
-the flag, the optional archive is neither copied nor installed. The command is necessarily longer than directly
+run. The trailing `stl` is the fixed `bash -c` argument label. Append
+` --with-wss` for the WSS companion or ` --with-quic` for the QUIC companion
+after that final `stl`; supply both flags only when selecting both companions.
+For each selected companion, the trusted command also checks root ownership,
+mode, single hardlink, matching filename/CPU, size and exact copied bytes
+**before executing the private snapshot**. It places each selected companion
+beside the private STL launcher, not just beside the original downloaded STL
+file. The official launcher then checks the pinned SHA-256 of the WSS archive
+and its extracted executable, or of the QUIC executable, as selected.
+Unselected companion files remain untouched and are neither copied nor
+installed. The command is necessarily longer than directly
 invoking an unauthenticated transferred script; it is still one copyable
 invocation and requires no checksum variable, unpack, chmod or second installer.
 It is not an independent publisher signature: verify the official file before transfer.
@@ -745,9 +750,9 @@ Restoring only an old binary while retaining schema v4 is NOT a valid rollback.
 Never manually rewrite schema_version or strip pre-effect journals, original
 WSS fingerprints, receipts or resource claims.
 
-### Managed QUIC candidate: State v5 boundary
+### State v5: managed QUIC and rollback
 
-The managed QUIC candidate writes **State v5** on successful State mutation,
+Stable **v0.1.16** writes **State v5** on successful State mutation,
 including when only existing Native or WSS Links are present. Valid v1–v4
 State is readable without mutation, preserving historical MTU, journal and
 ownership rules. Older schemas cannot inject managed QUIC generation or
@@ -758,8 +763,8 @@ A pre-v5 executable cannot safely manage a snapshot after v5 publication.
 Keep a consistent restricted backup of State, credentials and original
 receiver handoffs before update. Prefer a v5-compatible forward fix after
 an uncertain update; never strip fields, edit the schema number or discard
-a journal to make an older binary accept it. This release-candidate boundary
-is additional to the earlier v3 and v4 boundaries below.
+a journal to make an older binary accept it. This v5 boundary is additional
+to the earlier v3 and v4 compatibility requirements.
 
 **Do not treat installer binary rollback as State rollback.** Once any new
 runtime has written schema v3, pre-v3 STL executables cannot read that State
@@ -897,7 +902,7 @@ pending journal, missing WSS original-termination proof, or duplicate/
 case-aliased nested receipt field (including Unicode SimpleFold aliases).
 **Availability:** previously published Stable `v0.1.13` does *not* have
 this fix. Use the trusted Latest Stable **update** to install v0.1.14 or
-newer (currently v0.1.15) before attempting receipt-aware menu Uninstall.
+newer before attempting receipt-aware menu Uninstall.
 Remove each live Link through the canonical Link lifecycle first.
 A preflight refusal with `credential_retirement_pending` means to finish the
 specific receipt-bound STL credential-retirement workflow, **not** delete the
@@ -1012,13 +1017,12 @@ or a locally selected helper as a published Stable artifact; verify the installe
 authenticated private connectivity before production use.
 
 
-## Optional pinned QUIC companion (release candidate)
+## Optional pinned QUIC companion
 
-The managed QUIC candidate uses one separate official **Hysteria
-app/v2.13.0** executable. Published Stable v0.1.15 does not contain this
-selection. Use a verified candidate for isolated acceptance, or the exact
-published version once QUIC is released. Core installation alone never
-creates a QUIC Link or starts a helper.
+Starting with **Stable v0.1.16**, managed QUIC uses one separate official
+**Hysteria app/v2.13.0** executable. Select the exact STL release and
+architecture-matched companion described below. Core installation alone
+never creates a QUIC Link or starts a helper.
 
 | CPU | Exact upstream asset | SHA-256 of the executable |
 | --- | --- | --- |
@@ -1067,5 +1071,5 @@ After installation, verify `stl version --json`, create/import the private
 pair, check local status, then test bilateral private ICMP, TCP and UDP.
 Successful installation or local helper readiness does not prove the remote
 TLS identity, a WG handshake, peer traffic, host reboot restoration or WAN
-reachability. See [CLI.md](CLI.md#managed-wireguard-over-quictls-release-candidate)
+reachability. See [CLI.md](CLI.md#managed-wireguard-over-quictls)
 and [SUPPORTED-ENVIRONMENTS.md](SUPPORTED-ENVIRONMENTS.md).
