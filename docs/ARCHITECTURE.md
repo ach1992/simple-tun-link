@@ -1003,6 +1003,60 @@ A crash between nft CREATE and receipt publication remains an
 intentionally unresolved orphan requiring separately approved
 reconciliation rather than blind retry.
 
+
+An additional, **still source-only and non-runnable**, initial native kernel
+WireGuard creation step is available as
+`quicwgorigin.StageOriginal(ctx, engine, linkID)`. It uses that same
+journal-locked Engine admission (including the immutable QUIC Plan and
+protected, pinned Hysteria material), not a separate resource manager.
+The entrypoint requires the previously recorded **original** QUIC nft
+ingress birth receipt and its current strict nft shape, plus the journal-
+matched private native WireGuard key from the existing KeyStore. It binds
+a fresh pinned-OS-thread network-namespace/boot observation and the exact
+original nft receipt **device/inode**, checking again across the host-effect
+window. Only then does it require current complete kernel-WireGuard public-
+key/listen-port inventories, **all-state** UDP socket vacancy, and the
+absence of foreign interface names/aliases before sending the existing
+exclusive `RTM_NEWLINK` WireGuard creation to the kernel. A journal-derived
+unguessable `q*` staging name is present in that very first kernel effect;
+an `IFLA_IFALIAS` tag is **not** falsely claimed to be atomic with
+creation. A successful exclusive ACK is followed by strict readback of
+the original staging name, first observed ifindex, WireGuard kind,
+DOWN/unaddressed/unconfigured state, then tag-by-ifindex, same-index
+readback, re-attestation of nft guard and protected key inode and a final
+post-publication host readback.
+
+Only after this first CREATE event and its strict readback does the writer
+exclusively publish the matching 0600, descriptor-checked and fsynced
+`credentials/quic-wg-origins/<LinkID>.json` **birth receipt**, with
+an independently reopened canonical path and exact created-file inode.
+It records the immutable journal ID/nonce, initial staging name/tag,
+ifindex, boot/namespace and original guard handles, **not private keys**.
+A repeat call refuses an existing receipt or staging identity, including
+byte-identical predecessors; canceled or uncertain ACKs, alias writes,
+namespace changes, replaced guard receipts and incomplete persistence
+leave the pre-effect journal and any possibly created host resources
+**quarantined**, without deletion, replay or foreign adoption.
+`quicwgorigin.InspectRecordedOriginal` is read-only and compares the
+receipt's inode, current first-generation staging shape and protected
+key against the same Engine journal and guard evidence.
+
+**Important ownership limitation:** a later identical name, alias, ifindex,
+guard-handle number, key bytes, boot or namespace label cannot prove
+continuous original kernel-object lifetime. In particular ifindex and nft
+handles can be recycled, and privileged same-byte private-file replacement
+between observations may be indistinguishable. The birth receipt and a
+matching observation do **not** authorize restoration, configuration,
+renaming, replacement, adoption, removal or retirement. The interface
+remains DOWN with no WG private-key or peer configuration and no UDP
+listener; Hysteria is not started and no committed Link is created.
+A future *composed* Engine transaction must establish sufficient ongoing
+ownership and safe recovery/retirement semantics before any such effect.
+The opt-in real-netlink acceptance test operates only in a verified
+disposable user/network namespace and uses synthetic empty WG/UDP socket
+readers where the laboratory lacks those executables; it is **not**
+a production-host or full credential/nft birth-chain proof.
+
 The current first-generation preflight deliberately
 rejects other early WSS/QUIC hooks until their independently verified
 original owner State + host evidence can be passed to the already shared

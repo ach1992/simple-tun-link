@@ -191,6 +191,16 @@ func persistOriginReceiptFD(root string, dir int, expected originReceipt, journa
 	return nil
 }
 
+// VerifyRecordedOriginalWithinAdmission rechecks the existing *birth* receipt
+// and exact live nft guard in the calling Engine journal/lock scope. It is a
+// read-only attestation primitive for trusted in-process host-effect writers,
+// NOT a permit to create, reuse, delete or retire the guard. It must be called
+// while the caller holds the canonical Engine QUIC material locks.
+func VerifyRecordedOriginalWithinAdmission(ctx context.Context, root string, id domain.LinkID, nonce string, port uint16) (OriginalGuardObservation, error) {
+	return verifyRecordedOriginalWithinAdmission(ctx, root, id, nonce, port,
+		linux.ExecRunner{}, hostidentity.CurrentKernelBootID, currentNetworkNamespace)
+}
+
 // InspectRecordedOriginal is READ-ONLY evidence that a previously recorded
 // exclusive CREATE still has a matching nft shape in this exact boot/netns.
 // Not sufficient for deletion/retirement after object replacement or reboot.
@@ -208,62 +218,73 @@ func inspectRecordedOriginal(ctx context.Context, engine *app.Engine, id domain.
 	var observation OriginalGuardObservation
 	err := engine.WithQUICCrashIngressAdmission(ctx, id,
 		func(c context.Context, root string, link domain.LinkID, nonce string, wg domain.WireGuardOptions) error {
-			runtime.LockOSThread()
-			defer runtime.UnlockOSThread()
-			firstBoot, err := bootID()
-			if err != nil || !hostidentity.ValidBootID(firstBoot) {
-				return fmt.Errorf("original QUIC recorded boot identity unverified")
-			}
-			firstNS, err := networkNS()
-			if err != nil || !validNetworkNamespaceID(firstNS) {
-				return fmt.Errorf("original QUIC recorded namespace unverified")
-			}
-			dir, err := openOriginReceiptDir(root, false)
-			if err != nil {
-				return err
-			}
-			defer unix.Close(dir)
-			record, initialFile, err := readOriginReceiptFDWithIdentity(dir, link, nonce, wg.ListenPort)
-			if err != nil || record.KernelBootID != firstBoot || record.NetworkNS != firstNS {
-				return fmt.Errorf("original QUIC receipt absent or from another host generation")
-			}
-			guard, err := linux.NewQUICWGIngressPlan(link, wg.ListenPort, nonce)
-			if err != nil {
-				return err
-			}
-			present, handles, err := linux.ReadWGIngressGuardHandles(c, runner, guard)
-			if err != nil || !present || handles != record.Handles {
-				return fmt.Errorf("recorded QUIC guard original differs from current kernel observation")
-			}
-			secondBoot, bErr := bootID()
-			secondNS, nErr := networkNS()
-			if bErr != nil || nErr != nil || firstBoot != secondBoot || firstNS != secondNS || c.Err() != nil {
-				return fmt.Errorf("recorded QUIC guard host generation changed during observation")
-			}
-			// Keep the first directory pinned while independently resolving a
-			// fresh canonical path. An interloper may substitute parent or
-			// receipt inode while nft subprocesses execute.
-			fresh, err := openOriginReceiptDir(root, false)
-			if err != nil {
-				return err
-			}
-			var oldDir, newDir unix.Stat_t
-			same := unix.Fstat(dir, &oldDir) == nil && unix.Fstat(fresh, &newDir) == nil &&
-				oldDir.Dev == newDir.Dev && oldDir.Ino == newDir.Ino
-			again, finalFile, readErr := readOriginReceiptFDWithIdentity(fresh, link, nonce, wg.ListenPort)
-			unix.Close(fresh)
-			if !same || readErr != nil || again != record || finalFile != initialFile {
-				return fmt.Errorf("recorded QUIC guard receipt changed during kernel observation")
-			}
-			observation = OriginalGuardObservation{
-				LinkID: link, Table: guard.TableName(), ListenPort: wg.ListenPort,
-				KernelBootID: firstBoot, NetworkNS: firstNS,
-				Status: GuardRecordedOriginalWitness, Handles: handles,
-			}
-			return nil
+			var err error
+			observation, err = verifyRecordedOriginalWithinAdmission(c, root, link, nonce, wg.ListenPort,
+				runner, bootID, networkNS)
+			return err
 		})
 	if err != nil {
 		return OriginalGuardObservation{}, err
 	}
 	return observation, nil
+}
+
+// This function runs on one pinned OS thread for ALL live kernel/nft reads.
+// It is deliberately not an ownership proof: nft handles may be recycled.
+func verifyRecordedOriginalWithinAdmission(ctx context.Context, root string, link domain.LinkID,
+	nonce string, port uint16, runner linux.BoundedRunner,
+	bootID func() (string, error), networkNS func() (string, error)) (OriginalGuardObservation, error) {
+	if ctx == nil || runner == nil || bootID == nil || networkNS == nil {
+		return OriginalGuardObservation{}, fmt.Errorf("original QUIC guard observation inputs unavailable")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	firstBoot, err := bootID()
+	if err != nil || !hostidentity.ValidBootID(firstBoot) {
+		return OriginalGuardObservation{}, fmt.Errorf("original QUIC recorded boot identity unverified")
+	}
+	firstNS, err := networkNS()
+	if err != nil || !validNetworkNamespaceID(firstNS) {
+		return OriginalGuardObservation{}, fmt.Errorf("original QUIC recorded namespace unverified")
+	}
+	dir, err := openOriginReceiptDir(root, false)
+	if err != nil {
+		return OriginalGuardObservation{}, err
+	}
+	defer unix.Close(dir)
+	record, initialFile, err := readOriginReceiptFDWithIdentity(dir, link, nonce, port)
+	if err != nil || record.KernelBootID != firstBoot || record.NetworkNS != firstNS {
+		return OriginalGuardObservation{}, fmt.Errorf("original QUIC receipt absent or from another host generation")
+	}
+	guard, err := linux.NewQUICWGIngressPlan(link, port, nonce)
+	if err != nil {
+		return OriginalGuardObservation{}, err
+	}
+	present, handles, err := linux.ReadWGIngressGuardHandles(ctx, runner, guard)
+	if err != nil || !present || handles != record.Handles {
+		return OriginalGuardObservation{}, fmt.Errorf("recorded QUIC guard original differs from current kernel observation")
+	}
+	secondBoot, bErr := bootID()
+	secondNS, nErr := networkNS()
+	if bErr != nil || nErr != nil || firstBoot != secondBoot || firstNS != secondNS || ctx.Err() != nil {
+		return OriginalGuardObservation{}, fmt.Errorf("recorded QUIC guard host generation changed during observation")
+	}
+	fresh, err := openOriginReceiptDir(root, false)
+	if err != nil {
+		return OriginalGuardObservation{}, err
+	}
+	var oldDir, newDir unix.Stat_t
+	same := unix.Fstat(dir, &oldDir) == nil && unix.Fstat(fresh, &newDir) == nil &&
+		oldDir.Dev == newDir.Dev && oldDir.Ino == newDir.Ino
+	again, finalFile, readErr := readOriginReceiptFDWithIdentity(fresh, link, nonce, port)
+	unix.Close(fresh)
+	if !same || readErr != nil || again != record || finalFile != initialFile {
+		return OriginalGuardObservation{}, fmt.Errorf("recorded QUIC guard receipt changed during kernel observation")
+	}
+	return OriginalGuardObservation{
+		LinkID: link, Table: guard.TableName(), ListenPort: port,
+		KernelBootID: firstBoot, NetworkNS: firstNS,
+		Status: GuardRecordedOriginalWitness, Handles: handles,
+		ReceiptDevice: initialFile.Device, ReceiptInode: initialFile.Inode,
+	}, nil
 }

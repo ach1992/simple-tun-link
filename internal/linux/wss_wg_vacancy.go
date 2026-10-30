@@ -77,9 +77,9 @@ func WSSGlobalWGKernelVacant(ctx context.Context, runner BoundedRunner, wgBinary
 					}
 					occupied = occupied || parts[1] == publicKey
 				case "listen-port":
-					if parts[1] == "off" {
-						break
-					}
+					// wireguard-tools show.c prints a decimal uint16, even
+					// for an unconfigured interface (0). "off" is a fwmark
+					// representation, not a valid listen-port inventory.
 					number, err := strconv.ParseUint(parts[1], 10, 16)
 					if err != nil || strconv.FormatUint(number, 10) != parts[1] {
 						return false, fmt.Errorf("malformed global WG listen port")
