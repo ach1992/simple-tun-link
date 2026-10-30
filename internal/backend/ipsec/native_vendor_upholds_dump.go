@@ -31,7 +31,7 @@ func vendorStopParseLegacyManagerDump(r io.Reader, version int) error {
 		return err
 	}
 	if observed.IncomingUpholds {
-		return errors.New("effective Upholds dependency prevents vendor STOP")
+		return errors.New("effective reverse UpheldBy dependency prevents vendor STOP")
 	}
 	if !observed.Present {
 		return errors.New("systemd manager snapshot missing complete vendor identity")
