@@ -1047,15 +1047,86 @@ continuous original kernel-object lifetime. In particular ifindex and nft
 handles can be recycled, and privileged same-byte private-file replacement
 between observations may be indistinguishable. The birth receipt and a
 matching observation do **not** authorize restoration, configuration,
-renaming, replacement, adoption, removal or retirement. The interface
-remains DOWN with no WG private-key or peer configuration and no UDP
-listener; Hysteria is not started and no committed Link is created.
+renaming, replacement, adoption, removal or retirement. This WG creation step leaves the interface
+DOWN with no WG private-key or peer configuration and no UDP listener;
+it does not start Hysteria or create a committed Link.
 A future *composed* Engine transaction must establish sufficient ongoing
 ownership and safe recovery/retirement semantics before any such effect.
 The opt-in real-netlink acceptance test operates only in a verified
 disposable user/network namespace and uses synthetic empty WG/UDP socket
 readers where the laboratory lacks those executables; it is **not**
 a production-host or full credential/nft birth-chain proof.
+
+The separate, **source-only original helper start** is available as
+`quichelper.StartOriginal(ctx, engine, linkID)`. It is not connected to
+a public Backend, CLI or Ensure path. `Engine.WithQUICCrashHelperAdmission`
+holds the existing maintenance, Link and resource locks, derives every
+input from the immutable journal, verifies its protected material before
+and after activation, and rejects journal drift without rewriting it.
+The fixed production adapter also rechecks the recorded original guard
+and still-DOWN native WG shape, including the receipt/key file witnesses.
+These observations establish bounded consistency, not continuous kernel
+object lifetime or permission to configure the device.
+
+Before dispatch, the adapter requires the initial PID-1 system manager,
+the caller's matching boot, network/mount/PID/user namespaces and filesystem
+root, and an unoccupied canonical per-Link service name. It inspects the
+manager's actual unit search paths, including applicable type-wide and
+dash-prefix drop-ins, aliases and reverse `.wants`, `.requires` and
+`.upholds` entries. Existing units, foreign hooks, ambiguous readback and
+unsafe environment inputs fail closed. Effective incoming `Upholds` can
+restart a unit independently of `Restart=no`, so both pre-dispatch and
+positive process readback require no effective `Upholds` relationship and
+no pending manager reload. `TriggeredBy` must be explicitly empty. Newer managers
+must explicitly report empty `Upholds` and `UpheldBy`; proven systemd
+249/250 managers instead require a complete, successful streamed PID-1
+manager dump from the fixed trusted `systemd-analyze` executable. A missing
+property is never used as proof that the dependency is absent. The shared
+pure parser also serves IPsec, whose vendor identity and STOP policy stay
+in its existing adapter. The checks do not modify foreign units.
+
+The adapter uses fixed local systemd executables with a clean command
+environment. The transient unit has exact argv/config identity,
+`Type=exec`, `Restart=no`, `StopWhenUnneeded=no`, a fixed minimal environment
+and explicit sandbox properties.
+Only a locally requested privileged UDP port adds `CAP_NET_BIND_SERVICE`;
+a low-numbered remote port does not grant that capability.
+
+The approved Hysteria executable remains open through first execution and
+readback. Its temporary `/proc/<caller-PID>/fd/<descriptor>` launch path
+selects that retained original inode, while the canonical approved path
+and hash are reattested separately. All protected generation files and
+their directory chain also remain pinned across activation. A retained
+descriptor prevents inode recycling; it cannot freeze contents against a
+privileged in-place writer. Equal bytes and indistinguishable metadata
+do not prove that no privileged write occurred. The original process is
+observed through a retained pidfd, PID/start time, systemd invocation/start
+timestamp, exact executable inode and argv/environment, cgroup and network
+namespace, with repeated unit/process readback.
+
+A separate `credentials/quic-helper-origins/<LinkID>.attempt.json` is
+exclusively created, fsynced and verified **before** any start request.
+It binds the journal digest, nonce, host, executable and prior WG/guard
+observations. This attempt remains authoritative even after cancellation,
+an uncertain systemd response, a missing birth receipt or later unit
+vacancy: none permits replay. Only a successful original start followed
+by strict readback publishes the separate `<LinkID>.birth.json`, itself
+checked by retained inode and canonical-path readback. Neither file
+contains private keys or authorization secrets. Both are birth evidence,
+not adoption, stop, restart, reset, restore or retirement authority.
+
+Failures preserve the immutable journal and every possible effect;
+there is no automatic service cleanup or journal consumption. This step
+can establish a helper process, but does not configure WireGuard,
+commit an operational Link, prove authenticated bilateral private-L3
+traffic or complete crash/reboot recovery. The disposable systemd CI
+fixture uses the same fixed adapter with a retained harmless executable
+and pidfd-only cleanup. It checks real manager/process representation
+and collision refusal on the supported runner matrix. A separate owned,
+bounded upholder establishes an actual incoming dependency on an absent
+helper target; target preflight must reject it before any helper start.
+The fixture is not a full Hysteria/credential/guard/WG activation acceptance
+test.
 
 The current first-generation preflight deliberately
 rejects other early WSS/QUIC hooks until their independently verified
@@ -1091,9 +1162,11 @@ synthetic boot-ID *test seam only*, with actual kernel nft operations.
 This bounded source step has no CLI or runtime caller and is **not** a running
 QUIC Link. Future implementation must add safe continuously verified nft
 lifecycle ownership and retirement (the recorded birth witness is insufficient),
-exact kernel WG/UDP and process/systemd witness, separate
-activation-time executable/credential re-attestation, and dependency-aware
-safe rollback/reboot/retirement before enabling a committed private L3 Link.
+safe WG configuration and UDP activation, a composed Engine transaction
+that preserves the helper's original process ownership, and dependency-aware
+rollback/reboot/retirement before enabling a committed private L3 Link.
+The separate first-start helper witness and activation-time material
+reattestation above do not satisfy those remaining lifecycle obligations.
 
 The adapter's opt-in disposable loopback compatibility test uses the
 pinned, hash-checked official Hysteria binary with **Go-issued per-Link

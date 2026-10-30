@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ach1992/simple-tun-link/internal/maintenance"
+	"github.com/ach1992/simple-tun-link/internal/systemdunit"
 )
 
 // VendorServiceStopPlan is a *time-local* read-only preview, not permission
@@ -101,27 +102,7 @@ func nativeVendorDistroOwnership(ctx context.Context, fragment string) error {
 // only with a separately proven old PID1 manager version. Newer missing,
 // malformed, ambiguous, duplicated or occupied properties fail closed.
 func vendorStopSystemdVersion(raw []byte) (int, bool) {
-	if len(raw) < len("Version=247\n") || len(raw) > 120 ||
-		!strings.HasPrefix(string(raw), "Version=") || raw[len(raw)-1] != '\n' ||
-		strings.Count(string(raw), "\n") != 1 {
-		return 0, false
-	}
-	s := strings.TrimSuffix(strings.TrimPrefix(string(raw), "Version="), "\n")
-	if len(s) < 3 {
-		return 0, false
-	}
-	for _, b := range []byte(s) {
-		if b < 0x21 || b > 0x7e {
-			return 0, false
-		}
-	}
-	if s[0] < '1' || s[0] > '9' || s[1] < '0' || s[1] > '9' || s[2] < '0' || s[2] > '9' {
-		return 0, false
-	}
-	if len(s) > 3 && !strings.ContainsAny(s[3:4], ".-+~") {
-		return 0, false
-	}
-	return int(s[0]-'0')*100 + int(s[1]-'0')*10 + int(s[2]-'0'), true
+	return systemdunit.ParseVersion(raw)
 }
 
 func vendorStopLegacyWithoutUpholds(raw []byte) bool {

@@ -164,6 +164,30 @@ type OriginalObservation struct {
 	KernelBootID string
 	NetworkNS    string
 	GuardHandles linux.WGIngressLiveHandles
+	// File witnesses permit comparison across one bounded helper activation.
+	// They do not establish continuous ownership of the kernel objects.
+	ReceiptDevice      uint64
+	ReceiptInode       uint64
+	GuardReceiptDevice uint64
+	GuardReceiptInode  uint64
+	KeyDevice          uint64
+	KeyInode           uint64
+}
+
+// VerifyRecordedOriginalWithinAdmission is a read-only bridge for a caller
+// already holding the canonical Engine admission locks. It uses only the
+// fixed real kernel readers and pins the calling OS thread; it never nests an
+// Engine acquisition or creates, configures, adopts or retires any resource.
+// Its result proves current consistency with birth evidence, not uninterrupted
+// kernel-object lifetime or permission for a later destructive operation.
+func VerifyRecordedOriginalWithinAdmission(ctx context.Context, root string, id domain.LinkID,
+	nonce string, wg domain.WireGuardOptions) (OriginalObservation, error) {
+	if ctx == nil || id.Validate() != nil || wg.Validate() != nil || wg.ListenPort == 0 {
+		return OriginalObservation{}, fmt.Errorf("original QUIC native WG observation inputs invalid")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	return inspectWithinAdmission(ctx, root, id, nonce, wg.ListenPort, wg.LocalPublicKey, realKernelOps())
 }
 
 // InspectRecordedOriginal is a read-only Engine/journal-bound inspection.
@@ -211,7 +235,9 @@ func inspectWithinAdmission(ctx context.Context, root string, id domain.LinkID, 
 	}
 	guard, e := ops.guard(ctx, root, id, nonce, port)
 	if e != nil || guard.Status != quicguard.GuardRecordedOriginalWitness ||
+		guard.LinkID != id || guard.ListenPort != port ||
 		guard.KernelBootID != boot || guard.NetworkNS != ns ||
+		guard.ReceiptDevice == 0 || guard.ReceiptInode == 0 ||
 		guard.Handles != receipt.GuardHandles {
 		return fail()
 	}
@@ -227,7 +253,16 @@ func inspectWithinAdmission(ctx context.Context, root string, id domain.LinkID, 
 	if e != nil {
 		return fail()
 	}
-	if key.Close() != nil {
+	var keyIdentity unix.Stat_t
+	keyStatErr := unix.Fstat(int(key.Fd()), &keyIdentity)
+	keyCloseErr := key.Close()
+	if keyStatErr != nil || keyCloseErr != nil {
+		return fail()
+	}
+	// Guard identity must remain stable over the intervening WG/key reads.
+	// Recycled kernel identities remain a documented observational limit.
+	guardAgain, e := ops.guard(ctx, root, id, nonce, port)
+	if e != nil || guardAgain != guard {
 		return fail()
 	}
 	// Re-resolve canonical path and receipt inode after all kernel/subprocess
@@ -246,5 +281,8 @@ func inspectWithinAdmission(ctx context.Context, root string, id domain.LinkID, 
 		return fail()
 	}
 	return OriginalObservation{LinkID: id, StagingName: receipt.StagingName,
-		IfIndex: receipt.IfIndex, KernelBootID: boot, NetworkNS: ns, GuardHandles: receipt.GuardHandles}, nil
+		IfIndex: receipt.IfIndex, KernelBootID: boot, NetworkNS: ns, GuardHandles: receipt.GuardHandles,
+		ReceiptDevice: initial.Device, ReceiptInode: initial.Inode,
+		GuardReceiptDevice: guard.ReceiptDevice, GuardReceiptInode: guard.ReceiptInode,
+		KeyDevice: uint64(keyIdentity.Dev), KeyInode: keyIdentity.Ino}, nil
 }
