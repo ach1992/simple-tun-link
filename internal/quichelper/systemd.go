@@ -469,7 +469,9 @@ func safeManagerEnvironment(raw string) bool {
 		switch k {
 		case "PATH", "LANG", "LC_ALL", "LC_CTYPE":
 		default:
-			return false
+			if !slices.Contains(strings.Fields(helperUnsetEnvironment), k) {
+				return false
+			}
 		}
 		seen[k] = true
 	}

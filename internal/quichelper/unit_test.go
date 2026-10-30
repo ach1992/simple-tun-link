@@ -3,6 +3,7 @@ package quichelper
 import (
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -128,5 +129,40 @@ func TestUnitSearchTrustAcceptsRootControlledUsrMergeAliases(t *testing.T) {
 	}
 	if err := trustedDirectoryChain("/tmp"); err == nil {
 		t.Fatal("accepted writable unit search ancestor")
+	}
+}
+
+func TestManagerSGXContextRequiresPreExecRemovalAndCannotReachChild(t *testing.T) {
+	// Synthetic value only: do not inspect or report a runner's actual SGX
+	// environment value. The contract binds the variable name and its removal.
+	const syntheticValue = "test-only-manager-context"
+	if !safeManagerEnvironment("LANG=C PATH=/usr/bin SGX_AESM_ADDR=" + syntheticValue) {
+		t.Fatal("explicitly removed manager context rejected")
+	}
+	spec := testUnitSpec(t)
+	values := runningProperties(spec)
+	if err := verifyUnitProperties(values, spec); err != nil {
+		t.Fatal(err)
+	}
+	values["UnsetEnvironment"] = strings.Replace(values["UnsetEnvironment"], " SGX_AESM_ADDR", "", 1)
+	if err := verifyUnitProperties(values, spec); err == nil {
+		t.Fatal("SGX manager context admitted without mandatory pre-exec removal")
+	}
+	prefix := t.TempDir()
+	invocation := strings.Repeat("a", 32)
+	clean := []byte("PATH=/usr/sbin:/usr/bin:/sbin:/bin\x00LANG=C\x00LC_ALL=C\x00LC_CTYPE=C\x00INVOCATION_ID=" + invocation + "\x00")
+	path := filepath.Join(prefix, "environ")
+	if err := os.WriteFile(path, clean, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyProcessEnvironment(prefix, invocation); err != nil {
+		t.Fatal(err)
+	}
+	contaminated := append(append([]byte(nil), clean...), []byte("SGX_AESM_ADDR="+syntheticValue+"\x00")...)
+	if err := os.WriteFile(path, contaminated, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyProcessEnvironment(prefix, invocation); err == nil || strings.Contains(err.Error(), syntheticValue) {
+		t.Fatalf("removed manager value survived process verification or leaked: %v", err)
 	}
 }

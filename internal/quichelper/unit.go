@@ -57,6 +57,11 @@ func canonicalHex(s string, n int) bool {
 	return len(s) == n && strings.Trim(s, "0123456789abcdef") == ""
 }
 
+// This immutable list removes known manager context at systemd's final
+// environment assembly boundary. Manager keys are admitted only when a fixed
+// Environment value overrides them or this list requires their removal.
+const helperUnsetEnvironment = "HOME LOGNAME USER SHELL MEMORY_PRESSURE_WATCH MEMORY_PRESSURE_WRITE SYSTEMD_EXEC_PID SGX_AESM_ADDR"
+
 var securityProperties = map[string]string{
 	"Type": "exec", "Restart": "no", "NoNewPrivileges": "yes", "PrivateTmp": "yes",
 	"ProtectSystem": "strict", "ProtectHome": "yes", "PrivateDevices": "yes",
@@ -67,7 +72,7 @@ var securityProperties = map[string]string{
 	"WorkingDirectory": "/", "KillMode": "control-group", "CollectMode": "inactive", "RemainAfterExit": "no",
 	"DynamicUser": "no", "PrivateNetwork": "no", "NotifyAccess": "none", "DefaultDependencies": "no",
 	"Environment": "PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C LC_ALL=C LC_CTYPE=C", "PassEnvironment": "",
-	"UnsetEnvironment": "HOME LOGNAME USER SHELL MEMORY_PRESSURE_WATCH MEMORY_PRESSURE_WRITE SYSTEMD_EXEC_PID", "EnvironmentFiles": "", "RootDirectory": "", "RootImage": "",
+	"UnsetEnvironment": helperUnsetEnvironment, "EnvironmentFiles": "", "RootDirectory": "", "RootImage": "",
 	"NetworkNamespacePath": "",
 }
 
