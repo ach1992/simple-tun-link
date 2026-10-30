@@ -101,14 +101,18 @@ bash -c 'set -e; d=$(mktemp -d); cleanup(){ rm -rf -- "$d"; }; trap cleanup EXIT
 
 Use no suffix for Latest Stable. The same trusted bootstrap fetches and
 verifies the selected official release; no local file preparation is needed.
-For an already installed host, use **Update** in the STL menu to upgrade or
-request a downgrade after its State and Link checks. A binary change must never
-silently erase Links or protected State. See [Issue #176](https://github.com/ach1992/simple-tun-link/issues/176).
+For an already installed host, use **Update** in the STL menu to upgrade;
+Downgrade is only eligible with **canonical empty State and no historical
+receipts**, not merely zero saved Links. A binary change must never
+silently erase Links or protected State. Stable v0.1.15 also fixes the
+Update release-list display for the real GitHub API response above 256 KiB,
+while retaining a bounded response and official immutable-release checks.
+See [Issue #176](https://github.com/ach1992/simple-tun-link/issues/176).
 
 ### Local installation without GitHub access on the server
 
 Official Stable releases from **v0.1.9 onward** support one self-contained
-core installer. The current example, **v0.1.14**, uses the files below.
+core installer. The current example, **v0.1.15**, uses the files below.
 For later releases, always select the corresponding tag and architecture from
 [official Latest Stable](https://github.com/ach1992/simple-tun-link/releases/latest).
 WSS is optional and needs **one separate verified companion archive**.
@@ -118,8 +122,8 @@ and all STL-owned core metadata; no second STL file is needed on the server:
 
 | Destination CPU (`uname -m`) | Download from the exact official release |
 | --- | --- |
-| `x86_64` | [`stl_v0.1.14_linux_amd64_local-install.sh`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.14/stl_v0.1.14_linux_amd64_local-install.sh) |
-| `aarch64` | [`stl_v0.1.14_linux_arm64_local-install.sh`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.14/stl_v0.1.14_linux_arm64_local-install.sh) |
+| `x86_64` | [`stl_v0.1.15_linux_amd64_local-install.sh`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.15/stl_v0.1.15_linux_amd64_local-install.sh) |
+| `aarch64` | [`stl_v0.1.15_linux_arm64_local-install.sh`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.15/stl_v0.1.15_linux_arm64_local-install.sh) |
 
 Upload the single file **as-is** into `/root/stl/` on the server (e.g. through
 SFTP); the folder must be root-owned mode `0700` and the file root-owned
@@ -306,10 +310,10 @@ uses State **v4** for WSS-capable management; an older pre-v4 binary cannot
 be assumed safe even on a host that has only Native Links. In particular,
 installed v0.1.12 and earlier binaries do not know the guarded `DOWNGRADE`
 operation. First use the permanent Latest Stable `update` command to install
-official v0.1.14 (or a newer verified Stable); only then request an older
-published immutable Stable through the installed menu, subject to zero-Link
-and State/resource ownership gates.
-Official Stable **v0.1.14** also lets core-only Uninstall proceed when the only
+official v0.1.15 (or a newer verified Stable); only then request an older
+published immutable Stable through the installed menu, subject to the
+stricter canonical empty-State and resource-ownership gates.
+Since Stable **v0.1.14**, core-only Uninstall can proceed when the only
 remaining State consists of validated, **fully retired** WireGuard/WSS/IPsec
 historical removal receipts; it preserves those receipts and all protected
 State instead of deleting them. An unfinished credential retirement, saved
