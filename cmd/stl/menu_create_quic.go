@@ -59,6 +59,7 @@ func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, er
 		return p.failed(err)
 	}
 	menuSection(out, "QUIC roles / which side accepts public TLS?")
+	menuProse(out, "Either server can create this Link. Choose the public listener based on reachability, not location; the other server will dial.")
 	menuOption(out, "1", "Listen QUIC", "THIS server accepts the selected UDP port")
 	menuOption(out, "2", "Dial QUIC", "OTHER server accepts the UDP port")
 	choice, err := p.ask("Choose [1]: ")

@@ -54,6 +54,22 @@ where supported. Links have stable IDs, separately owned resources and
 lifecycles, and independently observed state. One Link's failure, repair or
 removal must not disrupt unrelated Links.
 
+**Public connection initiation is an endpoint choice, not a geography or
+setup-creator identity.** For a backend with asymmetric Dial/Listen roles,
+either eligible endpoint may be selected as the public initiator for each Link;
+the other endpoint receives the complementary role during pairing. The
+operator must have an explicit role choice wherever that backend supports one.
+Symmetric native tunnels need no artificial Dial/Listen role; their backend's
+actual initiation semantics must be explained rather than forced into a
+universal client/server model. Private application traffic starting from both
+ends is separate from the direction of public connection establishment.
+
+Automatic role suggestions or selection may be added when bounded peer and
+network evidence justifies them, but must not silently override an explicit
+choice, infer direction from server location or imply that a selected direction
+is reachable. A Link with no demonstrated reachable direction must report
+that limitation rather than claim success.
+
 A successfully committed working Link must survive ordinary service restart
 and host reboot through recovery of the **same intended identity and
 connectivity**, without requiring fresh manual pairing. An incomplete

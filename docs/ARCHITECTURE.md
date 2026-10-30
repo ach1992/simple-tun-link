@@ -84,6 +84,38 @@ The domain distinguishes:
 - dependencies;
 - desired vs observed state.
 
+### Public initiation and endpoint-local roles
+
+Three distinct roles must never be conflated: the **setup creator** (which
+host issues the pairing material), the **public transport initiator** (which
+host first contacts the other's physical listener), and the **private
+application initiator** (which host first sends packets over the established
+Link). A receiver may be the public initiator; private applications may
+initiate from either end once the Link is usable.
+
+- WSS and QUIC/Salamander have explicit endpoint-local `dial` and `listen`
+  carrier roles. Either peer may create the Link with either role. Pairing
+  produces exactly one complementary peer role and binds TLS identity,
+  listening port, forwarding socket and ownership to the actual listener,
+  independent of country, underlay ordering or setup creator identity.
+- Native GRE/IPIP, including FOU/GUE, are peer-configured encapsulations,
+  not client/server transports; no synthetic Dial/Listen setting should be
+  imposed. Native WireGuard uses each peer's configured endpoint and
+  keepalive/roaming behavior instead of a universal fixed initiator.
+  IPsec/IKEv2 uses explicit peer-local initiation (the committed Link can
+  be connected from either configured endpoint), not a geographical role.
+- Role choice is a **per-Link** supported transport capability. An operator's
+  manual choice takes precedence. Any future `auto` mode needs bounded,
+  safe reachability evidence for both candidates, an explicit selected plan
+  and peer coordination, and truthful failure when no route is proven.
+  Source address, DNS response, local socket readiness or private application
+  direction alone cannot prove peer-authenticated public establishment.
+- A role change on a committed Link is a topology/lifecycle operation, not
+  permission to mutate it silently or reuse foreign listener resources.
+  Observe actual ownership, credentials and peer agreement under canonical
+  Engine locks and the appropriate versioned state/pairing migration gates.
+  This rule does not introduce automatic runtime failover or a second Engine.
+
 ### Backend adapters
 Initial adapters:
 - GRE;

@@ -59,6 +59,7 @@ func menuCreateWSSWithHost(input io.Reader, reader *bufio.Reader, out, errOut io
 		return p.failed(err)
 	}
 	menuSection(out, "WSS roles / which side accepts public TLS?")
+	menuProse(out, "Either server can create this Link. Choose the public listener based on reachability, not location; the other server will dial.")
 	menuOption(out, "1", "Listen WSS", "THIS server accepts the selected TCP port")
 	menuOption(out, "2", "Dial WSS", "OTHER server accepts the TCP port")
 	choice, err := p.ask("Choose [1]: ")

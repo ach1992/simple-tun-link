@@ -11,6 +11,24 @@ For Setup Link versions, inversion and payload security use
 
 ## Interactive operation
 
+**Choose the public connection initiator per Link, not per country.** For
+WSS and QUIC/Salamander, the Create menu asks whether **THIS** server
+will `Dial` the peer's physical TCP/UDP listener or `Listen` for the peer.
+The server that creates the private Setup Link may take either role; the
+imported peer gets the complementary role. This is independent of which
+private application starts sending first. Do not assume that being a
+sender/creator means being a dialer or that either public orientation is
+reachable without a peer-authenticated test. The current CLI offers an
+explicit manual choice; it does **not** automatically select, probe both
+public roles or switch a committed Link between roles.
+
+GRE/IPIP Native/FOU/GUE use reciprocal physical endpoint configuration,
+not Dial/Listen. Native WireGuard uses peer endpoints and keepalive;
+IPsec/IKEv2 can be explicitly connected from either prepared peer. Check
+the selected backend's own prerequisites, connection and diagnostic
+semantics rather than interpreting these methods as a compulsory
+client/server topology.
+
 Run `stl` in a real terminal or invoke `stl menu`. Without an
 interactive terminal, `stl` prints help instead. The principal tasks are
 Create, Import, My tunnels, Test connectivity, Settings, Update and
