@@ -245,7 +245,11 @@ func productionMenuPackageOps() menuPackagePreparationOps {
 // separate YES. Inspecting or cancelling always remains read-only.
 func menuPrepareSelectedPackages(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
 	selected tunnelOption, options *runtimeOptions) menuPackagePreparation {
-	return menuPrepareSelectedPackagesWithOps(input, reader, out, errOut, selected, options, productionMenuPackageOps())
+	ops := productionMenuPackageOps()
+	if options != nil && options.packagePreview != nil {
+		ops.preview = options.packagePreview
+	}
+	return menuPrepareSelectedPackagesWithOps(input, reader, out, errOut, selected, options, ops)
 }
 
 func menuPrepareSelectedPackagesWithOps(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,

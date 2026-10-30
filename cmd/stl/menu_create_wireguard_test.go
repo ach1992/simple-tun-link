@@ -23,8 +23,9 @@ func TestGuidedWireGuardCreatesConfirmedProtectedHandoff(t *testing.T) {
 	host := &guidedTestRunner{}
 	fake := &wireGuardCreatorFake{newLifecycleFake()}
 	opts := &runtimeOptions{stateRoot: root, backends: []backend.Backend{fake}, probeRunner: host,
-		mtuManager:   guidedMTUFake{},
-		createLinkID: func() (domain.LinkID, error) { return createTestID, nil }}
+		mtuManager:     guidedMTUFake{},
+		createLinkID:   func() (domain.LinkID, error) { return createTestID, nil },
+		packagePreview: readyGuidedPackagePreview}
 	stdin := "1\n2\n192.0.2.20\n\n51871\n51872\nn\nYES\n8\n"
 	var out, stderr bytes.Buffer
 	code := runWithRuntimeInput([]string{"menu"}, strings.NewReader(stdin), &out, &stderr, opts)
@@ -63,8 +64,9 @@ func TestGuidedWireGuardCancelDoesNotGeneratePrivateFileOrState(t *testing.T) {
 	host := &guidedTestRunner{}
 	fake := &wireGuardCreatorFake{newLifecycleFake()}
 	opts := &runtimeOptions{stateRoot: root, backends: []backend.Backend{fake}, probeRunner: host,
-		mtuManager:   guidedMTUFake{},
-		createLinkID: func() (domain.LinkID, error) { return createTestID, nil }}
+		mtuManager:     guidedMTUFake{},
+		createLinkID:   func() (domain.LinkID, error) { return createTestID, nil },
+		packagePreview: readyGuidedPackagePreview}
 	stdin := "1\n2\n192.0.2.20\n\n51871\n51872\nn\nNO\n8\n"
 	var out, stderr bytes.Buffer
 	code := runWithRuntimeInput([]string{"menu"}, strings.NewReader(stdin), &out, &stderr, opts)
