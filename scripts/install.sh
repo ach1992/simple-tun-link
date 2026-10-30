@@ -12,13 +12,13 @@ Usage:
   install.sh update --version vX.Y.Z [--prefix /usr/local]
   install.sh install|update --bundle /path/to/release-bundle [--prefix /usr/local]
   install.sh install --auto-stable --bundle /path/to/verified-local-bundle [--prefix /usr/local]
-  install.sh install|update --version vX.Y.Z [--backends native,wireguard,ipsec]
+  install.sh install|update --version vX.Y.Z [--backends native,wireguard,quic,ipsec]
   install.sh install|update --bundle /path/to/release-bundle [--prefix /usr/local] [--backends all]
-  install.sh requirements [--backends native,wireguard,ipsec] [--os-release-file /path/to/read-only-fixture]
-  install.sh prepare --backends native|wireguard|ipsec|all [--expected-missing '...'] [--expected-apt-plan '...']
+  install.sh requirements [--backends native,wireguard,quic,ipsec] [--os-release-file /path/to/read-only-fixture]
+  install.sh prepare --backends native|wireguard|quic|ipsec|all [--expected-missing '...'] [--expected-apt-plan '...']
   install.sh uninstall [--prefix /usr/local] [--retire-owned-restore]
 
-The default backend selection is native (GRE/IPIP). Add wireguard and/or
+The default backend selection is native (GRE/IPIP). Add wireguard, quic or
 ipsec explicitly to provision optional dependencies. "all" selects all.
 IPsec on a verified clean systemd host may be prepared after a fresh, exact
 package/dependency PREPARE consent. Distribution hooks can temporarily
@@ -47,6 +47,177 @@ fail() { printf 'stl installer [FAILED]: %s\n' "$*" >&2; exit 1; }
 action=$1
 shift
 case "$action" in
+  companion-quic)
+    # Internal optional-companion operation. The ONE approved local STL
+    # installer calls this after verifying/installing the core executable.
+    # No Link, network, nft rule or service is created here.
+    [[ $# == 2 || $# == 4 ]] || usage
+    [[ $1 == --binary ]] || usage
+    companion_source=$2
+    companion_prefix=/usr/local
+    if [[ $# == 4 ]]; then
+      [[ $3 == --prefix ]] || usage
+      companion_prefix=$4
+    fi
+    [[ $companion_prefix == /* && $companion_prefix != / &&
+       -d $companion_prefix && ! -L $companion_prefix &&
+       $(realpath -e -- "$companion_prefix") == "$companion_prefix" ]] ||
+      fail 'unsafe QUIC installation prefix'
+    case $(uname -m) in
+      x86_64) companion_arch=amd64
+        companion_exe_sha=907ba8c9693edb104b20582681fb7dc15639d5b64a9cbb616a7b539190a86691 ;;
+      aarch64) companion_arch=arm64
+        companion_exe_sha=a68a61a84452ca250ce0368202521965ca9cc9d801a404f1dc9008ac6cf677a7 ;;
+      *) fail 'official QUIC companion supports only linux/amd64 and linux/arm64' ;;
+    esac
+    expected_name=hysteria-linux-${companion_arch}
+    [[ $companion_source == /* && ! -L $companion_source &&
+       -f $companion_source && $(basename -- "$companion_source") == "$expected_name" &&
+       $(realpath -e -- "$companion_source") == "$companion_source" ]] ||
+       fail 'official QUIC companion binary must be a canonical regular file with its exact release filename'
+    # The source binary may live beside a user-downloaded one-file
+    # installer. The raw source and its directory are NOT trusted; only
+    # an immutable private snapshot after pinned SHA-256 is executable.
+    bytes=$(stat -c %s -- "$companion_source")
+    (( bytes > 1024 && bytes < 100000000 )) || fail 'QUIC binary size is unsafe'
+    [[ $companion_prefix != /usr/local || $EUID == 0 ]] ||
+       fail 'system-wide QUIC companion installation requires root'
+    # Verify the destination ancestor chain; source is untrusted input.
+    if [[ $EUID == 0 ]]; then
+      step=/
+      IFS=/ read -ra components <<< "${companion_prefix#/}"
+      for component in "${components[@]}"; do
+        [[ -z $component ]] && continue
+        step="${step%/}/$component"
+        [[ -d $step && ! -L $step && $(stat -c %u -- "$step") == 0 ]] ||
+           fail "QUIC destination ancestor untrusted: $step"
+        mode=$(stat -c %a -- "$step")
+        [[ $mode =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 8#022) == 0 )) ||
+           fail "QUIC destination ancestor writable: $step"
+      done
+    fi
+    companion_dir="$companion_prefix/lib/simple-tun-link"
+    companion_lock="$companion_dir/.maintenance.lock"
+    core_record="$companion_dir/install-record"
+    core_binary="$companion_prefix/bin/stl"
+    [[ -d $companion_dir && ! -L $companion_dir &&
+       -f $core_record && ! -L $core_record &&
+       -f $core_binary && ! -L $core_binary ]] ||
+       fail 'QUIC companion requires an existing installer-owned STL core'
+    [[ $(stat -c %u -- "$core_record") == "$EUID" &&
+       $(stat -c %u -- "$companion_dir") == "$EUID" ]] ||
+       fail 'STL installer core ownership is unverified'
+    for entry in "$companion_dir" "$core_record" "$core_binary"; do
+      [[ $(stat -c %u -- "$entry") == "$EUID" ]] || fail 'untrusted QUIC installer identity'
+      entry_mode=$(stat -c %a -- "$entry")
+      [[ $entry_mode =~ ^[0-7]{3,4}$ ]] && (( (8#$entry_mode & 8#022) == 0 )) ||
+        fail 'QUIC installer identity is writable by another user'
+    done
+    if [[ $EUID == 0 ]]; then
+      for directory in "${core_record%/*}" "${core_binary%/*}"; do
+        step=/
+        IFS=/ read -ra components <<< "${directory#/}"
+        for component in "${components[@]}"; do
+          [[ -z $component ]] && continue
+          step="${step%/}/$component"
+          [[ -d $step && ! -L $step && $(stat -c %u -- "$step") == 0 ]] ||
+            fail 'untrusted QUIC installer directory chain'
+          entry_mode=$(stat -c %a -- "$step")
+          [[ $entry_mode =~ ^[0-7]{3,4}$ ]] && (( (8#$entry_mode & 8#022) == 0 )) ||
+            fail 'QUIC installer directory chain is writable'
+        done
+      done
+    fi
+    [[ ! -L $companion_lock ]] || fail 'untrusted core maintenance lock'
+    if [[ -e $companion_lock ]]; then
+      [[ -f $companion_lock && $(stat -c %u:%a:%h -- "$companion_lock") == "$EUID:600:1" ]] ||
+        fail 'untrusted QUIC maintenance lock identity'
+    fi
+    exec 9>> "$companion_lock"
+    flock -x -w 30 9 || fail 'QUIC companion requires exclusive STL maintenance lock'
+    grep -qx 'format=1' "$core_record" &&
+      grep -qx 'project=simple-tun-link' "$core_record" ||
+      fail 'STL core install record does not identify an owned installation'
+    core_hash=$(sed -n 's/^sha256=//p' "$core_record")
+    [[ $core_hash =~ ^[0-9a-f]{64}$ &&
+       $(sha256sum -- "$core_binary" | awk '{print $1}') == "$core_hash" ]] ||
+      fail 'STL core executable differs from its ownership record'
+    target_dir="$companion_prefix/libexec/stl"
+    target="$target_dir/hysteria"
+    own_record="$companion_dir/quic-companion-record"
+    # Immutable-for-operation snapshot, with all untrusted parsing after
+    # pinned hash verification. No extraction into the user's directory.
+    stage=$(mktemp -d "$companion_dir/.quic-install.XXXXXXXX") ||
+       fail 'cannot allocate private QUIC staging'
+    trap '[[ -d $stage && ! -L $stage ]] && rm -rf --one-file-system -- "$stage"' EXIT
+    head -c "$bytes" -- "$companion_source" > "$stage/hysteria" ||
+       fail 'cannot snapshot the selected QUIC binary'
+    chmod 0755 "$stage/hysteria"
+    [[ $(stat -c %s -- "$stage/hysteria") == "$bytes" &&
+       $(sha256sum -- "$stage/hysteria" | awk '{print $1}') == "$companion_exe_sha" ]] ||
+       fail 'official upstream Hysteria binary SHA-256 mismatch'
+    # Hold the original executable inode across no-replace publication.
+    exec 8< "$stage/hysteria"
+    original_companion_identity=$(stat -Lc '%d:%i' /proc/self/fd/8)
+    for directory in "$companion_prefix/libexec" "$target_dir"; do
+      if [[ -e $directory || -L $directory ]]; then
+        [[ -d $directory && ! -L $directory && $(stat -c %u -- "$directory") == "$EUID" ]] ||
+          fail 'untrusted QUIC destination directory'
+        entry_mode=$(stat -c %a -- "$directory")
+        [[ $entry_mode =~ ^[0-7]{3,4}$ ]] && (( (8#$entry_mode & 8#022) == 0 )) ||
+          fail 'QUIC destination directory is writable by another user'
+      fi
+    done
+    if [[ -e $own_record || -L $own_record || -e $target || -L $target ]]; then
+       [[ -f $own_record && ! -L $own_record &&
+          -f $target && ! -L $target &&
+          $(stat -c %u -- "$target") == "$EUID" &&
+          $(stat -c %u -- "$own_record") == "$EUID" ]] ||
+         fail 'foreign or interrupted QUIC companion identity; do not adopt it'
+       expected_companion_record=$(printf 'format=1\nproject=simple-tun-link\ncompanion=hysteria\nversion=2.13.0\nsha256=%s' "$companion_exe_sha")
+       [[ $(cat -- "$own_record") == "$expected_companion_record" ]] ||
+         fail 'QUIC companion record does not match the approved pinned version'
+       [[ $(stat -c %a:%h -- "$target") == 755:1 &&
+          $(stat -c %a:%h -- "$own_record") == 600:1 ]] ||
+         fail 'installed QUIC companion permissions or link count differ'
+       [[ $(sha256sum -- "$target" | awk '{print $1}') == "$companion_exe_sha" ]] ||
+         fail 'installed companion executable drift'
+       printf '[OK] Approved hysteria v2.13.0 companion is already installed.\n'
+       exit 0
+    fi
+    for base in "$companion_prefix/libexec" "$target_dir"; do
+      if [[ ! -e $base && ! -L $base ]]; then
+        mkdir -m 0755 -- "$base" || fail 'cannot create private STL companion directory'
+      fi
+      [[ -d $base && ! -L $base &&
+         $(stat -c %u -- "$base") == "$EUID" ]] ||
+         fail 'QUIC executable ancestor is not installer-owned'
+      mode=$(stat -c %a -- "$base")
+      [[ $mode =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 8#022) == 0 )) ||
+         fail 'QUIC executable ancestor writable by another user'
+    done
+    # The verified binary and ownership record become durable independently.
+    incoming_record="$stage/incoming-record"
+    printf 'format=1\nproject=simple-tun-link\ncompanion=hysteria\nversion=2.13.0\nsha256=%s\n' "$companion_exe_sha" > "$incoming_record"
+    chmod 0600 "$incoming_record"
+    sync -f "$stage/hysteria" "$incoming_record" "$stage" "$target_dir" "$companion_dir" ||
+       fail 'QUIC companion prepublication sync failed'
+    # Exact no-replace only: a foreign hysteria must never be truncated.
+    [[ ! -e $target && ! -L $target && ! -e $own_record && ! -L $own_record ]] ||
+       fail 'QUIC companion pathname raced with a foreign owner'
+    mv -T -n -- "$stage/hysteria" "$target"
+    [[ ! -e $stage/hysteria && -f $target && ! -L $target &&
+       $(stat -Lc '%d:%i' -- "$target") == "$original_companion_identity" &&
+       $(sha256sum -- "$target" | awk '{print $1}') == "$companion_exe_sha" ]] ||
+       fail 'QUIC companion publication not confirmed'
+    sync -f "$target" "$target_dir" || fail 'QUIC companion binary durability unverified'
+    mv -T -n -- "$incoming_record" "$own_record"
+    [[ ! -e $incoming_record && -f $own_record && ! -L $own_record ]] ||
+       fail 'QUIC companion ownership record publication unverified'
+    sync -f "$own_record" "$companion_dir" || fail 'QUIC companion record durability unverified'
+    printf '[OK] Installed pinned official hysteria v2.13.0 for optional STL-managed QUIC Links.\n'
+    exit 0
+    ;;
   companion-wss)
     # Internal optional-companion operation. The ONE approved local STL
     # installer calls this after verifying/installing the core executable.
@@ -428,6 +599,7 @@ select_packages() {
   local -a requested=()
   want_native=0
   want_wg=0
+  want_quic=0
   want_ipsec=0
   [[ $backends =~ ^[a-z,]+$ ]] || usage
   # Bash read -a silently discards an empty trailing CSV item.
@@ -438,11 +610,13 @@ select_packages() {
     case "$item" in
       native) [[ $want_native == 0 ]] || usage; want_native=1 ;;
       wireguard) [[ $want_wg == 0 ]] || usage; want_wg=1 ;;
+      quic) [[ $want_quic == 0 ]] || usage; want_quic=1 ;;
       ipsec) [[ $want_ipsec == 0 ]] || usage; want_ipsec=1 ;;
       all)
         [[ ${#requested[@]} == 1 ]] || usage
         want_native=1
         want_wg=1
+        want_quic=1
         want_ipsec=1
         ;;
       *) usage ;;
@@ -452,7 +626,9 @@ select_packages() {
   # provide the exact modinfo/modprobe commands used by the newly explicit
   # optional module preflight. This is not permission to load all modules.
   packages=(iproute2 iptables kmod)
+  [[ $want_quic == 0 ]] || want_wg=1
   [[ $want_wg == 0 ]] || packages+=(wireguard-tools)
+  [[ $want_quic == 0 ]] || packages+=(nftables)
   # The standard plugin bundle supplies common cryptographic backends such
   # as OpenSSL/GCM; --no-install-recommends would omit it otherwise.
   [[ $want_ipsec == 0 ]] || packages+=(charon-systemd strongswan-swanctl libstrongswan-standard-plugins)

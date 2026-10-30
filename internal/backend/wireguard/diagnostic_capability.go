@@ -2,6 +2,7 @@ package wireguard
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
@@ -11,6 +12,9 @@ import (
 // WireGuard/UDP backend: outer IPv4 (20), UDP (8), WG data header/tag (32).
 // It is not a presumed MTU and never modifies the link's configured MTU.
 func Overhead(link domain.Link) (int, error) {
+	if link.Backend == domain.BackendWireGuardQUIC {
+		return 0, fmt.Errorf("QUIC carrier framing has no fixed native WireGuard physical overhead")
+	}
 	if err := validateLink(link); err != nil {
 		return 0, err
 	}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/backend/ipsec"
+	"github.com/ach1992/simple-tun-link/internal/carrier/quic"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/hostidentity"
 	"github.com/ach1992/simple-tun-link/internal/state"
@@ -39,14 +40,19 @@ type MTUManager interface {
 }
 
 type Engine struct {
-	mtuManager         MTUManager
-	maintenance        MaintenanceGuard
-	backends           *backend.Registry
-	store              state.Store
-	locks              Locker
-	restorePersistence RestorePersistence
-	restoreExecutable  string
-	restoreModules     func(context.Context, domain.Link) error
+	quicRetirement QUICRetirementStore
+	// Package-private material seams support ordering and crash tests only.
+	quicPreviewMaterial   func(string, quic.Plan, uint16, string, quic.CredentialBundle) (quic.HelperConfigIdentity, error)
+	quicStageGeneration   func(context.Context, string, quic.Plan, uint16, string, string, quic.CredentialBundle, quic.HelperConfigIdentity) (quic.HelperConfigIdentity, error)
+	quicInspectGeneration func(string, quic.Plan, uint16, string, string, quic.HelperConfigIdentity) (quic.HelperConfigIdentity, error)
+	mtuManager            MTUManager
+	maintenance           MaintenanceGuard
+	backends              *backend.Registry
+	store                 state.Store
+	locks                 Locker
+	restorePersistence    RestorePersistence
+	restoreExecutable     string
+	restoreModules        func(context.Context, domain.Link) error
 	// Trusted current kernel lifetime source. Tests in package app can
 	// inject deterministic boot transitions; production has no override.
 	kernelBootID  func() (string, error)
@@ -346,6 +352,11 @@ func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.
 					DesiredState: "committed", Rollback: "not_attempted"})
 		}
 	}
+	if prior.Backend == domain.BackendWireGuardQUIC {
+		if err := e.retireQUICCredentialLocked(ctx, id); err != nil {
+			return result, stlerr.WithEvidence(stlerr.Wrap(stlerr.CodeState, "remove", string(id), string(prior.Backend), "QUIC Link removal committed; protected credential retirement requires exact receipt-bound retry", err), stlerr.OperationEvidence{Stage: "credential_retirement", HostMutation: "attempted", DesiredState: "committed", Rollback: "not_attempted"})
+		}
+	}
 	if prior.Backend == domain.BackendWireGuardWSS {
 		if err := e.retireWSSCredentialLocked(ctx, id); err != nil {
 			return result, stlerr.WithEvidence(
@@ -440,7 +451,7 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 	// Invalidate historical removal authority BEFORE a new attempt (even
 	// one which later fails apply) can stage a key or host resources. An
 	// old receipt must never authorize deleting an active retry's key.
-	if receipt, found := snapshot.FindRemovalReceipt(desired.ID); found && receipt.Backend == domain.BackendWireGuardWSS {
+	if receipt, found := snapshot.FindRemovalReceipt(desired.ID); found && (receipt.Backend == domain.BackendWireGuardWSS || receipt.Backend == domain.BackendWireGuardQUIC) {
 		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID), string(desired.Backend),
 			"retired WSS Link identity is reserved permanently; create a new Link ID")
 	}
@@ -502,6 +513,12 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 	}()
 	request.OwnedResources = append([]domain.ResourceClaim(nil), prior.OwnedResources...)
 	link := request.Link
+	if link.Backend == domain.BackendWireGuardQUIC {
+		ctx, err = e.quicInitialContext(ctx, link, prior)
+		if err != nil {
+			return Result{}, contextualize(err, stlerr.CodeConflict, string(request.Operation), link, "QUIC original generation admission failed")
+		}
+	}
 	var trustedWSSBoot string
 	var manualWSSRestore, newWSSOriginal bool
 	if link.Backend == domain.BackendWireGuardWSS {
@@ -697,6 +714,62 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		if _, removed := fresh.FindRemovalReceipt(link.ID); removed {
 			return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(link.ID), string(link.Backend),
 				"previous removal authorization was not invalidated")
+		}
+	}
+	var preparedQUIC state.QUICCrashOperation
+	var quicGeneration state.QUICGeneration
+	var quicRuntime backend.ManagedQUICBackend
+	if link.Backend == domain.BackendWireGuardQUIC {
+		var admitted bool
+		quicRuntime, admitted = impl.(backend.ManagedQUICBackend)
+		if !admitted {
+			return Result{}, fmt.Errorf("managed QUIC backend lacks retained transaction authority")
+		}
+		if prior.Desired.ID == link.ID {
+			current, present := fresh.Find(link.ID)
+			if !present || !sameQUICRecord(current, prior) {
+				return Result{}, fmt.Errorf("committed QUIC generation changed under locks")
+			}
+			index, ok := observed.(interface{ QUICOriginalIfIndex() int })
+			if !ok {
+				return Result{}, fmt.Errorf("QUIC original kernel observation unavailable")
+			}
+			if backend.HasQUICColdBootExtinctionWitness(ctx, link.ID) {
+				if index.QUICOriginalIfIndex() != 0 {
+					return Result{}, fmt.Errorf("current-boot QUIC replacement cannot be adopted")
+				}
+				vacant, err := quicRuntime.QUICHostVacant(ctx, link)
+				if err != nil || !vacant {
+					return Result{}, fmt.Errorf("QUIC post-reboot host vacancy unverified")
+				}
+			} else if index.QUICOriginalIfIndex() != prior.QUICGeneration.WGIfIndex {
+				return Result{}, fmt.Errorf("QUIC original kernel interface missing or changed in the same boot; retain owner and claims")
+			}
+		} else if plan.Empty() {
+			return Result{}, fmt.Errorf("fresh QUIC requires positive original creation")
+		}
+		ctx, preparedQUIC, err = e.prepareManagedQUIC(ctx, request, prior, resources, !plan.Empty())
+		if err != nil {
+			return Result{}, contextualize(err, stlerr.CodeState, "quic_prepare", link, "managed QUIC preparation failed; preserve any journal and material")
+		}
+		var original *state.QUICGeneration
+		if prior.Desired.ID == link.ID {
+			g := prior.QUICGeneration
+			original = &g
+		}
+		var closeScope func() error
+		ctx, closeScope, err = quicRuntime.BeginQUIC(ctx, link, original)
+		if err != nil {
+			return Result{}, contextualize(err, stlerr.CodeValidate, "quic_begin", link, "managed QUIC retained identity scope unavailable")
+		}
+		if closeScope == nil {
+			return Result{}, fmt.Errorf("managed QUIC scope did not provide descriptor cleanup")
+		}
+		defer func() { _ = closeScope() }()
+		if provision, ok := ctx.Value(quicProvisionKey{}).(*quicProvision); ok && provision.publishHandoff != nil {
+			if err := provision.publishHandoff(); err != nil {
+				return Result{}, contextualize(err, stlerr.CodeState, "quic_handoff", link, "protected QUIC handoff publication failed; no host Apply")
+			}
 		}
 	}
 	// The final observed inventory (after resource locks) is authoritative
@@ -965,6 +1038,24 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		}
 	}
 
+	quicOriginalTermination := ""
+	if link.Backend == domain.BackendWireGuardQUIC && request.Operation == backend.OperationRemove {
+		index := 0
+		if p, ok := plan.(interface{ QUICOriginalRemoveIndex() int }); ok {
+			index = p.QUICOriginalRemoveIndex()
+		}
+		if changed && index > 0 && index == prior.QUICGeneration.WGIfIndex {
+			verificationCtx, err = backend.WithQUICWGDeleted(ctx, link.ID)
+			if err != nil {
+				return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo, "quic_remove_proof", evidence.HostMutation, err)
+			}
+			quicOriginalTermination = state.QUICOriginalExactIfIndexDeleted
+		} else if backend.HasQUICColdBootExtinctionWitness(ctx, link.ID) {
+			quicOriginalTermination = state.QUICOriginalKernelGenerationExtinct
+		} else {
+			return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo, "quic_remove_proof", evidence.HostMutation, fmt.Errorf("original QUIC termination proof missing"))
+		}
+	}
 	// Apply managed MTU after the backend has created/marked its exact
 	// interface, but before backend Verify, restore publication and desired
 	// state commit. Legacy/unmanaged Links never call this host writer.
@@ -1047,6 +1138,26 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		if prior.Desired.ID == link.ID && prior.WSSFiles != wssFiles {
 			return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo,
 				"wss_credential_identity", "attempted", fmt.Errorf("WSS issued credential fingerprints drifted"))
+		}
+	}
+	if link.Backend == domain.BackendWireGuardQUIC {
+		if request.Operation == backend.OperationEnsure {
+			quicGeneration, err = quicRuntime.AttestQUIC(ctx, link)
+			if err != nil {
+				return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo, "quic_generation", evidence.HostMutation, contextualize(err, stlerr.CodeVerify, "quic_attest", link, "original QUIC generation readback failed"))
+			}
+			if prior.Desired.ID == link.ID && (quicGeneration.Files != prior.QUICGeneration.Files || quicGeneration.OriginNonce != prior.QUICGeneration.OriginNonce || quicGeneration.MaterialNonce != prior.QUICGeneration.MaterialNonce) {
+				return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo, "quic_generation", evidence.HostMutation, fmt.Errorf("committed QUIC material ownership changed"))
+			}
+			boot, bootErr := e.kernelBootID()
+			if bootErr != nil || boot != quicGeneration.KernelBootID {
+				return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo, "quic_boot", evidence.HostMutation, fmt.Errorf("QUIC host kernel generation changed"))
+			}
+		} else {
+			vacant, vacancyErr := quicRuntime.QUICHostVacant(verificationCtx, link)
+			if vacancyErr != nil || !vacant {
+				return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo, "quic_retirement_proof", evidence.HostMutation, fmt.Errorf("QUIC original termination/host vacancy unverified"))
+			}
 		}
 	}
 	// Serialize only the host-wide persistence transition and state commit.
@@ -1164,7 +1275,13 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 					restoreProof = state.WSSColdBootRestore{} // spent after successful creation
 				}
 			}
-			snapshot.Upsert(state.LinkRecord{Desired: link, OwnedResources: resources,
+			if link.Backend == domain.BackendWireGuardQUIC && prior.Desired.ID == link.ID {
+				current, present := snapshot.Find(link.ID)
+				if !present || !sameQUICRecord(current, prior) {
+					return fmt.Errorf("QUIC original owner changed before commit")
+				}
+			}
+			snapshot.Upsert(state.LinkRecord{Desired: link, OwnedResources: resources, QUICGeneration: quicGeneration,
 				WSSFiles: wssFiles, WSSOrigin: originalNonce,
 				WSSKernelBootID: birthBoot, WSSKernelBootSource: birthSource,
 				WSSColdBootRestore: restoreProof})
@@ -1189,6 +1306,12 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 					return fmt.Errorf("WSS original owner changed before retirement receipt publication")
 				}
 			}
+			if link.Backend == domain.BackendWireGuardQUIC {
+				current, present := snapshot.Find(link.ID)
+				if !present || !sameQUICRecord(current, prior) || !state.ValidQUICOriginalTerminationProof(quicOriginalTermination) {
+					return fmt.Errorf("QUIC original removal owner/proof changed")
+				}
+			}
 			if !snapshot.Delete(link.ID) {
 				return state.ErrNotFound
 			}
@@ -1201,6 +1324,12 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 					LocalPublicKey: link.WireGuard.LocalPublicKey,
 					WSSLink:        link, WSSFiles: prior.WSSFiles,
 					WSSOriginalTermination: wssOriginalTermination})
+			}
+			if link.Backend == domain.BackendWireGuardQUIC {
+				if _, exists := snapshot.FindRemovalReceipt(link.ID); exists {
+					return fmt.Errorf("QUIC removal receipt already exists")
+				}
+				snapshot.RemovalReceipts = append(snapshot.RemovalReceipts, state.RemovalReceipt{LinkID: link.ID, Backend: domain.BackendWireGuardQUIC, LocalPublicKey: link.WireGuard.LocalPublicKey, QUICLink: link, QUICGeneration: prior.QUICGeneration, QUICOriginalTermination: quicOriginalTermination})
 			}
 			if link.Backend == domain.BackendIPsec {
 				if ipsecRetirementDigest == "" {
@@ -1230,6 +1359,9 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 				return fmt.Errorf("WSS pre-effect journal cannot be consumed atomically")
 			}
 		}
+		if err := consumeManagedQUIC(snapshot, preparedQUIC); err != nil {
+			return err
+		}
 		// Pending pre-effect journals still need the host restore entry point
 		// even after the last ordinary Link is durably removed.
 		remaining = len(snapshot.Links) + len(snapshot.QUICCrashOperations) + len(snapshot.WSSCrashOperations)
@@ -1254,6 +1386,9 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		}
 		published := loadErr == nil && stateMatchesOperation(visible, request, resources, publicationFiles,
 			publishedOrigin, trustedWSSBoot, newWSSOriginal, manualWSSRestore, prior, wssOriginalTermination)
+		if link.Backend == domain.BackendWireGuardQUIC {
+			published = loadErr == nil && quicPublished(visible, request, resources, quicGeneration, prior, quicOriginalTermination)
+		}
 		oldState := loadErr == nil && stateMatchesPrior(visible, link.ID, postPreparePrior)
 		var publicationErr *state.PublicationError
 		indeterminate := errors.As(commitErr, &publicationErr)
@@ -1639,7 +1774,7 @@ func stateMatchesPrior(snapshot state.Snapshot, id domain.LinkID, prior state.Li
 	if prior.Desired.ID == "" {
 		return !exists
 	}
-	return exists && record.Desired == prior.Desired &&
+	return exists && record.Desired == prior.Desired && record.QUICGeneration == prior.QUICGeneration &&
 		record.WSSFiles == prior.WSSFiles && record.WSSOrigin == prior.WSSOrigin &&
 		record.WSSKernelBootID == prior.WSSKernelBootID &&
 		record.WSSKernelBootSource == prior.WSSKernelBootSource &&

@@ -43,6 +43,7 @@ type GenerationPin struct {
 	files               []pinnedMaterialFile
 	identity            MaterialIdentity
 	closed              bool
+	recordedOnly        bool
 }
 
 func OpenPinnedGeneration(ctx context.Context, root string, plan Plan, port uint16,
@@ -50,8 +51,22 @@ func OpenPinnedGeneration(ctx context.Context, root string, plan Plan, port uint
 	return openPinnedGeneration(ctx, root, plan, port, binary, nonce, expected, InspectPinnedHysteria)
 }
 
+// OpenPinnedGenerationForRemoval checks the original receipt and exact bytes
+// without granting current TLS trust. Expired original credentials must not
+// prevent stopping/removing their owned Link. VerifyForLaunch remains required
+// before any helper start, including a rollback of a Remove operation.
+func OpenPinnedGenerationForRemoval(ctx context.Context, root string, plan Plan, port uint16,
+	binary, nonce string, expected HelperConfigIdentity) (*GenerationPin, error) {
+	return openPinnedGenerationMode(ctx, root, plan, port, binary, nonce, expected, InspectPinnedHysteria, true)
+}
+
 func openPinnedGeneration(ctx context.Context, root string, plan Plan, port uint16,
 	binary, nonce string, expected HelperConfigIdentity, verify helperVerifier) (_ *GenerationPin, result error) {
+	return openPinnedGenerationMode(ctx, root, plan, port, binary, nonce, expected, verify, false)
+}
+
+func openPinnedGenerationMode(ctx context.Context, root string, plan Plan, port uint16,
+	binary, nonce string, expected HelperConfigIdentity, verify helperVerifier, recordedOnly bool) (_ *GenerationPin, result error) {
 	if ctx == nil || verify == nil || !validGenerationNonce(nonce) || helperConfigPreflight(root, plan, port, binary) != nil {
 		return nil, errInvalidPinnedOperation
 	}
@@ -59,7 +74,7 @@ func openPinnedGeneration(ctx context.Context, root string, plan Plan, port uint
 		return nil, err
 	}
 	p := &GenerationPin{root: root, binary: binary, nonce: nonce, plan: plan, port: port,
-		expected: expected, verify: verify, creds: -1, parent: -1, dir: -1}
+		expected: expected, verify: verify, creds: -1, parent: -1, dir: -1, recordedOnly: recordedOnly}
 	defer func() {
 		if result != nil {
 			_ = p.Close()
@@ -151,9 +166,10 @@ func (p *GenerationPin) Verify(ctx context.Context) error {
 	if err := inspectGenerationReceiptFD(p.dir, p.plan, p.nonce, p.expected); err != nil {
 		return err
 	}
-	actual, err := inspectHelperConfigFD(p.dir, p.root, p.plan, p.port, p.binary, p.verify)
-	if err != nil || actual != p.expected {
-		return fmt.Errorf("QUIC pinned generation semantic drift")
+	if !p.recordedOnly {
+		if err := p.verifyLaunch(); err != nil {
+			return err
+		}
 	}
 	// Re-resolve the canonical private parents to detect a directory swap
 	// even when our retained descriptors still expose an intact old tree.
@@ -177,6 +193,26 @@ func (p *GenerationPin) Verify(ctx context.Context) error {
 		return err
 	}
 	return ctx.Err()
+}
+
+// VerifyForLaunch requires current TLS validity and the exact admitted helper
+// configuration even for a pin opened only to remove an original generation.
+func (p *GenerationPin) VerifyForLaunch(ctx context.Context) error {
+	if err := p.Verify(ctx); err != nil {
+		return err
+	}
+	if !p.recordedOnly {
+		return nil
+	}
+	return p.verifyLaunch()
+}
+
+func (p *GenerationPin) verifyLaunch() error {
+	actual, err := inspectHelperConfigFD(p.dir, p.root, p.plan, p.port, p.binary, p.verify)
+	if err != nil || actual != p.expected {
+		return fmt.Errorf("QUIC pinned generation semantic drift or TLS validity failure")
+	}
+	return nil
 }
 
 func (p *GenerationPin) Close() error {

@@ -13,14 +13,14 @@ func WithPinnedJournalGeneration(ctx context.Context, root string, plan Plan, po
 
 func withPinnedJournalGeneration(ctx context.Context, root string, plan Plan, port uint16,
 	binary, nonce string, expected HelperConfigIdentity, perform func() error, verify helperVerifier) error {
+	if perform == nil {
+		return errInvalidPinnedOperation
+	}
 	pin, err := openPinnedGeneration(ctx, root, plan, port, binary, nonce, expected, verify)
 	if err != nil {
 		return err
 	}
 	defer pin.Close()
-	if perform == nil {
-		return errInvalidPinnedOperation
-	}
 	if err := perform(); err != nil {
 		return err
 	}

@@ -37,6 +37,11 @@ func (b *Backend) DiagnosticState(ctx context.Context, link domain.Link) (Diagno
 	if !target.matches(link, name) {
 		return DiagnosticState{}, fmt.Errorf("WireGuard interface identity/configuration is not verified")
 	}
+	if link.Backend == domain.BackendWireGuardQUIC {
+		if err := b.requireCompleteQUICOriginal(ctx, link, target, name); err != nil {
+			return DiagnosticState{}, err
+		}
+	}
 	read := func(field string) (string, error) {
 		result, err := b.runner.Run(ctx, b.wgBinary, "show", name, field)
 		if err != nil {

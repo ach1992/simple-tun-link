@@ -110,6 +110,10 @@ func readLegacyUnitGraph(ctx context.Context, name string, version int) (systemd
 }
 
 func verifyLegacyUnitGraph(snapshot systemdunit.LegacyUnitSnapshot, s unitSpec, vacant bool) error {
+	return verifyLegacyUnitGraphState(snapshot, s, vacant, "active")
+}
+
+func verifyLegacyUnitGraphState(snapshot systemdunit.LegacyUnitSnapshot, s unitSpec, vacant bool, activeState string) error {
 	if snapshot.IncomingUpholds || snapshot.OutgoingUpholds {
 		return fmt.Errorf("foreign effective QUIC Upholds relationship")
 	}
@@ -122,7 +126,7 @@ func verifyLegacyUnitGraph(snapshot systemdunit.LegacyUnitSnapshot, s unitSpec, 
 		return fmt.Errorf("original QUIC unit missing from manager snapshot")
 	}
 	expected := map[string]string{
-		"Unit Load State": "loaded", "Unit Active State": "active",
+		"Unit Load State": "loaded", "Unit Active State": activeState,
 		"Need Daemon Reload": "no", "Transient": "yes",
 		"Fragment Path": "/run/systemd/transient/" + s.Name, "StopWhenUnneeded": "no",
 	}
@@ -153,6 +157,10 @@ func verifyLegacyUnitGraph(snapshot systemdunit.LegacyUnitSnapshot, s unitSpec, 
 // Retain this root-owned directory while inspecting aliases and installed
 // reverse edges. An edge directory symlink is never a trusted inventory.
 func checkUnitReverseReferences(ctx context.Context, path, name string) error {
+	return checkUnitReverseReferencesPolicy(ctx, path, name, false)
+}
+
+func checkUnitReverseReferencesPolicy(ctx context.Context, path, name string, allowSelected bool) error {
 	if ctx == nil || ctx.Err() != nil {
 		return fmt.Errorf("QUIC reverse dependency inspection canceled")
 	}
@@ -162,13 +170,17 @@ func checkUnitReverseReferences(ctx context.Context, path, name string) error {
 	}
 	directory := os.NewFile(uintptr(fd), path)
 	defer directory.Close()
-	return inspectUnitReferenceDirectory(ctx, directory, name, true, 0)
+	return inspectUnitReferenceDirectoryPolicy(ctx, directory, name, true, 0, allowSelected)
 }
 
 // Reads a bounded chunk at a time and checks cancellation between entries.
 // owner is fixed to root by production; tests can exercise inventory logic
 // with an unprivileged isolated directory without relaxing that caller.
 func inspectUnitReferenceDirectory(ctx context.Context, directory *os.File, name string, inspectEdges bool, owner uint32) error {
+	return inspectUnitReferenceDirectoryPolicy(ctx, directory, name, inspectEdges, owner, false)
+}
+
+func inspectUnitReferenceDirectoryPolicy(ctx context.Context, directory *os.File, name string, inspectEdges bool, owner uint32, allowSelected bool) error {
 	if ctx == nil || ctx.Err() != nil || directory == nil {
 		return fmt.Errorf("QUIC reverse dependency inspection canceled or unavailable")
 	}
@@ -186,6 +198,14 @@ func inspectUnitReferenceDirectory(ctx context.Context, directory *os.File, name
 				return fmt.Errorf("QUIC reverse dependency inspection canceled")
 			}
 			if entry.Name() == name {
+				if allowSelected && inspectEdges {
+					var selected unix.Stat_t
+					if unix.Fstatat(int(directory.Fd()), name, &selected, unix.AT_SYMLINK_NOFOLLOW) != nil ||
+						selected.Mode&unix.S_IFMT != unix.S_IFREG || selected.Uid != owner || selected.Mode&0o022 != 0 || selected.Nlink != 1 {
+						return fmt.Errorf("managed QUIC transient fragment is untrusted")
+					}
+					continue
+				}
 				return fmt.Errorf("foreign QUIC unit or reverse dependency exists")
 			}
 			if strings.HasSuffix(entry.Name(), ".service") {

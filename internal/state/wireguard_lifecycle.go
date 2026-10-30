@@ -43,10 +43,13 @@ func ValidWSSOriginalTerminationProof(value string) bool {
 }
 
 type RemovalReceipt struct {
-	LinkID         domain.LinkID  `json:"link_id"`
-	Backend        domain.Backend `json:"backend"`
-	LocalPublicKey string         `json:"local_public_key"`
-	Retired        bool           `json:"retired,omitempty"`
+	QUICLink                domain.Link    `json:"quic_link,omitzero"`
+	QUICGeneration          QUICGeneration `json:"quic_generation,omitzero"`
+	QUICOriginalTermination string         `json:"quic_original_termination,omitempty"`
+	LinkID                  domain.LinkID  `json:"link_id"`
+	Backend                 domain.Backend `json:"backend"`
+	LocalPublicKey          string         `json:"local_public_key"`
+	Retired                 bool           `json:"retired,omitempty"`
 	// Exact public Link is needed for post-Remove helper identity verification.
 	WSSLink  domain.Link     `json:"wss_link,omitzero"`
 	WSSFiles WSSFileIdentity `json:"wss_file_digests,omitzero"`
@@ -118,7 +121,7 @@ func validateWireGuardLifecycle(s Snapshot) error {
 	}
 	removed := make(map[domain.LinkID]bool, len(s.RemovalReceipts))
 	for _, receipt := range s.RemovalReceipts {
-		if receipt.LinkID.Validate() != nil || (receipt.Backend != domain.BackendWireGuard && receipt.Backend != domain.BackendWireGuardWSS) ||
+		if receipt.LinkID.Validate() != nil || (receipt.Backend != domain.BackendWireGuard && receipt.Backend != domain.BackendWireGuardWSS && receipt.Backend != domain.BackendWireGuardQUIC) ||
 			!validReceiptPublicKey(receipt.LocalPublicKey) {
 			return fmt.Errorf("invalid WireGuard removal receipt")
 		}
@@ -134,6 +137,13 @@ func validateWireGuardLifecycle(s Snapshot) error {
 		} else if receipt.WSSLink != (domain.Link{}) || receipt.WSSFiles != (WSSFileIdentity{}) ||
 			receipt.WSSOriginalTermination != "" {
 			return fmt.Errorf("native WireGuard receipt cannot carry WSS Link fields")
+		}
+		if receipt.Backend == domain.BackendWireGuardQUIC {
+			if receipt.QUICLink.ID != receipt.LinkID || receipt.QUICLink.WireGuard.LocalPublicKey != receipt.LocalPublicKey || receipt.QUICGeneration.Validate(receipt.QUICLink) != nil || !ValidQUICOriginalTerminationProof(receipt.QUICOriginalTermination) {
+				return fmt.Errorf("invalid managed QUIC removal receipt")
+			}
+		} else if receipt.QUICLink != (domain.Link{}) || receipt.QUICGeneration != (QUICGeneration{}) || receipt.QUICOriginalTermination != "" {
+			return fmt.Errorf("non-QUIC receipt carries QUIC provenance")
 		}
 		if removed[receipt.LinkID] {
 			return fmt.Errorf("duplicate WireGuard removal receipt")

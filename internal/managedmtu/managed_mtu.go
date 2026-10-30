@@ -11,6 +11,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/backend/ipip"
 	"github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	"github.com/ach1992/simple-tun-link/internal/backend/wireguard"
+	"github.com/ach1992/simple-tun-link/internal/carrier/quic"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 )
@@ -69,6 +70,11 @@ func mtuIdentity(link domain.Link) (string, int, error) {
 		}
 		n, err := wireguard.Overhead(link)
 		return name, n, err
+	case domain.BackendWireGuardQUIC:
+		name, err := wireguard.InterfaceName(link.ID)
+		// QUIC fragments the forwarded datagram; it has no fixed native-WG
+		// overhead to subtract from the physical device MTU.
+		return name, 0, err
 	case domain.BackendIPsec:
 		profile, err := ipsec.NewProfile(link)
 		if err != nil {
@@ -82,7 +88,7 @@ func mtuIdentity(link domain.Link) (string, int, error) {
 }
 
 func (m HostMTUManager) desired(ctx context.Context, link domain.Link, overhead int) (int, error) {
-	if overhead <= 0 {
+	if overhead <= 0 && link.Backend != domain.BackendWireGuardQUIC {
 		return 0, fmt.Errorf("MTU backend overhead unavailable")
 	}
 	route, err := (linux.RouteResolver{Runner: m.Runner}).Resolve(ctx, link.Underlay.Peer)
@@ -98,6 +104,19 @@ func (m HostMTUManager) desired(ctx context.Context, link domain.Link, overhead 
 		underlay = route.MTU
 	}
 	ceiling := underlay - overhead
+	if link.Backend == domain.BackendWireGuardQUIC {
+		if underlay < quic.QUICMinimumIPv4UnderlayMTU {
+			return 0, fmt.Errorf("QUIC local underlay cannot carry the required 1200-byte UDP payload")
+		}
+		plan, err := quic.PlanFromLink(link)
+		if err != nil {
+			return 0, err
+		}
+		ceiling, err = quic.MaximumWireGuardMTU(plan)
+		if err != nil {
+			return 0, err
+		}
+	}
 	if ceiling < 68 {
 		return 0, fmt.Errorf("MTU underlay cannot carry supported inner IPv4 datagrams")
 	}
@@ -109,6 +128,9 @@ func (m HostMTUManager) desired(ctx context.Context, link domain.Link, overhead 
 		return min(1280, ceiling), nil
 	case domain.MTUManual:
 		if link.MTU.Bytes < 68 || link.MTU.Bytes > ceiling {
+			if link.Backend == domain.BackendWireGuardQUIC {
+				return 0, fmt.Errorf("manual MTU exceeds the pinned QUIC helper's datagram capacity")
+			}
 			return 0, fmt.Errorf("manual MTU exceeds the verified local route/device ceiling")
 		}
 		return link.MTU.Bytes, nil
@@ -158,6 +180,9 @@ func (m HostMTUManager) Apply(ctx context.Context, req backend.Request, observed
 		return nil, false, err
 	}
 	alias, err := linux.OwnerTag(req.Link.ID)
+	if req.Link.Backend == domain.BackendWireGuardQUIC {
+		alias, err = linux.QUICWGOwnerTag(req.Link.ID, backend.QUICOrigin(ctx))
+	}
 	if err != nil || old.IfAlias != alias {
 		return nil, false, fmt.Errorf("MTU target is not an exactly owner-marked STL Link")
 	}

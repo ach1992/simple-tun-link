@@ -29,6 +29,8 @@ func selectedPackageBackends(selected tunnelOption) string {
 		return "native"
 	case domain.BackendWireGuard:
 		return "native,wireguard"
+	case domain.BackendWireGuardQUIC:
+		return "native,quic"
 	case domain.BackendIPsec:
 		return "native,ipsec"
 	default:
@@ -178,7 +180,7 @@ func readSelectedPackagePreview(ctx context.Context, selected tunnelOption) (sel
 	// Strings must be the canonical installer literal package vocabulary.
 	// This parser must never emit arbitrary package names as shell arguments.
 	allowed := map[string]bool{"iproute2": true, "iptables": true, "kmod": true,
-		"wireguard-tools": true, "charon-systemd": true, "strongswan-swanctl": true,
+		"wireguard-tools": true, "nftables": true, "charon-systemd": true, "strongswan-swanctl": true,
 		"libstrongswan-standard-plugins": true}
 	for _, name := range strings.Fields(plan.packages) {
 		if !allowed[name] {

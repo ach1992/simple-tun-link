@@ -161,6 +161,9 @@ func menuStatusTraffic(status linkStatusResponse) (rx, tx *uint64, unit string, 
 	case status.WSSState != nil:
 		a, b, last := status.WSSState.RXBytes, status.WSSState.TXBytes, status.WSSState.LastHandshakeUnix
 		return &a, &b, "bytes", &last
+	case status.QUICState != nil:
+		a, b, last := status.QUICState.RXBytes, status.QUICState.TXBytes, status.QUICState.LastHandshakeUnix
+		return &a, &b, "bytes", &last
 	case status.WireGuardState != nil:
 		a, b, last := status.WireGuardState.RXBytes, status.WireGuardState.TXBytes, status.WireGuardState.LatestHandshakeUnix
 		return &a, &b, "bytes", &last
@@ -391,6 +394,18 @@ func menuShowLocalStatus(id domain.LinkID, out, errOut io.Writer, options *runti
 			menuHealthLine(out, "WSS helper", "WARNING", "Helper not observed as active")
 		}
 		if result.WSSState.WGIngressGuardActive {
+			menuHealthLine(out, "WG ingress", "OK", "Scoped UDP protection active")
+		} else {
+			menuHealthLine(out, "WG ingress", "WARNING", "Scoped UDP guard not observed")
+		}
+	}
+	if result.QUICState != nil {
+		if result.QUICState.QUICHelperActive {
+			menuHealthLine(out, "QUIC helper", "OK", "Managed helper active")
+		} else {
+			menuHealthLine(out, "QUIC helper", "WARNING", "Helper not observed as active")
+		}
+		if result.QUICState.WGIngressGuardActive {
 			menuHealthLine(out, "WG ingress", "OK", "Scoped UDP protection active")
 		} else {
 			menuHealthLine(out, "WG ingress", "WARNING", "Scoped UDP guard not observed")

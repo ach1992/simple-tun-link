@@ -353,6 +353,7 @@ func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		menuOption(out, "4", "Manual connection", "Set up both ends by hand")
 		menuOption(out, "5", "Advanced types", "FOU / GUE / IPsec")
 		menuOption(out, "6", "WireGuard / WSS + TLS", "Encrypted WSS Carrier (optional pinned helper)")
+		menuOption(out, "7", "WireGuard / QUIC + TLS", "Encrypted UDP Carrier (optional pinned Hysteria)")
 		menuOption(out, "i", "Availability details", "Explain why a type is unavailable")
 		menuOption(out, "0", "Back", "Main menu")
 		fmt.Fprint(out, "Tunnel type [1]: ")
@@ -374,6 +375,16 @@ func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		}
 		if value == "" {
 			value = "1"
+		}
+		if value == "7" {
+			picked := tunnelOption{backend: domain.BackendWireGuardQUIC, mode: domain.EncapUDP}
+			prep := menuPrepareSelectedPackages(input, reader, out, errOut, picked, options)
+			if !prep.canContinue {
+				report = menuCapabilitySnapshot(options)
+				menuAcknowledge(input, reader, out)
+				continue
+			}
+			return menuCreateQUIC(input, reader, out, errOut, options)
 		}
 		if value == "6" {
 			// Same kernel WireGuard packages, separately admitted optional WSS.

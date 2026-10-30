@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -115,7 +117,7 @@ func readPrivateHandoffFile(path string) (string, error) {
 }
 
 func validatedSavedProtectedMenuOffer(options *runtimeOptions, selected domain.Link) (string, error) {
-	if selected.Backend != domain.BackendWireGuard && selected.Backend != domain.BackendIPsec && selected.Backend != domain.BackendWireGuardWSS {
+	if selected.Backend != domain.BackendWireGuard && selected.Backend != domain.BackendIPsec && selected.Backend != domain.BackendWireGuardWSS && selected.Backend != domain.BackendWireGuardQUIC {
 		return "", fmt.Errorf("this backend does not use protected handoff files")
 	}
 	root := createStateRoot(options)
@@ -132,6 +134,9 @@ func validatedSavedProtectedMenuOffer(options *runtimeOptions, selected domain.L
 	if _, pending := snapshot.FindWSSCrashOperation(selected.ID); pending {
 		return "", fmt.Errorf("WSS Link has an unresolved protected operation")
 	}
+	if _, pending := snapshot.FindQUICCrashOperation(selected.ID); pending {
+		return "", fmt.Errorf("QUIC Link has an unresolved protected operation")
+	}
 	path, err := protectedMenuHandoffPath(options, selected.ID)
 	if err != nil {
 		return "", err
@@ -139,6 +144,18 @@ func validatedSavedProtectedMenuOffer(options *runtimeOptions, selected domain.L
 	raw, err := readPrivateHandoffFile(path)
 	if err != nil {
 		return "", err
+	}
+	if selected.Backend == domain.BackendWireGuardQUIC {
+		offer, decoded, err := decodeQUICOffer(strings.NewReader(raw))
+		defer clear(decoded)
+		if err != nil {
+			return "", fmt.Errorf("stored QUIC handoff is invalid")
+		}
+		defer offer.clear()
+		if !quicOfferMatchesSenderGeneration(offer, current) {
+			return "", fmt.Errorf("stored QUIC handoff does not match the current sender generation")
+		}
+		return raw, nil
 	}
 	if selected.Backend == domain.BackendWireGuardWSS {
 		offer, _, err := decodeWSSOffer(strings.NewReader(raw))
@@ -220,6 +237,56 @@ func validatedExternalWSSMenuOffer(options *runtimeOptions, selected domain.Link
 	return raw, nil
 }
 
+// The token is shared only by the two original QUIC endpoints. Its public
+// committed digest binds a private receiver offer to the original sender
+// issuance; a syntactically valid replacement bundle is not a reissue right.
+func quicOfferMatchesSenderGeneration(offer quicOffer, record state.LinkRecord) bool {
+	if offer.Sender != record.Desired || record.QUICGeneration.Validate(record.Desired) != nil {
+		return false
+	}
+	token := offer.ReceiverTLS["authorization-token"]
+	if len(token) != 65 || token[64] != '\n' {
+		return false
+	}
+	digest := sha256.Sum256(token[:64])
+	return hex.EncodeToString(digest[:]) == record.QUICGeneration.Files.Authorization
+}
+
+// QUIC CLI handoffs use the same explicit private-file disclosure boundary.
+func validatedExternalQUICMenuOffer(options *runtimeOptions, selected domain.Link, privatePath string) (string, error) {
+	if selected.Backend != domain.BackendWireGuardQUIC || !filepath.IsAbs(privatePath) ||
+		filepath.Clean(privatePath) != privatePath || privatePath == "/" {
+		return "", fmt.Errorf("enter the original absolute private file path of the QUIC sender")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), readOperationTimeout)
+	defer cancel()
+	snapshot, err := state.NewFileStore(createStateRoot(options)).Load(ctx)
+	if err != nil {
+		return "", fmt.Errorf("current QUIC Link identity is unverified")
+	}
+	current, present := snapshot.Find(selected.ID)
+	if !present || current.Desired != selected {
+		return "", fmt.Errorf("saved sender Link changed, was superseded or is missing")
+	}
+	if _, pending := snapshot.FindQUICCrashOperation(selected.ID); pending {
+		return "", fmt.Errorf("original QUIC Link has an unresolved operation")
+	}
+	raw, err := readPrivateHandoffFile(privatePath)
+	if err != nil {
+		return "", fmt.Errorf("original handoff is missing or failed private ownership/mode checks")
+	}
+	offer, decoded, err := decodeQUICOffer(strings.NewReader(raw))
+	defer clear(decoded)
+	if err != nil {
+		return "", fmt.Errorf("original file is not a versioned QUIC receiver offer")
+	}
+	defer offer.clear()
+	if !quicOfferMatchesSenderGeneration(offer, current) {
+		return "", fmt.Errorf("private offer is not the original sender offer for this saved Link")
+	}
+	return raw, nil
+}
+
 func secureDeleteProtectedMenuHandoff(options *runtimeOptions, selected domain.Link) error {
 	if _, err := validatedSavedProtectedMenuOffer(options, selected); err != nil {
 		return err
@@ -265,7 +332,7 @@ func menuSensitiveHandoffAction(input io.Reader, reader *bufio.Reader, out, errO
 		fmt.Fprintln(errOut, "Protected Setup Links require a real interactive terminal. No credential disclosed or deleted.")
 		return 2
 	}
-	if selected.Backend != domain.BackendWireGuard && selected.Backend != domain.BackendIPsec && selected.Backend != domain.BackendWireGuardWSS {
+	if selected.Backend != domain.BackendWireGuard && selected.Backend != domain.BackendIPsec && selected.Backend != domain.BackendWireGuardWSS && selected.Backend != domain.BackendWireGuardQUIC {
 		return 2
 	}
 	if deleteSaved {
@@ -298,7 +365,7 @@ func menuSensitiveHandoffAction(input io.Reader, reader *bufio.Reader, out, errO
 		return 2
 	}
 	if deleteSaved {
-		if selected.Backend == domain.BackendWireGuardWSS {
+		if selected.Backend == domain.BackendWireGuardWSS || selected.Backend == domain.BackendWireGuardQUIC {
 			if _, err := validatedSavedProtectedMenuOffer(options, selected); errors.Is(err, errProtectedMenuOfferMissing) {
 				menuNotice(out, "INFO", "No original receiver offer was saved by the menu on this host; nothing to delete. Tunnel and keys unchanged.")
 				return 0
@@ -312,9 +379,13 @@ func menuSensitiveHandoffAction(input io.Reader, reader *bufio.Reader, out, errO
 		return 0
 	}
 	encoded, err := validatedSavedProtectedMenuOffer(options, selected)
-	if errors.Is(err, errProtectedMenuOfferMissing) && selected.Backend == domain.BackendWireGuardWSS {
+	if errors.Is(err, errProtectedMenuOfferMissing) && (selected.Backend == domain.BackendWireGuardWSS || selected.Backend == domain.BackendWireGuardQUIC) {
 		menuNotice(out, "INFO", "No original receiver offer is saved in this menu on this server.")
-		menuProse(out, "If YOU created this Link using CLI create-wss, provide its original --output file.")
+		command := "create-wss"
+		if selected.Backend == domain.BackendWireGuardQUIC {
+			command = "create-quic"
+		}
+		menuProse(out, "If YOU created this Link using CLI "+command+", provide its original --output file.")
 		menuProse(out, "If you IMPORTED the Link, request the original offer from its creator. No keys can be regenerated here.")
 		if err := clearQueuedMenuConfirmation(input, reader); err != nil {
 			menuNotice(out, "WARNING", "Cannot safely read a fresh private file path; no credential displayed.")
@@ -330,7 +401,11 @@ func menuSensitiveHandoffAction(input io.Reader, reader *bufio.Reader, out, errO
 			menuNotice(out, "WARNING", "Invalid private file path; nothing disclosed.")
 			return 2
 		}
-		encoded, err = validatedExternalWSSMenuOffer(options, selected, path)
+		if selected.Backend == domain.BackendWireGuardQUIC {
+			encoded, err = validatedExternalQUICMenuOffer(options, selected, path)
+		} else {
+			encoded, err = validatedExternalWSSMenuOffer(options, selected, path)
+		}
 	}
 	if err != nil {
 		menuNotice(out, "WARNING", "Protected Setup Link could not be verified; nothing disclosed.")

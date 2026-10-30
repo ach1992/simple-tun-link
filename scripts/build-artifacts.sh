@@ -147,6 +147,11 @@ installer command selects WSS; merely placing an optional archive has no
 effect. The canonical installer verifies the exact architecture-specific file, verifies both archive and extracted executable
 SHA-256 and installs it under the canonical installer-owned path.
 See docs/INSTALL.md for official download filename and mandatory trust checks.
+An OPTIONAL official Hysteria v2.13.0 binary hysteria-linux-$arch may also
+be placed beside this file. Explicit --with-quic selects its pinned binary
+and the WireGuard/nftables distro prerequisites; it creates no Link or service.
+Its SHA-256 is verified before core installation and again from a private
+snapshot before no-replace companion publication. Helpers are not bundled.
 Other helpers (including Paqet) are NOT included in STL.
 EOF_LOCAL
   (

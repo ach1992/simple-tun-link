@@ -123,6 +123,25 @@ grep -q 'selected optional WSS archive SHA-256 mismatch' "$scratch/selected-wss-
   fail 'invalid selected companion unexpectedly installed core'
 echo 'SNAPSHOT_OPTIONAL_WSS_EXPLICIT_SELECTION_AND_EARLY_REJECTION=PASS'
 
+# QUIC selection has its own exact official binary pin. Missing or invalid
+# selected bytes fail before installing core; no helper is fetched implicitly.
+if bash "$one_file" --prefix "$scratch/prefix" --with-quic > "$scratch/selected-quic-missing.log" 2>&1; then
+  fail 'missing selected QUIC helper was accepted'
+fi
+grep -q 'QUIC selected but official' "$scratch/selected-quic-missing.log" ||
+  fail 'missing selected QUIC helper was not explained'
+[[ ! -e "$scratch/prefix/bin/stl" ]] || fail 'missing QUIC companion installed core'
+mkdir -m 0700 "$scratch/invalid-quic"
+cp -- "$one_file" "$scratch/invalid-quic/$(basename -- "$one_file")"
+head -c 2048 /dev/zero > "$scratch/invalid-quic/hysteria-linux-${arch}"
+if bash "$scratch/invalid-quic/$(basename -- "$one_file")" --prefix "$scratch/prefix" --with-quic > "$scratch/selected-quic-hash.log" 2>&1; then
+  fail 'mismatched selected QUIC helper was accepted'
+fi
+grep -q 'selected optional QUIC binary SHA-256 mismatch' "$scratch/selected-quic-hash.log" ||
+  fail 'selected QUIC checksum failure not attributed'
+[[ ! -e "$scratch/prefix/bin/stl" ]] || fail 'invalid QUIC companion installed core'
+echo 'SNAPSHOT_OPTIONAL_QUIC_EXPLICIT_SELECTION_AND_EARLY_REJECTION=PASS'
+
 # Transfer corruption must fail before invoking canonical installation. The
 # filename is preserved, as the real operator copies official bytes as-is.
 mkdir -m 0700 "$scratch/tamper"

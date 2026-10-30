@@ -145,6 +145,10 @@ func uninstallSnapshotReady(s state.Snapshot) bool {
 			!state.ValidWSSOriginalTerminationProof(receipt.WSSOriginalTermination) {
 			return false
 		}
+		if receipt.Backend == domain.BackendWireGuardQUIC &&
+			!state.ValidQUICOriginalTerminationProof(receipt.QUICOriginalTermination) {
+			return false
+		}
 	}
 	for _, receipt := range s.IPsecRemovalReceipts {
 		if !receipt.Retired {

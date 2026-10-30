@@ -43,7 +43,8 @@ type Options struct {
 	DeleteLink         func(context.Context, int) error
 	LookupIndex        func(string) (int, error)
 	// WSSHost is only supplied to NewWSS. Native WireGuard remains unchanged.
-	WSSHost WSSHost
+	WSSHost  WSSHost
+	QUICHost QUICHost
 }
 
 type Backend struct {
@@ -59,6 +60,7 @@ type Backend struct {
 	deleteLink         func(context.Context, int) error
 	lookupIndex        func(string) (int, error)
 	wssHost            WSSHost
+	quicHost           QUICHost
 	// Test-only seam for a dispatched-but-unacknowledged kernel NEWLINK:
 	// production always uses linux.CreateWSSWireGuardStaged.
 	wssCreateStaged func(context.Context, string) error
@@ -68,7 +70,7 @@ func New(opts Options) (*Backend, error) {
 	if opts.Runner == nil || opts.Routes == nil || opts.Firewall == nil || opts.Collisions == nil || opts.Keys == nil {
 		return nil, fmt.Errorf("WireGuard requires runner, route, firewall, collision and private-key storage")
 	}
-	b := &Backend{wssHost: opts.WSSHost, runner: opts.Runner, routes: opts.Routes, firewall: opts.Firewall, collisions: opts.Collisions, keys: opts.Keys, ipBinary: opts.IPBinary, wgBinary: opts.WGBinary,
+	b := &Backend{wssHost: opts.WSSHost, quicHost: opts.QUICHost, runner: opts.Runner, routes: opts.Routes, firewall: opts.Firewall, collisions: opts.Collisions, keys: opts.Keys, ipBinary: opts.IPBinary, wgBinary: opts.WGBinary,
 		setAlias: opts.SetAlias, addAddress: opts.AddAddress, setUp: opts.SetUp, deleteLink: opts.DeleteLink, lookupIndex: opts.LookupIndex}
 	if b.ipBinary == "" {
 		b.ipBinary = "ip"
@@ -101,6 +103,9 @@ func New(opts Options) (*Backend, error) {
 }
 
 func (b *Backend) Kind() domain.Backend {
+	if b.quicHost != nil {
+		return domain.BackendWireGuardQUIC
+	}
 	if b.wssHost != nil {
 		return domain.BackendWireGuardWSS
 	}
@@ -198,17 +203,17 @@ func (b *Backend) Inspect(ctx context.Context, link domain.Link) (core.Observati
 		obs.Links[i] = links[i]
 		break
 	}
-	if b.wssHost != nil {
+	if b.managedHost() != nil {
 		obs.WSSLink = link
-		obs.GuardPresent, err = b.wssHost.GuardPresent(ctx, link)
+		obs.GuardPresent, err = b.managedHost().GuardPresent(ctx, link)
 		if err != nil {
 			return nil, err
 		}
-		obs.HelperPresent, err = b.wssHost.HelperPresent(ctx, link)
+		obs.HelperPresent, err = b.managedHost().HelperPresent(ctx, link)
 		if err != nil {
 			return nil, err
 		}
-		obs.HelperLoaded, err = b.wssHost.HelperLoaded(ctx, link)
+		obs.HelperLoaded, err = b.managedHost().HelperLoaded(ctx, link)
 		if err != nil {
 			return nil, err
 		}
@@ -357,7 +362,7 @@ func (b *Backend) Plan(ctx context.Context, req core.Request, observed core.Obse
 	if _, err := composition.Build(req.Link, composition.CarrierForLink(req.Link)); err != nil {
 		return nil, err
 	}
-	if b.wssHost != nil {
+	if b.managedHost() != nil {
 		return b.planWSS(ctx, req, obs)
 	}
 	name, _ := InterfaceName(req.Link.ID)
@@ -444,7 +449,7 @@ func (b *Backend) Validate(ctx context.Context, req core.Request, observed core.
 	if err := validateLink(req.Link); err != nil {
 		return err
 	}
-	if b.wssHost != nil {
+	if b.managedHost() != nil {
 		return b.validateWSS(ctx, req, obs, p)
 	}
 	if req.Operation == core.OperationRemove {
@@ -587,6 +592,9 @@ func (b *Backend) Verify(ctx context.Context, req core.Request) (core.Observatio
 	current, err := b.Inspect(ctx, req.Link)
 	if err != nil {
 		return nil, err
+	}
+	if b.quicHost != nil {
+		return b.verifyQUIC(ctx, req, current.(observation))
 	}
 	if b.wssHost != nil {
 		return b.verifyWSS(ctx, req, current.(observation))

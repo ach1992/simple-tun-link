@@ -29,6 +29,7 @@ const (
 	desiredLinkSchemaVersion = 1
 	managedMTUSchemaVersion  = 2
 	desiredWSSSchemaVersion  = 3
+	desiredQUICSchemaVersion = 4
 	maxDesiredLinkBytes      = 16 * 1024
 	lifecycleTimeLimit       = 5 * time.Minute
 	maxLinkJSONNesting       = 12
@@ -258,7 +259,7 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 			safe.ObjectID = observedPublic.ObjectID
 		}
 		switch domain.Backend(observedPublic.Backend) {
-		case domain.BackendGRE, domain.BackendIPIP, domain.BackendWireGuard, domain.BackendWireGuardWSS, domain.BackendIPsec:
+		case domain.BackendGRE, domain.BackendIPIP, domain.BackendWireGuard, domain.BackendWireGuardWSS, domain.BackendWireGuardQUIC, domain.BackendIPsec:
 			safe.Backend = observedPublic.Backend
 		}
 	}
@@ -407,6 +408,24 @@ type desiredLinkRequestV2 struct {
 	Link          desiredLinkV2 `json:"link"`
 }
 
+// Input schema v4 adds only the explicit authenticated QUIC composition.
+// Legacy native/WSS requests cannot silently acquire this capability.
+type desiredLinkRequestV4 struct {
+	SchemaVersion int           `json:"schema_version"`
+	Link          desiredLinkV4 `json:"link"`
+}
+type desiredLinkV4 struct {
+	desiredLinkV2
+	WireGuard domain.WireGuardOptions `json:"wireguard"`
+	QUIC      domain.QUICOptions      `json:"quic"`
+}
+
+func (d desiredLinkV4) link() domain.Link {
+	link := d.desiredLinkV2.link()
+	link.WireGuard, link.QUIC = d.WireGuard, d.QUIC
+	return link
+}
+
 // Input schema v3 adds ONLY the authenticated WireGuard-over-WSS public
 // settings. Frozen v1/v2 requests never acquire new mutation capabilities.
 type desiredLinkRequestV3 struct {
@@ -538,6 +557,16 @@ func decodeDesiredLink(reader io.Reader) (domain.Link, error) {
 		if link.Backend != domain.BackendWireGuardWSS {
 			return domain.Link{}, stlerr.New(stlerr.CodeUnsupported, "decode_link", "", "",
 				"desired Link v3 is reserved for wireguard-wss")
+		}
+	case desiredQUICSchemaVersion:
+		var request desiredLinkRequestV4
+		if err := decoder.Decode(&request); err != nil {
+			return domain.Link{}, fmt.Errorf("invalid desired QUIC Link v4 request")
+		}
+		link = request.Link.link()
+		if link.Backend != domain.BackendWireGuardQUIC {
+			return domain.Link{}, stlerr.New(stlerr.CodeUnsupported, "decode_link", "", "",
+				"desired Link v4 is reserved for wireguard-quic")
 		}
 	default:
 		return domain.Link{}, stlerr.New(stlerr.CodeUnsupported, "decode_link", "", "",

@@ -102,6 +102,24 @@ func printManualConnectionDetails(out io.Writer, l domain.Link) {
 		menuProse(out, "  WSS cannot be paired from this public-only view. Use the ORIGINAL sender's protected receiver offer.")
 		menuProse(out, "  If this server IMPORTED the Link, request the original offer from its creator; never regenerate active private keys.")
 		menuProse(out, "  Run Check connection for peer ICMP; Connection details alone do not prove traffic.")
+	case domain.BackendWireGuardQUIC:
+		// Public per-Link topology is safe to inspect on either peer. It
+		// never substitutes for the original sensitive receiver offer.
+		menuField(out, "QUIC role", l.QUIC.Role+" (this server)")
+		menuField(out, "QUIC TLS UDP port", strconv.Itoa(int(l.QUIC.UDPPort)))
+		if l.QUIC.TLSServerName != "" {
+			menuField(out, "TLS server name", safeMenuText(l.QUIC.TLSServerName))
+		}
+		if l.QUIC.Role == "dial" {
+			menuField(out, "Local QUIC forward UDP", strconv.Itoa(int(l.QUIC.ForwardUDPPort))+" (loopback only)")
+		}
+		menuField(out, "WG UDP local / peer", fmt.Sprintf("%d / %d (private, guarded)", l.WireGuard.ListenPort, l.WireGuard.PeerPort))
+		menuCopyLine(out, "THIS server WG PUBLIC key", l.WireGuard.LocalPublicKey)
+		menuCopyLine(out, "OTHER server WG PUBLIC key", l.WireGuard.PeerPublicKey)
+		menuProse(out, "  OTHER server role is the reverse (listen/dial). WireGuard stays private behind authenticated QUIC/TLS.")
+		menuProse(out, "  QUIC cannot be paired from this public-only view. Use the ORIGINAL sender's protected receiver offer.")
+		menuProse(out, "  If this server IMPORTED the Link, request the original offer from its creator; never regenerate active private keys.")
+		menuProse(out, "  Run Check connection for peer ICMP; Connection details alone do not prove traffic.")
 	case domain.BackendIPsec:
 		fmt.Fprintln(out, "  IPsec/IKEv2 uses an independent protected PSK and native-exclusive strongSwan.")
 		menuProse(out, "  Public details alone are insufficient: use My tunnels -> Share -> SHOW for the protected receiver offer.")

@@ -45,6 +45,9 @@ func wssHelperClaim(id domain.LinkID) domain.ResourceClaim {
 // Endpoint is deliberately NOT pinned: authenticated WG roaming is valid.
 func (b *Backend) requireCompleteWSSOriginal(ctx context.Context, link domain.Link,
 	wg observedLink, name string) error {
+	if link.Backend == domain.BackendWireGuardQUIC {
+		return b.requireCompleteQUICOriginal(ctx, link, wg, name)
+	}
 	alias, err := linux.WSSOwnerTag(link.ID, core.WSSOrigin(ctx))
 	if err != nil || !wg.Exists || wg.IfIndex <= 0 || wg.Name != name ||
 		wg.Alias != alias || wg.Owner != link.ID ||
@@ -72,7 +75,7 @@ func (b *Backend) planWSS(ctx context.Context, req core.Request, obs observation
 		helperChange: !obs.HelperPresent}
 	claims := []domain.ResourceClaim{
 		{Kind: domain.ResourceUDPListenPort, Key: strconv.Itoa(int(req.Link.WireGuard.ListenPort))},
-		wssGuardClaim(req.Link.ID),
+		managedGuardClaim(req.Link),
 	}
 	claims = append(claims, path.CarrierClaims()...)
 	switch req.Operation {
@@ -86,7 +89,7 @@ func (b *Backend) planWSS(ctx context.Context, req core.Request, obs observation
 		}
 		p.route = route
 		p.interfaceChange = !obs.Target.matches(req.Link, name)
-		providerClaims, err := desiredResources(req.Link, wssGuardClaim(req.Link.ID))
+		providerClaims, err := desiredResources(req.Link, managedGuardClaim(req.Link))
 		if err != nil {
 			return nil, err
 		}
@@ -116,7 +119,7 @@ func (b *Backend) validateWSS(ctx context.Context, req core.Request, obs observa
 			"changing a live WSS Link configuration is not admitted; remove and provision a new Link")
 	}
 	if obs.Target.Exists {
-		original, err := linux.WSSOwnerTag(req.Link.ID, core.WSSOrigin(ctx))
+		original, err := managedOwnerTag(ctx, req.Link)
 		if err != nil || obs.Target.Alias != original {
 			return fmt.Errorf("original WSS kernel interface provenance mismatch")
 		}
@@ -134,12 +137,12 @@ func (b *Backend) validateWSS(ctx context.Context, req core.Request, obs observa
 	// An existing same-name nft table or systemd service is NOT proof of
 	// STL ownership. The Engine must have committed their exact claims.
 	if obs.GuardPresent {
-		if err := linux.RequireOwned(req.Link.ID, wssGuardClaim(req.Link.ID), req.OwnedResources); err != nil {
+		if err := linux.RequireOwned(req.Link.ID, managedGuardClaim(req.Link), req.OwnedResources); err != nil {
 			return err
 		}
 	}
 	if obs.HelperLoaded {
-		if err := linux.RequireOwned(req.Link.ID, wssHelperClaim(req.Link.ID), req.OwnedResources); err != nil {
+		if err := linux.RequireOwned(req.Link.ID, managedHelperClaim(req.Link), req.OwnedResources); err != nil {
 			return err
 		}
 	}
@@ -148,12 +151,12 @@ func (b *Backend) validateWSS(ctx context.Context, req core.Request, obs observa
 	// A newly trusted kernel generation, durably bound to this original
 	// Link by Engine, is the only admission for a missing committed WSS WG.
 	if req.Prior != nil && !obs.Target.Exists {
-		if !core.HasWSSColdBootExtinctionWitness(ctx, req.Link.ID) {
+		if !managedColdBootWitness(ctx, req.Link) {
 			return fmt.Errorf("committed WSS original WG absent locally without verified original-kernel extinction; quarantine Link")
 		}
 		// After reboot, do not delete or adopt a current-generation guard,
 		// helper, socket or replacement interface that may be foreign.
-		vacant, err := b.CrashHostVacant(ctx, obs)
+		vacant, err := b.managedHostVacant(ctx, req.Link, obs)
 		if err != nil || !vacant {
 			return fmt.Errorf("post-reboot WSS original vacancy unverified; preserve committed Link: %w", errors.Join(err, core.ErrIndeterminateHostEffect))
 		}
@@ -177,7 +180,7 @@ func (b *Backend) validateWSS(ctx context.Context, req core.Request, obs observa
 	if route.Source != req.Link.Underlay.Local || route.Device != p.route.Device {
 		return fmt.Errorf("WSS route changed under resource lock")
 	}
-	if err := b.wssHost.Preflight(ctx, req.Link, obs.GuardPresent); err != nil {
+	if err := b.managedHost().Preflight(ctx, req.Link, obs.GuardPresent); err != nil {
 		return err
 	}
 	if !obs.Target.Exists {
@@ -235,13 +238,13 @@ func (b *Backend) ensureWSS(ctx context.Context, req core.Request, obs observati
 	// The guard MUST be effective before kernel WG binds its host-wide UDP
 	// socket. Reverse-order compensation removes the guard last.
 	if p.guardChange {
-		revert, err := b.wssHost.EnsureGuard(ctx, req.Link)
+		revert, err := b.managedHost().EnsureGuard(ctx, req.Link)
 		if revert != nil {
 			undos = append(undos, func(c context.Context) error {
 				if !verifiedKernelDeletion {
 					return fmt.Errorf("WSS original kernel deletion not established; retain ingress guard")
 				}
-				witnessed, witnessErr := core.WithWSSWGDeleted(c, req.Link.ID)
+				witnessed, witnessErr := managedWGDeleted(c, req.Link)
 				if witnessErr != nil {
 					return witnessErr
 				}
@@ -285,7 +288,7 @@ func (b *Backend) ensureWSS(ctx context.Context, req core.Request, obs observati
 		}
 	}
 	if p.helperChange {
-		revert, err := b.wssHost.StartHelper(ctx, req.Link)
+		revert, err := b.managedHost().StartHelper(ctx, req.Link)
 		if err != nil && errors.Is(err, core.ErrIndeterminateHostEffect) {
 			// Could be a live helper. Never undo the kernel socket's
 			// protective nft guard while a dependent effect is unknown.
