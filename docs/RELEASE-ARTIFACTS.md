@@ -160,6 +160,31 @@ Ensure/Restore/Remove/retirement/reconciliation. A pre-v5 binary-only rollback
 is unsafe after v5 publication, including on a Native-only host. Ordinary
 reads must not write migration State or silently acquire host authority.
 
+### Explicit QUIC obfuscation / State v6 acceptance
+
+The current runtime writes **State v6** and reads valid v1–v5 snapshots without
+read-time migration writes. Verify preserved v5 Plain Link/config/material
+identity, rejection of obfuscation fields grafted into older State, and
+complete mode/optional-secret binding in managed operations, generations and
+retirement receipts. Creator/private-offer v2 and desired-input v5 require
+separate compatibility evidence: old v1/v4 inputs must remain Plain-only and
+reject the new field even when empty.
+
+Exercise real pinned-helper Salamander forwarding with unchanged TLS/mTLS,
+bearer and ACL requirements, alongside a Plain sibling. Verify wrong or
+missing obfuscation material refusal, safe preview/status/diagnostics,
+helper recovery, private ICMP/TCP/UDP and isolated canonical removal. Preserve
+the actual field direction and measured loss; local control or readiness is
+not complete physical acceptance.
+
+A binary-only rollback to a pre-v6 reader cannot manage retained v6 data.
+The only added verified empty transition targets **v0.1.17 / State v5** and
+accepts exactly the two-field canonical empty snapshot. Any Link, journal,
+receipt, extra member or ambiguity must refuse unchanged. Release/install
+acceptance must verify that installing/updating the core does not itself
+mutate State, and that a guarded installer rollback preserves the original
+State bytes. Never relabel a binary rollback as a live-State downgrade.
+
 The optional Hysteria companion is not bundled in core release artifacts.
 The one-file installer must accept only explicit `--with-quic`, the exact
 architecture's official app/v2.13.0 bytes, trusted staging and an owned

@@ -163,7 +163,7 @@ func (b *managedQUICBackend) AttestQUIC(ctx context.Context, link domain.Link) (
 	}
 	return state.QUICGeneration{Version: 1, OriginNonce: backend.QUICOrigin(ctx), MaterialNonce: op.Nonce, KernelBootID: b.boot, KernelBootSource: hostidentity.VerifiedHostBootSourceV1, NetworkNS: "net:[42]", WGIfIndex: b.owners[link.ID].index,
 		GuardTableHandle: 1, GuardChainHandle: 2, GuardRuleHandle: 3,
-		Files:          state.QUICFileIdentity{Certificate: op.CertificateSHA256, TLSKey: strings.Repeat("f", 64), TrustCA: op.TrustCASHA256, Authorization: op.AuthorizationSHA256, HelperConfig: op.HelperConfigSHA256, DirectoryDevice: 1, DirectoryInode: 5, ReceiptDevice: 1, ReceiptInode: 6},
+		Files:          state.QUICFileIdentity{Certificate: op.CertificateSHA256, TLSKey: strings.Repeat("f", 64), TrustCA: op.TrustCASHA256, Authorization: op.AuthorizationSHA256, ObfuscationSHA256: op.ObfuscationSHA256, HelperConfig: op.HelperConfigSHA256, DirectoryDevice: 1, DirectoryInode: 5, ReceiptDevice: 1, ReceiptInode: 6},
 		ExecutablePath: op.ExecutablePath, ExecutableSHA256: op.ExecutableSHA256, ExecutableDevice: op.ExecutableDevice, ExecutableInode: op.ExecutableInode}, nil
 }
 func (b *managedQUICBackend) QUICHostVacant(ctx context.Context, link domain.Link) (bool, error) {
@@ -224,6 +224,11 @@ func (r *managedQUICRetirement) VerifyAbandonmentAbsent(context.Context, state.Q
 
 func managedQUICEngineFixture(t *testing.T) (*Engine, *managedQUICBackend, domain.Link) {
 	t.Helper()
+	return managedQUICEngineFixtureWithObfuscation(t, domain.QUICObfuscationPlain)
+}
+
+func managedQUICEngineFixtureWithObfuscation(t *testing.T, mode string) (*Engine, *managedQUICBackend, domain.Link) {
+	t.Helper()
 	root := t.TempDir()
 	store := state.NewFileStore(root)
 	b := &managedQUICBackend{store: store, boot: testWSSBootBefore, owners: map[domain.LinkID]managedQUICObservation{}, nextIndex: 100}
@@ -238,15 +243,22 @@ func managedQUICEngineFixture(t *testing.T) (*Engine, *managedQUICBackend, domai
 	e.kernelBootID = func() (string, error) { return b.boot, nil }
 	e.SetQUICRetirementStore(&managedQUICRetirement{})
 	intent := quicCrashIntentFixture()
+	intent.Plan.Obfuscation = mode
+	if mode == domain.QUICObfuscationSalamander {
+		intent.ObfuscationSHA256 = strings.Repeat("9", 64)
+	}
 	intent.WireGuard.PeerPort = intent.Plan.Local.RemoteWGUDPPort
 	link := domain.Link{ID: intent.Plan.Local.LinkID, DisplayName: "managed-quic", Backend: domain.BackendWireGuardQUIC, Encapsulation: domain.EncapUDP,
 		Underlay: domain.Underlay{Local: netip.MustParseAddr("192.0.2.10"), Peer: intent.Plan.Physical.Addr()}, Addresses: intent.Addresses, WireGuard: intent.WireGuard,
-		QUIC: domain.QUICOptions{Role: "dial", UDPPort: intent.Plan.Physical.Port(), ForwardUDPPort: intent.Plan.Local.LocalHelperUDPPort, TLSServerName: intent.Plan.TLSName}}
+		QUIC: domain.QUICOptions{Role: "dial", UDPPort: intent.Plan.Physical.Port(), ForwardUDPPort: intent.Plan.Local.LocalHelperUDPPort, TLSServerName: intent.Plan.TLSName, Obfuscation: mode}}
 	if err := link.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	expected := quicExpectedMaterialIdentity(intent)
-	e.quicPreviewMaterial = func(string, quic.Plan, uint16, string, quic.CredentialBundle) (quic.HelperConfigIdentity, error) {
+	e.quicPreviewMaterial = func(_ string, p quic.Plan, _ uint16, _ string, _ quic.CredentialBundle) (quic.HelperConfigIdentity, error) {
+		if p.Obfuscation != mode {
+			return quic.HelperConfigIdentity{}, fmt.Errorf("preview lost the selected obfuscation mode")
+		}
 		b.events = append(b.events, "preview")
 		return expected, nil
 	}
@@ -256,17 +268,24 @@ func managedQUICEngineFixture(t *testing.T) (*Engine, *managedQUICBackend, domai
 			return quic.HelperConfigIdentity{}, err
 		}
 		op, ok := s.FindQUICCrashOperation(p.LinkID)
-		if !ok || op.Managed == nil || op.Nonce != nonce {
+		if !ok || op.Managed == nil || op.Nonce != nonce || p.Obfuscation != mode || op.Plan.Obfuscation != mode ||
+			op.ObfuscationSHA256 != expected.Credentials.ObfuscationSHA256 || want != expected {
 			return quic.HelperConfigIdentity{}, fmt.Errorf("material staged before durable exact journal")
 		}
 		b.events = append(b.events, "stage")
 		return want, nil
 	}
-	e.quicInspectGeneration = func(string, quic.Plan, uint16, string, string, quic.HelperConfigIdentity) (quic.HelperConfigIdentity, error) {
+	e.quicInspectGeneration = func(_ string, p quic.Plan, _ uint16, _ string, _ string, want quic.HelperConfigIdentity) (quic.HelperConfigIdentity, error) {
+		if p.Obfuscation != mode || want != expected {
+			return quic.HelperConfigIdentity{}, fmt.Errorf("readback lost the selected mode or material identity")
+		}
 		return expected, nil
 	}
-	e.quicInspectRecordedGeneration = func(context.Context, string, quic.Plan, uint16, string, quic.HelperConfigIdentity) (state.QUICFileIdentity, error) {
-		return state.QUICFileIdentity{Certificate: expected.Credentials.CertificateSHA256, TLSKey: strings.Repeat("f", 64), TrustCA: expected.Credentials.TrustCASHA256, Authorization: expected.Credentials.AuthorizationSHA256, HelperConfig: expected.ConfigSHA256, DirectoryDevice: 1, DirectoryInode: 5, ReceiptDevice: 1, ReceiptInode: 6}, nil
+	e.quicInspectRecordedGeneration = func(_ context.Context, _ string, p quic.Plan, _ uint16, _ string, want quic.HelperConfigIdentity) (state.QUICFileIdentity, error) {
+		if p.Obfuscation != mode || want != expected {
+			return state.QUICFileIdentity{}, fmt.Errorf("removal lost the selected mode or material identity")
+		}
+		return state.QUICFileIdentity{Certificate: expected.Credentials.CertificateSHA256, TLSKey: strings.Repeat("f", 64), TrustCA: expected.Credentials.TrustCASHA256, Authorization: expected.Credentials.AuthorizationSHA256, ObfuscationSHA256: expected.Credentials.ObfuscationSHA256, HelperConfig: expected.ConfigSHA256, DirectoryDevice: 1, DirectoryInode: 5, ReceiptDevice: 1, ReceiptInode: 6}, nil
 	}
 	return e, b, link
 }
@@ -387,7 +406,17 @@ func TestManagedQUICVisibleUnconfirmedPublicationPreservesHost(t *testing.T) {
 }
 
 func TestManagedQUICMissingOriginalRequiresTrustedNewKernel(t *testing.T) {
-	e, b, link := managedQUICEngineFixture(t)
+	for _, mode := range []string{domain.QUICObfuscationPlain, domain.QUICObfuscationSalamander} {
+		name := mode
+		if name == "" {
+			name = "plain"
+		}
+		t.Run(name, func(t *testing.T) { runManagedQUICMissingOriginalRequiresTrustedNewKernel(t, mode) })
+	}
+}
+
+func runManagedQUICMissingOriginalRequiresTrustedNewKernel(t *testing.T, mode string) {
+	e, b, link := managedQUICEngineFixtureWithObfuscation(t, mode)
 	createManagedQUIC(t, e, b, link)
 	before, _ := b.store.Load(context.Background())
 	prior, _ := before.Find(link.ID)

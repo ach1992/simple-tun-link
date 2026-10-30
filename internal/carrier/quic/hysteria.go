@@ -40,6 +40,7 @@ type Plan struct {
 	Role                Role
 	Underlay            netip.AddrPort
 	TLSName             string
+	Obfuscation         string `json:"obfuscation,omitempty"`
 	LocalForwardUDPPort uint16 // Dial-side loopback socket; zero on Listen.
 	PeerWGUDPPort       uint16 // Dial-side destination: listening peer's WG UDP port.
 	LocalWGUDPPort      uint16 // Listen-side destination: its own kernel WG UDP port.
@@ -113,18 +114,29 @@ type udpForward struct {
 	Timeout string `json:"timeout"`
 }
 type serverConfig struct {
-	Listen     string     `json:"listen"`
-	TLS        tlsServer  `json:"tls"`
-	Auth       serverAuth `json:"auth"`
-	ACL        serverACL  `json:"acl"`
-	DisableUDP bool       `json:"disableUDP"`
+	Listen     string             `json:"listen"`
+	TLS        tlsServer          `json:"tls"`
+	Auth       serverAuth         `json:"auth"`
+	ACL        serverACL          `json:"acl"`
+	DisableUDP bool               `json:"disableUDP"`
+	Obfs       *obfuscationConfig `json:"obfs,omitempty"`
 }
 type clientConfig struct {
-	Server        string       `json:"server"`
-	Auth          string       `json:"auth"`
-	TLS           tlsClient    `json:"tls"`
-	UDPForwarding []udpForward `json:"udpForwarding"`
-	Lazy          bool         `json:"lazy,omitempty"`
+	Server        string             `json:"server"`
+	Auth          string             `json:"auth"`
+	TLS           tlsClient          `json:"tls"`
+	UDPForwarding []udpForward       `json:"udpForwarding"`
+	Lazy          bool               `json:"lazy,omitempty"`
+	Obfs          *obfuscationConfig `json:"obfs,omitempty"`
+}
+
+type obfuscationConfig struct {
+	Type       string           `json:"type"`
+	Salamander salamanderConfig `json:"salamander"`
+}
+
+type salamanderConfig struct {
+	Password string `json:"password"`
 }
 
 // Build generates only data, not an executable or install operation. The
@@ -135,6 +147,21 @@ type clientConfig struct {
 // independent per-Link bearer are mandatory; config/secret material must
 // never appear in argv, environment, status, or public diagnostics.
 func Build(plan Plan, binary, privateRoot, authorizationToken string) (Command, error) {
+	return BuildWithObfuscation(plan, binary, privateRoot, authorizationToken, "")
+}
+
+// BuildWithObfuscation accepts only the selected mode's distinct secret.
+// Secrets enter the private config only; plain plans reject extra material.
+func BuildWithObfuscation(plan Plan, binary, privateRoot, authorizationToken, obfuscationSecret string) (Command, error) {
+	if !domain.ValidQUICObfuscation(plan.Obfuscation) ||
+		(plan.Obfuscation == domain.QUICObfuscationPlain && obfuscationSecret != "") ||
+		(plan.Obfuscation == domain.QUICObfuscationSalamander && (!validToken(obfuscationSecret) || obfuscationSecret == authorizationToken)) {
+		return Command{}, errors.New("QUIC obfuscation mode requires exactly its independently generated secret")
+	}
+	var obfs *obfuscationConfig
+	if plan.Obfuscation == domain.QUICObfuscationSalamander {
+		obfs = &obfuscationConfig{Type: domain.QUICObfuscationSalamander, Salamander: salamanderConfig{Password: obfuscationSecret}}
+	}
 	if err := plan.LinkID.Validate(); err != nil {
 		return Command{}, errors.New("QUIC requires a valid exact Link owner")
 	}
@@ -172,6 +199,7 @@ func Build(plan Plan, binary, privateRoot, authorizationToken string) (Command, 
 	switch plan.Role {
 	case Dial:
 		config = clientConfig{
+			Obfs:   obfs,
 			Server: plan.Underlay.String(),
 			Auth:   authorizationToken,
 			// A managed dialer must bind its local forwarding socket even if
@@ -196,6 +224,7 @@ func Build(plan Plan, binary, privateRoot, authorizationToken string) (Command, 
 			sniGuard = "dns-san"
 		}
 		config = serverConfig{
+			Obfs:   obfs,
 			Listen: plan.Underlay.String(),
 			TLS:    tlsServer{Cert: serverCert, Key: serverKey, SNIGuard: sniGuard, ClientCA: clientCA},
 			Auth:   serverAuth{Type: "password", Password: authorizationToken},

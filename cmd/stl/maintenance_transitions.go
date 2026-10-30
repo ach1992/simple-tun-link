@@ -110,6 +110,8 @@ func publishedStateSchema(tag string) (int, error) {
 		return 3, nil
 	case 10, 11, 12:
 		return 4, nil
+	case 17:
+		return 5, nil
 	default:
 		return 0, errors.New("this release has no verified historical State schema contract")
 	}
@@ -190,7 +192,7 @@ func canonicalEmptyStateSchema(raw []byte) (int, error) {
 	}
 	var schema int
 	if err := json.Unmarshal(fields["schema_version"], &schema); err != nil ||
-		(schema != 3 && schema != 4) {
+		(schema != 3 && schema != 4 && schema != 5 && schema != 6) {
 		return 0, errors.New("State schema is not eligible for downgrade")
 	}
 	var links []json.RawMessage
@@ -201,9 +203,8 @@ func canonicalEmptyStateSchema(raw []byte) (int, error) {
 }
 
 // A downgrade with even one Link, journal or retained resource receipt is
-// intentionally refused by inspectUninstallReady. Converting an EMPTY v4
-// snapshot to v3 is safe because there are exactly two keys and no data to
-// discard; it is not a general-purpose State migration.
+// intentionally refused by inspectUninstallReady. Only explicit verified
+// empty-schema transitions are supported; this is not a general State migration.
 func stageEmptyStateForDowngrade(root, target string) error {
 	schema, err := publishedStateSchema(target)
 	if err != nil {
@@ -241,7 +242,7 @@ func stageEmptyStateForDowngrade(root, target string) error {
 	}
 	// Any other non-empty records would have been rejected by the strict
 	// two-field proof, and the canonical Engine preflight runs first.
-	if schema != 3 || current != 4 {
+	if !((schema == 3 && current == 4) || (schema == 5 && current == 6)) {
 		return errors.New("no lossless downlevel State representation is known")
 	}
 	tmp, err := os.CreateTemp(root, ".stl-empty-state-downlevel-*")
@@ -250,7 +251,7 @@ func stageEmptyStateForDowngrade(root, target string) error {
 	}
 	name := tmp.Name()
 	defer os.Remove(name)
-	if _, err := io.WriteString(tmp, "{\"schema_version\":3,\"links\":[]}\n"); err != nil {
+	if _, err := fmt.Fprintf(tmp, "{\"schema_version\":%d,\"links\":[]}\n", schema); err != nil {
 		tmp.Close()
 		return errors.New("cannot write empty downlevel State")
 	}
@@ -281,7 +282,7 @@ func stageEmptyStateForDowngrade(root, target string) error {
 }
 
 // The Uninstall gate can preserve fully retired receipts. Downgrade cannot:
-// pre-v4 readers and lossless empty-v4-to-v3 staging accept ONLY canonical
+// verified older readers and lossless empty-schema staging accept ONLY canonical
 // empty original State. Check it before asking for DOWNGRADE confirmation,
 // and recheck under the canonical installer's exclusive lock.
 func inspectDowngradeReady(ctx context.Context, root string, unit uninstallUnitInspector,

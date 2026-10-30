@@ -29,7 +29,16 @@ func testQUICCreateRequest() quicCreateRequest {
 
 func testQUICOffer(t *testing.T) (quicOffer, []byte) {
 	t.Helper()
+	return testQUICOfferWithMode(t, "")
+}
+
+func testQUICOfferWithMode(t *testing.T, mode string) (quicOffer, []byte) {
+	t.Helper()
 	r := testQUICCreateRequest()
+	r.Obfuscation = mode
+	if mode != "" {
+		r.SchemaVersion = 2
+	}
 	local, localPublic, err := wg.GenerateKeyPair()
 	if err != nil {
 		t.Fatal(err)
@@ -44,13 +53,13 @@ func testQUICOffer(t *testing.T) (quicOffer, []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	listen, dial, err := quic.GeneratePair(r.LinkID, r.Underlay.Local.String())
+	listen, dial, err := quic.GeneratePairWithObfuscation(r.LinkID, r.Underlay.Local.String(), mode)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer listen.Clear()
 	defer dial.Clear()
-	offer := quicOffer{SchemaVersion: 1, Sender: sender, Receiver: receiver,
+	offer := quicOffer{SchemaVersion: r.SchemaVersion, Sender: sender, Receiver: receiver,
 		ReceiverWGKey: peer.SecretWireValue(), ReceiverTLS: dial.ProtectedFiles()}
 	raw, err := json.Marshal(offer)
 	if err != nil {

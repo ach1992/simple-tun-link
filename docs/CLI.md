@@ -503,8 +503,9 @@ the durable exact removal receipt. A failed secret-retirement phase leaves
 its receipt retryable; a retired Link ID cannot be reused. Arbitrary
 **operator-selected exported handoff paths** remain operator-managed and
 must be separately retired from their external storage after confirmation.
-WSS management first used State v4; Stable v0.1.16 introduces State v5
-for managed QUIC and subsequent State mutations on all backends.
+WSS management first used State v4; Stable v0.1.16 introduced State v5
+for managed QUIC. The current runtime writes State v6 for the versioned
+QUIC obfuscation/material contract and subsequent State mutations on all backends.
 Older binaries must not manage snapshots written by an unsupported newer schema.
 
 ### Ubuntu AppArmor confinement of `wg` (WSS host preflight)
@@ -856,8 +857,16 @@ verified host capabilities and a reachable physical UDP listener.
 Choose **Create tunnel → WireGuard / QUIC + TLS**. Select which server
 listens on the physical UDP endpoint, the two private Link Addresses, each
 endpoint's kernel WireGuard UDP port, and the Dial endpoint's private
-loopback forwarding port. The public QUIC UDP listener and local WG port
-must differ. The listener has no extra loopback forwarder. TLS uses the
+loopback forwarding port. Choose **Plain** (the unchanged default) or
+**Salamander** for the QUIC packet representation. Salamander uses a fresh
+per-Link secret generated and transferred through the protected peer offer;
+the menu never asks for a password or exposes it in public output. Both peers
+must agree on the mode. This changes neither TLS authentication nor the
+private WireGuard topology, and is not a guarantee of WAN reachability.
+The guided flow emits private offer v2 for either mode, so both peers need
+a release that accepts v2 offers. To pair Plain with an older v1-only peer,
+use the frozen machine creator v1 contract below.
+The public QUIC UDP listener and local WG port must differ. The listener has no extra loopback forwarder. TLS uses the
 listener's exact IP SAN by default or an explicitly verified DNS SAN;
 certificate verification is never disabled.
 
@@ -868,7 +877,8 @@ a fallback. Open the public QUIC UDP port through the appropriate host and
 provider rules; do not publish the guarded kernel WG port.
 
 Creation issues new per-Link WG keys, separate TLS identities/trust anchors
-and an authorization token. It commits the local managed Link and writes a
+and an authorization token, plus an independent obfuscation secret when
+Salamander is selected. It commits the local managed Link and writes a
 **SENSITIVE** receiver JSON file using protected no-clobber publication.
 Transfer that file privately. On the other endpoint choose **Import setup
 link → WireGuard / QUIC + TLS**, inspect the receiver-facing public preview
@@ -883,15 +893,22 @@ not a measured PMTU. The pinned helper fragments forwarded WG datagrams
 within QUIC and imposes its own message-size limit; native WireGuard's
 fixed-overhead calculation is not used. Local MTU mutation and rollback
 require the exact nonce-marked original WG generation.
+The necessary local IPv4 underlay minimum is **1228 bytes for Plain** and
+**1236 bytes for Salamander** (its additional eight-byte salt). The helper
+capacity ceiling remains 4032 inner bytes. These are local admission checks,
+not measured carrier PMTU or proof that a handshake will pass the path.
 
 ### Machine creation and private import
 
-Creator input uses its own schema **1** and contains public topology only.
-For a first host acting as Listen, a request file can contain:
+Creator input schema **2** adds the public `obfuscation` choice:
+`"plain"` (default when absent) or `"salamander"`. Schema **1** remains
+supported for Plain and rejects the new field even when empty. No creator
+schema accepts caller-supplied secrets. For a Salamander Listen creator:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
+  "obfuscation": "salamander",
   "underlay": {"local": "198.51.100.10", "peer": "203.0.113.20"},
   "addresses": {"local": "10.77.0.0/31", "peer": "10.77.0.1/31"},
   "listen_port": 51821,
@@ -919,7 +936,8 @@ sudo stl link import-quic --stdin --confirm SHA256_FROM_PREVIEW --json < /root/q
 Run preview/import on the intended receiving endpoint after private transfer.
 Confirmation binds the original sensitive bytes; a changed handoff requires
 a new preview. Ordinary stdout/JSON contains public result/evidence only,
-never private key, bearer, raw certificate material or the complete handoff.
+never private key, bearer, obfuscation secret, raw certificate material or
+the complete handoff.
 
 `link resume-quic --stdin --confirm SHA256 --json` selects the **sender**
 Link from that original handoff and uses its existing protected material.
@@ -927,14 +945,25 @@ It does not generate replacement keys, bypass a pending journal or adopt
 an uncommitted object. Import selects the receiver; the distinction is
 explicit even when the two endpoints share one Link ID.
 
-The existing `link ensure --stdin --json` uses input schema **4** for the
-public QUIC desired Link, with `backend:"wireguard-quic"`,
-`encapsulation:"udp"`, `wireguard`, `quic` and the endpoint-local `mtu`
-policy. It reuses the canonical Engine and already provisioned credentials.
-It cannot create a first protected QUIC identity from public JSON alone.
-Native v1/v2 and WSS v3 requests do not acquire QUIC capabilities. These
-request versions, private offer schema 1, response versions and persisted
-State v5 are independent contracts.
+`link ensure --stdin --json` input schema **5** extends the public QUIC
+Link with `quic.obfuscation`, accepting `"plain"` or `"salamander"`.
+An absent or explicit `"plain"` value normalizes to the existing internal
+empty Plain identity; ordinary Plain Link JSON continues to omit that field.
+Input schema **4** remains the frozen Plain-only QUIC contract and rejects
+`obfuscation`, including an empty value. Both versions require
+`backend:"wireguard-quic"`, `encapsulation:"udp"`, public `wireguard` and
+`quic` settings, plus endpoint-local `mtu` policy. They reuse the canonical
+Engine and previously provisioned credentials; public JSON cannot create a
+first protected identity or silently switch an existing Link's mode/secret.
+Create a fresh paired Link for a different mode.
+
+Native v1/v2 and WSS v3 requests do not acquire QUIC capabilities. Creator v1
+emits private offer v1 (Plain); creator v2 emits private offer v2 and supports
+both modes. Old offers remain Plain-only and cannot graft the new field or
+secret. Public response schema **1** adds only the safe mode label to QUIC
+preview/diagnostics; secrets remain confined to protected material. Desired
+input, creator input, private offer, public response and persisted **State v6**
+are independent version contracts.
 
 ### Status, practical diagnostics and removal
 

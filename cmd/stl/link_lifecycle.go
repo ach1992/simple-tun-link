@@ -26,13 +26,14 @@ import (
 const (
 	// Input schema and response schema evolve independently. A future
 	// change to CLI output must not silently reinterpret existing requests.
-	desiredLinkSchemaVersion = 1
-	managedMTUSchemaVersion  = 2
-	desiredWSSSchemaVersion  = 3
-	desiredQUICSchemaVersion = 4
-	maxDesiredLinkBytes      = 16 * 1024
-	lifecycleTimeLimit       = 5 * time.Minute
-	maxLinkJSONNesting       = 12
+	desiredLinkSchemaVersion            = 1
+	managedMTUSchemaVersion             = 2
+	desiredWSSSchemaVersion             = 3
+	desiredQUICSchemaVersion            = 4
+	desiredQUICObfuscationSchemaVersion = 5
+	maxDesiredLinkBytes                 = 16 * 1024
+	lifecycleTimeLimit                  = 5 * time.Minute
+	maxLinkJSONNesting                  = 12
 )
 
 type lifecycleResultResponse struct {
@@ -417,13 +418,57 @@ type desiredLinkRequestV4 struct {
 type desiredLinkV4 struct {
 	desiredLinkV2
 	WireGuard domain.WireGuardOptions `json:"wireguard"`
-	QUIC      domain.QUICOptions      `json:"quic"`
+	QUIC      desiredQUICOptionsV1    `json:"quic"`
 }
 
 func (d desiredLinkV4) link() domain.Link {
 	link := d.desiredLinkV2.link()
-	link.WireGuard, link.QUIC = d.WireGuard, d.QUIC
+	link.WireGuard, link.QUIC = d.WireGuard, d.QUIC.options()
 	return link
+}
+
+// Freeze the original QUIC wire fields independently of the internal domain.
+// A new domain field must never widen schema v4 or private offer v1.
+type desiredQUICOptionsV1 struct {
+	Role           string `json:"role"`
+	UDPPort        uint16 `json:"udp_port"`
+	ForwardUDPPort uint16 `json:"forward_udp_port,omitempty"`
+	TLSServerName  string `json:"tls_server_name,omitempty"`
+}
+
+func (q desiredQUICOptionsV1) options() domain.QUICOptions {
+	return domain.QUICOptions{Role: q.Role, UDPPort: q.UDPPort, ForwardUDPPort: q.ForwardUDPPort, TLSServerName: q.TLSServerName}
+}
+
+type desiredQUICOptionsV2 struct {
+	desiredQUICOptionsV1
+	Obfuscation string `json:"obfuscation,omitempty"`
+}
+
+func (q desiredQUICOptionsV2) options() (domain.QUICOptions, error) {
+	mode, err := normalizeQUICObfuscation(q.Obfuscation)
+	if err != nil {
+		return domain.QUICOptions{}, err
+	}
+	options := q.desiredQUICOptionsV1.options()
+	options.Obfuscation = mode
+	return options, nil
+}
+
+type desiredLinkRequestV5 struct {
+	SchemaVersion int           `json:"schema_version"`
+	Link          desiredLinkV5 `json:"link"`
+}
+type desiredLinkV5 struct {
+	desiredLinkV4
+	QUIC desiredQUICOptionsV2 `json:"quic"`
+}
+
+func (d desiredLinkV5) link() (domain.Link, error) {
+	link := d.desiredLinkV4.link()
+	var err error
+	link.QUIC, err = d.QUIC.options()
+	return link, err
 }
 
 // Input schema v3 adds ONLY the authenticated WireGuard-over-WSS public
@@ -567,6 +612,19 @@ func decodeDesiredLink(reader io.Reader) (domain.Link, error) {
 		if link.Backend != domain.BackendWireGuardQUIC {
 			return domain.Link{}, stlerr.New(stlerr.CodeUnsupported, "decode_link", "", "",
 				"desired Link v4 is reserved for wireguard-quic")
+		}
+	case desiredQUICObfuscationSchemaVersion:
+		var request desiredLinkRequestV5
+		if err := decoder.Decode(&request); err != nil {
+			return domain.Link{}, fmt.Errorf("invalid desired QUIC Link v5 request")
+		}
+		link, err = request.Link.link()
+		if err != nil {
+			return domain.Link{}, err
+		}
+		if link.Backend != domain.BackendWireGuardQUIC {
+			return domain.Link{}, stlerr.New(stlerr.CodeUnsupported, "decode_link", "", "",
+				"desired Link v5 is reserved for wireguard-quic")
 		}
 	default:
 		return domain.Link{}, stlerr.New(stlerr.CodeUnsupported, "decode_link", "", "",

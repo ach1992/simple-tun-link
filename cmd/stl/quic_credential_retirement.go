@@ -42,10 +42,10 @@ func (r quicCredentialRetirement) RetireAfterRemove(ctx context.Context, link do
 	}
 	expected := quic.HelperConfigIdentity{ConfigSHA256: generation.Files.HelperConfig,
 		Credentials: quic.CredentialIdentity{CertificateSHA256: generation.Files.Certificate,
-			TrustCASHA256: generation.Files.TrustCA, AuthorizationSHA256: generation.Files.Authorization},
+			TrustCASHA256: generation.Files.TrustCA, AuthorizationSHA256: generation.Files.Authorization, ObfuscationSHA256: generation.Files.ObfuscationSHA256},
 		Executable: pinnedexec.Identity{SHA256: generation.ExecutableSHA256, Device: generation.ExecutableDevice, Inode: generation.ExecutableInode}}
 	identity := quic.MaterialIdentity{CertificateSHA256: generation.Files.Certificate, TLSKeySHA256: generation.Files.TLSKey,
-		TrustCASHA256: generation.Files.TrustCA, AuthorizationSHA256: generation.Files.Authorization,
+		TrustCASHA256: generation.Files.TrustCA, AuthorizationSHA256: generation.Files.Authorization, ObfuscationSHA256: generation.Files.ObfuscationSHA256,
 		HelperConfigSHA256: generation.Files.HelperConfig, DirectoryDevice: generation.Files.DirectoryDevice,
 		DirectoryInode: generation.Files.DirectoryInode, ReceiptDevice: generation.Files.ReceiptDevice, ReceiptInode: generation.Files.ReceiptInode}
 	if err := quic.RetireOwnedGeneration(ctx, r.root, plan, generation.MaterialNonce, expected, identity); err != nil {
@@ -137,10 +137,10 @@ func (r quicCredentialRetirement) RetireAfterAbandonment(ctx context.Context, re
 		return err
 	}
 	expected := quic.HelperConfigIdentity{ConfigSHA256: op.HelperConfigSHA256,
-		Credentials: quic.CredentialIdentity{CertificateSHA256: op.CertificateSHA256, TrustCASHA256: op.TrustCASHA256, AuthorizationSHA256: op.AuthorizationSHA256},
+		Credentials: quic.CredentialIdentity{CertificateSHA256: op.CertificateSHA256, TrustCASHA256: op.TrustCASHA256, AuthorizationSHA256: op.AuthorizationSHA256, ObfuscationSHA256: op.ObfuscationSHA256},
 		Executable:  pinnedexec.Identity{SHA256: op.ExecutableSHA256, Device: op.ExecutableDevice, Inode: op.ExecutableInode}}
 	f := receipt.Files
-	identity := quic.MaterialIdentity{CertificateSHA256: f.Certificate, TLSKeySHA256: f.TLSKey, TrustCASHA256: f.TrustCA, AuthorizationSHA256: f.Authorization,
+	identity := quic.MaterialIdentity{CertificateSHA256: f.Certificate, TLSKeySHA256: f.TLSKey, TrustCASHA256: f.TrustCA, AuthorizationSHA256: f.Authorization, ObfuscationSHA256: f.ObfuscationSHA256,
 		HelperConfigSHA256: f.HelperConfig, DirectoryDevice: f.DirectoryDevice, DirectoryInode: f.DirectoryInode, ReceiptDevice: f.ReceiptDevice, ReceiptInode: f.ReceiptInode}
 	if err := quic.RetireOwnedGeneration(ctx, r.root, plan, op.Nonce, expected, identity); err != nil {
 		return err

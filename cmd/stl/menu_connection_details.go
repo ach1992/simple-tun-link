@@ -106,6 +106,7 @@ func printManualConnectionDetails(out io.Writer, l domain.Link) {
 		// Public per-Link topology is safe to inspect on either peer. It
 		// never substitutes for the original sensitive receiver offer.
 		menuField(out, "QUIC role", l.QUIC.Role+" (this server)")
+		menuField(out, "QUIC obfuscation", publicQUICObfuscation(l.QUIC.Obfuscation))
 		menuField(out, "QUIC TLS UDP port", strconv.Itoa(int(l.QUIC.UDPPort)))
 		if l.QUIC.TLSServerName != "" {
 			menuField(out, "TLS server name", safeMenuText(l.QUIC.TLSServerName))

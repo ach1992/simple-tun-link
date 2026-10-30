@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/netip"
 	"strings"
+
+	"github.com/ach1992/simple-tun-link/internal/domain"
 )
 
 // QUICHostPlan retains all public, endpoint-local information of an already
@@ -11,9 +13,10 @@ import (
 // projection as if it also pinned TLS and physical routing. No secrets.
 // It is NOT a runnable Link or permission to create any host resources.
 type QUICHostPlan struct {
-	Local    QUICLocalAdmission `json:"local"`
-	Physical netip.AddrPort     `json:"physical"`
-	TLSName  string             `json:"tls_name"`
+	Local       QUICLocalAdmission `json:"local"`
+	Physical    netip.AddrPort     `json:"physical"`
+	TLSName     string             `json:"tls_name"`
+	Obfuscation string             `json:"obfuscation,omitempty"`
 }
 
 // ValidQUICTLSName is the precise existing Hysteria SAN/DNS selection rule,
@@ -44,6 +47,9 @@ func ValidQUICTLSName(name string, physical netip.Addr) bool {
 }
 
 func (p QUICHostPlan) Validate() error {
+	if !domain.ValidQUICObfuscation(p.Obfuscation) {
+		return fmt.Errorf("invalid QUIC obfuscation mode")
+	}
 	if _, err := p.Local.CarrierClaims(); err != nil {
 		return fmt.Errorf("invalid QUIC local carrier identity: %w", err)
 	}

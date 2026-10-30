@@ -30,11 +30,16 @@ func quicUITestGeneration(offer quicOffer) state.QUICGeneration {
 	digest := strings.Repeat("a", 64)
 	token := offer.ReceiverTLS["authorization-token"]
 	auth := sha256.Sum256(token[:64])
+	obfuscation := ""
+	if secret, ok := offer.ReceiverTLS["obfs-secret"]; ok {
+		digest := sha256.Sum256(secret[:64])
+		obfuscation = hex.EncodeToString(digest[:])
+	}
 	return state.QUICGeneration{Version: 1, OriginNonce: strings.Repeat("b", 32), MaterialNonce: strings.Repeat("c", 32),
 		KernelBootID: "11111111-2222-4333-8444-555555555555", KernelBootSource: hostidentity.VerifiedHostBootSourceV1,
 		NetworkNS: "net:[4012345678]", WGIfIndex: 77, GuardTableHandle: 11, GuardChainHandle: 12, GuardRuleHandle: 13,
 		ExecutablePath: quic.DefaultExecutable, ExecutableSHA256: quic.PinnedAMD64SHA256, ExecutableDevice: 1, ExecutableInode: 2,
-		Files: state.QUICFileIdentity{Certificate: digest, TLSKey: digest, TrustCA: digest, Authorization: hex.EncodeToString(auth[:]), HelperConfig: digest,
+		Files: state.QUICFileIdentity{Certificate: digest, TLSKey: digest, TrustCA: digest, Authorization: hex.EncodeToString(auth[:]), ObfuscationSHA256: obfuscation, HelperConfig: digest,
 			DirectoryDevice: 1, DirectoryInode: 3, ReceiptDevice: 1, ReceiptInode: 4}}
 }
 

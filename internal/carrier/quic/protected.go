@@ -23,7 +23,10 @@ type CredentialIdentity struct {
 	CertificateSHA256   string
 	TrustCASHA256       string
 	AuthorizationSHA256 string
+	ObfuscationSHA256   string `json:"ObfuscationSHA256,omitempty"`
 }
+
+const obfuscationSecretFile = "obfs-secret"
 
 func roleFiles(role Role) ([4]string, error) {
 	switch role {
@@ -36,6 +39,33 @@ func roleFiles(role Role) ([4]string, error) {
 	}
 }
 
+// planFiles extends the original four role files only for an explicit mode.
+// Plain retains the exact historical file set, ordering and serialization.
+func planFiles(plan Plan) ([]string, error) {
+	if !domain.ValidQUICObfuscation(plan.Obfuscation) {
+		return nil, fmt.Errorf("invalid QUIC obfuscation mode")
+	}
+	role, err := roleFiles(plan.Role)
+	if err != nil {
+		return nil, err
+	}
+	names := append([]string(nil), role[:]...)
+	if plan.Obfuscation == domain.QUICObfuscationSalamander {
+		names = append(names, obfuscationSecretFile)
+	}
+	return names, nil
+}
+
+func requireSelectedObfuscation(fd int, plan Plan) error {
+	if plan.Obfuscation == domain.QUICObfuscationPlain {
+		var st unix.Stat_t
+		if err := unix.Fstatat(fd, obfuscationSecretFile, &st, unix.AT_SYMLINK_NOFOLLOW); err != unix.ENOENT {
+			return fmt.Errorf("plain QUIC cannot contain obfuscation material")
+		}
+	}
+	return nil
+}
+
 func validMaterialScope(plan Plan) error {
 	if plan.LinkID.Validate() != nil || !plan.Underlay.IsValid() ||
 		!plan.Underlay.Addr().Is4() || plan.Underlay.Port() == 0 ||
@@ -43,7 +73,7 @@ func validMaterialScope(plan Plan) error {
 		!validTLSName(plan.TLSName, plan.Underlay.Addr()) {
 		return fmt.Errorf("invalid QUIC credential Link or TLS endpoint")
 	}
-	_, err := roleFiles(plan.Role)
+	_, err := planFiles(plan)
 	return err
 }
 
@@ -72,9 +102,9 @@ func parseSingleCA(raw []byte) (*x509.Certificate, error) {
 }
 
 func validateRoleMaterial(plan Plan, files map[string][]byte) (CredentialIdentity, error) {
-	names, err := roleFiles(plan.Role)
+	names, err := planFiles(plan)
 	if err != nil || len(files) != len(names) {
-		return CredentialIdentity{}, fmt.Errorf("QUIC requires exactly its role's four private files")
+		return CredentialIdentity{}, fmt.Errorf("QUIC requires exactly its selected role and mode's private files")
 	}
 	for _, name := range names {
 		if len(files[name]) < 1 || len(files[name]) > credentials.MaxPrivateFileBytes {
@@ -131,10 +161,20 @@ func validateRoleMaterial(plan Plan, files map[string][]byte) (CredentialIdentit
 	leafSHA := sha256.Sum256(leaf.Raw)
 	caSHA := sha256.Sum256(files[names[2]])
 	authSHA := sha256.Sum256(bearer[:64])
+	obfuscationSHA := ""
+	if plan.Obfuscation == domain.QUICObfuscationSalamander {
+		secret := files[obfuscationSecretFile]
+		if len(secret) != 65 || secret[64] != '\n' || !validToken(string(secret[:64])) || bytes.Equal(secret, bearer) {
+			return CredentialIdentity{}, fmt.Errorf("invalid or non-independent QUIC obfuscation secret")
+		}
+		sum := sha256.Sum256(secret[:64])
+		obfuscationSHA = hex.EncodeToString(sum[:])
+	}
 	return CredentialIdentity{
 		CertificateSHA256:   hex.EncodeToString(leafSHA[:]),
 		TrustCASHA256:       hex.EncodeToString(caSHA[:]),
 		AuthorizationSHA256: hex.EncodeToString(authSHA[:]),
+		ObfuscationSHA256:   obfuscationSHA,
 	}, nil
 }
 
@@ -203,7 +243,10 @@ func StageCredentials(root string, plan Plan, bundle CredentialBundle) (Credenti
 	if err := requireExclusiveRole(fd, plan.Role); err != nil {
 		return CredentialIdentity{}, err
 	}
-	names, _ := roleFiles(plan.Role)
+	if err := requireSelectedObfuscation(fd, plan); err != nil {
+		return CredentialIdentity{}, err
+	}
+	names, _ := planFiles(plan)
 	for _, name := range names {
 		if err := credentials.WritePrivateNoReplace(fd, name, files[name]); err != nil {
 			return CredentialIdentity{}, err
@@ -232,7 +275,10 @@ func InspectCredentials(root string, plan Plan) (CredentialIdentity, error) {
 	if err := requireExclusiveRole(fd, plan.Role); err != nil {
 		return CredentialIdentity{}, err
 	}
-	names, _ := roleFiles(plan.Role)
+	if err := requireSelectedObfuscation(fd, plan); err != nil {
+		return CredentialIdentity{}, err
+	}
+	names, _ := planFiles(plan)
 	files := make(map[string][]byte, len(names))
 	defer clearRoleFiles(files)
 	for _, name := range names {

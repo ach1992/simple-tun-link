@@ -56,6 +56,10 @@ func TestManagedQUICRejectsUnsupportedOrConflictingTopology(t *testing.T) {
 		{"remote-key", func(_ *domain.Link, b *domain.Link) { b.WireGuard.PeerPublicKey = b.WireGuard.LocalPublicKey }},
 		{"wrong-listener", func(_ *domain.Link, b *domain.Link) { b.QUIC.UDPPort++ }},
 		{"wrong-tls", func(_ *domain.Link, b *domain.Link) { b.QUIC.TLSServerName = "other.example" }},
+		{"mismatched-obfuscation", func(a *domain.Link, _ *domain.Link) { a.QUIC.Obfuscation = domain.QUICObfuscationSalamander }},
+		{"unknown-obfuscation", func(a *domain.Link, b *domain.Link) {
+			a.QUIC.Obfuscation, b.QUIC.Obfuscation = "automatic", "automatic"
+		}},
 		{"tls-ip-override", func(a *domain.Link, _ *domain.Link) { a.QUIC.TLSServerName = "192.0.2.9" }},
 		{"wireguard-helper-collision", func(a *domain.Link, _ *domain.Link) { a.QUIC.ForwardUDPPort = a.WireGuard.ListenPort }},
 		{"listener-wireguard-collision", func(_ *domain.Link, b *domain.Link) { b.QUIC.UDPPort = b.WireGuard.ListenPort }},
@@ -76,5 +80,31 @@ func TestManagedQUICRejectsUnsupportedOrConflictingTopology(t *testing.T) {
 				t.Fatal("unsafe or incompatible QUIC topology accepted")
 			}
 		})
+	}
+}
+
+func TestManagedQUICSalamanderPairKeepsExistingTopology(t *testing.T) {
+	dial, listen := managedQUICPair()
+	dial.QUIC.Obfuscation, listen.QUIC.Obfuscation = domain.QUICObfuscationSalamander, domain.QUICObfuscationSalamander
+	if err := ValidateQUICPeerPair(dial, CarrierForLink(dial), listen, CarrierForLink(listen)); err != nil {
+		t.Fatal(err)
+	}
+	for _, link := range []domain.Link{dial, listen} {
+		got, err := Build(link, CarrierForLink(link))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.QUIC.Obfuscation != domain.QUICObfuscationSalamander {
+			t.Fatal("composition dropped the selected obfuscation mode")
+		}
+		plain := link
+		plain.QUIC.Obfuscation = domain.QUICObfuscationPlain
+		before, err := Build(plain, CarrierForLink(plain))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.WGPeerEndpoint != before.WGPeerEndpoint || !slices.Equal(got.CarrierClaims(), before.CarrierClaims()) || got.QUIC.Local != before.QUIC.Local || got.QUIC.Physical != before.QUIC.Physical {
+			t.Fatal("obfuscation changed physical, WireGuard or resource topology")
+		}
 	}
 }

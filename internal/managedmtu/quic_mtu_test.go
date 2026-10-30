@@ -48,19 +48,25 @@ func quicMTUFixture(t *testing.T) (context.Context, HostMTUManager, *managedRunn
 
 func TestManagedQUICMTUUsesHelperCapacityAndQUICMinimum(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		policy   domain.MTUPolicy
-		routeMTU int
-		want     int
+		name        string
+		obfuscation string
+		policy      domain.MTUPolicy
+		routeMTU    int
+		want        int
 	}{
-		{"conservative_auto", domain.MTUPolicy{Mode: domain.MTUAuto}, 1228, 1280},
-		{"fragmented_inner_packet", domain.MTUPolicy{Mode: domain.MTUManual, Bytes: 4032}, 1500, 4032},
-		{"over_helper_capacity", domain.MTUPolicy{Mode: domain.MTUManual, Bytes: 4033}, 9000, 0},
-		{"underlay_too_small", domain.MTUPolicy{Mode: domain.MTUAuto}, 1227, 0},
+		{"conservative_auto", "", domain.MTUPolicy{Mode: domain.MTUAuto}, 1228, 1280},
+		{"fragmented_inner_packet", "", domain.MTUPolicy{Mode: domain.MTUManual, Bytes: 4032}, 1500, 4032},
+		{"over_helper_capacity", "", domain.MTUPolicy{Mode: domain.MTUManual, Bytes: 4033}, 9000, 0},
+		{"underlay_too_small", "", domain.MTUPolicy{Mode: domain.MTUAuto}, 1227, 0},
+		{"salamander_minimum", domain.QUICObfuscationSalamander, domain.MTUPolicy{Mode: domain.MTUAuto}, 1236, 1280},
+		{"salamander_underlay_too_small", domain.QUICObfuscationSalamander, domain.MTUPolicy{Mode: domain.MTUAuto}, 1235, 0},
+		{"salamander_capacity_unchanged", domain.QUICObfuscationSalamander, domain.MTUPolicy{Mode: domain.MTUManual, Bytes: 4032}, 1500, 4032},
+		{"salamander_over_capacity", domain.QUICObfuscationSalamander, domain.MTUPolicy{Mode: domain.MTUManual, Bytes: 4033}, 9000, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, m, r, link, claims := quicMTUFixture(t)
 			link.MTU, r.routeMTU = tc.policy, tc.routeMTU
+			link.QUIC.Obfuscation = tc.obfuscation
 			undo, changed, err := m.Apply(ctx, backend.Request{Operation: backend.OperationEnsure, Link: link}, false, claims)
 			if tc.want == 0 {
 				if err == nil || changed || undo != nil || r.ifaces[claims[0].Key].MTU != 1500 {

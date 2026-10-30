@@ -290,7 +290,7 @@ func (d *quicNamespaceLabTrace) report(root string, store *state.FileStore, keys
 			plan, planErr := quic.PlanFromLink(op.Managed.Intent)
 			if planErr == nil {
 				expected := quic.HelperConfigIdentity{ConfigSHA256: op.HelperConfigSHA256,
-					Credentials: quic.CredentialIdentity{CertificateSHA256: op.CertificateSHA256, TrustCASHA256: op.TrustCASHA256, AuthorizationSHA256: op.AuthorizationSHA256},
+					Credentials: quic.CredentialIdentity{CertificateSHA256: op.CertificateSHA256, TrustCASHA256: op.TrustCASHA256, AuthorizationSHA256: op.AuthorizationSHA256, ObfuscationSHA256: op.ObfuscationSHA256},
 					Executable:  pinnedexec.Identity{SHA256: op.ExecutableSHA256, Device: op.ExecutableDevice, Inode: op.ExecutableInode}}
 				nonce := op.Nonce
 				if op.Managed.HadCommittedLink {
@@ -553,14 +553,14 @@ func (h *quicNamespaceLabHost) material(ctx context.Context, link domain.Link) (
 	if scope.prior != nil {
 		g := *scope.prior
 		nonce = g.MaterialNonce
-		expected = quic.HelperConfigIdentity{ConfigSHA256: g.Files.HelperConfig, Credentials: quic.CredentialIdentity{CertificateSHA256: g.Files.Certificate, TrustCASHA256: g.Files.TrustCA, AuthorizationSHA256: g.Files.Authorization}, Executable: pinnedexec.Identity{SHA256: g.ExecutableSHA256, Device: g.ExecutableDevice, Inode: g.ExecutableInode}}
+		expected = quic.HelperConfigIdentity{ConfigSHA256: g.Files.HelperConfig, Credentials: quic.CredentialIdentity{CertificateSHA256: g.Files.Certificate, TrustCASHA256: g.Files.TrustCA, AuthorizationSHA256: g.Files.Authorization, ObfuscationSHA256: g.Files.ObfuscationSHA256}, Executable: pinnedexec.Identity{SHA256: g.ExecutableSHA256, Device: g.ExecutableDevice, Inode: g.ExecutableInode}}
 	} else {
 		op, ok := core.QUICManagedOperation(ctx)
 		if !ok || op.Managed.Intent != link {
 			return nil, expected, "", fmt.Errorf("test start lacks canonical durable journal")
 		}
 		nonce = op.Nonce
-		expected = quic.HelperConfigIdentity{ConfigSHA256: op.HelperConfigSHA256, Credentials: quic.CredentialIdentity{CertificateSHA256: op.CertificateSHA256, TrustCASHA256: op.TrustCASHA256, AuthorizationSHA256: op.AuthorizationSHA256}, Executable: pinnedexec.Identity{SHA256: op.ExecutableSHA256, Device: op.ExecutableDevice, Inode: op.ExecutableInode}}
+		expected = quic.HelperConfigIdentity{ConfigSHA256: op.HelperConfigSHA256, Credentials: quic.CredentialIdentity{CertificateSHA256: op.CertificateSHA256, TrustCASHA256: op.TrustCASHA256, AuthorizationSHA256: op.AuthorizationSHA256, ObfuscationSHA256: op.ObfuscationSHA256}, Executable: pinnedexec.Identity{SHA256: op.ExecutableSHA256, Device: op.ExecutableDevice, Inode: op.ExecutableInode}}
 	}
 	plan, err := quicPlanForLink(link)
 	if err != nil {
@@ -626,7 +626,7 @@ func (h *quicNamespaceLabHost) Attest(ctx context.Context, link domain.Link) (st
 		KernelBootID: boot, KernelBootSource: hostidentity.VerifiedHostBootSourceV1, NetworkNS: ns,
 		GuardTableHandle: handles.Table, GuardChainHandle: handles.Chain, GuardRuleHandle: handles.Rule,
 		ExecutablePath: quic.DefaultExecutable, ExecutableSHA256: expected.Executable.SHA256, ExecutableDevice: expected.Executable.Device, ExecutableInode: expected.Executable.Inode,
-		Files: state.QUICFileIdentity{Certificate: f.CertificateSHA256, TLSKey: f.TLSKeySHA256, TrustCA: f.TrustCASHA256, Authorization: f.AuthorizationSHA256, HelperConfig: f.HelperConfigSHA256,
+		Files: state.QUICFileIdentity{Certificate: f.CertificateSHA256, TLSKey: f.TLSKeySHA256, TrustCA: f.TrustCASHA256, Authorization: f.AuthorizationSHA256, ObfuscationSHA256: f.ObfuscationSHA256, HelperConfig: f.HelperConfigSHA256,
 			DirectoryDevice: f.DirectoryDevice, DirectoryInode: f.DirectoryInode, ReceiptDevice: f.ReceiptDevice, ReceiptInode: f.ReceiptInode}}
 	return g, pin.Verify(ctx)
 }

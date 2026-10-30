@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -20,18 +21,22 @@ import (
 // digests; TLSKey hashes the private file. The protected generation receipt
 // independently binds the original directory and all exact file inodes.
 type QUICFileIdentity struct {
-	Certificate     string `json:"certificate_sha256"`
-	TLSKey          string `json:"tls_key_sha256"`
-	TrustCA         string `json:"trust_ca_sha256"`
-	Authorization   string `json:"authorization_sha256"`
-	HelperConfig    string `json:"helper_config_sha256"`
-	DirectoryDevice uint64 `json:"directory_device"`
-	DirectoryInode  uint64 `json:"directory_inode"`
-	ReceiptDevice   uint64 `json:"receipt_device"`
-	ReceiptInode    uint64 `json:"receipt_inode"`
+	Certificate       string `json:"certificate_sha256"`
+	TLSKey            string `json:"tls_key_sha256"`
+	TrustCA           string `json:"trust_ca_sha256"`
+	Authorization     string `json:"authorization_sha256"`
+	ObfuscationSHA256 string `json:"obfuscation_sha256,omitempty"`
+	HelperConfig      string `json:"helper_config_sha256"`
+	DirectoryDevice   uint64 `json:"directory_device"`
+	DirectoryInode    uint64 `json:"directory_inode"`
+	ReceiptDevice     uint64 `json:"receipt_device"`
+	ReceiptInode      uint64 `json:"receipt_inode"`
 }
 
 func (f QUICFileIdentity) Validate() error {
+	if f.ObfuscationSHA256 != "" && (!validIPsecPendingDigest(f.ObfuscationSHA256) || f.ObfuscationSHA256 == f.Authorization) {
+		return fmt.Errorf("invalid managed QUIC obfuscation material identity")
+	}
 	for _, digest := range []string{f.Certificate, f.TLSKey, f.TrustCA, f.Authorization, f.HelperConfig} {
 		if !validIPsecPendingDigest(digest) {
 			return fmt.Errorf("invalid managed QUIC material identity")
@@ -72,6 +77,9 @@ func validQUICNonce(s string) bool {
 }
 
 func (g QUICGeneration) Validate(link domain.Link) error {
+	if !validQUICObfuscationFingerprint(link.QUIC.Obfuscation, g.Files.ObfuscationSHA256, g.Files.Authorization) {
+		return fmt.Errorf("managed QUIC obfuscation material does not match selected mode")
+	}
 	if link.Backend != domain.BackendWireGuardQUIC || link.Validate() != nil || g.Version != 1 ||
 		!validQUICNonce(g.OriginNonce) || !validQUICNonce(g.MaterialNonce) ||
 		!hostidentity.ValidBootID(g.KernelBootID) || g.KernelBootSource != hostidentity.VerifiedHostBootSourceV1 ||
@@ -133,8 +141,69 @@ func (op QUICCrashOperation) ValidateManaged() error {
 func (op QUICCrashOperation) MatchesGenerationMaterial(g QUICGeneration) bool {
 	return op.CertificateSHA256 == g.Files.Certificate && op.TrustCASHA256 == g.Files.TrustCA &&
 		op.AuthorizationSHA256 == g.Files.Authorization && op.HelperConfigSHA256 == g.Files.HelperConfig &&
+		op.ObfuscationSHA256 == g.Files.ObfuscationSHA256 &&
 		op.ExecutablePath == g.ExecutablePath && op.ExecutableSHA256 == g.ExecutableSHA256 &&
 		op.ExecutableDevice == g.ExecutableDevice && op.ExecutableInode == g.ExecutableInode
+}
+
+func validQUICObfuscationFingerprint(mode, fingerprint, bearerFingerprint string) bool {
+	switch mode {
+	case domain.QUICObfuscationPlain:
+		return fingerprint == ""
+	case domain.QUICObfuscationSalamander:
+		return validIPsecPendingDigest(fingerprint) && fingerprint != bearerFingerprint
+	default:
+		return false
+	}
+}
+
+// Formats before State 6 cannot acquire the newly recognized transport mode
+// or material identity during decoding. Scan nested journals and receipts too,
+// rejecting empty/null values and alternate key casing before migration.
+// Walking tokens also sees fields hidden by later duplicate parent keys.
+func rejectLegacyQUICObfuscationFields(raw []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	var visit func(int) error
+	visit = func(depth int) error {
+		if depth > 64 {
+			return fmt.Errorf("legacy State nesting exceeds validation bound")
+		}
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		switch token {
+		case json.Delim('{'):
+			for decoder.More() {
+				keyToken, err := decoder.Token()
+				if err != nil {
+					return err
+				}
+				key, ok := keyToken.(string)
+				if !ok {
+					return fmt.Errorf("invalid legacy State object key")
+				}
+				if strings.EqualFold(key, "obfuscation") || strings.EqualFold(key, "obfuscation_sha256") || strings.EqualFold(key, "ObfuscationSHA256") {
+					return fmt.Errorf("legacy State cannot contain QUIC obfuscation configuration or material identity")
+				}
+				if err := visit(depth + 1); err != nil {
+					return err
+				}
+			}
+			_, err = decoder.Token()
+			return err
+		case json.Delim('['):
+			for decoder.More() {
+				if err := visit(depth + 1); err != nil {
+					return err
+				}
+			}
+			_, err = decoder.Token()
+			return err
+		}
+		return nil
+	}
+	return visit(0)
 }
 
 func (s *Snapshot) DeleteQUICManagedOperation(id domain.LinkID) bool {

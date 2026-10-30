@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ type pinnedHelper struct {
 	logPath string
 	done    chan struct{}
 	waitErr error // published by closing done; do not read until done closes
+	cancel  context.CancelFunc
 }
 
 func (h *pinnedHelper) exited() (bool, error) {
@@ -268,14 +270,22 @@ func TestPinnedHysteriaRejectionEvidenceFailsClosed(t *testing.T) {
 // UDP forwarding. All sockets stay on loopback and never touch STL State,
 // WireGuard, nftables, systemd, kernel routes or physical peer servers.
 func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
-	for _, tlsName := range []string{"quic-probe.invalid", "127.0.0.1"} {
-		t.Run(tlsName, func(t *testing.T) {
-			runPinnedHysteriaLoopbackScenario(t, tlsName)
+	for _, mode := range []string{domain.QUICObfuscationPlain, domain.QUICObfuscationSalamander} {
+		name := mode
+		if name == "" {
+			name = "plain"
+		}
+		t.Run(name, func(t *testing.T) {
+			for _, tlsName := range []string{"quic-probe.invalid", "127.0.0.1"} {
+				t.Run(tlsName, func(t *testing.T) {
+					runPinnedHysteriaLoopbackScenario(t, tlsName, mode)
+				})
+			}
 		})
 	}
 }
 
-func runPinnedHysteriaLoopbackScenario(t *testing.T, tlsName string) {
+func runPinnedHysteriaLoopbackScenario(t *testing.T, tlsName, mode string) {
 	bin := os.Getenv("STL_QUIC_HYSTERIA_BIN")
 	if bin == "" {
 		t.Skip("set STL_QUIC_HYSTERIA_BIN to the separately SHA-256 verified official app/v2.13.0 binary")
@@ -300,7 +310,7 @@ func runPinnedHysteriaLoopbackScenario(t *testing.T, tlsName string) {
 	}
 	// The real Go issuer supplies the exact Hysteria config's TLS/mTLS and
 	// independent per-Link bearer; no OpenSSL fixture or stored CA keys.
-	serverBundle, clientBundle, err := GeneratePair(link, tlsName)
+	serverBundle, clientBundle, err := GeneratePairWithObfuscation(link, tlsName, mode)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,6 +318,7 @@ func runPinnedHysteriaLoopbackScenario(t *testing.T, tlsName string) {
 	defer clientBundle.Clear()
 	secrets := clientBundle.ProtectedFiles()
 	token := strings.TrimSuffix(string(secrets["authorization-token"]), "\n")
+	obfuscationSecret := strings.TrimSuffix(string(secrets[obfuscationSecretFile]), "\n")
 	clearProtectedCopies(secrets)
 	if !validToken(token) {
 		t.Fatal("issued QUIC authorization token malformed")
@@ -383,7 +394,7 @@ func runPinnedHysteriaLoopbackScenario(t *testing.T, tlsName string) {
 	echoPort := uint16(echo.LocalAddr().(*net.UDPAddr).Port)
 	base := Plan{
 		LinkID: link, Underlay: netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), serverPort),
-		TLSName: tlsName,
+		TLSName: tlsName, Obfuscation: mode,
 	}
 	srv := base
 	srv.Role = Listen
@@ -392,11 +403,11 @@ func runPinnedHysteriaLoopbackScenario(t *testing.T, tlsName string) {
 	dial.Role = Dial
 	dial.LocalForwardUDPPort = clientPort
 	dial.PeerWGUDPPort = echoPort
-	serverCmd, err := Build(srv, bin, root, token)
+	serverCmd, err := BuildWithObfuscation(srv, bin, root, token, obfuscationSecret)
 	if err != nil {
 		t.Fatal(err)
 	}
-	clientCmd, err := Build(dial, bin, root, token)
+	clientCmd, err := BuildWithObfuscation(dial, bin, root, token, obfuscationSecret)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,14 +448,18 @@ func runPinnedHysteriaLoopbackScenario(t *testing.T, tlsName string) {
 			cancel()
 			t.Fatalf("%s helper could not launch: %v", name, err)
 		}
-		p := &pinnedHelper{name: name, logPath: path, done: make(chan struct{})}
+		p := &pinnedHelper{name: name, logPath: path, done: make(chan struct{}), cancel: cancel}
 		go func() {
 			p.waitErr = c.Wait()
 			close(p.done)
 		}()
 		t.Cleanup(func() {
 			cancel()
-			<-p.done
+			select {
+			case <-p.done:
+			case <-time.After(2 * time.Second):
+				t.Errorf("%s helper did not stop within the cleanup deadline", name)
+			}
 			_ = out.Close()
 		})
 		return p
@@ -502,6 +517,108 @@ func runPinnedHysteriaLoopbackScenario(t *testing.T, tlsName string) {
 	if success != 100 {
 		t.Fatal("QUIC UDP transfer incomplete")
 	}
+	var mismatchLogs []string
+	if mode == domain.QUICObfuscationSalamander && tlsName == "quic-probe.invalid" {
+		// These are bounded nonadmission observations, not positive
+		// cryptographic rejection evidence. The same already authenticated
+		// session must relay before and after each mismatch; an unavailable
+		// server cannot satisfy this fixture merely by producing a timeout.
+		healthyControl := func(label string) {
+			t.Helper()
+			payload := []byte("healthy-control-" + label)
+			if err := conn.SetDeadline(time.Now().Add(1500 * time.Millisecond)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := conn.Write(payload); err != nil {
+				t.Fatal(err)
+			}
+			reply := make([]byte, 1500)
+			if n, err := conn.Read(reply); err != nil || !bytes.Equal(reply[:n], payload) {
+				t.Fatal("authenticated healthy control failed around obfuscation mismatch")
+			}
+		}
+		wrongSecret := strings.Repeat("0", 64)
+		for _, digit := range []string{"0", "1", "2"} {
+			candidate := strings.Repeat(digit, 64)
+			if candidate != obfuscationSecret && candidate != token {
+				wrongSecret = candidate
+				break
+			}
+		}
+		for _, mismatch := range []struct{ name, mode, secret string }{
+			{"wrong-obfs-secret", domain.QUICObfuscationSalamander, wrongSecret},
+			{"plain-to-salamander", domain.QUICObfuscationPlain, ""},
+		} {
+			healthyControl(mismatch.name + "-before")
+			negative := dial
+			negative.LocalForwardUDPPort = reserve()
+			negative.Obfuscation = mismatch.mode
+			command, err := BuildWithObfuscation(negative, bin, root, token, mismatch.secret)
+			if err != nil {
+				t.Fatal(err)
+			}
+			config := saveConfig(&command, mismatch.name)
+			process := run(command, config, mismatch.name)
+			mismatchLogs = append(mismatchLogs, mismatch.name)
+			probe, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer probe.Close()
+			target := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: int(negative.LocalForwardUDPPort)}
+			deadline := time.Now().Add(2 * time.Second)
+			for time.Now().Before(deadline) {
+				if exited, err := process.exited(); exited {
+					t.Fatalf("%s helper exited before the bounded observation completed: %v", mismatch.name, err)
+				}
+				if _, err := probe.WriteTo([]byte("obfuscation-mismatch-must-not-forward"), target); err != nil && !errors.Is(err, syscall.ECONNREFUSED) {
+					t.Fatal(err)
+				}
+				if err := probe.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+					t.Fatal(err)
+				}
+				buf := make([]byte, 128)
+				if _, _, err := probe.ReadFrom(buf); err == nil {
+					t.Fatalf("%s unexpectedly relayed application data", mismatch.name)
+				} else if !errors.Is(err, os.ErrDeadlineExceeded) && !errors.Is(err, syscall.ECONNREFUSED) {
+					t.Fatal(err)
+				}
+				// An unbound eager forwarder may return UDP refusal. Neither
+				// that refusal nor a read timeout is the admission assertion.
+				log := process.logBytes(t)
+				ready := bytes.Contains(log, []byte("UDP forwarding listening"))
+				clear(log)
+				if ready {
+					t.Fatalf("%s unexpectedly completed authentication", mismatch.name)
+				}
+				time.Sleep(25 * time.Millisecond)
+			}
+			probe.Close()
+			log := process.logBytes(t)
+			started := bytes.Contains(log, []byte("client mode"))
+			clear(log)
+			if !started {
+				t.Fatal("mismatch helper produced no upstream client startup evidence")
+			}
+			if exited, err := process.exited(); exited {
+				t.Fatalf("%s helper exited before controlled termination: %v", mismatch.name, err)
+			}
+			process.cancel()
+			select {
+			case <-process.done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("bounded mismatch helper did not stop")
+			}
+			healthyControl(mismatch.name + "-after")
+			log = serverProcess.logBytes(t)
+			admitted, err := pinnedServerLogEvents(log, "client connected")
+			clear(log)
+			if err != nil || len(admitted) != 1 {
+				t.Fatal("obfuscation mismatch changed the server's authenticated session set")
+			}
+			t.Logf("%s: 2s observation, client startup observed, no new server admission or application echo, healthy control before/after passed", mismatch.name)
+		}
+	}
 	// Negative tests exercise actual JSON generated by Build, not a
 	// hand-written alternate Hysteria ACL or client configuration.
 	noAck := func(p *pinnedHelper, localPort uint16, label string) {
@@ -534,7 +651,7 @@ func runPinnedHysteriaLoopbackScenario(t *testing.T, tlsName string) {
 	}
 	rejectedAuth := dial
 	rejectedAuth.LocalForwardUDPPort = reserve()
-	badAuthCmd, err := Build(rejectedAuth, bin, root, badToken)
+	badAuthCmd, err := BuildWithObfuscation(rejectedAuth, bin, root, badToken, obfuscationSecret)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -578,7 +695,7 @@ func runPinnedHysteriaLoopbackScenario(t *testing.T, tlsName string) {
 	foreignPlan := dial
 	foreignPlan.LinkID = foreignLink
 	foreignPlan.LocalForwardUDPPort = reserve()
-	foreignCmd, err := Build(foreignPlan, bin, root, token)
+	foreignCmd, err := BuildWithObfuscation(foreignPlan, bin, root, token, obfuscationSecret)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -599,7 +716,7 @@ func runPinnedHysteriaLoopbackScenario(t *testing.T, tlsName string) {
 	restricted := dial
 	restricted.LocalForwardUDPPort = reserve()
 	restricted.PeerWGUDPPort = uint16(forbidden.LocalAddr().(*net.UDPAddr).Port)
-	forbiddenCmd, err := Build(restricted, bin, root, token)
+	forbiddenCmd, err := BuildWithObfuscation(restricted, bin, root, token, obfuscationSecret)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -640,14 +757,16 @@ func runPinnedHysteriaLoopbackScenario(t *testing.T, tlsName string) {
 		t.Fatal("allowed destination control failed after ACL rejection")
 	}
 	// Explicitly keep sensitive helper configs out of logging and reporting.
-	for _, name := range []string{"server", "client", "bad-auth", "bad-mtls", "bad-destination"} {
+	for _, name := range append([]string{"server", "client", "bad-auth", "bad-mtls", "bad-destination"}, mismatchLogs...) {
 		b, err := os.ReadFile(filepath.Join(root, name+".log"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if bytes.Contains(b, []byte(token)) || bytes.Contains(b, []byte("PRIVATE KEY")) {
+		if bytes.Contains(b, []byte(token)) || bytes.Contains(b, []byte("PRIVATE KEY")) ||
+			(obfuscationSecret != "" && bytes.Contains(b, []byte(obfuscationSecret))) {
 			t.Fatal("Hysteria INFO log exposed live per-Link credentials")
 		}
+		clear(b)
 	}
 	t.Logf("pinned Hysteria v2.13.0 generated JSON E2E: issued TLS/mTLS + bearer UDP 100/100; invalid token, foreign client CA and UDP destination denied")
 }

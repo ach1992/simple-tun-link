@@ -257,8 +257,9 @@ WireGuard and nft operations, and the official Hysteria process. **Manager
 supervision and nested-namespace boot-source authentication are test adapters**;
 they do not establish production systemd or genuine reboot provenance.
 
-The sequence covers two independent QUIC pairs and a native WireGuard
-sibling; bilateral ICMP, 64 KiB TCP and sixteen 1200-byte UDP echoes in each
+The sequence covers a Salamander pair created through schema 2, an
+independent Plain pair created through frozen schema 1, and a native
+WireGuard sibling; bilateral ICMP, 64 KiB TCP and sixteen 1200-byte UDP echoes in each
 direction; physical WG DROP counters; helper interruption and retained-owner
 Restore; port/subnet collision refusal; Remove/retire isolation; and pending
 first-creation/same-boot reconciliation refusal. The independent janitor and

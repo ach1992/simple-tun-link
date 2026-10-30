@@ -374,12 +374,23 @@ its exact loopback WireGuard destination and ends with deny-all. No public
 WG fallback, unrestricted proxy, arbitrary configuration extension or
 certificate-verification bypass is exposed.
 
+Plain remains the default wire representation. Salamander is an explicit
+per-Link choice using the same fixed pinned helper and all the same TLS/WG
+authentication requirements. Its independent 256-bit secret is present only
+in a protected `obfs-secret` file, the exact private helper configuration and
+the sensitive receiver handoff. Both peers must agree on mode and secret.
+The expected file set, fingerprints, pinned-generation inspection, Restore,
+rollback and retirement bind that optional file to the same generation.
+Ordinary State/status/diagnostics expose only the mode and public identity
+fingerprints, never the secret. Packet obfuscation is not a reachability or
+undetectability guarantee and never authorizes automatic fallback.
+
 The canonical Engine holds maintenance, Link and resource locks, persists
 a managed pre-effect journal before private staging or host effects, and
 retains executable/material descriptors through verification and State
 publication. The ingress DROP guard precedes WG creation; helper shutdown
 and positive original WG termination precede guard removal. The committed
-State v5 generation binds trusted boot/source, namespace, original ifindex,
+State v6 generation retains the v5 original-ownership contract and binds trusted boot/source, namespace, original ifindex,
 nft handles, creation/material nonces and protected executable/file identity.
 Public names, shape, hashes, nonce markers and source-only birth receipts
 alone never authorize adoption or deletion. Historical source-only journals
@@ -400,7 +411,7 @@ ambiguous manager observations cause refusal. Dial connects lazily when
 forwarded traffic arrives so the first endpoint can be configured before
 peer import; authentication and transport failures remain observable.
 
-TLS keys, WG keys, bearer, helper configuration and the receiver handoff are
+TLS keys, WG keys, bearer, obfuscation secret, helper configuration and the receiver handoff are
 sensitive. Ordinary State contains public fingerprints and provenance only.
 Managed process output goes to the existing journal; its actual stderr FD
 must match any `JOURNAL_STREAM` identity. Public diagnostics allow only bounded

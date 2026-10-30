@@ -19,6 +19,7 @@ var errInvalidPinnedOperation = errors.New("invalid pinned QUIC material operati
 // The generation receipt independently binds every original file inode/hash.
 type MaterialIdentity struct {
 	CertificateSHA256, TLSKeySHA256, TrustCASHA256, AuthorizationSHA256, HelperConfigSHA256 string
+	ObfuscationSHA256                                                                       string `json:"ObfuscationSHA256,omitempty"`
 	DirectoryDevice, DirectoryInode, ReceiptDevice, ReceiptInode                            uint64
 }
 
@@ -99,7 +100,7 @@ func openPinnedGenerationMode(ctx context.Context, root string, plan Plan, port 
 	if err := inspectGenerationReceiptFD(p.dir, plan, nonce, expected); err != nil {
 		return nil, err
 	}
-	names, err := generationFiles(plan.Role)
+	names, err := generationFiles(plan)
 	if err != nil {
 		return nil, err
 	}
@@ -107,6 +108,7 @@ func openPinnedGenerationMode(ctx context.Context, root string, plan Plan, port 
 	role, _ := roleFiles(plan.Role)
 	p.identity = MaterialIdentity{CertificateSHA256: expected.Credentials.CertificateSHA256,
 		TrustCASHA256: expected.Credentials.TrustCASHA256, AuthorizationSHA256: expected.Credentials.AuthorizationSHA256,
+		ObfuscationSHA256:  expected.Credentials.ObfuscationSHA256,
 		HelperConfigSHA256: expected.ConfigSHA256, DirectoryDevice: uint64(p.original.Dev), DirectoryInode: p.original.Ino}
 	for _, name := range names {
 		witness, err := privateFileWitness(p.dir, name)

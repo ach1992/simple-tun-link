@@ -722,7 +722,7 @@ def run_lab():
             reject("managed original committed owner missing")
         return matches[0]
 
-    def request(link, subnet, local_port, peer_port, udp_port=0, forward=0):
+    def request(link, subnet, local_port, peer_port, udp_port=0, forward=0, obfuscation=""):
         value = {"schema_version": 1, "link_id": link,
                  "underlay": {"local": "172.31.246.1", "peer": "172.31.246.2"},
                  "addresses": {"local": subnet + ".1/30", "peer": subnet + ".2/30"},
@@ -730,6 +730,8 @@ def run_lab():
                  "local_keepalive": 1, "peer_keepalive": 1}
         if udp_port:
             value.update({"role": "listen", "udp_port": udp_port, "remote_forward_udp_port": forward})
+            if obfuscation:
+                value.update({"schema_version": 2, "obfuscation": obfuscation})
         return value
 
     def pair(value, native=False):
@@ -748,8 +750,25 @@ def run_lab():
     first_id = "lnk_" + "71" * 16
     second_id = "lnk_" + "72" * 16
     pair(request(native_id, "10.246.3", 51931, 51932), native=True)
-    first_raw = pair(request(first_id, "10.246.1", 51821, 51822, 29443, 53001))
+    first_raw = pair(request(first_id, "10.246.1", 51821, 51822, 29443, 53001, "salamander"))
     pair(request(second_id, "10.246.2", 51831, 51832, 29444, 53002))
+    for peer in ("alpha", "beta"):
+        for link, mode in ((first_id, "salamander"), (second_id, "")):
+            if record(peer, link)["desired"]["quic"].get("obfuscation", "") != mode:
+                reject("managed pairing changed the selected QUIC mode")
+            materials = pathlib.Path("/lab/" + peer + "-state/credentials/quic/" + link)
+            config = json.loads((materials / "helper.json").read_bytes())
+            secret_path = materials / "obfs-secret"
+            if mode:
+                secret = secret_path.read_bytes()
+                authorization = (materials / "authorization-token").read_bytes()
+                if (secret_path.stat().st_mode & 0o777 != 0o600 or
+                        secret == authorization or
+                        config.get("obfs") != {"type": "salamander", "salamander": {"password": secret.decode().strip()}}):
+                    reject("managed Salamander protected material/config binding failed")
+            elif secret_path.exists() or "obfs" in config:
+                reject("legacy-input Plain sibling acquired obfuscation material")
+    print("QUIC_MANAGED_SALAMANDER_AND_LEGACY_PLAIN_PAIRING=PASS", flush=True)
     print("QUIC_MANAGED_SEPARATE_PROCESS_CREATE_PREVIEW_IMPORT_RESUME_TWO_LINKS=PASS", flush=True)
 
     def ping(peer, source, destination, required=True):
@@ -927,7 +946,7 @@ def run_lab():
     for peer in ("alpha", "beta"):
         if identity(peer, first_id) != original[peer]:
             reject("helper repair replaced committed WG/material/guard generation")
-        cli(peer, ["ensure", "--stdin", "--json"], {"schema_version": 4, "link": record(peer, first_id)["desired"]})
+        cli(peer, ["ensure", "--stdin", "--json"], {"schema_version": 5, "link": record(peer, first_id)["desired"]})
     print("QUIC_MANAGED_HELPER_FAILURE_BLOCKS_TRAFFIC_AND_CANONICAL_RESTORE_REPAIRS=PASS", flush=True)
     print("QUIC_MANAGED_REBOOT_PROOF=NOT_RUN; restore above reconciles the same kernel generation", flush=True)
 
@@ -960,7 +979,7 @@ def run_lab():
     interrupted_id = "lnk_" + "76" * 16
     interrupted_file = "/lab/interrupted-original.json"
     cli("alpha", ["create-quic", "--stdin", "--output", interrupted_file, "--json"],
-        request(interrupted_id, "10.246.6", 51861, 51862, 29447, 53006), succeeds=False, interrupted=True)
+        request(interrupted_id, "10.246.6", 51861, 51862, 29447, 53006, "salamander"), succeeds=False, interrupted=True)
     interrupted_raw = pathlib.Path(interrupted_file).read_bytes()
     confirmation = hashlib.sha256(interrupted_raw.removesuffix(b"\n")).hexdigest()
     journal_before = pathlib.Path("/lab/alpha-state/state.json").read_bytes()

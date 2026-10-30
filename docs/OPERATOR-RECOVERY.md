@@ -622,6 +622,19 @@ acceptance is claimed.
 
 ## Managed QUIC: interrupted operations and kernel extinction
 
+Plain and Salamander use the same recovery commands and original-generation
+proof. For Salamander, preserve `obfs-secret` together with the original
+WG/TLS/bearer files, helper configuration, State and receiver offer. The
+optional secret fingerprint is part of the generation; matching the bearer
+alone does not authorize replacing or reissuing it. Do not regenerate the
+secret, change modes or hand-edit `helper.json` to repair a pending operation.
+A fresh mode requires a fresh paired Link.
+
+The runtime writes State v6. Valid v5 Plain records remain readable, but
+binary-only rollback to v0.1.17 cannot consume retained v6 data. Only the
+canonical empty-State downgrade described in [INSTALL.md](INSTALL.md#state-v6-explicit-quic-obfuscation-and-rollback)
+is supported; retained receipts and journals are never discarded for it.
+
 Managed QUIC uses the same canonical Engine, protected State and resource
 locks as ordinary Link operations. A failed operation may retain a complete
 pre-effect journal and protected material even when rollback returned

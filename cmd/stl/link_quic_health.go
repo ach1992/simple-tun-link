@@ -24,6 +24,7 @@ type QUICLinkDiagnostics struct {
 	LinkID                     domain.LinkID                 `json:"link_id"`
 	Carrier                    string                        `json:"carrier"`
 	Role                       string                        `json:"role"`
+	Obfuscation                string                        `json:"obfuscation"`
 	Interface                  string                        `json:"interface,omitempty"`
 	IfIndex                    int                           `json:"ifindex,omitempty"`
 	QUICHelperActive           bool                          `json:"quic_helper_active"`
@@ -51,7 +52,7 @@ func quicHealthError(link domain.Link, reason, detail string) error {
 // owned resources under its existing locks. CLI code does not adopt names,
 // receipts or arbitrary matching processes as ownership evidence.
 func trustedQUICObservation(ctx context.Context, link domain.Link, options runtimeOptions) (QUICLinkDiagnostics, linux.Runner, error) {
-	d := QUICLinkDiagnostics{SchemaVersion: 1, LinkID: link.ID, Carrier: "quic-udp", Role: link.QUIC.Role,
+	d := QUICLinkDiagnostics{SchemaVersion: 1, LinkID: link.ID, Carrier: "quic-udp", Role: link.QUIC.Role, Obfuscation: publicQUICObfuscation(link.QUIC.Obfuscation),
 		AuthenticationObservation: "not_observable_from_process_state",
 		TrafficObservation:        "not_tested_by_read_only_diagnostics"}
 	if link.Backend != domain.BackendWireGuardQUIC {
@@ -161,8 +162,8 @@ func linkQUICDiagnoseCommand(args []string, out, errOut io.Writer, opts *runtime
 			return 1
 		}
 	} else {
-		fmt.Fprintf(out, "QUIC Link %s: helper=%t guard=%t kernel=%t WG-handshake=%t, RX=%d TX=%d bytes; private connectivity not measured.\n",
-			observed.LinkID, observed.QUICHelperActive, observed.WGIngressGuardActive, observed.KernelWireGuardPresent,
+		fmt.Fprintf(out, "QUIC Link %s (obfuscation=%s): helper=%t guard=%t kernel=%t WG-handshake=%t, RX=%d TX=%d bytes; private connectivity not measured.\n",
+			observed.LinkID, observed.Obfuscation, observed.QUICHelperActive, observed.WGIngressGuardActive, observed.KernelWireGuardPresent,
 			observed.WireGuardHandshakeObserved, observed.RXBytes, observed.TXBytes)
 		writeQUICHelperDetails(out, observed.Helper, observed.HelperObservationReason)
 	}

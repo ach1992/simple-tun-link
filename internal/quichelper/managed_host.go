@@ -230,12 +230,12 @@ func (h *Host) Begin(ctx context.Context, link domain.Link, prior *state.QUICGen
 
 func generationExpected(g state.QUICGeneration) quic.HelperConfigIdentity {
 	return quic.HelperConfigIdentity{ConfigSHA256: g.Files.HelperConfig, Credentials: quic.CredentialIdentity{
-		CertificateSHA256: g.Files.Certificate, TrustCASHA256: g.Files.TrustCA, AuthorizationSHA256: g.Files.Authorization},
+		CertificateSHA256: g.Files.Certificate, TrustCASHA256: g.Files.TrustCA, AuthorizationSHA256: g.Files.Authorization, ObfuscationSHA256: g.Files.ObfuscationSHA256},
 		Executable: pinnedexec.Identity{SHA256: g.ExecutableSHA256, Device: g.ExecutableDevice, Inode: g.ExecutableInode}}
 }
 func materialFiles(f quic.MaterialIdentity) state.QUICFileIdentity {
 	return state.QUICFileIdentity{Certificate: f.CertificateSHA256, TLSKey: f.TLSKeySHA256, TrustCA: f.TrustCASHA256,
-		Authorization: f.AuthorizationSHA256, HelperConfig: f.HelperConfigSHA256, DirectoryDevice: f.DirectoryDevice,
+		Authorization: f.AuthorizationSHA256, ObfuscationSHA256: f.ObfuscationSHA256, HelperConfig: f.HelperConfigSHA256, DirectoryDevice: f.DirectoryDevice,
 		DirectoryInode: f.DirectoryInode, ReceiptDevice: f.ReceiptDevice, ReceiptInode: f.ReceiptInode}
 }
 

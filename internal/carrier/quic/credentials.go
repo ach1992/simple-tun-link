@@ -64,8 +64,15 @@ func (b *CredentialBundle) Clear() {
 // binds any IP SAN to the physical endpoint. This function does not write
 // private files, install packages or change host state.
 func GeneratePair(id domain.LinkID, tlsName string) (listen, dial CredentialBundle, err error) {
-	if id.Validate() != nil || !validIssuingName(tlsName) {
-		return CredentialBundle{}, CredentialBundle{}, errors.New("invalid QUIC Link owner or TLS identity")
+	return GeneratePairWithObfuscation(id, tlsName, domain.QUICObfuscationPlain)
+}
+
+// GeneratePairWithObfuscation adds an independently generated 256-bit shared
+// Salamander password only for that explicitly selected mode. TLS identities
+// and bearer authentication retain the same independent issuance policy.
+func GeneratePairWithObfuscation(id domain.LinkID, tlsName, mode string) (listen, dial CredentialBundle, err error) {
+	if id.Validate() != nil || !validIssuingName(tlsName) || !domain.ValidQUICObfuscation(mode) {
+		return CredentialBundle{}, CredentialBundle{}, errors.New("invalid QUIC Link owner, TLS identity or obfuscation mode")
 	}
 
 	now := time.Now()
@@ -118,6 +125,28 @@ func GeneratePair(id domain.LinkID, tlsName string) (listen, dial CredentialBund
 		"server-ca.pem":       serverCAPEM,
 		"authorization-token": append(append([]byte(nil), token...), '\n'),
 	}}
+	if mode == domain.QUICObfuscationSalamander {
+		var randomObfs [32]byte
+		if _, err := rand.Read(randomObfs[:]); err != nil {
+			clear(randomObfs[:])
+			clear(token)
+			listen.Clear()
+			dial.Clear()
+			return CredentialBundle{}, CredentialBundle{}, errors.New("could not issue QUIC obfuscation secret")
+		}
+		secret := []byte(hex.EncodeToString(randomObfs[:]))
+		clear(randomObfs[:])
+		if string(secret) == string(token) {
+			clear(secret)
+			clear(token)
+			listen.Clear()
+			dial.Clear()
+			return CredentialBundle{}, CredentialBundle{}, errors.New("QUIC secrets must be independent")
+		}
+		listen.files[obfuscationSecretFile] = append(append([]byte(nil), secret...), '\n')
+		dial.files[obfuscationSecretFile] = append(append([]byte(nil), secret...), '\n')
+		clear(secret)
+	}
 	clear(token)
 	return listen, dial, nil
 }

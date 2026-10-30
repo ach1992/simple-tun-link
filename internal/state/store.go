@@ -19,12 +19,13 @@ import (
 )
 
 const (
-	SchemaVersion        = 5
-	preQUICSchemaVersion = 4
-	preWSSSchemaVersion  = 3
-	legacySchemaVersion  = 1
-	preMTUSchemaVersion  = 2
-	DefaultRoot          = "/var/lib/simple-tun-link"
+	SchemaVersion                   = 6
+	preQUICObfuscationSchemaVersion = 5
+	preQUICSchemaVersion            = 4
+	preWSSSchemaVersion             = 3
+	legacySchemaVersion             = 1
+	preMTUSchemaVersion             = 2
+	DefaultRoot                     = "/var/lib/simple-tun-link"
 )
 
 var ErrNotFound = errors.New("link state not found")
@@ -334,6 +335,11 @@ func (s *FileStore) loadUnlocked() (Snapshot, error) {
 		}
 		return Snapshot{}, fmt.Errorf("decode state trailing data: %w", err)
 	}
+	if snapshot.SchemaVersion <= preQUICObfuscationSchemaVersion {
+		if err := rejectLegacyQUICObfuscationFields(raw); err != nil {
+			return Snapshot{}, err
+		}
+	}
 	if snapshot.SchemaVersion <= preQUICSchemaVersion {
 		if err := rejectLegacyQUICManagedFields(raw); err != nil {
 			return Snapshot{}, err
@@ -434,6 +440,9 @@ func containsMTUField(value any) bool {
 func migrateSnapshot(snapshot Snapshot) (Snapshot, error) {
 	switch snapshot.SchemaVersion {
 	case SchemaVersion:
+		return snapshot, nil
+	case preQUICObfuscationSchemaVersion:
+		snapshot.SchemaVersion = SchemaVersion
 		return snapshot, nil
 	case preQUICSchemaVersion:
 		snapshot.SchemaVersion = SchemaVersion

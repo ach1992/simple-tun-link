@@ -105,8 +105,12 @@ func (m HostMTUManager) desired(ctx context.Context, link domain.Link, overhead 
 	}
 	ceiling := underlay - overhead
 	if link.Backend == domain.BackendWireGuardQUIC {
-		if underlay < quic.QUICMinimumIPv4UnderlayMTU {
-			return 0, fmt.Errorf("QUIC local underlay cannot carry the required 1200-byte UDP payload")
+		minimum, err := quic.MinimumIPv4UnderlayMTU(link.QUIC.Obfuscation)
+		if err != nil {
+			return 0, err
+		}
+		if underlay < minimum {
+			return 0, fmt.Errorf("QUIC local underlay cannot carry the required datagram for the selected obfuscation mode")
 		}
 		plan, err := quic.PlanFromLink(link)
 		if err != nil {
