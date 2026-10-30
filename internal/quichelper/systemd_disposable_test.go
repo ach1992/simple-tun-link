@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -48,6 +49,7 @@ func TestQUICHelperDisposableSystemdOriginal(t *testing.T) {
 	defer cancel()
 	host := systemdHost{}
 	if _, err := host.preflight(ctx, spec); err != nil {
+		logDisposableManagerEnvironment(t, ctx)
 		t.Fatalf("original empty-unit preflight failed: %v", err)
 	}
 	if err := host.start(ctx, spec); err != nil {
@@ -134,6 +136,106 @@ func TestQUICHelperDisposableSystemdOriginal(t *testing.T) {
 		})
 	}
 	t.Log("actual transient first-start, process pin, collision denial and strict unit-property evidence passed; no managed QUIC Link was created")
+}
+
+// Fixture-only diagnostics expose validated environment KEY NAMES, never
+// values or raw manager output. They do not alter production admission.
+func logDisposableManagerEnvironment(t *testing.T, ctx context.Context) {
+	t.Helper()
+	raw, err := managerCommand(ctx, "systemctl", "--system", "show", "--property=Environment", "--no-pager", "--all")
+	if err != nil {
+		t.Log("manager_environment_diagnostic=query_unavailable")
+		return
+	}
+	defer clear(raw)
+	properties, err := parseProperties(raw)
+	if err != nil {
+		t.Log("manager_environment_diagnostic=property_parse_invalid")
+		return
+	}
+	environment, present := properties["Environment"]
+	if !present {
+		t.Log("manager_environment_diagnostic=property_missing")
+		return
+	}
+	keys, invalid := diagnosticEnvironmentKeys(environment)
+	var rejected []string
+	for _, key := range keys {
+		// Probe only the name with a harmless synthetic value. This tells
+		// whether the current policy rejects a key without printing its value.
+		if !safeManagerEnvironment(key + "=C") {
+			rejected = append(rejected, key)
+		}
+	}
+	t.Logf("manager_environment_diagnostic=property_present policy_accepted=%t key_names=%v key_probe_rejected=%v malformed_or_bounded=%t",
+		safeManagerEnvironment(environment), keys, rejected, invalid)
+}
+
+func diagnosticEnvironmentKeys(raw string) ([]string, bool) {
+	if len(raw) > 16<<10 {
+		return nil, true
+	}
+	var keys []string
+	seen := make(map[string]bool)
+	invalid := false
+	start, quote, escaped := -1, byte(0), false
+	for i := 0; i <= len(raw); i++ {
+		if i == len(raw) || (quote == 0 && !escaped && (raw[i] == ' ' || raw[i] == '\t')) {
+			if start >= 0 {
+				field := raw[start:i]
+				if len(field) >= 2 && (field[0] == '"' || field[0] == '\'') && field[len(field)-1] == field[0] {
+					field = field[1 : len(field)-1]
+				}
+				key, _, hasValue := strings.Cut(field, "=")
+				valid := hasValue && len(key) > 0 && len(key) <= 64
+				for j, ch := range key {
+					if !(ch == '_' || ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z' || j > 0 && ch >= '0' && ch <= '9') {
+						valid = false
+					}
+				}
+				if valid && !seen[key] && len(keys) < 64 {
+					keys = append(keys, key)
+					seen[key] = true
+				} else {
+					invalid = true
+				}
+				start = -1
+			}
+			if i == len(raw) {
+				invalid = invalid || quote != 0 || escaped
+				break
+			}
+			continue
+		}
+		if start < 0 {
+			start = i
+		}
+		ch := raw[i]
+		if escaped {
+			escaped = false
+		} else if ch == '\\' {
+			escaped = true
+		} else if quote != 0 {
+			if ch == quote {
+				quote = 0
+			}
+		} else if ch == '"' || ch == '\'' {
+			quote = ch
+		}
+	}
+	slices.Sort(keys)
+	return keys, invalid
+}
+
+func TestDisposableEnvironmentDiagnosticsNamesOnly(t *testing.T) {
+	keys, invalid := diagnosticEnvironmentKeys(`LANG=C "PRIVATE_VALUE=secret with OTHER=hidden" PATH=/usr/bin`)
+	if invalid || !slices.Equal(keys, []string{"LANG", "PATH", "PRIVATE_VALUE"}) {
+		t.Fatal("quoted environment values were not kept out of diagnostic names")
+	}
+	keys, invalid = diagnosticEnvironmentKeys("LANG=C INVALID-SECRET=value LANG=C")
+	if !invalid || !slices.Equal(keys, []string{"LANG"}) {
+		t.Fatal("malformed or duplicated names were not bounded without exposing values")
+	}
 }
 
 func pinDisposableExecutable(t *testing.T) (string, unix.Stat_t) {
