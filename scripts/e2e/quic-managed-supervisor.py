@@ -30,10 +30,30 @@ PR_SET_PDEATHSIG = 1
 MAX_SETUP_SECONDS = 300
 MAX_LAB_SECONDS = 420
 MAX_TERMINATION_MS = 8000
+RECOVERY_WAIT_SECONDS = 60
 
 
 def reject(message):
     raise RuntimeError(message)
+
+
+def active_helper_identity(observed):
+    if (not isinstance(observed, dict) or observed.get("active") is not True or type(observed.get("pid")) is not int
+            or type(observed.get("start_time")) is not int or observed["pid"] <= 0 or observed["start_time"] <= 0):
+        return None
+    return observed["pid"], observed["start_time"]
+
+
+def wait_for_recovery(probe, deadline):
+    attempts = 0
+    while time.monotonic() < deadline:
+        attempts += 1
+        if probe(deadline) and time.monotonic() <= deadline:
+            return True, attempts
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(0.2, remaining))
+    return False, attempts
 
 
 def github_hosted_root_gate(check_event=False, repo=None):
@@ -666,7 +686,7 @@ def run_lab():
         reject("private test process supervisor did not become ready")
     sequence = 0
 
-    def cli(peer, args, contents=b"", succeeds=True, interrupted=False):
+    def cli(peer, args, contents=b"", succeeds=True, interrupted=False, timeout=70):
         nonlocal sequence
         sequence += 1
         env = os.environ.copy()
@@ -677,7 +697,7 @@ def run_lab():
         if isinstance(contents, dict):
             contents = json.dumps(contents).encode()
         result = subprocess.run(prefix(peer) + ["/lab/stl-lab", "-test.run", "^TestQUICManagedLabCLI$"],
-                                input=contents, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, timeout=70)
+                                input=contents, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, timeout=timeout)
         logfile = pathlib.Path("/lab/" + peer + "-command-" + str(sequence) + ".log")
         logfile.write_bytes(result.stdout); os.chmod(logfile, 0o600)
         if (result.returncode == 0) != succeeds:
@@ -766,6 +786,7 @@ def run_lab():
 
     for subnet in ("10.246.1", "10.246.2"):
         applications(subnet)
+    initial_diagnostics = {}
     for peer in ("alpha", "beta"):
         for link in (first_id, second_id):
             current = record(peer, link)
@@ -775,6 +796,8 @@ def run_lab():
             info = cli(peer, ["diagnose-quic", link, "--json"])
             if not info["wireguard_handshake_observed"] or info["rx_bytes"] <= 0 or info["tx_bytes"] <= 0:
                 reject("managed WireGuard handshake/counters unavailable after real traffic")
+            if link == first_id:
+                initial_diagnostics[peer] = info
             quality = cli(peer, ["diagnose", link, "--json"])
             if quality["quality"]["packets_received"] != 5 or not quality["quality"]["reachable"]:
                 reject("managed five-ping diagnostics did not observe peer replies")
@@ -808,6 +831,10 @@ def run_lab():
 
     siblings = {(peer, link): identity(peer, link) for peer in ("alpha", "beta") for link in (second_id, native_id)}
     original = {peer: identity(peer, first_id) for peer in ("alpha", "beta")}
+    original_helpers = {peer: active_helper_identity(test_rpc(peer, record(peer, first_id), "observe"))
+                        for peer in ("alpha", "beta")}
+    if any(value is None for value in original_helpers.values()):
+        reject("original helper process identities are unavailable before failure injection")
     owned = record("alpha", first_id)
     test_rpc("alpha", owned, "kill")
     if ping("alpha", "10.246.1.1", "10.246.1.2", False):
@@ -819,8 +846,83 @@ def run_lab():
     ping("alpha", "10.246.3.1", "10.246.3.2")
     for peer in ("alpha", "beta"):
         cli(peer, ["restore", "--all"])
-    await_ping("alpha", "10.246.1.1", "10.246.1.2")
-    await_ping("beta", "10.246.1.2", "10.246.1.1")
+    restore_finished = time.monotonic()
+    restored_helpers = {}
+
+    def recovery_facts(phase, wait_elapsed_ms=0, attempts=0):
+        # Only exact-process comparisons and finite public diagnostic fields
+        # leave this fixture. No PID, names, keys, config or helper logs do.
+        report = {"phase": phase, "wait_elapsed_ms": wait_elapsed_ms, "attempts": attempts,
+                  "wait_limit_ms": RECOVERY_WAIT_SECONDS * 1000}
+        lifecycle_ok = True
+        for peer, role in (("alpha", "listener"), ("beta", "dial")):
+            facts = {"process_observed": False, "generation_unchanged": False,
+                     "process_identity_expected": False, "diagnostics_observed": False}
+            try:
+                current = active_helper_identity(test_rpc(peer, record(peer, first_id), "observe"))
+                facts["process_observed"] = current is not None
+                facts["generation_unchanged"] = identity(peer, first_id) == original[peer]
+                facts["process_changed_from_original"] = current is not None and current != original_helpers[peer]
+                expected = current != original_helpers[peer] if peer == "alpha" else current == original_helpers[peer]
+                facts["process_identity_expected"] = current is not None and expected and (
+                    peer not in restored_helpers or current == restored_helpers[peer])
+                if phase == "post_restore":
+                    restored_helpers[peer] = current
+            except (RuntimeError, OSError, ValueError, KeyError, TypeError):
+                pass
+            lifecycle_ok = lifecycle_ok and all(facts[key] for key in (
+                "process_observed", "generation_unchanged", "process_identity_expected"))
+            try:
+                details = cli(peer, ["diagnose-quic", first_id, "--json"], timeout=10)
+                for field in ("quic_helper_active", "wg_ingress_guard_active", "kernel_wireguard_present"):
+                    facts[field] = details.get(field) is True
+                for field in ("rx_bytes", "tx_bytes"):
+                    value, before = details[field], initial_diagnostics[peer][field]
+                    if type(value) is not int or type(before) is not int or not 0 <= before <= value < 1 << 64:
+                        raise ValueError("bounded diagnostic counter unavailable")
+                    facts[field + "_delta"] = value - before
+                facts["handshake_advanced"] = details.get("last_handshake_unix", 0) > initial_diagnostics[peer].get("last_handshake_unix", 0)
+                facts["diagnostics_observed"] = True
+            except (RuntimeError, OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired):
+                pass
+            report[role] = facts
+        report["post_restore_elapsed_ms"] = int((time.monotonic() - restore_finished) * 1000)
+        print("QUIC_MANAGED_RECOVERY_OBSERVATION=" + json.dumps(report, sort_keys=True, separators=(",", ":")), flush=True)
+        return lifecycle_ok
+
+    if not recovery_facts("post_restore"):
+        reject("restore did not preserve the required exact helper and saved generation identities")
+
+    # Pinned Hysteria v2.13.0 defaults MaxIdleTimeout to 30s. Forwarding Feed
+    # refreshes its UDP-session idle clock, so 1s WG keepalives do not let the
+    # configured 20s forwarding timeout bound recovery. After ReceiveLoop
+    # loses the QUIC session, one UDP() call clears the closed client and a
+    # later call reconnects. Allow 60s for that sequence and WG delivery;
+    # this is a test observation budget, not a protocol guarantee or SLO.
+    # Initial startup keeps its original bound; the live dial is never reset.
+    def recovery_ping(deadline):
+        for peer, source, destination in (("alpha", "10.246.1.1", "10.246.1.2"),
+                                           ("beta", "10.246.1.2", "10.246.1.1")):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            try:
+                result = command(peer, ["ping", "-n", "-I", source, "-c", "1", "-W", "1", destination],
+                                 check=False, timeout=min(3, remaining))
+            except subprocess.TimeoutExpired:
+                return False
+            if result.returncode:
+                return False
+        return True
+
+    wait_started = time.monotonic()
+    recovered, attempts = wait_for_recovery(recovery_ping, wait_started + RECOVERY_WAIT_SECONDS)
+    wait_elapsed_ms = int((time.monotonic() - wait_started) * 1000)
+    lifecycle_ok = recovery_facts("reachable" if recovered else "timeout", wait_elapsed_ms, attempts)
+    if not recovered:
+        reject("managed private link recovery exceeded its bounded observation deadline")
+    if not lifecycle_ok:
+        reject("helper or saved generation identity changed during recovery")
     applications("10.246.1")
     for peer in ("alpha", "beta"):
         if identity(peer, first_id) != original[peer]:
