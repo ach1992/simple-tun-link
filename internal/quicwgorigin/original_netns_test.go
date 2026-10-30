@@ -40,7 +40,7 @@ func (r isolatedKernelReader) RunBounded(ctx context.Context, lim linux.CaptureL
 		case "public-key":
 			return linux.CommandResult{Stdout: []byte("(none)\n")}, nil
 		case "listen-port":
-			return linux.CommandResult{Stdout: []byte("off\n")}, nil
+			return linux.CommandResult{Stdout: []byte("0\n")}, nil
 		case "peers":
 			return linux.CommandResult{}, nil
 		}

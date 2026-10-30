@@ -67,13 +67,14 @@ func originalGuard() quicguard.OriginalGuardObservation {
 }
 
 type mockKernel struct {
-	created  bool
-	alias    string
-	index    int
-	name     string
-	events   []string
-	occupied bool
-	noWG     bool
+	created   bool
+	alias     string
+	index     int
+	name      string
+	events    []string
+	occupied  bool
+	noWG      bool
+	badListen bool
 }
 
 func (f *mockKernel) Run(ctx context.Context, name string, args ...string) (linux.CommandResult, error) {
@@ -98,7 +99,10 @@ func (f *mockKernel) RunBounded(ctx context.Context, lim linux.CaptureLimits,
 		case "public-key":
 			return linux.CommandResult{Stdout: []byte("(none)\n")}, nil
 		case "listen-port":
-			return linux.CommandResult{Stdout: []byte("off\n")}, nil
+			if f.badListen {
+				return linux.CommandResult{Stdout: []byte("off\n")}, nil
+			}
+			return linux.CommandResult{Stdout: []byte("0\n")}, nil
 		case "peers":
 			return linux.CommandResult{}, nil
 		}
@@ -252,6 +256,7 @@ func TestOriginalKernelWGPostEffectQuarantine(t *testing.T) {
 				return errors.New("lost ACK after effective RTM_NEWLINK")
 			}
 		}},
+		{"unexpected-listen-port-format", func(_ *kernelOps, f *mockKernel) { f.badListen = true }},
 		{"alias-uncertain", func(ops *kernelOps, _ *mockKernel) {
 			ops.alias = func(context.Context, int, string) error { return errors.New("lost alias ACK") }
 		}},

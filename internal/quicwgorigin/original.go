@@ -254,7 +254,7 @@ func inspectStaged(ctx context.Context, runner linux.BoundedRunner, name, alias 
 		return 0, fmt.Errorf("original kernel WG has unexpected addresses or changed identity")
 	}
 	for _, check := range []struct{ field, want string }{
-		{"public-key", "(none)"}, {"listen-port", "off"}, {"peers", ""},
+		{"public-key", "(none)"}, {"listen-port", "0"}, {"peers", ""},
 	} {
 		got, err := runner.RunBounded(ctx, linux.CaptureLimits{Stdout: 8 << 10, Stderr: 4 << 10},
 			"wg", "show", name, check.field)
