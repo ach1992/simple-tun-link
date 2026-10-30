@@ -11,6 +11,7 @@ import (
 
 	core "github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/hostidentity"
 )
 
 // HelperDiagnostics separates current owned process evidence from historical
@@ -130,12 +131,29 @@ func safeUnitResult(value string) string {
 	}
 }
 
-func readHelperEvents(ctx context.Context, unit, invocation, boot string) ([]HelperEvent, error) {
-	if !safeArgument(unit) || !canonicalHex(invocation, 32) {
+// helperJournalArgs preserves exact attribution while using journalctl's
+// 32-character ID128 boot selector. The trusted kernel source supplies a dashed
+// UUID; passing that spelling to --boot fails even on otherwise supported hosts.
+// Never reinterpret an invalid identity as an offset or the current boot.
+func helperJournalArgs(unit, invocation, boot string) ([]string, error) {
+	bootHex := boot
+	if hostidentity.ValidBootID(boot) {
+		bootHex = strings.ReplaceAll(boot, "-", "")
+	}
+	if !safeArgument(unit) || !canonicalHex(invocation, 32) ||
+		!canonicalHex(bootHex, 32) || strings.Trim(bootHex, "0") == "" {
 		return nil, fmt.Errorf("invalid QUIC journal attribution")
 	}
-	raw, err := managerCommand(ctx, "journalctl", "--system", "--no-pager", "--quiet", "--output=json", "--lines=64",
-		"--boot="+boot, "_SYSTEMD_UNIT="+unit, "_SYSTEMD_INVOCATION_ID="+invocation, "_TRANSPORT=stdout")
+	return []string{"--system", "--no-pager", "--quiet", "--output=json", "--lines=64",
+		"--boot=" + bootHex, "_SYSTEMD_UNIT=" + unit, "_SYSTEMD_INVOCATION_ID=" + invocation, "_TRANSPORT=stdout"}, nil
+}
+
+func readHelperEvents(ctx context.Context, unit, invocation, boot string) ([]HelperEvent, error) {
+	args, err := helperJournalArgs(unit, invocation, boot)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := managerCommand(ctx, "journalctl", args...)
 	if err != nil {
 		return nil, err
 	}

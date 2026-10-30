@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -92,5 +93,40 @@ func TestManagedErrorsKeepCauseAndStageWithoutRenderingRawStderr(t *testing.T) {
 	}
 	if public.ReasonCode != "quic_manager_command_exit" || !strings.Contains(public.Detail, "203") || public.Evidence == nil || public.Evidence.Stage != "helper_start" || public.Evidence.HostMutation != "outcome_uncertain" {
 		t.Fatalf("safe stage/exit evidence missing: %+v", public)
+	}
+}
+
+func TestHelperJournalArgsCanonicalBootAndExactAttribution(t *testing.T) {
+	const unit = "stl-quic-fixture.service"
+	invocation := strings.Repeat("a", 32)
+	bootHex := strings.Repeat("b", 32)
+	want := []string{"--system", "--no-pager", "--quiet", "--output=json", "--lines=64",
+		"--boot=" + bootHex, "_SYSTEMD_UNIT=" + unit, "_SYSTEMD_INVOCATION_ID=" + invocation, "_TRANSPORT=stdout"}
+	for _, boot := range []string{bootHex, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"} {
+		args, err := helperJournalArgs(unit, invocation, boot)
+		if err != nil || !slices.Equal(args, want) {
+			t.Fatalf("boot query changed attribution or used an unsupported selector: args=%q, err=%v", args, err)
+		}
+		// The same original identity must still bind the returned journal row;
+		// query normalization must not broaden the independent parser checks.
+		events, err := parseHelperEvents(journalFixture(t, map[string]string{"level": "info", "msg": "server up and running"}), unit, invocation, boot)
+		if err != nil || len(events) != 1 || events[0].Event != "listener_ready" {
+			t.Fatalf("canonical boot did not retain exact row attribution: %+v, %v", events, err)
+		}
+	}
+	for _, boot := range []string{"", "0", "-1", "all", bootHex + "+1", strings.ToUpper(bootHex),
+		strings.Repeat("0", 32), "00000000-0000-0000-0000-000000000000",
+		"bbbbbbbbbbbb-bbbb-bbbb-bbbbbbbbbbbb", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbg", bootHex + "\n"} {
+		if args, err := helperJournalArgs(unit, invocation, boot); err == nil || args != nil {
+			t.Fatalf("malformed, aliased or relative boot selector accepted: %q", boot)
+		}
+	}
+	for _, identity := range []struct{ unit, invocation string }{
+		{"foreign.service\n_SYSTEMD_UNIT=other.service", invocation},
+		{unit, invocation + "+1"},
+	} {
+		if args, err := helperJournalArgs(identity.unit, identity.invocation, bootHex); err == nil || args != nil {
+			t.Fatal("invalid journal attribution accepted")
+		}
 	}
 }
