@@ -28,7 +28,7 @@ func TestMenuStableDowngradeShowsRealActionAndRootTTYBoundary(t *testing.T) {
 	}}
 	code := runWithRuntimeInput([]string{"menu"}, strings.NewReader("6\n1\n8\n"), &out, &errOut, options)
 	if code != 0 || errOut.Len() != 0 ||
-		!strings.Contains(out.String(), "downgrade (requires empty Links)") ||
+		!strings.Contains(out.String(), "downgrade (requires empty State)") ||
 		!strings.Contains(out.String(), "Automatic update requires a real terminal") ||
 		strings.Contains(out.String(), "Type DOWNGRADE") ||
 		strings.Contains(out.String(), "Version change complete") {
