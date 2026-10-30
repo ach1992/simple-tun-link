@@ -941,7 +941,7 @@ State v5 are independent contracts.
 sudo stl link status YOUR_LINK_ID --json
 sudo stl link diagnose-quic YOUR_LINK_ID --json
 sudo stl link diagnose YOUR_LINK_ID --json
-sudo stl link remove YOUR_LINK_ID --json
+sudo stl link remove YOUR_LINK_ID --confirm YOUR_LINK_ID --json
 sudo stl link retire-quic YOUR_LINK_ID --confirm YOUR_LINK_ID --json
 sudo stl link reconcile-quic-cold-boot YOUR_LINK_ID --confirm YOUR_LINK_ID --json
 ```

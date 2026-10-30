@@ -49,6 +49,20 @@ syntax see [CLI.md](CLI.md); for changing a saved Link see the
   unknown, and helper/handshake counters alone never fabricate peer
   replies. Native/other backend checks remain independent.
 
+- Managed WireGuard-over-QUIC follows the same separation between local
+  evidence and active private-peer measurement. `link status` and
+  `link diagnose-quic` verify the committed generation, helper, ingress
+  guard and kernel WireGuard identity. Helper restart/exit information and
+  attributed current-invocation authentication events remain distinct from
+  application traffic. Missing journal events remain unavailable; a running
+  process never implies successful peer authentication. Generic
+  `link diagnose` and the all-Link inventory use five bounded private ICMP
+  probes only after exact ownership and private-route verification.
+  Unresolved QUIC operations remain quarantined and are not actively probed.
+  Carrier PMTU is not measured, and diagnostic `--mtu` is refused. The
+  lifecycle's conservative auto MTU and pinned-helper capacity bound are
+  separate configuration rules, described in [ARCHITECTURE.md](ARCHITECTURE.md).
+
 - `link throughput`: a separate, explicitly approved short TCP
   traffic test; not a default health check or a tunnel bandwidth cap.
 
@@ -101,7 +115,7 @@ Before transmitting, the read-only adapter must verify the selected
 backend's capability and exact owned interface name/ifindex, local
 Link Address and interface UP state. Native backends additionally verify
 the route-derived physical underlay source/device/MTU toward the saved
-**underlay peer**; managed WSS first verifies its carrier/guard/kernel
+**underlay peer**; managed WSS and QUIC first verify their carrier/guard/kernel
 provenance and the **private** peer route and source, without estimating
 underlay PMTU. A replaced
 interface under a reused name or mismatched route blocks measurement.
@@ -132,6 +146,7 @@ automatically a reply, a lost packet or a measured MTU.
 | IPIP Native/FOU/GUE | Same identity and route rules; transport overhead 20/28/32 bytes for IPv4 Native/FOU/GUE |
 | WireGuard | Owned interface/ifindex, public local/peer keys, listen port, local Link IP, handshake timestamp and RX/TX bytes; IPv4 data overhead **60 bytes** |
 | WireGuard over WSS | Status and dedicated `diagnose-wss` show owner-verified helper/guard/kernel WG handshake and byte counters; standard diagnose sends **five bounded private ICMP probes** after WSS and private route/identity verification; **carrier PMTU remains unknown** |
+| WireGuard over QUIC | Status and dedicated `diagnose-quic` show committed-generation helper/guard/kernel observations and attributed helper events; standard diagnose sends **five bounded private ICMP probes** after exact ownership and private route verification; **carrier PMTU remains unknown** |
 | IPsec ESP/NAT-T | **Admitted** STL-exclusive runtime, exact owned XFRM interface name/ifindex/`if_id`, VICI connection and matching SA before any probe; conservative overhead planning bounds **128/136 bytes** |
 
 GRE overhead is supplied by the backend from actual GRE fields,
@@ -153,7 +168,7 @@ No healthy status follows from a counter alone.
 
 ## MTU selection versus MTU application
 
-The selected backend supplies its **actual outer encapsulation
+For Native encapsulations, the selected backend supplies its **actual outer encapsulation
 overhead** and a route-aware underlay MTU; the shared IPv4
 decision ceiling is:
 

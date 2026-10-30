@@ -10,7 +10,6 @@ github_root_gate() {
      ${GITHUB_RUN_ID:-} =~ ^[1-9][0-9]*$ && ${GITHUB_RUN_ATTEMPT:-} =~ ^[1-9][0-9]*$ ]] ||
     refuse 'root launch is confined to the opted-in GitHub-hosted repository PR job'
 }
-repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 if [[ "${1:-}" != --isolated ]]; then
   [[ $# == 0 && ${STL_RUN_PRIVILEGED_E2E:-} == 1 ]] || refuse 'explicit disposable E2E opt-in required'
   if [[ $(id -u) == 0 ]]; then
@@ -18,6 +17,7 @@ if [[ "${1:-}" != --isolated ]]; then
   else
     [[ -z ${STL_QUIC_MANAGED_ROOT_LAUNCH:-} ]] || refuse 'root mode requires the original root caller'
   fi
+  repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
   helper=${STL_QUIC_HYSTERIA_BIN:-}
   [[ $helper == /* && -f $helper && ! -L $helper && $(stat -c %u -- "$helper") == $(id -u) ]] || refuse 'owned official helper fixture required'
   wg_binary=${STL_QUIC_WG_BINARY:-}
@@ -45,6 +45,14 @@ for witness in namespace-guard parent-namespaces origin-uid namespace-mode; do
   [[ -f $fixture/data/$witness && ! -L $fixture/data/$witness &&
      $(stat -c '%u:%a:%h' -- "$fixture/data/$witness") == 0:600:1 ]] || refuse 'private namespace witness metadata differs'
 done
+[[ ${BASH_SOURCE[0]} == "$fixture/data/launcher.sh" &&
+   -f $fixture/data/launcher.sh && ! -L $fixture/data/launcher.sh &&
+   $(stat -c '%u:%a:%h' -- "$fixture/data/launcher.sh") == 0:700:1 &&
+   -f $fixture/data/launcher.sha256 && ! -L $fixture/data/launcher.sha256 &&
+   $(stat -c '%u:%a:%h' -- "$fixture/data/launcher.sha256") == 0:600:1 ]] || refuse 'exact private launcher witness missing'
+launcher_digest=$(cat "$fixture/data/launcher.sha256")
+[[ $launcher_digest =~ ^[a-f0-9]{64}$ &&
+   $(sha256sum -- "$fixture/data/launcher.sh" | cut -d' ' -f1) == "$launcher_digest" ]] || refuse 'private launcher byte identity changed'
 [[ $(cat "$fixture/data/namespace-guard") == "$STL_QUIC_MANAGED_LAB" ]] || refuse 'fixture nonce differs'
 mapfile -t parents < "$fixture/data/parent-namespaces"
 [[ ${#parents[@]} == 4 && $(id -u) == 0 && $$ == 1 &&

@@ -90,6 +90,14 @@ func TestQUICHelperDisposableSystemdManaged(t *testing.T) {
 		t.Fatalf("fresh caller could not verify the post-launcher managed process: %v", err)
 	}
 	retained = append(retained, first.Process)
+	limitRaw, err := managerCommand(ctx, "systemctl", "--system", "show", spec.Name, "--property=StartLimitIntervalUSec,StartLimitBurst", "--no-pager", "--all")
+	if err != nil {
+		t.Fatalf("fixture start-limit readback failed: %v", err)
+	}
+	limits, err := parseProperties(limitRaw)
+	if err != nil || limits["StartLimitIntervalUSec"] != "1min" || limits["StartLimitBurst"] != "2" {
+		t.Fatal("fixture's exact two-start per-minute limit was not independently observed")
+	}
 	if first.Process.Observation.ExecutableDevice != uint64(executable.Dev) || first.Process.Observation.ExecutableInode != executable.Ino {
 		t.Fatal("managed process is not the original canonical executable")
 	}
@@ -157,9 +165,15 @@ func TestQUICHelperDisposableSystemdManaged(t *testing.T) {
 		t.Fatalf("signal exact second fixture invocation: %v", err)
 	}
 	failed := waitDisposableManagedTerminalFailure(t, ctx, spec)
-	if failed.Values["Result"] != "start-limit-hit" || failed.Values["MainPID"] != "0" || failed.Values["CollectMode"] != "inactive" {
-		t.Fatal("fixture did not reach its real retained terminal start-limit failure")
+	// systemd v249/v255 service_enter_dead preserves an earlier non-success
+	// result. After SIGKILL the denied restart can therefore retain "signal";
+	// the separately verified limit and two queued retries prove exhaustion.
+	result := failed.Values["Result"]
+	resultKnown := result == "signal" || result == "start-limit-hit"
+	if !resultKnown || failed.Values["NRestarts"] != "2" || failed.Values["MainPID"] != "0" || failed.Values["CollectMode"] != "inactive" {
+		t.Fatalf("fixture terminal evidence differs: result_known=%t retries_two=%t main_pid_zero=%t collect_inactive=%t", resultKnown, failed.Values["NRestarts"] == "2", failed.Values["MainPID"] == "0", failed.Values["CollectMode"] == "inactive")
 	}
+	t.Logf("terminal failure after verified start-limit exhaustion: result=%s retries=2 main_pid_zero=true", result)
 	if _, err := managerCommand(ctx, "systemctl", "--system", "stop", spec.Name, "--no-pager"); err != nil {
 		t.Fatalf("verified terminal fixture stop request failed: %v", err)
 	}

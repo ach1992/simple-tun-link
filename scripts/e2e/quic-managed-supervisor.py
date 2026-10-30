@@ -300,6 +300,37 @@ def copy_verified_wg(source, destination):
         os.close(descriptor)
 
 
+def stage_verified_launcher(repo, source, destination):
+    """Retain the exact checkout script while making a private executable copy."""
+    if source != str(pathlib.Path(repo, "scripts/e2e/quic-managed-wireguard.sh")):
+        reject("launcher does not name the exact checkout fixture")
+    descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    with os.fdopen(descriptor, "rb") as original:
+        before = os.fstat(original.fileno())
+        owner = os.stat(repo, follow_symlinks=False).st_uid
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid not in (0, os.geteuid(), owner)
+                or before.st_mode & 0o6022 or before.st_nlink != 1 or not 0 < before.st_size <= 128 << 10):
+            reject("checkout launcher metadata is unverified")
+        contents = original.read((128 << 10) + 1)
+        if len(contents) != before.st_size:
+            reject("checkout launcher changed during snapshot")
+        output_fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o700)
+        with os.fdopen(output_fd, "wb") as output:
+            output.write(contents)
+            output.flush()
+            os.fsync(output.fileno())
+
+        def identity(entry):
+            return (entry.st_dev, entry.st_ino, entry.st_mode, entry.st_uid, entry.st_gid,
+                    entry.st_nlink, entry.st_size, entry.st_mtime_ns, entry.st_ctime_ns)
+
+        if (identity(os.fstat(original.fileno())) != identity(before)
+                or identity(os.stat(source, follow_symlinks=False)) != identity(before)
+                or pathlib.Path(destination).read_bytes() != contents):
+            reject("private launcher differs from the retained checkout source")
+        return hashlib.sha256(contents).hexdigest()
+
+
 def outer(repo, helper, wg_binary, launcher):
     if os.environ.get("STL_RUN_PRIVILEGED_E2E") != "1" or not all(pathlib.Path(p).is_absolute() for p in (repo, helper, wg_binary, launcher)):
         reject("explicit opt-in and owned absolute source/helper paths required")
@@ -349,6 +380,10 @@ def outer(repo, helper, wg_binary, launcher):
         os.chmod(data / "wg.sha256", 0o600)
         shutil.copyfile(pathlib.Path(repo, "scripts/e2e/quic-managed-supervisor.py"), data / "driver.py")
         os.chmod(data / "driver.py", 0o700)
+        staged_launcher = data / "launcher.sh"
+        launcher_digest = stage_verified_launcher(repo, launcher, staged_launcher)
+        (data / "launcher.sha256").write_text(launcher_digest + "\n", encoding="ascii")
+        os.chmod(data / "launcher.sha256", 0o600)
         env = os.environ.copy()
         env.update({"STL_QUIC_MANAGED_ROOT": root, "STL_QUIC_MANAGED_LAB": nonce,
                     "GOTOOLCHAIN": "local", "CGO_ENABLED": "0", "GOFLAGS": "-mod=readonly -modcacherw -buildvcs=false", "GOWORK": "off", "GOENV": "off"})
@@ -368,8 +403,11 @@ def outer(repo, helper, wg_binary, launcher):
             print(pathlib.Path(root, "build.log").read_text(errors="replace")[-16000:], file=sys.stderr)
             reject("managed CLI test executable did not compile")
         argv = ["unshare", "--user", "--map-root-user", "--net", "--mount", "--pid", "--fork", "--kill-child", "--mount-proc",
-                "bash", launcher, "--isolated"]
-        child = subprocess.Popen(argv, cwd=repo, env=env, close_fds=True, preexec_fn=lambda: death_with_parent(owner))
+                "bash", str(staged_launcher), "--isolated"]
+        # The mapped root cannot traverse runner-private checkout ancestors.
+        # Only compilation uses that checkout; namespace entry uses our exact
+        # verified launcher and cwd below the already-owned private root.
+        child = subprocess.Popen(argv, cwd=root, env=env, close_fds=True, preexec_fn=lambda: death_with_parent(owner))
         pidfd = os.pidfd_open(child.pid, 0)
         parent_sock.sendmsg([b"P"], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", [pidfd]))])
         try:
