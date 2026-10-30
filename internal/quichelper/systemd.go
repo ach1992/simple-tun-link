@@ -43,41 +43,49 @@ func (w *boundedOutput) Write(p []byte) (int, error) {
 // loader or tool-search environment from an interactive caller. Open the
 // trusted root-owned executable before exec so PATH and final-symlink
 // substitution cannot redirect this command.
-func managerCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
-	if ctx == nil || (name != "systemctl" && name != "systemd-run") {
-		return nil, fmt.Errorf("invalid local systemd command")
+func localManagerCommand(ctx context.Context, name string, args ...string) (*exec.Cmd, func(), error) {
+	if ctx == nil || (name != "systemctl" && name != "systemd-run" && name != "systemd-analyze") {
+		return nil, nil, fmt.Errorf("invalid local systemd command")
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	path := "/usr/bin/" + name
 	for _, parent := range []string{"/usr", "/usr/bin"} {
 		var st unix.Stat_t
 		if unix.Lstat(parent, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFDIR || st.Uid != 0 || st.Mode&0o022 != 0 {
-			return nil, fmt.Errorf("systemd command directory is untrusted")
+			return nil, nil, fmt.Errorf("systemd command directory is untrusted")
 		}
 	}
 	fd, e := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if e != nil {
-		return nil, fmt.Errorf("trusted local systemd command unavailable")
+		return nil, nil, fmt.Errorf("trusted local systemd command unavailable")
 	}
 	f := os.NewFile(uintptr(fd), name)
-	defer f.Close()
 	var st unix.Stat_t
 	if unix.Fstat(fd, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || st.Uid != 0 || st.Mode&0o022 != 0 || st.Mode&0o111 == 0 || st.Mode&0o6000 != 0 {
-		return nil, fmt.Errorf("local systemd executable is untrusted")
+		_ = f.Close()
+		return nil, nil, fmt.Errorf("local systemd executable is untrusted")
 	}
 	bounded, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
 	cmd := exec.CommandContext(bounded, "/proc/self/fd/3", args...)
 	cmd.Args[0] = path
 	cmd.ExtraFiles = []*os.File{f}
 	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C", "LC_ALL=C", "SYSTEMD_COLORS=0", "SYSTEMD_PAGER=cat"}
 	cmd.WaitDelay = time.Second
+	return cmd, func() { cancel(); _ = f.Close() }, nil
+}
+
+func managerCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
+	cmd, release, err := localManagerCommand(ctx, name, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	var out, stderr boundedOutput
 	cmd.Stdout = &out
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	err = cmd.Run()
 	// stderr can contain manager/config context; never expose it as ordinary
 	// diagnostics. Identity fields and a bounded error stage are sufficient.
 	if err != nil || out.overflow || stderr.overflow {
@@ -135,6 +143,13 @@ func currentHostIdentity() (hostIdentity, error) {
 }
 
 func (systemdHost) preflight(ctx context.Context, s unitSpec) (hostIdentity, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return hostIdentity{}, fmt.Errorf("QUIC manager preflight context unavailable")
+	}
+	// Apply a cancellation deadline while reading filesystem inventories
+	// in chunks, rather than imposing an installed-unit or Link-count quota.
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
 	host, err := currentHostIdentity()
 	if err != nil {
 		return host, err
@@ -158,7 +173,7 @@ func (systemdHost) preflight(ctx context.Context, s unitSpec) (hostIdentity, err
 	if env, ok := manager["Environment"]; !ok || !safeManagerEnvironment(env) {
 		return hostIdentity{}, fmt.Errorf("QUIC manager has an unapproved inherited environment")
 	}
-	if err := checkUnitSearchPaths(manager["UnitPath"], s.Name); err != nil {
+	if err := checkUnitSearchPaths(ctx, manager["UnitPath"], s.Name); err != nil {
 		return hostIdentity{}, err
 	}
 	values, err := queryUnit(ctx, s.Name)
@@ -168,6 +183,9 @@ func (systemdHost) preflight(ctx context.Context, s unitSpec) (hostIdentity, err
 	if err := verifyUnitVacant(values, s); err != nil {
 		return hostIdentity{}, err
 	}
+	if err := verifyEffectiveUnitDependencies(ctx, s, values, true); err != nil {
+		return hostIdentity{}, err
+	}
 	again, err := currentHostIdentity()
 	if err != nil || again != host {
 		return hostIdentity{}, fmt.Errorf("system-manager identity changed during QUIC preflight")
@@ -175,7 +193,10 @@ func (systemdHost) preflight(ctx context.Context, s unitSpec) (hostIdentity, err
 	return host, nil
 }
 
-func checkUnitSearchPaths(raw, name string) error {
+func checkUnitSearchPaths(ctx context.Context, raw, name string) error {
+	if ctx == nil || ctx.Err() != nil {
+		return fmt.Errorf("systemd unit search inspection canceled")
+	}
 	paths := strings.Fields(raw)
 	if len(paths) == 0 || len(paths) > 64 {
 		return fmt.Errorf("systemd unit search path unverified")
@@ -188,6 +209,9 @@ func checkUnitSearchPaths(raw, name string) error {
 		}
 	}
 	for _, path := range paths {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("systemd unit search inspection canceled")
+		}
 		if !safeArgument(path) || !filepath.IsAbs(path) || filepath.Clean(path) != path || path == "/" {
 			return fmt.Errorf("systemd unit search path syntax is unsafe")
 		}
@@ -209,6 +233,9 @@ func checkUnitSearchPaths(raw, name string) error {
 			if !os.IsNotExist(err) {
 				return fmt.Errorf("foreign QUIC unit file, dependency or drop-in exists or cannot be excluded")
 			}
+		}
+		if err := checkUnitReverseReferences(ctx, path, name); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -364,6 +391,9 @@ func (systemdHost) observe(ctx context.Context, s unitSpec) (*processPin, error)
 	again, e := queryUnit(ctx, s.Name)
 	if e != nil || verifyUnitProperties(again, s) != nil || again["MainPID"] != v["MainPID"] || again["InvocationID"] != v["InvocationID"] || again["ExecMainStartTimestampMonotonic"] != v["ExecMainStartTimestampMonotonic"] {
 		return nil, fmt.Errorf("original QUIC systemd invocation changed")
+	}
+	if e := verifyEffectiveUnitDependencies(ctx, s, again, false); e != nil {
+		return nil, e
 	}
 	second, e := observeProcess(pid, s, again)
 	if e != nil || second != obs || p.alive() != nil {

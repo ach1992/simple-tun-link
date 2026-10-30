@@ -1072,11 +1072,23 @@ Before dispatch, the adapter requires the initial PID-1 system manager,
 the caller's matching boot, network/mount/PID/user namespaces and filesystem
 root, and an unoccupied canonical per-Link service name. It inspects the
 manager's actual unit search paths, including applicable type-wide and
-dash-prefix drop-ins and dependency directories. Existing units, foreign
-hooks, ambiguous readback and unsafe environment inputs fail closed.
-It uses fixed local systemd executables with a clean command environment.
-The transient unit has exact argv/config identity, `Type=exec`,
-`Restart=no`, a fixed minimal environment and explicit sandbox properties.
+dash-prefix drop-ins, aliases and reverse `.wants`, `.requires` and
+`.upholds` entries. Existing units, foreign hooks, ambiguous readback and
+unsafe environment inputs fail closed. Effective incoming `Upholds` can
+restart a unit independently of `Restart=no`, so both pre-dispatch and
+positive process readback require no effective `Upholds` relationship and
+no pending manager reload. `TriggeredBy` must be explicitly empty. Newer managers
+must explicitly report empty `Upholds` and `UpheldBy`; proven systemd
+249/250 managers instead require a complete, successful streamed PID-1
+manager dump from the fixed trusted `systemd-analyze` executable. A missing
+property is never used as proof that the dependency is absent. The shared
+pure parser also serves IPsec, whose vendor identity and STOP policy stay
+in its existing adapter. The checks do not modify foreign units.
+
+The adapter uses fixed local systemd executables with a clean command
+environment. The transient unit has exact argv/config identity,
+`Type=exec`, `Restart=no`, `StopWhenUnneeded=no`, a fixed minimal environment
+and explicit sandbox properties.
 Only a locally requested privileged UDP port adds `CAP_NET_BIND_SERVICE`;
 a low-numbered remote port does not grant that capability.
 
@@ -1110,8 +1122,11 @@ commit an operational Link, prove authenticated bilateral private-L3
 traffic or complete crash/reboot recovery. The disposable systemd CI
 fixture uses the same fixed adapter with a retained harmless executable
 and pidfd-only cleanup. It checks real manager/process representation
-and collision refusal on the supported runner matrix; it is not a full
-Hysteria/credential/guard/WG activation acceptance test.
+and collision refusal on the supported runner matrix. A separate owned,
+bounded upholder establishes an actual incoming dependency on an absent
+helper target; target preflight must reject it before any helper start.
+The fixture is not a full Hysteria/credential/guard/WG activation acceptance
+test.
 
 The current first-generation preflight deliberately
 rejects other early WSS/QUIC hooks until their independently verified

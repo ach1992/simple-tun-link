@@ -21,7 +21,7 @@ func testUnitSpec(t *testing.T) unitSpec {
 
 func runningProperties(s unitSpec) map[string]string {
 	v := specSecurityProperties(s)
-	for k, value := range map[string]string{"Id": s.Name, "Names": s.Name, "LoadState": "loaded", "ActiveState": "active", "SubState": "running", "Transient": "yes", "Description": s.Description, "FragmentPath": "/run/systemd/transient/" + s.Name, "UnitFileState": "transient", "NRestarts": "0", "MainPID": "1234", "ExecMainPID": "1234", "InvocationID": strings.Repeat("a", 32), "ControlGroup": "/system.slice/" + s.Name, "ExecMainStartTimestampMonotonic": "123456"} {
+	for k, value := range map[string]string{"Id": s.Name, "Names": s.Name, "LoadState": "loaded", "ActiveState": "active", "SubState": "running", "Transient": "yes", "Description": s.Description, "FragmentPath": "/run/systemd/transient/" + s.Name, "UnitFileState": "transient", "NRestarts": "0", "MainPID": "1234", "ExecMainPID": "1234", "InvocationID": strings.Repeat("a", 32), "ControlGroup": "/system.slice/" + s.Name, "ExecMainStartTimestampMonotonic": "123456", "NeedDaemonReload": "no", "Upholds": "", "UpheldBy": "", "TriggeredBy": ""} {
 		v[k] = value
 	}
 	prefix := "{ path=" + s.Binary + " ; argv[]=" + strings.Join(append([]string{s.Binary}, s.Args...), " ") + " ; "
@@ -42,6 +42,7 @@ func TestUnitReadbackRejectsForeignExecutionIdentityAndSecurity(t *testing.T) {
 		{"pre-hook", "ExecStartPre", runningProperties(s)["ExecStart"]}, {"post-hook", "ExecStartPost", runningProperties(s)["ExecStart"]}, {"stop-hook", "ExecStopEx", runningProperties(s)["ExecStartEx"]},
 		{"whitespace-hook", "ExecCondition", " "}, {"dropin", "DropInPaths", "/etc/systemd/system/service.d/foreign.conf"}, {"failure-trigger", "OnFailure", "foreign.service"},
 		{"restart", "Restart", "on-failure"}, {"inherit-env", "PassEnvironment", "TOKEN"}, {"environment", "Environment", "SECRET=value"}, {"weak-sandbox", "NoNewPrivileges", "no"},
+		{"incoming-upholder", "UpheldBy", "foreign.service"}, {"outgoing-upholder", "Upholds", "foreign.service"}, {"activation-trigger", "TriggeredBy", "foreign.socket"}, {"foreign-sockets", "Sockets", "foreign.socket"}, {"pending-reload", "NeedDaemonReload", "yes"}, {"automatic-stop", "StopWhenUnneeded", "yes"},
 		{"pid", "MainPID", "01234"}, {"invocation", "InvocationID", strings.Repeat("0", 32)}, {"cgroup", "ControlGroup", "/system.slice/foreign.service"}, {"restarted", "NRestarts", "1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -52,7 +53,7 @@ func TestUnitReadbackRejectsForeignExecutionIdentityAndSecurity(t *testing.T) {
 			}
 		})
 	}
-	for _, key := range []string{"ExecStartEx", "Environment", "RootDirectory", "NoNewPrivileges", "InvocationID"} {
+	for _, key := range []string{"ExecStartEx", "Environment", "RootDirectory", "NoNewPrivileges", "InvocationID", "TriggeredBy", "NeedDaemonReload", "StopWhenUnneeded"} {
 		t.Run("missing_"+key, func(t *testing.T) {
 			v := runningProperties(s)
 			delete(v, key)

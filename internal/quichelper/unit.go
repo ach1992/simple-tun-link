@@ -69,7 +69,7 @@ var securityProperties = map[string]string{
 	"RestrictSUIDSGID": "yes", "LockPersonality": "yes", "MemoryDenyWriteExecute": "yes",
 	"CapabilityBoundingSet": "", "AmbientCapabilities": "", "User": "root", "Group": "root",
 	"UMask": "0077", "StandardInput": "null", "StandardOutput": "null", "StandardError": "null",
-	"WorkingDirectory": "/", "KillMode": "control-group", "CollectMode": "inactive", "RemainAfterExit": "no",
+	"WorkingDirectory": "/", "KillMode": "control-group", "CollectMode": "inactive", "RemainAfterExit": "no", "StopWhenUnneeded": "no",
 	"DynamicUser": "no", "PrivateNetwork": "no", "NotifyAccess": "none", "DefaultDependencies": "no",
 	"Environment": "PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C LC_ALL=C LC_CTYPE=C", "PassEnvironment": "",
 	"UnsetEnvironment": helperUnsetEnvironment, "EnvironmentFiles": "", "RootDirectory": "", "RootImage": "",
@@ -79,7 +79,7 @@ var securityProperties = map[string]string{
 const forbiddenHooks = "ExecCondition,ExecConditionEx,ExecStartPre,ExecStartPreEx,ExecStartPost,ExecStartPostEx,ExecReload,ExecReloadEx,ExecReloadPost,ExecReloadPostEx,ExecStop,ExecStopEx,ExecStopPost,ExecStopPostEx"
 
 func unitPropertyNames() string {
-	names := []string{"Id", "Names", "LoadState", "ActiveState", "SubState", "Transient", "Description", "FragmentPath", "SourcePath", "DropInPaths", "UnitFileState", "ExecStart", "ExecStartEx", "MainPID", "ExecMainPID", "InvocationID", "ControlGroup", "NRestarts", "ExecMainStartTimestampMonotonic", "OnFailure", "OnSuccess"}
+	names := []string{"Id", "Names", "LoadState", "ActiveState", "SubState", "Transient", "Description", "FragmentPath", "SourcePath", "DropInPaths", "UnitFileState", "ExecStart", "ExecStartEx", "MainPID", "ExecMainPID", "InvocationID", "ControlGroup", "NRestarts", "ExecMainStartTimestampMonotonic", "OnFailure", "OnSuccess", "NeedDaemonReload", "Upholds", "UpheldBy", "TriggeredBy", "Sockets"}
 	for key := range securityProperties {
 		names = append(names, key)
 	}
@@ -120,6 +120,23 @@ func noForeignHooks(values map[string]string) error {
 			return fmt.Errorf("foreign QUIC service directive: %s", key)
 		}
 	}
+	// Restart=no does not prevent a foreign unit from activating or
+	// continuously upholding this service. Missing Upholds/UpheldBy on
+	// systemd 249/250 requires the separate trusted manager-dump gate.
+	for _, key := range []string{"Upholds", "UpheldBy", "TriggeredBy", "Sockets"} {
+		if values[key] != "" {
+			return fmt.Errorf("foreign QUIC service dependency: %s", key)
+		}
+	}
+	if value, present := values["TriggeredBy"]; !present || value != "" {
+		return fmt.Errorf("QUIC service activation relationship is unverified")
+	}
+	// Sockets is not exported as a service D-Bus property on supported
+	// managers. TriggeredBy is the effective relationship also used by
+	// systemd's service_collect_fds; never infer socket absence from a
+	// missing Sockets key or relax the required TriggeredBy receipt.
+	// https://github.com/systemd/systemd/blob/v249/src/core/service.c
+	// https://github.com/systemd/systemd/blob/v249/src/core/dbus-unit.c
 	return nil
 }
 
@@ -127,7 +144,7 @@ func verifyUnitVacant(v map[string]string, s unitSpec) error {
 	if err := noForeignHooks(v); err != nil {
 		return err
 	}
-	for key, want := range map[string]string{"Id": s.Name, "Names": s.Name, "LoadState": "not-found", "ActiveState": "inactive", "SubState": "dead", "Transient": "no", "Description": s.Name, "FragmentPath": "", "Environment": "", "CollectMode": "inactive", "MainPID": "0", "ExecMainPID": "0", "Restart": "no"} {
+	for key, want := range map[string]string{"Id": s.Name, "Names": s.Name, "LoadState": "not-found", "ActiveState": "inactive", "SubState": "dead", "Transient": "no", "Description": s.Name, "FragmentPath": "", "Environment": "", "CollectMode": "inactive", "MainPID": "0", "ExecMainPID": "0", "Restart": "no", "NeedDaemonReload": "no"} {
 		got, ok := v[key]
 		if !ok || got != want {
 			return fmt.Errorf("QUIC helper unit is present or vacancy is unverified")
@@ -174,7 +191,7 @@ func verifyUnitProperties(v map[string]string, s unitSpec) error {
 	if err := noForeignHooks(v); err != nil {
 		return err
 	}
-	for key, want := range map[string]string{"Id": s.Name, "Names": s.Name, "LoadState": "loaded", "ActiveState": "active", "SubState": "running", "Transient": "yes", "Description": s.Description, "FragmentPath": "/run/systemd/transient/" + s.Name, "UnitFileState": "transient", "NRestarts": "0"} {
+	for key, want := range map[string]string{"Id": s.Name, "Names": s.Name, "LoadState": "loaded", "ActiveState": "active", "SubState": "running", "Transient": "yes", "Description": s.Description, "FragmentPath": "/run/systemd/transient/" + s.Name, "UnitFileState": "transient", "NRestarts": "0", "NeedDaemonReload": "no"} {
 		got, ok := v[key]
 		if !ok || got != want {
 			return fmt.Errorf("original QUIC unit identity differs: %s", key)

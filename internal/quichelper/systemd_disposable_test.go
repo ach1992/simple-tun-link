@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ach1992/simple-tun-link/internal/systemdunit"
 	"golang.org/x/sys/unix"
 )
 
@@ -135,7 +136,180 @@ func TestQUICHelperDisposableSystemdOriginal(t *testing.T) {
 			}
 		})
 	}
+	t.Run("effective_foreign_upholder_blocks_first_start", func(t *testing.T) {
+		verifyDisposableForeignUpholder(t, run, attempt, binary, executable)
+	})
 	t.Log("actual transient first-start, process pin, collision denial and strict unit-property evidence passed; no managed QUIC Link was created")
+}
+
+// This regression declares an actual direct dependency on a separate absent
+// helper. It never starts that target, writes a unit file or reloads PID 1.
+// Its one explicitly owned upholder is a bounded harmless process.
+func verifyDisposableForeignUpholder(t *testing.T, run, attempt, binary string, executable unix.Stat_t) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	digest := sha256.Sum256([]byte("quic-helper-upholds:" + run + ":" + attempt))
+	id := fmt.Sprintf("%x", digest[:5])
+	target := unitSpec{
+		Name:        "stl-quic-" + id + ".service",
+		Description: fmt.Sprintf("STL-QUIC-stl-%s:tx:%x", id, digest[:16]),
+		Binary:      binary,
+		Args:        []string{"45"},
+	}
+	upholder := target
+	upholder.Name = "stl-quic-lab-upholder-" + id + ".service"
+	upholder.Description = fmt.Sprintf("STL-QUIC-LAB-UPHOLDER-%s:tx:%x", id, digest[16:])
+	host := systemdHost{}
+	if _, err := host.preflight(ctx, target); err != nil {
+		t.Fatalf("negative target was not independently vacant before the fixture: %v", err)
+	}
+	if _, err := host.preflight(ctx, upholder); err != nil {
+		t.Fatalf("disposable upholder identity already present or unverified: %v", err)
+	}
+	before, err := monotonicUSec()
+	if err != nil {
+		t.Fatal("upholder original start lower bound unavailable")
+	}
+	args := []string{"--system", "--unit=" + upholder.Name, "--description=" + upholder.Description,
+		"--service-type=exec", "--quiet", "--property=Upholds=" + target.Name}
+	properties := specSecurityProperties(upholder)
+	keys := make([]string, 0, len(properties))
+	for key := range properties {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	for _, key := range keys {
+		if key != "Type" && key != "EnvironmentFiles" {
+			args = append(args, "--property="+key+"="+properties[key])
+		}
+	}
+	args = append(args, "--", upholder.Binary)
+	args = append(args, upholder.Args...)
+	if _, err := managerCommand(ctx, "systemd-run", args...); err != nil {
+		t.Fatalf("original bounded upholder start uncertain; no name cleanup: %v", err)
+	}
+	after, err := monotonicUSec()
+	if err != nil {
+		t.Fatal("upholder original start upper bound unavailable; bounded fixture retained")
+	}
+	pin, err := pinDisposableUpholder(ctx, upholder, target, before, after)
+	if err != nil {
+		t.Fatalf("upholder original process not proved; bounded fixture retained: %v", err)
+	}
+	t.Cleanup(func() { disposeOriginalProcess(t, pin) })
+	if pin.Observation.ExecutableDevice != uint64(executable.Dev) || pin.Observation.ExecutableInode != executable.Ino {
+		t.Fatal("upholder did not execute the originally retained harmless inode")
+	}
+	if _, err := host.preflight(ctx, target); err == nil {
+		t.Fatal("first-start preflight admitted an effective foreign Upholds dependency")
+	}
+	values, err := queryUnit(ctx, target.Name)
+	if err != nil || values["LoadState"] != "not-found" || values["MainPID"] != "0" ||
+		values["ExecMainPID"] != "0" || values["ExecStart"] != "" || values["ExecStartEx"] != "" {
+		t.Fatal("negative helper target no longer has verified absent executable/process state")
+	}
+	if err := pin.alive(); err != nil {
+		t.Fatal("target rejection did not preserve the independently owned live upholder")
+	}
+	if _, modern := values["UpheldBy"]; modern {
+		t.Log("effective edge verified through actual UpheldBy/Upholds properties")
+	} else {
+		t.Log("effective edge verified through actual legacy PID-1 Manager.Dump observations for both selected units")
+	}
+	t.Log("actual effective Upholds edge rejected before helper dispatch; original upholder cleanup uses its retained pidfd only")
+}
+
+// Production correctly refuses this unit's deliberately nonempty outgoing
+// Upholds. The fixture explicitly attests that one declared extension, then
+// checks every other actual property and the original process with the same
+// production primitives. No unknown graph property is normalized away.
+func pinDisposableUpholder(ctx context.Context, upholder, target unitSpec, before, after uint64) (*processPin, error) {
+	inspect := func() (map[string]string, error) {
+		values, err := queryUnit(ctx, upholder.Name)
+		if err != nil {
+			return nil, err
+		}
+		if err := verifyDisposableUpholdsEdge(ctx, upholder, target, values); err != nil {
+			return nil, err
+		}
+		checked := make(map[string]string, len(values))
+		for key, value := range values {
+			checked[key] = value
+		}
+		if _, supported := checked["Upholds"]; supported {
+			// Only the exact, independently observed fixture edge is allowed.
+			checked["Upholds"] = ""
+		}
+		if err := verifyUnitProperties(checked, upholder); err != nil {
+			return nil, err
+		}
+		return values, nil
+	}
+	values, err := inspect()
+	if err != nil {
+		return nil, err
+	}
+	pid, err := strconv.Atoi(values["MainPID"])
+	if err != nil || pid <= 1 {
+		return nil, errors.New("original upholder PID invalid")
+	}
+	fd, err := unix.PidfdOpen(pid, 0)
+	if err != nil {
+		return nil, errors.New("original upholder pidfd unavailable")
+	}
+	pin := &processPin{fd: fd}
+	confirmed := false
+	defer func() {
+		if !confirmed {
+			pin.Close()
+		}
+	}()
+	first, err := observeProcess(pid, upholder, values)
+	if err != nil || first.StartMonotonicUSec < before || first.StartMonotonicUSec > after {
+		return nil, errors.New("original upholder process or start interval unverified")
+	}
+	again, err := inspect()
+	if err != nil || again["MainPID"] != values["MainPID"] {
+		return nil, errors.New("original upholder unit changed during readback")
+	}
+	second, err := observeProcess(pid, upholder, again)
+	if err != nil || second != first || pin.alive() != nil {
+		return nil, errors.New("original upholder process changed during readback")
+	}
+	pin.Observation = first
+	confirmed = true
+	return pin, nil
+}
+
+func verifyDisposableUpholdsEdge(ctx context.Context, upholder, target unitSpec, observed map[string]string) error {
+	targetValues, err := queryUnit(ctx, target.Name)
+	if err != nil {
+		return err
+	}
+	if incoming, supported := targetValues["UpheldBy"]; supported {
+		if incoming != upholder.Name || observed["Upholds"] != target.Name {
+			return errors.New("actual disposable Upholds edge does not match both exact unit names")
+		}
+		return nil
+	}
+	versionRaw, err := managerCommand(ctx, "systemctl", "--system", "show", "--property=Version", "--no-pager", "--all")
+	if err != nil {
+		return err
+	}
+	version, valid := systemdunit.ParseVersion(versionRaw)
+	if !valid || (version != 249 && version != 250) {
+		return errors.New("missing UpheldBy property outside the proven legacy manager versions")
+	}
+	targetGraph, err := readLegacyUnitGraph(ctx, target.Name, version)
+	if err != nil || !targetGraph.Present || !targetGraph.IncomingUpholds || targetGraph.OutgoingUpholds {
+		return errors.New("actual legacy manager dump does not attest the selected target's incoming Upholds")
+	}
+	upholderGraph, err := readLegacyUnitGraph(ctx, upholder.Name, version)
+	if err != nil || !upholderGraph.Present || !upholderGraph.OutgoingUpholds || upholderGraph.IncomingUpholds {
+		return errors.New("actual legacy manager dump does not attest the original upholder's outgoing Upholds")
+	}
+	return nil
 }
 
 // Fixture-only diagnostics expose validated environment KEY NAMES, never

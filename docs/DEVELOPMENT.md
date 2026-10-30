@@ -209,7 +209,13 @@ The production systemd adapter must establish the exact transient unit,
 argv, environment, executable inode, invocation, PID/start time, cgroup
 and namespace. A duplicate start must fail without replacing the first
 process. Negative checks derive from the runner's actual property
-representation. Cleanup signals only the retained original pidfd.
+representation. A separate bounded `sleep` upholder declares an actual
+`Upholds=` edge to an independently vacant helper target. The fixture
+checks the effective graph through modern properties or the complete
+systemd 249/250 manager dump, requires target preflight to refuse it, and
+verifies that the target was never started. It creates no unit files and
+performs no daemon reload. Cleanup signals only the retained original
+pidfds; an uncertain start is left to its bounded process lifetime.
 
 Ordinary `go test ./...` skips that explicitly privileged fixture while
 running deterministic journal-admission, material/receipt substitution,
