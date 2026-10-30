@@ -26,6 +26,7 @@ firewall ownership and kernel capabilities must still pass on both endpoints.
 | **IPIP** | Native, FOU/UDP, GUE/UDP | No | Alternative plaintext L3 encapsulation |
 | **WireGuard** | UDP | Yes | Encrypted point-to-point connection |
 | **WireGuard over WSS/TLS** | WSS over TCP + private kernel WG | Yes (mTLS and WireGuard) | Optional managed Carrier when the peer can reach a selected TLS TCP port |
+| **WireGuard over QUIC/TLS** (release candidate) | QUIC over UDP + private kernel WG | Yes (mTLS and WireGuard) | Optional managed Carrier with the separately pinned Hysteria companion |
 | **IPsec** | IKEv2/XFRM, ESP or NAT-T | Yes | Advanced encrypted transport; requires a verified STL-owned strongSwan runtime |
 
 GRE keys and UDP encapsulation do **not** encrypt or authenticate traffic.
@@ -52,6 +53,15 @@ install the explicitly selected, verified `wstunnel v11.0.0` companion on
 both endpoints. STL protects the **kernel WireGuard UDP port** with a
 Link-scoped ingress guard; do **not** publish that port to the Internet.
 Use non-overlapping private Link Address subnets.
+
+The managed QUIC implementation is a **release candidate**, not a feature of
+the published v0.1.15 installer. Its prerequisites, confidential peer setup,
+diagnostics and recovery are documented in
+[managed QUIC](docs/CLI.md#managed-wireguard-over-quictls-release-candidate).
+For QUIC, permit only the selected public **UDP** listener through the
+underlay firewall; its kernel WireGuard UDP ports remain guarded. Local
+activation, peer authentication and actual private traffic are verified
+separately.
 
 ## Install on both servers
 
@@ -134,7 +144,7 @@ optional WSS companion may coexist). Run **as root**
 shell instruction):
 
 ~~~sh
-bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}") || exit 1; [[ $n =~ ^[0-9]+$ && $n -gt 0 && $n -le 134250000 ]] || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; head -c "$n" -- "${f[0]}" > "$d/${f[0]##*/}"; [[ $(stat -c %s -- "$d/${f[0]##*/}") == "$n" ]]; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; for x in "$@"; do if [[ $x == --with-wss ]]; then case $(uname -m) in x86_64) a=amd64;; aarch64) a=arm64;; *) echo "STL: unsupported WSS CPU" >&2; exit 1;; esac; w="/root/stl/wstunnel_11.0.0_linux_${a}.tar.gz"; [[ -f $w && ! -L $w && $(stat -c %u:%a "$w") =~ ^0:(600|644)$ && $(stat -c %h "$w") == 1 ]] || { echo "STL: missing or unsafe optional WSS archive" >&2; exit 1; }; z=$(stat -c %s "$w"); [[ $z =~ ^[0-9]+$ && $z -gt 1024 && $z -lt 100000000 ]] || { echo "STL: optional WSS archive size is unsafe" >&2; exit 1; }; head -c "$z" -- "$w" > "$d/${w##*/}"; [[ $(stat -c %s -- "$d/${w##*/}") == "$z" ]] && cmp -s -- "$w" "$d/${w##*/}" || { echo "STL: WSS archive changed during protected copy" >&2; exit 1; }; break; fi; done; bash "$d/${f[0]##*/}" "$@"' stl
+bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}") || exit 1; [[ $n =~ ^[0-9]+$ && $n -gt 0 && $n -le 134250000 ]] || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; head -c "$n" -- "${f[0]}" > "$d/${f[0]##*/}"; [[ $(stat -c %s -- "$d/${f[0]##*/}") == "$n" ]]; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; for x in "$@"; do case "$x" in --with-wss|--with-quic) case $(uname -m) in x86_64) a=amd64;; aarch64) a=arm64;; *) echo "STL: unsupported companion CPU" >&2; exit 1;; esac; if [[ $x == --with-wss ]]; then w="/root/stl/wstunnel_11.0.0_linux_${a}.tar.gz"; else w="/root/stl/hysteria-linux-${a}"; fi;; *) continue;; esac; [[ -f $w && ! -L $w && $(stat -c %u:%a "$w") =~ ^0:(600|644)$ && $(stat -c %h "$w") == 1 ]] || { echo "STL: missing or unsafe selected companion" >&2; exit 1; }; z=$(stat -c %s "$w"); [[ $z =~ ^[0-9]+$ && $z -gt 1024 && $z -lt 100000000 ]] || { echo "STL: companion size is unsafe" >&2; exit 1; }; head -c "$z" -- "$w" > "$d/${w##*/}"; [[ $(stat -c %s -- "$d/${w##*/}") == "$z" ]] && cmp -s -- "$w" "$d/${w##*/}" || { echo "STL: companion changed during protected copy" >&2; exit 1; }; done; bash "$d/${f[0]##*/}" "$@"' stl
 ~~~
 
 The final `stl` labels the `bash -c` invocation; to explicitly install
@@ -305,8 +315,12 @@ command instead of reinstalling:
 bash -c 'set -e; d=$(mktemp -d); cleanup(){ rm -rf -- "$d"; }; trap cleanup EXIT; curl -fsSLo "$d/stl.sh" --proto "=https" --proto-redir "=https" https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh; test -s "$d/stl.sh"; bash -n "$d/stl.sh"; bash "$d/stl.sh" "$@"' stl update
 ~~~
 
-Installer binary rollback is **not** State rollback. Stable v0.1.10+
-uses State **v4** for WSS-capable management; an older pre-v4 binary cannot
+Installer binary rollback is **not** State rollback. Stable v0.1.10–v0.1.15
+uses State **v4** for WSS-capable management. The managed QUIC candidate
+writes **State v5** on the next State mutation, including on hosts with
+only Native Links; a pre-v5 binary must not manage that snapshot. A valid
+older snapshot remains readable, and reading alone does not rewrite it.
+For the earlier v4 boundary, an older pre-v4 binary cannot
 be assumed safe even on a host that has only Native Links. In particular,
 installed v0.1.12 and earlier binaries do not know the guarded `DOWNGRADE`
 operation. First use the permanent Latest Stable `update` command to install

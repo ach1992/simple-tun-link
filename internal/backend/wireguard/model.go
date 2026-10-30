@@ -179,6 +179,10 @@ func parsePeerAttribute(raw []byte, peer string) (string, error) {
 func (o observedLink) matches(link domain.Link, name string) bool {
 	alias, err := linux.OwnerTag(link.ID)
 	match := err == nil && o.Alias == alias
+	if link.Backend == domain.BackendWireGuardQUIC {
+		original, _, valid := linux.ParseQUICWGOwnerTag(o.Alias)
+		match = valid && original == link.ID
+	}
 	if link.Backend == domain.BackendWireGuardWSS {
 		original, _, valid := linux.ParseWSSOwnerTag(o.Alias)
 		match = valid && original == link.ID
@@ -204,7 +208,7 @@ func validateLink(link domain.Link) error {
 	if err := link.Validate(); err != nil {
 		return err
 	}
-	if (link.Backend != domain.BackendWireGuard && link.Backend != domain.BackendWireGuardWSS) || link.Encapsulation != domain.EncapUDP {
+	if (link.Backend != domain.BackendWireGuard && link.Backend != domain.BackendWireGuardWSS && link.Backend != domain.BackendWireGuardQUIC) || link.Encapsulation != domain.EncapUDP {
 		return stlerr.New(stlerr.CodeUnsupported, "wireguard", string(link.ID), string(link.Backend), "WireGuard backend requires UDP")
 	}
 	if !link.Underlay.Local.Is4() || !link.Underlay.Peer.Is4() {
@@ -232,7 +236,7 @@ func desiredResources(link domain.Link, firewall domain.ResourceClaim) ([]domain
 }
 
 func endpoint(link domain.Link) string {
-	if link.Backend == domain.BackendWireGuardWSS {
+	if link.Backend == domain.BackendWireGuardWSS || link.Backend == domain.BackendWireGuardQUIC {
 		path, err := composition.Build(link, composition.CarrierForLink(link))
 		if err != nil || path.Role == composition.Listen {
 			return ""

@@ -3,6 +3,7 @@ package quichelper
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -44,7 +45,7 @@ func (w *boundedOutput) Write(p []byte) (int, error) {
 // trusted root-owned executable before exec so PATH and final-symlink
 // substitution cannot redirect this command.
 func localManagerCommand(ctx context.Context, name string, args ...string) (*exec.Cmd, func(), error) {
-	if ctx == nil || (name != "systemctl" && name != "systemd-run" && name != "systemd-analyze") {
+	if ctx == nil || (name != "systemctl" && name != "systemd-run" && name != "systemd-analyze" && name != "journalctl") {
 		return nil, nil, fmt.Errorf("invalid local systemd command")
 	}
 	if err := ctx.Err(); err != nil {
@@ -77,9 +78,14 @@ func localManagerCommand(ctx context.Context, name string, args ...string) (*exe
 }
 
 func managerCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
-	cmd, release, err := localManagerCommand(ctx, name, args...)
+	if ctx == nil {
+		return nil, &managerFailure{Kind: "invalid_context"}
+	}
+	bounded, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	cmd, release, err := localManagerCommand(bounded, name, args...)
 	if err != nil {
-		return nil, err
+		return nil, &managerFailure{Kind: "command_unavailable", cause: err}
 	}
 	defer release()
 	var out, stderr boundedOutput
@@ -88,8 +94,22 @@ func managerCommand(ctx context.Context, name string, args ...string) ([]byte, e
 	err = cmd.Run()
 	// stderr can contain manager/config context; never expose it as ordinary
 	// diagnostics. Identity fields and a bounded error stage are sufficient.
-	if err != nil || out.overflow || stderr.overflow {
-		return nil, fmt.Errorf("local systemd command failed or readback exceeded its bound")
+	if out.overflow || stderr.overflow {
+		return nil, &managerFailure{Kind: "output_limit", cause: err}
+	}
+	if err != nil {
+		kind, code := "command_failed", 0
+		if errors.Is(bounded.Err(), context.DeadlineExceeded) {
+			kind = "timeout"
+		} else if errors.Is(bounded.Err(), context.Canceled) {
+			kind = "canceled"
+		} else {
+			var exit *exec.ExitError
+			if errors.As(err, &exit) {
+				kind, code = "command_exit", exit.ExitCode()
+			}
+		}
+		return nil, &managerFailure{Kind: kind, ExitCode: code, cause: err}
 	}
 	return out.Bytes(), nil
 }
@@ -194,6 +214,10 @@ func (systemdHost) preflight(ctx context.Context, s unitSpec) (hostIdentity, err
 }
 
 func checkUnitSearchPaths(ctx context.Context, raw, name string) error {
+	return checkUnitSearchPathsPolicy(ctx, raw, name, false)
+}
+
+func checkUnitSearchPathsPolicy(ctx context.Context, raw, name string, allowTransient bool) error {
 	if ctx == nil || ctx.Err() != nil {
 		return fmt.Errorf("systemd unit search inspection canceled")
 	}
@@ -229,12 +253,18 @@ func checkUnitSearchPaths(ctx context.Context, raw, name string) error {
 			return err
 		}
 		for _, entry := range entries {
+			if allowTransient && path == "/run/systemd/transient" && entry == name {
+				if err := trustedTransientFragment(path, name); err != nil {
+					return err
+				}
+				continue
+			}
 			_, err := os.Lstat(filepath.Join(path, entry))
 			if !os.IsNotExist(err) {
 				return fmt.Errorf("foreign QUIC unit file, dependency or drop-in exists or cannot be excluded")
 			}
 		}
-		if err := checkUnitReverseReferences(ctx, path, name); err != nil {
+		if err := checkUnitReverseReferencesPolicy(ctx, path, name, allowTransient && path == "/run/systemd/transient"); err != nil {
 			return err
 		}
 	}
@@ -405,6 +435,10 @@ func (systemdHost) observe(ctx context.Context, s unitSpec) (*processPin, error)
 }
 
 func observeProcess(pid int, s unitSpec, v map[string]string) (processObservation, error) {
+	return observeProcessEnvironment(pid, s, v, false)
+}
+
+func observeProcessEnvironment(pid int, s unitSpec, v map[string]string, journal bool) (processObservation, error) {
 	var obs processObservation
 	obs.PID = pid
 	start, e := processStartTime(pid)
@@ -456,7 +490,7 @@ func observeProcess(pid int, s unitSpec, v map[string]string) (processObservatio
 	if !found {
 		return obs, fmt.Errorf("original QUIC process systemd cgroup missing")
 	}
-	if e := verifyProcessEnvironment(prefix, v["InvocationID"]); e != nil {
+	if e := verifyProcessEnvironmentPolicy(prefix, v["InvocationID"], journal); e != nil {
 		return obs, e
 	}
 	obs.InvocationID = v["InvocationID"]
@@ -508,12 +542,26 @@ func safeManagerEnvironment(raw string) bool {
 	return true
 }
 func verifyProcessEnvironment(prefix, invocation string) error {
+	return verifyProcessEnvironmentPolicy(prefix, invocation, false)
+}
+
+func verifyProcessEnvironmentPolicy(prefix, invocation string, journal bool) error {
 	raw, err := readBoundedFile(prefix+"/environ", 16<<10)
 	if err != nil || len(raw) == 0 || raw[len(raw)-1] != 0 {
 		return fmt.Errorf("original QUIC process environment unavailable")
 	}
 	defer clear(raw)
 	want := map[string]string{"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C", "LC_CTYPE": "C", "INVOCATION_ID": invocation}
+	if journal {
+		// systemd.exec(249): JOURNAL_STREAM identifies the stderr stream when
+		// both output descriptors use journald. Merely seeing the key is not
+		// evidence; bind it to the actual inherited descriptor.
+		var stream unix.Stat_t
+		if unix.Stat(prefix+"/fd/2", &stream) != nil || stream.Mode&unix.S_IFMT != unix.S_IFSOCK {
+			return fmt.Errorf("managed QUIC journal stream is unavailable")
+		}
+		want["JOURNAL_STREAM"] = strconv.FormatUint(uint64(stream.Dev), 10) + ":" + strconv.FormatUint(stream.Ino, 10)
+	}
 	got := map[string]string{}
 	for _, item := range strings.Split(string(raw[:len(raw)-1]), "\x00") {
 		k, v, ok := strings.Cut(item, "=")

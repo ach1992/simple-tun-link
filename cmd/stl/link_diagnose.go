@@ -56,6 +56,13 @@ func linkDiagnoseCommand(args []string, stdout, stderr io.Writer, options *runti
 	if !exists {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, "link_diagnose", "Link ID is not present in local desired state")
 	}
+	if record.Desired.Backend == domain.BackendWireGuardQUIC && manualMTU != 0 {
+		public := stlerr.New(stlerr.CodeUnsupported, "link_diagnose", string(id), "wireguard-quic",
+			"QUIC carrier PMTU and manual MTU probing are not verified; private five-ping is available without --mtu")
+		public.ReasonCode = "quic_mtu_measurement_unavailable"
+		public.NextStep = "Run stl link diagnose " + string(id) + " --json without --mtu; do not apply a guessed carrier PMTU."
+		return readCommandPublicError(stdout, stderr, jsonOutput, public)
+	}
 	if record.Desired.Backend == domain.BackendWireGuardWSS && manualMTU != 0 {
 		public := stlerr.New(stlerr.CodeUnsupported, "link_diagnose", string(id), "wireguard-wss",
 			"WSS carrier PMTU and manual MTU probing are not verified; private five-ping is available without --mtu")

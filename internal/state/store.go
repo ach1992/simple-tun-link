@@ -19,11 +19,12 @@ import (
 )
 
 const (
-	SchemaVersion       = 4
-	preWSSSchemaVersion = 3
-	legacySchemaVersion = 1
-	preMTUSchemaVersion = 2
-	DefaultRoot         = "/var/lib/simple-tun-link"
+	SchemaVersion        = 5
+	preQUICSchemaVersion = 4
+	preWSSSchemaVersion  = 3
+	legacySchemaVersion  = 1
+	preMTUSchemaVersion  = 2
+	DefaultRoot          = "/var/lib/simple-tun-link"
 )
 
 var ErrNotFound = errors.New("link state not found")
@@ -39,6 +40,7 @@ func (e *PublicationError) Error() string {
 func (e *PublicationError) Unwrap() error { return e.Cause }
 
 type LinkRecord struct {
+	QUICGeneration QUICGeneration         `json:"quic_generation,omitzero"`
 	Desired        domain.Link            `json:"desired"`
 	OwnedResources []domain.ResourceClaim `json:"owned_resources,omitempty"`
 	WSSFiles       WSSFileIdentity        `json:"wss_file_digests,omitzero"`
@@ -59,18 +61,19 @@ type LinkRecord struct {
 }
 
 type Snapshot struct {
-	SchemaVersion          int                     `json:"schema_version"`
-	Links                  []LinkRecord            `json:"links"`
-	PendingSenders         []PendingSender         `json:"pending_senders,omitempty"`
-	PendingIPsec           []PendingIPsec          `json:"pending_ipsec,omitempty"`
-	IPsecVICIOperations    []IPsecVICIOperation    `json:"ipsec_vici_operations,omitempty"`
-	IPsecReapplyOperations []IPsecReapplyOperation `json:"ipsec_reapply_operations,omitempty"`
-	IPsecRemoveOperations  []IPsecRemoveOperation  `json:"ipsec_remove_operations,omitempty"`
-	IPsecXFRMOperations    []IPsecXFRMOperation    `json:"ipsec_xfrm_operations,omitempty"`
-	IPsecRemovalReceipts   []IPsecRemovalReceipt   `json:"ipsec_removal_receipts,omitempty"`
-	RemovalReceipts        []RemovalReceipt        `json:"removal_receipts,omitempty"`
-	WSSCrashOperations     []WSSCrashOperation     `json:"wss_crash_operations,omitempty"`
-	QUICCrashOperations    []QUICCrashOperation    `json:"quic_crash_operations,omitempty"`
+	SchemaVersion           int                      `json:"schema_version"`
+	Links                   []LinkRecord             `json:"links"`
+	PendingSenders          []PendingSender          `json:"pending_senders,omitempty"`
+	PendingIPsec            []PendingIPsec           `json:"pending_ipsec,omitempty"`
+	IPsecVICIOperations     []IPsecVICIOperation     `json:"ipsec_vici_operations,omitempty"`
+	IPsecReapplyOperations  []IPsecReapplyOperation  `json:"ipsec_reapply_operations,omitempty"`
+	IPsecRemoveOperations   []IPsecRemoveOperation   `json:"ipsec_remove_operations,omitempty"`
+	IPsecXFRMOperations     []IPsecXFRMOperation     `json:"ipsec_xfrm_operations,omitempty"`
+	IPsecRemovalReceipts    []IPsecRemovalReceipt    `json:"ipsec_removal_receipts,omitempty"`
+	RemovalReceipts         []RemovalReceipt         `json:"removal_receipts,omitempty"`
+	WSSCrashOperations      []WSSCrashOperation      `json:"wss_crash_operations,omitempty"`
+	QUICCrashOperations     []QUICCrashOperation     `json:"quic_crash_operations,omitempty"`
+	QUICAbandonmentReceipts []QUICAbandonmentReceipt `json:"quic_abandonment_receipts,omitempty"`
 }
 
 func EmptySnapshot() Snapshot {
@@ -141,6 +144,9 @@ func (s *Snapshot) normalize() {
 		return s.IPsecRemovalReceipts[i].LinkID < s.IPsecRemovalReceipts[j].LinkID
 	})
 	sort.Slice(s.RemovalReceipts, func(i, j int) bool { return s.RemovalReceipts[i].LinkID < s.RemovalReceipts[j].LinkID })
+	sort.Slice(s.QUICAbandonmentReceipts, func(i, j int) bool {
+		return s.QUICAbandonmentReceipts[i].Operation.Plan.Local.LinkID < s.QUICAbandonmentReceipts[j].Operation.Plan.Local.LinkID
+	})
 	for i := range s.WSSCrashOperations {
 		s.WSSCrashOperations[i].Resources = normalizeClaims(s.WSSCrashOperations[i].Resources)
 	}
@@ -240,6 +246,14 @@ func (s *FileStore) Update(ctx context.Context, mutate func(*Snapshot) error) er
 	for i, op := range snapshot.QUICCrashOperations {
 		originalQUIC[i] = op
 		originalQUIC[i].Resources = append([]domain.ResourceClaim(nil), op.Resources...)
+		if op.Managed != nil {
+			managed := *op.Managed
+			originalQUIC[i].Managed = &managed
+		}
+	}
+	originalQUICAbandonments := make([]QUICAbandonmentReceipt, len(snapshot.QUICAbandonmentReceipts))
+	for i, r := range snapshot.QUICAbandonmentReceipts {
+		originalQUICAbandonments[i] = cloneQUICAbandonment(r)
 	}
 	if err := mutate(&snapshot); err != nil {
 		return err
@@ -248,11 +262,18 @@ func (s *FileStore) Update(ctx context.Context, mutate func(*Snapshot) error) er
 	if err := validateSnapshot(snapshot); err != nil {
 		return err
 	}
+	if err := validateQUICAbandonmentTransition(originalQUICAbandonments, originalQUIC, snapshot); err != nil {
+		return err
+	}
 	for _, old := range originalQUIC {
 		current, found := snapshot.FindQUICCrashOperation(old.Plan.Local.LinkID)
-		if !found || !reflect.DeepEqual(old, current) {
-			return fmt.Errorf("QUIC pre-effect journal cannot be altered or cleared without exact-owned reconciliation")
+		if found && reflect.DeepEqual(old, current) {
+			continue
 		}
+		if !found && old.Managed != nil && validQUICManagedCompletion(old, snapshot) {
+			continue
+		}
+		return fmt.Errorf("QUIC pre-effect journal cannot be altered or cleared without exact-owned reconciliation")
 	}
 	for id, replacement := range originalSupersessions {
 		if retained, found := snapshot.Find(id); found {
@@ -312,6 +333,11 @@ func (s *FileStore) loadUnlocked() (Snapshot, error) {
 			return Snapshot{}, fmt.Errorf("decode state: multiple JSON values")
 		}
 		return Snapshot{}, fmt.Errorf("decode state trailing data: %w", err)
+	}
+	if snapshot.SchemaVersion <= preQUICSchemaVersion {
+		if err := rejectLegacyQUICManagedFields(raw); err != nil {
+			return Snapshot{}, err
+		}
 	}
 	if snapshot.SchemaVersion <= preWSSSchemaVersion {
 		if err := rejectLegacyWSSFields(raw); err != nil {
@@ -408,6 +434,9 @@ func containsMTUField(value any) bool {
 func migrateSnapshot(snapshot Snapshot) (Snapshot, error) {
 	switch snapshot.SchemaVersion {
 	case SchemaVersion:
+		return snapshot, nil
+	case preQUICSchemaVersion:
+		snapshot.SchemaVersion = SchemaVersion
 		return snapshot, nil
 	case preWSSSchemaVersion:
 		snapshot.SchemaVersion = SchemaVersion
@@ -537,6 +566,13 @@ func validateSnapshot(snapshot Snapshot) error {
 			record.WSSColdBootRestore != (WSSColdBootRestore{}) || record.WSSSupersededBy != "" {
 			return fmt.Errorf("native Link cannot carry WSS credential or original host-object identity")
 		}
+		if record.Desired.Backend == domain.BackendWireGuardQUIC {
+			if err := record.QUICGeneration.Validate(record.Desired); err != nil {
+				return err
+			}
+		} else if record.QUICGeneration != (QUICGeneration{}) {
+			return fmt.Errorf("non-QUIC Link carries managed QUIC provenance")
+		}
 		seen[record.Desired.ID] = struct{}{}
 		for _, claim := range record.OwnedResources {
 			if err := claim.Validate(); err != nil {
@@ -568,7 +604,10 @@ func validateSnapshot(snapshot Snapshot) error {
 	if err := validateWSSCrashOperations(snapshot); err != nil {
 		return err
 	}
-	return validateQUICCrashOperations(snapshot)
+	if err := validateQUICCrashOperations(snapshot); err != nil {
+		return err
+	}
+	return validateQUICAbandonmentReceipts(snapshot)
 }
 
 func cloneRecord(record LinkRecord) LinkRecord {

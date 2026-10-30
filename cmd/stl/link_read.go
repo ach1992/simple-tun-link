@@ -55,6 +55,7 @@ type linkStatusResponse struct {
 	IPIPState         *ipipbackend.DiagnosticState  `json:"ipip_state,omitempty"`
 	WireGuardState    *wgbackend.DiagnosticState    `json:"wireguard_state,omitempty"`
 	WSSState          *WSSLinkDiagnostics           `json:"wss_state,omitempty"`
+	QUICState         *QUICLinkDiagnostics          `json:"quic_state,omitempty"`
 	IPsecState        *ipsecbackend.DiagnosticState `json:"ipsec_state,omitempty"`
 }
 
@@ -166,6 +167,29 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 		if err != nil {
 			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeState, "link_status", "cannot initialize read-only backend inspection")
 		}
+	}
+	if record.Desired.Backend == domain.BackendWireGuardQUIC {
+		observed, runner, inspectErr := trustedQUICObservation(ctx, record.Desired, *options)
+		if inspectErr != nil {
+			return readQUICInspectionError(ctx, stdout, stderr, jsonOutput, inspectErr)
+		}
+		if observed.KernelWireGuardPresent {
+			if _, inspectErr := diagnostics.VerifyPrivateLinkIdentity(ctx, record.Desired, observed.Interface, runner); inspectErr != nil {
+				return readQUICInspectionError(ctx, stdout, stderr, jsonOutput, inspectErr)
+			}
+		}
+		response := linkStatusResponse{SchemaVersion: jsonSchemaVersion, Link: summarizeLink(record.Desired),
+			InterfaceVerified: observed.KernelWireGuardPresent, Connectivity: "not_measured", QUICState: &observed}
+		if jsonOutput {
+			if json.NewEncoder(stdout).Encode(response) != nil {
+				return 1
+			}
+		} else {
+			fmt.Fprintf(stdout, "Link %s: managed QUIC helper=%t guard=%t kernel=%t WG-handshake=%t, RX=%d TX=%d bytes (connectivity not measured)\n",
+				id, observed.QUICHelperActive, observed.WGIngressGuardActive, observed.KernelWireGuardPresent,
+				observed.WireGuardHandshakeObserved, observed.RXBytes, observed.TXBytes)
+		}
+		return 0
 	}
 	// Managed WSS does not register as Native WireGuard. Its separately
 	// attested helper/guard/kernel observer still belongs in the SAME

@@ -120,7 +120,7 @@ func uninstallSnapshotEmpty(s state.Snapshot) bool {
 		len(s.IPsecReapplyOperations) == 0 && len(s.IPsecRemoveOperations) == 0 &&
 		len(s.IPsecXFRMOperations) == 0 && len(s.IPsecRemovalReceipts) == 0 &&
 		len(s.RemovalReceipts) == 0 && len(s.WSSCrashOperations) == 0 &&
-		len(s.QUICCrashOperations) == 0
+		len(s.QUICCrashOperations) == 0 && len(s.QUICAbandonmentReceipts) == 0
 }
 
 // Uninstall removes only the verified installer-owned core binary and record;
@@ -134,6 +134,7 @@ func uninstallSnapshotReady(s state.Snapshot) bool {
 	withoutReceipts := s
 	withoutReceipts.RemovalReceipts = nil
 	withoutReceipts.IPsecRemovalReceipts = nil
+	withoutReceipts.QUICAbandonmentReceipts = nil
 	if !uninstallSnapshotEmpty(withoutReceipts) {
 		return false
 	}
@@ -143,6 +144,15 @@ func uninstallSnapshotReady(s state.Snapshot) bool {
 		}
 		if receipt.Backend == domain.BackendWireGuardWSS &&
 			!state.ValidWSSOriginalTerminationProof(receipt.WSSOriginalTermination) {
+			return false
+		}
+		if receipt.Backend == domain.BackendWireGuardQUIC &&
+			!state.ValidQUICOriginalTerminationProof(receipt.QUICOriginalTermination) {
+			return false
+		}
+	}
+	for _, receipt := range s.QUICAbandonmentReceipts {
+		if !receipt.Retired || receipt.Validate() != nil {
 			return false
 		}
 	}
@@ -328,6 +338,7 @@ func inspectUninstallState(ctx context.Context, root string, trust func(string) 
 		withoutReceipts := snapshot
 		withoutReceipts.RemovalReceipts = nil
 		withoutReceipts.IPsecRemovalReceipts = nil
+		withoutReceipts.QUICAbandonmentReceipts = nil
 		if uninstallSnapshotEmpty(withoutReceipts) {
 			return false, errors.New("protected credential retirement remains unfinished or unverified")
 		}
@@ -415,7 +426,7 @@ func uninstallGateGuidance(err error) (string, string) {
 	case strings.Contains(message, "saved Links or pending operations remain"):
 		return "saved_or_pending_links", "Open My tunnels in STL and remove each verified Link; reconcile pending operations through STL before retrying Uninstall."
 	case strings.Contains(message, "protected credential retirement remains"):
-		return "credential_retirement_pending", "The Link was removed but a protected credential retirement receipt is unfinished or unverified. Use the exact STL receipt-bound retire-wss, credential retire, or retire-ipsec recovery operation as applicable; never delete State or credentials manually."
+		return "credential_retirement_pending", "The Link was removed but a protected credential retirement receipt is unfinished or unverified. Use the exact STL receipt-bound retire-quic, retire-wss, credential retire, or retire-ipsec recovery operation as applicable; never delete State or credentials manually."
 	case strings.Contains(message, "downgrade requires a canonical empty State"):
 		return "downgrade_state_history_retained", "Downgrade requires a truly empty, canonical State with no historical retirement receipts. Keep the current v4-capable STL and preserve State; do not delete receipts to force an older binary."
 	case strings.Contains(message, "Engine restore unit is still installed"):

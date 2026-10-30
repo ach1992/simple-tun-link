@@ -42,6 +42,8 @@ jobs:
           bash -n scripts/e2e/wss-managed-wireguard-matrix.sh
           bash -n scripts/e2e/wss-reconnect-systemd.sh
           bash -n scripts/e2e/quic-helper-systemd.sh
+          bash -n scripts/e2e/quic-managed-wireguard.sh
+          python3 -c 'import ast; ast.parse(open("scripts/e2e/quic-managed-supervisor.py").read())'
           python3 -c 'import ast,sys; [ast.parse(open(p).read()) for p in sys.argv[1:]]' scripts/e2e/wss-negative-probe.py scripts/e2e/wss-r1-supervisor.py scripts/e2e/wss-r2-nft-crash.py scripts/e2e/wss-r2-legacy-drift.py scripts/e2e/wss-r2-wg-crash.py scripts/e2e/wss-r4-partial-wg.py scripts/e2e/wss-r4-guard-interloper.py
           bash -n scripts/e2e/ipsec-two-peer-netns.sh
           bash -n scripts/e2e/ipsec-installed-systemd.sh
@@ -55,6 +57,8 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test ./...
+      - name: Mixed WSS and QUIC guard provenance fixtures
+        run: go test -tags stl_e2e_lab ./internal/linux -run TestManagedWGIngressSiblings -count=1
       - name: Offline installer regression
         run: |
           bash scripts/test-install.sh
@@ -72,7 +76,7 @@ jobs:
       matrix:
         runner: [ubuntu-22.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -82,6 +86,93 @@ jobs:
       - name: Exact extended execution flags, controlled restart and bounded ping
         shell: bash
         run: bash scripts/e2e/wss-reconnect-systemd.sh
-      - name: QUIC original transient start and pinned process identity
+      - name: QUIC original and managed canonical execution, restart and owner identity
         shell: bash
         run: bash scripts/e2e/quic-helper-systemd.sh
+
+  # The public CLI/Engine owns both peers and every lifecycle transition.
+  # WireGuard, nftables and pinned Hysteria are real; manager/boot attribution
+  # is a tagged namespace adapter. Actual PID 1 is tested in the matrix above.
+  quic-managed-kernel:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify hosted-root disposable namespace capability
+        shell: bash
+        run: |
+          test "$GITHUB_ACTIONS" = true
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$GITHUB_REPOSITORY" = ach1992/simple-tun-link
+          test "$GITHUB_EVENT_NAME" = pull_request
+          # Root's 0->0 user mapping preserves the ordinary owner-DAC read of
+          # legacy proc inventory. All four runtime namespaces remain separate;
+          # no firewall inventory is replaced and no host policy is relaxed.
+          if ! sudo timeout 10 unshare --user --map-root-user --net --mount --pid --fork --kill-child --mount-proc /usr/bin/true >/dev/null 2>&1; then
+            echo 'QUIC_MANAGED_NAMESPACE_CAPABILITY=UNAVAILABLE; mode=github-hosted-root; managed architecture acceptance=NOT_RUN' | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo 'QUIC_MANAGED_NAMESPACE_CAPABILITY=AVAILABLE; mode=github-hosted-root; actual managed acceptance follows' >> "$GITHUB_STEP_SUMMARY"
+      - name: Disposable hosted-runner kernel prerequisites
+        shell: bash
+        run: |
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$GITHUB_REPOSITORY" = ach1992/simple-tun-link
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends iproute2 iptables nftables wireguard-tools iputils-ping util-linux kmod
+          sudo modprobe wireguard
+      - name: Managed two-peer multi-Link QUIC acceptance in hosted-root namespaces
+        shell: bash
+        run: |
+          test "$GITHUB_ACTIONS" = true
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$GITHUB_REPOSITORY" = ach1992/simple-tun-link
+          test "$GITHUB_EVENT_NAME" = pull_request
+          go_binary="$(command -v go)"
+          [[ "$go_binary" = /* && -x "$go_binary" ]]
+          toolchain_dir="$(dirname "$go_binary")"
+          required_toolchain="$(awk '$1 == "toolchain" {print $2}' go.mod)"
+          [[ "$required_toolchain" =~ ^go[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$(GOTOOLCHAIN=local "$go_binary" env GOVERSION)" = "$required_toolchain"
+          fixture="$(mktemp -d "$RUNNER_TEMP/stl-quic-official.XXXXXXXX")"
+          fixture_identity="$(stat -c '%d:%i' -- "$fixture")"
+          cleanup_official_fixture() {
+            [[ -d "$fixture" && ! -L "$fixture" && "$(stat -c '%d:%i' -- "$fixture")" = "$fixture_identity" ]] || {
+              echo 'Owned official fixture identity changed; cleanup refused' >&2
+              return 1
+            }
+            sudo rm -rf --one-file-system -- "$fixture"
+          }
+          trap cleanup_official_fixture EXIT
+          case "$(uname -m)" in
+            x86_64) arch=amd64; digest=907ba8c9693edb104b20582681fb7dc15639d5b64a9cbb616a7b539190a86691 ;;
+            aarch64) arch=arm64; digest=a68a61a84452ca250ce0368202521965ca9cc9d801a404f1dc9008ac6cf677a7 ;;
+            *) echo 'managed architecture acceptance=NOT_RUN: no official pin'; exit 1 ;;
+          esac
+          curl --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --location --silent --show-error --max-time 120 \
+            "https://github.com/HyNetworks/hysteria/releases/download/app%2Fv2.13.0/hysteria-linux-$arch" \
+            --output "$fixture/hysteria-linux-$arch"
+          printf '%s  %s\n' "$digest" "$fixture/hysteria-linux-$arch" | sha256sum --check --status
+          chmod 0700 "$fixture/hysteria-linux-$arch"
+          sudo chown 0:0 -- "$fixture" "$fixture/hysteria-linux-$arch"
+          sudo chmod 0700 -- "$fixture" "$fixture/hysteria-linux-$arch"
+          # Forward actual CI provenance values; the outer fixture also reads
+          # this real event file and verifies both PR repositories. These
+          # values must never be synthesized on a connected server.
+          sudo env -i PATH="$toolchain_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+            GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
+            GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_EVENT_NAME="$GITHUB_EVENT_NAME" \
+            GITHUB_EVENT_PATH="$GITHUB_EVENT_PATH" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+            GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
+            STL_RUN_PRIVILEGED_E2E=1 STL_QUIC_MANAGED_ROOT_LAUNCH=github-hosted-pr \
+            STL_QUIC_HYSTERIA_BIN="$fixture/hysteria-linux-$arch" \
+            /usr/bin/bash scripts/e2e/quic-managed-wireguard.sh

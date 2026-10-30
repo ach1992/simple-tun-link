@@ -24,12 +24,13 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/maintenance"
 	"github.com/ach1992/simple-tun-link/internal/managedmtu"
+	"github.com/ach1992/simple-tun-link/internal/quichelper"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 	"github.com/ach1992/simple-tun-link/internal/version"
 )
 
-const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl menu\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link diagnose <link-id> [--mtu <bytes>] [--json]\n  stl link diagnose --all [--timeout <duration>] [--parallel <1..4>] [--json]\n  stl link throughput <link-id> --confirm <link-id> [--seconds <1..10>] [--json]\n  stl link preview --stdin [--json]\n  stl link import --stdin --confirm <preview-token> [--json]\n  stl link export <link-id> [--json]\n  stl link create-wireguard --stdin --output <private-file> [--json]\n  stl link create-wss --stdin --output <private-file> [--json]\n  stl link preview-wss --stdin [--json]\n  stl link diagnose-wss <link-id> [--json]\n  stl link plan-wss-replacement <old-link-id> [--json]\n  stl link supersede-wss <old-id> --replacement <new-id> --confirm <old-id> [--json]\n  stl link retire-wss <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-vacant <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-removed <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-repair-vacant <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-original <link-id> --confirm <link-id> [--json]\n  stl link arm-wss-cold-boot <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-cold-boot <link-id> --confirm <link-id> [--json]\n  stl link import-wss --stdin --confirm <preview-sha256> [--json]\n  stl link resume-wss --stdin --confirm <preview-sha256> [--json]\n  stl link create-ipsec --stdin --output <private-file> [--json]\n  stl link activate-ipsec <link-id> --confirm <link-id> [--json]\n  stl link connect-ipsec <link-id> --confirm <link-id> [--json]\n  stl link retire-ipsec <link-id> --confirm <link-id> [--json]\n  stl link reconcile-ipsec <link-id> --confirm <link-id> [--json]\n  stl link reconcile-xfrm-ipsec <link-id> --confirm <link-id> [--json]\n  stl link resume-wireguard --stdin --confirm <setup-digest> [--json]\n  stl link recover-handoff --source <private-temp> --output <private-file> --confirm <link-id> [--json]\n  stl link credential retire <link-id> --confirm <link-id> --public-key <local-public-key> [--json]\n  stl link ensure --stdin [--json]\n  stl link remove <link-id> --confirm <link-id> [--json]\n  stl link restore --all\n  stl doctor ipsec [--json]\n  stl maintenance pre-uninstall --json\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
+const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl menu\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link diagnose <link-id> [--mtu <bytes>] [--json]\n  stl link diagnose --all [--timeout <duration>] [--parallel <1..4>] [--json]\n  stl link throughput <link-id> --confirm <link-id> [--seconds <1..10>] [--json]\n  stl link preview --stdin [--json]\n  stl link import --stdin --confirm <preview-token> [--json]\n  stl link export <link-id> [--json]\n  stl link create-wireguard --stdin --output <private-file> [--json]\n  stl link create-wss --stdin --output <private-file> [--json]\n  stl link create-quic --stdin --output <private-file> [--json]\n  stl link preview-quic --stdin [--json]\n  stl link import-quic --stdin --confirm <preview-sha256> [--json]\n  stl link resume-quic --stdin --confirm <preview-sha256> [--json]\n  stl link diagnose-quic <link-id> [--json]\n  stl link retire-quic <link-id> --confirm <link-id> [--json]\n  stl link reconcile-quic-cold-boot <link-id> --confirm <link-id> [--json]\n  stl link preview-wss --stdin [--json]\n  stl link diagnose-wss <link-id> [--json]\n  stl link plan-wss-replacement <old-link-id> [--json]\n  stl link supersede-wss <old-id> --replacement <new-id> --confirm <old-id> [--json]\n  stl link retire-wss <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-vacant <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-removed <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-repair-vacant <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-original <link-id> --confirm <link-id> [--json]\n  stl link arm-wss-cold-boot <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-cold-boot <link-id> --confirm <link-id> [--json]\n  stl link import-wss --stdin --confirm <preview-sha256> [--json]\n  stl link resume-wss --stdin --confirm <preview-sha256> [--json]\n  stl link create-ipsec --stdin --output <private-file> [--json]\n  stl link activate-ipsec <link-id> --confirm <link-id> [--json]\n  stl link connect-ipsec <link-id> --confirm <link-id> [--json]\n  stl link retire-ipsec <link-id> --confirm <link-id> [--json]\n  stl link reconcile-ipsec <link-id> --confirm <link-id> [--json]\n  stl link reconcile-xfrm-ipsec <link-id> --confirm <link-id> [--json]\n  stl link resume-wireguard --stdin --confirm <setup-digest> [--json]\n  stl link recover-handoff --source <private-temp> --output <private-file> --confirm <link-id> [--json]\n  stl link credential retire <link-id> --confirm <link-id> --public-key <local-public-key> [--json]\n  stl link ensure --stdin [--json]\n  stl link remove <link-id> --confirm <link-id> [--json]\n  stl link restore --all\n  stl doctor ipsec [--json]\n  stl maintenance pre-uninstall --json\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
 
 const jsonSchemaVersion = 1
 
@@ -44,6 +45,14 @@ type runtimeOptions struct {
 	// Test-only owner-scoped WSS host observation seam. Nil uses real nft,
 	// systemd and kernel WireGuard readback after exact saved-State admission.
 	wssObserver func(context.Context, string, linux.BoundedRunner, domain.Link) (WSSLinkDiagnostics, error)
+	// Test-only read-only observation seam. Production always calls the
+	// canonical Engine's locked, generation-bound QUIC inspection.
+	quicObserver func(context.Context, domain.LinkID) (app.QUICInspection, error)
+	// Test-only helper diagnostic source; nil uses attributed native Host.Diagnose.
+	quicHelperObserver func(context.Context, domain.Link) (quichelper.HelperDiagnostics, error)
+	quicRetirementHost quicRetirementHost
+	// Test-only assembly hook; production never receives a caller-selected Engine policy.
+	configureEngine func(*app.Engine)
 	// Test-only module observation seam. Production uses the real read-only
 	// sysfs/modinfo probe; never expose this through CLI input.
 	moduleObserve func(context.Context, string) linux.KernelModuleState
@@ -158,6 +167,12 @@ func runWithRuntimeInput(args []string, input io.Reader, stdout, stderr io.Write
 		if len(args) >= 2 && args[1] == "reconcile-wss-removed" {
 			return linkWSSCrashRemovedCommand(args[2:], stdout, stderr, options)
 		}
+		if len(args) >= 2 && args[1] == "reconcile-quic-cold-boot" {
+			return linkQUICColdBootReconcileCommand(args[2:], stdout, stderr, options)
+		}
+		if len(args) >= 2 && args[1] == "retire-quic" {
+			return linkQUICRetireCommand(args[2:], stdout, stderr, options)
+		}
 		if len(args) >= 2 && args[1] == "retire-wss" {
 			return linkWSSRetireCommand(args[2:], stdout, stderr, options)
 		}
@@ -166,6 +181,13 @@ func runWithRuntimeInput(args []string, input io.Reader, stdout, stderr io.Write
 		}
 		if len(args) >= 2 && args[1] == "plan-wss-replacement" {
 			return linkWSSReplacementPlanCommand(args[2:], stdout, stderr, options)
+		}
+		if len(args) >= 2 && args[1] == "diagnose-quic" {
+			return linkQUICDiagnoseCommand(args[1:], stdout, stderr, options)
+		}
+		if len(args) >= 2 && (args[1] == "create-quic" || args[1] == "preview-quic" ||
+			args[1] == "import-quic" || args[1] == "resume-quic") {
+			return linkQUICCommand(args[1:], input, stdout, stderr, options)
 		}
 		if len(args) >= 2 && args[1] == "diagnose-wss" {
 			return linkWSSDiagnoseCommand(args[1:], stdout, stderr, options)
@@ -277,7 +299,19 @@ func assembleRuntimeOptions(stateRoot string) (*runtimeOptions, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize WSS WireGuard backend: %w", err)
 	}
-	options.backends = []backend.Backend{gre, ipip, wg, wssWG}
+	quicHost, err := quichelper.NewHost(options.stateRoot, state.NewFileStore(options.stateRoot))
+	if err != nil {
+		return nil, fmt.Errorf("initialize QUIC host adapter: %w", err)
+	}
+	quicWG, err := wgbackend.NewQUIC(wgbackend.Options{
+		Runner: runner, Routes: routes, Firewall: firewall, Collisions: collisions, Keys: keys,
+		QUICHost: quicHost,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("initialize QUIC WireGuard backend: %w", err)
+	}
+	options.quicRetirementHost = quicHost
+	options.backends = []backend.Backend{gre, ipip, wg, wssWG, quicWG}
 	// Runtime activation is read-only admission followed by registration.
 	// The unverified/missing native-exclusive service blocks IPsec ONLY;
 	// GRE/IPIP/WireGuard assembly and behavior must stay independent.
@@ -372,6 +406,20 @@ func buildRuntimeEngine(options runtimeOptions) (*app.Engine, error) {
 			keys: keys, guard: guard,
 		})
 	}
+	if _, hasQUIC := registry.Get(domain.BackendWireGuardQUIC); hasQUIC {
+		keys, err := wgbackend.NewKeyStore(options.stateRoot)
+		if err != nil {
+			return nil, fmt.Errorf("initialize QUIC retirement key store: %w", err)
+		}
+		host := options.quicRetirementHost
+		if host == nil {
+			host, err = quichelper.NewHost(options.stateRoot, store)
+			if err != nil {
+				return nil, fmt.Errorf("initialize QUIC retirement host: %w", err)
+			}
+		}
+		engine.SetQUICRetirementStore(quicCredentialRetirement{root: options.stateRoot, host: host, keys: keys})
+	}
 	// Reboot module restoration is permitted only for the canonical, root-owned
 	// installed executable, not for tests, an offline binary, or any arbitrary
 	// state root. Engine narrows execution further to saved committed Links
@@ -386,6 +434,9 @@ func buildRuntimeEngine(options runtimeOptions) (*app.Engine, error) {
 		// All default-root production mutations acquire a shared lock before
 		// Link/resource locks. The installer holds its exclusive peer.
 		engine.SetMaintenanceGuard(maintenance.NewInstalledGate())
+	}
+	if options.configureEngine != nil {
+		options.configureEngine(engine)
 	}
 	return engine, nil
 }

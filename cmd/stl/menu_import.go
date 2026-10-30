@@ -188,6 +188,7 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		menuOption(out, "1", "GRE / IPIP", "Unencrypted; visible paste")
 		menuOption(out, "2", "WireGuard / IPsec", "Sensitive; hidden paste")
 		menuOption(out, "3", "WireGuard / WSS + TLS", "Sensitive peer JSON; hidden paste")
+		menuOption(out, "4", "WireGuard / QUIC + TLS", "Sensitive peer JSON; hidden paste")
 		menuOption(out, "0", "Back", "Main menu")
 		fmt.Fprint(out, "Choose type [1]: ")
 		mode, err := readMenuAnswer(reader)
@@ -195,7 +196,7 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			return 0
 		}
 		if err != nil {
-			menuNotice(out, "WARNING", "Choose a listed number: 0, 1, 2 or 3.")
+			menuNotice(out, "WARNING", "Choose a listed number: 0, 1, 2, 3 or 4.")
 			continue
 		}
 		if mode == "" {
@@ -204,12 +205,15 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		if mode == "0" || strings.EqualFold(mode, "q") {
 			return 0
 		}
-		if mode != "1" && mode != "2" && mode != "3" {
-			menuNotice(out, "WARNING", "Choose 1 for GRE/IPIP, 2 for WireGuard/IPsec or 3 for WireGuard/WSS.")
+		if mode != "1" && mode != "2" && mode != "3" && mode != "4" {
+			menuNotice(out, "WARNING", "Choose 1 for GRE/IPIP, 2 for WireGuard/IPsec, 3 for WireGuard/WSS or 4 for WireGuard/QUIC.")
 			continue
 		}
 		if mode == "3" {
 			return menuImportWSS(input, reader, out, errOut, options)
+		}
+		if mode == "4" {
+			return menuImportQUIC(input, reader, out, errOut, options)
 		}
 		// Only display a secret-bearing paste prompt AFTER ECHO is masked.
 		// The protected operation also owns terminal restoration on every

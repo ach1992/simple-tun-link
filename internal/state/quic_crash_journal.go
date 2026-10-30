@@ -19,6 +19,7 @@ import (
 // Until a separately reviewed effect/recovery implementation is available,
 // unresolved operations remain quarantined and cannot be cleared or replayed.
 type QUICCrashOperation struct {
+	Managed             *QUICManagedOperation    `json:"managed,omitempty"`
 	Plan                composition.QUICHostPlan `json:"plan"`
 	Addresses           domain.LinkAddresses     `json:"addresses"`
 	WireGuard           domain.WireGuardOptions  `json:"wireguard"`
@@ -63,7 +64,7 @@ func (op QUICCrashOperation) Validate() error {
 		return fmt.Errorf("QUIC physical underlay is captured by the private Link route")
 	}
 	if op.WireGuard.PeerPort == 0 || op.WireGuard.ListenPort != local.LocalWGUDPPort ||
-		(local.Role == composition.Dial && op.WireGuard.PeerPort != local.LocalHelperUDPPort) {
+		(local.Role == composition.Dial && ((op.Managed == nil && op.WireGuard.PeerPort != local.LocalHelperUDPPort) || (op.Managed != nil && op.WireGuard.PeerPort != local.RemoteWGUDPPort))) {
 		return fmt.Errorf("invalid QUIC pre-effect WireGuard and carrier UDP ports")
 	}
 	provider, err := composition.WireGuardProviderClaims(local.LinkID, op.Addresses.Local, op.WireGuard)
@@ -113,6 +114,9 @@ func (op QUICCrashOperation) Validate() error {
 		op.ExecutablePath == "/" || strings.ContainsAny(op.ExecutablePath, "\x00\r\n") {
 		return fmt.Errorf("invalid QUIC pre-effect pinned executable identity")
 	}
+	if op.Managed != nil {
+		return op.ValidateManaged()
+	}
 	return nil
 }
 
@@ -127,8 +131,13 @@ func validateQUICCrashOperations(s Snapshot) error {
 			return fmt.Errorf("duplicate QUIC pre-effect Link intent")
 		}
 		seen[id] = true
-		if _, exists := s.Find(id); exists {
-			return fmt.Errorf("QUIC pre-effect Link ID already committed")
+		record, exists := s.Find(id)
+		if op.Managed == nil {
+			if exists {
+				return fmt.Errorf("QUIC pre-effect Link ID already committed")
+			}
+		} else if exists != op.Managed.HadCommittedLink || (exists && (record.Desired != op.Managed.Intent || record.QUICGeneration != op.Managed.OriginalGeneration)) {
+			return fmt.Errorf("managed QUIC journal original committed owner changed")
 		}
 		if _, exists := s.FindPendingSender(id); exists {
 			return fmt.Errorf("QUIC pre-effect Link ID overlaps pending WireGuard")
@@ -146,6 +155,9 @@ func validateQUICCrashOperations(s Snapshot) error {
 			return fmt.Errorf("QUIC pre-effect Link ID has an IPsec removal receipt")
 		}
 		for _, record := range s.Links {
+			if op.Managed != nil && record.Desired.ID == id {
+				continue
+			}
 			for _, reserved := range record.OwnedResources {
 				if conflictQUICClaims(op.Resources, []domain.ResourceClaim{reserved}) {
 					return fmt.Errorf("QUIC pre-effect claims overlap a committed Link")

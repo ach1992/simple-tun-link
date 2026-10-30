@@ -27,6 +27,9 @@ const (
 	// in the first candidate. A UDP-shaped packet is NOT blanket permission
 	// to compose native GRE/IPIP FOU/GUE or IPsec through WSS.
 	WSS Kind = "wss"
+	// QUIC carries the same native WireGuard datagrams through the precisely
+	// scoped Hysteria topology. Runtime authority remains in the Engine.
+	QUIC Kind = "quic"
 )
 
 type Role string
@@ -55,6 +58,7 @@ type Carrier struct {
 	Kind            Kind
 	Role            Role
 	PublicTCPPort   uint16
+	PublicUDPPort   uint16
 	LocalForwardUDP uint16
 	TLSServerName   string
 	CredentialOwner domain.LinkID
@@ -79,6 +83,7 @@ type Path struct {
 	WSSRemoteWGUDPPort uint16
 	TLSName            string
 	CredentialOwner    domain.LinkID
+	QUIC               QUICHostPlan
 }
 
 // Build proves a supported *design* combination, never live transport
@@ -89,6 +94,11 @@ type Path struct {
 // alone never authorizes host effects; its Engine recovery, independent
 // review and release gates remain separate.
 func CarrierForLink(link domain.Link) Carrier {
+	if link.Backend == domain.BackendWireGuardQUIC {
+		return Carrier{Kind: QUIC, Role: Role(link.QUIC.Role),
+			PublicUDPPort: link.QUIC.UDPPort, LocalForwardUDP: link.QUIC.ForwardUDPPort,
+			TLSServerName: link.QUIC.TLSServerName, CredentialOwner: link.ID}
+	}
 	if link.Backend != domain.BackendWireGuardWSS {
 		return Carrier{}
 	}
@@ -112,8 +122,8 @@ func Build(link domain.Link, carrier Carrier) (Path, error) {
 	}
 	switch carrier.Kind {
 	case Direct:
-		if link.Backend == domain.BackendWireGuardWSS {
-			return Path{}, fmt.Errorf("wireguard-wss cannot use the native WireGuard path")
+		if link.Backend == domain.BackendWireGuardWSS || link.Backend == domain.BackendWireGuardQUIC {
+			return Path{}, fmt.Errorf("a carried WireGuard Link cannot use the direct WireGuard path")
 		}
 		if carrier != (Carrier{}) {
 			return Path{}, fmt.Errorf("native path must not carry a carrier role, endpoint or identity")
@@ -126,6 +136,9 @@ func Build(link domain.Link, carrier Carrier) (Path, error) {
 		}
 		return plan, nil
 	case WSS:
+		if carrier.PublicUDPPort != 0 {
+			return Path{}, fmt.Errorf("WSS cannot specify a QUIC physical UDP endpoint")
+		}
 		// Precisely one proven inner framing/topology is supported today.
 		// A matching UDP wire shape alone does not establish GRE FOU/GUE
 		// endpoint/device/source compatibility.
@@ -220,6 +233,8 @@ func Build(link domain.Link, carrier Carrier) (Path, error) {
 			return Path{}, fmt.Errorf("WSS role must be dial or listen")
 		}
 		return plan, nil
+	case QUIC:
+		return buildQUICPath(link, carrier, plan)
 	default:
 		return Path{}, fmt.Errorf("unsupported carrier kind %q", carrier.Kind)
 	}
@@ -227,7 +242,7 @@ func Build(link domain.Link, carrier Carrier) (Path, error) {
 
 func nativePayload(link domain.Link) (Payload, error) {
 	switch link.Backend {
-	case domain.BackendWireGuard, domain.BackendWireGuardWSS:
+	case domain.BackendWireGuard, domain.BackendWireGuardWSS, domain.BackendWireGuardQUIC:
 		if link.Encapsulation == domain.EncapUDP {
 			return UDPDatagrams, nil
 		}
@@ -281,6 +296,14 @@ func validTLSName(value string) bool {
 // The composed backend must still independently inspect physical ownership,
 // reserve real firewall/process/file identities, and verify post-apply state.
 func (p Path) CarrierClaims() []domain.ResourceClaim {
+	if p.Kind == QUIC {
+		return []domain.ResourceClaim{
+			{Kind: domain.ResourceBackendID, Key: "quic/helper/" + string(p.CredentialOwner)},
+			{Kind: domain.ResourceBackendID, Key: "quic/tls-identity/" + string(p.CredentialOwner)},
+			{Kind: domain.ResourceFirewall, Key: "quic/nft/" + string(p.CredentialOwner)},
+			{Kind: domain.ResourceUDPListenPort, Key: strconv.Itoa(int(p.QUIC.Local.LocalHelperUDPPort))},
+		}
+	}
 	if p.Kind != WSS {
 		return nil
 	}

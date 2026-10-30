@@ -22,7 +22,10 @@ func (b *Backend) Apply(ctx context.Context, req core.Request, observed core.Obs
 	if !ok {
 		return nil, fmt.Errorf("unexpected WireGuard plan")
 	}
-	if b.wssHost != nil {
+	if b.quicHost != nil && req.Operation == core.OperationRemove {
+		return b.removeQUIC(ctx, req, obs, p)
+	}
+	if b.managedHost() != nil {
 		return b.applyWSS(ctx, req, obs, p)
 	}
 	switch req.Operation {
@@ -128,13 +131,19 @@ func (b *Backend) applyRemove(ctx context.Context, req core.Request, p plan) (co
 func (b *Backend) createOwnedInterface(ctx context.Context, link domain.Link, name string) (creationProgress, error) {
 	progress := creationProgress{}
 	var index int
-	if b.wssHost != nil {
+	if b.managedHost() != nil {
 		nonce := core.WSSOrigin(ctx)
-		original, err := linux.WSSOwnerTag(link.ID, nonce)
+		if b.quicHost != nil {
+			nonce = core.QUICOrigin(ctx)
+		}
+		original, err := managedOwnerTag(ctx, link)
 		if err != nil {
 			return progress, fmt.Errorf("WSS original kernel object provenance unavailable")
 		}
 		staging, err := linux.WSSStagingName(link.ID, nonce)
+		if b.quicHost != nil {
+			staging, err = linux.QUICWGStagingName(link.ID, nonce)
+		}
 		if err != nil {
 			return progress, err
 		}
@@ -144,6 +153,9 @@ func (b *Backend) createOwnedInterface(ctx context.Context, link domain.Link, na
 		create := b.wssCreateStaged
 		if create == nil {
 			create = linux.CreateWSSWireGuardStaged
+			if b.quicHost != nil {
+				create = linux.CreateQUICWireGuardStaged
+			}
 		}
 		if err := create(ctx, staging); err != nil {
 			// An RTM_NEWLINK ACK error/cancellation does not prove the
@@ -334,7 +346,7 @@ func (b *Backend) rollbackCreatedInterface(ctx context.Context, link domain.Link
 				return fmt.Errorf("WireGuard ifindex was reused; preserving foreign interface")
 			}
 		}
-		if b.wssHost != nil {
+		if b.managedHost() != nil {
 			// This is not a verified deletion. The original WG may have
 			// moved to another namespace and become administratively DOWN,
 			// so neither a local wg inventory nor an ss socket scan can

@@ -362,3 +362,63 @@ Staging names and public nonce markers are not intended to defeat a
 malicious local root administrator who can rewrite protected State and
 forge kernel objects; actual systemd, two-host and ARM64 WSS field
 acceptance and independent review remain separate gates.
+
+## Managed QUIC/TLS security boundary
+
+The managed QUIC carrier uses real kernel WireGuard inside the fixed
+Hysteria app/v2.13.0 UDP forwarding configuration. Admission pins the exact
+architecture-specific official executable digest and protected canonical
+path. TLS 1.3, exact server SAN verification, independent client-certificate
+trust and a per-Link bearer are all required. The listener ACL admits only
+its exact loopback WireGuard destination and ends with deny-all. No public
+WG fallback, unrestricted proxy, arbitrary configuration extension or
+certificate-verification bypass is exposed.
+
+The canonical Engine holds maintenance, Link and resource locks, persists
+a managed pre-effect journal before private staging or host effects, and
+retains executable/material descriptors through verification and State
+publication. The ingress DROP guard precedes WG creation; helper shutdown
+and positive original WG termination precede guard removal. The committed
+State v5 generation binds trusted boot/source, namespace, original ifindex,
+nft handles, creation/material nonces and protected executable/file identity.
+Public names, shape, hashes, nonce markers and source-only birth receipts
+alone never authorize adoption or deletion. Historical source-only journals
+are immutable and nonpromotable.
+
+These checks retain the documented WSS local-root boundary: a malicious
+administrator able to rewrite protected State and forge kernel resources
+is outside the provenance guarantee. A retained descriptor prevents ordinary
+inode recycling while held; it does not prevent privileged in-place writes.
+A successful process launch is not evidence of peer trust or private traffic.
+
+Managed helpers execute the durable canonical path under the exact admitted
+systemd policy with `Restart=on-failure`. The legacy creator-process FD path
+is never used for managed restart. Current executable, argv, environment,
+unit policy, activation edges, process/cgroup/namespace and material identity
+are verified before lifecycle effects. Foreign hooks, aliases, restarters or
+ambiguous manager observations cause refusal. Dial connects lazily when
+forwarded traffic arrives so the first endpoint can be configured before
+peer import; authentication and transport failures remain observable.
+
+TLS keys, WG keys, bearer, helper configuration and the receiver handoff are
+sensitive. Ordinary State contains public fingerprints and provenance only.
+Managed process output goes to the existing journal; its actual stderr FD
+must match any `JOURNAL_STREAM` identity. Public diagnostics allow only bounded
+records attributed to the trusted boot, unit and invocation, then project
+recognized events and safe exit/process facts. Raw `MESSAGE`, remote error,
+peer address/ID, URI, environment and configuration never become public
+error detail. Errors retain lifecycle stage, uncertainty and the next safe
+action without echoing input secrets. Do not upload raw protected files or
+journal transcripts to an Issue.
+
+Removal verifies the recorded generation even if certificates have expired;
+new activation still requires current TLS trust. Retirement requires the
+exact successful termination receipt and fresh host/State absence, and
+refuses substituted files. A copied receiver handoff outside STL's private
+store remains operator-managed. Uncertain operation journals are retained;
+neither successful-looking undo nor local namespace vacancy establishes
+extinction of an original interface. Explicit recovery must bind the exact
+managed attempt and independently prove its required original-termination
+or changed-host-kernel condition. A namespace or container restart never
+supplies host-kernel extinction. Physical reboot and two-peer acceptance
+remain separately authorized deployment activities.

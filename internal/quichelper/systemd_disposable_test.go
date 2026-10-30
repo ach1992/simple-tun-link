@@ -204,6 +204,12 @@ func verifyDisposableForeignUpholder(t *testing.T, run, attempt, binary string, 
 	if _, err := host.preflight(ctx, target); err == nil {
 		t.Fatal("first-start preflight admitted an effective foreign Upholds dependency")
 	}
+	if observed, err := inspectManagedUnit(ctx, target); err == nil {
+		if observed.Process != nil {
+			_ = observed.Process.Close()
+		}
+		t.Fatal("managed helper admission accepted an independently verified foreign Upholds dependency")
+	}
 	values, err := queryUnit(ctx, target.Name)
 	if err != nil || values["LoadState"] != "not-found" || values["MainPID"] != "0" ||
 		values["ExecMainPID"] != "0" || values["ExecStart"] != "" || values["ExecStartEx"] != "" {

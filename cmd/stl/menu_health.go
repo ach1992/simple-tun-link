@@ -161,6 +161,9 @@ func menuStatusTraffic(status linkStatusResponse) (rx, tx *uint64, unit string, 
 	case status.WSSState != nil:
 		a, b, last := status.WSSState.RXBytes, status.WSSState.TXBytes, status.WSSState.LastHandshakeUnix
 		return &a, &b, "bytes", &last
+	case status.QUICState != nil:
+		a, b, last := status.QUICState.RXBytes, status.QUICState.TXBytes, status.QUICState.LastHandshakeUnix
+		return &a, &b, "bytes", &last
 	case status.WireGuardState != nil:
 		a, b, last := status.WireGuardState.RXBytes, status.WireGuardState.TXBytes, status.WireGuardState.LatestHandshakeUnix
 		return &a, &b, "bytes", &last
@@ -394,6 +397,40 @@ func menuShowLocalStatus(id domain.LinkID, out, errOut io.Writer, options *runti
 			menuHealthLine(out, "WG ingress", "OK", "Scoped UDP protection active")
 		} else {
 			menuHealthLine(out, "WG ingress", "WARNING", "Scoped UDP guard not observed")
+		}
+	}
+	if result.QUICState != nil {
+		if result.QUICState.QUICHelperActive {
+			menuHealthLine(out, "QUIC helper", "OK", "Managed helper active")
+		} else {
+			menuHealthLine(out, "QUIC helper", "WARNING", "Helper not observed as active")
+		}
+		if result.QUICState.WGIngressGuardActive {
+			menuHealthLine(out, "WG ingress", "OK", "Scoped UDP protection active")
+		} else {
+			menuHealthLine(out, "WG ingress", "WARNING", "Scoped UDP guard not observed")
+		}
+		if helper := result.QUICState.Helper; helper != nil {
+			menuField(out, "QUIC process state", fmt.Sprintf("%s; restarts %d", helper.State, helper.RestartCount))
+			menuField(out, "QUIC protected material", helper.MaterialState)
+			menuField(out, "Carrier authentication", helper.Authentication+" (historical current-invocation events)")
+			menuField(out, "Helper event stream", helper.JournalState)
+			if helper.ExitResult != "" {
+				menuField(out, "QUIC helper exit", fmt.Sprintf("%s; code %d status %d", helper.ExitResult, helper.ExitCode, helper.ExitStatus))
+			}
+			start := len(helper.Events) - 4
+			if start < 0 {
+				start = 0
+			}
+			for _, event := range helper.Events[start:] {
+				menuField(out, "QUIC helper event", event.Event)
+				if event.ReasonCode != "" {
+					menuField(out, "Reason", event.ReasonCode)
+				}
+				if event.NextStep != "" {
+					menuField(out, "Next action", event.NextStep)
+				}
+			}
 		}
 	}
 	menuHealthLine(out, "Peer traffic", "UNKNOWN", "connectivity not measured; use Check connection for 5 pings")

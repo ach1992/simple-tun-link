@@ -1,5 +1,6 @@
-// Package quichelper implements only the original first start of an already
-// admitted QUIC helper. It cannot recover, restart, stop or retire a service.
+// Package quichelper supplies the canonical managed QUIC helper Host and the
+// separate source-only StartOriginal primitive. Their lifecycle authority,
+// unit policies and material generations are deliberately not interchangeable.
 package quichelper
 
 import (

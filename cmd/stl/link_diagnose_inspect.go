@@ -38,7 +38,7 @@ func inspectLinkDiagnostic(ctx context.Context, link domain.Link, options runtim
 			break
 		}
 	}
-	if selected == nil && link.Backend != domain.BackendWireGuardWSS {
+	if selected == nil && link.Backend != domain.BackendWireGuardWSS && link.Backend != domain.BackendWireGuardQUIC {
 		return linkDiagnostic{}, stlerr.New(stlerr.CodeUnsupported, "link_diagnose", string(link.ID), string(link.Backend),
 			"diagnostic backend is unavailable")
 	}
@@ -97,6 +97,8 @@ func inspectLinkDiagnostic(ctx context.Context, link domain.Link, options runtim
 			handshakeUTC: m.State.LatestHandshakeUnix}, nil
 	case domain.BackendWireGuardWSS:
 		return inspectWSSQuality(ctx, link, options)
+	case domain.BackendWireGuardQUIC:
+		return inspectQUICQuality(ctx, link, options)
 	default:
 		return linkDiagnostic{}, stlerr.New(stlerr.CodeUnsupported, "link_diagnose", string(link.ID), string(link.Backend),
 			"active diagnosis is not implemented for this backend")

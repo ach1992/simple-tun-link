@@ -108,7 +108,7 @@ func menuUninstallWithOps(input io.Reader, reader *bufio.Reader, out, errOut io.
 				fmt.Fprintln(errOut, "Saved Link identity is invalid; uninstall guidance halted.")
 				return 1
 			}
-			if record.Desired.Backend == domain.BackendWireGuard || record.Desired.Backend == domain.BackendIPsec {
+			if record.Desired.Backend == domain.BackendWireGuard || record.Desired.Backend == domain.BackendWireGuardWSS || record.Desired.Backend == domain.BackendWireGuardQUIC || record.Desired.Backend == domain.BackendIPsec {
 				hasProtected = true
 			}
 		}
@@ -131,6 +131,7 @@ func menuUninstallWithOps(input io.Reader, reader *bufio.Reader, out, errOut io.
 		withoutReceipts := snapshot
 		withoutReceipts.RemovalReceipts = nil
 		withoutReceipts.IPsecRemovalReceipts = nil
+		withoutReceipts.QUICAbandonmentReceipts = nil
 		if uninstallSnapshotEmpty(withoutReceipts) {
 			menuNotice(out, "WARNING", "An unfinished protected credential retirement receipt remains; Uninstall cannot proceed.")
 			menuField(out, "Reason", "credential_retirement_pending")
@@ -139,11 +140,14 @@ func menuUninstallWithOps(input io.Reader, reader *bufio.Reader, out, errOut io.
 			menuNotice(out, "WARNING", "Saved pending operations remain even though no Link is listed.")
 			menuField(out, "Reason", "saved_or_pending_links")
 			menuField(out, "NEXT ACTION", "Use STL's Link/recovery workflow to reconcile pending operations before Uninstall.")
+			if len(snapshot.QUICCrashOperations) > 0 {
+				menuProse(out, "QUIC pending attempts require exact stl link reconcile-quic-cold-boot <id> --confirm <id> after a verified later host reboot. Preserve incomplete material and State; same-boot replay remains refused.")
+			}
 		}
 		return 0
 	}
 	menuNotice(out, "INFO", "Zero saved Links. STL will inspect private State and the restore unit.")
-	if count := len(snapshot.RemovalReceipts) + len(snapshot.IPsecRemovalReceipts); count > 0 {
+	if count := len(snapshot.RemovalReceipts) + len(snapshot.IPsecRemovalReceipts) + len(snapshot.QUICAbandonmentReceipts); count > 0 {
 		menuField(out, "Retired receipts", fmt.Sprintf("%d history record(s) kept in protected State; no deletion", count))
 	}
 	if ops.canAct == nil || ops.preflight == nil || ops.install == nil || ops.verify == nil {

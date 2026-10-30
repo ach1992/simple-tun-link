@@ -17,6 +17,7 @@ archive_bytes=@BYTES@
 prefix=/usr/local
 prefix_set=0
 enable_wss=0
+enable_quic=0
 # An optional archive alone never consents to Carrier installation.
 while (( $# > 0 )); do
   case "$1" in
@@ -32,7 +33,12 @@ while (( $# > 0 )); do
       enable_wss=1
       shift
       ;;
-    *) fail 'usage: bash stl_<version>_linux_<arch>_local-install.sh [--prefix /existing/isolated/prefix] [--with-wss]' ;;
+    --with-quic)
+      [[ $enable_quic == 0 ]] || fail 'duplicate --with-quic'
+      enable_quic=1
+      shift
+      ;;
+    *) fail 'usage: bash stl_<version>_linux_<arch>_local-install.sh [--prefix /existing/isolated/prefix] [--with-wss] [--with-quic]' ;;
   esac
 done
 [[ $(uname -s) == Linux ]] || fail 'Linux required'
@@ -92,6 +98,23 @@ if [[ $enable_wss == 1 ]]; then
     fail 'selected optional WSS archive SHA-256 mismatch; core unchanged'
 fi
 
+# QUIC is independently selected and never downloaded as a side effect.
+quic_companion="${source%/*}/hysteria-linux-${architecture}"
+if [[ $enable_quic == 1 ]]; then
+  [[ -f $quic_companion && ! -L $quic_companion ]] ||
+    fail "QUIC selected but official $(basename -- "$quic_companion") absent; core unchanged"
+  quic_bytes=$(stat -c %s -- "$quic_companion")
+  [[ $quic_bytes =~ ^[0-9]+$ ]] && (( quic_bytes > 1024 && quic_bytes < 100000000 )) ||
+    fail 'selected optional QUIC binary size is unsafe; core unchanged'
+  case $architecture in
+    amd64) expected_quic_sha=907ba8c9693edb104b20582681fb7dc15639d5b64a9cbb616a7b539190a86691 ;;
+    arm64) expected_quic_sha=a68a61a84452ca250ce0368202521965ca9cc9d801a404f1dc9008ac6cf677a7 ;;
+    *) fail 'unsupported optional QUIC companion architecture' ;;
+  esac
+  [[ $(sha256sum -- "$quic_companion" | awk '{print $1}') == "$expected_quic_sha" ]] ||
+    fail 'selected optional QUIC binary SHA-256 mismatch; core unchanged'
+fi
+
 # Take a private immutable-for-this-operation copy of the entire transferred
 # file before reading its embedded archive; no GitHub/download step is needed.
 if [[ $EUID == 0 ]]; then
@@ -127,8 +150,10 @@ grep -Fxq -- "version=$version" "$stage/bundle/BUILD-MANIFEST.txt" &&
 # The one-file route uses the canonical installer's restricted automatic
 # Stable policy *under the maintenance lock*. Do not inspect the install
 # record here: any pre-lock decision would race a concurrent installer.
+core_backends=native,wireguard
+[[ $enable_quic == 0 ]] || core_backends=native,quic
 bash "$stage/bundle/install.sh" install --auto-stable --bundle "$stage/bundle" \
-  --prefix "$prefix" --backends native,wireguard
+  --prefix "$prefix" --backends "$core_backends"
 "$prefix/bin/stl" version --json || fail 'installed executable identity check failed'
 # Only --with-wss selects optional WSS; file presence is not consent.
 if [[ $enable_wss == 1 ]]; then
@@ -137,6 +162,12 @@ if [[ $enable_wss == 1 ]]; then
   fi
   printf '[OK] Selected pinned WSS helper installed; explicit Link setup is still required.
 '
+fi
+if [[ $enable_quic == 1 ]]; then
+  if ! bash "$stage/bundle/install.sh" companion-quic --binary "$quic_companion" --prefix "$prefix"; then
+    fail 'core installed but selected QUIC companion admission failed; no QUIC Link created'
+  fi
+  printf '[OK] Selected pinned Hysteria helper installed; explicit QUIC Link setup is still required.\n'
 fi
 if [[ $prefix == /usr/local ]]; then
   if [[ -t 0 && -t 1 ]]; then

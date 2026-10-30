@@ -26,11 +26,15 @@ for distro in 'ubuntu 22.04' 'ubuntu 22.10' 'ubuntu 24.04' 'ubuntu 26.04' \
   grep -qx "packages=iproute2 iptables kmod" "$root/out" || fail "wrong native package list on $distro"
   plan native,wireguard
   grep -qx "packages=iproute2 iptables kmod wireguard-tools" "$root/out" || fail "wrong WireGuard package list on $distro"
+  plan native,quic
+  grep -qx "packages=iproute2 iptables kmod wireguard-tools nftables" "$root/out" || fail "wrong QUIC package list on $distro"
+  plan quic,wireguard
+  grep -qx "packages=iproute2 iptables kmod wireguard-tools nftables" "$root/out" || fail "duplicate QUIC provider packages on $distro"
   plan native,ipsec
   grep -qx "packages=iproute2 iptables kmod charon-systemd strongswan-swanctl libstrongswan-standard-plugins" "$root/out" || fail "wrong IPsec package list on $distro"
   grep -q 'notice=IPsec PREPARE may briefly activate a new vendor strongSwan service' "$root/out" || fail 'IPsec package activation risk not flagged'
   plan all
-  grep -qx "packages=iproute2 iptables kmod wireguard-tools charon-systemd strongswan-swanctl libstrongswan-standard-plugins" "$root/out" ||
+  grep -qx "packages=iproute2 iptables kmod wireguard-tools nftables charon-systemd strongswan-swanctl libstrongswan-standard-plugins" "$root/out" ||
     fail "wrong all-backend package list on $distro"
   if [[ $distro == 'debian 11' ]]; then
     grep -q 'Debian 11 LTS ended 2026-08-31' "$root/err" || fail 'Debian 11 security EOL warning missing'
@@ -56,7 +60,7 @@ bad bash "$installer" requirements --os-release-file "$root/os-release"
 [[ ! -e $touch_marker ]] || fail 'OS release contents were executed as shell'
 write_os debian 13
 
-for backends in native, native,,wireguard wireguard,wireguard all,wireguard ipsec,ipsec nativex; do
+for backends in native, native,,wireguard wireguard,wireguard all,wireguard ipsec,ipsec quic,quic quic, nativex; do
   bad bash "$installer" requirements --backends "$backends" --os-release-file "$root/os-release"
 done
 

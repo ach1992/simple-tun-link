@@ -29,7 +29,7 @@ func (e *Engine) PrepareQUICCrash(ctx context.Context, intent state.QUICCrashOpe
 	host QUICHostCollisionInspector) (state.QUICCrashOperation, error) {
 	const operation = "quic_prepare_crash"
 	id := intent.Plan.Local.LinkID
-	if intent.Nonce != "" || len(intent.Resources) != 0 {
+	if intent.Managed != nil || intent.Nonce != "" || len(intent.Resources) != 0 {
 		return state.QUICCrashOperation{}, stlerr.New(stlerr.CodeInvalid, operation, string(id), "quic",
 			"QUIC pre-effect nonce and canonical resource claims are Engine-owned")
 	}

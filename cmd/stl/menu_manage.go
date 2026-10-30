@@ -52,7 +52,7 @@ func menuManage(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		menuSection(out, "Tunnel actions")
 		menuOption(out, "1", "Local status", "Read-only")
 		menuOption(out, "2", "Check connection", "Read-only diagnostics")
-		if selected.Backend == domain.BackendWireGuardWSS {
+		if selected.Backend == domain.BackendWireGuardWSS || selected.Backend == domain.BackendWireGuardQUIC {
 			menuActionOption(out, "3", "Share Setup Link", "Original sender offer only; may require private file", "SHOW")
 		} else {
 			menuActionOption(out, "3", "Share Setup Link", "Copy original link safely", "SHOW")

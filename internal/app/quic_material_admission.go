@@ -200,6 +200,9 @@ func (e *Engine) withQUICCrashMaterialLocks(ctx context.Context, id domain.LinkI
 	if err != nil {
 		return unavailable("protected State could not be rechecked under locks")
 	}
+	if op.Managed != nil {
+		return conflict("managed QUIC operations cannot enter source-only admission")
+	}
 	latest, present := fresh.FindQUICCrashOperation(id)
 	if !present || !reflect.DeepEqual(latest, op) {
 		return conflict("QUIC journal changed while acquiring its resource locks")

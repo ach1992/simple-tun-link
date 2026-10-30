@@ -358,6 +358,9 @@ func healthFromMeasurement(link domain.Link, measurement linkDiagnostic) healthL
 		if link.Backend == domain.BackendWireGuardWSS {
 			next = "No automatic action; inspect WSS helper/guard and peer quality separately. WSS carrier PMTU was not measured."
 		}
+		if link.Backend == domain.BackendWireGuardQUIC {
+			next = "No automatic action; inspect QUIC helper/guard and peer quality separately. QUIC carrier PMTU was not measured."
+		}
 		return healthLinkCheck{
 			Link: summarizeLink(link), Status: "observed", ReasonCode: "link_peer_replied",
 			Summary:  "The verified Link received a peer echo reply during bounded probes; future traffic is not guaranteed.",

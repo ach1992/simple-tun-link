@@ -17,11 +17,12 @@ type Backend string
 type Encapsulation string
 
 const (
-	BackendGRE          Backend = "gre"
-	BackendIPIP         Backend = "ipip"
-	BackendWireGuard    Backend = "wireguard"
-	BackendWireGuardWSS Backend = "wireguard-wss"
-	BackendIPsec        Backend = "ipsec"
+	BackendGRE           Backend = "gre"
+	BackendIPIP          Backend = "ipip"
+	BackendWireGuard     Backend = "wireguard"
+	BackendWireGuardWSS  Backend = "wireguard-wss"
+	BackendWireGuardQUIC Backend = "wireguard-quic"
+	BackendIPsec         Backend = "ipsec"
 
 	EncapNative Encapsulation = "native"
 	EncapFOU    Encapsulation = "fou"
@@ -139,6 +140,16 @@ type WSSOptions struct {
 	TLSServerName  string `json:"tls_server_name,omitempty"`
 }
 
+// QUICOptions is the public, endpoint-local Hysteria carrier topology.
+// Credentials and executable identities belong to the protected generation,
+// not to user-supplied Link configuration.
+type QUICOptions struct {
+	Role           string `json:"role"`
+	UDPPort        uint16 `json:"udp_port"`
+	ForwardUDPPort uint16 `json:"forward_udp_port,omitempty"`
+	TLSServerName  string `json:"tls_server_name,omitempty"`
+}
+
 // Link is desired backend-neutral state. Interface names and backend-owned
 // resource identities deliberately do not participate in Link identity.
 type Link struct {
@@ -154,6 +165,7 @@ type Link struct {
 	WireGuard WireGuardOptions `json:"wireguard,omitzero"`
 	MTU       MTUPolicy        `json:"mtu,omitzero"`
 	WSS       WSSOptions       `json:"wss,omitzero"`
+	QUIC      QUICOptions      `json:"quic,omitzero"`
 }
 
 // ResourceClaim is a secret-free identity for a collision-sensitive host
@@ -213,11 +225,22 @@ func (l Link) Validate() error {
 	if l.Backend != BackendGRE && l.GRE != (GREOptions{}) {
 		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "GRE options are only valid for the GRE backend")
 	}
-	if l.Backend != BackendWireGuard && l.Backend != BackendWireGuardWSS && l.WireGuard != (WireGuardOptions{}) {
+	if l.Backend != BackendWireGuard && l.Backend != BackendWireGuardWSS && l.Backend != BackendWireGuardQUIC && l.WireGuard != (WireGuardOptions{}) {
 		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "WireGuard options are only valid for the WireGuard backend")
 	}
 	if l.Backend != BackendWireGuardWSS && l.WSS != (WSSOptions{}) {
 		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "WSS options are only allowed with wireguard-wss")
+	}
+	if l.Backend != BackendWireGuardQUIC && l.QUIC != (QUICOptions{}) {
+		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "QUIC options are only allowed with wireguard-quic")
+	}
+	if l.Backend == BackendWireGuardQUIC {
+		if l.QUIC.UDPPort == 0 || (l.QUIC.Role != "dial" && l.QUIC.Role != "listen") ||
+			(l.QUIC.Role == "dial" && (l.QUIC.ForwardUDPPort == 0 || l.QUIC.ForwardUDPPort == l.WireGuard.ListenPort)) ||
+			(l.QUIC.Role == "listen" && (l.QUIC.ForwardUDPPort != 0 || l.QUIC.UDPPort == l.WireGuard.ListenPort)) ||
+			l.WireGuard.ListenPort == 0 || l.WireGuard.PeerPort == 0 {
+			return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "invalid QUIC dial/listen port and role configuration")
+		}
 	}
 	if l.Backend == BackendWireGuardWSS {
 		if l.WSS.TCPPort == 0 || (l.WSS.Role != "dial" && l.WSS.Role != "listen") ||
@@ -226,7 +249,7 @@ func (l Link) Validate() error {
 			return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "invalid WSS dial/listen port and role configuration")
 		}
 	}
-	if l.Backend == BackendWireGuard || l.Backend == BackendWireGuardWSS {
+	if l.Backend == BackendWireGuard || l.Backend == BackendWireGuardWSS || l.Backend == BackendWireGuardQUIC {
 		if l.Encapsulation != EncapUDP {
 			return stlerr.New(stlerr.CodeUnsupported, "validate_link", string(l.ID), string(l.Backend), "WireGuard requires UDP encapsulation")
 		}
