@@ -20,10 +20,17 @@ import (
 // Collect public topology through the menu. Key generation, private peer
 // handoff and host mutations remain in the canonical Engine and WSS CLI.
 func menuCreateWSS(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, opts *runtimeOptions) int {
+	return menuCreateWSSWithHost(input, reader, out, errOut, opts, wss.Host{StateRoot: createStateRoot(opts)})
+}
+
+// The internal host parameter lets isolated PTY tests inspect a pinned test
+// executable with the production identity guard, without installing a helper
+// or changing the global /usr/local/libexec/stl path.
+func menuCreateWSSWithHost(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
+	opts *runtimeOptions, companion wss.Host) int {
 	p := createPrompts{reader: reader, out: out, errOut: errOut}
 	menuSection(out, "Create / WireGuard over WSS (mTLS)")
 	menuNotice(out, "INFO", "WireGuard UDP is scoped to loopback; the remote peer connects over authenticated WSS/TLS TCP.")
-	companion := wss.Host{StateRoot: createStateRoot(opts)}
 	if _, err := wss.InspectPinnedExecutableForOperator(companion); err != nil {
 		menuNotice(out, "WARNING", "Approved wstunnel v11.0.0 companion is missing or untrusted.")
 		menuProse(out, "Place the exact official wstunnel_11.0.0_linux_ARCH.tar.gz beside the official one-file STL installer and rerun that SAME installer.")

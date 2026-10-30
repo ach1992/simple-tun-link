@@ -26,7 +26,10 @@ import (
 const (
 	menuOfficialReleasesURL = "https://api.github.com/repos/ach1992/simple-tun-link/releases?per_page=15"
 	menuUpdatedExecutable   = 106 // internal menu loop sentinel; never a CLI exit status
-	menuReleaseBytesLimit   = 256 * 1024
+	// The official GitHub API returns entire release notes and asset metadata
+	// for all 15 candidates. The real v0.1.14 list already exceeds 256 KiB;
+	// keep a bounded 1 MiB response instead of incorrectly refusing valid tags.
+	menuReleaseBytesLimit = 1024 * 1024
 )
 
 var menuReleaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$`)
@@ -376,7 +379,7 @@ func menuUpdate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 				case menuForwardMenuUpgrade(version.Version, release):
 					kind += " / upgrade"
 				case !release.Prerelease && menuStablePatchDowngrade(version.Version, release.TagName):
-					kind += " / downgrade (requires empty Links)"
+					kind += " / downgrade (requires empty State)"
 				default:
 					kind += " / check compatibility"
 				}
@@ -476,7 +479,7 @@ func menuUpdate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		stop()
 		if err != nil {
 			reason, next := uninstallGateGuidance(err)
-			menuNotice(out, "WARNING", "Downgrade requires no saved Links, pending operations or STL restore unit. No change started.")
+			menuNotice(out, "WARNING", "Downgrade requires canonical empty State (including no historical receipts), no pending operations and no STL restore unit. No change started.")
 			menuField(out, "Reason", reason)
 			menuField(out, "NEXT ACTION", next)
 			return 0
