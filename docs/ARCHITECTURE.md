@@ -927,6 +927,24 @@ the existing restore/Engine locking must be reused rather than duplicated.
 Changing a Dial TLS peer name cannot be inferred from its leaf certificate
 alone: the exact journal Plan and rendered helper config remain binding.
 
+The source-only Engine now also admits an **initial native WireGuard private
+key** for an unresolved QUIC journal through the bounded
+`quicwgkey.StageInitial(ctx, engine, linkID, privateKey)` entrypoint.
+The supplied typed key must derive the journal's immutable local WireGuard
+public key **before any file write**. It reuses the canonical maintenance/Link/resource locks and the
+existing WireGuard KeyStore's exclusive no-replace publication, root-private
+credentials directory, 0600 file and descriptor-bound public-key readback.
+An existing key is never replaced or adopted, even if its bytes match;
+a failed or uncertain publication leaves both the journal and possible
+original private file intact, for separate reconciliation. The source-only
+`quicwgkey.InspectJournalKey` is a read-only identity/permission check, not
+an original file-creation receipt or durable lifetime ownership proof. Native
+WG credential staging can occur independently of the protected Hysteria
+credential/config generation after the journal exists, but **neither**
+staging method can clear it, create a kernel WG interface, start a process,
+commit a Link or authorize host-resource adoption, rollback or retirement.
+This adds no secondary credential owner and no new State schema.
+
 A separate, **not yet wired to CLI, RestoreAll or a public Link backend**
 QUIC ingress origin step now provides the first host-effect implementation:
 `quicguard.StageOriginal(ctx, engine, linkID)` is the sole exported
