@@ -40,6 +40,11 @@ type OriginalGuardObservation struct {
 	NetworkNS    string
 	Status       GuardObservationStatus
 	Handles      linux.WGIngressLiveHandles
+	// Only filled by a positive recorded-original birth observer. Binding
+	// before/after effects to one receipt inode detects replacement within
+	// that observation; it proves no continuous nft object lifetime.
+	ReceiptDevice uint64
+	ReceiptInode  uint64
 }
 
 // InspectPendingOriginal inspects only the original unresolved QUIC journal
