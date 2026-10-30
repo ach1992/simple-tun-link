@@ -83,7 +83,7 @@ func (p Plan) HostPlan(localKernelWGUDPPort uint16) (composition.QUICHostPlan, e
 		return composition.QUICHostPlan{}, err
 	}
 	full := composition.QUICHostPlan{
-		Local: local, Physical: p.Underlay, TLSName: p.TLSName,
+		Local: local, Physical: p.Underlay, TLSName: p.TLSName, Obfuscation: p.Obfuscation,
 	}
 	if err := full.Validate(); err != nil {
 		return composition.QUICHostPlan{}, err

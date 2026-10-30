@@ -67,7 +67,11 @@ func renderHelperConfigFromFiles(root string, plan Plan, binary string,
 	// Build accepts a string token. No credential or rendered config is
 	// included in logs, public State, command args or returned identities.
 	token := files[names[3]]
-	cmd, err := Build(plan, binary, root, string(token[:64]))
+	obfuscationSecret := ""
+	if secret, present := files[obfuscationSecretFile]; present {
+		obfuscationSecret = string(secret[:64]) // Exact length validated above.
+	}
+	cmd, err := BuildWithObfuscation(plan, binary, root, string(token[:64]), obfuscationSecret)
 	if err != nil {
 		return nil, CredentialIdentity{}, err
 	}
@@ -98,7 +102,13 @@ func renderHelperConfigFromFD(fd int, root string, plan Plan, binary string) ([]
 	if err := requireExclusiveRole(fd, plan.Role); err != nil {
 		return nil, CredentialIdentity{}, err
 	}
-	names, _ := roleFiles(plan.Role)
+	if err := requireSelectedObfuscation(fd, plan); err != nil {
+		return nil, CredentialIdentity{}, err
+	}
+	names, err := planFiles(plan)
+	if err != nil {
+		return nil, CredentialIdentity{}, err
+	}
 	files := make(map[string][]byte, len(names))
 	defer clearRoleFiles(files)
 	for _, name := range names {

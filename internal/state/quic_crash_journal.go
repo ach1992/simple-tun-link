@@ -28,6 +28,7 @@ type QUICCrashOperation struct {
 	CertificateSHA256   string                   `json:"certificate_sha256"`
 	TrustCASHA256       string                   `json:"trust_ca_sha256"`
 	AuthorizationSHA256 string                   `json:"authorization_sha256"`
+	ObfuscationSHA256   string                   `json:"obfuscation_sha256,omitempty"`
 	HelperConfigSHA256  string                   `json:"helper_config_sha256"`
 	ExecutablePath      string                   `json:"executable_path"`
 	ExecutableSHA256    string                   `json:"executable_sha256"`
@@ -48,6 +49,9 @@ func (s Snapshot) FindQUICCrashOperation(id domain.LinkID) (QUICCrashOperation, 
 // cannot attest actual private-file bytes, installed binary, live host
 // vacancy or cross-host trust; a future runtime must check these separately.
 func (op QUICCrashOperation) Validate() error {
+	if !validQUICObfuscationFingerprint(op.Plan.Obfuscation, op.ObfuscationSHA256, op.AuthorizationSHA256) {
+		return fmt.Errorf("QUIC journal obfuscation identity does not match selected mode")
+	}
 	if err := op.Plan.Validate(); err != nil {
 		return fmt.Errorf("invalid QUIC pre-effect physical/role/TLS topology: %w", err)
 	}

@@ -9,9 +9,15 @@ import (
 
 func stageInspectionFixture(t *testing.T, role Role) (string, Plan, uint16, HelperConfigIdentity, string, string) {
 	t.Helper()
+	return stageInspectionFixtureWithObfuscation(t, role, "")
+}
+
+func stageInspectionFixtureWithObfuscation(t *testing.T, role Role, mode string) (string, Plan, uint16, HelperConfigIdentity, string, string) {
+	t.Helper()
 	root := privateStateRoot(t)
 	plan, port := helperConfigPlan(domainTestLinkID(), role)
-	listen, dial, err := GeneratePair(plan.LinkID, plan.TLSName)
+	plan.Obfuscation = mode
+	listen, dial, err := GeneratePairWithObfuscation(plan.LinkID, plan.TLSName, mode)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +47,7 @@ func copyForeignQUICGeneration(t *testing.T, dir string, role Role) string {
 	if err := os.Mkdir(foreign, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	names, err := generationFiles(role)
+	names, err := generationFiles(Plan{Role: role})
 	if err != nil {
 		t.Fatal(err)
 	}

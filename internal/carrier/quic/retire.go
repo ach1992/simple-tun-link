@@ -27,6 +27,11 @@ func RetireOwnedGeneration(ctx context.Context, root string, plan Plan, nonce st
 		identity.AuthorizationSHA256 != expected.Credentials.AuthorizationSHA256 || identity.HelperConfigSHA256 != expected.ConfigSHA256 {
 		return fmt.Errorf("original managed QUIC retirement identity missing")
 	}
+	if identity.ObfuscationSHA256 != expected.Credentials.ObfuscationSHA256 ||
+		(plan.Obfuscation == domain.QUICObfuscationPlain && identity.ObfuscationSHA256 != "") ||
+		(plan.Obfuscation == domain.QUICObfuscationSalamander && (!validSHA256(identity.ObfuscationSHA256) || identity.ObfuscationSHA256 == identity.AuthorizationSHA256)) {
+		return fmt.Errorf("QUIC retirement obfuscation identity differs from selected mode")
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -65,7 +70,7 @@ func RetireOwnedGeneration(ctx context.Context, root string, plan Plan, nonce st
 		generationDirectoryPinned(parent, dir, string(plan.LinkID), original) != nil {
 		return fmt.Errorf("QUIC retirement directory is not the recorded original")
 	}
-	names, err := generationFiles(plan.Role)
+	names, err := generationFiles(plan)
 	if err != nil {
 		return err
 	}
@@ -105,7 +110,7 @@ func RetireOwnedGeneration(ctx context.Context, root string, plan Plan, nonce st
 		return fmt.Errorf("QUIC retirement receipt is noncanonical")
 	}
 	clear(canonical)
-	if recorded.SchemaVersion != 1 || recorded.LinkID != plan.LinkID || recorded.Role != plan.Role || recorded.Nonce != nonce ||
+	if recorded.SchemaVersion != 1 || recorded.LinkID != plan.LinkID || recorded.Role != plan.Role || recorded.Obfuscation != plan.Obfuscation || recorded.Nonce != nonce ||
 		recorded.DirectoryDevice != identity.DirectoryDevice || recorded.DirectoryInode != identity.DirectoryInode || recorded.Expected != expected || len(recorded.Files) != len(names) {
 		return fmt.Errorf("QUIC retirement receipt differs from original managed generation")
 	}
@@ -193,6 +198,9 @@ func RetireOwnedGeneration(ctx context.Context, root string, plan Plan, nonce st
 }
 
 func validMaterialIdentity(i MaterialIdentity) bool {
+	if i.ObfuscationSHA256 != "" && !validSHA256(i.ObfuscationSHA256) {
+		return false
+	}
 	for _, digest := range []string{i.CertificateSHA256, i.TLSKeySHA256, i.TrustCASHA256, i.AuthorizationSHA256, i.HelperConfigSHA256} {
 		if !validSHA256(digest) {
 			return false
@@ -231,9 +239,10 @@ func retirementInventory(dir int) ([]string, error) {
 	}
 	f := os.NewFile(uintptr(fd), "quic-retirement-inventory")
 	defer f.Close()
-	// A generation has exactly five role/config files plus its receipt.
-	entries, err := f.ReadDir(7)
-	if err != nil && err != io.EOF || len(entries) > 6 {
+	// The largest admitted generation has six role/config files and receipt.
+	// The caller separately checks the selected mode's exact file inventory.
+	entries, err := f.ReadDir(8)
+	if err != nil && err != io.EOF || len(entries) > 7 {
 		return nil, fmt.Errorf("QUIC retirement inventory differs")
 	}
 	names := make([]string, 0, len(entries))

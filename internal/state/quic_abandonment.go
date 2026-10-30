@@ -28,7 +28,7 @@ func (r QUICAbandonmentReceipt) Validate() error {
 		!hostidentity.ValidBootID(r.ReconciledKernelBootID) || r.ReconciledKernelBootSource != hostidentity.VerifiedHostBootSourceV1 ||
 		r.ReconciledKernelBootID == op.Managed.KernelBootID || r.Files.Validate() != nil ||
 		r.Files.Certificate != op.CertificateSHA256 || r.Files.TrustCA != op.TrustCASHA256 ||
-		r.Files.Authorization != op.AuthorizationSHA256 || r.Files.HelperConfig != op.HelperConfigSHA256 {
+		r.Files.Authorization != op.AuthorizationSHA256 || r.Files.HelperConfig != op.HelperConfigSHA256 || r.Files.ObfuscationSHA256 != op.ObfuscationSHA256 {
 		return fmt.Errorf("invalid managed QUIC abandoned-attempt receipt")
 	}
 	return nil

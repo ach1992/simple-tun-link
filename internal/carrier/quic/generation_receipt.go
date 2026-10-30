@@ -33,6 +33,7 @@ type generationReceipt struct {
 	LinkID          domain.LinkID          `json:"link_id"`
 	Nonce           string                 `json:"nonce"`
 	Role            Role                   `json:"role"`
+	Obfuscation     string                 `json:"obfuscation,omitempty"`
 	DirectoryDevice uint64                 `json:"directory_device"`
 	DirectoryInode  uint64                 `json:"directory_inode"`
 	Expected        HelperConfigIdentity   `json:"expected"`
@@ -44,12 +45,12 @@ func validGenerationNonce(nonce string) bool {
 	return err == nil && len(raw) == 16 && hex.EncodeToString(raw) == nonce
 }
 
-func generationFiles(role Role) ([]string, error) {
-	names, err := roleFiles(role)
+func generationFiles(plan Plan) ([]string, error) {
+	names, err := planFiles(plan)
 	if err != nil {
 		return nil, err
 	}
-	files := []string{names[0], names[1], names[2], names[3], "helper.json"}
+	files := append(names, "helper.json")
 	sort.Strings(files)
 	return files, nil
 }
@@ -129,7 +130,7 @@ func captureGenerationReceiptFD(fd int, plan Plan, nonce string, expected Helper
 	if !validGenerationNonce(nonce) || validMaterialScope(plan) != nil {
 		return generationReceipt{}, fmt.Errorf("invalid QUIC journal generation identity")
 	}
-	files, err := generationFiles(plan.Role)
+	files, err := generationFiles(plan)
 	if err != nil {
 		return generationReceipt{}, err
 	}
@@ -145,7 +146,7 @@ func captureGenerationReceiptFD(fd int, plan Plan, nonce string, expected Helper
 		return generationReceipt{}, fmt.Errorf("QUIC generation directory is untrusted")
 	}
 	receipt := generationReceipt{SchemaVersion: 1, LinkID: plan.LinkID, Nonce: nonce,
-		Role: plan.Role, DirectoryDevice: uint64(dir.Dev), DirectoryInode: dir.Ino,
+		Role: plan.Role, Obfuscation: plan.Obfuscation, DirectoryDevice: uint64(dir.Dev), DirectoryInode: dir.Ino,
 		Expected: expected, Files: make(map[string]fileWitness, len(files))}
 	for _, name := range files {
 		identity, err := privateFileWitness(fd, name)
@@ -161,7 +162,7 @@ func captureGenerationReceiptFD(fd int, plan Plan, nonce string, expected Helper
 }
 
 // InspectGenerationReceipt never adopts matching bytes without the durable
-// exact-nonce receipt. Receipt, inventory and all five inode witnesses are
+// exact-nonce receipt. Receipt, mode-specific inventory and inode witnesses are
 // read through one pinned directory FD. The canonical path must still name
 // that generation when inspection returns.
 func InspectGenerationReceipt(root string, plan Plan, nonce string, expected HelperConfigIdentity) error {
@@ -296,7 +297,7 @@ func sameGenerationDirectoryFD(first, second int) bool {
 }
 
 func inspectGenerationReceiptFD(fd int, plan Plan, nonce string, expected HelperConfigIdentity) error {
-	names, err := generationFiles(plan.Role)
+	names, err := generationFiles(plan)
 	if err != nil {
 		return err
 	}
@@ -315,7 +316,7 @@ func inspectGenerationReceiptFD(fd int, plan Plan, nonce string, expected Helper
 		return fmt.Errorf("QUIC generation ownership receipt is invalid")
 	}
 	if recorded.SchemaVersion != 1 || recorded.LinkID != plan.LinkID ||
-		recorded.Nonce != nonce || recorded.Role != plan.Role ||
+		recorded.Nonce != nonce || recorded.Role != plan.Role || recorded.Obfuscation != plan.Obfuscation ||
 		recorded.Expected != expected {
 		return fmt.Errorf("QUIC generation receipt does not bind immutable journal")
 	}
@@ -461,7 +462,7 @@ func stageJournalGenerationWithHooks(ctx context.Context, root string, plan Plan
 	if err := generationDirectoryPinned(quicDir, fd, string(plan.LinkID), origin); err != nil {
 		return HelperConfigIdentity{}, err
 	}
-	names, err := generationFiles(plan.Role)
+	names, err := generationFiles(plan)
 	if err != nil {
 		return HelperConfigIdentity{}, err
 	}

@@ -148,6 +148,18 @@ type QUICOptions struct {
 	UDPPort        uint16 `json:"udp_port"`
 	ForwardUDPPort uint16 `json:"forward_udp_port,omitempty"`
 	TLSServerName  string `json:"tls_server_name,omitempty"`
+	Obfuscation    string `json:"obfuscation,omitempty"`
+}
+
+// Empty preserves the original plain-QUIC representation. Public versioned
+// inputs may offer an explicit "plain" choice, but normalize it at admission.
+const (
+	QUICObfuscationPlain      = ""
+	QUICObfuscationSalamander = "salamander"
+)
+
+func ValidQUICObfuscation(mode string) bool {
+	return mode == QUICObfuscationPlain || mode == QUICObfuscationSalamander
 }
 
 // Link is desired backend-neutral state. Interface names and backend-owned
@@ -235,6 +247,9 @@ func (l Link) Validate() error {
 		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "QUIC options are only allowed with wireguard-quic")
 	}
 	if l.Backend == BackendWireGuardQUIC {
+		if !ValidQUICObfuscation(l.QUIC.Obfuscation) {
+			return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "unsupported QUIC obfuscation mode")
+		}
 		if l.QUIC.UDPPort == 0 || (l.QUIC.Role != "dial" && l.QUIC.Role != "listen") ||
 			(l.QUIC.Role == "dial" && (l.QUIC.ForwardUDPPort == 0 || l.QUIC.ForwardUDPPort == l.WireGuard.ListenPort)) ||
 			(l.QUIC.Role == "listen" && (l.QUIC.ForwardUDPPort != 0 || l.QUIC.UDPPort == l.WireGuard.ListenPort)) ||

@@ -68,7 +68,7 @@ type originalOps struct {
 
 func expectedMaterial(op state.QUICCrashOperation) quic.HelperConfigIdentity {
 	return quic.HelperConfigIdentity{
-		ConfigSHA256: op.HelperConfigSHA256, Credentials: quic.CredentialIdentity{CertificateSHA256: op.CertificateSHA256, TrustCASHA256: op.TrustCASHA256, AuthorizationSHA256: op.AuthorizationSHA256},
+		ConfigSHA256: op.HelperConfigSHA256, Credentials: quic.CredentialIdentity{CertificateSHA256: op.CertificateSHA256, TrustCASHA256: op.TrustCASHA256, AuthorizationSHA256: op.AuthorizationSHA256, ObfuscationSHA256: op.ObfuscationSHA256},
 		Executable: pinnedexec.Identity{SHA256: op.ExecutableSHA256, Device: op.ExecutableDevice, Inode: op.ExecutableInode}}
 }
 

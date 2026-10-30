@@ -128,7 +128,7 @@ func TestStateV4QUICJournalMigratesWithoutManagedAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.SchemaVersion != 5 || len(s.QUICCrashOperations) != 1 || s.QUICCrashOperations[0].Managed != nil {
+	if s.SchemaVersion != SchemaVersion || len(s.QUICCrashOperations) != 1 || s.QUICCrashOperations[0].Managed != nil {
 		t.Fatal("v4 source journal was promoted")
 	}
 	if err := store.Update(ctx, func(s *Snapshot) error { s.QUICCrashOperations = nil; return nil }); err == nil {

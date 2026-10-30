@@ -129,6 +129,7 @@ func quicExpectedMaterialIdentity(op state.QUICCrashOperation) quic.HelperConfig
 			CertificateSHA256:   op.CertificateSHA256,
 			TrustCASHA256:       op.TrustCASHA256,
 			AuthorizationSHA256: op.AuthorizationSHA256,
+			ObfuscationSHA256:   op.ObfuscationSHA256,
 		},
 		Executable: pinnedexec.Identity{
 			SHA256: op.ExecutableSHA256,
@@ -212,7 +213,7 @@ func (e *Engine) withQUICCrashMaterialLocks(ctx context.Context, id domain.LinkI
 	local := op.Plan.Local
 	plan := quic.Plan{
 		LinkID: id, Role: quic.Role(local.Role),
-		Underlay: op.Plan.Physical, TLSName: op.Plan.TLSName,
+		Underlay: op.Plan.Physical, TLSName: op.Plan.TLSName, Obfuscation: op.Plan.Obfuscation,
 	}
 	switch local.Role {
 	case composition.Dial:

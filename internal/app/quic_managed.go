@@ -115,7 +115,7 @@ func (e *Engine) prepareManagedQUIC(ctx context.Context, req backend.Request, pr
 	var expected quic.HelperConfigIdentity
 	if committed {
 		g := prior.QUICGeneration
-		expected = quicExpectedMaterialIdentity(state.QUICCrashOperation{CertificateSHA256: g.Files.Certificate, TrustCASHA256: g.Files.TrustCA, AuthorizationSHA256: g.Files.Authorization, HelperConfigSHA256: g.Files.HelperConfig,
+		expected = quicExpectedMaterialIdentity(state.QUICCrashOperation{CertificateSHA256: g.Files.Certificate, TrustCASHA256: g.Files.TrustCA, AuthorizationSHA256: g.Files.Authorization, ObfuscationSHA256: g.Files.ObfuscationSHA256, HelperConfigSHA256: g.Files.HelperConfig,
 			ExecutablePath: g.ExecutablePath, ExecutableSHA256: g.ExecutableSHA256, ExecutableDevice: g.ExecutableDevice, ExecutableInode: g.ExecutableInode})
 		if req.Operation == backend.OperationRemove {
 			// Removal requires exact recorded bytes/inodes, not present-day TLS
@@ -173,7 +173,7 @@ func (e *Engine) prepareManagedQUIC(ctx context.Context, req backend.Request, pr
 		return nil, state.QUICCrashOperation{}, fmt.Errorf("trusted QUIC attempt kernel generation unavailable")
 	}
 	op := state.QUICCrashOperation{Plan: host, Addresses: req.Link.Addresses, WireGuard: req.Link.WireGuard, Nonce: nonce, Resources: claims,
-		CertificateSHA256: expected.Credentials.CertificateSHA256, TrustCASHA256: expected.Credentials.TrustCASHA256, AuthorizationSHA256: expected.Credentials.AuthorizationSHA256, HelperConfigSHA256: expected.ConfigSHA256,
+		CertificateSHA256: expected.Credentials.CertificateSHA256, TrustCASHA256: expected.Credentials.TrustCASHA256, AuthorizationSHA256: expected.Credentials.AuthorizationSHA256, ObfuscationSHA256: expected.Credentials.ObfuscationSHA256, HelperConfigSHA256: expected.ConfigSHA256,
 		ExecutablePath: quic.DefaultExecutable, ExecutableSHA256: expected.Executable.SHA256, ExecutableDevice: expected.Executable.Device, ExecutableInode: expected.Executable.Inode,
 		Managed: &state.QUICManagedOperation{Version: 1, KernelBootID: boot, KernelBootSource: hostidentity.VerifiedHostBootSourceV1, Intent: req.Link, Operation: string(req.Operation), HadCommittedLink: committed, OriginalGeneration: prior.QUICGeneration}}
 	if err := op.Validate(); err != nil {
@@ -245,7 +245,7 @@ func (e *Engine) quicRecordedMaterial(ctx context.Context, root string, plan qui
 	}
 	f := pin.Identity()
 	return state.QUICFileIdentity{Certificate: f.CertificateSHA256, TLSKey: f.TLSKeySHA256, TrustCA: f.TrustCASHA256,
-		Authorization: f.AuthorizationSHA256, HelperConfig: f.HelperConfigSHA256, DirectoryDevice: f.DirectoryDevice,
+		Authorization: f.AuthorizationSHA256, ObfuscationSHA256: f.ObfuscationSHA256, HelperConfig: f.HelperConfigSHA256, DirectoryDevice: f.DirectoryDevice,
 		DirectoryInode: f.DirectoryInode, ReceiptDevice: f.ReceiptDevice, ReceiptInode: f.ReceiptInode}, nil
 }
 
