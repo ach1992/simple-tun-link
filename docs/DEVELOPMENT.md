@@ -197,6 +197,27 @@ acceptance envelope, not an arbitrary latest download. This optional
 test does not replace native regression tests or actual STL-managed
 two-peer acceptance.
 
+### Disposable QUIC helper systemd contract
+
+The pull-request CI systemd matrix runs
+`bash scripts/e2e/quic-helper-systemd.sh` on its disposable GitHub-hosted
+Ubuntu runners. The script refuses ordinary connected hosts and requires
+the expected repository/run identity and root test execution. It compiles
+the current `internal/quichelper` tests and starts only a 45-second
+`sleep` fixture through an original retained executable descriptor.
+The production systemd adapter must establish the exact transient unit,
+argv, environment, executable inode, invocation, PID/start time, cgroup
+and namespace. A duplicate start must fail without replacing the first
+process. Negative checks derive from the runner's actual property
+representation. Cleanup signals only the retained original pidfd.
+
+Ordinary `go test ./...` skips that explicitly privileged fixture while
+running deterministic journal-admission, material/receipt substitution,
+attempt ordering, uncertain-start quarantine and replay-denial tests.
+The actual systemd fixture proves the manager/process contract; it does
+not start Hysteria, configure networking or establish a managed QUIC Link.
+The separate private-L3 lab below remains a distinct acceptance envelope.
+
 ### Optional QUIC over real kernel WireGuard private-L3 lab
 
 The strictly opt-in runner proves the actual pinned Hysteria v2.13.0
