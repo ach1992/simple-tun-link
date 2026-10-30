@@ -5,12 +5,14 @@ import (
 	"errors"
 	"net/netip"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
 	core "github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/carrier/quic"
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/hostidentity"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/pinnedexec"
 	"github.com/ach1992/simple-tun-link/internal/state"
@@ -98,7 +100,7 @@ func newManagedHostFixture(t *testing.T) *managedHostFixture {
 		t.Fatal(err)
 	}
 	f.op.ExecutablePath = quic.DefaultExecutable
-	f.op.Managed = &state.QUICManagedOperation{Version: 1, Intent: f.link, Operation: "ensure"}
+	f.op.Managed = &state.QUICManagedOperation{Version: 1, Intent: f.link, Operation: "ensure", KernelBootID: f.identity.BootID, KernelBootSource: hostidentity.VerifiedHostBootSourceV1}
 	if err := f.op.ValidateManaged(); err != nil {
 		t.Fatal(err)
 	}
@@ -310,5 +312,35 @@ func TestManagedDispatchedFailureRetainsJournalAndCauseWithoutStop(t *testing.T)
 	}
 	if strings.Contains(err.Error(), secret.Error()) {
 		t.Fatal("private failure text exposed")
+	}
+}
+
+func TestManagedRuntimeAndPureRendererUseExactlyOneJSONFormatArgument(t *testing.T) {
+	f := newManagedHostFixture(t)
+	ctx := f.context(t)
+	plan, err := quic.PlanFromLink(f.link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := quic.Build(plan, quic.DefaultExecutable, f.store.root, strings.Repeat("a", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer command.Clear()
+	spec, err := f.host.spec(ctx, f.link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(command.Args, spec.Args) {
+		t.Fatal("managed renderer and production systemd command differ")
+	}
+	count := 0
+	for _, arg := range spec.Args {
+		if arg == "--log-format" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatal("managed log-format flag duplicated or absent")
 	}
 }

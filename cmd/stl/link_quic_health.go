@@ -12,6 +12,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/diagnostics"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
+	"github.com/ach1992/simple-tun-link/internal/quichelper"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
@@ -19,22 +20,24 @@ import (
 // These are separately observed local facts. A running process never proves
 // QUIC authentication or private application traffic.
 type QUICLinkDiagnostics struct {
-	SchemaVersion              int           `json:"schema_version"`
-	LinkID                     domain.LinkID `json:"link_id"`
-	Carrier                    string        `json:"carrier"`
-	Role                       string        `json:"role"`
-	Interface                  string        `json:"interface,omitempty"`
-	IfIndex                    int           `json:"ifindex,omitempty"`
-	QUICHelperActive           bool          `json:"quic_helper_active"`
-	QUICHelperLoaded           bool          `json:"quic_helper_loaded"`
-	WGIngressGuardActive       bool          `json:"wg_ingress_guard_active"`
-	KernelWireGuardPresent     bool          `json:"kernel_wireguard_present"`
-	WireGuardHandshakeObserved bool          `json:"wireguard_handshake_observed"`
-	LastHandshakeUnix          int64         `json:"last_handshake_unix,omitempty"`
-	RXBytes                    uint64        `json:"rx_bytes"`
-	TXBytes                    uint64        `json:"tx_bytes"`
-	AuthenticationObservation  string        `json:"authentication_observation"`
-	TrafficObservation         string        `json:"traffic_observation"`
+	SchemaVersion              int                           `json:"schema_version"`
+	LinkID                     domain.LinkID                 `json:"link_id"`
+	Carrier                    string                        `json:"carrier"`
+	Role                       string                        `json:"role"`
+	Interface                  string                        `json:"interface,omitempty"`
+	IfIndex                    int                           `json:"ifindex,omitempty"`
+	QUICHelperActive           bool                          `json:"quic_helper_active"`
+	QUICHelperLoaded           bool                          `json:"quic_helper_loaded"`
+	WGIngressGuardActive       bool                          `json:"wg_ingress_guard_active"`
+	KernelWireGuardPresent     bool                          `json:"kernel_wireguard_present"`
+	WireGuardHandshakeObserved bool                          `json:"wireguard_handshake_observed"`
+	LastHandshakeUnix          int64                         `json:"last_handshake_unix,omitempty"`
+	RXBytes                    uint64                        `json:"rx_bytes"`
+	TXBytes                    uint64                        `json:"tx_bytes"`
+	AuthenticationObservation  string                        `json:"authentication_observation"`
+	TrafficObservation         string                        `json:"traffic_observation"`
+	Helper                     *quichelper.HelperDiagnostics `json:"helper,omitempty"`
+	HelperObservationReason    string                        `json:"helper_observation_reason,omitempty"`
 }
 
 func quicHealthError(link domain.Link, reason, detail string) error {
@@ -94,6 +97,14 @@ func trustedQUICObservation(ctx context.Context, link domain.Link, options runti
 	if d.RXBytes > 0 && d.TXBytes > 0 {
 		d.TrafficObservation = "kernel WireGuard RX/TX bytes observed; application traffic was not measured by this command"
 	}
+	helper, partial, helperErr := observeQUICHelperDetails(ctx, link, record, observed, options)
+	if helperErr != nil {
+		return d, nil, helperErr
+	}
+	d.Helper, d.HelperObservationReason = helper, partial
+	if helper.Authentication == "observed" {
+		d.AuthenticationObservation = "QUIC carrier authentication observed in attributed current-invocation events; private application traffic remains a separate measurement"
+	}
 	runner := options.probeRunner
 	if runner == nil {
 		runner = linux.ExecRunner{}
@@ -143,7 +154,7 @@ func linkQUICDiagnoseCommand(args []string, out, errOut io.Writer, opts *runtime
 	}
 	observed, _, err := trustedQUICObservation(ctx, record.Desired, *opts)
 	if err != nil {
-		return readStatusInspectionError(ctx, out, errOut, isJSON, err)
+		return readQUICInspectionError(ctx, out, errOut, isJSON, err)
 	}
 	if isJSON {
 		if json.NewEncoder(out).Encode(observed) != nil {
@@ -153,6 +164,7 @@ func linkQUICDiagnoseCommand(args []string, out, errOut io.Writer, opts *runtime
 		fmt.Fprintf(out, "QUIC Link %s: helper=%t guard=%t kernel=%t WG-handshake=%t, RX=%d TX=%d bytes; private connectivity not measured.\n",
 			observed.LinkID, observed.QUICHelperActive, observed.WGIngressGuardActive, observed.KernelWireGuardPresent,
 			observed.WireGuardHandshakeObserved, observed.RXBytes, observed.TXBytes)
+		writeQUICHelperDetails(out, observed.Helper, observed.HelperObservationReason)
 	}
 	return 0
 }

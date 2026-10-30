@@ -77,12 +77,21 @@ func TestQUICOfferRoundTripAndPublicPreviewKeepSecretsPrivate(t *testing.T) {
 		t.Fatalf("public preview failed: code=%d", code)
 	}
 	var preview struct {
-		Backend   domain.Backend `json:"backend"`
-		Confirm   string         `json:"confirmation_sha256"`
-		Sensitive bool           `json:"sensitive"`
+		Backend       domain.Backend `json:"backend"`
+		Confirm       string         `json:"confirmation_sha256"`
+		Sensitive     bool           `json:"sensitive"`
+		PeerUnderlay  string         `json:"receiver_peer_underlay"`
+		PeerPrivateIP string         `json:"receiver_peer_private_ip"`
+		TLSListener   string         `json:"tls_listener_name"`
+		LocalForward  uint16         `json:"receiver_forward_udp_port"`
+		PeerForward   uint16         `json:"peer_forward_udp_port"`
 	}
 	if json.Unmarshal(out.Bytes(), &preview) != nil || preview.Backend != domain.BackendWireGuardQUIC || !preview.Sensitive || preview.Confirm != setupLinkConfirmation(string(raw)) {
 		t.Fatal("public preview does not bind the exact private offer")
+	}
+	if preview.PeerUnderlay != offer.Receiver.Underlay.Peer.String() || preview.PeerPrivateIP != offer.Receiver.Addresses.Peer.String() ||
+		preview.TLSListener != offer.Sender.Underlay.Local.String() || preview.LocalForward != offer.Receiver.QUIC.ForwardUDPPort || preview.PeerForward != 0 {
+		t.Fatal("receiver confirmation concealed or reversed its peer endpoint, forwarding socket or effective TLS listener identity")
 	}
 	public, _ := json.Marshal(offer.Sender)
 	for _, output := range [][]byte{out.Bytes(), public} {
@@ -195,5 +204,17 @@ func TestQUICActivationErrorRetainsEvidenceWithoutRawCause(t *testing.T) {
 	}
 	if strings.Contains(out.String(), secret) || !strings.Contains(out.String(), "rollback_incomplete") {
 		t.Fatal("typed operation evidence lost or private cause leaked")
+	}
+}
+
+func TestQUICColdBootRecoveryRequiresExactConfirmationBeforeRuntime(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "untouched")
+	id := string(testQUICCreateRequest().LinkID)
+	var out, errOut bytes.Buffer
+	if code := linkQUICColdBootReconcileCommand([]string{id, "--confirm", "lnk_ffffffffffffffffffffffffffffffff", "--json"}, &out, &errOut, &runtimeOptions{stateRoot: root}); code == 0 {
+		t.Fatal("wrong original identity was accepted")
+	}
+	if _, err := os.Lstat(root); !os.IsNotExist(err) {
+		t.Fatal("rejected confirmation touched State")
 	}
 }

@@ -503,7 +503,8 @@ the durable exact removal receipt. A failed secret-retirement phase leaves
 its receipt retryable; a retired Link ID cannot be reused. Arbitrary
 **operator-selected exported handoff paths** remain operator-managed and
 must be separately retired from their external storage after confirmation.
-The state schema is v4; older binaries must not attempt to manage WSS Links.
+WSS management first used State v4; the managed QUIC candidate uses State v5.
+Older binaries must not manage snapshots written by an unsupported newer schema.
 
 ### Ubuntu AppArmor confinement of `wg` (WSS host preflight)
 
@@ -840,3 +841,134 @@ root with access to protected State and arbitrary host mutation.
 The rootless tests use real kernel WG and nft but a disposable systemd
 shim; disposable tests alone never prove field/systemd reboot behavior or all
 architectures; physical acceptance and release reviews are separately recorded.
+
+## Managed WireGuard over QUIC/TLS (release candidate)
+
+The `wireguard-quic` backend uses native kernel WireGuard inside one
+per-Link authenticated Hysteria/QUIC UDP carrier. It is a release candidate;
+Stable v0.1.15 does not expose these commands. Both endpoints need the
+[explicit pinned companion](INSTALL.md#optional-pinned-quic-companion-release-candidate),
+verified host capabilities and a reachable physical UDP listener.
+
+### Guided setup and the three address/port roles
+
+Choose **Create tunnel → WireGuard / QUIC + TLS**. Select which server
+listens on the physical UDP endpoint, the two private Link Addresses, each
+endpoint's kernel WireGuard UDP port, and the Dial endpoint's private
+loopback forwarding port. The public QUIC UDP listener and local WG port
+must differ. The listener has no extra loopback forwarder. TLS uses the
+listener's exact IP SAN by default or an explicitly verified DNS SAN;
+certificate verification is never disabled.
+
+The kernel WireGuard peer endpoint on Dial is its local
+`127.0.0.1:<forward-port>`. Listen learns the authenticated peer's loopback
+endpoint. Neither endpoint sends native WireGuard to the physical peer as
+a fallback. Open the public QUIC UDP port through the appropriate host and
+provider rules; do not publish the guarded kernel WG port.
+
+Creation issues new per-Link WG keys, separate TLS identities/trust anchors
+and an authorization token. It commits the local managed Link and writes a
+**SENSITIVE** receiver JSON file using protected no-clobber publication.
+Transfer that file privately. On the other endpoint choose **Import setup
+link → WireGuard / QUIC + TLS**, inspect the receiver-facing public preview
+and confirm. Never paste the receiver file into an Issue or ordinary logs.
+Saved sender-side **Share Setup Link** reuses only the original protected
+handoff after verifying its exact public identity and protected material;
+it does not regenerate credentials. Receiver-only endpoints cannot invent
+the sender's original handoff.
+
+Both peers start with an explicit Auto MTU policy: conservative **1280**,
+not a measured PMTU. The pinned helper fragments forwarded WG datagrams
+within QUIC and imposes its own message-size limit; native WireGuard's
+fixed-overhead calculation is not used. Local MTU mutation and rollback
+require the exact nonce-marked original WG generation.
+
+### Machine creation and private import
+
+Creator input uses its own schema **1** and contains public topology only.
+For a first host acting as Listen, a request file can contain:
+
+```json
+{
+  "schema_version": 1,
+  "underlay": {"local": "198.51.100.10", "peer": "203.0.113.20"},
+  "addresses": {"local": "10.77.0.0/31", "peer": "10.77.0.1/31"},
+  "listen_port": 51821,
+  "peer_port": 51822,
+  "local_keepalive": 25,
+  "peer_keepalive": 25,
+  "role": "listen",
+  "udp_port": 443,
+  "remote_forward_udp_port": 53001
+}
+```
+
+Use real endpoint addresses and unused resources. `link_id` and
+`display_name` are optional. A Dial creator instead sets `role:"dial"` and
+`local_forward_udp_port`, with no remote forwarder. `tls_server_name` is
+optional and must match the certificate identity. Unknown fields, mixed
+role fields, incompatible keys/addresses/ports and malformed JSON fail.
+
+```sh
+sudo stl link create-quic --stdin --output /root/quic-peer.json --json < quic-create.json
+sudo stl link preview-quic --stdin --json < /root/quic-peer.json
+sudo stl link import-quic --stdin --confirm SHA256_FROM_PREVIEW --json < /root/quic-peer.json
+```
+
+Run preview/import on the intended receiving endpoint after private transfer.
+Confirmation binds the original sensitive bytes; a changed handoff requires
+a new preview. Ordinary stdout/JSON contains public result/evidence only,
+never private key, bearer, raw certificate material or the complete handoff.
+
+`link resume-quic --stdin --confirm SHA256 --json` selects the **sender**
+Link from that original handoff and uses its existing protected material.
+It does not generate replacement keys, bypass a pending journal or adopt
+an uncommitted object. Import selects the receiver; the distinction is
+explicit even when the two endpoints share one Link ID.
+
+The existing `link ensure --stdin --json` uses input schema **4** for the
+public QUIC desired Link, with `backend:"wireguard-quic"`,
+`encapsulation:"udp"`, `wireguard`, `quic` and the endpoint-local `mtu`
+policy. It reuses the canonical Engine and already provisioned credentials.
+It cannot create a first protected QUIC identity from public JSON alone.
+Native v1/v2 and WSS v3 requests do not acquire QUIC capabilities. These
+request versions, private offer schema 1, response versions and persisted
+State v5 are independent contracts.
+
+### Status, practical diagnostics and removal
+
+```sh
+sudo stl link status YOUR_LINK_ID --json
+sudo stl link diagnose-quic YOUR_LINK_ID --json
+sudo stl link diagnose YOUR_LINK_ID --json
+sudo stl link remove YOUR_LINK_ID --json
+sudo stl link retire-quic YOUR_LINK_ID --confirm YOUR_LINK_ID --json
+sudo stl link reconcile-quic-cold-boot YOUR_LINK_ID --confirm YOUR_LINK_ID --json
+```
+
+`status` and `diagnose-quic` inspect owned local State and host resources.
+A running helper alone proves neither peer authentication nor a working
+private Link. Kernel handshake time and RX/TX counters remain separate
+observations. Generic `diagnose` and menu **Test connectivity** perform the
+bounded private-peer checks only after the exact helper, guard, WG interface
+and private route are verified. Application TCP/UDP traffic and actual WAN
+conditions require their own practical checks; peer PMTU is not inferred
+from process state.
+
+Remove stops the exact owned helper, deletes the original WG interface,
+then removes its exact ingress guard and commits a removal/retirement
+receipt. It automatically attempts receipt-bound TLS/token/WG cleanup.
+If cleanup is incomplete, `retire-quic` retries only that original receipt
+and independently verified resource absence. An expired certificate may
+be removed using its recorded generation; it may not authorize a new start.
+External copies of the receiver file remain under operator control.
+
+A missing original in the same kernel generation is not permission to
+recreate or delete it: the interface may have moved to another namespace.
+Preserve State, credentials, reservations and guard after any uncertain
+operation. Pending journals block ordinary Ensure/Resume/Restore/Remove;
+source-only historical QUIC journals never become managed ownership.
+Use the [explicit proof-bound recovery procedure](OPERATOR-RECOVERY.md#managed-quic-interrupted-operations-and-kernel-extinction), not manual JSON edits,
+unit-name cleanup or a regenerated peer handoff. Legitimate committed
+post-reboot restoration requires trusted changed-kernel evidence and fresh
+host vacancy, preserving the same Link and credential identity.

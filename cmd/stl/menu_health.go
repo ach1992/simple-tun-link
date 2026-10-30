@@ -410,6 +410,28 @@ func menuShowLocalStatus(id domain.LinkID, out, errOut io.Writer, options *runti
 		} else {
 			menuHealthLine(out, "WG ingress", "WARNING", "Scoped UDP guard not observed")
 		}
+		if helper := result.QUICState.Helper; helper != nil {
+			menuField(out, "QUIC process state", fmt.Sprintf("%s; restarts %d", helper.State, helper.RestartCount))
+			menuField(out, "QUIC protected material", helper.MaterialState)
+			menuField(out, "Carrier authentication", helper.Authentication+" (historical current-invocation events)")
+			menuField(out, "Helper event stream", helper.JournalState)
+			if helper.ExitResult != "" {
+				menuField(out, "QUIC helper exit", fmt.Sprintf("%s; code %d status %d", helper.ExitResult, helper.ExitCode, helper.ExitStatus))
+			}
+			start := len(helper.Events) - 4
+			if start < 0 {
+				start = 0
+			}
+			for _, event := range helper.Events[start:] {
+				menuField(out, "QUIC helper event", event.Event)
+				if event.ReasonCode != "" {
+					menuField(out, "Reason", event.ReasonCode)
+				}
+				if event.NextStep != "" {
+					menuField(out, "Next action", event.NextStep)
+				}
+			}
+		}
 	}
 	menuHealthLine(out, "Peer traffic", "UNKNOWN", "connectivity not measured; use Check connection for 5 pings")
 	rx, tx, unit, handshake := menuStatusTraffic(result)

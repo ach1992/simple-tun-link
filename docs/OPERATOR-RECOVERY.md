@@ -618,3 +618,89 @@ exercise post-reboot State transitions using injected boot-generation
 values; these **do not** authenticate a physical host reboot.
 No actual PID1/kernel reboot, service restore or provider WAN
 acceptance is claimed.
+
+
+## Managed QUIC: interrupted operations and kernel extinction
+
+Managed QUIC uses the same canonical Engine, protected State and resource
+locks as ordinary Link operations. A failed operation may retain a complete
+pre-effect journal and protected material even when rollback returned
+success. Preserve that evidence. A current missing interface or UDP socket
+does not establish original termination: a WireGuard interface may have
+moved to another network namespace. Neither a matching resource name nor
+an old source-only creation receipt grants recovery authority.
+
+First distinguish a **committed Link with no pending operation** from a
+**pending managed attempt**. Local status and dedicated QUIC diagnostics
+are read-only; failures never authorize manual deletion. For a committed
+Link, ordinary Ensure/Restore may repair only the verified original host
+generation. A legitimately different trusted host kernel plus current
+vacancy can restore that same committed Link and credentials. Certificate
+expiry blocks new activation but does not prevent exact recorded-generation
+Remove or receipt-bound retirement.
+
+### Exact pending-attempt recovery
+
+A new managed attempt records its actual trusted host-kernel boot ID and
+source **before** protected staging or host effects. If its journal remains
+pending, ordinary Ensure, Resume, Restore and Remove refuse replay. The
+explicit recovery command is:
+
+```sh
+sudo stl link reconcile-quic-cold-boot YOUR_LINK_ID --confirm YOUR_LINK_ID --json
+```
+
+This command does **not** reboot, restart a service, delete a kernel object,
+change firewall rules or adopt matching objects. It succeeds only when all
+of the following can be independently verified under canonical locks:
+
+- The exact new managed journal, original public intent, resource claims and
+  prior committed owner have not changed.
+- The current genuine host-kernel generation differs from the **attempt's**
+  trusted generation. An older committed birth does not satisfy this check
+  for an attempt made in the current kernel.
+- The complete original protected material receipt and recorded file identity
+  remain intact. Expiry alone does not invalidate recorded removal evidence.
+- Current helper, WG identity, ingress guard, selected UDP sockets and
+  conflicting private interface/address/subnet resources are strictly vacant.
+- Boot, network namespace and original material remain stable through the
+  final State publication.
+
+If the required full-kernel reboot has not occurred, the command refuses.
+A container restart, namespace change or edited Boot ID is not a substitute.
+A whole-host reboot affects unrelated workloads and must be planned and
+approved separately by the host owner, with a restricted consistent backup
+of State, credentials and original handoffs and a recovery access path.
+STL never performs that reboot as part of reconciliation.
+
+| Pending operation | Successful State-only result | Following action |
+| --- | --- | --- |
+| Ensure of an already committed Link | Consume only that journal; keep the exact owner and credentials | Ordinary Restore, then verify peer traffic |
+| Remove of an already committed Link | Remove owner and journal atomically; record original-kernel extinction | Exact `retire-quic` cleanup |
+| Complete initial Ensure that never committed | Replace journal with an immutable abandonment receipt; never synthesize a committed generation | Exact `retire-quic`; use a new Link ID for any future setup |
+
+An abandoned Link ID remains permanently reserved. To retire original
+material after a successful removal/abandonment receipt:
+
+```sh
+sudo stl link retire-quic YOUR_LINK_ID --confirm YOUR_LINK_ID --json
+```
+
+Retirement rechecks the exact receipt, host/State absence and remaining
+original files. Partial deletion is retryable only with that evidence;
+a reappeared or substituted file is never deleted using the old receipt.
+Uninstall may preserve validated fully retired historical receipts, while
+Downgrade requires genuinely empty State including no such receipts.
+
+### Cases that deliberately remain quarantined
+
+Same-kernel vacancy, untrusted boot provenance, a source-only historical
+journal, changed owner/material, a foreign occupied resource, or incomplete
+initial staging without its complete original generation receipt cannot
+satisfy this recovery contract. The command preserves journal, claims and
+files. Do not strip fields, copy matching receipts, overwrite keys or clear
+State to force a retry. These cases require separately reviewed host-owner
+resolution of the specific uncertain resources; the CLI does not manufacture
+proof. If State publication itself is reported uncertain, reload and inspect
+the exact protected result before another action. A successful reconciliation
+is not a claim of private connectivity or released-artifact acceptance.

@@ -233,14 +233,14 @@ run the exact command as **root**, or use the separately shown genuine `sudo`
 variant from a non-root administrator account:
 
 ~~~sh
-bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}") || exit 1; [[ $n =~ ^[0-9]+$ && $n -gt 0 && $n -le 134250000 ]] || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; head -c "$n" -- "${f[0]}" > "$d/${f[0]##*/}"; [[ $(stat -c %s -- "$d/${f[0]##*/}") == "$n" ]]; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; for x in "$@"; do if [[ $x == --with-wss ]]; then case $(uname -m) in x86_64) a=amd64;; aarch64) a=arm64;; *) echo "STL: unsupported WSS CPU" >&2; exit 1;; esac; w="/root/stl/wstunnel_11.0.0_linux_${a}.tar.gz"; [[ -f $w && ! -L $w && $(stat -c %u:%a "$w") =~ ^0:(600|644)$ && $(stat -c %h "$w") == 1 ]] || { echo "STL: missing or unsafe optional WSS archive" >&2; exit 1; }; z=$(stat -c %s "$w"); [[ $z =~ ^[0-9]+$ && $z -gt 1024 && $z -lt 100000000 ]] || { echo "STL: optional WSS archive size is unsafe" >&2; exit 1; }; head -c "$z" -- "$w" > "$d/${w##*/}"; [[ $(stat -c %s -- "$d/${w##*/}") == "$z" ]] && cmp -s -- "$w" "$d/${w##*/}" || { echo "STL: WSS archive changed during protected copy" >&2; exit 1; }; break; fi; done; bash "$d/${f[0]##*/}" "$@"' stl
+bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}") || exit 1; [[ $n =~ ^[0-9]+$ && $n -gt 0 && $n -le 134250000 ]] || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; head -c "$n" -- "${f[0]}" > "$d/${f[0]##*/}"; [[ $(stat -c %s -- "$d/${f[0]##*/}") == "$n" ]]; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; for x in "$@"; do case "$x" in --with-wss|--with-quic) case $(uname -m) in x86_64) a=amd64;; aarch64) a=arm64;; *) echo "STL: unsupported companion CPU" >&2; exit 1;; esac; if [[ $x == --with-wss ]]; then w="/root/stl/wstunnel_11.0.0_linux_${a}.tar.gz"; else w="/root/stl/hysteria-linux-${a}"; fi;; *) continue;; esac; [[ -f $w && ! -L $w && $(stat -c %u:%a "$w") =~ ^0:(600|644)$ && $(stat -c %h "$w") == 1 ]] || { echo "STL: missing or unsafe selected companion" >&2; exit 1; }; z=$(stat -c %s "$w"); [[ $z =~ ^[0-9]+$ && $z -gt 1024 && $z -lt 100000000 ]] || { echo "STL: companion size is unsafe" >&2; exit 1; }; head -c "$z" -- "$w" > "$d/${w##*/}"; [[ $(stat -c %s -- "$d/${w##*/}") == "$z" ]] && cmp -s -- "$w" "$d/${w##*/}" || { echo "STL: companion changed during protected copy" >&2; exit 1; }; done; bash "$d/${f[0]##*/}" "$@"' stl
 ~~~
 
 For a sudo-capable **non-root** administrator, use this command instead
 (the user must already have genuine `sudo` access):
 
 ~~~sh
-sudo bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}") || exit 1; [[ $n =~ ^[0-9]+$ && $n -gt 0 && $n -le 134250000 ]] || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; head -c "$n" -- "${f[0]}" > "$d/${f[0]##*/}"; [[ $(stat -c %s -- "$d/${f[0]##*/}") == "$n" ]]; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; for x in "$@"; do if [[ $x == --with-wss ]]; then case $(uname -m) in x86_64) a=amd64;; aarch64) a=arm64;; *) echo "STL: unsupported WSS CPU" >&2; exit 1;; esac; w="/root/stl/wstunnel_11.0.0_linux_${a}.tar.gz"; [[ -f $w && ! -L $w && $(stat -c %u:%a "$w") =~ ^0:(600|644)$ && $(stat -c %h "$w") == 1 ]] || { echo "STL: missing or unsafe optional WSS archive" >&2; exit 1; }; z=$(stat -c %s "$w"); [[ $z =~ ^[0-9]+$ && $z -gt 1024 && $z -lt 100000000 ]] || { echo "STL: optional WSS archive size is unsafe" >&2; exit 1; }; head -c "$z" -- "$w" > "$d/${w##*/}"; [[ $(stat -c %s -- "$d/${w##*/}") == "$z" ]] && cmp -s -- "$w" "$d/${w##*/}" || { echo "STL: WSS archive changed during protected copy" >&2; exit 1; }; break; fi; done; bash "$d/${f[0]##*/}" "$@"' stl
+sudo bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}") || exit 1; [[ $n =~ ^[0-9]+$ && $n -gt 0 && $n -le 134250000 ]] || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; head -c "$n" -- "${f[0]}" > "$d/${f[0]##*/}"; [[ $(stat -c %s -- "$d/${f[0]##*/}") == "$n" ]]; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; for x in "$@"; do case "$x" in --with-wss|--with-quic) case $(uname -m) in x86_64) a=amd64;; aarch64) a=arm64;; *) echo "STL: unsupported companion CPU" >&2; exit 1;; esac; if [[ $x == --with-wss ]]; then w="/root/stl/wstunnel_11.0.0_linux_${a}.tar.gz"; else w="/root/stl/hysteria-linux-${a}"; fi;; *) continue;; esac; [[ -f $w && ! -L $w && $(stat -c %u:%a "$w") =~ ^0:(600|644)$ && $(stat -c %h "$w") == 1 ]] || { echo "STL: missing or unsafe selected companion" >&2; exit 1; }; z=$(stat -c %s "$w"); [[ $z =~ ^[0-9]+$ && $z -gt 1024 && $z -lt 100000000 ]] || { echo "STL: companion size is unsafe" >&2; exit 1; }; head -c "$z" -- "$w" > "$d/${w##*/}"; [[ $(stat -c %s -- "$d/${w##*/}") == "$z" ]] && cmp -s -- "$w" "$d/${w##*/}" || { echo "STL: companion changed during protected copy" >&2; exit 1; }; done; bash "$d/${f[0]##*/}" "$@"' stl
 ~~~
 
 These commands verify ownership, source type, modes, installer count and the
@@ -745,6 +745,22 @@ Restoring only an old binary while retaining schema v4 is NOT a valid rollback.
 Never manually rewrite schema_version or strip pre-effect journals, original
 WSS fingerprints, receipts or resource claims.
 
+### Managed QUIC candidate: State v5 boundary
+
+The managed QUIC candidate writes **State v5** on successful State mutation,
+including when only existing Native or WSS Links are present. Valid v1–v4
+State is readable without mutation, preserving historical MTU, journal and
+ownership rules. Older schemas cannot inject managed QUIC generation or
+retirement authority. Historical source-only QUIC attempts remain reserved;
+a new binary does not promote their receipts into managed Links.
+
+A pre-v5 executable cannot safely manage a snapshot after v5 publication.
+Keep a consistent restricted backup of State, credentials and original
+receiver handoffs before update. Prefer a v5-compatible forward fix after
+an uncertain update; never strip fields, edit the schema number or discard
+a journal to make an older binary accept it. This release-candidate boundary
+is additional to the earlier v3 and v4 boundaries below.
+
 **Do not treat installer binary rollback as State rollback.** Once any new
 runtime has written schema v3, pre-v3 STL executables cannot read that State
 and must fail closed. On a failed new-version rollout, prefer a verified
@@ -994,3 +1010,62 @@ acceptance or a WireGuard handshake. See the exact pairing examples in
 [SECURITY.md](SECURITY.md). Do not treat a development-only source build
 or a locally selected helper as a published Stable artifact; verify the installed exact release and
 authenticated private connectivity before production use.
+
+
+## Optional pinned QUIC companion (release candidate)
+
+The managed QUIC candidate uses one separate official **Hysteria
+app/v2.13.0** executable. Published Stable v0.1.15 does not contain this
+selection. Use a verified candidate for isolated acceptance, or the exact
+published version once QUIC is released. Core installation alone never
+creates a QUIC Link or starts a helper.
+
+| CPU | Exact upstream asset | SHA-256 of the executable |
+| --- | --- | --- |
+| x86_64 | `hysteria-linux-amd64` | `907ba8c9693edb104b20582681fb7dc15639d5b64a9cbb616a7b539190a86691` |
+| aarch64 | `hysteria-linux-arm64` | `a68a61a84452ca250ce0368202521965ca9cc9d801a404f1dc9008ac6cf677a7` |
+
+Obtain the asset from the exact official
+[Hysteria release](https://github.com/HyNetworks/hysteria/releases/tag/app%2Fv2.13.0).
+Keep its filename unchanged; this is an executable asset, not an archive.
+Place it beside the one architecture-matched STL local installer in the
+protected `/root/stl` directory. Use the **complete trusted root/sudo
+preflight command** in the local-install section and append ` --with-quic`
+after its final `stl` argument. Its last fragment is therefore
+`bash "$d/${f[0]##*/}" "$@"' stl --with-quic`; that fragment is not a standalone
+command. Select both optional companions only by supplying both flags.
+
+The preflight snapshots each explicitly selected companion beside the
+installer in the same private directory. The one-file launcher checks the
+architecture, filename, size and exact pinned digest before core
+installation. The canonical installer then verifies its private immutable
+snapshot, exact version and installer-owned destination under the maintenance
+lock, installing the helper at `/usr/local/libexec/stl/hysteria` with an
+ownership record. A foreign executable is never overwritten. An already
+identical verified companion is a no-op. Unselected files are not installed,
+and this operation never creates a Link, changes nft rules or starts a unit.
+
+The QUIC prerequisite selection includes native networking tools,
+`wireguard-tools` and `nftables`; only missing packages from configured
+signed APT sources are requested. Missing manager/kernel capabilities still
+make this optional carrier unavailable. No package or service preparation
+is hidden inside normal status, diagnostics or runtime construction.
+
+For an existing verified installer-owned core, the canonical administrator
+recovery action is:
+
+```sh
+sudo bash scripts/install.sh companion-quic --binary /absolute/path/hysteria-linux-amd64 --prefix /usr/local
+```
+
+Use the canonical script from the exact verified release/candidate. Do not
+manually copy a binary into the runtime directory or fabricate its ownership
+record. An isolated `--prefix` is for installer acceptance; production
+managed Links always use the fixed canonical executable path.
+
+After installation, verify `stl version --json`, create/import the private
+pair, check local status, then test bilateral private ICMP, TCP and UDP.
+Successful installation or local helper readiness does not prove the remote
+TLS identity, a WG handshake, peer traffic, host reboot restoration or WAN
+reachability. See [CLI.md](CLI.md#managed-wireguard-over-quictls-release-candidate)
+and [SUPPORTED-ENVIRONMENTS.md](SUPPORTED-ENVIRONMENTS.md).

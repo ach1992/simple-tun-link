@@ -61,18 +61,19 @@ type LinkRecord struct {
 }
 
 type Snapshot struct {
-	SchemaVersion          int                     `json:"schema_version"`
-	Links                  []LinkRecord            `json:"links"`
-	PendingSenders         []PendingSender         `json:"pending_senders,omitempty"`
-	PendingIPsec           []PendingIPsec          `json:"pending_ipsec,omitempty"`
-	IPsecVICIOperations    []IPsecVICIOperation    `json:"ipsec_vici_operations,omitempty"`
-	IPsecReapplyOperations []IPsecReapplyOperation `json:"ipsec_reapply_operations,omitempty"`
-	IPsecRemoveOperations  []IPsecRemoveOperation  `json:"ipsec_remove_operations,omitempty"`
-	IPsecXFRMOperations    []IPsecXFRMOperation    `json:"ipsec_xfrm_operations,omitempty"`
-	IPsecRemovalReceipts   []IPsecRemovalReceipt   `json:"ipsec_removal_receipts,omitempty"`
-	RemovalReceipts        []RemovalReceipt        `json:"removal_receipts,omitempty"`
-	WSSCrashOperations     []WSSCrashOperation     `json:"wss_crash_operations,omitempty"`
-	QUICCrashOperations    []QUICCrashOperation    `json:"quic_crash_operations,omitempty"`
+	SchemaVersion           int                      `json:"schema_version"`
+	Links                   []LinkRecord             `json:"links"`
+	PendingSenders          []PendingSender          `json:"pending_senders,omitempty"`
+	PendingIPsec            []PendingIPsec           `json:"pending_ipsec,omitempty"`
+	IPsecVICIOperations     []IPsecVICIOperation     `json:"ipsec_vici_operations,omitempty"`
+	IPsecReapplyOperations  []IPsecReapplyOperation  `json:"ipsec_reapply_operations,omitempty"`
+	IPsecRemoveOperations   []IPsecRemoveOperation   `json:"ipsec_remove_operations,omitempty"`
+	IPsecXFRMOperations     []IPsecXFRMOperation     `json:"ipsec_xfrm_operations,omitempty"`
+	IPsecRemovalReceipts    []IPsecRemovalReceipt    `json:"ipsec_removal_receipts,omitempty"`
+	RemovalReceipts         []RemovalReceipt         `json:"removal_receipts,omitempty"`
+	WSSCrashOperations      []WSSCrashOperation      `json:"wss_crash_operations,omitempty"`
+	QUICCrashOperations     []QUICCrashOperation     `json:"quic_crash_operations,omitempty"`
+	QUICAbandonmentReceipts []QUICAbandonmentReceipt `json:"quic_abandonment_receipts,omitempty"`
 }
 
 func EmptySnapshot() Snapshot {
@@ -143,6 +144,9 @@ func (s *Snapshot) normalize() {
 		return s.IPsecRemovalReceipts[i].LinkID < s.IPsecRemovalReceipts[j].LinkID
 	})
 	sort.Slice(s.RemovalReceipts, func(i, j int) bool { return s.RemovalReceipts[i].LinkID < s.RemovalReceipts[j].LinkID })
+	sort.Slice(s.QUICAbandonmentReceipts, func(i, j int) bool {
+		return s.QUICAbandonmentReceipts[i].Operation.Plan.Local.LinkID < s.QUICAbandonmentReceipts[j].Operation.Plan.Local.LinkID
+	})
 	for i := range s.WSSCrashOperations {
 		s.WSSCrashOperations[i].Resources = normalizeClaims(s.WSSCrashOperations[i].Resources)
 	}
@@ -247,11 +251,18 @@ func (s *FileStore) Update(ctx context.Context, mutate func(*Snapshot) error) er
 			originalQUIC[i].Managed = &managed
 		}
 	}
+	originalQUICAbandonments := make([]QUICAbandonmentReceipt, len(snapshot.QUICAbandonmentReceipts))
+	for i, r := range snapshot.QUICAbandonmentReceipts {
+		originalQUICAbandonments[i] = cloneQUICAbandonment(r)
+	}
 	if err := mutate(&snapshot); err != nil {
 		return err
 	}
 	snapshot.normalize()
 	if err := validateSnapshot(snapshot); err != nil {
+		return err
+	}
+	if err := validateQUICAbandonmentTransition(originalQUICAbandonments, originalQUIC, snapshot); err != nil {
 		return err
 	}
 	for _, old := range originalQUIC {
@@ -593,7 +604,10 @@ func validateSnapshot(snapshot Snapshot) error {
 	if err := validateWSSCrashOperations(snapshot); err != nil {
 		return err
 	}
-	return validateQUICCrashOperations(snapshot)
+	if err := validateQUICCrashOperations(snapshot); err != nil {
+		return err
+	}
+	return validateQUICAbandonmentReceipts(snapshot)
 }
 
 func cloneRecord(record LinkRecord) LinkRecord {

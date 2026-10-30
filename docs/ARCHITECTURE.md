@@ -671,559 +671,208 @@ model, without creating per-screen diagnostic or logging engines:
   daemon, database or retention machinery only when justified by an owned
   runtime requirement.
 
-## Optional QUIC/UDP Carrier admission study (not a shipped Backend)
+## Managed WireGuard over QUIC
 
-[Issue #142](https://github.com/ach1992/simple-tun-link/issues/142) owns the
-decision, research and release/host gates for a **second** Carrier. Current
-physical IRPT-101 ↔ DE-Hamed-Test research established DE-initiated UDP/KCP
-payload delivery and DE-first QUIC Initial reachability, but **did not prove
-an authenticated QUIC 1-RTT session or a secure managed WireGuard Link over
-the physical public path**. TCP proxy/wrapper alternatives reuse the already
-working WSS TCP underlay; UDP QUIC can add a genuinely distinct *conditional*
-path. Paqet/PCK and destination-port hopping remain Owner-parked. No
-automatic Carrier fallback is implied.
+The `wireguard-quic` carrier composes **native kernel WireGuard** with the
+optional, exact-SHA256-pinned upstream Hysteria **app/v2.13.0**. One public
+Link has `Encapsulation=udp`, public `WireGuardOptions` and comparable,
+endpoint-local `QUICOptions`. The existing Engine remains the sole authority
+for locks, State, resource claims, Apply/Verify, rollback and restoration.
+There is no independent Link manager, packet engine, carrier fallback or
+runtime plugin ABI. Source implementation, published release and installed
+physical-host acceptance remain separate evidence in Issue #142.
 
-The **non-runnable** `internal/carrier/quic` adapter first targets an
-optionally installed, exact-SHA256-verified upstream Hysteria **app/v2.13.0**
-helper. It produces only public endpoint/role topology and a sensitive
-strictly scoped **JSON configuration** (never a ready-to-run STL Link),
-with separate Dial and Listen roles, an explicit physical QUIC UDP socket
-and a distinct Dial-side `127.0.0.1` UDP socket for **kernel WireGuard**
-forwarding. The protected config requires verified server TLS identity,
-client-certificate authentication through a restricted client CA, a second
-independent per-Link random authorization secret, and a server ACL accepting
-only the selected `127.0.0.1:<owned-kernel-WG-UDP-port>` destination with a
-final deny-all. No HTTP, SOCKS, unrestricted forwarding, proxy, TUN, Native
-GRE/IPIP/FOU/GUE or public-IP fallback is admitted. The binary and
-generated config are not silently installed or started, and the existing
-WSS/native Link schema, CLI, on-host helpers and v0.1.12 release are unchanged.
+### Exact topology and credentials
 
-A separate, still **non-runnable** per-Link credential issuer creates two
-independent ephemeral CA signing authorities (server and client) and their
-role-specific TLS leaf identities plus a random 256-bit Link bearer. Only
-the appropriate leaf key, peer trust anchor and bearer are returned for each
-role; the CA signing keys are not exported or persisted. Bundles are
-sensitive in-memory data, not authorization to import credentials, rotate
-identities or start a helper. A source-only preparation
-component now provides explicit, caller-locked `StageCredentials` and
-read-only `InspectCredentials`: per-Link/role exact four-file material under
-`$stateRoot/credentials/quic/<LinkID>/`, verified no-symlink `0700`
-directories, singly linked `0600` files, no-replace/idempotent bytes, TLS
-leaf purpose and exact server SAN checks, protected CA/bearer checks and
-public-only SHA-256 readback identities. Unexpected opposite-role material,
-credential drift and uncertain readback fail closed; a partial publication is
-**preserved**, not automatically deleted or overwritten. Local inspection
-cannot prove cross-host CA matching or authenticate a peer.
+`composition.QUICHostPlanForLink` separates the physical QUIC UDP endpoint,
+private Link IPv4 routes and kernel WireGuard's local forwarding endpoint.
+The **Dial** role reaches the peer's physical UDP listener and exposes one
+`127.0.0.1` UDP forwarder. Only that loopback address becomes its configured
+WG peer endpoint. The **Listen** role binds its explicit physical IPv4/UDP
+endpoint and starts WG without an invented static physical peer endpoint;
+authenticated loopback packets establish WG roaming state.
 
-A separate read-only `InspectPinnedHysteria` verifies the optional installed
-binary using exact upstream AMD64/ARM64 SHA-256, owner/mode/inode and
-no-symlink path checks. It reuses the Linux trusted-executable inspection
-shared with WSS; neither the optional binary nor certificates are installed
-by these APIs. The **source-only, non-runnable** canonical QUIC pre-effect
-journal described below can now durably reserve the proposed identities,
-but it neither calls these protected APIs nor attests/owns their actual
-files, executable, service or kernel generation. A future runtime Engine
-must recheck exact credential and executable fingerprints under locks and
-prove partial effects independently before treating any resource as owned.
+Both roles reserve their own kernel WG UDP port and local helper socket.
+The remote physical UDP destination and remote WG destination are not local
+port reservations. Physical and private routes must not overlap, private
+routes cannot capture loopback or reserved local-only ranges, and exact
+reciprocal peer keys, ports, roles and TLS identity are checked before
+pairing. The same peer pair can have multiple independent Links with distinct
+resource identities. Existing native/WSS/IPsec collisions still apply.
 
-A follow-up, still **non-runnable** public-topology admission function,
-`quic.Plan.CarrierClaims(localKernelWGUDPPort)`, now proposes the exact
-host-wide exclusive UDP reservations for a future composed Engine plan:
-the **local native kernel-WireGuard UDP listen port** plus either the Dial
-role's `127.0.0.1` helper forwarder port or the Listen role's physical
-QUIC UDP listener. The Dial peer's remote WireGuard destination port is
-**not** a local reservation. Existing STL UDP-port collision semantics
-apply conservatively across bind addresses and native/WSS/QUIC adapters.
-The helper, per-Link TLS-identity and scoped nft guard have distinct
-secret-free resource identities. Listen rejects a mismatched local
-WireGuard/ACL port and either role rejects an intra-Link helper/WG
-socket-port collision; renderer validation shares the role/port contract.
-These are **only proposed identities**, not host ownership; the bounded
-source-only Engine journal below can also durably preserve these claims.
-There is still no committed runnable QUIC Link, actual socket reservation,
-nft rule, service identity, certificate admission, helper start or public
-QUIC Link activation.
+The fixed helper configuration admits only per-Link TLS 1.3 server
+verification, client-certificate authentication with a distinct client CA,
+an independent 256-bit bearer and the exact loopback WG destination. The
+server ACL ends with deny-all. No unrestricted proxy, SOCKS/HTTP/TUN mode,
+realm, masquerading configuration, arbitrary helper option or public WG
+fallback is accepted. Ephemeral CA signing keys are never exported or
+persisted; each peer receives only its own leaf key and peer trust anchor.
 
-A separate **read-only source-only** `app.Engine.CheckQUICPreparation` now
-consumes `quic.Plan.LocalAdmission`'s validated, port-only projection and
-composes it with `composition.WireGuardProviderClaims`, the same
-native WireGuard interface/address/local UDP/public-key claims consumed by
-shipped native/WSS planning. Both local and peer private IPv4 Link routes
-reuse WSS's global-unicast and reserved-prefix overlap checks (including
-loopback and link-local), without imposing RFC1918-only addressing.
-Within canonical Engine maintenance, Link and resource locks it refreshes
-State, checks conflicting committed/pending Links
-(including unresolved WSS claims), and uses the existing live
-`linux.CollisionInspector` contract for local interfaces, addresses, routes
-and **both** locally bound UDP ports, including connected UDP sockets,
-from an all-state IPv4/IPv6 socket inventory. It refuses shared strongSwan
-UDP/500 or UDP/4500 when any committed/pending IPsec intent is present even if the
-shared daemon is temporarily not listening: those fixed ports are not in
-IPsec's per-Link exclusive claims. The actual live socket inventory is still
-required regardless of persisted State, including when a daemon has no
-per-Link record. Other unique per-Link helper, firewall and WG public-key
-claims are proposals, **not** independently attested live host identities.
+Role-specific material lives below
+`$stateRoot/credentials/quic/<LinkID>/`: four protected credential files,
+`helper.json` and a nonce-bound generation receipt. The existing descriptor-
+relative private store enforces 0700 directories, single-link 0600 regular
+files, no symlink traversal and no replacement of existing material. The
+WG private key stays in the existing per-Link KeyStore. Public State contains
+fingerprints and original file identity, never keys, bearer or receiver
+handoff bytes. A sensitive receiver offer has its own explicit schema and
+cannot be interpreted by native or WSS pairing readers.
 
-This check performs no QUIC staging, State mutation, journal, or runtime
-operation. Its locks are released before it returns; a clean preview is not
-an exclusive reservation, a service/binary/TLS attestation, global
-cross-namespace WireGuard identity proof or permission for any host effect.
+### Canonical transaction and original-generation provenance
 
-The separate **source-only** `Engine.PrepareQUICCrash` now reuses that
-same canonical locked admission to durably write one **pre-effect QUIC
-intent** in the existing private, atomic desired-State v4 FileStore. The
-first journal is **for a NEW, uncommitted Link only**. It captures the
-complete public endpoint-local role and physical QUIC/TLS Plan (not only
-local UDP port projections), private Link Addresses, public WireGuard
-configuration and exactly
-derived provider + carrier claims, a unique Engine-issued nonce, the
-**expected-only** role-specific TLS certificate/CA/bearer fingerprints,
-helper-config SHA-256, and expected pinned-executable path/SHA-256/inode.
-Before writing it the Engine validates local/peer private routes and rules
-out the physical QUIC endpoint being swallowed by either private route.
-The final State collision check and journal publication occur under
-maintenance -> Link -> resource -> shared restore-persistence locks. The
-restore lock also serializes ordinary last-Link Remove and empty-State
-RestoreAll unit cleanup: both must retain an existing owned reboot restore
-unit while any unresolved QUIC journal remains. Ordinary independent Link
-removal still succeeds; the unit is retired only after no committed Link or
-protected QUIC/WSS pre-effect reservation remains. A source-only QUIC journal
-does **not** install a restore unit that was absent to begin with. These
-locks and expected identities do not attest that credential files, the
-binary, peer authentication or a process/kernel owner actually exist.
+Persisted **State v5** adds managed QUIC generation and completion metadata.
+Valid v1–v4 State remains readable under its existing migration rules, but
+legacy documents cannot graft managed QUIC authority. A pre-v5 binary cannot
+safely manage State after a v5 publication; binary-only downgrade is not an
+accepted rollback procedure.
 
-An unresolved QUIC journal survives State reload and publication
-uncertainty, reserves its **full local resources** against unrelated Links,
-rejects duplicate/new use of its Link ID, and blocks ordinary Ensure/Remove
-and empty-State restore-unit retirement. Its content cannot be altered or
-silently removed through the normal FileStore.Update path: **no automatic
-replay, rollback, replacement, or deletion** of an uncertain QUIC generation
-is authorized. The additive `quic_crash_operations` field uses the same
-State v4 store; legacy v1-v3 documents cannot graft a QUIC journal during
-migration, and older strict readers lacking this field fail closed rather
-than silently ignore an unknown pending operation. Release-level State
-compatibility must be verified before this source-only writer becomes
-available in installed versions.
+A fresh managed Ensure follows the existing Engine transaction:
 
-This first journal merely establishes the durable **pre-effect boundary**.
-No CLI, installer, managed native-WG or Hysteria helper calls it; it does
-not stage any protected file or perform host effects. In particular,
-check-then-commit locks do not remain held after the call, and a stored
-nonce/claim is **NOT** an actual port reservation, executable spawn permit
-or proof of ownership. Later reviewed code must re-validate actual
-credentials and binary/config under held locks, supply an ownership-aware
-host-effect transaction and exact partial-effect recovery/remove/retirement
-before exposing an operable QUIC Link.
+1. Inspect and plan public identities; hold maintenance, Link and resource
+   locks, reload State, and reject conflicting saved, pending or live claims.
+2. Durably publish the exact versioned managed pre-effect journal before
+   writing protected material or dispatching any host effect.
+3. Stage and reattest the exact WG/TLS/bearer/config generation. A sender's
+   optional protected handoff publication occurs after local material is
+   durable and before first host Apply. Retain executable/material witnesses
+   through final verification and State publication.
+4. Verify host capability, original ownership and firewall coexistence;
+   create the scoped non-loopback WG UDP DROP guard before a WG listener;
+   exclusively create, tag and configure the original native WG interface;
+   start only the exact admitted per-Link helper.
+5. Verify the complete concurrent guard, kernel and helper state, publish the
+   existing restore-unit contract, then atomically commit Link ownership and
+   generation provenance while consuming only the exact managed journal.
 
-A further **source-only** QUIC host-generation identity projection now
-reuses the existing WSS nft ingress guard renderer, strict JSON verifier
-and exclusive kernel WireGuard netlink create primitive. QUIC derives
-distinct `stlquic_*` nft tables and nonce-bound rule comments, a
-`stl:quic:<LinkID>:tx:<nonce>` kernel alias candidate and a separate
-nonce-derived `q*` original-staging interface name. The projection
-`linux.PlanQUICWGHostOrigin` binds all three to the same immutable journal
-nonce and local kernel WG UDP port. Unlike legacy WSS read-only guard
-plans, QUIC requires a valid nonce from the start; neither matching
-table names nor markers prove their own creation. This change performs
-no nft, netlink, systemd, helper or State operation. Before any future
-host effect, the canonical Engine still needs its post-journal live
-vacancy checks, exact original-object creation witnesses, positive
-ifindex/guard/service ownership, dependency-ordered rollback and
-reboot/reconciliation gates; a source-only plan is not a permit.
+A committed `QUICGeneration` binds the creation origin, stable material
+nonce, trusted kernel boot source, network namespace, original WG ifindex,
+nft table/chain/rule handles, protected file generation and pinned executable.
+Every later operation combines that positive canonical provenance with
+fresh complete resource checks. A matching name, nonce, ifindex, handle,
+receipt, public key or current shape **alone** never grants adoption,
+recreation, deletion or journal clearance. The documented local-root trust
+boundary is unchanged: STL does not prove invisible history against a
+malicious administrator able to rewrite protected State and forge kernel
+objects. Retained descriptors prevent ordinary inode recycling within their
+scope; they do not freeze privileged in-place writes.
 
-A shared, still **read-only** whole-host firewall-coexistence probe now
-supports both WSS and QUIC candidate WG ingress guards. It reuses the
-existing bounded five-query nft/IPv4+IPv6-iptables/legacy inspection and
-its strict early-hook rejection. Only independently attested, exact
-current WSS or QUIC sibling guards may be excluded, with a complete
-nonce (when present)/port/table/rule live readback; missing, foreign,
-drifted, duplicated, overlapping UDP-port or self-claimed NEW Link
-guards fail closed. Separate WSS and QUIC
-namespaces do not authorize automatic trust or cleanup. The future
-canonical Engine must prove each committed sibling's original State,
-host and generation ownership before supplying any exclusion; this
-source-only probe cannot establish that evidence itself or grant an
-nft transaction, kernel effect or host mutation.
+Errors after possible host dispatch preserve uncertainty. Cancellation,
+missing observations or a failed command are not proof that no effect
+occurred. Dependency rollback stops at the first uncertain upper layer,
+retaining lower WG ingress protection and the durable journal. A State
+publication error is reconciled against the visible exact snapshot before
+any compensation; it is never blindly treated as an uncommitted operation.
 
-The separate **source-only** `quic.StageHelperConfig` and read-only
-`quic.InspectHelperConfig` provide checked, deterministic `helper.json`
-publication for each Link's already-protected credential generation. Before
-staging, they validate the complete role/local UDP claim proposal, admit the
-exact official SHA-256-pinned Hysteria executable, read the appropriate
-role's protected 0600 certificate/key/CA and bearer through private
-descriptor-relative access, validate the TLS/Link identity and regenerate
-the exact role-specific Hysteria JSON. `helper.json` is then created only
-with no-replace 0600 semantics, and readback must match the exact freshly
-rendered bytes. Existing differing or untrusted files, opposite-role CA,
-permission/inode changes, or changed authenticated topology are refused
-without deleting/replacing uncertain material. Only secret-free
-`HelperConfigIdentity` evidence (config SHA-256, credential fingerprints
-and verified executable inode/hash) is returned; plaintext authorization
-never belongs in ordinary Link State, diagnostics or arguments. Opt-in
-tests additionally exercise an **actual pinned official Hysteria binary**
-for config staging/readback without spawning a helper.
+### Helper lifetime and useful observation
 
-The source-only `quic.PreviewHelperConfig` calculates the anticipated
-seven-field public credential/config/executable identity from an in-memory
-role-specific bundle, exact Plan and State root, using the same certificate,
-bearer, Hysteria renderer and official executable admission as protected
-staging. Preview performs no private-file publication. The calling
-Engine workflow must first publish the complete immutable pre-effect
-journal containing these expected values via `PrepareQUICCrash`; a preview
-alone does not reserve a Link or establish ownership.
+Managed units use a durable, fixed canonical Hysteria path, exact protected
+config, `Type=exec`, the approved minimal environment and explicit sandbox
+properties, with `Restart=on-failure`. Their identity is bound to the
+committed generation. Startup and controlled restart reattest the pinned
+executable, exact unit/argv/security policy and current process identity.
+A pidfd and original invocation observation remain held through the composed
+transaction; releasing read-only descriptors never stops a service.
 
-`Engine.StageQUICCrashMaterials` is the **source-only, non-runnable** canonical
-writer for an already durable, unresolved QUIC journal. Its public
-implementation now requires **positive create-time generation provenance** in
-addition to seven expected fingerprints. It reconstructs the journal's exact
-Plan, checks the immutable nonce, performs the same official-binary and
-private-bundle preview before any protected Link directory is created, and
-rechecks State under canonical maintenance -> Link -> resource locks.
+Foreign executable hooks, aliases/drop-ins, incoming activation relationships,
+unsafe environment and ambiguous readback block mutation. Incoming `Upholds`
+is checked explicitly: supported systemd 249/250 use the complete trusted
+manager dump, while newer managers must expose the expected empty effective
+properties. Shared parsing does not weaken the separate IPsec STOP policy.
+A newly loaded name or a historical process receipt cannot authorize Stop.
 
-A **fresh** Link credential directory is created with exclusive
-descriptor-relative `mkdirat` (not reused merely because file contents
-match). STL immediately opens and pins the original directory FD and
-device/inode, checks the original canonical parent entry, then syncs the
-parent. The FIRST creation of each of the five role-private 0600 files
-uses strict exclusive `O_CREAT|O_EXCL` publication through **that pinned
-directory FD**, recording the very inode created by each successful open,
-synchronizing its data and directory, and verifying its original identity
-against immediate and final no-symlink readback. Even byte-identical
-`EEXIST` fails closed; generic no-replace/idempotent component staging is
-**not** permitted to manufacture first-generation ownership. Before any
-receipt publication STL rechecks all five original inode witnesses, the
-complete inventory and the still-pinned originating directory/parent identity.
-Only then does it publish the private 0600 `generation-owner.json` sidecar
-(schema v1), also through exclusive create-only publication, and perform
-same-FD receipt/inventory/inode readback. This sidecar binds the **Engine-issued immutable
-journal nonce**, Link, role, expected seven-field identity and **all five
-creation-generation inodes**. It does not contain plaintext keys or bearer.
-Every idempotent retry is a separately gated **existing-generation** path:
-it must inspect the same durable receipt and all five matching actual inodes;
-it must NOT restage or adopt a pre-existing directory merely because its
-credentials and helper JSON match the journal. The receipt, files and final
-inventory are inspected with one held directory FD, rather than mixing
-independent canonical-path resolutions. A crash after
-exclusive directory creation but before the sidecar becomes durable leaves
-uncertain files quarantined. No automatic deletion, adoption or blind retry
-occurs. This approach changes no State v4 schema.
+Managed helper output uses the existing journal. Its `JOURNAL_STREAM`
+identity must match the actual process output descriptor; an arbitrary extra
+environment variable is not accepted. Read-only diagnostic evidence is
+bounded and attributed by trusted boot, unit and invocation metadata. Only
+recognized safe events and process/exit facts enter public reports; raw
+journal messages, remote error strings, paths, environment and credential
+material are not promoted to public output. Typed errors preserve stage,
+dispatch/host-mutation uncertainty, State disposition and the next action.
+No new generic logging framework is added.
 
-The read-only public `Engine.InspectQUICCrashMaterials` now requires both the
-positive journal-bound receipt and actual protected config/credential and
-pinned executable identity. Receipt, exact five-file inode witnesses,
-private credential semantics and helper JSON are inspected using a **single
-held generation directory FD**, with a final receipt recheck and canonical
-credentials/QUIC/Link path identity revalidation. A replaced directory,
-ancestor or same-byte foreign inode fails closed; an independent successful
-read from another directory can never complete the ownership attestation.
-The raw protected-storage helpers remain uncommitted building blocks, not independent ownership grants. Neither
-successful staging nor inspection **consumes the journal**, proves any actual
-systemd/kernel/nft object or Hysteria process ownership, authenticates the
-remote peer or launches any helper. Future runtime implementation must
-re-attest exact helper bytes and protected materials at the process
-activation boundary and record positive host-specific create/absence witnesses.
-Interrupted, unknown or foreign host effects keep the journal unresolved;
-the existing restore/Engine locking must be reused rather than duplicated.
-Changing a Dial TLS peer name cannot be inferred from its leaf certificate
-alone: the exact journal Plan and rendered helper config remain binding.
+Local status, helper readiness, observed WG handshake/counters and actual
+bilateral private traffic remain distinct facts. Read-only inspection never
+creates private directories, starts/repairs a service or consumes a journal.
+The explicit connection check reuses the common bounded private-Link probe
+only after the helper, guard, WG and private route are verified. QUIC path
+MTU is not inferred from native WG's fixed encapsulation overhead.
 
-The source-only Engine now also admits an **initial native WireGuard private
-key** for an unresolved QUIC journal through the bounded
-`quicwgkey.StageInitial(ctx, engine, linkID, privateKey)` entrypoint.
-The supplied typed key must derive the journal's immutable local WireGuard
-public key **before any file write**. It reuses the canonical maintenance/Link/resource locks and the
-existing WireGuard KeyStore's exclusive no-replace publication, root-private
-credentials directory, 0600 file and descriptor-bound public-key readback.
-An existing key is never replaced or adopted, even if its bytes match;
-a failed or uncertain publication leaves both the journal and possible
-original private file intact, for separate reconciliation. The source-only
-`quicwgkey.InspectJournalKey` is a read-only identity/permission check, not
-an original file-creation receipt or durable lifetime ownership proof. Native
-WG credential staging can occur independently of the protected Hysteria
-credential/config generation after the journal exists, but **neither**
-staging method can clear it, create a kernel WG interface, start a process,
-commit a Link or authorize host-resource adoption, rollback or retirement.
-This adds no secondary credential owner and no new State schema.
+### Remove, restoration and coexistence
 
-A separate, **not yet wired to CLI, RestoreAll or a public Link backend**
-QUIC ingress origin step now provides the first host-effect implementation:
-`quicguard.StageOriginal(ctx, engine, linkID)` is the sole exported
-production nft CREATE entrypoint, with no caller-selectable publisher,
-Runner, plan, nonce or create-result witness. It calls
-`Engine.WithQUICCrashIngressAdmission` synchronously to reuse the durable,
-immutable QUIC journal and canonical maintenance/Link/resource locks. The
-Engine callback is an *admission scope*, not independent proof of host
-creation: success as an actual ingress creation witness requires the fixed
-host command and complete strict readback inside the Stage entrypoint. It first
-re-attests the original protected five-file credential/config generation
-receipt and the exact SHA-256/inode-pinned Hysteria binary; the private
-quicguard writer reconstructs the nonce/port-bound nft plan from Engine-
-attested State; Linux read-only inspection reuses the
-shared WSS/QUIC bounded nft table inventory and full five-query firewall
-coexistence preflight, checks complete *current-host* WireGuard public-key,
-listen-port and guard-namespace UDP listener/socket vacancy via the existing
-WSS WG inspector plus an all-state (`ss -a`) UDP census for connected sockets,
-then performs an exclusive `create table` nft transaction followed by strict
-full-table readback. A missing/ambiguous/occupied live inventory fails
-closed **before dispatch**; the previous journal's vacancy snapshot cannot
-be reused as a present-time creation permit. As with all snapshot-based
-admission, a foreign process can race a readback after it completes;
-final runnable activation must still use its own dependency-aware original
-resource ownership and post-effect checks. A **pre-existing table,
-even with identical bytes/marker**, is never adopted as this attempt's
-original. An unsuccessful or ambiguous dispatched nft operation is not
-rolled back: the same QUIC journal and possible guard remain quarantined
-without any inferred deletion rights. The source-only creation path now adds
-a **durable original-CREATE witness** only after the exclusive nft transaction
-and same-thread strict nft inventory/table/chain/rule-handle readback succeed.
-It binds the exact immutable journal Link ID, nonce, WG UDP port, table,
-verified kernel boot ID and calling-thread network namespace to a single,
-exclusively created 0600 file in the canonical owner-private
-`credentials/quic-guard-origins/` directory. Descriptor-relative no-symlink
-creation, fsync, exact inode/path confirmation and canonical JSON readback are
-required before reporting success. An absent, replaced or ambiguous receipt
-never grants ownership merely because an equal-looking nft table exists.
+Remove verifies and stops the original helper before deleting the exact
+owned WG object; only positive original WG termination permits lifting its
+guard. The same State commit records the exact material-bound retirement
+receipt. Credential retirement requires that receipt and independently
+verified resource absence, and refuses replaced or mismatched private files.
+External operator-selected receiver copies remain operator-managed.
 
-`quicguard.InspectRecordedOriginal` is a separate **read-only** Engine-locked
-comparison of this file to the immutable protected journal, the actual
-current kernel boot/network namespace and strictly observed nft handles. It
-re-attests the original file inode and directory over host inspection and
-reports only `recorded_original_creation_consistent_no_retirement_authority`.
-An inode substitution during readback, mismatched boot/namespace, changed
-numerical nft handle values, unverified original material or mismatching
-current nft shape rejects the observation; the journal is not cleared.
-**Recycled nft handles with identical numerical values, or privileged
-replacement with matching current shape and identifiers, may be
-indistinguishable from uninterrupted originals.** A positive result is
-only bounded consistency between a recorded CREATE event and a current
-observation; it does **not** prove continuous kernel-object ownership
-after process death, reboot or replacement, and never authorizes adoption,
-deletion, replacement, replay, restart, retirement or recovery.
-A crash between nft CREATE and receipt publication remains an
-intentionally unresolved orphan requiring separately approved
-reconciliation rather than blind retry.
+A missing original in the same kernel generation is not absence proof: a
+DOWN WG interface can have moved to another namespace. Ensure, RestoreAll
+and Remove preserve the committed owner, reservations, material and remaining
+guard in that case. Legitimate post-reboot recreation requires a different,
+independently trusted host-kernel generation plus strict current-host
+vacancy. Namespace/container restart is not a host reboot. Restoration
+retains the intended Link and credential identity, without fresh pairing.
+Unresolved operation journals continue to block unsafe replay and empty-
+State restore-unit retirement.
 
+Every new managed operation also records its own trusted attempt boot and
+source before effects. Explicit `reconcile-quic-cold-boot` requires a later
+trusted whole-kernel generation, exact unchanged journal/owner, complete
+original material receipt and fresh full current resource vacancy. It only
+reads host resources and atomically reconciles State. An interrupted
+committed Ensure preserves its owner for ordinary Restore; interrupted
+Remove publishes its exact original-extinction receipt; a never-committed
+complete attempt gets a distinct immutable abandonment receipt without
+invented WG ifindex or guard handles. That Link ID remains reserved forever,
+and `retire-quic` can retire only its exact original material. Same-boot
+rollback success/local vacancy cannot clear a journal. Partial or changed
+material without its complete original receipt remains quarantined even
+following a reboot. A source-only journal never enters this route.
 
-An additional, **still source-only and non-runnable**, initial native kernel
-WireGuard creation step is available as
-`quicwgorigin.StageOriginal(ctx, engine, linkID)`. It uses that same
-journal-locked Engine admission (including the immutable QUIC Plan and
-protected, pinned Hysteria material), not a separate resource manager.
-The entrypoint requires the previously recorded **original** QUIC nft
-ingress birth receipt and its current strict nft shape, plus the journal-
-matched private native WireGuard key from the existing KeyStore. It binds
-a fresh pinned-OS-thread network-namespace/boot observation and the exact
-original nft receipt **device/inode**, checking again across the host-effect
-window. Only then does it require current complete kernel-WireGuard public-
-key/listen-port inventories, **all-state** UDP socket vacancy, and the
-absence of foreign interface names/aliases before sending the existing
-exclusive `RTM_NEWLINK` WireGuard creation to the kernel. A journal-derived
-unguessable `q*` staging name is present in that very first kernel effect;
-an `IFLA_IFALIAS` tag is **not** falsely claimed to be atomic with
-creation. A successful exclusive ACK is followed by strict readback of
-the original staging name, first observed ifindex, WireGuard kind,
-DOWN/unaddressed/unconfigured state, then tag-by-ifindex, same-index
-readback, re-attestation of nft guard and protected key inode and a final
-post-publication host readback.
+WSS and QUIC share strict per-Link early-DROP firewall coexistence admission.
+Only protected owner/reservation provenance together with complete expected
+live guard structure can exclude a sibling from foreign-hook rejection.
+This observational exclusion grants no cleanup or recovery rights. Other
+foreign hooks remain untouched and block incompatible activation.
 
-Only after this first CREATE event and its strict readback does the writer
-exclusively publish the matching 0600, descriptor-checked and fsynced
-`credentials/quic-wg-origins/<LinkID>.json` **birth receipt**, with
-an independently reopened canonical path and exact created-file inode.
-It records the immutable journal ID/nonce, initial staging name/tag,
-ifindex, boot/namespace and original guard handles, **not private keys**.
-A repeat call refuses an existing receipt or staging identity, including
-byte-identical predecessors; canceled or uncertain ACKs, alias writes,
-namespace changes, replaced guard receipts and incomplete persistence
-leave the pre-effect journal and any possibly created host resources
-**quarantined**, without deletion, replay or foreign adoption.
-`quicwgorigin.InspectRecordedOriginal` is read-only and compares the
-receipt's inode, current first-generation staging shape and protected
-key against the same Engine journal and guard evidence.
+### Earlier source-only APIs remain quarantined
 
-**Important ownership limitation:** a later identical name, alias, ifindex,
-guard-handle number, key bytes, boot or namespace label cannot prove
-continuous original kernel-object lifetime. In particular ifindex and nft
-handles can be recycled, and privileged same-byte private-file replacement
-between observations may be indistinguishable. The birth receipt and a
-matching observation do **not** authorize restoration, configuration,
-renaming, replacement, adoption, removal or retirement. This WG creation step leaves the interface
-DOWN with no WG private-key or peer configuration and no UDP listener;
-it does not start Hysteria or create a committed Link.
-A future *composed* Engine transaction must establish sufficient ongoing
-ownership and safe recovery/retirement semantics before any such effect.
-The opt-in real-netlink acceptance test operates only in a verified
-disposable user/network namespace and uses synthetic empty WG/UDP socket
-readers where the laboratory lacks those executables; it is **not**
-a production-host or full credential/nft birth-chain proof.
+`PrepareQUICCrash`, `StageQUICCrashMaterials`, `quicwgkey.StageInitial`,
+`quicguard.StageOriginal`, `quicwgorigin.StageOriginal` and
+`quichelper.StartOriginal` retain their bounded source-only contracts.
+Historical operations lack the managed discriminant; neither a matching
+birth receipt nor a later managed caller can promote or consume them.
+Their exclusive original CREATE/start receipts describe bounded creation
+consistency, not continuing lifetime, configuration, recovery or retirement
+authority. Initial WG remains DOWN/unconfigured in that separate API.
+The source-only helper's held `/proc/<creator>/fd/N` launch path is historical
+first-start evidence and is never reused as a managed restart executable.
 
-The separate, **source-only original helper start** is available as
-`quichelper.StartOriginal(ctx, engine, linkID)`. It is not connected to
-a public Backend, CLI or Ensure path. `Engine.WithQUICCrashHelperAdmission`
-holds the existing maintenance, Link and resource locks, derives every
-input from the immutable journal, verifies its protected material before
-and after activation, and rejects journal drift without rewriting it.
-The fixed production adapter also rechecks the recorded original guard
-and still-DOWN native WG shape, including the receipt/key file witnesses.
-These observations establish bounded consistency, not continuous kernel
-object lifetime or permission to configure the device.
+### Acceptance boundaries
 
-Before dispatch, the adapter requires the initial PID-1 system manager,
-the caller's matching boot, network/mount/PID/user namespaces and filesystem
-root, and an unoccupied canonical per-Link service name. It inspects the
-manager's actual unit search paths, including applicable type-wide and
-dash-prefix drop-ins, aliases and reverse `.wants`, `.requires` and
-`.upholds` entries. Existing units, foreign hooks, ambiguous readback and
-unsafe environment inputs fail closed. Effective incoming `Upholds` can
-restart a unit independently of `Restart=no`, so both pre-dispatch and
-positive process readback require no effective `Upholds` relationship and
-no pending manager reload. `TriggeredBy` must be explicitly empty. Newer managers
-must explicitly report empty `Upholds` and `UpheldBy`; proven systemd
-249/250 managers instead require a complete, successful streamed PID-1
-manager dump from the fixed trusted `systemd-analyze` executable. A missing
-property is never used as proof that the dependency is absent. The shared
-pure parser also serves IPsec, whose vendor identity and STOP policy stay
-in its existing adapter. The checks do not modify foreign units.
+The existing pinned-helper loopback test proves authenticated local QUIC
+and byte-identical UDP, including explicit bad-bearer, wrong-client-CA and
+forbidden-destination failures. The earlier `quic-wg-private-l3.sh` laboratory
+proves standalone real WG/nft/Hysteria traffic, not managed Engine behavior.
+Managed acceptance must instead invoke Create/import/Ensure/status/diagnose/
+restore/remove in separate CLI processes, carry bilateral private ICMP/TCP/
+UDP, exercise independent same-peer Links and existing backend siblings,
+and verify failure/quarantine/retirement behavior.
 
-The adapter uses fixed local systemd executables with a clean command
-environment. The transient unit has exact argv/config identity,
-`Type=exec`, `Restart=no`, `StopWhenUnneeded=no`, a fixed minimal environment
-and explicit sandbox properties.
-Only a locally requested privileged UDP port adds `CAP_NET_BIND_SERVICE`;
-a low-numbered remote port does not grant that capability.
-
-The approved Hysteria executable remains open through first execution and
-readback. Its temporary `/proc/<caller-PID>/fd/<descriptor>` launch path
-selects that retained original inode, while the canonical approved path
-and hash are reattested separately. All protected generation files and
-their directory chain also remain pinned across activation. A retained
-descriptor prevents inode recycling; it cannot freeze contents against a
-privileged in-place writer. Equal bytes and indistinguishable metadata
-do not prove that no privileged write occurred. The original process is
-observed through a retained pidfd, PID/start time, systemd invocation/start
-timestamp, exact executable inode and argv/environment, cgroup and network
-namespace, with repeated unit/process readback.
-
-A separate `credentials/quic-helper-origins/<LinkID>.attempt.json` is
-exclusively created, fsynced and verified **before** any start request.
-It binds the journal digest, nonce, host, executable and prior WG/guard
-observations. This attempt remains authoritative even after cancellation,
-an uncertain systemd response, a missing birth receipt or later unit
-vacancy: none permits replay. Only a successful original start followed
-by strict readback publishes the separate `<LinkID>.birth.json`, itself
-checked by retained inode and canonical-path readback. Neither file
-contains private keys or authorization secrets. Both are birth evidence,
-not adoption, stop, restart, reset, restore or retirement authority.
-
-Failures preserve the immutable journal and every possible effect;
-there is no automatic service cleanup or journal consumption. This step
-can establish a helper process, but does not configure WireGuard,
-commit an operational Link, prove authenticated bilateral private-L3
-traffic or complete crash/reboot recovery. The disposable systemd CI
-fixture uses the same fixed adapter with a retained harmless executable
-and pidfd-only cleanup. It checks real manager/process representation
-and collision refusal on the supported runner matrix. A separate owned,
-bounded upholder establishes an actual incoming dependency on an absent
-helper target; target preflight must reject it before any helper start.
-The fixture is not a full Hysteria/credential/guard/WG activation acceptance
-test.
-
-The current first-generation preflight deliberately
-rejects other early WSS/QUIC hooks until their independently verified
-original owner State + host evidence can be passed to the already shared
-sibling coexistence machinery; do not work around this by disabling WSS.
-
-A separate **read-only, journal-bound host observation** is available
-internally as `quicguard.InspectPendingOriginal(ctx, engine, linkID)`. It
-reuses the canonical Engine's existing maintenance/Link/resource locks and
-requires the immutable original journal and current protected generation
-attestation. It uses the fixed actual nft reader, a trusted kernel boot-ID
-source and a before/after stable OS-thread-scoped network-namespace label
-from `/proc/thread-self/ns/net`. The observer locks its OS thread for the
-entire nft subprocess sequence, so the namespace label describes the same
-thread context in which `nft` executes (unlike `/proc/self/ns/net`, which
-can describe a different thread). The original guard CREATE also locks its
-thread across live preflight, `nft` effect and strict readback and fails
-closed on namespace drift (quarantining effects dispatched before drift).
-Neither lock nor the label proves original ownership. The strict
-nft table census and full exact table readback must agree on the original
-object handles. The only successful statuses are **not visible in this
-observed namespace** and **matching shape, ownership unverified** (the latter
-includes Table/Chain/Rule handles). Any missing, changed or ambiguous input
-is an error, not proof of absence or ownership. Kernel nft handles can be
-reused, same-byte foreign tables may appear identical, and namespace-local
-observation cannot prove absence on an entire host. This diagnostic never
-updates State, adopts or removes a resource, starts any Helper, clears the
-journal, or grants durable recovery/retirement authority. Its strict host
-boot-ID source intentionally fails closed in unsupported nested PID/proc
-mount environments; disposable namespace integration uses a clearly
-synthetic boot-ID *test seam only*, with actual kernel nft operations.
-
-This bounded source step has no CLI or runtime caller and is **not** a running
-QUIC Link. Future implementation must add safe continuously verified nft
-lifecycle ownership and retirement (the recorded birth witness is insufficient),
-safe WG configuration and UDP activation, a composed Engine transaction
-that preserves the helper's original process ownership, and dependency-aware
-rollback/reboot/retirement before enabling a committed private L3 Link.
-The separate first-start helper witness and activation-time material
-reattestation above do not satisfy those remaining lifecycle obligations.
-
-The adapter's opt-in disposable loopback compatibility test uses the
-pinned, hash-checked official Hysteria binary with **Go-issued per-Link
-TLS/mTLS credentials and bearer**, not manually authored helper JSON or
-OpenSSL-generated identities. Both DNS and literal loopback IPv4 SANs
-complete a genuine QUIC session and **100/100 byte-identical 1200-byte UDP
-echoes**. Security-negative evidence is not inferred from UDP timeout alone:
-the test requires the bad-bearer client's exact upstream HTTP 404 auth
-failure, the foreign-client-CA client's QUIC TLS remote unknown-CA failure,
-and confirmation that the forbidden client first authenticated and
-then generated an exact server-side UDP WARN event with the ACL's `rejected`
-error, matching that client's QUIC address and authentication identity.
-The unlisted UDP destination must receive nothing; the original allowed
-destination must still work. Every helper INFO log is checked for
-credential leaks, and failure diagnostics never echo raw helper logs.
-These are **local helper/serialization results**,
-not physical WAN, kernel WireGuard L3 or STL-managed lifecycle acceptance.
-
-A separate opt-in test-only
-`scripts/e2e/quic-wg-private-l3.sh` lab now proves that the
-same pinned Hysteria v2.13.0 config renderer, disjoint protected role
-material, native kernel WireGuard devices and source-generated QUIC nft
-guards on **both endpoints** can carry **real bilateral private-IP ICMP,
-TCP and UDP** across a disposable veth underlay joining two network
-namespaces. Both guards are created and strictly verified
-**before** either kernel WG listener starts, and distinct physical UDP
-DROP probes validate the two live guards after activation. Private
-traffic stops when the QUIC client helper is stopped and resumes on
-restarting it with unchanged WG identity. A test-only PID-1 controller,
-exact-pidfd supervisor, parent-death kill boundary and separate-session
-fixture-creating janitor contain both normal and abnormal laboratory
-termination; eight fault modes also exercise supervisor SIGKILL before
-preparation, after protected-material staging and with live helpers. The source
-scripts and reproducible evidence are described in
-[DEVELOPMENT.md](DEVELOPMENT.md). It uses no managed Engine
-activation: the test-only nft CREATE and WG/helper start are scoped
-explicitly to the disposable lab and do NOT grant original resource
-ownership, transaction/journal clearance, systemd/reboot recovery or
-physical-host acceptance. The operational and reproduction contract is
-in [DEVELOPMENT.md](DEVELOPMENT.md).
-
-Before a public `wireguard-quic` (or equivalent explicitly approved) Link
-is enabled, the original Engine must own compatible provider/carrier
-composition and Link identity/State, an exact binary/credential trust
-chain and optional offline helper installation, bounded helper systemd
-ownership, physical UDP and loopback port reservation, the kernel WG
-ingress guard, crash journaling, true wire 1-RTT and private L3 tests,
-independent multi-Link coexistence, restore/remove and safe rollback.
-Enable only one precise combination after validating these gates; do
-not build a generic plugin API or a second packet Engine preemptively.
+A rootless kernel laboratory with a manager shim is explicitly limited to
+that environment. Real PID1 systemd fixtures, independently booted guests,
+changed-kernel reboot restoration, published-artifact installation and
+physical two-host WAN/NAT acceptance are distinct evidence. Record exact
+candidate/environment results in GitHub; never promote a shim, process start
+or standalone packet test into an unobserved delivery claim.
 
 ## WireGuard over WSS (implemented in Stable v0.1.10+)
 
 One canonical Link identity has Backend wireguard-wss (never Native WG
 fallback), Encapsulation UDP, WireGuardOptions and endpoint-local WSSOptions.
 Composition derives precisely WSS over kernel WireGuard, rejecting unsupported
-Carriers. The existing Engine locks, desired-State v4 and resource claims
+Carriers. The existing Engine locks, versioned desired State and resource claims
 govern all effects. The WSS Backend applies in dependency order:
 admit pinned helper/private mTLS + firewall coexistence → create private
 nft kernel-WG UDP ingress guard → create owner-tagged WG Interface →
@@ -1362,7 +1011,7 @@ routes.
 ### R2 — durable WSS pre-effect crash quarantine (shipped in Stable v0.1.10+)
 
 The canonical Engine prepares a secret-free `wss_crash_operations`
-record in State v4, after final resource-lock admission and **before**
+record (introduced in State v4 and preserved in v5), after final resource-lock admission and **before**
 calling the WSS Backend Apply. It stores the endpoint-local public Link,
 operation, random nonce, prior-commit flag, and complete planned resource
 claims. This is a **reservation/quarantine**, not proof of nft/kernel/systemd
@@ -1460,7 +1109,7 @@ recovery without changing ordinary Link automatic replay:
 `arm-wss-cold-boot` command atomically adds
 `cold_boot_armed_from` (the current, kernel-issued UUID) **and**
 `cold_boot_source` (`linux-initial-pid-unshadowed-procfs-v1`) to the
-original validated State v4 pre-effect journal. The versioned source
+original validated WSS pre-effect journal. The versioned source
 marker is written only after successful live host-provenance checks;
 it is not a cryptographic attestation against a privileged State writer.
 It is never a host deletion witness and it cannot be changed after a reboot.

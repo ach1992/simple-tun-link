@@ -104,19 +104,7 @@ func (o quicOffer) validate() error {
 
 // Convert the canonical public composition; this performs no host admission.
 func quicPlanForLink(link domain.Link) (quic.Plan, error) {
-	host, err := composition.QUICHostPlanForLink(link)
-	if err != nil {
-		return quic.Plan{}, err
-	}
-	plan := quic.Plan{LinkID: link.ID, Role: quic.Role(host.Local.Role),
-		Underlay: host.Physical, TLSName: host.TLSName}
-	if plan.Role == quic.Dial {
-		plan.LocalForwardUDPPort = host.Local.LocalHelperUDPPort
-		plan.PeerWGUDPPort = host.Local.RemoteWGUDPPort
-	} else {
-		plan.LocalWGUDPPort = host.Local.LocalWGUDPPort
-	}
-	return plan, nil
+	return quic.PlanFromLink(link)
 }
 func decodeQUICOffer(in io.Reader) (quicOffer, []byte, error) {
 	if in == nil {
@@ -265,27 +253,48 @@ func linkQUICCommand(args []string, in io.Reader, out, errOut io.Writer, options
 		}
 		defer offer.clear()
 		defer clear(raw)
+		plan, err := quicPlanForLink(offer.Receiver)
+		if err != nil {
+			return quicCommandError(operation, jsonOut, "", stlerr.CodeInvalid, "invalid canonical QUIC receiver plan", out, errOut)
+		}
 		response := struct {
-			SchemaVersion int            `json:"schema_version"`
-			LinkID        domain.LinkID  `json:"link_id"`
-			Backend       domain.Backend `json:"backend"`
-			Role          string         `json:"receiver_role"`
-			Underlay      string         `json:"receiver_underlay"`
-			PrivateIP     string         `json:"receiver_private_ip"`
-			Confirm       string         `json:"confirmation_sha256"`
-			Sensitive     bool           `json:"sensitive"`
-		}{1, offer.Receiver.ID, offer.Receiver.Backend, offer.Receiver.QUIC.Role,
-			offer.Receiver.Underlay.Local.String(), offer.Receiver.Addresses.Local.String(),
-			setupLinkConfirmation(string(raw)), true}
+			SchemaVersion      int            `json:"schema_version"`
+			LinkID             domain.LinkID  `json:"link_id"`
+			Backend            domain.Backend `json:"backend"`
+			Role               string         `json:"receiver_role"`
+			PeerRole           string         `json:"peer_role"`
+			Underlay           string         `json:"receiver_underlay"`
+			PeerUnderlay       string         `json:"receiver_peer_underlay"`
+			PrivateIP          string         `json:"receiver_private_ip"`
+			PeerPrivateIP      string         `json:"receiver_peer_private_ip"`
+			UDPPort            uint16         `json:"quic_udp_port"`
+			ForwardUDPPort     uint16         `json:"receiver_forward_udp_port"`
+			PeerForwardUDPPort uint16         `json:"peer_forward_udp_port"`
+			WGListenPort       uint16         `json:"receiver_wireguard_udp_port"`
+			WGPeerPort         uint16         `json:"peer_wireguard_udp_port"`
+			TLSListener        string         `json:"tls_listener_name"`
+			Confirm            string         `json:"confirmation_sha256"`
+			Sensitive          bool           `json:"sensitive"`
+		}{SchemaVersion: 1, LinkID: offer.Receiver.ID, Backend: offer.Receiver.Backend,
+			Role: offer.Receiver.QUIC.Role, PeerRole: offer.Sender.QUIC.Role,
+			Underlay: offer.Receiver.Underlay.Local.String(), PeerUnderlay: offer.Receiver.Underlay.Peer.String(),
+			PrivateIP: offer.Receiver.Addresses.Local.String(), PeerPrivateIP: offer.Receiver.Addresses.Peer.String(),
+			UDPPort: offer.Receiver.QUIC.UDPPort, ForwardUDPPort: offer.Receiver.QUIC.ForwardUDPPort,
+			PeerForwardUDPPort: offer.Sender.QUIC.ForwardUDPPort, WGListenPort: offer.Receiver.WireGuard.ListenPort,
+			WGPeerPort: offer.Receiver.WireGuard.PeerPort, TLSListener: plan.TLSName,
+			Confirm: setupLinkConfirmation(string(raw)), Sensitive: true}
 		if jsonOut {
 			if json.NewEncoder(out).Encode(response) != nil {
 				return 1
 			}
 			return 0
 		}
-		fmt.Fprintf(out, "SENSITIVE QUIC receiver: Link %s, role %s, underlay %s, private IP %s\n",
-			response.LinkID, response.Role, response.Underlay, response.PrivateIP)
-		fmt.Fprintf(out, "After independently verifying this peer, import with --confirm %s\n", response.Confirm)
+		fmt.Fprintf(out, "SENSITIVE QUIC receiver: Link %s\n", response.LinkID)
+		fmt.Fprintf(out, "THIS server: physical %s, private %s, role %s\n", response.Underlay, response.PrivateIP, response.Role)
+		fmt.Fprintf(out, "PEER server: physical %s, private %s, role %s\n", response.PeerUnderlay, response.PeerPrivateIP, response.PeerRole)
+		fmt.Fprintf(out, "QUIC public UDP %d; effective TLS listener identity %s\n", response.UDPPort, response.TLSListener)
+		fmt.Fprintf(out, "Loopback forward UDP: this %d, peer %d (0 = no forwarder); guarded WG UDP: this %d, peer %d\n", response.ForwardUDPPort, response.PeerForwardUDPPort, response.WGListenPort, response.WGPeerPort)
+		fmt.Fprintf(out, "After independently verifying both endpoints and the TLS identity, import with --confirm %s\n", response.Confirm)
 		return 0
 	case "import-quic", "resume-quic":
 		if !((len(args) == 4 || len(args) == 5 && args[4] == "--json") && args[1] == "--stdin" && args[2] == "--confirm" &&

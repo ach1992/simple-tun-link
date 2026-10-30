@@ -103,6 +103,9 @@ func (m *Managed) scope(ctx context.Context, link domain.Link) (*managedScope, e
 	if err != nil {
 		return nil, err
 	}
+	if op.Managed.KernelBootID != s.boot || op.Managed.KernelBootSource != hostidentity.VerifiedHostBootSourceV1 {
+		return nil, fmt.Errorf("managed QUIC guard attempt kernel provenance differs")
+	}
 	if s.prior.Version != 0 && (s.prior.KernelBootID != s.boot) != core.HasQUICColdBootExtinctionWitness(ctx, link.ID) {
 		return nil, fmt.Errorf("managed QUIC guard kernel transition proof differs")
 	}

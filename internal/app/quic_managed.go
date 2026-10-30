@@ -92,18 +92,9 @@ func (e *Engine) managedQUICRoot() (string, error) {
 }
 
 func quicPlanForManagedLink(link domain.Link) (quic.Plan, error) {
-	host, err := composition.QUICHostPlanForLink(link)
-	if err != nil {
-		return quic.Plan{}, err
-	}
-	p := quic.Plan{LinkID: link.ID, Role: quic.Role(host.Local.Role), Underlay: host.Physical, TLSName: host.TLSName}
-	if host.Local.Role == composition.Dial {
-		p.LocalForwardUDPPort = host.Local.LocalHelperUDPPort
-		p.PeerWGUDPPort = host.Local.RemoteWGUDPPort
-	} else {
-		p.LocalWGUDPPort = host.Local.LocalWGUDPPort
-	}
-	return p, nil
+	// PlanFromLink also binds the fixed managed helper startup policy. The
+	// public journal topology cannot reconstruct that private policy marker.
+	return quic.PlanFromLink(link)
 }
 
 func (e *Engine) prepareManagedQUIC(ctx context.Context, req backend.Request, prior state.LinkRecord, resources []domain.ResourceClaim, changed bool) (context.Context, state.QUICCrashOperation, error) {
@@ -126,13 +117,22 @@ func (e *Engine) prepareManagedQUIC(ctx context.Context, req backend.Request, pr
 		g := prior.QUICGeneration
 		expected = quicExpectedMaterialIdentity(state.QUICCrashOperation{CertificateSHA256: g.Files.Certificate, TrustCASHA256: g.Files.TrustCA, AuthorizationSHA256: g.Files.Authorization, HelperConfigSHA256: g.Files.HelperConfig,
 			ExecutablePath: g.ExecutablePath, ExecutableSHA256: g.ExecutableSHA256, ExecutableDevice: g.ExecutableDevice, ExecutableInode: g.ExecutableInode})
-		inspect := e.quicInspectGeneration
-		if inspect == nil {
-			inspect = quic.InspectJournalGeneration
-		}
-		actual, err := inspect(root, p, req.Link.WireGuard.ListenPort, quic.DefaultExecutable, g.MaterialNonce, expected)
-		if err != nil || actual != expected {
-			return nil, state.QUICCrashOperation{}, fmt.Errorf("committed QUIC protected generation differs")
+		if req.Operation == backend.OperationRemove {
+			// Removal requires exact recorded bytes/inodes, not present-day TLS
+			// validity. A certificate expiring cannot strand its owned resources.
+			files, err := e.quicRecordedMaterial(ctx, root, p, req.Link.WireGuard.ListenPort, g.MaterialNonce, expected)
+			if err != nil || files != g.Files {
+				return nil, state.QUICCrashOperation{}, fmt.Errorf("committed QUIC recorded generation differs")
+			}
+		} else {
+			inspect := e.quicInspectGeneration
+			if inspect == nil {
+				inspect = quic.InspectJournalGeneration
+			}
+			actual, err := inspect(root, p, req.Link.WireGuard.ListenPort, quic.DefaultExecutable, g.MaterialNonce, expected)
+			if err != nil || actual != expected {
+				return nil, state.QUICCrashOperation{}, fmt.Errorf("committed QUIC protected generation differs")
+			}
 		}
 	}
 	if provision != nil {
@@ -168,10 +168,14 @@ func (e *Engine) prepareManagedQUIC(ctx context.Context, req backend.Request, pr
 	if req.Operation == backend.OperationRemove {
 		claims = append([]domain.ResourceClaim(nil), prior.OwnedResources...)
 	}
+	boot, err := e.kernelBootID()
+	if err != nil || !hostidentity.ValidBootID(boot) {
+		return nil, state.QUICCrashOperation{}, fmt.Errorf("trusted QUIC attempt kernel generation unavailable")
+	}
 	op := state.QUICCrashOperation{Plan: host, Addresses: req.Link.Addresses, WireGuard: req.Link.WireGuard, Nonce: nonce, Resources: claims,
 		CertificateSHA256: expected.Credentials.CertificateSHA256, TrustCASHA256: expected.Credentials.TrustCASHA256, AuthorizationSHA256: expected.Credentials.AuthorizationSHA256, HelperConfigSHA256: expected.ConfigSHA256,
 		ExecutablePath: quic.DefaultExecutable, ExecutableSHA256: expected.Executable.SHA256, ExecutableDevice: expected.Executable.Device, ExecutableInode: expected.Executable.Inode,
-		Managed: &state.QUICManagedOperation{Version: 1, Intent: req.Link, Operation: string(req.Operation), HadCommittedLink: committed, OriginalGeneration: prior.QUICGeneration}}
+		Managed: &state.QUICManagedOperation{Version: 1, KernelBootID: boot, KernelBootSource: hostidentity.VerifiedHostBootSourceV1, Intent: req.Link, Operation: string(req.Operation), HadCommittedLink: committed, OriginalGeneration: prior.QUICGeneration}}
 	if err := op.Validate(); err != nil {
 		return nil, state.QUICCrashOperation{}, err
 	}
@@ -224,6 +228,25 @@ func (e *Engine) prepareManagedQUIC(ctx context.Context, req backend.Request, pr
 		}
 	}
 	return ctx, op, nil
+}
+
+func (e *Engine) quicRecordedMaterial(ctx context.Context, root string, plan quic.Plan, port uint16,
+	nonce string, expected quic.HelperConfigIdentity) (state.QUICFileIdentity, error) {
+	if e.quicInspectRecordedGeneration != nil {
+		return e.quicInspectRecordedGeneration(ctx, root, plan, port, nonce, expected)
+	}
+	pin, err := quic.OpenPinnedGenerationForRemoval(ctx, root, plan, port, quic.DefaultExecutable, nonce, expected)
+	if err != nil {
+		return state.QUICFileIdentity{}, err
+	}
+	defer pin.Close()
+	if err := pin.Verify(ctx); err != nil {
+		return state.QUICFileIdentity{}, err
+	}
+	f := pin.Identity()
+	return state.QUICFileIdentity{Certificate: f.CertificateSHA256, TLSKey: f.TLSKeySHA256, TrustCA: f.TrustCASHA256,
+		Authorization: f.AuthorizationSHA256, HelperConfig: f.HelperConfigSHA256, DirectoryDevice: f.DirectoryDevice,
+		DirectoryInode: f.DirectoryInode, ReceiptDevice: f.ReceiptDevice, ReceiptInode: f.ReceiptInode}, nil
 }
 
 func sameQUICOperation(a, b state.QUICCrashOperation) bool { return reflect.DeepEqual(a, b) }

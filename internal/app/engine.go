@@ -42,17 +42,18 @@ type MTUManager interface {
 type Engine struct {
 	quicRetirement QUICRetirementStore
 	// Package-private material seams support ordering and crash tests only.
-	quicPreviewMaterial   func(string, quic.Plan, uint16, string, quic.CredentialBundle) (quic.HelperConfigIdentity, error)
-	quicStageGeneration   func(context.Context, string, quic.Plan, uint16, string, string, quic.CredentialBundle, quic.HelperConfigIdentity) (quic.HelperConfigIdentity, error)
-	quicInspectGeneration func(string, quic.Plan, uint16, string, string, quic.HelperConfigIdentity) (quic.HelperConfigIdentity, error)
-	mtuManager            MTUManager
-	maintenance           MaintenanceGuard
-	backends              *backend.Registry
-	store                 state.Store
-	locks                 Locker
-	restorePersistence    RestorePersistence
-	restoreExecutable     string
-	restoreModules        func(context.Context, domain.Link) error
+	quicPreviewMaterial           func(string, quic.Plan, uint16, string, quic.CredentialBundle) (quic.HelperConfigIdentity, error)
+	quicStageGeneration           func(context.Context, string, quic.Plan, uint16, string, string, quic.CredentialBundle, quic.HelperConfigIdentity) (quic.HelperConfigIdentity, error)
+	quicInspectGeneration         func(string, quic.Plan, uint16, string, string, quic.HelperConfigIdentity) (quic.HelperConfigIdentity, error)
+	quicInspectRecordedGeneration func(context.Context, string, quic.Plan, uint16, string, quic.HelperConfigIdentity) (state.QUICFileIdentity, error)
+	mtuManager                    MTUManager
+	maintenance                   MaintenanceGuard
+	backends                      *backend.Registry
+	store                         state.Store
+	locks                         Locker
+	restorePersistence            RestorePersistence
+	restoreExecutable             string
+	restoreModules                func(context.Context, domain.Link) error
 	// Trusted current kernel lifetime source. Tests in package app can
 	// inject deterministic boot transitions; production has no override.
 	kernelBootID  func() (string, error)
@@ -410,6 +411,9 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID), "quic",
 			"unresolved QUIC pre-effect journal blocks ordinary Ensure")
 	}
+	if _, abandoned := snapshot.FindQUICAbandonmentReceipt(desired.ID); abandoned {
+		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID), string(desired.Backend), "abandoned QUIC Link identity is reserved permanently; create a new Link ID")
+	}
 	if _, pending := snapshot.FindWSSCrashOperation(desired.ID); pending {
 		blocked := stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID),
 			string(desired.Backend), "WSS pre-effect crash journal requires explicit, owner-verified reconciliation")
@@ -614,6 +618,9 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		return Result{}, stlerr.New(stlerr.CodeConflict, string(request.Operation),
 			string(link.ID), string(link.Backend),
 			"unfinished QUIC pre-effect journal: no host mutation permitted")
+	}
+	if _, abandoned := fresh.FindQUICAbandonmentReceipt(link.ID); abandoned {
+		return Result{}, stlerr.New(stlerr.CodeConflict, string(request.Operation), string(link.ID), string(link.Backend), "abandoned QUIC identity remains reserved; no host mutation permitted")
 	}
 	if _, pending := fresh.FindWSSCrashOperation(link.ID); pending {
 		return Result{}, stlerr.New(stlerr.CodeConflict, string(request.Operation),

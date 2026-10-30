@@ -171,11 +171,11 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 	if record.Desired.Backend == domain.BackendWireGuardQUIC {
 		observed, runner, inspectErr := trustedQUICObservation(ctx, record.Desired, *options)
 		if inspectErr != nil {
-			return readStatusInspectionError(ctx, stdout, stderr, jsonOutput, inspectErr)
+			return readQUICInspectionError(ctx, stdout, stderr, jsonOutput, inspectErr)
 		}
 		if observed.KernelWireGuardPresent {
 			if _, inspectErr := diagnostics.VerifyPrivateLinkIdentity(ctx, record.Desired, observed.Interface, runner); inspectErr != nil {
-				return readStatusInspectionError(ctx, stdout, stderr, jsonOutput, inspectErr)
+				return readQUICInspectionError(ctx, stdout, stderr, jsonOutput, inspectErr)
 			}
 		}
 		response := linkStatusResponse{SchemaVersion: jsonSchemaVersion, Link: summarizeLink(record.Desired),

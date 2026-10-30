@@ -7,9 +7,8 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/domain"
 )
 
-// validateRolePorts is shared by the helper renderer and the proposed
-// resource admission. This prevents a helper config from accepting a role
-// topology the future canonical Engine cannot safely reserve.
+// validateRolePorts is shared by the helper renderer and canonical resource
+// admission. Configurations cannot bypass the role's exclusive reservations.
 func (p Plan) validateRolePorts() error {
 	switch p.Role {
 	case Dial:
@@ -29,7 +28,7 @@ func (p Plan) validateRolePorts() error {
 	return nil
 }
 
-// LocalAdmission translates a FULL source QUIC Plan into the minimum local
+// LocalAdmission translates a full public QUIC Plan into the minimum local
 // resource identity required for Engine-locked, read-only collision checks.
 // It validates the full TLS endpoint/role first. A caller must never treat
 // the projection as authority to stage credentials or start a helper.
@@ -64,9 +63,9 @@ func (p Plan) LocalAdmission(localKernelWGUDPPort uint16) (composition.QUICLocal
 	return projection, nil
 }
 
-// CarrierClaims proposes only local exclusive QUIC resources for a future
-// Engine plan; the remote peer's WireGuard destination is NOT locally owned.
-// The exact same claims are consumed by read-only Engine admission.
+// CarrierClaims returns the local exclusive resources consumed by canonical
+// Engine planning and read-only collision admission. The remote WireGuard
+// destination is not a locally owned resource.
 func (p Plan) CarrierClaims(localKernelWGUDPPort uint16) ([]domain.ResourceClaim, error) {
 	projection, err := p.LocalAdmission(localKernelWGUDPPort)
 	if err != nil {

@@ -190,6 +190,10 @@ func (h *Host) Begin(ctx context.Context, link domain.Link, prior *state.QUICGen
 		_ = closeScope()
 		return nil, nil, managedError(link, "admission", "host_identity", "local system-manager or host identity could not be verified", err, false)
 	}
+	if s.hasOperation && (s.operation.Managed.KernelBootID != s.identity.BootID || s.operation.Managed.KernelBootSource != hostidentity.VerifiedHostBootSourceV1) {
+		_ = closeScope()
+		return nil, nil, managedError(link, "admission", "journal_boot_changed", "managed QUIC operation belongs to a different or unverified kernel lifetime; reconcile it without replaying effects", nil, false)
+	}
 	approved, err := h.ops.inspectExecutable(quic.DefaultExecutable)
 	if err != nil || approved != s.expected.Executable {
 		_ = closeScope()
@@ -268,6 +272,9 @@ func (h *Host) scope(ctx context.Context, link domain.Link, effect bool) (*manag
 		op, ok := core.QUICManagedOperation(ctx)
 		if !ok || !s.hasOperation || !reflect.DeepEqual(op, s.operation) {
 			return nil, fmt.Errorf("managed QUIC effect requires its exact durable journal")
+		}
+		if op.Managed.KernelBootID != s.identity.BootID || op.Managed.KernelBootSource != hostidentity.VerifiedHostBootSourceV1 {
+			return nil, fmt.Errorf("managed QUIC journal kernel lifetime differs")
 		}
 		if err := h.verifyStoredAdmission(ctx, s); err != nil {
 			return nil, err
@@ -601,6 +608,26 @@ func managedError(link domain.Link, stage, reason, detail string, cause error, c
 	err := stlerr.Wrap(code, "quic_"+stage, string(link.ID), string(domain.BackendWireGuardQUIC), detail, cause)
 	err.ReasonCode = "quic_" + reason
 	err.NextStep = "inspect this Link's QUIC diagnostics and the retained operation journal before retrying"
+	switch reason {
+	case "executable_drift":
+		err.NextStep = "verify the installed pinned Hysteria release and original executable identity; preserve the Link generation"
+	case "material_drift", "material_invalid":
+		err.NextStep = "inspect original protected material and certificate lifetime; do not overwrite or re-pair the active generation"
+	case "state_unavailable":
+		err.NextStep = "restore access to the original protected State location before any Link mutation"
+	case "host_identity":
+		err.NextStep = "run from the original host namespaces and verify the local PID1 system manager"
+	case "journal_boot_changed":
+		err.NextStep = "use the explicit managed QUIC kernel-extinction reconciliation after verifying the new host boot"
+	case "foreign_unit", "unit_unverified":
+		err.NextStep = "inspect this unit's ownership, dependencies and execution properties; preserve any foreign object"
+	case "journal_unavailable":
+		err.NextStep = "inspect local journal availability and permissions; use the separately reported process and exit state"
+	case "unprovisioned":
+		err.NextStep = "complete canonical pairing or inspect the pending managed operation before retrying"
+	case "helper_not_absent", "guard_not_absent", "wireguard_not_absent", "udp_not_absent":
+		err.NextStep = "complete or reconcile the exact managed Remove before retiring private material"
+	}
 	err.Evidence = &stlerr.OperationEvidence{Stage: stage, HostMutation: mutation, DesiredState: "not_committed", Rollback: "not_attempted"}
 	return err
 }

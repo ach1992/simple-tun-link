@@ -21,16 +21,23 @@ func (h *Host) VerifyRetirementHostAbsent(ctx context.Context, link domain.Link,
 	if h == nil || ctx == nil || g.Validate(link) != nil {
 		return fmt.Errorf("managed QUIC original retirement identity invalid")
 	}
-	ctx, err := core.WithQUICOrigin(ctx, g.OriginNonce)
+	ctx = core.WithQUICGeneration(ctx, g)
+	return h.verifyVacantHost(ctx, link, g.OriginNonce, "")
+}
+
+func (h *Host) verifyVacantHost(ctx context.Context, link domain.Link, origin, extinctBoot string) error {
+	ctx, err := core.WithQUICOrigin(ctx, origin)
 	if err != nil {
 		return err
 	}
-	ctx = core.WithQUICGeneration(ctx, g)
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	host, err := h.ops.host()
 	if err != nil {
 		return err
+	}
+	if extinctBoot != "" && host.BootID == extinctBoot {
+		return fmt.Errorf("managed QUIC original kernel lifetime has not ended")
 	}
 	spec, err := h.spec(ctx, link)
 	if err != nil {

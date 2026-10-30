@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -92,7 +93,11 @@ func (g QUICGeneration) Validate(link domain.Link) error {
 // fresh Version 1 operations participate in canonical committed lifecycle.
 // This intent is immutable until its exact atomic commit/removal transition.
 type QUICManagedOperation struct {
-	Version            int            `json:"version"`
+	Version int `json:"version"`
+	// The attempt's trusted kernel generation is recorded BEFORE any effect.
+	// OriginalGeneration may be older during restore and cannot replace this.
+	KernelBootID       string         `json:"kernel_boot_id"`
+	KernelBootSource   string         `json:"kernel_boot_source"`
 	Intent             domain.Link    `json:"intent"`
 	Operation          string         `json:"operation"`
 	HadCommittedLink   bool           `json:"had_committed_link"`
@@ -104,7 +109,7 @@ func (op QUICCrashOperation) ValidateManaged() error {
 	if op.ExecutablePath != "/usr/local/libexec/stl/hysteria" {
 		return fmt.Errorf("managed QUIC requires the canonical approved executable path")
 	}
-	if m == nil || m.Version != 1 || m.Intent.Backend != domain.BackendWireGuardQUIC || m.Intent.Validate() != nil ||
+	if m == nil || m.Version != 1 || !hostidentity.ValidBootID(m.KernelBootID) || m.KernelBootSource != hostidentity.VerifiedHostBootSourceV1 || m.Intent.Backend != domain.BackendWireGuardQUIC || m.Intent.Validate() != nil ||
 		(m.Operation != "ensure" && m.Operation != "remove") {
 		return fmt.Errorf("invalid managed QUIC operation")
 	}
@@ -148,6 +153,11 @@ func validQUICManagedCompletion(op QUICCrashOperation, s Snapshot) bool {
 	}
 	m := op.Managed
 	if m.Operation == "ensure" {
+		if !m.HadCommittedLink {
+			if receipt, ok := s.FindQUICAbandonmentReceipt(m.Intent.ID); ok {
+				return receipt.Validate() == nil && reflect.DeepEqual(receipt.Operation, op)
+			}
+		}
 		r, ok := s.Find(m.Intent.ID)
 		if !ok || r.Desired != m.Intent || !slices.Equal(r.OwnedResources, op.Resources) ||
 			r.QUICGeneration.Validate(r.Desired) != nil || !op.MatchesGenerationMaterial(r.QUICGeneration) {
@@ -187,7 +197,7 @@ func rejectLegacyQUICManagedFields(raw []byte) error {
 		case map[string]any:
 			for key, child := range item {
 				switch strings.ToLower(key) {
-				case "quic", "quic_generation", "quic_link", "quic_original_termination", "managed":
+				case "quic", "quic_generation", "quic_link", "quic_original_termination", "quic_abandonment_receipts", "managed":
 					return true
 				}
 				if contains(child) {

@@ -17,8 +17,10 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/app"
 	wg "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/carrier/quic"
+	"github.com/ach1992/simple-tun-link/internal/composition"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/hostidentity"
+	"github.com/ach1992/simple-tun-link/internal/quichelper"
 	"github.com/ach1992/simple-tun-link/internal/state"
 )
 
@@ -112,6 +114,10 @@ func TestQUICReadOnlyDiagnosticsSeparatesLocalStateFromPeerProof(t *testing.T) {
 		}
 		return app.QUICInspection{Interface: name, IfIndex: 77, KernelPresent: true, GuardActive: true, HelperActive: true, HelperLoaded: true}, nil
 	}
+	options.quicHelperObserver = func(context.Context, domain.Link) (quichelper.HelperDiagnostics, error) {
+		return quichelper.HelperDiagnostics{GuardObserved: true, HelperObserved: true, GuardPresent: true, HelperPresent: true, HelperLoaded: true,
+			State: "active", Authentication: "not_observed", Handshake: "not_observed", MaterialState: "verified", JournalState: "observed"}, nil
+	}
 	var out, errOut bytes.Buffer
 	if code := linkQUICDiagnoseCommand([]string{"diagnose-quic", string(offer.Sender.ID), "--json"}, &out, &errOut, options); code != 0 || errOut.Len() != 0 || calls != 1 {
 		t.Fatal("read-only QUIC diagnostics failed")
@@ -148,5 +154,111 @@ func TestQUICUninstallNeedsOriginalTerminationEvenForRetiredReceipt(t *testing.T
 	snapshot.RemovalReceipts[0].Retired = false
 	if uninstallSnapshotReady(snapshot) {
 		t.Fatal("unfinished credential retirement allowed uninstall")
+	}
+}
+
+func TestQUICHelperDiagnosticsExposeClassifiedEventsAndBoundPartialRead(t *testing.T) {
+	options, offer, _, _ := quicSavedUIFixture(t)
+	name, _ := wg.InterfaceName(offer.Sender.ID)
+	options.quicObserver = func(context.Context, domain.LinkID) (app.QUICInspection, error) {
+		return app.QUICInspection{Interface: name, IfIndex: 77, KernelPresent: true, GuardActive: true, HelperActive: true, HelperLoaded: true}, nil
+	}
+	options.quicHelperObserver = func(context.Context, domain.Link) (quichelper.HelperDiagnostics, error) {
+		return quichelper.HelperDiagnostics{GuardObserved: true, HelperObserved: true, GuardPresent: true, HelperPresent: true, HelperLoaded: true,
+			State: "active", Authentication: "observed", Handshake: "observed", MaterialState: "verified", JournalState: "observed", RestartCount: 2,
+			Events: []quichelper.HelperEvent{{TimestampUSec: 1700000000000000, Level: "info", Event: "transport_connected"}}}, nil
+	}
+	var out, errOut bytes.Buffer
+	if code := linkQUICDiagnoseCommand([]string{"diagnose-quic", string(offer.Sender.ID), "--json"}, &out, &errOut, options); code != 0 {
+		t.Fatal("classified helper diagnostic failed")
+	}
+	var result QUICLinkDiagnostics
+	if json.Unmarshal(out.Bytes(), &result) != nil || result.Helper == nil || result.Helper.RestartCount != 2 || len(result.Helper.Events) != 1 || result.Helper.Events[0].Event != "transport_connected" ||
+		!strings.Contains(result.AuthenticationObservation, "attributed current-invocation") || result.TrafficObservation != "not_tested_by_read_only_diagnostics" {
+		t.Fatal("helper event evidence was lost or promoted to application proof")
+	}
+	options.quicHelperObserver = func(context.Context, domain.Link) (quichelper.HelperDiagnostics, error) {
+		return quichelper.HelperDiagnostics{GuardObserved: true, HelperObserved: true, GuardPresent: true, HelperPresent: true, HelperLoaded: true,
+			State: "active", Authentication: "not_observed", Handshake: "not_observed", MaterialState: "verified", JournalState: "unavailable"}, errors.New("UNTRUSTED_RAW_JOURNAL_SECRET")
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := linkQUICDiagnoseCommand([]string{"diagnose-quic", string(offer.Sender.ID), "--json"}, &out, &errOut, options); code != 0 {
+		t.Fatal("proven local state discarded because historical events were unavailable")
+	}
+	if strings.Contains(out.String()+errOut.String(), "UNTRUSTED_RAW") || !strings.Contains(out.String(), "quic_journal_unavailable") {
+		t.Fatal("partial helper evidence was not explicitly bounded and sanitized")
+	}
+}
+
+func TestQUICHelperObservationRechecksCommittedGenerationBeforePublishing(t *testing.T) {
+	options, offer, _, _ := quicSavedUIFixture(t)
+	name, _ := wg.InterfaceName(offer.Sender.ID)
+	options.quicObserver = func(context.Context, domain.LinkID) (app.QUICInspection, error) {
+		return app.QUICInspection{Interface: name, IfIndex: 77, KernelPresent: true, GuardActive: true, HelperActive: true, HelperLoaded: true}, nil
+	}
+	options.quicHelperObserver = func(ctx context.Context, _ domain.Link) (quichelper.HelperDiagnostics, error) {
+		if err := state.NewFileStore(options.stateRoot).Update(ctx, func(s *state.Snapshot) error {
+			record, ok := s.Find(offer.Sender.ID)
+			if !ok {
+				return errors.New("fixture owner missing")
+			}
+			record.QUICGeneration.Files.HelperConfig = strings.Repeat("d", 64)
+			s.Upsert(record)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return quichelper.HelperDiagnostics{GuardObserved: true, HelperObserved: true, GuardPresent: true, HelperPresent: true, HelperLoaded: true, State: "active", JournalState: "observed"}, nil
+	}
+	var out, errOut bytes.Buffer
+	if code := linkQUICDiagnoseCommand([]string{"diagnose-quic", string(offer.Sender.ID), "--json"}, &out, &errOut, options); code == 0 || !strings.Contains(out.String(), "quic_observation_changed") {
+		t.Fatal("different generation's helper data was published as the original observation")
+	}
+}
+
+func TestQUICAbandonmentReceiptBlocksUninstallUntilFullyRetired(t *testing.T) {
+	offer, _ := testQUICOffer(t)
+	g := quicUITestGeneration(offer)
+	plan, err := composition.QUICHostPlanForLink(offer.Sender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := composition.WireGuardProviderClaims(offer.Sender.ID, offer.Sender.Addresses.Local, offer.Sender.WireGuard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	carrier, err := plan.Local.CarrierClaims()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var claims []domain.ResourceClaim
+	seen := map[string]bool{}
+	for _, claim := range append(provider, carrier...) {
+		if !seen[claim.Canonical()] {
+			seen[claim.Canonical()] = true
+			claims = append(claims, claim)
+		}
+	}
+	op := state.QUICCrashOperation{Plan: plan, Addresses: offer.Sender.Addresses, WireGuard: offer.Sender.WireGuard, Nonce: g.MaterialNonce, Resources: claims,
+		CertificateSHA256: g.Files.Certificate, TrustCASHA256: g.Files.TrustCA, AuthorizationSHA256: g.Files.Authorization, HelperConfigSHA256: g.Files.HelperConfig,
+		ExecutablePath: g.ExecutablePath, ExecutableSHA256: g.ExecutableSHA256, ExecutableDevice: g.ExecutableDevice, ExecutableInode: g.ExecutableInode,
+		Managed: &state.QUICManagedOperation{Version: 1, KernelBootID: g.KernelBootID, KernelBootSource: g.KernelBootSource, Intent: offer.Sender, Operation: "ensure"}}
+	receipt := state.QUICAbandonmentReceipt{Operation: op, Files: g.Files,
+		ReconciledKernelBootID: "22222222-3333-4444-8555-666666666666", ReconciledKernelBootSource: hostidentity.VerifiedHostBootSourceV1}
+	if err := receipt.Validate(); err != nil {
+		t.Fatal("synthetic maintenance fixture invalid", err)
+	}
+	snapshot := state.Snapshot{QUICAbandonmentReceipts: []state.QUICAbandonmentReceipt{receipt}}
+	if uninstallSnapshotReady(snapshot) || uninstallSnapshotEmpty(snapshot) {
+		t.Fatal("unfinished abandoned material allowed destructive maintenance")
+	}
+	snapshot.QUICAbandonmentReceipts[0].Retired = true
+	if !uninstallSnapshotReady(snapshot) || uninstallSnapshotEmpty(snapshot) {
+		t.Fatal("fully retired history must allow uninstall but remain a downgrade reservation")
+	}
+	snapshot.QUICAbandonmentReceipts[0].ReconciledKernelBootID = g.KernelBootID
+	if uninstallSnapshotReady(snapshot) {
+		t.Fatal("retired flag bypassed missing kernel extinction proof")
 	}
 }

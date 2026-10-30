@@ -49,6 +49,8 @@ type managedQUICBackend struct {
 	attestError                           bool
 	uncertainApply                        bool
 	closedWithOwner                       bool
+	recoveryCalls                         int
+	recoveryVacancyError                  bool
 }
 
 func (b *managedQUICBackend) Kind() domain.Backend { return domain.BackendWireGuardQUIC }
@@ -170,6 +172,13 @@ func (b *managedQUICBackend) QUICHostVacant(ctx context.Context, link domain.Lin
 	}
 	return b.owners[link.ID].index == 0, nil
 }
+func (b *managedQUICBackend) QUICRecoveryHostVacant(ctx context.Context, op state.QUICCrashOperation) (bool, error) {
+	b.recoveryCalls++
+	if b.recoveryVacancyError {
+		return false, fmt.Errorf("fixture host vacancy unverified")
+	}
+	return b.QUICHostVacant(ctx, op.Managed.Intent)
+}
 
 type managedQUICKeyStore struct {
 	b    *managedQUICBackend
@@ -195,13 +204,21 @@ func (k managedQUICKeyStore) PutRecipient(id domain.LinkID, _ []byte, _ string) 
 	return nil
 }
 
-type managedQUICRetirement struct{ calls int }
+type managedQUICRetirement struct{ calls, abandonedCalls, abandonedVerifications int }
 
 func (r *managedQUICRetirement) RetireAfterRemove(context.Context, domain.Link, state.QUICGeneration) error {
 	r.calls++
 	return nil
 }
 func (r *managedQUICRetirement) VerifyAbsent(context.Context, domain.Link, state.QUICGeneration) error {
+	return nil
+}
+func (r *managedQUICRetirement) RetireAfterAbandonment(context.Context, state.QUICAbandonmentReceipt) error {
+	r.abandonedCalls++
+	return nil
+}
+func (r *managedQUICRetirement) VerifyAbandonmentAbsent(context.Context, state.QUICAbandonmentReceipt) error {
+	r.abandonedVerifications++
 	return nil
 }
 
@@ -247,6 +264,9 @@ func managedQUICEngineFixture(t *testing.T) (*Engine, *managedQUICBackend, domai
 	}
 	e.quicInspectGeneration = func(string, quic.Plan, uint16, string, string, quic.HelperConfigIdentity) (quic.HelperConfigIdentity, error) {
 		return expected, nil
+	}
+	e.quicInspectRecordedGeneration = func(context.Context, string, quic.Plan, uint16, string, quic.HelperConfigIdentity) (state.QUICFileIdentity, error) {
+		return state.QUICFileIdentity{Certificate: expected.Credentials.CertificateSHA256, TLSKey: strings.Repeat("f", 64), TrustCA: expected.Credentials.TrustCASHA256, Authorization: expected.Credentials.AuthorizationSHA256, HelperConfig: expected.ConfigSHA256, DirectoryDevice: 1, DirectoryInode: 5, ReceiptDevice: 1, ReceiptInode: 6}, nil
 	}
 	return e, b, link
 }

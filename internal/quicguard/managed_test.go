@@ -12,6 +12,7 @@ import (
 	core "github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/composition"
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/hostidentity"
 	"github.com/ach1992/simple-tun-link/internal/state"
 )
 
@@ -43,7 +44,7 @@ func managedGuardFixture(t *testing.T) (*Managed, *guardTestRunner, domain.Link,
 	for _, c := range unique {
 		claims = append(claims, c)
 	}
-	op := state.QUICCrashOperation{Managed: &state.QUICManagedOperation{Version: 1, Intent: link, Operation: "ensure"}, Plan: host, Addresses: link.Addresses, WireGuard: wg, Nonce: fixtureNonce, Resources: claims,
+	op := state.QUICCrashOperation{Managed: &state.QUICManagedOperation{Version: 1, KernelBootID: testBootID, KernelBootSource: hostidentity.VerifiedHostBootSourceV1, Intent: link, Operation: "ensure"}, Plan: host, Addresses: link.Addresses, WireGuard: wg, Nonce: fixtureNonce, Resources: claims,
 		CertificateSHA256: strings.Repeat("a", 64), TrustCASHA256: strings.Repeat("b", 64), AuthorizationSHA256: strings.Repeat("c", 64), HelperConfigSHA256: strings.Repeat("d", 64), ExecutablePath: "/usr/local/libexec/stl/hysteria", ExecutableSHA256: strings.Repeat("e", 64), ExecutableDevice: 1, ExecutableInode: 2}
 	if err := store.Update(context.Background(), func(s *state.Snapshot) error { s.QUICCrashOperations = append(s.QUICCrashOperations, op); return nil }); err != nil {
 		t.Fatal(err)

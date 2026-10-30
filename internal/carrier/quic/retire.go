@@ -36,13 +36,28 @@ func RetireOwnedGeneration(ctx context.Context, root string, plan Plan, nonce st
 	}
 	defer unix.Close(creds)
 	parent, missing, err := maybePrivateDirectory(creds, "quic")
-	if err != nil || missing {
+	if err != nil {
 		return err
+	}
+	if missing {
+		if err := unix.Fsync(creds); err != nil {
+			return fmt.Errorf("QUIC private-parent absence durability uncertain: %w", err)
+		}
+		return nil
 	}
 	defer unix.Close(parent)
 	dir, missing, err := maybePrivateDirectory(parent, string(plan.LinkID))
-	if err != nil || missing {
+	if err != nil {
 		return err
+	}
+	// A prior unlink may have returned an fsync error. Observing the name
+	// absent on retry is insufficient to report durable retirement: sync
+	// the same protected parent before the Engine consumes its receipt.
+	if missing {
+		if err := unix.Fsync(parent); err != nil {
+			return fmt.Errorf("QUIC original directory absence durability uncertain: %w", err)
+		}
+		return nil
 	}
 	defer unix.Close(dir)
 	var original unix.Stat_t

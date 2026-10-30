@@ -1,8 +1,7 @@
-// Package quic renders an optional, strictly scoped UDP-over-QUIC helper
-// configuration for one prospective STL Link. It is NOT a runnable backend:
-// the existing Engine must first own its Link, kernel WireGuard, socket/port
-// reservations, nft ingress isolation, helper binary/credential admission,
-// systemd lifecycle, crash recovery and rollback. No host effects occur here.
+// Package quic renders and protects the narrowly scoped UDP-over-QUIC carrier
+// material used by the canonical managed WireGuard/QUIC Engine composition.
+// These pure plans and file primitives do not independently authorize kernel,
+// firewall or systemd effects; the managed backend owns those transactions.
 package quic
 
 import (
@@ -44,6 +43,9 @@ type Plan struct {
 	LocalForwardUDPPort uint16 // Dial-side loopback socket; zero on Listen.
 	PeerWGUDPPort       uint16 // Dial-side destination: listening peer's WG UDP port.
 	LocalWGUDPPort      uint16 // Listen-side destination: its own kernel WG UDP port.
+	// Only PlanFromLink selects the versioned managed lifecycle policy. Old
+	// source-only Plan literals retain their byte-identical configuration.
+	managed bool
 }
 
 // Command has only public process arguments. The config contains live
@@ -122,6 +124,7 @@ type clientConfig struct {
 	Auth          string       `json:"auth"`
 	TLS           tlsClient    `json:"tls"`
 	UDPForwarding []udpForward `json:"udpForwarding"`
+	Lazy          bool         `json:"lazy,omitempty"`
 }
 
 // Build generates only data, not an executable or install operation. The
@@ -162,12 +165,20 @@ func Build(plan Plan, binary, privateRoot, authorizationToken string) (Command, 
 	configPath := filepath.Join(root, "helper.json")
 	result := Command{Binary: binary, ConfigPath: configPath,
 		Args: []string{"--disable-update-check", "--log-level", "info", "-c", configPath}}
+	if plan.managed {
+		result.Args = []string{"--disable-update-check", "--log-level", "info", "--log-format", "json", "-c", configPath}
+	}
 	var config any
 	switch plan.Role {
 	case Dial:
 		config = clientConfig{
 			Server: plan.Underlay.String(),
 			Auth:   authorizationToken,
+			// A managed dialer must bind its local forwarding socket even if
+			// its peer has not imported the handoff yet. Pinned Hysteria retries
+			// connection on later UDP calls; readiness here proves no peer auth.
+			// https://github.com/apernet/hysteria/blob/ca8fbd874fd6ca82413948de6dc5924405e103e1/core/client/reconnect.go
+			Lazy: plan.managed,
 			TLS: tlsClient{SNI: plan.TLSName, Insecure: false, CA: ca,
 				ClientCertificate: clientCert, ClientKey: clientKey},
 			UDPForwarding: []udpForward{{

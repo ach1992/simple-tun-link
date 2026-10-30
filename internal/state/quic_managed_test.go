@@ -22,7 +22,7 @@ func managedQUICStateFixture(t *testing.T) (QUICCrashOperation, LinkRecord) {
 	link := domain.Link{ID: op.Plan.Local.LinkID, DisplayName: "managed-quic", Backend: domain.BackendWireGuardQUIC, Encapsulation: domain.EncapUDP,
 		Underlay: domain.Underlay{Local: netip.MustParseAddr("192.0.2.10"), Peer: op.Plan.Physical.Addr()}, Addresses: op.Addresses, WireGuard: op.WireGuard,
 		QUIC: domain.QUICOptions{Role: "dial", UDPPort: op.Plan.Physical.Port(), ForwardUDPPort: op.Plan.Local.LocalHelperUDPPort, TLSServerName: op.Plan.TLSName}}
-	op.Managed = &QUICManagedOperation{Version: 1, Intent: link, Operation: "ensure"}
+	op.Managed = &QUICManagedOperation{Version: 1, KernelBootID: "01234567-89ab-4cde-8fab-0123456789ab", KernelBootSource: hostidentity.VerifiedHostBootSourceV1, Intent: link, Operation: "ensure"}
 	op.Resources = normalizeClaims(op.Resources)
 	g := QUICGeneration{Version: 1, OriginNonce: op.Nonce, MaterialNonce: op.Nonce, KernelBootID: "01234567-89ab-4cde-8fab-0123456789ab", KernelBootSource: hostidentity.VerifiedHostBootSourceV1, NetworkNS: "net:[42]", WGIfIndex: 101,
 		GuardTableHandle: 1, GuardChainHandle: 2, GuardRuleHandle: 3,
@@ -87,7 +87,7 @@ func TestManagedQUICRemoveRequiresAtomicExactTerminationReceipt(t *testing.T) {
 	op, record := managedQUICStateFixture(t)
 	store := NewFileStore(t.TempDir())
 	op.Nonce = strings.Repeat("b", 32)
-	op.Managed = &QUICManagedOperation{Version: 1, Intent: record.Desired, Operation: "remove", HadCommittedLink: true, OriginalGeneration: record.QUICGeneration}
+	op.Managed = &QUICManagedOperation{Version: 1, KernelBootID: record.QUICGeneration.KernelBootID, KernelBootSource: hostidentity.VerifiedHostBootSourceV1, Intent: record.Desired, Operation: "remove", HadCommittedLink: true, OriginalGeneration: record.QUICGeneration}
 	if err := store.Update(ctx, func(s *Snapshot) error {
 		s.Upsert(record)
 		s.QUICCrashOperations = append(s.QUICCrashOperations, op)

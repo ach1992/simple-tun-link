@@ -57,6 +57,40 @@ IPsec**, never GRE/IPIP/WireGuard. No package installation or service start
 occurs in ordinary runtime assembly. A SENSITIVE IPsec Quick Link may be staged/activated only under
 its separately verified prerequisite and runtime admission contracts.
 
+### Managed WireGuard over QUIC/TLS
+
+This optional carrier is implemented in the managed QUIC release candidate;
+it is not included in published Stable v0.1.15. It requires real kernel
+WireGuard, `wg`, iproute2, nftables, usable loopback UDP, IPv4 underlay and
+private Link routes, and the exact official Hysteria **app/v2.13.0** binary
+for linux/amd64 or linux/arm64. The companion is separately selected and
+pinned by digest; its mere presence never enables a Link. Source compilation
+or a process reporting the expected version does not establish executable
+trust. See [companion installation](INSTALL.md#optional-pinned-quic-companion-release-candidate).
+
+Managed helpers require systemd **249 or newer** with the exact effective
+unit, process, sandbox and dependency observations accepted by preflight.
+The 249/250 incoming `Upholds` check uses a complete trusted manager dump;
+newer managers must provide the required effective properties. Missing or
+ambiguous evidence makes QUIC unavailable. The general Debian 11 baseline
+does not promise QUIC on its older stock service manager. Trusted host-kernel
+birth evidence also requires the initial PID namespace and unshadowed
+kernel boot identity; a container UUID is not host-reboot evidence.
+
+The selected QUIC UDP port must be reachable on the listener. The local
+WireGuard UDP port is intentionally protected against physical ingress by
+a Link-scoped nft DROP guard. Existing foreign firewall hooks, occupied
+ports or unverifiable objects cause refusal. Independent managed WSS/QUIC
+Links may coexist only after their full saved and live guard identities
+are verified. No proxy mode or direct-WireGuard fallback is enabled.
+
+Creation uses an explicit conservative inner MTU of **1280**. This is not
+measured peer PMTU. The pinned helper's message framing limits managed
+inner datagrams to a conservative aligned **4032 bytes**; native WireGuard's
+fixed overhead is not a QUIC MTU calculation. A verified local IPv4 route
+must support at least 1228 bytes, and actual end-to-end QUIC reachability
+still needs a peer traffic test.
+
 ## Validation and deployment boundaries
 
 Supported OS/kernel/architecture **baselines are not a blanket promise**

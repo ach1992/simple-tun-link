@@ -164,8 +164,9 @@ or installed release.
 
 ### Optional WSS v11 executable compatibility
 
-The WSS Carrier is **not active in STL**. To verify the first helper's
-real parser/TLS/restricted-UDP forwarding behavior on a disposable Linux
+This standalone compatibility test is separate from the managed WSS
+lifecycle. To verify the helper's real parser/TLS/restricted-UDP forwarding
+behavior on a disposable Linux
 x86_64 test host, extract the official `wstunnel v11.0.0` Linux amd64
 archive and verify it against the upstream release `checksums.txt`.
 Then, with the extracted binary at an **absolute path**, run:
@@ -203,8 +204,12 @@ The pull-request CI systemd matrix runs
 `bash scripts/e2e/quic-helper-systemd.sh` on its disposable GitHub-hosted
 Ubuntu runners. The script refuses ordinary connected hosts and requires
 the expected repository/run identity and root test execution. It compiles
-the current `internal/quichelper` tests and starts only a 45-second
-`sleep` fixture through an original retained executable descriptor.
+the current `internal/quichelper` tests and starts only bounded harmless
+`sleep` fixtures. The source-only fixture retains its original executable
+descriptor; the managed fixture uses the canonical executable after its
+launcher process exits, verifies journald process attribution, triggers
+`Restart=on-failure` through the retained original pidfd, then verifies an
+explicit owned stop.
 The production systemd adapter must establish the exact transient unit,
 argv, environment, executable inode, invocation, PID/start time, cgroup
 and namespace. A duplicate start must fail without replacing the first
@@ -223,6 +228,57 @@ attempt ordering, uncertain-start quarantine and replay-denial tests.
 The actual systemd fixture proves the manager/process contract; it does
 not start Hysteria, configure networking or establish a managed QUIC Link.
 The separate private-L3 lab below remains a distinct acceptance envelope.
+
+### Managed QUIC consumer acceptance
+
+The managed carrier has its own opt-in harness:
+
+```sh
+STL_RUN_PRIVILEGED_E2E=1 \
+STL_QUIC_HYSTERIA_BIN=/absolute/path/hysteria-linux-amd64 \
+STL_QUIC_WG_BINARY=/absolute/path/wg \
+bash scripts/e2e/quic-managed-wireguard.sh
+```
+
+Use an unprivileged account with Linux user, network, mount and PID namespace
+support. The helper must match its exact official architecture pin. `wg`
+defaults to the installed command; the optional absolute test tool is copied
+from a retained verified regular file into the private fixture and its bytes
+are rechecked. No host executable is installed or overwritten. Other
+prerequisites are Go, Python 3, util-linux, iproute2, nftables, iptables and
+ping. Missing prerequisites fail before any network effect.
+
+The build tag `stl_e2e_lab` exists only for test binaries. Separate public CLI
+processes run the canonical Engine, actual private credential staging,
+WireGuard and nft operations, and the official Hysteria process. **Manager
+supervision and nested-namespace boot-source authentication are test adapters**;
+they do not establish production systemd or genuine reboot provenance.
+
+The sequence covers two independent QUIC pairs and a native WireGuard
+sibling; bilateral ICMP, 64 KiB TCP and sixteen 1200-byte UDP echoes in each
+direction; physical WG DROP counters; helper interruption and retained-owner
+Restore; port/subnet collision refusal; Remove/retire isolation; and pending
+first-creation/same-boot reconciliation refusal. The independent janitor and
+retained pidfds bound cleanup to the created namespace lifetime and exact
+private directory. No name-only host cleanup is permitted.
+
+CI runs this harness on disposable amd64 and arm64 GitHub-hosted runners.
+Any temporary runner-specific namespace-policy preparation is confined to
+that job and restored afterward. Unsupported capability fails visibly; it
+is not a passed traffic test. Exact commands, source SHA, runner/kernel/tool
+identity, real results and cleanup belong to the associated CI/Issue record.
+
+Mixed WSS/QUIC guard provenance fixtures also run separately:
+
+```sh
+go test -tags stl_e2e_lab ./internal/linux -run TestManagedWGIngressSiblings -count=1
+```
+
+They check both admission directions and reject changed boot/namespace,
+handles, claims, rule shapes and legacy source-only journals. These are
+read-only State/nft fixtures, not combined WSS-plus-QUIC traffic evidence.
+Native PID1 helpers, independently booted VM restoration, physical two-host
+WAN and downloaded published-artifact acceptance remain distinct layers.
 
 ### Optional QUIC over real kernel WireGuard private-L3 lab
 

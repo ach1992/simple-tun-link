@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ach1992/simple-tun-link/internal/linux"
+	"runtime"
 	"slices"
 
 	core "github.com/ach1992/simple-tun-link/internal/backend"
@@ -164,6 +165,58 @@ func (b *Backend) QUICHostVacant(ctx context.Context, link domain.Link) (bool, e
 		return false, err
 	}
 	return linux.QUICWGAllStateUDPPortVacant(ctx, runner, link.WireGuard.ListenPort)
+}
+
+// QUICRecoveryHostVacant is read-only. It accepts a typed extinction witness
+// only to demand complete fresh vacancy; it cannot stop, delete or adopt any
+// same-name resource. The fixed helper reader independently reloads the exact
+// managed journal and verifies its attempt's later trusted kernel generation.
+func (b *Backend) QUICRecoveryHostVacant(ctx context.Context, op state.QUICCrashOperation) (bool, error) {
+	if op.Managed == nil || op.Validate() != nil || !core.HasQUICColdBootExtinctionWitness(ctx, op.Managed.Intent.ID) {
+		return false, fmt.Errorf("QUIC managed recovery proof missing")
+	}
+	reader, ok := b.quicHost.(interface {
+		VerifyRecoveryHostAbsent(context.Context, state.QUICCrashOperation) error
+	})
+	if !ok {
+		return false, fmt.Errorf("fixed managed QUIC recovery inspection unavailable")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if err := reader.VerifyRecoveryHostAbsent(ctx, op); err != nil {
+		return false, err
+	}
+	vacant, err := b.QUICHostVacant(ctx, op.Managed.Intent)
+	if err != nil || !vacant {
+		return false, err
+	}
+	// Also reject a current non-WireGuard occupant of the reserved interface
+	// or private address/subnet. Owner labels never exempt an observation.
+	var claims []domain.ResourceClaim
+	for _, claim := range op.Resources {
+		if claim.Kind == domain.ResourceInterface || claim.Kind == domain.ResourceLinkAddress || claim.Kind == domain.ResourceLinkSubnet {
+			claims = append(claims, claim)
+		}
+	}
+	observed, err := b.collisions.Inspect(ctx, claims)
+	if err != nil {
+		return false, err
+	}
+	for _, actual := range observed {
+		for _, claim := range claims {
+			conflict, err := domain.ResourceClaimsConflict(claim, actual.Claim)
+			if err != nil {
+				return false, err
+			}
+			if conflict {
+				return false, nil
+			}
+		}
+	}
+	if err := reader.VerifyRecoveryHostAbsent(ctx, op); err != nil {
+		return false, err
+	}
+	return true, ctx.Err()
 }
 
 func (b *Backend) verifyQUIC(ctx context.Context, req core.Request, obs observation) (core.Observation, error) {

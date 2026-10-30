@@ -141,7 +141,7 @@ no alternate privileged mutable-tag updater should be invented.
 A release with changed lifecycle/State behavior must independently
 demonstrate that valid older saved State remains readable according
 to its documented migration rules. The published WSS-capable runtime
-(Stable v0.1.10+) uses **State v4**; State v3 originally added **endpoint-local managed MTU**. Older valid
+(Stable v0.1.10–v0.1.15) uses **State v4**; State v3 originally added **endpoint-local managed MTU**. Older valid
 v1/v2 documents can be read under their versioned migration rules,
 but a subsequent successful mutation may persist a newer schema.
 A binary-only rollback to a pre-v4 reader **cannot** be assumed safe
@@ -150,6 +150,33 @@ Preserve a consistent State-and-credential backup with original handoffs
 and validate exact recovery provenance as described in
 [INSTALL.md](INSTALL.md#persisted-state-v3-upgrade-and-safe-rollback-boundary)
 before testing a downgrade or roll-forward.
+
+### Managed QUIC / State v5 acceptance
+
+The managed QUIC candidate advances current State to **v5**. Verify valid
+v1–v4 migration, rejection of managed-authority fields grafted into old
+schemas, preservation of source-only quarantine, and exact generation-bound
+Ensure/Restore/Remove/retirement/reconciliation. A pre-v5 binary-only rollback
+is unsafe after v5 publication, including on a Native-only host. Ordinary
+reads must not write migration State or silently acquire host authority.
+
+The optional Hysteria companion is not bundled in core release artifacts.
+The one-file installer must accept only explicit `--with-quic`, the exact
+architecture's official app/v2.13.0 bytes, trusted staging and an owned
+no-replace destination. Verify duplicate/missing/wrong-architecture/tampered
+selection failure and the unchanged core-only path. Published assets must
+contain the same canonical installer bytes as the reviewed source.
+
+Required QUIC evidence must name its precise layer: focused transaction and
+secret-boundary tests; actual managed CLI processes with real WG/nft and
+pinned Hysteria carrying bilateral private ICMP/TCP/UDP and independent
+Links; native PID1 systemd 249/newer architecture fixtures; real changed-
+kernel restoration where available; and downloaded released-asset installs.
+A rootless namespace test with a manager/boot-identity shim must identify
+that substitution. It does not prove a host reboot, native service-manager
+integration or a physical two-server WAN. Readiness reports must expose any
+unexecuted gate rather than relabel the old standalone packet lab as a
+managed acceptance test.
 
 For an accepted release's representative native guests, prefer the
 following evidence when required by its changes:
