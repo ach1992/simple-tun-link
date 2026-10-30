@@ -200,10 +200,10 @@ delete leftover protected temporary material.
 was the first release with the self-contained `*_local-install.sh` format.**
 Use the [latest published Stable](https://github.com/ach1992/simple-tun-link/releases/latest)
 for a new installation. As a concrete example, the approved immutable
-**v0.1.13** publishes the exact download files below.
+**v0.1.14** publishes the exact download files below.
 When a new release becomes Latest, select that new release's **actual tag**,
 matching architecture and source-verified file instead of blindly reusing
-v0.1.13.
+v0.1.14.
 Open the official release on an Internet-connected device and verify its tag,
 publisher and exact published asset before privileged use. The matching file
 already embeds all required STL core files; no extra STL binary, installer,
@@ -214,8 +214,8 @@ through a separately verified, explicit
 
 | Server CPU | Exactly ONE file to download | Exact official release asset |
 | --- | --- | --- |
-| `x86_64` | `stl_v0.1.13_linux_amd64_local-install.sh` | [Official v0.1.13 AMD64 file](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.13/stl_v0.1.13_linux_amd64_local-install.sh) |
-| `aarch64` | `stl_v0.1.13_linux_arm64_local-install.sh` | [Official v0.1.13 ARM64 file](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.13/stl_v0.1.13_linux_arm64_local-install.sh) |
+| `x86_64` | `stl_v0.1.14_linux_amd64_local-install.sh` | [Official v0.1.14 AMD64 file](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.14/stl_v0.1.14_linux_amd64_local-install.sh) |
+| `aarch64` | `stl_v0.1.14_linux_arm64_local-install.sh` | [Official v0.1.14 ARM64 file](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.14/stl_v0.1.14_linux_arm64_local-install.sh) |
 
 Transfer the selected single file
 **without renaming, extracting or making it executable** into `/root/stl/`.
@@ -874,13 +874,15 @@ Missing, malformed, symlinked or otherwise ambiguous State fails closed;
 the installed binary/record and committed State remain untouched.
 After a Link is removed, its **fully retired, individually validated** WSS,
 WireGuard or IPsec credential receipts are historical non-secret identity
-reservations, not active Links. The newer source-level inspector admits these
-retired receipts for **core-only Uninstall** while preserving their original
-State bytes, but rejects any unfinished retirement, pending journal, missing
-WSS original-termination proof, duplicate or case-aliased nested receipt
-field. **Availability:** official published `v0.1.13` does *not* include this
-later fix; users need a separately reviewed/published successor before its
-installed-menu Uninstall can apply this receipt-aware admission.
+reservations, not active Links. The official **Stable v0.1.14** inspector
+admits these fully retired receipts for **core-only Uninstall** while
+preserving their original State bytes, but rejects any unfinished retirement,
+pending journal, missing WSS original-termination proof, or duplicate/
+case-aliased nested receipt field (including Unicode SimpleFold aliases).
+**Availability:** previously published Stable `v0.1.13` does *not* have
+this fix. Use the trusted Latest Stable **update** to install v0.1.14 before
+attempting its receipt-aware installed-menu Uninstall, and remove each live
+Link through the canonical Link lifecycle first.
 A preflight refusal with `credential_retirement_pending` means to finish the
 specific receipt-bound STL credential-retirement workflow, **not** delete the
 State folder. This exception is never a State-erasure grant: a requested
