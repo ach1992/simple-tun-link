@@ -164,8 +164,8 @@ See [Issue #176](https://github.com/ach1992/simple-tun-link/issues/176).
 
 **Download, upload, run one command.** No compiler, extraction, separate
 STL binary, manifest transfer or manual helper installation is needed.
-This works with official self-contained Stable installers from v0.1.9 onward.
-Use the [latest published Stable](https://github.com/ach1992/simple-tun-link/releases/latest)
+Core-only local installation starts with Stable v0.1.9; WSS needs STL v0.1.10+
+and QUIC/Salamander needs STL v0.1.16+. Use the [latest published Stable](https://github.com/ach1992/simple-tun-link/releases/latest)
 (not an untagged source build). Check the destination CPU with `uname -m`:
 `x86_64` means **amd64**; `aarch64` means **arm64**.
 
@@ -236,7 +236,7 @@ still require suitable **signed APT repositories**. A fully air-gapped
 server without those packages cannot be prepared by the STL file alone.
 IPsec also has a separate, explicitly confirmed PREPARE process. If SFTP
 cannot upload directly as root, see
-[non-root transfer and exact security checks](docs/INSTALL.md#one-transferred-file-and-one-trusted-command-new-release-format).
+[non-root SFTP transfer instructions](docs/INSTALL.md#quick-start-three-steps-including-optional-carriers).
 Full hashes and error recovery live in
 [WSS installation](docs/INSTALL.md#optional-pinned-wss-companion-available-in-stable-v0110)
 and [QUIC installation](docs/INSTALL.md#optional-pinned-quic-companion).
