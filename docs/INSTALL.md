@@ -204,6 +204,64 @@ delete leftover protected temporary material.
 
 ## Local installation: choose a published asset
 
+### Quick start: three steps, including optional Carriers
+
+1. **Download on an Internet-connected device.** On the target run
+   `uname -m`; for `x86_64` choose `amd64`, for `aarch64` choose `arm64`.
+   Download exactly one `stl_vX.Y.Z_linux_ARCH_local-install.sh` from the
+   [latest official STL Stable](https://github.com/ach1992/simple-tun-link/releases/latest).
+   `vX.Y.Z` means the actual published version. Optionally also download
+   the architecture-matched [wstunnel v11.0.0](https://github.com/erebe/wstunnel/releases/tag/v11.0.0)
+   archive for **WSS**, or [Hysteria app/v2.13.0](https://github.com/HyNetworks/hysteria/releases/tag/app%2Fv2.13.0)
+   executable for **QUIC/Salamander**. The
+   [README download table](../README.md#local-installation-without-github-access-on-the-server)
+   links **each exact AMD64/ARM64 helper asset**; the pinned SHA256s are below.
+2. **Upload unchanged files** to root-owned `0700` `/root/stl/` on each
+   destination. Files must be root-owned `0600`/`0644`; no extraction,
+   renaming or executable bit is needed. Keep exactly one matching
+   `*_local-install.sh` plus whichever optional helper files you selected.
+3. **Copy the one trusted command** under
+   [One transferred file and one trusted command](#one-transferred-file-and-one-trusted-command-new-release-format)
+   below and execute it via SSH. With `sudo`, it works for an authorized
+   non-root admin; root may omit `sudo`. Append `--with-wss`, `--with-quic`,
+   or both **after the command's final `stl`** only for helpers you chose.
+   No flag means Core only. The installer validates the selected files,
+   installs the canonical Core and helpers, and opens the menu when
+   interactive. On a noninteractive session use `sudo stl menu`.
+
+Example destination folder for AMD64 with both helpers (all three names
+must match the downloaded official assets):
+
+~~~text
+/root/stl/
+  stl_vX.Y.Z_linux_amd64_local-install.sh
+  wstunnel_11.0.0_linux_amd64.tar.gz
+  hysteria-linux-amd64
+~~~
+
+**No automatic Carrier enablement:** helpers are installed only when
+their matching flags are explicitly supplied; creating a Link requires
+the separate guided Create/Import confirmation. The folder may contain
+only the Core installer, or either/both helpers. If the file checks fail,
+the command refuses before launching the transferred installer.
+
+**Offline is not zero-dependency:** the destination needs no GitHub access,
+but missing selected distro packages can still require accessible **signed
+APT repositories**. No installer silently rewrites APT sources or bypasses
+signatures. An air-gapped fresh OS with missing packages needs separate
+trusted distro-prerequisite provisioning.
+
+**SFTP without root login:** first upload the selected files to a private
+directory under your sudo-capable administrator's home. Create the root
+destination once with `sudo install -d -o root -g root -m 0700 /root/stl`,
+then copy each chosen file as root using
+`sudo install -o root -g root -m 0600 ~/upload/EXACT_FILENAME /root/stl/`
+(replace `EXACT_FILENAME` with the actual file name, and repeat for any
+optional helpers). Use the unchanged original filenames, then run the
+one trusted install command below. Do not loosen `/root` permissions
+or enable root SSH just to transfer files.
+
+
 ### One transferred file and one trusted command (new release format)
 
 **[Stable v0.1.9](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.9)
