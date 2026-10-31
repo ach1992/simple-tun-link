@@ -160,3 +160,59 @@ func TestIPsecDoctorCanceledAndInvalidDependencies(t *testing.T) {
 		t.Fatal("nil runner accepted")
 	}
 }
+
+// Older read-only checks predate the shipped exclusive IPsec provisioner.
+// The public doctor must now direct operators to the real opt-in PREPARE,
+// without mistaking missing units, files, or origin receipts for permission
+// to adopt a foreign strongSwan installation.
+func TestIPsecDoctorMissingArtifactsGuideCurrentSafePrepare(t *testing.T) {
+	report, err := inspectIPsecDoctorFixture(context.Background(), &ipsecDoctorRunner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.ActivationAllowed {
+		t.Fatal("read-only checks must never grant activation")
+	}
+	for _, name := range []string{
+		"native_service_unit",
+		"native_service_unit_origin",
+		"native_systemd_loaded_unit",
+		"native_config",
+		"native_config_origin",
+		"operational_runtime",
+	} {
+		check := checkByName(t, report, name)
+		if check.Status != "blocked" ||
+			!strings.Contains(check.NextStep, "stl doctor ipsec --json") ||
+			!strings.Contains(check.NextStep, "PREPARE") {
+			t.Fatalf("%s advertises an obsolete or unqualified recovery path: %+v", name, check)
+		}
+		if name != "operational_runtime" {
+			for _, marker := range []string{"provisioning_readiness", "sudo stl menu", "Only if a fresh STL-exclusive preflight qualifies"} {
+				if !strings.Contains(check.NextStep, marker) {
+					t.Fatalf("%s missing safe preparation boundary %q: %+v", name, marker, check)
+				}
+			}
+		}
+		for _, obsolete := range []string{"future verified", "source-only unit", "future provisioner"} {
+			if strings.Contains(strings.ToLower(check.NextStep), obsolete) {
+				t.Fatalf("%s points at unavailable future provisioning: %+v", name, check)
+			}
+		}
+	}
+	for _, name := range []string{"native_service_unit", "native_service_unit_origin", "native_config", "native_config_origin"} {
+		check := checkByName(t, report, name)
+		if !strings.Contains(strings.ToLower(check.NextStep), "adopt") {
+			t.Fatalf("%s lost the foreign-ownership restriction: %+v", name, check)
+		}
+	}
+	raw, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"PSK=", "private_key", "NEVER_SHOW"} {
+		if strings.Contains(string(raw), secret) {
+			t.Fatalf("doctor exposed secret: %s", secret)
+		}
+	}
+}

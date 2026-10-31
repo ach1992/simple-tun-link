@@ -24,7 +24,7 @@ func inspectNativeExclusiveConfigOrigin(inspect func() ipsec.NativeOriginAssessm
 		result.Status = "blocked"
 		result.ReasonCode = "native_config_origin_not_provisioned"
 		result.Summary = "No complete private native IPsec publication record was found. Matching configuration bytes alone do not establish STL ownership."
-		result.NextStep = "Use a future verified no-clobber STL provisioner; never adopt a foreign configuration."
+		result.NextStep = ipsecCurrentPrepareGuidance + " Missing STL-origin receipts cannot authorize adopting an existing configuration."
 	case ipsec.NativeOriginConflict:
 		result.Status = "blocked"
 		result.ReasonCode = "native_config_origin_conflict"

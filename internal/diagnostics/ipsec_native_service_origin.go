@@ -25,7 +25,7 @@ func inspectNativeExclusiveServiceUnitOrigin(inspect func() ipsec.NativeOriginAs
 		check.Status = "blocked"
 		check.ReasonCode = "native_service_unit_origin_not_provisioned"
 		check.Summary = "No complete STL-private service publication receipt was found; matching unit bytes alone are not STL ownership."
-		check.NextStep = "Use an independently approved no-clobber STL unit provisioner; do not adopt an existing strongSwan unit."
+		check.NextStep = ipsecCurrentPrepareGuidance + " No matching publication receipt means the existing unit cannot be adopted."
 	case ipsec.NativeOriginConflict:
 		check.Status = "blocked"
 		check.ReasonCode = "native_service_unit_origin_conflict"

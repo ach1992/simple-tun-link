@@ -73,7 +73,7 @@ func inspectNativeSystemdLoadedUnit(ctx context.Context, runner linux.Runner) IP
 		check.Status = "blocked"
 		check.ReasonCode = "native_systemd_unit_not_loaded"
 		check.Summary = "The proposed STL IPsec service is not listed under its primary name in systemd's current in-memory unit inventory; on-disk units and aliases remain unverified."
-		check.NextStep = "Do not install or start the source-only unit on a live host; validate unit identity, aliases, packages and systemd admission in an authorized disposable environment."
+		check.NextStep = ipsecCurrentPrepareGuidance + " A missing loaded-unit entry proves neither vacancy nor safe ownership; do not start or adopt an unverified unit."
 	case systemdInventoryNotFound:
 		// A systemd entry with LOAD=not-found is not proof of a foreign
 		// unit: it may be the residue of an earlier harmless lookup.

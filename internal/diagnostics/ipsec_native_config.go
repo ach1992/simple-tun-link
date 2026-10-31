@@ -26,7 +26,7 @@ func inspectNativeExclusiveConfig(inspect func() ipsec.NativeConfigAssessment) I
 		check.Status = "blocked"
 		check.ReasonCode = "native_config_not_provisioned"
 		check.Summary = "The proposed STL-private strongSwan configuration was not found."
-		check.NextStep = "Use a future verified STL-only provisioner; do not copy or adopt foreign strongSwan configuration."
+		check.NextStep = ipsecCurrentPrepareGuidance + " Never copy or adopt foreign strongSwan configuration."
 	case ipsec.NativeConfigConflict:
 		check.Status = "blocked"
 		check.ReasonCode = "native_config_untrusted"
