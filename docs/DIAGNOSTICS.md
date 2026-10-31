@@ -79,12 +79,17 @@ not prove the whole Link is down. The overall Link outcome can remain
 subprocess is **not** a confirmed lost packet. Missing capability or
 ownership yields `blocked` or `unknown`, never silent success.
 Conditionally unadmitted IPsec reports
-`ipsec_runtime_not_registered` with safe next step
-`stl doctor ipsec`, without activating the daemon. On an
-actual host, the doctor also reports `provisioning_readiness` from
-the same **read-only native-exclusive Preflight** used before IPsec
-PREPARE. A StrongSwan **unit file existing on disk** is not proof
-that a VPN service is active, enabled or using UDP 500/4500.
+`ipsec_runtime_not_registered` with read-only next check
+`stl doctor ipsec --json`, **without** activating a daemon. Inspect
+`provisioning_readiness`: only a freshly qualified STL-exclusive
+preflight may lead to `sudo stl menu` → **Create tunnel →
+Advanced types → IPsec → PREPARE**, with separate Link creation consent.
+Unverified or unowned service/configuration cannot be adopted,
+overwritten or interrupted by PREPARE; even an eligible official vendor
+service requires independent verification and a separate exact
+`STOP strongswan.service` confirmation. A
+StrongSwan **unit file existing on disk** is not proof of an active
+or enabled daemon or the use of UDP 500/4500.
 The current Preflight's separate stable reason/next-step fields
 distinguish missing/ambiguous systemd identity, executable, daemon,
 port, private VICI and service-state problems. They cannot authorize
