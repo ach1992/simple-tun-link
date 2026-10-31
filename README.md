@@ -162,79 +162,88 @@ See [Issue #176](https://github.com/ach1992/simple-tun-link/issues/176).
 
 ### Local installation without GitHub access on the server
 
-Official Stable releases from **v0.1.9 onward** support one self-contained
-core installer. From the [official Latest Stable release](https://github.com/ach1992/simple-tun-link/releases/latest),
-select its **actual published tag** (written as `vX.Y.Z` below) and matching
-architecture; never guess a version or use a source-only/unpublished asset.
-WSS and QUIC are optional: each selected Carrier needs its own separately
-verified companion file.
-Download only **one** official architecture-specific release asset on another
-device. It already contains the matching STL binary, the canonical installer
-and all STL-owned core metadata; no second STL file is needed on the server:
+**Download, upload, run one command.** No compiler, extraction, separate
+STL binary, manifest transfer or manual helper installation is needed.
+Core-only local installation starts with Stable v0.1.9; WSS needs STL v0.1.10+
+and QUIC/Salamander needs STL v0.1.16+. Use the [latest published Stable](https://github.com/ach1992/simple-tun-link/releases/latest)
+(not an untagged source build). Check the destination CPU with `uname -m`:
+`x86_64` means **amd64**; `aarch64` means **arm64**.
 
-| Destination CPU (`uname -m`) | Filename pattern in the published release |
-| --- | --- |
-| `x86_64` | `stl_vX.Y.Z_linux_amd64_local-install.sh` |
-| `aarch64` | `stl_vX.Y.Z_linux_arm64_local-install.sh` |
+**1. Download files on a device that can reach GitHub.** Choose one Core
+installer for the destination CPU, plus only the Carrier helpers you want:
 
-Upload the single file **as-is** into `/root/stl/` on the server (e.g. through
-SFTP); the folder must be root-owned mode `0700` and the file root-owned
-mode `0600` or `0644`. Keep **exactly one** matching
-`*_local-install.sh` in that folder (move any older installer elsewhere; the
-selected optional companions may coexist). Run **as root**
-(the command itself is a trusted pre-execution check, before any transferred
-shell instruction):
+| What you want | AMD64 (`x86_64`) | ARM64 (`aarch64`) | Official download source |
+| --- | --- | --- | --- |
+| **Core STL (required)** | `stl_vX.Y.Z_linux_amd64_local-install.sh` | `stl_vX.Y.Z_linux_arm64_local-install.sh` | [STL Latest Stable assets](https://github.com/ach1992/simple-tun-link/releases/latest) |
+| **WSS/TLS (optional)** | [`wstunnel_11.0.0_linux_amd64.tar.gz`](https://github.com/erebe/wstunnel/releases/download/v11.0.0/wstunnel_11.0.0_linux_amd64.tar.gz) | [`wstunnel_11.0.0_linux_arm64.tar.gz`](https://github.com/erebe/wstunnel/releases/download/v11.0.0/wstunnel_11.0.0_linux_arm64.tar.gz) | [wstunnel v11.0.0](https://github.com/erebe/wstunnel/releases/tag/v11.0.0) |
+| **QUIC/TLS or Salamander (optional)** | [`hysteria-linux-amd64`](https://github.com/HyNetworks/hysteria/releases/download/app/v2.13.0/hysteria-linux-amd64) | [`hysteria-linux-arm64`](https://github.com/HyNetworks/hysteria/releases/download/app/v2.13.0/hysteria-linux-arm64) | [Hysteria app/v2.13.0](https://github.com/HyNetworks/hysteria/releases/tag/app%2Fv2.13.0) |
+
+Replace `vX.Y.Z` with the **actual version on the STL release page**;
+download the named `.sh` asset, not an archive or `stl-bootstrap.sh`.
+Confirm the official publisher/release on the downloading device. The
+installer verifies exact pinned helper hashes automatically, but its own
+embedded checks are not an independent publisher signature.
+
+**2. Upload the selected files unchanged to `/root/stl/` on each server.**
+Use root-authorized SFTP; create the folder if missing (as root:
+`install -d -o root -g root -m 0700 /root/stl`). The directory must be
+root-owned with mode `0700`; files must be root-owned with mode `0600`
+or `0644`. Do **not** rename, extract or `chmod +x` files. Keep **exactly
+one** `*_local-install.sh` in this folder; helpers sit beside it. For
+example, on an AMD64 server using both optional Carriers:
+
+~~~text
+/root/stl/
+  stl_vX.Y.Z_linux_amd64_local-install.sh
+  wstunnel_11.0.0_linux_amd64.tar.gz
+  hysteria-linux-amd64
+~~~
+
+**3. Run one copy-and-paste installation command** on the destination
+via SSH. The command does the trusted preflight, private file copies,
+canonical Core installation and any explicitly selected helpers. Run
+this as root. If using a sudo-capable non-root administrator, prepend
+`sudo ` to the same command (or copy the INSTALL guide's `sudo` variant):
 
 ~~~sh
 bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}") || exit 1; [[ $n =~ ^[0-9]+$ && $n -gt 0 && $n -le 134250000 ]] || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; head -c "$n" -- "${f[0]}" > "$d/${f[0]##*/}"; [[ $(stat -c %s -- "$d/${f[0]##*/}") == "$n" ]]; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; for x in "$@"; do case "$x" in --with-wss|--with-quic) case $(uname -m) in x86_64) a=amd64;; aarch64) a=arm64;; *) echo "STL: unsupported companion CPU" >&2; exit 1;; esac; if [[ $x == --with-wss ]]; then w="/root/stl/wstunnel_11.0.0_linux_${a}.tar.gz"; else w="/root/stl/hysteria-linux-${a}"; fi;; *) continue;; esac; [[ -f $w && ! -L $w && $(stat -c %u:%a "$w") =~ ^0:(600|644)$ && $(stat -c %h "$w") == 1 ]] || { echo "STL: missing or unsafe selected companion" >&2; exit 1; }; z=$(stat -c %s "$w"); [[ $z =~ ^[0-9]+$ && $z -gt 1024 && $z -lt 100000000 ]] || { echo "STL: companion size is unsafe" >&2; exit 1; }; head -c "$z" -- "$w" > "$d/${w##*/}"; [[ $(stat -c %s -- "$d/${w##*/}") == "$z" ]] && cmp -s -- "$w" "$d/${w##*/}" || { echo "STL: companion changed during protected copy" >&2; exit 1; }; done; bash "$d/${f[0]##*/}" "$@"' stl
 ~~~
 
-The final `stl` labels the `bash -c` invocation. To select an optional
-companion, append ` --with-wss` for the pinned `wstunnel v11.0.0` archive
-or ` --with-quic` for the pinned Hysteria `app/v2.13.0` executable after
-that final `stl`. Supply both flags only when selecting both companions;
-use neither for a core-only install. The exact architecture-matched files
-must already be beside the installer. The trusted preflight makes a bounded
-root-private snapshot of the installer and each selected companion; the
-canonical launcher then checks their pinned digests. It rejects absent,
-unsafe or changed selected files instead of silently omitting a companion.
-The [QUIC companion instructions](docs/INSTALL.md#optional-pinned-quic-companion)
-give its exact filenames and provenance requirements. Merely placing a helper
-beside the installer neither selects it nor creates a Link.
-The [full root/sudo procedure](docs/INSTALL.md#one-transferred-file-and-one-trusted-command-new-release-format)
-explains the same verified preflight.
+Append the desired option **after the last `stl` in that same command**:
 
-If using a non-root sudo-capable administrator, run the same command with
-`sudo` placed before `bash -c` (see the [installation guide](docs/INSTALL.md#local-installation-choose-a-published-asset)).
-The preflight rejects unsafe modes/symlinks and snapshots the transferred
-file (at most 134250000 bytes) into a root-private directory **before**
-executing it. It does not prove
-publisher authenticity by itself: verify the official source and release on
-the Internet-connected downloading device. The launcher then recognizes the
-CPU, privately verifies/extracts its embedded
-release archive, and invokes the canonical installer. It handles a new install,
-a no-op for the same verified artifact, or a newer **Stable-to-Stable** update;
-it then opens the menu on a terminal (otherwise use `sudo stl menu`). It never
-fetches STL from GitHub on the destination. Already-installed prerequisites
-are reused; only missing native/WireGuard distro packages may use the configured
-**signed APT repositories**. IPsec preparation is separate. Since
-**Stable v0.1.10**, managed WireGuard over WSS is an **optional**, explicitly
-selected Carrier requiring the separately pinned `wstunnel v11.0.0` archive
-and `--with-wss`; it is not bundled with core STL. **Stable v0.1.16** adds
-the separately pinned Hysteria companion selected with `--with-quic` for
-managed QUIC. Paqet is not shipped.
+| Install | End of that one command |
+| --- | --- |
+| Core only (default) | `stl` |
+| Core + WSS | `stl --with-wss` |
+| Core + QUIC/Salamander | `stl --with-quic` |
+| Core + both | `stl --with-wss --with-quic` |
 
-**Availability:** [v0.1.9](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.9)
-is the first Stable release with the self-contained `.sh` installers.
-The older [v0.1.8](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.8)
-contains only `.tar.gz` local archives and requires a different manual
-procedure; never invoke this command on an archive. See [historical and current installation procedures](docs/INSTALL.md#local-installation-choose-a-published-asset)
-for recovery, exact file selection and older-version instructions.
-Verify publisher/tag provenance on the downloading device before root execution;
-embedded or same-account checksums prove integrity, not independent publisher
-authenticity. The v0.1.9 core installer did not support optional WSS;
-from v0.1.10, the version-pinned WSS companion can be transferred beside the
-core installer and activated **only** with explicit `--with-wss`.
+These are command endings, **not** standalone commands. Merely uploading
+a helper does not select or activate it. The trusted preflight rejects
+unsafe or missing selected files before executing transferred shell bytes;
+the canonical installer checks internal Core and helper integrity and
+installs the helper into its managed destination. The destination
+does not need GitHub access.
+
+**Expected result:** after success, the STL menu opens in an interactive
+terminal; otherwise run `sudo stl menu`. Then use **Create tunnel** and
+**Import setup link** on the two servers; installing a Carrier alone
+never creates a tunnel. Reinstalling the same verified Core is a no-op;
+newer Stable-to-Stable changes use the canonical guarded update path.
+Verify real peer traffic separately.
+
+**Offline limitation:** missing native/WireGuard distro prerequisites
+still require suitable **signed APT repositories**. A fully air-gapped
+server without those packages cannot be prepared by the STL file alone.
+IPsec also has a separate, explicitly confirmed PREPARE process. If SFTP
+cannot upload directly as root, see
+[non-root SFTP transfer instructions](docs/INSTALL.md#quick-start-three-steps-including-optional-carriers).
+Full hashes and error recovery live in
+[WSS installation](docs/INSTALL.md#optional-pinned-wss-companion-available-in-stable-v0110)
+and [QUIC installation](docs/INSTALL.md#optional-pinned-quic-companion).
+
+Older **v0.1.8** used `.tar.gz` instead of the new single-file `.sh`;
+see [legacy instructions](docs/INSTALL.md#older-v018-release-manual-archive-transfer).
 
 ## Connect Server A and Server B
 
