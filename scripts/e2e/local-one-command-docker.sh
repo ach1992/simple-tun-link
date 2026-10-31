@@ -14,13 +14,13 @@ if [[ ${1:-} == guest && -e /.dockerenv && ${STL_E2E_DISPOSABLE_GUEST:-} == appr
     local line
     line=$(grep '^bash -c .*stl-preflight' /mnt/stl-readme)
     [[ $(printf '%s\n' "$line" | wc -l) == 1 ]] || fail missing_root_operator_command
-    [[ $# == 0 || ( $# == 1 && $1 == --with-wss ) ]] ||
-      fail unexpected_operator_options
-    if (( $# == 1 )); then
-      eval "$line --with-wss"
-    else
-      eval "$line"
-    fi
+    # Accepted literal README invocations only; the option string is fixed,
+    # never supplied by an untrusted fixture or derived from archive contents.
+    case "$*" in
+      ""|--with-wss|--with-quic|"--with-wss --with-quic") ;;
+      *) fail unexpected_operator_options ;;
+    esac
+    eval "$line $*"
   }
   run_sudo_operator() {
     local line
@@ -130,6 +130,58 @@ APT_STUB
       shopt -u nullglob
       [[ ${#leftovers[@]} == 0 ]] || fail valid_wss_left_private_preflight
       echo "LITERAL_OFFLINE_WSS_COMPANION_VALIDATED_AND_INSTALLED=PASS"
+      ;;
+    quic-invalid)
+      # The README command must snapshot the selected transferred Hysteria
+      # binary and reach its pinned digest guard before any core mutation.
+      c="/root/stl/hysteria-linux-${STL_E2E_ARCH}"
+      head -c 2048 /dev/zero > "$c"
+      chmod 0600 "$c"
+      if run_root_operator --with-quic > /tmp/stl-quic-invalid.log 2>&1; then
+        fail accepted_invalid_optional_quic_companion
+      fi
+      grep -q 'selected optional QUIC binary SHA-256 mismatch' /tmp/stl-quic-invalid.log ||
+        { cat /tmp/stl-quic-invalid.log >&2; fail quic_did_not_reach_copied_binary_sha_guard; }
+      [[ ! -e /usr/local/bin/stl && ! -e /usr/local/libexec/stl/hysteria &&
+         ! -e /usr/local/lib/simple-tun-link/install-record ]] ||
+        fail invalid_quic_modified_installed_core
+      shopt -s nullglob
+      leftovers=(/root/.stl-preflight.*)
+      shopt -u nullglob
+      [[ ${#leftovers[@]} == 0 ]] || fail invalid_quic_left_private_preflight
+      echo "LITERAL_QUIC_PRIVATE_COMPANION_SNAPSHOT_INVALID_SHA_REFUSED=PASS"
+      ;;
+    quic-valid|both-valid)
+      # Only SHA-pinned transferred upstream bytes, not guest downloads.
+      [[ -f /mnt/stl-quic-binary ]] || fail missing_pinned_guest_quic_binary
+      install -m 0600 -- /mnt/stl-quic-binary "/root/stl/hysteria-linux-${STL_E2E_ARCH}"
+      if [[ $STL_E2E_SCENARIO == both-valid ]]; then
+        [[ -f /mnt/stl-wss-archive ]] || fail missing_pinned_guest_wss_archive
+        install -m 0600 -- /mnt/stl-wss-archive \
+          "/root/stl/wstunnel_11.0.0_linux_${STL_E2E_ARCH}.tar.gz"
+        run_root_operator --with-wss --with-quic
+      else
+        run_root_operator --with-quic
+      fi
+      [[ -x /usr/local/bin/stl && -x /usr/local/libexec/stl/hysteria ]] ||
+        fail valid_selected_quic_not_installed
+      [[ $(sha256sum /usr/local/libexec/stl/hysteria | awk '{print $1}') == "$STL_E2E_QUIC_EXEC_SHA" ]] ||
+        fail selected_quic_helper_executable_hash_drift
+      if [[ $STL_E2E_SCENARIO == both-valid ]]; then
+        [[ -x /usr/local/libexec/stl/wstunnel ]] || fail combined_selected_wss_not_installed
+        [[ $(sha256sum /usr/local/libexec/stl/wstunnel | awk '{print $1}') == "$STL_E2E_WSS_EXEC_SHA" ]] ||
+          fail combined_selected_wss_executable_hash_drift
+      else
+        [[ ! -e /usr/local/libexec/stl/wstunnel ]] || fail unselected_wss_was_installed
+      fi
+      /usr/local/bin/stl version --json |
+        grep -Fq "\"version\":\"$STL_E2E_EXPECTED_VERSION\"" ||
+        fail selected_quic_changed_core_version
+      shopt -s nullglob
+      leftovers=(/root/.stl-preflight.*)
+      shopt -u nullglob
+      [[ ${#leftovers[@]} == 0 ]] || fail valid_quic_left_private_preflight
+      echo "LITERAL_OFFLINE_${STL_E2E_SCENARIO^^}_COMPANIONS_VALIDATED_AND_INSTALLED=PASS"
       ;;
     stable-update)
       # Separate un-released test-tagged binaries exercise real automatic
@@ -303,26 +355,39 @@ printf '%s\n' "$sudo_line" | bash -n || fail malformed_sudo_operator_command
 # Only the disposable guest executes the third-party helper. Its archive
 # is downloaded by the unprivileged runner, SHA-pinned and mounted read-only;
 # the guest has GitHub destinations blocked and no host package mounts.
-wss_dir=$(mktemp -d /var/tmp/stl-wss-operator.XXXXXXXX)
-trap 'rm -rf -- "$wss_dir"' EXIT
+helper_dir=$(mktemp -d /var/tmp/stl-operator-helpers.XXXXXXXX)
+trap 'rm -rf -- "$helper_dir"' EXIT
 case $arch in
   amd64)
     wss_archive_sha=9708a99717b5a951453c2ff7c14c25d3418d02ca7fcb96fdb382a8f2083bab5e
-    wss_exe_sha=6a1d6ab8f4537823d0a8157416b264fa1313253574143e3900eba93e17c6de49 ;;
+    wss_exe_sha=6a1d6ab8f4537823d0a8157416b264fa1313253574143e3900eba93e17c6de49
+    quic_exe_sha=907ba8c9693edb104b20582681fb7dc15639d5b64a9cbb616a7b539190a86691 ;;
   arm64)
     wss_archive_sha=b86abf73e340ed0c3ff9a77a5458aa27213784920ec65513132b36def45edc94
-    wss_exe_sha=c0fa96ec1ceb9275137939159f095d1063b0365641e9d63f84d032c23c7c81ed ;;
+    wss_exe_sha=c0fa96ec1ceb9275137939159f095d1063b0365641e9d63f84d032c23c7c81ed
+    quic_exe_sha=a68a61a84452ca250ce0368202521965ca9cc9d801a404f1dc9008ac6cf677a7 ;;
 esac
 command -v curl >/dev/null || fail missing_verified_upstream_download_tool
-wss_file="$wss_dir/wstunnel_11.0.0_linux_${arch}.tar.gz"
-curl -fLSs --proto '=https' --proto-redir '=https' --tlsv1.2   --connect-timeout 12 --max-time 120 --retry 2   "https://github.com/erebe/wstunnel/releases/download/v11.0.0/${wss_file##*/}"   -o "$wss_file" || fail pinned_optional_companion_download_failed
+wss_file="$helper_dir/wstunnel_11.0.0_linux_${arch}.tar.gz"
+curl -fLSs --proto '=https' --proto-redir '=https' --tlsv1.2 \
+  --connect-timeout 12 --max-time 120 --retry 2 \
+  "https://github.com/erebe/wstunnel/releases/download/v11.0.0/${wss_file##*/}" \
+  -o "$wss_file" || fail pinned_optional_companion_download_failed
 [[ $(sha256sum "$wss_file" | awk '{print $1}') == "$wss_archive_sha" ]] ||
   fail pinned_optional_companion_source_sha_mismatch
+quic_file="$helper_dir/hysteria-linux-${arch}"
+curl -fLSs --proto '=https' --proto-redir '=https' --tlsv1.2 \
+  --connect-timeout 12 --max-time 120 --retry 2 \
+  "https://github.com/HyNetworks/hysteria/releases/download/app%2Fv2.13.0/${quic_file##*/}" \
+  -o "$quic_file" || fail pinned_optional_quic_download_failed
+[[ $(sha256sum "$quic_file" | awk '{print $1}') == "$quic_exe_sha" ]] ||
+  fail pinned_optional_quic_source_sha_mismatch
 
-for scenario in missing-packages preinstalled-no-apt blocked-mirror preflight-size untrusted-foreign sudo-operator wss-invalid wss-valid; do
+for scenario in missing-packages preinstalled-no-apt blocked-mirror preflight-size untrusted-foreign sudo-operator wss-invalid wss-valid quic-invalid quic-valid both-valid; do
   network=bridge
   [[ $scenario == blocked-mirror || $scenario == untrusted-foreign ||
-     $scenario == preflight-size || $scenario == wss-invalid ]] && network=none
+     $scenario == preflight-size || $scenario == wss-invalid ||
+     $scenario == quic-invalid ]] && network=none
   docker run --rm --network "$network" \
     --add-host github.com:127.0.0.1 \
     --add-host api.github.com:127.0.0.1 \
@@ -334,7 +399,9 @@ for scenario in missing-packages preinstalled-no-apt blocked-mirror preflight-si
     -e STL_E2E_EXPECTED_VERSION="$version" \
     -e STL_E2E_ARCH="$arch" \
     -e STL_E2E_WSS_EXEC_SHA="$wss_exe_sha" \
+    -e STL_E2E_QUIC_EXEC_SHA="$quic_exe_sha" \
     -v "$wss_file:/mnt/stl-wss-archive:ro" \
+    -v "$quic_file:/mnt/stl-quic-binary:ro" \
     -v "$entry:/mnt/stl-entry.sh:ro" \
     -v "$guest_script:/mnt/stl-guest-driver.sh:ro" \
     -v "$PWD/README.md:/mnt/stl-readme:ro" \
@@ -346,7 +413,7 @@ done
 # Build two test-tagged artifacts only inside an ephemeral private clone.
 # Never publish/push these tags or modify the source worktree's tag namespace.
 fixture=$(mktemp -d /var/tmp/stl-local-stable-e2e.XXXXXXXX)
-trap 'rm -rf -- "$fixture" "$wss_dir"' EXIT
+trap 'rm -rf -- "$fixture" "$helper_dir"' EXIT
 git clone --quiet --local --no-hardlinks -- "$PWD" "$fixture/repo"
 [[ $(git -C "$fixture/repo" rev-parse HEAD) == "$(git rev-parse HEAD)" ]] ||
   fail 'ephemeral release fixture has the wrong candidate HEAD'
