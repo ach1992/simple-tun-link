@@ -83,6 +83,8 @@ def main():
     p.add_argument('--introduction',action='store_true')
     p.add_argument('--introduction-settle',type=float,default=1.5)
     p.add_argument('--max-datagram',type=int,default=1200)
+    p.add_argument('--lab-drop-outer-after',type=float,default=None,
+                   help='LOCAL LOOPBACK FAULT ONLY: discard outgoing outer datagrams after elapsed seconds')
     a=p.parse_args()
     if (not 1<=a.duration<=1800 or not 148<=a.max_datagram<=1500 or
             not 0<=a.introduction_settle<=3 or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}',a.run_id)):
@@ -91,12 +93,17 @@ def main():
         p.error('distinct_exact_loopback_inner_endpoints_required')
     if a.introduction and a.role!='dial':p.error('only_explicit_dialer_may_introduce')
     if bool(a.netns_path)==a.loopback_control:p.error('choose_netns_or_loopback_control')
-    if a.loopback_control and not all(ipaddress.ip_address(x[0]).is_loopback for x in [a.outer_bind,a.outer_peer]):
+    outer_is_loopback=all(ipaddress.ip_address(x[0]).is_loopback for x in [a.outer_bind,a.outer_peer])
+    if a.loopback_control and not outer_is_loopback:
         p.error('control_mode_requires_loopback_outer')
-    counts={k:0 for k in ['outer_rx','outer_tx','inner_rx','inner_tx','outer_bytes_rx','outer_bytes_tx','invalid_outer','invalid_inner','truncated_outer','truncated_inner','listener_early_inner','queue_dropped','send_errors','introductions']}
+    if a.lab_drop_outer_after is not None and (not outer_is_loopback or
+            not 0 < a.lab_drop_outer_after < a.duration):
+        p.error('lab_fault_requires_loopback_and_bounded_duration')
+    counts={k:0 for k in ['outer_rx','outer_tx','inner_rx','inner_tx','outer_bytes_rx','outer_bytes_tx','invalid_outer','invalid_inner','truncated_outer','truncated_inner','listener_early_inner','queue_dropped','send_errors','introductions','lab_dropped_outer']}
     types={'outer_rx':{},'outer_tx':{}}
     stop=[False];outer=None;inner=None;sel=None;started=time.monotonic()
     first_rx=None;first_tx=None;max_rx=0;max_tx=0;exit_code=0;reason='deadline'
+    lab_drop_reported=[False]
     def emit(event,**values):
         print(json.dumps(dict(utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),run_id=a.run_id,
                              event=event,elapsed_s=time.monotonic()-started,role=a.role,**values),sort_keys=True),flush=True)
@@ -107,6 +114,13 @@ def main():
              maxrss_kib=usage.ru_maxrss,**extra)
     def send_packet(sock,data,which,kind=None):
         nonlocal first_tx,max_tx
+        if (which=='outer' and a.lab_drop_outer_after is not None and
+                time.monotonic()-started >= a.lab_drop_outer_after):
+            counts['lab_dropped_outer']+=1
+            if not lab_drop_reported[0]:
+                lab_drop_reported[0]=True
+                emit('LAB_OUTER_BLACKHOLE',direction='outbound',local_loopback_only=True)
+            return False
         try:
             n=sock.send(data)
             if n!=len(data):raise RuntimeError('partial_datagram_send')
@@ -135,6 +149,7 @@ def main():
         emit('READY',outer_local=outer.getsockname(),outer_peer=outer.getpeername(),outer_socket_inode=outer_identity,
              origin_netns=dict(device=origin.st_dev,inode=origin.st_ino),current_netns=destination,
              inner_local=inner.getsockname(),inner_peer=inner.getpeername(),introduction=a.introduction,
+             lab_drop_outer_after=a.lab_drop_outer_after,
              authentication='not_observed_by_adapter',duration=a.duration)
         deadline=started+a.duration;next_report=time.monotonic()+5
         introduced=not a.introduction;settle_until=0;pending=[];candidate_seen=False

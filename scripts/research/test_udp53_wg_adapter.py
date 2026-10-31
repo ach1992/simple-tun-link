@@ -237,6 +237,27 @@ def introduction_continuity(source):
         a.close()
 
 
+def loopback_fault_is_bounded(source):
+    a = Adapter(source, 'dial', ('--lab-drop-outer-after', '0.7'), duration=2.0)
+    try:
+        a.inner_peer.sendto(frame(1), a.inner_bind)
+        expect_packet(a.outer_peer, frame(1), a.outer_bind)
+        time.sleep(0.75)
+        a.inner_peer.sendto(frame(4), a.inner_bind)
+        expect_silence(a.outer_peer)
+        end = a.finish()
+        require(end['counts']['lab_dropped_outer'] >= 1 and
+                end['counts']['send_errors'] == 0,
+                'lab fault did not discard packets without false send errors')
+        require(len([e for e in a.events if e.get('event') == 'LAB_OUTER_BLACKHOLE']) == 1,
+                'lab fault event must occur exactly once')
+        require(end['counts']['outer_tx'] == 1,
+                'fault must not count discarded datagrams as delivered')
+        return end
+    finally:
+        a.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--adapter", type=Path, default=Path(__file__).with_name("udp53_wg_adapter.py"))
@@ -244,7 +265,8 @@ def main():
     args = parser.parse_args()
     result = {"kind": "real_unprivileged_loopback", "cryptographic_authentication_tested": False,
               "adapter_sha256": hashlib.sha256(args.adapter.read_bytes()).hexdigest(), "cases": []}
-    for test in (listener_controls, dial_without_introduction, introduction_continuity):
+    for test in (listener_controls, dial_without_introduction, introduction_continuity,
+                 loopback_fault_is_bounded):
         try:
             receipt = test(args.adapter)
             result["cases"].append({"name": test.__name__, "status": "PASS", "receipt": receipt})
@@ -252,7 +274,7 @@ def main():
             result["cases"].append({"name": test.__name__, "status": "FAIL",
                                     "error": type(exc).__name__, "detail": str(exc)})
             break
-    result["status"] = "PASS" if len(result["cases"]) == 3 and all(
+    result["status"] = "PASS" if len(result["cases"]) == 4 and all(
         c["status"] == "PASS" for c in result["cases"]) else "FAIL"
     args.result.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     print(json.dumps(result, sort_keys=True))

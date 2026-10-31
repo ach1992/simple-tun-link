@@ -16,10 +16,13 @@ Preserve [PROJECT-SPEC](../../docs/PROJECT-SPEC.md),
 [SECURITY](../../docs/SECURITY.md). This research branch does not add a supported
 backend or authorize integration, publication, automatic failover or a new TUN engine.
 
-## Reviewed source and responsibilities
+## Original U53-R2 source identities and responsibilities
 
-The following source hashes identify the reviewed fixture. Recompute them after
-transfer; a changed file requires review of the effective change before reuse.
+The following hashes belong **only** to the original archived research fixture
+`research/udp53-native-wg-proof@6c00e9e77b206941da132ef8e415ce16441b6c30`.
+The successor recovery branch adds a strictly local fault mode and a new test;
+**do not assume these original hashes describe the changed successor files**.
+Recompute and review the exact active source before a test or transfer.
 
 | File | SHA-256 | Responsibility |
 | --- | --- | --- |
@@ -245,3 +248,69 @@ cleanup remains explicit retained state. No wildcard process kills, recursive
 configuration cleanup, retained-credential deletion or name-only force removal.
 Keep raw captures/private diagnostic material in the authorized evidence store;
 publish only sanitized decision-grade results to #125 and decision changes to #142.
+
+## Successor research: identity-preserving, coordinated local recovery (not WAN)
+
+`test_udp53_identity_recovery.py` is a **root-required, Dev-host-only**,
+explicitly bounded local proof of native WireGuard surviving transport-helper
+replacement. Do not run it on production, an installed STL physical test target,
+or any host without an exact authorized temporary-namespace experiment. It uses
+**only 127.0.0.1 outer UDP sockets**, never UDP/53 over the public Internet.
+It reuses the same original `udp53_fixture.py` and `udp53_apps.py`; native WG
+keys, peer public identities, interfaces and private addresses stay fixed
+through two public-role orientations and replacement of both adapters' source
+socket tuples. The local harness directly coordinates both adapters; **this is
+not a distributed recovery control protocol** and not a self-healing Carrier.
+
+Unprivileged transport checks (four real-loopback controls, no native WG):
+
+```bash
+python3 scripts/research/test_udp53_wg_adapter.py --result /tmp/stl-u53-loopback-result.json
+```
+
+On an **authorized disposable Dev host only**, with the native WG kernel and
+`ip`, `ping`, `nft`, Python 3 and a verified executable `wg` binary available,
+run the native fault/recovery proof as root. The exact absolute path is to a
+verified tool binary; the harness does not install packages or alter global
+host configuration. No new service, route, nft rule, forwarding setting or
+DNS listener is created.
+
+```bash
+python3 scripts/research/test_udp53_identity_recovery.py --wg-tool /absolute/path/to/wg
+```
+
+The `--lab-drop-outer-after` adapter option is rejected unless **both public
+socket endpoints are loopback**; it deliberately discards a local outbound
+UDP datagram after a bounded interval. Each orientation first proves real
+native WG/private ping, independent SHA-256 checked TCP receipts and exact UDP
+receiver/ACK counts in both directions; then verifies failed private probes
+and zero UDP ACK under the artificial blackhole. A single *test-harness*
+coordinated socket generation refresh is allowed, **without changing keys**;
+private ICMP/TCP/UDP must succeed again, including after a short local idle.
+No application sender bytes or handshake timestamp alone count as delivered
+payload. Strict test failures retain negative receipts rather than masquerade
+as a recovered link. Failure detection requires actual private application
+proof, not only a recent WireGuard handshake.
+
+The test owns `u53-lab-*` temporary namespaces and exclusive `stl-u53-lab-*`
+private key directories under `/etc/wireguard`, verifies process termination,
+retains task-specific **nonsecret** fixture and cleanup receipts in the
+restricted Dev evidence location
+`/srv/ai-workspace/stl-research-evidence/2026-10-31-udp53-local/`, then removes
+only verified task-owned temporary fixture roots and keys. It independently
+hashes current host routes, rules, addresses and nft rules before/after. It
+never touches installed STL Link State. A missing or conflicting resource is
+a failure, not permission to take over another service.
+
+**Interpretation gate:** a local recovery PASS proves only that native WG
+identity may be retained while an out-of-band test orchestrator replaces both
+outer sockets. It does not prove why the IR/DE real UDP path becomes unusable,
+or how two separated peers can coordinate when their only transport is down.
+For a real Carrier, that control requirement needs an explicitly approved,
+fail-closed, authenticated peer contract or an independently available approved
+control channel; do not silently add port hopping, third-party relays, credential
+regeneration, persistent helper polling or fallbacks. Physical two-host
+post-idle data delivery, source tuple causality, sustained throughput/PPS,
+capacity, multi-Link admission and managed Engine/systemd lifecycle remain
+separate GO/NO-GO gates under #125/#142. Keep the original historical
+`research/udp53-native-wg-proof` branch and its full evidence intact.
