@@ -13,6 +13,16 @@ specific real pair of WAN/NAT hosts has passed field acceptance; that
 independent Owner gate is tracked in
 [Issue #93](https://github.com/ach1992/simple-tun-link/issues/93).
 Commands using `vX.Y.Z` require a **real published** tag.
+At the dated **2026-10-31 delivery checkpoint**, [immutable
+v0.1.20](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.20)
+was verified installed on both original field hosts after a trusted
+v0.1.19-to-v0.1.20 update. This patch changes only the IPsec doctor's
+human-readable `next_step` and requires **no State migration**.
+That dated fact does **not** pin the latest release forever: always
+consult the dynamic `/releases/latest` link above. The
+[physical results #93](https://github.com/ach1992/simple-tun-link/issues/93)
+and [installer evidence #146](https://github.com/ach1992/simple-tun-link/issues/146)
+distinguish delivery from untested WAN/reboot conditions.
 
 ## Installation and runtime ownership
 

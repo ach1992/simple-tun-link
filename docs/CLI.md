@@ -44,6 +44,13 @@ Uninstall. GRE Native is the default guided Create choice; WireGuard,
 IPIP, manual configuration and advanced encapsulations/IPsec remain
 discoverable.
 
+- An IPsec readiness error can be inspected using **read-only**
+  `stl doctor ipsec --json`. Inspect `provisioning_readiness`:
+  only a fresh, qualified exclusive preflight permits **Create tunnel →
+  Advanced types → IPsec → PREPARE**, with separate consent for
+  actual Link creation. The doctor never repairs an unowned VPN.
+  The separate, exact `STOP strongswan.service` restriction is
+  documented in [installer ownership](INSTALL.md#installation-and-runtime-ownership).
 - Creating a Link selects the **other server's** reachable underlay
   address, suggests this host's route-derived source, and offers an
   unused private Link Address pair or manual local/peer addresses

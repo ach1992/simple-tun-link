@@ -23,6 +23,30 @@ Version equality is recommended but **not intrinsically required for GRE**: the
 v0.1.9 and v0.1.13 GRE Setup Link codec is compatible. Host routing,
 firewall ownership and kernel capabilities must still pass on both endpoints.
 
+## Latest Stable and verified scope
+
+The **authoritative latest release** is [GitHub Latest
+Stable](https://github.com/ach1992/simple-tun-link/releases/latest); do not infer it
+from a branch name or an old Issue. At the **2026-10-31 delivery checkpoint**,
+[immutable v0.1.20](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.20)
+was published from `7ec8667583935843eb387c411372f9fa2e9fe8dc` and independently
+verified installed on **IRPT-101** (Ubuntu 22.04) and **DE-Hamed-Test** (Ubuntu
+26.04). Version/checksum, idempotent reinstall, unchanged protected
+State/companions/network and zero saved Links passed. The v0.1.20 patch changes only
+read-only IPsec recovery `next_step` guidance.
+
+The latest **real bilateral WAN application** evidence for this pair belongs to
+**v0.1.19**: WSS/TLS and QUIC/Salamander worked with **DE public Dial → IR public
+Listen**, with private applications initiated from both ends, and GRE Native passed
+bounded private ICMP. Later GRE FOU/GUE UDP packets did not reach the receiving
+interface; IPIP/native WireGuard did not establish usable paths in those tests, and
+IPsec admission was blocked by the existing foreign-service environment. **v0.1.20 WAN
+traffic, genuine host reboot and soak have not been re-tested.** See [physical
+acceptance #93](https://github.com/ach1992/simple-tun-link/issues/93), [cross-backend
+owner #142](https://github.com/ach1992/simple-tun-link/issues/142) and [installer
+#146](https://github.com/ach1992/simple-tun-link/issues/146). A saved Link, local
+readiness and proved peer traffic are distinct levels of evidence.
+
 ## Tunnel options
 
 | Backend | Transport | Encrypted? | Typical choice |
@@ -109,9 +133,14 @@ existing managed WSS Dial Link from an older Stable, replacing the STL binary
 alone does **not** recreate its running systemd helper or activate the
 new dialer reconnect wakeup. See the separately approved
 [managed WSS upgrade procedure](docs/INSTALL.md#existing-managed-wss-dial-helper-after-updating-to-v0112).
-For IPsec, preparation may require separately approved signed packages
-and an exclusively attested private service. STL must not silently
-take over another VPN installation.
+For IPsec, inspect the **read-only** `sudo stl doctor ipsec --json` report,
+especially `provisioning_readiness`. Only after a fresh, qualified
+STL-exclusive preflight, use `sudo stl menu` → **Create tunnel →
+Advanced types → IPsec → PREPARE**; Link creation needs **separate**
+confirmation. An unowned or ambiguous StrongSwan service cannot be adopted.
+Stopping an independently verified eligible official service requires
+distinct exact `STOP strongswan.service` consent. See
+[IPsec preparation and ownership](docs/INSTALL.md#installation-and-runtime-ownership).
 
 ### Install an exact older published Stable
 
@@ -239,13 +268,15 @@ intended peer through a trusted private channel, then use
 The original protected receiver offer can be displayed again
 through the explicit **SHOW** action and separately retired with
 **DELETE**; ordinary status and JSON never include the secret.
-IPsec is also available under Advanced types **only when its
-native-exclusive runtime has passed admission**. A failed IPsec
-preflight does not disable GRE/IPIP/WireGuard. For IPsec, after the
-other server has imported the protected Setup Link, choose **My tunnels
-→ Connect IPsec** on either peer and explicitly confirm `CONNECT`
-before running Test connectivity. Import alone does not initiate
-IKEv2; Test connectivity remains read-only and explains a missing SA.
+For IPsec, choose **Create tunnel → Advanced types → IPsec**.
+If its private runtime is not admitted yet, the menu can offer
+separately gated `PREPARE` **only on a qualified host**; review the
+[read-only doctor and security checks](docs/INSTALL.md#installation-and-runtime-ownership)
+before consenting to package or service effects. A blocked IPsec preflight
+does not disable GRE/IPIP/WireGuard. Once the other server imports the
+protected Setup Link, select **My tunnels → Connect IPsec** on either peer
+and explicitly confirm `CONNECT` before Test connectivity. Import
+alone does not initiate IKEv2, and Test connectivity never creates an SA.
 
 ### WireGuard over WSS/TLS (optional, Stable v0.1.10+)
 
@@ -260,10 +291,13 @@ Merely copying the helper does not install it. Regular online/core STL
 installation does **not** fetch or enable this helper.
 
 1. On the first host open **Create tunnel → 6 WireGuard / WSS + TLS**.
-   Enter the peer's reachable address, select **Listen WSS** or **Dial WSS**,
-   the listener's reachable TLS TCP port (default `443`), distinct local/peer
-   protected WG UDP ports, private IPs and TLS server identity. Review the
-   planned owned changes and type `YES`.
+   Enter the peer's reachable address; **Enter** at the direction prompt
+   accepts a *provisional, unverified* Listen/Dial suggestion, while
+   **1=Listen / 2=Dial** overrides it for this host. Set the listener's
+   reachable TLS TCP port (default `443`), distinct protected WG UDP ports,
+   private IPs and TLS server identity. Review actual roles and owned effects
+   before `YES`. The receiver gets the complementary public role;
+   the suggestion is **not** an external reachability test.
 2. Transfer the resulting **SENSITIVE receiver Setup Link** through an
    authenticated private channel. On the second host use **Import setup
    link → 3 WireGuard / WSS + TLS**, hidden-paste the original offer,
