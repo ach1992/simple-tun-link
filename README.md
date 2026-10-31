@@ -29,8 +29,7 @@ The **authoritative latest release** is [GitHub Latest
 Stable](https://github.com/ach1992/simple-tun-link/releases/latest); do not infer it
 from a branch name or an old Issue. At the **2026-10-31 delivery checkpoint**,
 [immutable v0.1.20](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.20)
-was published from `7ec8667583935843eb387c411372f9fa2e9fe8dc` and independently
-verified installed on **IRPT-101** (Ubuntu 22.04) and **DE-Hamed-Test** (Ubuntu
+was published from `7ec8667583935843eb387c411372f9fa2e9fe8dc` and verified installed on **IRPT-101** (Ubuntu 22.04) and **DE-Hamed-Test** (Ubuntu
 26.04). Version/checksum, idempotent reinstall, unchanged protected
 State/companions/network and zero saved Links passed. The v0.1.20 patch changes only
 read-only IPsec recovery `next_step` guidance.
