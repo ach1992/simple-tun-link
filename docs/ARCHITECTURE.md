@@ -84,6 +84,49 @@ The domain distinguishes:
 - dependencies;
 - desired vs observed state.
 
+### Public initiation and endpoint-local roles
+
+Three distinct roles must never be conflated: the **setup creator** (which
+host issues the pairing material), the **public transport initiator** (which
+host first contacts the other's physical listener), and the **private
+application initiator** (which host first sends packets over the established
+Link). A receiver may be the public initiator; private applications may
+initiate from either end once the Link is usable.
+
+- WSS and QUIC/Salamander have explicit endpoint-local `dial` and `listen`
+  carrier roles. Either peer may create the Link with either role. Pairing
+  produces exactly one complementary peer role. The Listen endpoint owns
+  the public listener port and TLS listener identity; the Dial endpoint owns
+  the private loopback UDP forwarding socket. Credentials and owned host
+  resources are scoped to the exact Link and corresponding endpoint-local
+  role, independent of country, underlay ordering or setup creator identity.
+- Native GRE/IPIP, including FOU/GUE, are peer-configured encapsulations,
+  not client/server transports; no synthetic Dial/Listen setting should be
+  imposed. Native WireGuard uses each peer's configured endpoint and
+  keepalive/roaming behavior instead of a universal fixed initiator.
+  IPsec/IKEv2 uses explicit peer-local initiation (the committed Link can
+  be connected from either configured endpoint), not a geographical role.
+- Role choice is a **per-Link** supported transport capability. In the
+  human-guided path the default is a **provisional orientation suggestion**
+  derived symmetrically from known endpoint address scope and deterministic
+  canonical IPv4 ordering if both endpoints have the same scope. The creator
+  never has to choose a direction to continue; selecting 1 (Listen) or 2
+  (Dial) at the same prompt overrides the suggestion and takes precedence. The
+  resolved `dial`/`listen` roles enter the existing creator/recipient offer,
+  not a new persisted `auto` role. The default is **not** a peer test,
+  guaranteed listener accessibility or automatic failover. Source address,
+  DNS response, local socket readiness or private application direction alone
+  cannot prove peer-authenticated public establishment.
+- Future *reachability-based* automatic direction changes need a separately
+  versioned, bounded, peer-coordinated authenticated probe and safe
+  rollback/ownership. Neither a proposed default nor a manual override
+  permits success reporting without observed authenticated private traffic.
+- A role change on a committed Link is a topology/lifecycle operation, not
+  permission to mutate it silently or reuse foreign listener resources.
+  Observe actual ownership, credentials and peer agreement under canonical
+  Engine locks and the appropriate versioned state/pairing migration gates.
+  This rule does not introduce automatic runtime failover or a second Engine.
+
 ### Backend adapters
 Initial adapters:
 - GRE;

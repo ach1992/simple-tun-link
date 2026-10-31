@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ach1992/simple-tun-link/internal/carrier/wss"
+	"golang.org/x/sys/unix"
 )
 
 // The operator must see the next question after the informational WSS banner;
@@ -72,5 +73,91 @@ func TestWSSGuidedMissingCompanionGivesBoundedActionableMessage(t *testing.T) {
 	}
 	if _, err := os.Stat(root); !os.IsNotExist(err) {
 		t.Fatalf("WSS missing companion created State: %v", err)
+	}
+}
+
+// Exercise the actual WSS wizard from role choice through review on a narrow
+// terminal. Cancel before YES: no credential or host-resource mutation is allowed.
+func TestWSSGuidedRealPTYDirectionPortRetryReviewAndCancel(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	workspace := t.TempDir()
+	root := filepath.Join(workspace, "absent-state")
+	binary := filepath.Join(workspace, "pinned-helper")
+	payload := []byte("isolated pinned WSS helper identity; never executed")
+	if err := os.WriteFile(binary, payload, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(payload)
+	companion := wss.Host{Binary: binary, SHA256: hex.EncodeToString(sum[:])}
+	master, slave := openMenuPTY(t)
+	if err := unix.IoctlSetWinsize(int(slave.Fd()), unix.TIOCSWINSZ,
+		&unix.Winsize{Row: 24, Col: 38}); err != nil {
+		t.Fatal(err)
+	}
+	opts := guidedTestOptions(root, &guidedTestRunner{},
+		&guidedTestBackend{lifecycleFakeBackend: newLifecycleFake()})
+	done := make(chan int, 1)
+	go func() {
+		done <- menuCreateWSSWithHost(slave, bufio.NewReader(slave), slave, slave, opts, companion)
+	}()
+	steps := []struct {
+		prompt, answer string
+	}{
+		{"Other server's reachable IPv4 address", "192.0.2.20\n"},
+		{"Tunnel IP on THIS server", "\n"},
+		{"Direction [Enter=suggested; 1=listen; 2=dial]: ", "2\n"},
+		{"Public WSS/TLS TCP port [443]: ", "0\n"},
+	}
+	for _, step := range steps {
+		readMenuPTYUntil(t, master, step.prompt)
+		if _, err := io.WriteString(master, step.answer); err != nil {
+			t.Fatal(err)
+		}
+	}
+	retry := readMenuPTYUntil(t, master, "Use a port number between 1 and 65535.", "Public WSS/TLS TCP port [443]: ")
+	if strings.Contains(retry, "Use a UDP port number") {
+		t.Fatalf("WSS TCP was reported as UDP: %q", retry)
+	}
+	if _, err := io.WriteString(master, "8443\n"); err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []struct {
+		prompt, answer string
+	}{
+		{"Kernel WG UDP port on THIS server", "\n"},
+		{"Kernel WG UDP port on OTHER server", "\n"},
+		{"THIS server's private loopback forwarding UDP port", "\n"},
+		{"TLS certificate SAN", "\n"},
+	} {
+		readMenuPTYUntil(t, master, step.prompt)
+		if _, err := io.WriteString(master, step.answer); err != nil {
+			t.Fatal(err)
+		}
+	}
+	review := readMenuPTYUntil(t, master, "Create WSS Link and private receiver handoff? Type YES")
+	for _, marker := range []string{
+		"192.0.2.10 (dial)", "192.0.2.20 (listen)", "192.0.2.20:8443/TCP",
+		"manual override", "Public reachability is unverified",
+	} {
+		if !strings.Contains(review, marker) {
+			t.Fatalf("narrow WSS review missing %q: %q", marker, review)
+		}
+	}
+	if strings.Contains(review, "\x1b") {
+		t.Fatalf("NO_COLOR WSS review contained ANSI: %q", review)
+	}
+	if _, err := io.WriteString(master, "\n"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("WSS preview cancellation returned %d", code)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("WSS preview cancellation did not finish")
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("WSS review cancellation wrote State or credentials: %v", err)
 	}
 }

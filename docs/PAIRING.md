@@ -79,6 +79,17 @@ listen/peer port and endpoint keepalive roles. Stable Link ID,
 backend/encapsulation and display name stay unchanged.
 Individual Link IDs are distinct even for same-peer Links.
 
+**Setup creator is not public connection dialer.** For the separate managed
+WSS/QUIC creator/offer contracts, the creating endpoint resolves its own
+`dial` or `listen` role (guided: Enter for provisional default or 1/2
+for manual; versioned machine requests: explicit), and the protected
+recipient handoff receives the complementary role. TLS listener identity,
+public port and private forwarding belong to the selected roles, regardless
+of which endpoint authored the offer. Generic `Offer.ReceiverLink()` above
+covers its supported native backends; it is not an alternate WSS/QUIC
+credential or role-inversion contract. Private application initiation and
+public Carrier initiation are separate from creator/recipient identity.
+
 The ordinary application `Link` is public configuration:
 - GRE/IPIP carry no private credential (GRE key is a
   nonsecret identifier, not an encryption key).

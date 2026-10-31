@@ -58,19 +58,9 @@ func menuCreateWSSWithHost(input io.Reader, reader *bufio.Reader, out, errOut io
 	if err != nil {
 		return p.failed(err)
 	}
-	menuSection(out, "WSS roles / which side accepts public TLS?")
-	menuOption(out, "1", "Listen WSS", "THIS server accepts the selected TCP port")
-	menuOption(out, "2", "Dial WSS", "OTHER server accepts the TCP port")
-	choice, err := p.ask("Choose [1]: ")
+	role, roleSource, err := askCarrierRole(p, "WSS", route.Source, peer)
 	if err != nil {
 		return p.failed(err)
-	}
-	role := "listen"
-	if choice == "2" {
-		role = "dial"
-	} else if choice != "" && choice != "1" {
-		menuNotice(out, "WARNING", "Choose 1 or 2.")
-		return 2
 	}
 	tcp, err := askPortDefault(p, "Public WSS/TLS TCP port [443]: ", 443)
 	if err != nil {
@@ -131,8 +121,7 @@ func menuCreateWSSWithHost(input io.Reader, reader *bufio.Reader, out, errOut io
 	}
 	menuScreen(out, "Review / confirm WireGuard over WSS")
 	menuField(out, "Backend", "WireGuard / WSS + TLS")
-	menuField(out, "This server", route.Source.String()+" ("+role+")")
-	menuField(out, "Other server", peer.String())
+	showCarrierDirectionReview(out, route.Source, peer, role, roleSource, "TCP", tcp)
 	menuField(out, "TLS TCP port", strconv.Itoa(int(tcp)))
 	menuField(out, "Kernel WG UDP", fmt.Sprintf("this %d / peer %d", localWG, peerWG))
 	menuField(out, "Private IPs", addresses.Local.String()+" <-> "+addresses.Peer.String())
