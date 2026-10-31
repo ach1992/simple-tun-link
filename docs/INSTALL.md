@@ -242,8 +242,10 @@ must match the downloaded official assets):
 **No automatic Carrier enablement:** helpers are installed only when
 their matching flags are explicitly supplied; creating a Link requires
 the separate guided Create/Import confirmation. The folder may contain
-only the Core installer, or either/both helpers. If the file checks fail,
-the command refuses before launching the transferred installer.
+only the Core installer, or either/both helpers. Unsafe or missing selected
+files fail the trusted preflight before transferred code runs; the
+launcher then verifies build-bound and pinned companion hashes before
+installing the Core or optional helper.
 
 **Offline is not zero-dependency:** the destination needs no GitHub access,
 but missing selected distro packages can still require accessible **signed
