@@ -26,7 +26,7 @@ func inspectNativeExclusiveServiceUnit(inspect func() ipsec.NativeServiceUnitAss
 		result.Status = "blocked"
 		result.ReasonCode = "native_service_unit_not_provisioned"
 		result.Summary = "The proposed STL-exclusive IPsec service unit is not installed."
-		result.NextStep = "Use a future verified STL-only no-clobber unit provisioner; do not adopt or alter a distro strongSwan service."
+		result.NextStep = ipsecCurrentPrepareGuidance + " Never adopt, overwrite or stop a distro strongSwan service without its separately verified, exact-unit authorization."
 	case ipsec.NativeServiceUnitConflict:
 		result.Status = "blocked"
 		result.ReasonCode = "native_service_unit_untrusted"

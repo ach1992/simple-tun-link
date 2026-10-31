@@ -10,6 +10,12 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/linux"
 )
 
+// The exclusive no-clobber provisioner is already shipped and is reached
+// through a selected, fresh IPsec PREPARE. The observational doctor must
+// describe that current path without treating missing files/units as
+// authority to start a service or to take over foreign strongSwan.
+const ipsecCurrentPrepareGuidance = "Review stl doctor ipsec --json, especially provisioning_readiness. Only if a fresh STL-exclusive preflight qualifies, use sudo stl menu -> Create tunnel -> Advanced types -> IPsec -> PREPARE."
+
 // IPsecRuntimeNotRegisteredReason is shared by the observational doctor
 // and inactive IPsec Link status/diagnose errors. It is a stable machine code.
 const IPsecRuntimeNotRegisteredReason = "ipsec_runtime_not_registered"
@@ -79,7 +85,7 @@ func inspectIPsecHostWithInputs(ctx context.Context, runner linux.Runner, ports 
 	report.Checks = append(report.Checks, IPsecHostCheck{
 		Name: "operational_runtime", Status: "blocked", ReasonCode: IPsecRuntimeNotRegisteredReason,
 		Summary:  "IPsec operational runtime is not registered for this host. Its native-exclusive strongSwan service, private configuration and ownership admission are not proven by this read-only inspection.",
-		NextStep: "Review each blocked prerequisite; packages alone cannot activate IPsec. Provision a separately verified STL-exclusive service, then re-run stl doctor ipsec.",
+		NextStep: "Review blocked checks and provisioning_readiness in stl doctor ipsec --json; packages alone cannot activate IPsec. If a fresh exclusive preflight qualifies, use the selected IPsec PREPARE in sudo stl menu; recheck doctor before activating a Link.",
 	})
 	if err := ctx.Err(); err != nil {
 		return IPsecHostReport{}, err
