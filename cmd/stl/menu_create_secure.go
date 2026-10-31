@@ -32,6 +32,6 @@ func askPortDefault(p createPrompts, prompt string, fallback uint16) (uint16, er
 		if err == nil && value != 0 {
 			return uint16(value), nil
 		}
-		fmt.Fprintln(p.out, "Use a UDP port number between 1 and 65535.")
+		fmt.Fprintln(p.out, "Use a port number between 1 and 65535.")
 	}
 }

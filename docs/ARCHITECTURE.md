@@ -95,9 +95,11 @@ initiate from either end once the Link is usable.
 
 - WSS and QUIC/Salamander have explicit endpoint-local `dial` and `listen`
   carrier roles. Either peer may create the Link with either role. Pairing
-  produces exactly one complementary peer role and binds TLS identity,
-  listening port, forwarding socket and ownership to the actual listener,
-  independent of country, underlay ordering or setup creator identity.
+  produces exactly one complementary peer role. The Listen endpoint owns
+  the public listener port and TLS listener identity; the Dial endpoint owns
+  the private loopback UDP forwarding socket. Credentials and owned host
+  resources are scoped to the exact Link and corresponding endpoint-local
+  role, independent of country, underlay ordering or setup creator identity.
 - Native GRE/IPIP, including FOU/GUE, are peer-configured encapsulations,
   not client/server transports; no synthetic Dial/Listen setting should be
   imposed. Native WireGuard uses each peer's configured endpoint and

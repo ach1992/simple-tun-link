@@ -60,7 +60,7 @@ func TestCarrierRoleGuidedSuggestionAndSamePromptOverride(t *testing.T) {
 					t.Fatalf("got role=%q origin=%q err=%v; output=%q", role, origin, err, output.String())
 				}
 				if !strings.Contains(output.String(), "Unverified default: no WAN test") ||
-					!strings.Contains(output.String(), "Unverified default: no WAN test") ||
+					!strings.Contains(output.String(), "Suggested: THIS server will") ||
 					!strings.Contains(output.String(), "Direction [Enter=suggested; 1=listen; 2=dial]") ||
 					!strings.Contains(output.String(), carrier+" / PUBLIC CONNECTION DIRECTION") {
 					t.Fatalf("single-prompt suggestion / override not discoverable: %q", output.String())
