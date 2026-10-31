@@ -14,6 +14,11 @@ userspace forwarding loop.
 run `sudo stl menu`, create a tunnel on the first server, privately share its
 Setup Link, import it on the second, then choose **Test connectivity** on both.
 STL does not claim that a Link works merely because it was saved.
+For WSS/QUIC, **Enter** at the creation-direction prompt accepts only an
+**unverified** suggested public Dial/Listen role; **1=Listen** or **2=Dial**
+overrides it for THIS server, with the paired server taking the other role.
+A suggested direction is not a network reachability test; a working public
+Carrier and real private application traffic require separate checks.
 Version equality is recommended but **not intrinsically required for GRE**: the
 v0.1.9 and v0.1.13 GRE Setup Link codec is compatible. Host routing,
 firewall ownership and kernel capabilities must still pass on both endpoints.
@@ -130,19 +135,19 @@ See [Issue #176](https://github.com/ach1992/simple-tun-link/issues/176).
 ### Local installation without GitHub access on the server
 
 Official Stable releases from **v0.1.9 onward** support one self-contained
-core installer. The current example, **v0.1.16**, uses the files below.
-For later releases, always select the corresponding tag and architecture from
-[official Latest Stable](https://github.com/ach1992/simple-tun-link/releases/latest).
+core installer. From the [official Latest Stable release](https://github.com/ach1992/simple-tun-link/releases/latest),
+select its **actual published tag** (written as `vX.Y.Z` below) and matching
+architecture; never guess a version or use a source-only/unpublished asset.
 WSS and QUIC are optional: each selected Carrier needs its own separately
 verified companion file.
 Download only **one** official architecture-specific release asset on another
 device. It already contains the matching STL binary, the canonical installer
 and all STL-owned core metadata; no second STL file is needed on the server:
 
-| Destination CPU (`uname -m`) | Download from the exact official release |
+| Destination CPU (`uname -m`) | Filename pattern in the published release |
 | --- | --- |
-| `x86_64` | [`stl_v0.1.16_linux_amd64_local-install.sh`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.16/stl_v0.1.16_linux_amd64_local-install.sh) |
-| `aarch64` | [`stl_v0.1.16_linux_arm64_local-install.sh`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.16/stl_v0.1.16_linux_arm64_local-install.sh) |
+| `x86_64` | `stl_vX.Y.Z_linux_amd64_local-install.sh` |
+| `aarch64` | `stl_vX.Y.Z_linux_arm64_local-install.sh` |
 
 Upload the single file **as-is** into `/root/stl/` on the server (e.g. through
 SFTP); the folder must be root-owned mode `0700` and the file root-owned

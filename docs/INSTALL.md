@@ -199,10 +199,10 @@ delete leftover protected temporary material.
 **[Stable v0.1.9](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.9)
 was the first release with the self-contained `*_local-install.sh` format.**
 Use the [latest published Stable](https://github.com/ach1992/simple-tun-link/releases/latest)
-for a new installation. The **v0.1.16** local-install files are listed below.
-When a new release becomes Latest, select that new release's **actual tag**,
-matching architecture and source-verified file instead of blindly reusing
-an older example.
+for a new installation. The filename patterns below use `vX.Y.Z` for
+the **actual published tag** shown by that release, not a literal or
+guessed version. Verify that the exact file exists in the release and
+matches the published manifest/checksums before transferring it.
 Open the official release on an Internet-connected device and verify its tag,
 publisher and exact published asset before privileged use. The matching file
 already embeds all required STL core files; no extra STL binary, installer,
@@ -213,10 +213,10 @@ through a separately verified, explicit
 the separately pinned Hysteria companion selected with `--with-quic`;
 Paqet remains unshipped.
 
-| Server CPU | Exactly ONE file to download | Exact official release asset |
+| Server CPU | Exactly ONE file to download | Official release source |
 | --- | --- | --- |
-| `x86_64` | `stl_v0.1.16_linux_amd64_local-install.sh` | [Official v0.1.16 AMD64 file](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.16/stl_v0.1.16_linux_amd64_local-install.sh) |
-| `aarch64` | `stl_v0.1.16_linux_arm64_local-install.sh` | [Official v0.1.16 ARM64 file](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.16/stl_v0.1.16_linux_arm64_local-install.sh) |
+| `x86_64` | `stl_vX.Y.Z_linux_amd64_local-install.sh` | [Latest Stable assets](https://github.com/ach1992/simple-tun-link/releases/latest) |
+| `aarch64` | `stl_vX.Y.Z_linux_arm64_local-install.sh` | [Latest Stable assets](https://github.com/ach1992/simple-tun-link/releases/latest) |
 
 Transfer the selected single file
 **without renaming, extracting or making it executable** into `/root/stl/`.
