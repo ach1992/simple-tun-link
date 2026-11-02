@@ -10,6 +10,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/backend/gre"
 	"github.com/ach1992/simple-tun-link/internal/backend/ipip"
 	"github.com/ach1992/simple-tun-link/internal/backend/ipsec"
+	"github.com/ach1992/simple-tun-link/internal/backend/l2tpv3"
 	"github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/carrier/quic"
 	"github.com/ach1992/simple-tun-link/internal/domain"
@@ -55,6 +56,13 @@ func mtuIdentity(link domain.Link) (string, int, error) {
 			return "", 0, err
 		}
 		n, err := gre.Overhead(link)
+		return name, n, err
+	case domain.BackendL2TPv3:
+		name, err := l2tpv3.InterfaceName(link.ID)
+		if err != nil {
+			return "", 0, err
+		}
+		n, err := l2tpv3.Overhead(link)
 		return name, n, err
 	case domain.BackendIPIP:
 		name, err := ipip.InterfaceName(link.ID)

@@ -260,7 +260,7 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 			safe.ObjectID = observedPublic.ObjectID
 		}
 		switch domain.Backend(observedPublic.Backend) {
-		case domain.BackendGRE, domain.BackendIPIP, domain.BackendWireGuard, domain.BackendWireGuardWSS, domain.BackendWireGuardQUIC, domain.BackendIPsec:
+		case domain.BackendGRE, domain.BackendIPIP, domain.BackendL2TPv3, domain.BackendWireGuard, domain.BackendWireGuardWSS, domain.BackendWireGuardQUIC, domain.BackendIPsec:
 			safe.Backend = observedPublic.Backend
 		}
 	}

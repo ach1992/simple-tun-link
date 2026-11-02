@@ -8,15 +8,16 @@ import (
 type Capability string
 
 const (
-	CapabilityGRENative  Capability = "gre/native"
-	CapabilityGREFOU     Capability = "gre/fou"
-	CapabilityGREGUE     Capability = "gre/gue"
-	CapabilityIPIPNative Capability = "ipip/native"
-	CapabilityIPIPFOU    Capability = "ipip/fou"
-	CapabilityIPIPGUE    Capability = "ipip/gue"
-	CapabilityWireGuard  Capability = "wireguard"
-	CapabilityIPsecXFRM  Capability = "ipsec/xfrm"
-	CapabilitySystemd    Capability = "systemd"
+	CapabilityGRENative      Capability = "gre/native"
+	CapabilityGREFOU         Capability = "gre/fou"
+	CapabilityGREGUE         Capability = "gre/gue"
+	CapabilityIPIPNative     Capability = "ipip/native"
+	CapabilityL2TPv3DirectIP Capability = "l2tpv3/native"
+	CapabilityIPIPFOU        Capability = "ipip/fou"
+	CapabilityIPIPGUE        Capability = "ipip/gue"
+	CapabilityWireGuard      Capability = "wireguard"
+	CapabilityIPsecXFRM      Capability = "ipsec/xfrm"
+	CapabilitySystemd        Capability = "systemd"
 )
 
 type CapabilityStatus struct {
@@ -66,6 +67,7 @@ func (p CapabilityProbe) Probe(ctx context.Context) (CapabilityReport, error) {
 	report := CapabilityReport{}
 	gre := p.commandAvailable(ctx, ip, "-json", "-details", "link", "show", "type", "gre")
 	ipip := p.commandAvailable(ctx, ip, "-json", "-details", "link", "show", "type", "ipip")
+	l2tp := p.commandAvailable(ctx, ip, "-json", "l2tp", "show", "tunnel") && p.commandAvailable(ctx, ip, "-json", "l2tp", "show", "session")
 	fou := p.commandAvailable(ctx, ip, "fou", "show")
 	// A failed read-only FOU query alone is not evidence of an unsupported
 	// kernel. It can fail because a loadable module is not yet active.
@@ -82,6 +84,8 @@ func (p CapabilityProbe) Probe(ctx context.Context) (CapabilityReport, error) {
 
 	report[CapabilityGRENative] = observedCapability(gre, "gre_probe_unconfirmed",
 		"GRE read-only kernel query did not succeed; inspect module and permissions")
+	report[CapabilityL2TPv3DirectIP] = observedCapability(l2tp, "l2tpv3_probe_unconfirmed",
+		"L2TPv3 kernel/netlink query failed; verify ip l2tp and l2tp_ip/l2tp_eth modules")
 	report[CapabilityIPIPNative] = observedCapability(ipip, "ipip_probe_unconfirmed",
 		"IPIP read-only kernel query did not succeed; inspect module and permissions")
 	fouCode, fouReason := "fou_probe_unconfirmed",

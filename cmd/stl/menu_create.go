@@ -343,7 +343,7 @@ func menuCreatePlain(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	menuField(out, "Local tunnel IP", link.Addresses.Local.String())
 	menuField(out, "Remote tunnel IP", link.Addresses.Peer.String())
 	menuNotice(out, "INFO", "Auto MTU is only a local estimate. Test the peer after pairing.")
-	menuNotice(out, "WARNING", "GRE/IPIP is not encrypted. Do not send secrets.")
+	menuNotice(out, "WARNING", "Native GRE/IPIP/L2TPv3 is not encrypted or authenticated. Do not send secrets.")
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
 		fmt.Fprintln(errOut, "Cannot establish a fresh terminal confirmation; nothing applied.")
 		return 2

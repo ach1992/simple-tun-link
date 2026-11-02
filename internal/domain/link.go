@@ -19,6 +19,7 @@ type Encapsulation string
 const (
 	BackendGRE           Backend = "gre"
 	BackendIPIP          Backend = "ipip"
+	BackendL2TPv3        Backend = "l2tpv3"
 	BackendWireGuard     Backend = "wireguard"
 	BackendWireGuardWSS  Backend = "wireguard-wss"
 	BackendWireGuardQUIC Backend = "wireguard-quic"
@@ -282,6 +283,16 @@ func (l Link) Validate() error {
 		case EncapNative, EncapFOU, EncapGUE:
 		default:
 			return stlerr.New(stlerr.CodeUnsupported, "validate_link", string(l.ID), string(l.Backend), "unsupported IPIP encapsulation")
+		}
+	}
+	if l.Backend == BackendL2TPv3 {
+		if l.Encapsulation != EncapNative || !l.Underlay.Local.Is4() || !l.Underlay.Peer.Is4() {
+			return stlerr.New(stlerr.CodeUnsupported, "validate_link", string(l.ID), string(l.Backend), "L2TPv3 Direct-IP requires native IP protocol 115 with IPv4 endpoints")
+		}
+		if l.Addresses.Local.Bits() != l.Addresses.Peer.Bits() ||
+			l.Addresses.Local.Bits() < 1 || l.Addresses.Local.Bits() > 31 ||
+			l.Addresses.Local.Masked() != l.Addresses.Peer.Masked() {
+			return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "L2TPv3 Ethernet pseudowire requires both private IPv4 addresses on one non-/32 subnet")
 		}
 	}
 	if l.Backend == BackendGRE {

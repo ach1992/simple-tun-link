@@ -25,7 +25,7 @@ func importablePlaintextOffer(preview pairing.Preview) bool {
 	if preview.Mode != pairing.ModeQuick || preview.HasCredential || preview.Sensitive {
 		return false
 	}
-	return preview.Link.Backend == domain.BackendGRE || preview.Link.Backend == domain.BackendIPIP
+	return preview.Link.Backend == domain.BackendGRE || preview.Link.Backend == domain.BackendIPIP || preview.Link.Backend == domain.BackendL2TPv3
 }
 
 // Credential-bearing recipient import is restricted to the bound v3 public

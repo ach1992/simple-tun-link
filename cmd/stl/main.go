@@ -18,6 +18,7 @@ import (
 	grebackend "github.com/ach1992/simple-tun-link/internal/backend/gre"
 	ipipbackend "github.com/ach1992/simple-tun-link/internal/backend/ipip"
 	ipsecbackend "github.com/ach1992/simple-tun-link/internal/backend/ipsec"
+	l2tpbackend "github.com/ach1992/simple-tun-link/internal/backend/l2tpv3"
 	wgbackend "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/carrier/wss"
 	"github.com/ach1992/simple-tun-link/internal/domain"
@@ -282,6 +283,10 @@ func assembleRuntimeOptions(stateRoot string) (*runtimeOptions, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize IPIP backend: %w", err)
 	}
+	l2tp, err := l2tpbackend.New(l2tpbackend.Options{Runner: runner, Routes: routes, Firewall: firewall, Collisions: collisions})
+	if err != nil {
+		return nil, fmt.Errorf("initialize L2TPv3 backend: %w", err)
+	}
 	keys, err := wgbackend.NewKeyStore(options.stateRoot)
 	if err != nil {
 		return nil, fmt.Errorf("initialize protected WireGuard credentials: %w", err)
@@ -311,7 +316,7 @@ func assembleRuntimeOptions(stateRoot string) (*runtimeOptions, error) {
 		return nil, fmt.Errorf("initialize QUIC WireGuard backend: %w", err)
 	}
 	options.quicRetirementHost = quicHost
-	options.backends = []backend.Backend{gre, ipip, wg, wssWG, quicWG}
+	options.backends = []backend.Backend{gre, ipip, l2tp, wg, wssWG, quicWG}
 	// Runtime activation is read-only admission followed by registration.
 	// The unverified/missing native-exclusive service blocks IPsec ONLY;
 	// GRE/IPIP/WireGuard assembly and behavior must stay independent.

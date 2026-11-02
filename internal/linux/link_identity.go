@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"net"
 	"net/netip"
 	"syscall"
 	"time"
@@ -29,6 +30,16 @@ func SetLinkAliasByIndex(ctx context.Context, index int, alias string) error {
 	}
 	value := append([]byte(alias), 0)
 	return routeLinkRequest(ctx, unix.RTM_SETLINK, index, 0, 0, unix.IFLA_IFALIAS, value)
+}
+
+// SetLinkMACByIndex assigns the verified locally-administered Ethernet address
+// to an exact Linux interface index, not a replaceable interface name.
+func SetLinkMACByIndex(ctx context.Context, index int, address string) error {
+	mac, err := net.ParseMAC(address)
+	if index <= 0 || err != nil || len(mac) != 6 || mac[0]&1 != 0 || mac[0]&2 == 0 {
+		return fmt.Errorf("valid interface index and locally-administered unicast MAC required")
+	}
+	return routeLinkRequest(ctx, unix.RTM_NEWLINK, index, 0, 0, unix.IFLA_ADDRESS, []byte(mac))
 }
 
 // SetLinkUpByIndex activates the exact observed kernel link identity without a

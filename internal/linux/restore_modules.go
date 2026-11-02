@@ -36,6 +36,10 @@ func CommittedLinkKernelModules(link domain.Link) []string {
 		case domain.EncapFOU, domain.EncapGUE:
 			return []string{"ip_gre", "fou"}
 		}
+	case domain.BackendL2TPv3:
+		if link.Encapsulation == domain.EncapNative {
+			return []string{"l2tp_ip", "l2tp_eth"}
+		}
 	case domain.BackendIPIP:
 		switch link.Encapsulation {
 		case domain.EncapNative:

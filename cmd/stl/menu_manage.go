@@ -91,7 +91,7 @@ func menuManage(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 				fmt.Fprintln(out, "Connection not verified; check peer setup and firewall.")
 			}
 		case "3", "e":
-			if selected.Backend == domain.BackendGRE || selected.Backend == domain.BackendIPIP {
+			if selected.Backend == domain.BackendGRE || selected.Backend == domain.BackendIPIP || selected.Backend == domain.BackendL2TPv3 {
 				if code := menuSharePlainLink(id, out, errOut, options); code != 0 {
 					menuProse(out, "Setup Link cannot be rebuilt from the current saved state. No network changes made.")
 				}
@@ -125,7 +125,7 @@ func menuManage(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			menuAcknowledge(input, reader, out)
 			return code
 		case "6":
-			if selected.Backend == domain.BackendGRE || selected.Backend == domain.BackendIPIP {
+			if selected.Backend == domain.BackendGRE || selected.Backend == domain.BackendIPIP || selected.Backend == domain.BackendL2TPv3 {
 				menuNotice(out, "INFO", "Plaintext links are generated on demand; there is no private receiver file.")
 				menuAcknowledge(input, reader, out)
 				continue
