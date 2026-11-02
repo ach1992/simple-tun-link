@@ -15,7 +15,7 @@ Runtime preflight is authoritative for actual backend capability on a host.
   Debian 11: default Bullseye security package indexes can return HTTP 404
   after LTS expiry. STL refuses blind repository rewrites or disabling APT
   signature/expiry protection. Prefer Debian 12+ or suitable ELTS support.
-- Selected prerequisite planning: native GRE/IPIP installs/verifies
+- Selected prerequisite planning: native GRE/IPIP/L2TPv3 installs/verifies
   iproute2, iptables and kmod (module introspection and explicit on-demand
   module loading). Optional WireGuard selects wireguard-tools; optional
   IPsec selects charon-systemd, strongswan-swanctl and
@@ -39,6 +39,17 @@ A supported host may still lack one optional backend. Preflight must detect the 
 ### GRE / IPIP
 
 Require the selected kernel/iproute2 support for the requested mode. Native, FOU, and GUE support are detected independently. Missing FOU/GUE support does not disable Native GRE/IPIP.
+
+### L2TPv3 Direct-IP
+
+Requires Linux L2TPv3 **IP encapsulation** and Ethernet pseudowire support
+(`ip l2tp`, `l2tp_ip`, `l2tp_eth` and their kernel dependencies);
+the distro/kernel/version floor alone does not prove this optional
+capability. Runtime and guided readiness checks are read-only until the
+operator explicitly approves selected kernel-module preparation. A
+successful local interface and peer ping on a given test host do not
+guarantee that a provider transports **IP protocol 115** in the wild.
+Unlike IPsec and WireGuard, this method has no authentication/encryption.
 
 ### WireGuard
 

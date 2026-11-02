@@ -13,7 +13,7 @@ not a changing status report in this file.
 Run privileged tests **only on an explicitly approved disposable
 Docker-capable VM**. Never use a production, shared, AI Server
 Agent or test-control-plane host. Docker containers share the
-VM's kernel; FOU/IPIP module autoload may affect that VM.
+VM's kernel; FOU/IPIP/L2TPv3 module autoload may affect that VM.
 The `STL_E2E_DISPOSABLE_HOST=approved` environment flag is
 a local safety check, **not** authorization by itself.
 
@@ -42,6 +42,17 @@ VICI/strongSwan credentials into the guests.
 
 A successful run must demonstrate all of the following, not
 merely compile or print a success-looking JSON response:
+
+The independent **L2TPv3 Direct-IP / protocol 115** Ethernet pseudowire
+fixture must also prove two-way private ICMP, **16 MiB receiver-confirmed
+SHA-256 TCP in each direction**, idempotent Ensure, committed-Link
+kernel-loss restore, and two simultaneous L2TPv3 Links on the same
+underlay. Removing the first must leave the second live, followed by
+exact scoped cleanup. Both L2TP kernel drivers are required. The E2E
+markers are `L2TPV3_REAL_TWO_PEER_KERNEL_ENGINE_E2E_PASS`,
+`L2TPV3_TCP_BILATERAL_16MiB_SHA_PASS` and
+`L2TPV3_E2E_CLEANUP_EXIT=0`. This does not prove that an arbitrary
+public provider carries protocol 115.
 
 1. Three simultaneous same-peer GRE Native, keyed FOU and keyed
    GUE Links with unique IDs, link IPs, collision-safe UDP/firewall

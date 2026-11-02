@@ -43,7 +43,8 @@ func ObserveL2TPv3(ctx context.Context, link domain.Link, inspector L2TPv3Inspec
 	if inspector == nil || runner == nil {
 		return L2TPv3Report{}, stlerr.New(stlerr.CodeInvalid, "diagnose_l2tpv3", string(link.ID), string(link.Backend), "L2TPv3 diagnostics dependencies are required")
 	}
-	// Overhead includes the selected L2TPv3/UDP/GUE transport bytes.
+	// Conservative overhead covers IPv4 protocol 115, the L2TPv3 Ethernet
+	// pseudowire and its inner Ethernet header; it is not a measured peer PMTU.
 	overhead, err := l2tpbackend.Overhead(link)
 	if err != nil {
 		return L2TPv3Report{}, stlerr.Wrap(stlerr.CodeInvalid, "diagnose_l2tpv3", string(link.ID), string(link.Backend), "invalid L2TPv3 Link configuration", err)
