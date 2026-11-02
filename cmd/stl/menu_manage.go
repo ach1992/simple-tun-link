@@ -58,7 +58,7 @@ func menuManage(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			menuActionOption(out, "3", "Share Setup Link", "Copy original link safely", "SHOW")
 		}
 		menuOption(out, "4", "Connection details", "View both server settings")
-		menuActionOption(out, "5", "Remove this tunnel", "Destructive; confirm", "REMOVE")
+		menuActionOption(out, "5", "Remove this tunnel", "Local owned cleanup; confirm", "REMOVE")
 		menuActionOption(out, "6", "Delete receiver link", "Only the original menu-saved private offer", "DELETE")
 		if selected.Backend == domain.BackendIPsec {
 			menuActionOption(out, "7", "Connect IPsec", "Explicit IKEv2 initiation after peer import", "CONNECT")
@@ -158,9 +158,11 @@ func menuRemoveLink(input io.Reader, reader *bufio.Reader, out, errOut io.Writer
 	menuActionSection(out, "Remove tunnel / preview", "REMOVE")
 	menuHealthLine(out, "Current action", "WARNING", "PREVIEW ONLY - no tunnel has been removed")
 	menuField(out, "Tunnel", fmt.Sprintf("%s / %s", selected.Backend, selected.Encapsulation))
+	menuCopyLine(out, "Link ID", string(selected.ID))
 	menuField(out, "Tunnel IPs", selected.Addresses.Local.String()+" -> "+selected.Addresses.Peer.String())
 	menuField(out, "Underlay IPs", selected.Underlay.Local.String()+" -> "+selected.Underlay.Peer.String())
 	menuNotice(out, "WARNING", "Removing this Link can disconnect applications using its tunnel IPs.")
+	menuProse(out, "Peer reachability, current underlay routes and Create prerequisites are not needed for removal. STL still checks exact local ownership.")
 	fmt.Fprintln(out, "Only this Link's verified resources will be removed; other Links remain isolated.")
 	fmt.Fprintln(out, "A partial result is NOT safe to retry until its current state is inspected.")
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
@@ -186,6 +188,13 @@ func menuRemoveLink(input io.Reader, reader *bufio.Reader, out, errOut io.Writer
 	if code == 0 {
 		menuScreen(out, "Remove / complete")
 		menuNotice(out, "OK", "Selected tunnel removed. Other Links were not selected for removal.")
+	} else {
+		menuNotice(out, "WARNING", "Remove did not finish with verified success. The peer connection is NOT required; investigate local ownership or an incomplete transaction.")
+		menuCopyLine(out, "Inspect saved Link", "stl link status "+string(selected.ID)+" --json")
+		if selected.Backend == domain.BackendIPsec {
+			menuCopyLine(out, "IPsec readiness", "stl doctor ipsec --json")
+		}
+		menuProse(out, "If local ownership cannot be proven, stop and use the backend's explicit reconciliation path. Never flush unrelated firewall rules or delete a foreign interface.")
 	}
 	return code
 }

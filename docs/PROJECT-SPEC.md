@@ -100,6 +100,10 @@ operator-initiated attempt; safety and credential protection still apply.
 3. **Reliable lifecycle.** Plan, verify, apply, persist, inspect, repair,
    remove and restore only correctly identified STL-owned resources;
    distinguish successful completion, partial effects and uncertainty.
+   **Removing an owned Link is a local teardown and does not require peer
+   connectivity, a working route to its underlay, fresh Create prerequisites
+   or unrelated backend readiness.** Missing, ambiguous or foreign local
+   resources require exact ownership recovery rather than blind deletion.
    Repeated desired-state operations should converge idempotently.
 4. **Independent multi-Link operation.** Allow independent Links and backend
    combinations without an arbitrary product-imposed count or

@@ -95,9 +95,27 @@ func parseOwnedInboundRule(fields []string, id domain.LinkID, ipv6 bool) (Inboun
 			return InboundFirewallRule{}, fmt.Errorf("unexpected firewall field")
 		}
 	}
-	if len(values) != 7 || len(modules) != 2 ||
-		values["-j"] != "ACCEPT" || (values["-p"] != "udp" && values["-p"] != "17") {
-		return InboundFirewallRule{}, fmt.Errorf("firewall rule is not a canonical UDP allow rule")
+	if values["-j"] != "ACCEPT" || !modules["comment"] {
+		return InboundFirewallRule{}, fmt.Errorf("firewall rule is not an exact STL allow rule")
+	}
+	protocol := uint8(0)
+	switch values["-p"] {
+	case "udp", "17":
+		protocol = 17
+		if len(values) != 7 || len(modules) != 2 || !modules["udp"] || values["--dport"] == "" {
+			return InboundFirewallRule{}, fmt.Errorf("noncanonical UDP allow rule")
+		}
+	case "gre", "47":
+		protocol = 47
+	case "ipip", "ipencap", "4":
+		protocol = 4
+	case "l2tp", "115":
+		protocol = 115
+	default:
+		return InboundFirewallRule{}, fmt.Errorf("unsupported STL firewall protocol")
+	}
+	if protocol != 17 && (len(values) != 6 || len(modules) != 1 || modules["udp"] || values["--dport"] != "") {
+		return InboundFirewallRule{}, fmt.Errorf("noncanonical native IP protocol allow rule")
 	}
 	toHost := func(raw string) (netip.Addr, error) {
 		if addr, err := netip.ParseAddr(raw); err == nil {
@@ -117,17 +135,38 @@ func parseOwnedInboundRule(fields []string, id domain.LinkID, ipv6 bool) (Inboun
 	if err != nil {
 		return InboundFirewallRule{}, err
 	}
-	port, err := strconv.ParseUint(values["--dport"], 10, 16)
-	if err != nil || port == 0 {
-		return InboundFirewallRule{}, fmt.Errorf("invalid firewall UDP port")
+	port := uint64(0)
+	if protocol == 17 {
+		port, err = strconv.ParseUint(values["--dport"], 10, 16)
+		if err != nil || port == 0 {
+			return InboundFirewallRule{}, fmt.Errorf("invalid firewall UDP port")
+		}
 	}
 	rule := InboundFirewallRule{
 		Peer: peer, Local: local, InputInterface: values["-i"],
-		Protocol: 17, DestinationPort: uint16(port),
+		Protocol: protocol, DestinationPort: uint16(port),
 	}
 	if rule.Peer.Is6() != ipv6 || rule.Local.Is6() != ipv6 ||
 		rule.Validate() != nil || values["--comment"] != firewallMarker(id, rule) {
 		return InboundFirewallRule{}, fmt.Errorf("firewall fields or ownership digest do not match")
 	}
 	return rule, nil
+}
+
+// RecoverOwnedInboundForRemoval reconstructs only an exact, uniquely marked
+// existing rule for a committed Link. This is explicitly independent of the
+// current route to the peer, which may have changed or vanished. A marker
+// alone is not proof: FindOwnedInbound validates the entire canonical rule,
+// and the backend must also bind it to durable Link resource claims.
+func RecoverOwnedInboundForRemoval(ctx context.Context, f interface {
+	FindOwnedInbound(context.Context, domain.LinkID, bool) (InboundFirewallRule, bool, error)
+}, id domain.LinkID, local, peer netip.Addr, protocol uint8, port uint16) (InboundFirewallRule, bool, error) {
+	rule, present, err := f.FindOwnedInbound(ctx, id, false)
+	if err != nil || !present {
+		return InboundFirewallRule{}, false, err
+	}
+	if rule.Local != local || rule.Peer != peer || rule.Protocol != protocol || rule.DestinationPort != port {
+		return InboundFirewallRule{}, false, fmt.Errorf("owned firewall rule no longer matches committed tunnel endpoints/protocol")
+	}
+	return rule, true, nil
 }
