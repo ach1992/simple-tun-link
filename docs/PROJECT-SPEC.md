@@ -100,19 +100,15 @@ operator-initiated attempt; safety and credential protection still apply.
 3. **Reliable lifecycle.** Plan, verify, apply, persist, inspect, repair,
    remove and restore only correctly identified STL-owned resources;
    distinguish successful completion, partial effects and uncertainty.
-   **Removing an owned Link is a local teardown and does not require peer
-   connectivity, a working route to its underlay, fresh Create prerequisites
-   or unrelated backend readiness.** Missing, ambiguous or foreign local
-   resources require exact ownership recovery rather than blind deletion.
    Repeated desired-state operations should converge idempotently.
    **All backends:** Remove of a saved Link is a local owner-scoped cleanup,
-   independent of peer reachability, live underlay route or source, parent
-   Link presence, tunnel health, and Create-only preparation. Recover exact
-   owned firewall/interface/service identities from committed State and
-   current local inspection, never by resolving a new route. If local
-   ownership/read-back or an interrupted transaction cannot be verified,
-   preserve durable recovery evidence and report an actionable incomplete
-   removal rather than deleting foreign resources or claiming success.
+   independent of peer reachability, underlay route/source, parent Link,
+   tunnel health, Create-only prerequisites and unrelated backend readiness.
+   Recover exact owned firewall/interface/service identities from committed
+   State and local inspection, never by resolving a new route. Unverified,
+   interrupted or foreign host state requires specific owner-scoped recovery;
+   preserve durable evidence rather than deleting unrelated resources or
+   incorrectly reporting success.
 4. **Independent multi-Link operation.** Allow independent Links and backend
    combinations without an arbitrary product-imposed count or
    one-Link-per-peer assumption; resolve genuine kernel, address, service,
