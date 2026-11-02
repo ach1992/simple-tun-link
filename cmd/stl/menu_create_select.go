@@ -410,7 +410,6 @@ func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 				menuAcknowledge(input, reader, out)
 				continue
 			}
-			menuScreen(out, "New tunnel / WireGuard over WSS")
 			return menuCreateWSS(input, reader, out, errOut, options)
 		}
 		var picked tunnelOption

@@ -51,6 +51,20 @@ encapsulations/IPsec remain discoverable.
   actual Link creation. The doctor never repairs an unowned VPN.
   The separate, exact `STOP strongswan.service` restriction is
   documented in [installer ownership](INSTALL.md#installation-and-runtime-ownership).
+- When **WireGuard/WSS** or **WireGuard/QUIC** is selected in Create
+  or Import, the menu first checks the exact supported pinned companion.
+  If absent, installed root operators may choose **Install online**
+  (download from the fixed official upstream HTTPS release and validate the
+  pinned SHA-256) or **Install local** (reuse an already transferred asset in
+  root-owned `/root/stl/`). Both require a fresh exact `INSTALL`
+  confirmation and delegate publication to the existing canonical
+  companion installer. If the official download is unreachable or fails
+  verification, the menu offers the local fallback and exact filename;
+  it never downloads arbitrary mirrors or silently installs all helpers.
+  Foreign or partially installed companion identity blocks automatic
+  overwrite and requires inspection/reconciliation. The Create/Import
+  Link confirmation remains separate. The installed core does not need to
+  be replaced merely to add an approved optional companion.
 - Creating a Link selects the **other server's** reachable underlay
   address, suggests this host's route-derived source, and offers an
   unused private Link Address pair or manual local/peer addresses

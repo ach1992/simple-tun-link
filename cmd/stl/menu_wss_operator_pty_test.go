@@ -66,7 +66,7 @@ func TestWSSGuidedMissingCompanionGivesBoundedActionableMessage(t *testing.T) {
 		&runtimeOptions{stateRoot: root}, companion)
 	if code != 4 || errOut.Len() != 0 ||
 		!strings.Contains(out.String(), "Approved wstunnel v11.0.0 companion is missing or untrusted") ||
-		!strings.Contains(out.String(), "official one-file STL installer") ||
+		!strings.Contains(out.String(), "installed root menu to acquire") ||
 		strings.Contains(out.String(), "missing-helper") {
 		t.Fatalf("missing WSS helper guidance incorrect: code=%d out=%q stderr=%q",
 			code, out.String(), errOut.String())

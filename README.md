@@ -169,6 +169,13 @@ See [Issue #176](https://github.com/ach1992/simple-tun-link/issues/176).
 
 ### Local installation without GitHub access on the server
 
+Already installed STL Core? Use `sudo stl menu` and select WSS or QUIC
+under Create/Import. STL offers a consented, SHA256-verified **online
+download + install** of only that pinned optional helper, or **Install
+local** from the exact pre-transferred `/root/stl/` asset when GitHub is
+unreachable. Both paths use one canonical installer and never create
+a Link until separately confirmed. See [Install](docs/INSTALL.md#interactive-on-demand-companion-installation-online-or-local).
+
 **Download, upload, run one command.** No compiler, extraction, separate
 STL binary, manifest transfer or manual helper installation is needed.
 Core-only local installation starts with Stable v0.1.9; WSS needs STL v0.1.10+
