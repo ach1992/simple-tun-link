@@ -100,7 +100,7 @@ initiate from either end once the Link is usable.
   the private loopback UDP forwarding socket. Credentials and owned host
   resources are scoped to the exact Link and corresponding endpoint-local
   role, independent of country, underlay ordering or setup creator identity.
-- Native GRE/IPIP, including FOU/GUE, are peer-configured encapsulations,
+- Native GRE/IPIP, including FOU/GUE, and L2TPv3 Direct-IP are peer-configured encapsulations,
   not client/server transports; no synthetic Dial/Listen setting should be
   imposed. Native WireGuard uses each peer's configured endpoint and
   keepalive/roaming behavior instead of a universal fixed initiator.
@@ -128,13 +128,37 @@ initiate from either end once the Link is usable.
   This rule does not introduce automatic runtime failover or a second Engine.
 
 ### Backend adapters
-Initial adapters:
+Adapters:
 - GRE;
 - IPIP;
+- L2TPv3 Direct-IP (static Linux Ethernet pseudowire);
 - WireGuard;
 - IPsec/XFRM.
 
 GRE/IPIP expose Native/FOU/GUE encapsulations through backend-specific configuration rather than pretending each combination is an unrelated product.
+
+L2TPv3 Direct-IP is an independent native backend, not a GRE variant or
+a user-space Carrier. The same shared Link ID deterministically yields
+opposing kernel tunnel/session IDs and two locally administered Ethernet
+MACs, which the ordinary Setup Link inversion preserves. Backend Apply
+owns a `l2tpeth` interface, private IPv4 address, dedicated permanent
+peer neighbor and inbound IP-protocol-115 firewall claim. Engine
+Inspect/Plan/Validate/Apply/Verify, resource locks, rollback and committed
+reboot restore govern this Link like GRE/IPIP. Interface alias/ifindex and
+complete kernel tunnel/session identities are checked before destructive
+operations; foreign sessions, address conflicts and ambiguous state block
+mutation. All IPv4/IPv6 interface addresses are observed: ordinary verified
+kernel-generated IPv6 link-local is allowed, but foreign manually configured
+IPv6 addresses veto destructive session removal/rollback. A private peer
+neighbor is created using exclusive, ifindex-bound route netlink; never
+through replace-by-name. Delete re-observes neighbor/address/session identity
+after Validate, and an iproute2 error after a possible kernel effect never
+counts as completed rollback without a bounded fresh readback. Unverifiable
+partial state is preserved for operator reconciliation. Local setup never proves that a remote provider actually
+delivers protocol-115 packets. No L2 bridge, global neighbor/sysctl
+change, IPsec configuration or external packet forwarder is created.
+L2TPv3 transports plaintext and is not authenticated. Network admission
+is evaluated separately from local structural verification.
 
 ### Linux integration
 Owns safe interaction with:

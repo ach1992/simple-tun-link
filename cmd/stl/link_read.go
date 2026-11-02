@@ -11,6 +11,7 @@ import (
 	grebackend "github.com/ach1992/simple-tun-link/internal/backend/gre"
 	ipipbackend "github.com/ach1992/simple-tun-link/internal/backend/ipip"
 	ipsecbackend "github.com/ach1992/simple-tun-link/internal/backend/ipsec"
+	l2tpbackend "github.com/ach1992/simple-tun-link/internal/backend/l2tpv3"
 	wgbackend "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/diagnostics"
 	"github.com/ach1992/simple-tun-link/internal/domain"
@@ -53,6 +54,7 @@ type linkStatusResponse struct {
 	Connectivity      string                        `json:"connectivity"`
 	GREState          *grebackend.DiagnosticState   `json:"gre_state,omitempty"`
 	IPIPState         *ipipbackend.DiagnosticState  `json:"ipip_state,omitempty"`
+	L2TPv3State       *l2tpbackend.DiagnosticState  `json:"l2tpv3_state,omitempty"`
 	WireGuardState    *wgbackend.DiagnosticState    `json:"wireguard_state,omitempty"`
 	WSSState          *WSSLinkDiagnostics           `json:"wss_state,omitempty"`
 	QUICState         *QUICLinkDiagnostics          `json:"quic_state,omitempty"`
@@ -294,6 +296,25 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 		}
 		response.IPIPState = &observed
 		interfaceName, kindLabel = observed.Interface, "IPIP"
+		rxPackets, txPackets = observed.RXPackets, observed.TXPackets
+	case domain.BackendL2TPv3:
+		inspector, ok := selected.(interface {
+			DiagnosticState(context.Context, domain.Link) (l2tpbackend.DiagnosticState, error)
+		})
+		if !ok {
+			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_status", "backend has no live diagnostic adapter")
+		}
+		observed, err := inspector.DiagnosticState(ctx, record.Desired)
+		if err != nil {
+			return readStatusInspectionError(ctx, stdout, stderr, jsonOutput, err)
+		}
+		expectedName, nameErr := l2tpbackend.InterfaceName(id)
+		if nameErr != nil || observed.Interface != expectedName || observed.IfIndex <= 0 ||
+			observed.Encapsulation != record.Desired.Encapsulation {
+			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInspect, "link_status", "backend returned inconsistent Link identity")
+		}
+		response.L2TPv3State = &observed
+		interfaceName, kindLabel = observed.Interface, "L2TPv3"
 		rxPackets, txPackets = observed.RXPackets, observed.TXPackets
 	case domain.BackendWireGuard:
 		inspector, ok := selected.(interface {

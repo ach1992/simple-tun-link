@@ -20,6 +20,10 @@ import (
 // create a tunnel, change State, edit systemd, or establish host support.
 func plainRequiredModules(selected tunnelOption) []string {
 	switch selected.backend {
+	case domain.BackendL2TPv3:
+		if selected.mode == domain.EncapNative {
+			return []string{"l2tp_ip", "l2tp_eth"}
+		}
 	case domain.BackendGRE:
 		switch selected.mode {
 		case domain.EncapNative:
@@ -45,7 +49,8 @@ func plainRequiredModules(selected tunnelOption) []string {
 func menuModulePreparationReason(code string) bool {
 	switch code {
 	case "gre_probe_unconfirmed", "ipip_probe_unconfirmed", "base_link_probe_unconfirmed",
-		"fou_probe_unconfirmed", "fou_module_present_probe_failed", "kernel_module_not_loaded":
+		"fou_probe_unconfirmed", "fou_module_present_probe_failed", "kernel_module_not_loaded",
+		"l2tpv3_probe_unconfirmed", "l2tpv3_session_probe_unconfirmed":
 		return true
 	}
 	return false

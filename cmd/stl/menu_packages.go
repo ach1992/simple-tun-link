@@ -25,7 +25,7 @@ var canonicalInstaller []byte
 // Neither a mutable GitHub tag nor caller-controlled PATH/source is executed.
 func selectedPackageBackends(selected tunnelOption) string {
 	switch selected.backend {
-	case domain.BackendGRE, domain.BackendIPIP:
+	case domain.BackendGRE, domain.BackendIPIP, domain.BackendL2TPv3:
 		return "native"
 	case domain.BackendWireGuard:
 		return "native,wireguard"
@@ -303,7 +303,7 @@ func menuPrepareSelectedPackagesWithOps(input io.Reader, reader *bufio.Reader, o
 	if plan.missing != "" {
 		menuField(out, "Missing packages", plan.missing)
 		menuField(out, "APT install plan", plan.aptInstall)
-		if selected.backend == domain.BackendGRE || selected.backend == domain.BackendIPIP {
+		if selected.backend == domain.BackendGRE || selected.backend == domain.BackendIPIP || selected.backend == domain.BackendL2TPv3 {
 			menuField(out, "Possible modules", strings.Join(plainRequiredModules(selected), ", "))
 			menuProse(out, "This same PREPARE also authorizes loading ONLY the selected modules if a post-APT kernel check proves them missing and loadable. Modules may remain loaded until reboot; the other server is prepared separately.")
 		}

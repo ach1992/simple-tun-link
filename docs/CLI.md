@@ -30,7 +30,7 @@ from either end once the Link is usable. Noninteractive versioned request
 schemas continue to accept concrete explicit roles: there is no new JSON
 `auto` mode or runtime role-switching contract.
 
-GRE/IPIP Native/FOU/GUE use reciprocal physical endpoint configuration,
+GRE/IPIP Native/FOU/GUE and L2TPv3 Direct-IP use reciprocal physical endpoint configuration,
 not Dial/Listen. Native WireGuard uses peer endpoints and keepalive;
 IPsec/IKEv2 can be explicitly connected from either prepared peer. Check
 the selected backend's own prerequisites, connection and diagnostic
@@ -41,8 +41,8 @@ Run `stl` in a real terminal or invoke `stl menu`. Without an
 interactive terminal, `stl` prints help instead. The principal tasks are
 Create, Import, My tunnels, Test connectivity, Settings, Update and
 Uninstall. GRE Native is the default guided Create choice; WireGuard,
-IPIP, manual configuration and advanced encapsulations/IPsec remain
-discoverable.
+IPIP, L2TPv3 Direct-IP (option 8), manual configuration and advanced
+encapsulations/IPsec remain discoverable.
 
 - An IPsec readiness error can be inspected using **read-only**
   `stl doctor ipsec --json`. Inspect `provisioning_readiness`:
@@ -65,7 +65,7 @@ discoverable.
   disruption and independently verified ownership. Foreign or unknown
   services require manual remediation and `RECHECK`.
 - After successful local Create, show saved/local success separately
-  from measured peer traffic. GRE/IPIP plaintext offers can be exported
+  from measured peer traffic. GRE/IPIP/L2TPv3 plaintext offers can be exported
   again. The original SENSITIVE WireGuard/IPsec/WSS receiver handoff is
   shown after successful menu creation in a real terminal, and retained
   separately for future Share with fresh `SHOW`. Explicit `DELETE`
@@ -164,8 +164,22 @@ when the operators do not want to transfer a Setup Link:
    peer Link Address connectivity.
 
 The manual menu is for **Native** GRE/IPIP. Use the canonical
-**Share Setup Link → Import** flow for FOU/GUE so paired UDP
-port and encapsulation settings are preserved. WireGuard/IPsec
+**Share Setup Link → Import** flow for FOU/GUE and **L2TPv3 Direct-IP**:
+the same Link ID must be shared to derive exactly complementary
+kernel Tunnel/Session IDs and Ethernet MACs. Allow **IPv4 protocol 115**
+(not TCP/UDP port 115) on both underlays; expect only a locally managed
+permanent private-peer neighbor, and verify actual peer-originated traffic.
+L2TPv3 traffic is plaintext, unauthenticated and provider-dependent.
+On an uncertain L2TPv3 create/remove error, **do not retry the failed
+mutation or delete an orphan interface/tunnel blindly**. Check the
+machine-readable failure `evidence.rollback` and `next_step`, read the
+current Link through `stl link status <ID> --json`, and review
+`sudo ip -json l2tp show tunnel`, `sudo ip -json l2tp show session`,
+`sudo ip -json address show` and `sudo ip -json neigh show`.
+A foreign configured IPv6 address or non-STL neighbor/session requires
+the owning operator to reconcile it before STL can safely remove the
+pseudowire; otherwise destroying the L2TP session destroys their data.
+WireGuard/IPsec
 receiver secrets cannot be reconstructed from Connection details;
 use the original protected receiver handoff.
 
@@ -312,11 +326,11 @@ Quick Links in `argv` or shell history.
 ~~~sh
 stl link preview --stdin --json < /root/private/received.stl
 stl link import --stdin --confirm <import_confirmation> --json < /root/private/received.stl
-stl link export <saved-gre-or-ipip-id> --json
+stl link export <saved-plain-link-id> --json
 ~~~
 
 Preview does not mutate State or inspect/repair the active host. For
-eligible plaintext GRE/IPIP, configured WireGuard v3 or strict 32-byte
+eligible plaintext GRE/IPIP/L2TPv3, configured WireGuard v3 or strict 32-byte
 PSK IPsec v2 offers, it returns a lowercase SHA-256
 `import_confirmation` over the exact normalized URL. Import requires
 that **same** URL and token, then recipient-oriented inversion and
@@ -324,7 +338,7 @@ a separate authorized Engine operation. Token matching detects a
 different payload; it does **not** authenticate its author.
 
 The regular saved-State export command is intentionally restricted to
-credential-free GRE/IPIP; a valid sender's private receiver credential
+credential-free GRE/IPIP/L2TPv3; a valid sender's private receiver credential
 cannot be reconstructed from stored public State. Guided sender
 Share instead uses the original protected handoff after new consent.
 WireGuard v1/v2 and IPsec v1 legacy offers, or IPsec v2 with

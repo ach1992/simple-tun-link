@@ -12,6 +12,7 @@ import (
 
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/backend/gre"
+	"github.com/ach1992/simple-tun-link/internal/backend/l2tpv3"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 )
@@ -234,6 +235,139 @@ func TestManagedMTUAllNativeBackendsHaveLocalOwnershipAndOverhead(t *testing.T) 
 			}
 			if err := undo(ctx); err != nil || runner.ifaces[name].MTU != 1500 {
 				t.Fatalf("backend managed undo failed: %v", err)
+			}
+		})
+	}
+}
+
+// The Remove compensation must restore the *captured* managed MTU, not
+// recalculate Auto or infer the kernel default of a newly created l2tpeth.
+func l2tpRemoveMTUFixture(t *testing.T, mode domain.MTUMode) (HostMTUManager, *managedRunner, domain.Link, []domain.ResourceClaim, mtuInterface) {
+	t.Helper()
+	m, r, link, claims := managerFixture(t)
+	oldName := claims[0].Key
+	link.Backend = domain.BackendL2TPv3
+	link.MTU.Mode = mode
+	if mode == domain.MTUAuto {
+		link.MTU.Bytes = 0
+	}
+	name, err := l2tpv3.InterfaceName(link.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := r.ifaces[oldName]
+	delete(r.ifaces, oldName)
+	original.IfName = name
+	if mode == domain.MTUAuto {
+		original.MTU = 1280
+	} else {
+		original.MTU = link.MTU.Bytes
+	}
+	r.ifaces[name] = original
+	claims[0].Key = name
+	return m, r, link, claims, original
+}
+
+func TestL2TPManagedMTUCompensation(t *testing.T) {
+	ctx := context.Background()
+	for _, mode := range []domain.MTUMode{domain.MTUManual, domain.MTUAuto} {
+		t.Run(string(mode), func(t *testing.T) {
+			m, r, link, claims, original := l2tpRemoveMTUFixture(t, mode)
+			restore, err := m.CaptureL2TPRemove(ctx, link, original.IfIndex, claims)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Original session was deleted and the replacement l2tpeth
+			// received a new ifindex and a default MTU.
+			recreated := original
+			recreated.IfIndex = 109
+			recreated.MTU = 1500
+			r.ifaces[claims[0].Key] = recreated
+			r.routeMTU = 0 // Remove restore must not recompute underlay policy.
+			if err := restore(ctx, recreated.IfIndex); err != nil {
+				t.Fatalf("compensation: %v", err)
+			}
+			if got := r.ifaces[claims[0].Key]; got.IfIndex != 109 || got.MTU != original.MTU {
+				t.Fatalf("original managed MTU not restored: old=%+v now=%+v", original, got)
+			}
+		})
+	}
+	t.Run("untouched original interface is not rewritten", func(t *testing.T) {
+		m, r, link, claims, original := l2tpRemoveMTUFixture(t, domain.MTUManual)
+		writes := 0
+		m.SetByIndex = func(context.Context, int, int) error { writes++; return nil }
+		restore, err := m.CaptureL2TPRemove(ctx, link, original.IfIndex, claims)
+		if err != nil || restore(ctx, original.IfIndex) != nil || writes != 0 {
+			t.Fatalf("original interface was unnecessarily mutated: err=%v writes=%d", err, writes)
+		}
+		_ = r
+	})
+}
+
+func TestL2TPManagedMTURemoveIdentityAndFailureGuards(t *testing.T) {
+	ctx := context.Background()
+	for _, scenario := range []string{
+		"foreign replacement", "changed witness", "reused original index",
+		"setter error", "setter no effect", "original interface MTU drift",
+	} {
+		t.Run(scenario, func(t *testing.T) {
+			m, r, link, claims, original := l2tpRemoveMTUFixture(t, domain.MTUManual)
+			if scenario == "setter error" {
+				m.SetByIndex = func(context.Context, int, int) error {
+					return errors.New("injected netlink error")
+				}
+			} else if scenario == "setter no effect" {
+				m.SetByIndex = func(context.Context, int, int) error { return nil }
+			}
+			restore, err := m.CaptureL2TPRemove(ctx, link, original.IfIndex, claims)
+			if err != nil {
+				t.Fatal(err)
+			}
+			name := claims[0].Key
+			newIndex := 109
+			newIface := original
+			newIface.IfIndex = newIndex
+			newIface.MTU = 1500
+			switch scenario {
+			case "foreign replacement":
+				newIface.IfAlias = "foreign-owner"
+			case "changed witness":
+				newIndex = 110
+			case "reused original index":
+				newIface.IfIndex = original.IfIndex
+				newIndex = original.IfIndex
+			case "original interface MTU drift":
+				newIface.IfIndex = original.IfIndex
+				newIndex = original.IfIndex
+			}
+			r.ifaces[name] = newIface
+			if err := restore(ctx, newIndex); err == nil {
+				t.Fatal("uncertain/foreign MTU compensation incorrectly succeeded")
+			}
+			if got := r.ifaces[name]; got.MTU != 1500 {
+				t.Fatalf("unverified compensation modified a foreign/drifted MTU: %+v", got)
+			}
+		})
+	}
+	for _, scenario := range []string{"missing writer", "wrong original index", "foreign owner", "missing claim"} {
+		t.Run(scenario, func(t *testing.T) {
+			m, r, link, claims, original := l2tpRemoveMTUFixture(t, domain.MTUAuto)
+			idx := original.IfIndex
+			switch scenario {
+			case "missing writer":
+				m.SetByIndex = nil
+			case "wrong original index":
+				idx++
+			case "foreign owner":
+				foreign := original
+				foreign.IfAlias = "another-tool"
+				r.ifaces[claims[0].Key] = foreign
+			case "missing claim":
+				claims = nil
+			}
+			_, err := m.CaptureL2TPRemove(ctx, link, idx, claims)
+			if err == nil {
+				t.Fatal("invalid managed MTU capture allowed a destructive Remove")
 			}
 		})
 	}

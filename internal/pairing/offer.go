@@ -122,8 +122,11 @@ func (o Offer) validate() error {
 	// Strict backend/encapsulation compatibility is intentionally centralized
 	// here rather than delegated to the future CLI or individual backends.
 	switch o.link.Backend {
-	case domain.BackendGRE, domain.BackendIPIP:
-		if o.link.Encapsulation != domain.EncapNative && o.link.Encapsulation != domain.EncapFOU && o.link.Encapsulation != domain.EncapGUE {
+	case domain.BackendGRE, domain.BackendIPIP, domain.BackendL2TPv3:
+		if o.link.Backend == domain.BackendL2TPv3 && o.link.Encapsulation != domain.EncapNative {
+			return fmt.Errorf("L2TPv3 setup links require Direct-IP native encapsulation")
+		}
+		if o.link.Backend != domain.BackendL2TPv3 && o.link.Encapsulation != domain.EncapNative && o.link.Encapsulation != domain.EncapFOU && o.link.Encapsulation != domain.EncapGUE {
 			return fmt.Errorf("unsupported GRE/IPIP encapsulation")
 		}
 		if len(o.recipientSecret) != 0 {

@@ -19,6 +19,7 @@ type Encapsulation string
 const (
 	BackendGRE           Backend = "gre"
 	BackendIPIP          Backend = "ipip"
+	BackendL2TPv3        Backend = "l2tpv3"
 	BackendWireGuard     Backend = "wireguard"
 	BackendWireGuardWSS  Backend = "wireguard-wss"
 	BackendWireGuardQUIC Backend = "wireguard-quic"
@@ -282,6 +283,32 @@ func (l Link) Validate() error {
 		case EncapNative, EncapFOU, EncapGUE:
 		default:
 			return stlerr.New(stlerr.CodeUnsupported, "validate_link", string(l.ID), string(l.Backend), "unsupported IPIP encapsulation")
+		}
+	}
+	if l.Backend == BackendL2TPv3 {
+		if l.Encapsulation != EncapNative || !l.Underlay.Local.Is4() || !l.Underlay.Peer.Is4() {
+			return stlerr.New(stlerr.CodeUnsupported, "validate_link", string(l.ID), string(l.Backend), "L2TPv3 Direct-IP requires native IP protocol 115 with IPv4 endpoints")
+		}
+		if l.Addresses.Local.Bits() != l.Addresses.Peer.Bits() ||
+			l.Addresses.Local.Bits() < 1 || l.Addresses.Local.Bits() > 31 ||
+			l.Addresses.Local.Masked() != l.Addresses.Peer.Masked() {
+			return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "L2TPv3 Ethernet pseudowire requires both IPv4 addresses on one non-/32 subnet")
+		}
+		// A /31 has two usable host addresses (RFC 3021). In wider
+		// Ethernet subnets, the network and broadcast addresses cannot
+		// be reliable unicast peers, even when iproute2 accepts them.
+		for _, peerIP := range []netip.Prefix{l.Addresses.Local, l.Addresses.Peer} {
+			if peerIP.Bits() >= 31 {
+				continue
+			}
+			address := peerIP.Addr().As4()
+			network := peerIP.Masked().Addr().As4()
+			hostMask := ^uint32(0) >> uint(peerIP.Bits())
+			addrN := uint32(address[0])<<24 | uint32(address[1])<<16 | uint32(address[2])<<8 | uint32(address[3])
+			networkN := uint32(network[0])<<24 | uint32(network[1])<<16 | uint32(network[2])<<8 | uint32(network[3])
+			if addrN == networkN || addrN == networkN|hostMask {
+				return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "L2TPv3 private IPv4 endpoints must be usable unicast host addresses")
+			}
 		}
 	}
 	if l.Backend == BackendGRE {

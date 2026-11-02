@@ -82,6 +82,18 @@ func inspectLinkDiagnostic(ctx context.Context, link domain.Link, options runtim
 		}
 		return linkDiagnostic{report: m, mtu: m.MTU, quality: m.Quality,
 			rx: m.State.RXPackets, tx: m.State.TXPackets, counterUnit: "packets"}, nil
+	case domain.BackendL2TPv3:
+		inspector, ok := selected.(diagnostics.L2TPv3Inspector)
+		if !ok {
+			return linkDiagnostic{}, stlerr.New(stlerr.CodeUnsupported, "link_diagnose", string(link.ID), string(link.Backend),
+				"L2TPv3 diagnostic backend is unavailable")
+		}
+		m, err := diagnostics.ObserveL2TPv3(ctx, link, inspector, runner, manualMTU)
+		if err != nil {
+			return linkDiagnostic{}, err
+		}
+		return linkDiagnostic{report: m, mtu: m.MTU, quality: m.Quality,
+			rx: m.State.RXPackets, tx: m.State.TXPackets, counterUnit: "packets"}, nil
 	case domain.BackendWireGuard:
 		inspector, ok := selected.(diagnostics.WireGuardInspector)
 		if !ok {

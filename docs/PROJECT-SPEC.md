@@ -85,9 +85,13 @@ operator-initiated attempt; safety and credential protection still apply.
 
 1. **Transport-neutral Link model.** One identity, desired/observed state,
    address model, lifecycle and diagnostic vocabulary serves all backends.
-   The initial backend families are GRE, IPIP, WireGuard and IPsec/XFRM.
+   The initial backend families are GRE, IPIP, WireGuard and IPsec/XFRM;
+   L2TPv3 Direct-IP is an additional native Linux Ethernet pseudowire
+   backend for a private IPv4 peer link (no userspace data-plane relay).
    GRE/IPIP support Native and, where technically supported, FOU/GUE;
-   GRE Native is the straightforward interactive default.
+   GRE Native remains the straightforward interactive default. L2TPv3
+   Direct-IP uses IP protocol 115, no TCP/UDP outer port, and supplies
+   no confidentiality or authentication. Individual networks may block it.
 2. **Practical two-endpoint configuration.** Provide guided creation,
    manually specified endpoints/Link Addresses, and explicit, versioned
    peer setup import/export. Start with IPv4 point-to-point addresses,

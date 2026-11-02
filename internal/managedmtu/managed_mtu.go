@@ -10,6 +10,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/backend/gre"
 	"github.com/ach1992/simple-tun-link/internal/backend/ipip"
 	"github.com/ach1992/simple-tun-link/internal/backend/ipsec"
+	"github.com/ach1992/simple-tun-link/internal/backend/l2tpv3"
 	"github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/carrier/quic"
 	"github.com/ach1992/simple-tun-link/internal/domain"
@@ -55,6 +56,13 @@ func mtuIdentity(link domain.Link) (string, int, error) {
 			return "", 0, err
 		}
 		n, err := gre.Overhead(link)
+		return name, n, err
+	case domain.BackendL2TPv3:
+		name, err := l2tpv3.InterfaceName(link.ID)
+		if err != nil {
+			return "", 0, err
+		}
+		n, err := l2tpv3.Overhead(link)
 		return name, n, err
 	case domain.BackendIPIP:
 		name, err := ipip.InterfaceName(link.ID)
@@ -150,6 +158,63 @@ func claimsHaveInterface(claims []domain.ResourceClaim, name string) bool {
 		}
 	}
 	return false
+}
+
+// CaptureL2TPRemove pins the actual pre-Remove MTU while Engine holds the
+// existing Link and resource locks. Its compensation is called only AFTER the
+// backend positively proves restoration of the owned tunnel/session/interface;
+// the verified current ifindex is supplied by that fresh kernel observation.
+// No MTU policy is recomputed on the failure path.
+func (m HostMTUManager) CaptureL2TPRemove(ctx context.Context, link domain.Link, originalIndex int, claims []domain.ResourceClaim) (func(context.Context, int) error, error) {
+	if link.Backend != domain.BackendL2TPv3 ||
+		(link.MTU.Mode != domain.MTUManual && link.MTU.Mode != domain.MTUAuto) ||
+		originalIndex <= 0 || m.SetByIndex == nil {
+		return nil, fmt.Errorf("managed L2TPv3 Remove MTU restoration is unavailable")
+	}
+	name, _, err := mtuIdentity(link)
+	if err != nil || !claimsHaveInterface(claims, name) {
+		return nil, errors.Join(errors.New("managed L2TPv3 Remove has no exact owned interface claim"), err)
+	}
+	alias, err := linux.OwnerTag(link.ID)
+	if err != nil {
+		return nil, err
+	}
+	original, err := m.inspect(ctx, name)
+	if err != nil || original.IfIndex != originalIndex || original.IfAlias != alias {
+		return nil, errors.Join(errors.New("cannot capture owned L2TPv3 interface MTU before Remove"), err)
+	}
+	return func(undoCtx context.Context, verifiedIndex int) error {
+		current, readErr := m.inspect(undoCtx, name)
+		if readErr != nil || verifiedIndex <= 0 || current.IfIndex != verifiedIndex || current.IfAlias != alias {
+			return errors.Join(errors.New("cannot restore L2TPv3 MTU: restored interface identity is unverified"), readErr)
+		}
+		if verifiedIndex == originalIndex {
+			// The original kernel ifindex survived, or was reused. Do not
+			// overwrite an unexpected MTU on an unproved generation.
+			if current.MTU != original.MTU {
+				return fmt.Errorf("cannot restore L2TPv3 MTU: original interface changed unexpectedly")
+			}
+			return nil
+		}
+		if current.MTU == original.MTU {
+			return nil
+		}
+		// Guard against an intervening interface replacement immediately
+		// before the ifindex-bound netlink mutation.
+		before, checkErr := m.inspect(undoCtx, name)
+		if checkErr != nil || before != current {
+			return errors.Join(errors.New("cannot restore L2TPv3 MTU: interface changed before mutation"), checkErr)
+		}
+		if err := m.SetByIndex(undoCtx, verifiedIndex, original.MTU); err != nil {
+			return fmt.Errorf("L2TPv3 compensating MTU write failed or took uncertain effect: %w", err)
+		}
+		after, checkErr := m.inspect(undoCtx, name)
+		if checkErr != nil || after.IfIndex != verifiedIndex || after.IfAlias != alias ||
+			after.MTU != original.MTU {
+			return errors.Join(errors.New("L2TPv3 compensating MTU readback is unverified"), checkErr)
+		}
+		return nil
+	}, nil
 }
 
 func (m HostMTUManager) Apply(ctx context.Context, req backend.Request, observedBefore bool, claims []domain.ResourceClaim) (backend.Rollback, bool, error) {

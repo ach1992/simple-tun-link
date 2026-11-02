@@ -66,7 +66,7 @@ func linkExportCommand(args []string, stdout, stderr io.Writer, options *runtime
 	}
 	// Never silently drop required recipient secrets. Plaintext GRE/IPIP
 	// reuse the same canonical pairing inversion and persisted Link contract.
-	if record.Desired.Backend != domain.BackendGRE && record.Desired.Backend != domain.BackendIPIP {
+	if record.Desired.Backend != domain.BackendGRE && record.Desired.Backend != domain.BackendIPIP && record.Desired.Backend != domain.BackendL2TPv3 {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_export",
 			"export is not yet supported for this backend")
 	}

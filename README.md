@@ -52,12 +52,18 @@ readiness and proved peer traffic are distinct levels of evidence.
 | --- | --- | --- | --- |
 | **GRE** | Native, FOU/UDP, GUE/UDP | No | Simplest default; fast plaintext L3 connectivity |
 | **IPIP** | Native, FOU/UDP, GUE/UDP | No | Alternative plaintext L3 encapsulation |
+| **L2TPv3 Direct-IP** | IP protocol 115; kernel Ethernet pseudowire | No | Alternative private IPv4 between Linux peers where protocol 115 is reachable |
 | **WireGuard** | UDP | Yes | Encrypted point-to-point connection |
 | **WireGuard over WSS/TLS** | WSS over TCP + private kernel WG | Yes (mTLS and WireGuard) | Optional managed Carrier when the peer can reach a selected TLS TCP port |
 | **WireGuard over QUIC/TLS** | QUIC over UDP + private kernel WG | Yes (mTLS and WireGuard) | Optional managed Carrier with the separately pinned Hysteria companion |
 | **IPsec** | IKEv2/XFRM, ESP or NAT-T | Yes | Advanced encrypted transport; requires a verified STL-owned strongSwan runtime |
 
 GRE keys and UDP encapsulation do **not** encrypt or authenticate traffic.
+L2TPv3 also does **not** authenticate or encrypt packets, and private-IP success
+depends on actual peer reachability rather than only a local `UP` interface.
+Its native Linux session/interface and permanent neighbor are managed as
+STL-owned resources; it needs `l2tp_ip` / `l2tp_eth` kernel support.
+
 A supported backend also requires compatible kernel capabilities and
 actual network reachability on both servers. STL does not change a
 cloud-provider firewall, configure NAT forwarding, or guarantee passage
@@ -74,7 +80,8 @@ Backend support is checked on each host rather than assumed from the OS
 name alone. See [supported environments](docs/SUPPORTED-ENVIRONMENTS.md).
 
 Allow the selected underlay transport in the relevant host/provider rules:
-GRE Native uses **IP protocol 47** (not TCP port 47); WireGuard uses
+GRE Native uses **IP protocol 47** (not TCP port 47); L2TPv3 Direct-IP uses
+**IP protocol 115** (not TCP/UDP port 115); WireGuard uses
 the selected UDP port; IPsec typically needs UDP **500/4500** and/or ESP.
 For **WSS**, open the chosen TLS **TCP** port on the listening host and
 install the explicitly selected, verified `wstunnel v11.0.0` companion on
@@ -432,3 +439,37 @@ firewall or host-reboot environment; validate the intended servers
 before relying on their connectivity.
 
 [MIT License](LICENSE)
+
+## L2TPv3 Direct-IP: private IPv4 alternative
+
+Choose **Create tunnel -> 8 L2TPv3 / Direct-IP** on the first server,
+then import its **Setup Link** on the second server. Both endpoints must
+run an STL build with this backend; older installed `v0.1.20` cannot
+import/create this new type. Import retains the shared Link ID and reverses
+the underlay/private-IP addresses; STL derives distinct reciprocal Linux
+tunnel/session IDs and locally administered Ethernet MACs from that identity.
+Linux `l2tpeth` exposes a native Ethernet pseudowire; STL uses a local-only
+permanent neighbor for the private peer to avoid incomplete ARP resolution.
+Do **not** bridge it to a real Ethernet LAN unless you deliberately add and
+secure that configuration outside this feature.
+
+This is **direct IPv4 protocol 115**, not L2TP over UDP or an IPsec VPN.
+The underlay, its protocol-115 firewall allowance, kernel `ip l2tp` support,
+and real peer ingress are host/network-specific. A successful local Ensure
+or ten Ping replies on one provider do not imply durable connectivity on
+all hosts. It does not provide confidentiality or authentication; wrap
+sensitive data in an authenticated encrypted transport. Private IPs are
+ordinary locally selected Link Addresses, not externally assigned addresses.
+`stl link status` reports owned local state; `stl link diagnose` and
+peer-origin data tests distinguish actual reachability.
+
+**Optional disposable Linux E2E:** Run the kernel-backed, isolated two-namespace
+Engine/Restore/Remove smoke on an approved disposable validation host with
+
+    sudo env STL_E2E_DISPOSABLE_HOST=approved bash scripts/e2e/l2tpv3-netns.sh
+
+This test does not change the host's default route and includes SHA-256-
+verified 16 MiB private TCP transfers in **each** namespace direction.
+It does not qualify public-Internet reachability or provider stability:
+test actual application traffic and durable private-IP delivery on the
+specific target network before relying on it.

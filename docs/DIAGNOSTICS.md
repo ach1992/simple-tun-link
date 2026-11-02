@@ -154,6 +154,7 @@ automatically a reply, a lost packet or a measured MTU.
 | --- | --- |
 | GRE Native/FOU/GUE | Deterministic owned interface/ifindex, mode, local IP, route, GRE options/encapsulation overhead and public packet/byte/error counters |
 | IPIP Native/FOU/GUE | Same identity and route rules; transport overhead 20/28/32 bytes for IPv4 Native/FOU/GUE |
+| L2TPv3 Direct-IP | Exact owned `l2tpeth` interface/ifindex, native tunnel/session ID and reciprocal peer IDs, locally managed permanent neighbor and actual Linux RX/TX packet/byte/error counters; conservative 42-byte outer IPv4/L2TPv3/inner-Ethernet overhead planning only, not measured WAN reachability |
 | WireGuard | Owned interface/ifindex, public local/peer keys, listen port, local Link IP, handshake timestamp and RX/TX bytes; IPv4 data overhead **60 bytes** |
 | WireGuard over WSS | Status and dedicated `diagnose-wss` show owner-verified helper/guard/kernel WG handshake and byte counters; standard diagnose sends **five bounded private ICMP probes** after WSS and private route/identity verification; **carrier PMTU remains unknown** |
 | WireGuard over QUIC | Status and dedicated `diagnose-quic` show committed-generation helper/guard/kernel observations and attributed helper events; standard diagnose sends **five bounded private ICMP probes** after exact ownership and private route verification; **carrier PMTU remains unknown** |

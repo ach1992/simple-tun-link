@@ -24,6 +24,8 @@ func plainBackendCapability(backend domain.Backend, mode domain.Encapsulation) l
 		return linux.CapabilityGREFOU
 	case backend == domain.BackendGRE && mode == domain.EncapGUE:
 		return linux.CapabilityGREGUE
+	case backend == domain.BackendL2TPv3 && mode == domain.EncapNative:
+		return linux.CapabilityL2TPv3DirectIP
 	case backend == domain.BackendIPIP && mode == domain.EncapNative:
 		return linux.CapabilityIPIPNative
 	case backend == domain.BackendIPIP && mode == domain.EncapFOU:
@@ -120,11 +122,14 @@ func menuRefineModuleReadiness(report linux.CapabilityReport, observe func(strin
 		return report
 	}
 	states := make(map[string]linux.KernelModuleState, 3)
-	for _, module := range []string{"ip_gre", "ipip", "fou"} {
+	for _, module := range []string{"ip_gre", "ipip", "fou", "l2tp_ip", "l2tp_eth"} {
 		states[module] = observe(module)
 	}
-	for _, backend := range []domain.Backend{domain.BackendGRE, domain.BackendIPIP} {
+	for _, backend := range []domain.Backend{domain.BackendGRE, domain.BackendIPIP, domain.BackendL2TPv3} {
 		for _, mode := range []domain.Encapsulation{domain.EncapNative, domain.EncapFOU, domain.EncapGUE} {
+			if backend == domain.BackendL2TPv3 && mode != domain.EncapNative {
+				continue
+			}
 			choice := tunnelOption{backend: backend, mode: mode}
 			capability := plainBackendCapability(backend, mode)
 			status, known := report[capability]
@@ -249,6 +254,7 @@ func menuCapabilityHelp(out io.Writer, report linux.CapabilityReport) {
 		}
 		showGroup("GRE native", linux.CapabilityGRENative)
 		showGroup("IPIP native", linux.CapabilityIPIPNative)
+		showGroup("L2TPv3 Direct-IP", linux.CapabilityL2TPv3DirectIP)
 		// Group all four only if they really failed for the SAME FOU
 		// prerequisite. Otherwise do not imply that the other backend
 		// or all its UDP modes failed.
@@ -275,12 +281,13 @@ func menuCapabilityHelp(out io.Writer, report linux.CapabilityReport) {
 	menuNotice(out, "INFO", "Kernel modules, packages, network Links and services were NOT changed.")
 }
 
-// Keep common choices on one short screen; the six less common transports
-// and no-Link workflows are visible only when the operator asks for them.
+// Keep common choices on one screen. Preserve existing numeric options for
+// backwards-compatible workflows; add L2TPv3 as option 8.
 var basicTunnelOptions = map[string]tunnelOption{
 	"1": {domain.BackendGRE, domain.EncapNative, false},
 	"2": {domain.BackendWireGuard, domain.EncapUDP, false},
 	"3": {domain.BackendIPIP, domain.EncapNative, false},
+	"8": {domain.BackendL2TPv3, domain.EncapNative, false},
 }
 var manualTunnelOptions = map[string]tunnelOption{
 	"1": {domain.BackendGRE, domain.EncapNative, true},
@@ -354,6 +361,7 @@ func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		menuOption(out, "5", "Advanced types", "FOU / GUE / IPsec")
 		menuOption(out, "6", "WireGuard / WSS + TLS", "Encrypted WSS Carrier (optional pinned helper)")
 		menuOption(out, "7", "WireGuard / QUIC + TLS", "Encrypted UDP Carrier (optional pinned Hysteria)")
+		menuTunnelOption(out, "8", "L2TPv3 / Direct-IP", "IP protocol 115; plaintext private Ethernet", report, basicTunnelOptions["8"])
 		menuOption(out, "i", "Availability details", "Explain why a type is unavailable")
 		menuOption(out, "0", "Back", "Main menu")
 		fmt.Fprint(out, "Tunnel type [1]: ")
@@ -424,7 +432,7 @@ func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			menuAcknowledge(input, reader, out)
 			continue
 		}
-		if picked.backend == domain.BackendGRE || picked.backend == domain.BackendIPIP {
+		if picked.backend == domain.BackendGRE || picked.backend == domain.BackendIPIP || picked.backend == domain.BackendL2TPv3 {
 			ready, refreshed := menuPrepareSelectedModules(input, reader, out, options, picked, report, packagePrep)
 			if !ready {
 				report = menuCapabilitySnapshot(options)

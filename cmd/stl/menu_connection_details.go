@@ -68,6 +68,11 @@ func printManualConnectionDetails(out io.Writer, l domain.Link) {
 			fmt.Fprintln(out, "  For FOU/GUE use My tunnels -> Share Setup Link (manual menu is Native only).")
 		}
 		fmt.Fprintln(out, "  GRE traffic is NOT encrypted or authenticated.")
+	case domain.BackendL2TPv3:
+		fmt.Fprintln(out, "  L2TPv3 Direct-IP uses IPv4 protocol 115; it is NOT TCP/UDP port 115.")
+		fmt.Fprintln(out, "  Pair the OTHER server with My tunnels -> Share Setup Link / Import.")
+		fmt.Fprintln(out, "  Both endpoints share Link ID for reciprocal tunnel/session IDs and private Ethernet neighbors.")
+		fmt.Fprintln(out, "  L2TPv3 is plaintext and unauthenticated; verify actual peer traffic.")
 	case domain.BackendIPIP:
 		if l.Encapsulation == domain.EncapNative {
 			fmt.Fprintln(out, "  OTHER server menu: Create tunnel -> 4 Manual -> 2 IPIP Native.")

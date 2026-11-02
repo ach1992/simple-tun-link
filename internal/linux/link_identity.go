@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"net"
 	"net/netip"
 	"syscall"
 	"time"
@@ -29,6 +30,16 @@ func SetLinkAliasByIndex(ctx context.Context, index int, alias string) error {
 	}
 	value := append([]byte(alias), 0)
 	return routeLinkRequest(ctx, unix.RTM_SETLINK, index, 0, 0, unix.IFLA_IFALIAS, value)
+}
+
+// SetLinkMACByIndex assigns the verified locally-administered Ethernet address
+// to an exact Linux interface index, not a replaceable interface name.
+func SetLinkMACByIndex(ctx context.Context, index int, address string) error {
+	mac, err := net.ParseMAC(address)
+	if index <= 0 || err != nil || len(mac) != 6 || mac[0]&1 != 0 || mac[0]&2 == 0 {
+		return fmt.Errorf("valid interface index and locally-administered unicast MAC required")
+	}
+	return routeLinkRequest(ctx, unix.RTM_NEWLINK, index, 0, 0, unix.IFLA_ADDRESS, []byte(mac))
 }
 
 // SetLinkUpByIndex activates the exact observed kernel link identity without a
@@ -79,6 +90,35 @@ func AddIPv4AddressByIndex(ctx context.Context, index int, prefix netip.Prefix) 
 	message[base+3] = unix.RT_SCOPE_UNIVERSE
 	order.PutUint32(message[base+4:base+8], uint32(index))
 	copy(message[base+unix.SizeofIfAddrmsg:], attrs)
+	return sendRouteNetlinkRequest(ctx, message, seq)
+}
+
+// AddPermanentIPv4NeighborByIndex creates a private peer neighbor bound to
+// the verified interface INDEX, never a mutable interface name. EXCL prevents
+// accidentally overwriting another actor's existing NUD/LLADDR entry.
+// An EEXIST is a conflict, not permission to adopt or replace it.
+func AddPermanentIPv4NeighborByIndex(ctx context.Context, index int, addr netip.Addr, address string) error {
+	mac, err := net.ParseMAC(address)
+	if index <= 0 || !addr.Is4() || !addr.IsGlobalUnicast() || err != nil ||
+		len(mac) != 6 || mac[0]&1 != 0 {
+		return fmt.Errorf("valid interface index, IPv4 unicast peer and Ethernet unicast MAC are required")
+	}
+	ip := addr.As4()
+	attrs := appendNetlinkAttr(nil, unix.NDA_DST, ip[:])
+	attrs = appendNetlinkAttr(attrs, unix.NDA_LLADDR, mac)
+	const seq uint32 = 1
+	message := make([]byte, unix.SizeofNlMsghdr+unix.SizeofNdMsg+len(attrs))
+	order := binary.NativeEndian
+	order.PutUint32(message[0:4], uint32(len(message)))
+	order.PutUint16(message[4:6], unix.RTM_NEWNEIGH)
+	order.PutUint16(message[6:8], unix.NLM_F_REQUEST|unix.NLM_F_ACK|unix.NLM_F_CREATE|unix.NLM_F_EXCL)
+	order.PutUint32(message[8:12], seq)
+	base := unix.SizeofNlMsghdr
+	message[base] = unix.AF_INET
+	order.PutUint32(message[base+4:base+8], uint32(int32(index)))
+	order.PutUint16(message[base+8:base+10], unix.NUD_PERMANENT)
+	message[base+11] = unix.RTN_UNICAST
+	copy(message[base+unix.SizeofNdMsg:], attrs)
 	return sendRouteNetlinkRequest(ctx, message, seq)
 }
 
