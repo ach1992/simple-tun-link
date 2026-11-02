@@ -18,15 +18,44 @@ func BoundLocalIPv4(endpoints []LocalIPv4Endpoint, local netip.Addr, device stri
 	return hostaddress.Unique(endpoints, local, device)
 }
 func validLocalUnderlayIPv4(ip netip.Addr) bool { return hostaddress.ValidIPv4(ip) }
+
+// The inventory can be unexpectedly large or malformed. Both streams must be
+// capped *during* capture, not after a Runner has already buffered the output.
+const localIPv4StdoutLimit = 256 << 10
+const localIPv4StderrLimit = 1024
+
 func ListLocalIPv4Endpoints(ctx context.Context, runner Runner) ([]LocalIPv4Endpoint, error) {
 	if ctx == nil || runner == nil {
 		return nil, fmt.Errorf("local IPv4 inventory context or runner unavailable")
 	}
-	result, err := runner.Run(ctx, "ip", "-json", "address", "show")
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("local IPv4 inventory canceled: %w", err)
+	}
+	bounded, ok := runner.(BoundedRunner)
+	if !ok {
+		return nil, fmt.Errorf("local IPv4 inventory requires capture-bounded execution")
+	}
+	result, err := bounded.RunBounded(ctx, CaptureLimits{
+		Stdout: localIPv4StdoutLimit, Stderr: localIPv4StderrLimit,
+	}, "ip", "-json", "address", "show")
 	if err != nil || ctx.Err() != nil {
+		// Keep cancellation/timeout and overflow classifications inspectable
+		// without exposing arbitrary process text or host inventory.
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("local IPv4 inventory canceled: %w", ctx.Err())
+		}
+		if errors.Is(err, ErrOutputLimit) {
+			return nil, fmt.Errorf("local IPv4 inventory exceeded capture limit: %w", ErrOutputLimit)
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("local IPv4 inventory timed out: %w", context.DeadlineExceeded)
+		}
+		if errors.Is(err, context.Canceled) {
+			return nil, fmt.Errorf("local IPv4 inventory canceled: %w", context.Canceled)
+		}
 		return nil, fmt.Errorf("cannot inspect this host's assigned IPv4 interfaces")
 	}
-	if len(result.Stderr) != 0 || len(result.Stdout) > 256<<10 {
+	if len(result.Stderr) != 0 || len(result.Stdout) > localIPv4StdoutLimit {
 		return nil, fmt.Errorf("local IPv4 inventory is incomplete or exceeds read limit")
 	}
 	return ParseLocalIPv4Endpoints(result.Stdout)

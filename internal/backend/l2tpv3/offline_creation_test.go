@@ -41,3 +41,19 @@ func TestL2TPv3CanCreateWithoutAnyPeerRoute(t *testing.T) {
 		t.Fatalf("L2TPv3 could not create local resources without peer route: %v %+v", err, plan)
 	}
 }
+
+// Test double for a capture-bounded host inventory read. It must never
+// turn a call to RunBounded into an unchecked unbounded success.
+func (k *offlineL2TPKernel) RunBounded(ctx context.Context, limits linux.CaptureLimits, name string, args ...string) (linux.CommandResult, error) {
+	if limits.Stdout <= 0 || limits.Stderr <= 0 {
+		return linux.CommandResult{}, linux.ErrOutputLimit
+	}
+	if err := ctx.Err(); err != nil {
+		return linux.CommandResult{}, err
+	}
+	output, err := k.Run(ctx, name, args...)
+	if len(output.Stdout) > limits.Stdout || len(output.Stderr) > limits.Stderr {
+		return linux.CommandResult{}, linux.ErrOutputLimit
+	}
+	return output, err
+}

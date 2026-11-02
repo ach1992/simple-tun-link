@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 type offlineUnderlayRoutes struct {
@@ -85,5 +89,101 @@ func TestLocalAddressInventoryRejectsOversizedOrMissingContext(t *testing.T) {
 	}
 	if _, err := ListLocalIPv4Endpoints(nil, runner); err == nil {
 		t.Fatal("missing context accepted")
+	}
+}
+
+// BoundedRunner is mandatory: a plain Runner must not be consulted,
+// even if its fake output looks like a valid local IPv4 inventory.
+type unboundedInventoryRunner struct{ calls int }
+
+func (r *unboundedInventoryRunner) Run(_ context.Context, _ string, _ ...string) (CommandResult, error) {
+	r.calls++
+	return CommandResult{Stdout: []byte(`[{"ifname":"ens3","addr_info":[{"family":"inet","local":"192.0.2.10"}]}]`)}, nil
+}
+
+type capturedInventoryRunner struct {
+	unboundedInventoryRunner
+	gotLimits CaptureLimits
+	gotName   string
+	gotArgs   []string
+	result    CommandResult
+	err       error
+}
+
+func (r *capturedInventoryRunner) RunBounded(ctx context.Context, limits CaptureLimits, name string, args ...string) (CommandResult, error) {
+	r.gotLimits = limits
+	r.gotName = name
+	r.gotArgs = append([]string(nil), args...)
+	if err := ctx.Err(); err != nil {
+		return CommandResult{}, err
+	}
+	if r.err != nil {
+		return CommandResult{}, r.err
+	}
+	if len(r.result.Stdout) > limits.Stdout || len(r.result.Stderr) > limits.Stderr {
+		return CommandResult{}, ErrOutputLimit
+	}
+	return r.result, nil
+}
+func TestLocalInventoryRequiresCaptureBoundaryAndExactArgs(t *testing.T) {
+	unbounded := &unboundedInventoryRunner{}
+	if _, err := ListLocalIPv4Endpoints(context.Background(), unbounded); err == nil || unbounded.calls != 0 {
+		t.Fatalf("unbounded runner was invoked instead of refused: err=%v calls=%d", err, unbounded.calls)
+	}
+	r := &capturedInventoryRunner{result: CommandResult{Stdout: []byte(`[{"ifname":"ens3","addr_info":[{"family":"inet","local":"192.0.2.10"}]}]`)}}
+	endpoints, err := ListLocalIPv4Endpoints(context.Background(), r)
+	if err != nil || len(endpoints) != 1 || endpoints[0].Interface != "ens3" || r.calls != 0 ||
+		r.gotName != "ip" || !reflect.DeepEqual(r.gotArgs, []string{"-json", "address", "show"}) ||
+		r.gotLimits != (CaptureLimits{Stdout: 256 << 10, Stderr: 1024}) {
+		t.Fatalf("wrong bounded local inventory admission: %+v err=%v runner=%+v", endpoints, err, r)
+	}
+}
+
+func TestRealLocalInventoryCaptureStopsOversizedStdoutAndStderr(t *testing.T) {
+	// Execute the actual existing os/exec bounded reader via an isolated fake
+	// ip binary; testing len(stdout) after a plain Run would not pass here.
+	temp := t.TempDir()
+	t.Setenv("PATH", temp+string(os.PathListSeparator)+os.Getenv("PATH"))
+	script := filepath.Join(temp, "ip")
+	for _, tc := range []struct{ name, body string }{
+		{"stdout", "/usr/bin/head -c 1048576 /dev/zero"},
+		{"stderr", "/usr/bin/head -c 1048576 /dev/zero >&2"},
+		{"valid", `printf '%s' '[{"ifname":"ens3","addr_info":[{"family":"inet","local":"192.0.2.10"}]}]'`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(script, []byte("#!/bin/sh\n"+tc.body+"\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			started := time.Now()
+			endpoints, err := ListLocalIPv4Endpoints(context.Background(), ExecRunner{Timeout: 3 * time.Second})
+			if tc.name == "valid" {
+				if err != nil || len(endpoints) != 1 || endpoints[0].Address.String() != "192.0.2.10" {
+					t.Fatalf("bounded valid inventory rejected: %v %+v", err, endpoints)
+				}
+			} else if !errors.Is(err, ErrOutputLimit) || len(endpoints) != 0 {
+				t.Fatalf("%s overflow escaped capture-time bound: err=%v endpoints=%+v", tc.name, err, endpoints)
+			}
+			if time.Since(started) > 2*time.Second {
+				t.Fatalf("%s inventory overflow did not terminate promptly", tc.name)
+			}
+		})
+	}
+}
+func TestLocalInventoryPreservesCancellationAndTimeoutClassification(t *testing.T) {
+	r := &capturedInventoryRunner{err: context.DeadlineExceeded}
+	if _, err := ListLocalIPv4Endpoints(context.Background(), r); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("timeout classification lost: %v", err)
+	}
+	r.err = context.Canceled
+	if _, err := ListLocalIPv4Endpoints(context.Background(), r); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation classification lost: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := ListLocalIPv4Endpoints(ctx, r); !errors.Is(err, context.Canceled) {
+		t.Fatalf("already-canceled context not propagated: %v", err)
+	}
+	if r.calls != 0 {
+		t.Fatal("unbounded Run called after a cancellation")
 	}
 }

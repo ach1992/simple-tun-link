@@ -108,3 +108,19 @@ func TestRouteResolverReportsOptionalRouteMTU(t *testing.T) {
 		})
 	}
 }
+
+// Test double for a capture-bounded host inventory read. It must never
+// turn a call to RunBounded into an unchecked unbounded success.
+func (r *fakeRunner) RunBounded(ctx context.Context, limits CaptureLimits, name string, args ...string) (CommandResult, error) {
+	if limits.Stdout <= 0 || limits.Stderr <= 0 {
+		return CommandResult{}, ErrOutputLimit
+	}
+	if err := ctx.Err(); err != nil {
+		return CommandResult{}, err
+	}
+	output, err := r.Run(ctx, name, args...)
+	if len(output.Stdout) > limits.Stdout || len(output.Stderr) > limits.Stderr {
+		return CommandResult{}, ErrOutputLimit
+	}
+	return output, err
+}

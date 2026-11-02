@@ -182,11 +182,21 @@ func (f *fakeKernel) Run(_ context.Context, binary string, args ...string) (linu
 }
 
 // Test runner's output is bounded by the deterministic fake inventory.
-func (f *fakeKernel) RunBounded(ctx context.Context, _ linux.CaptureLimits, binary string, args ...string) (linux.CommandResult, error) {
+func (f *fakeKernel) RunBounded(ctx context.Context, limits linux.CaptureLimits, binary string, args ...string) (linux.CommandResult, error) {
+	if limits.Stdout <= 0 || limits.Stderr <= 0 {
+		return linux.CommandResult{}, linux.ErrOutputLimit
+	}
+	if err := ctx.Err(); err != nil {
+		return linux.CommandResult{}, err
+	}
 	if binary == "ss" && reflect.DeepEqual(args, []string{"-H", "-u", "-l", "-n"}) {
 		return linux.CommandResult{}, nil // fixed synthetic host has no UDP sockets
 	}
-	return f.Run(ctx, binary, args...)
+	out, err := f.Run(ctx, binary, args...)
+	if len(out.Stdout) > limits.Stdout || len(out.Stderr) > limits.Stderr {
+		return linux.CommandResult{}, linux.ErrOutputLimit
+	}
+	return out, err
 }
 
 func (f *fakeKernel) RunWithFiles(_ context.Context, binary string, files []*os.File, args ...string) (linux.CommandResult, error) {
