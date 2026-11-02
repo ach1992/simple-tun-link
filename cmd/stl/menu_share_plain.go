@@ -24,10 +24,22 @@ func menuSharePlainLink(id domain.LinkID, out, errOut io.Writer, options *runtim
 		fmt.Fprintln(errOut, "Cannot validate the saved plaintext Setup Link. Nothing was shared.")
 		return 1
 	}
+	var transport string
+	switch exported.Backend {
+	case domain.BackendGRE:
+		transport = "GRE"
+	case domain.BackendIPIP:
+		transport = "IPIP"
+	case domain.BackendL2TPv3:
+		transport = "L2TPv3 Direct-IP"
+	default:
+		fmt.Fprintln(errOut, "Saved Setup Link backend is not a supported plaintext transport.")
+		return 1
+	}
 	menuSection(out, "Copy / complete Setup Link")
-	menuNotice(out, "WARNING", "GRE/IPIP is unencrypted. Do not include private credentials.")
+	menuNotice(out, "WARNING", transport+" is not encrypted or authenticated. Do not send secrets.")
 	fmt.Fprintln(out, "\n"+exported.SetupLink)
-	fmt.Fprintln(out, "\nOTHER server: Import setup link -> GRE/IPIP -> paste -> review -> YES.")
+	fmt.Fprintln(out, "\nOTHER server: Import setup link -> 1 (GRE / IPIP / L2TPv3) -> paste -> review -> YES.")
 	fmt.Fprintln(out, "The same link can be shown again later from My tunnels -> Share.")
 	return 0
 }

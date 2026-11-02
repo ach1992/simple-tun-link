@@ -336,3 +336,20 @@ func TestProtectedInputPreservesUnexpectedRawCarriageReturn(t *testing.T) {
 		t.Fatal("visible nonsecret GRE/IPIP CRLF behavior regressed")
 	}
 }
+
+// Import type 1 is the canonical plaintext path for GRE, IPIP and the
+// first-class L2TPv3 Direct-IP backend; it must advertise that third
+// supported transport instead of leading field operators to a false choice.
+func TestMenuImportPlaintextSelectorNamesL2TPv3(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "not-created-state")
+	code, out, errOut := runMenuImportTest(t, root, []backend.Backend{newLifecycleFake()}, "2\n1\n0\n8\n")
+	if code != 0 || errOut != "" ||
+		!strings.Contains(out, "GRE / IPIP / L2TPv3") ||
+		!strings.Contains(out, "Paste the GRE/IPIP/L2TPv3 stl:// line") ||
+		!strings.Contains(out, "WILL be visible while typing") {
+		t.Fatalf("plaintext import menu did not explain L2TPv3: code=%d output=%q err=%q", code, out, errOut)
+	}
+	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cancelled plaintext import modified State: %v", err)
+	}
+}

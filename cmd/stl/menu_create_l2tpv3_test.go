@@ -82,8 +82,11 @@ func TestGuidedL2TPv3Option8CreateAndPairing(t *testing.T) {
 		offer.ReceiverLink().Underlay.Local != link.Underlay.Peer {
 		t.Fatalf("missing canonical L2TPv3 receiver inversion: %v", err)
 	}
-	if !strings.Contains(out, "L2TPV3") || !strings.Contains(out, "not encrypted") {
-		t.Fatalf("operator was not told the actual backend/plaintext warning: %q", out)
+	if !strings.Contains(out, "L2TPV3") ||
+		!strings.Contains(out, "L2TPv3 Direct-IP is not encrypted or authenticated") ||
+		!strings.Contains(out, "Import setup link -> 1 (GRE / IPIP / L2TPv3)") ||
+		strings.Contains(out, "GRE/IPIP is unencrypted") {
+		t.Fatalf("L2TPv3 operator pairing warning or receiver instruction is misleading: %q", out)
 	}
 	for _, cmd := range host.calls {
 		if strings.Contains(cmd, "l2tp add") || strings.Contains(cmd, "iptables") {
