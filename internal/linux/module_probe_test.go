@@ -115,3 +115,54 @@ func TestKernelModuleObservationNeverProbesUnknownOrCanceledModules(t *testing.T
 		t.Fatalf("unsupported module or canceled observation attempted a command: %v", runner.calls)
 	}
 }
+
+// L2TPv3 depends on both modules. A real host with active L2TP kernel
+// support must not be reported as unknown merely because the observer's
+// allowlist predates the new backend. Missing-but-loadable evidence must
+// also reach the one-consent PREPARE/committed-Restore path.
+func TestL2TPKernelModuleObservationLoadedAndLoadable(t *testing.T) {
+	for _, module := range []string{"l2tp_ip", "l2tp_eth"} {
+		for _, tc := range []struct {
+			name   string
+			loaded bool
+			want   KernelModuleState
+		}{
+			{"loaded", true, KernelModuleLoaded},
+			{"loadable-inactive", false, KernelModuleLoadableInactive},
+		} {
+			t.Run(module+"/"+tc.name, func(t *testing.T) {
+				root := filepath.Join(t.TempDir(), "sys-module")
+				if err := os.Mkdir(root, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if tc.loaded {
+					if err := os.Mkdir(filepath.Join(root, module), 0700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				artifact := filepath.Join(t.TempDir(), module+".ko.zst")
+				if err := os.WriteFile(artifact, []byte("synthetic"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				expectedPath := "/lib/modules/mock/" + module + ".ko.zst"
+				runner := &moduleObservationRunner{path: expectedPath + "\n"}
+				probe := KernelModuleProbe{Runner: runner, SysModuleRoot: root}
+				probe.stat = func(path string) (os.FileInfo, error) {
+					if path == expectedPath {
+						return os.Stat(artifact)
+					}
+					return os.Stat(path)
+				}
+				if got := probe.Observe(context.Background(), module); got != tc.want {
+					t.Fatalf("module %s readiness=%v want %v", module, got, tc.want)
+				}
+				if tc.loaded && len(runner.calls) != 0 {
+					t.Fatalf("already-loaded module ran modinfo: %v", runner.calls)
+				}
+				if !tc.loaded && (len(runner.calls) != 1 || runner.calls[0] != "modinfo -n "+module) {
+					t.Fatalf("inactive module observation was not exact/read-only: %v", runner.calls)
+				}
+			})
+		}
+	}
+}

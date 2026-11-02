@@ -147,3 +147,52 @@ func TestTrustedModuleArtifactRefusesOutsideOrWritablePath(t *testing.T) {
 		t.Fatalf("valid test dependency path rejected: %v", err)
 	}
 }
+
+// Never extend privileged module loading via a broad caller-controlled name.
+// The two L2TPv3 dependencies are the only new allowlisted targets, and
+// they must still pass exact trusted dependency-graph validation.
+func TestTrustedL2TPModuleLoaderWithVerifiedDependencyPlan(t *testing.T) {
+	for _, module := range []string{"l2tp_ip", "l2tp_eth"} {
+		t.Run(module, func(t *testing.T) {
+			selected := "/lib/modules/synthetic/kernel/net/l2tp/" + module + ".ko.zst"
+			dep := "/lib/modules/synthetic/kernel/net/l2tp/l2tp_core.ko.zst"
+			loaded := false
+			calls := 0
+			run := func(_ context.Context, args ...string) ([]byte, error) {
+				calls++
+				if len(args) == 5 && args[3] == "--show-depends" && args[4] == module {
+					return []byte("insmod " + dep + "\ninsmod " + selected + "\n"), nil
+				}
+				if len(args) == 4 && args[3] == module {
+					loaded = true
+					return nil, nil
+				}
+				t.Fatalf("unexpected L2TP module command: %v", args)
+				return nil, errors.New("unexpected")
+			}
+			trusted := func(path string) error {
+				if path != selected && path != dep {
+					return errors.New("untrusted module path")
+				}
+				return nil
+			}
+			observe := func(string) (bool, error) { return loaded, nil }
+			if err := loadTrustedKernelModule(context.Background(), module, observe, run, trusted); err != nil {
+				t.Fatalf("approved native module failed verified preparation: %v", err)
+			}
+			if calls != 2 || !loaded {
+				t.Fatalf("expected one inspection/one insertion, got %d loaded=%t", calls, loaded)
+			}
+			calls = 0
+			if err := loadTrustedKernelModule(context.Background(), module, observe, run, trusted); err != nil || calls != 0 {
+				t.Fatalf("already-loaded L2TP module triggered mutation: %v calls=%d", err, calls)
+			}
+			calls = 0
+			loaded = false
+			rejected := func(string) error { return errors.New("untrusted transitive dependency") }
+			if err := loadTrustedKernelModule(context.Background(), module, observe, run, rejected); err == nil || calls != 1 || loaded {
+				t.Fatalf("untrusted graph reached kernel insertion: %v calls=%d loaded=%t", err, calls, loaded)
+			}
+		})
+	}
+}
