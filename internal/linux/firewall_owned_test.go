@@ -110,3 +110,81 @@ func TestParseOwnedInboundRejectsBroadOrNoncanonicalRule(t *testing.T) {
 		})
 	}
 }
+
+// Native GRE, IPIP and L2TPv3 rules are IP protocols rather than UDP.
+// iptables -S can normalize numeric protocols to names on readback.
+func TestFindOwnedInboundRecoversCanonicalNativeProtocolRulesWithoutRoute(t *testing.T) {
+	id := domain.LinkID("lnk_0123456789abcdef0123456789abcdef")
+	for _, tc := range []struct {
+		protocol uint8
+		name     string
+	}{
+		{47, "gre"}, {4, "ipencap"}, {115, "115"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rule := InboundFirewallRule{
+				Peer: netip.MustParseAddr("198.51.100.20"), Local: netip.MustParseAddr("192.0.2.10"),
+				InputInterface: "old-eth0", Protocol: tc.protocol,
+			}
+			runner := newFirewallRunner()
+			runner.seedRule("iptables", firewallRuleArgs(id, rule))
+			f := IPTablesFirewall{Runner: runner}
+			got, present, err := RecoverOwnedInboundForRemoval(context.Background(), f, id, rule.Local, rule.Peer, tc.protocol, 0)
+			if err != nil || !present || got != rule {
+				t.Fatalf("native owned rule recovery failed: got=%+v present=%v err=%v", got, present, err)
+			}
+			raw := append([]string{"-A", "INPUT"}, firewallRuleArgs(id, rule)...)
+			for i := range raw {
+				if raw[i] == "-p" {
+					raw[i+1] = tc.name
+					break
+				}
+			}
+			if parsed, err := parseOwnedInboundRule(raw, id, false); err != nil || parsed != rule {
+				t.Fatalf("kernel protocol alias rejected: %+v %v", parsed, err)
+			}
+			if _, present, err := RecoverOwnedInboundForRemoval(context.Background(), f, id, rule.Local, rule.Peer, 17, 1234); err == nil || present {
+				t.Fatal("owned rule adopted by unrelated transport")
+			}
+		})
+	}
+}
+
+func TestNativeFirewallOwnedReadbackRejectsInexactOrForgedRules(t *testing.T) {
+	id := domain.LinkID("lnk_0123456789abcdef0123456789abcdef")
+	rule := InboundFirewallRule{
+		Peer: netip.MustParseAddr("198.51.100.20"), Local: netip.MustParseAddr("192.0.2.10"),
+		InputInterface: "eth0", Protocol: 47,
+	}
+	base := append([]string{"-A", "INPUT"}, firewallRuleArgs(id, rule)...)
+	for _, tc := range []struct {
+		name string
+		edit func([]string) []string
+	}{
+		{"extra-match", func(fields []string) []string { return append(fields, "-m", "limit") }},
+		{"unexpected-port", func(fields []string) []string { return append(fields, "--dport", "1234") }},
+		{"wrong-rule-interface", func(fields []string) []string {
+			for i := range fields {
+				if fields[i] == "-i" {
+					fields[i+1] = "eth1"
+				}
+			}
+			return fields
+		}},
+		{"wrong-comment", func(fields []string) []string {
+			for i := range fields {
+				if fields[i] == "--comment" {
+					fields[i+1] = "stl:" + string(id) + ":deadbeefcafe1111"
+				}
+			}
+			return fields
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fields := tc.edit(append([]string(nil), base...))
+			if _, err := parseOwnedInboundRule(fields, id, false); err == nil {
+				t.Fatalf("noncanonical native rule admitted: %v", fields)
+			}
+		})
+	}
+}

@@ -20,6 +20,7 @@ import (
 	wgbackend "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
+	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
@@ -135,7 +136,11 @@ func executeLinkMutationControlled(operation string, desired domain.Link, id dom
 	}
 	if options == nil {
 		var err error
-		options, err = productionRuntimeOptions()
+		if operation == "link_remove" {
+			options, err = productionRemovalRuntimeOptions(id)
+		} else {
+			options, err = productionRuntimeOptions()
+		}
 		if err != nil {
 			return lifecycleFailureWithEvidence(stdout, stderr, jsonOutput, stlerr.CodeState, operation, nil,
 				"cannot initialize backend/runtime; no success is confirmed", preflightEvidence(), nil)
@@ -726,4 +731,42 @@ func restoreFailureGuidance(kind linux.RestoreFailureKind) string {
 	default:
 		return ""
 	}
+}
+
+// productionRemovalRuntimeOptions is deliberately scoped to the saved
+// backend. The initial read selects construction only; the canonical
+// Engine re-loads State under its maintenance and Link locks before
+// any mutation, rejecting concurrent changes instead of adopting them.
+func productionRemovalRuntimeOptions(id domain.LinkID) (*runtimeOptions, error) {
+	return removalRuntimeOptionsForState(state.DefaultRoot, id)
+}
+
+// This first State read selects only the backend constructor; it is never
+// used as removal authority and is always refreshed under Engine locks.
+func removalRuntimeOptionsForState(root string, id domain.LinkID) (*runtimeOptions, error) {
+	if err := id.Validate(); err != nil {
+		return nil, err
+	}
+	kind, err := savedBackendForRemoval(root, id)
+	if err != nil {
+		return nil, err
+	}
+	return assembleRuntimeOptionsForBackend(root, kind)
+}
+
+// A saved backend is a construction hint, not deletion authority. The
+// canonical Engine always reloads and validates State under its locks.
+func savedBackendForRemoval(root string, id domain.LinkID) (domain.Backend, error) {
+	if err := id.Validate(); err != nil {
+		return "", err
+	}
+	snapshot, err := state.NewFileStore(root).Load(context.Background())
+	if err != nil {
+		return "", err
+	}
+	saved, exists := snapshot.Find(id)
+	if !exists {
+		return "", state.ErrNotFound
+	}
+	return saved.Desired.Backend, nil
 }

@@ -19,6 +19,7 @@ type RouteResolver interface {
 type Firewall interface {
 	HasInbound(context.Context, domain.LinkID, linux.InboundFirewallRule) (bool, error)
 	HasOwnedInbound(context.Context, domain.LinkID, bool) (bool, error)
+	FindOwnedInbound(context.Context, domain.LinkID, bool) (linux.InboundFirewallRule, bool, error)
 	EnsureInboundLocked(context.Context, domain.LinkID, linux.InboundFirewallRule) (func(context.Context) error, bool, error)
 	RemoveInboundLocked(context.Context, domain.LinkID, linux.InboundFirewallRule) (bool, error)
 }
@@ -193,33 +194,60 @@ func (b *Backend) Plan(ctx context.Context, req core.Request, observed core.Obse
 		return nil, err
 	}
 	name, _ := InterfaceName(req.Link.ID)
-	route, err := b.routes.Resolve(ctx, req.Link.Underlay.Peer)
-	if err != nil {
-		return nil, fmt.Errorf("resolve IPIP underlay route: %w", err)
-	}
-	if route.Source != req.Link.Underlay.Local {
-		return nil, fmt.Errorf("selected local underlay does not match kernel route source")
-	}
 	protocol, destinationPort, err := firewallProtocolAndPort(req.Link)
 	if err != nil {
 		return nil, err
 	}
-	rule := linux.InboundFirewallRule{
-		Peer: req.Link.Underlay.Peer, Local: req.Link.Underlay.Local,
-		InputInterface: route.Device, Protocol: protocol, DestinationPort: destinationPort,
+	var route linux.Route
+	var rule linux.InboundFirewallRule
+	var firewallPresent bool
+	if req.Operation == core.OperationRemove {
+		// Remove must not require a live peer or an operable route to it.
+		// Recover the exact original STL firewall rule independently, then
+		// authorize mutation only against persisted resource claims.
+		rule, firewallPresent, err = linux.RecoverOwnedInboundForRemoval(
+			ctx, b.firewall, req.Link.ID, req.Link.Underlay.Local,
+			req.Link.Underlay.Peer, protocol, destinationPort)
+		if err != nil {
+			return nil, fmt.Errorf("cannot verify original owned firewall for removal: %w", err)
+		}
+		if firewallPresent {
+			route.Device = rule.InputInterface
+		} else if protocol == 17 {
+			// The original FOU/GUE device is a field of the observed mapping,
+			// not the current route. Collision and persisted ownership checks
+			// below reject a mapping that was replaced by a foreign owner.
+			for _, existing := range obs.Mappings {
+				if existing.Port == destinationPort {
+					route.Device = existing.Device
+					break
+				}
+			}
+		}
+	} else {
+		route, err = b.routes.Resolve(ctx, req.Link.Underlay.Peer)
+		if err != nil {
+			return nil, fmt.Errorf("resolve IPIP underlay route: %w", err)
+		}
+		if route.Source != req.Link.Underlay.Local {
+			return nil, fmt.Errorf("selected local underlay does not match kernel route source")
+		}
+		rule = linux.InboundFirewallRule{
+			Peer: req.Link.Underlay.Peer, Local: req.Link.Underlay.Local,
+			InputInterface: route.Device, Protocol: protocol, DestinationPort: destinationPort,
+		}
+		firewallPresent, err = b.firewall.HasInbound(ctx, req.Link.ID, rule)
+		if err != nil {
+			return nil, fmt.Errorf("inspect IPIP firewall rule: %w", err)
+		}
+		anyOwnedFirewall, err := b.firewall.HasOwnedInbound(ctx, req.Link.ID, false)
+		if err != nil {
+			return nil, fmt.Errorf("inspect IPIP firewall ownership: %w", err)
+		}
+		if !firewallPresent && anyOwnedFirewall {
+			return nil, stlerr.New(stlerr.CodeConflict, "ipip_plan", string(req.Link.ID), string(req.Link.Backend), "an owned IPIP firewall rule exists for a different underlay route; reconciliation is required")
+		}
 	}
-	firewallPresent, err := b.firewall.HasInbound(ctx, req.Link.ID, rule)
-	if err != nil {
-		return nil, fmt.Errorf("inspect IPIP firewall rule: %w", err)
-	}
-	anyOwnedFirewall, err := b.firewall.HasOwnedInbound(ctx, req.Link.ID, false)
-	if err != nil {
-		return nil, fmt.Errorf("inspect IPIP firewall ownership: %w", err)
-	}
-	if !firewallPresent && anyOwnedFirewall {
-		return nil, stlerr.New(stlerr.CodeConflict, "ipip_plan", string(req.Link.ID), string(req.Link.Backend), "an owned IPIP firewall rule exists for a different underlay route; reconciliation is required")
-	}
-
 	p := plan{link: req.Link, name: name, route: route, firewallRule: rule}
 	if mapping, managed := desiredFOUMapping(req.Link, route); managed {
 		exact, collision := mappingAtPort(obs.Mappings, mapping)
@@ -260,12 +288,14 @@ func (b *Backend) Validate(ctx context.Context, req core.Request, observed core.
 	if err := validateLink(req.Link); err != nil {
 		return err
 	}
-	freshRoute, err := b.routes.Resolve(ctx, req.Link.Underlay.Peer)
-	if err != nil {
-		return fmt.Errorf("recheck IPIP underlay route: %w", err)
-	}
-	if freshRoute.Source != req.Link.Underlay.Local || freshRoute.Device != p.route.Device {
-		return fmt.Errorf("underlay route changed after IPIP planning")
+	if req.Operation == core.OperationEnsure {
+		freshRoute, err := b.routes.Resolve(ctx, req.Link.Underlay.Peer)
+		if err != nil {
+			return fmt.Errorf("recheck IPIP underlay route: %w", err)
+		}
+		if freshRoute.Source != req.Link.Underlay.Local || freshRoute.Device != p.route.Device {
+			return fmt.Errorf("underlay route changed after IPIP planning")
+		}
 	}
 	if obs.Target.Exists && obs.Target.Owner != req.Link.ID {
 		return stlerr.New(stlerr.CodeConflict, "ipip_validate", string(req.Link.ID), string(req.Link.Backend), "IPIP interface name is not owned by this Link")

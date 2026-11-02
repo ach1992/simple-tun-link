@@ -229,6 +229,23 @@ stl doctor ipsec [--json]
 stl maintenance pre-uninstall --json
 ~~~
 
+Removal is **local, not a connection test**: it works with a dead peer,
+lost underlay route and previously lost STL-owned ingress firewall rule,
+using the exact committed Link ownership and current host inventory.
+GRE/IPIP Native, FOU and GUE plus native L2TPv3 recover their original
+rule without recalculating it from the current route. Native WireGuard,
+WSS/QUIC and admitted IPsec already avoid peer-route dependencies.
+The runtime used by a removal constructs only the saved Link's backend,
+so an unrelated optional backend's readiness cannot block it.
+
+An unresolved partial removal, missing rollback credential, unknown
+kernel/service resource identity, or unadmitted IPsec VICI writer is **not**
+permission to delete another service. These are explicit local
+reconciliation gates; the CLI must not report success without proof.
+For interactive use choose **My tunnels -> Remove this tunnel** and
+confirm `REMOVE`; a separate Link's resources are not selected.
+
+
 **Read-only/local observation:** `list`, `status`, `preview`,
 `export`, `doctor`, `maintenance pre-uninstall` and `version`.
 `diagnose` is host-state read-only but can send bounded ICMP probes.
