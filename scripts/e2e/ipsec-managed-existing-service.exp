@@ -48,7 +48,7 @@ expect {
   timeout { puts stderr "IPSEC_EXISTING_MENU=PRIVATE_SERVICE_NOT_READY"; exit 26 }
 }
 expect {
-  -re {Other server's reachable IPv4 address} { send -- "q\r" }
+  -re {Other server's IPv4 address \(peer may be offline; q=back\):} { send -- "q\r" }
   timeout { puts stderr "IPSEC_EXISTING_MENU=CREATE_CONTINUATION_MISSING"; exit 27 }
 }
 expect {
