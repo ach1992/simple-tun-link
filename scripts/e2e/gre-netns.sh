@@ -187,7 +187,24 @@ select_mode() {
 for selected_mode in native fou gue; do
   select_mode "$selected_mode"
   echo "BEGIN_GRE_MODE=$mode"
-  run_side a ensure
+  if [[ "$mode" == native ]]; then
+    # Exactly one bounded, real-kernel peer-offline Create acceptance:
+    # the first endpoint retains its original assigned IPv4 on stlula,
+    # but a more-specific unreachable route makes ip route get PEER fail.
+    # Only the fresh, task-owned netns is changed; no host routing changes.
+    ip -n "$ns_a" route add unreachable 192.0.2.11/32
+    if ip netns exec "$ns_a" ip -4 route get 192.0.2.11 >/dev/null 2>&1; then
+      echo 'FAIL: native offline Create did not lose its peer route' >&2
+      exit 1
+    fi
+    run_side a ensure
+    # Re-enable normal physical underlay for ordinary receiver pairing,
+    # traffic tests and the rest of the existing release matrix.
+    ip -n "$ns_a" route del unreachable 192.0.2.11/32
+    echo 'GRE_NATIVE_CREATE_WITH_PEER_ROUTE_UNAVAILABLE=PASS'
+  else
+    run_side a ensure
+  fi
   run_side b ensure
   run_side a reensure
   run_side b reensure
