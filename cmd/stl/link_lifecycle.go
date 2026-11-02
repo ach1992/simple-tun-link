@@ -274,6 +274,9 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 		case evidence.Stage == "credential_provision" && evidence.CredentialProvision == "attempted":
 			safe.ReasonCode = "credential_provision_outcome_unverified"
 			safe.NextStep = "A protected local key write was attempted; reconcile the exact key identity and saved Link intent before retry. No backend Apply was invoked."
+		case observedPublic != nil && observedPublic.ReasonCode == "kernel_module_not_loaded" && operation == "link_remove":
+			safe.ReasonCode = "kernel_module_not_loaded"
+			safe.NextStep = "Remove must not require Create preparation or a reachable peer. Local owner/vacancy inspection is currently unverified; inspect the saved Link and its exact local resources before owner-scoped reconciliation. Do not erase State or unrelated interfaces."
 		case observedPublic != nil && observedPublic.ReasonCode == "kernel_module_not_loaded":
 			safe.ReasonCode = "kernel_module_not_loaded"
 			safe.NextStep = "Inspect the matching kernel module and supported host packages; load it only with operator authorization, then retry read-only checks."
@@ -295,6 +298,9 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 		case evidence.HostMutation == "not_attempted" && errors.Is(observed, context.Canceled):
 			safe.ReasonCode = "operation_cancelled_before_apply"
 			safe.NextStep = "Operation was canceled before backend Apply; inspect Link state and retry only if still intended."
+		case evidence.HostMutation == "not_attempted" && operation == "link_remove":
+			safe.ReasonCode = "rejected_before_host_apply"
+			safe.NextStep = "Inspect only this Link's saved owner identity, local kernel, firewall, helper and recovery journal. No remote connectivity or Create preparation is needed; reconcile uncertain resources before retrying removal. Engine did not invoke host Apply."
 		case evidence.HostMutation == "not_attempted":
 			safe.ReasonCode = "rejected_before_host_apply"
 			safe.NextStep = "Correct prerequisites or conflicting intent, then inspect Link state read-only before retrying; Engine did not invoke host Apply."
@@ -316,7 +322,7 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 	// instead of overwriting it with the generic rejected_before_host_apply.
 	if observedPublic != nil && evidence != nil &&
 		evidence.Stage == "plan" && evidence.HostMutation == "not_attempted" &&
-		observedPublic.Backend == string(domain.BackendGRE) {
+		observedPublic.Backend == string(domain.BackendGRE) && operation != "link_remove" {
 		switch observedPublic.ReasonCode {
 		case "gre_underlay_route_unverified", "gre_underlay_source_mismatch",
 			"gre_firewall_readback_unverified", "gre_firewall_ownership_unverified",
