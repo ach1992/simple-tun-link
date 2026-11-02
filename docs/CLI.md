@@ -100,7 +100,13 @@ encapsulations/IPsec remain discoverable.
   An already verified matching SA never triggers a second IKE initiation.
   **Test connectivity** never creates an SA, changes services or silently
   repairs. A human Remove requires a fresh `REMOVE`
-  after preview. **Test connectivity → A Check all tunnels** uses the
+  after preview. **Remove does not need an online peer, a working Link,
+  a current underlay route, or creation-only readiness** for GRE, IPIP,
+  L2TPv3, WireGuard, WSS, QUIC or IPsec. It still checks saved ownership
+  and verifies the absence of actual host resources before committing.
+  Foreign or uncertain local state requires exact owner-scoped recovery;
+  it must never be silently forgotten or marked removed.
+  **Test connectivity → A Check all tunnels** uses the
   existing versioned all-Link diagnostic report, presented as a compact
   table of peer IP, Ping replies and time-local results. Unverified or
   blocked checks retain their reason/next step; detailed MTU, counters

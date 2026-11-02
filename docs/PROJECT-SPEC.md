@@ -101,6 +101,14 @@ operator-initiated attempt; safety and credential protection still apply.
    remove and restore only correctly identified STL-owned resources;
    distinguish successful completion, partial effects and uncertainty.
    Repeated desired-state operations should converge idempotently.
+   **All backends:** Remove of a saved Link is a local owner-scoped cleanup,
+   independent of peer reachability, live underlay route or source, parent
+   Link presence, tunnel health, and Create-only preparation. Recover exact
+   owned firewall/interface/service identities from committed State and
+   current local inspection, never by resolving a new route. If local
+   ownership/read-back or an interrupted transaction cannot be verified,
+   preserve durable recovery evidence and report an actionable incomplete
+   removal rather than deleting foreign resources or claiming success.
 4. **Independent multi-Link operation.** Allow independent Links and backend
    combinations without an arbitrary product-imposed count or
    one-Link-per-peer assumption; resolve genuine kernel, address, service,
