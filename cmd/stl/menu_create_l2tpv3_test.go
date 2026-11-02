@@ -16,6 +16,19 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/state"
 )
 
+// Override only the native L2TP preflight for this test. The shared GRE
+// fixture must still be able to simulate a missing L2TP kernel.
+type guidedL2TPv3Runner struct{ *guidedTestRunner }
+
+func (r *guidedL2TPv3Runner) Run(ctx context.Context, name string, args ...string) (linux.CommandResult, error) {
+	command := name + " " + strings.Join(args, " ")
+	if command == "ip -json l2tp show tunnel" || command == "ip -json l2tp show session" {
+		r.calls = append(r.calls, command)
+		return linux.CommandResult{Stdout: []byte("[]")}, nil
+	}
+	return r.guidedTestRunner.Run(ctx, name, args...)
+}
+
 type guidedL2TPv3Backend struct{ *lifecycleFakeBackend }
 
 func (*guidedL2TPv3Backend) Kind() domain.Backend { return domain.BackendL2TPv3 }
@@ -31,7 +44,7 @@ func (b *guidedL2TPv3Backend) DiagnosticState(_ context.Context, link domain.Lin
 // transport choices or disclose any secrets in the plaintext Setup Link.
 func TestGuidedL2TPv3Option8CreateAndPairing(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "state")
-	host := &guidedTestRunner{}
+	host := &guidedL2TPv3Runner{guidedTestRunner: &guidedTestRunner{}}
 	fake := &guidedL2TPv3Backend{lifecycleFakeBackend: newLifecycleFake()}
 	opts := &runtimeOptions{
 		stateRoot: root, probeRunner: host, backends: []backend.Backend{fake},
