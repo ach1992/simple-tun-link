@@ -149,6 +149,8 @@ func (h *fakeKernel) Run(_ context.Context, binary string, args ...string) (linu
 		return linux.CommandResult{Stdout: b}, nil
 	}
 	switch {
+	case joined == "-json address show":
+		return encode([]map[string]any{{"ifname": "eth0", "addr_info": []map[string]any{{"family": "inet", "local": h.link.Underlay.Local.String(), "prefixlen": 24}}}})
 	case joined == "-json l2tp show tunnel":
 		return encode(h.tunnels)
 	case joined == "-json l2tp show session":
@@ -443,6 +445,22 @@ func TestDifferentLinkIDsStable(t *testing.T) {
 	if got := strconv.Itoa(len(one.Addresses.Peer.Addr().String())); got == "" {
 		t.Fatal("unexpected empty peer")
 	}
+}
+
+// Test double for a capture-bounded host inventory read. It must never
+// turn a call to RunBounded into an unchecked unbounded success.
+func (r *fakeKernel) RunBounded(ctx context.Context, limits linux.CaptureLimits, name string, args ...string) (linux.CommandResult, error) {
+	if limits.Stdout <= 0 || limits.Stderr <= 0 {
+		return linux.CommandResult{}, linux.ErrOutputLimit
+	}
+	if err := ctx.Err(); err != nil {
+		return linux.CommandResult{}, err
+	}
+	output, err := r.Run(ctx, name, args...)
+	if len(output.Stdout) > limits.Stdout || len(output.Stderr) > limits.Stderr {
+		return linux.CommandResult{}, linux.ErrOutputLimit
+	}
+	return output, err
 }
 
 type brokenL2TPRemoveRoute struct{}

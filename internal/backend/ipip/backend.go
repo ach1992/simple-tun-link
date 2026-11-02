@@ -225,9 +225,9 @@ func (b *Backend) Plan(ctx context.Context, req core.Request, observed core.Obse
 			}
 		}
 	} else {
-		route, err = b.routes.Resolve(ctx, req.Link.Underlay.Peer)
+		route, err = linux.ResolveConfiguredUnderlay(ctx, b.routes, b.runner, req.Link.Underlay.Local, req.Link.Underlay.Peer)
 		if err != nil {
-			return nil, fmt.Errorf("resolve IPIP underlay route: %w", err)
+			return nil, stlerr.LocalUnderlayUnverified("ipip_plan", string(req.Link.ID), string(req.Link.Backend), err)
 		}
 		if route.Source != req.Link.Underlay.Local {
 			return nil, fmt.Errorf("selected local underlay does not match kernel route source")
@@ -289,7 +289,7 @@ func (b *Backend) Validate(ctx context.Context, req core.Request, observed core.
 		return err
 	}
 	if req.Operation == core.OperationEnsure {
-		freshRoute, err := b.routes.Resolve(ctx, req.Link.Underlay.Peer)
+		freshRoute, err := linux.ResolveConfiguredUnderlay(ctx, b.routes, b.runner, req.Link.Underlay.Local, req.Link.Underlay.Peer)
 		if err != nil {
 			return fmt.Errorf("recheck IPIP underlay route: %w", err)
 		}
@@ -388,7 +388,7 @@ func (b *Backend) Verify(ctx context.Context, req core.Request) (core.Observatio
 	}
 	switch req.Operation {
 	case core.OperationEnsure:
-		route, err := b.routes.Resolve(ctx, req.Link.Underlay.Peer)
+		route, err := linux.ResolveConfiguredUnderlay(ctx, b.routes, b.runner, req.Link.Underlay.Local, req.Link.Underlay.Peer)
 		if err != nil {
 			return nil, err
 		}

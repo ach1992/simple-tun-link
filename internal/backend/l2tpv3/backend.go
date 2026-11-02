@@ -353,9 +353,9 @@ func (b *Backend) Plan(ctx context.Context, req core.Request, observed core.Obse
 			route.Device = rule.InputInterface
 		}
 	} else {
-		route, err = b.routes.Resolve(ctx, req.Link.Underlay.Peer)
+		route, err = linux.ResolveConfiguredUnderlay(ctx, b.routes, b.runner, req.Link.Underlay.Local, req.Link.Underlay.Peer)
 		if err != nil || route.Source != req.Link.Underlay.Local {
-			return nil, fmt.Errorf("L2TPv3 underlay route/source mismatch: %v", err)
+			return nil, stlerr.LocalUnderlayUnverified("l2tpv3_plan", string(req.Link.ID), string(req.Link.Backend), err)
 		}
 		rule = linux.InboundFirewallRule{
 			Local: req.Link.Underlay.Local, Peer: req.Link.Underlay.Peer,
@@ -401,8 +401,11 @@ func (b *Backend) Validate(ctx context.Context, req core.Request, observed core.
 		return fmt.Errorf("unexpected L2TPv3 plan")
 	}
 	if req.Operation == core.OperationEnsure {
-		fresh, err := b.routes.Resolve(ctx, req.Link.Underlay.Peer)
-		if err != nil || fresh.Device != p.route.Device || fresh.Source != req.Link.Underlay.Local {
+		fresh, err := linux.ResolveConfiguredUnderlay(ctx, b.routes, b.runner, req.Link.Underlay.Local, req.Link.Underlay.Peer)
+		if err != nil {
+			return fmt.Errorf("cannot recheck L2TPv3 local underlay: %w", err)
+		}
+		if fresh.Device != p.route.Device || fresh.Source != req.Link.Underlay.Local {
 			return fmt.Errorf("L2TPv3 underlay route/source changed")
 		}
 	}
@@ -495,7 +498,7 @@ func (b *Backend) Verify(ctx context.Context, req core.Request) (core.Observatio
 	}
 	var has bool
 	if req.Operation == core.OperationEnsure {
-		route, err := b.routes.Resolve(ctx, req.Link.Underlay.Peer)
+		route, err := linux.ResolveConfiguredUnderlay(ctx, b.routes, b.runner, req.Link.Underlay.Local, req.Link.Underlay.Peer)
 		if err != nil {
 			return nil, err
 		}

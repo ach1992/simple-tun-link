@@ -10,6 +10,8 @@ import (
 
 	core "github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/hostaddress"
+	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
 // RuntimeAdmission is independent of daemon/VICI/kernel vacancy checks.
@@ -375,9 +377,9 @@ func (b *OperationalBackend) Validate(ctx context.Context, req core.Request, obs
 	// resource claims, interface owner tag+ifindex and private VICI names,
 	// not by continued reachability to the remote endpoint.
 	if req.Operation == core.OperationEnsure {
-		route, err := b.Routes.Resolve(ctx, req.Link.Underlay.Peer)
+		route, err := b.resolveLocalUnderlay(ctx, req.Link)
 		if err != nil || route.Source != req.Link.Underlay.Local || route.Device == "" {
-			return fmt.Errorf("IPsec underlay route/source could not be verified")
+			return stlerr.LocalUnderlayUnverified("ipsec_validate", string(req.Link.ID), string(req.Link.Backend), err)
 		}
 	}
 	if err := b.authorize(ctx); err != nil {
@@ -548,12 +550,47 @@ type ipsecProgress struct {
 	Shared, Connection, Deleted bool
 }
 
+// resolveLocalUnderlay never trusts a route source/device unless the
+// owner-private local address inventory independently attests that exact
+// unique binding. If the peer route is missing/misleading, the assigned local
+// IPv4/interface still supports local XFRM Create, with no peer reachability
+// assumption. The backend rechecks under Engine locks before mutation.
+func (b *OperationalBackend) resolveLocalUnderlay(ctx context.Context, link domain.Link) (HostRoute, error) {
+	if b.Runner == nil {
+		return HostRoute{}, fmt.Errorf("IPsec local IPv4 inventory runner unavailable")
+	}
+	binary := b.IPBinary
+	if binary == "" {
+		binary = "ip"
+	}
+	result, err := b.Runner.RunBounded(ctx, CaptureLimits{Stdout: 256 << 10, Stderr: 1024}, binary, "-json", "address", "show")
+	if err != nil || ctx.Err() != nil || len(result.Stderr) != 0 {
+		return HostRoute{}, fmt.Errorf("cannot verify assigned local IPsec IPv4/interface")
+	}
+	defer clear(result.Stdout)
+	inventory, err := hostaddress.Parse(result.Stdout)
+	if err != nil {
+		return HostRoute{}, fmt.Errorf("invalid local IPsec address inventory: %w", err)
+	}
+	assigned, err := hostaddress.Unique(inventory, link.Underlay.Local, "")
+	if err != nil {
+		return HostRoute{}, fmt.Errorf("IPsec local underlay not uniquely assigned: %w", err)
+	}
+	if b.Routes != nil {
+		if candidate, routeErr := b.Routes.Resolve(ctx, link.Underlay.Peer); routeErr == nil &&
+			candidate.Source == link.Underlay.Local && candidate.Device == assigned.Interface {
+			return candidate, nil
+		}
+	}
+	return HostRoute{Source: link.Underlay.Local, Device: assigned.Interface}, nil
+}
+
 func (b *OperationalBackend) createDevice(ctx context.Context, p Profile) (ipsecProgress, error) {
 	progress := ipsecProgress{}
 	if b.advanceDevice == nil {
 		return progress, fmt.Errorf("durable XFRM creation journal unavailable")
 	}
-	route, err := b.Routes.Resolve(ctx, p.Link.Underlay.Peer)
+	route, err := b.resolveLocalUnderlay(ctx, p.Link)
 	if err != nil || route.Source != p.Link.Underlay.Local || route.Device == "" {
 		return progress, fmt.Errorf("IPsec route changed before XFRM creation")
 	}

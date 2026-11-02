@@ -37,11 +37,19 @@ created.
 
 ## Intended product outcome
 
-An operator or authorized external consumer can configure two reachable
-underlay endpoints, select an available tunnel method, and obtain an
+An operator or authorized external consumer can configure two intended
+underlay IPv4 endpoints (even if the other server is currently offline),
+select an available tunnel method, and obtain an
 independent, usable Layer-3 point-to-point Link with a private Link Address on
 each server. The product must distinguish a locally saved/created Link from
 **observed bilateral connectivity**; one is not proof of the other.
+Creation and recipient Import must not require peer ping, handshake, or a
+currently working route to the remote underlay. A local kernel route lookup
+may suggest an interface/source; if absent or inconsistent, STL may instead
+use a uniquely verified IPv4 already assigned to the local host. Existing
+local resource collision/ownership checks still apply. Local configuration,
+helper/kernel activation, and optional subsequent peer diagnostics are
+independently reported, not combined into one implied success.
 
 STL is useful both directly through an understandable human interface and as
 an infrastructure capability invoked by unrelated software. External

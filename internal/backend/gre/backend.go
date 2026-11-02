@@ -2,6 +2,7 @@ package gre
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -234,11 +235,21 @@ func (b *Backend) Plan(ctx context.Context, req core.Request, observed core.Obse
 			}
 		}
 	} else {
-		route, err = b.routes.Resolve(ctx, req.Link.Underlay.Peer)
+		route, err = linux.ResolveConfiguredUnderlay(ctx, b.routes, b.runner, req.Link.Underlay.Local, req.Link.Underlay.Peer)
 		if err != nil {
-			return nil, grePlanningIssue(req.Link, stlerr.CodePlan, "gre_underlay_route_unverified",
-				"On the receiver, check the route to the sender public IPv4 with ip -4 route get PEER_IP. Verify local underlay routing first; no tunnel was applied.",
-				"cannot verify the kernel route to GRE peer", err)
+			// An inventory capture failure is not evidence that the peer
+			// route/source is wrong. Keep its typed cause and local guidance.
+			if errors.Is(err, linux.ErrOutputLimit) || errors.Is(err, context.DeadlineExceeded) ||
+				errors.Is(err, context.Canceled) {
+				return nil, stlerr.LocalUnderlayUnverified("gre_plan", string(req.Link.ID), string(req.Link.Backend), err)
+			}
+			reason := "gre_underlay_route_unverified"
+			if errors.Is(err, linux.ErrUnderlaySourceMismatch) {
+				reason = "gre_underlay_source_mismatch"
+			}
+			return nil, grePlanningIssue(req.Link, stlerr.CodePlan, reason,
+				"The peer need not be online. Inspect ip -json address show; assign the intended LOCAL IPv4 to exactly one host interface, or select an assigned local endpoint before importing. No Link was created.",
+				"cannot prove a uniquely assigned local GRE IPv4/interface", err)
 		}
 		if route.Source != req.Link.Underlay.Local {
 			return nil, grePlanningIssue(req.Link, stlerr.CodePlan, "gre_underlay_source_mismatch",
@@ -315,7 +326,7 @@ func (b *Backend) Validate(ctx context.Context, req core.Request, observed core.
 		return err
 	}
 	if req.Operation == core.OperationEnsure {
-		freshRoute, err := b.routes.Resolve(ctx, req.Link.Underlay.Peer)
+		freshRoute, err := linux.ResolveConfiguredUnderlay(ctx, b.routes, b.runner, req.Link.Underlay.Local, req.Link.Underlay.Peer)
 		if err != nil {
 			return fmt.Errorf("recheck GRE underlay route: %w", err)
 		}
@@ -409,7 +420,7 @@ func (b *Backend) Verify(ctx context.Context, req core.Request) (core.Observatio
 	}
 	switch req.Operation {
 	case core.OperationEnsure:
-		route, err := b.routes.Resolve(ctx, req.Link.Underlay.Peer)
+		route, err := linux.ResolveConfiguredUnderlay(ctx, b.routes, b.runner, req.Link.Underlay.Local, req.Link.Underlay.Peer)
 		if err != nil {
 			return nil, err
 		}

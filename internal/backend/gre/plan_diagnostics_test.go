@@ -31,7 +31,9 @@ func TestGREPlanReasonCodesAreSpecificWithoutLeakingKernelErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runner := &fakeRunner{link: link, name: name}
+	// Explicitly exclude the configured source from actual local assignment:
+	// a lost/mismatching peer route alone no longer blocks Create.
+	runner := &fakeRunner{link: link, name: name, assignedSourceOverride: "203.0.113.200"}
 	backend := newTestBackend(t, runner, &fakeFirewall{}, fakeCollisions{})
 	ctx := context.Background()
 	observed, err := backend.Inspect(ctx, link)
@@ -53,7 +55,7 @@ func TestGREPlanReasonCodesAreSpecificWithoutLeakingKernelErrors(t *testing.T) {
 			_, err := backend.Plan(ctx, core.Request{Operation: core.OperationEnsure, Link: link}, observed)
 			public := stlerr.Public(err)
 			if err == nil || public.ReasonCode != tc.reason || public.NextStep == "" ||
-				!strings.Contains(public.NextStep, "ip -4 route get") ||
+				!strings.Contains(public.NextStep, "ip -json address show") ||
 				strings.Contains(public.Error()+public.NextStep, "DO_NOT_PRINT") {
 				t.Fatalf("bad route plan refusal: %+v err=%v", public, err)
 			}

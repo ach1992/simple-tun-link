@@ -39,19 +39,29 @@ func testLink() domain.Link {
 }
 
 type fakeRunner struct {
-	link                 domain.Link
-	name                 string
-	state                observedLink
-	extra                []observedLink
-	mappings             []fouMapping
-	commands             []string
-	addressIndexOverride int
+	link                   domain.Link
+	name                   string
+	state                  observedLink
+	extra                  []observedLink
+	mappings               []fouMapping
+	commands               []string
+	addressIndexOverride   int
+	assignedSourceOverride string
 }
 
 func (r *fakeRunner) Run(_ context.Context, name string, args ...string) (linux.CommandResult, error) {
 	r.commands = append(r.commands, strings.Join(append([]string{name}, args...), " "))
 	joined := strings.Join(args, " ")
 	switch {
+	// Fixture-backed exact host assignment: success-path route hints are
+	// independently verified just like production underlay admission.
+	case joined == "-json address show":
+		assigned := r.link.Underlay.Local.String()
+		if r.assignedSourceOverride != "" {
+			assigned = r.assignedSourceOverride
+		}
+		raw := fmt.Sprintf(`[{"ifname":"eth0","addr_info":[{"family":"inet","local":%q,"prefixlen":24}]}]`, assigned)
+		return linux.CommandResult{Stdout: []byte(raw)}, nil
 	case joined == "-details -json link show type gre":
 		rows := make([]linkJSON, 0, 1+len(r.extra))
 		for _, state := range append([]observedLink{r.state}, r.extra...) {
@@ -1253,6 +1263,22 @@ func TestNativeGREAddressObservationRejectsNameReuseAcrossIfindexes(t *testing.T
 	if !runner.state.Exists || runner.state.IfIndex != 77 || runner.state.Owner != "" {
 		t.Fatalf("mismatched observation modified or destroyed interface: %#v", runner.state)
 	}
+}
+
+// Test double for a capture-bounded host inventory read. It must never
+// turn a call to RunBounded into an unchecked unbounded success.
+func (r *fakeRunner) RunBounded(ctx context.Context, limits linux.CaptureLimits, name string, args ...string) (linux.CommandResult, error) {
+	if limits.Stdout <= 0 || limits.Stderr <= 0 {
+		return linux.CommandResult{}, linux.ErrOutputLimit
+	}
+	if err := ctx.Err(); err != nil {
+		return linux.CommandResult{}, err
+	}
+	output, err := r.Run(ctx, name, args...)
+	if len(output.Stdout) > limits.Stdout || len(output.Stderr) > limits.Stderr {
+		return linux.CommandResult{}, linux.ErrOutputLimit
+	}
+	return output, err
 }
 
 // All GRE modes must delete their *old* owned objects after the route to

@@ -13,7 +13,6 @@ import (
 
 	"github.com/ach1992/simple-tun-link/internal/carrier/wss"
 	"github.com/ach1992/simple-tun-link/internal/domain"
-	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/state"
 )
 
@@ -43,9 +42,12 @@ func menuCreateWSSWithHost(input io.Reader, reader *bufio.Reader, out, errOut io
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	runner := createRunner(opts)
-	route, err := (linux.RouteResolver{Runner: runner}).Resolve(ctx, peer)
-	if err != nil || !route.Source.Is4() || !route.Source.IsGlobalUnicast() || route.Source == peer {
-		menuNotice(out, "WARNING", "No verified local IPv4 route to the remote peer.")
+	route, err := askLocalUnderlay(p, runner, peer)
+	if err != nil {
+		if err == errCreateCancelled || err == io.EOF {
+			return p.failed(err)
+		}
+		menuNotice(out, "WARNING", "No verified local IPv4/interface was selected; no Link was created. Inspect ip -json address show, then retry with an assigned local address.")
 		return 4
 	}
 	root := createStateRoot(opts)

@@ -1,6 +1,7 @@
 package linux
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -24,15 +25,46 @@ type RouteResolver struct {
 }
 
 type ipRoute struct {
-	Destination string `json:"dst"`
-	Gateway     string `json:"gateway"`
-	Device      string `json:"dev"`
-	Preferred   string `json:"prefsrc"`
-	Source      string `json:"src"`
-	MTU         int    `json:"mtu"`
-	Metrics     struct {
+	Destination string       `json:"dst"`
+	Gateway     string       `json:"gateway"`
+	Device      string       `json:"dev"`
+	Preferred   string       `json:"prefsrc"`
+	Source      string       `json:"src"`
+	MTU         int          `json:"mtu"`
+	Metrics     routeMetrics `json:"metrics"`
+}
+
+// iproute2 returns metrics as either an object or a singleton array.
+// Both shapes are local kernel route metadata, not proof of remote reachability.
+type routeMetrics struct{ MTU int }
+
+func (m *routeMetrics) UnmarshalJSON(raw []byte) error {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return fmt.Errorf("empty route metrics")
+	}
+	if raw[0] == '[' {
+		var rows []routeMetrics
+		if err := json.Unmarshal(raw, &rows); err != nil {
+			return fmt.Errorf("invalid route metrics array: %w", err)
+		}
+		if len(rows) != 1 {
+			return fmt.Errorf("route metrics must have exactly one entry")
+		}
+		*m = rows[0]
+		return nil
+	}
+	var row struct {
 		MTU int `json:"mtu"`
-	} `json:"metrics"`
+	}
+	if raw[0] != '{' {
+		return fmt.Errorf("invalid route metrics shape")
+	}
+	if err := json.Unmarshal(raw, &row); err != nil {
+		return fmt.Errorf("invalid route metrics object: %w", err)
+	}
+	m.MTU = row.MTU
+	return nil
 }
 
 // Resolve asks the kernel for the route to the actual peer instead of guessing

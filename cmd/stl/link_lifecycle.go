@@ -306,6 +306,10 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 		case evidence.HostMutation == "not_attempted" && operation == "link_remove":
 			safe.ReasonCode = "rejected_before_host_apply"
 			safe.NextStep = "Inspect only this Link's saved owner identity, local kernel, firewall, helper and recovery journal. No remote connectivity or Create preparation is needed; reconcile uncertain resources before retrying removal. Engine did not invoke host Apply."
+		case observedPublic != nil && observedPublic.ReasonCode == "local_underlay_unverified" &&
+			operation != "link_remove" && evidence.HostMutation == "not_attempted" && (evidence.Stage == "plan" || evidence.Stage == "validate"):
+			safe.ReasonCode = "local_underlay_unverified"
+			safe.NextStep = "Inspect ip -json address show on THIS server. Choose a uniquely assigned local IPv4/interface in the menu or correct the request's local underlay IP. Creating or importing does not require peer reachability; no host Apply was invoked."
 		case evidence.HostMutation == "not_attempted":
 			safe.ReasonCode = "rejected_before_host_apply"
 			safe.NextStep = "Correct prerequisites or conflicting intent, then inspect Link state read-only before retrying; Engine did not invoke host Apply."
@@ -327,7 +331,10 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 	// instead of overwriting it with the generic rejected_before_host_apply.
 	if observedPublic != nil && evidence != nil &&
 		evidence.Stage == "plan" && evidence.HostMutation == "not_attempted" &&
-		observedPublic.Backend == string(domain.BackendGRE) && operation != "link_remove" {
+		observedPublic.Backend == string(domain.BackendGRE) && operation != "link_remove" &&
+		!errors.Is(observed, context.DeadlineExceeded) && !errors.Is(observed, context.Canceled) {
+		// An actual interruption must never be overwritten by an advisory
+		// GRE route/source reason from an earlier planning observation.
 		switch observedPublic.ReasonCode {
 		case "gre_underlay_route_unverified", "gre_underlay_source_mismatch",
 			"gre_firewall_readback_unverified", "gre_firewall_ownership_unverified",

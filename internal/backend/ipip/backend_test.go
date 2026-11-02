@@ -47,6 +47,11 @@ func (r *fakeRunner) Run(_ context.Context, name string, args ...string) (linux.
 	r.commands = append(r.commands, strings.Join(append([]string{name}, args...), " "))
 	joined := strings.Join(args, " ")
 	switch {
+	// Fixture-backed exact host assignment: success-path route hints are
+	// independently verified just like production underlay admission.
+	case joined == "-json address show":
+		raw := fmt.Sprintf(`[{"ifname":"eth0","addr_info":[{"family":"inet","local":%q,"prefixlen":24}]}]`, r.link.Underlay.Local.String())
+		return linux.CommandResult{Stdout: []byte(raw)}, nil
 	case joined == "-details -json link show type ipip":
 		rows := make([]linkJSON, 0, 1+len(r.extra))
 		for _, state := range append([]observedLink{r.state}, r.extra...) {
@@ -643,6 +648,22 @@ func TestIPIPUnderlayPairClaimSerializesEncapsulationVariants(t *testing.T) {
 	if backendIdentity(second.Underlay.Local, second.Underlay.Peer) == original {
 		t.Fatal("different underlay peers were collapsed into one resource key")
 	}
+}
+
+// Test double for a capture-bounded host inventory read. It must never
+// turn a call to RunBounded into an unchecked unbounded success.
+func (r *fakeRunner) RunBounded(ctx context.Context, limits linux.CaptureLimits, name string, args ...string) (linux.CommandResult, error) {
+	if limits.Stdout <= 0 || limits.Stderr <= 0 {
+		return linux.CommandResult{}, linux.ErrOutputLimit
+	}
+	if err := ctx.Err(); err != nil {
+		return linux.CommandResult{}, err
+	}
+	output, err := r.Run(ctx, name, args...)
+	if len(output.Stdout) > limits.Stdout || len(output.Stderr) > limits.Stderr {
+		return linux.CommandResult{}, linux.ErrOutputLimit
+	}
+	return output, err
 }
 
 type brokenIPIPRemoveRoute struct{}

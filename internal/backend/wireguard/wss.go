@@ -80,9 +80,9 @@ func (b *Backend) planWSS(ctx context.Context, req core.Request, obs observation
 	claims = append(claims, path.CarrierClaims()...)
 	switch req.Operation {
 	case core.OperationEnsure:
-		route, err := b.routes.Resolve(ctx, req.Link.Underlay.Peer)
+		route, err := linux.ResolveConfiguredUnderlay(ctx, b.routes, b.runner, req.Link.Underlay.Local, req.Link.Underlay.Peer)
 		if err != nil {
-			return nil, fmt.Errorf("WSS underlay route: %w", err)
+			return nil, stlerr.LocalUnderlayUnverified("managed_plan", string(req.Link.ID), string(req.Link.Backend), err)
 		}
 		if route.Source != req.Link.Underlay.Local {
 			return nil, fmt.Errorf("WSS physical source does not match resolved route")
@@ -173,7 +173,7 @@ func (b *Backend) validateWSS(ctx context.Context, req core.Request, obs observa
 		}
 		return b.rejectForeignReplacement(ctx, req.Link.ID, p.name)
 	}
-	route, err := b.routes.Resolve(ctx, req.Link.Underlay.Peer)
+	route, err := linux.ResolveConfiguredUnderlay(ctx, b.routes, b.runner, req.Link.Underlay.Local, req.Link.Underlay.Peer)
 	if err != nil {
 		return err
 	}
