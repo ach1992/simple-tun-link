@@ -849,20 +849,34 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		}
 	}
 	ipsecRetirementDigest := ""
+	ipsecRetirementAbsent := false
 	if request.Operation == backend.OperationRemove && link.Backend == domain.BackendIPsec {
-		fingerprint, ok := impl.(interface {
-			CredentialDigest(domain.LinkID) (string, error)
-		})
-		if !ok {
-			return Result{}, stlerr.New(stlerr.CodeUnsupported, "ipsec_remove", string(link.ID), "ipsec",
-				"IPsec backend lacks protected credential retirement binding")
+		// Credential-free finalization is exclusively for a real operational
+		// backend plan whose fresh locked state proved all IPsec resources
+		// absent. An arbitrary fake plan cannot mint a PSK-absent receipt.
+		if _, operational := impl.(*ipsec.OperationalBackend); operational {
+			if absence, ok := plan.(interface{ IPsecCredentialAbsent() bool }); ok && absence.IPsecCredentialAbsent() {
+				if verifier, ok := impl.(interface{ VerifyCredentialAbsent(domain.LinkID) error }); !ok || verifier.VerifyCredentialAbsent(link.ID) != nil {
+					return Result{}, stlerr.New(stlerr.CodeState, "ipsec_remove", string(link.ID), "ipsec", "protected IPsec PSK absence is not independently verified")
+				}
+				ipsecRetirementAbsent = true
+			}
 		}
-		digest, err := fingerprint.CredentialDigest(link.ID)
-		if err != nil {
-			return Result{}, stlerr.New(stlerr.CodeState, "ipsec_remove", string(link.ID), "ipsec",
-				"protected IPsec rollback/retirement credential cannot be verified")
+		if !ipsecRetirementAbsent {
+			fingerprint, ok := impl.(interface {
+				CredentialDigest(domain.LinkID) (string, error)
+			})
+			if !ok {
+				return Result{}, stlerr.New(stlerr.CodeUnsupported, "ipsec_remove", string(link.ID), "ipsec",
+					"IPsec backend lacks protected credential retirement binding")
+			}
+			digest, err := fingerprint.CredentialDigest(link.ID)
+			if err != nil {
+				return Result{}, stlerr.New(stlerr.CodeState, "ipsec_remove", string(link.ID), "ipsec",
+					"protected IPsec rollback/retirement credential cannot be verified")
+			}
+			ipsecRetirementDigest = digest
 		}
-		ipsecRetirementDigest = digest
 	}
 	changed := !plan.Empty()
 	if link.Backend == domain.BackendWireGuardWSS && request.Operation == backend.OperationEnsure {
@@ -1409,7 +1423,7 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 				snapshot.RemovalReceipts = append(snapshot.RemovalReceipts, state.RemovalReceipt{LinkID: link.ID, Backend: domain.BackendWireGuardQUIC, LocalPublicKey: link.WireGuard.LocalPublicKey, QUICLink: link, QUICGeneration: prior.QUICGeneration, QUICOriginalTermination: quicOriginalTermination})
 			}
 			if link.Backend == domain.BackendIPsec {
-				if ipsecRetirementDigest == "" {
+				if !ipsecRetirementAbsent && ipsecRetirementDigest == "" {
 					return fmt.Errorf("missing protected IPsec retirement identity")
 				}
 				if _, exists := snapshot.FindIPsecRemovalReceipt(link.ID); exists {
@@ -1419,7 +1433,7 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 				// that removes the committed Link, never in a best-effort
 				// follow-up that can be lost across a crash.
 				snapshot.IPsecRemovalReceipts = append(snapshot.IPsecRemovalReceipts,
-					state.IPsecRemovalReceipt{LinkID: link.ID, PSKSHA256: ipsecRetirementDigest})
+					state.IPsecRemovalReceipt{LinkID: link.ID, PSKSHA256: ipsecRetirementDigest, VerifiedAbsent: ipsecRetirementAbsent})
 			}
 		default:
 			return fmt.Errorf("unsupported operation %q", request.Operation)

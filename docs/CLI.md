@@ -238,10 +238,21 @@ WSS/QUIC and admitted IPsec already avoid peer-route dependencies.
 The runtime used by a removal constructs only the saved Link's backend,
 so an unrelated optional backend's readiness cannot block it.
 
-An unresolved partial removal, missing rollback credential, unknown
-kernel/service resource identity, or unadmitted IPsec VICI writer is **not**
-permission to delete another service. These are explicit local
-reconciliation gates; the CLI must not report success without proof.
+An unresolved partial removal, a missing rollback credential needed for
+**live** host effects, unknown kernel/service resource identity, or an
+unadmitted IPsec VICI writer is **not** permission to delete another service.
+An IPsec Link whose entire scoped XFRM/VICI/SA/policy footprint is proven
+vacant and whose protected original PSK file is independently proven absent
+is the narrow exception: ordinary Remove (and explicit interrupted-journal
+reconciliation) can complete State cleanup, retaining a distinct durable
+`verified_absent` retirement receipt without inventing a digest. This path
+never calls VICI unload, XFRM deletion or credential deletion; it rechecks
+absence under the canonical locks before every no-effect journal transition.
+A symlink, unreadable/corrupt/foreign private file, missing trusted
+credential directory, remaining SA/policy, competing journal, changed
+interface identity or any uncertain observation still blocks Remove.
+These are explicit local reconciliation gates; the CLI must not report
+success without proof.
 For interactive use choose **My tunnels -> Remove this tunnel** and
 confirm `REMOVE`; a separate Link's resources are not selected.
 
@@ -425,7 +436,9 @@ absent Link alone. IPsec uses corresponding exact staged
 `activate-ipsec`, `connect-ipsec`, explicit
 `reconcile-ipsec`/`reconcile-xfrm-ipsec` and receipt-bound
 `retire-ipsec`; PSK retirement does not require a currently
-running strongSwan service. Unknown VICI/XFRM effects and absent
+running strongSwan service. An independently verified already-absent
+IPsec credential uses a separate no-digest retirement receipt; ordinary
+present credentials continue to require exact SHA-256 identity at deletion. Unknown VICI/XFRM effects and absent
 recorded original ifindex are not deletion authority. `stl doctor
 ipsec --json` is read-only and distinguishes absent/unknown/foreign
 from positively admitted private runtime.

@@ -265,6 +265,29 @@ func (s *PSKStore) Digest(id domain.LinkID) (string, error) {
 	return hex.EncodeToString(digest[:]), nil
 }
 
+// VerifyAbsent proves absence of exactly this Link's protected PSK by
+// descriptor-relative lstat inside the validated owner-only credential
+// directory. Unlike Load, a missing directory, symlink, inaccessible path,
+// or ambiguous error is NEVER evidence of absence. This is read-only and
+// cannot authorize deletion without the Engine's committed Link/locks.
+func (s *PSKStore) VerifyAbsent(id domain.LinkID) error {
+	name, err := s.keyName(id)
+	if err != nil {
+		return err
+	}
+	dirfd, err := credentials.OpenProtected(s.stateRoot, false)
+	if err != nil {
+		return fmt.Errorf("protected IPsec credential directory cannot be verified")
+	}
+	defer unix.Close(dirfd)
+	var entry unix.Stat_t
+	err = unix.Fstatat(dirfd, name, &entry, unix.AT_SYMLINK_NOFOLLOW)
+	if errors.Is(err, unix.ENOENT) {
+		return nil
+	}
+	return fmt.Errorf("protected IPsec credential is present or path absence is unverified")
+}
+
 // RetireMatching removes only the matching root-private 256-bit PSK from
 // the protected credential directory. Caller MUST hold canonical
 // maintenance/Link locks and an already-durable post-Remove receipt;

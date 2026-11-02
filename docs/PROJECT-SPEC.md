@@ -109,6 +109,13 @@ operator-initiated attempt; safety and credential protection still apply.
    interrupted or foreign host state requires specific owner-scoped recovery;
    preserve durable evidence rather than deleting unrelated resources or
    incorrectly reporting success.
+   A committed IPsec Link whose protected PSK was independently proven
+   already absent and whose exact XFRM device, policies, SAs and scoped VICI
+   objects are all verifiably vacant may be finalized through the same locked
+   Remove transaction and a distinct no-digest absence receipt. Never
+   synthesize a PSK digest or unload live resources without a rollback key;
+   unsafe/foreign/unknown credential paths and interrupted journals require
+   owner-scoped reconciliation.
 4. **Independent multi-Link operation.** Allow independent Links and backend
    combinations without an arbitrary product-imposed count or
    one-Link-per-peer assumption; resolve genuine kernel, address, service,
