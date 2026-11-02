@@ -96,6 +96,36 @@ echo "L2TPV3_REAL_PRIVATE_ICMP_A_TO_B"
 ip netns exec "$ns_a" ping -n -q -I 10.253.115.1 -c 8 -i 0.2 -W 2 10.253.115.2
 echo "L2TPV3_REAL_PRIVATE_ICMP_B_TO_A"
 ip netns exec "$ns_b" ping -n -q -I 10.253.115.2 -c 8 -i 0.2 -W 2 10.253.115.1
+# Receiver-origin SHA-256 receipts prove real private TCP data rather than
+# a local-up interface or a ping-only path. Each endpoint starts one transfer.
+traffic() {
+  local src_role="$1" peer_role="$2" src_ns peer_ns src_ip peer_ip port tag
+  if [[ "$src_role" == a ]]; then
+    src_ns="$ns_a"; peer_ns="$ns_b"; src_ip=10.253.115.1; peer_ip=10.253.115.2
+    port=45115; tag=irrel-a-to-b
+  else
+    src_ns="$ns_b"; peer_ns="$ns_a"; src_ip=10.253.115.2; peer_ip=10.253.115.1
+    port=45116; tag=irrel-b-to-a
+  fi
+  echo "L2TPV3_PRIVATE_TCP_TRANSFER_$src_role"
+  local witness="$temp/tcp-$peer_role.log"
+  timeout 45 ip netns exec "$peer_ns" python3 -u "$root/scripts/e2e/l2tpv3-tcp.py" server "$peer_ip" "$src_ip" "$port" 16 "$tag" > "$witness" 2>&1 &
+  local server_pid=$!
+  sleep 0.25
+  # In case of a connection failure the bounded server exits on its own.
+  # Wait before removing test namespaces, never signal a guessed PID.
+  if ! timeout 45 ip netns exec "$src_ns" python3 -u "$root/scripts/e2e/l2tpv3-tcp.py" client "$src_ip" "$peer_ip" "$port" 16 "$tag"; then
+    wait "$server_pid" || :
+    cat "$witness"
+    return 1
+  fi
+  wait "$server_pid"
+  cat "$witness"
+  grep -F '"event": "RECEIVER_SHA256"' "$witness" >/dev/null || return 1
+}
+traffic a b
+traffic b a
+echo "L2TPV3_TCP_BILATERAL_16MiB_SHA_PASS"
 echo "L2TPV3_IDEMPOTENT_ENSURE"
 run_engine a ensure | grep 'changed=false'
 run_engine b ensure | grep 'changed=false'

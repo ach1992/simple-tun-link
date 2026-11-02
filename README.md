@@ -468,6 +468,8 @@ Engine/Restore/Remove smoke on an approved disposable validation host with
 
     sudo env STL_E2E_DISPOSABLE_HOST=approved bash scripts/e2e/l2tpv3-netns.sh
 
-This test does not affect the production host routing table and does not
-qualify public-Internet reachability; peer-L3 SHA-verified traffic requires
-separate application tests on the selected network.
+This test does not change the host's default route and includes SHA-256-
+verified 16 MiB private TCP transfers in **each** namespace direction.
+It does not qualify public-Internet reachability or provider stability:
+test actual application traffic and durable private-IP delivery on the
+specific target network before relying on it.
