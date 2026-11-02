@@ -281,8 +281,8 @@ func menuCapabilityHelp(out io.Writer, report linux.CapabilityReport) {
 	menuNotice(out, "INFO", "Kernel modules, packages, network Links and services were NOT changed.")
 }
 
-// Keep common choices on one short screen; the six less common transports
-// and no-Link workflows are visible only when the operator asks for them.
+// Keep common choices on one screen. Preserve existing numeric options for
+// backwards-compatible workflows; add L2TPv3 as option 8.
 var basicTunnelOptions = map[string]tunnelOption{
 	"1": {domain.BackendGRE, domain.EncapNative, false},
 	"2": {domain.BackendWireGuard, domain.EncapUDP, false},
@@ -357,11 +357,11 @@ func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		menuTunnelOption(out, "1", "GRE / Native", "Default; not encrypted", report, basicTunnelOptions["1"])
 		menuTunnelOption(out, "2", "WireGuard / UDP", "Encrypted", report, basicTunnelOptions["2"])
 		menuTunnelOption(out, "3", "IPIP / Native", "Not encrypted", report, basicTunnelOptions["3"])
-		menuTunnelOption(out, "8", "L2TPv3 / Direct-IP", "IP protocol 115; plaintext private Ethernet", report, basicTunnelOptions["8"])
 		menuOption(out, "4", "Manual connection", "Set up both ends by hand")
 		menuOption(out, "5", "Advanced types", "FOU / GUE / IPsec")
 		menuOption(out, "6", "WireGuard / WSS + TLS", "Encrypted WSS Carrier (optional pinned helper)")
 		menuOption(out, "7", "WireGuard / QUIC + TLS", "Encrypted UDP Carrier (optional pinned Hysteria)")
+		menuTunnelOption(out, "8", "L2TPv3 / Direct-IP", "IP protocol 115; plaintext private Ethernet", report, basicTunnelOptions["8"])
 		menuOption(out, "i", "Availability details", "Explain why a type is unavailable")
 		menuOption(out, "0", "Back", "Main menu")
 		fmt.Fprint(out, "Tunnel type [1]: ")

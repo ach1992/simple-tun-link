@@ -462,3 +462,12 @@ sensitive data in an authenticated encrypted transport. Private IPs are
 ordinary locally selected Link Addresses, not externally assigned addresses.
 `stl link status` reports owned local state; `stl link diagnose` and
 peer-origin data tests distinguish actual reachability.
+
+**Optional disposable Linux E2E:** Run the kernel-backed, isolated two-namespace
+Engine/Restore/Remove smoke on an approved disposable validation host with
+
+    sudo env STL_E2E_DISPOSABLE_HOST=approved bash scripts/e2e/l2tpv3-netns.sh
+
+This test does not affect the production host routing table and does not
+qualify public-Internet reachability; peer-L3 SHA-verified traffic requires
+separate application tests on the selected network.
