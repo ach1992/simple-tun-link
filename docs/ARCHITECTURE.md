@@ -147,7 +147,14 @@ Inspect/Plan/Validate/Apply/Verify, resource locks, rollback and committed
 reboot restore govern this Link like GRE/IPIP. Interface alias/ifindex and
 complete kernel tunnel/session identities are checked before destructive
 operations; foreign sessions, address conflicts and ambiguous state block
-mutation. Local setup never proves that a remote provider actually
+mutation. All IPv4/IPv6 interface addresses are observed: ordinary verified
+kernel-generated IPv6 link-local is allowed, but foreign manually configured
+IPv6 addresses veto destructive session removal/rollback. A private peer
+neighbor is created using exclusive, ifindex-bound route netlink; never
+through replace-by-name. Delete re-observes neighbor/address/session identity
+after Validate, and an iproute2 error after a possible kernel effect never
+counts as completed rollback without a bounded fresh readback. Unverifiable
+partial state is preserved for operator reconciliation. Local setup never proves that a remote provider actually
 delivers protocol-115 packets. No L2 bridge, global neighbor/sysctl
 change, IPsec configuration or external packet forwarder is created.
 L2TPv3 transports plaintext and is not authenticated. Network admission

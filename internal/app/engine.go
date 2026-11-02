@@ -1497,8 +1497,13 @@ func (e *Engine) rollbackWithContextAtStage(ctx context.Context, request backend
 	}
 	if err := undo(ctx); err != nil {
 		evidence.Rollback = "incomplete"
-		return stlerr.WithEvidence(stlerr.Wrap(stlerr.CodeRollback, string(request.Operation), string(link.ID), string(link.Backend),
-			"operation failed and rollback did not complete", errors.Join(original, err)), evidence)
+		failure := stlerr.Wrap(stlerr.CodeRollback, string(request.Operation), string(link.ID), string(link.Backend),
+			"operation failed and rollback did not complete", errors.Join(original, err))
+		if link.Backend == domain.BackendL2TPv3 && errors.Is(err, backend.ErrIndeterminateHostEffect) {
+			failure.ReasonCode = "l2tpv3_kernel_effect_indeterminate"
+			failure.NextStep = "Preserve the current host state; do not blindly retry, delete the L2TP session or adopt its interface. Inspect with sudo ip -json l2tp show tunnel; sudo ip -json l2tp show session; ip -json address show; ip -json neigh show; and stl link status <ID> --json. Reconcile foreign resources with their owning operator before retrying."
+		}
+		return stlerr.WithEvidence(failure, evidence)
 	}
 	// Callback success is not a second independent kernel/state verification.
 	evidence.Rollback = "completed_unverified"

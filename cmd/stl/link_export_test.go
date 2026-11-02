@@ -50,12 +50,14 @@ func TestCLIExportCreatesCanonicalRecipientSetupLinkByStableID(t *testing.T) {
 	ipipFOU.Backend, ipipFOU.Encapsulation = domain.BackendIPIP, domain.EncapFOU
 	ipipGUE := exportLinkFixture("6", "10.80.54.0/31")
 	ipipGUE.Backend, ipipGUE.Encapsulation = domain.BackendIPIP, domain.EncapGUE
-	storeReadLinks(t, root, ipipNative, ipipFOU, ipipGUE)
+	l2tpNative := exportLinkFixture("7", "10.80.55.0/31")
+	l2tpNative.Backend, l2tpNative.Encapsulation = domain.BackendL2TPv3, domain.EncapNative
+	storeReadLinks(t, root, ipipNative, ipipFOU, ipipGUE, l2tpNative)
 	before, err := os.ReadFile(filepath.Join(root, "state.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	links := []domain.Link{first, second, ipipNative, ipipFOU, ipipGUE}
+	links := []domain.Link{first, second, ipipNative, ipipFOU, ipipGUE, l2tpNative}
 	for _, link := range links {
 		code, out, stderr := runExport(t, root, "link", "export", string(link.ID), "--json")
 		if code != 0 || stderr != "" || strings.Contains(out, "private_label") {

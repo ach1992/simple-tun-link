@@ -115,6 +115,8 @@ type ifaceAddr struct {
 		Family    string `json:"family"`
 		Local     string `json:"local"`
 		PrefixLen int    `json:"prefixlen"`
+		Scope     string `json:"scope"`
+		Protocol  string `json:"protocol"`
 	} `json:"addr_info"`
 }
 type neighbor struct {

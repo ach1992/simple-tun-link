@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/sys/unix"
+
 	core "github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
@@ -98,15 +100,19 @@ func TestIdentityPairingAndValidation(t *testing.T) {
 }
 
 type fakeKernel struct {
-	link     domain.Link
-	id       identity
-	tunnels  []tunnel
-	sessions []session
-	ifc      *iface
-	addr     []netip.Prefix
-	neigh    []neighbor
-	fail     string
-	calls    []string
+	link          domain.Link
+	id            identity
+	tunnels       []tunnel
+	sessions      []session
+	ifc           *iface
+	addr          []netip.Prefix
+	neigh         []neighbor
+	ipv6          []map[string]any
+	onAddNeighbor func()
+	fail          string
+	failAfter     string
+	failAfterErr  error
+	calls         []string
 }
 
 func newFakeKernel(t *testing.T, l domain.Link) *fakeKernel {
@@ -117,6 +123,19 @@ func newFakeKernel(t *testing.T, l domain.Link) *fakeKernel {
 	}
 	return &fakeKernel{link: l, id: id}
 }
+
+// Model a netlink mutation committed by the kernel followed by an
+// iproute2 timeout/exit error. A pre-effect error is not equivalent.
+func (h *fakeKernel) afterEffect(command string) error {
+	if h.failAfter == "" || !strings.Contains(command, h.failAfter) {
+		return nil
+	}
+	if h.failAfterErr != nil {
+		return h.failAfterErr
+	}
+	return errors.New("injected command error AFTER kernel effect")
+}
+
 func (h *fakeKernel) Run(_ context.Context, binary string, args ...string) (linux.CommandResult, error) {
 	joined := strings.Join(args, " ")
 	h.calls = append(h.calls, joined)
@@ -146,6 +165,7 @@ func (h *fakeKernel) Run(_ context.Context, binary string, args ...string) (linu
 		for _, a := range h.addr {
 			list = append(list, map[string]any{"family": "inet", "local": a.Addr().String(), "prefixlen": a.Bits()})
 		}
+		list = append(list, h.ipv6...)
 		row["addr_info"] = list
 		return encode([]any{row})
 	case strings.HasPrefix(joined, "-json neigh show dev "):
@@ -157,11 +177,11 @@ func (h *fakeKernel) Run(_ context.Context, binary string, args ...string) (linu
 		}}})
 	case strings.HasPrefix(joined, "l2tp add tunnel "):
 		h.tunnels = append(h.tunnels, tunnel{TunnelID: h.id.tunnel, PeerTunnel: h.id.peerTunnel, Encap: "IP", Local: h.link.Underlay.Local.String(), Peer: h.link.Underlay.Peer.String()})
-		return linux.CommandResult{}, nil
+		return linux.CommandResult{}, h.afterEffect(joined)
 	case strings.HasPrefix(joined, "l2tp add session "):
 		h.sessions = append(h.sessions, session{TunnelID: h.id.tunnel, PeerTunnelID: h.id.peerTunnel, SessionID: h.id.session, PeerSessionID: h.id.peerSession, Interface: h.id.name})
 		h.ifc = &iface{IfIndex: 123, IfName: h.id.name, Address: "de:ad:be:ef:00:00", Flags: []string{"BROADCAST"}}
-		return linux.CommandResult{}, nil
+		return linux.CommandResult{}, h.afterEffect(joined)
 	case strings.HasPrefix(joined, "l2tp del session "):
 		if h.ifc == nil {
 			return linux.CommandResult{}, errors.New("no session")
@@ -170,16 +190,14 @@ func (h *fakeKernel) Run(_ context.Context, binary string, args ...string) (linu
 		h.ifc = nil
 		h.addr = nil
 		h.neigh = nil
-		return linux.CommandResult{}, nil
+		h.ipv6 = nil
+		return linux.CommandResult{}, h.afterEffect(joined)
 	case strings.HasPrefix(joined, "l2tp del tunnel "):
 		if len(h.sessions) != 0 {
 			return linux.CommandResult{}, errors.New("session still attached")
 		}
 		h.tunnels = nil
-		return linux.CommandResult{}, nil
-	case strings.HasPrefix(joined, "neigh replace "):
-		h.neigh = []neighbor{{Dst: h.link.Addresses.Peer.Addr().String(), LLAddr: h.id.peerMAC, State: json.RawMessage(`["PERMANENT"]`)}}
-		return linux.CommandResult{}, nil
+		return linux.CommandResult{}, h.afterEffect(joined)
 	default:
 		return linux.CommandResult{}, fmt.Errorf("unexpected kernel command %q", joined)
 	}
@@ -244,6 +262,22 @@ func testBackend(t *testing.T, l domain.Link, k *fakeKernel, fw *fakeFirewall, c
 				return fmt.Errorf("wrong up index")
 			}
 			k.ifc.Flags = append(k.ifc.Flags, "UP")
+			return nil
+		},
+		AddNeighbor: func(_ context.Context, ix int, peer netip.Addr, mac string) error {
+			if k.onAddNeighbor != nil {
+				k.onAddNeighbor()
+			}
+			if k.fail == "neighbor add" {
+				return errors.New("injected exclusive neighbor add failure")
+			}
+			if k.ifc == nil || k.ifc.IfIndex != ix || peer != k.link.Addresses.Peer.Addr() {
+				return fmt.Errorf("neighbor operation not pinned to original ifindex/peer")
+			}
+			if len(k.neigh) != 0 {
+				return fmt.Errorf("exclusive neighbor exists: %w", unix.EEXIST)
+			}
+			k.neigh = []neighbor{{Dst: peer.String(), LLAddr: mac, State: json.RawMessage("[\"PERMANENT\"]")}}
 			return nil
 		},
 	})
@@ -338,7 +372,7 @@ func TestFailedCreateRollsBackExactResources(t *testing.T) {
 	k := newFakeKernel(t, l)
 	fw := &fakeFirewall{}
 	b := testBackend(t, l, k, fw, fakeCollisions{})
-	k.fail = "neigh replace"
+	k.fail = "neighbor add"
 	_, undo, err := exercise(t, b, core.Request{Operation: core.OperationEnsure, Link: l})
 	if err == nil || undo == nil {
 		t.Fatalf("expected partial failure with undo, got %v", err)

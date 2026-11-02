@@ -102,6 +102,9 @@ run_engine a ensure
 run_engine b ensure
 run_engine a check
 run_engine b check
+echo "L2TPV3_NETLINK_EXCLUSIVE_NEIGHBOR_PROOF"
+run_engine a exclusive-neighbor
+run_engine b exclusive-neighbor
 echo "L2TPV3_REAL_PRIVATE_ICMP_A_TO_B"
 ip netns exec "$ns_a" ping -n -q -I 10.253.115.1 -c 8 -i 0.2 -W 2 10.253.115.2
 echo "L2TPV3_REAL_PRIVATE_ICMP_B_TO_A"

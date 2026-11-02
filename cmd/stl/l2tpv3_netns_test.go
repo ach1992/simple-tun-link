@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"os"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/managedmtu"
 	"github.com/ach1992/simple-tun-link/internal/pairing"
 	"github.com/ach1992/simple-tun-link/internal/state"
+	"golang.org/x/sys/unix"
 )
 
 // TestL2TPv3NetnsE2E is an explicit privileged, two-netns real-Linux
@@ -79,6 +81,23 @@ func TestL2TPv3NetnsE2E(t *testing.T) {
 			t.Fatalf("real Linux L2TPv3 Ensure: %v", err)
 		}
 		t.Logf("L2TPV3_NETNS_ENSURE_OK role=%s changed=%t", role, res.Changed)
+	case "exclusive-neighbor":
+		observed, err := b.DiagnosticState(ctx, link)
+		if err != nil || observed.IfIndex <= 0 {
+			t.Fatalf("cannot identify original interface: %+v %v", observed, err)
+		}
+		// A competing exclusive Add must not replace the already owned peer
+		// neighbor. The same kernel netlink primitive is used in production.
+		err = linux.AddPermanentIPv4NeighborByIndex(ctx, observed.IfIndex,
+			link.Addresses.Peer.Addr(), "02:ae:01:02:03:04")
+		if !errors.Is(err, unix.EEXIST) {
+			t.Fatalf("kernel neighbor did not refuse an occupied peer: %v", err)
+		}
+		result, err := engine.Ensure(ctx, link)
+		if err != nil || result.Changed {
+			t.Fatalf("exclusive add changed existing L2TPv3 neighbor/Link: %+v %v", result, err)
+		}
+		t.Logf("L2TPV3_KERNEL_NEIGHBOR_EXCLUSIVE_PASS role=%s", role)
 	case "restore":
 		res, err := engine.RestoreAll(ctx)
 		if err != nil || len(res) != 1 || !res[0].Changed {

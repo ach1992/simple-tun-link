@@ -170,6 +170,15 @@ kernel Tunnel/Session IDs and Ethernet MACs. Allow **IPv4 protocol 115**
 (not TCP/UDP port 115) on both underlays; expect only a locally managed
 permanent private-peer neighbor, and verify actual peer-originated traffic.
 L2TPv3 traffic is plaintext, unauthenticated and provider-dependent.
+On an uncertain L2TPv3 create/remove error, **do not retry the failed
+mutation or delete an orphan interface/tunnel blindly**. Check the
+machine-readable failure `evidence.rollback` and `next_step`, read the
+current Link through `stl link status <ID> --json`, and review
+`sudo ip -json l2tp show tunnel`, `sudo ip -json l2tp show session`,
+`sudo ip -json address show` and `sudo ip -json neigh show`.
+A foreign configured IPv6 address or non-STL neighbor/session requires
+the owning operator to reconcile it before STL can safely remove the
+pseudowire; otherwise destroying the L2TP session destroys their data.
 WireGuard/IPsec
 receiver secrets cannot be reconstructed from Connection details;
 use the original protected receiver handoff.

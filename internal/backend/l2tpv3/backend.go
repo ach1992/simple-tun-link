@@ -3,6 +3,7 @@ package l2tpv3
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/netip"
 	"slices"
 	"strings"
@@ -35,6 +36,7 @@ type Options struct {
 	SetMAC      func(context.Context, int, string) error
 	AddAddress  func(context.Context, int, netip.Prefix) error
 	SetUp       func(context.Context, int) error
+	AddNeighbor func(context.Context, int, netip.Addr, string) error
 	ModuleProbe func(context.Context, string) bool
 }
 type Backend struct {
@@ -47,6 +49,7 @@ type Backend struct {
 	setMAC      func(context.Context, int, string) error
 	addAddress  func(context.Context, int, netip.Prefix) error
 	setUp       func(context.Context, int) error
+	addNeighbor func(context.Context, int, netip.Addr, string) error
 	moduleProbe func(context.Context, string) bool
 }
 
@@ -74,23 +77,28 @@ func New(opts Options) (*Backend, error) {
 	if setUp == nil {
 		setUp = linux.SetLinkUpByIndex
 	}
+	addNeighbor := opts.AddNeighbor
+	if addNeighbor == nil {
+		addNeighbor = linux.AddPermanentIPv4NeighborByIndex
+	}
 	moduleProbe := opts.ModuleProbe
 	if moduleProbe == nil {
 		moduleProbe = (linux.KernelModuleProbe{Runner: opts.Runner}).AvailableButNotLoaded
 	}
-	return &Backend{runner: opts.Runner, routes: opts.Routes, firewall: opts.Firewall, collisions: opts.Collisions, ip: ip, setAlias: setAlias, setMAC: setMAC, addAddress: addAddress, setUp: setUp, moduleProbe: moduleProbe}, nil
+	return &Backend{runner: opts.Runner, routes: opts.Routes, firewall: opts.Firewall, collisions: opts.Collisions, ip: ip, setAlias: setAlias, setMAC: setMAC, addAddress: addAddress, setUp: setUp, addNeighbor: addNeighbor, moduleProbe: moduleProbe}, nil
 }
 func (*Backend) Kind() domain.Backend { return domain.BackendL2TPv3 }
 
 type observation struct {
-	id        identity
-	tunnels   []tunnel
-	sessions  []session
-	tunnel    *tunnel
-	session   *session
-	iface     *iface
-	addresses []netip.Prefix
-	neighbors []neighbor
+	id             identity
+	tunnels        []tunnel
+	sessions       []session
+	tunnel         *tunnel
+	session        *session
+	iface          *iface
+	addresses      []netip.Prefix
+	foreignAddress bool
+	neighbors      []neighbor
 }
 
 func (o observation) ObservedResources() []domain.ResourceClaim {
@@ -120,7 +128,7 @@ func (o observation) matches(l domain.Link) bool {
 	if err != nil || i.IfAlias != wantAlias {
 		return false
 	}
-	if len(o.addresses) != 1 || o.addresses[0] != l.Addresses.Local {
+	if o.foreignAddress || len(o.addresses) != 1 || o.addresses[0] != l.Addresses.Local {
 		return false
 	}
 	for _, n := range o.neighbors {
@@ -235,14 +243,22 @@ func (b *Backend) Inspect(ctx context.Context, link domain.Link) (core.Observati
 			return nil, fmt.Errorf("L2TPv3 interface identity changed while reading addresses")
 		}
 		for _, item := range rows[0].AddrInfo {
-			if item.Family != "inet" {
-				continue
+			switch item.Family {
+			case "inet":
+				ip, err := netip.ParseAddr(item.Local)
+				if err != nil || !ip.Is4() || item.PrefixLen < 0 || item.PrefixLen > 32 {
+					return nil, fmt.Errorf("malformed L2TPv3 IPv4 address inventory")
+				}
+				o.addresses = append(o.addresses, netip.PrefixFrom(ip, item.PrefixLen))
+			case "inet6":
+				// An ordinary kernel-generated link-local address is allowed.
+				// Every other IPv6 address blocks deletion of this interface.
+				if !autoKernelLinkLocal(item.Local, item.PrefixLen, item.Scope, item.Protocol, o.iface.Address) {
+					o.foreignAddress = true
+				}
+			default:
+				o.foreignAddress = true
 			}
-			ip, err := netip.ParseAddr(item.Local)
-			if err != nil || !ip.Is4() || item.PrefixLen < 0 || item.PrefixLen > 32 {
-				return nil, fmt.Errorf("malformed L2TPv3 address inventory")
-			}
-			o.addresses = append(o.addresses, netip.PrefixFrom(ip, item.PrefixLen))
 		}
 		nRes, err := b.runner.Run(ctx, b.ip, "-json", "neigh", "show", "dev", id.name)
 		if err != nil {
@@ -254,6 +270,33 @@ func (b *Backend) Inspect(ctx context.Context, link domain.Link) (core.Observati
 		}
 	}
 	return o, nil
+}
+
+// Modern Linux exposes "kernel_ll" for automatically created IPv6
+// link-local addresses. On older kernels which omit that protocol, permit
+// only the precise EUI-64 link-local of the current Ethernet MAC.
+// A foreign/global/manually assigned IPv6 address must not be destroyed.
+func autoKernelLinkLocal(text string, bits int, scope, protocol, ethernetMAC string) bool {
+	ip, err := netip.ParseAddr(text)
+	if err != nil || !ip.Is6() || !ip.IsLinkLocalUnicast() || bits != 64 || scope != "link" {
+		return false
+	}
+	if protocol == "kernel_ll" {
+		return true
+	}
+	if protocol != "" {
+		return false
+	}
+	mac, err := net.ParseMAC(ethernetMAC)
+	if err != nil || len(mac) != 6 {
+		return false
+	}
+	var eui [16]byte
+	eui[0], eui[1] = 0xfe, 0x80
+	eui[8], eui[9], eui[10] = mac[0]^2, mac[1], mac[2]
+	eui[11], eui[12] = 0xff, 0xfe
+	eui[13], eui[14], eui[15] = mac[3], mac[4], mac[5]
+	return ip == netip.AddrFrom16(eui)
 }
 
 type plan struct {

@@ -93,6 +93,35 @@ func AddIPv4AddressByIndex(ctx context.Context, index int, prefix netip.Prefix) 
 	return sendRouteNetlinkRequest(ctx, message, seq)
 }
 
+// AddPermanentIPv4NeighborByIndex creates a private peer neighbor bound to
+// the verified interface INDEX, never a mutable interface name. EXCL prevents
+// accidentally overwriting another actor's existing NUD/LLADDR entry.
+// An EEXIST is a conflict, not permission to adopt or replace it.
+func AddPermanentIPv4NeighborByIndex(ctx context.Context, index int, addr netip.Addr, address string) error {
+	mac, err := net.ParseMAC(address)
+	if index <= 0 || !addr.Is4() || !addr.IsGlobalUnicast() || err != nil ||
+		len(mac) != 6 || mac[0]&1 != 0 {
+		return fmt.Errorf("valid interface index, IPv4 unicast peer and Ethernet unicast MAC are required")
+	}
+	ip := addr.As4()
+	attrs := appendNetlinkAttr(nil, unix.NDA_DST, ip[:])
+	attrs = appendNetlinkAttr(attrs, unix.NDA_LLADDR, mac)
+	const seq uint32 = 1
+	message := make([]byte, unix.SizeofNlMsghdr+unix.SizeofNdMsg+len(attrs))
+	order := binary.NativeEndian
+	order.PutUint32(message[0:4], uint32(len(message)))
+	order.PutUint16(message[4:6], unix.RTM_NEWNEIGH)
+	order.PutUint16(message[6:8], unix.NLM_F_REQUEST|unix.NLM_F_ACK|unix.NLM_F_CREATE|unix.NLM_F_EXCL)
+	order.PutUint32(message[8:12], seq)
+	base := unix.SizeofNlMsghdr
+	message[base] = unix.AF_INET
+	order.PutUint32(message[base+4:base+8], uint32(int32(index)))
+	order.PutUint16(message[base+8:base+10], unix.NUD_PERMANENT)
+	message[base+11] = unix.RTN_UNICAST
+	copy(message[base+unix.SizeofNdMsg:], attrs)
+	return sendRouteNetlinkRequest(ctx, message, seq)
+}
+
 // DeleteLinkByIndex deletes the exact observed kernel link identity. Callers
 // must still revalidate that the index remains attributable to their resource
 // immediately before invoking this destructive primitive.
