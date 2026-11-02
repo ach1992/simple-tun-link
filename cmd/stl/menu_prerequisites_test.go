@@ -348,3 +348,39 @@ func TestPackagePreparationConsentDoesNotConsumeLinkConfirmation(t *testing.T) {
 		t.Fatalf("absent prior approval bypassed module consent or root-TTY gate: %q", output.String())
 	}
 }
+
+// The L2TPv3 field campaign found a stale GRE/IPIP-only readiness label
+// even after kernel observation was corrected. Render the exact selected
+// module instead of identifying a different backend.
+func TestMenuL2TPModuleReadinessNamesExactUnloadedKernelModule(t *testing.T) {
+	report := linux.CapabilityReport{linux.CapabilityL2TPv3DirectIP: {Available: true}}
+	menuRefineModuleReadiness(report, func(module string) linux.KernelModuleState {
+		if module == "l2tp_ip" {
+			return linux.KernelModuleLoadableInactive
+		}
+		return linux.KernelModuleLoaded
+	})
+	status := report[linux.CapabilityL2TPv3DirectIP]
+	if status.Available || status.ReasonCode != "kernel_module_not_loaded" ||
+		!strings.Contains(status.Reason, "l2tp_ip") || strings.Contains(status.Reason, "GRE/IPIP") {
+		t.Fatalf("selected L2TP prerequisite was misidentified: %+v", status)
+	}
+	selected := tunnelOption{backend: domain.BackendL2TPv3, mode: domain.EncapNative}
+	if label, _ := menuCapabilityHint(report, selected); label != "[Needs setup]" {
+		t.Fatalf("observed inactive L2TP module was not preparable: %s", label)
+	}
+	modules, reason := plainModuleCandidates(selected, report, func(module string) linux.KernelModuleState {
+		if module == "l2tp_ip" {
+			return linux.KernelModuleLoadableInactive
+		}
+		return linux.KernelModuleLoaded
+	})
+	if !slices.Equal(modules, []string{"l2tp_ip"}) || reason != "" {
+		t.Fatalf("wrong exact module preparation: modules=%v reason=%s", modules, reason)
+	}
+	report = linux.CapabilityReport{linux.CapabilityL2TPv3DirectIP: {Available: true}}
+	menuRefineModuleReadiness(report, func(string) linux.KernelModuleState { return linux.KernelModuleLoaded })
+	if !report[linux.CapabilityL2TPv3DirectIP].Available {
+		t.Fatalf("loaded L2TP kernel was downgraded: %+v", report)
+	}
+}
