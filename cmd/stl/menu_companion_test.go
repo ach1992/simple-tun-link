@@ -62,6 +62,39 @@ func TestCompanionSpecsMatchPinnedCanonicalInstaller(t *testing.T) {
 	}
 }
 
+// Reproduces R01: a pinned executable with no installer ownership record
+// must not be admitted through either Create or Import's shared setup flow.
+func TestProductionMenuCompanionRejectsUnrecordedPinnedExecutable(t *testing.T) {
+	for _, kind := range []menuCompanionKind{menuCompanionWSS, menuCompanionQUIC} {
+		for _, operation := range []string{"create", "import"} {
+			t.Run(string(kind)+"/"+operation, func(t *testing.T) {
+				spec, ok := menuPinnedCompanion(kind, runtime.GOARCH)
+				if !ok {
+					t.Skip("unsupported architecture")
+				}
+				spec.binary = filepath.Join(t.TempDir(), "trusted-executable")
+				spec.record = filepath.Join(t.TempDir(), "missing-record")
+				if err := os.WriteFile(spec.binary, []byte("fixture for an already pinned executable"), 0755); err != nil {
+					t.Fatal(err)
+				}
+				inspected := 0
+				ops := productionMenuCompanionOps(func() error {
+					inspected++
+					return nil // standalone executable pin is valid
+				}, spec)
+				input := strings.NewReader("1\nINSTALL\n")
+				var out bytes.Buffer
+				if menuEnsureCompanion(input, bufio.NewReader(input), &out, spec, ops) {
+					t.Fatal("unrecorded executable reused without verifying installer ownership")
+				}
+				if inspected != 1 || !strings.Contains(out.String(), "will not overwrite") {
+					t.Fatalf("identity admission did not fail closed: inspections=%d output=%q", inspected, out.String())
+				}
+			})
+		}
+	}
+}
+
 func TestCompanionCopyRejectsBadHashAndSize(t *testing.T) {
 	data := []byte(strings.Repeat("test-real-contents", 120))
 	hash := sha256.Sum256(data)

@@ -103,8 +103,9 @@ type menuCompanionOps struct {
 
 func productionMenuCompanionOps(inspect func() error, spec menuCompanionSpec) menuCompanionOps {
 	return menuCompanionOps{
-		inspect: inspect, canInstall: menuCanUpdateNow,
-		download: menuDownloadPinnedCompanion, install: runEmbeddedInstaller,
+		inspect:    func() error { return menuInspectInstalledCompanion(spec, inspect) },
+		canInstall: menuCanUpdateNow,
+		download:   menuDownloadPinnedCompanion, install: runEmbeddedInstaller,
 		stageParent: "/root", localFile: spec.localPath(),
 		copyLocal: menuCopyLocalCompanion,
 	}

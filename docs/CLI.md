@@ -61,10 +61,14 @@ encapsulations/IPsec remain discoverable.
   companion installer. If the official download is unreachable or fails
   verification, the menu offers the local fallback and exact filename;
   it never downloads arbitrary mirrors or silently installs all helpers.
-  Foreign or partially installed companion identity blocks automatic
-  overwrite and requires inspection/reconciliation. The Create/Import
-  Link confirmation remains separate. The installed core does not need to
-  be replaced merely to add an approved optional companion.
+  Reuse requires BOTH the pinned executable and the original trusted,
+  root-owned canonical companion record (exact component, version and
+  executable/archive SHA-256 as applicable). A byte-correct executable
+  with a missing, changed or unsafe record is NOT adopted or silently
+  repaired. Foreign or partially installed identity requires operator
+  inspection/reconciliation. The Create/Import Link confirmation remains
+  separate. The installed core does not need to be replaced merely to add
+  an approved optional companion.
 - Creating a Link selects the **other server's** intended underlay IPv4
   (the remote server may be offline). STL uses a local kernel route lookup
   only to suggest THIS host's assigned IP and interface; **no Ping,
