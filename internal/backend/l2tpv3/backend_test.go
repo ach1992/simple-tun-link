@@ -226,6 +226,16 @@ func (f *fakeFirewall) HasInbound(_ context.Context, _ domain.LinkID, _ linux.In
 func (f *fakeFirewall) HasOwnedInbound(_ context.Context, _ domain.LinkID, _ bool) (bool, error) {
 	return f.active, nil
 }
+func (f *fakeFirewall) FindOwnedInbound(_ context.Context, _ domain.LinkID, _ bool) (linux.InboundFirewallRule, bool, error) {
+	if !f.active {
+		return linux.InboundFirewallRule{}, false, nil
+	}
+	l := testLink()
+	return linux.InboundFirewallRule{
+		Peer: l.Underlay.Peer, Local: l.Underlay.Local,
+		InputInterface: "eth0", Protocol: 115,
+	}, true, nil
+}
 func (f *fakeFirewall) EnsureInboundLocked(_ context.Context, _ domain.LinkID, _ linux.InboundFirewallRule) (func(context.Context) error, bool, error) {
 	old := f.active
 	f.active = true
@@ -432,5 +442,31 @@ func TestDifferentLinkIDsStable(t *testing.T) {
 	}
 	if got := strconv.Itoa(len(one.Addresses.Peer.Addr().String())); got == "" {
 		t.Fatal("unexpected empty peer")
+	}
+}
+
+type brokenL2TPRemoveRoute struct{}
+
+func (brokenL2TPRemoveRoute) Resolve(context.Context, netip.Addr) (linux.Route, error) {
+	return linux.Route{}, errors.New("unreachable peer")
+}
+
+func TestL2TPv3RemoveOwnedTunnelWithoutUnderlayRoute(t *testing.T) {
+	link := testLink()
+	k := newFakeKernel(t, link)
+	fw := &fakeFirewall{}
+	b := testBackend(t, link, k, fw, fakeCollisions{})
+	created, _, err := exercise(t, b, core.Request{Operation: core.OperationEnsure, Link: link})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fw.active = false // firewall already disappeared, committed kernel still owned
+	b.routes = brokenL2TPRemoveRoute{}
+	removed, _, err := exercise(t, b, core.Request{Operation: core.OperationRemove, Prior: &link, Link: link, OwnedResources: created.Resources()})
+	if err != nil || removed.Empty() {
+		t.Fatalf("Remove depended on unreachable underlay: plan=%+v err=%v", removed, err)
+	}
+	if fw.active || k.ifc != nil || len(k.tunnels) != 0 || len(k.sessions) != 0 {
+		t.Fatal("L2TPv3 owned resources remained")
 	}
 }

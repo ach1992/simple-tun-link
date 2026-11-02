@@ -54,23 +54,40 @@ func (e *Engine) retireIPsecCredentialLocked(ctx context.Context, id domain.Link
 	if receipt.Retired {
 		return nil
 	}
-	var retire func(domain.LinkID, string) error
-	if e.ipsecRetirement != nil {
-		retire = e.ipsecRetirement.RetireMatching
-	} else if implementation, registered := e.backends.Get(domain.BackendIPsec); registered {
-		// Compatibility with injected Engine tests; production configures the
-		// same protected store independently of live IPsec runtime admission.
-		if backend, ok := implementation.(interface {
-			RetireCredential(domain.LinkID, string) error
-		}); ok {
-			retire = backend.RetireCredential
+	if receipt.VerifiedAbsent {
+		// A verified-absent receipt must never reach RetireMatching or
+		// synthesize a digest. Repeat descriptor-pinned absence verification
+		// under the same locks immediately before durable finalization.
+		var absent func(domain.LinkID) error
+		if protected, ok := e.ipsecRetirement.(interface{ VerifyAbsent(domain.LinkID) error }); ok {
+			absent = protected.VerifyAbsent
+		} else if impl, registered := e.backends.Get(domain.BackendIPsec); registered {
+			if backend, ok := impl.(interface{ VerifyCredentialAbsent(domain.LinkID) error }); ok {
+				absent = backend.VerifyCredentialAbsent
+			}
 		}
-	}
-	if retire == nil {
-		return fmt.Errorf("protected IPsec retirement store unavailable")
-	}
-	if err := retire(id, receipt.PSKSHA256); err != nil {
-		return fmt.Errorf("IPsec key retirement unconfirmed; protected credential retained for exact reconciliation")
+		if absent == nil || absent(id) != nil {
+			return fmt.Errorf("protected IPsec credential absence is no longer independently verified")
+		}
+	} else {
+		var retire func(domain.LinkID, string) error
+		if e.ipsecRetirement != nil {
+			retire = e.ipsecRetirement.RetireMatching
+		} else if implementation, registered := e.backends.Get(domain.BackendIPsec); registered {
+			// Compatibility with injected Engine tests; production configures the
+			// same protected store independently of live IPsec runtime admission.
+			if backend, ok := implementation.(interface {
+				RetireCredential(domain.LinkID, string) error
+			}); ok {
+				retire = backend.RetireCredential
+			}
+		}
+		if retire == nil {
+			return fmt.Errorf("protected IPsec retirement store unavailable")
+		}
+		if err := retire(id, receipt.PSKSHA256); err != nil {
+			return fmt.Errorf("IPsec key retirement unconfirmed; protected credential retained for exact reconciliation")
+		}
 	}
 	if err := e.store.Update(ctx, func(s *state.Snapshot) error {
 		fresh, present := s.FindIPsecRemovalReceipt(id)
