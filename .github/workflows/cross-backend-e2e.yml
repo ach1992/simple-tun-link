@@ -76,8 +76,10 @@ jobs:
           done
           ip -json fou show
           ip -details -json link show type ipip
-          ip -json l2tp show tunnel
-          ip -json l2tp show session
+          # L2TP generic-netlink queries may require CAP_NET_ADMIN even for reads.
+          # Do not misclassify an unprivileged EPERM as an unsupported module.
+          sudo ip -json l2tp show tunnel
+          sudo ip -json l2tp show session
       - name: Build isolated userspace images
         run: |
           set -euo pipefail
