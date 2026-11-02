@@ -14,6 +14,9 @@ for tool in ip iptables ping python3 sha256sum mktemp; do
 done
 root="$(cd -- "$(dirname -- "$0")/../.." && pwd)"
 cd "$root"
+# Root may inspect an aiworker-owned checkout, but must not refresh or
+# rewrite its Git index/locks as a side effect of the acceptance run.
+export GIT_OPTIONAL_LOCKS=0
 [[ -f go.mod ]] || { echo "REFUSED: absent source identity" >&2; exit 2; }
 temp="$(mktemp -d /tmp/stl-l2tpv3-e2e.XXXXXXXX)"
 suffix="${temp##*.}"
@@ -58,10 +61,10 @@ if [[ -n "${STL_E2E_PREBUILT_TEST:-}" ]]; then
   source_sha="$STL_E2E_SOURCE_SHA"
 else
   command -v git >/dev/null && command -v go >/dev/null || exit 2
-  [[ -z "$(git status --porcelain)" ]] || {
+  [[ -z "$(git -c safe.directory="$root" status --porcelain)" ]] || {
     echo "REFUSED: source tree is dirty; immutable evidence cannot be established" >&2; exit 2;
   }
-  source_sha="$(git rev-parse HEAD)"
+  source_sha="$(git -c safe.directory="$root" rev-parse HEAD)"
   GOTOOLCHAIN=local go test -c -o "$temp/l2tp.test" ./cmd/stl
 fi
 chmod 700 "$temp/l2tp.test"
