@@ -51,3 +51,38 @@ func TestIPsecRemovalReceiptRejectsAmbiguousAuthorization(t *testing.T) {
 		})
 	}
 }
+
+// A verified-absent receipt carries *no digest*. It authorizes only
+// receipt-bound read-only confirmation; a present-key digest uses the
+// original strict SHA-256 representation. Both identities are exclusive.
+func TestIPsecRemovalReceiptValidatedAbsentCredentialMode(t *testing.T) {
+	id := domain.LinkID("lnk_01010101010101010101010101010101")
+	clean := EmptySnapshot()
+	clean.IPsecRemovalReceipts = []IPsecRemovalReceipt{{LinkID: id, VerifiedAbsent: true}}
+	if err := validateSnapshot(clean); err != nil {
+		t.Fatalf("verified-absent receipt rejected: %v", err)
+	}
+	clean.IPsecRemovalReceipts[0].Retired = true
+	if err := validateSnapshot(clean); err != nil {
+		t.Fatalf("retired verified-absent receipt rejected: %v", err)
+	}
+	for _, tc := range []struct {
+		name  string
+		alter func(*IPsecRemovalReceipt)
+	}{
+		{"digest-and-absent", func(r *IPsecRemovalReceipt) {
+			r.PSKSHA256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+		}},
+		{"absent-not-declared", func(r *IPsecRemovalReceipt) { r.VerifiedAbsent = false }},
+		{"duplicate", func(r *IPsecRemovalReceipt) { r.LinkID = "../foreign" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := clean
+			candidate.IPsecRemovalReceipts = append([]IPsecRemovalReceipt(nil), clean.IPsecRemovalReceipts...)
+			tc.alter(&candidate.IPsecRemovalReceipts[0])
+			if err := validateSnapshot(candidate); err == nil {
+				t.Fatal("ambiguous receipt identity accepted")
+			}
+		})
+	}
+}

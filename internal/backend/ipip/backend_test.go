@@ -155,6 +155,19 @@ func (f *fakeFirewall) HasInbound(_ context.Context, _ domain.LinkID, rule linux
 func (f *fakeFirewall) HasOwnedInbound(context.Context, domain.LinkID, bool) (bool, error) {
 	return f.present, nil
 }
+func (f *fakeFirewall) FindOwnedInbound(_ context.Context, _ domain.LinkID, _ bool) (linux.InboundFirewallRule, bool, error) {
+	if !f.present {
+		return linux.InboundFirewallRule{}, false, nil
+	}
+	if f.lastRule.Protocol == 0 {
+		link := testLink()
+		return linux.InboundFirewallRule{
+			Peer: link.Underlay.Peer, Local: link.Underlay.Local,
+			InputInterface: "eth0", Protocol: 4,
+		}, true, nil
+	}
+	return f.lastRule, true, nil
+}
 func (f *fakeFirewall) EnsureInboundLocked(_ context.Context, _ domain.LinkID, rule linux.InboundFirewallRule) (func(context.Context) error, bool, error) {
 	f.lastRule = rule
 	if f.failEnsure {
@@ -651,4 +664,64 @@ func (r *fakeRunner) RunBounded(ctx context.Context, limits linux.CaptureLimits,
 		return linux.CommandResult{}, linux.ErrOutputLimit
 	}
 	return output, err
+}
+
+type brokenIPIPRemoveRoute struct{}
+
+func (brokenIPIPRemoveRoute) Resolve(context.Context, netip.Addr) (linux.Route, error) {
+	return linux.Route{}, errors.New("no route to peer")
+}
+
+func TestIPIPRemoveOwnedTunnelWithoutUnderlayRoute(t *testing.T) {
+	for _, encap := range []domain.Encapsulation{domain.EncapNative, domain.EncapFOU, domain.EncapGUE} {
+		t.Run(string(encap), func(t *testing.T) {
+			link := testLink()
+			link.Encapsulation = encap
+			name, _ := InterfaceName(link.ID)
+			runner, fw := &fakeRunner{link: link, name: name}, &fakeFirewall{}
+			b := newTestBackend(t, runner, fw, fakeCollisions{})
+			ctx := context.Background()
+			ensure := core.Request{Operation: core.OperationEnsure, Link: link}
+			observed, err := b.Inspect(ctx, link)
+			if err != nil {
+				t.Fatal(err)
+			}
+			create, err := b.Plan(ctx, ensure, observed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := b.Validate(ctx, ensure, observed, create); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := b.Apply(ctx, ensure, observed, create); err != nil {
+				t.Fatal(err)
+			}
+			resources := create.Resources()
+			if encap == domain.EncapGUE {
+				fw.present = false
+			}
+			b.routes = brokenIPIPRemoveRoute{}
+			observed, err = b.Inspect(ctx, link)
+			if err != nil {
+				t.Fatal(err)
+			}
+			remove := core.Request{Operation: core.OperationRemove, Prior: &link, Link: link, OwnedResources: resources}
+			plan, err := b.Plan(ctx, remove, observed)
+			if err != nil {
+				t.Fatalf("Remove depended on dead route: %v", err)
+			}
+			if err := b.Validate(ctx, remove, observed, plan); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := b.Apply(ctx, remove, observed, plan); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := b.Verify(ctx, remove); err != nil {
+				t.Fatal(err)
+			}
+			if runner.state.Exists || fw.present || len(runner.mappings) != 0 {
+				t.Fatal("IPIP owned objects remained")
+			}
+		})
+	}
 }

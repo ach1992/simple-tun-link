@@ -20,6 +20,7 @@ import (
 	wgbackend "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
+	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
@@ -135,7 +136,11 @@ func executeLinkMutationControlled(operation string, desired domain.Link, id dom
 	}
 	if options == nil {
 		var err error
-		options, err = productionRuntimeOptions()
+		if operation == "link_remove" {
+			options, err = productionRemovalRuntimeOptions(id)
+		} else {
+			options, err = productionRuntimeOptions()
+		}
 		if err != nil {
 			return lifecycleFailureWithEvidence(stdout, stderr, jsonOutput, stlerr.CodeState, operation, nil,
 				"cannot initialize backend/runtime; no success is confirmed", preflightEvidence(), nil)
@@ -274,6 +279,9 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 		case evidence.Stage == "credential_provision" && evidence.CredentialProvision == "attempted":
 			safe.ReasonCode = "credential_provision_outcome_unverified"
 			safe.NextStep = "A protected local key write was attempted; reconcile the exact key identity and saved Link intent before retry. No backend Apply was invoked."
+		case observedPublic != nil && observedPublic.ReasonCode == "kernel_module_not_loaded" && operation == "link_remove":
+			safe.ReasonCode = "kernel_module_not_loaded"
+			safe.NextStep = "Remove must not require Create preparation or a reachable peer. Local owner/vacancy inspection is currently unverified; inspect the saved Link and its exact local resources before owner-scoped reconciliation. Do not erase State or unrelated interfaces."
 		case observedPublic != nil && observedPublic.ReasonCode == "kernel_module_not_loaded":
 			safe.ReasonCode = "kernel_module_not_loaded"
 			safe.NextStep = "Inspect the matching kernel module and supported host packages; load it only with operator authorization, then retry read-only checks."
@@ -295,8 +303,11 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 		case evidence.HostMutation == "not_attempted" && errors.Is(observed, context.Canceled):
 			safe.ReasonCode = "operation_cancelled_before_apply"
 			safe.NextStep = "Operation was canceled before backend Apply; inspect Link state and retry only if still intended."
+		case evidence.HostMutation == "not_attempted" && operation == "link_remove":
+			safe.ReasonCode = "rejected_before_host_apply"
+			safe.NextStep = "Inspect only this Link's saved owner identity, local kernel, firewall, helper and recovery journal. No remote connectivity or Create preparation is needed; reconcile uncertain resources before retrying removal. Engine did not invoke host Apply."
 		case observedPublic != nil && observedPublic.ReasonCode == "local_underlay_unverified" &&
-			evidence.HostMutation == "not_attempted" && (evidence.Stage == "plan" || evidence.Stage == "validate"):
+			operation != "link_remove" && evidence.HostMutation == "not_attempted" && (evidence.Stage == "plan" || evidence.Stage == "validate"):
 			safe.ReasonCode = "local_underlay_unverified"
 			safe.NextStep = "Inspect ip -json address show on THIS server. Choose a uniquely assigned local IPv4/interface in the menu or correct the request's local underlay IP. Creating or importing does not require peer reachability; no host Apply was invoked."
 		case evidence.HostMutation == "not_attempted":
@@ -320,7 +331,7 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 	// instead of overwriting it with the generic rejected_before_host_apply.
 	if observedPublic != nil && evidence != nil &&
 		evidence.Stage == "plan" && evidence.HostMutation == "not_attempted" &&
-		observedPublic.Backend == string(domain.BackendGRE) {
+		observedPublic.Backend == string(domain.BackendGRE) && operation != "link_remove" {
 		switch observedPublic.ReasonCode {
 		case "gre_underlay_route_unverified", "gre_underlay_source_mismatch",
 			"gre_firewall_readback_unverified", "gre_firewall_ownership_unverified",
@@ -724,4 +735,42 @@ func restoreFailureGuidance(kind linux.RestoreFailureKind) string {
 	default:
 		return ""
 	}
+}
+
+// productionRemovalRuntimeOptions is deliberately scoped to the saved
+// backend. The initial read selects construction only; the canonical
+// Engine re-loads State under its maintenance and Link locks before
+// any mutation, rejecting concurrent changes instead of adopting them.
+func productionRemovalRuntimeOptions(id domain.LinkID) (*runtimeOptions, error) {
+	return removalRuntimeOptionsForState(state.DefaultRoot, id)
+}
+
+// This first State read selects only the backend constructor; it is never
+// used as removal authority and is always refreshed under Engine locks.
+func removalRuntimeOptionsForState(root string, id domain.LinkID) (*runtimeOptions, error) {
+	if err := id.Validate(); err != nil {
+		return nil, err
+	}
+	kind, err := savedBackendForRemoval(root, id)
+	if err != nil {
+		return nil, err
+	}
+	return assembleRuntimeOptionsForBackend(root, kind)
+}
+
+// A saved backend is a construction hint, not deletion authority. The
+// canonical Engine always reloads and validates State under its locks.
+func savedBackendForRemoval(root string, id domain.LinkID) (domain.Backend, error) {
+	if err := id.Validate(); err != nil {
+		return "", err
+	}
+	snapshot, err := state.NewFileStore(root).Load(context.Background())
+	if err != nil {
+		return "", err
+	}
+	saved, exists := snapshot.Find(id)
+	if !exists {
+		return "", state.ErrNotFound
+	}
+	return saved.Desired.Backend, nil
 }

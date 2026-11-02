@@ -109,6 +109,21 @@ operator-initiated attempt; safety and credential protection still apply.
    remove and restore only correctly identified STL-owned resources;
    distinguish successful completion, partial effects and uncertainty.
    Repeated desired-state operations should converge idempotently.
+   **All backends:** Remove of a saved Link is a local owner-scoped cleanup,
+   independent of peer reachability, underlay route/source, parent Link,
+   tunnel health, Create-only prerequisites and unrelated backend readiness.
+   Recover exact owned firewall/interface/service identities from committed
+   State and local inspection, never by resolving a new route. Unverified,
+   interrupted or foreign host state requires specific owner-scoped recovery;
+   preserve durable evidence rather than deleting unrelated resources or
+   incorrectly reporting success.
+   A committed IPsec Link whose protected PSK was independently proven
+   already absent and whose exact XFRM device, policies, SAs and scoped VICI
+   objects are all verifiably vacant may be finalized through the same locked
+   Remove transaction and a distinct no-digest absence receipt. Never
+   synthesize a PSK digest or unload live resources without a rollback key;
+   unsafe/foreign/unknown credential paths and interrupted journals require
+   owner-scoped reconciliation.
 4. **Independent multi-Link operation.** Allow independent Links and backend
    combinations without an arbitrary product-imposed count or
    one-Link-per-peer assumption; resolve genuine kernel, address, service,

@@ -111,7 +111,13 @@ encapsulations/IPsec remain discoverable.
   An already verified matching SA never triggers a second IKE initiation.
   **Test connectivity** never creates an SA, changes services or silently
   repairs. A human Remove requires a fresh `REMOVE`
-  after preview. **Test connectivity → A Check all tunnels** uses the
+  after preview. **Remove does not need an online peer, a working Link,
+  a current underlay route, or creation-only readiness** for GRE, IPIP,
+  L2TPv3, WireGuard, WSS, QUIC or IPsec. It still checks saved ownership
+  and verifies the absence of actual host resources before committing.
+  Foreign or uncertain local state requires exact owner-scoped recovery;
+  it must never be silently forgotten or marked removed.
+  **Test connectivity → A Check all tunnels** uses the
   existing versioned all-Link diagnostic report, presented as a compact
   table of peer IP, Ping replies and time-local results. Unverified or
   blocked checks retain their reason/next step; detailed MTU, counters
@@ -233,6 +239,34 @@ stl link restore --all
 stl doctor ipsec [--json]
 stl maintenance pre-uninstall --json
 ~~~
+
+Removal is **local, not a connection test**: it works with a dead peer,
+lost underlay route and previously lost STL-owned ingress firewall rule,
+using the exact committed Link ownership and current host inventory.
+GRE/IPIP Native, FOU and GUE plus native L2TPv3 recover their original
+rule without recalculating it from the current route. Native WireGuard,
+WSS/QUIC and admitted IPsec already avoid peer-route dependencies.
+The runtime used by a removal constructs only the saved Link's backend,
+so an unrelated optional backend's readiness cannot block it.
+
+An unresolved partial removal, a missing rollback credential needed for
+**live** host effects, unknown kernel/service resource identity, or an
+unadmitted IPsec VICI writer is **not** permission to delete another service.
+An IPsec Link whose entire scoped XFRM/VICI/SA/policy footprint is proven
+vacant and whose protected original PSK file is independently proven absent
+is the narrow exception: ordinary Remove (and explicit interrupted-journal
+reconciliation) can complete State cleanup, retaining a distinct durable
+`verified_absent` retirement receipt without inventing a digest. This path
+never calls VICI unload, XFRM deletion or credential deletion; it rechecks
+absence under the canonical locks before every no-effect journal transition.
+A symlink, unreadable/corrupt/foreign private file, missing trusted
+credential directory, remaining SA/policy, competing journal, changed
+interface identity or any uncertain observation still blocks Remove.
+These are explicit local reconciliation gates; the CLI must not report
+success without proof.
+For interactive use choose **My tunnels -> Remove this tunnel** and
+confirm `REMOVE`; a separate Link's resources are not selected.
+
 
 **Read-only/local observation:** `list`, `status`, `preview`,
 `export`, `doctor`, `maintenance pre-uninstall` and `version`.
@@ -413,7 +447,9 @@ absent Link alone. IPsec uses corresponding exact staged
 `activate-ipsec`, `connect-ipsec`, explicit
 `reconcile-ipsec`/`reconcile-xfrm-ipsec` and receipt-bound
 `retire-ipsec`; PSK retirement does not require a currently
-running strongSwan service. Unknown VICI/XFRM effects and absent
+running strongSwan service. An independently verified already-absent
+IPsec credential uses a separate no-digest retirement receipt; ordinary
+present credentials continue to require exact SHA-256 identity at deletion. Unknown VICI/XFRM effects and absent
 recorded original ifindex are not deletion authority. `stl doctor
 ipsec --json` is read-only and distinguishes absent/unknown/foreign
 from positively admitted private runtime.
