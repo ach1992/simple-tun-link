@@ -38,7 +38,7 @@ func (p KernelModuleProbe) Observe(ctx context.Context, module string) KernelMod
 	}
 	// No caller-controlled paths or unrestricted module identifier strings.
 	switch module {
-	case "fou", "ipip", "ip_gre":
+	case "fou", "ipip", "ip_gre", "l2tp_ip", "l2tp_eth":
 	default:
 		return KernelModuleUnknown
 	}

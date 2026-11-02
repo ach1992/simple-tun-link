@@ -34,7 +34,7 @@ func loadTrustedKernelModule(ctx context.Context, module string,
 		return errors.New("module loader is unavailable")
 	}
 	switch module {
-	case "fou", "ipip", "ip_gre":
+	case "fou", "ipip", "ip_gre", "l2tp_ip", "l2tp_eth":
 	default:
 		return errors.New("module outside selected kernel allowlist")
 	}
