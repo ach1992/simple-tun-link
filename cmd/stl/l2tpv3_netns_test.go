@@ -42,6 +42,17 @@ func (r *l2tpPostEffectRunner) Run(ctx context.Context, binary string, args ...s
 	return out, err
 }
 
+// This real-kernel fault-injection wrapper must preserve capture-time
+// limits on read-only address inventory. The post-effect fault remains
+// scoped to ordinary kernel mutation calls in Run above.
+func (r *l2tpPostEffectRunner) RunBounded(ctx context.Context, limits linux.CaptureLimits, binary string, args ...string) (linux.CommandResult, error) {
+	bounded, ok := r.Runner.(linux.BoundedRunner)
+	if !ok {
+		return linux.CommandResult{}, errors.New("L2TPv3 test runner has no bounded capture")
+	}
+	return bounded.RunBounded(ctx, limits, binary, args...)
+}
+
 func realL2TPInterfaceMTU(ctx context.Context, runner linux.Runner, name string) (index, mtu int, err error) {
 	result, err := runner.Run(ctx, "ip", "-json", "link", "show", "dev", name)
 	if err != nil {

@@ -22,6 +22,7 @@ import (
 )
 
 type fakeKernel struct {
+	localUnderlay     netip.Addr
 	target            observedLink
 	others            []observedLink
 	calls             [][]string
@@ -44,6 +45,12 @@ func (f *fakeKernel) Run(_ context.Context, binary string, args ...string) (linu
 		return linux.CommandResult{}, errors.New("synthetic add failure")
 	}
 	switch {
+	case binary == "ip" && reflect.DeepEqual(args, []string{"-json", "address", "show"}):
+		if !f.localUnderlay.IsValid() {
+			return linux.CommandResult{}, errors.New("fixture local underlay missing")
+		}
+		raw := fmt.Sprintf(`[{"ifname":"eth0","addr_info":[{"family":"inet","local":%q,"prefixlen":24}]}]`, f.localUnderlay.String())
+		return linux.CommandResult{Stdout: []byte(raw)}, nil
 	case binary == "ip" && reflect.DeepEqual(args, []string{"-details", "-json", "link", "show", "type", "wireguard"}):
 		if !f.target.Exists {
 			return linux.CommandResult{Stdout: []byte("[]")}, nil
@@ -175,11 +182,21 @@ func (f *fakeKernel) Run(_ context.Context, binary string, args ...string) (linu
 }
 
 // Test runner's output is bounded by the deterministic fake inventory.
-func (f *fakeKernel) RunBounded(ctx context.Context, _ linux.CaptureLimits, binary string, args ...string) (linux.CommandResult, error) {
+func (f *fakeKernel) RunBounded(ctx context.Context, limits linux.CaptureLimits, binary string, args ...string) (linux.CommandResult, error) {
+	if limits.Stdout <= 0 || limits.Stderr <= 0 {
+		return linux.CommandResult{}, linux.ErrOutputLimit
+	}
+	if err := ctx.Err(); err != nil {
+		return linux.CommandResult{}, err
+	}
 	if binary == "ss" && reflect.DeepEqual(args, []string{"-H", "-u", "-l", "-n"}) {
 		return linux.CommandResult{}, nil // fixed synthetic host has no UDP sockets
 	}
-	return f.Run(ctx, binary, args...)
+	out, err := f.Run(ctx, binary, args...)
+	if len(out.Stdout) > limits.Stdout || len(out.Stderr) > limits.Stderr {
+		return linux.CommandResult{}, linux.ErrOutputLimit
+	}
+	return out, err
 }
 
 func (f *fakeKernel) RunWithFiles(_ context.Context, binary string, files []*os.File, args ...string) (linux.CommandResult, error) {
@@ -292,7 +309,7 @@ func fixture(t *testing.T) (*Backend, domain.Link, *KeyStore, *fakeKernel, *fake
 	if err := keys.PutNew(link.ID, local); err != nil {
 		t.Fatal(err)
 	}
-	fake := &fakeKernel{wantSecret: local.SecretWireValue()}
+	fake := &fakeKernel{wantSecret: local.SecretWireValue(), localUnderlay: link.Underlay.Local}
 	fw := &fakeFirewall{}
 	b, err := New(Options{Runner: fake, Routes: fakeRoute{link.Underlay.Local}, Firewall: fw, Collisions: fakeCollisions{}, Keys: keys,
 		LookupIndex: func(name string) (int, error) {

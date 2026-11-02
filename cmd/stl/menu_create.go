@@ -226,14 +226,16 @@ func menuCreatePlain(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	runner := createRunner(options)
-	route, err := (linux.RouteResolver{Runner: runner}).Resolve(ctx, peer)
-	if err != nil || !route.Source.Is4() || !route.Source.IsGlobalUnicast() ||
-		route.Source.IsLoopback() || route.Source == peer {
-		fmt.Fprintln(errOut, "Cannot establish a usable local IPv4 source and route to that peer; nothing applied.")
+	route, err := askLocalUnderlay(p, runner, peer)
+	if err != nil {
+		if err == errCreateCancelled || err == io.EOF {
+			return p.failed(err)
+		}
+		fmt.Fprintln(errOut, "No verified local IPv4/interface was selected; no Link was created. Inspect ip -json address show, then retry with an assigned local address.")
 		return 4
 	}
 	menuSection(out, "Connection settings")
-	menuField(out, "This server", route.Source.String()+" (automatic)")
+	menuField(out, "This server", route.Source.String()+" (selected local)")
 	menuField(out, "Other server", peer.String())
 	menuField(out, "Network device", safeMenuText(route.Device))
 

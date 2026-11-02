@@ -39,19 +39,29 @@ func testLink() domain.Link {
 }
 
 type fakeRunner struct {
-	link                 domain.Link
-	name                 string
-	state                observedLink
-	extra                []observedLink
-	mappings             []fouMapping
-	commands             []string
-	addressIndexOverride int
+	link                   domain.Link
+	name                   string
+	state                  observedLink
+	extra                  []observedLink
+	mappings               []fouMapping
+	commands               []string
+	addressIndexOverride   int
+	assignedSourceOverride string
 }
 
 func (r *fakeRunner) Run(_ context.Context, name string, args ...string) (linux.CommandResult, error) {
 	r.commands = append(r.commands, strings.Join(append([]string{name}, args...), " "))
 	joined := strings.Join(args, " ")
 	switch {
+	// Fixture-backed exact host assignment: success-path route hints are
+	// independently verified just like production underlay admission.
+	case joined == "-json address show":
+		assigned := r.link.Underlay.Local.String()
+		if r.assignedSourceOverride != "" {
+			assigned = r.assignedSourceOverride
+		}
+		raw := fmt.Sprintf(`[{"ifname":"eth0","addr_info":[{"family":"inet","local":%q,"prefixlen":24}]}]`, assigned)
+		return linux.CommandResult{Stdout: []byte(raw)}, nil
 	case joined == "-details -json link show type gre":
 		rows := make([]linkJSON, 0, 1+len(r.extra))
 		for _, state := range append([]observedLink{r.state}, r.extra...) {
@@ -168,13 +178,28 @@ func (r fakeRoute) Resolve(context.Context, netip.Addr) (linux.Route, error) { r
 type fakeFirewall struct {
 	present    bool
 	failEnsure bool
+	lastRule   linux.InboundFirewallRule
 }
 
-func (f *fakeFirewall) HasInbound(context.Context, domain.LinkID, linux.InboundFirewallRule) (bool, error) {
+func (f *fakeFirewall) HasInbound(_ context.Context, _ domain.LinkID, rule linux.InboundFirewallRule) (bool, error) {
+	f.lastRule = rule
 	return f.present, nil
 }
 func (f *fakeFirewall) HasOwnedInbound(context.Context, domain.LinkID, bool) (bool, error) {
 	return f.present, nil
+}
+func (f *fakeFirewall) FindOwnedInbound(_ context.Context, id domain.LinkID, _ bool) (linux.InboundFirewallRule, bool, error) {
+	if !f.present {
+		return linux.InboundFirewallRule{}, false, nil
+	}
+	// The fake's original rule is on eth0, irrespective of later routes.
+	if f.lastRule.Protocol != 0 {
+		return f.lastRule, true, nil
+	}
+	return linux.InboundFirewallRule{
+		Peer: testLink().Underlay.Peer, Local: testLink().Underlay.Local,
+		InputInterface: "eth0", Protocol: 47,
+	}, true, nil
 }
 func (f *fakeFirewall) EnsureInboundLocked(context.Context, domain.LinkID, linux.InboundFirewallRule) (func(context.Context) error, bool, error) {
 	if f.failEnsure {
@@ -1237,5 +1262,83 @@ func TestNativeGREAddressObservationRejectsNameReuseAcrossIfindexes(t *testing.T
 	}
 	if !runner.state.Exists || runner.state.IfIndex != 77 || runner.state.Owner != "" {
 		t.Fatalf("mismatched observation modified or destroyed interface: %#v", runner.state)
+	}
+}
+
+// Test double for a capture-bounded host inventory read. It must never
+// turn a call to RunBounded into an unchecked unbounded success.
+func (r *fakeRunner) RunBounded(ctx context.Context, limits linux.CaptureLimits, name string, args ...string) (linux.CommandResult, error) {
+	if limits.Stdout <= 0 || limits.Stderr <= 0 {
+		return linux.CommandResult{}, linux.ErrOutputLimit
+	}
+	if err := ctx.Err(); err != nil {
+		return linux.CommandResult{}, err
+	}
+	output, err := r.Run(ctx, name, args...)
+	if len(output.Stdout) > limits.Stdout || len(output.Stderr) > limits.Stderr {
+		return linux.CommandResult{}, linux.ErrOutputLimit
+	}
+	return output, err
+}
+
+// All GRE modes must delete their *old* owned objects after the route to
+// the peer has vanished; Restore/Ensure still require a live route.
+func TestGRERemoveOwnedTunnelWithoutUnderlayRoute(t *testing.T) {
+	for _, encap := range []domain.Encapsulation{domain.EncapNative, domain.EncapFOU, domain.EncapGUE} {
+		t.Run(string(encap), func(t *testing.T) {
+			link := testLink()
+			link.Encapsulation = encap
+			if encap != domain.EncapNative {
+				link.GRE.UDPPort = 51231
+			}
+			name, _ := InterfaceName(link.ID)
+			runner, fw := &fakeRunner{link: link, name: name}, &fakeFirewall{}
+			b := newTestBackend(t, runner, fw, fakeCollisions{})
+			ctx := context.Background()
+			ensure := core.Request{Operation: core.OperationEnsure, Link: link}
+			observed, err := b.Inspect(ctx, link)
+			if err != nil {
+				t.Fatal(err)
+			}
+			create, err := b.Plan(ctx, ensure, observed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := b.Validate(ctx, ensure, observed, create); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := b.Apply(ctx, ensure, observed, create); err != nil {
+				t.Fatal(err)
+			}
+			resources := create.Resources()
+			// A terminally degraded Link may also have lost its own
+			// firewall rule before Remove. Recovery must still clean the
+			// exact owned interface and FOU mapping if they remain.
+			if encap == domain.EncapFOU {
+				fw.present = false
+			}
+			b.routes = brokenGREPlanRoute{} // route cannot be resolved anymore
+			observed, err = b.Inspect(ctx, link)
+			if err != nil {
+				t.Fatal(err)
+			}
+			remove := core.Request{Operation: core.OperationRemove, Prior: &link, Link: link, OwnedResources: resources}
+			plan, err := b.Plan(ctx, remove, observed)
+			if err != nil {
+				t.Fatalf("Remove depended on dead route: %v", err)
+			}
+			if err := b.Validate(ctx, remove, observed, plan); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := b.Apply(ctx, remove, observed, plan); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := b.Verify(ctx, remove); err != nil {
+				t.Fatal(err)
+			}
+			if runner.state.Exists || fw.present || len(runner.mappings) != 0 {
+				t.Fatal("GRE owned objects remained")
+			}
+		})
 	}
 }

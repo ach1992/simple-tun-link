@@ -246,7 +246,7 @@ func TestOperatorInputErrorsRemainInMenuWithoutHostMutation(t *testing.T) {
 	code, out, errText := runGuidedTest(opts, input)
 	if code != 0 || len(fake.applies) != 0 || !strings.Contains(out, "Choose one of the listed numbers") ||
 		!strings.Contains(out, "Use a private IPv4") ||
-		!strings.Contains(out, "Enter an actual reachable IPv4") ||
+		!strings.Contains(out, "no ping or live connection required") ||
 		!strings.Contains(out, "Create cancelled") ||
 		strings.Contains(out+errText, "BAD-IP") {
 		t.Fatalf("invalid prompt lost menu safety: %d %q %q", code, out, errText)
@@ -309,7 +309,7 @@ func TestOperatorManualGREPairedOnBothServersWithoutSetupLink(t *testing.T) {
 	fa := &guidedTestBackend{lifecycleFakeBackend: newLifecycleFake()}
 	fb := &guidedTestBackend{lifecycleFakeBackend: newLifecycleFake()}
 	first := guidedTestOptions(firstRoot, &guidedTestRunner{}, fa)
-	second := guidedTestOptions(secondRoot, &guidedTestRunner{}, fb)
+	second := guidedTestOptions(secondRoot, &guidedTestRunner{localIPv4: "192.0.2.20"}, fb)
 	scriptA := "1\n4\n1\n192.0.2.20\n10.235.1.1\n10.235.1.2\n\nn\nYES\nn\n8\n"
 	scriptB := "1\n4\n1\n192.0.2.10\n10.235.1.2\n10.235.1.1\n\nn\nYES\nn\n8\n"
 	code, out, errText := runGuidedTest(first, scriptA)
@@ -347,7 +347,7 @@ func TestOperatorAutoDetectsServerIPAndEnterAcceptsBothTunnelIPs(t *testing.T) {
 	code, out, errText := runGuidedTest(guidedTestOptions(root, &guidedTestRunner{}, fake),
 		"1\n1\n192.0.2.20\n\nn\nYES\nn\n8\n")
 	if code != 0 || errText != "" || len(fake.applies) != 1 ||
-		!strings.Contains(out, "192.0.2.10 (automatic)") ||
+		!strings.Contains(out, "192.0.2.10 (selected local)") ||
 		!strings.Contains(out, "TUNNEL ADDRESSES") ||
 		!strings.Contains(out, "Tunnel IP on THIS server (Enter=use suggested;") {
 		t.Fatalf("auto IP default did not complete: %d %q %q", code, out, errText)
@@ -392,7 +392,7 @@ func TestOperatorManualKeyedGRECanReproduceSavedPeerWithoutSetupLink(t *testing.
 		t.Fatalf("saved Link details lack two-server manual instructions: %d %q %q", menuCode, details, menuErrors)
 	}
 	bFake := &guidedTestBackend{lifecycleFakeBackend: newLifecycleFake()}
-	secondOpts := guidedTestOptions(rootB, &guidedTestRunner{}, bFake)
+	secondOpts := guidedTestOptions(rootB, &guidedTestRunner{localIPv4: "192.0.2.20"}, bFake)
 	input := "1\n4\n1\n192.0.2.10\n10.235.1.2\n10.235.1.1\n" +
 		fmt.Sprint(linkA.GRE.Key) + "\nn\nYES\nn\n8\n"
 	code, out, errText := runGuidedTest(secondOpts, input)
@@ -425,6 +425,8 @@ func TestOperatorManualIPIPNativeWithoutSetupLink(t *testing.T) {
 	}
 	a := build(firstRoot, f1)
 	b := build(secondRoot, f2)
+	// Each simulated peer has a genuinely different locally assigned IP.
+	b.probeRunner = &guidedTestRunner{localIPv4: "192.0.2.20"}
 	for i, tc := range []struct {
 		opts  *runtimeOptions
 		input string

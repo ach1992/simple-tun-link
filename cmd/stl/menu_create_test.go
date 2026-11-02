@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/netip"
 	"os"
@@ -24,10 +25,15 @@ import (
 const createTestID = domain.LinkID("lnk_ffffffffffffffffffffffffffffffff")
 
 type guidedTestRunner struct {
-	routeFail      bool
-	capabilityFail bool
-	routes         string
-	calls          []string
+	routeFail        bool
+	routeFailAll     bool
+	localIPv4        string
+	localInventory   string
+	routeWrongDevice bool
+	routeWrongSource bool
+	capabilityFail   bool
+	routes           string
+	calls            []string
 }
 
 func (r *guidedTestRunner) Run(_ context.Context, name string, args ...string) (linux.CommandResult, error) {
@@ -36,12 +42,21 @@ func (r *guidedTestRunner) Run(_ context.Context, name string, args ...string) (
 	output := ""
 	switch command {
 	case "ip -4 -json route get 192.0.2.10":
+		if r.routeFailAll {
+			return linux.CommandResult{}, errors.New("no route to local peer")
+		}
 		output = "[{\"dst\":\"192.0.2.10\",\"dev\":\"eth0\",\"prefsrc\":\"192.0.2.20\",\"gateway\":\"192.0.2.1\",\"mtu\":1500}]"
 	case "ip -4 -json route get 192.0.2.20":
-		if r.routeFail {
+		if r.routeFail || r.routeFailAll {
 			return linux.CommandResult{}, errors.New("opaque, potentially sensitive route error")
 		}
 		output = "[{\"dst\":\"192.0.2.20\",\"dev\":\"eth0\",\"prefsrc\":\"192.0.2.10\",\"gateway\":\"192.0.2.1\",\"mtu\":1500}]"
+		if r.routeWrongDevice {
+			output = "[{\"dst\":\"192.0.2.20\",\"dev\":\"wrong0\",\"prefsrc\":\"192.0.2.10\"}]"
+		}
+		if r.routeWrongSource {
+			output = "[{\"dst\":\"192.0.2.20\",\"dev\":\"eth0\",\"prefsrc\":\"198.51.100.11\"}]"
+		}
 	case "ip -4 -json route get 10.0.0.5":
 		output = "[{\"dst\":\"10.0.0.5\",\"dev\":\"eth0\",\"prefsrc\":\"192.0.2.10\",\"gateway\":\"192.0.2.1\",\"mtu\":1500}]"
 	case "ip -json -details link show type gre":
@@ -56,7 +71,14 @@ func (r *guidedTestRunner) Run(_ context.Context, name string, args ...string) (
 	case "ip -json link show":
 		output = "[{\"ifname\":\"eth0\",\"ifalias\":\"\"}]"
 	case "ip -json address show":
-		output = "[{\"ifname\":\"eth0\",\"addr_info\":[{\"local\":\"192.0.2.10\",\"prefixlen\":24}]}]"
+		if r.localInventory != "" {
+			return linux.CommandResult{Stdout: []byte(r.localInventory)}, nil
+		}
+		ip := r.localIPv4
+		if ip == "" {
+			ip = "192.0.2.10"
+		}
+		output = fmt.Sprintf(`[{"ifname":"eth0","addr_info":[{"family":"inet","local":%q,"prefixlen":24}]}]`, ip)
 	case "ip -json route show table all":
 		if r.routes == "" {
 			output = "[{\"dst\":\"192.0.2.0/24\",\"dev\":\"eth0\"}]"
@@ -341,7 +363,7 @@ func TestGuidedGRECreateRealPTYConfirmedJourney(t *testing.T) {
 	send("1")
 	expect("Tunnel type [1]: ")
 	send("1")
-	expect("Other server's reachable IPv4 address")
+	expect("Other server's IPv4 address (peer may be offline")
 	send("192.0.2.20")
 	expect("Tunnel IP on THIS server")
 	send("")
@@ -548,4 +570,20 @@ func TestGuidedGRECreateAutoCandidatesSkipKnownPeerUnderlay(t *testing.T) {
 		t.Fatalf("automatic candidate did not exclude known peer underlay: got=%s available=%t err=%v",
 			got, available, err)
 	}
+}
+
+// Test double for a capture-bounded host inventory read. It must never
+// turn a call to RunBounded into an unchecked unbounded success.
+func (r *guidedTestRunner) RunBounded(ctx context.Context, limits linux.CaptureLimits, name string, args ...string) (linux.CommandResult, error) {
+	if limits.Stdout <= 0 || limits.Stderr <= 0 {
+		return linux.CommandResult{}, linux.ErrOutputLimit
+	}
+	if err := ctx.Err(); err != nil {
+		return linux.CommandResult{}, err
+	}
+	output, err := r.Run(ctx, name, args...)
+	if len(output.Stdout) > limits.Stdout || len(output.Stderr) > limits.Stderr {
+		return linux.CommandResult{}, linux.ErrOutputLimit
+	}
+	return output, err
 }

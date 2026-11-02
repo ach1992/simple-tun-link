@@ -2,6 +2,7 @@ package gre
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -19,6 +20,7 @@ type RouteResolver interface {
 type Firewall interface {
 	HasInbound(context.Context, domain.LinkID, linux.InboundFirewallRule) (bool, error)
 	HasOwnedInbound(context.Context, domain.LinkID, bool) (bool, error)
+	FindOwnedInbound(context.Context, domain.LinkID, bool) (linux.InboundFirewallRule, bool, error)
 	EnsureInboundLocked(context.Context, domain.LinkID, linux.InboundFirewallRule) (func(context.Context) error, bool, error)
 	RemoveInboundLocked(context.Context, domain.LinkID, linux.InboundFirewallRule) (bool, error)
 }
@@ -201,43 +203,81 @@ func (b *Backend) Plan(ctx context.Context, req core.Request, observed core.Obse
 		return nil, err
 	}
 	name, _ := InterfaceName(req.Link.ID)
-	route, err := b.routes.Resolve(ctx, req.Link.Underlay.Peer)
-	if err != nil {
-		return nil, grePlanningIssue(req.Link, stlerr.CodePlan, "gre_underlay_route_unverified",
-			"On the receiver, check the route to the sender public IPv4 with ip -4 route get PEER_IP. Verify local underlay routing first; no tunnel was applied.",
-			"cannot verify the kernel route to GRE peer", err)
-	}
-	if route.Source != req.Link.Underlay.Local {
-		return nil, grePlanningIssue(req.Link, stlerr.CodePlan, "gre_underlay_source_mismatch",
-			"The kernel-selected outgoing source IPv4 differs from the local underlay IPv4 expected by this Setup Link. Inspect ip -4 route get PEER_IP on this receiver and correct the endpoint/route before re-importing.",
-			"selected GRE underlay source does not match the kernel route", nil)
-	}
 	protocol, destinationPort := uint8(greProtocol), uint16(0)
 	if req.Link.Encapsulation == domain.EncapFOU || req.Link.Encapsulation == domain.EncapGUE {
 		protocol, destinationPort = 17, req.Link.GRE.UDPPort
 	}
-	rule := linux.InboundFirewallRule{
-		Peer: req.Link.Underlay.Peer, Local: req.Link.Underlay.Local,
-		InputInterface: route.Device, Protocol: protocol, DestinationPort: destinationPort,
+	var route linux.Route
+	var rule linux.InboundFirewallRule
+	var firewallPresent bool
+	var err error
+	if req.Operation == core.OperationRemove {
+		// Remove must not require a live peer or an operable route to it.
+		// Recover the exact original STL firewall rule independently, then
+		// authorize mutation only against persisted resource claims.
+		rule, firewallPresent, err = linux.RecoverOwnedInboundForRemoval(
+			ctx, b.firewall, req.Link.ID, req.Link.Underlay.Local,
+			req.Link.Underlay.Peer, protocol, destinationPort)
+		if err != nil {
+			return nil, fmt.Errorf("cannot verify original owned firewall for removal: %w", err)
+		}
+		if firewallPresent {
+			route.Device = rule.InputInterface
+		} else if protocol == 17 {
+			// The original FOU/GUE device is a field of the observed mapping,
+			// not the current route. Collision and persisted ownership checks
+			// below reject a mapping that was replaced by a foreign owner.
+			for _, existing := range obs.Mappings {
+				if existing.Port == destinationPort {
+					route.Device = existing.Device
+					break
+				}
+			}
+		}
+	} else {
+		route, err = linux.ResolveConfiguredUnderlay(ctx, b.routes, b.runner, req.Link.Underlay.Local, req.Link.Underlay.Peer)
+		if err != nil {
+			// An inventory capture failure is not evidence that the peer
+			// route/source is wrong. Keep its typed cause and local guidance.
+			if errors.Is(err, linux.ErrOutputLimit) || errors.Is(err, context.DeadlineExceeded) ||
+				errors.Is(err, context.Canceled) {
+				return nil, stlerr.LocalUnderlayUnverified("gre_plan", string(req.Link.ID), string(req.Link.Backend), err)
+			}
+			reason := "gre_underlay_route_unverified"
+			if errors.Is(err, linux.ErrUnderlaySourceMismatch) {
+				reason = "gre_underlay_source_mismatch"
+			}
+			return nil, grePlanningIssue(req.Link, stlerr.CodePlan, reason,
+				"The peer need not be online. Inspect ip -json address show; assign the intended LOCAL IPv4 to exactly one host interface, or select an assigned local endpoint before importing. No Link was created.",
+				"cannot prove a uniquely assigned local GRE IPv4/interface", err)
+		}
+		if route.Source != req.Link.Underlay.Local {
+			return nil, grePlanningIssue(req.Link, stlerr.CodePlan, "gre_underlay_source_mismatch",
+				"The kernel-selected outgoing source IPv4 differs from the local underlay IPv4 expected by this Setup Link. Inspect ip -4 route get PEER_IP on this receiver and correct the endpoint/route before re-importing.",
+				"selected GRE underlay source does not match the kernel route", nil)
+		}
+		rule = linux.InboundFirewallRule{
+			Peer: req.Link.Underlay.Peer, Local: req.Link.Underlay.Local,
+			InputInterface: route.Device, Protocol: protocol, DestinationPort: destinationPort,
+		}
+		firewallPresent, err = b.firewall.HasInbound(ctx, req.Link.ID, rule)
+		if err != nil {
+			return nil, grePlanningIssue(req.Link, stlerr.CodeInspect, "gre_firewall_readback_unverified",
+				"STL could not confirm its exact GRE ingress firewall rule. Inspect firewall service/readback availability and STL ownership without changing other rules; no tunnel was applied.",
+				"cannot verify GRE ingress firewall rule", err)
+		}
+		anyOwnedFirewall, err := b.firewall.HasOwnedInbound(ctx, req.Link.ID, false)
+		if err != nil {
+			return nil, grePlanningIssue(req.Link, stlerr.CodeInspect, "gre_firewall_ownership_unverified",
+				"STL could not verify existing GRE firewall ownership. Inspect STL Link status and firewall service availability read-only; do not adopt or flush another owner's rules.",
+				"cannot verify GRE firewall ownership", err)
+		}
+		if !firewallPresent && anyOwnedFirewall {
+			return nil, grePlanningIssue(req.Link, stlerr.CodeConflict, "gre_firewall_route_drift",
+				"An earlier STL-owned firewall rule targets a different route. Inspect this Link and its route in STL before retrying; never replace the rule blindly.",
+				"existing owned GRE firewall does not match this underlay route", nil)
+		}
 	}
-	firewallPresent, err := b.firewall.HasInbound(ctx, req.Link.ID, rule)
-	if err != nil {
-		return nil, grePlanningIssue(req.Link, stlerr.CodeInspect, "gre_firewall_readback_unverified",
-			"STL could not confirm its exact GRE ingress firewall rule. Inspect firewall service/readback availability and STL ownership without changing other rules; no tunnel was applied.",
-			"cannot verify GRE ingress firewall rule", err)
-	}
-	anyOwnedFirewall, err := b.firewall.HasOwnedInbound(ctx, req.Link.ID, false)
-	if err != nil {
-		return nil, grePlanningIssue(req.Link, stlerr.CodeInspect, "gre_firewall_ownership_unverified",
-			"STL could not verify existing GRE firewall ownership. Inspect STL Link status and firewall service availability read-only; do not adopt or flush another owner's rules.",
-			"cannot verify GRE firewall ownership", err)
-	}
-	if !firewallPresent && anyOwnedFirewall {
-		return nil, grePlanningIssue(req.Link, stlerr.CodeConflict, "gre_firewall_route_drift",
-			"An earlier STL-owned firewall rule targets a different route. Inspect this Link and its route in STL before retrying; never replace the rule blindly.",
-			"existing owned GRE firewall does not match this underlay route", nil)
-	}
-
 	p := plan{link: req.Link, name: name, route: route, firewallRule: rule}
 	if mapping, managed := desiredFOUMapping(req.Link, route); managed {
 		exact, collision := mappingAtPort(obs.Mappings, mapping)
@@ -285,12 +325,14 @@ func (b *Backend) Validate(ctx context.Context, req core.Request, observed core.
 	if err := validateLink(req.Link); err != nil {
 		return err
 	}
-	freshRoute, err := b.routes.Resolve(ctx, req.Link.Underlay.Peer)
-	if err != nil {
-		return fmt.Errorf("recheck GRE underlay route: %w", err)
-	}
-	if freshRoute.Source != req.Link.Underlay.Local || freshRoute.Device != p.route.Device {
-		return fmt.Errorf("underlay route changed after GRE planning")
+	if req.Operation == core.OperationEnsure {
+		freshRoute, err := linux.ResolveConfiguredUnderlay(ctx, b.routes, b.runner, req.Link.Underlay.Local, req.Link.Underlay.Peer)
+		if err != nil {
+			return fmt.Errorf("recheck GRE underlay route: %w", err)
+		}
+		if freshRoute.Source != req.Link.Underlay.Local || freshRoute.Device != p.route.Device {
+			return fmt.Errorf("underlay route changed after GRE planning")
+		}
 	}
 	if obs.Target.Exists && obs.Target.Owner != req.Link.ID {
 		return stlerr.New(stlerr.CodeConflict, "gre_validate", string(req.Link.ID), string(req.Link.Backend), "GRE interface name is not owned by this Link")
@@ -378,7 +420,7 @@ func (b *Backend) Verify(ctx context.Context, req core.Request) (core.Observatio
 	}
 	switch req.Operation {
 	case core.OperationEnsure:
-		route, err := b.routes.Resolve(ctx, req.Link.Underlay.Peer)
+		route, err := linux.ResolveConfiguredUnderlay(ctx, b.routes, b.runner, req.Link.Underlay.Local, req.Link.Underlay.Peer)
 		if err != nil {
 			return nil, err
 		}

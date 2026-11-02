@@ -278,6 +278,24 @@ func productionRuntimeOptions() (*runtimeOptions, error) {
 // assembleRuntimeOptions preserves the exact production backend wiring while
 // allowing isolated Go E2E tests to inject an independent StateRoot.
 func assembleRuntimeOptions(stateRoot string) (*runtimeOptions, error) {
+	return assembleRuntimeOptionsForBackend(stateRoot, "")
+}
+
+// assembleRuntimeOptionsForBackend builds only the saved Link's backend
+// for a Remove. An unrelated unavailable helper, credential store or
+// optional runtime cannot prevent cleanup of an independently owned Link.
+// A missing selected backend still fails closed in the canonical Engine.
+func assembleRuntimeBackendOptions(stateRoot string, selected domain.Backend) (*runtimeOptions, error) {
+	if selected != "" {
+		switch selected {
+		case domain.BackendGRE, domain.BackendIPIP, domain.BackendL2TPv3,
+			domain.BackendWireGuard, domain.BackendWireGuardWSS,
+			domain.BackendWireGuardQUIC, domain.BackendIPsec:
+		default:
+			return nil, fmt.Errorf("unknown saved backend cannot authorize removal")
+		}
+	}
+	wants := func(kind domain.Backend) bool { return selected == "" || selected == kind }
 	options := &runtimeOptions{stateRoot: stateRoot}
 	runner := linux.ExecRunner{}
 	options.mtuManager = managedmtu.HostMTUManager{Runner: runner, SetByIndex: linux.SetLinkMTUByIndex}
@@ -285,81 +303,113 @@ func assembleRuntimeOptions(stateRoot string) (*runtimeOptions, error) {
 	routes := linux.RouteResolver{Runner: runner}
 	firewall := linux.IPTablesFirewall{Runner: runner, Locks: locks}
 	collisions := linux.CollisionInspector{Snapshotter: linux.HostSnapshotter{Runner: runner}}
-	gre, err := grebackend.New(grebackend.Options{
-		Runner: runner, Routes: routes, Firewall: firewall, Collisions: collisions,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("initialize GRE backend: %w", err)
+	if wants(domain.BackendGRE) {
+		gre, err := grebackend.New(grebackend.Options{
+			Runner: runner, Routes: routes, Firewall: firewall, Collisions: collisions,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("initialize GRE backend: %w", err)
+		}
+		options.backends = append(options.backends, gre)
 	}
-	ipip, err := ipipbackend.New(ipipbackend.Options{
-		Runner: runner, Routes: routes, Firewall: firewall, Collisions: collisions,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("initialize IPIP backend: %w", err)
+	if wants(domain.BackendIPIP) {
+		ipip, err := ipipbackend.New(ipipbackend.Options{
+			Runner: runner, Routes: routes, Firewall: firewall, Collisions: collisions,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("initialize IPIP backend: %w", err)
+		}
+		options.backends = append(options.backends, ipip)
 	}
-	l2tp, err := l2tpbackend.New(l2tpbackend.Options{Runner: runner, Routes: routes, Firewall: firewall, Collisions: collisions})
-	if err != nil {
-		return nil, fmt.Errorf("initialize L2TPv3 backend: %w", err)
+	if wants(domain.BackendL2TPv3) {
+		l2tp, err := l2tpbackend.New(l2tpbackend.Options{
+			Runner: runner, Routes: routes, Firewall: firewall, Collisions: collisions,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("initialize L2TPv3 backend: %w", err)
+		}
+		options.backends = append(options.backends, l2tp)
 	}
-	keys, err := wgbackend.NewKeyStore(options.stateRoot)
-	if err != nil {
-		return nil, fmt.Errorf("initialize protected WireGuard credentials: %w", err)
+	if wants(domain.BackendWireGuard) || wants(domain.BackendWireGuardWSS) || wants(domain.BackendWireGuardQUIC) {
+		keys, err := wgbackend.NewKeyStore(options.stateRoot)
+		if err != nil {
+			return nil, fmt.Errorf("initialize selected WireGuard credentials: %w", err)
+		}
+		if wants(domain.BackendWireGuard) {
+			wg, err := wgbackend.New(wgbackend.Options{
+				Runner: runner, Routes: routes, Firewall: firewall, Collisions: collisions, Keys: keys,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("initialize WireGuard backend: %w", err)
+			}
+			options.backends = append(options.backends, wg)
+		}
+		if wants(domain.BackendWireGuardWSS) {
+			wssWG, err := wgbackend.NewWSS(wgbackend.Options{
+				Runner: runner, Routes: routes, Firewall: firewall, Collisions: collisions, Keys: keys,
+				WSSHost: wss.Host{StateRoot: options.stateRoot},
+			})
+			if err != nil {
+				return nil, fmt.Errorf("initialize WSS WireGuard backend: %w", err)
+			}
+			options.backends = append(options.backends, wssWG)
+		}
+		if wants(domain.BackendWireGuardQUIC) {
+			quicHost, err := quichelper.NewHost(options.stateRoot, state.NewFileStore(options.stateRoot))
+			if err != nil {
+				return nil, fmt.Errorf("initialize QUIC host adapter: %w", err)
+			}
+			quicWG, err := wgbackend.NewQUIC(wgbackend.Options{
+				Runner: runner, Routes: routes, Firewall: firewall, Collisions: collisions, Keys: keys,
+				QUICHost: quicHost,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("initialize QUIC WireGuard backend: %w", err)
+			}
+			options.quicRetirementHost = quicHost
+			options.backends = append(options.backends, quicWG)
+		}
 	}
-	wg, err := wgbackend.New(wgbackend.Options{
-		Runner: runner, Routes: routes, Firewall: firewall, Collisions: collisions, Keys: keys,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("initialize WireGuard backend: %w", err)
-	}
-	wssWG, err := wgbackend.NewWSS(wgbackend.Options{
-		Runner: runner, Routes: routes, Firewall: firewall, Collisions: collisions, Keys: keys,
-		WSSHost: wss.Host{StateRoot: options.stateRoot},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("initialize WSS WireGuard backend: %w", err)
-	}
-	quicHost, err := quichelper.NewHost(options.stateRoot, state.NewFileStore(options.stateRoot))
-	if err != nil {
-		return nil, fmt.Errorf("initialize QUIC host adapter: %w", err)
-	}
-	quicWG, err := wgbackend.NewQUIC(wgbackend.Options{
-		Runner: runner, Routes: routes, Firewall: firewall, Collisions: collisions, Keys: keys,
-		QUICHost: quicHost,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("initialize QUIC WireGuard backend: %w", err)
-	}
-	options.quicRetirementHost = quicHost
-	options.backends = []backend.Backend{gre, ipip, l2tp, wg, wssWG, quicWG}
+
 	// Runtime activation is read-only admission followed by registration.
 	// The unverified/missing native-exclusive service blocks IPsec ONLY;
 	// GRE/IPIP/WireGuard assembly and behavior must stay independent.
 	// Never start, adopt or configure strongSwan from this constructor.
-	nativeAdmission := ipsecbackend.NewNativeRuntimeAdmission()
-	gateCtx, gateCancel := context.WithTimeout(context.Background(), 8*time.Second)
-	admitted := nativeAdmission.Authorize(gateCtx) == nil
-	gateCancel()
-	if admitted {
-		protectedKeys, keyErr := ipsecbackend.NewPSKStore(options.stateRoot)
-		writer, writerErr := ipsecbackend.NewScopedWriter(ipsecbackend.NativeExclusiveVICIPath)
-		if keyErr == nil && writerErr == nil {
-			operational, opErr := ipsecbackend.NewOperationalBackend(ipsecbackend.OperationalOptions{
-				Admission: nativeAdmission, Runner: ipsecbackend.BoundedExecRunner{}, Keys: protectedKeys,
-				Routes: ipsecbackend.HostRouteResolveFunc(func(ctx context.Context, peer netip.Addr) (ipsecbackend.HostRoute, error) {
-					resolved, err := routes.Resolve(ctx, peer)
-					if err != nil {
-						return ipsecbackend.HostRoute{}, err
-					}
-					return ipsecbackend.HostRoute{Source: resolved.Source, Device: resolved.Device}, nil
-				}),
-				Writer: writer, XFRM: ipsecbackend.NewXFRMVacancyInspector("ip"),
-				SetAlias: linux.SetLinkAliasByIndex, AddAddr: linux.AddIPv4AddressByIndex,
-				SetUp: linux.SetLinkUpByIndex, Delete: linux.DeleteLinkByIndex,
-			})
-			if opErr == nil {
-				options.backends = append(options.backends, operational)
+	if wants(domain.BackendIPsec) {
+		nativeAdmission := ipsecbackend.NewNativeRuntimeAdmission()
+		gateCtx, gateCancel := context.WithTimeout(context.Background(), 8*time.Second)
+		admitted := nativeAdmission.Authorize(gateCtx) == nil
+		gateCancel()
+		if admitted {
+			protectedKeys, keyErr := ipsecbackend.NewPSKStore(options.stateRoot)
+			writer, writerErr := ipsecbackend.NewScopedWriter(ipsecbackend.NativeExclusiveVICIPath)
+			if keyErr == nil && writerErr == nil {
+				operational, opErr := ipsecbackend.NewOperationalBackend(ipsecbackend.OperationalOptions{
+					Admission: nativeAdmission, Runner: ipsecbackend.BoundedExecRunner{}, Keys: protectedKeys,
+					Routes: ipsecbackend.HostRouteResolveFunc(func(ctx context.Context, peer netip.Addr) (ipsecbackend.HostRoute, error) {
+						resolved, err := routes.Resolve(ctx, peer)
+						if err != nil {
+							return ipsecbackend.HostRoute{}, err
+						}
+						return ipsecbackend.HostRoute{Source: resolved.Source, Device: resolved.Device}, nil
+					}),
+					Writer: writer, XFRM: ipsecbackend.NewXFRMVacancyInspector("ip"),
+					SetAlias: linux.SetLinkAliasByIndex, AddAddr: linux.AddIPv4AddressByIndex,
+					SetUp: linux.SetLinkUpByIndex, Delete: linux.DeleteLinkByIndex,
+				})
+				if opErr == nil {
+					options.backends = append(options.backends, operational)
+				}
 			}
 		}
+	}
+	return options, nil
+}
+
+func assembleRuntimeOptionsForBackend(stateRoot string, selected domain.Backend) (*runtimeOptions, error) {
+	options, err := assembleRuntimeBackendOptions(stateRoot, selected)
+	if err != nil {
+		return nil, err
 	}
 
 	info, err := os.Stat("/run/systemd/system")

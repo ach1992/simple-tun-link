@@ -29,7 +29,7 @@ expect {
   timeout { puts stderr "IPSEC_MENU_E2E=PREPARE_NOT_VERIFIED"; exit 24 }
 }
 expect {
-  -re {Other server's reachable IPv4 address} { send -- "q\r" }
+  -re {Other server's IPv4 address \(peer may be offline; q=back\):} { send -- "q\r" }
   timeout { puts stderr "IPSEC_MENU_E2E=PRIVATE_SERVICE_NOT_READY"; exit 25 }
 }
 expect {

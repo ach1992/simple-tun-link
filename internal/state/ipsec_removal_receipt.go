@@ -13,8 +13,12 @@ import (
 // digest does not reveal the raw PSK; it cannot authorize daemon changes.
 type IPsecRemovalReceipt struct {
 	LinkID    domain.LinkID `json:"link_id"`
-	PSKSHA256 string        `json:"psk_sha256"`
-	Retired   bool          `json:"retired,omitempty"`
+	PSKSHA256 string        `json:"psk_sha256,omitempty"`
+	// VerifiedAbsent is a separate, strictly read-only retirement mode:
+	// no file deletion is authorized because the original PSK was already
+	// independently proven absent with no remaining IPsec host resources.
+	VerifiedAbsent bool `json:"verified_absent,omitempty"`
+	Retired        bool `json:"retired,omitempty"`
 }
 
 func (s Snapshot) FindIPsecRemovalReceipt(id domain.LinkID) (IPsecRemovalReceipt, bool) {
@@ -29,12 +33,15 @@ func (s Snapshot) FindIPsecRemovalReceipt(id domain.LinkID) (IPsecRemovalReceipt
 func validateIPsecRemovalReceipts(s Snapshot) error {
 	seen := map[domain.LinkID]bool{}
 	for _, r := range s.IPsecRemovalReceipts {
-		if r.LinkID.Validate() != nil || len(r.PSKSHA256) != 64 || seen[r.LinkID] {
+		if r.LinkID.Validate() != nil || seen[r.LinkID] ||
+			(r.VerifiedAbsent && r.PSKSHA256 != "") || (!r.VerifiedAbsent && len(r.PSKSHA256) != 64) {
 			return fmt.Errorf("invalid or duplicate IPsec key retirement receipt")
 		}
-		b, err := hex.DecodeString(r.PSKSHA256)
-		if err != nil || len(b) != 32 || hex.EncodeToString(b) != r.PSKSHA256 {
-			return fmt.Errorf("invalid IPsec key retirement digest")
+		if !r.VerifiedAbsent {
+			b, err := hex.DecodeString(r.PSKSHA256)
+			if err != nil || len(b) != 32 || hex.EncodeToString(b) != r.PSKSHA256 {
+				return fmt.Errorf("invalid IPsec key retirement digest")
+			}
 		}
 		if _, exists := s.Find(r.LinkID); exists {
 			return fmt.Errorf("IPsec retired identity still committed")

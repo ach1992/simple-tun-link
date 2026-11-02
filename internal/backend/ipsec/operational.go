@@ -10,6 +10,8 @@ import (
 
 	core "github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/hostaddress"
+	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
 // RuntimeAdmission is independent of daemon/VICI/kernel vacancy checks.
@@ -106,6 +108,15 @@ func (b *OperationalBackend) CredentialDigest(id domain.LinkID) (string, error) 
 	return b.Keys.Digest(id)
 }
 
+// VerifyCredentialAbsent is read-only and valid only in an Engine-locked
+// credential-free Remove transaction or exact receipt-bound retirement.
+func (b *OperationalBackend) VerifyCredentialAbsent(id domain.LinkID) error {
+	if b == nil || b.Keys == nil {
+		return fmt.Errorf("protected IPsec credential source unavailable")
+	}
+	return b.Keys.VerifyAbsent(id)
+}
+
 // RetireCredential is called only after Engine has verified the durable
 // post-Remove receipt and holds the same maintenance/Link lock. Do not
 // require a running daemon for secure file retirement after host teardown.
@@ -187,11 +198,16 @@ type operationalPlan struct {
 	Create  bool
 	Load    bool
 	Remove  bool
+	// CredentialAbsent is only set after exact local host vacancy and the
+	// protected PSK file's descriptor-verified absence; it never permits
+	// rollback-free teardown of a live or unknown owner-scoped resource.
+	CredentialAbsent bool
 }
 
-func (p operationalPlan) Empty() bool                { return !p.Create && !p.Load && !p.Remove }
-func (p operationalPlan) NeedsIPsecVICILoad() bool   { return p.Load }
-func (p operationalPlan) NeedsIPsecXFRMCreate() bool { return p.Create }
+func (p operationalPlan) Empty() bool                 { return !p.Create && !p.Load && !p.Remove }
+func (p operationalPlan) NeedsIPsecVICILoad() bool    { return p.Load }
+func (p operationalPlan) NeedsIPsecXFRMCreate() bool  { return p.Create }
+func (p operationalPlan) IPsecCredentialAbsent() bool { return p.Remove && p.CredentialAbsent }
 
 func (p operationalPlan) Resources() []domain.ResourceClaim {
 	return append([]domain.ResourceClaim(nil), p.Claims...)
@@ -268,15 +284,6 @@ func (b *OperationalBackend) Plan(ctx context.Context, req core.Request, observe
 		p.Create = !o.Iface.Exists
 		p.Load = !o.Connection
 	case core.OperationRemove:
-		// A successful Remove may require rollback of the previous
-		// scoped VICI objects. Validate the protected credential BEFORE
-		// terminating/unloading anything; missing/corrupt PSK is not an
-		// acceptable irreversible partial-cleanup condition.
-		key, loadErr := b.Keys.Load(req.Link.ID)
-		if loadErr != nil {
-			return nil, fmt.Errorf("cannot safely remove IPsec without its protected rollback credential")
-		}
-		key.Zeroize()
 		if req.Prior == nil || !ipsecClaimsRecorded(req.OwnedResources, o.Profile) {
 			return nil, fmt.Errorf("cannot remove IPsec resources without exact committed ownership")
 		}
@@ -286,8 +293,27 @@ func (b *OperationalBackend) Plan(ctx context.Context, req core.Request, observe
 		if o.Connection != o.Shared && !req.IPsecRemoveRecovery {
 			return nil, fmt.Errorf("partial VICI state requires explicit journal-bound reconcile-ipsec")
 		}
-		// A committed Link always requires a durable finalization transaction,
-		// even if the daemon already lost all objects after an interruption.
+		// A live XFRM/VICI resource may need the original rollback PSK.
+		// If and ONLY if every scoped object is independently absent,
+		// finalizing the existing committed intent needs no reconstruction
+		// credential. Unreadable/foreign/corrupt paths remain denied.
+		key, loadErr := b.Keys.Load(req.Link.ID)
+		if loadErr == nil {
+			key.Zeroize()
+		} else {
+			if o.Iface.Exists || o.Connection || o.Shared {
+				return nil, fmt.Errorf("cannot safely remove live IPsec resources without protected rollback credential")
+			}
+			if err := b.Keys.VerifyAbsent(req.Link.ID); err != nil {
+				return nil, fmt.Errorf("cannot independently prove original protected IPsec PSK absent")
+			}
+			if err := b.XFRM.RequireVacant(ctx, o.Profile); err != nil {
+				return nil, fmt.Errorf("cannot verify absent IPsec XFRM interface, policy and SA for credential-free finalization")
+			}
+			p.CredentialAbsent = true
+		}
+		// Even a fully vacant committed Link requires the canonical
+		// durable Remove journal, state deletion and retirement receipt.
 		p.Remove = true
 	default:
 		return nil, fmt.Errorf("unsupported IPsec operation")
@@ -327,6 +353,19 @@ func (b *OperationalBackend) Validate(ctx context.Context, req core.Request, obs
 	if current := fresh.(operationalObservation); current.Iface != o.Iface || current.Connection != o.Connection || current.Shared != o.Shared {
 		return fmt.Errorf("IPsec kernel or VICI identity changed during operation")
 	}
+	if p.CredentialAbsent {
+		if req.Operation != core.OperationRemove || req.Prior == nil ||
+			!ipsecClaimsRecorded(req.OwnedResources, o.Profile) || o.Iface.Exists || o.Connection || o.Shared {
+			return fmt.Errorf("credential-free IPsec Remove requires entirely vacant committed owner")
+		}
+		if err := b.Keys.VerifyAbsent(req.Link.ID); err != nil {
+			return fmt.Errorf("IPsec PSK absence changed or is unverified under resource lock")
+		}
+		if err := b.XFRM.RequireVacant(ctx, o.Profile); err != nil {
+			return fmt.Errorf("IPsec XFRM vacancy changed or is unverified under resource lock")
+		}
+	}
+
 	if p.Create {
 		if err := b.XFRM.RequireVacant(ctx, p.Profile); err != nil {
 			return fmt.Errorf("IPsec XFRM identity not vacant or inventory uncertain")
@@ -338,9 +377,9 @@ func (b *OperationalBackend) Validate(ctx context.Context, req core.Request, obs
 	// resource claims, interface owner tag+ifindex and private VICI names,
 	// not by continued reachability to the remote endpoint.
 	if req.Operation == core.OperationEnsure {
-		route, err := b.Routes.Resolve(ctx, req.Link.Underlay.Peer)
+		route, err := b.resolveLocalUnderlay(ctx, req.Link)
 		if err != nil || route.Source != req.Link.Underlay.Local || route.Device == "" {
-			return fmt.Errorf("IPsec underlay route/source could not be verified")
+			return stlerr.LocalUnderlayUnverified("ipsec_validate", string(req.Link.ID), string(req.Link.Backend), err)
 		}
 	}
 	if err := b.authorize(ctx); err != nil {
@@ -499,6 +538,9 @@ func (b *OperationalBackend) applyEnsure(ctx context.Context, p operationalPlan)
 }
 
 func (b *OperationalBackend) applyRemove(ctx context.Context, p operationalPlan) (core.Rollback, error) {
+	if p.CredentialAbsent {
+		return b.applyJournalledVacantRemove(ctx, p)
+	}
 	return b.applyJournalledRemove(ctx, p)
 }
 
@@ -508,12 +550,47 @@ type ipsecProgress struct {
 	Shared, Connection, Deleted bool
 }
 
+// resolveLocalUnderlay never trusts a route source/device unless the
+// owner-private local address inventory independently attests that exact
+// unique binding. If the peer route is missing/misleading, the assigned local
+// IPv4/interface still supports local XFRM Create, with no peer reachability
+// assumption. The backend rechecks under Engine locks before mutation.
+func (b *OperationalBackend) resolveLocalUnderlay(ctx context.Context, link domain.Link) (HostRoute, error) {
+	if b.Runner == nil {
+		return HostRoute{}, fmt.Errorf("IPsec local IPv4 inventory runner unavailable")
+	}
+	binary := b.IPBinary
+	if binary == "" {
+		binary = "ip"
+	}
+	result, err := b.Runner.RunBounded(ctx, CaptureLimits{Stdout: 256 << 10, Stderr: 1024}, binary, "-json", "address", "show")
+	if err != nil || ctx.Err() != nil || len(result.Stderr) != 0 {
+		return HostRoute{}, fmt.Errorf("cannot verify assigned local IPsec IPv4/interface")
+	}
+	defer clear(result.Stdout)
+	inventory, err := hostaddress.Parse(result.Stdout)
+	if err != nil {
+		return HostRoute{}, fmt.Errorf("invalid local IPsec address inventory: %w", err)
+	}
+	assigned, err := hostaddress.Unique(inventory, link.Underlay.Local, "")
+	if err != nil {
+		return HostRoute{}, fmt.Errorf("IPsec local underlay not uniquely assigned: %w", err)
+	}
+	if b.Routes != nil {
+		if candidate, routeErr := b.Routes.Resolve(ctx, link.Underlay.Peer); routeErr == nil &&
+			candidate.Source == link.Underlay.Local && candidate.Device == assigned.Interface {
+			return candidate, nil
+		}
+	}
+	return HostRoute{Source: link.Underlay.Local, Device: assigned.Interface}, nil
+}
+
 func (b *OperationalBackend) createDevice(ctx context.Context, p Profile) (ipsecProgress, error) {
 	progress := ipsecProgress{}
 	if b.advanceDevice == nil {
 		return progress, fmt.Errorf("durable XFRM creation journal unavailable")
 	}
-	route, err := b.Routes.Resolve(ctx, p.Link.Underlay.Peer)
+	route, err := b.resolveLocalUnderlay(ctx, p.Link)
 	if err != nil || route.Source != p.Link.Underlay.Local || route.Device == "" {
 		return progress, fmt.Errorf("IPsec route changed before XFRM creation")
 	}

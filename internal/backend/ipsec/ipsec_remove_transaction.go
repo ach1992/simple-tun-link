@@ -186,3 +186,69 @@ func (b *OperationalBackend) requireIPsecKernelEffectsVacant(ctx context.Context
 	}
 	return nil
 }
+
+// applyJournalledVacantRemove advances the existing durable Remove journal
+// when the exact original PSK and every scoped host resource are already
+// absent. It NEVER calls Terminate, UnloadConnection, UnloadShared, Delete,
+// or any route/peer operation. Every transition refreshes protected PSK,
+// exclusive daemon, VICI and XFRM vacancy under Engine resource locks.
+// Interrupted journal writes remain replayable through explicit reconciliation.
+func (b *OperationalBackend) applyJournalledVacantRemove(ctx context.Context, p operationalPlan) (core.Rollback, error) {
+	return b.runJournalledVacantRemove(ctx, p, b.Writer.Inspect)
+}
+
+// The injected read-only scoped observer is used only by same-package tests
+// to simulate a private VICI socket without changing production writer
+// authority, exported constructors, or any privileged execution boundary.
+func (b *OperationalBackend) runJournalledVacantRemove(ctx context.Context, p operationalPlan,
+	inspectScoped func(context.Context, Profile) (Snapshot, error)) (core.Rollback, error) {
+	if inspectScoped == nil {
+		return nil, fmt.Errorf("private VICI observer unavailable")
+	}
+	if !p.Remove || !p.CredentialAbsent || b.removeJournal == nil || b.advanceRemove == nil {
+		return nil, fmt.Errorf("credential-free IPsec Remove missing exact journal authority")
+	}
+	current, err := b.removeJournal(ctx, p.Profile)
+	if err != nil {
+		return nil, fmt.Errorf("cannot verify committed IPsec Remove journal")
+	}
+	phase := current.Phase
+	for n := 0; n < len(state.IPsecRemovePhases); n++ {
+		if err := b.authorize(ctx); err != nil {
+			return nil, err
+		}
+		if err := b.Keys.VerifyAbsent(p.Profile.Link.ID); err != nil {
+			return nil, fmt.Errorf("protected IPsec PSK absence changed during finalization")
+		}
+		device, err := b.inspectDevice(ctx, p.Profile)
+		if err != nil || device.Exists {
+			return nil, fmt.Errorf("IPsec device vacancy changed during no-effect finalization")
+		}
+		objects, err := inspectScoped(ctx, p.Profile)
+		if err != nil || objects.ConnectionNamePresent || objects.SecretNamePresent {
+			return nil, fmt.Errorf("IPsec daemon ownership/vacancy changed during no-effect finalization")
+		}
+		if err := b.XFRM.RequireVacant(ctx, p.Profile); err != nil {
+			return nil, fmt.Errorf("IPsec policy/SA vacancy unverified during no-effect finalization")
+		}
+		if phase == state.IPsecRemoveDeviceAbsent {
+			// There were no host mutations; no rollback key can be needed.
+			return func(context.Context) error { return nil }, nil
+		}
+		next := ""
+		for index, from := range state.IPsecRemovePhases {
+			if from == phase && index+1 < len(state.IPsecRemovePhases) {
+				next = state.IPsecRemovePhases[index+1]
+				break
+			}
+		}
+		if next == "" {
+			return nil, fmt.Errorf("unknown IPsec Remove journal phase")
+		}
+		if err := b.advanceRemove(ctx, p.Profile, phase, next); err != nil {
+			return nil, fmt.Errorf("IPsec no-effect Remove phase publication unconfirmed")
+		}
+		phase = next
+	}
+	return nil, fmt.Errorf("IPsec no-effect Remove journal did not reach completion")
+}

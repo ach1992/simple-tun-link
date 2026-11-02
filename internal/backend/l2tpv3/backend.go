@@ -20,6 +20,7 @@ type RouteResolver interface {
 type Firewall interface {
 	HasInbound(context.Context, domain.LinkID, linux.InboundFirewallRule) (bool, error)
 	HasOwnedInbound(context.Context, domain.LinkID, bool) (bool, error)
+	FindOwnedInbound(context.Context, domain.LinkID, bool) (linux.InboundFirewallRule, bool, error)
 	EnsureInboundLocked(context.Context, domain.LinkID, linux.InboundFirewallRule) (func(context.Context) error, bool, error)
 	RemoveInboundLocked(context.Context, domain.LinkID, linux.InboundFirewallRule) (bool, error)
 }
@@ -335,21 +336,42 @@ func (b *Backend) Plan(ctx context.Context, req core.Request, observed core.Obse
 	if err != nil {
 		return nil, err
 	}
-	route, err := b.routes.Resolve(ctx, req.Link.Underlay.Peer)
-	if err != nil || route.Source != req.Link.Underlay.Local {
-		return nil, fmt.Errorf("L2TPv3 underlay route/source mismatch: %v", err)
-	}
-	rule := linux.InboundFirewallRule{Local: req.Link.Underlay.Local, Peer: req.Link.Underlay.Peer, InputInterface: route.Device, Protocol: protocol}
-	has, err := b.firewall.HasInbound(ctx, req.Link.ID, rule)
-	if err != nil {
-		return nil, err
-	}
-	owned, err := b.firewall.HasOwnedInbound(ctx, req.Link.ID, false)
-	if err != nil {
-		return nil, err
-	}
-	if owned && !has {
-		return nil, stlerr.New(stlerr.CodeConflict, "l2tpv3_plan", string(req.Link.ID), "l2tpv3", "a different owned IP115 firewall rule requires explicit reconciliation")
+	var route linux.Route
+	var rule linux.InboundFirewallRule
+	var has bool
+	if req.Operation == core.OperationRemove {
+		// A committed Link can lose the parent route or remote peer. Recover
+		// only its original exactly owned IP115 firewall rule without asking
+		// today's underlay router for a new interface identity.
+		rule, has, err = linux.RecoverOwnedInboundForRemoval(
+			ctx, b.firewall, req.Link.ID, req.Link.Underlay.Local,
+			req.Link.Underlay.Peer, protocol, 0)
+		if err != nil {
+			return nil, fmt.Errorf("recover L2TPv3 original firewall ownership: %w", err)
+		}
+		if has {
+			route.Device = rule.InputInterface
+		}
+	} else {
+		route, err = linux.ResolveConfiguredUnderlay(ctx, b.routes, b.runner, req.Link.Underlay.Local, req.Link.Underlay.Peer)
+		if err != nil || route.Source != req.Link.Underlay.Local {
+			return nil, stlerr.LocalUnderlayUnverified("l2tpv3_plan", string(req.Link.ID), string(req.Link.Backend), err)
+		}
+		rule = linux.InboundFirewallRule{
+			Local: req.Link.Underlay.Local, Peer: req.Link.Underlay.Peer,
+			InputInterface: route.Device, Protocol: protocol,
+		}
+		has, err = b.firewall.HasInbound(ctx, req.Link.ID, rule)
+		if err != nil {
+			return nil, err
+		}
+		owned, err := b.firewall.HasOwnedInbound(ctx, req.Link.ID, false)
+		if err != nil {
+			return nil, err
+		}
+		if owned && !has {
+			return nil, stlerr.New(stlerr.CodeConflict, "l2tpv3_plan", string(req.Link.ID), "l2tpv3", "a different owned IP115 firewall rule requires explicit reconciliation")
+		}
 	}
 	p := plan{id: id, link: req.Link, route: route, firewallRule: rule}
 	switch req.Operation {
@@ -378,9 +400,14 @@ func (b *Backend) Validate(ctx context.Context, req core.Request, observed core.
 	if !ok {
 		return fmt.Errorf("unexpected L2TPv3 plan")
 	}
-	fresh, err := b.routes.Resolve(ctx, req.Link.Underlay.Peer)
-	if err != nil || fresh.Device != p.route.Device || fresh.Source != req.Link.Underlay.Local {
-		return fmt.Errorf("L2TPv3 underlay route/source changed")
+	if req.Operation == core.OperationEnsure {
+		fresh, err := linux.ResolveConfiguredUnderlay(ctx, b.routes, b.runner, req.Link.Underlay.Local, req.Link.Underlay.Peer)
+		if err != nil {
+			return fmt.Errorf("cannot recheck L2TPv3 local underlay: %w", err)
+		}
+		if fresh.Device != p.route.Device || fresh.Source != req.Link.Underlay.Local {
+			return fmt.Errorf("L2TPv3 underlay route/source changed")
+		}
 	}
 	if req.Prior != nil {
 		before, after := *req.Prior, req.Link
@@ -465,18 +492,24 @@ func (b *Backend) Verify(ctx context.Context, req core.Request) (core.Observatio
 		return nil, err
 	}
 	o := result.(observation)
-	route, err := b.routes.Resolve(ctx, req.Link.Underlay.Peer)
-	if err != nil {
-		return nil, err
-	}
-	rule := linux.InboundFirewallRule{Local: req.Link.Underlay.Local, Peer: req.Link.Underlay.Peer, InputInterface: route.Device, Protocol: protocol}
-	has, err := b.firewall.HasInbound(ctx, req.Link.ID, rule)
-	if err != nil {
-		return nil, err
-	}
 	owned, err := b.firewall.HasOwnedInbound(ctx, req.Link.ID, false)
 	if err != nil {
 		return nil, err
+	}
+	var has bool
+	if req.Operation == core.OperationEnsure {
+		route, err := linux.ResolveConfiguredUnderlay(ctx, b.routes, b.runner, req.Link.Underlay.Local, req.Link.Underlay.Peer)
+		if err != nil {
+			return nil, err
+		}
+		rule := linux.InboundFirewallRule{
+			Local: req.Link.Underlay.Local, Peer: req.Link.Underlay.Peer,
+			InputInterface: route.Device, Protocol: protocol,
+		}
+		has, err = b.firewall.HasInbound(ctx, req.Link.ID, rule)
+		if err != nil {
+			return nil, err
+		}
 	}
 	switch req.Operation {
 	case core.OperationEnsure:
