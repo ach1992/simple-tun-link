@@ -234,9 +234,23 @@ func runWithRuntimeInput(args []string, input io.Reader, stdout, stderr io.Write
 		if len(args) >= 2 && args[1] == "export" {
 			return linkExportCommand(args[1:], stdout, stderr, options)
 		}
-		if len(args) != 3 || args[1] != "restore" || args[2] != "--all" {
-			fmt.Fprintln(stderr, "usage: stl link restore --all")
-			return 2
+		// Unknown Link operations must never be misreported as a malformed
+		// restore request. Preserve the versioned JSON error contract for
+		// clients explicitly requesting --json, without touching host State.
+		jsonOutput := false
+		for _, arg := range args[1:] {
+			if arg == "--json" {
+				jsonOutput = true
+				break
+			}
+		}
+		if len(args) < 2 || args[1] != "restore" {
+			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, "link",
+				"unknown or missing link subcommand; run stl help for supported Link commands")
+		}
+		if len(args) != 3 || args[2] != "--all" {
+			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, "link_restore",
+				"usage: stl link restore --all")
 		}
 		if options == nil {
 			var err error
