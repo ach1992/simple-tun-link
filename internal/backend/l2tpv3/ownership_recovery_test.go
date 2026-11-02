@@ -373,3 +373,177 @@ func TestEngineEvidenceForAmbiguousL2TPv3(t *testing.T) {
 		}
 	})
 }
+
+// Keep this Engine wiring test independent of the managedmtu package (which
+// imports l2tpv3). The real HostMTUManager's ifindex-bound netlink behavior is
+// separately exercised in managedmtu tests.
+type engineL2TPManagedMTU struct {
+	kernel        *fakeKernel
+	current       int
+	captures      int
+	restores      int
+	failRestore   bool
+	beforeRestore func()
+}
+
+func (m *engineL2TPManagedMTU) Apply(_ context.Context, req core.Request, _ bool, _ []domain.ResourceClaim) (core.Rollback, bool, error) {
+	if m.kernel.ifc == nil {
+		return nil, false, errors.New("managed MTU target is missing")
+	}
+	previous := m.current
+	target := req.Link.MTU.Bytes
+	if req.Link.MTU.Mode == domain.MTUAuto {
+		target = 1280
+	}
+	m.current = target
+	return func(context.Context) error { m.current = previous; return nil }, previous != target, nil
+}
+
+func (m *engineL2TPManagedMTU) CaptureL2TPRemove(_ context.Context, link domain.Link, beforeIndex int, _ []domain.ResourceClaim) (func(context.Context, int) error, error) {
+	if m.kernel.ifc == nil || beforeIndex != m.kernel.ifc.IfIndex {
+		return nil, errors.New("original L2TPv3 interface is not verified")
+	}
+	m.captures++
+	capturedMTU := m.current
+	return func(_ context.Context, restoredIndex int) error {
+		m.restores++
+		if m.beforeRestore != nil {
+			m.beforeRestore()
+		}
+		if m.kernel.ifc == nil || restoredIndex != m.kernel.ifc.IfIndex ||
+			m.kernel.ifc.IfAlias != "stl:"+string(link.ID) {
+			return errors.New("replacement interface is not owned by the original Link")
+		}
+		if m.failRestore {
+			return errors.New("injected managed MTU restoration failure")
+		}
+		m.current = capturedMTU
+		return nil
+	}, nil
+}
+
+func TestEngineL2TPManagedMTURemoveCompensation(t *testing.T) {
+	for _, mode := range []domain.MTUMode{domain.MTUManual, domain.MTUAuto} {
+		for _, deletion := range []string{"l2tp del session", "l2tp del tunnel"} {
+			t.Run(string(mode)+"/"+deletion, func(t *testing.T) {
+				l := testLink()
+				l.MTU = domain.MTUPolicy{Mode: mode}
+				want := 1280
+				if mode == domain.MTUManual {
+					want = 1300
+					l.MTU.Bytes = want
+				}
+				k := newFakeKernel(t, l)
+				m := &engineL2TPManagedMTU{kernel: k, current: 1500}
+				k.onAddSession = func() { m.current = 1500 } // new l2tpeth kernel default
+				fw := &fakeFirewall{}
+				b := testBackend(t, l, k, fw, fakeCollisions{})
+				reg, err := core.NewRegistry(b)
+				if err != nil {
+					t.Fatal(err)
+				}
+				root := t.TempDir()
+				engine, err := app.New(reg, state.NewFileStore(root), state.NewLockManager(root))
+				if err != nil {
+					t.Fatal(err)
+				}
+				engine.SetMTUManager(m)
+				if _, err = engine.Ensure(context.Background(), l); err != nil || m.current != want {
+					t.Fatalf("managed Ensure failed: %v mtu=%d", err, m.current)
+				}
+				firstIndex := k.ifc.IfIndex
+				k.failAfter = deletion
+				_, err = engine.Remove(context.Background(), l.ID)
+				proof := stlerr.EvidenceOf(err)
+				if err == nil || proof == nil || proof.Stage != "apply" ||
+					proof.Rollback != "completed_unverified" || proof.DesiredState != "no_commit_attempted" {
+					t.Fatalf("compensated Remove evidence mismatch: %v %+v", err, proof)
+				}
+				if m.captures != 1 || m.restores != 1 || m.current != want ||
+					k.ifc == nil || k.ifc.IfIndex == firstIndex || !fw.active {
+					t.Fatalf("managed MTU/kernel/firewall drift after compensation: mtu=%d %+v %+v", m.current, k.ifc, m)
+				}
+				if _, err := b.Verify(context.Background(), core.Request{Operation: core.OperationEnsure, Link: l}); err != nil {
+					t.Fatalf("post-compensation backend identity drift: %v", err)
+				}
+				snap, err := state.NewFileStore(root).Load(context.Background())
+				record, found := snap.Find(l.ID)
+				if err != nil || !found || record.Desired.MTU != l.MTU {
+					t.Fatalf("committed managed MTU state changed: %v %+v", err, record)
+				}
+				// A normal subsequently successful Remove must not run MTU
+				// compensation, and must release only its own resources.
+				k.failAfter = ""
+				if _, err := engine.Remove(context.Background(), l.ID); err != nil {
+					t.Fatalf("normal Remove after recovery: %v", err)
+				}
+				if m.restores != 1 || fw.active || k.ifc != nil {
+					t.Fatal("normal Remove unexpectedly compensated or leaked owned resources")
+				}
+				snap, err = state.NewFileStore(root).Load(context.Background())
+				if err != nil || len(snap.Links) != 0 {
+					t.Fatalf("normal Remove retained committed Link: %+v %v", snap.Links, err)
+				}
+			})
+		}
+	}
+}
+
+func TestEngineL2TPManagedMTURestoreFailureClassification(t *testing.T) {
+	for _, scenario := range []string{"mtu setter failed", "foreign replacement", "missing writer"} {
+		t.Run(scenario, func(t *testing.T) {
+			l := testLink()
+			l.MTU = domain.MTUPolicy{Mode: domain.MTUManual, Bytes: 1300}
+			k := newFakeKernel(t, l)
+			m := &engineL2TPManagedMTU{kernel: k, current: 1500}
+			k.onAddSession = func() { m.current = 1500 }
+			fw := &fakeFirewall{}
+			b := testBackend(t, l, k, fw, fakeCollisions{})
+			reg, err := core.NewRegistry(b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := t.TempDir()
+			e, err := app.New(reg, state.NewFileStore(root), state.NewLockManager(root))
+			if err != nil {
+				t.Fatal(err)
+			}
+			e.SetMTUManager(m)
+			if _, err := e.Ensure(context.Background(), l); err != nil {
+				t.Fatal(err)
+			}
+			if scenario == "missing writer" {
+				e.SetMTUManager(nil)
+				_, err = e.Remove(context.Background(), l.ID)
+				if err == nil || k.ifc == nil || !fw.active {
+					t.Fatal("managed Remove without writer was not rejected before mutation")
+				}
+				if snap, loadErr := state.NewFileStore(root).Load(context.Background()); loadErr != nil || len(snap.Links) != 1 {
+					t.Fatal("preflight refusal changed committed State")
+				}
+				return
+			}
+			if scenario == "mtu setter failed" {
+				m.failRestore = true
+			} else {
+				m.beforeRestore = func() { k.ifc.IfAlias = "foreign-owner" }
+			}
+			k.failAfter = "l2tp del session"
+			_, err = e.Remove(context.Background(), l.ID)
+			proof := stlerr.EvidenceOf(err)
+			if err == nil || proof == nil || proof.Rollback != "incomplete" ||
+				stlerr.CodeOf(err) != stlerr.CodeRollback ||
+				stlerr.Public(err).ReasonCode != "l2tpv3_kernel_effect_indeterminate" {
+				t.Fatalf("unsafe compensation reported success: %v %+v", err, proof)
+			}
+			if m.current != 1500 || !fw.active || k.ifc == nil {
+				t.Fatal("uncertain restored interface unexpectedly had a new managed MTU or lost its firewall")
+			}
+			snap, loadErr := state.NewFileStore(root).Load(context.Background())
+			record, found := snap.Find(l.ID)
+			if loadErr != nil || !found || record.Desired.MTU != l.MTU {
+				t.Fatalf("failed compensation lost committed MTU intent: %v %+v", loadErr, record)
+			}
+		})
+	}
+}

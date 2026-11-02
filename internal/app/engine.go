@@ -795,6 +795,41 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		return Result{}, contextualize(err, stlerr.CodeValidate, string(request.Operation), link, "backend validation failed")
 	}
 
+	// A committed managed L2TPv3 Link may be destroyed even when iproute2
+	// returns a delete error. Capture its exact live MTU before any backend
+	// Apply and compensate only after proving the recreated kernel identity.
+	// An absent interface needs no MTU snapshot or post-Remove restoration.
+	var l2tpRemoveMTURestore func(context.Context, int) error
+	if request.Operation == backend.OperationRemove && link.Backend == domain.BackendL2TPv3 &&
+		(link.MTU.Mode == domain.MTUManual || link.MTU.Mode == domain.MTUAuto) {
+		identity, ok := observed.(interface{ L2TPVerifiedOwnedIndex(domain.Link) int })
+		if !ok {
+			return Result{}, fmt.Errorf("managed L2TPv3 Remove lacks a verified interface witness")
+		}
+		originalIndex := identity.L2TPVerifiedOwnedIndex(link)
+		if originalIndex == 0 && len(observed.ObservedResources()) != 0 {
+			return Result{}, fmt.Errorf("managed L2TPv3 Remove interface ownership is unverified")
+		}
+		if originalIndex > 0 {
+			manager, ok := e.mtuManager.(interface {
+				CaptureL2TPRemove(context.Context, domain.Link, int, []domain.ResourceClaim) (func(context.Context, int) error, error)
+			})
+			if !ok {
+				return Result{}, stlerr.New(stlerr.CodeUnsupported, "managed_mtu_remove", string(link.ID),
+					string(link.Backend), "managed L2TPv3 Remove compensation is unavailable")
+			}
+			l2tpRemoveMTURestore, err = manager.CaptureL2TPRemove(ctx, link, originalIndex, prior.OwnedResources)
+			if err != nil {
+				return Result{}, contextualize(err, stlerr.CodeValidate, "managed_mtu_remove",
+					link, "cannot pin committed L2TPv3 MTU before Remove")
+			}
+			if l2tpRemoveMTURestore == nil {
+				return Result{}, stlerr.New(stlerr.CodeUnsupported, "managed_mtu_remove", string(link.ID),
+					string(link.Backend), "managed MTU Remove capture returned no compensation")
+			}
+		}
+	}
+
 	// Existing credential hashes are immutable. Re-Ensure cannot silently
 	// authorize a same-name replacement as a new issuance generation.
 	if link.Backend == domain.BackendWireGuardWSS && request.Operation == backend.OperationEnsure &&
@@ -1005,6 +1040,41 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		evidence.HostMutation = "attempted"
 		evidence.Rollback = "unavailable"
 		undo, err = impl.Apply(ctx, request, observed, plan)
+		if undo != nil && l2tpRemoveMTURestore != nil {
+			backendUndo := undo
+			undo = func(undoCtx context.Context) error {
+				if err := backendUndo(undoCtx); err != nil {
+					return err // Never write MTU if kernel/backend restoration failed.
+				}
+				restored, readErr := impl.Inspect(undoCtx, link)
+				if readErr != nil {
+					return fmt.Errorf("cannot verify L2TPv3 compensation before MTU: %w",
+						errors.Join(readErr, backend.ErrIndeterminateHostEffect))
+				}
+				witness, ok := restored.(interface{ L2TPVerifiedOwnedIndex(domain.Link) int })
+				verifiedIndex := 0
+				if ok {
+					verifiedIndex = witness.L2TPVerifiedOwnedIndex(link)
+				}
+				if verifiedIndex <= 0 {
+					return fmt.Errorf("restored L2TPv3 kernel identity is not exclusively owned: %w", backend.ErrIndeterminateHostEffect)
+				}
+				if restoreErr := l2tpRemoveMTURestore(undoCtx, verifiedIndex); restoreErr != nil {
+					return fmt.Errorf("managed L2TPv3 MTU compensation failed: %w",
+						errors.Join(restoreErr, backend.ErrIndeterminateHostEffect))
+				}
+				final, finalErr := impl.Inspect(undoCtx, link)
+				if finalErr != nil {
+					return fmt.Errorf("L2TPv3 post-MTU restoration identity is unverified: %w",
+						errors.Join(finalErr, backend.ErrIndeterminateHostEffect))
+				}
+				finalWitness, ok := final.(interface{ L2TPVerifiedOwnedIndex(domain.Link) int })
+				if !ok || finalWitness.L2TPVerifiedOwnedIndex(link) != verifiedIndex {
+					return fmt.Errorf("L2TPv3 post-MTU restoration interface changed: %w", backend.ErrIndeterminateHostEffect)
+				}
+				return nil
+			}
+		}
 		if err != nil {
 			return Result{}, e.rollbackFailureAtStage(ctx, request, link, undo, evidence.Stage, evidence.HostMutation, contextualize(err, stlerr.CodeApply, string(request.Operation), link, "backend apply failed"))
 		}

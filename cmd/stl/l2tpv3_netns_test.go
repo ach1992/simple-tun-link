@@ -4,9 +4,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/netip"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,8 +20,42 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/managedmtu"
 	"github.com/ach1992/simple-tun-link/internal/pairing"
 	"github.com/ach1992/simple-tun-link/internal/state"
+	"github.com/ach1992/simple-tun-link/internal/stlerr"
 	"golang.org/x/sys/unix"
 )
+
+// Inject an error only AFTER the real kernel has accepted a destructive
+// iproute2 operation. This runner cannot manufacture successful kernel calls.
+type l2tpPostEffectRunner struct {
+	linux.Runner
+	command  string
+	injected bool
+}
+
+func (r *l2tpPostEffectRunner) Run(ctx context.Context, binary string, args ...string) (linux.CommandResult, error) {
+	out, err := r.Runner.Run(ctx, binary, args...)
+	if err == nil && r.command != "" && !r.injected &&
+		strings.HasPrefix(strings.Join(args, " "), r.command) {
+		r.injected = true
+		return out, errors.New("injected post-effect L2TPv3 kernel delete error")
+	}
+	return out, err
+}
+
+func realL2TPInterfaceMTU(ctx context.Context, runner linux.Runner, name string) (index, mtu int, err error) {
+	result, err := runner.Run(ctx, "ip", "-json", "link", "show", "dev", name)
+	if err != nil {
+		return 0, 0, err
+	}
+	var rows []struct {
+		IfIndex int
+		MTU     int
+	}
+	if err = json.Unmarshal(result.Stdout, &rows); err != nil || len(rows) != 1 {
+		return 0, 0, errors.New("cannot verify exact Linux L2TPv3 interface MTU")
+	}
+	return rows[0].IfIndex, rows[0].MTU, nil
+}
 
 // TestL2TPv3NetnsE2E is an explicit privileged, two-netns real-Linux
 // acceptance entrypoint; ordinary go test never applies host resources.
@@ -55,7 +91,11 @@ func TestL2TPv3NetnsE2E(t *testing.T) {
 	if role == "b" {
 		link = pairing.Invert(link)
 	}
-	runner := linux.ExecRunner{}
+	if action == "compensate-session" || action == "compensate-tunnel" {
+		link.MTU = domain.MTUPolicy{Mode: domain.MTUManual, Bytes: 1300}
+	}
+	faultRunner := &l2tpPostEffectRunner{Runner: linux.ExecRunner{}}
+	var runner linux.Runner = faultRunner
 	locks := state.NewLockManager(root)
 	b, err := l2tp.New(l2tp.Options{Runner: runner, Routes: linux.RouteResolver{Runner: runner},
 		Firewall:   linux.IPTablesFirewall{Runner: runner, Locks: locks},
@@ -116,6 +156,52 @@ func TestL2TPv3NetnsE2E(t *testing.T) {
 			t.Fatalf("real kernel L2TPv3 Remove: %+v %v", res, err)
 		}
 		t.Logf("L2TPV3_NETNS_REMOVE_OK role=%s", role)
+	case "compensate-session", "compensate-tunnel":
+		// A fresh committed manual-MTU Link in this isolated namespace.
+		// The injected error happens AFTER the actual destructive kernel
+		// operation, so the replacement l2tpeth cannot inherit the old MTU.
+		if _, err := engine.Ensure(ctx, link); err != nil {
+			t.Fatalf("manual MTU Ensure before injection: %v", err)
+		}
+		name, err := l2tp.InterfaceName(link.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		firstIndex, firstMTU, err := realL2TPInterfaceMTU(ctx, runner, name)
+		if err != nil || firstMTU != 1300 {
+			t.Fatalf("original kernel managed MTU missing: index=%d mtu=%d err=%v", firstIndex, firstMTU, err)
+		}
+		if action == "compensate-session" {
+			faultRunner.command = "l2tp del session"
+		} else {
+			faultRunner.command = "l2tp del tunnel"
+		}
+		_, err = engine.Remove(ctx, link.ID)
+		proof := stlerr.EvidenceOf(err)
+		if err == nil || !faultRunner.injected || proof == nil ||
+			proof.Stage != "apply" || proof.Rollback != "completed_unverified" {
+			t.Fatalf("real kernel post-delete compensation failed: %v %+v injected=%t", err, proof, faultRunner.injected)
+		}
+		secondIndex, secondMTU, err := realL2TPInterfaceMTU(ctx, runner, name)
+		if err != nil || secondIndex == firstIndex || secondMTU != firstMTU {
+			t.Fatalf("real recreated L2TPv3 did not restore exact manual MTU: old=%d/%d new=%d/%d err=%v", firstIndex, firstMTU, secondIndex, secondMTU, err)
+		}
+		if _, err := b.Verify(ctx, backend.Request{Operation: backend.OperationEnsure, Link: link}); err != nil {
+			t.Fatalf("real restored backend/firewall ownership unavailable: %v", err)
+		}
+		snap, err := state.NewFileStore(root).Load(ctx)
+		rec, found := snap.Find(link.ID)
+		if err != nil || !found || rec.Desired.MTU != link.MTU {
+			t.Fatalf("real committed State lost on compensated Remove: %v %+v", err, rec)
+		}
+		if _, err := engine.Remove(ctx, link.ID); err != nil {
+			t.Fatalf("normal real kernel cleanup after injected error: %v", err)
+		}
+		snap, err = state.NewFileStore(root).Load(ctx)
+		if err != nil || len(snap.Links) != 0 {
+			t.Fatalf("real cleanup retained committed State: %v %+v", err, snap.Links)
+		}
+		t.Logf("L2TPV3_REAL_KERNEL_MANUAL_MTU_REMOVE_COMPENSATION_PASS action=%s", action)
 	default:
 		t.Fatalf("invalid gated action %q", action)
 	}

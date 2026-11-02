@@ -166,6 +166,12 @@ ip netns exec "$ns_a" ping -n -q -I 10.253.116.1 -c 3 -i 0.2 -W 2 10.253.116.2
 ip netns exec "$ns_b" ping -n -q -I 10.253.116.2 -c 3 -i 0.2 -W 2 10.253.116.1
 run_engine a remove secondary
 run_engine b remove secondary
+echo "L2TPV3_REAL_KERNEL_POST_EFFECT_REMOVE_MTU_COMPENSATION"
+# Both ordinary Links are fully removed. Reuse the same disposable namespace
+# for two independent fresh, manual-MTU post-delete compensation scenarios.
+run_engine a compensate-session
+run_engine a compensate-tunnel
+echo "L2TPV3_MANUAL_MTU_POST_DELETE_COMPENSATION_PASS"
 for ns in "$ns_a" "$ns_b"; do
   [[ "$(ip netns exec "$ns" ip -json l2tp show tunnel)" == "[]" ]] || exit 7
   [[ "$(ip netns exec "$ns" ip -json l2tp show session)" == "[]" ]] || exit 8

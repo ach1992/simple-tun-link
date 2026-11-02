@@ -113,6 +113,17 @@ func (o observation) ObservedResources() []domain.ResourceClaim {
 	return claims
 }
 func (o observation) present() bool { return o.iface != nil || o.tunnel != nil || o.session != nil }
+
+// L2TPVerifiedOwnedIndex is the read-only identity witness used by Engine
+// before a committed Remove and after its compensating kernel restoration.
+// An alias or interface name alone is never sufficient to authorize MTU writes.
+func (o observation) L2TPVerifiedOwnedIndex(l domain.Link) int {
+	if !o.matches(l) || !o.interfaceOwned(l) || !onlyManagedNeighbor(o, l) ||
+		!noForeignL2TPSessions(o) {
+		return 0
+	}
+	return o.iface.IfIndex
+}
 func (o observation) matches(l domain.Link) bool {
 	if o.tunnel == nil || o.session == nil || o.iface == nil {
 		return false

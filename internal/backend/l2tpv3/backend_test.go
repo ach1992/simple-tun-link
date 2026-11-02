@@ -109,6 +109,8 @@ type fakeKernel struct {
 	neigh         []neighbor
 	ipv6          []map[string]any
 	onAddNeighbor func()
+	onAddSession  func()
+	nextIfIndex   int
 	fail          string
 	failAfter     string
 	failAfterErr  error
@@ -180,7 +182,14 @@ func (h *fakeKernel) Run(_ context.Context, binary string, args ...string) (linu
 		return linux.CommandResult{}, h.afterEffect(joined)
 	case strings.HasPrefix(joined, "l2tp add session "):
 		h.sessions = append(h.sessions, session{TunnelID: h.id.tunnel, PeerTunnelID: h.id.peerTunnel, SessionID: h.id.session, PeerSessionID: h.id.peerSession, Interface: h.id.name})
-		h.ifc = &iface{IfIndex: 123, IfName: h.id.name, Address: "de:ad:be:ef:00:00", Flags: []string{"BROADCAST"}}
+		if h.nextIfIndex == 0 {
+			h.nextIfIndex = 122
+		}
+		h.nextIfIndex++
+		h.ifc = &iface{IfIndex: h.nextIfIndex, IfName: h.id.name, Address: "de:ad:be:ef:00:00", Flags: []string{"BROADCAST"}}
+		if h.onAddSession != nil {
+			h.onAddSession()
+		}
 		return linux.CommandResult{}, h.afterEffect(joined)
 	case strings.HasPrefix(joined, "l2tp del session "):
 		if h.ifc == nil {
