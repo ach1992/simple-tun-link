@@ -331,7 +331,10 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 	// instead of overwriting it with the generic rejected_before_host_apply.
 	if observedPublic != nil && evidence != nil &&
 		evidence.Stage == "plan" && evidence.HostMutation == "not_attempted" &&
-		observedPublic.Backend == string(domain.BackendGRE) && operation != "link_remove" {
+		observedPublic.Backend == string(domain.BackendGRE) && operation != "link_remove" &&
+		!errors.Is(observed, context.DeadlineExceeded) && !errors.Is(observed, context.Canceled) {
+		// An actual interruption must never be overwritten by an advisory
+		// GRE route/source reason from an earlier planning observation.
 		switch observedPublic.ReasonCode {
 		case "gre_underlay_route_unverified", "gre_underlay_source_mismatch",
 			"gre_firewall_readback_unverified", "gre_firewall_ownership_unverified",

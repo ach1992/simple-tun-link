@@ -237,6 +237,12 @@ func (b *Backend) Plan(ctx context.Context, req core.Request, observed core.Obse
 	} else {
 		route, err = linux.ResolveConfiguredUnderlay(ctx, b.routes, b.runner, req.Link.Underlay.Local, req.Link.Underlay.Peer)
 		if err != nil {
+			// An inventory capture failure is not evidence that the peer
+			// route/source is wrong. Keep its typed cause and local guidance.
+			if errors.Is(err, linux.ErrOutputLimit) || errors.Is(err, context.DeadlineExceeded) ||
+				errors.Is(err, context.Canceled) {
+				return nil, stlerr.LocalUnderlayUnverified("gre_plan", string(req.Link.ID), string(req.Link.Backend), err)
+			}
 			reason := "gre_underlay_route_unverified"
 			if errors.Is(err, linux.ErrUnderlaySourceMismatch) {
 				reason = "gre_underlay_source_mismatch"

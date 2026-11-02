@@ -85,9 +85,9 @@ func ResolveConfiguredUnderlay(ctx context.Context, routes interface {
 	}
 	endpoints, err := ListLocalIPv4Endpoints(ctx, runner)
 	if err != nil {
-		if routeErr == nil && suggested.Source != local {
-			return Route{}, fmt.Errorf("%w: assigned local address inventory unavailable", ErrUnderlaySourceMismatch)
-		}
+		// Local inventory is authoritative; a conflicting route hint is
+		// only advisory. Preserve capture overflow/cancellation/deadline
+		// identity rather than replacing the actual failure with mismatch.
 		return Route{}, err
 	}
 	assigned, err := BoundLocalIPv4(endpoints, local, "")

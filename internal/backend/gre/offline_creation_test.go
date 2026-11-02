@@ -2,15 +2,19 @@ package gre
 
 import (
 	"context"
+	"errors"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
 	"github.com/ach1992/simple-tun-link/internal/app"
 	core "github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/state"
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
+	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
 type offlineGREHost struct {
@@ -84,6 +88,65 @@ func (h *offlineGREHost) RunBounded(ctx context.Context, limits linux.CaptureLim
 		return linux.CommandResult{}, linux.ErrOutputLimit
 	}
 	return output, err
+}
+
+// Exercise the real GRE -> Engine error chain with a successful, but misleading,
+// route hint. Typed bounded-inventory errors outrank advisory source mismatch,
+// and must not authorize any host Apply or State publication.
+func TestGREEngineRetainsInventoryFailureWithWrongRouteHint(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		cause error
+	}{
+		{"capture_overflow", linux.ErrOutputLimit},
+		{"deadline", context.DeadlineExceeded},
+		{"cancelled", context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			link := testLink()
+			name, err := InterfaceName(link.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			kernel, fw := &fakeRunner{link: link, name: name}, &fakeFirewall{}
+			b := newTestBackend(t, kernel, fw, fakeCollisions{})
+			b.routes = fakeRoute{route: linux.Route{
+				Peer: link.Underlay.Peer, Source: netip.MustParseAddr("203.0.113.99"), Device: "eth9",
+			}}
+			b.runner = &offlineGREHost{
+				original: kernel, captureErr: errors.Join(tc.cause, errors.New("PRIVATE_HOST_INFO_DO_NOT_ECHO")),
+			}
+			registry, err := core.NewRegistry(b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := t.TempDir()
+			engine, err := app.New(registry, state.NewFileStore(root), state.NewLockManager(root))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = engine.Ensure(context.Background(), link)
+			if !errors.Is(err, tc.cause) || errors.Is(err, linux.ErrUnderlaySourceMismatch) {
+				t.Fatalf("Engine masked bounded capture error as route mismatch: %v", err)
+			}
+			pub := stlerr.Public(err)
+			if pub.ReasonCode != "local_underlay_unverified" ||
+				strings.Contains(pub.Error()+pub.NextStep, "PRIVATE_HOST_INFO_DO_NOT_ECHO") {
+				t.Fatalf("unsafe or misleading Engine diagnostic: %+v", pub)
+			}
+			if kernel.state.Exists || fw.present || len(kernel.mappings) != 0 {
+				t.Fatal("failed inventory triggered host Apply")
+			}
+			for _, command := range kernel.commands {
+				if strings.Contains(command, " link add ") || strings.Contains(command, " fou add ") {
+					t.Fatalf("capture failure executed mutating command: %q", command)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(root, "state.json")); !os.IsNotExist(err) {
+				t.Fatalf("capture failure committed Link State: %v", err)
+			}
+		})
+	}
 }
 
 // The real Engine must stop at Plan if the capture boundary refuses the local

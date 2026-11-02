@@ -402,7 +402,10 @@ func (b *Backend) Validate(ctx context.Context, req core.Request, observed core.
 	}
 	if req.Operation == core.OperationEnsure {
 		fresh, err := linux.ResolveConfiguredUnderlay(ctx, b.routes, b.runner, req.Link.Underlay.Local, req.Link.Underlay.Peer)
-		if err != nil || fresh.Device != p.route.Device || fresh.Source != req.Link.Underlay.Local {
+		if err != nil {
+			return fmt.Errorf("cannot recheck L2TPv3 local underlay: %w", err)
+		}
+		if fresh.Device != p.route.Device || fresh.Source != req.Link.Underlay.Local {
 			return fmt.Errorf("L2TPv3 underlay route/source changed")
 		}
 	}

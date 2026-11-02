@@ -169,6 +169,49 @@ func TestRealLocalInventoryCaptureStopsOversizedStdoutAndStderr(t *testing.T) {
 		})
 	}
 }
+
+// A misleading-but-successful route hint must not replace the actual
+// bounded-inventory failure with a source-mismatch error. Both the Engine and
+// human/machine diagnostics depend on this inspectable cause chain.
+func TestResolveConfiguredUnderlayPreservesInventoryFailureOnMisleadingRoute(t *testing.T) {
+	local, peer := netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("198.51.100.20")
+	wrongSource := netip.MustParseAddr("198.51.100.4")
+	for _, tc := range []struct {
+		name  string
+		cause error
+	}{
+		{"stdout_or_stderr_overflow", ErrOutputLimit},
+		{"deadline", context.DeadlineExceeded},
+		{"cancelled", context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The injected raw process text must not appear in the error chain.
+			runner := &capturedInventoryRunner{err: errors.Join(tc.cause, errors.New("PRIVATE_IP_OUTPUT_MUST_NOT_LEAK"))}
+			routes := &offlineUnderlayRoutes{source: wrongSource}
+			got, err := ResolveConfiguredUnderlay(context.Background(), routes, runner, local, peer)
+			if !errors.Is(err, tc.cause) || errors.Is(err, ErrUnderlaySourceMismatch) || got != (Route{}) {
+				t.Fatalf("wrong error identity or unsafe route accepted: got=%+v err=%v", got, err)
+			}
+			if strings.Contains(err.Error(), "PRIVATE_IP_OUTPUT_MUST_NOT_LEAK") {
+				t.Fatal("raw inventory subprocess output leaked")
+			}
+			if routes.calls != 1 || runner.gotName != "ip" ||
+				!reflect.DeepEqual(runner.gotArgs, []string{"-json", "address", "show"}) ||
+				runner.gotLimits != (CaptureLimits{Stdout: 256 << 10, Stderr: 1024}) {
+				t.Fatalf("inventory did not preserve bounded execution: routes=%d runner=%+v", routes.calls, runner)
+			}
+		})
+	}
+
+	t.Run("healthy_multihomed_fallback", func(t *testing.T) {
+		runner := &capturedInventoryRunner{result: CommandResult{Stdout: []byte(`[{"ifname":"enp2s0","addr_info":[{"family":"inet","local":"192.0.2.10"}]},{"ifname":"eth7","addr_info":[{"family":"inet","local":"198.51.100.4"}]}]`)}}
+		got, err := ResolveConfiguredUnderlay(context.Background(), &offlineUnderlayRoutes{source: wrongSource}, runner, local, peer)
+		if err != nil || got.Source != local || got.Device != "enp2s0" || got.Gateway.IsValid() || got.MTU != 0 {
+			t.Fatalf("healthy multi-homed local binding was not selected: got=%+v err=%v", got, err)
+		}
+	})
+}
+
 func TestLocalInventoryPreservesCancellationAndTimeoutClassification(t *testing.T) {
 	r := &capturedInventoryRunner{err: context.DeadlineExceeded}
 	if _, err := ListLocalIPv4Endpoints(context.Background(), r); !errors.Is(err, context.DeadlineExceeded) {
