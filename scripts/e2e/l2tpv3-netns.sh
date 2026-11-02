@@ -84,9 +84,19 @@ ip -n "$ns_b" link set stl2ub up
 ip netns exec "$ns_a" ping -n -q -I 198.18.115.1 -c 2 -W 2 198.18.115.2
 ip netns exec "$ns_b" ping -n -q -I 198.18.115.2 -c 2 -W 2 198.18.115.1
 run_engine() {
-  local role="$1" op="$2" ns subdir
-  if [[ "$role" == a ]]; then ns="$ns_a"; subdir="$temp/a"; else ns="$ns_b"; subdir="$temp/b"; fi
-  ip netns exec "$ns" env     STL_L2TPV3_NETNS_E2E=approved     STL_L2TPV3_E2E_ROLE="$role"     STL_L2TPV3_E2E_ACTION="$op"     STL_L2TPV3_E2E_STATE_ROOT="$subdir"     "$temp/l2tp.test" -test.run '^TestL2TPv3NetnsE2E$' -test.v
+  local role="$1" op="$2" slot="${3:-primary}" ns subdir
+  if [[ "$role" == a ]]; then
+    ns="$ns_a"; subdir="$temp/a"
+  else
+    ns="$ns_b"; subdir="$temp/b"
+  fi
+  ip netns exec "$ns" env \
+    STL_L2TPV3_NETNS_E2E=approved \
+    STL_L2TPV3_E2E_ROLE="$role" \
+    STL_L2TPV3_E2E_ACTION="$op" \
+    STL_L2TPV3_E2E_SLOT="$slot" \
+    STL_L2TPV3_E2E_STATE_ROOT="$subdir" \
+    "$temp/l2tp.test" -test.run '^TestL2TPv3NetnsE2E$' -test.v
 }
 run_engine a ensure
 run_engine b ensure
@@ -137,14 +147,28 @@ ip netns exec "$ns_a" ip l2tp del tunnel tunnel_id "$tunnel_id"
 run_engine a restore
 run_engine a check
 ip netns exec "$ns_a" ping -n -q -I 10.253.115.1 -c 4 -i 0.2 -W 2 10.253.115.2
-echo "L2TPV3_OWNER_SCOPED_REMOVE"
+echo "L2TPV3_MULTILINK_SAME_PUBLIC_UNDERLAY"
+run_engine a ensure secondary
+run_engine b ensure secondary
+run_engine a check secondary
+run_engine b check secondary
+ip netns exec "$ns_a" ping -n -q -I 10.253.116.1 -c 3 -i 0.2 -W 2 10.253.116.2
+ip netns exec "$ns_b" ping -n -q -I 10.253.116.2 -c 3 -i 0.2 -W 2 10.253.116.1
+echo "L2TPV3_REMOVE_FIRST_LINK_SECOND_MUST_SURVIVE"
 run_engine a remove
 run_engine b remove
+run_engine a check secondary
+run_engine b check secondary
+ip netns exec "$ns_a" ping -n -q -I 10.253.116.1 -c 3 -i 0.2 -W 2 10.253.116.2
+ip netns exec "$ns_b" ping -n -q -I 10.253.116.2 -c 3 -i 0.2 -W 2 10.253.116.1
+run_engine a remove secondary
+run_engine b remove secondary
 for ns in "$ns_a" "$ns_b"; do
   [[ "$(ip netns exec "$ns" ip -json l2tp show tunnel)" == "[]" ]] || exit 7
   [[ "$(ip netns exec "$ns" ip -json l2tp show session)" == "[]" ]] || exit 8
   if ip -n "$ns" link show sl21234567890ab >/dev/null 2>&1; then exit 9; fi
-  if ip -n "$ns" -4 route show | grep -F '10.253.115'; then exit 10; fi
-  if ip netns exec "$ns" iptables -S INPUT | grep -F 'lnk_1234567890abcdef1234567890abcdef'; then exit 11; fi
+  if ip -n "$ns" link show sl2abcdefabcdef >/dev/null 2>&1; then exit 9; fi
+  if ip -n "$ns" -4 route show | grep -E '10[.]253[.](115|116)[.]'; then exit 10; fi
+  if ip netns exec "$ns" iptables -S INPUT | grep -E 'lnk_(1234567890abcdef1234567890abcdef|abcdefabcdefabcdefabcdefabcdefab)'; then exit 11; fi
 done
 echo "L2TPV3_REAL_TWO_PEER_KERNEL_ENGINE_E2E_PASS"

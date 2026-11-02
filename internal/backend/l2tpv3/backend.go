@@ -377,8 +377,8 @@ func (b *Backend) Validate(ctx context.Context, req core.Request, observed core.
 			}
 		}
 	case core.OperationRemove:
-		if o.present() && (!o.matches(req.Link) || !o.interfaceOwned(req.Link)) {
-			return stlerr.New(stlerr.CodeConflict, "l2tpv3_remove", string(req.Link.ID), "l2tpv3", "cannot delete L2TPv3 state not matching exact committed ownership")
+		if o.present() && (!o.matches(req.Link) || !o.interfaceOwned(req.Link) || !onlyManagedNeighbor(o, req.Link)) {
+			return stlerr.New(stlerr.CodeConflict, "l2tpv3_remove", string(req.Link.ID), "l2tpv3", "cannot delete L2TPv3 interface containing unowned neighbor or mismatched kernel state")
 		}
 		for _, claim := range []domain.ResourceClaim{
 			{Kind: domain.ResourceInterface, Key: p.id.name},

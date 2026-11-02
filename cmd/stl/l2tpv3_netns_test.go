@@ -37,6 +37,19 @@ func TestL2TPv3NetnsE2E(t *testing.T) {
 		Addresses: domain.LinkAddresses{Local: netip.MustParsePrefix("10.253.115.1/30"), Peer: netip.MustParsePrefix("10.253.115.2/30")},
 		MTU:       domain.MTUPolicy{Mode: domain.MTUAuto},
 	}
+	// The secondary Link shares the SAME public underlay with the primary.
+	// It must remain usable after the primary Link is removed.
+	switch os.Getenv("STL_L2TPV3_E2E_SLOT") {
+	case "", "primary":
+	case "secondary":
+		link.ID = "lnk_abcdefabcdefabcdefabcdefabcdefab"
+		link.Addresses = domain.LinkAddresses{
+			Local: netip.MustParsePrefix("10.253.116.1/30"),
+			Peer:  netip.MustParsePrefix("10.253.116.2/30"),
+		}
+	default:
+		t.Fatal("unrecognized L2TPv3 test Link slot")
+	}
 	if role == "b" {
 		link = pairing.Invert(link)
 	}

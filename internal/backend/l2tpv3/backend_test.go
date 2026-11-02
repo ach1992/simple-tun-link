@@ -78,6 +78,23 @@ func TestIdentityPairingAndValidation(t *testing.T) {
 	if bad.Validate() == nil {
 		t.Fatal("L2TPv3 /32 Ethernet unicast unusable peer accepted")
 	}
+	bad = l
+	bad.Addresses.Local = netip.MustParsePrefix("10.253.115.0/30")
+	if bad.Validate() == nil {
+		t.Fatal("L2TPv3 network address accepted as a unicast endpoint")
+	}
+	bad = l
+	bad.Addresses.Peer = netip.MustParsePrefix("10.253.115.3/30")
+	if bad.Validate() == nil {
+		t.Fatal("L2TPv3 broadcast address accepted as a unicast endpoint")
+	}
+	bad = l
+	bad.Addresses.Local = netip.MustParsePrefix("10.253.115.0/31")
+	bad.Addresses.Peer = netip.MustParsePrefix("10.253.115.1/31")
+	if err := bad.Validate(); err != nil {
+		t.Fatalf("legitimate RFC3021 /31 Ethernet pair rejected: %v", err)
+	}
+
 }
 
 type fakeKernel struct {
@@ -279,6 +296,15 @@ func TestBackendLifecycleAndOwnership(t *testing.T) {
 	if err != nil || !p2.Empty() {
 		t.Fatalf("idempotent Ensure changed backend: p=%#v err=%v", p2, err)
 	}
+	// Deleting the L2TP Ethernet interface would delete an unrelated
+	// neighbor entry. The removal gate must fail before removing the firewall.
+	k.neigh = append(k.neigh, neighbor{Dst: "10.253.115.3", LLAddr: "02:00:00:00:00:01", State: json.RawMessage(`["PERMANENT"]`)})
+	_, _, err = exercise(t, b, core.Request{Operation: core.OperationRemove, Prior: &l, Link: l, OwnedResources: p.Resources()})
+	if err == nil || !fw.active || k.ifc == nil {
+		t.Fatal("unsafe Remove deleted a Link that contained an unrelated neighbor")
+	}
+	k.neigh = k.neigh[:1]
+
 	p3, _, err := exercise(t, b, core.Request{Operation: core.OperationRemove, Prior: &l, Link: l, OwnedResources: p.Resources()})
 	if err != nil || p3.Empty() {
 		t.Fatalf("Remove failed: %v", err)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	core "github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/domain"
@@ -108,10 +109,17 @@ func slicesUp(flags []string) bool {
 func correctNeighbor(o observation, l domain.Link) bool {
 	for _, n := range o.neighbors {
 		if n.Dst == l.Addresses.Peer.Addr().String() {
-			return n.LLAddr == o.id.peerMAC && neighborPermanent(n)
+			return strings.EqualFold(n.LLAddr, o.id.peerMAC) && neighborPermanent(n)
 		}
 	}
 	return false
+}
+
+// A session deletion destroys every neighbor attached to its Ethernet
+// interface. A second neighbor could belong to another program or operator:
+// refuse destructive Remove/rollback instead of silently deleting it.
+func onlyManagedNeighbor(o observation, l domain.Link) bool {
+	return len(o.neighbors) == 1 && correctNeighbor(o, l)
 }
 func (b *Backend) createKernel(ctx context.Context, l domain.Link, id identity, existingTunnel bool) (p progress, err error) {
 	if !existingTunnel {
@@ -202,7 +210,7 @@ func (b *Backend) undoCreated(ctx context.Context, l domain.Link, p progress) er
 			!p.addressWritten && len(o.addresses) != 0 {
 			return fmt.Errorf("cannot undo L2TPv3 session: address state has changed")
 		}
-		if p.neighborWritten && !correctNeighbor(o, l) || !p.neighborWritten && len(o.neighbors) != 0 {
+		if p.neighborWritten && !onlyManagedNeighbor(o, l) || !p.neighborWritten && len(o.neighbors) != 0 {
 			return fmt.Errorf("cannot undo L2TPv3 session: neighbor state changed")
 		}
 		wantAlias := ""
