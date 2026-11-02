@@ -138,6 +138,7 @@ func menuRefineModuleReadiness(report linux.CapabilityReport, observe func(strin
 				continue
 			}
 			baseInactive, fouInactive := false, false
+			inactiveBaseModules := make([]string, 0, 2)
 			uncertain := false
 			for _, module := range plainRequiredModules(choice) {
 				switch states[module] {
@@ -148,6 +149,7 @@ func menuRefineModuleReadiness(report linux.CapabilityReport, observe func(strin
 						fouInactive = true
 					} else {
 						baseInactive = true
+						inactiveBaseModules = append(inactiveBaseModules, module)
 					}
 				case linux.KernelModuleUnavailable:
 					status = linux.CapabilityStatus{ReasonCode: "kernel_module_artifact_unavailable",
@@ -169,8 +171,13 @@ func menuRefineModuleReadiness(report linux.CapabilityReport, observe func(strin
 				report[capability] = linux.CapabilityStatus{ReasonCode: "fou_module_present_probe_failed",
 					Reason: "FOU module is available on disk but not loaded"}
 			case baseInactive:
+				label, verb := "module", "is"
+				if len(inactiveBaseModules) > 1 {
+					label, verb = "modules", "are"
+				}
 				report[capability] = linux.CapabilityStatus{ReasonCode: "kernel_module_not_loaded",
-					Reason: "Base GRE/IPIP module is available on disk but not loaded"}
+					Reason: fmt.Sprintf("Required kernel %s %s %s available on disk but not loaded",
+						label, strings.Join(inactiveBaseModules, ", "), verb)}
 			case !status.Available && status.ReasonCode == "fou_module_present_probe_failed":
 				// A failed FOU query with a verified loaded module is not a
 				// request to load it again, whatever modinfo itself reported.

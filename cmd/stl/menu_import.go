@@ -179,13 +179,13 @@ func clearQueuedMenuConfirmation(input io.Reader, reader *bufio.Reader) error {
 // menuImport delegates all decoding, preview, canonical inversion,
 // import eligibility, state locking and mutation to existing commands.
 // The extra operator confirmation is intentionally human-only.
-// A plain GRE/IPIP offer may be visible on the terminal; a credentialed
+// A plain GRE/IPIP/L2TPv3 offer may be visible on the terminal; a credentialed
 // WireGuard/IPsec offer stays protected. Both use the canonical preview
 // and import commands, with a freshly typed affirmative after the preview.
 func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, options *runtimeOptions) int {
 	for {
 		menuScreen(out, "Import Setup Link / choose type")
-		menuOption(out, "1", "GRE / IPIP", "Unencrypted; visible paste")
+		menuOption(out, "1", "GRE / IPIP / L2TPv3", "Unencrypted; visible paste")
 		menuOption(out, "2", "WireGuard / IPsec", "Sensitive; hidden paste")
 		menuOption(out, "3", "WireGuard / WSS + TLS", "Sensitive peer JSON; hidden paste")
 		menuOption(out, "4", "WireGuard / QUIC + TLS", "Sensitive peer JSON; hidden paste")
@@ -206,7 +206,7 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			return 0
 		}
 		if mode != "1" && mode != "2" && mode != "3" && mode != "4" {
-			menuNotice(out, "WARNING", "Choose 1 for GRE/IPIP, 2 for WireGuard/IPsec, 3 for WireGuard/WSS or 4 for WireGuard/QUIC.")
+			menuNotice(out, "WARNING", "Choose 1 for GRE/IPIP/L2TPv3, 2 for WireGuard/IPsec, 3 for WireGuard/WSS or 4 for WireGuard/QUIC.")
 			continue
 		}
 		if mode == "3" {
@@ -222,7 +222,7 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			prompt := func() {
 				menuScreen(out, "Import / paste complete Setup Link")
 				if mode == "1" {
-					fmt.Fprintln(out, "Paste the GRE/IPIP stl:// line. It is not encrypted and WILL be visible while typing.")
+					fmt.Fprintln(out, "Paste the GRE/IPIP/L2TPv3 stl:// line. It is not encrypted and WILL be visible while typing.")
 				} else {
 					fmt.Fprintln(out, "Paste the secret-bearing stl:// line. Terminal input is hidden to protect peer keys.")
 				}
@@ -268,7 +268,7 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			if code := linkPreviewCommand([]string{"preview", "--stdin", "--json"},
 				strings.NewReader(encoded), &buffer, io.Discard); code != 0 {
 				menuProse(out, "The setup link could not be read: it may be incomplete, altered, or from an unsupported STL version.")
-				menuProse(out, "Copy the original COMPLETE line from the other server (Manage -> Share for GRE/IPIP) and retry.")
+				menuProse(out, "Copy the original COMPLETE line from the other server (Manage -> Share for GRE/IPIP/L2TPv3) and retry.")
 				continue
 			}
 			var preview ImportPreviewResponse
@@ -282,7 +282,7 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 				break
 			}
 			if mode == "2" && !preview.Sensitive && !preview.HasCredential {
-				menuProse(out, "This is an ordinary plaintext GRE/IPIP setup link; importing it in protected mode is also supported.")
+				menuProse(out, "This is an ordinary plaintext GRE/IPIP/L2TPv3 setup link; importing it in protected mode is also supported.")
 			}
 			menuScreen(out, "Import / review before applying")
 			menuField(out, "Type", fmt.Sprintf("%s / %s", preview.Backend, preview.Encapsulation))

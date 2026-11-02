@@ -394,7 +394,7 @@ func menuCreatePlain(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		menuNotice(out, "OK", "Local tunnel saved. No Setup Link is needed; configure the other server manually.")
 		printManualConnectionDetails(out, link)
 		fmt.Fprintln(out, "You can see these details again in My tunnels -> Connection details.")
-		fmt.Fprintln(out, "You can also export a GRE/IPIP Setup Link later in My tunnels -> Share.")
+		fmt.Fprintln(out, "You can also export a plaintext Setup Link later in My tunnels -> Share.")
 	} else {
 		menuNotice(out, "OK", "Local tunnel saved. Copy the Setup Link below to the other server.")
 		if code := menuSharePlainLink(link.ID, out, errOut, options); code != 0 {
