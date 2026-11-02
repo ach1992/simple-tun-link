@@ -1,0 +1,86 @@
+# Dedicated L2TPv3 E2E: native kernel capability is OPTIONAL for STL.
+# Do not make unrelated GRE/WG/IPsec jobs fail when a runner image lacks
+# l2tp_ip/l2tp_eth. This separate capability-qualified job is required for
+# a PR that introduces or changes this backend. It fails (not skips) if the
+# selected runner lacks the kernel feature.
+name: Native L2TPv3 Direct-IP E2E
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/l2tpv3-e2e.yml'
+      - 'scripts/e2e/l2tpv3-*'
+      - 'internal/backend/l2tpv3/**'
+      - 'internal/domain/link.go'
+      - 'internal/linux/capability.go'
+      - 'internal/linux/link_identity.go'
+      - 'internal/linux/restore_modules.go'
+      - 'internal/managedmtu/managed_mtu.go'
+      - 'internal/diagnostics/l2tpv3.go'
+      - 'internal/pairing/offer.go'
+      - 'cmd/stl/**'
+
+permissions:
+  contents: read
+
+jobs:
+  native-arm64:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Pin exact source and native ARM64 kernel
+        env:
+          EXPECTED_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_PR_HEAD"
+          test -z "$(git status --porcelain)"
+          test "$(uname -m)" = aarch64
+          test "$(go env GOARCH)" = arm64
+          echo "L2TPV3_E2E_SOURCE_SHA=$(git rev-parse HEAD)"
+          uname -a
+          go version
+          ip -Version
+      - name: Qualify native Linux L2TPv3 modules and read access
+        run: |
+          set -euo pipefail
+          # One dedicated disposable GitHub runner, never an Agent/production VM.
+          # A missing capability is an explicit failure in THIS optional job,
+          # not a false pass and not a blocker for the unrelated six-Link suite.
+          for module in l2tp_ip l2tp_eth; do
+            sudo modprobe "$module" || {
+              echo "L2TPV3_E2E_UNAVAILABLE_KERNEL_MODULE=$module"
+              exit 2
+            }
+          done
+          # Generic netlink L2TP dumps may require CAP_NET_ADMIN even to read.
+          sudo ip -json l2tp show tunnel
+          sudo ip -json l2tp show session
+          echo L2TPV3_E2E_MODULES_READY
+      - name: Build pinned native acceptance executable
+        run: |
+          set -euo pipefail
+          go test -c -o "$RUNNER_TEMP/stl-l2tp-e2e.test" ./cmd/stl
+          chmod 755 "$RUNNER_TEMP/stl-l2tp-e2e.test"
+          echo "L2TPV3_E2E_TEST_SHA256=$(sha256sum "$RUNNER_TEMP/stl-l2tp-e2e.test" | awk '{print $1}')"
+      - name: Real bilateral private L3 plus multi-Link isolation
+        run: |
+          set -euo pipefail
+          test -x "$RUNNER_TEMP/stl-l2tp-e2e.test"
+          binary_sha="$(sha256sum "$RUNNER_TEMP/stl-l2tp-e2e.test" | awk '{print $1}')"
+          source_sha="$(git rev-parse HEAD)"
+          sudo env PATH="$PATH" \
+            STL_E2E_DISPOSABLE_HOST=approved \
+            STL_E2E_PREBUILT_TEST="$RUNNER_TEMP/stl-l2tp-e2e.test" \
+            STL_E2E_PREBUILT_SHA256="$binary_sha" \
+            STL_E2E_SOURCE_SHA="$source_sha" \
+            bash scripts/e2e/l2tpv3-netns.sh

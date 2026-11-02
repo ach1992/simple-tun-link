@@ -13,7 +13,7 @@ not a changing status report in this file.
 Run privileged tests **only on an explicitly approved disposable
 Docker-capable VM**. Never use a production, shared, AI Server
 Agent or test-control-plane host. Docker containers share the
-VM's kernel; FOU/IPIP/L2TPv3 module autoload may affect that VM.
+VM's kernel; FOU/IPIP module autoload may affect that VM.
 The `STL_E2E_DISPOSABLE_HOST=approved` environment flag is
 a local safety check, **not** authorization by itself.
 
@@ -42,17 +42,6 @@ VICI/strongSwan credentials into the guests.
 
 A successful run must demonstrate all of the following, not
 merely compile or print a success-looking JSON response:
-
-The independent **L2TPv3 Direct-IP / protocol 115** Ethernet pseudowire
-fixture must also prove two-way private ICMP, **16 MiB receiver-confirmed
-SHA-256 TCP in each direction**, idempotent Ensure, committed-Link
-kernel-loss restore, and two simultaneous L2TPv3 Links on the same
-underlay. Removing the first must leave the second live, followed by
-exact scoped cleanup. Both L2TP kernel drivers are required. The E2E
-markers are `L2TPV3_REAL_TWO_PEER_KERNEL_ENGINE_E2E_PASS`,
-`L2TPV3_TCP_BILATERAL_16MiB_SHA_PASS` and
-`L2TPV3_E2E_CLEANUP_EXIT=0`. This does not prove that an arbitrary
-public provider carries protocol 115.
 
 1. Three simultaneous same-peer GRE Native, keyed FOU and keyed
    GUE Links with unique IDs, link IPs, collision-safe UDP/firewall
@@ -102,6 +91,29 @@ It also requires `GRE_E2E_CLEANUP_EXIT=0` for the
 guest sessions and
 `CROSS_BACKEND_DISPOSABLE_CLEANUP_EXIT=0` overall.
 Failure/timeout/unsupported paths must not quietly print PASS.
+
+## Independently gated native L2TPv3 acceptance
+
+Unlike the existing six-Link release matrix, L2TPv3 is a **kernel-
+capability-dependent optional Backend**. A disposable GitHub runner with
+a minimal Azure kernel need not have its `l2tp_ip` module even when its
+GRE, IPIP and WireGuard drivers work. The dedicated
+[`l2tpv3-e2e.yml`](../../.github/workflows/l2tpv3-e2e.yml) uses an
+explicitly capability-qualified **native ARM64 runner**; missing required
+modules is a visible failure of this *L2TPv3* acceptance, not a false
+pass or an unrelated six-Link matrix regression. Permission-denied
+generic-netlink reads are separated from missing module failures.
+
+The dedicated **L2TPv3 Direct-IP / protocol 115** Ethernet pseudowire
+fixture must also prove two-way private ICMP, **16 MiB receiver-confirmed
+SHA-256 TCP in each direction**, idempotent Ensure, committed-Link
+kernel-loss restore, and two simultaneous L2TPv3 Links on the same
+underlay. Removing the first must leave the second live, followed by
+exact scoped cleanup. Both L2TP kernel drivers are required. The E2E
+markers are `L2TPV3_REAL_TWO_PEER_KERNEL_ENGINE_E2E_PASS`,
+`L2TPV3_TCP_BILATERAL_16MiB_SHA_PASS` and
+`L2TPV3_E2E_CLEANUP_EXIT=0`. This does not prove that an arbitrary
+public provider carries protocol 115.
 
 ## Exact-source CI and evidence
 

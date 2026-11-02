@@ -64,10 +64,10 @@ jobs:
         run: |
           set -euo pipefail
           # The disposable VM starts with minimal loaded modules. Load only
-          # the FOU/IPIP and native L2TPv3 drivers required by the full
-          # acceptance matrix. Never run this on the Agent or a shared host.
+          # the FOU and IPIP drivers required by the *existing* complete
+          # release matrix; never run this on the Agent or a shared host.
           # Missing capability is FAIL, not SKIP.
-          for module in fou ipip l2tp_ip l2tp_eth; do
+          for module in fou ipip; do
             sudo modprobe "$module" || {
               echo "UNSUPPORTED_KERNEL_MODULE=$module"
               exit 2
@@ -76,10 +76,6 @@ jobs:
           done
           ip -json fou show
           ip -details -json link show type ipip
-          # L2TP generic-netlink queries may require CAP_NET_ADMIN even for reads.
-          # Do not misclassify an unprivileged EPERM as an unsupported module.
-          sudo ip -json l2tp show tunnel
-          sudo ip -json l2tp show session
       - name: Build isolated userspace images
         run: |
           set -euo pipefail
@@ -87,7 +83,7 @@ jobs:
             --build-arg BASE_IMAGE=ubuntu:24.04 -t stl-cross-six:ubuntu24 .
           docker build -f scripts/e2e/cross-backend.Dockerfile \
             --build-arg BASE_IMAGE=debian:trixie -t stl-cross-six:debian13 .
-      - name: Real L2TPv3 Direct-IP plus six-Link GRE/WG/IKEv2 ESP/NAT-T matrix
+      - name: Real six-Link GRE/WG/IKEv2 ESP/NAT-T matrix
         run: |
           set -euo pipefail
           sudo env PATH="$PATH" STL_E2E_DISPOSABLE_HOST=approved \
