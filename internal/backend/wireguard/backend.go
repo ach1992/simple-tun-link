@@ -385,9 +385,9 @@ func (b *Backend) Plan(ctx context.Context, req core.Request, observed core.Obse
 			resources:       []domain.ResourceClaim{{Kind: domain.ResourceUDPListenPort, Key: strconv.Itoa(int(req.Link.WireGuard.ListenPort))}}}
 		return p, nil
 	}
-	route, err := b.routes.Resolve(ctx, req.Link.Underlay.Peer)
+	route, err := linux.ResolveConfiguredUnderlay(ctx, b.routes, b.runner, req.Link.Underlay.Local, req.Link.Underlay.Peer)
 	if err != nil {
-		return nil, fmt.Errorf("cannot resolve WireGuard underlay: %w", err)
+		return nil, stlerr.LocalUnderlayUnverified("wireguard_plan", string(req.Link.ID), string(req.Link.Backend), err)
 	}
 	if route.Source != req.Link.Underlay.Local {
 		return nil, fmt.Errorf("WireGuard local underlay does not match selected route source")
@@ -462,7 +462,7 @@ func (b *Backend) Validate(ctx context.Context, req core.Request, observed core.
 				"owned firewall identity changed during removal planning")
 		}
 	} else {
-		route, err := b.routes.Resolve(ctx, req.Link.Underlay.Peer)
+		route, err := linux.ResolveConfiguredUnderlay(ctx, b.routes, b.runner, req.Link.Underlay.Local, req.Link.Underlay.Peer)
 		if err != nil {
 			return err
 		}
@@ -607,7 +607,7 @@ func (b *Backend) Verify(ctx context.Context, req core.Request) (core.Observatio
 	name, _ := InterfaceName(req.Link.ID)
 	switch req.Operation {
 	case core.OperationEnsure:
-		route, err := b.routes.Resolve(ctx, req.Link.Underlay.Peer)
+		route, err := linux.ResolveConfiguredUnderlay(ctx, b.routes, b.runner, req.Link.Underlay.Local, req.Link.Underlay.Peer)
 		if err != nil {
 			return nil, err
 		}

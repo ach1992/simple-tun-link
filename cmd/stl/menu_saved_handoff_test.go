@@ -504,7 +504,7 @@ func TestGuidedWireGuardRealTTYShowsOriginalProtectedSetupImmediatelyAfterCreate
 	tty.send("1")
 	tty.expect("Tunnel type [1]: ")
 	tty.send("2")
-	tty.expect("Other server's reachable IPv4 address")
+	tty.expect("Other server's IPv4 address (peer may be offline")
 	tty.send("192.0.2.20")
 	tty.expect("Tunnel IP on THIS server")
 	tty.send("")

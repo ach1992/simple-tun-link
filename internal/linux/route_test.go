@@ -89,6 +89,11 @@ func TestRouteResolverReportsOptionalRouteMTU(t *testing.T) {
 	}{
 		{"top level", `[{"dst":"203.0.113.9","dev":"eth0","prefsrc":"192.0.2.10","mtu":1410}]`, 1410, false},
 		{"nested metric", `[{"dst":"203.0.113.9","dev":"eth0","prefsrc":"192.0.2.10","metrics":{"mtu":1390}}]`, 1390, false},
+		{"iproute2 array metric", `[{"dst":"203.0.113.9","dev":"eth0","prefsrc":"192.0.2.10","metrics":[{"mtu":1500}]}]`, 1500, false},
+		{"array lower than top-level", `[{"dst":"203.0.113.9","dev":"eth0","prefsrc":"192.0.2.10","mtu":1600,"metrics":[{"mtu":1450}]}]`, 1450, false},
+		{"array negative MTU", `[{"dst":"203.0.113.9","dev":"eth0","prefsrc":"192.0.2.10","metrics":[{"mtu":-1}]}]`, 0, true},
+		{"ambiguous multiple metric rows", `[{"dst":"203.0.113.9","dev":"eth0","prefsrc":"192.0.2.10","metrics":[{"mtu":1500},{"mtu":1400}]}]`, 0, true},
+		{"invalid metric shape", `[{"dst":"203.0.113.9","dev":"eth0","prefsrc":"192.0.2.10","metrics":"1500"}]`, 0, true},
 		{"both use lower", `[{"dst":"203.0.113.9","dev":"eth0","prefsrc":"192.0.2.10","mtu":1450,"metrics":{"mtu":1390}}]`, 1390, false},
 		{"not specified", `[{"dst":"203.0.113.9","dev":"eth0","prefsrc":"192.0.2.10"}]`, 0, false},
 		{"invalid negative", `[{"dst":"203.0.113.9","dev":"eth0","prefsrc":"192.0.2.10","mtu":-1}]`, 0, true},

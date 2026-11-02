@@ -36,7 +36,7 @@ func TestWSSGuidedPTYShowsNextPromptAndCancelsWithoutState(t *testing.T) {
 			&runtimeOptions{stateRoot: root}, companion)
 	}()
 	seen := readMenuPTYUntil(t, master, "WireGuard UDP is scoped to loopback",
-		"Other server's reachable IPv4 address")
+		"Other server's IPv4 address (peer may be offline")
 	if strings.Contains(seen, "Approved wstunnel") {
 		t.Fatal("correct pinned companion was refused")
 	}
@@ -103,7 +103,7 @@ func TestWSSGuidedRealPTYDirectionPortRetryReviewAndCancel(t *testing.T) {
 	steps := []struct {
 		prompt, answer string
 	}{
-		{"Other server's reachable IPv4 address", "192.0.2.20\n"},
+		{"Other server's IPv4 address (peer may be offline", "192.0.2.20\n"},
 		{"Tunnel IP on THIS server", "\n"},
 		{"Direction [Enter=suggested; 1=listen; 2=dial]: ", "2\n"},
 		{"Public WSS/TLS TCP port [443]: ", "0\n"},

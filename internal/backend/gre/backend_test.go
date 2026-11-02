@@ -39,19 +39,29 @@ func testLink() domain.Link {
 }
 
 type fakeRunner struct {
-	link                 domain.Link
-	name                 string
-	state                observedLink
-	extra                []observedLink
-	mappings             []fouMapping
-	commands             []string
-	addressIndexOverride int
+	link                   domain.Link
+	name                   string
+	state                  observedLink
+	extra                  []observedLink
+	mappings               []fouMapping
+	commands               []string
+	addressIndexOverride   int
+	assignedSourceOverride string
 }
 
 func (r *fakeRunner) Run(_ context.Context, name string, args ...string) (linux.CommandResult, error) {
 	r.commands = append(r.commands, strings.Join(append([]string{name}, args...), " "))
 	joined := strings.Join(args, " ")
 	switch {
+	// Fixture-backed exact host assignment: success-path route hints are
+	// independently verified just like production underlay admission.
+	case joined == "-json address show":
+		assigned := r.link.Underlay.Local.String()
+		if r.assignedSourceOverride != "" {
+			assigned = r.assignedSourceOverride
+		}
+		raw := fmt.Sprintf(`[{"ifname":"eth0","addr_info":[{"family":"inet","local":%q,"prefixlen":24}]}]`, assigned)
+		return linux.CommandResult{Stdout: []byte(raw)}, nil
 	case joined == "-details -json link show type gre":
 		rows := make([]linkJSON, 0, 1+len(r.extra))
 		for _, state := range append([]observedLink{r.state}, r.extra...) {

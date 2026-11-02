@@ -149,6 +149,8 @@ func (h *fakeKernel) Run(_ context.Context, binary string, args ...string) (linu
 		return linux.CommandResult{Stdout: b}, nil
 	}
 	switch {
+	case joined == "-json address show":
+		return encode([]map[string]any{{"ifname": "eth0", "addr_info": []map[string]any{{"family": "inet", "local": h.link.Underlay.Local.String(), "prefixlen": 24}}}})
 	case joined == "-json l2tp show tunnel":
 		return encode(h.tunnels)
 	case joined == "-json l2tp show session":

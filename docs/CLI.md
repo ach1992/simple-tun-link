@@ -51,10 +51,21 @@ encapsulations/IPsec remain discoverable.
   actual Link creation. The doctor never repairs an unowned VPN.
   The separate, exact `STOP strongswan.service` restriction is
   documented in [installer ownership](INSTALL.md#installation-and-runtime-ownership).
-- Creating a Link selects the **other server's** reachable underlay
-  address, suggests this host's route-derived source, and offers an
-  unused private Link Address pair or manual local/peer addresses
-  (including valid adjacent /31 and usable /30 pairs).
+- Creating a Link selects the **other server's** intended underlay IPv4
+  (the remote server may be offline). STL uses a local kernel route lookup
+  only to suggest THIS host's assigned IP and interface; **no Ping,
+  handshake, TCP connection or peer connectivity test is required before
+  Create or Import**. If local route/source detection fails, it lists
+  assigned local IPv4/interface pairs from `ip -json address show` and lets
+  the operator select a uniquely assigned pair. If there is exactly one
+  usable local pair, Enter accepts it. On a multi-homed host, even an
+  otherwise verified kernel route suggestion offers `m` to explicitly
+  choose another uniquely assigned local IPv4/interface. The Engine rechecks the selected
+  local address/interface, committed identity, credentials, and conflicts.
+  The wizard also suggests an unused private Link Address pair or permits
+  manual local/peer tunnel addresses (valid adjacent /31 and usable /30
+  pairs; IPsec still requires /31). An unassigned or multiply-assigned
+  local underlay cannot silently become a valid Create/Import source.
 - Preview before mutation shows selected backend, both endpoints,
   encapsulation/ports, endpoint-local MTU and effects. Selected missing
   trusted prerequisites can be prepared through one scoped, freshly

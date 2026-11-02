@@ -38,13 +38,13 @@ func plainBackendCapability(backend domain.Backend, mode domain.Encapsulation) l
 
 func askPeerUnderlay(p createPrompts) (netip.Addr, error) {
 	for {
-		value, err := p.ask("Other server's reachable IPv4 address (public/private; q=back): ")
+		value, err := p.ask("Other server's IPv4 address (peer may be offline; q=back): ")
 		if err != nil {
 			return netip.Addr{}, err
 		}
 		peer, err := netip.ParseAddr(value)
 		if err != nil || !peer.Is4() || !peer.IsGlobalUnicast() || peer.IsLoopback() || peer.IsLinkLocalUnicast() {
-			fmt.Fprintln(p.out, "Enter an actual reachable IPv4 address for the OTHER server, like 192.0.2.20.")
+			fmt.Fprintln(p.out, "Enter the OTHER server's IPv4 address (no ping or live connection required), e.g. 192.0.2.20.")
 			continue
 		}
 		return peer, nil

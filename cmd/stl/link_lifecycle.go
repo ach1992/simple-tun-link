@@ -295,6 +295,10 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 		case evidence.HostMutation == "not_attempted" && errors.Is(observed, context.Canceled):
 			safe.ReasonCode = "operation_cancelled_before_apply"
 			safe.NextStep = "Operation was canceled before backend Apply; inspect Link state and retry only if still intended."
+		case observedPublic != nil && observedPublic.ReasonCode == "local_underlay_unverified" &&
+			evidence.HostMutation == "not_attempted" && (evidence.Stage == "plan" || evidence.Stage == "validate"):
+			safe.ReasonCode = "local_underlay_unverified"
+			safe.NextStep = "Inspect ip -json address show on THIS server. Choose a uniquely assigned local IPv4/interface in the menu or correct the request's local underlay IP. Creating or importing does not require peer reachability; no host Apply was invoked."
 		case evidence.HostMutation == "not_attempted":
 			safe.ReasonCode = "rejected_before_host_apply"
 			safe.NextStep = "Correct prerequisites or conflicting intent, then inspect Link state read-only before retrying; Engine did not invoke host Apply."
