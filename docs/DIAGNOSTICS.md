@@ -138,6 +138,7 @@ re-inspects ownership and routing under its lock. Direct versioned CLI/JSON
 preview and import contracts are unchanged; this is an interactive preflight,
 not a remote recipient-discovery or network-configuration mechanism.
 
+## Common Linux probe contract
 
 Before transmitting, the read-only adapter must verify the selected
 backend's capability and exact owned interface name/ifindex, local
