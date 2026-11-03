@@ -18,7 +18,7 @@ stable_url='https://github.com/ach1992/simple-tun-link/releases/latest/download/
 # valid Bash syntax before it executes any part of the downloaded script.
 for line in "${published_commands[@]}"; do
   [[ "$line" == *'s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 '* &&
-     "$line" == *' | head -c 131073 | tr "\000" "\001") && (( ${#s} > 0 && ${#s} <= 131072 )) && [[ $s != *$(printf "\001")* ]]'* &&
+     "$line" == *' | head -c 131073 | tr "\000" "\001" && printf x) && (( ${#s} > 1 && ${#s} <= 131073 )) && [[ $s != *$(printf "\001")* ]] && s=${s%x}'* &&
      "$line" == *'&& bash -n <<<"$s" && bash -c "$s" stl "$@"'* &&
      "$line" != *' | bash'* ]] || {
     echo 'Public installer must finish its download before any execution.' >&2

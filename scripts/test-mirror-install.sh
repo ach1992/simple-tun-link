@@ -116,6 +116,28 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(('%x\r\n' % len(body)).encode('ascii') + body + b'\r\n0\r\n\r\n')
             return
+        if self.path in ('/newline-oversize.sh', '/newline-fit.sh',
+                         '/official-newline-oversize.sh', '/official-newline-fit.sh'):
+            # A successful HTTPS chunked response without Content-Length.
+            # Capture a valid complete script followed by ONLY trailing LF.
+            # A normal-size complete bootstrap must execute; 128KiB+1 must not.
+            if self.path.startswith('/official-'):
+                prefix = b'#!/usr/bin/env bash\nprintf "OFFICIAL_NEWLINE_FIXTURE_EXECUTED=PASS\\n"\n'
+            else:
+                with open(os.path.join(root, 'install.sh'), 'rb') as source:
+                    prefix = source.read()
+            target_size = 131073 if 'oversize' in self.path else 32768
+            assert len(prefix) < target_size
+            body = prefix + b'\n' * (target_size - len(prefix))
+            assert len(body) == target_size and body[-1:] == b'\n'
+            self.send_response(200)
+            self.send_header('Transfer-Encoding', 'chunked')
+            self.end_headers()
+            for offset in range(0, len(body), 32768):
+                chunk = body[offset:offset+32768]
+                self.wfile.write(('%x\r\n' % len(chunk)).encode('ascii') + chunk + b'\r\n')
+            self.wfile.write(b'0\r\n\r\n')
+            return
         if self.path == '/stall.sh':
             self.send_response(200)
             self.end_headers()
@@ -198,6 +220,11 @@ grep -Fx "INSTALL_COMMAND=$one_liner" "$scratch/prepared.log" >/dev/null ||
 # Real TLS streaming tests: chunked payload with no Content-Length must
 # be stopped at 128KiB+1 before any script is run. A stalled response must
 # time out despite an initially valid shell prefix. No root/host mutation.
+for fixture in "$base/newline-oversize.sh" "$base/official-newline-oversize.sh"; do
+  raw_bytes=$(curl -fsS --max-time 20 "$fixture" | wc -c)
+  [[ $raw_bytes == 131073 ]] ||
+    { echo "MIRROR_TEST_FAIL: wire payload must be exactly 131073 bytes: $fixture ($raw_bytes)" >&2; exit 1; }
+done
 attempts=$(wc -l < "$STL_MIRROR_SUDO_RECORD")
 oversize_cmd=${one_liner/"$base/install.sh"/"$base/chunked-oversize.sh"}
 if bash -c "$oversize_cmd" > "$scratch/oversize.out" 2> "$scratch/oversize.err"; then
@@ -205,6 +232,45 @@ if bash -c "$oversize_cmd" > "$scratch/oversize.out" 2> "$scratch/oversize.err";
 fi
 [[ $(wc -l < "$STL_MIRROR_SUDO_RECORD") == "$attempts" ]] ||
   { echo 'MIRROR_TEST_FAIL: oversized first hop invoked privileged installer' >&2; exit 1; }
+# The exact publicly documented official command must independently reject
+# the same trailing-LF bypass. Only its first-hop URL is redirected to the
+# isolated TLS fixture; the payload is deliberately harmless (no sudo).
+official_url='https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh'
+mapfile -t official_commands < <(grep '^bash -c .*stl-bootstrap.sh' "$repo/README.md")
+[[ ${#official_commands[@]} -eq 3 ]] ||
+  { echo 'MIRROR_TEST_FAIL: expected three published official commands' >&2; exit 1; }
+for official_line in "${official_commands[@]}"; do
+  grep -Fx -- "$official_line" "$repo/docs/INSTALL.md" >/dev/null ||
+    { echo 'MIRROR_TEST_FAIL: official user commands disagree' >&2; exit 1; }
+  official_bad=${official_line/"$official_url"/"$base/official-newline-oversize.sh"}
+  [[ $official_bad == *"$base/official-newline-oversize.sh"* ]] ||
+    { echo 'MIRROR_TEST_FAIL: official first-hop fixture substitution failed' >&2; exit 1; }
+  if bash -c "$official_bad" > "$scratch/official-lf-bad.out" 2> "$scratch/official-lf-bad.err"; then
+    echo 'MIRROR_TEST_FAIL: official literal command accepted 131073 trailing-LF bytes' >&2; exit 1
+  fi
+  ! grep -q 'OFFICIAL_NEWLINE_FIXTURE_EXECUTED' "$scratch/official-lf-bad.out" ||
+    { echo 'MIRROR_TEST_FAIL: oversized official script executed' >&2; exit 1; }
+  official_good=${official_line/"$official_url"/"$base/official-newline-fit.sh"}
+  bash -c "$official_good" > "$scratch/official-lf-good.out" 2> "$scratch/official-lf-good.err" ||
+    { echo 'MIRROR_TEST_FAIL: official literal command rejected valid within-cap trailing-LF bytes' >&2
+      sed -n '1,12p' "$scratch/official-lf-good.err" >&2
+      exit 1; }
+  grep -Fx 'OFFICIAL_NEWLINE_FIXTURE_EXECUTED=PASS' "$scratch/official-lf-good.out" >/dev/null ||
+    { echo 'MIRROR_TEST_FAIL: official within-cap fixture not executed' >&2; exit 1; }
+done
+[[ $(wc -l < "$STL_MIRROR_SUDO_RECORD") == "$attempts" ]] ||
+  { echo 'MIRROR_TEST_FAIL: official fixture invoked privileged installer' >&2; exit 1; }
+
+# Generated mirror command and documented mirror command were already byte-
+# checked against each other. Exercise their real pinned executable payload.
+newline_bad_cmd=${one_liner/"$base/install.sh"/"$base/newline-oversize.sh"}
+if bash -c "$newline_bad_cmd" > "$scratch/mirror-lf-bad.out" 2> "$scratch/mirror-lf-bad.err"; then
+  echo 'MIRROR_TEST_FAIL: mirror accepted 131073 trailing-LF bytes' >&2; exit 1
+fi
+[[ $(wc -l < "$STL_MIRROR_SUDO_RECORD") == "$attempts" ]] ||
+  { echo 'MIRROR_TEST_FAIL: oversized newline-padded mirror reached sudo' >&2; exit 1; }
+echo 'FIRST_HOP_NEWLINE_OVERFLOW_NO_EXECUTION=PASS'
+
 nul_cmd=${one_liner/"$base/install.sh"/"$base/nul-padded.sh"}
 if bash -c "$nul_cmd" > "$scratch/nul.out" 2> "$scratch/nul.err"; then
   echo 'MIRROR_TEST_FAIL: NUL-padded oversized chunked response was accepted' >&2; exit 1
@@ -245,6 +311,15 @@ bash -c "$one_liner" > "$scratch/install.out" 2> "$scratch/install.err" || {
 }
 [[ $(wc -l < "$STL_MIRROR_SUDO_RECORD") == 1 ]] ||
   { echo 'MIRROR_TEST_FAIL: not exactly one canonical privileged invocation' >&2; exit 1; }
+# A valid within-cap chunked response that contains the fully pinned mirror
+# bootstrap plus harmless trailing newlines must still succeed.
+newline_good_cmd=${one_liner/"$base/install.sh"/"$base/newline-fit.sh"}
+bash -c "$newline_good_cmd" > "$scratch/mirror-lf-good.out" 2> "$scratch/mirror-lf-good.err" ||
+  { echo 'MIRROR_TEST_FAIL: mirror rejected valid within-cap trailing-LF bytes' >&2; exit 1; }
+[[ $(wc -l < "$STL_MIRROR_SUDO_RECORD") == 2 ]] ||
+  { echo 'MIRROR_TEST_FAIL: valid trailing-LF mirror did not invoke canonical installer' >&2; exit 1; }
+echo 'FIRST_HOP_NEWLINE_WITHIN_LIMIT_VALID=PASS'
+
 
 # Edit ONLY the embedded digest constant of a separately served bootstrap.
 # A well-formed shell file with a false pin cannot elevate privileges.

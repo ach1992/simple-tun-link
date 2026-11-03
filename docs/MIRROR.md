@@ -95,18 +95,21 @@ On an eligible Linux host that reaches **only your mirror**:
 **Fresh installation:**
 
 ```bash
-bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsS --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | head -c 131073 | tr "\000" "\001") && (( ${#s} > 0 && ${#s} <= 131072 )) && [[ $s != *$(printf "\001")* ]] && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl
+bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsS --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | head -c 131073 | tr "\000" "\001" && printf x) && (( ${#s} > 1 && ${#s} <= 131073 )) && [[ $s != *$(printf "\001")* ]] && s=${s%x} && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl
 ```
 
 **Update of an existing installer-owned STL:**
 
 ```bash
-bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsS --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | head -c 131073 | tr "\000" "\001") && (( ${#s} > 0 && ${#s} <= 131072 )) && [[ $s != *$(printf "\001")* ]] && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl update
+bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsS --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | head -c 131073 | tr "\000" "\001" && printf x) && (( ${#s} > 1 && ${#s} <= 131073 )) && [[ $s != *$(printf "\001")* ]] && s=${s%x} && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl update
 ```
 
 These one-liners download the **whole** first script with a 45-second
 transfer deadline and a 128-KiB streaming limit (including chunked responses),
-reject NUL/control-byte substitutions, and syntax-check before execution. A bare `curl | bash` is
+reject NUL/control-byte substitutions, and syntax-check before execution.
+A final non-newline sentinel is added only after successful transport and
+removed only after length validation, so Bash cannot discard trailing newline
+bytes before the raw transfer-size check. A bare `curl | bash` is
 shorter but loses the first-hop completion guarantee; do **not** use it
 for an administrative installation. Running `install` against a different
 existing verified STL will **not** silently upgrade; it prints a specific

@@ -617,7 +617,7 @@ before downloading the canonical installer; it does not execute a mutable
 identity before installing. The public command stays unchanged:
 
 ~~~sh
-bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 | tr "\000" "\001") && (( ${#s} > 0 && ${#s} <= 131072 )) && [[ $s != *$(printf "\001")* ]] && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl
+bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 | tr "\000" "\001" && printf x) && (( ${#s} > 1 && ${#s} <= 131073 )) && [[ $s != *$(printf "\001")* ]] && s=${s%x} && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl
 ~~~
 
 To install a specific published Stable, append its tag to that same
@@ -626,7 +626,7 @@ entry point stays unchanged across releases. With no suffix, the immutable
 Latest Stable asset supplies its exact pinned default version.
 
 ~~~sh
-bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 | tr "\000" "\001") && (( ${#s} > 0 && ${#s} <= 131072 )) && [[ $s != *$(printf "\001")* ]] && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl v0.1.9
+bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 | tr "\000" "\001" && printf x) && (( ${#s} > 1 && ${#s} <= 131073 )) && [[ $s != *$(printf "\001")* ]] && s=${s%x} && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl v0.1.9
 ~~~
 
 The first hop is first **fully downloaded into shell memory**. Only after
@@ -652,7 +652,7 @@ installer-owned STL, **do not run install again**: use this equally fixed
 update command:
 
 ~~~sh
-bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 | tr "\000" "\001") && (( ${#s} > 0 && ${#s} <= 131072 )) && [[ $s != *$(printf "\001")* ]] && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl update
+bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 | tr "\000" "\001" && printf x) && (( ${#s} > 1 && ${#s} <= 131073 )) && [[ $s != *$(printf "\001")* ]] && s=${s%x} && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl update
 ~~~
 
 This selects the unchanged canonical installer update transaction,
@@ -699,7 +699,9 @@ bash scripts/install.sh requirements --backends all
 ```
 
 The short command fully downloads and syntax-checks the **bootstrap** in
-memory before execution; the bootstrap separately downloads and syntax-checks
+memory before execution. It appends a non-newline sentinel after completed
+transport, checks the actual received byte count (including trailing newlines),
+then removes the sentinel before execution; the bootstrap separately downloads and syntax-checks
 its exact-version canonical installer in a private temporary file **before
 invoking sudo**. Failed/partial first-hop transfers do not run partial code.
 An optional older exact-version suffix

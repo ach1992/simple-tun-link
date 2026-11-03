@@ -107,4 +107,4 @@ chmod 0755 "$stage" "$stage/releases" "$stage/releases/$tag"
 mv -T -n -- "$stage" "$outdir"
 trap - EXIT
 printf 'MIRROR_PREPARED=PASS\nTAG=%s\nMIRROR_URL=%s\nUPLOAD_ROOT=%s\n' "$tag" "$mirror_url" "$outdir"
-printf 'INSTALL_COMMAND=bash -c '\''LC_ALL=C; s=$(set -o pipefail; curl -fsS --connect-timeout 10 --max-time 45 %s/install.sh | head -c 131073 | tr "\\000" "\\001") && (( ${#s} > 0 && ${#s} <= 131072 )) && [[ $s != *$(printf "\\001")* ]] && bash -n <<<"$s" && bash -c "$s" stl "$@"'\'' stl\n' "$mirror_url"
+printf 'INSTALL_COMMAND=bash -c '\''LC_ALL=C; s=$(set -o pipefail; curl -fsS --connect-timeout 10 --max-time 45 %s/install.sh | head -c 131073 | tr "\\000" "\\001" && printf x) && (( ${#s} > 1 && ${#s} <= 131073 )) && [[ $s != *$(printf "\\001")* ]] && s=${s%%x} && bash -n <<<"$s" && bash -c "$s" stl "$@"'\'' stl\n' "$mirror_url"
