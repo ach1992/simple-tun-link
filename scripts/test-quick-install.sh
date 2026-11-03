@@ -17,8 +17,9 @@ stable_url='https://github.com/ach1992/simple-tun-link/releases/latest/download/
 # The first-hop command substitution must finish with curl exit 0 and
 # valid Bash syntax before it executes any part of the downloaded script.
 for line in "${published_commands[@]}"; do
-  [[ "$line" == *'s=$(curl -fsSL '* &&
-     "$line" == *'&& test -n "$s" && bash -n <<<"$s" && bash -c "$s" stl "$@"'* &&
+  [[ "$line" == *'s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 '* &&
+     "$line" == *' | head -c 131073) && (( ${#s} > 0 && ${#s} <= 131072 ))'* &&
+     "$line" == *'&& bash -n <<<"$s" && bash -c "$s" stl "$@"'* &&
      "$line" != *' | bash'* ]] || {
     echo 'Public installer must finish its download before any execution.' >&2
     exit 1
@@ -44,8 +45,8 @@ bash -n "$STL_TEST_STABLE_BOOTSTRAP"
 # MUST prevent its execution.
 head -c -1 "$STL_TEST_STABLE_BOOTSTRAP" > "$scratch/almost-complete.sh"
 bash -n "$scratch/almost-complete.sh"
-grep -Fx 'quick_install_main "v0.1.0" "$@"' "$scratch/almost-complete.sh" >/dev/null
-[[ "$(tail -n 1 "$STL_TEST_STABLE_BOOTSTRAP")" == 'quick_install_main "v0.1.0" "$@"' ]] || {
+grep -Fx 'quick_install_main "v0.1.0" "" "" "" "$@"' "$scratch/almost-complete.sh" >/dev/null
+[[ "$(tail -n 1 "$STL_TEST_STABLE_BOOTSTRAP")" == 'quick_install_main "v0.1.0" "" "" "" "$@"' ]] || {
   echo 'Stable bootstrap did not pin its exact release tag.' >&2
   exit 1
 }
@@ -82,6 +83,10 @@ if [[ "$url" == "https://github.com/ach1992/simple-tun-link/releases/latest/down
     missing-invocation-success) sed '$d' "$STL_TEST_STABLE_BOOTSTRAP"; exit 0 ;;
     empty-success) exit 0 ;;
     syntax-error) printf '%s\n' 'if (( ('; exit 0 ;;
+    oversized-chunked)
+      printf '#!/usr/bin/env bash\n'
+      head -c 200000 /dev/zero | tr '\000' '#'
+      exit 0 ;;
     "") cat "$STL_TEST_STABLE_BOOTSTRAP"; exit 0 ;;
     *) exit 49 ;;
   esac
@@ -174,6 +179,33 @@ if ((EUID==0));then
 else
   grep -q 'sudo bash .* install --version v0.1.0-rc.123 --backends native,wireguard' "$STL_TEST_EXECUTIONS"
 fi
+# The official source and generated official bootstrap must ignore ambient
+# operator/caller-supplied mirror pins completely, including malformed ones.
+# Fake curl accepts ONLY the official tag-pinned source in this test.
+for official_source in "$repo/scripts/quick-install.sh" "$STL_TEST_STABLE_BOOTSTRAP"; do
+  : > "$STL_TEST_EXECUTIONS"
+  if [[ $official_source == "$STL_TEST_STABLE_BOOTSTRAP" ]]; then
+    args=()
+  else
+    args=(v0.1.0-rc.123)
+  fi
+  STL_MIRROR_URL=https://attacker.invalid/releases/v0.1.0 \
+    STL_MIRROR_INSTALL_SHA=$(printf '%064d' 9) \
+    STL_MIRROR_SUMS_SHA=$(printf '%064d' 8) \
+    bash "$official_source" "${args[@]}" > "$scratch/out" 2> "$scratch/err" || {
+    echo 'Official bootstrap accepted ambient mirror override.' >&2; exit 1;
+  }
+  if (( EUID == 0 )); then
+    grep -q 'test fake installer' "$STL_TEST_EXECUTIONS" ||
+      { echo 'Official installer did not run.' >&2; exit 1; }
+  else
+    grep -q '^sudo bash .* install --version ' "$STL_TEST_EXECUTIONS" ||
+      { echo 'Official installer did not run from its canonical source.' >&2; exit 1; }
+  fi
+  if grep -q 'release-base' "$STL_TEST_EXECUTIONS"; then
+    echo 'Official installer was redirected by ambient mirror configuration.' >&2; exit 1
+  fi
+done
 # Operator upgrades must use the canonical update transaction rather than
 # quietly running install over an existing version (which correctly refuses).
 : > "$STL_TEST_EXECUTIONS"
@@ -311,7 +343,7 @@ for idx in 0 1 2; do
   # The subtle case: the final invocation is present and parseable, but
   # curl returns a failure after producing almost/all of the bytes.
   # Neither install nor update may start, even briefly.
-  for first_hop_failure in no-bytes truncated almost-complete complete-then-error missing-invocation-success empty-success syntax-error; do
+  for first_hop_failure in no-bytes truncated almost-complete complete-then-error missing-invocation-success empty-success syntax-error oversized-chunked; do
     : > "$STL_TEST_EXECUTIONS"
     if STL_TEST_FIRST_HOP="$first_hop_failure" bash -c "$published_cmd" > "$scratch/out" 2>"$scratch/err"; then
       echo "Published $action first-hop $first_hop_failure falsely succeeded." >&2

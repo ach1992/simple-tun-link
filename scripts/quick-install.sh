@@ -19,10 +19,24 @@ quick_install_main() {
     echo "Usage: STL bootstrap [optional-exact-stable-tag] [native|native,wireguard] [update]" >&2
     exit 2
   }
-  [[ $# -ge 1 && $# -le 4 ]] || usage
-  version=$1
-  bootstrap_version=$version
-  shift
+  # Distribution trust comes ONLY from the exact reviewed final invocation.
+  # Never accept STL_MIRROR_* inherited environment variables as origin pins.
+  [[ $# -ge 4 && $# -le 7 ]] || usage
+  local bootstrap_version=$1 mirror_url=$2 mirror_install_sha=$3 mirror_sums_sha=$4
+  shift 4
+  version=$bootstrap_version
+  if [[ -n $mirror_url ]]; then
+    [[ $bootstrap_version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ &&
+       $mirror_url =~ ^https://[a-zA-Z0-9][a-zA-Z0-9.-]*(:[0-9]{1,5})?/releases/v[0-9]+\.[0-9]+\.[0-9]+$ &&
+       $mirror_url == */releases/$bootstrap_version && $mirror_url != *..* &&
+       $mirror_install_sha =~ ^[0-9a-f]{64}$ &&
+       $mirror_sums_sha =~ ^[0-9a-f]{64}$ ]] || {
+      echo '[FAILED] Invalid pinned mirror metadata; no installer started.' >&2
+      return 2
+    }
+  else
+    [[ -z $mirror_install_sha && -z $mirror_sums_sha ]] || usage
+  fi
   # The immutable Latest Stable bootstrap pins the default tag. One optional
   # explicit published Stable tag follows the same short public command;
   # never interpolate a path, branch, arbitrary tag or user shell code.
@@ -49,7 +63,7 @@ quick_install_main() {
   # A self-hosted mirror is pinned to one Stable version. Historical release
   # selection would need a separately prepared version-specific mirror asset;
   # never fall back to GitHub API when the target is isolated.
-  if [[ ${STL_MIRROR_URL:-} != '' && $version != "$bootstrap_version" ]]; then
+  if [[ $mirror_url != '' && $version != "$bootstrap_version" ]]; then
     echo '[FAILED] This mirror bootstrap serves only its pinned Stable. Publish the desired exact-version mirror bootstrap; no GitHub fallback.' >&2
     return 1
   fi
@@ -127,13 +141,13 @@ STL_RELEASE_JSON
   # Download the trusted current immutable canonical installer completely,
   # and syntax-check it BEFORE any sudo/root execution.
   tmp="$workdir/install.sh"
-  if [[ -n ${STL_MIRROR_URL:-} ]]; then
-    source_url="$STL_MIRROR_URL/install.sh"
+  if [[ -n $mirror_url ]]; then
+    source_url="$mirror_url/install.sh"
     if ! curl -fsSs --proto "=https" --proto-redir "=https" --max-redirs 0 --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 --retry-max-time 150 -o "$tmp" "$source_url" >/dev/null 2>&1; then
       echo '[FAILED] Mirror canonical installer unavailable. Check the HTTPS mirror and required release files; no GitHub fallback or installer started.' >&2
       return 1
     fi
-    [[ -s $tmp && $(sha256sum -- "$tmp" | awk '{print $1}') == "$STL_MIRROR_INSTALL_SHA" ]] || {
+    [[ -s $tmp && $(sha256sum -- "$tmp" | awk '{print $1}') == "$mirror_install_sha" ]] || {
       echo '[FAILED] Mirror canonical installer differs from the independently pinned SHA256; no installer started.' >&2
       return 1
     }
@@ -164,7 +178,7 @@ STL_RELEASE_JSON
                 $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ &&
                 $prior != "$version" &&
                 $line == "stl installer [FAILED]: installed_version_mismatch: prior=$prior target=$version; install cannot replace a different installer-owned release; use an explicit update" ]]; then
-            if [[ -n ${STL_MIRROR_URL:-} ]]; then
+            if [[ -n $mirror_url ]]; then
               printf '[ACTION] STL %s is already installed. install will not replace it with %s. Rerun this same verified HTTPS mirror command with update as the final argument; the built-in Update menu requires GitHub. No automatic upgrade was performed.\n' "$prior" "$version"
             else
               printf '[ACTION] STL %s is already installed. install will not replace it with %s. Run sudo stl menu -> Update, or rerun the same trusted bootstrap with update as its final argument. No automatic upgrade was performed.\n' "$prior" "$version"
@@ -215,14 +229,14 @@ STL_RELEASE_JSON
   echo "[INFO] Running STL $action for $version. Raw package diagnostics are withheld; this can take several minutes."
   if (
     if (( EUID == 0 )); then
-      if [[ -n ${STL_MIRROR_URL:-} ]]; then
-        bash "$tmp" "$action" --version "$version" --backends "$backends" --release-base "$STL_MIRROR_URL" --release-sums-sha256 "$STL_MIRROR_SUMS_SHA"
+      if [[ -n $mirror_url ]]; then
+        bash "$tmp" "$action" --version "$version" --backends "$backends" --release-base "$mirror_url" --release-sums-sha256 "$mirror_sums_sha"
       else
         bash "$tmp" "$action" --version "$version" --backends "$backends"
       fi
     else
-      if [[ -n ${STL_MIRROR_URL:-} ]]; then
-        sudo bash "$tmp" "$action" --version "$version" --backends "$backends" --release-base "$STL_MIRROR_URL" --release-sums-sha256 "$STL_MIRROR_SUMS_SHA"
+      if [[ -n $mirror_url ]]; then
+        sudo bash "$tmp" "$action" --version "$version" --backends "$backends" --release-base "$mirror_url" --release-sums-sha256 "$mirror_sums_sha"
       else
         sudo bash "$tmp" "$action" --version "$version" --backends "$backends"
       fi
@@ -253,24 +267,6 @@ STL_RELEASE_JSON
   fi
   echo "[INFO] No interactive terminal detected. Start it later with: sudo stl menu"
 }
-# Release-preparation tooling embeds a pinned URL and hashes in the FINAL
-# invocation. This wrapper has no mutable configuration, no GitHub fallback.
-quick_install_mirror_main() {
-  [[ $# -ge 4 ]] || return 2
-  local pinned_version=$1
-  local STL_MIRROR_URL=$2
-  local STL_MIRROR_INSTALL_SHA=$3
-  local STL_MIRROR_SUMS_SHA=$4
-  shift 4
-  [[ $pinned_version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ &&
-     $STL_MIRROR_URL =~ ^https://[a-zA-Z0-9][a-zA-Z0-9.-]*(:[0-9]{1,5})?/releases/v[0-9]+\.[0-9]+\.[0-9]+$ &&
-     $STL_MIRROR_URL == */releases/$pinned_version &&
-     $STL_MIRROR_URL != *..* &&
-     $STL_MIRROR_INSTALL_SHA =~ ^[0-9a-f]{64}$ &&
-     $STL_MIRROR_SUMS_SHA =~ ^[0-9a-f]{64}$ ]] || {
-    echo '[FAILED] Invalid pinned mirror metadata; nothing installed.' >&2
-    return 2
-  }
-  quick_install_main "$pinned_version" "$@"
-}
-quick_install_main "$@"
+# Direct source execution is official-only. Published official and self-hosted
+# scripts replace ONLY this final invocation with constant, reviewed pins.
+quick_install_main "${1:-}" "" "" "" "${@:2}"

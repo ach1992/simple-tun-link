@@ -28,8 +28,8 @@ parent=$(dirname -- "$output")
 root="$(cd -- "$(dirname -- "$0")/.." && pwd -P)"
 source_file="$root/scripts/quick-install.sh"
 [[ -f $source_file && ! -L $source_file ]] || exit 1
-[[ $(grep -Fxc 'quick_install_main "$@"' "$source_file") -eq 1 &&
-  $(tail -n 1 "$source_file") == 'quick_install_main "$@"' ]] || {
+[[ $(grep -Fxc 'quick_install_main "${1:-}" "" "" "" "${@:2}"' "$source_file") -eq 1 &&
+  $(tail -n 1 "$source_file") == 'quick_install_main "${1:-}" "" "" "" "${@:2}"' ]] || {
   echo 'Quick-install entrypoint changed; release template must be reviewed' >&2
   exit 1
 }
@@ -38,7 +38,7 @@ trap 'rm -f -- "$tmp"' EXIT
 # Only the final invocation changes: all HTTPS, privilege, truncated
 # stream, root/TTY and canonical-installer boundaries are preserved.
 sed '$d' "$source_file" > "$tmp"
-printf 'quick_install_main "%s" "$@"\n' "$tag" >> "$tmp"
+printf 'quick_install_main "%s" "" "" "" "$@"\n' "$tag" >> "$tmp"
 bash -n "$tmp"
 [[ $(grep -c '^quick_install_main "' "$tmp") -eq 1 ]] || {
   echo 'Generated bootstrap contains unexpected entrypoints' >&2

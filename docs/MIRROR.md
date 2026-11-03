@@ -95,17 +95,18 @@ On an eligible Linux host that reaches **only your mirror**:
 **Fresh installation:**
 
 ```bash
-bash -c 's=$(curl -fsS https://stl.example.com/install.sh) && test -n "$s" && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl
+bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsS --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | head -c 131073) && (( ${#s} > 0 && ${#s} <= 131072 )) && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl
 ```
 
 **Update of an existing installer-owned STL:**
 
 ```bash
-bash -c 's=$(curl -fsS https://stl.example.com/install.sh) && test -n "$s" && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl update
+bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsS --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | head -c 131073) && (( ${#s} > 0 && ${#s} <= 131072 )) && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl update
 ```
 
-These one-liners download the **whole** first script successfully and
-syntax-check it before running any part of it. A bare `curl | bash` is
+These one-liners download the **whole** first script with a 45-second
+transfer deadline and a 128-KiB streaming limit (including chunked responses),
+and syntax-check it before running any part of it. A bare `curl | bash` is
 shorter but loses the first-hop completion guarantee; do **not** use it
 for an administrative installation. Running `install` against a different
 existing verified STL will **not** silently upgrade; it prints a specific

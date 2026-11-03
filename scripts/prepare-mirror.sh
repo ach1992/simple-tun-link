@@ -35,7 +35,7 @@ outdir="$parent/$(basename -- "$output")"
 script_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
 mirror_source="$script_dir/quick-install.sh"
 [[ -f $mirror_source && ! -L $mirror_source &&
-   $(tail -n 1 "$mirror_source") == 'quick_install_main "$@"' ]] ||
+   $(tail -n 1 "$mirror_source") == 'quick_install_main "${1:-}" "" "" "" "${@:2}"' ]] ||
   { echo 'Mirror bootstrap source contract changed; inspect before preparing an upload.' >&2; exit 1; }
 regular() { [[ -f $1 && ! -L $1 && -s $1 ]]; }
 expected() {
@@ -83,7 +83,7 @@ cmp -s "$stage/canonical-amd64.sh" "$stage/canonical-arm64.sh" ||
   { echo 'Release architectures contain different canonical installers.' >&2; exit 1; }
 # The mirror bootstrap must be generated from the EXACT published and hashed
 # Stable source, not from whichever future checkout happens to be active.
-[[ $(tail -n 1 "$source_dir/stl-bootstrap.sh") == "quick_install_main \"$tag\" \"\$@\"" ]] &&
+[[ $(tail -n 1 "$source_dir/stl-bootstrap.sh") == "quick_install_main \"$tag\" \"\" \"\" \"\" \"\$@\"" ]] &&
   cmp -s <(sed '$d' "$source_dir/stl-bootstrap.sh") <(sed '$d' "$mirror_source") &&
   cmp -s "$stage/canonical-amd64.sh" "$script_dir/install.sh" ||
   { echo 'Local release-preparation source differs from official hashed bootstrap/installer. Use the exact released source/tag.' >&2; exit 1; }
@@ -94,16 +94,17 @@ installer_sha=$(sha256sum "$stage/releases/$tag/install.sh" | awk '{print $1}')
 # Inject only validated, source-pinned constants into the final invocation.
 # The full bootstrap stays byte-for-byte based on canonical quick-install.sh.
 sed '$d' "$mirror_source" > "$stage/install.sh"
-printf "quick_install_mirror_main '%s' '%s/releases/%s' '%s' '%s' \"\$@\"\n" \
+printf "quick_install_main '%s' '%s/releases/%s' '%s' '%s' \"\$@\"\n" \
   "$tag" "$mirror_url" "$tag" "$installer_sha" "$trusted_sums" >> "$stage/install.sh"
 bash -n "$stage/install.sh"
 chmod 0644 "$stage/install.sh"
-[[ $(tail -n 1 "$stage/install.sh") == quick_install_mirror_main* &&
-   $(grep -c '^quick_install_mirror_main ' "$stage/install.sh") == 1 ]] ||
+[[ $(tail -n 1 "$stage/install.sh") == quick_install_main* &&
+   $(grep -c '^quick_install_main ' "$stage/install.sh") == 1 ]] ||
   { echo 'Mirror bootstrap final invocation failed verification.' >&2; exit 1; }
 rm -f -- "$stage/canonical-amd64.sh" "$stage/canonical-arm64.sh"
 chmod 0755 "$stage" "$stage/releases" "$stage/releases/$tag"
 [[ ! -e $outdir && ! -L $outdir ]] || { echo 'Output appeared concurrently; no overwrite.' >&2; exit 1; }
 mv -T -n -- "$stage" "$outdir"
 trap - EXIT
-printf 'MIRROR_PREPARED=PASS\nTAG=%s\nMIRROR_URL=%s\nUPLOAD_ROOT=%s\nINSTALL_COMMAND=bash -c '\''s=$(curl -fsS %s/install.sh) && test -n "$s" && bash -n <<<"$s" && bash -c "$s" stl "$@"'\'' stl\n' "$tag" "$mirror_url" "$outdir" "$mirror_url"
+printf 'MIRROR_PREPARED=PASS\nTAG=%s\nMIRROR_URL=%s\nUPLOAD_ROOT=%s\n' "$tag" "$mirror_url" "$outdir"
+printf 'INSTALL_COMMAND=bash -c '\''LC_ALL=C; s=$(set -o pipefail; curl -fsS --connect-timeout 10 --max-time 45 %s/install.sh | head -c 131073) && (( ${#s} > 0 && ${#s} <= 131072 )) && bash -n <<<"$s" && bash -c "$s" stl "$@"'\'' stl\n' "$mirror_url"

@@ -2,6 +2,12 @@
 # End-to-end mirror test. TLS server binds only loopback, all system effects
 # stay in explicit temporary nondefault prefixes; no real system install/APT.
 set -Eeuo pipefail
+# This test intercepts sudo but the real bootstrap bypasses sudo under root.
+# Reject privileged execution before allocating files, building or binding TLS.
+if (( EUID == 0 )); then
+  echo 'MIRROR_TEST_REFUSED: requires a non-root disposable test user; no host changes attempted.' >&2
+  exit 77
+fi
 umask 077
 repo=$(cd -- "$(dirname -- "$0")/.." && pwd -P)
 scratch=$(mktemp -d)
@@ -83,8 +89,34 @@ import http.server
 import os
 import ssl
 import sys
+import time
 root, cert, key, port_path = sys.argv[1:]
 class Handler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/chunked-oversize.sh':
+            self.send_response(200)
+            self.send_header('Transfer-Encoding', 'chunked')
+            self.end_headers()
+            chunk = b'#!/bin/bash\n' + b'#' * 32768
+            for _ in range(6):
+                try:
+                    self.wfile.write(('%x\r\n' % len(chunk)).encode('ascii') + chunk + b'\r\n')
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    break
+            return
+        if self.path == '/stall.sh':
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'#!/bin/bash\n')
+            self.wfile.flush()
+            time.sleep(4)
+            try:
+                self.wfile.write(b'echo INCOMPLETE_TRANSFER\n')
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
+        return super().do_GET()
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=root, **kwargs)
     def log_message(self, fmt, *args):
@@ -146,12 +178,72 @@ export STL_MIRROR_PREFIX="$scratch/new-prefix"
 mkdir -p "$STL_MIRROR_PREFIX/bin" "$STL_MIRROR_PREFIX/lib"
 : > "$STL_MIRROR_SUDO_RECORD"
 
-one_liner="bash -c 's=\$(curl -fsS $base/install.sh) && test -n \"\$s\" && bash -n <<<\"\$s\" && bash -c \"\$s\" stl \"\$@\"' stl"
+one_liner="bash -c 'LC_ALL=C; s=\$(set -o pipefail; curl -fsS --connect-timeout 10 --max-time 45 $base/install.sh | head -c 131073) && (( \${#s} > 0 && \${#s} <= 131072 )) && bash -n <<<\"\$s\" && bash -c \"\$s\" stl \"\$@\"' stl"
+# Real TLS streaming tests: chunked payload with no Content-Length must
+# be stopped at 128KiB+1 before any script is run. A stalled response must
+# time out despite an initially valid shell prefix. No root/host mutation.
+attempts=$(wc -l < "$STL_MIRROR_SUDO_RECORD")
+oversize_cmd=${one_liner/"$base/install.sh"/"$base/chunked-oversize.sh"}
+if bash -c "$oversize_cmd" > "$scratch/oversize.out" 2> "$scratch/oversize.err"; then
+  echo 'MIRROR_TEST_FAIL: oversized chunked HTTPS response accepted' >&2; exit 1
+fi
+[[ $(wc -l < "$STL_MIRROR_SUDO_RECORD") == "$attempts" ]] ||
+  { echo 'MIRROR_TEST_FAIL: oversized first hop invoked privileged installer' >&2; exit 1; }
+stall_cmd=${one_liner/"$base/install.sh"/"$base/stall.sh"}
+stall_cmd=${stall_cmd/"--max-time 45"/"--max-time 2"}
+before_stall=$(date +%s)
+if bash -c "$stall_cmd" > "$scratch/stall.out" 2> "$scratch/stall.err"; then
+  echo 'MIRROR_TEST_FAIL: stalled HTTPS response accepted' >&2; exit 1
+fi
+duration=$(( $(date +%s) - before_stall ))
+(( duration <= 9 )) ||
+  { echo "MIRROR_TEST_FAIL: stalled transfer exceeded bounded timeout ($duration seconds)" >&2; exit 1; }
+[[ $(wc -l < "$STL_MIRROR_SUDO_RECORD") == "$attempts" ]] ||
+  { echo 'MIRROR_TEST_FAIL: timed-out first hop invoked privileged installer' >&2; exit 1; }
+echo 'MIRROR_FIRST_HOP_CHUNKED_SIZE_AND_TOTAL_TIMEOUT=PASS'
+
+# Root refusal is executed before the first scratch dir is allocated. Verify
+# this in the unprivileged test, without experimenting with real root.
+guard_line=$(grep -n -m1 '^if (( EUID == 0 )); then' "$repo/scripts/test-mirror-install.sh" | cut -d: -f1)
+scratch_line=$(grep -n -m1 '^scratch=$(mktemp -d)' "$repo/scripts/test-mirror-install.sh" | cut -d: -f1)
+[[ $guard_line =~ ^[0-9]+$ && $scratch_line =~ ^[0-9]+$ ]] &&
+  (( guard_line < scratch_line )) || {
+  echo 'MIRROR_TEST_FAIL: root guard no longer precedes test setup' >&2; exit 1
+}
+echo 'MIRROR_ROOT_PREFLIGHT_BEFORE_EFFECTS=PASS'
+
+# Inherited mirror values must not override release-pinned trusted arguments.
+export STL_MIRROR_URL='https://attacker.invalid/releases/v0.9.99'
+export STL_MIRROR_INSTALL_SHA=$(printf '%064d' 1)
+export STL_MIRROR_SUMS_SHA=$(printf '%064d' 2)
 bash -c "$one_liner" > "$scratch/install.out" 2> "$scratch/install.err" || {
   cat "$scratch/install.out" "$scratch/install.err"; echo 'MIRROR_TEST_FAIL: fresh install' >&2; exit 1;
 }
 [[ $(wc -l < "$STL_MIRROR_SUDO_RECORD") == 1 ]] ||
   { echo 'MIRROR_TEST_FAIL: not exactly one canonical privileged invocation' >&2; exit 1; }
+
+# Edit ONLY the embedded digest constant of a separately served bootstrap.
+# A well-formed shell file with a false pin cannot elevate privileges.
+python3 - "$scratch/www/install.sh" "$scratch/www/bad-pins.sh" <<'PY_PINS'
+from pathlib import Path
+import re
+import sys
+src = Path(sys.argv[1]).read_text()
+lines = src.splitlines(keepends=True)
+assert re.search(r"'[0-9a-f]{64}'", lines[-1])
+lines[-1] = re.sub(r"'[0-9a-f]{64}'", "'" + "0" * 64 + "'", lines[-1], count=1)
+Path(sys.argv[2]).write_text("".join(lines))
+PY_PINS
+bad_pins_cmd=${one_liner/"$base/install.sh"/"$base/bad-pins.sh"}
+attempts=$(wc -l < "$STL_MIRROR_SUDO_RECORD")
+if bash -c "$bad_pins_cmd" > "$scratch/bad-pin.out" 2> "$scratch/bad-pin.err"; then
+  echo 'MIRROR_TEST_FAIL: invalid embedded SHA256 pin was accepted' >&2; exit 1
+fi
+grep -q 'differs from the independently pinned SHA256' "$scratch/bad-pin.err" ||
+  { echo 'MIRROR_TEST_FAIL: wrong installer digest was not rejected at source' >&2; exit 1; }
+[[ $(wc -l < "$STL_MIRROR_SUDO_RECORD") == "$attempts" ]] ||
+  { echo 'MIRROR_TEST_FAIL: invalid first-hop pin crossed the privilege boundary' >&2; exit 1; }
+
 "$STL_MIRROR_PREFIX/bin/stl" version --json | grep -q '"version":"v0.9.99"'
 sha_new=$(sha256sum "$STL_MIRROR_PREFIX/bin/stl" | awk '{print $1}')
 bash -c "$one_liner" > "$scratch/repeat.out" 2> "$scratch/repeat.err" || {
