@@ -119,6 +119,25 @@ backend counters. Unknown metrics are absent or `null` by contract;
 do not invent a zero. Never echo arbitrary Link display names,
 raw external output, private credentials or SENSITIVE Setup Links.
 
+## GRE Setup Link import: local receiver check
+
+Before offering the interactive GRE Import confirmation, STL performs a
+**bounded, read-only** `ip -json address show` inventory on the receiving host.
+It compares the offer-declared **receiver underlay IPv4** with addresses
+assigned to exactly one local interface. If the address is absent, duplicated
+across interfaces or the inventory cannot be trusted, the menu does **not**
+offer Apply. It distinguishes a proven local-address mismatch from an
+unverified/ambiguous observation and gives non-secret instructions to check
+both endpoints on the source server and generate a corrected Setup Link.
+
+A unique local IPv4 assignment **does not authenticate who issued the Setup
+Link, prove that the link was intended for this host, verify the declared
+sender endpoint or measure peer reachability**. The operator must verify both
+configured endpoint IPs before confirming, and the canonical Engine still
+re-inspects ownership and routing under its lock. Direct versioned CLI/JSON
+preview and import contracts are unchanged; this is an interactive preflight,
+not a remote recipient-discovery or network-configuration mechanism.
+
 ## Common Linux probe contract
 
 Before transmitting, the read-only adapter must verify the selected
