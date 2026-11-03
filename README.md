@@ -112,7 +112,7 @@ Use the current [official Stable release](https://github.com/ach1992/simple-tun-
 The permanent Stable installer URL remains the same across releases:
 
 ~~~bash
-bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073) && (( ${#s} > 0 && ${#s} <= 131072 )) && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl
+bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 | tr "\000" "\001") && (( ${#s} > 0 && ${#s} <= 131072 )) && [[ $s != *$(printf "\001")* ]] && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl
 ~~~
 
 The short wrapper first captures the **complete** tag-pinned bootstrap
@@ -160,7 +160,7 @@ Use the **same one-line installer** above and append only the desired Stable
 version at the end. For example, select the official **v0.1.9**:
 
 ~~~bash
-bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073) && (( ${#s} > 0 && ${#s} <= 131072 )) && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl v0.1.9
+bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 | tr "\000" "\001") && (( ${#s} > 0 && ${#s} <= 131072 )) && [[ $s != *$(printf "\001")* ]] && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl v0.1.9
 ~~~
 
 Use no suffix for Latest Stable. The same trusted bootstrap fetches and
@@ -394,7 +394,7 @@ credentials and saved receiver handoffs, then run the Stable **update**
 command instead of reinstalling:
 
 ~~~bash
-bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073) && (( ${#s} > 0 && ${#s} <= 131072 )) && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl update
+bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 | tr "\000" "\001") && (( ${#s} > 0 && ${#s} <= 131072 )) && [[ $s != *$(printf "\001")* ]] && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl update
 ~~~
 
 Installer binary rollback is **not** State rollback. Stable v0.1.10–v0.1.15

@@ -105,6 +105,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 except (BrokenPipeError, ConnectionResetError):
                     break
             return
+        if self.path == '/nul-padded.sh':
+            # Exactly 128KiB+1 bytes with many NULs. Bash command
+            # substitution strips NUL; the first-hop filter must preserve
+            # the original byte count and reject, not execute the prefix.
+            prefix = b'#!/bin/bash\necho NUL_BYPASS\n'
+            body = prefix + b'\000' * (131073 - len(prefix))
+            self.send_response(200)
+            self.send_header('Transfer-Encoding', 'chunked')
+            self.end_headers()
+            self.wfile.write(('%x\r\n' % len(body)).encode('ascii') + body + b'\r\n0\r\n\r\n')
+            return
         if self.path == '/stall.sh':
             self.send_response(200)
             self.end_headers()
@@ -178,7 +189,12 @@ export STL_MIRROR_PREFIX="$scratch/new-prefix"
 mkdir -p "$STL_MIRROR_PREFIX/bin" "$STL_MIRROR_PREFIX/lib"
 : > "$STL_MIRROR_SUDO_RECORD"
 
-one_liner="bash -c 'LC_ALL=C; s=\$(set -o pipefail; curl -fsS --connect-timeout 10 --max-time 45 $base/install.sh | head -c 131073) && (( \${#s} > 0 && \${#s} <= 131072 )) && bash -n <<<\"\$s\" && bash -c \"\$s\" stl \"\$@\"' stl"
+one_liner=$(grep -m1 '^bash -c .*stl.example.com/install.sh' "$repo/docs/MIRROR.md")
+one_liner=${one_liner/https:\/\/stl.example.com/$base}
+[[ $one_liner == *"$base/install.sh"* ]] ||
+  { echo 'MIRROR_TEST_FAIL: operator mirror command missing' >&2; exit 1; }
+grep -Fx "INSTALL_COMMAND=$one_liner" "$scratch/prepared.log" >/dev/null ||
+  { echo 'MIRROR_TEST_FAIL: prepared command differs from documented one-liner' >&2; exit 1; }
 # Real TLS streaming tests: chunked payload with no Content-Length must
 # be stopped at 128KiB+1 before any script is run. A stalled response must
 # time out despite an initially valid shell prefix. No root/host mutation.
@@ -189,6 +205,14 @@ if bash -c "$oversize_cmd" > "$scratch/oversize.out" 2> "$scratch/oversize.err";
 fi
 [[ $(wc -l < "$STL_MIRROR_SUDO_RECORD") == "$attempts" ]] ||
   { echo 'MIRROR_TEST_FAIL: oversized first hop invoked privileged installer' >&2; exit 1; }
+nul_cmd=${one_liner/"$base/install.sh"/"$base/nul-padded.sh"}
+if bash -c "$nul_cmd" > "$scratch/nul.out" 2> "$scratch/nul.err"; then
+  echo 'MIRROR_TEST_FAIL: NUL-padded oversized chunked response was accepted' >&2; exit 1
+fi
+[[ $(wc -l < "$STL_MIRROR_SUDO_RECORD") == "$attempts" ]] ||
+  { echo 'MIRROR_TEST_FAIL: NUL-padded response invoked privileged installer' >&2; exit 1; }
+! grep -q NUL_BYPASS "$scratch/nul.out" ||
+  { echo 'MIRROR_TEST_FAIL: NUL-padded response executed its shell prefix' >&2; exit 1; }
 stall_cmd=${one_liner/"$base/install.sh"/"$base/stall.sh"}
 stall_cmd=${stall_cmd/"--max-time 45"/"--max-time 2"}
 before_stall=$(date +%s)
