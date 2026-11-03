@@ -7,6 +7,7 @@ import (
 
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
+	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
 // DiagnosticState is the backend-specific, secret-free state/counter view used
@@ -27,15 +28,16 @@ func (b *Backend) Capability(ctx context.Context, link domain.Link) (linux.Capab
 	if err := validateLink(link); err != nil {
 		return linux.CapabilityStatus{}, err
 	}
-	if _, err := b.runner.Run(ctx, b.ipBinary, "-details", "-json", "link", "show", "type", "ipip"); err != nil {
+	if _, err := b.readIPIPLinks(ctx); err != nil {
 		if ctx.Err() != nil {
 			return linux.CapabilityStatus{}, ctx.Err()
 		}
-		if b.moduleProbe(ctx, "ipip") {
+		if public := stlerr.Public(err); public.ReasonCode == "kernel_module_not_loaded" {
 			return linux.CapabilityStatus{Reason: "kernel module is available on disk but not loaded",
 				ReasonCode: "kernel_module_not_loaded"}, nil
 		}
-		return linux.CapabilityStatus{Reason: "IPIP link type is unavailable"}, nil
+		return linux.CapabilityStatus{Reason: "IPIP kernel inventory is unavailable or incomplete",
+			ReasonCode: "ipip_kernel_inventory_unverified"}, nil
 	}
 	if link.Encapsulation == domain.EncapFOU || link.Encapsulation == domain.EncapGUE {
 		if _, err := b.runner.Run(ctx, b.ipBinary, "-json", "fou", "show"); err != nil {

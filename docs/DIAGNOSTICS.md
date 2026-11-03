@@ -95,6 +95,30 @@ distinguish missing/ambiguous systemd identity, executable, daemon,
 port, private VICI and service-state problems. They cannot authorize
 service startup or ownership changes.
 
+### IPIP kernel-inventory readiness
+
+An `ip -details -json link show type ipip` command can exit successfully
+while returning placeholder rows such as `[{}]` when the kernel module is
+inactive. Neither a zero exit code nor a JSON `null` value proves a verified
+empty interface inventory. The interactive capability hint, backend
+`Inspect`, and backend capability check reject malformed/incomplete rows
+rather than permitting a free-resource claim or an Apply.
+
+- `kernel_module_not_loaded` means read-only module evidence independently
+  identified an available-but-inactive module. The operator may prepare only
+  the selected backend through the existing confirmed kernel-preparation
+  workflow; inspection alone never loads a module.
+- `ipip_kernel_inventory_unverified` means the IPIP inventory cannot be
+  trusted, but an unloaded, loadable module is **not independently proved**.
+  On the affected host, inspect the exact command above and kernel-module/
+  iproute2 readiness before an explicit retry. A malformed inventory cannot
+  justify changing saved State or removing other devices.
+
+An IPIP Create/Import may be locally configured without peer reachability;
+neither this readiness check nor an active Link interface proves that the
+remote peer has received packets. A real private-peer traffic test is
+separate from local inspection.
+
 Every operation remains **network-config read-only** unless it is an
 explicit Engine lifecycle command. Diagnostic probes can send bounded
 ICMP/TCP traffic but must not apply MTU, change routes or firewall,
