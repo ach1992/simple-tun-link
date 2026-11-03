@@ -402,22 +402,21 @@ different payload; it does **not** authenticate its author.
 
 **Wrong-receiver and underlay diagnosis:** Interactive Import shares one
 bounded, read-only local IPv4 inventory check across GRE, IPIP, L2TPv3,
-native WireGuard, IPsec, WSS and QUIC Setup Links. For non-NAT paths, an
-unassigned/ambiguous receiver underlay or unavailable inventory prevents
-the interactive Apply confirmation; it explains how to inspect
-`ip -json address show`, verify **both** endpoint IPs on the sending
-server, and generate a fresh receiver handoff if the recipient was mistaken.
-IPsec **NAT-T** is different: a translated public receiver address may not
-appear as a local interface address, so the menu warns and requires
-independent NAT/recipient verification before the existing explicit
-confirmation, rather than falsely asserting another host was intended.
-For IPsec ESP without NAT-T, the non-NAT refusal applies. A *matching*
-local address is not sender authentication or remote connectivity proof.
+native WireGuard, IPsec (both ESP and NAT-T), WSS and QUIC Setup Links.
+A missing/ambiguous receiver **local underlay** or unavailable inventory
+prevents interactive Apply approval; the operator is told to inspect
+`ip -json address show`, verify **both** endpoint IPs on the
+sending server, and generate a fresh handoff if the receiver was mistaken.
+IPsec NAT-T may traverse a translator, but the current IPsec Engine still
+requires `Underlay.Local` to be **uniquely assigned on this host**;
+a translated public address is not a replacement for the configured local
+binding. Verify external NAT mapping separately. A *matching* local address
+is not sender authentication or proof of remote connectivity.
 
 This is an **operator preflight**, not a new pairing authority. CLI
 `link preview --stdin` and `preview-wss`/`preview-quic` remain
 host-independent and read-only, without local address inspection.
-Canonical Engine Plan independently rechecks its local endpoint/ownership
+Canonical Engine Plan/Validate independently rechecks its local endpoint/ownership
 rules for CLI and menu import. When a complete bounded inventory proves
 an absent or duplicated local address, supported Engine/CLI paths report
 typed `local_underlay_not_assigned` or `local_underlay_ambiguous` with

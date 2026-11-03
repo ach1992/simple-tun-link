@@ -82,7 +82,7 @@ func menuImportQUIC(input io.Reader, reader *bufio.Reader, out, errOut io.Writer
 	menuField(out, "QUIC obfuscation", details.Obfuscation)
 	menuField(out, "Loopback forwarding UDP", fmt.Sprintf("this %d / peer %d (0 = no forwarder)", details.ForwardUDPPort, details.PeerForwardUDPPort))
 	menuField(out, "Guarded WireGuard UDP", fmt.Sprintf("this %d / peer %d", details.WGListenPort, details.WGPeerPort))
-	if !reviewImportReceiver(out, createRunner(opts), details.Underlay, domain.BackendWireGuardQUIC, offer.Receiver.Encapsulation) {
+	if !reviewImportReceiver(out, createRunner(opts), details.Underlay) {
 		return 2
 	}
 	menuNotice(out, "WARNING", "Private keys will be staged; the Engine will create an owned WG interface, nft guard and QUIC helper. Peer traffic must then be checked independently.")

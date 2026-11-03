@@ -68,8 +68,8 @@ var (
 	ErrUnderlaySourceMismatch = errors.New("kernel route selected another local source")
 	// These diagnoses require a successfully parsed, bounded local inventory:
 	// failed captures cannot establish the recipient's identity.
-	ErrUnderlayLocalNotAssigned = errors.New("configured local IPv4 is not assigned on this host")
-	ErrUnderlayLocalAmbiguous   = errors.New("configured local IPv4 belongs to multiple local interfaces")
+	ErrUnderlayLocalNotAssigned = hostaddress.ErrNotAssigned
+	ErrUnderlayLocalAmbiguous   = hostaddress.ErrAmbiguous
 )
 
 // ResolveConfiguredUnderlay chooses a locally assigned IPv4/interface for
@@ -98,21 +98,8 @@ func ResolveConfiguredUnderlay(ctx context.Context, routes interface {
 	}
 	assigned, err := BoundLocalIPv4(endpoints, local, "")
 	if err != nil {
-		// The independently bounded/parsed local inventory, not a route
-		// suggestion, determines whether the requested IPv4 is absent or
-		// ambiguous. Preserve the existing route-hint error for callers.
-		matches := 0
-		for _, endpoint := range endpoints {
-			if endpoint.Address == local {
-				matches++
-			}
-		}
-		switch {
-		case matches == 0:
-			err = fmt.Errorf("%w: %w", ErrUnderlayLocalNotAssigned, err)
-		case matches > 1:
-			err = fmt.Errorf("%w: %w", ErrUnderlayLocalAmbiguous, err)
-		}
+		// The shared, verified local binding classifier owns absence vs
+		// ambiguity. A kernel route hint is secondary, never host identity.
 		if routeErr == nil && suggested.Source != local {
 			return Route{}, fmt.Errorf("%w: %w", ErrUnderlaySourceMismatch, err)
 		}

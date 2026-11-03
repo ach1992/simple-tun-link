@@ -100,9 +100,17 @@ func TestVersionedCLICreateDeniesUnknownLocalIPBeforeHostEffects(t *testing.T) {
 // projection. Missing vs duplicate local assignment must not be replaced by
 // an advisory route hint, unavailable inventory, interruption or a staged key.
 func TestSharedImportUnderlayReasonsAcrossSupportedBackends(t *testing.T) {
-	backends := []domain.Backend{
-		domain.BackendGRE, domain.BackendIPIP, domain.BackendL2TPv3,
-		domain.BackendWireGuard, domain.BackendWireGuardWSS, domain.BackendWireGuardQUIC,
+	backends := []struct {
+		kind  domain.Backend
+		stage string
+	}{
+		{domain.BackendGRE, "plan"},
+		{domain.BackendIPIP, "plan"},
+		{domain.BackendL2TPv3, "plan"},
+		{domain.BackendWireGuard, "plan"},
+		{domain.BackendWireGuardWSS, "plan"},
+		{domain.BackendWireGuardQUIC, "plan"},
+		{domain.BackendIPsec, "validate"},
 	}
 	cases := []struct {
 		name         string
@@ -121,13 +129,13 @@ func TestSharedImportUnderlayReasonsAcrossSupportedBackends(t *testing.T) {
 		{"credential staged", linux.ErrUnderlayLocalNotAssigned,
 			"local_underlay_unverified", "protected key write was also attempted", "attempted"},
 	}
-	for _, kind := range backends {
+	for _, selected := range backends {
 		for _, tc := range cases {
-			t.Run(string(kind)+"/"+tc.name, func(t *testing.T) {
+			t.Run(string(selected.kind)+"/"+tc.name, func(t *testing.T) {
 				secret := errors.New("PRIVATE_UNDERLAY_ERROR_DO_NOT_PRINT")
 				observed := stlerr.LocalUnderlayUnverified("test_plan", "lnk_11111111111111111111111111111111",
-					string(kind), errors.Join(tc.cause, secret))
-				evidence := &stlerr.OperationEvidence{Stage: "plan", HostMutation: "not_attempted",
+					string(selected.kind), errors.Join(tc.cause, secret))
+				evidence := &stlerr.OperationEvidence{Stage: selected.stage, HostMutation: "not_attempted",
 					DesiredState: "no_commit_attempted", Rollback: "not_required",
 					CredentialProvision: tc.credential}
 				var out, errOut bytes.Buffer
@@ -135,12 +143,12 @@ func TestSharedImportUnderlayReasonsAcrossSupportedBackends(t *testing.T) {
 					nil, "Link import did not finish", evidence, observed)
 				var result lifecycleFailureResponse
 				if exit == 0 || json.Unmarshal(out.Bytes(), &result) != nil || result.Error == nil ||
-					result.Error.ReasonCode != tc.reason || result.Error.Backend != string(kind) ||
+					result.Error.ReasonCode != tc.reason || result.Error.Backend != string(selected.kind) ||
 					!strings.Contains(result.Error.NextStep, tc.step) || errOut.Len() > 0 ||
 					strings.Contains(out.String(), "PRIVATE_UNDERLAY_ERROR_DO_NOT_PRINT") ||
 					result.Error.Evidence == nil || result.Error.Evidence.HostMutation != "not_attempted" {
 					t.Fatalf("missing shared actionable redacted classification: backend=%s exit=%d out=%s err=%s",
-						kind, exit, out.String(), errOut.String())
+						selected.kind, exit, out.String(), errOut.String())
 				}
 			})
 		}

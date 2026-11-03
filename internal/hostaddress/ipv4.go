@@ -2,6 +2,7 @@ package hostaddress
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"slices"
@@ -94,6 +95,13 @@ func ValidIPv4(ip netip.Addr) bool {
 	return octets[0] != 0 && octets[0] < 240
 }
 
+// These typed results are valid only after a complete parsed local inventory.
+// They are shared by the native backends, IPsec and import UI.
+var (
+	ErrNotAssigned = errors.New("local IPv4 is not assigned to this host")
+	ErrAmbiguous   = errors.New("local IPv4 is assigned on multiple host interfaces")
+)
+
 func Unique(endpoints []Endpoint, local netip.Addr, device string) (Endpoint, error) {
 	if !ValidIPv4(local) {
 		return Endpoint{}, fmt.Errorf("select a usable IPv4 address actually assigned on this host")
@@ -104,8 +112,21 @@ func Unique(endpoints []Endpoint, local netip.Addr, device string) (Endpoint, er
 			matches = append(matches, ep)
 		}
 	}
-	if len(matches) != 1 {
-		return Endpoint{}, fmt.Errorf("local IPv4/interface must identify exactly one assigned host address; inspect ip -json address show and choose a unique local endpoint")
+	if len(matches) == 0 {
+		// A caller that explicitly selected a device may have chosen the
+		// wrong interface even when this IPv4 exists elsewhere on the host.
+		// That is NOT evidence of a wrong physical receiver.
+		if device != "" {
+			for _, ep := range endpoints {
+				if ep.Address == local {
+					return Endpoint{}, fmt.Errorf("local IPv4 is assigned on a different interface; inspect ip -json address show")
+				}
+			}
+		}
+		return Endpoint{}, fmt.Errorf("%w; inspect ip -json address show and choose an assigned local endpoint", ErrNotAssigned)
+	}
+	if len(matches) > 1 {
+		return Endpoint{}, fmt.Errorf("%w; inspect ip -json address show and choose a unique local interface", ErrAmbiguous)
 	}
 	return matches[0], nil
 }

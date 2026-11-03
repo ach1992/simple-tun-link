@@ -12,7 +12,6 @@ import (
 
 	wg "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/carrier/wss"
-	"github.com/ach1992/simple-tun-link/internal/domain"
 )
 
 func testProtectedWSSReceiverOffer(t *testing.T) ([]byte, string) {
@@ -86,23 +85,5 @@ func TestProtectedImportMenusRejectWrongRecipientBeforeApproval(t *testing.T) {
 				t.Fatalf("wrong receiver committed protected state: %v", err)
 			}
 		})
-	}
-}
-
-func TestIPsecESPRequiresAssignedReceiverWhileNATTNeedsExplicitReview(t *testing.T) {
-	for _, tc := range []struct {
-		encap domain.Encapsulation
-		allow bool
-		want  string
-	}{
-		{domain.EncapESP, false, "No import was attempted"},
-		{domain.EncapNATT, true, "NAT mapping"},
-	} {
-		probe := &greReceiverProbe{inventory: greReceiverInventory("eth0", "203.0.113.197")}
-		var out bytes.Buffer
-		allow := reviewImportReceiver(&out, probe, "192.0.2.20", domain.BackendIPsec, tc.encap)
-		if allow != tc.allow || probe.calls != 1 || !strings.Contains(out.String(), tc.want) {
-			t.Fatalf("IPsec %s receiver policy wrong: allowed=%t out=%q", tc.encap, allow, out.String())
-		}
 	}
 }

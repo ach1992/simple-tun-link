@@ -160,9 +160,8 @@ func TestGREImportNoRemoteRecipientInferenceWhenSenderCannotBeObserved(t *testin
 }
 
 // Shared recipient checks apply to every Setup Link family. A verified local
-// match is still not proof of the sender's intended recipient. IPsec is
-// deliberately advisory when NAT-T could explain an absent public endpoint.
-func TestAllImportBackendsShareReceiverReviewAndNATAwareGuidance(t *testing.T) {
+// match is still not proof of the sender's intended recipient, even for NAT-T.
+func TestAllImportBackendsShareReceiverReview(t *testing.T) {
 	backends := []domain.Backend{
 		domain.BackendGRE, domain.BackendIPIP, domain.BackendL2TPv3,
 		domain.BackendWireGuard, domain.BackendWireGuardWSS,
@@ -173,38 +172,29 @@ func TestAllImportBackendsShareReceiverReviewAndNATAwareGuidance(t *testing.T) {
 		name, inventory, want string
 		err                   error
 		status                bool
-		natStatus             bool
 	}{
-		{"assigned", greReceiverInventory("eth0", receiver), "does not verify the sender's endpoint", nil, true, true},
-		{"other receiver", greReceiverInventory("eth0", "203.0.113.197"), "not assigned to THIS server", nil, false, true},
+		{"assigned", greReceiverInventory("eth0", receiver), "does not verify the sender's endpoint", nil, true},
+		{"other receiver", greReceiverInventory("eth0", "203.0.113.197"), "not assigned to THIS server", nil, false},
 		{"multiple assignments", strings.TrimSuffix(greReceiverInventory("eth0", receiver), "]") +
-			"," + strings.TrimPrefix(greReceiverInventory("eth1", receiver), "["), "multiple local interfaces", nil, false, false},
-		{"malformed inventory", "[bad-json-with-UNTRUSTED_PRIVATE_HOST_SECRET]", "could not be verified", nil, false, true},
-		{"failed capture", "", "could not be verified", errors.New("UNTRUSTED_PRIVATE_HOST_SECRET"), false, true},
+			"," + strings.TrimPrefix(greReceiverInventory("eth1", receiver), "["), "multiple local interfaces", nil, false},
+		{"malformed inventory", "[bad-json-with-UNTRUSTED_PRIVATE_HOST_SECRET]", "could not be verified", nil, false},
+		{"failed capture", "", "could not be verified", errors.New("UNTRUSTED_PRIVATE_HOST_SECRET"), false},
 	}
 	for _, kind := range backends {
 		for _, tc := range cases {
 			t.Run(string(kind)+"/"+tc.name, func(t *testing.T) {
 				probe := &greReceiverProbe{inventory: tc.inventory, err: tc.err}
 				var out bytes.Buffer
-				encap := domain.EncapNative
-				if kind == domain.BackendIPsec {
-					encap = domain.EncapNATT
-				}
-				allowed := reviewImportReceiver(&out, probe, receiver, kind, encap)
+				allowed := reviewImportReceiver(&out, probe, receiver)
 				wantAllowed := tc.status
-				if kind == domain.BackendIPsec {
-					wantAllowed = tc.natStatus
-				}
 				if allowed != wantAllowed || probe.calls != 1 || !strings.Contains(out.String(), tc.want) ||
 					strings.Contains(out.String(), "UNTRUSTED_PRIVATE_HOST_SECRET") {
 					t.Fatalf("incorrect shared receiver guidance: backend=%s allowed=%t want=%t observed=%q calls=%d",
 						kind, allowed, wantAllowed, out.String(), probe.calls)
 				}
-				if kind == domain.BackendIPsec && tc.name == "other receiver" {
-					if !strings.Contains(out.String(), "NAT") || !strings.Contains(out.String(), "BEFORE confirming") {
-						t.Fatal("IPsec missing endpoint was treated as proven wrong recipient")
-					}
+				if kind == domain.BackendIPsec && tc.name == "other receiver" &&
+					!strings.Contains(out.String(), "LOCAL underlay must be assigned") {
+					t.Fatal("IPsec NAT-T local binding rule was omitted")
 				}
 			})
 		}
@@ -212,9 +202,9 @@ func TestAllImportBackendsShareReceiverReviewAndNATAwareGuidance(t *testing.T) {
 }
 
 // The actual versioned Quick Link menu shares the same refusal for every
-// non-NAT tunnel kind, including protected native WireGuard and IPsec ESP.
+// tunnel kind, including protected WireGuard, IPsec ESP and NAT-T.
 // A stale pretyped YES must not bypass the first recipient check.
-func TestQuickLinkMenuRejectsOtherReceiverForAllNonNATBackends(t *testing.T) {
+func TestQuickLinkMenuRejectsOtherReceiverAcrossBackends(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		backend domain.Backend
@@ -226,6 +216,7 @@ func TestQuickLinkMenuRejectsOtherReceiverForAllNonNATBackends(t *testing.T) {
 		{"l2tpv3", domain.BackendL2TPv3, domain.EncapNative, "1"},
 		{"wireguard", domain.BackendWireGuard, domain.EncapUDP, "2"},
 		{"ipsec-esp", domain.BackendIPsec, domain.EncapESP, "2"},
+		{"ipsec-natt", domain.BackendIPsec, domain.EncapNATT, "2"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			link, _ := makeLifecycleDesired(t, "b", "10.70.178.0/31")

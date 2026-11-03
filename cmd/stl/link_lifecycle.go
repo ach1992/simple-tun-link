@@ -361,7 +361,7 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 	// ResolveConfiguredUnderlay. Do not parse raw kernel text or infer that a
 	// mismatching Setup Link was intentionally addressed to another host.
 	if observedPublic != nil && observedPublic.ReasonCode == "local_underlay_unverified" &&
-		evidence != nil && evidence.Stage == "plan" && evidence.HostMutation == "not_attempted" &&
+		evidence != nil && (evidence.Stage == "plan" || evidence.Stage == "validate") && evidence.HostMutation == "not_attempted" &&
 		evidence.CredentialProvision != "attempted" && operation != "link_remove" &&
 		!errors.Is(observed, context.DeadlineExceeded) && !errors.Is(observed, context.Canceled) {
 		switch {

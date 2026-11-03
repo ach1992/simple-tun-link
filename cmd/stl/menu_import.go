@@ -336,11 +336,10 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			if preview.Backend == "ipsec" {
 				menuProse(out, "IPsec needs a verified STL-owned strongSwan service before import. Import alone does not connect IKE.")
 			}
-			// All Setup Link backends use one read-only receiver/endpoint
-			// review before any Import approval. Only independently observed
-			// local assignment can support a mismatch warning; NAT-aware
-			// IPsec remains advisory instead of asserting wrong recipient.
-			if !reviewImportReceiver(out, createRunner(options), preview.LocalUnderlay, preview.Backend, preview.Encapsulation) {
+			// All Setup Link backends use the same read-only local receiver
+			// binding review before any Import approval. This is not proof of
+			// an authenticated intended recipient or a successful peer route.
+			if !reviewImportReceiver(out, createRunner(options), preview.LocalUnderlay) {
 				continue
 			}
 			menuProse(out, "Check that the underlay IPs and both tunnel IPs are correct. Import changes THIS server's configuration.")

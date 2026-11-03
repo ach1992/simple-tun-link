@@ -2,17 +2,17 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/netip"
 	"time"
 
-	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 )
 
-// Setup Link endpoints describe configuration, not a trusted recipient
-// identity. A bounded local address inventory can disprove local assignment;
-// a match never proves who the sender intended to contact.
+// Setup Link endpoint fields describe configuration, not a trusted recipient.
+// Use the same bounded local binding classifier as Engine backends. A match
+// never authenticates the sender, intended receiver or peer connectivity.
 type importReceiverStatus uint8
 
 const (
@@ -31,31 +31,26 @@ func inspectImportReceiver(ctx context.Context, runner linux.Runner, receiver st
 	if err != nil {
 		return importReceiverUnverified
 	}
-	count := 0
-	for _, endpoint := range endpoints {
-		if endpoint.Address == ip {
-			count++
+	if _, err := linux.BoundLocalIPv4(endpoints, ip, ""); err != nil {
+		switch {
+		case errors.Is(err, linux.ErrUnderlayLocalNotAssigned):
+			return importReceiverNotAssigned
+		case errors.Is(err, linux.ErrUnderlayLocalAmbiguous):
+			return importReceiverAmbiguous
+		default:
+			return importReceiverUnverified
 		}
 	}
-	switch count {
-	case 0:
-		return importReceiverNotAssigned
-	case 1:
-		return importReceiverAssigned
-	default:
-		return importReceiverAmbiguous
-	}
+	return importReceiverAssigned
 }
 
-// This preflight is shared by plaintext and protected interactive Import.
-// It is never a substitute for canonical Engine Plan/ownership checks.
-// IPsec/NAT-T can legitimately use an externally translated IKE address,
-// so an absent public address is an explicit warning, NOT authenticated proof
-// of a wrong receiver or permission to override protected service admission.
-func reviewImportReceiver(out io.Writer, runner linux.Runner, receiver string, backend domain.Backend, encap domain.Encapsulation) bool {
+// Shared read-only preflight for ALL interactive Setup Link Import methods.
+// IPsec NAT-T also requires the configured LOCAL underlay to be assigned to
+// this host; NAT's translated public peer address is not that local binding.
+// Canonical Engine Plan/Validate independently rechecks it before host Apply.
+func reviewImportReceiver(out io.Writer, runner linux.Runner, receiver string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	natAware := backend == domain.BackendIPsec && encap == domain.EncapNATT
 	switch inspectImportReceiver(ctx, runner, receiver) {
 	case importReceiverAssigned:
 		menuHealthLine(out, "Receiver on THIS host", "OK", "Receiver IPv4 assigned to exactly one local interface")
@@ -63,20 +58,12 @@ func reviewImportReceiver(out io.Writer, runner linux.Runner, receiver string, b
 		return true
 	case importReceiverNotAssigned:
 		menuNotice(out, "WARNING", "The Setup Link's receiver IPv4 is not assigned to THIS server.")
-		if natAware {
-			menuProse(out, "IPsec/NAT-T may use a translated public endpoint. Verify the real receiver, NAT mapping and BOTH endpoint IPs on the sender BEFORE confirming. An unassigned public IP alone does not prove a wrong recipient.")
-			return true
-		}
-		menuProse(out, "This may be a Setup Link for another receiver or an incorrect endpoint. Verify BOTH server IPs on the source server, then create/share a fresh Setup Link for this receiver. No import was attempted.")
+		menuProse(out, "This may target another server or use a wrong local endpoint. Even with NAT-T, the LOCAL underlay must be assigned here, not merely translated to a public IP. Inspect ip -json address show, verify BOTH endpoints on the sender, then share a corrected Setup Link. No import was attempted.")
 	case importReceiverAmbiguous:
 		menuNotice(out, "WARNING", "The Setup Link's receiver IPv4 appears on multiple local interfaces.")
 		menuProse(out, "Inspect ip -json address show and correct the ambiguous assignment before importing. This does not prove which receiver was intended. No import was attempted.")
 	default:
 		menuNotice(out, "WARNING", "The Setup Link's receiver IPv4 could not be verified on this server.")
-		if natAware {
-			menuProse(out, "Local read-only inventory is unavailable or incomplete. This does NOT prove a wrong IPsec recipient; independently verify both endpoints and any NAT mapping before approving import.")
-			return true
-		}
 		menuProse(out, "Local read-only inventory is unavailable or incomplete; this does NOT prove a wrong recipient. Inspect ip -json address show, verify this server's assigned receiver IPv4 and retry. No import was attempted.")
 	}
 	return false
