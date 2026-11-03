@@ -198,7 +198,7 @@ func (b *Backend) readIPIPLinks(ctx context.Context) ([]observedLink, error) {
 		return nil, core.KernelModuleNotLoaded("ipip")
 	}
 	public := stlerr.Wrap(stlerr.CodeInspect, "ipip_inspect", "", string(domain.BackendIPIP),
-		"IPIP kernel inventory is unavailable or incomplete; no host state was applied", err)
+		"IPIP kernel inventory is unavailable or incomplete", err)
 	public.ReasonCode = "ipip_kernel_inventory_unverified"
 	public.NextStep = "On this server, check ip -details -json link show type ipip and the ipip module state. Incomplete rows are not an empty inventory; verify module and iproute2 readiness before retrying. Do not erase State or other interfaces."
 	return nil, public

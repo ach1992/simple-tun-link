@@ -114,6 +114,19 @@ rather than permitting a free-resource claim or an Apply.
   iproute2 readiness before an explicit retry. A malformed inventory cannot
   justify changing saved State or removing other devices.
 
+IPIP `link status`, `link diagnose`, and `link diagnose --all` retain
+these evidence-backed reason codes in human and JSON output, including
+when capability inspection succeeds but the subsequent owned-device
+inspection fails. They do not send private-peer probes after an invalid
+inventory. `unknown` is distinct from a positively proven inactive
+module (`blocked`). Initial Engine Inspect and post-lock re-inspection
+preserve actionable readiness guidance only when Apply has not started
+and no cancellation/timeout or rollback uncertainty takes precedence.
+An inventory may also become unverified **during** Apply/Remove or
+post-Apply Verify; only the Engine's stage, host-mutation and rollback
+evidence can characterize those effects. Backend inspection alone must
+never claim the whole operation was mutation-free.
+
 An IPIP Create/Import may be locally configured without peer reachability;
 neither this readiness check nor an active Link interface proves that the
 remote peer has received packets. A real private-peer traffic test is

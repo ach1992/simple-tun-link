@@ -97,6 +97,9 @@ func linkDiagnoseCommand(args []string, stdout, stderr io.Writer, options *runti
 			public.NextStep = "Check kernel module policy and load only with authorization; rerun observational diagnosis."
 			return readCommandPublicError(stdout, stderr, jsonOutput, public)
 		}
+		if isIPIPInventoryUnverified(err) && ctx.Err() == nil {
+			return readCommandPublicError(stdout, stderr, jsonOutput, ipipInventoryReadPublicError("link_diagnose", id))
+		}
 		switch code {
 		case stlerr.CodeInvalid:
 			return readCommandError(stdout, stderr, jsonOutput, code, "link_diagnose", "invalid diagnostic configuration or MTU request")
