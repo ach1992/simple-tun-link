@@ -51,7 +51,69 @@ func (s *menuInstallerOutputStream) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// Both the read-only package preview and the post-consent operator report
+// use this single allowlist of canonical installer FAILED messages. In
+// particular, APT output and pre-transaction INFO do not establish that an
+// apt-get install occurred. Only authored diagnostic identifiers are retained.
+func canonicalAPTOperatorFailure(line string) (stage, reason string) {
+	message, ok := strings.CutPrefix(line, "stl installer [FAILED]: ")
+	if !ok {
+		return "", ""
+	}
+	switch {
+	case strings.HasPrefix(message, "APT_PACKAGE_INSTALL failed;"),
+		strings.HasPrefix(message, "APT package transaction failed"),
+		strings.HasPrefix(message, "selected package remains unavailable:"):
+		return "apt_package_transaction", "apt_transaction_incomplete"
+	case strings.HasPrefix(message, "APT_INDEX_REFRESH failed;"),
+		strings.HasPrefix(message, "APT index refresh failed"),
+		strings.HasPrefix(message, "APT lists lock remained busy"):
+		return "apt_index_refresh", "apt_index_unverified"
+	case strings.HasPrefix(message, "APT_DEPENDENCY_PLAN failed;"),
+		strings.HasPrefix(message, "APT cannot resolve the complete selected dependency plan"),
+		strings.HasPrefix(message, "APT dependency plan changed"),
+		strings.HasPrefix(message, "APT plan changed since confirmation"),
+		strings.HasPrefix(message, "APT preferred candidate differs from the consented version"),
+		strings.HasPrefix(message, "no APT package index mapping available"),
+		strings.HasPrefix(message, "APT plan would remove packages"),
+		strings.HasPrefix(message, "APT plan would upgrade an installed package"),
+		strings.HasPrefix(message, "APT returned an unrecognized install identity"),
+		strings.HasPrefix(message, "APT returned an unrecognized candidate version"),
+		strings.HasPrefix(message, "APT plan includes duplicate package identity"),
+		strings.HasPrefix(message, "APT plan omitted a required selected package"),
+		strings.HasPrefix(message, "APT plan is empty or exceeds safe preview limits"),
+		strings.HasPrefix(message, "approved APT install plan is empty"):
+		return "apt_dependency_plan", "apt_dependency_plan_unverified"
+	case strings.HasPrefix(message, "APT candidate InRelease"),
+		strings.HasPrefix(message, "APT sources explicitly bypass signature verification"),
+		strings.HasPrefix(message, "APT selected a dependency outside the distribution archive"),
+		strings.HasPrefix(message, "APT candidate includes a non-distribution package source"),
+		strings.HasPrefix(message, "APT candidate package version has no verified distribution index"),
+		strings.HasPrefix(message, "APT index-to-release inventory could not be inspected"),
+		strings.HasPrefix(message, "APT candidate source maps to ambiguous release identities"),
+		strings.HasPrefix(message, "APT candidate-to-index policy could not be read"),
+		strings.HasPrefix(message, "APT source inventory could not be read"),
+		strings.HasPrefix(message, "APT source inventory could not be inspected"),
+		strings.HasPrefix(message, "official distribution archive signing keyring unavailable"),
+		strings.HasPrefix(message, "official archive keyring package ownership unverified"),
+		strings.HasPrefix(message, "distribution archive keyring package not fully installed"),
+		strings.HasPrefix(message, "cannot verify distribution archive signatures"),
+		strings.HasPrefix(message, "official Ubuntu archive metadata does not match the host"),
+		strings.HasPrefix(message, "official Debian archive metadata does not match the host"):
+		return "apt_source_trust", "apt_source_trust_unverified"
+	default:
+		return "", ""
+	}
+}
+
 func (v *menuInstallerOutput) observeLine(line string) {
+	// Informational APT lock waits and "Installing verified missing
+	// packages" precede final verification and cannot establish the
+	// failed stage or whether apt-get install actually began.
+	if stage, reason := canonicalAPTOperatorFailure(line); reason != "" {
+		v.stage, v.reason = stage, reason
+		return
+	}
 	switch {
 	case strings.HasPrefix(line, "stl installer [FAILED]: partial failure; inspect retained recovery directory:"):
 		v.stage, v.reason = "binary_recovery", "retained_recovery_requires_inspection"
@@ -63,33 +125,7 @@ func (v *menuInstallerOutput) observeLine(line string) {
 		v.stage, v.reason = "uninstall_preflight", "uninstall_preflight_unverified"
 	case strings.HasPrefix(line, "stl installer [FAILED]: STL ownership record is missing or not regular"):
 		v.stage, v.reason = "installation_ownership", "installer_ownership_unverified"
-	case strings.HasPrefix(line, "stl installer [FAILED]: APT_PACKAGE_INSTALL failed;"),
-		strings.HasPrefix(line, "stl installer [FAILED]: APT package transaction failed"):
-		v.stage, v.reason = "apt_package_transaction", "apt_transaction_incomplete"
-	case strings.HasPrefix(line, "stl installer [FAILED]: APT_INDEX_REFRESH failed;"),
-		strings.HasPrefix(line, "stl installer [FAILED]: APT index refresh failed"),
-		strings.HasPrefix(line, "stl installer [FAILED]: APT lists lock remained busy"):
-		v.stage, v.reason = "apt_index_refresh", "apt_index_unverified"
-	case strings.HasPrefix(line, "stl installer [FAILED]: APT_DEPENDENCY_PLAN failed;"),
-		strings.HasPrefix(line, "stl installer [FAILED]: APT cannot resolve the complete selected dependency plan"),
-		strings.HasPrefix(line, "stl installer [FAILED]: APT dependency plan changed"),
-		strings.HasPrefix(line, "stl installer [FAILED]: no APT package index mapping available"),
-		strings.HasPrefix(line, "stl installer [FAILED]: APT plan would remove packages"):
-		v.stage, v.reason = "apt_dependency_plan", "apt_dependency_plan_unverified"
-	case strings.HasPrefix(line, "stl installer [FAILED]: APT candidate InRelease"),
-		strings.HasPrefix(line, "stl installer [FAILED]: APT sources explicitly bypass signature verification"),
-		strings.HasPrefix(line, "stl installer [FAILED]: APT selected a dependency outside the distribution archive"):
-		v.stage, v.reason = "apt_source_trust", "apt_source_trust_unverified"
-	case strings.HasPrefix(line, "stl installer [INFO]: Another APT process holds the lists lock"):
-		// A later failure may be unrelated; this remains a reported stage,
-		// never a claim that the lists lock was the sole cause.
-		if v.reason == "" {
-			v.stage = "apt_index_refresh"
-		}
-	case strings.HasPrefix(line, "[INFO] Installing verified missing packages on"):
-		if v.reason == "" {
-			v.stage = "apt_package_transaction"
-		}
+
 	}
 }
 

@@ -55,6 +55,16 @@ func (e *packagePreviewIssue) Error() string { return e.reason }
 
 func packageInventoryFailure(stderr string, ctxErr error) error {
 	issue := &packagePreviewIssue{}
+	// Read only fixed terminal failure categories from the canonical
+	// installer, not arbitrary low-level APT output or repository URLs.
+	// Keep the final recognized FAILED line if multiple are present.
+	aptReason := ""
+	for _, line := range strings.Split(stderr, "\n") {
+		_, reason := canonicalAPTOperatorFailure(line)
+		if reason != "" {
+			aptReason = reason
+		}
+	}
 	switch {
 	case errors.Is(ctxErr, context.DeadlineExceeded):
 		issue.reason = "requirements_check_timeout"
@@ -70,26 +80,15 @@ func packageInventoryFailure(stderr string, ctxErr error) error {
 		strings.Contains(stderr, "invalid Debian version"):
 		issue.reason = "unsupported_or_unverified_os"
 		issue.next = "Inspect /etc/os-release and docs/SUPPORTED-ENVIRONMENTS.md (read-only); do not change OS identity."
-	case strings.Contains(stderr, "APT sources explicitly bypass signature verification"),
-		strings.Contains(stderr, "APT selected a dependency outside the distribution archive"),
-		strings.Contains(stderr, "APT index-to-release inventory could not be inspected"),
-		strings.Contains(stderr, "APT candidate InRelease"),
-		strings.Contains(stderr, "APT candidate includes a non-distribution package source"),
-		strings.Contains(stderr, "APT candidate package version has no verified distribution index"),
-		strings.Contains(stderr, "distribution archive keyring"),
-		strings.Contains(stderr, "cannot verify distribution archive signatures"):
+	case aptReason == "apt_source_trust_unverified":
 		issue.reason = "apt_source_trust_unverified"
 		issue.next = "Inspect APT source configuration and apt-cache policy for the missing packages; do not bypass signature checks."
-	case strings.Contains(stderr, "APT_DEPENDENCY_PLAN failed;"),
-		strings.Contains(stderr, "APT cannot resolve the complete selected dependency plan"),
-		strings.Contains(stderr, "no APT package index mapping available"),
-		strings.Contains(stderr, "APT plan would remove packages"),
-		strings.Contains(stderr, "APT plan omitted"),
-		strings.Contains(stderr, "APT package index mapping"),
-		strings.Contains(stderr, "APT candidate-to-index policy"),
-		strings.Contains(stderr, "APT plan would upgrade"):
+	case aptReason == "apt_dependency_plan_unverified":
 		issue.reason = "apt_dependency_plan_unverified"
 		issue.next = "Check apt-cache policy for selected packages and configured distribution sources (read-only); no packages changed."
+	case aptReason == "apt_index_unverified":
+		issue.reason = "apt_index_unverified"
+		issue.next = "Inspect signed APT repositories, available indexes and apt-cache policy (read-only); no preparation was started."
 	case strings.Contains(stderr, "dpkg has unfinished package configuration"):
 		issue.reason = "dpkg_transaction_incomplete"
 		issue.next = "Run dpkg --audit (read-only), then reconcile package state before starting a new PREPARE."

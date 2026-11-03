@@ -133,6 +133,15 @@ package, binary and service mutations require fresh confirmation.
 | `STL ownership record is missing or not regular` on `update` | `namei -l /usr/local/lib/simple-tun-link/install-record` and `stat` the `stl`/`stlink` installation paths | An incomplete first install is not an update; never forge ownership metadata or replace existing foreign binaries |
 | Installer partial publication or failed identity verification | Check the reported private recovery directory, installed executable identity and ownership record, without changing them | Stop before another update/uninstall; retained rollback evidence is authoritative |
 
+The `[INFO] Installing verified missing packages on ...` line is printed
+**before** PREPARE may refresh package indexes, recheck its dependency plan
+and confirm vendor ownership. It is not evidence that `apt-get install`
+started. A `Reported stage` is assigned from a recognized terminal installer
+failure where available; interruption or missing/incomplete diagnostics must
+remain `unverified` rather than guess the transaction stage. Regardless of
+the diagnostic category, after an attempted PREPARE inspect `dpkg --audit`
+and actual package/service state before a new consented attempt.
+
 Avoid posting raw APT source configuration, package logs, State files, or
 private Setup Links publicly: they can contain credentials or sensitive
 host details. Provide redacted reason codes and relevant command exit
