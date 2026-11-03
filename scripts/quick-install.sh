@@ -164,7 +164,11 @@ STL_RELEASE_JSON
                 $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ &&
                 $prior != "$version" &&
                 $line == "stl installer [FAILED]: installed_version_mismatch: prior=$prior target=$version; install cannot replace a different installer-owned release; use an explicit update" ]]; then
-            printf '[ACTION] STL %s is already installed. install will not replace it with %s. Run sudo stl menu -> Update, or rerun the same trusted bootstrap with update as its final argument. No automatic upgrade was performed.\n' "$prior" "$version"
+            if [[ -n ${STL_MIRROR_URL:-} ]]; then
+              printf '[ACTION] STL %s is already installed. install will not replace it with %s. Rerun this same verified HTTPS mirror command with update as the final argument; the built-in Update menu requires GitHub. No automatic upgrade was performed.\n' "$prior" "$version"
+            else
+              printf '[ACTION] STL %s is already installed. install will not replace it with %s. Run sudo stl menu -> Update, or rerun the same trusted bootstrap with update as its final argument. No automatic upgrade was performed.\n' "$prior" "$version"
+            fi
           else
             echo '[WARNING] STL install cannot safely replace the existing artifact. Inspect ownership and the installed version; do not force an update.'
           fi ;;

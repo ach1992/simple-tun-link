@@ -174,7 +174,9 @@ before_old=$(sha256sum "$STL_MIRROR_PREFIX/bin/stl" | awk '{print $1}')
 if bash -c "$one_liner" > "$scratch/wrong.out" 2> "$scratch/wrong.err"; then
   echo 'MIRROR_TEST_FAIL: install incorrectly upgraded an existing version' >&2; exit 1
 fi
-grep -q '\[ACTION\].*v0.9.98.*v0.9.99.*Update' "$scratch/wrong.out" ||
+grep -q '\[ACTION\].*v0.9.98.*v0.9.99.*mirror command with update' "$scratch/wrong.out" ||
+  { cat "$scratch/wrong.out" "$scratch/wrong.err"; echo 'MIRROR_TEST_FAIL: explicit mirror Update guidance missing' >&2; exit 1; }
+grep -q 'built-in Update menu requires GitHub' "$scratch/wrong.out" ||
   { cat "$scratch/wrong.out" "$scratch/wrong.err"; echo 'MIRROR_TEST_FAIL: actionable installed-version error missing' >&2; exit 1; }
 [[ $(sha256sum "$STL_MIRROR_PREFIX/bin/stl" | awk '{print $1}') == "$before_old" ]] ||
   { echo 'MIRROR_TEST_FAIL: mistaken install changed existing binary' >&2; exit 1; }

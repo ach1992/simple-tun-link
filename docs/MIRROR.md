@@ -111,6 +111,12 @@ for an administrative installation. Running `install` against a different
 existing verified STL will **not** silently upgrade; it prints a specific
 Update instruction. Same-artifact reinstall remains an idempotent no-op.
 
+**Offline Update uses the mirror command above.** The existing built-in
+`sudo stl menu` → `Update` screen still queries GitHub's releases API,
+so it is **not available** on a host restricted to your mirror. The ordinary
+menu remains usable for other tunnel-management operations. No mirror URL
+is silently persisted as a future update authority.
+
 The mirror bootstrap fetches only `https://stl.example.com/releases/vX.Y.Z/`
 files, with **no GitHub/API fallback or redirects**. It verifies the canonical
 shell source digest before executing it. The canonical installer verifies
