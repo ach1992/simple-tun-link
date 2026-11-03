@@ -137,20 +137,55 @@ func runEmbeddedInstaller(ctx context.Context, stdout, stderr io.Writer, args ..
 	return nil
 }
 
+const (
+	packagePreviewStdoutLimit = 32 * 1024
+	packagePreviewStderrLimit = 64 * 1024
+)
+
+var errPackagePreviewOutputLimit = errors.New("read-only package output exceeded capture limit")
+
+// exec.Cmd streams into this writer during collection. Returning an error on
+// overflow stops io.Copy without retaining an arbitrarily large child output.
+type boundedPackagePreviewOutput struct {
+	bytes.Buffer
+	limit    int
+	overflow bool
+}
+
+func (b *boundedPackagePreviewOutput) Write(p []byte) (int, error) {
+	remaining := b.limit - b.Len()
+	if len(p) > remaining {
+		b.overflow = true
+		n, _ := b.Buffer.Write(p[:remaining])
+		return n, errPackagePreviewOutputLimit
+	}
+	return b.Buffer.Write(p)
+}
+
 func readSelectedPackagePreview(ctx context.Context, selected tunnelOption) (selectedPackagePreview, error) {
+	return readSelectedPackagePreviewWithRunner(ctx, selected, runEmbeddedInstaller)
+}
+
+// Private runner seam for exercising read-only output failure without APT or host effects.
+func readSelectedPackagePreviewWithRunner(ctx context.Context, selected tunnelOption,
+	runner func(context.Context, io.Writer, io.Writer, ...string) error) (selectedPackagePreview, error) {
 	choice := selectedPackageBackends(selected)
 	if choice == "" {
 		return selectedPackagePreview{}, errors.New("unrecognized tunnel package selection")
 	}
-	var stdout, stderr bytes.Buffer
-	if err := runEmbeddedInstaller(ctx, &stdout, &stderr, "requirements", "--backends", choice); err != nil {
-		return selectedPackagePreview{}, packageInventoryFailure(stderr.String(), ctx.Err())
-	}
-	if stdout.Len() > 32768 {
+	stdout := boundedPackagePreviewOutput{limit: packagePreviewStdoutLimit}
+	stderr := boundedPackagePreviewOutput{limit: packagePreviewStderrLimit}
+	runErr := runner(ctx, &stdout, &stderr, "requirements", "--backends", choice)
+	// A truncated inventory or diagnostic is not an APT plan and cannot
+	// authorize PREPARE, even if the child or test runner reported success.
+	if stdout.overflow || stderr.overflow {
 		return selectedPackagePreview{}, &packagePreviewIssue{
 			reason: "requirements_inventory_oversized",
-			next:   "The read-only package response exceeded its limit; verify the STL binary and release integrity before retrying.",
+			next:   "The read-only package output exceeded its limit; verify the STL binary and release integrity before retrying.",
 		}
+	}
+	if runErr != nil {
+		return selectedPackagePreview{}, packageInventoryFailure(stderr.String(), ctx.Err())
 	}
 	var plan selectedPackagePreview
 	seen := map[string]bool{}

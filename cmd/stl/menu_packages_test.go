@@ -154,6 +154,52 @@ func TestCanonicalAPTPreviewFailuresUseCurrentInstallerReasons(t *testing.T) {
 	}
 }
 
+// The subprocess must reject excess output during collection, not after a
+// potentially unbounded bytes.Buffer has already retained the data.
+func TestSelectedPackagePreviewRejectsCaptureOverflowAtWrite(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		toStderr  bool
+		ignoreErr bool
+		maxBytes  int
+	}{
+		{"stdout/runner error", false, false, 32 * 1024},
+		{"stderr/runner error", true, false, 64 * 1024},
+		{"stdout/runner ignores error", false, true, 32 * 1024},
+		{"stderr/runner ignores error", true, true, 64 * 1024},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const sensitive = "private-preview-token-do-not-print"
+			payload := bytes.Repeat([]byte(sensitive), 10000)
+			runner := func(_ context.Context, stdout, stderr io.Writer, args ...string) error {
+				if strings.Join(args, " ") != "requirements --backends native" {
+					t.Fatalf("unexpected read-only command: %q", args)
+				}
+				writer := stdout
+				if tc.toStderr {
+					writer = stderr
+				}
+				n, err := writer.Write(payload)
+				if err == nil || n != tc.maxBytes {
+					t.Fatalf("capture limit violated: collected %d of %d bytes, expected %d, err=%v",
+						n, len(payload), tc.maxBytes, err)
+				}
+				if tc.ignoreErr {
+					return nil // Even a child reporting success cannot authorize a truncated plan.
+				}
+				return err
+			}
+			_, err := readSelectedPackagePreviewWithRunner(context.Background(),
+				tunnelOption{backend: domain.BackendGRE, mode: domain.EncapNative}, runner)
+			reason, next := packageInventoryGuidance(err)
+			if reason != "requirements_inventory_oversized" || strings.Contains(reason+next, sensitive) ||
+				!strings.Contains(next, "release integrity") {
+				t.Fatalf("overflow not fail-closed and redacted: reason=%q next=%q err=%v", reason, next, err)
+			}
+		})
+	}
+}
+
 // Bash inherits BASH_ENV for a noninteractive script unless its execution
 // environment is sanitized. The embedded privileged invocation MUST NOT
 // interpret inherited shell startup code before the canonical installer.
