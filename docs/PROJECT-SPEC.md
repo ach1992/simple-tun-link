@@ -251,6 +251,12 @@ The product meets its accepted scope when evidence shows that:
   practical for direct use.
 - Prerequisite and diagnostic outcomes, resource ownership, secret
   handling, and allowed host effects are truthful and verifiable.
+- Interactive Create/Import keeps consistent semantic screens and guides
+  selected missing pinned companions through explicit, verified online
+  acquisition or trusted local/offline files without manual root-side
+  installation commands. Installer ownership, fresh consent and Link
+  confirmation remain independent; unsuccessful downloads never weaken
+  integrity checks or claim universal Internet availability.
 - The design supports adding an appropriate backend or consumer with
   bounded change to shared code, without duplicating the Link lifecycle
   or introducing unnecessary runtime overhead.

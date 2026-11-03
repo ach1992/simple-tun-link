@@ -51,6 +51,24 @@ encapsulations/IPsec remain discoverable.
   actual Link creation. The doctor never repairs an unowned VPN.
   The separate, exact `STOP strongswan.service` restriction is
   documented in [installer ownership](INSTALL.md#installation-and-runtime-ownership).
+- When **WireGuard/WSS** or **WireGuard/QUIC** is selected in Create
+  or Import, the menu first checks the exact supported pinned companion.
+  If absent, installed root operators may choose **Install online**
+  (download from the fixed official upstream HTTPS release and validate the
+  pinned SHA-256) or **Install local** (reuse an already transferred asset in
+  root-owned `/root/stl/`). Both require a fresh exact `INSTALL`
+  confirmation and delegate publication to the existing canonical
+  companion installer. If the official download is unreachable or fails
+  verification, the menu offers the local fallback and exact filename;
+  it never downloads arbitrary mirrors or silently installs all helpers.
+  Reuse requires BOTH the pinned executable and the original trusted,
+  root-owned canonical companion record (exact component, version and
+  executable/archive SHA-256 as applicable). A byte-correct executable
+  with a missing, changed or unsafe record is NOT adopted or silently
+  repaired. Foreign or partially installed identity requires operator
+  inspection/reconciliation. The Create/Import Link confirmation remains
+  separate. The installed core does not need to be replaced merely to add
+  an approved optional companion.
 - Creating a Link selects the **other server's** intended underlay IPv4
   (the remote server may be offline). STL uses a local kernel route lookup
   only to suggest THIS host's assigned IP and interface; **no Ping,

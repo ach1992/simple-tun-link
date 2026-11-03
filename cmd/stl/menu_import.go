@@ -8,8 +8,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 
+	"github.com/ach1992/simple-tun-link/internal/carrier/quic"
+	"github.com/ach1992/simple-tun-link/internal/carrier/wss"
+	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/pairing"
 	"golang.org/x/sys/unix"
 )
@@ -209,10 +213,40 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			menuNotice(out, "WARNING", "Choose 1 for GRE/IPIP/L2TPv3, 2 for WireGuard/IPsec, 3 for WireGuard/WSS or 4 for WireGuard/QUIC.")
 			continue
 		}
-		if mode == "3" {
-			return menuImportWSS(input, reader, out, errOut, options)
-		}
-		if mode == "4" {
+		if mode == "3" || mode == "4" {
+			// Verify selected packages and the optional pinned helper BEFORE
+			// asking the receiver to paste sensitive credentials. The same
+			// on-demand install/reuse paths serve Create and Import.
+			kind := menuCompanionWSS
+			picked := tunnelOption{backend: domain.BackendWireGuard, mode: domain.EncapUDP}
+			inspect := func() error {
+				_, err := wss.InspectPinnedExecutableForOperator(wss.Host{StateRoot: createStateRoot(options)})
+				return err
+			}
+			if mode == "4" {
+				kind = menuCompanionQUIC
+				picked.backend = domain.BackendWireGuardQUIC
+				inspect = func() error {
+					_, err := quic.InspectPinnedHysteria(quic.DefaultExecutable)
+					return err
+				}
+			}
+			if prep := menuPrepareSelectedPackages(input, reader, out, errOut, picked, options); !prep.canContinue {
+				menuAcknowledge(input, reader, out)
+				return 4
+			}
+			spec, supported := menuPinnedCompanion(kind, runtime.GOARCH)
+			if !supported {
+				menuNotice(out, "WARNING", "No supported official companion for this host architecture.")
+				return 4
+			}
+			menuScreen(out, "Import / selected companion check")
+			if !menuEnsureCompanion(input, reader, out, spec, productionMenuCompanionOps(inspect, spec)) {
+				return 4
+			}
+			if mode == "3" {
+				return menuImportWSS(input, reader, out, errOut, options)
+			}
 			return menuImportQUIC(input, reader, out, errOut, options)
 		}
 		// Only display a secret-bearing paste prompt AFTER ECHO is masked.

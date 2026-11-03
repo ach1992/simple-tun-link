@@ -202,6 +202,44 @@ the separate credentials store and retained handoffs where needed.
 Do not share these bytes in Issue/PR/CI logs, and do not wildcard
 delete leftover protected temporary material.
 
+## Interactive on-demand companion installation (online or local)
+
+For an **already installed, installer-owned** STL Core, choose **Create
+tunnel -> WireGuard / WSS + TLS** or **WireGuard / QUIC + TLS** (or the same
+type under Import) in a real **`sudo stl menu`** terminal. If the exact
+pinned optional companion is absent, STL presents two separate paths:
+
+- **Install online:** after explicit `INSTALL` confirmation, download
+  only the selected, fixed-version official wstunnel/Hysteria asset over
+  HTTPS, verify its built-in pinned SHA-256 in a protected temporary
+  directory, and call the byte-identical canonical embedded installer.
+  STL does not need a separate shell command or STL Core reinstall.
+- **Install local:** on a device with Internet access, obtain the exact
+  architecture-matched upstream asset listed below. Transfer it **unchanged**
+  to `/root/stl/EXACT_FILENAME` on the destination, owned by root
+  (folder 0700; regular file 0600/0644). Select **Install local** in the
+  menu and confirm `INSTALL`. The same canonical installer validates and
+  installs the selected companion.
+
+A failed online fetch **does not prove the host is offline**: DNS,
+routing, firewall, proxy, provider filtering, GitHub reachability, or the
+remote release can be responsible. The menu reports a bounded reason and
+offers the precise local fallback; never use an unverified mirror or disable
+TLS/checksums. A mismatched hash, foreign executable/record or uncertain
+partial install is **not** automatically overwritten. Inspect the
+STL-owned identity before another attempt. Seeing a menu or declining
+`INSTALL` never downloads or installs a helper. A successful helper
+install does not create a Link or enable a carrier: the later Link
+`YES` confirmation is independent.
+
+The offline **one-file initial Core install** below remains separate and
+unchanged: `--with-wss` / `--with-quic` explicitly select locally
+transferred companion files. If signed distribution APT dependencies are
+also missing, STL's selected-backend `PREPARE` handles only verified
+configured repositories; fully air-gapped machines may need trusted distro
+packages pre-provisioned. Core Update and helper acquisition are different
+operations.
+
 ## Local installation: choose a published asset
 
 ### Quick start: three steps, including optional Carriers
@@ -1064,9 +1102,9 @@ explicit --with-wss option. Mere archive presence is not consent to install
 an optional Carrier. When selected, the installer detects that exact filename, snapshots the archive into
 installer-controlled private staging, validates SHA-256 of the entire archive
 and the extracted executable plus exact version, then stages the helper at
-/usr/local/libexec/stl/wstunnel with an ownership record. No network download,
-helper unpack step, alternate helper installer or WSS effect is required of the
-operator. Ordinary STL users, including those leaving an unselected
+/usr/local/libexec/stl/wstunnel with an ownership record. No helper unpack step or alternate helper installer is required of
+the operator. On an existing STL installation, the selected interactive menu
+can also download this same fixed asset online with fresh consent. Ordinary STL users, including those leaving an unselected
 companion beside the installer, get unchanged core behavior. A bad archive, wrong CPU or foreign target binary fails closed.
 
 **Run the verified trusted preflight one-liner shown in the local-install
@@ -1090,7 +1128,8 @@ before the core installer is started. An existing verified WSS installation
 does not need a new sidecar merely to upgrade its core STL executable.
 
 For an **already installer-owned** STL installation, the equivalent standalone
-administrator recovery action is available (not the normal first-use path):
+administrator recovery action is available when the interactive menu cannot
+be used (the menu is the preferred on-demand setup path):
 ~~~sh
 sudo bash scripts/install.sh companion-wss --archive /absolute/path/wstunnel_11.0.0_linux_amd64.tar.gz --prefix /usr/local
 ~~~

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -28,12 +29,30 @@ func menuCreateQUIC(input io.Reader, reader *bufio.Reader, out, errOut io.Writer
 func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
 	opts *runtimeOptions, companion string) int {
 	p := createPrompts{reader: reader, out: out, errOut: errOut}
-	menuSection(out, "Create / WireGuard over QUIC (mTLS)")
+	menuScreen(out, "Create / WireGuard over QUIC (mTLS)")
 	menuNotice(out, "INFO", "Kernel WireGuard ingress is guarded; the remote peer connects over authenticated QUIC/UDP with TLS and per-Link credentials.")
-	if _, err := quic.InspectPinnedHysteria(companion); err != nil {
-		menuNotice(out, "WARNING", "Approved Hysteria v2.13.0 companion is missing or untrusted.")
-		menuProse(out, "Place the exact official hysteria-linux-ARCH binary beside the official one-file STL installer and rerun that installer with --with-quic.")
-		return 4
+	inspect := func() error {
+		_, err := quic.InspectPinnedHysteria(companion)
+		return err
+	}
+	if companion != quic.DefaultExecutable {
+		// Isolated fixture paths never authorize production helper install.
+		if inspect() != nil {
+			menuNotice(out, "WARNING", "Approved Hysteria v2.13.0 companion is missing or untrusted.")
+			menuField(out, "Next", "Use the installed root menu to acquire a verified QUIC companion.")
+			return 4
+		}
+	} else {
+		spec, supported := menuPinnedCompanion(menuCompanionQUIC, runtime.GOARCH)
+		if !supported {
+			menuNotice(out, "WARNING", "This CPU has no supported official QUIC companion.")
+			return 4
+		}
+		if !menuEnsureCompanion(input, reader, out, spec, productionMenuCompanionOps(inspect, spec)) {
+			return 4
+		}
+		menuScreen(out, "Create / WireGuard over QUIC (mTLS)")
+		menuField(out, "Companion", "Pinned helper verified; ready for Link setup")
 	}
 	peer, err := askPeerUnderlay(p)
 	if err != nil {

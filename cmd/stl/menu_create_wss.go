@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -28,12 +29,31 @@ func menuCreateWSS(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
 func menuCreateWSSWithHost(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
 	opts *runtimeOptions, companion wss.Host) int {
 	p := createPrompts{reader: reader, out: out, errOut: errOut}
-	menuSection(out, "Create / WireGuard over WSS (mTLS)")
+	menuScreen(out, "Create / WireGuard over WSS (mTLS)")
 	menuNotice(out, "INFO", "WireGuard UDP is scoped to loopback; the remote peer connects over authenticated WSS/TLS TCP.")
-	if _, err := wss.InspectPinnedExecutableForOperator(companion); err != nil {
-		menuNotice(out, "WARNING", "Approved wstunnel v11.0.0 companion is missing or untrusted.")
-		menuProse(out, "Place the exact official wstunnel_11.0.0_linux_ARCH.tar.gz beside the official one-file STL installer and rerun that SAME installer.")
-		return 4
+	inspect := func() error {
+		_, err := wss.InspectPinnedExecutableForOperator(companion)
+		return err
+	}
+	if companion.Binary != "" && companion.Binary != wss.DefaultExecutable {
+		// A test-controlled executable must not trigger root installation
+		// of the production companion when its fixture is absent.
+		if inspect() != nil {
+			menuNotice(out, "WARNING", "Approved wstunnel v11.0.0 companion is missing or untrusted.")
+			menuField(out, "Next", "Use the installed root menu to acquire a verified WSS companion.")
+			return 4
+		}
+	} else {
+		spec, supported := menuPinnedCompanion(menuCompanionWSS, runtime.GOARCH)
+		if !supported {
+			menuNotice(out, "WARNING", "This CPU has no supported official WSS companion.")
+			return 4
+		}
+		if !menuEnsureCompanion(input, reader, out, spec, productionMenuCompanionOps(inspect, spec)) {
+			return 4
+		}
+		menuScreen(out, "Create / WireGuard over WSS (mTLS)")
+		menuField(out, "Companion", "Pinned helper verified; ready for Link setup")
 	}
 	peer, err := askPeerUnderlay(p)
 	if err != nil {
