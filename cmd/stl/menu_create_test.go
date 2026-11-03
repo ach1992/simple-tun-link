@@ -404,6 +404,8 @@ func TestGuidedGRECreatePeerImportAndIdempotentReimport(t *testing.T) {
 	importScript := "2\n1\n" + encoded + "\nYES\n8\n"
 	for attempt := 0; attempt < 2; attempt++ {
 		receiverOpts := guidedTestOptions(receiverRoot, &guidedTestRunner{}, receiver)
+		// This recipient fixture owns the offer-declared local IPv4.
+		receiverOpts.probeRunner = &greReceiverProbe{inventory: greReceiverInventory("eth0", "192.0.2.20")}
 		code, peerOut, peerErr := runGuidedTest(receiverOpts, importScript)
 		if code != 0 || peerErr != "" {
 			t.Fatalf("receiver Import attempt %d failed: %d %q", attempt, code, peerErr)

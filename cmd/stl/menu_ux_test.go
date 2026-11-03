@@ -120,6 +120,7 @@ func TestOperatorThirtyManualGRECreateManageShareAndImport(t *testing.T) {
 	}
 	receiver := &guidedTestBackend{lifecycleFakeBackend: newLifecycleFake()}
 	ropts := guidedTestOptions(receiverRoot, &guidedTestRunner{}, receiver)
+	ropts.probeRunner = &greReceiverProbe{inventory: greReceiverInventory("eth0", "192.0.2.20")}
 	peerCode, peerOut, peerErr := runGuidedTest(ropts, "2\n1\n"+links[0]+"\nYES\n8\n")
 	if peerCode != 0 || peerErr != "" || !strings.Contains(peerOut, "changes applied and verified") || len(receiver.applies) != 1 {
 		t.Fatalf("/30 peer import failed: %d %q %q", peerCode, peerOut, peerErr)
@@ -262,7 +263,10 @@ func TestOperatorImportLongOrMalformedLineDrainsAndCanRecover(t *testing.T) {
 	offer := testQuickSetupLink(t, source, nil)
 	long := strings.Repeat("a", 24*1024+55)
 	fake := &guidedTestBackend{lifecycleFakeBackend: newLifecycleFake()}
-	opts := &runtimeOptions{stateRoot: root, backends: []backend.Backend{fake}}
+	opts := &runtimeOptions{
+		stateRoot: root, backends: []backend.Backend{fake},
+		probeRunner: &greReceiverProbe{inventory: greReceiverInventory("eth0", "192.0.2.20")},
+	}
 	input := "2\n1\n" + long + "\n" + offer + "\nYES\n8\n"
 	var out, errText bytes.Buffer
 	code := runWithRuntimeInput([]string{"menu"}, strings.NewReader(input), &out, &errText, opts)

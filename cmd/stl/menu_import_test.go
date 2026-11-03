@@ -22,7 +22,12 @@ func runMenuImportTest(t *testing.T, root string, backends []backend.Backend, tr
 	t.Helper()
 	var output, errorsOut bytes.Buffer
 	code := runWithRuntimeInput([]string{"menu"}, strings.NewReader(transcript),
-		&output, &errorsOut, &runtimeOptions{stateRoot: root, backends: backends})
+		&output, &errorsOut, &runtimeOptions{
+			stateRoot: root, backends: backends,
+			// GRE fixture's declared recipient IPv4 is genuinely present
+			// on one fake local interface. No real-host inventory is read.
+			probeRunner: &greReceiverProbe{inventory: greReceiverInventory("eth0", "192.0.2.20")},
+		})
 	return code, output.String(), errorsOut.String()
 }
 
