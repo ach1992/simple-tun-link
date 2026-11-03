@@ -355,6 +355,24 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 			}
 		}
 	}
+	// An independently verified local inventory can distinguish a wrong
+	// receiver address from ambiguous assignment and an unknown observation.
+	// Share this classification across every native/managed backend that uses
+	// ResolveConfiguredUnderlay. Do not parse raw kernel text or infer that a
+	// mismatching Setup Link was intentionally addressed to another host.
+	if observedPublic != nil && observedPublic.ReasonCode == "local_underlay_unverified" &&
+		evidence != nil && evidence.Stage == "plan" && evidence.HostMutation == "not_attempted" &&
+		evidence.CredentialProvision != "attempted" && operation != "link_remove" &&
+		!errors.Is(observed, context.DeadlineExceeded) && !errors.Is(observed, context.Canceled) {
+		switch {
+		case errors.Is(observed, linux.ErrUnderlayLocalNotAssigned):
+			safe.ReasonCode = "local_underlay_not_assigned"
+			safe.NextStep = "The configured local receiver IPv4 is not assigned to THIS host. Inspect ip -json address show; verify BOTH endpoints on the sender and create a fresh Setup Link if the recipient or IP was mistaken. No backend Apply was attempted."
+		case errors.Is(observed, linux.ErrUnderlayLocalAmbiguous):
+			safe.ReasonCode = "local_underlay_ambiguous"
+			safe.NextStep = "The receiver IPv4 is assigned on multiple local interfaces. Inspect ip -json address show and resolve the ambiguity before retrying. This does not prove which host was intended; no backend Apply was attempted."
+		}
+	}
 	// Only explicitly typed Engine WSS identity/journal denials get a
 	// specific operator action. Never parse raw backend text or infer
 	// absence from a failed inspection, and never override a post-Apply

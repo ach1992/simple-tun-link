@@ -336,11 +336,11 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			if preview.Backend == "ipsec" {
 				menuProse(out, "IPsec needs a verified STL-owned strongSwan service before import. Import alone does not connect IKE.")
 			}
-			// GRE's offer inversion determines the expected receiver IPv4,
-			// but the offer cannot prove which physical server is receiving it.
-			// Check local assignment read-only before offering any Apply.
-			if preview.Backend == domain.BackendGRE &&
-				!reviewGREImportReceiver(out, createRunner(options), preview.LocalUnderlay) {
+			// All Setup Link backends use one read-only receiver/endpoint
+			// review before any Import approval. Only independently observed
+			// local assignment can support a mismatch warning; NAT-aware
+			// IPsec remains advisory instead of asserting wrong recipient.
+			if !reviewImportReceiver(out, createRunner(options), preview.LocalUnderlay, preview.Backend, preview.Encapsulation) {
 				continue
 			}
 			menuProse(out, "Check that the underlay IPs and both tunnel IPs are correct. Import changes THIS server's configuration.")

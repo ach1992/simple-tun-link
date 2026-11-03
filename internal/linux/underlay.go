@@ -64,7 +64,13 @@ func ListLocalIPv4Endpoints(ctx context.Context, runner Runner) ([]LocalIPv4Endp
 // ErrUnderlaySourceMismatch means the kernel-selected source differed from the
 // committed local endpoint, and no uniquely assigned local alternative could
 // be proven. It is only used to select safe, local operator guidance.
-var ErrUnderlaySourceMismatch = errors.New("kernel route selected another local source")
+var (
+	ErrUnderlaySourceMismatch = errors.New("kernel route selected another local source")
+	// These diagnoses require a successfully parsed, bounded local inventory:
+	// failed captures cannot establish the recipient's identity.
+	ErrUnderlayLocalNotAssigned = errors.New("configured local IPv4 is not assigned on this host")
+	ErrUnderlayLocalAmbiguous   = errors.New("configured local IPv4 belongs to multiple local interfaces")
+)
 
 // ResolveConfiguredUnderlay chooses a locally assigned IPv4/interface for
 // Create/Import/Ensure. A route-to-peer lookup may suggest the outbound
@@ -92,8 +98,23 @@ func ResolveConfiguredUnderlay(ctx context.Context, routes interface {
 	}
 	assigned, err := BoundLocalIPv4(endpoints, local, "")
 	if err != nil {
+		// The independently bounded/parsed local inventory, not a route
+		// suggestion, determines whether the requested IPv4 is absent or
+		// ambiguous. Preserve the existing route-hint error for callers.
+		matches := 0
+		for _, endpoint := range endpoints {
+			if endpoint.Address == local {
+				matches++
+			}
+		}
+		switch {
+		case matches == 0:
+			err = fmt.Errorf("%w: %w", ErrUnderlayLocalNotAssigned, err)
+		case matches > 1:
+			err = fmt.Errorf("%w: %w", ErrUnderlayLocalAmbiguous, err)
+		}
 		if routeErr == nil && suggested.Source != local {
-			return Route{}, fmt.Errorf("%w: %v", ErrUnderlaySourceMismatch, err)
+			return Route{}, fmt.Errorf("%w: %w", ErrUnderlaySourceMismatch, err)
 		}
 		return Route{}, err
 	}

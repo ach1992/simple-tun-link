@@ -44,8 +44,8 @@ func TestGREPlanReasonCodesAreSpecificWithoutLeakingKernelErrors(t *testing.T) {
 		name, reason string
 		setup        func()
 	}{
-		{"route lookup", "gre_underlay_route_unverified", func() { backend.routes = brokenGREPlanRoute{} }},
-		{"source mismatch", "gre_underlay_source_mismatch", func() {
+		{"route lookup with missing local IP", "local_underlay_unverified", func() { backend.routes = brokenGREPlanRoute{} }},
+		{"mismatching route hint with missing local IP", "local_underlay_unverified", func() {
 			backend.routes = fakeRoute{route: linux.Route{Peer: link.Underlay.Peer, Source: netip.MustParseAddr("192.0.2.99"), Device: "eth0"}}
 		}},
 	}
@@ -56,6 +56,7 @@ func TestGREPlanReasonCodesAreSpecificWithoutLeakingKernelErrors(t *testing.T) {
 			public := stlerr.Public(err)
 			if err == nil || public.ReasonCode != tc.reason || public.NextStep == "" ||
 				!strings.Contains(public.NextStep, "ip -json address show") ||
+				!errors.Is(err, linux.ErrUnderlayLocalNotAssigned) ||
 				strings.Contains(public.Error()+public.NextStep, "DO_NOT_PRINT") {
 				t.Fatalf("bad route plan refusal: %+v err=%v", public, err)
 			}

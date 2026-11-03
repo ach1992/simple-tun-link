@@ -240,7 +240,9 @@ func (b *Backend) Plan(ctx context.Context, req core.Request, observed core.Obse
 			// An inventory capture failure is not evidence that the peer
 			// route/source is wrong. Keep its typed cause and local guidance.
 			if errors.Is(err, linux.ErrOutputLimit) || errors.Is(err, context.DeadlineExceeded) ||
-				errors.Is(err, context.Canceled) {
+				errors.Is(err, context.Canceled) ||
+				errors.Is(err, linux.ErrUnderlayLocalNotAssigned) ||
+				errors.Is(err, linux.ErrUnderlayLocalAmbiguous) {
 				return nil, stlerr.LocalUnderlayUnverified("gre_plan", string(req.Link.ID), string(req.Link.Backend), err)
 			}
 			reason := "gre_underlay_route_unverified"

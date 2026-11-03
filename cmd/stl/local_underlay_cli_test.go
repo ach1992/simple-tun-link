@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/ach1992/simple-tun-link/internal/backend"
+	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
@@ -91,5 +93,56 @@ func TestVersionedCLICreateDeniesUnknownLocalIPBeforeHostEffects(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "state.json")); !os.IsNotExist(err) {
 		t.Fatalf("local inventory failure committed Link State: %v", err)
+	}
+}
+
+// All native/managed backends share one conservative CLI/JSON recovery
+// projection. Missing vs duplicate local assignment must not be replaced by
+// an advisory route hint, unavailable inventory, interruption or a staged key.
+func TestSharedImportUnderlayReasonsAcrossSupportedBackends(t *testing.T) {
+	backends := []domain.Backend{
+		domain.BackendGRE, domain.BackendIPIP, domain.BackendL2TPv3,
+		domain.BackendWireGuard, domain.BackendWireGuardWSS, domain.BackendWireGuardQUIC,
+	}
+	cases := []struct {
+		name         string
+		cause        error
+		reason, step string
+		credential   string
+	}{
+		{"wrong receiver", errors.Join(linux.ErrUnderlaySourceMismatch, linux.ErrUnderlayLocalNotAssigned),
+			"local_underlay_not_assigned", "THIS host", ""},
+		{"ambiguous receiver", linux.ErrUnderlayLocalAmbiguous,
+			"local_underlay_ambiguous", "multiple local interfaces", ""},
+		{"unverified inventory", linux.ErrOutputLimit,
+			"local_underlay_unverified", "ip -json address show", ""},
+		{"interrupted", errors.Join(context.Canceled, linux.ErrUnderlayLocalNotAssigned),
+			"operation_cancelled_before_apply", "canceled", ""},
+		{"credential staged", linux.ErrUnderlayLocalNotAssigned,
+			"local_underlay_unverified", "protected key write was also attempted", "attempted"},
+	}
+	for _, kind := range backends {
+		for _, tc := range cases {
+			t.Run(string(kind)+"/"+tc.name, func(t *testing.T) {
+				secret := errors.New("PRIVATE_UNDERLAY_ERROR_DO_NOT_PRINT")
+				observed := stlerr.LocalUnderlayUnverified("test_plan", "lnk_11111111111111111111111111111111",
+					string(kind), errors.Join(tc.cause, secret))
+				evidence := &stlerr.OperationEvidence{Stage: "plan", HostMutation: "not_attempted",
+					DesiredState: "no_commit_attempted", Rollback: "not_required",
+					CredentialProvision: tc.credential}
+				var out, errOut bytes.Buffer
+				exit := lifecycleFailureWithEvidence(&out, &errOut, true, stlerr.CodePlan, "link_import",
+					nil, "Link import did not finish", evidence, observed)
+				var result lifecycleFailureResponse
+				if exit == 0 || json.Unmarshal(out.Bytes(), &result) != nil || result.Error == nil ||
+					result.Error.ReasonCode != tc.reason || result.Error.Backend != string(kind) ||
+					!strings.Contains(result.Error.NextStep, tc.step) || errOut.Len() > 0 ||
+					strings.Contains(out.String(), "PRIVATE_UNDERLAY_ERROR_DO_NOT_PRINT") ||
+					result.Error.Evidence == nil || result.Error.Evidence.HostMutation != "not_attempted" {
+					t.Fatalf("missing shared actionable redacted classification: backend=%s exit=%d out=%s err=%s",
+						kind, exit, out.String(), errOut.String())
+				}
+			})
+		}
 	}
 }
