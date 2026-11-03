@@ -59,6 +59,36 @@ func TestInstallerOperatorOutputIsBoundedAndSecretSafe(t *testing.T) {
 	}
 }
 
+func TestCanonicalAPTPrepareFailureStageAndReason(t *testing.T) {
+	tests := []struct {
+		name, failure, stage, reason string
+	}{
+		{"index mirror failure", "APT_INDEX_REFRESH failed; missing selected packages: iptables.", "apt_index_refresh", "apt_index_unverified"},
+		{"dependency resolution", "APT_DEPENDENCY_PLAN failed; missing selected packages: iptables.", "apt_dependency_plan", "apt_dependency_plan_unverified"},
+		{"partial package transaction", "APT_PACKAGE_INSTALL failed; missing selected packages: iptables.", "apt_package_transaction", "apt_transaction_incomplete"},
+		{"signed candidate failure", "APT candidate InRelease is not signed by the distribution archive", "apt_source_trust", "apt_source_trust_unverified"},
+		{"source trust bypass", "APT sources explicitly bypass signature verification", "apt_source_trust", "apt_source_trust_unverified"},
+		{"APT index lock", "APT lists lock remained busy after bounded waiting", "apt_index_refresh", "apt_index_unverified"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var capture menuInstallerOutput
+			_, stderr := capture.streams()
+			_, _ = io.WriteString(stderr, "[INFO] Installing verified missing packages on "+
+				operatorSensitiveSentinel+"\n")
+			_, _ = io.WriteString(stderr, "stl installer [FAILED]: "+tc.failure+" "+
+				operatorSensitiveSentinel+"\n")
+			var out bytes.Buffer
+			capture.failure(&out, "prepare", fmt.Errorf("child failed"), context.Background())
+			display := out.String()
+			if !strings.Contains(display, tc.stage) || !strings.Contains(display, tc.reason) ||
+				strings.Contains(display, operatorSensitiveSentinel) || !strings.Contains(display, "dpkg --audit") {
+				t.Fatalf("wrong APT prepare stage/recovery: %q", display)
+			}
+		})
+	}
+}
+
 func TestCanonicalUpdateProcessNeverShowsRawChildStreams(t *testing.T) {
 	tmp := t.TempDir()
 	script := filepath.Join(tmp, "fixture.sh")

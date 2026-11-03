@@ -71,6 +71,8 @@ func packageInventoryFailure(stderr string, ctxErr error) error {
 		issue.reason = "unsupported_or_unverified_os"
 		issue.next = "Inspect /etc/os-release and docs/SUPPORTED-ENVIRONMENTS.md (read-only); do not change OS identity."
 	case strings.Contains(stderr, "APT sources explicitly bypass signature verification"),
+		strings.Contains(stderr, "APT selected a dependency outside the distribution archive"),
+		strings.Contains(stderr, "APT index-to-release inventory could not be inspected"),
 		strings.Contains(stderr, "APT candidate InRelease"),
 		strings.Contains(stderr, "APT candidate includes a non-distribution package source"),
 		strings.Contains(stderr, "APT candidate package version has no verified distribution index"),
@@ -78,7 +80,10 @@ func packageInventoryFailure(stderr string, ctxErr error) error {
 		strings.Contains(stderr, "cannot verify distribution archive signatures"):
 		issue.reason = "apt_source_trust_unverified"
 		issue.next = "Inspect APT source configuration and apt-cache policy for the missing packages; do not bypass signature checks."
-	case strings.Contains(stderr, "APT cannot resolve the complete selected dependency plan"),
+	case strings.Contains(stderr, "APT_DEPENDENCY_PLAN failed;"),
+		strings.Contains(stderr, "APT cannot resolve the complete selected dependency plan"),
+		strings.Contains(stderr, "no APT package index mapping available"),
+		strings.Contains(stderr, "APT plan would remove packages"),
 		strings.Contains(stderr, "APT plan omitted"),
 		strings.Contains(stderr, "APT package index mapping"),
 		strings.Contains(stderr, "APT candidate-to-index policy"),

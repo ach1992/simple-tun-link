@@ -63,14 +63,23 @@ func (v *menuInstallerOutput) observeLine(line string) {
 		v.stage, v.reason = "uninstall_preflight", "uninstall_preflight_unverified"
 	case strings.HasPrefix(line, "stl installer [FAILED]: STL ownership record is missing or not regular"):
 		v.stage, v.reason = "installation_ownership", "installer_ownership_unverified"
-	case strings.HasPrefix(line, "stl installer [FAILED]: APT package transaction failed"):
+	case strings.HasPrefix(line, "stl installer [FAILED]: APT_PACKAGE_INSTALL failed;"),
+		strings.HasPrefix(line, "stl installer [FAILED]: APT package transaction failed"):
 		v.stage, v.reason = "apt_package_transaction", "apt_transaction_incomplete"
-	case strings.HasPrefix(line, "stl installer [FAILED]: APT index refresh failed"),
+	case strings.HasPrefix(line, "stl installer [FAILED]: APT_INDEX_REFRESH failed;"),
+		strings.HasPrefix(line, "stl installer [FAILED]: APT index refresh failed"),
 		strings.HasPrefix(line, "stl installer [FAILED]: APT lists lock remained busy"):
 		v.stage, v.reason = "apt_index_refresh", "apt_index_unverified"
-	case strings.HasPrefix(line, "stl installer [FAILED]: APT cannot resolve the complete selected dependency plan"),
-		strings.HasPrefix(line, "stl installer [FAILED]: APT dependency plan changed"):
+	case strings.HasPrefix(line, "stl installer [FAILED]: APT_DEPENDENCY_PLAN failed;"),
+		strings.HasPrefix(line, "stl installer [FAILED]: APT cannot resolve the complete selected dependency plan"),
+		strings.HasPrefix(line, "stl installer [FAILED]: APT dependency plan changed"),
+		strings.HasPrefix(line, "stl installer [FAILED]: no APT package index mapping available"),
+		strings.HasPrefix(line, "stl installer [FAILED]: APT plan would remove packages"):
 		v.stage, v.reason = "apt_dependency_plan", "apt_dependency_plan_unverified"
+	case strings.HasPrefix(line, "stl installer [FAILED]: APT candidate InRelease"),
+		strings.HasPrefix(line, "stl installer [FAILED]: APT sources explicitly bypass signature verification"),
+		strings.HasPrefix(line, "stl installer [FAILED]: APT selected a dependency outside the distribution archive"):
+		v.stage, v.reason = "apt_source_trust", "apt_source_trust_unverified"
 	case strings.HasPrefix(line, "stl installer [INFO]: Another APT process holds the lists lock"):
 		// A later failure may be unrelated; this remains a reported stage,
 		// never a claim that the lists lock was the sole cause.
