@@ -133,6 +133,28 @@ type menuRoundTripper func(*http.Request) (*http.Response, error)
 
 func (f menuRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
+// A valid HTTPS response can fail after streaming some verified-looking bytes.
+// This is a transfer/read failure, not an invalid upstream HTTP status.
+type menuInterruptedReader struct{}
+
+func (menuInterruptedReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+
+type menuUnwritableStage struct{}
+
+func (menuUnwritableStage) Write([]byte) (int, error) { return 0, io.ErrShortWrite }
+
+func TestPinnedCompanionPayloadDistinguishesReadAndWriteFailures(t *testing.T) {
+	body := strings.Repeat("transfer-data", 200)
+	sum := sha256.Sum256([]byte(body))
+	digest := hex.EncodeToString(sum[:])
+	if err := menuCopyPinnedPayload(strings.NewReader(body), menuUnwritableStage{}, digest); !errors.Is(err, menuCompanionStagingError) {
+		t.Fatalf("failed staging write misclassified as a remote source failure: %v", err)
+	}
+	if err := menuCopyPinnedPayload(io.MultiReader(strings.NewReader(body[:1300]), menuInterruptedReader{}), io.Discard, digest); !errors.Is(err, menuCompanionReadError) {
+		t.Fatalf("interrupted source reader misclassified as staging failure: %v", err)
+	}
+}
+
 func TestOnlineCompanionAcquisitionTrustedOriginAndDigest(t *testing.T) {
 	body := strings.Repeat("fixed-snapshot-data", 100)
 	hash := sha256.Sum256([]byte(body))
@@ -170,6 +192,16 @@ func TestOnlineCompanionAcquisitionTrustedOriginAndDigest(t *testing.T) {
 	}
 	if err := run(0, "", "", fmt.Errorf("network down")); !errors.Is(err, menuCompanionNetworkError) {
 		t.Fatalf("network failure ignored: %v", err)
+	}
+	client := menuCompanionClient()
+	client.Transport = menuRoundTripper(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header),
+			Body:          io.NopCloser(io.MultiReader(strings.NewReader(body[:1200]), menuInterruptedReader{})),
+			ContentLength: -1, Request: req}, nil
+	})
+	if err := menuDownloadPinnedCompanionWithClient(context.Background(), spec,
+		filepath.Join(t.TempDir(), "partially-downloaded-asset"), client); !errors.Is(err, menuCompanionNetworkError) {
+		t.Fatalf("mid-body HTTPS read failure misclassified as upstream rejection: %v", err)
 	}
 }
 
@@ -270,11 +302,17 @@ func TestMenuCompanionOnlineConsentVerificationAndCancel(t *testing.T) {
 }
 
 func TestMenuCompanionOfflineFallbackAndFailedInstallerNoRetry(t *testing.T) {
-	s, _, _, ops, installs := testMenuCompanion(t)
+	s, data, _, ops, installs := testMenuCompanion(t)
 	downloads := 0
-	ops.download = func(context.Context, menuCompanionSpec, string) error {
+	ops.download = func(ctx context.Context, spec menuCompanionSpec, target string) error {
 		downloads++
-		return menuCompanionNetworkError
+		client := menuCompanionClient()
+		client.Transport = menuRoundTripper(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header),
+				Body:          io.NopCloser(io.MultiReader(bytes.NewReader(data[:1400]), menuInterruptedReader{})),
+				ContentLength: -1, Request: req}, nil
+		})
+		return menuDownloadPinnedCompanionWithClient(ctx, spec, target, client)
 	}
 	in := strings.NewReader("1\nINSTALL\n2\nINSTALL\n")
 	var out bytes.Buffer
@@ -283,6 +321,9 @@ func TestMenuCompanionOfflineFallbackAndFailedInstallerNoRetry(t *testing.T) {
 		!strings.Contains(out.String(), "official_download_unreachable") ||
 		!strings.Contains(out.String(), "Install local") {
 		t.Fatalf("offline fallback not usable: %q", out.String())
+	}
+	if entries, err := os.ReadDir(ops.stageParent); err != nil || len(entries) != 0 {
+		t.Fatalf("interrupted online staging not removed after local recovery: %v / %v", entries, err)
 	}
 	s, _, _, ops, installs = testMenuCompanion(t)
 	ops.install = func(_ context.Context, stdout, stderr io.Writer, args ...string) error {
