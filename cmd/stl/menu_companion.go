@@ -148,6 +148,7 @@ const (
 	menuCompanionSourceError  menuCompanionError = "official_download_rejected"
 	menuCompanionSizeError    menuCompanionError = "companion_size_unverified"
 	menuCompanionHashError    menuCompanionError = "companion_sha256_mismatch"
+	menuCompanionReadError    menuCompanionError = "companion_source_read_incomplete"
 	menuCompanionLocalError   menuCompanionError = "local_source_unavailable_or_unsafe"
 	menuCompanionStagingError menuCompanionError = "private_staging_unavailable"
 )
@@ -169,6 +170,40 @@ func menuCompanionClient() *http.Client {
 	}
 }
 
+// Track destination errors independently of a body-reader failure: neither
+// a disconnected transfer nor a full staging filesystem is an HTTP rejection.
+type menuCompanionStageWriter struct {
+	io.Writer
+	failed bool
+}
+
+func (w *menuCompanionStageWriter) Write(p []byte) (int, error) {
+	n, err := w.Writer.Write(p)
+	if err != nil || n != len(p) {
+		w.failed = true
+	}
+	return n, err
+}
+
+func menuCopyPinnedPayload(src io.Reader, dst io.Writer, digest string) error {
+	sum := sha256.New()
+	stage := &menuCompanionStageWriter{Writer: dst}
+	n, err := io.Copy(io.MultiWriter(stage, sum), io.LimitReader(src, menuCompanionMaxBytes+1))
+	if err != nil {
+		if stage.failed {
+			return menuCompanionStagingError
+		}
+		return menuCompanionReadError
+	}
+	if n <= 1024 || n >= menuCompanionMaxBytes {
+		return menuCompanionSizeError
+	}
+	if hex.EncodeToString(sum.Sum(nil)) != digest {
+		return menuCompanionHashError
+	}
+	return nil
+}
+
 func menuCopyPinnedAsset(src io.Reader, target, digest string) error {
 	// The caller creates a private, never-before-existing staging directory.
 	// O_EXCL and a bounded stream reject arbitrary overwrite or huge assets.
@@ -177,16 +212,8 @@ func menuCopyPinnedAsset(src io.Reader, target, digest string) error {
 		return menuCompanionStagingError
 	}
 	defer f.Close()
-	sum := sha256.New()
-	n, err := io.Copy(io.MultiWriter(f, sum), io.LimitReader(src, menuCompanionMaxBytes+1))
-	if err != nil {
-		return menuCompanionSourceError
-	}
-	if n <= 1024 || n >= menuCompanionMaxBytes {
-		return menuCompanionSizeError
-	}
-	if hex.EncodeToString(sum.Sum(nil)) != digest {
-		return menuCompanionHashError
+	if err := menuCopyPinnedPayload(src, f, digest); err != nil {
+		return err
 	}
 	if err := f.Sync(); err != nil {
 		return menuCompanionStagingError
@@ -218,7 +245,13 @@ func menuDownloadPinnedCompanionWithClient(ctx context.Context, spec menuCompani
 	if res.ContentLength >= menuCompanionMaxBytes {
 		return menuCompanionSizeError
 	}
-	return menuCopyPinnedAsset(res.Body, target, spec.digest)
+	if err := menuCopyPinnedAsset(res.Body, target, spec.digest); err != nil {
+		if errors.Is(err, menuCompanionReadError) {
+			return menuCompanionNetworkError
+		}
+		return err
+	}
+	return nil
 }
 
 // The local path is fixed, not an arbitrary root-executable path supplied
@@ -252,7 +285,13 @@ func menuCopyLocalCompanionFromDir(spec menuCompanionSpec, source, target, direc
 	if err != nil || !os.SameFile(info, opened) {
 		return menuCompanionLocalError
 	}
-	return menuCopyPinnedAsset(in, target, spec.digest)
+	if err := menuCopyPinnedAsset(in, target, spec.digest); err != nil {
+		if errors.Is(err, menuCompanionReadError) {
+			return menuCompanionLocalError
+		}
+		return err
+	}
+	return nil
 }
 
 func menuOwnedBy(info os.FileInfo, uid uint32) bool {
