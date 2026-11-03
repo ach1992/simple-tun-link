@@ -306,3 +306,41 @@ func TestLifecycleCLIReceiptFailureProjectsActualHostMutationWithSameV1Envelope(
 		})
 	}
 }
+
+// A valid IPIP backend observation error is projected through the SAME
+// Engine lifecycle used by direct CLI, JSON and interactive Import/Create.
+// Only the typed authored reason is exposed, never raw command diagnostics.
+type ipipInventoryFailureBackend struct{ *lifecycleFakeBackend }
+
+func (*ipipInventoryFailureBackend) Kind() domain.Backend { return domain.BackendIPIP }
+func (*ipipInventoryFailureBackend) Inspect(context.Context, domain.Link) (backend.Observation, error) {
+	issue := stlerr.New(stlerr.CodeInspect, "ipip_inspect", "", "ipip",
+		"private raw stdout: VERY_SECRET_NOT_FOR_OUTPUT")
+	issue.ReasonCode = "ipip_kernel_inventory_unverified"
+	issue.NextStep = "Inspect IPIP inventory on this server without modifying State."
+	return nil, issue
+}
+
+func TestLifecycleIPIPMalformedInventoryPreservesActionableSafeReason(t *testing.T) {
+	root := t.TempDir()
+	link, _ := makeLifecycleDesired(t, "e", "10.70.24.0/31")
+	link.Backend = domain.BackendIPIP
+	link.Encapsulation = domain.EncapNative
+	payload := desiredRequestJSON(t, link, desiredLinkSchemaVersion)
+	// Reuse the same exact accepted JSON v1 command; do not mock its
+	// response or bypass the canonical Engine.
+	var stdout, stderr bytes.Buffer
+	exit := runWithRuntimeInput([]string{"link", "ensure", "--stdin", "--json"}, strings.NewReader(payload),
+		&stdout, &stderr, &runtimeOptions{stateRoot: root, backends: []backend.Backend{&ipipInventoryFailureBackend{newLifecycleFake()}}})
+	if exit == 0 || strings.Contains(stdout.String()+stderr.String(), "VERY_SECRET_NOT_FOR_OUTPUT") {
+		t.Fatalf("incomplete IPIP inventory succeeded or leaked raw details: %d %q %q", exit, stdout.String(), stderr.String())
+	}
+	var response lifecycleFailureResponse
+	if json.Unmarshal(stdout.Bytes(), &response) != nil || response.Error == nil ||
+		response.Error.ReasonCode != "ipip_kernel_inventory_unverified" ||
+		response.Error.Evidence == nil || response.Error.Evidence.Stage != "inspect" ||
+		response.Error.Evidence.HostMutation != "not_attempted" ||
+		!strings.Contains(response.Error.NextStep, "ip -details -json link show type ipip") {
+		t.Fatalf("IPIP reason/stage/action lost at CLI Engine boundary: %+v", response)
+	}
+}

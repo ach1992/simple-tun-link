@@ -148,14 +148,7 @@ func (b *Backend) Inspect(ctx context.Context, link domain.Link) (core.Observati
 	if err != nil {
 		return nil, err
 	}
-	result, err := b.runner.Run(ctx, b.ipBinary, "-details", "-json", "link", "show", "type", "ipip")
-	if err != nil {
-		if b.moduleProbe(ctx, "ipip") {
-			return nil, core.KernelModuleNotLoaded("ipip")
-		}
-		return nil, fmt.Errorf("inspect IPIP links: %w", err)
-	}
-	links, err := parseIPIPLinks(result.Stdout)
+	links, err := b.readIPIPLinks(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -183,6 +176,32 @@ func (b *Backend) Inspect(ctx context.Context, link domain.Link) (core.Observati
 		break
 	}
 	return obs, nil
+}
+
+// readIPIPLinks is the one strictly validated local kernel inventory for
+// Engine inspection and backend capability checks. A successful iproute2 exit
+// does not establish a trustworthy inventory (unloaded ipip has returned [{}]).
+// No failed observation is ever converted into a safe empty inventory.
+func (b *Backend) readIPIPLinks(ctx context.Context) ([]observedLink, error) {
+	result, err := b.runner.Run(ctx, b.ipBinary, "-details", "-json", "link", "show", "type", "ipip")
+	if err == nil {
+		var links []observedLink
+		links, err = parseIPIPLinks(result.Stdout)
+		if err == nil {
+			return links, nil
+		}
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if b.moduleProbe(ctx, "ipip") {
+		return nil, core.KernelModuleNotLoaded("ipip")
+	}
+	public := stlerr.Wrap(stlerr.CodeInspect, "ipip_inspect", "", string(domain.BackendIPIP),
+		"IPIP kernel inventory is unavailable or incomplete", err)
+	public.ReasonCode = "ipip_kernel_inventory_unverified"
+	public.NextStep = "On this server, check ip -details -json link show type ipip and the ipip module state. Incomplete rows are not an empty inventory; verify module and iproute2 readiness before retrying. Do not erase State or other interfaces."
+	return nil, public
 }
 
 func (b *Backend) Plan(ctx context.Context, req core.Request, observed core.Observation) (core.Plan, error) {

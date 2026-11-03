@@ -8,13 +8,20 @@ import (
 )
 
 type capabilityRunner struct {
-	fail map[string]bool
+	fail   map[string]bool
+	output map[string][]byte
 }
 
 func (r capabilityRunner) Run(_ context.Context, name string, args ...string) (CommandResult, error) {
 	key := strings.Join(append([]string{name}, args...), " ")
 	if r.fail[key] {
 		return CommandResult{}, errors.New("private diagnostic that must not be exposed")
+	}
+	if value, ok := r.output[key]; ok {
+		return CommandResult{Stdout: value}, nil
+	}
+	if key == "ip -json -details link show type ipip" {
+		return CommandResult{Stdout: []byte("[]")}, nil
 	}
 	return CommandResult{}, nil
 }
@@ -94,5 +101,35 @@ func TestNoModinfoDoesNotFalselyProveFOUUnsupported(t *testing.T) {
 		got.ReasonCode != "swanctl_probe_unconfirmed" ||
 		strings.Contains(got.Reason, "private diagnostic") {
 		t.Fatalf("IPsec prerequisite cause was not separated: %+v", got)
+	}
+}
+
+// iproute2 on a kernel with an unloaded ipip module has returned [{},{},{}]
+// with exit 0. Menu capability hints must not call this "ready".
+func TestIPIPCapabilityRequiresTrustworthyInventoryNotJustExitZero(t *testing.T) {
+	key := "ip -json -details link show type ipip"
+	for _, tc := range []struct {
+		name, inventory string
+		ready           bool
+	}{
+		{"kernel placeholders", "[{},{},{}]", false},
+		{"null", "null", false},
+		{"missing endpoint", `[{"ifindex":1,"ifname":"ipip1","linkinfo":{"info_kind":"ipip","info_data":{}}}]`, false},
+		{"valid empty", "[]", true},
+		{"valid wildcard", `[{"ifindex":1,"ifname":"tunl0","linkinfo":{"info_kind":"ipip","info_data":{"local":"any","remote":"any"}}}]`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := CapabilityProbe{Runner: capabilityRunner{output: map[string][]byte{key: []byte(tc.inventory)}}}
+			report, err := p.Probe(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, cap := range []Capability{CapabilityIPIPNative, CapabilityIPIPFOU, CapabilityIPIPGUE} {
+				got := report[cap]
+				if got.Available != tc.ready || (!tc.ready && got.ReasonCode == "") {
+					t.Fatalf("menu overclaimed %s for %s: %+v", cap, tc.name, got)
+				}
+			}
+		})
 	}
 }

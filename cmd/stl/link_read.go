@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -367,8 +368,11 @@ func readStatusInspectionError(ctx context.Context, stdout, stderr io.Writer, js
 		public.NextStep = "Check installed kernel module and host policy; load only with authorization, then retry status."
 		return readCommandPublicError(stdout, stderr, jsonOutput, public)
 	}
-	if ctx.Err() != nil {
+	if ctx.Err() != nil || errors.Is(observed, context.Canceled) || errors.Is(observed, context.DeadlineExceeded) {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInspect, "link_status", "live diagnostic inspection was interrupted")
+	}
+	if isIPIPInventoryUnverified(observed) {
+		return readCommandPublicError(stdout, stderr, jsonOutput, ipipInventoryReadPublicError("link_status", ""))
 	}
 	return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInspect, "link_status", "live diagnostic state could not be verified")
 }

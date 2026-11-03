@@ -4,6 +4,7 @@ package diagnostics
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	ipipbackend "github.com/ach1992/simple-tun-link/internal/backend/ipip"
@@ -26,6 +27,22 @@ type IPIPReport struct {
 	Report
 	Backend domain.Backend              `json:"backend"`
 	State   ipipbackend.DiagnosticState `json:"state"`
+}
+
+// The backend's reason is a narrow, typed observation, never a raw kernel
+// message. Keep it through this shared diagnostic layer so both single-Link
+// and multi-Link callers can project their own secret-safe operator guidance.
+const ipipInventoryUnknownReason = "ipip_kernel_inventory_unverified"
+
+const ipipInventoryDiagnosticAction = "On this server check ip -details -json link show type ipip and kernel module readiness; incomplete inventory is not a free device. Do not erase saved State or alter other Links."
+
+func ipipInventoryError(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	known := stlerr.Public(err)
+	return known.Code == stlerr.CodeInspect && known.Backend == string(domain.BackendIPIP) &&
+		known.ReasonCode == ipipInventoryUnknownReason
 }
 
 // ObserveIPIP refuses to measure without a currently validated, owned IPIP
@@ -53,10 +70,23 @@ func ObserveIPIP(ctx context.Context, link domain.Link, inspector IPIPInspector,
 		if ctx.Err() != nil {
 			return IPIPReport{}, ctx.Err()
 		}
-		return IPIPReport{}, stlerr.Wrap(stlerr.CodeInspect, "diagnose_ipip", string(link.ID), string(link.Backend), "cannot inspect IPIP capability", err)
+		wrapped := stlerr.Wrap(stlerr.CodeInspect, "diagnose_ipip", string(link.ID), string(link.Backend), "cannot inspect IPIP capability", err)
+		if ipipInventoryError(err) {
+			wrapped.ReasonCode, wrapped.NextStep = ipipInventoryUnknownReason, ipipInventoryDiagnosticAction
+		} else if stlerr.Public(err).ReasonCode == "kernel_module_not_loaded" {
+			wrapped.ReasonCode = "kernel_module_not_loaded"
+			wrapped.NextStep = "Verify kernel module availability and load only with authorization before retrying read-only diagnosis."
+		}
+		return IPIPReport{}, wrapped
 	}
 	if !capability.Available {
 		unsupported := stlerr.New(stlerr.CodeUnsupported, "diagnose_ipip", string(link.ID), string(link.Backend), "IPIP capability is not available")
+		if capability.ReasonCode == ipipInventoryUnknownReason {
+			uncertain := stlerr.New(stlerr.CodeInspect, "diagnose_ipip", string(link.ID), string(link.Backend),
+				"IPIP kernel inventory was not verified; no peer probe was started")
+			uncertain.ReasonCode, uncertain.NextStep = ipipInventoryUnknownReason, ipipInventoryDiagnosticAction
+			return IPIPReport{}, uncertain
+		}
 		if capability.ReasonCode == "kernel_module_not_loaded" {
 			unsupported.ReasonCode = capability.ReasonCode
 			unsupported.NextStep = "Check module availability for this kernel; load only with operator authorization and retry observation."
@@ -70,8 +100,11 @@ func ObserveIPIP(ctx context.Context, link domain.Link, inspector IPIPInspector,
 		}
 		wrapped := stlerr.Wrap(stlerr.CodeInspect, "diagnose_ipip", string(link.ID), string(link.Backend),
 			"cannot verify IPIP operational state and counters", err)
-		if known := stlerr.Public(err); known.ReasonCode == "kernel_module_not_loaded" {
-			wrapped.ReasonCode, wrapped.NextStep = known.ReasonCode, known.NextStep
+		if ipipInventoryError(err) {
+			wrapped.ReasonCode, wrapped.NextStep = ipipInventoryUnknownReason, ipipInventoryDiagnosticAction
+		} else if stlerr.Public(err).ReasonCode == "kernel_module_not_loaded" {
+			wrapped.ReasonCode = "kernel_module_not_loaded"
+			wrapped.NextStep = "Verify kernel module availability and load only with authorization before retrying read-only diagnosis."
 		}
 		return IPIPReport{}, wrapped
 	}

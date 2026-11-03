@@ -334,6 +334,10 @@ func healthDiagnosticFailure(link domain.Link, err error) healthLinkCheck {
 			"Link observation was interrupted or timed out.",
 			"Inspect Link status; rerun read-only diagnosis when host availability permits.")
 	}
+	if link.Backend == domain.BackendIPIP && isIPIPInventoryUnverified(err) {
+		return healthUnavailable(link, "ipip_kernel_inventory_unverified",
+			ipipInventoryReadSummary, ipipInventoryReadNext)
+	}
 	return healthUnavailable(link, "diagnostic_observation_unverified",
 		"Backend identity, network probe or current Link observation could not be verified.",
 		"Inspect Link status and kernel prerequisites; do not infer absence, repairability or successful traffic.")

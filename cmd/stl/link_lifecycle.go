@@ -303,6 +303,16 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 		case evidence.HostMutation == "not_attempted" && errors.Is(observed, context.Canceled):
 			safe.ReasonCode = "operation_cancelled_before_apply"
 			safe.NextStep = "Operation was canceled before backend Apply; inspect Link state and retry only if still intended."
+		case observedPublic != nil && observedPublic.Code == stlerr.CodeInspect &&
+			observedPublic.Backend == string(domain.BackendIPIP) &&
+			observedPublic.ReasonCode == "ipip_kernel_inventory_unverified" &&
+			(evidence.Stage == "inspect" || evidence.Stage == "plan") &&
+			evidence.HostMutation == "not_attempted" && evidence.DesiredState == "no_commit_attempted" &&
+			evidence.Rollback == "not_required":
+			// Initial and post-lock re-inspection are both before Engine Apply.
+			// Do not override real cancellation, rollback or post-Apply evidence.
+			safe.ReasonCode = "ipip_kernel_inventory_unverified"
+			safe.NextStep = "On THIS server inspect ip -details -json link show type ipip and the ipip module. Invalid/incomplete inventory is not a free interface or an empty Link list. Correct module/iproute2 readiness before retrying; do not erase State or other interfaces. Engine did not invoke host Apply."
 		case evidence.HostMutation == "not_attempted" && operation == "link_remove":
 			safe.ReasonCode = "rejected_before_host_apply"
 			safe.NextStep = "Inspect only this Link's saved owner identity, local kernel, firewall, helper and recovery journal. No remote connectivity or Create preparation is needed; reconcile uncertain resources before retrying removal. Engine did not invoke host Apply."

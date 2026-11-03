@@ -1,6 +1,7 @@
 package ipip
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/netip"
@@ -70,15 +71,27 @@ type observedLink struct {
 }
 
 func parseIPIPLinks(raw []byte) ([]observedLink, error) {
+	// json.Unmarshal accepts null into a slice; null is not a verified empty
+	// array, so reject it before any ownership or collision decision.
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '[' {
+		return nil, fmt.Errorf("IPIP kernel inventory is not a JSON array")
+	}
 	var rows []linkJSON
 	if err := json.Unmarshal(raw, &rows); err != nil {
 		return nil, fmt.Errorf("parse IPIP link state: %w", err)
 	}
 	out := make([]observedLink, 0, len(rows))
 	for _, row := range rows {
-		// Linux exposes wildcard fallback devices through the same query. They
-		// are not STL point-to-point Links and must never be claimed/deleted.
-		if strings.TrimSpace(row.LinkInfo.InfoData.Local) == "any" || strings.TrimSpace(row.LinkInfo.InfoData.Remote) == "any" {
+		// Even the kernel wildcard fallback must carry a real interface
+		// identity. An iproute2 placeholder ({}) is not a safe absence.
+		if row.IfIndex <= 0 || row.IfName == "" || row.LinkInfo.InfoKind != "ipip" {
+			return nil, fmt.Errorf("invalid IPIP link inspection row")
+		}
+		// Only the complete paired wildcard is the kernel fallback. A
+		// partially missing endpoint cannot be silently omitted.
+		if strings.TrimSpace(row.LinkInfo.InfoData.Local) == "any" &&
+			strings.TrimSpace(row.LinkInfo.InfoData.Remote) == "any" {
 			continue
 		}
 		state, err := parseIPIPLink(row)

@@ -1,8 +1,11 @@
 package linux
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/netip"
 )
 
 type Capability string
@@ -66,7 +69,7 @@ func (p CapabilityProbe) Probe(ctx context.Context) (CapabilityReport, error) {
 
 	report := CapabilityReport{}
 	gre := p.commandAvailable(ctx, ip, "-json", "-details", "link", "show", "type", "gre")
-	ipip := p.commandAvailable(ctx, ip, "-json", "-details", "link", "show", "type", "ipip")
+	ipip := p.ipipInventoryReadable(ctx, ip)
 	l2tp := p.commandAvailable(ctx, ip, "-json", "l2tp", "show", "tunnel") && p.commandAvailable(ctx, ip, "-json", "l2tp", "show", "session")
 	fou := p.commandAvailable(ctx, ip, "fou", "show")
 	// A failed read-only FOU query alone is not evidence of an unsupported
@@ -127,6 +130,50 @@ func (p CapabilityProbe) Probe(ctx context.Context) (CapabilityReport, error) {
 		return nil, err
 	}
 	return report, nil
+}
+
+// The human menu uses this read-only, advisory capability snapshot. Linux
+// iproute2 can return exit 0 with [{}] placeholder rows when ipip is unloaded;
+// accepting that as support would contradict the stricter Engine adapter.
+// Backend Inspect still verifies the complete device/ownership semantics.
+func (p CapabilityProbe) ipipInventoryReadable(ctx context.Context, ip string) bool {
+	result, err := p.Runner.Run(ctx, ip, "-json", "-details", "link", "show", "type", "ipip")
+	if err != nil || ctx.Err() != nil {
+		return false
+	}
+	trimmed := bytes.TrimSpace(result.Stdout)
+	if len(trimmed) == 0 || trimmed[0] != '[' {
+		return false
+	}
+	var rows []struct {
+		IfIndex  int    `json:"ifindex"`
+		IfName   string `json:"ifname"`
+		LinkInfo struct {
+			InfoKind string `json:"info_kind"`
+			InfoData struct {
+				Local  string `json:"local"`
+				Remote string `json:"remote"`
+			} `json:"info_data"`
+		} `json:"linkinfo"`
+	}
+	if json.Unmarshal(trimmed, &rows) != nil {
+		return false
+	}
+	for _, row := range rows {
+		if row.IfIndex <= 0 || row.IfName == "" || row.LinkInfo.InfoKind != "ipip" {
+			return false
+		}
+		local, peer := row.LinkInfo.InfoData.Local, row.LinkInfo.InfoData.Remote
+		if local == "any" && peer == "any" {
+			continue
+		}
+		l, errLocal := netip.ParseAddr(local)
+		r, errPeer := netip.ParseAddr(peer)
+		if errLocal != nil || errPeer != nil || !l.Is4() || !r.Is4() {
+			return false
+		}
+	}
+	return true
 }
 
 func (p CapabilityProbe) commandAvailable(ctx context.Context, name string, args ...string) bool {
