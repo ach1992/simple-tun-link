@@ -30,6 +30,8 @@ jobs:
         run: |
           bash -n scripts/quick-install.sh
           bash -n scripts/test-quick-install.sh
+          bash -n scripts/prepare-mirror.sh
+          bash -n scripts/test-mirror-install.sh
           bash -n scripts/e2e/gre-netns.sh
           bash -n scripts/e2e/l2tpv3-netns.sh
           bash -n scripts/e2e/gre-multipeer-netns.sh
@@ -66,6 +68,7 @@ jobs:
           bash scripts/test-install.sh
           bash scripts/test-install-requirements.sh
           bash scripts/test-quick-install.sh
+          bash scripts/test-mirror-install.sh
       - name: Transferable architecture-specific local bundle smoke
         run: GOTOOLCHAIN=local bash scripts/e2e/snapshot-install-smoke.sh
 

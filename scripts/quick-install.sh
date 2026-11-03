@@ -19,10 +19,24 @@ quick_install_main() {
     echo "Usage: STL bootstrap [optional-exact-stable-tag] [native|native,wireguard] [update]" >&2
     exit 2
   }
-  [[ $# -ge 1 && $# -le 4 ]] || usage
-  version=$1
-  bootstrap_version=$version
-  shift
+  # Distribution trust comes ONLY from the exact reviewed final invocation.
+  # Never accept STL_MIRROR_* inherited environment variables as origin pins.
+  [[ $# -ge 4 && $# -le 7 ]] || usage
+  local bootstrap_version=$1 mirror_url=$2 mirror_install_sha=$3 mirror_sums_sha=$4
+  shift 4
+  version=$bootstrap_version
+  if [[ -n $mirror_url ]]; then
+    [[ $bootstrap_version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ &&
+       $mirror_url =~ ^https://[a-zA-Z0-9][a-zA-Z0-9.-]*(:[0-9]{1,5})?/releases/v[0-9]+\.[0-9]+\.[0-9]+$ &&
+       $mirror_url == */releases/$bootstrap_version && $mirror_url != *..* &&
+       $mirror_install_sha =~ ^[0-9a-f]{64}$ &&
+       $mirror_sums_sha =~ ^[0-9a-f]{64}$ ]] || {
+      echo '[FAILED] Invalid pinned mirror metadata; no installer started.' >&2
+      return 2
+    }
+  else
+    [[ -z $mirror_install_sha && -z $mirror_sums_sha ]] || usage
+  fi
   # The immutable Latest Stable bootstrap pins the default tag. One optional
   # explicit published Stable tag follows the same short public command;
   # never interpolate a path, branch, arbitrary tag or user shell code.
@@ -46,6 +60,13 @@ quick_install_main() {
   fi
   workdir=$(mktemp -d)
   trap 'rm -rf -- "$workdir"' EXIT
+  # A self-hosted mirror is pinned to one Stable version. Historical release
+  # selection would need a separately prepared version-specific mirror asset;
+  # never fall back to GitHub API when the target is isolated.
+  if [[ $mirror_url != '' && $version != "$bootstrap_version" ]]; then
+    echo '[FAILED] This mirror bootstrap serves only its pinned Stable. Publish the desired exact-version mirror bootstrap; no GitHub fallback.' >&2
+    return 1
+  fi
   # The bootstrap's pinned immutable Stable supplies the ONLY executable
   # installer. User-selected historical tags are never shell-source paths.
   # Admit them as data only after GitHub confirms an exact complete immutable
@@ -119,11 +140,23 @@ STL_RELEASE_JSON
   fi
   # Download the trusted current immutable canonical installer completely,
   # and syntax-check it BEFORE any sudo/root execution.
-  source_url="https://raw.githubusercontent.com/ach1992/simple-tun-link/$bootstrap_version/scripts/install.sh"
   tmp="$workdir/install.sh"
-  if ! curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 --retry-max-time 150 -o "$tmp" "$source_url" >/dev/null 2>&1; then
-    echo '[FAILED] STL installer download failed before execution. Check HTTPS/DNS reachability of raw.githubusercontent.com and the exact official release; no installer started.' >&2
-    return 1
+  if [[ -n $mirror_url ]]; then
+    source_url="$mirror_url/install.sh"
+    if ! curl -fsSs --proto "=https" --proto-redir "=https" --max-redirs 0 --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 --retry-max-time 150 -o "$tmp" "$source_url" >/dev/null 2>&1; then
+      echo '[FAILED] Mirror canonical installer unavailable. Check the HTTPS mirror and required release files; no GitHub fallback or installer started.' >&2
+      return 1
+    fi
+    [[ -s $tmp && $(sha256sum -- "$tmp" | awk '{print $1}') == "$mirror_install_sha" ]] || {
+      echo '[FAILED] Mirror canonical installer differs from the independently pinned SHA256; no installer started.' >&2
+      return 1
+    }
+  else
+    source_url="https://raw.githubusercontent.com/ach1992/simple-tun-link/$bootstrap_version/scripts/install.sh"
+    if ! curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 --retry-max-time 150 -o "$tmp" "$source_url" >/dev/null 2>&1; then
+      echo '[FAILED] STL installer download failed before execution. Check HTTPS/DNS reachability of raw.githubusercontent.com and the exact official release; no installer started.' >&2
+      return 1
+    fi
   fi
   [[ -s $tmp ]] || { echo '[FAILED] STL installer download is empty; no installer started. Verify the official release and retry the download.' >&2; return 1; }
   if ! bash -n "$tmp" >/dev/null 2>&1; then
@@ -137,6 +170,39 @@ STL_RELEASE_JSON
     local line announced_wait=0 announced_packages=0 announced_failure=0
     while IFS= read -r -n 1024 line || [[ -n $line ]]; do
       case "$line" in
+        'stl installer [FAILED]: installed_version_mismatch: prior='*)
+          local remainder prior
+          remainder=${line#'stl installer [FAILED]: installed_version_mismatch: prior='}
+          prior=${remainder%% *}
+          if [[ $prior =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ &&
+                $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ &&
+                $prior != "$version" &&
+                $line == "stl installer [FAILED]: installed_version_mismatch: prior=$prior target=$version; install cannot replace a different installer-owned release; use an explicit update" ]]; then
+            if [[ -n $mirror_url ]]; then
+              printf '[ACTION] STL %s is already installed. install will not replace it with %s. Rerun this same verified HTTPS mirror command with update as the final argument; the built-in Update menu requires GitHub. No automatic upgrade was performed.\n' "$prior" "$version"
+            else
+              printf '[ACTION] STL %s is already installed. install will not replace it with %s. Run sudo stl menu -> Update, or rerun the same trusted bootstrap with update as its final argument. No automatic upgrade was performed.\n' "$prior" "$version"
+            fi
+          else
+            echo '[WARNING] STL install cannot safely replace the existing artifact. Inspect ownership and the installed version; do not force an update.'
+          fi ;;
+        'stl installer [FAILED]: mirror_checksum_mismatch:'*)
+          echo '[FAILED] The mirror SHA256SUMS does not match this bootstrap release pin. Check uploads and independent release hashes; no binary published.' ;;
+        'stl installer [FAILED]: mirror_download_failed:'*)
+          echo '[FAILED] Required release file is unavailable on the HTTPS mirror. Upload the complete verified version directory; no GitHub fallback.' ;;
+        'stl installer [FAILED]: APT_INDEX_REFRESH failed;'*)
+          echo '[ACTION] APT could not refresh signed package indexes. Check the configured reachable domestic/signed distro mirror and dpkg --audit; no package install was started by this attempt.' ;;
+        'stl installer [FAILED]: APT_DEPENDENCY_PLAN failed;'*)
+          echo '[ACTION] APT cannot resolve the selected verified packages. Check authenticated repository configuration and package availability; no packages changed.' ;;
+        'stl installer [FAILED]: APT_PACKAGE_INSTALL failed;'*)
+          echo '[WARNING] APT package installation failed or is partially applied. Inspect dpkg --audit, active APT tasks and retained recovery before trying again; no automatic retry.' ;;
+        'stl installer [FAILED]: no STL installer-owned installation found'*)
+          echo '[ACTION] Update requires an existing verified STL installation. Check for foreign/partial STL files and recovery first; use fresh install only on a confirmed clean host.' ;;
+        'stl installer [FAILED]: STL ownership record is missing or not regular'*|\
+        'stl installer [FAILED]: invalid ownership record'*|\
+        'stl installer [FAILED]: installed stl differs from recorded owned binary'*|\
+        'stl installer [FAILED]: unreconciled STL installer recovery directory exists'*)
+          echo '[WARNING] STL ownership or retained recovery is unverified. Inspect the existing files/journal; do not overwrite, delete recovery, or force Update.' ;;
         'stl installer [FAILED]: legacy_binary_bridge_required:'*)
           echo '[ACTION] This installed Stable cannot directly downgrade. First UPDATE it to the next official Stable using the permanent one-line installer without an old tag; then select the older official version in its installed Update menu.' ;;
         'stl installer [INFO]: Another APT process holds the lists lock'*)
@@ -163,9 +229,17 @@ STL_RELEASE_JSON
   echo "[INFO] Running STL $action for $version. Raw package diagnostics are withheld; this can take several minutes."
   if (
     if (( EUID == 0 )); then
-      bash "$tmp" "$action" --version "$version" --backends "$backends"
+      if [[ -n $mirror_url ]]; then
+        bash "$tmp" "$action" --version "$version" --backends "$backends" --release-base "$mirror_url" --release-sums-sha256 "$mirror_sums_sha"
+      else
+        bash "$tmp" "$action" --version "$version" --backends "$backends"
+      fi
     else
-      sudo bash "$tmp" "$action" --version "$version" --backends "$backends"
+      if [[ -n $mirror_url ]]; then
+        sudo bash "$tmp" "$action" --version "$version" --backends "$backends" --release-base "$mirror_url" --release-sums-sha256 "$mirror_sums_sha"
+      else
+        sudo bash "$tmp" "$action" --version "$version" --backends "$backends"
+      fi
     fi
   ) 2>&1 | quick_install_safe_output; then
     install_status=0
@@ -193,4 +267,6 @@ STL_RELEASE_JSON
   fi
   echo "[INFO] No interactive terminal detected. Start it later with: sudo stl menu"
 }
-quick_install_main "$@"
+# Direct source execution is official-only. Published official and self-hosted
+# scripts replace ONLY this final invocation with constant, reviewed pins.
+quick_install_main "${1:-}" "" "" "" "${@:2}"

@@ -617,7 +617,7 @@ before downloading the canonical installer; it does not execute a mutable
 identity before installing. The public command stays unchanged:
 
 ~~~sh
-bash -c 'set -e; d=$(mktemp -d); cleanup(){ rm -rf -- "$d"; }; trap cleanup EXIT; curl -fsSLo "$d/stl.sh" --proto "=https" --proto-redir "=https" https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh; test -s "$d/stl.sh"; bash -n "$d/stl.sh"; bash "$d/stl.sh" "$@"' stl
+bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 | tr "\000" "\001" && printf x) && (( ${#s} > 1 && ${#s} <= 131073 )) && [[ $s != *$(printf "\001")* ]] && s=${s%x} && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl
 ~~~
 
 To install a specific published Stable, append its tag to that same
@@ -626,13 +626,15 @@ entry point stays unchanged across releases. With no suffix, the immutable
 Latest Stable asset supplies its exact pinned default version.
 
 ~~~sh
-bash -c 'set -e; d=$(mktemp -d); cleanup(){ rm -rf -- "$d"; }; trap cleanup EXIT; curl -fsSLo "$d/stl.sh" --proto "=https" --proto-redir "=https" https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh; test -s "$d/stl.sh"; bash -n "$d/stl.sh"; bash "$d/stl.sh" "$@"' stl v0.1.9
+bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 | tr "\000" "\001" && printf x) && (( ${#s} > 1 && ${#s} <= 131073 )) && [[ $s != *$(printf "\001")* ]] && s=${s%x} && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl v0.1.9
 ~~~
 
-The **first hop is downloaded to a private temporary directory**. Only
-after curl completes successfully and the file is nonempty and passes Bash
-syntax validation can it execute. Failed or partial transfers never execute
-the downloaded script; the temporary directory is removed on exit. An
+The first hop is first **fully downloaded into shell memory**. Only after
+curl returns success within 45 seconds, the script is nonempty and no
+larger than 128 KiB (including chunked responses), NUL/control-byte
+substitutions are rejected, and syntax validation passes
+can the bootstrap execute. Do not replace this with bare `curl | bash`:
+a failed transfer can otherwise be hidden or its partial script executed. An
 optional historical Stable suffix is checked against the official exact-tag
 GitHub release API before privilege elevation; it requires Python 3 and a
 published, complete, `immutable:true` non-prerelease release. Missing,
@@ -650,7 +652,7 @@ installer-owned STL, **do not run install again**: use this equally fixed
 update command:
 
 ~~~sh
-bash -c 'set -e; d=$(mktemp -d); cleanup(){ rm -rf -- "$d"; }; trap cleanup EXIT; curl -fsSLo "$d/stl.sh" --proto "=https" --proto-redir "=https" https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh; test -s "$d/stl.sh"; bash -n "$d/stl.sh"; bash "$d/stl.sh" "$@"' stl update
+bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 | tr "\000" "\001" && printf x) && (( ${#s} > 1 && ${#s} <= 131073 )) && [[ $s != *$(printf "\001")* ]] && s=${s%x} && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl update
 ~~~
 
 This selects the unchanged canonical installer update transaction,
@@ -680,6 +682,8 @@ menu shows the specific failed preflight reason and safe next step.
 A failed `RECHECK` does not repair anything; prefer investigating
 the reported blocker over repeating `PREPARE`.
 Offline bootstrap failure/PTY tests: bash scripts/test-quick-install.sh.
+For a self-hosted HTTPS mirror that operates with **zero GitHub access on
+the destination host**, see [MIRROR.md](MIRROR.md).
 
 The canonical installer selects native GRE/IPIP prerequisites by default. `--backends all` requests every dependency
 family, but it does **not** authorize unsafe IPsec package/service
@@ -694,17 +698,23 @@ To preview without changing anything:
 bash scripts/install.sh requirements --backends all
 ```
 
-The permanent one-command wrapper completes and syntax-checks the
-**current immutable bootstrap's pinned canonical installer** in a private
-temporary file **before invoking sudo**; a partial/failed download is never
-streamed into a privileged shell. An optional older exact-version suffix
+The short command fully downloads and syntax-checks the **bootstrap** in
+memory before execution. It appends a non-newline sentinel after completed
+transport, checks the actual received byte count (including trailing newlines),
+then removes the sentinel before execution; the bootstrap separately downloads and syntax-checks
+its exact-version canonical installer in a private temporary file **before
+invoking sudo**. Failed/partial first-hop transfers do not run partial code.
+An optional older exact-version suffix
 first passes official immutable-release metadata verification and is used
 only as an installer argument. The canonical installer then fetches
 `SHA256SUMS`, `BUILD-MANIFEST.txt`, `LICENSE`, and the one
 architecture-specific `stl_vX.Y.Z_linux_<arch>` executable from the **fixed
 project GitHub release URL** over HTTPS. It checks the relevant SHA-256 entries,
 MIT/commit/version metadata, and the executable's `version --json` identity
-**before** publication. No caller-provided download URL is accepted.
+**before** publication. The default GitHub path accepts no caller-provided
+download URL. A separately generated, version-specific self-hosted mirror
+bootstrap uses the same installer with a strict HTTPS release directory
+and a trusted pinned `SHA256SUMS` digest; see [MIRROR.md](MIRROR.md).
 
 For `--bundle` system-wide installs, use a private administrator-controlled
 bundle source; bundle-local checksums do not authenticate a hostile source.

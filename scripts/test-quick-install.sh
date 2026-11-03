@@ -14,14 +14,14 @@ mapfile -t published_commands < <(grep '^bash -c .*stl-bootstrap.sh' "$repo/READ
 # Public commands must NEVER need a changing tag, branch or token.
 # The immutable Stable asset itself pins the exact release tag.
 stable_url='https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh'
-# Source is complete only after curl exits 0. The script must not be
-# interpreted in a pipe where a late curl error can follow root effects.
-for idx in 0 1 2; do
-  line="${published_commands[$idx]}"
-  [[ "$line" == *'set -e; d=$(mktemp -d);'* &&
-     "$line" == *"curl -fsSLo \"\$d/stl.sh\" --proto \"=https\" --proto-redir \"=https\" $stable_url; test -s \"\$d/stl.sh\"; bash -n \"\$d/stl.sh\"; bash \"\$d/stl.sh\" \"\$@\""* &&
+# The first-hop command substitution must finish with curl exit 0 and
+# valid Bash syntax before it executes any part of the downloaded script.
+for line in "${published_commands[@]}"; do
+  [[ "$line" == *'s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 '* &&
+     "$line" == *' | head -c 131073 | tr "\000" "\001" && printf x) && (( ${#s} > 1 && ${#s} <= 131073 )) && [[ $s != *$(printf "\001")* ]] && s=${s%x}'* &&
+     "$line" == *'&& bash -n <<<"$s" && bash -c "$s" stl "$@"'* &&
      "$line" != *' | bash'* ]] || {
-    echo 'Public installer must download completely to a private file before any script execution.' >&2
+    echo 'Public installer must finish its download before any execution.' >&2
     exit 1
   }
 done
@@ -39,26 +39,14 @@ scratch=$(mktemp -d)
 trap 'rm -rf -- "$scratch"' EXIT
 bash "$repo/scripts/render-stable-bootstrap.sh" "$STL_TEST_PUBLIC_TAG" "$scratch/stl-bootstrap.sh"
 export STL_TEST_STABLE_BOOTSTRAP="$scratch/stl-bootstrap.sh"
-export STL_TEST_FIRST_HOP_PATHS="$scratch/first-hop-paths"
-: > "$STL_TEST_FIRST_HOP_PATHS"
 bash -n "$STL_TEST_STABLE_BOOTSTRAP"
 # This nearly-complete asset remains parseable and includes the
 # privileged call, despite missing the final newline. A failing curl
 # MUST prevent its execution.
 head -c -1 "$STL_TEST_STABLE_BOOTSTRAP" > "$scratch/almost-complete.sh"
 bash -n "$scratch/almost-complete.sh"
-grep -Fx 'quick_install_main "v0.1.0" "$@"' "$scratch/almost-complete.sh" >/dev/null
-assert_first_hop_cleanup() {
-  local path
-  while IFS= read -r path; do
-    [[ ! -e $path && ! -d $(dirname -- "$path") ]] || {
-      echo "Leaked first-hop private temporary download: $path" >&2
-      exit 1
-    }
-  done < "$STL_TEST_FIRST_HOP_PATHS"
-  : > "$STL_TEST_FIRST_HOP_PATHS"
-}
-[[ "$(tail -n 1 "$STL_TEST_STABLE_BOOTSTRAP")" == 'quick_install_main "v0.1.0" "$@"' ]] || {
+grep -Fx 'quick_install_main "v0.1.0" "" "" "" "$@"' "$scratch/almost-complete.sh" >/dev/null
+[[ "$(tail -n 1 "$STL_TEST_STABLE_BOOTSTRAP")" == 'quick_install_main "v0.1.0" "" "" "" "$@"' ]] || {
   echo 'Stable bootstrap did not pin its exact release tag.' >&2
   exit 1
 }
@@ -84,21 +72,22 @@ while (($#)); do
     *) shift ;;
   esac
 done
-# Simulate exact public first-hop curl output-to-file. No network.
+# Simulate stdout-to-memory first-hop curl. No network/privilege.
 if [[ "$url" == "https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh" ]]; then
-  [[ -n "$destination" ]] || exit 44
-  [[ -d $(dirname -- "$destination") &&
-     $(stat -c %a -- "$(dirname -- "$destination")") == 700 ]] || exit 46
-  printf '%s\n' "$destination" >> "$STL_TEST_FIRST_HOP_PATHS"
+  [[ -z "$destination" ]] || exit 44
   case "${STL_TEST_FIRST_HOP:-}" in
-    no-bytes) : > "$destination"; exit 47 ;;
-    truncated) sed '$d' "$STL_TEST_STABLE_BOOTSTRAP" > "$destination"; exit 48 ;;
-    almost-complete) head -c -1 "$STL_TEST_STABLE_BOOTSTRAP" > "$destination"; exit 48 ;;
-    complete-then-error) cat "$STL_TEST_STABLE_BOOTSTRAP" > "$destination"; exit 48 ;;
-    missing-invocation-success) sed '$d' "$STL_TEST_STABLE_BOOTSTRAP" > "$destination"; exit 0 ;;
-    empty-success) : > "$destination"; exit 0 ;;
-    syntax-error) printf '%s\n' 'if (( (' > "$destination"; exit 0 ;;
-    "") cat "$STL_TEST_STABLE_BOOTSTRAP" > "$destination"; exit 0 ;;
+    no-bytes) exit 47 ;;
+    truncated) sed '$d' "$STL_TEST_STABLE_BOOTSTRAP"; exit 48 ;;
+    almost-complete) head -c -1 "$STL_TEST_STABLE_BOOTSTRAP"; exit 48 ;;
+    complete-then-error) cat "$STL_TEST_STABLE_BOOTSTRAP"; exit 48 ;;
+    missing-invocation-success) sed '$d' "$STL_TEST_STABLE_BOOTSTRAP"; exit 0 ;;
+    empty-success) exit 0 ;;
+    syntax-error) printf '%s\n' 'if (( ('; exit 0 ;;
+    oversized-chunked)
+      printf '#!/usr/bin/env bash\n'
+      head -c 200000 /dev/zero | tr '\000' '#'
+      exit 0 ;;
+    "") cat "$STL_TEST_STABLE_BOOTSTRAP"; exit 0 ;;
     *) exit 49 ;;
   esac
 fi
@@ -160,6 +149,10 @@ set -euo pipefail
 printf 'sudo' >> "$STL_TEST_EXECUTIONS"
 printf ' %s' "$@" >> "$STL_TEST_EXECUTIONS"
 printf '\n' >> "$STL_TEST_EXECUTIONS"
+if [[ ${STL_TEST_SUDO_PUBLIC_ERROR:-} == apt-index && ${1:-} == bash ]]; then
+  printf '%s\n' 'stl installer [FAILED]: APT_INDEX_REFRESH failed; SECRET_PRIVATE_REPO_URL=DO_NOT_LEAK' >&2
+  exit 42
+fi
 if [[ ${STL_TEST_SUDO_FAIL:-} == 1 && ${1:-} == bash ]]; then
   printf '%s\n' 'STL_TEST_INSTALLER_SENSITIVE_SENTINEL' >&2
   printf '%s\n' 'STL_TEST_INSTALLER_SENSITIVE_SENTINEL'
@@ -186,6 +179,33 @@ if ((EUID==0));then
 else
   grep -q 'sudo bash .* install --version v0.1.0-rc.123 --backends native,wireguard' "$STL_TEST_EXECUTIONS"
 fi
+# The official source and generated official bootstrap must ignore ambient
+# operator/caller-supplied mirror pins completely, including malformed ones.
+# Fake curl accepts ONLY the official tag-pinned source in this test.
+for official_source in "$repo/scripts/quick-install.sh" "$STL_TEST_STABLE_BOOTSTRAP"; do
+  : > "$STL_TEST_EXECUTIONS"
+  if [[ $official_source == "$STL_TEST_STABLE_BOOTSTRAP" ]]; then
+    args=()
+  else
+    args=(v0.1.0-rc.123)
+  fi
+  STL_MIRROR_URL=https://attacker.invalid/releases/v0.1.0 \
+    STL_MIRROR_INSTALL_SHA=$(printf '%064d' 9) \
+    STL_MIRROR_SUMS_SHA=$(printf '%064d' 8) \
+    bash "$official_source" "${args[@]}" > "$scratch/out" 2> "$scratch/err" || {
+    echo 'Official bootstrap accepted ambient mirror override.' >&2; exit 1;
+  }
+  if (( EUID == 0 )); then
+    grep -q 'test fake installer' "$STL_TEST_EXECUTIONS" ||
+      { echo 'Official installer did not run.' >&2; exit 1; }
+  else
+    grep -q '^sudo bash .* install --version ' "$STL_TEST_EXECUTIONS" ||
+      { echo 'Official installer did not run from its canonical source.' >&2; exit 1; }
+  fi
+  if grep -q 'release-base' "$STL_TEST_EXECUTIONS"; then
+    echo 'Official installer was redirected by ambient mirror configuration.' >&2; exit 1
+  fi
+done
 # Operator upgrades must use the canonical update transaction rather than
 # quietly running install over an existing version (which correctly refuses).
 : > "$STL_TEST_EXECUTIONS"
@@ -265,6 +285,18 @@ if (( EUID != 0 )); then
     fi
   done
 fi
+# Trusted, authored error categories must survive the bootstrap sanitizer
+# without replaying sensitive APT output from the canonical child.
+if (( EUID != 0 )); then
+  if STL_TEST_SUDO_PUBLIC_ERROR=apt-index bash "$repo/scripts/quick-install.sh" v0.1.0-rc.123 > "$scratch/out" 2> "$scratch/err"; then
+    echo 'Classified APT failure was incorrectly accepted.' >&2; exit 1
+  fi
+  grep -q 'APT could not refresh signed package indexes' "$scratch/out" ||
+    { echo 'APT stage guidance was lost.' >&2; exit 1; }
+  if grep -q 'SECRET_PRIVATE_REPO_URL' "$scratch/out" "$scratch/err"; then
+    echo 'APT error sanitizer leaked child diagnostics.' >&2; exit 1
+  fi
+fi
 # The most important user journey: a bootstrap streamed to bash should
 # reattach fd 0 to the actual terminal after its install step and launch STL.
 if command -v script >/dev/null 2>&1; then
@@ -297,7 +329,7 @@ for idx in 0 1 2; do
   if [[ "$idx" == 1 ]]; then expected_tag=v0.1.9; fi
   if [[ "$idx" == 2 ]]; then action=update; fi
   # Positive path: successful completed bootstrap => canonical installer
-  # with correct action and exact tag, followed by private-file cleanup.
+  # with correct action and exact tag, without executing partial downloads.
   : > "$STL_TEST_EXECUTIONS"
   if ! bash -c "$published_cmd" > "$scratch/out" 2>"$scratch/err"; then
     echo "Published installer failed: $(cat "$scratch/err")" >&2
@@ -308,11 +340,10 @@ for idx in 0 1 2; do
   else
     grep -Eq "^sudo bash .* $action --version $expected_tag --backends native,wireguard$" "$STL_TEST_EXECUTIONS"
   fi
-  assert_first_hop_cleanup
   # The subtle case: the final invocation is present and parseable, but
   # curl returns a failure after producing almost/all of the bytes.
   # Neither install nor update may start, even briefly.
-  for first_hop_failure in no-bytes truncated almost-complete complete-then-error missing-invocation-success empty-success syntax-error; do
+  for first_hop_failure in no-bytes truncated almost-complete complete-then-error missing-invocation-success empty-success syntax-error oversized-chunked; do
     : > "$STL_TEST_EXECUTIONS"
     if STL_TEST_FIRST_HOP="$first_hop_failure" bash -c "$published_cmd" > "$scratch/out" 2>"$scratch/err"; then
       echo "Published $action first-hop $first_hop_failure falsely succeeded." >&2
@@ -322,8 +353,7 @@ for idx in 0 1 2; do
       echo "Published $action first-hop $first_hop_failure invoked installer/sudo before transport success." >&2
       exit 1
     }
-    assert_first_hop_cleanup
-  done
+    done
 done
 # A selected historical tag is NEVER a shell path. Rejected metadata must
 # fail before execution, including transport failure, redirects and truncation.
@@ -351,7 +381,7 @@ if (( EUID == 0 )); then
 else
   grep -Eq "^sudo bash .* update --version $STL_TEST_PUBLIC_TAG --backends native$" "$STL_TEST_EXECUTIONS"
 fi
-# A successful private-file bootstrap still must reconnect the real TTY
+# A successful memory-captured bootstrap still must reconnect the real TTY
 # and open STL's menu, for the permanently published install command.
 if command -v script >/dev/null 2>&1; then
   : > "$STL_TEST_EXECUTIONS"
@@ -364,7 +394,6 @@ if command -v script >/dev/null 2>&1; then
     echo 'Public first-hop wrapper failed controlling-TTY handoff.' >&2
     exit 1
   }
-  assert_first_hop_cleanup
 fi
 echo 'PUBLIC_FIRST_HOP_TRANSPORT_COMPLETE_BEFORE_EXECUTION_AND_PTY=PASS'
 # Interruption before the final complete invocation must not invoke sudo,
