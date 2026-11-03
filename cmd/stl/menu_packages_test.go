@@ -130,6 +130,30 @@ func TestSelectedPackagePreviewErrorsAreActionableAndRedacted(t *testing.T) {
 	}
 }
 
+// The live canonical installer uses stable uppercase APT stage identifiers.
+// Their operator projections must remain actionable and redact raw stderr.
+func TestCanonicalAPTPreviewFailuresUseCurrentInstallerReasons(t *testing.T) {
+	tests := []struct {
+		name, failure, reason, next string
+	}{
+		{"dependency resolution", "APT_DEPENDENCY_PLAN failed; missing selected packages: iptables.", "apt_dependency_plan_unverified", "apt-cache policy"},
+		{"no signed index mapping", "no APT package index mapping available", "apt_dependency_plan_unverified", "apt-cache policy"},
+		{"removal proposal", "APT plan would remove packages; no changes allowed", "apt_dependency_plan_unverified", "apt-cache policy"},
+		{"foreign dependency", "APT selected a dependency outside the distribution archive; no changes allowed", "apt_source_trust_unverified", "signature"},
+		{"untrusted source config", "APT sources explicitly bypass signature verification", "apt_source_trust_unverified", "signature"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			failure := "stl installer [FAILED]: " + tc.failure + " " + operatorSensitiveSentinel
+			reason, next := packageInventoryGuidance(packageInventoryFailure(failure, nil))
+			if reason != tc.reason || !strings.Contains(next, tc.next) ||
+				strings.Contains(reason+next, operatorSensitiveSentinel) {
+				t.Fatalf("misclassified canonical preview failure: got reason=%q next=%q", reason, next)
+			}
+		})
+	}
+}
+
 // Bash inherits BASH_ENV for a noninteractive script unless its execution
 // environment is sanitized. The embedded privileged invocation MUST NOT
 // interpret inherited shell startup code before the canonical installer.
