@@ -9,6 +9,7 @@ usage() {
 Usage:
   install.sh unpack --archive /private/stl_vX.Y.Z_linux_ARCH_local-install.tar.gz --destination /new/private/dir --sha256 VERIFIED_64_HEX_DIGEST
   install.sh install --version vX.Y.Z [--prefix /usr/local]
+  install.sh install|update --version vX.Y.Z --release-base https://trusted.example/releases/vX.Y.Z --release-sums-sha256 VERIFIED_64_HEX
   install.sh update --version vX.Y.Z [--prefix /usr/local]
   install.sh install|update --bundle /path/to/release-bundle [--prefix /usr/local]
   install.sh install --auto-stable --bundle /path/to/verified-local-bundle [--prefix /usr/local]
@@ -515,6 +516,8 @@ esac
 prefix=/usr/local
 version=
 bundle=
+release_base=
+release_sums_sha256=
 auto_stable=0
 retire_owned_restore=0
 backends=native
@@ -528,6 +531,8 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --version) [[ $# -ge 2 && -z $version ]] || usage; version=$2; shift 2 ;;
     --bundle) [[ $# -ge 2 && -z $bundle ]] || usage; bundle=$2; shift 2 ;;
+    --release-base) [[ $# -ge 2 && -z $release_base ]] || usage; release_base=$2; shift 2 ;;
+    --release-sums-sha256) [[ $# -ge 2 && -z $release_sums_sha256 ]] || usage; release_sums_sha256=$2; shift 2 ;;
     --auto-stable) [[ $auto_stable == 0 ]] || usage; auto_stable=1; shift ;;
     --retire-owned-restore) [[ $retire_owned_restore == 0 ]] || usage; retire_owned_restore=1; shift ;;
     --prefix) [[ $# -ge 2 ]] || usage; prefix=$2; shift 2 ;;
@@ -546,6 +551,18 @@ else
   [[ -n $version && -z $bundle || -z $version && -n $bundle ]] || usage
 fi
 [[ $auto_stable == 0 || ( $action == install && -n $bundle ) ]] || usage
+# An operator-managed HTTPS mirror is an explicit, hash-pinned release
+# transport, never a fallback for an untrusted official download.
+[[ -z $release_base && -z $release_sums_sha256 ||
+   -n $release_base && -n $release_sums_sha256 &&
+   ( $action == install || $action == update ) && -n $version && -z $bundle ]] || usage
+if [[ -n $release_base ]]; then
+  [[ $release_sums_sha256 =~ ^[0-9a-f]{64}$ &&
+     $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ &&
+     $release_base =~ ^https://[a-zA-Z0-9][a-zA-Z0-9.-]*(:[0-9]{1,5})?/releases/v[0-9]+\.[0-9]+\.[0-9]+$ &&
+     $release_base == */releases/$version && $release_base != *..* ]] ||
+    fail 'mirror requires exact versioned HTTPS release directory and independently trusted SHA256SUMS digest'
+fi
 [[ $retire_owned_restore == 0 || $action == uninstall ]] || usage
 [[ $action == requirements || -z $os_release_fixture ]] || usage
 [[ $action == prepare || ( $expected_missing_supplied == 0 && $expected_apt_plan_supplied == 0 ) ]] || usage
@@ -1372,7 +1389,7 @@ fi
 [[ $prefix == /* && $prefix != / && -d $prefix && ! -L $prefix ]] || fail 'prefix must be an existing absolute non-symlink directory'
 [[ "$(realpath -e -- "$prefix")" == "$prefix" ]] || fail 'prefix must be canonical (no symlinks or dot segments)'
 # Nondefault prefixes are isolated/offline test or custom local installations.
-[[ $prefix == /usr/local || -n $bundle || $action == uninstall ]] || fail 'a nondefault prefix requires an offline --bundle'
+[[ $prefix == /usr/local || -n $bundle || -n $release_base || $action == uninstall ]] || fail 'a nondefault prefix requires an offline --bundle or hash-pinned HTTPS mirror'
 [[ $prefix != /usr/local || $EUID -eq 0 ]] || fail 'installation to /usr/local requires root'
 if [[ $prefix == /usr/local && $action != uninstall ]]; then
   # Fail early, before installing files or packages, on unsupported systems.
@@ -1728,10 +1745,20 @@ for file in SHA256SUMS BUILD-MANIFEST.txt LICENSE "$asset"; do
     is_regular "$bundle/$file" || fail "bundle file missing or unsafe: $file"
     cp -- "$bundle/$file" "$stage/$file" || fail "cannot read bundle file: $file"
   else
-    url="https://github.com/ach1992/simple-tun-link/releases/download/${version}/${file}"
-    curl -fLSs --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 -o "$stage/$file" "$url" || fail "cannot download release file: $file"
+    if [[ -n $release_base ]]; then
+      url="$release_base/$file"
+      curl -fsSs --proto '=https' --proto-redir '=https' --max-redirs 0 --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 -o "$stage/$file" "$url" ||
+        fail "mirror_download_failed: cannot fetch $file from configured HTTPS mirror; no fallback to GitHub"
+    else
+      url="https://github.com/ach1992/simple-tun-link/releases/download/${version}/${file}"
+      curl -fLSs --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 -o "$stage/$file" "$url" || fail "cannot download release file: $file"
+    fi
   fi
 done
+if [[ -n $release_base ]]; then
+  [[ $(hash_file "$stage/SHA256SUMS") == "$release_sums_sha256" ]] ||
+    fail 'mirror_checksum_mismatch: release SHA256SUMS differs from independently pinned digest; nothing published'
+fi
 for file in BUILD-MANIFEST.txt LICENSE "$asset"; do
   expected=$(awk -v name="$file" '$2 == name {print $1}' "$stage/SHA256SUMS")
   [[ $expected =~ ^[0-9a-f]{64}$ ]] || fail "missing/duplicate or malformed SHA256 entry for $file"
@@ -1761,7 +1788,7 @@ fi
 if [[ $action == update ]]; then
   if [[ $exact_reinstall == 1 ]]; then
     [[ $prior_version == "$version" && $prior_hash == "$incoming_hash" ]] ||
-      fail 'install found a different installer-owned STL artifact; use an explicit reviewed update, never silent replacement'
+      fail "installed_version_mismatch: prior=$prior_version target=$version; install cannot replace a different installer-owned release; use an explicit update"
   elif [[ $prior_version == "$version" ]]; then
     [[ $prior_hash == "$incoming_hash" ]] ||
       fail 'same release version has different executable bytes; refusing mutable/repacked tag'

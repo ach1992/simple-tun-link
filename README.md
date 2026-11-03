@@ -112,12 +112,13 @@ Use the current [official Stable release](https://github.com/ach1992/simple-tun-
 The permanent Stable installer URL remains the same across releases:
 
 ~~~bash
-bash -c 'set -e; d=$(mktemp -d); cleanup(){ rm -rf -- "$d"; }; trap cleanup EXIT; curl -fsSLo "$d/stl.sh" --proto "=https" --proto-redir "=https" https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh; test -s "$d/stl.sh"; bash -n "$d/stl.sh"; bash "$d/stl.sh" "$@"' stl
+bash -c 's=$(curl -fsSL https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh) && test -n "$s" && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl
 ~~~
 
-The wrapper downloads the release's tag-pinned bootstrap into a private
-temporary directory and checks download completion and shell syntax
-before running it. For a requested older exact Stable suffix, the **new
+The short wrapper first captures the **complete** tag-pinned bootstrap
+in memory and checks curl's exit status and Bash syntax before running it.
+Do not replace it with a bare `curl | bash` pipeline: a failed download can
+otherwise be hidden and a partially streamed script may execute. For a requested older exact Stable suffix, the **new
 bootstrap** verifies the official complete immutable release via the GitHub
 API (Python 3 required) *before* root execution. It executes only the
 bootstrap's currently pinned canonical installer; the selected older tag
@@ -126,6 +127,10 @@ The canonical installer verifies checksums, build identity and installed-file
 ownership. A checksum supplied by the
 same publisher is **not** an independent publisher signature: review
 the official release, source and installer before privileged execution.
+
+For servers that cannot reach GitHub, prepare and serve the same release
+from a trusted domestic HTTPS mirror; see [self-hosted mirror setup](docs/MIRROR.md).
+The mirror does not contact GitHub on the target.
 
 By default, the installer selects GRE/IPIP and WireGuard prerequisites.
 It opens the guided menu on an interactive terminal; otherwise run:
@@ -154,7 +159,7 @@ Use the **same one-line installer** above and append only the desired Stable
 version at the end. For example, select the official **v0.1.9**:
 
 ~~~bash
-bash -c 'set -e; d=$(mktemp -d); cleanup(){ rm -rf -- "$d"; }; trap cleanup EXIT; curl -fsSLo "$d/stl.sh" --proto "=https" --proto-redir "=https" https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh; test -s "$d/stl.sh"; bash -n "$d/stl.sh"; bash "$d/stl.sh" "$@"' stl v0.1.9
+bash -c 's=$(curl -fsSL https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh) && test -n "$s" && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl v0.1.9
 ~~~
 
 Use no suffix for Latest Stable. The same trusted bootstrap fetches and
@@ -388,7 +393,7 @@ credentials and saved receiver handoffs, then run the Stable **update**
 command instead of reinstalling:
 
 ~~~bash
-bash -c 'set -e; d=$(mktemp -d); cleanup(){ rm -rf -- "$d"; }; trap cleanup EXIT; curl -fsSLo "$d/stl.sh" --proto "=https" --proto-redir "=https" https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh; test -s "$d/stl.sh"; bash -n "$d/stl.sh"; bash "$d/stl.sh" "$@"' stl update
+bash -c 's=$(curl -fsSL https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh) && test -n "$s" && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl update
 ~~~
 
 Installer binary rollback is **not** State rollback. Stable v0.1.10–v0.1.15

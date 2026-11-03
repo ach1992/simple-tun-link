@@ -40,7 +40,7 @@ trap 'rm -f -- "$tmp"' EXIT
 sed '$d' "$source_file" > "$tmp"
 printf 'quick_install_main "%s" "$@"\n' "$tag" >> "$tmp"
 bash -n "$tmp"
-[[ $(grep -Fc 'quick_install_main "' "$tmp") -eq 1 ]] || {
+[[ $(grep -c '^quick_install_main "' "$tmp") -eq 1 ]] || {
   echo 'Generated bootstrap contains unexpected entrypoints' >&2
   exit 1
 }
