@@ -122,6 +122,27 @@ func TestReleaseLookupGuidanceClassifiesFailuresWithoutLeakingNetworkError(t *te
 	}
 }
 
+func TestOfflineUpdateGuidanceWithoutGitHubIsReadOnly(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "absent")
+	var out, errOut bytes.Buffer
+	opts := &runtimeOptions{stateRoot: root, menuReleases: func(context.Context) ([]menuOfficialRelease, error) {
+		return nil, errors.New("private diagnostic data")
+	}}
+	code := runWithRuntimeInput([]string{"menu"}, strings.NewReader("6\no\n8\n"), &out, &errOut, opts)
+	transcript := out.String() + errOut.String()
+	for _, want := range []string{"Offline / HTTPS mirror Update", "docs/MIRROR.md", "docs/INSTALL.md", "No update or trust-source change"} {
+		if !strings.Contains(transcript, want) {
+			t.Fatalf("missing %q in transcript %q", want, transcript)
+		}
+	}
+	if code != 0 || strings.Contains(transcript, "private diagnostic data") || strings.Contains(transcript, "Update complete") {
+		t.Fatalf("unsafe offline update code=%d transcript=%q", code, transcript)
+	}
+	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("state changed: %v", err)
+	}
+}
+
 func TestMenuForwardReleaseUpgradeGateRejectsDowngradesAndUnknownVersions(t *testing.T) {
 	for _, tc := range []struct {
 		current, target string

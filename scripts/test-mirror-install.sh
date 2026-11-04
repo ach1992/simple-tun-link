@@ -78,6 +78,19 @@ if bash scripts/prepare-mirror.sh --tag v0.9.99 \
 fi
 [[ ! -e "$scratch/rejected" ]] ||
   { echo 'MIRROR_TEST_FAIL: rejected source produced files' >&2; exit 1; }
+# A writable publication parent must not serve as the local trust anchor.
+mkdir -m 0700 "$scratch/untrusted-publisher"
+chmod 0777 "$scratch/untrusted-publisher"
+valid_sums=$(sha256sum < "$scratch/new-release/SHA256SUMS")
+valid_sums=${valid_sums%% *}
+if bash scripts/prepare-mirror.sh --tag v0.9.99 \
+   --release-dir "$scratch/new-release" --trusted-sums-sha256 "$valid_sums" \
+   --url https://localhost:8443 \
+   --output "$scratch/untrusted-publisher/rejected" >/dev/null 2>&1; then
+  echo 'MIRROR_TEST_FAIL: accepted group/world-writable output parent' >&2; exit 1
+fi
+[[ ! -e "$scratch/untrusted-publisher/rejected" ]] ||
+  { echo 'MIRROR_TEST_FAIL: unsafe output parent received a publication' >&2; exit 1; }
 
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -sha256 \
   -keyout "$scratch/cert.key" -out "$scratch/cert.crt" \
@@ -178,7 +191,34 @@ sum_digest=$(sha256sum "$scratch/new-release/SHA256SUMS" | awk '{print $1}')
 bash scripts/prepare-mirror.sh --tag v0.9.99 \
    --release-dir "$scratch/new-release" --trusted-sums-sha256 "$sum_digest" \
    --url "$base" --output "$scratch/webroot" > "$scratch/prepared.log"
+# A concurrent publication-path writer must not be able to change the
+# checksum reported as trusted. A disposable wrapper alters the just-
+# published file AFTER mv and BEFORE the preparer prints its pin.
+mkdir -m 0700 "$scratch/publish-fixture-bin"
+cat > "$scratch/publish-fixture-bin/mv" <<'MV_RACE'
+#!/usr/bin/env bash
+set -euo pipefail
+/usr/bin/mv "$@"
+if [[ ${!#} == "$STL_TEST_RACE_DEST" ]]; then
+  printf '\n# post-publication attacker-controlled bytes\n' >> "$STL_TEST_RACE_DEST/install.sh"
+fi
+MV_RACE
+chmod 0700 "$scratch/publish-fixture-bin/mv"
+STL_TEST_RACE_DEST="$scratch/webroot-raced" PATH="$scratch/publish-fixture-bin:$PATH" \
+  bash scripts/prepare-mirror.sh --tag v0.9.99 \
+  --release-dir "$scratch/new-release" --trusted-sums-sha256 "$sum_digest" \
+  --url "$base" --output "$scratch/webroot-raced" > "$scratch/prepared-raced.log"
+trusted_staged=$(sha256sum < "$scratch/webroot/install.sh")
+trusted_staged=${trusted_staged%% *}
+raced_pin=$(sed -n 's/^BOOTSTRAP_SHA256=//p' "$scratch/prepared-raced.log")
+tampered_published=$(sha256sum < "$scratch/webroot-raced/install.sh")
+tampered_published=${tampered_published%% *}
+[[ $raced_pin == "$trusted_staged" && $tampered_published != "$raced_pin" ]] ||
+  { echo 'MIRROR_TEST_FAIL: trust pin came from mutated publication path' >&2; exit 1; }
+grep -F "\"$raced_pin\"" "$scratch/prepared-raced.log" >/dev/null ||
+  { echo 'MIRROR_TEST_FAIL: prepared command used a nonstaged pin' >&2; exit 1; }
 cp -a -- "$scratch/webroot/." "$scratch/www/"
+cp -- "$scratch/webroot-raced/install.sh" "$scratch/www/post-publication-tamper.sh"
 [[ -f "$scratch/www/install.sh" && -f "$scratch/www/releases/v0.9.99/install.sh" ]] ||
   { echo 'MIRROR_TEST_FAIL: expected static tree absent' >&2; exit 1; }
 export CURL_CA_BUNDLE="$scratch/cert.crt"
@@ -212,11 +252,28 @@ mkdir -p "$STL_MIRROR_PREFIX/bin" "$STL_MIRROR_PREFIX/lib"
 : > "$STL_MIRROR_SUDO_RECORD"
 
 one_liner=$(grep -m1 '^bash -c .*stl.example.com/install.sh' "$repo/docs/MIRROR.md")
+first_hop_sha=$(sed -n 's/^BOOTSTRAP_SHA256=//p' "$scratch/prepared.log")
+[[ $first_hop_sha =~ ^[0-9a-f]{64}$ ]] ||
+  { echo 'MIRROR_TEST_FAIL: preparer did not provide pinned first-hop checksum' >&2; exit 1; }
 one_liner=${one_liner/https:\/\/stl.example.com/$base}
+one_liner=${one_liner/TRUSTED_BOOTSTRAP_SHA256/$first_hop_sha}
 [[ $one_liner == *"$base/install.sh"* ]] ||
   { echo 'MIRROR_TEST_FAIL: operator mirror command missing' >&2; exit 1; }
 grep -Fx "INSTALL_COMMAND=$one_liner" "$scratch/prepared.log" >/dev/null ||
   { echo 'MIRROR_TEST_FAIL: prepared command differs from documented one-liner' >&2; exit 1; }
+grep -Fx "UPDATE_COMMAND=$one_liner update" "$scratch/prepared.log" >/dev/null ||
+  { echo 'MIRROR_TEST_FAIL: generated Update command differs from documented mirror flow' >&2; exit 1; }
+# Execute an actual HTTPS fetch of the post-publication tampered bootstrap
+# with the prepublication trusted pin. No sudo/canonical execution allowed.
+raced_command=${one_liner/"$base/install.sh"/"$base/post-publication-tamper.sh"}
+if bash -c "$raced_command" > "$scratch/race.out" 2> "$scratch/race.err"; then
+  echo 'MIRROR_TEST_FAIL: accepted a changed published bootstrap' >&2; exit 1
+fi
+grep -q 'mirror bootstrap SHA256 mismatch' "$scratch/race.err" ||
+  { echo 'MIRROR_TEST_FAIL: postpublication tamper had no integrity error' >&2; exit 1; }
+[[ ! -s "$STL_MIRROR_SUDO_RECORD" && ! -e "$STL_MIRROR_PREFIX/bin/stl" ]] ||
+  { echo 'MIRROR_TEST_FAIL: postpublication tamper crossed privilege boundary' >&2; exit 1; }
+echo 'MIRROR_PRIVATE_PREPUBLICATION_PIN_AND_TAMPER_REFUSAL=PASS'
 # Real TLS streaming tests: chunked payload with no Content-Length must
 # be stopped at 128KiB+1 before any script is run. A stalled response must
 # time out despite an initially valid shell prefix. No root/host mutation.
@@ -309,14 +366,17 @@ bash -c "$one_liner" > "$scratch/install.out" 2> "$scratch/install.err" || {
 }
 [[ $(wc -l < "$STL_MIRROR_SUDO_RECORD") == 1 ]] ||
   { echo 'MIRROR_TEST_FAIL: not exactly one canonical privileged invocation' >&2; exit 1; }
-# A valid within-cap chunked response that contains the fully pinned mirror
-# bootstrap plus harmless trailing newlines must still succeed.
+# A within-limit, fully parseable response still MUST match the exact pinned
+# bytes. Even harmless trailing LF is tampering at the first-hop trust boundary.
 newline_good_cmd=${one_liner/"$base/install.sh"/"$base/newline-fit.sh"}
-bash -c "$newline_good_cmd" > "$scratch/mirror-lf-good.out" 2> "$scratch/mirror-lf-good.err" ||
-  { echo 'MIRROR_TEST_FAIL: mirror rejected valid within-cap trailing-LF bytes' >&2; exit 1; }
-[[ $(wc -l < "$STL_MIRROR_SUDO_RECORD") == 2 ]] ||
-  { echo 'MIRROR_TEST_FAIL: valid trailing-LF mirror did not invoke canonical installer' >&2; exit 1; }
-echo 'FIRST_HOP_NEWLINE_WITHIN_LIMIT_VALID=PASS'
+if bash -c "$newline_good_cmd" > "$scratch/mirror-lf-good.out" 2> "$scratch/mirror-lf-good.err"; then
+  echo 'MIRROR_TEST_FAIL: modified first-hop accepted despite independent pin' >&2; exit 1
+fi
+grep -q 'mirror bootstrap SHA256 mismatch' "$scratch/mirror-lf-good.err" ||
+  { echo 'MIRROR_TEST_FAIL: first-hop checksum rejection missing' >&2; exit 1; }
+[[ $(wc -l < "$STL_MIRROR_SUDO_RECORD") == 1 ]] ||
+  { echo 'MIRROR_TEST_FAIL: modified mirror first hop invoked privileged installer' >&2; exit 1; }
+echo 'FIRST_HOP_WITHIN_LIMIT_PINNED_BYTES_ONLY=PASS'
 
 
 # Edit ONLY the embedded digest constant of a separately served bootstrap.
@@ -332,6 +392,10 @@ lines[-1] = re.sub(r"'[0-9a-f]{64}'", "'" + "0" * 64 + "'", lines[-1], count=1)
 Path(sys.argv[2]).write_text("".join(lines))
 PY_PINS
 bad_pins_cmd=${one_liner/"$base/install.sh"/"$base/bad-pins.sh"}
+# This controlled negative fixture pins its altered first hop independently,
+# so the test can reach and exercise the canonical second-hop mismatch guard.
+bad_pins_sha=$(sha256sum "$scratch/www/bad-pins.sh" | awk '{print $1}')
+bad_pins_cmd=${bad_pins_cmd/"$first_hop_sha"/"$bad_pins_sha"}
 attempts=$(wc -l < "$STL_MIRROR_SUDO_RECORD")
 if bash -c "$bad_pins_cmd" > "$scratch/bad-pin.out" 2> "$scratch/bad-pin.err"; then
   echo 'MIRROR_TEST_FAIL: invalid embedded SHA256 pin was accepted' >&2; exit 1

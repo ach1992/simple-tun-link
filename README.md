@@ -37,10 +37,10 @@ Use the [latest official Stable release](https://github.com/ach1992/simple-tun-l
 Run this complete-download, syntax-checked installer on each server:
 
 ~~~bash
-bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 | tr "\000" "\001" && printf x) && (( ${#s} > 1 && ${#s} <= 131073 )) && [[ $s != *$(printf "\001")* ]] && s=${s%x} && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl
+bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && bash -n "$f" && bash "$f" "$@"' stl
 ~~~
 
-It fetches a bounded, complete HTTPS bootstrap before execution. The verified
+It fetches a bounded, complete HTTPS bootstrap into an owned temporary file before execution. The verified
 bootstrap and canonical installer then check the released artifact's checksums
 and version/source identity. A publisher's own checksum is not an independent
 signature; verify that you trust the official publisher before privileged use.
@@ -142,7 +142,7 @@ Back up protected State/credentials and any original sensitive receiver
 handoffs before upgrading. For an existing installer-owned STL, use:
 
 ~~~bash
-bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 | tr "\000" "\001" && printf x) && (( ${#s} > 1 && ${#s} <= 131073 )) && [[ $s != *$(printf "\001")* ]] && s=${s%x} && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl update
+bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && bash -n "$f" && bash "$f" "$@"' stl update
 ~~~
 
 State and executable rollback are **not** the same: newer managed features

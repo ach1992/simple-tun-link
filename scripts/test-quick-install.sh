@@ -29,11 +29,11 @@ stable_url='https://github.com/ach1992/simple-tun-link/releases/latest/download/
 # The first-hop command substitution must finish with curl exit 0 and
 # valid Bash syntax before it executes any part of the downloaded script.
 for line in "${published_commands[@]}"; do
-  [[ "$line" == *'s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 '* &&
-     "$line" == *' | head -c 131073 | tr "\000" "\001" && printf x) && (( ${#s} > 1 && ${#s} <= 131073 )) && [[ $s != *$(printf "\001")* ]] && s=${s%x}'* &&
-     "$line" == *'&& bash -n <<<"$s" && bash -c "$s" stl "$@"'* &&
+  [[ "$line" == *'set -eo pipefail; f=$(mktemp); trap '* &&
+     "$line" == *'curl -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 '* &&
+     "$line" == *' | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && bash -n "$f" && bash "$f" "$@"'* &&
      "$line" != *' | bash'* ]] || {
-    echo 'Public installer must finish its download before any execution.' >&2
+    echo 'Public installer must finish its bounded download before execution.' >&2
     exit 1
   }
 done
