@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/ach1992/simple-tun-link/internal/backend"
+	ipsecbackend "github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
@@ -51,7 +52,7 @@ func TestVersionedCLIGREInventoryInterruptionReasonsTakePrecedence(t *testing.T)
 		reason string
 		want   string
 	}{
-		{"overflow", linux.ErrOutputLimit, "local_underlay_unverified", "local_underlay_unverified"},
+		{"overflow", linux.ErrOutputLimit, "local_underlay_unverified", "local_underlay_capture_limited"},
 		{"deadline", context.DeadlineExceeded, "gre_underlay_source_mismatch", "operation_deadline_exceeded_before_apply"},
 		{"cancelled", context.Canceled, "gre_underlay_source_mismatch", "operation_cancelled_before_apply"},
 	} {
@@ -123,7 +124,9 @@ func TestSharedImportUnderlayReasonsAcrossSupportedBackends(t *testing.T) {
 		{"ambiguous receiver", linux.ErrUnderlayLocalAmbiguous,
 			"local_underlay_ambiguous", "multiple local interfaces", ""},
 		{"unverified inventory", linux.ErrOutputLimit,
-			"local_underlay_unverified", "ip -json address show", ""},
+			"local_underlay_capture_limited", "capture limit", ""},
+		{"ipsec bounded capture", ipsecbackend.ErrBoundedOutput,
+			"local_underlay_capture_limited", "capture limit", ""},
 		{"interrupted", errors.Join(context.Canceled, linux.ErrUnderlayLocalNotAssigned),
 			"operation_cancelled_before_apply", "canceled", ""},
 		{"credential staged", linux.ErrUnderlayLocalNotAssigned,

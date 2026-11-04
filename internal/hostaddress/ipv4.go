@@ -33,9 +33,12 @@ type Endpoint struct {
 // Parse consumes local iproute2 address inventory only.
 // No route to a remote peer, online probe or host mutation is involved.
 func Parse(raw []byte) ([]Endpoint, error) {
+	// ip -json address show emits one object per interface, including an
+	// explicit addr_info array (possibly empty). A missing/null field is
+	// incomplete evidence, not evidence that an address is absent.
 	var rows []struct {
 		Name      string `json:"ifname"`
-		Addresses []struct {
+		Addresses *[]struct {
 			Family string `json:"family"`
 			Local  string `json:"local"`
 		} `json:"addr_info"`
@@ -43,13 +46,27 @@ func Parse(raw []byte) ([]Endpoint, error) {
 	if err := json.Unmarshal(raw, &rows); err != nil || rows == nil {
 		return nil, fmt.Errorf("cannot parse complete local IPv4 address inventory")
 	}
+	interfaces := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		if !validInterface(row.Name) || row.Addresses == nil || interfaces[row.Name] {
+			return nil, fmt.Errorf("local IPv4 address inventory contains an incomplete interface record")
+		}
+		interfaces[row.Name] = true
+		for _, item := range *row.Addresses {
+			if (item.Family != "inet" && item.Family != "inet6") || item.Local == "" {
+				return nil, fmt.Errorf("local IPv4 address inventory contains an incomplete address record")
+			}
+			ip, err := netip.ParseAddr(strings.TrimSpace(item.Local))
+			if err != nil || (item.Family == "inet" && !ip.Is4()) ||
+				(item.Family == "inet6" && !ip.Is6()) {
+				return nil, fmt.Errorf("local IPv4 address inventory contains an invalid address record")
+			}
+		}
+	}
 	found := map[Endpoint]bool{}
 	for _, row := range rows {
-		for _, item := range row.Addresses {
+		for _, item := range *row.Addresses {
 			if item.Family != "inet" {
-				if item.Family == "" && item.Local != "" {
-					return nil, fmt.Errorf("local IPv4 family is unverified")
-				}
 				continue
 			}
 			ip, err := netip.ParseAddr(strings.TrimSpace(item.Local))

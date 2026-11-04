@@ -95,6 +95,12 @@ func linkImportCommand(args []string, input io.Reader, stdout, stderr io.Writer,
 		return readCommandError(stdout, stderr, jsonOutput, code, "link_import",
 			"receiver Link configuration is invalid or unsupported")
 	}
+	// A correct confirmation token does not prove this host owns the
+	// receiver IPv4. Check BEFORE IPsec pending State/PSK or WireGuard
+	// recipient credential provisioning is even assembled.
+	if ok, code := admitCLIImportReceiver(stdout, stderr, jsonOutput, "link_import", desired, options); !ok {
+		return code
+	}
 	if importableIPsecOffer(offer) {
 		return executeIPsecRecipientImport(encoded, args[3], desired.ID, jsonOutput, stdout, stderr, options)
 	}

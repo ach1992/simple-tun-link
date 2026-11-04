@@ -3,6 +3,7 @@ package ipsec
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os/exec"
@@ -29,6 +30,10 @@ func (f HostRouteResolveFunc) Resolve(ctx context.Context, dst netip.Addr) (Host
 	}
 	return f(ctx, dst)
 }
+
+// ErrBoundedOutput identifies a capture-time stdout/stderr overflow without
+// retaining arbitrary command output or leaking subprocess diagnostic text.
+var ErrBoundedOutput = errors.New("IPsec subprocess capture limit exceeded")
 
 type CaptureLimits struct{ Stdout, Stderr int }
 type CommandResult struct{ Stdout, Stderr []byte }
@@ -61,10 +66,13 @@ func (w *privateCapture) Write(p []byte) (int, error) {
 }
 
 func (r BoundedExecRunner) RunBounded(ctx context.Context, limits CaptureLimits, command string, args ...string) (CommandResult, error) {
-	if ctx == nil || ctx.Err() != nil || limits.Stdout <= 0 || limits.Stderr <= 0 ||
+	if ctx == nil || limits.Stdout <= 0 || limits.Stderr <= 0 ||
 		limits.Stdout > 4<<20 || limits.Stderr > 64<<10 ||
 		len(command) == 0 || command[0] == '-' {
 		return CommandResult{}, fmt.Errorf("invalid bounded IPsec execution request")
+	}
+	if err := ctx.Err(); err != nil {
+		return CommandResult{}, fmt.Errorf("bounded IPsec command interrupted: %w", err)
 	}
 	timeout := r.Timeout
 	if timeout <= 0 {
@@ -84,7 +92,16 @@ func (r BoundedExecRunner) RunBounded(ctx context.Context, limits CaptureLimits,
 	if err != nil || out.overflow || errOut.overflow || bound.Err() != nil {
 		out.output.Reset()
 		errOut.output.Reset()
-		return CommandResult{}, fmt.Errorf("bounded IPsec command did not complete successfully")
+		switch {
+		case bound.Err() != nil:
+			return CommandResult{}, fmt.Errorf("bounded IPsec command interrupted: %w", bound.Err())
+		case out.overflow || errOut.overflow:
+			return CommandResult{}, fmt.Errorf("bounded IPsec command did not complete successfully: %w", ErrBoundedOutput)
+		default:
+			// Do not wrap the subprocess error: it may contain raw host
+			// output or a path and is not a trusted diagnostic surface.
+			return CommandResult{}, fmt.Errorf("bounded IPsec command did not complete successfully")
+		}
 	}
 	return CommandResult{Stdout: bytes.Clone(out.output.Bytes()), Stderr: bytes.Clone(errOut.output.Bytes())}, nil
 }

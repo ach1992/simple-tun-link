@@ -559,12 +559,40 @@ func (b *OperationalBackend) resolveLocalUnderlay(ctx context.Context, link doma
 	if b.Runner == nil {
 		return HostRoute{}, fmt.Errorf("IPsec local IPv4 inventory runner unavailable")
 	}
+	if ctx == nil {
+		return HostRoute{}, fmt.Errorf("IPsec local IPv4 inventory context unavailable")
+	}
+	if err := ctx.Err(); err != nil {
+		return HostRoute{}, fmt.Errorf("IPsec local IPv4 inventory interrupted: %w", err)
+	}
 	binary := b.IPBinary
 	if binary == "" {
 		binary = "ip"
 	}
 	result, err := b.Runner.RunBounded(ctx, CaptureLimits{Stdout: 256 << 10, Stderr: 1024}, binary, "-json", "address", "show")
-	if err != nil || ctx.Err() != nil || len(result.Stderr) != 0 {
+	if ctx.Err() != nil {
+		return HostRoute{}, fmt.Errorf("IPsec local IPv4 inventory interrupted: %w", ctx.Err())
+	}
+	if err != nil {
+		switch {
+		case errors.Is(err, context.DeadlineExceeded):
+			return HostRoute{}, fmt.Errorf("IPsec local IPv4 inventory timed out: %w", context.DeadlineExceeded)
+		case errors.Is(err, context.Canceled):
+			return HostRoute{}, fmt.Errorf("IPsec local IPv4 inventory canceled: %w", context.Canceled)
+		case errors.Is(err, ErrBoundedOutput):
+			return HostRoute{}, fmt.Errorf("IPsec local IPv4 inventory exceeded bounded capture: %w", ErrBoundedOutput)
+		default:
+			// Unknown command errors may carry secrets; preserve neither
+			// their raw text nor untrusted stderr in typed/public failures.
+			return HostRoute{}, fmt.Errorf("cannot verify assigned local IPsec IPv4/interface")
+		}
+	}
+	if len(result.Stdout) > 256<<10 || len(result.Stderr) > 1024 {
+		// Defense in depth for a nonconforming injected bounded runner:
+		// never classify a truncated/oversized result as a complete host.
+		return HostRoute{}, fmt.Errorf("IPsec local IPv4 inventory exceeded bounded capture: %w", ErrBoundedOutput)
+	}
+	if len(result.Stderr) != 0 {
 		return HostRoute{}, fmt.Errorf("cannot verify assigned local IPsec IPv4/interface")
 	}
 	defer clear(result.Stdout)

@@ -400,11 +400,15 @@ that **same** URL and token, then recipient-oriented inversion and
 a separate authorized Engine operation. Token matching detects a
 different payload; it does **not** authenticate its author.
 
-**Wrong-receiver and underlay diagnosis:** Interactive Import shares one
-bounded, read-only local IPv4 inventory check across GRE, IPIP, L2TPv3,
-native WireGuard, IPsec (both ESP and NAT-T), WSS and QUIC Setup Links.
-A missing/ambiguous receiver **local underlay** or unavailable inventory
-prevents interactive Apply approval; the operator is told to inspect
+**Wrong-receiver and underlay diagnosis:** Both **interactive and
+confirmed CLI Import** share one bounded, read-only local IPv4 assignment
+check across GRE, IPIP, L2TPv3, native WireGuard, IPsec (both ESP and
+NAT-T), WSS and QUIC Setup Links. The check runs after the exact
+confirmation and canonical receiver inversion but **before** the first
+new protected key/TLS provisioning or IPsec pending-State publication.
+A missing/ambiguous receiver **local underlay** or unavailable/incomplete
+inventory refuses Import before credential or host effects; the operator
+is told to inspect
 `ip -json address show`, verify **both** endpoint IPs on the
 sending server, and generate a fresh handoff if the receiver was mistaken.
 IPsec NAT-T may traverse a translator, but the current IPsec Engine still
@@ -415,14 +419,22 @@ is not sender authentication or proof of remote connectivity.
 
 This is an **operator preflight**, not a new pairing authority. CLI
 `link preview --stdin` and `preview-wss`/`preview-quic` remain
-host-independent and read-only, without local address inspection.
-Canonical Engine Plan/Validate independently rechecks its local endpoint/ownership
-rules for CLI and menu import. When a complete bounded inventory proves
-an absent or duplicated local address, supported Engine/CLI paths report
-typed `local_underlay_not_assigned` or `local_underlay_ambiguous` with
-safe next steps; unavailable inventory, cancellation and staged credential
-uncertainty are separate outcomes. Setup Links/PSKs/private TLS data and
-raw OS output are never emitted in those explanations.
+host-independent and read-only, without local address inspection. Sender
+`resume-wss`/`resume-quic` continue using their exact existing
+credential/ownership recovery path rather than interpreting the receiver
+as the current local host.
+Canonical Engine Plan/Validate independently rechecks local endpoints and
+ownership under locks against changes after preflight. A complete bounded
+inventory can establish an absent or duplicated local address, reported
+through typed `local_underlay_not_assigned` or
+`local_underlay_ambiguous`. Incomplete/malformed inventory is always
+unverified, never a proved wrong recipient. Typed cancellation, timeout,
+and bounded-output overflow remain distinct; a failed operation after
+earlier protected credential staging retains its exact reconciliation
+warning and is not automatically cleaned up. The new Import admission
+does not erase any preexisting credential or pending State.
+Setup Links/PSKs/private TLS data and raw OS output are never emitted in
+these explanations.
 
 The regular saved-State export command is intentionally restricted to
 credential-free GRE/IPIP/L2TPv3; a valid sender's private receiver credential

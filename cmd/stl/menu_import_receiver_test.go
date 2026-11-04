@@ -139,8 +139,14 @@ func TestGREImportReceiverReviewAgainstBoundedHostInventory(t *testing.T) {
 			if tc.wantApplies == 0 && strings.Contains(out, "Import this tunnel?") {
 				t.Fatal("non-admitted recipient was offered a host mutation confirmation")
 			}
-			if probe.calls != 1 {
-				t.Fatalf("expected exactly one bounded local inventory read, got %d", probe.calls)
+			wantReads := 1
+			if tc.wantApplies > 0 {
+				// The menu admission is deliberately rechecked at the
+				// CLI boundary before the canonical Engine runs.
+				wantReads = 2
+			}
+			if probe.calls != wantReads {
+				t.Fatalf("expected %d bounded local inventory reads, got %d", wantReads, probe.calls)
 			}
 			if len(fake.applies) != tc.wantApplies {
 				t.Fatalf("backend Apply count=%d want=%d; out=%q", len(fake.applies), tc.wantApplies, out)

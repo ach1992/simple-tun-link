@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ach1992/simple-tun-link/internal/app"
+	ipsecbackend "github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	wgbackend "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
@@ -317,9 +318,14 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 			safe.ReasonCode = "rejected_before_host_apply"
 			safe.NextStep = "Inspect only this Link's saved owner identity, local kernel, firewall, helper and recovery journal. No remote connectivity or Create preparation is needed; reconcile uncertain resources before retrying removal. Engine did not invoke host Apply."
 		case observedPublic != nil && observedPublic.ReasonCode == "local_underlay_unverified" &&
-			operation != "link_remove" && evidence.HostMutation == "not_attempted" && (evidence.Stage == "plan" || evidence.Stage == "validate"):
-			safe.ReasonCode = "local_underlay_unverified"
-			safe.NextStep = "Inspect ip -json address show on THIS server. Choose a uniquely assigned local IPv4/interface in the menu or correct the request's local underlay IP. Creating or importing does not require peer reachability; no host Apply was invoked."
+			operation != "link_remove" && evidence.HostMutation == "not_attempted" && (evidence.Stage == "preflight" || evidence.Stage == "plan" || evidence.Stage == "validate"):
+			if errors.Is(observed, linux.ErrOutputLimit) || errors.Is(observed, ipsecbackend.ErrBoundedOutput) {
+				safe.ReasonCode = "local_underlay_capture_limited"
+				safe.NextStep = "The bounded local IPv4 inventory output exceeded its capture limit. Inspect ip -json address show on THIS server and restore reliable read-only inventory before importing; no backend Apply was attempted."
+			} else {
+				safe.ReasonCode = "local_underlay_unverified"
+				safe.NextStep = "Inspect ip -json address show on THIS server. Choose a uniquely assigned local IPv4/interface in the menu or correct the request's local underlay IP. Creating or importing does not require peer reachability; no host Apply was invoked."
+			}
 		case evidence.HostMutation == "not_attempted":
 			safe.ReasonCode = "rejected_before_host_apply"
 			safe.NextStep = "Correct prerequisites or conflicting intent, then inspect Link state read-only before retrying; Engine did not invoke host Apply."
@@ -361,7 +367,7 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 	// ResolveConfiguredUnderlay. Do not parse raw kernel text or infer that a
 	// mismatching Setup Link was intentionally addressed to another host.
 	if observedPublic != nil && observedPublic.ReasonCode == "local_underlay_unverified" &&
-		evidence != nil && (evidence.Stage == "plan" || evidence.Stage == "validate") && evidence.HostMutation == "not_attempted" &&
+		evidence != nil && (evidence.Stage == "preflight" || evidence.Stage == "plan" || evidence.Stage == "validate") && evidence.HostMutation == "not_attempted" &&
 		evidence.CredentialProvision != "attempted" && operation != "link_remove" &&
 		!errors.Is(observed, context.DeadlineExceeded) && !errors.Is(observed, context.Canceled) {
 		switch {

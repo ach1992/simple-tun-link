@@ -7,7 +7,9 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
+	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
 // Setup Link endpoint fields describe configuration, not a trusted recipient.
@@ -22,26 +24,59 @@ const (
 	importReceiverAmbiguous
 )
 
-func inspectImportReceiver(ctx context.Context, runner linux.Runner, receiver string) importReceiverStatus {
-	ip, err := netip.ParseAddr(receiver)
-	if err != nil || !ip.Is4() {
-		return importReceiverUnverified
+// inspectLocalReceiverBinding is read-only and shared by interactive Import,
+// machine CLI Import, and their redacted diagnostic projection. It performs
+// neither credential staging nor Engine/State initialization.
+func inspectLocalReceiverBinding(ctx context.Context, runner linux.Runner, ip netip.Addr) error {
+	if !ip.Is4() {
+		return errors.New("configured local receiver IPv4 unavailable")
 	}
 	endpoints, err := linux.ListLocalIPv4Endpoints(ctx, runner)
 	if err != nil {
+		return err
+	}
+	_, err = linux.BoundLocalIPv4(endpoints, ip, "")
+	return err
+}
+
+func inspectImportReceiver(ctx context.Context, runner linux.Runner, receiver string) importReceiverStatus {
+	ip, err := netip.ParseAddr(receiver)
+	if err != nil {
 		return importReceiverUnverified
 	}
-	if _, err := linux.BoundLocalIPv4(endpoints, ip, ""); err != nil {
-		switch {
-		case errors.Is(err, linux.ErrUnderlayLocalNotAssigned):
-			return importReceiverNotAssigned
-		case errors.Is(err, linux.ErrUnderlayLocalAmbiguous):
-			return importReceiverAmbiguous
-		default:
-			return importReceiverUnverified
-		}
+	err = inspectLocalReceiverBinding(ctx, runner, ip)
+	switch {
+	case err == nil:
+		return importReceiverAssigned
+	case errors.Is(err, linux.ErrUnderlayLocalNotAssigned):
+		return importReceiverNotAssigned
+	case errors.Is(err, linux.ErrUnderlayLocalAmbiguous):
+		return importReceiverAmbiguous
+	default:
+		return importReceiverUnverified
 	}
-	return importReceiverAssigned
+}
+
+// The CLI must not stage a protected key, pending intent or TLS bundle before
+// receiver assignment is independently admitted. Engine Plan/Validate MUST
+// still re-check under locks: this preflight does not remove the TOCTOU gate.
+// It applies to Import only, never to offline/host-independent Preview or
+// protected sender-side Resume of an already staged original.
+func admitCLIImportReceiver(out, errOut io.Writer, jsonOutput bool, operation string,
+	desired domain.Link, opts *runtimeOptions) (bool, int) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := inspectLocalReceiverBinding(ctx, createRunner(opts), desired.Underlay.Local)
+	if err == nil {
+		return true, 0
+	}
+	observed := stlerr.LocalUnderlayUnverified("import_receiver_admission",
+		string(desired.ID), string(desired.Backend), err)
+	rc := lifecycleFailureWithEvidence(out, errOut, jsonOutput, stlerr.CodePlan,
+		operation, nil,
+		"Receiver local IPv4 was not verified; no new protected credential, State, or host Apply was attempted",
+		preflightEvidence(), observed)
+	return false, rc
 }
 
 // Shared read-only preflight for ALL interactive Setup Link Import methods.

@@ -76,7 +76,8 @@ func TestIPsecRecipientImportWithoutAdmittedServiceKeepsSecretProtected(t *testi
 		strings.Contains(previewOut.String(), encoded) {
 		t.Fatalf("cannot securely preview canonical IPsec v2 handoff: code=%d output=%s", previewExit, previewOut.String())
 	}
-	opts := &runtimeOptions{stateRoot: filepath.Join(temp, "state")}
+	opts := &runtimeOptions{stateRoot: filepath.Join(temp, "state"),
+		probeRunner: &greReceiverProbe{inventory: greReceiverInventory("eth0", "192.0.2.2")}}
 	var stdout, stderr bytes.Buffer
 	exit := runWithRuntimeInput([]string{"link", "import", "--stdin", "--confirm", preview.ImportConfirmation, "--json"},
 		strings.NewReader(encoded), &stdout, &stderr, opts)

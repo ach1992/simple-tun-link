@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -85,5 +86,53 @@ func TestProtectedImportMenusRejectWrongRecipientBeforeApproval(t *testing.T) {
 				t.Fatalf("wrong receiver committed protected state: %v", err)
 			}
 		})
+	}
+}
+
+// Unlike a successful local match, ambiguous/incomplete/interrupted inventory
+// is never authorization to stage a protected WSS or QUIC recipient.
+func TestProtectedImportMenusRefuseUnverifiedOrAmbiguousReceiver(t *testing.T) {
+	for _, mode := range []string{"wss", "quic"} {
+		var raw []byte
+		var receiver string
+		if mode == "wss" {
+			raw, receiver = testProtectedWSSReceiverOffer(t)
+		} else {
+			offer, payload := testQUICOffer(t)
+			raw, receiver = payload, offer.Receiver.Underlay.Local.String()
+		}
+		for _, tc := range []struct {
+			name, inventory, want string
+			cause                 error
+		}{
+			{"ambiguous", strings.TrimSuffix(greReceiverInventory("eth0", receiver), "]") + "," + strings.TrimPrefix(greReceiverInventory("eth1", receiver), "["), "multiple local interfaces", nil},
+			{"incomplete", `[{"ifname":"eth0","addr_info":null}]`, "could not be verified", nil},
+			{"deadline", "", "could not be verified", context.DeadlineExceeded},
+			{"cancelled", "", "could not be verified", context.Canceled},
+		} {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				root := filepath.Join(t.TempDir(), "never-created")
+				probe := &greReceiverProbe{inventory: tc.inventory, err: tc.cause}
+				input := strings.NewReader(string(raw) + "\nYES\n")
+				var out, errOut bytes.Buffer
+				options := &runtimeOptions{stateRoot: root, probeRunner: probe}
+				var code int
+				if mode == "wss" {
+					code = menuImportWSS(input, bufio.NewReader(input), &out, &errOut, options)
+				} else {
+					code = menuImportQUIC(input, bufio.NewReader(input), &out, &errOut, options)
+				}
+				if code != 2 || probe.calls != 1 || errOut.Len() != 0 ||
+					!strings.Contains(out.String(), tc.want) ||
+					strings.Contains(out.String(), "Import and start this authenticated") ||
+					strings.Contains(out.String(), string(raw)) ||
+					strings.Contains(out.String(), "PRIVATE KEY") {
+					t.Fatalf("%s %s protected menu incorrectly continued: code=%d out=%q err=%q", mode, tc.name, code, out.String(), errOut.String())
+				}
+				if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("%s %s touched State or credentials: %v", mode, tc.name, err)
+				}
+			})
+		}
 	}
 }
