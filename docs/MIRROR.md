@@ -74,8 +74,12 @@ https://stl.example.com/releases/vX.Y.Z/stl_vX.Y.Z_linux_arm64_local-install.tar
 
 The root `install.sh` contains exact version, canonical-installer digest,
 trusted release `SHA256SUMS` digest, and the configured mirror HTTPS URL.
-**Its own SHA256** is printed by `prepare-mirror.sh` for the independently
-pinned first-hop command. Protect this output as part of your trust anchor.
+**Its own SHA256** is computed from the validated private staging artifact
+**before** publication and then printed by `prepare-mirror.sh` for the
+independently pinned first-hop command; the published path is never rehashed
+to create a trust anchor. The output parent must be controlled by the
+preparing administrator and not group/other writable. Protect this
+output as part of your trust anchor.
 Only after **all** versioned files are present and accessible should the
 operator publish or replace the root `install.sh`. Keep old version
 directories if active clients or rollback workflows still need them. Do not
@@ -97,13 +101,13 @@ On an eligible Linux host that reaches **only your mirror**:
 **Fresh installation:**
 
 ```bash
-bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fsSs --proto "=https" --max-redirs 0 --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && printf "%s  %s\n" "TRUSTED_BOOTSTRAP_SHA256" "$f" | sha256sum --check && bash -n "$f" && bash "$f" "$@"' stl
+bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fsSs --proto "=https" --max-redirs 0 --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && { [ "$(sha256sum < "$f" | cut -d" " -f1)" = "TRUSTED_BOOTSTRAP_SHA256" ] || { echo "STL: mirror bootstrap SHA256 mismatch" >&2; exit 1; }; } && bash -n "$f" && bash "$f" "$@"' stl
 ```
 
 **Update of an existing installer-owned STL:**
 
 ```bash
-bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fsSs --proto "=https" --max-redirs 0 --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && printf "%s  %s\n" "TRUSTED_BOOTSTRAP_SHA256" "$f" | sha256sum --check && bash -n "$f" && bash "$f" "$@"' stl update
+bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fsSs --proto "=https" --max-redirs 0 --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && { [ "$(sha256sum < "$f" | cut -d" " -f1)" = "TRUSTED_BOOTSTRAP_SHA256" ] || { echo "STL: mirror bootstrap SHA256 mismatch" >&2; exit 1; }; } && bash -n "$f" && bash "$f" "$@"' stl update
 ```
 
 These examples require replacing `TRUSTED_BOOTSTRAP_SHA256` with the

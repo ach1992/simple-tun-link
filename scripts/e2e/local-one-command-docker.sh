@@ -66,6 +66,40 @@ APT_STUB
       [[ ! -e /tmp/stl-apt-was-called ]] || fail unnecessary_apt_on_install
       inode=$(stat -c %i -- /usr/local/bin/stl)
       before_record=$(sha256sum /usr/local/lib/simple-tun-link/install-record | cut -d' ' -f1)
+      # The trusted command must hash and execute its private snapshot, even
+      # if the root-assisted transfer process replaces the original while
+      # the checksum is being computed. Hook only the disposable guest's
+      # /usr/bin/sha256sum, exactly at the private snapshot hash boundary.
+      file="/root/stl/$STL_E2E_ENTRY_NAME"
+      install -m 0600 -- "$file" /tmp/stl-race-original
+      printf 'touch /tmp/STL_UNTRUSTED_CODE_EXECUTED\nexit 98\n' > /tmp/stl-race-malicious
+      chmod 0600 /tmp/stl-race-malicious
+      mv -- /usr/bin/sha256sum /usr/bin/stl-sha256sum-real
+      cat > /usr/bin/sha256sum <<'RACE_SHA'
+#!/bin/bash
+set -euo pipefail
+if [[ -f /tmp/stl-race-armed ]]; then
+  input=$(readlink /proc/self/fd/0)
+  [[ $input == /root/.stl-preflight.*/stl_*_local-install.sh ]] || exit 87
+  mv -- "/root/stl/$STL_E2E_ENTRY_NAME" /tmp/stl-race-original-source
+  mv -- /tmp/stl-race-malicious "/root/stl/$STL_E2E_ENTRY_NAME"
+  rm -- /tmp/stl-race-armed
+fi
+exec /usr/bin/stl-sha256sum-real "$@"
+RACE_SHA
+      chmod 0755 /usr/bin/sha256sum
+      : > /tmp/stl-race-armed
+      run_root_operator
+      [[ ! -e /tmp/stl-race-armed && ! -e /tmp/STL_UNTRUSTED_CODE_EXECUTED ]] ||
+        fail private_snapshot_was_not_the_executed_source
+      cmp -s -- /tmp/stl-race-original "$file" && fail source_was_not_replaced_in_fixture
+      mv -f -- /tmp/stl-race-original "$file"
+      mv -f -- /usr/bin/stl-sha256sum-real /usr/bin/sha256sum
+      shopt -s nullglob
+      leftovers=(/root/.stl-preflight.*)
+      shopt -u nullglob
+      [[ ${#leftovers[@]} == 0 ]] || fail authenticated_snapshot_not_cleaned
+      echo 'LITERAL_PRIVATE_PREEXEC_SNAPSHOT_SOURCE_SWAP=PASS'
       run_root_operator
       [[ ! -e /tmp/stl-apt-was-called && $(stat -c %i -- /usr/local/bin/stl) == "$inode" &&
          $(sha256sum /usr/local/lib/simple-tun-link/install-record | cut -d' ' -f1) == "$before_record" ]] ||
@@ -277,7 +311,7 @@ APT_STUB
       if run_root_operator > /tmp/stl-truncated-failure 2>&1; then
         fail accepted_truncated_embedded_payload
       fi
-      grep -q 'computed checksum did NOT match' /tmp/stl-truncated-failure ||
+      grep -q 'transferred installer SHA256 mismatch' /tmp/stl-truncated-failure ||
         { cat /tmp/stl-truncated-failure >&2; fail truncated_wrong_integrity_diagnostic; }
       [[ ! -e /usr/local/bin/stl &&
          ! -e /usr/local/lib/simple-tun-link/install-record ]] ||
@@ -329,6 +363,28 @@ APT_STUB
         fail accepted_multiple_installers
       fi
       rm -- /root/stl/stl_duplicate_local-install.sh
+      # A newline embedded inside a glob-matching filename can trick GNU
+      # sha256sum --check into checking an entirely different existing path.
+      # Prove the fixture would pass the old manifest parser, then require
+      # the new literal command to reject it BEFORE transferred code runs.
+      mv -- "$file" /root/stl/check-target
+      evil="/root/stl/check-target"$'\n'"evil_local-install.sh"
+      printf 'touch /tmp/STL_UNTRUSTED_CODE_EXECUTED\nexit 98\n' > "$evil"
+      chmod 0600 "$evil"
+      printf '%s  %s\n' "$STL_E2E_TRUSTED_ENTRY_SHA256" "$evil" |
+        /usr/bin/sha256sum --check > /tmp/stl-ambiguous-check.log 2>&1 ||
+        fail checksum_parser_fixture_not_ambiguous
+      if run_root_operator > /tmp/stl-newline-name-failure 2>&1; then
+        fail accepted_newline_installer_filename
+      fi
+      grep -q 'unsafe folder/file' /tmp/stl-newline-name-failure ||
+        fail newline_filename_rejection_diagnostic
+      [[ ! -e /tmp/STL_UNTRUSTED_CODE_EXECUTED && ! -e /usr/local/bin/stl &&
+         ! -e /usr/local/lib/simple-tun-link/install-record ]] ||
+        fail ambiguous_checksum_executed_or_mutated_state
+      rm -- "$evil"
+      mv -- /root/stl/check-target "$file"
+      echo 'LITERAL_NEWLINE_FILENAME_CHECKFILE_BYPASS_REFUSED=PASS'
       [[ ! -e /usr/local/bin/stl ]] || fail untrusted_source_modified_installation
       printf 'FOREIGN_STL_BINARY\n' > /usr/local/bin/stl
       if run_root_operator > /tmp/stl-foreign-failure 2>&1; then

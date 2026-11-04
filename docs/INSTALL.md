@@ -353,23 +353,34 @@ A checksum copied from an untrusted mirror is not a publisher trust anchor.
 For an authorized **root** terminal, use the literal guarded command:
 
 ~~~sh
-bash -c 'set -euo pipefail; shopt -s nullglob; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $1 =~ ^[0-9a-f]{64}$ && ${#f[@]} == 1 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file" >&2; exit 1; }; n=$(stat -c %s "${f[0]}"); (( n > 0 && n <= 134250000 )) || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; printf "%s  %s\n" "$1" "${f[0]}" | sha256sum --check; bash "${f[0]}" "${@:2}"' stl TRUSTED_SHA256
+bash -c 'set -euo pipefail; umask 077; export PATH=/usr/sbin:/usr/bin:/sbin:/bin; shopt -s nullglob; f=(/root/stl/*_local-install.sh); [[ ${#f[@]} == 1 ]] || { echo "STL: expected exactly one installer" >&2; exit 1; }; b=${f[0]##*/}; [[ $EUID == 0 && $1 =~ ^[0-9a-f]{64}$ && $b =~ ^stl_(v[0-9]+\.[0-9]+\.[0-9]+|dev-[0-9a-f]{12})_linux_(amd64|arm64)_local-install\.sh$ && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file" >&2; exit 1; }; n=$(stat -c %s "${f[0]}"); (( n > 0 && n <= 134250000 )) || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''[[ -d $d && ! -L $d ]] && rm -rf --one-file-system -- "$d"'\'' EXIT; cp -- "${f[0]}" "$d/$b"; chmod 0600 "$d/$b"; [[ $(stat -c %s "$d/$b") == "$n" ]] || { echo "STL: copied installer size changed" >&2; exit 1; }; h=$(sha256sum < "$d/$b"); [[ ${h%% *} == "$1" ]] || { echo "STL: transferred installer SHA256 mismatch" >&2; exit 1; }; a=${b%_local-install.sh}; a=${a##*_}; for o in "${@:2}"; do case $o in --with-wss) c=wstunnel_11.0.0_linux_$a.tar.gz;; --with-quic) c=hysteria-linux-$a;; *) continue;; esac; p=/root/stl/$c; [[ -f $p && ! -L $p && $(stat -c %u:%a "$p") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe/missing selected companion" >&2; exit 1; }; m=$(stat -c %s "$p"); (( m > 0 && m <= 100000000 )) || { echo "STL: invalid companion size" >&2; exit 1; }; cp -- "$p" "$d/$c"; chmod 0600 "$d/$c"; done; bash "$d/$b" "${@:2}"' stl TRUSTED_SHA256
 ~~~
 
 From a **non-root** account with genuine sudo permission:
 
 ~~~sh
-sudo bash -c 'set -euo pipefail; shopt -s nullglob; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $1 =~ ^[0-9a-f]{64}$ && ${#f[@]} == 1 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file" >&2; exit 1; }; n=$(stat -c %s "${f[0]}"); (( n > 0 && n <= 134250000 )) || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; printf "%s  %s\n" "$1" "${f[0]}" | sha256sum --check; bash "${f[0]}" "${@:2}"' stl TRUSTED_SHA256
+sudo bash -c 'set -euo pipefail; umask 077; export PATH=/usr/sbin:/usr/bin:/sbin:/bin; shopt -s nullglob; f=(/root/stl/*_local-install.sh); [[ ${#f[@]} == 1 ]] || { echo "STL: expected exactly one installer" >&2; exit 1; }; b=${f[0]##*/}; [[ $EUID == 0 && $1 =~ ^[0-9a-f]{64}$ && $b =~ ^stl_(v[0-9]+\.[0-9]+\.[0-9]+|dev-[0-9a-f]{12})_linux_(amd64|arm64)_local-install\.sh$ && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file" >&2; exit 1; }; n=$(stat -c %s "${f[0]}"); (( n > 0 && n <= 134250000 )) || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''[[ -d $d && ! -L $d ]] && rm -rf --one-file-system -- "$d"'\'' EXIT; cp -- "${f[0]}" "$d/$b"; chmod 0600 "$d/$b"; [[ $(stat -c %s "$d/$b") == "$n" ]] || { echo "STL: copied installer size changed" >&2; exit 1; }; h=$(sha256sum < "$d/$b"); [[ ${h%% *} == "$1" ]] || { echo "STL: transferred installer SHA256 mismatch" >&2; exit 1; }; a=${b%_local-install.sh}; a=${a##*_}; for o in "${@:2}"; do case $o in --with-wss) c=wstunnel_11.0.0_linux_$a.tar.gz;; --with-quic) c=hysteria-linux-$a;; *) continue;; esac; p=/root/stl/$c; [[ -f $p && ! -L $p && $(stat -c %u:%a "$p") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe/missing selected companion" >&2; exit 1; }; m=$(stat -c %s "$p"); (( m > 0 && m <= 100000000 )) || { echo "STL: invalid companion size" >&2; exit 1; }; cp -- "$p" "$d/$c"; chmod 0600 "$d/$c"; done; bash "$d/$b" "${@:2}"' stl TRUSTED_SHA256
 ~~~
 
-Both variants run the same published-file checks; only the `sudo` prefix
-differs. Root-only `/root/stl` (0700) prevents unprivileged replacement between
-hash validation and execution. The launcher itself verifies the embedded
-archive hash, exact platform and signed-APT dependency policy. The checksum
-must be authenticated independently before this shell is executed; the
+Both variants run the same checks; only the `sudo` prefix differs. The
+command admits only the exact Stable-release filename shape (and the same
+build-tool `dev-<12-hex>` shape for isolated snapshot tests), rejects control
+characters, copies the transferred file into a newly created root-only
+`/root/.stl-preflight.*` directory, hashes the **private copy** through stdin
+without constructing a checksum manifest, then executes **only that copy**.
+Explicitly selected optional helpers are also copied into that private
+directory; the authenticated launcher verifies their architecture-specific
+pinned SHA256 **before** any core installation. No selected helper is read
+again from the mutable transfer directory during installation. The launcher
+verifies the embedded archive hash, exact platform and signed-APT policy.
+The checksum must be authenticated independently before execution; the
 verified command does not fetch scripts from GitHub or trust arbitrary bytes
-placed in `/root/stl`. An unsafe path, symlink, bad mode, multiple installers,
-oversized file or checksum mismatch fails before executing transferred shell.
+placed in `/root/stl`. Unsafe paths, symlinks, bad modes, multiple
+installers, oversized files or checksum mismatches fail before executing
+transferred shell. A concurrent
+change to the original after the private copy cannot change the bytes that
+are executed. Root-authorized administrators remain responsible for keeping
+their own trusted shell and preparation host secure.
 
 **Explicit Update:** append `--update` after the final trusted digest.
 This option is included in the candidate source and will require its own

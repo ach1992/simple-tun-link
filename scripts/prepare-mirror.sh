@@ -30,7 +30,11 @@ done
    $(realpath -e "$source_dir") == "$source_dir" ]] || usage
 [[ $output != / && $output != . && -n $output && ! -e $output && ! -L $output ]] || usage
 parent=$(dirname -- "$output")
-[[ -d $parent && ! -L $parent && $(realpath -e "$parent") == "$parent" ]] || usage
+[[ -d $parent && ! -L $parent && $(realpath -e "$parent") == "$parent" &&
+   $(stat -c %u -- "$parent") == "$EUID" ]] || usage
+parent_mode=$(stat -c %a -- "$parent")
+[[ $parent_mode =~ ^[0-7]{3,4}$ ]] && (( (8#$parent_mode & 8#022) == 0 )) ||
+  { echo 'Mirror output parent must be owner-controlled, not group/other writable.' >&2; exit 1; }
 outdir="$parent/$(basename -- "$output")"
 script_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
 mirror_source="$script_dir/quick-install.sh"
@@ -101,18 +105,22 @@ chmod 0644 "$stage/install.sh"
 [[ $(tail -n 1 "$stage/install.sh") == quick_install_main* &&
    $(grep -c '^quick_install_main ' "$stage/install.sh") == 1 ]] ||
   { echo 'Mirror bootstrap final invocation failed verification.' >&2; exit 1; }
+# Pin the final validated PRIVATE bootstrap, never the published path.
+first_hop_sha=$(sha256sum < "$stage/install.sh")
+first_hop_sha=${first_hop_sha%% *}
 rm -f -- "$stage/canonical-amd64.sh" "$stage/canonical-arm64.sh"
 chmod 0755 "$stage" "$stage/releases" "$stage/releases/$tag"
 [[ ! -e $outdir && ! -L $outdir ]] || { echo 'Output appeared concurrently; no overwrite.' >&2; exit 1; }
 mv -T -n -- "$stage" "$outdir"
+[[ ! -e $stage && -d $outdir && ! -L $outdir ]] ||
+  { echo 'Mirror output raced with another publisher; not reporting success.' >&2; exit 1; }
 trap - EXIT
 printf 'MIRROR_PREPARED=PASS\nTAG=%s\nMIRROR_URL=%s\nUPLOAD_ROOT=%s\n' "$tag" "$mirror_url" "$outdir"
 # The operator copies this command from the trusted preparation machine,
 # NOT the mirror. Pin the first downloaded shell against independently
 # prepared bytes before executing any of its content, even as non-root.
-first_hop_sha=$(sha256sum -- "$outdir/install.sh" | awk '{print $1}')
 operator_command=$(cat <<'STL_OPERATOR_COMMAND'
-bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fsSs --proto "=https" --max-redirs 0 --connect-timeout 10 --max-time 45 MIRROR_INSTALL_URL | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && printf "%s  %s\n" "TRUSTED_BOOTSTRAP_SHA256" "$f" | sha256sum --check && bash -n "$f" && bash "$f" "$@"' stl
+bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fsSs --proto "=https" --max-redirs 0 --connect-timeout 10 --max-time 45 MIRROR_INSTALL_URL | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && { [ "$(sha256sum < "$f" | cut -d" " -f1)" = "TRUSTED_BOOTSTRAP_SHA256" ] || { echo "STL: mirror bootstrap SHA256 mismatch" >&2; exit 1; }; } && bash -n "$f" && bash "$f" "$@"' stl
 STL_OPERATOR_COMMAND
 )
 mirror_install="$mirror_url/install.sh"
