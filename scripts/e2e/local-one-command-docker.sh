@@ -137,8 +137,12 @@ set -euo pipefail
 if [[ -f /tmp/stl-race-armed ]]; then
   input=$(readlink /proc/self/fd/0)
   [[ $input == /root/.stl-preflight.*/stl_*_local-install.sh ]] || exit 87
-  mv -- "/root/stl/$STL_E2E_ENTRY_NAME" /tmp/stl-race-original-source
-  mv -- /tmp/stl-race-malicious "/root/stl/$STL_E2E_ENTRY_NAME"
+  # The operator runs under env -i; the disposable hook must derive the
+  # source from the guest transfer directory, not an inherited test variable.
+  originals=(/root/stl/*_local-install.sh)
+  [[ ${#originals[@]} == 1 && -f ${originals[0]} ]] || exit 87
+  mv -- "${originals[0]}" /tmp/stl-race-original-source
+  mv -- /tmp/stl-race-malicious "${originals[0]}"
   rm -- /tmp/stl-race-armed
 fi
 exec /usr/bin/stl-sha256sum-real "$@"
@@ -240,7 +244,7 @@ set -euo pipefail
 if [[ -f /tmp/stl-wss-source-swap-armed ]]; then
   input=$(readlink /proc/self/fd/0)
   if [[ $input == /root/.stl-local-install.*/wstunnel_11.0.0_linux_*.tar.gz ]]; then
-    original="/root/stl/wstunnel_11.0.0_linux_${STL_E2E_ARCH}.tar.gz"
+    original="/root/stl/${input##*/}"
     mv -- "$original" /tmp/stl-wss-authentic-source
     printf 'UNTRUSTED_CHANGED_COMPANION\n' > "$original"
     chmod 0600 -- "$original"
