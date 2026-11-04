@@ -355,17 +355,19 @@ A checksum copied from an untrusted mirror is not a publisher trust anchor.
 For an authorized **root** terminal, use the literal guarded command:
 
 ~~~sh
-bash -c 'set -euo pipefail; umask 077; export PATH=/usr/sbin:/usr/bin:/sbin:/bin; shopt -s nullglob; f=(/root/stl/*_local-install.sh); [[ ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} ]] || { echo "STL: expected exactly one regular installer" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}"); (( n > 0 && n <= 134250000 )) || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; b=${f[0]##*/}; head -c 134250001 -- "${f[0]}" > "$d/$b"; h=$(sha256sum < "$d/$b"); [[ ${h%% *} == "$1" ]] || { echo "STL: transferred installer SHA256 mismatch" >&2; exit 1; }; bash "$d/$b" "${@:2}"' stl TRUSTED_SHA256
+/bin/bash -c 'set -euo pipefail; umask 077; export PATH=/usr/sbin:/usr/bin:/sbin:/bin; shopt -s nullglob; f=(/root/stl/*_local-install.sh); [[ ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} ]] || { echo "STL: expected exactly one regular installer" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}"); (( n > 0 && n <= 134250000 )) || { echo "STL: size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; b=${f[0]##*/}; head -c 134250001 -- "${f[0]}" > "$d/$b"; h=$(sha256sum < "$d/$b"); [[ ${h%% *} == "$1" ]] || { echo "STL: transferred installer SHA256 mismatch" >&2; exit 1; }; bash "$d/$b" "${@:2}"' stl TRUSTED_SHA256
 ~~~
 
 From a **non-root** account with genuine sudo permission:
 
 ~~~sh
-sudo bash -c 'set -euo pipefail; umask 077; export PATH=/usr/sbin:/usr/bin:/sbin:/bin; shopt -s nullglob; f=(/root/stl/*_local-install.sh); [[ ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} ]] || { echo "STL: expected exactly one regular installer" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}"); (( n > 0 && n <= 134250000 )) || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; b=${f[0]##*/}; head -c 134250001 -- "${f[0]}" > "$d/$b"; h=$(sha256sum < "$d/$b"); [[ ${h%% *} == "$1" ]] || { echo "STL: transferred installer SHA256 mismatch" >&2; exit 1; }; bash "$d/$b" "${@:2}"' stl TRUSTED_SHA256
+/usr/bin/sudo /bin/bash -c 'set -euo pipefail; umask 077; export PATH=/usr/sbin:/usr/bin:/sbin:/bin; shopt -s nullglob; f=(/root/stl/*_local-install.sh); [[ ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} ]] || { echo "STL: expected exactly one regular installer" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}"); (( n > 0 && n <= 134250000 )) || { echo "STL: size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; b=${f[0]##*/}; head -c 134250001 -- "${f[0]}" > "$d/$b"; h=$(sha256sum < "$d/$b"); [[ ${h%% *} == "$1" ]] || { echo "STL: transferred installer SHA256 mismatch" >&2; exit 1; }; bash "$d/$b" "${@:2}"' stl TRUSTED_SHA256
 ~~~
 
-Both variants use exactly the same trusted command (only the `sudo`
-prefix differs). The first hop selects one regular, non-symlink local
+Both variants execute identical authenticated snapshot logic. The absolute
+`/bin/bash` and (for non-root users) `/usr/bin/sudo` paths ensure an
+inherited `PATH` cannot substitute the initial executable. The first hop
+selects one regular, non-symlink local
 installer, rejects an empty or oversized source before staging, reads at
 most 134,250,001 bytes into a newly created root-only
 `/root/.stl-preflight.*` directory (even if the source changes

@@ -12,7 +12,7 @@ if [[ ${1:-} == guest && -e /.dockerenv && ${STL_E2E_DISPOSABLE_GUEST:-} == appr
   # a test-local paraphrase. Root guests have no sudo requirement.
   run_root_operator() {
     local line
-    line=$(grep '^bash -c .*shopt -s nullglob' /mnt/stl-install-doc)
+    line=$(grep '^/bin/bash -c .*shopt -s nullglob' /mnt/stl-install-doc)
     [[ $(printf '%s\n' "$line" | wc -l) == 1 ]] || fail missing_root_operator_command
     # Accepted literal INSTALL.md invocations only; the option string is fixed,
     # never supplied by an untrusted fixture or derived from archive contents.
@@ -25,10 +25,10 @@ if [[ ${1:-} == guest && -e /.dockerenv && ${STL_E2E_DISPOSABLE_GUEST:-} == appr
   }
   run_sudo_operator() {
     local line
-    line=$(grep '^sudo bash -c .*shopt -s nullglob' /mnt/stl-install-doc)
+    line=$(grep '^/usr/bin/sudo /bin/bash -c .*shopt -s nullglob' /mnt/stl-install-doc)
     [[ $(printf '%s\n' "$line" | wc -l) == 1 ]] || fail missing_sudo_operator_command
     line=${line/TRUSTED_SHA256/$STL_E2E_TRUSTED_ENTRY_SHA256}
-    su -s /bin/bash stloperator -c "$line"
+    su -s /bin/bash stloperator -c "PATH=/home/stloperator/bin:/usr/sbin:/usr/bin:/sbin:/bin $line"
   }
   install -d -m 0700 /root/stl
   install -m 0600 -- /mnt/stl-entry.sh "/root/stl/$STL_E2E_ENTRY_NAME"
@@ -72,10 +72,18 @@ touch /tmp/STL_UNTRUSTED_PATH_EXECUTED
 exit 98
 UNTRUSTED_PATH_SHA
       chmod 0700 -- /root/stl/sha256sum
+      cat > /root/stl/bash <<'UNTRUSTED_PATH_BASH'
+#!/bin/sh
+touch /tmp/STL_UNTRUSTED_BASH_EXECUTED
+exit 98
+UNTRUSTED_PATH_BASH
+      chmod 0700 -- /root/stl/bash
       PATH=/root/stl:/usr/sbin:/usr/bin:/sbin:/bin run_root_operator
-      [[ ! -e /tmp/STL_UNTRUSTED_PATH_EXECUTED ]] ||
+      [[ ! -e /tmp/STL_UNTRUSTED_PATH_EXECUTED &&
+         ! -e /tmp/STL_UNTRUSTED_BASH_EXECUTED ]] ||
         fail unsafe_inherited_path_executed_transferred_command
-      rm -- /root/stl/sha256sum
+      rm -- /root/stl/sha256sum /root/stl/bash
+      echo 'LITERAL_ROOT_BASH_PATH_LOOKUP_REFUSED=PASS'
       echo 'LITERAL_TRUSTED_SYSTEM_PATH_FOR_PREEXEC_HASH=PASS'
       inode=$(stat -c %i -- /usr/local/bin/stl)
       before_record=$(sha256sum /usr/local/lib/simple-tun-link/install-record | cut -d' ' -f1)
@@ -128,8 +136,18 @@ RACE_SHA
       command -v useradd >/dev/null || fail missing_guest_useradd
       useradd -m -s /bin/bash stloperator
       install -d -m 0755 /etc/sudoers.d
-      printf 'stloperator ALL=(root) NOPASSWD: /usr/bin/bash\n' > /etc/sudoers.d/stl-e2e
+      printf 'stloperator ALL=(root) NOPASSWD: /bin/bash\n' > /etc/sudoers.d/stl-e2e
       chmod 0440 /etc/sudoers.d/stl-e2e
+      install -d -o stloperator -g stloperator -m 0700 /home/stloperator/bin
+      for tool in sudo bash; do
+        cat > "/home/stloperator/bin/$tool" <<'UNTRUSTED_SUDO_LOOKUP'
+#!/bin/sh
+touch /tmp/STL_UNTRUSTED_INITIAL_LOOKUP
+exit 98
+UNTRUSTED_SUDO_LOOKUP
+        chown stloperator:stloperator "/home/stloperator/bin/$tool"
+        chmod 0700 "/home/stloperator/bin/$tool"
+      done
       # The *genuine* sudo path must also refuse an oversized source before
       # allocating staging or touching an existing STL installation.
       file="/root/stl/$STL_E2E_ENTRY_NAME"
@@ -139,12 +157,15 @@ RACE_SHA
       if run_sudo_operator > /tmp/stl-sudo-oversize-failure 2>&1; then
         fail real_sudo_accepted_oversized_source
       fi
-      grep -q 'installer file size must be 1..134250000 bytes' /tmp/stl-sudo-oversize-failure ||
+      grep -q 'size must be 1..134250000 bytes' /tmp/stl-sudo-oversize-failure ||
         fail real_sudo_size_refusal_wrong_diagnostic
       [[ ! -e /usr/local/bin/stl ]] || fail real_sudo_oversize_modified_installation
       rm -- "$file"
       mv -- /root/stl-sudo-original "$file"
       run_sudo_operator
+      [[ ! -e /tmp/STL_UNTRUSTED_INITIAL_LOOKUP ]] ||
+        fail inherited_path_hijacked_initial_sudo_or_bash
+      echo 'LITERAL_SUDO_AND_BASH_PATH_LOOKUP_REFUSED=PASS'
       [[ -x /usr/local/bin/stl ]] || fail real_sudo_installer_not_run
       ;;
     wss-invalid)
@@ -331,7 +352,7 @@ APT_STUB
         if run_root_operator > /tmp/stl-preflight-size-failure 2>&1; then
           fail "accepted_invalid_preflight_size_$size"
         fi
-        grep -q 'installer file size must be 1..134250000 bytes' /tmp/stl-preflight-size-failure ||
+        grep -q 'size must be 1..134250000 bytes' /tmp/stl-preflight-size-failure ||
           { cat /tmp/stl-preflight-size-failure >&2; fail preflight_size_wrong_diagnostic; }
         shopt -s nullglob
         stage_dirs=(/root/.stl-preflight.*)
@@ -499,10 +520,10 @@ trusted_entry_sha=$(sha256sum -- "$entry" | awk '{print $1}')
 guest_script=$(realpath -e -- "${BASH_SOURCE[0]}")
 # Assert the root/sudo operator commands are equivalent, aside from
 # the real sudo prefix. The guest executes the actual root/sudo text.
-root_line=$(grep '^bash -c .*shopt -s nullglob' docs/INSTALL.md)
-sudo_line=$(grep '^sudo bash -c .*shopt -s nullglob' docs/INSTALL.md)
-[[ -n $root_line && $sudo_line == "sudo $root_line" ]] || fail operator_docs_drift
-[[ ${#root_line} -le 700 ]] || fail local_operator_command_regressed_beyond_700_characters
+root_line=$(grep '^/bin/bash -c .*shopt -s nullglob' docs/INSTALL.md)
+sudo_line=$(grep '^/usr/bin/sudo /bin/bash -c .*shopt -s nullglob' docs/INSTALL.md)
+[[ -n $root_line && $sudo_line == "/usr/bin/sudo $root_line" ]] || fail operator_docs_drift
+[[ ${#root_line} -le 700 && ${#sudo_line} -le 700 ]] || fail local_operator_command_regressed_beyond_700_characters
 printf '%s\n' "$root_line" | bash -n || fail malformed_root_operator_command
 printf '%s\n' "$sudo_line" | bash -n || fail malformed_sudo_operator_command
 # Only the disposable guest executes the third-party helper. Its archive
