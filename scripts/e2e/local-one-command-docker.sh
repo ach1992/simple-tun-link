@@ -12,7 +12,7 @@ if [[ ${1:-} == guest && -e /.dockerenv && ${STL_E2E_DISPOSABLE_GUEST:-} == appr
   # a test-local paraphrase. Root guests have no sudo requirement.
   run_root_operator() {
     local line
-    line=$(grep '^bash -c .*shopt -s nullglob' /mnt/stl-install-doc)
+    line=$(grep '^/usr/bin/env -i HOME=/root .*shopt -s nullglob' /mnt/stl-install-doc)
     [[ $(printf '%s\n' "$line" | wc -l) == 1 ]] || fail missing_root_operator_command
     # Accepted literal INSTALL.md invocations only; the option string is fixed,
     # never supplied by an untrusted fixture or derived from archive contents.
@@ -25,10 +25,10 @@ if [[ ${1:-} == guest && -e /.dockerenv && ${STL_E2E_DISPOSABLE_GUEST:-} == appr
   }
   run_sudo_operator() {
     local line
-    line=$(grep '^sudo bash -c .*shopt -s nullglob' /mnt/stl-install-doc)
+    line=$(grep '^/usr/bin/sudo /usr/bin/env -i HOME=/root .*shopt -s nullglob' /mnt/stl-install-doc)
     [[ $(printf '%s\n' "$line" | wc -l) == 1 ]] || fail missing_sudo_operator_command
     line=${line/TRUSTED_SHA256/$STL_E2E_TRUSTED_ENTRY_SHA256}
-    su -s /bin/bash stloperator -c "$line"
+    su -s /bin/bash stloperator -c "PATH=/home/stloperator/bin:/usr/sbin:/usr/bin:/sbin:/bin $line"
   }
   install -d -m 0700 /root/stl
   install -m 0600 -- /mnt/stl-entry.sh "/root/stl/$STL_E2E_ENTRY_NAME"
@@ -62,8 +62,64 @@ printf 'APT_WAS_CALLED\n' > /tmp/stl-apt-was-called
 exit 88
 APT_STUB
       chmod 0755 /usr/sbin/apt-get
-      run_root_operator
+      # Prove these startup hooks actually execute in an unsanitized Bash,
+      # then exercise the LITERAL operator command under the same exposure.
+      # These marker files and deliberately unsafe functions never leave Docker.
+      cat > /root/stl/.poisoned-bash-env <<'STL_POISON_BASH_ENV'
+printf 'BASH_ENV_EXECUTED\n' > /tmp/STL_BASH_ENV_EXECUTED
+STL_POISON_BASH_ENV
+      chmod 0600 /root/stl/.poisoned-bash-env
+      sha256sum() {
+        /usr/bin/touch /tmp/STL_IMPORTED_FUNCTION_EXECUTED
+        return 98
+      }
+      export -f sha256sum
+      BASH_ENV=/root/stl/.poisoned-bash-env /bin/bash -c ':'
+      [[ -e /tmp/STL_BASH_ENV_EXECUTED ]] || fail poisoned_bash_env_fixture_did_not_execute
+      rm -- /tmp/STL_BASH_ENV_EXECUTED
+      /bin/bash -c 'sha256sum </dev/null' >/dev/null 2>&1 || :
+      [[ -e /tmp/STL_IMPORTED_FUNCTION_EXECUTED ]] || fail exported_function_fixture_not_imported
+      rm -- /tmp/STL_IMPORTED_FUNCTION_EXECUTED
+
+      saved_sha=$STL_E2E_TRUSTED_ENTRY_SHA256
+      STL_E2E_TRUSTED_ENTRY_SHA256=$(printf '%064d' 0)
+      if BASH_ENV=/root/stl/.poisoned-bash-env run_root_operator > /tmp/stl-bash-env-invalid-pin 2>&1; then
+        fail poisoned_shell_accepted_wrong_publisher_pin
+      fi
+      grep -q 'installer SHA256 mismatch' /tmp/stl-bash-env-invalid-pin ||
+        fail poisoned_shell_missed_first_hop_digest_guard
+      [[ ! -e /usr/local/bin/stl && ! -e /usr/local/lib/simple-tun-link/install-record ]] ||
+        fail poisoned_shell_invalid_pin_mutated_core
+      STL_E2E_TRUSTED_ENTRY_SHA256=$saved_sha
+      BASH_ENV=/root/stl/.poisoned-bash-env run_root_operator
+      [[ ! -e /tmp/STL_BASH_ENV_EXECUTED && ! -e /tmp/STL_IMPORTED_FUNCTION_EXECUTED ]] ||
+        fail inherited_bash_startup_or_function_executed
+      unset -f sha256sum
+      rm -- /root/stl/.poisoned-bash-env
       [[ ! -e /tmp/stl-apt-was-called ]] || fail unnecessary_apt_on_install
+      echo 'LITERAL_BASH_ENV_AND_EXPORTED_FUNCTIONS_EXCLUDED=PASS'
+      echo 'LITERAL_NESTED_BASH_ENV_AND_FUNCTIONS_EXCLUDED=PASS'
+      # The literal command must force the system PATH before invoking hash
+      # or transfer utilities; a tool name inside /root/stl never runs as root.
+      cat > /root/stl/sha256sum <<'UNTRUSTED_PATH_SHA'
+#!/bin/sh
+touch /tmp/STL_UNTRUSTED_PATH_EXECUTED
+exit 98
+UNTRUSTED_PATH_SHA
+      chmod 0700 -- /root/stl/sha256sum
+      cat > /root/stl/bash <<'UNTRUSTED_PATH_BASH'
+#!/bin/sh
+touch /tmp/STL_UNTRUSTED_BASH_EXECUTED
+exit 98
+UNTRUSTED_PATH_BASH
+      chmod 0700 -- /root/stl/bash
+      PATH=/root/stl:/usr/sbin:/usr/bin:/sbin:/bin run_root_operator
+      [[ ! -e /tmp/STL_UNTRUSTED_PATH_EXECUTED &&
+         ! -e /tmp/STL_UNTRUSTED_BASH_EXECUTED ]] ||
+        fail unsafe_inherited_path_executed_transferred_command
+      rm -- /root/stl/sha256sum /root/stl/bash
+      echo 'LITERAL_ROOT_BASH_PATH_LOOKUP_REFUSED=PASS'
+      echo 'LITERAL_TRUSTED_SYSTEM_PATH_FOR_PREEXEC_HASH=PASS'
       inode=$(stat -c %i -- /usr/local/bin/stl)
       before_record=$(sha256sum /usr/local/lib/simple-tun-link/install-record | cut -d' ' -f1)
       # The trusted command must hash and execute its private snapshot, even
@@ -81,8 +137,12 @@ set -euo pipefail
 if [[ -f /tmp/stl-race-armed ]]; then
   input=$(readlink /proc/self/fd/0)
   [[ $input == /root/.stl-preflight.*/stl_*_local-install.sh ]] || exit 87
-  mv -- "/root/stl/$STL_E2E_ENTRY_NAME" /tmp/stl-race-original-source
-  mv -- /tmp/stl-race-malicious "/root/stl/$STL_E2E_ENTRY_NAME"
+  # The operator runs under env -i; the disposable hook must derive the
+  # source from the guest transfer directory, not an inherited test variable.
+  originals=(/root/stl/*_local-install.sh)
+  [[ ${#originals[@]} == 1 && -f ${originals[0]} ]] || exit 87
+  mv -- "${originals[0]}" /tmp/stl-race-original-source
+  mv -- /tmp/stl-race-malicious "${originals[0]}"
   rm -- /tmp/stl-race-armed
 fi
 exec /usr/bin/stl-sha256sum-real "$@"
@@ -115,8 +175,18 @@ RACE_SHA
       command -v useradd >/dev/null || fail missing_guest_useradd
       useradd -m -s /bin/bash stloperator
       install -d -m 0755 /etc/sudoers.d
-      printf 'stloperator ALL=(root) NOPASSWD: /usr/bin/bash\n' > /etc/sudoers.d/stl-e2e
+      printf 'stloperator ALL=(root) NOPASSWD: /usr/bin/env\n' > /etc/sudoers.d/stl-e2e
       chmod 0440 /etc/sudoers.d/stl-e2e
+      install -d -o stloperator -g stloperator -m 0700 /home/stloperator/bin
+      for tool in sudo bash; do
+        cat > "/home/stloperator/bin/$tool" <<'UNTRUSTED_SUDO_LOOKUP'
+#!/bin/sh
+touch /tmp/STL_UNTRUSTED_INITIAL_LOOKUP
+exit 98
+UNTRUSTED_SUDO_LOOKUP
+        chown stloperator:stloperator "/home/stloperator/bin/$tool"
+        chmod 0700 "/home/stloperator/bin/$tool"
+      done
       # The *genuine* sudo path must also refuse an oversized source before
       # allocating staging or touching an existing STL installation.
       file="/root/stl/$STL_E2E_ENTRY_NAME"
@@ -126,12 +196,15 @@ RACE_SHA
       if run_sudo_operator > /tmp/stl-sudo-oversize-failure 2>&1; then
         fail real_sudo_accepted_oversized_source
       fi
-      grep -q 'installer file size must be 1..134250000 bytes' /tmp/stl-sudo-oversize-failure ||
+      grep -q 'size must be 1..134250000 bytes' /tmp/stl-sudo-oversize-failure ||
         fail real_sudo_size_refusal_wrong_diagnostic
       [[ ! -e /usr/local/bin/stl ]] || fail real_sudo_oversize_modified_installation
       rm -- "$file"
       mv -- /root/stl-sudo-original "$file"
       run_sudo_operator
+      [[ ! -e /tmp/STL_UNTRUSTED_INITIAL_LOOKUP ]] ||
+        fail inherited_path_hijacked_initial_sudo_or_bash
+      echo 'LITERAL_SUDO_AND_BASH_PATH_LOOKUP_REFUSED=PASS'
       [[ -x /usr/local/bin/stl ]] || fail real_sudo_installer_not_run
       ;;
     wss-invalid)
@@ -161,7 +234,32 @@ RACE_SHA
       [[ -f /mnt/stl-wss-archive ]] || fail missing_pinned_guest_archive
       c="/root/stl/wstunnel_11.0.0_linux_${STL_E2E_ARCH}.tar.gz"
       install -m 0600 -- /mnt/stl-wss-archive "$c"
+      # Swap the mutable transferred helper at the EXACT point where the
+      # signed launcher hashes its private copy. Core and helper must still
+      # install only the previously snapped, officially pinned bytes.
+      mv -- /usr/bin/sha256sum /usr/bin/stl-sha256sum-real
+      cat > /usr/bin/sha256sum <<'WSS_SWAP_SHA'
+#!/bin/bash
+set -euo pipefail
+if [[ -f /tmp/stl-wss-source-swap-armed ]]; then
+  input=$(readlink /proc/self/fd/0)
+  if [[ $input == /root/.stl-local-install.*/wstunnel_11.0.0_linux_*.tar.gz ]]; then
+    original="/root/stl/${input##*/}"
+    mv -- "$original" /tmp/stl-wss-authentic-source
+    printf 'UNTRUSTED_CHANGED_COMPANION\n' > "$original"
+    chmod 0600 -- "$original"
+    rm -- /tmp/stl-wss-source-swap-armed
+  fi
+fi
+exec /usr/bin/stl-sha256sum-real "$@"
+WSS_SWAP_SHA
+      chmod 0755 /usr/bin/sha256sum
+      : > /tmp/stl-wss-source-swap-armed
       run_root_operator --with-wss
+      [[ ! -e /tmp/stl-wss-source-swap-armed &&
+         -f /tmp/stl-wss-authentic-source ]] ||
+        fail selected_companion_source_swap_not_exercised
+      mv -- /usr/bin/stl-sha256sum-real /usr/bin/sha256sum
       [[ -x /usr/local/bin/stl &&
          -x /usr/local/libexec/stl/wstunnel ]] ||
         fail valid_selected_companion_not_installed
@@ -174,6 +272,7 @@ RACE_SHA
       leftovers=(/root/.stl-preflight.*)
       shopt -u nullglob
       [[ ${#leftovers[@]} == 0 ]] || fail valid_wss_left_private_preflight
+      echo "LITERAL_WSS_COMPANION_SNAPSHOT_SOURCE_SWAP=PASS"
       echo "LITERAL_OFFLINE_WSS_COMPANION_VALIDATED_AND_INSTALLED=PASS"
       ;;
     quic-invalid)
@@ -292,7 +391,7 @@ APT_STUB
         if run_root_operator > /tmp/stl-preflight-size-failure 2>&1; then
           fail "accepted_invalid_preflight_size_$size"
         fi
-        grep -q 'installer file size must be 1..134250000 bytes' /tmp/stl-preflight-size-failure ||
+        grep -q 'size must be 1..134250000 bytes' /tmp/stl-preflight-size-failure ||
           { cat /tmp/stl-preflight-size-failure >&2; fail preflight_size_wrong_diagnostic; }
         shopt -s nullglob
         stage_dirs=(/root/.stl-preflight.*)
@@ -311,7 +410,7 @@ APT_STUB
       if run_root_operator > /tmp/stl-truncated-failure 2>&1; then
         fail accepted_truncated_embedded_payload
       fi
-      grep -q 'transferred installer SHA256 mismatch' /tmp/stl-truncated-failure ||
+      grep -q 'installer SHA256 mismatch' /tmp/stl-truncated-failure ||
         { cat /tmp/stl-truncated-failure >&2; fail truncated_wrong_integrity_diagnostic; }
       [[ ! -e /usr/local/bin/stl &&
          ! -e /usr/local/lib/simple-tun-link/install-record ]] ||
@@ -330,8 +429,18 @@ APT_STUB
         fail accepted_world_writable_file
       fi
       [[ ! -e /tmp/STL_UNTRUSTED_CODE_EXECUTED ]] || fail untrusted_code_ran_before_checks
-      grep -q 'unsafe folder/file' /tmp/stl-untrusted-failure || fail unsafe_mode_wrong_error
+      grep -q 'installer SHA256 mismatch' /tmp/stl-untrusted-failure ||
+        fail modified_file_not_rejected_by_whole_file_pin
       mv -f -- /root/stl-original "$file"
+      # Source metadata is validated by the authenticated launcher BEFORE any
+      # canonical install effect; this must hold even when bytes are authentic.
+      chmod 0666 -- "$file"
+      if run_root_operator > /tmp/stl-world-writable-authentic 2>&1; then
+        fail accepted_authentic_but_world_writable_source
+      fi
+      grep -q 'transferred installer source must be root-owned' /tmp/stl-world-writable-authentic ||
+        fail signed_launcher_did_not_refuse_world_writable_origin
+      chmod 0600 -- "$file"
       # A symlink target may contain arbitrary injected shell instructions;
       # the link must be refused by the trusted command, not by that target.
       mv -- "$file" /root/stl-safe-source
@@ -341,6 +450,8 @@ APT_STUB
         fail accepted_symlink_source
       fi
       [[ ! -e /tmp/STL_UNTRUSTED_CODE_EXECUTED ]] || fail symlink_executed_untrusted_code
+      grep -q 'one regular installer required' /tmp/stl-symlink-failure ||
+        fail symlink_source_not_refused_in_short_first_hop
       rm -- "$file"
       mv -- /root/stl-safe-source "$file"
       # Now the file itself has the malicious prelude, but is mode 0600;
@@ -355,9 +466,16 @@ APT_STUB
         fail accepted_writable_source_ancestor
       fi
       [[ ! -e /tmp/STL_UNTRUSTED_CODE_EXECUTED ]] || fail ancestor_executed_untrusted_code
-      chmod 0700 /root/stl
+      grep -q 'installer SHA256 mismatch' /tmp/stl-writable-ancestor-failure ||
+        fail altered_source_not_rejected_by_whole_file_pin
       rm -- "$file"
       mv -- /root/stl-safe-source "$file"
+      if run_root_operator > /tmp/stl-authentic-writable-ancestor 2>&1; then
+        fail accepted_authentic_source_in_world_writable_directory
+      fi
+      grep -q 'untrusted /root/stl transfer directory' /tmp/stl-authentic-writable-ancestor ||
+        fail signed_launcher_did_not_refuse_writable_origin_directory
+      chmod 0700 /root/stl
       cp -- "$file" /root/stl/stl_duplicate_local-install.sh
       if run_root_operator > /tmp/stl-multiple-failure 2>&1; then
         fail accepted_multiple_installers
@@ -377,14 +495,32 @@ APT_STUB
       if run_root_operator > /tmp/stl-newline-name-failure 2>&1; then
         fail accepted_newline_installer_filename
       fi
-      grep -q 'unsafe folder/file' /tmp/stl-newline-name-failure ||
-        fail newline_filename_rejection_diagnostic
+      grep -q 'installer SHA256 mismatch' /tmp/stl-newline-name-failure ||
+        fail newline_filename_invalid_pin_rejection_diagnostic
       [[ ! -e /tmp/STL_UNTRUSTED_CODE_EXECUTED && ! -e /usr/local/bin/stl &&
          ! -e /usr/local/lib/simple-tun-link/install-record ]] ||
         fail ambiguous_checksum_executed_or_mutated_state
+      # Even when actual bytes are authentic, the signed entrypoint must
+      # refuse the newline-contaminated name before any installation effect.
+      cp -- /root/stl/check-target "$evil"
+      if run_root_operator > /tmp/stl-newline-valid-sha-failure 2>&1; then
+        fail authenticated_misnamed_source_installed
+      fi
+      grep -q 'unexpected installer filename' /tmp/stl-newline-valid-sha-failure ||
+        fail signed_launcher_did_not_refuse_noncanonical_source_name
       rm -- "$evil"
       mv -- /root/stl/check-target "$file"
       echo 'LITERAL_NEWLINE_FILENAME_CHECKFILE_BYPASS_REFUSED=PASS'
+      # Authenticated input with multiple hardlinks must be rejected by the
+      # signed guard, including if the first hop's SHA256 is valid.
+      ln -- "$file" /root/stl/other-hardlink
+      if run_root_operator > /tmp/stl-hardlinked-source-failure 2>&1; then
+        fail accepted_hardlinked_installer_source
+      fi
+      grep -q 'single-linked' /tmp/stl-hardlinked-source-failure ||
+        fail signed_launcher_did_not_refuse_hardlinks
+      rm -- /root/stl/other-hardlink
+      echo 'LITERAL_AUTHENTIC_UNSAFE_MODE_DIR_HARDLINK_REFUSED=PASS'
       [[ ! -e /usr/local/bin/stl ]] || fail untrusted_source_modified_installation
       printf 'FOREIGN_STL_BINARY\n' > /usr/local/bin/stl
       if run_root_operator > /tmp/stl-foreign-failure 2>&1; then
@@ -423,9 +559,10 @@ trusted_entry_sha=$(sha256sum -- "$entry" | awk '{print $1}')
 guest_script=$(realpath -e -- "${BASH_SOURCE[0]}")
 # Assert the root/sudo operator commands are equivalent, aside from
 # the real sudo prefix. The guest executes the actual root/sudo text.
-root_line=$(grep '^bash -c .*shopt -s nullglob' docs/INSTALL.md)
-sudo_line=$(grep '^sudo bash -c .*shopt -s nullglob' docs/INSTALL.md)
-[[ -n $root_line && $sudo_line == "sudo $root_line" ]] || fail operator_docs_drift
+root_line=$(grep '^/usr/bin/env -i HOME=/root .*shopt -s nullglob' docs/INSTALL.md)
+sudo_line=$(grep '^/usr/bin/sudo /usr/bin/env -i HOME=/root .*shopt -s nullglob' docs/INSTALL.md)
+[[ -n $root_line && $sudo_line == "/usr/bin/sudo $root_line" ]] || fail operator_docs_drift
+[[ ${#root_line} -le 700 && ${#sudo_line} -le 700 ]] || fail local_operator_command_regressed_beyond_700_characters
 printf '%s\n' "$root_line" | bash -n || fail malformed_root_operator_command
 printf '%s\n' "$sudo_line" | bash -n || fail malformed_sudo_operator_command
 # Only the disposable guest executes the third-party helper. Its archive
