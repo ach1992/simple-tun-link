@@ -107,4 +107,15 @@ chmod 0755 "$stage" "$stage/releases" "$stage/releases/$tag"
 mv -T -n -- "$stage" "$outdir"
 trap - EXIT
 printf 'MIRROR_PREPARED=PASS\nTAG=%s\nMIRROR_URL=%s\nUPLOAD_ROOT=%s\n' "$tag" "$mirror_url" "$outdir"
-printf 'INSTALL_COMMAND=bash -c '\''LC_ALL=C; s=$(set -o pipefail; curl -fsS --connect-timeout 10 --max-time 45 %s/install.sh | head -c 131073 | tr "\\000" "\\001" && printf x) && (( ${#s} > 1 && ${#s} <= 131073 )) && [[ $s != *$(printf "\\001")* ]] && s=${s%%x} && bash -n <<<"$s" && bash -c "$s" stl "$@"'\'' stl\n' "$mirror_url"
+# The operator copies this command from the trusted preparation machine,
+# NOT the mirror. Pin the first downloaded shell against independently
+# prepared bytes before executing any of its content, even as non-root.
+first_hop_sha=$(sha256sum -- "$outdir/install.sh" | awk '{print $1}')
+operator_command=$(cat <<'STL_OPERATOR_COMMAND'
+bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fsSs --proto "=https" --max-redirs 0 --connect-timeout 10 --max-time 45 MIRROR_INSTALL_URL | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && printf "%s  %s\n" "TRUSTED_BOOTSTRAP_SHA256" "$f" | sha256sum --check && bash -n "$f" && bash "$f" "$@"' stl
+STL_OPERATOR_COMMAND
+)
+mirror_install="$mirror_url/install.sh"
+operator_command=${operator_command/MIRROR_INSTALL_URL/$mirror_install}
+operator_command=${operator_command/TRUSTED_BOOTSTRAP_SHA256/$first_hop_sha}
+printf 'BOOTSTRAP_SHA256=%s\nINSTALL_COMMAND=%s\nUPDATE_COMMAND=%s update\n' "$first_hop_sha" "$operator_command" "$operator_command"

@@ -74,6 +74,8 @@ https://stl.example.com/releases/vX.Y.Z/stl_vX.Y.Z_linux_arm64_local-install.tar
 
 The root `install.sh` contains exact version, canonical-installer digest,
 trusted release `SHA256SUMS` digest, and the configured mirror HTTPS URL.
+**Its own SHA256** is printed by `prepare-mirror.sh` for the independently
+pinned first-hop command. Protect this output as part of your trust anchor.
 Only after **all** versioned files are present and accessible should the
 operator publish or replace the root `install.sh`. Keep old version
 directories if active clients or rollback workflows still need them. Do not
@@ -95,21 +97,30 @@ On an eligible Linux host that reaches **only your mirror**:
 **Fresh installation:**
 
 ```bash
-bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsS --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | head -c 131073 | tr "\000" "\001" && printf x) && (( ${#s} > 1 && ${#s} <= 131073 )) && [[ $s != *$(printf "\001")* ]] && s=${s%x} && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl
+bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fsSs --proto "=https" --max-redirs 0 --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && printf "%s  %s\n" "TRUSTED_BOOTSTRAP_SHA256" "$f" | sha256sum --check && bash -n "$f" && bash "$f" "$@"' stl
 ```
 
 **Update of an existing installer-owned STL:**
 
 ```bash
-bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsS --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | head -c 131073 | tr "\000" "\001" && printf x) && (( ${#s} > 1 && ${#s} <= 131073 )) && [[ $s != *$(printf "\001")* ]] && s=${s%x} && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl update
+bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fsSs --proto "=https" --max-redirs 0 --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && printf "%s  %s\n" "TRUSTED_BOOTSTRAP_SHA256" "$f" | sha256sum --check && bash -n "$f" && bash "$f" "$@"' stl update
 ```
 
-These one-liners download the **whole** first script with a 45-second
-transfer deadline and a 128-KiB streaming limit (including chunked responses),
-reject NUL/control-byte substitutions, and syntax-check before execution.
-A final non-newline sentinel is added only after successful transport and
-removed only after length validation, so Bash cannot discard trailing newline
-bytes before the raw transfer-size check. A bare `curl | bash` is
+These examples require replacing `TRUSTED_BOOTSTRAP_SHA256` with the
+`BOOTSTRAP_SHA256` printed by `prepare-mirror.sh` on your **trusted
+preparation device**. The preparer also prints the exact ready-to-paste
+`INSTALL_COMMAND` and `UPDATE_COMMAND`; prefer those and keep the printed
+digest in a trusted record, not a checksum fetched from the untrusted target
+mirror. All 64 hexadecimal characters must match. **Do not execute the
+placeholder as-is.** A replaced or compromised mirror first-hop script fails
+SHA256 before its first instruction executes.
+
+These commands download the **whole** first script into a private temporary
+file with a 45-second deadline and a 128-KiB streaming limit (including
+chunked responses), then require exact first-hop SHA256 and Bash syntax.
+The temporary file is removed on failure and success. They do not rely on
+`curl --max-filesize`, which does not enforce an unknown-length transfer
+limit on older supported curl versions. A bare `curl | bash` is
 shorter but loses the first-hop completion guarantee; do **not** use it
 for an administrative installation. Running `install` against a different
 existing verified STL will **not** silently upgrade; it prints a specific

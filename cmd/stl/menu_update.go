@@ -352,6 +352,18 @@ func menuPrintManualUpdate(out io.Writer, selected string) {
 	menuProse(out, "Do not pipe a mutable-tag download into a privileged shell.")
 }
 
+// A mirror or offline bundle is never silently adopted as a trust source.
+// This path only explains the existing pinned canonical installer; it does
+// not read foreign files or attempt an unauthenticated root update.
+func menuPrintOfflineUpdate(out io.Writer) {
+	menuSection(out, "Offline / trusted mirror Update")
+	menuProse(out, "The official release catalogue needs GitHub. A mirror-only server must use an explicitly trusted, version-pinned HTTPS mirror; a fully offline server needs a preverified local installer.")
+	menuField(out, "HTTPS mirror", "https://github.com/ach1992/simple-tun-link/blob/main/docs/MIRROR.md#3-clean-install-and-explicit-update")
+	menuField(out, "Local file", "https://github.com/ach1992/simple-tun-link/blob/main/docs/INSTALL.md#local-installation-choose-a-published-asset")
+	menuProse(out, "Verify publisher and the exact release SHA256 independently before executing any downloaded shell. Run the explicit mirror command with update, or use the architecture-matched, locally verified one-file installer. Do not use curl | bash.")
+	menuProse(out, "No update or trust-source change was performed by this screen.")
+}
+
 func menuUpdate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, options *runtimeOptions) int {
 	menuScreen(out, "Update / choose official release")
 	menuField(out, "Installed", safeMenuText(version.Version))
@@ -364,6 +376,7 @@ func menuUpdate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		menuField(out, "Reason", reason)
 		menuField(out, "NEXT ACTION", next)
 		menuField(out, "Official releases", "https://github.com/ach1992/simple-tun-link/releases")
+		menuField(out, "Offline alternative", "Choose o below for separately verified Mirror/Local Update; GitHub is not required for those explicit methods.")
 	} else {
 		menuSection(out, "Latest complete public releases")
 		for i, release := range releases {
@@ -389,9 +402,10 @@ func menuUpdate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			menuOption(out, strconv.Itoa(i+1), release.TagName, kind)
 		}
 	}
-	menuOption(out, "m", "Exact tag guidance", "Manual recovery / offline only")
+	menuOption(out, "m", "Exact tag guidance", "Manual release verification")
+	menuOption(out, "o", "Offline / HTTPS mirror Update", "Show safe local and mirror paths")
 	menuOption(out, "0", "Back", "No changes")
-	fmt.Fprint(out, "Release number or m (Enter cancels): ")
+	fmt.Fprint(out, "Release number, m or o (Enter cancels): ")
 	choice, err := readMenuAnswer(reader)
 	if errors.Is(err, io.EOF) || (err == nil && (choice == "" || choice == "0" || strings.EqualFold(choice, "q"))) {
 		menuNotice(out, "INFO", "Update cancelled. Nothing changed.")
@@ -400,6 +414,10 @@ func menuUpdate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 	if err != nil {
 		menuNotice(out, "WARNING", "Invalid selection; no update started.")
 		return 2
+	}
+	if strings.EqualFold(choice, "o") {
+		menuPrintOfflineUpdate(out)
+		return 0
 	}
 	selected, official := "", false
 	var selectedRelease menuOfficialRelease

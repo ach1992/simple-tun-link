@@ -345,45 +345,50 @@ and the directory must be root-owned `0700`.
 **Keep exactly one matching `*_local-install.sh`** in `/root/stl/`: move
 older installers to a separate private directory before running the glob.
 Either or both selected companion files may coexist with that one installer.
-With this one matching installer present,
-run the exact command as **root**, or use the separately shown genuine `sudo`
-variant from a non-root administrator account:
+With one matching installer present, obtain the **whole-file SHA256** from a
+separately verified official published release on your trusted downloading
+device. Replace `TRUSTED_SHA256` with its 64 lowercase hexadecimal characters.
+A checksum copied from an untrusted mirror is not a publisher trust anchor.
+
+For an authorized **root** terminal, use the literal guarded command:
 
 ~~~sh
-bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}") || exit 1; [[ $n =~ ^[0-9]+$ && $n -gt 0 && $n -le 134250000 ]] || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; head -c "$n" -- "${f[0]}" > "$d/${f[0]##*/}"; [[ $(stat -c %s -- "$d/${f[0]##*/}") == "$n" ]]; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; for x in "$@"; do case "$x" in --with-wss|--with-quic) case $(uname -m) in x86_64) a=amd64;; aarch64) a=arm64;; *) echo "STL: unsupported companion CPU" >&2; exit 1;; esac; if [[ $x == --with-wss ]]; then w="/root/stl/wstunnel_11.0.0_linux_${a}.tar.gz"; else w="/root/stl/hysteria-linux-${a}"; fi;; *) continue;; esac; [[ -f $w && ! -L $w && $(stat -c %u:%a "$w") =~ ^0:(600|644)$ && $(stat -c %h "$w") == 1 ]] || { echo "STL: missing or unsafe selected companion" >&2; exit 1; }; z=$(stat -c %s "$w"); [[ $z =~ ^[0-9]+$ && $z -gt 1024 && $z -lt 100000000 ]] || { echo "STL: companion size is unsafe" >&2; exit 1; }; head -c "$z" -- "$w" > "$d/${w##*/}"; [[ $(stat -c %s -- "$d/${w##*/}") == "$z" ]] && cmp -s -- "$w" "$d/${w##*/}" || { echo "STL: companion changed during protected copy" >&2; exit 1; }; done; bash "$d/${f[0]##*/}" "$@"' stl
+bash -c 'set -euo pipefail; shopt -s nullglob; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $1 =~ ^[0-9a-f]{64}$ && ${#f[@]} == 1 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file" >&2; exit 1; }; n=$(stat -c %s "${f[0]}"); (( n > 0 && n <= 134250000 )) || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; printf "%s  %s\n" "$1" "${f[0]}" | sha256sum --check; bash "${f[0]}" "${@:2}"' stl TRUSTED_SHA256
 ~~~
 
-For a sudo-capable **non-root** administrator, use this command instead
-(the user must already have genuine `sudo` access):
+From a **non-root** account with genuine sudo permission:
 
 ~~~sh
-sudo bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}") || exit 1; [[ $n =~ ^[0-9]+$ && $n -gt 0 && $n -le 134250000 ]] || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; head -c "$n" -- "${f[0]}" > "$d/${f[0]##*/}"; [[ $(stat -c %s -- "$d/${f[0]##*/}") == "$n" ]]; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; for x in "$@"; do case "$x" in --with-wss|--with-quic) case $(uname -m) in x86_64) a=amd64;; aarch64) a=arm64;; *) echo "STL: unsupported companion CPU" >&2; exit 1;; esac; if [[ $x == --with-wss ]]; then w="/root/stl/wstunnel_11.0.0_linux_${a}.tar.gz"; else w="/root/stl/hysteria-linux-${a}"; fi;; *) continue;; esac; [[ -f $w && ! -L $w && $(stat -c %u:%a "$w") =~ ^0:(600|644)$ && $(stat -c %h "$w") == 1 ]] || { echo "STL: missing or unsafe selected companion" >&2; exit 1; }; z=$(stat -c %s "$w"); [[ $z =~ ^[0-9]+$ && $z -gt 1024 && $z -lt 100000000 ]] || { echo "STL: companion size is unsafe" >&2; exit 1; }; head -c "$z" -- "$w" > "$d/${w##*/}"; [[ $(stat -c %s -- "$d/${w##*/}") == "$z" ]] && cmp -s -- "$w" "$d/${w##*/}" || { echo "STL: companion changed during protected copy" >&2; exit 1; }; done; bash "$d/${f[0]##*/}" "$@"' stl
+sudo bash -c 'set -euo pipefail; shopt -s nullglob; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $1 =~ ^[0-9a-f]{64}$ && ${#f[@]} == 1 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file" >&2; exit 1; }; n=$(stat -c %s "${f[0]}"); (( n > 0 && n <= 134250000 )) || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; printf "%s  %s\n" "$1" "${f[0]}" | sha256sum --check; bash "${f[0]}" "${@:2}"' stl TRUSTED_SHA256
 ~~~
 
-These commands verify ownership, source type, modes, installer count and the
-1..134250000-byte file-size bound **before** private bounded copying or
-execution of transferred shell bytes.
-An unsafe folder/file, symlink or extra matching installer is refused, not
-run. The trailing `stl` is the fixed `bash -c` argument label. Append
-` --with-wss` for the WSS companion or ` --with-quic` for the QUIC companion
-after that final `stl`; supply both flags only when selecting both companions.
-For each selected companion, the trusted command also checks root ownership,
-mode, single hardlink, matching filename/CPU, size and exact copied bytes
-**before executing the private snapshot**. It places each selected companion
-beside the private STL launcher, not just beside the original downloaded STL
-file. The official launcher then checks the pinned SHA-256 of the WSS archive
-and its extracted executable, or of the QUIC executable, as selected.
-Unselected companion files remain untouched and are neither copied nor
-installed. The command is necessarily longer than directly
-invoking an unauthenticated transferred script; it is still one copyable
-invocation and requires no checksum variable, unpack, chmod or second installer.
-It is not an independent publisher signature: verify the official file before transfer.
+Both variants run the same published-file checks; only the `sudo` prefix
+differs. Root-only `/root/stl` (0700) prevents unprivileged replacement between
+hash validation and execution. The launcher itself verifies the embedded
+archive hash, exact platform and signed-APT dependency policy. The checksum
+must be authenticated independently before this shell is executed; the
+verified command does not fetch scripts from GitHub or trust arbitrary bytes
+placed in `/root/stl`. An unsafe path, symlink, bad mode, multiple installers,
+oversized file or checksum mismatch fails before executing transferred shell.
+
+**Explicit Update:** append `--update` after the final trusted digest.
+This option is included in the candidate source and will require its own
+reviewed Stable release. The previously published `v0.1.22` one-file launcher
+does not recognize `--update`; use the existing canonical verified Update
+runbook for that release rather than assuming this source change is deployed.
+An ordinary Install on an older installer-owned version now refuses replacement
+and explains that Update must be selected. A same-artifact install is a no-op.
+To install an optional WSS or QUIC helper, additionally append
+`--with-wss`, `--with-quic` or both after the digest. The launcher verifies
+the selected companion's official pinned SHA256 before core/helper mutation;
+unselected helpers are untouched. No companion or other tool is automatically
+enabled as a Link.
 
 A non-interactive success prints `[OK]` and `stl version --json`, followed by
 `sudo stl menu` guidance. On an interactive terminal, the normal menu opens.
 A new host installs; an existing verified same-version installation is a no-op;
-a newer Stable replaces an older installer-owned Stable through the canonical
-atomic update. Downgrades and channel changes fail closed and require explicit
+a newer Stable replaces an older installer-owned Stable only with explicit
+`--update` and the canonical atomic update. Downgrades and channel changes fail closed and require explicit
 reviewed manual canonical action. The launcher **does not modify Links,
 credentials, State, unrelated services or networking**, and it does not stage
 IPsec or Paqet; a WSS helper is staged only if explicitly selected with
@@ -567,7 +572,7 @@ before downloading the canonical installer; it does not execute a mutable
 identity before installing. The public command stays unchanged:
 
 ~~~sh
-bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 | tr "\000" "\001" && printf x) && (( ${#s} > 1 && ${#s} <= 131073 )) && [[ $s != *$(printf "\001")* ]] && s=${s%x} && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl
+bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && bash -n "$f" && bash "$f" "$@"' stl
 ~~~
 
 To install a specific published Stable, append its tag to that same
@@ -576,13 +581,12 @@ entry point stays unchanged across releases. With no suffix, the immutable
 Latest Stable asset supplies its exact pinned default version.
 
 ~~~sh
-bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 | tr "\000" "\001" && printf x) && (( ${#s} > 1 && ${#s} <= 131073 )) && [[ $s != *$(printf "\001")* ]] && s=${s%x} && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl v0.1.9
+bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && bash -n "$f" && bash "$f" "$@"' stl v0.1.9
 ~~~
 
-The first hop is first **fully downloaded into shell memory**. Only after
+The first hop is first **fully downloaded into an owned temporary file**. Only after
 curl returns success within 45 seconds, the script is nonempty and no
-larger than 128 KiB (including chunked responses), NUL/control-byte
-substitutions are rejected, and syntax validation passes
+larger than 128 KiB (including chunked responses), the actual transfer size is checked without Bash command-substitution byte loss, and syntax validation passes
 can the bootstrap execute. Do not replace this with bare `curl | bash`:
 a failed transfer can otherwise be hidden or its partial script executed. An
 optional historical Stable suffix is checked against the official exact-tag
@@ -602,10 +606,10 @@ installer-owned STL, **do not run install again**: use this equally fixed
 update command:
 
 ~~~sh
-bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 | tr "\000" "\001" && printf x) && (( ${#s} > 1 && ${#s} <= 131073 )) && [[ $s != *$(printf "\001")* ]] && s=${s%x} && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl update
+bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && bash -n "$f" && bash "$f" "$@"' stl update
 ~~~
 
-This selects the unchanged canonical installer update transaction,
+The entire bootstrap download must succeed before it can execute; the private temporary file is removed even on error. This selects the unchanged canonical installer update transaction,
 including identity-verified existing ownership and rollback journals.
 The three published examples (latest install, exact Stable, latest update) use the default native,wireguard prerequisites.
 An advanced operator who separately obtains and verifies the immutable

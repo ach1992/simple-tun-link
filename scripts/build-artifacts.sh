@@ -120,7 +120,7 @@ For the simplest installation, download the ONE official matching release
 file stl_${version}_linux_${arch}_local-install.sh instead of this tar.gz.
 Transfer the .sh file unchanged into /root/stl/ and, with that ONE file
 present, run as an administrator:
-    As root: use the one-command trusted preflight in docs/INSTALL.md
+    As root: use the independently SHA-pinned command in docs/INSTALL.md
     from the matching source commit or published release tag.
     Or, as a non-root administrator, use its documented sudo variant.
     Do NOT run the transferred shell file directly as root: its own source
@@ -128,7 +128,8 @@ present, run as an administrator:
 
 The .sh file embeds these exact archive bytes and a build-bound digest; it
 verifies a private copy, delegates safe unpack to the canonical install.sh,
-then installs, safely no-ops, or updates newer Stable STL in one invocation.
+then installs or safely no-ops; an older installed Stable requires the
+explicit --update argument after the independently verified file SHA256.
 It uses no GitHub downloads on the target; only genuinely missing native and
 WireGuard packages may use the host's preconfigured signed APT repositories.
 IPsec still requires its own separate approved PREPARE/service flow.
@@ -138,9 +139,10 @@ manual archive procedure at docs/INSTALL.md of the exact release source.
 It remains the canonical format for legacy/archive users, not a shell script.
 
 Verify official source/tag and publisher identity on the downloading device
-before running any privileged installer. SHA256SUMS from that same publisher,
-or the digest embedded in the .sh file, detects corruption but does NOT
-provide an independent publisher signature against a compromised account.
+before running any privileged installer. Record the independently obtained
+whole-file .sh SHA256 and provide it to the trusted command; SHA256SUMS from
+the same publisher is an integrity receipt, NOT an independent signature
+against a compromised publisher account.
 Do not use anonymous mirrors or unverifiable repackaged installers.
 An OPTIONAL approved upstream wstunnel v11.0.0 archive may be placed beside
 this single-file installer. Explicit --with-wss on the SAME single-file

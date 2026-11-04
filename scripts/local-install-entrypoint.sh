@@ -18,6 +18,7 @@ prefix=/usr/local
 prefix_set=0
 enable_wss=0
 enable_quic=0
+explicit_update=0
 # An optional archive alone never consents to Carrier installation.
 while (( $# > 0 )); do
   case "$1" in
@@ -38,7 +39,12 @@ while (( $# > 0 )); do
       enable_quic=1
       shift
       ;;
-    *) fail 'usage: bash stl_<version>_linux_<arch>_local-install.sh [--prefix /existing/isolated/prefix] [--with-wss] [--with-quic]' ;;
+    --update)
+      [[ $explicit_update == 0 ]] || fail 'duplicate --update'
+      explicit_update=1
+      shift
+      ;;
+    *) fail 'usage: bash stl_<version>_linux_<arch>_local-install.sh [--prefix /existing/isolated/prefix] [--update] [--with-wss] [--with-quic]' ;;
   esac
 done
 [[ $(uname -s) == Linux ]] || fail 'Linux required'
@@ -147,12 +153,14 @@ grep -Fxq -- "version=$version" "$stage/bundle/BUILD-MANIFEST.txt" &&
   grep -Fxq -- "commit=$commit" "$stage/bundle/BUILD-MANIFEST.txt" ||
   fail 'embedded bundle version or source commit mismatch'
 
-# The one-file route uses the canonical installer's restricted automatic
-# Stable policy *under the maintenance lock*. Do not inspect the install
-# record here: any pre-lock decision would race a concurrent installer.
+# Fresh Install and explicit Update use the SAME canonical lock, ownership,
+# bundle checks and rollback. No out-of-lock probe of the existing record,
+# and no silent replacement of a different installed Stable.
 core_backends=native,wireguard
 [[ $enable_quic == 0 ]] || core_backends=native,quic
-bash "$stage/bundle/install.sh" install --auto-stable --bundle "$stage/bundle" \
+operation=install
+[[ $explicit_update == 0 ]] || operation=update
+bash "$stage/bundle/install.sh" "$operation" --bundle "$stage/bundle" \
   --prefix "$prefix" --backends "$core_backends"
 "$prefix/bin/stl" version --json || fail 'installed executable identity check failed'
 # Only --with-wss selects optional WSS; file presence is not consent.

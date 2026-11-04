@@ -12,24 +12,35 @@ if [[ ${1:-} == guest && -e /.dockerenv && ${STL_E2E_DISPOSABLE_GUEST:-} == appr
   # a test-local paraphrase. Root guests have no sudo requirement.
   run_root_operator() {
     local line
-    line=$(grep '^bash -c .*stl-preflight' /mnt/stl-install-doc)
+    line=$(grep '^bash -c .*shopt -s nullglob' /mnt/stl-install-doc)
     [[ $(printf '%s\n' "$line" | wc -l) == 1 ]] || fail missing_root_operator_command
     # Accepted literal INSTALL.md invocations only; the option string is fixed,
     # never supplied by an untrusted fixture or derived from archive contents.
     case "$*" in
-      ""|--with-wss|--with-quic|"--with-wss --with-quic") ;;
+      ""|--update|--with-wss|--with-quic|"--with-wss --with-quic") ;;
       *) fail unexpected_operator_options ;;
     esac
+    line=${line/TRUSTED_SHA256/$STL_E2E_TRUSTED_ENTRY_SHA256}
     eval "$line $*"
   }
   run_sudo_operator() {
     local line
-    line=$(grep '^sudo bash -c .*stl-preflight' /mnt/stl-install-doc)
+    line=$(grep '^sudo bash -c .*shopt -s nullglob' /mnt/stl-install-doc)
     [[ $(printf '%s\n' "$line" | wc -l) == 1 ]] || fail missing_sudo_operator_command
+    line=${line/TRUSTED_SHA256/$STL_E2E_TRUSTED_ENTRY_SHA256}
     su -s /bin/bash stloperator -c "$line"
   }
   install -d -m 0700 /root/stl
   install -m 0600 -- /mnt/stl-entry.sh "/root/stl/$STL_E2E_ENTRY_NAME"
+  # The published trusted hash is captured before entry into this guest.
+  # A malicious, even syntactically valid, transferred shell must never run.
+  before_pin=$STL_E2E_TRUSTED_ENTRY_SHA256
+  STL_E2E_TRUSTED_ENTRY_SHA256=$(printf '%064d' 0)
+  if run_root_operator > /tmp/stl-untrusted-digest.log 2>&1; then
+    fail wrong_external_whole_file_pin_accepted
+  fi
+  [[ ! -e /usr/local/bin/stl ]] || fail invalid_external_pin_installed_core
+  STL_E2E_TRUSTED_ENTRY_SHA256=$before_pin
   case $STL_E2E_SCENARIO in
     missing-packages)
       # Missing distro packages are genuinely installed through the configured
@@ -197,22 +208,30 @@ APT_STUB
       chmod 0755 /usr/sbin/apt-get
       cp -- /mnt/stl-older.sh "/root/stl/$STL_E2E_OLDER_NAME"
       rm -- "/root/stl/$STL_E2E_ENTRY_NAME"
+      STL_E2E_TRUSTED_ENTRY_SHA256=$STL_E2E_OLDER_SHA
       run_root_operator
       /usr/local/bin/stl version --json | grep -Fq '"version":"v999.0.0"' ||
         fail initial_test_stable_version
       rm -- "/root/stl/$STL_E2E_OLDER_NAME"
       cp -- /mnt/stl-newer.sh "/root/stl/$STL_E2E_NEWER_NAME"
-      run_root_operator
+      STL_E2E_TRUSTED_ENTRY_SHA256=$STL_E2E_NEWER_SHA
+      if run_root_operator > /tmp/stl-implicit-update-failure 2>&1; then
+        fail unapproved_implicit_update
+      fi
+      grep -q 'installed_version_mismatch' /tmp/stl-implicit-update-failure ||
+        fail missing_explicit_update_guidance
+      run_root_operator --update
       /usr/local/bin/stl version --json | grep -Fq '"version":"v999.0.1"' ||
-        fail stable_update_did_not_replace_owned_binary
+        fail explicit_stable_update_did_not_replace_owned_binary
       after_sha=$(sha256sum /usr/local/bin/stl | cut -d' ' -f1)
       rm -- "/root/stl/$STL_E2E_NEWER_NAME"
       cp -- /mnt/stl-older.sh "/root/stl/$STL_E2E_OLDER_NAME"
+      STL_E2E_TRUSTED_ENTRY_SHA256=$STL_E2E_OLDER_SHA
       if run_root_operator > /tmp/stl-downgrade-failure 2>&1; then
         fail automatic_downgrade_accepted
       fi
-      grep -q 'refusing automatic downgrade/channel change' /tmp/stl-downgrade-failure ||
-        fail missing_downgrade_refusal_diagnosis
+      grep -q 'installed_version_mismatch' /tmp/stl-downgrade-failure ||
+        fail missing_default_downgrade_refusal_diagnosis
       [[ $(sha256sum /usr/local/bin/stl | cut -d' ' -f1) == "$after_sha" ]] ||
         fail downgrade_changed_installed_binary
       [[ ! -e /tmp/stl-apt-was-called ]] || fail stable_update_used_apt_without_missing_packages
@@ -339,6 +358,7 @@ case $image in ubuntu:24.04|debian:bookworm) ;; *) fail 'unsupported disposable 
 entry_name="stl_${version}_linux_${arch}_local-install.sh"
 entry="$bundle/$entry_name"
 [[ -f $entry && ! -L $entry ]] || fail 'missing tested one-file artifact'
+trusted_entry_sha=$(sha256sum -- "$entry" | awk '{print $1}')
 (
   cd "$bundle"
   sha256sum --check --ignore-missing SHA256SUMS > /dev/null
@@ -347,8 +367,8 @@ entry="$bundle/$entry_name"
 guest_script=$(realpath -e -- "${BASH_SOURCE[0]}")
 # Assert the root/sudo operator commands are equivalent, aside from
 # the real sudo prefix. The guest executes the actual root/sudo text.
-root_line=$(grep '^bash -c .*stl-preflight' docs/INSTALL.md)
-sudo_line=$(grep '^sudo bash -c .*stl-preflight' docs/INSTALL.md)
+root_line=$(grep '^bash -c .*shopt -s nullglob' docs/INSTALL.md)
+sudo_line=$(grep '^sudo bash -c .*shopt -s nullglob' docs/INSTALL.md)
 [[ -n $root_line && $sudo_line == "sudo $root_line" ]] || fail operator_docs_drift
 printf '%s\n' "$root_line" | bash -n || fail malformed_root_operator_command
 printf '%s\n' "$sudo_line" | bash -n || fail malformed_sudo_operator_command
@@ -396,6 +416,7 @@ for scenario in missing-packages preinstalled-no-apt blocked-mirror preflight-si
     -e STL_E2E_DISPOSABLE_GUEST=approved \
     -e STL_E2E_SCENARIO="$scenario" \
     -e STL_E2E_ENTRY_NAME="$entry_name" \
+    -e STL_E2E_TRUSTED_ENTRY_SHA256="$trusted_entry_sha" \
     -e STL_E2E_EXPECTED_VERSION="$version" \
     -e STL_E2E_ARCH="$arch" \
     -e STL_E2E_WSS_EXEC_SHA="$wss_exe_sha" \
@@ -423,6 +444,8 @@ for stable in v999.0.0 v999.0.1; do
 done
 older_name="stl_v999.0.0_linux_${arch}_local-install.sh"
 newer_name="stl_v999.0.1_linux_${arch}_local-install.sh"
+older_sha=$(sha256sum -- "$fixture/v999.0.0/$older_name" | awk '{print $1}')
+newer_sha=$(sha256sum -- "$fixture/v999.0.1/$newer_name" | awk '{print $1}')
 [[ -f "$fixture/v999.0.0/$older_name" && -f "$fixture/v999.0.1/$newer_name" ]] ||
   fail 'missing synthetic stable update artifacts'
 docker run --rm --network bridge \
@@ -435,6 +458,8 @@ docker run --rm --network bridge \
   -e STL_E2E_ENTRY_NAME="$entry_name" \
   -e STL_E2E_OLDER_NAME="$older_name" \
   -e STL_E2E_NEWER_NAME="$newer_name" \
+  -e STL_E2E_OLDER_SHA="$older_sha" \
+  -e STL_E2E_NEWER_SHA="$newer_sha" \
   -v "$entry:/mnt/stl-entry.sh:ro" \
   -v "$fixture/v999.0.0/$older_name:/mnt/stl-older.sh:ro" \
   -v "$fixture/v999.0.1/$newer_name:/mnt/stl-newer.sh:ro" \
