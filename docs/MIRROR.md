@@ -104,7 +104,20 @@ On an eligible Linux host that reaches **only your mirror**:
 bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fsSs --proto "=https" --max-redirs 0 --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && { [ "$(sha256sum < "$f" | cut -d" " -f1)" = "TRUSTED_BOOTSTRAP_SHA256" ] || { echo "STL: mirror bootstrap SHA256 mismatch" >&2; exit 1; }; } && bash -n "$f" && bash "$f" "$@"' stl
 ```
 
-**Update of an existing installer-owned STL:**
+**Update of an existing installer-owned STL:** On an **already installed**
+release that supports the new `stl update` CLI, the short, independently
+pinned API-free command is:
+
+```bash
+sudo stl update --mirror https://stl.example.com/install.sh --sha256 TRUSTED_BOOTSTRAP_SHA256
+```
+
+Supply the exact `BOOTSTRAP_SHA256` from the **trusted preparation machine**,
+not a checksum read back from the mirror. This CLI will be available only
+after its reviewed source is published in a new Stable; an older installed
+binary does not gain the command automatically. For **older installations**
+(including published v0.1.22), use the existing generated, independently
+pinned `UPDATE_COMMAND` instead:
 
 ```bash
 bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fsSs --proto "=https" --max-redirs 0 --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && { [ "$(sha256sum < "$f" | cut -d" " -f1)" = "TRUSTED_BOOTSTRAP_SHA256" ] || { echo "STL: mirror bootstrap SHA256 mismatch" >&2; exit 1; }; } && bash -n "$f" && bash "$f" "$@"' stl update

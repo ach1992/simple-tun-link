@@ -17,6 +17,35 @@ import (
 
 const operatorSensitiveSentinel = "STL_OPERATOR_PRIVATE_SENTINEL"
 
+// The executable local launcher is authenticated before invocation, but its
+// child output still may contain APT paths, URLs, and private host data.
+// Only fixed reason vocabulary may reach an operator's terminal.
+func TestAuthenticatedLocalLauncherFailuresRemainActionableAndRedacted(t *testing.T) {
+	cases := []struct {
+		message, stage, reason, next string
+	}{
+		{"wrong file for aarch64; download the official linux/arm64 local installer", "local_architecture", "local_architecture_incompatible", "uname -m"},
+		{"selected optional WSS archive SHA-256 mismatch; core unchanged", "local_companion", "local_companion_unverified", "helper"},
+		{"embedded archive SHA256 mismatch; re-download from the verified official release", "local_bundle", "local_bundle_unverified", "SHA256"},
+		{"untrusted /root/stl transfer directory; require root ownership and mode 0700", "local_source", "local_source_untrusted", "/root/stl"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.reason, func(t *testing.T) {
+			var capture menuInstallerOutput
+			_, stderr := capture.streams()
+			_, _ = io.WriteString(stderr, "APT-private data: "+operatorSensitiveSentinel+"\n")
+			_, _ = io.WriteString(stderr, "stl local install [FAILED]: "+tc.message+" PRIVATE="+operatorSensitiveSentinel+"\n")
+			var out bytes.Buffer
+			capture.failure(&out, "update", fmt.Errorf("child failed: %s", operatorSensitiveSentinel), context.Background())
+			got := out.String()
+			if !strings.Contains(got, tc.stage) || !strings.Contains(got, tc.reason) ||
+				!strings.Contains(got, tc.next) || strings.Contains(got, operatorSensitiveSentinel) {
+				t.Errorf("unsafe or unhelpful local update report: %q", got)
+			}
+		})
+	}
+}
+
 // APT and Bash stdout/stderr are never a safe source of display text. Preserve
 // only bounded, authored stage/reason fields and the real child exit status.
 func TestInstallerOperatorOutputIsBoundedAndSecretSafe(t *testing.T) {

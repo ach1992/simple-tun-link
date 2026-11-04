@@ -353,9 +353,26 @@ APT_STUB
       fi
       grep -q 'installed_version_mismatch' /tmp/stl-implicit-update-failure ||
         fail missing_explicit_update_guidance
-      run_root_operator --update
+      # The new short, installed-CLI entrypoint must authenticate the
+      # transferred file BEFORE launching any shell or canonical updater.
+      # This is a real root guest with GitHub API blocked.
+      if /usr/local/bin/stl update --local "/root/stl/$STL_E2E_NEWER_NAME" \
+          --sha256 "$STL_E2E_OLDER_SHA" > /tmp/stl-verified-wrong-pin 2>&1; then
+        fail short_update_accepted_wrong_independent_pin
+      fi
+      grep -q 'independent SHA256 mismatch' /tmp/stl-verified-wrong-pin ||
+        fail short_update_wrong_pin_has_no_diagnosis
+      /usr/local/bin/stl version --json | grep -Fq '"version":"v999.0.0"' ||
+        fail short_update_wrong_pin_modified_binary
+      /usr/local/bin/stl update --local "/root/stl/$STL_E2E_NEWER_NAME" \
+        --sha256 "$STL_E2E_NEWER_SHA" > /tmp/stl-verified-update 2>&1 ||
+        { cat /tmp/stl-verified-update >&2; fail short_update_rejected_valid_private_snapshot; }
       /usr/local/bin/stl version --json | grep -Fq '"version":"v999.0.1"' ||
         fail explicit_stable_update_did_not_replace_owned_binary
+      echo 'LITERAL_INSTALLED_STL_UPDATE_LOCAL_PINNED_AND_GITHUB_API_BLOCKED=PASS'
+      # The existing guarded first hop remains an idempotent way to retry
+      # the same official release, not a second update engine.
+      run_root_operator --update
       after_sha=$(sha256sum /usr/local/bin/stl | cut -d' ' -f1)
       rm -- "/root/stl/$STL_E2E_NEWER_NAME"
       cp -- /mnt/stl-older.sh "/root/stl/$STL_E2E_OLDER_NAME"

@@ -95,7 +95,7 @@ source_bytes=$(stat -c %s -- "$source")
 # remain in /root/stl. A trusted entrypoint (not the tiny first-hop command)
 # validates and privately snapshots each explicit companion before use.
 transfer_dir=${source%/*}
-if [[ $EUID == 0 && $transfer_dir =~ ^/root/\.stl-preflight\.[A-Za-z0-9]{8}$ ]]; then
+if [[ $EUID == 0 && $transfer_dir =~ ^/root/\.stl-preflight\.[A-Za-z0-9]{8,12}$ ]]; then
   transfer_dir=/root/stl
   [[ -d $transfer_dir && ! -L $transfer_dir &&
      $(stat -c %u:%a -- "$transfer_dir") == 0:700 ]] ||

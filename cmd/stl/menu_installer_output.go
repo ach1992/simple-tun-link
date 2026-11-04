@@ -125,6 +125,20 @@ func (v *menuInstallerOutput) observeLine(line string) {
 		v.stage, v.reason = "uninstall_preflight", "uninstall_preflight_unverified"
 	case strings.HasPrefix(line, "stl installer [FAILED]: STL ownership record is missing or not regular"):
 		v.stage, v.reason = "installation_ownership", "installer_ownership_unverified"
+	case strings.HasPrefix(line, "stl local install [FAILED]: wrong file for"),
+		strings.HasPrefix(line, "stl local install [FAILED]: unsupported CPU architecture"):
+		v.stage, v.reason = "local_architecture", "local_architecture_incompatible"
+	case strings.HasPrefix(line, "stl local install [FAILED]: selected optional"),
+		strings.HasPrefix(line, "stl local install [FAILED]: WSS selected"),
+		strings.HasPrefix(line, "stl local install [FAILED]: QUIC selected"):
+		v.stage, v.reason = "local_companion", "local_companion_unverified"
+	case strings.HasPrefix(line, "stl local install [FAILED]: embedded archive SHA256 mismatch"),
+		strings.HasPrefix(line, "stl local install [FAILED]: embedded bundle version or source commit mismatch"):
+		v.stage, v.reason = "local_bundle", "local_bundle_unverified"
+	case strings.HasPrefix(line, "stl local install [FAILED]: transferred file"),
+		strings.HasPrefix(line, "stl local install [FAILED]: untrusted /root/stl"),
+		strings.HasPrefix(line, "stl local install [FAILED]: local installer has an invalid"):
+		v.stage, v.reason = "local_source", "local_source_untrusted"
 
 	}
 }
@@ -162,6 +176,12 @@ func (v *menuInstallerOutput) failure(out io.Writer, action string, err error, c
 		menuField(out, "NEXT ACTION", "STL found leftover State contents it cannot prove are its own locks. Preserve them and inspect State ownership; do not delete arbitrary files to force Uninstall.")
 	case reason == "uninstall_preflight_unverified":
 		menuField(out, "NEXT ACTION", "Use My tunnels to remove verified Links, then inspect STL restore unit and State ownership in STL before retrying Uninstall.")
+	case reason == "local_architecture_incompatible":
+		menuField(out, "NEXT ACTION", "Download the exact official local installer matching uname -m and independently verify its full SHA256. Check installed ownership before retrying.")
+	case reason == "local_companion_unverified":
+		menuField(out, "NEXT ACTION", "Check the selected helper's official architecture and pinned SHA256, and inspect installed core/companion identity before retrying; Core might already be updated.")
+	case reason == "local_bundle_unverified" || reason == "local_source_untrusted":
+		menuField(out, "NEXT ACTION", "Re-transfer a verified official file into protected /root/stl (root-owned, mode 0700) and independently check SHA256; inspect any partial installation/recovery before retrying.")
 	default:
 		menuField(out, "NEXT ACTION", "Inspect stl version --json, installation ownership record and retained private recovery journal; package or binary changes may persist. Do not retry blindly.")
 	}
