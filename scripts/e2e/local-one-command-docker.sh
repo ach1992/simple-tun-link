@@ -64,6 +64,19 @@ APT_STUB
       chmod 0755 /usr/sbin/apt-get
       run_root_operator
       [[ ! -e /tmp/stl-apt-was-called ]] || fail unnecessary_apt_on_install
+      # The literal command must force the system PATH before invoking hash
+      # or transfer utilities; a tool name inside /root/stl never runs as root.
+      cat > /root/stl/sha256sum <<'UNTRUSTED_PATH_SHA'
+#!/bin/sh
+touch /tmp/STL_UNTRUSTED_PATH_EXECUTED
+exit 98
+UNTRUSTED_PATH_SHA
+      chmod 0700 -- /root/stl/sha256sum
+      PATH=/root/stl:/usr/sbin:/usr/bin:/sbin:/bin run_root_operator
+      [[ ! -e /tmp/STL_UNTRUSTED_PATH_EXECUTED ]] ||
+        fail unsafe_inherited_path_executed_transferred_command
+      rm -- /root/stl/sha256sum
+      echo 'LITERAL_TRUSTED_SYSTEM_PATH_FOR_PREEXEC_HASH=PASS'
       inode=$(stat -c %i -- /usr/local/bin/stl)
       before_record=$(sha256sum /usr/local/lib/simple-tun-link/install-record | cut -d' ' -f1)
       # The trusted command must hash and execute its private snapshot, even

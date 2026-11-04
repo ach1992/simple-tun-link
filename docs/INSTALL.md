@@ -286,10 +286,12 @@ must match the downloaded official assets):
 **No automatic Carrier enablement:** helpers are installed only when
 their matching flags are explicitly supplied; creating a Link requires
 the separate guided Create/Import confirmation. The folder may contain
-only the Core installer, or either/both helpers. Unsafe or missing selected
-files fail the trusted preflight before transferred code runs; the
-launcher then verifies build-bound and pinned companion hashes before
-installing the Core or optional helper.
+only the Core installer, or either/both helpers. The short trusted
+first hop rejects nonregular sources, oversized input and unauthenticated
+installer bytes before executing any transferred code. The authenticated,
+build-bound launcher then checks the original source ownership/modes,
+private companion snapshots and pinned hashes of only the selected
+helpers before canonical Core or companion installation.
 
 **Offline is not zero-dependency:** the destination needs no GitHub access,
 but missing selected distro packages can still require accessible **signed
@@ -353,13 +355,13 @@ A checksum copied from an untrusted mirror is not a publisher trust anchor.
 For an authorized **root** terminal, use the literal guarded command:
 
 ~~~sh
-bash -c 'set -euo pipefail; umask 077; shopt -s nullglob; f=(/root/stl/*_local-install.sh); [[ ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} ]] || { echo "STL: expected exactly one regular installer" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}"); (( n > 0 && n <= 134250000 )) || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; b=${f[0]##*/}; head -c 134250001 -- "${f[0]}" > "$d/$b"; h=$(sha256sum < "$d/$b"); [[ ${h%% *} == "$1" ]] || { echo "STL: transferred installer SHA256 mismatch" >&2; exit 1; }; bash "$d/$b" "${@:2}"' stl TRUSTED_SHA256
+bash -c 'set -euo pipefail; umask 077; export PATH=/usr/sbin:/usr/bin:/sbin:/bin; shopt -s nullglob; f=(/root/stl/*_local-install.sh); [[ ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} ]] || { echo "STL: expected exactly one regular installer" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}"); (( n > 0 && n <= 134250000 )) || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; b=${f[0]##*/}; head -c 134250001 -- "${f[0]}" > "$d/$b"; h=$(sha256sum < "$d/$b"); [[ ${h%% *} == "$1" ]] || { echo "STL: transferred installer SHA256 mismatch" >&2; exit 1; }; bash "$d/$b" "${@:2}"' stl TRUSTED_SHA256
 ~~~
 
 From a **non-root** account with genuine sudo permission:
 
 ~~~sh
-sudo bash -c 'set -euo pipefail; umask 077; shopt -s nullglob; f=(/root/stl/*_local-install.sh); [[ ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} ]] || { echo "STL: expected exactly one regular installer" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}"); (( n > 0 && n <= 134250000 )) || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; b=${f[0]##*/}; head -c 134250001 -- "${f[0]}" > "$d/$b"; h=$(sha256sum < "$d/$b"); [[ ${h%% *} == "$1" ]] || { echo "STL: transferred installer SHA256 mismatch" >&2; exit 1; }; bash "$d/$b" "${@:2}"' stl TRUSTED_SHA256
+sudo bash -c 'set -euo pipefail; umask 077; export PATH=/usr/sbin:/usr/bin:/sbin:/bin; shopt -s nullglob; f=(/root/stl/*_local-install.sh); [[ ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} ]] || { echo "STL: expected exactly one regular installer" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}"); (( n > 0 && n <= 134250000 )) || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; b=${f[0]##*/}; head -c 134250001 -- "${f[0]}" > "$d/$b"; h=$(sha256sum < "$d/$b"); [[ ${h%% *} == "$1" ]] || { echo "STL: transferred installer SHA256 mismatch" >&2; exit 1; }; bash "$d/$b" "${@:2}"' stl TRUSTED_SHA256
 ~~~
 
 Both variants use exactly the same trusted command (only the `sudo`
