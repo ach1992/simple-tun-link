@@ -9,7 +9,7 @@ saved Link is **not** proof that packets reach its peer.
 
 | Option | Connection | Encryption |
 | --- | --- | --- |
-| GRE / IPIP | Native IP, optionally FOU/GUE over UDP | No |
+| GRE / IPIP | Native IP protocols 47 / 4, optionally FOU/GUE over UDP | No |
 | L2TPv3 Direct-IP | Native IP protocol 115 | No |
 | WireGuard | Native UDP | Yes |
 | WireGuard over WSS/TLS | TCP/TLS plus kernel WireGuard; optional `wstunnel` | Yes |
@@ -22,9 +22,10 @@ NAT or foreign VPNs, and no transport works through every network.
 
 ## Requirements
 
-- Two supported Linux servers you administer; use a matching architecture
-  (`x86_64` = AMD64, `aarch64` = ARM64). See
-  [supported systems](docs/SUPPORTED-ENVIRONMENTS.md).
+- Two Linux servers you administer. The installer supports Ubuntu 22.04+ or
+  Debian 11+, Linux kernel 5.4+, iproute2 5.1+ and AMD64 (`x86_64`) or ARM64
+  (`aarch64`); systemd provides reboot restoration. Check each backend's
+  additional capabilities in [supported systems](docs/SUPPORTED-ENVIRONMENTS.md).
 - Root privileges (or authorized `sudo`) for local network changes.
 - An actually reachable public/underlay path for the selected transport.
 - An accessible **signed** Debian/Ubuntu APT repository only when selected OS
