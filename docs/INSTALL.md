@@ -355,20 +355,24 @@ A checksum copied from an untrusted mirror is not a publisher trust anchor.
 For an authorized **root** terminal, use the literal guarded command:
 
 ~~~sh
-/bin/bash -c 'set -euo pipefail; umask 077; export PATH=/usr/sbin:/usr/bin:/sbin:/bin; shopt -s nullglob; f=(/root/stl/*_local-install.sh); [[ ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} ]] || { echo "STL: expected exactly one regular installer" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}"); (( n > 0 && n <= 134250000 )) || { echo "STL: size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; b=${f[0]##*/}; head -c 134250001 -- "${f[0]}" > "$d/$b"; h=$(sha256sum < "$d/$b"); [[ ${h%% *} == "$1" ]] || { echo "STL: transferred installer SHA256 mismatch" >&2; exit 1; }; bash "$d/$b" "${@:2}"' stl TRUSTED_SHA256
+/usr/bin/env -i HOME=/root PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'set -euo pipefail; umask 077; shopt -s nullglob; f=(/root/stl/*_local-install.sh); [[ ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} ]] || { echo "STL: one regular installer required" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}"); (( n > 0 && n <= 134250000 )) || { echo "STL: size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; b=${f[0]##*/}; head -c 134250001 -- "${f[0]}" > "$d/$b"; h=$(sha256sum < "$d/$b"); [[ ${h%% *} == "$1" ]] || { echo "STL: installer SHA256 mismatch" >&2; exit 1; }; bash "$d/$b" "${@:2}"' stl TRUSTED_SHA256
 ~~~
 
 From a **non-root** account with genuine sudo permission:
 
 ~~~sh
-/usr/bin/sudo /bin/bash -c 'set -euo pipefail; umask 077; export PATH=/usr/sbin:/usr/bin:/sbin:/bin; shopt -s nullglob; f=(/root/stl/*_local-install.sh); [[ ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} ]] || { echo "STL: expected exactly one regular installer" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}"); (( n > 0 && n <= 134250000 )) || { echo "STL: size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; b=${f[0]##*/}; head -c 134250001 -- "${f[0]}" > "$d/$b"; h=$(sha256sum < "$d/$b"); [[ ${h%% *} == "$1" ]] || { echo "STL: transferred installer SHA256 mismatch" >&2; exit 1; }; bash "$d/$b" "${@:2}"' stl TRUSTED_SHA256
+/usr/bin/sudo /usr/bin/env -i HOME=/root PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'set -euo pipefail; umask 077; shopt -s nullglob; f=(/root/stl/*_local-install.sh); [[ ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} ]] || { echo "STL: one regular installer required" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}"); (( n > 0 && n <= 134250000 )) || { echo "STL: size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; b=${f[0]##*/}; head -c 134250001 -- "${f[0]}" > "$d/$b"; h=$(sha256sum < "$d/$b"); [[ ${h%% *} == "$1" ]] || { echo "STL: installer SHA256 mismatch" >&2; exit 1; }; bash "$d/$b" "${@:2}"' stl TRUSTED_SHA256
 ~~~
 
-Both variants execute identical authenticated snapshot logic. The absolute
-`/bin/bash` and (for non-root users) `/usr/bin/sudo` paths ensure an
-inherited `PATH` cannot substitute the initial executable. The first hop
-selects one regular, non-symlink local
-installer, rejects an empty or oversized source before staging, reads at
+Both variants execute identical authenticated snapshot logic. Absolute
+`/usr/bin/env -i` clears inherited Bash startup hooks (`BASH_ENV`, exported
+functions, `SHELLOPTS`/`BASHOPTS`) **before** the first `/bin/bash` starts;
+only trusted `PATH` and root `HOME` are passed to nested processes. The
+non-root variant uses absolute `/usr/bin/sudo`, so inherited `PATH` cannot
+substitute the initial executable. The install command intentionally does
+not forward terminal/session variables; run `sudo stl menu` afterward for
+normal user-specific terminal settings. The first hop selects one regular,
+non-symlink local installer, rejects an empty or oversized source, reads at
 most 134,250,001 bytes into a newly created root-only
 `/root/.stl-preflight.*` directory (even if the source changes
 after its size check),
@@ -382,7 +386,9 @@ filename or the isolated build's `dev-<12-hex>` filename shape, including
 control-character rejection. It refuses unsafe original `/root/stl`
 ownership, permissions, or symlinks before canonical installation.
 For explicitly selected WSS/QUIC companions, it snapshots only those
-files in another protected staging directory, verifies the
+files in another protected staging directory with a copy limit of the
+maximum selected-helper size plus one byte, even if the source grows,
+then verifies the
 architecture-specific pinned SHA256 of **each private copy before core
 installation**, and passes only those authenticated helper copies to the
 canonical installer. It never rereads mutable transferred helpers during

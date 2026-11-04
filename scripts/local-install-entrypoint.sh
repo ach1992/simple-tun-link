@@ -118,7 +118,8 @@ else
 fi
 cleanup() { [[ -d $stage && ! -L $stage ]] && rm -rf --one-file-system -- "$stage"; }
 trap cleanup EXIT
-cp -- "$source" "$stage/entrypoint" || fail 'cannot snapshot local installer'
+head -c 134250001 -- "$source" > "$stage/entrypoint" ||
+  fail 'cannot snapshot local installer'
 chmod 0600 -- "$stage/entrypoint"
 [[ $(stat -c %s -- "$stage/entrypoint") == "$source_bytes" ]] ||
   fail 'transferred file changed while copying; transfer the official artifact again'
@@ -145,7 +146,8 @@ snapshot_companion() {
   [[ $size =~ ^[0-9]+$ ]] &&
     (( size >= min_bytes && size <= max_bytes )) ||
     fail "selected optional $name size is unsafe; core unchanged"
-  cp -- "$original_path" "$stage/$name" ||
+  # A selected source may grow after stat; bound the private write.
+  head -c "$((max_bytes + 1))" -- "$original_path" > "$stage/$name" ||
     fail "cannot snapshot selected optional $name"
   chmod 0600 -- "$stage/$name"
   [[ $(stat -c %s -- "$stage/$name") == "$size" ]] ||

@@ -12,7 +12,7 @@ if [[ ${1:-} == guest && -e /.dockerenv && ${STL_E2E_DISPOSABLE_GUEST:-} == appr
   # a test-local paraphrase. Root guests have no sudo requirement.
   run_root_operator() {
     local line
-    line=$(grep '^/bin/bash -c .*shopt -s nullglob' /mnt/stl-install-doc)
+    line=$(grep '^/usr/bin/env -i HOME=/root .*shopt -s nullglob' /mnt/stl-install-doc)
     [[ $(printf '%s\n' "$line" | wc -l) == 1 ]] || fail missing_root_operator_command
     # Accepted literal INSTALL.md invocations only; the option string is fixed,
     # never supplied by an untrusted fixture or derived from archive contents.
@@ -25,7 +25,7 @@ if [[ ${1:-} == guest && -e /.dockerenv && ${STL_E2E_DISPOSABLE_GUEST:-} == appr
   }
   run_sudo_operator() {
     local line
-    line=$(grep '^/usr/bin/sudo /bin/bash -c .*shopt -s nullglob' /mnt/stl-install-doc)
+    line=$(grep '^/usr/bin/sudo /usr/bin/env -i HOME=/root .*shopt -s nullglob' /mnt/stl-install-doc)
     [[ $(printf '%s\n' "$line" | wc -l) == 1 ]] || fail missing_sudo_operator_command
     line=${line/TRUSTED_SHA256/$STL_E2E_TRUSTED_ENTRY_SHA256}
     su -s /bin/bash stloperator -c "PATH=/home/stloperator/bin:/usr/sbin:/usr/bin:/sbin:/bin $line"
@@ -62,8 +62,43 @@ printf 'APT_WAS_CALLED\n' > /tmp/stl-apt-was-called
 exit 88
 APT_STUB
       chmod 0755 /usr/sbin/apt-get
-      run_root_operator
+      # Prove these startup hooks actually execute in an unsanitized Bash,
+      # then exercise the LITERAL operator command under the same exposure.
+      # These marker files and deliberately unsafe functions never leave Docker.
+      cat > /root/stl/.poisoned-bash-env <<'STL_POISON_BASH_ENV'
+printf 'BASH_ENV_EXECUTED\n' > /tmp/STL_BASH_ENV_EXECUTED
+STL_POISON_BASH_ENV
+      chmod 0600 /root/stl/.poisoned-bash-env
+      sha256sum() {
+        /usr/bin/touch /tmp/STL_IMPORTED_FUNCTION_EXECUTED
+        return 98
+      }
+      export -f sha256sum
+      BASH_ENV=/root/stl/.poisoned-bash-env /bin/bash -c ':'
+      [[ -e /tmp/STL_BASH_ENV_EXECUTED ]] || fail poisoned_bash_env_fixture_did_not_execute
+      rm -- /tmp/STL_BASH_ENV_EXECUTED
+      /bin/bash -c 'sha256sum </dev/null' >/dev/null 2>&1 || :
+      [[ -e /tmp/STL_IMPORTED_FUNCTION_EXECUTED ]] || fail exported_function_fixture_not_imported
+      rm -- /tmp/STL_IMPORTED_FUNCTION_EXECUTED
+
+      saved_sha=$STL_E2E_TRUSTED_ENTRY_SHA256
+      STL_E2E_TRUSTED_ENTRY_SHA256=$(printf '%064d' 0)
+      if BASH_ENV=/root/stl/.poisoned-bash-env run_root_operator > /tmp/stl-bash-env-invalid-pin 2>&1; then
+        fail poisoned_shell_accepted_wrong_publisher_pin
+      fi
+      grep -q 'installer SHA256 mismatch' /tmp/stl-bash-env-invalid-pin ||
+        fail poisoned_shell_missed_first_hop_digest_guard
+      [[ ! -e /usr/local/bin/stl && ! -e /usr/local/lib/simple-tun-link/install-record ]] ||
+        fail poisoned_shell_invalid_pin_mutated_core
+      STL_E2E_TRUSTED_ENTRY_SHA256=$saved_sha
+      BASH_ENV=/root/stl/.poisoned-bash-env run_root_operator
+      [[ ! -e /tmp/STL_BASH_ENV_EXECUTED && ! -e /tmp/STL_IMPORTED_FUNCTION_EXECUTED ]] ||
+        fail inherited_bash_startup_or_function_executed
+      unset -f sha256sum
+      rm -- /root/stl/.poisoned-bash-env
       [[ ! -e /tmp/stl-apt-was-called ]] || fail unnecessary_apt_on_install
+      echo 'LITERAL_BASH_ENV_AND_EXPORTED_FUNCTIONS_EXCLUDED=PASS'
+      echo 'LITERAL_NESTED_BASH_ENV_AND_FUNCTIONS_EXCLUDED=PASS'
       # The literal command must force the system PATH before invoking hash
       # or transfer utilities; a tool name inside /root/stl never runs as root.
       cat > /root/stl/sha256sum <<'UNTRUSTED_PATH_SHA'
@@ -136,7 +171,7 @@ RACE_SHA
       command -v useradd >/dev/null || fail missing_guest_useradd
       useradd -m -s /bin/bash stloperator
       install -d -m 0755 /etc/sudoers.d
-      printf 'stloperator ALL=(root) NOPASSWD: /bin/bash\n' > /etc/sudoers.d/stl-e2e
+      printf 'stloperator ALL=(root) NOPASSWD: /usr/bin/env\n' > /etc/sudoers.d/stl-e2e
       chmod 0440 /etc/sudoers.d/stl-e2e
       install -d -o stloperator -g stloperator -m 0700 /home/stloperator/bin
       for tool in sudo bash; do
@@ -371,7 +406,7 @@ APT_STUB
       if run_root_operator > /tmp/stl-truncated-failure 2>&1; then
         fail accepted_truncated_embedded_payload
       fi
-      grep -q 'transferred installer SHA256 mismatch' /tmp/stl-truncated-failure ||
+      grep -q 'installer SHA256 mismatch' /tmp/stl-truncated-failure ||
         { cat /tmp/stl-truncated-failure >&2; fail truncated_wrong_integrity_diagnostic; }
       [[ ! -e /usr/local/bin/stl &&
          ! -e /usr/local/lib/simple-tun-link/install-record ]] ||
@@ -390,7 +425,7 @@ APT_STUB
         fail accepted_world_writable_file
       fi
       [[ ! -e /tmp/STL_UNTRUSTED_CODE_EXECUTED ]] || fail untrusted_code_ran_before_checks
-      grep -q 'transferred installer SHA256 mismatch' /tmp/stl-untrusted-failure ||
+      grep -q 'installer SHA256 mismatch' /tmp/stl-untrusted-failure ||
         fail modified_file_not_rejected_by_whole_file_pin
       mv -f -- /root/stl-original "$file"
       # Source metadata is validated by the authenticated launcher BEFORE any
@@ -411,7 +446,7 @@ APT_STUB
         fail accepted_symlink_source
       fi
       [[ ! -e /tmp/STL_UNTRUSTED_CODE_EXECUTED ]] || fail symlink_executed_untrusted_code
-      grep -q 'expected exactly one regular installer' /tmp/stl-symlink-failure ||
+      grep -q 'one regular installer required' /tmp/stl-symlink-failure ||
         fail symlink_source_not_refused_in_short_first_hop
       rm -- "$file"
       mv -- /root/stl-safe-source "$file"
@@ -427,7 +462,7 @@ APT_STUB
         fail accepted_writable_source_ancestor
       fi
       [[ ! -e /tmp/STL_UNTRUSTED_CODE_EXECUTED ]] || fail ancestor_executed_untrusted_code
-      grep -q 'transferred installer SHA256 mismatch' /tmp/stl-writable-ancestor-failure ||
+      grep -q 'installer SHA256 mismatch' /tmp/stl-writable-ancestor-failure ||
         fail altered_source_not_rejected_by_whole_file_pin
       rm -- "$file"
       mv -- /root/stl-safe-source "$file"
@@ -456,7 +491,7 @@ APT_STUB
       if run_root_operator > /tmp/stl-newline-name-failure 2>&1; then
         fail accepted_newline_installer_filename
       fi
-      grep -q 'transferred installer SHA256 mismatch' /tmp/stl-newline-name-failure ||
+      grep -q 'installer SHA256 mismatch' /tmp/stl-newline-name-failure ||
         fail newline_filename_invalid_pin_rejection_diagnostic
       [[ ! -e /tmp/STL_UNTRUSTED_CODE_EXECUTED && ! -e /usr/local/bin/stl &&
          ! -e /usr/local/lib/simple-tun-link/install-record ]] ||
@@ -520,8 +555,8 @@ trusted_entry_sha=$(sha256sum -- "$entry" | awk '{print $1}')
 guest_script=$(realpath -e -- "${BASH_SOURCE[0]}")
 # Assert the root/sudo operator commands are equivalent, aside from
 # the real sudo prefix. The guest executes the actual root/sudo text.
-root_line=$(grep '^/bin/bash -c .*shopt -s nullglob' docs/INSTALL.md)
-sudo_line=$(grep '^/usr/bin/sudo /bin/bash -c .*shopt -s nullglob' docs/INSTALL.md)
+root_line=$(grep '^/usr/bin/env -i HOME=/root .*shopt -s nullglob' docs/INSTALL.md)
+sudo_line=$(grep '^/usr/bin/sudo /usr/bin/env -i HOME=/root .*shopt -s nullglob' docs/INSTALL.md)
 [[ -n $root_line && $sudo_line == "/usr/bin/sudo $root_line" ]] || fail operator_docs_drift
 [[ ${#root_line} -le 700 && ${#sudo_line} -le 700 ]] || fail local_operator_command_regressed_beyond_700_characters
 printf '%s\n' "$root_line" | bash -n || fail malformed_root_operator_command
