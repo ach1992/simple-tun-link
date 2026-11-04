@@ -296,6 +296,11 @@ alias_version="$("$scratch/prefix/bin/stlink" version --json)"
    $actual_version == *"\"commit\":\"$source_sha\""* ]] ||
   fail 'executable-reported identity mismatch'
 
+# Exercise the actual installed binary through a Linux controlling PTY.
+# Cancel-only navigation plus 38-column NO_COLOR must not mutate State or host.
+python3 scripts/e2e/terminal-operator-smoke.py "$installed" ||
+  fail 'installed binary terminal operator smoke failed'
+
 # Canonical uninstall is intentionally NOT invoked here: the real binary
 # checks the host's root-owned state and systemd restore-unit identity even
 # for a custom offline prefix. CI runners do not guarantee either is safe or

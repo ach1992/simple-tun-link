@@ -269,7 +269,7 @@ APT_STUB
           fail preflight_size_rejection_modified_installation
       done
       # A truncated but non-empty transferred payload within the size limit
-      # must fail the verified archive boundary, not install a broken build.
+      # must fail the independently pinned WHOLE-FILE SHA before shell execution.
       cp -- /root/stl-size-original "$file"
       original_size=$(stat -c %s -- "$file")
       (( original_size > 100 )) || fail invalid_fixture_size
@@ -277,7 +277,7 @@ APT_STUB
       if run_root_operator > /tmp/stl-truncated-failure 2>&1; then
         fail accepted_truncated_embedded_payload
       fi
-      grep -Eq 'SHA256 mismatch|invalid or oversized payload' /tmp/stl-truncated-failure ||
+      grep -q 'computed checksum did NOT match' /tmp/stl-truncated-failure ||
         { cat /tmp/stl-truncated-failure >&2; fail truncated_wrong_integrity_diagnostic; }
       [[ ! -e /usr/local/bin/stl &&
          ! -e /usr/local/lib/simple-tun-link/install-record ]] ||
