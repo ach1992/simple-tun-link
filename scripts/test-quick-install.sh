@@ -11,6 +11,18 @@ mapfile -t published_commands < <(grep '^bash -c .*stl-bootstrap.sh' "$repo/docs
   echo 'INSTALL.md must contain three verified official commands (latest, exact, update).' >&2
   exit 1
 }
+# README exposes the literal latest Install and Update commands. Verify they
+# are exactly the commands exercised from INSTALL.md, not unchecked variants.
+mapfile -t readme_commands < <(grep '^bash -c .*stl-bootstrap.sh' "$repo/README.md")
+[[ ${#readme_commands[@]} -eq 2 ]] || {
+  echo 'README must contain the two tested official commands (latest install and update).' >&2
+  exit 1
+}
+[[ ${readme_commands[0]} == "${published_commands[0]}" &&
+   ${readme_commands[1]} == "${published_commands[2]}" ]] || {
+  echo 'README Install/Update commands differ from tested INSTALL.md commands.' >&2
+  exit 1
+}
 # Public commands must NEVER need a changing tag, branch or token.
 # The immutable Stable asset itself pins the exact release tag.
 stable_url='https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh'

@@ -61,11 +61,11 @@ specific older release, use the
 Download on another trusted device, verify the publisher and release, then
 upload only the files you need to a root-owned, private `/root/stl/` folder:
 
-| Function | Official file matching destination architecture |
-| --- | --- |
-| Core (required) | `stl_vX.Y.Z_linux_amd64_local-install.sh` or `stl_vX.Y.Z_linux_arm64_local-install.sh` |
-| WSS (optional) | `wstunnel_11.0.0_linux_<arch>.tar.gz` from the [pinned wstunnel release](https://github.com/erebe/wstunnel/releases/tag/v11.0.0) |
-| QUIC (optional) | `hysteria-linux-<arch>` from the [pinned Hysteria release](https://github.com/HyNetworks/hysteria/releases/tag/app%2Fv2.13.0) |
+| Function | AMD64 (`x86_64`) | ARM64 (`aarch64`) |
+| --- | --- | --- |
+| Core (required) | `stl_vX.Y.Z_linux_amd64_local-install.sh` | `stl_vX.Y.Z_linux_arm64_local-install.sh` |
+| WSS (optional, wstunnel v11.0.0) | [`wstunnel_11.0.0_linux_amd64.tar.gz`](https://github.com/erebe/wstunnel/releases/download/v11.0.0/wstunnel_11.0.0_linux_amd64.tar.gz) | [`wstunnel_11.0.0_linux_arm64.tar.gz`](https://github.com/erebe/wstunnel/releases/download/v11.0.0/wstunnel_11.0.0_linux_arm64.tar.gz) |
+| QUIC (optional, Hysteria app/v2.13.0) | [`hysteria-linux-amd64`](https://github.com/HyNetworks/hysteria/releases/download/app/v2.13.0/hysteria-linux-amd64) | [`hysteria-linux-arm64`](https://github.com/HyNetworks/hysteria/releases/download/app/v2.13.0/hysteria-linux-arm64) |
 
 Replace `vX.Y.Z` with the exact
 [official Stable release tag](https://github.com/ach1992/simple-tun-link/releases/latest);
