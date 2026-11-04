@@ -49,7 +49,10 @@ func (e *Engine) EnsureWithQUICCredentialAdmitted(ctx context.Context, desired d
 	defer clear(copyKey)
 	p := &quicProvision{key: copyKey, store: store, bundle: bundle, publishHandoff: publishHandoff,
 		receiverAdmission: admission}
-	return e.ensureWithPolicy(context.WithValue(ctx, quicProvisionKey{}, p), desired, true)
+	// The first locked receiver check must precede the shared Ensure
+	// receipt/credential transition. Keep the later resource+restore-locked
+	// check before QUIC journal publication: locks can wait independently.
+	return e.ensureWithProvision(context.WithValue(ctx, quicProvisionKey{}, p), desired, true, nil, admission)
 }
 
 func quicNonce() (string, error) {

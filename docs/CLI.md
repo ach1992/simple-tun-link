@@ -409,9 +409,13 @@ new protected key/TLS provisioning or IPsec pending-State publication.
 After entering the canonical Engine, a **second admission** runs under
 the Link/maintenance locks immediately before native WireGuard/WSS
 credential staging, under Link/resource locks before IPsec PSK/pending
-State, and under the QUIC Link/resource/restore locks before its
-first protected creation journal. Address changes during lock waits
-therefore fail before these new durable protected effects.
+State. QUIC also checks under the Link/maintenance locks **before
+any shared Ensure State transition**, then checks again under its
+resource/restore locks before the first protected creation journal.
+A historical WireGuard removal receipt (whether its original key has
+been retired or not) **reserves that Link ID against QUIC Create/Import**;
+rejected QUIC Import must preserve the exact existing receipt. Address
+changes during lock waits therefore fail before new protected effects.
 A missing/ambiguous receiver **local underlay** or unavailable/incomplete
 inventory refuses Import before new recipient credentials or host effects;
 the operator is told to inspect `ip -json address show`, verify

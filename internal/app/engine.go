@@ -499,6 +499,17 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 	if err := admitReceiverUnderLock(ctx, desired, admission); err != nil {
 		return Result{}, err
 	}
+	// A managed QUIC original cannot reuse ANY historically removed WireGuard Link
+	// identity. The QUIC admission contract already reserves all removal
+	// receipts (including native WG, Retired=false/true); never consume one
+	// as ordinary Ensure's historical invalidation. Existing retirement
+	// evidence must survive an Import refusal and later reconciliation.
+	if desired.Backend == domain.BackendWireGuardQUIC {
+		if _, reserved := snapshot.FindRemovalReceipt(desired.ID); reserved {
+			return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID), string(desired.Backend),
+				"existing WireGuard removal receipt reserves this Link ID; create a fresh QUIC Link ID")
+		}
+	}
 	// Invalidate historical removal authority BEFORE a new attempt (even
 	// one which later fails apply) can stage a key or host resources. An
 	// old receipt must never authorize deleting an active retry's key.
