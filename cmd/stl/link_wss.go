@@ -260,6 +260,11 @@ func linkWSSCommand(args []string, in io.Reader, out, errOut io.Writer, options 
 		if subtle.ConstantTimeCompare([]byte(args[3]), []byte(setupLinkConfirmation(string(raw)))) != 1 {
 			return wssCommandError(operation, jsonOut, "", stlerr.CodeInvalid, "preview confirmation differs", out, errOut)
 		}
+		if operation == "import-wss" {
+			if ok, code := admitCLIImportReceiver(out, errOut, jsonOut, operation, offer.Receiver, options); !ok {
+				return code
+			}
+		}
 		if options == nil {
 			options, err = productionRuntimeOptions()
 			if err != nil {
@@ -276,8 +281,9 @@ func linkWSSCommand(args []string, in io.Reader, out, errOut io.Writer, options 
 		if operation == "import-wss" {
 			secret := []byte(offer.ReceiverWGKey)
 			defer clear(secret)
-			result, err = engine.EnsureWithWSSCredential(ctx, offer.Receiver, secret, keys,
-				func() error { return wss.Stage(options.stateRoot, offer.Receiver, offer.ReceiverTLS) })
+			result, err = engine.EnsureWithWSSCredentialAdmitted(ctx, offer.Receiver, secret, keys,
+				func() error { return wss.Stage(options.stateRoot, offer.Receiver, offer.ReceiverTLS) },
+				lockedImportReceiverAdmission(options))
 		} else {
 			// Resume uses the EXACT sender-oriented Link from the original
 			// handoff and previously staged credentials; never generate keys.

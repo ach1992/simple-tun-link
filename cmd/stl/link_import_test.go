@@ -131,7 +131,8 @@ func TestPlaintextIPIPImportAllEncapsulations(t *testing.T) {
 			source.Backend, source.Encapsulation = domain.BackendIPIP, encap
 			encoded := testQuickSetupLink(t, source, nil)
 			fake := &ipipImportFake{newLifecycleFake()}
-			options := &runtimeOptions{stateRoot: root, backends: []backend.Backend{fake}}
+			options := &runtimeOptions{stateRoot: root, backends: []backend.Backend{fake},
+				probeRunner: &greReceiverProbe{inventory: greReceiverInventory("eth0", "192.0.2.20")}}
 			var out, errOut bytes.Buffer
 			code := runWithRuntimeInput(
 				[]string{"link", "import", "--stdin", "--confirm", setupLinkConfirmation(encoded), "--json"},
@@ -324,7 +325,8 @@ func TestWireGuardV3ImportProtectedIdempotentAndRedacted(t *testing.T) {
 	receiverKey := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x52}, 32))
 	completeWireGuardFixture(t, &source, receiverKey)
 	url := testQuickSetupLink(t, source, []byte(receiverKey))
-	options := &runtimeOptions{stateRoot: root, backends: []backend.Backend{fake}}
+	options := &runtimeOptions{stateRoot: root, backends: []backend.Backend{fake},
+		probeRunner: &greReceiverProbe{inventory: greReceiverInventory("eth0", "192.0.2.20")}}
 	run := func(args ...string) (int, string, string) {
 		t.Helper()
 		var out, errOut bytes.Buffer
@@ -427,7 +429,8 @@ func TestWireGuardImportFailedActivationKeepsRetryableCredential(t *testing.T) {
 	secret := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x62}, 32))
 	completeWireGuardFixture(t, &source, secret)
 	url := testQuickSetupLink(t, source, []byte(secret))
-	options := &runtimeOptions{stateRoot: root, backends: []backend.Backend{fake}}
+	options := &runtimeOptions{stateRoot: root, backends: []backend.Backend{fake},
+		probeRunner: &greReceiverProbe{inventory: greReceiverInventory("eth0", "192.0.2.20")}}
 	invoke := func() (int, string) {
 		var out, errOut bytes.Buffer
 		code := runWithRuntimeInput([]string{"link", "import", "--stdin", "--confirm", setupLinkConfirmation(url), "--json"}, strings.NewReader(url), &out, &errOut, options)

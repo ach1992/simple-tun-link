@@ -95,7 +95,8 @@ func TestAllPlainGuidedCreateWithOfflinePeerAndManualLocalEndpoint(t *testing.T)
 			case domain.BackendL2TPv3:
 				receiver = &guidedL2TPv3Backend{lifecycleFakeBackend: receiverFake}
 			}
-			receiverOpts := &runtimeOptions{stateRoot: receiverRoot, backends: []backend.Backend{receiver}}
+			receiverOpts := &runtimeOptions{stateRoot: receiverRoot, backends: []backend.Backend{receiver},
+				probeRunner: &greReceiverProbe{inventory: greReceiverInventory("eth0", offer.ReceiverLink().Underlay.Local.String())}}
 			var output, errorOutput bytes.Buffer
 			exit := runWithRuntimeInput([]string{"link", "import", "--stdin", "--confirm", setupLinkConfirmation(encoded), "--json"},
 				strings.NewReader(encoded), &output, &errorOutput, receiverOpts)

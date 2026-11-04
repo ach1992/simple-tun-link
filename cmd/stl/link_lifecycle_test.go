@@ -157,7 +157,9 @@ func runLifecycleTest(t *testing.T, root string, b *lifecycleFakeBackend, args [
 		backends = []backend.Backend{b}
 	}
 	code := runWithRuntimeInput(args, strings.NewReader(stdin), &out, &errOut,
-		&runtimeOptions{stateRoot: root, backends: backends})
+		&runtimeOptions{stateRoot: root, backends: backends,
+			probeRunner: &greReceiverProbe{inventory: strings.TrimSuffix(greReceiverInventory("eth0", "192.0.2.20"), "]") +
+				"," + strings.TrimPrefix(greReceiverInventory("eth1", "192.0.2.35"), "[")}})
 	return code, out.String(), errOut.String()
 }
 

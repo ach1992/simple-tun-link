@@ -64,7 +64,13 @@ func ListLocalIPv4Endpoints(ctx context.Context, runner Runner) ([]LocalIPv4Endp
 // ErrUnderlaySourceMismatch means the kernel-selected source differed from the
 // committed local endpoint, and no uniquely assigned local alternative could
 // be proven. It is only used to select safe, local operator guidance.
-var ErrUnderlaySourceMismatch = errors.New("kernel route selected another local source")
+var (
+	ErrUnderlaySourceMismatch = errors.New("kernel route selected another local source")
+	// These diagnoses require a successfully parsed, bounded local inventory:
+	// failed captures cannot establish the recipient's identity.
+	ErrUnderlayLocalNotAssigned = hostaddress.ErrNotAssigned
+	ErrUnderlayLocalAmbiguous   = hostaddress.ErrAmbiguous
+)
 
 // ResolveConfiguredUnderlay chooses a locally assigned IPv4/interface for
 // Create/Import/Ensure. A route-to-peer lookup may suggest the outbound
@@ -92,8 +98,10 @@ func ResolveConfiguredUnderlay(ctx context.Context, routes interface {
 	}
 	assigned, err := BoundLocalIPv4(endpoints, local, "")
 	if err != nil {
+		// The shared, verified local binding classifier owns absence vs
+		// ambiguity. A kernel route hint is secondary, never host identity.
 		if routeErr == nil && suggested.Source != local {
-			return Route{}, fmt.Errorf("%w: %v", ErrUnderlaySourceMismatch, err)
+			return Route{}, fmt.Errorf("%w: %w", ErrUnderlaySourceMismatch, err)
 		}
 		return Route{}, err
 	}

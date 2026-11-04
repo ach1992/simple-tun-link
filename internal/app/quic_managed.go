@@ -21,10 +21,11 @@ import (
 
 type quicProvisionKey struct{}
 type quicProvision struct {
-	key            []byte
-	store          RecipientCredentialStore
-	bundle         quic.CredentialBundle
-	publishHandoff func() error
+	key               []byte
+	store             RecipientCredentialStore
+	bundle            quic.CredentialBundle
+	publishHandoff    func() error
+	receiverAdmission ReceiverAdmission
 }
 
 // EnsureWithQUICCredential is the only managed first-creation material path.
@@ -33,13 +34,25 @@ type quicProvision struct {
 // publishHandoff is only the command's protected no-clobber handoff writer.
 func (e *Engine) EnsureWithQUICCredential(ctx context.Context, desired domain.Link, key []byte,
 	store RecipientCredentialStore, bundle quic.CredentialBundle, publishHandoff func() error) (Result, error) {
+	return e.EnsureWithQUICCredentialAdmitted(ctx, desired, key, store, bundle, publishHandoff, nil)
+}
+
+// EnsureWithQUICCredentialAdmitted binds receiver readmission to the QUIC
+// journal's canonical post-resource-lock publication boundary.
+func (e *Engine) EnsureWithQUICCredentialAdmitted(ctx context.Context, desired domain.Link, key []byte,
+	store RecipientCredentialStore, bundle quic.CredentialBundle, publishHandoff func() error,
+	admission ReceiverAdmission) (Result, error) {
 	if ctx == nil || desired.Backend != domain.BackendWireGuardQUIC || store == nil || len(key) == 0 {
 		return Result{}, stlerr.New(stlerr.CodeInvalid, "quic_credential", string(desired.ID), string(desired.Backend), "QUIC requires protected local key and endpoint credentials")
 	}
 	copyKey := append([]byte(nil), key...)
 	defer clear(copyKey)
-	p := &quicProvision{key: copyKey, store: store, bundle: bundle, publishHandoff: publishHandoff}
-	return e.ensureWithPolicy(context.WithValue(ctx, quicProvisionKey{}, p), desired, true)
+	p := &quicProvision{key: copyKey, store: store, bundle: bundle, publishHandoff: publishHandoff,
+		receiverAdmission: admission}
+	// The first locked receiver check must precede the shared Ensure
+	// receipt/credential transition. Keep the later resource+restore-locked
+	// check before QUIC journal publication: locks can wait independently.
+	return e.ensureWithProvision(context.WithValue(ctx, quicProvisionKey{}, p), desired, true, nil, admission)
 }
 
 func quicNonce() (string, error) {
@@ -185,6 +198,15 @@ func (e *Engine) prepareManagedQUIC(ctx context.Context, req backend.Request, pr
 	release, err := e.locks.Acquire(ctx, []domain.ResourceClaim{restoreLockClaim()})
 	if err != nil {
 		return nil, state.QUICCrashOperation{}, err
+	}
+	// An Import can wait for maintenance, Link, resource and restore locks
+	// after its CLI preview succeeded. Recheck under all those locks,
+	// immediately before publishing the first durable QUIC crash journal.
+	if provision != nil {
+		if err := admitReceiverUnderLock(ctx, req.Link, provision.receiverAdmission); err != nil {
+			release()
+			return nil, state.QUICCrashOperation{}, err
+		}
 	}
 	err = e.store.Update(ctx, func(s *state.Snapshot) error {
 		if _, exists := s.FindQUICCrashOperation(req.Link.ID); exists {

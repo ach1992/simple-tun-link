@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -138,8 +139,14 @@ func TestGREImportReceiverReviewAgainstBoundedHostInventory(t *testing.T) {
 			if tc.wantApplies == 0 && strings.Contains(out, "Import this tunnel?") {
 				t.Fatal("non-admitted recipient was offered a host mutation confirmation")
 			}
-			if probe.calls != 1 {
-				t.Fatalf("expected exactly one bounded local inventory read, got %d", probe.calls)
+			wantReads := 1
+			if tc.wantApplies > 0 {
+				// The menu admission is deliberately rechecked at the
+				// CLI boundary before the canonical Engine runs.
+				wantReads = 2
+			}
+			if probe.calls != wantReads {
+				t.Fatalf("expected %d bounded local inventory reads, got %d", wantReads, probe.calls)
 			}
 			if len(fake.applies) != tc.wantApplies {
 				t.Fatalf("backend Apply count=%d want=%d; out=%q", len(fake.applies), tc.wantApplies, out)
@@ -155,5 +162,103 @@ func TestGREImportNoRemoteRecipientInferenceWhenSenderCannotBeObserved(t *testin
 	if !strings.Contains(out, "does not verify the sender's endpoint") ||
 		!strings.Contains(out, "Import cancelled") || len(fake.applies) != 0 {
 		t.Fatalf("receiver address observation falsely authenticated the sender or bypassed consent: %q", out)
+	}
+}
+
+// Shared recipient checks apply to every Setup Link family. A verified local
+// match is still not proof of the sender's intended recipient, even for NAT-T.
+func TestAllImportBackendsShareReceiverReview(t *testing.T) {
+	backends := []domain.Backend{
+		domain.BackendGRE, domain.BackendIPIP, domain.BackendL2TPv3,
+		domain.BackendWireGuard, domain.BackendWireGuardWSS,
+		domain.BackendWireGuardQUIC, domain.BackendIPsec,
+	}
+	const receiver = "192.0.2.20"
+	cases := []struct {
+		name, inventory, want string
+		err                   error
+		status                bool
+	}{
+		{"assigned", greReceiverInventory("eth0", receiver), "does not verify the sender's endpoint", nil, true},
+		{"other receiver", greReceiverInventory("eth0", "203.0.113.197"), "not assigned to THIS server", nil, false},
+		{"multiple assignments", strings.TrimSuffix(greReceiverInventory("eth0", receiver), "]") +
+			"," + strings.TrimPrefix(greReceiverInventory("eth1", receiver), "["), "multiple local interfaces", nil, false},
+		{"malformed inventory", "[bad-json-with-UNTRUSTED_PRIVATE_HOST_SECRET]", "could not be verified", nil, false},
+		{"failed capture", "", "could not be verified", errors.New("UNTRUSTED_PRIVATE_HOST_SECRET"), false},
+	}
+	for _, kind := range backends {
+		for _, tc := range cases {
+			t.Run(string(kind)+"/"+tc.name, func(t *testing.T) {
+				probe := &greReceiverProbe{inventory: tc.inventory, err: tc.err}
+				var out bytes.Buffer
+				allowed := reviewImportReceiver(&out, probe, receiver)
+				wantAllowed := tc.status
+				if allowed != wantAllowed || probe.calls != 1 || !strings.Contains(out.String(), tc.want) ||
+					strings.Contains(out.String(), "UNTRUSTED_PRIVATE_HOST_SECRET") {
+					t.Fatalf("incorrect shared receiver guidance: backend=%s allowed=%t want=%t observed=%q calls=%d",
+						kind, allowed, wantAllowed, out.String(), probe.calls)
+				}
+				if kind == domain.BackendIPsec && tc.name == "other receiver" &&
+					!strings.Contains(out.String(), "LOCAL underlay must be assigned") {
+					t.Fatal("IPsec NAT-T local binding rule was omitted")
+				}
+			})
+		}
+	}
+}
+
+// The actual versioned Quick Link menu shares the same refusal for every
+// tunnel kind, including protected WireGuard, IPsec ESP and NAT-T.
+// A stale pretyped YES must not bypass the first recipient check.
+func TestQuickLinkMenuRejectsOtherReceiverAcrossBackends(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		backend domain.Backend
+		encap   domain.Encapsulation
+		mode    string
+	}{
+		{"gre", domain.BackendGRE, domain.EncapNative, "1"},
+		{"ipip", domain.BackendIPIP, domain.EncapNative, "1"},
+		{"l2tpv3", domain.BackendL2TPv3, domain.EncapNative, "1"},
+		{"wireguard", domain.BackendWireGuard, domain.EncapUDP, "2"},
+		{"ipsec-esp", domain.BackendIPsec, domain.EncapESP, "2"},
+		{"ipsec-natt", domain.BackendIPsec, domain.EncapNATT, "2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			link, _ := makeLifecycleDesired(t, "b", "10.70.178.0/31")
+			link.Backend, link.Encapsulation = tc.backend, tc.encap
+			var credential []byte
+			if tc.backend == domain.BackendWireGuard {
+				key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32))
+				completeWireGuardFixture(t, &link, key)
+				credential = []byte(key)
+			}
+			if tc.backend == domain.BackendIPsec {
+				credential = bytes.Repeat([]byte{0x59}, 32)
+			}
+			offer := testQuickSetupLink(t, link, credential)
+			root := filepath.Join(t.TempDir(), "no-state")
+			fake := newLifecycleFake()
+			probe := &greReceiverProbe{inventory: greReceiverInventory("eth0", "203.0.113.197")}
+			var out, errOut bytes.Buffer
+			rc := runWithRuntimeInput([]string{"menu"},
+				strings.NewReader("2\n"+tc.mode+"\n"+offer+"\nYES\n8\n"),
+				&out, &errOut, &runtimeOptions{
+					stateRoot: root, backends: []backend.Backend{fake},
+					probeRunner: probe,
+				})
+			if rc != 0 || probe.calls != 1 ||
+				!strings.Contains(out.String(), "not assigned to THIS server") ||
+				strings.Contains(out.String(), "Import this tunnel?") ||
+				strings.Contains(out.String()+errOut.String(), offer) ||
+				strings.Contains(out.String()+errOut.String(), link.DisplayName) ||
+				len(fake.applies) != 0 {
+				t.Fatalf("%s wrong-host Quick Link was admitted: code=%d out=%q err=%q calls=%d",
+					tc.name, rc, out.String(), errOut.String(), probe.calls)
+			}
+			if _, err := os.Lstat(filepath.Join(root, "state.json")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("wrong-host Quick Link committed state: %v", err)
+			}
+		})
 	}
 }

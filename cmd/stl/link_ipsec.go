@@ -328,7 +328,8 @@ func executeIPsecRecipientImport(encoded, confirmation string, id domain.LinkID,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), lifecycleTimeLimit)
 	defer cancel()
-	if err = engine.StageIPsecRecipient(ctx, encoded, confirmation, keys); err != nil {
+	if err = engine.StageIPsecRecipientAdmitted(ctx, encoded, confirmation, keys,
+		lockedImportReceiverAdmission(opts)); err != nil {
 		return ipsecFailure(out, errOut, isJSON, stlerr.CodeOf(err), op, id,
 			"protected IPsec import staging failed or its outcome is uncertain", err)
 	}

@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ach1992/simple-tun-link/internal/app"
+	ipsecbackend "github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	wgbackend "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
@@ -180,7 +181,8 @@ func executeLinkMutationControlled(operation string, desired domain.Link, id dom
 				return lifecycleFailureWithEvidence(stdout, stderr, jsonOutput, stlerr.CodeState, operation, nil,
 					"cannot initialize protected WireGuard recipient store", preflightEvidence(), nil)
 			}
-			result, err = engine.EnsureImportedRecipient(ctx, desired, credential, keys)
+			result, err = engine.EnsureImportedRecipientAdmitted(ctx, desired, credential, keys,
+				lockedImportReceiverAdmission(options))
 		} else {
 			result, err = engine.EnsureImported(ctx, desired)
 		}
@@ -317,9 +319,14 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 			safe.ReasonCode = "rejected_before_host_apply"
 			safe.NextStep = "Inspect only this Link's saved owner identity, local kernel, firewall, helper and recovery journal. No remote connectivity or Create preparation is needed; reconcile uncertain resources before retrying removal. Engine did not invoke host Apply."
 		case observedPublic != nil && observedPublic.ReasonCode == "local_underlay_unverified" &&
-			operation != "link_remove" && evidence.HostMutation == "not_attempted" && (evidence.Stage == "plan" || evidence.Stage == "validate"):
-			safe.ReasonCode = "local_underlay_unverified"
-			safe.NextStep = "Inspect ip -json address show on THIS server. Choose a uniquely assigned local IPv4/interface in the menu or correct the request's local underlay IP. Creating or importing does not require peer reachability; no host Apply was invoked."
+			operation != "link_remove" && evidence.HostMutation == "not_attempted" && (evidence.Stage == "preflight" || evidence.Stage == "plan" || evidence.Stage == "validate"):
+			if errors.Is(observed, linux.ErrOutputLimit) || errors.Is(observed, ipsecbackend.ErrBoundedOutput) {
+				safe.ReasonCode = "local_underlay_capture_limited"
+				safe.NextStep = "The bounded local IPv4 inventory output exceeded its capture limit. Inspect ip -json address show on THIS server and restore reliable read-only inventory before importing; no backend Apply was attempted."
+			} else {
+				safe.ReasonCode = "local_underlay_unverified"
+				safe.NextStep = "Inspect ip -json address show on THIS server. Choose a uniquely assigned local IPv4/interface in the menu or correct the request's local underlay IP. Creating or importing does not require peer reachability; no host Apply was invoked."
+			}
 		case evidence.HostMutation == "not_attempted":
 			safe.ReasonCode = "rejected_before_host_apply"
 			safe.NextStep = "Correct prerequisites or conflicting intent, then inspect Link state read-only before retrying; Engine did not invoke host Apply."
@@ -353,6 +360,50 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 				safe.ReasonCode = observedPublic.ReasonCode
 				safe.NextStep = observedPublic.NextStep
 			}
+		}
+	}
+	// An independently verified local inventory can distinguish a wrong
+	// receiver address from ambiguous assignment and an unknown observation.
+	// Share this classification across every native/managed backend that uses
+	// ResolveConfiguredUnderlay. Do not parse raw kernel text or infer that a
+	// mismatching Setup Link was intentionally addressed to another host.
+	if observedPublic != nil && observedPublic.ReasonCode == "local_underlay_unverified" &&
+		evidence != nil && (evidence.Stage == "preflight" || evidence.Stage == "plan" || evidence.Stage == "validate") && evidence.HostMutation == "not_attempted" &&
+		evidence.CredentialProvision != "attempted" && operation != "link_remove" &&
+		!errors.Is(observed, context.DeadlineExceeded) && !errors.Is(observed, context.Canceled) {
+		switch {
+		case errors.Is(observed, linux.ErrUnderlayLocalNotAssigned):
+			safe.ReasonCode = "local_underlay_not_assigned"
+			safe.NextStep = "The configured local receiver IPv4 is not assigned to THIS host. Inspect ip -json address show; verify BOTH endpoints on the sender and create a fresh Setup Link if the recipient or IP was mistaken. No backend Apply was attempted."
+		case errors.Is(observed, linux.ErrUnderlayLocalAmbiguous):
+			safe.ReasonCode = "local_underlay_ambiguous"
+			safe.NextStep = "The receiver IPv4 is assigned on multiple local interfaces. Inspect ip -json address show and resolve the ambiguity before retrying. This does not prove which host was intended; no backend Apply was attempted."
+		}
+	}
+	// The IPsec backend can perform one final local IPv4 read inside Apply,
+	// AFTER the Engine has durably prepared the owner-scoped XFRM journal.
+	// Preserve the typed interruption/assignment cause, but never imply
+	// Host Apply or protected staging was not entered at this point.
+	if evidence != nil && evidence.Stage == "apply" &&
+		evidence.HostMutation == "attempted" &&
+		(evidence.Rollback == "unavailable" || evidence.Rollback == "not_required") &&
+		observedPublic != nil && observedPublic.Backend == string(domain.BackendIPsec) &&
+		errors.Is(observed, ipsecbackend.ErrCreateDeviceUnderlayRecheck) {
+		safe.NextStep = "IPsec Apply was entered, but the final local IPv4 check failed before XFRM device creation. Inspect ip -json address show and this Link's exact protected PSK, pending State and XFRM/VICI journals. Do not blindly retry, delete staged material or adopt foreign resources; reconcile first."
+		switch {
+		case errors.Is(observed, context.Canceled):
+			safe.ReasonCode = "ipsec_xfrm_underlay_cancelled"
+		case errors.Is(observed, context.DeadlineExceeded):
+			safe.ReasonCode = "ipsec_xfrm_underlay_timed_out"
+		case errors.Is(observed, ipsecbackend.ErrBoundedOutput):
+			safe.ReasonCode = "ipsec_xfrm_underlay_capture_limited"
+		case errors.Is(observed, linux.ErrUnderlayLocalNotAssigned):
+			safe.ReasonCode = "ipsec_xfrm_underlay_not_assigned"
+		case errors.Is(observed, linux.ErrUnderlayLocalAmbiguous):
+			safe.ReasonCode = "ipsec_xfrm_underlay_ambiguous"
+		default:
+			// Malformed or unavailable inventory never proves a wrong host.
+			safe.ReasonCode = "ipsec_xfrm_underlay_unverified"
 		}
 	}
 	// Only explicitly typed Engine WSS identity/journal denials get a

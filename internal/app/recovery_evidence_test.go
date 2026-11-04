@@ -263,7 +263,7 @@ func TestEngineProtectedCredentialProvisionIsNotMisreportedAsNoSideEffects(t *te
 					return errors.New("private_key=SECRET: simulated write failure")
 				}
 				return nil
-			})
+			}, nil)
 			if calls != 1 {
 				t.Fatalf("credential callback calls=%d", calls)
 			}

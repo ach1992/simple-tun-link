@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -228,5 +229,43 @@ func TestLocalInventoryPreservesCancellationAndTimeoutClassification(t *testing.
 	}
 	if r.calls != 0 {
 		t.Fatal("unbounded Run called after a cancellation")
+	}
+}
+
+// Only a complete local address inventory may assert that the receiver IP
+// is missing or ambiguous, even if the kernel route chose a different source.
+// Both route-observation and route-independent Create use this distinction.
+func TestConfiguredUnderlayDistinguishesObservedReceiverMistakes(t *testing.T) {
+	local := netip.MustParseAddr("192.0.2.10")
+	peer := netip.MustParseAddr("198.51.100.20")
+	for _, tc := range []struct {
+		name, inventory string
+		want            error
+	}{
+		{"missing", string([]byte{'['}) + "{\"ifname\":\"eth0\",\"addr_info\":[{\"family\":\"inet\",\"local\":\"192.0.2.11\"}]}]", ErrUnderlayLocalNotAssigned},
+		{"ambiguous", string([]byte{'['}) + "{\"ifname\":\"eth0\",\"addr_info\":[{\"family\":\"inet\",\"local\":\"192.0.2.10\"}]},{\"ifname\":\"eth1\",\"addr_info\":[{\"family\":\"inet\",\"local\":\"192.0.2.10\"}]}]", ErrUnderlayLocalAmbiguous},
+	} {
+		for _, hinted := range []bool{false, true} {
+			t.Run(tc.name+"/hint="+strconv.FormatBool(hinted), func(t *testing.T) {
+				routes := &offlineUnderlayRoutes{}
+				if hinted {
+					routes.source = netip.MustParseAddr("198.51.100.4")
+				}
+				runner := &capturedInventoryRunner{result: CommandResult{Stdout: []byte(tc.inventory)}}
+				got, err := ResolveConfiguredUnderlay(context.Background(), routes, runner, local, peer)
+				if got != (Route{}) || !errors.Is(err, tc.want) ||
+					(hinted && !errors.Is(err, ErrUnderlaySourceMismatch)) {
+					t.Fatalf("local evidence was not preserved: route=%+v err=%v", got, err)
+				}
+			})
+		}
+	}
+	runner := &capturedInventoryRunner{err: ErrOutputLimit}
+	_, err := ResolveConfiguredUnderlay(context.Background(), &offlineUnderlayRoutes{
+		source: netip.MustParseAddr("198.51.100.4"),
+	}, runner, local, peer)
+	if !errors.Is(err, ErrOutputLimit) || errors.Is(err, ErrUnderlayLocalNotAssigned) ||
+		errors.Is(err, ErrUnderlayLocalAmbiguous) {
+		t.Fatalf("incomplete inventory falsely diagnosed a wrong receiver: %v", err)
 	}
 }

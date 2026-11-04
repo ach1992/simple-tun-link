@@ -63,7 +63,8 @@ func TestIPIPInventoryFailureAtBothEnginePreApplyInspections(t *testing.T) {
 					link, _ := makeLifecycleDesired(t, "f", "10.70.52.0/31")
 					link.Backend, link.Encapsulation = domain.BackendIPIP, domain.EncapNative
 					fake := &stagedIPIPInventory{lifecycleFakeBackend: newLifecycleFake()}
-					opts := &runtimeOptions{stateRoot: root, backends: []backend.Backend{fake}}
+					opts := &runtimeOptions{stateRoot: root, backends: []backend.Backend{fake},
+						probeRunner: &greReceiverProbe{inventory: greReceiverInventory("eth0", link.Underlay.Peer.String())}}
 					if operation == "remove" {
 						before := desiredRequestJSON(t, link, desiredLinkSchemaVersion)
 						var out, errOut bytes.Buffer

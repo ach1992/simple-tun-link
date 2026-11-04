@@ -2,6 +2,7 @@ package hostaddress
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"slices"
@@ -32,9 +33,12 @@ type Endpoint struct {
 // Parse consumes local iproute2 address inventory only.
 // No route to a remote peer, online probe or host mutation is involved.
 func Parse(raw []byte) ([]Endpoint, error) {
+	// ip -json address show emits one object per interface, including an
+	// explicit addr_info array (possibly empty). A missing/null field is
+	// incomplete evidence, not evidence that an address is absent.
 	var rows []struct {
 		Name      string `json:"ifname"`
-		Addresses []struct {
+		Addresses *[]struct {
 			Family string `json:"family"`
 			Local  string `json:"local"`
 		} `json:"addr_info"`
@@ -42,13 +46,27 @@ func Parse(raw []byte) ([]Endpoint, error) {
 	if err := json.Unmarshal(raw, &rows); err != nil || rows == nil {
 		return nil, fmt.Errorf("cannot parse complete local IPv4 address inventory")
 	}
+	interfaces := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		if !validInterface(row.Name) || row.Addresses == nil || interfaces[row.Name] {
+			return nil, fmt.Errorf("local IPv4 address inventory contains an incomplete interface record")
+		}
+		interfaces[row.Name] = true
+		for _, item := range *row.Addresses {
+			if (item.Family != "inet" && item.Family != "inet6") || item.Local == "" {
+				return nil, fmt.Errorf("local IPv4 address inventory contains an incomplete address record")
+			}
+			ip, err := netip.ParseAddr(strings.TrimSpace(item.Local))
+			if err != nil || (item.Family == "inet" && !ip.Is4()) ||
+				(item.Family == "inet6" && !ip.Is6()) {
+				return nil, fmt.Errorf("local IPv4 address inventory contains an invalid address record")
+			}
+		}
+	}
 	found := map[Endpoint]bool{}
 	for _, row := range rows {
-		for _, item := range row.Addresses {
+		for _, item := range *row.Addresses {
 			if item.Family != "inet" {
-				if item.Family == "" && item.Local != "" {
-					return nil, fmt.Errorf("local IPv4 family is unverified")
-				}
 				continue
 			}
 			ip, err := netip.ParseAddr(strings.TrimSpace(item.Local))
@@ -94,6 +112,13 @@ func ValidIPv4(ip netip.Addr) bool {
 	return octets[0] != 0 && octets[0] < 240
 }
 
+// These typed results are valid only after a complete parsed local inventory.
+// They are shared by the native backends, IPsec and import UI.
+var (
+	ErrNotAssigned = errors.New("local IPv4 is not assigned to this host")
+	ErrAmbiguous   = errors.New("local IPv4 is assigned on multiple host interfaces")
+)
+
 func Unique(endpoints []Endpoint, local netip.Addr, device string) (Endpoint, error) {
 	if !ValidIPv4(local) {
 		return Endpoint{}, fmt.Errorf("select a usable IPv4 address actually assigned on this host")
@@ -104,8 +129,21 @@ func Unique(endpoints []Endpoint, local netip.Addr, device string) (Endpoint, er
 			matches = append(matches, ep)
 		}
 	}
-	if len(matches) != 1 {
-		return Endpoint{}, fmt.Errorf("local IPv4/interface must identify exactly one assigned host address; inspect ip -json address show and choose a unique local endpoint")
+	if len(matches) == 0 {
+		// A caller that explicitly selected a device may have chosen the
+		// wrong interface even when this IPv4 exists elsewhere on the host.
+		// That is NOT evidence of a wrong physical receiver.
+		if device != "" {
+			for _, ep := range endpoints {
+				if ep.Address == local {
+					return Endpoint{}, fmt.Errorf("local IPv4 is assigned on a different interface; inspect ip -json address show")
+				}
+			}
+		}
+		return Endpoint{}, fmt.Errorf("%w; inspect ip -json address show and choose an assigned local endpoint", ErrNotAssigned)
+	}
+	if len(matches) > 1 {
+		return Endpoint{}, fmt.Errorf("%w; inspect ip -json address show and choose a unique local interface", ErrAmbiguous)
 	}
 	return matches[0], nil
 }

@@ -60,6 +60,9 @@ func menuImportWSS(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
 	menuField(out, "THIS underlay", details.Underlay)
 	menuField(out, "THIS private IP", details.PrivateIP)
 	menuField(out, "TLS WSS TCP port", fmt.Sprintf("%d", offer.Receiver.WSS.TCPPort))
+	if !reviewImportReceiver(out, createRunner(opts), details.Underlay) {
+		return 2
+	}
 	menuNotice(out, "WARNING", "Private keys will be staged; the Engine will create an owned WG interface, nft guard and WSS helper. Peer traffic must then be checked independently.")
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
 		menuNotice(out, "WARNING", "Cannot obtain fresh terminal approval; no Link changed.")

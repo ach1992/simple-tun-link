@@ -559,12 +559,40 @@ func (b *OperationalBackend) resolveLocalUnderlay(ctx context.Context, link doma
 	if b.Runner == nil {
 		return HostRoute{}, fmt.Errorf("IPsec local IPv4 inventory runner unavailable")
 	}
+	if ctx == nil {
+		return HostRoute{}, fmt.Errorf("IPsec local IPv4 inventory context unavailable")
+	}
+	if err := ctx.Err(); err != nil {
+		return HostRoute{}, fmt.Errorf("IPsec local IPv4 inventory interrupted: %w", err)
+	}
 	binary := b.IPBinary
 	if binary == "" {
 		binary = "ip"
 	}
 	result, err := b.Runner.RunBounded(ctx, CaptureLimits{Stdout: 256 << 10, Stderr: 1024}, binary, "-json", "address", "show")
-	if err != nil || ctx.Err() != nil || len(result.Stderr) != 0 {
+	if ctx.Err() != nil {
+		return HostRoute{}, fmt.Errorf("IPsec local IPv4 inventory interrupted: %w", ctx.Err())
+	}
+	if err != nil {
+		switch {
+		case errors.Is(err, context.DeadlineExceeded):
+			return HostRoute{}, fmt.Errorf("IPsec local IPv4 inventory timed out: %w", context.DeadlineExceeded)
+		case errors.Is(err, context.Canceled):
+			return HostRoute{}, fmt.Errorf("IPsec local IPv4 inventory canceled: %w", context.Canceled)
+		case errors.Is(err, ErrBoundedOutput):
+			return HostRoute{}, fmt.Errorf("IPsec local IPv4 inventory exceeded bounded capture: %w", ErrBoundedOutput)
+		default:
+			// Unknown command errors may carry secrets; preserve neither
+			// their raw text nor untrusted stderr in typed/public failures.
+			return HostRoute{}, fmt.Errorf("cannot verify assigned local IPsec IPv4/interface")
+		}
+	}
+	if len(result.Stdout) > 256<<10 || len(result.Stderr) > 1024 {
+		// Defense in depth for a nonconforming injected bounded runner:
+		// never classify a truncated/oversized result as a complete host.
+		return HostRoute{}, fmt.Errorf("IPsec local IPv4 inventory exceeded bounded capture: %w", ErrBoundedOutput)
+	}
+	if len(result.Stderr) != 0 {
 		return HostRoute{}, fmt.Errorf("cannot verify assigned local IPsec IPv4/interface")
 	}
 	defer clear(result.Stdout)
@@ -585,14 +613,25 @@ func (b *OperationalBackend) resolveLocalUnderlay(ctx context.Context, link doma
 	return HostRoute{Source: link.Underlay.Local, Device: assigned.Interface}, nil
 }
 
+// ErrCreateDeviceUnderlayRecheck identifies the final local IPv4 readback
+// inside backend Apply, before the first XFRM device creation command. This
+// marker is internal to STL, not a new host/journal ownership authority.
+var ErrCreateDeviceUnderlayRecheck = errors.New("IPsec pre-XFRM local underlay recheck failed")
+
 func (b *OperationalBackend) createDevice(ctx context.Context, p Profile) (ipsecProgress, error) {
 	progress := ipsecProgress{}
 	if b.advanceDevice == nil {
 		return progress, fmt.Errorf("durable XFRM creation journal unavailable")
 	}
 	route, err := b.resolveLocalUnderlay(ctx, p.Link)
-	if err != nil || route.Source != p.Link.Underlay.Local || route.Device == "" {
-		return progress, fmt.Errorf("IPsec route changed before XFRM creation")
+	if err != nil {
+		// Keep only sanitized typed local inventory causes. Engine already
+		// entered Apply and may have prepared journals, so the CLI must
+		// distinguish this late check from pre-Apply rejection.
+		return progress, fmt.Errorf("%w: %w", ErrCreateDeviceUnderlayRecheck, err)
+	}
+	if route.Source != p.Link.Underlay.Local || route.Device == "" {
+		return progress, fmt.Errorf("%w: resolved IPsec local interface changed", ErrCreateDeviceUnderlayRecheck)
 	}
 	if err = b.XFRM.RequireVacant(ctx, p); err != nil {
 		return progress, fmt.Errorf("XFRM resources no longer vacant")
