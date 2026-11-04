@@ -101,6 +101,9 @@ deploy a public mirror; do not assume a particular mirror already exists.
    and verify the reversed local/peer endpoints and exact receiver role.
    Confirm the import explicitly. WSS/QUIC can require manual selection of
    `Listen` or `Dial`: the suggested direction is **not** reachability proof.
+   For IPsec, complete separately confirmed preparation and select
+   **My tunnels → Connect IPsec** on either peer after Import; Import alone
+   does not initiate IKEv2.
 4. Use **Test connectivity** on both hosts and test your application's
    private TCP/UDP traffic. Local interface health and peer-received packets
    are different observations.
