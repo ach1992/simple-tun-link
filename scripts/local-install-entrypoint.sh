@@ -89,40 +89,28 @@ source_bytes=$(stat -c %s -- "$source")
 (( source_bytes > archive_bytes && source_bytes <= 134250000 )) ||
   fail 'local installer has an invalid or oversized payload'
 
-# A missing or corrupt selected companion fails BEFORE core installation.
-# Canonical installer also verifies archive, executable, record and paths.
-companion="${source%/*}/wstunnel_11.0.0_linux_${architecture}.tar.gz"
-if [[ $enable_wss == 1 ]]; then
-  [[ -f $companion && ! -L $companion ]] ||
-    fail "WSS selected but official $(basename -- "$companion") absent; core unchanged"
-  case $architecture in
-    amd64) expected_companion_sha=9708a99717b5a951453c2ff7c14c25d3418d02ca7fcb96fdb382a8f2083bab5e ;;
-    arm64) expected_companion_sha=b86abf73e340ed0c3ff9a77a5458aa27213784920ec65513132b36def45edc94 ;;
-    *) fail 'unsupported optional WSS companion architecture' ;;
-  esac
-  [[ $(sha256sum -- "$companion" | awk '{print $1}') == "$expected_companion_sha" ]] ||
-    fail 'selected optional WSS archive SHA-256 mismatch; core unchanged'
+# The operator may copy the verified one-file entrypoint into a root-private
+# /root/.stl-preflight.* directory before authenticating/executing it. When
+# invoked from that precise protected location, selected companion transfers
+# remain in /root/stl. A trusted entrypoint (not the tiny first-hop command)
+# validates and privately snapshots each explicit companion before use.
+transfer_dir=${source%/*}
+if [[ $EUID == 0 && $transfer_dir =~ ^/root/\.stl-preflight\.[A-Za-z0-9]{8}$ ]]; then
+  transfer_dir=/root/stl
+  [[ -d $transfer_dir && ! -L $transfer_dir &&
+     $(stat -c %u:%a -- "$transfer_dir") == 0:700 ]] ||
+    fail 'untrusted /root/stl transfer directory; require root ownership and mode 0700'
+  original="$transfer_dir/$source_name"
+  [[ -f $original && ! -L $original &&
+     $(stat -c %u:%a -- "$original") =~ ^0:(600|644)$ &&
+     $(stat -c %h -- "$original") == 1 ]] ||
+    fail 'transferred installer source must be root-owned, regular, single-linked and mode 0600/0644'
 fi
 
-# QUIC is independently selected and never downloaded as a side effect.
-quic_companion="${source%/*}/hysteria-linux-${architecture}"
-if [[ $enable_quic == 1 ]]; then
-  [[ -f $quic_companion && ! -L $quic_companion ]] ||
-    fail "QUIC selected but official $(basename -- "$quic_companion") absent; core unchanged"
-  quic_bytes=$(stat -c %s -- "$quic_companion")
-  [[ $quic_bytes =~ ^[0-9]+$ ]] && (( quic_bytes > 1024 && quic_bytes < 100000000 )) ||
-    fail 'selected optional QUIC binary size is unsafe; core unchanged'
-  case $architecture in
-    amd64) expected_quic_sha=907ba8c9693edb104b20582681fb7dc15639d5b64a9cbb616a7b539190a86691 ;;
-    arm64) expected_quic_sha=a68a61a84452ca250ce0368202521965ca9cc9d801a404f1dc9008ac6cf677a7 ;;
-    *) fail 'unsupported optional QUIC companion architecture' ;;
-  esac
-  [[ $(sha256sum -- "$quic_companion" | awk '{print $1}') == "$expected_quic_sha" ]] ||
-    fail 'selected optional QUIC binary SHA-256 mismatch; core unchanged'
-fi
-
-# Take a private immutable-for-this-operation copy of the entire transferred
-# file before reading its embedded archive; no GitHub/download step is needed.
+# For direct source calls and for the verified short first hop alike, stage
+# the source and every explicitly selected companion inside root-private
+# storage. The authenticated snapshot is the ONLY optional-helper input used
+# by the canonical installer, so later original-file substitution is harmless.
 if [[ $EUID == 0 ]]; then
   stage=$(mktemp -d /root/.stl-local-install.XXXXXXXX) || fail 'private root staging failed'
 else
@@ -134,6 +122,65 @@ cp -- "$source" "$stage/entrypoint" || fail 'cannot snapshot local installer'
 chmod 0600 -- "$stage/entrypoint"
 [[ $(stat -c %s -- "$stage/entrypoint") == "$source_bytes" ]] ||
   fail 'transferred file changed while copying; transfer the official artifact again'
+
+snapshot_companion() {
+  local original_path=$1 name=$2 min_bytes=$3 max_bytes=$4 label=$5
+  [[ -f $original_path && ! -L $original_path ]] ||
+    fail "$label selected but official $name absent, not regular or symlinked; core unchanged"
+  local uid mode size
+  uid=$(stat -c %u -- "$original_path") ||
+    fail "cannot inspect selected optional $name owner"
+  mode=$(stat -c %a -- "$original_path") ||
+    fail "cannot inspect selected optional $name permissions"
+  if [[ $EUID == 0 ]]; then
+    [[ $uid == 0 && ( $mode == 600 || $mode == 644 ) ]] ||
+      fail "selected optional $name must be root-owned and mode 0600/0644; core unchanged"
+  else
+    [[ $uid == "$EUID" && $mode =~ ^[0-7]{3,4}$ ]] &&
+      (( (8#$mode & 8#022) == 0 )) ||
+      fail "selected optional $name must be admin-owned and not group/other-writable; core unchanged"
+  fi
+  size=$(stat -c %s -- "$original_path") ||
+    fail "cannot inspect selected optional $name size"
+  [[ $size =~ ^[0-9]+$ ]] &&
+    (( size >= min_bytes && size <= max_bytes )) ||
+    fail "selected optional $name size is unsafe; core unchanged"
+  cp -- "$original_path" "$stage/$name" ||
+    fail "cannot snapshot selected optional $name"
+  chmod 0600 -- "$stage/$name"
+  [[ $(stat -c %s -- "$stage/$name") == "$size" ]] ||
+    fail "selected optional $name changed while copying; core unchanged"
+}
+
+companion="$stage/wstunnel_11.0.0_linux_${architecture}.tar.gz"
+if [[ $enable_wss == 1 ]]; then
+  snapshot_companion "$transfer_dir/wstunnel_11.0.0_linux_${architecture}.tar.gz" \
+    "wstunnel_11.0.0_linux_${architecture}.tar.gz" 1 100000000 WSS
+  case $architecture in
+    amd64) expected_companion_sha=9708a99717b5a951453c2ff7c14c25d3418d02ca7fcb96fdb382a8f2083bab5e ;;
+    arm64) expected_companion_sha=b86abf73e340ed0c3ff9a77a5458aa27213784920ec65513132b36def45edc94 ;;
+    *) fail 'unsupported optional WSS companion architecture' ;;
+  esac
+  actual_sha=$(sha256sum < "$companion")
+  [[ ${actual_sha%% *} == "$expected_companion_sha" ]] ||
+    fail 'selected optional WSS archive SHA-256 mismatch; core unchanged'
+fi
+
+# QUIC is independently selected and never downloaded as a side effect.
+quic_companion="$stage/hysteria-linux-${architecture}"
+if [[ $enable_quic == 1 ]]; then
+  snapshot_companion "$transfer_dir/hysteria-linux-${architecture}" \
+    "hysteria-linux-${architecture}" 1025 99999999 QUIC
+  case $architecture in
+    amd64) expected_quic_sha=907ba8c9693edb104b20582681fb7dc15639d5b64a9cbb616a7b539190a86691 ;;
+    arm64) expected_quic_sha=a68a61a84452ca250ce0368202521965ca9cc9d801a404f1dc9008ac6cf677a7 ;;
+    *) fail 'unsupported optional QUIC companion architecture' ;;
+  esac
+  actual_sha=$(sha256sum < "$quic_companion")
+  [[ ${actual_sha%% *} == "$expected_quic_sha" ]] ||
+    fail 'selected optional QUIC binary SHA-256 mismatch; core unchanged'
+fi
+
 archive="$stage/$archive_name"
 tail -c "$archive_bytes" -- "$stage/entrypoint" > "$archive" ||
   fail 'cannot read embedded archive'
