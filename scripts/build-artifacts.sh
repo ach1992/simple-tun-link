@@ -120,8 +120,9 @@ For the simplest installation, download the ONE official matching release
 file stl_${version}_linux_${arch}_local-install.sh instead of this tar.gz.
 Transfer the .sh file unchanged into /root/stl/ and, with that ONE file
 present, run as an administrator:
-    As root: use the one-command trusted preflight in this release's README.
-    Or, as a non-root administrator, use the documented sudo variant.
+    As root: use the one-command trusted preflight in docs/INSTALL.md
+    from the matching source commit or published release tag.
+    Or, as a non-root administrator, use its documented sudo variant.
     Do NOT run the transferred shell file directly as root: its own source
     checks cannot defend against malicious instructions injected before them.
 

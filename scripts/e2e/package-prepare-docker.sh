@@ -32,7 +32,7 @@ grep -qx "commit=$source_sha" "$root/bundle/BUILD-MANIFEST.txt" || fail wrong_bu
 ) || fail bundle_checksum_mismatch
 archive="$root/bundle/stl_dev-${short_sha}_linux_${arch}_local-install.tar.gz"
 [[ -f $archive ]] || fail missing_local_install_archive
-# Execute the README single-file command from transferred bytes in native
+# Execute the INSTALL.md single-file command from transferred bytes in native
 # disposable guests, including signed APT positive/negative behavior.
 STL_E2E_DISPOSABLE_HOST=approved bash scripts/e2e/local-one-command-docker.sh \
   "$root/bundle" "$image" "$arch" "dev-${short_sha}"

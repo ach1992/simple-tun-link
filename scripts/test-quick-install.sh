@@ -6,9 +6,21 @@ set -Eeuo pipefail
 umask 077
 repo="$(cd -- "$(dirname -- "$0")/.." && pwd -P)"
 # Stable release bumps must keep the permanent first-hop install/update text.
-mapfile -t published_commands < <(grep '^bash -c .*stl-bootstrap.sh' "$repo/README.md")
+mapfile -t published_commands < <(grep '^bash -c .*stl-bootstrap.sh' "$repo/docs/INSTALL.md")
 [[ ${#published_commands[@]} -eq 3 ]] || {
-  echo 'README must contain three verified, stable-prefix quick commands (latest, exact, update).' >&2
+  echo 'INSTALL.md must contain three verified official commands (latest, exact, update).' >&2
+  exit 1
+}
+# README exposes the literal latest Install and Update commands. Verify they
+# are exactly the commands exercised from INSTALL.md, not unchecked variants.
+mapfile -t readme_commands < <(grep '^bash -c .*stl-bootstrap.sh' "$repo/README.md")
+[[ ${#readme_commands[@]} -eq 2 ]] || {
+  echo 'README must contain the two tested official commands (latest install and update).' >&2
+  exit 1
+}
+[[ ${readme_commands[0]} == "${published_commands[0]}" &&
+   ${readme_commands[1]} == "${published_commands[2]}" ]] || {
+  echo 'README Install/Update commands differ from tested INSTALL.md commands.' >&2
   exit 1
 }
 # Public commands must NEVER need a changing tag, branch or token.

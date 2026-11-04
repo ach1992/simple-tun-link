@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Literal README one-file/one-command acceptance inside DISPOSABLE guests.
+# Literal INSTALL.md one-file/one-command acceptance inside DISPOSABLE guests.
 # No host packages, STL installation, Docker socket, privileged caps or host
 # networking are ever mounted into the guest. Called by package-prepare E2E.
 set -Eeuo pipefail
@@ -8,13 +8,13 @@ umask 077
 if [[ ${1:-} == guest && -e /.dockerenv && ${STL_E2E_DISPOSABLE_GUEST:-} == approved ]]; then
   [[ $EUID == 0 ]] || exit 98
   fail() { echo "LOCAL_ONE_COMMAND_GUEST_FAILED=$*" >&2; exit 1; }
-  # Read and execute the literal release-facing command from README, not
+  # Read and execute the literal operator command from INSTALL.md, not
   # a test-local paraphrase. Root guests have no sudo requirement.
   run_root_operator() {
     local line
-    line=$(grep '^bash -c .*stl-preflight' /mnt/stl-readme)
+    line=$(grep '^bash -c .*stl-preflight' /mnt/stl-install-doc)
     [[ $(printf '%s\n' "$line" | wc -l) == 1 ]] || fail missing_root_operator_command
-    # Accepted literal README invocations only; the option string is fixed,
+    # Accepted literal INSTALL.md invocations only; the option string is fixed,
     # never supplied by an untrusted fixture or derived from archive contents.
     case "$*" in
       ""|--with-wss|--with-quic|"--with-wss --with-quic") ;;
@@ -91,7 +91,7 @@ APT_STUB
       ;;
     wss-invalid)
       # Original transfer contains an invalid official-named archive. The
-      # complete README command must privately co-snapshot it and reach the
+      # complete INSTALL.md command must privately co-snapshot it and reach the
       # PINNED-SHA error, not "archive absent" from the preflight directory.
       c="/root/stl/wstunnel_11.0.0_linux_${STL_E2E_ARCH}.tar.gz"
       head -c 2048 /dev/zero > "$c"
@@ -132,7 +132,7 @@ APT_STUB
       echo "LITERAL_OFFLINE_WSS_COMPANION_VALIDATED_AND_INSTALLED=PASS"
       ;;
     quic-invalid)
-      # The README command must snapshot the selected transferred Hysteria
+      # The INSTALL.md command must snapshot the selected transferred Hysteria
       # binary and reach its pinned digest guard before any core mutation.
       c="/root/stl/hysteria-linux-${STL_E2E_ARCH}"
       head -c 2048 /dev/zero > "$c"
@@ -345,9 +345,9 @@ entry="$bundle/$entry_name"
 ) || fail 'candidate checksums differ'
 
 guest_script=$(realpath -e -- "${BASH_SOURCE[0]}")
-# Assert both documentation commands are exactly equivalent, aside from
+# Assert the root/sudo operator commands are equivalent, aside from
 # the real sudo prefix. The guest executes the actual root/sudo text.
-root_line=$(grep '^bash -c .*stl-preflight' README.md)
+root_line=$(grep '^bash -c .*stl-preflight' docs/INSTALL.md)
 sudo_line=$(grep '^sudo bash -c .*stl-preflight' docs/INSTALL.md)
 [[ -n $root_line && $sudo_line == "sudo $root_line" ]] || fail operator_docs_drift
 printf '%s\n' "$root_line" | bash -n || fail malformed_root_operator_command
@@ -404,7 +404,6 @@ for scenario in missing-packages preinstalled-no-apt blocked-mirror preflight-si
     -v "$quic_file:/mnt/stl-quic-binary:ro" \
     -v "$entry:/mnt/stl-entry.sh:ro" \
     -v "$guest_script:/mnt/stl-guest-driver.sh:ro" \
-    -v "$PWD/README.md:/mnt/stl-readme:ro" \
     -v "$PWD/docs/INSTALL.md:/mnt/stl-install-doc:ro" \
     "$image" /bin/bash /mnt/stl-guest-driver.sh guest
   printf 'LOCAL_ONE_COMMAND_%s=PASS (%s linux/%s)\n' "$scenario" "$image" "$arch"
@@ -440,7 +439,6 @@ docker run --rm --network bridge \
   -v "$fixture/v999.0.0/$older_name:/mnt/stl-older.sh:ro" \
   -v "$fixture/v999.0.1/$newer_name:/mnt/stl-newer.sh:ro" \
   -v "$guest_script:/mnt/stl-guest-driver.sh:ro" \
-  -v "$PWD/README.md:/mnt/stl-readme:ro" \
   -v "$PWD/docs/INSTALL.md:/mnt/stl-install-doc:ro" \
   "$image" /bin/bash /mnt/stl-guest-driver.sh guest
 printf 'LOCAL_ONE_COMMAND_STABLE_UPDATE_AND_DOWNGRADE_REFUSAL=PASS (%s linux/%s)\n' "$image" "$arch"
