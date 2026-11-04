@@ -456,6 +456,7 @@ docker run --rm --network bridge \
   -e STL_E2E_DISPOSABLE_GUEST=approved \
   -e STL_E2E_SCENARIO=stable-update \
   -e STL_E2E_ENTRY_NAME="$entry_name" \
+  -e STL_E2E_TRUSTED_ENTRY_SHA256="$trusted_entry_sha" \
   -e STL_E2E_OLDER_NAME="$older_name" \
   -e STL_E2E_NEWER_NAME="$newer_name" \
   -e STL_E2E_OLDER_SHA="$older_sha" \
