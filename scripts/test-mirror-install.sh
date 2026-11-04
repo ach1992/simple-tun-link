@@ -236,12 +236,10 @@ fi
 # the same trailing-LF bypass. Only its first-hop URL is redirected to the
 # isolated TLS fixture; the payload is deliberately harmless (no sudo).
 official_url='https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh'
-mapfile -t official_commands < <(grep '^bash -c .*stl-bootstrap.sh' "$repo/README.md")
+mapfile -t official_commands < <(grep '^bash -c .*stl-bootstrap.sh' "$repo/docs/INSTALL.md")
 [[ ${#official_commands[@]} -eq 3 ]] ||
   { echo 'MIRROR_TEST_FAIL: expected three published official commands' >&2; exit 1; }
 for official_line in "${official_commands[@]}"; do
-  grep -Fx -- "$official_line" "$repo/docs/INSTALL.md" >/dev/null ||
-    { echo 'MIRROR_TEST_FAIL: official user commands disagree' >&2; exit 1; }
   official_bad=${official_line/"$official_url"/"$base/official-newline-oversize.sh"}
   [[ $official_bad == *"$base/official-newline-oversize.sh"* ]] ||
     { echo 'MIRROR_TEST_FAIL: official first-hop fixture substitution failed' >&2; exit 1; }

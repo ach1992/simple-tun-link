@@ -1,488 +1,167 @@
 # Simple Tun Link (STL)
 
-**Create and manage point-to-point IP tunnels between Linux servers.**
-STL gives each endpoint a private **Link Address** that applications can
-use without needing to understand the underlying tunnel technology.
+**Create and manage private IP links between Linux servers.** STL gives each
+endpoint a private Link Address and handles Create, Import, Status, Diagnose,
+Restore and Remove. Use its guided terminal menu or versioned CLI/JSON. A
+saved Link is **not** proof that packets reach its peer.
 
-Use STL directly through a guided terminal menu, or integrate it into
-other software through versioned CLI/JSON commands. One host can manage
-multiple independent Links, including different supported transports
-to the same peer. Native Linux backends carry packets without a Go
-userspace forwarding loop.
+## What STL supports
 
-**First connection:** Prefer the same supported Stable release on both hosts,
-run `sudo stl menu`, create a tunnel on the first server, privately share its
-Setup Link, import it on the second, then choose **Test connectivity** on both.
-STL does not claim that a Link works merely because it was saved.
-For WSS/QUIC, **Enter** at the creation-direction prompt accepts only an
-**unverified** suggested public Dial/Listen role; **1=Listen** or **2=Dial**
-overrides it for THIS server, with the paired server taking the other role.
-A suggested direction is not a network reachability test; a working public
-Carrier and real private application traffic require separate checks.
-Version equality is recommended but **not intrinsically required for GRE**: the
-v0.1.9 and v0.1.13 GRE Setup Link codec is compatible. Host routing,
-firewall ownership and kernel capabilities must still pass on both endpoints.
+| Option | Connection | Encryption |
+| --- | --- | --- |
+| GRE / IPIP | Native IP, optionally FOU/GUE over UDP | No |
+| L2TPv3 Direct-IP | Native IP protocol 115 | No |
+| WireGuard | Native UDP | Yes |
+| WireGuard over WSS/TLS | TCP/TLS plus kernel WireGuard; optional `wstunnel` | Yes |
+| WireGuard over QUIC | QUIC/TLS plus kernel WireGuard; optional Hysteria (Plain or Salamander) | Yes |
+| IPsec | Native IKEv2/XFRM, ESP or NAT-T; gated host preparation | Yes |
 
-## Latest Stable and verified scope
-
-The **authoritative latest release** is [GitHub Latest
-Stable](https://github.com/ach1992/simple-tun-link/releases/latest); do not infer it
-from a branch name or an old Issue. At the **2026-10-31 delivery checkpoint**,
-[immutable v0.1.20](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.20)
-was published from `7ec8667583935843eb387c411372f9fa2e9fe8dc` and verified installed on **IRPT-101** (Ubuntu 22.04) and **DE-Hamed-Test** (Ubuntu
-26.04). Version/checksum, idempotent reinstall, unchanged protected
-State/companions/network and zero saved Links passed. The v0.1.20 patch changes only
-read-only IPsec recovery `next_step` guidance.
-
-The latest **real bilateral WAN application** evidence for this pair belongs to
-**v0.1.19**: WSS/TLS and QUIC/Salamander worked with **DE public Dial → IR public
-Listen**, with private applications initiated from both ends, and GRE Native passed
-bounded private ICMP. Later GRE FOU/GUE UDP packets did not reach the receiving
-interface; IPIP/native WireGuard did not establish usable paths in those tests, and
-IPsec admission was blocked by the existing foreign-service environment. **v0.1.20 WAN
-traffic, genuine host reboot and soak have not been re-tested.** See [physical
-acceptance #93](https://github.com/ach1992/simple-tun-link/issues/93), [cross-backend
-owner #142](https://github.com/ach1992/simple-tun-link/issues/142) and [installer
-#146](https://github.com/ach1992/simple-tun-link/issues/146). A saved Link, local
-readiness and proved peer traffic are distinct levels of evidence.
-
-## Tunnel options
-
-| Backend | Transport | Encrypted? | Typical choice |
-| --- | --- | --- | --- |
-| **GRE** | Native, FOU/UDP, GUE/UDP | No | Simplest default; fast plaintext L3 connectivity |
-| **IPIP** | Native, FOU/UDP, GUE/UDP | No | Alternative plaintext L3 encapsulation |
-| **L2TPv3 Direct-IP** | IP protocol 115; kernel Ethernet pseudowire | No | Alternative private IPv4 between Linux peers where protocol 115 is reachable |
-| **WireGuard** | UDP | Yes | Encrypted point-to-point connection |
-| **WireGuard over WSS/TLS** | WSS over TCP + private kernel WG | Yes (mTLS and WireGuard) | Optional managed Carrier when the peer can reach a selected TLS TCP port |
-| **WireGuard over QUIC/TLS** | QUIC over UDP + private kernel WG | Yes (mTLS and WireGuard) | Optional managed Carrier with the separately pinned Hysteria companion |
-| **IPsec** | IKEv2/XFRM, ESP or NAT-T | Yes | Advanced encrypted transport; requires a verified STL-owned strongSwan runtime |
-
-GRE keys and UDP encapsulation do **not** encrypt or authenticate traffic.
-L2TPv3 also does **not** authenticate or encrypt packets, and private-IP success
-depends on actual peer reachability rather than only a local `UP` interface.
-Its native Linux session/interface and permanent neighbor are managed as
-STL-owned resources; it needs `l2tp_ip` / `l2tp_eth` kernel support.
-
-A supported backend also requires compatible kernel capabilities and
-actual network reachability on both servers. STL does not change a
-cloud-provider firewall, configure NAT forwarding, or guarantee passage
-through every network.
+Different transports have different kernel, firewall, network and optional
+helper requirements. STL does not automatically configure provider firewalls,
+NAT or foreign VPNs, and no transport works through every network.
 
 ## Requirements
 
-Two Linux servers you administer, with reachable underlay IP addresses
-and root/sudo access. The supported installer baseline is **Ubuntu 22.04+
-or Debian 11+**, **amd64/arm64**, kernel **5.4+** and iproute2 **5.1+**;
-systemd is used for automatic reboot restoration. Debian 11 requires
-working maintained/signed repositories after the end of standard LTS.
-Backend support is checked on each host rather than assumed from the OS
-name alone. See [supported environments](docs/SUPPORTED-ENVIRONMENTS.md).
-
-Allow the selected underlay transport in the relevant host/provider rules:
-GRE Native uses **IP protocol 47** (not TCP port 47); L2TPv3 Direct-IP uses
-**IP protocol 115** (not TCP/UDP port 115); WireGuard uses
-the selected UDP port; IPsec typically needs UDP **500/4500** and/or ESP.
-For **WSS**, open the chosen TLS **TCP** port on the listening host and
-install the explicitly selected, verified `wstunnel v11.0.0` companion on
-both endpoints. STL protects the **kernel WireGuard UDP port** with a
-Link-scoped ingress guard; do **not** publish that port to the Internet.
-Use non-overlapping private Link Address subnets.
-
-Managed WireGuard over QUIC/TLS is available starting with **Stable v0.1.16**.
-Both endpoints require the separately pinned Hysteria companion and supported
-host capabilities. Its prerequisites, confidential peer setup, diagnostics
-and recovery are documented in
-[managed QUIC](docs/CLI.md#managed-wireguard-over-quictls).
-For QUIC, permit only the selected public **UDP** listener through the
-underlay firewall; its kernel WireGuard UDP ports remain guarded. Local
-activation, peer authentication and actual private traffic are verified
-separately.
-The QUIC mode is explicit: **Plain** remains the default; **Salamander**
-uses the pinned helper's supported packet obfuscation with a fresh protected
-per-Link secret. Both peers must use the same mode. TLS/mTLS and WireGuard
-authentication remain required, and no mode guarantees reachability in either
-dial direction. Follow the [versioned CLI contract](docs/CLI.md#managed-wireguard-over-quictls)
-for the installed release; successful source or local tests do not establish
-physical-path acceptance.
+- Two supported Linux servers you administer; use a matching architecture
+  (`x86_64` = AMD64, `aarch64` = ARM64). See
+  [supported systems](docs/SUPPORTED-ENVIRONMENTS.md).
+- Root privileges (or authorized `sudo`) for local network changes.
+- An actually reachable public/underlay path for the selected transport.
+- An accessible **signed** Debian/Ubuntu APT repository only when selected OS
+  prerequisites are missing. STL does not overwrite APT sources.
 
 ## Install on both servers
 
-Use the current [official Stable release](https://github.com/ach1992/simple-tun-link/releases/latest).
-The permanent Stable installer URL remains the same across releases:
+Use the [latest official Stable release](https://github.com/ach1992/simple-tun-link/releases/latest).
+Run this complete-download, syntax-checked installer on each server:
 
 ~~~bash
 bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 | tr "\000" "\001" && printf x) && (( ${#s} > 1 && ${#s} <= 131073 )) && [[ $s != *$(printf "\001")* ]] && s=${s%x} && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl
 ~~~
 
-The short wrapper first captures the **complete** tag-pinned bootstrap
-in memory (maximum 128 KiB and a 45-second total transfer deadline)
-and checks curl's exit status and Bash syntax before running it.
-Do not replace it with a bare `curl | bash` pipeline: a failed download can
-otherwise be hidden and a partially streamed script may execute. For a requested older exact Stable suffix, the **new
-bootstrap** verifies the official complete immutable release via the GitHub
-API (Python 3 required) *before* root execution. It executes only the
-bootstrap's currently pinned canonical installer; the selected older tag
-is an artifact/version argument, never executable older shell source.
-The canonical installer verifies checksums, build identity and installed-file
-ownership. A checksum supplied by the
-same publisher is **not** an independent publisher signature: review
-the official release, source and installer before privileged execution.
+It fetches a bounded, complete HTTPS bootstrap before execution. The verified
+bootstrap and canonical installer then check the released artifact's checksums
+and version/source identity. A publisher's own checksum is not an independent
+signature; verify that you trust the official publisher before privileged use.
+**Do not replace this command with an unchecked `curl | bash` pipeline.**
 
-For servers that cannot reach GitHub, prepare and serve the same release
-from a trusted domestic HTTPS mirror; see [self-hosted mirror setup](docs/MIRROR.md).
-The mirror does not contact GitHub on the target.
-
-By default, the installer selects GRE/IPIP and WireGuard prerequisites.
-It opens the guided menu on an interactive terminal; otherwise run:
-
-~~~sh
-sudo stl menu
-~~~
-
-Verify the installed version with `stl version --json`. When updating an
-existing managed WSS Dial Link from an older Stable, replacing the STL binary
-alone does **not** recreate its running systemd helper or activate the
-new dialer reconnect wakeup. See the separately approved
-[managed WSS upgrade procedure](docs/INSTALL.md#existing-managed-wss-dial-helper-after-updating-to-v0112).
-For IPsec, inspect the **read-only** `sudo stl doctor ipsec --json` report,
-especially `provisioning_readiness`. Only after a fresh, qualified
-STL-exclusive preflight, use `sudo stl menu` → **Create tunnel →
-Advanced types → IPsec → PREPARE**; Link creation needs **separate**
-confirmation. An unowned or ambiguous StrongSwan service cannot be adopted.
-Stopping an independently verified eligible official service requires
-distinct exact `STOP strongswan.service` consent. See
-[IPsec preparation and ownership](docs/INSTALL.md#installation-and-runtime-ownership).
-
-### Install an exact older published Stable
-
-Use the **same one-line installer** above and append only the desired Stable
-version at the end. For example, select the official **v0.1.9**:
+After installation, open the menu or verify the installed version:
 
 ~~~bash
-bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 | tr "\000" "\001" && printf x) && (( ${#s} > 1 && ${#s} <= 131073 )) && [[ $s != *$(printf "\001")* ]] && s=${s%x} && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl v0.1.9
+sudo stl menu
+stl version --json
 ~~~
 
-Use no suffix for Latest Stable. The same trusted bootstrap fetches and
-verifies the selected official release; no local file preparation is needed.
-For an already installed host, use **Update** in the STL menu to upgrade;
-Downgrade is only eligible with **canonical empty State and no historical
-receipts**, not merely zero saved Links. A binary change must never
-silently erase Links or protected State. Stable v0.1.15 also fixes the
-Update release-list display for the real GitHub API response above 256 KiB,
-while retaining a bounded response and official immutable-release checks.
-See [Issue #176](https://github.com/ach1992/simple-tun-link/issues/176).
+Already installed? Use **Update**, not a new Install; see below. For a
+specific older release, use the
+[version-pinned procedure](docs/INSTALL.md#verified-stable-bootstrap-commands-latest-or-exact-stable-tag).
 
-### Local installation without GitHub access on the server
+### Install when the server cannot reach GitHub
 
-Already installed STL Core? Use `sudo stl menu` and select WSS or QUIC
-under Create/Import. STL offers a consented, SHA256-verified **online
-download + install** of only that pinned optional helper, or **Install
-local** from the exact pre-transferred `/root/stl/` asset when GitHub is
-unreachable. Both paths use one canonical installer and never create
-a Link until separately confirmed. See [Install](docs/INSTALL.md#interactive-on-demand-companion-installation-online-or-local).
+Download on another trusted device, verify the publisher and release, then
+upload only the files you need to a root-owned, private `/root/stl/` folder:
 
-**Download, upload, run one command.** No compiler, extraction, separate
-STL binary, manifest transfer or manual helper installation is needed.
-Core-only local installation starts with Stable v0.1.9; WSS needs STL v0.1.10+
-and QUIC/Salamander needs STL v0.1.16+. Use the [latest published Stable](https://github.com/ach1992/simple-tun-link/releases/latest)
-(not an untagged source build). Check the destination CPU with `uname -m`:
-`x86_64` means **amd64**; `aarch64` means **arm64**.
-
-**1. Download files on a device that can reach GitHub.** Choose one Core
-installer for the destination CPU, plus only the Carrier helpers you want:
-
-| What you want | AMD64 (`x86_64`) | ARM64 (`aarch64`) | Official download source |
-| --- | --- | --- | --- |
-| **Core STL (required)** | `stl_vX.Y.Z_linux_amd64_local-install.sh` | `stl_vX.Y.Z_linux_arm64_local-install.sh` | [STL Latest Stable assets](https://github.com/ach1992/simple-tun-link/releases/latest) |
-| **WSS/TLS (optional)** | [`wstunnel_11.0.0_linux_amd64.tar.gz`](https://github.com/erebe/wstunnel/releases/download/v11.0.0/wstunnel_11.0.0_linux_amd64.tar.gz) | [`wstunnel_11.0.0_linux_arm64.tar.gz`](https://github.com/erebe/wstunnel/releases/download/v11.0.0/wstunnel_11.0.0_linux_arm64.tar.gz) | [wstunnel v11.0.0](https://github.com/erebe/wstunnel/releases/tag/v11.0.0) |
-| **QUIC/TLS or Salamander (optional)** | [`hysteria-linux-amd64`](https://github.com/HyNetworks/hysteria/releases/download/app/v2.13.0/hysteria-linux-amd64) | [`hysteria-linux-arm64`](https://github.com/HyNetworks/hysteria/releases/download/app/v2.13.0/hysteria-linux-arm64) | [Hysteria app/v2.13.0](https://github.com/HyNetworks/hysteria/releases/tag/app%2Fv2.13.0) |
-
-Replace `vX.Y.Z` with the **actual version on the STL release page**;
-download the named `.sh` asset, not an archive or `stl-bootstrap.sh`.
-Confirm the official publisher/release on the downloading device. The
-installer verifies exact pinned helper hashes automatically, but its own
-embedded checks are not an independent publisher signature.
-
-**2. Upload the selected files unchanged to `/root/stl/` on each server.**
-Use root-authorized SFTP; create the folder if missing (as root:
-`install -d -o root -g root -m 0700 /root/stl`). The directory must be
-root-owned with mode `0700`; files must be root-owned with mode `0600`
-or `0644`. Do **not** rename, extract or `chmod +x` files. Keep **exactly
-one** `*_local-install.sh` in this folder; helpers sit beside it. For
-example, on an AMD64 server using both optional Carriers:
-
-~~~text
-/root/stl/
-  stl_vX.Y.Z_linux_amd64_local-install.sh
-  wstunnel_11.0.0_linux_amd64.tar.gz
-  hysteria-linux-amd64
-~~~
-
-**3. Run one copy-and-paste installation command** on the destination
-via SSH. The command does the trusted preflight, private file copies,
-canonical Core installation and any explicitly selected helpers. Run
-this as root. If using a sudo-capable non-root administrator, prepend
-`sudo ` to the same command (or copy the INSTALL guide's `sudo` variant):
-
-~~~sh
-bash -c 'set -euo pipefail; f=(/root/stl/*_local-install.sh); [[ $EUID == 0 && $(stat -c %u:%a /root) == 0:700 && $(stat -c %u:%a /root/stl) == 0:700 && ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} && $(stat -c %u:%a "${f[0]}") =~ ^0:(600|644)$ ]] || { echo "STL: unsafe folder/file; require root-owned /root/stl (0700) and one file (0600/0644)" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}") || exit 1; [[ $n =~ ^[0-9]+$ && $n -gt 0 && $n -le 134250000 ]] || { echo "STL: installer file size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; head -c "$n" -- "${f[0]}" > "$d/${f[0]##*/}"; [[ $(stat -c %s -- "$d/${f[0]##*/}") == "$n" ]]; cmp -s -- "${f[0]}" "$d/${f[0]##*/}"; for x in "$@"; do case "$x" in --with-wss|--with-quic) case $(uname -m) in x86_64) a=amd64;; aarch64) a=arm64;; *) echo "STL: unsupported companion CPU" >&2; exit 1;; esac; if [[ $x == --with-wss ]]; then w="/root/stl/wstunnel_11.0.0_linux_${a}.tar.gz"; else w="/root/stl/hysteria-linux-${a}"; fi;; *) continue;; esac; [[ -f $w && ! -L $w && $(stat -c %u:%a "$w") =~ ^0:(600|644)$ && $(stat -c %h "$w") == 1 ]] || { echo "STL: missing or unsafe selected companion" >&2; exit 1; }; z=$(stat -c %s "$w"); [[ $z =~ ^[0-9]+$ && $z -gt 1024 && $z -lt 100000000 ]] || { echo "STL: companion size is unsafe" >&2; exit 1; }; head -c "$z" -- "$w" > "$d/${w##*/}"; [[ $(stat -c %s -- "$d/${w##*/}") == "$z" ]] && cmp -s -- "$w" "$d/${w##*/}" || { echo "STL: companion changed during protected copy" >&2; exit 1; }; done; bash "$d/${f[0]##*/}" "$@"' stl
-~~~
-
-Append the desired option **after the last `stl` in that same command**:
-
-| Install | End of that one command |
+| Function | Official file matching destination architecture |
 | --- | --- |
-| Core only (default) | `stl` |
-| Core + WSS | `stl --with-wss` |
-| Core + QUIC/Salamander | `stl --with-quic` |
-| Core + both | `stl --with-wss --with-quic` |
+| Core (required) | `stl_vX.Y.Z_linux_amd64_local-install.sh` or `stl_vX.Y.Z_linux_arm64_local-install.sh` |
+| WSS (optional) | `wstunnel_11.0.0_linux_<arch>.tar.gz` from the [pinned wstunnel release](https://github.com/erebe/wstunnel/releases/tag/v11.0.0) |
+| QUIC (optional) | `hysteria-linux-<arch>` from the [pinned Hysteria release](https://github.com/HyNetworks/hysteria/releases/tag/app%2Fv2.13.0) |
 
-These are command endings, **not** standalone commands. Merely uploading
-a helper does not select or activate it. The trusted preflight rejects
-unsafe or missing selected files before executing transferred shell bytes;
-the canonical installer checks internal Core and helper integrity and
-installs the helper into its managed destination. The destination
-does not need GitHub access.
+Replace `vX.Y.Z` with the exact
+[official Stable release tag](https://github.com/ach1992/simple-tun-link/releases/latest);
+choose **only one** Core architecture. Use SFTP/SCP to transfer files
+unchanged. Do not rename, extract, execute or `chmod +x` the downloaded
+`.sh` file directly. For root-owned installation:
 
-**Expected result:** after success, the STL menu opens in an interactive
-terminal; otherwise run `sudo stl menu`. Then use **Create tunnel** and
-**Import setup link** on the two servers; installing a Carrier alone
-never creates a tunnel. Reinstalling the same verified Core is a no-op;
-newer Stable-to-Stable changes use the canonical guarded update path.
-Verify real peer traffic separately.
-
-**Offline limitation:** missing native/WireGuard distro prerequisites
-still require suitable **signed APT repositories**. A fully air-gapped
-server without those packages cannot be prepared by the STL file alone.
-IPsec also has a separate, explicitly confirmed PREPARE process. If SFTP
-cannot upload directly as root, see
-[non-root SFTP transfer instructions](docs/INSTALL.md#quick-start-three-steps-including-optional-carriers).
-Full hashes and error recovery live in
-[WSS installation](docs/INSTALL.md#optional-pinned-wss-companion-available-in-stable-v0110)
-and [QUIC installation](docs/INSTALL.md#optional-pinned-quic-companion).
-
-Older **v0.1.8** used `.tar.gz` instead of the new single-file `.sh`;
-see [legacy instructions](docs/INSTALL.md#older-v018-release-manual-archive-transfer).
-
-## Connect Server A and Server B
-
-1. On **Server A**, run `sudo stl menu` and select **Create tunnel →
-   GRE / Native** (the default). Enter Server B's reachable underlay IPv4.
-2. Accept the suggested private Link Address pair or enter your own
-   non-overlapping addresses. Review the displayed local/peer
-   endpoints and type **YES** to create A's Link.
-3. Copy A's **Setup Link**. On **Server B**, open **Import setup link →
-   GRE/IPIP**, paste it, review the reversed local/peer settings and
-   type **YES**.
-4. After both ends are configured, select **Test connectivity** on
-   each server. An installed interface or saved Link alone does not
-   prove that peer packets are reaching the other server.
-
-You can retrieve a saved plaintext GRE/IPIP Setup Link again from
-**My tunnels → Share Setup Link** without recreating the Link.
-For advanced native setup without exchanging a Setup Link, see
-[manual GRE/IPIP pairing](docs/CLI.md#manual-greipip-native-pairing-no-setup-link).
-An existing committed Link is restored after reboot through STL's
-owned systemd restore service; an interrupted uncommitted attempt
-does not count as a successfully connected Link.
-
-### Want encryption?
-
-Select **WireGuard / UDP** in Create instead. After local creation,
-STL displays a **SENSITIVE receiver Setup Link**. Send it to the
-intended peer through a trusted private channel, then use
-**Import setup link → WireGuard / IPsec** on that server.
-The original protected receiver offer can be displayed again
-through the explicit **SHOW** action and separately retired with
-**DELETE**; ordinary status and JSON never include the secret.
-For IPsec, choose **Create tunnel → Advanced types → IPsec**.
-If its private runtime is not admitted yet, the menu can offer
-separately gated `PREPARE` **only on a qualified host**; review the
-[read-only doctor and security checks](docs/INSTALL.md#installation-and-runtime-ownership)
-before consenting to package or service effects. A blocked IPsec preflight
-does not disable GRE/IPIP/WireGuard. Once the other server imports the
-protected Setup Link, select **My tunnels → Connect IPsec** on either peer
-and explicitly confirm `CONNECT` before Test connectivity. Import
-alone does not initiate IKEv2, and Test connectivity never creates an SA.
-
-### WireGuard over WSS/TLS (optional, Stable v0.1.10+)
-
-This uses **real kernel WireGuard** carried through a per-Link WSS/TLS
-helper, not an OpenVPN/proxy fallback. WSS requires a separate official
-[`wstunnel v11.0.0` archive](https://github.com/erebe/wstunnel/releases/tag/v11.0.0)
-matching the host CPU. Copy that unchanged archive beside the STL
-single-file local installer on **both servers**, verify its pinned checksum,
-and explicitly select `--with-wss` using the
-[trusted installation procedure](docs/INSTALL.md#optional-pinned-wss-companion-available-in-stable-v0110).
-Merely copying the helper does not install it. Regular online/core STL
-installation does **not** fetch or enable this helper.
-
-1. On the first host open **Create tunnel → 6 WireGuard / WSS + TLS**.
-   Enter the peer's reachable address; **Enter** at the direction prompt
-   accepts a *provisional, unverified* Listen/Dial suggestion, while
-   **1=Listen / 2=Dial** overrides it for this host. Set the listener's
-   reachable TLS TCP port (default `443`), distinct protected WG UDP ports,
-   private IPs and TLS server identity. Review actual roles and owned effects
-   before `YES`. The receiver gets the complementary public role;
-   the suggestion is **not** an external reachability test.
-2. Transfer the resulting **SENSITIVE receiver Setup Link** through an
-   authenticated private channel. On the second host use **Import setup
-   link → 3 WireGuard / WSS + TLS**, hidden-paste the original offer,
-   review the inverted roles/settings and type `YES`.
-3. On **both** hosts choose **My tunnels → Check connection**, or
-   **Test connectivity → A Check all tunnels**. Verify real private peer
-   traffic. `Local status` alone only verifies owned local state; WSS
-   carrier **path MTU is not measured** by the five-ping check.
-
-The sender may retrieve its **original** saved offer from **My tunnels →
-Share Setup Link → SHOW**. A CLI-created sender must supply its original
-private `--output` file; the importing receiver cannot regenerate keys or
-the sender's offer. `DELETE` affects only the verified menu-owned offer,
-**not** an active Link or an unrelated CLI file. See
-[guided/CLI WSS details](docs/CLI.md#managed-wireguard-over-wsstls-stable-v0110)
-and [sensitive setup security](docs/SECURITY.md).
-
-## Manage Links
-
-For an on-demand overview of **all** saved tunnels, choose
-**4 Test connectivity → A Check all tunnels** in the menu.
-The result is a compact table of peer IPs, ICMP replies and observed
-status; a missing Ping reply alone does not prove a tunnel is down.
-A completed unanswered ping counts as measured packet loss, while a
-canceled or failed probe remains unknown rather than invented loss.
-Select an individual tunnel for detailed latency, supported MTU data
-and counters. **Managed WireGuard/WSS** uses these same Status, five-ping,
-Check all and Connection details actions: it verifies the scoped
-helper/guard, real kernel WG identity and private peer route before
-pinging; WSS carrier **path MTU is not measured** by that check.
-`stl link diagnose-wss YOUR_LINK_ID --json` still provides detailed
-local WSS helper, guard, WireGuard handshake and traffic counters.
-
-For WSS receiver setup, the original **sender** may Share a protected
-offer retained by the menu, or enter the original CLI `--output`
-private file after an explicit `SHOW`. The importing receiver
-cannot regenerate an old sender-private Setup Link from ordinary
-State. Missing and unsafe offers are reported separately; ordinary
-Status/Diagnostics never expose secret material.
-
-~~~sh
-sudo stl link list --json                    # Saved Link inventory
-sudo stl link status YOUR_LINK_ID --json     # Owned local interface
-sudo stl link diagnose YOUR_LINK_ID --json   # Peer ICMP; WSS PMTU not measured
-sudo stl link diagnose --all --json          # Check all saved Links
-sudo stl doctor ipsec --json                 # Read-only IPsec prerequisite check
+~~~bash
+sudo install -d -o root -g root -m 0700 /root/stl
 ~~~
 
-The menu also provides Share, Connection details and an individually
-confirmed Remove. In scripts, removal needs the exact ID twice:
+Then follow the [verified local one-command procedure](docs/INSTALL.md#one-transferred-file-and-one-trusted-command-new-release-format),
+including `--with-wss` / `--with-quic` **only** for helpers you explicitly
+downloaded. That procedure checks the file/directory trust boundary and
+copies transferred bytes privately **before** executing any of them. The
+Core package needs no GitHub, Go compiler or container on the destination.
+If selected OS packages are missing, normal signed APT may still be needed.
 
-~~~sh
+To self-host an official, pinned version without GitHub on the destination,
+see [HTTPS Mirror setup](docs/MIRROR.md). Generating mirror files does not
+deploy a public mirror; do not assume a particular mirror already exists.
+
+## Connect your first two servers
+
+1. On **Server A**, run `sudo stl menu` → **Create tunnel**. Choose a
+   transport (GRE/Native is the simplest plaintext default). Supply the
+   reachable underlay peer address and review the proposed, non-overlapping
+   private Link Addresses and local resource changes before typing `YES`.
+2. **Share the Setup Link privately.** For WireGuard, WSS, QUIC and IPsec
+   the handoff contains sensitive receiver credentials; never post it in
+   logs, Issues, screenshots or public chat.
+3. On **Server B**, choose **Import setup link**, paste the original offer
+   and verify the reversed local/peer endpoints and exact receiver role.
+   Confirm the import explicitly. WSS/QUIC can require manual selection of
+   `Listen` or `Dial`: the suggested direction is **not** reachability proof.
+4. Use **Test connectivity** on both hosts and test your application's
+   private TCP/UDP traffic. Local interface health and peer-received packets
+   are different observations.
+
+For encrypted transport details, setup-link handling and advanced modes see
+[CLI and operator workflows](docs/CLI.md) and [Pairing](docs/PAIRING.md).
+
+## Manage and troubleshoot
+
+~~~bash
+sudo stl menu                              # Guided tasks
+sudo stl link list --json                  # Saved links
+sudo stl link status YOUR_LINK_ID --json   # Local ownership / state
+sudo stl link diagnose YOUR_LINK_ID --json # Bounded peer reachability
+sudo stl link diagnose --all --json        # Check all saved links
+sudo stl doctor ipsec --json               # Read-only IPsec readiness
+~~~
+
+If an operation reports unknown/partial effects, do not blindly retry.
+Follow [Diagnostics](docs/DIAGNOSTICS.md) and
+[Operator Recovery](docs/OPERATOR-RECOVERY.md). To remove an owned Link, use
+the guided confirmation in **My tunnels** or:
+
+~~~bash
 sudo stl link remove YOUR_LINK_ID --confirm YOUR_LINK_ID
 ~~~
 
-Do not blindly retry operations reporting uncertain host effects.
-Use [operator recovery](docs/OPERATOR-RECOVERY.md) to inspect exact
-ownership first. For machine integration, `stl link ensure --stdin
---json` and other [versioned commands](docs/CLI.md) reuse the same
-Link lifecycle as the menu.
+Removing one Link must not tear down unrelated Links, services or host
+resources. Uninstall has its own explicit safety gates and never implicitly
+removes a live Link.
 
-## Update or uninstall
+## Update and uninstall
 
-For an existing **installer-owned** STL, back up protected State,
-credentials and saved receiver handoffs, then run the Stable **update**
-command instead of reinstalling:
+Back up protected State/credentials and any original sensitive receiver
+handoffs before upgrading. For an existing installer-owned STL, use:
 
 ~~~bash
 bash -c 'LC_ALL=C; s=$(set -o pipefail; curl -fsSL --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 | tr "\000" "\001" && printf x) && (( ${#s} > 1 && ${#s} <= 131073 )) && [[ $s != *$(printf "\001")* ]] && s=${s%x} && bash -n <<<"$s" && bash -c "$s" stl "$@"' stl update
 ~~~
 
-Installer binary rollback is **not** State rollback. Stable v0.1.10–v0.1.15
-uses State **v4** for WSS-capable management. Stable **v0.1.16**
-writes **State v5** on the next State mutation, including on hosts with
-only Native Links; a pre-v5 binary must not manage that snapshot. A valid
-older snapshot remains readable, and reading alone does not rewrite it.
-The current Salamander-capable runtime writes **State v6**; even v0.1.17
-cannot manage a retained v6 snapshot. Read the [current rollback boundary](docs/INSTALL.md#state-v6-explicit-quic-obfuscation-and-rollback)
-before upgrading or requesting a downgrade.
-For the earlier v4 boundary, an older pre-v4 binary cannot
-be assumed safe even on a host that has only Native Links. In particular,
-installed v0.1.12 and earlier binaries do not know the guarded `DOWNGRADE`
-operation. First use the permanent Latest Stable `update` command to install
-official v0.1.15 (or a newer verified Stable); only then request an older
-published immutable Stable through the installed menu, subject to the
-stricter canonical empty-State and resource-ownership gates.
-Since Stable **v0.1.14**, core-only Uninstall can proceed when the only
-remaining State consists of validated, **fully retired** WireGuard/WSS/IPsec
-historical removal receipts; it preserves those receipts and all protected
-State instead of deleting them. An unfinished credential retirement, saved
-Link, pending operation or unverified resource still blocks Uninstall.
-**Downgrade remains stricter:** it requires genuinely canonical empty State,
-including *no* historical receipts. Installed Stable v0.1.13 does **not** have
-the receipt-aware Uninstall fix; first use the verified Latest Stable update.
-The new Uninstall menu also handles a verified owned orphan restore unit
-after `UNINSTALL` consent, retaining committed State, credentials, optional
-companions and packages. Preserve a
-credential-matched private backup and follow
-[safe State/rollback instructions](docs/INSTALL.md#persisted-state-v3-upgrade-and-safe-rollback-boundary).
-Never downgrade an active managed WSS Link by replacing only its binary.
+State and executable rollback are **not** the same: newer managed features
+use State v6, so an older binary might not understand the retained State.
+Read [Update, recovery, rollback and uninstall](docs/INSTALL.md#update)
+before downgrading or removing the installation. A GitHub-restricted host
+uses the explicit [Mirror Update](docs/MIRROR.md#3-clean-install-and-explicit-update)
+or [local installer](docs/INSTALL.md#one-transferred-file-and-one-trusted-command-new-release-format)
+path instead of the built-in GitHub release picker.
 
-Uninstall never removes active Links or erases private credentials
-implicitly. Remove each owned Link deliberately before using the
-verified installer's uninstall action; follow the
-[uninstall procedure](docs/INSTALL.md#uninstall-never-tear-down-live-links-implicitly).
+## Documentation
 
-## More information
-
-For users: [CLI and advanced setup](docs/CLI.md),
-[installation and recovery](docs/INSTALL.md),
-[diagnostics](docs/DIAGNOSTICS.md) and
-[security](docs/SECURITY.md).
-
-For contributors and integrators:
-[Project Specification](docs/PROJECT-SPEC.md),
-[architecture](docs/ARCHITECTURE.md),
-[pairing format](docs/PAIRING.md),
-[development](docs/DEVELOPMENT.md) and
-[release verification](docs/RELEASE-ARTIFACTS.md).
-
-**Scope of evidence:** isolated CI, native test guests and published
-checksums do not certify every physical two-server WAN/NAT, provider
-firewall or host-reboot environment; validate the intended servers
-before relying on their connectivity.
+- **Users:** [Install and Update](docs/INSTALL.md),
+  [CLI/Menu](docs/CLI.md), [Diagnostics](docs/DIAGNOSTICS.md),
+  [Operator Recovery](docs/OPERATOR-RECOVERY.md) and
+  [Supported environments](docs/SUPPORTED-ENVIRONMENTS.md).
+- **Developers and integrators:** [Project Specification](docs/PROJECT-SPEC.md),
+  [Architecture](docs/ARCHITECTURE.md), [Pairing](docs/PAIRING.md),
+  [Security](docs/SECURITY.md), [Development](docs/DEVELOPMENT.md)
+  and [Release verification](docs/RELEASE-ARTIFACTS.md).
+- **Latest release and changes:** [GitHub Releases](https://github.com/ach1992/simple-tun-link/releases).
+  Outstanding accepted work is managed in
+  [GitHub Issues](https://github.com/ach1992/simple-tun-link/issues),
+  not in this user guide.
 
 [MIT License](LICENSE)
-
-## L2TPv3 Direct-IP: private IPv4 alternative
-
-Choose **Create tunnel -> 8 L2TPv3 / Direct-IP** on the first server,
-then import its **Setup Link** on the second server. Both endpoints must
-run an STL build with this backend; older installed `v0.1.20` cannot
-import/create this new type. Import retains the shared Link ID and reverses
-the underlay/private-IP addresses; STL derives distinct reciprocal Linux
-tunnel/session IDs and locally administered Ethernet MACs from that identity.
-Linux `l2tpeth` exposes a native Ethernet pseudowire; STL uses a local-only
-permanent neighbor for the private peer to avoid incomplete ARP resolution.
-Do **not** bridge it to a real Ethernet LAN unless you deliberately add and
-secure that configuration outside this feature.
-
-This is **direct IPv4 protocol 115**, not L2TP over UDP or an IPsec VPN.
-The underlay, its protocol-115 firewall allowance, kernel `ip l2tp` support,
-and real peer ingress are host/network-specific. A successful local Ensure
-or ten Ping replies on one provider do not imply durable connectivity on
-all hosts. It does not provide confidentiality or authentication; wrap
-sensitive data in an authenticated encrypted transport. Private IPs are
-ordinary locally selected Link Addresses, not externally assigned addresses.
-`stl link status` reports owned local state; `stl link diagnose` and
-peer-origin data tests distinguish actual reachability.
-
-**Optional disposable Linux E2E:** Run the kernel-backed, isolated two-namespace
-Engine/Restore/Remove smoke on an approved disposable validation host with
-
-    sudo env STL_E2E_DISPOSABLE_HOST=approved bash scripts/e2e/l2tpv3-netns.sh
-
-This test does not change the host's default route and includes SHA-256-
-verified 16 MiB private TCP transfers in **each** namespace direction.
-It does not qualify public-Internet reachability or provider stability:
-test actual application traffic and durable private-IP delivery on the
-specific target network before relying on it.

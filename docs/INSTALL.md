@@ -13,16 +13,10 @@ specific real pair of WAN/NAT hosts has passed field acceptance; that
 independent Owner gate is tracked in
 [Issue #93](https://github.com/ach1992/simple-tun-link/issues/93).
 Commands using `vX.Y.Z` require a **real published** tag.
-At the dated **2026-10-31 delivery checkpoint**, [immutable
-v0.1.20](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.20)
-was verified installed on both original field hosts after a trusted
-v0.1.19-to-v0.1.20 update. This patch changes only the IPsec doctor's
-human-readable `next_step` and requires **no State migration**.
-That dated fact does **not** pin the latest release forever: always
-consult the dynamic `/releases/latest` link above. The
-[physical results #93](https://github.com/ach1992/simple-tun-link/issues/93)
-and [installer evidence #146](https://github.com/ach1992/simple-tun-link/issues/146)
-distinguish delivery from untested WAN/reboot conditions.
+For environment-specific acceptance still open after a particular release,
+see [installer and distribution #146](https://github.com/ach1992/simple-tun-link/issues/146).
+Historical release/test checkpoints belong to their original immutable
+Releases, PRs and dated Issue evidence, not this current operator runbook.
 
 ## Installation and runtime ownership
 
@@ -264,7 +258,7 @@ operations.
    the architecture-matched [wstunnel v11.0.0](https://github.com/erebe/wstunnel/releases/tag/v11.0.0)
    archive for **WSS**, or [Hysteria app/v2.13.0](https://github.com/HyNetworks/hysteria/releases/tag/app%2Fv2.13.0)
    executable for **QUIC/Salamander**. The
-   [README download table](../README.md#local-installation-without-github-access-on-the-server)
+   [README download table](../README.md#install-when-the-server-cannot-reach-github)
    links **each exact AMD64/ARM64 helper asset**; the pinned SHA256s are below.
 2. **Upload unchanged files** to root-owned `0700` `/root/stl/` on each
    destination. Files must be root-owned `0600`/`0644`; no extraction,
@@ -420,68 +414,24 @@ never independently verified; do not execute an unauthenticated mirror.
 
 ### Older v0.1.8 release: manual archive transfer
 
-For operators deliberately using the older
-[v0.1.8 release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.8),
-installation requires the original manually verified `.tar.gz` process.
-That historical release **does not** contain the one-command `.sh` format:
-
-| CPU | Exact official file | Transfer placement |
-| --- | --- | --- |
-| `x86_64` | [`stl_v0.1.8_linux_amd64_local-install.tar.gz`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.8/stl_v0.1.8_linux_amd64_local-install.tar.gz) | `/root/stl-transfer/` |
-| `aarch64` | [`stl_v0.1.8_linux_arm64_local-install.tar.gz`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.8/stl_v0.1.8_linux_arm64_local-install.tar.gz) | `/root/stl-transfer/` |
-| Either | [`SHA256SUMS`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.8/SHA256SUMS) | Verify selected archive on the downloading device |
-
-The original [authenticated manual unpack procedure](#verified-archive-unpack-procedure)
-remains below for published archives and existing automation. Prefer the
-latest published Stable single-file format above for new installations,
-after verifying the exact asset and its official provenance.
+The [immutable v0.1.8 release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.8)
+contains architecture-specific `*_local-install.tar.gz` archives, **not** the
+self-contained `*_local-install.sh` entrypoint. If you deliberately maintain
+this legacy tag, verify its published assets and use the
+[verified archive unpack procedure](#verified-archive-unpack-procedure)
+below with its actual version-specific filenames and checksum.
+For new installs use the current release's simpler verified `.sh` format.
 
 ### Legacy manual inventory: v0.1.7 (no local archive)
 
-On a different device with access to GitHub, first choose **one** architecture
-from the destination's `uname -m` (`x86_64` = `amd64`, `aarch64` = `arm64`).
-Download these exact official files from the immutable, source-reviewed
-[`v0.1.7` release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.7):
-
-| Selected feature | Required download | Official location / transfer placement |
-| --- | --- | --- |
-| STL core, Linux x86_64 | [`stl_v0.1.7_linux_amd64`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.7/stl_v0.1.7_linux_amd64) | `/root/stl/stl_v0.1.7_linux_amd64` (instead of arm64) |
-| STL core, Linux aarch64 | [`stl_v0.1.7_linux_arm64`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.7/stl_v0.1.7_linux_arm64) | `/root/stl/stl_v0.1.7_linux_arm64` (instead of amd64) |
-| All selected STL core installations | [`SHA256SUMS`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.7/SHA256SUMS), [`BUILD-MANIFEST.txt`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.7/BUILD-MANIFEST.txt), [`LICENSE`](https://github.com/ach1992/simple-tun-link/releases/download/v0.1.7/LICENSE) | All three regular files directly in `/root/stl/` |
-| Local canonical installer | [`scripts/install.sh` from tag `v0.1.7`](https://github.com/ach1992/simple-tun-link/blob/v0.1.7/scripts/install.sh) | Save from the exact-tag source as `/root/stl/install.sh`; **not a `v0.1.7` release asset** |
-| Stable online bootstrap (not local) | `stl-bootstrap.sh` in the same release | Not required when running `install.sh` locally |
-
-`v0.1.7` has **no** complete prepackaged local archive. Do not download a
-made-up `*_local-install.tar.gz` asset under that tag. Review the exact-tag
-installer source and independently check trusted published/tag identity before
-root execution. `SHA256SUMS` is integrity metadata **from the same release**,
-not a publisher signature or a defense against a compromised release account.
-
-Transfer **only** your chosen architecture executable plus `SHA256SUMS`,
-`BUILD-MANIFEST.txt`, `LICENSE`, and `install.sh` over SFTP/SCP or removable
-storage to a root-owned `0700` directory. For example:
-
-~~~sh
-# On the destination as root (sudo -i), before transferring:
-install -d -m 0700 /root/stl
-# On the OTHER device, after downloading all selected files:
-# scp stl_v0.1.7_linux_amd64 SHA256SUMS BUILD-MANIFEST.txt LICENSE install.sh root@TARGET_HOST:/root/stl/
-# On the destination as root (sudo -i), after the transfer:
-cd /root/stl
-ls -la
-sha256sum --check --ignore-missing SHA256SUMS
-bash -n install.sh
-bash ./install.sh install --bundle /root/stl --backends native,wireguard
-stl version --json
-~~~
-
-The release-wide `SHA256SUMS` includes unused binaries and the online
-bootstrap; `--ignore-missing` verifies only the chosen locally transferred
-assets. Never interpret this as independent source authenticity. When STL was
-already installed by the canonical installer, run `update --bundle /root/stl`
-for an explicitly verified newer version rather than a new install. On
-releases with the new package support, repeating an identical verified
-`install` is a no-op; do not assume this behavior exists in `v0.1.7`.
+The [immutable v0.1.7 release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.7)
+shipped neither self-contained `*_local-install.sh` nor
+`*_local-install.tar.gz`. Deliberately maintaining that version requires
+its exact-tag binary, license, manifest, checksums and matching canonical
+[installer source from that tag](https://github.com/ach1992/simple-tun-link/blob/v0.1.7/scripts/install.sh),
+with independently verified publisher identity before any privileged execution.
+Do not invent nonexistent release assets; prefer a separately verified newer
+Stable for new installations.
 
 ### Exact optional component checklist
 
@@ -606,7 +556,7 @@ passing a verified exact historical Stable tag as **data**. To audit the
 installer manually, obtain the current immutable Stable's canonical source
 and cross-check its publisher/tag identity before any root execution.
 
-### Permanent short one-line installer (Latest Stable or an exact Stable tag)
+### Verified Stable bootstrap commands (Latest or exact Stable tag)
 
 The version-free `releases/latest/download/stl-bootstrap.sh` URL selects
 the newest published **Stable**, excluding RC and draft releases. GitHub
