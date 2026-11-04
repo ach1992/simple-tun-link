@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -155,5 +156,63 @@ func TestSharedImportUnderlayReasonsAcrossSupportedBackends(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// A real OperationalBackend.Apply can fail during createDevice's final
+// inventory recheck after prepared XFRM/PSK journal publication. Its typed
+// error must retain a precise versioned reason WITHOUT claiming Apply was
+// never entered; the actual backend dispatch is tested in ipsec package.
+func TestIPsecPostApplyXFRMRecheckPreservesRecoveryEvidenceAndReasons(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		cause  error
+		reason string
+	}{
+		{"cancelled", context.Canceled, "ipsec_xfrm_underlay_cancelled"},
+		{"timeout", context.DeadlineExceeded, "ipsec_xfrm_underlay_timed_out"},
+		{"capture", ipsecbackend.ErrBoundedOutput, "ipsec_xfrm_underlay_capture_limited"},
+		{"missing", linux.ErrUnderlayLocalNotAssigned, "ipsec_xfrm_underlay_not_assigned"},
+		{"ambiguous", linux.ErrUnderlayLocalAmbiguous, "ipsec_xfrm_underlay_ambiguous"},
+		{"invalid readback", errors.New("PRIVATE_IPSEC_UNVERIFIED_DETAIL"), "ipsec_xfrm_underlay_unverified"},
+	} {
+		for _, encap := range []domain.Encapsulation{domain.EncapESP, domain.EncapNATT} {
+			t.Run(string(encap)+"/"+tc.name, func(t *testing.T) {
+				id := "lnk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+				cause := fmt.Errorf("%w: %w", ipsecbackend.ErrCreateDeviceUnderlayRecheck, tc.cause)
+				observed := stlerr.Wrap(stlerr.CodeApply, "ensure", id, string(domain.BackendIPsec),
+					"backend apply failed; protected recovery may be required", cause)
+				evidence := &stlerr.OperationEvidence{Stage: "apply", HostMutation: "attempted",
+					DesiredState: "no_commit_attempted", Rollback: "unavailable"}
+				var out, errOut bytes.Buffer
+				rc := lifecycleFailureWithEvidence(&out, &errOut, true, stlerr.CodeApply, "link_import",
+					nil, "IPsec activation failed or is uncertain; reconcile staged intent", evidence, observed)
+				var response lifecycleFailureResponse
+				if rc == 0 || errOut.Len() != 0 || json.Unmarshal(out.Bytes(), &response) != nil ||
+					response.Error == nil || response.Error.ReasonCode != tc.reason ||
+					response.Error.Evidence == nil || response.Error.Evidence.Stage != "apply" ||
+					response.Error.Evidence.HostMutation != "attempted" ||
+					response.Error.Evidence.Rollback != "unavailable" ||
+					!strings.Contains(response.Error.NextStep, "IPsec Apply was entered") ||
+					!strings.Contains(response.Error.NextStep, "XFRM/VICI journals") ||
+					strings.Contains(out.String(), "PRIVATE_IPSEC_UNVERIFIED_DETAIL") ||
+					strings.Contains(out.String(), "No backend Apply was attempted") {
+					t.Fatalf("post-Apply IPsec diagnostic lost safety or typed cause: rc=%d out=%s err=%s", rc, out.String(), errOut.String())
+				}
+			})
+		}
+	}
+	// Unsafe rollback cannot be masked by a more convenient address error.
+	id := "lnk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	cause := fmt.Errorf("%w: %w", ipsecbackend.ErrCreateDeviceUnderlayRecheck, linux.ErrUnderlayLocalNotAssigned)
+	observed := stlerr.Wrap(stlerr.CodeRollback, "ensure", id, "ipsec", "failed", cause)
+	var out, errOut bytes.Buffer
+	_ = lifecycleFailureWithEvidence(&out, &errOut, true, stlerr.CodeRollback, "link_import", nil,
+		"operation remains uncertain", &stlerr.OperationEvidence{Stage: "apply", HostMutation: "attempted",
+			DesiredState: "no_commit_attempted", Rollback: "incomplete"}, observed)
+	var response lifecycleFailureResponse
+	if json.Unmarshal(out.Bytes(), &response) != nil || response.Error == nil ||
+		response.Error.ReasonCode != "rollback_incomplete" {
+		t.Fatalf("unverified rollback masked by a local binding diagnosis: %s", out.String())
 	}
 }

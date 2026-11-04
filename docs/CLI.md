@@ -406,11 +406,17 @@ check across GRE, IPIP, L2TPv3, native WireGuard, IPsec (both ESP and
 NAT-T), WSS and QUIC Setup Links. The check runs after the exact
 confirmation and canonical receiver inversion but **before** the first
 new protected key/TLS provisioning or IPsec pending-State publication.
+After entering the canonical Engine, a **second admission** runs under
+the Link/maintenance locks immediately before native WireGuard/WSS
+credential staging, under Link/resource locks before IPsec PSK/pending
+State, and under the QUIC Link/resource/restore locks before its
+first protected creation journal. Address changes during lock waits
+therefore fail before these new durable protected effects.
 A missing/ambiguous receiver **local underlay** or unavailable/incomplete
-inventory refuses Import before credential or host effects; the operator
-is told to inspect
-`ip -json address show`, verify **both** endpoint IPs on the
-sending server, and generate a fresh handoff if the receiver was mistaken.
+inventory refuses Import before new recipient credentials or host effects;
+the operator is told to inspect `ip -json address show`, verify
+**both** endpoint IPs on the sending server, and generate a fresh handoff
+if the receiver was mistaken.
 IPsec NAT-T may traverse a translator, but the current IPsec Engine still
 requires `Underlay.Local` to be **uniquely assigned on this host**;
 a translated public address is not a replacement for the configured local
@@ -432,9 +438,23 @@ unverified, never a proved wrong recipient. Typed cancellation, timeout,
 and bounded-output overflow remain distinct; a failed operation after
 earlier protected credential staging retains its exact reconciliation
 warning and is not automatically cleaned up. The new Import admission
-does not erase any preexisting credential or pending State.
-Setup Links/PSKs/private TLS data and raw OS output are never emitted in
-these explanations.
+does not erase any preexisting credential or pending State. Local
+Interface assignment is managed by the host and is not atomic with STL's
+protected-file writes; Engine Plan/Validate retain their separate final
+checks before host effects.
+
+**Late IPsec creation diagnostic:** IPsec ESP and NAT-T perform a final
+local IPv4/interface read inside Engine Apply, just before issuing
+the XFRM device creation command. If this read fails, the typed cause
+remains visible through specific `ipsec_xfrm_underlay_*` reason codes
+(cancel, deadline, capture limit, missing/ambiguous or unverified).
+The evidence still marks `stage=apply` and
+`host_mutation=attempted`: pre-effect PSK and exact recovery
+journals may already exist. Preserve them; inspect this Link's State,
+XFRM/VICI journals and local assigned IP before owner-scoped
+reconciliation. The failure must not be presented as though backend
+Apply had never been entered. Setup Links/PSKs/private TLS data and raw
+OS output are never emitted in these explanations.
 
 The regular saved-State export command is intentionally restricted to
 credential-free GRE/IPIP/L2TPv3; a valid sender's private receiver credential

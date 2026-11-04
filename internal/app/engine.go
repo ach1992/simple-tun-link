@@ -163,6 +163,25 @@ func (e *Engine) EnsureImported(ctx context.Context, desired domain.Link) (Resul
 	return e.ensureWithPolicy(ctx, desired, true)
 }
 
+// ReceiverAdmission is an operator-supplied read-only local binding check.
+// The canonical Engine calls it while its Link/maintenance locks are held,
+// immediately before an Import's first durable protected publication.
+// It is not a sender-authentication or remote-reachability authority.
+type ReceiverAdmission func(context.Context, domain.Link) error
+
+func admitReceiverUnderLock(ctx context.Context, desired domain.Link, admission ReceiverAdmission) error {
+	if admission == nil {
+		return nil
+	}
+	if err := admission(ctx, desired); err != nil {
+		return stlerr.WithEvidence(
+			stlerr.LocalUnderlayUnverified("import_receiver_locked", string(desired.ID), string(desired.Backend), err),
+			stlerr.OperationEvidence{Stage: "preflight", HostMutation: "not_attempted",
+				DesiredState: "no_commit_attempted", Rollback: "not_required"})
+	}
+	return nil
+}
+
 // RecipientCredentialStore is a protected, retry-safe per-Link provisioner.
 // This remains an Engine transaction extension, not a pairing-specific
 // independent lifecycle or a public WireGuard secret stored in domain.Link.
@@ -175,7 +194,14 @@ type RecipientCredentialStore interface {
 // A failed host apply may leave a protected uncommitted key for exact-credential
 // retry/reconciliation; such a key must never be blindly removed.
 func (e *Engine) EnsureImportedRecipient(ctx context.Context, desired domain.Link, credential []byte, store RecipientCredentialStore) (Result, error) {
-	return e.EnsureWithWireGuardCredential(ctx, desired, credential, store)
+	return e.EnsureImportedRecipientAdmitted(ctx, desired, credential, store, nil)
+}
+
+// EnsureImportedRecipientAdmitted binds CLI receiver readmission to the
+// canonical Engine's locked credential publication boundary.
+func (e *Engine) EnsureImportedRecipientAdmitted(ctx context.Context, desired domain.Link, credential []byte,
+	store RecipientCredentialStore, admission ReceiverAdmission) (Result, error) {
+	return e.ensureWithWireGuardCredential(ctx, desired, credential, store, admission)
 }
 
 // EnsureWithWireGuardCredential provisions an endpoint's OWN private key and
@@ -183,6 +209,11 @@ func (e *Engine) EnsureImportedRecipient(ctx context.Context, desired domain.Lin
 // Link and resource locks. Both sender creation and receiver import use this
 // single transaction; secrets never enter ordinary Link desired state.
 func (e *Engine) EnsureWithWireGuardCredential(ctx context.Context, desired domain.Link, credential []byte, store RecipientCredentialStore) (Result, error) {
+	return e.ensureWithWireGuardCredential(ctx, desired, credential, store, nil)
+}
+
+func (e *Engine) ensureWithWireGuardCredential(ctx context.Context, desired domain.Link, credential []byte,
+	store RecipientCredentialStore, admission ReceiverAdmission) (Result, error) {
 	if store == nil || desired.Backend != domain.BackendWireGuard ||
 		desired.WireGuard == (domain.WireGuardOptions{}) ||
 		desired.WireGuard.ListenPort == 0 || desired.WireGuard.PeerPort == 0 {
@@ -194,7 +225,7 @@ func (e *Engine) EnsureWithWireGuardCredential(ctx context.Context, desired doma
 	}
 	return e.ensureWithProvision(ctx, desired, true, func() error {
 		return store.EnsureRecipient(desired.ID, credential, desired.WireGuard.LocalPublicKey)
-	})
+	}, admission)
 }
 
 // EnsureWithWSSCredential stages the WireGuard key and the endpoint-local mTLS
@@ -202,6 +233,14 @@ func (e *Engine) EnsureWithWireGuardCredential(ctx context.Context, desired doma
 // that govern the subsequent WSS kernel/firewall/sidecar transition.
 func (e *Engine) EnsureWithWSSCredential(ctx context.Context, desired domain.Link,
 	credential []byte, store RecipientCredentialStore, stageTLS func() error) (Result, error) {
+	return e.EnsureWithWSSCredentialAdmitted(ctx, desired, credential, store, stageTLS, nil)
+}
+
+// EnsureWithWSSCredentialAdmitted rechecks local assignment after the
+// canonical Link lock, before publishing either WG or mTLS material.
+func (e *Engine) EnsureWithWSSCredentialAdmitted(ctx context.Context, desired domain.Link,
+	credential []byte, store RecipientCredentialStore, stageTLS func() error,
+	admission ReceiverAdmission) (Result, error) {
 	if desired.Backend != domain.BackendWireGuardWSS || store == nil || stageTLS == nil ||
 		desired.WireGuard.ListenPort == 0 || desired.WireGuard.PeerPort == 0 {
 		return Result{}, stlerr.New(stlerr.CodeUnsupported, "wss_credential", string(desired.ID),
@@ -212,14 +251,15 @@ func (e *Engine) EnsureWithWSSCredential(ctx context.Context, desired domain.Lin
 			return err
 		}
 		return stageTLS()
-	})
+	}, admission)
 }
 
 func (e *Engine) ensureWithPolicy(ctx context.Context, desired domain.Link, rejectReconfiguration bool) (Result, error) {
-	return e.ensureWithProvision(ctx, desired, rejectReconfiguration, nil)
+	return e.ensureWithProvision(ctx, desired, rejectReconfiguration, nil, nil)
 }
 
-func (e *Engine) ensureWithProvision(ctx context.Context, desired domain.Link, rejectReconfiguration bool, provision func() error) (out Result, operationErr error) {
+func (e *Engine) ensureWithProvision(ctx context.Context, desired domain.Link, rejectReconfiguration bool,
+	provision func() error, admission ReceiverAdmission) (out Result, operationErr error) {
 	defer func() {
 		if operationErr != nil && stlerr.EvidenceOf(operationErr) == nil {
 			operationErr = stlerr.WithEvidence(operationErr, stlerr.OperationEvidence{
@@ -236,7 +276,7 @@ func (e *Engine) ensureWithProvision(ctx context.Context, desired domain.Link, r
 		return Result{}, stlerr.Wrap(stlerr.CodeState, "ensure", string(desired.ID), "", "maintenance gate unavailable; no mutation attempted", err)
 	}
 	defer release()
-	return e.executeEnsure(ctx, desired, rejectReconfiguration, provision)
+	return e.executeEnsure(ctx, desired, rejectReconfiguration, provision, admission)
 }
 
 // RemoveIfUnchanged is the interactive preview-confirmed variant of Remove.
@@ -382,7 +422,8 @@ func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.
 	return result, nil
 }
 
-func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectReconfiguration bool, provision func() error) (out Result, operationErr error) {
+func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectReconfiguration bool,
+	provision func() error, admission ReceiverAdmission) (out Result, operationErr error) {
 	defer func() {
 		if operationErr != nil && stlerr.EvidenceOf(operationErr) == nil {
 			operationErr = stlerr.WithEvidence(operationErr, stlerr.OperationEvidence{
@@ -451,6 +492,12 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 	// unavailable. Credential activation remains inside the Engine Link lock.
 	if _, registered := e.backends.Get(desired.Backend); !registered {
 		return Result{}, stlerr.New(stlerr.CodeUnsupported, "ensure_imported", string(desired.ID), string(desired.Backend), "requested backend is not registered")
+	}
+	// A CLI preflight can become stale while maintenance/Link locks are
+	// acquired. Recheck under the canonical Link lock before ANY State
+	// receipt invalidation or protected recipient credential publication.
+	if err := admitReceiverUnderLock(ctx, desired, admission); err != nil {
+		return Result{}, err
 	}
 	// Invalidate historical removal authority BEFORE a new attempt (even
 	// one which later fails apply) can stage a key or host resources. An

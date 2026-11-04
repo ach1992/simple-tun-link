@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/ach1992/simple-tun-link/internal/app"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
@@ -54,6 +55,17 @@ func inspectImportReceiver(ctx context.Context, runner linux.Runner, receiver st
 		return importReceiverAmbiguous
 	default:
 		return importReceiverUnverified
+	}
+}
+
+// lockedImportReceiverAdmission uses exactly the same read-only bounded
+// classifier as the early CLI/menu check, but executes under canonical
+// Engine locks at the first protected publication boundary. The runner is
+// local to this import invocation, never stored globally on the Engine.
+func lockedImportReceiverAdmission(opts *runtimeOptions) app.ReceiverAdmission {
+	runner := createRunner(opts)
+	return func(ctx context.Context, link domain.Link) error {
+		return inspectLocalReceiverBinding(ctx, runner, link.Underlay.Local)
 	}
 }
 

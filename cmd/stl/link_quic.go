@@ -497,7 +497,8 @@ func linkQUICCommand(args []string, in io.Reader, out, errOut io.Writer, options
 				return quicCommandError(operation, jsonOut, offer.Receiver.ID, stlerr.CodeInvalid, "invalid receiver protected material", out, errOut)
 			}
 			defer bundle.Clear()
-			result, err = engine.EnsureWithQUICCredential(ctx, offer.Receiver, secret, keys, bundle, nil)
+			result, err = engine.EnsureWithQUICCredentialAdmitted(ctx, offer.Receiver, secret, keys, bundle, nil,
+				lockedImportReceiverAdmission(options))
 		} else {
 			// Resume uses the EXACT sender-oriented Link from the original
 			// handoff and previously staged credentials; never generate keys.

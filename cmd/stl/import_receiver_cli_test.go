@@ -8,12 +8,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
+	"github.com/ach1992/simple-tun-link/internal/pairing"
 )
 
 // Actual CLI entrypoints, not a synthetic diagnosis wrapper. An exact
@@ -131,5 +133,110 @@ func TestConfirmedCLIImportSeparatesIncompleteInventoryAndInterruptions(t *testi
 				t.Fatalf("rejected import created state: %v", err)
 			}
 		})
+	}
+}
+
+// The first observation represents the user-reviewed CLI admission. The
+// second represents the address changing while canonical Engine locks are
+// acquired, before its first protected credential publication.
+type changingReceiverProbe struct {
+	observations []string
+	calls        int
+}
+
+func (*changingReceiverProbe) Run(context.Context, string, ...string) (linux.CommandResult, error) {
+	return linux.CommandResult{}, errors.New("unbounded local inventory refused")
+}
+
+func (p *changingReceiverProbe) RunBounded(_ context.Context, limits linux.CaptureLimits, name string, args ...string) (linux.CommandResult, error) {
+	if name != "ip" || !slices.Equal(args, []string{"-json", "address", "show"}) ||
+		limits.Stdout <= 0 || limits.Stderr <= 0 {
+		return linux.CommandResult{}, errors.New("not an authorized bounded local IPv4 readback")
+	}
+	p.calls++
+	i := p.calls - 1
+	if i >= len(p.observations) {
+		return linux.CommandResult{}, errors.New("unexpected receiver inventory re-read")
+	}
+	return linux.CommandResult{Stdout: []byte(p.observations[i])}, nil
+}
+
+type cliWSSAdmissionBackend struct{ *lifecycleFakeBackend }
+
+func (*cliWSSAdmissionBackend) Kind() domain.Backend { return domain.BackendWireGuardWSS }
+
+func TestProtectedCLIImportReadmitsUnderEngineLockAfterAddressChanges(t *testing.T) {
+	for _, mode := range []string{"native-wireguard", "wss"} {
+		for _, tc := range []struct {
+			name, inventory, reason string
+		}{
+			{"missing", greReceiverInventory("eth0", "203.0.113.197"), "local_underlay_not_assigned"},
+			{"ambiguous", `[{"ifname":"eth0","addr_info":[{"family":"inet","local":"192.0.2.20"}]},{"ifname":"eth1","addr_info":[{"family":"inet","local":"192.0.2.20"}]}]`, "local_underlay_ambiguous"},
+			{"incomplete", `[{"ifname":"eth0","addr_info":null}]`, "local_underlay_unverified"},
+		} {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				var raw string
+				var desired domain.Link
+				var selected backend.Backend
+				impl := newLifecycleFake()
+				command := "import"
+				if mode == "native-wireguard" {
+					source, _ := makeLifecycleDesired(t, "b", "10.71.88.0/31")
+					source.Backend, source.Encapsulation = domain.BackendWireGuard, domain.EncapUDP
+					secret := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x52}, 32))
+					completeWireGuardFixture(t, &source, secret)
+					raw = testQuickSetupLink(t, source, []byte(secret))
+					desired = pairing.Invert(source)
+					selected = &wireguardImportFake{impl}
+				} else {
+					payload, _ := testProtectedWSSReceiverOffer(t)
+					raw = string(payload)
+					var offer wssOffer
+					if err := json.Unmarshal(payload, &offer); err != nil {
+						t.Fatal(err)
+					}
+					defer offer.clear()
+					desired = offer.Receiver
+					selected = &cliWSSAdmissionBackend{impl}
+					command = "import-wss"
+				}
+				valid := greReceiverInventory("eth0", desired.Underlay.Local.String())
+				invalid := tc.inventory
+				if tc.name == "ambiguous" {
+					invalid = strings.TrimSuffix(valid, "]") + "," + strings.TrimPrefix(greReceiverInventory("eth1", desired.Underlay.Local.String()), "[")
+				}
+				probe := &changingReceiverProbe{observations: []string{valid, invalid}}
+				root := filepath.Join(t.TempDir(), "private-root")
+				if err := os.Mkdir(root, 0700); err != nil {
+					t.Fatal(err)
+				}
+				marker := filepath.Join(root, "unrelated-material")
+				if err := os.WriteFile(marker, []byte("preserve"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				opts := &runtimeOptions{stateRoot: root, probeRunner: probe, backends: []backend.Backend{selected}}
+				var out, errOut bytes.Buffer
+				exit := runWithRuntimeInput([]string{"link", command, "--stdin", "--confirm", setupLinkConfirmation(raw), "--json"},
+					strings.NewReader(raw), &out, &errOut, opts)
+				var response lifecycleFailureResponse
+				if exit == 0 || probe.calls != 2 || errOut.Len() != 0 ||
+					json.Unmarshal(out.Bytes(), &response) != nil || response.Error == nil ||
+					response.Error.ReasonCode != tc.reason || response.Error.Evidence == nil ||
+					response.Error.Evidence.HostMutation != "not_attempted" ||
+					response.Error.Evidence.CredentialProvision != "" ||
+					len(impl.applies) != 0 || strings.Contains(out.String(), raw) {
+					t.Fatalf("%s %s mutated or lost locked admission: exit=%d calls=%d out=%q err=%q", mode, tc.name, exit, probe.calls, out.String(), errOut.String())
+				}
+				if _, err := os.Lstat(filepath.Join(root, "state.json")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("locked refusal committed state: %v", err)
+				}
+				if got, err := os.ReadFile(marker); err != nil || string(got) != "preserve" {
+					t.Fatalf("locked refusal destroyed preexisting private material: %v", err)
+				}
+				if matches, err := filepath.Glob(filepath.Join(root, "credentials", "*")); err != nil || len(matches) != 0 {
+					t.Fatalf("locked refusal published new private material: %v %v", matches, err)
+				}
+			})
+		}
 	}
 }

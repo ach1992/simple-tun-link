@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	core "github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/hostaddress"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
@@ -102,5 +103,84 @@ func TestIPsecBoundedRunnerKeepsTypedOverflowAndInterruptions(t *testing.T) {
 	_, err := r.RunBounded(context.Background(), CaptureLimits{Stdout: 64, Stderr: 128}, "sh", "-c", "head -c 2048 /dev/zero")
 	if !errors.Is(err, ErrBoundedOutput) {
 		t.Fatalf("real bounded runner overflow lost identity: %v", err)
+	}
+}
+
+// The same actual IPsec local binding algorithm used by Validate first
+// succeeds. The host then changes its address before backend Apply rechecks
+// the parent in createDevice. No XFRM add command or issuing-create journal
+// may occur, and typed causes must cross the real Apply -> createDevice call.
+type changingIPsecParentReader struct {
+	receiver       string
+	second         CommandResult
+	secondErr      error
+	inventoryCalls int
+	otherCalls     []string
+}
+
+func (r *changingIPsecParentReader) RunBounded(_ context.Context, limits CaptureLimits, command string, args ...string) (CommandResult, error) {
+	call := command + " " + strings.Join(args, " ")
+	if call != "ip -json address show" {
+		r.otherCalls = append(r.otherCalls, call)
+		return CommandResult{}, errors.New("unexpected host command; no XFRM mutation authorized")
+	}
+	r.inventoryCalls++
+	if r.inventoryCalls == 1 {
+		return CommandResult{Stdout: []byte(`[{"ifname":"ens3","addr_info":[{"family":"inet","local":"192.0.2.10"}]}]`)}, nil
+	}
+	if r.inventoryCalls != 2 {
+		return CommandResult{}, errors.New("unexpected third inventory")
+	}
+	return r.second, r.secondErr
+}
+
+func TestIPsecApplyFinalParentRecheckPreservesTypedFailureAndNoXFRMBothEncapsulations(t *testing.T) {
+	for _, encap := range []domain.Encapsulation{domain.EncapESP, domain.EncapNATT} {
+		for _, tc := range []struct {
+			name, raw     string
+			cause, expect error
+		}{
+			{"cancelled", "", context.Canceled, context.Canceled},
+			{"deadline", "", context.DeadlineExceeded, context.DeadlineExceeded},
+			{"capture", "", ErrBoundedOutput, ErrBoundedOutput},
+			{"malformed", `[{"ifname":"ens3","addr_info":null}]`, nil, nil},
+			{"missing", `[{"ifname":"ens3","addr_info":[{"family":"inet","local":"203.0.113.197"}]}]`, nil, hostaddress.ErrNotAssigned},
+			{"ambiguous", `[{"ifname":"ens3","addr_info":[{"family":"inet","local":"192.0.2.10"}]},{"ifname":"ens4","addr_info":[{"family":"inet","local":"192.0.2.10"}]}]`, nil, hostaddress.ErrAmbiguous},
+		} {
+			t.Run(string(encap)+"/"+tc.name, func(t *testing.T) {
+				link := testIPsecLink(t, encap)
+				link.Underlay.Local = netip.MustParseAddr("192.0.2.10")
+				profile, err := NewProfile(link)
+				if err != nil {
+					t.Fatal(err)
+				}
+				r := &changingIPsecParentReader{receiver: link.Underlay.Local.String(), second: CommandResult{Stdout: []byte(tc.raw)}, secondErr: tc.cause}
+				admission := &admittedAbsentIPsec{}
+				route := &offlineIPsecRoute{}
+				b := &OperationalBackend{OperationalOptions: OperationalOptions{Admission: admission, Runner: r, Routes: route, IPBinary: "ip"}}
+				journalWrites := 0
+				b.SetDeviceJournal(func(context.Context, Profile, string, string, int) error { journalWrites++; return nil })
+				// This is the actual local-underlay check Validate runs.
+				prevalidated, err := b.resolveLocalUnderlay(context.Background(), link)
+				if err != nil || prevalidated.Device != "ens3" || prevalidated.Source != link.Underlay.Local {
+					t.Fatalf("pre-Apply local binding did not pass: %+v %v", prevalidated, err)
+				}
+				_, err = b.Apply(context.Background(), core.Request{Operation: core.OperationEnsure, Link: link},
+					operationalObservation{Profile: profile}, operationalPlan{Profile: profile, Create: true, Claims: profile.ResourceClaims()})
+				if err == nil || !errors.Is(err, ErrCreateDeviceUnderlayRecheck) {
+					t.Fatalf("actual backend Apply dropped createDevice identity: %v", err)
+				}
+				if tc.expect != nil && !errors.Is(err, tc.expect) {
+					t.Fatalf("createDevice dropped typed cause %v: %v", tc.expect, err)
+				}
+				if tc.expect == nil && (errors.Is(err, hostaddress.ErrNotAssigned) || errors.Is(err, hostaddress.ErrAmbiguous)) {
+					t.Fatalf("incomplete inventory misclassified as wrong receiver: %v", err)
+				}
+				if r.inventoryCalls != 2 || journalWrites != 0 || len(r.otherCalls) != 0 || admission.calls == 0 {
+					t.Fatalf("XFRM effect or journal attempted after late receiver change: reads=%d journal=%d other=%v admitted=%d",
+						r.inventoryCalls, journalWrites, r.otherCalls, admission.calls)
+				}
+			})
+		}
 	}
 }

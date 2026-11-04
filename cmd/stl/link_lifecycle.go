@@ -181,7 +181,8 @@ func executeLinkMutationControlled(operation string, desired domain.Link, id dom
 				return lifecycleFailureWithEvidence(stdout, stderr, jsonOutput, stlerr.CodeState, operation, nil,
 					"cannot initialize protected WireGuard recipient store", preflightEvidence(), nil)
 			}
-			result, err = engine.EnsureImportedRecipient(ctx, desired, credential, keys)
+			result, err = engine.EnsureImportedRecipientAdmitted(ctx, desired, credential, keys,
+				lockedImportReceiverAdmission(options))
 		} else {
 			result, err = engine.EnsureImported(ctx, desired)
 		}
@@ -377,6 +378,32 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 		case errors.Is(observed, linux.ErrUnderlayLocalAmbiguous):
 			safe.ReasonCode = "local_underlay_ambiguous"
 			safe.NextStep = "The receiver IPv4 is assigned on multiple local interfaces. Inspect ip -json address show and resolve the ambiguity before retrying. This does not prove which host was intended; no backend Apply was attempted."
+		}
+	}
+	// The IPsec backend can perform one final local IPv4 read inside Apply,
+	// AFTER the Engine has durably prepared the owner-scoped XFRM journal.
+	// Preserve the typed interruption/assignment cause, but never imply
+	// Host Apply or protected staging was not entered at this point.
+	if evidence != nil && evidence.Stage == "apply" &&
+		evidence.HostMutation == "attempted" &&
+		(evidence.Rollback == "unavailable" || evidence.Rollback == "not_required") &&
+		observedPublic != nil && observedPublic.Backend == string(domain.BackendIPsec) &&
+		errors.Is(observed, ipsecbackend.ErrCreateDeviceUnderlayRecheck) {
+		safe.NextStep = "IPsec Apply was entered, but the final local IPv4 check failed before XFRM device creation. Inspect ip -json address show and this Link's exact protected PSK, pending State and XFRM/VICI journals. Do not blindly retry, delete staged material or adopt foreign resources; reconcile first."
+		switch {
+		case errors.Is(observed, context.Canceled):
+			safe.ReasonCode = "ipsec_xfrm_underlay_cancelled"
+		case errors.Is(observed, context.DeadlineExceeded):
+			safe.ReasonCode = "ipsec_xfrm_underlay_timed_out"
+		case errors.Is(observed, ipsecbackend.ErrBoundedOutput):
+			safe.ReasonCode = "ipsec_xfrm_underlay_capture_limited"
+		case errors.Is(observed, linux.ErrUnderlayLocalNotAssigned):
+			safe.ReasonCode = "ipsec_xfrm_underlay_not_assigned"
+		case errors.Is(observed, linux.ErrUnderlayLocalAmbiguous):
+			safe.ReasonCode = "ipsec_xfrm_underlay_ambiguous"
+		default:
+			// Malformed or unavailable inventory never proves a wrong host.
+			safe.ReasonCode = "ipsec_xfrm_underlay_unverified"
 		}
 	}
 	// Only explicitly typed Engine WSS identity/journal denials get a

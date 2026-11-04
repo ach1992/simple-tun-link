@@ -38,7 +38,7 @@ func (e *Engine) StageIPsecSender(ctx context.Context, offer pairing.Offer, keys
 	defer clear(secret)
 	digest := sha256.Sum256([]byte(encoded))
 	return e.stageIPsec(ctx, desired, secret, "sender", hex.EncodeToString(digest[:]), keys,
-		func() error { return publish(encoded) })
+		func() error { return publish(encoded) }, nil)
 }
 
 // StageIPsecRecipient protects an explicitly reviewed Quick Link's shared
@@ -47,6 +47,14 @@ func (e *Engine) StageIPsecSender(ctx context.Context, offer pairing.Offer, keys
 // Existing v2 Quick Links remain previewable, but only a strict 32-byte PSK
 // is eligible for staging; noncanonical legacy lengths are never rekeyed.
 func (e *Engine) StageIPsecRecipient(ctx context.Context, rawURL string, confirmedSHA256 string, keys IPsecCredentialStore) error {
+	return e.StageIPsecRecipientAdmitted(ctx, rawURL, confirmedSHA256, keys, nil)
+}
+
+// StageIPsecRecipientAdmitted checks the exact IPsec receiver again under
+// canonical maintenance/Link/resource locks before staging the first PSK or
+// PendingIPsec intent. Preexisting protected material is never erased.
+func (e *Engine) StageIPsecRecipientAdmitted(ctx context.Context, rawURL, confirmedSHA256 string,
+	keys IPsecCredentialStore, admission ReceiverAdmission) error {
 	// Bound untrusted input before even hashing it, then bind the exact raw
 	// bytes shown in preview (not a re-encoded Offer).
 	if len(rawURL) == 0 || len(rawURL) > pairing.MaxLinkBytes {
@@ -69,7 +77,7 @@ func (e *Engine) StageIPsecRecipient(ctx context.Context, rawURL string, confirm
 		return err
 	}
 	defer clear(secret)
-	return e.stageIPsec(ctx, desired, secret, "recipient", "", keys, nil)
+	return e.stageIPsec(ctx, desired, secret, "recipient", "", keys, nil, admission)
 }
 
 func checkedIPsecQuickOffer(offer pairing.Offer, recipient bool) (domain.Link, []byte, string, error) {
@@ -107,7 +115,8 @@ func checkedIPsecQuickOffer(offer pairing.Offer, recipient bool) (domain.Link, [
 	return desired, secret, encoded, nil
 }
 
-func (e *Engine) stageIPsec(ctx context.Context, desired domain.Link, secret []byte, origin, digest string, keys IPsecCredentialStore, publish func() error) error {
+func (e *Engine) stageIPsec(ctx context.Context, desired domain.Link, secret []byte, origin, digest string,
+	keys IPsecCredentialStore, publish func() error, admission ReceiverAdmission) error {
 	if e == nil || ctx == nil || keys == nil {
 		return stlerr.New(stlerr.CodeInvalid, "ipsec_stage", "", "ipsec", "Engine and protected key store are required")
 	}
@@ -160,6 +169,12 @@ func (e *Engine) stageIPsec(ctx context.Context, desired domain.Link, secret []b
 		return stlerr.New(stlerr.CodeConflict, "ipsec_stage", string(desired.ID), "ipsec", "prior IPsec retirement reserves Link identity; create a new Link ID")
 	}
 	if err := rejectResourceConflicts(snapshot, desired.ID, claims); err != nil {
+		return err
+	}
+	// This is the final read-only receiver admission after ALL Engine
+	// reservations. A changed host assignment must not produce a new PSK
+	// or a new pending public intent.
+	if err := admitReceiverUnderLock(ctx, desired, admission); err != nil {
 		return err
 	}
 

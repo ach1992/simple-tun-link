@@ -613,14 +613,25 @@ func (b *OperationalBackend) resolveLocalUnderlay(ctx context.Context, link doma
 	return HostRoute{Source: link.Underlay.Local, Device: assigned.Interface}, nil
 }
 
+// ErrCreateDeviceUnderlayRecheck identifies the final local IPv4 readback
+// inside backend Apply, before the first XFRM device creation command. This
+// marker is internal to STL, not a new host/journal ownership authority.
+var ErrCreateDeviceUnderlayRecheck = errors.New("IPsec pre-XFRM local underlay recheck failed")
+
 func (b *OperationalBackend) createDevice(ctx context.Context, p Profile) (ipsecProgress, error) {
 	progress := ipsecProgress{}
 	if b.advanceDevice == nil {
 		return progress, fmt.Errorf("durable XFRM creation journal unavailable")
 	}
 	route, err := b.resolveLocalUnderlay(ctx, p.Link)
-	if err != nil || route.Source != p.Link.Underlay.Local || route.Device == "" {
-		return progress, fmt.Errorf("IPsec route changed before XFRM creation")
+	if err != nil {
+		// Keep only sanitized typed local inventory causes. Engine already
+		// entered Apply and may have prepared journals, so the CLI must
+		// distinguish this late check from pre-Apply rejection.
+		return progress, fmt.Errorf("%w: %w", ErrCreateDeviceUnderlayRecheck, err)
+	}
+	if route.Source != p.Link.Underlay.Local || route.Device == "" {
+		return progress, fmt.Errorf("%w: resolved IPsec local interface changed", ErrCreateDeviceUnderlayRecheck)
 	}
 	if err = b.XFRM.RequireVacant(ctx, p); err != nil {
 		return progress, fmt.Errorf("XFRM resources no longer vacant")
