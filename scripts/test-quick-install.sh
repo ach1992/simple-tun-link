@@ -3,6 +3,12 @@
 # Host effects are simulated by fake curl/sudo in a private scratch dir.
 # All fake tooling and side effects remain inside a disposable directory.
 set -Eeuo pipefail
+# This unit harness intercepts sudo but cannot safely intercept an already
+# root process. Privileged cases run separately in disposable root guests.
+if (( EUID == 0 )); then
+  echo 'STL_TEST_QUICK_INSTALL_REFUSED: run as non-root' >&2
+  exit 77
+fi
 umask 077
 repo="$(cd -- "$(dirname -- "$0")/.." && pwd -P)"
 # Stable release bumps must keep the permanent first-hop install/update text.
@@ -47,6 +53,11 @@ for idx in 0 1 2; do
   fi
 done
 export STL_TEST_PUBLIC_TAG=v0.1.0
+export STL_TEST_CANONICAL_SOURCE="$repo/scripts/install.sh"
+canonical_sha=$(sha256sum < "$STL_TEST_CANONICAL_SOURCE")
+canonical_sha=${canonical_sha%% *}
+[[ $canonical_sha =~ ^[0-9a-f]{64}$ ]] || exit 1
+expected_stable_invocation="quick_install_main \"$STL_TEST_PUBLIC_TAG\" \"\" \"$canonical_sha\" \"\" \"\$@\""
 scratch=$(mktemp -d)
 trap 'rm -rf -- "$scratch"' EXIT
 bash "$repo/scripts/render-stable-bootstrap.sh" "$STL_TEST_PUBLIC_TAG" "$scratch/stl-bootstrap.sh"
@@ -57,8 +68,8 @@ bash -n "$STL_TEST_STABLE_BOOTSTRAP"
 # MUST prevent its execution.
 head -c -1 "$STL_TEST_STABLE_BOOTSTRAP" > "$scratch/almost-complete.sh"
 bash -n "$scratch/almost-complete.sh"
-grep -Fx 'quick_install_main "v0.1.0" "" "" "" "$@"' "$scratch/almost-complete.sh" >/dev/null
-[[ "$(tail -n 1 "$STL_TEST_STABLE_BOOTSTRAP")" == 'quick_install_main "v0.1.0" "" "" "" "$@"' ]] || {
+grep -Fx "$expected_stable_invocation" "$scratch/almost-complete.sh" >/dev/null
+[[ "$(tail -n 1 "$STL_TEST_STABLE_BOOTSTRAP")" == "$expected_stable_invocation" ]] || {
   echo 'Stable bootstrap did not pin its exact release tag.' >&2
   exit 1
 }
@@ -157,6 +168,13 @@ if [[ -n "${STL_TEST_OVERSIZE_DOWNSTREAM:-}" ]]; then
 fi
 if [[ -n "$STL_TEST_SYNTAX_FAIL" ]]; then
   printf '%s\n' 'if (( STL_TEST_SYNTAX_SENSITIVE_SENTINEL ('
+elif [[ "$url" == "https://raw.githubusercontent.com/ach1992/simple-tun-link/$STL_TEST_PUBLIC_TAG/scripts/install.sh" ]]; then
+  if [[ -n "${STL_TEST_OFFICIAL_CANONICAL_TAMPERED:-}" ]]; then
+    # Valid, maliciously changed shell must fail the pin before sudo.
+    printf '%s\n' '#!/usr/bin/env bash' 'touch "$STL_TEST_EXECUTIONS"'
+  else
+    cat "$STL_TEST_CANONICAL_SOURCE"
+  fi
 else
   printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "test fake installer" >> "$STL_TEST_EXECUTIONS"'
 fi
@@ -282,6 +300,35 @@ done
   echo 'Bad or partial installer passed privilege elevation.' >&2
   exit 1
 }
+# Publisher-pinned official release bootstrap must reject a syntactically
+# valid, substituted canonical installer before calling sudo or Bash on it.
+: > "$STL_TEST_EXECUTIONS"
+if STL_TEST_OFFICIAL_CANONICAL_TAMPERED=1 bash "$STL_TEST_STABLE_BOOTSTRAP" > "$scratch/out" 2>"$scratch/err"; then
+  echo 'Immutable Stable bootstrap executed substituted canonical source.' >&2
+  exit 1
+fi
+grep -q 'immutable Stable bootstrap SHA256 pin' "$scratch/err" || {
+  echo 'Missing official source pin-mismatch diagnostic.' >&2
+  exit 1
+}
+[[ ! -s "$STL_TEST_EXECUTIONS" ]] || {
+  echo 'Official source pin mismatch reached privileged execution.' >&2
+  exit 1
+}
+# An inherited exported Bash function may not spoof the SHA checker.
+sha256sum() { printf '%s  -\n' "$canonical_sha"; }
+export -f sha256sum
+: > "$STL_TEST_EXECUTIONS"
+if STL_TEST_OFFICIAL_CANONICAL_TAMPERED=1 bash "$STL_TEST_STABLE_BOOTSTRAP" > "$scratch/out" 2>"$scratch/err"; then
+  echo 'Inherited SHA256 function bypassed the official release pin.' >&2
+  exit 1
+fi
+[[ ! -s "$STL_TEST_EXECUTIONS" ]] || {
+  echo 'Inherited SHA256 function reached privileged installer.' >&2
+  exit 1
+}
+unset -f sha256sum
+echo 'OFFICIAL_STABLE_CANONICAL_PIN_PRE_PRIVILEGE=PASS'
 # Failed canonical install/update is not a successful bootstrap. Fake sudo
 # exits with a controlled status after recording the action; no host effects.
 if (( EUID != 0 )); then

@@ -602,10 +602,15 @@ and cross-check its publisher/tag identity before any root execution.
 The version-free `releases/latest/download/stl-bootstrap.sh` URL selects
 the newest published **Stable**, excluding RC and draft releases. GitHub
 serves a tag-bound immutable bootstrap asset generated from the reviewed
-quick installer source. That bootstrap pins its own exact release tag
-before downloading the canonical installer; it does not execute a mutable
-`main` script as root. Inspect source, SHA256SUMS and official release
-identity before installing. The public command stays unchanged:
+quick installer source. A newly published Stable bootstrap built from current
+source pins **both** its exact release tag and the whole-file SHA256 of the reviewed canonical
+`install.sh`. The complete downloaded canonical file must match that
+build-bound digest **before** syntax checking or any sudo/root execution.
+A substituted canonical script fails closed even if it is valid Bash.
+It never executes mutable `main` as root. Published `v0.1.22` predates
+this canonical SHA256 pin; the stronger check requires a later reviewed
+Stable release and does not retroactively alter historical assets.
+Inspect source, SHA256SUMS and official release identity before installing. The public command stays unchanged:
 
 ~~~sh
 bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && bash -n "$f" && bash "$f" "$@"' stl
@@ -630,9 +635,10 @@ GitHub release API before privilege elevation; it requires Python 3 and a
 published, complete, `immutable:true` non-prerelease release. Missing,
 mismatched, truncated, redirected, unavailable or mutable metadata fails
 closed. **The executable canonical installer is always downloaded from the
-bootstrap's own immutable Latest Stable tag**, never from the separately
-selected older tag. That older version remains data (`--version`) for the
-canonical installer, which independently validates release SHA256SUMS, binary
+bootstrap's own immutable Latest Stable tag** (and, on a newly
+published pinned Stable, must match its embedded canonical SHA256), never from
+the separately selected older tag. That older version remains data
+(`--version`) for the canonical installer, which independently validates release SHA256SUMS, binary
 metadata and installed ownership/rollback rules. The bootstrap reattaches a
 real /dev/tty to open the menu after installation. Without a TTY, use
 `sudo stl menu`. This source change reaches users only after a new release

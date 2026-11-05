@@ -67,6 +67,14 @@ The archive keeps the exact six regular members: one binary, canonical
 `install.sh`, `LICENSE`, `BUILD-MANIFEST.txt`, `LOCAL-INSTALL.txt`, and
 `SHA256SUMS` (covering the other five). Both `.sh` and `.tar.gz` are included
 in the release-wide SHA256SUMS; building alone does **not** publish them.
+A newly rendered Stable `stl-bootstrap.sh` also embeds the **complete-file
+SHA256 of the exact canonical `scripts/install.sh`** from the release source
+tree, after verifying it is byte-identical to the compiled-in canonical copy.
+The runtime checks this pin before running downloaded canonical shell or
+elevating privileges. The self-hosted Mirror keeps its independently verified
+source and SHA256SUMS pins. This source behavior requires a new reviewed
+release; historical assets such as published v0.1.22 remain unchanged.
+
 The first official Stable release with the new `.sh` assets is
 [v0.1.9](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.9).
 The older v0.1.8 release contained only the legacy `.tar.gz` archives.

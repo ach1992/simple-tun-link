@@ -87,7 +87,9 @@ cmp -s "$stage/canonical-amd64.sh" "$stage/canonical-arm64.sh" ||
   { echo 'Release architectures contain different canonical installers.' >&2; exit 1; }
 # The mirror bootstrap must be generated from the EXACT published and hashed
 # Stable source, not from whichever future checkout happens to be active.
-[[ $(tail -n 1 "$source_dir/stl-bootstrap.sh") == "quick_install_main \"$tag\" \"\" \"\" \"\" \"\$@\"" ]] &&
+release_canonical_sha=$(sha256sum < "$stage/canonical-amd64.sh")
+release_canonical_sha=${release_canonical_sha%% *}
+[[ $(tail -n 1 "$source_dir/stl-bootstrap.sh") == "quick_install_main \"$tag\" \"\" \"$release_canonical_sha\" \"\" \"\$@\"" ]] &&
   cmp -s <(sed '$d' "$source_dir/stl-bootstrap.sh") <(sed '$d' "$mirror_source") &&
   cmp -s "$stage/canonical-amd64.sh" "$script_dir/install.sh" ||
   { echo 'Local release-preparation source differs from official hashed bootstrap/installer. Use the exact released source/tag.' >&2; exit 1; }
@@ -95,6 +97,10 @@ grep -q 'release-sums-sha256)' "$stage/canonical-amd64.sh" ||
   { echo 'This Stable does not support standalone HTTPS mirror installation; publish a newer reviewed release.' >&2; exit 1; }
 install -m 0644 "$stage/canonical-amd64.sh" "$stage/releases/$tag/install.sh"
 installer_sha=$(sha256sum "$stage/releases/$tag/install.sh" | awk '{print $1}')
+[[ $installer_sha == "$release_canonical_sha" ]] || {
+  echo 'Verified canonical installer changed while staging the mirror.' >&2
+  exit 1
+}
 # Inject only validated, source-pinned constants into the final invocation.
 # The full bootstrap stays byte-for-byte based on canonical quick-install.sh.
 sed '$d' "$mirror_source" > "$stage/install.sh"

@@ -22,20 +22,20 @@ quick_install_main() {
   # Distribution trust comes ONLY from the exact reviewed final invocation.
   # Never accept STL_MIRROR_* inherited environment variables as origin pins.
   [[ $# -ge 4 && $# -le 7 ]] || usage
-  local bootstrap_version=$1 mirror_url=$2 mirror_install_sha=$3 mirror_sums_sha=$4
+  local bootstrap_version=$1 mirror_url=$2 pinned_install_sha=$3 mirror_sums_sha=$4
   shift 4
   version=$bootstrap_version
   if [[ -n $mirror_url ]]; then
     [[ $bootstrap_version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ &&
        $mirror_url =~ ^https://[a-zA-Z0-9][a-zA-Z0-9.-]*(:[0-9]{1,5})?/releases/v[0-9]+\.[0-9]+\.[0-9]+$ &&
        $mirror_url == */releases/$bootstrap_version && $mirror_url != *..* &&
-       $mirror_install_sha =~ ^[0-9a-f]{64}$ &&
+       $pinned_install_sha =~ ^[0-9a-f]{64}$ &&
        $mirror_sums_sha =~ ^[0-9a-f]{64}$ ]] || {
       echo '[FAILED] Invalid pinned mirror metadata; no installer started.' >&2
       return 2
     }
   else
-    [[ -z $mirror_install_sha && -z $mirror_sums_sha ]] || usage
+    [[ -z $mirror_sums_sha && ( -z $pinned_install_sha || $pinned_install_sha =~ ^[0-9a-f]{64}$ ) ]] || usage
   fi
   # The immutable Latest Stable bootstrap pins the default tag. One optional
   # explicit published Stable tag follows the same short public command;
@@ -171,9 +171,18 @@ STL_RELEASE_JSON
     return 1
   fi
   [[ -s $tmp ]] || { echo '[FAILED] STL installer download is empty; no installer started. Verify the official release and retry the download.' >&2; return 1; }
-  if [[ -n $mirror_url ]]; then
-    [[ $(sha256sum -- "$tmp" | awk '{print $1}') == "$mirror_install_sha" ]] || {
-      echo '[FAILED] Mirror canonical installer differs from the independently pinned SHA256; no installer started.' >&2
+  # A rendered immutable Stable bootstrap carries the exact reviewed
+  # canonical installer's SHA256; the Mirror carries that same source pin
+  # alongside its independently authenticated release checksum manifest.
+  if [[ -n $pinned_install_sha ]]; then
+    # Use the system binary, not an exported shell function from the
+    # operator's environment, to establish the pre-privilege digest.
+    [[ $(/usr/bin/sha256sum < "$tmp") == "$pinned_install_sha  -" ]] || {
+      if [[ -n $mirror_url ]]; then
+        echo '[FAILED] Mirror canonical installer differs from the independently pinned SHA256; no installer started.' >&2
+      else
+        echo '[FAILED] Official canonical installer differs from the immutable Stable bootstrap SHA256 pin; no installer started.' >&2
+      fi
       return 1
     }
   fi

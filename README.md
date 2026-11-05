@@ -52,7 +52,10 @@ bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -f
 
 It fetches a bounded, complete HTTPS bootstrap into an owned temporary file before execution. The verified
 bootstrap and canonical installer then check the released artifact's checksums
-and version/source identity. A publisher's own checksum is not an independent
+and version/source identity. A newly generated Stable bootstrap also pins the
+canonical installer's exact SHA256 **before privilege elevation**; published
+v0.1.22 predates that check, which takes effect only in a later Stable.
+A publisher's own checksum is not an independent
 signature; verify that you trust the official publisher before privileged use.
 **Do not replace this command with an unchecked `curl | bash` pipeline.**
 
