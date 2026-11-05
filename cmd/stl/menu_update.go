@@ -356,8 +356,8 @@ func menuPrintManualUpdate(out io.Writer, selected string) {
 // This path only explains the existing pinned canonical installer; it does
 // not read foreign files or attempt an unauthenticated root update.
 func menuPrintOfflineUpdate(out io.Writer) {
-	menuSection(out, "Offline / trusted mirror Update")
-	menuProse(out, "The official release catalogue needs GitHub. A mirror-only server must use an explicitly trusted, version-pinned HTTPS mirror; a fully offline server needs a preverified local installer.")
+	menuSection(out, "Offline / HTTPS mirror Update")
+	menuProse(out, "Browsing the official GitHub release catalogue needs GitHub. A mirror-only server must use an explicitly trusted, version-pinned HTTPS mirror; a fully offline server needs a preverified local installer.")
 	menuField(out, "HTTPS mirror", "https://github.com/ach1992/simple-tun-link/blob/main/docs/MIRROR.md#3-clean-install-and-explicit-update")
 	menuField(out, "Local file", "https://github.com/ach1992/simple-tun-link/blob/main/docs/INSTALL.md#local-installation-choose-a-published-asset")
 	menuProse(out, "If the installed version supports stl update, use one of these exact, API-free commands with independently verified pins (replace all placeholders):")
@@ -367,7 +367,112 @@ func menuPrintOfflineUpdate(out io.Writer) {
 	menuProse(out, "No update or trust-source change was performed by this screen.")
 }
 
+// Choose the distribution source BEFORE trying GitHub. A host with only a
+// trusted HTTPS mirror or a local transfer must not need api.github.com even
+// for a read-only menu screen. No mirror URL or digest is persisted.
 func menuUpdate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, options *runtimeOptions) int {
+	menuScreen(out, "Update / choose source")
+	menuField(out, "Installed", safeMenuText(version.Version))
+	menuOption(out, "1", "Official GitHub releases", "Browse complete immutable releases")
+	menuOption(out, "2", "Verified local file", "Offline; requires independent SHA256")
+	menuOption(out, "3", "Trusted HTTPS mirror", "No GitHub API; requires independent SHA256")
+	menuOption(out, "o", "Offline instructions", "File transfer and trust guidance")
+	menuOption(out, "0", "Back", "No changes")
+	fmt.Fprint(out, "Choose update source (Enter cancels): ")
+	choice, err := readMenuAnswer(reader)
+	if errors.Is(err, io.EOF) || (err == nil && (choice == "" || choice == "0" || strings.EqualFold(choice, "q"))) {
+		menuNotice(out, "INFO", "Update cancelled. Nothing changed.")
+		return 0
+	}
+	if err != nil {
+		menuNotice(out, "WARNING", "Invalid update-source selection; nothing changed.")
+		return 2
+	}
+	switch strings.ToLower(choice) {
+	case "1":
+		return menuUpdateOfficial(input, reader, out, errOut, options)
+	case "2":
+		return menuUpdatePinned(input, reader, out, errOut, "--local", menuCanUpdateNow(input, out), verifiedUpdateCommand)
+	case "3":
+		return menuUpdatePinned(input, reader, out, errOut, "--mirror", menuCanUpdateNow(input, out), verifiedUpdateCommand)
+	case "o":
+		menuPrintOfflineUpdate(out)
+		return 0
+	default:
+		menuNotice(out, "WARNING", "Choose 1, 2, 3, o or 0; no update started.")
+		return 2
+	}
+}
+
+// The existing CLI is the ONLY local/mirror first hop and calls the one
+// canonical installer. The injectable function here permits non-privileged
+// menu-consent tests, never replacement of the production CLI/TTY gate.
+func menuUpdatePinned(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, method string, eligible bool, execute func([]string, io.Writer, io.Writer) int) int {
+	menuScreen(out, "Update / independently pinned source")
+	if method == "--local" {
+		menuField(out, "Method", "Verified local file")
+		menuProse(out, "Transfer the official architecture-matched local-install.sh unchanged to a private root-owned /root/stl directory.")
+	} else {
+		menuField(out, "Method", "Trusted HTTPS mirror")
+		menuProse(out, "Use the exact https://HOST[:PORT]/install.sh prepared on a trusted device. The destination never contacts GitHub or falls back to another origin.")
+	}
+	menuProse(out, "The SHA256 must come from the independently trusted publisher/download or mirror-preparation device, never from the untrusted destination mirror.")
+	if !eligible {
+		menuNotice(out, "INFO", "Interactive update requires the installed /usr/local/bin/stl running as root in a real terminal.")
+		menuPrintOfflineUpdate(out)
+		return 0
+	}
+	label := "Full official local-installer path (/root/stl/EXACT_FILENAME)"
+	if method == "--mirror" {
+		label = "Trusted HTTPS mirror URL (https://HOST/install.sh)"
+	}
+	fmt.Fprintf(out, "%s (Enter cancels): ", label)
+	source, err := readMenuAnswer(reader)
+	if err != nil || source == "" || source == "0" || strings.EqualFold(source, "q") {
+		menuNotice(out, "INFO", "Update cancelled. Nothing changed.")
+		return 0
+	}
+	fmt.Fprint(out, "Independent SHA256 (64 lowercase hex; Enter cancels): ")
+	digest, err := readMenuAnswer(reader)
+	if err != nil || digest == "" || digest == "0" || strings.EqualFold(digest, "q") {
+		menuNotice(out, "INFO", "Update cancelled. Nothing changed.")
+		return 0
+	}
+	args := []string{method, source, "--sha256", digest}
+	request, err := parseVerifiedUpdate(args)
+	if err != nil {
+		menuNotice(out, "WARNING", "Source, CPU/filename or independent SHA256 is invalid. No file was opened or update started.")
+		menuField(out, "Reason", "pinned_update_input_invalid")
+		menuField(out, "NEXT ACTION", "Use the exact official /root/stl file or HTTPS mirror install.sh URL and a separately verified 64-character lowercase digest.")
+		return 0
+	}
+	menuSection(out, "Review / before privileged update")
+	menuField(out, "Method", request.kind)
+	menuField(out, "Source", request.source)
+	menuField(out, "Independent SHA256", request.digest)
+	menuNotice(out, "WARNING", "UPDATE can replace the installed binary and may use selected signed APT packages. Back up protected State and credentials; do not interrupt package transactions.")
+	menuProse(out, "The source has NOT yet been authenticated. After confirmation the existing CLI privately snapshots and verifies the whole file BEFORE running the canonical Update. No trust source is saved.")
+	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
+		menuNotice(out, "WARNING", "Cannot obtain a fresh terminal confirmation. Nothing changed.")
+		return 2
+	}
+	fmt.Fprintf(out, "Type %s to verify and update (Enter cancels): ", menuActionToken(out, "UPDATE"))
+	answer, err := readMenuAnswer(reader)
+	if err != nil || answer != "UPDATE" {
+		menuNotice(out, "INFO", "Update cancelled. Nothing changed.")
+		return 0
+	}
+	// After a confirmed attempt, even a failed installer may have changed
+	// package/binary state. Never continue the stale in-memory Engine/menu.
+	if code := execute(args, out, errOut); code != 0 {
+		menuNotice(out, "FAILED", "Verified Update did not complete. Inspect version, install-record, dpkg --audit and retained recovery before retrying.")
+		return menuUpdatedExecutable
+	}
+	menuNotice(out, "OK", "Verified Update completed. Restart STL and verify saved Links separately.")
+	return menuUpdatedExecutable
+}
+
+func menuUpdateOfficial(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, options *runtimeOptions) int {
 	menuScreen(out, "Update / choose official release")
 	menuField(out, "Installed", safeMenuText(version.Version))
 	ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)

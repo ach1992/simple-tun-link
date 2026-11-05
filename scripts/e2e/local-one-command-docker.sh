@@ -679,9 +679,10 @@ docker run --rm --network bridge \
   "$image" /bin/bash /mnt/stl-guest-driver.sh guest
 printf 'LOCAL_ONE_COMMAND_STABLE_UPDATE_AND_DOWNGRADE_REFUSAL=PASS (%s linux/%s)\n' "$image" "$arch"
 
-# A separate root guest exercises the ACTUAL installed stl update --mirror
-# command, not a test-only paraphrase of the existing bootstrap. All requests
-# stay on guest loopback HTTPS; only distro-signed APT can reach the Internet.
+# A separate root guest exercises actual installed-CLI mirror refusals and
+# a real PTY menu-driven, independently pinned mirror Update through the
+# SAME installed CLI/canonical engine. All requests stay on guest-loopback
+# HTTPS; only distro-signed APT can reach the Internet.
 command -v openssl >/dev/null || fail missing_host_openssl_for_tls_test
 mkdir -m 0700 "$fixture/mirror-publisher"
 trusted_sums=$(sha256sum < "$fixture/v999.0.1/SHA256SUMS")
@@ -717,6 +718,7 @@ docker run --rm --network bridge \
   -v "$fixture/stl-mirror-test.key:/mnt/stl-test.key:ro" \
   -v "$PWD/scripts/e2e/installed-mirror-fixture.py:/mnt/stl-server.py:ro" \
   -v "$PWD/scripts/e2e/installed-mirror-update-guest.sh:/mnt/stl-mirror-guest.sh:ro" \
+  -v "$PWD/scripts/e2e/terminal-offline-update.py:/mnt/stl-menu-pty.py:ro" \
   -v "$PWD/docs/INSTALL.md:/mnt/stl-install-doc:ro" \
   "$image" /bin/bash /mnt/stl-mirror-guest.sh ||
   fail verified_installed_cli_mirror_guest_failed

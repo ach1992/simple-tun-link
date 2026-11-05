@@ -15,7 +15,7 @@ import (
 
 func TestMenuUpdateGuidancePinsExactReleaseWithoutExecutingAnything(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "absent")
-	code, out, errOut := runMenuTest(t, root, "6\nv0.1.0\n8\n")
+	code, out, errOut := runMenuTest(t, root, "6\n1\nv0.1.0\n8\n")
 	if code != 0 || errOut != "" {
 		t.Fatalf("guided update failed: code=%d stderr=%q", code, errOut)
 	}
@@ -38,7 +38,7 @@ func TestMenuUpdateGuidancePinsExactReleaseWithoutExecutingAnything(t *testing.T
 func TestMenuUpdateRejectsInjectionAndDoesNotEchoInput(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "absent")
 	payload := "v0.1.0; touch /tmp/private-menu-injection"
-	code, out, errOut := runMenuTest(t, root, "6\n"+payload+"\n")
+	code, out, errOut := runMenuTest(t, root, "6\n1\n"+payload+"\n")
 	if code != 0 || !strings.Contains(errOut, "Invalid release tag") ||
 		strings.Contains(out+errOut, payload) || strings.Contains(out, "sudo bash") {
 		t.Fatalf("untrusted tag accepted or echoed: code=%d out=%q err=%q", code, out, errOut)

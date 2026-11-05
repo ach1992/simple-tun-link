@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Execute the REAL installed /usr/local/bin/stl mirror Update in a disposable
-# Debian/Ubuntu root guest. Never mount host networking, Docker socket, host
+# Exercise installed /usr/local/bin/stl CLI and confirmed mirror Update menu
+# in a disposable Debian/Ubuntu root guest. Never mount networking, Docker socket, host
 # package database, host STL State, or an Owner/Agent production filesystem.
 set -Eeuo pipefail
 umask 077
@@ -131,9 +131,12 @@ try_bad asset-oversize-chunked 'mirror_release_asset_unverified'
 
 printf 'normal\n' > "$mode.new"
 mv -f -- "$mode.new" "$mode"
-/usr/local/bin/stl update --mirror "$mirror_url" --sha256 "$STL_E2E_BOOTSTRAP_SHA" \
-  > /root/stl-mirror-valid-update.out 2>&1 ||
-  { cat /root/stl-mirror-valid-update.out >&2; fail valid_exact_pinned_mirror_update_failed; }
+# Real installed-root, narrow NO_COLOR PTY menu: select the GitHub-free
+# trusted HTTPS mirror, reject invalid input/digest, require fresh UPDATE,
+# and delegate the successful path to the existing CLI/canonical installer.
+python3 /mnt/stl-menu-pty.py "$mirror_url" "$STL_E2E_BOOTSTRAP_SHA" \
+  /root/stl-mirror-valid-update.out ||
+  fail valid_exact_pinned_mirror_menu_update_failed
 /usr/local/bin/stl version --json | grep -Fq '"version":"v999.0.1"' ||
   fail valid_mirror_update_version_not_changed
 [[ $(sha256sum /usr/local/bin/stl | cut -d' ' -f1) != "$before_binary" &&

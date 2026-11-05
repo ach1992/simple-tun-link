@@ -1,15 +1,18 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -109,7 +112,7 @@ func TestReleaseLookupGuidanceClassifiesFailuresWithoutLeakingNetworkError(t *te
 			var out, errOut bytes.Buffer
 			options := &runtimeOptions{stateRoot: filepath.Join(t.TempDir(), "no-state"),
 				menuReleases: func(context.Context) ([]menuOfficialRelease, error) { return nil, tc.err }}
-			if code := runWithRuntimeInput([]string{"menu"}, strings.NewReader("6\n0\n8\n"),
+			if code := runWithRuntimeInput([]string{"menu"}, strings.NewReader("6\n1\n0\n8\n"),
 				&out, &errOut, options); code != 0 ||
 				!strings.Contains(out.String(), reason) ||
 				!strings.Contains(out.String(), tc.wantAction) ||
@@ -130,7 +133,7 @@ func TestOfflineUpdateGuidanceWithoutGitHubIsReadOnly(t *testing.T) {
 	}}
 	code := runWithRuntimeInput([]string{"menu"}, strings.NewReader("6\no\n8\n"), &out, &errOut, opts)
 	transcript := out.String() + errOut.String()
-	for _, want := range []string{"Offline / HTTPS mirror Update", "docs/MIRROR.md", "docs/INSTALL.md", "No update or trust-source change"} {
+	for _, want := range []string{"OFFLINE / HTTPS MIRROR UPDATE", "docs/MIRROR.md", "docs/INSTALL.md", "No update or trust-source change"} {
 		if !strings.Contains(transcript, want) {
 			t.Fatalf("missing %q in transcript %q", want, transcript)
 		}
@@ -203,7 +206,7 @@ func TestMenuStableForwardUpgradeReachesRootTTYGate(t *testing.T) {
 	opts := &runtimeOptions{stateRoot: filepath.Join(t.TempDir(), "absent"), menuReleases: func(context.Context) ([]menuOfficialRelease, error) {
 		return []menuOfficialRelease{release}, nil
 	}}
-	code := runWithRuntimeInput([]string{"menu"}, strings.NewReader("6\n1\n8\n"), &out, &errOut, opts)
+	code := runWithRuntimeInput([]string{"menu"}, strings.NewReader("6\n1\n1\n8\n"), &out, &errOut, opts)
 	if code != 0 || errOut.Len() != 0 || !strings.Contains(out.String(), "Stable / immutable") ||
 		!strings.Contains(out.String(), "Automatic update requires a real terminal, root") ||
 		strings.Contains(out.String(), "No in-place update command is recommended") ||
@@ -223,7 +226,7 @@ func TestMenuUpdateChoiceIsReadOnlyOutsideRealInstalledRootTTY(t *testing.T) {
 			sampleOfficialRelease("v0.1.0-rc.6", now.Add(-2*time.Hour)),
 		}, nil
 	}}
-	code := runWithRuntimeInput([]string{"menu"}, strings.NewReader("6\n2\n8\n"), &out, &errOut, opts)
+	code := runWithRuntimeInput([]string{"menu"}, strings.NewReader("6\n1\n2\n8\n"), &out, &errOut, opts)
 	if code != 0 || errOut.Len() != 0 || !strings.Contains(out.String(), "v0.1.0-rc.7") ||
 		!strings.Contains(out.String(), "release_version_contract_unsupported") ||
 		strings.Contains(out.String(), "bash -o pipefail") ||
@@ -241,7 +244,7 @@ func TestMenuUpdateOfflineFallbackAndRejectedInstallerInput(t *testing.T) {
 		menuReleases: func(context.Context) ([]menuOfficialRelease, error) {
 			return nil, errors.New("secret network diagnostic must not be printed")
 		}}
-	if code := runWithRuntimeInput([]string{"menu"}, strings.NewReader("6\n0\n8\n"), &out, &errOut, opts); code != 0 ||
+	if code := runWithRuntimeInput([]string{"menu"}, strings.NewReader("6\n1\n0\n8\n"), &out, &errOut, opts); code != 0 ||
 		!strings.Contains(out.String(), "Cannot verify the official release list") ||
 		strings.Contains(out.String()+errOut.String(), "secret network diagnostic") {
 		t.Fatalf("offline fallback was unsafe: code=%d out=%q err=%q", code, out.String(), errOut.String())
@@ -348,7 +351,7 @@ func TestMenuMutablePublishedUpgradeRemainsVisibleButManualOnly(t *testing.T) {
 			opts := &runtimeOptions{stateRoot: root, menuReleases: func(context.Context) ([]menuOfficialRelease, error) {
 				return []menuOfficialRelease{release}, nil
 			}}
-			code := runWithRuntimeInput([]string{"menu"}, strings.NewReader("6\n1\n8\n"), &out, &errOut, opts)
+			code := runWithRuntimeInput([]string{"menu"}, strings.NewReader("6\n1\n1\n8\n"), &out, &errOut, opts)
 			if code != 0 || errOut.Len() != 0 ||
 				!strings.Contains(out.String(), "Automatic root update is disabled") ||
 				!strings.Contains(out.String(), "manual only") ||
@@ -377,7 +380,7 @@ func TestMenuImmutableReleaseStillNeedsInstalledRootRealTTY(t *testing.T) {
 	opts := &runtimeOptions{stateRoot: root, menuReleases: func(context.Context) ([]menuOfficialRelease, error) {
 		return []menuOfficialRelease{release}, nil
 	}}
-	code := runWithRuntimeInput([]string{"menu"}, strings.NewReader("6\n1\n8\n"), &out, &errOut, opts)
+	code := runWithRuntimeInput([]string{"menu"}, strings.NewReader("6\n1\n1\n8\n"), &out, &errOut, opts)
 	if code != 0 || errOut.Len() != 0 ||
 		!strings.Contains(out.String(), "Pre-release / immutable") ||
 		!strings.Contains(out.String(), "Automatic update requires a real terminal, root") ||
@@ -387,5 +390,87 @@ func TestMenuImmutableReleaseStillNeedsInstalledRootRealTTY(t *testing.T) {
 	}
 	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("noninteractive immutable release changed State: %v", err)
+	}
+}
+
+// A mirror-only or air-gapped host must not even attempt the GitHub API to
+// reach its pinned Update method. A non-installed/non-TTY menu remains safe.
+func TestMenuPinnedUpdateSourceSkipsGitHubAndRequiresInstalledRootTTY(t *testing.T) {
+	for _, method := range []string{"2", "3"} {
+		t.Run(method, func(t *testing.T) {
+			var calls int
+			var out, errOut bytes.Buffer
+			opts := &runtimeOptions{
+				stateRoot: filepath.Join(t.TempDir(), "uncreated"),
+				menuReleases: func(context.Context) ([]menuOfficialRelease, error) {
+					calls++
+					return nil, errors.New("PRIVATE_API_SENTINEL")
+				},
+			}
+			code := runWithRuntimeInput([]string{"menu"}, strings.NewReader("6\n"+method+"\n8\n"), &out, &errOut, opts)
+			combined := out.String() + errOut.String()
+			if code != 0 || calls != 0 || !strings.Contains(combined, "OFFLINE / HTTPS MIRROR UPDATE") ||
+				!strings.Contains(combined, "installed /usr/local/bin/stl") ||
+				strings.Contains(combined, "PRIVATE_API_SENTINEL") || strings.Contains(combined, "Type UPDATE") {
+				t.Fatalf("pinned menu attempted GitHub or bypassed root/TTY gate: code=%d lookups=%d transcript=%q", code, calls, combined)
+			}
+		})
+	}
+}
+
+// This tests the exact menu consent and argument forwarding with a harmless
+// fake execution function. Production always passes the existing installed
+// root/TTY gate and verifiedUpdateCommand; the fake never executes a script.
+func TestMenuPinnedUpdateConsentAndCLIParity(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	local := filepath.Join("/root/stl", updateTestFilename())
+	cases := []struct {
+		name, method, source, sha, confirm string
+		wantRun, wantExit                  bool
+	}{
+		{"local approved", "--local", local, digest, "UPDATE", true, true},
+		{"mirror approved", "--mirror", "https://mirror.example.com/install.sh", digest, "UPDATE", true, true},
+		{"local no consent", "--local", local, digest, "NO", false, false},
+		{"mirror empty consent", "--mirror", "https://mirror.example.com/install.sh", digest, "", false, false},
+		{"invalid digest", "--local", local, "not-an-independent-digest", "UPDATE", false, false},
+		{"foreign local file", "--local", "/tmp/stl-helper.sh", digest, "UPDATE", false, false},
+		{"insecure mirror", "--mirror", "http://mirror.example.com/install.sh", digest, "UPDATE", false, false},
+		{"credential mirror", "--mirror", "https://name:SECRET@mirror.example.com/install.sh", digest, "UPDATE", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			input := strings.NewReader(tc.source + "\n" + tc.sha + "\n" + tc.confirm + "\n")
+			var out, errOut bytes.Buffer
+			var calls int
+			code := menuUpdatePinned(input, bufio.NewReader(input), &out, &errOut, tc.method, true,
+				func(args []string, stdout, stderr io.Writer) int {
+					calls++
+					want := []string{tc.method, tc.source, "--sha256", tc.sha}
+					if !reflect.DeepEqual(args, want) {
+						t.Fatalf("menu passed a different command: got=%q want=%q", args, want)
+					}
+					return 0
+				})
+			if (calls == 1) != tc.wantRun || (code == menuUpdatedExecutable) != tc.wantExit {
+				t.Fatalf("invalid attempt: code=%d calls=%d out=%q err=%q", code, calls, out.String(), errOut.String())
+			}
+			if strings.Contains(out.String()+errOut.String(), "SECRET") {
+				t.Fatal("untrusted mirror credentials reached output")
+			}
+			if tc.wantRun && (!strings.Contains(out.String(), "Independent SHA256") ||
+				!strings.Contains(out.String(), "Restart STL")) {
+				t.Fatal("approved pinned source did not display review/finish")
+			}
+		})
+	}
+}
+
+func TestMenuPinnedUpdateFailedAttemptAlwaysExitsStaleMenu(t *testing.T) {
+	input := strings.NewReader("https://mirror.example.com/install.sh\n" + strings.Repeat("b", 64) + "\nUPDATE\n")
+	var out, errOut bytes.Buffer
+	code := menuUpdatePinned(input, bufio.NewReader(input), &out, &errOut, "--mirror", true,
+		func([]string, io.Writer, io.Writer) int { return 1 })
+	if code != menuUpdatedExecutable || !strings.Contains(out.String(), "Inspect version, install-record") {
+		t.Fatalf("failed canonical update resumed stale Engine: code=%d out=%q", code, out.String())
 	}
 }

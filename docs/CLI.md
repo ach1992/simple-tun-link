@@ -37,6 +37,19 @@ the selected backend's own prerequisites, connection and diagnostic
 semantics rather than interpreting these methods as a compulsory
 client/server topology.
 
+On builds that include the new Update source selector, `sudo stl menu`
+→ **Update** first asks which distribution path to use: official
+immutable GitHub release catalogue, independently verified `/root/stl`
+local file, or trusted HTTPS mirror `install.sh`. The local and mirror
+choices never need `api.github.com`: both collect the exact source and an
+independently obtained SHA256, validate the same `stl update` CLI arguments,
+then require a fresh `UPDATE` confirmation. The existing installed root
+and real-TTY gates apply; no mirror preference or digest is saved and no
+automatic fallback is permitted. The old menu terminates after any
+confirmed update attempt, even one with uncertain partial effects.
+The source selector is **not yet in published v0.1.22**; follow
+[Install/Update](INSTALL.md) for older releases.
+
 Run `stl` in a real terminal or invoke `stl menu`. Without an
 interactive terminal, `stl` prints help instead. The principal tasks are
 Create, Import, My tunnels, Test connectivity, Settings, Update and

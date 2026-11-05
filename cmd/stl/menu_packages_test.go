@@ -212,7 +212,10 @@ func TestCanonicalPackageInstallerDoesNotSourceInheritedBashEnv(t *testing.T) {
 	t.Setenv("BASH_ENV", hook)
 	t.Setenv("ENV", hook)
 	t.Setenv("PATH", tmp)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// This test checks environment isolation, not APT inventory latency.
+	// Under a loaded Dev host, an otherwise successful read-only package
+	// inventory can exceed five seconds without executing BASH_ENV.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if _, err := readSelectedPackagePreview(ctx, tunnelOption{backend: domain.BackendGRE, mode: domain.EncapNative}); err != nil {
 		t.Fatalf("sanitized canonical plan failed: %v", err)

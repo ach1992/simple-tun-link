@@ -148,6 +148,13 @@ removes a live Link.
 
 ## Update and uninstall
 
+For builds including the new Update source selector, `sudo stl menu`
+→ **Update** → **Verified local file** or **Trusted HTTPS mirror**
+provides the same SHA256-pinned CLI path with an explicit `UPDATE`
+confirmation and no GitHub API dependency. This menu improvement is
+**source-only until a future Stable release**; existing published v0.1.22
+users must use its documented verified Update commands.
+
 Back up protected State/credentials and any original sensitive receiver
 handoffs before upgrading. An installed STL release that supports the
 `stl update` command can update **without GitHub/API access** using an
