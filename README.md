@@ -33,6 +33,16 @@ NAT or foreign VPNs, and no transport works through every network.
 
 ## Install on both servers
 
+Choose **one** source for the initial install:
+
+| Target connectivity | Installation path |
+| --- | --- |
+| GitHub reachable | Use the complete-download **official Latest Stable** command below |
+| GitHub blocked; trusted file transfer available | Transfer one architecture-matched, independently SHA256-verified release file and use the [guarded local command](docs/INSTALL.md#one-transferred-file-and-one-trusted-command-new-release-format) |
+| GitHub blocked; approved HTTPS mirror reachable | Use the independently pinned [Mirror install command](docs/MIRROR.md#3-clean-install-and-explicit-update) generated on the trusted preparation device |
+
+Never run the transferred shell file directly or use an unchecked `curl | bash` command. The local/Mirror first hop must authenticate a complete private copy **before** shell execution. These options use one canonical installer; a Mirror must be prepared and approved independently, not presumed available.
+
 Use the [latest official Stable release](https://github.com/ach1992/simple-tun-link/releases/latest).
 Run this complete-download, syntax-checked installer on each server:
 

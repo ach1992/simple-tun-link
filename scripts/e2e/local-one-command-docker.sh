@@ -12,7 +12,7 @@ if [[ ${1:-} == guest && -e /.dockerenv && ${STL_E2E_DISPOSABLE_GUEST:-} == appr
   # a test-local paraphrase. Root guests have no sudo requirement.
   run_root_operator() {
     local line
-    line=$(grep '^/usr/bin/env -i HOME=/root .*shopt -s nullglob' /mnt/stl-install-doc)
+    line=$(grep '^/usr/bin/env -i HOME=/root .*fail SHA256_MISMATCH' /mnt/stl-install-doc)
     [[ $(printf '%s\n' "$line" | wc -l) == 1 ]] || fail missing_root_operator_command
     # Accepted literal INSTALL.md invocations only; the option string is fixed,
     # never supplied by an untrusted fixture or derived from archive contents.
@@ -25,7 +25,7 @@ if [[ ${1:-} == guest && -e /.dockerenv && ${STL_E2E_DISPOSABLE_GUEST:-} == appr
   }
   run_sudo_operator() {
     local line
-    line=$(grep '^/usr/bin/sudo /usr/bin/env -i HOME=/root .*shopt -s nullglob' /mnt/stl-install-doc)
+    line=$(grep '^/usr/bin/sudo /usr/bin/env -i HOME=/root .*fail SHA256_MISMATCH' /mnt/stl-install-doc)
     [[ $(printf '%s\n' "$line" | wc -l) == 1 ]] || fail missing_sudo_operator_command
     line=${line/TRUSTED_SHA256/$STL_E2E_TRUSTED_ENTRY_SHA256}
     su -s /bin/bash stloperator -c "PATH=/home/stloperator/bin:/usr/sbin:/usr/bin:/sbin:/bin $line"
@@ -86,7 +86,7 @@ STL_POISON_BASH_ENV
       if BASH_ENV=/root/stl/.poisoned-bash-env run_root_operator > /tmp/stl-bash-env-invalid-pin 2>&1; then
         fail poisoned_shell_accepted_wrong_publisher_pin
       fi
-      grep -q 'installer SHA256 mismatch' /tmp/stl-bash-env-invalid-pin ||
+      grep -q 'STL_SHA256_MISMATCH' /tmp/stl-bash-env-invalid-pin ||
         fail poisoned_shell_missed_first_hop_digest_guard
       [[ ! -e /usr/local/bin/stl && ! -e /usr/local/lib/simple-tun-link/install-record ]] ||
         fail poisoned_shell_invalid_pin_mutated_core
@@ -196,7 +196,7 @@ UNTRUSTED_SUDO_LOOKUP
       if run_sudo_operator > /tmp/stl-sudo-oversize-failure 2>&1; then
         fail real_sudo_accepted_oversized_source
       fi
-      grep -q 'size must be 1..134250000 bytes' /tmp/stl-sudo-oversize-failure ||
+      grep -q 'STL_INVALID_SIZE' /tmp/stl-sudo-oversize-failure ||
         fail real_sudo_size_refusal_wrong_diagnostic
       [[ ! -e /usr/local/bin/stl ]] || fail real_sudo_oversize_modified_installation
       rm -- "$file"
@@ -408,7 +408,7 @@ APT_STUB
         if run_root_operator > /tmp/stl-preflight-size-failure 2>&1; then
           fail "accepted_invalid_preflight_size_$size"
         fi
-        grep -q 'size must be 1..134250000 bytes' /tmp/stl-preflight-size-failure ||
+        grep -q 'STL_INVALID_SIZE' /tmp/stl-preflight-size-failure ||
           { cat /tmp/stl-preflight-size-failure >&2; fail preflight_size_wrong_diagnostic; }
         shopt -s nullglob
         stage_dirs=(/root/.stl-preflight.*)
@@ -427,7 +427,7 @@ APT_STUB
       if run_root_operator > /tmp/stl-truncated-failure 2>&1; then
         fail accepted_truncated_embedded_payload
       fi
-      grep -q 'installer SHA256 mismatch' /tmp/stl-truncated-failure ||
+      grep -q 'STL_SHA256_MISMATCH' /tmp/stl-truncated-failure ||
         { cat /tmp/stl-truncated-failure >&2; fail truncated_wrong_integrity_diagnostic; }
       [[ ! -e /usr/local/bin/stl &&
          ! -e /usr/local/lib/simple-tun-link/install-record ]] ||
@@ -446,7 +446,7 @@ APT_STUB
         fail accepted_world_writable_file
       fi
       [[ ! -e /tmp/STL_UNTRUSTED_CODE_EXECUTED ]] || fail untrusted_code_ran_before_checks
-      grep -q 'installer SHA256 mismatch' /tmp/stl-untrusted-failure ||
+      grep -q 'STL_SHA256_MISMATCH' /tmp/stl-untrusted-failure ||
         fail modified_file_not_rejected_by_whole_file_pin
       mv -f -- /root/stl-original "$file"
       # Source metadata is validated by the authenticated launcher BEFORE any
@@ -467,7 +467,7 @@ APT_STUB
         fail accepted_symlink_source
       fi
       [[ ! -e /tmp/STL_UNTRUSTED_CODE_EXECUTED ]] || fail symlink_executed_untrusted_code
-      grep -q 'one regular installer required' /tmp/stl-symlink-failure ||
+      grep -q 'STL_INVALID_FILE' /tmp/stl-symlink-failure ||
         fail symlink_source_not_refused_in_short_first_hop
       rm -- "$file"
       mv -- /root/stl-safe-source "$file"
@@ -483,7 +483,7 @@ APT_STUB
         fail accepted_writable_source_ancestor
       fi
       [[ ! -e /tmp/STL_UNTRUSTED_CODE_EXECUTED ]] || fail ancestor_executed_untrusted_code
-      grep -q 'installer SHA256 mismatch' /tmp/stl-writable-ancestor-failure ||
+      grep -q 'STL_SHA256_MISMATCH' /tmp/stl-writable-ancestor-failure ||
         fail altered_source_not_rejected_by_whole_file_pin
       rm -- "$file"
       mv -- /root/stl-safe-source "$file"
@@ -512,7 +512,7 @@ APT_STUB
       if run_root_operator > /tmp/stl-newline-name-failure 2>&1; then
         fail accepted_newline_installer_filename
       fi
-      grep -q 'installer SHA256 mismatch' /tmp/stl-newline-name-failure ||
+      grep -q 'STL_SHA256_MISMATCH' /tmp/stl-newline-name-failure ||
         fail newline_filename_invalid_pin_rejection_diagnostic
       [[ ! -e /tmp/STL_UNTRUSTED_CODE_EXECUTED && ! -e /usr/local/bin/stl &&
          ! -e /usr/local/lib/simple-tun-link/install-record ]] ||
@@ -576,10 +576,10 @@ trusted_entry_sha=$(sha256sum -- "$entry" | awk '{print $1}')
 guest_script=$(realpath -e -- "${BASH_SOURCE[0]}")
 # Assert the root/sudo operator commands are equivalent, aside from
 # the real sudo prefix. The guest executes the actual root/sudo text.
-root_line=$(grep '^/usr/bin/env -i HOME=/root .*shopt -s nullglob' docs/INSTALL.md)
-sudo_line=$(grep '^/usr/bin/sudo /usr/bin/env -i HOME=/root .*shopt -s nullglob' docs/INSTALL.md)
+root_line=$(grep '^/usr/bin/env -i HOME=/root .*fail SHA256_MISMATCH' docs/INSTALL.md)
+sudo_line=$(grep '^/usr/bin/sudo /usr/bin/env -i HOME=/root .*fail SHA256_MISMATCH' docs/INSTALL.md)
 [[ -n $root_line && $sudo_line == "/usr/bin/sudo $root_line" ]] || fail operator_docs_drift
-[[ ${#root_line} -le 700 && ${#sudo_line} -le 700 ]] || fail local_operator_command_regressed_beyond_700_characters
+[[ ${#root_line} -le 600 && ${#sudo_line} -le 600 ]] || fail local_operator_command_regressed_beyond_600_characters
 printf '%s\n' "$root_line" | bash -n || fail malformed_root_operator_command
 printf '%s\n' "$sudo_line" | bash -n || fail malformed_sudo_operator_command
 # Only the disposable guest executes the third-party helper. Its archive

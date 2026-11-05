@@ -355,16 +355,23 @@ A checksum copied from an untrusted mirror is not a publisher trust anchor.
 For an authorized **root** terminal, use the literal guarded command:
 
 ~~~sh
-/usr/bin/env -i HOME=/root PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'set -euo pipefail; umask 077; shopt -s nullglob; f=(/root/stl/*_local-install.sh); [[ ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} ]] || { echo "STL: one regular installer required" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}"); (( n > 0 && n <= 134250000 )) || { echo "STL: size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; b=${f[0]##*/}; head -c 134250001 -- "${f[0]}" > "$d/$b"; h=$(sha256sum < "$d/$b"); [[ ${h%% *} == "$1" ]] || { echo "STL: installer SHA256 mismatch" >&2; exit 1; }; bash "$d/$b" "${@:2}"' stl TRUSTED_SHA256
+/usr/bin/env -i HOME=/root PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'set -euo pipefail; umask 077; fail(){ echo "STL_$1" >&2; exit 1; }; f=(/root/stl/*_local-install.sh); [[ ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} ]] || fail INVALID_FILE; s=$(stat -c%s -- "${f[0]}"); (( s>0 && s<=134250000 )) || fail INVALID_SIZE; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf "$d"'\'' EXIT; p="$d/${f[0]##*/}"; head -c 134250001 -- "${f[0]}" >"$p"; [[ $(sha256sum <"$p") == "$1  -" ]] || fail SHA256_MISMATCH; bash "$p" "${@:2}"' stl TRUSTED_SHA256
 ~~~
 
 From a **non-root** account with genuine sudo permission:
 
 ~~~sh
-/usr/bin/sudo /usr/bin/env -i HOME=/root PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'set -euo pipefail; umask 077; shopt -s nullglob; f=(/root/stl/*_local-install.sh); [[ ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} ]] || { echo "STL: one regular installer required" >&2; exit 1; }; n=$(stat -c %s -- "${f[0]}"); (( n > 0 && n <= 134250000 )) || { echo "STL: size must be 1..134250000 bytes" >&2; exit 1; }; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf -- "$d"'\'' EXIT; b=${f[0]##*/}; head -c 134250001 -- "${f[0]}" > "$d/$b"; h=$(sha256sum < "$d/$b"); [[ ${h%% *} == "$1" ]] || { echo "STL: installer SHA256 mismatch" >&2; exit 1; }; bash "$d/$b" "${@:2}"' stl TRUSTED_SHA256
+/usr/bin/sudo /usr/bin/env -i HOME=/root PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'set -euo pipefail; umask 077; fail(){ echo "STL_$1" >&2; exit 1; }; f=(/root/stl/*_local-install.sh); [[ ${#f[@]} == 1 && -f ${f[0]} && ! -L ${f[0]} ]] || fail INVALID_FILE; s=$(stat -c%s -- "${f[0]}"); (( s>0 && s<=134250000 )) || fail INVALID_SIZE; d=$(mktemp -d /root/.stl-preflight.XXXXXXXX); trap '\''rm -rf "$d"'\'' EXIT; p="$d/${f[0]##*/}"; head -c 134250001 -- "${f[0]}" >"$p"; [[ $(sha256sum <"$p") == "$1  -" ]] || fail SHA256_MISMATCH; bash "$p" "${@:2}"' stl TRUSTED_SHA256
 ~~~
 
-Both variants execute identical authenticated snapshot logic. Absolute
+Both variants execute identical authenticated snapshot logic. The early
+refusals are `STL_INVALID_FILE` (no unique, regular non-symlink installer),
+`STL_INVALID_SIZE` (empty or over 134,250,000 bytes), and
+`STL_SHA256_MISMATCH` (the private copy differs from the independently
+supplied whole-file digest). These reason codes mean **no transferred shell
+code executed**; recheck the release asset and trusted SHA before retrying.
+The short form still creates and hashes a protected bounded snapshot and
+never runs the mutable transferred source directly. Absolute
 `/usr/bin/env -i` clears inherited Bash startup hooks (`BASH_ENV`, exported
 functions, `SHELLOPTS`/`BASHOPTS`) **before** the first `/bin/bash` starts;
 only trusted `PATH` and root `HOME` are passed to nested processes. The
