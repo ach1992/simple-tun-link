@@ -258,7 +258,7 @@ tampered_published=$(sha256sum < "$scratch/webroot-raced/install.sh")
 tampered_published=${tampered_published%% *}
 [[ $raced_pin == "$trusted_staged" && $tampered_published != "$raced_pin" ]] ||
   { echo 'MIRROR_TEST_FAIL: trust pin came from mutated publication path' >&2; exit 1; }
-grep -F "\"$raced_pin\"" "$scratch/prepared-raced.log" >/dev/null ||
+grep -F "$raced_pin" "$scratch/prepared-raced.log" >/dev/null ||
   { echo 'MIRROR_TEST_FAIL: prepared command used a nonstaged pin' >&2; exit 1; }
 cp -a -- "$scratch/webroot/." "$scratch/www/"
 cp -- "$scratch/webroot-raced/install.sh" "$scratch/www/post-publication-tamper.sh"
@@ -282,10 +282,33 @@ mkdir -p "$scratch/bin"
 cat > "$scratch/bin/sudo" <<'SUDO'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-[[ $# -ge 2 && $1 == bash ]] || exit 87
-shift
-printf '%s\n' "$*" >> "$STL_MIRROR_SUDO_RECORD"
-bash "$@" --prefix "$STL_MIRROR_PREFIX"
+# Test-only nonprivileged simulation. The actual root snapshot is separately
+# exercised with the real sudo binary inside disposable package guests.
+[[ ${1:-} == /usr/bin/env && ${2:-} == -i ]] || exit 87
+args=("$@")
+found=0
+for ((i=0; i + 7 < ${#args[@]}; i++)); do
+  if [[ ${args[i]} == stl && ${args[i+3]} =~ ^(install|update)$ &&
+        ${args[i+4]} == --version && ${args[i+6]} == --backends ]]; then
+    source=${args[i+1]}
+    expected=${args[i+2]}
+    command=("${args[@]:i+3}")
+    found=1
+    break
+  fi
+done
+[[ $found == 1 ]] || exit 88
+# Preserve the simulated root digest/copy boundary: in production it lives
+# in /root with root ownership; this unprivileged guest checks a private copy.
+stage=$(mktemp -d)
+trap 'rm -rf -- "$stage"' EXIT
+head -c 1048577 -- "$source" > "$stage/install.sh"
+[[ $(sha256sum < "$stage/install.sh") == "$expected  -" ]] || {
+  echo 'STL_ROOT_SNAPSHOT_SHA256_MISMATCH' >&2
+  exit 75
+}
+printf '%s\n' "${command[*]}" >> "$STL_MIRROR_SUDO_RECORD"
+bash "$stage/install.sh" "${command[@]}" --prefix "$STL_MIRROR_PREFIX"
 SUDO
 chmod 0755 "$scratch/bin/sudo"
 export PATH="$scratch/bin:$PATH"
@@ -294,7 +317,7 @@ export STL_MIRROR_PREFIX="$scratch/new-prefix"
 mkdir -p "$STL_MIRROR_PREFIX/bin" "$STL_MIRROR_PREFIX/lib"
 : > "$STL_MIRROR_SUDO_RECORD"
 
-one_liner=$(grep -m1 '^bash -c .*stl.example.com/install.sh' "$repo/docs/MIRROR.md")
+one_liner=$(grep -m1 '^/usr/bin/env -i HOME=/ .*stl.example.com/install.sh' "$repo/docs/MIRROR.md")
 first_hop_sha=$(sed -n 's/^BOOTSTRAP_SHA256=//p' "$scratch/prepared.log")
 [[ $first_hop_sha =~ ^[0-9a-f]{64}$ ]] ||
   { echo 'MIRROR_TEST_FAIL: preparer did not provide pinned first-hop checksum' >&2; exit 1; }
@@ -306,9 +329,72 @@ grep -Fx "INSTALL_COMMAND=$one_liner" "$scratch/prepared.log" >/dev/null ||
   { echo 'MIRROR_TEST_FAIL: prepared command differs from documented one-liner' >&2; exit 1; }
 grep -Fx "UPDATE_COMMAND=$one_liner update" "$scratch/prepared.log" >/dev/null ||
   { echo 'MIRROR_TEST_FAIL: generated Update command differs from documented mirror flow' >&2; exit 1; }
+# REAL literal clean-env first-hop regression: no BASH_ENV, exported shell
+# function or caller PATH may act before the independently pinned digest.
+# A trusted test-only CA/no-proxy is explicitly admitted after env -i.
+literal_clean=${one_liner/\/bin\/bash -c /CURL_CA_BUNDLE=$scratch\/cert.crt NO_PROXY=localhost,127.0.0.1 \/bin\/bash -c }
+printf '#!/bin/bash\nprintf "FIRST_HOP_CLEAN_ENV_POSITIVE=PASS\\n"\\n' > "$scratch/www/clean-fixture.sh"
+clean_sha=$(sha256sum < "$scratch/www/clean-fixture.sh")
+clean_sha=${clean_sha%% *}
+clean_positive=${literal_clean/"$base/install.sh"/"$base/clean-fixture.sh"}
+clean_positive=${clean_positive/"$first_hop_sha"/"$clean_sha"}
+cat > "$scratch/poison-bash-env" <<EOF
+#!/bin/bash
+/usr/bin/touch "$scratch/poison-bash-env-executed"
+EOF
+cat > "$scratch/bin/curl" <<EOF
+#!/bin/sh
+/usr/bin/touch "$scratch/poison-path-curl-executed"
+exit 91
+EOF
+chmod 0700 "$scratch/bin/curl"
+# Exported function would have returned the expected digest even on a
+# different payload if the mirror first-hop used a bare sha256sum lookup.
+sha256sum() { printf '%s  -\\n' "$first_hop_sha"; }
+export -f sha256sum
+BASH_ENV="$scratch/poison-bash-env" /bin/sh -c "$clean_positive" > "$scratch/clean.out" 2> "$scratch/clean.err" ||
+  { cat "$scratch/clean.err" >&2; echo 'MIRROR_TEST_FAIL: clean-env first-hop rejected trusted TLS test script' >&2; exit 1; }
+grep -Fxq 'FIRST_HOP_CLEAN_ENV_POSITIVE=PASS' "$scratch/clean.out" ||
+  { echo 'MIRROR_TEST_FAIL: clean-env positive bootstrap did not execute' >&2; exit 1; }
+# Literal official first hop has no independent first-hop SHA pin (publisher
+# trust remains out of band), but it must still ignore hostile inherited
+# startup hooks, functions, and PATH before any Bash or download starts.
+official_clean=$(grep -m1 '^/usr/bin/env -i HOME=/ .*stl-bootstrap.sh' "$repo/docs/INSTALL.md")
+[[ -n $official_clean ]] || { echo 'MIRROR_TEST_FAIL: official literal missing' >&2; exit 1; }
+official_clean=${official_clean/https:\/\/github.com\/ach1992\/simple-tun-link\/releases\/latest\/download\/stl-bootstrap.sh/$base\/official-newline-fit.sh}
+official_clean=${official_clean/\/bin\/bash -c /CURL_CA_BUNDLE=$scratch\/cert.crt NO_PROXY=localhost,127.0.0.1 \/bin\/bash -c }
+BASH_ENV="$scratch/poison-bash-env" /bin/sh -c "$official_clean" > "$scratch/official-clean.out" 2> "$scratch/official-clean.err" ||
+  { cat "$scratch/official-clean.err" >&2; echo 'MIRROR_TEST_FAIL: official first hop inherited hostile environment' >&2; exit 1; }
+grep -Fxq 'OFFICIAL_NEWLINE_FIXTURE_EXECUTED=PASS' "$scratch/official-clean.out" ||
+  { echo 'MIRROR_TEST_FAIL: official literal clean-env positive not executed' >&2; exit 1; }
+wrong_first_hop=${literal_clean/"$first_hop_sha"/"$(printf '%064d' 0)"}
+if BASH_ENV="$scratch/poison-bash-env" /bin/sh -c "$wrong_first_hop" > "$scratch/poison.out" 2> "$scratch/poison.err"; then
+  echo 'MIRROR_TEST_FAIL: inherited SHA function bypassed mirror first-hop pin' >&2; exit 1
+fi
+grep -q 'mirror bootstrap SHA256 mismatch' "$scratch/poison.err" ||
+  { echo 'MIRROR_TEST_FAIL: clean-env negative missing pin diagnosis' >&2; exit 1; }
+unset -f sha256sum
+rm -- "$scratch/bin/curl"
+[[ ! -e "$scratch/poison-bash-env-executed" &&
+   ! -e "$scratch/poison-path-curl-executed" &&
+   ! -s "$STL_MIRROR_SUDO_RECORD" ]] ||
+  { echo 'MIRROR_TEST_FAIL: hostile inherited environment reached first hop or privileged operation' >&2; exit 1; }
+echo 'LITERAL_MIRROR_ENV_I_BASH_ENV_FUNCTION_PATH_AND_PIN=PASS'
+# For the non-root local TLS simulation, use a COPY of the same bootstrap
+# with only sudo redirected to our fake shim. Keep the original authenticated
+# prepared command intact above; this fixture never reaches publication.
+sed 's|/usr/bin/sudo "${root_exec\[@\]}"|sudo "${root_exec[@]}"|' "$scratch/www/install.sh" > "$scratch/www/fixture-install.sh"
+grep -Fq 'sudo "${root_exec[@]}"' "$scratch/www/fixture-install.sh"
+fixture_sha=$(sha256sum < "$scratch/www/fixture-install.sh")
+fixture_sha=${fixture_sha%% *}
+one_liner=${one_liner/"$base/install.sh"/"$base/fixture-install.sh"}
+one_liner=${one_liner/"$first_hop_sha"/"$fixture_sha"}
+# Emulate network and privilege only in this unit harness. Literal clean-env
+# entrypoints and root sudo are tested separately with real tool paths.
+one_liner=${one_liner/\/usr\/bin\/env -i HOME=\/ PATH=\/usr\/sbin:\/usr\/bin:\/sbin:\/bin \/bin\/bash -c/\/bin\/bash -c}
 # Execute an actual HTTPS fetch of the post-publication tampered bootstrap
 # with the prepublication trusted pin. No sudo/canonical execution allowed.
-raced_command=${one_liner/"$base/install.sh"/"$base/post-publication-tamper.sh"}
+raced_command=${one_liner/"$base/fixture-install.sh"/"$base/post-publication-tamper.sh"}
 if bash -c "$raced_command" > "$scratch/race.out" 2> "$scratch/race.err"; then
   echo 'MIRROR_TEST_FAIL: accepted a changed published bootstrap' >&2; exit 1
 fi
@@ -326,7 +412,7 @@ for fixture in "$base/newline-oversize.sh" "$base/official-newline-oversize.sh";
     { echo "MIRROR_TEST_FAIL: wire payload must be exactly 131073 bytes: $fixture ($raw_bytes)" >&2; exit 1; }
 done
 attempts=$(wc -l < "$STL_MIRROR_SUDO_RECORD")
-oversize_cmd=${one_liner/"$base/install.sh"/"$base/chunked-oversize.sh"}
+oversize_cmd=${one_liner/"$base/fixture-install.sh"/"$base/chunked-oversize.sh"}
 if bash -c "$oversize_cmd" > "$scratch/oversize.out" 2> "$scratch/oversize.err"; then
   echo 'MIRROR_TEST_FAIL: oversized chunked HTTPS response accepted' >&2; exit 1
 fi
@@ -336,10 +422,13 @@ fi
 # the same trailing-LF bypass. Only its first-hop URL is redirected to the
 # isolated TLS fixture; the payload is deliberately harmless (no sudo).
 official_url='https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh'
-mapfile -t official_commands < <(grep '^bash -c .*stl-bootstrap.sh' "$repo/docs/INSTALL.md")
+mapfile -t official_commands < <(grep '^/usr/bin/env -i HOME=/ .*stl-bootstrap.sh' "$repo/docs/INSTALL.md")
 [[ ${#official_commands[@]} -eq 3 ]] ||
   { echo 'MIRROR_TEST_FAIL: expected three published official commands' >&2; exit 1; }
 for official_line in "${official_commands[@]}"; do
+  # These HTTPS fixtures need the locally trusted test-only CA. The trusted
+  # operator command is otherwise unchanged (including the env -i boundary).
+  official_line=${official_line/\/bin\/bash -c /CURL_CA_BUNDLE=$scratch\/cert.crt NO_PROXY=localhost,127.0.0.1 \/bin\/bash -c }
   official_bad=${official_line/"$official_url"/"$base/official-newline-oversize.sh"}
   [[ $official_bad == *"$base/official-newline-oversize.sh"* ]] ||
     { echo 'MIRROR_TEST_FAIL: official first-hop fixture substitution failed' >&2; exit 1; }
@@ -361,7 +450,7 @@ done
 
 # Generated mirror command and documented mirror command were already byte-
 # checked against each other. Exercise their real pinned executable payload.
-newline_bad_cmd=${one_liner/"$base/install.sh"/"$base/newline-oversize.sh"}
+newline_bad_cmd=${one_liner/"$base/fixture-install.sh"/"$base/newline-oversize.sh"}
 if bash -c "$newline_bad_cmd" > "$scratch/mirror-lf-bad.out" 2> "$scratch/mirror-lf-bad.err"; then
   echo 'MIRROR_TEST_FAIL: mirror accepted 131073 trailing-LF bytes' >&2; exit 1
 fi
@@ -369,7 +458,7 @@ fi
   { echo 'MIRROR_TEST_FAIL: oversized newline-padded mirror reached sudo' >&2; exit 1; }
 echo 'FIRST_HOP_NEWLINE_OVERFLOW_NO_EXECUTION=PASS'
 
-nul_cmd=${one_liner/"$base/install.sh"/"$base/nul-padded.sh"}
+nul_cmd=${one_liner/"$base/fixture-install.sh"/"$base/nul-padded.sh"}
 if bash -c "$nul_cmd" > "$scratch/nul.out" 2> "$scratch/nul.err"; then
   echo 'MIRROR_TEST_FAIL: NUL-padded oversized chunked response was accepted' >&2; exit 1
 fi
@@ -377,7 +466,7 @@ fi
   { echo 'MIRROR_TEST_FAIL: NUL-padded response invoked privileged installer' >&2; exit 1; }
 ! grep -q NUL_BYPASS "$scratch/nul.out" ||
   { echo 'MIRROR_TEST_FAIL: NUL-padded response executed its shell prefix' >&2; exit 1; }
-stall_cmd=${one_liner/"$base/install.sh"/"$base/stall.sh"}
+stall_cmd=${one_liner/"$base/fixture-install.sh"/"$base/stall.sh"}
 stall_cmd=${stall_cmd/"--max-time 45"/"--max-time 2"}
 before_stall=$(date +%s)
 if bash -c "$stall_cmd" > "$scratch/stall.out" 2> "$scratch/stall.err"; then
@@ -411,7 +500,7 @@ bash -c "$one_liner" > "$scratch/install.out" 2> "$scratch/install.err" || {
   { echo 'MIRROR_TEST_FAIL: not exactly one canonical privileged invocation' >&2; exit 1; }
 # A within-limit, fully parseable response still MUST match the exact pinned
 # bytes. Even harmless trailing LF is tampering at the first-hop trust boundary.
-newline_good_cmd=${one_liner/"$base/install.sh"/"$base/newline-fit.sh"}
+newline_good_cmd=${one_liner/"$base/fixture-install.sh"/"$base/newline-fit.sh"}
 if bash -c "$newline_good_cmd" > "$scratch/mirror-lf-good.out" 2> "$scratch/mirror-lf-good.err"; then
   echo 'MIRROR_TEST_FAIL: modified first-hop accepted despite independent pin' >&2; exit 1
 fi
@@ -434,11 +523,11 @@ assert re.search(r"'[0-9a-f]{64}'", lines[-1])
 lines[-1] = re.sub(r"'[0-9a-f]{64}'", "'" + "0" * 64 + "'", lines[-1], count=1)
 Path(sys.argv[2]).write_text("".join(lines))
 PY_PINS
-bad_pins_cmd=${one_liner/"$base/install.sh"/"$base/bad-pins.sh"}
+bad_pins_cmd=${one_liner/"$base/fixture-install.sh"/"$base/bad-pins.sh"}
 # This controlled negative fixture pins its altered first hop independently,
 # so the test can reach and exercise the canonical second-hop mismatch guard.
 bad_pins_sha=$(sha256sum "$scratch/www/bad-pins.sh" | awk '{print $1}')
-bad_pins_cmd=${bad_pins_cmd/"$first_hop_sha"/"$bad_pins_sha"}
+bad_pins_cmd=${bad_pins_cmd/"$fixture_sha"/"$bad_pins_sha"}
 attempts=$(wc -l < "$STL_MIRROR_SUDO_RECORD")
 if bash -c "$bad_pins_cmd" > "$scratch/bad-pin.out" 2> "$scratch/bad-pin.err"; then
   echo 'MIRROR_TEST_FAIL: invalid embedded SHA256 pin was accepted' >&2; exit 1

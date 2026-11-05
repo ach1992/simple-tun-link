@@ -602,13 +602,18 @@ and cross-check its publisher/tag identity before any root execution.
 The version-free `releases/latest/download/stl-bootstrap.sh` URL selects
 the newest published **Stable**, excluding RC and draft releases. GitHub
 serves a tag-bound immutable bootstrap asset generated from the reviewed
-quick installer source. That bootstrap pins its own exact release tag
-before downloading the canonical installer; it does not execute a mutable
-`main` script as root. Inspect source, SHA256SUMS and official release
-identity before installing. The public command stays unchanged:
+quick installer source. A newly published Stable bootstrap built from current
+source pins **both** its exact release tag and the whole-file SHA256 of the reviewed canonical
+`install.sh`. The complete downloaded canonical file must match that
+build-bound digest **before** syntax checking or any sudo/root execution.
+A substituted canonical script fails closed even if it is valid Bash.
+It never executes mutable `main` as root. Published `v0.1.22` predates
+this canonical SHA256 pin; the stronger check requires a later reviewed
+Stable release and does not retroactively alter historical assets.
+Inspect source, SHA256SUMS and official release identity before installing. The public command stays unchanged:
 
 ~~~sh
-bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && bash -n "$f" && bash "$f" "$@"' stl
+/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl
 ~~~
 
 To install a specific published Stable, append its tag to that same
@@ -617,8 +622,22 @@ entry point stays unchanged across releases. With no suffix, the immutable
 Latest Stable asset supplies its exact pinned default version.
 
 ~~~sh
-bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && bash -n "$f" && bash "$f" "$@"' stl v0.1.9
+/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl v0.1.9
 ~~~
+
+The literal official commands start via `/usr/bin/env -i` and an absolute
+`/bin/bash`: inherited `BASH_ENV`, exported shell functions, unsafe `PATH`
+and `curlrc` cannot alter the first-hop authentication. For deliberately
+configured HTTPS proxy or private CA access, insert only
+`HTTPS_PROXY=...`, `NO_PROXY=...`, and/or
+`CURL_CA_BUNDLE=/absolute/trusted/ca.pem` after `PATH=...` and before
+`/bin/bash`. These explicit values are also forwarded by the reviewed
+bootstrap to its privileged phase; other caller environment is not copied.
+Avoid inline proxy secrets (they may appear in shell history/process lists);
+configure authenticated proxy access through administrator-controlled
+mechanisms instead. APT connectivity is configured separately using the
+existing signed distribution sources; never pass untrusted flags or use
+`sudo -E`.
 
 The first hop is first **fully downloaded into an owned temporary file**. Only after
 curl returns success within 45 seconds, the script is nonempty and no
@@ -630,19 +649,30 @@ GitHub release API before privilege elevation; it requires Python 3 and a
 published, complete, `immutable:true` non-prerelease release. Missing,
 mismatched, truncated, redirected, unavailable or mutable metadata fails
 closed. **The executable canonical installer is always downloaded from the
-bootstrap's own immutable Latest Stable tag**, never from the separately
-selected older tag. That older version remains data (`--version`) for the
-canonical installer, which independently validates release SHA256SUMS, binary
+bootstrap's own immutable Latest Stable tag** (and, on a newly
+published pinned Stable, must match its embedded canonical SHA256), never from
+the separately selected older tag. That older version remains data
+(`--version`) for the canonical installer, which independently validates release SHA256SUMS, binary
 metadata and installed ownership/rollback rules. The bootstrap reattaches a
 real /dev/tty to open the menu after installation. Without a TTY, use
 `sudo stl menu`. This source change reaches users only after a new release
 publishes its corresponding permanent bootstrap asset.
+When the new root-private snapshot behavior is published, the bootstrap
+also binds the **bytes executed by Root** to the pinned canonical digest:
+after sudo authentication, privileged Bash copies at most 1 MiB + 1 byte to
+a root-owned `0700` private directory, checks the copied file's complete
+SHA256 and size, executes only that authenticated copy, and cleans up.
+Another process with the calling operator's UID cannot replace the
+verified executable during sudo's password prompt. Digest mismatch or
+unsafe snapshot fails before installing packages or changing STL. The
+currently published v0.1.22 does not include this reviewed remediation.
+
 Default prerequisites are native and WireGuard. To update an existing
 installer-owned STL, **do not run install again**: use this equally fixed
 update command:
 
 ~~~sh
-bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && bash -n "$f" && bash "$f" "$@"' stl update
+/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl update
 ~~~
 
 The entire bootstrap download must succeed before it can execute; the private temporary file is removed even on error. This selects the unchanged canonical installer update transaction,

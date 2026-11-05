@@ -47,14 +47,28 @@ Use the [latest official Stable release](https://github.com/ach1992/simple-tun-l
 Run this complete-download, syntax-checked installer on each server:
 
 ~~~bash
-bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && bash -n "$f" && bash "$f" "$@"' stl
+/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl
 ~~~
 
 It fetches a bounded, complete HTTPS bootstrap into an owned temporary file before execution. The verified
 bootstrap and canonical installer then check the released artifact's checksums
-and version/source identity. A publisher's own checksum is not an independent
+and version/source identity. A newly generated Stable bootstrap also pins the
+canonical installer's exact SHA256 **before privilege elevation**; published
+v0.1.22 predates that check, which takes effect only in a later Stable.
+A publisher's own checksum is not an independent
 signature; verify that you trust the official publisher before privileged use.
 **Do not replace this command with an unchecked `curl | bash` pipeline.**
+The initial `/usr/bin/env -i` excludes inherited `BASH_ENV`, exported
+functions and untrusted `PATH` before starting Bash. On a future Stable
+containing the hardened root handoff, an independently digest-matched
+root-private snapshot (not the user-owned temporary pathname) is what
+privileged Bash actually executes. If HTTPS requires a proxy or a private CA,
+add only explicit, reviewed `HTTPS_PROXY=...`, `NO_PROXY=...` and/or
+`CURL_CA_BUNDLE=/trusted/ca.pem` assignments **between `PATH=...` and
+`/bin/bash`** in the first command. Those three values alone are forwarded
+to the privileged installer; do not use `sudo -E` or include proxy passwords
+in commands or shell history. Missing distro packages still use the
+host's separately configured signed APT repository/proxy.
 
 After installation, open the menu or verify the installed version:
 
@@ -176,7 +190,7 @@ must use their already supported verified manual procedures.
 For an existing installer-owned STL that reaches official GitHub, use:
 
 ~~~bash
-bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && bash -n "$f" && bash "$f" "$@"' stl update
+/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl update
 ~~~
 
 State and executable rollback are **not** the same: newer managed features

@@ -101,7 +101,7 @@ On an eligible Linux host that reaches **only your mirror**:
 **Fresh installation:**
 
 ```bash
-bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fsSs --proto "=https" --max-redirs 0 --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && { [ "$(sha256sum < "$f" | cut -d" " -f1)" = "TRUSTED_BOOTSTRAP_SHA256" ] || { echo "STL: mirror bootstrap SHA256 mismatch" >&2; exit 1; }; } && bash -n "$f" && bash "$f" "$@"' stl
+/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fsSs --proto "=https" --max-redirs 0 --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && { [ "$(/usr/bin/sha256sum < "$f")" = "TRUSTED_BOOTSTRAP_SHA256  -" ] || { echo "STL: mirror bootstrap SHA256 mismatch" >&2; exit 1; }; } && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl
 ```
 
 **Update of an existing installer-owned STL:** On an **already installed**
@@ -129,7 +129,7 @@ binary does not gain the command automatically. For **older installations**
 pinned `UPDATE_COMMAND` instead:
 
 ```bash
-bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fsSs --proto "=https" --max-redirs 0 --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && { [ "$(sha256sum < "$f" | cut -d" " -f1)" = "TRUSTED_BOOTSTRAP_SHA256" ] || { echo "STL: mirror bootstrap SHA256 mismatch" >&2; exit 1; }; } && bash -n "$f" && bash "$f" "$@"' stl update
+/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fsSs --proto "=https" --max-redirs 0 --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && { [ "$(/usr/bin/sha256sum < "$f")" = "TRUSTED_BOOTSTRAP_SHA256  -" ] || { echo "STL: mirror bootstrap SHA256 mismatch" >&2; exit 1; }; } && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl update
 ```
 
 These examples require replacing `TRUSTED_BOOTSTRAP_SHA256` with the
@@ -140,6 +140,17 @@ digest in a trusted record, not a checksum fetched from the untrusted target
 mirror. All 64 hexadecimal characters must match. **Do not execute the
 placeholder as-is.** A replaced or compromised mirror first-hop script fails
 SHA256 before its first instruction executes.
+
+The commands begin with `/usr/bin/env -i` before Bash, reject inherited
+`BASH_ENV`, exported functions and unsafe PATH lookups, and use the absolute
+system SHA256 binary for the first-hop pin. If the target needs a private CA
+or reviewed HTTPS proxy, insert `CURL_CA_BUNDLE=/absolute/trusted/ca.pem`,
+`HTTPS_PROXY=...` and/or `NO_PROXY=...` **after `PATH=...` and before
+`/bin/bash`**. Only these selected transport values carry into the
+privileged phase; avoid putting proxy passwords in commands/history, and
+do not use `sudo -E`. Keep APT distribution signing and its separate proxy
+configuration intact. This root-private snapshot/clean-env behavior takes
+effect only when published in a newly reviewed Stable, not v0.1.22.
 
 These commands download the **whole** first script into a private temporary
 file with a 45-second deadline and a 128-KiB streaming limit (including

@@ -87,7 +87,9 @@ cmp -s "$stage/canonical-amd64.sh" "$stage/canonical-arm64.sh" ||
   { echo 'Release architectures contain different canonical installers.' >&2; exit 1; }
 # The mirror bootstrap must be generated from the EXACT published and hashed
 # Stable source, not from whichever future checkout happens to be active.
-[[ $(tail -n 1 "$source_dir/stl-bootstrap.sh") == "quick_install_main \"$tag\" \"\" \"\" \"\" \"\$@\"" ]] &&
+release_canonical_sha=$(sha256sum < "$stage/canonical-amd64.sh")
+release_canonical_sha=${release_canonical_sha%% *}
+[[ $(tail -n 1 "$source_dir/stl-bootstrap.sh") == "quick_install_main \"$tag\" \"\" \"$release_canonical_sha\" \"\" \"\$@\"" ]] &&
   cmp -s <(sed '$d' "$source_dir/stl-bootstrap.sh") <(sed '$d' "$mirror_source") &&
   cmp -s "$stage/canonical-amd64.sh" "$script_dir/install.sh" ||
   { echo 'Local release-preparation source differs from official hashed bootstrap/installer. Use the exact released source/tag.' >&2; exit 1; }
@@ -95,6 +97,10 @@ grep -q 'release-sums-sha256)' "$stage/canonical-amd64.sh" ||
   { echo 'This Stable does not support standalone HTTPS mirror installation; publish a newer reviewed release.' >&2; exit 1; }
 install -m 0644 "$stage/canonical-amd64.sh" "$stage/releases/$tag/install.sh"
 installer_sha=$(sha256sum "$stage/releases/$tag/install.sh" | awk '{print $1}')
+[[ $installer_sha == "$release_canonical_sha" ]] || {
+  echo 'Verified canonical installer changed while staging the mirror.' >&2
+  exit 1
+}
 # Inject only validated, source-pinned constants into the final invocation.
 # The full bootstrap stays byte-for-byte based on canonical quick-install.sh.
 sed '$d' "$mirror_source" > "$stage/install.sh"
@@ -120,7 +126,7 @@ printf 'MIRROR_PREPARED=PASS\nTAG=%s\nMIRROR_URL=%s\nUPLOAD_ROOT=%s\n' "$tag" "$
 # NOT the mirror. Pin the first downloaded shell against independently
 # prepared bytes before executing any of its content, even as non-root.
 operator_command=$(cat <<'STL_OPERATOR_COMMAND'
-bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fsSs --proto "=https" --max-redirs 0 --connect-timeout 10 --max-time 45 MIRROR_INSTALL_URL | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && { [ "$(sha256sum < "$f" | cut -d" " -f1)" = "TRUSTED_BOOTSTRAP_SHA256" ] || { echo "STL: mirror bootstrap SHA256 mismatch" >&2; exit 1; }; } && bash -n "$f" && bash "$f" "$@"' stl
+/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fsSs --proto "=https" --max-redirs 0 --connect-timeout 10 --max-time 45 MIRROR_INSTALL_URL | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && { [ "$(/usr/bin/sha256sum < "$f")" = "TRUSTED_BOOTSTRAP_SHA256  -" ] || { echo "STL: mirror bootstrap SHA256 mismatch" >&2; exit 1; }; } && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl
 STL_OPERATOR_COMMAND
 )
 mirror_install="$mirror_url/install.sh"

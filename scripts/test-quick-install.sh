@@ -3,17 +3,23 @@
 # Host effects are simulated by fake curl/sudo in a private scratch dir.
 # All fake tooling and side effects remain inside a disposable directory.
 set -Eeuo pipefail
+# This unit harness intercepts sudo but cannot safely intercept an already
+# root process. Privileged cases run separately in disposable root guests.
+if (( EUID == 0 )); then
+  echo 'STL_TEST_QUICK_INSTALL_REFUSED: run as non-root' >&2
+  exit 77
+fi
 umask 077
 repo="$(cd -- "$(dirname -- "$0")/.." && pwd -P)"
 # Stable release bumps must keep the permanent first-hop install/update text.
-mapfile -t published_commands < <(grep '^bash -c .*stl-bootstrap.sh' "$repo/docs/INSTALL.md")
+mapfile -t published_commands < <(grep '^/usr/bin/env -i HOME=/ .*stl-bootstrap.sh' "$repo/docs/INSTALL.md")
 [[ ${#published_commands[@]} -eq 3 ]] || {
   echo 'INSTALL.md must contain three verified official commands (latest, exact, update).' >&2
   exit 1
 }
 # README exposes the literal latest Install and Update commands. Verify they
 # are exactly the commands exercised from INSTALL.md, not unchecked variants.
-mapfile -t readme_commands < <(grep '^bash -c .*stl-bootstrap.sh' "$repo/README.md")
+mapfile -t readme_commands < <(grep '^/usr/bin/env -i HOME=/ .*stl-bootstrap.sh' "$repo/README.md")
 [[ ${#readme_commands[@]} -eq 2 ]] || {
   echo 'README must contain the two tested official commands (latest install and update).' >&2
   exit 1
@@ -29,9 +35,10 @@ stable_url='https://github.com/ach1992/simple-tun-link/releases/latest/download/
 # The first-hop command substitution must finish with curl exit 0 and
 # valid Bash syntax before it executes any part of the downloaded script.
 for line in "${published_commands[@]}"; do
-  [[ "$line" == *'set -eo pipefail; f=$(mktemp); trap '* &&
-     "$line" == *'curl -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 '* &&
-     "$line" == *' | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && bash -n "$f" && bash "$f" "$@"'* &&
+  [[ "$line" == '/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c '* &&
+     "$line" == *'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '* &&
+     "$line" == *'/usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 '* &&
+     "$line" == *' | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"'* &&
      "$line" != *' | bash'* ]] || {
     echo 'Public installer must finish its bounded download before execution.' >&2
     exit 1
@@ -47,6 +54,11 @@ for idx in 0 1 2; do
   fi
 done
 export STL_TEST_PUBLIC_TAG=v0.1.0
+export STL_TEST_CANONICAL_SOURCE="$repo/scripts/install.sh"
+canonical_sha=$(sha256sum < "$STL_TEST_CANONICAL_SOURCE")
+canonical_sha=${canonical_sha%% *}
+[[ $canonical_sha =~ ^[0-9a-f]{64}$ ]] || exit 1
+expected_stable_invocation="quick_install_main \"$STL_TEST_PUBLIC_TAG\" \"\" \"$canonical_sha\" \"\" \"\$@\""
 scratch=$(mktemp -d)
 trap 'rm -rf -- "$scratch"' EXIT
 bash "$repo/scripts/render-stable-bootstrap.sh" "$STL_TEST_PUBLIC_TAG" "$scratch/stl-bootstrap.sh"
@@ -57,8 +69,8 @@ bash -n "$STL_TEST_STABLE_BOOTSTRAP"
 # MUST prevent its execution.
 head -c -1 "$STL_TEST_STABLE_BOOTSTRAP" > "$scratch/almost-complete.sh"
 bash -n "$scratch/almost-complete.sh"
-grep -Fx 'quick_install_main "v0.1.0" "" "" "" "$@"' "$scratch/almost-complete.sh" >/dev/null
-[[ "$(tail -n 1 "$STL_TEST_STABLE_BOOTSTRAP")" == 'quick_install_main "v0.1.0" "" "" "" "$@"' ]] || {
+grep -Fx "$expected_stable_invocation" "$scratch/almost-complete.sh" >/dev/null
+[[ "$(tail -n 1 "$STL_TEST_STABLE_BOOTSTRAP")" == "$expected_stable_invocation" ]] || {
   echo 'Stable bootstrap did not pin its exact release tag.' >&2
   exit 1
 }
@@ -71,6 +83,24 @@ if bash "$repo/scripts/render-stable-bootstrap.sh" 'v0.1.0-rc.7' "$scratch/rc-no
   echo 'RC bootstrap illegally became latest Stable.' >&2
   exit 1
 fi
+# The unit's non-root sudo/curl are intentionally simulated, so substitute
+# ONLY the absolute sudo invocation in private copies. The real release
+# source and actual privileged root/sudo behavior are tested separately.
+sed 's|/usr/bin/sudo "${root_exec\[@\]}"|sudo "${root_exec[@]}"|' "$STL_TEST_STABLE_BOOTSTRAP" > "$scratch/test-stable.sh"
+sed 's|/usr/bin/sudo "${root_exec\[@\]}"|sudo "${root_exec[@]}"|' "$repo/scripts/quick-install.sh" > "$scratch/test-direct.sh"
+grep -Fq 'sudo "${root_exec[@]}"' "$scratch/test-stable.sh"
+grep -Fq 'sudo "${root_exec[@]}"' "$scratch/test-direct.sh"
+export STL_TEST_STABLE_BOOTSTRAP="$scratch/test-stable.sh"
+export STL_TEST_QUICK_INSTALL_FILE="$scratch/test-direct.sh"
+# The production first-hop must start Bash only AFTER env -i and use trusted
+# absolute tools. Unit network simulation swaps only these boundaries, while
+# separate real loopback HTTPS tests execute the hardened literal entrypoint.
+prepare_mock_public_command() {
+  local command=$1
+  command=${command/\/usr\/bin\/env -i HOME=\/ PATH=\/usr\/sbin:\/usr\/bin:\/sbin:\/bin \/bin\/bash -c/\/bin\/bash -c}
+  command=${command/\/usr\/bin\/curl -q /curl -q }
+  printf '%s' "$command"
+}
 mkdir -p "$scratch/bin"
 cat > "$scratch/bin/curl" <<'CURL'
 #!/usr/bin/env bash
@@ -157,6 +187,13 @@ if [[ -n "${STL_TEST_OVERSIZE_DOWNSTREAM:-}" ]]; then
 fi
 if [[ -n "$STL_TEST_SYNTAX_FAIL" ]]; then
   printf '%s\n' 'if (( STL_TEST_SYNTAX_SENSITIVE_SENTINEL ('
+elif [[ "$url" == "https://raw.githubusercontent.com/ach1992/simple-tun-link/$STL_TEST_PUBLIC_TAG/scripts/install.sh" ]]; then
+  if [[ -n "${STL_TEST_OFFICIAL_CANONICAL_TAMPERED:-}" ]]; then
+    # Valid, maliciously changed shell must fail the pin before sudo.
+    printf '%s\n' '#!/usr/bin/env bash' 'touch "$STL_TEST_EXECUTIONS"'
+  else
+    cat "$STL_TEST_CANONICAL_SOURCE"
+  fi
 else
   printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "test fake installer" >> "$STL_TEST_EXECUTIONS"'
 fi
@@ -164,20 +201,35 @@ CURL
 cat > "$scratch/bin/sudo" <<'SUDO'
 #!/usr/bin/env bash
 set -euo pipefail
-printf 'sudo' >> "$STL_TEST_EXECUTIONS"
-printf ' %s' "$@" >> "$STL_TEST_EXECUTIONS"
-printf '\n' >> "$STL_TEST_EXECUTIONS"
-if [[ ${STL_TEST_SUDO_PUBLIC_ERROR:-} == apt-index && ${1:-} == bash ]]; then
+if [[ "$#" -eq 2 && "$1" == stl && "$2" == menu ]]; then
+  printf '%s\n' 'sudo stl menu' >> "$STL_TEST_EXECUTIONS"
+  printf '%s\n' 'FAKE_STL_MENU_RENDERED'
+  exit 0
+fi
+[[ ${1:-} == /usr/bin/env && ${2:-} == -i ]] || exit 85
+# The private test-only shim records the intended canonical transaction.
+# Real sudo/root snapshot execution is covered by an isolated root guest.
+args=("$@")
+found=0
+for ((i=0; i + 6 < ${#args[@]}; i++)); do
+  if [[ ${args[i]} == stl && ${args[i+3]} =~ ^(install|update)$ &&
+        ${args[i+4]} == --version && ${args[i+6]} == --backends ]]; then
+    action=${args[i+3]}
+    version=${args[i+5]}
+    backends=${args[i+7]}
+    found=1
+    break
+  fi
+done
+[[ $found == 1 ]] || exit 86
+printf 'sudo root-snapshot test fake installer %s --version %s --backends %s\n' "$action" "$version" "$backends" >> "$STL_TEST_EXECUTIONS"
+if [[ ${STL_TEST_SUDO_PUBLIC_ERROR:-} == apt-index ]]; then
   printf '%s\n' 'stl installer [FAILED]: APT_INDEX_REFRESH failed; SECRET_PRIVATE_REPO_URL=DO_NOT_LEAK' >&2
   exit 42
 fi
-if [[ ${STL_TEST_SUDO_FAIL:-} == 1 && ${1:-} == bash ]]; then
+if [[ ${STL_TEST_SUDO_FAIL:-} == 1 ]]; then
   printf '%s\n' 'STL_TEST_INSTALLER_SENSITIVE_SENTINEL' >&2
-  printf '%s\n' 'STL_TEST_INSTALLER_SENSITIVE_SENTINEL'
   exit 42
-fi
-if [[ "$#" -eq 2 && "$1" == stl && "$2" == menu ]]; then
-  printf '%s\n' 'FAKE_STL_MENU_RENDERED'
 fi
 exit 0
 SUDO
@@ -186,21 +238,21 @@ export PATH="$scratch/bin:$PATH"
 export STL_TEST_EXECUTIONS="$scratch/record"
 export STL_TEST_DOWNLOAD_FAIL=
 export STL_TEST_SYNTAX_FAIL=
-export STL_TEST_QUICK_INSTALL_FILE="$repo/scripts/quick-install.sh"
+export STL_TEST_QUICK_INSTALL_FILE="$scratch/test-direct.sh"
 : > "$STL_TEST_EXECUTIONS"
 # Offline non-tty startup should not start a menu or make a network call.
-bash "$repo/scripts/quick-install.sh" v0.1.0-rc.123 native,wireguard > "$scratch/out" 2>"$scratch/err"
+bash "$STL_TEST_QUICK_INSTALL_FILE" v0.1.0-rc.123 native,wireguard > "$scratch/out" 2>"$scratch/err"
 grep -q 'No interactive terminal detected' "$scratch/out"
 grep -q 'v0.1.0-rc.123' "$scratch/out"
 if ((EUID==0));then
   grep -q 'test fake installer' "$STL_TEST_EXECUTIONS"
 else
-  grep -q 'sudo bash .* install --version v0.1.0-rc.123 --backends native,wireguard' "$STL_TEST_EXECUTIONS"
+  grep -q 'sudo root-snapshot test fake installer install --version v0.1.0-rc.123 --backends native,wireguard' "$STL_TEST_EXECUTIONS"
 fi
 # The official source and generated official bootstrap must ignore ambient
 # operator/caller-supplied mirror pins completely, including malformed ones.
 # Fake curl accepts ONLY the official tag-pinned source in this test.
-for official_source in "$repo/scripts/quick-install.sh" "$STL_TEST_STABLE_BOOTSTRAP"; do
+for official_source in "$STL_TEST_QUICK_INSTALL_FILE" "$STL_TEST_STABLE_BOOTSTRAP"; do
   : > "$STL_TEST_EXECUTIONS"
   if [[ $official_source == "$STL_TEST_STABLE_BOOTSTRAP" ]]; then
     args=()
@@ -217,7 +269,7 @@ for official_source in "$repo/scripts/quick-install.sh" "$STL_TEST_STABLE_BOOTST
     grep -q 'test fake installer' "$STL_TEST_EXECUTIONS" ||
       { echo 'Official installer did not run.' >&2; exit 1; }
   else
-    grep -q '^sudo bash .* install --version ' "$STL_TEST_EXECUTIONS" ||
+    grep -q '^sudo root-snapshot test fake installer install --version ' "$STL_TEST_EXECUTIONS" ||
       { echo 'Official installer did not run from its canonical source.' >&2; exit 1; }
   fi
   if grep -q 'release-base' "$STL_TEST_EXECUTIONS"; then
@@ -227,33 +279,33 @@ done
 # Operator upgrades must use the canonical update transaction rather than
 # quietly running install over an existing version (which correctly refuses).
 : > "$STL_TEST_EXECUTIONS"
-bash "$repo/scripts/quick-install.sh" v0.1.0-rc.123 update > "$scratch/out" 2>"$scratch/err"
+bash "$STL_TEST_QUICK_INSTALL_FILE" v0.1.0-rc.123 update > "$scratch/out" 2>"$scratch/err"
 if ((EUID==0));then
   grep -q 'test fake installer' "$STL_TEST_EXECUTIONS"
 else
-  grep -q 'sudo bash .* update --version v0.1.0-rc.123 --backends native,wireguard' "$STL_TEST_EXECUTIONS"
+  grep -q 'sudo root-snapshot test fake installer update --version v0.1.0-rc.123 --backends native,wireguard' "$STL_TEST_EXECUTIONS"
 fi
 : > "$STL_TEST_EXECUTIONS"
-bash "$repo/scripts/quick-install.sh" v0.1.0-rc.123 native update > "$scratch/out" 2>"$scratch/err"
+bash "$STL_TEST_QUICK_INSTALL_FILE" v0.1.0-rc.123 native update > "$scratch/out" 2>"$scratch/err"
 if ((EUID==0));then
   grep -q 'test fake installer' "$STL_TEST_EXECUTIONS"
 else
-  grep -q 'sudo bash .* update --version v0.1.0-rc.123 --backends native' "$STL_TEST_EXECUTIONS"
+  grep -q 'sudo root-snapshot test fake installer update --version v0.1.0-rc.123 --backends native' "$STL_TEST_EXECUTIONS"
 fi
 before="$(wc -c < "$STL_TEST_EXECUTIONS")"
 for invalid in 'v0.1.0-rc.123;rm' 'latest' '../main' 'v0.1.0-rc.123--bad/path'; do
-  if bash "$repo/scripts/quick-install.sh" "$invalid" > "$scratch/out" 2>"$scratch/err"; then
+  if bash "$STL_TEST_QUICK_INSTALL_FILE" "$invalid" > "$scratch/out" 2>"$scratch/err"; then
     echo 'Bootstrap incorrectly accepted invalid version.' >&2
     exit 1
   fi
 done
 for invalid in 'native,wireguard,ipsec' 'upgrade' 'native,update'; do
-  if bash "$repo/scripts/quick-install.sh" v0.1.0-rc.123 "$invalid" > "$scratch/out" 2> "$scratch/err"; then
+  if bash "$STL_TEST_QUICK_INSTALL_FILE" v0.1.0-rc.123 "$invalid" > "$scratch/out" 2> "$scratch/err"; then
     echo 'Bootstrap incorrectly accepted invalid action/backends.' >&2
     exit 1
   fi
 done
-if bash "$repo/scripts/quick-install.sh" v0.1.0-rc.123 update update > "$scratch/out" 2>"$scratch/err"; then
+if bash "$STL_TEST_QUICK_INSTALL_FILE" v0.1.0-rc.123 update update > "$scratch/out" 2>"$scratch/err"; then
   echo 'Bootstrap accepted duplicate update flags.' >&2
   exit 1
 fi
@@ -262,7 +314,7 @@ fi
   exit 1
 }
 for scenario in STL_TEST_DOWNLOAD_FAIL STL_TEST_SYNTAX_FAIL STL_TEST_OVERSIZE_DOWNSTREAM; do
-  if env "$scenario=1" bash "$repo/scripts/quick-install.sh" v0.1.0-rc.123 > "$scratch/out" 2>"$scratch/err"; then
+  if env "$scenario=1" bash "$STL_TEST_QUICK_INSTALL_FILE" v0.1.0-rc.123 > "$scratch/out" 2>"$scratch/err"; then
     echo "Bootstrap incorrectly accepted $scenario" >&2
     exit 1
   fi
@@ -282,6 +334,35 @@ done
   echo 'Bad or partial installer passed privilege elevation.' >&2
   exit 1
 }
+# Publisher-pinned official release bootstrap must reject a syntactically
+# valid, substituted canonical installer before calling sudo or Bash on it.
+: > "$STL_TEST_EXECUTIONS"
+if STL_TEST_OFFICIAL_CANONICAL_TAMPERED=1 bash "$STL_TEST_STABLE_BOOTSTRAP" > "$scratch/out" 2>"$scratch/err"; then
+  echo 'Immutable Stable bootstrap executed substituted canonical source.' >&2
+  exit 1
+fi
+grep -q 'immutable Stable bootstrap SHA256 pin' "$scratch/err" || {
+  echo 'Missing official source pin-mismatch diagnostic.' >&2
+  exit 1
+}
+[[ ! -s "$STL_TEST_EXECUTIONS" ]] || {
+  echo 'Official source pin mismatch reached privileged execution.' >&2
+  exit 1
+}
+# An inherited exported Bash function may not spoof the SHA checker.
+sha256sum() { printf '%s  -\n' "$canonical_sha"; }
+export -f sha256sum
+: > "$STL_TEST_EXECUTIONS"
+if STL_TEST_OFFICIAL_CANONICAL_TAMPERED=1 bash "$STL_TEST_STABLE_BOOTSTRAP" > "$scratch/out" 2>"$scratch/err"; then
+  echo 'Inherited SHA256 function bypassed the official release pin.' >&2
+  exit 1
+fi
+[[ ! -s "$STL_TEST_EXECUTIONS" ]] || {
+  echo 'Inherited SHA256 function reached privileged installer.' >&2
+  exit 1
+}
+unset -f sha256sum
+echo 'OFFICIAL_STABLE_CANONICAL_PIN_PRE_PRIVILEGE=PASS'
 # Failed canonical install/update is not a successful bootstrap. Fake sudo
 # exits with a controlled status after recording the action; no host effects.
 if (( EUID != 0 )); then
@@ -289,7 +370,7 @@ if (( EUID != 0 )); then
     : > "$STL_TEST_EXECUTIONS"
     args=()
     [[ $action != update ]] || args=(update)
-    if STL_TEST_SUDO_FAIL=1 bash "$repo/scripts/quick-install.sh" v0.1.0-rc.123 "${args[@]}" > "$scratch/out" 2>"$scratch/err"; then
+    if STL_TEST_SUDO_FAIL=1 bash "$STL_TEST_QUICK_INSTALL_FILE" v0.1.0-rc.123 "${args[@]}" > "$scratch/out" 2>"$scratch/err"; then
       echo "Bootstrap falsely accepted failed canonical $action" >&2
       exit 1
     fi
@@ -308,7 +389,7 @@ fi
 # Trusted, authored error categories must survive the bootstrap sanitizer
 # without replaying sensitive APT output from the canonical child.
 if (( EUID != 0 )); then
-  if STL_TEST_SUDO_PUBLIC_ERROR=apt-index bash "$repo/scripts/quick-install.sh" v0.1.0-rc.123 > "$scratch/out" 2> "$scratch/err"; then
+  if STL_TEST_SUDO_PUBLIC_ERROR=apt-index bash "$STL_TEST_QUICK_INSTALL_FILE" v0.1.0-rc.123 > "$scratch/out" 2> "$scratch/err"; then
     echo 'Classified APT failure was incorrectly accepted.' >&2; exit 1
   fi
   grep -q 'APT could not refresh signed package indexes' "$scratch/out" ||
@@ -320,7 +401,7 @@ fi
 # The most important user journey: a bootstrap streamed to bash should
 # reattach fd 0 to the actual terminal after its install step and launch STL.
 if command -v script >/dev/null 2>&1; then
-  script -q -e -c "cat '$repo/scripts/quick-install.sh' | bash -s -- v0.1.0-rc.123 native,wireguard" /dev/null \
+  script -q -e -c "cat '$STL_TEST_QUICK_INSTALL_FILE' | bash -s -- v0.1.0-rc.123 native,wireguard" /dev/null \
     < /dev/null > "$scratch/pty-out" 2> "$scratch/pty-err"
   grep -q 'FAKE_STL_MENU_RENDERED' "$scratch/pty-out" || {
     echo 'Quick installer did not launch menu in the controlling PTY.' >&2
@@ -336,6 +417,7 @@ fi
 # before they can start any canonical installer or privileged action.
 for idx in 0 1 2; do
   published_cmd="${published_commands[$idx]}"
+  mocked_cmd=$(prepare_mock_public_command "$published_cmd")
   [[ "$published_cmd" == *"$stable_url"* ]] || {
     echo 'Published commands must use the immutable latest Stable asset.' >&2
     exit 1
@@ -351,21 +433,21 @@ for idx in 0 1 2; do
   # Positive path: successful completed bootstrap => canonical installer
   # with correct action and exact tag, without executing partial downloads.
   : > "$STL_TEST_EXECUTIONS"
-  if ! bash -c "$published_cmd" > "$scratch/out" 2>"$scratch/err"; then
+  if ! bash -c "$mocked_cmd" > "$scratch/out" 2>"$scratch/err"; then
     echo "Published installer failed: $(cat "$scratch/err")" >&2
     exit 1
   fi
   if (( EUID == 0 )); then
     grep -q 'test fake installer' "$STL_TEST_EXECUTIONS"
   else
-    grep -Eq "^sudo bash .* $action --version $expected_tag --backends native,wireguard$" "$STL_TEST_EXECUTIONS"
+    grep -Eq "^sudo root-snapshot test fake installer $action --version $expected_tag --backends native,wireguard$" "$STL_TEST_EXECUTIONS"
   fi
   # The subtle case: the final invocation is present and parseable, but
   # curl returns a failure after producing almost/all of the bytes.
   # Neither install nor update may start, even briefly.
   for first_hop_failure in no-bytes truncated almost-complete complete-then-error missing-invocation-success empty-success syntax-error oversized-chunked; do
     : > "$STL_TEST_EXECUTIONS"
-    if STL_TEST_FIRST_HOP="$first_hop_failure" bash -c "$published_cmd" > "$scratch/out" 2>"$scratch/err"; then
+    if STL_TEST_FIRST_HOP="$first_hop_failure" bash -c "$mocked_cmd" > "$scratch/out" 2>"$scratch/err"; then
       echo "Published $action first-hop $first_hop_failure falsely succeeded." >&2
       exit 1
     fi
@@ -399,13 +481,13 @@ bash "$STL_TEST_STABLE_BOOTSTRAP" native update > "$scratch/out" 2>"$scratch/err
 if (( EUID == 0 )); then
   grep -q 'test fake installer' "$STL_TEST_EXECUTIONS"
 else
-  grep -Eq "^sudo bash .* update --version $STL_TEST_PUBLIC_TAG --backends native$" "$STL_TEST_EXECUTIONS"
+  grep -Eq "^sudo root-snapshot test fake installer update --version $STL_TEST_PUBLIC_TAG --backends native$" "$STL_TEST_EXECUTIONS"
 fi
 # A successful memory-captured bootstrap still must reconnect the real TTY
 # and open STL's menu, for the permanently published install command.
 if command -v script >/dev/null 2>&1; then
   : > "$STL_TEST_EXECUTIONS"
-  script -q -e -c "${published_commands[0]}" /dev/null     < /dev/null > "$scratch/public-pty-out" 2>"$scratch/public-pty-err"
+  script -q -e -c "$(prepare_mock_public_command "${published_commands[0]}")" /dev/null     < /dev/null > "$scratch/public-pty-out" 2>"$scratch/public-pty-err"
   grep -q 'FAKE_STL_MENU_RENDERED' "$scratch/public-pty-out" || {
     echo 'Public first-hop wrapper prevented automatic menu launch.' >&2
     exit 1
@@ -419,7 +501,7 @@ echo 'PUBLIC_FIRST_HOP_TRANSPORT_COMPLETE_BEFORE_EXECUTION_AND_PTY=PASS'
 # Interruption before the final complete invocation must not invoke sudo,
 # report fake success, or execute a partial install.
 before_trunc="$(wc -c < "$STL_TEST_EXECUTIONS")"
-if sed '$d' "$repo/scripts/quick-install.sh" | bash -s -- v0.1.0-rc.123 > "$scratch/out" 2> "$scratch/err"; then
+if sed '$d' "$STL_TEST_QUICK_INSTALL_FILE" | bash -s -- v0.1.0-rc.123 > "$scratch/out" 2> "$scratch/err"; then
   echo 'Incomplete streamed bootstrap incorrectly succeeded.' >&2
   exit 1
 fi

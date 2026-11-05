@@ -202,6 +202,9 @@ UNTRUSTED_SUDO_LOOKUP
       rm -- "$file"
       mv -- /root/stl-sudo-original "$file"
       run_sudo_operator
+      # Real sudo handoff, privileged private SHA-bound snapshot, and
+      # same-UID source replacement occur in this disposable guest only.
+      bash /mnt/stl-quick-sudo-guest.sh
       [[ ! -e /tmp/STL_UNTRUSTED_INITIAL_LOOKUP ]] ||
         fail inherited_path_hijacked_initial_sudo_or_bash
       echo 'LITERAL_SUDO_AND_BASH_PATH_LOOKUP_REFUSED=PASS'
@@ -635,6 +638,8 @@ for scenario in missing-packages preinstalled-no-apt blocked-mirror preflight-si
     -v "$quic_file:/mnt/stl-quic-binary:ro" \
     -v "$entry:/mnt/stl-entry.sh:ro" \
     -v "$guest_script:/mnt/stl-guest-driver.sh:ro" \
+    -v "$PWD/scripts/quick-install.sh:/mnt/stl-quick-install.sh:ro" \
+    -v "$PWD/scripts/e2e/quick-bootstrap-sudo-guest.sh:/mnt/stl-quick-sudo-guest.sh:ro" \
     -v "$PWD/docs/INSTALL.md:/mnt/stl-install-doc:ro" \
     "$image" /bin/bash /mnt/stl-guest-driver.sh guest
   printf 'LOCAL_ONE_COMMAND_%s=PASS (%s linux/%s)\n' "$scenario" "$image" "$arch"

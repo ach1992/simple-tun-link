@@ -33,12 +33,24 @@ source_file="$root/scripts/quick-install.sh"
   echo 'Quick-install entrypoint changed; release template must be reviewed' >&2
   exit 1
 }
+# Pin the exact canonical installer bytes in the published Stable asset,
+# rather than trusting a second mutable network response before root.
+canonical="$root/scripts/install.sh"
+embedded="$root/cmd/stl/canonical-installer.sh"
+[[ -f $canonical && ! -L $canonical && -f $embedded && ! -L $embedded &&
+   $(stat -c%s "$canonical") -gt 0 ]] && cmp -s "$canonical" "$embedded" || {
+  echo 'Canonical source differs from the embedded installer; refusing Stable bootstrap.' >&2
+  exit 1
+}
+canonical_sha=$(sha256sum < "$canonical")
+canonical_sha=${canonical_sha%% *}
+[[ $canonical_sha =~ ^[0-9a-f]{64}$ ]] || exit 1
 tmp=$(mktemp "$parent/.stl-bootstrap.XXXXXXXX")
 trap 'rm -f -- "$tmp"' EXIT
 # Only the final invocation changes: all HTTPS, privilege, truncated
 # stream, root/TTY and canonical-installer boundaries are preserved.
 sed '$d' "$source_file" > "$tmp"
-printf 'quick_install_main "%s" "" "" "" "$@"\n' "$tag" >> "$tmp"
+printf 'quick_install_main "%s" "" "%s" "" "$@"\n' "$tag" "$canonical_sha" >> "$tmp"
 bash -n "$tmp"
 [[ $(grep -c '^quick_install_main "' "$tmp") -eq 1 ]] || {
   echo 'Generated bootstrap contains unexpected entrypoints' >&2
