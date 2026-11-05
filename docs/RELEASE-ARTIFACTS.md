@@ -71,7 +71,10 @@ A newly rendered Stable `stl-bootstrap.sh` also embeds the **complete-file
 SHA256 of the exact canonical `scripts/install.sh`** from the release source
 tree, after verifying it is byte-identical to the compiled-in canonical copy.
 The runtime checks this pin before running downloaded canonical shell or
-elevating privileges. The self-hosted Mirror keeps its independently verified
+elevating privileges, then rechecks a bounded root-private snapshot against
+the identical digest immediately before executing as root. The initial
+published official/Mirror one-liners start Bash under a clean `env -i`
+boundary; explicit HTTPS proxy/CA values are allowlisted into the root step. The self-hosted Mirror keeps its independently verified
 source and SHA256SUMS pins. This source behavior requires a new reviewed
 release; historical assets such as published v0.1.22 remain unchanged.
 

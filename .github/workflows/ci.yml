@@ -30,6 +30,7 @@ jobs:
         run: |
           bash -n scripts/quick-install.sh
           bash -n scripts/test-quick-install.sh
+          bash -n scripts/e2e/quick-bootstrap-sudo-guest.sh
           bash -n scripts/prepare-mirror.sh
           bash -n scripts/test-mirror-install.sh
           bash -n scripts/e2e/gre-netns.sh

@@ -190,6 +190,64 @@ STL_RELEASE_JSON
     echo '[FAILED] STL installer syntax validation failed; no installer started. Verify the tagged release and its installer before retrying.' >&2
     return 1
   fi
+  # Preserve the pre-privilege digest across sudo authentication. The
+  # user-owned download is NEVER executed as root: sudo copies at most 1 MiB+1
+  # into a fresh root-owned 0700 directory, hashes that private copy against
+  # this digest, and runs ONLY the authenticated root-private file.
+  local privileged_digest=$pinned_install_sha
+  if [[ -z $privileged_digest ]]; then
+    # Maintainer-direct bootstrap without a rendered release pin still binds
+    # the bytes seen before sudo to the bytes executed by root. It does not
+    # independently authenticate the publisher; rendered Stable/Mirror do.
+    privileged_digest=$(/usr/bin/sha256sum < "$tmp")
+    privileged_digest=${privileged_digest%% *}
+  fi
+  [[ $privileged_digest =~ ^[0-9a-f]{64}$ ]] || {
+    echo '[FAILED] Canonical source digest is missing or invalid; no installer started.' >&2
+    return 1
+  }
+  local privileged_stage
+  privileged_stage=$(cat <<'STL_ROOT_SNAPSHOT'
+set -Eeuo pipefail
+umask 077
+source=$1
+expected=$2
+shift 2
+[[ $source == /* && -f $source && ! -L $source && $expected =~ ^[0-9a-f]{64}$ ]] || {
+  echo 'STL_ROOT_SNAPSHOT_INVALID' >&2
+  exit 71
+}
+stage=$(/usr/bin/mktemp -d /root/.stl-quick-bootstrap.XXXXXXXX) || {
+  echo 'STL_ROOT_SNAPSHOT_UNAVAILABLE' >&2
+  exit 72
+}
+cleanup() { [[ -d $stage && ! -L $stage ]] && /bin/rm -rf --one-file-system -- "$stage"; }
+trap cleanup EXIT
+/usr/bin/head -c 1048577 -- "$source" > "$stage/install.sh" || {
+  echo 'STL_ROOT_SNAPSHOT_COPY_FAILED' >&2
+  exit 73
+}
+bytes=$(/usr/bin/wc -c < "$stage/install.sh")
+(( bytes > 0 && bytes <= 1048576 )) || {
+  echo 'STL_ROOT_SNAPSHOT_SIZE_INVALID' >&2
+  exit 74
+}
+[[ $(/usr/bin/sha256sum < "$stage/install.sh") == "$expected  -" ]] || {
+  echo 'STL_ROOT_SNAPSHOT_SHA256_MISMATCH' >&2
+  exit 75
+}
+/bin/bash "$stage/install.sh" "$@"
+STL_ROOT_SNAPSHOT
+)
+  # Explicitly admitted transport overrides are the only environment data
+  # forwarded to the privileged subprocess; never use sudo -E. Root Bash
+  # starts under env -i, so BASH_ENV and exported functions cannot cross.
+  local -a root_exec=(
+    /usr/bin/env -i HOME=/root PATH=/usr/sbin:/usr/bin:/sbin:/bin
+    HTTPS_PROXY="${HTTPS_PROXY-}" NO_PROXY="${NO_PROXY-}"
+    CURL_CA_BUNDLE="${CURL_CA_BUNDLE-}"
+    /bin/bash -c "$privileged_stage" stl "$tmp" "$privileged_digest"
+  )
   # Even an authenticated installer can invoke APT and hooks with private
   # repository URLs. Do not expose raw stdout/stderr, and do not buffer an
   # unbounded transaction log in memory or a temporary file.
@@ -197,6 +255,11 @@ STL_RELEASE_JSON
     local line announced_wait=0 announced_packages=0 announced_failure=0
     while IFS= read -r -n 1024 line || [[ -n $line ]]; do
       case "$line" in
+        'STL_ROOT_SNAPSHOT_SHA256_MISMATCH')
+          echo '[FAILED] Privileged private snapshot SHA256 mismatch after sudo. The transferred source changed; no installer code was executed as root.' ;;
+        'STL_ROOT_SNAPSHOT_INVALID'|'STL_ROOT_SNAPSHOT_UNAVAILABLE'|\
+        'STL_ROOT_SNAPSHOT_COPY_FAILED'|'STL_ROOT_SNAPSHOT_SIZE_INVALID')
+          echo '[FAILED] Privileged installer snapshot could not be safely authenticated; no installer code was executed as root.' ;;
         'stl installer [FAILED]: installed_version_mismatch: prior='*)
           local remainder prior
           remainder=${line#'stl installer [FAILED]: installed_version_mismatch: prior='}
@@ -259,18 +322,12 @@ STL_RELEASE_JSON
   local install_status=0
   echo "[INFO] Running STL $action for $version. Raw package diagnostics are withheld; this can take several minutes."
   if (
+    arguments=("$action" --version "$version" --backends "$backends")
+    [[ -z $mirror_url ]] || arguments+=(--release-base "$mirror_url" --release-sums-sha256 "$mirror_sums_sha")
     if (( EUID == 0 )); then
-      if [[ -n $mirror_url ]]; then
-        bash "$tmp" "$action" --version "$version" --backends "$backends" --release-base "$mirror_url" --release-sums-sha256 "$mirror_sums_sha"
-      else
-        bash "$tmp" "$action" --version "$version" --backends "$backends"
-      fi
+      "${root_exec[@]}" "${arguments[@]}"
     else
-      if [[ -n $mirror_url ]]; then
-        sudo bash "$tmp" "$action" --version "$version" --backends "$backends" --release-base "$mirror_url" --release-sums-sha256 "$mirror_sums_sha"
-      else
-        sudo bash "$tmp" "$action" --version "$version" --backends "$backends"
-      fi
+      /usr/bin/sudo "${root_exec[@]}" "${arguments[@]}"
     fi
   ) 2>&1 | quick_install_safe_output; then
     install_status=0
