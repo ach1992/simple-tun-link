@@ -38,7 +38,7 @@ export ALL_PROXY=http://127.0.0.1:9
 install -d -m 0700 /root/stl
 install -m 0600 -- /mnt/stl-older.sh "/root/stl/$STL_E2E_OLDER_NAME"
 
-root_line=$(grep '^/usr/bin/env -i HOME=/root .*shopt -s nullglob' /mnt/stl-install-doc)
+root_line=$(grep '^/usr/bin/env -i HOME=/root .*fail SHA256_MISMATCH' /mnt/stl-install-doc)
 [[ $(printf '%s\n' "$root_line" | wc -l) == 1 ]] || fail missing_literal_trusted_local_command
 root_line=${root_line/TRUSTED_SHA256/$STL_E2E_OLDER_SHA}
 eval "$root_line"
