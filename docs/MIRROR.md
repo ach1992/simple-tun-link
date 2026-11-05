@@ -112,6 +112,15 @@ pinned API-free command is:
 sudo stl update --mirror https://stl.example.com/install.sh --sha256 TRUSTED_BOOTSTRAP_SHA256
 ```
 
+On a later **published** STL version containing the source-selector menu,
+operators may instead open `sudo stl menu` → **Update → Trusted HTTPS
+mirror**, enter `https://stl.example.com/install.sh` and the independently
+verified `BOOTSTRAP_SHA256`, review them and type `UPDATE`. This is
+the same bounded `stl update --mirror` flow, **not** a second installer.
+The menu does not query GitHub, remember mirror authority or install
+optional helpers. Published v0.1.22 does not yet have this menu or CLI;
+retain the explicit guarded fallback documented below until publication.
+
 Supply the exact `BOOTSTRAP_SHA256` from the **trusted preparation machine**,
 not a checksum read back from the mirror. This CLI will be available only
 after its reviewed source is published in a new Stable; an older installed

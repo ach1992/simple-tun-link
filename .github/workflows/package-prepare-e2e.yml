@@ -17,6 +17,7 @@ on:
       - 'scripts/local-install-entrypoint.sh'
       - 'scripts/e2e/local-one-command-docker.sh'
       - 'scripts/e2e/installed-mirror-update-guest.sh'
+      - 'scripts/e2e/terminal-offline-update.py'
       - 'scripts/e2e/installed-mirror-fixture.py'
       - 'cmd/stl/**'
 

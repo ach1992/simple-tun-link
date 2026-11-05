@@ -745,6 +745,19 @@ an independently verified lowercase 64-character digest, run:
 sudo stl update --local /root/stl/stl_vX.Y.Z_linux_ARCH_local-install.sh --sha256 TRUSTED_FILE_SHA256
 ~~~
 
+**Interactive menu (after this source is published):** Run `sudo stl menu`
+and choose **Update → Verified local file** or **Update → Trusted HTTPS
+mirror**. The menu asks for the exact local path or HTTPS `install.sh` URL
+and the independently obtained 64-character lowercase SHA256, reviews both,
+then requires a fresh `UPDATE` confirmation before invoking the **same**
+`stl update` first-hop verification and canonical installer. The source
+chooser does not contact GitHub for these two methods; the official
+release-picker option is separate. The menu retains no remembered
+mirror/digest and never switches Update authority implicitly. This is
+**source behavior only** until a later official Stable publishes
+these changes; published v0.1.22 has neither this menu nor the short
+`stl update` CLI. Use the existing verified commands above on older hosts.
+
 **Trusted HTTPS mirror:** On the trusted preparation device, use the
 `BOOTSTRAP_SHA256` reported by `scripts/prepare-mirror.sh` *before uploading*
 the static mirror. On the destination, with an exact HTTPS URL (no redirects),
@@ -773,7 +786,18 @@ have partially applied packages: inspect `dpkg --audit`, STL ownership and
 retained recovery before attempting another update. After completion verify
 `sudo stl version --json` and the status of your existing Links.
 
-The menu reads official release metadata. **Only an installed executable
+For a build that includes the new source selector, the menu first offers
+**Official GitHub releases**, **Verified local file** and **Trusted HTTPS
+mirror**. Only the first choice queries `api.github.com`; the two
+independently pinned alternatives do not require a GitHub/API connection.
+The built-in CLI enforces root-owned installation, private bounded
+snapshots, digest verification and canonical rollback/ownership gates
+after separate `UPDATE` confirmation. A failed attempt always closes
+the old in-memory menu; verify the installed version and recovery state
+before restarting. This selector is not present in published v0.1.22.
+
+The official release-picker option reads official release metadata.
+**Only an installed executable
 that already contains the newer Stable-patch menu gate** can automatically
 delegate a forward same-major/minor Stable patch update. A later Stable patch is eligible only when the **installed** executable
 contains this newer menu gate *and* the target release passes immutable-tag,
