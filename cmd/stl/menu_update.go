@@ -360,7 +360,10 @@ func menuPrintOfflineUpdate(out io.Writer) {
 	menuProse(out, "The official release catalogue needs GitHub. A mirror-only server must use an explicitly trusted, version-pinned HTTPS mirror; a fully offline server needs a preverified local installer.")
 	menuField(out, "HTTPS mirror", "https://github.com/ach1992/simple-tun-link/blob/main/docs/MIRROR.md#3-clean-install-and-explicit-update")
 	menuField(out, "Local file", "https://github.com/ach1992/simple-tun-link/blob/main/docs/INSTALL.md#local-installation-choose-a-published-asset")
-	menuProse(out, "Verify publisher and the exact release SHA256 independently before executing any downloaded shell. Run the explicit mirror command with update, or use the architecture-matched, locally verified one-file installer. Do not use curl | bash.")
+	menuProse(out, "If the installed version supports stl update, use one of these exact, API-free commands with independently verified pins (replace all placeholders):")
+	menuField(out, "Local", "sudo stl update --local /root/stl/stl_vX.Y.Z_linux_ARCH_local-install.sh --sha256 TRUSTED_FILE_SHA256")
+	menuField(out, "Mirror", "sudo stl update --mirror https://YOUR_TRUSTED_MIRROR/install.sh --sha256 TRUSTED_BOOTSTRAP_SHA256")
+	menuProse(out, "Obtain the digest from the trusted official download or mirror-preparation device, NOT from the mirror. Older installed versions must use the guarded source-specific Update runbook. Do not use curl | bash.")
 	menuProse(out, "No update or trust-source change was performed by this screen.")
 }
 

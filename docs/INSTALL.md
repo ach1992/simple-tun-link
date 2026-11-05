@@ -718,6 +718,54 @@ stlink version --json
 
 ## Update
 
+### Short, authenticated Update from an installed STL (local or HTTPS mirror)
+
+Once an installed **published** STL executable includes the `stl update`
+command, two API-free paths use the same canonical Update/rollback engine.
+The new CLI is **source-only until the corresponding Stable is published**;
+installed v0.1.22 does not have it. On older installations, continue using the
+existing long guarded local `--update` command above or the verified
+HTTPS mirror UPDATE_COMMAND below; do not assume a newer CLI exists.
+
+**Local file:** On a trusted Internet-connected device confirm the official
+publisher, exact immutable Stable tag, architecture and full-file SHA256.
+Transfer the original, unchanged `stl_vX.Y.Z_linux_ARCH_local-install.sh` into
+root-owned, mode-`0700` `/root/stl/`, with the file mode `0600` or `0644`.
+Then, replacing both placeholders with the *real* official version/CPU and
+an independently verified lowercase 64-character digest, run:
+
+~~~bash
+sudo stl update --local /root/stl/stl_vX.Y.Z_linux_ARCH_local-install.sh --sha256 TRUSTED_FILE_SHA256
+~~~
+
+**Trusted HTTPS mirror:** On the trusted preparation device, use the
+`BOOTSTRAP_SHA256` reported by `scripts/prepare-mirror.sh` *before uploading*
+the static mirror. On the destination, with an exact HTTPS URL (no redirects),
+run:
+
+~~~bash
+sudo stl update --mirror https://stl.example.com/install.sh --sha256 TRUSTED_BOOTSTRAP_SHA256
+~~~
+
+Neither example can be run with a literal placeholder. The command refuses a
+missing, wrong-architecture, symlinked, hardlinked, writable, oversized,
+truncated or incorrectly pinned local file, or an untrusted/redirecting/
+malformed/oversized HTTPS response **before executing the downloaded script**.
+It places only bounded, independently hashed bytes in root-private staging;
+then a clean-environment child uses the authenticated, build-bound launcher or
+pinned mirror bootstrap. The HTTPS Mirror's downstream canonical installer
+(1 MiB), release metadata (64 KiB each) and requested binary (128 MiB)
+are also capped **during reception**, including when Content-Length is
+absent. Excess bytes cannot fill temporary storage before SHA256 rejection.
+The **same canonical installer** checks the release,
+owned installation, exact version/State compatibility, signed distro APT,
+and recovery journal before any update. This entrypoint does not download
+optional helpers by default, persist a mirror authority, use GitHub API, or
+bypass installed-version/rollback rules. A failed canonical transaction may
+have partially applied packages: inspect `dpkg --audit`, STL ownership and
+retained recovery before attempting another update. After completion verify
+`sudo stl version --json` and the status of your existing Links.
+
 The menu reads official release metadata. **Only an installed executable
 that already contains the newer Stable-patch menu gate** can automatically
 delegate a forward same-major/minor Stable patch update. A later Stable patch is eligible only when the **installed** executable

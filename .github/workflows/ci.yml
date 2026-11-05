@@ -38,6 +38,8 @@ jobs:
           bash -n scripts/e2e/cross-backend-docker.sh
           bash -n scripts/e2e/snapshot-install-smoke.sh
           bash -n scripts/e2e/local-one-command-docker.sh
+          bash -n scripts/e2e/installed-mirror-update-guest.sh
+          python3 -c 'import ast; ast.parse(open("scripts/e2e/installed-mirror-fixture.py").read())'
           bash -n scripts/local-install-entrypoint.sh
           bash -n scripts/e2e/wireguard-netns.sh
           bash -n scripts/e2e/wss-wg-ingress-netns.sh

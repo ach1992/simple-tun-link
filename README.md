@@ -139,7 +139,24 @@ removes a live Link.
 ## Update and uninstall
 
 Back up protected State/credentials and any original sensitive receiver
-handoffs before upgrading. For an existing installer-owned STL, use:
+handoffs before upgrading. An installed STL release that supports the
+`stl update` command can update **without GitHub/API access** using an
+independently verified local file or a pinned HTTPS mirror:
+
+~~~bash
+sudo stl update --local /root/stl/stl_vX.Y.Z_linux_ARCH_local-install.sh --sha256 TRUSTED_FILE_SHA256
+sudo stl update --mirror https://YOUR_TRUSTED_MIRROR/install.sh --sha256 TRUSTED_BOOTSTRAP_SHA256
+~~~
+
+Choose **one** method, replace the examples with the actual exact-version
+asset and SHA256 obtained independently from the trusted downloading/mirror
+preparation device. Never take the trust digest from the same untrusted mirror.
+The second command requires a previously prepared, independently pinned HTTPS
+mirror. These commands become available only in a newly published release
+containing this CLI; older installed Stable versions (including v0.1.22)
+must use their already supported verified manual procedures.
+
+For an existing installer-owned STL that reaches official GitHub, use:
 
 ~~~bash
 bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && bash -n "$f" && bash "$f" "$@"' stl update

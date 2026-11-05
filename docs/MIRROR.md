@@ -104,7 +104,20 @@ On an eligible Linux host that reaches **only your mirror**:
 bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fsSs --proto "=https" --max-redirs 0 --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && { [ "$(sha256sum < "$f" | cut -d" " -f1)" = "TRUSTED_BOOTSTRAP_SHA256" ] || { echo "STL: mirror bootstrap SHA256 mismatch" >&2; exit 1; }; } && bash -n "$f" && bash "$f" "$@"' stl
 ```
 
-**Update of an existing installer-owned STL:**
+**Update of an existing installer-owned STL:** On an **already installed**
+release that supports the new `stl update` CLI, the short, independently
+pinned API-free command is:
+
+```bash
+sudo stl update --mirror https://stl.example.com/install.sh --sha256 TRUSTED_BOOTSTRAP_SHA256
+```
+
+Supply the exact `BOOTSTRAP_SHA256` from the **trusted preparation machine**,
+not a checksum read back from the mirror. This CLI will be available only
+after its reviewed source is published in a new Stable; an older installed
+binary does not gain the command automatically. For **older installations**
+(including published v0.1.22), use the existing generated, independently
+pinned `UPDATE_COMMAND` instead:
 
 ```bash
 bash -c 'set -eo pipefail; f=$(mktemp); trap '\''rm -f -- "$f"'\'' EXIT; curl -fsSs --proto "=https" --max-redirs 0 --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | head -c 131073 > "$f"; [ -s "$f" ] && [ "$(wc -c < "$f")" -le 131072 ] && { [ "$(sha256sum < "$f" | cut -d" " -f1)" = "TRUSTED_BOOTSTRAP_SHA256" ] || { echo "STL: mirror bootstrap SHA256 mismatch" >&2; exit 1; }; } && bash -n "$f" && bash "$f" "$@"' stl update
@@ -138,7 +151,17 @@ is silently persisted as a future update authority.
 
 The mirror bootstrap fetches only `https://stl.example.com/releases/vX.Y.Z/`
 files, with **no GitHub/API fallback or redirects**. It verifies the canonical
-shell source digest before executing it. The canonical installer verifies
+shell source digest before executing it. **Downstream Mirror transfers are
+also bounded while streaming**, not only the initial 128-KiB first hop:
+the canonical `install.sh` is limited to 1 MiB, `SHA256SUMS`,
+`BUILD-MANIFEST.txt` and `LICENSE` to 64 KiB each, and the
+architecture-specific STL executable to 128 MiB. The receiver uses the
+declared-size curl safeguard plus an independent streaming byte cap,
+including for chunked responses and older supported curl versions. An
+oversized, incomplete or mismatched download fails before replacing an
+installed binary; private incomplete download stages are cleaned without
+discarding legitimate **COMMITTED** transaction-recovery journals.
+The canonical installer verifies
 the release checksum manifest against the **independently pinned** digest,
 then validates the requested architecture's executable, manifest and
 version/commit identity, and the existing STL ownership/transaction rules.

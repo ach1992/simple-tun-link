@@ -105,7 +105,50 @@ import sys
 import time
 root, cert, key, port_path = sys.argv[1:]
 class Handler(http.server.SimpleHTTPRequestHandler):
+    def oversize(self, amount, chunked):
+        self.send_response(200)
+        if chunked:
+            self.send_header('Transfer-Encoding', 'chunked')
+        else:
+            self.send_header('Content-Length', str(amount))
+        self.end_headers()
+        try:
+            while amount:
+                payload = b'X' * min(32768, amount)
+                if chunked:
+                    self.wfile.write(('%x\r\n' % len(payload)).encode('ascii') + payload + b'\r\n')
+                else:
+                    self.wfile.write(payload)
+                amount -= len(payload)
+            if chunked:
+                self.wfile.write(b'0\r\n\r\n')
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
     def do_GET(self):
+        mode_path = os.path.join(os.path.dirname(root), 'mirror-downstream-mode')
+        try:
+            with open(mode_path, 'r', encoding='ascii') as stream:
+                mode = stream.read().strip()
+        except FileNotFoundError:
+            mode = ''
+        release = '/releases/v0.9.99/'
+        if self.path == release + 'install.sh':
+            if mode == 'canonical-oversize-known':
+                self.oversize(1048577, False)
+                return
+            if mode == 'canonical-oversize-chunked':
+                self.oversize(1048577, True)
+                return
+        if self.path == release + 'SHA256SUMS' and mode == 'sums-oversize-chunked':
+            self.oversize(65537, True)
+            return
+        if self.path == release + 'BUILD-MANIFEST.txt' and mode == 'manifest-oversize-known':
+            self.oversize(65537, False)
+            return
+        if self.path == release + 'stl_v0.9.99_linux_amd64' and mode == 'asset-tamper':
+            self.oversize(1024, False)
+            return
         if self.path == '/chunked-oversize.sh':
             self.send_response(200)
             self.send_header('Transfer-Encoding', 'chunked')
@@ -424,6 +467,52 @@ cp "$scratch/old-release/BUILD-MANIFEST.txt" "$scratch/old-release/LICENSE" \
 bash scripts/install.sh install --bundle "$scratch/old-bundle" \
   --prefix "$STL_MIRROR_PREFIX" --backends native,wireguard > "$scratch/old.out" 2> "$scratch/old.err"
 before_old=$(sha256sum "$STL_MIRROR_PREFIX/bin/stl" | awk '{print $1}')
+before_record=$(sha256sum "$STL_MIRROR_PREFIX/lib/simple-tun-link/install-record" | awk '{print $1}')
+# The canonical successful install deliberately retains a durable COMMITTED
+# journal until the next installer invocation reconciles it. A rejected
+# oversized download must leave no NEW or UNCOMMITTED private staging.
+preexisting_committed=$(find "$STL_MIRROR_PREFIX/bin" -maxdepth 1 -type d -name '.stl-install.*' -printf '%f\n')
+# Real HTTPS downstream overflow/asset tamper cases. The first hop is
+# independently authenticated and the canonical updater is entered, but
+# bounded second/third-hop bytes must never exhaust temporary storage or
+# replace the installed version. Both Content-Length and chunked flows run.
+for failure_mode in canonical-oversize-known canonical-oversize-chunked \
+                    sums-oversize-chunked manifest-oversize-known asset-tamper; do
+  printf '%s\n' "$failure_mode" > "$scratch/mirror-downstream-mode.next"
+  mv -f "$scratch/mirror-downstream-mode.next" "$scratch/mirror-downstream-mode"
+  if bash -c "$one_liner update" > "$scratch/$failure_mode.out" 2> "$scratch/$failure_mode.err"; then
+    echo "MIRROR_TEST_FAIL: accepted downstream $failure_mode" >&2
+    exit 1
+  fi
+  case "$failure_mode" in
+    canonical-oversize-known|canonical-oversize-chunked)
+      grep -Eq '(1 MiB streaming limit|Mirror canonical installer unavailable, incomplete or oversized)' \
+        "$scratch/$failure_mode.err" ||
+        { cat "$scratch/$failure_mode.err" >&2; echo 'MIRROR_TEST_FAIL: canonical bound guidance missing' >&2; exit 1; } ;;
+    sums-oversize-chunked)
+      grep -Eq '(Mirror release asset exceeds the authenticated streaming-size limit|Required release file is unavailable on the HTTPS mirror)' "$scratch/$failure_mode.out" ||
+        { cat "$scratch/$failure_mode.out" >&2; echo 'MIRROR_TEST_FAIL: chunked sums bound missing' >&2; exit 1; } ;;
+    manifest-oversize-known)
+      grep -q 'Required release file is unavailable on the HTTPS mirror' "$scratch/$failure_mode.out" ||
+        { cat "$scratch/$failure_mode.out" >&2; echo 'MIRROR_TEST_FAIL: manifest bound missing' >&2; exit 1; } ;;
+    asset-tamper)
+      grep -q 'Release asset SHA256 mismatch' "$scratch/$failure_mode.out" ||
+        { cat "$scratch/$failure_mode.out" >&2; echo 'MIRROR_TEST_FAIL: mirrored asset hash refusal missing' >&2; exit 1; } ;;
+  esac
+  [[ $(sha256sum "$STL_MIRROR_PREFIX/bin/stl" | awk '{print $1}') == "$before_old" &&
+     $(sha256sum "$STL_MIRROR_PREFIX/lib/simple-tun-link/install-record" | awk '{print $1}') == "$before_record" ]] ||
+    { echo "MIRROR_TEST_FAIL: $failure_mode changed binary/record" >&2; exit 1; }
+  shopt -s nullglob
+  remaining=("$STL_MIRROR_PREFIX/bin"/.stl-install.*)
+  shopt -u nullglob
+  for retained in "${remaining[@]}"; do
+    [[ -d $retained && ! -L $retained && -f $retained/COMMITTED &&
+       $(printf '%s\n' "$preexisting_committed" | grep -Fxc "${retained##*/}") == 1 ]] ||
+      { echo "MIRROR_TEST_FAIL: $failure_mode retained a new/uncommitted private stage" >&2; exit 1; }
+  done
+done
+rm -f "$scratch/mirror-downstream-mode"
+echo 'MIRROR_DOWNSTREAM_HTTPS_KNOWN_CHUNKED_AND_TAMPER_BOUNDS=PASS'
 if bash -c "$one_liner" > "$scratch/wrong.out" 2> "$scratch/wrong.err"; then
   echo 'MIRROR_TEST_FAIL: install incorrectly upgraded an existing version' >&2; exit 1
 fi

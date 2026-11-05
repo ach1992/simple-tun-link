@@ -158,7 +158,19 @@ encapsulations/IPsec remain discoverable.
   values, and no secret-bearing or ANSI-contaminated machine output.
   `STL_NO_CLEAR=1` retains an append-only interactive display for
   troubleshooting.
-- Update delegates only to an independently verified official
+- An installed release implementing `stl update` offers short, explicit
+  **offline/local** and **HTTPS mirror** Update entrypoints:
+  `sudo stl update --local /root/stl/EXACT_LOCAL_FILE --sha256 TRUSTED_SHA256`
+  or `sudo stl update --mirror https://operator.example/install.sh --sha256 TRUSTED_BOOTSTRAP_SHA256`.
+  The 64-character digest comes from an independently authenticated
+  official release or trusted mirror-preparation device, never from the
+  destination mirror. A protected, bounded snapshot is verified before any
+  downloaded Bash executes; the canonical installer alone decides ownership,
+  version compatibility, APT and rollback. No GitHub API query, persistent
+  mirror trust or implicit companion selection occurs. Older published STL
+  versions lack this CLI; follow [Install/Update](INSTALL.md#update) for their
+  supported guarded procedure.
+- The **menu-driven** Update delegates only to an independently verified official
   **immutable** published installer for forward same-line Stable patch
   or forward RC releases, under the installed-root/TTY and fresh `UPDATE`
   gates. Major/minor migration, RC-to-Stable, mutable or unknown release
