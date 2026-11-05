@@ -141,24 +141,42 @@ STL_RELEASE_JSON
   # Download the trusted current immutable canonical installer completely,
   # and syntax-check it BEFORE any sudo/root execution.
   tmp="$workdir/install.sh"
+  # The local-release archive already limits the canonical install.sh to
+  # 1 MiB. Apply the SAME bound while receiving bytes, not after curl has
+  # filled a live host's temporary storage. --max-filesize helps reject
+  # known Content-Length early; head enforces the hard streaming cap also
+  # on old Debian/Ubuntu curl versions and chunked/unknown-length responses.
+  # pipefail makes a truncated response or a broken curl fail closed.
+  local canonical_limit=1048576 canonical_rc=0 canonical_bytes
   if [[ -n $mirror_url ]]; then
     source_url="$mirror_url/install.sh"
-    if ! curl -fsSs --proto "=https" --proto-redir "=https" --max-redirs 0 --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 --retry-max-time 150 -o "$tmp" "$source_url" >/dev/null 2>&1; then
-      echo '[FAILED] Mirror canonical installer unavailable. Check the HTTPS mirror and required release files; no GitHub fallback or installer started.' >&2
-      return 1
+    curl -fsSs --proto "=https" --proto-redir "=https" --max-redirs 0 --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 --retry-max-time 150 --max-filesize "$canonical_limit" "$source_url" 2>/dev/null |
+      head -c "$((canonical_limit + 1))" > "$tmp" || canonical_rc=$?
+  else
+    source_url="https://raw.githubusercontent.com/ach1992/simple-tun-link/$bootstrap_version/scripts/install.sh"
+    curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 --retry-max-time 150 --max-filesize "$canonical_limit" "$source_url" 2>/dev/null |
+      head -c "$((canonical_limit + 1))" > "$tmp" || canonical_rc=$?
+  fi
+  canonical_bytes=$(wc -c < "$tmp")
+  if (( canonical_bytes > canonical_limit )); then
+    echo '[FAILED] Canonical installer exceeds the 1 MiB streaming limit; no installer started. Check the trusted release or HTTPS mirror.' >&2
+    return 1
+  fi
+  if (( canonical_rc != 0 )); then
+    if [[ -n $mirror_url ]]; then
+      echo '[FAILED] Mirror canonical installer unavailable, incomplete or oversized. Check HTTPS and the verified mirror files; no GitHub fallback or installer started.' >&2
+    else
+      echo '[FAILED] STL installer download failed before execution. Check HTTPS/DNS reachability of raw.githubusercontent.com and the exact official release; no installer started.' >&2
     fi
-    [[ -s $tmp && $(sha256sum -- "$tmp" | awk '{print $1}') == "$mirror_install_sha" ]] || {
+    return 1
+  fi
+  [[ -s $tmp ]] || { echo '[FAILED] STL installer download is empty; no installer started. Verify the official release and retry the download.' >&2; return 1; }
+  if [[ -n $mirror_url ]]; then
+    [[ $(sha256sum -- "$tmp" | awk '{print $1}') == "$mirror_install_sha" ]] || {
       echo '[FAILED] Mirror canonical installer differs from the independently pinned SHA256; no installer started.' >&2
       return 1
     }
-  else
-    source_url="https://raw.githubusercontent.com/ach1992/simple-tun-link/$bootstrap_version/scripts/install.sh"
-    if ! curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 --retry-max-time 150 -o "$tmp" "$source_url" >/dev/null 2>&1; then
-      echo '[FAILED] STL installer download failed before execution. Check HTTPS/DNS reachability of raw.githubusercontent.com and the exact official release; no installer started.' >&2
-      return 1
-    fi
   fi
-  [[ -s $tmp ]] || { echo '[FAILED] STL installer download is empty; no installer started. Verify the official release and retry the download.' >&2; return 1; }
   if ! bash -n "$tmp" >/dev/null 2>&1; then
     echo '[FAILED] STL installer syntax validation failed; no installer started. Verify the tagged release and its installer before retrying.' >&2
     return 1
@@ -188,6 +206,10 @@ STL_RELEASE_JSON
           fi ;;
         'stl installer [FAILED]: mirror_checksum_mismatch:'*)
           echo '[FAILED] The mirror SHA256SUMS does not match this bootstrap release pin. Check uploads and independent release hashes; no binary published.' ;;
+        'stl installer [FAILED]: mirror_download_oversized:'*)
+          echo '[FAILED] Mirror release asset exceeds the authenticated streaming-size limit. Inspect the mirror and use independently trusted release files; no binary published.' ;;
+        'stl installer [FAILED]: checksum mismatch for '*)
+          echo '[FAILED] Release asset SHA256 mismatch. Recheck the independently trusted release and transferred files; no binary published.' ;;
         'stl installer [FAILED]: mirror_download_failed:'*)
           echo '[FAILED] Required release file is unavailable on the HTTPS mirror. Upload the complete verified version directory; no GitHub fallback.' ;;
         'stl installer [FAILED]: APT_INDEX_REFRESH failed;'*)

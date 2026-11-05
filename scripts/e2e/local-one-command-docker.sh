@@ -679,3 +679,46 @@ docker run --rm --network bridge \
   "$image" /bin/bash /mnt/stl-guest-driver.sh guest
 printf 'LOCAL_ONE_COMMAND_STABLE_UPDATE_AND_DOWNGRADE_REFUSAL=PASS (%s linux/%s)\n' "$image" "$arch"
 
+# A separate root guest exercises the ACTUAL installed stl update --mirror
+# command, not a test-only paraphrase of the existing bootstrap. All requests
+# stay on guest loopback HTTPS; only distro-signed APT can reach the Internet.
+command -v openssl >/dev/null || fail missing_host_openssl_for_tls_test
+mkdir -m 0700 "$fixture/mirror-publisher"
+trusted_sums=$(sha256sum < "$fixture/v999.0.1/SHA256SUMS")
+trusted_sums=${trusted_sums%% *}
+bash scripts/prepare-mirror.sh --tag v999.0.1 \
+  --release-dir "$fixture/v999.0.1" \
+  --trusted-sums-sha256 "$trusted_sums" \
+  --url https://localhost:8443 \
+  --output "$fixture/mirror-publisher/static" > "$fixture/mirror-prepared.log" ||
+  fail test_mirror_preparation_failed
+mirror_bootstrap_sha=$(sed -n 's/^BOOTSTRAP_SHA256=//p' "$fixture/mirror-prepared.log")
+[[ $mirror_bootstrap_sha =~ ^[0-9a-f]{64}$ ]] ||
+  fail test_mirror_bootstrap_not_independently_pinned
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -sha256 \
+  -keyout "$fixture/stl-mirror-test.key" \
+  -out "$fixture/stl-mirror-test.crt" \
+  -subj '/CN=localhost' \
+  -addext 'subjectAltName=DNS:localhost' \
+  -addext 'basicConstraints=critical,CA:TRUE' >/dev/null 2>&1 ||
+  fail test_tls_certificate_generation_failed
+docker run --rm --network bridge \
+  --add-host github.com:127.0.0.1 \
+  --add-host api.github.com:127.0.0.1 \
+  --add-host objects.githubusercontent.com:127.0.0.1 \
+  --add-host github-releases.githubusercontent.com:127.0.0.1 \
+  -e STL_E2E_DISPOSABLE_GUEST=approved \
+  -e STL_E2E_OLDER_NAME="$older_name" \
+  -e STL_E2E_OLDER_SHA="$older_sha" \
+  -e STL_E2E_BOOTSTRAP_SHA="$mirror_bootstrap_sha" \
+  -v "$fixture/v999.0.0/$older_name:/mnt/stl-older.sh:ro" \
+  -v "$fixture/mirror-publisher/static:/mnt/stl-mirror:ro" \
+  -v "$fixture/stl-mirror-test.crt:/mnt/stl-test.crt:ro" \
+  -v "$fixture/stl-mirror-test.key:/mnt/stl-test.key:ro" \
+  -v "$PWD/scripts/e2e/installed-mirror-fixture.py:/mnt/stl-server.py:ro" \
+  -v "$PWD/scripts/e2e/installed-mirror-update-guest.sh:/mnt/stl-mirror-guest.sh:ro" \
+  -v "$PWD/docs/INSTALL.md:/mnt/stl-install-doc:ro" \
+  "$image" /bin/bash /mnt/stl-mirror-guest.sh ||
+  fail verified_installed_cli_mirror_guest_failed
+printf 'LITERAL_INSTALLED_CLI_HTTPS_MIRROR_UPDATE_AND_DOWNSTREAM_BOUNDS=PASS (%s linux/%s)\n' "$image" "$arch"
+

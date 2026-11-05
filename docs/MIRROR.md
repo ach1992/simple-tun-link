@@ -151,7 +151,17 @@ is silently persisted as a future update authority.
 
 The mirror bootstrap fetches only `https://stl.example.com/releases/vX.Y.Z/`
 files, with **no GitHub/API fallback or redirects**. It verifies the canonical
-shell source digest before executing it. The canonical installer verifies
+shell source digest before executing it. **Downstream Mirror transfers are
+also bounded while streaming**, not only the initial 128-KiB first hop:
+the canonical `install.sh` is limited to 1 MiB, `SHA256SUMS`,
+`BUILD-MANIFEST.txt` and `LICENSE` to 64 KiB each, and the
+architecture-specific STL executable to 128 MiB. The receiver uses the
+declared-size curl safeguard plus an independent streaming byte cap,
+including for chunked responses and older supported curl versions. An
+oversized, incomplete or mismatched download fails before replacing an
+installed binary; private incomplete download stages are cleaned without
+discarding legitimate **COMMITTED** transaction-recovery journals.
+The canonical installer verifies
 the release checksum manifest against the **independently pinned** digest,
 then validates the requested architecture's executable, manifest and
 version/commit identity, and the existing STL ownership/transaction rules.

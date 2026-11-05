@@ -143,16 +143,22 @@ if [[ "$url" != 'https://raw.githubusercontent.com/ach1992/simple-tun-link/v0.1.
       "$url" != "https://raw.githubusercontent.com/ach1992/simple-tun-link/$STL_TEST_PUBLIC_TAG/scripts/install.sh" ]]; then
   exit 44
 fi
-[[ -n "$destination" ]] || exit 44
+# The canonical first hop uses bounded stdout streaming, never curl -o.
+[[ -z "$destination" ]] || exit 44
 [[ -z "$STL_TEST_DOWNLOAD_FAIL" ]] || {
   printf '%s\n' 'STL_TEST_DOWNLOAD_SENSITIVE_SENTINEL' >&2
   printf '%s\n' 'STL_TEST_DOWNLOAD_SENSITIVE_SENTINEL'
   exit 45
 }
+if [[ -n "${STL_TEST_OVERSIZE_DOWNSTREAM:-}" ]]; then
+  printf '#!/usr/bin/env bash\n'
+  head -c 1048580 /dev/zero | tr '\\000' '#'
+  exit 0
+fi
 if [[ -n "$STL_TEST_SYNTAX_FAIL" ]]; then
-  printf '%s\n' 'if (( STL_TEST_SYNTAX_SENSITIVE_SENTINEL (' > "$destination"
+  printf '%s\n' 'if (( STL_TEST_SYNTAX_SENSITIVE_SENTINEL ('
 else
-  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "test fake installer" >> "$STL_TEST_EXECUTIONS"' > "$destination"
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "test fake installer" >> "$STL_TEST_EXECUTIONS"'
 fi
 CURL
 cat > "$scratch/bin/sudo" <<'SUDO'
@@ -255,15 +261,17 @@ fi
   echo 'Invalid tag invoked privileged installer.' >&2
   exit 1
 }
-for scenario in STL_TEST_DOWNLOAD_FAIL STL_TEST_SYNTAX_FAIL; do
+for scenario in STL_TEST_DOWNLOAD_FAIL STL_TEST_SYNTAX_FAIL STL_TEST_OVERSIZE_DOWNSTREAM; do
   if env "$scenario=1" bash "$repo/scripts/quick-install.sh" v0.1.0-rc.123 > "$scratch/out" 2>"$scratch/err"; then
     echo "Bootstrap incorrectly accepted $scenario" >&2
     exit 1
   fi
   if [[ $scenario == STL_TEST_DOWNLOAD_FAIL ]]; then
     grep -q 'download failed before execution' "$scratch/err" || { echo 'Missing download stage guidance' >&2; exit 1; }
-  else
+  elif [[ $scenario == STL_TEST_SYNTAX_FAIL ]]; then
     grep -q 'syntax validation failed' "$scratch/err" || { echo 'Missing syntax stage guidance' >&2; exit 1; }
+  else
+    grep -q '1 MiB streaming limit' "$scratch/err" || { echo 'Missing streaming-byte-limit guidance' >&2; exit 1; }
   fi
   if grep -q 'STL_TEST_.*SENSITIVE_SENTINEL' "$scratch/out" "$scratch/err"; then
     echo "Untrusted $scenario diagnostic leaked to operator" >&2

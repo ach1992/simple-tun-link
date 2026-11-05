@@ -753,7 +753,11 @@ truncated or incorrectly pinned local file, or an untrusted/redirecting/
 malformed/oversized HTTPS response **before executing the downloaded script**.
 It places only bounded, independently hashed bytes in root-private staging;
 then a clean-environment child uses the authenticated, build-bound launcher or
-pinned mirror bootstrap. The **same canonical installer** checks the release,
+pinned mirror bootstrap. The HTTPS Mirror's downstream canonical installer
+(1 MiB), release metadata (64 KiB each) and requested binary (128 MiB)
+are also capped **during reception**, including when Content-Length is
+absent. Excess bytes cannot fill temporary storage before SHA256 rejection.
+The **same canonical installer** checks the release,
 owned installation, exact version/State compatibility, signed distro APT,
 and recovery journal before any update. This entrypoint does not download
 optional helpers by default, persist a mirror authority, use GitHub API, or

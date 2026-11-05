@@ -1745,13 +1745,37 @@ for file in SHA256SUMS BUILD-MANIFEST.txt LICENSE "$asset"; do
     is_regular "$bundle/$file" || fail "bundle file missing or unsafe: $file"
     cp -- "$bundle/$file" "$stage/$file" || fail "cannot read bundle file: $file"
   else
+    # Match the authenticated local archive's per-member bounds. In
+    # particular, no untrusted Mirror response may fill root-owned
+    # temporary storage before its SHA256 mismatch is detected.
+    # --max-filesize rejects declared oversize early; head also caps
+    # unknown-length/chunked streams on older supported curl versions.
+    case "$file" in
+      stl_*) transfer_limit=134217728 ;;
+      *) transfer_limit=65536 ;;
+    esac
+    transfer_rc=0
     if [[ -n $release_base ]]; then
       url="$release_base/$file"
-      curl -fsSs --proto '=https' --proto-redir '=https' --max-redirs 0 --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 -o "$stage/$file" "$url" ||
-        fail "mirror_download_failed: cannot fetch $file from configured HTTPS mirror; no fallback to GitHub"
+      curl -fsSs --proto '=https' --proto-redir '=https' --max-redirs 0 --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 --max-filesize "$transfer_limit" "$url" 2>/dev/null |
+        head -c "$((transfer_limit + 1))" > "$stage/$file" || transfer_rc=$?
     else
       url="https://github.com/ach1992/simple-tun-link/releases/download/${version}/${file}"
-      curl -fLSs --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 -o "$stage/$file" "$url" || fail "cannot download release file: $file"
+      curl -fLSs --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 --max-filesize "$transfer_limit" "$url" 2>/dev/null |
+        head -c "$((transfer_limit + 1))" > "$stage/$file" || transfer_rc=$?
+    fi
+    transfer_bytes=$(wc -c < "$stage/$file") || fail "cannot inspect downloaded size for $file"
+    if (( transfer_bytes > transfer_limit )); then
+      if [[ -n $release_base ]]; then
+        fail "mirror_download_oversized: $file exceeds verified release transfer limit; no fallback to GitHub"
+      fi
+      fail "official release file exceeds verified transfer limit: $file"
+    fi
+    if (( transfer_rc != 0 || transfer_bytes == 0 )); then
+      if [[ -n $release_base ]]; then
+        fail "mirror_download_failed: $file unavailable, incomplete or oversized; no fallback to GitHub"
+      fi
+      fail "cannot download complete bounded official release file: $file"
     fi
   fi
 done
