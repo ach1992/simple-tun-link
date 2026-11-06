@@ -20,6 +20,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // dpkg ownership and dpkg --verify only attest against locally installed
@@ -366,9 +368,31 @@ func vendorLiveFilesMatchOfficialArchiveWithPathCheck(ctx context.Context, deb [
 	// Fully consume the bounded unpacker output BEFORE inspecting it.
 	// Streaming tar.Next() while writing the compressed archive to a child
 	// can deadlock on early fail-closed returns with a blocked stdin writer.
-	cmd := exec.CommandContext(ctx, "/usr/bin/dpkg-deb", "--fsys-tarfile", "-")
+	// Ubuntu 26.04's dpkg-deb 1.23.7 rejects complete pipe-fed archives
+	// as truncated (e.g. 608 > 0 bytes). A sealed, seekable Linux memfd
+	// preserves byte identity without a mutable pathname on disk.
+	if len(deb) == 0 || len(deb) > 40<<20 {
+		return errors.New("signed archive size unsupported")
+	}
+	fd, err := unix.MemfdCreate("stl-signed-distro-archive", unix.MFD_CLOEXEC|unix.MFD_ALLOW_SEALING)
+	if err != nil {
+		return errors.New("private signed archive snapshot unavailable")
+	}
+	archive := os.NewFile(uintptr(fd), "stl-signed-distro-archive")
+	defer archive.Close()
+	if n, err := archive.Write(deb); err != nil || n != len(deb) {
+		return errors.New("private signed archive snapshot incomplete")
+	}
+	if _, err := archive.Seek(0, io.SeekStart); err != nil {
+		return errors.New("private signed archive snapshot not seekable")
+	}
+	if _, err := unix.FcntlInt(archive.Fd(), unix.F_ADD_SEALS,
+		unix.F_SEAL_WRITE|unix.F_SEAL_GROW|unix.F_SEAL_SHRINK|unix.F_SEAL_SEAL); err != nil {
+		return errors.New("private signed archive snapshot not sealed")
+	}
+	cmd := exec.CommandContext(ctx, "/usr/bin/dpkg-deb", "--fsys-tarfile", "/proc/self/fd/3")
 	cmd.Env = nativeSystemdFixedEnvironment()
-	cmd.Stdin = bytes.NewReader(deb)
+	cmd.ExtraFiles = []*os.File{archive}
 	stdout, stderr := &privateCapture{max: 128 << 20}, &privateCapture{max: 1024}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	if err := cmd.Run(); err != nil || stdout.overflow || stderr.overflow || stderr.output.Len() != 0 {
