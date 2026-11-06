@@ -50,9 +50,10 @@ official asset, the tag and source-commit identity, and that both officially
 hashed archives contain the **same canonical installer**. It refuses
 repackaged/incomplete or legacy releases without mirror support. It does
 not fetch from the Internet, write into an existing output, install STL or
-change networking. The first version supporting this facility must be
-published after its normal independent review/release gates; **v0.1.21 does
-not contain this new mirror-aware canonical installer**.
+change networking. Basic self-hosted Mirror support first shipped in
+reviewed Stable `v0.1.22`; the hardened bootstrap and installed local/Mirror
+Update selector first shipped in `v0.1.23`. Historical `v0.1.21` assets
+remain unchanged and predate Mirror support.
 
 ## 2. Upload the generated static tree to your HTTPS web root
 
@@ -96,6 +97,32 @@ curl -fsS https://stl.example.com/install.sh | head -n 3
 
 ## 3. Clean install and explicit Update
 
+### Validated ACh-hosted Mirror for Stable v0.1.23
+
+As verified on 2026-11-06, `https://stl.gitscripts.ir/install.sh` serves
+the exact released `v0.1.23` artifacts from the operator-approved
+`/www/acdomains/stl.gitscripts.ir` document root on the IR aaPanel host.
+Its **independently prepared** first-hop SHA256 is:
+
+```text
+a3824a43dbb4472dd480b1bda653a3efc37f9ad928bde4017b5dcfe52d656d4d
+```
+
+The official release-wide `SHA256SUMS` digest, verified on the trusted
+preparation machine, is
+`0cd850a597a649d05ffe1af4221726d3fd1bcfdb01f11e186dde62d4f521b67a`.
+All ten required Mirror paths were independently fetched over validated
+HTTPS from the Iran test host `IRPT-101` and checked against prepared
+SHA256 values; an absent asset returned HTTP 404. Separately, a nonroot
+Dev private-prefix test installed the official `v0.1.22` binary, updated
+to `v0.1.23` from this **live HTTPS Mirror**, rejected a wrong manifest
+digest, and proved same-artifact reinstall does not replace the binary or
+Install Record. These results do **not** prove a fresh physical installation
+with GitHub actually blocked. These pins apply **only to v0.1.23**. A future version requires new
+release verification, Mirror preparation and a newly trusted bootstrap
+SHA256. Do not derive the trust digest by downloading it from the same
+Mirror being authenticated.
+
 On an eligible Linux host that reaches **only your mirror**:
 
 **Fresh installation:**
@@ -112,20 +139,19 @@ pinned API-free command is:
 sudo stl update --mirror https://stl.example.com/install.sh --sha256 TRUSTED_BOOTSTRAP_SHA256
 ```
 
-On a later **published** STL version containing the source-selector menu,
+On installed STL `v0.1.23` or later containing the source-selector menu,
 operators may instead open `sudo stl menu` → **Update → Trusted HTTPS
 mirror**, enter `https://stl.example.com/install.sh` and the independently
 verified `BOOTSTRAP_SHA256`, review them and type `UPDATE`. This is
 the same bounded `stl update --mirror` flow, **not** a second installer.
-The menu does not query GitHub, remember mirror authority or install
-optional helpers. Published v0.1.22 does not yet have this menu or CLI;
-retain the explicit guarded fallback documented below until publication.
+The selected Mirror path does not query GitHub, remember Mirror authority
+or install optional helpers. The older published `v0.1.22` does not have
+this menu or CLI; use the guarded fallback below until a verified upgrade.
 
 Supply the exact `BOOTSTRAP_SHA256` from the **trusted preparation machine**,
-not a checksum read back from the mirror. This CLI will be available only
-after its reviewed source is published in a new Stable; an older installed
-binary does not gain the command automatically. For **older installations**
-(including published v0.1.22), use the existing generated, independently
+not a checksum read back from the Mirror. This CLI was first published in
+Stable `v0.1.23`; an older installed binary does not gain it automatically.
+For **older installations** (including published `v0.1.22`), use the existing generated, independently
 pinned `UPDATE_COMMAND` instead:
 
 ```bash
@@ -149,8 +175,8 @@ or reviewed HTTPS proxy, insert `CURL_CA_BUNDLE=/absolute/trusted/ca.pem`,
 `/bin/bash`**. Only these selected transport values carry into the
 privileged phase; avoid putting proxy passwords in commands/history, and
 do not use `sudo -E`. Keep APT distribution signing and its separate proxy
-configuration intact. This root-private snapshot/clean-env behavior takes
-effect only when published in a newly reviewed Stable, not v0.1.22.
+configuration intact. This root-private snapshot/clean-env behavior first
+shipped in `v0.1.23`, not in the historical `v0.1.22` assets.
 
 These commands download the **whole** first script into a private temporary
 file with a 45-second deadline and a 128-KiB streaming limit (including
@@ -163,11 +189,14 @@ for an administrative installation. Running `install` against a different
 existing verified STL will **not** silently upgrade; it prints a specific
 Update instruction. Same-artifact reinstall remains an idempotent no-op.
 
-**Offline Update uses the mirror command above.** The existing built-in
-`sudo stl menu` → `Update` screen still queries GitHub's releases API,
-so it is **not available** on a host restricted to your mirror. The ordinary
-menu remains usable for other tunnel-management operations. No mirror URL
-is silently persisted as a future update authority.
+**Offline Update uses the Mirror command or selected menu choice above.**
+Starting with installed `v0.1.23`, the menu separately offers Official
+GitHub releases, Verified local file and Trusted HTTPS Mirror. **Only**
+the official release picker queries GitHub's API; the two pinned offline
+choices work on Mirror-restricted hosts. An older installed `v0.1.22`
+menu still requires GitHub for its original picker and must use the
+guarded manual Update fallback. No Mirror URL is silently persisted as
+a future update authority.
 
 The mirror bootstrap fetches only `https://stl.example.com/releases/vX.Y.Z/`
 files, with **no GitHub/API fallback or redirects**. It verifies the canonical

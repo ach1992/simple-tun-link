@@ -75,8 +75,8 @@ elevating privileges, then rechecks a bounded root-private snapshot against
 the identical digest immediately before executing as root. The initial
 published official/Mirror one-liners start Bash under a clean `env -i`
 boundary; explicit HTTPS proxy/CA values are allowlisted into the root step. The self-hosted Mirror keeps its independently verified
-source and SHA256SUMS pins. This source behavior requires a new reviewed
-release; historical assets such as published v0.1.22 remain unchanged.
+source and SHA256SUMS pins. These protections first shipped in reviewed
+Stable `v0.1.23`; historical assets such as `v0.1.22` remain unchanged.
 
 The first official Stable release with the new `.sh` assets is
 [v0.1.9](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.9).

@@ -607,10 +607,12 @@ source pins **both** its exact release tag and the whole-file SHA256 of the revi
 `install.sh`. The complete downloaded canonical file must match that
 build-bound digest **before** syntax checking or any sudo/root execution.
 A substituted canonical script fails closed even if it is valid Bash.
-It never executes mutable `main` as root. Published `v0.1.22` predates
-this canonical SHA256 pin; the stronger check requires a later reviewed
-Stable release and does not retroactively alter historical assets.
-Inspect source, SHA256SUMS and official release identity before installing. The public command stays unchanged:
+It never executes mutable `main` as root. The canonical SHA256 pin first
+shipped in reviewed Stable `v0.1.23`; historical `v0.1.22` assets remain
+unchanged and lack this protection. Before installing, verify source,
+SHA256SUMS and release identity. The **version-free official URL and
+Install/Update contract** stay stable, although the literal first-hop
+command was hardened to start with a clean `env -i` environment:
 
 ~~~sh
 /usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl
@@ -655,9 +657,8 @@ the separately selected older tag. That older version remains data
 (`--version`) for the canonical installer, which independently validates release SHA256SUMS, binary
 metadata and installed ownership/rollback rules. The bootstrap reattaches a
 real /dev/tty to open the menu after installation. Without a TTY, use
-`sudo stl menu`. This source change reaches users only after a new release
-publishes its corresponding permanent bootstrap asset.
-When the new root-private snapshot behavior is published, the bootstrap
+`sudo stl menu`. This change reached users with the `v0.1.23` Stable
+bootstrap. In `v0.1.23` and later, it
 also binds the **bytes executed by Root** to the pinned canonical digest:
 after sudo authentication, privileged Bash copies at most 1 MiB + 1 byte to
 a root-owned `0700` private directory, checks the copied file's complete
@@ -665,7 +666,7 @@ SHA256 and size, executes only that authenticated copy, and cleans up.
 Another process with the calling operator's UID cannot replace the
 verified executable during sudo's password prompt. Digest mismatch or
 unsafe snapshot fails before installing packages or changing STL. The
-currently published v0.1.22 does not include this reviewed remediation.
+older published `v0.1.22` lacks this remediation; `v0.1.23` includes it.
 
 Default prerequisites are native and WireGuard. To update an existing
 installer-owned STL, **do not run install again**: use this equally fixed
@@ -759,8 +760,8 @@ stlink version --json
 
 Once an installed **published** STL executable includes the `stl update`
 command, two API-free paths use the same canonical Update/rollback engine.
-The new CLI is **source-only until the corresponding Stable is published**;
-installed v0.1.22 does not have it. On older installations, continue using the
+This CLI was first published in Stable `v0.1.23`; installed `v0.1.22`
+does not have it. On older installations, continue using the
 existing long guarded local `--update` command above or the verified
 HTTPS mirror UPDATE_COMMAND below; do not assume a newer CLI exists.
 
@@ -775,7 +776,7 @@ an independently verified lowercase 64-character digest, run:
 sudo stl update --local /root/stl/stl_vX.Y.Z_linux_ARCH_local-install.sh --sha256 TRUSTED_FILE_SHA256
 ~~~
 
-**Interactive menu (after this source is published):** Run `sudo stl menu`
+**Interactive menu (installed v0.1.23 and later):** Run `sudo stl menu`
 and choose **Update → Verified local file** or **Update → Trusted HTTPS
 mirror**. The menu asks for the exact local path or HTTPS `install.sh` URL
 and the independently obtained 64-character lowercase SHA256, reviews both,
@@ -784,9 +785,9 @@ then requires a fresh `UPDATE` confirmation before invoking the **same**
 chooser does not contact GitHub for these two methods; the official
 release-picker option is separate. The menu retains no remembered
 mirror/digest and never switches Update authority implicitly. This is
-**source behavior only** until a later official Stable publishes
-these changes; published v0.1.22 has neither this menu nor the short
-`stl update` CLI. Use the existing verified commands above on older hosts.
+available from official Stable `v0.1.23`; installed `v0.1.22` has neither
+this menu nor the short `stl update` CLI. Use the existing verified
+commands above on older hosts.
 
 **Trusted HTTPS mirror:** On the trusted preparation device, use the
 `BOOTSTRAP_SHA256` reported by `scripts/prepare-mirror.sh` *before uploading*
@@ -824,7 +825,8 @@ The built-in CLI enforces root-owned installation, private bounded
 snapshots, digest verification and canonical rollback/ownership gates
 after separate `UPDATE` confirmation. A failed attempt always closes
 the old in-memory menu; verify the installed version and recovery state
-before restarting. This selector is not present in published v0.1.22.
+before restarting. This selector first appeared in published `v0.1.23`
+and is not present in installed `v0.1.22`.
 
 The official release-picker option reads official release metadata.
 **Only an installed executable

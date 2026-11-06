@@ -52,18 +52,17 @@ Run this complete-download, syntax-checked installer on each server:
 
 It fetches a bounded, complete HTTPS bootstrap into an owned temporary file before execution. The verified
 bootstrap and canonical installer then check the released artifact's checksums
-and version/source identity. A newly generated Stable bootstrap also pins the
-canonical installer's exact SHA256 **before privilege elevation**; published
-v0.1.22 predates that check, which takes effect only in a later Stable.
+and version/source identity. Since Stable `v0.1.23`, the official bootstrap
+also pins the canonical installer's exact SHA256 **before privilege
+elevation**. The older published `v0.1.22` predates that hardening.
 A publisher's own checksum is not an independent
 signature; verify that you trust the official publisher before privileged use.
 **Do not replace this command with an unchecked `curl | bash` pipeline.**
 The initial `/usr/bin/env -i` excludes inherited `BASH_ENV`, exported
-functions and untrusted `PATH` before starting Bash. On a future Stable
-containing the hardened root handoff, an independently digest-matched
-root-private snapshot (not the user-owned temporary pathname) is what
-privileged Bash actually executes. If HTTPS requires a proxy or a private CA,
-add only explicit, reviewed `HTTPS_PROXY=...`, `NO_PROXY=...` and/or
+functions and untrusted `PATH` before starting Bash. Since `v0.1.23`,
+privileged Bash executes only an independently digest-matched root-private
+snapshot, never the user-owned downloaded pathname. If HTTPS requires a
+proxy or private CA, add only explicit, reviewed `HTTPS_PROXY=...`, `NO_PROXY=...` and/or
 `CURL_CA_BUNDLE=/trusted/ca.pem` assignments **between `PATH=...` and
 `/bin/bash`** in the first command. Those three values alone are forwarded
 to the privileged installer; do not use `sudo -E` or include proxy passwords
@@ -109,9 +108,12 @@ copies transferred bytes privately **before** executing any of them. The
 Core package needs no GitHub, Go compiler or container on the destination.
 If selected OS packages are missing, normal signed APT may still be needed.
 
-To self-host an official, pinned version without GitHub on the destination,
-see [HTTPS Mirror setup](docs/MIRROR.md). Generating mirror files does not
-deploy a public mirror; do not assume a particular mirror already exists.
+An operator-managed HTTPS Mirror is available at
+`https://stl.gitscripts.ir/install.sh` for the verified, exact `v0.1.23`
+release. Its trusted first-hop SHA256 and precise validation are recorded in
+[HTTPS Mirror setup](docs/MIRROR.md). Mirror selection is **explicit and
+version-pinned**, not an automatic fallback or substitute for trusting the
+publisher. Generating future Mirror files alone does not deploy them.
 
 ## Connect your first two servers
 
@@ -165,9 +167,9 @@ removes a live Link.
 For builds including the new Update source selector, `sudo stl menu`
 → **Update** → **Verified local file** or **Trusted HTTPS mirror**
 provides the same SHA256-pinned CLI path with an explicit `UPDATE`
-confirmation and no GitHub API dependency. This menu improvement is
-**source-only until a future Stable release**; existing published v0.1.22
-users must use its documented verified Update commands.
+confirmation and no GitHub API dependency. This menu was first published
+in `v0.1.23`; older installed `v0.1.22` binaries must use their documented
+verified Update commands to upgrade before selecting the new menu.
 
 Back up protected State/credentials and any original sensitive receiver
 handoffs before upgrading. An installed STL release that supports the
@@ -183,9 +185,9 @@ Choose **one** method, replace the examples with the actual exact-version
 asset and SHA256 obtained independently from the trusted downloading/mirror
 preparation device. Never take the trust digest from the same untrusted mirror.
 The second command requires a previously prepared, independently pinned HTTPS
-mirror. These commands become available only in a newly published release
-containing this CLI; older installed Stable versions (including v0.1.22)
-must use their already supported verified manual procedures.
+mirror. These commands are available starting with installed `v0.1.23`;
+older installed Stable versions (including `v0.1.22`) must use their
+already supported verified manual procedures.
 
 For an existing installer-owned STL that reaches official GitHub, use:
 
