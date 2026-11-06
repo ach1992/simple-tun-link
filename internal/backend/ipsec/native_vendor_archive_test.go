@@ -97,16 +97,7 @@ func TestVendorSignedArchiveMatchesActualFiles(t *testing.T) {
 	defer cancel()
 	if err := vendorLiveFilesMatchOfficialArchiveWithPathCheck(ctx, deb,
 		func(string, byte) error { return nil }); err != nil {
-		// Temporary CI diagnostic for #228; never execute or install the package.
-		probe := exec.CommandContext(ctx, "/usr/bin/dpkg-deb", "--fsys-tarfile", "-")
-		probe.Env = nativeSystemdFixedEnvironment()
-		probe.Stdin = bytes.NewReader(deb)
-		out, diag := &privateCapture{max: 128 << 20}, &privateCapture{max: 2048}
-		probe.Stdout, probe.Stderr = out, diag
-		probeErr := probe.Run()
-		version, versionErr := exec.Command("/usr/bin/dpkg-deb", "--version").CombinedOutput()
-		t.Fatalf("unchanged official-style archive rejected: %v; dpkg_version=%q version_err=%v; probe_exit=%v stdout_bytes=%d stdout_overflow=%v stderr_bytes=%d stderr_overflow=%v bounded_stderr=%q deb_bytes=%d",
-			err, version, versionErr, probeErr, out.output.Len(), out.overflow, diag.output.Len(), diag.overflow, diag.output.String(), len(deb))
+		t.Fatalf("unchanged official-style archive rejected: %v", err)
 	}
 	if err := os.WriteFile(live, []byte("locally modified bytes"), 0600); err != nil {
 		t.Fatal(err)
