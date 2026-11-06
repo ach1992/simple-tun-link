@@ -408,10 +408,13 @@ authentication source. Root administrators must still trust their shell,
 the original publisher and their download/transfer machine.
 
 **Explicit Update:** append `--update` after the final trusted digest.
-This option is included in the candidate source and will require its own
-reviewed Stable release. The previously published `v0.1.22` one-file launcher
-does not recognize `--update`; use the existing canonical verified Update
-runbook for that release rather than assuming this source change is deployed.
+The one-file launcher's explicit `--update` option first shipped in
+**published Stable `v0.1.23`**. The historical `v0.1.22` one-file launcher
+does not recognize this option; its published assets remain unchanged.
+To upgrade an older installer-owned STL, obtain and independently authenticate
+the newer `v0.1.23` (or later) one-file launcher, then run it with its trusted
+whole-file SHA256 and explicit `--update`. Do not try to update an older
+installation with the `v0.1.22` launcher.
 An ordinary Install on an older installer-owned version now refuses replacement
 and explains that Update must be selected. A same-artifact install is a no-op.
 To install an optional WSS or QUIC helper, additionally append
@@ -719,12 +722,19 @@ To preview without changing anything:
 bash scripts/install.sh requirements --backends all
 ```
 
-The short command fully downloads and syntax-checks the **bootstrap** in
-memory before execution. It appends a non-newline sentinel after completed
-transport, checks the actual received byte count (including trailing newlines),
-then removes the sentinel before execution; the bootstrap separately downloads and syntax-checks
-its exact-version canonical installer in a private temporary file **before
-invoking sudo**. Failed/partial first-hop transfers do not run partial code.
+The published short Stable command starts Bash via `/usr/bin/env -i` with
+`set -eo pipefail`. It downloads the **bootstrap** over HTTPS into an owned
+temporary file from `mktemp` with `umask 077`: `curl` is piped through
+`head -c 131073`, bounding the received file to 128 KiB plus one byte.
+It requires successful pipeline completion, checks that the file is nonempty
+and no larger than 131072 bytes, and validates it with `bash -n` **before
+execution**. An `EXIT` trap deletes the temporary file; no in-memory
+first-hop execution or sentinel is involved. Failed transport, oversized,
+empty or syntax-invalid downloads fail before the bootstrap executes.
+The version-bound bootstrap separately downloads the canonical installer
+into a bounded private temporary file, verifies its build-pinned whole-file
+SHA256 before any sudo/root execution, and after elevation reauthenticates
+a new root-private snapshot before executing the installer.
 An optional older exact-version suffix
 first passes official immutable-release metadata verification and is used
 only as an installer argument. The canonical installer then fetches
