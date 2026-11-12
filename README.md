@@ -43,7 +43,7 @@ Choose **one** source for the initial install:
 
 Never run the transferred shell file directly or use an unchecked `curl | bash` command. The local/Mirror first hop must authenticate a complete private copy **before** shell execution. These options use one canonical installer; a Mirror must be prepared and approved independently, not presumed available.
 
-Use the [latest official Stable release](https://github.com/ach1992/simple-tun-link/releases/latest).
+Use the [latest official Stable release](https://github.com/ach1992/simple-tun-link/releases/latest) (currently [**v0.1.24**](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.24), published 2026-11-12).
 Run this complete-download, syntax-checked installer on each server:
 
 ~~~bash
@@ -68,6 +68,13 @@ proxy or private CA, add only explicit, reviewed `HTTPS_PROXY=...`, `NO_PROXY=..
 to the privileged installer; do not use `sudo -E` or include proxy passwords
 in commands or shell history. Missing distro packages still use the
 host's separately configured signed APT repository/proxy.
+
+Since Stable `v0.1.24`, successful interactive Install and Update automatically
+launch the menu using the canonical absolute executable path, even when the
+hardened bootstrap `PATH` excludes `/usr/local/bin`. If using `v0.1.23`, the
+installer may have succeeded even if its last automatic menu launch failed;
+run `/usr/local/bin/stl menu` as root or `/usr/bin/sudo /usr/local/bin/stl menu`
+from an authorized non-root account.
 
 After installation, open the menu or verify the installed version:
 
@@ -108,12 +115,12 @@ copies transferred bytes privately **before** executing any of them. The
 Core package needs no GitHub, Go compiler or container on the destination.
 If selected OS packages are missing, normal signed APT may still be needed.
 
-An operator-managed HTTPS Mirror is available at
-`https://stl.gitscripts.ir/install.sh` for the verified, exact `v0.1.23`
-release. Its trusted first-hop SHA256 and precise validation are recorded in
-[HTTPS Mirror setup](docs/MIRROR.md). Mirror selection is **explicit and
-version-pinned**, not an automatic fallback or substitute for trusting the
-publisher. Generating future Mirror files alone does not deploy them.
+You can prepare and host **your own HTTPS Mirror** using the
+[HTTPS Mirror setup](docs/MIRROR.md). STL does not prescribe a default Mirror
+endpoint. Supply your own URL and its independently verified, version-pinned
+bootstrap SHA256; never derive the trust pin from that same Mirror.
+Selecting a Mirror is explicit, not an automatic fallback or a substitute for
+trusting the publisher. Preparing Mirror files does not publish them.
 
 ## Connect your first two servers
 

@@ -659,10 +659,17 @@ published pinned Stable, must match its embedded canonical SHA256), never from
 the separately selected older tag. That older version remains data
 (`--version`) for the canonical installer, which independently validates release SHA256SUMS, binary
 metadata and installed ownership/rollback rules. The bootstrap reattaches a
-real /dev/tty to open the menu after installation. Without a TTY, use
-`sudo stl menu`. This change reached users with the `v0.1.23` Stable
-bootstrap. In `v0.1.23` and later, it
-also binds the **bytes executed by Root** to the pinned canonical digest:
+real /dev/tty for menu input after a successful Install or Update. This PTY
+handoff first shipped in `v0.1.23`, but that release could report
+`exec: stl: not found` **after a successful installation**, because its
+clean `PATH` omits `/usr/local/bin`. Stable `v0.1.24` fixes both root and
+sudo automatic menu handoffs using absolute executable paths, without
+weakening the clean-environment boundary. On a previously installed
+`v0.1.23`, verify with `/usr/local/bin/stl version --json` and open
+`/usr/bin/sudo /usr/local/bin/stl menu` (or `/usr/local/bin/stl menu` as
+root). Without an interactive TTY, start the menu with the displayed absolute
+command. In `v0.1.23` and later, the bootstrap also binds the **bytes
+executed by Root** to the pinned canonical digest:
 after sudo authentication, privileged Bash copies at most 1 MiB + 1 byte to
 a root-owned `0700` private directory, checks the copied file's complete
 SHA256 and size, executes only that authenticated copy, and cleans up.

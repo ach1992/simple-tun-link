@@ -77,6 +77,13 @@ published official/Mirror one-liners start Bash under a clean `env -i`
 boundary; explicit HTTPS proxy/CA values are allowlisted into the root step. The self-hosted Mirror keeps its independently verified
 source and SHA256SUMS pins. These protections first shipped in reviewed
 Stable `v0.1.23`; historical assets such as `v0.1.22` remain unchanged.
+Stable `v0.1.24` corrected the terminal menu handoff after successful
+Install/Update under the deliberately restricted first-hop `PATH`: the
+root path uses `/usr/local/bin/stl`, and non-root uses absolute `/usr/bin/sudo`
+with that same binary path. This fix does not change installer trust,
+publication, Link State, APT policy or network configuration. The exact
+published source and immutable artifacts are identified by the
+[v0.1.24 release](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.24).
 
 The first official Stable release with the new `.sh` assets is
 [v0.1.9](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.9).
