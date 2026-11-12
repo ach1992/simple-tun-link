@@ -184,7 +184,7 @@ echo 'IPSEC_SYSTEMCTL_INDEPENDENT_STDOUT_STDERR_AND_EXIT_BOUNDARY=PASS'
 
 # Exercise the canonical index-refresh helpers against a fake APT process and
 # fake clock. Never run the host's apt-get, sleep, dpkg or package hooks.
-sed -n '/^apt_update_is_only_lists_lock() {/,/^}/p' "$installer" > "$root/apt-update-functions.sh"
+sed -n '/^apt_update_only_lists_lock_stream() {/,/^}/p' "$installer" > "$root/apt-update-functions.sh"
 sed -n '/^apt_update_indexes() {/,/^}/p' "$installer" >> "$root/apt-update-functions.sh"
 [[ $(grep -c '^apt_update_indexes() {' "$root/apt-update-functions.sh") == 1 ]] || fail 'canonical APT refresh function unavailable'
 # shellcheck source=/dev/null
@@ -210,6 +210,13 @@ apt-get() {
     missing_primary) printf 'E: Unable to lock directory /var/lib/apt/lists/\n' >&2; return 100 ;;
     transient_progress) if (( calls == 0 )); then printf 'Reading package lists... Done\n'; fake_apt_lock; return 100; fi ;;
     transient_old_lock) if (( calls == 0 )); then printf 'E: Could not get lock /var/lib/apt/lists/lock - open (11: Resource temporarily unavailable)\nE: Unable to lock directory /var/lib/apt/lists/\n' >&2; return 100; fi ;;
+    progressive)
+      printf 'APT_REFRESH_EARLY_PROGRESS\n'
+      touch "$root/apt-progress-start"
+      while [[ ! -e $root/apt-allow-finish ]]; do /bin/sleep 0.05; done
+      printf 'Reading package lists... Done\n'
+      return 0 ;;
+
     wrong_exit) fake_apt_lock; return 17 ;;
     partial_index)
       printf 'W: Failed to fetch repository index; using old index files instead.\n' >&2
@@ -231,7 +238,7 @@ reset_fake_apt
 fake_apt_mode=transient
 apt_update_indexes > "$root/apt.out" 2> "$root/apt.err" || fail 'temporary APT lists lock was not retried'
 [[ $(cat "$root/apt-calls") == 2 && $(wc -l < "$root/apt-waits") == 1 ]] || fail 'APT lock was not retried exactly once'
-grep -q 'Reading package lists' "$root/apt.out" || fail 'successful APT refresh output lost'
+grep -q 'Reading package lists' "$root/apt.err" || fail 'successful APT refresh output lost'
 for fake_apt_mode in transient_progress transient_old_lock; do
   reset_fake_apt
   apt_update_indexes > "$root/apt.out" 2> "$root/apt.err" || fail "expected APT lock variant was rejected: $fake_apt_mode"
@@ -256,8 +263,124 @@ if ( apt_update_indexes > "$root/apt.out" 2> "$root/apt.err" ); then
 fi
 [[ $(cat "$root/apt-calls") == 12 && $(wc -l < "$root/apt-waits") == 11 ]] || fail 'APT lock retry budget was not bounded'
 grep -q 'Do not delete APT lock files' "$root/apt.err" || fail 'permanent APT lock lacks safe recovery guidance'
+# A live APT update must show progress before apt-get returns. The fake
+# process blocks after writing the first line until the test opens the gate.
+reset_fake_apt
+fake_apt_mode=progressive
+apt_update_indexes > "$root/apt-progress.out" 2> "$root/apt-progress.err" &
+progress_pid=$!
+progress_seen=0
+for ((wait_attempt=0; wait_attempt<100; wait_attempt++)); do
+  if grep -Fq 'APT_REFRESH_EARLY_PROGRESS' "$root/apt-progress.err" 2>/dev/null; then
+    progress_seen=1
+    break
+  fi
+  /bin/sleep 0.05
+done
+touch "$root/apt-allow-finish"
+wait "$progress_pid" || fail 'progressive APT refresh unexpectedly failed'
+[[ $progress_seen == 1 ]] || fail 'APT progress stayed buffered until the child exited'
+grep -Fq 'Reading package lists... Done' "$root/apt-progress.err" ||
+  fail 'APT final progress line was lost'
+
+# The streaming classifier must forward the original bytes, even when a
+# non-retryable line is longer than its bounded read chunk or lacks newline.
+printf 'E: Could not get lock /var/lib/apt/lists/lock - open (11: Resource temporarily unavailable)\n' > "$root/apt-raw.txt"
+printf '%02100d\n' 0 >> "$root/apt-raw.txt"
+if apt_update_only_lists_lock_stream < "$root/apt-raw.txt" 2> "$root/apt-raw.err"; then
+  fail 'long APT diagnostic was mistakenly classified as lists-lock-only'
+fi
+cmp -s "$root/apt-raw.txt" "$root/apt-raw.err" ||
+  fail 'long APT diagnostic was truncated or modified'
+printf 'E: Could not get lock /var/lib/apt/lists/lock - truncated' > "$root/apt-raw.txt"
+if apt_update_only_lists_lock_stream < "$root/apt-raw.txt" 2> "$root/apt-raw.err"; then
+  fail 'non-newline-terminated lock diagnostic was retried'
+fi
+cmp -s "$root/apt-raw.txt" "$root/apt-raw.err" ||
+  fail 'non-newline-terminated APT diagnostic was lost or modified'
 unset -f apt-get sleep fake_apt_lock reset_fake_apt
 printf 'APT_CANONICAL_LOCK_RETRY_AND_NONLOCK_FAIL_CLOSED=PASS\n'
 printf 'APT_PARTIAL_INDEX_ERROR_MODE_ANY=PASS\n'
+
+
+# Run actual canonical read-only simulation and capture helpers with a
+# mock package manager. No host APT, disk inventory or package changes.
+sed -n '/^apt_plan_capture_bounded() {/,/^}/p' "$installer" > "$root/apt-resolver-functions.sh"
+sed -n '/^apt_resolve_plan() {/,/^}/p' "$installer" >> "$root/apt-resolver-functions.sh"
+[[ $(grep -c '^apt_plan_capture_bounded() {' "$root/apt-resolver-functions.sh") == 1 &&
+   $(grep -c '^apt_resolve_plan() {' "$root/apt-resolver-functions.sh") == 1 ]] ||
+  fail 'canonical read-only resolver functions unavailable'
+# shellcheck source=/dev/null
+source "$root/apt-resolver-functions.sh"
+apt_safety=()
+missing=(wireguard-tools)
+apt_sources_must_be_authenticated() { :; }
+apt_verify_distro_candidates() { :; }
+package_installed() { return 1; }
+fake_plan_mode=success
+apt-get() {
+  [[ $1 == -s ]] || { echo 'Wrong fake simulation action' >&2; return 91; }
+  case "$fake_plan_mode" in
+    success)
+      printf 'Reading package lists...\n'
+      printf 'Inst wireguard-tools (1.2.3 Ubuntu:24.04 [amd64])\n'
+      printf 'Conf wireguard-tools (1.2.3 Ubuntu:24.04 [amd64])\n'
+      ;;
+    fail_stdout)
+      printf 'E: Unable to correct dependency problems: stdout-only resolver detail\n'
+      return 100 ;;
+    fail_stderr)
+      printf 'W: simulated partial plan context\n'
+      printf 'E: Dependency version conflict: stderr-only resolver detail\n' >&2
+      return 100 ;;
+    oversize)
+      printf 'APT_SIMULATION_EARLY\n'
+      printf '%070000d\n' 0
+      printf 'APT_SIMULATION_LAST_LINE\n'
+      ;;
+    *) return 88 ;;
+  esac
+}
+apt_resolve_plan > "$root/plan.out" 2> "$root/plan.err" ||
+  fail 'valid APT simulation failed'
+[[ $apt_plan == 'wireguard-tools=1.2.3' ]] ||
+  fail "APT simulated plan parsing changed: $apt_plan"
+grep -Fq 'Inst wireguard-tools' "$root/plan.err" ||
+  fail 'valid APT simulation details were not displayed'
+for fake_plan_mode in fail_stdout fail_stderr oversize; do
+  apt_plan='unset'
+  if ( apt_resolve_plan > "$root/plan.out" 2> "$root/plan.err" ); then
+    fail "invalid simulation $fake_plan_mode was accepted"
+  fi
+  [[ $apt_plan == unset ]] ||
+    fail "failed $fake_plan_mode published partial approved plan"
+  case "$fake_plan_mode" in
+    fail_stdout)
+      grep -Fq 'stdout-only resolver detail' "$root/plan.err" || {
+        cat "$root/plan.err" >&2
+        fail 'failed APT simulation suppressed stdout diagnostic'
+      } ;;
+    fail_stderr)
+      grep -Fq 'stderr-only resolver detail' "$root/plan.err" &&
+      grep -Fq 'simulated partial plan context' "$root/plan.err" ||
+        fail 'failed APT simulation suppressed stderr or stdout' ;;
+    oversize)
+      grep -Fq 'APT_SIMULATION_EARLY' "$root/plan.err" &&
+      grep -Fq 'APT_SIMULATION_LAST_LINE' "$root/plan.err" &&
+      grep -Fq 'bounded 64 KiB machine-plan capture' "$root/plan.err" ||
+        fail 'oversized plan did not drain full diagnostics or refuse parsing' ;;
+  esac
+  grep -Fq 'APT_DEPENDENCY_PLAN' "$root/plan.err" ||
+    fail "failed APT simulation lacked a typed stage: $fake_plan_mode"
+  if [[ $fake_plan_mode == oversize ]]; then
+    grep -Fq 'bounded 64 KiB machine-plan capture' "$root/plan.err" ||
+      fail 'oversized capture omitted its bounded reason'
+  else
+    grep -Fq 'apt_get_exit=100' "$root/plan.err" ||
+      fail "APT failure lost actual process exit code: $fake_plan_mode"
+  fi
+done
+unset -f apt-get apt_sources_must_be_authenticated apt_verify_distro_candidates package_installed
+printf 'APT_SIMULATION_BOUNDED_CAPTURE_AND_FULL_STDOUT_STDERR=PASS\n'
 
 printf 'Installer requirements checks PASS (Ubuntu 22.04+, Debian 11+, package plans, unsafe inputs, EOL).\n'

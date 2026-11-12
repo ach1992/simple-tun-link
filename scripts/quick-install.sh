@@ -288,6 +288,11 @@ STL_ROOT_SNAPSHOT
     if (( EUID == 0 )); then
       exec /usr/local/bin/stl menu <&"$stl_menu_tty" >&"$stl_menu_tty" 2>&1
     else
+      # sudo can drop the NO_COLOR opt-out. Restore only the explicit
+      # operator preference for the interactive menu, not arbitrary hooks.
+      if [[ ${NO_COLOR+x} ]]; then
+        exec /usr/bin/sudo /usr/bin/env NO_COLOR=1 "TERM=${TERM:-dumb}" /usr/local/bin/stl menu <&"$stl_menu_tty" >&"$stl_menu_tty" 2>&1
+      fi
       exec /usr/bin/sudo /usr/local/bin/stl menu <&"$stl_menu_tty" >&"$stl_menu_tty" 2>&1
     fi
   fi

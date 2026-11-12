@@ -333,7 +333,15 @@ grep -Fx "UPDATE_COMMAND=$one_liner update" "$scratch/prepared.log" >/dev/null |
 # function or caller PATH may act before the independently pinned digest.
 # A trusted test-only CA/no-proxy is explicitly admitted after env -i.
 literal_clean=${one_liner/\/bin\/bash -c /CURL_CA_BUNDLE=$scratch\/cert.crt NO_PROXY=localhost,127.0.0.1 \/bin\/bash -c }
-printf '#!/bin/bash\nprintf "FIRST_HOP_CLEAN_ENV_POSITIVE=PASS\\n"\\n' > "$scratch/www/clean-fixture.sh"
+cat > "$scratch/www/clean-fixture.sh" <<'STL_CLEAN_ENV_FIXTURE'
+#!/bin/bash
+printf 'FIRST_HOP_CLEAN_ENV_POSITIVE=PASS\n'
+if [[ ${NO_COLOR+x} ]]; then
+  printf 'MIRROR_NO_COLOR_PRESENCE=present\n'
+else
+  printf 'MIRROR_NO_COLOR_PRESENCE=absent\n'
+fi
+STL_CLEAN_ENV_FIXTURE
 clean_sha=$(sha256sum < "$scratch/www/clean-fixture.sh")
 clean_sha=${clean_sha%% *}
 clean_positive=${literal_clean/"$base/install.sh"/"$base/clean-fixture.sh"}
@@ -356,6 +364,22 @@ BASH_ENV="$scratch/poison-bash-env" /bin/sh -c "$clean_positive" > "$scratch/cle
   { cat "$scratch/clean.err" >&2; echo 'MIRROR_TEST_FAIL: clean-env first-hop rejected trusted TLS test script' >&2; exit 1; }
 grep -Fxq 'FIRST_HOP_CLEAN_ENV_POSITIVE=PASS' "$scratch/clean.out" ||
   { echo 'MIRROR_TEST_FAIL: clean-env positive bootstrap did not execute' >&2; exit 1; }
+# Exercise the literal generated HTTPS first hop with NO_COLOR absent, empty
+# and nonempty. Preserve the opt-out without admitting shell startup hooks.
+for color_mode in absent present-empty present-value; do
+  case "$color_mode" in
+    absent)
+      env -u NO_COLOR BASH_ENV="$scratch/poison-bash-env" /bin/sh -c "$clean_positive" > "$scratch/mirror-color.out" 2> "$scratch/mirror-color.err" ;;
+    present-empty)
+      NO_COLOR='' BASH_ENV="$scratch/poison-bash-env" /bin/sh -c "$clean_positive" > "$scratch/mirror-color.out" 2> "$scratch/mirror-color.err" ;;
+    present-value)
+      NO_COLOR=1 BASH_ENV="$scratch/poison-bash-env" /bin/sh -c "$clean_positive" > "$scratch/mirror-color.out" 2> "$scratch/mirror-color.err" ;;
+  esac || { cat "$scratch/mirror-color.err" >&2; echo "MIRROR_TEST_FAIL: $color_mode first hop failed" >&2; exit 1; }
+  expected=present
+  [[ $color_mode != absent ]] || expected=absent
+  grep -Fxq "MIRROR_NO_COLOR_PRESENCE=$expected" "$scratch/mirror-color.out" ||
+    { echo "MIRROR_TEST_FAIL: $color_mode NO_COLOR changed at first hop" >&2; exit 1; }
+done
 # Literal official first hop has no independent first-hop SHA pin (publisher
 # trust remains out of band), but it must still ignore hostile inherited
 # startup hooks, functions, and PATH before any Bash or download starts.
@@ -391,7 +415,7 @@ one_liner=${one_liner/"$base/install.sh"/"$base/fixture-install.sh"}
 one_liner=${one_liner/"$first_hop_sha"/"$fixture_sha"}
 # Emulate network and privilege only in this unit harness. Literal clean-env
 # entrypoints and root sudo are tested separately with real tool paths.
-prefix='/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-dumb}" /bin/bash -c'
+prefix='/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-dumb}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c'
 [[ $one_liner == "$prefix "* ]] || { echo "MIRROR_TEST_FAIL: unexpected first-hop prefix" >&2; exit 1; }
 one_liner="/bin/bash -c${one_liner#"$prefix"}"
 # Execute an actual HTTPS fetch of the post-publication tampered bootstrap

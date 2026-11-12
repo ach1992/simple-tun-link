@@ -258,7 +258,7 @@ func menuRunCanonicalUpdate(ctx context.Context, release menuOfficialRelease, ou
 
 // Execute only the previously selected installer; output is untrusted
 // (Bash/APT/other subprocesses). Keep process status and operator recovery
-// information without exposing raw child stdout/stderr to the terminal.
+// status while retaining full child diagnostics for the local operator.
 func menuRunCanonicalUpdateProcess(ctx context.Context, path, tag string, out io.Writer) error {
 	var childOutput menuInstallerOutput
 	childStdout, childStderr := childOutput.streamsVisible(out, out)

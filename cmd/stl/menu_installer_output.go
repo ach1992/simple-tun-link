@@ -146,10 +146,13 @@ func (v *menuInstallerOutput) observeLine(line string) {
 	// while leaving the full original line visible on the local terminal.
 	case strings.HasPrefix(line, "stl installer [FAILED]: mirror_download_oversized:"),
 		strings.HasPrefix(line, "stl installer [FAILED]: mirror_download_failed:"),
-		strings.HasPrefix(line, "stl installer [FAILED]: mirror_checksum_mismatch:"),
-		strings.HasPrefix(line, "stl installer [FAILED]: checksum mismatch for "),
-		strings.HasPrefix(line, "stl installer [FAILED]: missing/duplicate or malformed SHA256 entry for "):
+		strings.HasPrefix(line, "stl installer [FAILED]: mirror_checksum_mismatch:"):
 		v.stage, v.reason = "mirror_release_assets", "mirror_release_asset_unverified"
+	// Official GitHub and operator-hosted Mirrors share these canonical
+	// checksum errors. Do not manufacture Mirror provenance from the error.
+	case strings.HasPrefix(line, "stl installer [FAILED]: checksum mismatch for "),
+		strings.HasPrefix(line, "stl installer [FAILED]: missing/duplicate or malformed SHA256 entry for "):
+		v.stage, v.reason = "release_integrity", "release_integrity_unverified"
 	case strings.HasPrefix(line, "stl installer [FAILED]: cannot download complete bounded official release file:"),
 		strings.HasPrefix(line, "stl installer [FAILED]: official release file exceeds verified transfer limit:"):
 		v.stage, v.reason = "official_release_assets", "official_release_asset_unverified"
@@ -241,6 +244,8 @@ func (v *menuInstallerOutput) failure(out io.Writer, action string, err error, c
 		menuField(out, "NEXT ACTION", "Check the pinned HTTPS mirror, verified release's canonical installer SHA256 and the 1 MiB streaming limit; inspect the installed version and recovery before retrying.")
 	case reason == "mirror_release_asset_unverified":
 		menuField(out, "NEXT ACTION", "Check the exact mirrored release's SHA256SUMS, manifests, binary and streaming limits against the independent trusted release; inspect installed ownership and recovery before retrying.")
+	case reason == "release_integrity_unverified":
+		menuField(out, "NEXT ACTION", "Check the actual selected source (official GitHub or HTTPS Mirror), its independently trusted SHA256SUMS, manifest and artifact bytes before retrying. An unknown source must not be reported as a Mirror.")
 	case reason == "official_release_asset_unverified":
 		menuField(out, "NEXT ACTION", "Inspect the failed official release download, TLS/DNS reachability and the published version's checksum manifest; do not assume any binary was installed.")
 	case reason == "installed_version_mismatch":

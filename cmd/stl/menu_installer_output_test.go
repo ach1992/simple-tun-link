@@ -451,9 +451,24 @@ func TestDirectCanonicalInstallerFailuresRetainRealStageAndDetailedText(t *testi
 			"mirror_release_assets", "mirror_release_asset_unverified", "SHA256SUMS",
 		},
 		{
-			"Mirror binary digest mismatch",
+			"Mirror binary digest mismatch (source-neutral category)",
 			"stl installer [FAILED]: checksum mismatch for stl_v9.9.9_linux_amd64",
-			"mirror_release_assets", "mirror_release_asset_unverified", "manifests",
+			"release_integrity", "release_integrity_unverified", "official GitHub or HTTPS Mirror",
+		},
+		{
+			"Official binary digest mismatch (source-neutral category)",
+			"stl installer [FAILED]: checksum mismatch for stl_v9.9.9_linux_amd64",
+			"release_integrity", "release_integrity_unverified", "official GitHub or HTTPS Mirror",
+		},
+		{
+			"Official malformed SHA256 entry",
+			"stl installer [FAILED]: missing/duplicate or malformed SHA256 entry for BUILD-MANIFEST.txt",
+			"release_integrity", "release_integrity_unverified", "SHA256SUMS",
+		},
+		{
+			"Mirror malformed SHA256 entry (source-neutral category)",
+			"stl installer [FAILED]: missing/duplicate or malformed SHA256 entry for LICENSE",
+			"release_integrity", "release_integrity_unverified", "SHA256SUMS",
 		},
 		{
 			"Official release download failure",
