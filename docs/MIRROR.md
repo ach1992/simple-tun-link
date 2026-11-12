@@ -97,31 +97,26 @@ curl -fsS https://stl.example.com/install.sh | head -n 3
 
 ## 3. Clean install and explicit Update
 
-### Validated ACh-hosted Mirror for Stable v0.1.23
+### Use a Mirror you independently trust
 
-As verified on 2026-11-06, `https://stl.gitscripts.ir/install.sh` serves
-the exact released `v0.1.23` artifacts from the operator-approved
-`/www/acdomains/stl.gitscripts.ir` document root on the IR aaPanel host.
-Its **independently prepared** first-hop SHA256 is:
+STL does **not** prescribe a default or shared HTTPS Mirror endpoint. Any
+operator can prepare and host the **same verified official Stable assets**
+under their own HTTPS domain by following this runbook. Supply your own
+Mirror URL and the **independently prepared** first-hop SHA256. A Mirror is
+never used as an automatic fallback.
 
-```text
-a3824a43dbb4472dd480b1bda653a3efc37f9ad928bde4017b5dcfe52d656d4d
-```
+As of 2026-11-12, the latest immutable official Stable is
+[v0.1.24](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.24).
+The operator must regenerate the version-pinned Mirror bootstrap and its trust
+pin for each new release; a digest for an older version cannot authenticate
+a newer `install.sh`. Publication of a release on GitHub does not
+automatically update any independently hosted Mirror.
 
-The official release-wide `SHA256SUMS` digest, verified on the trusted
-preparation machine, is
-`0cd850a597a649d05ffe1af4221726d3fd1bcfdb01f11e186dde62d4f521b67a`.
-All ten required Mirror paths were independently fetched over validated
-HTTPS from the Iran test host `IRPT-101` and checked against prepared
-SHA256 values; an absent asset returned HTTP 404. Separately, a nonroot
-Dev private-prefix test installed the official `v0.1.22` binary, updated
-to `v0.1.23` from this **live HTTPS Mirror**, rejected a wrong manifest
-digest, and proved same-artifact reinstall does not replace the binary or
-Install Record. These results do **not** prove a fresh physical installation
-with GitHub actually blocked. These pins apply **only to v0.1.23**. A future version requires new
-release verification, Mirror preparation and a newly trusted bootstrap
-SHA256. Do not derive the trust digest by downloading it from the same
-Mirror being authenticated.
+Maintainer-specific publication checks and historical release pins are
+recorded in [installer/distribution Issue #146](https://github.com/ach1992/simple-tun-link/issues/146),
+not as a default endpoint in this operator runbook. Neither a successful
+Mirror download nor an isolated test proves a fresh physical installation
+with GitHub blocked or signed regional APT recovery.
 
 On an eligible Linux host that reaches **only your mirror**:
 
