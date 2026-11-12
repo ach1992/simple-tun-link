@@ -214,26 +214,26 @@ source=$1
 expected=$2
 shift 2
 [[ $source == /* && -f $source && ! -L $source && $expected =~ ^[0-9a-f]{64}$ ]] || {
-  echo 'STL_ROOT_SNAPSHOT_INVALID' >&2
+  echo 'STL_ROOT_SNAPSHOT_INVALID: privileged installer source path or hash metadata is invalid; no installer executed.' >&2
   exit 71
 }
 stage=$(/usr/bin/mktemp -d /root/.stl-quick-bootstrap.XXXXXXXX) || {
-  echo 'STL_ROOT_SNAPSHOT_UNAVAILABLE' >&2
+  echo 'STL_ROOT_SNAPSHOT_UNAVAILABLE: cannot create a root-private installer staging directory; no installer executed.' >&2
   exit 72
 }
 cleanup() { [[ -d $stage && ! -L $stage ]] && /bin/rm -rf --one-file-system -- "$stage"; }
 trap cleanup EXIT
 /usr/bin/head -c 1048577 -- "$source" > "$stage/install.sh" || {
-  echo 'STL_ROOT_SNAPSHOT_COPY_FAILED' >&2
+  echo 'STL_ROOT_SNAPSHOT_COPY_FAILED: cannot copy the authenticated installer into the root-private staging directory; no installer executed.' >&2
   exit 73
 }
 bytes=$(/usr/bin/wc -c < "$stage/install.sh")
 (( bytes > 0 && bytes <= 1048576 )) || {
-  echo 'STL_ROOT_SNAPSHOT_SIZE_INVALID' >&2
+  echo 'STL_ROOT_SNAPSHOT_SIZE_INVALID: root-private installer copy is empty or exceeds 1 MiB; no installer executed.' >&2
   exit 74
 }
 [[ $(/usr/bin/sha256sum < "$stage/install.sh") == "$expected  -" ]] || {
-  echo 'STL_ROOT_SNAPSHOT_SHA256_MISMATCH' >&2
+  echo 'STL_ROOT_SNAPSHOT_SHA256_MISMATCH: Privileged private snapshot SHA256 mismatch after sudo. The authenticated installer source changed before root execution; no installer executed.' >&2
   exit 75
 }
 /bin/bash "$stage/install.sh" "$@"
