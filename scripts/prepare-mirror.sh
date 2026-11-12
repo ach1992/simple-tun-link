@@ -126,7 +126,7 @@ printf 'MIRROR_PREPARED=PASS\nTAG=%s\nMIRROR_URL=%s\nUPLOAD_ROOT=%s\n' "$tag" "$
 # NOT the mirror. Pin the first downloaded shell against independently
 # prepared bytes before executing any of its content, even as non-root.
 operator_command=$(cat <<'STL_OPERATOR_COMMAND'
-/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fsSs --proto "=https" --max-redirs 0 --connect-timeout 10 --max-time 45 MIRROR_INSTALL_URL | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && { [ "$(/usr/bin/sha256sum < "$f")" = "TRUSTED_BOOTSTRAP_SHA256  -" ] || { echo "STL: mirror bootstrap SHA256 mismatch" >&2; exit 1; }; } && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl
+/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-dumb}" /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fsSs --proto "=https" --max-redirs 0 --connect-timeout 10 --max-time 45 MIRROR_INSTALL_URL | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && { [ "$(/usr/bin/sha256sum < "$f")" = "TRUSTED_BOOTSTRAP_SHA256  -" ] || { echo "STL: mirror bootstrap SHA256 mismatch" >&2; exit 1; }; } && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl
 STL_OPERATOR_COMMAND
 )
 mirror_install="$mirror_url/install.sh"

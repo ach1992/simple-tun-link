@@ -447,6 +447,13 @@ frameworks.
 - Use semantic color plus readable text; show one primary next action and
   optional detail. Align for narrow and wide terminals, but never wrap,
   truncate, color-inject or log exact IDs, commands or sensitive handoffs.
+- An explicitly started local canonical installer operation must keep its
+  complete operational stdout/stderr visible to the administrator; a concise
+  stage/reason/exit summary supplements rather than replaces these details.
+  Keep genuine protected Link credentials out of generic machine/status output.
+  Preserve the attached terminal's validated TERM for post-install menu
+  redraw without inheriting arbitrary shell startup hooks into privileged
+  installer execution.
 - Keep the interface usable with `NO_COLOR`, `TERM=dumb` and
   redirected streams; machine output must never depend on terminal colors,
   screen redraw, prose or prompt order.

@@ -186,6 +186,16 @@ operator-initiated attempt; safety and credential protection still apply.
   configured interface, successful handshake, and verified peer packets
   establish different facts. Error messages, health reports and product
   documentation must preserve those distinctions.
+- **Operator diagnostics without artificial suppression.** A local authorized
+  operator who runs Install, Update, PREPARE, Uninstall or a selected helper
+  must see the actual canonical installer and distro-package stdout/stderr,
+  along with clear stage, exit status and next action. Do not discard
+  useful errors, paths, package-manager details or host diagnostics behind
+  a generic security label. Show a readable progress/result boundary and
+  do not discard diagnostic evidence simply because a child line is long.
+  Retain stable typed reason codes for machine/JSON consumers; do not expose
+  private Link keys, PSKs or protected Setup Links through generic status,
+  logs, clipboard echoes or machine results. These are distinct surfaces.
 
 ## Operator autonomy and safety boundaries
 

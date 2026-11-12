@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ach1992/simple-tun-link/internal/domain"
@@ -287,7 +288,7 @@ func TestCanonicalAPTIncompleteAndSpoofedOutputIsConservative(t *testing.T) {
 	}
 }
 
-func TestCanonicalUpdateProcessNeverShowsRawChildStreams(t *testing.T) {
+func TestCanonicalUpdateProcessShowsFullOperatorDiagnostics(t *testing.T) {
 	tmp := t.TempDir()
 	script := filepath.Join(tmp, "fixture.sh")
 	content := "#!/bin/bash\n" +
@@ -310,7 +311,8 @@ func TestCanonicalUpdateProcessNeverShowsRawChildStreams(t *testing.T) {
 		t.Fatal("failure was treated as successful update")
 	}
 	got := output.String()
-	if strings.Contains(got, operatorSensitiveSentinel) ||
+	if !strings.Contains(got, "stdout "+operatorSensitiveSentinel) ||
+		!strings.Contains(got, "stl installer [FAILED]: partial failure; inspect retained recovery directory: "+operatorSensitiveSentinel) ||
 		!strings.Contains(got, "Child exit code") ||
 		!strings.Contains(got, "43") ||
 		!strings.Contains(got, "retained_recovery_requires_inspection") ||
@@ -328,12 +330,13 @@ func TestCanonicalUpdateProcessNeverShowsRawChildStreams(t *testing.T) {
 	}
 	output.Reset()
 	if err := menuRunCanonicalUpdateProcess(context.Background(), script, "v0.1.9", &output); err != nil ||
-		strings.Contains(output.String(), operatorSensitiveSentinel) {
-		t.Fatalf("raw update success output leaked or failed: %v %q", err, output.String())
+		!strings.Contains(output.String(), "success with "+operatorSensitiveSentinel+" stdout") ||
+		!strings.Contains(output.String(), "success with "+operatorSensitiveSentinel+" stderr") {
+		t.Fatalf("successful update lost operator output: %v %q", err, output.String())
 	}
 }
 
-func TestPackagePrepareNeverForwardsRawInstallerOutput(t *testing.T) {
+func TestPackagePrepareDisplaysDetailedInstallerOutput(t *testing.T) {
 	input := strings.NewReader("PREPARE\n")
 	reader := bufio.NewReader(input)
 	var out, errOut bytes.Buffer
@@ -361,12 +364,70 @@ func TestPackagePrepareNeverForwardsRawInstallerOutput(t *testing.T) {
 	result := menuPrepareSelectedPackagesWithOps(input, reader, &out, &errOut, selected, nil, ops)
 	rendered := out.String() + errOut.String()
 	if result.canContinue || result.approvedSelectedPlan || calls != 1 ||
-		strings.Contains(rendered, operatorSensitiveSentinel) ||
+		!strings.Contains(rendered, "APT stdout "+operatorSensitiveSentinel) ||
+		!strings.Contains(rendered, "stl installer [FAILED]: APT package transaction failed; "+operatorSensitiveSentinel) ||
 		!strings.Contains(rendered, "Child exit code") ||
 		!strings.Contains(rendered, "63") ||
 		!strings.Contains(rendered, "apt_transaction_incomplete") ||
 		!strings.Contains(rendered, "dpkg --audit") ||
 		!strings.Contains(rendered, "may persist") {
 		t.Fatalf("PREPARE failure was unsafe: result=%+v calls=%d output=%q", result, calls, rendered)
+	}
+}
+
+// A visible terminal stream retains complete raw bytes, including a long
+// diagnostic line that exceeds the 1 KiB classifier budget, while keeping
+// the classified summary of the *actual* child failure.
+func TestInstallerOperatorStreamsNeverTruncateRealDiagnostics(t *testing.T) {
+	var captured menuInstallerOutput
+	var stdout, stderr bytes.Buffer
+	out, errOut := captured.streamsVisible(&stdout, &stderr)
+	payload := "STL-APT-DETAIL-" + strings.Repeat("A", 8192) + "\n"
+	if n, err := io.WriteString(out, payload); err != nil || n != len(payload) {
+		t.Fatalf("stdout lost data: bytes=%d err=%v", n, err)
+	}
+	failure := "stl installer [FAILED]: APT_INDEX_REFRESH failed; package indexes inaccessible\n"
+	if _, err := io.WriteString(errOut, failure); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != payload || stderr.String() != failure {
+		t.Fatalf("operator logs were silently dropped: stdout=%d stderr=%q", stdout.Len(), stderr.String())
+	}
+	var summary bytes.Buffer
+	captured.failure(&summary, "install", &exec.ExitError{}, context.Background())
+	if !strings.Contains(summary.String(), "apt_index_refresh") ||
+		!strings.Contains(summary.String(), "apt_index_unverified") {
+		t.Fatalf("raw output replaced the structured summary: %q", summary.String())
+	}
+}
+
+func TestVisibleInstallerStreamsSerializeConcurrentStdoutAndStderr(t *testing.T) {
+	var captured menuInstallerOutput
+	var output bytes.Buffer // bytes.Buffer is not safe for concurrent writes.
+	stdout, stderr := captured.streamsVisible(&output, &output)
+	var workers sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		workers.Add(2)
+		go func(i int) {
+			defer workers.Done()
+			if _, err := fmt.Fprintf(stdout, "out-%03d\\n", i); err != nil {
+				t.Errorf("stdout %d: %v", i, err)
+			}
+		}(i)
+		go func(i int) {
+			defer workers.Done()
+			if _, err := fmt.Fprintf(stderr, "err-%03d\\n", i); err != nil {
+				t.Errorf("stderr %d: %v", i, err)
+			}
+		}(i)
+	}
+	workers.Wait()
+	for i := 0; i < 100; i++ {
+		for _, prefix := range []string{"out", "err"} {
+			want := fmt.Sprintf("%s-%03d\\n", prefix, i)
+			if strings.Count(output.String(), want) != 1 {
+				t.Fatalf("parallel installer output lost or duplicated %q", want)
+			}
+		}
 	}
 }

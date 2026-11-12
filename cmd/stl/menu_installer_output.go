@@ -10,29 +10,41 @@ import (
 	"sync"
 )
 
-// The canonical installer and APT produce environment-specific diagnostic
-// output (including repository URLs and source fragments). None of it may be
-// forwarded to the menu. These independent, bounded sinks only extract fixed
-// reason/stage identifiers; raw lines are never logged or retained.
+// Preserve stable stage/reason classification for concise summaries.
+// Local operator-initiated installer commands also stream their complete
+// diagnostic output to the terminal; machine consumers may use streams()
+// to project only classified data, never arbitrary child text.
 type menuInstallerOutput struct {
-	mu     sync.Mutex
-	stage  string
-	reason string
+	mu        sync.Mutex
+	forwardMu sync.Mutex
+	stage     string
+	reason    string
 }
 
 type menuInstallerOutputStream struct {
 	owner    *menuInstallerOutput
+	forward  io.Writer
 	line     []byte
 	oversize bool
 }
 
+// streams preserves the existing classified-only behavior for consumers that
+// intentionally need machine-safe, non-interactive output.
 func (v *menuInstallerOutput) streams() (io.Writer, io.Writer) {
 	return &menuInstallerOutputStream{owner: v}, &menuInstallerOutputStream{owner: v}
 }
 
+// streamsVisible is for an authenticated local operator who has explicitly
+// started an installer operation. Show the FULL actual stdout/stderr while
+// concurrently deriving the existing stage/reason/exit summary. Do not
+// truncate installer diagnostics or silently discard unknown error lines.
+func (v *menuInstallerOutput) streamsVisible(out, errOut io.Writer) (io.Writer, io.Writer) {
+	return &menuInstallerOutputStream{owner: v, forward: out},
+		&menuInstallerOutputStream{owner: v, forward: errOut}
+}
+
 func (s *menuInstallerOutputStream) Write(p []byte) (int, error) {
 	s.owner.mu.Lock()
-	defer s.owner.mu.Unlock()
 	for _, b := range p {
 		if b == '\n' || b == '\r' {
 			if !s.oversize {
@@ -47,6 +59,19 @@ func (s *menuInstallerOutputStream) Write(p []byte) (int, error) {
 		} else {
 			s.oversize = true
 		}
+	}
+	s.owner.mu.Unlock()
+	if s.forward != nil {
+		// exec.Cmd copies stdout and stderr on separate goroutines. Serialize
+		// writes to a shared terminal/buffer so chunks are not lost, while
+		// keeping classification and forwarding independently synchronized.
+		s.owner.forwardMu.Lock()
+		defer s.owner.forwardMu.Unlock()
+		n, err := s.forward.Write(p)
+		if err == nil && n < len(p) {
+			err = io.ErrShortWrite
+		}
+		return n, err
 	}
 	return len(p), nil
 }

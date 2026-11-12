@@ -391,7 +391,9 @@ one_liner=${one_liner/"$base/install.sh"/"$base/fixture-install.sh"}
 one_liner=${one_liner/"$first_hop_sha"/"$fixture_sha"}
 # Emulate network and privilege only in this unit harness. Literal clean-env
 # entrypoints and root sudo are tested separately with real tool paths.
-one_liner=${one_liner/\/usr\/bin\/env -i HOME=\/ PATH=\/usr\/sbin:\/usr\/bin:\/sbin:\/bin \/bin\/bash -c/\/bin\/bash -c}
+prefix='/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-dumb}" /bin/bash -c'
+[[ $one_liner == "$prefix "* ]] || { echo "MIRROR_TEST_FAIL: unexpected first-hop prefix" >&2; exit 1; }
+one_liner="/bin/bash -c${one_liner#"$prefix"}"
 # Execute an actual HTTPS fetch of the post-publication tampered bootstrap
 # with the prepublication trusted pin. No sudo/canonical execution allowed.
 raced_command=${one_liner/"$base/fixture-install.sh"/"$base/post-publication-tamper.sh"}
@@ -579,13 +581,13 @@ for failure_mode in canonical-oversize-known canonical-oversize-chunked \
         "$scratch/$failure_mode.err" ||
         { cat "$scratch/$failure_mode.err" >&2; echo 'MIRROR_TEST_FAIL: canonical bound guidance missing' >&2; exit 1; } ;;
     sums-oversize-chunked)
-      grep -Eq '(Mirror release asset exceeds the authenticated streaming-size limit|Required release file is unavailable on the HTTPS mirror)' "$scratch/$failure_mode.out" ||
+      grep -Eq 'stl installer \[FAILED\]: mirror_download_failed: SHA256SUMS' "$scratch/$failure_mode.out" ||
         { cat "$scratch/$failure_mode.out" >&2; echo 'MIRROR_TEST_FAIL: chunked sums bound missing' >&2; exit 1; } ;;
     manifest-oversize-known)
-      grep -q 'Required release file is unavailable on the HTTPS mirror' "$scratch/$failure_mode.out" ||
+      grep -Eq 'stl installer \[FAILED\]: mirror_download_failed: BUILD-MANIFEST.txt' "$scratch/$failure_mode.out" ||
         { cat "$scratch/$failure_mode.out" >&2; echo 'MIRROR_TEST_FAIL: manifest bound missing' >&2; exit 1; } ;;
     asset-tamper)
-      grep -q 'Release asset SHA256 mismatch' "$scratch/$failure_mode.out" ||
+      grep -Fq 'stl installer [FAILED]: checksum mismatch for' "$scratch/$failure_mode.out" ||
         { cat "$scratch/$failure_mode.out" >&2; echo 'MIRROR_TEST_FAIL: mirrored asset hash refusal missing' >&2; exit 1; } ;;
   esac
   [[ $(sha256sum "$STL_MIRROR_PREFIX/bin/stl" | awk '{print $1}') == "$before_old" &&
@@ -605,9 +607,9 @@ echo 'MIRROR_DOWNSTREAM_HTTPS_KNOWN_CHUNKED_AND_TAMPER_BOUNDS=PASS'
 if bash -c "$one_liner" > "$scratch/wrong.out" 2> "$scratch/wrong.err"; then
   echo 'MIRROR_TEST_FAIL: install incorrectly upgraded an existing version' >&2; exit 1
 fi
-grep -q '\[ACTION\].*v0.9.98.*v0.9.99.*mirror command with update' "$scratch/wrong.out" ||
+grep -q 'installed_version_mismatch: prior=v0.9.98 target=v0.9.99' "$scratch/wrong.out" ||
   { cat "$scratch/wrong.out" "$scratch/wrong.err"; echo 'MIRROR_TEST_FAIL: explicit mirror Update guidance missing' >&2; exit 1; }
-grep -q 'built-in Update menu requires GitHub' "$scratch/wrong.out" ||
+grep -q 'use an explicit update' "$scratch/wrong.out" ||
   { cat "$scratch/wrong.out" "$scratch/wrong.err"; echo 'MIRROR_TEST_FAIL: actionable installed-version error missing' >&2; exit 1; }
 [[ $(sha256sum "$STL_MIRROR_PREFIX/bin/stl" | awk '{print $1}') == "$before_old" ]] ||
   { echo 'MIRROR_TEST_FAIL: mistaken install changed existing binary' >&2; exit 1; }
@@ -641,7 +643,7 @@ printf '%064d  BUILD-MANIFEST.txt\n' 5 > "$scratch/www/releases/v0.9.99/SHA256SU
 if bash -c "$one_liner" > "$scratch/corrupt.out" 2> "$scratch/corrupt.err"; then
   echo 'MIRROR_TEST_FAIL: corrupted checksum manifest accepted' >&2; exit 1
 fi
-grep -q 'SHA256SUMS does not match' "$scratch/corrupt.out" ||
+grep -q 'mirror_checksum_mismatch:' "$scratch/corrupt.out" ||
   { cat "$scratch/corrupt.out" "$scratch/corrupt.err"; echo 'MIRROR_TEST_FAIL: checksum guidance missing' >&2; exit 1; }
 [[ ! -e "$STL_MIRROR_PREFIX/bin/stl" ]] ||
   { echo 'MIRROR_TEST_FAIL: checksum mismatch installed binary' >&2; exit 1; }
@@ -668,7 +670,7 @@ mv "$scratch/www/releases/v0.9.99/LICENSE" "$scratch/untampered-license"
 if bash -c "$one_liner" > "$scratch/missing.out" 2> "$scratch/missing.err"; then
   echo 'MIRROR_TEST_FAIL: missing mirrored asset accepted' >&2; exit 1
 fi
-grep -q 'Required release file is unavailable on the HTTPS mirror' "$scratch/missing.out" ||
+grep -Fq 'stl installer [FAILED]: mirror_download_failed: LICENSE' "$scratch/missing.out" ||
   { cat "$scratch/missing.out" "$scratch/missing.err"; echo 'MIRROR_TEST_FAIL: missing-asset guidance unavailable' >&2; exit 1; }
 [[ ! -e "$STL_MIRROR_PREFIX/bin/stl" ]] ||
   { echo 'MIRROR_TEST_FAIL: incomplete mirror created an executable' >&2; exit 1; }

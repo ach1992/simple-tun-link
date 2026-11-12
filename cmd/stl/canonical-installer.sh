@@ -750,7 +750,7 @@ apt_verify_distro_candidates() {
         if [[ -z ${release_verified[$release]+present} ]]; then
           [[ -f $release && ! -L $release && $(stat -c %u "$release") == 0 ]] ||
             fail 'APT candidate InRelease is missing or untrusted'
-          gpgv --quiet --keyring "$anchor" "$release" >/dev/null 2>&1 ||
+          gpgv --quiet --keyring "$anchor" "$release" ||
             fail 'APT candidate InRelease is not signed by the distribution archive'
           # A verified signer is decisive. These metadata fields are just an
           # additional consistency check, never an alternative to the key.
@@ -1757,11 +1757,11 @@ for file in SHA256SUMS BUILD-MANIFEST.txt LICENSE "$asset"; do
     transfer_rc=0
     if [[ -n $release_base ]]; then
       url="$release_base/$file"
-      curl -fsSs --proto '=https' --proto-redir '=https' --max-redirs 0 --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 --max-filesize "$transfer_limit" "$url" 2>/dev/null |
+      curl -fsSs --proto '=https' --proto-redir '=https' --max-redirs 0 --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 --max-filesize "$transfer_limit" "$url" |
         head -c "$((transfer_limit + 1))" > "$stage/$file" || transfer_rc=$?
     else
       url="https://github.com/ach1992/simple-tun-link/releases/download/${version}/${file}"
-      curl -fLSs --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 --max-filesize "$transfer_limit" "$url" 2>/dev/null |
+      curl -fLSs --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 --max-filesize "$transfer_limit" "$url" |
         head -c "$((transfer_limit + 1))" > "$stage/$file" || transfer_rc=$?
     fi
     transfer_bytes=$(wc -c < "$stage/$file") || fail "cannot inspect downloaded size for $file"

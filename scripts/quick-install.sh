@@ -79,7 +79,7 @@ quick_install_main() {
     release_json="$workdir/release.json"
     release_status=
     release_url="https://api.github.com/repos/ach1992/simple-tun-link/releases/tags/$version"
-    if ! release_status=$(curl -fsSs --proto "=https" --proto-redir "=https" --max-redirs 0 --tlsv1.2 --connect-timeout 10 --max-time 25 -H 'Accept: application/vnd.github+json' -H 'User-Agent: simple-tun-link-operator' -w '%{http_code}' -o "$release_json" "$release_url" 2>/dev/null) ||
+    if ! release_status=$(curl -fsSs --proto "=https" --proto-redir "=https" --max-redirs 0 --tlsv1.2 --connect-timeout 10 --max-time 25 -H 'Accept: application/vnd.github+json' -H 'User-Agent: simple-tun-link-operator' -w '%{http_code}' -o "$release_json" "$release_url") ||
        [[ $release_status != 200 ]] ||
        ! python3 -I - "$release_json" "$version" <<'STL_RELEASE_JSON'
 import datetime
@@ -150,11 +150,11 @@ STL_RELEASE_JSON
   local canonical_limit=1048576 canonical_rc=0 canonical_bytes
   if [[ -n $mirror_url ]]; then
     source_url="$mirror_url/install.sh"
-    curl -fsSs --proto "=https" --proto-redir "=https" --max-redirs 0 --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 --retry-max-time 150 --max-filesize "$canonical_limit" "$source_url" 2>/dev/null |
+    curl -fsSs --proto "=https" --proto-redir "=https" --max-redirs 0 --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 --retry-max-time 150 --max-filesize "$canonical_limit" "$source_url" |
       head -c "$((canonical_limit + 1))" > "$tmp" || canonical_rc=$?
   else
     source_url="https://raw.githubusercontent.com/ach1992/simple-tun-link/$bootstrap_version/scripts/install.sh"
-    curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 --retry-max-time 150 --max-filesize "$canonical_limit" "$source_url" 2>/dev/null |
+    curl -fLSs --proto "=https" --proto-redir "=https" --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 --retry-max-time 150 --max-filesize "$canonical_limit" "$source_url" |
       head -c "$((canonical_limit + 1))" > "$tmp" || canonical_rc=$?
   fi
   canonical_bytes=$(wc -c < "$tmp")
@@ -186,7 +186,7 @@ STL_RELEASE_JSON
       return 1
     }
   fi
-  if ! bash -n "$tmp" >/dev/null 2>&1; then
+  if ! bash -n "$tmp"; then
     echo '[FAILED] STL installer syntax validation failed; no installer started. Verify the tagged release and its installer before retrying.' >&2
     return 1
   fi
@@ -248,79 +248,13 @@ STL_ROOT_SNAPSHOT
     CURL_CA_BUNDLE="${CURL_CA_BUNDLE-}"
     /bin/bash -c "$privileged_stage" stl "$tmp" "$privileged_digest"
   )
-  # Even an authenticated installer can invoke APT and hooks with private
-  # repository URLs. Do not expose raw stdout/stderr, and do not buffer an
-  # unbounded transaction log in memory or a temporary file.
-  quick_install_safe_output() {
-    local line announced_wait=0 announced_packages=0 announced_failure=0
-    while IFS= read -r -n 1024 line || [[ -n $line ]]; do
-      case "$line" in
-        'STL_ROOT_SNAPSHOT_SHA256_MISMATCH')
-          echo '[FAILED] Privileged private snapshot SHA256 mismatch after sudo. The transferred source changed; no installer code was executed as root.' ;;
-        'STL_ROOT_SNAPSHOT_INVALID'|'STL_ROOT_SNAPSHOT_UNAVAILABLE'|\
-        'STL_ROOT_SNAPSHOT_COPY_FAILED'|'STL_ROOT_SNAPSHOT_SIZE_INVALID')
-          echo '[FAILED] Privileged installer snapshot could not be safely authenticated; no installer code was executed as root.' ;;
-        'stl installer [FAILED]: installed_version_mismatch: prior='*)
-          local remainder prior
-          remainder=${line#'stl installer [FAILED]: installed_version_mismatch: prior='}
-          prior=${remainder%% *}
-          if [[ $prior =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ &&
-                $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ &&
-                $prior != "$version" &&
-                $line == "stl installer [FAILED]: installed_version_mismatch: prior=$prior target=$version; install cannot replace a different installer-owned release; use an explicit update" ]]; then
-            if [[ -n $mirror_url ]]; then
-              printf '[ACTION] STL %s is already installed. install will not replace it with %s. Rerun this same verified HTTPS mirror command with update as the final argument; the built-in Update menu requires GitHub. No automatic upgrade was performed.\n' "$prior" "$version"
-            else
-              printf '[ACTION] STL %s is already installed. install will not replace it with %s. Run sudo stl menu -> Update, or rerun the same trusted bootstrap with update as its final argument. No automatic upgrade was performed.\n' "$prior" "$version"
-            fi
-          else
-            echo '[WARNING] STL install cannot safely replace the existing artifact. Inspect ownership and the installed version; do not force an update.'
-          fi ;;
-        'stl installer [FAILED]: mirror_checksum_mismatch:'*)
-          echo '[FAILED] The mirror SHA256SUMS does not match this bootstrap release pin. Check uploads and independent release hashes; no binary published.' ;;
-        'stl installer [FAILED]: mirror_download_oversized:'*)
-          echo '[FAILED] Mirror release asset exceeds the authenticated streaming-size limit. Inspect the mirror and use independently trusted release files; no binary published.' ;;
-        'stl installer [FAILED]: checksum mismatch for '*)
-          echo '[FAILED] Release asset SHA256 mismatch. Recheck the independently trusted release and transferred files; no binary published.' ;;
-        'stl installer [FAILED]: mirror_download_failed:'*)
-          echo '[FAILED] Required release file is unavailable on the HTTPS mirror. Upload the complete verified version directory; no GitHub fallback.' ;;
-        'stl installer [FAILED]: APT_INDEX_REFRESH failed;'*)
-          echo '[ACTION] APT could not refresh signed package indexes. Check the configured reachable domestic/signed distro mirror and dpkg --audit; no package install was started by this attempt.' ;;
-        'stl installer [FAILED]: APT_DEPENDENCY_PLAN failed;'*)
-          echo '[ACTION] APT cannot resolve the selected verified packages. Check authenticated repository configuration and package availability; no packages changed.' ;;
-        'stl installer [FAILED]: APT_PACKAGE_INSTALL failed;'*)
-          echo '[WARNING] APT package installation failed or is partially applied. Inspect dpkg --audit, active APT tasks and retained recovery before trying again; no automatic retry.' ;;
-        'stl installer [FAILED]: no STL installer-owned installation found'*)
-          echo '[ACTION] Update requires an existing verified STL installation. Check for foreign/partial STL files and recovery first; use fresh install only on a confirmed clean host.' ;;
-        'stl installer [FAILED]: STL ownership record is missing or not regular'*|\
-        'stl installer [FAILED]: invalid ownership record'*|\
-        'stl installer [FAILED]: installed stl differs from recorded owned binary'*|\
-        'stl installer [FAILED]: unreconciled STL installer recovery directory exists'*)
-          echo '[WARNING] STL ownership or retained recovery is unverified. Inspect the existing files/journal; do not overwrite, delete recovery, or force Update.' ;;
-        'stl installer [FAILED]: legacy_binary_bridge_required:'*)
-          echo '[ACTION] This installed Stable cannot directly downgrade. First UPDATE it to the next official Stable using the permanent one-line installer without an old tag; then select the older official version in its installed Update menu.' ;;
-        'stl installer [INFO]: Another APT process holds the lists lock'*)
-          if (( ! announced_wait )); then
-            echo '[INFO] STL is waiting for a known temporary APT lists lock to clear.'
-            announced_wait=1
-          fi ;;
-        '[INFO] Installing verified missing packages on '*)
-          if (( ! announced_packages )); then
-            echo '[INFO] STL is installing only the verified selected dependencies.'
-            announced_packages=1
-          fi ;;
-        'stl installer [FAILED]: partial failure; inspect retained recovery directory:'*)
-          echo '[WARNING] Canonical installer reported uncertain recovery. Inspect retained private recovery evidence before retrying.' ;;
-        'stl installer [FAILED]:'*)
-          if (( ! announced_failure )); then
-            echo '[WARNING] Canonical installer reported a failure. No automatic retry will occur.'
-            announced_failure=1
-          fi ;;
-      esac
-    done
-  }
+  # The local operator needs the exact authenticated installer and APT
+  # diagnostics, not a generic classification that hides the root cause.
+  # Stream output directly instead of collecting unbounded logs in memory.
   local install_status=0
-  echo "[INFO] Running STL $action for $version. Raw package diagnostics are withheld; this can take several minutes."
+  printf '\n== Simple Tun Link %s | %s ==\n' "$version" "${action^^}"
+  printf '[OK] Canonical installer authenticated and Bash syntax verified.\n'
+  printf '[STEP] Running %s; detailed installer/APT output follows.\n\n' "$action"
   if (
     arguments=("$action" --version "$version" --backends "$backends")
     [[ -z $mirror_url ]] || arguments+=(--release-base "$mirror_url" --release-sums-sha256 "$mirror_sums_sha")
@@ -329,18 +263,22 @@ STL_ROOT_SNAPSHOT
     else
       /usr/bin/sudo "${root_exec[@]}" "${arguments[@]}"
     fi
-  ) 2>&1 | quick_install_safe_output; then
+  ) 2>&1; then
     install_status=0
   else
-    # pipefail preserves the canonical installer's exit status if the
-    # read-only sanitizer completes. Filter failure also fails closed.
+    # Preserve the canonical exit status and actual diagnostic output.
     install_status=$?
   fi
   if (( install_status != 0 )); then
-    printf '[FAILED] STL %s %s did not complete (exit %d). Review the reported stage (if any); inspect dpkg --audit, STL install-record and any retained recovery before retrying. A partial APT or binary transaction may persist.\n' "$version" "$action" "$install_status" >&2
+    printf '\n[FAILED] STL %s %s exited with status %d. The actual installer error is above.\n' "$version" "$action" "$install_status" >&2
+    if [[ $action == install ]]; then
+      echo '[NEXT] If STL is already installed, use explicit Update rather than attempting Install again.' >&2
+    fi
+    echo '[NEXT] Read-only checks: /usr/local/bin/stl version --json; dpkg --audit; /usr/local/lib/simple-tun-link/install-record; /usr/local/bin/.stl-install.* (if present). Preserve retained recovery before retrying.' >&2
     return "$install_status"
   fi
-  echo "[OK] STL $version $action completed. Opening the menu on this terminal..."
+  printf '\n[OK] STL %s %s completed.\n' "$version" "$action"
+  echo '[STEP] Opening the installed menu on the controlling terminal...'
   # When a bootstrap script is piped into bash, fd 0 is the script content,
   # not interactive menu input. Reattach to the controlling terminal only.
   if [[ -t 1 ]] && { exec {stl_menu_tty}<>/dev/tty; } 2>/dev/null; then

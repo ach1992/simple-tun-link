@@ -242,7 +242,7 @@ func menuRunCanonicalUpdate(ctx context.Context, release menuOfficialRelease, ou
 		return errors.New("invalid or incompatible official release selection")
 	}
 	var child menuInstallerOutput
-	stdout, stderr := child.streams()
+	stdout, stderr := child.streamsVisible(out, errOut)
 	menuNotice(out, "INFO", "Running embedded canonical installer with exact release verification and State ownership locks.")
 	if err := runEmbeddedInstaller(ctx, stdout, stderr, "update", "--version", tag, "--backends", "native"); err != nil {
 		child.failure(out, "update", err, ctx)
@@ -261,13 +261,13 @@ func menuRunCanonicalUpdate(ctx context.Context, release menuOfficialRelease, ou
 // information without exposing raw child stdout/stderr to the terminal.
 func menuRunCanonicalUpdateProcess(ctx context.Context, path, tag string, out io.Writer) error {
 	var childOutput menuInstallerOutput
-	childStdout, childStderr := childOutput.streams()
+	childStdout, childStderr := childOutput.streamsVisible(out, out)
 	command := exec.CommandContext(ctx, "/bin/bash", path, "update", "--version", tag, "--backends", "native")
 	command.Stdout, command.Stderr, command.Stdin = childStdout, childStderr, os.Stdin
 	// Do not let caller-controlled shell startup/loader environment execute
 	// before the canonical root installer (also used by PREPARE).
 	command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C", "LANG=C", "HOME=/root"}
-	menuNotice(out, "INFO", "Running canonical updater; raw child diagnostics are withheld from the menu.")
+	menuNotice(out, "INFO", "Running canonical updater. Detailed installer output follows; final status will appear below.")
 	if err := command.Run(); err != nil {
 		childOutput.failure(out, "update", err, ctx)
 		return errors.New("canonical updater exited unsuccessfully or was interrupted")
@@ -628,7 +628,7 @@ func menuUpdateOfficial(input io.Reader, reader *bufio.Reader, out, errOut io.Wr
 	if err := menuRunCanonicalUpdate(updateCtx, selectedRelease, out, errOut); err != nil {
 		menuNotice(out, "FAILED", "Canonical installer did not confirm completion. Inspect installed identity/recovery before retrying.")
 		menuField(out, "Reason", menuUpdateFailureCategory(err))
-		menuField(out, "NEXT ACTION", "Inspect official release reachability, stl version --json, installed ownership and retained recovery evidence read-only; no blind retry. Child diagnostics remain private.")
+		menuField(out, "NEXT ACTION", "Inspect the detailed installer error shown above, then check official release reachability, stl version --json, installed ownership and retained recovery before retrying.")
 		// The executable might have been partially replaced or rolled back.
 		// Never resume the old in-memory menu after any install attempt.
 		return menuUpdatedExecutable

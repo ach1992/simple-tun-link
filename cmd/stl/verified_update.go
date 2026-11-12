@@ -249,7 +249,7 @@ func verifiedUpdateCommand(args []string, out, errOut io.Writer) int {
 	cli.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root", "LANG=C", "LC_ALL=C"}
 	cli.Stdin = os.Stdin
 	var captured menuInstallerOutput
-	cli.Stdout, cli.Stderr = captured.streams()
+	cli.Stdout, cli.Stderr = captured.streamsVisible(out, errOut)
 	if err := cli.Run(); err != nil {
 		fmt.Fprintln(errOut, "[WARNING] Verified updater failed or was interrupted; host/package effects may be partial.")
 		captured.failure(errOut, "update", err, ctx)

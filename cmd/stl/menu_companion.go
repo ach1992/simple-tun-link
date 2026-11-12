@@ -415,7 +415,7 @@ func menuEnsureCompanion(input io.Reader, reader *bufio.Reader, out io.Writer,
 				return false
 			}
 			var child menuInstallerOutput
-			stdout, stderr := child.streams()
+			stdout, stderr := child.streamsVisible(out, out)
 			menuNotice(out, "INFO", "Verified download/source; canonical installer checking exact ownership and publishing companion.")
 			attemptedInstall = true
 			installCtx, stop := context.WithTimeout(context.Background(), 50*time.Second)
