@@ -140,6 +140,27 @@ func (v *menuInstallerOutput) observeLine(line string) {
 		return
 	}
 	switch {
+	// With detailed operator diagnostics enabled, the real canonical
+	// installer errors reach this stream directly (without the old
+	// bootstrap's sanitizer). Classify those stable authored prefixes,
+	// while leaving the full original line visible on the local terminal.
+	case strings.HasPrefix(line, "stl installer [FAILED]: mirror_download_oversized:"),
+		strings.HasPrefix(line, "stl installer [FAILED]: mirror_download_failed:"),
+		strings.HasPrefix(line, "stl installer [FAILED]: mirror_checksum_mismatch:"),
+		strings.HasPrefix(line, "stl installer [FAILED]: checksum mismatch for "),
+		strings.HasPrefix(line, "stl installer [FAILED]: missing/duplicate or malformed SHA256 entry for "):
+		v.stage, v.reason = "mirror_release_assets", "mirror_release_asset_unverified"
+	case strings.HasPrefix(line, "stl installer [FAILED]: cannot download complete bounded official release file:"),
+		strings.HasPrefix(line, "stl installer [FAILED]: official release file exceeds verified transfer limit:"):
+		v.stage, v.reason = "official_release_assets", "official_release_asset_unverified"
+	case strings.HasPrefix(line, "stl installer [FAILED]: installed_version_mismatch: prior="):
+		v.stage, v.reason = "installed_version", "installed_version_mismatch"
+	case strings.HasPrefix(line, "STL_ROOT_SNAPSHOT_SHA256_MISMATCH:"),
+		strings.HasPrefix(line, "STL_ROOT_SNAPSHOT_INVALID:"),
+		strings.HasPrefix(line, "STL_ROOT_SNAPSHOT_UNAVAILABLE:"),
+		strings.HasPrefix(line, "STL_ROOT_SNAPSHOT_COPY_FAILED:"),
+		strings.HasPrefix(line, "STL_ROOT_SNAPSHOT_SIZE_INVALID:"):
+		v.stage, v.reason = "privileged_snapshot", "privileged_installer_snapshot_unverified"
 	case strings.HasPrefix(line, "[FAILED] Canonical installer exceeds the 1 MiB streaming limit"),
 		strings.HasPrefix(line, "[FAILED] Mirror canonical installer unavailable, incomplete or oversized"),
 		strings.HasPrefix(line, "[FAILED] Mirror canonical installer differs from the independently pinned SHA256"):
@@ -220,6 +241,12 @@ func (v *menuInstallerOutput) failure(out io.Writer, action string, err error, c
 		menuField(out, "NEXT ACTION", "Check the pinned HTTPS mirror, verified release's canonical installer SHA256 and the 1 MiB streaming limit; inspect the installed version and recovery before retrying.")
 	case reason == "mirror_release_asset_unverified":
 		menuField(out, "NEXT ACTION", "Check the exact mirrored release's SHA256SUMS, manifests, binary and streaming limits against the independent trusted release; inspect installed ownership and recovery before retrying.")
+	case reason == "official_release_asset_unverified":
+		menuField(out, "NEXT ACTION", "Inspect the failed official release download, TLS/DNS reachability and the published version's checksum manifest; do not assume any binary was installed.")
+	case reason == "installed_version_mismatch":
+		menuField(out, "NEXT ACTION", "Another STL version is already installed; Install cannot replace it. Inspect /usr/local/bin/stl version --json and the ownership record, then choose explicit verified Update if appropriate.")
+	case reason == "privileged_installer_snapshot_unverified":
+		menuField(out, "NEXT ACTION", "The private root snapshot could not be validated. Check installer source/digest and disk access; no unverified installer was executed. Do not bypass hash verification.")
 	default:
 		menuField(out, "NEXT ACTION", "Inspect stl version --json, installation ownership record and retained private recovery journal; package or binary changes may persist. Do not retry blindly.")
 	}

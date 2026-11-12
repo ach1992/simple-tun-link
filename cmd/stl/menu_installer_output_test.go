@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -429,5 +430,62 @@ func TestVisibleInstallerStreamsSerializeConcurrentStdoutAndStderr(t *testing.T)
 				t.Fatalf("parallel installer output lost or duplicated %q", want)
 			}
 		}
+	}
+}
+
+func TestDirectCanonicalInstallerFailuresRetainRealStageAndDetailedText(t *testing.T) {
+	testCases := []struct{ name, childLine, stage, reason, next string }{
+		{
+			"Mirror oversized SHA256SUMS",
+			"stl installer [FAILED]: mirror_download_oversized: SHA256SUMS exceeds verified release transfer limit; no fallback to GitHub",
+			"mirror_release_assets", "mirror_release_asset_unverified", "SHA256SUMS",
+		},
+		{
+			"Mirror asset unavailable",
+			"stl installer [FAILED]: mirror_download_failed: LICENSE unavailable, incomplete or oversized; no fallback to GitHub",
+			"mirror_release_assets", "mirror_release_asset_unverified", "SHA256SUMS",
+		},
+		{
+			"Mirror manifest integrity mismatch",
+			"stl installer [FAILED]: mirror_checksum_mismatch: SHA256SUMS differs from pinned digest",
+			"mirror_release_assets", "mirror_release_asset_unverified", "SHA256SUMS",
+		},
+		{
+			"Mirror binary digest mismatch",
+			"stl installer [FAILED]: checksum mismatch for stl_v9.9.9_linux_amd64",
+			"mirror_release_assets", "mirror_release_asset_unverified", "manifests",
+		},
+		{
+			"Official release download failure",
+			"stl installer [FAILED]: cannot download complete bounded official release file: SHA256SUMS",
+			"official_release_assets", "official_release_asset_unverified", "TLS/DNS",
+		},
+		{
+			"Previously installed version",
+			"stl installer [FAILED]: installed_version_mismatch: prior=v0.1.23 target=v0.1.24; install cannot replace a different installer-owned release; use an explicit update",
+			"installed_version", "installed_version_mismatch", "explicit verified Update",
+		},
+		{
+			"Root-private snapshot rejected",
+			"STL_ROOT_SNAPSHOT_SHA256_MISMATCH: Privileged private snapshot SHA256 mismatch after sudo. No installer executed.",
+			"privileged_snapshot", "privileged_installer_snapshot_unverified", "hash verification",
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var child menuInstallerOutput
+			var out bytes.Buffer
+			_, stderr := child.streamsVisible(&out, &out)
+			if _, err := io.WriteString(stderr, tc.childLine+"\n"); err != nil {
+				t.Fatal(err)
+			}
+			child.failure(&out, "update", errors.New("child command exited"), context.Background())
+			all := out.String()
+			for _, expected := range []string{tc.childLine, tc.stage, tc.reason, tc.next} {
+				if !strings.Contains(all, expected) {
+					t.Errorf("required diagnostic %q absent from %q", expected, all)
+				}
+			}
+		})
 	}
 }
