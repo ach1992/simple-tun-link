@@ -143,8 +143,9 @@ host details. Provide redacted reason codes and relevant command exit
 statuses instead. A completed installer alone does not prove that live
 Links can reach their peers or survive reboot.
 
-The guided PREPARE and Update menus forward authenticated canonical
-installer and APT stdout/stderr to the local operator **as it happens**,
+Since Stable `v0.1.25`, the guided PREPARE and Update menus forward
+authenticated canonical installer and APT stdout/stderr to the local operator
+**as it happens**,
 including download and dependency-resolution failures. They additionally
 show the last **reported** stage (not proof of host effects), the actual
 child exit code when available, a typed reason, and a read-only recovery
