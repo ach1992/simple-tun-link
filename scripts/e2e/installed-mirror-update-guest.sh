@@ -126,7 +126,7 @@ try_bad sums-oversize-chunked 'mirror_release_asset_unverified'
 try_bad manifest-oversize-known 'mirror_release_asset_unverified'
 try_bad manifest-truncated 'mirror_release_asset_unverified'
 try_bad sums-tamper 'mirror_release_asset_unverified'
-try_bad asset-tamper 'mirror_release_asset_unverified'
+try_bad asset-tamper 'release_integrity_unverified'
 try_bad asset-oversize-chunked 'mirror_release_asset_unverified'
 
 printf 'normal\n' > "$mode.new"
