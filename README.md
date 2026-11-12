@@ -43,7 +43,7 @@ Choose **one** source for the initial install:
 
 Never run the transferred shell file directly or use an unchecked `curl | bash` command. The local/Mirror first hop must authenticate a complete private copy **before** shell execution. These options use one canonical installer; a Mirror must be prepared and approved independently, not presumed available.
 
-Use the [latest official Stable release](https://github.com/ach1992/simple-tun-link/releases/latest) (currently [**v0.1.24**](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.24), published 2026-11-12).
+Use the [latest official Stable release](https://github.com/ach1992/simple-tun-link/releases/latest); check its published tag and release assets before installing.
 Run this complete-download, syntax-checked installer on each server:
 
 ~~~bash
@@ -83,6 +83,11 @@ hardened bootstrap `PATH` excludes `/usr/local/bin`. If using `v0.1.23`, the
 installer may have succeeded even if its last automatic menu launch failed;
 run `/usr/local/bin/stl menu` as root or `/usr/bin/sudo /usr/local/bin/stl menu`
 from an authorized non-root account.
+
+Stable `v0.1.25` adds complete local canonical installer/APT diagnostic streaming,
+accurate failure stages and exit codes, and preserved `NO_COLOR` in clean
+bootstrap and non-root menu handoffs. It does not change persisted Link State,
+network configuration or the independently verified Mirror trust procedure.
 
 After installation, open the menu or verify the installed version:
 
