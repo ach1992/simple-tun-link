@@ -47,8 +47,16 @@ Use the [latest official Stable release](https://github.com/ach1992/simple-tun-l
 Run this complete-download, syntax-checked installer on each server:
 
 ~~~bash
-/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl
+/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-dumb}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl
 ~~~
+
+The explicit `TERM="${TERM:-dumb}"` carries the connected terminal type,
+while `${NO_COLOR+NO_COLOR=1}` passes the operator's `NO_COLOR` opt-out
+**only when present**, including an empty value. It is preserved across the
+non-root `sudo` menu handoff as well. The authenticated installer still runs
+with a clean, restricted environment; `NO_COLOR`, `TERM=dumb` or a
+noninteractive session disables ANSI redraw. This prevents the update menu from appearing as a new block
+below the installer output rather than redrawing the full terminal.
 
 It fetches a bounded, complete HTTPS bootstrap into an owned temporary file before execution. The verified
 bootstrap and canonical installer then check the released artifact's checksums
@@ -199,7 +207,7 @@ already supported verified manual procedures.
 For an existing installer-owned STL that reaches official GitHub, use:
 
 ~~~bash
-/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl update
+/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-dumb}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl update
 ~~~
 
 State and executable rollback are **not** the same: newer managed features

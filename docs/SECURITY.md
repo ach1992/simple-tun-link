@@ -30,6 +30,17 @@ keys, IPsec PSKs, raw private Setup Links or arbitrary untrusted
 daemon/kernel output. No credential is recovered from display names,
 filename patterns or logged command-line arguments.
 
+An authenticated administrator who explicitly starts the canonical installer,
+Update, PREPARE, Uninstall or companion installation sees the **complete**
+installer and package-manager stdout/stderr in that local terminal, plus a
+typed status/exit summary. Suppressing actionable APT or installer diagnostics
+is not a substitute for proper handling of private Link credentials.
+Package manager output can include operator-configured repository URLs or
+host details: do not publish terminal transcripts to Issues, CI logs or
+shared troubleshooting channels without checking their contents. STL does not
+automatically persist those raw installer streams or insert them into
+machine/JSON Link diagnostics.
+
 - Each local WireGuard private key and each IPsec PSK belongs in its
   backend-specific owner-private credential store under STL's private
   State root. Reject symlinks, unsafe ancestors, wrong ownership,

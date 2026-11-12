@@ -191,8 +191,8 @@ func menuUninstallWithOps(input io.Reader, reader *bufio.Reader, out, errOut io.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	var child menuInstallerOutput
-	childOut, childErr := child.streams()
-	menuNotice(out, "INFO", "Canonical installer verifying ownership and removing only STL-owned binaries. Raw child output is hidden.")
+	childOut, childErr := child.streamsVisible(out, errOut)
+	menuNotice(out, "INFO", "Canonical installer checking ownership and removing STL-owned binaries. Details follow.")
 	installerArgs := []string{"uninstall"}
 	if retireUnit {
 		installerArgs = append(installerArgs, "--retire-owned-restore")

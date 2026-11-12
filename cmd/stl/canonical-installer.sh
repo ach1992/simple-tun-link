@@ -750,7 +750,7 @@ apt_verify_distro_candidates() {
         if [[ -z ${release_verified[$release]+present} ]]; then
           [[ -f $release && ! -L $release && $(stat -c %u "$release") == 0 ]] ||
             fail 'APT candidate InRelease is missing or untrusted'
-          gpgv --quiet --keyring "$anchor" "$release" >/dev/null 2>&1 ||
+          gpgv --quiet --keyring "$anchor" "$release" ||
             fail 'APT candidate InRelease is not signed by the distribution archive'
           # A verified signer is decisive. These metadata fields are just an
           # additional consistency check, never an alternative to the key.
@@ -783,38 +783,68 @@ apt_safety=(-o APT::Get::AllowUnauthenticated=false
 # APT's DPkg::Lock::Timeout does not cover the package-index lists lock on
 # supported Debian/Ubuntu releases. Retry ONLY a positively classified lists
 # lock failure before the package transaction, never repository trust errors.
-apt_update_is_only_lists_lock() {
-  local output=$1 line lock_seen=0
-  # Fail closed on *every* line outside this narrow set of real APT
-  # lists-lock diagnostics. Other warnings, repository failures, progress
-  # or partial downloads must never be retried as an exclusive lock.
-  while IFS= read -r line; do
-    case "$line" in
-      'E: Could not get lock /var/lib/apt/lists/lock'*) lock_seen=1 ;;
-      'E: Unable to lock directory /var/lib/apt/lists/' | \
-      'N: Be aware that removing the lock file is not a solution and may break your system.' | \
-      'Reading package lists...' | 'Reading package lists... Done' | '') ;;
-      *) return 1 ;;
-    esac
-  done <<< "$output"
-  (( lock_seen == 1 ))
+# Forward every APT refresh byte live through tee; inspect only small,
+# fixed-size lines for the specific APT lists lock retry exception. A lengthy
+# or unfamiliar line can NEVER authorize another attempt.
+apt_update_only_lists_lock_stream() {
+  local LC_ALL=C
+  local chunk lock_seen=0 unrelated=0
+  # APT output is a stream, not a command-substitution buffer. Read at
+  # most 2048 characters at a time and write each fragment immediately,
+  # preserving even long/unknown lines while never retrying on them.
+  while :; do
+    chunk=
+    if IFS= read -r -n 2048 chunk; then
+      if (( ${#chunk} >= 2048 )); then
+        printf '%s' "$chunk" >&2 || return 2
+        unrelated=1
+        continue
+      fi
+      printf '%s\n' "$chunk" >&2 || return 2
+      case "$chunk" in
+        'E: Could not get lock /var/lib/apt/lists/lock'*) lock_seen=1 ;;
+        'E: Unable to lock directory /var/lib/apt/lists/' | \
+        'N: Be aware that removing the lock file is not a solution and may break your system.' | \
+        'Reading package lists...' | 'Reading package lists... Done' | '') ;;
+        *) unrelated=1 ;;
+      esac
+    else
+      [[ -z $chunk ]] && break
+      # EOF without a newline: preserve bytes, but never classify as a
+      # safe lists-lock-only failure because the diagnostic is incomplete.
+      printf '%s' "$chunk" >&2 || return 2
+      unrelated=1
+      break
+    fi
+  done
+  (( lock_seen == 1 && unrelated == 0 ))
 }
 
 apt_update_indexes() {
-  local output status attempt
-  # 12 attempts with 5-second gaps: at most 55 seconds of lock-only waits.
+  local attempt
+  local -a outcomes=()
+  # No command substitution: APT progress and failure evidence must not
+  # accumulate in unbounded shell memory or wait for the process to finish.
+  # A single bounded-line consumer forwards every fragment directly to
+  # the operator and classifies only a proven lists-lock-only failure.
+  # No async tee subprocess or unbounded replay buffer is involved.
   for ((attempt=1; attempt<=12; attempt++)); do
-    if output=$(LC_ALL=C DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none \
-      apt-get "${apt_safety[@]}" -o Acquire::Retries=2 \
-      -o APT::Update::Error-Mode=any update 2>&1); then
-      [[ -z $output ]] || printf '%s\n' "$output"
-      return 0
+    if LC_ALL=C DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none \
+       apt-get "${apt_safety[@]}" -o Acquire::Retries=2 \
+         -o APT::Update::Error-Mode=any update 2>&1 |
+       apt_update_only_lists_lock_stream; then
+      outcomes=("${PIPESTATUS[@]}")
     else
-      status=$?
+      outcomes=("${PIPESTATUS[@]}")
     fi
-    [[ -z $output ]] || printf '%s\n' "$output" >&2
-    if (( status != 100 )) || ! apt_update_is_only_lists_lock "$output"; then
-      fail "APT_INDEX_REFRESH failed; missing selected packages: ${missing[*]}. No package install attempted. Inspect the APT output and signature trust. If current repositories are unreachable, manually select an accessible official signed Debian/Ubuntu mirror (including a suitable Iranian/regional mirror), update your APT configuration yourself, then rerun. STL will not edit repositories or disable signatures."
+    if (( ${#outcomes[@]} != 2 || outcomes[1] > 1 )); then
+      fail 'APT_INDEX_REFRESH diagnostics could not be streamed completely; no retry or package install attempted.'
+    fi
+    if (( outcomes[0] == 0 )); then
+      return 0
+    fi
+    if (( outcomes[0] != 100 || outcomes[1] != 0 )); then
+      fail "APT_INDEX_REFRESH failed; missing selected packages: ${missing[*]}; apt_get_exit=${outcomes[0]}. No package install attempted. Inspect the APT output and signature trust. If current repositories are unreachable, manually select an accessible official signed Debian/Ubuntu mirror (including a suitable Iranian/regional mirror), update your APT configuration yourself, then rerun. STL will not edit repositories or disable signatures."
     fi
     if (( attempt == 12 )); then
       fail 'APT lists lock remained busy after bounded waiting; let the other apt-get finish, then rerun this operation. Do not delete APT lock files or kill package-manager processes.'
@@ -824,15 +854,67 @@ apt_update_indexes() {
   done
 }
 
+# Keep the machine-readable dependency inventory bounded without limiting
+# the LIVE diagnostic stream. The same bounded read loop forwards all
+# bytes to the operator immediately and retains at most 64 KiB of
+# authenticated apt-get -s text for exact-plan parsing.
+apt_plan_capture_bounded() {
+  local LC_ALL=C
+  local capture=$1 chunk bytes=0 left overflow=0
+  : > "$capture" || return 1
+  while IFS= read -r -N 4096 chunk || [[ -n $chunk ]]; do
+    printf '%s' "$chunk" >&2 || return 2
+    left=$((65536 - bytes))
+    if (( left <= 0 )); then
+      overflow=1
+      continue
+    fi
+    if (( ${#chunk} > left )); then
+      printf '%s' "${chunk:0:left}" >> "$capture" || return 1
+      bytes=65536
+      overflow=1
+    else
+      printf '%s' "$chunk" >> "$capture" || return 1
+      bytes=$((bytes + ${#chunk}))
+    fi
+  done
+  (( overflow == 0 ))
+}
+
 apt_resolve_plan() {
   local text line pkg version requested found
   local -a planned=()
   apt_plan=
   (( ${#missing[@]} > 0 )) || return 0
   apt_sources_must_be_authenticated
-  text=$(LC_ALL=C apt-get -s -o Debug::NoLocking=1 "${apt_safety[@]}" \
-    install --no-install-recommends -- "${missing[@]}") ||
-    fail "APT_DEPENDENCY_PLAN failed; missing selected packages: ${missing[*]}. No packages changed. Inspect the signed configured repositories and their candidate indexes. If unreachable, manually configure an accessible appropriately signed regional mirror; do not bypass APT verification."
+  local capture
+  local -a outcomes=()
+  capture=$(/usr/bin/mktemp /tmp/stl-apt-plan.XXXXXXXX) ||
+    fail 'APT_DEPENDENCY_PLAN cannot create private bounded simulation capture; no packages changed.'
+  # Stream the complete stdout to the operator while retaining only a
+  # bounded parsed plan; stderr from apt-get remains directly visible.
+  # A failed simulation is never an accepted plan.
+  if LC_ALL=C apt-get -s -o Debug::NoLocking=1 "${apt_safety[@]}" \
+       install --no-install-recommends -- "${missing[@]}" |
+     apt_plan_capture_bounded "$capture"; then
+    outcomes=("${PIPESTATUS[@]}")
+  else
+    outcomes=("${PIPESTATUS[@]}")
+  fi
+  if (( ${#outcomes[@]} != 2 || outcomes[0] != 0 )); then
+    /bin/rm -f -- "$capture"
+    fail "APT_DEPENDENCY_PLAN failed; missing selected packages: ${missing[*]}; apt_get_exit=${outcomes[0]}. No packages changed. Inspect the complete APT simulation diagnostics above and signed configured repositories before retrying."
+  fi
+  if (( outcomes[1] == 2 )); then
+    /bin/rm -f -- "$capture"
+    fail 'APT_DEPENDENCY_PLAN could not stream complete diagnostics to the operator; no packages changed.'
+  fi
+  if (( outcomes[1] != 0 )); then
+    /bin/rm -f -- "$capture"
+    fail 'APT_DEPENDENCY_PLAN simulation output exceeded the bounded 64 KiB machine-plan capture or its private capture failed; all available diagnostics were streamed above; no packages changed.'
+  fi
+  text=$(< "$capture")
+  /bin/rm -f -- "$capture"
   while IFS= read -r line; do
     case "$line" in
       Remv\ *|Purg\ *) fail 'APT plan would remove packages; no changes allowed' ;;
@@ -1757,11 +1839,11 @@ for file in SHA256SUMS BUILD-MANIFEST.txt LICENSE "$asset"; do
     transfer_rc=0
     if [[ -n $release_base ]]; then
       url="$release_base/$file"
-      curl -fsSs --proto '=https' --proto-redir '=https' --max-redirs 0 --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 --max-filesize "$transfer_limit" "$url" 2>/dev/null |
+      curl -fsSs --proto '=https' --proto-redir '=https' --max-redirs 0 --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 --max-filesize "$transfer_limit" "$url" |
         head -c "$((transfer_limit + 1))" > "$stage/$file" || transfer_rc=$?
     else
       url="https://github.com/ach1992/simple-tun-link/releases/download/${version}/${file}"
-      curl -fLSs --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 --max-filesize "$transfer_limit" "$url" 2>/dev/null |
+      curl -fLSs --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 2 --max-filesize "$transfer_limit" "$url" |
         head -c "$((transfer_limit + 1))" > "$stage/$file" || transfer_rc=$?
     fi
     transfer_bytes=$(wc -c < "$stage/$file") || fail "cannot inspect downloaded size for $file"

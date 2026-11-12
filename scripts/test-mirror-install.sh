@@ -333,7 +333,15 @@ grep -Fx "UPDATE_COMMAND=$one_liner update" "$scratch/prepared.log" >/dev/null |
 # function or caller PATH may act before the independently pinned digest.
 # A trusted test-only CA/no-proxy is explicitly admitted after env -i.
 literal_clean=${one_liner/\/bin\/bash -c /CURL_CA_BUNDLE=$scratch\/cert.crt NO_PROXY=localhost,127.0.0.1 \/bin\/bash -c }
-printf '#!/bin/bash\nprintf "FIRST_HOP_CLEAN_ENV_POSITIVE=PASS\\n"\\n' > "$scratch/www/clean-fixture.sh"
+cat > "$scratch/www/clean-fixture.sh" <<'STL_CLEAN_ENV_FIXTURE'
+#!/bin/bash
+printf 'FIRST_HOP_CLEAN_ENV_POSITIVE=PASS\n'
+if [[ ${NO_COLOR+x} ]]; then
+  printf 'MIRROR_NO_COLOR_PRESENCE=present\n'
+else
+  printf 'MIRROR_NO_COLOR_PRESENCE=absent\n'
+fi
+STL_CLEAN_ENV_FIXTURE
 clean_sha=$(sha256sum < "$scratch/www/clean-fixture.sh")
 clean_sha=${clean_sha%% *}
 clean_positive=${literal_clean/"$base/install.sh"/"$base/clean-fixture.sh"}
@@ -356,6 +364,22 @@ BASH_ENV="$scratch/poison-bash-env" /bin/sh -c "$clean_positive" > "$scratch/cle
   { cat "$scratch/clean.err" >&2; echo 'MIRROR_TEST_FAIL: clean-env first-hop rejected trusted TLS test script' >&2; exit 1; }
 grep -Fxq 'FIRST_HOP_CLEAN_ENV_POSITIVE=PASS' "$scratch/clean.out" ||
   { echo 'MIRROR_TEST_FAIL: clean-env positive bootstrap did not execute' >&2; exit 1; }
+# Exercise the literal generated HTTPS first hop with NO_COLOR absent, empty
+# and nonempty. Preserve the opt-out without admitting shell startup hooks.
+for color_mode in absent present-empty present-value; do
+  case "$color_mode" in
+    absent)
+      env -u NO_COLOR BASH_ENV="$scratch/poison-bash-env" /bin/sh -c "$clean_positive" > "$scratch/mirror-color.out" 2> "$scratch/mirror-color.err" ;;
+    present-empty)
+      NO_COLOR='' BASH_ENV="$scratch/poison-bash-env" /bin/sh -c "$clean_positive" > "$scratch/mirror-color.out" 2> "$scratch/mirror-color.err" ;;
+    present-value)
+      NO_COLOR=1 BASH_ENV="$scratch/poison-bash-env" /bin/sh -c "$clean_positive" > "$scratch/mirror-color.out" 2> "$scratch/mirror-color.err" ;;
+  esac || { cat "$scratch/mirror-color.err" >&2; echo "MIRROR_TEST_FAIL: $color_mode first hop failed" >&2; exit 1; }
+  expected=present
+  [[ $color_mode != absent ]] || expected=absent
+  grep -Fxq "MIRROR_NO_COLOR_PRESENCE=$expected" "$scratch/mirror-color.out" ||
+    { echo "MIRROR_TEST_FAIL: $color_mode NO_COLOR changed at first hop" >&2; exit 1; }
+done
 # Literal official first hop has no independent first-hop SHA pin (publisher
 # trust remains out of band), but it must still ignore hostile inherited
 # startup hooks, functions, and PATH before any Bash or download starts.
@@ -391,7 +415,9 @@ one_liner=${one_liner/"$base/install.sh"/"$base/fixture-install.sh"}
 one_liner=${one_liner/"$first_hop_sha"/"$fixture_sha"}
 # Emulate network and privilege only in this unit harness. Literal clean-env
 # entrypoints and root sudo are tested separately with real tool paths.
-one_liner=${one_liner/\/usr\/bin\/env -i HOME=\/ PATH=\/usr\/sbin:\/usr\/bin:\/sbin:\/bin \/bin\/bash -c/\/bin\/bash -c}
+prefix='/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-dumb}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c'
+[[ $one_liner == "$prefix "* ]] || { echo "MIRROR_TEST_FAIL: unexpected first-hop prefix" >&2; exit 1; }
+one_liner="/bin/bash -c${one_liner#"$prefix"}"
 # Execute an actual HTTPS fetch of the post-publication tampered bootstrap
 # with the prepublication trusted pin. No sudo/canonical execution allowed.
 raced_command=${one_liner/"$base/fixture-install.sh"/"$base/post-publication-tamper.sh"}
@@ -579,13 +605,13 @@ for failure_mode in canonical-oversize-known canonical-oversize-chunked \
         "$scratch/$failure_mode.err" ||
         { cat "$scratch/$failure_mode.err" >&2; echo 'MIRROR_TEST_FAIL: canonical bound guidance missing' >&2; exit 1; } ;;
     sums-oversize-chunked)
-      grep -Eq '(Mirror release asset exceeds the authenticated streaming-size limit|Required release file is unavailable on the HTTPS mirror)' "$scratch/$failure_mode.out" ||
+      grep -Eq 'stl installer \[FAILED\]: mirror_download_failed: SHA256SUMS' "$scratch/$failure_mode.out" ||
         { cat "$scratch/$failure_mode.out" >&2; echo 'MIRROR_TEST_FAIL: chunked sums bound missing' >&2; exit 1; } ;;
     manifest-oversize-known)
-      grep -q 'Required release file is unavailable on the HTTPS mirror' "$scratch/$failure_mode.out" ||
+      grep -Eq 'stl installer \[FAILED\]: mirror_download_failed: BUILD-MANIFEST.txt' "$scratch/$failure_mode.out" ||
         { cat "$scratch/$failure_mode.out" >&2; echo 'MIRROR_TEST_FAIL: manifest bound missing' >&2; exit 1; } ;;
     asset-tamper)
-      grep -q 'Release asset SHA256 mismatch' "$scratch/$failure_mode.out" ||
+      grep -Fq 'stl installer [FAILED]: checksum mismatch for' "$scratch/$failure_mode.out" ||
         { cat "$scratch/$failure_mode.out" >&2; echo 'MIRROR_TEST_FAIL: mirrored asset hash refusal missing' >&2; exit 1; } ;;
   esac
   [[ $(sha256sum "$STL_MIRROR_PREFIX/bin/stl" | awk '{print $1}') == "$before_old" &&
@@ -605,9 +631,9 @@ echo 'MIRROR_DOWNSTREAM_HTTPS_KNOWN_CHUNKED_AND_TAMPER_BOUNDS=PASS'
 if bash -c "$one_liner" > "$scratch/wrong.out" 2> "$scratch/wrong.err"; then
   echo 'MIRROR_TEST_FAIL: install incorrectly upgraded an existing version' >&2; exit 1
 fi
-grep -q '\[ACTION\].*v0.9.98.*v0.9.99.*mirror command with update' "$scratch/wrong.out" ||
+grep -q 'installed_version_mismatch: prior=v0.9.98 target=v0.9.99' "$scratch/wrong.out" ||
   { cat "$scratch/wrong.out" "$scratch/wrong.err"; echo 'MIRROR_TEST_FAIL: explicit mirror Update guidance missing' >&2; exit 1; }
-grep -q 'built-in Update menu requires GitHub' "$scratch/wrong.out" ||
+grep -q 'use an explicit update' "$scratch/wrong.out" ||
   { cat "$scratch/wrong.out" "$scratch/wrong.err"; echo 'MIRROR_TEST_FAIL: actionable installed-version error missing' >&2; exit 1; }
 [[ $(sha256sum "$STL_MIRROR_PREFIX/bin/stl" | awk '{print $1}') == "$before_old" ]] ||
   { echo 'MIRROR_TEST_FAIL: mistaken install changed existing binary' >&2; exit 1; }
@@ -641,7 +667,7 @@ printf '%064d  BUILD-MANIFEST.txt\n' 5 > "$scratch/www/releases/v0.9.99/SHA256SU
 if bash -c "$one_liner" > "$scratch/corrupt.out" 2> "$scratch/corrupt.err"; then
   echo 'MIRROR_TEST_FAIL: corrupted checksum manifest accepted' >&2; exit 1
 fi
-grep -q 'SHA256SUMS does not match' "$scratch/corrupt.out" ||
+grep -q 'mirror_checksum_mismatch:' "$scratch/corrupt.out" ||
   { cat "$scratch/corrupt.out" "$scratch/corrupt.err"; echo 'MIRROR_TEST_FAIL: checksum guidance missing' >&2; exit 1; }
 [[ ! -e "$STL_MIRROR_PREFIX/bin/stl" ]] ||
   { echo 'MIRROR_TEST_FAIL: checksum mismatch installed binary' >&2; exit 1; }
@@ -668,7 +694,7 @@ mv "$scratch/www/releases/v0.9.99/LICENSE" "$scratch/untampered-license"
 if bash -c "$one_liner" > "$scratch/missing.out" 2> "$scratch/missing.err"; then
   echo 'MIRROR_TEST_FAIL: missing mirrored asset accepted' >&2; exit 1
 fi
-grep -q 'Required release file is unavailable on the HTTPS mirror' "$scratch/missing.out" ||
+grep -Fq 'stl installer [FAILED]: mirror_download_failed: LICENSE' "$scratch/missing.out" ||
   { cat "$scratch/missing.out" "$scratch/missing.err"; echo 'MIRROR_TEST_FAIL: missing-asset guidance unavailable' >&2; exit 1; }
 [[ ! -e "$STL_MIRROR_PREFIX/bin/stl" ]] ||
   { echo 'MIRROR_TEST_FAIL: incomplete mirror created an executable' >&2; exit 1; }

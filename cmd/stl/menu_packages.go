@@ -379,9 +379,9 @@ func menuPrepareSelectedPackagesWithOps(input io.Reader, reader *bufio.Reader, o
 		}
 		prepCtx, done := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer done()
-		menuNotice(out, "INFO", "Canonical installer checking exact plan and host ownership; raw APT diagnostics are withheld from the menu.")
+		menuNotice(out, "INFO", "Checking the exact package plan and host ownership. Installer and APT details follow.")
 		var childOutput menuInstallerOutput
-		childStdout, childStderr := childOutput.streams()
+		childStdout, childStderr := childOutput.streamsVisible(out, errOut)
 		if err := ops.install(prepCtx, childStdout, childStderr, "prepare",
 			"--backends", selectedPackageBackends(selected), "--expected-missing", refreshed.missing,
 			"--expected-apt-plan", refreshed.aptInstall); err != nil {

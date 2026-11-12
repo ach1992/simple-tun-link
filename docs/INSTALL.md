@@ -143,17 +143,20 @@ host details. Provide redacted reason codes and relevant command exit
 statuses instead. A completed installer alone does not prove that live
 Links can reach their peers or survive reboot.
 
-The guided PREPARE and Update menus never forward raw APT, package-hook,
-Bash or child-installer stdout/stderr to the terminal. Instead they show
-a fixed reason category, the last **reported** stage (not proof of the
-actual host effects), the child exit code when available, and a
-read-only recovery check. Quick Install likewise suppresses raw download,
-syntax-check and installer diagnostics; only fixed progress messages and
-a process exit code are displayed. Do not treat missing terminal details
-as evidence that packages, vendor services or a swapped binary are intact.
-For detailed investigation, inspect trusted host state privately and
-redact any command output before sharing it. Do not enable verbose
-secret-bearing logs as a workaround for a failed operation.
+The guided PREPARE and Update menus forward authenticated canonical
+installer and APT stdout/stderr to the local operator **as it happens**,
+including download and dependency-resolution failures. They additionally
+show the last **reported** stage (not proof of host effects), the actual
+child exit code when available, a typed reason, and a read-only recovery
+check. Quick Install likewise preserves real download, Bash and installer
+errors instead of silently suppressing diagnostics. The canonical APT index
+refresh streams progress continuously while only retrying verified lists-lock
+failures; the read-only simulation streams full diagnostics but retains at
+most 64 KiB of validated machine-plan output in private temporary storage.
+Never infer that a transaction completed just because a status line printed.
+Review outputs before sharing them externally, since repository or host details
+may be sensitive; protected Link/PSK/Setup-Link material remains absent from
+general-purpose machine/status output.
 
 ## Read-only diagnosis of setup or persistence failure
 
@@ -618,7 +621,7 @@ Install/Update contract** stay stable, although the literal first-hop
 command was hardened to start with a clean `env -i` environment:
 
 ~~~sh
-/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl
+/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-dumb}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl
 ~~~
 
 To install a specific published Stable, append its tag to that same
@@ -627,12 +630,18 @@ entry point stays unchanged across releases. With no suffix, the immutable
 Latest Stable asset supplies its exact pinned default version.
 
 ~~~sh
-/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl v0.1.9
+/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-dumb}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl v0.1.9
 ~~~
 
 The literal official commands start via `/usr/bin/env -i` and an absolute
 `/bin/bash`: inherited `BASH_ENV`, exported shell functions, unsafe `PATH`
-and `curlrc` cannot alter the first-hop authentication. For deliberately
+and `curlrc` cannot alter the first-hop authentication. Explicit `TERM="${TERM:-dumb}"` carries the connected terminal type,
+and `${NO_COLOR+NO_COLOR=1}` carries the operator's ANSI opt-out only
+when it exists (an empty `NO_COLOR` also disables ANSI). Non-root
+post-success menu handoff explicitly restores that preference through
+`sudo`. No shell startup code, extra PATH entries or other caller
+environment are admitted into the privileged installer. On a noninteractive
+or `TERM=dumb` terminal, ANSI screen control is still not attempted. For deliberately
 configured HTTPS proxy or private CA access, insert only
 `HTTPS_PROXY=...`, `NO_PROXY=...`, and/or
 `CURL_CA_BUNDLE=/absolute/trusted/ca.pem` after `PATH=...` and before
@@ -683,7 +692,7 @@ installer-owned STL, **do not run install again**: use this equally fixed
 update command:
 
 ~~~sh
-/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl update
+/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-dumb}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl update
 ~~~
 
 The entire bootstrap download must succeed before it can execute; the private temporary file is removed even on error. This selects the unchanged canonical installer update transaction,

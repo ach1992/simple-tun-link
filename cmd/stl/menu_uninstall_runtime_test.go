@@ -53,9 +53,10 @@ func TestMenuCanonicalUninstallConsentPreflightAndStaleExit(t *testing.T) {
 			code := menuUninstallWithOps(input, bufio.NewReader(input), &out, &errOut,
 				&runtimeOptions{stateRoot: root}, ops)
 			rendered := out.String() + errOut.String()
+			actualInstallerDetail := strings.Contains(rendered, "private-token=DO_NOT_LEAK")
 			if code != tc.expectCode || calls != tc.wants ||
 				!strings.Contains(rendered, tc.contains) ||
-				strings.Contains(rendered, "DO_NOT_LEAK") ||
+				actualInstallerDetail != (tc.wants == 1) ||
 				strings.Contains(rendered, "private-key") {
 				t.Fatalf("case=%s code=%d installs=%d output=%q", tc.name, code, calls, rendered)
 			}

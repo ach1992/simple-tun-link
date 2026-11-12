@@ -35,7 +35,7 @@ stable_url='https://github.com/ach1992/simple-tun-link/releases/latest/download/
 # The first-hop command substitution must finish with curl exit 0 and
 # valid Bash syntax before it executes any part of the downloaded script.
 for line in "${published_commands[@]}"; do
-  [[ "$line" == '/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c '* &&
+  [[ "$line" == '/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-dumb}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c '* &&
      "$line" == *'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '* &&
      "$line" == *'/usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 '* &&
      "$line" == *' | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"'* &&
@@ -87,15 +87,18 @@ fi
 # ONLY the absolute sudo invocation in private copies. The real release
 # source and actual privileged root/sudo behavior are tested separately.
 sed -e 's|/usr/bin/sudo "${root_exec\[@\]}"|sudo "${root_exec[@]}"|' \
-  -e 's|exec /usr/bin/sudo /usr/local/bin/stl menu|exec sudo /usr/local/bin/stl menu|' "$STL_TEST_STABLE_BOOTSTRAP" > "$scratch/test-stable.sh"
+  -e 's|exec /usr/bin/sudo /usr/local/bin/stl menu|exec sudo /usr/local/bin/stl menu|' \
+  -e 's|exec /usr/bin/sudo /usr/bin/env NO_COLOR=1|exec sudo /usr/bin/env NO_COLOR=1|' "$STL_TEST_STABLE_BOOTSTRAP" > "$scratch/test-stable.sh"
 sed -e 's|/usr/bin/sudo "${root_exec\[@\]}"|sudo "${root_exec[@]}"|' \
-  -e 's|exec /usr/bin/sudo /usr/local/bin/stl menu|exec sudo /usr/local/bin/stl menu|' "$repo/scripts/quick-install.sh" > "$scratch/test-direct.sh"
+  -e 's|exec /usr/bin/sudo /usr/local/bin/stl menu|exec sudo /usr/local/bin/stl menu|' \
+  -e 's|exec /usr/bin/sudo /usr/bin/env NO_COLOR=1|exec sudo /usr/bin/env NO_COLOR=1|' "$repo/scripts/quick-install.sh" > "$scratch/test-direct.sh"
 grep -Fq 'sudo "${root_exec[@]}"' "$scratch/test-stable.sh"
 grep -Fq 'sudo "${root_exec[@]}"' "$scratch/test-direct.sh"
 # The clean first-hop PATH omits /usr/local/bin, where the core is installed.
 # Both root and sudo menu handoffs must use the absolute installed path.
 grep -Fq 'exec /usr/local/bin/stl menu' "$repo/scripts/quick-install.sh"
 grep -Fq 'exec /usr/bin/sudo /usr/local/bin/stl menu' "$repo/scripts/quick-install.sh"
+grep -Fq 'exec /usr/bin/sudo /usr/bin/env NO_COLOR=1' "$repo/scripts/quick-install.sh"
 export STL_TEST_STABLE_BOOTSTRAP="$scratch/test-stable.sh"
 export STL_TEST_QUICK_INSTALL_FILE="$scratch/test-direct.sh"
 # The production first-hop must start Bash only AFTER env -i and use trusted
@@ -103,7 +106,9 @@ export STL_TEST_QUICK_INSTALL_FILE="$scratch/test-direct.sh"
 # separate real loopback HTTPS tests execute the hardened literal entrypoint.
 prepare_mock_public_command() {
   local command=$1
-  command=${command/\/usr\/bin\/env -i HOME=\/ PATH=\/usr\/sbin:\/usr\/bin:\/sbin:\/bin \/bin\/bash -c/\/bin\/bash -c}
+  local prefix='/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-dumb}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c'
+  [[ $command == "$prefix "* ]] || return 1
+  command="/bin/bash -c${command#"$prefix"}"
   command=${command/\/usr\/bin\/curl -q /curl -q }
   printf '%s' "$command"
 }
@@ -207,9 +212,18 @@ CURL
 cat > "$scratch/bin/sudo" <<'SUDO'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "$#" -eq 5 && "$1" == /usr/bin/env && "$2" == NO_COLOR=1 &&
+      "$3" == TERM=* && "$4" == /usr/local/bin/stl && "$5" == menu ]]; then
+  printf '%s\n' 'sudo /usr/local/bin/stl menu NO_COLOR=1' >> "$STL_TEST_EXECUTIONS"
+  printf '%s\n' 'FAKE_STL_MENU_RENDERED'
+  printf 'FAKE_STL_TERM=%s\n' "${3#TERM=}"
+  printf '%s\n' 'FAKE_STL_NO_COLOR=present'
+  exit 0
+fi
 if [[ "$#" -eq 2 && "$1" == /usr/local/bin/stl && "$2" == menu ]]; then
   printf '%s\n' 'sudo /usr/local/bin/stl menu' >> "$STL_TEST_EXECUTIONS"
   printf '%s\n' 'FAKE_STL_MENU_RENDERED'
+  printf 'FAKE_STL_TERM=%s\n' "${TERM:-unset}"
   exit 0
 fi
 [[ ${1:-} == /usr/bin/env && ${2:-} == -i ]] || exit 85
@@ -331,10 +345,19 @@ for scenario in STL_TEST_DOWNLOAD_FAIL STL_TEST_SYNTAX_FAIL STL_TEST_OVERSIZE_DO
   else
     grep -q '1 MiB streaming limit' "$scratch/err" || { echo 'Missing streaming-byte-limit guidance' >&2; exit 1; }
   fi
-  if grep -q 'STL_TEST_.*SENSITIVE_SENTINEL' "$scratch/out" "$scratch/err"; then
-    echo "Untrusted $scenario diagnostic leaked to operator" >&2
-    exit 1
-  fi
+  # Transport errors and verified-installer syntax errors are operator
+  # diagnostics. Keep them visible without ever executing the rejected file.
+  case "$scenario" in
+    STL_TEST_DOWNLOAD_FAIL)
+      grep -q 'STL_TEST_DOWNLOAD_SENSITIVE_SENTINEL' "$scratch/err" ||
+        { echo 'Curl failure detail was suppressed.' >&2; exit 1; } ;;
+    STL_TEST_SYNTAX_FAIL)
+      grep -Eq 'unexpected EOF|syntax error' "$scratch/err" ||
+        { echo 'Bash syntax location/details were suppressed.' >&2; exit 1; } ;;
+    STL_TEST_OVERSIZE_DOWNSTREAM)
+      ! grep -q 'STL_TEST_.*SENSITIVE_SENTINEL' "$scratch/out" "$scratch/err" ||
+        { echo 'Oversize body unexpectedly reached terminal.' >&2; exit 1; } ;;
+  esac
 done
 [[ "$before" == "$(wc -c < "$STL_TEST_EXECUTIONS")" ]] || {
   echo 'Bad or partial installer passed privilege elevation.' >&2
@@ -380,12 +403,12 @@ if (( EUID != 0 )); then
       echo "Bootstrap falsely accepted failed canonical $action" >&2
       exit 1
     fi
-    grep -q 'did not complete (exit 42)' "$scratch/err" || { echo "Missing $action recovery guidance" >&2; exit 1; }
+    grep -q 'exited with status 42' "$scratch/err" || { echo "Missing $action exit-status guidance" >&2; exit 1; }
     grep -q 'retained recovery' "$scratch/err" || { echo "Missing uncertain-transaction guidance" >&2; exit 1; }
-    if grep -q 'STL_TEST_INSTALLER_SENSITIVE_SENTINEL' "$scratch/out" "$scratch/err"; then
-      echo "Raw canonical $action stdout/stderr leaked to operator" >&2
+    grep -q 'STL_TEST_INSTALLER_SENSITIVE_SENTINEL' "$scratch/out" || {
+      echo "Canonical $action diagnostic was lost to the operator." >&2
       exit 1
-    fi
+    }
     if grep -q 'FAKE_STL_MENU_RENDERED' "$scratch/out" || grep -q 'sudo /usr/local/bin/stl menu' "$STL_TEST_EXECUTIONS"; then
       echo "Failed $action launched STL menu" >&2
       exit 1
@@ -398,11 +421,14 @@ if (( EUID != 0 )); then
   if STL_TEST_SUDO_PUBLIC_ERROR=apt-index bash "$STL_TEST_QUICK_INSTALL_FILE" v0.1.0-rc.123 > "$scratch/out" 2> "$scratch/err"; then
     echo 'Classified APT failure was incorrectly accepted.' >&2; exit 1
   fi
-  grep -q 'APT could not refresh signed package indexes' "$scratch/out" ||
-    { echo 'APT stage guidance was lost.' >&2; exit 1; }
-  if grep -q 'SECRET_PRIVATE_REPO_URL' "$scratch/out" "$scratch/err"; then
-    echo 'APT error sanitizer leaked child diagnostics.' >&2; exit 1
-  fi
+  grep -q 'APT_INDEX_REFRESH failed; SECRET_PRIVATE_REPO_URL=DO_NOT_LEAK' "$scratch/out" || {
+    echo 'APT stage and actual failing source context were lost.' >&2
+    exit 1
+  }
+  grep -q 'exited with status 42' "$scratch/err" || {
+    echo 'APT failure omitted its real child exit status.' >&2
+    exit 1
+  }
 fi
 # The most important user journey: a bootstrap streamed to bash should
 # reattach fd 0 to the actual terminal after its install step and launch STL.
@@ -411,22 +437,67 @@ if command -v script >/dev/null 2>&1; then
     args=
     [[ $action != update ]] || args=update
     : > "$STL_TEST_EXECUTIONS"
-    PATH="$scratch/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    TERM=xterm-256color PATH="$scratch/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
       script -q -e -c "cat '$STL_TEST_QUICK_INSTALL_FILE' | bash -s -- v0.1.0-rc.123 native,wireguard $args" /dev/null \
       < /dev/null > "$scratch/pty-out" 2> "$scratch/pty-err"
     grep -q 'FAKE_STL_MENU_RENDERED' "$scratch/pty-out" || {
       echo "Quick $action did not launch menu under a restricted PATH." >&2
       exit 1
     }
+    grep -q 'FAKE_STL_TERM=xterm-256color' "$scratch/pty-out" || {
+      echo "Quick $action lost terminal type before the auto-menu handoff." >&2
+      exit 1
+    }
     grep -q 'sudo /usr/local/bin/stl menu' "$STL_TEST_EXECUTIONS" || {
       echo "Quick $action did not invoke the absolute installed STL menu." >&2
       exit 1
     }
+  # A present NO_COLOR opt-out (even an empty value) must survive the
+  # simulated sudo handoff into the installed program. An unset preference
+  # keeps the existing direct absolute-path menu behavior.
+  for flag in set empty; do
+    : > "$STL_TEST_EXECUTIONS"
+    if [[ $flag == set ]]; then
+      NO_COLOR=1 TERM=xterm-256color PATH="$scratch/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+        script -q -e -c "cat '$STL_TEST_QUICK_INSTALL_FILE' | bash -s -- v0.1.0-rc.123 native,wireguard update" /dev/null \
+        < /dev/null > "$scratch/no-color-pty-out" 2>"$scratch/no-color-pty-err"
+    else
+      NO_COLOR='' TERM=xterm-256color PATH="$scratch/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+        script -q -e -c "cat '$STL_TEST_QUICK_INSTALL_FILE' | bash -s -- v0.1.0-rc.123 native,wireguard" /dev/null \
+        < /dev/null > "$scratch/no-color-pty-out" 2>"$scratch/no-color-pty-err"
+    fi
+    grep -q 'FAKE_STL_NO_COLOR=present' "$scratch/no-color-pty-out" &&
+      grep -q 'FAKE_STL_TERM=xterm-256color' "$scratch/no-color-pty-out" &&
+      grep -q 'sudo /usr/local/bin/stl menu NO_COLOR=1' "$STL_TEST_EXECUTIONS" || {
+        echo "Quick $flag NO_COLOR menu handoff lost sudo opt-out." >&2
+        exit 1
+      }
+  done
   done
 fi
 # Execute all three published commands through the real short downloader.
 # Every action needs complete first-hop transport and syntax validation
 # before they can start any canonical installer or privileged action.
+# A clean first hop retains only the terminal capability required for
+# the post-success full-screen menu, never shell hooks or PATH overrides.
+observed_term=$(export TERM=xterm-256color; /usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-dumb}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c 'printf %s "$TERM"')
+[[ $observed_term == xterm-256color ]] || {
+  echo 'Clean first hop lost interactive terminal capabilities.' >&2
+  exit 1
+}
+observed_term=$(export TERM=dumb; /usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-dumb}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c 'printf %s "$TERM"')
+[[ $observed_term == dumb ]] || {
+  echo 'Clean first hop overrode explicit dumb terminal setting.' >&2
+  exit 1
+}
+# Test literal clean-env behavior, not just simulated sudo: optional NO_COLOR
+# must remain ABSENT when unset and PRESENT even if defined as empty.
+observed_color=$(unset NO_COLOR; /usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM=xterm-256color ${NO_COLOR+NO_COLOR=1} /bin/bash -c 'printf %s "${NO_COLOR+x}"')
+[[ -z $observed_color ]] || { echo 'Clean first hop invented NO_COLOR.' >&2; exit 1; }
+observed_color=$(NO_COLOR='' /bin/bash -c '/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM=xterm-256color ${NO_COLOR+NO_COLOR=1} /bin/bash -c '\''printf %s "${NO_COLOR+x}"'\''')
+[[ $observed_color == x ]] || { echo 'Clean first hop dropped present empty NO_COLOR.' >&2; exit 1; }
+observed_color=$(NO_COLOR=1 /bin/bash -c '/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM=xterm-256color ${NO_COLOR+NO_COLOR=1} /bin/bash -c '\''printf %s "$NO_COLOR"'\''')
+[[ $observed_color == 1 ]] || { echo 'Clean first hop dropped NO_COLOR=1.' >&2; exit 1; }
 for idx in 0 1 2; do
   published_cmd="${published_commands[$idx]}"
   mocked_cmd=$(prepare_mock_public_command "$published_cmd")
@@ -481,8 +552,13 @@ for release_case in network-error redirect truncated empty oversized mismatched-
     echo "Unverified release $release_case invoked the canonical installer." >&2
     exit 1
   }
-  if grep -q 'DO_NOT_LEAK' "$scratch/out" "$scratch/err"; then
-    echo "Release API error leaked private response." >&2
+  if [[ $release_case == network-error ]]; then
+    grep -Fq 'INTERNAL_CREDENTIAL=DO_NOT_LEAK' "$scratch/err" || {
+      echo 'Release API transport diagnostic was suppressed.' >&2
+      exit 1
+    }
+  elif grep -q 'DO_NOT_LEAK' "$scratch/out" "$scratch/err"; then
+    echo 'Unexpected release API body was forwarded.' >&2
     exit 1
   fi
 done
@@ -499,11 +575,15 @@ fi
 # and open STL's menu, for the permanently published install command.
 if command -v script >/dev/null 2>&1; then
   : > "$STL_TEST_EXECUTIONS"
-  PATH="$scratch/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+  TERM=xterm-256color PATH="$scratch/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
     script -q -e -c "$(prepare_mock_public_command "${published_commands[0]}")" /dev/null \
     < /dev/null > "$scratch/public-pty-out" 2>"$scratch/public-pty-err"
   grep -q 'FAKE_STL_MENU_RENDERED' "$scratch/public-pty-out" || {
     echo 'Public first-hop wrapper prevented automatic menu launch.' >&2
+    exit 1
+  }
+  grep -q 'FAKE_STL_TERM=xterm-256color' "$scratch/public-pty-out" || {
+    echo 'Public first-hop failed to preserve interactive TERM.' >&2
     exit 1
   }
   grep -q 'sudo /usr/local/bin/stl menu' "$STL_TEST_EXECUTIONS" || {

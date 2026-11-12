@@ -123,7 +123,7 @@ On an eligible Linux host that reaches **only your mirror**:
 **Fresh installation:**
 
 ```bash
-/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fsSs --proto "=https" --max-redirs 0 --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && { [ "$(/usr/bin/sha256sum < "$f")" = "TRUSTED_BOOTSTRAP_SHA256  -" ] || { echo "STL: mirror bootstrap SHA256 mismatch" >&2; exit 1; }; } && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl
+/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-dumb}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fsSs --proto "=https" --max-redirs 0 --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && { [ "$(/usr/bin/sha256sum < "$f")" = "TRUSTED_BOOTSTRAP_SHA256  -" ] || { echo "STL: mirror bootstrap SHA256 mismatch" >&2; exit 1; }; } && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl
 ```
 
 **Update of an existing installer-owned STL:** On an **already installed**
@@ -150,7 +150,7 @@ For **older installations** (including published `v0.1.22`), use the existing ge
 pinned `UPDATE_COMMAND` instead:
 
 ```bash
-/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fsSs --proto "=https" --max-redirs 0 --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && { [ "$(/usr/bin/sha256sum < "$f")" = "TRUSTED_BOOTSTRAP_SHA256  -" ] || { echo "STL: mirror bootstrap SHA256 mismatch" >&2; exit 1; }; } && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl update
+/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-dumb}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fsSs --proto "=https" --max-redirs 0 --connect-timeout 10 --max-time 45 https://stl.example.com/install.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && { [ "$(/usr/bin/sha256sum < "$f")" = "TRUSTED_BOOTSTRAP_SHA256  -" ] || { echo "STL: mirror bootstrap SHA256 mismatch" >&2; exit 1; }; } && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl update
 ```
 
 These examples require replacing `TRUSTED_BOOTSTRAP_SHA256` with the
@@ -161,6 +161,14 @@ digest in a trusted record, not a checksum fetched from the untrusted target
 mirror. All 64 hexadecimal characters must match. **Do not execute the
 placeholder as-is.** A replaced or compromised mirror first-hop script fails
 SHA256 before its first instruction executes.
+
+These generated commands preserve the invoking terminal's `TERM` and the
+**presence** of `NO_COLOR` for post-success menu presentation, including
+a non-root `sudo` handoff. If `NO_COLOR` was unset, the command does not
+invent it; an empty but present value still disables ANSI. Neither flag
+permits inheriting shell startup hooks, unrestricted PATH or other runtime
+environment into the root installer. A missing/dumb terminal type remains
+non-ANSI.
 
 The commands begin with `/usr/bin/env -i` before Bash, reject inherited
 `BASH_ENV`, exported functions and unsafe PATH lookups, and use the absolute

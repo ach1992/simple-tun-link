@@ -334,7 +334,8 @@ func TestMenuCompanionOfflineFallbackAndFailedInstallerNoRetry(t *testing.T) {
 	in = strings.NewReader("1\nINSTALL\n1\nINSTALL\n")
 	out.Reset()
 	if menuEnsureCompanion(in, bufio.NewReader(in), &out, s, ops) ||
-		*installs != 1 || strings.Contains(out.String(), "private-url-secret") ||
+		*installs != 1 || !strings.Contains(out.String(), "root installer private-url-secret") ||
+		strings.Contains(out.String(), "private-data-should-not-leak") ||
 		!strings.Contains(out.String(), "reconciled before a new attempt") {
 		t.Fatalf("failed canonical installer silently retried/leaked: %q", out.String())
 	}
