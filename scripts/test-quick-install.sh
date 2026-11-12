@@ -86,10 +86,16 @@ fi
 # The unit's non-root sudo/curl are intentionally simulated, so substitute
 # ONLY the absolute sudo invocation in private copies. The real release
 # source and actual privileged root/sudo behavior are tested separately.
-sed 's|/usr/bin/sudo "${root_exec\[@\]}"|sudo "${root_exec[@]}"|' "$STL_TEST_STABLE_BOOTSTRAP" > "$scratch/test-stable.sh"
-sed 's|/usr/bin/sudo "${root_exec\[@\]}"|sudo "${root_exec[@]}"|' "$repo/scripts/quick-install.sh" > "$scratch/test-direct.sh"
+sed -e 's|/usr/bin/sudo "${root_exec\[@\]}"|sudo "${root_exec[@]}"|' \
+  -e 's|exec /usr/bin/sudo /usr/local/bin/stl menu|exec sudo /usr/local/bin/stl menu|' "$STL_TEST_STABLE_BOOTSTRAP" > "$scratch/test-stable.sh"
+sed -e 's|/usr/bin/sudo "${root_exec\[@\]}"|sudo "${root_exec[@]}"|' \
+  -e 's|exec /usr/bin/sudo /usr/local/bin/stl menu|exec sudo /usr/local/bin/stl menu|' "$repo/scripts/quick-install.sh" > "$scratch/test-direct.sh"
 grep -Fq 'sudo "${root_exec[@]}"' "$scratch/test-stable.sh"
 grep -Fq 'sudo "${root_exec[@]}"' "$scratch/test-direct.sh"
+# The clean first-hop PATH omits /usr/local/bin, where the core is installed.
+# Both root and sudo menu handoffs must use the absolute installed path.
+grep -Fq 'exec /usr/local/bin/stl menu' "$repo/scripts/quick-install.sh"
+grep -Fq 'exec /usr/bin/sudo /usr/local/bin/stl menu' "$repo/scripts/quick-install.sh"
 export STL_TEST_STABLE_BOOTSTRAP="$scratch/test-stable.sh"
 export STL_TEST_QUICK_INSTALL_FILE="$scratch/test-direct.sh"
 # The production first-hop must start Bash only AFTER env -i and use trusted
@@ -201,8 +207,8 @@ CURL
 cat > "$scratch/bin/sudo" <<'SUDO'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "$#" -eq 2 && "$1" == stl && "$2" == menu ]]; then
-  printf '%s\n' 'sudo stl menu' >> "$STL_TEST_EXECUTIONS"
+if [[ "$#" -eq 2 && "$1" == /usr/local/bin/stl && "$2" == menu ]]; then
+  printf '%s\n' 'sudo /usr/local/bin/stl menu' >> "$STL_TEST_EXECUTIONS"
   printf '%s\n' 'FAKE_STL_MENU_RENDERED'
   exit 0
 fi
@@ -380,7 +386,7 @@ if (( EUID != 0 )); then
       echo "Raw canonical $action stdout/stderr leaked to operator" >&2
       exit 1
     fi
-    if grep -q 'FAKE_STL_MENU_RENDERED' "$scratch/out" || grep -q 'sudo stl menu' "$STL_TEST_EXECUTIONS"; then
+    if grep -q 'FAKE_STL_MENU_RENDERED' "$scratch/out" || grep -q 'sudo /usr/local/bin/stl menu' "$STL_TEST_EXECUTIONS"; then
       echo "Failed $action launched STL menu" >&2
       exit 1
     fi
@@ -401,16 +407,22 @@ fi
 # The most important user journey: a bootstrap streamed to bash should
 # reattach fd 0 to the actual terminal after its install step and launch STL.
 if command -v script >/dev/null 2>&1; then
-  script -q -e -c "cat '$STL_TEST_QUICK_INSTALL_FILE' | bash -s -- v0.1.0-rc.123 native,wireguard" /dev/null \
-    < /dev/null > "$scratch/pty-out" 2> "$scratch/pty-err"
-  grep -q 'FAKE_STL_MENU_RENDERED' "$scratch/pty-out" || {
-    echo 'Quick installer did not launch menu in the controlling PTY.' >&2
-    exit 1
-  }
-  grep -q 'sudo stl menu' "$STL_TEST_EXECUTIONS" || {
-    echo 'Quick installer did not invoke STL menu after verifying install.' >&2
-    exit 1
-  }
+  for action in install update; do
+    args=
+    [[ $action != update ]] || args=update
+    : > "$STL_TEST_EXECUTIONS"
+    PATH="$scratch/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+      script -q -e -c "cat '$STL_TEST_QUICK_INSTALL_FILE' | bash -s -- v0.1.0-rc.123 native,wireguard $args" /dev/null \
+      < /dev/null > "$scratch/pty-out" 2> "$scratch/pty-err"
+    grep -q 'FAKE_STL_MENU_RENDERED' "$scratch/pty-out" || {
+      echo "Quick $action did not launch menu under a restricted PATH." >&2
+      exit 1
+    }
+    grep -q 'sudo /usr/local/bin/stl menu' "$STL_TEST_EXECUTIONS" || {
+      echo "Quick $action did not invoke the absolute installed STL menu." >&2
+      exit 1
+    }
+  done
 fi
 # Execute all three published commands through the real short downloader.
 # Every action needs complete first-hop transport and syntax validation
@@ -487,12 +499,14 @@ fi
 # and open STL's menu, for the permanently published install command.
 if command -v script >/dev/null 2>&1; then
   : > "$STL_TEST_EXECUTIONS"
-  script -q -e -c "$(prepare_mock_public_command "${published_commands[0]}")" /dev/null     < /dev/null > "$scratch/public-pty-out" 2>"$scratch/public-pty-err"
+  PATH="$scratch/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    script -q -e -c "$(prepare_mock_public_command "${published_commands[0]}")" /dev/null \
+    < /dev/null > "$scratch/public-pty-out" 2>"$scratch/public-pty-err"
   grep -q 'FAKE_STL_MENU_RENDERED' "$scratch/public-pty-out" || {
     echo 'Public first-hop wrapper prevented automatic menu launch.' >&2
     exit 1
   }
-  grep -q 'sudo stl menu' "$STL_TEST_EXECUTIONS" || {
+  grep -q 'sudo /usr/local/bin/stl menu' "$STL_TEST_EXECUTIONS" || {
     echo 'Public first-hop wrapper failed controlling-TTY handoff.' >&2
     exit 1
   }

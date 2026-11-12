@@ -348,12 +348,12 @@ STL_ROOT_SNAPSHOT
     rmdir -- "$workdir"
     trap - EXIT
     if (( EUID == 0 )); then
-      exec stl menu <&"$stl_menu_tty" >&"$stl_menu_tty" 2>&1
+      exec /usr/local/bin/stl menu <&"$stl_menu_tty" >&"$stl_menu_tty" 2>&1
     else
-      exec sudo stl menu <&"$stl_menu_tty" >&"$stl_menu_tty" 2>&1
+      exec /usr/bin/sudo /usr/local/bin/stl menu <&"$stl_menu_tty" >&"$stl_menu_tty" 2>&1
     fi
   fi
-  echo "[INFO] No interactive terminal detected. Start it later with: sudo stl menu"
+  echo "[INFO] No interactive terminal detected. Start it later with: /usr/bin/sudo /usr/local/bin/stl menu"
 }
 # Direct source execution is official-only. Published official and self-hosted
 # scripts replace ONLY this final invocation with constant, reviewed pins.
