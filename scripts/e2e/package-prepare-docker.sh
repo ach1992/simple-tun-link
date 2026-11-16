@@ -184,7 +184,7 @@ cat > "$signer_bin" <<MOCK
 #!/bin/bash
 # Only the STL direct official-release verification call is denied; preserve
 # unrelated APT verifier behavior in the disposable package-plan fixture.
-if [[ \$1 == --quiet && \$2 == --keyring ]]; then
+if [[ \$1 == --quiet && \$2 == --status-fd && \$3 == 3 && \$4 == --keyring ]]; then
   touch /tmp/stl-e2e-gpgv-denied
   exit 92
 fi

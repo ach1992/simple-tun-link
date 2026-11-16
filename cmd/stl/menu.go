@@ -96,6 +96,13 @@ func localAddressCandidate() string {
 }
 
 func readMenuAnswer(in *bufio.Reader) (string, error) {
+	return readMenuAnswerBounded(in, menuInputLimit)
+}
+
+// Short numeric/confirmation choices remain bounded, but update sources
+// must accommodate valid DNS names and Linux filesystem paths. Keep the
+// bounds tied to the field and OS instead of a global 128-byte UI ceiling.
+func readMenuAnswerBounded(in *bufio.Reader, maxBytes int) (string, error) {
 	answer := make([]byte, 0, 32)
 	overflow := false
 	for count := 0; count < 64*1024; count++ {
@@ -115,7 +122,7 @@ func readMenuAnswer(in *bufio.Reader) (string, error) {
 			}
 			return strings.TrimSpace(string(answer)), nil
 		}
-		if len(answer) < menuInputLimit {
+		if len(answer) < maxBytes {
 			answer = append(answer, next)
 		} else {
 			overflow = true
