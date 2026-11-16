@@ -196,7 +196,7 @@ if bash /mnt/stl-install.sh prepare --backends native,wireguard \
   fail unsigned_candidate_index_was_accepted
 fi
 [[ -e /tmp/stl-e2e-gpgv-denied ]] || fail candidate_signer_was_not_invoked
-grep -q "APT candidate InRelease is not signed by the distribution archive" /tmp/stl-e2e-source-error ||
+grep -q "APT candidate InRelease has no valid distribution archive signature or contains an invalid signature" /tmp/stl-e2e-source-error ||
   { sed -n "1,30p" /tmp/stl-e2e-source-error >&2; fail unsigned_candidate_wrong_refusal; }
 mv -- /tmp/stl-e2e-gpgv-original "$signer_bin"
 echo "APT_NATIVE_WG_UNSIGNED_CANDIDATE_REFUSED=PASS"
