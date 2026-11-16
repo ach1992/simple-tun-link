@@ -22,10 +22,14 @@ NAT or foreign VPNs, and no transport works through every network.
 
 ## Requirements
 
-- Two Linux servers you administer. The installer supports Ubuntu 22.04+ or
-  Debian 11+, Linux kernel 5.4+, iproute2 5.1+ and AMD64 (`x86_64`) or ARM64
-  (`aarch64`); systemd provides reboot restoration. Check each backend's
-  additional capabilities in [supported systems](docs/SUPPORTED-ENVIRONMENTS.md).
+- Two Linux servers you administer. The installer supports Debian/Ubuntu
+  signed APT environments without an arbitrary numeric OS-version floor.
+  Maintained release testing starts with kernel 5.4+ and iproute2 5.1+;
+  actual backend/kernel capabilities, rather than version strings alone,
+  determine availability. Published binaries target AMD64 (`x86_64`) and
+  ARM64 (`aarch64`); systemd provides reboot restoration. See
+  [supported environments](docs/SUPPORTED-ENVIRONMENTS.md) for conditional
+  requirements, compatibility scope, and older-release caveats.
 - Root privileges (or authorized `sudo`) for local network changes.
 - An actually reachable public/underlay path for the selected transport.
 - An accessible **signed** Debian/Ubuntu APT repository only when selected OS

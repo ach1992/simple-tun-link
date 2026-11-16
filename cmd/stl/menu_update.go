@@ -21,6 +21,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/version"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -427,7 +428,10 @@ func menuUpdatePinned(input io.Reader, reader *bufio.Reader, out, errOut io.Writ
 		label = "Trusted HTTPS mirror URL (https://HOST/install.sh)"
 	}
 	fmt.Fprintf(out, "%s (Enter cancels): ", label)
-	source, err := readMenuAnswer(reader)
+	// A complete Linux path or real DNS mirror hostname may exceed the
+	// short menu-choice limit. The validated source still cannot exceed
+	// the platform path bound, and the selected updater revalidates it.
+	source, err := readMenuAnswerBounded(reader, unix.PathMax)
 	if err != nil || source == "" || source == "0" || strings.EqualFold(source, "q") {
 		menuNotice(out, "INFO", "Update cancelled. Nothing changed.")
 		return 0

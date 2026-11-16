@@ -330,7 +330,7 @@ EOF
       >/tmp/stl-forged-preview 2>/tmp/stl-forged-stderr; then
     fail forged_origin_accepted_as_official_distro
   fi
-  grep -q 'not signed by the distribution archive' /tmp/stl-forged-stderr ||
+  grep -q 'APT candidate InRelease has no valid distribution archive signature or contains an invalid signature' /tmp/stl-forged-stderr ||
     fail forged_origin_not_rejected_by_signer
   [[ ! -e /usr/sbin/charon-systemd ]] || fail forged_origin_changed_packages
   [[ ! -e /var/lib/simple-tun-link/ipsec ]] || fail forged_origin_started_private_service

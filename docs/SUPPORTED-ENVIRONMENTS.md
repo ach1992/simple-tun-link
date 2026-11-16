@@ -7,14 +7,17 @@ Runtime preflight is authoritative for actual backend capability on a host.
 ## Initial platform policy
 
 - Linux only.
-- Installer distro floor: Ubuntu 22.04+ and Debian 11+ (Debian/Ubuntu ID
-  values, not guesses from ID_LIKE). Unknown derivatives fail explicitly;
-  repositories are never rewritten automatically. The requested Debian 11
-  compatibility floor remains despite its security LTS expiry (2026-08-31).
-  **Working maintained/signed APT repositories are a precondition** on
-  Debian 11: default Bullseye security package indexes can return HTTP 404
-  after LTS expiry. STL refuses blind repository rewrites or disabling APT
-  signature/expiry protection. Prefer Debian 12+ or suitable ELTS support.
+- Installer package-manager integration: Linux hosts identifying as Debian or
+  Ubuntu and supplying functioning, authenticated APT/dpkg tooling. No numeric
+  OS-release floor is imposed: signed repository availability, requested
+  package availability and per-backend runtime preflight determine whether an
+  installation is possible. Other distributions and unverified derivatives
+  are not silently treated as compatible with Debian/Ubuntu package names.
+  Old/EOL releases may no longer have working signed default repositories or
+  security maintenance; acceptance is not a promise of vendor support and STL
+  never rewrites repositories, disables signature verification or ignores APT
+  expiry. Prefer a maintained distribution, or operator-managed supported
+  extended-security archives where applicable.
 - Selected prerequisite planning: native GRE/IPIP/L2TPv3 installs/verifies
   iproute2, iptables and kmod (module introspection and explicit on-demand
   module loading). Optional WireGuard selects wireguard-tools; optional
@@ -24,13 +27,20 @@ Runtime preflight is authoritative for actual backend capability on a host.
   signed APT sources. IPsec package/service preparation is separately
   gated by observed host ownership and explicit operator approval;
   direct installer invocations must not bypass that gate.
-- Baseline kernel: **5.4 or newer**.
-- Baseline iproute2: **5.1 or newer**.
+- Initial tested kernel baseline: **5.4 or newer**; Linux tunnel features
+  on other kernels are assessed per backend rather than accepted or rejected
+  solely by a parsed kernel version.
+- Initial tested iproute2 baseline: **5.1 or newer**; actual commands and
+  kernel readback are required instead of trusting a version number.
 - Initial release architectures: **linux/amd64** and **linux/arm64**.
 - systemd is the initial persistence/service target, but STL must not require or replace systemd-networkd, NetworkManager, Netplan, or another primary host network manager.
 - On systemd hosts, persistence file operations require a protected root-owned unit-directory chain and Linux filesystem support for atomic no-replace creation and renameat2 guarded exchange/retirement; unsupported filesystem primitives fail explicitly rather than using an unsafe overwrite fallback.
 
-The kernel floor is intentionally newer than the first XFRM-interface kernel. strongSwan documents XFRM interfaces from Linux 4.19/iproute2 5.1 and an inbound-policy limitation before Linux 5.1; the 5.4 floor gives v0.1 a simpler supported baseline while remaining broadly available.
+The tested kernel baseline is newer than the first XFRM-interface kernel.
+strongSwan documents XFRM interfaces from Linux 4.19/iproute2 5.1 and an
+inbound-policy limitation before Linux 5.1. These are feature-specific
+compatibility facts, not a blanket installer prohibition on other versions.
+Release acceptance still exercises explicitly recorded maintained hosts.
 
 ## Capability-based backends
 

@@ -22,7 +22,8 @@ Releases, PRs and dated Issue evidence, not this current operator runbook.
 
 - Supported installer environments are listed in
   [SUPPORTED-ENVIRONMENTS.md](SUPPORTED-ENVIRONMENTS.md): Linux amd64/arm64,
-  initially Ubuntu 22.04+ and Debian 11+, with actual capability checks.
+  Debian/Ubuntu with signed APT and actual capability checks; numeric
+  distro version alone does not determine eligibility.
 - The supported installed executable is the root-owned
   `/usr/local/bin/stl`. `/usr/local/bin/stlink` is an exact relative
   alias to that executable, not a separate product. The installer
@@ -637,12 +638,15 @@ Latest Stable asset supplies its exact pinned default version.
 The literal official commands start via `/usr/bin/env -i` and an absolute
 `/bin/bash`: inherited `BASH_ENV`, exported shell functions, unsafe `PATH`
 and `curlrc` cannot alter the first-hop authentication. Explicit `TERM="${TERM:-dumb}"` carries the connected terminal type,
-and `${NO_COLOR+NO_COLOR=1}` carries the operator's ANSI opt-out only
-when it exists (an empty `NO_COLOR` also disables ANSI). Non-root
-post-success menu handoff explicitly restores that preference through
-`sudo`. No shell startup code, extra PATH entries or other caller
-environment are admitted into the privileged installer. On a noninteractive
-or `TERM=dumb` terminal, ANSI screen control is still not attempted. For deliberately
+and `${NO_COLOR+NO_COLOR=1}` carries the operator's color opt-out only
+when it exists (an empty `NO_COLOR` also disables styling). A real
+interactive terminal with usable `TERM` still clears/redraws each menu frame
+in monochrome mode; only `STL_NO_CLEAR=1`, redirected output and `TERM=dumb`
+prevent cursor/screen controls. Non-root post-success menu handoff explicitly
+restores the color preference through `sudo`. No shell startup code, extra
+PATH entries or other caller environment are admitted into the privileged
+installer. On a noninteractive or `TERM=dumb` terminal, ANSI screen control
+is not attempted. For deliberately
 configured HTTPS proxy or private CA access, insert only
 `HTTPS_PROXY=...`, `NO_PROXY=...`, and/or
 `CURL_CA_BUNDLE=/absolute/trusted/ca.pem` after `PATH=...` and before
