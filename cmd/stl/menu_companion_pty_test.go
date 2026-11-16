@@ -172,8 +172,8 @@ func TestWSSAndQUICCreateScreensUseSameClearContract(t *testing.T) {
 					t.Fatalf("missing full-screen method header: %q", seen)
 				}
 				hasClear := strings.Contains(seen, "\x1b[2J\x1b[H")
-				if hasClear == disableColor || disableColor && strings.Contains(seen, "\x1b") {
-					t.Fatalf("clear/NO_COLOR mismatch: noColor=%v content=%q", disableColor, seen)
+				if !hasClear || disableColor && strings.Contains(strings.ReplaceAll(seen, "\x1b[2J\x1b[H", ""), "\x1b") {
+					t.Fatalf("clean redraw/color preference mismatch: noColor=%v content=%q", disableColor, seen)
 				}
 				select {
 				case code := <-done:

@@ -72,9 +72,7 @@ func packageInventoryFailure(stderr string, ctxErr error) error {
 	case ctxErr != nil:
 		issue.reason = "requirements_check_interrupted"
 		issue.next = "Read-only inspection was interrupted. Reopen Create tunnel when the host is ready."
-	case strings.Contains(stderr, "unsupported distribution:"),
-		strings.Contains(stderr, "Ubuntu 22.04 or later is required"),
-		strings.Contains(stderr, "Debian 11 or later is required"),
+	case strings.Contains(stderr, "unsupported package-manager distribution:"),
 		strings.Contains(stderr, "OS release file is unreadable"),
 		strings.Contains(stderr, "invalid Ubuntu version"),
 		strings.Contains(stderr, "invalid Debian version"):

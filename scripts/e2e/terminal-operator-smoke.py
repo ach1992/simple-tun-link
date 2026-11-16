@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real installed-STL PTY, 38-column, NO_COLOR, cancel-only operator smoke.
+"""Real installed-STL PTY, 38-column, monochrome redraw, cancel-only smoke.
 
 This is a non-root, non-mutating acceptance seam. It never confirms a Link,
 installs packages, removes State, changes network configuration or uses secrets.
@@ -130,9 +130,9 @@ def main() -> int:
         child.wait(timeout=5)
         if child.returncode != 0:
             raise AssertionError(f"menu exited with {child.returncode}")
-        if b"\x1b" in transcript:
-            raise AssertionError("NO_COLOR permitted ANSI/clear screen")
-        print("INSTALLED_38COL_NO_COLOR_NO_ANSI=PASS")
+        if b"\x1b[2J\x1b[H" not in transcript or b"\x1b" in transcript.replace(b"\x1b[2J\x1b[H", b""):
+            raise AssertionError("NO_COLOR did not preserve an unstyled menu redraw")
+        print("INSTALLED_38COL_NO_COLOR_CLEAN_REDRAW=PASS")
     finally:
         if child.poll() is None:
             child.kill()

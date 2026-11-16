@@ -16,8 +16,8 @@ plan() {
 bad() {
   if "$@" > "$root/out" 2> "$root/err"; then fail "unsafe or unsupported input accepted"; fi
 }
-for distro in 'ubuntu 22.04' 'ubuntu 22.10' 'ubuntu 24.04' 'ubuntu 26.04' \
-              'debian 11' 'debian 12' 'debian 13' 'debian 14'; do
+for distro in 'ubuntu 20.04' 'ubuntu 22.04' 'ubuntu 22.10' 'ubuntu 24.04' 'ubuntu 26.04' \
+              'debian 10' 'debian 11' 'debian 12' 'debian 13' 'debian 14'; do
   read -r os version <<< "$distro"
   write_os "$os" "$version"
   plan native
@@ -36,14 +36,11 @@ for distro in 'ubuntu 22.04' 'ubuntu 22.10' 'ubuntu 24.04' 'ubuntu 26.04' \
   plan all
   grep -qx "packages=iproute2 iptables kmod wireguard-tools nftables charon-systemd strongswan-swanctl libstrongswan-standard-plugins" "$root/out" ||
     fail "wrong all-backend package list on $distro"
-  if [[ $distro == 'debian 11' ]]; then
-    grep -q 'Debian 11 LTS ended 2026-08-31' "$root/err" || fail 'Debian 11 security EOL warning missing'
-  fi
 done
 
-# Fail early for unsupported/old systems rather than pretending APT works.
-for distro in 'ubuntu 20.04' 'ubuntu 22.03' 'debian 10' \
-              'debian 9' 'fedora 42' 'linuxmint 22'; do
+# Do not guess capability from a numeric release. Unsupported package
+# managers and malformed OS identities still fail before package effects.
+for distro in 'fedora 42' 'linuxmint 22'; do
   read -r os version <<< "$distro"
   write_os "$os" "$version"
   bad bash "$installer" requirements --backends all --os-release-file "$root/os-release"
@@ -94,6 +91,40 @@ if [[ $EUID -ne 0 ]]; then
   bad bash "$installer" prepare --backends wireguard
 fi
 [[ ! -e "$root/prefix/bin/stl" ]] || fail 'package preparation modified offline installation'
+
+# Exercise the real GPGV machine-status parser directly. InRelease may carry
+# both an official archive signature and a newer unknown co-signature. Never
+# accept an unknown-only, malformed, bad, revoked or expired signer.
+sed -n '/^apt_archive_signature_status_valid() {/,/^}/p' "$installer" > "$root/stl-archive-verify.sh"
+[[ $(grep -c '^apt_archive_signature_status_valid() {' "$root/stl-archive-verify.sh") == 1 ]] ||
+  fail 'canonical GPGV status parser unavailable'
+# shellcheck source=/dev/null
+source "$root/stl-archive-verify.sh"
+key=78DBA3BC47EF2265
+{
+  printf '[GNUPG:] GOODSIG 6ED0E7B82643E131 Debian Archive Automatic Signing Key\n'
+  printf '[GNUPG:] VALIDSIG 4CB50190207B4758A3F73A796ED0E7B82643E131 2026-07-11 1783765031 0 4 0 1 8 01 B8B80B5B623EAB6AD8775C45B7C5D7D6350947F8\n'
+  printf '[GNUPG:] ERRSIG %s 1 8 01 1783765032 9 B8E5F13176D2A7A75220028078DBA3BC47EF2265\n' "$key"
+  printf '[GNUPG:] NO_PUBKEY %s\n' "$key"
+  printf '[GNUPG:] VALIDSIG 4D64FEC119C2029067D6E791F8D2585B8783D481 2026-07-11 1783765141 0 4 0 22 8 01 4D64FEC119C2029067D6E791F8D2585B8783D481\n'
+} > "$root/gpgv-status"
+apt_archive_signature_status_valid 2 "$root/gpgv-status" || fail 'real Debian co-signed archive rejected'
+apt_archive_signature_status_valid 0 "$root/gpgv-status" || fail 'verified co-signed archive rejected with success code'
+bad_status="$root/gpgv-status"
+printf '[GNUPG:] ERRSIG %s 1 8 01 1783765032 9 %s\n[GNUPG:] NO_PUBKEY %s\n' "$key" "$key" "$key" > "$bad_status"
+if apt_archive_signature_status_valid 2 "$bad_status"; then fail 'unknown-only signer accepted'; fi
+printf '[GNUPG:] VALIDSIG 4CB50190207B4758A3F73A796ED0E7B82643E131\n' > "$bad_status"
+if apt_archive_signature_status_valid 2 "$bad_status"; then fail 'unexpected verifier error accepted'; fi
+if apt_archive_signature_status_valid 1 "$bad_status"; then fail 'bad verifier exit accepted'; fi
+for bad_code in BADSIG REVKEYSIG EXPKEYSIG EXPSIG KEYREVOKED KEYEXPIRED SIGEXPIRED NODATA FAILURE ERROR; do
+  printf '[GNUPG:] VALIDSIG 4CB50190207B4758A3F73A796ED0E7B82643E131\n[GNUPG:] %s AAAAAAAA\n' "$bad_code" > "$bad_status"
+  if apt_archive_signature_status_valid 0 "$bad_status"; then fail "$bad_code signer accepted"; fi
+done
+printf '[GNUPG:] VALIDSIG 4CB50190207B4758A3F73A796ED0E7B82643E131\n[GNUPG:] ERRSIG %s 1 8 01 1783765032 4 %s\n' "$key" "$key" > "$bad_status"
+if apt_archive_signature_status_valid 2 "$bad_status"; then fail 'unknown non-missing signer failure accepted'; fi
+printf '[GNUPG:] VALIDSIG 4CB50190207B4758A3F73A796ED0E7B82643E131\n[GNUPG:] ERRSIG %s 1 8 01 1783765032 9 %s\n' "$key" "$key" > "$bad_status"
+if apt_archive_signature_status_valid 2 "$bad_status"; then fail 'unpaired NO_PUBKEY accepted'; fi
+echo 'APT_OFFICIAL_COSIGNATURE_MISSING_KEY_AND_INVALID_SIGNER_GATES=PASS'
 
 # Exercise the ACTUAL canonical function, extracted verbatim without running
 # the installer or mutating the host. A Go doctor query can leave a harmless
@@ -383,4 +414,4 @@ done
 unset -f apt-get apt_sources_must_be_authenticated apt_verify_distro_candidates package_installed
 printf 'APT_SIMULATION_BOUNDED_CAPTURE_AND_FULL_STDOUT_STDERR=PASS\n'
 
-printf 'Installer requirements checks PASS (Ubuntu 22.04+, Debian 11+, package plans, unsafe inputs, EOL).\n'
+printf 'Installer requirements checks PASS (capability-based Debian/Ubuntu, signed GPGV status, package plans, unsafe inputs).\n'

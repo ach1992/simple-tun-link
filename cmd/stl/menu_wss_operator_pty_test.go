@@ -20,6 +20,7 @@ import (
 // a genuine PTY, not merely a prebuffered string, drives and cancels the path.
 func TestWSSGuidedPTYShowsNextPromptAndCancelsWithoutState(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
+	t.Setenv("TERM", "xterm")
 	workspace := t.TempDir()
 	root := filepath.Join(workspace, "absent-state")
 	binary := filepath.Join(workspace, "pinned-helper")
@@ -80,6 +81,7 @@ func TestWSSGuidedMissingCompanionGivesBoundedActionableMessage(t *testing.T) {
 // terminal. Cancel before YES: no credential or host-resource mutation is allowed.
 func TestWSSGuidedRealPTYDirectionPortRetryReviewAndCancel(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
+	t.Setenv("TERM", "xterm")
 	workspace := t.TempDir()
 	root := filepath.Join(workspace, "absent-state")
 	binary := filepath.Join(workspace, "pinned-helper")
@@ -143,8 +145,9 @@ func TestWSSGuidedRealPTYDirectionPortRetryReviewAndCancel(t *testing.T) {
 			t.Fatalf("narrow WSS review missing %q: %q", marker, review)
 		}
 	}
-	if strings.Contains(review, "\x1b") {
-		t.Fatalf("NO_COLOR WSS review contained ANSI: %q", review)
+	if !strings.Contains(review, "\x1b[2J\x1b[H") ||
+		strings.Contains(strings.ReplaceAll(review, "\x1b[2J\x1b[H", ""), "\x1b") {
+		t.Fatalf("NO_COLOR WSS review was not a monochrome clean redraw: %q", review)
 	}
 	if _, err := io.WriteString(master, "\n"); err != nil {
 		t.Fatal(err)

@@ -153,17 +153,21 @@ func TestMenuActionSemanticsAndExactCopyableTokens(t *testing.T) {
 }
 
 func TestMenuPresentationTermAndColorGates(t *testing.T) {
-	_, slave := openMenuPTY(t)
+	master, slave := openMenuPTY(t)
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("STL_NO_CLEAR", "0")
-	// Presence of NO_COLOR, even empty, must disable ALL ANSI,
-	// including visible-screen clearing and cursor repositioning.
+	// NO_COLOR suppresses styling, not the terminal's ability to replace
+	// the previous menu frame with a clean full-screen redraw.
 	t.Setenv("NO_COLOR", "")
-	if menuColorEnabled(slave) || menuEscapeCapable(slave) {
-		t.Fatal("NO_COLOR permitted ANSI screen control or semantic color")
+	if menuColorEnabled(slave) || !menuEscapeCapable(slave) {
+		t.Fatal("NO_COLOR suppressed terminal redraw or allowed semantic color")
+	}
+	menuScreen(slave, "Monochrome")
+	if seen := readMenuPTYUntil(t, master, "MONOCHROME"); !strings.Contains(seen, "\x1b[2J\x1b[H") || strings.Contains(seen, "\x1b[1;") {
+		t.Fatalf("NO_COLOR did not redraw a monochrome menu: %q", seen)
 	}
 	if got := menuPaint(slave, menuRed, "FAILED"); got != "FAILED" {
-		t.Fatalf("NO_COLOR produced ANSI: %q", got)
+		t.Fatalf("NO_COLOR produced styling: %q", got)
 	}
 	t.Setenv("TERM", "dumb")
 	if menuEscapeCapable(slave) || menuColorEnabled(slave) {

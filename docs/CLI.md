@@ -167,8 +167,9 @@ encapsulations/IPsec remain discoverable.
 - The interface presents short, actionable errors with distinguished
   missing, unknown, foreign and partly-mutated outcomes; no automatic
   retries of uncertain host effects. Color is semantic only. Preserve
-  `NO_COLOR`, `TERM=dumb`, redirected output, exact copyable opaque
-  values, and no secret-bearing or ANSI-contaminated machine output.
+  `NO_COLOR` (no styling without disabling TTY screen replacement),
+  `TERM=dumb` (no ANSI), redirected output, exact copyable opaque values,
+  and no secret-bearing or ANSI-contaminated machine output.
   `STL_NO_CLEAR=1` retains an append-only interactive display for
   troubleshooting.
 - An installed release implementing `stl update` offers short, explicit
