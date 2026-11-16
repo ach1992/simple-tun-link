@@ -260,7 +260,7 @@ stl version [--json]
 stl link list [--json]
 stl link status <link-id> [--json]
 stl link diagnose <link-id> [--mtu <bytes>] [--json]
-stl link diagnose --all [--timeout <duration>] [--parallel <1..4>] [--json]
+stl link diagnose --all [--timeout <duration>] [--parallel <positive-count>] [--json]
 stl link throughput <link-id> --confirm <link-id> [--seconds <1..10>] [--json]
 
 stl link preview --stdin [--json]
@@ -572,10 +572,10 @@ stable, ordered saved-State inventory and independent Link checks;
 `--timeout` accepts a positive Go duration such as `10m`
 and starts before inventory loading. Each Link has a bounded
 probe budget; there is **no arbitrary Link-count cap**. The optional
-`--parallel 1..4` (default `1`) observes up to four **independent**
-Links concurrently using the same saved-State snapshot and overall
-`--timeout`. This limits concurrent diagnostic subprocesses, **not**
-the number of Links. Results always remain sorted by Link ID regardless
+`--parallel <positive-count>` (default `1`) observes up to the requested
+number of **independent** Links concurrently using the same saved-State
+snapshot and overall `--timeout`. Actual workers never exceed the number of
+Links in that verified snapshot; this is not a product-imposed quota. Results always remain sorted by Link ID regardless
 of completion order. More concurrent probes can increase short-lived
 host/network load; no Link/route/firewall/service is changed.
 If a run is interrupted, incomplete or unprocessed Links remain
@@ -676,7 +676,7 @@ and transfer byte counts separately; process readiness alone cannot attest
 mTLS or application delivery. The generic `link diagnose <id>` now sends **five** bounded
 owner-scoped private-IP ICMP probes for verified managed WSS Links.
 `link status <id>` verifies local WSS helper/guard/WG ownership and
-counters without pinging; `link diagnose --all [--parallel 1..4]`
+counters without pinging; `link diagnose --all [--parallel <positive-count>]`
 reports measured WSS peer replies independently of any other Links.
 WSS **PMTU is not measured** or guessed from Native WireGuard
 overhead; an explicit WSS `--mtu` attempt is unsupported.
