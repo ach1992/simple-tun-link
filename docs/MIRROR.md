@@ -1,8 +1,10 @@
 # Self-hosted HTTPS mirror (no GitHub access on the destination)
 
 An STL mirror is a **static directory** hosted on an operator-controlled HTTPS
-domain, for example `https://stl.example.com`. The destination server needs
-only that domain, a trusted TLS certificate, and any already configured,
+domain, for example `https://stl.example.com`, or a **bracketed IPv6
+literal** such as `https://[2001:db8::1]:8443`. The destination server needs
+only that origin, a trusted TLS certificate with a matching DNS or IP SAN,
+and any already configured,
 appropriately signed OS package repositories. It does **not** need
 `github.com`, `api.github.com`, `raw.githubusercontent.com`, Git or
 any other international download service for the default STL core install

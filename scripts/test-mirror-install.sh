@@ -234,6 +234,41 @@ sum_digest=$(sha256sum "$scratch/new-release/SHA256SUMS" | awk '{print $1}')
 bash scripts/prepare-mirror.sh --tag v0.9.99 \
    --release-dir "$scratch/new-release" --trusted-sums-sha256 "$sum_digest" \
    --url "$base" --output "$scratch/webroot" > "$scratch/prepared.log"
+# An operator may publish a pinned HTTPS mirror on a bracketed IPv6
+# address. Validate the entire standalone chain without opening a socket:
+# trusted preparer -> generated self-contained bootstrap -> canonical
+# installer's release-base gate (using a deliberately absent test prefix).
+ipv6_origin='https://[2001:db8::1]:8443'
+bash scripts/prepare-mirror.sh --tag v0.9.99 \
+   --release-dir "$scratch/new-release" --trusted-sums-sha256 "$sum_digest" \
+   --url "$ipv6_origin" --output "$scratch/webroot-ipv6" > "$scratch/prepared-ipv6.log"
+grep -Fqx "MIRROR_URL=$ipv6_origin" "$scratch/prepared-ipv6.log" &&
+  grep -Fq "$ipv6_origin/install.sh" "$scratch/prepared-ipv6.log" ||
+  { echo 'MIRROR_TEST_FAIL: bracketed IPv6 mirror origin did not survive preparation' >&2; exit 1; }
+if bash "$scratch/webroot-ipv6/install.sh" invalid-subcommand > "$scratch/ipv6-bootstrap.out" 2> "$scratch/ipv6-bootstrap.err"; then
+  echo 'MIRROR_TEST_FAIL: expected invalid bootstrap operation to be rejected' >&2; exit 1
+fi
+grep -Fq 'Usage: STL bootstrap' "$scratch/ipv6-bootstrap.err" ||
+  { cat "$scratch/ipv6-bootstrap.err" >&2; echo 'MIRROR_TEST_FAIL: IPv6 bootstrap rejected trusted origin before argument validation' >&2; exit 1; }
+if bash scripts/install.sh install --version v0.9.99 --backends native \
+  --release-base "$ipv6_origin/releases/v0.9.99" \
+  --release-sums-sha256 "$sum_digest" --prefix "$scratch/nonexistent-prefix" \
+    > "$scratch/ipv6-canonical.out" 2> "$scratch/ipv6-canonical.err"; then
+  echo 'MIRROR_TEST_FAIL: invalid isolated install prefix accepted' >&2; exit 1
+fi
+grep -Fq 'prefix must be an existing absolute non-symlink directory' "$scratch/ipv6-canonical.err" ||
+  { cat "$scratch/ipv6-canonical.err" >&2; echo 'MIRROR_TEST_FAIL: canonical installer rejected valid bracketed IPv6 release origin' >&2; exit 1; }
+echo 'MIRROR_BRACKETED_IPV6_PUBLISH_BOOTSTRAP_CANONICAL_GATE=PASS'
+for bad_origin in 'https://[bad]' 'https://[::1]/extra' 'https://[::1]@evil.invalid' 'https://[::1%25eth0]'; do
+  if bash scripts/prepare-mirror.sh --tag v0.9.99 \
+     --release-dir "$scratch/new-release" --trusted-sums-sha256 "$sum_digest" \
+     --url "$bad_origin" --output "$scratch/bad-ipv6-origin" >/dev/null 2>&1; then
+    echo "MIRROR_TEST_FAIL: bad IPv6 mirror origin admitted: $bad_origin" >&2; exit 1
+  fi
+done
+[[ ! -e $scratch/bad-ipv6-origin ]] ||
+  { echo 'MIRROR_TEST_FAIL: rejected mirror created output' >&2; exit 1; }
+
 # A concurrent publication-path writer must not be able to change the
 # checksum reported as trusted. A disposable wrapper alters the just-
 # published file AFTER mv and BEFORE the preparer prints its pin.

@@ -24,7 +24,8 @@ while (( $# )); do
 done
 [[ $tag =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ &&
    $trusted_sums =~ ^[0-9a-f]{64}$ &&
-   $mirror_url =~ ^https://[a-zA-Z0-9][a-zA-Z0-9.-]*(:[0-9]{1,5})?$ &&
+   ( $mirror_url =~ ^https://[a-zA-Z0-9][a-zA-Z0-9.-]*(:[0-9]{1,5})?$ ||
+     $mirror_url =~ ^https://\[([0-9a-fA-F]*:){2,}[0-9a-fA-F:.]*\](:[0-9]{1,5})?$ ) &&
    $mirror_url != *..* ]] || usage
 [[ $source_dir == /* && -d $source_dir && ! -L $source_dir &&
    $(realpath -e "$source_dir") == "$source_dir" ]] || usage

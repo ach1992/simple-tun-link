@@ -559,7 +559,8 @@ fi
 if [[ -n $release_base ]]; then
   [[ $release_sums_sha256 =~ ^[0-9a-f]{64}$ &&
      $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ &&
-     $release_base =~ ^https://[a-zA-Z0-9][a-zA-Z0-9.-]*(:[0-9]{1,5})?/releases/v[0-9]+\.[0-9]+\.[0-9]+$ &&
+     ( $release_base =~ ^https://[a-zA-Z0-9][a-zA-Z0-9.-]*(:[0-9]{1,5})?/releases/v[0-9]+\.[0-9]+\.[0-9]+$ ||
+       $release_base =~ ^https://\[([0-9a-fA-F]*:){2,}[0-9a-fA-F:.]*\](:[0-9]{1,5})?/releases/v[0-9]+\.[0-9]+\.[0-9]+$ ) &&
      $release_base == */releases/$version && $release_base != *..* ]] ||
     fail 'mirror requires exact versioned HTTPS release directory and independently trusted SHA256SUMS digest'
 fi
