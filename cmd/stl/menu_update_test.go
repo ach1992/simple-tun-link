@@ -18,7 +18,31 @@ import (
 	"time"
 
 	"github.com/ach1992/simple-tun-link/internal/version"
+	"golang.org/x/sys/unix"
 )
+
+func TestMenuVerifiedUpdateSourceAcceptsRealLongDNSAndRejectsExcessivePaste(t *testing.T) {
+	// A legitimate DNS hostname can be longer than the short numeric-choice
+	// limit, but should never cause a silent cancel before URL validation.
+	source := "https://" + strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + ".example/install.sh"
+	if len(source) <= menuInputLimit {
+		t.Fatal("test hostname is not long enough to reproduce the former bug")
+	}
+	reader := bufio.NewReader(strings.NewReader(source + "\n"))
+	got, err := readMenuAnswerBounded(reader, unix.PathMax)
+	if err != nil || got != source {
+		t.Fatalf("valid long mirror URL could not be read: %q, %v", got, err)
+	}
+	if _, err := parseVerifiedUpdate([]string{"--mirror", got, "--sha256", strings.Repeat("a", 64)}); err != nil {
+		t.Fatalf("valid long mirror URL rejected by existing update parser: %v", err)
+	}
+	for _, length := range []int{unix.PathMax + 1, 64 * 1024} {
+		input := bufio.NewReader(strings.NewReader(strings.Repeat("x", length) + "\n"))
+		if _, err := readMenuAnswerBounded(input, unix.PathMax); !errors.Is(err, errMenuInputTooLong) {
+			t.Fatalf("%d-byte oversized source should be rejected, got %v", length, err)
+		}
+	}
+}
 
 func sampleOfficialRelease(tag string, published time.Time) menuOfficialRelease {
 	r := menuOfficialRelease{TagName: tag, Prerelease: true, PublishedAt: published}

@@ -594,19 +594,16 @@ validate_os() {
     debian)
       [[ $os_version =~ ^([0-9]+)(\.[0-9]+)?$ ]] || fail "invalid Debian version: $os_version"
       major=${BASH_REMATCH[1]}
-      (( 10#$major >= 11 )) || fail "Debian 11 or later is required; found $os_version"
-      if (( 10#$major == 11 )); then
-        printf 'stl installer [WARNING]: Debian 11 LTS ended 2026-08-31; retain compatibility only with separately maintained security support. No APT source changes are made.\n' >&2
-      fi
+      # Do not infer kernel, repository or backend capabilities from the
+      # release number. Signed APT and per-backend preflight decide support.
       ;;
     ubuntu)
       [[ $os_version =~ ^([0-9]+)\.([0-9]{2})$ ]] || fail "invalid Ubuntu version: $os_version"
       major=${BASH_REMATCH[1]}
       minor=${BASH_REMATCH[2]}
-      (( 10#$major > 22 || (10#$major == 22 && 10#$minor >= 4) )) ||
-        fail "Ubuntu 22.04 or later is required; found $os_version"
+      # Accept valid release metadata without inventing a version allowlist.
       ;;
-    *) fail "unsupported distribution: $os_id $os_version; expected Ubuntu >=22.04 or Debian >=11" ;;
+    *) fail "unsupported package-manager distribution: $os_id $os_version; this installer currently integrates with Debian/Ubuntu APT" ;;
   esac
 }
 
@@ -658,6 +655,34 @@ package_installed() {
   [[ $result == 'install ok installed' ]]
 }
 
+# Accept a distribution-authenticated Release with at least one valid signature
+# from the installed official archive keyring. gpgv can return 2 for another
+# co-signer absent from that keyring (as on Debian 12 in Nov 2026). Do not
+# treat missing-key signers as trusted, or tolerate an invalid known signature.
+# This parser takes ONLY gpgv --status-fd output, never APT human text.
+apt_archive_signature_status_valid() {
+  local rc=$1 status_file=$2
+  [[ $rc =~ ^[0-9]+$ && -f $status_file ]] || return 1
+  LC_ALL=C awk -v rc="$rc" '
+    $1 == "[GNUPG:]" && $2 == "VALIDSIG" { valid++ }
+    $1 == "[GNUPG:]" && $2 == "NO_PUBKEY" { no_key[$3] = 1 }
+    $1 == "[GNUPG:]" && $2 == "ERRSIG" {
+      if ($8 == 9) missing_error[$3] = 1
+      else invalid = 1
+    }
+    $1 == "[GNUPG:]" && $2 ~ /^(BADSIG|REVKEYSIG|EXPKEYSIG|EXPSIG|KEYREVOKED|KEYEXPIRED|SIGEXPIRED|NODATA|FAILURE|ERROR)$/ { invalid = 1 }
+    END {
+      missing = 0
+      for (key in missing_error) {
+        if (!(key in no_key)) invalid = 1
+        else missing++
+      }
+      if (rc != 0 && (rc != 2 || missing == 0)) invalid = 1
+      exit !(valid > 0 && invalid == 0)
+    }
+  ' "$status_file"
+}
+
 # Verify the source of each SELECTED candidate, not merely its APT-trusted
 # Release Origin/Label. A third-party source may sign its own Release metadata
 # with a trusted key and claim "Ubuntu" or "Debian". The signed InRelease that
@@ -667,7 +692,7 @@ package_installed() {
 apt_verify_distro_candidates() {
   local anchor keyring_package index_targets row description filename component architecture
   local target identifier release suffix index_file pkg_version pkg version policy_line selected=0
-  local source candidate=0 matches policy
+  local source candidate=0 matches policy status_file gpgv_rc
   local -A indices=() release_verified=()
   if [[ $os_id == ubuntu ]]; then
     anchor=/usr/share/keyrings/ubuntu-archive-keyring.gpg
@@ -751,8 +776,22 @@ apt_verify_distro_candidates() {
         if [[ -z ${release_verified[$release]+present} ]]; then
           [[ -f $release && ! -L $release && $(stat -c %u "$release") == 0 ]] ||
             fail 'APT candidate InRelease is missing or untrusted'
-          gpgv --quiet --keyring "$anchor" "$release" ||
-            fail 'APT candidate InRelease is not signed by the distribution archive'
+          # An InRelease may have several co-signatures. gpgv exits 2 when
+          # *one* signer is not in this installed archive keyring even if
+          # another official signer VALIDLY authenticated the same bytes.
+          # Trust ONLY actual VALIDSIG records emitted by this verifier with
+          # the package-owned distribution keyring; never trust a claimed
+          # Origin/Label or a signature from a foreign APT keyring.
+          status_file=$(mktemp /tmp/stl-archive-gpgv.XXXXXXXX) ||
+            fail 'cannot capture official archive signature status'
+          gpgv_rc=0
+          gpgv --quiet --status-fd 3 --keyring "$anchor" "$release" 3> "$status_file" ||
+            gpgv_rc=$?
+          if ! apt_archive_signature_status_valid "$gpgv_rc" "$status_file"; then
+            rm -f -- "$status_file"
+            fail 'APT candidate InRelease has no valid distribution archive signature or contains an invalid signature'
+          fi
+          rm -f -- "$status_file"
           # A verified signer is decisive. These metadata fields are just an
           # additional consistency check, never an alternative to the key.
           if [[ $os_id == ubuntu ]]; then

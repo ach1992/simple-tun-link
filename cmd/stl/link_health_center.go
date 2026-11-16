@@ -57,11 +57,9 @@ type healthLinkObservation struct {
 	LatestHandshakeUnix *int64  `json:"latest_handshake_unix,omitempty"`
 }
 
-// Diagnostic parallelism limits concurrent observer subprocesses, NOT
-// how many Links a user may configure. Default remains strictly serial for
-// existing automation, and an operator can opt into at most four probes.
-const maxHealthParallel = 4
-
+// Diagnostic parallelism is explicitly chosen by the operator. The scheduler
+// starts no more observers than Links in the verified snapshot; default remains
+// serial. Do not impose an artificial product-wide worker-count restriction.
 func parseHealthCenterArgs(args []string) (jsonOutput bool, timeout time.Duration, parallel int, ok bool) {
 	if len(args) < 2 || args[0] != "diagnose" || args[1] != "--all" {
 		return false, 0, 0, false
@@ -90,7 +88,7 @@ func parseHealthCenterArgs(args []string) (jsonOutput bool, timeout time.Duratio
 				return false, 0, 0, false
 			}
 			count, err := strconv.Atoi(args[i+1])
-			if err != nil || count < 1 || count > maxHealthParallel ||
+			if err != nil || count < 1 ||
 				args[i+1] != strconv.Itoa(count) {
 				return false, 0, 0, false
 			}
@@ -121,7 +119,7 @@ func linkDiagnoseAllWithServices(args []string, stdout, stderr io.Writer, option
 	_, timeout, parallel, valid := parseHealthCenterArgs(args)
 	if !valid {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, "link_diagnose_all",
-			"usage: stl link diagnose --all [--timeout <duration>] [--parallel <1..4>] [--json]")
+			"usage: stl link diagnose --all [--timeout <duration>] [--parallel <positive-count>] [--json]")
 	}
 	// The operator's total budget and signal cancellation begin BEFORE
 	// loading inventory or preparing the diagnostic runtime. No probe gets
@@ -434,7 +432,8 @@ func healthObserveOne(ctx context.Context, link domain.Link, options runtimeOpti
 
 // The snapshot is immutable for this run. Every observer is read-only and
 // owns a separate per-Link context; no worker writes report counters or
-// reorders output. The fixed worker ceiling bounds concurrent host probes.
+// reorders output. Workers are bounded by the operator request and the
+// actual number of Links in the verified snapshot.
 func healthObserveAll(ctx context.Context, links []domain.Link, options runtimeOptions,
 	runtimeAvailable bool, parallel int,
 	observe func(context.Context, domain.Link, runtimeOptions) (linkDiagnostic, error)) []healthLinkCheck {

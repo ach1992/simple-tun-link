@@ -119,7 +119,7 @@ func vendorAttestDistroPackages(ctx context.Context, versions map[string]string)
 
 func vendorArchiveCommand(ctx context.Context, limit int, name string, args ...string) ([]byte, error) {
 	switch name {
-	case "/usr/bin/apt-get", "/usr/lib/apt/apt-helper", "/usr/bin/gpgv", "/usr/bin/dpkg-deb":
+	case "/usr/bin/apt-get", "/usr/lib/apt/apt-helper", "/usr/bin/dpkg-deb":
 	default:
 		return nil, errors.New("unexpected archive tool")
 	}
@@ -130,9 +130,9 @@ func vendorArchiveCommand(ctx context.Context, limit int, name string, args ...s
 	if err := cmd.Run(); err != nil || stdout.overflow || stderr.overflow {
 		return nil, errors.New("archive attestation command failed")
 	}
-	// gpgv can emit human-readable successful signature diagnostics on stderr;
-	// no output is returned or trusted from that channel.
-	if name != "/usr/bin/gpgv" && stderr.output.Len() != 0 {
+	// The signature verifier uses its own status-fd aware, bounded gate.
+	// All ordinary archive inventory commands must have no stderr.
+	if stderr.output.Len() != 0 {
 		return nil, errors.New("archive inspection diagnostics")
 	}
 	return append([]byte(nil), stdout.output.Bytes()...), nil
@@ -190,8 +190,87 @@ func vendorAPTIndexPath(fields map[string]string) (file, release, key string, ok
 	return file, release, component + "/binary-" + arch + "/Packages", true
 }
 
+// A legitimate Debian/Ubuntu InRelease can contain several co-signatures,
+// including newer signers absent from this host's installed archive keyring.
+// gpgv exits 2 in that case even if another official signature is valid.
+// The Go IPsec vendor-provenance gate must use the same signed-archive rule
+// as the canonical Bash installer, not impose a second version-specific gate.
+func vendorGPGVStatusValid(exitCode int, raw []byte) bool {
+	if (exitCode != 0 && exitCode != 2) || len(raw) == 0 || len(raw) > 16<<10 || raw[len(raw)-1] != '\n' {
+		return false
+	}
+	valid := 0
+	missing := make(map[string]bool)
+	unknownErrors := make(map[string]bool)
+	for _, line := range strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "[GNUPG:]" {
+			return false
+		}
+		switch fields[1] {
+		case "VALIDSIG":
+			if len(fields) < 3 || fields[2] == "" {
+				return false
+			}
+			valid++
+		case "NO_PUBKEY":
+			if len(fields) != 3 || fields[2] == "" {
+				return false
+			}
+			missing[fields[2]] = true
+		case "ERRSIG":
+			// GnuPG status: ERRSIG keyid pk_algo hash_algo sig_class time rc [fpr].
+			// rc=9 is a missing public key, not a failed signature by a
+			// trusted archive signer. Every other signer error is fatal.
+			if len(fields) < 8 || fields[2] == "" || fields[7] != "9" {
+				return false
+			}
+			unknownErrors[fields[2]] = true
+		case "BADSIG", "REVKEYSIG", "EXPKEYSIG", "EXPSIG", "KEYREVOKED", "KEYEXPIRED", "SIGEXPIRED", "NODATA", "FAILURE", "ERROR":
+			return false
+		}
+	}
+	if valid == 0 {
+		return false
+	}
+	for key := range unknownErrors {
+		if !missing[key] {
+			return false
+		}
+	}
+	for key := range missing {
+		if !unknownErrors[key] {
+			return false
+		}
+	}
+	return exitCode == 0 || len(unknownErrors) > 0
+}
+
+func vendorVerifyArchiveSignatures(ctx context.Context, release, anchor string) error {
+	cmd := exec.CommandContext(ctx, "/usr/bin/gpgv", "--quiet", "--status-fd", "1", "--keyring", anchor, release)
+	cmd.Env = nativeSystemdFixedEnvironment()
+	stdout, stderr := &privateCapture{max: 16 << 10}, &privateCapture{max: 2048}
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	err := cmd.Run()
+	if ctx.Err() != nil || stdout.overflow || stderr.overflow {
+		return errors.New("official archive signature status unavailable")
+	}
+	exitCode := 0
+	if err != nil {
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) {
+			return errors.New("official archive signature verifier failed")
+		}
+		exitCode = exit.ExitCode()
+	}
+	if !vendorGPGVStatusValid(exitCode, stdout.output.Bytes()) {
+		return errors.New("official archive InRelease lacks a valid authorized signature")
+	}
+	return nil
+}
+
 func vendorVerifySignedRelease(ctx context.Context, release, anchor, origin string) error {
-	if _, err := vendorArchiveCommand(ctx, 512, "/usr/bin/gpgv", "--quiet", "--keyring", anchor, release); err != nil {
+	if err := vendorVerifyArchiveSignatures(ctx, release, anchor); err != nil {
 		return err
 	}
 	raw, err := os.ReadFile(release)

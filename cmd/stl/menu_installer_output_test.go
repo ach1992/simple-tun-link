@@ -129,7 +129,7 @@ func TestCanonicalAPTPrepareFailureStageAndReason(t *testing.T) {
 		{"index mirror failure", "APT_INDEX_REFRESH failed; missing selected packages: iptables.", "apt_index_refresh", "apt_index_unverified"},
 		{"dependency resolution", "APT_DEPENDENCY_PLAN failed; missing selected packages: iptables.", "apt_dependency_plan", "apt_dependency_plan_unverified"},
 		{"partial package transaction", "APT_PACKAGE_INSTALL failed; missing selected packages: iptables.", "apt_package_transaction", "apt_transaction_incomplete"},
-		{"signed candidate failure", "APT candidate InRelease is not signed by the distribution archive", "apt_source_trust", "apt_source_trust_unverified"},
+		{"signed candidate failure", "APT candidate InRelease has no valid distribution archive signature or contains an invalid signature", "apt_source_trust", "apt_source_trust_unverified"},
 		{"source trust bypass", "APT sources explicitly bypass signature verification", "apt_source_trust", "apt_source_trust_unverified"},
 		{"APT index lock", "APT lists lock remained busy after bounded waiting", "apt_index_refresh", "apt_index_unverified"},
 	}
