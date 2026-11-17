@@ -315,15 +315,26 @@ func productionMenuPackageOps() menuPackagePreparationOps {
 // One explicit PREPARE covers the selected package/dependency plan AND, for
 // IPsec, qualified private-service admission. Actual Link Create has its own
 // separate YES. Inspecting or cancelling always remains read-only.
+// Raw APT diagnostics are only permitted when BOTH the human session and
+// the actual diagnostic destination are real TTYs. In particular, an
+// interactive stdout does not authorize writing secrets to redirected stderr.
+func selectedPackagePreviewForStreams(out, errOut io.Writer,
+	runner func(context.Context, io.Writer, io.Writer, ...string) error) func(context.Context, tunnelOption) (selectedPackagePreview, error) {
+	var terminal io.Writer
+	if _, stdoutTTY := menuTerminal(out); stdoutTTY {
+		if _, stderrTTY := menuTerminal(errOut); stderrTTY {
+			terminal = errOut
+		}
+	}
+	return func(ctx context.Context, selected tunnelOption) (selectedPackagePreview, error) {
+		return readSelectedPackagePreviewWithDiagnostics(ctx, selected, runner, terminal)
+	}
+}
+
 func menuPrepareSelectedPackages(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
 	selected tunnelOption, options *runtimeOptions) menuPackagePreparation {
 	ops := productionMenuPackageOps()
-	if _, tty := menuTerminal(out); tty && errOut != nil {
-		// Local human-only diagnostics, never machine/JSON or redirected output.
-		ops.preview = func(ctx context.Context, selected tunnelOption) (selectedPackagePreview, error) {
-			return readSelectedPackagePreviewWithDiagnostics(ctx, selected, runEmbeddedInstaller, errOut)
-		}
-	}
+	ops.preview = selectedPackagePreviewForStreams(out, errOut, runEmbeddedInstaller)
 	if options != nil && options.packagePreview != nil {
 		ops.preview = options.packagePreview
 	}
