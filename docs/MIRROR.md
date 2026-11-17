@@ -121,13 +121,29 @@ downloads the exact `install.sh` and **SHA256-verifies its bytes against
 the independently authenticated signed metadata before executing**.
 The canonical installer still validates the release-wide official archive
 digests, APT signatures, installed State and host-resource ownership.
+The Signed Mirror launcher records the **actual** installer-owned
+version and commit before verifying a new publisher release, then passes
+that exact identity through the authenticated Mirror bootstrap. The
+canonical installer checks this identity **again under its existing
+exclusive maintenance lock**, together with strictly newer compatible
+Stable-version admission. A different independently pinned Update may
+run first; if it changes the installed binary, the stale Signed Update
+**stops without downgrading, installing packages, or advancing the
+publisher receipt**. The ordinary independently SHA-pinned Update still
+retains its explicit, guarded downgrade capability; only Signed Update
+is forward-only.
+
 After installation, STL independently checks the exact **signed target
-version and commit** before advancing its protected anti-rollback receipt.
-If the installer succeeded but the process stopped before committing that
-receipt, running the same verified signed command against a matching
-already installed version can reconcile the sequence **without rerunning
-the installer**; an incorrect commit must be refused. Do not delete or
-manually edit the protected receipt to bypass a rollback failure.
+version and commit** while reacquiring the canonical maintenance lock
+before advancing its protected anti-rollback receipt. If the installer
+succeeded but the process stopped before committing that receipt,
+relaunching the *current installed* STL with the same verified signed
+command can reconcile the sequence **without rerunning the installer**.
+The already-running old executable is not allowed to authorize receipt
+recovery after its binary has been replaced. A concurrent independently
+pinned Update or a mismatched commit refuses receipt advancement.
+Do not delete or manually edit the protected receipt to bypass a rollback
+or recovery failure.
 
 This mode does not enable unattended updates, automatic Mirror discovery,
 a default publisher or trust-on-first-use. No authenticated signature means

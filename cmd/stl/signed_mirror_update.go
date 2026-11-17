@@ -354,6 +354,139 @@ func mirrorPublisherEnrollmentCommand(args []string, out, errOut io.Writer) int 
 	return 0
 }
 
+type signedInstalledIdentity struct {
+	SchemaVersion int    `json:"schema_version"`
+	Version       string `json:"version"`
+	Commit        string `json:"commit"`
+	Date          string `json:"date,omitempty"`
+}
+
+func readSignedInstalledIdentityWithRunner(run func() ([]byte, error)) (signedInstalledIdentity, error) {
+	var identity signedInstalledIdentity
+	raw, err := run()
+	if err != nil || len(raw) == 0 || len(raw) > 4096 {
+		return identity, errors.New("installed version cannot be verified")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&identity); err != nil {
+		return signedInstalledIdentity{}, errors.New("installed version metadata invalid")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF ||
+		identity.SchemaVersion != jsonSchemaVersion ||
+		!menuStableVersion.MatchString(identity.Version) ||
+		!mirrorCommitPattern.MatchString(identity.Commit) {
+		return signedInstalledIdentity{}, errors.New("installed version identity is not a single verified Stable")
+	}
+	return identity, nil
+}
+
+func readSignedInstalledIdentity() (signedInstalledIdentity, error) {
+	return readSignedInstalledIdentityWithRunner(func() ([]byte, error) {
+		return exec.Command("/usr/local/bin/stl", "version", "--json").Output()
+	})
+}
+
+// The external canonical installer has already RELEASED its maintenance lock
+// when it exits. Acquiring it here cannot deadlock a nested installer.
+// Keep publisher->maintenance lock order consistent for receipt recovery and
+// for normal signed success. An independent pinned Update holds maintenance
+// only, never publisher. No unverified installation can advance a receipt.
+func commitSignedMirrorReceipt(meta mirrorSignedRelease, state mirrorPublisherTrust,
+	acquire func(context.Context) (func() error, error),
+	readInstalled func() (signedInstalledIdentity, error),
+	writeTrust func(mirrorPublisherTrust) error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	unlock, err := acquire(ctx)
+	if err != nil {
+		return errors.New("canonical maintenance lock not available for publisher receipt")
+	}
+	defer unlock()
+	identity, err := readInstalled()
+	if err != nil || identity.Version != meta.Version || identity.Commit != meta.Commit {
+		return errors.New("actual installed identity changed or differs from signed publisher release; receipt not advanced")
+	}
+	state.Sequence, state.LastVersion = meta.Sequence, meta.Version
+	if err := writeTrust(state); err != nil {
+		return errors.New("publisher receipt could not be stored durably")
+	}
+	return nil
+}
+
+// The regular Engine maintenance.Gate deliberately rejects a replaced
+// running executable after a lock wait. Signed Update's own OLD executable
+// necessarily becomes stale after canonical Update succeeds, so it cannot
+// use that Engine gate for its receipt. This private lock is ONLY for
+// identity rechecking and durable publisher receipt; it never mutates Links
+// or makes installer/State admission decisions. It acquires the exact same
+// canonical installer flock inode without passing that lock to a child.
+func acquireSignedReceiptMaintenance(ctx context.Context) (func() error, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return nil, errors.New("receipt maintenance context unavailable")
+	}
+	if err := verifiedUpdateDirectory(publisherTrustDir, 0, true); err != nil {
+		return nil, errors.New("canonical maintenance directory untrusted")
+	}
+	path := filepath.Join(publisherTrustDir, ".maintenance.lock")
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0600)
+	if err != nil {
+		return nil, errors.New("canonical maintenance lock unavailable")
+	}
+	f := os.NewFile(uintptr(fd), path)
+	closeErr := func(e error) (func() error, error) { _ = f.Close(); return nil, e }
+	validate := func() error {
+		info, e := f.Stat()
+		if e != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+			return errors.New("canonical maintenance lock mode invalid")
+		}
+		st, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || st.Uid != 0 || st.Nlink != 1 {
+			return errors.New("canonical maintenance lock owner untrusted")
+		}
+		entry, e := os.Lstat(path)
+		if e != nil || !os.SameFile(info, entry) {
+			return errors.New("canonical maintenance lock inode changed")
+		}
+		return nil
+	}
+	if err := validate(); err != nil {
+		return closeErr(err)
+	}
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		lockErr := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB)
+		if lockErr == nil {
+			break
+		}
+		if lockErr != syscall.EWOULDBLOCK && lockErr != syscall.EAGAIN {
+			return closeErr(errors.New("canonical maintenance lock failed"))
+		}
+		select {
+		case <-ctx.Done():
+			return closeErr(errors.New("canonical maintenance receipt wait expired"))
+		case <-ticker.C:
+		}
+	}
+	if err := validate(); err != nil {
+		_ = syscall.Flock(fd, syscall.LOCK_UN)
+		return closeErr(err)
+	}
+	return func() error {
+		e := syscall.Flock(fd, syscall.LOCK_UN)
+		return errors.Join(e, f.Close())
+	}, nil
+}
+
+func commitInstalledSignedMirrorReceipt(meta mirrorSignedRelease, state mirrorPublisherTrust) error {
+	return commitSignedMirrorReceipt(meta, state,
+		acquireSignedReceiptMaintenance,
+		readSignedInstalledIdentity,
+		func(updated mirrorPublisherTrust) error { return writePublisherTrust(publisherTrustDir, 0, updated) })
+}
+
 func signedMirrorUpdateCommand(args []string, out, errOut io.Writer) int {
 	if len(args) != 2 || args[0] != "--signed-mirror" || verifyUpdateMirrorURL(args[1]) != nil {
 		fmt.Fprintln(errOut, "usage: stl update --signed-mirror https://TRUSTED-MIRROR/install.sh")
@@ -388,53 +521,48 @@ func signedMirrorUpdateCommand(args []string, out, errOut io.Writer) int {
 		fmt.Fprintln(errOut, "publisher trust identity changed")
 		return 1
 	}
+	// Running a stale executable is not authority to Update/recover the live
+	// installation. Independently read the installed version+commit now; the
+	// canonical installer will also recheck this SAME baseline inside its lock.
+	baseline, err := readSignedInstalledIdentity()
+	if err != nil || baseline.Version != version.Version || baseline.Commit != version.Commit {
+		fmt.Fprintln(errOut, "installed executable changed while this STL command was running; reopen the current installed version")
+		return 1
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	meta, err := fetchVerifiedSignedMirror(ctx, verifiedUpdateHTTPClient(), args[1], pub, state, version.Version)
+	meta, err := fetchVerifiedSignedMirror(ctx, verifiedUpdateHTTPClient(), args[1], pub, state, baseline.Version)
 	if err != nil {
 		fmt.Fprintln(errOut, "signed mirror authorization failed: "+err.Error())
 		return 1
 	}
-	if meta.Version == version.Version {
-		// Crash recovery: a canonical update can succeed then terminate before
-		// its independently signed anti-rollback receipt is durably committed.
-		// Only the EXACT matching signed source commit may advance the receipt
-		// without running any installer, package command or network side effect.
-		if meta.Commit != version.Commit {
+	if meta.Version == baseline.Version {
+		// Crash recovery needs the EXACT signed commit and current installed
+		// binary identity checked while holding canonical maintenance, otherwise
+		// a simultaneous independently pinned Update could race this receipt.
+		if meta.Commit != baseline.Commit {
 			fmt.Fprintln(errOut, "installed version shares a tag but not the signed publisher commit; no trust advanced")
 			return 1
 		}
-		state.Sequence, state.LastVersion = meta.Sequence, meta.Version
-		if err := writePublisherTrust(publisherTrustDir, 0, state); err != nil {
-			fmt.Fprintln(errOut, "publisher receipt could not be recovered; no update started")
+		if err := commitInstalledSignedMirrorReceipt(meta, state); err != nil {
+			fmt.Fprintln(errOut, "publisher receipt recovery refused: "+err.Error())
 			return 1
 		}
 		fmt.Fprintf(out, "[OK] Already installed verified signed %s; publisher sequence %d reconciled without running an installer.\n", meta.Version, meta.Sequence)
 		return 0
 	}
 	fmt.Fprintf(out, "[INFO] Verified publisher signature, increasing sequence %d, target %s. Running exact authenticated bootstrap.\n", meta.Sequence, meta.Version)
-	if code := verifiedUpdateCommandExpected([]string{"--mirror", args[1], "--sha256", meta.BootstrapSHA256}, out, errOut, meta.Version, meta.Commit); code != 0 {
+	if code := verifiedUpdateCommandExpected([]string{"--mirror", args[1], "--sha256", meta.BootstrapSHA256}, out, errOut,
+		meta.Version, meta.Commit, baseline.Version, baseline.Commit); code != 0 {
 		return code
 	}
-	raw, err := exec.Command("/usr/local/bin/stl", "version", "--json").Output()
-	if err != nil || len(raw) > 4096 {
-		fmt.Fprintln(errOut, "installed version cannot be checked after signed update")
+	// The canonical exclusive lock ended with installer exit. Acquire it once
+	// more for atomic installed-identity recheck + durable receipt advancement;
+	// a separate independently pinned update may have run in between.
+	if err := commitInstalledSignedMirrorReceipt(meta, state); err != nil {
+		fmt.Fprintln(errOut, "signed update installed identity/receipt reconciliation required: "+err.Error())
 		return 1
 	}
-	var installed struct {
-		Version string `json:"version"`
-		Commit  string `json:"commit"`
-	}
-	if json.Unmarshal(raw, &installed) != nil || installed.Version != meta.Version || installed.Commit != meta.Commit {
-		fmt.Fprintln(errOut, "signed update installed identity differs from authorized metadata; reconcile before retry")
-		return 1
-	}
-	state.Sequence = meta.Sequence
-	state.LastVersion = meta.Version
-	if err := writePublisherTrust(publisherTrustDir, 0, state); err != nil {
-		fmt.Fprintln(errOut, "installed release verified but publisher anti-rollback record could not be committed; manual reconciliation required")
-		return 1
-	}
-	fmt.Fprintf(out, "[OK] Signed mirror update %s verified; publisher sequence %d committed.\n", installed.Version, meta.Sequence)
+	fmt.Fprintf(out, "[OK] Signed mirror update %s verified; publisher sequence %d committed.\n", meta.Version, meta.Sequence)
 	return 0
 }

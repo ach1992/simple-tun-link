@@ -35,6 +35,11 @@ No host Link or network configuration is modified by this installer.
 maintenance lock, allow fresh installs, identical verified artifacts and
 newer Stable-to-Stable updates only. Ordinary explicit update still supports
 a separately reviewed downgrade or RC transition.
+The internal --signed-forward-from VERSION COMMIT mode is used only by
+publisher-authenticated Mirror Update; it rechecks the actual installed
+identity under the existing exclusive maintenance lock and refuses stale
+consent or any same-version/downgrade transaction. Operators should use
+stl update --signed-mirror rather than call this internal flag directly.
 Unpack requires a verified SHA256 from independently trusted release metadata,
 then checks regular-file members and a fresh private destination without APT.
 Missing selected distro packages may use only currently configured signed APT;
@@ -527,6 +532,9 @@ expected_missing=
 expected_missing_supplied=0
 expected_apt_plan=
 expected_apt_plan_supplied=0
+signed_prior_version=
+signed_prior_commit=
+signed_prior_supplied=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version) [[ $# -ge 2 && -z $version ]] || usage; version=$2; shift 2 ;;
@@ -534,6 +542,7 @@ while [[ $# -gt 0 ]]; do
     --release-base) [[ $# -ge 2 && -z $release_base ]] || usage; release_base=$2; shift 2 ;;
     --release-sums-sha256) [[ $# -ge 2 && -z $release_sums_sha256 ]] || usage; release_sums_sha256=$2; shift 2 ;;
     --auto-stable) [[ $auto_stable == 0 ]] || usage; auto_stable=1; shift ;;
+    --signed-forward-from) [[ $# -ge 3 && $signed_prior_supplied == 0 ]] || usage; signed_prior_version=$2; signed_prior_commit=$3; signed_prior_supplied=1; shift 3 ;;
     --retire-owned-restore) [[ $retire_owned_restore == 0 ]] || usage; retire_owned_restore=1; shift ;;
     --prefix) [[ $# -ge 2 ]] || usage; prefix=$2; shift 2 ;;
     --backends) [[ $# -ge 2 && $backends_supplied == 0 ]] || usage; backends=$2; backends_supplied=1; shift 2 ;;
@@ -551,6 +560,15 @@ else
   [[ -n $version && -z $bundle || -z $version && -n $bundle ]] || usage
 fi
 [[ $auto_stable == 0 || ( $action == install && -n $bundle ) ]] || usage
+# The signed forward admission is an EXTRA constraint enforced under the
+# canonical maintenance lock. Local --bundle is allowed only for isolated
+# offline acceptance; normal signed production Updates use a pinned Mirror.
+if [[ $signed_prior_supplied == 1 ]]; then
+  [[ $action == update && $auto_stable == 0 &&
+     ( -n $bundle || -n $release_base ) &&
+     $signed_prior_version =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ &&
+     $signed_prior_commit =~ ^[0-9a-f]{40}$ ]] || usage
+fi
 # An operator-managed HTTPS mirror is an explicit, hash-pinned release
 # transport, never a fallback for an untrusted official download.
 [[ -z $release_base && -z $release_sums_sha256 ||
@@ -1623,6 +1641,30 @@ if [[ $action == install ]]; then
   fi
 else
   read_record
+fi
+if [[ -n $signed_prior_version ]]; then
+  # The actual installer-owned identity is obtained inside the existing
+  # EXCLUSIVE .maintenance.lock, never from the prior Signed Update process.
+  [[ $prior_version == "$signed_prior_version" ]] ||
+    fail 'signed_forward_prior_identity_changed: installed version changed since signed authentication; no APT or binary changed'
+  signed_installed_identity=$("$target" version --json) ||
+    fail 'signed_forward_prior_identity_unverified: installed executable cannot report its source commit'
+  [[ $signed_installed_identity == *\"version\":\"$signed_prior_version\"* &&
+     $signed_installed_identity == *\"commit\":\"$signed_prior_commit\"* ]] ||
+    fail 'signed_forward_prior_identity_changed: installed source commit changed since signed authentication'
+  # Preserve deliberately explicit SHA-pinned/manual downgrade semantics;
+  # only the signed path insists on strictly forward Stable progress.
+  [[ $version == '' || $version =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] ||
+    fail 'signed_forward_target_invalid: signed Update requires a Stable version'
+  signed_target=$version
+  if [[ -n $bundle ]]; then
+    signed_target=$(sed -n 's/^version=//p' "$bundle/BUILD-MANIFEST.txt") ||
+      fail 'signed_forward_target_invalid: bundle manifest unavailable'
+  fi
+  [[ $signed_target =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ &&
+     "${signed_prior_version%.*}" == "${signed_target%.*}" ]] &&
+    dpkg --compare-versions "${signed_prior_version#v}" lt "${signed_target#v}" ||
+    fail 'signed_forward_target_not_newer: target is not a compatible strictly newer Stable'
 fi
 
 # Only the existing installer-owned executable and record are admitted for

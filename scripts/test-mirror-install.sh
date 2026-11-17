@@ -672,7 +672,26 @@ grep -q 'use an explicit update' "$scratch/wrong.out" ||
   { cat "$scratch/wrong.out" "$scratch/wrong.err"; echo 'MIRROR_TEST_FAIL: actionable installed-version error missing' >&2; exit 1; }
 [[ $(sha256sum "$STL_MIRROR_PREFIX/bin/stl" | awk '{print $1}') == "$before_old" ]] ||
   { echo 'MIRROR_TEST_FAIL: mistaken install changed existing binary' >&2; exit 1; }
-# Explicit update uses the same first hop but changes the canonical action.
+# Signed mode forwards its previously authenticated installed identity
+# THROUGH the exact TLS bootstrap and privileged private snapshot to the
+# canonical maintenance lock. The source commit is from this isolated test
+# bundle, never accepted from an unverified external response.
+signed_prior_commit=$(sed -n 's/^commit=//p' "$scratch/old-release/BUILD-MANIFEST.txt")
+[[ $signed_prior_commit =~ ^[0-9a-f]{40}$ ]] ||
+  { echo 'MIRROR_TEST_FAIL: synthetic old release lacks valid commit' >&2; exit 1; }
+bash -c "$one_liner signed-update v0.9.98 $signed_prior_commit" \
+  > "$scratch/signed-forward.out" 2> "$scratch/signed-forward.err" || {
+  cat "$scratch/signed-forward.out" "$scratch/signed-forward.err"
+  echo 'MIRROR_TEST_FAIL: signed baseline did not reach canonical Update' >&2
+  exit 1
+}
+grep -Fq -- "--signed-forward-from v0.9.98 $signed_prior_commit" "$STL_MIRROR_SUDO_RECORD" ||
+  { echo 'MIRROR_TEST_FAIL: verified Signed Update lost exact baseline before root' >&2; exit 1; }
+"$STL_MIRROR_PREFIX/bin/stl" version --json | grep -q '"version":"v0.9.99"'
+echo 'MIRROR_TLS_SIGNED_FIRST_HOP_CANONICAL_BASELINE_FORWARDING=PASS'
+
+# Ordinary explicitly pinned mirror Update still uses the previous
+# unqualified protocol; no signed-only restriction is imposed on it.
 bash -c "$one_liner update" > "$scratch/update.out" 2> "$scratch/update.err" || {
   cat "$scratch/update.out" "$scratch/update.err"; echo 'MIRROR_TEST_FAIL: explicit Update failed' >&2; exit 1
 }
