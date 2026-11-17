@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -40,7 +41,17 @@ type verifiedUpdateRequest struct {
 }
 
 func parseVerifiedUpdate(args []string) (verifiedUpdateRequest, error) {
-	usage := errors.New("usage: stl update (--local /root/stl/official-local-install.sh | --mirror https://trusted.example/install.sh) --sha256 INDEPENDENT_64_HEX")
+	// The operator explicitly trusts an HTTPS host serving an unchanged
+	// published self-contained installer. No publisher key or external
+	// digest is needed for this opt-in mode; the older pinned modes remain
+	// byte-for-byte authenticated as before.
+	if len(args) == 2 && args[0] == "--url" {
+		if _, err := verifyUpdateReleaseAssetURL(args[1]); err != nil {
+			return verifiedUpdateRequest{}, err
+		}
+		return verifiedUpdateRequest{kind: "asset", source: args[1]}, nil
+	}
+	usage := errors.New("usage: stl update --url https://HOST/PATH/stl_vX.Y.Z_linux_ARCH_local-install.sh OR stl update (--local /root/stl/official-local-install.sh | --mirror https://trusted.example/install.sh) --sha256 INDEPENDENT_64_HEX")
 	if len(args) != 4 || args[2] != "--sha256" || !updateDigestPattern.MatchString(args[3]) {
 		return verifiedUpdateRequest{}, usage
 	}
@@ -61,10 +72,10 @@ func parseVerifiedUpdate(args []string) (verifiedUpdateRequest, error) {
 	}
 }
 
-// Only a DNS/IPv4 host or an explicitly bracketed IPv6 literal can
-// identify a trusted HTTPS mirror. An IPv6 physical host is transport data,
-// not a new trust source: TLS hostname/IP-SAN validation and independent
-// exact SHA256 still apply, without redirects or credentials.
+// Accept DNS/IPv4 hosts and bracketed IPv6 literals with standard TLS
+// hostname/IP-SAN validation. The optional pinned bootstrap flow separately
+// requires the caller's independent SHA256; the ordinary operator-trusted
+// HTTPS release-file flow does not.
 func validUpdateMirrorHost(u *url.URL) bool {
 	host := u.Hostname()
 	if host == "" {
@@ -96,6 +107,37 @@ func verifyUpdateMirrorURL(raw string) error {
 		}
 	}
 	return nil
+}
+
+// A regular mirror is simply a byte-for-byte copy of GitHub Release assets.
+// The URL may have any directory layout, including GitHub's own download
+// path; only the final immutable-release filename, architecture and HTTPS
+// transport define this opt-in installable asset contract.
+func verifyUpdateReleaseAssetURL(raw string) (string, error) {
+	reject := errors.New("HTTPS release asset requires https://HOST/PATH/stl_vX.Y.Z_linux_ARCH_local-install.sh for this CPU (no credentials, query or fragment); no update started")
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.User != nil || u.Opaque != "" ||
+		u.Host == "" || !validUpdateMirrorHost(u) || u.RawPath != "" ||
+		u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawFragment != "" ||
+		u.Path == "" || !strings.HasPrefix(u.Path, "/") || u.EscapedPath() != u.Path {
+		return "", reject
+	}
+	if port := u.Port(); port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return "", reject
+		}
+	}
+	name := path.Base(u.Path)
+	if !updateFilePattern.MatchString(name) || !strings.HasSuffix(name, "_linux_"+runtime.GOARCH+"_local-install.sh") {
+		return "", reject
+	}
+	for _, part := range strings.Split(u.Path, "/")[1:] {
+		if part == "." || part == ".." || part == "" {
+			return "", reject
+		}
+	}
+	return name, nil
 }
 
 // Only protected /root and /root/stl are admitted. An unchecked path,
@@ -213,6 +255,75 @@ func verifiedMirrorSnapshot(ctx context.Context, raw, digest, root string, uid u
 	return dir, path, nil
 }
 
+// The chosen HTTPS host is the trust boundary for an ordinary copied
+// release asset. Do not silently treat its contents as independently signed
+// by GitHub. The embedded archive still checks its own build-bound digest
+// and the canonical installer still verifies manifest, ownership and
+// transaction state before committing any change.
+func mirrorReleaseAssetSnapshot(ctx context.Context, raw, root string, uid uint32, client *http.Client) (string, string, string, error) {
+	name, err := verifyUpdateReleaseAssetURL(raw)
+	if err != nil {
+		return "", "", "", err
+	}
+	if err := verifiedUpdateDirectory(root, uid, false); err != nil {
+		return "", "", "", errors.New("private root staging unavailable")
+	}
+	// Use a separate staging name from the transferred-local-file
+	// .stl-preflight.* contract. That mode deliberately requires an
+	// original /root/stl copy for optional companions; a downloaded HTTPS
+	// asset has no such original and must remain completely self-contained.
+	dir, err := os.MkdirTemp(root, ".stl-release-asset.")
+	if err != nil {
+		return "", "", "", errors.New("cannot create private release-asset staging")
+	}
+	fail := func(message string) (string, string, string, error) {
+		_ = os.RemoveAll(dir)
+		return "", "", "", errors.New(message)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
+	if err != nil {
+		return fail("invalid HTTPS release-asset request")
+	}
+	req.Header.Set("User-Agent", "simple-tun-link-release-asset-update")
+	res, err := client.Do(req)
+	if err != nil {
+		return fail("HTTPS release-asset download failed; check TLS, reachability and timeouts")
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK || res.ContentLength > verifiedLocalMaxBytes {
+		return fail("release-asset response status or size invalid; no code executed")
+	}
+	target := filepath.Join(dir, name)
+	out, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return fail("cannot create private release-asset snapshot")
+	}
+	h := sha256.New()
+	n, copyErr := io.Copy(io.MultiWriter(out, h), io.LimitReader(res.Body, verifiedLocalMaxBytes+1))
+	syncErr := out.Sync()
+	closeErr := out.Close()
+	if copyErr != nil || syncErr != nil || closeErr != nil || n <= 0 ||
+		n > verifiedLocalMaxBytes || res.ContentLength >= 0 && res.ContentLength != n {
+		return fail("release-asset download incomplete, changing or oversized; no code executed")
+	}
+	return dir, target, hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// GitHub Releases uses an HTTPS redirect to its release-asset CDN. Mirror
+// operators may also use HTTPS CDNs. Follow only HTTPS destinations; the
+// caller explicitly selects and trusts the origin (including its redirects).
+func mirrorReleaseAssetHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 15 * time.Minute,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 || req.URL.Scheme != "https" || req.URL.User != nil {
+				return errors.New("release asset redirect must stay on authenticated HTTPS")
+			}
+			return nil
+		},
+	}
+}
+
 func verifiedUpdateHTTPClient() *http.Client {
 	return &http.Client{
 		Timeout: 45 * time.Second,
@@ -222,10 +333,11 @@ func verifiedUpdateHTTPClient() *http.Client {
 	}
 }
 
-// This is a trusted *first-hop* only. The preverified release launcher and
-// the one canonical installer retain all version, APT, State and rollback
-// authority. Caller-provided digest is a REQUIRED independent trust input;
-// source URLs and downloaded manifests cannot supply it themselves.
+// All Update sources end in the same canonical installer. Pinned file or
+// bootstrap modes demand a caller-provided independent SHA256; the opt-in
+// plain release-file mode instead trusts the selected HTTPS origin and the
+// copied self-contained launcher. No source mode bypasses canonical State,
+// APT, installed-ownership or rollback checks.
 func verifiedUpdateCommand(args []string, out, errOut io.Writer) int {
 	return verifiedUpdateCommandExpected(args, out, errOut, "", "", "", "")
 }
@@ -250,7 +362,7 @@ func verifiedUpdateCommandExpected(args []string, out, errOut io.Writer,
 		return 2
 	}
 	if os.Geteuid() != 0 {
-		fmt.Fprintln(errOut, "stl update requires root; use sudo with independently verified SHA256")
+		fmt.Fprintln(errOut, "stl update requires root; use sudo")
 		return 1
 	}
 	executable, err := os.Executable()
@@ -263,20 +375,29 @@ func verifiedUpdateCommandExpected(args []string, out, errOut io.Writer,
 		fmt.Fprintln(errOut, "run the installed /usr/local/bin/stl; no update started")
 		return 1
 	}
-	var dir, path string
-	if req.kind == "local" {
+	var dir, path, downloadedDigest string
+	switch req.kind {
+	case "local":
 		dir, path, err = verifiedUpdateSnapshot(req.source, "/root", "/root/stl", 0, req.digest)
-	} else {
+	case "mirror":
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 		dir, path, err = verifiedMirrorSnapshot(ctx, req.source, req.digest, "/root", 0, verifiedUpdateHTTPClient())
+	case "asset":
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer cancel()
+		dir, path, downloadedDigest, err = mirrorReleaseAssetSnapshot(ctx, req.source, "/root", 0, mirrorReleaseAssetHTTPClient())
 	}
 	if err != nil {
-		fmt.Fprintln(errOut, "stl verified update: "+err.Error())
+		fmt.Fprintln(errOut, "stl update: "+err.Error())
 		return 1
 	}
 	defer os.RemoveAll(dir)
-	fmt.Fprintln(out, "[INFO] Verified private snapshot against independently provided SHA256. Running canonical Update; do not interrupt APT/package transactions.")
+	if req.kind == "asset" {
+		fmt.Fprintf(out, "[INFO] Operator-trusted HTTPS release file downloaded into root-private storage (SHA256 %s). This is a transfer receipt, NOT independent publisher verification. Running build-bound canonical Update; do not interrupt APT/package transactions.\n", downloadedDigest)
+	} else {
+		fmt.Fprintln(out, "[INFO] Verified private snapshot against independently provided SHA256. Running canonical Update; do not interrupt APT/package transactions.")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 	cli := exec.CommandContext(ctx, "/bin/bash", path, "--update")
@@ -287,6 +408,14 @@ func verifiedUpdateCommandExpected(args []string, out, errOut io.Writer,
 		}
 	}
 	cli.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root", "LANG=C", "LC_ALL=C"}
+	// Preserve only explicit HTTPS transport settings needed by the
+	// canonical Mirror downloader. Never inherit Bash startup hooks,
+	// arbitrary environment variables or exported shell functions.
+	for _, key := range []string{"HTTPS_PROXY", "NO_PROXY", "CURL_CA_BUNDLE"} {
+		if value, ok := os.LookupEnv(key); ok {
+			cli.Env = append(cli.Env, key+"="+value)
+		}
+	}
 	cli.Stdin = os.Stdin
 	var captured menuInstallerOutput
 	cli.Stdout, cli.Stderr = captured.streamsVisible(out, errOut)
@@ -305,9 +434,15 @@ func verifiedUpdateCommandExpected(args []string, out, errOut io.Writer,
 		Version       string `json:"version"`
 		Commit        string `json:"commit"`
 	}
+	assetVersion := ""
+	if req.kind == "asset" {
+		name := filepath.Base(path)
+		assetVersion = strings.TrimPrefix(strings.SplitN(name, "_linux_", 2)[0], "stl_")
+	}
 	if json.Unmarshal(versionOutput, &identity) != nil || identity.SchemaVersion != jsonSchemaVersion ||
 		!menuReleaseTag.MatchString(identity.Version) || len(identity.Commit) != 40 ||
 		!regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(identity.Commit) ||
+		(assetVersion != "" && identity.Version != assetVersion) ||
 		expectedVersion != "" && (identity.Version != expectedVersion || identity.Commit != expectedCommit) {
 		fmt.Fprintln(errOut, "[WARNING] Installed binary version/commit identity unverified. Inspect recovery; do not retry blindly.")
 		return 1

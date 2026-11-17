@@ -118,18 +118,21 @@ STL verified local archive (version $version, linux/$arch)
 
 For the simplest installation, download the ONE official matching release
 file stl_${version}_linux_${arch}_local-install.sh instead of this tar.gz.
-Transfer the .sh file unchanged into /root/stl/ and, with that ONE file
-present, run as an administrator:
-    As root: use the independently SHA-pinned command in docs/INSTALL.md
-    from the matching source commit or published release tag.
-    Or, as a non-root administrator, use its documented sudo variant.
-    Do NOT run the transferred shell file directly as root: its own source
-    checks cannot defend against malicious instructions injected before them.
+Copy the official file unchanged into /root/stl/ (root-owned 0700 directory,
+file mode 0600). After choosing and trusting the HTTPS GitHub or Mirror source,
+run as an administrator:
+    sudo bash /root/stl/stl_${version}_linux_${arch}_local-install.sh
+    For an existing version, explicitly append --update.
+No external SHA256 needs to be typed for this simple operator-trusted source
+path. Optional independently SHA-pinned first-hop scripts are documented in
+docs/INSTALL.md if independent source authentication is desired. The file's
+build-bound archive digest proves embedded byte consistency, NOT that a
+maliciously replaced complete shell launcher came from GitHub.
 
 The .sh file embeds these exact archive bytes and a build-bound digest; it
 verifies a private copy, delegates safe unpack to the canonical install.sh,
-then installs or safely no-ops; an older installed Stable requires the
-explicit --update argument after the independently verified file SHA256.
+then installs or safely no-ops; replacing an older installed Stable
+requires the explicit --update argument.
 It uses no GitHub downloads on the target; only genuinely missing native and
 WireGuard packages may use the host's preconfigured signed APT repositories.
 IPsec still requires its own separate approved PREPARE/service flow.
@@ -138,18 +141,25 @@ If you intentionally use this tar.gz alone, consult the maintainer/operator
 manual archive procedure at docs/INSTALL.md of the exact release source.
 It remains the canonical format for legacy/archive users, not a shell script.
 
-Verify official source/tag and publisher identity on the downloading device
-before running any privileged installer. Record the independently obtained
-whole-file .sh SHA256 and provide it to the trusted command; SHA256SUMS from
+For the ordinary operator-trusted HTTPS workflow, select a trusted source
+and correct official version/architecture. No independent full-file SHA256
+or publisher key needs to be supplied. HTTPS and the internal archive digest
+do NOT independently prove GitHub publisher identity if a complete launcher
+is replaced. Do not trust unknown mirrors or repackaged installers.
+
+OPTIONAL independently SHA256-pinned local workflow: on a trusted device,
+verify the official publisher/tag, obtain the full-file .sh SHA256 separately,
+and use the pinned transfer command documented in docs/INSTALL.md. Do not
+take the trust pin solely from the same untrusted Mirror; a checksum from
 the same publisher is an integrity receipt, NOT an independent signature
 against a compromised publisher account.
-Do not use anonymous mirrors or unverifiable repackaged installers.
 An OPTIONAL approved upstream wstunnel v11.0.0 archive may be placed beside
 this single-file installer. Explicit --with-wss on the SAME single-file
 installer command selects WSS; merely placing an optional archive has no
 effect. The canonical installer verifies the exact architecture-specific file, verifies both archive and extracted executable
 SHA-256 and installs it under the canonical installer-owned path.
-See docs/INSTALL.md for official download filename and mandatory trust checks.
+See docs/INSTALL.md for official filenames, HTTPS source trust, and the
+OPTIONAL independently SHA256-pinned workflow.
 An OPTIONAL official Hysteria v2.13.0 binary hysteria-linux-$arch may also
 be placed beside this file. Explicit --with-quic selects its pinned binary
 and the WireGuard/nftables distro prerequisites; it creates no Link or service.

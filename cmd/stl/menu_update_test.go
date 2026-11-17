@@ -420,7 +420,7 @@ func TestMenuImmutableReleaseStillNeedsInstalledRootRealTTY(t *testing.T) {
 // A mirror-only or air-gapped host must not even attempt the GitHub API to
 // reach its pinned Update method. A non-installed/non-TTY menu remains safe.
 func TestMenuPinnedUpdateSourceSkipsGitHubAndRequiresInstalledRootTTY(t *testing.T) {
-	for _, method := range []string{"2", "3"} {
+	for _, method := range []string{"2", "4"} {
 		t.Run(method, func(t *testing.T) {
 			var calls int
 			var out, errOut bytes.Buffer
@@ -496,5 +496,40 @@ func TestMenuPinnedUpdateFailedAttemptAlwaysExitsStaleMenu(t *testing.T) {
 		func([]string, io.Writer, io.Writer) int { return 1 })
 	if code != menuUpdatedExecutable || !strings.Contains(out.String(), "Inspect version, install-record") {
 		t.Fatalf("failed canonical update resumed stale Engine: code=%d out=%q", code, out.String())
+	}
+}
+
+func TestMenuPlainMirrorReleaseAssetConsentAndNoGitHub(t *testing.T) {
+	url := "https://mirror.example.com/releases/v0.1.99/" + updateTestFilename()
+	for _, tc := range []struct {
+		name, input       string
+		eligible, wantRun bool
+		wantCode          int
+	}{
+		{"approved", url + "\nUPDATE\n", true, true, menuUpdatedExecutable},
+		{"cancelled", url + "\nNO\n", true, false, 0},
+		{"invalid origin", "http://mirror.example.com/" + updateTestFilename() + "\nUPDATE\n", true, false, 0},
+		{"no TTY", url + "\nUPDATE\n", false, false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := strings.NewReader(tc.input)
+			var out, errOut bytes.Buffer
+			count := 0
+			code := menuUpdateReleaseAsset(input, bufio.NewReader(input), &out, &errOut, tc.eligible,
+				func(args []string, _, _ io.Writer) int {
+					count++
+					if !reflect.DeepEqual(args, []string{"--url", url}) {
+						t.Fatalf("mirror menu changed release URL: %q", args)
+					}
+					return 0
+				})
+			if code != tc.wantCode || (count == 1) != tc.wantRun {
+				t.Fatalf("release asset consent wrong: code=%d count=%d stdout=%q stderr=%q",
+					code, count, out.String(), errOut.String())
+			}
+			if tc.eligible && !strings.Contains(out.String(), "TLS") {
+				t.Fatalf("no operator-host trust warning: %q", out.String())
+			}
+		})
 	}
 }

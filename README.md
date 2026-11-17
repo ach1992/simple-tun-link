@@ -43,9 +43,9 @@ Choose **one** source for the initial install:
 | --- | --- |
 | GitHub reachable | Use the complete-download **official Latest Stable** command below |
 | GitHub blocked; trusted file transfer available | Transfer one architecture-matched, independently SHA256-verified release file and use the [guarded local command](docs/INSTALL.md#one-transferred-file-and-one-trusted-command-new-release-format) |
-| GitHub blocked; approved HTTPS mirror reachable | Use the independently pinned [Mirror install command](docs/MIRROR.md#3-clean-install-and-explicit-update) generated on the trusted preparation device |
+| GitHub blocked; operator-trusted HTTPS mirror reachable | Copy the official Release assets unchanged; download the architecture-matched `*_local-install.sh` and install it using the [simple Mirror instructions](docs/MIRROR.md#simple-copy-as-is-mirror-recommended) |
 
-Never run the transferred shell file directly or use an unchecked `curl | bash` command. The local/Mirror first hop must authenticate a complete private copy **before** shell execution. These options use one canonical installer; a Mirror must be prepared and approved independently, not presumed available.
+Do not pipe an unfinished download into a privileged shell. With the simple Mirror path, the operator explicitly trusts the chosen HTTPS server, downloads the **complete original Release file** to protected storage and runs the same build-bound canonical installer. No per-install SHA256 entry or separate signing system is required. Independent publisher verification is not implied by trusting a Mirror; the optional pinned and signed paths remain available.
 
 Use the [latest official Stable release](https://github.com/ach1992/simple-tun-link/releases/latest); check its published tag and release assets before installing.
 Run this complete-download, syntax-checked installer on each server:
@@ -132,12 +132,15 @@ copies transferred bytes privately **before** executing any of them. The
 Core package needs no GitHub, Go compiler or container on the destination.
 If selected OS packages are missing, normal signed APT may still be needed.
 
-You can prepare and host **your own HTTPS Mirror** using the
-[HTTPS Mirror setup](docs/MIRROR.md). STL does not prescribe a default Mirror
-endpoint. Supply your own URL and its independently verified, version-pinned
-bootstrap SHA256; never derive the trust pin from that same Mirror.
-Selecting a Mirror is explicit, not an automatic fallback or a substitute for
-trusting the publisher. Preparing Mirror files does not publish them.
+You can use **any HTTPS Mirror that copies official GitHub Release assets
+byte-for-byte**. Choose the matching `*_local-install.sh` URL and follow the
+[simple Mirror installation](docs/MIRROR.md#simple-copy-as-is-mirror-recommended).
+No additional signer, special bootstrap or per-install SHA256 is required.
+To update an already installed compatible STL, use `sudo stl update --url
+https://YOUR_MIRROR/PATH/stl_vX.Y.Z_linux_ARCH_local-install.sh`. The operator
+chooses and trusts the URL; Mirror TLS does not independently authenticate
+the GitHub publisher. Advanced pinned/signed options remain available.
+STL does not prescribe a default Mirror or fallback source.
 
 ## Connect your first two servers
 
@@ -189,29 +192,33 @@ removes a live Link.
 ## Update and uninstall
 
 For builds including the new Update source selector, `sudo stl menu`
-→ **Update** → **Verified local file** or **Trusted HTTPS mirror**
-provides the same SHA256-pinned CLI path with an explicit `UPDATE`
-confirmation and no GitHub API dependency. This menu was first published
-in `v0.1.23`; older installed `v0.1.22` binaries must use their documented
-verified Update commands to upgrade before selecting the new menu.
+→ **Update** → **HTTPS release file** accepts the URL of an original
+GitHub Release `*_local-install.sh` hosted on any explicitly trusted HTTPS
+Mirror, without a typed SHA256 or separate signer. The menu requires fresh
+`UPDATE` confirmation. The previously published `v0.1.23` menu did **not**
+have this direct-asset option: use the downloaded newer one-file installer
+with explicit `--update` to upgrade an older installation.
 
 Back up protected State/credentials and any original sensitive receiver
-handoffs before upgrading. An installed STL release that supports the
-`stl update` command can update **without GitHub/API access** using an
-independently verified local file or a pinned HTTPS mirror:
+handoffs before upgrading. A new STL that supports direct HTTPS release-file
+Update can use a **literal copied official file** with no GitHub API:
+
+~~~bash
+sudo stl update --url https://YOUR_MIRROR/releases/vX.Y.Z/stl_vX.Y.Z_linux_ARCH_local-install.sh
+~~~
+
+The operator explicitly trusts that HTTPS host. Advanced SHA256-pinned local
+and bootstrap alternatives (both available from `v0.1.23`) remain supported:
 
 ~~~bash
 sudo stl update --local /root/stl/stl_vX.Y.Z_linux_ARCH_local-install.sh --sha256 TRUSTED_FILE_SHA256
-sudo stl update --mirror https://YOUR_TRUSTED_MIRROR/install.sh --sha256 TRUSTED_BOOTSTRAP_SHA256
+sudo stl update --mirror https://YOUR_MIRROR/install.sh --sha256 TRUSTED_BOOTSTRAP_SHA256
 ~~~
 
-Choose **one** method, replace the examples with the actual exact-version
-asset and SHA256 obtained independently from the trusted downloading/mirror
-preparation device. Never take the trust digest from the same untrusted mirror.
-The second command requires a previously prepared, independently pinned HTTPS
-mirror. These commands are available starting with installed `v0.1.23`;
-older installed Stable versions (including `v0.1.22`) must use their
-already supported verified manual procedures.
+Choose one method and use a real published tag/architecture. Only the pinned
+modes require a separately obtained hash. To upgrade an older installed STL
+lacking `--url`, download the original newer one-file asset, then run it
+with `--update` as in [MIRROR.md](docs/MIRROR.md#simple-copy-as-is-mirror-recommended).
 
 For an existing installer-owned STL that reaches official GitHub, use:
 
@@ -223,7 +230,7 @@ State and executable rollback are **not** the same: newer managed features
 use State v6, so an older binary might not understand the retained State.
 Read [Update, recovery, rollback and uninstall](docs/INSTALL.md#update)
 before downgrading or removing the installation. A GitHub-restricted host
-uses the explicit [Mirror Update](docs/MIRROR.md#3-clean-install-and-explicit-update)
+uses the explicit [Mirror Update](docs/MIRROR.md#simple-copy-as-is-mirror-recommended)
 or [local installer](docs/INSTALL.md#one-transferred-file-and-one-trusted-command-new-release-format)
 path instead of the built-in GitHub release picker.
 

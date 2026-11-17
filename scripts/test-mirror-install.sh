@@ -59,11 +59,26 @@ EOF
         -cf - "$name" install.sh LICENSE BUILD-MANIFEST.txt LOCAL-INSTALL.txt SHA256SUMS |
         gzip -n > "$out/$archive"
     )
+    # Also prepare the unmodified official self-contained release asset.
+    # This is what ordinary copy-as-is mirrors should serve directly.
+    entry="$out/${name}_local-install.sh"
+    archive_digest=$(sha256sum "$out/$archive" | awk '{print $1}')
+    archive_bytes=$(stat -c %s "$out/$archive")
+    sed -e "s|@VERSION@|$tag|g" \
+        -e "s|@COMMIT@|$commit|g" \
+        -e "s|@ARCH@|$arch|g" \
+        -e "s|@ARCHIVE@|$archive|g" \
+        -e "s|@DIGEST@|$archive_digest|g" \
+        -e "s|@BYTES@|$archive_bytes|g" \
+        "$repo/scripts/local-install-entrypoint.sh" > "$entry"
+    cat -- "$out/$archive" >> "$entry"
   done
   bash scripts/render-stable-bootstrap.sh "$tag" "$out/stl-bootstrap.sh"
   ( cd "$out"; sha256sum -- stl_${tag}_linux_amd64 stl_${tag}_linux_arm64 \
     LICENSE stl-bootstrap.sh BUILD-MANIFEST.txt stl_${tag}_linux_amd64_local-install.tar.gz \
-    stl_${tag}_linux_arm64_local-install.tar.gz > SHA256SUMS )
+    stl_${tag}_linux_arm64_local-install.tar.gz \
+    stl_${tag}_linux_amd64_local-install.sh \
+    stl_${tag}_linux_arm64_local-install.sh > SHA256SUMS )
 }
 cd "$repo"
 make_release v0.9.98 "$scratch/old-release"
@@ -309,6 +324,66 @@ curl -fsS "$base/install.sh" -o "$scratch/fetched" || {
   echo 'MIRROR_TEST_FAIL: local TLS first hop unavailable' >&2; exit 1;
 }
 cmp "$scratch/fetched" "$scratch/www/install.sh"
+
+# Ordinary Mirror: serve EXACT unchanged GitHub Release assets, not a
+# newly rendered bootstrap/signature. Download the architecture's official
+# self-contained file through TLS, then install+Update with the same
+# canonical installer in a private nondefault prefix and no external SHA.
+for release_arch in amd64 arm64; do
+  release_file="stl_v0.9.99_linux_${release_arch}_local-install.sh"
+  cmp "$scratch/new-release/$release_file" \
+    "$scratch/www/releases/v0.9.99/$release_file" ||
+    { echo 'MIRROR_TEST_FAIL: copied release installer bytes changed' >&2; exit 1; }
+done
+case "$(uname -m)" in
+  x86_64) plain_arch=amd64; other_arch=arm64 ;;
+  aarch64) plain_arch=arm64; other_arch=amd64 ;;
+  *) echo 'MIRROR_TEST_FAIL: unsupported runner CPU' >&2; exit 1 ;;
+esac
+mkdir -m 0700 "$scratch/plain-transfer"
+plain_prefix="$scratch/plain-prefix"
+mkdir -p "$plain_prefix/bin" "$plain_prefix/lib"
+old_plain="stl_v0.9.98_linux_${plain_arch}_local-install.sh"
+cp -- "$scratch/old-release/$old_plain" "$scratch/plain-transfer/$old_plain"
+chmod 0600 "$scratch/plain-transfer/$old_plain"
+bash "$scratch/plain-transfer/$old_plain" --prefix "$plain_prefix" > "$scratch/plain-old.out" 2> "$scratch/plain-old.err" ||
+  { cat "$scratch/plain-old.out" "$scratch/plain-old.err"; echo 'MIRROR_TEST_FAIL: old plain source install failed' >&2; exit 1; }
+"$plain_prefix/bin/stl" version --json | grep -q '"version":"v0.9.98"' ||
+  { echo 'MIRROR_TEST_FAIL: old plain source install wrong version' >&2; exit 1; }
+new_plain="stl_v0.9.99_linux_${plain_arch}_local-install.sh"
+curl -q -fsSs --proto '=https' --proto-redir '=https' \
+  "$base/releases/v0.9.99/$new_plain" -o "$scratch/plain-transfer/$new_plain"
+cmp "$scratch/plain-transfer/$new_plain" "$scratch/new-release/$new_plain" ||
+  { echo 'MIRROR_TEST_FAIL: HTTPS copied asset bytes changed' >&2; exit 1; }
+chmod 0600 "$scratch/plain-transfer/$new_plain"
+# The default Install must not replace an older published binary.
+before_plain=$(sha256sum < "$plain_prefix/bin/stl")
+if bash "$scratch/plain-transfer/$new_plain" --prefix "$plain_prefix" \
+  > "$scratch/plain-no-update.out" 2> "$scratch/plain-no-update.err"; then
+  echo 'MIRROR_TEST_FAIL: plain install unexpectedly upgraded' >&2; exit 1
+fi
+[[ $(sha256sum < "$plain_prefix/bin/stl") == "$before_plain" ]] ||
+  { echo 'MIRROR_TEST_FAIL: plain Install changed existing version' >&2; exit 1; }
+# Explicit --update succeeds through the SAME native canonical installer.
+bash "$scratch/plain-transfer/$new_plain" --prefix "$plain_prefix" --update \
+  > "$scratch/plain-new.out" 2> "$scratch/plain-new.err" ||
+  { cat "$scratch/plain-new.out" "$scratch/plain-new.err"; echo 'MIRROR_TEST_FAIL: plain URL asset Update failed' >&2; exit 1; }
+"$plain_prefix/bin/stl" version --json | grep -q '"version":"v0.9.99"' ||
+  { echo 'MIRROR_TEST_FAIL: plain URL asset Update wrong version' >&2; exit 1; }
+after_plain=$(sha256sum < "$plain_prefix/bin/stl")
+# Wrong CPU file must refuse without modifying existing install.
+wrong_plain="stl_v0.9.99_linux_${other_arch}_local-install.sh"
+cp -- "$scratch/new-release/$wrong_plain" "$scratch/plain-transfer/$wrong_plain"
+chmod 0600 "$scratch/plain-transfer/$wrong_plain"
+if bash "$scratch/plain-transfer/$wrong_plain" --prefix "$plain_prefix" --update \
+  > "$scratch/plain-wrong-arch.out" 2> "$scratch/plain-wrong-arch.err"; then
+  echo 'MIRROR_TEST_FAIL: wrong-arch original release accepted' >&2; exit 1
+fi
+grep -Fq 'wrong file for' "$scratch/plain-wrong-arch.err" ||
+  { echo 'MIRROR_TEST_FAIL: wrong-arch refusal missing' >&2; exit 1; }
+[[ $(sha256sum < "$plain_prefix/bin/stl") == "$after_plain" ]] ||
+  { echo 'MIRROR_TEST_FAIL: wrong-arch file mutated installation' >&2; exit 1; }
+echo 'MIRROR_COPY_AS_IS_HTTPS_ORIGINAL_FILE_INSTALL_UPDATE_WRONG_ARCH=PASS'
 
 # Intercept ONLY privilege elevation, and redirect the exact canonical
 # invocation into an isolated test prefix. The canonical installer and
