@@ -16,7 +16,7 @@ Usage:
   install.sh install|update --version vX.Y.Z [--backends native,wireguard,quic,ipsec]
   install.sh install|update --bundle /path/to/release-bundle [--prefix /usr/local] [--backends all]
   install.sh requirements [--backends native,wireguard,quic,ipsec] [--os-release-file /path/to/read-only-fixture]
-  install.sh prepare --backends native|wireguard|quic|ipsec|all [--expected-missing '...'] [--expected-apt-plan '...']
+  install.sh prepare --backends native|wireguard|quic|ipsec|all [--expected-missing '...'] [--expected-apt-plan '...' | --expected-apt-plan-sha256 SHA256]
   install.sh uninstall [--prefix /usr/local] [--retire-owned-restore]
 
 The default backend selection is native (GRE/IPIP). Add wireguard, quic or
@@ -527,6 +527,8 @@ expected_missing=
 expected_missing_supplied=0
 expected_apt_plan=
 expected_apt_plan_supplied=0
+expected_apt_plan_sha256=
+expected_apt_plan_sha256_supplied=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version) [[ $# -ge 2 && -z $version ]] || usage; version=$2; shift 2 ;;
@@ -540,6 +542,7 @@ while [[ $# -gt 0 ]]; do
     --os-release-file) [[ $# -ge 2 && -z $os_release_fixture ]] || usage; os_release_fixture=$2; shift 2 ;;
     --expected-missing) [[ $# -ge 2 && $expected_missing_supplied == 0 ]] || usage; expected_missing=$2; expected_missing_supplied=1; shift 2 ;;
     --expected-apt-plan) [[ $# -ge 2 && $expected_apt_plan_supplied == 0 ]] || usage; expected_apt_plan=$2; expected_apt_plan_supplied=1; shift 2 ;;
+    --expected-apt-plan-sha256) [[ $# -ge 2 && $expected_apt_plan_sha256_supplied == 0 ]] || usage; expected_apt_plan_sha256=$2; expected_apt_plan_sha256_supplied=1; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -566,7 +569,8 @@ if [[ -n $release_base ]]; then
 fi
 [[ $retire_owned_restore == 0 || $action == uninstall ]] || usage
 [[ $action == requirements || -z $os_release_fixture ]] || usage
-[[ $action == prepare || ( $expected_missing_supplied == 0 && $expected_apt_plan_supplied == 0 ) ]] || usage
+[[ $action == prepare || ( $expected_missing_supplied == 0 && $expected_apt_plan_supplied == 0 && $expected_apt_plan_sha256_supplied == 0 ) ]] || usage
+[[ $expected_apt_plan_supplied == 0 || $expected_apt_plan_sha256_supplied == 0 ]] || usage
 [[ $action != prepare || $prefix == /usr/local ]] || fail 'package preparation is allowed only for the installer-owned /usr/local installation'
 
 # Use a data-only OS release parser. Never "source" /etc/os-release as shell
@@ -706,7 +710,7 @@ apt_verify_distro_candidates() {
   [[ $(dpkg-query -S "$anchor" 2>/dev/null) == "$keyring_package: "* ]] ||
     fail 'official archive keyring package ownership unverified'
   package_installed "$keyring_package" || fail 'distribution archive keyring package not fully installed'
-  command -v gpgv >/dev/null || fail 'cannot verify distribution archive signatures'
+  command -v gpgv >/dev/null || fail 'cannot verify distribution archive signatures; official distro gpgv is missing. Install gpgv from authenticated distribution APT or separately verified offline media, then retry; STL will not bypass signature checks.'
   # indextargets reports the exact local Packages indices APT associates
   # with the configured sources. Match its Description to apt-cache policy's
   # per-version source line; never accept a matching label alone.
@@ -894,49 +898,53 @@ apt_update_indexes() {
   done
 }
 
-# Keep the machine-readable dependency inventory bounded without limiting
-# the LIVE diagnostic stream. The same bounded read loop forwards all
-# bytes to the operator immediately and retains at most 64 KiB of
-# authenticated apt-get -s text for exact-plan parsing.
-apt_plan_capture_bounded() {
-  local LC_ALL=C
-  local capture=$1 chunk bytes=0 left overflow=0
+# Stream all APT diagnostics immediately. Capture ONLY the real install/removal
+# facts, never progress, dependency explanations or other verbose diagnostics.
+# This makes the machine plan scale with actual selected dependencies instead
+# of imposing an arbitrary cap on otherwise harmless apt-get -s output.
+apt_plan_capture_selected() {
+  local capture=$1 line ended=0
   : > "$capture" || return 1
-  while IFS= read -r -N 4096 chunk || [[ -n $chunk ]]; do
-    printf '%s' "$chunk" >&2 || return 2
-    left=$((65536 - bytes))
-    if (( left <= 0 )); then
-      overflow=1
-      continue
-    fi
-    if (( ${#chunk} > left )); then
-      printf '%s' "${chunk:0:left}" >> "$capture" || return 1
-      bytes=65536
-      overflow=1
+  while :; do
+    line=
+    if IFS= read -r line; then
+      ended=1
+    elif [[ -n $line ]]; then
+      ended=0
     else
-      printf '%s' "$chunk" >> "$capture" || return 1
-      bytes=$((bytes + ${#chunk}))
+      break
     fi
+    # Preserve the exact visible bytes, including a final unterminated line.
+    printf '%s' "$line" >&2 || return 2
+    if (( ended )); then printf '\n' >&2 || return 2; fi
+    case "$line" in
+      Inst\ *|Remv\ *|Purg\ *)
+        printf '%s' "$line" >> "$capture" || return 1
+        if (( ended )); then printf '\n' >> "$capture" || return 1; fi ;;
+    esac
+    (( ended )) || break
   done
-  (( overflow == 0 ))
 }
+
 
 apt_resolve_plan() {
   local text line pkg version requested found
   local -a planned=()
+  local -A seen_plan=()
   apt_plan=
+  apt_plan_sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   (( ${#missing[@]} > 0 )) || return 0
   apt_sources_must_be_authenticated
   local capture
   local -a outcomes=()
   capture=$(/usr/bin/mktemp /tmp/stl-apt-plan.XXXXXXXX) ||
-    fail 'APT_DEPENDENCY_PLAN cannot create private bounded simulation capture; no packages changed.'
-  # Stream the complete stdout to the operator while retaining only a
-  # bounded parsed plan; stderr from apt-get remains directly visible.
+    fail 'APT_DEPENDENCY_PLAN cannot create private simulation plan capture; no packages changed.'
+  # Stream complete stdout/stderr while retaining only APT's install/removal
+  # facts. Verbose diagnostic text is not part of the authorization plan.
   # A failed simulation is never an accepted plan.
   if LC_ALL=C apt-get -s -o Debug::NoLocking=1 "${apt_safety[@]}" \
        install --no-install-recommends -- "${missing[@]}" |
-     apt_plan_capture_bounded "$capture"; then
+     apt_plan_capture_selected "$capture"; then
     outcomes=("${PIPESTATUS[@]}")
   else
     outcomes=("${PIPESTATUS[@]}")
@@ -951,7 +959,7 @@ apt_resolve_plan() {
   fi
   if (( outcomes[1] != 0 )); then
     /bin/rm -f -- "$capture"
-    fail 'APT_DEPENDENCY_PLAN simulation output exceeded the bounded 64 KiB machine-plan capture or its private capture failed; all available diagnostics were streamed above; no packages changed.'
+    fail 'APT_DEPENDENCY_PLAN could not capture all install/removal facts; no packages changed.'
   fi
   text=$(< "$capture")
   /bin/rm -f -- "$capture"
@@ -974,9 +982,8 @@ apt_resolve_plan() {
         if package_installed "$pkg"; then
           fail 'APT plan would upgrade an installed package; review separately'
         fi
-        for requested in "${planned[@]}"; do
-          [[ $requested != "$pkg="* ]] || fail 'APT plan includes duplicate package identity'
-        done
+        [[ -z ${seen_plan[$pkg]+present} ]] || fail 'APT plan includes duplicate package identity'
+        seen_plan["$pkg"]=1
         planned+=("$pkg=$version")
         ;;
     esac
@@ -989,8 +996,12 @@ apt_resolve_plan() {
     [[ $found == 1 ]] || fail 'APT plan omitted a required selected package'
   done
   apt_plan="${planned[*]}"
-  [[ -n $apt_plan && ${#apt_plan} -lt 16384 ]] ||
-    fail 'APT plan is empty or exceeds safe preview limits'
+  [[ -n $apt_plan ]] || fail 'APT could not produce a complete install plan'
+  apt_plan_sha256=$(printf '%s' "$apt_plan" | sha256sum) ||
+    fail 'APT plan digest could not be calculated'
+  apt_plan_sha256=${apt_plan_sha256%% *}
+  [[ $apt_plan_sha256 =~ ^[a-f0-9]{64}$ ]] ||
+    fail 'APT plan digest is invalid'
   apt_verify_distro_candidates
 }
 
@@ -1412,6 +1423,9 @@ ensure_packages() {
   if (( ${#missing[@]} == 0 )); then
     [[ $expected_apt_plan_supplied == 0 || -z $expected_apt_plan ]] ||
       fail 'APT plan changed since confirmation; no APT attempted'
+    [[ $expected_apt_plan_sha256_supplied == 0 ||
+       $expected_apt_plan_sha256 == e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 ]] ||
+      fail 'APT plan changed since confirmation; no APT attempted'
     printf '[OK] STL dependencies already installed for %s %s (%s).\n' "$os_id" "$os_version" "$backends" >&2
     return
   fi
@@ -1424,7 +1438,8 @@ ensure_packages() {
     done
   fi
   if [[ $missing_ipsec == 1 && ( $action != prepare ||
-        $expected_missing_supplied != 1 || $expected_apt_plan_supplied != 1 ) ]]; then
+        $expected_missing_supplied != 1 ||
+        ( $expected_apt_plan_supplied != 1 && $expected_apt_plan_sha256_supplied != 1 ) ) ]]; then
     fail 'automatic IPsec requires explicit exact-plan PREPARE consent'
   fi
   if [[ $missing_ipsec == 1 ]]; then
@@ -1444,6 +1459,9 @@ ensure_packages() {
   before_plan=$apt_plan
   if [[ $expected_apt_plan_supplied == 1 && $before_plan != "$expected_apt_plan" ]]; then
     fail 'APT dependency plan changed since confirmation; no APT attempted'
+  fi
+  if [[ $expected_apt_plan_sha256_supplied == 1 && $apt_plan_sha256 != "$expected_apt_plan_sha256" ]]; then
+    fail 'APT dependency plan digest changed since confirmation; no APT attempted'
   fi
   if [[ $missing_ipsec == 1 ]]; then
     ipsec_clean_host_before_apt
@@ -1498,6 +1516,7 @@ if [[ $action == requirements ]]; then
     printf 'missing_packages=%s\n' "${missing[*]}"
     apt_resolve_plan
     printf 'apt_install=%s\n' "$apt_plan"
+    printf 'apt_install_sha256=%s\n' "$apt_plan_sha256"
   fi
   if [[ $want_ipsec == 1 ]]; then
     printf 'notice=IPsec PREPARE may briefly activate a new vendor strongSwan service; only transaction-owned service normalization is permitted\n'
@@ -1636,6 +1655,10 @@ if [[ $action == prepare ]]; then
   if [[ $expected_apt_plan_supplied == 1 ]]; then
     expected_apt_pattern='^([a-z0-9.+:-]+=[0-9a-zA-Z:.+~_-]+( [a-z0-9.+:-]+=[0-9a-zA-Z:.+~_-]+)*)?$'
     [[ $expected_apt_plan =~ $expected_apt_pattern ]] || fail 'untrusted expected APT dependency plan'
+  fi
+  if [[ $expected_apt_plan_sha256_supplied == 1 ]]; then
+    [[ $expected_apt_plan_sha256 =~ ^[a-f0-9]{64}$ ]] ||
+      fail 'untrusted expected APT dependency plan digest'
   fi
   ensure_packages
   printf '[OK] Selected backend packages prepared; kernel readiness and private IPsec service admission (if selected) still need independent verification. No STL executable or Link was changed.\n'

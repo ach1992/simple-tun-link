@@ -97,6 +97,8 @@ func canonicalAPTOperatorFailure(line string) (stage, reason string) {
 	case strings.HasPrefix(message, "APT_DEPENDENCY_PLAN failed;"),
 		strings.HasPrefix(message, "APT cannot resolve the complete selected dependency plan"),
 		strings.HasPrefix(message, "APT dependency plan changed"),
+		strings.HasPrefix(message, "APT dependency plan digest changed"),
+		strings.HasPrefix(message, "APT could not produce a complete install plan"),
 		strings.HasPrefix(message, "APT plan changed since confirmation"),
 		strings.HasPrefix(message, "APT preferred candidate differs from the consented version"),
 		strings.HasPrefix(message, "no APT package index mapping available"),
