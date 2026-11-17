@@ -1,4 +1,25 @@
-# Direct UDP53 + native WireGuard research fixture
+# UDP53 native-WireGuard research — archived NO-GO
+
+> **Decision (2026-11-18; physical evidence 2026-11-17 UTC): NO-GO for STL, including the optional personal-use tier.** Owner criteria: general Carrier needs >=200 Mbps sustained useful secure private-L3 traffic; a personal Carrier near 10 Mbps is worthwhile **only if sustained and meaningfully better or more reachable than existing STL methods**. The observed direct UDP53 design did not meet either threshold. This decision concerns the tested pair/implementation, not every possible UDP/53 transport.
+>
+> **Archival source**: tag `archive/udp53-no-go-20261118`. Do not merge these fixtures into `main`, ship a release, create a public selectable Carrier, or treat older development instructions below as an active work plan. [Physical evidence owner #125](https://github.com/ach1992/simple-tun-link/issues/125) · [Product decision owner #142](https://github.com/ach1992/simple-tun-link/issues/142).
+
+## Actual authenticated two-host outcomes
+
+- Targets: IRPT-101 (`193.111.235.101`) and DE-Hamed-Test (`91.107.246.220`). Disposable native WireGuard namespaces, private IP, two complementary public UDP/53 orientations, no installed STL Link/Engine changes.
+- Both public orientations achieved genuine native WireGuard handshakes and at least short private traffic. With **DE initiating the outer UDP flow to IR listener**, DE→IR private TCP 1 MiB completed at **1.48 Mbps**, 4 MiB at **13.45 Mbps**, and IR→DE 1 MiB at **9.83 Mbps**; all had independent full SHA256 receipts. Private UDP ACK counts included 32/32, 63/64 and 125/128; the receiving peer logged 64/64 in the 63/64 case (lost return ACK, not necessarily lost payload). Some private pings failed after idle despite later short TCP recovery.
+- With **IR initiating public UDP toward DE listener**, initial private ICMP was 4/4, mean **86.3 ms**, but later TCP and UDP application checks failed, and adapter WAN counters showed strongly asymmetric received/sent packets. Establishment is not sustained usability.
+- The discriminating **64 MiB DE→IR** attempt ended **`TCP_PARTIAL_SENT`**, deadline after 90 seconds, **16,302,080 of 67,108,864 bytes sent**, about **1.45 Mbps client-side attempted average**; **no completed SHA256 receiver receipt**. Do not mislabel this as verified end-to-end useful throughput. Short >10 Mbps bursts do not satisfy the personal tier.
+- Direct vanilla WireGuard in namespaces failed handshake on UDP/53056 and again on the equivalent public UDP/53-oriented tuple (this observation alone does not prove a general path restriction). On the **same two hosts**, official STL-managed **WireGuard-over-WSS** previously delivered independently SHA256-confirmed 1 MiB TCP and 64/64 UDP in both directions: [#93 real WSS result](https://github.com/ach1992/simple-tun-link/issues/93#issuecomment-6623078630). The **raw unencrypted TCP/443 control** transferred 4 MiB at **36.22 Mbps** with peer SHA256, but a separate 64 MiB attempt was incomplete; raw TCP is **not** a WSS throughput benchmark.
+- This direct UDP53/DNS-shaped primer is not Recursive DNS tunnelling. [#124](https://github.com/ach1992/simple-tun-link/issues/124) separately owns resolver-mediated DNS research, `iodine`, and MasterDnsVPN.
+
+## Engineering disposition
+
+The experimental Python adapter lacks production multi-Link port/identity ownership, authenticated cross-host recovery coordination, Engine transactions, restore/reboot and negative-path acceptance; solving those would add significant operational and maintenance complexity. Without a distinct reachable path plus sustained user-beneficial throughput, do not invest in productizing it. Source code remains inspectable through one **non-Release Git archival tag**, with exact evidence and the verdict in GitHub Issues rather than extra product code, multiple active branches or new release assets. Reconsider only if future evidence shows existing WSS/QUIC/native methods cannot serve a specific path and this alternate transport passes the Owner's sustained useful-traffic tier.
+
+---
+
+## Historical research fixture instructions (superseded by this conclusion)
 
 This opt-in fixture investigates one fixed public UDP flow around native kernel
 WireGuard. It is research tooling, **not an STL Carrier, installer, managed Link,
