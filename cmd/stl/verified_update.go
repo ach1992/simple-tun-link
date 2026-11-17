@@ -227,6 +227,10 @@ func verifiedUpdateHTTPClient() *http.Client {
 // authority. Caller-provided digest is a REQUIRED independent trust input;
 // source URLs and downloaded manifests cannot supply it themselves.
 func verifiedUpdateCommand(args []string, out, errOut io.Writer) int {
+	return verifiedUpdateCommandExpected(args, out, errOut, "", "")
+}
+
+func verifiedUpdateCommandExpected(args []string, out, errOut io.Writer, expectedVersion, expectedCommit string) int {
 	req, err := parseVerifiedUpdate(args)
 	if err != nil {
 		fmt.Fprintln(errOut, err)
@@ -287,7 +291,8 @@ func verifiedUpdateCommand(args []string, out, errOut io.Writer) int {
 	}
 	if json.Unmarshal(versionOutput, &identity) != nil || identity.SchemaVersion != jsonSchemaVersion ||
 		!menuReleaseTag.MatchString(identity.Version) || len(identity.Commit) != 40 ||
-		!regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(identity.Commit) {
+		!regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(identity.Commit) ||
+		expectedVersion != "" && (identity.Version != expectedVersion || identity.Commit != expectedCommit) {
 		fmt.Fprintln(errOut, "[WARNING] Installed binary version/commit identity unverified. Inspect recovery; do not retry blindly.")
 		return 1
 	}

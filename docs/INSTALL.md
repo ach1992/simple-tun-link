@@ -827,6 +827,10 @@ run:
 
 ~~~bash
 sudo stl update --mirror https://stl.example.com/install.sh --sha256 TRUSTED_BOOTSTRAP_SHA256
+
+# On a release that includes Signed Mirror, after one-time independent
+# publisher-key enrollment; no per-release digest needs to be typed:
+sudo stl update --signed-mirror https://stl.example.com/install.sh
 ~~~
 
 Neither example can be run with a literal placeholder. The command refuses a

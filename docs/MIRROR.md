@@ -17,6 +17,122 @@ binary metadata. Unlike a blind mirror URL switch, both the canonical
 installer and its release-wide `SHA256SUMS` are pinned into the generated
 bootstrap before uploading anything.
 
+## Optional publisher-signed Update (newer installed versions)
+
+The existing **independently pinned** `stl update --mirror URL --sha256 HASH`
+path always remains available and is the only supported Mirror Update mode
+in published Stable v0.1.25. The following workflow is for a separately
+reviewed, released STL version that contains the Signed Mirror client;
+creating a signing key or publishing metadata alone does **not** retrofit
+an older installed `stl`.
+
+After a **one-time, independent publisher-key enrollment**, the installed
+binary can use `sudo stl update --signed-mirror https://YOUR-MIRROR/install.sh`
+without manually entering another SHA256 for each release.
+
+### First-time trust setup (on trusted systems, not the public mirror)
+
+1. On your **trusted release preparation machine**, create and protect a
+   persistent Ed25519 publisher key (not a GitHub token or TLS server key):
+
+   ```bash
+   umask 077
+   openssl genpkey -algorithm Ed25519 -out /secure/publisher-private.pem
+   chmod 600 /secure/publisher-private.pem
+   openssl pkey -in /secure/publisher-private.pem -pubout -out /secure/publisher-public.pem
+   ```
+
+   Keep the private key **off the public mirror and destination hosts**.
+   Back up and control this key independently. An unrecoverable lost signing
+   key requires an explicitly authorized publisher-key rotation.
+
+2. Transfer only `publisher-public.pem` through a separately trusted route
+   to `/root/stl/publisher.pem` (root-owned private directory). The raw
+   Ed25519 public-key fingerprint is the **SHA256 of its 32 public-key bytes**,
+   not the hash of the PEM text or the complete DER wrapper. The trusted
+   signer prints this fingerprint; communicate it to the destination via an
+   independent channel, never by reading it back from the untrusted mirror.
+3. On a newer, canonically installed STL, run in a **real local root TTY**:
+
+   ```bash
+   sudo stl mirror-key enroll --file /root/stl/publisher.pem --fingerprint VERIFIED_RAW_PUBLIC_KEY_SHA256
+   ```
+
+   Independently compare the displayed fingerprint, then type `ENROLL`.
+   The key is saved in a private, durable, installer-adjacent root-only
+   record. An existing trust key is never silently replaced. To rotate
+   it, independently verify the new key and use `--rotate`; explicitly
+   type `ROTATE`. The retained anti-rollback version and sequence remain
+   in effect across rotation.
+
+### Prepare and sign a new immutable Stable Mirror
+
+First prepare the exact official release as documented in Section 1, with
+an independently trusted official `SHA256SUMS` digest and a local staging
+directory. The offline `scripts/prepare-mirror.sh` prints the exact
+`BOOTSTRAP_SHA256` that it generated.
+
+Before uploading the staging tree to the web root, sign it **on the trusted
+preparing machine** using the publisher's protected key:
+
+```bash
+go run ./cmd/stl-mirror-signer \
+  --mirror-dir /trusted/new/stl-webroot \
+  --tag vX.Y.Z \
+  --private-key /secure/publisher-private.pem \
+  --trusted-sums-sha256 TRUSTED_OFFICIAL_RELEASE_SUMS_SHA256 \
+  --trusted-bootstrap-sha256 TRUSTED_PREPARED_BOOTSTRAP_SHA256 \
+  --sequence NEXT_STRICTLY_INCREASING_NUMBER
+```
+
+This adds **two small static files** to the root: `release.json` (purpose,
+release sequence, exact version/commit, exact bootstrap SHA256, publisher
+fingerprint) and `release.sig` (detached base64 Ed25519 signature over the
+**exact raw bytes** of `release.json`). The signer will reject a modified
+bootstrap, wrong trusted official release checksum, unsafe private key,
+unexpected manifest or existing signed metadata. Do not sign an arbitrary
+`install.sh` pulled from the Mirror. A newly prepared version must use
+a strictly higher release sequence than the latest version the operator has
+already accepted. If a signing attempt fails, fix and rerun on a **new**
+trusted staging tree; never overwrite an already signed publication in place.
+
+Publish all versioned official assets **before** switching the static root
+bootstrap, `release.json` and `release.sig` to the matching new release.
+The mirror must serve these three matching paths over verified HTTPS from
+the same origin without HTTP redirects, HTML challenges, authentication
+or content rewriting. Coordinate publication atomically or use a short
+maintenance window so signed metadata and bootstrap cannot be mixed.
+Previously published release versions and recovery files must remain
+available when still needed.
+
+On an enrolled eligible host, use:
+
+```bash
+sudo stl update --signed-mirror https://YOUR-MIRROR/install.sh
+```
+
+The client fetches only `release.json` and `release.sig` from the chosen
+origin, verifies the detached signature with its **already enrolled** key,
+refuses unauthenticated/tampered metadata, replayed or lower sequences,
+incompatible/downgrade versions, and mismatched key fingerprints. It then
+downloads the exact `install.sh` and **SHA256-verifies its bytes against
+the independently authenticated signed metadata before executing**.
+The canonical installer still validates the release-wide official archive
+digests, APT signatures, installed State and host-resource ownership.
+After installation, STL independently checks the exact **signed target
+version and commit** before advancing its protected anti-rollback receipt.
+If the installer succeeded but the process stopped before committing that
+receipt, running the same verified signed command against a matching
+already installed version can reconcile the sequence **without rerunning
+the installer**; an incorrect commit must be refused. Do not delete or
+manually edit the protected receipt to bypass a rollback failure.
+
+This mode does not enable unattended updates, automatic Mirror discovery,
+a default publisher or trust-on-first-use. No authenticated signature means
+**no Update**. It requires an explicit operator action. Signed metadata is
+small and fully authenticated; the actual released executable still obeys
+the canonical installer's integrity/ownership and filesystem controls.
+
 ## 1. Prepare files on a device that can reach GitHub
 
 1. On a **trusted Internet-connected** device, obtain an exact **immutable
@@ -107,8 +223,9 @@ under their own HTTPS domain by following this runbook. Supply your own
 Mirror URL and the **independently prepared** first-hop SHA256. A Mirror is
 never used as an automatic fallback.
 
-As of 2026-11-12, the latest immutable official Stable is
-[v0.1.24](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.24).
+As of 2026-11-17, the latest published immutable Stable is
+[v0.1.25](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.25).
+Any newer code on `main` is not a published Stable until its own release.
 The operator must regenerate the version-pinned Mirror bootstrap and its trust
 pin for each new release; a digest for an older version cannot authenticate
 a newer `install.sh`. Publication of a release on GitHub does not
