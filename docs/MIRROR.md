@@ -90,7 +90,9 @@ release sequence, exact version/commit, exact bootstrap SHA256, publisher
 fingerprint) and `release.sig` (detached base64 Ed25519 signature over the
 **exact raw bytes** of `release.json`). The signer will reject a modified
 bootstrap, wrong trusted official release checksum, unsafe private key,
-unexpected manifest or existing signed metadata. Do not sign an arbitrary
+a \`BUILD-MANIFEST.txt\` whose SHA256 differs from the independently pinned
+official release-wide \`SHA256SUMS\`, unexpected manifest identity, or
+existing signed metadata. Do not sign an arbitrary
 `install.sh` pulled from the Mirror. A newly prepared version must use
 a strictly higher release sequence than the latest version the operator has
 already accepted. If a signing attempt fails, fix and rerun on a **new**

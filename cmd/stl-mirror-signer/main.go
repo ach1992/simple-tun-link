@@ -124,6 +124,26 @@ func signRelease(root, tag, keyPath, trustSums, trustBootstrap string, sequence 
 	if err != nil {
 		return "", err
 	}
+	// The release commit enters the root-of-trust decision. An attacker who
+	// can modify the staging tree after prepare-mirror.sh MUST NOT swap the
+	// BUILD-MANIFEST commit while leaving the independently pinned
+	// release-wide SHA256SUMS bytes unmodified.
+	manifestSum := sha256.Sum256(manifest)
+	manifestDigest := hex.EncodeToString(manifestSum[:])
+	seenManifest := false
+	for _, line := range strings.Split(string(sums), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || fields[1] != "BUILD-MANIFEST.txt" {
+			continue
+		}
+		if seenManifest || fields[0] != manifestDigest {
+			return "", errors.New("release commit manifest differs from trusted release-wide checksum")
+		}
+		seenManifest = true
+	}
+	if !seenManifest {
+		return "", errors.New("trusted release has no authenticated commit manifest")
+	}
 	commit, err := readManifestCommit(manifest, tag)
 	if err != nil {
 		return "", err

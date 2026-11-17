@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -26,13 +27,14 @@ func TestSignedMirrorPublisherGeneratesAuthenticatedStaticFilesOnly(t *testing.T
 	if err := os.WriteFile(filepath.Join(root, "install.sh"), boot, 0644); err != nil {
 		t.Fatal(err)
 	}
-	sums := []byte(strings.Repeat("a", 64) + "  BUILD-MANIFEST.txt\n")
-	if err := os.WriteFile(filepath.Join(root, "releases", tag, "SHA256SUMS"), sums, 0644); err != nil {
-		t.Fatal(err)
-	}
 	manifest := []byte("project=simple-tun-link\nversion=" + tag + "\ncommit=" + strings.Repeat("b", 40) +
 		"\nmode=tag\nsource=https://github.com/ach1992/simple-tun-link\n")
 	if err := os.WriteFile(filepath.Join(root, "releases", tag, "BUILD-MANIFEST.txt"), manifest, 0644); err != nil {
+		t.Fatal(err)
+	}
+	manifestSum := sha256.Sum256(manifest)
+	sums := []byte(hex.EncodeToString(manifestSum[:]) + "  BUILD-MANIFEST.txt\n")
+	if err := os.WriteFile(filepath.Join(root, "releases", tag, "SHA256SUMS"), sums, 0644); err != nil {
 		t.Fatal(err)
 	}
 	_, pk, err := ed25519.GenerateKey(rand.Reader)
@@ -91,6 +93,17 @@ func TestSignedMirrorPublisherGeneratesAuthenticatedStaticFilesOnly(t *testing.T
 	}
 	os.Remove(filepath.Join(root, "release.json"))
 	os.Remove(filepath.Join(root, "release.sig"))
+	manifestFile := filepath.Join(root, "releases", tag, "BUILD-MANIFEST.txt")
+	mutatedManifest := bytes.Replace(manifest, []byte(strings.Repeat("b", 40)), []byte(strings.Repeat("c", 40)), 1)
+	if err := os.WriteFile(manifestFile, mutatedManifest, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := signRelease(root, tag, privateFile, trusted, hex.EncodeToString(trustedBoot[:]), 2); err == nil {
+		t.Fatal("modified commit manifest authenticated despite unchanged trusted official SHA256SUMS")
+	}
+	if err := os.WriteFile(manifestFile, manifest, 0644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := signRelease(root, tag, privateFile, strings.Repeat("c", 64), hex.EncodeToString(trustedBoot[:]), 2); err == nil {
 		t.Fatal("untrusted release-wide sums were signed")
 	}
