@@ -821,7 +821,7 @@ stlink version --json
 
 ## Update
 
-### Short, authenticated Update from an installed STL (local or HTTPS mirror)
+### Explicit Update from an installed STL (local or HTTPS mirror)
 
 Installed STL versions with `stl update` support the existing
 independently pinned local file and HTTPS bootstrap paths. **Newer STL
@@ -844,21 +844,26 @@ an independently verified lowercase 64-character digest, run:
 sudo stl update --local /root/stl/stl_vX.Y.Z_linux_ARCH_local-install.sh --sha256 TRUSTED_FILE_SHA256
 ~~~
 
-**Interactive menu (installed v0.1.23 and later):** Run `sudo stl menu`
-and choose **Update → Verified local file** or **Update → Trusted HTTPS
-mirror**. The menu asks for the exact local path or HTTPS `install.sh` URL
-and the independently obtained 64-character lowercase SHA256, reviews both,
+**Interactive pinned-source menu:** In installed `v0.1.23` through
+`v0.1.25`, choose **Update → Verified local file** or **Update → Trusted
+HTTPS mirror**. In newer builds that support `update --url`, choose
+**Update → Verified local file** or **Update → Pinned HTTPS bootstrap**
+for the same pinned modes. **Update → HTTPS release file** is instead the
+operator-trusted, no-manual-SHA256 method described above.
+The pinned choices ask for the exact local path or HTTPS `install.sh` URL
+and the independently obtained 64-character lowercase SHA256, review both,
 then requires a fresh `UPDATE` confirmation before invoking the **same**
 `stl update` first-hop verification and canonical installer. The source
 chooser does not contact GitHub for these two methods; the official
 release-picker option is separate. The menu retains no remembered
 mirror/digest and never switches Update authority implicitly. This is
 available from official Stable `v0.1.23`; installed `v0.1.22` has neither
-this menu nor the short `stl update` CLI. Use the existing verified
-commands above on older hosts.
+this menu nor the short `stl update` CLI. Use the documented older
+canonical installer Update procedure on those hosts, not a CLI command
+they do not support.
 
-**Trusted HTTPS mirror:** On the trusted preparation device, use the
-`BOOTSTRAP_SHA256` reported by `scripts/prepare-mirror.sh` *before uploading*
+**Optional independently pinned HTTPS bootstrap:** On the trusted
+preparation device, use the `BOOTSTRAP_SHA256` reported by `scripts/prepare-mirror.sh` *before uploading*
 the static mirror. On the destination, with an exact HTTPS URL (no redirects),
 run:
 

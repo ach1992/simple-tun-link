@@ -325,9 +325,9 @@ advanced path, supply your own Mirror URL and the independently prepared
 first-hop SHA256. A Mirror is
 never used as an automatic fallback.
 
-As of 2026-11-17, the latest published immutable Stable is
-[v0.1.25](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.25).
-Any newer code on `main` is not a published Stable until its own release.
+Choose the [latest officially published Stable](https://github.com/ach1992/simple-tun-link/releases/latest)
+or an exact published tag. Newer code on `main` is not a published Stable
+until its own release.
 The operator must regenerate the version-pinned Mirror bootstrap and its trust
 pin for each new release; a digest for an older version cannot authenticate
 a newer `install.sh`. Publication of a release on GitHub does not
@@ -355,11 +355,12 @@ pinned API-free command is:
 sudo stl update --mirror https://stl.example.com/install.sh --sha256 TRUSTED_BOOTSTRAP_SHA256
 ```
 
-On installed STL `v0.1.23` or later containing the source-selector menu,
-operators may instead open `sudo stl menu` → **Update → Trusted HTTPS
-mirror**, enter `https://stl.example.com/install.sh` and the independently
-verified `BOOTSTRAP_SHA256`, review them and type `UPDATE`. This is
-the same bounded `stl update --mirror` flow, **not** a second installer.
+On installed STL `v0.1.23` through `v0.1.25`, operators may open
+`sudo stl menu` → **Update → Trusted HTTPS mirror**. In newer builds,
+the equivalent advanced option is **Update → Pinned HTTPS bootstrap**,
+not **HTTPS release file**. Enter `https://stl.example.com/install.sh`
+and the independently verified `BOOTSTRAP_SHA256`, review them and type
+`UPDATE`. This is the same bounded `stl update --mirror` flow, **not** a second installer.
 The selected Mirror path does not query GitHub, remember Mirror authority
 or install optional helpers. The older published `v0.1.22` does not have
 this menu or CLI; use the guarded fallback below until a verified upgrade.
@@ -413,14 +414,14 @@ for an administrative installation. Running `install` against a different
 existing verified STL will **not** silently upgrade; it prints a specific
 Update instruction. Same-artifact reinstall remains an idempotent no-op.
 
-**Offline Update uses the Mirror command or selected menu choice above.**
-Starting with installed `v0.1.23`, the menu separately offers Official
-GitHub releases, Verified local file and Trusted HTTPS Mirror. **Only**
-the official release picker queries GitHub's API; the two pinned offline
-choices work on Mirror-restricted hosts. An older installed `v0.1.22`
-menu still requires GitHub for its original picker and must use the
-guarded manual Update fallback. No Mirror URL is silently persisted as
-a future update authority.
+**Offline Update uses the explicit Mirror command or corresponding menu
+choice above.** Installed `v0.1.23` through `v0.1.25` offer Official
+GitHub releases, Verified local file and Trusted HTTPS mirror. Newer
+builds add the simple HTTPS release file and separate advanced Pinned HTTPS
+bootstrap and Publisher-signed HTTPS bootstrap choices. **Only** the
+official release picker queries GitHub's API. An installed `v0.1.22`
+requires the guarded manual Update fallback. No Mirror URL is silently
+persisted as future update authority.
 
 The mirror bootstrap fetches only `https://stl.example.com/releases/vX.Y.Z/`
 files, with **no GitHub/API fallback or redirects**. It verifies the canonical
