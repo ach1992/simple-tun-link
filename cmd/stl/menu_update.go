@@ -359,7 +359,7 @@ func menuPrintManualUpdate(out io.Writer, selected string) {
 func menuPrintOfflineUpdate(out io.Writer) {
 	menuSection(out, "Offline / HTTPS mirror Update")
 	menuProse(out, "A mirror can simply copy the official GitHub Release assets unchanged. Choose its versioned HTTPS local-install.sh file; no mirror generator, publisher key, GitHub API or per-install typed SHA256 is needed. The operator is responsible for trusting the chosen HTTPS server.")
-	menuField(out, "HTTPS mirror", "https://github.com/ach1992/simple-tun-link/blob/main/docs/MIRROR.md#3-clean-install-and-explicit-update")
+	menuField(out, "HTTPS mirror", "https://github.com/ach1992/simple-tun-link/blob/main/docs/MIRROR.md#simple-copy-as-is-mirror-recommended")
 	menuField(out, "Local file", "https://github.com/ach1992/simple-tun-link/blob/main/docs/INSTALL.md#local-installation-choose-a-published-asset")
 	menuProse(out, "Simple HTTPS release-file Update (no user-supplied SHA256 or separate signer):")
 	menuField(out, "Mirror file", "sudo stl update --url https://YOUR_MIRROR/releases/vX.Y.Z/stl_vX.Y.Z_linux_ARCH_local-install.sh")

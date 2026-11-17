@@ -344,6 +344,13 @@ The independently SHA-pinned local/Mirror paths below remain optional.
 
 ### One transferred file and one trusted command (new release format)
 
+This is the **optional independently SHA256-pinned local-transfer procedure**.
+For an operator-trusted HTTPS source that does not require a separately
+obtained digest, use the [simple original Release-file workflow](MIRROR.md#simple-copy-as-is-mirror-recommended)
+instead. Do not confuse the two trust models: both use the same canonical
+installer, but only the advanced procedure independently authenticates the
+complete transferred shell file before running it.
+
 **[Stable v0.1.9](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.9)
 was the first release with the self-contained `*_local-install.sh` format.**
 Use the [latest published Stable](https://github.com/ach1992/simple-tun-link/releases/latest)
