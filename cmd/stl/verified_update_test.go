@@ -69,7 +69,11 @@ func TestVerifiedUpdateRequiresExplicitIndependentDigestAndExactSource(t *testin
 }
 
 func TestVerifiedUpdateMirrorURLRejectsUntrustedOrigins(t *testing.T) {
-	for _, good := range []string{"https://mirror.example.com/install.sh", "https://127.0.0.1:443/install.sh"} {
+	for _, good := range []string{
+		"https://mirror.example.com/install.sh", "https://127.0.0.1:443/install.sh",
+		"https://[2001:db8::1]/install.sh", "https://[2001:db8::1]:8443/install.sh",
+		"https://[::1]/install.sh", "https://[::ffff:192.0.2.1]/install.sh",
+	} {
 		if err := verifyUpdateMirrorURL(good); err != nil {
 			t.Fatalf("valid mirror %q: %v", good, err)
 		}
@@ -87,6 +91,11 @@ func TestVerifiedUpdateMirrorURLRejectsUntrustedOrigins(t *testing.T) {
 		"https://mirror.example.com/%69nstall.sh",
 		"https://mirror.example.com/install.sh?",
 		"https://mirror.example.com:443@evil.example.com/install.sh",
+		"https://[bad]/install.sh", "https://[::gg]/install.sh",
+		"https://[::1]/install.sh?fake=1", "https://[::1]:0/install.sh",
+		"https://[::1]:99999/install.sh", "https://[::1]:/install.sh",
+		"https://[::1]junk/install.sh", "https://[::1]@evil.example/install.sh",
+		"https://[::1%25en0]/install.sh", "https://[::1]/bad/../install.sh",
 	} {
 		if err := verifyUpdateMirrorURL(bad); err == nil {
 			t.Fatalf("accepted unsafe mirror URL: %q", bad)

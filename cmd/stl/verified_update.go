@@ -11,6 +11,7 @@ import (
 	"hash"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -60,13 +61,32 @@ func parseVerifiedUpdate(args []string) (verifiedUpdateRequest, error) {
 	}
 }
 
+// Only a DNS/IPv4 host or an explicitly bracketed IPv6 literal can
+// identify a trusted HTTPS mirror. An IPv6 physical host is transport data,
+// not a new trust source: TLS hostname/IP-SAN validation and independent
+// exact SHA256 still apply, without redirects or credentials.
+func validUpdateMirrorHost(u *url.URL) bool {
+	host := u.Hostname()
+	if host == "" {
+		return false
+	}
+	if !strings.HasPrefix(u.Host, "[") {
+		return updateHostPattern.MatchString(host) && !strings.Contains(host, "..")
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil || !ip.Is6() || ip.Zone() != "" {
+		return false
+	}
+	literal := "[" + host + "]"
+	return u.Host == literal || strings.HasPrefix(u.Host, literal+":") && u.Port() != ""
+}
+
 func verifyUpdateMirrorURL(raw string) error {
 	reject := errors.New("mirror update requires exactly https://HOST[:PORT]/install.sh (no credentials, query, fragment or redirect); no update started")
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" || u.User != nil || u.Opaque != "" ||
 		u.Path != "/install.sh" || u.RawPath != "" || u.RawQuery != "" ||
-		u.ForceQuery || u.Fragment != "" || u.RawFragment != "" || u.Hostname() == "" ||
-		!updateHostPattern.MatchString(u.Hostname()) || strings.Contains(u.Hostname(), "..") {
+		u.ForceQuery || u.Fragment != "" || u.RawFragment != "" || !validUpdateMirrorHost(u) {
 		return reject
 	}
 	if port := u.Port(); port != "" {

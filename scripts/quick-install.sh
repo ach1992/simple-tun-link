@@ -27,7 +27,8 @@ quick_install_main() {
   version=$bootstrap_version
   if [[ -n $mirror_url ]]; then
     [[ $bootstrap_version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ &&
-       $mirror_url =~ ^https://[a-zA-Z0-9][a-zA-Z0-9.-]*(:[0-9]{1,5})?/releases/v[0-9]+\.[0-9]+\.[0-9]+$ &&
+       ( $mirror_url =~ ^https://[a-zA-Z0-9][a-zA-Z0-9.-]*(:[0-9]{1,5})?/releases/v[0-9]+\.[0-9]+\.[0-9]+$ ||
+         $mirror_url =~ ^https://\[([0-9a-fA-F]*:){2,}[0-9a-fA-F:.]*\](:[0-9]{1,5})?/releases/v[0-9]+\.[0-9]+\.[0-9]+$ ) &&
        $mirror_url == */releases/$bootstrap_version && $mirror_url != *..* &&
        $pinned_install_sha =~ ^[0-9a-f]{64}$ &&
        $mirror_sums_sha =~ ^[0-9a-f]{64}$ ]] || {
