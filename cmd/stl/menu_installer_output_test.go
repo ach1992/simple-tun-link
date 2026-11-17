@@ -180,6 +180,8 @@ func TestCanonicalAPTPlannerAndTrustVocabularyProjection(t *testing.T) {
 		{"unsafe sized plan", "APT plan is empty or exceeds safe preview limits", "apt_dependency_plan", "apt_dependency_plan_unverified"},
 		{"changed candidate", "APT preferred candidate differs from the consented version", "apt_dependency_plan", "apt_dependency_plan_unverified"},
 		{"drift before refresh", "APT dependency plan changed since confirmation; no APT attempted", "apt_dependency_plan", "apt_dependency_plan_unverified"},
+		{"digest drift", "APT dependency plan digest changed since confirmation; no APT attempted", "apt_dependency_plan", "apt_dependency_plan_unverified"},
+		{"missing selected plan", "APT could not produce a complete install plan", "apt_dependency_plan", "apt_dependency_plan_unverified"},
 		{"drift after refresh", "APT dependency plan changed after index refresh; package install cancelled", "apt_dependency_plan", "apt_dependency_plan_unverified"},
 		{"drift before prepare", "APT plan changed since confirmation; no APT attempted", "apt_dependency_plan", "apt_dependency_plan_unverified"},
 		{"empty approved plan", "approved APT install plan is empty; nothing installed", "apt_dependency_plan", "apt_dependency_plan_unverified"},
@@ -202,8 +204,14 @@ func TestCanonicalAPTPlannerAndTrustVocabularyProjection(t *testing.T) {
 				t.Errorf("unsafe or incomplete operator report: %q", display)
 			}
 			reason, next := packageInventoryGuidance(packageInventoryFailure(line, nil))
-			if reason != tc.reason || strings.Contains(reason+next, operatorSensitiveSentinel) {
-				t.Errorf("preview mismatch: reason=%q next=%q; want %q", reason, next, tc.reason)
+			expectedPreview := tc.reason
+			if strings.HasPrefix(tc.message, "cannot verify distribution archive signatures") {
+				// Existing PREPARE stage keeps its apt_source_trust classification,
+				// while the read-only Preview can offer a more precise remedy.
+				expectedPreview = "distro_signature_verifier_missing"
+			}
+			if reason != expectedPreview || strings.Contains(reason+next, operatorSensitiveSentinel) {
+				t.Errorf("preview mismatch: reason=%q next=%q; want %q", reason, next, expectedPreview)
 			}
 			if tc.stage == "apt_source_trust" && !strings.Contains(next, "signature") {
 				t.Errorf("preview source recovery weakened: %q", next)
