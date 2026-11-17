@@ -16,7 +16,7 @@ Usage:
   install.sh install|update --version vX.Y.Z [--backends native,wireguard,quic,ipsec]
   install.sh install|update --bundle /path/to/release-bundle [--prefix /usr/local] [--backends all]
   install.sh requirements [--backends native,wireguard,quic,ipsec] [--os-release-file /path/to/read-only-fixture]
-  install.sh prepare --backends native|wireguard|quic|ipsec|all [--expected-missing '...'] [--expected-apt-plan '...']
+  install.sh prepare --backends native|wireguard|quic|ipsec|all [--expected-missing '...'] [--expected-apt-plan '...' | --expected-apt-plan-sha256 SHA256]
   install.sh uninstall [--prefix /usr/local] [--retire-owned-restore]
 
 The default backend selection is native (GRE/IPIP). Add wireguard, quic or
@@ -35,6 +35,11 @@ No host Link or network configuration is modified by this installer.
 maintenance lock, allow fresh installs, identical verified artifacts and
 newer Stable-to-Stable updates only. Ordinary explicit update still supports
 a separately reviewed downgrade or RC transition.
+The internal --signed-forward-from VERSION COMMIT mode is used only by
+publisher-authenticated Mirror Update; it rechecks the actual installed
+identity under the existing exclusive maintenance lock and refuses stale
+consent or any same-version/downgrade transaction. Operators should use
+stl update --signed-mirror rather than call this internal flag directly.
 Unpack requires a verified SHA256 from independently trusted release metadata,
 then checks regular-file members and a fresh private destination without APT.
 Missing selected distro packages may use only currently configured signed APT;
@@ -527,6 +532,11 @@ expected_missing=
 expected_missing_supplied=0
 expected_apt_plan=
 expected_apt_plan_supplied=0
+expected_apt_plan_sha256=
+expected_apt_plan_sha256_supplied=0
+signed_prior_version=
+signed_prior_commit=
+signed_prior_supplied=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version) [[ $# -ge 2 && -z $version ]] || usage; version=$2; shift 2 ;;
@@ -534,12 +544,14 @@ while [[ $# -gt 0 ]]; do
     --release-base) [[ $# -ge 2 && -z $release_base ]] || usage; release_base=$2; shift 2 ;;
     --release-sums-sha256) [[ $# -ge 2 && -z $release_sums_sha256 ]] || usage; release_sums_sha256=$2; shift 2 ;;
     --auto-stable) [[ $auto_stable == 0 ]] || usage; auto_stable=1; shift ;;
+    --signed-forward-from) [[ $# -ge 3 && $signed_prior_supplied == 0 ]] || usage; signed_prior_version=$2; signed_prior_commit=$3; signed_prior_supplied=1; shift 3 ;;
     --retire-owned-restore) [[ $retire_owned_restore == 0 ]] || usage; retire_owned_restore=1; shift ;;
     --prefix) [[ $# -ge 2 ]] || usage; prefix=$2; shift 2 ;;
     --backends) [[ $# -ge 2 && $backends_supplied == 0 ]] || usage; backends=$2; backends_supplied=1; shift 2 ;;
     --os-release-file) [[ $# -ge 2 && -z $os_release_fixture ]] || usage; os_release_fixture=$2; shift 2 ;;
     --expected-missing) [[ $# -ge 2 && $expected_missing_supplied == 0 ]] || usage; expected_missing=$2; expected_missing_supplied=1; shift 2 ;;
     --expected-apt-plan) [[ $# -ge 2 && $expected_apt_plan_supplied == 0 ]] || usage; expected_apt_plan=$2; expected_apt_plan_supplied=1; shift 2 ;;
+    --expected-apt-plan-sha256) [[ $# -ge 2 && $expected_apt_plan_sha256_supplied == 0 ]] || usage; expected_apt_plan_sha256=$2; expected_apt_plan_sha256_supplied=1; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -551,6 +563,15 @@ else
   [[ -n $version && -z $bundle || -z $version && -n $bundle ]] || usage
 fi
 [[ $auto_stable == 0 || ( $action == install && -n $bundle ) ]] || usage
+# The signed forward admission is an EXTRA constraint enforced under the
+# canonical maintenance lock. Local --bundle is allowed only for isolated
+# offline acceptance; normal signed production Updates use a pinned Mirror.
+if [[ $signed_prior_supplied == 1 ]]; then
+  [[ $action == update && $auto_stable == 0 &&
+     ( -n $bundle || -n $release_base ) &&
+     $signed_prior_version =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ &&
+     $signed_prior_commit =~ ^[0-9a-f]{40}$ ]] || usage
+fi
 # An operator-managed HTTPS mirror is an explicit, hash-pinned release
 # transport, never a fallback for an untrusted official download.
 [[ -z $release_base && -z $release_sums_sha256 ||
@@ -559,13 +580,15 @@ fi
 if [[ -n $release_base ]]; then
   [[ $release_sums_sha256 =~ ^[0-9a-f]{64}$ &&
      $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ &&
-     $release_base =~ ^https://[a-zA-Z0-9][a-zA-Z0-9.-]*(:[0-9]{1,5})?/releases/v[0-9]+\.[0-9]+\.[0-9]+$ &&
+     ( $release_base =~ ^https://[a-zA-Z0-9][a-zA-Z0-9.-]*(:[0-9]{1,5})?/releases/v[0-9]+\.[0-9]+\.[0-9]+$ ||
+       $release_base =~ ^https://\[([0-9a-fA-F]*:){2,}[0-9a-fA-F:.]*\](:[0-9]{1,5})?/releases/v[0-9]+\.[0-9]+\.[0-9]+$ ) &&
      $release_base == */releases/$version && $release_base != *..* ]] ||
     fail 'mirror requires exact versioned HTTPS release directory and independently trusted SHA256SUMS digest'
 fi
 [[ $retire_owned_restore == 0 || $action == uninstall ]] || usage
 [[ $action == requirements || -z $os_release_fixture ]] || usage
-[[ $action == prepare || ( $expected_missing_supplied == 0 && $expected_apt_plan_supplied == 0 ) ]] || usage
+[[ $action == prepare || ( $expected_missing_supplied == 0 && $expected_apt_plan_supplied == 0 && $expected_apt_plan_sha256_supplied == 0 ) ]] || usage
+[[ $expected_apt_plan_supplied == 0 || $expected_apt_plan_sha256_supplied == 0 ]] || usage
 [[ $action != prepare || $prefix == /usr/local ]] || fail 'package preparation is allowed only for the installer-owned /usr/local installation'
 
 # Use a data-only OS release parser. Never "source" /etc/os-release as shell
@@ -593,19 +616,16 @@ validate_os() {
     debian)
       [[ $os_version =~ ^([0-9]+)(\.[0-9]+)?$ ]] || fail "invalid Debian version: $os_version"
       major=${BASH_REMATCH[1]}
-      (( 10#$major >= 11 )) || fail "Debian 11 or later is required; found $os_version"
-      if (( 10#$major == 11 )); then
-        printf 'stl installer [WARNING]: Debian 11 LTS ended 2026-08-31; retain compatibility only with separately maintained security support. No APT source changes are made.\n' >&2
-      fi
+      # Do not infer kernel, repository or backend capabilities from the
+      # release number. Signed APT and per-backend preflight decide support.
       ;;
     ubuntu)
       [[ $os_version =~ ^([0-9]+)\.([0-9]{2})$ ]] || fail "invalid Ubuntu version: $os_version"
       major=${BASH_REMATCH[1]}
       minor=${BASH_REMATCH[2]}
-      (( 10#$major > 22 || (10#$major == 22 && 10#$minor >= 4) )) ||
-        fail "Ubuntu 22.04 or later is required; found $os_version"
+      # Accept valid release metadata without inventing a version allowlist.
       ;;
-    *) fail "unsupported distribution: $os_id $os_version; expected Ubuntu >=22.04 or Debian >=11" ;;
+    *) fail "unsupported package-manager distribution: $os_id $os_version; this installer currently integrates with Debian/Ubuntu APT" ;;
   esac
 }
 
@@ -657,6 +677,34 @@ package_installed() {
   [[ $result == 'install ok installed' ]]
 }
 
+# Accept a distribution-authenticated Release with at least one valid signature
+# from the installed official archive keyring. gpgv can return 2 for another
+# co-signer absent from that keyring (as on Debian 12 in Nov 2026). Do not
+# treat missing-key signers as trusted, or tolerate an invalid known signature.
+# This parser takes ONLY gpgv --status-fd output, never APT human text.
+apt_archive_signature_status_valid() {
+  local rc=$1 status_file=$2
+  [[ $rc =~ ^[0-9]+$ && -f $status_file ]] || return 1
+  LC_ALL=C awk -v rc="$rc" '
+    $1 == "[GNUPG:]" && $2 == "VALIDSIG" { valid++ }
+    $1 == "[GNUPG:]" && $2 == "NO_PUBKEY" { no_key[$3] = 1 }
+    $1 == "[GNUPG:]" && $2 == "ERRSIG" {
+      if ($8 == 9) missing_error[$3] = 1
+      else invalid = 1
+    }
+    $1 == "[GNUPG:]" && $2 ~ /^(BADSIG|REVKEYSIG|EXPKEYSIG|EXPSIG|KEYREVOKED|KEYEXPIRED|SIGEXPIRED|NODATA|FAILURE|ERROR)$/ { invalid = 1 }
+    END {
+      missing = 0
+      for (key in missing_error) {
+        if (!(key in no_key)) invalid = 1
+        else missing++
+      }
+      if (rc != 0 && (rc != 2 || missing == 0)) invalid = 1
+      exit !(valid > 0 && invalid == 0)
+    }
+  ' "$status_file"
+}
+
 # Verify the source of each SELECTED candidate, not merely its APT-trusted
 # Release Origin/Label. A third-party source may sign its own Release metadata
 # with a trusted key and claim "Ubuntu" or "Debian". The signed InRelease that
@@ -666,7 +714,7 @@ package_installed() {
 apt_verify_distro_candidates() {
   local anchor keyring_package index_targets row description filename component architecture
   local target identifier release suffix index_file pkg_version pkg version policy_line selected=0
-  local source candidate=0 matches policy
+  local source candidate=0 matches policy status_file gpgv_rc
   local -A indices=() release_verified=()
   if [[ $os_id == ubuntu ]]; then
     anchor=/usr/share/keyrings/ubuntu-archive-keyring.gpg
@@ -680,7 +728,7 @@ apt_verify_distro_candidates() {
   [[ $(dpkg-query -S "$anchor" 2>/dev/null) == "$keyring_package: "* ]] ||
     fail 'official archive keyring package ownership unverified'
   package_installed "$keyring_package" || fail 'distribution archive keyring package not fully installed'
-  command -v gpgv >/dev/null || fail 'cannot verify distribution archive signatures'
+  command -v gpgv >/dev/null || fail 'cannot verify distribution archive signatures; official distro gpgv is missing. Install gpgv from authenticated distribution APT or separately verified offline media, then retry; STL will not bypass signature checks.'
   # indextargets reports the exact local Packages indices APT associates
   # with the configured sources. Match its Description to apt-cache policy's
   # per-version source line; never accept a matching label alone.
@@ -750,8 +798,22 @@ apt_verify_distro_candidates() {
         if [[ -z ${release_verified[$release]+present} ]]; then
           [[ -f $release && ! -L $release && $(stat -c %u "$release") == 0 ]] ||
             fail 'APT candidate InRelease is missing or untrusted'
-          gpgv --quiet --keyring "$anchor" "$release" ||
-            fail 'APT candidate InRelease is not signed by the distribution archive'
+          # An InRelease may have several co-signatures. gpgv exits 2 when
+          # *one* signer is not in this installed archive keyring even if
+          # another official signer VALIDLY authenticated the same bytes.
+          # Trust ONLY actual VALIDSIG records emitted by this verifier with
+          # the package-owned distribution keyring; never trust a claimed
+          # Origin/Label or a signature from a foreign APT keyring.
+          status_file=$(mktemp /tmp/stl-archive-gpgv.XXXXXXXX) ||
+            fail 'cannot capture official archive signature status'
+          gpgv_rc=0
+          gpgv --quiet --status-fd 3 --keyring "$anchor" "$release" 3> "$status_file" ||
+            gpgv_rc=$?
+          if ! apt_archive_signature_status_valid "$gpgv_rc" "$status_file"; then
+            rm -f -- "$status_file"
+            fail 'APT candidate InRelease has no valid distribution archive signature or contains an invalid signature'
+          fi
+          rm -f -- "$status_file"
           # A verified signer is decisive. These metadata fields are just an
           # additional consistency check, never an alternative to the key.
           if [[ $os_id == ubuntu ]]; then
@@ -854,49 +916,53 @@ apt_update_indexes() {
   done
 }
 
-# Keep the machine-readable dependency inventory bounded without limiting
-# the LIVE diagnostic stream. The same bounded read loop forwards all
-# bytes to the operator immediately and retains at most 64 KiB of
-# authenticated apt-get -s text for exact-plan parsing.
-apt_plan_capture_bounded() {
-  local LC_ALL=C
-  local capture=$1 chunk bytes=0 left overflow=0
+# Stream all APT diagnostics immediately. Capture ONLY the real install/removal
+# facts, never progress, dependency explanations or other verbose diagnostics.
+# This makes the machine plan scale with actual selected dependencies instead
+# of imposing an arbitrary cap on otherwise harmless apt-get -s output.
+apt_plan_capture_selected() {
+  local capture=$1 line ended=0
   : > "$capture" || return 1
-  while IFS= read -r -N 4096 chunk || [[ -n $chunk ]]; do
-    printf '%s' "$chunk" >&2 || return 2
-    left=$((65536 - bytes))
-    if (( left <= 0 )); then
-      overflow=1
-      continue
-    fi
-    if (( ${#chunk} > left )); then
-      printf '%s' "${chunk:0:left}" >> "$capture" || return 1
-      bytes=65536
-      overflow=1
+  while :; do
+    line=
+    if IFS= read -r line; then
+      ended=1
+    elif [[ -n $line ]]; then
+      ended=0
     else
-      printf '%s' "$chunk" >> "$capture" || return 1
-      bytes=$((bytes + ${#chunk}))
+      break
     fi
+    # Preserve the exact visible bytes, including a final unterminated line.
+    printf '%s' "$line" >&2 || return 2
+    if (( ended )); then printf '\n' >&2 || return 2; fi
+    case "$line" in
+      Inst\ *|Remv\ *|Purg\ *)
+        printf '%s' "$line" >> "$capture" || return 1
+        if (( ended )); then printf '\n' >> "$capture" || return 1; fi ;;
+    esac
+    (( ended )) || break
   done
-  (( overflow == 0 ))
 }
+
 
 apt_resolve_plan() {
   local text line pkg version requested found
   local -a planned=()
+  local -A seen_plan=()
   apt_plan=
+  apt_plan_sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   (( ${#missing[@]} > 0 )) || return 0
   apt_sources_must_be_authenticated
   local capture
   local -a outcomes=()
   capture=$(/usr/bin/mktemp /tmp/stl-apt-plan.XXXXXXXX) ||
-    fail 'APT_DEPENDENCY_PLAN cannot create private bounded simulation capture; no packages changed.'
-  # Stream the complete stdout to the operator while retaining only a
-  # bounded parsed plan; stderr from apt-get remains directly visible.
+    fail 'APT_DEPENDENCY_PLAN cannot create private simulation plan capture; no packages changed.'
+  # Stream complete stdout/stderr while retaining only APT's install/removal
+  # facts. Verbose diagnostic text is not part of the authorization plan.
   # A failed simulation is never an accepted plan.
   if LC_ALL=C apt-get -s -o Debug::NoLocking=1 "${apt_safety[@]}" \
        install --no-install-recommends -- "${missing[@]}" |
-     apt_plan_capture_bounded "$capture"; then
+     apt_plan_capture_selected "$capture"; then
     outcomes=("${PIPESTATUS[@]}")
   else
     outcomes=("${PIPESTATUS[@]}")
@@ -911,7 +977,7 @@ apt_resolve_plan() {
   fi
   if (( outcomes[1] != 0 )); then
     /bin/rm -f -- "$capture"
-    fail 'APT_DEPENDENCY_PLAN simulation output exceeded the bounded 64 KiB machine-plan capture or its private capture failed; all available diagnostics were streamed above; no packages changed.'
+    fail 'APT_DEPENDENCY_PLAN could not capture all install/removal facts; no packages changed.'
   fi
   text=$(< "$capture")
   /bin/rm -f -- "$capture"
@@ -934,9 +1000,8 @@ apt_resolve_plan() {
         if package_installed "$pkg"; then
           fail 'APT plan would upgrade an installed package; review separately'
         fi
-        for requested in "${planned[@]}"; do
-          [[ $requested != "$pkg="* ]] || fail 'APT plan includes duplicate package identity'
-        done
+        [[ -z ${seen_plan[$pkg]+present} ]] || fail 'APT plan includes duplicate package identity'
+        seen_plan["$pkg"]=1
         planned+=("$pkg=$version")
         ;;
     esac
@@ -949,8 +1014,12 @@ apt_resolve_plan() {
     [[ $found == 1 ]] || fail 'APT plan omitted a required selected package'
   done
   apt_plan="${planned[*]}"
-  [[ -n $apt_plan && ${#apt_plan} -lt 16384 ]] ||
-    fail 'APT plan is empty or exceeds safe preview limits'
+  [[ -n $apt_plan ]] || fail 'APT could not produce a complete install plan'
+  apt_plan_sha256=$(printf '%s' "$apt_plan" | sha256sum) ||
+    fail 'APT plan digest could not be calculated'
+  apt_plan_sha256=${apt_plan_sha256%% *}
+  [[ $apt_plan_sha256 =~ ^[a-f0-9]{64}$ ]] ||
+    fail 'APT plan digest is invalid'
   apt_verify_distro_candidates
 }
 
@@ -1372,6 +1441,9 @@ ensure_packages() {
   if (( ${#missing[@]} == 0 )); then
     [[ $expected_apt_plan_supplied == 0 || -z $expected_apt_plan ]] ||
       fail 'APT plan changed since confirmation; no APT attempted'
+    [[ $expected_apt_plan_sha256_supplied == 0 ||
+       $expected_apt_plan_sha256 == e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 ]] ||
+      fail 'APT plan changed since confirmation; no APT attempted'
     printf '[OK] STL dependencies already installed for %s %s (%s).\n' "$os_id" "$os_version" "$backends" >&2
     return
   fi
@@ -1384,7 +1456,8 @@ ensure_packages() {
     done
   fi
   if [[ $missing_ipsec == 1 && ( $action != prepare ||
-        $expected_missing_supplied != 1 || $expected_apt_plan_supplied != 1 ) ]]; then
+        $expected_missing_supplied != 1 ||
+        ( $expected_apt_plan_supplied != 1 && $expected_apt_plan_sha256_supplied != 1 ) ) ]]; then
     fail 'automatic IPsec requires explicit exact-plan PREPARE consent'
   fi
   if [[ $missing_ipsec == 1 ]]; then
@@ -1404,6 +1477,9 @@ ensure_packages() {
   before_plan=$apt_plan
   if [[ $expected_apt_plan_supplied == 1 && $before_plan != "$expected_apt_plan" ]]; then
     fail 'APT dependency plan changed since confirmation; no APT attempted'
+  fi
+  if [[ $expected_apt_plan_sha256_supplied == 1 && $apt_plan_sha256 != "$expected_apt_plan_sha256" ]]; then
+    fail 'APT dependency plan digest changed since confirmation; no APT attempted'
   fi
   if [[ $missing_ipsec == 1 ]]; then
     ipsec_clean_host_before_apt
@@ -1458,6 +1534,7 @@ if [[ $action == requirements ]]; then
     printf 'missing_packages=%s\n' "${missing[*]}"
     apt_resolve_plan
     printf 'apt_install=%s\n' "$apt_plan"
+    printf 'apt_install_sha256=%s\n' "$apt_plan_sha256"
   fi
   if [[ $want_ipsec == 1 ]]; then
     printf 'notice=IPsec PREPARE may briefly activate a new vendor strongSwan service; only transaction-owned service normalization is permitted\n'
@@ -1584,6 +1661,30 @@ if [[ $action == install ]]; then
 else
   read_record
 fi
+if [[ -n $signed_prior_version ]]; then
+  # The actual installer-owned identity is obtained inside the existing
+  # EXCLUSIVE .maintenance.lock, never from the prior Signed Update process.
+  [[ $prior_version == "$signed_prior_version" ]] ||
+    fail 'signed_forward_prior_identity_changed: installed version changed since signed authentication; no APT or binary changed'
+  signed_installed_identity=$("$target" version --json) ||
+    fail 'signed_forward_prior_identity_unverified: installed executable cannot report its source commit'
+  [[ $signed_installed_identity == *\"version\":\"$signed_prior_version\"* &&
+     $signed_installed_identity == *\"commit\":\"$signed_prior_commit\"* ]] ||
+    fail 'signed_forward_prior_identity_changed: installed source commit changed since signed authentication'
+  # Preserve deliberately explicit SHA-pinned/manual downgrade semantics;
+  # only the signed path insists on strictly forward Stable progress.
+  [[ $version == '' || $version =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] ||
+    fail 'signed_forward_target_invalid: signed Update requires a Stable version'
+  signed_target=$version
+  if [[ -n $bundle ]]; then
+    signed_target=$(sed -n 's/^version=//p' "$bundle/BUILD-MANIFEST.txt") ||
+      fail 'signed_forward_target_invalid: bundle manifest unavailable'
+  fi
+  [[ $signed_target =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ &&
+     "${signed_prior_version%.*}" == "${signed_target%.*}" ]] &&
+    dpkg --compare-versions "${signed_prior_version#v}" lt "${signed_target#v}" ||
+    fail 'signed_forward_target_not_newer: target is not a compatible strictly newer Stable'
+fi
 
 # Only the existing installer-owned executable and record are admitted for
 # post-install package provisioning; never change STL binary/Link State here.
@@ -1596,6 +1697,10 @@ if [[ $action == prepare ]]; then
   if [[ $expected_apt_plan_supplied == 1 ]]; then
     expected_apt_pattern='^([a-z0-9.+:-]+=[0-9a-zA-Z:.+~_-]+( [a-z0-9.+:-]+=[0-9a-zA-Z:.+~_-]+)*)?$'
     [[ $expected_apt_plan =~ $expected_apt_pattern ]] || fail 'untrusted expected APT dependency plan'
+  fi
+  if [[ $expected_apt_plan_sha256_supplied == 1 ]]; then
+    [[ $expected_apt_plan_sha256 =~ ^[a-f0-9]{64}$ ]] ||
+      fail 'untrusted expected APT dependency plan digest'
   fi
   ensure_packages
   printf '[OK] Selected backend packages prepared; kernel readiness and private IPsec service admission (if selected) still need independent verification. No STL executable or Link was changed.\n'
@@ -1641,6 +1746,11 @@ finish() {
   local rc=$?
   trap - EXIT
   set +e
+  # An EXIT trap can run while a called helper still has unassigned local
+  # variables (e.g. the APT verifier's local 'target') in dynamic scope.
+  # Rebind installer-owned identities in this trap's own function frame so
+  # that cleanup cannot adopt or expand the caller's shadowed variables.
+  local target="$bin_dir/stl" alias="$bin_dir/stlink" record="$record_dir/install-record"
   if [[ -n $stage && -d $stage ]]; then
     if (( rc == 0 )); then
       if [[ -f $stage/COMMITTED ]]; then

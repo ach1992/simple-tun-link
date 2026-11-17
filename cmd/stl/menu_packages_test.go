@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -87,8 +90,12 @@ func TestSelectedPackagePreviewErrorsAreActionableAndRedacted(t *testing.T) {
 	}{
 		{"timeout", "", "requirements_check_timeout", "host load", context.DeadlineExceeded},
 		{"interrupted", "", "requirements_check_interrupted", "Reopen Create tunnel", context.Canceled},
-		{"unsupported OS", "stl installer [FAILED]: unsupported distribution: secret", "unsupported_or_unverified_os", "/etc/os-release", nil},
-		{"APT trust", "stl installer [FAILED]: APT candidate InRelease is not signed by the distribution archive: secret", "apt_source_trust_unverified", "apt-cache policy", nil},
+		{"unsupported package manager", "stl installer [FAILED]: unsupported package-manager distribution: fedora 42; this installer currently integrates with Debian/Ubuntu APT", "unsupported_or_unverified_os", "/etc/os-release", nil},
+		{"invalid Debian release metadata", "stl installer [FAILED]: invalid Debian version: secret", "unsupported_or_unverified_os", "/etc/os-release", nil},
+		{"invalid Ubuntu release metadata", "stl installer [FAILED]: invalid Ubuntu version: secret", "unsupported_or_unverified_os", "/etc/os-release", nil},
+		{"OS identity unreadable", "stl installer [FAILED]: OS release file is unreadable: secret", "unsupported_or_unverified_os", "/etc/os-release", nil},
+		{"APT trust", "stl installer [FAILED]: APT candidate InRelease has no valid distribution archive signature or contains an invalid signature: secret", "apt_source_trust_unverified", "apt-cache policy", nil},
+		{"missing gpgv", "stl installer [FAILED]: cannot verify distribution archive signatures; official distro gpgv is missing.", "distro_signature_verifier_missing", "gpgv", nil},
 		{"APT plan", "stl installer [FAILED]: APT cannot resolve the complete selected dependency plan: secret", "apt_dependency_plan_unverified", "apt-cache policy", nil},
 		{"dpkg", "stl installer [FAILED]: dpkg has unfinished package configuration: secret", "dpkg_transaction_incomplete", "dpkg --audit", nil},
 		{"untrusted raw stderr", "stl installer [FAILED]: private-token-DO-NOT-PRINT", "requirements_inventory_unverified", "/etc/os-release", nil},
@@ -154,49 +161,78 @@ func TestCanonicalAPTPreviewFailuresUseCurrentInstallerReasons(t *testing.T) {
 	}
 }
 
-// The subprocess must reject excess output during collection, not after a
-// potentially unbounded bytes.Buffer has already retained the data.
-func TestSelectedPackagePreviewRejectsCaptureOverflowAtWrite(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		toStderr  bool
-		ignoreErr bool
-		maxBytes  int
-	}{
-		{"stdout/runner error", false, false, 32 * 1024},
-		{"stderr/runner error", true, false, 64 * 1024},
-		{"stdout/runner ignores error", false, true, 32 * 1024},
-		{"stderr/runner ignores error", true, true, 64 * 1024},
+// The read-only preview must never confuse long APT diagnostics with an
+// oversized dependency plan or hide the locally observed failure reason.
+func TestSelectedPackagePreviewStreamsLongDiagnosticsAndVerifiesPlan(t *testing.T) {
+	const sensitive = "temporary-private-apt-url-do-not-print"
+	realPlan := "iproute2=6.0.0-1"
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(realPlan)))
+	inventory := "distribution=debian\nversion=13\nselected_backends=native\n" +
+		"packages=iproute2 iptables kmod\nmissing_packages=iproute2\n" +
+		"apt_install=" + realPlan + "\napt_install_sha256=" + digest + "\n"
+	verbose := strings.Repeat(sensitive, 6000) + "\n"
+	runner := func(_ context.Context, stdout, stderr io.Writer, _ ...string) error {
+		if _, err := io.WriteString(stderr, verbose); err != nil {
+			return err
+		}
+		_, err := io.WriteString(stdout, inventory)
+		return err
+	}
+	var tty bytes.Buffer
+	plan, err := readSelectedPackagePreviewWithDiagnostics(context.Background(),
+		tunnelOption{backend: domain.BackendGRE, mode: domain.EncapNative}, runner, &tty)
+	if err != nil || plan.aptInstall != realPlan || plan.aptDigest != digest ||
+		tty.String() != verbose {
+		t.Fatalf("long read-only diagnostics were not retained/forwarded: plan=%+v err=%v", plan, err)
+	}
+	for _, tc := range []struct{ name, inventory string }{
+		{"wrong digest", strings.Replace(inventory, digest, strings.Repeat("f", 64), 1)},
+		{"duplicate field", inventory + "apt_install=" + realPlan + "\n"},
+		{"unexpected field", inventory + "command=run me\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			const sensitive = "private-preview-token-do-not-print"
-			payload := bytes.Repeat([]byte(sensitive), 10000)
-			runner := func(_ context.Context, stdout, stderr io.Writer, args ...string) error {
-				if strings.Join(args, " ") != "requirements --backends native" {
-					t.Fatalf("unexpected read-only command: %q", args)
-				}
-				writer := stdout
-				if tc.toStderr {
-					writer = stderr
-				}
-				n, err := writer.Write(payload)
-				if err == nil || n != tc.maxBytes {
-					t.Fatalf("capture limit violated: collected %d of %d bytes, expected %d, err=%v",
-						n, len(payload), tc.maxBytes, err)
-				}
-				if tc.ignoreErr {
-					return nil // Even a child reporting success cannot authorize a truncated plan.
-				}
+			fake := func(_ context.Context, stdout, stderr io.Writer, _ ...string) error {
+				_, err := io.WriteString(stdout, tc.inventory)
 				return err
 			}
-			_, err := readSelectedPackagePreviewWithRunner(context.Background(),
-				tunnelOption{backend: domain.BackendGRE, mode: domain.EncapNative}, runner)
-			reason, next := packageInventoryGuidance(err)
-			if reason != "requirements_inventory_oversized" || strings.Contains(reason+next, sensitive) ||
-				!strings.Contains(next, "release integrity") {
-				t.Fatalf("overflow not fail-closed and redacted: reason=%q next=%q err=%v", reason, next, err)
+			if _, err := readSelectedPackagePreviewWithRunner(context.Background(),
+				tunnelOption{backend: domain.BackendGRE, mode: domain.EncapNative}, fake); err == nil {
+				t.Fatal("malformed read-only inventory authorized PREPARE")
 			}
 		})
+	}
+	runnerFailed := func(_ context.Context, stdout, stderr io.Writer, _ ...string) error {
+		_, _ = io.WriteString(stderr, verbose)
+		_, _ = io.WriteString(stderr, "stl installer [FAILED]: APT plan would remove packages; no changes allowed\n")
+		return errors.New("APT exited with sensitive cause " + sensitive)
+	}
+	_, err = readSelectedPackagePreviewWithRunner(context.Background(),
+		tunnelOption{backend: domain.BackendGRE, mode: domain.EncapNative}, runnerFailed)
+	reason, next := packageInventoryGuidance(err)
+	if reason != "apt_dependency_plan_unverified" || strings.Contains(reason+next, sensitive) {
+		t.Fatalf("failed preview lost safe typed reason: %s %s", reason, next)
+	}
+}
+
+// Actual dependency lists, not arbitrary progress messages, determine the
+// inventory size. Spooling must accept a plan longer than the former 32KiB.
+func TestSelectedPackagePreviewLargePlanSpoolsToPrivateFile(t *testing.T) {
+	terms := []string{"iproute2=6.0.0-1"}
+	for i := 0; i < 3600; i++ {
+		terms = append(terms, fmt.Sprintf("dep-%05d=1.0.0", i))
+	}
+	large := strings.Join(terms, " ")
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(large)))
+	runner := func(_ context.Context, stdout, stderr io.Writer, _ ...string) error {
+		_, err := io.WriteString(stdout, "distribution=debian\nversion=13\nselected_backends=native\n"+
+			"packages=iproute2 iptables kmod\nmissing_packages=iproute2\n"+
+			"apt_install="+large+"\napt_install_sha256="+digest+"\n")
+		return err
+	}
+	got, err := readSelectedPackagePreviewWithRunner(context.Background(),
+		tunnelOption{backend: domain.BackendGRE, mode: domain.EncapNative}, runner)
+	if err != nil || got.aptDigest != digest || got.aptInstall != large {
+		t.Fatalf("legitimate long dependency inventory rejected: %v", err)
 	}
 }
 

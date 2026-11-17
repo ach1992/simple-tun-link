@@ -171,14 +171,9 @@ func verifyLockFile(f *os.File, path string, testPath bool) error {
 	return nil
 }
 
-func (g Gate) validateExecutableIdentity(dir string) error {
-	canonical := g.Canonical
-	if canonical == "" {
-		canonical = CanonicalSTL
-	}
-	if !filepath.IsAbs(canonical) || filepath.Clean(canonical) != canonical {
-		return fmt.Errorf("maintenance executable path must be absolute and canonical")
-	}
+// verifyRecoveryJournals shares the installer's existing COMMITTED identity
+// proof between Engine admission and publisher receipt reconciliation.
+func (g Gate) verifyRecoveryJournals(canonical, dir string) error {
 	// Only trust installer journals beneath a protected canonical bin
 	// directory. A regular COMMITTED pathname alone is never commit proof.
 	if err := verifyDirectory(filepath.Dir(canonical), g.testOnlyUnprivilegedPath); err != nil {
@@ -200,6 +195,20 @@ func (g Gate) validateExecutableIdentity(dir string) error {
 		if err := g.verifyRecoveryJournal(recovery, canonical, dir); err != nil {
 			return fmt.Errorf("unresolved installer recovery requires reconciliation before Link mutation: %w", err)
 		}
+	}
+	return nil
+}
+
+func (g Gate) validateExecutableIdentity(dir string) error {
+	canonical := g.Canonical
+	if canonical == "" {
+		canonical = CanonicalSTL
+	}
+	if !filepath.IsAbs(canonical) || filepath.Clean(canonical) != canonical {
+		return fmt.Errorf("maintenance executable path must be absolute and canonical")
+	}
+	if err := g.verifyRecoveryJournals(canonical, dir); err != nil {
+		return err
 	}
 	// For a checkout or manually run binary with no STL managed installation,
 	// the lock still protects concurrent installs but there is no managed

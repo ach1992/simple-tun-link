@@ -455,9 +455,10 @@ frameworks.
   NO_COLOR (including empty values) through root/non-root post-install
   menu redraw, without inheriting arbitrary shell startup hooks into
   privileged installer execution.
-- Keep the interface usable with `NO_COLOR`, `TERM=dumb` and
-  redirected streams; machine output must never depend on terminal colors,
-  screen redraw, prose or prompt order.
+- Keep the interface usable with `NO_COLOR` (no styling, but normal TTY
+  redraw), `TERM=dumb` (no ANSI), `STL_NO_CLEAR=1` (append-only view), and
+  redirected streams (no ANSI); machine output must never depend on terminal
+  colors, screen redraw, prose or prompt order.
 - Menu actions never independently allocate addresses, install packages,
   own services, commit State, or rewrite firewall/routes; they delegate
   to the existing installer/Engine and trust boundaries.

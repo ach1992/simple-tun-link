@@ -21,6 +21,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/version"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -357,13 +358,17 @@ func menuPrintManualUpdate(out io.Writer, selected string) {
 // not read foreign files or attempt an unauthenticated root update.
 func menuPrintOfflineUpdate(out io.Writer) {
 	menuSection(out, "Offline / HTTPS mirror Update")
-	menuProse(out, "Browsing the official GitHub release catalogue needs GitHub. A mirror-only server must use an explicitly trusted, version-pinned HTTPS mirror; a fully offline server needs a preverified local installer.")
-	menuField(out, "HTTPS mirror", "https://github.com/ach1992/simple-tun-link/blob/main/docs/MIRROR.md#3-clean-install-and-explicit-update")
+	menuProse(out, "A mirror can simply copy the official GitHub Release assets unchanged. Choose its versioned HTTPS local-install.sh file; no mirror generator, publisher key, GitHub API or per-install typed SHA256 is needed. The operator is responsible for trusting the chosen HTTPS server.")
+	menuField(out, "HTTPS mirror", "https://github.com/ach1992/simple-tun-link/blob/main/docs/MIRROR.md#simple-copy-as-is-mirror-recommended")
 	menuField(out, "Local file", "https://github.com/ach1992/simple-tun-link/blob/main/docs/INSTALL.md#local-installation-choose-a-published-asset")
-	menuProse(out, "If the installed version supports stl update, use one of these exact, API-free commands with independently verified pins (replace all placeholders):")
-	menuField(out, "Local", "sudo stl update --local /root/stl/stl_vX.Y.Z_linux_ARCH_local-install.sh --sha256 TRUSTED_FILE_SHA256")
-	menuField(out, "Mirror", "sudo stl update --mirror https://YOUR_TRUSTED_MIRROR/install.sh --sha256 TRUSTED_BOOTSTRAP_SHA256")
-	menuProse(out, "Obtain the digest from the trusted official download or mirror-preparation device, NOT from the mirror. Older installed versions must use the guarded source-specific Update runbook. Do not use curl | bash.")
+	menuProse(out, "Simple HTTPS release-file Update (no user-supplied SHA256 or separate signer):")
+	menuField(out, "Mirror file", "sudo stl update --url https://YOUR_MIRROR/releases/vX.Y.Z/stl_vX.Y.Z_linux_ARCH_local-install.sh")
+	menuProse(out, "For an initial installation, download the same official release file into root-owned /root/stl and execute it; see docs/MIRROR.md. GitHub's official release asset URL is also supported.")
+	menuProse(out, "Optional independently pinned or publisher-signed advanced paths remain available:")
+	menuField(out, "Pinned local", "sudo stl update --local /root/stl/stl_vX.Y.Z_linux_ARCH_local-install.sh --sha256 TRUSTED_FILE_SHA256")
+	menuField(out, "Pinned bootstrap", "sudo stl update --mirror https://YOUR_MIRROR/install.sh --sha256 TRUSTED_BOOTSTRAP_SHA256")
+	menuField(out, "Signed bootstrap", "sudo stl update --signed-mirror https://YOUR_MIRROR/install.sh (after key enrollment)")
+	menuProse(out, "Only pinned modes need an independently obtained digest. Do not use curl | bash for root installation.")
 	menuProse(out, "No update or trust-source change was performed by this screen.")
 }
 
@@ -375,7 +380,9 @@ func menuUpdate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 	menuField(out, "Installed", safeMenuText(version.Version))
 	menuOption(out, "1", "Official GitHub releases", "Browse complete immutable releases")
 	menuOption(out, "2", "Verified local file", "Offline; requires independent SHA256")
-	menuOption(out, "3", "Trusted HTTPS mirror", "No GitHub API; requires independent SHA256")
+	menuOption(out, "3", "HTTPS release file", "Direct official asset copy; no manual SHA256 or GitHub API")
+	menuOption(out, "4", "Pinned HTTPS bootstrap", "Advanced; requires independent SHA256")
+	menuOption(out, "5", "Publisher-signed HTTPS bootstrap", "Advanced; requires enrolled key")
 	menuOption(out, "o", "Offline instructions", "File transfer and trust guidance")
 	menuOption(out, "0", "Back", "No changes")
 	fmt.Fprint(out, "Choose update source (Enter cancels): ")
@@ -394,14 +401,108 @@ func menuUpdate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 	case "2":
 		return menuUpdatePinned(input, reader, out, errOut, "--local", menuCanUpdateNow(input, out), verifiedUpdateCommand)
 	case "3":
+		return menuUpdateReleaseAsset(input, reader, out, errOut, menuCanUpdateNow(input, out), verifiedUpdateCommand)
+	case "4":
 		return menuUpdatePinned(input, reader, out, errOut, "--mirror", menuCanUpdateNow(input, out), verifiedUpdateCommand)
+	case "5":
+		return menuUpdateSignedMirror(input, reader, out, errOut, menuCanUpdateNow(input, out), signedMirrorUpdateCommand)
 	case "o":
 		menuPrintOfflineUpdate(out)
 		return 0
 	default:
-		menuNotice(out, "WARNING", "Choose 1, 2, 3, o or 0; no update started.")
+		menuNotice(out, "WARNING", "Choose 1, 2, 3, 4, 5, o or 0; no update started.")
 		return 2
 	}
+}
+
+// The regular mirror path consumes an unchanged official self-contained
+// release asset over HTTPS. Only the chosen host's TLS authenticity is
+// assumed: neither the downloaded asset nor a hash from the same host can
+// independently prove GitHub publisher identity.
+func menuUpdateReleaseAsset(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
+	eligible bool, execute func([]string, io.Writer, io.Writer) int) int {
+	menuScreen(out, "Update / HTTPS release file")
+	menuProse(out, "Copy the original GitHub Release files to your HTTPS server, then enter the direct architecture-matched local-install.sh file URL. No separate Mirror bootstrap, publisher key or manual SHA256 is required.")
+	menuNotice(out, "WARNING", "You must trust the selected HTTPS host and any redirects. TLS protects transport but does not independently prove the files came from GitHub.")
+	if !eligible {
+		menuNotice(out, "INFO", "HTTPS release-file Update requires the installed /usr/local/bin/stl running as root in a real terminal; nothing changed.")
+		return 0
+	}
+	fmt.Fprint(out, "HTTPS release file URL (Enter cancels): ")
+	source, err := readMenuAnswerBounded(reader, unix.PathMax)
+	if err != nil || source == "" || source == "0" || strings.EqualFold(source, "q") {
+		menuNotice(out, "INFO", "Release-file Update cancelled. Nothing changed.")
+		return 0
+	}
+	if _, err := verifyUpdateReleaseAssetURL(source); err != nil {
+		menuNotice(out, "WARNING", "Invalid HTTPS release file, CPU architecture or URL; no update attempted.")
+		return 0
+	}
+	menuSection(out, "Review / before Update")
+	menuField(out, "HTTPS file", source)
+	menuNotice(out, "WARNING", "UPDATE will download and execute the file you explicitly selected, then run canonical installation with its embedded integrity/ownership checks. Installed binary and selected signed-APT packages may change; preserve State and credentials.")
+	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
+		menuNotice(out, "WARNING", "Fresh terminal confirmation unavailable; nothing changed.")
+		return 2
+	}
+	fmt.Fprintf(out, "Type %s to update from this HTTPS file (Enter cancels): ", menuActionToken(out, "UPDATE"))
+	answer, err := readMenuAnswer(reader)
+	if err != nil || answer != "UPDATE" {
+		menuNotice(out, "INFO", "Release-file Update cancelled. Nothing changed.")
+		return 0
+	}
+	if code := execute([]string{"--url", source}, out, errOut); code != 0 {
+		menuNotice(out, "FAILED", "Release-file Update did not complete; inspect installed version, install-record, dpkg --audit and retained recovery before retrying.")
+		return menuUpdatedExecutable
+	}
+	menuNotice(out, "OK", "Release-file Update completed. Restart STL and verify saved Links separately.")
+	return menuUpdatedExecutable
+}
+
+// Publisher-signed Update uses the existing canonical installer once the
+// independently enrolled key and detached release signature are verified.
+// This UI never enrolls a key based on a Mirror's untrusted response.
+func menuUpdateSignedMirror(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
+	eligible bool, execute func([]string, io.Writer, io.Writer) int) int {
+	menuScreen(out, "Update / publisher-signed HTTPS mirror")
+	menuField(out, "Trust", "Locally enrolled publisher Ed25519 key (independent fingerprint)")
+	menuField(out, "Enrollment", "sudo stl mirror-key enroll --file /root/stl/publisher.pem --fingerprint TRUSTED_SHA256")
+	menuProse(out, "No SHA256 needs to be copied for each new release. Signed release metadata must be fresh, compatible and newer; the downloaded bootstrap is still checked byte-for-byte before execution.")
+	if !eligible {
+		menuNotice(out, "INFO", "Signed Mirror Update requires the installed root STL, a real terminal and independently enrolled publisher key. Nothing changed.")
+		return 0
+	}
+	fmt.Fprint(out, "Publisher-signed HTTPS Mirror URL (https://HOST/install.sh; Enter cancels): ")
+	source, err := readMenuAnswerBounded(reader, unix.PathMax)
+	if err != nil || source == "" || source == "0" || strings.EqualFold(source, "q") {
+		menuNotice(out, "INFO", "Signed Mirror Update cancelled. Nothing changed.")
+		return 0
+	}
+	if verifyUpdateMirrorURL(source) != nil {
+		menuNotice(out, "WARNING", "Signed Mirror HTTPS origin is invalid; no update attempted.")
+		return 0
+	}
+	menuSection(out, "Review / before authenticated Update")
+	menuField(out, "Source", source)
+	menuNotice(out, "WARNING", "Only an independently enrolled publisher key can authorize this update. Installed binary and selected signed-APT packages may change; preserve protected State/credentials and inspect partial failures.")
+	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
+		menuNotice(out, "WARNING", "Fresh terminal confirmation unavailable; nothing changed.")
+		return 2
+	}
+	fmt.Fprintf(out, "Type %s to verify signature and update (Enter cancels): ", menuActionToken(out, "UPDATE"))
+	answer, err := readMenuAnswer(reader)
+	if err != nil || answer != "UPDATE" {
+		menuNotice(out, "INFO", "Signed Mirror Update cancelled. Nothing changed.")
+		return 0
+	}
+	// Any attempted installer may have mutated binary/package state, even if
+	// the subprocess failed. Never continue an outdated in-memory menu.
+	if code := execute([]string{"--signed-mirror", source}, out, errOut); code != 0 {
+		menuNotice(out, "FAILED", "Signed Mirror Update did not complete; inspect installed version, trust record and package recovery before retrying.")
+		return menuUpdatedExecutable
+	}
+	menuNotice(out, "OK", "Signed Mirror Update verified. Restart STL and verify protected Links separately.")
+	return menuUpdatedExecutable
 }
 
 // The existing CLI is the ONLY local/mirror first hop and calls the one
@@ -427,7 +528,10 @@ func menuUpdatePinned(input io.Reader, reader *bufio.Reader, out, errOut io.Writ
 		label = "Trusted HTTPS mirror URL (https://HOST/install.sh)"
 	}
 	fmt.Fprintf(out, "%s (Enter cancels): ", label)
-	source, err := readMenuAnswer(reader)
+	// A complete Linux path or real DNS mirror hostname may exceed the
+	// short menu-choice limit. The validated source still cannot exceed
+	// the platform path bound, and the selected updater revalidates it.
+	source, err := readMenuAnswerBounded(reader, unix.PathMax)
 	if err != nil || source == "" || source == "0" || strings.EqualFold(source, "q") {
 		menuNotice(out, "INFO", "Update cancelled. Nothing changed.")
 		return 0

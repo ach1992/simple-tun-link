@@ -27,7 +27,8 @@ quick_install_main() {
   version=$bootstrap_version
   if [[ -n $mirror_url ]]; then
     [[ $bootstrap_version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ &&
-       $mirror_url =~ ^https://[a-zA-Z0-9][a-zA-Z0-9.-]*(:[0-9]{1,5})?/releases/v[0-9]+\.[0-9]+\.[0-9]+$ &&
+       ( $mirror_url =~ ^https://[a-zA-Z0-9][a-zA-Z0-9.-]*(:[0-9]{1,5})?/releases/v[0-9]+\.[0-9]+\.[0-9]+$ ||
+         $mirror_url =~ ^https://\[([0-9a-fA-F]*:){2,}[0-9a-fA-F:.]*\](:[0-9]{1,5})?/releases/v[0-9]+\.[0-9]+\.[0-9]+$ ) &&
        $mirror_url == */releases/$bootstrap_version && $mirror_url != *..* &&
        $pinned_install_sha =~ ^[0-9a-f]{64}$ &&
        $mirror_sums_sha =~ ^[0-9a-f]{64}$ ]] || {
@@ -43,6 +44,17 @@ quick_install_main() {
   if [[ $# -gt 0 && $1 =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
     version=$1
     shift
+  fi
+  # A Signed Mirror caller adds its authenticated baseline as DATA, never
+  # as an environment setting. A normal explicit pinned "update" must retain
+  # its deliberately permitted guarded-downgrade contract.
+  signed_prior_version= signed_prior_commit=
+  if [[ $# == 3 && $1 == signed-update ]]; then
+    [[ -n $mirror_url && $2 =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ &&
+       $3 =~ ^[0-9a-f]{40}$ ]] || usage
+    signed_prior_version=$2
+    signed_prior_commit=$3
+    set -- update
   fi
   backends=native,wireguard
   action=install
@@ -258,6 +270,7 @@ STL_ROOT_SNAPSHOT
   if (
     arguments=("$action" --version "$version" --backends "$backends")
     [[ -z $mirror_url ]] || arguments+=(--release-base "$mirror_url" --release-sums-sha256 "$mirror_sums_sha")
+    [[ -z $signed_prior_version ]] || arguments+=(--signed-forward-from "$signed_prior_version" "$signed_prior_commit")
     if (( EUID == 0 )); then
       "${root_exec[@]}" "${arguments[@]}"
     else

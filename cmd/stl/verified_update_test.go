@@ -69,7 +69,11 @@ func TestVerifiedUpdateRequiresExplicitIndependentDigestAndExactSource(t *testin
 }
 
 func TestVerifiedUpdateMirrorURLRejectsUntrustedOrigins(t *testing.T) {
-	for _, good := range []string{"https://mirror.example.com/install.sh", "https://127.0.0.1:443/install.sh"} {
+	for _, good := range []string{
+		"https://mirror.example.com/install.sh", "https://127.0.0.1:443/install.sh",
+		"https://[2001:db8::1]/install.sh", "https://[2001:db8::1]:8443/install.sh",
+		"https://[::1]/install.sh", "https://[::ffff:192.0.2.1]/install.sh",
+	} {
 		if err := verifyUpdateMirrorURL(good); err != nil {
 			t.Fatalf("valid mirror %q: %v", good, err)
 		}
@@ -87,6 +91,11 @@ func TestVerifiedUpdateMirrorURLRejectsUntrustedOrigins(t *testing.T) {
 		"https://mirror.example.com/%69nstall.sh",
 		"https://mirror.example.com/install.sh?",
 		"https://mirror.example.com:443@evil.example.com/install.sh",
+		"https://[bad]/install.sh", "https://[::gg]/install.sh",
+		"https://[::1]/install.sh?fake=1", "https://[::1]:0/install.sh",
+		"https://[::1]:99999/install.sh", "https://[::1]:/install.sh",
+		"https://[::1]junk/install.sh", "https://[::1]@evil.example/install.sh",
+		"https://[::1%25en0]/install.sh", "https://[::1]/bad/../install.sh",
 	} {
 		if err := verifyUpdateMirrorURL(bad); err == nil {
 			t.Fatalf("accepted unsafe mirror URL: %q", bad)
@@ -283,5 +292,150 @@ func TestVerifiedUpdateMirrorSnapshotHTTPSPinAndBoundedTransport(t *testing.T) {
 	// trust the isolated fixture's ephemeral self-signed certificate.
 	if _, _, err := verifiedMirrorSnapshot(context.Background(), url, updateTestDigest(payload), root, uid, verifiedUpdateHTTPClient()); err == nil {
 		t.Fatal("production TLS client trusted a self-signed test certificate")
+	}
+}
+
+func TestPlainHTTPSReleaseAssetURLAndParser(t *testing.T) {
+	name := updateTestFilename()
+	good := []string{
+		"https://mirror.example.com/" + name,
+		"https://mirror.example.com/releases/v0.1.99/" + name,
+		"https://github.com/ach1992/simple-tun-link/releases/download/v0.1.99/" + name,
+		"https://127.0.0.1:8443/folder/" + name,
+		"https://[2001:db8::1]:8443/files/" + name,
+	}
+	for _, u := range good {
+		got, err := verifyUpdateReleaseAssetURL(u)
+		if err != nil || got != name {
+			t.Fatalf("valid copied GitHub asset URL %q rejected: name=%q err=%v", u, got, err)
+		}
+		req, err := parseVerifiedUpdate([]string{"--url", u})
+		if err != nil || req.kind != "asset" || req.source != u || req.digest != "" {
+			t.Fatalf("plain asset mode was misparsed: %+v %v", req, err)
+		}
+	}
+	opposite := "arm64"
+	if runtime.GOARCH == "arm64" {
+		opposite = "amd64"
+	}
+	bad := []string{
+		"http://mirror.example.com/" + name,
+		"https://mirror.example.com/install.sh",
+		"https://mirror.example.com/" + strings.Replace(name, runtime.GOARCH, opposite, 1),
+		"https://mirror.example.com/fake_local-install.sh",
+		"https://mirror.example.com/stl_v0.1.99-rc.1_linux_" + runtime.GOARCH + "_local-install.sh",
+		"https://mirror.example.com//" + name,
+		"https://mirror.example.com/../" + name,
+		"https://mirror.example.com/%2e%2e/" + name,
+		"https://mirror.example.com/" + name + "?token=abc",
+		"https://mirror.example.com/" + name + "#frag",
+		"https://user:pass@mirror.example.com/" + name,
+		"https://mirror.example.com:0/" + name,
+		"https://mirror.example.com:65536/" + name,
+		"https://mirror..example.com/" + name,
+		"https://[::1%25eth0]/" + name,
+	}
+	for _, u := range bad {
+		if _, err := verifyUpdateReleaseAssetURL(u); err == nil {
+			t.Errorf("accepted invalid HTTPS release file %q", u)
+		}
+		if _, err := parseVerifiedUpdate([]string{"--url", u}); err == nil {
+			t.Errorf("parser accepted invalid HTTPS release file %q", u)
+		}
+	}
+	for _, args := range [][]string{
+		{"--url"},
+		{"--url", "https://example.com/" + name, "--sha256", updateTestDigest([]byte("a"))},
+		{"--url", "https://example.com/" + name, "--update"},
+	} {
+		if _, err := parseVerifiedUpdate(args); err == nil {
+			t.Fatalf("accepted extra or missing plain asset flags: %q", args)
+		}
+	}
+	var out, errOut bytes.Buffer
+	if status := run([]string{"update", "--url", "http://example.com/" + name}, &out, &errOut); status != 2 ||
+		out.Len() != 0 || !strings.Contains(errOut.String(), "HTTPS release asset") {
+		t.Fatalf("CLI did not reject invalid URL pre-privilege: status=%d stdout=%q stderr=%q", status, out.String(), errOut.String())
+	}
+}
+
+func TestPlainHTTPSReleaseAssetSnapshotTransportAndCleanup(t *testing.T) {
+	name := updateTestFilename()
+	payload := []byte("#!/usr/bin/env bash\necho TEST_ONLY_NOT_EXECUTED\n")
+	var mode atomic.Value
+	mode.Store("ok")
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/"+name) && r.URL.Path != "/cdn-receipt" {
+			http.NotFound(w, r)
+			return
+		}
+		switch mode.Load().(string) {
+		case "redirect":
+			if r.URL.Path != "/cdn-receipt" {
+				http.Redirect(w, r, "/cdn-receipt", http.StatusTemporaryRedirect)
+				return
+			}
+			_, _ = w.Write(payload)
+		case "http downgrade":
+			http.Redirect(w, r, "http://example.invalid/evil", http.StatusFound)
+		case "not found":
+			http.NotFound(w, r)
+		case "too large":
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", verifiedLocalMaxBytes+1))
+			_, _ = w.Write(payload)
+		case "truncated":
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)+11))
+			_, _ = w.Write(payload)
+		case "empty":
+			return
+		default:
+			_, _ = w.Write(payload)
+		}
+	}))
+	defer server.Close()
+	client := server.Client()
+	client.CheckRedirect = mirrorReleaseAssetHTTPClient().CheckRedirect
+	client.Timeout = mirrorReleaseAssetHTTPClient().Timeout
+	root := t.TempDir()
+	url := server.URL + "/original/subfolder/" + name
+	uid := uint32(os.Geteuid())
+	for _, modeValue := range []string{"ok", "redirect"} {
+		mode.Store(modeValue)
+		dir, file, digest, err := mirrorReleaseAssetSnapshot(context.Background(), url, root, uid, client)
+		if err != nil {
+			t.Fatalf("plain HTTPS snapshot %s rejected: %v", modeValue, err)
+		}
+		// A fetched file has no original /root/stl copy. Do not use the
+		// special .stl-preflight.* path reserved for transferred files.
+		if !strings.HasPrefix(filepath.Base(dir), ".stl-release-asset.") {
+			t.Fatalf("HTTPS asset staged as local transfer requiring nonexistent original: %s", dir)
+		}
+		got, readErr := os.ReadFile(file)
+		if readErr != nil || !bytes.Equal(got, payload) || digest != updateTestDigest(payload) ||
+			filepath.Base(file) != name {
+			t.Fatalf("download changed or misnamed file: %v %q %s", readErr, got, digest)
+		}
+		if info, err := os.Stat(file); err != nil || info.Mode().Perm() != 0600 {
+			t.Fatalf("release asset not root-private: %v %v", info, err)
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, modeValue := range []string{"http downgrade", "not found", "too large", "truncated", "empty"} {
+		t.Run(modeValue, func(t *testing.T) {
+			mode.Store(modeValue)
+			if _, _, _, err := mirrorReleaseAssetSnapshot(context.Background(), url, root, uid, client); err == nil {
+				t.Fatal("invalid release download was accepted")
+			}
+			stages, err := filepath.Glob(filepath.Join(root, ".stl-release-asset.*"))
+			if err != nil || len(stages) != 0 {
+				t.Fatalf("failed download left executable staging: %v %v", stages, err)
+			}
+		})
+	}
+	mode.Store("ok")
+	if _, _, _, err := mirrorReleaseAssetSnapshot(context.Background(), url, root, uid, mirrorReleaseAssetHTTPClient()); err == nil {
+		t.Fatal("production TLS client accepted test-only certificate")
 	}
 }

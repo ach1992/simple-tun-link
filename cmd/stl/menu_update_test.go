@@ -18,7 +18,31 @@ import (
 	"time"
 
 	"github.com/ach1992/simple-tun-link/internal/version"
+	"golang.org/x/sys/unix"
 )
+
+func TestMenuVerifiedUpdateSourceAcceptsRealLongDNSAndRejectsExcessivePaste(t *testing.T) {
+	// A legitimate DNS hostname can be longer than the short numeric-choice
+	// limit, but should never cause a silent cancel before URL validation.
+	source := "https://" + strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + ".example/install.sh"
+	if len(source) <= menuInputLimit {
+		t.Fatal("test hostname is not long enough to reproduce the former bug")
+	}
+	reader := bufio.NewReader(strings.NewReader(source + "\n"))
+	got, err := readMenuAnswerBounded(reader, unix.PathMax)
+	if err != nil || got != source {
+		t.Fatalf("valid long mirror URL could not be read: %q, %v", got, err)
+	}
+	if _, err := parseVerifiedUpdate([]string{"--mirror", got, "--sha256", strings.Repeat("a", 64)}); err != nil {
+		t.Fatalf("valid long mirror URL rejected by existing update parser: %v", err)
+	}
+	for _, length := range []int{unix.PathMax + 1, 64 * 1024} {
+		input := bufio.NewReader(strings.NewReader(strings.Repeat("x", length) + "\n"))
+		if _, err := readMenuAnswerBounded(input, unix.PathMax); !errors.Is(err, errMenuInputTooLong) {
+			t.Fatalf("%d-byte oversized source should be rejected, got %v", length, err)
+		}
+	}
+}
 
 func sampleOfficialRelease(tag string, published time.Time) menuOfficialRelease {
 	r := menuOfficialRelease{TagName: tag, Prerelease: true, PublishedAt: published}
@@ -396,7 +420,7 @@ func TestMenuImmutableReleaseStillNeedsInstalledRootRealTTY(t *testing.T) {
 // A mirror-only or air-gapped host must not even attempt the GitHub API to
 // reach its pinned Update method. A non-installed/non-TTY menu remains safe.
 func TestMenuPinnedUpdateSourceSkipsGitHubAndRequiresInstalledRootTTY(t *testing.T) {
-	for _, method := range []string{"2", "3"} {
+	for _, method := range []string{"2", "4"} {
 		t.Run(method, func(t *testing.T) {
 			var calls int
 			var out, errOut bytes.Buffer
@@ -472,5 +496,40 @@ func TestMenuPinnedUpdateFailedAttemptAlwaysExitsStaleMenu(t *testing.T) {
 		func([]string, io.Writer, io.Writer) int { return 1 })
 	if code != menuUpdatedExecutable || !strings.Contains(out.String(), "Inspect version, install-record") {
 		t.Fatalf("failed canonical update resumed stale Engine: code=%d out=%q", code, out.String())
+	}
+}
+
+func TestMenuPlainMirrorReleaseAssetConsentAndNoGitHub(t *testing.T) {
+	url := "https://mirror.example.com/releases/v0.1.99/" + updateTestFilename()
+	for _, tc := range []struct {
+		name, input       string
+		eligible, wantRun bool
+		wantCode          int
+	}{
+		{"approved", url + "\nUPDATE\n", true, true, menuUpdatedExecutable},
+		{"cancelled", url + "\nNO\n", true, false, 0},
+		{"invalid origin", "http://mirror.example.com/" + updateTestFilename() + "\nUPDATE\n", true, false, 0},
+		{"no TTY", url + "\nUPDATE\n", false, false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := strings.NewReader(tc.input)
+			var out, errOut bytes.Buffer
+			count := 0
+			code := menuUpdateReleaseAsset(input, bufio.NewReader(input), &out, &errOut, tc.eligible,
+				func(args []string, _, _ io.Writer) int {
+					count++
+					if !reflect.DeepEqual(args, []string{"--url", url}) {
+						t.Fatalf("mirror menu changed release URL: %q", args)
+					}
+					return 0
+				})
+			if code != tc.wantCode || (count == 1) != tc.wantRun {
+				t.Fatalf("release asset consent wrong: code=%d count=%d stdout=%q stderr=%q",
+					code, count, out.String(), errOut.String())
+			}
+			if tc.eligible && !strings.Contains(out.String(), "TLS") {
+				t.Fatalf("no operator-host trust warning: %q", out.String())
+			}
+		})
 	}
 }

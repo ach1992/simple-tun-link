@@ -16,8 +16,8 @@ plan() {
 bad() {
   if "$@" > "$root/out" 2> "$root/err"; then fail "unsafe or unsupported input accepted"; fi
 }
-for distro in 'ubuntu 22.04' 'ubuntu 22.10' 'ubuntu 24.04' 'ubuntu 26.04' \
-              'debian 11' 'debian 12' 'debian 13' 'debian 14'; do
+for distro in 'ubuntu 20.04' 'ubuntu 22.04' 'ubuntu 22.10' 'ubuntu 24.04' 'ubuntu 26.04' \
+              'debian 10' 'debian 11' 'debian 12' 'debian 13' 'debian 14'; do
   read -r os version <<< "$distro"
   write_os "$os" "$version"
   plan native
@@ -36,14 +36,11 @@ for distro in 'ubuntu 22.04' 'ubuntu 22.10' 'ubuntu 24.04' 'ubuntu 26.04' \
   plan all
   grep -qx "packages=iproute2 iptables kmod wireguard-tools nftables charon-systemd strongswan-swanctl libstrongswan-standard-plugins" "$root/out" ||
     fail "wrong all-backend package list on $distro"
-  if [[ $distro == 'debian 11' ]]; then
-    grep -q 'Debian 11 LTS ended 2026-08-31' "$root/err" || fail 'Debian 11 security EOL warning missing'
-  fi
 done
 
-# Fail early for unsupported/old systems rather than pretending APT works.
-for distro in 'ubuntu 20.04' 'ubuntu 22.03' 'debian 10' \
-              'debian 9' 'fedora 42' 'linuxmint 22'; do
+# Do not guess capability from a numeric release. Unsupported package
+# managers and malformed OS identities still fail before package effects.
+for distro in 'fedora 42' 'linuxmint 22'; do
   read -r os version <<< "$distro"
   write_os "$os" "$version"
   bad bash "$installer" requirements --backends all --os-release-file "$root/os-release"
@@ -94,6 +91,40 @@ if [[ $EUID -ne 0 ]]; then
   bad bash "$installer" prepare --backends wireguard
 fi
 [[ ! -e "$root/prefix/bin/stl" ]] || fail 'package preparation modified offline installation'
+
+# Exercise the real GPGV machine-status parser directly. InRelease may carry
+# both an official archive signature and a newer unknown co-signature. Never
+# accept an unknown-only, malformed, bad, revoked or expired signer.
+sed -n '/^apt_archive_signature_status_valid() {/,/^}/p' "$installer" > "$root/stl-archive-verify.sh"
+[[ $(grep -c '^apt_archive_signature_status_valid() {' "$root/stl-archive-verify.sh") == 1 ]] ||
+  fail 'canonical GPGV status parser unavailable'
+# shellcheck source=/dev/null
+source "$root/stl-archive-verify.sh"
+key=78DBA3BC47EF2265
+{
+  printf '[GNUPG:] GOODSIG 6ED0E7B82643E131 Debian Archive Automatic Signing Key\n'
+  printf '[GNUPG:] VALIDSIG 4CB50190207B4758A3F73A796ED0E7B82643E131 2026-07-11 1783765031 0 4 0 1 8 01 B8B80B5B623EAB6AD8775C45B7C5D7D6350947F8\n'
+  printf '[GNUPG:] ERRSIG %s 1 8 01 1783765032 9 B8E5F13176D2A7A75220028078DBA3BC47EF2265\n' "$key"
+  printf '[GNUPG:] NO_PUBKEY %s\n' "$key"
+  printf '[GNUPG:] VALIDSIG 4D64FEC119C2029067D6E791F8D2585B8783D481 2026-07-11 1783765141 0 4 0 22 8 01 4D64FEC119C2029067D6E791F8D2585B8783D481\n'
+} > "$root/gpgv-status"
+apt_archive_signature_status_valid 2 "$root/gpgv-status" || fail 'real Debian co-signed archive rejected'
+apt_archive_signature_status_valid 0 "$root/gpgv-status" || fail 'verified co-signed archive rejected with success code'
+bad_status="$root/gpgv-status"
+printf '[GNUPG:] ERRSIG %s 1 8 01 1783765032 9 %s\n[GNUPG:] NO_PUBKEY %s\n' "$key" "$key" "$key" > "$bad_status"
+if apt_archive_signature_status_valid 2 "$bad_status"; then fail 'unknown-only signer accepted'; fi
+printf '[GNUPG:] VALIDSIG 4CB50190207B4758A3F73A796ED0E7B82643E131\n' > "$bad_status"
+if apt_archive_signature_status_valid 2 "$bad_status"; then fail 'unexpected verifier error accepted'; fi
+if apt_archive_signature_status_valid 1 "$bad_status"; then fail 'bad verifier exit accepted'; fi
+for bad_code in BADSIG REVKEYSIG EXPKEYSIG EXPSIG KEYREVOKED KEYEXPIRED SIGEXPIRED NODATA FAILURE ERROR; do
+  printf '[GNUPG:] VALIDSIG 4CB50190207B4758A3F73A796ED0E7B82643E131\n[GNUPG:] %s AAAAAAAA\n' "$bad_code" > "$bad_status"
+  if apt_archive_signature_status_valid 0 "$bad_status"; then fail "$bad_code signer accepted"; fi
+done
+printf '[GNUPG:] VALIDSIG 4CB50190207B4758A3F73A796ED0E7B82643E131\n[GNUPG:] ERRSIG %s 1 8 01 1783765032 4 %s\n' "$key" "$key" > "$bad_status"
+if apt_archive_signature_status_valid 2 "$bad_status"; then fail 'unknown non-missing signer failure accepted'; fi
+printf '[GNUPG:] VALIDSIG 4CB50190207B4758A3F73A796ED0E7B82643E131\n[GNUPG:] ERRSIG %s 1 8 01 1783765032 9 %s\n' "$key" "$key" > "$bad_status"
+if apt_archive_signature_status_valid 2 "$bad_status"; then fail 'unpaired NO_PUBKEY accepted'; fi
+echo 'APT_OFFICIAL_COSIGNATURE_MISSING_KEY_AND_INVALID_SIGNER_GATES=PASS'
 
 # Exercise the ACTUAL canonical function, extracted verbatim without running
 # the installer or mutating the host. A Go doctor query can leave a harmless
@@ -305,9 +336,9 @@ printf 'APT_PARTIAL_INDEX_ERROR_MODE_ANY=PASS\n'
 
 # Run actual canonical read-only simulation and capture helpers with a
 # mock package manager. No host APT, disk inventory or package changes.
-sed -n '/^apt_plan_capture_bounded() {/,/^}/p' "$installer" > "$root/apt-resolver-functions.sh"
+sed -n '/^apt_plan_capture_selected() {/,/^}/p' "$installer" > "$root/apt-resolver-functions.sh"
 sed -n '/^apt_resolve_plan() {/,/^}/p' "$installer" >> "$root/apt-resolver-functions.sh"
-[[ $(grep -c '^apt_plan_capture_bounded() {' "$root/apt-resolver-functions.sh") == 1 &&
+[[ $(grep -c '^apt_plan_capture_selected() {' "$root/apt-resolver-functions.sh") == 1 &&
    $(grep -c '^apt_resolve_plan() {' "$root/apt-resolver-functions.sh") == 1 ]] ||
   fail 'canonical read-only resolver functions unavailable'
 # shellcheck source=/dev/null
@@ -333,10 +364,23 @@ apt-get() {
       printf 'W: simulated partial plan context\n'
       printf 'E: Dependency version conflict: stderr-only resolver detail\n' >&2
       return 100 ;;
-    oversize)
+    verbose_success)
       printf 'APT_SIMULATION_EARLY\n'
       printf '%070000d\n' 0
       printf 'APT_SIMULATION_LAST_LINE\n'
+      printf 'Inst wireguard-tools (1.2.3 Ubuntu:24.04 [amd64])\n'
+      ;;
+    removal_after_verbose)
+      printf '%070000d\n' 0
+      printf 'Inst wireguard-tools (1.2.3 Ubuntu:24.04 [amd64])\n'
+      printf 'Remv old-package [1.0]\n'
+      ;;
+    empty_plan)
+      printf 'Reading package lists...\n'
+      ;;
+    unterminated_diagnostic)
+      printf 'Inst wireguard-tools (1.2.3 Ubuntu:24.04 [amd64])\n'
+      printf 'APT_DIAG_NO_FINAL_NEWLINE'
       ;;
     *) return 88 ;;
   esac
@@ -347,7 +391,23 @@ apt_resolve_plan > "$root/plan.out" 2> "$root/plan.err" ||
   fail "APT simulated plan parsing changed: $apt_plan"
 grep -Fq 'Inst wireguard-tools' "$root/plan.err" ||
   fail 'valid APT simulation details were not displayed'
-for fake_plan_mode in fail_stdout fail_stderr oversize; do
+fake_plan_mode=unterminated_diagnostic
+apt_resolve_plan > "$root/plan.out" 2> "$root/plan.err" ||
+  fail 'valid simulation with non-newline-terminated trailing diagnostic was rejected'
+[[ $apt_plan == wireguard-tools=1.2.3 ]] ||
+  fail 'unterminated APT diagnostic changed the install plan'
+[[ $(tail -c 25 "$root/plan.err") == 'APT_DIAG_NO_FINAL_NEWLINE' ]] ||
+  fail 'unterminated APT diagnostic bytes were changed'
+fake_plan_mode=verbose_success
+apt_resolve_plan > "$root/plan.out" 2> "$root/plan.err" ||
+  fail 'valid plan after 70 KiB of diagnostics was rejected'
+[[ $apt_plan == 'wireguard-tools=1.2.3' ]] ||
+  fail 'large diagnostics changed the selected plan'
+[[ $apt_plan_sha256 == "$(printf '%s' "$apt_plan" | sha256sum | cut -d' ' -f1)" ]] ||
+  fail 'selected APT plan fingerprint drifted'
+grep -Fq 'APT_SIMULATION_LAST_LINE' "$root/plan.err" ||
+  fail 'large APT diagnostics were not forwarded in full'
+for fake_plan_mode in fail_stdout fail_stderr removal_after_verbose empty_plan; do
   apt_plan='unset'
   if ( apt_resolve_plan > "$root/plan.out" 2> "$root/plan.err" ); then
     fail "invalid simulation $fake_plan_mode was accepted"
@@ -364,23 +424,29 @@ for fake_plan_mode in fail_stdout fail_stderr oversize; do
       grep -Fq 'stderr-only resolver detail' "$root/plan.err" &&
       grep -Fq 'simulated partial plan context' "$root/plan.err" ||
         fail 'failed APT simulation suppressed stderr or stdout' ;;
-    oversize)
-      grep -Fq 'APT_SIMULATION_EARLY' "$root/plan.err" &&
-      grep -Fq 'APT_SIMULATION_LAST_LINE' "$root/plan.err" &&
-      grep -Fq 'bounded 64 KiB machine-plan capture' "$root/plan.err" ||
-        fail 'oversized plan did not drain full diagnostics or refuse parsing' ;;
+    removal_after_verbose)
+      grep -Fq 'Remv old-package' "$root/plan.err" ||
+        fail 'late destructive APT fact was not observed' ;;
+    empty_plan)
+      grep -Fq 'Reading package lists' "$root/plan.err" ||
+        fail 'empty plan diagnostics were suppressed' ;;
   esac
-  grep -Fq 'APT_DEPENDENCY_PLAN' "$root/plan.err" ||
-    fail "failed APT simulation lacked a typed stage: $fake_plan_mode"
-  if [[ $fake_plan_mode == oversize ]]; then
-    grep -Fq 'bounded 64 KiB machine-plan capture' "$root/plan.err" ||
-      fail 'oversized capture omitted its bounded reason'
+  if [[ $fake_plan_mode == removal_after_verbose ]]; then
+    grep -Fq 'APT plan would remove packages' "$root/plan.err" ||
+      fail 'late destructive APT operation was not rejected'
+  elif [[ $fake_plan_mode == empty_plan ]]; then
+    grep -Fq 'APT plan omitted a required selected package' "$root/plan.err" ||
+      fail 'empty simulated plan was accepted'
   else
+    grep -Fq 'APT_DEPENDENCY_PLAN' "$root/plan.err" ||
+      fail "failed APT simulation lacked a typed stage: $fake_plan_mode"
+  fi
+  if [[ $fake_plan_mode == fail_stdout || $fake_plan_mode == fail_stderr ]]; then
     grep -Fq 'apt_get_exit=100' "$root/plan.err" ||
       fail "APT failure lost actual process exit code: $fake_plan_mode"
   fi
 done
 unset -f apt-get apt_sources_must_be_authenticated apt_verify_distro_candidates package_installed
-printf 'APT_SIMULATION_BOUNDED_CAPTURE_AND_FULL_STDOUT_STDERR=PASS\n'
+printf 'APT_SIMULATION_SELECTIVE_CAPTURE_AND_FULL_DIAGNOSTICS=PASS\n'
 
-printf 'Installer requirements checks PASS (Ubuntu 22.04+, Debian 11+, package plans, unsafe inputs, EOL).\n'
+printf 'Installer requirements checks PASS (capability-based Debian/Ubuntu, signed GPGV status, package plans, unsafe inputs).\n'

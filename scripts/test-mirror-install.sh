@@ -59,11 +59,26 @@ EOF
         -cf - "$name" install.sh LICENSE BUILD-MANIFEST.txt LOCAL-INSTALL.txt SHA256SUMS |
         gzip -n > "$out/$archive"
     )
+    # Also prepare the unmodified official self-contained release asset.
+    # This is what ordinary copy-as-is mirrors should serve directly.
+    entry="$out/${name}_local-install.sh"
+    archive_digest=$(sha256sum "$out/$archive" | awk '{print $1}')
+    archive_bytes=$(stat -c %s "$out/$archive")
+    sed -e "s|@VERSION@|$tag|g" \
+        -e "s|@COMMIT@|$commit|g" \
+        -e "s|@ARCH@|$arch|g" \
+        -e "s|@ARCHIVE@|$archive|g" \
+        -e "s|@DIGEST@|$archive_digest|g" \
+        -e "s|@BYTES@|$archive_bytes|g" \
+        "$repo/scripts/local-install-entrypoint.sh" > "$entry"
+    cat -- "$out/$archive" >> "$entry"
   done
   bash scripts/render-stable-bootstrap.sh "$tag" "$out/stl-bootstrap.sh"
   ( cd "$out"; sha256sum -- stl_${tag}_linux_amd64 stl_${tag}_linux_arm64 \
     LICENSE stl-bootstrap.sh BUILD-MANIFEST.txt stl_${tag}_linux_amd64_local-install.tar.gz \
-    stl_${tag}_linux_arm64_local-install.tar.gz > SHA256SUMS )
+    stl_${tag}_linux_arm64_local-install.tar.gz \
+    stl_${tag}_linux_amd64_local-install.sh \
+    stl_${tag}_linux_arm64_local-install.sh > SHA256SUMS )
 }
 cd "$repo"
 make_release v0.9.98 "$scratch/old-release"
@@ -234,6 +249,41 @@ sum_digest=$(sha256sum "$scratch/new-release/SHA256SUMS" | awk '{print $1}')
 bash scripts/prepare-mirror.sh --tag v0.9.99 \
    --release-dir "$scratch/new-release" --trusted-sums-sha256 "$sum_digest" \
    --url "$base" --output "$scratch/webroot" > "$scratch/prepared.log"
+# An operator may publish a pinned HTTPS mirror on a bracketed IPv6
+# address. Validate the entire standalone chain without opening a socket:
+# trusted preparer -> generated self-contained bootstrap -> canonical
+# installer's release-base gate (using a deliberately absent test prefix).
+ipv6_origin='https://[2001:db8::1]:8443'
+bash scripts/prepare-mirror.sh --tag v0.9.99 \
+   --release-dir "$scratch/new-release" --trusted-sums-sha256 "$sum_digest" \
+   --url "$ipv6_origin" --output "$scratch/webroot-ipv6" > "$scratch/prepared-ipv6.log"
+grep -Fqx "MIRROR_URL=$ipv6_origin" "$scratch/prepared-ipv6.log" &&
+  grep -Fq "$ipv6_origin/install.sh" "$scratch/prepared-ipv6.log" ||
+  { echo 'MIRROR_TEST_FAIL: bracketed IPv6 mirror origin did not survive preparation' >&2; exit 1; }
+if bash "$scratch/webroot-ipv6/install.sh" invalid-subcommand > "$scratch/ipv6-bootstrap.out" 2> "$scratch/ipv6-bootstrap.err"; then
+  echo 'MIRROR_TEST_FAIL: expected invalid bootstrap operation to be rejected' >&2; exit 1
+fi
+grep -Fq 'Usage: STL bootstrap' "$scratch/ipv6-bootstrap.err" ||
+  { cat "$scratch/ipv6-bootstrap.err" >&2; echo 'MIRROR_TEST_FAIL: IPv6 bootstrap rejected trusted origin before argument validation' >&2; exit 1; }
+if bash scripts/install.sh install --version v0.9.99 --backends native \
+  --release-base "$ipv6_origin/releases/v0.9.99" \
+  --release-sums-sha256 "$sum_digest" --prefix "$scratch/nonexistent-prefix" \
+    > "$scratch/ipv6-canonical.out" 2> "$scratch/ipv6-canonical.err"; then
+  echo 'MIRROR_TEST_FAIL: invalid isolated install prefix accepted' >&2; exit 1
+fi
+grep -Fq 'prefix must be an existing absolute non-symlink directory' "$scratch/ipv6-canonical.err" ||
+  { cat "$scratch/ipv6-canonical.err" >&2; echo 'MIRROR_TEST_FAIL: canonical installer rejected valid bracketed IPv6 release origin' >&2; exit 1; }
+echo 'MIRROR_BRACKETED_IPV6_PUBLISH_BOOTSTRAP_CANONICAL_GATE=PASS'
+for bad_origin in 'https://[bad]' 'https://[::1]/extra' 'https://[::1]@evil.invalid' 'https://[::1%25eth0]'; do
+  if bash scripts/prepare-mirror.sh --tag v0.9.99 \
+     --release-dir "$scratch/new-release" --trusted-sums-sha256 "$sum_digest" \
+     --url "$bad_origin" --output "$scratch/bad-ipv6-origin" >/dev/null 2>&1; then
+    echo "MIRROR_TEST_FAIL: bad IPv6 mirror origin admitted: $bad_origin" >&2; exit 1
+  fi
+done
+[[ ! -e $scratch/bad-ipv6-origin ]] ||
+  { echo 'MIRROR_TEST_FAIL: rejected mirror created output' >&2; exit 1; }
+
 # A concurrent publication-path writer must not be able to change the
 # checksum reported as trusted. A disposable wrapper alters the just-
 # published file AFTER mv and BEFORE the preparer prints its pin.
@@ -274,6 +324,66 @@ curl -fsS "$base/install.sh" -o "$scratch/fetched" || {
   echo 'MIRROR_TEST_FAIL: local TLS first hop unavailable' >&2; exit 1;
 }
 cmp "$scratch/fetched" "$scratch/www/install.sh"
+
+# Ordinary Mirror: serve EXACT unchanged GitHub Release assets, not a
+# newly rendered bootstrap/signature. Download the architecture's official
+# self-contained file through TLS, then install+Update with the same
+# canonical installer in a private nondefault prefix and no external SHA.
+for release_arch in amd64 arm64; do
+  release_file="stl_v0.9.99_linux_${release_arch}_local-install.sh"
+  cmp "$scratch/new-release/$release_file" \
+    "$scratch/www/releases/v0.9.99/$release_file" ||
+    { echo 'MIRROR_TEST_FAIL: copied release installer bytes changed' >&2; exit 1; }
+done
+case "$(uname -m)" in
+  x86_64) plain_arch=amd64; other_arch=arm64 ;;
+  aarch64) plain_arch=arm64; other_arch=amd64 ;;
+  *) echo 'MIRROR_TEST_FAIL: unsupported runner CPU' >&2; exit 1 ;;
+esac
+mkdir -m 0700 "$scratch/plain-transfer"
+plain_prefix="$scratch/plain-prefix"
+mkdir -p "$plain_prefix/bin" "$plain_prefix/lib"
+old_plain="stl_v0.9.98_linux_${plain_arch}_local-install.sh"
+cp -- "$scratch/old-release/$old_plain" "$scratch/plain-transfer/$old_plain"
+chmod 0600 "$scratch/plain-transfer/$old_plain"
+bash "$scratch/plain-transfer/$old_plain" --prefix "$plain_prefix" > "$scratch/plain-old.out" 2> "$scratch/plain-old.err" ||
+  { cat "$scratch/plain-old.out" "$scratch/plain-old.err"; echo 'MIRROR_TEST_FAIL: old plain source install failed' >&2; exit 1; }
+"$plain_prefix/bin/stl" version --json | grep -q '"version":"v0.9.98"' ||
+  { echo 'MIRROR_TEST_FAIL: old plain source install wrong version' >&2; exit 1; }
+new_plain="stl_v0.9.99_linux_${plain_arch}_local-install.sh"
+curl -q -fsSs --proto '=https' --proto-redir '=https' \
+  "$base/releases/v0.9.99/$new_plain" -o "$scratch/plain-transfer/$new_plain"
+cmp "$scratch/plain-transfer/$new_plain" "$scratch/new-release/$new_plain" ||
+  { echo 'MIRROR_TEST_FAIL: HTTPS copied asset bytes changed' >&2; exit 1; }
+chmod 0600 "$scratch/plain-transfer/$new_plain"
+# The default Install must not replace an older published binary.
+before_plain=$(sha256sum < "$plain_prefix/bin/stl")
+if bash "$scratch/plain-transfer/$new_plain" --prefix "$plain_prefix" \
+  > "$scratch/plain-no-update.out" 2> "$scratch/plain-no-update.err"; then
+  echo 'MIRROR_TEST_FAIL: plain install unexpectedly upgraded' >&2; exit 1
+fi
+[[ $(sha256sum < "$plain_prefix/bin/stl") == "$before_plain" ]] ||
+  { echo 'MIRROR_TEST_FAIL: plain Install changed existing version' >&2; exit 1; }
+# Explicit --update succeeds through the SAME native canonical installer.
+bash "$scratch/plain-transfer/$new_plain" --prefix "$plain_prefix" --update \
+  > "$scratch/plain-new.out" 2> "$scratch/plain-new.err" ||
+  { cat "$scratch/plain-new.out" "$scratch/plain-new.err"; echo 'MIRROR_TEST_FAIL: plain URL asset Update failed' >&2; exit 1; }
+"$plain_prefix/bin/stl" version --json | grep -q '"version":"v0.9.99"' ||
+  { echo 'MIRROR_TEST_FAIL: plain URL asset Update wrong version' >&2; exit 1; }
+after_plain=$(sha256sum < "$plain_prefix/bin/stl")
+# Wrong CPU file must refuse without modifying existing install.
+wrong_plain="stl_v0.9.99_linux_${other_arch}_local-install.sh"
+cp -- "$scratch/new-release/$wrong_plain" "$scratch/plain-transfer/$wrong_plain"
+chmod 0600 "$scratch/plain-transfer/$wrong_plain"
+if bash "$scratch/plain-transfer/$wrong_plain" --prefix "$plain_prefix" --update \
+  > "$scratch/plain-wrong-arch.out" 2> "$scratch/plain-wrong-arch.err"; then
+  echo 'MIRROR_TEST_FAIL: wrong-arch original release accepted' >&2; exit 1
+fi
+grep -Fq 'wrong file for' "$scratch/plain-wrong-arch.err" ||
+  { echo 'MIRROR_TEST_FAIL: wrong-arch refusal missing' >&2; exit 1; }
+[[ $(sha256sum < "$plain_prefix/bin/stl") == "$after_plain" ]] ||
+  { echo 'MIRROR_TEST_FAIL: wrong-arch file mutated installation' >&2; exit 1; }
+echo 'MIRROR_COPY_AS_IS_HTTPS_ORIGINAL_FILE_INSTALL_UPDATE_WRONG_ARCH=PASS'
 
 # Intercept ONLY privilege elevation, and redirect the exact canonical
 # invocation into an isolated test prefix. The canonical installer and
@@ -637,7 +747,26 @@ grep -q 'use an explicit update' "$scratch/wrong.out" ||
   { cat "$scratch/wrong.out" "$scratch/wrong.err"; echo 'MIRROR_TEST_FAIL: actionable installed-version error missing' >&2; exit 1; }
 [[ $(sha256sum "$STL_MIRROR_PREFIX/bin/stl" | awk '{print $1}') == "$before_old" ]] ||
   { echo 'MIRROR_TEST_FAIL: mistaken install changed existing binary' >&2; exit 1; }
-# Explicit update uses the same first hop but changes the canonical action.
+# Signed mode forwards its previously authenticated installed identity
+# THROUGH the exact TLS bootstrap and privileged private snapshot to the
+# canonical maintenance lock. The source commit is from this isolated test
+# bundle, never accepted from an unverified external response.
+signed_prior_commit=$(sed -n 's/^commit=//p' "$scratch/old-release/BUILD-MANIFEST.txt")
+[[ $signed_prior_commit =~ ^[0-9a-f]{40}$ ]] ||
+  { echo 'MIRROR_TEST_FAIL: synthetic old release lacks valid commit' >&2; exit 1; }
+bash -c "$one_liner signed-update v0.9.98 $signed_prior_commit" \
+  > "$scratch/signed-forward.out" 2> "$scratch/signed-forward.err" || {
+  cat "$scratch/signed-forward.out" "$scratch/signed-forward.err"
+  echo 'MIRROR_TEST_FAIL: signed baseline did not reach canonical Update' >&2
+  exit 1
+}
+grep -Fq -- "--signed-forward-from v0.9.98 $signed_prior_commit" "$STL_MIRROR_SUDO_RECORD" ||
+  { echo 'MIRROR_TEST_FAIL: verified Signed Update lost exact baseline before root' >&2; exit 1; }
+"$STL_MIRROR_PREFIX/bin/stl" version --json | grep -q '"version":"v0.9.99"'
+echo 'MIRROR_TLS_SIGNED_FIRST_HOP_CANONICAL_BASELINE_FORWARDING=PASS'
+
+# Ordinary explicitly pinned mirror Update still uses the previous
+# unqualified protocol; no signed-only restriction is imposed on it.
 bash -c "$one_liner update" > "$scratch/update.out" 2> "$scratch/update.err" || {
   cat "$scratch/update.out" "$scratch/update.err"; echo 'MIRROR_TEST_FAIL: explicit Update failed' >&2; exit 1
 }

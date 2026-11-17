@@ -24,7 +24,8 @@ while (( $# )); do
 done
 [[ $tag =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ &&
    $trusted_sums =~ ^[0-9a-f]{64}$ &&
-   $mirror_url =~ ^https://[a-zA-Z0-9][a-zA-Z0-9.-]*(:[0-9]{1,5})?$ &&
+   ( $mirror_url =~ ^https://[a-zA-Z0-9][a-zA-Z0-9.-]*(:[0-9]{1,5})?$ ||
+     $mirror_url =~ ^https://\[([0-9a-fA-F]*:){2,}[0-9a-fA-F:.]*\](:[0-9]{1,5})?$ ) &&
    $mirror_url != *..* ]] || usage
 [[ $source_dir == /* && -d $source_dir && ! -L $source_dir &&
    $(realpath -e "$source_dir") == "$source_dir" ]] || usage
@@ -55,7 +56,9 @@ regular "$source_dir/SHA256SUMS" || { echo 'Official release SHA256SUMS missing.
 files=(BUILD-MANIFEST.txt LICENSE stl-bootstrap.sh
        "stl_${tag}_linux_amd64" "stl_${tag}_linux_arm64"
        "stl_${tag}_linux_amd64_local-install.tar.gz"
-       "stl_${tag}_linux_arm64_local-install.tar.gz")
+       "stl_${tag}_linux_arm64_local-install.tar.gz"
+       "stl_${tag}_linux_amd64_local-install.sh"
+       "stl_${tag}_linux_arm64_local-install.sh")
 for file in "${files[@]}"; do
   regular "$source_dir/$file" || { echo "Official release asset missing or unsafe: $file" >&2; exit 1; }
   [[ $(sha256sum "$source_dir/$file" | awk '{print $1}') == "$(expected "$file")" ]] ||

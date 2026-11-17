@@ -37,18 +37,45 @@ the selected backend's own prerequisites, connection and diagnostic
 semantics rather than interpreting these methods as a compulsory
 client/server topology.
 
-On builds that include the new Update source selector, `sudo stl menu`
-→ **Update** first asks which distribution path to use: official
-immutable GitHub release catalogue, independently verified `/root/stl`
-local file, or trusted HTTPS mirror `install.sh`. The local and mirror
-choices never need `api.github.com`: both collect the exact source and an
-independently obtained SHA256, validate the same `stl update` CLI arguments,
-then require a fresh `UPDATE` confirmation. The existing installed root
-and real-TTY gates apply; no mirror preference or digest is saved and no
-automatic fallback is permitted. The old menu terminates after any
-confirmed update attempt, even one with uncertain partial effects.
-The source selector is **not yet in published v0.1.22**; follow
-[Install/Update](INSTALL.md) for older releases.
+On builds with the current five-source Update selector, `sudo stl menu`
+→ **Update** chooses the source **before any official GitHub API lookup**:
+
+1. **Official GitHub releases:** browse the immutable official release
+   catalogue (`api.github.com`).
+2. **Verified local file:** select an original file in `/root/stl/` and
+   provide its independently verified whole-file SHA256
+   (`stl update --local FILE --sha256 HASH`).
+3. **HTTPS release file:** give an original architecture-matched
+   `*_local-install.sh` URL at an explicitly trusted HTTPS origin
+   (`stl update --url HTTPS_RELEASE_ASSET_URL`); **no manual SHA256,
+   publisher-key enrollment or GitHub API is required**. The chosen
+   HTTPS origin and its HTTPS redirects are trusted as the source;
+   embedded integrity checks alone cannot independently prove GitHub
+   publisher identity if the entire launcher has been replaced.
+4. **Pinned HTTPS bootstrap:** advanced `install.sh` Mirror with an
+   independently obtained bootstrap SHA256
+   (`stl update --mirror URL --sha256 HASH`).
+5. **Publisher-signed HTTPS bootstrap:** advanced signed Mirror
+   (`stl update --signed-mirror URL`), requiring prior **independent
+   publisher-key enrollment** and signed metadata rather than a typed
+   per-update SHA256.
+
+The **Offline instructions** choice is read-only. Non-catalogue source
+choices do not require `api.github.com`. All Update execution paths
+retain the installed-root/real-TTY menu gates, source validation,
+operator review and fresh exact `UPDATE` confirmation. The selector
+persists no Mirror preference or digest and never silently falls back
+to another source. The in-memory menu exits after a confirmed Update
+attempt, including one with uncertain partial effects.
+
+Published `v0.1.22` has neither this selector nor the short `stl update`
+CLI. Published `v0.1.23` through `v0.1.25` have the earlier selector
+(official GitHub releases, independently pinned local file, and
+independently pinned **Trusted HTTPS mirror** `install.sh`) but **not**
+the ordinary `--url` release-file mode. On older installed versions,
+download the new complete original one-file installer through the
+failure-gated procedure and invoke it with explicit `--update` as
+described in [Install/Update](INSTALL.md) and [Mirror](MIRROR.md).
 
 Run `stl` in a real terminal or invoke `stl menu`. Without an
 interactive terminal, `stl` prints help instead. The principal tasks are
@@ -167,27 +194,45 @@ encapsulations/IPsec remain discoverable.
 - The interface presents short, actionable errors with distinguished
   missing, unknown, foreign and partly-mutated outcomes; no automatic
   retries of uncertain host effects. Color is semantic only. Preserve
-  `NO_COLOR`, `TERM=dumb`, redirected output, exact copyable opaque
-  values, and no secret-bearing or ANSI-contaminated machine output.
+  `NO_COLOR` (no styling without disabling TTY screen replacement),
+  `TERM=dumb` (no ANSI), redirected output, exact copyable opaque values,
+  and no secret-bearing or ANSI-contaminated machine output.
   `STL_NO_CLEAR=1` retains an append-only interactive display for
   troubleshooting.
-- An installed release implementing `stl update` offers short, explicit
-  **offline/local** and **HTTPS mirror** Update entrypoints:
-  `sudo stl update --local /root/stl/EXACT_LOCAL_FILE --sha256 TRUSTED_SHA256`
-  or `sudo stl update --mirror https://operator.example/install.sh --sha256 TRUSTED_BOOTSTRAP_SHA256`.
-  The 64-character digest comes from an independently authenticated
-  official release or trusted mirror-preparation device, never from the
-  destination mirror. A protected, bounded snapshot is verified before any
-  downloaded Bash executes; the canonical installer alone decides ownership,
-  version compatibility, APT and rollback. No GitHub API query, persistent
-  mirror trust or implicit companion selection occurs. Older published STL
-  versions lack this CLI; follow [Install/Update](INSTALL.md#update) for their
-  supported guarded procedure.
-- The **menu-driven** Update delegates only to an independently verified official
-  **immutable** published installer for forward same-line Stable patch
-  or forward RC releases, under the installed-root/TTY and fresh `UPDATE`
-  gates. Major/minor migration, RC-to-Stable, mutable or unknown release
-  artifacts require independent manual verification. Uninstall is a guided, individually
+- On installed builds that implement `stl update --url`, the ordinary
+  **operator-trusted HTTPS release-file** entrypoint is
+  `sudo stl update --url https://YOUR_MIRROR/releases/vX.Y.Z/stl_vX.Y.Z_linux_ARCH_local-install.sh`.
+  It consumes the unchanged official self-contained release file from the
+  explicitly trusted HTTPS source without a manually supplied SHA256,
+  publisher key or GitHub API query. HTTPS/TLS and the embedded archive
+  integrity checks are **not** independent proof of GitHub publisher
+  provenance for an operator-hosted copy. The **optional independently
+  pinned** entrypoints remain:
+  `sudo stl update --local /root/stl/EXACT_LOCAL_FILE --sha256 TRUSTED_FILE_SHA256`
+  and `sudo stl update --mirror https://operator.example/install.sh --sha256 TRUSTED_BOOTSTRAP_SHA256`.
+  Only these pinned paths require a separately authenticated full-file
+  or bootstrap digest, never obtained solely from the destination Mirror.
+  The optional `sudo stl update --signed-mirror https://operator.example/install.sh`
+  uses previously enrolled independent publisher trust and signed metadata.
+  Each supported non-catalogue entrypoint validates its source and stages
+  a bounded root-private snapshot (a local copy or complete HTTPS transfer)
+  before executing installer code; the same
+  canonical installer decides ownership, version compatibility, signed
+  APT and rollback. No implicit source fallback, remembered Mirror
+  preference or companion selection occurs. Published `v0.1.23` through
+  `v0.1.25` support the pinned CLI methods but not `--url`; installed
+  `v0.1.22` supports neither. Older installations use the guarded
+  one-file installer with explicit `--update` in
+  [Install/Update](INSTALL.md#update).
+- The **Official GitHub releases** Update-menu choice delegates only
+  to an independently verified **immutable** published installer for
+  forward same-line Stable patch or forward RC releases, under the
+  installed-root/TTY and fresh `UPDATE` gates. The other four choices
+  use their explicit operator-selected source and their respective
+  trust requirements; they are **not** automatic GitHub catalogue
+  fallbacks. Major/minor migration, RC-to-Stable, mutable or unknown
+  official release artifacts require independent manual verification.
+  Uninstall is a guided, individually
   authorized cleanup—not a mass Link or credential purge.
   Operator failure pages for selected packages and official releases
   give an authored, non-secret reason category and a read-only next check.
@@ -260,7 +305,7 @@ stl version [--json]
 stl link list [--json]
 stl link status <link-id> [--json]
 stl link diagnose <link-id> [--mtu <bytes>] [--json]
-stl link diagnose --all [--timeout <duration>] [--parallel <1..4>] [--json]
+stl link diagnose --all [--timeout <duration>] [--parallel <positive-count>] [--json]
 stl link throughput <link-id> --confirm <link-id> [--seconds <1..10>] [--json]
 
 stl link preview --stdin [--json]
@@ -572,10 +617,10 @@ stable, ordered saved-State inventory and independent Link checks;
 `--timeout` accepts a positive Go duration such as `10m`
 and starts before inventory loading. Each Link has a bounded
 probe budget; there is **no arbitrary Link-count cap**. The optional
-`--parallel 1..4` (default `1`) observes up to four **independent**
-Links concurrently using the same saved-State snapshot and overall
-`--timeout`. This limits concurrent diagnostic subprocesses, **not**
-the number of Links. Results always remain sorted by Link ID regardless
+`--parallel <positive-count>` (default `1`) observes up to the requested
+number of **independent** Links concurrently using the same saved-State
+snapshot and overall `--timeout`. Actual workers never exceed the number of
+Links in that verified snapshot; this is not a product-imposed quota. Results always remain sorted by Link ID regardless
 of completion order. More concurrent probes can increase short-lived
 host/network load; no Link/route/firewall/service is changed.
 If a run is interrupted, incomplete or unprocessed Links remain
@@ -676,7 +721,7 @@ and transfer byte counts separately; process readiness alone cannot attest
 mTLS or application delivery. The generic `link diagnose <id>` now sends **five** bounded
 owner-scoped private-IP ICMP probes for verified managed WSS Links.
 `link status <id>` verifies local WSS helper/guard/WG ownership and
-counters without pinging; `link diagnose --all [--parallel 1..4]`
+counters without pinging; `link diagnose --all [--parallel <positive-count>]`
 reports measured WSS peer replies independently of any other Links.
 WSS **PMTU is not measured** or guessed from Native WireGuard
 overhead; an explicit WSS `--mtu` attempt is unsupported.

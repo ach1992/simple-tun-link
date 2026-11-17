@@ -22,7 +22,8 @@ Releases, PRs and dated Issue evidence, not this current operator runbook.
 
 - Supported installer environments are listed in
   [SUPPORTED-ENVIRONMENTS.md](SUPPORTED-ENVIRONMENTS.md): Linux amd64/arm64,
-  initially Ubuntu 22.04+ and Debian 11+, with actual capability checks.
+  Debian/Ubuntu with signed APT and actual capability checks; numeric
+  distro version alone does not determine eligibility.
 - The supported installed executable is the root-owned
   `/usr/local/bin/stl`. `/usr/local/bin/stlink` is an exact relative
   alias to that executable, not a separate product. The installer
@@ -152,9 +153,13 @@ child exit code when available, a typed reason, and a read-only recovery
 check. Quick Install likewise preserves real download, Bash and installer
 errors instead of silently suppressing diagnostics. The canonical APT index
 refresh streams progress continuously while only retrying verified lists-lock
-failures; the read-only simulation streams full diagnostics but retains at
-most 64 KiB of validated machine-plan output in private temporary storage.
-Never infer that a transaction completed just because a status line printed.
+failures; the read-only APT simulation streams complete diagnostics and retains
+only exact install/removal facts in private temporary storage. Guided PREPARE
+cross-checks the complete selected plan before and after confirmation; large
+plans use the SHA256 of the **exact full package=version list** so OS argv
+limits cannot truncate the authorization. No extra packages, upgrades,
+removals or foreign repositories are silently approved.
+Minimal Debian/Ubuntu images without the official **gpgv** verifier must install that package from authenticated distribution APT (or separately verified offline media) before STL can independently attest archive signatures. The installer reports this as **distro_signature_verifier_missing** and never downgrades the trust checks.\nNever infer that a transaction completed just because a status line printed.
 Review outputs before sharing them externally, since repository or host details
 may be sensitive; protected Link/PSK/Setup-Link material remains absent from
 general-purpose machine/status output.
@@ -314,7 +319,37 @@ one trusted install command below. Do not loosen `/root` permissions
 or enable root SSH just to transfer files.
 
 
+### Simple HTTPS Mirror copy (without extra signer or manual SHA256)
+
+An operator may copy the official GitHub Release assets byte-for-byte to a
+trusted HTTPS web server. For a new installation, download the matching
+`stl_vX.Y.Z_linux_ARCH_local-install.sh` from that URL into protected
+`/root/stl` and execute it. An already installed STL that supports the
+new direct-asset Update mode can use:
+
+```bash
+sudo stl update --url https://YOUR_MIRROR/releases/vX.Y.Z/stl_vX.Y.Z_linux_ARCH_local-install.sh
+```
+
+The official GitHub Release file URL is also accepted by `--url`, including
+GitHub's normal HTTPS download redirect. This mode does **not** require a
+publisher Ed25519 key, an extra Mirror bootstrap or a manually typed
+SHA256. The user explicitly trusts the HTTPS file origin (and redirects);
+internal SHA256 checks verify the archive inside the chosen file but cannot
+independently prove that an attacker did not replace the complete launcher.
+No GitHub API is needed by a Mirror-only destination. For the exact complete
+download/install commands, architecture selection and older-version
+`--update` fallback, see [MIRROR.md](MIRROR.md#simple-copy-as-is-mirror-recommended).
+The independently SHA-pinned local/Mirror paths below remain optional.
+
 ### One transferred file and one trusted command (new release format)
+
+This is the **optional independently SHA256-pinned local-transfer procedure**.
+For an operator-trusted HTTPS source that does not require a separately
+obtained digest, use the [simple original Release-file workflow](MIRROR.md#simple-copy-as-is-mirror-recommended)
+instead. Do not confuse the two trust models: both use the same canonical
+installer, but only the advanced procedure independently authenticates the
+complete transferred shell file before running it.
 
 **[Stable v0.1.9](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.9)
 was the first release with the self-contained `*_local-install.sh` format.**
@@ -637,12 +672,15 @@ Latest Stable asset supplies its exact pinned default version.
 The literal official commands start via `/usr/bin/env -i` and an absolute
 `/bin/bash`: inherited `BASH_ENV`, exported shell functions, unsafe `PATH`
 and `curlrc` cannot alter the first-hop authentication. Explicit `TERM="${TERM:-dumb}"` carries the connected terminal type,
-and `${NO_COLOR+NO_COLOR=1}` carries the operator's ANSI opt-out only
-when it exists (an empty `NO_COLOR` also disables ANSI). Non-root
-post-success menu handoff explicitly restores that preference through
-`sudo`. No shell startup code, extra PATH entries or other caller
-environment are admitted into the privileged installer. On a noninteractive
-or `TERM=dumb` terminal, ANSI screen control is still not attempted. For deliberately
+and `${NO_COLOR+NO_COLOR=1}` carries the operator's color opt-out only
+when it exists (an empty `NO_COLOR` also disables styling). A real
+interactive terminal with usable `TERM` still clears/redraws each menu frame
+in monochrome mode; only `STL_NO_CLEAR=1`, redirected output and `TERM=dumb`
+prevent cursor/screen controls. Non-root post-success menu handoff explicitly
+restores the color preference through `sudo`. No shell startup code, extra
+PATH entries or other caller environment are admitted into the privileged
+installer. On a noninteractive or `TERM=dumb` terminal, ANSI screen control
+is not attempted. For deliberately
 configured HTTPS proxy or private CA access, insert only
 `HTTPS_PROXY=...`, `NO_PROXY=...`, and/or
 `CURL_CA_BUNDLE=/absolute/trusted/ca.pem` after `PATH=...` and before
@@ -783,14 +821,17 @@ stlink version --json
 
 ## Update
 
-### Short, authenticated Update from an installed STL (local or HTTPS mirror)
+### Explicit Update from an installed STL (local or HTTPS mirror)
 
-Once an installed **published** STL executable includes the `stl update`
-command, two API-free paths use the same canonical Update/rollback engine.
-This CLI was first published in Stable `v0.1.23`; installed `v0.1.22`
-does not have it. On older installations, continue using the
-existing long guarded local `--update` command above or the verified
-HTTPS mirror UPDATE_COMMAND below; do not assume a newer CLI exists.
+Installed STL versions with `stl update` support the existing
+independently pinned local file and HTTPS bootstrap paths. **Newer STL
+versions that include `stl update --url`** also support a copied official
+`*_local-install.sh` directly from any explicitly trusted HTTPS Mirror,
+without an external SHA256 or publisher-key enrollment. This calls the
+**same canonical Update/rollback engine**. The basic pinned CLI first shipped
+in `v0.1.23`; older installed binaries lack the new direct-file URL option.
+On those binaries, download the newer original one-file installer and use
+its explicit `--update` mode; see [MIRROR.md](MIRROR.md#simple-copy-as-is-mirror-recommended).
 
 **Local file:** On a trusted Internet-connected device confirm the official
 publisher, exact immutable Stable tag, architecture and full-file SHA256.
@@ -803,26 +844,35 @@ an independently verified lowercase 64-character digest, run:
 sudo stl update --local /root/stl/stl_vX.Y.Z_linux_ARCH_local-install.sh --sha256 TRUSTED_FILE_SHA256
 ~~~
 
-**Interactive menu (installed v0.1.23 and later):** Run `sudo stl menu`
-and choose **Update → Verified local file** or **Update → Trusted HTTPS
-mirror**. The menu asks for the exact local path or HTTPS `install.sh` URL
-and the independently obtained 64-character lowercase SHA256, reviews both,
+**Interactive pinned-source menu:** In installed `v0.1.23` through
+`v0.1.25`, choose **Update → Verified local file** or **Update → Trusted
+HTTPS mirror**. In newer builds that support `update --url`, choose
+**Update → Verified local file** or **Update → Pinned HTTPS bootstrap**
+for the same pinned modes. **Update → HTTPS release file** is instead the
+operator-trusted, no-manual-SHA256 method described above.
+The pinned choices ask for the exact local path or HTTPS `install.sh` URL
+and the independently obtained 64-character lowercase SHA256, review both,
 then requires a fresh `UPDATE` confirmation before invoking the **same**
 `stl update` first-hop verification and canonical installer. The source
 chooser does not contact GitHub for these two methods; the official
 release-picker option is separate. The menu retains no remembered
 mirror/digest and never switches Update authority implicitly. This is
 available from official Stable `v0.1.23`; installed `v0.1.22` has neither
-this menu nor the short `stl update` CLI. Use the existing verified
-commands above on older hosts.
+this menu nor the short `stl update` CLI. Use the documented older
+canonical installer Update procedure on those hosts, not a CLI command
+they do not support.
 
-**Trusted HTTPS mirror:** On the trusted preparation device, use the
-`BOOTSTRAP_SHA256` reported by `scripts/prepare-mirror.sh` *before uploading*
+**Optional independently pinned HTTPS bootstrap:** On the trusted
+preparation device, use the `BOOTSTRAP_SHA256` reported by `scripts/prepare-mirror.sh` *before uploading*
 the static mirror. On the destination, with an exact HTTPS URL (no redirects),
 run:
 
 ~~~bash
 sudo stl update --mirror https://stl.example.com/install.sh --sha256 TRUSTED_BOOTSTRAP_SHA256
+
+# On a release that includes Signed Mirror, after one-time independent
+# publisher-key enrollment; no per-release digest needs to be typed:
+sudo stl update --signed-mirror https://stl.example.com/install.sh
 ~~~
 
 Neither example can be run with a literal placeholder. The command refuses a
@@ -844,16 +894,18 @@ have partially applied packages: inspect `dpkg --audit`, STL ownership and
 retained recovery before attempting another update. After completion verify
 `sudo stl version --json` and the status of your existing Links.
 
-For a build that includes the new source selector, the menu first offers
-**Official GitHub releases**, **Verified local file** and **Trusted HTTPS
-mirror**. Only the first choice queries `api.github.com`; the two
-independently pinned alternatives do not require a GitHub/API connection.
-The built-in CLI enforces root-owned installation, private bounded
-snapshots, digest verification and canonical rollback/ownership gates
-after separate `UPDATE` confirmation. A failed attempt always closes
-the old in-memory menu; verify the installed version and recovery state
-before restarting. This selector first appeared in published `v0.1.23`
-and is not present in installed `v0.1.22`.
+For builds that include the new direct-file URL mode, the Update menu
+offers **Official GitHub releases**, **Verified local file**, **HTTPS
+release file**, **Pinned HTTPS bootstrap** and **Publisher-signed HTTPS
+bootstrap**. Only the first choice queries `api.github.com`. The
+ordinary HTTPS release-file mode assumes the selected operator-trusted
+origin and independently validates the **internal** archive, manifest,
+filesystem ownership and canonical install transaction; it does not prompt
+for an external digest. The pinned and signed advanced modes remain
+unchanged. A failed attempt exits the old in-memory menu so it cannot
+operate against a replaced executable. The original selector first shipped
+in Stable `v0.1.23`; the new direct-file option is not present in that
+published version.
 
 The official release-picker option reads official release metadata.
 **Only an installed executable

@@ -15,6 +15,51 @@ import (
 	"time"
 )
 
+func TestVendorGPGVStatusRequiresAuthenticatedOfficialCosignature(t *testing.T) {
+	// Debian 12 bookworm InRelease from UK01-r: two official VALID signatures
+	// plus a new co-signer missing from its older installed archive keyring.
+	valid := "[GNUPG:] NEWSIG\n" +
+		"[GNUPG:] GOODSIG 6ED0E7B82643E131 Debian Archive Automatic Signing Key\n" +
+		"[GNUPG:] VALIDSIG 4CB50190207B4758A3F73A796ED0E7B82643E131 2026-07-11 1783765031 0 4 0 1 8 01 B8B80B5B623EAB6AD8775C45B7C5D7D6350947F8\n"
+	unknownKey := "78DBA3BC47EF2265"
+	missing := "[GNUPG:] ERRSIG " + unknownKey + " 1 8 01 1783765032 9 B8E5F13176D2A7A75220028078DBA3BC47EF2265\n" +
+		"[GNUPG:] NO_PUBKEY " + unknownKey + "\n"
+	cases := []struct {
+		name   string
+		exit   int
+		status string
+		ok     bool
+	}{
+		{"one authentic signature", 0, valid, true},
+		{"two valid plus unknown cosigner", 2, valid + missing + "[GNUPG:] VALIDSIG 4D64FEC119C2029067D6E791F8D2585B8783D481\n", true},
+		{"unknown-only signature", 2, missing, false},
+		{"unpaired unknown signer", 2, valid + "[GNUPG:] ERRSIG " + unknownKey + " 1 8 01 1783765032 9\n", false},
+		{"unpaired missing key", 2, valid + "[GNUPG:] NO_PUBKEY " + unknownKey + "\n", false},
+		{"non-missing signature error", 2, valid + "[GNUPG:] ERRSIG " + unknownKey + " 1 8 01 1783765032 4\n", false},
+		{"verifier tool unexpected error", 92, valid, false},
+		{"bad verifier exit", 1, valid, false},
+		{"false good status with missing-error exit", 2, valid, false},
+		{"empty output", 0, "", false},
+		{"status injection", 0, valid + "invalid non-status data\n", false},
+		{"incomplete status", 0, strings.TrimSuffix(valid, "\n"), false},
+	}
+	for _, code := range []string{"BADSIG", "REVKEYSIG", "EXPKEYSIG", "EXPSIG", "KEYREVOKED", "KEYEXPIRED", "SIGEXPIRED", "NODATA", "FAILURE", "ERROR"} {
+		cases = append(cases, struct {
+			name   string
+			exit   int
+			status string
+			ok     bool
+		}{"invalid signer " + code, 2, valid + missing + "[GNUPG:] " + code + " X\n", false})
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := vendorGPGVStatusValid(tc.exit, []byte(tc.status)); got != tc.ok {
+				t.Fatalf("signature status allowed=%v want=%v, exit=%d", got, tc.ok, tc.exit)
+			}
+		})
+	}
+}
+
 func TestVendorOptionalPackageStatusReceiptStrict(t *testing.T) {
 	pkg := "libcharon-extauth-plugins"
 	cases := []struct {

@@ -15,7 +15,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func TestReviewerNoColorForbidsAllTerminalControl(t *testing.T) {
+func TestReviewerNoColorRetainsCleanRedrawWithoutColor(t *testing.T) {
 	t.Setenv("STL_NO_CLEAR", "0")
 	t.Setenv("TERM", "xterm-256color")
 	previous, had := os.LookupEnv("NO_COLOR")
@@ -27,12 +27,12 @@ func TestReviewerNoColorForbidsAllTerminalControl(t *testing.T) {
 		}
 	})
 	for _, tc := range []struct {
-		name, term string
-		color      bool
+		name, term   string
+		clear, color bool
 	}{
-		{"NO_COLOR present even when empty", "xterm-256color", false},
-		{"dumb terminal", "dumb", false},
-		{"normal interactive", "xterm-256color", true},
+		{"NO_COLOR present even when empty", "xterm-256color", true, false},
+		{"dumb terminal", "dumb", false, false},
+		{"normal interactive", "xterm-256color", true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("TERM", tc.term)
@@ -45,11 +45,11 @@ func TestReviewerNoColorForbidsAllTerminalControl(t *testing.T) {
 			menuScreen(slave, "Main")
 			menuNotice(slave, "OK", "Screen rendered")
 			got := readMenuPTYUntil(t, master, "MAIN", "Screen rendered")
-			if strings.Contains(got, "\x1b") != tc.color {
-				t.Fatalf("unexpected ANSI eligibility: %q", got)
+			if strings.Contains(got, "\x1b[2J\x1b[H") != tc.clear {
+				t.Fatalf("unexpected terminal redraw: %q", got)
 			}
-			if tc.color && !strings.Contains(got, "\x1b[2J\x1b[H") {
-				t.Fatalf("normal TTY did not redraw visible screen: %q", got)
+			if strings.Contains(got, "\x1b[1;") != tc.color {
+				t.Fatalf("unexpected styled menu: %q", got)
 			}
 		})
 	}

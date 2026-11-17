@@ -4,10 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -42,6 +45,7 @@ type selectedPackagePreview struct {
 	missing    string
 	packages   string
 	aptInstall string
+	aptDigest  string
 }
 
 // packagePreviewIssue is an authored operator reason and next step. Never
@@ -72,14 +76,15 @@ func packageInventoryFailure(stderr string, ctxErr error) error {
 	case ctxErr != nil:
 		issue.reason = "requirements_check_interrupted"
 		issue.next = "Read-only inspection was interrupted. Reopen Create tunnel when the host is ready."
-	case strings.Contains(stderr, "unsupported distribution:"),
-		strings.Contains(stderr, "Ubuntu 22.04 or later is required"),
-		strings.Contains(stderr, "Debian 11 or later is required"),
+	case strings.Contains(stderr, "unsupported package-manager distribution:"),
 		strings.Contains(stderr, "OS release file is unreadable"),
 		strings.Contains(stderr, "invalid Ubuntu version"),
 		strings.Contains(stderr, "invalid Debian version"):
 		issue.reason = "unsupported_or_unverified_os"
 		issue.next = "Inspect /etc/os-release and docs/SUPPORTED-ENVIRONMENTS.md (read-only); do not change OS identity."
+	case strings.Contains(stderr, "cannot verify distribution archive signatures"):
+		issue.reason = "distro_signature_verifier_missing"
+		issue.next = "Install the official gpgv package using authenticated distribution APT or independently verified offline media, then retry the read-only inventory; STL does not bypass signature verification."
 	case aptReason == "apt_source_trust_unverified":
 		issue.reason = "apt_source_trust_unverified"
 		issue.next = "Inspect APT source configuration and apt-cache policy for the missing packages; do not bypass signature checks."
@@ -137,90 +142,111 @@ func runEmbeddedInstaller(ctx context.Context, stdout, stderr io.Writer, args ..
 	return nil
 }
 
-const (
-	packagePreviewStdoutLimit = 32 * 1024
-	packagePreviewStderrLimit = 64 * 1024
-)
+// APT can legitimately produce extensive resolver diagnostics even when the
+// actual transaction is small. Keep only a short diagnostic tail for typed
+// non-terminal errors and stream all bytes to a real local operator TTY.
+// The separate, machine-readable inventory is spooled to a private file.
+const packagePreviewDiagnosticTail = 32 * 1024
 
-var errPackagePreviewOutputLimit = errors.New("read-only package output exceeded capture limit")
-
-// exec.Cmd streams into this writer during collection. Returning an error on
-// overflow stops io.Copy without retaining an arbitrarily large child output.
-type boundedPackagePreviewOutput struct {
-	bytes.Buffer
-	limit    int
-	overflow bool
+type packagePreviewDiagnostics struct {
+	tail     []byte
+	terminal io.Writer
 }
 
-func (b *boundedPackagePreviewOutput) Write(p []byte) (int, error) {
-	remaining := b.limit - b.Len()
-	if len(p) > remaining {
-		b.overflow = true
-		n, _ := b.Buffer.Write(p[:remaining])
-		return n, errPackagePreviewOutputLimit
+func (d *packagePreviewDiagnostics) Write(p []byte) (int, error) {
+	if len(p) >= packagePreviewDiagnosticTail {
+		d.tail = append(d.tail[:0], p[len(p)-packagePreviewDiagnosticTail:]...)
+	} else {
+		drop := len(d.tail) + len(p) - packagePreviewDiagnosticTail
+		if drop > 0 {
+			d.tail = append(d.tail[:0], d.tail[drop:]...)
+		}
+		d.tail = append(d.tail, p...)
 	}
-	return b.Buffer.Write(p)
+	if d.terminal != nil {
+		return d.terminal.Write(p)
+	}
+	return len(p), nil
 }
 
 func readSelectedPackagePreview(ctx context.Context, selected tunnelOption) (selectedPackagePreview, error) {
 	return readSelectedPackagePreviewWithRunner(ctx, selected, runEmbeddedInstaller)
 }
 
-// Private runner seam for exercising read-only output failure without APT or host effects.
+// Private runner seam for testing read-only output without host mutations.
 func readSelectedPackagePreviewWithRunner(ctx context.Context, selected tunnelOption,
 	runner func(context.Context, io.Writer, io.Writer, ...string) error) (selectedPackagePreview, error) {
+	return readSelectedPackagePreviewWithDiagnostics(ctx, selected, runner, nil)
+}
+
+func readSelectedPackagePreviewWithDiagnostics(ctx context.Context, selected tunnelOption,
+	runner func(context.Context, io.Writer, io.Writer, ...string) error,
+	terminal io.Writer) (selectedPackagePreview, error) {
 	choice := selectedPackageBackends(selected)
 	if choice == "" {
 		return selectedPackagePreview{}, errors.New("unrecognized tunnel package selection")
 	}
-	stdout := boundedPackagePreviewOutput{limit: packagePreviewStdoutLimit}
-	stderr := boundedPackagePreviewOutput{limit: packagePreviewStderrLimit}
-	runErr := runner(ctx, &stdout, &stderr, "requirements", "--backends", choice)
-	// A truncated inventory or diagnostic is not an APT plan and cannot
-	// authorize PREPARE, even if the child or test runner reported success.
-	if stdout.overflow || stderr.overflow {
-		return selectedPackagePreview{}, &packagePreviewIssue{
-			reason: "requirements_inventory_oversized",
-			next:   "The read-only package output exceeded its limit; verify the STL binary and release integrity before retrying.",
-		}
+	stdout, err := os.CreateTemp("", "stl-apt-preview-")
+	if err != nil {
+		return selectedPackagePreview{}, &packagePreviewIssue{reason: "requirements_capture_unavailable",
+			next: "Inspect the host's private temporary storage; no preparation was started."}
 	}
+	defer func() { _ = stdout.Close(); _ = os.Remove(stdout.Name()) }()
+	diagnostics := &packagePreviewDiagnostics{terminal: terminal}
+	runErr := runner(ctx, stdout, diagnostics, "requirements", "--backends", choice)
 	if runErr != nil {
-		return selectedPackagePreview{}, packageInventoryFailure(stderr.String(), ctx.Err())
+		return selectedPackagePreview{}, packageInventoryFailure(string(diagnostics.tail), ctx.Err())
+	}
+	if _, err := stdout.Seek(0, io.SeekStart); err != nil {
+		return selectedPackagePreview{}, errors.New("read-only inventory could not be re-read")
 	}
 	var plan selectedPackagePreview
 	seen := map[string]bool{}
-	for _, line := range strings.Split(strings.TrimSuffix(stdout.String(), "\n"), "\n") {
+	reader := bufio.NewReader(stdout)
+	for {
+		line, readErr := reader.ReadString('\n')
+		if readErr == io.EOF && line == "" {
+			break
+		}
+		if readErr != nil && readErr != io.EOF {
+			return selectedPackagePreview{}, errors.New("read-only inventory could not be parsed")
+		}
+		line = strings.TrimSuffix(line, "\n")
 		key, value, ok := strings.Cut(line, "=")
 		if !ok || seen[key] {
 			return selectedPackagePreview{}, errors.New("invalid canonical package inventory")
 		}
 		seen[key] = true
 		switch key {
-		case "distribution", "version", "selected_backends", "packages", "missing_packages", "apt_install", "notice":
+		case "distribution", "version", "selected_backends", "packages",
+			"missing_packages", "apt_install", "apt_install_sha256", "notice":
 		default:
 			return selectedPackagePreview{}, errors.New("unexpected package inventory field")
 		}
 		if key == "selected_backends" && value != choice {
 			return selectedPackagePreview{}, errors.New("package selector drift")
 		}
-		if key == "packages" {
+		switch key {
+		case "packages":
 			plan.packages = value
-		}
-		if key == "missing_packages" {
+		case "missing_packages":
 			plan.missing = value
-		}
-		if key == "apt_install" {
+		case "apt_install":
 			plan.aptInstall = value
+		case "apt_install_sha256":
+			plan.aptDigest = value
+		}
+		if readErr == io.EOF {
+			break
 		}
 	}
-	if !seen["selected_backends"] || !seen["packages"] || !seen["missing_packages"] || !seen["apt_install"] || !seen["distribution"] || !seen["version"] {
+	if !seen["selected_backends"] || !seen["packages"] || !seen["missing_packages"] ||
+		!seen["apt_install"] || !seen["distribution"] || !seen["version"] {
 		return selectedPackagePreview{}, errors.New("canonical package inventory missing required fields")
 	}
-	// Strings must be the canonical installer literal package vocabulary.
-	// This parser must never emit arbitrary package names as shell arguments.
 	allowed := map[string]bool{"iproute2": true, "iptables": true, "kmod": true,
-		"wireguard-tools": true, "nftables": true, "charon-systemd": true, "strongswan-swanctl": true,
-		"libstrongswan-standard-plugins": true}
+		"wireguard-tools": true, "nftables": true, "charon-systemd": true,
+		"strongswan-swanctl": true, "libstrongswan-standard-plugins": true}
 	for _, name := range strings.Fields(plan.packages) {
 		if !allowed[name] {
 			return selectedPackagePreview{}, errors.New("unknown canonical package identity")
@@ -231,15 +257,14 @@ func readSelectedPackagePreviewWithRunner(ctx context.Context, selected tunnelOp
 			return selectedPackagePreview{}, errors.New("unknown or unselected missing package")
 		}
 	}
-	// The APT resolver may add transitive packages. Treat its complete
-	// package=version set as opaque, bounded data; never form shell code.
 	identity := regexp.MustCompile("^[a-z0-9][a-z0-9.+:-]*=[0-9][a-zA-Z0-9:.+~_-]*$")
 	seenAPT := map[string]bool{}
 	for _, term := range strings.Fields(plan.aptInstall) {
-		if !identity.MatchString(term) || seenAPT[strings.SplitN(term, "=", 2)[0]] {
+		packageName := strings.SplitN(term, "=", 2)[0]
+		if !identity.MatchString(term) || seenAPT[packageName] {
 			return selectedPackagePreview{}, errors.New("invalid APT resolver identity")
 		}
-		seenAPT[strings.SplitN(term, "=", 2)[0]] = true
+		seenAPT[packageName] = true
 	}
 	if (plan.missing == "") != (plan.aptInstall == "") {
 		return selectedPackagePreview{}, errors.New("APT resolver omitted missing dependencies")
@@ -249,6 +274,12 @@ func readSelectedPackagePreviewWithRunner(ctx context.Context, selected tunnelOp
 			return selectedPackagePreview{}, errors.New("APT resolver omitted selected package")
 		}
 	}
+	sum := sha256.Sum256([]byte(plan.aptInstall))
+	actualDigest := hex.EncodeToString(sum[:])
+	if seen["apt_install_sha256"] && plan.aptDigest != actualDigest {
+		return selectedPackagePreview{}, errors.New("canonical APT plan digest does not match its identity list")
+	}
+	plan.aptDigest = actualDigest
 	return plan, nil
 }
 
@@ -284,9 +315,26 @@ func productionMenuPackageOps() menuPackagePreparationOps {
 // One explicit PREPARE covers the selected package/dependency plan AND, for
 // IPsec, qualified private-service admission. Actual Link Create has its own
 // separate YES. Inspecting or cancelling always remains read-only.
+// Raw APT diagnostics are only permitted when BOTH the human session and
+// the actual diagnostic destination are real TTYs. In particular, an
+// interactive stdout does not authorize writing secrets to redirected stderr.
+func selectedPackagePreviewForStreams(out, errOut io.Writer,
+	runner func(context.Context, io.Writer, io.Writer, ...string) error) func(context.Context, tunnelOption) (selectedPackagePreview, error) {
+	var terminal io.Writer
+	if _, stdoutTTY := menuTerminal(out); stdoutTTY {
+		if _, stderrTTY := menuTerminal(errOut); stderrTTY {
+			terminal = errOut
+		}
+	}
+	return func(ctx context.Context, selected tunnelOption) (selectedPackagePreview, error) {
+		return readSelectedPackagePreviewWithDiagnostics(ctx, selected, runner, terminal)
+	}
+}
+
 func menuPrepareSelectedPackages(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
 	selected tunnelOption, options *runtimeOptions) menuPackagePreparation {
 	ops := productionMenuPackageOps()
+	ops.preview = selectedPackagePreviewForStreams(out, errOut, runEmbeddedInstaller)
 	if options != nil && options.packagePreview != nil {
 		ops.preview = options.packagePreview
 	}
@@ -368,7 +416,8 @@ func menuPrepareSelectedPackagesWithOps(input io.Reader, reader *bufio.Reader, o
 		refreshed, e := ops.preview(verifyCtx, selected)
 		stop()
 		if e != nil || refreshed.missing != plan.missing ||
-			refreshed.packages != plan.packages || refreshed.aptInstall != plan.aptInstall {
+			refreshed.packages != plan.packages || refreshed.aptInstall != plan.aptInstall ||
+			refreshed.aptDigest != plan.aptDigest {
 			menuNotice(out, "WARNING", "Package/dependency plan could not be confirmed after consent; no APT transaction started.")
 			menuField(out, "NEXT ACTION", "Review current APT package policy and start a NEW Create/PREPARE preview; the previous consent cannot be reused.")
 			if e != nil {
@@ -382,9 +431,15 @@ func menuPrepareSelectedPackagesWithOps(input io.Reader, reader *bufio.Reader, o
 		menuNotice(out, "INFO", "Checking the exact package plan and host ownership. Installer and APT details follow.")
 		var childOutput menuInstallerOutput
 		childStdout, childStderr := childOutput.streamsVisible(out, errOut)
+		planFlag, planValue := "--expected-apt-plan", refreshed.aptInstall
+		// A long legitimate transitive plan may exceed OS argv limits; its
+		// SHA256 admits exactly the previously displayed, reverified plan.
+		if len(refreshed.aptInstall) > 16*1024 {
+			planFlag, planValue = "--expected-apt-plan-sha256", refreshed.aptDigest
+		}
 		if err := ops.install(prepCtx, childStdout, childStderr, "prepare",
 			"--backends", selectedPackageBackends(selected), "--expected-missing", refreshed.missing,
-			"--expected-apt-plan", refreshed.aptInstall); err != nil {
+			planFlag, planValue); err != nil {
 			childOutput.failure(out, "prepare", err, prepCtx)
 			menuNotice(out, "FAILED", "Package preparation incomplete or denied. APT/vendor changes may persist after an attempted transaction; inspect and reconcile before retry.")
 			menuField(out, "NEXT ACTION", "Inspect dpkg --audit and current APT processes (read-only). Reconcile any partial transaction before a NEW PREPARE; never retry blindly.")

@@ -48,7 +48,8 @@ def assert_not_modified(previous: tuple[str, str]) -> None:
         raise AssertionError("refused/cancelled menu changed installed identity")
     if os.path.lexists("/var/lib/simple-tun-link"):
         raise AssertionError("refused/cancelled menu changed private Link State")
-    for prefix in (".stl-mirror-preflight.", ".stl-preflight."):
+    for prefix in (".stl-mirror-preflight.", ".stl-preflight.",
+                   ".stl-release-asset."):
         if any(entry.startswith(prefix) for entry in os.listdir("/root")):
             raise AssertionError("refused/cancelled menu left private download stage")
 
@@ -59,7 +60,7 @@ def exercise(
     action: str,
     expect: str,
     transcript_file: str | None = None,
-    choice: str = "3",
+    choice: str = "4",  # Advanced pinned-bootstrap menu option (3 is plain HTTPS file).
 ) -> bytes:
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 38, 0, 0))

@@ -58,11 +58,14 @@ and checksum inventory:
 
 Each single file contains a build-bound minimal launcher plus the **exact**
 corresponding six-member `*_local-install.tar.gz` byte sequence. Its embedded
-digest is checked *before* the canonical `unpack` action is invoked. The
-**trusted operator command** checks local file/directory ownership, modes,
-symlinks and file count *before* snapshotting or executing transferred bytes;
-the launcher then stages its received private bytes and delegates installation to the sole
-canonical `scripts/install.sh`. No independent installer engine is added.
+digest is checked *before* the canonical `unpack` action is invoked.
+In the ordinary copy-as-is HTTPS workflow, `sudo bash` trusts the entire downloaded launcher *before* its embedded
+checks can run; the archive digest cannot independently authenticate its
+publisher or detect replacement of the entire launcher. The optional pinned
+local first-hop verifies file/directory ownership, modes, links and a
+separately obtained full-file digest *before* executing transferred bytes.
+Both paths delegate to the sole canonical `scripts/install.sh`; no
+independent installer engine is added.
 The archive keeps the exact six regular members: one binary, canonical
 `install.sh`, `LICENSE`, `BUILD-MANIFEST.txt`, `LOCAL-INSTALL.txt`, and
 `SHA256SUMS` (covering the other five). Both `.sh` and `.tar.gz` are included
@@ -72,11 +75,12 @@ SHA256 of the exact canonical `scripts/install.sh`** from the release source
 tree, after verifying it is byte-identical to the compiled-in canonical copy.
 The runtime checks this pin before running downloaded canonical shell or
 elevating privileges, then rechecks a bounded root-private snapshot against
-the identical digest immediately before executing as root. The initial
-published official/Mirror one-liners start Bash under a clean `env -i`
-boundary; explicit HTTPS proxy/CA values are allowlisted into the root step. The self-hosted Mirror keeps its independently verified
-source and SHA256SUMS pins. These protections first shipped in reviewed
-Stable `v0.1.23`; historical assets such as `v0.1.22` remain unchanged.
+the identical digest immediately before executing as root. The original
+official bootstrap and optional pinned-bootstrap Mirror one-liners start Bash under a clean `env -i` boundary; explicit HTTPS
+proxy/CA values are allowlisted into the root step. Those first-hop
+protections shipped in reviewed Stable `v0.1.23`; historical assets such
+as `v0.1.22` remain unchanged. They do not imply that the simpler direct
+`sudo bash` copy-as-is path independently authenticates publisher identity.
 Stable `v0.1.24` corrected the terminal menu handoff after successful
 Install/Update under the deliberately restricted first-hop `PATH`: the
 root path uses `/usr/local/bin/stl`, and non-root uses absolute `/usr/bin/sudo`
@@ -93,8 +97,9 @@ The literal *operator* command, file inventory, trust boundary, error recovery
 and legacy `v0.1.8` manual archive procedure are owned by
 [INSTALL.md](INSTALL.md#local-installation-choose-a-published-asset).
 Do not maintain a competing installation runbook here. The new single-file
-launcher cannot provide an independent publisher signature: exact-tag
-publisher provenance must be confirmed out-of-band before execution.
+launcher cannot provide an independent publisher signature. Operators
+choosing the basic HTTPS path trust the selected source; those needing
+independent publisher provenance must verify it out-of-band before execution.
 The canonical `unpack` still checks private source ownership, its operation-
 local immutable snapshot, full outer digest, regular member types/order,
 strict size bounds, safe extraction and internal checksum coverage.
@@ -105,6 +110,18 @@ canonical transactional rollback/foreign ownership tests. Disposable native
 Debian/Ubuntu guest tests separately prove real selected signed-APT behavior.
 Tests cannot substitute for actual publication, physical host acceptance,
 reboot restoration or multi-host WAN traffic.
+
+The official `stl_vX.Y.Z_linux_{amd64,arm64}_local-install.sh` assets
+are also the complete **ordinary self-hosted Mirror** distribution format:
+copy them byte-for-byte from the published GitHub Release to any
+operator-trusted HTTPS server, without modifying or re-signing files.
+A first install downloads the complete appropriate file to protected
+`/root/stl` and runs it; an eligible installed binary supports
+`stl update --url HTTPS_RELEASE_ASSET_URL` and delegates to its **same**
+canonical installer. The chosen HTTPS Mirror is an explicit operator trust
+decision, not independent GitHub publisher authentication. The generated
+pinned `install.sh` and `release.sig` workflow is optional and is not a
+prerequisite for ordinary official GitHub releases.
 
 ## Installer and publication boundaries
 

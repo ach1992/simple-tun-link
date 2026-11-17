@@ -78,44 +78,108 @@ func requireAbsent(path string) error {
 	return fmt.Errorf("%q is still present", path)
 }
 
-func (g Gate) verifyCommittedInstalled(canonical, record, alias, wantHash string) error {
+// ownedInstallation is the installer's format=1 record, bound to the exact
+// bytes of the canonical executable and the stlink alias by the proof below.
+type ownedInstallation struct {
+	version string
+	hash    string
+}
+
+// verifiedInstalledIdentity is the common canonical installation identity
+// validator used by both retained COMMITTED journal checks and Signed Mirror
+// receipt reconciliation. It deliberately does not accept a running binary
+// pathname as evidence of a completed installer transaction.
+func (g Gate) verifiedInstalledIdentity(canonical, record, alias string) (ownedInstallation, error) {
+	var identity ownedInstallation
 	executable, err := g.openTrustedRegular(canonical, false)
 	if err != nil {
-		return fmt.Errorf("installed executable: %w", err)
+		return identity, fmt.Errorf("installed executable: %w", err)
 	}
-	hash := sha256.New()
-	_, hashErr := io.Copy(hash, executable)
+	h := sha256.New()
+	_, hashErr := io.Copy(h, executable)
 	closeErr := executable.Close()
 	if err := errors.Join(hashErr, closeErr); err != nil {
-		return fmt.Errorf("cannot hash installed executable: %w", err)
+		return identity, fmt.Errorf("cannot hash installed executable: %w", err)
 	}
-	if hex.EncodeToString(hash.Sum(nil)) != wantHash {
-		return fmt.Errorf("installed executable hash differs from committed journal")
-	}
+	identity.hash = hex.EncodeToString(h.Sum(nil))
 	recordBytes, err := g.readPrivateRegular(record, recordMaxSize)
 	if err != nil {
-		return fmt.Errorf("cannot trust ownership record: %w", err)
+		return ownedInstallation{}, fmt.Errorf("cannot trust ownership record: %w", err)
 	}
 	lines := strings.Split(string(recordBytes), "\n")
 	if len(lines) != 5 || lines[0] != "format=1" || lines[1] != "project=simple-tun-link" ||
-		lines[4] != "" || lines[3] != "sha256="+wantHash {
-		return fmt.Errorf("ownership record structure/hash disagrees with committed journal")
+		lines[4] != "" || lines[3] != "sha256="+identity.hash {
+		return ownedInstallation{}, fmt.Errorf("ownership record structure/hash disagrees with canonical executable")
 	}
 	version, ok := strings.CutPrefix(lines[2], "version=")
 	if !ok || !ownedVersionPattern.MatchString(version) {
-		return fmt.Errorf("ownership record has an invalid version")
+		return ownedInstallation{}, fmt.Errorf("ownership record has an invalid version")
 	}
+	identity.version = version
 	first, err := os.Lstat(alias)
 	if err != nil || first.Mode()&os.ModeSymlink == 0 {
-		return fmt.Errorf("installer-owned alias is missing or not a symlink")
+		return ownedInstallation{}, fmt.Errorf("installer-owned alias is missing or not a symlink")
 	}
 	link, err := os.Readlink(alias)
 	if err != nil || link != "stl" {
-		return fmt.Errorf("installer-owned alias does not point to stl")
+		return ownedInstallation{}, fmt.Errorf("installer-owned alias does not point to stl")
 	}
 	second, err := os.Lstat(alias)
 	if err != nil || !os.SameFile(first, second) {
-		return fmt.Errorf("installer alias changed during identity proof")
+		return ownedInstallation{}, fmt.Errorf("installer alias changed during identity proof")
+	}
+	return identity, nil
+}
+
+func (g Gate) verifyCommittedInstalled(canonical, record, alias, wantHash string) error {
+	identity, err := g.verifiedInstalledIdentity(canonical, record, alias)
+	if err != nil {
+		return err
+	}
+	if identity.hash != wantHash {
+		return fmt.Errorf("committed journal hash differs from installed executable and record")
+	}
+	return nil
+}
+
+// VerifyCompletedInstallation validates only the canonical, durable
+// installer-owned identity (not Link State). The caller MUST already hold
+// the canonical exclusive maintenance lock. This read-only path is needed
+// by Signed Mirror after self-upgrade: Engine Gate.Acquire deliberately
+// rejects a running process whose executable has been replaced.
+// Valid COMMITTED journals remain admissible, but missing/incomplete
+// journals and mismatched record/executable identities never advance trust.
+func (g Gate) VerifyCompletedInstallation(expectedVersion string) error {
+	if !ownedVersionPattern.MatchString(expectedVersion) {
+		return errors.New("expected installed version is invalid")
+	}
+	dir, canonical := g.Directory, g.Canonical
+	if dir == "" {
+		dir = DefaultDirectory
+	}
+	if canonical == "" {
+		canonical = CanonicalSTL
+	}
+	if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir ||
+		!filepath.IsAbs(canonical) || filepath.Clean(canonical) != canonical {
+		return errors.New("canonical installation paths are invalid")
+	}
+	if err := verifyDirectory(dir, g.testOnlyUnprivilegedPath); err != nil {
+		return fmt.Errorf("installer-owned record directory is untrusted: %w", err)
+	}
+	if err := verifyDirectory(filepath.Dir(canonical), g.testOnlyUnprivilegedPath); err != nil {
+		return fmt.Errorf("canonical executable directory is untrusted: %w", err)
+	}
+	identity, err := g.verifiedInstalledIdentity(canonical, filepath.Join(dir, RecordName),
+		filepath.Join(filepath.Dir(canonical), "stlink"))
+	if err != nil {
+		return fmt.Errorf("canonical installation incomplete: %w", err)
+	}
+	if identity.version != expectedVersion {
+		return errors.New("canonical install-record version differs from signed target")
+	}
+	if err := g.verifyRecoveryJournals(canonical, dir); err != nil {
+		return fmt.Errorf("canonical installation has unresolved recovery: %w", err)
 	}
 	return nil
 }

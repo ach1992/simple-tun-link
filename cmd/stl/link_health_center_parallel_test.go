@@ -64,9 +64,9 @@ func TestHealthCenterParallelSlowFirstLinkDoesNotStarveHealthySibling(t *testing
 	}
 }
 
-// Six saved Links are ALL supported: four is only the process/subprocess
-// concurrency ceiling. Results remain ordered even though the first four
-// can complete in a different order from their Link IDs.
+// Six saved Links are ALL supported: the operator may request six parallel
+// observations rather than hit an arbitrary worker quota. Results remain
+// ordered even when observers finish out of ID order.
 func TestHealthCenterParallelIsBoundedAndAllLinksRemainIndependent(t *testing.T) {
 	snapshot := state.EmptySnapshot()
 	for i := 1; i <= 6; i++ {
@@ -104,7 +104,7 @@ func TestHealthCenterParallelIsBoundedAndAllLinksRemainIndependent(t *testing.T)
 	go func() {
 		defer close(result)
 		code, body, stderr = executeHealthRemediationTest(
-			[]string{"diagnose", "--all", "--parallel", "4", "--timeout", "5s", "--json"},
+			[]string{"diagnose", "--all", "--parallel", "6", "--timeout", "5s", "--json"},
 			&runtimeOptions{stateRoot: root}, deps,
 		)
 	}()
@@ -114,11 +114,11 @@ func TestHealthCenterParallelIsBoundedAndAllLinksRemainIndependent(t *testing.T)
 			close(release)
 		}
 	}()
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 6; i++ {
 		select {
 		case <-started:
 		case <-time.After(2 * time.Second):
-			t.Fatal("worker pool did not start four independent observers")
+			t.Fatal("operator-selected worker pool did not start six independent observers")
 		}
 	}
 	select {
@@ -137,7 +137,7 @@ func TestHealthCenterParallelIsBoundedAndAllLinksRemainIndependent(t *testing.T)
 	if err := json.Unmarshal([]byte(body), &batch); err != nil || code != 0 || stderr != "" ||
 		batch.Outcome != "complete" || batch.Total != 6 || batch.Observed != 6 ||
 		batch.Unknown != 0 || batch.Blocked != 0 || len(batch.Checks) != 6 ||
-		peak.Load() != maxHealthParallel {
+		peak.Load() != 6 {
 		t.Fatalf("parallel cap/inventory mismatch: code=%d active=%d peak=%d batch=%+v stderr=%q err=%v",
 			code, active.Load(), peak.Load(), batch, stderr, err)
 	}
@@ -154,7 +154,6 @@ func TestHealthCenterParallelIsBoundedAndAllLinksRemainIndependent(t *testing.T)
 func TestHealthCenterParallelArgumentValidationAndSerialCompatibility(t *testing.T) {
 	for _, args := range [][]string{
 		{"diagnose", "--all", "--parallel", "0"},
-		{"diagnose", "--all", "--parallel", "5"},
 		{"diagnose", "--all", "--parallel", "-1"},
 		{"diagnose", "--all", "--parallel", "01"},
 		{"diagnose", "--all", "--parallel", "foo"},
@@ -165,6 +164,12 @@ func TestHealthCenterParallelArgumentValidationAndSerialCompatibility(t *testing
 		if valid {
 			t.Fatalf("invalid parallel worker count accepted: %q", args)
 		}
+	}
+	// The parser must accept a positive operator-selected count beyond 4;
+	// the scheduler limits actual workers to the verified Link inventory.
+	_, _, requested, accepted := parseHealthCenterArgs([]string{"diagnose", "--all", "--parallel", "1000000", "--json"})
+	if !accepted || requested != 1000000 {
+		t.Fatalf("operator-selected worker count was artificially capped: %d %v", requested, accepted)
 	}
 	_, _, defaultParallel, valid := parseHealthCenterArgs([]string{"diagnose", "--all", "--json"})
 	if !valid || defaultParallel != 1 {
@@ -225,6 +230,37 @@ func TestHealthCenterParallelDeadlineKeepsEveryUnstartedLinkUnknown(t *testing.T
 			check.Observed != nil {
 			t.Fatalf("timed-out worker fabricated health or dropped Link: %+v", check)
 		}
+	}
+}
+
+// The requested worker count may exceed the verified inventory. This must
+// never launch extra goroutines or probes and must preserve stable results.
+func TestHealthCenterParallelHighRequestClampedToActualLinkCount(t *testing.T) {
+	snapshot := healthRemediationInventory()
+	var peak, active atomic.Int32
+	deps := healthCenterServices{
+		load: func(context.Context) (state.Snapshot, error) { return snapshot, nil },
+		observe: func(ctx context.Context, _ domain.Link, _ runtimeOptions) (linkDiagnostic, error) {
+			n := active.Add(1)
+			for {
+				old := peak.Load()
+				if old >= n || peak.CompareAndSwap(old, n) {
+					break
+				}
+			}
+			defer active.Add(-1)
+			return parallelHealthMeasured(), nil
+		},
+	}
+	code, out, stderr := executeHealthRemediationTest(
+		[]string{"diagnose", "--all", "--parallel", "1000000", "--json"},
+		&runtimeOptions{stateRoot: t.TempDir()}, deps,
+	)
+	var batch healthCenterResponse
+	if err := json.Unmarshal([]byte(out), &batch); err != nil || code != 0 || stderr != "" ||
+		batch.Total != len(snapshot.Links) || batch.Observed != len(snapshot.Links) ||
+		peak.Load() > int32(len(snapshot.Links)) || active.Load() != 0 {
+		t.Fatalf("worker request escaped inventory bound or corrupted observations: code=%d peak=%d result=%+v stderr=%q err=%v", code, peak.Load(), batch, stderr, err)
 	}
 }
 

@@ -32,10 +32,9 @@ func menuTerminal(out io.Writer) (*os.File, bool) {
 func menuEscapeCapable(out io.Writer) bool {
 	_, tty := menuTerminal(out)
 	term := strings.ToLower(os.Getenv("TERM"))
-	_, noColor := os.LookupEnv("NO_COLOR")
-	// The terminal contract forbids ALL ANSI when NO_COLOR is present,
-	// including cursor moves and clear-screen controls.
-	return tty && !noColor && term != "" && term != "dumb"
+	// Color preferences are not terminal capabilities: even in monochrome
+	// mode an interactive terminal should replace the previous menu frame.
+	return tty && term != "" && term != "dumb"
 }
 
 func menuColorEnabled(out io.Writer) bool {
