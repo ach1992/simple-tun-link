@@ -141,18 +141,25 @@ If you intentionally use this tar.gz alone, consult the maintainer/operator
 manual archive procedure at docs/INSTALL.md of the exact release source.
 It remains the canonical format for legacy/archive users, not a shell script.
 
-Verify official source/tag and publisher identity on the downloading device
-before running any privileged installer. Record the independently obtained
-whole-file .sh SHA256 and provide it to the trusted command; SHA256SUMS from
+For the ordinary operator-trusted HTTPS workflow, select a trusted source
+and correct official version/architecture. No independent full-file SHA256
+or publisher key needs to be supplied. HTTPS and the internal archive digest
+do NOT independently prove GitHub publisher identity if a complete launcher
+is replaced. Do not trust unknown mirrors or repackaged installers.
+
+OPTIONAL independently SHA256-pinned local workflow: on a trusted device,
+verify the official publisher/tag, obtain the full-file .sh SHA256 separately,
+and use the pinned transfer command documented in docs/INSTALL.md. Do not
+take the trust pin solely from the same untrusted Mirror; a checksum from
 the same publisher is an integrity receipt, NOT an independent signature
 against a compromised publisher account.
-Do not use anonymous mirrors or unverifiable repackaged installers.
 An OPTIONAL approved upstream wstunnel v11.0.0 archive may be placed beside
 this single-file installer. Explicit --with-wss on the SAME single-file
 installer command selects WSS; merely placing an optional archive has no
 effect. The canonical installer verifies the exact architecture-specific file, verifies both archive and extracted executable
 SHA-256 and installs it under the canonical installer-owned path.
-See docs/INSTALL.md for official download filename and mandatory trust checks.
+See docs/INSTALL.md for official filenames, HTTPS source trust, and the
+OPTIONAL independently SHA256-pinned workflow.
 An OPTIONAL official Hysteria v2.13.0 binary hysteria-linux-$arch may also
 be placed beside this file. Explicit --with-quic selects its pinned binary
 and the WireGuard/nftables distro prerequisites; it creates no Link or service.

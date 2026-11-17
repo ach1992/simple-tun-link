@@ -42,12 +42,19 @@ trusted HTTPS URL; repeat on each server). Download the complete original
 file into a protected root-owned directory, then run it:
 
 ```bash
-sudo install -d -m 0700 /root/stl
-sudo curl -q -fLSs --proto '=https' --proto-redir '=https' \
-  -o /root/stl/stl_vX.Y.Z_linux_ARCH_local-install.sh \
-  https://YOUR_MIRROR/releases/vX.Y.Z/stl_vX.Y.Z_linux_ARCH_local-install.sh
-sudo chmod 0600 /root/stl/stl_vX.Y.Z_linux_ARCH_local-install.sh
-sudo bash /root/stl/stl_vX.Y.Z_linux_ARCH_local-install.sh
+(
+  sudo install -d -m 0700 /root/stl &&
+  staged=$(sudo mktemp /root/stl/.stl-download.XXXXXXXX) &&
+  trap 'sudo rm -f -- "$staged"' EXIT &&
+  sudo curl -q -fLSs --proto '=https' --proto-redir '=https' \
+    -o "$staged" \
+    https://YOUR_MIRROR/releases/vX.Y.Z/stl_vX.Y.Z_linux_ARCH_local-install.sh &&
+  sudo test -s "$staged" &&
+  sudo chmod 0600 "$staged" &&
+  sudo mv -f -- "$staged" /root/stl/stl_vX.Y.Z_linux_ARCH_local-install.sh &&
+  trap - EXIT &&
+  sudo bash /root/stl/stl_vX.Y.Z_linux_ARCH_local-install.sh
+)
 ```
 
 Use `amd64` for `x86_64` and `arm64` for `aarch64`. `ARCH` and
@@ -55,9 +62,13 @@ Use `amd64` for `x86_64` and `arm64` for `aarch64`. `ARCH` and
 directly is **the operator's explicit trust decision about that download
 source**; the file's internal hashes check its embedded content, but cannot
 prove that a malicious replacement of the entire launcher came from
-GitHub. Never pipe an unfinished transfer into a root shell. If installing
-from the exact official GitHub Release asset instead of a copy, the same
-steps work with its direct HTTPS download URL.
+GitHub. The commands form one failure-gated operation: an HTTPS error,
+incomplete or empty download cannot execute a stale or partial installer.
+The temporary root-private download is removed on failure, and the
+official filename is replaced only after the complete transfer succeeds.
+Never pipe an unfinished transfer into a root shell. If installing from
+the exact official GitHub Release asset instead of a copy, use its direct
+HTTPS download URL in the same block.
 
 **Update** on an installed STL version that supports the command:
 
@@ -78,11 +89,14 @@ Installer transactions, installed ownership/State protections, signed APT
 and rollback remain unchanged.
 
 **Upgrading an older STL that does not yet implement `update --url`:**
-download the newer official `*_local-install.sh` as above, then run
+use the **same complete failure-gated download block above**, but change
+its **final line inside the block** to:
 `sudo bash /root/stl/stl_vX.Y.Z_linux_ARCH_local-install.sh --update`.
-The explicit `--update` is essential; ordinary Install must not silently
-replace an older installed version. No new global Mirror settings or
-background update service are introduced.
+Do not run the ordinary Install command first and then retry Update
+separately: download, staging and execution must remain one guarded
+sequence. The explicit `--update` is essential; ordinary Install must not
+silently replace an older installed version. No new global Mirror settings
+or background update service are introduced.
 
 The remainder of this document describes **optional advanced** approaches
 for operators who explicitly want independently pinned bootstrap hashes
