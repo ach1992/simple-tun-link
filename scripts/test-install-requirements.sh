@@ -336,9 +336,9 @@ printf 'APT_PARTIAL_INDEX_ERROR_MODE_ANY=PASS\n'
 
 # Run actual canonical read-only simulation and capture helpers with a
 # mock package manager. No host APT, disk inventory or package changes.
-sed -n '/^apt_plan_capture_bounded() {/,/^}/p' "$installer" > "$root/apt-resolver-functions.sh"
+sed -n '/^apt_plan_capture_selected() {/,/^}/p' "$installer" > "$root/apt-resolver-functions.sh"
 sed -n '/^apt_resolve_plan() {/,/^}/p' "$installer" >> "$root/apt-resolver-functions.sh"
-[[ $(grep -c '^apt_plan_capture_bounded() {' "$root/apt-resolver-functions.sh") == 1 &&
+[[ $(grep -c '^apt_plan_capture_selected() {' "$root/apt-resolver-functions.sh") == 1 &&
    $(grep -c '^apt_resolve_plan() {' "$root/apt-resolver-functions.sh") == 1 ]] ||
   fail 'canonical read-only resolver functions unavailable'
 # shellcheck source=/dev/null
@@ -364,10 +364,23 @@ apt-get() {
       printf 'W: simulated partial plan context\n'
       printf 'E: Dependency version conflict: stderr-only resolver detail\n' >&2
       return 100 ;;
-    oversize)
+    verbose_success)
       printf 'APT_SIMULATION_EARLY\n'
       printf '%070000d\n' 0
       printf 'APT_SIMULATION_LAST_LINE\n'
+      printf 'Inst wireguard-tools (1.2.3 Ubuntu:24.04 [amd64])\n'
+      ;;
+    removal_after_verbose)
+      printf '%070000d\n' 0
+      printf 'Inst wireguard-tools (1.2.3 Ubuntu:24.04 [amd64])\n'
+      printf 'Remv old-package [1.0]\n'
+      ;;
+    empty_plan)
+      printf 'Reading package lists...\n'
+      ;;
+    unterminated_diagnostic)
+      printf 'Inst wireguard-tools (1.2.3 Ubuntu:24.04 [amd64])\n'
+      printf 'APT_DIAG_NO_FINAL_NEWLINE'
       ;;
     *) return 88 ;;
   esac
@@ -378,7 +391,23 @@ apt_resolve_plan > "$root/plan.out" 2> "$root/plan.err" ||
   fail "APT simulated plan parsing changed: $apt_plan"
 grep -Fq 'Inst wireguard-tools' "$root/plan.err" ||
   fail 'valid APT simulation details were not displayed'
-for fake_plan_mode in fail_stdout fail_stderr oversize; do
+fake_plan_mode=unterminated_diagnostic
+apt_resolve_plan > "$root/plan.out" 2> "$root/plan.err" ||
+  fail 'valid simulation with non-newline-terminated trailing diagnostic was rejected'
+[[ $apt_plan == wireguard-tools=1.2.3 ]] ||
+  fail 'unterminated APT diagnostic changed the install plan'
+[[ $(tail -c 25 "$root/plan.err") == 'APT_DIAG_NO_FINAL_NEWLINE' ]] ||
+  fail 'unterminated APT diagnostic bytes were changed'
+fake_plan_mode=verbose_success
+apt_resolve_plan > "$root/plan.out" 2> "$root/plan.err" ||
+  fail 'valid plan after 70 KiB of diagnostics was rejected'
+[[ $apt_plan == 'wireguard-tools=1.2.3' ]] ||
+  fail 'large diagnostics changed the selected plan'
+[[ $apt_plan_sha256 == "$(printf '%s' "$apt_plan" | sha256sum | cut -d' ' -f1)" ]] ||
+  fail 'selected APT plan fingerprint drifted'
+grep -Fq 'APT_SIMULATION_LAST_LINE' "$root/plan.err" ||
+  fail 'large APT diagnostics were not forwarded in full'
+for fake_plan_mode in fail_stdout fail_stderr removal_after_verbose empty_plan; do
   apt_plan='unset'
   if ( apt_resolve_plan > "$root/plan.out" 2> "$root/plan.err" ); then
     fail "invalid simulation $fake_plan_mode was accepted"
@@ -395,23 +424,29 @@ for fake_plan_mode in fail_stdout fail_stderr oversize; do
       grep -Fq 'stderr-only resolver detail' "$root/plan.err" &&
       grep -Fq 'simulated partial plan context' "$root/plan.err" ||
         fail 'failed APT simulation suppressed stderr or stdout' ;;
-    oversize)
-      grep -Fq 'APT_SIMULATION_EARLY' "$root/plan.err" &&
-      grep -Fq 'APT_SIMULATION_LAST_LINE' "$root/plan.err" &&
-      grep -Fq 'bounded 64 KiB machine-plan capture' "$root/plan.err" ||
-        fail 'oversized plan did not drain full diagnostics or refuse parsing' ;;
+    removal_after_verbose)
+      grep -Fq 'Remv old-package' "$root/plan.err" ||
+        fail 'late destructive APT fact was not observed' ;;
+    empty_plan)
+      grep -Fq 'Reading package lists' "$root/plan.err" ||
+        fail 'empty plan diagnostics were suppressed' ;;
   esac
-  grep -Fq 'APT_DEPENDENCY_PLAN' "$root/plan.err" ||
-    fail "failed APT simulation lacked a typed stage: $fake_plan_mode"
-  if [[ $fake_plan_mode == oversize ]]; then
-    grep -Fq 'bounded 64 KiB machine-plan capture' "$root/plan.err" ||
-      fail 'oversized capture omitted its bounded reason'
+  if [[ $fake_plan_mode == removal_after_verbose ]]; then
+    grep -Fq 'APT plan would remove packages' "$root/plan.err" ||
+      fail 'late destructive APT operation was not rejected'
+  elif [[ $fake_plan_mode == empty_plan ]]; then
+    grep -Fq 'APT plan omitted a required selected package' "$root/plan.err" ||
+      fail 'empty simulated plan was accepted'
   else
+    grep -Fq 'APT_DEPENDENCY_PLAN' "$root/plan.err" ||
+      fail "failed APT simulation lacked a typed stage: $fake_plan_mode"
+  fi
+  if [[ $fake_plan_mode == fail_stdout || $fake_plan_mode == fail_stderr ]]; then
     grep -Fq 'apt_get_exit=100' "$root/plan.err" ||
       fail "APT failure lost actual process exit code: $fake_plan_mode"
   fi
 done
 unset -f apt-get apt_sources_must_be_authenticated apt_verify_distro_candidates package_installed
-printf 'APT_SIMULATION_BOUNDED_CAPTURE_AND_FULL_STDOUT_STDERR=PASS\n'
+printf 'APT_SIMULATION_SELECTIVE_CAPTURE_AND_FULL_DIAGNOSTICS=PASS\n'
 
 printf 'Installer requirements checks PASS (capability-based Debian/Ubuntu, signed GPGV status, package plans, unsafe inputs).\n'

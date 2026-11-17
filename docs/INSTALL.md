@@ -153,9 +153,13 @@ child exit code when available, a typed reason, and a read-only recovery
 check. Quick Install likewise preserves real download, Bash and installer
 errors instead of silently suppressing diagnostics. The canonical APT index
 refresh streams progress continuously while only retrying verified lists-lock
-failures; the read-only simulation streams full diagnostics but retains at
-most 64 KiB of validated machine-plan output in private temporary storage.
-Never infer that a transaction completed just because a status line printed.
+failures; the read-only APT simulation streams complete diagnostics and retains
+only exact install/removal facts in private temporary storage. Guided PREPARE
+cross-checks the complete selected plan before and after confirmation; large
+plans use the SHA256 of the **exact full package=version list** so OS argv
+limits cannot truncate the authorization. No extra packages, upgrades,
+removals or foreign repositories are silently approved.
+Minimal Debian/Ubuntu images without the official **gpgv** verifier must install that package from authenticated distribution APT (or separately verified offline media) before STL can independently attest archive signatures. The installer reports this as **distro_signature_verifier_missing** and never downgrades the trust checks.\nNever infer that a transaction completed just because a status line printed.
 Review outputs before sharing them externally, since repository or host details
 may be sensitive; protected Link/PSK/Setup-Link material remains absent from
 general-purpose machine/status output.
