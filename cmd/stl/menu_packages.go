@@ -82,6 +82,9 @@ func packageInventoryFailure(stderr string, ctxErr error) error {
 		strings.Contains(stderr, "invalid Debian version"):
 		issue.reason = "unsupported_or_unverified_os"
 		issue.next = "Inspect /etc/os-release and docs/SUPPORTED-ENVIRONMENTS.md (read-only); do not change OS identity."
+	case strings.Contains(stderr, "cannot verify distribution archive signatures"):
+		issue.reason = "distro_signature_verifier_missing"
+		issue.next = "Install the official gpgv package using authenticated distribution APT or independently verified offline media, then retry the read-only inventory; STL does not bypass signature verification."
 	case aptReason == "apt_source_trust_unverified":
 		issue.reason = "apt_source_trust_unverified"
 		issue.next = "Inspect APT source configuration and apt-cache policy for the missing packages; do not bypass signature checks."

@@ -710,7 +710,7 @@ apt_verify_distro_candidates() {
   [[ $(dpkg-query -S "$anchor" 2>/dev/null) == "$keyring_package: "* ]] ||
     fail 'official archive keyring package ownership unverified'
   package_installed "$keyring_package" || fail 'distribution archive keyring package not fully installed'
-  command -v gpgv >/dev/null || fail 'cannot verify distribution archive signatures'
+  command -v gpgv >/dev/null || fail 'cannot verify distribution archive signatures; official distro gpgv is missing. Install gpgv from authenticated distribution APT or separately verified offline media, then retry; STL will not bypass signature checks.'
   # indextargets reports the exact local Packages indices APT associates
   # with the configured sources. Match its Description to apt-cache policy's
   # per-version source line; never accept a matching label alone.

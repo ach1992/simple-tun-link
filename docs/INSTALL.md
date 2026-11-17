@@ -159,7 +159,7 @@ cross-checks the complete selected plan before and after confirmation; large
 plans use the SHA256 of the **exact full package=version list** so OS argv
 limits cannot truncate the authorization. No extra packages, upgrades,
 removals or foreign repositories are silently approved.
-Never infer that a transaction completed just because a status line printed.
+Minimal Debian/Ubuntu images without the official **gpgv** verifier must install that package from authenticated distribution APT (or separately verified offline media) before STL can independently attest archive signatures. The installer reports this as **distro_signature_verifier_missing** and never downgrades the trust checks.\nNever infer that a transaction completed just because a status line printed.
 Review outputs before sharing them externally, since repository or host details
 may be sensitive; protected Link/PSK/Setup-Link material remains absent from
 general-purpose machine/status output.

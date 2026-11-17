@@ -95,6 +95,7 @@ func TestSelectedPackagePreviewErrorsAreActionableAndRedacted(t *testing.T) {
 		{"invalid Ubuntu release metadata", "stl installer [FAILED]: invalid Ubuntu version: secret", "unsupported_or_unverified_os", "/etc/os-release", nil},
 		{"OS identity unreadable", "stl installer [FAILED]: OS release file is unreadable: secret", "unsupported_or_unverified_os", "/etc/os-release", nil},
 		{"APT trust", "stl installer [FAILED]: APT candidate InRelease has no valid distribution archive signature or contains an invalid signature: secret", "apt_source_trust_unverified", "apt-cache policy", nil},
+		{"missing gpgv", "stl installer [FAILED]: cannot verify distribution archive signatures; official distro gpgv is missing.", "distro_signature_verifier_missing", "gpgv", nil},
 		{"APT plan", "stl installer [FAILED]: APT cannot resolve the complete selected dependency plan: secret", "apt_dependency_plan_unverified", "apt-cache policy", nil},
 		{"dpkg", "stl installer [FAILED]: dpkg has unfinished package configuration: secret", "dpkg_transaction_incomplete", "dpkg --audit", nil},
 		{"untrusted raw stderr", "stl installer [FAILED]: private-token-DO-NOT-PRINT", "requirements_inventory_unverified", "/etc/os-release", nil},
