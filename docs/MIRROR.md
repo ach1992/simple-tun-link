@@ -13,9 +13,81 @@ or Update. No mirror service or server-side script runtime is required.
 The mirror is an **alternative distribution transport**, not a different STL
 installer: `scripts/install.sh` still owns installation, maintenance locking,
 existing-install ownership checks, APT qualification, rollback, and installed
-binary metadata. Unlike a blind mirror URL switch, both the canonical
-installer and its release-wide `SHA256SUMS` are pinned into the generated
-bootstrap before uploading anything.
+binary metadata. The basic Mirror is simply unchanged official Release
+files. The **optional legacy pinned-bootstrap generator** can additionally
+bind the canonical installer and its release-wide `SHA256SUMS` into a generated
+bootstrap for operators who deliberately choose that extra trust mode.
+
+## Simple copy-as-is Mirror (recommended)
+
+A Mirror is **not a signing service, installer generator or new release
+authority**. An operator downloads the **unchanged files of one official
+GitHub Release** and uploads them to any HTTPS web server. Any directory
+layout is fine: the URLs only need to point to the actual files. For example:
+
+```text
+https://YOUR_MIRROR/releases/vX.Y.Z/stl_vX.Y.Z_linux_amd64_local-install.sh
+https://YOUR_MIRROR/releases/vX.Y.Z/stl_vX.Y.Z_linux_arm64_local-install.sh
+```
+
+Those two `*_local-install.sh` files are **already published by GitHub**,
+self-contained for the matching architecture, and carry their own embedded
+archive SHA256, build/commit manifest and canonical installer. **Do not
+regenerate, rename, unpack, modify, re-sign or repackage them.** No Mirror
+metadata, private/public publisher key, local compiler, `prepare-mirror.sh`,
+or user-supplied SHA256 is needed for this regular workflow.
+
+**First installation** (substitute the real published version, CPU and
+trusted HTTPS URL; repeat on each server). Download the complete original
+file into a protected root-owned directory, then run it:
+
+```bash
+sudo install -d -m 0700 /root/stl
+sudo curl -q -fLSs --proto '=https' --proto-redir '=https' \
+  -o /root/stl/stl_vX.Y.Z_linux_ARCH_local-install.sh \
+  https://YOUR_MIRROR/releases/vX.Y.Z/stl_vX.Y.Z_linux_ARCH_local-install.sh
+sudo chmod 0600 /root/stl/stl_vX.Y.Z_linux_ARCH_local-install.sh
+sudo bash /root/stl/stl_vX.Y.Z_linux_ARCH_local-install.sh
+```
+
+Use `amd64` for `x86_64` and `arm64` for `aarch64`. `ARCH` and
+`vX.Y.Z` are placeholders, not literal filenames. Running the file
+directly is **the operator's explicit trust decision about that download
+source**; the file's internal hashes check its embedded content, but cannot
+prove that a malicious replacement of the entire launcher came from
+GitHub. Never pipe an unfinished transfer into a root shell. If installing
+from the exact official GitHub Release asset instead of a copy, the same
+steps work with its direct HTTPS download URL.
+
+**Update** on an installed STL version that supports the command:
+
+```bash
+sudo stl update --url https://YOUR_MIRROR/releases/vX.Y.Z/stl_vX.Y.Z_linux_ARCH_local-install.sh
+```
+
+Or choose **Update → HTTPS release file** in the terminal menu. The
+installed updater validates the URL/CPU/file shape, follows HTTPS-only
+redirects (including GitHub's release CDN), downloads the **complete file**
+into private storage and calls the same canonical installer with explicit
+`--update`. It does **not** query the GitHub API, silently choose another
+download origin, register a key, prompt for SHA256, or maintain another
+installer. The operator-selected URL/HTTPS host (and its redirects) is
+trusted as the file source. The downloaded-file SHA256 printed by STL is a
+transfer/diagnostic receipt, **not proof of GitHub publisher identity**.
+Installer transactions, installed ownership/State protections, signed APT
+and rollback remain unchanged.
+
+**Upgrading an older STL that does not yet implement `update --url`:**
+download the newer official `*_local-install.sh` as above, then run
+`sudo bash /root/stl/stl_vX.Y.Z_linux_ARCH_local-install.sh --update`.
+The explicit `--update` is essential; ordinary Install must not silently
+replace an older installed version. No new global Mirror settings or
+background update service are introduced.
+
+The remainder of this document describes **optional advanced** approaches
+for operators who explicitly want independently pinned bootstrap hashes
+or publisher-signed metadata. They are **not prerequisites** for a normal
+copy-as-is Mirror or ordinary official GitHub installation.
 
 ## Optional publisher-signed Update (newer installed versions)
 
@@ -159,7 +231,7 @@ a default publisher or trust-on-first-use. No authenticated signature means
 small and fully authenticated; the actual released executable still obeys
 the canonical installer's integrity/ownership and filesystem controls.
 
-## 1. Prepare files on a device that can reach GitHub
+## 1. Optional advanced: prepare a pinned bootstrap from GitHub files
 
 1. On a **trusted Internet-connected** device, obtain an exact **immutable
    published Stable** release from
@@ -199,7 +271,7 @@ reviewed Stable `v0.1.22`; the hardened bootstrap and installed local/Mirror
 Update selector first shipped in `v0.1.23`. Historical `v0.1.21` assets
 remain unchanged and predate Mirror support.
 
-## 2. Upload the generated static tree to your HTTPS web root
+## 2. Optional advanced: upload the generated bootstrap tree
 
 Upload **the contents** of `/new/stl-webroot/` to the document root for
 `https://stl.example.com`, preserving relative paths:
@@ -215,6 +287,8 @@ https://stl.example.com/releases/vX.Y.Z/stl_vX.Y.Z_linux_amd64
 https://stl.example.com/releases/vX.Y.Z/stl_vX.Y.Z_linux_arm64
 https://stl.example.com/releases/vX.Y.Z/stl_vX.Y.Z_linux_amd64_local-install.tar.gz
 https://stl.example.com/releases/vX.Y.Z/stl_vX.Y.Z_linux_arm64_local-install.tar.gz
+https://stl.example.com/releases/vX.Y.Z/stl_vX.Y.Z_linux_amd64_local-install.sh
+https://stl.example.com/releases/vX.Y.Z/stl_vX.Y.Z_linux_arm64_local-install.sh
 ```
 
 The root `install.sh` contains exact version, canonical-installer digest,
@@ -226,7 +300,7 @@ to create a trust anchor. The output parent must be controlled by the
 preparing administrator and not group/other writable. Protect this
 output as part of your trust anchor.
 Only after **all** versioned files are present and accessible should the
-operator publish or replace the root `install.sh`. Keep old version
+operator publish or replace the optional root `install.sh`. Keep old version
 directories if active clients or rollback workflows still need them. Do not
 rewrite a previously advertised version's files. Use valid TLS; remove any
 HTML login pages, redirects, Cloudflare challenges, or authenticated
@@ -239,14 +313,16 @@ is a shell script, not HTML, before running anything:
 curl -fsS https://stl.example.com/install.sh | head -n 3
 ```
 
-## 3. Clean install and explicit Update
+## 3. Advanced pinned-bootstrap install and explicit Update
 
 ### Use a Mirror you independently trust
 
 STL does **not** prescribe a default or shared HTTPS Mirror endpoint. Any
-operator can prepare and host the **same verified official Stable assets**
-under their own HTTPS domain by following this runbook. Supply your own
-Mirror URL and the **independently prepared** first-hop SHA256. A Mirror is
+operator can copy and host the **same verified official Stable assets**
+under their own HTTPS domain by following this runbook. This section covers the **optional pinned-bootstrap** workflow, not the simple
+copy-as-is installation or `update --url` shown at the top. For this
+advanced path, supply your own Mirror URL and the independently prepared
+first-hop SHA256. A Mirror is
 never used as an automatic fallback.
 
 As of 2026-11-17, the latest published immutable Stable is

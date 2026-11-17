@@ -118,18 +118,21 @@ STL verified local archive (version $version, linux/$arch)
 
 For the simplest installation, download the ONE official matching release
 file stl_${version}_linux_${arch}_local-install.sh instead of this tar.gz.
-Transfer the .sh file unchanged into /root/stl/ and, with that ONE file
-present, run as an administrator:
-    As root: use the independently SHA-pinned command in docs/INSTALL.md
-    from the matching source commit or published release tag.
-    Or, as a non-root administrator, use its documented sudo variant.
-    Do NOT run the transferred shell file directly as root: its own source
-    checks cannot defend against malicious instructions injected before them.
+Copy the official file unchanged into /root/stl/ (root-owned 0700 directory,
+file mode 0600). After choosing and trusting the HTTPS GitHub or Mirror source,
+run as an administrator:
+    sudo bash /root/stl/stl_${version}_linux_${arch}_local-install.sh
+    For an existing version, explicitly append --update.
+No external SHA256 needs to be typed for this simple operator-trusted source
+path. Optional independently SHA-pinned first-hop scripts are documented in
+docs/INSTALL.md if independent source authentication is desired. The file's
+build-bound archive digest proves embedded byte consistency, NOT that a
+maliciously replaced complete shell launcher came from GitHub.
 
 The .sh file embeds these exact archive bytes and a build-bound digest; it
 verifies a private copy, delegates safe unpack to the canonical install.sh,
-then installs or safely no-ops; an older installed Stable requires the
-explicit --update argument after the independently verified file SHA256.
+then installs or safely no-ops; replacing an older installed Stable
+requires the explicit --update argument.
 It uses no GitHub downloads on the target; only genuinely missing native and
 WireGuard packages may use the host's preconfigured signed APT repositories.
 IPsec still requires its own separate approved PREPARE/service flow.

@@ -106,6 +106,18 @@ Debian/Ubuntu guest tests separately prove real selected signed-APT behavior.
 Tests cannot substitute for actual publication, physical host acceptance,
 reboot restoration or multi-host WAN traffic.
 
+The official `stl_vX.Y.Z_linux_{amd64,arm64}_local-install.sh` assets
+are also the complete **ordinary self-hosted Mirror** distribution format:
+copy them byte-for-byte from the published GitHub Release to any
+operator-trusted HTTPS server, without modifying or re-signing files.
+A first install downloads the complete appropriate file to protected
+`/root/stl` and runs it; an eligible installed binary supports
+`stl update --url HTTPS_RELEASE_ASSET_URL` and delegates to its **same**
+canonical installer. The chosen HTTPS Mirror is an explicit operator trust
+decision, not independent GitHub publisher authentication. The generated
+pinned `install.sh` and `release.sig` workflow is optional and is not a
+prerequisite for ordinary official GitHub releases.
+
 ## Installer and publication boundaries
 
 The canonical [installer](../scripts/install.sh) verifies the chosen

@@ -170,10 +170,15 @@ operator-initiated attempt; safety and credential protection still apply.
   Prefer a single architecture-specific file transferred unchanged into one
   root-local folder and installed via one short command, while retaining the
   canonical source-validation and transactional safety boundary.
-  Offer an operator-managed, version-pinned self-hosted HTTPS mirror for
-  servers that cannot reach GitHub at all: the mirror transfers only verified
-  official release bytes and never bypasses publisher trust, TLS,
-  checksums, installed ownership or the canonical installer lifecycle.
+  Offer a simple operator-managed HTTPS mirror for servers without GitHub
+  access: copy official GitHub Release assets **byte-for-byte**, choose the
+  HTTPS file URL and install or explicitly Update with the existing canonical
+  installer. The operator is responsible for trusting the mirror origin;
+  TLS and build-bound integrity checks do not independently prove GitHub
+  publisher identity. Do not require an extra signing service, publisher
+  key, generated bootstrap or manually typed SHA256 for this regular path;
+  retain optional independently pinned modes for those who need them.
+  Preserve signed distro APT, installed ownership and rollback authority.
   Reuse installed prerequisites; for missing selected distro packages use
   only configured, verified signed repositories. Never automatically rewrite
   APT sources, weaken signatures, force whole-host upgrades or download

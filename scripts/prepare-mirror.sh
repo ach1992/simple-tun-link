@@ -56,7 +56,9 @@ regular "$source_dir/SHA256SUMS" || { echo 'Official release SHA256SUMS missing.
 files=(BUILD-MANIFEST.txt LICENSE stl-bootstrap.sh
        "stl_${tag}_linux_amd64" "stl_${tag}_linux_arm64"
        "stl_${tag}_linux_amd64_local-install.tar.gz"
-       "stl_${tag}_linux_arm64_local-install.tar.gz")
+       "stl_${tag}_linux_arm64_local-install.tar.gz"
+       "stl_${tag}_linux_amd64_local-install.sh"
+       "stl_${tag}_linux_arm64_local-install.sh")
 for file in "${files[@]}"; do
   regular "$source_dir/$file" || { echo "Official release asset missing or unsafe: $file" >&2; exit 1; }
   [[ $(sha256sum "$source_dir/$file" | awk '{print $1}') == "$(expected "$file")" ]] ||

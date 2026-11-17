@@ -319,6 +319,29 @@ one trusted install command below. Do not loosen `/root` permissions
 or enable root SSH just to transfer files.
 
 
+### Simple HTTPS Mirror copy (without extra signer or manual SHA256)
+
+An operator may copy the official GitHub Release assets byte-for-byte to a
+trusted HTTPS web server. For a new installation, download the matching
+`stl_vX.Y.Z_linux_ARCH_local-install.sh` from that URL into protected
+`/root/stl` and execute it. An already installed STL that supports the
+new direct-asset Update mode can use:
+
+```bash
+sudo stl update --url https://YOUR_MIRROR/releases/vX.Y.Z/stl_vX.Y.Z_linux_ARCH_local-install.sh
+```
+
+The official GitHub Release file URL is also accepted by `--url`, including
+GitHub's normal HTTPS download redirect. This mode does **not** require a
+publisher Ed25519 key, an extra Mirror bootstrap or a manually typed
+SHA256. The user explicitly trusts the HTTPS file origin (and redirects);
+internal SHA256 checks verify the archive inside the chosen file but cannot
+independently prove that an attacker did not replace the complete launcher.
+No GitHub API is needed by a Mirror-only destination. For the exact complete
+download/install commands, architecture selection and older-version
+`--update` fallback, see [MIRROR.md](MIRROR.md#simple-copy-as-is-mirror-recommended).
+The independently SHA-pinned local/Mirror paths below remain optional.
+
 ### One transferred file and one trusted command (new release format)
 
 **[Stable v0.1.9](https://github.com/ach1992/simple-tun-link/releases/tag/v0.1.9)
@@ -793,12 +816,15 @@ stlink version --json
 
 ### Short, authenticated Update from an installed STL (local or HTTPS mirror)
 
-Once an installed **published** STL executable includes the `stl update`
-command, two API-free paths use the same canonical Update/rollback engine.
-This CLI was first published in Stable `v0.1.23`; installed `v0.1.22`
-does not have it. On older installations, continue using the
-existing long guarded local `--update` command above or the verified
-HTTPS mirror UPDATE_COMMAND below; do not assume a newer CLI exists.
+Installed STL versions with `stl update` support the existing
+independently pinned local file and HTTPS bootstrap paths. **Newer STL
+versions that include `stl update --url`** also support a copied official
+`*_local-install.sh` directly from any explicitly trusted HTTPS Mirror,
+without an external SHA256 or publisher-key enrollment. This calls the
+**same canonical Update/rollback engine**. The basic pinned CLI first shipped
+in `v0.1.23`; older installed binaries lack the new direct-file URL option.
+On those binaries, download the newer original one-file installer and use
+its explicit `--update` mode; see [MIRROR.md](MIRROR.md#simple-copy-as-is-mirror-recommended).
 
 **Local file:** On a trusted Internet-connected device confirm the official
 publisher, exact immutable Stable tag, architecture and full-file SHA256.
@@ -856,16 +882,18 @@ have partially applied packages: inspect `dpkg --audit`, STL ownership and
 retained recovery before attempting another update. After completion verify
 `sudo stl version --json` and the status of your existing Links.
 
-For a build that includes the new source selector, the menu first offers
-**Official GitHub releases**, **Verified local file** and **Trusted HTTPS
-mirror**. Only the first choice queries `api.github.com`; the two
-independently pinned alternatives do not require a GitHub/API connection.
-The built-in CLI enforces root-owned installation, private bounded
-snapshots, digest verification and canonical rollback/ownership gates
-after separate `UPDATE` confirmation. A failed attempt always closes
-the old in-memory menu; verify the installed version and recovery state
-before restarting. This selector first appeared in published `v0.1.23`
-and is not present in installed `v0.1.22`.
+For builds that include the new direct-file URL mode, the Update menu
+offers **Official GitHub releases**, **Verified local file**, **HTTPS
+release file**, **Pinned HTTPS bootstrap** and **Publisher-signed HTTPS
+bootstrap**. Only the first choice queries `api.github.com`. The
+ordinary HTTPS release-file mode assumes the selected operator-trusted
+origin and independently validates the **internal** archive, manifest,
+filesystem ownership and canonical install transaction; it does not prompt
+for an external digest. The pinned and signed advanced modes remain
+unchanged. A failed attempt exits the old in-memory menu so it cannot
+operate against a replaced executable. The original selector first shipped
+in Stable `v0.1.23`; the new direct-file option is not present in that
+published version.
 
 The official release-picker option reads official release metadata.
 **Only an installed executable
