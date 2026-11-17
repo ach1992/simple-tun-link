@@ -227,9 +227,26 @@ func verifiedUpdateHTTPClient() *http.Client {
 // authority. Caller-provided digest is a REQUIRED independent trust input;
 // source URLs and downloaded manifests cannot supply it themselves.
 func verifiedUpdateCommand(args []string, out, errOut io.Writer) int {
+	return verifiedUpdateCommandExpected(args, out, errOut, "", "", "", "")
+}
+
+// The optional signed baseline is forwarded THROUGH the authenticated
+// first-hop to the canonical installer. The canonical installer alone
+// re-evaluates it under its exclusive maintenance lock, immediately before
+// admitting a transaction. Ordinary independently pinned Update is unchanged.
+func verifiedUpdateCommandExpected(args []string, out, errOut io.Writer,
+	expectedVersion, expectedCommit, priorVersion, priorCommit string) int {
 	req, err := parseVerifiedUpdate(args)
 	if err != nil {
 		fmt.Fprintln(errOut, err)
+		return 2
+	}
+	if priorVersion != "" && (req.kind != "mirror" ||
+		!menuStableVersion.MatchString(priorVersion) ||
+		!mirrorCommitPattern.MatchString(priorCommit) ||
+		!menuStablePatchUpgrade(priorVersion, expectedVersion) ||
+		!mirrorCommitPattern.MatchString(expectedCommit)) {
+		fmt.Fprintln(errOut, "signed forward-only transaction baseline is invalid; no update started")
 		return 2
 	}
 	if os.Geteuid() != 0 {
@@ -265,6 +282,9 @@ func verifiedUpdateCommand(args []string, out, errOut io.Writer) int {
 	cli := exec.CommandContext(ctx, "/bin/bash", path, "--update")
 	if req.kind == "mirror" {
 		cli.Args = []string{"/bin/bash", path, "update"}
+		if priorVersion != "" {
+			cli.Args = []string{"/bin/bash", path, "signed-update", priorVersion, priorCommit}
+		}
 	}
 	cli.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root", "LANG=C", "LC_ALL=C"}
 	cli.Stdin = os.Stdin
@@ -287,7 +307,8 @@ func verifiedUpdateCommand(args []string, out, errOut io.Writer) int {
 	}
 	if json.Unmarshal(versionOutput, &identity) != nil || identity.SchemaVersion != jsonSchemaVersion ||
 		!menuReleaseTag.MatchString(identity.Version) || len(identity.Commit) != 40 ||
-		!regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(identity.Commit) {
+		!regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(identity.Commit) ||
+		expectedVersion != "" && (identity.Version != expectedVersion || identity.Commit != expectedCommit) {
 		fmt.Fprintln(errOut, "[WARNING] Installed binary version/commit identity unverified. Inspect recovery; do not retry blindly.")
 		return 1
 	}

@@ -333,6 +333,53 @@ wait "$pid_b" || fail 'second simultaneous same-artifact install failed'
    $(sha "$racing/lib/simple-tun-link/install-record") == "$racing_record" ]] ||
   fail 'concurrent same-artifact reinstall modified installed identity'
 
+# Deterministic TWO-ACTOR signed-vs-explicit interleaving:
+# A authenticates 0.1.1 against the installed 0.1.0 and captures its
+# version+commit, but has not reached canonical admission. B performs an
+# independently SHA-pinned, explicitly authorized update to 0.1.2 first.
+# A then reaches the same exclusive maintenance lock and must NOT undo B.
+signed_race="$root/signed-vs-pinned"
+mkdir -p "$signed_race/bin" "$signed_race/lib"
+bash "$installer" install --bundle "$root/v0.1.0" --prefix "$signed_race" > /dev/null
+signed_base_version=v0.1.0
+signed_base_commit=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+# ACTOR B: independent pinned Update is intentionally unaffected by the
+# new signed-only forward policy.
+bash "$installer" update --bundle "$root/v0.1.2" --prefix "$signed_race" > /dev/null
+race_hash=$(sha "$signed_race/bin/stl")
+race_record=$(sha "$signed_race/lib/simple-tun-link/install-record")
+race_inode=$(stat -c %i "$signed_race/bin/stl")
+# ACTOR A resumes after B, with the authenticated OLD snapshot.
+expect_failure bash "$installer" update --bundle "$root/v0.1.1" --prefix "$signed_race" \
+  --signed-forward-from "$signed_base_version" "$signed_base_commit"
+grep -Fq 'signed_forward_prior_identity_changed' "$root/err" ||
+  fail 'signed updater failed for wrong reason after independently pinned interleaving'
+[[ $(sha "$signed_race/bin/stl") == "$race_hash" &&
+   $(sha "$signed_race/lib/simple-tun-link/install-record") == "$race_record" &&
+   $(stat -c %i "$signed_race/bin/stl") == "$race_inode" ]] ||
+  fail 'stale signed updater replaced a newer pinned version or its ownership record'
+# Ordinary intentionally pinned rollback still works after the signed
+# rejection; do not convert all explicit updates into forward-only.
+bash "$installer" update --bundle "$root/v0.1.1" --prefix "$signed_race" >/dev/null
+[[ $(grep '^version=' "$signed_race/lib/simple-tun-link/install-record") == version=v0.1.1 ]] ||
+  fail 'ordinary explicit pinned rollback contract broken by signed policy'
+# A fresh Signed Update from the ACTUAL now-installed identity is admitted.
+expect_failure bash "$installer" update --bundle "$root/v0.1.2" --prefix "$signed_race" \
+  --signed-forward-from v0.1.1 ffffffffffffffffffffffffffffffffffffffff
+grep -Fq 'signed_forward_prior_identity_changed' "$root/err" ||
+  fail 'signed updater trusted false installed source commit'
+bash "$installer" update --bundle "$root/v0.1.2" --prefix "$signed_race" \
+  --signed-forward-from v0.1.1 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb >/dev/null
+[[ $(grep '^version=' "$signed_race/lib/simple-tun-link/install-record") == version=v0.1.2 ]] ||
+  fail 'fresh signed forward-only update incorrectly rejected'
+# Signed already-installed source must NOT be reinstalled or downgraded;
+# same-version publisher receipt recovery is handled without the installer.
+expect_failure bash "$installer" update --bundle "$root/v0.1.2" --prefix "$signed_race" \
+  --signed-forward-from v0.1.2 dddddddddddddddddddddddddddddddddddddddd
+grep -Fq 'signed_forward_target_not_newer' "$root/err" ||
+  fail 'signed same-version re-install bypassed isolated receipt policy'
+echo 'SIGNED_CANONICAL_TWO_ACTOR_EXPLICIT_RACE_AND_RECOVERY_ADMISSION=PASS'
+
 # The full offline suite also covers the distro-aware APT planner.
 bash "$(dirname "$0")/test-install-requirements.sh"
 
