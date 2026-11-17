@@ -1746,6 +1746,11 @@ finish() {
   local rc=$?
   trap - EXIT
   set +e
+  # An EXIT trap can run while a called helper still has unassigned local
+  # variables (e.g. the APT verifier's local 'target') in dynamic scope.
+  # Rebind installer-owned identities in this trap's own function frame so
+  # that cleanup cannot adopt or expand the caller's shadowed variables.
+  local target="$bin_dir/stl" alias="$bin_dir/stlink" record="$record_dir/install-record"
   if [[ -n $stage && -d $stage ]]; then
     if (( rc == 0 )); then
       if [[ -f $stage/COMMITTED ]]; then
