@@ -67,6 +67,12 @@ func TestSignedMirrorPublisherGeneratesAuthenticatedStaticFilesOnly(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, name := range []string{"release.json", "release.sig"} {
+		info, err := os.Stat(filepath.Join(root, name))
+		if err != nil || info.Mode().Perm() != 0644 {
+			t.Fatalf("signed metadata must be public/read-only for web-server: %s mode=%v err=%v", name, info, err)
+		}
+	}
 	sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(encoded)))
 	if err != nil || !ed25519.Verify(pub, raw, sig) {
 		t.Fatal("offline signed metadata cannot be verified")

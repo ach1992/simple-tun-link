@@ -184,6 +184,15 @@ func writeExclusive(path string, data []byte) error {
 		f.Close()
 		return err
 	}
+	// Trusted release metadata MUST be readable by an unprivileged HTTPS
+	// web-server account. The publisher's PRIVATE signing key is held
+	// separately with strict 0600 permission and is never copied here.
+	// Apply the public mode explicitly even when the invoking operator
+	// appropriately uses umask 077 for private key material.
+	if err := f.Chmod(0644); err != nil {
+		f.Close()
+		return err
+	}
 	if err := f.Sync(); err != nil {
 		f.Close()
 		return err
