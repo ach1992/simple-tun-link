@@ -14,6 +14,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/ach1992/simple-tun-link/internal/maintenance"
 	"github.com/ach1992/simple-tun-link/internal/version"
 	"io"
 	"net/http"
@@ -395,6 +396,7 @@ func readSignedInstalledIdentity() (signedInstalledIdentity, error) {
 // only, never publisher. No unverified installation can advance a receipt.
 func commitSignedMirrorReceipt(meta mirrorSignedRelease, state mirrorPublisherTrust,
 	acquire func(context.Context) (func() error, error),
+	verifyInstallation func(string) error,
 	readInstalled func() (signedInstalledIdentity, error),
 	writeTrust func(mirrorPublisherTrust) error) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -404,6 +406,13 @@ func commitSignedMirrorReceipt(meta mirrorSignedRelease, state mirrorPublisherTr
 		return errors.New("canonical maintenance lock not available for publisher receipt")
 	}
 	defer unlock()
+	// A new executable alone is not proof that the canonical installer
+	// committed its ownership record and durable recovery journal. The
+	// installed version/commit probe below is meaningful only after this
+	// shared canonical completed-installation proof succeeds under flock.
+	if err := verifyInstallation(meta.Version); err != nil {
+		return errors.New("canonical installation is incomplete or has unresolved recovery; publisher receipt not advanced")
+	}
 	identity, err := readInstalled()
 	if err != nil || identity.Version != meta.Version || identity.Commit != meta.Commit {
 		return errors.New("actual installed identity changed or differs from signed publisher release; receipt not advanced")
@@ -483,6 +492,9 @@ func acquireSignedReceiptMaintenance(ctx context.Context) (func() error, error) 
 func commitInstalledSignedMirrorReceipt(meta mirrorSignedRelease, state mirrorPublisherTrust) error {
 	return commitSignedMirrorReceipt(meta, state,
 		acquireSignedReceiptMaintenance,
+		func(targetVersion string) error {
+			return maintenance.NewInstalledGate().VerifyCompletedInstallation(targetVersion)
+		},
 		readSignedInstalledIdentity,
 		func(updated mirrorPublisherTrust) error { return writePublisherTrust(publisherTrustDir, 0, updated) })
 }

@@ -133,10 +133,18 @@ publisher receipt**. The ordinary independently SHA-pinned Update still
 retains its explicit, guarded downgrade capability; only Signed Update
 is forward-only.
 
-After installation, STL independently checks the exact **signed target
-version and commit** while reacquiring the canonical maintenance lock
-before advancing its protected anti-rollback receipt. If the installer
-succeeded but the process stopped before committing that receipt,
+After installation, STL reacquires the canonical maintenance lock and
+verifies the **completed installer-owned installation**, not just the
+executable-reported signed version and commit. The protected install-record
+must match the canonical executable's SHA256 and signed target version;
+the executable must report the signed source commit. Every retained
+installer recovery journal must satisfy the existing exact COMMITTED
+identity checks; an unresolved or incomplete transaction refuses receipt
+advancement. A valid retained COMMITTED journal does **not** have to be
+deleted before an interrupted-success receipt can be recovered.
+
+If the installer succeeded but the process stopped before committing that
+receipt,
 relaunching the *current installed* STL with the same verified signed
 command can reconcile the sequence **without rerunning the installer**.
 The already-running old executable is not allowed to authorize receipt

@@ -29,7 +29,8 @@ func TestSignedMirrorReceiptRejectsConcurrentPinnedVersionAndCommitChange(t *tes
 	writes := 0
 	read := func() (signedInstalledIdentity, error) { return installed, nil }
 	write := func(mirrorPublisherTrust) error { writes++; return nil }
-	if err := commitSignedMirrorReceipt(meta, state, acquire, read, write); err == nil || writes != 0 {
+	proof := func(string) error { return nil }
+	if err := commitSignedMirrorReceipt(meta, state, acquire, proof, read, write); err == nil || writes != 0 {
 		t.Fatalf("publisher receipt advanced after another pinned Update: err=%v writes=%d", err, writes)
 	}
 	if state.Sequence != 5 || state.LastVersion != "v0.1.25" {
@@ -38,7 +39,7 @@ func TestSignedMirrorReceiptRejectsConcurrentPinnedVersionAndCommitChange(t *tes
 	// Same version but source commit differs: tag alone never authorizes a
 	// publisher receipt after a competing repack/recovery attempt.
 	installed.Version, installed.Commit = meta.Version, strings.Repeat("d", 40)
-	if err := commitSignedMirrorReceipt(meta, state, acquire, read, write); err == nil || writes != 0 {
+	if err := commitSignedMirrorReceipt(meta, state, acquire, proof, read, write); err == nil || writes != 0 {
 		t.Fatalf("wrong installed commit advanced publisher receipt: %v", err)
 	}
 }
@@ -56,9 +57,16 @@ func TestSignedMirrorInterruptedUpdateRecoveryUsesLockedInstalledIdentity(t *tes
 		underLock = true
 		return func() error { underLock = false; maintenance.Unlock(); return nil }, nil
 	}
-	reads, writes := 0, 0
+	reads, writes, verified := 0, 0, 0
+	proof := func(v string) error {
+		verified++
+		if !underLock || v != meta.Version {
+			return errors.New("completed installation proof was not verified under maintenance lock")
+		}
+		return nil
+	}
 	var persisted mirrorPublisherTrust
-	err := commitSignedMirrorReceipt(meta, state, locker,
+	err := commitSignedMirrorReceipt(meta, state, locker, proof,
 		func() (signedInstalledIdentity, error) {
 			reads++
 			if !underLock {
@@ -74,7 +82,7 @@ func TestSignedMirrorInterruptedUpdateRecoveryUsesLockedInstalledIdentity(t *tes
 			persisted = next
 			return nil
 		})
-	if err != nil || reads != 1 || writes != 1 || persisted.Sequence != meta.Sequence ||
+	if err != nil || reads != 1 || writes != 1 || verified != 1 || persisted.Sequence != meta.Sequence ||
 		persisted.LastVersion != meta.Version || underLock {
 		t.Fatalf("interrupted matching-install recovery not atomic: err=%v reads=%d writes=%d next=%+v locked=%t",
 			err, reads, writes, persisted, underLock)
@@ -84,14 +92,14 @@ func TestSignedMirrorInterruptedUpdateRecoveryUsesLockedInstalledIdentity(t *tes
 	writes = 0
 	if err := commitSignedMirrorReceipt(meta, state, func(context.Context) (func() error, error) {
 		return nil, errors.New("another update owns canonical lock")
-	}, func() (signedInstalledIdentity, error) {
+	}, proof, func() (signedInstalledIdentity, error) {
 		t.Fatal("read without maintenance lock")
 		return installed, nil
 	},
 		func(mirrorPublisherTrust) error { writes++; return nil }); err == nil || writes != 0 {
 		t.Fatalf("unavailable canonical lock advanced receipt: %v", err)
 	}
-	if err := commitSignedMirrorReceipt(meta, state, locker,
+	if err := commitSignedMirrorReceipt(meta, state, locker, proof,
 		func() (signedInstalledIdentity, error) {
 			return signedInstalledIdentity{}, errors.New("unknown installed state")
 		},
@@ -117,6 +125,53 @@ func TestSignedMirrorLiveIdentityRequiresSingleValidInstalledVersion(t *testing.
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := readSignedInstalledIdentityWithRunner(func() ([]byte, error) { return []byte(tc.raw), nil }); err == nil {
 				t.Fatal("untrusted installed binary identity accepted")
+			}
+		})
+	}
+}
+
+// The signed executable may report the publisher's exact version+commit even
+// while the canonical installer record and recovery transaction are
+// incomplete. The receipt must not trust that executable in isolation.
+func TestSignedMirrorReceiptCannotAdvanceBeforeCompletedInstallationProof(t *testing.T) {
+	meta := mirrorSignedRelease{Sequence: 11, Version: "v0.1.26", Commit: strings.Repeat("b", 40)}
+	prior := mirrorPublisherTrust{Sequence: 10, LastVersion: "v0.1.25"}
+	identity := signedInstalledIdentity{SchemaVersion: jsonSchemaVersion, Version: meta.Version, Commit: meta.Commit}
+	var held sync.Mutex
+	locked := false
+	locker := func(context.Context) (func() error, error) {
+		held.Lock()
+		locked = true
+		return func() error { locked = false; held.Unlock(); return nil }, nil
+	}
+	for _, reason := range []string{
+		"new executable, old install-record, unresolved partial compensation",
+		"corrupt install-record",
+		"installed executable SHA256 differs from ownership record",
+		"retained uncommitted recovery",
+	} {
+		t.Run(reason, func(t *testing.T) {
+			proofCalls, identityReads, receiptWrites := 0, 0, 0
+			err := commitSignedMirrorReceipt(meta, prior, locker,
+				func(version string) error {
+					proofCalls++
+					if !locked || version != meta.Version {
+						t.Fatal("completed installation proof invoked outside canonical lock")
+					}
+					return errors.New(reason)
+				},
+				func() (signedInstalledIdentity, error) {
+					identityReads++
+					return identity, nil
+				},
+				func(mirrorPublisherTrust) error {
+					receiptWrites++
+					return nil
+				})
+			if err == nil || proofCalls != 1 || identityReads != 0 || receiptWrites != 0 || locked ||
+				prior.Sequence != 10 || prior.LastVersion != "v0.1.25" {
+				t.Fatalf("incomplete canonical transaction advanced publisher receipt: err=%v proof=%d reads=%d writes=%d locked=%v",
+					err, proofCalls, identityReads, receiptWrites, locked)
 			}
 		})
 	}
