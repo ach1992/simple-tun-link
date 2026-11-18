@@ -58,8 +58,12 @@ machine/JSON Link diagnostics.
 - Guided WireGuard/IPsec sender creation retains the **original**
   receiver Setup Link separately under STL-owned
   `receiver-handoffs/` (`0700` parent, `0600` verified per-Link
-  file). Retention lasts until an independently confirmed DELETE,
-  including across import, reboot and Link removal. A later SHOW
+  file). Retention lasts through import and reboot until an independently
+  confirmed DELETE or a successfully verified Link Remove. On successful
+  Remove, STL deletes only the exact original menu-owned receiver offer
+  after committing Link and credential retirement. User-specified CLI
+  --output files remain outside this scope; incomplete or uncertain
+  removal preserves the offer for recovery. A later SHOW
   requires a real interactive terminal, fresh consent and exact
   matching of the still-committed sender identity. SHOW necessarily
   exposes the secret on the screen/scrollback; disclose this clearly.

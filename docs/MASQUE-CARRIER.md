@@ -103,8 +103,12 @@ For uncertain pre-effect host outcomes, inspect owned resources and use
 silently reuse unknown foreign resources or mutate a different Link.
 `stl link remove ID --confirm ID` performs canonical owned local removal;
 `stl link retire-masque ID --confirm ID` is the distinct, receipt-bound
-protected-material retirement step after verified removal. Neither command
-removes anything on the **other** server automatically.
+protected-material retirement step after verified removal. A successful
+confirmed Remove also deletes the original receiver offer **only** when
+it was saved into STL's protected menu-managed handoff directory; CLI
+--output files remain operator-owned. Incomplete Remove preserves the
+original for recovery. Neither command removes anything on the
+**other** server automatically.
 
 The interactive menu offers **Create tunnel → MASQUE / CONNECT-IP** and
 **Import setup link → MASQUE / CONNECT-IP**. On Import, enter the exact

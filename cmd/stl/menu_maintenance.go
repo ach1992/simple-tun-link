@@ -108,19 +108,18 @@ func menuUninstallWithOps(input io.Reader, reader *bufio.Reader, out, errOut io.
 				fmt.Fprintln(errOut, "Saved Link identity is invalid; uninstall guidance halted.")
 				return 1
 			}
-			if record.Desired.Backend == domain.BackendWireGuard || record.Desired.Backend == domain.BackendWireGuardWSS || record.Desired.Backend == domain.BackendWireGuardQUIC || record.Desired.Backend == domain.BackendIPsec {
+			if record.Desired.Backend == domain.BackendWireGuard || record.Desired.Backend == domain.BackendWireGuardWSS || record.Desired.Backend == domain.BackendWireGuardQUIC || record.Desired.Backend == domain.BackendIPsec || record.Desired.Backend == domain.BackendMASQUE {
 				hasProtected = true
 			}
 		}
 		menuNotice(out, "WARNING", fmt.Sprintf("Uninstall blocked: %d saved tunnel(s) must be safely removed first.", len(snapshot.Links)))
 		if hasProtected {
-			menuSection(out, "First / protected WireGuard or IPsec receiver links")
-			menuProse(out, "BEFORE removing each such tunnel, decide whether to KEEP or DELETE its separately saved private receiver Setup Link.")
-			menuField(out, "Delete", "My tunnels -> select tunnel -> Delete receiver link -> type DELETE")
-			menuField(out, "Keep", "The private Setup Link survives tunnel removal and STL uninstall; keep it protected.")
-			menuField(out, "Why now?", "DELETE requires the original saved tunnel and a fresh confirmation before REMOVE.")
+			menuSection(out, "Protected receiver Setup Links")
+			menuProse(out, "A verified Remove also deletes this Link's original STL-saved private receiver Setup Link.")
+			menuProse(out, "Independent CLI --output files are user-owned and are never deleted automatically.")
+			menuProse(out, "If protected cleanup is unverified, inspect the exact remaining file instead of repeating Remove.")
 		}
-		menuSection(out, "Then / remove saved tunnels")
+		menuSection(out, "Remove saved tunnels")
 		menuField(out, "1", "My tunnels -> select tunnel -> Remove this tunnel")
 		menuField(out, "2", "Return here after all removals are confirmed")
 		menuNotice(out, "INFO", "Uninstall is read-only here; only confirmed individual Link removals can proceed.")

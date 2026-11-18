@@ -349,41 +349,125 @@ func validatedExternalMASQUEMenuOffer(options *runtimeOptions, selected domain.L
 	return raw, nil
 }
 
-func secureDeleteProtectedMenuHandoff(options *runtimeOptions, selected domain.Link) error {
-	if _, err := validatedSavedProtectedMenuOffer(options, selected); err != nil {
-		return err
-	}
-	path, err := protectedMenuHandoffPath(options, selected.ID)
+// A successful Remove deletes only the original menu-owned receiver offer.
+// This is prepared while the Link is still committed, when its exact private
+// generation can be validated against the authenticated sender State. CLI
+// --output files are deliberately outside this ownership boundary.
+type protectedHandoffRemoval struct {
+	id     domain.LinkID
+	path   string
+	digest [sha256.Size]byte
+}
+
+func prepareProtectedHandoffRemoval(options *runtimeOptions, id domain.LinkID) (*protectedHandoffRemoval, error) {
+	root := createStateRoot(options)
+	snapshot, err := state.NewFileStore(root).Load(context.Background())
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("cannot inspect Link State before private handoff retirement")
 	}
+	record, present := snapshot.Find(id)
+	if !present {
+		return nil, nil // The canonical Engine reports an unknown Link itself.
+	}
+	switch record.Desired.Backend {
+	case domain.BackendWireGuard, domain.BackendIPsec, domain.BackendWireGuardWSS,
+		domain.BackendWireGuardQUIC, domain.BackendMASQUE:
+	default:
+		return nil, nil
+	}
+	path, err := protectedMenuHandoffPath(options, id)
+	if err != nil {
+		return nil, err
+	}
+	original, err := validatedSavedProtectedMenuOffer(options, record.Desired)
+	if errors.Is(err, errProtectedMenuOfferMissing) {
+		return nil, nil // Receiver/imported or CLI-created Links own no menu offer.
+	}
+	if err != nil {
+		return nil, fmt.Errorf("original menu-owned receiver offer could not be verified")
+	}
+	return &protectedHandoffRemoval{id: id, path: path, digest: sha256.Sum256([]byte(original + "\n"))}, nil
+}
+
+func (prepared *protectedHandoffRemoval) retireAfterRemove(options *runtimeOptions) error {
+	if prepared == nil {
+		return nil
+	}
+	// Refuse to delete an offer for an identity that was independently
+	// re-created while this CLI invocation was removing the old Link.
+	snapshot, err := state.NewFileStore(createStateRoot(options)).Load(context.Background())
+	if err != nil {
+		return fmt.Errorf("cannot verify absent Link after committed removal")
+	}
+	if _, present := snapshot.Find(prepared.id); present {
+		return fmt.Errorf("Link identity changed after removal; private offer preserved")
+	}
+	return unlinkMatchingProtectedHandoff(prepared.path, prepared.digest)
+}
+
+// The same bounded descriptor-relative deletion is used by the optional
+// explicit DELETE action and automatic post-Remove cleanup. An offered path,
+// hardlink, symlink, substituted content or altered inode cannot authorize
+// removal of someone else's private file.
+func unlinkMatchingProtectedHandoff(path string, expected [sha256.Size]byte) error {
 	dir, err := openPrivateHandoffParent(filepath.Dir(path))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil // The owned private directory is already gone.
+	}
 	if err != nil {
 		return fmt.Errorf("protected handoff directory changed")
 	}
 	defer unix.Close(dir)
 	name := filepath.Base(path)
 	fd, err := unix.Openat(dir, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
-	if err != nil {
-		return fmt.Errorf("protected handoff file is no longer available")
+	if errors.Is(err, unix.ENOENT) {
+		return nil // The verified offer was already removed.
 	}
-	defer unix.Close(fd)
-	var current, entry unix.Stat_t
-	if err := unix.Fstat(fd, &current); err != nil || current.Mode&unix.S_IFMT != unix.S_IFREG ||
-		current.Mode&0o777 != 0o600 || current.Uid != uint32(os.Geteuid()) || current.Nlink != 1 {
-		return fmt.Errorf("protected handoff file ownership cannot be verified")
+	if err != nil {
+		return fmt.Errorf("protected handoff file is no longer trusted")
+	}
+	file := os.NewFile(uintptr(fd), "retiring-protected-handoff")
+	defer file.Close()
+	var before, after, entry unix.Stat_t
+	if err := unix.Fstat(fd, &before); err != nil || before.Mode&unix.S_IFMT != unix.S_IFREG ||
+		before.Mode&0o777 != 0o600 || before.Uid != uint32(os.Geteuid()) || before.Nlink != 1 ||
+		before.Size < 1 || before.Size > int64(max(pairing.MaxLinkBytes, maxMASQUEOfferBytes)+1) {
+		return fmt.Errorf("protected handoff file ownership or length cannot be verified")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, max(pairing.MaxLinkBytes, maxMASQUEOfferBytes)+2))
+	defer clear(data)
+	if err != nil || len(data) != int(before.Size) || sha256.Sum256(data) != expected {
+		return fmt.Errorf("protected handoff no longer matches the original Link; no deletion")
+	}
+	if err := unix.Fstat(fd, &after); err != nil || before.Ino != after.Ino ||
+		before.Dev != after.Dev || before.Size != after.Size || before.Mtim != after.Mtim ||
+		before.Ctim != after.Ctim || before.Nlink != after.Nlink {
+		return fmt.Errorf("protected handoff changed during identity verification")
 	}
 	if err := unix.Fstatat(dir, name, &entry, unix.AT_SYMLINK_NOFOLLOW); err != nil ||
-		entry.Ino != current.Ino || entry.Dev != current.Dev || entry.Size != current.Size {
-		return fmt.Errorf("protected handoff file changed; no deletion attempted")
+		entry.Ino != before.Ino || entry.Dev != before.Dev || entry.Size != before.Size ||
+		entry.Ctim != before.Ctim || entry.Mtim != before.Mtim {
+		return fmt.Errorf("protected handoff path changed; no deletion")
 	}
 	if err := unix.Unlinkat(dir, name, 0); err != nil {
-		return fmt.Errorf("cannot delete the verified protected handoff")
+		return fmt.Errorf("cannot delete verified protected handoff")
 	}
 	if err := unix.Fsync(dir); err != nil {
-		return fmt.Errorf("handoff deleted but directory durability uncertain")
+		return fmt.Errorf("handoff was unlinked but directory durability is unverified")
 	}
 	return nil
+}
+
+func secureDeleteProtectedMenuHandoff(options *runtimeOptions, selected domain.Link) error {
+	original, err := validatedSavedProtectedMenuOffer(options, selected)
+	if err != nil {
+		return err
+	}
+	path, err := protectedMenuHandoffPath(options, selected.ID)
+	if err != nil {
+		return err
+	}
+	return unlinkMatchingProtectedHandoff(path, sha256.Sum256([]byte(original+"\n")))
 }
 
 func menuSensitiveHandoffAction(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,

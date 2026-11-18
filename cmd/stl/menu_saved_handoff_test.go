@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -538,5 +539,178 @@ func TestGuidedWireGuardRealTTYShowsOriginalProtectedSetupImmediatelyAfterCreate
 	after, err := readPrivateHandoffFile(file)
 	if err != nil || after != original {
 		t.Fatalf("shown offer was changed or deleted: %v", err)
+	}
+}
+
+// Remove is shared by CLI and the interactive menu. Retire only the exact
+// original sender offer after the canonical Engine has committed removal.
+func TestRemoveRetiresOnlyVerifiedMenuOwnedReceiverHandoff(t *testing.T) {
+	opts, link, path, secret := guidedSavedWireGuardFixture(t)
+	// A private CLI --output file explicitly chosen by the operator is not
+	// the STL menu-managed handoff and must survive even a confirmed Remove.
+	externalDir := filepath.Join(t.TempDir(), "external")
+	if err := os.Mkdir(externalDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	externalPath := filepath.Join(externalDir, "cli-output.stl")
+	if err := writeSensitiveHandoff(externalPath, []byte(secret+"\n")); err != nil {
+		t.Fatal(err)
+	}
+	otherID := domain.LinkID("lnk_dddddddddddddddddddddddddddddddd")
+	otherPath, err := protectedMenuHandoffPath(opts, otherID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSensitiveHandoff(otherPath, []byte("unrelated-owner-only-file\n")); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := executeLinkMutation("link_remove", domain.Link{}, link.ID, true, &out, &errOut, opts)
+	if code != 0 || errOut.Len() != 0 {
+		t.Fatalf("confirmed Remove failed: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+	var result lifecycleResultResponse
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil || !result.Removed || result.LinkID != link.ID {
+		t.Fatalf("inaccurate Remove response: %+v %v", result, err)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("successful Engine Remove retained its exact saved receiver offer", err)
+	}
+	if contents, err := os.ReadFile(otherPath); err != nil || string(contents) != "unrelated-owner-only-file\n" {
+		t.Fatal("removal touched another Link's unrelated protected file", err)
+	}
+	if retained, err := readPrivateHandoffFile(externalPath); err != nil || retained != secret {
+		t.Fatal("automatic removal damaged an independently chosen CLI output file", err)
+	}
+	if strings.Contains(out.String()+errOut.String(), secret) {
+		t.Fatal("Remove disclosed the original receiver secret")
+	}
+	snapshot, err := state.NewFileStore(opts.stateRoot).Load(context.Background())
+	if err != nil || len(snapshot.Links) != 0 {
+		t.Fatal("removed Link remains committed", err)
+	}
+}
+
+func TestRemoveLeavesPrivateHandoffWhenLinkRemovalFailsOrCancelled(t *testing.T) {
+	opts, link, path, secret := guidedSavedWireGuardFixture(t)
+	fake := opts.backends[0].(*wireGuardCreatorFake)
+	fake.failApply = true
+	var out, errOut bytes.Buffer
+	code := executeLinkMutation("link_remove", domain.Link{}, link.ID, true, &out, &errOut, opts)
+	if code == 0 {
+		t.Fatal("failed Engine removal claimed success")
+	}
+	if actual, err := readPrivateHandoffFile(path); err != nil || actual != secret {
+		t.Fatal("uncommitted removal discarded receiver offer", err)
+	}
+	if strings.Contains(out.String()+errOut.String(), secret) {
+		t.Fatal("failed Remove leaked receiver offer")
+	}
+	fake.failApply = false
+	// A missing original offer, as on the recipient, must not prevent
+	// deleting the locally owned Link or create new handoff directories.
+	if err := secureDeleteProtectedMenuHandoff(opts, link); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errOut.Reset()
+	code = executeLinkMutation("link_remove", domain.Link{}, link.ID, true, &out, &errOut, opts)
+	if code != 0 || errOut.Len() != 0 {
+		t.Fatalf("missing receiver offer blocked local Remove: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+}
+
+func TestRemoveReportsCommittedCleanupIncompleteWithoutDeletingMismatchedFile(t *testing.T) {
+	opts, link, path, secret := guidedSavedWireGuardFixture(t)
+	// Another owner has substituted an unreadable/wrong-identity file at
+	// exactly the expected name; native Link removal must remain possible.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	const unknown = "not-the-original-receiver-credential\n"
+	if err := writeSensitiveHandoff(path, []byte(unknown)); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := executeLinkMutation("link_remove", domain.Link{}, link.ID, true, &out, &errOut, opts)
+	if code == 0 {
+		t.Fatal("cleanup failure falsely marked completed removal as fully clean")
+	}
+	var failure lifecycleFailureResponse
+	if err := json.Unmarshal(out.Bytes(), &failure); err != nil {
+		t.Fatal("invalid structured partial cleanup result", err)
+	}
+	if failure.Outcome != "removed_cleanup_incomplete" || failure.Error == nil ||
+		failure.Error.ReasonCode != "protected_handoff_cleanup_incomplete" ||
+		failure.PartialResult == nil || !failure.PartialResult.Removed || failure.PartialResult.LinkID != link.ID {
+		t.Fatalf("missing committed-remove cleanup evidence: %+v", failure)
+	}
+	if strings.Contains(out.String()+errOut.String(), unknown) || strings.Contains(out.String()+errOut.String(), secret) {
+		t.Fatal("incomplete cleanup disclosed a protected value")
+	}
+	if contents, err := os.ReadFile(path); err != nil || string(contents) != unknown {
+		t.Fatal("unverified private file was deleted or modified", err)
+	}
+	if snapshot, err := state.NewFileStore(opts.stateRoot).Load(context.Background()); err != nil || len(snapshot.Links) != 0 {
+		t.Fatal("safe local Link Remove was blocked by unrelated private file", err)
+	}
+}
+
+func TestMenuRemoveAutoRetiresVerifiedProtectedHandoff(t *testing.T) {
+	opts, _, path, secret := guidedSavedWireGuardFixture(t)
+	tty, done := startManageTTY(t, opts)
+	tty.expect("Choose a task: ")
+	tty.send("3")
+	tty.expect("Choose tunnel number: ")
+	tty.send("1")
+	tty.expect("Choose an action: ")
+	tty.send("5")
+	tty.expect("To permanently REMOVE this tunnel")
+	tty.send("REMOVE")
+	tty.expect("removed via canonical Engine")
+	tty.expect("Press Enter to continue... ")
+	tty.send("")
+	tty.expect("Choose a task: ")
+	tty.send("8")
+	manageTTYDone(t, done, 0)
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("menu removed Link but left its original private receiver offer", err)
+	}
+	if strings.Contains(tty.all, secret) {
+		t.Fatal("menu Remove disclosed private receiver credential")
+	}
+	if snapshot, err := state.NewFileStore(opts.stateRoot).Load(context.Background()); err != nil || len(snapshot.Links) != 0 {
+		t.Fatal("menu Remove did not remove exact Link State", err)
+	}
+}
+
+func TestPostRemoveHandoffCleanupRefusesChangedGeneration(t *testing.T) {
+	opts, link, path, _ := guidedSavedWireGuardFixture(t)
+	prepared, err := prepareProtectedHandoffRemoval(opts, link.ID)
+	if err != nil || prepared == nil {
+		t.Fatal("cannot prepare exact original handoff for removal", err)
+	}
+	// A privileged independent writer replaces the original filename with a
+	// different 0600 regular file between the initial validation and final
+	// unlink; the cleanup must never delete this unverified generation.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSensitiveHandoff(path, []byte("changed-private-generation\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.NewFileStore(opts.stateRoot).Update(context.Background(), func(s *state.Snapshot) error {
+		if !s.Delete(link.ID) {
+			return errors.New("test fixture lost Link")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepared.retireAfterRemove(opts); err == nil {
+		t.Fatal("different private file was accepted as the original generation")
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "changed-private-generation\n" {
+		t.Fatal("replaced private file changed during cleanup", err)
 	}
 }

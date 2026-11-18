@@ -120,9 +120,9 @@ func TestMenuUninstallFailsClosedOnCorruptState(t *testing.T) {
 	}
 }
 
-// Removing the Link first would lose the committed identity required by the
-// sensitive receiver-handoff DELETE gate. Pure GRE/IPIP must not suggest it.
-func TestMenuUninstallProtectedReceiverDecisionPrecedesRemoval(t *testing.T) {
+// Uninstall now explains the one-confirmation successful Remove cleanup.
+// Pure GRE/IPIP must not suggest a protected receiver offer.
+func TestMenuUninstallExplainsAutomaticProtectedHandoffCleanup(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		backend domain.Backend
@@ -157,22 +157,16 @@ func TestMenuUninstallProtectedReceiverDecisionPrecedesRemoval(t *testing.T) {
 				t.Fatalf("uninstall leaked identity or bypassed preflight: %q", out)
 			}
 			protected := tc.backend == domain.BackendWireGuard || tc.backend == domain.BackendIPsec
-			deletePos := strings.Index(out, "Delete receiver link -> type DELETE")
-			removePos := strings.Index(out, "Remove this tunnel")
-			if removePos < 0 {
+			if !strings.Contains(out, "Remove this tunnel") {
 				t.Fatalf("missing tunnel removal instruction: %q", out)
 			}
 			if protected {
-				for _, want := range []string{"BEFORE removing", "KEEP or DELETE", "type DELETE",
-					"survives tunnel removal and STL uninstall", "fresh confirmation"} {
+				for _, want := range []string{"verified Remove also deletes", "CLI --output", "instead of repeating Remove"} {
 					if !strings.Contains(out, want) {
-						t.Fatalf("missing protected-retention choice %q: %q", want, out)
+						t.Fatalf("missing protected cleanup guidance %q: %q", want, out)
 					}
 				}
-				if deletePos < 0 || deletePos >= removePos {
-					t.Fatalf("private handoff deletion not before Link removal: %q", out)
-				}
-			} else if deletePos >= 0 || strings.Contains(out, "KEEP or DELETE") {
+			} else if strings.Contains(out, "protected receiver Setup Link") || strings.Contains(out, "KEEP or DELETE") {
 				t.Fatalf("private-handling instructions on plaintext backend: %q", out)
 			}
 			after, err := os.ReadFile(filepath.Join(root, "state.json"))

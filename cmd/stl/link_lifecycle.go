@@ -171,6 +171,14 @@ func executeLinkMutationControlled(operation string, desired domain.Link, id dom
 	defer stop()
 	ctx, cancel := context.WithTimeout(signalCtx, lifecycleTimeLimit)
 	defer cancel()
+	// Capture the exact menu-owned receiver offer before the Engine retires
+	// committed Link identity and credentials. This read never blocks the
+	// owner-scoped tunnel Remove; any cleanup problem is reported afterwards.
+	var protectedRemoval *protectedHandoffRemoval
+	var protectedRemovalErr error
+	if operation == "link_remove" {
+		protectedRemoval, protectedRemovalErr = prepareProtectedHandoffRemoval(options, id)
+	}
 	var result app.Result
 	switch operation {
 	case "link_ensure":
@@ -214,6 +222,17 @@ func executeLinkMutationControlled(operation string, desired domain.Link, id dom
 			"Link Engine returned an inconsistent lifecycle result; reconcile before retry")
 	}
 
+	if operation == "link_remove" {
+		if protectedRemovalErr == nil {
+			protectedRemovalErr = protectedRemoval.retireAfterRemove(options)
+		}
+		if protectedRemovalErr != nil {
+			return lifecycleFailureWithEvidence(stdout, stderr, jsonOutput, stlerr.CodeState, operation, &result,
+				"Link was removed, but its original protected receiver Setup Link cleanup is incomplete; do not repeat Remove",
+				&stlerr.OperationEvidence{Stage: "protected_handoff_cleanup", HostMutation: "not_attempted",
+					DesiredState: "committed", Rollback: "not_required"}, nil)
+		}
+	}
 	if jsonOutput {
 		resp := lifecycleResultResponse{SchemaVersion: jsonSchemaVersion, Operation: operation,
 			LinkID: id, Changed: result.Changed, Removed: result.Removed}
@@ -309,6 +328,9 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 		case evidence.DesiredState == "visible_unconfirmed":
 			safe.ReasonCode = "state_publication_uncertain"
 			safe.NextStep = "Inspect saved desired state and live owned resources before retrying or removing anything; a publication may be visible without durable confirmation."
+		case evidence.Stage == "protected_handoff_cleanup" && evidence.DesiredState == "committed":
+			safe.ReasonCode = "protected_handoff_cleanup_incomplete"
+			safe.NextStep = "The Link is already removed. Its original private Setup Link may remain under STL's receiver-handoffs directory. Inspect only this ID's exact protected file and ownership before retiring it; do not rerun Remove or delete unrelated files."
 		case evidence.DesiredState == "committed":
 			safe.ReasonCode = "post_commit_cleanup_incomplete"
 			safe.NextStep = "The desired-state commit completed; inspect the remaining owned service or credential cleanup before retrying."
@@ -449,6 +471,13 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 		Error:                  safe,
 		Outcome:                "unconfirmed",
 		ReconciliationRequired: true,
+	}
+	// A failed post-commit receiver-offer cleanup is NOT uncertainty about
+	// the already verified Link removal. Distinguish this bounded leftover
+	// from a failed Engine Remove for machine callers and operators.
+	if evidence != nil && evidence.Stage == "protected_handoff_cleanup" &&
+		evidence.DesiredState == "committed" && result != nil && result.Removed {
+		out.Outcome = "removed_cleanup_incomplete"
 	}
 	if result != nil && result.LinkID.Validate() == nil {
 		// Engine's partial return is evidence for reconciliation, not a

@@ -157,9 +157,14 @@ encapsulations/IPsec remain discoverable.
   the original sender's offer. Missing originals are explained
   without calling an absent directory unsafe or exposing secrets.
   Delete receiver link removes only a verified **menu-saved**
-  receiver offer, never an unrelated CLI file, running tunnel or
-  existing keys. Status, diagnostics, noninteractive/JSON output and
-  cancellation never disclose the private Setup Link.
+  receiver offer while the Link remains active. A successful confirmed
+  Remove also automatically deletes that same original menu-saved offer,
+  not unrelated CLI --output files; uncertain Remove preserves it and a
+  cleanup error reports the committed Link removal as
+  `outcome=removed_cleanup_incomplete` with an exact cleanup reason and
+  `partial_result.removed=true`, without claiming the private file vanished.
+  Status, diagnostics, noninteractive/JSON output and cancellation never
+  disclose the private Setup Link.
 - My tunnels offers local Status, Link-scoped Test, Share, details and
   identity-bound Remove. For saved IPsec Links only, **Connect IPsec**
   starts IKEv2 through the canonical locked `connect-ipsec` Engine after
