@@ -102,6 +102,38 @@ shared terminal transcripts, Issues or logs.
   sustained benchmark. Packet loss, CPU utilization, latency, restart and
   genuine reboot require separate measured evidence.
 
+### Interrupted original with an active helper
+
+A pre-commit `ensure` can leave a **pending journal and a live, uncommitted
+helper** if the operator/process is interrupted after Host activation. In that
+case `link list` may be empty, while the original transient service and TUN
+still exist. `reconcile-masque` deliberately rejects a live or uncertain
+original: it does **not** stop services or silently claim ownership.
+
+For an explicitly authorized **disposable test Link**, recovery has two separate
+steps, and neither may be skipped:
+
+1. Independently inspect the exact pending journal and confirm its Link ID,
+   resource claims, original executable/configuration, material generation,
+   and intended owner. Verify the *effective* transient systemd identity
+   (`Id`, `Transient`, `FragmentPath`, `Description`, `ExecStart`, `MainPID`,
+   `ControlGroup` and process `argv`) against that Link. Verify the TUN owner
+   alias `stl:masque:<id>`, the exact `/32` address and peer route. Check that
+   no active consumer needs the helper. A unit name, process name, empty
+   `link list` or absence of a remote connection is **not** sufficient proof.
+2. Only when those checks positively identify the original test-only service
+   and the operator has authorized retiring it, stop **that exact** unit with
+   `systemctl stop` and verify both the service and TUN are absent. Then run
+   `stl link reconcile-masque <id> --confirm <id> --json` from the executable
+   bound to the **same State root**. Confirm a durable original retirement
+   receipt, no remaining pending journal and no original credential material.
+
+If the service is foreign, the original identity changed, a live consumer
+remains, or the stop outcome is ambiguous, **do not stop/delete by guess**.
+Preserve State, journal and protected files for independent owner review. This
+is a deliberately manual recovery boundary, **not** a cleanup timer, automatic
+service takeover or instruction to change the installed production binary.
+
 ## Release gates
 
 The unpublished candidate requires full Go tests/vet, independent exact-HEAD
