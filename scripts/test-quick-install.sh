@@ -35,7 +35,7 @@ stable_url='https://github.com/ach1992/simple-tun-link/releases/latest/download/
 # The first-hop command substitution must finish with curl exit 0 and
 # valid Bash syntax before it executes any part of the downloaded script.
 for line in "${published_commands[@]}"; do
-  [[ "$line" == '/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-dumb}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c '* &&
+  [[ "$line" == '/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-xterm}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c '* &&
      "$line" == *'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '* &&
      "$line" == *'/usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 '* &&
      "$line" == *' | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"'* &&
@@ -87,18 +87,16 @@ fi
 # ONLY the absolute sudo invocation in private copies. The real release
 # source and actual privileged root/sudo behavior are tested separately.
 sed -e 's|/usr/bin/sudo "${root_exec\[@\]}"|sudo "${root_exec[@]}"|' \
-  -e 's|exec /usr/bin/sudo /usr/local/bin/stl menu|exec sudo /usr/local/bin/stl menu|' \
-  -e 's|exec /usr/bin/sudo /usr/bin/env NO_COLOR=1|exec sudo /usr/bin/env NO_COLOR=1|' "$STL_TEST_STABLE_BOOTSTRAP" > "$scratch/test-stable.sh"
+  -e 's|exec /usr/bin/sudo /usr/bin/env|exec sudo /usr/bin/env|' "$STL_TEST_STABLE_BOOTSTRAP" > "$scratch/test-stable.sh"
 sed -e 's|/usr/bin/sudo "${root_exec\[@\]}"|sudo "${root_exec[@]}"|' \
-  -e 's|exec /usr/bin/sudo /usr/local/bin/stl menu|exec sudo /usr/local/bin/stl menu|' \
-  -e 's|exec /usr/bin/sudo /usr/bin/env NO_COLOR=1|exec sudo /usr/bin/env NO_COLOR=1|' "$repo/scripts/quick-install.sh" > "$scratch/test-direct.sh"
+  -e 's|exec /usr/bin/sudo /usr/bin/env|exec sudo /usr/bin/env|' "$repo/scripts/quick-install.sh" > "$scratch/test-direct.sh"
 grep -Fq 'sudo "${root_exec[@]}"' "$scratch/test-stable.sh"
 grep -Fq 'sudo "${root_exec[@]}"' "$scratch/test-direct.sh"
 # The clean first-hop PATH omits /usr/local/bin, where the core is installed.
 # Both root and sudo menu handoffs must use the absolute installed path.
 grep -Fq 'exec /usr/local/bin/stl menu' "$repo/scripts/quick-install.sh"
-grep -Fq 'exec /usr/bin/sudo /usr/local/bin/stl menu' "$repo/scripts/quick-install.sh"
-grep -Fq 'exec /usr/bin/sudo /usr/bin/env NO_COLOR=1' "$repo/scripts/quick-install.sh"
+grep -Fq 'exec /usr/bin/sudo /usr/bin/env "TERM=${TERM:-xterm}" /usr/local/bin/stl menu' "$repo/scripts/quick-install.sh"
+grep -Fq 'exec /usr/bin/sudo /usr/bin/env "TERM=${TERM:-xterm}" NO_COLOR=1 /usr/local/bin/stl menu' "$repo/scripts/quick-install.sh"
 export STL_TEST_STABLE_BOOTSTRAP="$scratch/test-stable.sh"
 export STL_TEST_QUICK_INSTALL_FILE="$scratch/test-direct.sh"
 # The production first-hop must start Bash only AFTER env -i and use trusted
@@ -106,7 +104,7 @@ export STL_TEST_QUICK_INSTALL_FILE="$scratch/test-direct.sh"
 # separate real loopback HTTPS tests execute the hardened literal entrypoint.
 prepare_mock_public_command() {
   local command=$1
-  local prefix='/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-dumb}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c'
+  local prefix='/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-xterm}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c'
   [[ $command == "$prefix "* ]] || return 1
   command="/bin/bash -c${command#"$prefix"}"
   command=${command/\/usr\/bin\/curl -q /curl -q }
@@ -212,18 +210,21 @@ CURL
 cat > "$scratch/bin/sudo" <<'SUDO'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "$#" -eq 5 && "$1" == /usr/bin/env && "$2" == NO_COLOR=1 &&
-      "$3" == TERM=* && "$4" == /usr/local/bin/stl && "$5" == menu ]]; then
+# Emulate sudo env_reset for the post-install menu.
+if [[ "$#" -eq 5 && "$1" == /usr/bin/env && "$2" == TERM=* &&
+      "$3" == NO_COLOR=1 && "$4" == /usr/local/bin/stl && "$5" == menu ]]; then
   printf '%s\n' 'sudo /usr/local/bin/stl menu NO_COLOR=1' >> "$STL_TEST_EXECUTIONS"
   printf '%s\n' 'FAKE_STL_MENU_RENDERED'
-  printf 'FAKE_STL_TERM=%s\n' "${3#TERM=}"
+  printf 'FAKE_STL_TERM=%s\n' "${2#TERM=}"
   printf '%s\n' 'FAKE_STL_NO_COLOR=present'
   exit 0
 fi
-if [[ "$#" -eq 2 && "$1" == /usr/local/bin/stl && "$2" == menu ]]; then
+if [[ "$#" -eq 4 && "$1" == /usr/bin/env && "$2" == TERM=* &&
+      "$3" == /usr/local/bin/stl && "$4" == menu ]]; then
   printf '%s\n' 'sudo /usr/local/bin/stl menu' >> "$STL_TEST_EXECUTIONS"
   printf '%s\n' 'FAKE_STL_MENU_RENDERED'
-  printf 'FAKE_STL_TERM=%s\n' "${TERM:-unset}"
+  printf 'FAKE_STL_TERM=%s\n' "${2#TERM=}"
+  printf '%s\n' 'FAKE_STL_NO_COLOR=absent'
   exit 0
 fi
 [[ ${1:-} == /usr/bin/env && ${2:-} == -i ]] || exit 85
@@ -475,17 +476,34 @@ if command -v script >/dev/null 2>&1; then
   done
   done
 fi
+# Reproduce unset and explicit dumb terminal handoffs, without sudo inheriting TERM.
+if command -v script >/dev/null 2>&1; then
+  for requested_term in "" dumb; do
+    : > "$STL_TEST_EXECUTIONS"
+    TERM="$requested_term" PATH="$scratch/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+      script -q -e -c "cat '$STL_TEST_QUICK_INSTALL_FILE' | bash -s -- v0.1.0-rc.123 native,wireguard" /dev/null \
+      < /dev/null > "$scratch/term-pty-out" 2>"$scratch/term-pty-err"
+    expected_term=$requested_term
+    [[ -n $expected_term ]] || expected_term=xterm
+    grep -q "FAKE_STL_TERM=$expected_term" "$scratch/term-pty-out" || {
+      echo "Missing TERM=$expected_term post-install PTY handoff." >&2
+      exit 1
+    }
+  done
+fi
 # Execute all three published commands through the real short downloader.
 # Every action needs complete first-hop transport and syntax validation
 # before they can start any canonical installer or privileged action.
 # A clean first hop retains only the terminal capability required for
 # the post-success full-screen menu, never shell hooks or PATH overrides.
-observed_term=$(export TERM=xterm-256color; /usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-dumb}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c 'printf %s "$TERM"')
+observed_term=$(unset TERM; /usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-xterm}" /bin/bash -c 'printf %s "$TERM"')
+[[ $observed_term == xterm ]] || { echo 'Missing TERM fallback on clean first hop.' >&2; exit 1; }
+observed_term=$(export TERM=xterm-256color; /usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-xterm}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c 'printf %s "$TERM"')
 [[ $observed_term == xterm-256color ]] || {
   echo 'Clean first hop lost interactive terminal capabilities.' >&2
   exit 1
 }
-observed_term=$(export TERM=dumb; /usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-dumb}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c 'printf %s "$TERM"')
+observed_term=$(export TERM=dumb; /usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-xterm}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c 'printf %s "$TERM"')
 [[ $observed_term == dumb ]] || {
   echo 'Clean first hop overrode explicit dumb terminal setting.' >&2
   exit 1

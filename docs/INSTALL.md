@@ -657,7 +657,7 @@ Install/Update contract** stay stable, although the literal first-hop
 command was hardened to start with a clean `env -i` environment:
 
 ~~~sh
-/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-dumb}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl
+/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-xterm}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl
 ~~~
 
 To install a specific published Stable, append its tag to that same
@@ -666,18 +666,20 @@ entry point stays unchanged across releases. With no suffix, the immutable
 Latest Stable asset supplies its exact pinned default version.
 
 ~~~sh
-/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-dumb}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl v0.1.9
+/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-xterm}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl v0.1.9
 ~~~
 
 The literal official commands start via `/usr/bin/env -i` and an absolute
 `/bin/bash`: inherited `BASH_ENV`, exported shell functions, unsafe `PATH`
-and `curlrc` cannot alter the first-hop authentication. Explicit `TERM="${TERM:-dumb}"` carries the connected terminal type,
-and `${NO_COLOR+NO_COLOR=1}` carries the operator's color opt-out only
-when it exists (an empty `NO_COLOR` also disables styling). A real
-interactive terminal with usable `TERM` still clears/redraws each menu frame
-in monochrome mode; only `STL_NO_CLEAR=1`, redirected output and `TERM=dumb`
-prevent cursor/screen controls. Non-root post-success menu handoff explicitly
-restores the color preference through `sudo`. No shell startup code, extra
+and `curlrc` cannot alter the first-hop authentication. Explicit `TERM="${TERM:-xterm}"` preserves the connected terminal type
+(and defaults to `xterm` only when unset or empty). `${NO_COLOR+NO_COLOR=1}`
+preserves the color opt-out when present (including an empty value).
+On a real interactive terminal the menu clears/redraws the visible frame
+even if `TERM` started unset or `NO_COLOR` is present. Only
+`STL_NO_CLEAR=1`, redirected output and explicit `TERM=dumb` suppress
+cursor/screen controls. Non-root post-install menu handoff preserves both
+`TERM` and optional `NO_COLOR` through `sudo`.
+No shell startup code, extra
 PATH entries or other caller environment are admitted into the privileged
 installer. On a noninteractive or `TERM=dumb` terminal, ANSI screen control
 is not attempted. For deliberately
@@ -731,7 +733,7 @@ installer-owned STL, **do not run install again**: use this equally fixed
 update command:
 
 ~~~sh
-/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-dumb}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl update
+/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-xterm}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl update
 ~~~
 
 The entire bootstrap download must succeed before it can execute; the private temporary file is removed even on error. This selects the unchanged canonical installer update transaction,

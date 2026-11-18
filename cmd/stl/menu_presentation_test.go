@@ -173,6 +173,14 @@ func TestMenuPresentationTermAndColorGates(t *testing.T) {
 	if menuEscapeCapable(slave) || menuColorEnabled(slave) {
 		t.Fatal("TERM=dumb must forbid screen control and color")
 	}
+	t.Setenv("TERM", "")
+	if !menuEscapeCapable(slave) || menuColorEnabled(slave) {
+		t.Fatal("unset TERM on a real TTY must redraw without NO_COLOR styling")
+	}
+	menuScreen(slave, "Unset TERM")
+	if seen := readMenuPTYUntil(t, master, "UNSET TERM"); !strings.Contains(seen, "\x1b[2J\x1b[H") {
+		t.Fatalf("unset TERM did not redraw a physical TTY: %q", seen)
+	}
 }
 
 func TestMenuInteractiveClearsBeforeAndAfterResultAcknowledgement(t *testing.T) {
