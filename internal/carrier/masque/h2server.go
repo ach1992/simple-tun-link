@@ -256,7 +256,7 @@ func (h *h2ServerConn) updateWindow(f *http2.WindowUpdateFrame) error {
 	return nil
 }
 
-func (h *h2ServerConn) reply(code string, assignment []byte) error {
+func (h *h2ServerConn) reply(code string) error {
 	var hdr bytes.Buffer
 	e := hpack.NewEncoder(&hdr)
 	if err := e.WriteField(hpack.HeaderField{Name: ":status", Value: code}); err != nil {
@@ -267,17 +267,11 @@ func (h *h2ServerConn) reply(code string, assignment []byte) error {
 			return err
 		}
 	}
-	if err := h.write(func(fr *http2.Framer) error {
+	return h.write(func(fr *http2.Framer) error {
 		return fr.WriteHeaders(http2.HeadersFrameParam{
 			StreamID: 1, BlockFragment: hdr.Bytes(), EndHeaders: true, EndStream: code != "200",
 		})
-	}); err != nil {
-		return err
-	}
-	if len(assignment) > 0 {
-		return h.sendData(context.Background(), assignment)
-	}
-	return nil
+	})
 }
 
 func (s *H2Server) authorizeRequest(f *http2.MetaHeadersFrame) bool {
@@ -365,13 +359,13 @@ func (s *H2Server) serveH2(parent context.Context, conn net.Conn) error {
 			err = h.updateWindow(f)
 		case *http2.MetaHeadersFrame:
 			if accepted || !s.authorizeRequest(f) {
-				_ = h.reply("400", nil)
+				_ = h.reply("400")
 				return errors.New("MASQUE unexpected CONNECT-IP stream")
 			}
 			s.activeMu.Lock()
 			if s.active {
 				s.activeMu.Unlock()
-				_ = h.reply("409", nil)
+				_ = h.reply("409")
 				return errors.New("MASQUE Link already has an active client")
 			}
 			s.active = true
@@ -387,12 +381,28 @@ func (s *H2Server) serveH2(parent context.Context, conn net.Conn) error {
 			capsule, _ := appendVarint(nil, capsuleAddressAssign)
 			capsule, _ = appendVarint(capsule, uint64(len(assignment)))
 			capsule = append(capsule, assignment...)
-			if err := h.reply("200", capsule); err != nil {
+			if err := h.reply("200"); err != nil {
 				return err
 			}
 			_ = conn.SetReadDeadline(time.Time{})
 			accepted = true
+			// Assignment MUST precede private packet DATA, but it may require
+			// a client WINDOW_UPDATE (including an initially zero stream window).
+			// The H2 reader therefore stays active while the single ordered
+			// outbound worker sends the assignment. Never wait for flow-control
+			// updates on the same goroutine that must read those updates.
 			go func() {
+				assignCtx, stopAssign := context.WithTimeout(ctx, 12*time.Second)
+				err := h.sendData(assignCtx, capsule)
+				stopAssign()
+				if err != nil {
+					select {
+					case outErrors <- fmt.Errorf("MASQUE private address assignment failed: %w", err):
+					default:
+					}
+					cancel()
+					return
+				}
 				for {
 					packet, err := s.pipe.ReadPacket(ctx)
 					if err != nil {
