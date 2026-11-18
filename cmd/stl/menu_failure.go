@@ -12,8 +12,13 @@ import (
 // The error values are already canonical, reviewed, secret-safe fields; this
 // renderer never unwraps OS/subprocess errors or displays arbitrary payloads.
 func renderTerminalLifecycleFailure(out io.Writer, issue *stlerr.Error, evidence *stlerr.OperationEvidence) {
+	committedRemoval := evidence != nil && evidence.Stage == "protected_handoff_cleanup" &&
+		evidence.DesiredState == "committed" && issue.ReasonCode == "protected_handoff_cleanup_incomplete"
 	menuSection(out, "Tunnel operation / incomplete")
-	if evidence != nil && evidence.HostMutation == "not_attempted" {
+	if committedRemoval {
+		menuHealthLine(out, "Tunnel removal", "OK", "Canonical Engine Remove committed; do not repeat Remove")
+		menuHealthLine(out, "Private handoff", "WARNING", "Cleanup incomplete; saved original may remain")
+	} else if evidence != nil && evidence.HostMutation == "not_attempted" {
 		menuHealthLine(out, "Host changes", "INFO", "No backend network Apply was attempted")
 	} else {
 		menuHealthLine(out, "Host changes", "WARNING", "Outcome not fully confirmed; inspect before retrying")
@@ -37,7 +42,7 @@ func renderTerminalLifecycleFailure(out io.Writer, issue *stlerr.Error, evidence
 		}
 	}
 	kind := "WARNING"
-	if evidence == nil || evidence.HostMutation != "not_attempted" {
+	if !committedRemoval && (evidence == nil || evidence.HostMutation != "not_attempted") {
 		kind = "FAILED" // attempted/uncertain host operations get the red status
 	}
 	switch issue.ReasonCode {

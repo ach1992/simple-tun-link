@@ -571,7 +571,7 @@ func menuSensitiveHandoffAction(input io.Reader, reader *bufio.Reader, out, errO
 		fmt.Fprintln(errOut, "Could not display the complete protected Setup Link.")
 		return 1
 	}
-	fmt.Fprintln(out, "Keep this credential private. It will remain saved until you explicitly delete it.")
+	fmt.Fprintln(out, "Keep this credential private. DELETE or verified Remove retires this saved original if cleanup succeeds.")
 	return 0
 }
 
@@ -614,5 +614,5 @@ func menuShowNewProtectedHandoff(input io.Reader, out io.Writer, options *runtim
 		return
 	}
 	fmt.Fprintln(out, "\nOTHER server: Import setup link -> select matching backend -> private paste -> review -> YES.")
-	fmt.Fprintln(out, "This same link stays in private storage until you explicitly delete it.")
+	fmt.Fprintln(out, "This same link stays in private storage until DELETE or verified Remove (if cleanup succeeds).")
 }

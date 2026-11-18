@@ -190,7 +190,7 @@ func menuRemoveLink(input io.Reader, reader *bufio.Reader, out, errOut io.Writer
 		menuScreen(out, "Remove / complete")
 		menuNotice(out, "OK", "Selected tunnel removed. Other Links were not selected for removal.")
 	} else {
-		menuNotice(out, "WARNING", "Remove did not finish with verified success. The peer connection is NOT required; investigate local ownership or an incomplete transaction.")
+		menuNotice(out, "WARNING", "Review the exact result above. If Remove committed but saved-offer cleanup failed, do not repeat Remove; inspect only that file. Otherwise reconcile local ownership before retrying.")
 		menuCopyLine(out, "Inspect saved Link", "stl link status "+string(selected.ID)+" --json")
 		if selected.Backend == domain.BackendIPsec {
 			menuCopyLine(out, "IPsec readiness", "stl doctor ipsec --json")

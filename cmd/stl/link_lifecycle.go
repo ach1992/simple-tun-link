@@ -229,7 +229,7 @@ func executeLinkMutationControlled(operation string, desired domain.Link, id dom
 		if protectedRemovalErr != nil {
 			return lifecycleFailureWithEvidence(stdout, stderr, jsonOutput, stlerr.CodeState, operation, &result,
 				"Link was removed, but its original protected receiver Setup Link cleanup is incomplete; do not repeat Remove",
-				&stlerr.OperationEvidence{Stage: "protected_handoff_cleanup", HostMutation: "not_attempted",
+				&stlerr.OperationEvidence{Stage: "protected_handoff_cleanup", HostMutation: "attempted",
 					DesiredState: "committed", Rollback: "not_required"}, nil)
 		}
 	}
@@ -506,7 +506,11 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 			}
 		}
 		if result != nil && result.LinkID != "" {
-			fmt.Fprintf(stderr, "Partial operation result for Link %s; reconcile current host/state before retry\n", result.LinkID)
+			if out.Outcome == "removed_cleanup_incomplete" {
+				fmt.Fprintf(stderr, "Link %s already removed; only protected receiver Setup Link cleanup is incomplete. Do not repeat Remove.\n", result.LinkID)
+			} else {
+				fmt.Fprintf(stderr, "Partial operation result for Link %s; reconcile current host/state before retry\n", result.LinkID)
+			}
 		}
 	}
 	switch code {

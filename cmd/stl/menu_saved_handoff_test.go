@@ -642,7 +642,8 @@ func TestRemoveReportsCommittedCleanupIncompleteWithoutDeletingMismatchedFile(t 
 	}
 	if failure.Outcome != "removed_cleanup_incomplete" || failure.Error == nil ||
 		failure.Error.ReasonCode != "protected_handoff_cleanup_incomplete" ||
-		failure.PartialResult == nil || !failure.PartialResult.Removed || failure.PartialResult.LinkID != link.ID {
+		failure.PartialResult == nil || !failure.PartialResult.Removed || failure.PartialResult.LinkID != link.ID ||
+		failure.Error.Evidence == nil || failure.Error.Evidence.HostMutation != "attempted" {
 		t.Fatalf("missing committed-remove cleanup evidence: %+v", failure)
 	}
 	if strings.Contains(out.String()+errOut.String(), unknown) || strings.Contains(out.String()+errOut.String(), secret) {
@@ -653,6 +654,68 @@ func TestRemoveReportsCommittedCleanupIncompleteWithoutDeletingMismatchedFile(t 
 	}
 	if snapshot, err := state.NewFileStore(opts.stateRoot).Load(context.Background()); err != nil || len(snapshot.Links) != 0 {
 		t.Fatal("safe local Link Remove was blocked by unrelated private file", err)
+	}
+}
+
+func TestMenuRemoveReportsCommittedRemovalDespitePrivateFileCleanupFailure(t *testing.T) {
+	enableTTYColorsForBoundaryTest(t)
+	opts, _, path, secret := guidedSavedWireGuardFixture(t)
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	const foreign = "unverified-private-offer\n"
+	if err := writeSensitiveHandoff(path, []byte(foreign)); err != nil {
+		t.Fatal(err)
+	}
+	tty, done := startManageTTY(t, opts)
+	tty.expect("Choose a task: ")
+	tty.send("3")
+	tty.expect("Choose tunnel number: ")
+	tty.send("1")
+	tty.expect("Choose an action: ")
+	tty.send("5")
+	tty.expect("To permanently REMOVE this tunnel")
+	tty.send("REMOVE")
+	tty.expect("Canonical Engine Remove committed")
+	tty.expect("Press Enter to continue...")
+	tty.send("")
+	tty.expect("Choose a task: ")
+	tty.send("8")
+	manageTTYDone(t, done, 0)
+	if strings.Contains(tty.all, "No backend network Apply was attempted") ||
+		strings.Contains(tty.all, "Remove did not finish with verified success") ||
+		strings.Contains(tty.all, secret) || strings.Contains(tty.all, foreign) ||
+		!strings.Contains(tty.all, "do not repeat Remove") {
+		t.Fatal("terminal confused committed removal with failed Engine mutation or disclosed private material")
+	}
+	if content, err := os.ReadFile(path); err != nil || string(content) != foreign {
+		t.Fatal("unverified private handoff was modified", err)
+	}
+	snapshot, err := state.NewFileStore(opts.stateRoot).Load(context.Background())
+	if err != nil || len(snapshot.Links) != 0 {
+		t.Fatal("Engine removal did not commit while cleanup failed", err)
+	}
+}
+
+func TestRemovePlaintextReportsCommittedRemovalWhenPrivateCleanupFails(t *testing.T) {
+	opts, link, path, secret := guidedSavedWireGuardFixture(t)
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	const foreign = "unverified-private-offer\n"
+	if err := writeSensitiveHandoff(path, []byte(foreign)); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := executeLinkMutation("link_remove", domain.Link{}, link.ID, false, &out, &errOut, opts)
+	if code == 0 || !strings.Contains(errOut.String(), "already removed; only protected receiver Setup Link cleanup") ||
+		strings.Contains(errOut.String(), "reconcile current host/state before retry") ||
+		strings.Contains(out.String()+errOut.String(), secret) ||
+		strings.Contains(out.String()+errOut.String(), foreign) {
+		t.Fatal("plain failure output did not distinguish committed removal from uncertain host mutation")
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != foreign {
+		t.Fatal("plain failure path changed foreign original offer", err)
 	}
 }
 
