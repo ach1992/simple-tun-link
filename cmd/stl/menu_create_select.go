@@ -393,6 +393,15 @@ func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			value = "1"
 		}
 		if value == "9" {
+			// MASQUE needs only iproute2, not WireGuard, nftables or an extra helper.
+			// Reuse the canonical consented package workflow before generating keys.
+			picked := tunnelOption{backend: domain.BackendMASQUE, mode: domain.EncapTLS}
+			prep := menuPrepareSelectedPackages(input, reader, out, errOut, picked, options)
+			if !prep.canContinue {
+				report = menuCapabilitySnapshot(options)
+				menuAcknowledge(input, reader, out)
+				continue
+			}
 			return menuCreateMASQUE(input, reader, out, errOut, options)
 		}
 		if value == "7" {

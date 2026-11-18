@@ -148,3 +148,36 @@ func TestMASQUEDesiredV6DoesNotWidenLegacySchemas(t *testing.T) {
 		t.Fatal("MASQUE v6 accepted WireGuard-specific fields")
 	}
 }
+
+// Invalid private offers and confirmation errors require actionable, secret-
+// safe machine guidance instead of the generic "check Link ID" fallback.
+func TestMASQUECLIPrivateInputErrorsAreActionable(t *testing.T) {
+	root := t.TempDir()
+	var out, errOut bytes.Buffer
+	rc := linkMASQUECommand([]string{"preview-masque", "--stdin", "--json"},
+		strings.NewReader("{"), &out, &errOut, &runtimeOptions{stateRoot: root})
+	if rc != 2 {
+		t.Fatalf("malformed preview exit=%d stderr=%s", rc, errOut.String())
+	}
+	var body lifecycleFailureResponse
+	if err := json.Unmarshal(out.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error == nil || body.Error.ReasonCode != "masque_offer_invalid" ||
+		!strings.Contains(body.Error.NextStep, "original private MASQUE receiver file") {
+		t.Fatalf("wrong malformed handoff guidance: %+v", body.Error)
+	}
+	out.Reset()
+	errOut.Reset()
+	rc = linkMASQUECommand([]string{"import-masque", "--stdin", "--confirm", strings.Repeat("f", 64), "--json"},
+		strings.NewReader("{"), &out, &errOut, &runtimeOptions{stateRoot: root})
+	if rc != 2 {
+		t.Fatalf("malformed import exit=%d", rc)
+	}
+	if err := json.Unmarshal(out.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error == nil || body.Error.ReasonCode != "masque_offer_invalid" {
+		t.Fatalf("import guidance: %+v", body.Error)
+	}
+}

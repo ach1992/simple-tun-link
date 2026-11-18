@@ -36,6 +36,8 @@ func selectedPackageBackends(selected tunnelOption) string {
 		return "native,quic"
 	case domain.BackendIPsec:
 		return "native,ipsec"
+	case domain.BackendMASQUE:
+		return "masque"
 	default:
 		return ""
 	}
@@ -383,7 +385,10 @@ func menuPrepareSelectedPackagesWithOps(input io.Reader, reader *bufio.Reader, o
 		if selected.backend == domain.BackendIPsec {
 			menuField(out, "Read-only check", "stl doctor ipsec --json")
 		}
-		return menuPackagePreparation{canContinue: selected.backend != domain.BackendIPsec}
+		// Unlike some existing plain backends, MASQUE cannot safely create a
+		// helper without its one required package. Direct operators to the
+		// installed root menu rather than issuing a doomed private identity.
+		return menuPackagePreparation{canContinue: selected.backend != domain.BackendIPsec && selected.backend != domain.BackendMASQUE}
 	}
 	menuScreen(out, "Selected tunnel / PREPARE")
 	menuField(out, "Type", fmt.Sprintf("%s / %s", selected.backend, selected.mode))

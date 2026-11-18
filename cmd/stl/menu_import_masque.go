@@ -9,6 +9,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/masquehost"
 )
 
@@ -16,9 +17,9 @@ import (
 // native pairing strings. No key is staged before an explicit fresh YES.
 func menuImportMASQUE(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, opts *runtimeOptions) int {
 	menuScreen(out, "Import / private MASQUE receiver handoff")
-	menuNotice(out, "WARNING", "Paste the complete single-line JSON offer privately. It contains the receiver's TLS private key.")
+	menuNotice(out, "WARNING", "Enter the absolute path to the original private receiver offer (mode 0600), or paste its complete single-line JSON. It contains a TLS private key.")
 	raw, err := readPrivateMenuURLWithPromptLimit(input, reader, func() {
-		fmt.Fprint(out, "Protected MASQUE offer (terminal echo off): ")
+		fmt.Fprint(out, "Private MASQUE offer file or JSON (terminal echo off; q=back): ")
 	}, maxMASQUEOfferBytes)
 	fmt.Fprintln(out)
 	if errors.Is(err, io.EOF) || raw == "0" || raw == "q" {
@@ -27,6 +28,16 @@ func menuImportMASQUE(input io.Reader, reader *bufio.Reader, out, errOut io.Writ
 	if err != nil || raw == "" {
 		menuNotice(out, "WARNING", "Private offer missing or incomplete; nothing imported.")
 		return 2
+	}
+	if strings.HasPrefix(raw, "/") {
+		// Reuse the existing descriptor-relative, no-follow, mode-0600,
+		// current-owner and single-link handoff reader. Never execute, echo
+		// or rewrite a file supplied by the operator.
+		raw, err = readPrivateHandoffFile(raw)
+		if err != nil {
+			menuNotice(out, "WARNING", "Cannot safely read that offer file. Use the original complete single-line JSON in an owner-private (0600) file inside a private directory; no Link changed.")
+			return 2
+		}
 	}
 	offer, _, err := decodeMASQUEOffer(strings.NewReader(raw), createStateRoot(opts))
 	if err != nil {
@@ -64,6 +75,13 @@ func menuImportMASQUE(input io.Reader, reader *bufio.Reader, out, errOut io.Writ
 		return 2
 	}
 	menuNotice(out, "INFO", "Local physical assignment is verified; remote identity and traffic are not yet proven. Verify the offer SHA256 through an independent trusted channel.")
+	// Match Create: inspect and (only on fresh PREPARE consent) install the
+	// minimal selected MASQUE prerequisites before staging receiver keys.
+	selected := tunnelOption{backend: domain.BackendMASQUE, mode: domain.EncapTLS}
+	if prep := menuPrepareSelectedPackages(input, reader, out, errOut, selected, opts); !prep.canContinue {
+		menuNotice(out, "INFO", "MASQUE import stopped before any receiver credential or Link change. Complete the selected prerequisites, then import the same original offer.")
+		return 0
+	}
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
 		return 2
 	}

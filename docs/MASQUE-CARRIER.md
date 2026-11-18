@@ -46,6 +46,23 @@ blocking; compare it to GRE Native with the same bidirectional workload.
 
 ## Create, preview, import and recovery
 
+On an installed Debian/Ubuntu host, **Create tunnel → MASQUE** checks the
+canonical package plan before asking for addresses or issuing credentials.
+**Import setup link → MASQUE** performs the same check after confirming
+the offered receiver identity and physical local address, before staging
+any private material.
+MASQUE uses the built-in Go TLS/H2 implementation: its only installable
+prerequisite is `iproute2`; it does not require WireGuard, strongSwan, nftables,
+iptables, kmod, or an external MASQUE helper package. If `iproute2` is missing,
+the interactive installed root terminal offers a separate **PREPARE** step
+with an exact signed-APT preview and a fresh confirmation; Create asks for a
+separate YES afterward. A running host `systemd` manager, TUN device, and
+privileged service access are runtime capabilities, not permission to replace
+the OS init system or perform global firewall/routing changes. Existing CLI
+`create-masque` remains a noninteractive entrypoint and **does not silently
+install packages**. A failed package preview should retain its real reason
+and next action; no package installation is implied by viewing the menu.
+
 Create on the **creator** (the role may be `dial` or `listen`; creator/receiver
 is independent of network direction). This example uses non-routable
 **documentation-only** IPv6 prefixes and must be replaced by addresses
@@ -90,8 +107,12 @@ protected-material retirement step after verified removal. Neither command
 removes anything on the **other** server automatically.
 
 The interactive menu offers **Create tunnel → MASQUE / CONNECT-IP** and
-**Import setup link → MASQUE / CONNECT-IP**. Protected paste masks terminal
-echo and requires a fresh, operator-entered `YES`; guided Create saves the
+**Import setup link → MASQUE / CONNECT-IP**. On Import, enter the exact
+absolute path to the original owner-private `0600` single-line offer file
+(or paste its JSON). The existing protected file reader rejects symlinks,
+foreign ownership, altered/partial content and unsafe permissions without
+printing its contents. Protected paste masks terminal echo. Import requires
+a fresh, operator-entered `YES`; guided Create saves the
 exact original handoff privately for `My tunnels → Share Setup Link → SHOW`.
 A CLI-created original can be disclosed only via explicit owner-private file
 selection and matching saved Link identity; an imported receiver cannot

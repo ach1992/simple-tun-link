@@ -258,6 +258,24 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 	// Error details here are authored literals, never the raw OS, backend,
 	// private state, caller-provided JSON or credential-bearing exception.
 	safe := stlerr.WithGuidance(stlerr.New(code, operation, "", "", detail))
+	// MASQUE handoff inputs are private and operator-facing. Generic Link-ID
+	// advice is misleading for a malformed file or a mismatched digest.
+	// Match only authored public literals, never arbitrary secret-bearing errors.
+	switch {
+	case operation == "link_preview-masque" && detail == "preview-masque: invalid private handoff",
+		(operation == "link_import-masque" || operation == "link_resume-masque") &&
+			(detail == operation[len("link_"):]+": unverified private MASQUE handoff"):
+		safe.ReasonCode = "masque_offer_invalid"
+		safe.NextStep = "Obtain the complete original private MASQUE receiver file; do not edit or truncate it. Retry preview-masque --stdin with that file. No Link change was requested."
+	case (operation == "link_import-masque" || operation == "link_resume-masque") &&
+		strings.HasSuffix(detail, ": private MASQUE handoff confirmation hash mismatch"):
+		safe.ReasonCode = "masque_offer_confirmation_mismatch"
+		safe.NextStep = "Verify the exact original receiver file SHA256 through a trusted channel, then use that digest with --confirm. No imported Link was changed."
+	case operation == "link_create-masque" &&
+		detail == "create-masque: this host does not uniquely own the requested MASQUE physical source":
+		safe.ReasonCode = "masque_source_not_assigned"
+		safe.NextStep = "Run ip address show on THIS server and choose its uniquely assigned physical IPv4/IPv6 address before creating keys. Peer connectivity is not required."
+	}
 	var observedPublic *stlerr.Error
 	if observed != nil {
 		// Retain the original errors.Is cause chain, but project only

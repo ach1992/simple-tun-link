@@ -115,6 +115,44 @@ func TestMASQUEImportMenuRejectsUnassignedReceiverBeforeStaging(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(root, "masque")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("refused offer left protected material on disk")
 	}
+	// The interactive path alternative consumes the same original
+	// protected file without copying it to a terminal or mutating State.
+	// Use a dedicated private parent; the testing.T temporary hierarchy
+	// may not attest every intermediate directory as trusted.
+	privateParent, err := os.MkdirTemp("", "stl-masque-offer-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(privateParent)
+	offerPath := filepath.Join(privateParent, "receiver-offer.json")
+	if err := os.WriteFile(offerPath, append(encoded, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, directErr := readPrivateHandoffFile(offerPath); directErr != nil {
+		t.Fatalf("test private-file fixture violates owner checks: %v", directErr)
+	}
+	out.Reset()
+	errOut.Reset()
+	fileInput := strings.NewReader(offerPath + "\nYES\n")
+	code = menuImportMASQUE(fileInput, bufio.NewReader(fileInput), &out, &errOut, &runtimeOptions{stateRoot: root})
+	if code == 0 || !strings.Contains(out.String(), "not uniquely own") {
+		t.Fatalf("protected-file import should reach local source admission: code=%d output=%s", code, out.String())
+	}
+	if strings.Contains(out.String(), string(files["server-key.pem"])) {
+		t.Fatal("protected-file import disclosed key")
+	}
+	if _, err := os.Stat(filepath.Join(root, "masque")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("protected-file receiver rejection staged material")
+	}
+	if err := os.Chmod(offerPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	fileInput = strings.NewReader(offerPath + "\n")
+	code = menuImportMASQUE(fileInput, bufio.NewReader(fileInput), &out, &errOut, &runtimeOptions{stateRoot: root})
+	if code == 0 || !strings.Contains(out.String(), "Cannot safely read that offer file") {
+		t.Fatalf("unsafe protected file not rejected: code=%d output=%s", code, out.String())
+	}
 }
 
 type masqueStatusFixture struct{ observed masquebackend.HostObservation }

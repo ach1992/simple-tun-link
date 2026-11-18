@@ -13,14 +13,15 @@ Usage:
   install.sh update --version vX.Y.Z [--prefix /usr/local]
   install.sh install|update --bundle /path/to/release-bundle [--prefix /usr/local]
   install.sh install --auto-stable --bundle /path/to/verified-local-bundle [--prefix /usr/local]
-  install.sh install|update --version vX.Y.Z [--backends native,wireguard,quic,ipsec]
+  install.sh install|update --version vX.Y.Z [--backends native,wireguard,quic,ipsec,masque]
   install.sh install|update --bundle /path/to/release-bundle [--prefix /usr/local] [--backends all]
-  install.sh requirements [--backends native,wireguard,quic,ipsec] [--os-release-file /path/to/read-only-fixture]
-  install.sh prepare --backends native|wireguard|quic|ipsec|all [--expected-missing '...'] [--expected-apt-plan '...' | --expected-apt-plan-sha256 SHA256]
+  install.sh requirements [--backends native,wireguard,quic,ipsec,masque] [--os-release-file /path/to/read-only-fixture]
+  install.sh prepare --backends native|wireguard|quic|ipsec|masque|all [--expected-missing '...'] [--expected-apt-plan '...' | --expected-apt-plan-sha256 SHA256]
   install.sh uninstall [--prefix /usr/local] [--retire-owned-restore]
 
-The default backend selection is native (GRE/IPIP). Add wireguard, quic or
-ipsec explicitly to provision optional dependencies. "all" selects all.
+The default backend selection is native (GRE/IPIP). Add wireguard, quic,
+ipsec or masque explicitly to prepare only the selected dependencies.
+MASQUE needs iproute2, without an external helper package. "all" selects all.
 IPsec on a verified clean systemd host may be prepared after a fresh, exact
 package/dependency PREPARE consent. Distribution hooks can temporarily
 start/enable a newly introduced strongSwan vendor service.
@@ -638,6 +639,7 @@ select_packages() {
   want_wg=0
   want_quic=0
   want_ipsec=0
+  want_masque=0
   [[ $backends =~ ^[a-z,]+$ ]] || usage
   # Bash read -a silently discards an empty trailing CSV item.
   [[ $backends != ,* && $backends != *, && $backends != *,,* ]] || usage
@@ -649,20 +651,26 @@ select_packages() {
       wireguard) [[ $want_wg == 0 ]] || usage; want_wg=1 ;;
       quic) [[ $want_quic == 0 ]] || usage; want_quic=1 ;;
       ipsec) [[ $want_ipsec == 0 ]] || usage; want_ipsec=1 ;;
+      masque) [[ $want_masque == 0 ]] || usage; want_masque=1 ;;
       all)
         [[ ${#requested[@]} == 1 ]] || usage
         want_native=1
         want_wg=1
         want_quic=1
         want_ipsec=1
+        want_masque=1
         ;;
       *) usage ;;
     esac
   done
-  # iproute2/iptables are the Engine/network baseline. The kmod tools
-  # provide the exact modinfo/modprobe commands used by the newly explicit
-  # optional module preflight. This is not permission to load all modules.
-  packages=(iproute2 iptables kmod)
+  # MASQUE uses native Go TLS/H2 plus a systemd-managed TUN: iproute2 is
+  # its only installable OS package requirement. A running systemd host and
+  # /dev/net/tun are checked at runtime; replacing init is not an APT fix.
+  # Other backends retain their existing native networking/module baseline.
+  packages=(iproute2)
+  if [[ $want_native == 1 || $want_wg == 1 || $want_quic == 1 || $want_ipsec == 1 ]]; then
+    packages+=(iptables kmod)
+  fi
   [[ $want_quic == 0 ]] || want_wg=1
   [[ $want_wg == 0 ]] || packages+=(wireguard-tools)
   [[ $want_quic == 0 ]] || packages+=(nftables)
