@@ -35,7 +35,7 @@ stable_url='https://github.com/ach1992/simple-tun-link/releases/latest/download/
 # The first-hop command substitution must finish with curl exit 0 and
 # valid Bash syntax before it executes any part of the downloaded script.
 for line in "${published_commands[@]}"; do
-  [[ "$line" == '/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM-}" ${NO_COLOR+NO_COLOR=1} STL_NO_CLEAR="$([[ ${STL_NO_CLEAR:-} == 1 ]] && printf 1)" /bin/bash -c '* &&
+  [[ "$line" == '/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM-}" ${NO_COLOR+NO_COLOR=1} STL_NO_CLEAR="$([ "${STL_NO_CLEAR:-}" = 1 ] && printf 1)" /bin/bash -c '* &&
      "$line" == *'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '* &&
      "$line" == *'/usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 '* &&
      "$line" == *' | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"'* &&
@@ -106,7 +106,7 @@ export STL_TEST_QUICK_INSTALL_FILE="$scratch/test-direct.sh"
 # separate real loopback HTTPS tests execute the hardened literal entrypoint.
 prepare_mock_public_command() {
   local command=$1
-  local prefix='/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM-}" ${NO_COLOR+NO_COLOR=1} STL_NO_CLEAR="$([[ ${STL_NO_CLEAR:-} == 1 ]] && printf 1)" /bin/bash -c'
+  local prefix='/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM-}" ${NO_COLOR+NO_COLOR=1} STL_NO_CLEAR="$([ "${STL_NO_CLEAR:-}" = 1 ] && printf 1)" /bin/bash -c'
   [[ $command == "$prefix "* ]] || return 1
   command="/bin/bash -c${command#"$prefix"}"
   command=${command/\/usr\/bin\/curl -q /curl -q }
@@ -540,7 +540,7 @@ fi
 # Exercise the literal published first-hop environment admission, not
 # the mocked installer. Unknown TERM must stay unknown (monochrome in Go).
 firsthop_terminal_settings() {
-  /usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM-}" ${NO_COLOR+NO_COLOR=1} STL_NO_CLEAR="$([[ ${STL_NO_CLEAR:-} == 1 ]] && printf 1)" /bin/bash -c 'printf "%s|%s|%s" "$TERM" "${STL_NO_CLEAR-}" "${NO_COLOR+x}"'
+  /usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM-}" ${NO_COLOR+NO_COLOR=1} STL_NO_CLEAR="$([ "${STL_NO_CLEAR:-}" = 1 ] && printf 1)" /bin/bash -c 'printf "%s|%s|%s" "$TERM" "${STL_NO_CLEAR-}" "${NO_COLOR+x}"'
 }
 observed_settings=$(unset TERM NO_COLOR STL_NO_CLEAR; firsthop_terminal_settings)
 [[ $observed_settings == '||' ]] || { echo 'Unset first-hop terminal settings were changed.' >&2; exit 1; }
@@ -552,13 +552,21 @@ observed_settings=$(unset NO_COLOR; TERM=xterm-256color STL_NO_CLEAR=unexpected 
 [[ $observed_settings == 'xterm-256color||' ]] || { echo 'Invalid clear setting was admitted.' >&2; exit 1; }
 observed_settings=$(NO_COLOR='' TERM=xterm-256color STL_NO_CLEAR=1 firsthop_terminal_settings)
 [[ $observed_settings == 'xterm-256color|1|x' ]] || { echo 'Color and no-clear settings were not independent.' >&2; exit 1; }
+# The public command is pasted into the caller's shell before /bin/bash
+# starts. Its opt-out normalization must also work in POSIX /bin/dash.
+if command -v dash >/dev/null 2>&1; then
+  observed_dash=$(TERM='' STL_NO_CLEAR=1 dash -c 'printf "%s|%s" "${TERM-}" "$([ "${STL_NO_CLEAR:-}" = 1 ] && printf 1)"')
+  [[ $observed_dash == '|1' ]] || { echo 'POSIX shell lost exact no-clear selection.' >&2; exit 1; }
+  observed_dash=$(TERM=dumb STL_NO_CLEAR=0 dash -c 'printf "%s|%s" "${TERM-}" "$([ "${STL_NO_CLEAR:-}" = 1 ] && printf 1)"')
+  [[ $observed_dash == 'dumb|' ]] || { echo 'POSIX shell invented a no-clear preference.' >&2; exit 1; }
+fi
 echo 'FIRST_HOP_EXACT_TERM_AND_NORMALIZED_NO_CLEAR=PASS'
-observed_term=$(export TERM=xterm-256color; /usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM-}" ${NO_COLOR+NO_COLOR=1} STL_NO_CLEAR="$([[ ${STL_NO_CLEAR:-} == 1 ]] && printf 1)" /bin/bash -c 'printf %s "$TERM"')
+observed_term=$(export TERM=xterm-256color; /usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM-}" ${NO_COLOR+NO_COLOR=1} STL_NO_CLEAR="$([ "${STL_NO_CLEAR:-}" = 1 ] && printf 1)" /bin/bash -c 'printf %s "$TERM"')
 [[ $observed_term == xterm-256color ]] || {
   echo 'Clean first hop lost interactive terminal capabilities.' >&2
   exit 1
 }
-observed_term=$(export TERM=dumb; /usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM-}" ${NO_COLOR+NO_COLOR=1} STL_NO_CLEAR="$([[ ${STL_NO_CLEAR:-} == 1 ]] && printf 1)" /bin/bash -c 'printf %s "$TERM"')
+observed_term=$(export TERM=dumb; /usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM-}" ${NO_COLOR+NO_COLOR=1} STL_NO_CLEAR="$([ "${STL_NO_CLEAR:-}" = 1 ] && printf 1)" /bin/bash -c 'printf %s "$TERM"')
 [[ $observed_term == dumb ]] || {
   echo 'Clean first hop overrode explicit dumb terminal setting.' >&2
   exit 1
