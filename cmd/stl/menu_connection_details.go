@@ -107,6 +107,13 @@ func printManualConnectionDetails(out io.Writer, l domain.Link) {
 		menuProse(out, "  WSS cannot be paired from this public-only view. Use the ORIGINAL sender's protected receiver offer.")
 		menuProse(out, "  If this server IMPORTED the Link, request the original offer from its creator; never regenerate active private keys.")
 		menuProse(out, "  Run Check connection for peer ICMP; Connection details alone do not prove traffic.")
+	case domain.BackendMASQUE:
+		menuField(out, "MASQUE role", l.MASQUE.Role+" (this server)")
+		menuField(out, "MASQUE HTTPS TCP port", strconv.Itoa(int(l.MASQUE.TCPPort)))
+		menuField(out, "TLS server name", safeMenuText(l.MASQUE.TLSServerName))
+		menuField(out, "Private L3 route", l.Addresses.Peer.String()+" over owned TUN")
+		menuProse(out, "Peer role is reversed; private mTLS handoff is required for the original peer. No public-only configuration can recreate private identity.")
+		menuProse(out, "Saved settings alone do not prove an authenticated CONNECT-IP session or successful private traffic.")
 	case domain.BackendWireGuardQUIC:
 		// Public per-Link topology is safe to inspect on either peer. It
 		// never substitutes for the original sensitive receiver offer.

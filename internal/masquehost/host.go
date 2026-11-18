@@ -263,10 +263,11 @@ func (h *Host) Inspect(ctx context.Context, link domain.Link) (masquebackend.Hos
 	return out, nil
 }
 
-// No peer reachability probe is required for a locally managed Link. The
-// selected physical SOURCE must nonetheless be bound on THIS host; a route
-// lookup against a remote host is not evidence of local address ownership.
-func verifyLocalUnderlay(ip netip.Addr) error {
+// VerifyLocalUnderlay checks a physical source against the actual local
+// interface inventory without changing host state. Call it before staging
+// receiver secrets and again under the Engine Link lock.
+// A match establishes local assignment, not peer identity or reachability.
+func VerifyLocalUnderlay(ip netip.Addr) error {
 	if !ip.IsValid() {
 		return errors.New("MASQUE physical source invalid")
 	}
@@ -305,7 +306,7 @@ func (h *Host) Preflight(ctx context.Context, link domain.Link, removing bool) e
 		return err
 	}
 	if !removing {
-		if err = verifyLocalUnderlay(link.Underlay.Local); err != nil {
+		if err = VerifyLocalUnderlay(link.Underlay.Local); err != nil {
 			return err
 		}
 	}

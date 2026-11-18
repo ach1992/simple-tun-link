@@ -444,3 +444,21 @@ managed attempt and independently prove its required original-termination
 or changed-host-kernel condition. A namespace or container restart never
 supplies host-kernel extinction. Physical reboot and two-peer acceptance
 remain separately authorized deployment activities.
+
+## Unreleased MASQUE material and authentication boundary
+
+The Issue #142 MASQUE candidate authenticates HTTP/2 CONNECT-IP using TLS
+certificates with pinned CA/peer identity. The public Link State carries
+only topology and an immutable exact protected-material SHA256, not TLS keys.
+Root-owned `masque/<link-id>/` files use `0700` directories, `0600` files and
+no-clobber writes. Reuse after an interrupted provision requires the complete
+original bytes, owner, identity and closed filename set; incomplete/altered
+credentials remain quarantined, never silently repaired or adopted. A failed
+operation is not permission to delete those files or change unknown services.
+Receiver import also verifies the intended local physical underlay *inside*
+the Engine Link lock before staging sensitive material. The menu uses hidden
+terminal paste and an explicit confirmation; its original sender handoff may
+be shared only with live TTY consent and exact committed generation binding.
+No CONNECT-IP stream, latency, confidentiality against endpoint compromise,
+provider access or censorship invisibility is claimed from local Status alone.
+See [MASQUE Carrier](MASQUE-CARRIER.md).

@@ -196,7 +196,7 @@ func menuCheckOneConnection(id domain.LinkID, out, errOut io.Writer, options *ru
 	}
 	menuHealthMeasurements(out, result.MTU, result.Quality, rx, tx, unit, handshake)
 	if result.MTU.Mode == "not_measured" {
-		menuHealthLine(out, "Path MTU", "INFO", "Not measured for WSS; this check used five private ICMP probes")
+		menuHealthLine(out, "Path MTU", "INFO", "Stream-carrier PMTU not measured; this check used five private ICMP probes")
 	}
 	if statusCode != 0 {
 		menuNotice(out, "WARNING", "Cumulative counters could not be checked separately; ping results are independent.")
@@ -387,6 +387,10 @@ func menuShowLocalStatus(id domain.LinkID, out, errOut io.Writer, options *runti
 		return code
 	}
 	menuHealthLine(out, "Interface", "OK", "Local interface verified")
+	if result.MASQUEState != nil {
+		menuHealthLine(out, "MASQUE helper", "OK", "Locally owned, running, with exact private TUN and route")
+		menuHealthLine(out, "Peer stream", "UNKNOWN", "mTLS CONNECT-IP session not independently measured by local Status")
+	}
 	if result.WSSState != nil {
 		if result.WSSState.WSSHelperActive {
 			menuHealthLine(out, "WSS helper", "OK", "Managed helper active")

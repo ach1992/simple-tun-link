@@ -110,6 +110,11 @@ func expectedClaims(link domain.Link) ([]domain.ResourceClaim, error) {
 	return r, nil
 }
 
+// ValidateTopology is the canonical side-effect-free admission for public
+// creator/offer inputs, before credentials or files are issued. The Engine
+// rechecks the same topology at actual resource planning.
+func ValidateTopology(link domain.Link) error { return validateLink(link) }
+
 func validateLink(link domain.Link) error {
 	if link.Backend != domain.BackendMASQUE || link.Validate() != nil {
 		return errors.New("invalid managed MASQUE Link")
@@ -125,6 +130,15 @@ func validateLink(link domain.Link) error {
 		}
 	}
 	return nil
+}
+
+// DiagnosticState reads only this Link's systemd, TUN, route and protected
+// identity. It never probes peer traffic or implies an authenticated stream.
+func (b *Backend) DiagnosticState(ctx context.Context, link domain.Link) (HostObservation, error) {
+	if err := validateLink(link); err != nil {
+		return HostObservation{}, err
+	}
+	return b.host.Inspect(ctx, link)
 }
 
 func (b *Backend) Inspect(ctx context.Context, link domain.Link) (core.Observation, error) {

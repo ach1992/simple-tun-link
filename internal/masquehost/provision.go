@@ -216,12 +216,14 @@ func StageFiles(root string, link domain.Link, files map[string][]byte) error {
 	}
 	dir := filepath.Join(parent, string(link.ID))
 	if err := os.Mkdir(dir, 0o700); err != nil {
-		return fmt.Errorf("MASQUE material generation already exists or cannot be reserved: %w", err)
+		if errors.Is(err, os.ErrExist) {
+			// An identical, complete, protected generation is safe to retry
+			// under the Engine Link lock after a pre-host interruption. Never
+			// repair a partial set or accept a different original key.
+			return verifyExistingStage(root, link, files)
+		}
+		return fmt.Errorf("MASQUE material generation cannot be reserved: %w", err)
 	}
-	defer func() {
-		// A failed Stage leaves an explicitly reserved directory for
-		// reconciliation, never a confusing auto-adopted partial bundle.
-	}()
 	fd, err := unix.Open(dir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return err
@@ -265,6 +267,43 @@ func StageFiles(root string, link domain.Link, files map[string][]byte) error {
 	}
 	// Every stage remains uncommitted until Engine's later backend Verify and
 	// State publication; callers must not infer service success from this.
+	return nil
+}
+
+// verifyExistingStage is deliberately read-only. Exact original bytes and
+// a closed file set are required, not merely a matching path, Link ID or an
+// owned directory. Partially written or foreign material stays quarantined.
+func verifyExistingStage(root string, link domain.Link, files map[string][]byte) error {
+	host := &Host{root: root}
+	dir, err := host.materialPath(link.ID)
+	if err != nil {
+		return err
+	}
+	if _, _, err := host.inspectMaterial(link); err != nil {
+		return fmt.Errorf("existing MASQUE generation is incomplete or different; preserve it for recovery: %w", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return errors.New("cannot enumerate existing MASQUE generation")
+	}
+	expected := materialNames(link)
+	if len(entries) != len(expected) {
+		return errors.New("existing MASQUE generation has unexpected entries; preserve for recovery")
+	}
+	for _, name := range expected {
+		if !slices.ContainsFunc(entries, func(e os.DirEntry) bool { return e.Name() == name && e.Type().IsRegular() }) {
+			return errors.New("existing MASQUE generation contains an unexpected file type or name")
+		}
+		original, err := trustedFile(filepath.Join(dir, name), 1<<20)
+		if err != nil {
+			return errors.New("existing MASQUE generation is not trusted")
+		}
+		same := bytes.Equal(original, files[name])
+		clear(original)
+		if !same {
+			return errors.New("existing MASQUE original credential bytes differ; never replace them")
+		}
+	}
 	return nil
 }
 

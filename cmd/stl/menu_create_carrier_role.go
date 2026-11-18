@@ -19,9 +19,9 @@ func recommendCarrierRole(local, peer netip.Addr) (role, basis string) {
 	case !localPublic && peerPublic:
 		return "dial", "the other endpoint has a non-private IPv4 address"
 	case local.Compare(peer) < 0:
-		return "listen", "deterministic IPv4 ordering (both have the same address scope)"
+		return "listen", "deterministic IP address ordering (both have the same address scope)"
 	default:
-		return "dial", "deterministic IPv4 ordering (both have the same address scope)"
+		return "dial", "deterministic IP address ordering (both have the same address scope)"
 	}
 }
 

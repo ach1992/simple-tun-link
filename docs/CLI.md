@@ -1249,3 +1249,16 @@ Use the [explicit proof-bound recovery procedure](OPERATOR-RECOVERY.md#managed-q
 unit-name cleanup or a regenerated peer handoff. Legitimate committed
 post-reboot restoration requires trusted changed-kernel evidence and fresh
 host vacancy, preserving the same Link and credential identity.
+
+## Unreleased MASQUE CONNECT-IP Carrier
+
+The Issue #142 development candidate adds typed `create-masque`, `preview-masque`,
+`import-masque`, `resume-masque`, `reconcile-masque` and `retire-masque`; normal
+`link list`, `link status`, `link diagnose`, `link restore --all` and `link remove`
+use the original canonical Engine. The menu includes MASQUE Create/Import with
+protected receiver handoff. It is **not** in the published v0.1.27 release.
+The original JSON receiver offer is **sensitive**, and the import `--confirm`
+is the SHA256 of the exact separately reviewed offer. Only verified local
+systemd/TUN/route ownership is asserted by status; private ICMP and sustained
+performance require independent testing. See [MASQUE Carrier](MASQUE-CARRIER.md)
+for commands, trusted handoff, input schema and recovery semantics.

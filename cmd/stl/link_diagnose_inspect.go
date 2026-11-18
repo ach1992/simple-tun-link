@@ -107,6 +107,8 @@ func inspectLinkDiagnostic(ctx context.Context, link domain.Link, options runtim
 		return linkDiagnostic{report: m, mtu: m.MTU, quality: m.Quality,
 			rx: m.State.RXBytes, tx: m.State.TXBytes, counterUnit: "bytes",
 			handshakeUTC: m.State.LatestHandshakeUnix}, nil
+	case domain.BackendMASQUE:
+		return inspectMASQUEQuality(ctx, link, options)
 	case domain.BackendWireGuardWSS:
 		return inspectWSSQuality(ctx, link, options)
 	case domain.BackendWireGuardQUIC:

@@ -105,6 +105,9 @@ func TestMASQUECreatorRejectsUnsupportedInputWithoutHostEffects(t *testing.T) {
 		func(r *masqueCreateRequestV1) { r.Addresses.Local = netip.MustParsePrefix("10.251.95.2/24") },
 		func(r *masqueCreateRequestV1) { r.Underlay.Peer = netip.MustParseAddr("127.0.0.1") },
 		func(r *masqueCreateRequestV1) { r.SchemaVersion = 2 },
+		func(r *masqueCreateRequestV1) {
+			r.Underlay.Local, r.Underlay.Peer = netip.MustParseAddr("10.251.95.2"), netip.MustParseAddr("10.251.95.1")
+		},
 	} {
 		v := request
 		mutation(&v)

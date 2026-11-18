@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/ach1992/simple-tun-link/internal/app"
+	masquebackend "github.com/ach1992/simple-tun-link/internal/backend/masque"
 	"github.com/ach1992/simple-tun-link/internal/carrier/masque"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/masquehost"
@@ -60,7 +61,7 @@ func (r masqueCreateRequestV1) makePair(id domain.LinkID) (domain.Link, domain.L
 	// Protected immutable fingerprints are filled after material issuance.
 	sender.MASQUE.MaterialSHA256 = string(bytes.Repeat([]byte{'0'}, 64))
 	receiver.MASQUE.MaterialSHA256 = sender.MASQUE.MaterialSHA256
-	if sender.Validate() != nil || receiver.Validate() != nil {
+	if masquebackend.ValidateTopology(sender) != nil || masquebackend.ValidateTopology(receiver) != nil {
 		return domain.Link{}, domain.Link{}, fmt.Errorf("invalid MASQUE physical/private endpoint or TLS configuration")
 	}
 	return sender, receiver, nil
@@ -84,8 +85,8 @@ func (o *masqueOfferV1) Clear() {
 }
 func (o masqueOfferV1) Validate(root string) error {
 	if o.SchemaVersion != 1 || o.Sender.Backend != domain.BackendMASQUE ||
-		o.Receiver.Backend != domain.BackendMASQUE || o.Sender.Validate() != nil ||
-		o.Receiver.Validate() != nil || o.Sender.ID != o.Receiver.ID ||
+		o.Receiver.Backend != domain.BackendMASQUE || masquebackend.ValidateTopology(o.Sender) != nil ||
+		masquebackend.ValidateTopology(o.Receiver) != nil || o.Sender.ID != o.Receiver.ID ||
 		o.Sender.MASQUE.Role == o.Receiver.MASQUE.Role ||
 		o.Sender.MASQUE.TCPPort != o.Receiver.MASQUE.TCPPort ||
 		o.Sender.MASQUE.TLSServerName != o.Receiver.MASQUE.TLSServerName ||
@@ -160,7 +161,8 @@ func masqueCommandResult(op string, result app.Result, jsonOutput bool, out, err
 func masqueRuntime(options *runtimeOptions) (*app.Engine, *runtimeOptions, error) {
 	var err error
 	if options == nil {
-		options, err = productionRuntimeOptions()
+		// An unavailable unrelated optional backend must not block MASQUE.
+		options, err = assembleRuntimeOptionsForBackend(state.DefaultRoot, domain.BackendMASQUE)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -249,6 +251,12 @@ func createMASQUE(in io.Reader, output string, jsonOutput bool, out, errOut io.W
 	sender, receiver, err := request.makePair(id)
 	if err != nil {
 		return masqueCommandError(op, jsonOutput, id, stlerr.CodeInvalid, "invalid sender/receiver topology", out, errOut)
+	}
+	// Reject an unassigned local physical source before issuing either
+	// endpoint private key or publishing a sensitive receiver handoff.
+	if err := masquehost.VerifyLocalUnderlay(sender.Underlay.Local); err != nil {
+		return masqueCommandError(op, jsonOutput, id, stlerr.CodePlan,
+			"this host does not uniquely own the requested MASQUE physical source", out, errOut)
 	}
 	validity := request.CertificateValidityDays
 	if validity == 0 {
@@ -350,9 +358,17 @@ func importOrResumeMASQUE(op string, in io.Reader, confirmation string, jsonOutp
 	defer cancel()
 	var result app.Result
 	if op == "import-masque" {
+		// Even a valid private handoff cannot authorize provisioning on an
+		// unrelated machine. Recheck under the canonical Engine Link lock.
+		admission := func(ctx context.Context, link domain.Link) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return masquehost.VerifyLocalUnderlay(link.Underlay.Local)
+		}
 		result, err = engine.EnsureWithMASQUEProvision(ctx, offer.Receiver, func() error {
 			return masquehost.StageFiles(runtime.stateRoot, offer.Receiver, offer.ReceiverMaterial)
-		}, nil)
+		}, admission)
 	} else {
 		result, err = engine.Ensure(ctx, offer.Sender)
 	}
