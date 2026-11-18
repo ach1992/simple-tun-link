@@ -181,6 +181,26 @@ func TestMenuPresentationTermAndColorGates(t *testing.T) {
 	if seen := readMenuPTYUntil(t, master, "UNSET TERM"); !strings.Contains(seen, "\x1b[2J\x1b[H") {
 		t.Fatalf("unset TERM did not redraw a physical TTY: %q", seen)
 	}
+	// Prove unknown TERM is monochrome even when NO_COLOR is completely
+	// absent, rather than letting NO_COLOR mask an accidental SGR fallback.
+	if err := os.Unsetenv("NO_COLOR"); err != nil {
+		t.Fatal(err)
+	}
+	if !menuEscapeCapable(slave) || menuColorEnabled(slave) {
+		t.Fatal("unknown TERM must permit redraw but not enable color")
+	}
+	menuScreen(slave, "Unknown TERM, color unset")
+	if seen := readMenuPTYUntil(t, master, "UNKNOWN TERM, COLOR UNSET"); !strings.Contains(seen, "\x1b[2J\x1b[H") || strings.Count(seen, "\x1b[") != 2 {
+		t.Fatalf("unknown TERM emitted non-redraw ANSI or failed to clear: %q", seen)
+	}
+	// The explicit append-only preference must override a known color-
+	// capable interactive terminal without disabling readable menu text.
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("STL_NO_CLEAR", "1")
+	menuScreen(slave, "Append only")
+	if seen := readMenuPTYUntil(t, master, "APPEND ONLY"); strings.Contains(seen, "\x1b[2J\x1b[H") {
+		t.Fatalf("STL_NO_CLEAR=1 did not suppress screen redraw: %q", seen)
+	}
 }
 
 func TestMenuInteractiveClearsBeforeAndAfterResultAcknowledgement(t *testing.T) {

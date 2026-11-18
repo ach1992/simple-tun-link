@@ -51,18 +51,19 @@ Use the [latest official Stable release](https://github.com/ach1992/simple-tun-l
 Run this complete-download, syntax-checked installer on each server:
 
 ~~~bash
-/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-xterm}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl
+/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM-}" ${NO_COLOR+NO_COLOR=1} STL_NO_CLEAR="$([[ ${STL_NO_CLEAR:-} == 1 ]] && printf 1)" /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl
 ~~~
 
-The explicit `TERM="${TERM:-xterm}"` preserves the connected terminal type,
-using `xterm` when it was unset or empty. `${NO_COLOR+NO_COLOR=1}` passes the
-operator's color opt-out only when present, including an empty value.
-The non-root `sudo` menu handoff retains both settings without inheriting
-arbitrary shell startup configuration into privileged execution. `NO_COLOR`
-disables styling, **not** screen redraw. An explicit `TERM=dumb`,
-`STL_NO_CLEAR=1`, or noninteractive output suppresses ANSI screen controls.
-On a capable terminal the menu replaces the visible installer output while
-preserving scrollback for diagnostic access.
+The explicit `TERM="${TERM-}"` preserves the actual terminal type, including
+unset/empty values, without guessing `xterm`. A real TTY with missing `TERM`
+can still redraw its screen **without colored styling**. `${NO_COLOR+NO_COLOR=1}`
+passes the color opt-out only when present (including an empty value).
+`STL_NO_CLEAR=1` is normalized and preserved as an explicit append-only menu
+preference; other values do not enable it. The non-root `sudo` menu handoff
+restores only these menu settings after installation; the canonical privileged
+installer retains its separate clean environment. Explicit `TERM=dumb`,
+`STL_NO_CLEAR=1` or redirected output disables ANSI screen controls; otherwise
+the menu replaces the visible installer output while preserving scrollback.
 
 It fetches a bounded, complete HTTPS bootstrap into an owned temporary file before execution. The verified
 bootstrap and canonical installer then check the released artifact's checksums
@@ -225,7 +226,7 @@ with `--update` as in [MIRROR.md](docs/MIRROR.md#simple-copy-as-is-mirror-recomm
 For an existing installer-owned STL that reaches official GitHub, use:
 
 ~~~bash
-/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM:-xterm}" ${NO_COLOR+NO_COLOR=1} /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl update
+/usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM-}" ${NO_COLOR+NO_COLOR=1} STL_NO_CLEAR="$([[ ${STL_NO_CLEAR:-} == 1 ]] && printf 1)" /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl update
 ~~~
 
 State and executable rollback are **not** the same: newer managed features

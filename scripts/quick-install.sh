@@ -301,13 +301,17 @@ STL_ROOT_SNAPSHOT
     if (( EUID == 0 )); then
       exec /usr/local/bin/stl menu <&"$stl_menu_tty" >&"$stl_menu_tty" 2>&1
     else
-      # sudo may drop TERM and NO_COLOR from its reset environment. Restore
-      # the terminal type and only the explicit color preference for the menu,
-      # never pass inherited environment into the privileged installer.
+      # sudo env_reset can discard terminal preferences. Restore only the
+      # menu's TERM (including empty), explicit NO_COLOR, and the exact
+      # STL_NO_CLEAR=1 opt-out; never carry them into the canonical installer.
+      local -a menu_env=("TERM=${TERM-}")
       if [[ ${NO_COLOR+x} ]]; then
-        exec /usr/bin/sudo /usr/bin/env "TERM=${TERM:-xterm}" NO_COLOR=1 /usr/local/bin/stl menu <&"$stl_menu_tty" >&"$stl_menu_tty" 2>&1
+        menu_env+=(NO_COLOR=1)
       fi
-      exec /usr/bin/sudo /usr/bin/env "TERM=${TERM:-xterm}" /usr/local/bin/stl menu <&"$stl_menu_tty" >&"$stl_menu_tty" 2>&1
+      if [[ ${STL_NO_CLEAR-} == 1 ]]; then
+        menu_env+=(STL_NO_CLEAR=1)
+      fi
+      exec /usr/bin/sudo /usr/bin/env "${menu_env[@]}" /usr/local/bin/stl menu <&"$stl_menu_tty" >&"$stl_menu_tty" 2>&1
     fi
   fi
   echo "[INFO] No interactive terminal detected. Start it later with: /usr/bin/sudo /usr/local/bin/stl menu"
