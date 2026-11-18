@@ -83,7 +83,9 @@ def main() -> int:
         send("2\n")
         until("Choose type [1]:")
         send("wrong-type\n")
-        until("Choose 1 for GRE/IPIP/L2TPv3")
+        # Import type error guidance names the current plain-tunnel choice;
+        # the previous hard-coded backend list became stale when MASQUE was added.
+        until("Choose 1 for plain tunnels")
         until("Choose type [1]:")
         send("0\n")
         until("Press Enter to continue...")
