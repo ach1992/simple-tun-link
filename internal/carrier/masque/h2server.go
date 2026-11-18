@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/netip"
 	"strconv"
@@ -152,7 +153,12 @@ func (s *H2Server) Serve(ctx context.Context) error {
 			if err != nil || tlsConn.ConnectionState().NegotiatedProtocol != "h2" {
 				return
 			}
-			_ = s.serveH2(ctx, tlsConn)
+			if err := s.serveH2(ctx, tlsConn); err != nil && ctx.Err() == nil &&
+				!errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
+				// Keep the failure stage in the private service journal without
+				// exposing the peer credential or capsule payload.
+				log.Printf("MASQUE authenticated H2 session ended: %v", err)
+			}
 		}(conn)
 	}
 }

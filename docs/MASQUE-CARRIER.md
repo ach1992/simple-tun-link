@@ -34,7 +34,9 @@ These are session-liveness defaults, **not** instant connectivity proof,
 packet-loss measurement or a public recovery-time SLA. Legitimate private
 traffic and PING replies refresh observed H2 activity; a healthy quiet
 Link is not retired simply because its private IP is idle. The local Link
-remains committed if the physical peer is down.
+remains committed if the physical peer is down. The listener records
+unexpected authenticated H2 session failures (including idle timeouts) in its
+local systemd journal, without logging private keys or capsule payloads.
 
 **Local-ready ≠ authenticated remote connection ≠ measured private traffic.**
 `status` reports owner-verified systemd/TUN/route only. `diagnose` performs a
