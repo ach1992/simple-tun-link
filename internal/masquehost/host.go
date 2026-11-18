@@ -321,6 +321,16 @@ func (h *Host) Preflight(ctx context.Context, link domain.Link, removing bool) e
 	return ctx.Err()
 }
 
+// A newly opened TUN exists briefly before the agent can set its exact
+// owner alias and private /32 route. Only while the expected ORIGINAL owned
+// service is running may this state be re-observed; it is never accepted as
+// a completed Link or silently adopted. Any lasting unowned TUN still blocks
+// the operation and requires explicit owner-aware recovery.
+func provisionalMASQUEAgentTun(observed masquebackend.HostObservation) bool {
+	return observed.UnitExists && observed.UnitOwned && observed.UnitActive &&
+		observed.InterfaceExists && !observed.InterfaceOwned
+}
+
 func (h *Host) Start(ctx context.Context, link domain.Link) (core.Rollback, error) {
 	if err := h.Preflight(ctx, link, false); err != nil {
 		return nil, err
@@ -377,7 +387,8 @@ func (h *Host) Start(ctx context.Context, link domain.Link) (core.Rollback, erro
 		if now.RuntimeReady {
 			return undo, nil
 		}
-		if now.UnitExists && !now.UnitOwned || now.InterfaceExists && !now.InterfaceOwned {
+		if now.UnitExists && !now.UnitOwned ||
+			now.InterfaceExists && !now.InterfaceOwned && !provisionalMASQUEAgentTun(now) {
 			return nil, fmt.Errorf("MASQUE original host effect was replaced: %w", core.ErrIndeterminateHostEffect)
 		}
 		select {
@@ -385,6 +396,16 @@ func (h *Host) Start(ctx context.Context, link domain.Link) (core.Rollback, erro
 			return undo, ctx.Err()
 		case <-time.After(100 * time.Millisecond):
 		}
+	}
+	last, inspectErr := h.Inspect(ctx, link)
+	if inspectErr != nil {
+		return undo, inspectErr
+	}
+	if last.RuntimeReady {
+		return undo, nil
+	}
+	if last.UnitExists && !last.UnitOwned || last.InterfaceExists && !last.InterfaceOwned {
+		return nil, fmt.Errorf("MASQUE TUN owner never became attested after start: %w", core.ErrIndeterminateHostEffect)
 	}
 	return undo, errors.New("MASQUE service did not create an attested local TUN before deadline")
 }
