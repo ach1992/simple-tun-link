@@ -209,3 +209,74 @@ func TestMASQUEStatusExposesLocalOwnershipWithoutFabricatingPeerConnectivity(t *
 		}
 	}
 }
+
+// Exercise genuine MASQUE sender/recipient offer binding and shared
+// post-Remove private-offer retirement without privileged host mutation.
+func TestMASQUEOriginalMenuOfferRetiresAfterCommittedStateRemoval(t *testing.T) {
+	request := masqueInputTestRequest()
+	sender, receiver, err := request.makePair(request.LinkID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair, err := masque.GeneratePair(sender.ID, sender.MASQUE.TLSServerName, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pair.Clear()
+	root := filepath.Join(t.TempDir(), "state")
+	sender, own, err := masquehost.BuildMaterial(root, sender, pair)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer masquehost.ClearFiles(own)
+	receiver, files, err := masquehost.BuildMaterial(root, receiver, pair)
+	if err != nil {
+		t.Fatal(err)
+	}
+	offer := masqueOfferV1{SchemaVersion: 1, Sender: sender, Receiver: receiver, ReceiverMaterial: files}
+	defer offer.Clear()
+	encoded, err := json.Marshal(offer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := state.NewFileStore(root)
+	if err := store.Update(context.Background(), func(s *state.Snapshot) error {
+		s.Upsert(state.LinkRecord{Desired: sender, MASQUELastEffectNonce: strings.Repeat("c", 64)})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	opts := &runtimeOptions{stateRoot: root}
+	path, err := prepareProtectedMenuHandoff(opts, sender.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSensitiveHandoff(path, append(encoded, '\n')); err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := prepareProtectedHandoffRemoval(opts, sender.ID)
+	if err != nil || prepared == nil {
+		t.Fatalf("cannot bind genuine MASQUE original to committed sender: %v", err)
+	}
+	// A pre-commit cleanup attempt cannot delete an active Link's offer.
+	if err := prepared.retireAfterRemove(opts); err == nil {
+		t.Fatal("protected original was retired while its Link was committed")
+	}
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatal("pre-commit preparation lost secret", err)
+	}
+	if err := store.Update(context.Background(), func(s *state.Snapshot) error {
+		if !s.Delete(sender.ID) {
+			return errors.New("expected committed test Link")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepared.retireAfterRemove(opts); err != nil {
+		t.Fatalf("verified MASQUE original was not retired: %v", err)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("MASQUE original sensitive menu offer survived committed removal: %v", err)
+	}
+}
