@@ -71,6 +71,40 @@ func TestMASQUEOutboundPrivatePacketAdmission(t *testing.T) {
 	}
 }
 
+// Kernel-generated multicast is local-only noise on an IPv4 /32 TUN.
+// Filtering it must not weaken strict admission of remote CONNECT-IP data.
+func TestMASQUEKernelIPv4MulticastDoesNotDropH2Session(t *testing.T) {
+	own := netip.MustParseAddr("10.251.95.2")
+	peer := netip.MustParseAddr("10.251.95.1")
+	for _, destination := range []string{"224.0.0.22", "224.0.0.252"} {
+		t.Run(destination, func(t *testing.T) {
+			packet := testPacket()
+			copy(packet[16:20], netip.MustParseAddr(destination).AsSlice())
+			if allowed, err := validateLocalTunIPv4Packet(packet, own, peer); allowed || err != nil {
+				t.Fatalf("local multicast must be dropped without session error: %v", err)
+			}
+			if allowed, err := validateInboundIPv4Packet(packet, own, peer); allowed || err == nil {
+				t.Fatal("remote multicast must fail strict peer admission")
+			}
+			// Malformed multicast is not silently treated as legitimate control.
+			malformed := append([]byte(nil), packet...)
+			malformed[2], malformed[3] = 0, 19
+			if allowed, err := validateLocalTunIPv4Packet(malformed, own, peer); allowed || err == nil {
+				t.Fatal("malformed multicast was silently accepted")
+			}
+			// An unrelated local source is never grandfathered by multicast.
+			foreign := append([]byte(nil), packet...)
+			foreign[12] = 192
+			if allowed, err := validateLocalTunIPv4Packet(foreign, own, peer); allowed || err == nil {
+				t.Fatal("foreign-source multicast was silently accepted")
+			}
+		})
+	}
+	if allowed, err := validateLocalTunIPv4Packet(testPacket(), own, peer); !allowed || err != nil {
+		t.Fatalf("expected point-to-point private packet was rejected: %v", err)
+	}
+}
+
 func TestProtectedHelperFileNeverFollowsSymlink(t *testing.T) {
 	root := t.TempDir()
 	normal := filepath.Join(root, "agent.json")

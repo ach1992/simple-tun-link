@@ -413,7 +413,7 @@ func (s *H2Server) serveH2(parent context.Context, conn net.Conn) error {
 						cancel()
 						return
 					}
-					allow, err := validateOutboundIPv4Packet(packet, s.cfg.LocalIPv4, s.cfg.PeerIPv4)
+					allow, err := validateLocalTunIPv4Packet(packet, s.cfg.LocalIPv4, s.cfg.PeerIPv4)
 					if err != nil {
 						select {
 						case outErrors <- err:

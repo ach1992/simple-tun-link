@@ -366,7 +366,7 @@ func forwardTunToH2(ctx context.Context, fd, mtu int, own, peer netip.Addr, clie
 				return fmt.Errorf("MASQUE TUN read failed: %w", err)
 			}
 			p = p[:read]
-			accept, err := validateOutboundIPv4Packet(p, own, peer)
+			accept, err := validateLocalTunIPv4Packet(p, own, peer)
 			if err != nil {
 				return err
 			}
@@ -379,6 +379,26 @@ func forwardTunToH2(ctx context.Context, fd, mtu int, own, peer netip.Addr, clie
 			return err
 		}
 	}
+}
+
+// validateLocalTunIPv4Packet drops valid locally generated IPv4 multicast
+// control traffic (e.g. IGMP or LLMNR) before it reaches CONNECT-IP. Linux
+// emits these packets even on a /32 point-to-point TUN. They are neither peer
+// traffic nor a reason to tear down an otherwise authenticated session.
+// Malformed and wrong-source packets still use the strict admission below.
+// Only local TUN reads use this filter; received peer capsules never do.
+func validateLocalTunIPv4Packet(p []byte, own, peer netip.Addr) (bool, error) {
+	if len(p) >= 20 && p[0]>>4 == 4 && p[0]&0x0f >= 5 &&
+		int(p[0]&0x0f)*4 <= len(p) &&
+		int(binary.BigEndian.Uint16(p[2:4])) == len(p) {
+		var src, dst [4]byte
+		copy(src[:], p[12:16])
+		copy(dst[:], p[16:20])
+		if netip.AddrFrom4(src) == own && netip.AddrFrom4(dst).IsMulticast() {
+			return false, nil
+		}
+	}
+	return validateOutboundIPv4Packet(p, own, peer)
 }
 
 // validateOutboundIPv4Packet accepts only the Link's own exact IPv4 pair.
