@@ -40,7 +40,8 @@ type MTUManager interface {
 }
 
 type Engine struct {
-	quicRetirement QUICRetirementStore
+	quicRetirement   QUICRetirementStore
+	masqueRetirement MASQUERetirementStore
 	// Package-private material seams support ordering and crash tests only.
 	quicPreviewMaterial           func(string, quic.Plan, uint16, string, quic.CredentialBundle) (quic.HelperConfigIdentity, error)
 	quicStageGeneration           func(context.Context, string, quic.Plan, uint16, string, string, quic.CredentialBundle, quic.HelperConfigIdentity) (quic.HelperConfigIdentity, error)
@@ -254,6 +255,18 @@ func (e *Engine) EnsureWithWSSCredentialAdmitted(ctx context.Context, desired do
 	}, admission)
 }
 
+// EnsureWithMASQUEProvision stages immutable per-Link mTLS material while the
+// canonical maintenance and Link locks are held. It never bypasses the shared
+// Engine's backend/State/rollback/restore transaction.
+func (e *Engine) EnsureWithMASQUEProvision(ctx context.Context, desired domain.Link,
+	stage func() error, admission ReceiverAdmission) (Result, error) {
+	if desired.Backend != domain.BackendMASQUE || stage == nil {
+		return Result{}, stlerr.New(stlerr.CodeUnsupported, "masque_provision", string(desired.ID),
+			string(desired.Backend), "MASQUE requires exact protected mTLS provisioning")
+	}
+	return e.ensureWithProvision(ctx, desired, true, stage, admission)
+}
+
 func (e *Engine) ensureWithPolicy(ctx context.Context, desired domain.Link, rejectReconfiguration bool) (Result, error) {
 	return e.ensureWithProvision(ctx, desired, rejectReconfiguration, nil, nil)
 }
@@ -320,6 +333,10 @@ func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.
 	snapshot, err := e.store.Load(ctx)
 	if err != nil {
 		return Result{}, stlerr.Wrap(stlerr.CodeState, "remove", string(id), "", "cannot load local state", err)
+	}
+	if _, pending := snapshot.FindMASQUEOperation(id); pending {
+		return Result{}, stlerr.New(stlerr.CodeConflict, "remove", string(id), "masque",
+			"unresolved MASQUE pre-effect operation requires original-resource reconciliation")
 	}
 	if _, pending := snapshot.FindQUICCrashOperation(id); pending {
 		return Result{}, stlerr.New(stlerr.CodeConflict, "remove", string(id), "quic",
@@ -398,6 +415,15 @@ func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.
 			return result, stlerr.WithEvidence(stlerr.Wrap(stlerr.CodeState, "remove", string(id), string(prior.Backend), "QUIC Link removal committed; protected credential retirement requires exact receipt-bound retry", err), stlerr.OperationEvidence{Stage: "credential_retirement", HostMutation: "attempted", DesiredState: "committed", Rollback: "not_attempted"})
 		}
 	}
+	if prior.Backend == domain.BackendMASQUE {
+		if err := e.retireMASQUECredentialLocked(ctx, id); err != nil {
+			return result, stlerr.WithEvidence(
+				stlerr.Wrap(stlerr.CodeState, "remove", string(id), "masque",
+					"MASQUE Link removed but exact original mTLS material retirement remains pending", err),
+				stlerr.OperationEvidence{Stage: "credential_retirement", HostMutation: "attempted",
+					DesiredState: "committed", Rollback: "not_attempted"})
+		}
+	}
 	if prior.Backend == domain.BackendWireGuardWSS {
 		if err := e.retireWSSCredentialLocked(ctx, id); err != nil {
 			return result, stlerr.WithEvidence(
@@ -447,6 +473,14 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 			string(desired.Backend), "superseded WSS original remains protected; ordinary Ensure cannot reactivate it")
 		blocked.ReasonCode = "wss_original_superseded"
 		return Result{}, blocked
+	}
+	if _, pending := snapshot.FindMASQUEOperation(desired.ID); pending {
+		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID), "masque",
+			"unresolved MASQUE pre-effect operation blocks new host effects")
+	}
+	if _, reserved := snapshot.FindMASQUERemovalReceipt(desired.ID); reserved {
+		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID), "masque",
+			"retired MASQUE Link identity cannot be reused")
 	}
 	if _, pending := snapshot.FindQUICCrashOperation(desired.ID); pending {
 		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID), "quic",
@@ -671,6 +705,15 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 			"wireguard-wss", "superseded WSS original cannot be restored or re-ensured")
 		blocked.ReasonCode = "wss_original_superseded"
 		return Result{}, blocked
+	}
+	if _, pending := fresh.FindMASQUEOperation(link.ID); pending {
+		return Result{}, stlerr.New(stlerr.CodeConflict, string(request.Operation),
+			string(link.ID), string(link.Backend),
+			"unfinished MASQUE pre-effect journal: no host mutation permitted")
+	}
+	if _, reserved := fresh.FindMASQUERemovalReceipt(link.ID); reserved {
+		return Result{}, stlerr.New(stlerr.CodeConflict, string(request.Operation),
+			string(link.ID), string(link.Backend), "MASQUE removed Link remains reserved")
 	}
 	if _, pending := fresh.FindQUICCrashOperation(link.ID); pending {
 		return Result{}, stlerr.New(stlerr.CodeConflict, string(request.Operation),
@@ -1106,6 +1149,17 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 			}
 		}
 	}
+	var preparedMASQUE state.MASQUEOperation
+	if changed && link.Backend == domain.BackendMASQUE {
+		// The transient systemd service and its TUN may outlive an
+		// interrupted CLI process. Reserve exact desired owner resources
+		// DURABLY before entering Apply; never blindly adopt an orphan.
+		preparedMASQUE, err = e.prepareMASQUEOperation(ctx, request, prior, resources)
+		if err != nil {
+			return Result{}, contextualize(err, stlerr.CodeState,
+				string(request.Operation), link, "MASQUE durable pre-effect journal unavailable")
+		}
+	}
 	var undo backend.Rollback
 	if changed {
 		evidence.Stage = "apply"
@@ -1430,7 +1484,11 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 					return fmt.Errorf("QUIC original owner changed before commit")
 				}
 			}
-			snapshot.Upsert(state.LinkRecord{Desired: link, OwnedResources: resources, QUICGeneration: quicGeneration,
+			masqueNonce := prior.MASQUELastEffectNonce
+			if preparedMASQUE.Nonce != "" && request.Operation == backend.OperationEnsure {
+				masqueNonce = preparedMASQUE.Nonce
+			}
+			snapshot.Upsert(state.LinkRecord{Desired: link, OwnedResources: resources, MASQUELastEffectNonce: masqueNonce, QUICGeneration: quicGeneration,
 				WSSFiles: wssFiles, WSSOrigin: originalNonce,
 				WSSKernelBootID: birthBoot, WSSKernelBootSource: birthSource,
 				WSSColdBootRestore: restoreProof})
@@ -1480,6 +1538,13 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 				}
 				snapshot.RemovalReceipts = append(snapshot.RemovalReceipts, state.RemovalReceipt{LinkID: link.ID, Backend: domain.BackendWireGuardQUIC, LocalPublicKey: link.WireGuard.LocalPublicKey, QUICLink: link, QUICGeneration: prior.QUICGeneration, QUICOriginalTermination: quicOriginalTermination})
 			}
+			if link.Backend == domain.BackendMASQUE {
+				if _, exists := snapshot.FindMASQUERemovalReceipt(link.ID); exists {
+					return fmt.Errorf("MASQUE original material retirement receipt exists")
+				}
+				snapshot.MASQUERemovalReceipts = append(snapshot.MASQUERemovalReceipts,
+					state.MASQUERemovalReceipt{Link: link, MaterialSHA256: link.MASQUE.MaterialSHA256, Purpose: "removed"})
+			}
 			if link.Backend == domain.BackendIPsec {
 				if !ipsecRetirementAbsent && ipsecRetirementDigest == "" {
 					return fmt.Errorf("missing protected IPsec retirement identity")
@@ -1508,12 +1573,23 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 				return fmt.Errorf("WSS pre-effect journal cannot be consumed atomically")
 			}
 		}
+		if preparedMASQUE.Nonce != "" {
+			current, found := snapshot.FindMASQUEOperation(link.ID)
+			if !found || current.Intent != preparedMASQUE.Intent ||
+				current.Nonce != preparedMASQUE.Nonce ||
+				current.Operation != preparedMASQUE.Operation ||
+				current.HadCommittedLink != preparedMASQUE.HadCommittedLink ||
+				!slices.Equal(current.Resources, preparedMASQUE.Resources) ||
+				!snapshot.DeleteMASQUEOperation(link.ID) {
+				return fmt.Errorf("MASQUE original pre-effect journal changed before State commit")
+			}
+		}
 		if err := consumeManagedQUIC(snapshot, preparedQUIC); err != nil {
 			return err
 		}
 		// Pending pre-effect journals still need the host restore entry point
 		// even after the last ordinary Link is durably removed.
-		remaining = len(snapshot.Links) + len(snapshot.QUICCrashOperations) + len(snapshot.WSSCrashOperations)
+		remaining = len(snapshot.Links) + len(snapshot.QUICCrashOperations) + len(snapshot.WSSCrashOperations) + len(snapshot.MASQUEOperations)
 		return nil
 	})
 	if commitErr != nil {
@@ -1709,6 +1785,23 @@ func rejectResourceConflicts(snapshot state.Snapshot, id domain.LinkID, wanted [
 	// An interrupted WSS transaction still reserves ALL planned addresses,
 	// listeners, interface identities and host effects. Otherwise a
 	// different Link could reuse those resources before reconciliation.
+	for _, pending := range snapshot.MASQUEOperations {
+		if pending.Intent.ID == id {
+			continue
+		}
+		for _, wantedClaim := range wanted {
+			for _, reserved := range pending.Resources {
+				conflict, err := domain.ResourceClaimsConflict(wantedClaim, reserved)
+				if err != nil {
+					return fmt.Errorf("cannot compare MASQUE pre-effect reservations: %w", err)
+				}
+				if conflict {
+					return stlerr.New(stlerr.CodeConflict, "validate_resources", string(id), "",
+						"resource reserved by unresolved MASQUE operation")
+				}
+			}
+		}
+	}
 	for _, pending := range snapshot.WSSCrashOperations {
 		if pending.Intent.ID == id {
 			continue

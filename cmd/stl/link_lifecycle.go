@@ -33,6 +33,7 @@ const (
 	desiredWSSSchemaVersion             = 3
 	desiredQUICSchemaVersion            = 4
 	desiredQUICObfuscationSchemaVersion = 5
+	desiredMASQUESchemaVersion          = 6
 	maxDesiredLinkBytes                 = 16 * 1024
 	lifecycleTimeLimit                  = 5 * time.Minute
 	maxLinkJSONNesting                  = 12
@@ -550,6 +551,30 @@ func (d desiredLinkV5) link() (domain.Link, error) {
 	return link, err
 }
 
+// Schema v6 is separate from the frozen native/WG/WSS/QUIC contracts.
+// Only explicit MASQUE typed public parameters are accepted here.
+type desiredLinkRequestV6 struct {
+	SchemaVersion int           `json:"schema_version"`
+	Link          desiredLinkV6 `json:"link"`
+}
+type desiredLinkV6 struct {
+	desiredLinkV2
+	MASQUE desiredMASQUEOptionsV1 `json:"masque"`
+}
+type desiredMASQUEOptionsV1 struct {
+	Role           string `json:"role"`
+	TCPPort        uint16 `json:"tcp_port"`
+	TLSServerName  string `json:"tls_server_name"`
+	MaterialSHA256 string `json:"material_sha256"`
+}
+
+func (d desiredLinkV6) link() domain.Link {
+	result := d.desiredLinkV2.link()
+	result.MASQUE = domain.MASQUEOptions{Role: d.MASQUE.Role, TCPPort: d.MASQUE.TCPPort,
+		TLSServerName: d.MASQUE.TLSServerName, MaterialSHA256: d.MASQUE.MaterialSHA256}
+	return result
+}
+
 // Input schema v3 adds ONLY the authenticated WireGuard-over-WSS public
 // settings. Frozen v1/v2 requests never acquire new mutation capabilities.
 type desiredLinkRequestV3 struct {
@@ -704,6 +729,16 @@ func decodeDesiredLink(reader io.Reader) (domain.Link, error) {
 		if link.Backend != domain.BackendWireGuardQUIC {
 			return domain.Link{}, stlerr.New(stlerr.CodeUnsupported, "decode_link", "", "",
 				"desired Link v5 is reserved for wireguard-quic")
+		}
+	case desiredMASQUESchemaVersion:
+		var request desiredLinkRequestV6
+		if err := decoder.Decode(&request); err != nil {
+			return domain.Link{}, fmt.Errorf("invalid desired MASQUE Link v6 request")
+		}
+		link = request.Link.link()
+		if link.Backend != domain.BackendMASQUE {
+			return domain.Link{}, stlerr.New(stlerr.CodeUnsupported, "decode_link", "", "",
+				"desired Link v6 is reserved for masque")
 		}
 	default:
 		return domain.Link{}, stlerr.New(stlerr.CodeUnsupported, "decode_link", "", "",

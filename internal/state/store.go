@@ -19,7 +19,8 @@ import (
 )
 
 const (
-	SchemaVersion                   = 6
+	SchemaVersion                   = 7
+	preMASQUESchemaVersion          = 6
 	preQUICObfuscationSchemaVersion = 5
 	preQUICSchemaVersion            = 4
 	preWSSSchemaVersion             = 3
@@ -41,11 +42,12 @@ func (e *PublicationError) Error() string {
 func (e *PublicationError) Unwrap() error { return e.Cause }
 
 type LinkRecord struct {
-	QUICGeneration QUICGeneration         `json:"quic_generation,omitzero"`
-	Desired        domain.Link            `json:"desired"`
-	OwnedResources []domain.ResourceClaim `json:"owned_resources,omitempty"`
-	WSSFiles       WSSFileIdentity        `json:"wss_file_digests,omitzero"`
-	WSSOrigin      string                 `json:"wss_original_object_nonce,omitempty"`
+	QUICGeneration        QUICGeneration         `json:"quic_generation,omitzero"`
+	MASQUELastEffectNonce string                 `json:"masque_last_effect_nonce,omitempty"`
+	Desired               domain.Link            `json:"desired"`
+	OwnedResources        []domain.ResourceClaim `json:"owned_resources,omitempty"`
+	WSSFiles              WSSFileIdentity        `json:"wss_file_digests,omitzero"`
+	WSSOrigin             string                 `json:"wss_original_object_nonce,omitempty"`
 	// Attested birth/current kernel generation of the original WSS object.
 	// Empty values in pre-provenance or untrusted environments are readable,
 	// but cannot authorize recreation or retirement from local absence.
@@ -75,6 +77,9 @@ type Snapshot struct {
 	WSSCrashOperations      []WSSCrashOperation      `json:"wss_crash_operations,omitempty"`
 	QUICCrashOperations     []QUICCrashOperation     `json:"quic_crash_operations,omitempty"`
 	QUICAbandonmentReceipts []QUICAbandonmentReceipt `json:"quic_abandonment_receipts,omitempty"`
+	MASQUEOperations        []MASQUEOperation        `json:"masque_operations,omitempty"`
+	MASQUERemovalReceipts   []MASQUERemovalReceipt   `json:"masque_removal_receipts,omitempty"`
+	MASQUERecoveryReceipts  []MASQUERecoveryReceipt  `json:"masque_recovery_receipts,omitempty"`
 }
 
 func EmptySnapshot() Snapshot {
@@ -147,6 +152,13 @@ func (s *Snapshot) normalize() {
 	sort.Slice(s.RemovalReceipts, func(i, j int) bool { return s.RemovalReceipts[i].LinkID < s.RemovalReceipts[j].LinkID })
 	sort.Slice(s.QUICAbandonmentReceipts, func(i, j int) bool {
 		return s.QUICAbandonmentReceipts[i].Operation.Plan.Local.LinkID < s.QUICAbandonmentReceipts[j].Operation.Plan.Local.LinkID
+	})
+	s.MASQUEOperations = canonicalMASQUEOperations(s.MASQUEOperations)
+	sort.Slice(s.MASQUERecoveryReceipts, func(i, j int) bool {
+		return s.MASQUERecoveryReceipts[i].LinkID < s.MASQUERecoveryReceipts[j].LinkID
+	})
+	sort.Slice(s.MASQUERemovalReceipts, func(i, j int) bool {
+		return s.MASQUERemovalReceipts[i].Link.ID < s.MASQUERemovalReceipts[j].Link.ID
 	})
 	for i := range s.WSSCrashOperations {
 		s.WSSCrashOperations[i].Resources = normalizeClaims(s.WSSCrashOperations[i].Resources)
@@ -256,11 +268,23 @@ func (s *FileStore) Update(ctx context.Context, mutate func(*Snapshot) error) er
 	for i, r := range snapshot.QUICAbandonmentReceipts {
 		originalQUICAbandonments[i] = cloneQUICAbandonment(r)
 	}
+	// MASQUE pre-effect reservations are immutable once published. Ordinary
+	// recovery cannot erase an ambiguous service/TUN effect or silently
+	// change its owner; only the exact durable Engine commit can consume it.
+	previousMASQUE := append([]MASQUEOperation(nil), snapshot.MASQUEOperations...)
+	for i := range previousMASQUE {
+		previousMASQUE[i].Resources = append([]domain.ResourceClaim(nil), previousMASQUE[i].Resources...)
+	}
+	previousRetirements := append([]MASQUERemovalReceipt(nil), snapshot.MASQUERemovalReceipts...)
+	previousMASQUERecoveries := append([]MASQUERecoveryReceipt(nil), snapshot.MASQUERecoveryReceipts...)
 	if err := mutate(&snapshot); err != nil {
 		return err
 	}
 	snapshot.normalize()
 	if err := validateSnapshot(snapshot); err != nil {
+		return err
+	}
+	if err := validateMASQUEStateTransition(previousMASQUE, previousRetirements, previousMASQUERecoveries, snapshot); err != nil {
 		return err
 	}
 	if err := validateQUICAbandonmentTransition(originalQUICAbandonments, originalQUIC, snapshot); err != nil {
@@ -334,6 +358,11 @@ func (s *FileStore) loadUnlocked() (Snapshot, error) {
 			return Snapshot{}, fmt.Errorf("decode state: multiple JSON values")
 		}
 		return Snapshot{}, fmt.Errorf("decode state trailing data: %w", err)
+	}
+	if snapshot.SchemaVersion <= preMASQUESchemaVersion {
+		if err := rejectLegacyMASQUEFields(raw); err != nil {
+			return Snapshot{}, err
+		}
 	}
 	if snapshot.SchemaVersion <= preQUICObfuscationSchemaVersion {
 		if err := rejectLegacyQUICObfuscationFields(raw); err != nil {
@@ -440,6 +469,9 @@ func containsMTUField(value any) bool {
 func migrateSnapshot(snapshot Snapshot) (Snapshot, error) {
 	switch snapshot.SchemaVersion {
 	case SchemaVersion:
+		return snapshot, nil
+	case preMASQUESchemaVersion:
+		snapshot.SchemaVersion = SchemaVersion
 		return snapshot, nil
 	case preQUICObfuscationSchemaVersion:
 		snapshot.SchemaVersion = SchemaVersion
@@ -575,6 +607,13 @@ func validateSnapshot(snapshot Snapshot) error {
 			record.WSSColdBootRestore != (WSSColdBootRestore{}) || record.WSSSupersededBy != "" {
 			return fmt.Errorf("native Link cannot carry WSS credential or original host-object identity")
 		}
+		if record.Desired.Backend == domain.BackendMASQUE {
+			if !validMASQUEDigest(record.MASQUELastEffectNonce) {
+				return fmt.Errorf("committed MASQUE Link lacks original effect provenance")
+			}
+		} else if record.MASQUELastEffectNonce != "" {
+			return fmt.Errorf("non-MASQUE Link cannot carry a MASQUE host-effect nonce")
+		}
 		if record.Desired.Backend == domain.BackendWireGuardQUIC {
 			if err := record.QUICGeneration.Validate(record.Desired); err != nil {
 				return err
@@ -588,6 +627,9 @@ func validateSnapshot(snapshot Snapshot) error {
 				return fmt.Errorf("invalid resource claim for %q: %w", record.Desired.ID, err)
 			}
 		}
+	}
+	if err := validateMASQUELifecycle(snapshot); err != nil {
+		return err
 	}
 	if err := validateWireGuardLifecycle(snapshot); err != nil {
 		return err

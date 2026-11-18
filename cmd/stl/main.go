@@ -19,12 +19,14 @@ import (
 	ipipbackend "github.com/ach1992/simple-tun-link/internal/backend/ipip"
 	ipsecbackend "github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	l2tpbackend "github.com/ach1992/simple-tun-link/internal/backend/l2tpv3"
+	masquebackend "github.com/ach1992/simple-tun-link/internal/backend/masque"
 	wgbackend "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/carrier/wss"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/maintenance"
 	"github.com/ach1992/simple-tun-link/internal/managedmtu"
+	"github.com/ach1992/simple-tun-link/internal/masquehost"
 	"github.com/ach1992/simple-tun-link/internal/quichelper"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
@@ -50,8 +52,9 @@ type runtimeOptions struct {
 	// canonical Engine's locked, generation-bound QUIC inspection.
 	quicObserver func(context.Context, domain.LinkID) (app.QUICInspection, error)
 	// Test-only helper diagnostic source; nil uses attributed native Host.Diagnose.
-	quicHelperObserver func(context.Context, domain.Link) (quichelper.HelperDiagnostics, error)
-	quicRetirementHost quicRetirementHost
+	quicHelperObserver   func(context.Context, domain.Link) (quichelper.HelperDiagnostics, error)
+	quicRetirementHost   quicRetirementHost
+	masqueRetirementHost app.MASQUERetirementStore
 	// Test-only assembly hook; production never receives a caller-selected Engine policy.
 	configureEngine func(*app.Engine)
 	// Test-only module observation seam. Production uses the real read-only
@@ -128,6 +131,8 @@ func runWithRuntimeInput(args []string, input io.Reader, stdout, stderr io.Write
 			return 2
 		}
 		return menuCommand(input, stdout, stderr, options)
+	case "masque-helper":
+		return masqueHelperCommand(args[1:], stdout, stderr)
 	case "version":
 		if len(args) == 2 && args[1] == "--json" {
 			payload := struct {
@@ -192,6 +197,16 @@ func runWithRuntimeInput(args []string, input io.Reader, stdout, stderr io.Write
 		}
 		if len(args) >= 2 && args[1] == "diagnose-quic" {
 			return linkQUICDiagnoseCommand(args[1:], stdout, stderr, options)
+		}
+		if len(args) >= 2 && args[1] == "retire-masque" {
+			return linkMASQUERetirementCommand(args[2:], stdout, stderr, options)
+		}
+		if len(args) >= 2 && args[1] == "reconcile-masque" {
+			return linkMASQUEReconcileCommand(args[2:], stdout, stderr, options)
+		}
+		if len(args) >= 2 && (args[1] == "create-masque" || args[1] == "preview-masque" ||
+			args[1] == "import-masque" || args[1] == "resume-masque") {
+			return linkMASQUECommand(args[1:], input, stdout, stderr, options)
 		}
 		if len(args) >= 2 && (args[1] == "create-quic" || args[1] == "preview-quic" ||
 			args[1] == "import-quic" || args[1] == "resume-quic") {
@@ -297,7 +312,8 @@ func assembleRuntimeBackendOptions(stateRoot string, selected domain.Backend) (*
 		switch selected {
 		case domain.BackendGRE, domain.BackendIPIP, domain.BackendL2TPv3,
 			domain.BackendWireGuard, domain.BackendWireGuardWSS,
-			domain.BackendWireGuardQUIC, domain.BackendIPsec:
+			domain.BackendWireGuardQUIC, domain.BackendIPsec,
+			domain.BackendMASQUE:
 		default:
 			return nil, fmt.Errorf("unknown saved backend cannot authorize removal")
 		}
@@ -376,6 +392,27 @@ func assembleRuntimeBackendOptions(stateRoot string, selected domain.Backend) (*
 			options.quicRetirementHost = quicHost
 			options.backends = append(options.backends, quicWG)
 		}
+	}
+
+	if wants(domain.BackendMASQUE) {
+		executable, err := os.Executable()
+		if err != nil {
+			return nil, fmt.Errorf("resolve MASQUE-owning STL executable: %w", err)
+		}
+		executable, err = canonicalSTLExecutable(executable)
+		if err != nil {
+			return nil, err
+		}
+		host, err := masquehost.New(options.stateRoot, executable)
+		if err != nil {
+			return nil, fmt.Errorf("initialize MASQUE host adapter: %w", err)
+		}
+		implementation, err := masquebackend.New(host)
+		if err != nil {
+			return nil, err
+		}
+		options.backends = append(options.backends, implementation)
+		options.masqueRetirementHost = host
 	}
 
 	// Runtime activation is read-only admission followed by registration.
@@ -462,6 +499,9 @@ func buildRuntimeEngine(options runtimeOptions) (*app.Engine, error) {
 		return nil, err
 	}
 	engine.SetMTUManager(options.mtuManager)
+	if options.masqueRetirementHost != nil {
+		engine.SetMASQUERetirementStore(options.masqueRetirementHost)
+	}
 	if _, hasWSS := registry.Get(domain.BackendWireGuardWSS); hasWSS {
 		keys, err := wgbackend.NewKeyStore(options.stateRoot)
 		if err != nil {
