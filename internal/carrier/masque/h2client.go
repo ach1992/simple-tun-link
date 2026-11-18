@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -37,6 +38,12 @@ type H2Config struct {
 	ConnectTimeout time.Duration
 }
 
+// An active CONNECT-IP Link can be perfectly quiet. Probes keep a healthy
+// session alive and read deadlines retire silent half-open TCP connections.
+// These are transport liveness bounds, not claims about private-IP reachability.
+const masqueH2ProbeInterval = 20 * time.Second
+const masqueH2PeerIdleLimit = 75 * time.Second
+
 // H2Client owns one authenticated HTTP/2 stream. Read and write are
 // independently driven, with explicit stream/connection flow control and
 // bounded capsule decoding, not an unbounded per-packet goroutine.
@@ -62,6 +69,8 @@ type H2Client struct {
 	responseOK        bool
 	assignedIPv4      netip.Addr
 	expectedIPv4      netip.Addr
+	probeInterval     time.Duration
+	peerIdleLimit     time.Duration
 }
 
 func validateH2Config(cfg H2Config) error {
@@ -87,6 +96,15 @@ func validateH2Config(cfg H2Config) error {
 // authenticates the request and refuses an unexpected address assignment.
 // It does not create an interface or change host-wide routing.
 func DialH2(ctx context.Context, cfg H2Config) (*H2Client, error) {
+	return dialH2WithLiveness(ctx, cfg, masqueH2ProbeInterval, masqueH2PeerIdleLimit)
+}
+
+// Non-public test seam: production always uses the conservative transport
+// defaults. Tests shorten time without changing the on-wire protocol.
+func dialH2WithLiveness(ctx context.Context, cfg H2Config, probeInterval, idleLimit time.Duration) (*H2Client, error) {
+	if probeInterval <= 0 || idleLimit <= 0 {
+		return nil, errors.New("MASQUE H2 liveness durations must be positive")
+	}
 	if err := validateH2Config(cfg); err != nil {
 		return nil, err
 	}
@@ -128,8 +146,9 @@ func DialH2(ctx context.Context, cfg H2Config) (*H2Client, error) {
 		packets:       make(chan []byte, 128),
 		peerFrameSize: 16384,
 		sendConnWin:   65535, sendStreamWin: 65535, peerInitialWindow: 65535,
-		flowUpdated:  make(chan struct{}),
-		expectedIPv4: cfg.ExpectedIPv4,
+		flowUpdated:   make(chan struct{}),
+		expectedIPv4:  cfg.ExpectedIPv4,
+		probeInterval: probeInterval, peerIdleLimit: idleLimit,
 	}
 	c.writeMu.Lock()
 	_, err = writer.WriteString(http2.ClientPreface)
@@ -210,12 +229,41 @@ func DialH2(ctx context.Context, cfg H2Config) (*H2Client, error) {
 	}
 	select {
 	case <-c.ready:
+		if err := c.connection.SetReadDeadline(time.Now().Add(c.peerIdleLimit)); err != nil {
+			c.Close()
+			return nil, fmt.Errorf("MASQUE H2 idle deadline unavailable: %w", err)
+		}
+		go c.probePeer()
 		return c, nil
 	case <-c.done:
 		return nil, c.failure()
 	case <-dialCtx.Done():
 		c.Close()
 		return nil, fmt.Errorf("MASQUE CONNECT-IP address assignment timed out: %w", dialCtx.Err())
+	}
+}
+
+// Probe the exact authenticated H2 connection, even when neither private
+// peer is sending IP packets. If responses stop, readLoop's deadline fails
+// this session and the existing dial-agent loop reconnects the same Link.
+func (c *H2Client) probePeer() {
+	ticker := time.NewTicker(c.probeInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.done:
+			return
+		case <-ticker.C:
+			var payload [8]byte
+			if _, err := rand.Read(payload[:]); err != nil {
+				c.fail(fmt.Errorf("MASQUE H2 ping payload unavailable: %w", err))
+				return
+			}
+			if err := c.sendControl(func(fr *http2.Framer) error { return fr.WritePing(false, payload) }); err != nil {
+				c.fail(fmt.Errorf("MASQUE H2 ping send failed: %w", err))
+				return
+			}
+		}
 	}
 }
 
@@ -276,6 +324,9 @@ func (c *H2Client) readLoop() {
 	var parser capsuleStream
 	for {
 		frame, err := c.framer.ReadFrame()
+		if err == nil && c.responseOK {
+			err = c.connection.SetReadDeadline(time.Now().Add(c.peerIdleLimit))
+		}
 		if err != nil {
 			c.fail(fmt.Errorf("MASQUE HTTP/2 receive failed: %w", err))
 			return

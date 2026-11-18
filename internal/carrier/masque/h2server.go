@@ -38,10 +38,11 @@ type H2ListenConfig struct {
 }
 
 type H2Server struct {
-	cfg      H2ListenConfig
-	pipe     PrivatePacketIO
-	activeMu sync.Mutex
-	active   bool
+	cfg           H2ListenConfig
+	pipe          PrivatePacketIO
+	activeMu      sync.Mutex
+	active        bool
+	peerIdleLimit time.Duration
 }
 
 func validateH2ListenConfig(c H2ListenConfig) error {
@@ -69,13 +70,20 @@ func validateH2ListenConfig(c H2ListenConfig) error {
 }
 
 func NewH2Server(cfg H2ListenConfig, pipe PrivatePacketIO) (*H2Server, error) {
+	return newH2ServerWithLiveness(cfg, pipe, masqueH2PeerIdleLimit)
+}
+
+func newH2ServerWithLiveness(cfg H2ListenConfig, pipe PrivatePacketIO, idleLimit time.Duration) (*H2Server, error) {
+	if idleLimit <= 0 {
+		return nil, errors.New("MASQUE H2 peer idle limit must be positive")
+	}
 	if err := validateH2ListenConfig(cfg); err != nil {
 		return nil, err
 	}
 	if pipe == nil {
 		return nil, errors.New("MASQUE server private packet interface unavailable")
 	}
-	return &H2Server{cfg: cfg, pipe: pipe}, nil
+	return &H2Server{cfg: cfg, pipe: pipe, peerIdleLimit: idleLimit}, nil
 }
 
 func (s *H2Server) TLSConfig() *tls.Config {
@@ -343,6 +351,9 @@ func (s *H2Server) serveH2(parent context.Context, conn net.Conn) error {
 	outErrors := make(chan error, 1)
 	for {
 		frame, err := h.fr.ReadFrame()
+		if err == nil && accepted {
+			err = conn.SetReadDeadline(time.Now().Add(s.peerIdleLimit))
+		}
 		if err != nil {
 			return fmt.Errorf("MASQUE client HTTP/2 receive ended: %w", err)
 		}
@@ -384,7 +395,11 @@ func (s *H2Server) serveH2(parent context.Context, conn net.Conn) error {
 			if err := h.reply("200"); err != nil {
 				return err
 			}
-			_ = conn.SetReadDeadline(time.Time{})
+			// Keep a bounded authenticated stream lifetime if TCP silently
+			// blackholes. The dialer sends H2 PINGs even with no IP data.
+			if err := conn.SetReadDeadline(time.Now().Add(s.peerIdleLimit)); err != nil {
+				return fmt.Errorf("MASQUE listener idle deadline unavailable: %w", err)
+			}
 			accepted = true
 			// Assignment MUST precede private packet DATA, but it may require
 			// a client WINDOW_UPDATE (including an initially zero stream window).

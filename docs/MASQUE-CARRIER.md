@@ -24,6 +24,18 @@ CDN, firewall evasion or reverse tunnel is provided. The dialer reconnects
 with bounded backoff and verifies the listener's TLS CA/name. The listener
 requires the original matching client certificate identity.
 
+A live authenticated CONNECT-IP stream sends HTTP/2 PING probes even when
+neither side has private IP packets to transmit. Currently the dialer probes
+every 20 seconds, and both endpoints close a session that stops delivering
+HTTP/2 frames for 75 seconds. A silently interrupted TCP path therefore
+releases the listener's single-client slot and triggers the **existing**
+dialer reconnect loop using the same Link, credentials and owned TUN/route.
+These are session-liveness defaults, **not** instant connectivity proof,
+packet-loss measurement or a public recovery-time SLA. Legitimate private
+traffic and PING replies refresh observed H2 activity; a healthy quiet
+Link is not retired simply because its private IP is idle. The local Link
+remains committed if the physical peer is down.
+
 **Local-ready ≠ authenticated remote connection ≠ measured private traffic.**
 `status` reports owner-verified systemd/TUN/route only. `diagnose` performs a
 bounded five-echo private IPv4 check; it does not certify sustained throughput,
