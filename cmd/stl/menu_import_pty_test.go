@@ -17,6 +17,12 @@ import (
 
 func openMenuPTY(t *testing.T) (*os.File, *os.File) {
 	t.Helper()
+	// Existing PTY operator fixtures assert literal, unstyled prompts. Avoid
+	// inheriting an empty TERM from CI; a test of the unset-TERM behavior must
+	// explicitly opt back in after opening its PTY.
+	if strings.TrimSpace(os.Getenv("TERM")) == "" {
+		t.Setenv("TERM", "dumb")
+	}
 	mfd, err := unix.Open("/dev/ptmx", unix.O_RDWR|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
 	if errors.Is(err, unix.ENOENT) || errors.Is(err, unix.ENODEV) {
 		t.Skip("no disposable PTY device")

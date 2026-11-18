@@ -31,15 +31,21 @@ func menuTerminal(out io.Writer) (*os.File, bool) {
 
 func menuEscapeCapable(out io.Writer) bool {
 	_, tty := menuTerminal(out)
-	term := strings.ToLower(os.Getenv("TERM"))
+	term := strings.ToLower(strings.TrimSpace(os.Getenv("TERM")))
 	// Color preferences are not terminal capabilities: even in monochrome
 	// mode an interactive terminal should replace the previous menu frame.
-	return tty && term != "" && term != "dumb"
+	// Missing TERM is common after sudo/sanitized launchers. A verified TTY
+	// may use basic ANSI screen controls; explicit TERM=dumb opts out.
+	return tty && term != "dumb"
 }
 
 func menuColorEnabled(out io.Writer) bool {
 	_, disabled := os.LookupEnv("NO_COLOR")
-	return menuEscapeCapable(out) && !disabled && os.Getenv("CLICOLOR") != "0"
+	// An attached TTY can safely redraw when TERM is unspecified, but that
+	// does not establish support for colored SGR styling. Keep plaintext
+	// prompts stable until the terminal type is explicitly known.
+	return menuEscapeCapable(out) && strings.TrimSpace(os.Getenv("TERM")) != "" &&
+		!disabled && os.Getenv("CLICOLOR") != "0"
 }
 
 func menuPaint(out io.Writer, role, value string) string {
