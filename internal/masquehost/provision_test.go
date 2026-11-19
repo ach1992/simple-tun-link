@@ -94,6 +94,11 @@ func TestMASQUEPublicTLSMaterialIsModeAndLinkBound(t *testing.T) {
 	}
 	defer issued.Clear()
 	root := t.TempDir()
+	bad := issued
+	bad.BearerToken = []byte("noncanonical")
+	if _, files, err := BuildMaterial(root, listener, bad); err == nil || files != nil {
+		t.Fatal("invalid public bearer must fail before creating private material copies")
+	}
 	listener, listenerFiles, err := BuildMaterial(root, listener, issued)
 	if err != nil {
 		t.Fatal(err)

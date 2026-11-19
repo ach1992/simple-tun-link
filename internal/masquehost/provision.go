@@ -35,6 +35,11 @@ func BuildMaterial(root string, link domain.Link, pair masque.PairMaterial) (dom
 	if !filepath.IsAbs(root) || filepath.Clean(root) != root || root == "/" {
 		return link, nil, errors.New("MASQUE material target root must be canonical")
 	}
+	// Validate the chosen request-authorization material before copying
+	// any private TLS bytes into a new buffer on error paths.
+	if link.MASQUE.PublicTLS && !masque.ValidBearerToken(pair.BearerToken) {
+		return link, nil, errors.New("MASQUE request bearer material invalid")
+	}
 	dir := filepath.Join(root, materialDir, string(link.ID))
 	name, err := masque.AgentInterfaceName(link.ID)
 	if err != nil {
@@ -60,9 +65,6 @@ func BuildMaterial(root string, link domain.Link, pair masque.PairMaterial) (dom
 		files["server-cert.pem"] = bytes.Clone(pair.ServerCertificate)
 		files["server-key.pem"] = bytes.Clone(pair.ServerPrivateKey)
 		if link.MASQUE.PublicTLS {
-			if !masque.ValidBearerToken(pair.BearerToken) {
-				return link, nil, errors.New("MASQUE request bearer material invalid")
-			}
 			cfg.PublicTLS = true
 			cfg.PeerSPKIBase64 = ""
 			cfg.BearerFile = filepath.Join(dir, "bearer-token")
@@ -85,19 +87,15 @@ func BuildMaterial(root string, link domain.Link, pair masque.PairMaterial) (dom
 			ClientKeyFile:  filepath.Join(dir, "client-key.pem"),
 		}
 		files["server-ca.pem"] = bytes.Clone(pair.ServerCA)
-		files["client-cert.pem"] = bytes.Clone(pair.ClientCertificate)
-		files["client-key.pem"] = bytes.Clone(pair.ClientPrivateKey)
 		if link.MASQUE.PublicTLS {
-			if !masque.ValidBearerToken(pair.BearerToken) {
-				return link, nil, errors.New("MASQUE request bearer material invalid")
-			}
 			cfg.PublicTLS = true
 			cfg.ClientCertFile = ""
 			cfg.ClientKeyFile = ""
 			cfg.BearerFile = filepath.Join(dir, "bearer-token")
-			delete(files, "client-cert.pem")
-			delete(files, "client-key.pem")
 			files["bearer-token"] = bytes.Clone(pair.BearerToken)
+		} else {
+			files["client-cert.pem"] = bytes.Clone(pair.ClientCertificate)
+			files["client-key.pem"] = bytes.Clone(pair.ClientPrivateKey)
 		}
 		raw, err := json.Marshal(cfg)
 		if err != nil {
