@@ -17,6 +17,26 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/state"
 )
 
+// A public-TLS H2 listener accepts ordinary unauthenticated GET/HEAD and
+// authenticates CONNECT-IP on the request. The default still requires mTLS.
+func askMASQUEPublicTLS(p createPrompts) (bool, error) {
+	menuSection(p.out, "MASQUE TLS authentication")
+	menuOption(p.out, "1", "Private mTLS", "client certificate verified before HTTP/2 (default)")
+	menuOption(p.out, "2", "Public TLS", "no TLS client certificate; CONNECT-IP requires a protected per-Link bearer; GET/HEAD serve a genuine endpoint")
+	answer, err := p.ask("MASQUE TLS mode [1]: ")
+	if err != nil {
+		return false, err
+	}
+	switch answer {
+	case "", "1":
+		return false, nil
+	case "2":
+		return true, nil
+	default:
+		return false, errors.New("choose MASQUE TLS mode 1 or 2")
+	}
+}
+
 // MASQUE accepts either IPv4 or IPv6 physical underlays. The ordinary guided
 // GRE/WG address chooser is IPv4-only; never silently coerce IPv6 to IPv4.
 func askMASQUEUnderlay(p createPrompts, local bool, peer netip.Addr) (netip.Addr, error) {
@@ -123,6 +143,10 @@ func menuCreateMASQUE(input io.Reader, reader *bufio.Reader, out, errOut io.Writ
 	if tlsName == "" {
 		tlsName = listener.String()
 	}
+	publicTLS, err := askMASQUEPublicTLS(p)
+	if err != nil {
+		return p.failed(err)
+	}
 	choose := domain.NewLinkID
 	if opts != nil && opts.createLinkID != nil {
 		choose = opts.createLinkID
@@ -135,7 +159,7 @@ func menuCreateMASQUE(input io.Reader, reader *bufio.Reader, out, errOut io.Writ
 	req := masqueCreateRequestV1{SchemaVersion: 1, LinkID: id,
 		Underlay:  desiredUnderlayV1{Local: own, Peer: peer},
 		Addresses: desiredLinkAddressesV1{Local: addresses.Local, Peer: addresses.Peer},
-		Role:      role, TCPPort: tcp, TLSServerName: tlsName}
+		Role:      role, TCPPort: tcp, TLSServerName: tlsName, PublicTLS: publicTLS}
 	if _, _, err := req.makePair(id); err != nil {
 		menuNotice(out, "WARNING", "MASQUE physical/private address or TLS name invalid; no credential or Link created.")
 		return 2
@@ -148,12 +172,17 @@ func menuCreateMASQUE(input io.Reader, reader *bufio.Reader, out, errOut io.Writ
 		return 1
 	}
 	menuScreen(out, "Review / confirm MASQUE CONNECT-IP")
-	menuField(out, "Backend", "MASQUE / RFC 9484 CONNECT-IP over HTTP/2 (mTLS)")
+	menuField(out, "Backend", "MASQUE / RFC 9484 CONNECT-IP over HTTP/2")
+	if publicTLS {
+		menuField(out, "TLS authentication", "Public TLS; protected per-Link HTTP/2 CONNECT-IP bearer")
+	} else {
+		menuField(out, "TLS authentication", "Private mTLS (default)")
+	}
 	showCarrierDirectionReview(out, own, peer, role, source, "TCP", tcp)
 	menuField(out, "TLS server name", safeMenuText(tlsName))
 	menuField(out, "Private IPv4 /32", addresses.Local.Addr().String()+" <-> "+addresses.Peer.Addr().String())
 	menuField(out, "Initial TUN MTU", strconv.Itoa(1280)+" bytes (peer PMTU not measured)")
-	menuNotice(out, "WARNING", "Creates a private mTLS credential generation, protected receiver handoff, owned transient systemd service and private TUN/route. No default route is changed.")
+	menuNotice(out, "WARNING", "Creates protected Link-specific TLS/authentication credentials, a private receiver handoff, owned systemd service and private TUN/route. No default route is changed.")
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
 		return 2
 	}

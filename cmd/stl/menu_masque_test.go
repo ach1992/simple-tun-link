@@ -283,3 +283,24 @@ func TestMASQUEOriginalMenuOfferRetiresAfterCommittedStateRemoval(t *testing.T) 
 		t.Fatalf("MASQUE original sensitive menu offer survived committed removal: %v", err)
 	}
 }
+
+func TestMASQUEGuidedTLSModeDefaultAndPublicChoice(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  bool
+	}{
+		{input: "\n", want: false},
+		{input: "1\n", want: false},
+		{input: "2\n", want: true},
+	} {
+		var out bytes.Buffer
+		p := createPrompts{reader: bufio.NewReader(strings.NewReader(tc.input)), out: &out}
+		got, err := askMASQUEPublicTLS(p)
+		if err != nil || got != tc.want {
+			t.Fatalf("choice %q: public TLS=%v err=%v", tc.input, got, err)
+		}
+		if !strings.Contains(out.String(), "Private mTLS") || !strings.Contains(out.String(), "Public TLS") {
+			t.Fatal("guided menu did not explain both modes")
+		}
+	}
+}

@@ -23,7 +23,24 @@ IPv6). The **private overlay stays IPv4 `/32`** even on IPv6 physical hosts.
 The listener must accept inbound connections; no automatically assumed NAT,
 CDN, firewall evasion or reverse tunnel is provided. The dialer reconnects
 with bounded backoff and verifies the listener's TLS CA/name. The listener
-requires the original matching client certificate identity.
+requires the original matching client certificate identity **by default**.
+An explicit opt-in `"public_tls": true` mode uses ordinary TLS without
+a client certificate, but requires a fresh per-Link 256-bit
+`Authorization: Bearer` value on the HTTP/2 extended CONNECT-IP
+request **before** the private TUN can be accessed. The dialer still
+verifies the listener's CA and certificate SAN. This request bearer remains
+only in protected original per-Link material and the sensitive receiver
+handoff, never in public State, Preview, Status, diagnostics or process argv.
+Original mTLS Links and their protected file inventory remain unchanged;
+switching authentication modes requires an explicit Remove and fresh
+pairing, not an in-place Ensure.
+
+An opt-in public-TLS listener offers a real first-party HTTP/2
+`GET /` and `HEAD /` response with HTTP 404 on unknown paths,
+on the **same TLS port**. These ordinary unauthenticated requests cannot
+start CONNECT-IP or forward private packets. This is not a third-party
+website impersonation, CDN proxy, public browser-trusted certificate or
+proof of browser TLS fingerprint equivalence.
 
 A live authenticated CONNECT-IP stream sends HTTP/2 PING probes even when
 neither side has private IP packets to transmit. Currently the dialer probes
@@ -77,7 +94,8 @@ stl link create-masque --stdin --output /root/stl-masque-receiver.json --json <<
   "addresses": {"local": "10.252.98.2/32", "peer": "10.252.98.1/32"},
   "role": "dial",
   "tcp_port": 443,
-  "tls_server_name": "2001:db8:2::1"
+  "tls_server_name": "2001:db8:2::1",
+  "public_tls": false
 }
 JSON
 ```
@@ -130,7 +148,12 @@ the original for recovery. Neither command removes anything on the
 **other** server automatically.
 
 The interactive menu offers **Create tunnel → MASQUE / CONNECT-IP** and
-**Import setup link → MASQUE / CONNECT-IP**. On Import, enter the exact
+**Import setup link → MASQUE / CONNECT-IP**. Guided Create offers
+**1. Private mTLS (default)** and **2. Public TLS (per-Link request bearer)**,
+includes the choice in the pre-YES review and preserves it through the
+receiver's private Preview and Import review. The creator JSON field
+`"public_tls": true` selects opt-in public mode; omission uses
+mTLS. Neither mode needs a new external helper or a second Engine. On Import, enter the exact
 absolute path to the original owner-private `0600` single-line offer file
 (or paste its JSON). The existing protected file reader rejects symlinks,
 foreign ownership, altered/partial content and unsafe permissions without

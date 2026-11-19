@@ -157,7 +157,8 @@ func validAuthorizationToken(token string) bool {
 }
 
 // restrictedServerPolicy requires BOTH an exact requested Link path and a
-// strong per-Link bearer token, plus mTLS enforced by wstunnel itself.
+// strong per-Link bearer token. The default private mode additionally
+// requires an mTLS client certificate; PublicTLS authenticates at Upgrade.
 // PathPrefix is NOT proof of CN identity in wstunnel v11 when CN extraction
 // fails. No reverse tunnel, TCP, SOCKS, foreign port or foreign host allowed.
 // This output contains the bearer secret; treat as private credential bytes.

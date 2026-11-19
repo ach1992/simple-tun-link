@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,10 +34,13 @@ type H2ListenConfig struct {
 	ListenAddress string
 	TLSServerName string
 	ServerCert    tls.Certificate
-	// Pin the exact authorized mTLS client identity to this Link.
-	PeerSPKI  []byte
-	LocalIPv4 netip.Addr
-	PeerIPv4  netip.Addr
+	// Private default: exact mTLS peer SPKI. Public TLS: protected per-Link
+	// bearer checked on the CONNECT-IP request, never on ordinary HTTP GET.
+	PeerSPKI    []byte
+	PublicTLS   bool
+	BearerToken []byte
+	LocalIPv4   netip.Addr
+	PeerIPv4    netip.Addr
 }
 
 type H2Server struct {
@@ -46,15 +51,35 @@ type H2Server struct {
 	peerIdleLimit time.Duration
 }
 
+// A 256-bit URL-safe secret is generated once for each public-TLS Link and
+// stored only in the protected original material on both endpoints.
+func ValidBearerToken(value []byte) bool {
+	if len(value) != base64.RawURLEncoding.EncodedLen(32) {
+		return false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(string(value))
+	return err == nil && len(raw) == 32 &&
+		base64.RawURLEncoding.EncodeToString(raw) == string(value)
+}
+
 func validateH2ListenConfig(c H2ListenConfig) error {
-	if c.TLSServerName == "" || c.ListenAddress == "" || len(c.PeerSPKI) == 0 ||
+	if c.TLSServerName == "" || c.ListenAddress == "" ||
 		!c.LocalIPv4.Is4() || !c.PeerIPv4.Is4() ||
 		c.LocalIPv4.IsUnspecified() || c.PeerIPv4.IsUnspecified() ||
 		c.LocalIPv4 == c.PeerIPv4 {
 		return errors.New("MASQUE listener identity, pinned peer or private addresses invalid")
 	}
-	if _, err := x509.ParsePKIXPublicKey(c.PeerSPKI); err != nil {
-		return errors.New("MASQUE listener expected peer public key is invalid")
+	if c.PublicTLS {
+		if len(c.PeerSPKI) != 0 || !ValidBearerToken(c.BearerToken) {
+			return errors.New("MASQUE public TLS requires a protected 256-bit bearer and no mTLS peer identity")
+		}
+	} else {
+		if len(c.BearerToken) != 0 || len(c.PeerSPKI) == 0 {
+			return errors.New("MASQUE private TLS requires exact client certificate identity")
+		}
+		if _, err := x509.ParsePKIXPublicKey(c.PeerSPKI); err != nil {
+			return errors.New("MASQUE listener expected peer public key is invalid")
+		}
 	}
 	_, port, err := net.SplitHostPort(c.ListenAddress)
 	if err != nil {
@@ -88,30 +113,36 @@ func newH2ServerWithLiveness(cfg H2ListenConfig, pipe PrivatePacketIO, idleLimit
 }
 
 func (s *H2Server) TLSConfig() *tls.Config {
-	expected := append([]byte(nil), s.cfg.PeerSPKI...)
-	return &tls.Config{
+	config := &tls.Config{
 		MinVersion:   tls.VersionTLS12,
 		NextProtos:   []string{"h2"},
 		Certificates: []tls.Certificate{s.cfg.ServerCert},
-		ClientAuth:   tls.RequireAnyClientCert,
-		VerifyPeerCertificate: func(chain [][]byte, _ [][]*x509.Certificate) error {
-			if len(chain) == 0 {
-				return errors.New("MASQUE peer TLS certificate identity missing")
-			}
-			cert, err := x509.ParseCertificate(chain[0])
-			if err != nil {
-				return errors.New("MASQUE peer TLS certificate cannot be parsed")
-			}
-			if subtle.ConstantTimeCompare(cert.RawSubjectPublicKeyInfo, expected) != 1 {
-				return errors.New("MASQUE client identity does not match the authorized Link")
-			}
-			now := time.Now()
-			if now.Before(cert.NotBefore) || now.After(cert.NotAfter) {
-				return errors.New("MASQUE peer certificate expired or not yet valid")
-			}
-			return nil
-		},
 	}
+	if s.cfg.PublicTLS {
+		// The server certificate is always verified by the dialer; client
+		// admission moves from TLS to the authenticated CONNECT-IP request.
+		return config
+	}
+	expected := append([]byte(nil), s.cfg.PeerSPKI...)
+	config.ClientAuth = tls.RequireAnyClientCert
+	config.VerifyPeerCertificate = func(chain [][]byte, _ [][]*x509.Certificate) error {
+		if len(chain) == 0 {
+			return errors.New("MASQUE peer TLS certificate identity missing")
+		}
+		cert, err := x509.ParseCertificate(chain[0])
+		if err != nil {
+			return errors.New("MASQUE peer TLS certificate cannot be parsed")
+		}
+		if subtle.ConstantTimeCompare(cert.RawSubjectPublicKeyInfo, expected) != 1 {
+			return errors.New("MASQUE client identity does not match the authorized Link")
+		}
+		now := time.Now()
+		if now.Before(cert.NotBefore) || now.After(cert.NotAfter) {
+			return errors.New("MASQUE peer certificate expired or not yet valid")
+		}
+		return nil
+	}
+	return config
 }
 
 func (s *H2Server) Serve(ctx context.Context) error {
@@ -157,7 +188,7 @@ func (s *H2Server) Serve(ctx context.Context) error {
 				!errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
 				// Keep the failure stage in the private service journal without
 				// exposing the peer credential or capsule payload.
-				log.Printf("MASQUE authenticated H2 session ended: %v", err)
+				log.Printf("MASQUE H2 session ended: %v", err)
 			}
 		}(conn)
 	}
@@ -288,6 +319,43 @@ func (h *h2ServerConn) reply(code string) error {
 	})
 }
 
+// HTTP/2 GET and HEAD are normal HTTP resources on the same public-TLS
+// listener. They grant no tunnel or packet access and never disclose secrets.
+// The single-connection framer completes the requested stream while
+// keeping the HTTP/2 connection available for another ordinary GET/HEAD.
+func (h *h2ServerConn) replyPublicHTTP(streamID uint32, method string, found bool) error {
+	body := []byte("STL MASQUE HTTP/2 endpoint\n")
+	code := "200"
+	if !found {
+		code = "404"
+		body = []byte("Not Found\n")
+	}
+	var hdr bytes.Buffer
+	e := hpack.NewEncoder(&hdr)
+	for _, field := range []hpack.HeaderField{
+		{Name: ":status", Value: code},
+		{Name: "content-type", Value: "text/plain; charset=utf-8"},
+		{Name: "content-length", Value: strconv.Itoa(len(body))},
+		{Name: "cache-control", Value: "no-store"},
+	} {
+		if err := e.WriteField(field); err != nil {
+			return err
+		}
+	}
+	if err := h.write(func(fr *http2.Framer) error {
+		return fr.WriteHeaders(http2.HeadersFrameParam{
+			StreamID: streamID, BlockFragment: hdr.Bytes(), EndHeaders: true,
+			EndStream: method == "HEAD",
+		})
+	}); err != nil {
+		return err
+	}
+	if method == "HEAD" {
+		return nil
+	}
+	return h.write(func(fr *http2.Framer) error { return fr.WriteData(streamID, true, body) })
+}
+
 func (s *H2Server) authorizeRequest(f *http2.MetaHeadersFrame) bool {
 	if f.StreamID != 1 || f.Truncated || f.StreamEnded() ||
 		f.PseudoValue("method") != "CONNECT" ||
@@ -300,12 +368,48 @@ func (s *H2Server) authorizeRequest(f *http2.MetaHeadersFrame) bool {
 	if f.PseudoValue("authority") != net.JoinHostPort(s.cfg.TLSServerName, port) {
 		return false
 	}
+	capsuleOK, authOK, authCount := false, false, 0
 	for _, hdr := range f.RegularFields() {
 		if hdr.Name == "capsule-protocol" && hdr.Value == "?1" {
-			return true
+			capsuleOK = true
+		}
+		if hdr.Name == "authorization" {
+			authCount++
+			authOK = subtle.ConstantTimeCompare(
+				[]byte(hdr.Value), append([]byte("Bearer "), s.cfg.BearerToken...)) == 1
 		}
 	}
-	return false
+	return capsuleOK && (!s.cfg.PublicTLS || (authCount == 1 && authOK))
+}
+
+// Only unauthenticated HTTP status resources, never a CONNECT-IP stream.
+func (s *H2Server) isPublicHTTP(f *http2.MetaHeadersFrame) bool {
+	if !s.cfg.PublicTLS || f.StreamID == 0 || f.StreamID%2 == 0 ||
+		f.Truncated || !f.StreamEnded() ||
+		f.PseudoValue("scheme") != "https" || f.PseudoValue("protocol") != "" {
+		return false
+	}
+	method := f.PseudoValue("method")
+	if method != "GET" && method != "HEAD" {
+		return false
+	}
+	return publicHTTPAuthorityMatches(s.cfg.TLSServerName, s.cfg.ListenAddress,
+		f.PseudoValue("authority"))
+}
+
+// Browsers normally omit :443 from the HTTPS authority. An ordinary H2
+// GET/HEAD must work with that standard origin-form authority, while
+// refusing arbitrary Host values or an unapproved external destination.
+func publicHTTPAuthorityMatches(name, listenAddress, authority string) bool {
+	_, port, err := net.SplitHostPort(listenAddress)
+	if err != nil {
+		return false
+	}
+	full := net.JoinHostPort(name, port)
+	if strings.EqualFold(authority, full) {
+		return true
+	}
+	return port == "443" && strings.EqualFold(authority, strings.TrimSuffix(full, ":443"))
 }
 
 func (s *H2Server) serveH2(parent context.Context, conn net.Conn) error {
@@ -354,11 +458,16 @@ func (s *H2Server) serveH2(parent context.Context, conn net.Conn) error {
 	var decoder capsuleStream
 	accepted := false
 	first := true
+	lastPublicStreamID := uint32(0)
 	outErrors := make(chan error, 1)
 	for {
 		frame, err := h.fr.ReadFrame()
-		if err == nil && accepted {
-			err = conn.SetReadDeadline(time.Now().Add(s.peerIdleLimit))
+		if err == nil {
+			idleLimit := 12 * time.Second
+			if accepted {
+				idleLimit = s.peerIdleLimit
+			}
+			err = conn.SetReadDeadline(time.Now().Add(idleLimit))
 		}
 		if err != nil {
 			return fmt.Errorf("MASQUE client HTTP/2 receive ended: %w", err)
@@ -375,9 +484,20 @@ func (s *H2Server) serveH2(parent context.Context, conn net.Conn) error {
 		case *http2.WindowUpdateFrame:
 			err = h.updateWindow(f)
 		case *http2.MetaHeadersFrame:
+			if !accepted && s.isPublicHTTP(f) && f.StreamID > lastPublicStreamID {
+				lastPublicStreamID = f.StreamID
+				if err := h.replyPublicHTTP(f.StreamID, f.PseudoValue("method"), f.PseudoValue("path") == "/"); err != nil {
+					return err
+				}
+				continue
+			}
 			if accepted || !s.authorizeRequest(f) {
-				_ = h.reply("400")
-				return errors.New("MASQUE unexpected CONNECT-IP stream")
+				code := "400"
+				if !accepted && s.cfg.PublicTLS && f.PseudoValue("method") == "CONNECT" {
+					code = "403"
+				}
+				_ = h.reply(code)
+				return errors.New("MASQUE rejected unauthorized or unexpected HTTP/2 request")
 			}
 			s.activeMu.Lock()
 			if s.active {

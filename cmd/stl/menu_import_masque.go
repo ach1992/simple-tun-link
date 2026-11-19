@@ -52,11 +52,12 @@ func menuImportMASQUE(input io.Reader, reader *bufio.Reader, out, errOut io.Writ
 	}
 	var details struct {
 		Role      string `json:"role"`
+		PublicTLS bool   `json:"public_tls"`
 		Underlay  string `json:"local_underlay"`
 		PrivateIP string `json:"local_private"`
 		Confirm   string `json:"confirmation_sha256"`
 	}
-	if json.Unmarshal(preview.Bytes(), &details) != nil || details.Confirm != setupLinkConfirmation(raw) || details.Role != offer.Receiver.MASQUE.Role {
+	if json.Unmarshal(preview.Bytes(), &details) != nil || details.Confirm != setupLinkConfirmation(raw) || details.Role != offer.Receiver.MASQUE.Role || details.PublicTLS != offer.Receiver.MASQUE.PublicTLS {
 		menuNotice(out, "WARNING", "Original private handoff confirmation is inconsistent; no action taken.")
 		return 2
 	}
@@ -70,6 +71,11 @@ func menuImportMASQUE(input io.Reader, reader *bufio.Reader, out, errOut io.Writ
 	menuField(out, "OTHER private IPv4", offer.Receiver.Addresses.Peer.String())
 	menuField(out, "HTTPS TCP port", fmt.Sprintf("%d", offer.Receiver.MASQUE.TCPPort))
 	menuField(out, "TLS server name", safeMenuText(offer.Receiver.MASQUE.TLSServerName))
+	if details.PublicTLS {
+		menuField(out, "TLS authentication", "Public TLS + per-Link request bearer")
+	} else {
+		menuField(out, "TLS authentication", "Private mTLS (default)")
+	}
 	if masquehost.VerifyLocalUnderlay(offer.Receiver.Underlay.Local) != nil {
 		menuNotice(out, "WARNING", "This host does not uniquely own the handoff's physical source IP; verify the intended receiver and ip address show before import.")
 		return 2

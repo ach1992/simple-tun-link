@@ -81,3 +81,64 @@ func TestMASQUEMaterialHandoffCannotChangeOtherLink(t *testing.T) {
 		t.Fatal("accepted material for a different Link owner")
 	}
 }
+
+// Public TLS keeps the same exact per-Link protected-generation and retirement
+// ownership model, but stores a request bearer instead of a client TLS key.
+func TestMASQUEPublicTLSMaterialIsModeAndLinkBound(t *testing.T) {
+	listener, dialer := generateTestLinks(t)
+	listener.MASQUE.PublicTLS = true
+	dialer.MASQUE.PublicTLS = true
+	issued, err := masque.GeneratePair(listener.ID, listener.MASQUE.TLSServerName, 365)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer issued.Clear()
+	root := t.TempDir()
+	listener, listenerFiles, err := BuildMaterial(root, listener, issued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ClearFiles(listenerFiles)
+	dialer, dialFiles, err := BuildMaterial(root, dialer, issued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ClearFiles(dialFiles)
+	if err := VerifyMaterialBundle(root, listener, listenerFiles); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyMaterialBundle(root, dialer, dialFiles); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(listenerFiles["bearer-token"], dialFiles["bearer-token"]) ||
+		!masque.ValidBearerToken(listenerFiles["bearer-token"]) {
+		t.Fatal("public Link bearer not bound to both protected material sets")
+	}
+	for _, files := range []map[string][]byte{listenerFiles, dialFiles} {
+		if len(files["client-key.pem"]) != 0 || len(files["client-cert.pem"]) != 0 {
+			t.Fatal("public TLS material unnecessarily retains a client TLS identity")
+		}
+	}
+	if _, ok := listenerFiles["server-key.pem"]; !ok {
+		t.Fatal("public TLS listener lost its server TLS private key")
+	}
+	if _, ok := dialFiles["server-ca.pem"]; !ok {
+		t.Fatal("public TLS dialer lost server CA verification")
+	}
+	for _, link := range []domain.Link{listener, dialer} {
+		link.MASQUE.PublicTLS = false
+		if err := VerifyMaterialBundle(root, link, listenerFiles); err == nil {
+			t.Fatal("accepted public bearer generation as private mTLS material")
+		}
+	}
+	corrupted := append([]byte(nil), dialFiles["bearer-token"]...)
+	dialFiles["bearer-token"][1] = '-'
+	if err := VerifyMaterialBundle(root, dialer, dialFiles); err == nil {
+		t.Fatal("accepted mutated request bearer in protected receiver material")
+	}
+	copy(dialFiles["bearer-token"], corrupted)
+	dialer.ID = "lnk_ffffffffffffffffffffffffffffffff"
+	if err := VerifyMaterialBundle(root, dialer, dialFiles); err == nil {
+		t.Fatal("accepted original public bearer for a different Link")
+	}
+}

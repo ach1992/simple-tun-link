@@ -34,6 +34,7 @@ type masqueCreateRequestV1 struct {
 	Role                    string                 `json:"role"`
 	TCPPort                 uint16                 `json:"tcp_port"`
 	TLSServerName           string                 `json:"tls_server_name"`
+	PublicTLS               bool                   `json:"public_tls,omitempty"`
 	CertificateValidityDays int                    `json:"certificate_validity_days,omitempty"`
 	MTU                     domain.MTUPolicy       `json:"mtu,omitzero"`
 }
@@ -48,7 +49,7 @@ func (r masqueCreateRequestV1) makePair(id domain.LinkID) (domain.Link, domain.L
 		Underlay:  domain.Underlay{Local: r.Underlay.Local, Peer: r.Underlay.Peer},
 		Addresses: domain.LinkAddresses{Local: r.Addresses.Local, Peer: r.Addresses.Peer},
 		MTU:       r.MTU,
-		MASQUE:    domain.MASQUEOptions{Role: r.Role, TCPPort: r.TCPPort, TLSServerName: r.TLSServerName},
+		MASQUE:    domain.MASQUEOptions{Role: r.Role, TCPPort: r.TCPPort, TLSServerName: r.TLSServerName, PublicTLS: r.PublicTLS},
 	}
 	receiver := sender
 	receiver.Underlay.Local, receiver.Underlay.Peer = sender.Underlay.Peer, sender.Underlay.Local
@@ -90,6 +91,7 @@ func (o masqueOfferV1) Validate(root string) error {
 		o.Sender.MASQUE.Role == o.Receiver.MASQUE.Role ||
 		o.Sender.MASQUE.TCPPort != o.Receiver.MASQUE.TCPPort ||
 		o.Sender.MASQUE.TLSServerName != o.Receiver.MASQUE.TLSServerName ||
+		o.Sender.MASQUE.PublicTLS != o.Receiver.MASQUE.PublicTLS ||
 		o.Sender.Underlay.Local != o.Receiver.Underlay.Peer ||
 		o.Sender.Underlay.Peer != o.Receiver.Underlay.Local ||
 		o.Sender.Addresses.Local != o.Receiver.Addresses.Peer ||
@@ -266,7 +268,7 @@ func createMASQUE(in io.Reader, output string, jsonOutput bool, out, errOut io.W
 	}
 	issued, err := masque.GeneratePair(id, request.TLSServerName, validity)
 	if err != nil {
-		return masqueCommandError(op, jsonOutput, id, stlerr.CodeInvalid, "MASQUE mTLS identity issuance failed", out, errOut)
+		return masqueCommandError(op, jsonOutput, id, stlerr.CodeInvalid, "MASQUE protected TLS identity and request credential issuance failed", out, errOut)
 	}
 	defer issued.Clear()
 	root := masqueDefaultRoot(options)
@@ -321,12 +323,13 @@ func previewMASQUE(offer masqueOfferV1, digest string, jsonOutput bool, out io.W
 		Role               string         `json:"role"`
 		TCPPort            uint16         `json:"tcp_port"`
 		TLSServerName      string         `json:"tls_server_name"`
+		PublicTLS          bool           `json:"public_tls"`
 		ConfirmationSHA256 string         `json:"confirmation_sha256"`
 		Sensitive          bool           `json:"sensitive"`
 	}{1, offer.Receiver.ID, offer.Receiver.Backend, offer.Receiver.Underlay.Local.String(),
 		offer.Receiver.Underlay.Peer.String(), offer.Receiver.Addresses.Local.String(),
 		offer.Receiver.Addresses.Peer.String(), offer.Receiver.MASQUE.Role, offer.Receiver.MASQUE.TCPPort,
-		offer.Receiver.MASQUE.TLSServerName, digest, true}
+		offer.Receiver.MASQUE.TLSServerName, offer.Receiver.MASQUE.PublicTLS, digest, true}
 	if jsonOutput {
 		if json.NewEncoder(out).Encode(resp) != nil {
 			return 1
@@ -336,6 +339,11 @@ func previewMASQUE(offer masqueOfferV1, digest string, jsonOutput bool, out io.W
 	fmt.Fprintf(out, "SENSITIVE MASQUE receiver %s: %s %s -> %s, private %s -> %s, TLS name %s, TCP port %d\n",
 		resp.LinkID, resp.Role, resp.LocalUnderlay, resp.PeerUnderlay, resp.LocalPrivate, resp.PeerPrivate,
 		resp.TLSServerName, resp.TCPPort)
+	mode := "private mTLS"
+	if resp.PublicTLS {
+		mode = "public TLS + per-Link request bearer"
+	}
+	fmt.Fprintf(out, "TLS authentication: %s\n", mode)
 	fmt.Fprintf(out, "After independently checking this handoff, import with --confirm %s\n", digest)
 	return 0
 }

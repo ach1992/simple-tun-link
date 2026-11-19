@@ -649,13 +649,15 @@ type desiredMASQUEOptionsV1 struct {
 	Role           string `json:"role"`
 	TCPPort        uint16 `json:"tcp_port"`
 	TLSServerName  string `json:"tls_server_name"`
+	PublicTLS      bool   `json:"public_tls,omitempty"`
 	MaterialSHA256 string `json:"material_sha256"`
 }
 
 func (d desiredLinkV6) link() domain.Link {
 	result := d.desiredLinkV2.link()
 	result.MASQUE = domain.MASQUEOptions{Role: d.MASQUE.Role, TCPPort: d.MASQUE.TCPPort,
-		TLSServerName: d.MASQUE.TLSServerName, MaterialSHA256: d.MASQUE.MaterialSHA256}
+		TLSServerName: d.MASQUE.TLSServerName, PublicTLS: d.MASQUE.PublicTLS,
+		MaterialSHA256: d.MASQUE.MaterialSHA256}
 	return result
 }
 

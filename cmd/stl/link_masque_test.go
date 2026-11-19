@@ -181,3 +181,88 @@ func TestMASQUECLIPrivateInputErrorsAreActionable(t *testing.T) {
 		t.Fatalf("import guidance: %+v", body.Error)
 	}
 }
+
+// The exact selected TLS authentication mode travels through both peers,
+// protected receiver handoff and nonsecret preview; only explicit opt-in
+// removes the TLS client-certificate requirement.
+func TestMASQUEPublicTLSCreatePreviewAndReceiverOffer(t *testing.T) {
+	request := masqueInputTestRequest()
+	request.PublicTLS = true
+	sender, receiver, err := request.makePair(request.LinkID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sender.MASQUE.PublicTLS || !receiver.MASQUE.PublicTLS {
+		t.Fatal("creator/receiver lost public TLS choice")
+	}
+	pair, err := masque.GeneratePair(sender.ID, sender.MASQUE.TLSServerName, 365)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pair.Clear()
+	root := t.TempDir()
+	sender, senderFiles, err := masquehost.BuildMaterial(root, sender, pair)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer masquehost.ClearFiles(senderFiles)
+	receiver, receiverFiles, err := masquehost.BuildMaterial(root, receiver, pair)
+	if err != nil {
+		t.Fatal(err)
+	}
+	offer := masqueOfferV1{SchemaVersion: 1, Sender: sender, Receiver: receiver, ReceiverMaterial: receiverFiles}
+	defer offer.Clear()
+	if err := offer.Validate(root); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(offer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := linkMASQUECommand([]string{"preview-masque", "--stdin", "--json"}, bytes.NewReader(raw),
+		&out, &errOut, &runtimeOptions{stateRoot: root}); code != 0 {
+		t.Fatalf("public receiver preview failed: code %d: %s", code, errOut.String())
+	}
+	var preview struct {
+		PublicTLS bool   `json:"public_tls"`
+		Role      string `json:"role"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &preview); err != nil || !preview.PublicTLS ||
+		preview.Role != receiver.MASQUE.Role {
+		t.Fatalf("public receiver preview lost TLS mode: %v %+v", err, preview)
+	}
+	if bytes.Contains(out.Bytes(), pair.BearerToken) ||
+		bytes.Contains(out.Bytes(), pair.ClientPrivateKey) ||
+		bytes.Contains(out.Bytes(), pair.ServerPrivateKey) {
+		t.Fatal("public receiver preview leaked protected material")
+	}
+	offer.Receiver.MASQUE.PublicTLS = false
+	if err := offer.Validate(root); err == nil {
+		t.Fatal("accepted a sender/receiver TLS authentication mode mismatch")
+	}
+}
+
+// The explicit public-TLS flag is a typed, nonsecret MASQUE v6 desired Link
+// field. It must round-trip without changing any legacy schema contract.
+func TestPublicMASQUEDesiredV6RoundTripsMode(t *testing.T) {
+	request := masqueInputTestRequest()
+	request.PublicTLS = true
+	link, _, err := request.makePair(request.LinkID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link.MASQUE.MaterialSHA256 = strings.Repeat("a", 64)
+	input := map[string]any{"schema_version": desiredMASQUESchemaVersion, "link": map[string]any{
+		"id": link.ID, "backend": domain.BackendMASQUE, "encapsulation": domain.EncapTLS,
+		"underlay": link.Underlay, "addresses": link.Addresses, "masque": link.MASQUE,
+	}}
+	raw, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual, err := decodeDesiredLink(bytes.NewReader(raw))
+	if err != nil || actual != link || !actual.MASQUE.PublicTLS {
+		t.Fatalf("MASQUE public TLS desired v6 roundtrip: %v actual=%+v", err, actual)
+	}
+}
