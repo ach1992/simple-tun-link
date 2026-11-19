@@ -172,8 +172,7 @@ func menuCreateWireGuard(input io.Reader, reader *bufio.Reader, out, errOut io.W
 	menuScreen(out, "Applying / creating encrypted WireGuard tunnel")
 	createRuntime, err := menuHandoffCreationOptions(options, id, domain.BackendWireGuard)
 	if err != nil {
-		menuNotice(out, "WARNING", "Cannot initialize the selected WireGuard runtime; no private Link or key was created.")
-		return 1
+		return menuGuidedCreateRuntimeFailure(out, domain.BackendWireGuard, err)
 	}
 	path, err = prepareProtectedMenuHandoff(options, id)
 	if err != nil {

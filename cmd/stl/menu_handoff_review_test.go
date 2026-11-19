@@ -30,12 +30,16 @@ func TestGuidedCreateResolvesSelectedRuntimeBeforePrivateHandoff(t *testing.T) {
 	selection := domain.BackendMASQUE
 	calls := 0
 	var assembled *runtimeOptions
+	mockMASQUE, err := masquebackend.New(masqueStatusFixture{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	builder := func(root string, backend domain.Backend) (*runtimeOptions, error) {
 		calls++
 		if root != state.DefaultRoot || backend != selection {
 			t.Fatalf("guided Create used wrong root/backend: %s %s", root, backend)
 		}
-		assembled = &runtimeOptions{stateRoot: root}
+		assembled = &runtimeOptions{stateRoot: root, backends: []core.Backend{mockMASQUE}}
 		return assembled, nil
 	}
 	scoped, err := menuHandoffCreationOptionsWithAssembler(nil, id, selection, builder)

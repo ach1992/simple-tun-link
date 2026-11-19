@@ -318,7 +318,7 @@ func assembleRuntimeBackendOptions(stateRoot string, selected domain.Backend) (*
 			domain.BackendWireGuardQUIC, domain.BackendIPsec,
 			domain.BackendMASQUE:
 		default:
-			return nil, fmt.Errorf("unknown saved backend cannot authorize removal")
+			return nil, runtimeInitFailure(runtimeInitSelection, fmt.Errorf("unknown saved backend"))
 		}
 	}
 	wants := func(kind domain.Backend) bool { return selected == "" || selected == kind }
@@ -334,7 +334,7 @@ func assembleRuntimeBackendOptions(stateRoot string, selected domain.Backend) (*
 			Runner: runner, Routes: routes, Firewall: firewall, Collisions: collisions,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("initialize GRE backend: %w", err)
+			return nil, runtimeInitFailure(runtimeInitBackend, fmt.Errorf("initialize GRE backend: %w", err))
 		}
 		options.backends = append(options.backends, gre)
 	}
@@ -343,7 +343,7 @@ func assembleRuntimeBackendOptions(stateRoot string, selected domain.Backend) (*
 			Runner: runner, Routes: routes, Firewall: firewall, Collisions: collisions,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("initialize IPIP backend: %w", err)
+			return nil, runtimeInitFailure(runtimeInitBackend, fmt.Errorf("initialize IPIP backend: %w", err))
 		}
 		options.backends = append(options.backends, ipip)
 	}
@@ -352,21 +352,21 @@ func assembleRuntimeBackendOptions(stateRoot string, selected domain.Backend) (*
 			Runner: runner, Routes: routes, Firewall: firewall, Collisions: collisions,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("initialize L2TPv3 backend: %w", err)
+			return nil, runtimeInitFailure(runtimeInitBackend, fmt.Errorf("initialize L2TPv3 backend: %w", err))
 		}
 		options.backends = append(options.backends, l2tp)
 	}
 	if wants(domain.BackendWireGuard) || wants(domain.BackendWireGuardWSS) || wants(domain.BackendWireGuardQUIC) {
 		keys, err := wgbackend.NewKeyStore(options.stateRoot)
 		if err != nil {
-			return nil, fmt.Errorf("initialize selected WireGuard credentials: %w", err)
+			return nil, runtimeInitFailure(runtimeInitCredentials, fmt.Errorf("initialize selected WireGuard credentials: %w", err))
 		}
 		if wants(domain.BackendWireGuard) {
 			wg, err := wgbackend.New(wgbackend.Options{
 				Runner: runner, Routes: routes, Firewall: firewall, Collisions: collisions, Keys: keys,
 			})
 			if err != nil {
-				return nil, fmt.Errorf("initialize WireGuard backend: %w", err)
+				return nil, runtimeInitFailure(runtimeInitBackend, fmt.Errorf("initialize WireGuard backend: %w", err))
 			}
 			options.backends = append(options.backends, wg)
 		}
@@ -376,21 +376,21 @@ func assembleRuntimeBackendOptions(stateRoot string, selected domain.Backend) (*
 				WSSHost: wss.Host{StateRoot: options.stateRoot},
 			})
 			if err != nil {
-				return nil, fmt.Errorf("initialize WSS WireGuard backend: %w", err)
+				return nil, runtimeInitFailure(runtimeInitBackend, fmt.Errorf("initialize WSS WireGuard backend: %w", err))
 			}
 			options.backends = append(options.backends, wssWG)
 		}
 		if wants(domain.BackendWireGuardQUIC) {
 			quicHost, err := quichelper.NewHost(options.stateRoot, state.NewFileStore(options.stateRoot))
 			if err != nil {
-				return nil, fmt.Errorf("initialize QUIC host adapter: %w", err)
+				return nil, runtimeInitFailure(runtimeInitBackend, fmt.Errorf("initialize QUIC host adapter: %w", err))
 			}
 			quicWG, err := wgbackend.NewQUIC(wgbackend.Options{
 				Runner: runner, Routes: routes, Firewall: firewall, Collisions: collisions, Keys: keys,
 				QUICHost: quicHost,
 			})
 			if err != nil {
-				return nil, fmt.Errorf("initialize QUIC WireGuard backend: %w", err)
+				return nil, runtimeInitFailure(runtimeInitBackend, fmt.Errorf("initialize QUIC WireGuard backend: %w", err))
 			}
 			options.quicRetirementHost = quicHost
 			options.backends = append(options.backends, quicWG)
@@ -400,19 +400,19 @@ func assembleRuntimeBackendOptions(stateRoot string, selected domain.Backend) (*
 	if wants(domain.BackendMASQUE) {
 		executable, err := os.Executable()
 		if err != nil {
-			return nil, fmt.Errorf("resolve MASQUE-owning STL executable: %w", err)
+			return nil, runtimeInitFailure(runtimeInitExecutable, fmt.Errorf("resolve MASQUE-owning STL executable: %w", err))
 		}
 		executable, err = canonicalSTLExecutable(executable)
 		if err != nil {
-			return nil, err
+			return nil, runtimeInitFailure(runtimeInitExecutable, err)
 		}
 		host, err := masquehost.New(options.stateRoot, executable)
 		if err != nil {
-			return nil, fmt.Errorf("initialize MASQUE host adapter: %w", err)
+			return nil, runtimeInitFailure(runtimeInitBackend, fmt.Errorf("initialize MASQUE host adapter: %w", err))
 		}
 		implementation, err := masquebackend.New(host)
 		if err != nil {
-			return nil, err
+			return nil, runtimeInitFailure(runtimeInitBackend, err)
 		}
 		options.backends = append(options.backends, implementation)
 		options.masqueRetirementHost = host
@@ -464,20 +464,20 @@ func assembleRuntimeOptionsForBackend(stateRoot string, selected domain.Backend)
 	case err == nil && info.IsDir():
 		executable, execErr := os.Executable()
 		if execErr != nil {
-			return nil, fmt.Errorf("locate STL executable: %w", execErr)
+			return nil, runtimeInitFailure(runtimeInitExecutable, fmt.Errorf("locate STL executable: %w", execErr))
 		}
 		executable, execErr = canonicalSTLExecutable(executable)
 		if execErr != nil {
-			return nil, execErr
+			return nil, runtimeInitFailure(runtimeInitExecutable, execErr)
 		}
 		options.restorePersistence = linux.SystemdPersistence{Runner: linux.ExecRunner{}}
 		options.executable = executable
 	case errors.Is(err, os.ErrNotExist):
 		// Manual restore is still available without systemd.
 	case err != nil:
-		return nil, fmt.Errorf("inspect systemd availability: %w", err)
+		return nil, runtimeInitFailure(runtimeInitSystemd, fmt.Errorf("inspect systemd availability: %w", err))
 	default:
-		return nil, fmt.Errorf("invalid systemd runtime directory")
+		return nil, runtimeInitFailure(runtimeInitSystemd, fmt.Errorf("invalid systemd runtime directory"))
 	}
 	return options, nil
 }

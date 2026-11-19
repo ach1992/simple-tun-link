@@ -28,15 +28,21 @@ func menuIPsecBlockedNotice(out io.Writer, attemptedProvision bool) {
 // not an alternative strongSwan owner or a generic service installer.
 func menuCreateIPsec(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
 	options *runtimeOptions, mode domain.Encapsulation) int {
+	return menuCreateIPsecWithAssembler(input, reader, out, errOut, options, mode, assembleRuntimeOptionsForBackend)
+}
+
+// The assembler seam leaves normal guided admission identical to CLI Engine
+// assembly while allowing a bounded, non-privileged nil-menu regression test.
+func menuCreateIPsecWithAssembler(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
+	options *runtimeOptions, mode domain.Encapsulation,
+	assemble func(string, domain.Backend) (*runtimeOptions, error)) int {
 	menuSection(out, fmt.Sprintf("Create IPsec / %s", mode))
 	fmt.Fprintln(out, "This requires a verified STL-exclusive strongSwan service.")
 	if options == nil {
 		var err error
-		options, err = productionRuntimeOptions()
+		options, err = menuIPsecSelectedRuntime(nil, assemble)
 		if err != nil {
-			fmt.Fprintln(out, "Cannot check IPsec prerequisites on this server. No changes applied.")
-			fmt.Fprintln(out, "Run: stl doctor ipsec")
-			return 4
+			return menuGuidedCreateRuntimeFailure(out, domain.BackendIPsec, err)
 		}
 	}
 	pre, done := context.WithTimeout(context.Background(), 15*time.Second)
@@ -143,8 +149,7 @@ func menuCreateIPsec(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	menuScreen(out, "Applying / creating protected IPsec tunnel")
 	createRuntime, err := menuHandoffCreationOptions(options, id, domain.BackendIPsec)
 	if err != nil {
-		menuNotice(out, "WARNING", "Cannot initialize the selected IPsec runtime; no private Link or key was created.")
-		return 1
+		return menuGuidedCreateRuntimeFailure(out, domain.BackendIPsec, err)
 	}
 	handoff, err = prepareProtectedMenuHandoff(options, id)
 	if err != nil {

@@ -77,7 +77,13 @@ func menuHandoffCreationOptionsWithAssembler(options *runtimeOptions, id domain.
 			return nil, fmt.Errorf("selected guided Create runtime unavailable: %w", err)
 		}
 		if options == nil {
-			return nil, fmt.Errorf("selected guided Create runtime unavailable")
+			return nil, runtimeInitFailure(runtimeInitRegistration, nil)
+		}
+		// A successful assembler must register exactly the intended backend;
+		// a bare StateRoot placeholder cannot authorize a confirmed Create.
+		if len(options.backends) != 1 || options.backends[0] == nil ||
+			options.backends[0].Kind() != selected {
+			return nil, runtimeInitFailure(runtimeInitRegistration, nil)
 		}
 	}
 	// The scoped ID is granted only after the operator's fresh YES. Public

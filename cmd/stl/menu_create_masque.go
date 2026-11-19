@@ -170,8 +170,7 @@ func menuCreateMASQUE(input io.Reader, reader *bufio.Reader, out, errOut io.Writ
 	}
 	createRuntime, err := menuHandoffCreationOptions(opts, id, domain.BackendMASQUE)
 	if err != nil {
-		menuNotice(out, "WARNING", "Cannot initialize the selected MASQUE runtime; no private Link or key was created.")
-		return 1
+		return menuGuidedCreateRuntimeFailure(out, domain.BackendMASQUE, err)
 	}
 	path, err := prepareProtectedMenuHandoff(opts, id)
 	if err != nil {

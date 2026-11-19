@@ -167,8 +167,7 @@ func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, er
 	}
 	createRuntime, err := menuHandoffCreationOptions(opts, id, domain.BackendWireGuardQUIC)
 	if err != nil {
-		menuNotice(out, "WARNING", "Cannot initialize the selected QUIC runtime; no private Link or key was created.")
-		return 1
+		return menuGuidedCreateRuntimeFailure(out, domain.BackendWireGuardQUIC, err)
 	}
 	path, err := prepareProtectedMenuHandoff(opts, id)
 	if err != nil {
