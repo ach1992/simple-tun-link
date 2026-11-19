@@ -61,32 +61,49 @@ func (e *packagePreviewIssue) Error() string { return e.reason }
 
 func packageInventoryFailure(stderr string, ctxErr error) error {
 	issue := &packagePreviewIssue{}
-	// Read only fixed terminal failure categories from the canonical
-	// installer, not arbitrary low-level APT output or repository URLs.
-	// Keep the final recognized FAILED line if multiple are present.
-	aptReason := ""
+	// APT diagnostics may contain private repository URLs and arbitrary
+	// text. Only the final canonical installer FAILED line supplies a
+	// reason; never classify a substring in raw APT output as STL evidence.
+	message, aptReason := "", ""
+	sawListsLockWait := false
 	for _, line := range strings.Split(stderr, "\n") {
-		_, reason := canonicalAPTOperatorFailure(line)
-		if reason != "" {
-			aptReason = reason
+		if failed, ok := strings.CutPrefix(line, "stl installer [FAILED]: "); ok {
+			message = failed
+			_, aptReason = canonicalAPTOperatorFailure(line)
+		}
+		// The guided read-only check has a shorter deadline than the
+		// canonical installer's 12-attempt lists-lock wait. Report a
+		// positively observed lock wait instead of guessing host load.
+		if strings.HasPrefix(line, "stl installer [INFO]: Another APT process holds the lists lock; waiting 5 seconds before retry ") {
+			sawListsLockWait = true
 		}
 	}
 	switch {
+	case errors.Is(ctxErr, context.DeadlineExceeded) && sawListsLockWait:
+		issue.reason = "apt_lists_lock_wait_timeout"
+		issue.next = "The read-only preview timed out while waiting on another APT process's lists lock. Inspect running APT processes (read-only), let the holder finish, then retry. Do not delete lock files or terminate package-manager processes."
 	case errors.Is(ctxErr, context.DeadlineExceeded):
 		issue.reason = "requirements_check_timeout"
 		issue.next = "The read-only check timed out. Check host load, then retry Create tunnel; no preparation was started."
 	case ctxErr != nil:
 		issue.reason = "requirements_check_interrupted"
 		issue.next = "Read-only inspection was interrupted. Reopen Create tunnel when the host is ready."
-	case strings.Contains(stderr, "unsupported package-manager distribution:"),
-		strings.Contains(stderr, "OS release file is unreadable"),
-		strings.Contains(stderr, "invalid Ubuntu version"),
-		strings.Contains(stderr, "invalid Debian version"):
+	case strings.HasPrefix(message, "unsupported package-manager distribution:"),
+		strings.HasPrefix(message, "OS release file is unreadable"),
+		strings.HasPrefix(message, "invalid Ubuntu version"),
+		strings.HasPrefix(message, "invalid Debian version"):
 		issue.reason = "unsupported_or_unverified_os"
 		issue.next = "Inspect /etc/os-release and docs/SUPPORTED-ENVIRONMENTS.md (read-only); do not change OS identity."
-	case strings.Contains(stderr, "cannot verify distribution archive signatures"):
+	case strings.HasPrefix(message, "cannot verify distribution archive signatures"):
 		issue.reason = "distro_signature_verifier_missing"
 		issue.next = "Install the official gpgv package using authenticated distribution APT or independently verified offline media, then retry the read-only inventory; STL does not bypass signature verification."
+	case strings.HasPrefix(message, "APT lists lock remained busy"):
+		issue.reason = "apt_lists_lock_busy"
+		issue.next = "Another package-manager process holds the APT lists lock. Inspect active APT processes (read-only), let the transaction finish, then retry the read-only check. Do not delete lock files or kill package-manager processes."
+	case strings.HasPrefix(message, "APT plan would remove packages"),
+		strings.HasPrefix(message, "APT plan would upgrade an installed package"):
+		issue.reason = "apt_plan_would_modify_installed_packages"
+		issue.next = "The APT simulation proposed removing or upgrading installed packages and was rejected. Inspect apt-cache policy and the configured signed sources (read-only); do not force this plan or start PREPARE."
 	case aptReason == "apt_source_trust_unverified":
 		issue.reason = "apt_source_trust_unverified"
 		issue.next = "Inspect APT source configuration and apt-cache policy for the missing packages; do not bypass signature checks."
@@ -96,7 +113,7 @@ func packageInventoryFailure(stderr string, ctxErr error) error {
 	case aptReason == "apt_index_unverified":
 		issue.reason = "apt_index_unverified"
 		issue.next = "Inspect signed APT repositories, available indexes and apt-cache policy (read-only); no preparation was started."
-	case strings.Contains(stderr, "dpkg has unfinished package configuration"):
+	case strings.HasPrefix(message, "dpkg has unfinished package configuration"):
 		issue.reason = "dpkg_transaction_incomplete"
 		issue.next = "Run dpkg --audit (read-only), then reconcile package state before starting a new PREPARE."
 	default:
@@ -113,6 +130,19 @@ func packageInventoryGuidance(err error) (reason, next string) {
 	}
 	return "requirements_inventory_unverified",
 		"Inspect /etc/os-release and apt-cache policy for selected packages (read-only); no preparation was started."
+}
+
+// The read-only inventory is an internal, version-bound contract between
+// STL and its embedded canonical installer. A broken response is not an APT
+// repository problem and must never supply a PREPARE authorization plan.
+func invalidPackageInventory() error {
+	return &packagePreviewIssue{reason: "requirements_inventory_contract_invalid",
+		next: "The canonical installer returned an invalid package inventory. Verify the STL executable and embedded installer provenance/version, then report the failed read-only check. Do not start PREPARE or change APT sources."}
+}
+
+func unavailablePackageInventory() error {
+	return &packagePreviewIssue{reason: "requirements_capture_unavailable",
+		next: "The private read-only inventory capture could not be read or created. Inspect temporary storage; no preparation was started."}
 }
 
 func missingStrongSwanPackages(missing string) bool {
@@ -190,8 +220,7 @@ func readSelectedPackagePreviewWithDiagnostics(ctx context.Context, selected tun
 	}
 	stdout, err := os.CreateTemp("", "stl-apt-preview-")
 	if err != nil {
-		return selectedPackagePreview{}, &packagePreviewIssue{reason: "requirements_capture_unavailable",
-			next: "Inspect the host's private temporary storage; no preparation was started."}
+		return selectedPackagePreview{}, unavailablePackageInventory()
 	}
 	defer func() { _ = stdout.Close(); _ = os.Remove(stdout.Name()) }()
 	diagnostics := &packagePreviewDiagnostics{terminal: terminal}
@@ -200,7 +229,7 @@ func readSelectedPackagePreviewWithDiagnostics(ctx context.Context, selected tun
 		return selectedPackagePreview{}, packageInventoryFailure(string(diagnostics.tail), ctx.Err())
 	}
 	if _, err := stdout.Seek(0, io.SeekStart); err != nil {
-		return selectedPackagePreview{}, errors.New("read-only inventory could not be re-read")
+		return selectedPackagePreview{}, unavailablePackageInventory()
 	}
 	var plan selectedPackagePreview
 	seen := map[string]bool{}
@@ -211,22 +240,22 @@ func readSelectedPackagePreviewWithDiagnostics(ctx context.Context, selected tun
 			break
 		}
 		if readErr != nil && readErr != io.EOF {
-			return selectedPackagePreview{}, errors.New("read-only inventory could not be parsed")
+			return selectedPackagePreview{}, unavailablePackageInventory()
 		}
 		line = strings.TrimSuffix(line, "\n")
 		key, value, ok := strings.Cut(line, "=")
 		if !ok || seen[key] {
-			return selectedPackagePreview{}, errors.New("invalid canonical package inventory")
+			return selectedPackagePreview{}, invalidPackageInventory()
 		}
 		seen[key] = true
 		switch key {
 		case "distribution", "version", "selected_backends", "packages",
 			"missing_packages", "apt_install", "apt_install_sha256", "notice":
 		default:
-			return selectedPackagePreview{}, errors.New("unexpected package inventory field")
+			return selectedPackagePreview{}, invalidPackageInventory()
 		}
 		if key == "selected_backends" && value != choice {
-			return selectedPackagePreview{}, errors.New("package selector drift")
+			return selectedPackagePreview{}, invalidPackageInventory()
 		}
 		switch key {
 		case "packages":
@@ -244,19 +273,19 @@ func readSelectedPackagePreviewWithDiagnostics(ctx context.Context, selected tun
 	}
 	if !seen["selected_backends"] || !seen["packages"] || !seen["missing_packages"] ||
 		!seen["apt_install"] || !seen["distribution"] || !seen["version"] {
-		return selectedPackagePreview{}, errors.New("canonical package inventory missing required fields")
+		return selectedPackagePreview{}, invalidPackageInventory()
 	}
 	allowed := map[string]bool{"iproute2": true, "iptables": true, "kmod": true,
 		"wireguard-tools": true, "nftables": true, "charon-systemd": true,
 		"strongswan-swanctl": true, "libstrongswan-standard-plugins": true}
 	for _, name := range strings.Fields(plan.packages) {
 		if !allowed[name] {
-			return selectedPackagePreview{}, errors.New("unknown canonical package identity")
+			return selectedPackagePreview{}, invalidPackageInventory()
 		}
 	}
 	for _, name := range strings.Fields(plan.missing) {
 		if !allowed[name] || !strings.Contains(" "+plan.packages+" ", " "+name+" ") {
-			return selectedPackagePreview{}, errors.New("unknown or unselected missing package")
+			return selectedPackagePreview{}, invalidPackageInventory()
 		}
 	}
 	identity := regexp.MustCompile("^[a-z0-9][a-z0-9.+:-]*=[0-9][a-zA-Z0-9:.+~_-]*$")
@@ -264,22 +293,22 @@ func readSelectedPackagePreviewWithDiagnostics(ctx context.Context, selected tun
 	for _, term := range strings.Fields(plan.aptInstall) {
 		packageName := strings.SplitN(term, "=", 2)[0]
 		if !identity.MatchString(term) || seenAPT[packageName] {
-			return selectedPackagePreview{}, errors.New("invalid APT resolver identity")
+			return selectedPackagePreview{}, invalidPackageInventory()
 		}
 		seenAPT[packageName] = true
 	}
 	if (plan.missing == "") != (plan.aptInstall == "") {
-		return selectedPackagePreview{}, errors.New("APT resolver omitted missing dependencies")
+		return selectedPackagePreview{}, invalidPackageInventory()
 	}
 	for _, term := range strings.Fields(plan.missing) {
 		if !seenAPT[term] {
-			return selectedPackagePreview{}, errors.New("APT resolver omitted selected package")
+			return selectedPackagePreview{}, invalidPackageInventory()
 		}
 	}
 	sum := sha256.Sum256([]byte(plan.aptInstall))
 	actualDigest := hex.EncodeToString(sum[:])
 	if seen["apt_install_sha256"] && plan.aptDigest != actualDigest {
-		return selectedPackagePreview{}, errors.New("canonical APT plan digest does not match its identity list")
+		return selectedPackagePreview{}, invalidPackageInventory()
 	}
 	plan.aptDigest = actualDigest
 	return plan, nil

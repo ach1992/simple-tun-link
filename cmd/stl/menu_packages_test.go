@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -94,6 +95,8 @@ func TestSelectedPackagePreviewErrorsAreActionableAndRedacted(t *testing.T) {
 		ctxErr                      error
 	}{
 		{"timeout", "", "requirements_check_timeout", "host load", context.DeadlineExceeded},
+		{"APT observed lock wait timeout", "stl installer [INFO]: Another APT process holds the lists lock; waiting 5 seconds before retry 2/12.\nE: secret private package location", "apt_lists_lock_wait_timeout", "Do not delete lock files", context.DeadlineExceeded},
+		{"raw APT lock word without canonical observation", "E: another APT process holds the lists lock", "requirements_check_timeout", "host load", context.DeadlineExceeded},
 		{"interrupted", "", "requirements_check_interrupted", "Reopen Create tunnel", context.Canceled},
 		{"unsupported package manager", "stl installer [FAILED]: unsupported package-manager distribution: fedora 42; this installer currently integrates with Debian/Ubuntu APT", "unsupported_or_unverified_os", "/etc/os-release", nil},
 		{"invalid Debian release metadata", "stl installer [FAILED]: invalid Debian version: secret", "unsupported_or_unverified_os", "/etc/os-release", nil},
@@ -102,8 +105,13 @@ func TestSelectedPackagePreviewErrorsAreActionableAndRedacted(t *testing.T) {
 		{"APT trust", "stl installer [FAILED]: APT candidate InRelease has no valid distribution archive signature or contains an invalid signature: secret", "apt_source_trust_unverified", "apt-cache policy", nil},
 		{"missing gpgv", "stl installer [FAILED]: cannot verify distribution archive signatures; official distro gpgv is missing.", "distro_signature_verifier_missing", "gpgv", nil},
 		{"APT plan", "stl installer [FAILED]: APT cannot resolve the complete selected dependency plan: secret", "apt_dependency_plan_unverified", "apt-cache policy", nil},
+		{"APT lists lock", "stl installer [FAILED]: APT lists lock remained busy after bounded waiting; secret", "apt_lists_lock_busy", "Do not delete lock files", nil},
+		{"APT removal proposal", "stl installer [FAILED]: APT plan would remove packages; secret", "apt_plan_would_modify_installed_packages", "do not force this plan", nil},
+		{"APT upgrade proposal", "stl installer [FAILED]: APT plan would upgrade an installed package; secret", "apt_plan_would_modify_installed_packages", "do not force this plan", nil},
 		{"dpkg", "stl installer [FAILED]: dpkg has unfinished package configuration: secret", "dpkg_transaction_incomplete", "dpkg --audit", nil},
 		{"untrusted raw stderr", "stl installer [FAILED]: private-token-DO-NOT-PRINT", "requirements_inventory_unverified", "/etc/os-release", nil},
+		{"raw APT cannot spoof OS failure", "E: failed reading invalid Debian version in private source", "requirements_inventory_unverified", "/etc/os-release", nil},
+		{"raw APT cannot spoof dpkg state", "E: dpkg has unfinished package configuration hidden in a package description", "requirements_inventory_unverified", "/etc/os-release", nil},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -142,6 +150,53 @@ func TestSelectedPackagePreviewErrorsAreActionableAndRedacted(t *testing.T) {
 	}
 }
 
+func TestMalformedReadOnlyInventoryShowsSafeMenuGuidanceWithoutPREPARE(t *testing.T) {
+	const private = "PRIVATE_APT_REPOSITORY_AUTH_TOKEN_NEVER_PRINT"
+	var out, errOut bytes.Buffer
+	previewRuns := 0
+	runner := func(_ context.Context, stdout, stderr io.Writer, args ...string) error {
+		previewRuns++
+		if !slices.Equal(args, []string{"requirements", "--backends", "native,ipsec"}) {
+			t.Fatalf("read-only check executed an unexpected operation: %q", args)
+		}
+		_, _ = io.WriteString(stderr, "E: private APT URL with "+private+"\n")
+		_, err := io.WriteString(stdout, "distribution=debian\nversion=13\n"+
+			"selected_backends=native,ipsec\npackages=iproute2 iptables kmod\n"+
+			"missing_packages=iproute2\napt_install=iproute2=6.0.0-1\n"+
+			"apt_install_sha256=not-a-valid-hash\nnotice="+private+"\n")
+		return err
+	}
+	ops := menuPackagePreparationOps{
+		preview: func(ctx context.Context, selected tunnelOption) (selectedPackagePreview, error) {
+			return readSelectedPackagePreviewWithRunner(ctx, selected, runner)
+		},
+		canPrepare: func(io.Reader, io.Writer) bool {
+			t.Fatal("malformed read-only inventory entered privilege admission")
+			return false
+		},
+		install: func(context.Context, io.Writer, io.Writer, ...string) error {
+			t.Fatal("malformed read-only inventory reached installer PREPARE")
+			return nil
+		},
+	}
+	input := strings.NewReader("PREPARE\nYES\n")
+	result := menuPrepareSelectedPackagesWithOps(input, nil, &out, &errOut,
+		tunnelOption{backend: domain.BackendIPsec, mode: domain.EncapESP}, nil, ops)
+	if previewRuns != 1 || result.canContinue || result.approvedSelectedPlan ||
+		!strings.Contains(out.String(), "requirements_inventory_contract_invalid") ||
+		!strings.Contains(out.String(), "Do not start PREPARE") ||
+		!strings.Contains(out.String(), "no preparation attempted") ||
+		strings.Contains(out.String()+errOut.String(), private) ||
+		errOut.Len() != 0 {
+		t.Fatalf("invalid inventory exposed private details or authorized PREPARE: runs=%d result=%+v out=%q stderr=%q",
+			previewRuns, result, out.String(), errOut.String())
+	}
+	remaining, err := io.ReadAll(input)
+	if err != nil || string(remaining) != "PREPARE\nYES\n" {
+		t.Fatalf("read-only failure consumed a destructive confirmation: %q %v", remaining, err)
+	}
+}
+
 // The live canonical installer uses stable uppercase APT stage identifiers.
 // Their operator projections must remain actionable and redact raw stderr.
 func TestCanonicalAPTPreviewFailuresUseCurrentInstallerReasons(t *testing.T) {
@@ -150,7 +205,10 @@ func TestCanonicalAPTPreviewFailuresUseCurrentInstallerReasons(t *testing.T) {
 	}{
 		{"dependency resolution", "APT_DEPENDENCY_PLAN failed; missing selected packages: iptables.", "apt_dependency_plan_unverified", "apt-cache policy"},
 		{"no signed index mapping", "no APT package index mapping available", "apt_dependency_plan_unverified", "apt-cache policy"},
-		{"removal proposal", "APT plan would remove packages; no changes allowed", "apt_dependency_plan_unverified", "apt-cache policy"},
+		{"removal proposal", "APT plan would remove packages; no changes allowed", "apt_plan_would_modify_installed_packages", "apt-cache policy"},
+		{"upgrade proposal", "APT plan would upgrade an installed package; review separately", "apt_plan_would_modify_installed_packages", "apt-cache policy"},
+		{"lists lock busy", "APT lists lock remained busy after bounded waiting; let the other apt-get finish", "apt_lists_lock_busy", "lock files"},
+		{"index refresh failure", "APT_INDEX_REFRESH failed; missing selected packages: iproute2", "apt_index_unverified", "signed APT repositories"},
 		{"foreign dependency", "APT selected a dependency outside the distribution archive; no changes allowed", "apt_source_trust_unverified", "signature"},
 		{"untrusted source config", "APT sources explicitly bypass signature verification", "apt_source_trust_unverified", "signature"},
 	}
@@ -194,6 +252,9 @@ func TestSelectedPackagePreviewStreamsLongDiagnosticsAndVerifiesPlan(t *testing.
 		{"wrong digest", strings.Replace(inventory, digest, strings.Repeat("f", 64), 1)},
 		{"duplicate field", inventory + "apt_install=" + realPlan + "\n"},
 		{"unexpected field", inventory + "command=run me\n"},
+		{"selected backend drift", strings.Replace(inventory, "selected_backends=native", "selected_backends=ipsec", 1)},
+		{"missing required fields", strings.Replace(inventory, "distribution=debian\n", "", 1)},
+		{"missing declared dependency", strings.Replace(inventory, "apt_install="+realPlan, "apt_install=", 1)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := func(_ context.Context, stdout, stderr io.Writer, _ ...string) error {
@@ -203,6 +264,9 @@ func TestSelectedPackagePreviewStreamsLongDiagnosticsAndVerifiesPlan(t *testing.
 			if _, err := readSelectedPackagePreviewWithRunner(context.Background(),
 				tunnelOption{backend: domain.BackendGRE, mode: domain.EncapNative}, fake); err == nil {
 				t.Fatal("malformed read-only inventory authorized PREPARE")
+			} else if reason, next := packageInventoryGuidance(err); reason != "requirements_inventory_contract_invalid" ||
+				!strings.Contains(next, "provenance/version") || !strings.Contains(next, "Do not start PREPARE") {
+				t.Fatalf("malformed inventory lost actionable own-contract guidance: reason=%q next=%q", reason, next)
 			}
 		})
 	}
@@ -214,7 +278,7 @@ func TestSelectedPackagePreviewStreamsLongDiagnosticsAndVerifiesPlan(t *testing.
 	_, err = readSelectedPackagePreviewWithRunner(context.Background(),
 		tunnelOption{backend: domain.BackendGRE, mode: domain.EncapNative}, runnerFailed)
 	reason, next := packageInventoryGuidance(err)
-	if reason != "apt_dependency_plan_unverified" || strings.Contains(reason+next, sensitive) {
+	if reason != "apt_plan_would_modify_installed_packages" || strings.Contains(reason+next, sensitive) {
 		t.Fatalf("failed preview lost safe typed reason: %s %s", reason, next)
 	}
 }

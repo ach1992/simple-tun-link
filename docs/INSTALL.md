@@ -120,11 +120,13 @@ package, binary and service mutations require fresh confirmation.
 | `unsupported_or_unverified_os` | `cat /etc/os-release` and [supported hosts](SUPPORTED-ENVIRONMENTS.md) | Do not forge OS fields or modify distribution identity |
 | `apt_source_trust_unverified` | `apt-cache policy iproute2 iptables kmod` and inspect configured distribution sources and archive signatures | Distribution candidate trust was not verified; never bypass signatures or edit sources automatically |
 | `requirements_check_timeout` or `requirements_inventory_unverified` | Check local load and APT metadata, then repeat the read-only Create inventory | A failed preview is not PREPARE consent |
+| `requirements_inventory_contract_invalid` | Verify the installed STL executable, bundled canonical installer and provenance/version; report the failed read-only inventory without unredacted source details | A malformed, mismatched, duplicated or hash-invalid inventory is not an APT source problem; it never authorizes PREPARE |
 | `requirements_inventory_oversized` | Confirm the official STL binary/source integrity; an unexpected inventory or diagnostic stream exceeded its collection limit | Truncated output is not a trusted package plan; PREPARE is not authorized |
 | `github_release_api_limited`, `release_lookup_timeout`, or `release_catalogue_invalid` | Check [official releases](https://github.com/ach1992/simple-tun-link/releases) and HTTPS reachability to `api.github.com` | No binary update began; do not substitute an unverified tag |
 | `apt_index_unverified` (`APT_INDEX_REFRESH`) | Inspect configured signed repositories and APT index availability; distinguish mirror failure from a positively identified lists lock | Index refresh failed; no package install was started by this attempt, but inspect existing APT state before a new PREPARE |
 | `apt_dependency_plan_unverified` (`APT_DEPENDENCY_PLAN`) | Inspect `apt-cache policy` for missing packages and signed candidate indexes | The planned transaction was rejected before package installation; refresh the preview and obtain new PREPARE consent |
-| APT lists lock held by another `apt-get` | `ps -ef` for legitimate package-manager activity and `dpkg --audit` | The installer waits a bounded period. Do not delete lock files, kill APT, or run a whole-host upgrade to clear the lock |
+| `apt_plan_would_modify_installed_packages` | Inspect the rejected APT simulation, `apt-cache policy` and configured signed sources | An attempted upgrade or removal of installed packages is not an approved prerequisite; no PREPARE and no forced package transaction |
+| `apt_lists_lock_wait_timeout` or `apt_lists_lock_busy` | Inspect active legitimate APT processes (`ps -ef`) and `dpkg --audit`; let the existing process finish | The guided read-only preview may hit its shorter deadline while the installer is still waiting, or the installer's bounded wait may expire. Neither permits deleting lock files, killing APT or running a whole-host upgrade |
 | `apt_transaction_incomplete` (`APT_PACKAGE_INSTALL`) | `dpkg --audit`, then verify selected installed packages with `dpkg-query -W` | Package/service hooks may persist. Inspect and reconcile before beginning another transaction; never blindly retry |
 | `STL ownership record is missing or not regular` on `update` | `namei -l /usr/local/lib/simple-tun-link/install-record` and `stat` the `stl`/`stlink` installation paths | An incomplete first install is not an update; never forge ownership metadata or replace existing foreign binaries |
 | Installer partial publication or failed identity verification | Check the reported private recovery directory, installed executable identity and ownership record, without changing them | Stop before another update/uninstall; retained rollback evidence is authoritative |
@@ -137,6 +139,14 @@ failure where available; interruption or missing/incomplete diagnostics must
 remain `unverified` rather than guess the transaction stage. Regardless of
 the diagnostic category, after an attempted PREPARE inspect `dpkg --audit`
 and actual package/service state before a new consented attempt.
+
+The selected-package **read-only pre-PREPARE preview** streams the full
+canonical installer/APT diagnostics only when both the human menu output
+and actual diagnostic destination are terminals. Redirected/scripted output
+gets stable reason codes and safe next steps, not arbitrary APT text or
+private repository URLs. A malformed canonical inventory is reported as an
+installer contract failure, never mistaken for successful package admission.
+This does not run PREPARE, change APT sources, or grant root consent.
 
 Avoid posting raw APT source configuration, package logs, State files, or
 private Setup Links publicly: they can contain credentials or sensitive
