@@ -160,6 +160,11 @@ func menuCreateWSSWithHost(input io.Reader, reader *bufio.Reader, out, errOut io
 		menuNotice(out, "INFO", "Creation cancelled.")
 		return 0
 	}
+	createRuntime, err := menuHandoffCreationOptions(opts, id, domain.BackendWireGuardWSS)
+	if err != nil {
+		menuNotice(out, "WARNING", "Cannot initialize the selected WSS runtime; no private Link or key was created.")
+		return 1
+	}
 	path, err := prepareProtectedMenuHandoff(opts, id)
 	if err != nil {
 		menuNotice(out, "WARNING", "Cannot safely prepare private receiver handoff.")
@@ -167,7 +172,7 @@ func menuCreateWSSWithHost(input io.Reader, reader *bufio.Reader, out, errOut io
 	}
 	menuScreen(out, "Applying / WSS+WireGuard")
 	code := linkWSSCommand([]string{"create-wss", "--stdin", "--output", path},
-		bytes.NewReader(preview), out, errOut, menuHandoffCreationOptions(opts, id))
+		bytes.NewReader(preview), out, errOut, createRuntime)
 	if code != 0 {
 		menuNotice(out, "WARNING", "Preserve the original peer handoff and reconcile State and owned host resources; do not generate replacement keys.")
 		return code

@@ -42,7 +42,7 @@ local systemd journal, without logging private keys or capsule payloads.
 `status` reports owner-verified systemd/TUN/route only. `diagnose` performs a
 bounded five-echo private IPv4 check; it does not certify sustained throughput,
 carrier PMTU or fault recovery. HTTP/2 over TCP can exhibit head-of-line
-blocking; compare it to GRE Native with the same bidirectional workload.
+blocking, but a comparative performance benchmark is not a MASQUE release gate.
 
 ## Create, preview, import and recovery
 
@@ -155,9 +155,10 @@ shared terminal transcripts, Issues or logs.
   protected material directory, TUN alias, interface address and private
   route. Another service, file or Link is never adopted by filename alone.
 - Default private TUN MTU is 1280 bytes; physical-path PMTU is not
-  established by local setup. Avoid treating a short TCP/UDP transfer as a
-  sustained benchmark. Packet loss, CPU utilization, latency, restart and
-  genuine reboot require separate measured evidence.
+  established by local setup. Small private TCP/UDP receipts prove
+  application connectivity, **not** physical-path PMTU, sustained
+  performance or reboot recovery. Do not infer those outcomes from local
+  setup or replace the required functional journey with benchmarks.
 
 ### Interrupted original with an active helper
 
@@ -193,9 +194,14 @@ service takeover or instruction to change the installed production binary.
 
 ## Release gates
 
-The unpublished candidate requires full Go tests/vet, independent exact-HEAD
-review, public CLI acceptance on **both** authorized test servers, malformed
-input/authentication/reconnect/foreign-owner/partial journal tests, reboot and
-multi-Link recovery, and sustained two-way comparison with GRE Native under
-equivalent conditions. Only the Owner can authorize merge, release and
-Production; see Issue #142 for the authoritative latest pass/fail record.
+Before publishing MASQUE as Stable, require current-source tests/vet,
+independent exact-candidate review, a canonical installed-version first-run
+and guided Create/Import/Manage journey on a permitted two-peer environment,
+fresh confirmation, private original handoff identity, real authenticated
+bilateral private IPv4 ICMP/TCP/UDP, reconnection/restore and owner-scoped
+Remove with no foreign effects. Record any blocked/untested host reboot
+honestly; do not claim a cold-reboot result from an in-place restore.
+A matched GRE comparison, CPU/throughput scorecard, synthetic performance
+threshold or long soak is **not** a MASQUE acceptance prerequisite.
+Only the Owner can authorize merge, Stable release, Mirror and Production;
+see Issue #142 for live evidence and remaining gates.

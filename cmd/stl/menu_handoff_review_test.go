@@ -21,6 +21,52 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
+// An ordinary `stl menu` starts with nil runtime options. The guided
+// confirmation must resolve the selected real backend before claiming the
+// one-Link protected receiver namespace; a state-root-only placeholder used
+// to cause an otherwise valid MASQUE Create to fail before Host Apply.
+func TestGuidedCreateResolvesSelectedRuntimeBeforePrivateHandoff(t *testing.T) {
+	id := domain.LinkID("lnk_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+	selection := domain.BackendMASQUE
+	calls := 0
+	var assembled *runtimeOptions
+	builder := func(root string, backend domain.Backend) (*runtimeOptions, error) {
+		calls++
+		if root != state.DefaultRoot || backend != selection {
+			t.Fatalf("guided Create used wrong root/backend: %s %s", root, backend)
+		}
+		assembled = &runtimeOptions{stateRoot: root}
+		return assembled, nil
+	}
+	scoped, err := menuHandoffCreationOptionsWithAssembler(nil, id, selection, builder)
+	if err != nil || calls != 1 || scoped == nil || scoped.menuHandoffID != id ||
+		scoped.stateRoot != state.DefaultRoot || assembled.menuHandoffID != "" {
+		t.Fatalf("nil menu runtime did not resolve selected backend without mutating its source: %v", err)
+	}
+	other := &runtimeOptions{stateRoot: filepath.Join(t.TempDir(), "state")}
+	scoped, err = menuHandoffCreationOptionsWithAssembler(other, id, selection, func(string, domain.Backend) (*runtimeOptions, error) {
+		t.Fatal("explicit injected runtime must not be reconstructed")
+		return nil, nil
+	})
+	if err != nil || scoped == nil || scoped.menuHandoffID != id ||
+		scoped.stateRoot != other.stateRoot || other.menuHandoffID != "" {
+		t.Fatalf("injected menu runtime changed or lost Link ownership: %v", err)
+	}
+	unavailable := errors.New("selected backend unavailable")
+	scoped, err = menuHandoffCreationOptionsWithAssembler(nil, id, selection, func(string, domain.Backend) (*runtimeOptions, error) {
+		return nil, unavailable
+	})
+	if scoped != nil || !errors.Is(err, unavailable) {
+		t.Fatalf("runtime admission failure must propagate without placeholder options: %v", err)
+	}
+	scoped, err = menuHandoffCreationOptionsWithAssembler(nil, id, selection, func(string, domain.Backend) (*runtimeOptions, error) {
+		return nil, nil
+	})
+	if scoped != nil || err == nil {
+		t.Fatal("nil successful runtime result cannot authorize private Link creation")
+	}
+}
+
 func TestPublicMASQUECLICannotClaimMenuHandoffNamespace(t *testing.T) {
 	opts, _, _, _ := guidedSavedWireGuardFixture(t)
 	id := domain.LinkID("lnk_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
@@ -57,7 +103,10 @@ func TestPublicMASQUECLICannotClaimMenuHandoffNamespace(t *testing.T) {
 	if err := checkCreatorHandoffDestination(opts, id, normalOutput); err != nil {
 		t.Fatalf("ordinary owner-private CLI destination was unnecessarily banned: %v", err)
 	}
-	scoped := menuHandoffCreationOptions(opts, id)
+	scoped, err := menuHandoffCreationOptions(opts, id, domain.BackendMASQUE)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := checkCreatorHandoffDestination(scoped, id, target); err != nil {
 		t.Fatalf("guided menu cannot create its own exact original offer: %v", err)
 	}

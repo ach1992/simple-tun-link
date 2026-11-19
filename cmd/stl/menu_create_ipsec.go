@@ -141,13 +141,18 @@ func menuCreateIPsec(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		return 0
 	}
 	menuScreen(out, "Applying / creating protected IPsec tunnel")
+	createRuntime, err := menuHandoffCreationOptions(options, id, domain.BackendIPsec)
+	if err != nil {
+		menuNotice(out, "WARNING", "Cannot initialize the selected IPsec runtime; no private Link or key was created.")
+		return 1
+	}
 	handoff, err = prepareProtectedMenuHandoff(options, id)
 	if err != nil {
 		fmt.Fprintln(errOut, "Cannot safely reserve the protected Setup Link file. No new key generated.")
 		return 1
 	}
 	code := linkCreateIPsecCommand([]string{"create-ipsec", "--stdin", "--output", handoff},
-		bytes.NewReader(payload), out, errOut, menuHandoffCreationOptions(options, id))
+		bytes.NewReader(payload), out, errOut, createRuntime)
 	if code != 0 {
 		fmt.Fprintln(errOut, "If a protected handoff was already staged, keep that file and reconcile before starting a new IPsec setup.")
 		return code

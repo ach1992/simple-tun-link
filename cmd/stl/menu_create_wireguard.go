@@ -170,12 +170,17 @@ func menuCreateWireGuard(input io.Reader, reader *bufio.Reader, out, errOut io.W
 	// has freshly approved the preview. After this point only the canonical
 	// sender Engine creates keys and publishes the 0600 handoff.
 	menuScreen(out, "Applying / creating encrypted WireGuard tunnel")
+	createRuntime, err := menuHandoffCreationOptions(options, id, domain.BackendWireGuard)
+	if err != nil {
+		menuNotice(out, "WARNING", "Cannot initialize the selected WireGuard runtime; no private Link or key was created.")
+		return 1
+	}
 	path, err = prepareProtectedMenuHandoff(options, id)
 	if err != nil {
 		fmt.Fprintln(errOut, "Cannot safely reserve the private Setup Link file; no new keypair generated.")
 		return 1
 	}
-	code := linkCreateWireGuardCommand([]string{"create-wireguard", "--stdin", "--output", path}, bytes.NewReader(payload), out, errOut, menuHandoffCreationOptions(options, id))
+	code := linkCreateWireGuardCommand([]string{"create-wireguard", "--stdin", "--output", path}, bytes.NewReader(payload), out, errOut, createRuntime)
 	if code != 0 {
 		fmt.Fprintln(errOut, "If a SENSITIVE file was published, retain it privately for explicit resume/reconciliation.")
 		return code
