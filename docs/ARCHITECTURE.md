@@ -1318,9 +1318,9 @@ reservations, private identity and surviving migrated WG unchanged.
 The harness uses disposable rootless kernel WireGuard+nft with a
 systemd **shim**, not real PID1 reboot or physical two-host recovery.
 
-## Optional MASQUE CONNECT-IP Carrier (Issue #142, unreleased)
+## Optional MASQUE CONNECT-IP Carrier (v0.1.28+, Issue #142)
 
-The experimental MASQUE backend uses **the single Engine**, Link ID, State,
+The native MASQUE backend uses **the single Engine**, Link ID, State,
 resource locks, owned host-effect journal, rollback and restore. It accepts a
 versioned, explicit IPv4/IPv6 physical source/peer pair and private IPv4
 `/32` routes; a root-owned transient per-Link systemd helper runs authenticated
@@ -1332,5 +1332,5 @@ reuse the canonical reporting and diagnostic contracts, never reporting
 verified remote connectivity merely from local service readiness.
 
 See [MASQUE Carrier](MASQUE-CARRIER.md) and
-[Issue #142](https://github.com/ach1992/simple-tun-link/issues/142) for the
-unmerged source/test status.
+[Issue #142](https://github.com/ach1992/simple-tun-link/issues/142) for
+post-publication two-server acceptance status (not inferred from release).

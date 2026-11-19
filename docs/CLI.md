@@ -1268,13 +1268,15 @@ unit-name cleanup or a regenerated peer handoff. Legitimate committed
 post-reboot restoration requires trusted changed-kernel evidence and fresh
 host vacancy, preserving the same Link and credential identity.
 
-## Unreleased MASQUE CONNECT-IP Carrier
+## MASQUE CONNECT-IP Carrier (v0.1.28+)
 
-The Issue #142 development candidate adds typed `create-masque`, `preview-masque`,
+The native MASQUE backend adds typed `create-masque`, `preview-masque`,
 `import-masque`, `resume-masque`, `reconcile-masque` and `retire-masque`; normal
 `link list`, `link status`, `link diagnose`, `link restore --all` and `link remove`
 use the original canonical Engine. The menu includes MASQUE Create/Import with
-protected receiver handoff. It is **not** in the published v0.1.27 release.
+protected receiver handoff. It first ships in `v0.1.28`; older `v0.1.27`
+installers do not have this Carrier. Practical published-version two-server
+acceptance is still tracked in [Issue #142](https://github.com/ach1992/simple-tun-link/issues/142).
 The original JSON receiver offer is **sensitive**, and the import `--confirm`
 is the SHA256 of the exact separately reviewed offer. Only verified local
 systemd/TUN/route ownership is asserted by status; private ICMP and sustained

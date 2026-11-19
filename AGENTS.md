@@ -11,8 +11,9 @@ Before coding:
 Hard boundaries:
 - GRE Native is the v0.1 default.
 - Current core backends include native GRE/IPIP, L2TPv3 Direct-IP,
-  WireGuard, and exclusive IPsec/XFRM. Optional WSS/TLS and QUIC/TLS
-  Carriers reuse managed kernel WireGuard, not a second Link Engine.
+  WireGuard, exclusive IPsec/XFRM, and authenticated MASQUE CONNECT-IP.
+  Optional WSS/TLS and QUIC/TLS Carriers reuse managed kernel WireGuard,
+  not a second Link Engine.
 - GRE/IPIP support Native/FOU/GUE.
 - Go is the control plane; native backends keep packet data out of Go.
 - For future Carriers, reuse the existing Engine and native L3 backends;

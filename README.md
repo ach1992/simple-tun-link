@@ -15,18 +15,19 @@ saved Link is **not** proof that packets reach its peer.
 | WireGuard over WSS/TLS | TCP/TLS plus kernel WireGuard; optional `wstunnel` | Yes |
 | WireGuard over QUIC | QUIC/TLS plus kernel WireGuard; optional Hysteria (Plain or Salamander) | Yes |
 | IPsec | Native IKEv2/XFRM, ESP or NAT-T; gated host preparation | Yes |
-| MASQUE CONNECT-IP (source `main` candidate) | HTTP/2 over TLS/TCP with mutual TLS; native IPv4 TUN | Yes |
+| MASQUE CONNECT-IP (v0.1.28+) | HTTP/2 over TLS/TCP with mutual TLS; native IPv4 TUN | Yes |
 
 Different transports have different kernel, firewall, network and optional
 helper requirements. STL does not automatically configure provider firewalls,
 NAT or foreign VPNs, and no transport works through every network.
 
-**Publication status:** MASQUE is implemented in current source `main`, but
-is **not** included in the published Stable `v0.1.27` installer. Do not
-assume that installing `releases/latest` makes this Carrier available until a
-new release is actually published and verified. See the
-[MASQUE Carrier guide](docs/MASQUE-CARRIER.md) and
-[functional acceptance status](https://github.com/ach1992/simple-tun-link/issues/142).
+**Release availability:** MASQUE is included from Stable `v0.1.28` onward;
+older `v0.1.27` installers do not contain it. The Owner chose to publish
+`v0.1.28` before the full real two-server MASQUE acceptance run, so a published
+release alone does **not** prove your WAN path or reboot recovery. Verify your
+installed version and test on authorized servers before production use. See
+the [MASQUE Carrier guide](docs/MASQUE-CARRIER.md) and
+[remaining field acceptance](https://github.com/ach1992/simple-tun-link/issues/142).
 
 ## Requirements
 

@@ -1,9 +1,10 @@
-# MASQUE CONNECT-IP Carrier (development candidate)
+# MASQUE CONNECT-IP Carrier (Stable v0.1.28+)
 
-> **Unreleased.** This document describes the experimental candidate in
-> [Issue #142](https://github.com/ach1992/simple-tun-link/issues/142), not
-> a capability available in the published v0.1.27 installer. Do not infer
-> production approval from a green local test or a successful private ping.
+> **First released in v0.1.28.** The Owner authorized GitHub publication
+> before the full practical two-server acceptance. Real installed-version
+> guided Create/Import, bilateral private ICMP/TCP/UDP and reboot recovery
+> remain separately tracked in [Issue #142](https://github.com/ach1992/simple-tun-link/issues/142).
+> Do not infer production approval from a release tag, local readiness or ping.
 
 ## What it is
 
@@ -192,16 +193,19 @@ Preserve State, journal and protected files for independent owner review. This
 is a deliberately manual recovery boundary, **not** a cleanup timer, automatic
 service takeover or instruction to change the installed production binary.
 
-## Release gates
+## Publication and follow-up field acceptance
 
-Before publishing MASQUE as Stable, require current-source tests/vet,
-independent exact-candidate review, a canonical installed-version first-run
-and guided Create/Import/Manage journey on a permitted two-peer environment,
-fresh confirmation, private original handoff identity, real authenticated
-bilateral private IPv4 ICMP/TCP/UDP, reconnection/restore and owner-scoped
-Remove with no foreign effects. Record any blocked/untested host reboot
-honestly; do not claim a cold-reboot result from an in-place restore.
-A matched GRE comparison, CPU/throughput scorecard, synthetic performance
-threshold or long soak is **not** a MASQUE acceptance prerequisite.
-Only the Owner can authorize merge, Stable release, Mirror and Production;
-see Issue #142 for live evidence and remaining gates.
+The Owner chose **publish Stable v0.1.28 first, then test on two authorized
+servers**. The release still requires exact-source review, tests, verified
+artifact hashes and installed-version identity, but **publication is not
+proof of full real two-server acceptance**. Record the subsequently tested
+published artifact, independently confirmed original private receiver offer,
+fresh Create/Import confirmation, authenticated bilateral private IPv4
+ICMP/TCP/UDP, reconnect/restore of the same Link, and owner-scoped Remove
+without foreign effects. Record any blocked or untested reboot truthfully;
+an in-place restore does not prove a cold boot. Do not silently bypass
+platform restrictions or treat release publication as permission to install
+on production hosts. A GRE performance comparison, CPU/throughput scorecard,
+synthetic performance threshold or soak is **not** a MASQUE prerequisite.
+See [Issue #142](https://github.com/ach1992/simple-tun-link/issues/142)
+for the current evidence and unresolved host-level gates.
