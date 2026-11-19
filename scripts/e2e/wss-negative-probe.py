@@ -7,7 +7,7 @@ import sys, os, ssl, socket, base64, secrets, time
 mode=sys.argv[1]
 root="/lab/beta-state/credentials/wss/lnk_0123456789abcdef0123456789abcdef"
 context=ssl.create_default_context(cafile=root+"/server-ca.pem")
-if mode!="no-mtls":
+if mode not in ("no-mtls", "no-mtls-wrong-bearer"):
     context.load_cert_chain(root+"/client-cert.pem",root+"/client-key.pem")
 context.check_hostname=False
 allowed_header=(open(root+"/authorization-headers","rb").read().strip().decode("ascii"))

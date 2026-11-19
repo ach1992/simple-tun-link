@@ -39,6 +39,7 @@ type wssCreateRequest struct {
 	LocalForwardUDPPort  uint16                 `json:"local_forward_udp_port,omitempty"`
 	RemoteForwardUDPPort uint16                 `json:"remote_forward_udp_port,omitempty"`
 	TLSServerName        string                 `json:"tls_server_name,omitempty"`
+	PublicTLS            bool                   `json:"public_tls,omitempty"`
 }
 
 // Private WSS handoffs cannot be imported by old v1/v2/v3 pairing code.
@@ -129,7 +130,7 @@ func makeWSSPair(r wssCreateRequest, id domain.LinkID, localPub, peerPub string)
 			LocalKeepalive: r.LocalKeepalive, PeerKeepalive: r.PeerKeepalive,
 		},
 		WSS: domain.WSSOptions{Role: r.Role, TCPPort: r.TCPPort,
-			ForwardUDPPort: r.LocalForwardUDPPort, TLSServerName: r.TLSServerName},
+			ForwardUDPPort: r.LocalForwardUDPPort, TLSServerName: r.TLSServerName, PublicTLS: r.PublicTLS},
 	}
 	peerRole := "listen"
 	if r.Role == "listen" {
@@ -146,7 +147,7 @@ func makeWSSPair(r wssCreateRequest, id domain.LinkID, localPub, peerPub string)
 			LocalKeepalive: r.PeerKeepalive, PeerKeepalive: r.LocalKeepalive,
 		},
 		WSS: domain.WSSOptions{Role: peerRole, TCPPort: r.TCPPort,
-			ForwardUDPPort: r.RemoteForwardUDPPort, TLSServerName: r.TLSServerName},
+			ForwardUDPPort: r.RemoteForwardUDPPort, TLSServerName: r.TLSServerName, PublicTLS: r.PublicTLS},
 	}
 	if r.Role == "dial" && r.RemoteForwardUDPPort != 0 {
 		return domain.Link{}, domain.Link{}, fmt.Errorf("WSS listener must not specify a remote forwarder")
@@ -234,9 +235,10 @@ func linkWSSCommand(args []string, in io.Reader, out, errOut io.Writer, options 
 			PrivateIP     string         `json:"receiver_private_ip"`
 			Confirm       string         `json:"confirmation_sha256"`
 			Sensitive     bool           `json:"sensitive"`
+			PublicTLS     bool           `json:"public_tls"`
 		}{1, offer.Receiver.ID, offer.Receiver.Backend, offer.Receiver.WSS.Role,
 			offer.Receiver.Underlay.Local.String(), offer.Receiver.Addresses.Local.String(),
-			setupLinkConfirmation(string(raw)), true}
+			setupLinkConfirmation(string(raw)), true, offer.Receiver.WSS.PublicTLS}
 		if jsonOut {
 			if json.NewEncoder(out).Encode(response) != nil {
 				return 1

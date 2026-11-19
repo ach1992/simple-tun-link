@@ -687,6 +687,15 @@ Start the **guided** path using STL menu:
 Create tunnel → WireGuard / WSS + TLS. Enter the peer public address and
 private Link IPv4 /30 or /31 pair, then accept the provisional public
 direction with Enter or select `1` Listen / `2` Dial in the same prompt.
+Choose **Private mTLS** (default) or **Public TLS** after direction.
+Public TLS lets an ordinary TLS client reach the listener without a client
+certificate; it does **not** expose private WG UDP to unauthenticated
+requests. Real WebSocket Upgrade still requires the exact Link path and
+secret bearer. The pinned wstunnel replies HTTP **400** to unrelated GET
+requests; it does not produce an ordinary website, Chrome fingerprint, or
+publicly trusted certificate. Keep the selected mode identical on both
+peers and create a fresh Link for a mode change.
+
 The next prompts collect WireGuard UDP listen/peer ports, WSS TCP port,
 private forwarding UDP port and TLS server identity. The menu checks the optional pinned helper, shows an
 effect summary, and requires fresh YES before host mutation. On the receiver,
@@ -706,6 +715,7 @@ values. It deliberately contains **no credentials**:
   "peer_port": 51822,
   "role": "listen",
   "tcp_port": 443,
+  "public_tls": true,
   "remote_forward_udp_port": 53001,
   "local_keepalive": 25,
   "peer_keepalive": 25

@@ -141,6 +141,7 @@ type WSSOptions struct {
 	TCPPort        uint16 `json:"tcp_port"`
 	ForwardUDPPort uint16 `json:"forward_udp_port,omitempty"`
 	TLSServerName  string `json:"tls_server_name,omitempty"`
+	PublicTLS      bool   `json:"public_tls,omitempty"`
 }
 
 // QUICOptions is the public, endpoint-local Hysteria carrier topology.

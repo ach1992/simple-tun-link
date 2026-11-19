@@ -522,6 +522,16 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 	if exists && record.Desired.Backend != desired.Backend {
 		return Result{}, stlerr.New(stlerr.CodeUnsupported, "ensure", string(desired.ID), string(desired.Backend), "changing backend for an existing Link is not supported by this lifecycle yet")
 	}
+	// The WSS public-TLS option shifts peer authentication from the TLS
+	// handshake to the authenticated Upgrade request. Generic Ensure may
+	// reconfigure ordinary properties, but it must never silently change
+	// this security contract on an existing service. Remove the original
+	// Link with its owned resources and create a freshly paired Link instead.
+	if exists && desired.Backend == domain.BackendWireGuardWSS &&
+		record.Desired.WSS.PublicTLS != desired.WSS.PublicTLS {
+		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID), string(desired.Backend),
+			"WSS TLS authentication mode changed; remove the original Link and create a fresh paired Link")
+	}
 	// Do not persist an imported credential when the requested backend is
 	// unavailable. Credential activation remains inside the Engine Link lock.
 	if _, registered := e.backends.Get(desired.Backend); !registered {

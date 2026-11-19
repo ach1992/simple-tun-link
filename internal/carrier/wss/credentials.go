@@ -86,6 +86,14 @@ func GeneratePair(id domain.LinkID, serverName string) (PrivateBundle, PrivateBu
 	if err != nil {
 		return nil, nil, err
 	}
+	// Parse the actual issued CA before signing the leaves. Go generates
+	// a SubjectKeyId for a CA certificate, but does not mutate the input
+	// template. Using that template as the issuer would omit the leaves'
+	// AuthorityKeyId and fail strict OpenSSL/Python TLS chain validation.
+	issuedCA, err := x509.ParseCertificate(caDER)
+	if err != nil || len(issuedCA.SubjectKeyId) == 0 {
+		return nil, nil, fmt.Errorf("generated WSS trust authority has no valid subject key identifier")
+	}
 	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
 	serverSerial, err := randomSerial()
 	if err != nil {
@@ -105,7 +113,7 @@ func GeneratePair(id domain.LinkID, serverName string) (PrivateBundle, PrivateBu
 		}
 		server.DNSNames = []string{serverName}
 	}
-	serverPEM, serverKey, err := issueSigned(ca, caKey, server)
+	serverPEM, serverKey, err := issueSigned(issuedCA, caKey, server)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -119,7 +127,7 @@ func GeneratePair(id domain.LinkID, serverName string) (PrivateBundle, PrivateBu
 		KeyUsage:    x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}
-	clientPEM, clientKey, err := issueSigned(ca, caKey, client)
+	clientPEM, clientKey, err := issueSigned(issuedCA, caKey, client)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -38,14 +38,20 @@ type Command struct {
 	ServerRestrictions []byte
 }
 
-// Build constructs a v11.0.0 mTLS invocation with a second, independent
+// Build constructs a v11.0.0 WSS invocation with a second, independent
 // high-entropy per-Link bearer credential. Upstream v11 skips CN-to-path
 // matching when the client certificate has no extractable CN, so PathPrefix
-// alone is NOT authorization. A TLS-trusted client must ALSO know the
+// alone is NOT authorization. An Upgrade requester must ALSO know the
 // per-Link token; this is the enforced authorization identity, with CN/path
 // matching a secondary defense when CN is present. A client missing CN but
 // possessing the bearer is not distinguishable by upstream v11: issuance,
 // rotation/revocation and secret protection must account for that.
+//
+// The default WSS mode still uses mTLS. Explicit PublicTLS accepts a normal
+// TLS handshake without client certificates, then enforces path plus bearer
+// before wstunnel opens the restricted WG UDP destination. The upstream v11
+// listener returns HTTP 400 to ordinary GET; this mode is NOT a decoy site,
+// Chrome-like TLS emulation, or proof of browser indistinguishability.
 //
 // The token must originate from a cryptographically secure 32-byte random
 // secret generated out of band and securely provisioned to BOTH endpoints.
@@ -93,8 +99,15 @@ func Build(link domain.Link, carrier composition.Carrier, binary, privateRoot, a
 		uri := url.URL{Scheme: "wss", Host: path.WSSPeerTCP.String()}
 		// Use the actual verified peer certificate DNS SAN; a physical IP
 		// underlay must not be misrepresented as a DNS address.
-		command.Args = []string{"client", "--log-lvl", safeWstunnelLogLevel, "--tls-verify-certificate",
-			"--tls-certificate", clientCert, "--tls-private-key", clientKey}
+		command.Args = []string{"client", "--log-lvl", safeWstunnelLogLevel, "--tls-verify-certificate"}
+		if link.WSS.PublicTLS {
+			// Public TLS does not request a client certificate. v11 must
+			// receive the exact Link path explicitly; the protected bearer
+			// and restricted UDP destination remain mandatory on Upgrade.
+			command.Args = append(command.Args, "--http-upgrade-path-prefix", clientCN(path.CredentialOwner))
+		} else {
+			command.Args = append(command.Args, "--tls-certificate", clientCert, "--tls-private-key", clientKey)
+		}
 		if path.TLSName != path.WSSPeerTCP.Addr().String() {
 			// Only override SNI/peer hostname for an explicitly selected
 			// DNS SAN. The default uses verified physical peer IP identity.
@@ -111,9 +124,11 @@ func Build(link domain.Link, carrier composition.Carrier, binary, privateRoot, a
 		}
 		uri := url.URL{Scheme: "wss", Host: path.WSSLocalTCP.String()}
 		command.Args = []string{"server", "--log-lvl", safeWstunnelLogLevel, "--tls-certificate", serverCert,
-			"--tls-private-key", serverKey,
-			"--tls-client-ca-certs", clientCA,
-			"--restrict-config", restrict, uri.String()}
+			"--tls-private-key", serverKey}
+		if !link.WSS.PublicTLS {
+			command.Args = append(command.Args, "--tls-client-ca-certs", clientCA)
+		}
+		command.Args = append(command.Args, "--restrict-config", restrict, uri.String())
 		command.ServerRestrictions = restrictedServerPolicy(path.CredentialOwner, path.WSSRemoteWGUDPPort, authorizationToken)
 	default:
 		return Command{}, fmt.Errorf("unknown WSS role")

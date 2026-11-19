@@ -240,13 +240,27 @@ rather than disclosing exploit details in a public Issue.
 ## WireGuard over WSS/TLS (Stable v0.1.10+ security boundary)
 
 WSS is a link-scoped carrier around the **real kernel WireGuard** backend,
-not a second VPN engine or a generic bypass route. The listener requires
+not a second VPN engine or a generic bypass route. The default listener requires
 trusted mTLS: separate 2-month leaf certificates (server/client purpose),
 a 3-month Link-specific CA, exact server identity/SAN and verified private
 keys. One independently generated 256-bit per-Link bearer and fixed destination
 restrictions protect each authorized WSS forwarding path. Do not assert
 strict leaf-CN pinning: the per-Link CA **plus independent bearer/path scope**
 is the accepted security model. CA signing material is never persisted.
+
+**Opt-in public-TLS WSS (source candidate for Issue #243):** the pinned
+wstunnel v11.0.0 listener can accept anonymous TLS handshakes on its **same
+TCP endpoint** without requesting a client certificate. It still presents
+a CA/SAN-verified server certificate, accepts only the exact protected
+per-Link `PathPrefix` + `Authorization: Bearer` for WebSocket Upgrade,
+and may forward only to the selected loopback WG UDP port. Unrelated HTTP/1.1
+GET returns **400 Bad Request**, not a realistic web page. Browser-trusted
+public certificates, Chrome-matching TLS fingerprints and active-site
+masquerade are not provided. Current private per-Link CA must be explicitly
+trusted; public TLS admission does not enable an anonymous UDP relay.
+Default mTLS keeps its original behavior. Do not equate an anonymous HTTP
+response, Helper active state, or successful TLS handshake with verified WG
+peer authentication or private ICMP/TCP/UDP traffic.
 
 All private keys/authorization files are owner-private 0600 beneath
 verified descriptor-traversed directories; bearer values must never reach

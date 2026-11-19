@@ -29,8 +29,8 @@ func menuCreateWSS(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
 func menuCreateWSSWithHost(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
 	opts *runtimeOptions, companion wss.Host) int {
 	p := createPrompts{reader: reader, out: out, errOut: errOut}
-	menuScreen(out, "Create / WireGuard over WSS (mTLS)")
-	menuNotice(out, "INFO", "WireGuard UDP is scoped to loopback; the remote peer connects over authenticated WSS/TLS TCP.")
+	menuScreen(out, "Create / WireGuard over WSS (TLS)")
+	menuNotice(out, "INFO", "WireGuard UDP is scoped to loopback. WSS uses verified server TLS and an exact private Link bearer; optional public TLS does not require a client certificate at handshake.")
 	inspect := func() error {
 		_, err := wss.InspectPinnedExecutableForOperator(companion)
 		return err
@@ -52,7 +52,7 @@ func menuCreateWSSWithHost(input io.Reader, reader *bufio.Reader, out, errOut io
 		if !menuEnsureCompanion(input, reader, out, spec, productionMenuCompanionOps(inspect, spec)) {
 			return 4
 		}
-		menuScreen(out, "Create / WireGuard over WSS (mTLS)")
+		menuScreen(out, "Create / WireGuard over WSS (TLS)")
 		menuField(out, "Companion", "Pinned helper verified; ready for Link setup")
 	}
 	peer, err := askPeerUnderlay(p)
@@ -81,6 +81,10 @@ func menuCreateWSSWithHost(input io.Reader, reader *bufio.Reader, out, errOut io
 		return p.failed(err)
 	}
 	role, roleSource, err := askCarrierRole(p, "WSS", route.Source, peer)
+	if err != nil {
+		return p.failed(err)
+	}
+	publicTLS, err := askWSSPublicTLS(p)
 	if err != nil {
 		return p.failed(err)
 	}
@@ -135,7 +139,7 @@ func menuCreateWSSWithHost(input io.Reader, reader *bufio.Reader, out, errOut io
 		Addresses:  desiredLinkAddressesV1{Local: addresses.Local, Peer: addresses.Peer},
 		ListenPort: localWG, PeerPort: peerWG, Role: role, TCPPort: tcp,
 		LocalKeepalive: 25, PeerKeepalive: 25,
-		LocalForwardUDPPort: forward, RemoteForwardUDPPort: remoteForward, TLSServerName: tlsName}
+		LocalForwardUDPPort: forward, RemoteForwardUDPPort: remoteForward, TLSServerName: tlsName, PublicTLS: publicTLS}
 	preview, err := json.Marshal(request)
 	if err != nil {
 		menuNotice(out, "WARNING", "Cannot encode public WSS configuration.")
@@ -145,10 +149,11 @@ func menuCreateWSSWithHost(input io.Reader, reader *bufio.Reader, out, errOut io
 	menuField(out, "Backend", "WireGuard / WSS + TLS")
 	showCarrierDirectionReview(out, route.Source, peer, role, roleSource, "TCP", tcp)
 	menuField(out, "TLS TCP port", strconv.Itoa(int(tcp)))
+	menuField(out, "Public TLS", strconv.FormatBool(publicTLS))
 	menuField(out, "Kernel WG UDP", fmt.Sprintf("this %d / peer %d", localWG, peerWG))
 	menuField(out, "Private IPs", addresses.Local.String()+" <-> "+addresses.Peer.String())
 	menuField(out, "WSS forwarding UDP", fmt.Sprintf("this %d / peer %d", forward, remoteForward))
-	menuNotice(out, "WARNING", "Creates scoped nft ingress guard, WG interface, WSS sidecar, mTLS secrets and a private peer handoff.")
+	menuNotice(out, "WARNING", "Creates scoped nft ingress guard, WG interface, WSS helper, private credentials and protected peer handoff. Public TLS allows anonymous TLS/HTTP but private WebSocket Upgrade still requires the exact Link bearer and WireGuard peer.")
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
 		return 2
 	}
@@ -181,4 +186,25 @@ func menuCreateWSSWithHost(input io.Reader, reader *bufio.Reader, out, errOut io
 	menuShowNewProtectedHandoff(input, out, opts, id)
 	menuProse(out, "On the peer: transfer the sensitive offer privately, run stl link preview-wss --stdin and then stl link import-wss --stdin --confirm SHA256; verify private traffic.")
 	return 0
+}
+
+// The real pinned wstunnel v11 listener can accept ordinary TLS clients
+// without a certificate while restricting Upgrade with exact path+bearer.
+// It returns HTTP 400 (not a decoy website) for unrelated GET requests.
+func askWSSPublicTLS(p createPrompts) (bool, error) {
+	menuSection(p.out, "WSS TLS authentication")
+	menuOption(p.out, "1", "Private mTLS", "original client-certificate requirement (default)")
+	menuOption(p.out, "2", "Public TLS", "no client certificate for TLS; Upgrade requires Link bearer; ordinary HTTP GET returns 400")
+	answer, err := p.ask("WSS TLS mode [1]: ")
+	if err != nil {
+		return false, err
+	}
+	switch answer {
+	case "", "1":
+		return false, nil
+	case "2":
+		return true, nil
+	default:
+		return false, fmt.Errorf("choose WSS TLS mode 1 or 2")
+	}
 }

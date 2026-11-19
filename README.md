@@ -12,7 +12,7 @@ saved Link is **not** proof that packets reach its peer.
 | GRE / IPIP | Native IP protocols 47 / 4, optionally FOU/GUE over UDP | No |
 | L2TPv3 Direct-IP | Native IP protocol 115 | No |
 | WireGuard | Native UDP | Yes |
-| WireGuard over WSS/TLS | TCP/TLS plus kernel WireGuard; optional `wstunnel` | Yes |
+| WireGuard over WSS/TLS | Genuine TLS/TCP + WebSocket plus kernel WireGuard; optional private mTLS or public TLS handshake (authorized Upgrade still requires Link bearer) | Yes |
 | WireGuard over QUIC | QUIC/TLS plus kernel WireGuard; pinned Hysteria (Plain/mTLS, Plain/public HTTP/3, Salamander) | Yes |
 | IPsec | Native IKEv2/XFRM, ESP or NAT-T; gated host preparation | Yes |
 | MASQUE CONNECT-IP (v0.1.28+) | HTTP/2 over TLS/TCP with mutual TLS; native IPv4 TUN | Yes |

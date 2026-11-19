@@ -182,13 +182,20 @@ and **public test-only** bearer headers, and uses unprivileged
 verified user+network namespace. Even a direct call to the internal
 `--inside` mode fails before any IP operation without the independent
 binary/namespace-launch evidence. The test checks the real version's
-**mTLS + per-Link bearer + exact path** behavior, including the
+**default mTLS + per-Link bearer + exact path** behavior, including the
 reviewed missing-CN-with-forged-path bypass attempt *without*
 the bearer. The upstream v11 does not enforce strict CN identity
 when a certificate has no CN; approved admission requires the
 additional secret, as described in
 [ARCHITECTURE.md](ARCHITECTURE.md).
-It needs Bash, OpenSSL, Python 3,
+The same pinned-helper test also verifies explicit public-TLS mode:
+anonymous CA-verified HTTP/1.1 GET returns 400, correct no-client-certificate
+WSS Upgrade forwards only the intended loopback UDP destination, incorrect
+bearer and foreign destination cannot forward, and valid forwarding survives
+an unauthorized request. The test uses a second private-namespace TCP port
+outside the host's observed ephemeral range to avoid TIME_WAIT false failures.
+This is genuine Helper acceptance, not an installed STL Engine/physical-host
+or Chrome-fingerprint proof. It needs Bash, OpenSSL, Python 3,
 `ip`, `ss`, `sha256sum`, `timeout` and unprivileged user namespace
 support. It never installs system packages, starts a host service,
 changes host routing/firewall or touches real peers. The upstream
@@ -288,6 +295,43 @@ handles, claims, rule shapes and legacy source-only journals. These are
 read-only State/nft fixtures, not combined WSS-plus-QUIC traffic evidence.
 Native PID1 helpers, independently booted VM restoration, physical two-host
 WAN and downloaded published-artifact acceptance remain distinct layers.
+
+### Disposable managed WSS Public TLS/private-mTLS two-peer acceptance
+
+The existing `scripts/e2e/wss-managed-wireguard-r1.sh` rootless lab exercises
+**actual** source-built STL CLI/Engine, role-private paired handoffs, native
+Linux WireGuard, a scoped nftables ingress guard, and the pinned, genuine
+`wstunnel v11.0.0`. It uses two independently isolated network namespaces,
+with a **test-only process supervisor** in place of real PID1 systemd.
+This acceptance is distinct from the standalone helper-only compatibility test
+above. It is opt-in and requires a private `.r1-lab/` fixture holding the
+SHA256-verified official `wstunnel`, a Go test executable built with
+`-tags stl_e2e_lab`, `wg`, `xtables-nft-multi`, and the repository's
+`wss-r1-supervisor.py` exposed as disposable `systemctl`/`systemd-run`
+shims. All such binaries and secrets must stay in the ignored fixture, not in
+Git, a host-wide installation or a real managed Link. The runner refuses a
+missing/untrusted fixture, requires an unprivileged user, and verifies new
+user/network/mount namespaces before mutating kernel interfaces.
+
+~~~sh
+# Existing approved, fully staged disposable .r1-lab fixture only:
+bash scripts/e2e/wss-managed-wireguard-r1.sh                  # default mTLS
+STL_WSS_PUBLIC_TLS_E2E=approved \
+  bash scripts/e2e/wss-managed-wireguard-r1.sh                # public TLS
+~~~
+
+Public TLS selection is exercised through the canonical public creator JSON,
+private Share/Preview/Import and actual systemd-rendered helper argv. The lab
+checks strict OpenSSL X.509 chains including leaf AuthorityKeyId, authentic
+bidirectional private ICMP, TCP and UDP, real anonymous HTTP GET (returns
+HTTP 400, **not** a decoy website), rejection of unknown bearer/path including
+no-client-certificate attempts, direct external WG UDP ingress denial,
+helper crash/repair, exact receipt-bound private credential retirement,
+and final two-sided Remove. Default mTLS is re-run independently to ensure
+its no-client-cert denial remains intact. Rootless namespaces and the
+simulated supervisor **do not prove** physical-host connectivity, true PID1
+systemd behavior, automatic reboot recovery, or Chrome TLS fingerprint parity.
+For those claims use their separate authorized acceptance environments.
 
 ### Optional QUIC over real kernel WireGuard private-L3 lab
 

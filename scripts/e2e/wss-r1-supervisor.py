@@ -19,6 +19,16 @@ def active(pid):
         v=p.read_text().split(") ")[1][0]
         return v not in "ZX"
     except Exception:return False
+# Match the documented systemd 249/259 ExecStartEx and ExecStartPostEx
+# structured observations. The production Engine verifies these fields
+# before any unit start/restart/stop, including exact execution flags.
+def exec_readback(argv, flag_kind, flag_value):
+    if not argv or not argv[0].startswith('/'):
+        raise RuntimeError('invalid disposable systemd command')
+    return ('{ path=' + argv[0] + ' ; argv[]=' + ' '.join(argv)
+            + ' ; ' + flag_kind + '=' + flag_value
+            + ' ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }')
+
 def launch(info):
     log=(store/(info["unit"]+".log")).open("ab")
     env=os.environ.copy();env.update(info["env"])
@@ -77,13 +87,16 @@ try:
                 print("ActiveState="+("active" if active(info["pid"]) else "failed"))
                 print("Transient=yes")
                 print("Description="+info["description"])
-                print("ExecStart={ path="+info["argv"][0]+" ; argv[]="+" ".join(info["argv"])+" ; }")
+                print("ExecStart="+exec_readback(info["argv"], "ignore_errors", "no"))
+                print("ExecStartEx="+exec_readback(info["argv"], "flags", ""))
                 probe=info["properties"].get("ExecStartPost", "")
                 if probe:
                     post=probe.lstrip("-").split(" ")
-                    print("ExecStartPost={ path="+post[0]+" ; argv[]="+" ".join(post)+" ; ignore_errors="+("yes" if probe.startswith("-") else "no")+" ; }")
+                    print("ExecStartPost="+exec_readback(post, "ignore_errors", "yes" if probe.startswith("-") else "no"))
+                    print("ExecStartPostEx="+exec_readback(post, "flags", "ignore-failure" if probe.startswith("-") else ""))
                 else:
                     print("ExecStartPost=")
+                    print("ExecStartPostEx=")
                 print("Environment="+" ".join(k+"="+v for k,v in sorted(info["env"].items())))
                 props=info["properties"]
                 print("Type="+props["Type"])
