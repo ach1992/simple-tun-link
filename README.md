@@ -15,10 +15,18 @@ saved Link is **not** proof that packets reach its peer.
 | WireGuard over WSS/TLS | TCP/TLS plus kernel WireGuard; optional `wstunnel` | Yes |
 | WireGuard over QUIC | QUIC/TLS plus kernel WireGuard; optional Hysteria (Plain or Salamander) | Yes |
 | IPsec | Native IKEv2/XFRM, ESP or NAT-T; gated host preparation | Yes |
+| MASQUE CONNECT-IP (source `main` candidate) | HTTP/2 over TLS/TCP with mutual TLS; native IPv4 TUN | Yes |
 
 Different transports have different kernel, firewall, network and optional
 helper requirements. STL does not automatically configure provider firewalls,
 NAT or foreign VPNs, and no transport works through every network.
+
+**Publication status:** MASQUE is implemented in current source `main`, but
+is **not** included in the published Stable `v0.1.27` installer. Do not
+assume that installing `releases/latest` makes this Carrier available until a
+new release is actually published and verified. See the
+[MASQUE Carrier guide](docs/MASQUE-CARRIER.md) and
+[functional acceptance status](https://github.com/ach1992/simple-tun-link/issues/142).
 
 ## Requirements
 
@@ -151,13 +159,14 @@ STL does not prescribe a default Mirror or fallback source.
    transport (GRE/Native is the simplest plaintext default). Supply the
    reachable underlay peer address and review the proposed, non-overlapping
    private Link Addresses and local resource changes before typing `YES`.
-2. **Share the Setup Link privately.** For WireGuard, WSS, QUIC and IPsec
+2. **Share the Setup Link privately.** For WireGuard, WSS, QUIC, IPsec and MASQUE
    the handoff contains sensitive receiver credentials; never post it in
    logs, Issues, screenshots or public chat.
 3. On **Server B**, choose **Import setup link**, paste the original offer
    and verify the reversed local/peer endpoints and exact receiver role.
-   Confirm the import explicitly. WSS/QUIC can require manual selection of
-   `Listen` or `Dial`: the suggested direction is **not** reachability proof.
+   Confirm the import explicitly. WSS/QUIC/MASQUE support the
+   `Listen` or `Dial` endpoint roles: the suggested direction is **not**
+   reachability proof.
    For IPsec, complete separately confirmed preparation and select
    **My tunnels → Connect IPsec** on either peer after Import; Import alone
    does not initiate IKEv2.
