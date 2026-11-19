@@ -314,6 +314,17 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 			safe.Backend = observedPublic.Backend
 		}
 	}
+	// A normal MASQUE Remove can commit its original State/receipt and
+	// then fail only during protected mTLS retirement. Do not infer that
+	// outcome from a missing Link or error text: require the Engine's
+	// positive Remove result, committed stage and typed MASQUE backend.
+	// Reconcile and explicit retirement already provide that same proof
+	// through their receipt-bound command paths.
+	committedMASQUEMaterial := evidence != nil && evidence.Stage == "credential_retirement" &&
+		evidence.DesiredState == "committed" && result != nil && result.Removed &&
+		((operation == "link_reconcile-masque" || operation == "link_retire-masque") ||
+			(operation == "link_remove" && observedPublic != nil &&
+				observedPublic.Backend == string(domain.BackendMASQUE)))
 	if evidence != nil {
 		copy := *evidence
 		safe.Evidence = &copy
@@ -333,8 +344,7 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 		case evidence.DesiredState == "visible_unconfirmed":
 			safe.ReasonCode = "state_publication_uncertain"
 			safe.NextStep = "Inspect saved desired state and live owned resources before retrying or removing anything; a publication may be visible without durable confirmation."
-		case evidence.Stage == "credential_retirement" && evidence.DesiredState == "committed" &&
-			(operation == "link_reconcile-masque" || operation == "link_retire-masque"):
+		case committedMASQUEMaterial:
 			safe.ReasonCode = "masque_material_retirement_incomplete"
 			id := "ID"
 			if result != nil && result.LinkID.Validate() == nil {
@@ -488,11 +498,9 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 	// A failed post-commit receiver-offer cleanup is NOT uncertainty about
 	// the already verified Link removal. Distinguish this bounded leftover
 	// from a failed Engine Remove for machine callers and operators.
-	if evidence != nil &&
-		(evidence.Stage == "protected_handoff_cleanup" ||
-			evidence.Stage == "credential_retirement" &&
-				(operation == "link_reconcile-masque" || operation == "link_retire-masque")) &&
-		evidence.DesiredState == "committed" && result != nil && result.Removed {
+	if result != nil && result.Removed &&
+		(committedMASQUEMaterial || evidence != nil && evidence.Stage == "protected_handoff_cleanup" &&
+			evidence.DesiredState == "committed") {
 		out.Outcome = "removed_cleanup_incomplete"
 	}
 	if result != nil && result.LinkID.Validate() == nil {

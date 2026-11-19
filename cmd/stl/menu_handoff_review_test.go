@@ -212,7 +212,8 @@ func TestAutoRetireHoldsCanonicalLinkLockAcrossStateAndUnlink(t *testing.T) {
 }
 
 type interruptedMenuMASQUEHost struct {
-	observed masquebackend.HostObservation
+	observed  masquebackend.HostObservation
+	cleanStop bool
 }
 
 func (h *interruptedMenuMASQUEHost) Inspect(context.Context, domain.Link) (masquebackend.HostObservation, error) {
@@ -227,9 +228,13 @@ func (h *interruptedMenuMASQUEHost) Start(_ context.Context, link domain.Link) (
 	return func(context.Context) error { h.observed = before; return nil }, nil
 }
 func (h *interruptedMenuMASQUEHost) Stop(context.Context, domain.Link) (core.Rollback, error) {
+	before := h.observed
+	h.observed = masquebackend.HostObservation{}
+	if h.cleanStop {
+		return func(context.Context) error { h.observed = before; return nil }, nil
+	}
 	// The service/TUN disappeared, but the initiating Engine received an
 	// indeterminate result after host effects: only explicit Reconcile can commit.
-	h.observed = masquebackend.HostObservation{}
 	return nil, core.ErrIndeterminateHostEffect
 }
 
@@ -257,6 +262,11 @@ type interruptedMenuMASQUEFixture struct {
 
 func newInterruptedMenuMASQUEFixture(t *testing.T) interruptedMenuMASQUEFixture {
 	t.Helper()
+	return newMenuMASQUEFixture(t, true)
+}
+
+func newMenuMASQUEFixture(t *testing.T, interrupted bool) interruptedMenuMASQUEFixture {
+	t.Helper()
 	req := masqueInputTestRequest()
 	sender, receiver, err := req.makePair(req.LinkID)
 	if err != nil {
@@ -283,7 +293,7 @@ func newInterruptedMenuMASQUEFixture(t *testing.T) interruptedMenuMASQUEFixture 
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := &interruptedMenuMASQUEHost{}
+	host := &interruptedMenuMASQUEHost{cleanStop: !interrupted}
 	backend, err := masquebackend.New(host)
 	if err != nil {
 		t.Fatal(err)
@@ -311,8 +321,10 @@ func newInterruptedMenuMASQUEFixture(t *testing.T) interruptedMenuMASQUEFixture 
 	if err := writeSensitiveHandoff(cliOutput, append(encoded, '\n')); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.Remove(context.Background(), sender.ID); err == nil {
-		t.Fatal("synthetic interrupted host Stop incorrectly committed")
+	if interrupted {
+		if _, err := engine.Remove(context.Background(), sender.ID); err == nil {
+			t.Fatal("synthetic interrupted host Stop incorrectly committed")
+		}
 	}
 	store := state.NewFileStore(root)
 	unrelated, _ := makeLifecycleDesired(t, "e", "10.70.19.0/31")
@@ -333,13 +345,204 @@ func newInterruptedMenuMASQUEFixture(t *testing.T) interruptedMenuMASQUEFixture 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, pending := snapshot.FindMASQUEOperation(sender.ID); !pending {
-		t.Fatal("missing durable interrupted MASQUE Remove journal")
+	if _, pending := snapshot.FindMASQUEOperation(sender.ID); pending != interrupted {
+		t.Fatal("unexpected pending MASQUE Remove journal state")
 	}
 	if _, present := snapshot.Find(sender.ID); !present {
-		t.Fatal("interrupted host Remove already deleted committed Link")
+		t.Fatal("menu MASQUE fixture lost committed Link before the test's Remove")
 	}
 	return interruptedMenuMASQUEFixture{opts, host, store, sender.ID, path, cliOutput, unrelated.ID, unrelatedPath, retirer}
+}
+
+// A normal confirmed Remove, unlike interrupted host-effect reconciliation,
+// can commit the Link's deletion and then fail while retiring the exact
+// original mTLS material. That committed outcome must be preserved by both
+// the Engine result and the shared CLI/JSON/terminal error projector.
+func TestMASQUEOrdinaryRemoveMaterialRetirementFailure(t *testing.T) {
+	t.Run("engine_committed_result", func(t *testing.T) {
+		fixture := newMenuMASQUEFixture(t, false)
+		fixture.retirement.fail = errors.New("injected original mTLS retirement failure")
+		engine, err := buildRuntimeEngine(*fixture.options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := engine.Remove(context.Background(), fixture.id)
+		evidence := stlerr.EvidenceOf(err)
+		if err == nil || !result.Removed || result.LinkID != fixture.id ||
+			evidence == nil || evidence.Stage != "credential_retirement" ||
+			evidence.DesiredState != "committed" {
+			t.Fatalf("Engine did not attest committed Remove before mTLS failure: %+v %+v %v",
+				result, evidence, err)
+		}
+		snapshot, err := fixture.store.Load(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		receipt, exists := snapshot.FindMASQUERemovalReceipt(fixture.id)
+		if _, present := snapshot.Find(fixture.id); present || !exists ||
+			receipt.Retired || receipt.Purpose != "removed" ||
+			len(snapshot.MASQUEOperations) != 0 {
+			t.Fatalf("normal Remove did not commit exact original receipt: %+v", snapshot)
+		}
+		if _, err := os.Lstat(fixture.offerPath); err != nil {
+			t.Fatal("Engine prematurely removed original private offer", err)
+		}
+	})
+
+	t.Run("json_and_receipt_bound_continuation", func(t *testing.T) {
+		fixture := newMenuMASQUEFixture(t, false)
+		fixture.retirement.fail = errors.New("simulated post-commit original mTLS removal failure")
+		var out, errOut bytes.Buffer
+		code := executeLinkMutation("link_remove", domain.Link{}, fixture.id, true, &out, &errOut, fixture.options)
+		if code == 0 || errOut.Len() != 0 {
+			t.Fatalf("incomplete material retirement incorrectly accepted: code=%d err=%q", code, errOut.String())
+		}
+		var failure lifecycleFailureResponse
+		if err := json.Unmarshal(out.Bytes(), &failure); err != nil ||
+			failure.Outcome != "removed_cleanup_incomplete" ||
+			failure.PartialResult == nil || !failure.PartialResult.Removed ||
+			failure.PartialResult.LinkID != fixture.id || failure.Error == nil ||
+			failure.Error.Backend != string(domain.BackendMASQUE) ||
+			failure.Error.ReasonCode != "masque_material_retirement_incomplete" ||
+			failure.Error.Evidence == nil ||
+			failure.Error.Evidence.Stage != "credential_retirement" ||
+			failure.Error.Evidence.DesiredState != "committed" ||
+			!strings.Contains(failure.Error.NextStep, "stl link retire-masque "+string(fixture.id)+" --confirm "+string(fixture.id)) ||
+			!strings.Contains(failure.Error.NextStep, "Do not repeat Remove") {
+			t.Fatalf("ordinary Remove lost positive committed-result evidence: %+v %v", failure, err)
+		}
+		var terminal bytes.Buffer
+		renderTerminalLifecycleFailure(&terminal, failure.Error, failure.Error.Evidence)
+		for _, word := range []string{"Tunnel removal", "Canonical Engine Remove committed",
+			"MASQUE mTLS material", "Private handoff", "Do not repeat Remove"} {
+			if !strings.Contains(terminal.String(), word) {
+				t.Fatalf("terminal misrepresented ordinary committed Remove, missing %q: %s", word, terminal.String())
+			}
+		}
+		snapshot, err := fixture.store.Load(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		receipt, exists := snapshot.FindMASQUERemovalReceipt(fixture.id)
+		if _, present := snapshot.Find(fixture.id); present || !exists ||
+			receipt.Retired || receipt.Purpose != "removed" ||
+			len(snapshot.MASQUEOperations) != 0 {
+			t.Fatalf("CLI failed to preserve committed Remove identity: %+v", snapshot)
+		}
+		origin, err := menuHandoffOriginPath(fixture.options, fixture.id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range []string{fixture.offerPath, origin, fixture.cliOutput, fixture.unrelatedPath} {
+			if _, err := os.Lstat(path); err != nil {
+				t.Fatalf("ordinary Remove failure destroyed private artifact %s: %v", path, err)
+			}
+		}
+		if _, present := snapshot.Find(fixture.unrelatedID); !present {
+			t.Fatal("ordinary failed material retirement removed unrelated Link")
+		}
+		id := string(fixture.id)
+		command := []string{id, "--confirm", id, "--json"}
+		out.Reset()
+		if code := linkMASQUERetirementCommand(command, &out, &errOut, fixture.options); code == 0 {
+			t.Fatal("unverified mTLS material allowed retirement continuation")
+		}
+		if _, err := os.Lstat(fixture.offerPath); err != nil {
+			t.Fatal("failed continuation destroyed original receiver offer", err)
+		}
+		fixture.retirement.fail = nil
+		out.Reset()
+		errOut.Reset()
+		if code := linkMASQUERetirementCommand(command, &out, &errOut, fixture.options); code != 0 {
+			t.Fatalf("exact committed Remove continuation failed: %d %s %s", code, out.String(), errOut.String())
+		}
+		var continued struct {
+			Retired bool `json:"retired"`
+		}
+		if err := json.Unmarshal(out.Bytes(), &continued); err != nil || !continued.Retired {
+			t.Fatalf("retire-masque did not confirm original retirement: %+v %v", continued, err)
+		}
+		for _, path := range []string{fixture.offerPath, origin} {
+			if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("retired original artifact still exists: %s %v", path, err)
+			}
+		}
+		for _, path := range []string{fixture.cliOutput, fixture.unrelatedPath} {
+			if _, err := os.Lstat(path); err != nil {
+				t.Fatalf("continuation affected unrelated file %s: %v", path, err)
+			}
+		}
+		snapshot, err = fixture.store.Load(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		receipt, exists = snapshot.FindMASQUERemovalReceipt(fixture.id)
+		if !exists || !receipt.Retired || len(snapshot.Links) != 1 {
+			t.Fatalf("retirement continuation altered unrelated Link or original receipt: %+v", snapshot)
+		}
+	})
+
+	t.Run("plain_output", func(t *testing.T) {
+		fixture := newMenuMASQUEFixture(t, false)
+		fixture.retirement.fail = errors.New("injected normal Remove material failure")
+		var out, errOut bytes.Buffer
+		code := executeLinkMutation("link_remove", domain.Link{}, fixture.id, false, &out, &errOut, fixture.options)
+		if code == 0 || !strings.Contains(errOut.String(), "already removed") ||
+			!strings.Contains(errOut.String(), "MASQUE mTLS material retirement is incomplete") ||
+			!strings.Contains(errOut.String(), "stl link retire-masque "+string(fixture.id)) ||
+			!strings.Contains(errOut.String(), "Do not repeat Remove") {
+			t.Fatalf("plain CLI ordinary Remove gave unsafe recovery guidance: code=%d stdout=%s stderr=%s",
+				code, out.String(), errOut.String())
+		}
+	})
+
+	t.Run("precommit_failure_not_misclassified", func(t *testing.T) {
+		fixture := newMenuMASQUEFixture(t, false)
+		fixture.host.cleanStop = false
+		var out, errOut bytes.Buffer
+		code := executeLinkMutation("link_remove", domain.Link{}, fixture.id, true, &out, &errOut, fixture.options)
+		if code == 0 {
+			t.Fatal("indeterminate host effect incorrectly committed Remove")
+		}
+		var failure lifecycleFailureResponse
+		if err := json.Unmarshal(out.Bytes(), &failure); err != nil ||
+			failure.Outcome == "removed_cleanup_incomplete" ||
+			failure.PartialResult != nil && failure.PartialResult.Removed ||
+			failure.Error == nil || failure.Error.ReasonCode == "masque_material_retirement_incomplete" {
+			t.Fatalf("pre-commit uncertainty incorrectly reported as committed: %+v %v", failure, err)
+		}
+		snapshot, err := fixture.store.Load(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, present := snapshot.Find(fixture.id); !present {
+			t.Fatal("failed pre-commit Remove deleted original Link")
+		}
+		if _, exists := snapshot.FindMASQUERemovalReceipt(fixture.id); exists {
+			t.Fatal("failed pre-commit Remove published a retirement receipt")
+		}
+		if _, err := os.Lstat(fixture.offerPath); err != nil {
+			t.Fatal("failed pre-commit Remove deleted original offer", err)
+		}
+	})
+
+	t.Run("other_backend_not_misclassified", func(t *testing.T) {
+		id := domain.LinkID("lnk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+		other := stlerr.New(stlerr.CodeState, "remove", string(id), string(domain.BackendWireGuard),
+			"unrelated post-commit credential failure")
+		evidence := &stlerr.OperationEvidence{Stage: "credential_retirement", HostMutation: "attempted",
+			DesiredState: "committed", Rollback: "not_attempted"}
+		var out, errOut bytes.Buffer
+		code := lifecycleFailureWithEvidence(&out, &errOut, true, stlerr.CodeState,
+			"link_remove", &app.Result{LinkID: id, Removed: true}, "unrelated credential cleanup incomplete",
+			evidence, other)
+		var failure lifecycleFailureResponse
+		if code == 0 || json.Unmarshal(out.Bytes(), &failure) != nil ||
+			failure.Outcome == "removed_cleanup_incomplete" ||
+			failure.Error == nil || failure.Error.ReasonCode == "masque_material_retirement_incomplete" {
+			t.Fatalf("non-MASQUE result acquired MASQUE-specific committed cleanup outcome: %+v", failure)
+		}
+	})
 }
 
 func TestMASQUEInterruptedRemoveReconcileRetiresExactMenuOriginal(t *testing.T) {

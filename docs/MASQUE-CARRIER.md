@@ -111,8 +111,9 @@ operator-owned and cannot publish into the reserved menu directory.
 Historical unmarked offers are preserved for explicit inspection, not
 silently adopted. Successful `reconcile-masque` of an interrupted Remove
 performs the same verified original-offer retirement **after** proving
-host absence and committing the recovered removal. If exact host-absence
-reconciliation commits removal but original MASQUE mTLS retirement fails,
+host absence and committing the recovered removal. If either an
+ordinary confirmed MASQUE Remove or exact host-absence reconciliation
+commits removal but original MASQUE mTLS retirement then fails,
 the result remains `outcome=removed_cleanup_incomplete` and
 `partial_result.removed=true` with
 `reason_code=masque_material_retirement_incomplete` and stage
