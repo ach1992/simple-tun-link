@@ -597,8 +597,15 @@ provides the digest and `resume-wireguard --stdin --confirm
 `.stl-handoff-*.tmp` may instead be published by
 `recover-handoff --source ... --output ... --confirm ...` **only**
 after exact matching pending sender identity, digest, original
-credential and owner-private inode checks. That command performs
-no Link mutation, rekeying, service startup or remote transfer.
+credential and owner-private inode checks. Public recovery cannot
+publish inside the menu-reserved `receiver-handoffs/` namespace. If a
+historical guided Create crashed with its original temporary there,
+recover it to an independently chosen private destination **outside**
+that directory on the same filesystem; only that exceptional source
+supports a cross-directory, no-clobber move. The recovered output is
+operator-owned, receives no invented menu-origin receipt, and must be
+retired explicitly when no longer needed. That command performs no Link
+mutation, rekeying, service startup or remote transfer.
 Lost/unsafe/orphaned original material requires explicit operator
 reconciliation, not wildcard deletion.
 

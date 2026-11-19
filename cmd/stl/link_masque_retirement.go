@@ -44,11 +44,39 @@ func linkMASQUERetirementCommand(args []string, out, errOut io.Writer, options *
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
+	// A pending/remotely verified committed MASQUE Remove has a durable,
+	// generation-bound receipt even after the original journal is consumed.
+	// Capture only its exact saved menu offer before touching mTLS material.
+	protected, removed, protectedErr := prepareProtectedHandoffForMASQUERetirement(options, id)
+	if !removed && protectedErr != nil {
+		return lifecycleFailure(out, errOut, jsonOutput, stlerr.CodeState,
+			"link_retire-masque", &app.Result{LinkID: id},
+			"cannot verify the exact MASQUE removal receipt for protected material retirement")
+	}
 	if err := engine.RetireMASQUECredential(ctx, id); err != nil {
+		if removed {
+			return lifecycleFailureWithEvidence(out, errOut, jsonOutput,
+				stlerr.CodeState, "link_retire-masque", &app.Result{LinkID: id, Removed: true},
+				"original MASQUE Link is already removed; exact mTLS retirement remains unverified; preserve the original receiver offer",
+				&stlerr.OperationEvidence{Stage: "credential_retirement", HostMutation: "attempted",
+					DesiredState: "committed", Rollback: "not_required"}, err)
+		}
 		return lifecycleFailureWithEvidence(out, errOut, jsonOutput,
 			stlerr.CodeOf(err), "link_retire-masque", &app.Result{LinkID: id},
 			"original MASQUE certificate/key retirement not yet proven; preserve exact receipt and inspect original host",
 			stlerr.EvidenceOf(err), err)
+	}
+	if removed {
+		if protectedErr == nil {
+			protectedErr = protected.retireAfterRemove(options)
+		}
+		if protectedErr != nil {
+			return lifecycleFailureWithEvidence(out, errOut, jsonOutput,
+				stlerr.CodeState, "link_retire-masque", &app.Result{LinkID: id, Removed: true},
+				"MASQUE mTLS material retirement is committed, but original private receiver offer cleanup remains incomplete; do not repeat Remove",
+				&stlerr.OperationEvidence{Stage: "protected_handoff_cleanup", HostMutation: "attempted",
+					DesiredState: "committed", Rollback: "not_required"}, nil)
+		}
 	}
 	if jsonOutput {
 		if err := json.NewEncoder(out).Encode(struct {

@@ -35,11 +35,11 @@ type handoffRecoveryResult struct {
 // fully synced 0600 staging file instead of the requested final name.
 // Only explicitly named, regular, owner-private, singly-linked STL temporary
 // files can be recovered. The original URL never enters argv or normal JSON.
-func withVerifiedHandoffTemporary(source, output string, operation func(raw string, publish func() error) error) error {
+func withVerifiedHandoffTemporary(source, output string, allowReservedSourceMove bool, operation func(raw string, publish func() error) error) error {
 	if operation == nil || !filepath.IsAbs(source) || filepath.Clean(source) != source ||
-		!filepath.IsAbs(output) || filepath.Clean(output) != output ||
-		filepath.Dir(source) != filepath.Dir(output) || source == output {
-		return fmt.Errorf("invalid recovery paths; both must be in the same private directory")
+		!filepath.IsAbs(output) || filepath.Clean(output) != output || source == output ||
+		(filepath.Dir(source) != filepath.Dir(output) && !allowReservedSourceMove) {
+		return fmt.Errorf("invalid recovery paths; cross-directory recovery requires an original reserved-menu crash temporary")
 	}
 	temporary := filepath.Base(source)
 	if !strings.HasPrefix(temporary, ".stl-handoff-") || !strings.HasSuffix(temporary, ".tmp") {
@@ -62,6 +62,14 @@ func withVerifiedHandoffTemporary(source, output string, operation func(raw stri
 		return fmt.Errorf("cannot inspect protected handoff parent")
 	}
 	defer unix.Close(dir)
+	outputDir := dir
+	if filepath.Dir(source) != filepath.Dir(output) {
+		outputDir, err = openPrivateHandoffParent(filepath.Dir(output))
+		if err != nil {
+			return fmt.Errorf("cannot inspect external private recovery destination")
+		}
+		defer unix.Close(outputDir)
+	}
 	// O_NONBLOCK prevents an attacker-created canonical-name FIFO from
 	// hanging before Fstat can reject non-regular sources. It does not
 	// change regular-file read semantics.
@@ -104,11 +112,16 @@ func withVerifiedHandoffTemporary(source, output string, operation func(raw stri
 		if err := unix.Fsync(fd); err != nil {
 			return fmt.Errorf("cannot make original protected temporary durable")
 		}
-		if err := unix.Renameat2(dir, temporary, dir, target, unix.RENAME_NOREPLACE); err != nil {
-			return fmt.Errorf("no-clobber temporary publication refused or failed")
+		if err := unix.Renameat2(dir, temporary, outputDir, target, unix.RENAME_NOREPLACE); err != nil {
+			return fmt.Errorf("no-clobber temporary publication refused or failed (choose an external directory on the same filesystem for reserved-menu crash recovery)")
 		}
 		if err := unix.Fsync(dir); err != nil {
-			return fmt.Errorf("handoff renamed but directory durability is uncertain")
+			return fmt.Errorf("handoff renamed but source directory durability is uncertain")
+		}
+		if outputDir != dir {
+			if err := unix.Fsync(outputDir); err != nil {
+				return fmt.Errorf("handoff renamed but external destination durability is uncertain")
+			}
 		}
 		return nil
 	})
@@ -138,6 +151,19 @@ func linkRecoverHandoffCommand(args []string, out, errOut io.Writer, opts *runti
 	if opts != nil {
 		root = opts.stateRoot
 	}
+	// A recovered crash temporary is not proof of menu ownership. Public
+	// recovery never publishes into the reserved namespace, even when a
+	// historical guided Create left the temporary there. Such a temporary
+	// may be moved no-clobber to an independent owner-private directory
+	// on the same filesystem, without inventing an origin receipt.
+	if !filepath.IsAbs(root) || filepath.Clean(root) != root ||
+		!filepath.IsAbs(args[4]) || filepath.Clean(args[4]) != args[4] ||
+		insideProtectedMenuHandoffNamespace(root, args[4]) {
+		return readCommandError(out, errOut, isJSON, stlerr.CodeInvalid, op,
+			"public handoff recovery destination is invalid or reserved for the guided menu; choose an independent private file")
+	}
+	allowReservedMove := filepath.Dir(args[2]) == filepath.Join(root, protectedMenuHandoffDir) &&
+		filepath.Dir(args[2]) != filepath.Dir(args[4])
 	// No backend probing/activation is necessary: this is a private-file
 	// recovery action only. The canonical Engine still owns locks and state.
 	engine, err := buildRuntimeEngine(runtimeOptions{stateRoot: root})
@@ -148,7 +174,7 @@ func linkRecoverHandoffCommand(args []string, out, errOut io.Writer, opts *runti
 	var kind domain.Backend
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	err = withVerifiedHandoffTemporary(args[2], args[4], func(raw string, publish func() error) error {
+	err = withVerifiedHandoffTemporary(args[2], args[4], allowReservedMove, func(raw string, publish func() error) error {
 		offer, decodeErr := pairing.DecodeSetupLink(raw)
 		if decodeErr != nil {
 			return stlerr.New(stlerr.CodeInvalid, op, string(id), "", "malformed SENSITIVE crash temporary")

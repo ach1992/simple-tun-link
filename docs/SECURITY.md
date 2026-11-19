@@ -80,7 +80,15 @@ machine/JSON Link diagnostics.
   recovery or a fresh authorized setup, not silent rekey or adoption.
   `recover-handoff` may republish only an original, safely retained,
   digest-matching crash-staged private offer with matching pending
-  intent/credential; it performs no kernel/daemon activation.
+  intent/credential; it performs no kernel/daemon activation. Public
+  recovery never writes into the menu-reserved handoff namespace. A
+  genuine historical menu crash temporary can be moved to a separate
+  owner-private file on the same filesystem, without inventing menu
+  ownership; that independent output is never auto-deleted.
+  After a confirmed interrupted MASQUE Remove, material retirement
+  failures keep the original offer untouched and report the committed
+  removal; the existing receipt-bound `retire-masque` can finish
+  credential and exact-menu-offer cleanup without replaying Remove.
 - A Quick Link can contain the **receiver credential**. It is
   explicitly **SENSITIVE**, not encrypted merely because it is
   encoded and checksummed. Deliver it over a trusted channel and

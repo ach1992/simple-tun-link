@@ -44,9 +44,20 @@ func linkMASQUEReconcileCommand(args []string, out, errOut io.Writer, options *r
 	protectedRemoval, protectedErr := prepareProtectedHandoffForMASQUERecovery(options, id)
 	result, err := engine.ReconcileMASQUE(ctx, id)
 	if err != nil {
+		if result.CommittedRemoved {
+			// ReconcileMASQUE may commit the exact verified-absent original
+			// removal before protected mTLS material retirement fails.
+			// The sender is GONE; the saved offer stays until retirement
+			// succeeds through the existing receipt-bound retire-masque.
+			return lifecycleFailureWithEvidence(out, errOut, jsonOutput,
+				stlerr.CodeState, "link_reconcile-masque", &app.Result{LinkID: id, Removed: true},
+				"MASQUE Remove reconciliation committed; original mTLS material retirement is incomplete and the private receiver offer is deliberately preserved",
+				&stlerr.OperationEvidence{Stage: "credential_retirement", HostMutation: "attempted",
+					DesiredState: "committed", Rollback: "not_required"}, err)
+		}
 		return lifecycleFailureWithEvidence(out, errOut, jsonOutput,
 			stlerr.CodeOf(err), "link_reconcile-masque", &app.Result{LinkID: id},
-			"MASQUE original host effect remains unverified or receipt retirement incomplete; inspect original State and service",
+			"MASQUE original host effect remains unverified; inspect original State and service before recovery",
 			stlerr.EvidenceOf(err), err)
 	}
 	// Reconciled Remove has already committed durable Link retirement. Only

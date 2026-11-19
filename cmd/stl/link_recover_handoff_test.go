@@ -100,6 +100,72 @@ func TestRecoverWireGuardOriginalCrashTemporaryWithExactPendingAndKey(t *testing
 	}
 }
 
+// Public recovery must never turn a crash-staged operator file into an
+// implicitly menu-owned offer. Historical guided writers can leave their
+// original temporary inside the reserved directory; the same exact pending
+// identity can still be recovered to an independent private destination.
+func TestRecoverReservedGuidedCrashTemporaryIntoIndependentPrivateOutput(t *testing.T) {
+	opts, source, _, link, root := stagedCrashWireGuard(t)
+	reserved, err := prepareProtectedMenuHandoff(opts, link.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	crashed := filepath.Join(filepath.Dir(reserved), filepath.Base(source))
+	if err := os.Rename(source, crashed); err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.ReadFile(crashed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoverArgs := []string{"link", "recover-handoff", "--source", crashed, "--output",
+		reserved, "--confirm", string(link.ID), "--json"}
+	code, stdout, stderr := creatorRun(recoverArgs, "", opts)
+	if code == 0 || stderr != "" || strings.Contains(stdout, "stl://") {
+		t.Fatalf("public recover crossed menu-only namespace: code=%d stdout=%s", code, stdout)
+	}
+	if _, err := os.Lstat(reserved); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("reserved receiver offer unexpectedly published", err)
+	}
+	if _, err := os.Lstat(crashed); err != nil {
+		t.Fatal("rejected recovery consumed protected original temporary", err)
+	}
+	external := filepath.Join(root, "operator-recovered.stl")
+	recoverArgs[5] = external
+	code, stdout, stderr = creatorRun(recoverArgs, "", opts)
+	if code != 0 || stderr != "" {
+		t.Fatalf("valid historical guided crash could not recover externally: %d %q %q", code, stdout, stderr)
+	}
+	after, err := os.ReadFile(external)
+	if err != nil || !bytes.Equal(original, after) {
+		t.Fatal("external recovery did not preserve exact original", err)
+	}
+	if _, err := os.Lstat(crashed); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("original temporary was not moved", err)
+	}
+	origin, err := menuHandoffOriginPath(opts, link.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(origin); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("public recovery synthesized menu ownership", err)
+	}
+	raw := strings.TrimSuffix(string(after), "\n")
+	code, stdout, stderr = creatorRun([]string{"link", "resume-wireguard", "--stdin",
+		"--confirm", setupLinkConfirmation(raw), "--json"}, string(after), opts)
+	if code != 0 || stderr != "" {
+		t.Fatalf("exact externally recovered sender cannot resume: %d %q", code, stdout)
+	}
+	code, stdout, stderr = creatorRun([]string{"link", "remove", string(link.ID),
+		"--confirm", string(link.ID), "--json"}, "", opts)
+	if code != 0 || stderr != "" {
+		t.Fatalf("confirmed Remove failed: %d %q %q", code, stdout, stderr)
+	}
+	if preserved, err := os.ReadFile(external); err != nil || !bytes.Equal(preserved, original) {
+		t.Fatal("Remove deleted or altered an independently recovered CLI output", err)
+	}
+}
+
 func TestRecoverHandoffRefusesAmbiguousOrUnsafeFilesWithoutMoving(t *testing.T) {
 	for _, kind := range []string{"different-confirm", "wrong-source-name", "world-readable",
 		"symlink", "hardlink", "occupied-target", "modified-original", "missing-sender-key",
@@ -338,7 +404,7 @@ func TestRecoverHandoffRejectsInPlaceContentRewriteBeforePublish(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = withVerifiedHandoffTemporary(source, output, func(raw string, publish func() error) error {
+	err = withVerifiedHandoffTemporary(source, output, false, func(raw string, publish func() error) error {
 		if raw != strings.TrimSuffix(string(initial), "\n") {
 			t.Fatal("incorrect initial protected temporary data")
 		}

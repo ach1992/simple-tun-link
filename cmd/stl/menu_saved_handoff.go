@@ -22,6 +22,18 @@ import (
 
 const protectedMenuHandoffDir = "receiver-handoffs"
 
+// This is a lexical namespace test, not a filesystem trust assertion:
+// subsequent private-dir fd operations separately reject symlink ancestors.
+func insideProtectedMenuHandoffNamespace(root, path string) bool {
+	if !filepath.IsAbs(root) || filepath.Clean(root) != root ||
+		!filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return false
+	}
+	relative, err := filepath.Rel(filepath.Join(root, protectedMenuHandoffDir), path)
+	return err == nil && (relative == "." ||
+		relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator)))
+}
+
 // Public --output is operator-owned, even if it deliberately points into
 // STL's State root. The menu's private namespace is a separate ownership
 // contract: only a fresh, confirmed guided Create may publish its exact ID
@@ -31,15 +43,10 @@ func checkCreatorHandoffDestination(options *runtimeOptions, id domain.LinkID, o
 		return err
 	}
 	root := createStateRoot(options)
-	if root == "" || id.Validate() != nil {
+	if !filepath.IsAbs(root) || filepath.Clean(root) != root || root == "/" || id.Validate() != nil {
 		return fmt.Errorf("cannot verify private receiver handoff ownership")
 	}
-	reserved := filepath.Join(root, protectedMenuHandoffDir)
-	rel, err := filepath.Rel(reserved, output)
-	if err != nil {
-		return fmt.Errorf("cannot compare receiver handoff ownership")
-	}
-	if rel == "." || rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+	if insideProtectedMenuHandoffNamespace(root, output) {
 		expected, pathErr := protectedMenuHandoffPath(options, id)
 		if pathErr != nil || options == nil || options.menuHandoffID != id || output != expected {
 			return fmt.Errorf("reserved receiver handoff directory is owned by guided Create, not CLI --output")
@@ -542,37 +549,72 @@ func prepareProtectedHandoffForMASQUERecovery(options *runtimeOptions, id domain
 	if !present || record.Desired != pending.Intent || record.Desired.Backend != domain.BackendMASQUE {
 		return nil, fmt.Errorf("MASQUE pending Remove does not match the committed sender")
 	}
+	return prepareOriginalMASQUEHandoffForRemoval(options, id, pending.Intent)
+}
+
+// A recovered interrupted Remove may commit State before its MASQUE material
+// retirement finishes. The existing exact receipt, never an absent Link ID
+// alone, is the authority for a later "retire-masque" continuation. An
+// abandoned-uncommitted Ensure is not a committed Remove.
+func prepareProtectedHandoffForMASQUERetirement(options *runtimeOptions, id domain.LinkID) (*protectedHandoffRemoval, bool, error) {
+	root := createStateRoot(options)
+	snapshot, err := state.NewFileStore(root).Load(context.Background())
+	if err != nil {
+		return nil, false, fmt.Errorf("cannot inspect MASQUE material retirement State")
+	}
+	receipt, found := snapshot.FindMASQUERemovalReceipt(id)
+	if !found || receipt.Purpose != "removed" {
+		return nil, false, nil
+	}
+	if receipt.Link.ID != id || receipt.Link.Backend != domain.BackendMASQUE ||
+		receipt.Link.MASQUE.MaterialSHA256 != receipt.MaterialSHA256 {
+		return nil, false, fmt.Errorf("invalid original MASQUE removal receipt")
+	}
+	if _, present := snapshot.Find(id); present {
+		return nil, false, fmt.Errorf("original MASQUE Link is still committed")
+	}
+	if _, pending := snapshot.FindMASQUEOperation(id); pending {
+		return nil, false, fmt.Errorf("MASQUE host operation remains unresolved")
+	}
+	prepared, err := prepareOriginalMASQUEHandoffForRemoval(options, id, receipt.Link)
+	return prepared, true, err
+}
+
+// Read the immutable, identity-attested saved original without demanding a
+// still-committed sender. Both recovery callers independently prove either
+// the exact interrupted Remove journal or the exact committed removal receipt.
+// Final deletion also checks the retired original receipt under the Link lock.
+func prepareOriginalMASQUEHandoffForRemoval(options *runtimeOptions, id domain.LinkID, expected domain.Link) (*protectedHandoffRemoval, error) {
+	root := createStateRoot(options)
 	path, err := protectedMenuHandoffPath(options, id)
 	if err != nil {
 		return nil, err
 	}
 	original, originalStat, err := readPrivateHandoffFileWithStat(path)
 	if errors.Is(err, errProtectedMenuOfferMissing) {
-		return nil, nil // An importing receiver or independent CLI sender.
+		return nil, nil // Importing receiver, independent CLI or previously deleted offer.
 	}
 	if err != nil {
-		return nil, fmt.Errorf("pending MASQUE original menu offer cannot be verified")
+		return nil, fmt.Errorf("original MASQUE menu offer cannot be verified")
 	}
 	offer, private, err := decodeMASQUEOffer(strings.NewReader(original), root)
 	defer clear(private)
 	if err != nil {
-		return nil, fmt.Errorf("pending MASQUE original receiver offer is invalid")
+		return nil, fmt.Errorf("original MASQUE receiver offer is invalid")
 	}
 	defer offer.Clear()
-	if offer.Sender != pending.Intent {
-		return nil, fmt.Errorf("pending MASQUE private offer does not match the original sender generation")
+	if offer.Sender != expected {
+		return nil, fmt.Errorf("original MASQUE receiver offer belongs to a different sender generation")
 	}
 	originPath, originDigest, originStat, err := verifiedMenuHandoffOrigin(options, id, original, originalStat)
 	if err != nil {
 		return nil, err
 	}
-	expected := pending.Intent
 	return &protectedHandoffRemoval{id: id, originalDesired: expected, path: path,
 		digest: sha256.Sum256([]byte(original + "\n")), originalStat: originalStat,
 		originPath: originPath, originDigest: originDigest, originStat: originStat,
 		recoveryOriginal: &expected}, nil
 }
-
 func (prepared *protectedHandoffRemoval) retireAfterRemove(options *runtimeOptions) error {
 	if prepared == nil {
 		return nil

@@ -111,8 +111,20 @@ operator-owned and cannot publish into the reserved menu directory.
 Historical unmarked offers are preserved for explicit inspection, not
 silently adopted. Successful `reconcile-masque` of an interrupted Remove
 performs the same verified original-offer retirement **after** proving
-host absence and committing the recovered removal. Incomplete Remove
-preserves the original for recovery. Neither command removes anything on the
+host absence and committing the recovered removal. If exact host-absence
+reconciliation commits removal but original MASQUE mTLS retirement fails,
+the result remains `outcome=removed_cleanup_incomplete` and
+`partial_result.removed=true` with
+`reason_code=masque_material_retirement_incomplete` and stage
+`credential_retirement`; the original receiver offer remains untouched.
+After verifying the matching receipt and host absence, rerun **only**
+`stl link retire-masque ID --confirm ID`, not Remove or Reconcile.
+That exact receipt-bound continuation completes mTLS retirement, then
+retires the original menu-owned receiver offer only when its inode,
+content and origin receipt are still verified. If only offer cleanup
+is incomplete, its distinct `protected_handoff_cleanup` stage is
+reported and the unknown file is preserved. Incomplete Remove preserves
+the original for recovery. Neither command removes anything on the
 **other** server automatically.
 
 The interactive menu offers **Create tunnel → MASQUE / CONNECT-IP** and

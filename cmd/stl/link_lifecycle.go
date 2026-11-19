@@ -310,7 +310,7 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 			safe.ObjectID = observedPublic.ObjectID
 		}
 		switch domain.Backend(observedPublic.Backend) {
-		case domain.BackendGRE, domain.BackendIPIP, domain.BackendL2TPv3, domain.BackendWireGuard, domain.BackendWireGuardWSS, domain.BackendWireGuardQUIC, domain.BackendIPsec:
+		case domain.BackendGRE, domain.BackendIPIP, domain.BackendL2TPv3, domain.BackendWireGuard, domain.BackendWireGuardWSS, domain.BackendWireGuardQUIC, domain.BackendIPsec, domain.BackendMASQUE:
 			safe.Backend = observedPublic.Backend
 		}
 	}
@@ -333,6 +333,14 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 		case evidence.DesiredState == "visible_unconfirmed":
 			safe.ReasonCode = "state_publication_uncertain"
 			safe.NextStep = "Inspect saved desired state and live owned resources before retrying or removing anything; a publication may be visible without durable confirmation."
+		case evidence.Stage == "credential_retirement" && evidence.DesiredState == "committed" &&
+			(operation == "link_reconcile-masque" || operation == "link_retire-masque"):
+			safe.ReasonCode = "masque_material_retirement_incomplete"
+			id := "ID"
+			if result != nil && result.LinkID.Validate() == nil {
+				id = string(result.LinkID)
+			}
+			safe.NextStep = "The MASQUE Link is already removed, but its original mTLS material retirement is incomplete and the saved receiver Setup Link has not been cleaned up. Inspect the exact removal receipt and original host absence, then use stl link retire-masque " + id + " --confirm " + id + " --json to finish both stages. Do not repeat Remove or erase unverified files."
 		case evidence.Stage == "protected_handoff_cleanup" && evidence.DesiredState == "committed":
 			safe.ReasonCode = "protected_handoff_cleanup_incomplete"
 			safe.NextStep = "The Link is already removed. Its original private Setup Link may remain under STL's receiver-handoffs directory. Inspect only this ID's exact protected file and ownership before retiring it; do not rerun Remove or delete unrelated files."
@@ -480,7 +488,10 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 	// A failed post-commit receiver-offer cleanup is NOT uncertainty about
 	// the already verified Link removal. Distinguish this bounded leftover
 	// from a failed Engine Remove for machine callers and operators.
-	if evidence != nil && evidence.Stage == "protected_handoff_cleanup" &&
+	if evidence != nil &&
+		(evidence.Stage == "protected_handoff_cleanup" ||
+			evidence.Stage == "credential_retirement" &&
+				(operation == "link_reconcile-masque" || operation == "link_retire-masque")) &&
 		evidence.DesiredState == "committed" && result != nil && result.Removed {
 		out.Outcome = "removed_cleanup_incomplete"
 	}
@@ -512,7 +523,11 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 		}
 		if result != nil && result.LinkID != "" {
 			if out.Outcome == "removed_cleanup_incomplete" {
-				fmt.Fprintf(stderr, "Link %s already removed; only protected receiver Setup Link cleanup is incomplete. Do not repeat Remove.\n", result.LinkID)
+				if evidence != nil && evidence.Stage == "credential_retirement" {
+					fmt.Fprintf(stderr, "Link %s already removed; MASQUE mTLS material retirement is incomplete and receiver Setup Link cleanup is pending. Do not repeat Remove.\n", result.LinkID)
+				} else {
+					fmt.Fprintf(stderr, "Link %s already removed; only protected receiver Setup Link cleanup is incomplete. Do not repeat Remove.\n", result.LinkID)
+				}
 			} else {
 				fmt.Fprintf(stderr, "Partial operation result for Link %s; reconcile current host/state before retry\n", result.LinkID)
 			}
