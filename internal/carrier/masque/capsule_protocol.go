@@ -3,6 +3,7 @@ package masque
 import (
 	"encoding/base64"
 	"strings"
+	"unicode/utf8"
 )
 
 // capsuleProtocolTrue validates RFC 9297's Capsule-Protocol Item as one
@@ -19,14 +20,17 @@ func capsuleProtocolTrue(value string) bool {
 	}
 	value = value[2:]
 	for {
-		value = strings.TrimLeft(value, " \t")
 		if value == "" {
 			return true
 		}
 		if value[0] != ';' {
+			// RFC 9651 section 4.2.3: whitespace before a parameter
+			// separator is not allowed within a Structured Field Item.
 			return false
 		}
-		value = strings.TrimLeft(value[1:], " \t")
+		// Parameter grammar discards SP only after the semicolon; HTAB
+		// in that position is invalid even though outer OWS is allowed.
+		value = strings.TrimLeft(value[1:], " ")
 		if value == "" || !sfKeyStart(value[0]) {
 			return false
 		}
@@ -78,21 +82,40 @@ func sfBareItemLength(s string) (int, bool) {
 			return 0, false
 		}
 		raw := s[1 : end+1]
-		if _, err := base64.StdEncoding.DecodeString(raw); err != nil {
-			return 0, false
+		// RFC 9651 section 4.2.7 requires the base64 alphabet and
+		// recommends accepting valid unpadded encodings. Go's default
+		// decoder accepts LF, so check every encoded byte before parsing.
+		for i := 0; i < len(raw); i++ {
+			c := raw[i]
+			if !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' ||
+				c >= '0' && c <= '9' || c == '+' || c == '/' || c == '=') {
+				return 0, false
+			}
 		}
-		return end + 2, true
+		// RFC 9651 advises accepting missing padding, even when only
+		// some expected '=' suffix bytes are present. StdEncoding checks
+		// alphabet placement after absent suffix padding is synthesized.
+		pad := (4 - len(raw)%4) % 4
+		_, err := base64.StdEncoding.DecodeString(raw + strings.Repeat("=", pad))
+		return end + 2, err == nil
 	case '%':
 		if len(s) < 2 || s[1] != '"' {
 			return 0, false
 		}
+		// A Display String's %-escapes use lowercase hex and the final
+		// decoded octets must form valid UTF-8 (RFC 9651 section 4.2.10).
+		decoded := make([]byte, 0, len(s)-3)
 		for i := 2; i < len(s); i++ {
+			c := s[i]
 			switch {
-			case s[i] == '"':
-				return i + 1, true
-			case s[i] == '%' && i+2 < len(s) && isHex(s[i+1]) && isHex(s[i+2]):
+			case c == '"':
+				return i + 1, utf8.Valid(decoded)
+			case c == '%' && i+2 < len(s) &&
+				isLowerHex(s[i+1]) && isLowerHex(s[i+2]):
+				decoded = append(decoded, hexNibble(s[i+1])<<4|hexNibble(s[i+2]))
 				i += 2
-			case s[i] >= 0x20 && s[i] <= 0x7e && s[i] != '%' && s[i] != '\\':
+			case c >= 0x20 && c <= 0x7e && c != '%':
+				decoded = append(decoded, c)
 			default:
 				return 0, false
 			}
@@ -165,6 +188,13 @@ func sfNumberLength(s string, decimalAllowed bool) (int, bool) {
 	return i, true
 }
 
-func isHex(c byte) bool {
-	return c >= '0' && c <= '9' || c >= 'A' && c <= 'F' || c >= 'a' && c <= 'f'
+func isLowerHex(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f'
+}
+
+func hexNibble(c byte) byte {
+	if c >= '0' && c <= '9' {
+		return c - '0'
+	}
+	return c - 'a' + 10
 }

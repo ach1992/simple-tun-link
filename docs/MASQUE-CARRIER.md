@@ -42,6 +42,18 @@ start CONNECT-IP or forward private packets. This is not a third-party
 website impersonation, CDN proxy, public browser-trusted certificate or
 proof of browser TLS fingerprint equivalence.
 
+The public HTTP/2 listener advertises and enforces a per-TLS-connection
+maximum of 64 concurrently pending response streams. Excess uncredited
+GET requests receive HTTP/2 REFUSED_STREAM without consuming a pending-body
+slot or affecting another stream; credit, cancellation and completed
+responses release their exact slots. Only stream-window-ready responses
+are scheduled for DATA, so zero-credit requests cannot cause repeated
+full-map scans. This is an HTTP/2 per-connection resource boundary, **not**
+a limit on STL Links, servers, throughput or data-plane packet forwarding.
+Unsupported public HTTP methods receive an error on their own valid stream;
+reusing a closed stream is an HTTP/2 protocol error rather than an
+attempt to send new HEADERS on the closed stream.
+
 A live authenticated CONNECT-IP stream sends HTTP/2 PING probes even when
 neither side has private IP packets to transmit. Currently the dialer probes
 every 20 seconds, and both endpoints close a session that stops delivering

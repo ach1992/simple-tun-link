@@ -20,11 +20,12 @@ import (
 // Use independent read/write framers over a genuine TLS/ALPN=h2 socket.
 // All assertions below see the actual peer-visible HTTP/2 frames and credit.
 type publicH2WirePeer struct {
-	conn   *tls.Conn
-	reader *http2.Framer
-	writer *http2.Framer
-	out    *bufio.Writer
-	port   string
+	conn                  *tls.Conn
+	reader                *http2.Framer
+	writer                *http2.Framer
+	out                   *bufio.Writer
+	port                  string
+	advertisedConcurrency uint32
 }
 
 func publicH2WireFixture(t *testing.T) (string, *x509.CertPool, string, *channelPrivatePipe) {
@@ -108,6 +109,14 @@ func newPublicH2WirePeer(t *testing.T, addr string, roots *x509.CertPool, initia
 				clientSettingsAck = true
 			} else {
 				serverSettings = true
+				if err := s.ForeachSetting(func(setting http2.Setting) error {
+					if setting.ID == http2.SettingMaxConcurrentStreams {
+						p.advertisedConcurrency = setting.Val
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
 				if err := p.writer.WriteSettingsAck(); err != nil {
 					t.Fatal(err)
 				}
@@ -354,7 +363,26 @@ func TestMASQUECapsuleStructuredBooleanSyntax(t *testing.T) {
 		{"?1;version=42;quality=0.5", true},
 		{"?1;token=foo/bar;message=\"a,b;c\"", true},
 		{"?1;bytes=:dGVzdA==:;when=@1659578233", true},
-		{"?1;display=%\"caf%C3%A9\"", true},
+		{"?1;display=%\"caf%c3%a9\"", true},
+		{"?1;bytes=:dGVzdA:", true},
+		{"?1;bytes=:dGVzdA=:", true},
+		{"?1;bytes=::", true},
+		{"?1;display=%\"caf%c3%a9\"", true},
+		{"?1;display=%\"literal\\backslash\"", true},
+		{"?1;feature=foo; extra=?1", true},
+		{"?1;feature=one;feature=two", true},
+		{"?1;bytes=:dGVzdA!:", false},
+		{"?1;bytes=:dGVzdA===:", false},
+		{"?1;bytes=:dGV\\nzdA==:", false},
+		{"?1;display=%\"%ff\"", false},
+		{"?1;display=%\"%FF\"", false},
+		{"?1;display=%\"caf%C3%A9\"", false},
+		{"?1;display=%\"%c3%28\"", false},
+		{"?1;display=%\"%c3\"", false},
+		{"?1 ;feature", false},
+		{"?1\t;feature", false},
+		{"?1;\tfeature", false},
+		{"?1;feature=one ;other", false},
 		{"?0", false},
 		{"?1, ?0", false},
 		{"?1;feature=?2", false},
@@ -377,8 +405,6 @@ func TestMASQUECapsuleStructuredBooleanSyntax(t *testing.T) {
 // validation and prove malformed Capsule-Protocol messages cannot be
 // admitted even though authentication is otherwise correct.
 func TestMASQUEPublicH2ExactWireCapsuleProtocolAdmission(t *testing.T) {
-	addr, roots, token, pipe := publicH2WireFixture(t)
-	bearer := hpack.HeaderField{Name: "authorization", Value: "Bearer " + token}
 	single := func(value string) []hpack.HeaderField {
 		return []hpack.HeaderField{{Name: "capsule-protocol", Value: value}}
 	}
@@ -408,19 +434,30 @@ func TestMASQUEPublicH2ExactWireCapsuleProtocolAdmission(t *testing.T) {
 		{label: "transfer encoding", capsule: single("?1"), extra: []hpack.HeaderField{
 			{Name: "transfer-encoding", Value: "chunked"},
 		}, expected: "403"},
+		{label: "valid unpadded base64", capsule: single("?1;bytes=:dGVzdA:"), expected: "200"},
+		{label: "valid partially padded base64", capsule: single("?1;bytes=:dGVzdA=:"), expected: "200"},
+		{label: "valid UTF-8 display", capsule: single("?1;display=%\"caf%c3%a9\""), expected: "200"},
+		{label: "malformed base64", capsule: single("?1;bytes=:dGVzdA!:"), expected: "403"},
+		{label: "malformed display invalid UTF-8", capsule: single("?1;label=%\"%ff\""), expected: "403"},
+		{label: "malformed display uppercase escape", capsule: single("?1;label=%\"%FF\""), expected: "403"},
+		{label: "malformed parameter whitespace", capsule: single("?1 ;flag"), expected: "403"},
 		{label: "valid true unknown parameters", capsule: single("?1;flag;version=2;note=\"ok\""), expected: "200"},
 	} {
-		extra := append([]hpack.HeaderField{bearer}, tc.extra...)
-		status := rawPublicH2ConnectStatusWithCapsules(t, addr, roots, "", "",
-			tc.capsule, extra)
-		if status != tc.expected {
-			t.Errorf("%s: HTTP %s, expected %s", tc.label, status, tc.expected)
-		}
-		select {
-		case packet := <-pipe.toServer:
-			t.Fatalf("%s reached private packet interface: %x", tc.label, packet)
-		default:
-		}
+		t.Run(tc.label, func(t *testing.T) {
+			addr, roots, token, pipe := publicH2WireFixture(t)
+			bearer := hpack.HeaderField{Name: "authorization", Value: "Bearer " + token}
+			extra := append([]hpack.HeaderField{bearer}, tc.extra...)
+			status := rawPublicH2ConnectStatusWithCapsules(t, addr, roots, "", "",
+				tc.capsule, extra)
+			if status != tc.expected {
+				t.Errorf("%s: HTTP %s, expected %s", tc.label, status, tc.expected)
+			}
+			select {
+			case packet := <-pipe.toServer:
+				t.Fatalf("%s reached private packet interface: %x", tc.label, packet)
+			default:
+			}
+		})
 	}
 }
 
@@ -453,10 +490,151 @@ func TestMASQUEPublicH2CannotReusePublicStreamForCONNECTIP(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.flush(t)
-	p.headers(t, 1, "403", true)
+	frame := p.next(t)
+	goaway, ok := frame.(*http2.GoAwayFrame)
+	if !ok || goaway.ErrCode != http2.ErrCodeProtocol {
+		t.Fatalf("reused closed stream should trigger PROTOCOL_ERROR GOAWAY, never HEADERS: %+v", frame)
+	}
 	select {
 	case packet := <-pipe.toServer:
 		t.Fatalf("reused HTTP/2 public stream reached private TUN: %x", packet)
+	default:
+	}
+}
+
+// An RFC 9113 maximum concurrency advertisement is enforced even when
+// a peer ignores it. Under stream-window zero, public replies remain
+// bounded and new HEADERS do not cause O(N) blocked-response scans.
+func TestMASQUEPublicH2PendingZeroWindowBudgetAndRecovery(t *testing.T) {
+	addr, roots, _, pipe := publicH2WireFixture(t)
+	p := newPublicH2WirePeer(t, addr, roots, 0)
+	if p.advertisedConcurrency != publicH2ConcurrentStreams {
+		t.Fatalf("expected advertised public H2 concurrency %d, got %d",
+			publicH2ConcurrentStreams, p.advertisedConcurrency)
+	}
+	page := []byte("STL MASQUE HTTP/2 endpoint\n")
+	for i := 0; i < publicH2ConcurrentStreams; i++ {
+		id := uint32(2*i + 1)
+		p.get(t, id, "GET", "/")
+		p.headers(t, id, "200", false)
+	}
+	p.noFrame(t)
+
+	refusedID := uint32(2*publicH2ConcurrentStreams + 1)
+	p.get(t, refusedID, "GET", "/")
+	reset, ok := p.next(t).(*http2.RSTStreamFrame)
+	if !ok || reset.StreamID != refusedID || reset.ErrCode != http2.ErrCodeRefusedStream {
+		t.Fatalf("excess pending GET was not refused on its own stream: %+v", reset)
+	}
+
+	// HEAD replies have no pending DATA and do not consume response buffers.
+	headID := refusedID + 2
+	p.get(t, headID, "HEAD", "/")
+	p.headers(t, headID, "200", true)
+
+	// WINDOW_UPDATE for the connection does not help zero-credit streams;
+	// repeated updates must not inspect or emit from the blocked map.
+	for i := 0; i < 20; i++ {
+		p.credit(t, 0, 1)
+	}
+	p.noFrame(t)
+
+	// Replenish just one pending stream. It completes, freeing one slot.
+	p.credit(t, 1, uint32(len(page)))
+	p.data(t, 1, page, true)
+	nextID := headID + 2
+	p.get(t, nextID, "GET", "/")
+	p.headers(t, nextID, "200", false)
+
+	// Cancel another blocked response; it also releases its pending slot.
+	if err := p.writer.WriteRSTStream(3, http2.ErrCodeCancel); err != nil {
+		t.Fatal(err)
+	}
+	p.flush(t)
+	afterCancelID := nextID + 2
+	p.get(t, afterCancelID, "GET", "/")
+	p.headers(t, afterCancelID, "200", false)
+
+	p.credit(t, nextID, uint32(len(page)))
+	p.data(t, nextID, page, true)
+	p.credit(t, afterCancelID, uint32(len(page)))
+	p.data(t, afterCancelID, page, true)
+	select {
+	case packet := <-pipe.toServer:
+		t.Fatalf("anonymous public HTTP entered private TUN: %x", packet)
+	default:
+	}
+}
+
+func TestMASQUEPublicH2PendingSchedulerExcludesZeroWindowStreams(t *testing.T) {
+	var writer bytes.Buffer
+	buf := bufio.NewWriter(&writer)
+	h := &h2ServerConn{
+		fr: http2.NewFramer(buf, nil), buf: buf,
+		peerFrameSize: 16384, peerInitialWindow: 0, connWindow: 65535,
+	}
+	for i := 0; i < publicH2ConcurrentStreams; i++ {
+		if err := h.replyPublicHTTP(uint32(2*i+1), "GET", true); err != nil {
+			t.Fatal(err)
+		}
+		if got := h.publicReady.Len(); got != 0 {
+			t.Fatalf("zero-credit GET caused queued work on iteration %d: %d", i, got)
+		}
+	}
+	if got := len(h.publicReplies); got != publicH2ConcurrentStreams {
+		t.Fatalf("stored %d pending replies, wanted %d", got, publicH2ConcurrentStreams)
+	}
+	if err := h.replyPublicHTTP(uint32(2*publicH2ConcurrentStreams+1), "GET", true); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(h.publicReplies); got != publicH2ConcurrentStreams {
+		t.Fatalf("over-capacity GET retained state: %d", got)
+	}
+	// Processing has zero eligible streams regardless of how many blocked
+	// streams exist, so a no-credit update requires no per-request scan.
+	for i := 0; i < 200; i++ {
+		if err := h.flushPublicData(); err != nil {
+			t.Fatal(err)
+		}
+		if got := h.publicReady.Len(); got != 0 {
+			t.Fatalf("blocked replies unexpectedly queued work: %d", got)
+		}
+	}
+	h.dropPublicReply(1)
+	if len(h.publicReplies) != publicH2ConcurrentStreams-1 || h.publicReady.Len() != 0 {
+		t.Fatal("public response cancellation did not release bounded pending state")
+	}
+}
+
+func TestMASQUEPublicH2RejectedMethodsUseTheirOwnStreams(t *testing.T) {
+	addr, roots, _, pipe := publicH2WireFixture(t)
+	p := newPublicH2WirePeer(t, addr, roots, 65535)
+	page := []byte("STL MASQUE HTTP/2 endpoint\n")
+
+	// First, close stream 1 with HEAD. Unsupported method on 3 must be
+	// rejected on 3, not reopen stream 1.
+	p.get(t, 1, "HEAD", "/")
+	p.headers(t, 1, "200", true)
+	p.get(t, 3, "POST", "/")
+	p.headers(t, 3, "400", true)
+
+	// On a new, legal stream 5, CONNECT-IP is rejected on 5 as well.
+	p.get(t, 5, "CONNECT", "/.well-known/masque/ip/")
+	p.headers(t, 5, "403", true)
+
+	// Multiple different methods and stream IDs may safely share one
+	// connection; invalid requests never poison later GET/HEAD.
+	p.get(t, 7, "GET", "/")
+	p.headers(t, 7, "200", false)
+	p.data(t, 7, page, true)
+	p.get(t, 9, "POST", "/missing")
+	p.headers(t, 9, "400", true)
+	p.get(t, 11, "HEAD", "/")
+	p.headers(t, 11, "200", true)
+
+	select {
+	case packet := <-pipe.toServer:
+		t.Fatalf("rejected request reached private packet path: %x", packet)
 	default:
 	}
 }

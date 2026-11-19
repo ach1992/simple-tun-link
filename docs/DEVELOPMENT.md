@@ -435,8 +435,12 @@ go test ./internal/carrier/masque -run \
 These tests verify zero and negative stream credit, separate stream windows,
 connection-credit exhaustion and replenishment, reusable GET/HEAD, scoped
 RST_STREAM cancellation, and malformed/duplicate Capsule-Protocol rejection
-against the actual framed/TLS listener. Existing mTLS CONNECT-IP tests remain
-in the same package's full test suite.
+against the actual framed/TLS listener. They also cover the advertised
+64-concurrent-pending-response boundary under zero DATA credit, queueing only
+eligible streams (rather than rescanning blocked responses), cancellation
+release/recovery, correct error stream IDs, closed-stream GOAWAY behavior,
+and RFC 9651 UTF-8 Display String/unpadded Base64 parameter parsing.
+Existing mTLS CONNECT-IP tests remain in the same package's full test suite.
 
 The strictly opt-in launcher compiles a production STL binary and a
 build-tagged test-only protected-material stage. After verifying fresh

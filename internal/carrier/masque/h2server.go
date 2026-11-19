@@ -3,6 +3,7 @@ package masque
 import (
 	"bufio"
 	"bytes"
+	"container/list"
 	"context"
 	"crypto/subtle"
 	"crypto/tls"
@@ -194,6 +195,12 @@ func (s *H2Server) Serve(ctx context.Context) error {
 	}
 }
 
+// The limit is per public HTTP/2 TLS connection (not a product Link-count
+// or bandwidth quota). It is advertised to clients as the H2 concurrency
+// setting and enforced for zero-credit pending GET bodies so anonymous peers
+// cannot retain unbounded response state on a tunnel listener.
+const publicH2ConcurrentStreams = 64
+
 // Per-connection HTTP/2 codec. x/net/http2.Server intentionally disables
 // RFC 8441 Extended CONNECT by default (Issue #71128). A private, bounded
 // HTTP/2 Framer is used instead of a global GODEBUG compatibility setting.
@@ -216,11 +223,15 @@ type h2ServerConn struct {
 	publicMode    bool
 	lastPublicID  uint32
 	publicReplies map[uint32]*h2PublicReply
+	// Only response streams that have positive stream credit are queued.
+	// A zero-credit GET does not trigger a scan of earlier pending GETs.
+	publicReady list.List
 }
 
 type h2PublicReply struct {
 	body   []byte
 	window int64
+	ready  *list.Element
 }
 
 func (h *h2ServerConn) write(do func(*http2.Framer) error) error {
@@ -288,8 +299,9 @@ func (h *h2ServerConn) readSetting(f *http2.SettingsFrame) error {
 				}
 			}
 			h.streamWindow += delta
-			for _, reply := range h.publicReplies {
+			for id, reply := range h.publicReplies {
 				reply.window += delta
+				h.schedulePublicReply(id, reply)
 			}
 			h.peerInitialWindow = int64(s.Val)
 		case http2.SettingMaxFrameSize:
@@ -321,10 +333,11 @@ func (h *h2ServerConn) updateWindow(f *http2.WindowUpdateFrame) error {
 		// WINDOW_UPDATE on a closed HTTP/2 response stream is permitted.
 		// It must not add credit to unrelated streams or CONNECT-IP.
 		if reply := h.publicReplies[f.StreamID]; reply != nil {
-			reply.window += int64(f.Increment)
-			if reply.window > (1<<31)-1 {
+			if reply.window+int64(f.Increment) > (1<<31)-1 {
 				return errors.New("MASQUE public HTTP/2 stream window overflow")
 			}
+			reply.window += int64(f.Increment)
+			h.schedulePublicReply(f.StreamID, reply)
 		}
 	} else if f.StreamID == 1 {
 		h.streamWindow += int64(f.Increment)
@@ -337,6 +350,12 @@ func (h *h2ServerConn) updateWindow(f *http2.WindowUpdateFrame) error {
 }
 
 func (h *h2ServerConn) reply(code string) error {
+	return h.replyOnStream(1, code)
+}
+
+// Private CONNECT-IP always uses stream 1; ordinary public HTTP rejection
+// uses the actual newly opened request stream, never an earlier closed one.
+func (h *h2ServerConn) replyOnStream(streamID uint32, code string) error {
 	var hdr bytes.Buffer
 	e := hpack.NewEncoder(&hdr)
 	if err := e.WriteField(hpack.HeaderField{Name: ":status", Value: code}); err != nil {
@@ -349,7 +368,7 @@ func (h *h2ServerConn) reply(code string) error {
 	}
 	return h.write(func(fr *http2.Framer) error {
 		return fr.WriteHeaders(http2.HeadersFrameParam{
-			StreamID: 1, BlockFragment: hdr.Bytes(), EndHeaders: true, EndStream: code != "200",
+			StreamID: streamID, BlockFragment: hdr.Bytes(), EndHeaders: true, EndStream: code != "200",
 		})
 	})
 }
@@ -359,6 +378,14 @@ func (h *h2ServerConn) reply(code string) error {
 // The single-connection framer completes the requested stream while
 // keeping the HTTP/2 connection available for another ordinary GET/HEAD.
 func (h *h2ServerConn) replyPublicHTTP(streamID uint32, method string, found bool) error {
+	// Respect the advertised concurrent-stream capacity even when a peer
+	// ignores SETTINGS_MAX_CONCURRENT_STREAMS. Refuse only the excess
+	// request, without retaining a body or closing other valid streams.
+	if method != "HEAD" && len(h.publicReplies) >= publicH2ConcurrentStreams {
+		return h.write(func(fr *http2.Framer) error {
+			return fr.WriteRSTStream(streamID, http2.ErrCodeRefusedStream)
+		})
+	}
 	body := []byte("STL MASQUE HTTP/2 endpoint\n")
 	code := "200"
 	if !found {
@@ -393,34 +420,82 @@ func (h *h2ServerConn) replyPublicHTTP(streamID uint32, method string, found boo
 	if h.publicReplies == nil {
 		h.publicReplies = make(map[uint32]*h2PublicReply)
 	}
-	h.publicReplies[streamID] = &h2PublicReply{body: body, window: h.peerInitialWindow}
+	reply := &h2PublicReply{body: body, window: h.peerInitialWindow}
+	h.publicReplies[streamID] = reply
+	h.schedulePublicReply(streamID, reply)
 	return h.flushPublicData()
 }
 
-// Drain only currently credited DATA. Never block the H2 frame reader while
-// waiting for WINDOW_UPDATE: the pending response remains in publicReplies
-// and is resumed when the reader processes more control frames.
+// Both the map and the list belong to the single H2 reader goroutine;
+// no background public-response worker or second scheduling framework is
+// needed. Only streams with stream-window credit are put on the ready list.
+func (h *h2ServerConn) schedulePublicReply(streamID uint32, reply *h2PublicReply) {
+	if reply.window > 0 && len(reply.body) != 0 {
+		if reply.ready == nil {
+			reply.ready = h.publicReady.PushBack(streamID)
+		}
+	} else if reply.ready != nil {
+		h.publicReady.Remove(reply.ready)
+		reply.ready = nil
+	}
+}
+
+func (h *h2ServerConn) dropPublicReply(streamID uint32) {
+	if reply := h.publicReplies[streamID]; reply != nil {
+		if reply.ready != nil {
+			h.publicReady.Remove(reply.ready)
+			reply.ready = nil
+		}
+		delete(h.publicReplies, streamID)
+	}
+}
+
+// Work-proportional scheduling: new zero-credit GETs never scan older
+// blocked requests. Connection WINDOW_UPDATE drains only the ready list;
+// stream WINDOW_UPDATE queues exactly the now-creditable stream. SETTINGS
+// necessarily touches active streams once to apply the window delta.
 func (h *h2ServerConn) flushPublicData() error {
-	for streamID, reply := range h.publicReplies {
-		for len(reply.body) > 0 {
-			h.flowMu.Lock()
-			n := min(int64(len(reply.body)), h.peerFrameSize, h.connWindow, reply.window)
-			if n <= 0 {
-				h.flowMu.Unlock()
-				break
-			}
-			h.connWindow -= n
-			reply.window -= n
+	for front := h.publicReady.Front(); front != nil; front = h.publicReady.Front() {
+		h.flowMu.Lock()
+		if h.connWindow <= 0 {
 			h.flowMu.Unlock()
-			end := int(n) == len(reply.body)
-			if err := h.write(func(fr *http2.Framer) error {
-				return fr.WriteData(streamID, end, reply.body[:n])
-			}); err != nil {
-				return err
+			return nil
+		}
+		streamID := front.Value.(uint32)
+		reply := h.publicReplies[streamID]
+		if reply == nil || reply.window <= 0 {
+			h.flowMu.Unlock()
+			h.publicReady.Remove(front)
+			if reply != nil {
+				reply.ready = nil
 			}
+			continue
+		}
+		n := min(int64(len(reply.body)), h.peerFrameSize, h.connWindow, reply.window)
+		if n <= 0 {
+			h.flowMu.Unlock()
+			return nil
+		}
+		h.connWindow -= n
+		reply.window -= n
+		h.flowMu.Unlock()
+
+		end := int(n) == len(reply.body)
+		if err := h.write(func(fr *http2.Framer) error {
+			return fr.WriteData(streamID, end, reply.body[:n])
+		}); err != nil {
+			return err
+		}
+		if end {
+			h.dropPublicReply(streamID)
+		} else {
 			reply.body = reply.body[n:]
-			if end {
-				delete(h.publicReplies, streamID)
+			if reply.window <= 0 {
+				h.publicReady.Remove(front)
+				reply.ready = nil
+			} else {
+				// Larger bodies can share available connection credit fairly.
+				h.publicReady.MoveToBack(front)
 			}
 		}
 	}
@@ -520,12 +595,18 @@ func (s *H2Server) serveH2(parent context.Context, conn net.Conn) error {
 		peerFrameSize: 16384, connWindow: 65535, streamWindow: 65535,
 		peerInitialWindow: 65535, flowChange: make(chan struct{}),
 	}
+	settings := []http2.Setting{
+		{ID: http2.SettingEnableConnectProtocol, Val: 1},
+		{ID: http2.SettingInitialWindowSize, Val: 8 * 1024 * 1024},
+		{ID: http2.SettingMaxFrameSize, Val: 65535},
+	}
+	if s.cfg.PublicTLS {
+		settings = append(settings, http2.Setting{
+			ID: http2.SettingMaxConcurrentStreams, Val: publicH2ConcurrentStreams,
+		})
+	}
 	if err := h.write(func(fr *http2.Framer) error {
-		return fr.WriteSettings(
-			http2.Setting{ID: http2.SettingEnableConnectProtocol, Val: 1},
-			http2.Setting{ID: http2.SettingInitialWindowSize, Val: 8 * 1024 * 1024},
-			http2.Setting{ID: http2.SettingMaxFrameSize, Val: 65535},
-		)
+		return fr.WriteSettings(settings...)
 	}); err != nil {
 		return err
 	}
@@ -575,14 +656,29 @@ func (s *H2Server) serveH2(parent context.Context, conn net.Conn) error {
 				continue
 			}
 			if accepted || h.publicMode || !s.authorizeRequest(f) {
-				// A TLS socket that already served ordinary public
-				// requests can never be repurposed into CONNECT-IP.
-				// HTTP/2 stream IDs are single-use, even after HEAD.
+				// The client cannot reuse a completed H2 stream or open an
+				// even-numbered stream. Never write HEADERS on a closed ID.
+				if f.StreamID == 0 || f.StreamID%2 == 0 ||
+					(h.publicMode && f.StreamID <= h.lastPublicID) {
+					_ = h.write(func(fr *http2.Framer) error {
+						return fr.WriteGoAway(h.lastPublicID, http2.ErrCodeProtocol, nil)
+					})
+					return errors.New("MASQUE invalid or reused HTTP/2 stream ID")
+				}
 				code := "400"
 				if !accepted && s.cfg.PublicTLS && f.PseudoValue("method") == "CONNECT" {
 					code = "403"
 				}
-				_ = h.reply(code)
+				if h.publicMode && !accepted {
+					// A new unsupported request has its own legal stream;
+					// return a response there, then keep public HTTP reusable.
+					h.lastPublicID = f.StreamID
+					if err := h.replyOnStream(f.StreamID, code); err != nil {
+						return err
+					}
+					continue
+				}
+				_ = h.replyOnStream(f.StreamID, code)
 				return errors.New("MASQUE rejected unauthorized or unexpected HTTP/2 request")
 			}
 			s.activeMu.Lock()
@@ -699,7 +795,7 @@ func (s *H2Server) serveH2(parent context.Context, conn net.Conn) error {
 				f.StreamID <= h.lastPublicID {
 				// An ordinary GET can be canceled without closing the peer's
 				// otherwise reusable HTTP/2 connection or altering TUN state.
-				delete(h.publicReplies, f.StreamID)
+				h.dropPublicReply(f.StreamID)
 				continue
 			}
 			return errors.New("MASQUE client reset CONNECT-IP stream")
