@@ -126,7 +126,7 @@ package, binary and service mutations require fresh confirmation.
 | `apt_index_unverified` (`APT_INDEX_REFRESH`) | Inspect configured signed repositories and APT index availability; distinguish mirror failure from a positively identified lists lock | Index refresh failed; no package install was started by this attempt, but inspect existing APT state before a new PREPARE |
 | `apt_dependency_plan_unverified` (`APT_DEPENDENCY_PLAN`) | Inspect `apt-cache policy` for missing packages and signed candidate indexes | The planned transaction was rejected before package installation; refresh the preview and obtain new PREPARE consent |
 | `apt_plan_would_modify_installed_packages` | Inspect the rejected APT simulation, `apt-cache policy` and configured signed sources | An attempted upgrade or removal of installed packages is not an approved prerequisite; no PREPARE and no forced package transaction |
-| `apt_lists_lock_wait_timeout` or `apt_lists_lock_busy` | Inspect active legitimate APT processes (`ps -ef`) and `dpkg --audit`; let the existing process finish | The guided read-only preview may hit its shorter deadline while the installer is still waiting, or the installer's bounded wait may expire. Neither permits deleting lock files, killing APT or running a whole-host upgrade |
+| APT lists lock held by another `apt-get` during an explicitly consented package operation | Inspect legitimate package-manager processes (`ps -ef`) and `dpkg --audit`; let the existing process finish | The canonical installer's bounded index-refresh retry is part of package preparation, **not** the read-only `requirements` preview. Never delete lock files, kill APT or run a whole-host upgrade |
 | `apt_transaction_incomplete` (`APT_PACKAGE_INSTALL`) | `dpkg --audit`, then verify selected installed packages with `dpkg-query -W` | Package/service hooks may persist. Inspect and reconcile before beginning another transaction; never blindly retry |
 | `STL ownership record is missing or not regular` on `update` | `namei -l /usr/local/lib/simple-tun-link/install-record` and `stat` the `stl`/`stlink` installation paths | An incomplete first install is not an update; never forge ownership metadata or replace existing foreign binaries |
 | Installer partial publication or failed identity verification | Check the reported private recovery directory, installed executable identity and ownership record, without changing them | Stop before another update/uninstall; retained rollback evidence is authoritative |
@@ -144,8 +144,13 @@ The selected-package **read-only pre-PREPARE preview** streams the full
 canonical installer/APT diagnostics only when both the human menu output
 and actual diagnostic destination are terminals. Redirected/scripted output
 gets stable reason codes and safe next steps, not arbitrary APT text or
-private repository URLs. A malformed canonical inventory is reported as an
-installer contract failure, never mistaken for successful package admission.
+private repository URLs. A malformed canonical inventory (including a
+missing, empty or incorrect `apt_install_sha256`) is reported as an
+installer contract failure and blocks MASQUE and IPsec guided continuation.
+A valid no-dependency plan still supplies the canonical SHA256 of the empty
+plan. The read-only `requirements` action runs a dependency simulation,
+**not** an APT index refresh; the latter's lists-lock retry messages are
+not evidence available from the current preview.
 This does not run PREPARE, change APT sources, or grant root consent.
 
 Avoid posting raw APT source configuration, package logs, State files, or

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -95,8 +96,6 @@ func TestSelectedPackagePreviewErrorsAreActionableAndRedacted(t *testing.T) {
 		ctxErr                      error
 	}{
 		{"timeout", "", "requirements_check_timeout", "host load", context.DeadlineExceeded},
-		{"APT observed lock wait timeout", "stl installer [INFO]: Another APT process holds the lists lock; waiting 5 seconds before retry 2/12.\nE: secret private package location", "apt_lists_lock_wait_timeout", "Do not delete lock files", context.DeadlineExceeded},
-		{"raw APT lock word without canonical observation", "E: another APT process holds the lists lock", "requirements_check_timeout", "host load", context.DeadlineExceeded},
 		{"interrupted", "", "requirements_check_interrupted", "Reopen Create tunnel", context.Canceled},
 		{"unsupported package manager", "stl installer [FAILED]: unsupported package-manager distribution: fedora 42; this installer currently integrates with Debian/Ubuntu APT", "unsupported_or_unverified_os", "/etc/os-release", nil},
 		{"invalid Debian release metadata", "stl installer [FAILED]: invalid Debian version: secret", "unsupported_or_unverified_os", "/etc/os-release", nil},
@@ -105,7 +104,6 @@ func TestSelectedPackagePreviewErrorsAreActionableAndRedacted(t *testing.T) {
 		{"APT trust", "stl installer [FAILED]: APT candidate InRelease has no valid distribution archive signature or contains an invalid signature: secret", "apt_source_trust_unverified", "apt-cache policy", nil},
 		{"missing gpgv", "stl installer [FAILED]: cannot verify distribution archive signatures; official distro gpgv is missing.", "distro_signature_verifier_missing", "gpgv", nil},
 		{"APT plan", "stl installer [FAILED]: APT cannot resolve the complete selected dependency plan: secret", "apt_dependency_plan_unverified", "apt-cache policy", nil},
-		{"APT lists lock", "stl installer [FAILED]: APT lists lock remained busy after bounded waiting; secret", "apt_lists_lock_busy", "Do not delete lock files", nil},
 		{"APT removal proposal", "stl installer [FAILED]: APT plan would remove packages; secret", "apt_plan_would_modify_installed_packages", "do not force this plan", nil},
 		{"APT upgrade proposal", "stl installer [FAILED]: APT plan would upgrade an installed package; secret", "apt_plan_would_modify_installed_packages", "do not force this plan", nil},
 		{"dpkg", "stl installer [FAILED]: dpkg has unfinished package configuration: secret", "dpkg_transaction_incomplete", "dpkg --audit", nil},
@@ -147,6 +145,249 @@ func TestSelectedPackagePreviewErrorsAreActionableAndRedacted(t *testing.T) {
 		!strings.Contains(out.String(), "no preparation attempted") ||
 		strings.Contains(out.String()+errOut.String(), "secret-private-token") {
 		t.Fatalf("failed preview was unsafe: result=%+v installs=%d out=%q err=%q", result, installs, out.String(), errOut.String())
+	}
+}
+
+func TestMASQUEPackagePreviewFailureBlocksGuidedContinuation(t *testing.T) {
+	const secret = "PRIVATE_SOURCE_URL_DO_NOT_DISPLAY"
+	selected := tunnelOption{backend: domain.BackendMASQUE, mode: domain.EncapTLS}
+	for _, tc := range []struct {
+		name, reason string
+		failure      func(context.Context) error
+	}{
+		{"invalid inventory", "requirements_inventory_contract_invalid", func(context.Context) error {
+			return invalidPackageInventory()
+		}},
+		{"timeout", "requirements_check_timeout", func(context.Context) error {
+			return packageInventoryFailure("", context.DeadlineExceeded)
+		}},
+		{"source trust", "apt_source_trust_unverified", func(context.Context) error {
+			return packageInventoryFailure("stl installer [FAILED]: APT candidate InRelease is missing or untrusted: "+secret, nil)
+		}},
+		{"unknown failure", "requirements_inventory_unverified", func(context.Context) error {
+			return errors.New("unknown private APT failure " + secret)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			previews, preparations := 0, 0
+			ops := menuPackagePreparationOps{
+				preview: func(ctx context.Context, got tunnelOption) (selectedPackagePreview, error) {
+					if got != selected {
+						t.Fatalf("unexpected package selection: %+v", got)
+					}
+					previews++
+					return selectedPackagePreview{}, tc.failure(ctx)
+				},
+				canPrepare: func(io.Reader, io.Writer) bool {
+					t.Fatal("invalid MASQUE preview requested privilege admission")
+					return false
+				},
+				install: func(context.Context, io.Writer, io.Writer, ...string) error {
+					preparations++
+					t.Fatal("invalid MASQUE preview attempted package installation")
+					return nil
+				},
+			}
+			input := strings.NewReader("PREPARE\nYES\n")
+			reader := bufio.NewReader(input)
+			var out, errOut bytes.Buffer
+			result := menuPrepareSelectedPackagesWithOps(input, reader, &out, &errOut,
+				selected, nil, ops)
+			if result.canContinue || result.approvedSelectedPlan ||
+				previews != 1 || preparations != 0 ||
+				!strings.Contains(out.String(), tc.reason) ||
+				!strings.Contains(out.String(), "no preparation attempted") ||
+				strings.Contains(out.String()+errOut.String(), secret) {
+				t.Fatalf("failed MASQUE preview passed Create/Import gate: result=%+v previews=%d preparations=%d out=%q err=%q",
+					result, previews, preparations, out.String(), errOut.String())
+			}
+			remaining, err := io.ReadAll(reader)
+			if err != nil || string(remaining) != "PREPARE\nYES\n" {
+				t.Fatalf("failed preview consumed Create/Import consent: %q %v", remaining, err)
+			}
+		})
+	}
+	// The established advisory behavior of non-IPsec/non-MASQUE
+	// backends remains unchanged; they do not gain PREPARE authority.
+	for _, backend := range []domain.Backend{domain.BackendGRE, domain.BackendWireGuard} {
+		var out, errOut bytes.Buffer
+		ops := menuPackagePreparationOps{
+			preview: func(context.Context, tunnelOption) (selectedPackagePreview, error) {
+				return selectedPackagePreview{}, invalidPackageInventory()
+			},
+			canPrepare: func(io.Reader, io.Writer) bool {
+				t.Fatal("ordinary failed preview attempted privilege admission")
+				return false
+			},
+			install: func(context.Context, io.Writer, io.Writer, ...string) error {
+				t.Fatal("ordinary failed preview attempted installer")
+				return nil
+			},
+		}
+		result := menuPrepareSelectedPackagesWithOps(strings.NewReader("PREPARE\nYES\n"), nil,
+			&out, &errOut, tunnelOption{backend: backend, mode: domain.EncapNative}, nil, ops)
+		if !result.canContinue || result.approvedSelectedPlan {
+			t.Fatalf("ordinary backend %s advisory policy changed: %+v", backend, result)
+		}
+	}
+}
+
+func TestMASQUEGuidedCreateStopsBeforeIdentityAfterPreviewFailure(t *testing.T) {
+	root := t.TempDir()
+	probe := &guidedTestRunner{}
+	fake := &guidedTestBackend{lifecycleFakeBackend: newLifecycleFake()}
+	opts := guidedTestOptions(root, probe, fake)
+	calls := 0
+	opts.packagePreview = func(_ context.Context, selected tunnelOption) (selectedPackagePreview, error) {
+		if selected.backend != domain.BackendMASQUE {
+			t.Fatalf("wrong guided choice: %+v", selected)
+		}
+		calls++
+		return selectedPackagePreview{}, invalidPackageInventory()
+	}
+	input := strings.NewReader("9\n0\n")
+	var out, errOut bytes.Buffer
+	if code := menuCreate(input, bufio.NewReader(input), &out, &errOut, opts); code != 0 ||
+		calls != 1 || strings.Contains(out.String(), "Create / MASQUE CONNECT-IP") ||
+		!strings.Contains(out.String(), "requirements_inventory_contract_invalid") {
+		t.Fatalf("guided MASQUE Create bypassed failed requirements: code=%d calls=%d out=%q err=%q",
+			code, calls, out.String(), errOut.String())
+	}
+	if entries, err := os.ReadDir(root); err != nil || len(entries) != 0 {
+		t.Fatalf("failed preview staged MASQUE Link/credential files: %v %v", entries, err)
+	}
+}
+
+func TestSelectedPackagePreviewDigestContractAndMASQUEPreparation(t *testing.T) {
+	const selectedPlan = "iproute2=6.0.0-1"
+	selected := tunnelOption{backend: domain.BackendMASQUE, mode: domain.EncapTLS}
+	sha := fmt.Sprintf("%x", sha256.Sum256([]byte(selectedPlan)))
+	emptySHA := fmt.Sprintf("%x", sha256.Sum256(nil))
+	ready := "distribution=debian\nversion=13\nselected_backends=masque\npackages=iproute2\nmissing_packages=\napt_install=\napt_install_sha256=" + emptySHA + "\n"
+	missing := "distribution=debian\nversion=13\nselected_backends=masque\npackages=iproute2\nmissing_packages=iproute2\napt_install=" + selectedPlan + "\napt_install_sha256=" + sha + "\n"
+	read := func(ctx context.Context, raw string) (selectedPackagePreview, error) {
+		return readSelectedPackagePreviewWithRunner(ctx, selected, func(_ context.Context, stdout, _ io.Writer, args ...string) error {
+			if !slices.Equal(args, []string{"requirements", "--backends", "masque"}) {
+				t.Fatalf("incorrect producer action: %q", args)
+			}
+			_, err := io.WriteString(stdout, raw)
+			return err
+		})
+	}
+	for _, tc := range []struct {
+		name, raw string
+		valid     bool
+	}{
+		{"complete empty plan", ready, true},
+		{"complete nonempty plan", missing, true},
+		{"missing digest empty plan", strings.Replace(ready, "apt_install_sha256="+emptySHA+"\n", "", 1), false},
+		{"missing digest nonempty plan", strings.Replace(missing, "apt_install_sha256="+sha+"\n", "", 1), false},
+		{"empty digest", strings.Replace(missing, sha, "", 1), false},
+		{"incorrect digest", strings.Replace(missing, sha, strings.Repeat("f", 64), 1), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plan, err := read(context.Background(), tc.raw)
+			if tc.valid {
+				if err != nil || (plan.aptDigest != sha && plan.aptDigest != emptySHA) {
+					t.Fatalf("valid canonical digest contract rejected: %+v %v", plan, err)
+				}
+			} else if reason, _ := packageInventoryGuidance(err); reason != "requirements_inventory_contract_invalid" {
+				t.Fatalf("accepted incomplete/different digest: plan=%+v err=%v", plan, err)
+			}
+		})
+	}
+	// Already-ready MASQUE must not require privilege admission or consume YES.
+	t.Run("ready no transaction", func(t *testing.T) {
+		input := strings.NewReader("YES\n")
+		reader := bufio.NewReader(input)
+		calls := 0
+		ops := menuPackagePreparationOps{
+			preview: func(ctx context.Context, got tunnelOption) (selectedPackagePreview, error) {
+				calls++
+				return read(ctx, ready)
+			},
+			canPrepare: func(io.Reader, io.Writer) bool {
+				t.Fatal("ready MASQUE unexpectedly needs PREPARE")
+				return false
+			},
+			install: func(context.Context, io.Writer, io.Writer, ...string) error {
+				t.Fatal("ready MASQUE unexpectedly installed packages")
+				return nil
+			},
+		}
+		var out, errOut bytes.Buffer
+		got := menuPrepareSelectedPackagesWithOps(input, reader, &out, &errOut, selected, nil, ops)
+		next, err := readMenuAnswer(reader)
+		if !got.canContinue || got.approvedSelectedPlan || calls != 1 || err != nil || next != "YES" {
+			t.Fatalf("ready MASQUE lost Create consent boundary: %+v calls=%d next=%q err=%v", got, calls, next, err)
+		}
+	})
+	// PREPARE consent applies only to the same fully attested digest and
+	// post-transaction inventory. YES for Link creation remains separate.
+	t.Run("consented missing package", func(t *testing.T) {
+		input := strings.NewReader("PREPARE\nYES\n")
+		reader := bufio.NewReader(input)
+		calls, installs := 0, 0
+		ops := menuPackagePreparationOps{
+			preview: func(ctx context.Context, got tunnelOption) (selectedPackagePreview, error) {
+				calls++
+				if calls == 3 {
+					return read(ctx, ready)
+				}
+				return read(ctx, missing)
+			},
+			canPrepare: func(io.Reader, io.Writer) bool { return true },
+			install: func(_ context.Context, _, _ io.Writer, args ...string) error {
+				installs++
+				if !slices.Equal(args, []string{"prepare", "--backends", "masque",
+					"--expected-missing", "iproute2", "--expected-apt-plan", selectedPlan}) {
+					t.Fatalf("unexpected package PREPARE plan: %q", args)
+				}
+				return nil
+			},
+		}
+		var out, errOut bytes.Buffer
+		got := menuPrepareSelectedPackagesWithOps(input, reader, &out, &errOut, selected, nil, ops)
+		next, err := readMenuAnswer(reader)
+		if !got.approvedFor(selected) || calls != 3 || installs != 1 || next != "YES" || err != nil {
+			t.Fatalf("consented MASQUE package flow failed: %+v calls=%d installs=%d next=%q err=%v out=%q", got, calls, installs, next, err, out.String())
+		}
+	})
+	// The second read-only preview MUST demand the producer's digest,
+	// even if an initial valid one and an explicit PREPARE were observed.
+	for _, bad := range []struct{ name, raw string }{
+		{"missing digest", strings.Replace(missing, "apt_install_sha256="+sha+"\n", "", 1)},
+		{"empty digest", strings.Replace(missing, sha, "", 1)},
+		{"wrong digest", strings.Replace(missing, sha, strings.Repeat("f", 64), 1)},
+	} {
+		t.Run("repreview "+bad.name, func(t *testing.T) {
+			input := strings.NewReader("PREPARE\nYES\n")
+			reader := bufio.NewReader(input)
+			calls := 0
+			ops := menuPackagePreparationOps{
+				preview: func(ctx context.Context, got tunnelOption) (selectedPackagePreview, error) {
+					calls++
+					if calls == 1 {
+						return read(ctx, missing)
+					}
+					return read(ctx, bad.raw)
+				},
+				canPrepare: func(io.Reader, io.Writer) bool { return true },
+				install: func(context.Context, io.Writer, io.Writer, ...string) error {
+					t.Fatal("invalid post-consent re-preview authorized APT mutation")
+					return nil
+				},
+			}
+			var out, errOut bytes.Buffer
+			got := menuPrepareSelectedPackagesWithOps(input, reader, &out, &errOut, selected, nil, ops)
+			next, err := readMenuAnswer(reader)
+			if got.canContinue || got.approvedSelectedPlan || calls != 2 ||
+				!strings.Contains(out.String(), "requirements_inventory_contract_invalid") ||
+				next != "YES" || err != nil {
+				t.Fatalf("invalid post-consent digest was admitted: %+v calls=%d next=%q err=%v out=%q",
+					got, calls, next, err, out.String())
+			}
+		})
 	}
 }
 
@@ -207,8 +448,6 @@ func TestCanonicalAPTPreviewFailuresUseCurrentInstallerReasons(t *testing.T) {
 		{"no signed index mapping", "no APT package index mapping available", "apt_dependency_plan_unverified", "apt-cache policy"},
 		{"removal proposal", "APT plan would remove packages; no changes allowed", "apt_plan_would_modify_installed_packages", "apt-cache policy"},
 		{"upgrade proposal", "APT plan would upgrade an installed package; review separately", "apt_plan_would_modify_installed_packages", "apt-cache policy"},
-		{"lists lock busy", "APT lists lock remained busy after bounded waiting; let the other apt-get finish", "apt_lists_lock_busy", "lock files"},
-		{"index refresh failure", "APT_INDEX_REFRESH failed; missing selected packages: iproute2", "apt_index_unverified", "signed APT repositories"},
 		{"foreign dependency", "APT selected a dependency outside the distribution archive; no changes allowed", "apt_source_trust_unverified", "signature"},
 		{"untrusted source config", "APT sources explicitly bypass signature verification", "apt_source_trust_unverified", "signature"},
 	}
@@ -249,6 +488,8 @@ func TestSelectedPackagePreviewStreamsLongDiagnosticsAndVerifiesPlan(t *testing.
 		t.Fatalf("long read-only diagnostics were not retained/forwarded: plan=%+v err=%v", plan, err)
 	}
 	for _, tc := range []struct{ name, inventory string }{
+		{"missing digest", strings.Replace(inventory, "apt_install_sha256="+digest+"\n", "", 1)},
+		{"empty digest", strings.Replace(inventory, digest, "", 1)},
 		{"wrong digest", strings.Replace(inventory, digest, strings.Repeat("f", 64), 1)},
 		{"duplicate field", inventory + "apt_install=" + realPlan + "\n"},
 		{"unexpected field", inventory + "command=run me\n"},
