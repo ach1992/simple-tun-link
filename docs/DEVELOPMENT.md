@@ -436,11 +436,15 @@ These tests verify zero and negative stream credit, separate stream windows,
 connection-credit exhaustion and replenishment, reusable GET/HEAD, scoped
 RST_STREAM cancellation, and malformed/duplicate Capsule-Protocol rejection
 against the actual framed/TLS listener. They also cover the advertised
-64-concurrent-pending-response boundary under zero DATA credit, queueing only
-eligible streams (rather than rescanning blocked responses), cancellation
-release/recovery, correct error stream IDs, closed-stream GOAWAY behavior,
-and RFC 9651 UTF-8 Display String/unpadded Base64 parameter parsing.
-Existing mTLS CONNECT-IP tests remain in the same package's full test suite.
+64-active-stream concurrency boundary under zero DATA credit across GET,
+HEAD and unsupported methods, queueing only eligible streams (rather than
+rescanning blocked responses), cancellation release/recovery, correct error
+stream IDs, half-closed rejected-stream reset, closed-stream GOAWAY behavior,
+and RFC 9651 UTF-8 Display String/unpadded Base64 parameter parsing. A real
+HPACK/TLS/H2 negative test repeatedly sends truncated Display Strings with
+no bearer, proves the listener remains alive, then forwards private packets
+on a newly authenticated CONNECT-IP session. Existing mTLS CONNECT-IP tests
+remain in the same package's full test suite.
 
 The strictly opt-in launcher compiles a production STL binary and a
 build-tagged test-only protected-material stage. After verifying fresh

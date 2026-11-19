@@ -163,6 +163,11 @@ func (p *publicH2WirePeer) noFrame(t *testing.T) {
 
 func (p *publicH2WirePeer) get(t *testing.T, id uint32, method, path string) {
 	t.Helper()
+	p.request(t, id, method, path, true)
+}
+
+func (p *publicH2WirePeer) request(t *testing.T, id uint32, method, path string, endStream bool) {
+	t.Helper()
 	var block bytes.Buffer
 	encoder := hpack.NewEncoder(&block)
 	for _, field := range []hpack.HeaderField{
@@ -175,7 +180,7 @@ func (p *publicH2WirePeer) get(t *testing.T, id uint32, method, path string) {
 		}
 	}
 	if err := p.writer.WriteHeaders(http2.HeadersFrameParam{
-		StreamID: id, EndHeaders: true, EndStream: true, BlockFragment: block.Bytes(),
+		StreamID: id, EndHeaders: true, EndStream: endStream, BlockFragment: block.Bytes(),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -364,6 +369,8 @@ func TestMASQUECapsuleStructuredBooleanSyntax(t *testing.T) {
 		{"?1;token=foo/bar;message=\"a,b;c\"", true},
 		{"?1;bytes=:dGVzdA==:;when=@1659578233", true},
 		{"?1;display=%\"caf%c3%a9\"", true},
+		{"?1;display=%\"\"", true},
+		{"?1;display=%\"x\"", true},
 		{"?1;bytes=:dGVzdA:", true},
 		{"?1;bytes=:dGVzdA=:", true},
 		{"?1;bytes=::", true},
@@ -379,6 +386,14 @@ func TestMASQUECapsuleStructuredBooleanSyntax(t *testing.T) {
 		{"?1;display=%\"caf%C3%A9\"", false},
 		{"?1;display=%\"%c3%28\"", false},
 		{"?1;display=%\"%c3\"", false},
+		// A partial Display String must never reach make() with a negative
+		// capacity, including when the request has no bearer authorization.
+		{"?1;flag=%", false},
+		{"?1;flag=%\"", false},
+		{"?1;flag=%\"x", false},
+		{"?1;flag=%\"%", false},
+		{"?1;flag=%\"%f", false},
+		{"?1;flag=%\"%ff", false},
 		{"?1 ;feature", false},
 		{"?1\t;feature", false},
 		{"?1;\tfeature", false},
@@ -527,10 +542,21 @@ func TestMASQUEPublicH2PendingZeroWindowBudgetAndRecovery(t *testing.T) {
 		t.Fatalf("excess pending GET was not refused on its own stream: %+v", reset)
 	}
 
-	// HEAD replies have no pending DATA and do not consume response buffers.
-	headID := refusedID + 2
-	p.get(t, headID, "HEAD", "/")
-	p.headers(t, headID, "200", true)
+	// RFC 9113 counts all active streams, including requests whose
+	// response is only HEADERS. At capacity, both HEAD and unsupported
+	// POST are refused on their own IDs rather than bypassing the limit.
+	headRefusedID := refusedID + 2
+	p.get(t, headRefusedID, "HEAD", "/")
+	reset, ok = p.next(t).(*http2.RSTStreamFrame)
+	if !ok || reset.StreamID != headRefusedID || reset.ErrCode != http2.ErrCodeRefusedStream {
+		t.Fatalf("excess HEAD was not refused on its own stream: %+v", reset)
+	}
+	postRefusedID := headRefusedID + 2
+	p.get(t, postRefusedID, "POST", "/")
+	reset, ok = p.next(t).(*http2.RSTStreamFrame)
+	if !ok || reset.StreamID != postRefusedID || reset.ErrCode != http2.ErrCodeRefusedStream {
+		t.Fatalf("excess unsupported POST was not refused on its own stream: %+v", reset)
+	}
 
 	// WINDOW_UPDATE for the connection does not help zero-credit streams;
 	// repeated updates must not inspect or emit from the blocked map.
@@ -539,10 +565,14 @@ func TestMASQUEPublicH2PendingZeroWindowBudgetAndRecovery(t *testing.T) {
 	}
 	p.noFrame(t)
 
-	// Replenish just one pending stream. It completes, freeing one slot.
+	// A completed response frees one slot. HEAD below capacity succeeds
+	// without DATA, then a new GET occupies the freed slot.
 	p.credit(t, 1, uint32(len(page)))
 	p.data(t, 1, page, true)
-	nextID := headID + 2
+	headAllowedID := postRefusedID + 2
+	p.get(t, headAllowedID, "HEAD", "/")
+	p.headers(t, headAllowedID, "200", true)
+	nextID := headAllowedID + 2
 	p.get(t, nextID, "GET", "/")
 	p.headers(t, nextID, "200", false)
 
@@ -584,12 +614,9 @@ func TestMASQUEPublicH2PendingSchedulerExcludesZeroWindowStreams(t *testing.T) {
 	if got := len(h.publicReplies); got != publicH2ConcurrentStreams {
 		t.Fatalf("stored %d pending replies, wanted %d", got, publicH2ConcurrentStreams)
 	}
-	if err := h.replyPublicHTTP(uint32(2*publicH2ConcurrentStreams+1), "GET", true); err != nil {
-		t.Fatal(err)
-	}
-	if got := len(h.publicReplies); got != publicH2ConcurrentStreams {
-		t.Fatalf("over-capacity GET retained state: %d", got)
-	}
+	// Admission on every new H2 stream is enforced in the live framer
+	// before calling replyPublicHTTP, exercised by the exact-wire test
+	// above. This unit only probes the no-scan ready-list behavior.
 	// Processing has zero eligible streams regardless of how many blocked
 	// streams exist, so a no-credit update requires no per-request scan.
 	for i := 0; i < 200; i++ {
@@ -632,9 +659,83 @@ func TestMASQUEPublicH2RejectedMethodsUseTheirOwnStreams(t *testing.T) {
 	p.get(t, 11, "HEAD", "/")
 	p.headers(t, 11, "200", true)
 
+	// A rejected request without END_STREAM must be reset, not left as
+	// a half-closed HTTP/2 stream that bypasses concurrency accounting.
+	p.request(t, 13, "POST", "/", false)
+	reset, ok := p.next(t).(*http2.RSTStreamFrame)
+	if !ok || reset.StreamID != 13 || reset.ErrCode != http2.ErrCodeProtocol {
+		t.Fatalf("open unsupported request not reset on its own stream: %+v", reset)
+	}
+	p.get(t, 15, "GET", "/")
+	p.headers(t, 15, "200", false)
+	p.data(t, 15, page, true)
+
 	select {
 	case packet := <-pipe.toServer:
 		t.Fatalf("rejected request reached private packet path: %x", packet)
 	default:
+	}
+}
+
+// A malformed Capsule-Protocol Display String is parsed before the full
+// Authorization result is available. The exact two-byte opening prefix used
+// to give make() a negative capacity, crashing the entire production helper.
+// Exercise it repeatedly as an anonymous TLS/H2 peer and then prove this
+// listener still admits a properly authenticated private packet session.
+func TestMASQUEPublicH2UnauthenticatedTruncatedDisplayDoesNotCrashListener(t *testing.T) {
+	addr, roots, token, pipe := publicH2WireFixture(t)
+	for _, value := range []string{
+		"?1;flag=%\"",
+		"?1;flag=%\"x",
+		"?1;flag=%\"%",
+		"?1;flag=%\"%f",
+	} {
+		for attempt := 0; attempt < 3; attempt++ {
+			status := rawPublicH2ConnectStatusWithCapsules(t, addr, roots, "", "",
+				[]hpack.HeaderField{{Name: "capsule-protocol", Value: value}}, nil)
+			if status != "403" {
+				t.Fatalf("anonymous malformed capsule %q attempt %d: HTTP %s; want 403",
+					value, attempt, status)
+			}
+		}
+	}
+	select {
+	case packet := <-pipe.toServer:
+		t.Fatalf("anonymous malformed request reached private TUN: %x", packet)
+	default:
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	link, err := DialH2(ctx, H2Config{
+		Address: addr, ServerName: "masque-test.invalid", Roots: roots,
+		ExpectedIPv4:   netip.MustParseAddr("10.251.95.2"),
+		ConnectTimeout: 2 * time.Second, BearerToken: token,
+	})
+	if err != nil {
+		t.Fatalf("valid authorized CONNECT-IP after anonymous malformed requests failed: %v", err)
+	}
+	defer link.Close()
+
+	request := testPacket()
+	if err := link.SendPackets(ctx, [][]byte{request}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-pipe.toServer:
+		if !bytes.Equal(got, request) {
+			t.Fatalf("valid authenticated private inbound IP differs: got %x want %x", got, request)
+		}
+	case <-ctx.Done():
+		t.Fatal("authenticated private inbound IP was not forwarded after malformed HTTP/2 requests")
+	}
+
+	reply := bytes.Clone(request)
+	copy(reply[12:16], []byte{10, 251, 95, 1})
+	copy(reply[16:20], []byte{10, 251, 95, 2})
+	pipe.toClient <- reply
+	got, err := link.ReadPacket(ctx)
+	if err != nil || !bytes.Equal(got, reply) {
+		t.Fatalf("valid authenticated private reply after malformed requests: %v", err)
 	}
 }

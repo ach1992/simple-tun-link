@@ -99,7 +99,10 @@ func sfBareItemLength(s string) (int, bool) {
 		_, err := base64.StdEncoding.DecodeString(raw + strings.Repeat("=", pad))
 		return end + 2, err == nil
 	case '%':
-		if len(s) < 2 || s[1] != '"' {
+		// A Display String needs at least the opening %" and closing ".
+		// An unauthenticated peer may supply only %" here; never give
+		// make() the negative capacity that len(s)-3 would produce.
+		if len(s) < 3 || s[1] != '"' {
 			return 0, false
 		}
 		// A Display String's %-escapes use lowercase hex and the final

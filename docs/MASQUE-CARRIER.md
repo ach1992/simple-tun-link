@@ -43,16 +43,21 @@ website impersonation, CDN proxy, public browser-trusted certificate or
 proof of browser TLS fingerprint equivalence.
 
 The public HTTP/2 listener advertises and enforces a per-TLS-connection
-maximum of 64 concurrently pending response streams. Excess uncredited
-GET requests receive HTTP/2 REFUSED_STREAM without consuming a pending-body
-slot or affecting another stream; credit, cancellation and completed
-responses release their exact slots. Only stream-window-ready responses
-are scheduled for DATA, so zero-credit requests cannot cause repeated
-full-map scans. This is an HTTP/2 per-connection resource boundary, **not**
-a limit on STL Links, servers, throughput or data-plane packet forwarding.
-Unsupported public HTTP methods receive an error on their own valid stream;
-reusing a closed stream is an HTTP/2 protocol error rather than an
-attempt to send new HEADERS on the closed stream.
+maximum of 64 concurrent active request streams. A new request at capacity
+(including GET, HEAD and unsupported methods) receives HTTP/2
+REFUSED_STREAM on its own stream, without retaining additional response
+state or interrupting existing requests. Completed or canceled GET
+responses release their exact pending-body slots. Only stream-window-ready
+responses are scheduled for DATA, so zero-credit requests cannot cause
+repeated full-map scans. HEAD and fully ended rejected methods finish
+synchronously; unsupported requests with an open request body are reset
+to avoid keeping unaccounted half-closed streams. This is an HTTP/2
+per-connection resource boundary, **not** a limit on STL Links, servers,
+throughput or data-plane packet forwarding. Unsupported public HTTP
+methods receive an error on their own valid stream; reusing a closed stream
+is an HTTP/2 protocol error rather than an attempt to send new HEADERS on
+the closed stream. Malformed Capsule-Protocol values are rejected without
+terminating the helper process, even when no bearer was sent.
 
 A live authenticated CONNECT-IP stream sends HTTP/2 PING probes even when
 neither side has private IP packets to transmit. Currently the dialer probes

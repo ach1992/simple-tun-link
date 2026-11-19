@@ -378,14 +378,9 @@ func (h *h2ServerConn) replyOnStream(streamID uint32, code string) error {
 // The single-connection framer completes the requested stream while
 // keeping the HTTP/2 connection available for another ordinary GET/HEAD.
 func (h *h2ServerConn) replyPublicHTTP(streamID uint32, method string, found bool) error {
-	// Respect the advertised concurrent-stream capacity even when a peer
-	// ignores SETTINGS_MAX_CONCURRENT_STREAMS. Refuse only the excess
-	// request, without retaining a body or closing other valid streams.
-	if method != "HEAD" && len(h.publicReplies) >= publicH2ConcurrentStreams {
-		return h.write(func(fr *http2.Framer) error {
-			return fr.WriteRSTStream(streamID, http2.ErrCodeRefusedStream)
-		})
-	}
+	// Concurrency admission is handled once in serveH2 before *any*
+	// public request (GET, HEAD or unsupported method), including those
+	// that complete without retaining a DATA body.
 	body := []byte("STL MASQUE HTTP/2 endpoint\n")
 	code := "200"
 	if !found {
@@ -647,6 +642,23 @@ func (s *H2Server) serveH2(parent context.Context, conn net.Conn) error {
 				err = h.flushPublicData()
 			}
 		case *http2.MetaHeadersFrame:
+			// RFC 9113 5.1.2 counts all active request streams, not
+			// only GETs with pending DATA. The H2 reader handles HEAD and
+			// rejected requests synchronously, so only pending GET replies
+			// remain active between frames. Refuse *any* new public stream
+			// at that capacity, including HEAD and unsupported methods.
+			// Closed/reused and even-numbered IDs retain their separate
+			// protocol-error handling below.
+			if !accepted && h.publicMode && f.StreamID > h.lastPublicID &&
+				f.StreamID%2 == 1 && len(h.publicReplies) >= publicH2ConcurrentStreams {
+				h.lastPublicID = f.StreamID
+				if err := h.write(func(fr *http2.Framer) error {
+					return fr.WriteRSTStream(f.StreamID, http2.ErrCodeRefusedStream)
+				}); err != nil {
+					return err
+				}
+				continue
+			}
 			if !accepted && s.isPublicHTTP(f) && f.StreamID > h.lastPublicID {
 				h.publicMode = true
 				h.lastPublicID = f.StreamID
@@ -670,9 +682,19 @@ func (s *H2Server) serveH2(parent context.Context, conn net.Conn) error {
 					code = "403"
 				}
 				if h.publicMode && !accepted {
-					// A new unsupported request has its own legal stream;
-					// return a response there, then keep public HTTP reusable.
+					// A new unsupported request has its own legal stream.
+					// If its request body is still open, a reset is needed to
+					// retire BOTH stream halves; a HEADERS-only error would
+					// leave a half-closed stream active without accounting.
 					h.lastPublicID = f.StreamID
+					if !f.StreamEnded() {
+						if err := h.write(func(fr *http2.Framer) error {
+							return fr.WriteRSTStream(f.StreamID, http2.ErrCodeProtocol)
+						}); err != nil {
+							return err
+						}
+						continue
+					}
 					if err := h.replyOnStream(f.StreamID, code); err != nil {
 						return err
 					}
