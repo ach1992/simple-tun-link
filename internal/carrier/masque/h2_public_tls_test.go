@@ -238,6 +238,13 @@ func TestMASQUEPublicTLSDeniesMalformedBearerAndClientModeConflict(t *testing.T)
 func rawPublicH2ConnectStatus(t *testing.T, addr string, roots *x509.CertPool,
 	path, protocol string, extra []hpack.HeaderField) string {
 	t.Helper()
+	return rawPublicH2ConnectStatusWithCapsules(t, addr, roots, path, protocol,
+		[]hpack.HeaderField{{Name: "capsule-protocol", Value: "?1"}}, extra)
+}
+
+func rawPublicH2ConnectStatusWithCapsules(t *testing.T, addr string, roots *x509.CertPool,
+	path, protocol string, capsuleFields, extra []hpack.HeaderField) string {
+	t.Helper()
 	raw, err := net.DialTimeout("tcp", addr, 2*time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -293,8 +300,8 @@ func rawPublicH2ConnectStatus(t *testing.T, addr string, roots *x509.CertPool,
 		{Name: ":method", Value: "CONNECT"}, {Name: ":scheme", Value: "https"},
 		{Name: ":authority", Value: net.JoinHostPort("masque-test.invalid", port)},
 		{Name: ":path", Value: path}, {Name: ":protocol", Value: protocol},
-		{Name: "capsule-protocol", Value: "?1"},
 	}
+	fields = append(fields, capsuleFields...)
 	fields = append(fields, extra...)
 	for _, field := range fields {
 		if err := encoder.WriteField(field); err != nil {

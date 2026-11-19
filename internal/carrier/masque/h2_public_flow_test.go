@@ -1,0 +1,462 @@
+package masque
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"errors"
+	"net"
+	"net/netip"
+	"testing"
+	"time"
+
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/hpack"
+)
+
+// Use independent read/write framers over a genuine TLS/ALPN=h2 socket.
+// All assertions below see the actual peer-visible HTTP/2 frames and credit.
+type publicH2WirePeer struct {
+	conn   *tls.Conn
+	reader *http2.Framer
+	writer *http2.Framer
+	out    *bufio.Writer
+	port   string
+}
+
+func publicH2WireFixture(t *testing.T) (string, *x509.CertPool, string, *channelPrivatePipe) {
+	t.Helper()
+	identity, roots := testTLS(t)
+	addr := availableListener(t)
+	token := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x67}, 32))
+	pipe := &channelPrivatePipe{toClient: make(chan []byte, 8), toServer: make(chan []byte, 8)}
+	srv, err := NewH2Server(H2ListenConfig{
+		ListenAddress: addr, TLSServerName: "masque-test.invalid",
+		ServerCert: identity, PublicTLS: true, BearerToken: []byte(token),
+		LocalIPv4: netip.MustParseAddr("10.251.95.1"),
+		PeerIPv4:  netip.MustParseAddr("10.251.95.2"),
+	}, pipe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("public H2 test listener shutdown: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Error("public H2 test listener did not stop")
+		}
+	})
+	for i := 0; i < 100; i++ {
+		raw, err := net.DialTimeout("tcp", addr, 80*time.Millisecond)
+		if err == nil {
+			raw.Close()
+			return addr, roots, token, pipe
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("public H2 test listener failed to bind")
+	return "", nil, "", nil
+}
+
+func newPublicH2WirePeer(t *testing.T, addr string, roots *x509.CertPool, initialWindow uint32) *publicH2WirePeer {
+	t.Helper()
+	raw, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := tls.Client(raw, &tls.Config{
+		RootCAs: roots, ServerName: "masque-test.invalid",
+		NextProtos: []string{"h2"}, MinVersion: tls.VersionTLS12,
+	})
+	t.Cleanup(func() { _ = conn.Close() })
+	if err := conn.SetDeadline(time.Now().Add(20 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Handshake(); err != nil {
+		t.Fatal(err)
+	}
+	if conn.ConnectionState().NegotiatedProtocol != "h2" {
+		t.Fatal("public TLS ALPN h2 not negotiated")
+	}
+	_, port, _ := net.SplitHostPort(addr)
+	out := bufio.NewWriter(conn)
+	p := &publicH2WirePeer{conn: conn, reader: http2.NewFramer(nil, conn),
+		writer: http2.NewFramer(out, nil), out: out, port: port}
+	p.reader.ReadMetaHeaders = hpack.NewDecoder(4096, nil)
+	if _, err := out.WriteString(http2.ClientPreface); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.writer.WriteSettings(http2.Setting{ID: http2.SettingInitialWindowSize, Val: initialWindow}); err != nil {
+		t.Fatal(err)
+	}
+	p.flush(t)
+	serverSettings, clientSettingsAck := false, false
+	for !(serverSettings && clientSettingsAck) {
+		f := p.next(t)
+		if s, ok := f.(*http2.SettingsFrame); ok {
+			if s.IsAck() {
+				clientSettingsAck = true
+			} else {
+				serverSettings = true
+				if err := p.writer.WriteSettingsAck(); err != nil {
+					t.Fatal(err)
+				}
+				p.flush(t)
+			}
+		}
+	}
+	return p
+}
+
+func (p *publicH2WirePeer) flush(t *testing.T) {
+	t.Helper()
+	if err := p.out.Flush(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (p *publicH2WirePeer) next(t *testing.T) http2.Frame {
+	t.Helper()
+	if err := p.conn.SetReadDeadline(time.Now().Add(8 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	f, err := p.reader.ReadFrame()
+	if err != nil {
+		t.Fatal("expected HTTP/2 frame:", err)
+	}
+	return f
+}
+
+func (p *publicH2WirePeer) noFrame(t *testing.T) {
+	t.Helper()
+	if err := p.conn.SetReadDeadline(time.Now().Add(65 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	f, err := p.reader.ReadFrame()
+	if err == nil {
+		t.Fatalf("unexpected frame without HTTP/2 DATA credit: %+v", f.Header())
+	}
+	var netErr net.Error
+	if !errors.As(err, &netErr) || !netErr.Timeout() {
+		t.Fatalf("expected a read timeout while DATA window is exhausted; got %v", err)
+	}
+}
+
+func (p *publicH2WirePeer) get(t *testing.T, id uint32, method, path string) {
+	t.Helper()
+	var block bytes.Buffer
+	encoder := hpack.NewEncoder(&block)
+	for _, field := range []hpack.HeaderField{
+		{Name: ":method", Value: method}, {Name: ":scheme", Value: "https"},
+		{Name: ":authority", Value: net.JoinHostPort("masque-test.invalid", p.port)},
+		{Name: ":path", Value: path},
+	} {
+		if err := encoder.WriteField(field); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := p.writer.WriteHeaders(http2.HeadersFrameParam{
+		StreamID: id, EndHeaders: true, EndStream: true, BlockFragment: block.Bytes(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p.flush(t)
+}
+
+func (p *publicH2WirePeer) headers(t *testing.T, id uint32, code string, endStream bool) {
+	t.Helper()
+	for {
+		f := p.next(t)
+		if _, ok := f.(*http2.WindowUpdateFrame); ok {
+			continue
+		}
+		h, ok := f.(*http2.MetaHeadersFrame)
+		if !ok || h.StreamID != id || h.PseudoValue("status") != code || h.StreamEnded() != endStream {
+			t.Fatalf("expected stream %d HTTP %s headers end=%v; got %+v", id, code, endStream, f)
+		}
+		return
+	}
+}
+
+func (p *publicH2WirePeer) data(t *testing.T, id uint32, want []byte, endStream bool) {
+	t.Helper()
+	f := p.next(t)
+	data, ok := f.(*http2.DataFrame)
+	if !ok || data.StreamID != id || !bytes.Equal(data.Data(), want) || data.StreamEnded() != endStream {
+		t.Fatalf("stream %d DATA end=%v expected %q; got %+v", id, endStream, want, f)
+	}
+}
+
+func (p *publicH2WirePeer) credit(t *testing.T, id uint32, n uint32) {
+	t.Helper()
+	if err := p.writer.WriteWindowUpdate(id, n); err != nil {
+		t.Fatal(err)
+	}
+	p.flush(t)
+}
+
+func (p *publicH2WirePeer) settings(t *testing.T, window uint32) {
+	t.Helper()
+	if err := p.writer.WriteSettings(http2.Setting{ID: http2.SettingInitialWindowSize, Val: window}); err != nil {
+		t.Fatal(err)
+	}
+	p.flush(t)
+	for {
+		f := p.next(t)
+		if settings, ok := f.(*http2.SettingsFrame); ok && settings.IsAck() {
+			return
+		}
+		t.Fatalf("expected SETTINGS ACK, got %+v", f)
+	}
+}
+
+func TestMASQUEPublicH2ExactWireStreamWindowsAndCancellation(t *testing.T) {
+	addr, roots, _, _ := publicH2WireFixture(t)
+	p := newPublicH2WirePeer(t, addr, roots, 0)
+	page := []byte("STL MASQUE HTTP/2 endpoint\n")
+	missing := []byte("Not Found\n")
+
+	p.get(t, 1, "GET", "/")
+	p.headers(t, 1, "200", false)
+	p.noFrame(t) // Zero stream credit: only HEADERS, never DATA.
+
+	p.get(t, 3, "HEAD", "/")
+	p.headers(t, 3, "200", true)
+	p.noFrame(t) // HEAD terminates in HEADERS, not DATA.
+
+	p.get(t, 5, "GET", "/not-found")
+	p.headers(t, 5, "404", false)
+	p.credit(t, 5, 3)
+	p.data(t, 5, missing[:3], false)
+	p.noFrame(t) // Stream 5's credit cannot be borrowed by stream 1.
+
+	p.credit(t, 1, 5)
+	p.data(t, 1, page[:5], false)
+	p.noFrame(t)
+	p.credit(t, 1, uint32(len(page)-5))
+	p.data(t, 1, page[5:], true)
+	p.credit(t, 5, uint32(len(missing)-3))
+	p.data(t, 5, missing[3:], true)
+
+	p.get(t, 7, "GET", "/")
+	p.headers(t, 7, "200", false)
+	p.credit(t, 7, uint32(len(page)))
+	p.data(t, 7, page, true)
+
+	// A previously closed stream's WINDOW_UPDATE must not credit new streams.
+	p.credit(t, 1, 100)
+	p.get(t, 9, "GET", "/")
+	p.headers(t, 9, "200", false)
+	p.noFrame(t)
+	p.credit(t, 9, uint32(len(page)))
+	p.data(t, 9, page, true)
+
+	// Optional review concern: RST_STREAM on a pending ordinary public
+	// response cancels only that stream, preserving the H2 connection.
+	p.get(t, 11, "GET", "/")
+	p.headers(t, 11, "200", false)
+	if err := p.writer.WriteRSTStream(11, http2.ErrCodeCancel); err != nil {
+		t.Fatal(err)
+	}
+	p.credit(t, 11, uint32(len(page)))
+	p.get(t, 13, "GET", "/")
+	p.headers(t, 13, "200", false)
+	p.credit(t, 13, uint32(len(page)))
+	p.data(t, 13, page, true)
+	p.noFrame(t)
+}
+
+func TestMASQUEPublicH2ExactWireSettingsChangeWhileResponsePending(t *testing.T) {
+	addr, roots, _, _ := publicH2WireFixture(t)
+	p := newPublicH2WirePeer(t, addr, roots, 0)
+	page := []byte("STL MASQUE HTTP/2 endpoint\n")
+	p.get(t, 1, "GET", "/")
+	p.headers(t, 1, "200", false)
+	p.settings(t, 4) // SETTINGS adjusts the still-pending public stream.
+	p.data(t, 1, page[:4], false)
+	p.noFrame(t)
+	p.settings(t, 0)
+	p.noFrame(t)
+	// Shrinking INITIAL_WINDOW_SIZE from 4 to 0 makes this active
+	// stream's window -4 (it already sent 4 bytes). Replenish that
+	// debt as well as the remaining payload credit.
+	p.credit(t, 1, uint32(len(page)))
+	p.data(t, 1, page[4:], true)
+}
+
+func TestMASQUEPublicH2ExactWireConnectionWindowExhaustion(t *testing.T) {
+	addr, roots, _, _ := publicH2WireFixture(t)
+	p := newPublicH2WirePeer(t, addr, roots, 65535)
+	page := []byte("STL MASQUE HTTP/2 endpoint\n")
+	full := 65535 / len(page)
+	for i := 0; i < full; i++ {
+		id := uint32(2*i + 1)
+		p.get(t, id, "GET", "/")
+		p.headers(t, id, "200", false)
+		p.data(t, id, page, true)
+	}
+	remaining := 65535 - full*len(page)
+	id := uint32(2*full + 1)
+	p.get(t, id, "GET", "/")
+	p.headers(t, id, "200", false)
+	if remaining > 0 {
+		p.data(t, id, page[:remaining], false)
+	}
+	second := id + 2
+	p.get(t, second, "GET", "/")
+	p.headers(t, second, "200", false)
+	p.noFrame(t) // Both streams have credit; the connection has NONE.
+
+	// Connection-level WINDOW_UPDATE replenishes the shared pool, without
+	// manufacturing stream credit, and both pending responses can finish.
+	p.credit(t, 0, uint32(2*len(page)))
+	got := make(map[uint32][]byte)
+	finished := map[uint32]bool{}
+	for len(finished) < 2 {
+		frame := p.next(t)
+		data, ok := frame.(*http2.DataFrame)
+		if !ok || (data.StreamID != id && data.StreamID != second) {
+			t.Fatalf("unexpected H2 frame after connection refill: %+v", frame)
+		}
+		got[data.StreamID] = append(got[data.StreamID], data.Data()...)
+		if data.StreamEnded() {
+			finished[data.StreamID] = true
+		}
+	}
+	if !bytes.Equal(got[id], page[remaining:]) || !bytes.Equal(got[second], page) {
+		t.Fatalf("connection credit isolation mismatch: id=%q other=%q", got[id], got[second])
+	}
+	p.get(t, second+2, "HEAD", "/")
+	p.headers(t, second+2, "200", true)
+	p.noFrame(t)
+	t.Logf("verified %d sequential GETs consumed exactly 65535 bytes of connection credit", full+2)
+}
+
+func TestMASQUECapsuleStructuredBooleanSyntax(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		valid bool
+	}{
+		{"?1", true},
+		{" ?1 ", true},
+		{"?1;feature", true},
+		{"?1;feature=?0;other=?1", true},
+		{"?1;version=42;quality=0.5", true},
+		{"?1;token=foo/bar;message=\"a,b;c\"", true},
+		{"?1;bytes=:dGVzdA==:;when=@1659578233", true},
+		{"?1;display=%\"caf%C3%A9\"", true},
+		{"?0", false},
+		{"?1, ?0", false},
+		{"?1;feature=?2", false},
+		{"?1;feature=", false},
+		{"?1;feature=foo bar", false},
+		{"?1;feature=:", false},
+		{"?1;feature=\"bad\\z\"", false},
+		{"?1;Feature=1", false},
+		{"?1;feature=1.2345", false},
+		{"?1;;feature", false},
+	} {
+		if got := capsuleProtocolTrue(tc.value); got != tc.valid {
+			t.Errorf("capsule-protocol %q: got %v want %v", tc.value, got, tc.valid)
+		}
+	}
+}
+
+// Send real HPACK-encoded CONNECT-IP requests directly to the TLS listener,
+// with correct bearer and topology. These negative cases bypass client-side
+// validation and prove malformed Capsule-Protocol messages cannot be
+// admitted even though authentication is otherwise correct.
+func TestMASQUEPublicH2ExactWireCapsuleProtocolAdmission(t *testing.T) {
+	addr, roots, token, pipe := publicH2WireFixture(t)
+	bearer := hpack.HeaderField{Name: "authorization", Value: "Bearer " + token}
+	single := func(value string) []hpack.HeaderField {
+		return []hpack.HeaderField{{Name: "capsule-protocol", Value: value}}
+	}
+	for _, tc := range []struct {
+		label    string
+		capsule  []hpack.HeaderField
+		extra    []hpack.HeaderField
+		expected string
+	}{
+		{label: "missing capsule", expected: "403"},
+		{label: "false capsule", capsule: single("?0"), expected: "403"},
+		{label: "duplicate true then false", capsule: []hpack.HeaderField{
+			{Name: "capsule-protocol", Value: "?1"}, {Name: "capsule-protocol", Value: "?0"},
+		}, expected: "403"},
+		{label: "duplicate true true", capsule: []hpack.HeaderField{
+			{Name: "capsule-protocol", Value: "?1"}, {Name: "capsule-protocol", Value: "?1"},
+		}, expected: "403"},
+		{label: "combined list", capsule: single("?1,?0"), expected: "403"},
+		{label: "nonboolean", capsule: single("1"), expected: "403"},
+		{label: "malformed parameter", capsule: single("?1;ext=?2"), expected: "403"},
+		{label: "content length", capsule: single("?1"), extra: []hpack.HeaderField{
+			{Name: "content-length", Value: "0"},
+		}, expected: "403"},
+		{label: "content type", capsule: single("?1"), extra: []hpack.HeaderField{
+			{Name: "content-type", Value: "application/octet-stream"},
+		}, expected: "403"},
+		{label: "transfer encoding", capsule: single("?1"), extra: []hpack.HeaderField{
+			{Name: "transfer-encoding", Value: "chunked"},
+		}, expected: "403"},
+		{label: "valid true unknown parameters", capsule: single("?1;flag;version=2;note=\"ok\""), expected: "200"},
+	} {
+		extra := append([]hpack.HeaderField{bearer}, tc.extra...)
+		status := rawPublicH2ConnectStatusWithCapsules(t, addr, roots, "", "",
+			tc.capsule, extra)
+		if status != tc.expected {
+			t.Errorf("%s: HTTP %s, expected %s", tc.label, status, tc.expected)
+		}
+		select {
+		case packet := <-pipe.toServer:
+			t.Fatalf("%s reached private packet interface: %x", tc.label, packet)
+		default:
+		}
+	}
+}
+
+// A requester that already used stream 1 for an ordinary HEAD must not
+// resurrect that HTTP/2 stream as authenticated CONNECT-IP on the same
+// socket, even with an otherwise valid per-Link bearer.
+func TestMASQUEPublicH2CannotReusePublicStreamForCONNECTIP(t *testing.T) {
+	addr, roots, token, pipe := publicH2WireFixture(t)
+	p := newPublicH2WirePeer(t, addr, roots, 65535)
+	p.get(t, 1, "HEAD", "/")
+	p.headers(t, 1, "200", true)
+
+	var block bytes.Buffer
+	encoder := hpack.NewEncoder(&block)
+	for _, field := range []hpack.HeaderField{
+		{Name: ":method", Value: "CONNECT"}, {Name: ":scheme", Value: "https"},
+		{Name: ":authority", Value: net.JoinHostPort("masque-test.invalid", p.port)},
+		{Name: ":path", Value: "/.well-known/masque/ip/"},
+		{Name: ":protocol", Value: "connect-ip"},
+		{Name: "capsule-protocol", Value: "?1"},
+		{Name: "authorization", Value: "Bearer " + token},
+	} {
+		if err := encoder.WriteField(field); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := p.writer.WriteHeaders(http2.HeadersFrameParam{
+		StreamID: 1, EndHeaders: true, BlockFragment: block.Bytes(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p.flush(t)
+	p.headers(t, 1, "403", true)
+	select {
+	case packet := <-pipe.toServer:
+		t.Fatalf("reused HTTP/2 public stream reached private TUN: %x", packet)
+	default:
+	}
+}

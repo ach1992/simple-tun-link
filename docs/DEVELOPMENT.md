@@ -424,6 +424,20 @@ STL_MASQUE_PUBLIC_TLS_E2E=approved \
   bash scripts/e2e/masque-public-h2-kernel.sh
 ~~~
 
+For the HTTP/2 protocol repair specifically, run the encoded-frame tests
+directly (no privileges or network namespaces required):
+
+~~~sh
+go test ./internal/carrier/masque -run \
+  'TestMASQUEPublicH2ExactWire|TestMASQUECapsuleStructuredBooleanSyntax' -count=1
+~~~
+
+These tests verify zero and negative stream credit, separate stream windows,
+connection-credit exhaustion and replenishment, reusable GET/HEAD, scoped
+RST_STREAM cancellation, and malformed/duplicate Capsule-Protocol rejection
+against the actual framed/TLS listener. Existing mTLS CONNECT-IP tests remain
+in the same package's full test suite.
+
 The strictly opt-in launcher compiles a production STL binary and a
 build-tagged test-only protected-material stage. After verifying fresh
 root-mapped user and network namespaces, it creates two distinct network
