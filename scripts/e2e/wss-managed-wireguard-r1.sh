@@ -212,6 +212,14 @@ done
 echo "UNDERLAY:"
 ip netns exec alpha ping -c 1 -W 2 198.51.100.22
 printf '%s\n' '{"schema_version":1,"link_id":"lnk_0123456789abcdef0123456789abcdef","underlay":{"local":"198.51.100.21","peer":"198.51.100.22"},"addresses":{"local":"10.75.0.1/30","peer":"10.75.0.2/30"},"listen_port":51821,"peer_port":51822,"role":"listen","tcp_port":59443,"remote_forward_udp_port":53001,"local_keepalive":25,"peer_keepalive":25}' > "$lab/alpha/create.json"
+# An opt-in real public-TLS WSS run exercises the canonical Create, private
+# receiver handoff, Preview/Import, full inner L3, supervised restart and
+# Remove. The default mTLS behavior is unchanged in the same runner.
+if [[ "${STL_WSS_PUBLIC_TLS_E2E:-}" == approved ]]; then
+  jq '.public_tls = true' "$lab/alpha/create.json" > "$lab/alpha/public-tls-create.json"
+  mv "$lab/alpha/public-tls-create.json" "$lab/alpha/create.json"
+  echo 'WSS_MANAGED_PUBLIC_TLS_MODE=SELECTED'
+fi
 invoke(){
   local side=$1; shift
   export STL_R1_SIDE_ROOT="$lab/$side"
@@ -717,6 +725,32 @@ invoke beta link preview-wss --stdin --json < "$lab/alpha-state/handoff/receiver
 confirm=$(grep -m1 '^{' "$lab/beta/preview.json" | jq -r .confirmation_sha256)
 invoke beta link import-wss --stdin --confirm "$confirm" < "$lab/alpha-state/handoff/receiver.json"
 
+if [[ "${STL_WSS_PUBLIC_TLS_E2E:-}" == approved ]]; then
+  # The same issued per-Link CA must verify under strict OpenSSL semantics,
+  # not only the more lenient Go and pinned Rustls consumers.
+  cert_dir="$lab/alpha-state/credentials/wss/lnk_0123456789abcdef0123456789abcdef"
+  openssl verify -x509_strict -CAfile "$cert_dir/client-ca.pem" "$cert_dir/server-cert.pem" >/dev/null
+  cert_dir="$lab/beta-state/credentials/wss/lnk_0123456789abcdef0123456789abcdef"
+  openssl verify -x509_strict -purpose sslclient -CAfile "$cert_dir/server-ca.pem" "$cert_dir/client-cert.pem" >/dev/null
+  echo 'WSS_MANAGED_STRICT_X509_CHAIN=PASS'
+  for side in alpha beta; do
+    jq -e '(.links|length)==1 and .links[0].desired.wss.public_tls==true and ((.wss_crash_operations//[])|length)==0'       "$lab/$side-state/state.json" >/dev/null
+  done
+  grep -m1 '^{' "$lab/beta/preview.json" | jq -e '.public_tls==true and .receiver_role=="dial"' >/dev/null
+  python3 - "$lab/alpha/runtime/stl-wss-0123456789abcdef0123456789abcdef.service.json"     "$lab/beta/runtime/stl-wss-0123456789abcdef0123456789abcdef.service.json" <<'PY_PUBLIC_UNIT'
+import json,sys
+listen=json.load(open(sys.argv[1]))["argv"]
+dial=json.load(open(sys.argv[2]))["argv"]
+assert listen[0].endswith('/wstunnel') and 'server' in listen
+assert dial[0].endswith('/wstunnel') and 'client' in dial
+assert '--tls-client-ca-certs' not in listen
+assert '--tls-certificate' not in dial and '--tls-private-key' not in dial
+assert '--tls-verify-certificate' in dial and '--http-upgrade-path-prefix' in dial
+assert '--http-headers-file' in dial and '--restrict-config' in listen
+print('WSS_MANAGED_PUBLIC_TLS_EXACT_HELPER_EXEC=PASS')
+PY_PUBLIC_UNIT
+fi
+
 if [[ -n "${STL_WSS_R9_REPLACEMENT_TEST:-}" ]]; then
   # Runs only after the normal real original pair was fully committed.
   source /lab/wss-r9-replacement.sh
@@ -803,10 +837,29 @@ wait "$udp_pid"
 echo "WSS DIAGNOSTICS FROM STL:"
 invoke alpha link diagnose-wss lnk_0123456789abcdef0123456789abcdef --json
 invoke beta link diagnose-wss lnk_0123456789abcdef0123456789abcdef --json
-echo "WSS NEGATIVE mTLS/BEARER/PATH:"
-for rejected in no-mtls wrong-bearer wrong-path; do
-  ip netns exec beta python3 /lab/wss-negative-probe.py "$rejected"
-done
+echo "WSS NEGATIVE CLIENT/BEARER/PATH:"
+if [[ "${STL_WSS_PUBLIC_TLS_E2E:-}" == approved ]]; then
+  ip netns exec beta python3 - <<'PY_PUBLIC_GET'
+import socket,ssl
+ca='/lab/beta-state/credentials/wss/lnk_0123456789abcdef0123456789abcdef/server-ca.pem'
+ctx=ssl.create_default_context(cafile=ca)
+with socket.create_connection(('198.51.100.21',59443),timeout=5) as plain:
+    with ctx.wrap_socket(plain,server_hostname='198.51.100.21') as tls:
+        tls.settimeout(5)
+        assert tls.selected_alpn_protocol() in ('http/1.1',None)
+        tls.sendall(b'GET / HTTP/1.1\r\nHost: 198.51.100.21\r\nConnection: close\r\n\r\n')
+        reply=tls.recv(1024)
+        assert reply.startswith(b'HTTP/1.1 400'),reply[:110]
+print('WSS_MANAGED_PUBLIC_TLS_REAL_HTTP_GET_400=PASS')
+PY_PUBLIC_GET
+  for rejected in no-mtls-wrong-bearer wrong-bearer wrong-path; do
+    ip netns exec beta python3 /lab/wss-negative-probe.py "$rejected"
+  done
+else
+  for rejected in no-mtls wrong-bearer wrong-path; do
+    ip netns exec beta python3 /lab/wss-negative-probe.py "$rejected"
+  done
+fi
 echo "DIRECT PUBLIC WIREGUARD UDP MUST BE REJECTED:"
 guard=$(python3 -c 'import hashlib;print("stlwss_"+hashlib.sha256(b"lnk_0123456789abcdef0123456789abcdef").hexdigest()[:16])')
 rule_packets(){

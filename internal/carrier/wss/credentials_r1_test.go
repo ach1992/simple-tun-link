@@ -3,6 +3,8 @@ package wss
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"testing"
@@ -27,6 +29,43 @@ func TestR1GeneratedPerLinkMTLSAndBearer(t *testing.T) {
 	}
 	defer listen.Clear()
 	defer dial.Clear()
+	// Issued leaves must reference the actual generated CA SubjectKeyId.
+	// Without AuthorityKeyId, strict OpenSSL/Python rejects the chain even
+	// though Go and some pinned TLS stacks accept it.
+	parseIssued := func(raw []byte) *x509.Certificate {
+		t.Helper()
+		block, trailing := pem.Decode(raw)
+		if block == nil || len(trailing) != 0 || block.Type != "CERTIFICATE" {
+			t.Fatal("invalid generated certificate PEM")
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cert
+	}
+	ca := parseIssued(listen["client-ca.pem"])
+	if len(ca.SubjectKeyId) == 0 || !bytes.Equal(listen["client-ca.pem"], dial["server-ca.pem"]) {
+		t.Fatal("trust authority identity differs across paired WSS endpoints")
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(ca)
+	for _, example := range []struct {
+		leaf    []byte
+		usage   x509.ExtKeyUsage
+		dnsName string
+	}{
+		{listen["server-cert.pem"], x509.ExtKeyUsageServerAuth, "198.51.100.21"},
+		{dial["client-cert.pem"], x509.ExtKeyUsageClientAuth, ""},
+	} {
+		leaf := parseIssued(example.leaf)
+		if len(leaf.AuthorityKeyId) == 0 || !bytes.Equal(leaf.AuthorityKeyId, ca.SubjectKeyId) {
+			t.Fatal("WSS leaf lacks the matching issuer AuthorityKeyId")
+		}
+		if _, err := leaf.Verify(x509.VerifyOptions{Roots: roots, KeyUsages: []x509.ExtKeyUsage{example.usage}, DNSName: example.dnsName}); err != nil {
+			t.Fatalf("WSS issued leaf chain or name invalid: %v", err)
+		}
+	}
 	if bytes.Equal(listen["server-key.pem"], dial["client-key.pem"]) {
 		t.Fatal("mTLS peers share private signing material")
 	}

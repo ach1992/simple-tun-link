@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"os"
 	"testing"
+
+	"github.com/ach1992/simple-tun-link/internal/domain"
 )
 
 // The test-only child runs the REAL CLI and production backend composition
@@ -20,7 +22,11 @@ func TestWSSLabCLI(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &args); err != nil {
 		t.Fatal(err)
 	}
-	opts, err := assembleRuntimeOptions("/var/lib/stl-r1-state")
+	// Only WSS is exercised by this disposable two-peer fixture.
+	// Initializing unrelated MASQUE would demand a production-installed
+	// canonical STL binary, which this build-tag-only test binary is not.
+	// The selected WSS Backend and its Engine remain production-wired.
+	opts, err := assembleRuntimeOptionsForBackend("/var/lib/stl-r1-state", domain.BackendWireGuardWSS)
 	if err != nil {
 		t.Fatalf("assemble production runtime: %v", err)
 	}
