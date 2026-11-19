@@ -172,7 +172,7 @@ func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, er
 	}
 	menuScreen(out, "Applying / QUIC+WireGuard")
 	code := linkQUICCommand([]string{"create-quic", "--stdin", "--output", path},
-		bytes.NewReader(preview), out, errOut, opts)
+		bytes.NewReader(preview), out, errOut, menuHandoffCreationOptions(opts, id))
 	if code != 0 {
 		menuNotice(out, "WARNING", "Preserve the original peer handoff and reconcile State and owned host resources; do not generate replacement keys.")
 		return code

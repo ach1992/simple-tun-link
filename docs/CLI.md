@@ -157,9 +157,20 @@ encapsulations/IPsec remain discoverable.
   the original sender's offer. Missing originals are explained
   without calling an absent directory unsafe or exposing secrets.
   Delete receiver link removes only a verified **menu-saved**
-  receiver offer, never an unrelated CLI file, running tunnel or
-  existing keys. Status, diagnostics, noninteractive/JSON output and
-  cancellation never disclose the private Setup Link.
+  receiver offer while the Link remains active. A successful confirmed
+  Remove also automatically deletes only an origin-attested original
+  menu-saved offer and its exact nonsecret owner receipt. Public
+  `--output` cannot publish into STL's reserved `receiver-handoffs/`
+  namespace; ordinary independent private paths remain permitted.
+  Older unmarked reserved originals are preserved for explicit inspection
+  rather than guessed ownership. Interrupted MASQUE Remove reconciliation
+  applies the same cleanup only after verified absence and committed
+  recovery. An uncertain Remove preserves the original, and a
+  cleanup error reports the committed Link removal as
+  `outcome=removed_cleanup_incomplete` with an exact cleanup reason and
+  `partial_result.removed=true`, without claiming the private file vanished.
+  Status, diagnostics, noninteractive/JSON output and cancellation never
+  disclose the private Setup Link.
 - My tunnels offers local Status, Link-scoped Test, Share, details and
   identity-bound Remove. For saved IPsec Links only, **Connect IPsec**
   starts IKEv2 through the canonical locked `connect-ipsec` Engine after
@@ -586,8 +597,15 @@ provides the digest and `resume-wireguard --stdin --confirm
 `.stl-handoff-*.tmp` may instead be published by
 `recover-handoff --source ... --output ... --confirm ...` **only**
 after exact matching pending sender identity, digest, original
-credential and owner-private inode checks. That command performs
-no Link mutation, rekeying, service startup or remote transfer.
+credential and owner-private inode checks. Public recovery cannot
+publish inside the menu-reserved `receiver-handoffs/` namespace. If a
+historical guided Create crashed with its original temporary there,
+recover it to an independently chosen private destination **outside**
+that directory on the same filesystem; only that exceptional source
+supports a cross-directory, no-clobber move. The recovered output is
+operator-owned, receives no invented menu-origin receipt, and must be
+retired explicitly when no longer needed. That command performs no Link
+mutation, rekeying, service startup or remote transfer.
 Lost/unsafe/orphaned original material requires explicit operator
 reconciliation, not wildcard deletion.
 
@@ -1249,3 +1267,16 @@ Use the [explicit proof-bound recovery procedure](OPERATOR-RECOVERY.md#managed-q
 unit-name cleanup or a regenerated peer handoff. Legitimate committed
 post-reboot restoration requires trusted changed-kernel evidence and fresh
 host vacancy, preserving the same Link and credential identity.
+
+## Unreleased MASQUE CONNECT-IP Carrier
+
+The Issue #142 development candidate adds typed `create-masque`, `preview-masque`,
+`import-masque`, `resume-masque`, `reconcile-masque` and `retire-masque`; normal
+`link list`, `link status`, `link diagnose`, `link restore --all` and `link remove`
+use the original canonical Engine. The menu includes MASQUE Create/Import with
+protected receiver handoff. It is **not** in the published v0.1.27 release.
+The original JSON receiver offer is **sensitive**, and the import `--confirm`
+is the SHA256 of the exact separately reviewed offer. Only verified local
+systemd/TUN/route ownership is asserted by status; private ICMP and sustained
+performance require independent testing. See [MASQUE Carrier](MASQUE-CARRIER.md)
+for commands, trusted handoff, input schema and recovery semantics.

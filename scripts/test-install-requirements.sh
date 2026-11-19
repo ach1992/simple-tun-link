@@ -20,6 +20,10 @@ for distro in 'ubuntu 20.04' 'ubuntu 22.04' 'ubuntu 22.10' 'ubuntu 24.04' 'ubunt
               'debian 10' 'debian 11' 'debian 12' 'debian 13' 'debian 14'; do
   read -r os version <<< "$distro"
   write_os "$os" "$version"
+  plan masque
+  grep -qx "packages=iproute2" "$root/out" || fail "wrong MASQUE-only package list on $distro"
+  plan native,masque
+  grep -qx "packages=iproute2 iptables kmod" "$root/out" || fail "MASQUE changed native packages on $distro"
   plan native
   grep -qx "distribution=$os" "$root/out" || fail "wrong distro for $distro"
   grep -qx "version=$version" "$root/out" || fail "wrong version for $distro"
@@ -57,7 +61,7 @@ bad bash "$installer" requirements --os-release-file "$root/os-release"
 [[ ! -e $touch_marker ]] || fail 'OS release contents were executed as shell'
 write_os debian 13
 
-for backends in native, native,,wireguard wireguard,wireguard all,wireguard ipsec,ipsec quic,quic quic, nativex; do
+for backends in native, native,,wireguard wireguard,wireguard all,wireguard ipsec,ipsec quic,quic quic, masque,masque masque, nativex; do
   bad bash "$installer" requirements --backends "$backends" --os-release-file "$root/os-release"
 done
 

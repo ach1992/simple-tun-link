@@ -321,7 +321,7 @@ func createWSS(in io.Reader, output string, out, errOut io.Writer, jsonOut bool,
 			return wssCommandError(operation, jsonOut, "", stlerr.CodeState, "cannot allocate Link ID", out, errOut)
 		}
 	}
-	if id.Validate() != nil || checkSensitiveHandoffDestination(output) != nil {
+	if id.Validate() != nil || checkCreatorHandoffDestination(options, id, output) != nil {
 		return wssCommandError(operation, jsonOut, id, stlerr.CodeInvalid, "Link identity or private output path is unsafe", out, errOut)
 	}
 	local, localPub, err := wg.GenerateKeyPair()

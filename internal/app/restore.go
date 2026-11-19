@@ -31,6 +31,10 @@ func (e *Engine) RestoreAll(ctx context.Context) ([]Result, error) {
 	// A crash journal is NOT a committed, healthy Link, and an empty
 	// desired-State snapshot with pending effects is not proof that the
 	// host can be cleaned up or ordinary restore safely replayed.
+	if len(snapshot.MASQUEOperations) > 0 && len(snapshot.Links) == 0 {
+		return nil, stlerr.New(stlerr.CodeConflict, "restore_all", "", "masque",
+			"unfinished MASQUE host effect prevents empty-State restore-unit cleanup")
+	}
 	if len(snapshot.QUICCrashOperations) > 0 && len(snapshot.Links) == 0 {
 		return nil, stlerr.New(stlerr.CodeConflict, "restore_all", "", "quic",
 			"unresolved QUIC pre-effect intent prevents empty-State restore-unit cleanup")
@@ -48,6 +52,10 @@ func (e *Engine) RestoreAll(ctx context.Context) ([]Result, error) {
 			return nil, stlerr.Wrap(stlerr.CodeState, "restore_all", "", "", "cannot lock restore persistence", lockErr)
 		}
 		fresh, reconcileErr := e.store.Load(ctx)
+		if reconcileErr == nil && len(fresh.Links) == 0 && len(fresh.MASQUEOperations) > 0 {
+			reconcileErr = stlerr.New(stlerr.CodeConflict, "restore_all", "", "masque",
+				"pending MASQUE pre-effect journal forbids restore-unit cleanup")
+		}
 		if reconcileErr == nil && len(fresh.Links) == 0 && len(fresh.QUICCrashOperations) > 0 {
 			reconcileErr = stlerr.New(stlerr.CodeConflict, "restore_all", "", "quic",
 				"unresolved QUIC pre-effect intent prevents restore-unit cleanup")

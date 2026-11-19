@@ -119,7 +119,7 @@ func TestGenuinePreMTUStateMigratesWithoutManagedWrites(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !bytes.Contains(persisted, []byte(`"schema_version": 6`)) ||
+			if !bytes.Contains(persisted, []byte(fmt.Sprintf(`"schema_version": %d`, SchemaVersion))) ||
 				bytes.Contains(persisted, []byte(`"mtu"`)) {
 				t.Fatalf("migrated state gained a managed MTU or was not published as current schema")
 			}

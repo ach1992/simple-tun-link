@@ -56,6 +56,9 @@ func linkDiagnoseCommand(args []string, stdout, stderr io.Writer, options *runti
 	if !exists {
 		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeInvalid, "link_diagnose", "Link ID is not present in local desired state")
 	}
+	if record.Desired.Backend == domain.BackendMASQUE && manualMTU != 0 {
+		return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_diagnose", "MASQUE carrier path MTU is not established; omit --mtu for five private IPv4 ICMP probes")
+	}
 	if record.Desired.Backend == domain.BackendWireGuardQUIC && manualMTU != 0 {
 		public := stlerr.New(stlerr.CodeUnsupported, "link_diagnose", string(id), "wireguard-quic",
 			"QUIC carrier PMTU and manual MTU probing are not verified; private five-ping is available without --mtu")
@@ -71,6 +74,12 @@ func linkDiagnoseCommand(args []string, stdout, stderr io.Writer, options *runti
 		return readCommandPublicError(stdout, stderr, jsonOutput, public)
 	}
 
+	if options == nil && record.Desired.Backend == domain.BackendMASQUE {
+		options, err = assembleRuntimeOptionsForBackend(root, domain.BackendMASQUE)
+		if err != nil {
+			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeState, "link_diagnose", "MASQUE diagnostic runtime unavailable")
+		}
+	}
 	if options == nil {
 		options, err = productionRuntimeOptions()
 		if err != nil {

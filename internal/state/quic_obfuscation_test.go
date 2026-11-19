@@ -25,7 +25,7 @@ func TestStateQUICObfuscationMigratesPriorVersionsWithoutPublishing(t *testing.T
 			}
 			store := NewFileStore(root)
 			loaded, err := store.Load(context.Background())
-			if err != nil || loaded.SchemaVersion != 6 || len(loaded.Links) != 0 {
+			if err != nil || loaded.SchemaVersion != SchemaVersion || len(loaded.Links) != 0 {
 				t.Fatalf("prior State did not migrate in memory: %v", err)
 			}
 			after, err := os.ReadFile(path)
@@ -36,8 +36,8 @@ func TestStateQUICObfuscationMigratesPriorVersionsWithoutPublishing(t *testing.T
 				t.Fatal(err)
 			}
 			published, err := os.ReadFile(path)
-			if err != nil || !bytes.Contains(published, []byte(`"schema_version": 6`)) {
-				t.Fatal("authorized publication did not use State 6")
+			if err != nil || !bytes.Contains(published, []byte(fmt.Sprintf(`"schema_version": %d`, SchemaVersion))) {
+				t.Fatal("authorized publication did not use current State schema")
 			}
 		})
 	}
@@ -68,7 +68,7 @@ func TestStateV5PreservesPlainManagedQUICGenerationsAndJournals(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		snapshot.SchemaVersion = 6
+		snapshot.SchemaVersion = SchemaVersion
 		if !reflect.DeepEqual(got, snapshot) {
 			t.Fatal("State 5 migration changed existing Plain ownership or immutable identity")
 		}

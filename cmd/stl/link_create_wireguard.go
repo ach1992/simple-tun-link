@@ -154,7 +154,7 @@ func linkCreateWireGuardCommand(args []string, input io.Reader, out, errOut io.W
 	// Check runtime and output path before creating or persisting ANY new
 	// sender/recipient private key. This is only an early check: the final
 	// no-clobber publication is repeated inside the Engine transaction.
-	if err = checkSensitiveHandoffDestination(output); err != nil {
+	if err = checkCreatorHandoffDestination(opts, id, output); err != nil {
 		return wireGuardCreationError(out, errOut, isJSON, stlerr.CodeInvalid, id,
 			"SENSITIVE handoff destination unsafe or already exists; nothing staged")
 	}

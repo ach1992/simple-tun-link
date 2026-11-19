@@ -12,8 +12,19 @@ import (
 // The error values are already canonical, reviewed, secret-safe fields; this
 // renderer never unwraps OS/subprocess errors or displays arbitrary payloads.
 func renderTerminalLifecycleFailure(out io.Writer, issue *stlerr.Error, evidence *stlerr.OperationEvidence) {
+	committedRemoval := evidence != nil && evidence.DesiredState == "committed" &&
+		(evidence.Stage == "protected_handoff_cleanup" && issue.ReasonCode == "protected_handoff_cleanup_incomplete" ||
+			evidence.Stage == "credential_retirement" && issue.ReasonCode == "masque_material_retirement_incomplete")
 	menuSection(out, "Tunnel operation / incomplete")
-	if evidence != nil && evidence.HostMutation == "not_attempted" {
+	if committedRemoval {
+		menuHealthLine(out, "Tunnel removal", "OK", "Canonical Engine Remove committed; do not repeat Remove")
+		if evidence.Stage == "credential_retirement" {
+			menuHealthLine(out, "MASQUE mTLS material", "WARNING", "Original credential retirement unverified")
+			menuHealthLine(out, "Private handoff", "WARNING", "Cleanup pending until material retirement succeeds")
+		} else {
+			menuHealthLine(out, "Private handoff", "WARNING", "Cleanup incomplete; saved original may remain")
+		}
+	} else if evidence != nil && evidence.HostMutation == "not_attempted" {
 		menuHealthLine(out, "Host changes", "INFO", "No backend network Apply was attempted")
 	} else {
 		menuHealthLine(out, "Host changes", "WARNING", "Outcome not fully confirmed; inspect before retrying")
@@ -37,7 +48,7 @@ func renderTerminalLifecycleFailure(out io.Writer, issue *stlerr.Error, evidence
 		}
 	}
 	kind := "WARNING"
-	if evidence == nil || evidence.HostMutation != "not_attempted" {
+	if !committedRemoval && (evidence == nil || evidence.HostMutation != "not_attempted") {
 		kind = "FAILED" // attempted/uncertain host operations get the red status
 	}
 	switch issue.ReasonCode {

@@ -33,6 +33,7 @@ const (
 	desiredWSSSchemaVersion             = 3
 	desiredQUICSchemaVersion            = 4
 	desiredQUICObfuscationSchemaVersion = 5
+	desiredMASQUESchemaVersion          = 6
 	maxDesiredLinkBytes                 = 16 * 1024
 	lifecycleTimeLimit                  = 5 * time.Minute
 	maxLinkJSONNesting                  = 12
@@ -170,6 +171,14 @@ func executeLinkMutationControlled(operation string, desired domain.Link, id dom
 	defer stop()
 	ctx, cancel := context.WithTimeout(signalCtx, lifecycleTimeLimit)
 	defer cancel()
+	// Capture the exact menu-owned receiver offer before the Engine retires
+	// committed Link identity and credentials. This read never blocks the
+	// owner-scoped tunnel Remove; any cleanup problem is reported afterwards.
+	var protectedRemoval *protectedHandoffRemoval
+	var protectedRemovalErr error
+	if operation == "link_remove" {
+		protectedRemoval, protectedRemovalErr = prepareProtectedHandoffRemoval(options, id)
+	}
 	var result app.Result
 	switch operation {
 	case "link_ensure":
@@ -189,6 +198,11 @@ func executeLinkMutationControlled(operation string, desired domain.Link, id dom
 	case "link_remove":
 		if expected != nil {
 			result, err = engine.RemoveIfUnchanged(ctx, *expected)
+		} else if protectedRemoval != nil {
+			// The private original was validated before acquiring Engine's
+			// lock. A changed committed sender must not be removed using
+			// that earlier offer identity, even from the CLI path.
+			result, err = engine.RemoveIfUnchanged(ctx, protectedRemoval.originalDesired)
 		} else {
 			result, err = engine.Remove(ctx, id)
 		}
@@ -213,6 +227,17 @@ func executeLinkMutationControlled(operation string, desired domain.Link, id dom
 			"Link Engine returned an inconsistent lifecycle result; reconcile before retry")
 	}
 
+	if operation == "link_remove" {
+		if protectedRemovalErr == nil {
+			protectedRemovalErr = protectedRemoval.retireAfterRemove(options)
+		}
+		if protectedRemovalErr != nil {
+			return lifecycleFailureWithEvidence(stdout, stderr, jsonOutput, stlerr.CodeState, operation, &result,
+				"Link was removed, but its original protected receiver Setup Link cleanup is incomplete; do not repeat Remove",
+				&stlerr.OperationEvidence{Stage: "protected_handoff_cleanup", HostMutation: "attempted",
+					DesiredState: "committed", Rollback: "not_required"}, nil)
+		}
+	}
 	if jsonOutput {
 		resp := lifecycleResultResponse{SchemaVersion: jsonSchemaVersion, Operation: operation,
 			LinkID: id, Changed: result.Changed, Removed: result.Removed}
@@ -257,6 +282,24 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 	// Error details here are authored literals, never the raw OS, backend,
 	// private state, caller-provided JSON or credential-bearing exception.
 	safe := stlerr.WithGuidance(stlerr.New(code, operation, "", "", detail))
+	// MASQUE handoff inputs are private and operator-facing. Generic Link-ID
+	// advice is misleading for a malformed file or a mismatched digest.
+	// Match only authored public literals, never arbitrary secret-bearing errors.
+	switch {
+	case operation == "link_preview-masque" && detail == "preview-masque: invalid private handoff",
+		(operation == "link_import-masque" || operation == "link_resume-masque") &&
+			(detail == operation[len("link_"):]+": unverified private MASQUE handoff"):
+		safe.ReasonCode = "masque_offer_invalid"
+		safe.NextStep = "Obtain the complete original private MASQUE receiver file; do not edit or truncate it. Retry preview-masque --stdin with that file. No Link change was requested."
+	case (operation == "link_import-masque" || operation == "link_resume-masque") &&
+		strings.HasSuffix(detail, ": private MASQUE handoff confirmation hash mismatch"):
+		safe.ReasonCode = "masque_offer_confirmation_mismatch"
+		safe.NextStep = "Verify the exact original receiver file SHA256 through a trusted channel, then use that digest with --confirm. No imported Link was changed."
+	case operation == "link_create-masque" &&
+		detail == "create-masque: this host does not uniquely own the requested MASQUE physical source":
+		safe.ReasonCode = "masque_source_not_assigned"
+		safe.NextStep = "Run ip address show on THIS server and choose its uniquely assigned physical IPv4/IPv6 address before creating keys. Peer connectivity is not required."
+	}
 	var observedPublic *stlerr.Error
 	if observed != nil {
 		// Retain the original errors.Is cause chain, but project only
@@ -267,10 +310,21 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 			safe.ObjectID = observedPublic.ObjectID
 		}
 		switch domain.Backend(observedPublic.Backend) {
-		case domain.BackendGRE, domain.BackendIPIP, domain.BackendL2TPv3, domain.BackendWireGuard, domain.BackendWireGuardWSS, domain.BackendWireGuardQUIC, domain.BackendIPsec:
+		case domain.BackendGRE, domain.BackendIPIP, domain.BackendL2TPv3, domain.BackendWireGuard, domain.BackendWireGuardWSS, domain.BackendWireGuardQUIC, domain.BackendIPsec, domain.BackendMASQUE:
 			safe.Backend = observedPublic.Backend
 		}
 	}
+	// A normal MASQUE Remove can commit its original State/receipt and
+	// then fail only during protected mTLS retirement. Do not infer that
+	// outcome from a missing Link or error text: require the Engine's
+	// positive Remove result, committed stage and typed MASQUE backend.
+	// Reconcile and explicit retirement already provide that same proof
+	// through their receipt-bound command paths.
+	committedMASQUEMaterial := evidence != nil && evidence.Stage == "credential_retirement" &&
+		evidence.DesiredState == "committed" && result != nil && result.Removed &&
+		((operation == "link_reconcile-masque" || operation == "link_retire-masque") ||
+			(operation == "link_remove" && observedPublic != nil &&
+				observedPublic.Backend == string(domain.BackendMASQUE)))
 	if evidence != nil {
 		copy := *evidence
 		safe.Evidence = &copy
@@ -290,6 +344,16 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 		case evidence.DesiredState == "visible_unconfirmed":
 			safe.ReasonCode = "state_publication_uncertain"
 			safe.NextStep = "Inspect saved desired state and live owned resources before retrying or removing anything; a publication may be visible without durable confirmation."
+		case committedMASQUEMaterial:
+			safe.ReasonCode = "masque_material_retirement_incomplete"
+			id := "ID"
+			if result != nil && result.LinkID.Validate() == nil {
+				id = string(result.LinkID)
+			}
+			safe.NextStep = "The MASQUE Link is already removed, but its original mTLS material retirement is incomplete and the saved receiver Setup Link has not been cleaned up. Inspect the exact removal receipt and original host absence, then use stl link retire-masque " + id + " --confirm " + id + " --json to finish both stages. Do not repeat Remove or erase unverified files."
+		case evidence.Stage == "protected_handoff_cleanup" && evidence.DesiredState == "committed":
+			safe.ReasonCode = "protected_handoff_cleanup_incomplete"
+			safe.NextStep = "The Link is already removed. Its original private Setup Link may remain under STL's receiver-handoffs directory. Inspect only this ID's exact protected file and ownership before retiring it; do not rerun Remove or delete unrelated files."
 		case evidence.DesiredState == "committed":
 			safe.ReasonCode = "post_commit_cleanup_incomplete"
 			safe.NextStep = "The desired-state commit completed; inspect the remaining owned service or credential cleanup before retrying."
@@ -431,6 +495,14 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 		Outcome:                "unconfirmed",
 		ReconciliationRequired: true,
 	}
+	// A failed post-commit receiver-offer cleanup is NOT uncertainty about
+	// the already verified Link removal. Distinguish this bounded leftover
+	// from a failed Engine Remove for machine callers and operators.
+	if result != nil && result.Removed &&
+		(committedMASQUEMaterial || evidence != nil && evidence.Stage == "protected_handoff_cleanup" &&
+			evidence.DesiredState == "committed") {
+		out.Outcome = "removed_cleanup_incomplete"
+	}
 	if result != nil && result.LinkID.Validate() == nil {
 		// Engine's partial return is evidence for reconciliation, not a
 		// successful or durable state transition. Never marshal app.Result
@@ -458,7 +530,15 @@ func lifecycleFailureWithEvidence(stdout, stderr io.Writer, jsonOutput bool, cod
 			}
 		}
 		if result != nil && result.LinkID != "" {
-			fmt.Fprintf(stderr, "Partial operation result for Link %s; reconcile current host/state before retry\n", result.LinkID)
+			if out.Outcome == "removed_cleanup_incomplete" {
+				if evidence != nil && evidence.Stage == "credential_retirement" {
+					fmt.Fprintf(stderr, "Link %s already removed; MASQUE mTLS material retirement is incomplete and receiver Setup Link cleanup is pending. Do not repeat Remove.\n", result.LinkID)
+				} else {
+					fmt.Fprintf(stderr, "Link %s already removed; only protected receiver Setup Link cleanup is incomplete. Do not repeat Remove.\n", result.LinkID)
+				}
+			} else {
+				fmt.Fprintf(stderr, "Partial operation result for Link %s; reconcile current host/state before retry\n", result.LinkID)
+			}
 		}
 	}
 	switch code {
@@ -548,6 +628,30 @@ func (d desiredLinkV5) link() (domain.Link, error) {
 	var err error
 	link.QUIC, err = d.QUIC.options()
 	return link, err
+}
+
+// Schema v6 is separate from the frozen native/WG/WSS/QUIC contracts.
+// Only explicit MASQUE typed public parameters are accepted here.
+type desiredLinkRequestV6 struct {
+	SchemaVersion int           `json:"schema_version"`
+	Link          desiredLinkV6 `json:"link"`
+}
+type desiredLinkV6 struct {
+	desiredLinkV2
+	MASQUE desiredMASQUEOptionsV1 `json:"masque"`
+}
+type desiredMASQUEOptionsV1 struct {
+	Role           string `json:"role"`
+	TCPPort        uint16 `json:"tcp_port"`
+	TLSServerName  string `json:"tls_server_name"`
+	MaterialSHA256 string `json:"material_sha256"`
+}
+
+func (d desiredLinkV6) link() domain.Link {
+	result := d.desiredLinkV2.link()
+	result.MASQUE = domain.MASQUEOptions{Role: d.MASQUE.Role, TCPPort: d.MASQUE.TCPPort,
+		TLSServerName: d.MASQUE.TLSServerName, MaterialSHA256: d.MASQUE.MaterialSHA256}
+	return result
 }
 
 // Input schema v3 adds ONLY the authenticated WireGuard-over-WSS public
@@ -704,6 +808,16 @@ func decodeDesiredLink(reader io.Reader) (domain.Link, error) {
 		if link.Backend != domain.BackendWireGuardQUIC {
 			return domain.Link{}, stlerr.New(stlerr.CodeUnsupported, "decode_link", "", "",
 				"desired Link v5 is reserved for wireguard-quic")
+		}
+	case desiredMASQUESchemaVersion:
+		var request desiredLinkRequestV6
+		if err := decoder.Decode(&request); err != nil {
+			return domain.Link{}, fmt.Errorf("invalid desired MASQUE Link v6 request")
+		}
+		link = request.Link.link()
+		if link.Backend != domain.BackendMASQUE {
+			return domain.Link{}, stlerr.New(stlerr.CodeUnsupported, "decode_link", "", "",
+				"desired Link v6 is reserved for masque")
 		}
 	default:
 		return domain.Link{}, stlerr.New(stlerr.CodeUnsupported, "decode_link", "", "",

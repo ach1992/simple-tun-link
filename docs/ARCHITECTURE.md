@@ -1317,3 +1317,20 @@ credential retirement all deny, leaving committed State, original
 reservations, private identity and surviving migrated WG unchanged.
 The harness uses disposable rootless kernel WireGuard+nft with a
 systemd **shim**, not real PID1 reboot or physical two-host recovery.
+
+## Optional MASQUE CONNECT-IP Carrier (Issue #142, unreleased)
+
+The experimental MASQUE backend uses **the single Engine**, Link ID, State,
+resource locks, owned host-effect journal, rollback and restore. It accepts a
+versioned, explicit IPv4/IPv6 physical source/peer pair and private IPv4
+`/32` routes; a root-owned transient per-Link systemd helper runs authenticated
+RFC 9484 CONNECT-IP over HTTP/2/TLS/TCP. It does **not** add a second Engine
+or replace the WSS/QUIC/WireGuard native pathways. Preview is read-only;
+private keys live only in protected materials/handoffs. State holds a digest,
+not the private key. The existing read-only Status and bounded private Ping
+reuse the canonical reporting and diagnostic contracts, never reporting
+verified remote connectivity merely from local service readiness.
+
+See [MASQUE Carrier](MASQUE-CARRIER.md) and
+[Issue #142](https://github.com/ach1992/simple-tun-link/issues/142) for the
+unmerged source/test status.

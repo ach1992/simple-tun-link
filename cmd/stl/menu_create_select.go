@@ -368,6 +368,7 @@ func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		menuOption(out, "5", "Advanced types", "FOU / GUE / IPsec")
 		menuOption(out, "6", "WireGuard / WSS + TLS", "Encrypted WSS Carrier (optional pinned helper)")
 		menuOption(out, "7", "WireGuard / QUIC + TLS", "Encrypted UDP Carrier (optional pinned Hysteria)")
+		menuOption(out, "9", "MASQUE / CONNECT-IP", "Native private IPv4 over mTLS + HTTP/2 TCP")
 		menuTunnelOption(out, "8", "L2TPv3 / Direct-IP", "IP protocol 115; plaintext private Ethernet", report, basicTunnelOptions["8"])
 		menuOption(out, "i", "Availability details", "Explain why a type is unavailable")
 		menuOption(out, "0", "Back", "Main menu")
@@ -390,6 +391,18 @@ func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		}
 		if value == "" {
 			value = "1"
+		}
+		if value == "9" {
+			// MASQUE needs only iproute2, not WireGuard, nftables or an extra helper.
+			// Reuse the canonical consented package workflow before generating keys.
+			picked := tunnelOption{backend: domain.BackendMASQUE, mode: domain.EncapTLS}
+			prep := menuPrepareSelectedPackages(input, reader, out, errOut, picked, options)
+			if !prep.canContinue {
+				report = menuCapabilitySnapshot(options)
+				menuAcknowledge(input, reader, out)
+				continue
+			}
+			return menuCreateMASQUE(input, reader, out, errOut, options)
 		}
 		if value == "7" {
 			picked := tunnelOption{backend: domain.BackendWireGuardQUIC, mode: domain.EncapUDP}

@@ -38,6 +38,7 @@ func TestSelectedPackagePlanIsTypedAndReadOnly(t *testing.T) {
 		{tunnelOption{backend: domain.BackendIPIP, mode: domain.EncapNative}, "native"},
 		{tunnelOption{backend: domain.BackendWireGuard, mode: domain.EncapUDP}, "native,wireguard"},
 		{tunnelOption{backend: domain.BackendIPsec, mode: domain.EncapESP}, "native,ipsec"},
+		{tunnelOption{backend: domain.BackendMASQUE, mode: domain.EncapTLS}, "masque"},
 	} {
 		if got := selectedPackageBackends(tc.sel); got != tc.want {
 			t.Fatalf("%s: %s", tc.want, got)
@@ -53,7 +54,11 @@ func TestSelectedPackagePlanIsTypedAndReadOnly(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", tc.want, err)
 		}
-		if !strings.Contains(plan.packages, "iproute2 iptables kmod") {
+		if tc.want == "masque" {
+			if plan.packages != "iproute2" {
+				t.Fatalf("MASQUE must not require unrelated packages: %+v", plan)
+			}
+		} else if !strings.Contains(plan.packages, "iproute2 iptables kmod") {
 			t.Fatalf("missing baseline requirements: %+v", plan)
 		}
 	}
@@ -293,5 +298,28 @@ func TestBlockedIPsecWarningPreservesEarlierPackageAndServiceEffects(t *testing.
 		if !strings.Contains(body, "No Link or keys") && !strings.Contains(body, "No IPsec Link or keys") {
 			t.Fatalf("failure no-Link semantics missing: %q", body)
 		}
+	}
+}
+
+// A missing MASQUE dependency must direct the operator to authenticated
+// installed-root PREPARE instead of generating an unusable credential pair.
+func TestMASQUEMissingPackageCannotSkipPreparation(t *testing.T) {
+	selected := tunnelOption{backend: domain.BackendMASQUE, mode: domain.EncapTLS}
+	ops := menuPackagePreparationOps{
+		preview: func(context.Context, tunnelOption) (selectedPackagePreview, error) {
+			return selectedPackagePreview{packages: "iproute2", missing: "iproute2", aptInstall: "iproute2=1", aptDigest: strings.Repeat("a", 64)}, nil
+		},
+		canPrepare: func(io.Reader, io.Writer) bool { return false },
+		install: func(context.Context, io.Writer, io.Writer, ...string) error {
+			t.Fatal("attempted unattended APT")
+			return nil
+		},
+	}
+	var out, errOut bytes.Buffer
+	input := strings.NewReader("")
+	got := menuPrepareSelectedPackagesWithOps(input, nil, &out, &errOut, selected, nil, ops)
+	if got.canContinue || !strings.Contains(out.String(), "iproute2") ||
+		!strings.Contains(out.String(), "sudo stl menu") {
+		t.Fatalf("missing MASQUE prerequisite was not explained: %+v, %s", got, out.String())
 	}
 }

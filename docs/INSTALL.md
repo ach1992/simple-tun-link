@@ -206,11 +206,13 @@ receiver Setup Link separately in
 `/var/lib/simple-tun-link/receiver-handoffs/` with private
 `0700` directory and `0600` Link-identity-bound file.
 Only a fresh real-terminal `SHOW` displays a retained offer;
-`DELETE` independently retires just that offer and not the
-active Link or local credentials. Link removal/uninstall does
-not silently delete retained receiver secrets. Explicit
-noninteractive creators use their own operator-specified private
-`--output` path; the menu does not invent or search those files.
+`DELETE` independently retires just that offer while the Link remains
+active. After a successful confirmed Remove, STL also automatically
+deletes the exact verified menu-saved offer. If Remove fails or its
+post-commit cleanup cannot be verified, the private file is preserved
+with specific recovery guidance. Explicit noninteractive creators use
+their own operator-specified private `--output` path; STL never deletes
+these unrelated operator-owned files automatically.
 
 A consistent operator-owned backup must include private State,
 the separate credentials store and retained handoffs where needed.
@@ -1149,16 +1151,18 @@ root terminal. The embedded installer holds the exclusive maintenance lock,
 checks Link/State/restore ownership, and never silently removes active Links,
 private credentials or foreign host resources. A genuinely STL-generated
 lock-only footprint with no committed State is retired by STL itself.
-When saved Links remain, it gives a private-handoff KEEP/DELETE decision
-**first** for WireGuard/IPsec; a requested `Delete receiver link` must
-occur while the exact saved tunnel still exists, with fresh `DELETE`
-confirmation. If retained, its separately protected receiver credential
-survives both Link removal and uninstall and must be secured or later
-retired by the administrator. GRE/IPIP do not require this private step.
-Then the menu guides each verified `Remove this tunnel` action, **without
-listing opaque IDs or display names**. With no saved Links, a zero count
-is **not** proof of safe uninstall; the installer still performs
-the canonical Go preflight under exclusive maintenance locking.
+When saved Links remain, the menu guides each confirmed
+`Remove this tunnel` operation, **without listing opaque IDs or display
+names**. A successful verified Remove also retires the matching original
+STL-saved receiver Setup Link for WireGuard/IPsec/WSS/QUIC/MASQUE; no
+separate KEEP/DELETE decision is needed. Independent `--output` files
+remain operator-owned, and only an exact menu-origin-attested original
+is deleted automatically. Historical unmarked originals are preserved
+for explicit inspection. If credential cleanup is incomplete, reconcile
+the exact original private file without repeating Remove.
+With no saved Links, a zero count is **not** proof of safe uninstall; the
+installer still performs the canonical Go preflight under exclusive
+maintenance locking.
 
 First quiesce concurrent Link operators and inspect the saved Links:
 

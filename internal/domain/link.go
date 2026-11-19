@@ -24,6 +24,7 @@ const (
 	BackendWireGuardWSS  Backend = "wireguard-wss"
 	BackendWireGuardQUIC Backend = "wireguard-quic"
 	BackendIPsec         Backend = "ipsec"
+	BackendMASQUE        Backend = "masque"
 
 	EncapNative Encapsulation = "native"
 	EncapFOU    Encapsulation = "fou"
@@ -31,6 +32,7 @@ const (
 	EncapUDP    Encapsulation = "udp"
 	EncapESP    Encapsulation = "esp"
 	EncapNATT   Encapsulation = "nat-t"
+	EncapTLS    Encapsulation = "tls"
 )
 
 type Underlay struct {
@@ -152,6 +154,16 @@ type QUICOptions struct {
 	Obfuscation    string `json:"obfuscation,omitempty"`
 }
 
+// MASQUEOptions is endpoint-local public topology for a dedicated authenticated
+// RFC 9484 CONNECT-IP Link. No certificates, signing keys, passwords, arbitrary
+// executable paths or credentials belong in desired State.
+type MASQUEOptions struct {
+	Role           string `json:"role"`
+	TCPPort        uint16 `json:"tcp_port"`
+	TLSServerName  string `json:"tls_server_name"`
+	MaterialSHA256 string `json:"material_sha256"`
+}
+
 // Empty preserves the original plain-QUIC representation. Public versioned
 // inputs may offer an explicit "plain" choice, but normalize it at admission.
 const (
@@ -179,6 +191,7 @@ type Link struct {
 	MTU       MTUPolicy        `json:"mtu,omitzero"`
 	WSS       WSSOptions       `json:"wss,omitzero"`
 	QUIC      QUICOptions      `json:"quic,omitzero"`
+	MASQUE    MASQUEOptions    `json:"masque,omitzero"`
 }
 
 // ResourceClaim is a secret-free identity for a collision-sensitive host
@@ -246,6 +259,41 @@ func (l Link) Validate() error {
 	}
 	if l.Backend != BackendWireGuardQUIC && l.QUIC != (QUICOptions{}) {
 		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "QUIC options are only allowed with wireguard-quic")
+	}
+	if l.Backend != BackendMASQUE && l.MASQUE != (MASQUEOptions{}) {
+		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "MASQUE options are only allowed with masque")
+	}
+	if l.Backend == BackendMASQUE {
+		if l.Encapsulation != EncapTLS || (l.MASQUE.Role != "dial" && l.MASQUE.Role != "listen") ||
+			l.MASQUE.TCPPort == 0 || strings.TrimSpace(l.MASQUE.TLSServerName) != l.MASQUE.TLSServerName ||
+			l.MASQUE.TLSServerName == "" || len(l.MASQUE.TLSServerName) > 253 ||
+			strings.ContainsAny(l.MASQUE.TLSServerName, "\x00\r\n\t /") {
+			return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "invalid MASQUE TLS role, port or server name")
+		}
+		if len(l.MASQUE.MaterialSHA256) != 64 {
+			return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "MASQUE original protected material identity is required")
+		}
+		if _, err := hex.DecodeString(l.MASQUE.MaterialSHA256); err != nil ||
+			strings.ToLower(l.MASQUE.MaterialSHA256) != l.MASQUE.MaterialSHA256 {
+			return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "MASQUE protected material SHA256 must use canonical lowercase hex")
+		}
+		if l.Underlay.Local.BitLen() != l.Underlay.Peer.BitLen() ||
+			l.Underlay.Local.IsUnspecified() || l.Underlay.Peer.IsUnspecified() ||
+			l.Underlay.Local.IsLoopback() || l.Underlay.Peer.IsLoopback() ||
+			l.Underlay.Local.IsMulticast() || l.Underlay.Peer.IsMulticast() ||
+			l.Underlay.Local.IsLinkLocalUnicast() || l.Underlay.Peer.IsLinkLocalUnicast() ||
+			l.Underlay.Local.Zone() != "" || l.Underlay.Peer.Zone() != "" {
+			return stlerr.New(stlerr.CodeUnsupported, "validate_link", string(l.ID), string(l.Backend), "MASQUE physical endpoints must be IPv4 or IPv6 unicast peers in the same family")
+		}
+		if l.Addresses.Local.Bits() != 32 || l.Addresses.Peer.Bits() != 32 ||
+			l.Addresses.Local.Addr().IsUnspecified() || l.Addresses.Peer.Addr().IsUnspecified() ||
+			l.Addresses.Local.Addr().IsMulticast() || l.Addresses.Peer.Addr().IsMulticast() ||
+			l.Addresses.Local.Addr().IsLoopback() || l.Addresses.Peer.Addr().IsLoopback() {
+			return stlerr.New(stlerr.CodeUnsupported, "validate_link", string(l.ID), string(l.Backend), "MASQUE requires distinct valid private IPv4 /32 Link endpoints")
+		}
+		if l.MTU.Mode == MTUManual && l.MTU.Bytes < 576 {
+			return stlerr.New(stlerr.CodeUnsupported, "validate_link", string(l.ID), string(l.Backend), "MASQUE TUN requires a usable IPv4 MTU")
+		}
 	}
 	if l.Backend == BackendWireGuardQUIC {
 		if !ValidQUICObfuscation(l.QUIC.Obfuscation) {

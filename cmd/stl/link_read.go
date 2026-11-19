@@ -13,6 +13,7 @@ import (
 	ipipbackend "github.com/ach1992/simple-tun-link/internal/backend/ipip"
 	ipsecbackend "github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	l2tpbackend "github.com/ach1992/simple-tun-link/internal/backend/l2tpv3"
+	masquebackend "github.com/ach1992/simple-tun-link/internal/backend/masque"
 	wgbackend "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/diagnostics"
 	"github.com/ach1992/simple-tun-link/internal/domain"
@@ -56,10 +57,25 @@ type linkStatusResponse struct {
 	GREState          *grebackend.DiagnosticState   `json:"gre_state,omitempty"`
 	IPIPState         *ipipbackend.DiagnosticState  `json:"ipip_state,omitempty"`
 	L2TPv3State       *l2tpbackend.DiagnosticState  `json:"l2tpv3_state,omitempty"`
+	MASQUEState       *masqueLinkStatus             `json:"masque_state,omitempty"`
 	WireGuardState    *wgbackend.DiagnosticState    `json:"wireguard_state,omitempty"`
 	WSSState          *WSSLinkDiagnostics           `json:"wss_state,omitempty"`
 	QUICState         *QUICLinkDiagnostics          `json:"quic_state,omitempty"`
 	IPsecState        *ipsecbackend.DiagnosticState `json:"ipsec_state,omitempty"`
+}
+
+// An owned local interface and unit do NOT prove a live CONNECT-IP peer.
+// Only nonsecret, Link-scoped inventory is exposed in the public status API.
+type masqueLinkStatus struct {
+	UnitExists      bool   `json:"unit_exists"`
+	UnitOwned       bool   `json:"unit_owned"`
+	UnitActive      bool   `json:"unit_active"`
+	InterfaceExists bool   `json:"interface_exists"`
+	InterfaceOwned  bool   `json:"interface_owned"`
+	InterfaceIndex  int    `json:"interface_index"`
+	LocalAddress    string `json:"local_address,omitempty"`
+	PeerRoute       bool   `json:"peer_route"`
+	RuntimeReady    bool   `json:"runtime_ready"`
 }
 
 type linkReadErrorResponse struct {
@@ -165,11 +181,57 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 			string(record.WSSSupersededBy) + " on both peers. Do not treat this original as active or reuse its reserved resources."
 		return readCommandPublicError(stdout, stderr, jsonOutput, blocked)
 	}
+	if options == nil && record.Desired.Backend == domain.BackendMASQUE {
+		options, err = assembleRuntimeOptionsForBackend(root, domain.BackendMASQUE)
+		if err != nil {
+			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeState, "link_status", "MASQUE read-only runtime unavailable")
+		}
+	}
 	if options == nil {
 		options, err = productionRuntimeOptions()
 		if err != nil {
 			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeState, "link_status", "cannot initialize read-only backend inspection")
 		}
+	}
+	if record.Desired.Backend == domain.BackendMASQUE {
+		var inspector interface {
+			DiagnosticState(context.Context, domain.Link) (masquebackend.HostObservation, error)
+		}
+		for _, impl := range options.backends {
+			if impl != nil && impl.Kind() == domain.BackendMASQUE {
+				inspector, _ = impl.(interface {
+					DiagnosticState(context.Context, domain.Link) (masquebackend.HostObservation, error)
+				})
+				break
+			}
+		}
+		if inspector == nil {
+			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_status", "managed MASQUE inspector unavailable")
+		}
+		observed, inspectErr := inspector.DiagnosticState(ctx, record.Desired)
+		if inspectErr != nil {
+			return readStatusInspectionError(ctx, stdout, stderr, jsonOutput, inspectErr)
+		}
+		private := ""
+		if observed.LocalAddress.IsValid() {
+			private = observed.LocalAddress.String()
+		}
+		projection := masqueLinkStatus{UnitExists: observed.UnitExists, UnitOwned: observed.UnitOwned,
+			UnitActive: observed.UnitActive, InterfaceExists: observed.InterfaceExists,
+			InterfaceOwned: observed.InterfaceOwned, InterfaceIndex: observed.InterfaceIndex,
+			LocalAddress: private, PeerRoute: observed.PeerRoute, RuntimeReady: observed.RuntimeReady}
+		response := linkStatusResponse{SchemaVersion: jsonSchemaVersion, Link: summarizeLink(record.Desired),
+			InterfaceVerified: observed.RuntimeReady, Connectivity: "not_measured", MASQUEState: &projection}
+		if jsonOutput {
+			if json.NewEncoder(stdout).Encode(response) != nil {
+				fmt.Fprintln(stderr, "cannot encode MASQUE status")
+				return 1
+			}
+		} else {
+			fmt.Fprintf(stdout, "Link %s: MASQUE locally ready=%t, owned unit=%t active=%t, owned TUN=%t, private route=%t (authenticated peer traffic not measured)\n",
+				id, projection.RuntimeReady, projection.UnitOwned, projection.UnitActive, projection.InterfaceOwned, projection.PeerRoute)
+		}
+		return 0
 	}
 	if record.Desired.Backend == domain.BackendWireGuardQUIC {
 		observed, runner, inspectErr := trustedQUICObservation(ctx, record.Desired, *options)

@@ -58,8 +58,20 @@ machine/JSON Link diagnostics.
 - Guided WireGuard/IPsec sender creation retains the **original**
   receiver Setup Link separately under STL-owned
   `receiver-handoffs/` (`0700` parent, `0600` verified per-Link
-  file). Retention lasts until an independently confirmed DELETE,
-  including across import, reboot and Link removal. A later SHOW
+  file). Retention lasts through import and reboot until an independently
+  confirmed DELETE or a successfully verified Link Remove. On successful
+  Remove, STL deletes only the exact original menu-owned receiver offer
+  after committing Link and credential retirement. User-specified CLI
+  `--output` files remain outside this scope: public Create rejects
+  destinations inside the reserved menu-managed directory. Guided Create
+  records a private, nonsecret, exact file-inode/digest origin receipt.
+  Automatic removal requires both that receipt and the original file's
+  matching device/inode/metadata; unknown older files without a receipt
+  remain for explicit inspection rather than being adopted or deleted.
+  Cleanup reacquires the canonical per-Link lock for State-absence and
+  file retirement; failed cleanup reports a *committed* Link removal
+  separately from remaining private artifacts. Incomplete or uncertain
+  Engine removal preserves the offer for recovery. A later SHOW
   requires a real interactive terminal, fresh consent and exact
   matching of the still-committed sender identity. SHOW necessarily
   exposes the secret on the screen/scrollback; disclose this clearly.
@@ -68,7 +80,15 @@ machine/JSON Link diagnostics.
   recovery or a fresh authorized setup, not silent rekey or adoption.
   `recover-handoff` may republish only an original, safely retained,
   digest-matching crash-staged private offer with matching pending
-  intent/credential; it performs no kernel/daemon activation.
+  intent/credential; it performs no kernel/daemon activation. Public
+  recovery never writes into the menu-reserved handoff namespace. A
+  genuine historical menu crash temporary can be moved to a separate
+  owner-private file on the same filesystem, without inventing menu
+  ownership; that independent output is never auto-deleted.
+  After a confirmed interrupted MASQUE Remove, material retirement
+  failures keep the original offer untouched and report the committed
+  removal; the existing receipt-bound `retire-masque` can finish
+  credential and exact-menu-offer cleanup without replaying Remove.
 - A Quick Link can contain the **receiver credential**. It is
   explicitly **SENSITIVE**, not encrypted merely because it is
   encoded and checksummed. Deliver it over a trusted channel and
@@ -444,3 +464,21 @@ managed attempt and independently prove its required original-termination
 or changed-host-kernel condition. A namespace or container restart never
 supplies host-kernel extinction. Physical reboot and two-peer acceptance
 remain separately authorized deployment activities.
+
+## Unreleased MASQUE material and authentication boundary
+
+The Issue #142 MASQUE candidate authenticates HTTP/2 CONNECT-IP using TLS
+certificates with pinned CA/peer identity. The public Link State carries
+only topology and an immutable exact protected-material SHA256, not TLS keys.
+Root-owned `masque/<link-id>/` files use `0700` directories, `0600` files and
+no-clobber writes. Reuse after an interrupted provision requires the complete
+original bytes, owner, identity and closed filename set; incomplete/altered
+credentials remain quarantined, never silently repaired or adopted. A failed
+operation is not permission to delete those files or change unknown services.
+Receiver import also verifies the intended local physical underlay *inside*
+the Engine Link lock before staging sensitive material. The menu uses hidden
+terminal paste and an explicit confirmation; its original sender handoff may
+be shared only with live TTY consent and exact committed generation binding.
+No CONNECT-IP stream, latency, confidentiality against endpoint compromise,
+provider access or censorship invisibility is claimed from local Status alone.
+See [MASQUE Carrier](MASQUE-CARRIER.md).

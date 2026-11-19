@@ -32,6 +32,10 @@ func readPrivateMenuLine(reader *bufio.Reader) (string, error) {
 }
 
 func readMenuURLWithDelimiter(reader *bufio.Reader, stripCR bool) (string, error) {
+	return readMenuURLWithDelimiterLimit(reader, stripCR, pairing.MaxLinkBytes)
+}
+
+func readMenuURLWithDelimiterLimit(reader *bufio.Reader, stripCR bool, limit int) (string, error) {
 	ending := func(data []byte) string {
 		if stripCR {
 			return strings.TrimSuffix(string(data), "\r")
@@ -40,7 +44,7 @@ func readMenuURLWithDelimiter(reader *bufio.Reader, stripCR bool) (string, error
 	}
 	data := make([]byte, 0, 256)
 	oversized := false
-	for count := 0; count < pairing.MaxLinkBytes+64*1024; count++ {
+	for count := 0; count < limit+64*1024; count++ {
 		b, err := reader.ReadByte()
 		if err != nil {
 			if errors.Is(err, io.EOF) && len(data) != 0 && !oversized {
@@ -57,7 +61,7 @@ func readMenuURLWithDelimiter(reader *bufio.Reader, stripCR bool) (string, error
 			}
 			return ending(data), nil
 		}
-		if len(data) < pairing.MaxLinkBytes {
+		if len(data) < limit {
 			data = append(data, b)
 		} else {
 			oversized = true
@@ -78,6 +82,10 @@ func readPrivateMenuURL(input io.Reader, reader *bufio.Reader) (url string, err 
 // has been disabled. Keeping prompt and read inside one protected operation
 // avoids a race where the user pastes immediately when the prompt appears.
 func readPrivateMenuURLWithPrompt(input io.Reader, reader *bufio.Reader, prompt func()) (url string, err error) {
+	return readPrivateMenuURLWithPromptLimit(input, reader, prompt, pairing.MaxLinkBytes)
+}
+
+func readPrivateMenuURLWithPromptLimit(input io.Reader, reader *bufio.Reader, prompt func(), limit int) (url string, err error) {
 	showPrompt := func() {
 		if prompt != nil {
 			prompt()
@@ -86,14 +94,14 @@ func readPrivateMenuURLWithPrompt(input io.Reader, reader *bufio.Reader, prompt 
 	file, ok := input.(*os.File)
 	if !ok {
 		showPrompt()
-		return readPrivateMenuLine(reader)
+		return readMenuURLWithDelimiterLimit(reader, false, limit)
 	}
 	fd := int(file.Fd())
 	before, err := unix.IoctlGetTermios(fd, unix.TCGETS)
 	if errors.Is(err, unix.ENOTTY) {
 		// An ordinary redirected file/pipe does not have terminal echo.
 		showPrompt()
-		return readPrivateMenuLine(reader)
+		return readMenuURLWithDelimiterLimit(reader, false, limit)
 	}
 	if err != nil {
 		// An unreadable/indeterminate terminal must not silently fall back
@@ -118,7 +126,7 @@ func readPrivateMenuURLWithPrompt(input io.Reader, reader *bufio.Reader, prompt 
 		}
 	}()
 	showPrompt()
-	return readPrivateMenuLine(reader)
+	return readMenuURLWithDelimiterLimit(reader, false, limit)
 }
 
 // normalizeMenuSetupPaste removes only exact, known clipboard presentation
@@ -193,6 +201,7 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		menuOption(out, "2", "WireGuard / IPsec", "Sensitive; hidden paste")
 		menuOption(out, "3", "WireGuard / WSS + TLS", "Sensitive peer JSON; hidden paste")
 		menuOption(out, "4", "WireGuard / QUIC + TLS", "Sensitive peer JSON; hidden paste")
+		menuOption(out, "5", "MASQUE / CONNECT-IP", "Sensitive peer JSON; hidden paste")
 		menuOption(out, "0", "Back", "Main menu")
 		fmt.Fprint(out, "Choose type [1]: ")
 		mode, err := readMenuAnswer(reader)
@@ -200,7 +209,7 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			return 0
 		}
 		if err != nil {
-			menuNotice(out, "WARNING", "Choose a listed number: 0, 1, 2, 3 or 4.")
+			menuNotice(out, "WARNING", "Choose a listed number: 0, 1, 2, 3, 4 or 5.")
 			continue
 		}
 		if mode == "" {
@@ -209,9 +218,12 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		if mode == "0" || strings.EqualFold(mode, "q") {
 			return 0
 		}
-		if mode != "1" && mode != "2" && mode != "3" && mode != "4" {
-			menuNotice(out, "WARNING", "Choose 1 for GRE/IPIP/L2TPv3, 2 for WireGuard/IPsec, 3 for WireGuard/WSS or 4 for WireGuard/QUIC.")
+		if mode != "1" && mode != "2" && mode != "3" && mode != "4" && mode != "5" {
+			menuNotice(out, "WARNING", "Choose 1 for plain tunnels, 2 for WireGuard/IPsec, 3 for WSS, 4 for QUIC or 5 for MASQUE.")
 			continue
+		}
+		if mode == "5" {
+			return menuImportMASQUE(input, reader, out, errOut, options)
 		}
 		if mode == "3" || mode == "4" {
 			// Verify selected packages and the optional pinned helper BEFORE

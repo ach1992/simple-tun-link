@@ -19,19 +19,21 @@ import (
 	ipipbackend "github.com/ach1992/simple-tun-link/internal/backend/ipip"
 	ipsecbackend "github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	l2tpbackend "github.com/ach1992/simple-tun-link/internal/backend/l2tpv3"
+	masquebackend "github.com/ach1992/simple-tun-link/internal/backend/masque"
 	wgbackend "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/carrier/wss"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/maintenance"
 	"github.com/ach1992/simple-tun-link/internal/managedmtu"
+	"github.com/ach1992/simple-tun-link/internal/masquehost"
 	"github.com/ach1992/simple-tun-link/internal/quichelper"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 	"github.com/ach1992/simple-tun-link/internal/version"
 )
 
-const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl menu\n  stl update (--local /root/stl/FILENAME | --mirror https://trusted.example/install.sh) --sha256 TRUSTED_SHA256\n  stl update --signed-mirror https://trusted.example/install.sh\n  stl update --url https://trusted.example/path/stl_vX.Y.Z_linux_ARCH_local-install.sh\n  stl mirror-key enroll --file /root/stl/publisher.pem --fingerprint TRUSTED_SHA256 [--rotate]\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link diagnose <link-id> [--mtu <bytes>] [--json]\n  stl link diagnose --all [--timeout <duration>] [--parallel <positive-count>] [--json]\n  stl link throughput <link-id> --confirm <link-id> [--seconds <1..10>] [--json]\n  stl link preview --stdin [--json]\n  stl link import --stdin --confirm <preview-token> [--json]\n  stl link export <link-id> [--json]\n  stl link create-wireguard --stdin --output <private-file> [--json]\n  stl link create-wss --stdin --output <private-file> [--json]\n  stl link create-quic --stdin --output <private-file> [--json]\n  stl link preview-quic --stdin [--json]\n  stl link import-quic --stdin --confirm <preview-sha256> [--json]\n  stl link resume-quic --stdin --confirm <preview-sha256> [--json]\n  stl link diagnose-quic <link-id> [--json]\n  stl link retire-quic <link-id> --confirm <link-id> [--json]\n  stl link reconcile-quic-cold-boot <link-id> --confirm <link-id> [--json]\n  stl link preview-wss --stdin [--json]\n  stl link diagnose-wss <link-id> [--json]\n  stl link plan-wss-replacement <old-link-id> [--json]\n  stl link supersede-wss <old-id> --replacement <new-id> --confirm <old-id> [--json]\n  stl link retire-wss <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-vacant <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-removed <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-repair-vacant <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-original <link-id> --confirm <link-id> [--json]\n  stl link arm-wss-cold-boot <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-cold-boot <link-id> --confirm <link-id> [--json]\n  stl link import-wss --stdin --confirm <preview-sha256> [--json]\n  stl link resume-wss --stdin --confirm <preview-sha256> [--json]\n  stl link create-ipsec --stdin --output <private-file> [--json]\n  stl link activate-ipsec <link-id> --confirm <link-id> [--json]\n  stl link connect-ipsec <link-id> --confirm <link-id> [--json]\n  stl link retire-ipsec <link-id> --confirm <link-id> [--json]\n  stl link reconcile-ipsec <link-id> --confirm <link-id> [--json]\n  stl link reconcile-xfrm-ipsec <link-id> --confirm <link-id> [--json]\n  stl link resume-wireguard --stdin --confirm <setup-digest> [--json]\n  stl link recover-handoff --source <private-temp> --output <private-file> --confirm <link-id> [--json]\n  stl link credential retire <link-id> --confirm <link-id> --public-key <local-public-key> [--json]\n  stl link ensure --stdin [--json]\n  stl link remove <link-id> --confirm <link-id> [--json]\n  stl link restore --all\n  stl doctor ipsec [--json]\n  stl maintenance pre-uninstall --json\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
+const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl menu\n  stl update (--local /root/stl/FILENAME | --mirror https://trusted.example/install.sh) --sha256 TRUSTED_SHA256\n  stl update --signed-mirror https://trusted.example/install.sh\n  stl update --url https://trusted.example/path/stl_vX.Y.Z_linux_ARCH_local-install.sh\n  stl mirror-key enroll --file /root/stl/publisher.pem --fingerprint TRUSTED_SHA256 [--rotate]\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link diagnose <link-id> [--mtu <bytes>] [--json]\n  stl link diagnose --all [--timeout <duration>] [--parallel <positive-count>] [--json]\n  stl link throughput <link-id> --confirm <link-id> [--seconds <1..10>] [--json]\n  stl link preview --stdin [--json]\n  stl link import --stdin --confirm <preview-token> [--json]\n  stl link export <link-id> [--json]\n  stl link create-wireguard --stdin --output <private-file> [--json]\n  stl link create-wss --stdin --output <private-file> [--json]\n  stl link create-quic --stdin --output <private-file> [--json]\n  stl link create-masque --stdin --output <private-file> [--json]\n  stl link preview-masque --stdin [--json]\n  stl link import-masque --stdin --confirm <preview-sha256> [--json]\n  stl link resume-masque --stdin --confirm <preview-sha256> [--json]\n  stl link reconcile-masque <link-id> --confirm <link-id> [--json]\n  stl link retire-masque <link-id> --confirm <link-id> [--json]\n  stl link preview-quic --stdin [--json]\n  stl link import-quic --stdin --confirm <preview-sha256> [--json]\n  stl link resume-quic --stdin --confirm <preview-sha256> [--json]\n  stl link diagnose-quic <link-id> [--json]\n  stl link retire-quic <link-id> --confirm <link-id> [--json]\n  stl link reconcile-quic-cold-boot <link-id> --confirm <link-id> [--json]\n  stl link preview-wss --stdin [--json]\n  stl link diagnose-wss <link-id> [--json]\n  stl link plan-wss-replacement <old-link-id> [--json]\n  stl link supersede-wss <old-id> --replacement <new-id> --confirm <old-id> [--json]\n  stl link retire-wss <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-vacant <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-removed <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-repair-vacant <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-original <link-id> --confirm <link-id> [--json]\n  stl link arm-wss-cold-boot <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-cold-boot <link-id> --confirm <link-id> [--json]\n  stl link import-wss --stdin --confirm <preview-sha256> [--json]\n  stl link resume-wss --stdin --confirm <preview-sha256> [--json]\n  stl link create-ipsec --stdin --output <private-file> [--json]\n  stl link activate-ipsec <link-id> --confirm <link-id> [--json]\n  stl link connect-ipsec <link-id> --confirm <link-id> [--json]\n  stl link retire-ipsec <link-id> --confirm <link-id> [--json]\n  stl link reconcile-ipsec <link-id> --confirm <link-id> [--json]\n  stl link reconcile-xfrm-ipsec <link-id> --confirm <link-id> [--json]\n  stl link resume-wireguard --stdin --confirm <setup-digest> [--json]\n  stl link recover-handoff --source <private-temp> --output <private-file> --confirm <link-id> [--json]\n  stl link credential retire <link-id> --confirm <link-id> --public-key <local-public-key> [--json]\n  stl link ensure --stdin [--json]\n  stl link remove <link-id> --confirm <link-id> [--json]\n  stl link restore --all\n  stl doctor ipsec [--json]\n  stl maintenance pre-uninstall --json\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
 
 const jsonSchemaVersion = 1
 
@@ -50,8 +52,9 @@ type runtimeOptions struct {
 	// canonical Engine's locked, generation-bound QUIC inspection.
 	quicObserver func(context.Context, domain.LinkID) (app.QUICInspection, error)
 	// Test-only helper diagnostic source; nil uses attributed native Host.Diagnose.
-	quicHelperObserver func(context.Context, domain.Link) (quichelper.HelperDiagnostics, error)
-	quicRetirementHost quicRetirementHost
+	quicHelperObserver   func(context.Context, domain.Link) (quichelper.HelperDiagnostics, error)
+	quicRetirementHost   quicRetirementHost
+	masqueRetirementHost app.MASQUERetirementStore
 	// Test-only assembly hook; production never receives a caller-selected Engine policy.
 	configureEngine func(*app.Engine)
 	// Test-only module observation seam. Production uses the real read-only
@@ -71,6 +74,9 @@ type runtimeOptions struct {
 	// Test seam for a failure immediately after final handoff publication.
 	// Production always uses the real protected, no-clobber writer.
 	writeHandoff func(string, []byte) error
+	// Only a freshly confirmed guided Create receives this scoped menu-owned
+	// handoff identity. Public CLI --output never acquires menu provenance.
+	menuHandoffID domain.LinkID
 	// Test-only read-only official release catalogue; nil uses bounded GitHub HTTPS.
 	menuReleases func(context.Context) ([]menuOfficialRelease, error)
 }
@@ -128,6 +134,8 @@ func runWithRuntimeInput(args []string, input io.Reader, stdout, stderr io.Write
 			return 2
 		}
 		return menuCommand(input, stdout, stderr, options)
+	case "masque-helper":
+		return masqueHelperCommand(args[1:], stdout, stderr)
 	case "version":
 		if len(args) == 2 && args[1] == "--json" {
 			payload := struct {
@@ -192,6 +200,16 @@ func runWithRuntimeInput(args []string, input io.Reader, stdout, stderr io.Write
 		}
 		if len(args) >= 2 && args[1] == "diagnose-quic" {
 			return linkQUICDiagnoseCommand(args[1:], stdout, stderr, options)
+		}
+		if len(args) >= 2 && args[1] == "retire-masque" {
+			return linkMASQUERetirementCommand(args[2:], stdout, stderr, options)
+		}
+		if len(args) >= 2 && args[1] == "reconcile-masque" {
+			return linkMASQUEReconcileCommand(args[2:], stdout, stderr, options)
+		}
+		if len(args) >= 2 && (args[1] == "create-masque" || args[1] == "preview-masque" ||
+			args[1] == "import-masque" || args[1] == "resume-masque") {
+			return linkMASQUECommand(args[1:], input, stdout, stderr, options)
 		}
 		if len(args) >= 2 && (args[1] == "create-quic" || args[1] == "preview-quic" ||
 			args[1] == "import-quic" || args[1] == "resume-quic") {
@@ -297,7 +315,8 @@ func assembleRuntimeBackendOptions(stateRoot string, selected domain.Backend) (*
 		switch selected {
 		case domain.BackendGRE, domain.BackendIPIP, domain.BackendL2TPv3,
 			domain.BackendWireGuard, domain.BackendWireGuardWSS,
-			domain.BackendWireGuardQUIC, domain.BackendIPsec:
+			domain.BackendWireGuardQUIC, domain.BackendIPsec,
+			domain.BackendMASQUE:
 		default:
 			return nil, fmt.Errorf("unknown saved backend cannot authorize removal")
 		}
@@ -376,6 +395,27 @@ func assembleRuntimeBackendOptions(stateRoot string, selected domain.Backend) (*
 			options.quicRetirementHost = quicHost
 			options.backends = append(options.backends, quicWG)
 		}
+	}
+
+	if wants(domain.BackendMASQUE) {
+		executable, err := os.Executable()
+		if err != nil {
+			return nil, fmt.Errorf("resolve MASQUE-owning STL executable: %w", err)
+		}
+		executable, err = canonicalSTLExecutable(executable)
+		if err != nil {
+			return nil, err
+		}
+		host, err := masquehost.New(options.stateRoot, executable)
+		if err != nil {
+			return nil, fmt.Errorf("initialize MASQUE host adapter: %w", err)
+		}
+		implementation, err := masquebackend.New(host)
+		if err != nil {
+			return nil, err
+		}
+		options.backends = append(options.backends, implementation)
+		options.masqueRetirementHost = host
 	}
 
 	// Runtime activation is read-only admission followed by registration.
@@ -462,6 +502,9 @@ func buildRuntimeEngine(options runtimeOptions) (*app.Engine, error) {
 		return nil, err
 	}
 	engine.SetMTUManager(options.mtuManager)
+	if options.masqueRetirementHost != nil {
+		engine.SetMASQUERetirementStore(options.masqueRetirementHost)
+	}
 	if _, hasWSS := registry.Get(domain.BackendWireGuardWSS); hasWSS {
 		keys, err := wgbackend.NewKeyStore(options.stateRoot)
 		if err != nil {
