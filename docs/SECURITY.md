@@ -62,8 +62,16 @@ machine/JSON Link diagnostics.
   confirmed DELETE or a successfully verified Link Remove. On successful
   Remove, STL deletes only the exact original menu-owned receiver offer
   after committing Link and credential retirement. User-specified CLI
-  --output files remain outside this scope; incomplete or uncertain
-  removal preserves the offer for recovery. A later SHOW
+  `--output` files remain outside this scope: public Create rejects
+  destinations inside the reserved menu-managed directory. Guided Create
+  records a private, nonsecret, exact file-inode/digest origin receipt.
+  Automatic removal requires both that receipt and the original file's
+  matching device/inode/metadata; unknown older files without a receipt
+  remain for explicit inspection rather than being adopted or deleted.
+  Cleanup reacquires the canonical per-Link lock for State-absence and
+  file retirement; failed cleanup reports a *committed* Link removal
+  separately from remaining private artifacts. Incomplete or uncertain
+  Engine removal preserves the offer for recovery. A later SHOW
   requires a real interactive terminal, fresh consent and exact
   matching of the still-committed sender identity. SHOW necessarily
   exposes the secret on the screen/scrollback; disclose this clearly.

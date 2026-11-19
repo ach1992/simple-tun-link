@@ -41,12 +41,27 @@ func linkMASQUEReconcileCommand(args []string, out, errOut io.Writer, options *r
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
+	protectedRemoval, protectedErr := prepareProtectedHandoffForMASQUERecovery(options, id)
 	result, err := engine.ReconcileMASQUE(ctx, id)
 	if err != nil {
 		return lifecycleFailureWithEvidence(out, errOut, jsonOutput,
 			stlerr.CodeOf(err), "link_reconcile-masque", &app.Result{LinkID: id},
 			"MASQUE original host effect remains unverified or receipt retirement incomplete; inspect original State and service",
 			stlerr.EvidenceOf(err), err)
+	}
+	// Reconciled Remove has already committed durable Link retirement. Only
+	// now may its exact original menu-owned receiver offer be removed.
+	if result.CommittedRemoved {
+		if protectedErr == nil {
+			protectedErr = protectedRemoval.retireAfterRemove(options)
+		}
+		if protectedErr != nil {
+			return lifecycleFailureWithEvidence(out, errOut, jsonOutput,
+				stlerr.CodeState, "link_reconcile-masque", &app.Result{LinkID: id, Removed: true},
+				"MASQUE Remove was reconciled and committed, but the original private receiver Setup Link cleanup is incomplete; do not repeat Remove",
+				&stlerr.OperationEvidence{Stage: "protected_handoff_cleanup", HostMutation: "attempted",
+					DesiredState: "committed", Rollback: "not_required"}, nil)
+		}
 	}
 	if jsonOutput {
 		payload := struct {

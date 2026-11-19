@@ -147,7 +147,7 @@ func menuCreateIPsec(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		return 1
 	}
 	code := linkCreateIPsecCommand([]string{"create-ipsec", "--stdin", "--output", handoff},
-		bytes.NewReader(payload), out, errOut, options)
+		bytes.NewReader(payload), out, errOut, menuHandoffCreationOptions(options, id))
 	if code != 0 {
 		fmt.Fprintln(errOut, "If a protected handoff was already staged, keep that file and reconcile before starting a new IPsec setup.")
 		return code

@@ -174,7 +174,7 @@ func menuCreateMASQUE(input io.Reader, reader *bufio.Reader, out, errOut io.Writ
 		return 1
 	}
 	menuScreen(out, "Applying / MASQUE managed Link")
-	code := linkMASQUECommand([]string{"create-masque", "--stdin", "--output", path}, bytes.NewReader(payload), out, errOut, opts)
+	code := linkMASQUECommand([]string{"create-masque", "--stdin", "--output", path}, bytes.NewReader(payload), out, errOut, menuHandoffCreationOptions(opts, id))
 	if code != 0 {
 		menuNotice(out, "WARNING", "Creation is not confirmed. Preserve the exact handoff, State and private files for inspection/reconciliation; do not regenerate an active identity.")
 		return code

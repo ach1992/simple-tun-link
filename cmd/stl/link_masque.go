@@ -233,8 +233,7 @@ func createMASQUE(in io.Reader, output string, jsonOutput bool, out, errOut io.W
 	var request masqueCreateRequestV1
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&request) != nil || request.SchemaVersion != 1 ||
-		checkSensitiveHandoffDestination(output) != nil {
+	if decoder.Decode(&request) != nil || request.SchemaVersion != 1 {
 		return masqueCommandError(op, jsonOutput, "", stlerr.CodeInvalid, "invalid creator fields or private output destination", out, errOut)
 	}
 	id := request.LinkID
@@ -247,6 +246,9 @@ func createMASQUE(in io.Reader, output string, jsonOutput bool, out, errOut io.W
 		if err != nil {
 			return masqueCommandError(op, jsonOutput, "", stlerr.CodeState, "cannot allocate Link identity", out, errOut)
 		}
+	}
+	if err := checkCreatorHandoffDestination(options, id, output); err != nil {
+		return masqueCommandError(op, jsonOutput, id, stlerr.CodeInvalid, "private output destination is unsafe or reserved for guided Create", out, errOut)
 	}
 	sender, receiver, err := request.makePair(id)
 	if err != nil {

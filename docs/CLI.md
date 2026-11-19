@@ -158,8 +158,14 @@ encapsulations/IPsec remain discoverable.
   without calling an absent directory unsafe or exposing secrets.
   Delete receiver link removes only a verified **menu-saved**
   receiver offer while the Link remains active. A successful confirmed
-  Remove also automatically deletes that same original menu-saved offer,
-  not unrelated CLI --output files; uncertain Remove preserves it and a
+  Remove also automatically deletes only an origin-attested original
+  menu-saved offer and its exact nonsecret owner receipt. Public
+  `--output` cannot publish into STL's reserved `receiver-handoffs/`
+  namespace; ordinary independent private paths remain permitted.
+  Older unmarked reserved originals are preserved for explicit inspection
+  rather than guessed ownership. Interrupted MASQUE Remove reconciliation
+  applies the same cleanup only after verified absence and committed
+  recovery. An uncertain Remove preserves the original, and a
   cleanup error reports the committed Link removal as
   `outcome=removed_cleanup_incomplete` with an exact cleanup reason and
   `partial_result.removed=true`, without claiming the private file vanished.

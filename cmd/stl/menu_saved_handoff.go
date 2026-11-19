@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ach1992/simple-tun-link/internal/app"
 	ipsecbackend "github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/pairing"
@@ -20,6 +21,116 @@ import (
 )
 
 const protectedMenuHandoffDir = "receiver-handoffs"
+
+// Public --output is operator-owned, even if it deliberately points into
+// STL's State root. The menu's private namespace is a separate ownership
+// contract: only a fresh, confirmed guided Create may publish its exact ID
+// there. This check must run before any new credential is generated.
+func checkCreatorHandoffDestination(options *runtimeOptions, id domain.LinkID, output string) error {
+	if err := checkSensitiveHandoffDestination(output); err != nil {
+		return err
+	}
+	root := createStateRoot(options)
+	if root == "" || id.Validate() != nil {
+		return fmt.Errorf("cannot verify private receiver handoff ownership")
+	}
+	reserved := filepath.Join(root, protectedMenuHandoffDir)
+	rel, err := filepath.Rel(reserved, output)
+	if err != nil {
+		return fmt.Errorf("cannot compare receiver handoff ownership")
+	}
+	if rel == "." || rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		expected, pathErr := protectedMenuHandoffPath(options, id)
+		if pathErr != nil || options == nil || options.menuHandoffID != id || output != expected {
+			return fmt.Errorf("reserved receiver handoff directory is owned by guided Create, not CLI --output")
+		}
+	}
+	return nil
+}
+
+// The scoped identity lives only on a copy passed to a guided Create
+// after its own real-terminal confirmation and protected path preparation.
+func menuHandoffCreationOptions(options *runtimeOptions, id domain.LinkID) *runtimeOptions {
+	if options == nil {
+		return &runtimeOptions{stateRoot: state.DefaultRoot, menuHandoffID: id}
+	}
+	scoped := *options
+	scoped.menuHandoffID = id
+	return &scoped
+}
+
+// Only the guided menu writes this nonsecret, owner-private origin receipt.
+// Previous releases could let a public CLI choose the same pathname; such a
+// file is not automatically menu-owned without this distinct proof.
+func menuHandoffOriginPath(options *runtimeOptions, id domain.LinkID) (string, error) {
+	path, err := protectedMenuHandoffPath(options, id)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(path, ".stl") + ".origin", nil
+}
+
+func menuHandoffOriginText(id domain.LinkID, original string, stat unix.Stat_t) string {
+	digest := sha256.Sum256([]byte(original + "\n"))
+	return fmt.Sprintf("stl-menu-origin-v1 %s %x %d %d %d %d %d %d",
+		id, digest, stat.Dev, stat.Ino, stat.Ctim.Sec, stat.Ctim.Nsec,
+		stat.Mtim.Sec, stat.Mtim.Nsec)
+}
+
+// Read only the exact original and its still-committed sender identity.
+// Absence/mismatch never grants permission to synthesize a menu receipt.
+func recordMenuHandoffOrigin(options *runtimeOptions, id domain.LinkID) error {
+	ctx, cancel := context.WithTimeout(context.Background(), readOperationTimeout)
+	defer cancel()
+	snapshot, err := state.NewFileStore(createStateRoot(options)).Load(ctx)
+	if err != nil {
+		return fmt.Errorf("saved Link unavailable for menu origin proof")
+	}
+	record, present := snapshot.Find(id)
+	if !present {
+		return fmt.Errorf("menu origin proof requires a committed Link")
+	}
+	original, err := validatedSavedProtectedMenuOffer(options, record.Desired)
+	if err != nil {
+		return fmt.Errorf("saved menu original cannot be validated")
+	}
+	filePath, err := protectedMenuHandoffPath(options, id)
+	if err != nil {
+		return err
+	}
+	readBack, stat, err := readPrivateHandoffFileWithStat(filePath)
+	if err != nil || readBack != original {
+		return fmt.Errorf("saved menu offer changed before provenance publication")
+	}
+	markerPath, err := menuHandoffOriginPath(options, id)
+	if err != nil {
+		return err
+	}
+	expected := menuHandoffOriginText(id, original, stat)
+	current, err := readPrivateHandoffFile(markerPath)
+	if err == nil {
+		if current == expected {
+			return nil // Confirmed idempotent original, not an adoption.
+		}
+		return fmt.Errorf("menu origin receipt already exists with different identity")
+	}
+	if !errors.Is(err, errProtectedMenuOfferMissing) {
+		return fmt.Errorf("existing menu origin receipt cannot be verified")
+	}
+	return writeSensitiveHandoff(markerPath, []byte(expected+"\n"))
+}
+
+func verifiedMenuHandoffOrigin(options *runtimeOptions, id domain.LinkID, original string, stat unix.Stat_t) (string, [sha256.Size]byte, unix.Stat_t, error) {
+	path, err := menuHandoffOriginPath(options, id)
+	if err != nil {
+		return "", [sha256.Size]byte{}, unix.Stat_t{}, err
+	}
+	actual, markerStat, err := readPrivateHandoffFileWithStat(path)
+	if err != nil || actual != menuHandoffOriginText(id, original, stat) {
+		return "", [sha256.Size]byte{}, unix.Stat_t{}, fmt.Errorf("saved receiver offer has no matching verified menu origin; preserve it for explicit inspection")
+	}
+	return path, sha256.Sum256([]byte(actual + "\n")), markerStat, nil
+}
 
 var errProtectedMenuOfferMissing = errors.New("original protected receiver Setup Link not saved here")
 
@@ -73,20 +184,27 @@ func prepareProtectedMenuHandoff(options *runtimeOptions, id domain.LinkID) (str
 // private-ancestor checks. Never accept an arbitrary filename or even a
 // regular file with extra hardlinks/incorrect ownership/mode.
 func readPrivateHandoffFile(path string) (string, error) {
+	raw, _, err := readPrivateHandoffFileWithStat(path)
+	return raw, err
+}
+
+// Every validated read can also pin the original device/inode/metadata
+// without ever returning secret material in logs or machine output.
+func readPrivateHandoffFileWithStat(path string) (string, unix.Stat_t, error) {
 	dir, err := openPrivateHandoffParent(filepath.Dir(path))
 	if errors.Is(err, os.ErrNotExist) {
-		return "", errProtectedMenuOfferMissing
+		return "", unix.Stat_t{}, errProtectedMenuOfferMissing
 	}
 	if err != nil {
-		return "", fmt.Errorf("protected handoff directory not trusted")
+		return "", unix.Stat_t{}, fmt.Errorf("protected handoff directory not trusted")
 	}
 	defer unix.Close(dir)
 	fd, err := unix.Openat(dir, filepath.Base(path), unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if errors.Is(err, unix.ENOENT) {
-		return "", errProtectedMenuOfferMissing
+		return "", unix.Stat_t{}, errProtectedMenuOfferMissing
 	}
 	if err != nil {
-		return "", fmt.Errorf("saved protected receiver handoff not available")
+		return "", unix.Stat_t{}, fmt.Errorf("saved protected receiver handoff not available")
 	}
 	file := os.NewFile(uintptr(fd), "protected-receiver-handoff")
 	defer file.Close()
@@ -94,26 +212,26 @@ func readPrivateHandoffFile(path string) (string, error) {
 	if err := unix.Fstat(fd, &before); err != nil || before.Mode&unix.S_IFMT != unix.S_IFREG ||
 		before.Uid != uint32(os.Geteuid()) || before.Mode&0o777 != 0o600 ||
 		before.Nlink != 1 || before.Size < 1 || before.Size > int64(max(pairing.MaxLinkBytes, maxMASQUEOfferBytes)+1) {
-		return "", fmt.Errorf("receiver handoff file failed trusted identity/mode checks")
+		return "", unix.Stat_t{}, fmt.Errorf("receiver handoff file failed trusted identity/mode checks")
 	}
 	data, err := io.ReadAll(io.LimitReader(file, max(pairing.MaxLinkBytes, maxMASQUEOfferBytes)+2))
 	if err != nil || len(data) != int(before.Size) {
-		return "", fmt.Errorf("cannot safely read exact receiver handoff")
+		return "", unix.Stat_t{}, fmt.Errorf("cannot safely read exact receiver handoff")
 	}
 	var after unix.Stat_t
 	if err := unix.Fstat(fd, &after); err != nil ||
 		before.Ino != after.Ino || before.Dev != after.Dev || before.Size != after.Size ||
 		before.Ctim != after.Ctim || before.Mtim != after.Mtim {
-		return "", fmt.Errorf("receiver handoff changed during the read")
+		return "", unix.Stat_t{}, fmt.Errorf("receiver handoff changed during the read")
 	}
 	if len(data) < 7 || data[len(data)-1] != '\n' {
-		return "", fmt.Errorf("saved handoff has invalid line framing")
+		return "", unix.Stat_t{}, fmt.Errorf("saved handoff has invalid line framing")
 	}
 	data = data[:len(data)-1]
 	if strings.IndexByte(string(data), '\n') >= 0 || strings.IndexByte(string(data), '\r') >= 0 {
-		return "", fmt.Errorf("saved handoff has invalid line framing")
+		return "", unix.Stat_t{}, fmt.Errorf("saved handoff has invalid line framing")
 	}
-	return string(data), nil
+	return string(data), before, nil
 }
 
 func validatedSavedProtectedMenuOffer(options *runtimeOptions, selected domain.Link) (string, error) {
@@ -354,9 +472,15 @@ func validatedExternalMASQUEMenuOffer(options *runtimeOptions, selected domain.L
 // generation can be validated against the authenticated sender State. CLI
 // --output files are deliberately outside this ownership boundary.
 type protectedHandoffRemoval struct {
-	id     domain.LinkID
-	path   string
-	digest [sha256.Size]byte
+	id               domain.LinkID
+	originalDesired  domain.Link // prevents CLI Remove from retiring a changed sender generation
+	path             string
+	digest           [sha256.Size]byte
+	originalStat     unix.Stat_t
+	originPath       string
+	originDigest     [sha256.Size]byte
+	originStat       unix.Stat_t
+	recoveryOriginal *domain.Link // only a journal-bound MASQUE Remove reconciliation
 }
 
 func prepareProtectedHandoffRemoval(options *runtimeOptions, id domain.LinkID) (*protectedHandoffRemoval, error) {
@@ -386,23 +510,113 @@ func prepareProtectedHandoffRemoval(options *runtimeOptions, id domain.LinkID) (
 	if err != nil {
 		return nil, fmt.Errorf("original menu-owned receiver offer could not be verified")
 	}
-	return &protectedHandoffRemoval{id: id, path: path, digest: sha256.Sum256([]byte(original + "\n"))}, nil
+	// Pin the exact validated bytes and inode before the destructive Engine
+	// Remove. Identical bytes copied into a different inode are not owned.
+	readBack, originalStat, err := readPrivateHandoffFileWithStat(path)
+	if err != nil || readBack != original {
+		return nil, fmt.Errorf("original receiver offer identity changed before removal")
+	}
+	originPath, originDigest, originStat, err := verifiedMenuHandoffOrigin(options, id, original, originalStat)
+	if err != nil {
+		return nil, err
+	}
+	return &protectedHandoffRemoval{id: id, originalDesired: record.Desired, path: path, digest: sha256.Sum256([]byte(original + "\n")),
+		originalStat: originalStat, originPath: originPath, originDigest: originDigest, originStat: originStat}, nil
+}
+
+// The normal private offer validator rightly rejects a pending MASQUE host
+// operation. Reconcile is different: an exact, committed sender and the
+// matching durable interrupted-Remove journal authorize *preparation only*.
+// Host absence and successful committed recovery still gate actual deletion.
+func prepareProtectedHandoffForMASQUERecovery(options *runtimeOptions, id domain.LinkID) (*protectedHandoffRemoval, error) {
+	root := createStateRoot(options)
+	snapshot, err := state.NewFileStore(root).Load(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("cannot inspect MASQUE recovery State before private cleanup")
+	}
+	pending, exists := snapshot.FindMASQUEOperation(id)
+	if !exists || pending.Operation != "remove" || !pending.HadCommittedLink {
+		return nil, nil // No committed interrupted Remove can retire a menu offer.
+	}
+	record, present := snapshot.Find(id)
+	if !present || record.Desired != pending.Intent || record.Desired.Backend != domain.BackendMASQUE {
+		return nil, fmt.Errorf("MASQUE pending Remove does not match the committed sender")
+	}
+	path, err := protectedMenuHandoffPath(options, id)
+	if err != nil {
+		return nil, err
+	}
+	original, originalStat, err := readPrivateHandoffFileWithStat(path)
+	if errors.Is(err, errProtectedMenuOfferMissing) {
+		return nil, nil // An importing receiver or independent CLI sender.
+	}
+	if err != nil {
+		return nil, fmt.Errorf("pending MASQUE original menu offer cannot be verified")
+	}
+	offer, private, err := decodeMASQUEOffer(strings.NewReader(original), root)
+	defer clear(private)
+	if err != nil {
+		return nil, fmt.Errorf("pending MASQUE original receiver offer is invalid")
+	}
+	defer offer.Clear()
+	if offer.Sender != pending.Intent {
+		return nil, fmt.Errorf("pending MASQUE private offer does not match the original sender generation")
+	}
+	originPath, originDigest, originStat, err := verifiedMenuHandoffOrigin(options, id, original, originalStat)
+	if err != nil {
+		return nil, err
+	}
+	expected := pending.Intent
+	return &protectedHandoffRemoval{id: id, originalDesired: expected, path: path,
+		digest: sha256.Sum256([]byte(original + "\n")), originalStat: originalStat,
+		originPath: originPath, originDigest: originDigest, originStat: originStat,
+		recoveryOriginal: &expected}, nil
 }
 
 func (prepared *protectedHandoffRemoval) retireAfterRemove(options *runtimeOptions) error {
 	if prepared == nil {
 		return nil
 	}
-	// Refuse to delete an offer for an identity that was independently
-	// re-created while this CLI invocation was removing the old Link.
-	snapshot, err := state.NewFileStore(createStateRoot(options)).Load(context.Background())
+	root := createStateRoot(options)
+	ctx, cancel := context.WithTimeout(context.Background(), readOperationTimeout)
+	defer cancel()
+	// The Engine releases its Link lock on return. Reacquire that SAME lock
+	// across the final State read AND file unlink, so another authorized
+	// Ensure/Remove/Recovery cannot change this Link between them.
+	release, err := state.NewLockManager(root).Acquire(ctx, []domain.ResourceClaim{app.LinkLockClaim(prepared.id)})
+	if err != nil {
+		return fmt.Errorf("cannot lock Link for original receiver-offer cleanup")
+	}
+	defer release()
+	snapshot, err := state.NewFileStore(root).Load(ctx)
 	if err != nil {
 		return fmt.Errorf("cannot verify absent Link after committed removal")
 	}
 	if _, present := snapshot.Find(prepared.id); present {
 		return fmt.Errorf("Link identity changed after removal; private offer preserved")
 	}
-	return unlinkMatchingProtectedHandoff(prepared.path, prepared.digest)
+	if _, pending := snapshot.FindMASQUEOperation(prepared.id); pending {
+		return fmt.Errorf("MASQUE original operation remains unresolved; private offer preserved")
+	}
+	if _, pending := snapshot.FindQUICCrashOperation(prepared.id); pending {
+		return fmt.Errorf("QUIC original operation remains unresolved; private offer preserved")
+	}
+	if _, pending := snapshot.FindPendingSender(prepared.id); pending {
+		return fmt.Errorf("original sender reservation remains unresolved; private offer preserved")
+	}
+	if prepared.recoveryOriginal != nil {
+		receipt, found := snapshot.FindMASQUERemovalReceipt(prepared.id)
+		if !found || receipt.Link != *prepared.recoveryOriginal ||
+			receipt.Purpose != "removed" || !receipt.Retired {
+			return fmt.Errorf("MASQUE recovered removal receipt is not the verified original; private offer preserved")
+		}
+	}
+	if err := unlinkMatchingProtectedHandoffBound(prepared.path, prepared.digest, &prepared.originalStat); err != nil {
+		return err
+	}
+	// Origin receipt is now obsolete. A mismatch is a committed cleanup
+	// failure, not permission to unlink an unverified replacement.
+	return unlinkMatchingProtectedHandoffBound(prepared.originPath, prepared.originDigest, &prepared.originStat)
 }
 
 // The same bounded descriptor-relative deletion is used by the optional
@@ -410,6 +624,10 @@ func (prepared *protectedHandoffRemoval) retireAfterRemove(options *runtimeOptio
 // hardlink, symlink, substituted content or altered inode cannot authorize
 // removal of someone else's private file.
 func unlinkMatchingProtectedHandoff(path string, expected [sha256.Size]byte) error {
+	return unlinkMatchingProtectedHandoffBound(path, expected, nil)
+}
+
+func unlinkMatchingProtectedHandoffBound(path string, expected [sha256.Size]byte, original *unix.Stat_t) error {
 	dir, err := openPrivateHandoffParent(filepath.Dir(path))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil // The owned private directory is already gone.
@@ -433,6 +651,10 @@ func unlinkMatchingProtectedHandoff(path string, expected [sha256.Size]byte) err
 		before.Mode&0o777 != 0o600 || before.Uid != uint32(os.Geteuid()) || before.Nlink != 1 ||
 		before.Size < 1 || before.Size > int64(max(pairing.MaxLinkBytes, maxMASQUEOfferBytes)+1) {
 		return fmt.Errorf("protected handoff file ownership or length cannot be verified")
+	}
+	if original != nil && (before.Dev != original.Dev || before.Ino != original.Ino ||
+		before.Size != original.Size || before.Ctim != original.Ctim || before.Mtim != original.Mtim) {
+		return fmt.Errorf("original protected receiver handoff inode changed; no deletion")
 	}
 	data, err := io.ReadAll(io.LimitReader(file, max(pairing.MaxLinkBytes, maxMASQUEOfferBytes)+2))
 	defer clear(data)
@@ -467,7 +689,29 @@ func secureDeleteProtectedMenuHandoff(options *runtimeOptions, selected domain.L
 	if err != nil {
 		return err
 	}
-	return unlinkMatchingProtectedHandoff(path, sha256.Sum256([]byte(original+"\n")))
+	readBack, stat, err := readPrivateHandoffFileWithStat(path)
+	if err != nil || readBack != original {
+		return fmt.Errorf("saved original changed before explicit deletion")
+	}
+	markerPath, markerDigest, markerStat, markerErr := verifiedMenuHandoffOrigin(options, selected.ID, original, stat)
+	if markerErr != nil {
+		// Fresh TTY DELETE explicitly authorizes removal of a legacy
+		// menu original without an origin receipt. Refuse altered receipts.
+		path, pathErr := menuHandoffOriginPath(options, selected.ID)
+		if pathErr != nil {
+			return pathErr
+		}
+		if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
+			return fmt.Errorf("unverified menu origin receipt blocks explicit deletion")
+		}
+	}
+	if err := unlinkMatchingProtectedHandoffBound(path, sha256.Sum256([]byte(original+"\n")), &stat); err != nil {
+		return err
+	}
+	if markerErr == nil {
+		return unlinkMatchingProtectedHandoffBound(markerPath, markerDigest, &markerStat)
+	}
+	return nil
 }
 
 func menuSensitiveHandoffAction(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
@@ -581,6 +825,11 @@ func menuSensitiveHandoffAction(input io.Reader, reader *bufio.Reader, out, errO
 // trip through Manage/Share. Redirected output, error streams and automation
 // never receive credentials. Subsequent sharing keeps its own SHOW gate.
 func menuShowNewProtectedHandoff(input io.Reader, out io.Writer, options *runtimeOptions, id domain.LinkID) {
+	// Publication is menu-scoped even when no TTY is available for display.
+	// Never upgrade an unknown legacy CLI file into menu-owned provenance.
+	if err := recordMenuHandoffOrigin(options, id); err != nil {
+		menuNotice(out, "WARNING", "Saved private receiver offer cannot be verified as menu-owned for automatic removal; preserve it for explicit inspection.")
+	}
 	in, inputOK := input.(*os.File)
 	_, outputOK := menuTerminal(out)
 	if !inputOK || !terminalIsInteractive(in) || !outputOK {

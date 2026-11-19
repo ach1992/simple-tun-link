@@ -175,7 +175,7 @@ func menuCreateWireGuard(input io.Reader, reader *bufio.Reader, out, errOut io.W
 		fmt.Fprintln(errOut, "Cannot safely reserve the private Setup Link file; no new keypair generated.")
 		return 1
 	}
-	code := linkCreateWireGuardCommand([]string{"create-wireguard", "--stdin", "--output", path}, bytes.NewReader(payload), out, errOut, options)
+	code := linkCreateWireGuardCommand([]string{"create-wireguard", "--stdin", "--output", path}, bytes.NewReader(payload), out, errOut, menuHandoffCreationOptions(options, id))
 	if code != 0 {
 		fmt.Fprintln(errOut, "If a SENSITIVE file was published, retain it privately for explicit resume/reconciliation.")
 		return code

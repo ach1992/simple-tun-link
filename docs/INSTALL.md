@@ -1156,7 +1156,9 @@ When saved Links remain, the menu guides each confirmed
 names**. A successful verified Remove also retires the matching original
 STL-saved receiver Setup Link for WireGuard/IPsec/WSS/QUIC/MASQUE; no
 separate KEEP/DELETE decision is needed. Independent `--output` files
-remain operator-owned. If credential cleanup is incomplete, reconcile
+remain operator-owned, and only an exact menu-origin-attested original
+is deleted automatically. Historical unmarked originals are preserved
+for explicit inspection. If credential cleanup is incomplete, reconcile
 the exact original private file without repeating Remove.
 With no saved Links, a zero count is **not** proof of safe uninstall; the
 installer still performs the canonical Go preflight under exclusive

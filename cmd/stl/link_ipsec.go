@@ -196,7 +196,7 @@ func linkCreateIPsecCommand(args []string, input io.Reader, out, errOut io.Write
 		return ipsecFailure(out, errOut, isJSON, stlerr.CodeInvalid, op, id,
 			"invalid IPsec/IKEv2 endpoint, Link Address or encapsulation", nil)
 	}
-	if err := checkSensitiveHandoffDestination(args[3]); err != nil {
+	if err := checkCreatorHandoffDestination(opts, id, args[3]); err != nil {
 		return ipsecFailure(out, errOut, isJSON, stlerr.CodeInvalid, op, id,
 			"SENSITIVE handoff destination is unsafe or already occupied", nil)
 	}

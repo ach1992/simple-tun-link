@@ -105,9 +105,14 @@ silently reuse unknown foreign resources or mutate a different Link.
 `stl link retire-masque ID --confirm ID` is the distinct, receipt-bound
 protected-material retirement step after verified removal. A successful
 confirmed Remove also deletes the original receiver offer **only** when
-it was saved into STL's protected menu-managed handoff directory; CLI
---output files remain operator-owned. Incomplete Remove preserves the
-original for recovery. Neither command removes anything on the
+its private menu-owned origin receipt matches the exact saved file
+(including device/inode and digest); independent CLI `--output` remains
+operator-owned and cannot publish into the reserved menu directory.
+Historical unmarked offers are preserved for explicit inspection, not
+silently adopted. Successful `reconcile-masque` of an interrupted Remove
+performs the same verified original-offer retirement **after** proving
+host absence and committing the recovered removal. Incomplete Remove
+preserves the original for recovery. Neither command removes anything on the
 **other** server automatically.
 
 The interactive menu offers **Create tunnel → MASQUE / CONNECT-IP** and

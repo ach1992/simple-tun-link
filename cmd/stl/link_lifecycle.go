@@ -198,6 +198,11 @@ func executeLinkMutationControlled(operation string, desired domain.Link, id dom
 	case "link_remove":
 		if expected != nil {
 			result, err = engine.RemoveIfUnchanged(ctx, *expected)
+		} else if protectedRemoval != nil {
+			// The private original was validated before acquiring Engine's
+			// lock. A changed committed sender must not be removed using
+			// that earlier offer identity, even from the CLI path.
+			result, err = engine.RemoveIfUnchanged(ctx, protectedRemoval.originalDesired)
 		} else {
 			result, err = engine.Remove(ctx, id)
 		}

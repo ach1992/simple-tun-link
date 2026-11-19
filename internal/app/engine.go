@@ -1905,9 +1905,14 @@ func contextualize(err error, fallback stlerr.Code, operation string, link domai
 	return stlerr.Wrap(fallback, operation, string(link.ID), string(link.Backend), detail, err)
 }
 
-func linkLock(id domain.LinkID) domain.ResourceClaim {
+// LinkLockClaim is the canonical cross-process exclusion for a Link ID.
+// Post-commit CLI file cleanup acquires this same lock after Engine Remove
+// returns, so an independently authorized new mutation cannot race it.
+func LinkLockClaim(id domain.LinkID) domain.ResourceClaim {
 	return domain.ResourceClaim{Kind: "stl-link", Key: string(id)}
 }
+
+func linkLock(id domain.LinkID) domain.ResourceClaim { return LinkLockClaim(id) }
 
 func resourceLockClaims(groups ...[]domain.ResourceClaim) ([]domain.ResourceClaim, error) {
 	claims := unionClaims(groups...)

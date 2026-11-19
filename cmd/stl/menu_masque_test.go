@@ -254,6 +254,9 @@ func TestMASQUEOriginalMenuOfferRetiresAfterCommittedStateRemoval(t *testing.T) 
 	if err := writeSensitiveHandoff(path, append(encoded, '\n')); err != nil {
 		t.Fatal(err)
 	}
+	if err := recordMenuHandoffOrigin(opts, sender.ID); err != nil {
+		t.Fatal(err)
+	}
 	prepared, err := prepareProtectedHandoffRemoval(opts, sender.ID)
 	if err != nil || prepared == nil {
 		t.Fatalf("cannot bind genuine MASQUE original to committed sender: %v", err)
