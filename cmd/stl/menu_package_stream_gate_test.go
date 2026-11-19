@@ -31,7 +31,7 @@ func TestPackagePreviewMixedTTYNeverStreamsSensitiveAPTDiagnostics(t *testing.T)
 	selected := tunnelOption{backend: domain.BackendGRE, mode: domain.EncapNative}
 	_, err = preview(context.Background(), selected)
 	reason, next := packageInventoryGuidance(err)
-	if reason != "apt_dependency_plan_unverified" || strings.Contains(reason+next, secret) {
+	if reason != "apt_plan_would_modify_installed_packages" || strings.Contains(reason+next, secret) {
 		t.Fatalf("read-only classified reason unavailable or leaked: %q %q", reason, next)
 	}
 	raw, err := os.ReadFile(stderrFile.Name())
