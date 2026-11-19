@@ -119,6 +119,7 @@ func printManualConnectionDetails(out io.Writer, l domain.Link) {
 		// never substitutes for the original sensitive receiver offer.
 		menuField(out, "QUIC role", l.QUIC.Role+" (this server)")
 		menuField(out, "QUIC obfuscation", publicQUICObfuscation(l.QUIC.Obfuscation))
+		menuField(out, "Public HTTP/3", strconv.FormatBool(l.QUIC.PublicHTTP3))
 		menuField(out, "QUIC TLS UDP port", strconv.Itoa(int(l.QUIC.UDPPort)))
 		if l.QUIC.TLSServerName != "" {
 			menuField(out, "TLS server name", safeMenuText(l.QUIC.TLSServerName))

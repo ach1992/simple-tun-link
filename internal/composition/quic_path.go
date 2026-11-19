@@ -60,7 +60,7 @@ func buildQUICPath(link domain.Link, carrier Carrier, path Path) (Path, error) {
 	if name == "" {
 		name = physical.String()
 	}
-	path.QUIC = QUICHostPlan{Local: local, Physical: netip.AddrPortFrom(physical, carrier.PublicUDPPort), TLSName: name, Obfuscation: link.QUIC.Obfuscation}
+	path.QUIC = QUICHostPlan{Local: local, Physical: netip.AddrPortFrom(physical, carrier.PublicUDPPort), TLSName: name, Obfuscation: link.QUIC.Obfuscation, PublicHTTP3: link.QUIC.PublicHTTP3}
 	if err := path.QUIC.Validate(); err != nil {
 		return Path{}, err
 	}
@@ -93,8 +93,8 @@ func ValidateQUICPeerPair(dialLink domain.Link, dialCarrier Carrier, listenLink 
 		dialLink.WireGuard.PeerPort != listenLink.WireGuard.ListenPort {
 		return fmt.Errorf("QUIC WireGuard keys and ports must be reciprocal")
 	}
-	if dial.QUIC.Physical != listen.QUIC.Physical || dial.TLSName != listen.TLSName || dial.QUIC.Obfuscation != listen.QUIC.Obfuscation {
-		return fmt.Errorf("QUIC peers must agree on the physical UDP listener, TLS server identity and obfuscation mode")
+	if dial.QUIC.Physical != listen.QUIC.Physical || dial.TLSName != listen.TLSName || dial.QUIC.Obfuscation != listen.QUIC.Obfuscation || dial.QUIC.PublicHTTP3 != listen.QUIC.PublicHTTP3 {
+		return fmt.Errorf("QUIC peers must agree on the physical UDP listener, TLS server identity and public HTTP/3 mode")
 	}
 	return nil
 }

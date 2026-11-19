@@ -264,3 +264,71 @@ func TestPhysicalIPSANUsesExactPeerWithoutInventedDNSName(t *testing.T) {
 		t.Fatal("IP SAN must not require a DNS-only SNI")
 	}
 }
+
+// Public HTTP/3 deliberately changes the QUIC TLS handshake, not the
+// destination: the Hysteria password and exact WG-only ACL remain mandatory.
+func TestPublicHTTP3RendererKeepsPrivateForwardingRestricted(t *testing.T) {
+	listener := fixturePlan(Listen)
+	listener.PublicHTTP3 = true
+	listener.LocalWGUDPPort = 51820
+	serverCmd, err := Build(listener, "/opt/stl/hysteria", "/var/lib/simple-tun-link", fixtureToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := unwrap(t, serverCmd)
+	if _, ok := server["masquerade"]; !ok {
+		t.Fatal("public H3 must use the actual QUIC listener masquerade")
+	}
+	if _, ok := server["listenHTTPS"]; ok {
+		t.Fatal("a separate TCP site is not evidence of real H3")
+	}
+	var tlsOpts map[string]any
+	if json.Unmarshal(server["tls"], &tlsOpts) != nil {
+		t.Fatal("bad H3 server TLS config")
+	}
+	if _, exists := tlsOpts["clientCA"]; exists {
+		t.Fatal("public QUIC handshake must not require a client certificate")
+	}
+	if field(t, server, "listen") != listener.Underlay.String() {
+		t.Fatal("H3 moved the actual UDP endpoint")
+	}
+	var acl serverACL
+	var auth serverAuth
+	if json.Unmarshal(server["acl"], &acl) != nil || json.Unmarshal(server["auth"], &auth) != nil ||
+		auth.Type != "password" || auth.Password != fixtureToken ||
+		!reflect.DeepEqual(acl.Inline, []string{"direct(127.0.0.1, udp/51820)", "reject(all)"}) {
+		t.Fatal("public H3 weakened tunnel password or restricted destination")
+	}
+	var web masqueradeConfig
+	if json.Unmarshal(server["masquerade"], &web) != nil ||
+		web.Type != "string" || web.String.StatusCode != 200 ||
+		!strings.Contains(web.String.Content, "<!doctype html>") {
+		t.Fatal("public H3 lacks a valid, real HTTP body")
+	}
+	dial := fixturePlan(Dial)
+	dial.PublicHTTP3 = true
+	dial.LocalForwardUDPPort, dial.PeerWGUDPPort = 53001, 51820
+	clientCmd, err := Build(dial, "/opt/stl/hysteria", "/var/lib/simple-tun-link", fixtureToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := unwrap(t, clientCmd)
+	var clientTLS map[string]any
+	if json.Unmarshal(client["tls"], &clientTLS) != nil || clientTLS["insecure"] != false {
+		t.Fatal("client disabled server certificate verification")
+	}
+	for _, forbidden := range []string{"clientCertificate", "clientKey"} {
+		if _, present := clientTLS[forbidden]; present {
+			t.Fatal("public QUIC dial still presents an unnecessary TLS client certificate")
+		}
+	}
+	for _, key := range []string{"ca", "sni"} {
+		if clientTLS[key] == "" || clientTLS[key] == nil {
+			t.Fatalf("public QUIC client lost server verification: %s", key)
+		}
+	}
+	dial.Obfuscation = domain.QUICObfuscationSalamander
+	if _, err := BuildWithObfuscation(dial, "/opt/stl/hysteria", "/var/lib/simple-tun-link", fixtureToken, strings.Repeat("b", 64)); err == nil {
+		t.Fatal("Salamander cannot impersonate a standard H3 endpoint")
+	}
+}

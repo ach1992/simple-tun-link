@@ -221,7 +221,7 @@ start_client() {
   fail "QUIC dialer did not reach authenticated forwarding readiness"
 }
 start_client
-grep -Fq 'client connected' "$lab/server.log" || fail "server mTLS/bearer admission was not observed"
+grep -Fq 'client connected' "$lab/server.log" || fail "server authenticated QUIC password admission was not observed"
 
 # Fault modes are admitted only after the disposable PID-1, nonce, owner
 # and namespace gates, and only after both real helpers have started.

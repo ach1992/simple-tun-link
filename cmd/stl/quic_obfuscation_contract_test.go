@@ -179,15 +179,97 @@ func TestSalamanderSavedOfferBindsBothSharedSecrets(t *testing.T) {
 	}
 }
 
+func TestQUICPublicHTTP3CreatorAndProtectedOffer(t *testing.T) {
+	original := testQUICCreateRequest()
+	original.SchemaVersion = 2
+	original.PublicHTTP3 = true
+	raw, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeQUICCreateRequest(raw)
+	if err != nil || decoded != original {
+		t.Fatal("public H3 creator failed", err)
+	}
+	for _, bad := range []struct {
+		version int
+		mode    string
+	}{
+		{1, "plain"}, {2, "salamander"},
+	} {
+		rejected := original
+		rejected.SchemaVersion = bad.version
+		rejected.Obfuscation = bad.mode
+		b, _ := json.Marshal(rejected)
+		if _, err := decodeQUICCreateRequest(b); err == nil {
+			t.Fatalf("invalid public H3 creator accepted v%d %q", bad.version, bad.mode)
+		}
+	}
+	offer, _ := testQUICOfferWithMode(t, "")
+	offer.SchemaVersion = 2
+	offer.Sender.QUIC.PublicHTTP3, offer.Receiver.QUIC.PublicHTTP3 = true, true
+	private, err := json.Marshal(offer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(private)
+	reimport, rawOffer, err := decodeQUICOffer(bytes.NewReader(private))
+	if err != nil {
+		var details quicOfferV2
+		if e := json.Unmarshal(private, &details); e == nil {
+			l, le := details.Sender.link()
+			r, re := details.Receiver.link()
+			next := quicOffer{SchemaVersion: 2, Sender: l, Receiver: r, ReceiverWGKey: details.ReceiverWGKey, ReceiverTLS: details.ReceiverTLS}
+			t.Fatalf("H3 private receiver failed import: sender=%v receiver=%v validate=%v decodedModes=%t/%t", le, re, next.validate(), l.QUIC.PublicHTTP3, r.QUIC.PublicHTTP3)
+		}
+		t.Fatal("H3 private receiver failed import", err)
+	}
+	defer reimport.clear()
+	defer clear(rawOffer)
+	if !reimport.Sender.QUIC.PublicHTTP3 || !reimport.Receiver.QUIC.PublicHTTP3 {
+		t.Fatal("H3 offer lost its mode")
+	}
+	var out, stderr bytes.Buffer
+	if code := linkQUICCommand([]string{"preview-quic", "--stdin", "--json"}, bytes.NewReader(private), &out, &stderr, nil); code != 0 {
+		t.Fatal("H3 receiver preview failed")
+	}
+	var preview struct {
+		PublicHTTP3 bool   `json:"public_http3"`
+		Confirm     string `json:"confirmation_sha256"`
+	}
+	if json.Unmarshal(out.Bytes(), &preview) != nil || !preview.PublicHTTP3 ||
+		preview.Confirm != setupLinkConfirmation(string(private)) {
+		t.Fatal("H3 public preview did not confirm the exact protected offer")
+	}
+	for _, secret := range offer.ReceiverTLS {
+		if bytes.Contains(out.Bytes(), secret) {
+			t.Fatal("H3 preview leaked private material")
+		}
+	}
+	changed := offer
+	changed.Sender.QUIC.PublicHTTP3 = false
+	b, err := json.Marshal(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(b)
+	if invalid, payload, err := decodeQUICOffer(bytes.NewReader(b)); err == nil {
+		invalid.clear()
+		clear(payload)
+		t.Fatal("mismatched H3 peer options bypassed pairing")
+	}
+}
+
 func TestQUICMenuObfuscationChoiceUsesCanonicalModes(t *testing.T) {
 	for _, tc := range []struct {
 		input, want string
+		publicHTTP3 bool
 		ok          bool
-	}{{"\n", "", true}, {"1\n", "", true}, {"2\n", "salamander", true}, {"3\n", "", false}, {"", "", false}} {
+	}{{"\n", "", false, true}, {"1\n", "", false, true}, {"2\n", "salamander", false, true}, {"3\n", "", true, true}, {"4\n", "", false, false}, {"", "", false, false}} {
 		var out bytes.Buffer
-		got, err := askQUICObfuscation(createPrompts{reader: bufio.NewReader(strings.NewReader(tc.input)), out: &out, errOut: io.Discard})
-		if (err == nil) != tc.ok || got != tc.want {
-			t.Fatalf("input=%q got=%q err=%v", tc.input, got, err)
+		got, http3, err := askQUICMode(createPrompts{reader: bufio.NewReader(strings.NewReader(tc.input)), out: &out, errOut: io.Discard})
+		if (err == nil) != tc.ok || got != tc.want || http3 != tc.publicHTTP3 {
+			t.Fatalf("input=%q got=%q http3=%t err=%v", tc.input, got, http3, err)
 		}
 		if !strings.Contains(out.String(), "Plain") || !strings.Contains(out.String(), "Salamander") {
 			t.Fatal("mode choices omitted")

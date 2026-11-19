@@ -399,14 +399,18 @@ acceptance and independent review remain separate gates.
 The managed QUIC carrier uses real kernel WireGuard inside the fixed
 Hysteria app/v2.13.0 UDP forwarding configuration. Admission pins the exact
 architecture-specific official executable digest and protected canonical
-path. TLS 1.3, exact server SAN verification, independent client-certificate
-trust and a per-Link bearer are all required. The listener ACL admits only
-its exact loopback WireGuard destination and ends with deny-all. No public
-WG fallback, unrestricted proxy, arbitrary configuration extension or
-certificate-verification bypass is exposed.
+path. TLS 1.3, exact server SAN verification, and an independent per-Link
+Hysteria password are mandatory. Traditional Plain and Salamander require
+client-CA mTLS. Explicit Plain + public HTTP/3 allows anonymous real HTTP/3
+GET on that same UDP listener, with no client-certificate request. The actual
+tunnel still requires its per-Link password plus kernel WireGuard peer
+authentication; the listener ACL admits only its exact loopback WireGuard
+destination and ends with deny-all. No public WG fallback, unrestricted
+proxy, TCP decoy sidecar or disabled server-certificate verification is exposed.
 
-Plain remains the default wire representation. Salamander is an explicit
-per-Link choice using the same fixed pinned helper and all the same TLS/WG
+Traditional Plain with mTLS remains the default menu selection. Public HTTP/3
+is a separate explicitly selected Plain mode, not Salamander. Salamander is an explicit
+per-Link choice using the same fixed pinned helper and the original TLS/WG
 authentication requirements. Its independent 256-bit secret is present only
 in a protected `obfs-secret` file, the exact private helper configuration and
 the sensitive receiver handoff. Both peers must agree on mode and secret.

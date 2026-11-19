@@ -776,22 +776,27 @@ reciprocal peer keys, ports, roles and TLS identity are checked before
 pairing. The same peer pair can have multiple independent Links with distinct
 resource identities. Existing native/WSS/IPsec collisions still apply.
 
-The fixed helper configuration admits only per-Link TLS 1.3 server
-verification, client-certificate authentication with a distinct client CA,
-an independent 256-bit bearer and the exact loopback WG destination. The
-server ACL ends with deny-all. No unrestricted proxy, SOCKS/HTTP/TUN mode,
-realm, masquerading configuration, arbitrary helper option or public WG
-fallback is accepted. Ephemeral CA signing keys are never exported or
+The managed helper configuration always enforces TLS 1.3 server verification,
+an independent per-Link 256-bit Hysteria password and the exact loopback WG
+destination; its ACL ends with deny-all. Traditional Plain and Salamander
+require distinct client-CA mTLS. Explicit **Plain + public HTTP/3** instead
+uses the official pinned helper's real UDP/H3 string masquerade **on the same
+QUIC endpoint**, without a TLS client certificate, while Hysteria password
+and kernel-WireGuard peer authorization still gate private forwarding. This
+mode adds neither a separate TCP HTTPS site nor a general-purpose proxy; it
+cannot be combined with Salamander. IP SAN remains supported; the per-Link
+private server CA is not a publicly browser-trusted certificate. A real H3
+response does not prove Chrome-equivalent ClientHello or network reachability. Ephemeral CA signing keys are never exported or
 persisted; each peer receives only its own leaf key and peer trust anchor.
 
 The public mode is explicit: empty internal `QUICOptions.Obfuscation` is
 Plain; `salamander` selects only the pinned upstream's supported Salamander
 wrapper. New public input may spell Plain as `plain` and normalizes it before
-identity checks. Both peers must agree on the mode. A fresh independent
+identity checks. Both peers must agree on the packet mode and public HTTP/3 choice. A fresh independent
 256-bit obfuscation secret is generated for Salamander; it is never reused
 from the bearer or TLS material. Old Plain configuration bytes, file sets
-and generation identities remain unchanged. Mode changes require a fresh
-paired Link, not an in-place configuration edit or automatic fallback.
+and generation identities remain unchanged. Mode or public HTTP/3 authorization changes require a fresh paired Link,
+not an in-place configuration edit or automatic fallback.
 
 Role-specific material lives below
 `$stateRoot/credentials/quic/<LinkID>/`: four protected credential files

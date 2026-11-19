@@ -83,7 +83,8 @@ func TestPinnedHysteriaKernelWGPairFixture(t *testing.T) {
 			t.Fatal("isolated role root unavailable")
 		}
 		plan := Plan{LinkID: link, Role: entry.role,
-			Underlay: netip.MustParseAddrPort(physical), TLSName: tlsName}
+			Underlay: netip.MustParseAddrPort(physical), TLSName: tlsName,
+			PublicHTTP3: os.Getenv("STL_QUIC_WG_L3_H3") == "approved"}
 		var localWG uint16
 		if entry.role == Listen {
 			plan.LocalWGUDPPort = 51820

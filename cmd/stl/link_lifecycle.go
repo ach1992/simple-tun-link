@@ -602,6 +602,7 @@ func (q desiredQUICOptionsV1) options() domain.QUICOptions {
 type desiredQUICOptionsV2 struct {
 	desiredQUICOptionsV1
 	Obfuscation string `json:"obfuscation,omitempty"`
+	PublicHTTP3 bool   `json:"public_http3,omitempty"`
 }
 
 func (q desiredQUICOptionsV2) options() (domain.QUICOptions, error) {
@@ -611,6 +612,10 @@ func (q desiredQUICOptionsV2) options() (domain.QUICOptions, error) {
 	}
 	options := q.desiredQUICOptionsV1.options()
 	options.Obfuscation = mode
+	if q.PublicHTTP3 && mode != domain.QUICObfuscationPlain {
+		return domain.QUICOptions{}, fmt.Errorf("public HTTP/3 requires plain QUIC")
+	}
+	options.PublicHTTP3 = q.PublicHTTP3
 	return options, nil
 }
 

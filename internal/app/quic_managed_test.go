@@ -228,6 +228,10 @@ func managedQUICEngineFixture(t *testing.T) (*Engine, *managedQUICBackend, domai
 }
 
 func managedQUICEngineFixtureWithObfuscation(t *testing.T, mode string) (*Engine, *managedQUICBackend, domain.Link) {
+	return managedQUICEngineFixtureWithMode(t, mode, false)
+}
+
+func managedQUICEngineFixtureWithMode(t *testing.T, mode string, publicHTTP3 bool) (*Engine, *managedQUICBackend, domain.Link) {
 	t.Helper()
 	root := t.TempDir()
 	store := state.NewFileStore(root)
@@ -244,19 +248,20 @@ func managedQUICEngineFixtureWithObfuscation(t *testing.T, mode string) (*Engine
 	e.SetQUICRetirementStore(&managedQUICRetirement{})
 	intent := quicCrashIntentFixture()
 	intent.Plan.Obfuscation = mode
+	intent.Plan.PublicHTTP3 = publicHTTP3
 	if mode == domain.QUICObfuscationSalamander {
 		intent.ObfuscationSHA256 = strings.Repeat("9", 64)
 	}
 	intent.WireGuard.PeerPort = intent.Plan.Local.RemoteWGUDPPort
 	link := domain.Link{ID: intent.Plan.Local.LinkID, DisplayName: "managed-quic", Backend: domain.BackendWireGuardQUIC, Encapsulation: domain.EncapUDP,
 		Underlay: domain.Underlay{Local: netip.MustParseAddr("192.0.2.10"), Peer: intent.Plan.Physical.Addr()}, Addresses: intent.Addresses, WireGuard: intent.WireGuard,
-		QUIC: domain.QUICOptions{Role: "dial", UDPPort: intent.Plan.Physical.Port(), ForwardUDPPort: intent.Plan.Local.LocalHelperUDPPort, TLSServerName: intent.Plan.TLSName, Obfuscation: mode}}
+		QUIC: domain.QUICOptions{Role: "dial", UDPPort: intent.Plan.Physical.Port(), ForwardUDPPort: intent.Plan.Local.LocalHelperUDPPort, TLSServerName: intent.Plan.TLSName, Obfuscation: mode, PublicHTTP3: publicHTTP3}}
 	if err := link.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	expected := quicExpectedMaterialIdentity(intent)
 	e.quicPreviewMaterial = func(_ string, p quic.Plan, _ uint16, _ string, _ quic.CredentialBundle) (quic.HelperConfigIdentity, error) {
-		if p.Obfuscation != mode {
+		if p.Obfuscation != mode || p.PublicHTTP3 != publicHTTP3 {
 			return quic.HelperConfigIdentity{}, fmt.Errorf("preview lost the selected obfuscation mode")
 		}
 		b.events = append(b.events, "preview")
@@ -268,7 +273,7 @@ func managedQUICEngineFixtureWithObfuscation(t *testing.T, mode string) (*Engine
 			return quic.HelperConfigIdentity{}, err
 		}
 		op, ok := s.FindQUICCrashOperation(p.LinkID)
-		if !ok || op.Managed == nil || op.Nonce != nonce || p.Obfuscation != mode || op.Plan.Obfuscation != mode ||
+		if !ok || op.Managed == nil || op.Nonce != nonce || p.Obfuscation != mode || op.Plan.Obfuscation != mode || op.Plan.PublicHTTP3 != publicHTTP3 ||
 			op.ObfuscationSHA256 != expected.Credentials.ObfuscationSHA256 || want != expected {
 			return quic.HelperConfigIdentity{}, fmt.Errorf("material staged before durable exact journal")
 		}
@@ -276,13 +281,13 @@ func managedQUICEngineFixtureWithObfuscation(t *testing.T, mode string) (*Engine
 		return want, nil
 	}
 	e.quicInspectGeneration = func(_ string, p quic.Plan, _ uint16, _ string, _ string, want quic.HelperConfigIdentity) (quic.HelperConfigIdentity, error) {
-		if p.Obfuscation != mode || want != expected {
+		if p.Obfuscation != mode || p.PublicHTTP3 != publicHTTP3 || want != expected {
 			return quic.HelperConfigIdentity{}, fmt.Errorf("readback lost the selected mode or material identity")
 		}
 		return expected, nil
 	}
 	e.quicInspectRecordedGeneration = func(_ context.Context, _ string, p quic.Plan, _ uint16, _ string, want quic.HelperConfigIdentity) (state.QUICFileIdentity, error) {
-		if p.Obfuscation != mode || want != expected {
+		if p.Obfuscation != mode || p.PublicHTTP3 != publicHTTP3 || want != expected {
 			return state.QUICFileIdentity{}, fmt.Errorf("removal lost the selected mode or material identity")
 		}
 		return state.QUICFileIdentity{Certificate: expected.Credentials.CertificateSHA256, TLSKey: strings.Repeat("f", 64), TrustCA: expected.Credentials.TrustCASHA256, Authorization: expected.Credentials.AuthorizationSHA256, ObfuscationSHA256: expected.Credentials.ObfuscationSHA256, HelperConfig: expected.ConfigSHA256, DirectoryDevice: 1, DirectoryInode: 5, ReceiptDevice: 1, ReceiptInode: 6}, nil
@@ -324,6 +329,50 @@ func TestManagedQUICJournalStageHandoffScopeAndAtomicCommit(t *testing.T) {
 	after, _ := b.store.Load(context.Background())
 	if !reflect.DeepEqual(s, after) {
 		t.Fatal("no-op Ensure rewrote provenance")
+	}
+}
+
+func TestManagedQUICPublicHTTP3RetainsCanonicalEngineOwnership(t *testing.T) {
+	e, b, link := managedQUICEngineFixtureWithMode(t, domain.QUICObfuscationPlain, true)
+	createManagedQUIC(t, e, b, link)
+	before, err := b.store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, ok := before.Find(link.ID)
+	if !ok || !record.Desired.QUIC.PublicHTTP3 || record.QUICGeneration.Validate(link) != nil {
+		t.Fatal("public H3 Link was not committed through one canonical Engine")
+	}
+	// A saved profile change is not an in-place implicit authentication
+	// migration; the original still owns exactly its material and helper.
+	altered := link
+	altered.QUIC.PublicHTTP3 = false
+	count := b.applyCount
+	if _, err := e.Ensure(context.Background(), altered); err == nil || b.applyCount != count {
+		t.Fatal("changed public handshake modified existing owned Link")
+	}
+	after, _ := b.store.Load(context.Background())
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("rejected mode change rewrote original State")
+	}
+	if result, err := e.Ensure(context.Background(), link); err != nil || result.Changed || b.applyCount != count {
+		t.Fatal("public H3 repeat ensure did not converge idempotently")
+	}
+	delete(b.owners, link.ID)
+	b.boot = testWSSBootAfter
+	if _, err := e.RestoreAll(context.Background()); err != nil {
+		t.Fatal("public H3 restore:", err)
+	}
+	restored, _ := b.store.Load(context.Background())
+	if next, found := restored.Find(link.ID); !found || next.Desired != link || next.QUICGeneration.Validate(link) != nil {
+		t.Fatal("public H3 restore altered identity or failed original receipt validation")
+	}
+	if _, err := e.Remove(context.Background(), link.ID); err != nil {
+		t.Fatal("public H3 removal:", err)
+	}
+	removed, _ := b.store.Load(context.Background())
+	if len(removed.Links) != 0 {
+		t.Fatal("public H3 Link survived canonical Engine removal")
 	}
 }
 

@@ -58,10 +58,11 @@ func menuImportQUIC(input io.Reader, reader *bufio.Reader, out, errOut io.Writer
 		TLSListener        string        `json:"tls_listener_name"`
 		Confirm            string        `json:"confirmation_sha256"`
 		Obfuscation        string        `json:"obfuscation"`
+		PublicHTTP3        bool          `json:"public_http3"`
 	}
 	plan, planErr := quicPlanForLink(offer.Receiver)
 	if json.Unmarshal(preview.Bytes(), &details) != nil || details.LinkID != offer.Receiver.ID ||
-		details.Confirm == "" || details.Obfuscation != publicQUICObfuscation(offer.Receiver.QUIC.Obfuscation) || planErr != nil || details.TLSListener != plan.TLSName ||
+		details.Confirm == "" || details.Obfuscation != publicQUICObfuscation(offer.Receiver.QUIC.Obfuscation) || details.PublicHTTP3 != offer.Receiver.QUIC.PublicHTTP3 || planErr != nil || details.TLSListener != plan.TLSName ||
 		details.PeerUnderlay != offer.Receiver.Underlay.Peer.String() || details.PeerPrivateIP != offer.Receiver.Addresses.Peer.String() ||
 		details.UDPPort != offer.Receiver.QUIC.UDPPort || details.ForwardUDPPort != offer.Receiver.QUIC.ForwardUDPPort ||
 		details.PeerForwardUDPPort != offer.Sender.QUIC.ForwardUDPPort {
@@ -70,7 +71,7 @@ func menuImportQUIC(input io.Reader, reader *bufio.Reader, out, errOut io.Writer
 	}
 	menuScreen(out, "Review / QUIC receiver before importing")
 	menuField(out, "Link", string(details.LinkID))
-	menuField(out, "Backend", "WireGuard / QUIC + mTLS")
+	menuField(out, "Backend", "WireGuard / QUIC + TLS")
 	menuField(out, "THIS server role", details.Role)
 	menuField(out, "THIS underlay", details.Underlay)
 	menuField(out, "THIS private IP", details.PrivateIP)
@@ -80,6 +81,7 @@ func menuImportQUIC(input io.Reader, reader *bufio.Reader, out, errOut io.Writer
 	menuField(out, "TLS QUIC UDP port", fmt.Sprintf("%d", details.UDPPort))
 	menuField(out, "TLS listener identity", details.TLSListener)
 	menuField(out, "QUIC obfuscation", details.Obfuscation)
+	menuField(out, "Public HTTP/3", fmt.Sprint(details.PublicHTTP3))
 	menuField(out, "Loopback forwarding UDP", fmt.Sprintf("this %d / peer %d (0 = no forwarder)", details.ForwardUDPPort, details.PeerForwardUDPPort))
 	menuField(out, "Guarded WireGuard UDP", fmt.Sprintf("this %d / peer %d", details.WGListenPort, details.WGPeerPort))
 	if !reviewImportReceiver(out, createRunner(opts), details.Underlay) {

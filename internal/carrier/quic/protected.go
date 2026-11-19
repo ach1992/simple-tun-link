@@ -42,7 +42,7 @@ func roleFiles(role Role) ([4]string, error) {
 // planFiles extends the original four role files only for an explicit mode.
 // Plain retains the exact historical file set, ordering and serialization.
 func planFiles(plan Plan) ([]string, error) {
-	if !domain.ValidQUICObfuscation(plan.Obfuscation) {
+	if !domain.ValidQUICObfuscation(plan.Obfuscation) || (plan.PublicHTTP3 && plan.Obfuscation != domain.QUICObfuscationPlain) {
 		return nil, fmt.Errorf("invalid QUIC obfuscation mode")
 	}
 	role, err := roleFiles(plan.Role)

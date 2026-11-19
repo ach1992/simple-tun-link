@@ -317,6 +317,13 @@ STL_QUIC_WG_L3_E2E=approved bash scripts/e2e/quic-wg-private-l3.sh \
   /absolute/path/to/wg
 ~~~
 
+To test **Plain + public HTTP/3** over that same real kernel-WireGuard
+L3 path, also set `STL_QUIC_WG_L3_H3=approved` for the launcher. The
+test then generates the selected authentic Hysteria configuration through
+the same protected fixture; the separate pinned loopback test verifies
+anonymous same-UDP-port H3 GET and wrong-token rejection. This is not
+a live managed Engine/systemd or physical-server acceptance claim.
+
 Requires Linux user/net/mount/**PID** namespace and pidfd support,
 Python with `os.pidfd_open` and `signal.pidfd_send_signal`, `unshare` with
 `--kill-child` and `--mount-proc`, `nsenter`, `ip`, `nft`, `ping`, `go`,

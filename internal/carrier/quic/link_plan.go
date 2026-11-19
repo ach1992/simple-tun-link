@@ -14,7 +14,7 @@ func PlanFromLink(link domain.Link) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	p := Plan{LinkID: host.Local.LinkID, Role: Role(host.Local.Role), Underlay: host.Physical, TLSName: host.TLSName, Obfuscation: host.Obfuscation, managed: true}
+	p := Plan{LinkID: host.Local.LinkID, Role: Role(host.Local.Role), Underlay: host.Physical, TLSName: host.TLSName, Obfuscation: host.Obfuscation, PublicHTTP3: host.PublicHTTP3, managed: true}
 	if p.Role == Dial {
 		p.LocalForwardUDPPort, p.PeerWGUDPPort = host.Local.LocalHelperUDPPort, host.Local.RemoteWGUDPPort
 	} else {

@@ -152,6 +152,7 @@ type QUICOptions struct {
 	ForwardUDPPort uint16 `json:"forward_udp_port,omitempty"`
 	TLSServerName  string `json:"tls_server_name,omitempty"`
 	Obfuscation    string `json:"obfuscation,omitempty"`
+	PublicHTTP3    bool   `json:"public_http3,omitempty"`
 }
 
 // MASQUEOptions is endpoint-local public topology for a dedicated authenticated
@@ -296,7 +297,7 @@ func (l Link) Validate() error {
 		}
 	}
 	if l.Backend == BackendWireGuardQUIC {
-		if !ValidQUICObfuscation(l.QUIC.Obfuscation) {
+		if !ValidQUICObfuscation(l.QUIC.Obfuscation) || (l.QUIC.PublicHTTP3 && l.QUIC.Obfuscation != QUICObfuscationPlain) {
 			return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "unsupported QUIC obfuscation mode")
 		}
 		if l.QUIC.UDPPort == 0 || (l.QUIC.Role != "dial" && l.QUIC.Role != "listen") ||
