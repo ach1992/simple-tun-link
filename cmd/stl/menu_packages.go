@@ -387,7 +387,12 @@ func menuPrepareSelectedPackagesWithOps(input io.Reader, reader *bufio.Reader, o
 	needsService := false
 	if selected.backend == domain.BackendIPsec {
 		if options == nil {
-			options, _ = productionRuntimeOptions()
+			var runtimeErr error
+			options, runtimeErr = menuIPsecSelectedRuntime(nil, assembleRuntimeOptionsForBackend)
+			if runtimeErr != nil {
+				menuGuidedCreateRuntimeFailure(out, domain.BackendIPsec, runtimeErr)
+				return menuPackagePreparation{}
+			}
 		}
 		checkCtx, stop := context.WithTimeout(context.Background(), 12*time.Second)
 		_, admitted := activeIPsecBackend(checkCtx, options)
@@ -507,9 +512,10 @@ func menuPrepareSelectedPackagesWithOps(input io.Reader, reader *bufio.Reader, o
 		}
 		// Rebuild registration and require actual admitted runtime; provision
 		// success is not itself proof of a ready backend.
-		options, err = productionRuntimeOptions()
+		options, err = menuIPsecSelectedRuntime(nil, assembleRuntimeOptionsForBackend)
 		if err != nil {
-			menuNotice(out, "FAILED", "Cannot rebuild IPsec backend after service preparation.")
+			menuGuidedCreateRuntimeFailure(out, domain.BackendIPsec, err)
+			menuNotice(out, "FAILED", "Cannot verify IPsec after service preparation; reconcile the actual host state before retry.")
 			return menuPackagePreparation{}
 		}
 		verifyCtx, end := context.WithTimeout(context.Background(), 15*time.Second)

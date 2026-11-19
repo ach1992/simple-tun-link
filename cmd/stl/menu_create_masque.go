@@ -168,13 +168,17 @@ func menuCreateMASQUE(input io.Reader, reader *bufio.Reader, out, errOut io.Writ
 		menuNotice(out, "INFO", "Creation cancelled before any host change.")
 		return 0
 	}
+	createRuntime, err := menuHandoffCreationOptions(opts, id, domain.BackendMASQUE)
+	if err != nil {
+		return menuGuidedCreateRuntimeFailure(out, domain.BackendMASQUE, err)
+	}
 	path, err := prepareProtectedMenuHandoff(opts, id)
 	if err != nil {
 		menuNotice(out, "WARNING", "Cannot reserve the protected peer handoff file.")
 		return 1
 	}
 	menuScreen(out, "Applying / MASQUE managed Link")
-	code := linkMASQUECommand([]string{"create-masque", "--stdin", "--output", path}, bytes.NewReader(payload), out, errOut, menuHandoffCreationOptions(opts, id))
+	code := linkMASQUECommand([]string{"create-masque", "--stdin", "--output", path}, bytes.NewReader(payload), out, errOut, createRuntime)
 	if code != 0 {
 		menuNotice(out, "WARNING", "Creation is not confirmed. Preserve the exact handoff, State and private files for inspection/reconciliation; do not regenerate an active identity.")
 		return code

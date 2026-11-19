@@ -55,15 +55,42 @@ func checkCreatorHandoffDestination(options *runtimeOptions, id domain.LinkID, o
 	return nil
 }
 
-// The scoped identity lives only on a copy passed to a guided Create
-// after its own real-terminal confirmation and protected path preparation.
-func menuHandoffCreationOptions(options *runtimeOptions, id domain.LinkID) *runtimeOptions {
-	if options == nil {
-		return &runtimeOptions{stateRoot: state.DefaultRoot, menuHandoffID: id}
+// Resolve only the chosen backend when production menu entry passed nil
+// runtime options. A state-root-only placeholder is not a usable Engine and
+// used to make confirmed guided Create fail before applying the Link.
+func menuHandoffCreationOptions(options *runtimeOptions, id domain.LinkID, selected domain.Backend) (*runtimeOptions, error) {
+	return menuHandoffCreationOptionsWithAssembler(options, id, selected, assembleRuntimeOptionsForBackend)
+}
+
+// The selected-backend assembler is injected only to test the nil-runtime
+// path without constructing host services or requiring a privileged systemd
+// environment. Existing caller-owned test/runtime options remain untouched.
+func menuHandoffCreationOptionsWithAssembler(options *runtimeOptions, id domain.LinkID, selected domain.Backend,
+	assemble func(string, domain.Backend) (*runtimeOptions, error)) (*runtimeOptions, error) {
+	if id.Validate() != nil {
+		return nil, fmt.Errorf("invalid guided Create Link identity")
 	}
+	if options == nil {
+		var err error
+		options, err = assemble(state.DefaultRoot, selected)
+		if err != nil {
+			return nil, fmt.Errorf("selected guided Create runtime unavailable: %w", err)
+		}
+		if options == nil {
+			return nil, runtimeInitFailure(runtimeInitRegistration, nil)
+		}
+		// A successful assembler must register exactly the intended backend;
+		// a bare StateRoot placeholder cannot authorize a confirmed Create.
+		if len(options.backends) != 1 || options.backends[0] == nil ||
+			options.backends[0].Kind() != selected {
+			return nil, runtimeInitFailure(runtimeInitRegistration, nil)
+		}
+	}
+	// The scoped ID is granted only after the operator's fresh YES. Public
+	// CLI requests still cannot publish into the reserved menu namespace.
 	scoped := *options
 	scoped.menuHandoffID = id
-	return &scoped
+	return &scoped, nil
 }
 
 // Only the guided menu writes this nonsecret, owner-private origin receipt.
