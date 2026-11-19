@@ -150,13 +150,15 @@ specific supported capability policy and acceptance are added.
 Unsupported capability is a visible unsupported/unknown result, never
 a silent passed test or a reason to disable an unrelated backend.
 
-### MASQUE CONNECT-IP over HTTP/2/TLS (unreleased, Issue #142)
+### MASQUE CONNECT-IP over HTTP/2/TLS (v0.1.28+, Issue #142)
 
-The candidate requires Linux TUN, iproute2, systemd transient-unit ownership,
+The released backend requires Linux TUN, iproute2, systemd transient-unit ownership,
 a trusted local IP source (IPv4 or IPv6), private IPv4 `/32` routing, and
 TCP/TLS connectivity to an operator-selected HTTPS listener. It is native Go
 (no pinned Hysteria/wstunnel helper, no WireGuard/strongSwan). Validated
 local resource ownership is not proof that TCP/443 or another configured port
 is reachable across a particular WAN; test the real two-host path. The
-release-specific environment matrix and reboot/PMTU/performance acceptance
-remain open under [Issue #142](https://github.com/ach1992/simple-tun-link/issues/142).
+published-version two-server functional acceptance, reboot restoration and
+specific WAN/PMTU evidence remain open under
+[Issue #142](https://github.com/ach1992/simple-tun-link/issues/142); no
+performance benchmark is a release prerequisite.
