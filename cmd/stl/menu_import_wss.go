@@ -47,19 +47,21 @@ func menuImportWSS(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
 		PrivateIP string        `json:"receiver_private_ip"`
 		Underlay  string        `json:"receiver_underlay"`
 		Confirm   string        `json:"confirmation_sha256"`
+		PublicTLS bool          `json:"public_tls"`
 	}
 	if json.Unmarshal(preview.Bytes(), &details) != nil || details.LinkID != offer.Receiver.ID ||
-		details.Confirm == "" {
+		details.Confirm == "" || details.PublicTLS != offer.Receiver.WSS.PublicTLS {
 		menuNotice(out, "WARNING", "WSS confirmation is inconsistent.")
 		return 2
 	}
 	menuScreen(out, "Review / WSS receiver before importing")
 	menuField(out, "Link", string(details.LinkID))
-	menuField(out, "Backend", "WireGuard / WSS + mTLS")
+	menuField(out, "Backend", "WireGuard / WSS + TLS")
 	menuField(out, "THIS server role", details.Role)
 	menuField(out, "THIS underlay", details.Underlay)
 	menuField(out, "THIS private IP", details.PrivateIP)
 	menuField(out, "TLS WSS TCP port", fmt.Sprintf("%d", offer.Receiver.WSS.TCPPort))
+	menuField(out, "Public TLS", fmt.Sprint(details.PublicTLS))
 	if !reviewImportReceiver(out, createRunner(opts), details.Underlay) {
 		return 2
 	}

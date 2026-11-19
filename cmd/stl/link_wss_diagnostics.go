@@ -23,6 +23,7 @@ type WSSLinkDiagnostics struct {
 	LinkID                     domain.LinkID `json:"link_id"`
 	Carrier                    string        `json:"carrier"`
 	Role                       string        `json:"role"`
+	PublicTLS                  bool          `json:"public_tls"`
 	WSSHelperActive            bool          `json:"wss_helper_active"`
 	WGIngressGuardActive       bool          `json:"wg_ingress_guard_active"`
 	KernelWireGuardPresent     bool          `json:"kernel_wireguard_present"`
@@ -48,7 +49,7 @@ func readR1PeerValue(ctx context.Context, runner linux.Runner, iface, field, exp
 
 func observeWSSLink(ctx context.Context, root string, runner linux.BoundedRunner, link domain.Link) (WSSLinkDiagnostics, error) {
 	d := WSSLinkDiagnostics{SchemaVersion: 1, LinkID: link.ID, Carrier: "wss-tls",
-		Role: link.WSS.Role, AuthenticationObservation: "not_observable_from_process_state",
+		Role: link.WSS.Role, PublicTLS: link.WSS.PublicTLS, AuthenticationObservation: "not_observable_from_process_state",
 		TrafficObservation: "not_tested_by_read_only_diagnostics"}
 	if link.Backend != domain.BackendWireGuardWSS {
 		return d, fmt.Errorf("not a WSS Link")
@@ -104,7 +105,7 @@ func observeWSSLink(ctx context.Context, root string, runner linux.BoundedRunner
 		return d, fmt.Errorf("invalid WireGuard TX counters")
 	}
 	if d.WireGuardHandshakeObserved {
-		d.AuthenticationObservation = "kernel WireGuard peer authenticated; WSS mTLS not individually attested"
+		d.AuthenticationObservation = "kernel WireGuard peer authenticated; WSS TLS and bearer not individually attested"
 	}
 	if d.RXBytes > 0 && d.TXBytes > 0 {
 		d.TrafficObservation = "kernel WireGuard RX/TX bytes observed; application traffic not tested by this command"

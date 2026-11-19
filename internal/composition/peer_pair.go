@@ -46,8 +46,8 @@ func ValidateWSSPeerPair(dialLink domain.Link, dialCarrier Carrier, listenLink d
 		dialLink.WireGuard.PeerPort != listenLink.WireGuard.ListenPort {
 		return fmt.Errorf("WSS WireGuard UDP ports are not reciprocal")
 	}
-	if dial.TLSName != listen.TLSName || dial.WSSPeerTCP != listen.WSSLocalTCP {
-		return fmt.Errorf("WSS TLS server identity or physical TCP endpoint differs between peers")
+	if dial.TLSName != listen.TLSName || dial.WSSPeerTCP != listen.WSSLocalTCP || dialLink.WSS.PublicTLS != listenLink.WSS.PublicTLS {
+		return fmt.Errorf("WSS TLS server identity, public TLS selection or physical TCP endpoint differs between peers")
 	}
 	return nil
 }

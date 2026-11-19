@@ -525,15 +525,24 @@ A first internal, secret-free `internal/composition` path planner records:
   A future public pairing version must not treat this check as sufficient
   evidence to activate a Carrier.
 
-The `internal/carrier/wss` adapter renders a restricted mTLS wstunnel
-argv and an exact per-Link protected bearer-token/path-to-loopback-WG-UDP
-policy. **Security boundary:** wstunnel v11.0.0 extracts the mTLS client
+The `internal/carrier/wss` adapter renders a restricted wstunnel invocation
+and an exact per-Link protected bearer-token/path-to-loopback-WG-UDP
+policy. The established default requires mTLS; opt-in `public_tls` omits
+client-certificate exchange at TLS admission and supplies an exact explicit
+Upgrade path while retaining server CA/SAN validation and bearer/ACL checks.
+Both peers must select the same mode; an existing Link cannot silently
+change its authentication mode. The pinned upstream is real HTTP/1.1 WSS
+(or HTTP/2 tunnel), but ordinary HTTP(S) GET is answered with 400, not an
+HTML site. This is an explicit Helper limitation, not a Chrome ClientHello
+claim, and no unrelated TCP decoy or new daemon is created. **Security boundary:** wstunnel v11.0.0 extracts the mTLS client
 certificate CN only when it is present; a certificate with no parseable
 CN can explicitly request another HTTP upgrade path. Therefore
 `!PathPrefix` by itself is **not certificate identity authorization**.
-The acceptance contract is **both** valid client-CA mTLS **and** possession
+The default mTLS contract is **both** valid client-CA mTLS **and** possession
 of an independent randomly generated 256-bit authorization token scoped
-to the Link. The server additionally checks the exact link path and
+to the Link. In opt-in public-TLS mode no client certificate is required;
+the exact protected token and Link path must be accepted in the genuine
+WebSocket Upgrade before opening the restricted WG UDP destination. The server additionally checks the exact link path and
 permitted UDP/loopback destination. The CN check is defense in depth
 when present, **not** sufficient or guaranteed alone. A trusted
 certificate without CN that possesses the correct per-Link bearer can
@@ -976,7 +985,7 @@ fallback), Encapsulation UDP, WireGuardOptions and endpoint-local WSSOptions.
 Composition derives precisely WSS over kernel WireGuard, rejecting unsupported
 Carriers. The existing Engine locks, versioned desired State and resource claims
 govern all effects. The WSS Backend applies in dependency order:
-admit pinned helper/private mTLS + firewall coexistence → create private
+admit pinned helper/selected TLS mode + firewall coexistence → create private
 nft kernel-WG UDP ingress guard → create owner-tagged WG Interface →
 start one owner-scoped systemd WSS helper → verify complete host firewall,
 exact systemd sandbox/restart properties and original TLS/bearer fingerprints

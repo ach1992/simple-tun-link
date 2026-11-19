@@ -261,6 +261,82 @@ for log in sorted(Path(".").glob("*.log")):
         raise SystemExit(f"Sensitive authorization test bearer leaked into helper log: {log.name}")
 print("WSTUNNEL_V11_SAFE_LOGGING=PASS")
 PY_LOG
+  # The public-TLS variant is another mode of the same per-Link service,
+  # not a second resident daemon. Stop test-only previous server and
+  # clients before exercising a replacement configuration on an isolated
+  # distinct listener port. This bounds upstream Tokio thread consumption.
+  for pid in "${pids[@]:1}"; do kill "$pid" 2>/dev/null || :; done
+  for pid in "${pids[@]:1}"; do wait "$pid" 2>/dev/null || :; done
+  pids=("${pids[0]}")
+  # New explicitly selected public-TLS mode uses the SAME real WSS helper,
+  # genuine HTTP/1.1 Upgrade, pinned CA-verified server identity, and
+  # exact request path+bearer+WG-UDP restriction. Anonymous GET is a real
+  # HTTP 400, NOT a decoy site or proof of Chrome TLS fingerprint parity.
+  # Prove the second bind address is available independently of the
+  # helper; an existing host resource cannot be mistaken for a helper bug.
+  python3 - <<'PY_BIND'
+import socket
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind(("198.51.100.21", 19444))
+print("WSS_PUBLIC_TLS_BIND_PRECHECK=PASS")
+PY_BIND
+  timeout 45s "$bin" server --log-lvl INFO \
+    --tls-certificate server.pem --tls-private-key server.key \
+    --restrict-config restrictions.yaml wss://198.51.100.21:19444 >public-server.log 2>&1 &
+  pids+=("$!")
+  for _ in $(seq 1 40); do
+    ss -lnt | grep -q '198.51.100.21:19444' && break
+    sleep 0.1
+  done
+  ss -lnt | grep -q '198.51.100.21:19444' || {
+    # TLS test keys and INFO-level helper startup cannot include the bearer
+    # until an Upgrade arrives; give only this bounded failure diagnostic.
+    grep -E '(ERROR|WARN|panic|Fatal|error)' public-server.log | tail -n 8 >&2 || :
+    echo 'Public-TLS WSS listener failed to bind in namespace' >&2
+    exit 1
+  }
+  local_status=$(curl -sS --noproxy '*' --http1.1 --cacert ca.pem \
+    --max-time 6 -o public-http-body -w '%{http_code}' https://198.51.100.21:19444/)
+  [[ "$local_status" == 400 ]] || {
+    echo "Pinned public-TLS WSS ordinary HTTP response is not observed" >&2
+    exit 1
+  }
+  SSL_CERT_FILE=ca.pem timeout 35s "$bin" client --log-lvl INFO \
+    --tls-verify-certificate --http-upgrade-path-prefix "$CN" \
+    --http-headers-file authorization-headers \
+    -L "udp://127.0.0.1:53011:127.0.0.1:53000?timeout_sec=0" \
+    wss://198.51.100.21:19444 >public-allowed.log 2>&1 &
+  pids+=("$!")
+  python3 check.py 53011 allow
+  SSL_CERT_FILE=ca.pem timeout 35s "$bin" client --log-lvl INFO \
+    --tls-verify-certificate --http-upgrade-path-prefix "$CN" \
+    --http-headers-file authorization-headers-wrong \
+    -L "udp://127.0.0.1:53012:127.0.0.1:53000?timeout_sec=0" \
+    wss://198.51.100.21:19444 >public-wrong-bearer.log 2>&1 &
+  pids+=("$!")
+  python3 check.py 53012 deny
+  grep -qi 'not allowed destination' public-server.log || {
+    echo 'Public-TLS WSS wrong bearer lacked upstream rejection evidence' >&2
+    exit 1
+  }
+  # Rejection by the destination policy must not affect the healthy
+  # authorized private tunnel. A second echo port exists in the namespace.
+  SSL_CERT_FILE=ca.pem timeout 35s "$bin" client --log-lvl INFO \
+    --tls-verify-certificate --http-upgrade-path-prefix "$CN" \
+    --http-headers-file authorization-headers \
+    -L "udp://127.0.0.1:53013:127.0.0.1:53009?timeout_sec=0" \
+    wss://198.51.100.21:19444 >public-forbidden-destination.log 2>&1 &
+  pids+=("$!")
+  python3 check.py 53013 deny
+  python3 check.py 53011 allow
+  # Upstream INFO logs must not disclose the bearer even when a request
+  # fails authorization. The original private headers remain confined.
+  if grep -Flq 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    public-*.log; then
+    echo 'Public-TLS WSS secret leaked into helper log' >&2
+    exit 1
+  fi
+  echo 'WSTUNNEL_V11_PINNED_PUBLIC_TLS_REQUEST_AUTH=PASS'
   echo 'WSTUNNEL_V11_PINNED_POLICY_ACCEPTANCE=PASS'
   exit 0
 fi

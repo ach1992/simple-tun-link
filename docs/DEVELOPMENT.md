@@ -182,13 +182,20 @@ and **public test-only** bearer headers, and uses unprivileged
 verified user+network namespace. Even a direct call to the internal
 `--inside` mode fails before any IP operation without the independent
 binary/namespace-launch evidence. The test checks the real version's
-**mTLS + per-Link bearer + exact path** behavior, including the
+**default mTLS + per-Link bearer + exact path** behavior, including the
 reviewed missing-CN-with-forged-path bypass attempt *without*
 the bearer. The upstream v11 does not enforce strict CN identity
 when a certificate has no CN; approved admission requires the
 additional secret, as described in
 [ARCHITECTURE.md](ARCHITECTURE.md).
-It needs Bash, OpenSSL, Python 3,
+The same pinned-helper test also verifies explicit public-TLS mode:
+anonymous CA-verified HTTP/1.1 GET returns 400, correct no-client-certificate
+WSS Upgrade forwards only the intended loopback UDP destination, incorrect
+bearer and foreign destination cannot forward, and valid forwarding survives
+an unauthorized request. The test uses a second private-namespace TCP port
+outside the host's observed ephemeral range to avoid TIME_WAIT false failures.
+This is genuine Helper acceptance, not an installed STL Engine/physical-host
+or Chrome-fingerprint proof. It needs Bash, OpenSSL, Python 3,
 `ip`, `ss`, `sha256sum`, `timeout` and unprivileged user namespace
 support. It never installs system packages, starts a host service,
 changes host routing/firewall or touches real peers. The upstream

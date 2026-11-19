@@ -94,6 +94,7 @@ func printManualConnectionDetails(out io.Writer, l domain.Link) {
 		// never substitutes for the original sensitive receiver offer.
 		menuField(out, "WSS role", l.WSS.Role+" (this server)")
 		menuField(out, "WSS TLS TCP port", strconv.Itoa(int(l.WSS.TCPPort)))
+		menuField(out, "Public TLS", strconv.FormatBool(l.WSS.PublicTLS))
 		if l.WSS.TLSServerName != "" {
 			menuField(out, "TLS server name", safeMenuText(l.WSS.TLSServerName))
 		}

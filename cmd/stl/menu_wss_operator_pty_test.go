@@ -108,6 +108,7 @@ func TestWSSGuidedRealPTYDirectionPortRetryReviewAndCancel(t *testing.T) {
 		{"Other server's IPv4 address (peer may be offline", "192.0.2.20\n"},
 		{"Tunnel IP on THIS server", "\n"},
 		{"Direction [Enter=suggested; 1=listen; 2=dial]: ", "2\n"},
+		{"WSS TLS mode [1]: ", "2\n"},
 		{"Public WSS/TLS TCP port [443]: ", "0\n"},
 	}
 	for _, step := range steps {
