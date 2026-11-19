@@ -57,6 +57,7 @@ type quicCreateRequest struct {
 	RemoteForwardUDPPort uint16                 `json:"remote_forward_udp_port,omitempty"`
 	TLSServerName        string                 `json:"tls_server_name,omitempty"`
 	Obfuscation          string                 `json:"obfuscation,omitempty"`
+	PublicHTTP3          bool                   `json:"public_http3,omitempty"`
 }
 
 // Only explicit new-version public boundaries accept the spelling "plain".
@@ -106,8 +107,8 @@ func decodeQUICCreateRequest(raw []byte) (quicCreateRequest, error) {
 		}
 		var err error
 		request.Obfuscation, err = normalizeQUICObfuscation(request.Obfuscation)
-		if err != nil {
-			return quicCreateRequest{}, err
+		if err != nil || (request.PublicHTTP3 && request.Obfuscation != domain.QUICObfuscationPlain) {
+			return quicCreateRequest{}, fmt.Errorf("public HTTP/3 requires plain QUIC")
 		}
 	default:
 		return request, fmt.Errorf("unsupported QUIC creator schema")
@@ -281,12 +282,12 @@ func decodeQUICOffer(in io.Reader) (quicOffer, []byte, error) {
 	return offer, raw, nil
 }
 func makeQUICPair(r quicCreateRequest, id domain.LinkID, localPub, peerPub string) (domain.Link, domain.Link, error) {
-	if (r.SchemaVersion != 1 && r.SchemaVersion != 2) || (r.SchemaVersion == 1 && r.Obfuscation != "") || id.Validate() != nil {
+	if (r.SchemaVersion != 1 && r.SchemaVersion != 2) || (r.SchemaVersion == 1 && (r.Obfuscation != "" || r.PublicHTTP3)) || id.Validate() != nil {
 		return domain.Link{}, domain.Link{}, fmt.Errorf("invalid QUIC request schema or identity")
 	}
 	mode, modeErr := normalizeQUICObfuscation(r.Obfuscation)
-	if modeErr != nil {
-		return domain.Link{}, domain.Link{}, modeErr
+	if modeErr != nil || (r.PublicHTTP3 && mode != domain.QUICObfuscationPlain) {
+		return domain.Link{}, domain.Link{}, fmt.Errorf("invalid QUIC mode or public HTTP/3 combination")
 	}
 	sender := domain.Link{
 		ID: id, DisplayName: r.DisplayName,
@@ -300,7 +301,7 @@ func makeQUICPair(r quicCreateRequest, id domain.LinkID, localPub, peerPub strin
 			LocalKeepalive: r.LocalKeepalive, PeerKeepalive: r.PeerKeepalive,
 		},
 		QUIC: domain.QUICOptions{Role: r.Role, UDPPort: r.UDPPort, Obfuscation: mode,
-			ForwardUDPPort: r.LocalForwardUDPPort, TLSServerName: r.TLSServerName},
+			ForwardUDPPort: r.LocalForwardUDPPort, TLSServerName: r.TLSServerName, PublicHTTP3: r.PublicHTTP3},
 	}
 	peerRole := "listen"
 	if r.Role == "listen" {
@@ -318,7 +319,7 @@ func makeQUICPair(r quicCreateRequest, id domain.LinkID, localPub, peerPub strin
 			LocalKeepalive: r.PeerKeepalive, PeerKeepalive: r.LocalKeepalive,
 		},
 		QUIC: domain.QUICOptions{Role: peerRole, UDPPort: r.UDPPort, Obfuscation: mode,
-			ForwardUDPPort: r.RemoteForwardUDPPort, TLSServerName: r.TLSServerName},
+			ForwardUDPPort: r.RemoteForwardUDPPort, TLSServerName: r.TLSServerName, PublicHTTP3: r.PublicHTTP3},
 	}
 	if r.Role == "dial" && r.RemoteForwardUDPPort != 0 {
 		return domain.Link{}, domain.Link{}, fmt.Errorf("QUIC listener must not specify a remote forwarder")
@@ -430,6 +431,7 @@ func linkQUICCommand(args []string, in io.Reader, out, errOut io.Writer, options
 			WGPeerPort         uint16         `json:"peer_wireguard_udp_port"`
 			TLSListener        string         `json:"tls_listener_name"`
 			Obfuscation        string         `json:"obfuscation"`
+			PublicHTTP3        bool           `json:"public_http3"`
 			Confirm            string         `json:"confirmation_sha256"`
 			Sensitive          bool           `json:"sensitive"`
 		}{SchemaVersion: 1, LinkID: offer.Receiver.ID, Backend: offer.Receiver.Backend,
@@ -438,7 +440,7 @@ func linkQUICCommand(args []string, in io.Reader, out, errOut io.Writer, options
 			PrivateIP: offer.Receiver.Addresses.Local.String(), PeerPrivateIP: offer.Receiver.Addresses.Peer.String(),
 			UDPPort: offer.Receiver.QUIC.UDPPort, ForwardUDPPort: offer.Receiver.QUIC.ForwardUDPPort,
 			PeerForwardUDPPort: offer.Sender.QUIC.ForwardUDPPort, WGListenPort: offer.Receiver.WireGuard.ListenPort,
-			WGPeerPort: offer.Receiver.WireGuard.PeerPort, TLSListener: plan.TLSName, Obfuscation: publicQUICObfuscation(offer.Receiver.QUIC.Obfuscation),
+			WGPeerPort: offer.Receiver.WireGuard.PeerPort, TLSListener: plan.TLSName, Obfuscation: publicQUICObfuscation(offer.Receiver.QUIC.Obfuscation), PublicHTTP3: offer.Receiver.QUIC.PublicHTTP3,
 			Confirm: setupLinkConfirmation(string(raw)), Sensitive: true}
 		if jsonOut {
 			if json.NewEncoder(out).Encode(response) != nil {
@@ -561,7 +563,7 @@ func createQUIC(in io.Reader, output string, out, errOut io.Writer, jsonOut bool
 	}
 	listenBundle, dialBundle, err := quic.GeneratePairWithObfuscation(id, path.TLSName, sender.QUIC.Obfuscation)
 	if err != nil {
-		return quicCommandError(operation, jsonOut, id, stlerr.CodeState, "QUIC mTLS issuance failed", out, errOut)
+		return quicCommandError(operation, jsonOut, id, stlerr.CodeState, "QUIC credential issuance failed", out, errOut)
 	}
 	defer listenBundle.Clear()
 	defer dialBundle.Clear()

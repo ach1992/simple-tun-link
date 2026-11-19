@@ -41,6 +41,7 @@ type Plan struct {
 	Underlay            netip.AddrPort
 	TLSName             string
 	Obfuscation         string `json:"obfuscation,omitempty"`
+	PublicHTTP3         bool   `json:"public_http3,omitempty"`
 	LocalForwardUDPPort uint16 // Dial-side loopback socket; zero on Listen.
 	PeerWGUDPPort       uint16 // Dial-side destination: listening peer's WG UDP port.
 	LocalWGUDPPort      uint16 // Listen-side destination: its own kernel WG UDP port.
@@ -92,14 +93,14 @@ type tlsServer struct {
 	Cert     string `json:"cert"`
 	Key      string `json:"key"`
 	SNIGuard string `json:"sniGuard"`
-	ClientCA string `json:"clientCA"`
+	ClientCA string `json:"clientCA,omitempty"`
 }
 type tlsClient struct {
 	SNI               string `json:"sni"`
 	Insecure          bool   `json:"insecure"`
 	CA                string `json:"ca"`
-	ClientCertificate string `json:"clientCertificate"`
-	ClientKey         string `json:"clientKey"`
+	ClientCertificate string `json:"clientCertificate,omitempty"`
+	ClientKey         string `json:"clientKey,omitempty"`
 }
 type serverAuth struct {
 	Type     string `json:"type"`
@@ -120,6 +121,7 @@ type serverConfig struct {
 	ACL        serverACL          `json:"acl"`
 	DisableUDP bool               `json:"disableUDP"`
 	Obfs       *obfuscationConfig `json:"obfs,omitempty"`
+	Masquerade *masqueradeConfig  `json:"masquerade,omitempty"`
 }
 type clientConfig struct {
 	Server        string             `json:"server"`
@@ -128,6 +130,23 @@ type clientConfig struct {
 	UDPForwarding []udpForward       `json:"udpForwarding"`
 	Lazy          bool               `json:"lazy,omitempty"`
 	Obfs          *obfuscationConfig `json:"obfs,omitempty"`
+}
+
+type masqueradeConfig struct {
+	Type   string `json:"type"`
+	String struct {
+		Content    string            `json:"content"`
+		Headers    map[string]string `json:"headers"`
+		StatusCode int               `json:"statusCode"`
+	} `json:"string"`
+}
+
+func publicHTTP3Masquerade() *masqueradeConfig {
+	m := &masqueradeConfig{Type: "string"}
+	m.String.Content = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Welcome</title></head><body><h1>Welcome</h1></body></html>"
+	m.String.Headers = map[string]string{"content-type": "text/html; charset=utf-8"}
+	m.String.StatusCode = 200
+	return m
 }
 
 type obfuscationConfig struct {
@@ -143,8 +162,10 @@ type salamanderConfig struct {
 // exact Hysteria app/v2.13.0 server ACL admits only the verified kernel-WG
 // local UDP port, then rejects ALL other TCP/UDP destinations. This prevents
 // the optional Hysteria helper becoming a general-purpose authenticated
-// network proxy. TLS1.3 server authentication, client-CA mTLS and an
-// independent per-Link bearer are mandatory; config/secret material must
+// network proxy. TLS1.3 server authentication and an independent per-Link
+// bearer remain mandatory. The opt-in public H3 mode admits anonymous HTTP/3
+// requests without client mTLS; the private WG UDP destination still requires
+// Hysteria password admission and a WireGuard peer. Config/secret material must
 // never appear in argv, environment, status, or public diagnostics.
 func Build(plan Plan, binary, privateRoot, authorizationToken string) (Command, error) {
 	return BuildWithObfuscation(plan, binary, privateRoot, authorizationToken, "")
@@ -155,6 +176,7 @@ func Build(plan Plan, binary, privateRoot, authorizationToken string) (Command, 
 func BuildWithObfuscation(plan Plan, binary, privateRoot, authorizationToken, obfuscationSecret string) (Command, error) {
 	if !domain.ValidQUICObfuscation(plan.Obfuscation) ||
 		(plan.Obfuscation == domain.QUICObfuscationPlain && obfuscationSecret != "") ||
+		(plan.PublicHTTP3 && plan.Obfuscation != domain.QUICObfuscationPlain) ||
 		(plan.Obfuscation == domain.QUICObfuscationSalamander && (!validToken(obfuscationSecret) || obfuscationSecret == authorizationToken)) {
 		return Command{}, errors.New("QUIC obfuscation mode requires exactly its independently generated secret")
 	}
@@ -215,6 +237,13 @@ func BuildWithObfuscation(plan Plan, binary, privateRoot, authorizationToken, ob
 				Timeout: "20s",
 			}},
 		}
+		if plan.PublicHTTP3 {
+			// No client certificate is needed for public H3: the exact
+			// per-Link Hysteria password authorizes private forwarding.
+			c := config.(clientConfig)
+			c.TLS.ClientCertificate, c.TLS.ClientKey = "", ""
+			config = c
+		}
 		result.Args = append(result.Args, "client")
 	case Listen:
 		sniGuard := "strict"
@@ -233,6 +262,12 @@ func BuildWithObfuscation(plan Plan, binary, privateRoot, authorizationToken, ob
 				"reject(all)",
 			}},
 			DisableUDP: false,
+		}
+		if plan.PublicHTTP3 {
+			c := config.(serverConfig)
+			c.TLS.ClientCA = ""
+			c.Masquerade = publicHTTP3Masquerade()
+			config = c
 		}
 		result.Args = append(result.Args, "server")
 	default:

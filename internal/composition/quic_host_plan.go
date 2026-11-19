@@ -17,6 +17,7 @@ type QUICHostPlan struct {
 	Physical    netip.AddrPort     `json:"physical"`
 	TLSName     string             `json:"tls_name"`
 	Obfuscation string             `json:"obfuscation,omitempty"`
+	PublicHTTP3 bool               `json:"public_http3,omitempty"`
 }
 
 // ValidQUICTLSName is the precise existing Hysteria SAN/DNS selection rule,
@@ -47,7 +48,7 @@ func ValidQUICTLSName(name string, physical netip.Addr) bool {
 }
 
 func (p QUICHostPlan) Validate() error {
-	if !domain.ValidQUICObfuscation(p.Obfuscation) {
+	if !domain.ValidQUICObfuscation(p.Obfuscation) || (p.PublicHTTP3 && p.Obfuscation != domain.QUICObfuscationPlain) {
 		return fmt.Errorf("invalid QUIC obfuscation mode")
 	}
 	if _, err := p.Local.CarrierClaims(); err != nil {

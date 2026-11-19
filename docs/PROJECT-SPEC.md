@@ -155,11 +155,16 @@ operator-initiated attempt; safety and credential protection still apply.
   packet forwarding hop for native Linux backends. Prefer Linux and backend
   datapaths and avoid permanent background services, central storage,
   redundant abstractions and costly polling without demonstrated value.
-- **Compatibility by explicit contracts.** Stable Link identity, versioned
-  setup links, desired-state and machine schemas, deterministic error
-  semantics and deliberate migration rules let standalone and external
-  consumers evolve without parsing human text or assuming internal Go
-  structures are public APIs.
+- **Compatibility by actual need, not default obligation.** Keep clear,
+  versioned setup-link and automation contracts for current supported
+  operations, but do not add legacy adapters, migration layers or duplicate
+  state solely to retain arbitrary old releases, old Links or old data.
+  A cleaner release may deliberately break old tunnel management: explain
+  the incompatibility and have operators Remove old Links with the owning
+  earlier version before upgrading and recreating them. Never silently
+  orphan STL-owned resources, claim a broken Link works, or remove unrelated
+  host services. A compatibility bridge is justified only for real active
+  use and when its maintenance cost is worth the benefit.
 - **Capability-based portability.** Detect relevant host/kernel/backend
   prerequisites. One unavailable or conflicting optional backend should
   not disable unrelated transports. Maintain practical supported-platform

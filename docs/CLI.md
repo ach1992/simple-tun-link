@@ -1122,12 +1122,16 @@ Choose **Create tunnel → WireGuard / QUIC + TLS**. First enter the peer
 underlay address and two private Link Addresses. Then Enter accepts the
 provisional physical direction suggestion, while `1` Listen / `2` Dial
 overrides it in the same step. Next enter the kernel WireGuard UDP ports
-and the Dial endpoint's private loopback forwarding port. Choose **Plain** (the unchanged default) or
-**Salamander** for the QUIC packet representation. Salamander uses a fresh
-per-Link secret generated and transferred through the protected peer offer;
-the menu never asks for a password or exposes it in public output. Both peers
-must agree on the mode. This changes neither TLS authentication nor the
-private WireGuard topology, and is not a guarantee of WAN reachability.
+and the Dial endpoint's private loopback forwarding port. Choose one of
+**Plain + mTLS** (default), **Salamander + mTLS**, or
+**Plain + public HTTP/3**. The third option enables actual HTTP/3 content on
+the same Hysteria UDP endpoint; it drops the QUIC TLS client-certificate
+request, not Hysteria password authorization, kernel WireGuard peer trust
+or the deny-by-default forwarding ACL. Salamander uses an independently
+generated per-Link secret. The menu never asks for these secrets. Both peers
+must agree on the selected options; a public page is not a WAN reachability
+or Chrome-equivalent fingerprint guarantee. IP-literal/private-CA TLS remains
+valid for STL peers but does not automatically imply browser trust.
 The guided flow emits private offer v2 for either mode, so both peers need
 a release that accepts v2 offers. To pair Plain with an older v1-only peer,
 use the frozen machine creator v1 contract below.
@@ -1165,8 +1169,10 @@ not measured carrier PMTU or proof that a handshake will pass the path.
 
 ### Machine creation and private import
 
-Creator input schema **2** adds the public `obfuscation` choice:
-`"plain"` (default when absent) or `"salamander"`. Schema **1** remains
+Creator input schema **2** accepts the public `obfuscation` choice:
+`"plain"` (default when absent) or `"salamander"`, and optional `"public_http3":true` for Plain.
+The latter selects genuine anonymous H3 handling while keeping authenticated
+private forwarding. Setting it with Salamander is invalid. Schema **1** remains
 supported for Plain and rejects the new field even when empty. No creator
 schema accepts caller-supplied secrets. For a Salamander Listen creator:
 
@@ -1211,7 +1217,8 @@ an uncommitted object. Import selects the receiver; the distinction is
 explicit even when the two endpoints share one Link ID.
 
 `link ensure --stdin --json` input schema **5** extends the public QUIC
-Link with `quic.obfuscation`, accepting `"plain"` or `"salamander"`.
+Link with `quic.obfuscation` (`"plain"` or `"salamander"`) and the
+optional Plain-only `quic.public_http3` boolean.
 An absent or explicit `"plain"` value normalizes to the existing internal
 empty Plain identity; ordinary Plain Link JSON continues to omit that field.
 Input schema **4** remains the frozen Plain-only QUIC contract and rejects
@@ -1227,7 +1234,7 @@ emits private offer v1 (Plain); creator v2 emits private offer v2 and supports
 both modes. Old offers remain Plain-only and cannot graft the new field or
 secret. Public response schema **1** adds only the safe mode label to QUIC
 preview/diagnostics; secrets remain confined to protected material. Desired
-input, creator input, private offer, public response and persisted **State v6**
+input, creator input, private offer, public response and persisted **State v7**
 are independent version contracts.
 
 ### Status, practical diagnostics and removal

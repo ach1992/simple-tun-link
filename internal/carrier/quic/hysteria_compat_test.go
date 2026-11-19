@@ -167,7 +167,7 @@ func TestPinnedHysteriaServerACLRejectionEvidenceFailsClosed(t *testing.T) {
 }
 
 // Hysteria v2.13.0 emits this server INFO event only after successful
-// TLS/mTLS and bearer authentication. Check the server separately rather
+// Hysteria bearer authentication (and mTLS when selected). Check the server separately rather
 // than assuming that a client-local UDP port proves remote admission.
 func (h *pinnedHelper) waitClientAdmissions(t *testing.T, want int) []pinnedServerEvent {
 	t.Helper()
@@ -211,9 +211,10 @@ func (h *pinnedHelper) waitRejected(t *testing.T, reason string) {
 			if !pinnedRejectionEvidence(log, reason) {
 				// Print only Boolean evidence, never private credentials or
 				// untrusted error text from the helper log.
-				t.Fatalf("%s helper exit is not proven %s rejection (init-failed=%t, auth-http-404=%t, tls-certificate=%t)",
+				t.Fatalf("%s helper exit is not proven %s rejection (init-failed=%t, auth-http-404=%t, auth-http-200=%t, tls-certificate=%t)",
 					h.name, reason, bytes.Contains(log, []byte("failed to initialize client")),
 					bytes.Contains(log, []byte("authentication error, HTTP status code: 404")),
+					bytes.Contains(log, []byte("authentication error, HTTP status code: 200")),
 					bytes.Contains(log, []byte("certificate")))
 			}
 			return
@@ -230,6 +231,8 @@ func pinnedRejectionEvidence(log []byte, reason string) bool {
 	switch reason {
 	case "bearer":
 		return bytes.Contains(log, []byte("authentication error, HTTP status code: 404"))
+	case "bearer-masquerade":
+		return bytes.Contains(log, []byte("authentication error, HTTP status code: 200"))
 	case "client-ca":
 		return bytes.Contains(log, []byte("CRYPTO_ERROR")) &&
 			bytes.Contains(log, []byte("remote")) &&
@@ -251,6 +254,8 @@ func TestPinnedHysteriaRejectionEvidenceFailsClosed(t *testing.T) {
 		{"bearer", "failed to initialize client: timeout", false},
 		{"bearer", "authentication error, HTTP status code: 404", false},
 		{"bearer", "failed to initialize client: authentication error, HTTP status code: 404", true},
+		{"bearer-masquerade", "failed to initialize client: authentication error, HTTP status code: 200", true},
+		{"bearer-masquerade", "failed to initialize client: authentication error, HTTP status code: 404", false},
 		{"client-ca", "", false},
 		{"client-ca", "failed to initialize client: timeout", false},
 		{"client-ca", "failed to initialize client: certificate rejected", false},
@@ -278,14 +283,24 @@ func TestPinnedHysteriaRealQUICLoopback(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			for _, tlsName := range []string{"quic-probe.invalid", "127.0.0.1"} {
 				t.Run(tlsName, func(t *testing.T) {
-					runPinnedHysteriaLoopbackScenario(t, tlsName, mode)
+					runPinnedHysteriaLoopbackScenario(t, tlsName, mode, false)
 				})
 			}
 		})
 	}
 }
 
-func runPinnedHysteriaLoopbackScenario(t *testing.T, tlsName, mode string) {
+// A real public-H3 Link runs on the SAME UDP listener as the authenticated
+// UDP forwarding session. This intentionally uses the official helper.
+func TestPinnedHysteriaPublicHTTP3Loopback(t *testing.T) {
+	for _, tlsName := range []string{"quic-probe.invalid", "127.0.0.1"} {
+		t.Run(tlsName, func(t *testing.T) {
+			runPinnedHysteriaLoopbackScenario(t, tlsName, domain.QUICObfuscationPlain, true)
+		})
+	}
+}
+
+func runPinnedHysteriaLoopbackScenario(t *testing.T, tlsName, mode string, publicHTTP3 bool) {
 	bin := os.Getenv("STL_QUIC_HYSTERIA_BIN")
 	if bin == "" {
 		t.Skip("set STL_QUIC_HYSTERIA_BIN to the separately SHA-256 verified official app/v2.13.0 binary")
@@ -394,7 +409,7 @@ func runPinnedHysteriaLoopbackScenario(t *testing.T, tlsName, mode string) {
 	echoPort := uint16(echo.LocalAddr().(*net.UDPAddr).Port)
 	base := Plan{
 		LinkID: link, Underlay: netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), serverPort),
-		TLSName: tlsName, Obfuscation: mode,
+		TLSName: tlsName, Obfuscation: mode, PublicHTTP3: publicHTTP3,
 	}
 	srv := base
 	srv.Role = Listen
@@ -471,6 +486,31 @@ func runPinnedHysteriaLoopbackScenario(t *testing.T, tlsName, mode string) {
 		t.Fatal("positive control server exited before authentication completed")
 	}
 	serverProcess.waitClientAdmissions(t, 1)
+	if publicHTTP3 {
+		ca := filepath.Join(private, "server-ca.pem")
+		url := fmt.Sprintf("https://%s:%d/", tlsName, serverPort)
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		// A normal unauthenticated H3 GET must succeed while the private
+		// UDP tunnel remains separately password-authorized. Explicit
+		// server-CA trust validates both DNS and IP-literal TLS SAN.
+		args := []string{"--http3-only", "--noproxy", "*",
+			"--silent", "--show-error", "--fail", "--max-time", "5", "--cacert", ca}
+		if tlsName != "127.0.0.1" {
+			args = append(args, "--resolve", fmt.Sprintf("%s:%d:127.0.0.1", tlsName, serverPort))
+		}
+		args = append(args, "--dump-header", "-", url)
+		web := exec.CommandContext(ctx, "curl", args...)
+		out, err := web.Output()
+		cancel()
+		if err != nil {
+			t.Fatalf("actual pinned H3 listener did not serve an anonymous, CA-verified GET: %v", err)
+		}
+		if !bytes.Contains(out, []byte("HTTP/3 200")) ||
+			!bytes.Contains(out, []byte("content-type: text/html")) ||
+			!bytes.Contains(out, []byte("<!doctype html>")) {
+			t.Fatal("anonymous response did not use real HTTP/3 and the expected valid HTML body")
+		}
+	}
 	conn, err := net.Dial("udp4", net.JoinHostPort("127.0.0.1", fmt.Sprint(clientPort)))
 	if err != nil {
 		t.Fatal(err)
@@ -657,56 +697,63 @@ func runPinnedHysteriaLoopbackScenario(t *testing.T, tlsName, mode string) {
 	}
 	badAuthPath := saveConfig(&badAuthCmd, "bad-auth")
 	badAuthProcess := run(badAuthCmd, badAuthPath, "bad-auth")
-	badAuthProcess.waitRejected(t, "bearer")
+	if publicHTTP3 {
+		badAuthProcess.waitRejected(t, "bearer-masquerade")
+	} else {
+		badAuthProcess.waitRejected(t, "bearer")
+	}
 	// The server must not mistake a bad bearer for an authorized client.
 	observedServerLog := serverProcess.logBytes(t)
 	if n := bytes.Count(observedServerLog, []byte("client connected")); n != 1 {
 		t.Fatal("invalid bearer unexpectedly authenticated a QUIC client")
 	}
 	clear(observedServerLog)
-	// A correct bearer is insufficient without the exact per-Link client CA.
-	// Use a different isolated per-Link issuer while trusting the genuine
-	// server CA; this checks actual upstream client-certificate rejection.
-	foreignLink := domain.LinkID("lnk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	foreignServer, foreignClient, err := GeneratePair(foreignLink, base.TLSName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer foreignServer.Clear()
-	defer foreignClient.Clear()
-	foreignRoot := filepath.Join(root, "credentials", "quic", string(foreignLink))
-	if err := os.MkdirAll(foreignRoot, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	foreignFiles := foreignClient.ProtectedFiles()
-	serverCA, err := os.ReadFile(filepath.Join(private, "server-ca.pem"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	clear(foreignFiles["server-ca.pem"])
-	foreignFiles["server-ca.pem"] = serverCA
-	for name, raw := range foreignFiles {
-		if err := os.WriteFile(filepath.Join(foreignRoot, name), raw, 0o600); err != nil {
-			clearProtectedCopies(foreignFiles)
+	if !publicHTTP3 {
+		// A correct bearer is insufficient without the exact per-Link client CA.
+		// Use a different isolated per-Link issuer while trusting the genuine
+		// server CA; this checks actual upstream client-certificate rejection.
+		foreignLink := domain.LinkID("lnk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+		foreignServer, foreignClient, err := GeneratePair(foreignLink, base.TLSName)
+		if err != nil {
 			t.Fatal(err)
 		}
+		defer foreignServer.Clear()
+		defer foreignClient.Clear()
+		foreignRoot := filepath.Join(root, "credentials", "quic", string(foreignLink))
+		if err := os.MkdirAll(foreignRoot, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		foreignFiles := foreignClient.ProtectedFiles()
+		serverCA, err := os.ReadFile(filepath.Join(private, "server-ca.pem"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		clear(foreignFiles["server-ca.pem"])
+		foreignFiles["server-ca.pem"] = serverCA
+		for name, raw := range foreignFiles {
+			if err := os.WriteFile(filepath.Join(foreignRoot, name), raw, 0o600); err != nil {
+				clearProtectedCopies(foreignFiles)
+				t.Fatal(err)
+			}
+		}
+		clearProtectedCopies(foreignFiles)
+		foreignPlan := dial
+		foreignPlan.LinkID = foreignLink
+		foreignPlan.LocalForwardUDPPort = reserve()
+		foreignCmd, err := BuildWithObfuscation(foreignPlan, bin, root, token, obfuscationSecret)
+		if err != nil {
+			t.Fatal(err)
+		}
+		foreignConfig := saveConfig(&foreignCmd, "bad-mtls")
+		foreignProcess := run(foreignCmd, foreignConfig, "bad-mtls")
+		foreignProcess.waitRejected(t, "client-ca")
+		observedServerLog = serverProcess.logBytes(t)
+		if n := bytes.Count(observedServerLog, []byte("client connected")); n != 1 {
+			t.Fatal("foreign client CA unexpectedly authenticated a QUIC client")
+		}
+		clear(observedServerLog)
+
 	}
-	clearProtectedCopies(foreignFiles)
-	foreignPlan := dial
-	foreignPlan.LinkID = foreignLink
-	foreignPlan.LocalForwardUDPPort = reserve()
-	foreignCmd, err := BuildWithObfuscation(foreignPlan, bin, root, token, obfuscationSecret)
-	if err != nil {
-		t.Fatal(err)
-	}
-	foreignConfig := saveConfig(&foreignCmd, "bad-mtls")
-	foreignProcess := run(foreignCmd, foreignConfig, "bad-mtls")
-	foreignProcess.waitRejected(t, "client-ca")
-	observedServerLog = serverProcess.logBytes(t)
-	if n := bytes.Count(observedServerLog, []byte("client connected")); n != 1 {
-		t.Fatal("foreign client CA unexpectedly authenticated a QUIC client")
-	}
-	clear(observedServerLog)
 
 	forbidden, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
@@ -757,7 +804,11 @@ func runPinnedHysteriaLoopbackScenario(t *testing.T, tlsName, mode string) {
 		t.Fatal("allowed destination control failed after ACL rejection")
 	}
 	// Explicitly keep sensitive helper configs out of logging and reporting.
-	for _, name := range append([]string{"server", "client", "bad-auth", "bad-mtls", "bad-destination"}, mismatchLogs...) {
+	logNames := []string{"server", "client", "bad-auth", "bad-destination"}
+	if !publicHTTP3 {
+		logNames = append(logNames, "bad-mtls")
+	}
+	for _, name := range append(logNames, mismatchLogs...) {
 		b, err := os.ReadFile(filepath.Join(root, name+".log"))
 		if err != nil {
 			t.Fatal(err)
@@ -768,7 +819,7 @@ func runPinnedHysteriaLoopbackScenario(t *testing.T, tlsName, mode string) {
 		}
 		clear(b)
 	}
-	t.Logf("pinned Hysteria v2.13.0 generated JSON E2E: issued TLS/mTLS + bearer UDP 100/100; invalid token, foreign client CA and UDP destination denied")
+	t.Logf("pinned Hysteria v2.13.0 generated JSON E2E: publicHTTP3=%t; bearer UDP 100/100; invalid token and UDP destination denied; mTLS additionally tested where selected", publicHTTP3)
 }
 
 func domainTestLinkID() domain.LinkID {

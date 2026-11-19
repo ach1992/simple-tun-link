@@ -13,7 +13,7 @@ saved Link is **not** proof that packets reach its peer.
 | L2TPv3 Direct-IP | Native IP protocol 115 | No |
 | WireGuard | Native UDP | Yes |
 | WireGuard over WSS/TLS | TCP/TLS plus kernel WireGuard; optional `wstunnel` | Yes |
-| WireGuard over QUIC | QUIC/TLS plus kernel WireGuard; optional Hysteria (Plain or Salamander) | Yes |
+| WireGuard over QUIC | QUIC/TLS plus kernel WireGuard; pinned Hysteria (Plain/mTLS, Plain/public HTTP/3, Salamander) | Yes |
 | IPsec | Native IKEv2/XFRM, ESP or NAT-T; gated host preparation | Yes |
 | MASQUE CONNECT-IP (v0.1.28+) | HTTP/2 over TLS/TCP with mutual TLS; native IPv4 TUN | Yes |
 

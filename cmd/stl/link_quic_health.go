@@ -25,6 +25,7 @@ type QUICLinkDiagnostics struct {
 	Carrier                    string                        `json:"carrier"`
 	Role                       string                        `json:"role"`
 	Obfuscation                string                        `json:"obfuscation"`
+	PublicHTTP3                bool                          `json:"public_http3"`
 	Interface                  string                        `json:"interface,omitempty"`
 	IfIndex                    int                           `json:"ifindex,omitempty"`
 	QUICHelperActive           bool                          `json:"quic_helper_active"`
@@ -52,7 +53,7 @@ func quicHealthError(link domain.Link, reason, detail string) error {
 // owned resources under its existing locks. CLI code does not adopt names,
 // receipts or arbitrary matching processes as ownership evidence.
 func trustedQUICObservation(ctx context.Context, link domain.Link, options runtimeOptions) (QUICLinkDiagnostics, linux.Runner, error) {
-	d := QUICLinkDiagnostics{SchemaVersion: 1, LinkID: link.ID, Carrier: "quic-udp", Role: link.QUIC.Role, Obfuscation: publicQUICObfuscation(link.QUIC.Obfuscation),
+	d := QUICLinkDiagnostics{SchemaVersion: 1, LinkID: link.ID, Carrier: "quic-udp", Role: link.QUIC.Role, Obfuscation: publicQUICObfuscation(link.QUIC.Obfuscation), PublicHTTP3: link.QUIC.PublicHTTP3,
 		AuthenticationObservation: "not_observable_from_process_state",
 		TrafficObservation:        "not_tested_by_read_only_diagnostics"}
 	if link.Backend != domain.BackendWireGuardQUIC {
@@ -93,7 +94,11 @@ func trustedQUICObservation(ctx context.Context, link domain.Link, options runti
 	d.LastHandshakeUnix, d.RXBytes, d.TXBytes = observed.LatestHandshakeUnix, observed.RXBytes, observed.TXBytes
 	d.WireGuardHandshakeObserved = observed.LatestHandshakeUnix > 0
 	if d.WireGuardHandshakeObserved {
-		d.AuthenticationObservation = "kernel WireGuard peer authenticated; QUIC mTLS is not individually attested by this command"
+		if link.QUIC.PublicHTTP3 {
+			d.AuthenticationObservation = "kernel WireGuard peer authenticated; QUIC password authorization is not individually attested by this command"
+		} else {
+			d.AuthenticationObservation = "kernel WireGuard peer authenticated; QUIC mTLS is not individually attested by this command"
+		}
 	}
 	if d.RXBytes > 0 && d.TXBytes > 0 {
 		d.TrafficObservation = "kernel WireGuard RX/TX bytes observed; application traffic was not measured by this command"

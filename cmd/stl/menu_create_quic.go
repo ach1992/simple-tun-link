@@ -29,8 +29,8 @@ func menuCreateQUIC(input io.Reader, reader *bufio.Reader, out, errOut io.Writer
 func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
 	opts *runtimeOptions, companion string) int {
 	p := createPrompts{reader: reader, out: out, errOut: errOut}
-	menuScreen(out, "Create / WireGuard over QUIC (mTLS)")
-	menuNotice(out, "INFO", "Kernel WireGuard ingress is guarded; the remote peer connects over authenticated QUIC/UDP with TLS and per-Link credentials.")
+	menuScreen(out, "Create / WireGuard over QUIC")
+	menuNotice(out, "INFO", "Kernel WireGuard ingress is guarded. Choose either original mTLS, Salamander, or real HTTP/3 over UDP with private Link password authorization.")
 	inspect := func() error {
 		_, err := quic.InspectPinnedHysteria(companion)
 		return err
@@ -51,7 +51,7 @@ func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, er
 		if !menuEnsureCompanion(input, reader, out, spec, productionMenuCompanionOps(inspect, spec)) {
 			return 4
 		}
-		menuScreen(out, "Create / WireGuard over QUIC (mTLS)")
+		menuScreen(out, "Create / WireGuard over QUIC")
 		menuField(out, "Companion", "Pinned helper verified; ready for Link setup")
 	}
 	peer, err := askPeerUnderlay(p)
@@ -83,7 +83,7 @@ func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, er
 	if err != nil {
 		return p.failed(err)
 	}
-	obfuscation, err := askQUICObfuscation(p)
+	obfuscation, publicHTTP3, err := askQUICMode(p)
 	if err != nil {
 		return p.failed(err)
 	}
@@ -134,7 +134,7 @@ func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, er
 	if err != nil {
 		return p.failed(err)
 	}
-	request := quicCreateRequest{SchemaVersion: 2, Obfuscation: publicQUICObfuscation(obfuscation), LinkID: id, Underlay: desiredUnderlayV1{Local: route.Source, Peer: peer},
+	request := quicCreateRequest{SchemaVersion: 2, Obfuscation: publicQUICObfuscation(obfuscation), PublicHTTP3: publicHTTP3, LinkID: id, Underlay: desiredUnderlayV1{Local: route.Source, Peer: peer},
 		Addresses:  desiredLinkAddressesV1{Local: addresses.Local, Peer: addresses.Peer},
 		ListenPort: localWG, PeerPort: peerWG, Role: role, UDPPort: udp,
 		LocalKeepalive: 25, PeerKeepalive: 25,
@@ -149,11 +149,12 @@ func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, er
 	showCarrierDirectionReview(out, route.Source, peer, role, roleSource, "UDP", udp)
 	menuField(out, "TLS UDP port", strconv.Itoa(int(udp)))
 	menuField(out, "QUIC obfuscation", publicQUICObfuscation(obfuscation))
+	menuField(out, "Public HTTP/3", strconv.FormatBool(publicHTTP3))
 	menuField(out, "Kernel WG UDP", fmt.Sprintf("this %d / peer %d", localWG, peerWG))
 	menuField(out, "Private IPs", addresses.Local.String()+" <-> "+addresses.Peer.String())
 	menuField(out, "Private MTU", "Auto: conservative 1280-byte start; peer PMTU remains unmeasured")
 	menuField(out, "QUIC forwarding UDP", fmt.Sprintf("this %d / peer %d", forward, remoteForward))
-	menuNotice(out, "WARNING", "Creates scoped nft ingress guard, WG interface, QUIC helper, mTLS secrets and a private peer handoff.")
+	menuNotice(out, "WARNING", "Creates scoped nft guard, WireGuard, QUIC helper, private credentials and peer handoff. HTTP/3 mode admits public web requests but requires the Link password for private forwarding.")
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
 		return 2
 	}
@@ -190,20 +191,23 @@ func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, er
 
 // The menu collects the same typed choice as creator schema v2; credentials
 // remain generated and staged by the canonical QUIC lifecycle.
-func askQUICObfuscation(p createPrompts) (string, error) {
+func askQUICMode(p createPrompts) (string, bool, error) {
 	menuSection(p.out, "QUIC packet representation")
-	menuOption(p.out, "1", "Plain", "standard QUIC packets (default)")
-	menuOption(p.out, "2", "Salamander", "shared per-Link obfuscation; TLS authentication remains required")
-	answer, err := p.ask("QUIC obfuscation [1]: ")
+	menuOption(p.out, "1", "Plain + mTLS", "original private QUIC handshake (default)")
+	menuOption(p.out, "2", "Salamander + mTLS", "per-Link obfuscation; not standard HTTP/3")
+	menuOption(p.out, "3", "Plain + public HTTP/3", "real same-UDP-endpoint HTTP/3; private forwarding requires Link password and WireGuard")
+	answer, err := p.ask("QUIC mode [1]: ")
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	switch answer {
 	case "", "1":
-		return "", nil
+		return "", false, nil
 	case "2":
-		return "salamander", nil
+		return "salamander", false, nil
+	case "3":
+		return "", true, nil
 	default:
-		return "", fmt.Errorf("choose QUIC obfuscation 1 or 2")
+		return "", false, fmt.Errorf("choose QUIC mode 1, 2 or 3")
 	}
 }
