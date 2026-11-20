@@ -109,13 +109,13 @@ func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, er
 	if err != nil {
 		return p.failed(err)
 	}
-	tlsName, err := p.ask("TLS certificate SAN (Enter = listener IP; or exact DNS name): ")
+	tlsName, err := askTLSCertificateSAN(p)
 	if err != nil {
 		return p.failed(err)
 	}
-	if len(tlsName) > 253 || strings.ContainsAny(tlsName, " \t\r\n/\\") {
-		menuNotice(out, "WARNING", "Specify one verifiable IP or DNS name without paths.")
-		return 2
+	localKeep, peerKeep, err := askCarrierKeepalives(p)
+	if err != nil {
+		return p.failed(err)
 	}
 	idMaker := domain.NewLinkID
 	if opts != nil && opts.createLinkID != nil {
@@ -137,7 +137,7 @@ func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, er
 	request := quicCreateRequest{SchemaVersion: 2, Obfuscation: publicQUICObfuscation(obfuscation), PublicHTTP3: publicHTTP3, LinkID: id, Underlay: desiredUnderlayV1{Local: route.Source, Peer: peer},
 		Addresses:  desiredLinkAddressesV1{Local: addresses.Local, Peer: addresses.Peer},
 		ListenPort: localWG, PeerPort: peerWG, Role: role, UDPPort: udp,
-		LocalKeepalive: 25, PeerKeepalive: 25,
+		LocalKeepalive: localKeep, PeerKeepalive: peerKeep,
 		LocalForwardUDPPort: forward, RemoteForwardUDPPort: remoteForward, TLSServerName: tlsName}
 	preview, err := json.Marshal(request)
 	if err != nil {
@@ -151,6 +151,7 @@ func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, er
 	menuField(out, "QUIC obfuscation", publicQUICObfuscation(obfuscation))
 	menuField(out, "Public HTTP/3", strconv.FormatBool(publicHTTP3))
 	menuField(out, "Kernel WG UDP", fmt.Sprintf("this %d / peer %d", localWG, peerWG))
+	menuField(out, "WG keepalive seconds", fmt.Sprintf("this %d / peer %d (0=off)", localKeep, peerKeep))
 	menuField(out, "Private IPs", addresses.Local.String()+" <-> "+addresses.Peer.String())
 	menuField(out, "Private MTU", "Auto: conservative 1280-byte start; peer PMTU remains unmeasured")
 	menuField(out, "QUIC forwarding UDP", fmt.Sprintf("this %d / peer %d", forward, remoteForward))
@@ -196,18 +197,20 @@ func askQUICMode(p createPrompts) (string, bool, error) {
 	menuOption(p.out, "1", "Plain + mTLS", "original private QUIC handshake (default)")
 	menuOption(p.out, "2", "Salamander + mTLS", "per-Link obfuscation; not standard HTTP/3")
 	menuOption(p.out, "3", "Plain + public HTTP/3", "real same-UDP-endpoint HTTP/3; private forwarding requires Link password and WireGuard")
-	answer, err := p.ask("QUIC mode [1]: ")
-	if err != nil {
-		return "", false, err
-	}
-	switch answer {
-	case "", "1":
-		return "", false, nil
-	case "2":
-		return "salamander", false, nil
-	case "3":
-		return "", true, nil
-	default:
-		return "", false, fmt.Errorf("choose QUIC mode 1, 2 or 3")
+	for {
+		answer, err := p.ask("QUIC mode [1]: ")
+		if err != nil {
+			return "", false, err
+		}
+		switch answer {
+		case "", "1":
+			return "", false, nil
+		case "2":
+			return "salamander", false, nil
+		case "3":
+			return "", true, nil
+		default:
+			fmt.Fprintln(p.out, "Choose QUIC mode 1, 2 or 3, or press q to go back.")
+		}
 	}
 }

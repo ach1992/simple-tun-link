@@ -70,7 +70,7 @@ func TestMalformedSchemasRejectedEvenWithCorrectIntegrityHash(t *testing.T) {
 		{"wrong key case", fmt.Sprintf(`{"schema_version":2,"Mode":"quick","link":%s}`, link), stlerr.CodeInvalid},
 		{"array instead of link", `{"schema_version":2,"mode":"quick","link":[]}`, stlerr.CodeInvalid},
 		{"null recipient credential", fmt.Sprintf(`{"schema_version":2,"mode":"quick","link":%s,"recipient_secret":null}`, link), stlerr.CodeInvalid},
-		{"unsupported schema version", fmt.Sprintf(`{"schema_version":4,"mode":"quick","link":%s}`, link), stlerr.CodeUnsupported},
+		{"unsupported schema version", fmt.Sprintf(`{"schema_version":5,"mode":"quick","link":%s}`, link), stlerr.CodeUnsupported},
 		{"unsupported exchange mode", fmt.Sprintf(`{"schema_version":2,"mode":"secure_exchange","link":%s}`, link), stlerr.CodeUnsupported},
 		{"missing schema version", fmt.Sprintf(`{"mode":"quick","link":%s}`, link), stlerr.CodeInvalid},
 		{"plaintext backend with credential", fmt.Sprintf(`{"schema_version":2,"mode":"quick","link":%s,"recipient_secret":{"kind":"ipsec_psk","data":"YQ"}}`, link), stlerr.CodeInvalid},
@@ -83,7 +83,7 @@ func TestMalformedSchemasRejectedEvenWithCorrectIntegrityHash(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			encoded := encodeRawForTest([]byte(tt.raw))
 			if tt.name == "unsupported schema version" {
-				encoded = encodeRawForVersionTest(4, []byte(tt.raw))
+				encoded = encodeRawForVersionTest(5, []byte(tt.raw))
 			}
 			_, err := DecodeSetupLink(encoded)
 			if err == nil || stlerr.CodeOf(err) != tt.code {

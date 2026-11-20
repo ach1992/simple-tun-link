@@ -54,3 +54,57 @@ func TestGuidedPortValidationIsProtocolNeutralAndRetries(t *testing.T) {
 		})
 	}
 }
+
+func TestKeepalivePromptsRetryAndCancelWithoutChangingOtherFields(t *testing.T) {
+	var out bytes.Buffer
+	p := createPrompts{reader: bufio.NewReader(strings.NewReader("invalid\n65536\n-1\n0\n")), out: &out}
+	value, err := askKeepalive(p, "Keepalive seconds: ")
+	if err != nil || value != 0 || strings.Count(out.String(), "Keepalive seconds: ") != 4 {
+		t.Fatalf("keepalive retry failed: %d, %v, %q", value, err, out.String())
+	}
+	out.Reset()
+	p = createPrompts{reader: bufio.NewReader(strings.NewReader("y\n65535\nwrong\n12\n")), out: &out}
+	local, peer, err := askCarrierKeepalives(p)
+	if err != nil || local != 65535 || peer != 12 || strings.Count(out.String(), "Keepalive seconds on OTHER server") != 2 {
+		t.Fatalf("endpoint-local keepalive choices lost: %d/%d, %v, %q", local, peer, err, out.String())
+	}
+	out.Reset()
+	p = createPrompts{reader: bufio.NewReader(strings.NewReader("n\n")), out: &out}
+	local, peer, err = askCarrierKeepalives(p)
+	if err != nil || local != 25 || peer != 25 {
+		t.Fatalf("guided default changed: %d/%d %v", local, peer, err)
+	}
+	out.Reset()
+	p = createPrompts{reader: bufio.NewReader(strings.NewReader("y\nq\n")), out: &out}
+	_, _, err = askCarrierKeepalives(p)
+	if !errors.Is(err, errCreateCancelled) {
+		t.Fatalf("cancel did not propagate: %v", err)
+	}
+}
+
+func TestOptionalTLSNamesAndModesRetryAtSamePrompt(t *testing.T) {
+	var out bytes.Buffer
+	p := createPrompts{reader: bufio.NewReader(strings.NewReader("bad/name\nvalid.example\n")), out: &out}
+	name, err := askTLSCertificateSAN(p)
+	if err != nil || name != "valid.example" || strings.Count(out.String(), "TLS certificate SAN") != 2 {
+		t.Fatalf("TLS name did not retry: %q %v %q", name, err, out.String())
+	}
+	out.Reset()
+	p = createPrompts{reader: bufio.NewReader(strings.NewReader("wrong\n2\n")), out: &out}
+	public, err := askWSSPublicTLS(p)
+	if err != nil || !public || strings.Count(out.String(), "WSS TLS mode [1]") != 2 {
+		t.Fatalf("WSS mode did not retry: %v %v %q", public, err, out.String())
+	}
+	out.Reset()
+	p = createPrompts{reader: bufio.NewReader(strings.NewReader("wrong\n3\n")), out: &out}
+	mode, http3, err := askQUICMode(p)
+	if err != nil || mode != "" || !http3 || strings.Count(out.String(), "QUIC mode [1]") != 2 {
+		t.Fatalf("QUIC mode did not retry: %q %v %v %q", mode, http3, err, out.String())
+	}
+	out.Reset()
+	p = createPrompts{reader: bufio.NewReader(strings.NewReader("q\n")), out: &out}
+	_, err = askTLSCertificateSAN(p)
+	if !errors.Is(err, errCreateCancelled) {
+		t.Fatalf("TLS name cancel was lost: %v", err)
+	}
+}

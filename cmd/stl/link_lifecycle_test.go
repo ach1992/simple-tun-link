@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -625,5 +626,27 @@ func TestDesiredLinkV1RejectsUnknownNestedDomainExtensionsBeforeRuntime(t *testi
 				t.Fatalf("unknown field created state/locks: %v", err)
 			}
 		})
+	}
+}
+
+func TestDesiredIPIPSchemaV7CustomPortAndFrozenV2Admission(t *testing.T) {
+	for _, port := range []int{1, 65535} {
+		raw := fmt.Sprintf(`{"schema_version":7,"link":{"id":"lnk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","underlay":{"local":"192.0.2.10","peer":"198.51.100.20"},"addresses":{"local":"10.80.20.10/24","peer":"10.80.20.11/25"},"backend":"ipip","encapsulation":"fou","ipip":{"udp_port":%d}}}`, port)
+		link, err := decodeDesiredLink(strings.NewReader(raw))
+		if err != nil || link.IPIP.UDPPort != uint16(port) || link.Addresses.Local.Bits() != 24 || link.Addresses.Peer.Bits() != 25 {
+			t.Fatalf("schema v7 lost custom configuration: port=%d link=%+v err=%v", port, link, err)
+		}
+		legacy := strings.Replace(raw, `"schema_version":7`, `"schema_version":2`, 1)
+		if _, err := decodeDesiredLink(strings.NewReader(legacy)); err == nil {
+			t.Fatal("frozen v2 silently accepted an IPIP field")
+		}
+		wrongBackend := strings.Replace(raw, `"backend":"ipip"`, `"backend":"gre"`, 1)
+		if _, err := decodeDesiredLink(strings.NewReader(wrongBackend)); err == nil {
+			t.Fatal("custom IPIP schema accepted GRE")
+		}
+		native := strings.Replace(raw, `"encapsulation":"fou"`, `"encapsulation":"native"`, 1)
+		if _, err := decodeDesiredLink(strings.NewReader(native)); err == nil {
+			t.Fatal("native IPIP accepted FOU-only port")
+		}
 	}
 }

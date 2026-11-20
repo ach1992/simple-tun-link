@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	ipipbackend "github.com/ach1992/simple-tun-link/internal/backend/ipip"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 	"github.com/ach1992/simple-tun-link/internal/pairing"
@@ -344,6 +345,19 @@ func menuCreatePlain(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 			return p.failed(err)
 		}
 	}
+	if advanced && backend == domain.BackendIPIP && mode != domain.EncapNative {
+		derived, err := ipipbackend.UDPPort(link)
+		if err != nil {
+			return p.failed(err)
+		}
+		port, err := askPortDefault(p, fmt.Sprintf("IPIP %s UDP receive port [%d] (both peers must match): ", mode, derived), derived)
+		if err != nil {
+			return p.failed(err)
+		}
+		if port != derived {
+			link.IPIP.UDPPort = port
+		}
+	}
 	if advanced {
 		if err := chooseManagedMTU(p, &link.MTU); err != nil {
 			return p.failed(err)
@@ -398,6 +412,18 @@ func menuCreatePlain(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		menuField(out, "GRE TTL / TOS", fmt.Sprintf("%d / %d (TTL 0=automatic)", link.GRE.TTL, link.GRE.TOS))
 		menuField(out, "GRE PMTU / checksum / sequence", fmt.Sprintf("enabled=%t / %t / %t", !link.GRE.DisablePMTUD, link.GRE.Checksum, link.GRE.Sequence))
 	}
+	if backend == domain.BackendIPIP && mode != domain.EncapNative {
+		port, err := ipipbackend.UDPPort(link)
+		if err != nil {
+			return p.failed(err)
+		}
+		menuField(out, "IPIP UDP receive port", strconv.Itoa(int(port))+" (exact peer match)")
+	}
+	if (backend == domain.BackendGRE || backend == domain.BackendIPIP) &&
+		(!link.Addresses.Local.Masked().Contains(link.Addresses.Peer.Addr()) ||
+			!link.Addresses.Peer.Masked().Contains(link.Addresses.Local.Addr())) {
+		menuNotice(out, "WARNING", "These custom CIDRs do not provide reciprocal on-link routing to the peer tunnel addresses. STL does not add an extra host route. Verify or configure the necessary routes on BOTH hosts; saving a Link is not evidence of peer connectivity.")
+	}
 	menuNotice(out, "INFO", "Auto MTU is only a local estimate. Test the peer after pairing.")
 	menuNotice(out, "WARNING", "Native GRE/IPIP/L2TPv3 is not encrypted or authenticated. Do not send secrets.")
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
@@ -431,7 +457,13 @@ func menuCreatePlain(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 			},
 		}, MTU: link.MTU},
 	}
-	payload, err := json.Marshal(wire)
+	var payload []byte
+	if link.IPIP.UDPPort != 0 {
+		payload, err = json.Marshal(desiredLinkRequestV7{SchemaVersion: desiredIPIPPortSchemaVersion,
+			Link: desiredLinkV7{desiredLinkV2: wire.Link, IPIP: desiredIPIPOptionsV1{UDPPort: link.IPIP.UDPPort}}})
+	} else {
+		payload, err = json.Marshal(wire)
+	}
 	if err != nil {
 		fmt.Fprintln(errOut, "Cannot encode Link intent; nothing applied.")
 		return 1

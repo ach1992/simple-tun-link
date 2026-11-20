@@ -339,3 +339,24 @@ func TestMASQUEGuidedTLSModeDefaultAndPublicChoice(t *testing.T) {
 		}
 	}
 }
+
+func TestMASQUEInvalidTLSModeAndNameRetryWithoutRecreate(t *testing.T) {
+	var out bytes.Buffer
+	p := createPrompts{reader: bufio.NewReader(strings.NewReader("wrong\n2\n")), out: &out}
+	public, err := askMASQUEPublicTLS(p)
+	if err != nil || !public || strings.Count(out.String(), "MASQUE TLS mode [1]") != 2 {
+		t.Fatalf("MASQUE TLS mode did not retry: %t %v %q", public, err, out.String())
+	}
+	out.Reset()
+	p = createPrompts{reader: bufio.NewReader(strings.NewReader("has/path\npeer.example\n")), out: &out}
+	name, err := askMASQUETLSName(p, netip.MustParseAddr("192.0.2.10"))
+	if err != nil || name != "peer.example" || strings.Count(out.String(), "TLS certificate name") != 2 {
+		t.Fatalf("MASQUE name did not retry: %q %v %q", name, err, out.String())
+	}
+	out.Reset()
+	p = createPrompts{reader: bufio.NewReader(strings.NewReader("\n")), out: &out}
+	name, err = askMASQUETLSName(p, netip.MustParseAddr("192.0.2.10"))
+	if err != nil || name != "192.0.2.10" {
+		t.Fatalf("listener IP default changed: %q %v", name, err)
+	}
+}

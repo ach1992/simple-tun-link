@@ -34,6 +34,7 @@ const (
 	desiredQUICSchemaVersion            = 4
 	desiredQUICObfuscationSchemaVersion = 5
 	desiredMASQUESchemaVersion          = 6
+	desiredIPIPPortSchemaVersion        = 7
 	maxDesiredLinkBytes                 = 16 * 1024
 	lifecycleTimeLimit                  = 5 * time.Minute
 	maxLinkJSONNesting                  = 12
@@ -661,6 +662,25 @@ func (d desiredLinkV6) link() domain.Link {
 	return result
 }
 
+// Input schema v7 extends frozen v2 only for explicit IPIP FOU/GUE ports.
+type desiredLinkRequestV7 struct {
+	SchemaVersion int           `json:"schema_version"`
+	Link          desiredLinkV7 `json:"link"`
+}
+type desiredLinkV7 struct {
+	desiredLinkV2
+	IPIP desiredIPIPOptionsV1 `json:"ipip"`
+}
+type desiredIPIPOptionsV1 struct {
+	UDPPort uint16 `json:"udp_port"`
+}
+
+func (d desiredLinkV7) link() domain.Link {
+	link := d.desiredLinkV2.link()
+	link.IPIP.UDPPort = d.IPIP.UDPPort
+	return link
+}
+
 // Input schema v3 adds ONLY the authenticated WireGuard-over-WSS public
 // settings. Frozen v1/v2 requests never acquire new mutation capabilities.
 type desiredLinkRequestV3 struct {
@@ -815,6 +835,15 @@ func decodeDesiredLink(reader io.Reader) (domain.Link, error) {
 		if link.Backend != domain.BackendWireGuardQUIC {
 			return domain.Link{}, stlerr.New(stlerr.CodeUnsupported, "decode_link", "", "",
 				"desired Link v5 is reserved for wireguard-quic")
+		}
+	case desiredIPIPPortSchemaVersion:
+		var request desiredLinkRequestV7
+		if err := decoder.Decode(&request); err != nil {
+			return domain.Link{}, fmt.Errorf("invalid desired IPIP Link v7 request")
+		}
+		link = request.Link.link()
+		if link.Backend != domain.BackendIPIP || link.Encapsulation == domain.EncapNative || link.IPIP.UDPPort == 0 {
+			return domain.Link{}, stlerr.New(stlerr.CodeUnsupported, "decode_link", "", "", "desired Link v7 requires custom IPIP FOU/GUE UDP receive port")
 		}
 	case desiredMASQUESchemaVersion:
 		var request desiredLinkRequestV6

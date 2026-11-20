@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/ach1992/simple-tun-link/internal/domain"
 )
@@ -33,5 +34,20 @@ func askPortDefault(p createPrompts, prompt string, fallback uint16) (uint16, er
 			return uint16(value), nil
 		}
 		fmt.Fprintln(p.out, "Use a port number between 1 and 65535.")
+	}
+}
+
+// A malformed optional TLS name is a recoverable field error. Backend
+// admission still validates the exact SAN and protected identity later.
+func askTLSCertificateSAN(p createPrompts) (string, error) {
+	for {
+		name, err := p.ask("TLS certificate SAN (Enter = listener IP; or exact DNS name): ")
+		if err != nil {
+			return "", err
+		}
+		if len(name) <= 253 && !strings.ContainsAny(name, " \t\r\n/\\") {
+			return name, nil
+		}
+		fmt.Fprintln(p.out, "Specify one DNS name or listener IP (at most 253 bytes, no spaces or paths); try again or press q.")
 	}
 }

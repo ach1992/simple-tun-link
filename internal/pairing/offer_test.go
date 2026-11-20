@@ -363,7 +363,6 @@ func TestRejectUnsafeOrInvalidLinkMetadata(t *testing.T) {
 		{"missing peer", func(l *domain.Link) { l.Underlay.Peer = netip.Addr{} }},
 		{"identical underlay", func(l *domain.Link) { l.Underlay.Peer = l.Underlay.Local }},
 		{"invalid address", func(l *domain.Link) { l.Addresses.Peer = netip.Prefix{} }},
-		{"prefix mismatch", func(l *domain.Link) { l.Addresses.Peer = netip.MustParsePrefix("10.90.20.1/30") }},
 		{"different underlay families", func(l *domain.Link) { l.Underlay.Peer = netip.MustParseAddr("2001:db8::20") }},
 		{"embedded newline", func(l *domain.Link) { l.DisplayName = "line\ninject" }},
 		{"format override", func(l *domain.Link) { l.DisplayName = "name\u202einjected" }},
@@ -467,5 +466,56 @@ func TestWireGuardQuickLinkTamperedPublicIdentityRejectedAfterNewChecksum(t *tes
 	}
 	if _, err := DecodeSetupLink(encodeRawForVersionTest(WireGuardSchemaVersion, raw)); err == nil {
 		t.Fatal("rechecksummed public identity tampering was accepted")
+	}
+}
+
+func TestIPIPCustomReceivePortAndMixedPrefixesPairingRoundTrip(t *testing.T) {
+	for _, port := range []uint16{1, 12345, 65535} {
+		for _, mode := range []domain.Encapsulation{domain.EncapFOU, domain.EncapGUE} {
+			link := testLink(idOne, domain.BackendIPIP, mode)
+			link.IPIP.UDPPort = port
+			link.Addresses.Local = netip.MustParsePrefix("10.90.20.10/24")
+			link.Addresses.Peer = netip.MustParsePrefix("10.90.20.11/25")
+			offer, err := NewQuickOffer(link, nil)
+			if err != nil || offer.effectiveSchemaVersion() != IPIPPortSchemaVersion {
+				t.Fatalf("custom IPIP pair rejected: %s %d %v", mode, port, err)
+			}
+			url, err := offer.EncodeSetupLink()
+			if err != nil || !strings.HasPrefix(url, "stl://4.") {
+				t.Fatalf("schema/URL: %v", err)
+			}
+			decoded, err := DecodeSetupLink(url)
+			if err != nil || decoded.Link() != link {
+				t.Fatalf("custom IPIP round-trip: %v %+v", err, decoded.Link())
+			}
+			receiver := decoded.ReceiverLink()
+			if receiver.IPIP.UDPPort != port || receiver.Addresses.Local != link.Addresses.Peer ||
+				receiver.Addresses.Peer != link.Addresses.Local || Invert(receiver) != link {
+				t.Fatalf("peer inversion changed explicit port/prefixes: %+v", receiver)
+			}
+			// Keep unrecognized IPIP fields out of frozen schema v2.
+			raw, err := json.Marshal(wireOffer{SchemaVersion: SchemaVersion, Mode: ModeQuick, Link: link})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodeSetupLink(encodeRawForVersionTest(SchemaVersion, raw)); err == nil {
+				t.Fatal("legacy pairing silently accepted a new IPIP field")
+			}
+		}
+	}
+	gre := testLink(idOne, domain.BackendGRE, domain.EncapNative)
+	gre.Addresses.Local = netip.MustParsePrefix("10.90.20.10/24")
+	gre.Addresses.Peer = netip.MustParsePrefix("10.90.20.11/25")
+	offer, err := NewQuickOffer(gre, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	url, err := offer.EncodeSetupLink()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeSetupLink(url)
+	if err != nil || decoded.ReceiverLink().Addresses.Local != gre.Addresses.Peer {
+		t.Fatalf("mixed prefix GRE pairing failed: %v", err)
 	}
 }

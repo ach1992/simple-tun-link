@@ -131,6 +131,9 @@ func TestWSSGuidedRealPTYDirectionPortRetryReviewAndCancel(t *testing.T) {
 		{"Kernel WG UDP port on OTHER server", "\n"},
 		{"THIS server's private loopback forwarding UDP port", "\n"},
 		{"TLS certificate SAN", "\n"},
+		{"Customize kernel WireGuard keepalive", "y\n"},
+		{"Keepalive seconds on THIS server", "0\n"},
+		{"Keepalive seconds on OTHER server", "65535\n"},
 	} {
 		readMenuPTYUntil(t, master, step.prompt)
 		if _, err := io.WriteString(master, step.answer); err != nil {
@@ -140,7 +143,7 @@ func TestWSSGuidedRealPTYDirectionPortRetryReviewAndCancel(t *testing.T) {
 	review := readMenuPTYUntil(t, master, "Create WSS Link and private receiver handoff? Type YES")
 	for _, marker := range []string{
 		"192.0.2.10 (dial)", "192.0.2.20 (listen)", "192.0.2.20:8443/TCP",
-		"manual override", "Public reachability is unverified",
+		"manual override", "Public reachability is unverified", "this 0 / peer 65535",
 	} {
 		if !strings.Contains(review, marker) {
 			t.Fatalf("narrow WSS review missing %q: %q", marker, review)

@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	ipipbackend "github.com/ach1992/simple-tun-link/internal/backend/ipip"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 )
 
@@ -80,8 +81,9 @@ func printManualConnectionDetails(out io.Writer, l domain.Link) {
 			fmt.Fprintln(out, "  OTHER server menu: Create tunnel -> 4 Manual -> 2 IPIP Native.")
 			fmt.Fprintln(out, "  Carrier: IP protocol 4 (IPIP), NOT TCP/UDP port 4.")
 		} else {
-			fmt.Fprintf(out, "  UDP encapsulation: %s\n", l.Encapsulation)
-			menuProse(out, "  For IPIP FOU/GUE use My tunnels -> Share Setup Link (receiver UDP port is paired automatically).")
+			port, _ := ipipbackend.UDPPort(l)
+			fmt.Fprintf(out, "  UDP encapsulation: %s, receive UDP port: %d (exact peer match)\n", l.Encapsulation, port)
+			menuProse(out, "  For IPIP FOU/GUE use My tunnels -> Share Setup Link; the peer receives the same UDP port.")
 		}
 		fmt.Fprintln(out, "  IPIP traffic is NOT encrypted or authenticated.")
 	case domain.BackendWireGuard:
