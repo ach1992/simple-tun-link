@@ -1172,10 +1172,14 @@ not a measured PMTU. The pinned helper fragments forwarded WG datagrams
 within QUIC and imposes its own message-size limit; native WireGuard's
 fixed-overhead calculation is not used. Local MTU mutation and rollback
 require the exact nonce-marked original WG generation.
-The necessary local IPv4 underlay minimum is **1228 bytes for Plain** and
-**1236 bytes for Salamander** (its additional eight-byte salt). The helper
-capacity ceiling remains 4032 inner bytes. These are local admission checks,
-not measured carrier PMTU or proof that a handshake will pass the path.
+The pinned Hysteria v2.13.0 helper's observed local IPv4 underlay minimum
+is **1308 bytes for Plain** and **1316 bytes for Salamander** (its additional
+eight-byte salt). These values include actual handshake packet sizes rather
+than only QUIC's generic RFC minimum. The helper capacity ceiling remains
+4032 inner bytes. The local checks need no peer reachability, do not measure
+carrier PMTU, and cannot guarantee a handshake through the external path.
+A smaller verified local underlay is rejected before committing a new QUIC Link
+rather than advertising a known-nonworking setup.
 
 ### Machine creation and private import
 

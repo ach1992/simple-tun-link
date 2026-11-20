@@ -28,3 +28,23 @@ func TestMaximumWireGuardMTUAccountsForBothRoleDestinations(t *testing.T) {
 		t.Fatal("conflicting physical and WireGuard ports accepted")
 	}
 }
+
+// These boundaries are pinned-helper operational requirements, not the
+// generic QUIC RFC minimum or an assumed measured remote path PMTU.
+func TestPinnedHysteriaMinimumIPv4UnderlayMTU(t *testing.T) {
+	for _, tc := range []struct {
+		mode string
+		want int
+	}{
+		{"", 1308},
+		{"salamander", 1316},
+	} {
+		got, err := MinimumIPv4UnderlayMTU(tc.mode)
+		if err != nil || got != tc.want {
+			t.Fatalf("obfuscation=%q local required MTU=%d want=%d err=%v", tc.mode, got, tc.want, err)
+		}
+	}
+	if _, err := MinimumIPv4UnderlayMTU("unknown"); err == nil {
+		t.Fatal("unexpected unknown QUIC mode accepted")
+	}
+}

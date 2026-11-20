@@ -7,16 +7,23 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/domain"
 )
 
-// QUICMinimumIPv4UnderlayMTU is a necessary local-route minimum, not a
-// measured peer PMTU: RFC 9000 section 14 requires a 1200-byte UDP payload,
-// plus the 20-byte IPv4 and 8-byte UDP headers used by this composition.
-const QUICMinimumIPv4UnderlayMTU = 1228
+// QUICMinimumIPv4UnderlayMTU is the pinned Hysteria app/v2.13.0 local
+// IPv4-route admission minimum, not a measured peer PMTU. Although RFC 9000
+// only mandates 1200 bytes of UDP payload (1228 bytes including IPv4/UDP),
+// the pinned helper's handshake attempts 1280-byte UDP payloads. On an
+// independent physical MTU-1280 underlay, server sendmsg returned EMSGSIZE
+// and the handshake timed out; a controlled unmodified-helper test failed
+// at 1307 and succeeded at 1308 bytes. Do not admit a locally impossible
+// setup merely because its path meets the generic protocol floor. Reassess
+// this version-specific bound when the pinned helper implementation changes.
+const QUICMinimumIPv4UnderlayMTU = 1308
 
 // MinimumIPv4UnderlayMTU adds the selected wire representation's necessary
-// overhead to the plain QUIC minimum. The pinned helper's Salamander wrapper
-// prepends an eight-byte salt after QUIC packet construction (extras/obfs/
-// salamander.go at ca8fbd874fd6ca82413948de6dc5924405e103e1). This lower bound
-// neither measures peer PMTU nor guarantees that every handshake packet fits.
+// overhead to the pinned helper's observed Plain handshake minimum. The
+// Salamander wrapper prepends an eight-byte salt (extras/obfs/salamander.go
+// at ca8fbd874fd6ca82413948de6dc5924405e103e1); isolated upstream
+// tests failed at 1315 and succeeded at 1316 bytes. This local bound neither
+// measures peer PMTU nor guarantees that a network path admits the packets.
 func MinimumIPv4UnderlayMTU(obfuscation string) (int, error) {
 	switch obfuscation {
 	case domain.QUICObfuscationPlain:

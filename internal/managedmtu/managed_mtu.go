@@ -12,6 +12,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	"github.com/ach1992/simple-tun-link/internal/backend/l2tpv3"
 	"github.com/ach1992/simple-tun-link/internal/backend/wireguard"
+	"github.com/ach1992/simple-tun-link/internal/carrier/masque"
 	"github.com/ach1992/simple-tun-link/internal/carrier/quic"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
@@ -118,7 +119,7 @@ func (m HostMTUManager) desired(ctx context.Context, link domain.Link, overhead 
 			return 0, err
 		}
 		if underlay < minimum {
-			return 0, fmt.Errorf("QUIC local underlay cannot carry the required datagram for the selected obfuscation mode")
+			return 0, fmt.Errorf("QUIC local underlay MTU %d cannot carry pinned Hysteria handshake packets (%s requires at least %d IPv4 bytes); use an underlay with sufficient verified local MTU", underlay, link.QUIC.Obfuscation, minimum)
 		}
 		plan, err := quic.PlanFromLink(link)
 		if err != nil {
@@ -217,6 +218,36 @@ func (m HostMTUManager) CaptureL2TPRemove(ctx context.Context, link domain.Link,
 	}, nil
 }
 
+// The MASQUE helper creates its own non-persistent TUN at the MTU signed into
+// its original protected configuration. The same value bounds its packet
+// buffers, so a second netlink write from outside that helper is not a safe
+// way to change the MASQUE MTU. Verify the exact helper-owned interface and
+// its already-applied value under the canonical Engine transaction instead.
+func (m HostMTUManager) verifyMASQUE(ctx context.Context, req backend.Request, observedBefore bool, claims []domain.ResourceClaim) error {
+	name, err := masque.AgentInterfaceName(req.Link.ID)
+	if err != nil {
+		return err
+	}
+	if !claimsHaveInterface(claims, name) {
+		return fmt.Errorf("MASQUE MTU interface is not part of the exact resource plan")
+	}
+	if req.Prior == nil && observedBefore {
+		return fmt.Errorf("MASQUE MTU cannot adopt an uncommitted interface")
+	}
+	current, err := m.inspect(ctx, name)
+	if err != nil {
+		return err
+	}
+	expectedMTU := 1280
+	if req.Link.MTU.Mode == domain.MTUManual {
+		expectedMTU = req.Link.MTU.Bytes
+	}
+	if current.IfAlias != "stl:masque:"+string(req.Link.ID) || current.MTU != expectedMTU {
+		return fmt.Errorf("MASQUE original TUN owner or configured MTU differs from the Link")
+	}
+	return nil
+}
+
 func (m HostMTUManager) Apply(ctx context.Context, req backend.Request, observedBefore bool, claims []domain.ResourceClaim) (backend.Rollback, bool, error) {
 	if req.Operation != backend.OperationEnsure ||
 		(req.Link.MTU.Mode != domain.MTUAuto && req.Link.MTU.Mode != domain.MTUManual) {
@@ -224,6 +255,9 @@ func (m HostMTUManager) Apply(ctx context.Context, req backend.Request, observed
 	}
 	if err := req.Link.MTU.Validate(); err != nil {
 		return nil, false, err
+	}
+	if req.Link.Backend == domain.BackendMASQUE {
+		return nil, false, m.verifyMASQUE(ctx, req, observedBefore, claims)
 	}
 	if m.SetByIndex == nil {
 		return nil, false, fmt.Errorf("MTU mutation facility is unavailable")

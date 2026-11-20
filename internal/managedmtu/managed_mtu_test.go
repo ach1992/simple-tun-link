@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/backend/gre"
 	"github.com/ach1992/simple-tun-link/internal/backend/l2tpv3"
+	"github.com/ach1992/simple-tun-link/internal/carrier/masque"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
 )
@@ -368,6 +370,105 @@ func TestL2TPManagedMTURemoveIdentityAndFailureGuards(t *testing.T) {
 			_, err := m.CaptureL2TPRemove(ctx, link, idx, claims)
 			if err == nil {
 				t.Fatal("invalid managed MTU capture allowed a destructive Remove")
+			}
+		})
+	}
+}
+
+// MASQUE applies MTU while creating its original TUN, including the helper's
+// packet-buffer limit; the Engine must verify that result without rewriting
+// only the kernel MTU and silently splitting those two limits.
+func masqueMTUFixture(t *testing.T, policy domain.MTUPolicy) (HostMTUManager, *managedRunner, domain.Link, []domain.ResourceClaim) {
+	t.Helper()
+	link := domain.Link{
+		ID:            "lnk_2a410000000000000000000000000001",
+		Backend:       domain.BackendMASQUE,
+		Encapsulation: domain.EncapTLS,
+		Underlay:      domain.Underlay{Local: netip.MustParseAddr("2001:db8::1"), Peer: netip.MustParseAddr("2001:db8::2")},
+		Addresses:     domain.LinkAddresses{Local: netip.MustParsePrefix("10.252.97.1/32"), Peer: netip.MustParsePrefix("10.252.97.2/32")},
+		MASQUE:        domain.MASQUEOptions{Role: "listen", TCPPort: 49476, TLSServerName: "2001:db8::1", MaterialSHA256: strings.Repeat("a", 64)},
+		MTU:           policy,
+	}
+	if err := link.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	name, err := masque.AgentInterfaceName(link.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mtu := 1280
+	if policy.Mode == domain.MTUManual {
+		mtu = policy.Bytes
+	}
+	runner := &managedRunner{ifaces: map[string]mtuInterface{
+		name: {IfIndex: 94, IfName: name, IfAlias: "stl:masque:" + string(link.ID), MTU: mtu},
+	}}
+	m := HostMTUManager{Runner: runner, SetByIndex: func(context.Context, int, int) error {
+		t.Fatal("MASQUE helper-owned MTU must not be rewritten by the Engine")
+		return nil
+	}}
+	return m, runner, link, []domain.ResourceClaim{{Kind: domain.ResourceInterface, Key: name}}
+}
+
+func TestMASQUEManagedMTUIsVerifiedWithoutSecondWriter(t *testing.T) {
+	for _, policy := range []domain.MTUPolicy{
+		{Mode: domain.MTUManual, Bytes: 1400},
+		{Mode: domain.MTUManual, Bytes: 1308},
+		{Mode: domain.MTUAuto},
+	} {
+		t.Run(fmt.Sprintf("%s_%d", policy.Mode, policy.Bytes), func(t *testing.T) {
+			m, r, l, claims := masqueMTUFixture(t, policy)
+			// A hosted MASQUE TUN requires only an owner/MTU inspector.
+			m.SetByIndex = nil
+			undo, changed, err := m.Apply(context.Background(), backend.Request{Operation: backend.OperationEnsure, Link: l}, false, claims)
+			if err != nil || changed || undo != nil || r.calls != 1 {
+				t.Fatalf("MASQUE helper's exact MTU not admitted: changed=%t inspect_calls=%d err=%v", changed, r.calls, err)
+			}
+			prior := l
+			undo, changed, err = m.Apply(context.Background(), backend.Request{Operation: backend.OperationEnsure, Prior: &prior, Link: l}, true, claims)
+			if err != nil || changed || undo != nil {
+				t.Fatalf("MASQUE repeated exact owner/MTU verification failed: changed=%t err=%v", changed, err)
+			}
+		})
+	}
+}
+
+func TestMASQUEManagedMTURefusesForeignOrDriftedOriginal(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		change  func(*managedRunner, *domain.Link, *[]domain.ResourceClaim)
+		existed bool
+	}{
+		{"other_owner", func(r *managedRunner, _ *domain.Link, c *[]domain.ResourceClaim) {
+			o := r.ifaces[(*c)[0].Key]
+			o.IfAlias = "stl:masque:lnk_ffffffffffffffffffffffffffffffff"
+			r.ifaces[(*c)[0].Key] = o
+		}, false},
+		{"generic_owner_tag", func(r *managedRunner, l *domain.Link, c *[]domain.ResourceClaim) {
+			o := r.ifaces[(*c)[0].Key]
+			o.IfAlias = "stl:" + string(l.ID)
+			r.ifaces[(*c)[0].Key] = o
+		}, false},
+		{"wrong_mtu", func(r *managedRunner, _ *domain.Link, c *[]domain.ResourceClaim) {
+			o := r.ifaces[(*c)[0].Key]
+			o.MTU--
+			r.ifaces[(*c)[0].Key] = o
+		}, false},
+		{"foreign_index", func(r *managedRunner, _ *domain.Link, c *[]domain.ResourceClaim) {
+			o := r.ifaces[(*c)[0].Key]
+			o.IfIndex = 0
+			r.ifaces[(*c)[0].Key] = o
+		}, false},
+		{"missing_interface", func(r *managedRunner, _ *domain.Link, c *[]domain.ResourceClaim) { delete(r.ifaces, (*c)[0].Key) }, false},
+		{"unclaimed_interface", func(_ *managedRunner, _ *domain.Link, c *[]domain.ResourceClaim) { *c = nil }, false},
+		{"uncommitted_adoption", func(_ *managedRunner, _ *domain.Link, _ *[]domain.ResourceClaim) {}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, r, l, claims := masqueMTUFixture(t, domain.MTUPolicy{Mode: domain.MTUManual, Bytes: 1400})
+			tc.change(r, &l, &claims)
+			undo, changed, err := m.Apply(context.Background(), backend.Request{Operation: backend.OperationEnsure, Link: l}, tc.existed, claims)
+			if err == nil || changed || undo != nil {
+				t.Fatalf("unsafe MASQUE host admitted: changed=%t err=%v", changed, err)
 			}
 		})
 	}

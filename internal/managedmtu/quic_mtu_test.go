@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/ach1992/simple-tun-link/internal/backend"
@@ -54,12 +56,12 @@ func TestManagedQUICMTUUsesHelperCapacityAndQUICMinimum(t *testing.T) {
 		routeMTU    int
 		want        int
 	}{
-		{"conservative_auto", "", domain.MTUPolicy{Mode: domain.MTUAuto}, 1228, 1280},
+		{"conservative_auto", "", domain.MTUPolicy{Mode: domain.MTUAuto}, 1308, 1280},
 		{"fragmented_inner_packet", "", domain.MTUPolicy{Mode: domain.MTUManual, Bytes: 4032}, 1500, 4032},
 		{"over_helper_capacity", "", domain.MTUPolicy{Mode: domain.MTUManual, Bytes: 4033}, 9000, 0},
-		{"underlay_too_small", "", domain.MTUPolicy{Mode: domain.MTUAuto}, 1227, 0},
-		{"salamander_minimum", domain.QUICObfuscationSalamander, domain.MTUPolicy{Mode: domain.MTUAuto}, 1236, 1280},
-		{"salamander_underlay_too_small", domain.QUICObfuscationSalamander, domain.MTUPolicy{Mode: domain.MTUAuto}, 1235, 0},
+		{"underlay_too_small", "", domain.MTUPolicy{Mode: domain.MTUAuto}, 1307, 0},
+		{"salamander_minimum", domain.QUICObfuscationSalamander, domain.MTUPolicy{Mode: domain.MTUAuto}, 1316, 1280},
+		{"salamander_underlay_too_small", domain.QUICObfuscationSalamander, domain.MTUPolicy{Mode: domain.MTUAuto}, 1315, 0},
 		{"salamander_capacity_unchanged", domain.QUICObfuscationSalamander, domain.MTUPolicy{Mode: domain.MTUManual, Bytes: 4032}, 1500, 4032},
 		{"salamander_over_capacity", domain.QUICObfuscationSalamander, domain.MTUPolicy{Mode: domain.MTUManual, Bytes: 4033}, 9000, 0},
 	} {
@@ -71,6 +73,16 @@ func TestManagedQUICMTUUsesHelperCapacityAndQUICMinimum(t *testing.T) {
 			if tc.want == 0 {
 				if err == nil || changed || undo != nil || r.ifaces[claims[0].Key].MTU != 1500 {
 					t.Fatalf("invalid MTU mutated Link: changed=%v err=%v", changed, err)
+				}
+				if tc.name == "underlay_too_small" || tc.name == "salamander_underlay_too_small" {
+					minimum := 1308
+					if tc.obfuscation == domain.QUICObfuscationSalamander {
+						minimum = 1316
+					}
+					if !strings.Contains(err.Error(), fmt.Sprint(tc.routeMTU)) ||
+						!strings.Contains(err.Error(), fmt.Sprint(minimum)) {
+						t.Fatalf("missing actionable QUIC MTU boundary: %v", err)
+					}
 				}
 				return
 			}

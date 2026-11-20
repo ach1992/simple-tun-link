@@ -199,10 +199,27 @@ shared terminal transcripts, Issues or logs.
   protected material directory, TUN alias, interface address and private
   route. Another service, file or Link is never adopted by filename alone.
 - Default private TUN MTU is 1280 bytes; physical-path PMTU is not
-  established by local setup. Small private TCP/UDP receipts prove
-  application connectivity, **not** physical-path PMTU, sustained
-  performance or reboot recovery. Do not infer those outcomes from local
-  setup or replace the required functional journey with benchmarks.
+  established by local setup. A manually selected MASQUE MTU is embedded
+  in the original protected helper configuration. The helper creates its
+  own TUN at that value and applies the same bound to packet buffers; the
+  canonical Engine verifies the owner-marked interface and effective MTU
+  without a second, inconsistent netlink rewrite. Set matching endpoint
+  MTUs through the original Create/Import offer; changing an existing
+  committed MASQUE helper's MTU requires a fresh pairing rather than
+  changing only its kernel interface.
+  Small private TCP/UDP receipts prove application connectivity, **not**
+  physical-path PMTU, sustained performance or reboot recovery. Do not
+  infer those outcomes from local setup or replace the required functional
+  journey with benchmarks.
+- **QUIC over MASQUE:** Pinned Hysteria v2.13.0 independently timed out over
+  a healthy IPv4 TUN with MTU 1280 in controlled testing. Its server
+  attempted oversized UDP sends (`EMSGSIZE`); a public HTTP/3 test succeeded
+  at MTU 1308 and failed at 1307 in that isolated setup. This is a measured
+  compatibility boundary for that setup, not a universal path-MTU claim.
+  When intentionally nesting QUIC, provision a fresh MASQUE parent with
+  sufficient **verified** MTU (for example 1400 where the actual path permits),
+  then test authenticated UDP, HTTP/3 and application traffic. Do not
+  silently raise a committed parent's MTU or assume an ICMP Ping proves QUIC.
 
 ### Interrupted original with an active helper
 
