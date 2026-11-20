@@ -33,6 +33,7 @@ type H2Config struct {
 	ClientCert     *tls.Certificate
 	Username       string
 	Password       string
+	BearerToken    string
 	Path           string
 	ExpectedIPv4   netip.Addr
 	ConnectTimeout time.Duration
@@ -83,8 +84,12 @@ func validateH2Config(cfg H2Config) error {
 	} else if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
 		return errors.New("MASQUE endpoint port is invalid")
 	}
-	if cfg.ClientCert == nil && (cfg.Username == "" || cfg.Password == "") {
-		return errors.New("MASQUE requires client certificate or Basic authentication")
+	if cfg.BearerToken != "" {
+		if !ValidBearerToken([]byte(cfg.BearerToken)) || cfg.ClientCert != nil || cfg.Username != "" || cfg.Password != "" {
+			return errors.New("MASQUE public request bearer must be a protected 256-bit token without competing credentials")
+		}
+	} else if cfg.ClientCert == nil && (cfg.Username == "" || cfg.Password == "") {
+		return errors.New("MASQUE requires client certificate or request authentication")
 	}
 	if cfg.Path != "" && (!strings.HasPrefix(cfg.Path, "/") || strings.ContainsAny(cfg.Path, "\r\n#")) {
 		return errors.New("MASQUE CONNECT-IP path is invalid")
@@ -204,7 +209,10 @@ func dialH2WithLiveness(ctx context.Context, cfg H2Config, probeInterval, idleLi
 		{Name: ":protocol", Value: "connect-ip"},
 		{Name: "capsule-protocol", Value: "?1"},
 	}
-	if cfg.Username != "" {
+	if cfg.BearerToken != "" {
+		headers = append(headers, hpack.HeaderField{Name: "authorization",
+			Value: "Bearer " + cfg.BearerToken, Sensitive: true})
+	} else if cfg.Username != "" {
 		headers = append(headers, hpack.HeaderField{Name: "proxy-authorization",
 			Value:     "Basic " + base64.StdEncoding.EncodeToString([]byte(cfg.Username+":"+cfg.Password)),
 			Sensitive: true})

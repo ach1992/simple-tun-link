@@ -74,9 +74,23 @@ func writeMaterialHash(w hash.Hash, filename string, contents []byte) {
 	_, _ = w.Write([]byte("\x00"))
 }
 
+// Only the selected authentication mode owns the corresponding credential.
+func credentialPath(disabled bool, dir, name string) string {
+	if disabled {
+		return ""
+	}
+	return filepath.Join(dir, name)
+}
+
 func materialNames(link domain.Link) []string {
 	if link.MASQUE.Role == "listen" {
+		if link.MASQUE.PublicTLS {
+			return []string{"agent.json", "bearer-token", "server-cert.pem", "server-key.pem"}
+		}
 		return []string{"agent.json", "server-cert.pem", "server-key.pem"}
+	}
+	if link.MASQUE.PublicTLS {
+		return []string{"agent.json", "bearer-token", "server-ca.pem"}
 	}
 	return []string{"agent.json", "client-cert.pem", "client-key.pem", "server-ca.pem"}
 }
@@ -128,8 +142,10 @@ func (h *Host) inspectMaterial(link domain.Link) (string, string, error) {
 			c.ServerName != link.MASQUE.TLSServerName ||
 			(c.RequestPath != "" && c.RequestPath != "/.well-known/masque/ip/") ||
 			c.CACertFile != filepath.Join(d, "server-ca.pem") ||
-			c.ClientCertFile != filepath.Join(d, "client-cert.pem") ||
-			c.ClientKeyFile != filepath.Join(d, "client-key.pem") ||
+			c.PublicTLS != link.MASQUE.PublicTLS ||
+			c.ClientCertFile != credentialPath(link.MASQUE.PublicTLS, d, "client-cert.pem") ||
+			c.ClientKeyFile != credentialPath(link.MASQUE.PublicTLS, d, "client-key.pem") ||
+			c.BearerFile != credentialPath(!link.MASQUE.PublicTLS, d, "bearer-token") ||
 			c.User != "" || c.PasswordFile != "" {
 			return "", "", errors.New("MASQUE dial protected config differs from desired Link identity")
 		}
@@ -144,6 +160,8 @@ func (h *Host) inspectMaterial(link domain.Link) (string, string, error) {
 			c.TLSServerName != link.MASQUE.TLSServerName ||
 			c.ServerCertFile != filepath.Join(d, "server-cert.pem") ||
 			c.ServerKeyFile != filepath.Join(d, "server-key.pem") ||
+			c.PublicTLS != link.MASQUE.PublicTLS ||
+			c.BearerFile != credentialPath(!link.MASQUE.PublicTLS, d, "bearer-token") ||
 			strings.ContainsAny(c.PeerSPKIBase64, "\r\n\x00") {
 			return "", "", errors.New("MASQUE listen protected config differs from desired Link identity")
 		}

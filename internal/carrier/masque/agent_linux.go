@@ -41,6 +41,8 @@ type DialAgentConfig struct {
 	CACertFile     string        `json:"ca_file"`
 	ClientCertFile string        `json:"client_cert_file,omitempty"`
 	ClientKeyFile  string        `json:"client_key_file,omitempty"`
+	PublicTLS      bool          `json:"public_tls,omitempty"`
+	BearerFile     string        `json:"bearer_file,omitempty"`
 	User           string        `json:"username,omitempty"`
 	PasswordFile   string        `json:"password_file,omitempty"`
 }
@@ -77,8 +79,13 @@ func (cfg DialAgentConfig) Validate() (netip.Addr, netip.Addr, error) {
 	if (cfg.ClientCertFile == "") != (cfg.ClientKeyFile == "") {
 		return netip.Addr{}, netip.Addr{}, errors.New("MASQUE client certificate and key must be specified together")
 	}
-	if cfg.PasswordFile == "" && cfg.ClientCertFile == "" {
-		return netip.Addr{}, netip.Addr{}, errors.New("MASQUE helper requires authentication")
+	if cfg.PublicTLS {
+		if cfg.BearerFile == "" || cfg.ClientCertFile != "" || cfg.ClientKeyFile != "" ||
+			cfg.User != "" || cfg.PasswordFile != "" {
+			return netip.Addr{}, netip.Addr{}, errors.New("MASQUE public TLS requires a protected request bearer only")
+		}
+	} else if cfg.BearerFile != "" || (cfg.PasswordFile == "" && cfg.ClientCertFile == "") {
+		return netip.Addr{}, netip.Addr{}, errors.New("MASQUE private TLS requires a client certificate or existing Basic credentials")
 	}
 	if (cfg.User == "") != (cfg.PasswordFile == "") {
 		return netip.Addr{}, netip.Addr{}, errors.New("MASQUE Basic credential requires username and password file")
@@ -212,6 +219,19 @@ func RunDialAgent(ctx context.Context, cfg DialAgentConfig) error {
 		}
 		clientCert = &pair
 	}
+	var bearer string
+	if cfg.PublicTLS {
+		raw, readErr := readPrivateFile(cfg.BearerFile, 128)
+		if readErr != nil {
+			return readErr
+		}
+		if !ValidBearerToken(raw) {
+			clear(raw)
+			return errors.New("MASQUE protected request bearer invalid")
+		}
+		bearer = string(raw)
+		clear(raw)
+	}
 	var secret string
 	if cfg.PasswordFile != "" {
 		raw, err := readPrivateFile(cfg.PasswordFile, 16384)
@@ -235,7 +255,7 @@ func RunDialAgent(ctx context.Context, cfg DialAgentConfig) error {
 		client, connectErr := DialH2(ctx, H2Config{
 			Address: cfg.Address, ServerName: cfg.ServerName, Roots: roots,
 			ClientCert: clientCert, Username: cfg.User, Password: secret,
-			ExpectedIPv4: own, Path: cfg.RequestPath,
+			BearerToken: bearer, ExpectedIPv4: own, Path: cfg.RequestPath,
 		})
 		if connectErr == nil {
 			backoff = time.Second

@@ -532,6 +532,11 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID), string(desired.Backend),
 			"WSS TLS authentication mode changed; remove the original Link and create a fresh paired Link")
 	}
+	if exists && desired.Backend == domain.BackendMASQUE &&
+		record.Desired.MASQUE.PublicTLS != desired.MASQUE.PublicTLS {
+		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID), string(desired.Backend),
+			"MASQUE TLS authentication mode changed; remove the original Link and create a fresh paired Link")
+	}
 	// Do not persist an imported credential when the requested backend is
 	// unavailable. Credential activation remains inside the Engine Link lock.
 	if _, registered := e.backends.Get(desired.Backend); !registered {

@@ -35,6 +35,11 @@ func BuildMaterial(root string, link domain.Link, pair masque.PairMaterial) (dom
 	if !filepath.IsAbs(root) || filepath.Clean(root) != root || root == "/" {
 		return link, nil, errors.New("MASQUE material target root must be canonical")
 	}
+	// Validate the chosen request-authorization material before copying
+	// any private TLS bytes into a new buffer on error paths.
+	if link.MASQUE.PublicTLS && !masque.ValidBearerToken(pair.BearerToken) {
+		return link, nil, errors.New("MASQUE request bearer material invalid")
+	}
 	dir := filepath.Join(root, materialDir, string(link.ID))
 	name, err := masque.AgentInterfaceName(link.ID)
 	if err != nil {
@@ -59,6 +64,12 @@ func BuildMaterial(root string, link domain.Link, pair masque.PairMaterial) (dom
 		}
 		files["server-cert.pem"] = bytes.Clone(pair.ServerCertificate)
 		files["server-key.pem"] = bytes.Clone(pair.ServerPrivateKey)
+		if link.MASQUE.PublicTLS {
+			cfg.PublicTLS = true
+			cfg.PeerSPKIBase64 = ""
+			cfg.BearerFile = filepath.Join(dir, "bearer-token")
+			files["bearer-token"] = bytes.Clone(pair.BearerToken)
+		}
 		raw, err := json.Marshal(cfg)
 		if err != nil {
 			return link, nil, err
@@ -76,8 +87,16 @@ func BuildMaterial(root string, link domain.Link, pair masque.PairMaterial) (dom
 			ClientKeyFile:  filepath.Join(dir, "client-key.pem"),
 		}
 		files["server-ca.pem"] = bytes.Clone(pair.ServerCA)
-		files["client-cert.pem"] = bytes.Clone(pair.ClientCertificate)
-		files["client-key.pem"] = bytes.Clone(pair.ClientPrivateKey)
+		if link.MASQUE.PublicTLS {
+			cfg.PublicTLS = true
+			cfg.ClientCertFile = ""
+			cfg.ClientKeyFile = ""
+			cfg.BearerFile = filepath.Join(dir, "bearer-token")
+			files["bearer-token"] = bytes.Clone(pair.BearerToken)
+		} else {
+			files["client-cert.pem"] = bytes.Clone(pair.ClientCertificate)
+			files["client-key.pem"] = bytes.Clone(pair.ClientPrivateKey)
+		}
 		raw, err := json.Marshal(cfg)
 		if err != nil {
 			return link, nil, err
@@ -152,6 +171,13 @@ func VerifyMaterialBundle(root string, link domain.Link, files map[string][]byte
 			cfg.ServerKeyFile != filepath.Join(dir, "server-key.pem") {
 			return errors.New("MASQUE imported listener config differs from expected Link")
 		}
+		if cfg.PublicTLS != link.MASQUE.PublicTLS ||
+			cfg.BearerFile != credentialPath(!link.MASQUE.PublicTLS, dir, "bearer-token") {
+			return errors.New("MASQUE imported listener authentication mode differs from desired Link")
+		}
+		if link.MASQUE.PublicTLS && !masque.ValidBearerToken(files["bearer-token"]) {
+			return errors.New("MASQUE listener protected request bearer invalid")
+		}
 		if _, _, err := cfg.Validate(); err != nil {
 			return err
 		}
@@ -173,8 +199,10 @@ func VerifyMaterialBundle(root string, link domain.Link, files map[string][]byte
 			cfg.PeerIPv4 != link.Addresses.Peer.Addr().String() || cfg.MTU != mtu ||
 			cfg.Address != net.JoinHostPort(link.Underlay.Peer.String(), strconv.Itoa(int(link.MASQUE.TCPPort))) ||
 			cfg.ServerName != link.MASQUE.TLSServerName ||
-			cfg.ClientCertFile != filepath.Join(dir, "client-cert.pem") ||
-			cfg.ClientKeyFile != filepath.Join(dir, "client-key.pem") ||
+			cfg.PublicTLS != link.MASQUE.PublicTLS ||
+			cfg.ClientCertFile != credentialPath(link.MASQUE.PublicTLS, dir, "client-cert.pem") ||
+			cfg.ClientKeyFile != credentialPath(link.MASQUE.PublicTLS, dir, "client-key.pem") ||
+			cfg.BearerFile != credentialPath(!link.MASQUE.PublicTLS, dir, "bearer-token") ||
 			cfg.CACertFile != filepath.Join(dir, "server-ca.pem") ||
 			cfg.User != "" || cfg.PasswordFile != "" || cfg.RequestPath != "" {
 			return errors.New("MASQUE imported dial config differs from expected Link")
@@ -182,7 +210,11 @@ func VerifyMaterialBundle(root string, link domain.Link, files map[string][]byte
 		if _, _, err := cfg.Validate(); err != nil {
 			return err
 		}
-		if _, err := tls.X509KeyPair(files["client-cert.pem"], files["client-key.pem"]); err != nil {
+		if link.MASQUE.PublicTLS {
+			if !masque.ValidBearerToken(files["bearer-token"]) {
+				return errors.New("MASQUE imported protected request bearer invalid")
+			}
+		} else if _, err := tls.X509KeyPair(files["client-cert.pem"], files["client-key.pem"]); err != nil {
 			return errors.New("MASQUE imported client certificate/key invalid")
 		}
 		roots := x509.NewCertPool()

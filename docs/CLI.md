@@ -1287,6 +1287,15 @@ host vacancy, preserving the same Link and credential identity.
 
 ## MASQUE CONNECT-IP Carrier (v0.1.28+)
 
+MASQUE creator JSON and explicit desired MASQUE Link schema v6
+optionally accept `"public_tls": true` for
+HTTP/2 Public TLS with request-level bearer admission and first-party
+GET/HEAD responses. Omission selects the original private mTLS default.
+Both Link endpoints must agree; `preview-masque --stdin --json` exposes
+only nonsecret `public_tls` while the token stays in the original
+protected receiver offer and per-Link credential files. Changing an
+existing committed Link mode requires Remove and fresh pairing.
+
 The native MASQUE backend adds typed `create-masque`, `preview-masque`,
 `import-masque`, `resume-masque`, `reconcile-masque` and `retire-masque`; normal
 `link list`, `link status`, `link diagnose`, `link restore --all` and `link remove`

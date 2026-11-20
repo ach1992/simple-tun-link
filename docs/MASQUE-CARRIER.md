@@ -23,7 +23,41 @@ IPv6). The **private overlay stays IPv4 `/32`** even on IPv6 physical hosts.
 The listener must accept inbound connections; no automatically assumed NAT,
 CDN, firewall evasion or reverse tunnel is provided. The dialer reconnects
 with bounded backoff and verifies the listener's TLS CA/name. The listener
-requires the original matching client certificate identity.
+requires the original matching client certificate identity **by default**.
+An explicit opt-in `"public_tls": true` mode uses ordinary TLS without
+a client certificate, but requires a fresh per-Link 256-bit
+`Authorization: Bearer` value on the HTTP/2 extended CONNECT-IP
+request **before** the private TUN can be accessed. The dialer still
+verifies the listener's CA and certificate SAN. This request bearer remains
+only in protected original per-Link material and the sensitive receiver
+handoff, never in public State, Preview, Status, diagnostics or process argv.
+Original mTLS Links and their protected file inventory remain unchanged;
+switching authentication modes requires an explicit Remove and fresh
+pairing, not an in-place Ensure.
+
+An opt-in public-TLS listener offers a real first-party HTTP/2
+`GET /` and `HEAD /` response with HTTP 404 on unknown paths,
+on the **same TLS port**. These ordinary unauthenticated requests cannot
+start CONNECT-IP or forward private packets. This is not a third-party
+website impersonation, CDN proxy, public browser-trusted certificate or
+proof of browser TLS fingerprint equivalence.
+
+The public HTTP/2 listener advertises and enforces a per-TLS-connection
+maximum of 64 concurrent active request streams. A new request at capacity
+(including GET, HEAD and unsupported methods) receives HTTP/2
+REFUSED_STREAM on its own stream, without retaining additional response
+state or interrupting existing requests. Completed or canceled GET
+responses release their exact pending-body slots. Only stream-window-ready
+responses are scheduled for DATA, so zero-credit requests cannot cause
+repeated full-map scans. HEAD and fully ended rejected methods finish
+synchronously; unsupported requests with an open request body are reset
+to avoid keeping unaccounted half-closed streams. This is an HTTP/2
+per-connection resource boundary, **not** a limit on STL Links, servers,
+throughput or data-plane packet forwarding. Unsupported public HTTP
+methods receive an error on their own valid stream; reusing a closed stream
+is an HTTP/2 protocol error rather than an attempt to send new HEADERS on
+the closed stream. Malformed Capsule-Protocol values are rejected without
+terminating the helper process, even when no bearer was sent.
 
 A live authenticated CONNECT-IP stream sends HTTP/2 PING probes even when
 neither side has private IP packets to transmit. Currently the dialer probes
@@ -77,7 +111,8 @@ stl link create-masque --stdin --output /root/stl-masque-receiver.json --json <<
   "addresses": {"local": "10.252.98.2/32", "peer": "10.252.98.1/32"},
   "role": "dial",
   "tcp_port": 443,
-  "tls_server_name": "2001:db8:2::1"
+  "tls_server_name": "2001:db8:2::1",
+  "public_tls": false
 }
 JSON
 ```
@@ -130,7 +165,12 @@ the original for recovery. Neither command removes anything on the
 **other** server automatically.
 
 The interactive menu offers **Create tunnel → MASQUE / CONNECT-IP** and
-**Import setup link → MASQUE / CONNECT-IP**. On Import, enter the exact
+**Import setup link → MASQUE / CONNECT-IP**. Guided Create offers
+**1. Private mTLS (default)** and **2. Public TLS (per-Link request bearer)**,
+includes the choice in the pre-YES review and preserves it through the
+receiver's private Preview and Import review. The creator JSON field
+`"public_tls": true` selects opt-in public mode; omission uses
+mTLS. Neither mode needs a new external helper or a second Engine. On Import, enter the exact
 absolute path to the original owner-private `0600` single-line offer file
 (or paste its JSON). The existing protected file reader rejects symlinks,
 foreign ownership, altered/partial content and unsafe permissions without

@@ -15,14 +15,17 @@ saved Link is **not** proof that packets reach its peer.
 | WireGuard over WSS/TLS | Genuine TLS/TCP + WebSocket plus kernel WireGuard; optional private mTLS or public TLS handshake (authorized Upgrade still requires Link bearer) | Yes |
 | WireGuard over QUIC | QUIC/TLS plus kernel WireGuard; pinned Hysteria (Plain/mTLS, Plain/public HTTP/3, Salamander) | Yes |
 | IPsec | Native IKEv2/XFRM, ESP or NAT-T; gated host preparation | Yes |
-| MASQUE CONNECT-IP (v0.1.28+) | HTTP/2 over TLS/TCP with mutual TLS; native IPv4 TUN | Yes |
+| MASQUE CONNECT-IP (v0.1.28+) | Native IPv4 TUN over HTTP/2 TLS/TCP; private mTLS default and optional request-bearer Public TLS where available in the installed build | Yes |
 
 Different transports have different kernel, firewall, network and optional
 helper requirements. STL does not automatically configure provider firewalls,
 NAT or foreign VPNs, and no transport works through every network.
 
 **Release availability:** MASQUE is included from Stable `v0.1.28` onward;
-older `v0.1.27` installers do not contain it. The Owner chose to publish
+older `v0.1.27` installers do not contain it. The optional
+MASQUE Public TLS request-bearer mode is newer source code and **is not
+included in `v0.1.28`**; check the installed release and selectable
+TLS mode before using this feature. The Owner chose to publish
 `v0.1.28` before the full real two-server MASQUE acceptance run, so a published
 release alone does **not** prove your WAN path or reboot recovery. Verify your
 installed version and test on authorized servers before production use. See

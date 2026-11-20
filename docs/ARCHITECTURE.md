@@ -1335,7 +1335,13 @@ systemd **shim**, not real PID1 reboot or physical two-host recovery.
 ## Optional MASQUE CONNECT-IP Carrier (v0.1.28+, Issue #142)
 
 The native MASQUE backend uses **the single Engine**, Link ID, State,
-resource locks, owned host-effect journal, rollback and restore. It accepts a
+resource locks, owned host-effect journal, rollback and restore.
+An opt-in `MASQUE.PublicTLS` mode (default false) authenticates
+extended CONNECT-IP at HTTP/2 request admission via a protected per-Link
+bearer and offers ordinary GET/HEAD on the same TLS listener. Existing
+private mTLS behavior is unchanged; the Engine rejects silent in-place
+authentication-mode changes. The original exact protected material and
+receipt-bound retirement lifecycle governs both modes. It accepts a
 versioned, explicit IPv4/IPv6 physical source/peer pair and private IPv4
 `/32` routes; a root-owned transient per-Link systemd helper runs authenticated
 RFC 9484 CONNECT-IP over HTTP/2/TLS/TCP. It does **not** add a second Engine

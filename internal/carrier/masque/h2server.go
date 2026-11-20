@@ -3,10 +3,12 @@ package masque
 import (
 	"bufio"
 	"bytes"
+	"container/list"
 	"context"
 	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +16,7 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,10 +35,13 @@ type H2ListenConfig struct {
 	ListenAddress string
 	TLSServerName string
 	ServerCert    tls.Certificate
-	// Pin the exact authorized mTLS client identity to this Link.
-	PeerSPKI  []byte
-	LocalIPv4 netip.Addr
-	PeerIPv4  netip.Addr
+	// Private default: exact mTLS peer SPKI. Public TLS: protected per-Link
+	// bearer checked on the CONNECT-IP request, never on ordinary HTTP GET.
+	PeerSPKI    []byte
+	PublicTLS   bool
+	BearerToken []byte
+	LocalIPv4   netip.Addr
+	PeerIPv4    netip.Addr
 }
 
 type H2Server struct {
@@ -46,15 +52,35 @@ type H2Server struct {
 	peerIdleLimit time.Duration
 }
 
+// A 256-bit URL-safe secret is generated once for each public-TLS Link and
+// stored only in the protected original material on both endpoints.
+func ValidBearerToken(value []byte) bool {
+	if len(value) != base64.RawURLEncoding.EncodedLen(32) {
+		return false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(string(value))
+	return err == nil && len(raw) == 32 &&
+		base64.RawURLEncoding.EncodeToString(raw) == string(value)
+}
+
 func validateH2ListenConfig(c H2ListenConfig) error {
-	if c.TLSServerName == "" || c.ListenAddress == "" || len(c.PeerSPKI) == 0 ||
+	if c.TLSServerName == "" || c.ListenAddress == "" ||
 		!c.LocalIPv4.Is4() || !c.PeerIPv4.Is4() ||
 		c.LocalIPv4.IsUnspecified() || c.PeerIPv4.IsUnspecified() ||
 		c.LocalIPv4 == c.PeerIPv4 {
 		return errors.New("MASQUE listener identity, pinned peer or private addresses invalid")
 	}
-	if _, err := x509.ParsePKIXPublicKey(c.PeerSPKI); err != nil {
-		return errors.New("MASQUE listener expected peer public key is invalid")
+	if c.PublicTLS {
+		if len(c.PeerSPKI) != 0 || !ValidBearerToken(c.BearerToken) {
+			return errors.New("MASQUE public TLS requires a protected 256-bit bearer and no mTLS peer identity")
+		}
+	} else {
+		if len(c.BearerToken) != 0 || len(c.PeerSPKI) == 0 {
+			return errors.New("MASQUE private TLS requires exact client certificate identity")
+		}
+		if _, err := x509.ParsePKIXPublicKey(c.PeerSPKI); err != nil {
+			return errors.New("MASQUE listener expected peer public key is invalid")
+		}
 	}
 	_, port, err := net.SplitHostPort(c.ListenAddress)
 	if err != nil {
@@ -88,30 +114,36 @@ func newH2ServerWithLiveness(cfg H2ListenConfig, pipe PrivatePacketIO, idleLimit
 }
 
 func (s *H2Server) TLSConfig() *tls.Config {
-	expected := append([]byte(nil), s.cfg.PeerSPKI...)
-	return &tls.Config{
+	config := &tls.Config{
 		MinVersion:   tls.VersionTLS12,
 		NextProtos:   []string{"h2"},
 		Certificates: []tls.Certificate{s.cfg.ServerCert},
-		ClientAuth:   tls.RequireAnyClientCert,
-		VerifyPeerCertificate: func(chain [][]byte, _ [][]*x509.Certificate) error {
-			if len(chain) == 0 {
-				return errors.New("MASQUE peer TLS certificate identity missing")
-			}
-			cert, err := x509.ParseCertificate(chain[0])
-			if err != nil {
-				return errors.New("MASQUE peer TLS certificate cannot be parsed")
-			}
-			if subtle.ConstantTimeCompare(cert.RawSubjectPublicKeyInfo, expected) != 1 {
-				return errors.New("MASQUE client identity does not match the authorized Link")
-			}
-			now := time.Now()
-			if now.Before(cert.NotBefore) || now.After(cert.NotAfter) {
-				return errors.New("MASQUE peer certificate expired or not yet valid")
-			}
-			return nil
-		},
 	}
+	if s.cfg.PublicTLS {
+		// The server certificate is always verified by the dialer; client
+		// admission moves from TLS to the authenticated CONNECT-IP request.
+		return config
+	}
+	expected := append([]byte(nil), s.cfg.PeerSPKI...)
+	config.ClientAuth = tls.RequireAnyClientCert
+	config.VerifyPeerCertificate = func(chain [][]byte, _ [][]*x509.Certificate) error {
+		if len(chain) == 0 {
+			return errors.New("MASQUE peer TLS certificate identity missing")
+		}
+		cert, err := x509.ParseCertificate(chain[0])
+		if err != nil {
+			return errors.New("MASQUE peer TLS certificate cannot be parsed")
+		}
+		if subtle.ConstantTimeCompare(cert.RawSubjectPublicKeyInfo, expected) != 1 {
+			return errors.New("MASQUE client identity does not match the authorized Link")
+		}
+		now := time.Now()
+		if now.Before(cert.NotBefore) || now.After(cert.NotAfter) {
+			return errors.New("MASQUE peer certificate expired or not yet valid")
+		}
+		return nil
+	}
+	return config
 }
 
 func (s *H2Server) Serve(ctx context.Context) error {
@@ -157,11 +189,17 @@ func (s *H2Server) Serve(ctx context.Context) error {
 				!errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
 				// Keep the failure stage in the private service journal without
 				// exposing the peer credential or capsule payload.
-				log.Printf("MASQUE authenticated H2 session ended: %v", err)
+				log.Printf("MASQUE H2 session ended: %v", err)
 			}
 		}(conn)
 	}
 }
+
+// The limit is per public HTTP/2 TLS connection (not a product Link-count
+// or bandwidth quota). It is advertised to clients as the H2 concurrency
+// setting and enforced for zero-credit pending GET bodies so anonymous peers
+// cannot retain unbounded response state on a tunnel listener.
+const publicH2ConcurrentStreams = 64
 
 // Per-connection HTTP/2 codec. x/net/http2.Server intentionally disables
 // RFC 8441 Extended CONNECT by default (Issue #71128). A private, bounded
@@ -179,6 +217,21 @@ type h2ServerConn struct {
 	streamWindow      int64
 	peerInitialWindow int64
 	flowChange        chan struct{}
+	// Ordinary public responses share connection DATA credit but use their
+	// own stream windows. Only the H2 reader changes this map; zero-credit
+	// replies remain pending while that reader processes WINDOW_UPDATE.
+	publicMode    bool
+	lastPublicID  uint32
+	publicReplies map[uint32]*h2PublicReply
+	// Only response streams that have positive stream credit are queued.
+	// A zero-credit GET does not trigger a scan of earlier pending GETs.
+	publicReady list.List
+}
+
+type h2PublicReply struct {
+	body   []byte
+	window int64
+	ready  *list.Element
 }
 
 func (h *h2ServerConn) write(do func(*http2.Framer) error) error {
@@ -236,7 +289,20 @@ func (h *h2ServerConn) readSetting(f *http2.SettingsFrame) error {
 			if s.Val > (1<<31)-1 {
 				return errors.New("MASQUE client advertised invalid stream window")
 			}
-			h.streamWindow += int64(s.Val) - h.peerInitialWindow
+			delta := int64(s.Val) - h.peerInitialWindow
+			if h.streamWindow+delta > (1<<31)-1 {
+				return errors.New("MASQUE peer stream window overflow")
+			}
+			for _, reply := range h.publicReplies {
+				if reply.window+delta > (1<<31)-1 {
+					return errors.New("MASQUE public stream window overflow")
+				}
+			}
+			h.streamWindow += delta
+			for id, reply := range h.publicReplies {
+				reply.window += delta
+				h.schedulePublicReply(id, reply)
+			}
 			h.peerInitialWindow = int64(s.Val)
 		case http2.SettingMaxFrameSize:
 			if s.Val < 16384 || s.Val > (1<<24)-1 {
@@ -260,17 +326,36 @@ func (h *h2ServerConn) updateWindow(f *http2.WindowUpdateFrame) error {
 	}
 	if f.StreamID == 0 {
 		h.connWindow += int64(f.Increment)
+		if h.connWindow > (1<<31)-1 {
+			return errors.New("MASQUE peer HTTP/2 connection window overflow")
+		}
+	} else if h.publicMode {
+		// WINDOW_UPDATE on a closed HTTP/2 response stream is permitted.
+		// It must not add credit to unrelated streams or CONNECT-IP.
+		if reply := h.publicReplies[f.StreamID]; reply != nil {
+			if reply.window+int64(f.Increment) > (1<<31)-1 {
+				return errors.New("MASQUE public HTTP/2 stream window overflow")
+			}
+			reply.window += int64(f.Increment)
+			h.schedulePublicReply(f.StreamID, reply)
+		}
 	} else if f.StreamID == 1 {
 		h.streamWindow += int64(f.Increment)
-	}
-	if h.connWindow > (1<<31)-1 || h.streamWindow > (1<<31)-1 {
-		return errors.New("MASQUE peer HTTP/2 window overflow")
+		if h.streamWindow > (1<<31)-1 {
+			return errors.New("MASQUE peer HTTP/2 stream window overflow")
+		}
 	}
 	h.signalFlow()
 	return nil
 }
 
 func (h *h2ServerConn) reply(code string) error {
+	return h.replyOnStream(1, code)
+}
+
+// Private CONNECT-IP always uses stream 1; ordinary public HTTP rejection
+// uses the actual newly opened request stream, never an earlier closed one.
+func (h *h2ServerConn) replyOnStream(streamID uint32, code string) error {
 	var hdr bytes.Buffer
 	e := hpack.NewEncoder(&hdr)
 	if err := e.WriteField(hpack.HeaderField{Name: ":status", Value: code}); err != nil {
@@ -283,9 +368,133 @@ func (h *h2ServerConn) reply(code string) error {
 	}
 	return h.write(func(fr *http2.Framer) error {
 		return fr.WriteHeaders(http2.HeadersFrameParam{
-			StreamID: 1, BlockFragment: hdr.Bytes(), EndHeaders: true, EndStream: code != "200",
+			StreamID: streamID, BlockFragment: hdr.Bytes(), EndHeaders: true, EndStream: code != "200",
 		})
 	})
+}
+
+// HTTP/2 GET and HEAD are normal HTTP resources on the same public-TLS
+// listener. They grant no tunnel or packet access and never disclose secrets.
+// The single-connection framer completes the requested stream while
+// keeping the HTTP/2 connection available for another ordinary GET/HEAD.
+func (h *h2ServerConn) replyPublicHTTP(streamID uint32, method string, found bool) error {
+	// Concurrency admission is handled once in serveH2 before *any*
+	// public request (GET, HEAD or unsupported method), including those
+	// that complete without retaining a DATA body.
+	body := []byte("STL MASQUE HTTP/2 endpoint\n")
+	code := "200"
+	if !found {
+		code = "404"
+		body = []byte("Not Found\n")
+	}
+	var hdr bytes.Buffer
+	e := hpack.NewEncoder(&hdr)
+	for _, field := range []hpack.HeaderField{
+		{Name: ":status", Value: code},
+		{Name: "content-type", Value: "text/plain; charset=utf-8"},
+		{Name: "content-length", Value: strconv.Itoa(len(body))},
+		{Name: "cache-control", Value: "no-store"},
+	} {
+		if err := e.WriteField(field); err != nil {
+			return err
+		}
+	}
+	if err := h.write(func(fr *http2.Framer) error {
+		return fr.WriteHeaders(http2.HeadersFrameParam{
+			StreamID: streamID, BlockFragment: hdr.Bytes(), EndHeaders: true,
+			EndStream: method == "HEAD",
+		})
+	}); err != nil {
+		return err
+	}
+	if method == "HEAD" {
+		return nil
+	}
+	// A HEADERS frame consumes no DATA credit. The response body is small,
+	// but even one byte must obey both the per-stream and connection windows.
+	if h.publicReplies == nil {
+		h.publicReplies = make(map[uint32]*h2PublicReply)
+	}
+	reply := &h2PublicReply{body: body, window: h.peerInitialWindow}
+	h.publicReplies[streamID] = reply
+	h.schedulePublicReply(streamID, reply)
+	return h.flushPublicData()
+}
+
+// Both the map and the list belong to the single H2 reader goroutine;
+// no background public-response worker or second scheduling framework is
+// needed. Only streams with stream-window credit are put on the ready list.
+func (h *h2ServerConn) schedulePublicReply(streamID uint32, reply *h2PublicReply) {
+	if reply.window > 0 && len(reply.body) != 0 {
+		if reply.ready == nil {
+			reply.ready = h.publicReady.PushBack(streamID)
+		}
+	} else if reply.ready != nil {
+		h.publicReady.Remove(reply.ready)
+		reply.ready = nil
+	}
+}
+
+func (h *h2ServerConn) dropPublicReply(streamID uint32) {
+	if reply := h.publicReplies[streamID]; reply != nil {
+		if reply.ready != nil {
+			h.publicReady.Remove(reply.ready)
+			reply.ready = nil
+		}
+		delete(h.publicReplies, streamID)
+	}
+}
+
+// Work-proportional scheduling: new zero-credit GETs never scan older
+// blocked requests. Connection WINDOW_UPDATE drains only the ready list;
+// stream WINDOW_UPDATE queues exactly the now-creditable stream. SETTINGS
+// necessarily touches active streams once to apply the window delta.
+func (h *h2ServerConn) flushPublicData() error {
+	for front := h.publicReady.Front(); front != nil; front = h.publicReady.Front() {
+		h.flowMu.Lock()
+		if h.connWindow <= 0 {
+			h.flowMu.Unlock()
+			return nil
+		}
+		streamID := front.Value.(uint32)
+		reply := h.publicReplies[streamID]
+		if reply == nil || reply.window <= 0 {
+			h.flowMu.Unlock()
+			h.publicReady.Remove(front)
+			if reply != nil {
+				reply.ready = nil
+			}
+			continue
+		}
+		n := min(int64(len(reply.body)), h.peerFrameSize, h.connWindow, reply.window)
+		if n <= 0 {
+			h.flowMu.Unlock()
+			return nil
+		}
+		h.connWindow -= n
+		reply.window -= n
+		h.flowMu.Unlock()
+
+		end := int(n) == len(reply.body)
+		if err := h.write(func(fr *http2.Framer) error {
+			return fr.WriteData(streamID, end, reply.body[:n])
+		}); err != nil {
+			return err
+		}
+		if end {
+			h.dropPublicReply(streamID)
+		} else {
+			reply.body = reply.body[n:]
+			if reply.window <= 0 {
+				h.publicReady.Remove(front)
+				reply.ready = nil
+			} else {
+				// Larger bodies can share available connection credit fairly.
+				h.publicReady.MoveToBack(front)
+			}
+		}
+	}
+	return nil
 }
 
 func (s *H2Server) authorizeRequest(f *http2.MetaHeadersFrame) bool {
@@ -300,12 +509,54 @@ func (s *H2Server) authorizeRequest(f *http2.MetaHeadersFrame) bool {
 	if f.PseudoValue("authority") != net.JoinHostPort(s.cfg.TLSServerName, port) {
 		return false
 	}
+	capsuleOK, capsuleCount, authOK, authCount := false, 0, false, 0
 	for _, hdr := range f.RegularFields() {
-		if hdr.Name == "capsule-protocol" && hdr.Value == "?1" {
-			return true
+		switch hdr.Name {
+		case "capsule-protocol":
+			capsuleCount++
+			capsuleOK = capsuleProtocolTrue(hdr.Value)
+		case "content-length", "content-type", "transfer-encoding":
+			// RFC 9297 §3.2 forbids HTTP content fields on any Capsule
+			// Protocol request, even when their values appear harmless.
+			return false
+		case "authorization":
+			authCount++
+			authOK = subtle.ConstantTimeCompare(
+				[]byte(hdr.Value), append([]byte("Bearer "), s.cfg.BearerToken...)) == 1
 		}
 	}
-	return false
+	return capsuleCount == 1 && capsuleOK &&
+		(!s.cfg.PublicTLS || (authCount == 1 && authOK))
+}
+
+// Only unauthenticated HTTP status resources, never a CONNECT-IP stream.
+func (s *H2Server) isPublicHTTP(f *http2.MetaHeadersFrame) bool {
+	if !s.cfg.PublicTLS || f.StreamID == 0 || f.StreamID%2 == 0 ||
+		f.Truncated || !f.StreamEnded() ||
+		f.PseudoValue("scheme") != "https" || f.PseudoValue("protocol") != "" {
+		return false
+	}
+	method := f.PseudoValue("method")
+	if method != "GET" && method != "HEAD" {
+		return false
+	}
+	return publicHTTPAuthorityMatches(s.cfg.TLSServerName, s.cfg.ListenAddress,
+		f.PseudoValue("authority"))
+}
+
+// Browsers normally omit :443 from the HTTPS authority. An ordinary H2
+// GET/HEAD must work with that standard origin-form authority, while
+// refusing arbitrary Host values or an unapproved external destination.
+func publicHTTPAuthorityMatches(name, listenAddress, authority string) bool {
+	_, port, err := net.SplitHostPort(listenAddress)
+	if err != nil {
+		return false
+	}
+	full := net.JoinHostPort(name, port)
+	if strings.EqualFold(authority, full) {
+		return true
+	}
+	return port == "443" && strings.EqualFold(authority, strings.TrimSuffix(full, ":443"))
 }
 
 func (s *H2Server) serveH2(parent context.Context, conn net.Conn) error {
@@ -339,12 +590,18 @@ func (s *H2Server) serveH2(parent context.Context, conn net.Conn) error {
 		peerFrameSize: 16384, connWindow: 65535, streamWindow: 65535,
 		peerInitialWindow: 65535, flowChange: make(chan struct{}),
 	}
+	settings := []http2.Setting{
+		{ID: http2.SettingEnableConnectProtocol, Val: 1},
+		{ID: http2.SettingInitialWindowSize, Val: 8 * 1024 * 1024},
+		{ID: http2.SettingMaxFrameSize, Val: 65535},
+	}
+	if s.cfg.PublicTLS {
+		settings = append(settings, http2.Setting{
+			ID: http2.SettingMaxConcurrentStreams, Val: publicH2ConcurrentStreams,
+		})
+	}
 	if err := h.write(func(fr *http2.Framer) error {
-		return fr.WriteSettings(
-			http2.Setting{ID: http2.SettingEnableConnectProtocol, Val: 1},
-			http2.Setting{ID: http2.SettingInitialWindowSize, Val: 8 * 1024 * 1024},
-			http2.Setting{ID: http2.SettingMaxFrameSize, Val: 65535},
-		)
+		return fr.WriteSettings(settings...)
 	}); err != nil {
 		return err
 	}
@@ -357,8 +614,12 @@ func (s *H2Server) serveH2(parent context.Context, conn net.Conn) error {
 	outErrors := make(chan error, 1)
 	for {
 		frame, err := h.fr.ReadFrame()
-		if err == nil && accepted {
-			err = conn.SetReadDeadline(time.Now().Add(s.peerIdleLimit))
+		if err == nil {
+			idleLimit := 12 * time.Second
+			if accepted {
+				idleLimit = s.peerIdleLimit
+			}
+			err = conn.SetReadDeadline(time.Now().Add(idleLimit))
 		}
 		if err != nil {
 			return fmt.Errorf("MASQUE client HTTP/2 receive ended: %w", err)
@@ -372,12 +633,75 @@ func (s *H2Server) serveH2(parent context.Context, conn net.Conn) error {
 		switch f := frame.(type) {
 		case *http2.SettingsFrame:
 			err = h.readSetting(f)
+			if err == nil && h.publicMode {
+				err = h.flushPublicData()
+			}
 		case *http2.WindowUpdateFrame:
 			err = h.updateWindow(f)
+			if err == nil && h.publicMode {
+				err = h.flushPublicData()
+			}
 		case *http2.MetaHeadersFrame:
-			if accepted || !s.authorizeRequest(f) {
-				_ = h.reply("400")
-				return errors.New("MASQUE unexpected CONNECT-IP stream")
+			// RFC 9113 5.1.2 counts all active request streams, not
+			// only GETs with pending DATA. The H2 reader handles HEAD and
+			// rejected requests synchronously, so only pending GET replies
+			// remain active between frames. Refuse *any* new public stream
+			// at that capacity, including HEAD and unsupported methods.
+			// Closed/reused and even-numbered IDs retain their separate
+			// protocol-error handling below.
+			if !accepted && h.publicMode && f.StreamID > h.lastPublicID &&
+				f.StreamID%2 == 1 && len(h.publicReplies) >= publicH2ConcurrentStreams {
+				h.lastPublicID = f.StreamID
+				if err := h.write(func(fr *http2.Framer) error {
+					return fr.WriteRSTStream(f.StreamID, http2.ErrCodeRefusedStream)
+				}); err != nil {
+					return err
+				}
+				continue
+			}
+			if !accepted && s.isPublicHTTP(f) && f.StreamID > h.lastPublicID {
+				h.publicMode = true
+				h.lastPublicID = f.StreamID
+				if err := h.replyPublicHTTP(f.StreamID, f.PseudoValue("method"), f.PseudoValue("path") == "/"); err != nil {
+					return err
+				}
+				continue
+			}
+			if accepted || h.publicMode || !s.authorizeRequest(f) {
+				// The client cannot reuse a completed H2 stream or open an
+				// even-numbered stream. Never write HEADERS on a closed ID.
+				if f.StreamID == 0 || f.StreamID%2 == 0 ||
+					(h.publicMode && f.StreamID <= h.lastPublicID) {
+					_ = h.write(func(fr *http2.Framer) error {
+						return fr.WriteGoAway(h.lastPublicID, http2.ErrCodeProtocol, nil)
+					})
+					return errors.New("MASQUE invalid or reused HTTP/2 stream ID")
+				}
+				code := "400"
+				if !accepted && s.cfg.PublicTLS && f.PseudoValue("method") == "CONNECT" {
+					code = "403"
+				}
+				if h.publicMode && !accepted {
+					// A new unsupported request has its own legal stream.
+					// If its request body is still open, a reset is needed to
+					// retire BOTH stream halves; a HEADERS-only error would
+					// leave a half-closed stream active without accounting.
+					h.lastPublicID = f.StreamID
+					if !f.StreamEnded() {
+						if err := h.write(func(fr *http2.Framer) error {
+							return fr.WriteRSTStream(f.StreamID, http2.ErrCodeProtocol)
+						}); err != nil {
+							return err
+						}
+						continue
+					}
+					if err := h.replyOnStream(f.StreamID, code); err != nil {
+						return err
+					}
+					continue
+				}
+				_ = h.replyOnStream(f.StreamID, code)
+				return errors.New("MASQUE rejected unauthorized or unexpected HTTP/2 request")
 			}
 			s.activeMu.Lock()
 			if s.active {
@@ -489,6 +813,13 @@ func (s *H2Server) serveH2(parent context.Context, conn net.Conn) error {
 				err = h.write(func(fr *http2.Framer) error { return fr.WritePing(true, f.Data) })
 			}
 		case *http2.RSTStreamFrame:
+			if !accepted && h.publicMode && f.StreamID%2 == 1 &&
+				f.StreamID <= h.lastPublicID {
+				// An ordinary GET can be canceled without closing the peer's
+				// otherwise reusable HTTP/2 connection or altering TUN state.
+				h.dropPublicReply(f.StreamID)
+				continue
+			}
 			return errors.New("MASQUE client reset CONNECT-IP stream")
 		case *http2.GoAwayFrame:
 			return errors.New("MASQUE client sent GOAWAY")

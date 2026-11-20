@@ -413,6 +413,63 @@ systemd supervision, actual STL Link commit/remove, crash/reboot restore,
 multi-Link independence, field WAN compatibility or a release gate.
 See Issue #142 for those separate outstanding requirements.
 
+### Optional MASQUE Public TLS two-peer kernel acceptance
+
+On Linux with rootless user/network/mount/PID namespace support, native
+TUN, Go, `ip`, `ping`, HTTP/2-enabled `curl` and Python,
+run the following **as a non-root developer**:
+
+~~~sh
+STL_MASQUE_PUBLIC_TLS_E2E=approved \
+  bash scripts/e2e/masque-public-h2-kernel.sh
+~~~
+
+For the HTTP/2 protocol repair specifically, run the encoded-frame tests
+directly (no privileges or network namespaces required):
+
+~~~sh
+go test ./internal/carrier/masque -run \
+  'TestMASQUEPublicH2ExactWire|TestMASQUECapsuleStructuredBooleanSyntax' -count=1
+~~~
+
+These tests verify zero and negative stream credit, separate stream windows,
+connection-credit exhaustion and replenishment, reusable GET/HEAD, scoped
+RST_STREAM cancellation, and malformed/duplicate Capsule-Protocol rejection
+against the actual framed/TLS listener. They also cover the advertised
+64-active-stream concurrency boundary under zero DATA credit across GET,
+HEAD and unsupported methods, queueing only eligible streams (rather than
+rescanning blocked responses), cancellation release/recovery, correct error
+stream IDs, half-closed rejected-stream reset, closed-stream GOAWAY behavior,
+and RFC 9651 UTF-8 Display String/unpadded Base64 parameter parsing. A real
+HPACK/TLS/H2 negative test repeatedly sends truncated Display Strings with
+no bearer, proves the listener remains alive, then forwards private packets
+on a newly authenticated CONNECT-IP session. Existing mTLS CONNECT-IP tests
+remain in the same package's full test suite.
+
+The strictly opt-in launcher compiles a production STL binary and a
+build-tagged test-only protected-material stage. After verifying fresh
+root-mapped user and network namespaces, it creates two distinct network
+namespaces with real veth underlay, two kernel TUNs and separate protected
+per-Link credential material. The production MASQUE helpers carry real
+bidirectional private ICMP, HTTP/TCP and UDP echo traffic, while a stock
+anonymous `curl` client negotiates real same-listener H2 GET and HEAD
+with strict private CA verification. The dialer's helper is SIGKILLed and
+restarted using **the original material**; traffic resumes and both TUNs
+disappear on normal shutdown. Stock H2 framing tests separately send
+missing, wrong and duplicate authorization directly to the listener and
+verify denial before any TUN packet access. A successful run removes its
+private task-specific fixture and leaves the original host networking
+unchanged.
+
+**Evidence boundary:** this helper-based Linux lab does **not** call
+the production CLI/Engine to commit, Import or Remove either peer Link;
+separate canonical Engine and protected-offer tests verify those contracts.
+It does not use real PID1 systemd, boot/reboot, external WAN, a published
+artifact, public browser PKI or browser TLS fingerprint parity. A killed
+lab controller might leave a uniquely named ignored fixture for manual
+reconciliation; do not blindly delete files with unknown consumers or
+mounts.
+
 ## Git and documentation ownership
 
 - `main` is the protected integration target. Use scoped branches,

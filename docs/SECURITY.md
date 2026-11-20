@@ -483,6 +483,22 @@ or changed-host-kernel condition. A namespace or container restart never
 supplies host-kernel extinction. Physical reboot and two-peer acceptance
 remain separately authorized deployment activities.
 
+## MASQUE HTTP/2 authentication modes and owned material
+
+MASQUE private mTLS remains the default: the exact peer certificate SPKI
+must pass TLS authentication before CONNECT-IP. Explicit
+`public_tls=true` does not require a TLS client certificate; instead
+a random 256-bit per-Link bearer is mandatory on the HTTP/2 extended
+CONNECT-IP request together with exact authority, scheme, path and
+capsule-protocol verification. Missing, wrong or duplicate request
+authorization never opens the private TUN. First-party GET/HEAD can
+return public responses without granting tunnel access. The dialer always
+checks the server's per-Link CA and SAN. A self-issued CA is not normally
+trusted by public browsers, and HTTP responses alone do not demonstrate
+browser-fingerprint parity, website camouflage or censorship resistance.
+Both modes reuse the existing owner-scoped protected materials, State,
+Engine, receipt-bound retirement and no-silent-mode-transition guards.
+
 ## Unreleased MASQUE material and authentication boundary
 
 The Issue #142 MASQUE candidate authenticates HTTP/2 CONNECT-IP using TLS

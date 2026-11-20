@@ -214,3 +214,48 @@ func TestMASQUEEngineRecoveryOfInterruptedRemove(t *testing.T) {
 		t.Fatal("failed durable MASQUE Remove recovery")
 	}
 }
+
+func TestMASQUEPublicTLSModeRequiresNewLinkIdentity(t *testing.T) {
+	ctx := context.Background()
+	host := &managedMASQUEFakeHost{}
+	retirer := &managedMASQUERetirer{}
+	engine, store := testMASQUEEngine(t, t.TempDir(), host, retirer)
+	link := testMASQUEDesired()
+	link.MASQUE.PublicTLS = true
+	res, err := engine.EnsureWithMASQUEProvision(ctx, link, func() error { return nil }, nil)
+	if err != nil || !res.Changed {
+		t.Fatalf("public TLS initial commit: %+v %v", res, err)
+	}
+	record, ok := func() (state.LinkRecord, bool) {
+		snapshot, err := store.Load(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return snapshot.Find(link.ID)
+	}()
+	if !ok || !record.Desired.MASQUE.PublicTLS {
+		t.Fatal("public TLS mode was not committed in canonical Link State")
+	}
+	res, err = engine.Ensure(ctx, link)
+	if err != nil || res.Changed {
+		t.Fatalf("idempotent same-mode Ensure: %+v %v", res, err)
+	}
+	oldApply := host.starts
+	changed := link
+	changed.MASQUE.PublicTLS = false
+	if _, err := engine.Ensure(ctx, changed); err == nil || host.starts != oldApply {
+		t.Fatal("in-place MASQUE security mode transition reached host Apply")
+	}
+	snapshot, err := store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, ok := snapshot.Find(link.ID)
+	if !ok || saved.Desired != link {
+		t.Fatal("conflicting authentication change modified committed Link")
+	}
+	res, err = engine.Remove(ctx, link.ID)
+	if err != nil || !res.Removed {
+		t.Fatalf("public TLS owned remove: %+v %v", res, err)
+	}
+}

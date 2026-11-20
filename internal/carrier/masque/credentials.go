@@ -29,6 +29,7 @@ type PairMaterial struct {
 	ClientCertificate []byte
 	ClientPrivateKey  []byte
 	ClientSPKIBase64  string
+	BearerToken       []byte
 }
 
 func (p *PairMaterial) Clear() {
@@ -40,6 +41,7 @@ func (p *PairMaterial) Clear() {
 	clear(p.ServerCA)
 	clear(p.ClientCertificate)
 	clear(p.ClientPrivateKey)
+	clear(p.BearerToken)
 	*p = PairMaterial{}
 }
 
@@ -187,5 +189,12 @@ func GeneratePair(id domain.LinkID, tlsName string, validityDays int) (bundle Pa
 		bundle.Clear()
 		return bundle, errors.New("MASQUE generated client certificate invalid")
 	}
+	secret := make([]byte, 32)
+	if _, err = rand.Read(secret); err != nil {
+		bundle.Clear()
+		return bundle, errors.New("MASQUE request token issuance failed")
+	}
+	bundle.BearerToken = []byte(base64.RawURLEncoding.EncodeToString(secret))
+	clear(secret)
 	return bundle, nil
 }

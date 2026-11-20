@@ -163,6 +163,7 @@ type MASQUEOptions struct {
 	Role           string `json:"role"`
 	TCPPort        uint16 `json:"tcp_port"`
 	TLSServerName  string `json:"tls_server_name"`
+	PublicTLS      bool   `json:"public_tls,omitempty"`
 	MaterialSHA256 string `json:"material_sha256"`
 }
 

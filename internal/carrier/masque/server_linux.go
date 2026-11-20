@@ -35,7 +35,9 @@ type ListenAgentConfig struct {
 	TLSServerName  string        `json:"tls_server_name"`
 	ServerCertFile string        `json:"server_cert_file"`
 	ServerKeyFile  string        `json:"server_key_file"`
-	PeerSPKIBase64 string        `json:"peer_spki_base64"`
+	PeerSPKIBase64 string        `json:"peer_spki_base64,omitempty"`
+	PublicTLS      bool          `json:"public_tls,omitempty"`
+	BearerFile     string        `json:"bearer_file,omitempty"`
 }
 
 func (c ListenAgentConfig) Validate() (netip.Addr, netip.Addr, error) {
@@ -60,15 +62,21 @@ func (c ListenAgentConfig) Validate() (netip.Addr, netip.Addr, error) {
 	if c.ListenAddress == "" || c.TLSServerName == "" || c.ServerCertFile == "" || c.ServerKeyFile == "" {
 		return netip.Addr{}, netip.Addr{}, errors.New("MASQUE listener TLS identity incomplete")
 	}
-	if c.PeerSPKIBase64 == "" || len(c.PeerSPKIBase64) > 8192 {
-		return netip.Addr{}, netip.Addr{}, errors.New("MASQUE listener peer public key missing or oversized")
-	}
-	key, err := base64.StdEncoding.Strict().DecodeString(c.PeerSPKIBase64)
-	if err != nil {
-		return netip.Addr{}, netip.Addr{}, errors.New("MASQUE listener peer public key encoding invalid")
-	}
-	if _, err = x509.ParsePKIXPublicKey(key); err != nil {
-		return netip.Addr{}, netip.Addr{}, errors.New("MASQUE listener peer public key material invalid")
+	if c.PublicTLS {
+		if c.BearerFile == "" || c.PeerSPKIBase64 != "" {
+			return netip.Addr{}, netip.Addr{}, errors.New("MASQUE public TLS listener requires a protected request bearer without mTLS identity")
+		}
+	} else {
+		if c.BearerFile != "" || c.PeerSPKIBase64 == "" || len(c.PeerSPKIBase64) > 8192 {
+			return netip.Addr{}, netip.Addr{}, errors.New("MASQUE private listener peer key missing or oversized")
+		}
+		key, err := base64.StdEncoding.Strict().DecodeString(c.PeerSPKIBase64)
+		if err != nil {
+			return netip.Addr{}, netip.Addr{}, errors.New("MASQUE listener peer public key encoding invalid")
+		}
+		if _, err = x509.ParsePKIXPublicKey(key); err != nil {
+			return netip.Addr{}, netip.Addr{}, errors.New("MASQUE listener peer public key material invalid")
+		}
 	}
 
 	_, port, err := net.SplitHostPort(c.ListenAddress)
@@ -195,6 +203,17 @@ func RunListenAgent(ctx context.Context, cfg ListenAgentConfig) error {
 		return errors.New("MASQUE listener certificate does not match configured TLS name")
 	}
 	pin, _ := base64.StdEncoding.DecodeString(cfg.PeerSPKIBase64)
+	var bearer []byte
+	if cfg.PublicTLS {
+		bearer, err = readPrivateFile(cfg.BearerFile, 128)
+		if err != nil {
+			return err
+		}
+		defer clear(bearer)
+		if !ValidBearerToken(bearer) {
+			return errors.New("MASQUE protected listener request bearer invalid")
+		}
+	}
 	tun, err := createPrivateTun(cfg.Interface, cfg.MTU, own, peer, cfg.LinkID)
 	if err != nil {
 		return err
@@ -202,7 +221,8 @@ func RunListenAgent(ctx context.Context, cfg ListenAgentConfig) error {
 	defer tun.Close()
 	server, err := NewH2Server(H2ListenConfig{
 		ListenAddress: cfg.ListenAddress, TLSServerName: cfg.TLSServerName,
-		ServerCert: identity, PeerSPKI: pin, LocalIPv4: own, PeerIPv4: peer,
+		ServerCert: identity, PeerSPKI: pin, PublicTLS: cfg.PublicTLS,
+		BearerToken: bearer, LocalIPv4: own, PeerIPv4: peer,
 	}, &kernelTun{fd: int(tun.Fd()), mtu: cfg.MTU})
 	if err != nil {
 		return err
