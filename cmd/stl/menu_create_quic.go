@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ach1992/simple-tun-link/internal/carrier/quic"
+	"github.com/ach1992/simple-tun-link/internal/composition"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/state"
 )
@@ -23,18 +24,24 @@ func menuCreateQUIC(input io.Reader, reader *bufio.Reader, out, errOut io.Writer
 	return menuCreateQUICWithExecutable(input, reader, out, errOut, opts, quic.DefaultExecutable)
 }
 
-// The internal executable parameter lets isolated PTY tests inspect a pinned test
-// executable with the production identity guard, without installing a helper
-// or changing the global /usr/local/libexec/stl path.
+// The internal executable parameter retains production's exact pinned helper
+// inspection. Guided tests inject a preflight-only seam below without changing
+// Engine admission or the canonical production executable.
 func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
 	opts *runtimeOptions, companion string) int {
+	return menuCreateQUICWithInspection(input, reader, out, errOut, opts, companion, func() error {
+		_, err := quic.InspectPinnedHysteria(companion)
+		return err
+	})
+}
+
+// Guided tests replace only the preflight, cancel before Create and cannot
+// authorize helper admission. Production and Engine keep their pinned checks.
+func menuCreateQUICWithInspection(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
+	opts *runtimeOptions, companion string, inspect func() error) int {
 	p := createPrompts{reader: reader, out: out, errOut: errOut}
 	menuScreen(out, "Create / WireGuard over QUIC")
 	menuNotice(out, "INFO", "Kernel WireGuard ingress is guarded. Choose either original mTLS, Salamander, or real HTTP/3 over UDP with private Link password authorization.")
-	inspect := func() error {
-		_, err := quic.InspectPinnedHysteria(companion)
-		return err
-	}
 	if companion != quic.DefaultExecutable {
 		// Isolated fixture paths never authorize production helper install.
 		if inspect() != nil {
@@ -109,13 +116,17 @@ func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, er
 	if err != nil {
 		return p.failed(err)
 	}
-	tlsName, err := p.ask("TLS certificate SAN (Enter = listener IP; or exact DNS name): ")
+	listener := peer
+	if role == "listen" {
+		listener = route.Source
+	}
+	tlsName, err := askTLSCertificateSAN(p, composition.QUIC, listener)
 	if err != nil {
 		return p.failed(err)
 	}
-	if len(tlsName) > 253 || strings.ContainsAny(tlsName, " \t\r\n/\\") {
-		menuNotice(out, "WARNING", "Specify one verifiable IP or DNS name without paths.")
-		return 2
+	localKeep, peerKeep, err := askCarrierKeepalives(p)
+	if err != nil {
+		return p.failed(err)
 	}
 	idMaker := domain.NewLinkID
 	if opts != nil && opts.createLinkID != nil {
@@ -137,7 +148,7 @@ func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, er
 	request := quicCreateRequest{SchemaVersion: 2, Obfuscation: publicQUICObfuscation(obfuscation), PublicHTTP3: publicHTTP3, LinkID: id, Underlay: desiredUnderlayV1{Local: route.Source, Peer: peer},
 		Addresses:  desiredLinkAddressesV1{Local: addresses.Local, Peer: addresses.Peer},
 		ListenPort: localWG, PeerPort: peerWG, Role: role, UDPPort: udp,
-		LocalKeepalive: 25, PeerKeepalive: 25,
+		LocalKeepalive: localKeep, PeerKeepalive: peerKeep,
 		LocalForwardUDPPort: forward, RemoteForwardUDPPort: remoteForward, TLSServerName: tlsName}
 	preview, err := json.Marshal(request)
 	if err != nil {
@@ -151,7 +162,9 @@ func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, er
 	menuField(out, "QUIC obfuscation", publicQUICObfuscation(obfuscation))
 	menuField(out, "Public HTTP/3", strconv.FormatBool(publicHTTP3))
 	menuField(out, "Kernel WG UDP", fmt.Sprintf("this %d / peer %d", localWG, peerWG))
+	menuField(out, "WG keepalive seconds", fmt.Sprintf("this %d / peer %d (0=off)", localKeep, peerKeep))
 	menuField(out, "Private IPs", addresses.Local.String()+" <-> "+addresses.Peer.String())
+	warnNonOnLinkPeerRoute(out, addresses)
 	menuField(out, "Private MTU", "Auto: conservative 1280-byte start; peer PMTU remains unmeasured")
 	menuField(out, "QUIC forwarding UDP", fmt.Sprintf("this %d / peer %d", forward, remoteForward))
 	menuNotice(out, "WARNING", "Creates scoped nft guard, WireGuard, QUIC helper, private credentials and peer handoff. HTTP/3 mode admits public web requests but requires the Link password for private forwarding.")
@@ -196,18 +209,20 @@ func askQUICMode(p createPrompts) (string, bool, error) {
 	menuOption(p.out, "1", "Plain + mTLS", "original private QUIC handshake (default)")
 	menuOption(p.out, "2", "Salamander + mTLS", "per-Link obfuscation; not standard HTTP/3")
 	menuOption(p.out, "3", "Plain + public HTTP/3", "real same-UDP-endpoint HTTP/3; private forwarding requires Link password and WireGuard")
-	answer, err := p.ask("QUIC mode [1]: ")
-	if err != nil {
-		return "", false, err
-	}
-	switch answer {
-	case "", "1":
-		return "", false, nil
-	case "2":
-		return "salamander", false, nil
-	case "3":
-		return "", true, nil
-	default:
-		return "", false, fmt.Errorf("choose QUIC mode 1, 2 or 3")
+	for {
+		answer, err := p.ask("QUIC mode [1]: ")
+		if err != nil {
+			return "", false, err
+		}
+		switch answer {
+		case "", "1":
+			return "", false, nil
+		case "2":
+			return "salamander", false, nil
+		case "3":
+			return "", true, nil
+		default:
+			fmt.Fprintln(p.out, "Choose QUIC mode 1, 2 or 3, or press q to go back.")
+		}
 	}
 }

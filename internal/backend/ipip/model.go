@@ -221,8 +221,8 @@ func InterfaceName(id domain.LinkID) (string, error) {
 }
 
 // UDPPort returns zero for Native and a deterministic high ephemeral port for
-// FOU/GUE. Both peers carry the same Link ID, so the mapping is symmetric
-// without adding backend-specific fields to the stable Link/pairing contract.
+// FOU/GUE when no explicit custom port was provided. The existing backend
+// and Engine still own port collisions and release.
 func UDPPort(link domain.Link) (uint16, error) {
 	if err := link.ID.Validate(); err != nil {
 		return 0, err
@@ -232,6 +232,9 @@ func UDPPort(link domain.Link) (uint16, error) {
 	}
 	if link.Encapsulation != domain.EncapFOU && link.Encapsulation != domain.EncapGUE {
 		return 0, stlerr.New(stlerr.CodeUnsupported, "ipip_port", string(link.ID), string(link.Backend), "unsupported IPIP encapsulation")
+	}
+	if link.IPIP.UDPPort != 0 {
+		return link.IPIP.UDPPort, nil
 	}
 	value, err := strconv.ParseUint(string(link.ID)[4:8], 16, 16)
 	if err != nil {

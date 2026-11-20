@@ -170,7 +170,7 @@ func PreflightLinux(ctx context.Context, link domain.Link, o LinuxProbeOptions) 
 	if route.MTU > 0 && route.MTU < mtu {
 		mtu = route.MTU
 	}
-	constraints := MTUConstraints{UnderlayMTU: mtu, BackendOverhead: o.BackendOverhead, ManualOverride: o.ManualMTU}
+	constraints := MTUConstraints{UnderlayMTU: mtu, BackendOverhead: o.BackendOverhead, LinkMTU: tunnel.MTU, ManualOverride: o.ManualMTU}
 	if _, err := mtuCeiling(constraints); err != nil {
 		return MTUConstraints{}, err
 	}

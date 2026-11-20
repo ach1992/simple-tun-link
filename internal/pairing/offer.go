@@ -23,6 +23,7 @@ import (
 const (
 	SchemaVersion          = 2 // existing GRE/IPIP/IPsec and legacy WireGuard pairing
 	WireGuardSchemaVersion = 3 // new public peer configuration and credential identity binding
+	IPIPPortSchemaVersion  = 4 // explicit IPIP FOU/GUE UDP port
 	legacySchemaVersion    = 1
 
 	// MaxPayloadBytes bounds both untrusted decoded JSON and deliberate export.
@@ -75,6 +76,8 @@ func NewQuickOffer(link domain.Link, credential []byte) (Offer, error) {
 	version := SchemaVersion
 	if link.Backend == domain.BackendWireGuard {
 		version = WireGuardSchemaVersion
+	} else if link.Backend == domain.BackendIPIP && link.IPIP.UDPPort != 0 {
+		version = IPIPPortSchemaVersion
 	}
 	offer := Offer{
 		link:            link,
@@ -90,11 +93,18 @@ func NewQuickOffer(link domain.Link, credential []byte) (Offer, error) {
 
 func (o Offer) validate() error {
 	version := o.effectiveSchemaVersion()
-	if version != legacySchemaVersion && version != SchemaVersion && version != WireGuardSchemaVersion {
+	if version != legacySchemaVersion && version != SchemaVersion && version != WireGuardSchemaVersion && version != IPIPPortSchemaVersion {
 		return fmt.Errorf("unsupported pairing schema version")
 	}
 	if version == WireGuardSchemaVersion && o.link.Backend != domain.BackendWireGuard {
 		return fmt.Errorf("pairing schema v3 is reserved for configured WireGuard")
+	}
+	if version == IPIPPortSchemaVersion && (o.link.Backend != domain.BackendIPIP ||
+		o.link.IPIP.UDPPort == 0 || o.link.Encapsulation == domain.EncapNative) {
+		return fmt.Errorf("pairing schema v4 requires a custom IPIP FOU/GUE port")
+	}
+	if version != IPIPPortSchemaVersion && o.link.IPIP != (domain.IPIPOptions{}) {
+		return fmt.Errorf("custom IPIP port requires pairing schema v4")
 	}
 	if version == legacySchemaVersion && o.link.GRE != (domain.GREOptions{}) {
 		return fmt.Errorf("pairing schema v1 cannot carry GRE backend options")
@@ -194,9 +204,6 @@ func validateLinkPrefixes(a domain.LinkAddresses) error {
 		if !prefix.IsValid() || !prefix.Addr().Is4() || prefix.Bits() < 0 || prefix.Bits() > 32 {
 			return fmt.Errorf("invalid IPv4 Link Address prefix")
 		}
-	}
-	if a.Local.Bits() != a.Peer.Bits() {
-		return fmt.Errorf("Link Address prefix lengths must agree on both peers")
 	}
 	return nil
 }

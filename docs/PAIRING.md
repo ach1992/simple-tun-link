@@ -35,6 +35,14 @@ and optional `recipient_secret` with `kind` and Base64
 GRE advanced flags and FOU/GUE UDP port so that importing
 does not manufacture a collision-sensitive setting.
 
+Custom IPIP FOU/GUE receive ports use **v4** (`stl://4.`), with an
+explicit `link.ipip.udp_port` from 1 to 65535. Native IPIP does not
+have a UDP receive port; ordinary IPIP FOU/GUE v2 offers with the
+original Link-ID-derived port remain valid. Both hosts import/export
+the same explicit port; matching an arbitrary port is not a reason to
+weaken receive-port collision or kernel endpoint identity checks.
+The older v1/v2 fields remain frozen rather than silently widened.
+
 Configured WireGuard uses **v3** (`stl://3.`): a public-only
 `link.wireguard` carries
 `local_public_key`, `peer_public_key`, `listen_port`,
@@ -48,6 +56,7 @@ explicit configured ports are required for new operational offers.
 | Offer | Decode/preview | Confirmed import |
 | --- | --- | --- |
 | GRE/IPIP v2 with valid options | Yes | Yes, after token and identity checks |
+| IPIP FOU/GUE v4 with explicit receive port | Yes | Yes, after token and exact port/identity checks |
 | GRE/IPIP v1 with supported Native options | Yes | Only supported validated configurations |
 | WireGuard v3, public config + matching receiver secret | Yes | Yes, through protected credential provision |
 | Legacy credential-only WireGuard v1/v2 | Yes, redacted | **No**; missing operational public peer config |
@@ -65,6 +74,18 @@ Decode bounds are **24 KiB entire input** and
 known fields and compatible backend/mode options, no duplicate
 or case-variant keys, valid UTF-8/surrogate handling, no shell
 evaluation and no arbitrary file/command interpretation.
+Different valid local/peer IPv4 CIDR prefix lengths are allowed by
+the wire contract and are preserved exactly on receiver inversion.
+This is a configuration transfer, **not proof that each host has an
+on-link route to the other tunnel address**. On GRE/IPIP and the
+WireGuard family (native WireGuard, WSS, QUIC), a /32 or non-overlapping
+prefix may require external reciprocal routing that STL does not
+install automatically. A successful local import or configured
+AllowedIPs does not establish a host route or peer handshake.
+The selected backend still enforces its actual prefix requirements
+(for example L2TPv3 same-subnet and IPsec /31), and connectivity
+diagnostics must report reality.
+
 Scoped IPv6 zone identifiers are not portable and are rejected;
 IPv6 underlay without zones may be valid even though IPv4
 Link Addresses are the initially supported link dataplane.

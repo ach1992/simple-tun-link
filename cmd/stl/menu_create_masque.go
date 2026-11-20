@@ -23,17 +23,38 @@ func askMASQUEPublicTLS(p createPrompts) (bool, error) {
 	menuSection(p.out, "MASQUE TLS authentication")
 	menuOption(p.out, "1", "Private mTLS", "client certificate verified before HTTP/2 (default)")
 	menuOption(p.out, "2", "Public TLS", "no TLS client certificate; CONNECT-IP requires a protected per-Link bearer; GET/HEAD serve a genuine endpoint")
-	answer, err := p.ask("MASQUE TLS mode [1]: ")
-	if err != nil {
-		return false, err
+	for {
+		answer, err := p.ask("MASQUE TLS mode [1]: ")
+		if err != nil {
+			return false, err
+		}
+		switch answer {
+		case "", "1":
+			return false, nil
+		case "2":
+			return true, nil
+		default:
+			menuProse(p.out, "Choose MASQUE TLS mode 1 or 2, or press q to go back.")
+		}
 	}
-	switch answer {
-	case "", "1":
-		return false, nil
-	case "2":
-		return true, nil
-	default:
-		return false, errors.New("choose MASQUE TLS mode 1 or 2")
+}
+
+// A bad optional TLS identity is a recoverable field error rather than a
+// failed Create after collecting all other configuration.
+func askMASQUETLSName(p createPrompts, listener netip.Addr) (string, error) {
+	for {
+		name, err := p.ask("TLS certificate name (Enter=listener IP; exact DNS name optional): ")
+		if err != nil {
+			return "", err
+		}
+		if name == "" {
+			return listener.String(), nil
+		}
+		if len(name) <= 253 && strings.TrimSpace(name) == name &&
+			!strings.ContainsAny(name, "\x00\r\n\t /") {
+			return name, nil
+		}
+		menuProse(p.out, "Use a single IP or DNS name (up to 253 bytes, no paths or whitespace); try again or press q.")
 	}
 }
 
@@ -163,12 +184,9 @@ func menuCreateMASQUE(input io.Reader, reader *bufio.Reader, out, errOut io.Writ
 	if role == "listen" {
 		listener = own
 	}
-	tlsName, err := p.ask("TLS certificate name (Enter=listener IP; exact DNS name optional): ")
+	tlsName, err := askMASQUETLSName(p, listener)
 	if err != nil {
 		return p.failed(err)
-	}
-	if tlsName == "" {
-		tlsName = listener.String()
 	}
 	publicTLS, err := askMASQUEPublicTLS(p)
 	if err != nil {

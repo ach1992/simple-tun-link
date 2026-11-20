@@ -15,33 +15,44 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/state"
 )
 
-func askPort(p createPrompts, question string, optional bool) (uint16, error) {
-	value, err := p.ask(question)
-	if err != nil {
-		return 0, err
-	}
-	if value == "" && optional {
-		return 0, nil
-	}
-	raw, err := strconv.ParseUint(value, 10, 16)
-	if err != nil || raw == 0 {
-		return 0, fmt.Errorf("invalid WireGuard UDP port")
-	}
-	return uint16(raw), nil
-}
+// Keepalive zero disables periodic packets; the full uint16 interval is a
+// backend-supported operator choice, not a reason to abort the wizard.
 func askKeepalive(p createPrompts, question string) (uint16, error) {
-	value, err := p.ask(question)
+	for {
+		value, err := p.ask(question)
+		if err != nil {
+			return 0, err
+		}
+		if value == "" {
+			return 0, nil
+		}
+		raw, parseErr := strconv.ParseUint(value, 10, 16)
+		if parseErr == nil {
+			return uint16(raw), nil
+		}
+		fmt.Fprintln(p.out, "Keepalive must be a whole number from 0 to 65535 seconds (0 or Enter = off).")
+	}
+}
+
+// WSS and QUIC reuse WireGuard's endpoint-local keepalive fields in their
+// existing creator/import contracts. Keep the simple path at 25 seconds.
+func askCarrierKeepalives(p createPrompts) (uint16, uint16, error) {
+	change, err := p.yesNo("Customize kernel WireGuard keepalive on either server? [y/N]: ")
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	if value == "" {
-		return 0, nil
+	if !change {
+		return 25, 25, nil
 	}
-	raw, err := strconv.ParseUint(value, 10, 16)
-	if err != nil || raw > 65535 {
-		return 0, fmt.Errorf("invalid WireGuard keepalive")
+	local, err := askKeepalive(p, "Keepalive seconds on THIS server [Enter=off]: ")
+	if err != nil {
+		return 0, 0, err
 	}
-	return uint16(raw), nil
+	peer, err := askKeepalive(p, "Keepalive seconds on OTHER server [Enter=off]: ")
+	if err != nil {
+		return 0, 0, err
+	}
+	return local, peer, nil
 }
 
 // The guided WireGuard sender assembles the same versioned public request
@@ -150,6 +161,7 @@ func menuCreateWireGuard(input io.Reader, reader *bufio.Reader, out, errOut io.W
 	menuField(out, "Other server", peer.String())
 	menuField(out, "Local tunnel IP", request.Addresses.Local.String())
 	menuField(out, "Remote tunnel IP", request.Addresses.Peer.String())
+	warnNonOnLinkPeerRoute(out, addresses)
 	menuField(out, "UDP ports", fmt.Sprintf("this %d / other %d", localPort, peerPort))
 	menuField(out, "Keepalive", fmt.Sprintf("this %ds / other %ds", localKeep, peerKeep))
 	menuField(out, "Receiver setup", "Saved privately; displayed here after successful Create")

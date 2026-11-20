@@ -195,3 +195,65 @@ func TestGuidedMultiHomeCanOverrideVerifiedRouteWithAssignedIPv4(t *testing.T) {
 		}
 	}
 }
+
+// Advanced IPIP's custom port must survive the real guided composer, frozen
+// versioned CLI admission, Engine persistence, pairing, peer inversion and
+// confirmed offline receiver Import; preview alone is not acceptance.
+func TestAdvancedIPIPCustomPortGuidedEnsureAndReceiverImportOffline(t *testing.T) {
+	for _, tc := range []struct {
+		choice string
+		mode   domain.Encapsulation
+		port   string
+	}{
+		{"3", domain.EncapFOU, "1"}, {"3", domain.EncapFOU, "65535"},
+		{"4", domain.EncapGUE, "1"}, {"4", domain.EncapGUE, "65535"},
+	} {
+		t.Run(string(tc.mode)+"-"+tc.port, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "state")
+			fake := newLifecycleFake()
+			opts := &runtimeOptions{stateRoot: root, backends: []backend.Backend{&ipipImportFake{lifecycleFakeBackend: fake}},
+				probeRunner: &guidedTestRunner{routeFailAll: true}, packagePreview: readyGuidedPackagePreview,
+				mtuManager: guidedMTUFake{}, moduleObserve: func(context.Context, string) linux.KernelModuleState { return linux.KernelModuleLoaded },
+				createLinkID: func() (domain.LinkID, error) { return domain.LinkID("lnk_11223344556677889900aabbccddeeff"), nil }}
+			script := "1\n5\n" + tc.choice + "\n192.0.2.20\n192.0.2.10\n\n\ny\ninvalid\n" + tc.port + "\n1\nYES\n8\n"
+			code, out, errText := runGuidedTest(opts, script)
+			if code != 0 || len(fake.applies) != 1 {
+				t.Fatalf("guided IPIP custom port failed: code=%d applies=%d err=%q out=%q", code, len(fake.applies), errText, out)
+			}
+			snapshot, err := state.NewFileStore(root).Load(context.Background())
+			if err != nil || len(snapshot.Links) != 1 {
+				t.Fatalf("no saved link: %v %+v", err, snapshot)
+			}
+			local := snapshot.Links[0].Desired
+			selected := uint16(1)
+			if tc.port == "65535" {
+				selected = 65535
+			}
+			if local.Encapsulation != tc.mode || local.IPIP.UDPPort != selected || !strings.Contains(out, "Use a port number between 1 and 65535") {
+				t.Fatalf("selected port not persisted/retried: %+v", local)
+			}
+			url := regexp.MustCompile(`stl://[^[:space:]]+`).FindString(out)
+			if !strings.HasPrefix(url, "stl://4.") {
+				t.Fatalf("advanced IPIP was not paired with schema v4: %q", url)
+			}
+			offer, err := pairing.DecodeSetupLink(url)
+			if err != nil || offer.ReceiverLink().IPIP.UDPPort != selected {
+				t.Fatalf("pairing port changed: %v", err)
+			}
+			receiverRoot := filepath.Join(t.TempDir(), "receiver")
+			receiverFake := newLifecycleFake()
+			receiverOpts := &runtimeOptions{stateRoot: receiverRoot, backends: []backend.Backend{&ipipImportFake{lifecycleFakeBackend: receiverFake}},
+				probeRunner: &greReceiverProbe{inventory: greReceiverInventory("eth0", offer.ReceiverLink().Underlay.Local.String())}}
+			var stdout, stderr bytes.Buffer
+			exit := runWithRuntimeInput([]string{"link", "import", "--stdin", "--confirm", setupLinkConfirmation(url), "--json"},
+				strings.NewReader(url), &stdout, &stderr, receiverOpts)
+			if exit != 0 || len(receiverFake.applies) != 1 || stderr.Len() != 0 {
+				t.Fatalf("receiver import rejected: exit=%d stdout=%q err=%q", exit, stdout.String(), stderr.String())
+			}
+			remote, err := state.NewFileStore(receiverRoot).Load(context.Background())
+			if err != nil || len(remote.Links) != 1 || remote.Links[0].Desired != offer.ReceiverLink() {
+				t.Fatalf("peer inversion/state mismatch: %+v err=%v", remote, err)
+			}
+		})
+	}
+}

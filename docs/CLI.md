@@ -121,9 +121,20 @@ encapsulations/IPsec remain discoverable.
   choose another uniquely assigned local IPv4/interface. The Engine rechecks the selected
   local address/interface, committed identity, credentials, and conflicts.
   The wizard also suggests an unused private Link Address pair or permits
-  manual local/peer tunnel addresses (valid adjacent /31 and usable /30
-  pairs; IPsec still requires /31). An unassigned or multiply-assigned
-  local underlay cannot silently become a valid Create/Import source.
+  manual local/peer tunnel addresses (adjacent /31 and usable /30 by default;
+  Advanced accepts explicit IPv4/CIDR including /32 and different valid
+  endpoint prefix lengths). IPsec requires matched /31; L2TPv3 needs a
+  same-subnet non-/32 pair. Non-on-link GRE/IPIP and WireGuard-family
+  prefixes (native WireGuard, WSS, QUIC) may require independently configured
+  peer routes. These are not installed by the guided workflow, and the
+  review warns before confirmation; saved local State does not prove
+  bilateral reachability.
+  An unassigned or multiply-assigned local underlay cannot silently become a valid Create/Import source.
+- Guided WSS/QUIC uses a 25-second WireGuard keepalive default on each
+  peer, now independently configurable from 0 (disabled) to 65535 seconds.
+  Invalid input retries without restarting Create. WSS/QUIC TLS SAN
+  selection also validates against the chosen physical listener IP and
+  that carrier's accepted canonical DNS spelling before confirmation.
 - Preview before mutation shows selected backend, both endpoints,
   encapsulation/ports, endpoint-local MTU and effects. Selected missing
   trusted prerequisites can be prepared through one scoped, freshly
@@ -289,9 +300,13 @@ when the operators do not want to transfer a Setup Link:
    peer Link Address connectivity.
 
 The manual menu is for **Native** GRE/IPIP. Use the canonical
-**Share Setup Link → Import** flow for FOU/GUE and **L2TPv3 Direct-IP**:
-the same Link ID must be shared to derive exactly complementary
-kernel Tunnel/Session IDs and Ethernet MACs. Allow **IPv4 protocol 115**
+**Share Setup Link → Import** flow for FOU/GUE and **L2TPv3 Direct-IP**.
+For IPIP FOU/GUE the automatically derived UDP receive port can be
+overridden in Advanced Create with any valid 1–65535 UDP port; both
+peers retain the exact port through Setup Link schema v4.
+
+For **L2TPv3 Direct-IP**, the same Link ID must be shared to derive
+exactly complementary kernel Tunnel/Session IDs and Ethernet MACs. Allow **IPv4 protocol 115**
 (not TCP/UDP port 115) on both underlays; expect only a locally managed
 permanent private-peer neighbor, and verify actual peer-originated traffic.
 L2TPv3 traffic is plaintext, unauthenticated and provider-dependent.
@@ -447,6 +462,15 @@ Example public **schema v1** request (illustrative addresses only):
 }
 ~~~
 
+**Input schema v7** extends v2 with an explicit IPIP FOU/GUE UDP
+receive port, e.g. `"ipip":{"udp_port":1}` (valid 1–65535). The
+field is invalid for Native IPIP and unrelated backends. Ordinary
+IPIP FOU/GUE without an override still uses the previous
+Link-ID-derived port and frozen v1/v2 schemas. Custom-port IPIP
+exports `stl://4.` Setup Links; automatic-port IPIP remains v2.
+The exact saved port governs FOU/GUE mapping, UDP firewall rule,
+collision checks, Verify and owner-scoped Remove.
+
 **Input schema v2** deliberately extends the same frozen v1 Link
 object by only an optional endpoint-local `mtu` policy, for example
 `"mtu": {"mode": "auto"}` or
@@ -483,8 +507,8 @@ stl link export <saved-plain-link-id> --json
 ~~~
 
 Preview does not mutate State or inspect/repair the active host. For
-eligible plaintext GRE/IPIP/L2TPv3, configured WireGuard v3 or strict 32-byte
-PSK IPsec v2 offers, it returns a lowercase SHA-256
+eligible plaintext GRE/IPIP (including custom-port IPIP v4), L2TPv3,
+configured WireGuard v3 or strict 32-byte PSK IPsec v2 offers, it returns a lowercase SHA-256
 `import_confirmation` over the exact normalized URL. Import requires
 that **same** URL and token, then recipient-oriented inversion and
 a separate authorized Engine operation. Token matching detects a

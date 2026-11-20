@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ach1992/simple-tun-link/internal/carrier/wss"
+	"github.com/ach1992/simple-tun-link/internal/composition"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/state"
 )
@@ -110,13 +111,17 @@ func menuCreateWSSWithHost(input io.Reader, reader *bufio.Reader, out, errOut io
 	if err != nil {
 		return p.failed(err)
 	}
-	tlsName, err := p.ask("TLS certificate SAN (Enter = listener IP; or exact DNS name): ")
+	listener := peer
+	if role == "listen" {
+		listener = route.Source
+	}
+	tlsName, err := askTLSCertificateSAN(p, composition.WSS, listener)
 	if err != nil {
 		return p.failed(err)
 	}
-	if len(tlsName) > 253 || strings.ContainsAny(tlsName, " \t\r\n/\\") {
-		menuNotice(out, "WARNING", "Specify one verifiable IP or DNS name without paths.")
-		return 2
+	localKeep, peerKeep, err := askCarrierKeepalives(p)
+	if err != nil {
+		return p.failed(err)
 	}
 	idMaker := domain.NewLinkID
 	if opts != nil && opts.createLinkID != nil {
@@ -138,7 +143,7 @@ func menuCreateWSSWithHost(input io.Reader, reader *bufio.Reader, out, errOut io
 	request := wssCreateRequest{SchemaVersion: 1, LinkID: id, Underlay: desiredUnderlayV1{Local: route.Source, Peer: peer},
 		Addresses:  desiredLinkAddressesV1{Local: addresses.Local, Peer: addresses.Peer},
 		ListenPort: localWG, PeerPort: peerWG, Role: role, TCPPort: tcp,
-		LocalKeepalive: 25, PeerKeepalive: 25,
+		LocalKeepalive: localKeep, PeerKeepalive: peerKeep,
 		LocalForwardUDPPort: forward, RemoteForwardUDPPort: remoteForward, TLSServerName: tlsName, PublicTLS: publicTLS}
 	preview, err := json.Marshal(request)
 	if err != nil {
@@ -151,7 +156,9 @@ func menuCreateWSSWithHost(input io.Reader, reader *bufio.Reader, out, errOut io
 	menuField(out, "TLS TCP port", strconv.Itoa(int(tcp)))
 	menuField(out, "Public TLS", strconv.FormatBool(publicTLS))
 	menuField(out, "Kernel WG UDP", fmt.Sprintf("this %d / peer %d", localWG, peerWG))
+	menuField(out, "WG keepalive seconds", fmt.Sprintf("this %d / peer %d (0=off)", localKeep, peerKeep))
 	menuField(out, "Private IPs", addresses.Local.String()+" <-> "+addresses.Peer.String())
+	warnNonOnLinkPeerRoute(out, addresses)
 	menuField(out, "WSS forwarding UDP", fmt.Sprintf("this %d / peer %d", forward, remoteForward))
 	menuNotice(out, "WARNING", "Creates scoped nft ingress guard, WG interface, WSS helper, private credentials and protected peer handoff. Public TLS allows anonymous TLS/HTTP but private WebSocket Upgrade still requires the exact Link bearer and WireGuard peer.")
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
@@ -195,16 +202,18 @@ func askWSSPublicTLS(p createPrompts) (bool, error) {
 	menuSection(p.out, "WSS TLS authentication")
 	menuOption(p.out, "1", "Private mTLS", "original client-certificate requirement (default)")
 	menuOption(p.out, "2", "Public TLS", "no client certificate for TLS; Upgrade requires Link bearer; ordinary HTTP GET returns 400")
-	answer, err := p.ask("WSS TLS mode [1]: ")
-	if err != nil {
-		return false, err
-	}
-	switch answer {
-	case "", "1":
-		return false, nil
-	case "2":
-		return true, nil
-	default:
-		return false, fmt.Errorf("choose WSS TLS mode 1 or 2")
+	for {
+		answer, err := p.ask("WSS TLS mode [1]: ")
+		if err != nil {
+			return false, err
+		}
+		switch answer {
+		case "", "1":
+			return false, nil
+		case "2":
+			return true, nil
+		default:
+			fmt.Fprintln(p.out, "Choose WSS TLS mode 1 or 2, or press q to go back.")
+		}
 	}
 }

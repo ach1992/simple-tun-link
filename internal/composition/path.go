@@ -194,16 +194,16 @@ func Build(link domain.Link, carrier Carrier) (Path, error) {
 			if name == "" {
 				name = link.Underlay.Peer.String()
 			}
-			if !validTLSName(name) {
-				return Path{}, fmt.Errorf("WSS dial side requires an exact IP SAN or canonical DNS server identity")
+			if !ValidWSSTLSName(name, link.Underlay.Peer) {
+				if !validTLSName(name) {
+					return Path{}, fmt.Errorf("WSS dial side requires an exact IP SAN or canonical DNS server identity")
+				}
+				return Path{}, fmt.Errorf("WSS TLS IP identity must match the physical TCP peer; use DNS SAN for a distinct name")
 			}
 			// wstunnel v11.0.0 implements --tls-sni-override using
 			// rustls DnsName, not IpAddress. A different IP SAN cannot
 			// be selected as an override: fail here, rather than hand a
 			// syntactically accepted but unrunnable plan to the operator.
-			if parsed, err := netip.ParseAddr(name); err == nil && parsed != link.Underlay.Peer {
-				return Path{}, fmt.Errorf("WSS TLS IP identity must match the physical TCP peer; use DNS SAN for a distinct name")
-			}
 			plan.TLSName = name
 			plan.WSSPeerTCP = netip.AddrPortFrom(link.Underlay.Peer, carrier.PublicTCPPort)
 			plan.WSSLocalUDP = netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), carrier.LocalForwardUDP)
@@ -219,10 +219,10 @@ func Build(link domain.Link, carrier Carrier) (Path, error) {
 			if name == "" {
 				name = link.Underlay.Local.String()
 			}
-			if !validTLSName(name) {
-				return Path{}, fmt.Errorf("WSS listener requires a canonical certificate identity")
-			}
-			if parsed, err := netip.ParseAddr(name); err == nil && parsed != link.Underlay.Local {
+			if !ValidWSSTLSName(name, link.Underlay.Local) {
+				if !validTLSName(name) {
+					return Path{}, fmt.Errorf("WSS listener requires a canonical certificate identity")
+				}
 				return Path{}, fmt.Errorf("WSS listener IP certificate identity must match its physical TCP bind IP")
 			}
 			plan.TLSName = name
@@ -262,6 +262,16 @@ func nativePayload(link domain.Link) (Payload, error) {
 		}
 	}
 	return "", fmt.Errorf("unsupported native provider/encapsulation %q/%q", link.Backend, link.Encapsulation)
+}
+
+// ValidWSSTLSName is the carrier admission contract for a selected SAN and
+// physical TLS listener; both the guided wizard and Engine use this predicate.
+func ValidWSSTLSName(name string, physical netip.Addr) bool {
+	if !validTLSName(name) {
+		return false
+	}
+	ip, err := netip.ParseAddr(name)
+	return err != nil || ip == physical
 }
 
 func validTLSName(value string) bool {

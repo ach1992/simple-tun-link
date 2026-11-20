@@ -148,3 +148,28 @@ func TestWireGuardPublicOptionsAndBackendIsolation(t *testing.T) {
 		t.Fatalf("legacy preview-only Link was discarded: %v", err)
 	}
 }
+
+func TestIPIPReceivePortIsOptionalFullRangeAndBackendScoped(t *testing.T) {
+	link := Link{ID: LinkID("lnk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		Underlay:  Underlay{Local: netip.MustParseAddr("192.0.2.10"), Peer: netip.MustParseAddr("198.51.100.20")},
+		Addresses: LinkAddresses{Local: netip.MustParsePrefix("10.80.20.0/31"), Peer: netip.MustParsePrefix("10.80.20.1/31")},
+		Backend:   BackendIPIP, Encapsulation: EncapFOU}
+	for _, encap := range []Encapsulation{EncapFOU, EncapGUE} {
+		for _, port := range []uint16{0, 1, 65535} {
+			link.Encapsulation = encap
+			link.IPIP.UDPPort = port
+			if err := link.Validate(); err != nil {
+				t.Fatalf("valid IPIP %s:%d rejected: %v", encap, port, err)
+			}
+		}
+	}
+	link.Encapsulation = EncapNative
+	if err := link.Validate(); err == nil {
+		t.Fatal("native IPIP accepted UDP receive port")
+	}
+	link.Encapsulation = EncapFOU
+	link.Backend, link.Encapsulation = BackendGRE, EncapNative
+	if err := link.Validate(); err == nil {
+		t.Fatal("GRE accepted IPIP-only option")
+	}
+}

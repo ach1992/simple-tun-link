@@ -91,6 +91,33 @@ func TestAutoMTUConfirmedUpperBound(t *testing.T) {
 	}
 }
 
+// A physical WG device can have a manually configured MTU smaller than the
+// inner PMTU suggested by its underlay. Never attempt a larger DF packet or
+// report the resulting local "Message too long" as a peer outage.
+func TestAutoMTUCapsAtVerifiedLocalLinkInterfaceMTU(t *testing.T) {
+	c := MTUConstraints{UnderlayMTU: 1280, BackendOverhead: 60, LinkMTU: 1200}
+	p := &thresholdProber{maxPacket: 1200}
+	got, err := SelectMTU(context.Background(), diagnosticLink(), c, p)
+	if err != nil || !got.Verified || got.CeilingMTU != 1200 ||
+		got.SelectedMTU != 1200 || got.Choice != MTUVerified ||
+		!reflect.DeepEqual(p.calls, []int{1200}) {
+		t.Fatalf("known interface MTU was ignored: result=%+v calls=%v err=%v", got, p.calls, err)
+	}
+	// A real underlay ceiling can still be stricter than the local device.
+	c.LinkMTU = 1420
+	p = &thresholdProber{maxPacket: 1220}
+	got, err = SelectMTU(context.Background(), diagnosticLink(), c, p)
+	if err != nil || !got.Verified || got.CeilingMTU != 1220 || got.SelectedMTU != 1220 {
+		t.Fatalf("underlay ceiling was not preserved: result=%+v err=%v", got, err)
+	}
+	// An unsupported DF tool must never suggest a fallback above the known interface.
+	c.LinkMTU = 1100
+	got, err = SelectMTU(context.Background(), diagnosticLink(), c, nil)
+	if err != nil || got.Verified || got.SelectedMTU != 1100 || got.CeilingMTU != 1100 {
+		t.Fatalf("unverified fallback exceeded local MTU: result=%+v err=%v", got, err)
+	}
+}
+
 func TestAutoMTUDiscoversSupportedMaximumWithoutHardcodedEncapsulation(t *testing.T) {
 	for _, test := range []struct {
 		name                string
@@ -198,6 +225,9 @@ func TestInvalidMTUConstraintsAreRejectedBeforeProbe(t *testing.T) {
 		{UnderlayMTU: 1500, BackendOverhead: 20, ManualOverride: -1},
 		{UnderlayMTU: 1500, BackendOverhead: 20, ManualOverride: 1481},
 		{UnderlayMTU: 1500, BackendOverhead: 20, ManualOverride: 67},
+		{UnderlayMTU: 1280, BackendOverhead: 60, LinkMTU: 67},
+		{UnderlayMTU: 1280, BackendOverhead: 60, LinkMTU: 65536},
+		{UnderlayMTU: 1280, BackendOverhead: 60, LinkMTU: 1200, ManualOverride: 1220},
 	}
 	for i, c := range tests {
 		p := &thresholdProber{maxPacket: 1500}

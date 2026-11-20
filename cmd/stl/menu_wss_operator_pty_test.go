@@ -106,7 +106,8 @@ func TestWSSGuidedRealPTYDirectionPortRetryReviewAndCancel(t *testing.T) {
 		prompt, answer string
 	}{
 		{"Other server's IPv4 address (peer may be offline", "192.0.2.20\n"},
-		{"Tunnel IP on THIS server", "\n"},
+		{"Tunnel IP on THIS server", "10.87.2.10/32\n"},
+		{"Tunnel IP on OTHER server", "10.87.3.11/32\n"},
 		{"Direction [Enter=suggested; 1=listen; 2=dial]: ", "2\n"},
 		{"WSS TLS mode [1]: ", "2\n"},
 		{"Public WSS/TLS TCP port [443]: ", "0\n"},
@@ -130,7 +131,33 @@ func TestWSSGuidedRealPTYDirectionPortRetryReviewAndCancel(t *testing.T) {
 		{"Kernel WG UDP port on THIS server", "\n"},
 		{"Kernel WG UDP port on OTHER server", "\n"},
 		{"THIS server's private loopback forwarding UDP port", "\n"},
-		{"TLS certificate SAN", "\n"},
+	} {
+		readMenuPTYUntil(t, master, step.prompt)
+		if _, err := io.WriteString(master, step.answer); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var sanTranscript strings.Builder
+	for _, invalid := range []string{"bad@name", "bad:name", "BAD.EXAMPLE", "192.0.2.33"} {
+		sanTranscript.WriteString(readMenuPTYUntil(t, master, "TLS certificate SAN"))
+		if _, err := io.WriteString(master, invalid+"\n"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sanTranscript.WriteString(readMenuPTYUntil(t, master, "TLS certificate SAN"))
+	if !strings.Contains(sanTranscript.String(), "IP SAN must match") ||
+		!strings.Contains(sanTranscript.String(), "canonical lowercase DNS") {
+		t.Fatalf("invalid WSS SAN did not retry locally: %q", sanTranscript.String())
+	}
+	if _, err := io.WriteString(master, "valid.example\n"); err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []struct {
+		prompt, answer string
+	}{
+		{"Customize kernel WireGuard keepalive", "y\n"},
+		{"Keepalive seconds on THIS server", "0\n"},
+		{"Keepalive seconds on OTHER server", "65535\n"},
 	} {
 		readMenuPTYUntil(t, master, step.prompt)
 		if _, err := io.WriteString(master, step.answer); err != nil {
@@ -140,7 +167,8 @@ func TestWSSGuidedRealPTYDirectionPortRetryReviewAndCancel(t *testing.T) {
 	review := readMenuPTYUntil(t, master, "Create WSS Link and private receiver handoff? Type YES")
 	for _, marker := range []string{
 		"192.0.2.10 (dial)", "192.0.2.20 (listen)", "192.0.2.20:8443/TCP",
-		"manual override", "Public reachability is unverified",
+		"manual override", "Public reachability is unverified", "this 0 / peer 65535",
+		"10.87.2.10/32", "10.87.3.11/32", "These custom CIDRs do not provide",
 	} {
 		if !strings.Contains(review, marker) {
 			t.Fatalf("narrow WSS review missing %q: %q", marker, review)

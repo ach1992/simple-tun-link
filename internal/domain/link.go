@@ -93,6 +93,11 @@ type GREOptions struct {
 	UDPPort      uint16 `json:"udp_port,omitempty"`
 }
 
+// IPIP FOU/GUE UDP port. Zero preserves the Link-ID-derived default.
+type IPIPOptions struct {
+	UDPPort uint16 `json:"udp_port,omitempty"`
+}
+
 // WireGuardOptions contains ONLY public configuration. Private keys live in
 // the protected per-Link KeyStore, never in desired state or generic JSON.
 // Zero options remain decodable for legacy preview-only pairing links; the
@@ -190,6 +195,7 @@ type Link struct {
 	// GRE is meaningful only when Backend == BackendGRE. omitzero keeps the
 	// backend-neutral JSON compact while preserving Link comparability.
 	GRE       GREOptions       `json:"gre,omitzero"`
+	IPIP      IPIPOptions      `json:"ipip,omitzero"`
 	WireGuard WireGuardOptions `json:"wireguard,omitzero"`
 	MTU       MTUPolicy        `json:"mtu,omitzero"`
 	WSS       WSSOptions       `json:"wss,omitzero"`
@@ -253,6 +259,9 @@ func (l Link) Validate() error {
 	}
 	if l.Backend != BackendGRE && l.GRE != (GREOptions{}) {
 		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "GRE options are only valid for the GRE backend")
+	}
+	if l.Backend != BackendIPIP && l.IPIP != (IPIPOptions{}) {
+		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "IPIP options require the IPIP backend")
 	}
 	if l.Backend != BackendWireGuard && l.Backend != BackendWireGuardWSS && l.Backend != BackendWireGuardQUIC && l.WireGuard != (WireGuardOptions{}) {
 		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "WireGuard options are only valid for the WireGuard backend")
@@ -327,6 +336,9 @@ func (l Link) Validate() error {
 		}
 	}
 	if l.Backend == BackendIPIP {
+		if l.Encapsulation == EncapNative && l.IPIP.UDPPort != 0 {
+			return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "native IPIP has no UDP receive port")
+		}
 		if !l.Underlay.Local.Is4() || !l.Underlay.Peer.Is4() {
 			return stlerr.New(stlerr.CodeUnsupported, "validate_link", string(l.ID), string(l.Backend), "v0.1 IPIP requires IPv4 underlay endpoints")
 		}

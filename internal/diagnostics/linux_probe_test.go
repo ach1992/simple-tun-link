@@ -27,6 +27,7 @@ type scriptedLinuxRunner struct {
 	localPrefix       netip.Prefix
 	linkUp            bool
 	addressIndex      int
+	tunnelMTU         int
 	pingResult        linux.CommandResult
 	pingErr           error
 	pingMax           int
@@ -35,7 +36,7 @@ type scriptedLinuxRunner struct {
 
 func newScriptedLinuxRunner() *scriptedLinuxRunner {
 	return &scriptedLinuxRunner{routeSource: "192.0.2.10", routeMTU: 1410,
-		localPrefix: netip.MustParsePrefix("10.80.20.0/31"), linkUp: true, addressIndex: 77}
+		localPrefix: netip.MustParsePrefix("10.80.20.0/31"), linkUp: true, addressIndex: 77, tunnelMTU: 1400}
 }
 
 func (r *scriptedLinuxRunner) Run(_ context.Context, name string, args ...string) (linux.CommandResult, error) {
@@ -52,8 +53,8 @@ func (r *scriptedLinuxRunner) Run(_ context.Context, name string, args ...string
 		if !r.linkUp {
 			flags = "DOWN"
 		}
-		raw := fmt.Sprintf(`[{"ifindex":%d,"ifname":"stltest0","mtu":1400,"flags":[%q],"addr_info":[{"family":"inet","local":%q,"prefixlen":%d}]}]`,
-			r.addressIndex, flags, r.localPrefix.Addr().String(), r.localPrefix.Bits())
+		raw := fmt.Sprintf(`[{"ifindex":%d,"ifname":"stltest0","mtu":%d,"flags":[%q],"addr_info":[{"family":"inet","local":%q,"prefixlen":%d}]}]`,
+			r.addressIndex, r.tunnelMTU, flags, r.localPrefix.Addr().String(), r.localPrefix.Bits())
 		return linux.CommandResult{Stdout: []byte(raw)}, nil
 	case name == "env":
 		r.pingTotalRequests++
@@ -82,7 +83,7 @@ func TestLinuxPreflightUsesRealUnderlayPathAndExactLocalLinkAddress(t *testing.T
 	runner := newScriptedLinuxRunner()
 	link := diagnosticLink()
 	constraints, err := PreflightLinux(context.Background(), link, testLinuxOptions(runner))
-	if err != nil || constraints.UnderlayMTU != 1410 || constraints.BackendOverhead != 24 {
+	if err != nil || constraints.UnderlayMTU != 1410 || constraints.BackendOverhead != 24 || constraints.LinkMTU != 1400 {
 		t.Fatalf("route-aware constraints wrong: %+v err=%v", constraints, err)
 	}
 	want := []string{
@@ -92,6 +93,28 @@ func TestLinuxPreflightUsesRealUnderlayPathAndExactLocalLinkAddress(t *testing.T
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("unscoped or unexpected observations: %v", runner.calls)
+	}
+}
+
+func TestLinuxPreflightUsesActualOwnedLinkMTUAsFinalDiagnosticCeiling(t *testing.T) {
+	runner := newScriptedLinuxRunner()
+	runner.routeMTU = 1280
+	runner.tunnelMTU = 1200
+	opts := testLinuxOptions(runner)
+	opts.BackendOverhead = 60
+	constraints, err := PreflightLinux(context.Background(), diagnosticLink(), opts)
+	if err != nil || constraints.UnderlayMTU != 1280 || constraints.LinkMTU != 1200 {
+		t.Fatalf("did not preserve two independent measured MTU constraints: %+v %v", constraints, err)
+	}
+	ceiling, err := mtuCeiling(constraints)
+	if err != nil || ceiling != 1200 {
+		t.Fatalf("the diagnostic ceiling must be the minimum measured size: %d %v", ceiling, err)
+	}
+	runner.pingMax = 1200
+	report, err := ObserveLinux(context.Background(), diagnosticLink(), opts)
+	if err != nil || !report.MTU.Verified || report.MTU.SelectedMTU != 1200 ||
+		report.MTU.CeilingMTU != 1200 {
+		t.Fatalf("realistic diagnostic still probed above WG device MTU: %+v %v", report, err)
 	}
 }
 

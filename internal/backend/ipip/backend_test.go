@@ -339,11 +339,19 @@ func TestNativeIPIPLifecycleIsIdempotentOwnedAndUsesProtocol4(t *testing.T) {
 	}
 }
 
-func TestIPIPFOUAndGUELifecycleUsesDerivedOwnedPort(t *testing.T) {
-	for _, encap := range []domain.Encapsulation{domain.EncapFOU, domain.EncapGUE} {
-		t.Run(string(encap), func(t *testing.T) {
+func TestIPIPFOUAndGUELifecycleUsesOwnedReceivePort(t *testing.T) {
+	for _, tc := range []struct {
+		encap        domain.Encapsulation
+		selectedPort uint16
+	}{
+		{domain.EncapFOU, 0}, {domain.EncapFOU, 1}, {domain.EncapFOU, 65535},
+		{domain.EncapGUE, 0}, {domain.EncapGUE, 1}, {domain.EncapGUE, 65535},
+	} {
+		encap, selectedPort := tc.encap, tc.selectedPort
+		t.Run(fmt.Sprintf("%s-port-%d", encap, selectedPort), func(t *testing.T) {
 			link := testLink()
 			link.Encapsulation = encap
+			link.IPIP.UDPPort = selectedPort
 			port, _ := UDPPort(link)
 			name, _ := InterfaceName(link.ID)
 			runner, firewall := &fakeRunner{link: link, name: name}, &fakeFirewall{}
@@ -723,5 +731,31 @@ func TestIPIPRemoveOwnedTunnelWithoutUnderlayRoute(t *testing.T) {
 				t.Fatal("IPIP owned objects remained")
 			}
 		})
+	}
+}
+
+func TestIPIPExplicitReceivePortPropagatesToLinuxIdentityAndClaims(t *testing.T) {
+	for _, mode := range []domain.Encapsulation{domain.EncapFOU, domain.EncapGUE} {
+		for _, selected := range []uint16{1, 65000, 65535} {
+			link := testLink()
+			link.Encapsulation, link.IPIP.UDPPort = mode, selected
+			port, err := UDPPort(link)
+			if err != nil || port != selected {
+				t.Fatalf("port %d %s: %d %v", selected, mode, port, err)
+			}
+			args, err := ipipTypeArgs(link)
+			if err != nil || !strings.Contains(strings.Join(args, " "), "encap-sport "+strconv.Itoa(int(selected))+" encap-dport "+strconv.Itoa(int(selected))) {
+				t.Fatalf("iproute2 did not receive selected port: %v %v", args, err)
+			}
+			claims := commonCollisionClaims(link, "test")
+			if !slices.Contains(claims, domain.ResourceClaim{Kind: domain.ResourceUDPListenPort, Key: strconv.Itoa(int(selected))}) {
+				t.Fatalf("custom port was not claimed for collision checking: %+v", claims)
+			}
+			inverse := link
+			inverse.Underlay.Local, inverse.Underlay.Peer = link.Underlay.Peer, link.Underlay.Local
+			if reciprocal, err := UDPPort(inverse); err != nil || reciprocal != selected {
+				t.Fatalf("peer port mismatch: %d %v", reciprocal, err)
+			}
+		}
 	}
 }

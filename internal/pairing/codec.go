@@ -91,7 +91,7 @@ func DecodeSetupLink(input string) (Offer, error) {
 	if err != nil {
 		return invalid("invalid setup-link scheme/version", err)
 	}
-	if envelopeVersion != legacySchemaVersion && envelopeVersion != SchemaVersion && envelopeVersion != WireGuardSchemaVersion {
+	if envelopeVersion != legacySchemaVersion && envelopeVersion != SchemaVersion && envelopeVersion != WireGuardSchemaVersion && envelopeVersion != IPIPPortSchemaVersion {
 		return Offer{}, stlerr.New(stlerr.CodeUnsupported, "pairing_decode", "", "", "unsupported pairing schema version")
 	}
 	body := input[len(prefix):]
@@ -194,6 +194,8 @@ func setupPrefixForVersion(version int) (string, error) {
 		return setupPrefix, nil
 	case WireGuardSchemaVersion:
 		return wireGuardSetupPrefix, nil
+	case IPIPPortSchemaVersion:
+		return "stl://4.", nil
 	default:
 		return "", fmt.Errorf("unsupported pairing schema version %d", version)
 	}
@@ -315,6 +317,7 @@ var wireAllowedFields = map[string]map[string]string{
 		"encapsulation": "string",
 		"gre":           "gre",
 		"wireguard":     "wireguard",
+		"ipip":          "ipip",
 	},
 	"underlay": {
 		"local": "string",
@@ -336,6 +339,7 @@ var wireAllowedFields = map[string]map[string]string{
 		"local_keepalive":  "number",
 		"peer_keepalive":   "number",
 	},
+	"ipip": {"udp_port": "number"},
 	"gre": {
 		"key_enabled":   "bool",
 		"key":           "number",
@@ -376,6 +380,9 @@ func validateWireValue(dec *json.Decoder, expected string, depth int, schemaVers
 					ok = false
 				}
 				if schemaVersion <= SchemaVersion && name == "wireguard" {
+					ok = false
+				}
+				if schemaVersion < IPIPPortSchemaVersion && name == "ipip" {
 					ok = false
 				}
 			}
