@@ -1,10 +1,45 @@
 package main
 
 import (
-	"github.com/ach1992/simple-tun-link/internal/domain"
+	"bytes"
 	"net/netip"
+	"strings"
 	"testing"
+
+	"github.com/ach1992/simple-tun-link/internal/domain"
 )
+
+// A valid CIDR pair is not necessarily routable through its connected
+// prefix; warn before confirmation without disallowing custom routing.
+func TestNonOnLinkPeerRouteGuidanceForSupportedCustomCIDRs(t *testing.T) {
+	for _, tc := range []struct {
+		name, local, peer string
+		warn              bool
+	}{
+		{"on-link /31", "10.87.2.0/31", "10.87.2.1/31", false},
+		{"on-link /30", "10.87.2.1/30", "10.87.2.2/30", false},
+		{"different mutually on-link prefixes", "10.87.2.10/24", "10.87.2.11/25", false},
+		{"disjoint /32", "10.87.2.10/32", "10.87.3.11/32", true},
+		{"wider disjoint", "10.87.2.10/24", "10.87.3.11/24", true},
+		{"asymmetric reachability", "10.87.2.10/32", "10.87.2.11/24", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			addresses, err := manualCIDRLinkAddresses(tc.local, tc.peer)
+			if err != nil {
+				t.Fatalf("valid custom CIDRs were restricted: %v", err)
+			}
+			var out bytes.Buffer
+			warnNonOnLinkPeerRoute(&out, addresses)
+			warned := strings.Contains(out.String(), "STL does not add an extra host route")
+			if warned != tc.warn {
+				t.Fatalf("route guidance does not match CIDRs: wanted=%t got=%q", tc.warn, out.String())
+			}
+			if tc.warn && !strings.Contains(out.String(), "saving a Link is not evidence of peer connectivity") {
+				t.Fatalf("missing honest post-create connectivity warning: %q", out.String())
+			}
+		})
+	}
+}
 
 func TestExplicitAdvancedCIDRHostAndBackendSemantics(t *testing.T) {
 	positive := []struct{ local, peer string }{

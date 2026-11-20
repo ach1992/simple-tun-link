@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/netip"
 	"strings"
 	"time"
@@ -98,6 +99,16 @@ func checkManualLinkSubnet(ctx context.Context, runner linux.Runner, reservation
 		}
 	}
 	return true, nil
+}
+
+// Custom prefixes can be valid without connected routes to each other's
+// tunnel IP. Do not install unowned routes or falsely claim connectivity.
+func warnNonOnLinkPeerRoute(out io.Writer, addresses domain.LinkAddresses) {
+	if addresses.Local.Masked().Contains(addresses.Peer.Addr()) &&
+		addresses.Peer.Masked().Contains(addresses.Local.Addr()) {
+		return
+	}
+	menuNotice(out, "WARNING", "These custom CIDRs do not provide reciprocal on-link routing to the peer tunnel addresses. STL does not add an extra host route. Verify or configure the necessary routes on BOTH hosts; saving a Link is not evidence of peer connectivity.")
 }
 
 // The ordinary path keeps an inferred RFC1918 /31 suggestion. Explicit

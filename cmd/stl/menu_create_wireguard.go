@@ -161,6 +161,7 @@ func menuCreateWireGuard(input io.Reader, reader *bufio.Reader, out, errOut io.W
 	menuField(out, "Other server", peer.String())
 	menuField(out, "Local tunnel IP", request.Addresses.Local.String())
 	menuField(out, "Remote tunnel IP", request.Addresses.Peer.String())
+	warnNonOnLinkPeerRoute(out, addresses)
 	menuField(out, "UDP ports", fmt.Sprintf("this %d / other %d", localPort, peerPort))
 	menuField(out, "Keepalive", fmt.Sprintf("this %ds / other %ds", localKeep, peerKeep))
 	menuField(out, "Receiver setup", "Saved privately; displayed here after successful Create")

@@ -124,12 +124,17 @@ encapsulations/IPsec remain discoverable.
   manual local/peer tunnel addresses (adjacent /31 and usable /30 by default;
   Advanced accepts explicit IPv4/CIDR including /32 and different valid
   endpoint prefix lengths). IPsec requires matched /31; L2TPv3 needs a
-  same-subnet non-/32 pair. Non-on-link GRE/IPIP prefixes may require
-  independent reciprocal host routes, not installed by this workflow.
+  same-subnet non-/32 pair. Non-on-link GRE/IPIP and WireGuard-family
+  prefixes (native WireGuard, WSS, QUIC) may require independently configured
+  peer routes. These are not installed by the guided workflow, and the
+  review warns before confirmation; saved local State does not prove
+  bilateral reachability.
   An unassigned or multiply-assigned local underlay cannot silently become a valid Create/Import source.
 - Guided WSS/QUIC uses a 25-second WireGuard keepalive default on each
   peer, now independently configurable from 0 (disabled) to 65535 seconds.
-  Invalid input retries without restarting Create.
+  Invalid input retries without restarting Create. WSS/QUIC TLS SAN
+  selection also validates against the chosen physical listener IP and
+  that carrier's accepted canonical DNS spelling before confirmation.
 - Preview before mutation shows selected backend, both endpoints,
   encapsulation/ports, endpoint-local MTU and effects. Selected missing
   trusted prerequisites can be prepared through one scoped, freshly

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ach1992/simple-tun-link/internal/carrier/wss"
+	"github.com/ach1992/simple-tun-link/internal/composition"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/state"
 )
@@ -110,7 +111,11 @@ func menuCreateWSSWithHost(input io.Reader, reader *bufio.Reader, out, errOut io
 	if err != nil {
 		return p.failed(err)
 	}
-	tlsName, err := askTLSCertificateSAN(p)
+	listener := peer
+	if role == "listen" {
+		listener = route.Source
+	}
+	tlsName, err := askTLSCertificateSAN(p, composition.WSS, listener)
 	if err != nil {
 		return p.failed(err)
 	}
@@ -153,6 +158,7 @@ func menuCreateWSSWithHost(input io.Reader, reader *bufio.Reader, out, errOut io
 	menuField(out, "Kernel WG UDP", fmt.Sprintf("this %d / peer %d", localWG, peerWG))
 	menuField(out, "WG keepalive seconds", fmt.Sprintf("this %d / peer %d (0=off)", localKeep, peerKeep))
 	menuField(out, "Private IPs", addresses.Local.String()+" <-> "+addresses.Peer.String())
+	warnNonOnLinkPeerRoute(out, addresses)
 	menuField(out, "WSS forwarding UDP", fmt.Sprintf("this %d / peer %d", forward, remoteForward))
 	menuNotice(out, "WARNING", "Creates scoped nft ingress guard, WG interface, WSS helper, private credentials and protected peer handoff. Public TLS allows anonymous TLS/HTTP but private WebSocket Upgrade still requires the exact Link bearer and WireGuard peer.")
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {

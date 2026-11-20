@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ach1992/simple-tun-link/internal/carrier/quic"
+	"github.com/ach1992/simple-tun-link/internal/composition"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/state"
 )
@@ -23,18 +24,24 @@ func menuCreateQUIC(input io.Reader, reader *bufio.Reader, out, errOut io.Writer
 	return menuCreateQUICWithExecutable(input, reader, out, errOut, opts, quic.DefaultExecutable)
 }
 
-// The internal executable parameter lets isolated PTY tests inspect a pinned test
-// executable with the production identity guard, without installing a helper
-// or changing the global /usr/local/libexec/stl path.
+// The internal executable parameter retains production's exact pinned helper
+// inspection. Guided tests inject a preflight-only seam below without changing
+// Engine admission or the canonical production executable.
 func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
 	opts *runtimeOptions, companion string) int {
+	return menuCreateQUICWithInspection(input, reader, out, errOut, opts, companion, func() error {
+		_, err := quic.InspectPinnedHysteria(companion)
+		return err
+	})
+}
+
+// Guided tests replace only the preflight, cancel before Create and cannot
+// authorize helper admission. Production and Engine keep their pinned checks.
+func menuCreateQUICWithInspection(input io.Reader, reader *bufio.Reader, out, errOut io.Writer,
+	opts *runtimeOptions, companion string, inspect func() error) int {
 	p := createPrompts{reader: reader, out: out, errOut: errOut}
 	menuScreen(out, "Create / WireGuard over QUIC")
 	menuNotice(out, "INFO", "Kernel WireGuard ingress is guarded. Choose either original mTLS, Salamander, or real HTTP/3 over UDP with private Link password authorization.")
-	inspect := func() error {
-		_, err := quic.InspectPinnedHysteria(companion)
-		return err
-	}
 	if companion != quic.DefaultExecutable {
 		// Isolated fixture paths never authorize production helper install.
 		if inspect() != nil {
@@ -109,7 +116,11 @@ func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, er
 	if err != nil {
 		return p.failed(err)
 	}
-	tlsName, err := askTLSCertificateSAN(p)
+	listener := peer
+	if role == "listen" {
+		listener = route.Source
+	}
+	tlsName, err := askTLSCertificateSAN(p, composition.QUIC, listener)
 	if err != nil {
 		return p.failed(err)
 	}
@@ -153,6 +164,7 @@ func menuCreateQUICWithExecutable(input io.Reader, reader *bufio.Reader, out, er
 	menuField(out, "Kernel WG UDP", fmt.Sprintf("this %d / peer %d", localWG, peerWG))
 	menuField(out, "WG keepalive seconds", fmt.Sprintf("this %d / peer %d (0=off)", localKeep, peerKeep))
 	menuField(out, "Private IPs", addresses.Local.String()+" <-> "+addresses.Peer.String())
+	warnNonOnLinkPeerRoute(out, addresses)
 	menuField(out, "Private MTU", "Auto: conservative 1280-byte start; peer PMTU remains unmeasured")
 	menuField(out, "QUIC forwarding UDP", fmt.Sprintf("this %d / peer %d", forward, remoteForward))
 	menuNotice(out, "WARNING", "Creates scoped nft guard, WireGuard, QUIC helper, private credentials and peer handoff. HTTP/3 mode admits public web requests but requires the Link password for private forwarding.")

@@ -4,12 +4,66 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"net/netip"
 	"strings"
 	"testing"
+
+	"github.com/ach1992/simple-tun-link/internal/composition"
 )
 
 // WSS public TCP, QUIC public UDP, and kernel WireGuard UDP share one
 // validated prompt. Rejecting a bad port must never mislabel WSS as UDP.
+// The actual WSS and QUIC admission predicates govern guided SAN input.
+func TestTLSCertificateSANCarrierAdmissionAndSameFieldRetry(t *testing.T) {
+	listener := netip.MustParseAddr("192.0.2.20")
+	for _, carrier := range []composition.Kind{composition.WSS, composition.QUIC} {
+		t.Run(string(carrier), func(t *testing.T) {
+			var out bytes.Buffer
+			p := createPrompts{reader: bufio.NewReader(strings.NewReader(
+				"bad@name\nbad:name\nBAD.EXAMPLE\n192.0.2.33\nvalid.example\n")), out: &out}
+			name, err := askTLSCertificateSAN(p, carrier, listener)
+			if err != nil || name != "valid.example" ||
+				strings.Count(out.String(), "TLS certificate SAN") != 5 ||
+				!strings.Contains(out.String(), "IP SAN must match") {
+				t.Fatalf("invalid SAN survived retry or valid DNS rejected: %q %v %q", name, err, out.String())
+			}
+			out.Reset()
+			name, err = askTLSCertificateSAN(createPrompts{
+				reader: bufio.NewReader(strings.NewReader("\n")), out: &out}, carrier, listener)
+			if err != nil || name != "" || strings.Contains(out.String(), "Try again") {
+				t.Fatalf("default listener IP changed: %q %v %q", name, err, out.String())
+			}
+			out.Reset()
+			name, err = askTLSCertificateSAN(createPrompts{
+				reader: bufio.NewReader(strings.NewReader("192.0.2.20\n")), out: &out}, carrier, listener)
+			if err != nil || name != listener.String() {
+				t.Fatalf("matching listener IP rejected: %q %v", name, err)
+			}
+			out.Reset()
+			_, err = askTLSCertificateSAN(createPrompts{
+				reader: bufio.NewReader(strings.NewReader("bad@name\nq\n")), out: &out}, carrier, listener)
+			if !errors.Is(err, errCreateCancelled) || strings.Count(out.String(), "TLS certificate SAN") != 2 {
+				t.Fatalf("q after rejected SAN did not cancel: %v %q", err, out.String())
+			}
+		})
+	}
+	for _, tc := range []struct {
+		carrier composition.Kind
+		want    string
+		prompts int
+	}{
+		{composition.WSS, "singlelabel", 1},
+		{composition.QUIC, "valid.example", 2},
+	} {
+		var out bytes.Buffer
+		p := createPrompts{reader: bufio.NewReader(strings.NewReader("singlelabel\nvalid.example\n")), out: &out}
+		name, err := askTLSCertificateSAN(p, tc.carrier, listener)
+		if err != nil || name != tc.want || strings.Count(out.String(), "TLS certificate SAN") != tc.prompts {
+			t.Fatalf("carrier-specific DNS admission changed: %s, %q %v %q", tc.carrier, name, err, out.String())
+		}
+	}
+}
+
 func TestGuidedPortValidationIsProtocolNeutralAndRetries(t *testing.T) {
 	for _, tc := range []struct {
 		name, prompt string
@@ -85,7 +139,7 @@ func TestKeepalivePromptsRetryAndCancelWithoutChangingOtherFields(t *testing.T) 
 func TestOptionalTLSNamesAndModesRetryAtSamePrompt(t *testing.T) {
 	var out bytes.Buffer
 	p := createPrompts{reader: bufio.NewReader(strings.NewReader("bad/name\nvalid.example\n")), out: &out}
-	name, err := askTLSCertificateSAN(p)
+	name, err := askTLSCertificateSAN(p, composition.WSS, netip.MustParseAddr("192.0.2.20"))
 	if err != nil || name != "valid.example" || strings.Count(out.String(), "TLS certificate SAN") != 2 {
 		t.Fatalf("TLS name did not retry: %q %v %q", name, err, out.String())
 	}
@@ -103,7 +157,7 @@ func TestOptionalTLSNamesAndModesRetryAtSamePrompt(t *testing.T) {
 	}
 	out.Reset()
 	p = createPrompts{reader: bufio.NewReader(strings.NewReader("q\n")), out: &out}
-	_, err = askTLSCertificateSAN(p)
+	_, err = askTLSCertificateSAN(p, composition.QUIC, netip.MustParseAddr("192.0.2.20"))
 	if !errors.Is(err, errCreateCancelled) {
 		t.Fatalf("TLS name cancel was lost: %v", err)
 	}

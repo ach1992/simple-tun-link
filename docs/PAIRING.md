@@ -77,11 +77,14 @@ evaluation and no arbitrary file/command interpretation.
 Different valid local/peer IPv4 CIDR prefix lengths are allowed by
 the wire contract and are preserved exactly on receiver inversion.
 This is a configuration transfer, **not proof that each host has an
-on-link route to the other tunnel address**. On GRE/IPIP a /32 or
-non-overlapping prefix may require external reciprocal routing that
-STL does not install automatically. The selected backend still enforces
-its actual prefix requirements (for example L2TPv3 same-subnet and
-IPsec /31), and connectivity diagnostics must report reality.
+on-link route to the other tunnel address**. On GRE/IPIP and the
+WireGuard family (native WireGuard, WSS, QUIC), a /32 or non-overlapping
+prefix may require external reciprocal routing that STL does not
+install automatically. A successful local import or configured
+AllowedIPs does not establish a host route or peer handshake.
+The selected backend still enforces its actual prefix requirements
+(for example L2TPv3 same-subnet and IPsec /31), and connectivity
+diagnostics must report reality.
 
 Scoped IPv6 zone identifiers are not portable and are rejected;
 IPv6 underlay without zones may be valid even though IPv4

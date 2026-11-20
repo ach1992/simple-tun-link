@@ -419,10 +419,8 @@ func menuCreatePlain(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		}
 		menuField(out, "IPIP UDP receive port", strconv.Itoa(int(port))+" (exact peer match)")
 	}
-	if (backend == domain.BackendGRE || backend == domain.BackendIPIP) &&
-		(!link.Addresses.Local.Masked().Contains(link.Addresses.Peer.Addr()) ||
-			!link.Addresses.Peer.Masked().Contains(link.Addresses.Local.Addr())) {
-		menuNotice(out, "WARNING", "These custom CIDRs do not provide reciprocal on-link routing to the peer tunnel addresses. STL does not add an extra host route. Verify or configure the necessary routes on BOTH hosts; saving a Link is not evidence of peer connectivity.")
+	if backend == domain.BackendGRE || backend == domain.BackendIPIP {
+		warnNonOnLinkPeerRoute(out, link.Addresses)
 	}
 	menuNotice(out, "INFO", "Auto MTU is only a local estimate. Test the peer after pairing.")
 	menuNotice(out, "WARNING", "Native GRE/IPIP/L2TPv3 is not encrypted or authenticated. Do not send secrets.")
