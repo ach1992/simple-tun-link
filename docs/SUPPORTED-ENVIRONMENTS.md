@@ -108,10 +108,12 @@ Creation uses an explicit conservative inner MTU of **1280**. This is not
 measured peer PMTU. The pinned helper's message framing limits managed
 inner datagrams to a conservative aligned **4032 bytes**; native WireGuard's
 fixed overhead is not a QUIC MTU calculation. A verified local IPv4 route
-must support at least **1228 bytes for Plain** or **1236 bytes for Salamander**.
-These are necessary local lower bounds, not measured peer PMTU or proof of
-a successful handshake. Actual end-to-end QUIC reachability still needs a
-peer traffic test.
+must support at least **1308 bytes for Plain** or **1316 bytes for Salamander**
+for the pinned Hysteria v2.13.0 handshake (including its observed larger
+packets, not only the RFC 9000 minimum). These are local readiness bounds
+that do not depend on remote reachability; they are not measured peer PMTU
+or proof of a successful handshake. Actual end-to-end QUIC connectivity
+still requires a peer traffic test.
 
 ## Validation and deployment boundaries
 
