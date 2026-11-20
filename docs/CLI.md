@@ -566,6 +566,13 @@ receiver-side inversion see [PAIRING.md](PAIRING.md).
 
 ## Protected sender workflows
 
+Since Stable **v0.1.31**, the native WireGuard sender validates all
+committed and pending canonical resource reservations before its private
+key, pending State or sensitive receiver handoff is staged. Pre-staging
+collisions produce an actionable `resource_conflict`. Earlier published
+versions may instead leave an original pending sender that requires exact
+`resume-wireguard` recovery; never regenerate or overwrite that identity.
+
 For automation, WireGuard and IPsec sender creation accept a
 public-only versioned request via stdin and write one SENSITIVE
 receiver handoff to an **explicit existing private absolute output
@@ -792,9 +799,11 @@ its receipt retryable; a retired Link ID cannot be reused. Arbitrary
 **operator-selected exported handoff paths** remain operator-managed and
 must be separately retired from their external storage after confirmation.
 WSS management first used State v4; Stable v0.1.16 introduced State v5
-for managed QUIC. The current runtime writes State v6 for the versioned
-QUIC obfuscation/material contract and subsequent State mutations on all backends.
-Older binaries must not manage snapshots written by an unsupported newer schema.
+for managed QUIC; State v6 added versioned QUIC obfuscation/material
+contracts. The current runtime writes **State v7** for MASQUE-aware Link
+and retirement history. Older binaries must not manage snapshots written
+by an unsupported newer schema; in particular, do not strip v7 receipts or
+change schema numbers to force a downlevel install.
 
 ### Ubuntu AppArmor confinement of `wg` (WSS host preflight)
 
@@ -1318,9 +1327,11 @@ The native MASQUE backend adds typed `create-masque`, `preview-masque`,
 `import-masque`, `resume-masque`, `reconcile-masque` and `retire-masque`; normal
 `link list`, `link status`, `link diagnose`, `link restore --all` and `link remove`
 use the original canonical Engine. The menu includes MASQUE Create/Import with
-protected receiver handoff. Guided Create keeps the ordinary **1280-byte
-private TUN MTU** default and offers an optional, advanced **manual MTU in
-bytes** before issuing any private identity. For example, select 1400 on a
+protected receiver handoff. Starting with Stable **v0.1.31**, Guided Create
+keeps the ordinary **1280-byte private TUN MTU** default and offers an optional,
+advanced **manual MTU in bytes** before issuing any private identity.
+Earlier installed versions use the existing explicit CLI creator MTU field.
+For example, select 1400 on a
 verified path when the MASQUE private Link must carry another transport whose
 minimum local packet size exceeds 1280. This is a **local choice, not path
 MTU discovery or guaranteed peer traffic**. The original sensitive receiver

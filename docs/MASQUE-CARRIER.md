@@ -12,6 +12,11 @@
 > kernel MTU mutation. The fix does not validate a higher physical path MTU
 > or clear any earlier QUIC Remove quarantine; see
 > [Issue #253](https://github.com/ach1992/simple-tun-link/issues/253).
+> Stable `v0.1.31` adds the guided **optional manual initial TUN MTU**
+> while retaining the 1280-byte default. v0.1.30 physically demonstrated
+> nested QUIC Plain/PublicH3-enabled private ICMP/TCP/UDP over a MASQUE
+> MTU-1400 parent on two real servers; this did not separately prove a
+> public HTTP/3 GET, broad WAN PMTU or physical cold reboot.
 > A Release, local-ready result or ping is not production approval.
 
 ## What it is
@@ -176,9 +181,11 @@ The interactive menu offers **Create tunnel → MASQUE / CONNECT-IP** and
 **Import setup link → MASQUE / CONNECT-IP**. Guided Create offers
 **1. Private mTLS (default)** and **2. Public TLS (per-Link request bearer)**,
 includes the choice in the pre-YES review and preserves it through the
-receiver's private Preview and Import review. Guided Create also offers an
-optional **advanced initial MASQUE TUN MTU**; entering 1400, for example,
-is appropriate only after verifying that the physical path can carry it and
+receiver's private Preview and Import review. From Stable **v0.1.31**,
+guided Create also offers an optional **advanced initial MASQUE TUN MTU**
+(the existing CLI creator offers it on earlier builds); for example,
+a selected MTU of 1400 is appropriate only after verifying that the
+physical path can carry it and
 that any nested carrier's minimum underlay is satisfied. Normal standalone
 Create still defaults to 1280. This value is embedded in the original
 protected peer offer; there is no silent remote path-MTU measurement or

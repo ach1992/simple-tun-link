@@ -630,10 +630,14 @@ alone does not authorize replacing or reissuing it. Do not regenerate the
 secret, change modes or hand-edit `helper.json` to repair a pending operation.
 A fresh mode requires a fresh paired Link.
 
-The runtime writes State v6. Valid v5 Plain records remain readable, but
-binary-only rollback to v0.1.17 cannot consume retained v6 data. Only the
-canonical empty-State downgrade described in [INSTALL.md](INSTALL.md#state-v6-explicit-quic-obfuscation-and-rollback)
-is supported; retained receipts and journals are never discarded for it.
+The current runtime writes **State v7**. Valid legacy v5 Plain and v6
+QUIC-obfuscation records remain readable by the current reader and migrate
+only on a successful State mutation; a binary-only rollback to v0.1.17
+cannot consume retained v7 data. The canonical historical **v6-to-v5**
+empty-State downgrade described in
+[INSTALL.md](INSTALL.md#state-v6-explicit-quic-obfuscation-and-rollback)
+does not support a direct v7 downgrade. Retained receipts and journals
+must never be discarded to manufacture compatibility.
 
 Managed QUIC uses the same canonical Engine, protected State and resource
 locks as ordinary Link operations. A failed operation may retain a complete
