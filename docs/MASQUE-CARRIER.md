@@ -176,7 +176,13 @@ The interactive menu offers **Create tunnel → MASQUE / CONNECT-IP** and
 **Import setup link → MASQUE / CONNECT-IP**. Guided Create offers
 **1. Private mTLS (default)** and **2. Public TLS (per-Link request bearer)**,
 includes the choice in the pre-YES review and preserves it through the
-receiver's private Preview and Import review. The creator JSON field
+receiver's private Preview and Import review. Guided Create also offers an
+optional **advanced initial MASQUE TUN MTU**; entering 1400, for example,
+is appropriate only after verifying that the physical path can carry it and
+that any nested carrier's minimum underlay is satisfied. Normal standalone
+Create still defaults to 1280. This value is embedded in the original
+protected peer offer; there is no silent remote path-MTU measurement or
+unilateral MTU change to an existing committed helper. The creator JSON field
 `"public_tls": true` selects opt-in public mode; omission uses
 mTLS. Neither mode needs a new external helper or a second Engine. On Import, enter the exact
 absolute path to the original owner-private `0600` single-line offer file

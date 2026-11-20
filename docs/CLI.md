@@ -244,7 +244,13 @@ encapsulations/IPsec remain discoverable.
   fallbacks. Major/minor migration, RC-to-Stable, mutable or unknown
   official release artifacts require independent manual verification.
   Uninstall is a guided, individually
-  authorized cleanup—not a mass Link or credential purge.
+  authorized cleanup—not a mass Link or credential purge. Its read-only
+  preflight distinguishes active/pending Links and incomplete credential
+  retirement from fully retired historical receipts (including MASQUE,
+  QUIC, WSS, WireGuard and IPsec). Verified retired receipts remain in
+  private State after core Uninstall; they are not authority for an
+  empty-State downgrade. Unknown or duplicate JSON fields still block
+  destructive maintenance rather than being silently discarded.
   Operator failure pages for selected packages and official releases
   give an authored, non-secret reason category and a read-only next check.
   Confirmed package PREPARE, Update, Uninstall and optional companion
@@ -590,6 +596,14 @@ URL is published through atomic `0600` no-replace output. A
 failed/incomplete attempt can leave protected pending intent and
 credential files; never assume it is safe to regenerate a receiver
 secret, delete a key or reuse the Link ID.
+
+An exact saved or pending resource conflict (including two Link IDs whose
+existing WireGuard naming contract maps to the same interface, or an occupied
+UDP listen port) is checked before the sender stages its key, pending State or
+one-time receiver handoff. This returns a typed `resource_conflict` and an
+explicit next action; no conflicting resource is adopted or deleted. If a
+failure occurs **after** staging, preserve the original handoff and resume
+the exact identity instead of generating new private keys.
 
 If the original complete handoff survives, `link preview --stdin`
 provides the digest and `resume-wireguard --stdin --confirm
@@ -1304,8 +1318,18 @@ The native MASQUE backend adds typed `create-masque`, `preview-masque`,
 `import-masque`, `resume-masque`, `reconcile-masque` and `retire-masque`; normal
 `link list`, `link status`, `link diagnose`, `link restore --all` and `link remove`
 use the original canonical Engine. The menu includes MASQUE Create/Import with
-protected receiver handoff. It first ships in `v0.1.28`; older `v0.1.27`
-installers do not have this Carrier. Practical published-version two-server
+protected receiver handoff. Guided Create keeps the ordinary **1280-byte
+private TUN MTU** default and offers an optional, advanced **manual MTU in
+bytes** before issuing any private identity. For example, select 1400 on a
+verified path when the MASQUE private Link must carry another transport whose
+minimum local packet size exceeds 1280. This is a **local choice, not path
+MTU discovery or guaranteed peer traffic**. The original sensitive receiver
+offer carries the same MTU to the opposite endpoint, and the pre-confirmation
+screen displays the selected value. CLI automation already exposes
+`"mtu":{"mode":"manual","bytes":1400}` on `create-masque`. Change a
+committed MASQUE helper's MTU only through a fresh paired Link, never by
+editing only the kernel TUN interface. It first ships in `v0.1.28`; older
+`v0.1.27` installers do not have this Carrier. Practical published-version two-server
 acceptance is still tracked in [Issue #142](https://github.com/ach1992/simple-tun-link/issues/142).
 The original JSON receiver offer is **sensitive**, and the import `--confirm`
 is the SHA256 of the exact separately reviewed offer. Only verified local

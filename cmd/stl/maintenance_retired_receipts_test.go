@@ -16,6 +16,90 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/state"
 )
 
+// Published State v7 can retain retired MASQUE material and original-recovery
+// receipts after all Links have been canonically removed. Uninstall must
+// preserve those tombstones, not report an invented State-integrity failure.
+// A pending MASQUE operation or unretired material must still block.
+func TestMASQUERetiredStateUninstallGateAndOriginalJSONAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		retired  bool
+		recovery bool
+	}{
+		{name: "retired material allowed", retired: true},
+		{name: "retired material and recovery allowed", retired: true, recovery: true},
+		{name: "pending material retirement refused", retired: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "state")
+			store := state.NewFileStore(root)
+			request := masqueInputTestRequest()
+			link, _, err := request.makePair(request.LinkID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := context.Background()
+			if err := store.Update(ctx, func(s *state.Snapshot) error {
+				s.MASQUERemovalReceipts = append(s.MASQUERemovalReceipts, state.MASQUERemovalReceipt{
+					Link: link, MaterialSHA256: link.MASQUE.MaterialSHA256, Purpose: "removed", Retired: tc.retired,
+				})
+				if tc.recovery {
+					s.MASQUERecoveryReceipts = append(s.MASQUERecoveryReceipts, state.MASQUERecoveryReceipt{
+						LinkID: link.ID, OriginalNonce: strings.Repeat("b", 64),
+						Outcome: "ensure_host_absent", MaterialSHA256: link.MASQUE.MaterialSHA256,
+					})
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			unit := fakeUninstallUnit{}
+			trust := func(string) error { return nil }
+			readyErr := inspectUninstallReady(ctx, root, unit, trust)
+			if (readyErr == nil) != tc.retired {
+				t.Fatalf("uninstall ready=%t want=%t: %v", readyErr == nil, tc.retired, readyErr)
+			}
+			if err := inspectDowngradeReady(ctx, root, unit, trust); err == nil {
+				t.Fatal("MASQUE retirement history allowed empty-only downgrade")
+			}
+			// No cleaning or rewriting the original tombstones just to make
+			// the preflight pass; it is read-only even on rejection.
+			path := filepath.Join(root, "state.json")
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := strictStateTopLevelFields(before); err != nil {
+				t.Fatalf("canonical MASQUE Snapshot fields wrongly rejected: %v", err)
+			}
+			if tc.retired {
+				// An unaudited extra field is not permission to Uninstall.
+				invalid := bytes.Replace(before, []byte("\"schema_version\":"), []byte("\"future_unknown\":true,\"schema_version\":"), 1)
+				if _, err := strictStateTopLevelFields(invalid); err == nil {
+					t.Fatal("destructive maintenance accepted unknown future State field")
+				}
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("read-only maintenance changed original State: %v", err)
+			}
+		})
+	}
+
+	if uninstallSnapshotReady(state.Snapshot{MASQUEOperations: []state.MASQUEOperation{{}}}) {
+		t.Fatal("pending MASQUE journal must block Uninstall")
+	}
+	if uninstallSnapshotEmpty(state.Snapshot{MASQUERemovalReceipts: []state.MASQUERemovalReceipt{{Retired: true}}}) {
+		t.Fatal("retained MASQUE retirement receipt must block empty-only downgrade")
+	}
+	if uninstallSnapshotEmpty(state.Snapshot{MASQUERecoveryReceipts: []state.MASQUERecoveryReceipt{{}}}) {
+		t.Fatal("retained MASQUE recovery receipt must block empty-only downgrade")
+	}
+	if uninstallSnapshotEmpty(state.Snapshot{MASQUEOperations: []state.MASQUEOperation{{}}}) {
+		t.Fatal("pending MASQUE journal must block empty-only downgrade")
+	}
+}
+
 func TestRetiredWSSReceiptAllowsCoreUninstallButNeverDownlevelState(t *testing.T) {
 	opts, sender, _, _, _ := savedExternalWSSFixture(t)
 	root := opts.stateRoot

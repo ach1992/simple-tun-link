@@ -131,6 +131,8 @@ func menuUninstallWithOps(input io.Reader, reader *bufio.Reader, out, errOut io.
 		withoutReceipts.RemovalReceipts = nil
 		withoutReceipts.IPsecRemovalReceipts = nil
 		withoutReceipts.QUICAbandonmentReceipts = nil
+		withoutReceipts.MASQUERemovalReceipts = nil
+		withoutReceipts.MASQUERecoveryReceipts = nil
 		if uninstallSnapshotEmpty(withoutReceipts) {
 			menuNotice(out, "WARNING", "An unfinished protected credential retirement receipt remains; Uninstall cannot proceed.")
 			menuField(out, "Reason", "credential_retirement_pending")
@@ -146,7 +148,9 @@ func menuUninstallWithOps(input io.Reader, reader *bufio.Reader, out, errOut io.
 		return 0
 	}
 	menuNotice(out, "INFO", "Zero saved Links. STL will inspect private State and the restore unit.")
-	if count := len(snapshot.RemovalReceipts) + len(snapshot.IPsecRemovalReceipts) + len(snapshot.QUICAbandonmentReceipts); count > 0 {
+	if count := len(snapshot.RemovalReceipts) + len(snapshot.IPsecRemovalReceipts) +
+		len(snapshot.QUICAbandonmentReceipts) + len(snapshot.MASQUERemovalReceipts) +
+		len(snapshot.MASQUERecoveryReceipts); count > 0 {
 		menuField(out, "Retired receipts", fmt.Sprintf("%d history record(s) kept in protected State; no deletion", count))
 	}
 	if ops.canAct == nil || ops.preflight == nil || ops.install == nil || ops.verify == nil {

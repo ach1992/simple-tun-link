@@ -217,6 +217,19 @@ func linkCreateWireGuardCommand(args []string, input io.Reader, out, errOut io.W
 		setupLinkConfirmation(block), keys, func() error {
 			return write(output, []byte(block+"\n"))
 		})
+	if err != nil && stlerr.CodeOf(err) == stlerr.CodeConflict &&
+		stlerr.Public(err).ReasonCode == "sender_resource_conflict_before_staging" {
+		// The Engine attests that no local key, pending State or private offer
+		// was staged. Unlike an uncertain Apply, it is safe to choose disjoint
+		// Link ID/port/addresses before starting a new sender transaction.
+		public := stlerr.New(stlerr.CodeConflict, "link_create_wireguard",
+			string(id), string(domain.BackendWireGuard),
+			"WireGuard interface, UDP port or private Link Address is reserved by another saved or pending Link; nothing was staged")
+		public.ReasonCode = "resource_conflict"
+		public.NextStep = "Choose a distinct Link ID, UDP listen port and private Link Address; inspect the other Link read-only. No private key, handoff or host Apply was attempted."
+		public.Evidence = preflightEvidence()
+		return readCommandPublicError(out, errOut, isJSON, public)
+	}
 	if err != nil || result.LinkID != id || result.Removed {
 		return wireGuardCreationError(out, errOut, isJSON, stlerr.CodeState, id,
 			"sender Create not confirmed: key/pending staging or handoff publication may be partial; inspect protected file and committed state before exact Resume/reconciliation")

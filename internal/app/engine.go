@@ -15,6 +15,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	"github.com/ach1992/simple-tun-link/internal/carrier/quic"
+	"github.com/ach1992/simple-tun-link/internal/composition"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/hostidentity"
 	"github.com/ach1992/simple-tun-link/internal/state"
@@ -1880,25 +1881,29 @@ func rejectResourceConflicts(snapshot state.Snapshot, id domain.LinkID, wanted [
 			}
 		}
 	}
-	// Existing WireGuard pending senders reserve their public Link Addresses
-	// before any peer handoff is published, even before backend Apply.
+	// An uncommitted WireGuard sender reserves its full public provider
+	// identity: interface name, Link addresses/subnet, UDP socket and public
+	// key. Reservation precedes even a receiver handoff publication.
 	for _, pending := range snapshot.PendingSenders {
 		if pending.Link.ID == id {
 			continue
 		}
-		link := pending.Link
-		addressClaims := []domain.ResourceClaim{
-			{Kind: domain.ResourceLinkAddress, Key: link.Addresses.Local.Addr().String()},
-			{Kind: domain.ResourceLinkSubnet, Key: link.Addresses.Local.Masked().String()},
+		reserved, err := composition.WireGuardProviderClaims(pending.Link.ID,
+			pending.Link.Addresses.Local, pending.Link.WireGuard)
+		if err != nil {
+			return stlerr.Wrap(stlerr.CodeState, "validate_resources", string(id), "",
+				"cannot inspect reserved WireGuard sender claims", err)
 		}
 		for _, wantedClaim := range wanted {
-			for _, reservation := range addressClaims {
+			for _, reservation := range reserved {
 				conflict, err := domain.ResourceClaimsConflict(wantedClaim, reservation)
 				if err != nil {
-					return stlerr.Wrap(stlerr.CodeState, "validate_resources", string(id), "", "cannot compare reserved WireGuard addresses", err)
+					return stlerr.Wrap(stlerr.CodeState, "validate_resources", string(id), "",
+						"cannot compare reserved WireGuard sender claims", err)
 				}
 				if conflict {
-					return stlerr.New(stlerr.CodeConflict, "validate_resources", string(id), "", "Link Address reserved by pending WireGuard sender")
+					return stlerr.New(stlerr.CodeConflict, "validate_resources", string(id), "",
+						"resource reserved by pending WireGuard sender")
 				}
 			}
 		}

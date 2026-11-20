@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/ach1992/simple-tun-link/internal/backend"
+	"github.com/ach1992/simple-tun-link/internal/composition"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
@@ -74,6 +75,28 @@ func (e *Engine) CreateWireGuardSender(ctx context.Context, desired domain.Link,
 	}
 	if _, ready := e.backends.Get(desired.Backend); !ready {
 		return Result{}, stlerr.New(stlerr.CodeUnsupported, "create_wireguard", string(desired.ID), "", "WireGuard backend unavailable")
+	}
+	// The maintenance lock makes saved reservations stable while preparing the
+	// original sender. Reject known collisions BEFORE storing a private key,
+	// staging pending intent or publishing the one-time receiver handoff. The
+	// canonical Engine rechecks the same claims after acquiring resource locks.
+	claims, err := composition.WireGuardProviderClaims(desired.ID,
+		desired.Addresses.Local, desired.WireGuard)
+	if err != nil {
+		return Result{}, stlerr.Wrap(stlerr.CodeInvalid, "create_wireguard",
+			string(desired.ID), string(desired.Backend), "invalid WireGuard provider claims", err)
+	}
+	if err := rejectResourceConflicts(snapshot, desired.ID, claims); err != nil {
+		if stlerr.CodeOf(err) == stlerr.CodeConflict {
+			blocked := stlerr.New(stlerr.CodeConflict, "create_wireguard",
+				string(desired.ID), string(desired.Backend),
+				"another saved or pending Link reserves the requested WireGuard resources")
+			blocked.ReasonCode = "sender_resource_conflict_before_staging"
+			return Result{}, blocked
+		}
+		return Result{}, stlerr.Wrap(stlerr.CodeState, "create_wireguard",
+			string(desired.ID), string(desired.Backend),
+			"cannot verify WireGuard reservations before credential staging", err)
 	}
 	// Explicitly no-clobber. If a previous private key is an orphan, preserve
 	// it and refuse publishing an unrelated second receiver offer for that ID.
