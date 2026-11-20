@@ -1356,12 +1356,15 @@ release being operated or a separately authorized test candidate. Never
 copy binaries into `/usr/local/libexec/stl` or forge the installer record manually; the read-only Engine admission checks the
 whole trusted executable path, digest and ownership before each activation.
 
-WSS uses real kernel WireGuard plus TLS/mTLS. The selected TCP endpoint must
-be reachable across the two servers; kernel WireGuard UDP must **not** be
-exposed publicly and is restricted by STL's scoped nftables guard. Conflicts
+WSS uses real kernel WireGuard plus TLS. Private mTLS is the default;
+Stable v0.1.29+ also supports an explicit PublicTLS handshake with
+per-Link bearer/path authorization on WebSocket Upgrade, not anonymous
+private forwarding. The selected TCP endpoint must be reachable across
+the two servers; kernel WireGuard UDP must **not** be exposed publicly and
+is restricted by STL's scoped nftables guard. Conflicts
 with other host firewalls/interfaces/services cause refusal, not takeover.
-A completed local installation does NOT prove WSS connectivity, mTLS peer
-acceptance or a WireGuard handshake. See the exact pairing examples in
+A completed local installation does NOT prove WSS connectivity, authenticated
+TLS/Upgrade admission or a WireGuard handshake. See the exact pairing examples in
 [CLI.md](CLI.md), evidence gates in Issue #142 and the scope in
 [SECURITY.md](SECURITY.md). Do not treat a development-only source build
 or a locally selected helper as a published Stable artifact; verify the installed exact release and

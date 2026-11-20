@@ -21,16 +21,18 @@ Different transports have different kernel, firewall, network and optional
 helper requirements. STL does not automatically configure provider firewalls,
 NAT or foreign VPNs, and no transport works through every network.
 
-**Release availability:** MASQUE is included from Stable `v0.1.28` onward;
-older `v0.1.27` installers do not contain it. The optional
-MASQUE Public TLS request-bearer mode is newer source code and **is not
-included in `v0.1.28`**; check the installed release and selectable
-TLS mode before using this feature. The Owner chose to publish
-`v0.1.28` before the full real two-server MASQUE acceptance run, so a published
-release alone does **not** prove your WAN path or reboot recovery. Verify your
-installed version and test on authorized servers before production use. See
-the [MASQUE Carrier guide](docs/MASQUE-CARRIER.md) and
-[remaining field acceptance](https://github.com/ach1992/simple-tun-link/issues/142).
+**Release availability:** MASQUE private mTLS first shipped in Stable
+`v0.1.28`; it is absent from `v0.1.27` and earlier. Stable `v0.1.29`
+adds opt-in QUIC Plain first-party HTTP/3, WSS Public TLS with
+bearer-authorized WebSocket Upgrade, and MASQUE Public TLS with
+bearer-authorized CONNECT-IP plus genuine HTTP/2 GET/HEAD on the same
+listener. These choices are **not** in `v0.1.28`; Private mTLS remains
+the default where applicable. Check the actual installed release and mode
+before creating Links. Publishing and isolated two-peer kernel tests do
+**not** prove this new release's physical WAN reachability, browser TLS
+fingerprint equivalence or cold reboot recovery. See the
+[MASQUE Carrier guide](docs/MASQUE-CARRIER.md) and
+[remaining field acceptance](https://github.com/ach1992/simple-tun-link/issues/243).
 
 ## Requirements
 

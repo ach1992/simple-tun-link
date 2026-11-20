@@ -1,10 +1,13 @@
 # MASQUE CONNECT-IP Carrier (Stable v0.1.28+)
 
-> **First released in v0.1.28.** The Owner authorized GitHub publication
-> before the full practical two-server acceptance. Real installed-version
-> guided Create/Import, bilateral private ICMP/TCP/UDP and reboot recovery
-> remain separately tracked in [Issue #142](https://github.com/ach1992/simple-tun-link/issues/142).
-> Do not infer production approval from a release tag, local readiness or ping.
+> **Version availability:** native MASQUE with default private mTLS first
+> shipped in Stable `v0.1.28`. The **opt-in Public TLS / CONNECT-IP bearer**
+> mode and first-party HTTP/2 GET/HEAD ship starting in Stable `v0.1.29`.
+> Private two-host v0.1.28 CLI traffic and service-restore evidence does **not**
+> validate v0.1.29 PublicTLS, fully guided pairing or cold physical reboot.
+> Track outstanding field acceptance in [Issue #243](https://github.com/ach1992/simple-tun-link/issues/243)
+> and [Issue #93](https://github.com/ach1992/simple-tun-link/issues/93).
+> A Release, local-ready result or ping is not production approval.
 
 ## What it is
 
@@ -235,11 +238,13 @@ service takeover or instruction to change the installed production binary.
 
 ## Publication and follow-up field acceptance
 
-The Owner chose **publish Stable v0.1.28 first, then test on two authorized
-servers**. The release still requires exact-source review, tests, verified
-artifact hashes and installed-version identity, but **publication is not
-proof of full real two-server acceptance**. Record the subsequently tested
-published artifact, independently confirmed original private receiver offer,
+For **v0.1.28 private mTLS**, an authorized two-physical-server CLI pairing,
+private ICMP/TCP/UDP and controlled service restore/remove passed; that
+historical receipt does not validate the **new v0.1.29 PublicTLS mode**.
+A new release requires exact-source review, verified artifacts and installed
+version identity; **publication alone does not prove physical acceptance**.
+For new-mode field acceptance, record the exact installed artifact,
+independently confirmed original private receiver offer,
 fresh Create/Import confirmation, authenticated bilateral private IPv4
 ICMP/TCP/UDP, reconnect/restore of the same Link, and owner-scoped Remove
 without foreign effects. Record any blocked or untested reboot truthfully;
