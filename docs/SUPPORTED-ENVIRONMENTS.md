@@ -104,6 +104,10 @@ ports or unverifiable objects cause refusal. Independent managed WSS/QUIC
 Links may coexist only after their full saved and live guard identities
 are verified. No proxy mode or direct-WireGuard fallback is enabled.
 
+Starting in Stable **v0.1.30**, the local-route readiness check uses the
+pinned Hysteria v2.13.0 helper's experimentally observed minimum UDP
+handshake capacity rather than the generic QUIC RFC minimum.
+
 Creation uses an explicit conservative inner MTU of **1280**. This is not
 measured peer PMTU. The pinned helper's message framing limits managed
 inner datagrams to a conservative aligned **4032 bytes**; native WireGuard's

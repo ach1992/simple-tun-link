@@ -7,6 +7,11 @@
 > validate v0.1.29 PublicTLS, fully guided pairing or cold physical reboot.
 > Track outstanding field acceptance in [Issue #243](https://github.com/ach1992/simple-tun-link/issues/243)
 > and [Issue #93](https://github.com/ach1992/simple-tun-link/issues/93).
+> Stable `v0.1.30` additionally verifies the **original helper-owned TUN
+> MTU** against protected Auto/Manual intent without applying a second
+> kernel MTU mutation. The fix does not validate a higher physical path MTU
+> or clear any earlier QUIC Remove quarantine; see
+> [Issue #253](https://github.com/ach1992/simple-tun-link/issues/253).
 > A Release, local-ready result or ping is not production approval.
 
 ## What it is
