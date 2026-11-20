@@ -43,10 +43,27 @@ failure is reported before an attempted Link; satisfying this check does
 original helper-owned TUN MTU (Auto or Manual) without a conflicting second
 kernel MTU write. To nest QUIC over MASQUE, provision a **new** parent with
 enough actual path MTU and test real peer traffic. No committed Link is
-silently retuned. Real two-host post-fix field verification and an earlier
-Iranian QUIC Remove quarantine remain tracked in
-[Issue #253](https://github.com/ach1992/simple-tun-link/issues/253);
-GitHub CI or this release is not proof of their resolution.
+silently retuned. On **v0.1.30**, an isolated physical Iran/Germany
+MASQUE parent at MTU 1400 successfully carried nested QUIC Plain with
+Public HTTP/3 **enabled**, plus authenticated private ICMP and bilateral
+TCP/UDP. That does **not** demonstrate a standalone public HTTP/3 GET,
+universal path PMTU, direct public-IPv4 reachability or reboot recovery.
+The earlier Iranian QUIC Remove quarantine remains tracked in
+[Issue #253](https://github.com/ach1992/simple-tun-link/issues/253).
+
+**Stable `v0.1.31` (operator UX and recovery correctness):** Guided MASQUE
+Create now offers an **optional advanced initial TUN MTU** before allocating
+private identity; standalone default remains 1280. A manually selected value
+(such as 1400 on a verified path) is shown before confirmation and preserved
+in the original protected two-peer offer. Native WireGuard Create detects
+saved or pending interface/port/address collisions **before** staging its
+private key or receiver handoff and returns an actionable
+`resource_conflict`; it does not overwrite another Link. Destructive
+Uninstall validation now recognizes the exact State v7 MASQUE/QUIC receipt
+fields, while rejecting pending operations, unretired credentials and
+unknown or ambiguous State. This new release's changed guided flow and
+Uninstall admission have passed source review and CI but are **not yet
+claimed physically accepted**. Follow [Issue #142](https://github.com/ach1992/simple-tun-link/issues/142).
 
 ## Requirements
 
@@ -258,8 +275,10 @@ For an existing installer-owned STL that reaches official GitHub, use:
 /usr/bin/env -i HOME=/ PATH=/usr/sbin:/usr/bin:/sbin:/bin TERM="${TERM-}" ${NO_COLOR+NO_COLOR=1} STL_NO_CLEAR="$([ "${STL_NO_CLEAR:-}" = 1 ] && printf 1)" /bin/bash -c 'set -eo pipefail; umask 077; f=$(/usr/bin/mktemp); trap '\''/bin/rm -f -- "$f"'\'' EXIT; /usr/bin/curl -q -fLSs --proto "=https" --proto-redir "=https" --connect-timeout 10 --max-time 45 https://github.com/ach1992/simple-tun-link/releases/latest/download/stl-bootstrap.sh | /usr/bin/head -c 131073 > "$f"; [ -s "$f" ] && [ "$(/usr/bin/wc -c < "$f")" -le 131072 ] && /bin/bash -n "$f" && /bin/bash "$f" "$@"' stl update
 ~~~
 
-State and executable rollback are **not** the same: newer managed features
-use State v6, so an older binary might not understand the retained State.
+State and executable rollback are **not** the same: the current runtime
+writes State v7 (MASQUE-aware); an older binary might not understand the
+retained State. Historical v6-to-v5 empty-State downgrade documentation
+does **not** authorize directly downleveling v7 or stripping receipts.
 Read [Update, recovery, rollback and uninstall](docs/INSTALL.md#update)
 before downgrading or removing the installation. A GitHub-restricted host
 uses the explicit [Mirror Update](docs/MIRROR.md#simple-copy-as-is-mirror-recommended)

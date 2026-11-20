@@ -1092,12 +1092,13 @@ to the earlier v3 and v4 compatibility requirements.
 
 ### State v6: explicit QUIC obfuscation and rollback
 
-The current runtime reads valid **v1–v5** State without writing it and writes
-**v6** after a successful State mutation. State v6 binds the selected QUIC
-mode and optional Salamander material fingerprint across the managed
-lifecycle. Existing Plain configuration/material bytes remain valid; old
-State cannot graft the new mode or fingerprint fields. Installing a binary
-alone does not mutate State.
+**Historical State v6** introduced selected QUIC obfuscation mode and
+optional Salamander material fingerprint. The **current runtime writes
+State v7**, adding MASQUE lifecycle and retirement receipts; the current
+reader also accepts valid historical State v1–v6 and migrates it on a
+successful State mutation. Existing Plain configuration/material bytes remain
+valid; old State cannot graft new mode or fingerprint fields. Installing a
+binary alone does not mutate State.
 
 Preserve a consistent private backup of State, credentials and original
 receiver handoffs before upgrade. A pre-v6 executable, including official
@@ -1106,13 +1107,15 @@ v6-compatible forward fix after an uncertain operation. Do not strip fields,
 change schema numbers or regenerate a missing obfuscation secret to make
 old material appear compatible.
 
-The canonical confirmed downgrade path has one additional verified empty
-conversion: **v6 → v5 for target v0.1.17**, only when the original snapshot
-contains exactly `schema_version` and an empty `links` array, with no duplicate
-or aliased fields. Any saved Link, operation journal, removal/abandonment
-receipt (including a retired receipt), extra field or ambiguous evidence
-refuses conversion. This does not provide active-Link or credential rollback,
-and does not infer contracts for other unverified release tags.
+The canonical confirmed downgrade path has one additional verified
+**historical** empty conversion: **v6 → v5 for target v0.1.17**, only
+when the original snapshot contains exactly `schema_version` and an
+empty `links` array, with no duplicate or aliased fields. The current
+State **v7 cannot be directly downleveled through this v6-to-v5 path**.
+Any saved Link, operation journal, removal/abandonment receipt (including
+a retired receipt), extra field or ambiguous evidence refuses conversion.
+This does not provide active-Link or credential rollback, and does not
+infer contracts for other unverified release tags.
 
 **Do not treat installer binary rollback as State rollback.** Once any new
 runtime has written schema v3, pre-v3 STL executables cannot read that State
