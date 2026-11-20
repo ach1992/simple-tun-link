@@ -73,6 +73,41 @@ func TestMASQUEGuidedIPv6UnderlayAndPrivateAddressValidationWithoutHostEffects(t
 	}
 }
 
+func TestMASQUEGuidedInitialMTUDefaultsAndCarriesExplicitManualChoice(t *testing.T) {
+	for _, tc := range []struct {
+		name, input string
+		want        domain.MTUPolicy
+		invalid     bool
+	}{
+		{name: "standalone default", input: "\n", want: domain.MTUPolicy{}},
+		{name: "manual nested carrier", input: "y\nnot-a-number\n1400\n", want: domain.MTUPolicy{Mode: domain.MTUManual, Bytes: 1400}, invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			p := createPrompts{reader: bufio.NewReader(strings.NewReader(tc.input)), out: &out}
+			got, err := askMASQUEInitialMTU(p)
+			if err != nil || got != tc.want {
+				t.Fatalf("MTU choice: got=%+v error=%v", got, err)
+			}
+			if !strings.Contains(out.String(), "Default MASQUE TUN MTU is 1280") ||
+				(tc.invalid && !strings.Contains(out.String(), "valid IPv4 MTU byte count")) {
+				t.Fatalf("missing path/invalid MTU guidance: %q", out.String())
+			}
+			req := masqueInputTestRequest()
+			req.MTU = got
+			sender, receiver, err := req.makePair(req.LinkID)
+			if err != nil || sender.MTU != got || receiver.MTU != got {
+				t.Fatalf("menu-selected MTU not preserved on BOTH peers: sender=%+v receiver=%+v err=%v", sender.MTU, receiver.MTU, err)
+			}
+		})
+	}
+	var out bytes.Buffer
+	p := createPrompts{reader: bufio.NewReader(strings.NewReader("q\n")), out: &out}
+	if _, err := askMASQUEInitialMTU(p); !errors.Is(err, errCreateCancelled) {
+		t.Fatalf("operator q did not cancel before any identity issuance: %v", err)
+	}
+}
+
 func TestMASQUEImportMenuRejectsUnassignedReceiverBeforeStaging(t *testing.T) {
 	req := masqueInputTestRequest()
 	sender, receiver, err := req.makePair(req.LinkID)

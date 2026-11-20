@@ -13,6 +13,7 @@ import (
 
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/backend/wireguard"
+	"github.com/ach1992/simple-tun-link/internal/composition"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/pairing"
 	"github.com/ach1992/simple-tun-link/internal/state"
@@ -125,6 +126,91 @@ func TestWireGuardSenderCreatesProtectedOneTimeHandoffAndResumesWithoutRekey(t *
 	code, _, _ = creatorRun([]string{"link", "resume-wireguard", "--stdin", "--confirm", strings.Repeat("f", 64), "--json"}, string(raw), opts)
 	if code == 0 || len(fake.applies) != 1 {
 		t.Fatal("unconfirmed resumed secret mutated Link")
+	}
+}
+
+func TestWireGuardCreatorRejectsReservedProviderResourcesBeforeStaging(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		pending bool
+		linkID  domain.LinkID
+	}{
+		{name: "committed interface name", linkID: "lnk_25301300000000000000000000000005"},
+		{name: "pending interface name", pending: true, linkID: "lnk_25301300000000000000000000000005"},
+		{name: "committed UDP listen port", linkID: "lnk_45678900000000000000000000000005"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, parent, fake, opts := newCreatorTest(t)
+			owner, _ := makeLifecycleDesired(t, "3", "10.70.30.0/31")
+			owner.ID = "lnk_25301300000000000000000000000002"
+			ownerPath := filepath.Join(parent, "owner.stl")
+			if code, out, stderr := creatorRun([]string{"link", "create-wireguard", "--stdin", "--output", ownerPath, "--json"}, creatorRequest(t, owner), opts); code != 0 {
+				t.Fatalf("fixture owner not committed: code=%d response=%q stderr=%q", code, out, stderr)
+			}
+			store := state.NewFileStore(root)
+			if err := store.Update(context.Background(), func(s *state.Snapshot) error {
+				record, ok := s.Find(owner.ID)
+				if !ok {
+					return errors.New("fixture owner is not saved")
+				}
+				claims, err := composition.WireGuardProviderClaims(owner.ID,
+					record.Desired.Addresses.Local, record.Desired.WireGuard)
+				if err != nil {
+					return err
+				}
+				if tc.pending {
+					s.Links = nil
+					s.PendingSenders = []state.PendingSender{{Link: record.Desired, HandoffSHA256: strings.Repeat("a", 64)}}
+				} else {
+					record.OwnedResources = claims
+					s.Upsert(record)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			before, err := store.Load(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			wanted, _ := makeLifecycleDesired(t, "4", "10.70.31.0/31")
+			wanted.ID = tc.linkID
+			req := wireGuardSenderRequestV1{
+				SchemaVersion: 1, LinkID: wanted.ID,
+				Underlay:   desiredUnderlayV1{Local: wanted.Underlay.Local, Peer: wanted.Underlay.Peer},
+				Addresses:  desiredLinkAddressesV1{Local: wanted.Addresses.Local, Peer: wanted.Addresses.Peer},
+				ListenPort: 51931, PeerPort: 51932,
+			}
+			// Only the explicit port-collision case keeps the same reserved
+			// port. The interface scenarios use distinct ports and subnets.
+			if tc.name == "committed UDP listen port" {
+				req.ListenPort = 51840
+			}
+			raw, err := json.Marshal(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			output := filepath.Join(parent, "candidate.stl")
+			code, resultText, stderr := creatorRun([]string{"link", "create-wireguard", "--stdin", "--output", output, "--json"}, string(raw), opts)
+			var errorResult linkReadErrorResponse
+			if code != 1 || stderr != "" || json.Unmarshal([]byte(resultText), &errorResult) != nil ||
+				errorResult.Error == nil || errorResult.Error.Code != "conflict" ||
+				errorResult.Error.ReasonCode != "resource_conflict" ||
+				errorResult.Error.Evidence == nil || errorResult.Error.Evidence.HostMutation != "not_attempted" ||
+				!strings.Contains(errorResult.Error.Detail, "nothing was staged") {
+				t.Fatalf("known resource collision was not an actionable pre-staging rejection: code=%d body=%q stderr=%q", code, resultText, stderr)
+			}
+			if _, err := os.Lstat(output); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("denied sender wrote protected handoff: %v", err)
+			}
+			if _, err := os.Lstat(filepath.Join(root, "credentials", string(wanted.ID)+".wgkey")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("denied sender staged private credential: %v", err)
+			}
+			after, err := store.Load(context.Background())
+			if err != nil || !reflect.DeepEqual(before, after) || len(fake.applies) != 1 {
+				t.Fatalf("conflicting sender changed State or host: before=%+v after=%+v err=%v applies=%d", before, after, err, len(fake.applies))
+			}
+		})
 	}
 }
 

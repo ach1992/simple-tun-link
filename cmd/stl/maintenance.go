@@ -120,7 +120,9 @@ func uninstallSnapshotEmpty(s state.Snapshot) bool {
 		len(s.IPsecReapplyOperations) == 0 && len(s.IPsecRemoveOperations) == 0 &&
 		len(s.IPsecXFRMOperations) == 0 && len(s.IPsecRemovalReceipts) == 0 &&
 		len(s.RemovalReceipts) == 0 && len(s.WSSCrashOperations) == 0 &&
-		len(s.QUICCrashOperations) == 0 && len(s.QUICAbandonmentReceipts) == 0
+		len(s.QUICCrashOperations) == 0 && len(s.QUICAbandonmentReceipts) == 0 &&
+		len(s.MASQUEOperations) == 0 && len(s.MASQUERemovalReceipts) == 0 &&
+		len(s.MASQUERecoveryReceipts) == 0
 }
 
 // Uninstall removes only the verified installer-owned core binary and record;
@@ -135,6 +137,8 @@ func uninstallSnapshotReady(s state.Snapshot) bool {
 	withoutReceipts.RemovalReceipts = nil
 	withoutReceipts.IPsecRemovalReceipts = nil
 	withoutReceipts.QUICAbandonmentReceipts = nil
+	withoutReceipts.MASQUERemovalReceipts = nil
+	withoutReceipts.MASQUERecoveryReceipts = nil
 	if !uninstallSnapshotEmpty(withoutReceipts) {
 		return false
 	}
@@ -157,6 +161,15 @@ func uninstallSnapshotReady(s state.Snapshot) bool {
 		}
 	}
 	for _, receipt := range s.IPsecRemovalReceipts {
+		if !receipt.Retired {
+			return false
+		}
+	}
+	// Each recovered MASQUE original is linked by the canonical State
+	// validator to its exact removed Link/credential identity. Retained
+	// history is safe for core Uninstall only AFTER that original's mTLS
+	// material has been fully retired.
+	for _, receipt := range s.MASQUERemovalReceipts {
 		if !receipt.Retired {
 			return false
 		}
@@ -339,6 +352,8 @@ func inspectUninstallState(ctx context.Context, root string, trust func(string) 
 		withoutReceipts.RemovalReceipts = nil
 		withoutReceipts.IPsecRemovalReceipts = nil
 		withoutReceipts.QUICAbandonmentReceipts = nil
+		withoutReceipts.MASQUERemovalReceipts = nil
+		withoutReceipts.MASQUERecoveryReceipts = nil
 		if uninstallSnapshotEmpty(withoutReceipts) {
 			return false, errors.New("protected credential retirement remains unfinished or unverified")
 		}

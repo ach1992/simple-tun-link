@@ -37,6 +37,33 @@ func askMASQUEPublicTLS(p createPrompts) (bool, error) {
 	}
 }
 
+// A standalone MASQUE TUN defaults to 1280. A higher MTU is an advanced,
+// endpoint-paired setting: the helper owns the TUN and uses this value for
+// packet buffers. The menu must not silently infer peer path MTU.
+func askMASQUEInitialMTU(p createPrompts) (domain.MTUPolicy, error) {
+	menuProse(p.out, "Default MASQUE TUN MTU is 1280 bytes. Nested carriers (for example, QUIC) may need a higher value; verify the physical path and set matching MTUs on both ends.")
+	custom, err := p.yesNo("Set a custom initial MASQUE TUN MTU (advanced)? [y/N]: ")
+	if err != nil {
+		return domain.MTUPolicy{}, err
+	}
+	if !custom {
+		return domain.MTUPolicy{}, nil
+	}
+	for {
+		raw, err := p.ask("Initial MASQUE TUN MTU bytes (example 1400; q=back): ")
+		if err != nil {
+			return domain.MTUPolicy{}, err
+		}
+		bytes, parseErr := strconv.Atoi(raw)
+		policy := domain.MTUPolicy{Mode: domain.MTUManual, Bytes: bytes}
+		if parseErr != nil || policy.Validate() != nil {
+			menuNotice(p.out, "WARNING", "Enter a valid IPv4 MTU byte count. The remote path MTU has not been measured.")
+			continue
+		}
+		return policy, nil
+	}
+}
+
 // MASQUE accepts either IPv4 or IPv6 physical underlays. The ordinary guided
 // GRE/WG address chooser is IPv4-only; never silently coerce IPv6 to IPv4.
 func askMASQUEUnderlay(p createPrompts, local bool, peer netip.Addr) (netip.Addr, error) {
@@ -147,6 +174,10 @@ func menuCreateMASQUE(input io.Reader, reader *bufio.Reader, out, errOut io.Writ
 	if err != nil {
 		return p.failed(err)
 	}
+	mtu, err := askMASQUEInitialMTU(p)
+	if err != nil {
+		return p.failed(err)
+	}
 	choose := domain.NewLinkID
 	if opts != nil && opts.createLinkID != nil {
 		choose = opts.createLinkID
@@ -159,7 +190,7 @@ func menuCreateMASQUE(input io.Reader, reader *bufio.Reader, out, errOut io.Writ
 	req := masqueCreateRequestV1{SchemaVersion: 1, LinkID: id,
 		Underlay:  desiredUnderlayV1{Local: own, Peer: peer},
 		Addresses: desiredLinkAddressesV1{Local: addresses.Local, Peer: addresses.Peer},
-		Role:      role, TCPPort: tcp, TLSServerName: tlsName, PublicTLS: publicTLS}
+		Role:      role, TCPPort: tcp, TLSServerName: tlsName, PublicTLS: publicTLS, MTU: mtu}
 	if _, _, err := req.makePair(id); err != nil {
 		menuNotice(out, "WARNING", "MASQUE physical/private address or TLS name invalid; no credential or Link created.")
 		return 2
@@ -181,7 +212,11 @@ func menuCreateMASQUE(input io.Reader, reader *bufio.Reader, out, errOut io.Writ
 	showCarrierDirectionReview(out, own, peer, role, source, "TCP", tcp)
 	menuField(out, "TLS server name", safeMenuText(tlsName))
 	menuField(out, "Private IPv4 /32", addresses.Local.Addr().String()+" <-> "+addresses.Peer.Addr().String())
-	menuField(out, "Initial TUN MTU", strconv.Itoa(1280)+" bytes (peer PMTU not measured)")
+	initialMTU := 1280
+	if mtu.Mode == domain.MTUManual {
+		initialMTU = mtu.Bytes
+	}
+	menuField(out, "Initial TUN MTU", strconv.Itoa(initialMTU)+" bytes (peer PMTU not measured)")
 	menuNotice(out, "WARNING", "Creates protected Link-specific TLS/authentication credentials, a private receiver handoff, owned systemd service and private TUN/route. No default route is changed.")
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
 		return 2
