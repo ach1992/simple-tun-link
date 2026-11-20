@@ -59,7 +59,11 @@ type DFProber interface {
 type MTUConstraints struct {
 	UnderlayMTU     int
 	BackendOverhead int
-	ManualOverride  int // 0=Auto, any other value requests Manual.
+	// LinkMTU is the exact, previously verified selected tunnel interface MTU.
+	// Zero means not supplied (for non-Linux callers). A known local device MTU
+	// limits the size that can actually be sent, independently of path overhead.
+	LinkMTU        int
+	ManualOverride int // 0=Auto, any other value requests Manual.
 }
 
 type MTUChoice string
@@ -100,6 +104,12 @@ func mtuCeiling(c MTUConstraints) (int, error) {
 	ceiling := c.UnderlayMTU - c.BackendOverhead
 	if ceiling > MaxIPv4MTU {
 		ceiling = MaxIPv4MTU
+	}
+	if c.LinkMTU != 0 {
+		if c.LinkMTU < MinIPv4MTU || c.LinkMTU > MaxIPv4MTU {
+			return 0, stlerr.New(stlerr.CodeInvalid, "diagnostics_mtu", "", "", "invalid observed local Link interface MTU")
+		}
+		ceiling = min(ceiling, c.LinkMTU)
 	}
 	if ceiling < MinIPv4MTU {
 		return 0, stlerr.New(stlerr.CodeInvalid, "diagnostics_mtu", "", "", "encapsulation leaves no viable IPv4 Link MTU")

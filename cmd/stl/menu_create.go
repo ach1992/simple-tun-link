@@ -149,56 +149,97 @@ func persistedGREReceiveConflict(snapshot state.Snapshot, link domain.Link) bool
 	return false
 }
 
-func configureGREAdvanced(p createPrompts, options *domain.GREOptions) error {
-	key, err := p.ask("GRE key (Enter=keep generated key; 'off'=unkeyed; decimal=explicit key): ")
-	if err != nil {
-		return err
+// Advanced GRE fields are backend configuration, not another Link Engine.
+// Retry a bad field in place, before staging any Link identity or host change.
+func configureGREAdvanced(p createPrompts, options *domain.GREOptions, mode domain.Encapsulation, manualPair bool) error {
+	if !manualPair {
+		for {
+			key, err := p.ask("GRE key (Enter=keep generated key; 'off'=unkeyed; decimal 0..4294967295): ")
+			if err != nil {
+				return err
+			}
+			if key == "" {
+				break
+			}
+			if strings.EqualFold(key, "off") {
+				options.KeyEnabled, options.Key = false, 0
+				break
+			}
+			parsed, parseErr := strconv.ParseUint(key, 10, 32)
+			if parseErr != nil {
+				menuProse(p.out, "Enter an unsigned GRE receive key from 0 through 4294967295, off, or Enter to keep.")
+				continue
+			}
+			options.KeyEnabled, options.Key = true, uint32(parsed)
+			// The generated FOU/GUE port is derived from the generated key.
+			// Recalculate the *suggestion* when the key changes, before letting
+			// the operator keep it or choose any valid UDP port below.
+			if mode == domain.EncapFOU || mode == domain.EncapGUE {
+				options.UDPPort = uint16(49152 + options.Key%16384)
+			}
+			break
+		}
 	}
-	switch key {
-	case "":
-	case "off":
-		options.KeyEnabled, options.Key = false, 0
-	default:
-		parsed, err := strconv.ParseUint(key, 10, 32)
+	for {
+		ttl, err := p.ask("GRE TTL (Enter=automatic; 1-255=fixed): ")
 		if err != nil {
-			return fmt.Errorf("invalid GRE key")
+			return err
 		}
-		options.KeyEnabled, options.Key = true, uint32(parsed)
-	}
-	ttl, err := p.ask("GRE TTL (Enter=automatic; 1-255=fixed): ")
-	if err != nil {
-		return err
-	}
-	if ttl != "" {
-		value, err := strconv.ParseUint(ttl, 10, 8)
-		if err != nil || value == 0 {
-			return fmt.Errorf("invalid GRE TTL")
+		if ttl == "" {
+			options.TTL = 0
+			break
 		}
-		options.TTL = uint8(value)
+		value, parseErr := strconv.ParseUint(ttl, 10, 8)
+		if parseErr == nil && value > 0 {
+			options.TTL = uint8(value)
+			break
+		}
+		menuProse(p.out, "GRE TTL must be an integer from 1 through 255, or Enter for automatic.")
 	}
-	tos, err := p.ask("GRE TOS (Enter=default; decimal 0-255): ")
-	if err != nil {
-		return err
-	}
-	if tos != "" {
-		value, err := strconv.ParseUint(tos, 10, 8)
+	for {
+		tos, err := p.ask("GRE TOS (Enter=default; decimal 0-255): ")
 		if err != nil {
-			return fmt.Errorf("invalid GRE TOS")
+			return err
 		}
-		options.TOS = uint8(value)
+		if tos == "" {
+			options.TOS = 0
+			break
+		}
+		value, parseErr := strconv.ParseUint(tos, 10, 8)
+		if parseErr == nil {
+			options.TOS = uint8(value)
+			break
+		}
+		menuProse(p.out, "GRE TOS must be an integer from 0 through 255, or Enter for default.")
 	}
+	options.DisablePMTUD = false
 	if options.TTL == 0 {
+		var err error
 		options.DisablePMTUD, err = p.yesNo("Disable GRE PMTU discovery? [y/N]: ")
 		if err != nil {
 			return err
 		}
+	} else {
+		menuProse(p.out, "Fixed GRE TTL keeps kernel PMTU discovery enabled (required by Linux).")
 	}
+	var err error
 	options.Checksum, err = p.yesNo("Enable GRE checksum? [y/N]: ")
 	if err != nil {
 		return err
 	}
 	options.Sequence, err = p.yesNo("Enable GRE sequence numbers? [y/N]: ")
-	return err
+	if err != nil {
+		return err
+	}
+	if mode == domain.EncapFOU || mode == domain.EncapGUE {
+		options.UDPPort, err = askPortDefault(p,
+			fmt.Sprintf("GRE %s UDP receive port [%d] (both peers must match): ", mode, options.UDPPort),
+			options.UDPPort)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // The interactive wizard is only an operator-facing composer. Host inspection,
@@ -249,7 +290,7 @@ func menuCreatePlain(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		fmt.Fprintln(errOut, "Cannot inspect existing STL Links; nothing applied.")
 		return 1
 	}
-	addresses, err := askLinkAddresses(p, runner, snapshot, peer, manualPair)
+	addresses, err := askPlainLinkAddresses(p, runner, snapshot, peer, manualPair, backend)
 	if err != nil {
 		return p.failed(err)
 	}
@@ -298,9 +339,8 @@ func menuCreatePlain(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	if err != nil {
 		return p.failed(err)
 	}
-	if advanced && backend == domain.BackendGRE && !manualPair {
-		if err := configureGREAdvanced(p, &link.GRE); err != nil {
-			fmt.Fprintln(out, "Invalid advanced GRE option; restarting tunnel setup is safe before confirmation.")
+	if advanced && backend == domain.BackendGRE {
+		if err := configureGREAdvanced(p, &link.GRE, mode, manualPair); err != nil {
 			return p.failed(err)
 		}
 	}
@@ -345,6 +385,19 @@ func menuCreatePlain(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	menuField(out, "Remote endpoint", peer.String())
 	menuField(out, "Local tunnel IP", link.Addresses.Local.String())
 	menuField(out, "Remote tunnel IP", link.Addresses.Peer.String())
+	menuField(out, "Local MTU policy", humanMTUPolicy(link.MTU))
+	if backend == domain.BackendGRE {
+		key := "unkeyed"
+		if link.GRE.KeyEnabled {
+			key = strconv.FormatUint(uint64(link.GRE.Key), 10)
+		}
+		menuField(out, "GRE receive key", key+" (not encryption; exact peer match)")
+		if mode != domain.EncapNative {
+			menuField(out, "GRE UDP receive port", strconv.Itoa(int(link.GRE.UDPPort))+" (exact peer match)")
+		}
+		menuField(out, "GRE TTL / TOS", fmt.Sprintf("%d / %d (TTL 0=automatic)", link.GRE.TTL, link.GRE.TOS))
+		menuField(out, "GRE PMTU / checksum / sequence", fmt.Sprintf("enabled=%t / %t / %t", !link.GRE.DisablePMTUD, link.GRE.Checksum, link.GRE.Sequence))
+	}
 	menuNotice(out, "INFO", "Auto MTU is only a local estimate. Test the peer after pairing.")
 	menuNotice(out, "WARNING", "Native GRE/IPIP/L2TPv3 is not encrypted or authenticated. Do not send secrets.")
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {

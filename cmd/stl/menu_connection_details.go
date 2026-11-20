@@ -51,7 +51,7 @@ func printManualConnectionDetails(out io.Writer, l domain.Link) {
 	fmt.Fprintf(out, "  Other server's PEER connection IP: %s  (THIS server)\n", l.Underlay.Local)
 	fmt.Fprintf(out, "  Other server's OWN tunnel IP:      %s\n", l.Addresses.Peer.Addr())
 	fmt.Fprintf(out, "  Other server's PEER tunnel IP:     %s\n", l.Addresses.Local.Addr())
-	fmt.Fprintf(out, "  Both tunnel IPs must use prefix /%d; reverse local and peer roles.\n", l.Addresses.Local.Bits())
+	fmt.Fprintf(out, "  Reverse the exact saved prefixes: local %s, peer %s.\n", l.Addresses.Peer, l.Addresses.Local)
 
 	switch l.Backend {
 	case domain.BackendGRE:
@@ -60,6 +60,8 @@ func printManualConnectionDetails(out io.Writer, l domain.Link) {
 		} else {
 			fmt.Fprintln(out, "  GRE receive key: none/unkeyed (press Enter at manual-key prompt)")
 		}
+		fmt.Fprintf(out, "  GRE TTL=%d TOS=%d PMTU enabled=%t checksum=%t sequence=%t\n",
+			l.GRE.TTL, l.GRE.TOS, !l.GRE.DisablePMTUD, l.GRE.Checksum, l.GRE.Sequence)
 		if l.Encapsulation == domain.EncapNative {
 			fmt.Fprintln(out, "  OTHER server menu: Create tunnel -> 4 Manual -> 1 GRE Native.")
 			fmt.Fprintln(out, "  Carrier: IP protocol 47 (GRE), NOT TCP/UDP port 47.")
