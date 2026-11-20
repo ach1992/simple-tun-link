@@ -34,6 +34,20 @@ fingerprint equivalence or cold reboot recovery. See the
 [MASQUE Carrier guide](docs/MASQUE-CARRIER.md) and
 [remaining field acceptance](https://github.com/ach1992/simple-tun-link/issues/243).
 
+**Stable `v0.1.30` (QUIC/MASQUE MTU correction):** The pinned Hysteria
+`app/v2.13.0` helper now requires a verified **local IPv4 underlay MTU**
+of at least **1308 bytes for Plain / Public HTTP/3** or **1316 bytes for
+Salamander**, matching observed helper handshake requirements. A local
+failure is reported before an attempted Link; satisfying this check does
+**not** prove the remote path PMTU or connection. MASQUE now verifies the
+original helper-owned TUN MTU (Auto or Manual) without a conflicting second
+kernel MTU write. To nest QUIC over MASQUE, provision a **new** parent with
+enough actual path MTU and test real peer traffic. No committed Link is
+silently retuned. Real two-host post-fix field verification and an earlier
+Iranian QUIC Remove quarantine remain tracked in
+[Issue #253](https://github.com/ach1992/simple-tun-link/issues/253);
+GitHub CI or this release is not proof of their resolution.
+
 ## Requirements
 
 - Two Linux servers you administer. The installer supports Debian/Ubuntu
