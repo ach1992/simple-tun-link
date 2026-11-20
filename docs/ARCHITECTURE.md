@@ -1332,7 +1332,7 @@ reservations, private identity and surviving migrated WG unchanged.
 The harness uses disposable rootless kernel WireGuard+nft with a
 systemd **shim**, not real PID1 reboot or physical two-host recovery.
 
-## Optional MASQUE CONNECT-IP Carrier (v0.1.28+, Issue #142)
+## Optional MASQUE CONNECT-IP Carrier (private mTLS v0.1.28+, PublicTLS v0.1.29+; Issue #142)
 
 The native MASQUE backend uses **the single Engine**, Link ID, State,
 resource locks, owned host-effect journal, rollback and restore.

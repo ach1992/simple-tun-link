@@ -248,7 +248,7 @@ restrictions protect each authorized WSS forwarding path. Do not assert
 strict leaf-CN pinning: the per-Link CA **plus independent bearer/path scope**
 is the accepted security model. CA signing material is never persisted.
 
-**Opt-in public-TLS WSS (source candidate for Issue #243):** the pinned
+**Opt-in public-TLS WSS (Stable v0.1.29+; Issue #243):** the pinned
 wstunnel v11.0.0 listener can accept anonymous TLS handshakes on its **same
 TCP endpoint** without requesting a client certificate. It still presents
 a CA/SAN-verified server certificate, accepts only the exact protected
@@ -499,11 +499,13 @@ browser-fingerprint parity, website camouflage or censorship resistance.
 Both modes reuse the existing owner-scoped protected materials, State,
 Engine, receipt-bound retirement and no-silent-mode-transition guards.
 
-## Unreleased MASQUE material and authentication boundary
+## MASQUE protected material and authentication boundary
 
-The Issue #142 MASQUE candidate authenticates HTTP/2 CONNECT-IP using TLS
-certificates with pinned CA/peer identity. The public Link State carries
-only topology and an immutable exact protected-material SHA256, not TLS keys.
+The MASQUE private mTLS mode (Stable v0.1.28+) authenticates HTTP/2
+CONNECT-IP using TLS certificates with pinned CA/peer identity; the
+PublicTLS bearer mode (Stable v0.1.29+) is described above. The public Link
+State carries only topology and an immutable exact protected-material SHA256,
+not TLS keys.
 Root-owned `masque/<link-id>/` files use `0700` directories, `0600` files and
 no-clobber writes. Reuse after an interrupted provision requires the complete
 original bytes, owner, identity and closed filename set; incomplete/altered
