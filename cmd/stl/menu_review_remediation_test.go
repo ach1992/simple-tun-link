@@ -67,7 +67,7 @@ func TestReviewerNarrowCopyBlocksKeepCommandsIDsKeysAndURLs(t *testing.T) {
 	command := "stl link diagnose " + id
 	url := "https://example.invalid/long/exact/operational/recovery/instructions"
 	setup := "stl://receiver-test-payload-that-can-be-longer-than-any-terminal-width-should-never-be-hard-wrapped"
-	for _, width := range []uint16{60, 80, 120} {
+	for _, width := range []uint16{24, 60, 80, 120} {
 		t.Run(fmt.Sprint(width), func(t *testing.T) {
 			t.Setenv("NO_COLOR", "1")
 			t.Setenv("TERM", "xterm-256color")
@@ -91,7 +91,7 @@ func TestReviewerNarrowCopyBlocksKeepCommandsIDsKeysAndURLs(t *testing.T) {
 			if strings.Contains(got, "\x1b") {
 				t.Fatalf("%d-column NO_COLOR copied ANSI: %q", width, got)
 			}
-			if len(command) > int(width) || len(link.WireGuard.LocalPublicKey) > int(width) {
+			if width >= 60 && (len(command) > int(width) || len(link.WireGuard.LocalPublicKey) > int(width)) {
 				t.Fatal("the command and WireGuard test key should fit the narrowest terminal")
 			}
 		})

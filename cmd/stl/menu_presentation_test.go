@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ach1992/simple-tun-link/internal/domain"
 	"golang.org/x/sys/unix"
 )
 
@@ -429,6 +430,24 @@ func TestTwentyFourColumnRealMenuManageNavigation(t *testing.T) {
 			tty.expect("Choose tunnel number: ")
 			tty.send("1")
 			tty.expect("Choose an action: ")
+			// Navigate the exact sequence that exposed the physical defect:
+			// Status -> Connection details -> Diagnose, then leave safely.
+			tty.send("1")
+			tty.expect("[UNKNOWN]")
+			tty.expect("Enter to continue...")
+			tty.send("")
+			tty.expect("Choose an action: ")
+			tty.send("4")
+			tty.expect("TWO-SERVER")
+			tty.expect("MANUAL SETUP")
+			tty.expect("Enter to continue...")
+			tty.send("")
+			tty.expect("Choose an action: ")
+			tty.send("2")
+			tty.expect("FIVE-PING")
+			tty.expect("Enter to continue...")
+			tty.send("")
+			tty.expect("Choose an action: ")
 			tty.send("0")
 			tty.expect("Choose a task: ")
 			tty.send("8")
@@ -437,12 +456,9 @@ func TestTwentyFourColumnRealMenuManageNavigation(t *testing.T) {
 			plain := strings.ReplaceAll(terminalColorSequence.ReplaceAllString(raw, ""), "\r", "")
 			var wide []string
 			for _, line := range strings.Split(plain, "\n") {
-				// An exact ID or copyable address is allowed to remain
-				// unsplit; user-facing explanatory prose is not.
-				if len(line) > 24 &&
-					!strings.Contains(line, "lnk_") &&
-					!strings.Contains(line, links[0].Addresses.Local.Addr().String()) &&
-					!strings.Contains(line, links[0].Addresses.Peer.Addr().String()) {
+				// Exempt only the exact standalone ID; a *longer line*
+				// containing a short IP or ID must still wrap as prose.
+				if len(line) > 24 && strings.TrimSpace(line) != string(links[0].ID) {
 					wide = append(wide, line)
 				}
 			}
@@ -451,6 +467,64 @@ func TestTwentyFourColumnRealMenuManageNavigation(t *testing.T) {
 			}
 			if !backend.present[links[0].ID] {
 				t.Fatal("read-only Manage traversal modified saved Link")
+			}
+		})
+	}
+}
+
+// Independently exercise semantic WARNING/UNKNOWN health lines where the
+// 16-column status prefix itself exceeds a 24-column terminal. Copyable
+// standalone tokens may be longer, but prose must not overflow.
+func TestTwentyFourColumnHealthWarningsAndAllBackendDetails(t *testing.T) {
+	for _, noColor := range []bool{false, true} {
+		t.Run(fmt.Sprintf("no_color=%t", noColor), func(t *testing.T) {
+			t.Setenv("TERM", "xterm-256color")
+			t.Setenv("CLICOLOR", "1")
+			old, present := os.LookupEnv("NO_COLOR")
+			_ = os.Unsetenv("NO_COLOR")
+			t.Cleanup(func() {
+				if present {
+					_ = os.Setenv("NO_COLOR", old)
+				} else {
+					_ = os.Unsetenv("NO_COLOR")
+				}
+			})
+			if noColor {
+				t.Setenv("NO_COLOR", "1")
+			}
+			master, slave := openMenuPTY(t)
+			if err := unix.IoctlSetWinsize(int(slave.Fd()), unix.TIOCSWINSZ, &unix.Winsize{Row: 40, Col: 24}); err != nil {
+				t.Fatal(err)
+			}
+			menuHealthLine(slave, "Ping", "WARNING", "0/5 replies (100% packet loss)")
+			menuHealthLine(slave, "Peer traffic", "UNKNOWN", "Not independently measured")
+			menuHealthLine(slave, "Suggested MTU", "WARNING", "1300 bytes (conservative estimate; not peer-confirmed)")
+			var notes []string
+			for _, kind := range []domain.Backend{
+				domain.BackendGRE, domain.BackendIPIP, domain.BackendL2TPv3,
+				domain.BackendWireGuard, domain.BackendIPsec, domain.BackendWireGuardWSS,
+				domain.BackendWireGuardQUIC, domain.BackendMASQUE,
+			} {
+				link := fixtureReadLink("lnk_1234567890abcdef1234567890abcdef",
+					"10.20.30.0/31", "10.20.30.1/31", kind)
+				printManualConnectionDetails(slave, link)
+				notes = append(notes, string(kind))
+			}
+			fmt.Fprintln(slave, "END-CHECK-24")
+			raw := readMenuPTYUntil(t, master, "END-CHECK-24")
+			plain := strings.ReplaceAll(terminalColorSequence.ReplaceAllString(raw, ""), "\r", "")
+			for _, line := range strings.Split(plain, "\n") {
+				if len(line) > 24 && strings.TrimSpace(line) != "lnk_1234567890abcdef1234567890abcdef" {
+					t.Fatalf("24-col status/backend prose overflow: len=%d line=%q", len(line), line)
+				}
+			}
+			for _, needed := range []string{"[WARNING]", "[UNKNOWN]", "PEER", "connection", "1300", "END-CHECK-24"} {
+				if !strings.Contains(plain, needed) {
+					t.Fatalf("missing status or original content %q", needed)
+				}
+			}
+			if hasSGR := strings.Contains(raw, "\x1b["+menuYellow+"m"); hasSGR == noColor {
+				t.Fatal("24-column status did not honor semantic colors / NO_COLOR")
 			}
 		})
 	}

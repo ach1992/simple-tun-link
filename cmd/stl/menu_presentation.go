@@ -210,12 +210,26 @@ func menuCopyable(value string) bool {
 // redirected, credential or copyable command values.
 func menuField(out io.Writer, label, value string) {
 	cols := menuColumns(out)
-	if cols >= 24 && !menuCopyable(value) &&
-		2+max(17, len(label))+1+len(value) > cols {
-		fmt.Fprintf(out, "  %s\n", label)
-		width := max(16, cols-6)
-		wrapped := "      " + strings.ReplaceAll(wrapTerminalGuidance(value, width), "\n", "\n      ")
-		fmt.Fprintln(out, menuFieldValue(out, label, wrapped))
+	if cols >= 24 && 2+max(17, len(label))+1+len(value) > cols {
+		if menuCopyable(value) {
+			menuCopyLine(out, label, value)
+			return
+		}
+		if len(label)+2 > cols {
+			menuNarrowProse(out, "  ", label, "")
+		} else {
+			fmt.Fprintf(out, "  %s\n", label)
+		}
+		for _, line := range strings.Split(wrapTerminalGuidance(value, max(16, cols-6)), "\n") {
+			indent := "      "
+			if len(indent)+len(line) > cols {
+				// Keep the exact opaque word (for example a reason code)
+				// unsplit rather than allowing unnecessary indentation
+				// to force a line of human output over the terminal width.
+				indent = ""
+			}
+			fmt.Fprintln(out, indent+menuFieldValue(out, label, line))
+		}
 		return
 	}
 	fmt.Fprintf(out, "  %-17s %s\n", label, menuFieldValue(out, label, value))
@@ -225,7 +239,11 @@ func menuField(out io.Writer, label, value string) {
 // labels cannot force a command, public key or Link ID to wrap at 60 columns.
 // The terminal may soft-wrap tokens wider than itself; we insert no breaks.
 func menuCopyLine(out io.Writer, label, exact string) {
-	fmt.Fprintf(out, "  %s\n", menuPaint(out, menuBlue, label))
+	if cols := menuColumns(out); cols >= 24 && len(label)+2 > cols {
+		menuNarrowProse(out, "  ", label, menuBlue)
+	} else {
+		fmt.Fprintf(out, "  %s\n", menuPaint(out, menuBlue, label))
+	}
 	fmt.Fprintln(out, exact)
 }
 
@@ -328,6 +346,10 @@ func menuAcknowledge(input io.Reader, reader *bufio.Reader, out io.Writer) {
 	if _, outOK := menuTerminal(out); !inOK || !outOK || !terminalIsInteractive(in) {
 		return
 	}
-	fmt.Fprint(out, "\n"+menuPaint(out, menuDim, "Press Enter to continue...")+" ")
+	prompt := "Press Enter to continue..."
+	if cols := menuColumns(out); cols >= 24 && len(prompt)+1 > cols {
+		prompt = "Enter to continue..."
+	}
+	fmt.Fprint(out, "\n"+menuPaint(out, menuDim, prompt)+" ")
 	_, _ = readMenuAnswer(reader)
 }
