@@ -169,7 +169,12 @@ func (t *PrivateTUN) ReadPacket(ctx context.Context) ([]byte, error) {
 			continue
 		}
 		if err := validPrivatePacket(p, t.local, t.peer, t.mtu); err != nil {
-			return nil, err
+			// Kernel/application traffic may target a different private
+			// destination immediately when the interface comes UP. It is
+			// not paired Link traffic: discard at the TUN boundary, never
+			// terminate a healthy owned helper or redirect such packets.
+			// Authenticated remote frames are validated separately.
+			continue
 		}
 		return p, nil
 	}

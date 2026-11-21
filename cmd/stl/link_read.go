@@ -14,9 +14,11 @@ import (
 	ipsecbackend "github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	l2tpbackend "github.com/ach1992/simple-tun-link/internal/backend/l2tpv3"
 	masquebackend "github.com/ach1992/simple-tun-link/internal/backend/masque"
+	spoofbackend "github.com/ach1992/simple-tun-link/internal/backend/spoof"
 	wgbackend "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/diagnostics"
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/spoofhost"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
@@ -58,6 +60,7 @@ type linkStatusResponse struct {
 	IPIPState         *ipipbackend.DiagnosticState  `json:"ipip_state,omitempty"`
 	L2TPv3State       *l2tpbackend.DiagnosticState  `json:"l2tpv3_state,omitempty"`
 	MASQUEState       *masqueLinkStatus             `json:"masque_state,omitempty"`
+	SpoofState        *spoofLinkStatus              `json:"spoof_state,omitempty"`
 	WireGuardState    *wgbackend.DiagnosticState    `json:"wireguard_state,omitempty"`
 	WSSState          *WSSLinkDiagnostics           `json:"wss_state,omitempty"`
 	QUICState         *QUICLinkDiagnostics          `json:"quic_state,omitempty"`
@@ -76,6 +79,17 @@ type masqueLinkStatus struct {
 	LocalAddress    string `json:"local_address,omitempty"`
 	PeerRoute       bool   `json:"peer_route"`
 	RuntimeReady    bool   `json:"runtime_ready"`
+}
+
+// Spoof local readiness is strictly separate from authenticated bilateral
+// underlay liveness and verified private application traffic.
+type spoofLinkStatus struct {
+	UnitOwned      bool                    `json:"unit_owned"`
+	UnitActive     bool                    `json:"unit_active"`
+	InterfaceOwned bool                    `json:"interface_owned"`
+	PrivateRoute   bool                    `json:"private_route"`
+	RuntimeReady   bool                    `json:"runtime_ready"`
+	Runtime        spoofhost.RuntimeStatus `json:"runtime"`
 }
 
 type linkReadErrorResponse struct {
@@ -181,6 +195,12 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 			string(record.WSSSupersededBy) + " on both peers. Do not treat this original as active or reuse its reserved resources."
 		return readCommandPublicError(stdout, stderr, jsonOutput, blocked)
 	}
+	if options == nil && record.Desired.Backend == domain.BackendSpoof {
+		options, err = assembleRuntimeOptionsForBackend(root, domain.BackendSpoof)
+		if err != nil {
+			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeState, "link_status", "Spoof read-only runtime unavailable")
+		}
+	}
 	if options == nil && record.Desired.Backend == domain.BackendMASQUE {
 		options, err = assembleRuntimeOptionsForBackend(root, domain.BackendMASQUE)
 		if err != nil {
@@ -192,6 +212,48 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 		if err != nil {
 			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeState, "link_status", "cannot initialize read-only backend inspection")
 		}
+	}
+	if record.Desired.Backend == domain.BackendSpoof {
+		var inspector interface {
+			DiagnosticState(context.Context, domain.Link) (spoofbackend.HostObservation, error)
+		}
+		for _, impl := range options.backends {
+			if impl != nil && impl.Kind() == domain.BackendSpoof {
+				inspector, _ = impl.(interface {
+					DiagnosticState(context.Context, domain.Link) (spoofbackend.HostObservation, error)
+				})
+				break
+			}
+		}
+		if inspector == nil {
+			return readCommandError(stdout, stderr, jsonOutput, stlerr.CodeUnsupported, "link_status", "managed Spoof inspector unavailable")
+		}
+		host, inspectErr := inspector.DiagnosticState(ctx, record.Desired)
+		if inspectErr != nil {
+			return readStatusInspectionError(ctx, stdout, stderr, jsonOutput, inspectErr)
+		}
+		runtime := spoofhost.TrustedRuntimeStatus(root, id, host)
+		connectivity := "not_confirmed"
+		if runtime.State == "CONNECTED" && runtime.Authenticated && runtime.BilateralConfirmed {
+			connectivity = "authenticated_bilateral"
+		}
+		projection := spoofLinkStatus{UnitOwned: host.UnitOwned,
+			UnitActive: host.UnitActive, InterfaceOwned: host.InterfaceOwned,
+			PrivateRoute: host.PeerRoute, RuntimeReady: host.RuntimeReady,
+			Runtime: runtime}
+		response := linkStatusResponse{SchemaVersion: jsonSchemaVersion, Link: summarizeLink(record.Desired),
+			InterfaceVerified: host.RuntimeReady, Connectivity: connectivity, SpoofState: &projection}
+		if jsonOutput {
+			if json.NewEncoder(stdout).Encode(response) != nil {
+				fmt.Fprintln(stderr, "cannot encode Spoof status")
+				return 1
+			}
+		} else {
+			fmt.Fprintf(stdout, "Link %s: Spoof helper=%t, private route=%t, state=%s, authenticated bilateral=%t, tx/rx=%d/%d private packets (application success not implied)\n",
+				id, host.RuntimeReady, host.PeerRoute, runtime.State,
+				connectivity == "authenticated_bilateral", runtime.SentPrivatePackets, runtime.ReceivedPrivatePackets)
+		}
+		return 0
 	}
 	if record.Desired.Backend == domain.BackendMASQUE {
 		var inspector interface {
