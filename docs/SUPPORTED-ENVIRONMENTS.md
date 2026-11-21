@@ -163,13 +163,12 @@ a trusted local IP source (IPv4 or IPv6), private IPv4 `/32` routing, and
 TCP/TLS connectivity to an operator-selected HTTPS listener. It is native Go
 (no pinned Hysteria/wstunnel helper, no WireGuard/strongSwan). Validated
 local resource ownership is not proof that TCP/443 or another configured port
-is reachable across a particular WAN; test the real two-host path. Two
-physical hosts running **v0.1.30** established private MASQUE/TUN MTU-1400,
-nested QUIC Plain/PublicH3-enabled and authenticated bilateral application
-TCP/UDP; this is bounded field evidence, not universal WAN or PMTU coverage.
-The **v0.1.31** guided-MTU menu/strict Uninstall corrections still need their
-own installed-build field acceptance. Cold reboot/original Iranian QUIC
-recovery, standalone HTTP/3 GET and broader WAN/provider acceptance remain
-open under [Issue #142](https://github.com/ach1992/simple-tun-link/issues/142)
-and [#253](https://github.com/ach1992/simple-tun-link/issues/253);
-no performance benchmark is a release prerequisite.
+is reachable across a particular WAN; test the real two-host path.
+Local readiness is not evidence of peer reachability or path MTU.
+Release- and environment-specific traffic, active-Link full OS reboot,
+and remaining WAN/NAT/platform coverage are tracked in
+[product readiness #142](https://github.com/ach1992/simple-tun-link/issues/142)
+and [physical field acceptance #93](https://github.com/ach1992/simple-tun-link/issues/93).
+The original Iranian QUIC recovery case is documented in
+[closed Issue #253](https://github.com/ach1992/simple-tun-link/issues/253).
+No performance benchmark is a release prerequisite.
