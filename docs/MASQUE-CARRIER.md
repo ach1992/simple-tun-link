@@ -1,23 +1,17 @@
 # MASQUE CONNECT-IP Carrier (Stable v0.1.28+)
 
-> **Version availability:** native MASQUE with default private mTLS first
-> shipped in Stable `v0.1.28`. The **opt-in Public TLS / CONNECT-IP bearer**
-> mode and first-party HTTP/2 GET/HEAD ship starting in Stable `v0.1.29`.
-> Private two-host v0.1.28 CLI traffic and service-restore evidence does **not**
-> validate v0.1.29 PublicTLS, fully guided pairing or cold physical reboot.
-> Track outstanding field acceptance in [Issue #243](https://github.com/ach1992/simple-tun-link/issues/243)
-> and [Issue #93](https://github.com/ach1992/simple-tun-link/issues/93).
-> Stable `v0.1.30` additionally verifies the **original helper-owned TUN
-> MTU** against protected Auto/Manual intent without applying a second
-> kernel MTU mutation. The fix does not validate a higher physical path MTU
-> or clear any earlier QUIC Remove quarantine; see
-> [Issue #253](https://github.com/ach1992/simple-tun-link/issues/253).
-> Stable `v0.1.31` adds the guided **optional manual initial TUN MTU**
-> while retaining the 1280-byte default. v0.1.30 physically demonstrated
-> nested QUIC Plain/PublicH3-enabled private ICMP/TCP/UDP over a MASQUE
-> MTU-1400 parent on two real servers; this did not separately prove a
-> public HTTP/3 GET, broad WAN PMTU or physical cold reboot.
-> A Release, local-ready result or ping is not production approval.
+> **Version availability:** Private mTLS first shipped in Stable `v0.1.28`.
+> Opt-in Public TLS with bearer-authorized CONNECT-IP and same-listener
+> HTTP/2 GET/HEAD shipped in `v0.1.29`. Stable `v0.1.30` added verification
+> of the original helper-owned TUN MTU without a second kernel MTU write;
+> `v0.1.31` added optional guided initial TUN MTU (1280-byte default).
+> Mode availability does not prove WAN reachability, physical path MTU or
+> browser-identical TLS behavior. Consult the exact-host field receipts in
+> [product readiness #142](https://github.com/ach1992/simple-tun-link/issues/142)
+> and [physical acceptance #93](https://github.com/ach1992/simple-tun-link/issues/93).
+> The earlier Iranian QUIC recovery is recorded in
+> [closed Issue #253](https://github.com/ach1992/simple-tun-link/issues/253).
+> Publication, local readiness or a ping is not production approval.
 
 ## What it is
 

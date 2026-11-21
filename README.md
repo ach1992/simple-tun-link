@@ -21,49 +21,22 @@ Different transports have different kernel, firewall, network and optional
 helper requirements. STL does not automatically configure provider firewalls,
 NAT or foreign VPNs, and no transport works through every network.
 
-**Release availability:** MASQUE private mTLS first shipped in Stable
-`v0.1.28`; it is absent from `v0.1.27` and earlier. Stable `v0.1.29`
-adds opt-in QUIC Plain first-party HTTP/3, WSS Public TLS with
-bearer-authorized WebSocket Upgrade, and MASQUE Public TLS with
-bearer-authorized CONNECT-IP plus genuine HTTP/2 GET/HEAD on the same
-listener. These choices are **not** in `v0.1.28`; Private mTLS remains
-the default where applicable. Check the actual installed release and mode
-before creating Links. Publishing and isolated two-peer kernel tests do
-**not** prove this new release's physical WAN reachability, browser TLS
-fingerprint equivalence or cold reboot recovery. See the
-[MASQUE Carrier guide](docs/MASQUE-CARRIER.md) and
-[remaining field acceptance](https://github.com/ach1992/simple-tun-link/issues/243).
+**Release and mode compatibility:** MASQUE private mTLS first shipped in
+Stable `v0.1.28`. Opt-in QUIC Plain HTTP/3, WSS Public TLS and MASQUE
+Public TLS (bearer-authorized CONNECT-IP and same-listener HTTP/2 GET/HEAD)
+arrived in `v0.1.29`. Subsequent releases improved MTU admission,
+guided MASQUE MTU selection, resource-collision checks and recovery.
+Check the **installed version** and [official Release notes](https://github.com/ach1992/simple-tun-link/releases)
+before choosing a mode; private mTLS remains the default where applicable.
 
-**Stable `v0.1.30` (QUIC/MASQUE MTU correction):** The pinned Hysteria
-`app/v2.13.0` helper now requires a verified **local IPv4 underlay MTU**
-of at least **1308 bytes for Plain / Public HTTP/3** or **1316 bytes for
-Salamander**, matching observed helper handshake requirements. A local
-failure is reported before an attempted Link; satisfying this check does
-**not** prove the remote path PMTU or connection. MASQUE now verifies the
-original helper-owned TUN MTU (Auto or Manual) without a conflicting second
-kernel MTU write. To nest QUIC over MASQUE, provision a **new** parent with
-enough actual path MTU and test real peer traffic. No committed Link is
-silently retuned. On **v0.1.30**, an isolated physical Iran/Germany
-MASQUE parent at MTU 1400 successfully carried nested QUIC Plain with
-Public HTTP/3 **enabled**, plus authenticated private ICMP and bilateral
-TCP/UDP. That does **not** demonstrate a standalone public HTTP/3 GET,
-universal path PMTU, direct public-IPv4 reachability or reboot recovery.
-The earlier Iranian QUIC Remove quarantine remains tracked in
-[Issue #253](https://github.com/ach1992/simple-tun-link/issues/253).
-
-**Stable `v0.1.31` (operator UX and recovery correctness):** Guided MASQUE
-Create now offers an **optional advanced initial TUN MTU** before allocating
-private identity; standalone default remains 1280. A manually selected value
-(such as 1400 on a verified path) is shown before confirmation and preserved
-in the original protected two-peer offer. Native WireGuard Create detects
-saved or pending interface/port/address collisions **before** staging its
-private key or receiver handoff and returns an actionable
-`resource_conflict`; it does not overwrite another Link. Destructive
-Uninstall validation now recognizes the exact State v7 MASQUE/QUIC receipt
-fields, while rejecting pending operations, unretired credentials and
-unknown or ambiguous State. This new release's changed guided flow and
-Uninstall admission have passed source review and CI but are **not yet
-claimed physically accepted**. Follow [Issue #142](https://github.com/ach1992/simple-tun-link/issues/142).
+Physical two-server traffic and same-Link automatic recovery after a full OS
+reboot have release- and host-specific [acceptance evidence](https://github.com/ach1992/simple-tun-link/issues/142).
+Distinct ISP/NAT and native physical ARM64 coverage remains tracked in
+[field acceptance](https://github.com/ach1992/simple-tun-link/issues/93).
+Neither local readiness nor a successful field path guarantees all provider
+networks or browser-identical TLS fingerprints. See
+[supported environments](docs/SUPPORTED-ENVIRONMENTS.md) for QUIC MTU bounds
+and the [MASQUE guide](docs/MASQUE-CARRIER.md) for transport details.
 
 ## Requirements
 
