@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ach1992/simple-tun-link/internal/domain"
 	"golang.org/x/sys/unix"
 )
 
@@ -349,4 +351,181 @@ func readMenuPTYUntil(t *testing.T, master *os.File, required ...string) string 
 	}
 	t.Fatalf("PTY did not produce %v: %q", required, transcript.String())
 	return ""
+}
+
+// The observed 24-column regression comes from human labels, not exact
+// copyable Link IDs. Exercise actual PTY winsize with semantic ANSI enabled
+// and disabled; no ordinary heading/option/status may overrun its columns.
+var terminalColorSequence = regexp.MustCompile("\x1b\\[[0-9;]*[A-Za-z]")
+
+func TestTwentyFourColumnTerminalReflowsHumanMenuText(t *testing.T) {
+	for _, monochrome := range []bool{false, true} {
+		t.Run(fmt.Sprintf("no_color=%t", monochrome), func(t *testing.T) {
+			master, slave := openMenuPTY(t)
+			if err := unix.IoctlSetWinsize(int(slave.Fd()), unix.TIOCSWINSZ,
+				&unix.Winsize{Row: 35, Col: 24}); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("TERM", "xterm-256color")
+			t.Setenv("CLICOLOR", "1")
+			previous, had := os.LookupEnv("NO_COLOR")
+			_ = os.Unsetenv("NO_COLOR")
+			t.Cleanup(func() {
+				if had {
+					_ = os.Setenv("NO_COLOR", previous)
+				} else {
+					_ = os.Unsetenv("NO_COLOR")
+				}
+			})
+			if monochrome {
+				t.Setenv("NO_COLOR", "1")
+			}
+			menuSection(slave, "Saved tunnels / not a connection test")
+			menuActionOption(slave, "7", "Uninstall", "Verify and remove installed STL", "UNINSTALL")
+			menuTunnelOption(slave, "7", "WireGuard / QUIC + TLS",
+				"Encrypted UDP Carrier (optional pinned Hysteria)", nil, tunnelOption{})
+			menuField(slave, "Saved tunnels", "0 (not a connection test)")
+			menuNotice(slave, "WARNING", "Uninstall removes only selected STL-owned executable, alias and record.")
+			fmt.Fprintln(slave, "END-24")
+			got := readMenuPTYUntil(t, master, "END-24")
+			raw := got
+			plain := strings.ReplaceAll(terminalColorSequence.ReplaceAllString(raw, ""), "\r", "")
+			for _, line := range strings.Split(plain, "\n") {
+				if len(line) > 24 {
+					t.Fatalf("24-column human text exceeded PTY width: len=%d line=%q\nraw=%q", len(line), line, raw)
+				}
+			}
+			if !strings.Contains(plain, "Uninstall") || !strings.Contains(plain, "[WARNING]") {
+				t.Fatalf("plain status or action meaning missing: %q", plain)
+			}
+			hasSGR := strings.Contains(raw, "\x1b["+menuYellow+"m")
+			if hasSGR == monochrome {
+				t.Fatalf("semantic color choice ignored NO_COLOR=%t: %q", monochrome, raw)
+			}
+		})
+	}
+}
+
+func TestTwentyFourColumnRealMenuManageNavigation(t *testing.T) {
+	for _, noColor := range []bool{false, true} {
+		t.Run(fmt.Sprintf("no_color=%t", noColor), func(t *testing.T) {
+			t.Setenv("TERM", "xterm-256color")
+			t.Setenv("CLICOLOR", "1")
+			old, present := os.LookupEnv("NO_COLOR")
+			_ = os.Unsetenv("NO_COLOR")
+			t.Cleanup(func() {
+				if present {
+					_ = os.Setenv("NO_COLOR", old)
+				} else {
+					_ = os.Unsetenv("NO_COLOR")
+				}
+			})
+			if noColor {
+				t.Setenv("NO_COLOR", "1")
+			}
+			opts, backend, links := manageFixture(t, 1)
+			tty, done := startManageTTY(t, opts, 24)
+			tty.expect("Choose a task: ")
+			tty.send("3")
+			tty.expect("Choose tunnel number: ")
+			tty.send("1")
+			tty.expect("Choose an action: ")
+			// Navigate the exact sequence that exposed the physical defect:
+			// Status -> Connection details -> Diagnose, then leave safely.
+			tty.send("1")
+			tty.expect("[UNKNOWN]")
+			tty.expect("Enter to continue...")
+			tty.send("")
+			tty.expect("Choose an action: ")
+			tty.send("4")
+			tty.expect("TWO-SERVER")
+			tty.expect("MANUAL SETUP")
+			tty.expect("Enter to continue...")
+			tty.send("")
+			tty.expect("Choose an action: ")
+			tty.send("2")
+			tty.expect("FIVE-PING")
+			tty.expect("Enter to continue...")
+			tty.send("")
+			tty.expect("Choose an action: ")
+			tty.send("0")
+			tty.expect("Choose a task: ")
+			tty.send("8")
+			manageTTYDone(t, done, 0)
+			raw := tty.all
+			plain := strings.ReplaceAll(terminalColorSequence.ReplaceAllString(raw, ""), "\r", "")
+			var wide []string
+			for _, line := range strings.Split(plain, "\n") {
+				// Exempt only the exact standalone ID; a *longer line*
+				// containing a short IP or ID must still wrap as prose.
+				if len(line) > 24 && strings.TrimSpace(line) != string(links[0].ID) {
+					wide = append(wide, line)
+				}
+			}
+			if len(wide) != 0 {
+				t.Fatalf("real 24-column Manage prose overflows (%d rows), examples=%q", len(wide), wide[:min(len(wide), 5)])
+			}
+			if !backend.present[links[0].ID] {
+				t.Fatal("read-only Manage traversal modified saved Link")
+			}
+		})
+	}
+}
+
+// Independently exercise semantic WARNING/UNKNOWN health lines where the
+// 16-column status prefix itself exceeds a 24-column terminal. Copyable
+// standalone tokens may be longer, but prose must not overflow.
+func TestTwentyFourColumnHealthWarningsAndAllBackendDetails(t *testing.T) {
+	for _, noColor := range []bool{false, true} {
+		t.Run(fmt.Sprintf("no_color=%t", noColor), func(t *testing.T) {
+			t.Setenv("TERM", "xterm-256color")
+			t.Setenv("CLICOLOR", "1")
+			old, present := os.LookupEnv("NO_COLOR")
+			_ = os.Unsetenv("NO_COLOR")
+			t.Cleanup(func() {
+				if present {
+					_ = os.Setenv("NO_COLOR", old)
+				} else {
+					_ = os.Unsetenv("NO_COLOR")
+				}
+			})
+			if noColor {
+				t.Setenv("NO_COLOR", "1")
+			}
+			master, slave := openMenuPTY(t)
+			if err := unix.IoctlSetWinsize(int(slave.Fd()), unix.TIOCSWINSZ, &unix.Winsize{Row: 40, Col: 24}); err != nil {
+				t.Fatal(err)
+			}
+			menuHealthLine(slave, "Ping", "WARNING", "0/5 replies (100% packet loss)")
+			menuHealthLine(slave, "Peer traffic", "UNKNOWN", "Not independently measured")
+			menuHealthLine(slave, "Suggested MTU", "WARNING", "1300 bytes (conservative estimate; not peer-confirmed)")
+			var notes []string
+			for _, kind := range []domain.Backend{
+				domain.BackendGRE, domain.BackendIPIP, domain.BackendL2TPv3,
+				domain.BackendWireGuard, domain.BackendIPsec, domain.BackendWireGuardWSS,
+				domain.BackendWireGuardQUIC, domain.BackendMASQUE,
+			} {
+				link := fixtureReadLink("lnk_1234567890abcdef1234567890abcdef",
+					"10.20.30.0/31", "10.20.30.1/31", kind)
+				printManualConnectionDetails(slave, link)
+				notes = append(notes, string(kind))
+			}
+			fmt.Fprintln(slave, "END-CHECK-24")
+			raw := readMenuPTYUntil(t, master, "END-CHECK-24")
+			plain := strings.ReplaceAll(terminalColorSequence.ReplaceAllString(raw, ""), "\r", "")
+			for _, line := range strings.Split(plain, "\n") {
+				if len(line) > 24 && strings.TrimSpace(line) != "lnk_1234567890abcdef1234567890abcdef" {
+					t.Fatalf("24-col status/backend prose overflow: len=%d line=%q", len(line), line)
+				}
+			}
+			for _, needed := range []string{"[WARNING]", "[UNKNOWN]", "PEER", "connection", "1300", "END-CHECK-24"} {
+				if !strings.Contains(plain, needed) {
+					t.Fatalf("missing status or original content %q", needed)
+				}
+			}
+			if hasSGR := strings.Contains(raw, "\x1b["+menuYellow+"m"); hasSGR == noColor {
+				t.Fatal("24-column status did not honor semantic colors / NO_COLOR")
+			}
+		})
+	}
 }

@@ -177,3 +177,30 @@ func TestRestoreContinuesThroughUnsupportedBackendInEitherOrder(t *testing.T) {
 		})
 	}
 }
+
+// The source snapshot can be sorted by Link ID with a nested child *before*
+// its private-address underlay parent; restore must use the actual topology.
+func TestRestoreDependencyOrderNestedParentBeforeChildren(t *testing.T) {
+	parent := linkFor(t, "parent", "10.80.181.0/31", "10.80.181.1/31")
+	parent.ID = domain.LinkID("lnk_ffffffffffffffffffffffffffffffff")
+	parent.Backend, parent.Encapsulation = domain.BackendMASQUE, domain.EncapTLS
+	child := linkFor(t, "child", "10.80.182.0/31", "10.80.182.1/31")
+	child.ID = domain.LinkID("lnk_00000000000000000000000000000001")
+	child.Underlay.Local = parent.Addresses.Local.Addr()
+	child.Underlay.Peer = parent.Addresses.Peer.Addr()
+	grandchild := linkFor(t, "grandchild", "10.80.183.0/31", "10.80.183.1/31")
+	grandchild.ID = domain.LinkID("lnk_00000000000000000000000000000002")
+	grandchild.Underlay.Local = child.Addresses.Local.Addr()
+	grandchild.Underlay.Peer = child.Addresses.Peer.Addr()
+	independent := linkFor(t, "sibling", "10.80.184.0/31", "10.80.184.1/31")
+	ordered := restoreDependencyOrder([]state.LinkRecord{
+		{Desired: grandchild}, {Desired: child}, {Desired: independent}, {Desired: parent},
+	})
+	if len(ordered) != 4 ||
+		ordered[0].Desired.ID != independent.ID ||
+		ordered[1].Desired.ID != parent.ID ||
+		ordered[2].Desired.ID != child.ID ||
+		ordered[3].Desired.ID != grandchild.ID {
+		t.Fatalf("restored descendants before producers or reordered independent sibling: %+v", ordered)
+	}
+}

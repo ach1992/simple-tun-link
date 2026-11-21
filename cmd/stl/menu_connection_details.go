@@ -34,6 +34,18 @@ func askManualGREKey(p createPrompts) (domain.GREOptions, error) {
 	}
 }
 
+// Render manual explanations unchanged for ordinary terminals and redirected
+// output. Only narrow real PTYs wrap their human prose at word boundaries;
+// saved addresses, keys and other individual tokens are never rewritten.
+func menuConnectionDetail(out io.Writer, format string, args ...any) {
+	line := strings.TrimSuffix(fmt.Sprintf(format, args...), "\n")
+	if cols := menuColumns(out); cols >= 24 && len(line) > cols && !menuCopyable(line) {
+		menuProse(out, line)
+		return
+	}
+	fmt.Fprintln(out, line)
+}
+
 // Read-only copy block derived from the canonical persisted Link (never
 // external network observations). The values are a two-server plan, not
 // evidence that the remote host is configured or reachable. No credential
@@ -49,46 +61,46 @@ func printManualConnectionDetails(out io.Writer, l domain.Link) {
 	menuField(out, "Local MTU", humanMTUPolicy(l.MTU))
 
 	menuSection(out, "Manual setup on the other server")
-	fmt.Fprintf(out, "  Other server's PEER connection IP: %s  (THIS server)\n", l.Underlay.Local)
-	fmt.Fprintf(out, "  Other server's OWN tunnel IP:      %s\n", l.Addresses.Peer.Addr())
-	fmt.Fprintf(out, "  Other server's PEER tunnel IP:     %s\n", l.Addresses.Local.Addr())
-	fmt.Fprintf(out, "  Reverse the exact saved prefixes: local %s, peer %s.\n", l.Addresses.Peer, l.Addresses.Local)
+	menuConnectionDetail(out, "  Other server's PEER connection IP: %s  (THIS server)\n", l.Underlay.Local)
+	menuConnectionDetail(out, "  Other server's OWN tunnel IP:      %s\n", l.Addresses.Peer.Addr())
+	menuConnectionDetail(out, "  Other server's PEER tunnel IP:     %s\n", l.Addresses.Local.Addr())
+	menuConnectionDetail(out, "  Reverse the exact saved prefixes: local %s, peer %s.\n", l.Addresses.Peer, l.Addresses.Local)
 
 	switch l.Backend {
 	case domain.BackendGRE:
 		if l.GRE.KeyEnabled {
-			fmt.Fprintf(out, "  GRE receive key: %d (must match both sides; NOT encryption)\n", l.GRE.Key)
+			menuConnectionDetail(out, "  GRE receive key: %d (must match both sides; NOT encryption)\n", l.GRE.Key)
 		} else {
-			fmt.Fprintln(out, "  GRE receive key: none/unkeyed (press Enter at manual-key prompt)")
+			menuConnectionDetail(out, "  GRE receive key: none/unkeyed (press Enter at manual-key prompt)")
 		}
-		fmt.Fprintf(out, "  GRE TTL=%d TOS=%d PMTU enabled=%t checksum=%t sequence=%t\n",
+		menuConnectionDetail(out, "  GRE TTL=%d TOS=%d PMTU enabled=%t checksum=%t sequence=%t\n",
 			l.GRE.TTL, l.GRE.TOS, !l.GRE.DisablePMTUD, l.GRE.Checksum, l.GRE.Sequence)
 		if l.Encapsulation == domain.EncapNative {
-			fmt.Fprintln(out, "  OTHER server menu: Create tunnel -> 4 Manual -> 1 GRE Native.")
-			fmt.Fprintln(out, "  Carrier: IP protocol 47 (GRE), NOT TCP/UDP port 47.")
+			menuConnectionDetail(out, "  OTHER server menu: Create tunnel -> 4 Manual -> 1 GRE Native.")
+			menuConnectionDetail(out, "  Carrier: IP protocol 47 (GRE), NOT TCP/UDP port 47.")
 		} else {
-			fmt.Fprintf(out, "  UDP encapsulation: %s, configured receive UDP port: %d\n", l.Encapsulation, l.GRE.UDPPort)
-			fmt.Fprintln(out, "  For FOU/GUE use My tunnels -> Share Setup Link (manual menu is Native only).")
+			menuConnectionDetail(out, "  UDP encapsulation: %s, configured receive UDP port: %d\n", l.Encapsulation, l.GRE.UDPPort)
+			menuConnectionDetail(out, "  For FOU/GUE use My tunnels -> Share Setup Link (manual menu is Native only).")
 		}
-		fmt.Fprintln(out, "  GRE traffic is NOT encrypted or authenticated.")
+		menuConnectionDetail(out, "  GRE traffic is NOT encrypted or authenticated.")
 	case domain.BackendL2TPv3:
-		fmt.Fprintln(out, "  L2TPv3 Direct-IP uses IPv4 protocol 115; it is NOT TCP/UDP port 115.")
-		fmt.Fprintln(out, "  Pair the OTHER server with My tunnels -> Share Setup Link / Import.")
-		fmt.Fprintln(out, "  Both endpoints share Link ID for reciprocal tunnel/session IDs and private Ethernet neighbors.")
-		fmt.Fprintln(out, "  L2TPv3 is plaintext and unauthenticated; verify actual peer traffic.")
+		menuConnectionDetail(out, "  L2TPv3 Direct-IP uses IPv4 protocol 115; it is NOT TCP/UDP port 115.")
+		menuConnectionDetail(out, "  Pair the OTHER server with My tunnels -> Share Setup Link / Import.")
+		menuConnectionDetail(out, "  Both endpoints share Link ID for reciprocal tunnel/session IDs and private Ethernet neighbors.")
+		menuConnectionDetail(out, "  L2TPv3 is plaintext and unauthenticated; verify actual peer traffic.")
 	case domain.BackendIPIP:
 		if l.Encapsulation == domain.EncapNative {
-			fmt.Fprintln(out, "  OTHER server menu: Create tunnel -> 4 Manual -> 2 IPIP Native.")
-			fmt.Fprintln(out, "  Carrier: IP protocol 4 (IPIP), NOT TCP/UDP port 4.")
+			menuConnectionDetail(out, "  OTHER server menu: Create tunnel -> 4 Manual -> 2 IPIP Native.")
+			menuConnectionDetail(out, "  Carrier: IP protocol 4 (IPIP), NOT TCP/UDP port 4.")
 		} else {
 			port, _ := ipipbackend.UDPPort(l)
-			fmt.Fprintf(out, "  UDP encapsulation: %s, receive UDP port: %d (exact peer match)\n", l.Encapsulation, port)
+			menuConnectionDetail(out, "  UDP encapsulation: %s, receive UDP port: %d (exact peer match)\n", l.Encapsulation, port)
 			menuProse(out, "  For IPIP FOU/GUE use My tunnels -> Share Setup Link; the peer receives the same UDP port.")
 		}
-		fmt.Fprintln(out, "  IPIP traffic is NOT encrypted or authenticated.")
+		menuConnectionDetail(out, "  IPIP traffic is NOT encrypted or authenticated.")
 	case domain.BackendWireGuard:
 		menuProse(out, "  WireGuard: encrypted UDP; do NOT assume these addresses alone will pair the other server.")
-		fmt.Fprintf(out, "  THIS server UDP listen port: %d | OTHER server UDP listen port: %d\n", l.WireGuard.ListenPort, l.WireGuard.PeerPort)
+		menuConnectionDetail(out, "  THIS server UDP listen port: %d | OTHER server UDP listen port: %d\n", l.WireGuard.ListenPort, l.WireGuard.PeerPort)
 		menuCopyLine(out, "THIS server PUBLIC key", l.WireGuard.LocalPublicKey)
 		menuCopyLine(out, "OTHER server PUBLIC key", l.WireGuard.PeerPublicKey)
 		menuProse(out, "  The original protected receiver offer remains available via My tunnels -> Share -> SHOW.")
@@ -140,11 +152,11 @@ func printManualConnectionDetails(out io.Writer, l domain.Link) {
 		menuProse(out, "  If this server IMPORTED the Link, request the original offer from its creator; never regenerate active private keys.")
 		menuProse(out, "  Run Check connection for peer ICMP; Connection details alone do not prove traffic.")
 	case domain.BackendIPsec:
-		fmt.Fprintln(out, "  IPsec/IKEv2 uses an independent protected PSK and native-exclusive strongSwan.")
+		menuConnectionDetail(out, "  IPsec/IKEv2 uses an independent protected PSK and native-exclusive strongSwan.")
 		menuProse(out, "  Public details alone are insufficient: use My tunnels -> Share -> SHOW for the protected receiver offer.")
 		menuProse(out, "  An already staged/private receiver PSK cannot be exported from ordinary Link state.")
 	default:
-		fmt.Fprintln(out, "  This backend is not supported for manual setup; use its canonical Setup Link.")
+		menuConnectionDetail(out, "  This backend is not supported for manual setup; use its canonical Setup Link.")
 	}
 	menuNotice(out, "WARNING", "Saved settings are NOT a remote connectivity test. Verify both peers.")
 

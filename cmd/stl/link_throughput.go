@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"os/exec"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	wgbackend "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
+	"github.com/ach1992/simple-tun-link/internal/carrier/masque"
 	"github.com/ach1992/simple-tun-link/internal/diagnostics"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
@@ -113,7 +115,7 @@ func parseThroughputArgs(args []string) (domain.LinkID, int, bool, bool) {
 	return id, seconds, isJSON, true
 }
 
-func throughputMeasuredInterface(m linkDiagnostic) string {
+func throughputMeasuredInterface(m linkDiagnostic, desired domain.Backend) string {
 	switch r := m.report.(type) {
 	case diagnostics.GREReport:
 		return r.State.Interface
@@ -124,10 +126,18 @@ func throughputMeasuredInterface(m linkDiagnostic) string {
 	case diagnostics.IPsecReport:
 		return r.State.Interface
 	case diagnostics.Report:
-		// The only generic Report on this path is from exact-owner WSS
-		// diagnostics after scoped helper/guard/kernel WG + private
-		// interface/route preflight. No unverified Native WG inference.
-		name, err := wgbackend.InterfaceName(r.LinkID)
+		// Generic reports come from distinct managed carriers. Choose the
+		// device from the committed backend, not a guessed WireGuard name.
+		var name string
+		var err error
+		switch desired {
+		case domain.BackendMASQUE:
+			name, err = masque.AgentInterfaceName(r.LinkID)
+		case domain.BackendWireGuardWSS, domain.BackendWireGuardQUIC:
+			name, err = wgbackend.InterfaceName(r.LinkID)
+		default:
+			return ""
+		}
 		if err == nil {
 			return name
 		}
@@ -224,6 +234,35 @@ func linkThroughputWithContext(parent context.Context, args []string, out, errOu
 		return throughputFailure(out, errOut, asJSON, stlerr.CodeState,
 			"throughput_state_unavailable", "local desired state unavailable", "Repair local state access; no traffic was attempted.")
 	}
+	store := state.NewFileStore(root)
+	// Engine.InspectQUIC itself acquires the non-reentrant maintenance, Link
+	// and resource leases. Inspect first, then take the throughput leases and
+	// require a byte-for-byte equivalent committed owner before traffic.
+	var preflight *linkDiagnostic
+	var preflightRecord state.LinkRecord
+	if preliminary, loadErr := store.Load(ctx); loadErr == nil {
+		if candidate, present := preliminary.Find(id); present && candidate.Desired.Backend == domain.BackendWireGuardQUIC {
+			if opts == nil {
+				initialized, initErr := productionRuntimeOptions()
+				if initErr != nil {
+					return throughputFailure(out, errOut, asJSON, stlerr.CodeState,
+						"throughput_backend_unavailable", "cannot initialize observational runtime", "Inspect backend prerequisites; no traffic was attempted.")
+				}
+				opts = initialized
+			}
+			observeCtx, done := context.WithTimeout(ctx, diagnoseOperationTimeout)
+			observed, observeErr := inspectLinkDiagnostic(observeCtx, candidate.Desired, *opts, 0)
+			expired := observeCtx.Err()
+			done()
+			if observeErr != nil || expired != nil || ctx.Err() != nil {
+				return throughputFailure(out, errOut, asJSON, stlerr.CodeInspect,
+					"throughput_identity_unverified", "owned Link identity or quality observation unavailable",
+					"Run link diagnose and resolve ownership/reachability problems before opting into throughput.")
+			}
+			preflightRecord = candidate
+			preflight = &observed
+		}
+	}
 	// Use the same order and exact claim as Engine: installation's shared
 	// maintenance gate first (production default root), then the per-Link
 	// lock. Holding it through the short iperf run prevents STL-driven
@@ -245,7 +284,6 @@ func linkThroughputWithContext(parent context.Context, args []string, out, errOu
 			"Wait for the selected Link lifecycle operation to finish; no traffic was attempted.")
 	}
 	defer unlockLink()
-	store := state.NewFileStore(root)
 	snapshot, err := store.Load(ctx)
 	if err != nil {
 		return throughputFailure(out, errOut, asJSON, stlerr.CodeState,
@@ -270,19 +308,29 @@ func linkThroughputWithContext(parent context.Context, args []string, out, errOu
 	if runner == nil {
 		runner = linux.ExecRunner{}
 	}
-	// A completed but unexpectedly slow inspection must not quietly consume
-	// the separate iperf3 budget. Keep the same 35-second per-Link limit
-	// enforced by standalone and all-Link read-only diagnostics.
-	diagnoseCtx, endDiagnose := context.WithTimeout(ctx, diagnoseOperationTimeout)
-	measurement, err := inspectLinkDiagnostic(diagnoseCtx, record.Desired, *opts, 0)
-	diagnoseErr := diagnoseCtx.Err()
-	endDiagnose()
-	if err != nil || diagnoseErr != nil || ctx.Err() != nil {
-		return throughputFailure(out, errOut, asJSON, stlerr.CodeInspect,
-			"throughput_identity_unverified", "owned Link identity or quality observation unavailable",
-			"Run link diagnose and resolve ownership/reachability problems before opting into throughput.")
+	// Non-QUIC diagnostics run under the throughput lease; QUIC was
+	// already inspected safely under Engine's separately acquired lease.
+	var measurement linkDiagnostic
+	if record.Desired.Backend == domain.BackendWireGuardQUIC {
+		if preflight == nil || !reflect.DeepEqual(preflightRecord, record) {
+			return throughputFailure(out, errOut, asJSON, stlerr.CodeConflict,
+				"throughput_state_changed", "committed QUIC identity changed since trusted inspection",
+				"Retry after the Link lifecycle stabilizes; no traffic was attempted.")
+		}
+		measurement = *preflight
+	} else {
+		diagnoseCtx, endDiagnose := context.WithTimeout(ctx, diagnoseOperationTimeout)
+		observed, inspectErr := inspectLinkDiagnostic(diagnoseCtx, record.Desired, *opts, 0)
+		diagnoseErr := diagnoseCtx.Err()
+		endDiagnose()
+		if inspectErr != nil || diagnoseErr != nil || ctx.Err() != nil {
+			return throughputFailure(out, errOut, asJSON, stlerr.CodeInspect,
+				"throughput_identity_unverified", "owned Link identity or quality observation unavailable",
+				"Run link diagnose and resolve ownership/reachability problems before opting into throughput.")
+		}
+		measurement = observed
 	}
-	iface := throughputMeasuredInterface(measurement)
+	iface := throughputMeasuredInterface(measurement, record.Desired.Backend)
 	if !safeThroughputInterface(iface) ||
 		measurement.quality.Status != diagnostics.QualityMeasured ||
 		!measurement.quality.Reachable {

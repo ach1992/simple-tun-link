@@ -10,22 +10,33 @@ import (
 
 	"github.com/ach1992/simple-tun-link/internal/diagnostics"
 	"github.com/ach1992/simple-tun-link/internal/domain"
-	"golang.org/x/sys/unix"
 )
 
 // All human health views consume existing read-only, versioned CLI reports.
 // They neither implement their own probes nor change machine CLI/JSON output.
 func menuHealthLine(out io.Writer, label, kind, value string) {
 	status := menuPaint(out, menuStatusRole(kind), "["+kind+"]")
-	if tty, ok := menuTerminal(out); ok {
-		// Account for the minimum 16-column label even when its text is
-		// shorter (Ping, MTU, etc.), plus spaces and the [STATUS] brackets.
-		visibleWidth := 2 + max(16, len(label)) + 1 + len(kind) + 2 + 2 + len(value)
-		if ws, err := unix.IoctlGetWinsize(int(tty.Fd()), unix.TIOCGWINSZ); err == nil && ws.Col > 0 &&
-			visibleWidth > int(ws.Col) && !menuCopyable(value) {
-			fmt.Fprintf(out, "  %-16s %s\n", label, status)
-			width := max(16, int(ws.Col)-6)
-			fmt.Fprintln(out, "      "+strings.ReplaceAll(wrapTerminalGuidance(value, width), "\n", "\n      "))
+	if cols := menuColumns(out); cols >= 24 {
+		// Count visible glyphs, not ANSI bytes. At 24 columns a padded
+		// label and [WARNING]/[UNKNOWN] cannot share the first row.
+		headingWidth := 2 + max(16, len(label)) + 1 + len(kind) + 2
+		if headingWidth+2+len(value) > cols {
+			if headingWidth <= cols {
+				fmt.Fprintf(out, "  %-16s %s\n", label, status)
+			} else {
+				menuNarrowProse(out, "  ", label, "")
+				fmt.Fprintf(out, "  %s\n", status)
+			}
+			// Exact copyable data is placed on its own line, never edited.
+			if menuCopyable(value) {
+				fmt.Fprintln(out, value)
+			} else {
+				indent := "      "
+				if cols <= 28 {
+					indent = "    "
+				}
+				menuNarrowProse(out, indent, value, "")
+			}
 			return
 		}
 	}

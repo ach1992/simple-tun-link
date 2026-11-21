@@ -231,7 +231,14 @@ func menuTunnelOption(out io.Writer, number, name, description string, report li
 		}
 	}
 	if narrow {
-		fmt.Fprintf(out, "  %s  %-20s %s\n      %s\n", optionNumber, name, coloredStatus, menuPaint(out, menuDim, description))
+		if cols := menuColumns(out); cols > 0 && cols <= 28 {
+			fmt.Fprintf(out, "  %s\n", optionNumber)
+			menuNarrowProse(out, "    ", name, "")
+			menuNarrowProse(out, "    ", label, role)
+			menuNarrowProse(out, "    ", description, menuDim)
+		} else {
+			fmt.Fprintf(out, "  %s  %-20s %s\n      %s\n", optionNumber, name, coloredStatus, menuPaint(out, menuDim, description))
+		}
 	} else {
 		fmt.Fprintf(out, "  %s  %-20s %s %s\n", optionNumber, name, coloredStatus, menuPaint(out, menuDim, description))
 	}

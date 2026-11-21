@@ -94,7 +94,7 @@ func TestWSSStatusAndMenuFivePingUseSameCanonicalActiveDiagnostics(t *testing.T)
 		report.Quality.PacketsSent != 5 || report.Quality.PacketsReceived != 5 || r.probes != 5 {
 		t.Fatalf("WSS active 5-ping CLI wrong: code=%d report=%+v stderr=%q probes=%d", code, report, errText, r.probes)
 	}
-	if bound := throughputMeasuredInterface(linkDiagnostic{report: report}); bound != iface {
+	if bound := throughputMeasuredInterface(linkDiagnostic{report: report}, domain.BackendWireGuardWSS); bound != iface {
 		t.Fatalf("WSS private throughput binding lost verified interface identity: %q != %q", bound, iface)
 	}
 	var menu, menuErr bytes.Buffer
