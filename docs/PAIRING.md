@@ -6,6 +6,27 @@ This is the **wire-format and compatibility contract** for
 [SECURITY.md](SECURITY.md). Pairing decodes and inverts
 configuration; it must **never mutate a host by previewing**.
 
+## Spoof offline handoff (distinct contract; development only)
+
+Issue #262 introduces the separate sensitive `stl-spoof-v1.` Setup Code.
+It is a **single manual A-to-B transfer**, not a second normal export/answer
+or a modified legacy `stl://` schema. It contains the unpredictable 256-bit
+bootstrap secret, the creator's **public** X25519 identity, one stable Link
+ID, both known **real** reachable IPv4 receive endpoints/ports, and the
+two private IPv4 addresses. Both sides keep their long-term private keys
+locally; B generates its own on Import. The peer Source candidate lists
+are intentionally never exchanged in the offer. Generic JSON, Status,
+Diagnose and logs must not expose this code.
+
+Noise `XKpsk0_25519_ChaChaPoly_SHA256` establishes fresh in-band sessions.
+The creator's first accepted authenticated enrollment durably pins B's
+public identity; later sessions must match it. A stolen **valid** Code before
+first enrollment can win that first binding; the protocol cannot infer a
+leak. Explicit revoke/reissue for an unbound offer and same-Link recovery
+without a second transfer are required before the feature is accepted.
+The current parser and crypto core are source-only, not a shipped working
+Create/Import/TUN workflow.
+
 ## Why a versioned Quick Link?
 
 STL uses a simple one-step `quick` offer so that the receiving

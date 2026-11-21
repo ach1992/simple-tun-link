@@ -199,6 +199,35 @@ Do not introduce speculative framework packages simply to mirror a diagram.
 
 Keep implementation private under internal/ until a real second consumer demonstrates a stable public Go API requirement.
 
+### Spoof-specific Direct TUN extension (Issue #262; not yet shipped)
+
+Unlike native GRE/IPIP and optional WireGuard Carriers, the approved Spoof
+provider needs an explicit per-Link Linux TUN and a **vetted authenticated
+encrypted userspace packet path**. It is an exception for this method only,
+not a general second Engine or replacement for existing native paths.
+
+The versioned `stl-spoof-v1` confidential offline offer carries a bootstrap
+secret, the creator's public identity, the exact **real** advertised endpoints
+and the ordered private IPv4 pair; it never carries either side's private
+identity. Recipient B generates its private identity locally. Noise
+`XKpsk0_25519_ChaChaPoly_SHA256` authenticates in-band on the same discovered
+path. Creator A durably binds B's public identity under canonical Engine
+locks after authenticated completion, and refuses silent re-binding. The
+source-IP candidates are local-only, re-read on recovery, and independent per
+direction. The forged outer source is *not* the reply destination; each
+packet targets the configured real peer endpoint.
+
+Authenticated handshake, bilateral delivery and verified private IP
+application traffic are **distinct evidence stages**. A locally created
+pending service and a successful send do not imply `CONNECTED`.
+Network adjustments, when genuinely required, must be inspected,
+link-attributed, reversible and lifecycle-owned. Normal STL real-server
+runtime must not contain laboratory or public/production host restrictions;
+the current Master's permission to execute tests only in owned private
+environments is a separate execution gate. End-to-end managed TUN, actual
+private ICMP/TCP/UDP, downtime recovery, reboot and Remove remain incomplete
+until proven by Issue #262. Existing release behavior is unchanged.
+
 ## 4. Control plane vs data plane
 
 Go owns the control plane. Native backends own packet movement.
