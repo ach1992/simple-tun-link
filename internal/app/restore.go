@@ -9,6 +9,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 )
 
@@ -100,7 +101,7 @@ func (e *Engine) RestoreAll(ctx context.Context) ([]Result, error) {
 
 	results := make([]Result, 0, len(snapshot.Links))
 	var perLinkFailures []error
-	for _, record := range snapshot.Links {
+	for _, record := range restoreDependencyOrder(snapshot.Links) {
 		if record.WSSSupersededBy != "" {
 			// A superseded original is retained as protected State, not as a
 			// desired active service. This applies even after a trusted new
@@ -149,6 +150,66 @@ func (e *Engine) RestoreAll(ctx context.Context) ([]Result, error) {
 			fmt.Sprintf("%d independent Link(s) could not be restored", len(perLinkFailures)), errors.Join(perLinkFailures...))
 	}
 	return results, nil
+}
+
+// Restore the underlay producer before any Link that routes through its
+// private endpoints, regardless of lexicographic Link ID. A parent MASQUE TUN
+// may change kernel ifindex on restart; restoring a child first would
+// otherwise bind its FOU/GUE receive mapping to a disappearing interface.
+// Independent siblings retain their saved order. Impossible dependency cycles
+// are left to the normal per-Link validation rather than blocking siblings.
+func restoreDependencyOrder(saved []state.LinkRecord) []state.LinkRecord {
+	type endpoints struct {
+		local, peer string
+	}
+	parents := make(map[endpoints][]int, len(saved))
+	for i, record := range saved {
+		own := record.Desired.Addresses
+		if own.Local.IsValid() && own.Peer.IsValid() {
+			key := endpoints{local: own.Local.Addr().String(), peer: own.Peer.Addr().String()}
+			parents[key] = append(parents[key], i)
+		}
+	}
+	degrees := make([]int, len(saved))
+	children := make([][]int, len(saved))
+	for i, record := range saved {
+		underlay := record.Desired.Underlay
+		key := endpoints{local: underlay.Local.String(), peer: underlay.Peer.String()}
+		for _, producer := range parents[key] {
+			if producer == i || saved[producer].WSSSupersededBy != "" {
+				continue
+			}
+			degrees[i]++
+			children[producer] = append(children[producer], i)
+		}
+	}
+	ordered := make([]state.LinkRecord, 0, len(saved))
+	done := make([]bool, len(saved))
+	for range saved {
+		ready := -1
+		for i := range saved {
+			if !done[i] && degrees[i] == 0 {
+				ready = i
+				break
+			}
+		}
+		if ready < 0 {
+			// Cyclic or otherwise impossible saved topology: keep independent
+			// work done and allow Engine validation to reject each bad Link.
+			for i, record := range saved {
+				if !done[i] {
+					ordered = append(ordered, record)
+				}
+			}
+			break
+		}
+		done[ready] = true
+		ordered = append(ordered, saved[ready])
+		for _, child := range children[ready] {
+			degrees[child]--
+		}
+	}
+	return ordered
 }
 
 // restorePersisted holds the per-Link lock while refreshing committed intent.

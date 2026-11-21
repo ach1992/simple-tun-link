@@ -1342,3 +1342,90 @@ func TestGRERemoveOwnedTunnelWithoutUnderlayRoute(t *testing.T) {
 		})
 	}
 }
+
+// The literal "ifNN" rendering is produced by iproute2 when the original
+// MASQUE TUN ifindex vanished, not an ordinary interface rename. A committed
+// port claim permits repair; an unowned lookalike never does.
+func TestGREOwnedFOURebindAfterParentIfindexReplacement(t *testing.T) {
+	for _, encap := range []domain.Encapsulation{domain.EncapFOU, domain.EncapGUE} {
+		t.Run(string(encap), func(t *testing.T) {
+			link := testLink()
+			link.Encapsulation, link.GRE.UDPPort = encap, 54199
+			name, _ := InterfaceName(link.ID)
+			runner, firewall := &fakeRunner{link: link, name: name}, &fakeFirewall{}
+			b := newTestBackend(t, runner, firewall, fakeCollisions{})
+			ctx := context.Background()
+			initial := core.Request{Operation: core.OperationEnsure, Link: link}
+			obs, err := b.Inspect(ctx, link)
+			if err != nil {
+				t.Fatal(err)
+			}
+			first, err := b.Plan(ctx, initial, obs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := b.Validate(ctx, initial, obs, first); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := b.Apply(ctx, initial, obs, first); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := b.Verify(ctx, initial); err != nil {
+				t.Fatal(err)
+			}
+			owned := first.Resources()
+			// Simulate the actual iproute2 orphan rendering after the MASQUE
+			// parent TUN vanishes, and the new parent route selects eth0.
+			runner.mappings[0].Device = "if2147483647"
+			restore := core.Request{Operation: core.OperationEnsure, Prior: &link, Link: link, OwnedResources: owned}
+			obs, err = b.Inspect(ctx, link)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := b.Plan(ctx, core.Request{Operation: core.OperationEnsure, Link: link}, obs); stlerr.CodeOf(err) != stlerr.CodeConflict {
+				t.Fatalf("unowned orphan port accepted: %v", err)
+			}
+			candidate, err := b.Plan(ctx, restore, obs)
+			if err != nil {
+				t.Fatalf("owned orphan rejected: %v", err)
+			}
+			if err := b.Validate(ctx, restore, obs, candidate); err != nil {
+				t.Fatal(err)
+			}
+			if !candidate.(plan).fouRebind || !candidate.(plan).fouChange {
+				t.Fatal("stale-ifindex rebind not planned")
+			}
+			start := len(runner.commands)
+			if _, err := b.Apply(ctx, restore, obs, candidate); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := b.Verify(ctx, restore); err != nil {
+				t.Fatal(err)
+			}
+			if len(runner.mappings) != 1 || runner.mappings[0].Device != "eth0" {
+				t.Fatalf("stale mapping not rebound: %+v", runner.mappings)
+			}
+			commands := strings.Join(runner.commands[start:], "\n")
+			if !strings.Contains(commands, "dev if2147483647") || !strings.Contains(commands, "dev eth0") ||
+				strings.Index(commands, "fou del port") > strings.Index(commands, "fou add port") {
+				t.Fatalf("old ifindex not retired before new mapping: %s", commands)
+			}
+			runner.mappings[0].Device = "if2147483647"
+			remove := core.Request{Operation: core.OperationRemove, Prior: &link, Link: link, OwnedResources: owned}
+			obs, _ = b.Inspect(ctx, link)
+			removal, err := b.Plan(ctx, remove, obs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := b.Validate(ctx, remove, obs, removal); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := b.Apply(ctx, remove, obs, removal); err != nil {
+				t.Fatal(err)
+			}
+			if len(runner.mappings) != 0 {
+				t.Fatal("orphan receive mapping survived Remove")
+			}
+		})
+	}
+}

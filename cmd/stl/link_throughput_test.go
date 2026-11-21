@@ -9,9 +9,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ach1992/simple-tun-link/internal/app"
 	"github.com/ach1992/simple-tun-link/internal/backend"
+	masquebackend "github.com/ach1992/simple-tun-link/internal/backend/masque"
+	wgbackend "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
+	"github.com/ach1992/simple-tun-link/internal/carrier/masque"
+	"github.com/ach1992/simple-tun-link/internal/diagnostics"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/linux"
+	"github.com/ach1992/simple-tun-link/internal/quichelper"
 	"github.com/ach1992/simple-tun-link/internal/state"
 )
 
@@ -312,5 +318,193 @@ func TestThroughputVersionFailureRedactedAndNoUnboundFallback(t *testing.T) {
 		!strings.Contains(out, "throughput_server_unavailable") ||
 		strings.Contains(out+errText, "secret") {
 		t.Fatalf("client failure was retried or leaked: %d %s %s", code, out, errText)
+	}
+}
+
+// A generic quality report lacks a device name; committed backend identity
+// must disambiguate the MASQUE TUN from the WSS/QUIC WireGuard interface.
+func TestThroughputMASQUEBoundInterfaceUsesManagedTUN(t *testing.T) {
+	id := domain.LinkID("lnk_1234567890abcdef1234567890abcdef")
+	name, err := masque.AgentInterfaceName(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := linkDiagnostic{report: diagnostics.Report{LinkID: id}}
+	if got := throughputMeasuredInterface(report, domain.BackendMASQUE); got != name {
+		t.Fatalf("MASQUE selected %q, want TUN %q", got, name)
+	}
+	wgName, _ := wgbackend.InterfaceName(id)
+	if got := throughputMeasuredInterface(report, domain.BackendWireGuardQUIC); got != wgName {
+		t.Fatalf("QUIC lost WG device binding: %q", got)
+	}
+	if got := throughputMeasuredInterface(report, domain.BackendGRE); got != "" {
+		t.Fatalf("generic report adopted an unrelated GRE device: %q", got)
+	}
+}
+
+// Induce a committed-state change only after the final quality probe, when
+// canonical QUIC inspection has already completed but before throughput
+// acquires its traffic lease and checks the saved owner again.
+type postProbeDriftRunner struct {
+	*localWSSHealthRunner
+	afterFifth func(context.Context) error
+	fired      bool
+}
+
+func (r *postProbeDriftRunner) Run(ctx context.Context, name string, args ...string) (linux.CommandResult, error) {
+	result, err := r.localWSSHealthRunner.Run(ctx, name, args...)
+	return r.triggerDrift(ctx, result, err)
+}
+
+func (r *postProbeDriftRunner) RunBounded(ctx context.Context, limits linux.CaptureLimits, name string, args ...string) (linux.CommandResult, error) {
+	result, err := r.localWSSHealthRunner.RunBounded(ctx, limits, name, args...)
+	return r.triggerDrift(ctx, result, err)
+}
+
+func (r *postProbeDriftRunner) triggerDrift(ctx context.Context, result linux.CommandResult, err error) (linux.CommandResult, error) {
+	if err == nil && !r.fired && r.probes == diagnostics.DefaultQualitySamples && r.afterFifth != nil {
+		r.fired = true
+		if mutationErr := r.afterFifth(ctx); mutationErr != nil {
+			return linux.CommandResult{}, mutationErr
+		}
+	}
+	return result, err
+}
+
+func TestQUICThroughputAvoidsNestedEngineLockAndDetectsStateDrift(t *testing.T) {
+	for _, changeState := range []bool{false, true} {
+		t.Run(fmt.Sprintf("change_state=%t", changeState), func(t *testing.T) {
+			opts, offer, _, _ := quicSavedUIFixture(t)
+			link := offer.Sender
+			iface, _ := wgbackend.InterfaceName(link.ID)
+			runner := &postProbeDriftRunner{localWSSHealthRunner: &localWSSHealthRunner{
+				addr: link.Addresses.Local.Addr().String(),
+				peer: link.Addresses.Peer.Addr().String(), iface: iface,
+				pubkey: link.WireGuard.LocalPublicKey, listenPort: link.WireGuard.ListenPort}}
+			tool := &throughputFakeTool{output: goodIperfJSON, versionOutput: "iperf 3.16 (cJSON 1.7.15)\n"}
+			opts.probeRunner, opts.throughputRunner = runner, tool
+			unlocked := false
+			opts.quicObserver = func(ctx context.Context, id domain.LinkID) (app.QUICInspection, error) {
+				if id != link.ID {
+					t.Fatal("wrong observed owner")
+				}
+				leaseCtx, cancel := context.WithTimeout(ctx, 150*time.Millisecond)
+				defer cancel()
+				release, err := state.NewLockManager(opts.stateRoot).Acquire(leaseCtx,
+					[]domain.ResourceClaim{{Kind: "stl-link", Key: string(id)}})
+				if err != nil {
+					return app.QUICInspection{}, fmt.Errorf("QUIC observer blocked by throughput's own lease: %w", err)
+				}
+				unlocked = true
+				if err := release(); err != nil {
+					return app.QUICInspection{}, err
+				}
+
+				return app.QUICInspection{Interface: iface, IfIndex: 77,
+					KernelPresent: true, GuardActive: true, HelperActive: true, HelperLoaded: true}, nil
+			}
+			opts.quicHelperObserver = func(context.Context, domain.Link) (quichelper.HelperDiagnostics, error) {
+				return quichelper.HelperDiagnostics{
+					GuardObserved: true, HelperObserved: true, GuardPresent: true,
+					HelperPresent: true, HelperLoaded: true, State: "active",
+					Authentication: "not_observed", Handshake: "not_observed",
+					MaterialState: "verified", JournalState: "observed"}, nil
+			}
+			runner.afterFifth = func(ctx context.Context) error {
+				if !changeState {
+					return nil
+				}
+				return state.NewFileStore(opts.stateRoot).Update(ctx, func(snapshot *state.Snapshot) error {
+					record, found := snapshot.Find(link.ID)
+					if !found {
+						return errors.New("saved QUIC Link missing")
+					}
+					record.Desired.DisplayName = "concurrent-identity-change"
+					snapshot.Upsert(record)
+					return nil
+				})
+			}
+			tool.onCall = func() {
+				leaseCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+				defer cancel()
+				release, err := state.NewLockManager(opts.stateRoot).Acquire(leaseCtx,
+					[]domain.ResourceClaim{{Kind: "stl-link", Key: string(link.ID)}})
+				if release != nil {
+					_ = release()
+				}
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Errorf("throughput traffic is not protected by Link lease: %v", err)
+				}
+			}
+			code, output, stderr := callThroughput([]string{
+				"link", "throughput", string(link.ID), "--confirm", string(link.ID), "--json"}, opts)
+			if !unlocked {
+				t.Fatal("canonical QUIC observer never acquired own lease")
+			}
+			if changeState {
+				if code == 0 || !strings.Contains(output, "throughput_state_changed") || tool.calls != 0 {
+					t.Fatalf("changed state launched client: code=%d output=%s calls=%d stderr=%s",
+						code, output, tool.calls, stderr)
+				}
+			} else {
+				if code != 0 || tool.calls != 1 || runner.probes != 5 ||
+					!strings.Contains(strings.Join(tool.args, " "), "--bind-dev "+iface) {
+					t.Fatalf("QUIC bound throughput failed: code=%d output=%s calls=%d probes=%d args=%v stderr=%s",
+						code, output, tool.calls, runner.probes, tool.args, stderr)
+				}
+			}
+		})
+	}
+}
+
+// Exercise the complete operator CLI preflight, including committed identity,
+// the owned MASQUE Host inspection, exact /32 private routing, five bounded
+// probes and the eventual iperf3 --bind-dev TUN argument.
+type masqueThroughputProbeRunner struct{ *localWSSHealthRunner }
+
+func (r *masqueThroughputProbeRunner) Run(ctx context.Context, name string, args ...string) (linux.CommandResult, error) {
+	if name == "ip" && strings.Join(args, " ") == "-4 -json address show dev "+r.iface {
+		return linux.CommandResult{Stdout: []byte(fmt.Sprintf(
+			"[{\"ifindex\":44,\"ifname\":%q,\"mtu\":1400,\"flags\":[\"UP\"],\"addr_info\":[{\"family\":\"inet\",\"local\":%q,\"prefixlen\":32}]}]",
+			r.iface, r.addr))}, nil
+	}
+	return r.localWSSHealthRunner.Run(ctx, name, args...)
+}
+
+func TestThroughputMASQUEUsesExactManagedTUNEndToEnd(t *testing.T) {
+	req := masqueInputTestRequest()
+	link, _, err := req.makePair(req.LinkID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link.MASQUE.MaterialSHA256 = strings.Repeat("b", 64)
+	root := t.TempDir()
+	if err := state.NewFileStore(root).Update(context.Background(), func(snapshot *state.Snapshot) error {
+		snapshot.Upsert(state.LinkRecord{Desired: link, MASQUELastEffectNonce: strings.Repeat("c", 64)})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	impl, err := masquebackend.New(masqueStatusFixture{observed: masquebackend.HostObservation{
+		UnitExists: true, UnitOwned: true, UnitActive: true, InterfaceExists: true,
+		InterfaceOwned: true, InterfaceIndex: 44, LocalAddress: link.Addresses.Local,
+		PeerRoute: true, RuntimeReady: true,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	iface, _ := masque.AgentInterfaceName(link.ID)
+	runner := &masqueThroughputProbeRunner{localWSSHealthRunner: &localWSSHealthRunner{
+		addr: link.Addresses.Local.Addr().String(), peer: link.Addresses.Peer.Addr().String(), iface: iface,
+	}}
+	tool := &throughputFakeTool{output: goodIperfJSON, versionOutput: "iperf 3.16 (cJSON 1.7.15)\n"}
+	opts := &runtimeOptions{stateRoot: root, backends: []backend.Backend{impl},
+		probeRunner: runner, throughputRunner: tool}
+	id := string(link.ID)
+	code, out, errText := callThroughput([]string{"link", "throughput", id, "--confirm", id, "--json"}, opts)
+	if code != 0 || errText != "" || tool.calls != 1 || runner.probes != 5 ||
+		!strings.Contains(strings.Join(tool.args, " "), "--bind-dev "+iface) {
+		t.Fatalf("MASQUE managed TUN throughput not verified: code=%d output=%s err=%s tool=%d probes=%d args=%v",
+			code, out, errText, tool.calls, runner.probes, tool.args)
 	}
 }

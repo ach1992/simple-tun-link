@@ -130,6 +130,8 @@ type plan struct {
 	route           linux.Route
 	firewallRule    linux.InboundFirewallRule
 	fouMapping      fouMapping
+	fouStaleMapping fouMapping
+	fouRebind       bool
 	fouManaged      bool
 	fouPresent      bool
 	resources       []domain.ResourceClaim
@@ -271,6 +273,21 @@ func (b *Backend) Plan(ctx context.Context, req core.Request, observed core.Obse
 	if mapping, managed := desiredFOUMapping(req.Link, route); managed {
 		exact, collision := mappingAtPort(obs.Mappings, mapping)
 		if collision {
+			// Never infer ownership from a matching UDP port or peer pair:
+			// only a previously committed STL Link may retire its old
+			// dead-ifindex mapping before rebinding to the new parent TUN.
+			if err := linux.RequireOwned(req.Link.ID, fouResourceClaim(req.Link), req.OwnedResources); err == nil {
+				stale, admissible, staleErr := staleFOUMappingAtPort(obs.Mappings, mapping)
+				if staleErr != nil {
+					return nil, fmt.Errorf("inspect old FOU/GUE interface index: %w", staleErr)
+				}
+				if admissible {
+					p.fouStaleMapping, p.fouRebind = stale, true
+					collision = false
+				}
+			}
+		}
+		if collision {
 			return nil, stlerr.New(stlerr.CodeConflict, "ipip_plan", string(req.Link.ID), string(req.Link.Backend), "IPIP FOU/GUE receive port is occupied by a different mapping")
 		}
 		p.fouMapping, p.fouManaged, p.fouPresent = mapping, true, exact
@@ -284,11 +301,11 @@ func (b *Backend) Plan(ctx context.Context, req core.Request, observed core.Obse
 		p.resources = desiredResources(req.Link, name, claim)
 		p.interfaceChange = !obs.Target.matches(req.Link, name)
 		p.firewallChange = !firewallPresent
-		p.fouChange = p.fouManaged && !p.fouPresent
+		p.fouChange = p.fouManaged && (!p.fouPresent || p.fouRebind)
 	case core.OperationRemove:
 		p.interfaceChange = obs.Target.Exists && obs.Target.Owner == req.Link.ID
 		p.firewallChange = firewallPresent
-		p.fouChange = p.fouManaged && p.fouPresent
+		p.fouChange = p.fouManaged && (p.fouPresent || p.fouRebind)
 	default:
 		return nil, fmt.Errorf("unsupported IPIP operation %q", req.Operation)
 	}
@@ -349,13 +366,18 @@ func (b *Backend) Validate(ctx context.Context, req core.Request, observed core.
 		return b.rejectForeignInterfaceReplacement(ctx, req.Link.ID, p.name)
 	}
 
+	if p.fouRebind {
+		if err := linux.RequireOwned(req.Link.ID, fouResourceClaim(req.Link), req.OwnedResources); err != nil {
+			return err
+		}
+	}
 	if p.fouPresent {
 		if err := linux.RequireOwned(req.Link.ID, fouResourceClaim(req.Link), req.OwnedResources); err != nil {
 			return stlerr.New(stlerr.CodeConflict, "ipip_validate", string(req.Link.ID), string(req.Link.Backend), "existing FOU/GUE receive mapping is not proven to belong to this Link")
 		}
 	}
 	claims := commonCollisionClaims(req.Link, p.name)
-	if p.fouPresent {
+	if p.fouPresent || p.fouRebind {
 		claims = filterClaimKind(claims, domain.ResourceUDPListenPort)
 	}
 	conflicts, err := b.collisions.Inspect(ctx, claims)

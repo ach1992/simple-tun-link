@@ -122,8 +122,29 @@ func menuRuleWidth(out io.Writer) int {
 }
 
 func menuSectionStyled(out io.Writer, title, role string) {
-	fmt.Fprintln(out, "\n"+menuPaint(out, role, strings.ToUpper(title)))
+	heading := strings.ToUpper(title)
+	if cols := menuColumns(out); cols > 0 && len(heading) > cols {
+		// Headings are human prose, unlike copyable tokens. Wrap at word
+		// boundaries *before* ANSI painting so escape bytes do not count as
+		// visible columns or split across terminal lines.
+		heading = wrapTerminalGuidance(heading, max(8, cols-2))
+	}
+	fmt.Fprintln(out, "\n"+menuPaint(out, role, heading))
 	fmt.Fprintln(out, menuPaint(out, menuDim, strings.Repeat("-", menuRuleWidth(out))))
+}
+
+// Preserve semantic colors only after short-terminal word wrapping. Never
+// insert line breaks into exact URL, Link ID, command or private Setup Link.
+func menuNarrowProse(out io.Writer, indent, value, role string) {
+	lines := []string{value}
+	if !menuCopyable(value) {
+		if cols := menuColumns(out); cols > len(indent)+8 {
+			lines = strings.Split(wrapTerminalGuidance(value, cols-len(indent)), "\n")
+		}
+	}
+	for _, line := range lines {
+		fmt.Fprintln(out, indent+menuPaint(out, role, line))
+	}
 }
 
 func menuOption(out io.Writer, number, title, description string) {
@@ -138,6 +159,7 @@ func menuOptionStyled(out io.Writer, number, title, description, role string) {
 	// Measure before styling: ANSI bytes would otherwise corrupt the
 	// length calculation. Exact links/commands stay unbroken.
 	cols := menuColumns(out)
+	rawDescription := description
 	copyable := menuCopyable(description)
 	stack := cols > 0 && (cols < 64 || 6+max(22, len(title))+1+len(description) > cols)
 	if stack && !copyable && cols > 24 {
@@ -148,6 +170,18 @@ func menuOptionStyled(out io.Writer, number, title, description, role string) {
 	}
 	entry := menuPaint(out, menuCyan, fmt.Sprintf("%2s", number))
 	if stack {
+		if cols > 0 && cols <= 28 {
+			fmt.Fprintf(out, "  %s\n", entry)
+			menuNarrowProse(out, "    ", title, role)
+			// Wrap source prose before applying SGR; copyable tokens are
+			// preserved exactly without inserted line breaks.
+			if copyable {
+				menuNarrowProse(out, "    ", rawDescription, "")
+			} else {
+				menuNarrowProse(out, "    ", rawDescription, menuDim)
+			}
+			return
+		}
 		fmt.Fprintf(out, "  %s  %s\n      %s\n", entry, menuPaint(out, role, title), description)
 		return
 	}

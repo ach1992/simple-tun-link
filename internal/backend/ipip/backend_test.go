@@ -759,3 +759,82 @@ func TestIPIPExplicitReceivePortPropagatesToLinuxIdentityAndClaims(t *testing.T)
 		}
 	}
 }
+
+func TestIPIPOwnedFOURebindAfterParentIfindexReplacement(t *testing.T) {
+	for _, encap := range []domain.Encapsulation{domain.EncapFOU, domain.EncapGUE} {
+		t.Run(string(encap), func(t *testing.T) {
+			link := testLink()
+			link.Encapsulation, link.IPIP.UDPPort = encap, 54299
+			name, _ := InterfaceName(link.ID)
+			runner, firewall := &fakeRunner{link: link, name: name}, &fakeFirewall{}
+			b := newTestBackend(t, runner, firewall, fakeCollisions{})
+			ctx := context.Background()
+			initial := core.Request{Operation: core.OperationEnsure, Link: link}
+			obs, err := b.Inspect(ctx, link)
+			if err != nil {
+				t.Fatal(err)
+			}
+			first, err := b.Plan(ctx, initial, obs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := b.Validate(ctx, initial, obs, first); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := b.Apply(ctx, initial, obs, first); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := b.Verify(ctx, initial); err != nil {
+				t.Fatal(err)
+			}
+			owned := first.Resources()
+			runner.mappings[0].Device = "if2147483647"
+			restore := core.Request{Operation: core.OperationEnsure, Prior: &link, Link: link, OwnedResources: owned}
+			obs, _ = b.Inspect(ctx, link)
+			if _, err := b.Plan(ctx, core.Request{Operation: core.OperationEnsure, Link: link}, obs); stlerr.CodeOf(err) != stlerr.CodeConflict {
+				t.Fatalf("unowned orphan port accepted: %v", err)
+			}
+			candidate, err := b.Plan(ctx, restore, obs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := b.Validate(ctx, restore, obs, candidate); err != nil {
+				t.Fatal(err)
+			}
+			if !candidate.(plan).fouRebind || !candidate.(plan).fouChange {
+				t.Fatal("stale-ifindex rebind not planned")
+			}
+			start := len(runner.commands)
+			if _, err := b.Apply(ctx, restore, obs, candidate); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := b.Verify(ctx, restore); err != nil {
+				t.Fatal(err)
+			}
+			if len(runner.mappings) != 1 || runner.mappings[0].Device != "eth0" {
+				t.Fatalf("stale mapping not rebound: %+v", runner.mappings)
+			}
+			commands := strings.Join(runner.commands[start:], "\n")
+			if !strings.Contains(commands, "dev if2147483647") || !strings.Contains(commands, "dev eth0") ||
+				strings.Index(commands, "fou del port") > strings.Index(commands, "fou add port") {
+				t.Fatalf("old ifindex not retired before new mapping: %s", commands)
+			}
+			runner.mappings[0].Device = "if2147483647"
+			remove := core.Request{Operation: core.OperationRemove, Prior: &link, Link: link, OwnedResources: owned}
+			obs, _ = b.Inspect(ctx, link)
+			removal, err := b.Plan(ctx, remove, obs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := b.Validate(ctx, remove, obs, removal); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := b.Apply(ctx, remove, obs, removal); err != nil {
+				t.Fatal(err)
+			}
+			if len(runner.mappings) != 0 {
+				t.Fatal("orphan receive mapping survived Remove")
+			}
+		})
+	}
+}

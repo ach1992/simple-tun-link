@@ -17,6 +17,7 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/backend"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 	"github.com/ach1992/simple-tun-link/internal/state"
+	"golang.org/x/sys/unix"
 )
 
 func manageFixture(t *testing.T, count int) (*runtimeOptions, *guidedTestBackend, []domain.Link) {
@@ -110,9 +111,18 @@ type manageTTY struct {
 	all     string
 }
 
-func startManageTTY(t *testing.T, opts *runtimeOptions) (*manageTTY, <-chan int) {
+func startManageTTY(t *testing.T, opts *runtimeOptions, widths ...uint16) (*manageTTY, <-chan int) {
 	t.Helper()
 	master, slave := openMenuPTY(t)
+	if len(widths) > 1 {
+		t.Fatal("at most one PTY width")
+	}
+	if len(widths) == 1 {
+		if err := unix.IoctlSetWinsize(int(slave.Fd()), unix.TIOCSWINSZ,
+			&unix.Winsize{Row: 38, Col: widths[0]}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	done := make(chan int, 1)
 	go func() { done <- runWithRuntimeInput([]string{"menu"}, slave, slave, slave, opts) }()
 	chunks := make(chan string, 64)

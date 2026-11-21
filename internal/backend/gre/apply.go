@@ -58,6 +58,18 @@ func (b *Backend) applyEnsure(ctx context.Context, req core.Request, obs observa
 		return errors.Join(errs...)
 	}
 
+	if p.fouRebind {
+		// The prior orphan is already unusable: retiring it under exact
+		// committed ownership is the first repair effect. Never restore a
+		// reference to an interface that is known to be absent.
+		removed, err := b.deleteStaleFOU(ctx, p.fouStaleMapping)
+		if err != nil {
+			return rollback, fmt.Errorf("retire owned stale FOU/GUE receive mapping: %w", err)
+		}
+		if !removed {
+			return rollback, fmt.Errorf("owned stale FOU/GUE receive mapping changed before repair")
+		}
+	}
 	if p.fouChange {
 		changed, err := b.addFOU(ctx, p.fouMapping)
 		fouCreated = changed
@@ -91,7 +103,7 @@ func (b *Backend) applyRemove(ctx context.Context, req core.Request, _ observati
 	fouRemoved := false
 	rollback := func(undoCtx context.Context) error {
 		var errs []error
-		if fouRemoved {
+		if fouRemoved && !p.fouRebind {
 			_, err := b.addFOU(undoCtx, p.fouMapping)
 			errs = append(errs, err)
 		}
@@ -128,7 +140,17 @@ func (b *Backend) applyRemove(ctx context.Context, req core.Request, _ observati
 		interfaceRemoved = true
 	}
 	if p.fouChange {
-		removed, err := b.deleteFOU(ctx, p.fouMapping)
+		target := p.fouMapping
+		if p.fouRebind {
+			target = p.fouStaleMapping
+		}
+		var removed bool
+		var err error
+		if p.fouRebind {
+			removed, err = b.deleteStaleFOU(ctx, target)
+		} else {
+			removed, err = b.deleteFOU(ctx, target)
+		}
 		fouRemoved = removed
 		if err != nil {
 			return rollback, err

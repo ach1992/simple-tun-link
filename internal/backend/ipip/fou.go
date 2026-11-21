@@ -128,6 +128,34 @@ func mappingAtPort(mappings []fouMapping, desired fouMapping) (exact bool, colli
 	return exact, collision
 }
 
+// After an owned MASQUE underlay TUN is recreated, iproute2 exposes the
+// orphan receiver bound to its *vanished* ifindex as "dev ifNN" instead of the
+// new interface name. Only the exact committed receive tuple may be rebound.
+func staleFOUMappingAtPort(mappings []fouMapping, desired fouMapping) (fouMapping, bool, error) {
+	var stale fouMapping
+	count := 0
+	for _, found := range mappings {
+		if found.Port != desired.Port {
+			continue
+		}
+		count++
+		if count != 1 || found.Encapsulation != desired.Encapsulation ||
+			found.IPProto != desired.IPProto || found.Local != desired.Local ||
+			found.Peer != desired.Peer || found.PeerPort != desired.PeerPort {
+			return fouMapping{}, false, nil
+		}
+		vacant, err := linux.VacantFOUDevice(found.Device)
+		if err != nil {
+			return fouMapping{}, false, err
+		}
+		if !vacant {
+			return fouMapping{}, false, nil
+		}
+		stale = found
+	}
+	return stale, count == 1, nil
+}
+
 func (b *Backend) addFOU(ctx context.Context, m fouMapping) (bool, error) {
 	before, err := b.inspectFOU(ctx)
 	if err != nil {
@@ -161,6 +189,20 @@ func (b *Backend) addFOU(ctx context.Context, m fouMapping) (bool, error) {
 		return true, fmt.Errorf("verify created FOU/GUE receive mapping: expected exact mapping not found")
 	}
 	return true, nil
+}
+
+// Retire a confirmed stale receiver only after checking that the old
+// kernel interface index has not been reused since the Plan was made.
+// Normal Remove still supports valid device names beginning with "if".
+func (b *Backend) deleteStaleFOU(ctx context.Context, m fouMapping) (bool, error) {
+	vacant, err := linux.VacantFOUDevice(m.Device)
+	if err != nil {
+		return false, fmt.Errorf("inspect stale FOU/GUE device index: %w", err)
+	}
+	if !vacant {
+		return false, fmt.Errorf("stale FOU/GUE device index no longer vacant")
+	}
+	return b.deleteFOU(ctx, m)
 }
 
 func (b *Backend) deleteFOU(ctx context.Context, m fouMapping) (bool, error) {
