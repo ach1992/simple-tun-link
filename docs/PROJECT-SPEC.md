@@ -139,8 +139,7 @@ operator-initiated attempt; safety and credential protection still apply.
 
 ## Durable architecture and development principles
 
-- **Owner-selected Spoof Direct TUN exception (in development, not a
-  shipped carrier).** Spoof uses an authenticated, encrypted per-Link Linux
+- **Owner-selected Spoof Direct TUN exception (separate managed Carrier).** Spoof uses an authenticated, encrypted per-Link Linux
   TUN data path, and does **not** require WireGuard. It must reuse the
   existing Engine for the same Link identity, private addresses, durable
   offline-pending intent, recoverable owned resources, Restore/Remove and
@@ -150,10 +149,10 @@ operator-initiated attempt; safety and credential protection still apply.
   targets real Linux servers, not TEST-only namespaces. STL may manage
   necessary targeted host networking settings as an owned transaction
   after explicit Link consent; it must not damage foreign resources or
-  silently apply unrelated global changes. The current development
-  verification authorization is PRIVATE ISOLATED ONLY and does not grant
-  real-host deployment/public forged-source traffic. Exact scope and
-  required acceptance remain in [Issue #262](https://github.com/ach1992/simple-tun-link/issues/262).
+  silently apply unrelated global changes. Publication does not establish
+  public-WAN/provider reachability or authorize unscoped live experiments.
+  Exact accepted scope and outstanding field evidence remain in
+  [Issue #262](https://github.com/ach1992/simple-tun-link/issues/262).
 - **API-first, not API-server-first.** The canonical backend-neutral Engine
   must be usable independently of terminal screens. Versioned CLI/JSON and
   idempotent desired-state operations are first-class integration contracts.
