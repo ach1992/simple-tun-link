@@ -16,9 +16,10 @@ saved Link is **not** proof that packets reach its peer.
 | WireGuard over QUIC | QUIC/TLS plus kernel WireGuard; pinned Hysteria (Plain/mTLS, Plain/public HTTP/3, Salamander) | Yes |
 | IPsec | Native IKEv2/XFRM, ESP or NAT-T; gated host preparation | Yes |
 | MASQUE CONNECT-IP (v0.1.28+) | Native IPv4 TUN over HTTP/2 TLS/TCP; private mTLS default and optional request-bearer Public TLS where available in the installed build | Yes |
+| Spoof Direct TUN (v0.1.34+) | Authenticated private IPv4 over operator-selected Source IPv4 and outer packet profiles; underlay reachability is conditional | Yes (Noise) |
 
-**In development, NOT in the published Stable release:** the
-[Spoof Direct TUN Carrier](docs/SPOOF-CARRIER.md) (Issue #262) encrypts
+**Spoof Direct TUN (introduced in Stable v0.1.34):** the
+[Spoof Carrier](docs/SPOOF-CARRIER.md) (Issue #262) encrypts
 private IPv4 ICMP/TCP/UDP within one authenticated managed Link.
 Its `Auto` policy searches local operator-supplied Source IPv4 addresses
 and STL-owned raw outer packet formats: UDP, unsolicited ICMP Echo Reply,
@@ -27,21 +28,21 @@ TCP-looking RST packets, GRE-shaped, nested IPIP, bare/echo-shaped protocol
 different outbound Source/profile/explicitly paired real destination
 combinations, save authenticated working routes across restarts, continue
 low-rate discovery of verified backups while healthy, and retry previously
-working routes before exhaustive rediscovery. The unshipped successor
-candidate also provides lightweight measured quality selection, an
+working routes before exhaustive rediscovery. The Carrier also provides
+lightweight measured quality selection, an
 endpoint-local Auto/Manual private TUN MTU with authenticated DF evidence,
 and opt-in exact Link-owned IPv4 INPUT rules on supported iptables
 hosts (no global policy edits). Operators can instead pin a local outgoing profile.
 **All eight outer packet profiles have carried authenticated private
-ICMP/TCP/UDP in two isolated Linux containers and, on the newer
-unreleased candidate, two independent-kernel KVM virtual machines.**
+ICMP/TCP/UDP in two isolated Linux containers and
+two independent-kernel KVM virtual machines.**
 Each VM profile had its own confidential Setup Code, actual private
 bidirectional payload verification and exact Link cleanup. This is
 not proof of public WAN reachability, stealth or native GRE/IPIP/L2TP
 interoperability. In
 particular, TCP-looking packets are **not** a real established TCP connection
 and the protocol-115 option is **not** STL's existing native L2TPv3 Backend.
-Current Spoof development also separates authenticated, externally
+Spoof also separates authenticated, externally
 advertised endpoints from local NAT bind addresses, incoming from
 outgoing NICs, and outer transport from verified private application
 traffic. Linux reverse-path filtering is diagnosed read-only;
@@ -52,9 +53,12 @@ STL previews shared/global effects, requires approval and journals
 verified values for reboot recovery and owner-aware rollback;
 no shared Linux sysctl is silently changed.
 
-No Spoof code has been merged into Stable or deployed to real production
-servers. See the [operator guide](docs/SPOOF-CARRIER.md) for actual support,
-source-list capacity, exact testing and remaining gates.
+Stable v0.1.33 and earlier **do not contain Spoof**. Inclusion in a
+release does not prove successful public-WAN Spoof connectivity, which
+remains provider- and topology-dependent and is not yet established by
+physical field tests. No automatic production-server upgrade is implied.
+See the [operator guide](docs/SPOOF-CARRIER.md) for prerequisites,
+source-list capacity and limitations, and [field acceptance](https://github.com/ach1992/simple-tun-link/issues/262) for remaining evidence.
 
 Different transports have different kernel, firewall, network and optional
 helper requirements. STL does not automatically configure provider firewalls,

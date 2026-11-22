@@ -1,11 +1,12 @@
-# Spoof Direct TUN Carrier — development candidate (Issue #262)
+# Spoof Direct TUN Carrier — operator guide (Issue #262)
 
-> **Release gate:** This document describes source candidates on the
-> original `feature/262-spoof-carrier` and isolated
-> `feature/262-smart-20261122` branches. It is **not** a claim that
-> Stable `v0.1.33` has Spoof, or that public Internet anti-spoofing
-> restrictions can be bypassed.
-> Merge/release require independent review and the full Issue #262 acceptance.
+> **Availability and evidence:** Introduced in official Stable `v0.1.34`;
+> `v0.1.33` and earlier do not contain this Carrier. The implementation
+> passed exact-source independent reviews and isolated native-KVM acceptance.
+> Neither a published version nor private test success proves that any
+> specific ISP/provider accepts the selected outer source or that real
+> public-WAN bilateral Spoof connectivity works. Physical field acceptance
+> and optional deployment are tracked separately in [Issue #262](https://github.com/ach1992/simple-tun-link/issues/262).
 
 ## What is carried vs how the peers reach each other
 
@@ -771,7 +772,7 @@ authorization.
 
 ## PR #263 remediation acceptance — native KVM, 2026-11-22
 
-The unreleased remediation code at commit `70d8061` was independently
+At that historical review stage, remediation code at commit `70d8061` was independently
 compiled from the PR branch on the Test Server, then exercised only
 on the two dedicated `stl262-spoof-private` Debian 13 KVM guests.
 The base bridge had NAT disabled; test-specific NAT and secondary
@@ -833,5 +834,8 @@ approval was not available for that operation. Previous-commit reboot
 evidence is not misrepresented as new-code validation. Dedicated
 iptables-legacy and additional Ubuntu/ARM64 guest acceptance were
 not completed on this code; nftables + iptables-nft were tested.
-Exact final PR HEAD CI, independent `APPROVE`, Merge, Release
-and any production change remain separate mandatory gates.
+At that historical checkpoint, exact-final-HEAD CI, independent review,
+Merge, Release and live-host changes remained separate gates. For the
+subsequent reviewed and merged source, consult Issue #262 and the official
+Release for its exact version; provider-dependent WAN success is still
+not established by these private tests.

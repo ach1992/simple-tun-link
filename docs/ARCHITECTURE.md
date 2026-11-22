@@ -199,7 +199,7 @@ Do not introduce speculative framework packages simply to mirror a diagram.
 
 Keep implementation private under internal/ until a real second consumer demonstrates a stable public Go API requirement.
 
-### Spoof-specific Direct TUN extension (Issue #262; not yet shipped)
+### Spoof-specific Direct TUN extension (Issue #262)
 
 Unlike native GRE/IPIP and optional WireGuard Carriers, the approved Spoof
 provider needs an explicit per-Link Linux TUN and a **vetted authenticated

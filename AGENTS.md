@@ -25,7 +25,7 @@ Hard boundaries:
   grant permission to start a helper or advertise a public Carrier.
   See [Issue #142](https://github.com/ach1992/simple-tun-link/issues/142)
   for current Owner gates.
-- **Spoof Carrier exception in development:** Issue #262 is the canonical
+- **Spoof Direct TUN exception:** Issue #262 is the canonical
   Owner-approved Direct Linux TUN + authenticated encrypted Spoof-specific
   backend. This is deliberately NOT WireGuard-over-Spoof and NOT a new Link
   manager. A privileged STL runtime on ordinary real Linux servers must be
@@ -33,8 +33,10 @@ Hard boundaries:
   reversible required network adjustment through the existing Engine. Only
   the current Master's TEST EXECUTION authorization is limited to owned
   isolated networks; never encode a TEST-only gate in production runtime.
-  The Spoof Link is NOT shipped, NOT WAN-tested, and not independently
-  accepted until #262's entire acceptance matrix and review gates pass.
+  First Stable availability is v0.1.34; distinguish exact-source isolated
+  acceptance and release from public-WAN/provider acceptance, which remains
+  unverified. Do not conflate a published feature with field deployment;
+  #262 continues to own unmet external acceptance.
 - No geography-specific data-model roles.
 - No global host tuning merely for convenience.
 - No firewall flush/default-route rewrite.
