@@ -102,6 +102,15 @@ func linkDiagnoseCommand(args []string, stdout, stderr io.Writer, options *runti
 	measurement, err := inspectLinkDiagnostic(ctx, record.Desired, *options, manualMTU)
 	if err != nil {
 		code := stlerr.CodeOf(err)
+		if record.Desired.Backend == domain.BackendSpoof {
+			observation := stlerr.Public(err)
+			switch observation.ReasonCode {
+			case "spoof_local_helper_unverified", "spoof_bilateral_unconfirmed", "spoof_private_icmp_unverified":
+				public := stlerr.New(stlerr.CodeInspect, "link_diagnose", string(id), "spoof", observation.Detail)
+				public.ReasonCode, public.NextStep = observation.ReasonCode, observation.NextStep
+				return readCommandPublicError(stdout, stderr, jsonOutput, public)
+			}
+		}
 		if record.Desired.Backend == domain.BackendIPsec && stlerr.Public(err).ReasonCode == "ipsec_sa_not_established" {
 			public := stlerr.New(stlerr.CodeInspect, "link_diagnose", string(id), "ipsec",
 				"IPsec is configured but no matching security association exists; no ICMP probes were sent")

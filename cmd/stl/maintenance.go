@@ -122,7 +122,9 @@ func uninstallSnapshotEmpty(s state.Snapshot) bool {
 		len(s.RemovalReceipts) == 0 && len(s.WSSCrashOperations) == 0 &&
 		len(s.QUICCrashOperations) == 0 && len(s.QUICAbandonmentReceipts) == 0 &&
 		len(s.MASQUEOperations) == 0 && len(s.MASQUERemovalReceipts) == 0 &&
-		len(s.MASQUERecoveryReceipts) == 0
+		len(s.MASQUERecoveryReceipts) == 0 &&
+		len(s.SpoofRemovalReceipts) == 0 && len(s.SpoofRPFilterClaims) == 0 &&
+		len(s.SpoofRPFilterSettings) == 0
 }
 
 // Uninstall removes only the verified installer-owned core binary and record;
@@ -139,6 +141,7 @@ func uninstallSnapshotReady(s state.Snapshot) bool {
 	withoutReceipts.QUICAbandonmentReceipts = nil
 	withoutReceipts.MASQUERemovalReceipts = nil
 	withoutReceipts.MASQUERecoveryReceipts = nil
+	withoutReceipts.SpoofRemovalReceipts = nil
 	if !uninstallSnapshotEmpty(withoutReceipts) {
 		return false
 	}
@@ -170,6 +173,14 @@ func uninstallSnapshotReady(s state.Snapshot) bool {
 	// history is safe for core Uninstall only AFTER that original's mTLS
 	// material has been fully retired.
 	for _, receipt := range s.MASQUERemovalReceipts {
+		if !receipt.Retired {
+			return false
+		}
+	}
+	// Retired Spoof originals are durable ID reservations, not live Links.
+	// Pending retirement or any rp_filter host-policy journal must still
+	// prevent removing the executable needed for exact recovery.
+	for _, receipt := range s.SpoofRemovalReceipts {
 		if !receipt.Retired {
 			return false
 		}
@@ -348,12 +359,16 @@ func inspectUninstallState(ctx context.Context, root string, trust func(string) 
 		return false, fmt.Errorf("cannot decode valid committed Link state")
 	}
 	if !uninstallSnapshotReady(snapshot) {
+		if len(snapshot.SpoofRPFilterClaims) != 0 || len(snapshot.SpoofRPFilterSettings) != 0 {
+			return false, errors.New("Spoof rp_filter host policy remains unreconciled; use the canonical Restore/reconciliation workflow before Uninstall")
+		}
 		withoutReceipts := snapshot
 		withoutReceipts.RemovalReceipts = nil
 		withoutReceipts.IPsecRemovalReceipts = nil
 		withoutReceipts.QUICAbandonmentReceipts = nil
 		withoutReceipts.MASQUERemovalReceipts = nil
 		withoutReceipts.MASQUERecoveryReceipts = nil
+		withoutReceipts.SpoofRemovalReceipts = nil
 		if uninstallSnapshotEmpty(withoutReceipts) {
 			return false, errors.New("protected credential retirement remains unfinished or unverified")
 		}
@@ -441,7 +456,9 @@ func uninstallGateGuidance(err error) (string, string) {
 	case strings.Contains(message, "saved Links or pending operations remain"):
 		return "saved_or_pending_links", "Open My tunnels in STL and remove each verified Link; reconcile pending operations through STL before retrying Uninstall."
 	case strings.Contains(message, "protected credential retirement remains"):
-		return "credential_retirement_pending", "The Link was removed but a protected credential retirement receipt is unfinished or unverified. Use the exact STL receipt-bound retire-quic, retire-wss, credential retire, or retire-ipsec recovery operation as applicable; never delete State or credentials manually."
+		return "credential_retirement_pending", "The Link was removed but a protected credential retirement receipt is unfinished or unverified. Use the exact STL receipt-bound retire-spoof, retire-quic, retire-wss, credential retire, or retire-ipsec operation as applicable; never delete State or credentials manually."
+	case strings.Contains(message, "Spoof rp_filter host policy remains unreconciled"):
+		return "spoof_rp_filter_recovery_pending", "Spoof rp_filter host-policy claims or settings still require exact recovery. Inspect the saved State and run the canonical stl link restore --all reconciliation as applicable before retrying Uninstall; do not delete journals or alter sysctls manually."
 	case strings.Contains(message, "downgrade requires a canonical empty State"):
 		return "downgrade_state_history_retained", "Downgrade requires a truly empty, canonical State with no historical retirement receipts. Keep the current v4-capable STL and preserve State; do not delete receipts to force an older binary."
 	case strings.Contains(message, "Engine restore unit is still installed"):

@@ -292,7 +292,16 @@ Inspect **three different facts** rather than one vague `OK`:
 control datagrams). These do **not** prove that your application is
 reachable: use an actual private ICMP/TCP/UDP test when needed.
 `link diagnose` is explicitly invoked traffic-generating private
-ICMP quality measurement; it does not prove outer-path PMTU.
+ICMP quality measurement **only after** a fresh, verified authenticated
+bilateral path exists; it does not prove outer-path PMTU. Until then,
+per-Link CLI, guided menu Check connection and `diagnose --all` report
+`spoof_bilateral_unconfirmed` with a read-only `spoof-status` next action,
+**not** an unexplained generic diagnostic failure or a fabricated ping.
+Unverified original systemd helper/TUN/route ownership is separately
+reported as `spoof_local_helper_unverified`. If a private ICMP measurement
+fails after authentication, the separate result is
+`spoof_private_icmp_unverified`; neither that result nor an unconfirmed
+carrier is silently promoted to a connected private application path.
 
 ## Recovery and retirement
 
@@ -320,7 +329,15 @@ sudo stl link remove LINK_ID --confirm LINK_ID --json
 This locally removes only verified original resources, deletes the
 matching protected identity after committed removal and reserves the
 original Link ID permanently. Remove must work without the peer online.
-The confidential **operator-owned Setup Code file** is external to
+Its fully retired original-identity receipt is intentionally preserved in
+State as a permanent ID reservation; this does **not** prevent a normal
+read-only `stl maintenance pre-uninstall --json` success when no Links or
+other obligations remain. An **unfinished** Spoof retirement or a retained
+`rp_filter` host-policy claim/journal blocks Uninstall until its original
+STL recovery is completed. Inspect the reported reason and use the exact
+`retire-spoof` or `stl link restore --all` reconciliation as applicable;
+do not delete State records or edit sysctls to force Uninstall. The
+confidential **operator-owned Setup Code file** is external to
 STL's per-Link protected material: remove your original transferred
 file from its trusted storage separately when you no longer need it.
 Re-issue a fresh Link/Code if an unbound Code might have been exposed.
