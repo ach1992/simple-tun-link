@@ -1345,8 +1345,9 @@ file, not pasted into an ordinary terminal. The exact per-host Source file
 is checked and can be Rechecked before confirmation.
 
 The standalone root-only commands are `stl link create-spoof`,
-`stl link import-spoof`, `stl link resume-spoof` and
-`stl link spoof-status LINK_ID --json`. On Create,
+`stl link import-spoof`, `stl link resume-spoof`,
+`stl link spoof-status LINK_ID --json` and post-Remove
+`stl link retire-spoof LINK_ID --confirm LINK_ID`. On Create,
 `--outer auto` (default) independently discovers a working Source
 IPv4, one of the explicitly paired real peer destinations, and one
 of the STL raw outer packet profiles (UDP/17, ICMP/1,

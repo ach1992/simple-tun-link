@@ -360,10 +360,12 @@ not claim maximum physical PMTU or anything from a failed send;
 delivery. The Link's generic managed-native MTU manager never takes
 ownership of this per-Link Spoof helper TUN.
 
-`--manage-ingress --device eth0` is an optional endpoint-local policy,
-not part of the original peer Setup Code. It requires that all local
-receiving IPv4 endpoints really be assigned to the specified interface
-and that a working privileged `iptables` CLI exists. With Auto it
+\`--manage-ingress --ingress-device eth0\` is an optional endpoint-local
+policy, not part of the original peer Setup Code. The incoming NIC is
+**independent** of the optional outgoing \`--device\`; actual post-DNAT
+receive-bind IPv4 addresses must be assigned somewhere on the local host,
+but need not be assigned on that same incoming NIC. A working privileged
+\`iptables\` CLI is required only for managed ingress. With Auto it
 creates narrowly matched Link-owned rules for UDP/TCP destination port,
 ICMP Echo Reply, and the supported raw IPv4 protocol numbers. For
 non-port-based raw protocols, only the exact local destination,
@@ -441,13 +443,14 @@ encrypted Link carried authenticated bilateral private ICMP/TCP/UDP
 even after primary receiver deletion, and all Link-owned ACCEPT
 rules were absent after removal. A new policy-specific **unit test**
 verifies that an already-permissive INPUT chain needs **no** rules;
-a new exact-binary, two-host permissive-policy E2E is still pending.
-The candidate binary was not replaced again inside the private guests
-because the current execution path required a connection-risk approval.
-External provider and independent nft hooks remain unverified. The actual public Internet,
-NAT/provider ACL diversity and real-site anti-spoofing are also
-unverified. This remains a gate until independently tested on a
-suitable authorized network.
+a new exact-binary, two-host permissive-policy E2E was pending **at
+that historical checkpoint**. It was subsequently completed successfully
+on native Debian 13 KVM guests (job \`1795318095403856835\`, exit 0).
+The then-blocked binary replacement was resolved by using the authorized
+task-owned private VM operation. Later PR #263 remediation testing verified
+an independent nftables INPUT drop hook and actual lab DNAT (details below).
+Public WAN, provider ACL, ISP anti-spoofing and physically distinct real
+server networks remain unverified: no private-lab test proves them.
 
 ## Scope and validated evidence
 
@@ -705,3 +708,70 @@ reachability. PR #263 requires exact final-HEAD GitHub CI, independent
 strict read-only review, and explicit Owner approval for any
 Merge/Release; public/production testing needs its own scoped
 authorization.
+
+## PR #263 remediation acceptance — native KVM, 2026-11-22
+
+The unreleased remediation code at commit `70d8061` was independently
+compiled from the PR branch on the Test Server, then exercised only
+on the two dedicated `stl262-spoof-private` Debian 13 KVM guests.
+The base bridge had NAT disabled; test-specific NAT and secondary
+bridges/Interfaces were installed with exact rollback. No public
+forged-source experiments or production/Stable modifications occurred.
+
+- **R1 / crash-safe retirement:** An opt-in root test in a real VM
+  reproduced partial protected-file removal after quarantine rename,
+  then recovered the exact original receipt. The repeated retry was
+  idempotent. A foreign file was preserved and `Retired=true`
+  refused until a supported exact cleanup could complete.
+  `STL_SPOOF_PRIVILEGED_ACCEPTANCE=1` explicitly gates the test.
+- **R2 / real NAT and interfaces:** Under `iptables-nft` INPUT DROP,
+  operator-controlled PREROUTING DNAT translated an advertised but
+  nonlocal `10.246.62.250:48502` to the locally assigned receiver
+  `10.246.62.245:49502`. The second advertised destination used
+  a different local port and replaced the primary after it was
+  blocked. Verified private bilateral ICMP, 262,144 TCP bytes and
+  16 UDP datagrams each way passed, followed by exact rollback
+  (job `1795321481132322286`, exit 0).
+  A separate two-bridge/dual-NIC test proved ingress/egress
+  `enp5s0`/`enp6s0` can differ while authenticated
+  private IPv4 works (job `1795321874955966865`, exit 0).
+  Engine resource claims were separately corrected to reserve
+  actual post-DNAT Bind ports rather than advertised ports.
+- **R3 / real private datapath:** The private application ICMP echo
+  probe reported `VERIFIED_ICMP` while traffic flowed;
+  an exact private INPUT drop preserved authenticated outer
+  `CONNECTED` but reported `ICMP_PROBE_FAILED`.
+  Removing it restored private verification automatically
+  (job `1795321388733641146`, exit 0). An **independent
+  native nftables INPUT hook** reproduced the same distinction,
+  and its removal restored the same Link (job
+  `1795321874955966865`, exit 0).
+  ICMP failure is not a claim that TCP or UDP also failed.
+- **Linux rp_filter:** Strict=1 succeeded with a valid reverse
+  path; an isolated dummy NIC introduced a real asymmetric reverse
+  route and strict filtering blocked the original Source packets.
+  Changing only the incoming VM NIC to loose=2 restored bilateral
+  private IPv4 on the SAME Link. Exact route/sysctl/Link rollback
+  was verified (job `1795321738446299300`, exit 0).
+  STL inspects effective max(all,interface) but does not silently
+  change policy for other services on a shared NIC.
+- **All eight raw outer Profiles:** Every one of
+  UDP, ICMP, TCP-looking, GRE-shaped, IPIP, protocol 58 bare,
+  protocol 58 echo and L2TPv3-style completed bilateral
+  authenticated private IPv4 echo plus genuine two-way private
+  TCP (262,144 bytes each direction) and UDP (16 datagrams each
+  direction), with exact Link/material cleanup after every Profile
+  (job `1795321954175288334`, exit 0).
+- **Broad Go gates:** `go test -p 2 ./...`, `go vet ./...`,
+  relevant `go test -race`, and `git diff --check`
+  passed on the remediation code at `70d8061`.
+
+The native tests prove the stated **private** scenarios, not public
+WAN/ISP reachability, every distro or all provider ACLs. Exact-HEAD
+**full guest restart/reboot was not rerun**: the required connection-risk
+approval was not available for that operation. Previous-commit reboot
+evidence is not misrepresented as new-code validation. Dedicated
+iptables-legacy and additional Ubuntu/ARM64 guest acceptance were
+not completed on this code; nftables + iptables-nft were tested.
+Exact final PR HEAD CI, independent `APPROVE`, Merge, Release
+and any production change remain separate mandatory gates.
