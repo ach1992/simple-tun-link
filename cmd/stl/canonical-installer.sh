@@ -2064,11 +2064,11 @@ for file in BUILD-MANIFEST.txt LICENSE "$asset"; do
   [[ $(hash_file "$stage/$file") == "$expected" ]] || fail "checksum mismatch for $file"
 done
 manifest="$stage/BUILD-MANIFEST.txt"
-grep -qx 'project=simple-tun-link' "$manifest" && grep -qx 'executable=stl' "$manifest" && grep -qx 'license=MIT' "$manifest" && grep -qx "version=$version" "$manifest" || fail 'release manifest does not describe the intended STL build'
+grep -qx 'project=simple-tun-link' "$manifest" && grep -qx 'executable=stl' "$manifest" && grep -qx 'license=AGPL-3.0-only' "$manifest" && grep -qx "version=$version" "$manifest" || fail 'release manifest does not describe the intended STL build'
 if [[ -z $bundle ]]; then grep -qx 'mode=tag' "$manifest" || fail 'remote release must be built from a tag'; fi
 commit=$(sed -n 's/^commit=//p' "$manifest")
 [[ $commit =~ ^[0-9a-f]{40}$ ]] || fail 'invalid release commit metadata'
-[[ $(head -n 1 "$stage/LICENSE") == 'MIT License' ]] || fail 'release LICENSE is not MIT'
+[[ $(sed -n '1p' "$stage/LICENSE" | sed 's/^[[:space:]]*//') == 'GNU AFFERO GENERAL PUBLIC LICENSE' ]] || fail 'release LICENSE is not GNU AGPLv3'
 install -m 0755 -- "$stage/$asset" "$stage/incoming"
 metadata=$("$stage/incoming" version --json) || fail 'downloaded binary cannot report version metadata'
 [[ $metadata == *\"version\":\"$version\"* && $metadata == *\"commit\":\"$commit\"* ]] || fail 'release executable and manifest identity disagree'

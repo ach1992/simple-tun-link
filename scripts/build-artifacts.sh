@@ -63,8 +63,8 @@ tmp="$(mktemp -d "$parent/.stl-artifacts.XXXXXXXX")"
 cleanup() { [[ -d $tmp ]] && rm -rf -- "$tmp"; }
 trap cleanup EXIT
 
-if [[ ! -f LICENSE ]] || ! grep -q 'MIT License' LICENSE; then
-  echo 'Source LICENSE is missing or not MIT' >&2
+if [[ ! -f LICENSE ]] || [[ $(sed -n '1p' LICENSE | sed 's/^[[:space:]]*//') != 'GNU AFFERO GENERAL PUBLIC LICENSE' ]] || ! grep -q 'END OF TERMS AND CONDITIONS' LICENSE; then
+  echo 'Source LICENSE is missing or not complete GNU AGPLv3' >&2
   exit 1
 fi
 
@@ -93,7 +93,7 @@ fi
 cat > "$tmp/BUILD-MANIFEST.txt" <<EOF
 project=simple-tun-link
 executable=stl
-license=MIT
+license=AGPL-3.0-only
 version=$version
 commit=$commit
 build_date=$commit_date

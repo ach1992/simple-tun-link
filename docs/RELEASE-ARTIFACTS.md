@@ -126,7 +126,7 @@ prerequisite for ordinary official GitHub releases.
 ## Installer and publication boundaries
 
 The canonical [installer](../scripts/install.sh) verifies the chosen
-bundle manifest, MIT license, checksums, expected executable
+bundle manifest, GNU AGPLv3 license, checksums, expected executable
 identity/version and installed ownership record before atomic
 install/update. Its private recovery journal distinguishes completed
 from uncertain operations. It refuses removal when saved Links,
@@ -145,6 +145,14 @@ bash scripts/test-quick-install.sh
 These use disposable files/prefixes, fake release fixtures and guarded
 failure injection; they do not prove published download identity,
 actual distro package hooks or kernel traffic.
+
+**First AGPL distribution boundary:** previous `v0.1.34` and older
+MIT-tagged releases are immutable, and their installed embedded
+Installer validates the MIT manifest. Use the **new AGPL package's**
+architecture-matched canonical one-file `--update` path for this
+transition; do not pretend an old MIT-only `stl update --url` can
+accept changed license metadata. Source/build checks distinguish the
+AGPL candidate from prior published MIT assets.
 
 Publication requires a **separately authorized** action binding an
 accepted exact source commit to an immutable version tag and complete

@@ -4,6 +4,11 @@
 automation**. The terminal menu is not a machine API. This file is a command
 reference, not a timeline of UI iterations, Issues or releases.
 
+For first use start with [README](../README.md). This long reference is
+organized into **interactive operation**, **exact CLI commands**,
+**machine-readable contracts** and method-specific advanced operations.
+Do not read every carrier section to perform a common task.
+
 For Setup Link versions, inversion and payload security use
 [PAIRING.md](PAIRING.md); for credential retention/retirement use
 [SECURITY.md](SECURITY.md). Actual support on a host is subject to
@@ -1336,7 +1341,7 @@ unit-name cleanup or a regenerated peer handoff. Legitimate committed
 post-reboot restoration requires trusted changed-kernel evidence and fresh
 host vacancy, preserving the same Link and credential identity.
 
-## Spoof Direct TUN Carrier (Issue #262; development branch only)
+## Spoof Direct TUN Carrier (Stable v0.1.34+; Issue #262)
 
 In `stl menu`, select **Create tunnel → 10 (Spoof)** or
 **Import Setup Link → 6 (Spoof)**. Interactive review requires `YES`

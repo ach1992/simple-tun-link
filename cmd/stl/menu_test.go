@@ -38,7 +38,7 @@ func TestMenuTasksAndNavigationDoNotCreateState(t *testing.T) {
 		"Create tunnel", "Import setup link", "My tunnels",
 		"Test connectivity", "Settings", "Update", "Uninstall", "Exit",
 		"GRE / Native", "CREATE TUNNEL",
-		"Update cancelled", "pre-uninstall",
+		"Update cancelled", "pre-uninstall", "AGPL-3.0-only", "No warranty",
 	} {
 		if !strings.Contains(output, item) {
 			t.Fatalf("menu omitted %q", item)

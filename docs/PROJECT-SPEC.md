@@ -20,7 +20,7 @@ GitHub Issue, commit, candidate, or published version.
 - Platform: Linux, initially Debian/Ubuntu-class servers; actual version,
   architecture, and capability support is defined in
   [SUPPORTED-ENVIRONMENTS.md](SUPPORTED-ENVIRONMENTS.md)
-- License: MIT ([LICENSE](../LICENSE))
+- License for new source distributions: GNU Affero General Public License v3.0 only (SPDX `AGPL-3.0-only`; [LICENSE](../LICENSE)); previously published MIT-tagged releases retain their original grants.
 
 ## The problem to solve
 

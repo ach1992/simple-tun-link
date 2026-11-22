@@ -18,6 +18,12 @@ files. The **optional legacy pinned-bootstrap generator** can additionally
 bind the canonical installer and its release-wide `SHA256SUMS` into a generated
 bootstrap for operators who deliberately choose that extra trust mode.
 
+For ordinary offline delivery, jump to
+[simple copy-as-is Mirror](#simple-copy-as-is-mirror-recommended).
+The separately documented publisher-signed and pinned-bootstrap methods
+are optional advanced trust workflows, **not required** for the simple
+architecture-matched original Release file.
+
 ## Simple copy-as-is Mirror (recommended)
 
 A Mirror is **not a signing service, installer generator or new release

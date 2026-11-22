@@ -6,7 +6,7 @@ This is the **wire-format and compatibility contract** for
 [SECURITY.md](SECURITY.md). Pairing decodes and inverts
 configuration; it must **never mutate a host by previewing**.
 
-## Spoof offline handoff (distinct contract; development only)
+## Spoof offline handoff (distinct managed Carrier; Stable v0.1.34+)
 
 Issue #262 introduces the separate sensitive `stl-spoof-v1.`
 Setup Code. It is a **single manual A-to-B transfer**,

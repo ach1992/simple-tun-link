@@ -1,5 +1,12 @@
 # Architecture
 
+This is a **technical implementation reference**, not an operator quick start
+or release diary. Use [README](../README.md) to set up a Link and
+[PROJECT-SPEC](PROJECT-SPEC.md) for product intent. This document describes
+the shared Engine, State/ownership, backend contracts, carrier internals and
+terminal presentation. For carrier-specific operation see
+[SPOOF-CARRIER](SPOOF-CARRIER.md) or [MASQUE-CARRIER](MASQUE-CARRIER.md).
+
 ## 1. Core model
 
 simple-tun-link owns a **Link**. It does not own or prescribe the architecture of software that consumes that Link.

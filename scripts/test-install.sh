@@ -36,11 +36,11 @@ else
 fi
 SCRIPT
   chmod 0755 "$dir/stl_${version}_linux_amd64"
-  printf 'MIT License\n' > "$dir/LICENSE"
+  cp -- "$(dirname "$installer")/../LICENSE" "$dir/LICENSE"
   cat > "$dir/BUILD-MANIFEST.txt" <<MANIFEST
 project=simple-tun-link
 executable=stl
-license=MIT
+license=AGPL-3.0-only
 version=$version
 commit=$commit
 build_date=2026-10-10T00:00:00Z

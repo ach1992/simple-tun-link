@@ -36,7 +36,7 @@ make_release() {
   cat > "$out/BUILD-MANIFEST.txt" <<EOF
 project=simple-tun-link
 executable=stl
-license=MIT
+license=AGPL-3.0-only
 version=$tag
 commit=$commit
 build_date=2026-11-03T00:00:00Z

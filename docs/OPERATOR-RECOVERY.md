@@ -5,6 +5,11 @@ This guide describes the implemented canonical Engine/CLI behavior for
 operations reuse the same Engine. Read-only `status`, `diagnose`, and
 `diagnose --all` provide observations; **none repairs a Link**.
 
+Start with [Diagnostics](DIAGNOSTICS.md) for read-only observations;
+apply recovery here only after an operation reports partial/uncertain effects.
+Carrier-specific procedures further down are exceptional, not required
+for routine Link management.
+
 ## What is proven and what remains uncertain
 
 A successful Engine operation (exit 0) has completed the backend's

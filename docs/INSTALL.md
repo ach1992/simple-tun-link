@@ -1,6 +1,13 @@
 # Install, update, and uninstall
 
 For normal two-server setup start with the [README](../README.md).
+
+**Quick navigation:** choose the guarded official GitHub release bootstrap
+when available, the untouched one-file release asset for trusted HTTPS
+Mirror/offline transfer, or **Update** when already installed. Use
+[installer failures](#when-installer-selected-prepare-or-update-fails),
+[Update](#update) and
+[Uninstall](#uninstall-never-tear-down-live-links-implicitly) as needed.
 This runbook documents **current operations and recovery safeguards**,
 not the history of earlier release candidates. The active Stable
 release and its exact tag/commit are resolved from
@@ -13,6 +20,17 @@ specific real pair of WAN/NAT hosts has passed field acceptance; that
 independent Owner gate is tracked in
 [Issue #93](https://github.com/ach1992/simple-tun-link/issues/93).
 Commands using `vX.Y.Z` require a **real published** tag.
+
+**MIT to AGPL transition:** Stable `v0.1.34` and earlier shipped an
+MIT-only embedded Installer. It expects `license=MIT` in incoming
+release metadata and therefore cannot be relied on to upgrade itself
+with `stl update --url` when the new release is AGPLv3. Instead download
+the complete **new** architecture-matched `*_local-install.sh` from an
+independently verified official release/trusted Mirror and run it with
+`--update`; the newer canonical Installer handles the transition under
+its usual lock and ownership checks. The official new-release guarded
+Stable bootstrap is another supported path. Never edit manifests, hashes
+or an old published release to bypass this license-metadata boundary.
 For environment-specific acceptance still open after a particular release,
 see [installer and distribution #146](https://github.com/ach1992/simple-tun-link/issues/146).
 Historical release/test checkpoints belong to their original immutable
@@ -304,9 +322,10 @@ operations.
    `vX.Y.Z` means the actual published version. Optionally also download
    the architecture-matched [wstunnel v11.0.0](https://github.com/erebe/wstunnel/releases/tag/v11.0.0)
    archive for **WSS**, or [Hysteria app/v2.13.0](https://github.com/HyNetworks/hysteria/releases/tag/app%2Fv2.13.0)
-   executable for **QUIC/Salamander**. The
-   [README download table](../README.md#install-when-the-server-cannot-reach-github)
-   links **each exact AMD64/ARM64 helper asset**; the pinned SHA256s are below.
+   executable for **QUIC/Salamander**. Select the matching upstream asset
+   listed under [WSS companion](#optional-pinned-wss-companion-available-in-stable-v0110)
+   or [QUIC companion](#optional-pinned-quic-companion), where the exact
+   AMD64/ARM64 filenames and pinned SHA256s are maintained.
 2. **Upload unchanged files** to root-owned `0700` `/root/stl/` on each
    destination. Files must be root-owned `0600`/`0644`; no extraction,
    renaming or executable bit is needed. Keep exactly one matching
@@ -838,7 +857,7 @@ only as an installer argument. The canonical installer then fetches
 `SHA256SUMS`, `BUILD-MANIFEST.txt`, `LICENSE`, and the one
 architecture-specific `stl_vX.Y.Z_linux_<arch>` executable from the **fixed
 project GitHub release URL** over HTTPS. It checks the relevant SHA-256 entries,
-MIT/commit/version metadata, and the executable's `version --json` identity
+declared license/commit/version metadata, and the executable's `version --json` identity
 **before** publication. The default GitHub path accepts no caller-provided
 download URL. A separately generated, version-specific self-hosted mirror
 bootstrap uses the same installer with a strict HTTPS release directory
