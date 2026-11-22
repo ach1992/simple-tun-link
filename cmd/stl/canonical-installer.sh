@@ -723,7 +723,9 @@ prerequisite_satisfied() {
   # command is broken, absent or cannot perform a read-only compatibility
   # probe. Check these same capabilities for both distro and alternate tools.
   case "$pkg" in
-    iproute2) prerequisite_tool_usable ip -json address show ;;
+    # Only binary availability belongs to PREPARE. Live netlink inventory
+    # requires host/network permissions and is verified by the selected Engine.
+    iproute2) prerequisite_tool_usable ip -V ;;
     iptables) prerequisite_tool_usable iptables -V && prerequisite_tool_usable ip6tables -V ;;
     kmod) prerequisite_tool_usable modprobe --version && prerequisite_tool_usable modinfo --version ;;
     wireguard-tools) prerequisite_tool_usable wg --version ;;

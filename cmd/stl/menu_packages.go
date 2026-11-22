@@ -100,6 +100,9 @@ func packageInventoryFailure(stderr string, ctxErr error) error {
 	case aptReason == "apt_index_unverified":
 		issue.reason = "apt_index_unverified"
 		issue.next = "Inspect signed APT repositories, available indexes and apt-cache policy (read-only); no preparation was started."
+	case strings.HasPrefix(message, "installed selected prerequisite ") && strings.Contains(message, " is unusable;"):
+		issue.reason = "installed_prerequisite_unusable"
+		issue.next = "A selected dependency is installed but its command could not pass a read-only availability check. Inspect the installed tool's normal --version / -V interface and root-controlled executable location; repair it explicitly if broken. STL will not reinstall or upgrade it automatically."
 	case strings.HasPrefix(message, "dpkg has unfinished package configuration"):
 		issue.reason = "dpkg_transaction_incomplete"
 		issue.next = "Run dpkg --audit (read-only), then reconcile package state before starting a new PREPARE."

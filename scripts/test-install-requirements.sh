@@ -72,11 +72,29 @@ bad bash "$installer" install --bundle "$root/missing-bundle" --prefix "$root/pr
 [[ ! -e "$root/prefix/bin/stl" ]] || fail 'fixture input modified installed identity'
 bad bash "$installer" uninstall --prefix "$root/prefix" --backends all
 
-# Read-only installed-host plan now includes a live dpkg inventory but
-# never touches APT, even when one of the selected distro packages is missing.
-live_out="$(bash "$installer" requirements --backends native 2>"$root/live.err")"
-grep -q '^missing_packages=' <<< "$live_out" ||
-  fail 'normal-host read-only requirements lost missing package field'
+# Live-host REQUIREMENTS can legitimately fail on an arbitrary CI runner
+# whose installed package is broken or whose unsigned/missing APT index
+# prevents preview. Those are correct no-mutation outcomes, NOT proof of
+# an incorrect installer. The deterministic distro matrix above and the
+# dedicated selected-APT native guest E2E own successful package resolution.
+# Demand either a complete inventory or an explicit canonical failure after
+# validated distro selection; never treat a silent/partial failure as PASS.
+live_out=; live_rc=0
+live_out="$(bash "$installer" requirements --backends native 2>"$root/live.err")" || live_rc=$?
+if [[ $live_rc == 0 ]]; then
+  grep -q '^missing_packages=' <<< "$live_out" ||
+    fail 'normal-host requirements succeeded without complete package inventory'
+else
+  grep -q '^distribution=' <<< "$live_out" &&
+    grep -q '^version=' <<< "$live_out" &&
+    grep -q '^selected_backends=native$' <<< "$live_out" &&
+    grep -q '^packages=iproute2 iptables kmod$' <<< "$live_out" ||
+    fail 'failed live-host requirements omitted the canonical source inventory'
+  grep -Fq 'stl installer [FAILED]:' "$root/live.err" ||
+    fail 'failed live-host requirements did not explain the refusal'
+  if [[ $live_rc != 1 ]]; then fail 'unexpected host requirement exit status'; fi
+  printf 'LIVE_HOST_REQUIREMENTS_CORRECTLY_REFUSED_UNVERIFIED_ENVIRONMENT=PASS\n'
+fi
 # A mismatched/unsafe expected package plan must not be accepted for any
 # action other than explicit prepare, even with attacker shell variables.
 bad bash "$installer" requirements --expected-missing iptables
@@ -471,7 +489,7 @@ printf 'APT_SIMULATION_SELECTIVE_CAPTURE_AND_FULL_DIAGNOSTICS=PASS\n'
   package_installed() { [[ $1 == "${existing_package:-none}" ]]; }
   prerequisite_tool_usable() {
     case "$*" in
-      'ip -json address show'|'iptables -V'|'ip6tables -V'|'modprobe --version'|'modinfo --version'|'wg --version'|'nft --version') return 0 ;;
+      'ip -V'|'iptables -V'|'ip6tables -V'|'modprobe --version'|'modinfo --version'|'wg --version'|'nft --version') return 0 ;;
       *) return 1 ;;
     esac
   }
