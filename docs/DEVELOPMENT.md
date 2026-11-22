@@ -54,9 +54,13 @@ for attribution, provenance or an authorized reuse decision.** The older
 not a vendored STL implementation; do not silently introduce its code or
 other external material without a focused provenance and obligation review.
 Linked Go module dependencies keep their own license notices in
-[THIRD-PARTY-NOTICES.txt](../THIRD-PARTY-NOTICES.txt). When pinned
-dependencies change, reconcile their actual upstream license texts
-and update this notice file before publishing new binaries.
+[THIRD-PARTY-NOTICES.txt](../THIRD-PARTY-NOTICES.txt). This file also
+retains the original complete first-party MIT copyright/license notice,
+so relicensing does not discard required provenance. The release builder
+checks that each module actually linked in both production architectures
+has its matching versioned notice in that file. When dependencies change,
+update upstream terms and author attributions from their real sources;
+do not satisfy the check with a placeholder.
 For distributed AGPLv3-covered binaries, include the Corresponding Source
 and applicable copyright/license notices; modified installations made
 remotely interactive may trigger AGPLv3 section 13 source-offer duties.

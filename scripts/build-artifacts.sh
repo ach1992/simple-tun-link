@@ -70,7 +70,15 @@ fi
 
 [[ -f THIRD-PARTY-NOTICES.txt && ! -L THIRD-PARTY-NOTICES.txt &&
    -s THIRD-PARTY-NOTICES.txt ]] || {
-  echo 'Third-party license notices missing from source' >&2
+  echo 'Historical and upstream legal notices missing from source' >&2
+  exit 1
+}
+# The pre-relicense MIT grant/copyright notice must survive distribution of
+# material originally covered by it, even though new releases are AGPL-only.
+grep -Fxq -- '--- Original STL MIT copyright and license notice (pre-AGPL releases) ---' THIRD-PARTY-NOTICES.txt &&
+grep -Fxq -- 'Copyright (c) 2026 ach1992' THIRD-PARTY-NOTICES.txt &&
+grep -Fxq -- '--- Go standard library/runtime (Go toolchain) ---' THIRD-PARTY-NOTICES.txt || {
+  echo 'Required historic STL MIT or Go runtime legal notice is missing' >&2
   exit 1
 }
 
@@ -86,6 +94,25 @@ for arch in amd64 arm64; do
   CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
     go build -trimpath -buildvcs=false -ldflags "$ldflags" \
     -o "$tmp/$filename" ./cmd/stl
+done
+
+# Keep notices synchronized with what the actual release executables link,
+# not with every historical module or test-only package in the Go graph.
+# go version -m inspects compiled binary metadata without executing it,
+# including the separately compiled ARM64 output on an AMD64 builder.
+for arch in amd64 arm64; do
+  filename="stl_${version}_linux_${arch}"
+  binary_metadata=$(go version -m "$tmp/$filename") || {
+    echo "Could not inspect actual compiled dependencies for linux/$arch" >&2
+    exit 1
+  }
+  while IFS= read -r module_version; do
+    [[ -n $module_version ]] || continue
+    grep -Fxq -- "--- $module_version ---" THIRD-PARTY-NOTICES.txt || {
+      echo "Missing legal notice for linked dependency on linux/$arch: $module_version" >&2
+      exit 1
+    }
+  done < <(awk '$1 == "dep" {print $2 " " $3}' <<< "$binary_metadata")
 done
 
 cp LICENSE THIRD-PARTY-NOTICES.txt "$tmp/"

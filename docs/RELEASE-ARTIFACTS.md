@@ -70,6 +70,11 @@ The archive keeps the exact seven regular members: one binary, canonical
 `install.sh`, `LICENSE`, `THIRD-PARTY-NOTICES.txt`, `BUILD-MANIFEST.txt`,
 `LOCAL-INSTALL.txt`, and `SHA256SUMS` (covering the other six). Both `.sh` and `.tar.gz` are included
 in the release-wide SHA256SUMS; building alone does **not** publish them.
+The release notice file retains the complete historical STL MIT grant and
+upstream dependency terms. Before packaging, the builder compares the
+module versions **actually linked into both binaries** against the
+notices; a missing module notice prevents publication. See
+[`THIRD-PARTY-NOTICES.txt`](../THIRD-PARTY-NOTICES.txt).
 A newly rendered Stable `stl-bootstrap.sh` also embeds the **complete-file
 SHA256 of the exact canonical `scripts/install.sh`** from the release source
 tree, after verifying it is byte-identical to the compiled-in canonical copy.
