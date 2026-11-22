@@ -35,7 +35,27 @@ Releases, PRs and dated Issue evidence, not this current operator runbook.
   provisioner owns its separately attested private strongSwan runtime
   under the same Engine/maintenance authority; neither component
   may adopt a foreign unit.
-- The installer selects only approved missing packages from the
+- The installer first reuses **working host tools**. For common CLI
+  prerequisites it probes the actual command even if its distro package is
+  reported installed; an installed **broken** command does not count as ready.
+  A functional existing tool in a root-controlled system directory is reused
+  regardless of which package (if any) provided it, without numeric version pins.
+  If a package is already installed but its command is unusable, STL reports
+  an actionable repair error rather than silently accepting it or automatically
+  reinstalling/upgrading that package. Symlinked system commands (including
+  Debian/Ubuntu `iptables` and `ip6tables` alternatives) are checked for a
+  trustworthy target but executed through the original command name, keeping
+  multi-call tool behavior intact.
+  This applies to `iproute2`, `iptables`/`ip6tables`, `kmod`,
+  `wireguard-tools` (`wg`) and `nftables` (`nft`). The selected kernel/backend
+  still checks its actual capabilities. External IPsec services/plugins or
+  WSS/QUIC helpers cannot be adopted by a simple `--version`; they require
+  separate verified ownership and protocol compatibility. PREPARE never
+  automatically upgrades an existing package or working tool. When all
+  selected prerequisites are already available, both the installer and the
+  read-only Requirements preview bypass APT entirely; a missing/broken APT
+  repository is not a reason to reinstall an otherwise usable existing tool.
+- The installer selects only approved genuinely missing packages from the
   configured signed distro repositories. The default native GRE/IPIP
   set needs `iproute2`, `iptables` and `kmod`; WireGuard adds
   `wireguard-tools`; IPsec may need `charon-systemd`,
@@ -125,6 +145,7 @@ package, binary and service mutations require fresh confirmation.
 | `github_release_api_limited`, `release_lookup_timeout`, or `release_catalogue_invalid` | Check [official releases](https://github.com/ach1992/simple-tun-link/releases) and HTTPS reachability to `api.github.com` | No binary update began; do not substitute an unverified tag |
 | `apt_index_unverified` (`APT_INDEX_REFRESH`) | Inspect configured signed repositories and APT index availability; distinguish mirror failure from a positively identified lists lock | Index refresh failed; no package install was started by this attempt, but inspect existing APT state before a new PREPARE |
 | `apt_dependency_plan_unverified` (`APT_DEPENDENCY_PLAN`) | Inspect `apt-cache policy` for missing packages and signed candidate indexes | The planned transaction was rejected before package installation; refresh the preview and obtain new PREPARE consent |
+| `installed_prerequisite_unusable` | Inspect whether the selected installed tool can start and where its executable resides; repair the existing package/tool explicitly if needed | The package is reported installed but its executable is not usable; no automatic reinstall, upgrade or APT transaction |
 | `apt_plan_would_modify_installed_packages` | Inspect the rejected APT simulation, `apt-cache policy` and configured signed sources | An attempted upgrade or removal of installed packages is not an approved prerequisite; no PREPARE and no forced package transaction |
 | APT lists lock held by another `apt-get` during an explicitly consented package operation | Inspect legitimate package-manager processes (`ps -ef`) and `dpkg --audit`; let the existing process finish | The canonical installer's bounded index-refresh retry is part of package preparation, **not** the read-only `requirements` preview. Never delete lock files, kill APT or run a whole-host upgrade |
 | `apt_transaction_incomplete` (`APT_PACKAGE_INSTALL`) | `dpkg --audit`, then verify selected installed packages with `dpkg-query -W` | Package/service hooks may persist. Inspect and reconcile before beginning another transaction; never blindly retry |

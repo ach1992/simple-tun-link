@@ -199,8 +199,14 @@ operator-initiated attempt; safety and credential protection still apply.
   key, generated bootstrap or manually typed SHA256 for this regular path;
   retain optional independently pinned modes for those who need them.
   Preserve signed distro APT, installed ownership and rollback authority.
-  Reuse installed prerequisites; for missing selected distro packages use
-  only configured, verified signed repositories. Never automatically rewrite
+  Reuse installed prerequisites by verified working functionality, not an
+  exact distro package name or executable-version string. Package-installed
+  but unusable common tools must be diagnosed instead of accepted or silently
+  reinstalled. Do not install or upgrade a compatible current tool just to
+  match a preferred package label. For truly
+  missing selected prerequisites use only configured, verified signed
+  repositories; foreign IPsec services and external helper binaries retain
+  separate ownership and protocol-authentication gates. Never automatically rewrite
   APT sources, weaken signatures, force whole-host upgrades or download
   unselected future Carrier helpers. One canonical installer owns the
   transactional executable/install-record lifecycle.

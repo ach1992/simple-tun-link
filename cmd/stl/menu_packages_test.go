@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -32,6 +33,26 @@ func TestCanonicalInstallerEmbeddedSourceIdentity(t *testing.T) {
 	}
 }
 func TestSelectedPackagePlanIsTypedAndReadOnly(t *testing.T) {
+	// A real runner may lack optional packages, signed APT indexes or the
+	// privilege needed for a live netlink check. Those are valid operator
+	// outcomes, not failures of selection and inventory parsing. Use the
+	// REAL embedded canonical installer with its read-only OS fixture,
+	// then add an explicitly empty APT inventory as a test-only contract.
+	// Separate selected-APT guest E2E verifies live resolver behavior.
+	osFixture := filepath.Join(t.TempDir(), "os-release")
+	if err := os.WriteFile(osFixture, []byte("ID=debian\nVERSION_ID=\"13\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := func(ctx context.Context, stdout, stderr io.Writer, args ...string) error {
+		var inventory bytes.Buffer
+		exactArgs := append(append([]string(nil), args...), "--os-release-file", osFixture)
+		if err := runEmbeddedInstaller(ctx, &inventory, stderr, exactArgs...); err != nil {
+			return err
+		}
+		_, err := io.WriteString(stdout, inventory.String()+"missing_packages=\napt_install=\napt_install_sha256="+
+			fmt.Sprintf("%x", sha256.Sum256(nil))+"\n")
+		return err
+	}
 	for _, tc := range []struct {
 		sel  tunnelOption
 		want string
@@ -45,13 +66,8 @@ func TestSelectedPackagePlanIsTypedAndReadOnly(t *testing.T) {
 		if got := selectedPackageBackends(tc.sel); got != tc.want {
 			t.Fatalf("%s: %s", tc.want, got)
 		}
-		// This test verifies selector and read-only canonical plan
-		// correctness, not a wall-clock SLA. On heavily loaded CI runners,
-		// the distro signature/index resolver can exceed production's
-		// 12-second UX budget. Do not let host load make a correctness test
-		// flaky; production still fails closed at its 12-second boundary.
-		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-		plan, err := readSelectedPackagePreview(ctx, tc.sel)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		plan, err := readSelectedPackagePreviewWithRunner(ctx, tc.sel, runner)
 		cancel()
 		if err != nil {
 			t.Fatalf("%s: %v", tc.want, err)
@@ -102,6 +118,7 @@ func TestSelectedPackagePreviewErrorsAreActionableAndRedacted(t *testing.T) {
 		{"invalid Ubuntu release metadata", "stl installer [FAILED]: invalid Ubuntu version: secret", "unsupported_or_unverified_os", "/etc/os-release", nil},
 		{"OS identity unreadable", "stl installer [FAILED]: OS release file is unreadable: secret", "unsupported_or_unverified_os", "/etc/os-release", nil},
 		{"APT trust", "stl installer [FAILED]: APT candidate InRelease has no valid distribution archive signature or contains an invalid signature: secret", "apt_source_trust_unverified", "apt-cache policy", nil},
+		{"installed broken dependency", "stl installer [FAILED]: installed selected prerequisite iproute2 is unusable; inspect/repair its actual tool or package without automatic reinstall/upgrade. No APT attempted.", "installed_prerequisite_unusable", "will not reinstall or upgrade", nil},
 		{"missing gpgv", "stl installer [FAILED]: cannot verify distribution archive signatures; official distro gpgv is missing.", "distro_signature_verifier_missing", "gpgv", nil},
 		{"APT plan", "stl installer [FAILED]: APT cannot resolve the complete selected dependency plan: secret", "apt_dependency_plan_unverified", "apt-cache policy", nil},
 		{"APT removal proposal", "stl installer [FAILED]: APT plan would remove packages; secret", "apt_plan_would_modify_installed_packages", "do not force this plan", nil},
@@ -558,13 +575,21 @@ func TestCanonicalPackageInstallerDoesNotSourceInheritedBashEnv(t *testing.T) {
 	t.Setenv("BASH_ENV", hook)
 	t.Setenv("ENV", hook)
 	t.Setenv("PATH", tmp)
-	// This test checks environment isolation, not APT inventory latency.
-	// Under a loaded Dev host, an otherwise successful read-only package
-	// inventory can exceed five seconds without executing BASH_ENV.
+	// Exercise the ACTUAL embedded Bash entrypoint with an OS fixture.
+	// Shell startup injection would execute before parsing the fixture;
+	// unrelated host APT/package availability must not decide this test.
+	osFixture := filepath.Join(tmp, "os-release")
+	if err := os.WriteFile(osFixture, []byte("ID=debian\nVERSION_ID=\"13\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if _, err := readSelectedPackagePreview(ctx, tunnelOption{backend: domain.BackendGRE, mode: domain.EncapNative}); err != nil {
-		t.Fatalf("sanitized canonical plan failed: %v", err)
+	var out, errOut bytes.Buffer
+	if err := runEmbeddedInstaller(ctx, &out, &errOut,
+		"requirements", "--backends", "native", "--os-release-file", osFixture); err != nil ||
+		!strings.Contains(out.String(), "selected_backends=native") ||
+		!strings.Contains(out.String(), "packages=iproute2 iptables kmod") || errOut.Len() != 0 {
+		t.Fatalf("sanitized canonical source-only inventory failed: err=%v output=%q", err, out.String())
 	}
 	if _, err := os.Stat(tmp + "/WRONG"); !os.IsNotExist(err) {
 		t.Fatalf("untrusted shell environment executed before installer: %v", err)
