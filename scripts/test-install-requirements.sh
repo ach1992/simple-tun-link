@@ -486,6 +486,28 @@ printf 'APT_SIMULATION_SELECTIVE_CAPTURE_AND_FULL_DIAGNOSTICS=PASS\n'
   if prerequisite_tool_usable cat --not-an-option; then
     fail 'unusable executable accepted solely because it exists'
   fi
+  # Real Ubuntu iptables/ip6tables are symlink entrypoints into a multi-call
+  # executable. Checking the resolved target is legitimate, but EXECUTING it
+  # loses argv[0] and causes the same precise E2E failure as a broken tool.
+  if (( EUID != 0 )); then
+    cat > "$root/xtables-nft-multi" <<'SH'
+#!/bin/sh
+case "${0##*/}" in
+  iptables|ip6tables) [ "${1:-}" = -V ] ;;
+  *) exit 1 ;;
+esac
+SH
+    chmod 0755 "$root/xtables-nft-multi"
+    ln -s xtables-nft-multi "$root/iptables"
+    ln -s xtables-nft-multi "$root/ip6tables"
+    prerequisite_tool_usable "$root/iptables" -V ||
+      fail 'verified IPv4 firewall alias lost its multi-call program name'
+    prerequisite_tool_usable "$root/ip6tables" -V ||
+      fail 'verified IPv6 firewall alias lost its multi-call program name'
+    if prerequisite_tool_usable "$root/xtables-nft-multi" -V; then
+      fail 'multi-call target without its expected alias falsely passed'
+    fi
+  fi
   package_installed() { [[ $1 == "${existing_package:-none}" ]]; }
   prerequisite_tool_usable() {
     case "$*" in

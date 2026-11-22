@@ -713,8 +713,11 @@ prerequisite_tool_usable() {
       done
     done
   fi
-  # Never demand a specific version string, and bound a broken tool's probe.
-  timeout -k 1 5 "$resolved" "$@" >/dev/null 2>&1
+  # Execute the verified DISCOVERED entrypoint, not its canonical target.
+  # Debian/Ubuntu multi-call programs (iptables/ip6tables -> xtables-nft-multi)
+  # dispatch on argv[0]; running the resolved file name breaks a healthy tool.
+  # Root-controlled path checks above still apply to the resolved target.
+  timeout -k 1 5 "$candidate" "$@" >/dev/null 2>&1
 }
 
 prerequisite_satisfied() {

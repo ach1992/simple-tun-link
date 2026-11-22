@@ -42,7 +42,10 @@ Releases, PRs and dated Issue evidence, not this current operator runbook.
   regardless of which package (if any) provided it, without numeric version pins.
   If a package is already installed but its command is unusable, STL reports
   an actionable repair error rather than silently accepting it or automatically
-  reinstalling/upgrading that package.
+  reinstalling/upgrading that package. Symlinked system commands (including
+  Debian/Ubuntu `iptables` and `ip6tables` alternatives) are checked for a
+  trustworthy target but executed through the original command name, keeping
+  multi-call tool behavior intact.
   This applies to `iproute2`, `iptables`/`ip6tables`, `kmod`,
   `wireguard-tools` (`wg`) and `nftables` (`nft`). The selected kernel/backend
   still checks its actual capabilities. External IPsec services/plugins or
