@@ -130,9 +130,22 @@ func inputRuleVerdict(fields []string, route managedIngress, link domain.Link) (
 				return "", true, false
 			}
 		case "-m":
-			if value != "tcp" && value != "udp" && value != "icmp" && value != "comment" {
+			if value != "tcp" && value != "udp" && value != "icmp" && value != "comment" &&
+				value != "conntrack" && value != "state" {
 				return "", true, false
 			}
+		case "--ctstate", "--state":
+			// A rule that permits only established/related packets cannot admit
+			// the unsolicited first Spoof handshake when INPUT defaults to DROP.
+			// Do not mistake that common stateful exception for an opaque rule
+			// that may already allow a new incoming packet.
+			states := strings.Split(value, ",")
+			for _, state := range states {
+				if state != "ESTABLISHED" && state != "RELATED" {
+					return "", true, false
+				}
+			}
+			return "", false, true
 		case "--comment": // metadata only
 		default:
 			return "", true, false

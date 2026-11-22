@@ -17,6 +17,8 @@ func TestSpoofIngressPermissionOnlyWhenBlocked(t *testing.T) {
 		{name: "existing explicit allow", chain: "-P INPUT DROP\n-A INPUT -i eth0 -d 10.244.62.221/32 -j ACCEPT\n"},
 		{name: "blocked primary only", chain: "-P INPUT ACCEPT\n-A INPUT -d 10.244.62.221/32 -j DROP\n"},
 		{name: "default drop", chain: "-P INPUT DROP\n"},
+		{name: "default drop with tracked established only", chain: "-P INPUT DROP\n-A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT\n"},
+		{name: "default drop with legacy state established only", chain: "-P INPUT DROP\n-A INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT\n"},
 		{name: "unrelated destination drop", chain: "-P INPUT ACCEPT\n-A INPUT -d 203.0.113.98/32 -j DROP\n"},
 		{name: "unrelated port drop", chain: "-P INPUT ACCEPT\n-A INPUT -i eth0 -p udp --dport 9000 -j DROP\n"},
 		{name: "unknown jump on permissive policy", chain: "-P INPUT ACCEPT\n-A INPUT -j PREEXISTING_FILTER\n"},
@@ -30,7 +32,7 @@ func TestSpoofIngressPermissionOnlyWhenBlocked(t *testing.T) {
 				}
 				var want bool
 				switch tt.name {
-				case "default drop":
+				case "default drop", "default drop with tracked established only", "default drop with legacy state established only":
 					want = true
 				case "blocked primary only":
 					want = r.endpoint.Port() == 48001
