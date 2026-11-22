@@ -32,9 +32,13 @@ candidate also provides lightweight measured quality selection, an
 endpoint-local Auto/Manual private TUN MTU with authenticated DF evidence,
 and opt-in exact Link-owned IPv4 INPUT rules on supported iptables
 hosts (no global policy edits). Operators can instead pin a local outgoing profile.
-**All eight outer packet profiles have carried bilateral authenticated private
-ICMP in two isolated Linux containers.** This is not proof of public WAN
-reachability, stealth or full native GRE/IPIP/L2TP interoperability. In
+**All eight outer packet profiles have carried authenticated private
+ICMP/TCP/UDP in two isolated Linux containers and, on the newer
+unreleased candidate, two independent-kernel KVM virtual machines.**
+Each VM profile had its own confidential Setup Code, actual private
+bidirectional payload verification and exact Link cleanup. This is
+not proof of public WAN reachability, stealth or native GRE/IPIP/L2TP
+interoperability. In
 particular, TCP-looking packets are **not** a real established TCP connection
 and the protocol-115 option is **not** STL's existing native L2TPv3 Backend.
 No Spoof code has been merged into Stable or deployed to real production

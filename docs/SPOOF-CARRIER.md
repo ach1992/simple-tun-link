@@ -495,10 +495,95 @@ to its original two addresses after the test. The large inventory was
 NOT exhaustively transmitted over the network; no real-provider
 forged-source delivery is claimed.
 
-**Not established by those tests:** a separate physical/VM kernel,
-real WAN/provider filtering, public Internet source spoofing,
-ordinary outer TCP establishment, all route/rp_filter/firewall combinations,
-large-scale performance beyond tested netem transfers, or
-review/merge/release. Container reboot is not a full independent
-hardware/kernel reboot. These remain tracked in
-[Issue #262](https://github.com/ach1992/simple-tun-link/issues/262).
+**Not established by the container tests alone:** independent kernels,
+public WAN/provider filtering, genuine outer TCP establishment, all
+firewall/routing combinations or review/release readiness. The separate
+VM campaign below provides additional kernel-independent evidence but
+does not establish public-provider reachability.
+
+## Independent-kernel KVM acceptance (2026-11-22)
+
+The exact smart candidate
+`900af8dda7a46f91dae5eafeb1e95e136425f44c` was built and tested
+on **two separately booted Debian 13 KVM virtual machines**, not Linux
+containers sharing the host kernel. The task-owned AI Test Server Incus
+project is `stl262-spoof-private`, with guests `stl262-native-a/b`.
+Both used Linux kernel `6.12.117+deb13-amd64`, real `enp5s0` NICs,
+systemd and TUN. Their private bridge `stl262private` uses
+`10.246.62.0/24`, with NAT and IPv4 forwarding **disabled**;
+no public forged-source packets were transmitted. Binary SHA256 on
+both guests:
+`50c4bbb28963bfe39bbe1ce99b88c14dda2a428dfaeda7877dc019e3c5f5cc2f`.
+
+The reproducible, task-specific runner
+[`scripts/tests/spoof-native-vm-matrix-lab.sh`](../scripts/tests/spoof-native-vm-matrix-lab.sh)
+uses these exact owned VM names and private endpoints; it is **not**
+a general-purpose host/firewall provisioning script. On the
+configured isolated Test Server, all **eight raw outer profiles**
+(`udp`, `icmp`, TCP-RST-shaped `tcp`, `gre`, `ipip`,
+`proto58`, `proto58-echo` and `l2tpv3`-shaped) individually
+completed one offline-Code Create/Import, bilateral authenticated
+`CONNECTED`, private ICMP 2/2 in both directions, and independently
+SHA-256-verified private TCP 262,144 bytes and verified UDP 16
+datagrams in **each direction**. Each temporary Link was removed on
+both VM peers with no loss of the separate original Link. Test Server
+root job `1795316401334192793` exited 0 with final marker
+`ALL_EIGHT_PROFILES_NATIVE_VM_ENCRYPTED_ICMP_TCP_UDP_BIDIRECTIONAL_PASS`.
+These are STL-owned raw packet shapes, **not** native interoperation
+with arbitrary TCP, GRE or L2TPv3 peers.
+
+Additional same-VM scenarios: A committed a pending Link before B
+imported, without an online peer; the same confidential Code later
+produced independently chosen outer routes and bilateral private
+ICMP/TCP/UDP. A one-sided B VM shutdown changed A to
+`RECONNECTING` with bilateral confirmation false; B's systemd
+boot Restore recovered the original Link, protected 0600 history and
+private traffic without a new Code. Independently rotating A's Source
+file between previously authenticated candidates recovered the same
+Link. Temporarily removing A's entire Source file accurately reported
+`NO_WORKING_PATH`, zero candidate Sources and bilateral=false; restoring
+the protected file reconnected both sides automatically, with private
+ICMP 3/3 each direction (Test Server job `1795316613771542919`, exit 0).
+Constraining A's underlay MTU to 1150 and B's to 1250 led to
+different **authenticated DF-verified** private MTUs of 1024 and
+1100 (including verified TUN kernel readback): 900-byte private
+ICMP 4/4 each way, 2 MiB verified TCP each way, and 80 UDP
+datagrams each way succeeded, followed by verified exact route cleanup.
+Two concurrent Links also carried verified ICMP/TCP/UDP independently;
+removing the second on B and A did not affect the first. A task-only
+one-way blackhole of the actual remote destination correctly led
+both peers to `RECONNECTING` / `bilateral_confirmed=false`;
+removing the scoped block automatically restored bilateral private
+ICMP. Finally, **both independently booted VMs were stopped and
+started**, and both boot Restore services completed successfully on
+the current binary, returning to bilateral CONNECTED with 3/3
+private ICMP each way and unchanged 16 historical routes.
+
+A real duplicate receiver-port test revealed that an earlier
+candidate could reject a conflicting Link but leave uncommitted
+per-Link protected material. The fix on `900af8d` defers only
+Spoof protected credential staging until **after** final canonical
+locked resource-collision admission. The same VM conflict was
+reproduced after the fix: the conflicting Link was refused,
+the existing Link stayed active and **no orphan material directory**
+was created. Exact test-only leftovers from the original failed
+experiment were retired after confirming ownership and no committed
+or live Link. A further regression recognizes an iptables
+`ESTABLISHED,RELATED` allowance as insufficient to admit an
+unsolicited incoming Spoof handshake under default DROP.
+On this candidate the full Go test suite, `go vet` and relevant
+app/Spoof race tests all passed on Dev Server (job
+`1795316244157195973`, exit 0).
+
+**Important limits:** the optional managed firewall E2E in the
+independent VMs was stopped by the platform safety control; no
+permission rule or new Link was created in that attempt. Separate
+missing-iptables preflight failed safely and precisely, and older
+isolated **container** default-DROP Allow/Remove evidence remains
+available; neither substitutes for a complete native VM
+nftables/iptables/manager matrix. Other OS/kernel versions, strict
+`rp_filter`, asymmetric real NAT, stressed network conditions
+and actual ISP anti-spoof filtering are not proven by the above
+successes. PR #263 must be reconciled to the exact final HEAD,
+pass fresh required CI and independent read-only review before
+any proposed Merge/Release.
