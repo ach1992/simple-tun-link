@@ -376,6 +376,7 @@ func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		menuOption(out, "6", "WireGuard / WSS + TLS", "Encrypted WSS Carrier (optional pinned helper)")
 		menuOption(out, "7", "WireGuard / QUIC + TLS", "Encrypted UDP Carrier (optional pinned Hysteria)")
 		menuOption(out, "9", "MASQUE / CONNECT-IP", "Native private IPv4 over mTLS + HTTP/2 TCP")
+		menuOption(out, "10", "Spoof / Direct TUN", "Encrypted private IPv4 over raw UDP or ICMP")
 		menuTunnelOption(out, "8", "L2TPv3 / Direct-IP", "IP protocol 115; plaintext private Ethernet", report, basicTunnelOptions["8"])
 		menuOption(out, "i", "Availability details", "Explain why a type is unavailable")
 		menuOption(out, "0", "Back", "Main menu")
@@ -398,6 +399,9 @@ func menuCreate(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		}
 		if value == "" {
 			value = "1"
+		}
+		if value == "10" {
+			return menuCreateSpoof(input, reader, out, errOut, options)
 		}
 		if value == "9" {
 			// MASQUE needs only iproute2, not WireGuard, nftables or an extra helper.

@@ -20,6 +20,7 @@ import (
 	ipsecbackend "github.com/ach1992/simple-tun-link/internal/backend/ipsec"
 	l2tpbackend "github.com/ach1992/simple-tun-link/internal/backend/l2tpv3"
 	masquebackend "github.com/ach1992/simple-tun-link/internal/backend/masque"
+	spoofbackend "github.com/ach1992/simple-tun-link/internal/backend/spoof"
 	wgbackend "github.com/ach1992/simple-tun-link/internal/backend/wireguard"
 	"github.com/ach1992/simple-tun-link/internal/carrier/wss"
 	"github.com/ach1992/simple-tun-link/internal/domain"
@@ -28,12 +29,13 @@ import (
 	"github.com/ach1992/simple-tun-link/internal/managedmtu"
 	"github.com/ach1992/simple-tun-link/internal/masquehost"
 	"github.com/ach1992/simple-tun-link/internal/quichelper"
+	"github.com/ach1992/simple-tun-link/internal/spoofhost"
 	"github.com/ach1992/simple-tun-link/internal/state"
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
 	"github.com/ach1992/simple-tun-link/internal/version"
 )
 
-const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl menu\n  stl update (--local /root/stl/FILENAME | --mirror https://trusted.example/install.sh) --sha256 TRUSTED_SHA256\n  stl update --signed-mirror https://trusted.example/install.sh\n  stl update --url https://trusted.example/path/stl_vX.Y.Z_linux_ARCH_local-install.sh\n  stl mirror-key enroll --file /root/stl/publisher.pem --fingerprint TRUSTED_SHA256 [--rotate]\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link diagnose <link-id> [--mtu <bytes>] [--json]\n  stl link diagnose --all [--timeout <duration>] [--parallel <positive-count>] [--json]\n  stl link throughput <link-id> --confirm <link-id> [--seconds <1..10>] [--json]\n  stl link preview --stdin [--json]\n  stl link import --stdin --confirm <preview-token> [--json]\n  stl link export <link-id> [--json]\n  stl link create-wireguard --stdin --output <private-file> [--json]\n  stl link create-wss --stdin --output <private-file> [--json]\n  stl link create-quic --stdin --output <private-file> [--json]\n  stl link create-masque --stdin --output <private-file> [--json]\n  stl link preview-masque --stdin [--json]\n  stl link import-masque --stdin --confirm <preview-sha256> [--json]\n  stl link resume-masque --stdin --confirm <preview-sha256> [--json]\n  stl link reconcile-masque <link-id> --confirm <link-id> [--json]\n  stl link retire-masque <link-id> --confirm <link-id> [--json]\n  stl link preview-quic --stdin [--json]\n  stl link import-quic --stdin --confirm <preview-sha256> [--json]\n  stl link resume-quic --stdin --confirm <preview-sha256> [--json]\n  stl link diagnose-quic <link-id> [--json]\n  stl link retire-quic <link-id> --confirm <link-id> [--json]\n  stl link reconcile-quic-cold-boot <link-id> --confirm <link-id> [--json]\n  stl link preview-wss --stdin [--json]\n  stl link diagnose-wss <link-id> [--json]\n  stl link plan-wss-replacement <old-link-id> [--json]\n  stl link supersede-wss <old-id> --replacement <new-id> --confirm <old-id> [--json]\n  stl link retire-wss <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-vacant <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-removed <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-repair-vacant <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-original <link-id> --confirm <link-id> [--json]\n  stl link arm-wss-cold-boot <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-cold-boot <link-id> --confirm <link-id> [--json]\n  stl link import-wss --stdin --confirm <preview-sha256> [--json]\n  stl link resume-wss --stdin --confirm <preview-sha256> [--json]\n  stl link create-ipsec --stdin --output <private-file> [--json]\n  stl link activate-ipsec <link-id> --confirm <link-id> [--json]\n  stl link connect-ipsec <link-id> --confirm <link-id> [--json]\n  stl link retire-ipsec <link-id> --confirm <link-id> [--json]\n  stl link reconcile-ipsec <link-id> --confirm <link-id> [--json]\n  stl link reconcile-xfrm-ipsec <link-id> --confirm <link-id> [--json]\n  stl link resume-wireguard --stdin --confirm <setup-digest> [--json]\n  stl link recover-handoff --source <private-temp> --output <private-file> --confirm <link-id> [--json]\n  stl link credential retire <link-id> --confirm <link-id> --public-key <local-public-key> [--json]\n  stl link ensure --stdin [--json]\n  stl link remove <link-id> --confirm <link-id> [--json]\n  stl link restore --all\n  stl doctor ipsec [--json]\n  stl maintenance pre-uninstall --json\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
+const usage = "simple-tun-link (stl)\n\nUsage:\n  stl help\n  stl menu\n  stl update (--local /root/stl/FILENAME | --mirror https://trusted.example/install.sh) --sha256 TRUSTED_SHA256\n  stl update --signed-mirror https://trusted.example/install.sh\n  stl update --url https://trusted.example/path/stl_vX.Y.Z_linux_ARCH_local-install.sh\n  stl mirror-key enroll --file /root/stl/publisher.pem --fingerprint TRUSTED_SHA256 [--rotate]\n  stl version [--json]\n  stl link list [--json]\n  stl link status <link-id> [--json]\n  stl link diagnose <link-id> [--mtu <bytes>] [--json]\n  stl link diagnose --all [--timeout <duration>] [--parallel <positive-count>] [--json]\n  stl link throughput <link-id> --confirm <link-id> [--seconds <1..10>] [--json]\n  stl link preview --stdin [--json]\n  stl link import --stdin --confirm <preview-token> [--json]\n  stl link export <link-id> [--json]\n  stl link create-wireguard --stdin --output <private-file> [--json]\n  stl link create-wss --stdin --output <private-file> [--json]\n  stl link create-quic --stdin --output <private-file> [--json]\n  stl link create-masque --stdin --output <private-file> [--json]\n  stl link create-spoof --creator IPv4:PORT --recipient IPv4:PORT --creator-private IPv4 --recipient-private IPv4 --sources FILE --output PRIVATE-FILE [--device IFACE] [--json]\n  stl link import-spoof --setup PRIVATE-FILE --sources FILE [--device IFACE] [--json]\n  stl link resume-spoof --setup PRIVATE-FILE --sources FILE [--device IFACE] [--json]\n  stl link spoof-status <link-id> [--json]\n  stl link rp-filter plan <link-id> --mode (loose|off) [--interface NIC] [--json]\n  stl link rp-filter apply <link-id> --mode (loose|off) --confirm <link-id> [--interface NIC] [--json]\n  stl link rp-filter restore <link-id> --confirm <link-id> [--json]\n  stl link retire-spoof <link-id> --confirm <link-id> [--json]\n  stl link preview-masque --stdin [--json]\n  stl link import-masque --stdin --confirm <preview-sha256> [--json]\n  stl link resume-masque --stdin --confirm <preview-sha256> [--json]\n  stl link reconcile-masque <link-id> --confirm <link-id> [--json]\n  stl link retire-masque <link-id> --confirm <link-id> [--json]\n  stl link preview-quic --stdin [--json]\n  stl link import-quic --stdin --confirm <preview-sha256> [--json]\n  stl link resume-quic --stdin --confirm <preview-sha256> [--json]\n  stl link diagnose-quic <link-id> [--json]\n  stl link retire-quic <link-id> --confirm <link-id> [--json]\n  stl link reconcile-quic-cold-boot <link-id> --confirm <link-id> [--json]\n  stl link preview-wss --stdin [--json]\n  stl link diagnose-wss <link-id> [--json]\n  stl link plan-wss-replacement <old-link-id> [--json]\n  stl link supersede-wss <old-id> --replacement <new-id> --confirm <old-id> [--json]\n  stl link retire-wss <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-vacant <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-removed <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-repair-vacant <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-original <link-id> --confirm <link-id> [--json]\n  stl link arm-wss-cold-boot <link-id> --confirm <link-id> [--json]\n  stl link reconcile-wss-cold-boot <link-id> --confirm <link-id> [--json]\n  stl link import-wss --stdin --confirm <preview-sha256> [--json]\n  stl link resume-wss --stdin --confirm <preview-sha256> [--json]\n  stl link create-ipsec --stdin --output <private-file> [--json]\n  stl link activate-ipsec <link-id> --confirm <link-id> [--json]\n  stl link connect-ipsec <link-id> --confirm <link-id> [--json]\n  stl link retire-ipsec <link-id> --confirm <link-id> [--json]\n  stl link reconcile-ipsec <link-id> --confirm <link-id> [--json]\n  stl link reconcile-xfrm-ipsec <link-id> --confirm <link-id> [--json]\n  stl link resume-wireguard --stdin --confirm <setup-digest> [--json]\n  stl link recover-handoff --source <private-temp> --output <private-file> --confirm <link-id> [--json]\n  stl link credential retire <link-id> --confirm <link-id> --public-key <local-public-key> [--json]\n  stl link ensure --stdin [--json]\n  stl link remove <link-id> --confirm <link-id> [--json]\n  stl link restore --all\n  stl doctor ipsec [--json]\n  stl maintenance pre-uninstall --json\n\nAdditional Link commands will be added through tracked GitHub Issues.\n"
 
 const jsonSchemaVersion = 1
 
@@ -55,6 +57,7 @@ type runtimeOptions struct {
 	quicHelperObserver   func(context.Context, domain.Link) (quichelper.HelperDiagnostics, error)
 	quicRetirementHost   quicRetirementHost
 	masqueRetirementHost app.MASQUERetirementStore
+	spoofRetirementHost  *spoofhost.Host
 	// Test-only assembly hook; production never receives a caller-selected Engine policy.
 	configureEngine func(*app.Engine)
 	// Test-only module observation seam. Production uses the real read-only
@@ -136,6 +139,8 @@ func runWithRuntimeInput(args []string, input io.Reader, stdout, stderr io.Write
 		return menuCommand(input, stdout, stderr, options)
 	case "masque-helper":
 		return masqueHelperCommand(args[1:], stdout, stderr)
+	case "spoof-helper":
+		return spoofHelperCommand(args[1:], stdout, stderr)
 	case "version":
 		if len(args) == 2 && args[1] == "--json" {
 			payload := struct {
@@ -206,6 +211,15 @@ func runWithRuntimeInput(args []string, input io.Reader, stdout, stderr io.Write
 		}
 		if len(args) >= 2 && args[1] == "reconcile-masque" {
 			return linkMASQUEReconcileCommand(args[2:], stdout, stderr, options)
+		}
+		if len(args) >= 2 && args[1] == "rp-filter" {
+			return linkSpoofRPFilterCommand(args[2:], stdout, stderr, options)
+		}
+		if len(args) >= 2 && args[1] == "retire-spoof" {
+			return linkSpoofRetirementCommand(args[2:], stdout, stderr, options)
+		}
+		if len(args) >= 2 && (args[1] == "create-spoof" || args[1] == "import-spoof" || args[1] == "resume-spoof" || args[1] == "spoof-status") {
+			return linkSpoofCommand(args[1:], stdout, stderr, options)
 		}
 		if len(args) >= 2 && (args[1] == "create-masque" || args[1] == "preview-masque" ||
 			args[1] == "import-masque" || args[1] == "resume-masque") {
@@ -316,7 +330,7 @@ func assembleRuntimeBackendOptions(stateRoot string, selected domain.Backend) (*
 		case domain.BackendGRE, domain.BackendIPIP, domain.BackendL2TPv3,
 			domain.BackendWireGuard, domain.BackendWireGuardWSS,
 			domain.BackendWireGuardQUIC, domain.BackendIPsec,
-			domain.BackendMASQUE:
+			domain.BackendMASQUE, domain.BackendSpoof:
 		default:
 			return nil, runtimeInitFailure(runtimeInitSelection, fmt.Errorf("unknown saved backend"))
 		}
@@ -397,6 +411,26 @@ func assembleRuntimeBackendOptions(stateRoot string, selected domain.Backend) (*
 		}
 	}
 
+	if wants(domain.BackendSpoof) {
+		executable, err := os.Executable()
+		if err != nil {
+			return nil, runtimeInitFailure(runtimeInitExecutable, err)
+		}
+		executable, err = canonicalSTLExecutable(executable)
+		if err != nil {
+			return nil, runtimeInitFailure(runtimeInitExecutable, err)
+		}
+		host, err := spoofhost.New(options.stateRoot, executable)
+		if err != nil {
+			return nil, runtimeInitFailure(runtimeInitBackend, err)
+		}
+		impl, err := spoofbackend.New(host)
+		if err != nil {
+			return nil, runtimeInitFailure(runtimeInitBackend, err)
+		}
+		options.backends = append(options.backends, impl)
+		options.spoofRetirementHost = host
+	}
 	if wants(domain.BackendMASQUE) {
 		executable, err := os.Executable()
 		if err != nil {
@@ -504,6 +538,10 @@ func buildRuntimeEngine(options runtimeOptions) (*app.Engine, error) {
 	engine.SetMTUManager(options.mtuManager)
 	if options.masqueRetirementHost != nil {
 		engine.SetMASQUERetirementStore(options.masqueRetirementHost)
+	}
+	if options.spoofRetirementHost != nil {
+		engine.SetSpoofRetirementStore(options.spoofRetirementHost)
+		engine.SetSpoofRPFilterManager(spoofhost.ManagedRPFilter{Root: options.stateRoot})
 	}
 	if _, hasWSS := registry.Get(domain.BackendWireGuardWSS); hasWSS {
 		keys, err := wgbackend.NewKeyStore(options.stateRoot)

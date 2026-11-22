@@ -17,6 +17,45 @@ saved Link is **not** proof that packets reach its peer.
 | IPsec | Native IKEv2/XFRM, ESP or NAT-T; gated host preparation | Yes |
 | MASQUE CONNECT-IP (v0.1.28+) | Native IPv4 TUN over HTTP/2 TLS/TCP; private mTLS default and optional request-bearer Public TLS where available in the installed build | Yes |
 
+**In development, NOT in the published Stable release:** the
+[Spoof Direct TUN Carrier](docs/SPOOF-CARRIER.md) (Issue #262) encrypts
+private IPv4 ICMP/TCP/UDP within one authenticated managed Link.
+Its `Auto` policy searches local operator-supplied Source IPv4 addresses
+and STL-owned raw outer packet formats: UDP, unsolicited ICMP Echo Reply,
+TCP-looking RST packets, GRE-shaped, nested IPIP, bare/echo-shaped protocol
+58 and an L2TPv3-style protocol-115 data header. Both endpoints can choose
+different outbound Source/profile/explicitly paired real destination
+combinations, save authenticated working routes across restarts, continue
+low-rate discovery of verified backups while healthy, and retry previously
+working routes before exhaustive rediscovery. The unshipped successor
+candidate also provides lightweight measured quality selection, an
+endpoint-local Auto/Manual private TUN MTU with authenticated DF evidence,
+and opt-in exact Link-owned IPv4 INPUT rules on supported iptables
+hosts (no global policy edits). Operators can instead pin a local outgoing profile.
+**All eight outer packet profiles have carried authenticated private
+ICMP/TCP/UDP in two isolated Linux containers and, on the newer
+unreleased candidate, two independent-kernel KVM virtual machines.**
+Each VM profile had its own confidential Setup Code, actual private
+bidirectional payload verification and exact Link cleanup. This is
+not proof of public WAN reachability, stealth or native GRE/IPIP/L2TP
+interoperability. In
+particular, TCP-looking packets are **not** a real established TCP connection
+and the protocol-115 option is **not** STL's existing native L2TPv3 Backend.
+Current Spoof development also separates authenticated, externally
+advertised endpoints from local NAT bind addresses, incoming from
+outgoing NICs, and outer transport from verified private application
+traffic. Linux reverse-path filtering is diagnosed read-only;
+when an actual asymmetric receive path is blocked, an operator may use
+**Fix rp_filter** in the Spoof tunnel menu or explicit CLI
+`rp-filter plan/apply/restore` to select `Loose (2)` or `Off (0)`.
+STL previews shared/global effects, requires approval and journals
+verified values for reboot recovery and owner-aware rollback;
+no shared Linux sysctl is silently changed.
+
+No Spoof code has been merged into Stable or deployed to real production
+servers. See the [operator guide](docs/SPOOF-CARRIER.md) for actual support,
+source-list capacity, exact testing and remaining gates.
+
 Different transports have different kernel, firewall, network and optional
 helper requirements. STL does not automatically configure provider firewalls,
 NAT or foreign VPNs, and no transport works through every network.

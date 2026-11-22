@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"net/netip"
+	"path/filepath"
 	"strings"
 
 	"github.com/ach1992/simple-tun-link/internal/stlerr"
@@ -25,6 +26,7 @@ const (
 	BackendWireGuardQUIC Backend = "wireguard-quic"
 	BackendIPsec         Backend = "ipsec"
 	BackendMASQUE        Backend = "masque"
+	BackendSpoof         Backend = "spoof"
 
 	EncapNative Encapsulation = "native"
 	EncapFOU    Encapsulation = "fou"
@@ -172,6 +174,204 @@ type MASQUEOptions struct {
 	MaterialSHA256 string `json:"material_sha256"`
 }
 
+// SpoofOptions is public endpoint-local topology for the Direct TUN Spoof
+// provider. No bootstrap secret or private X25519 identity belongs in State.
+// The role describes setup provenance, NOT an asymmetric data direction.
+type SpoofOptions struct {
+	// Empty means legacy/default raw UDP. "auto" tests all STL raw wire
+	// profiles independently on each endpoint; explicit names lock one
+	// profile without changing the original authenticated Link.
+	OuterProtocol string `json:"outer_protocol,omitempty"`
+	TxProfile     string `json:"tx_profile,omitempty"` // endpoint-local outbound override only when OuterProtocol=auto
+	Role          string `json:"role"`
+	SourceFile    string `json:"source_file"`
+	// Canonical comma-separated IP:port tuples. The order is operator priority,
+	// and the primary endpoint remains in Underlay/ListenPort/PeerPort.
+	LocalAlternates string    `json:"local_alternates,omitempty"`
+	PeerAlternates  string    `json:"peer_alternates,omitempty"`
+	PrivateMTU      MTUPolicy `json:"private_mtu,omitzero"`
+	ManageIngress   bool      `json:"manage_ingress,omitempty"`
+	DiscoveryPPS    int       `json:"discovery_pps,omitempty"`
+	BackgroundPPS   int       `json:"background_pps,omitempty"`
+
+	ListenPort       uint16     `json:"listen_port"`
+	PeerPort         uint16     `json:"peer_port"`
+	BindIPv4         netip.Addr `json:"bind_ipv4,omitzero"`          // locally assigned receiver, distinct from advertised Underlay.Local
+	BindPort         uint16     `json:"bind_port,omitempty"`         // post-DNAT local destination; zero=advertised port
+	BindAlternates   string     `json:"bind_alternates,omitempty"`   // additional local receivers, NOT advertised in Setup Code
+	IngressInterface string     `json:"ingress_interface,omitempty"` // receive NIC, independent of outgoing Interface
+	Interface        string     `json:"interface,omitempty"`         // outgoing NIC only
+	LocalPublicKey   string     `json:"local_public_key"`
+	PeerPublicKey    string     `json:"peer_public_key,omitempty"`
+	MaterialSHA256   string     `json:"material_sha256"`
+}
+
+func canonicalSpoofPublicKey(value string) bool {
+	if len(value) != 43 {
+		return false
+	}
+	raw, err := base64.RawURLEncoding.Strict().DecodeString(value)
+	if err != nil || len(raw) != 32 ||
+		base64.RawURLEncoding.EncodeToString(raw) != value {
+		return false
+	}
+	for _, b := range raw {
+		if b != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// ParseSpoofAlternates validates a comparable, canonical endpoint list. It
+// is deliberately scoped to operator-declared IPv4 destinations; it never
+// enumerates addresses, expands CIDRs, or infers a route from forged sources.
+func ParseSpoofAlternates(value string, primary netip.AddrPort) ([]netip.AddrPort, error) {
+	if value == "" {
+		return nil, nil
+	}
+	var result []netip.AddrPort
+	seen := map[netip.AddrPort]bool{primary: true}
+	for _, raw := range strings.Split(value, ",") {
+		ep, err := netip.ParseAddrPort(raw)
+		if err != nil || !ep.IsValid() || !ep.Addr().Is4() ||
+			ep.Addr().IsUnspecified() || ep.Addr().IsMulticast() || !ep.Addr().IsGlobalUnicast() ||
+			ep.Port() == 0 || ep.String() != raw || seen[ep] {
+			return nil, stlerr.New(stlerr.CodeInvalid, "spoof_alternates", "", "spoof",
+				"alternate endpoints must be unique canonical IPv4:port values, excluding the primary endpoint")
+		}
+		seen[ep] = true
+		result = append(result, ep)
+	}
+	return result, nil
+}
+
+// CanonicalSpoofAlternates converts explicit operator endpoints into the
+// compact comparable Link representation without adding artificial limits.
+func CanonicalSpoofAlternates(endpoints []netip.AddrPort, primary netip.AddrPort) (string, error) {
+	values := make([]string, 0, len(endpoints))
+	for _, ep := range endpoints {
+		values = append(values, ep.String())
+	}
+	canonical := strings.Join(values, ",")
+	_, err := ParseSpoofAlternates(canonical, primary)
+	return canonical, err
+}
+
+// ValidateSpoofTopology permits future real Linux server use; it deliberately
+// has NO laboratory-only, ASN, geographic or unassigned-source filter.
+func (l Link) ValidateSpoofTopology() error {
+	s := l.Spoof
+	if s.Role != "creator" && s.Role != "recipient" {
+		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof", "Spoof endpoint role must be creator or recipient")
+	}
+	profile := s.OuterProtocol
+	switch profile {
+	case "", "udp", "auto", "icmp", "tcp", "gre", "ipip", "proto58", "proto58-echo", "l2tpv3":
+	default:
+		return stlerr.New(stlerr.CodeUnsupported, "validate_link", string(l.ID), "spoof", "unsupported Spoof outer protocol")
+	}
+	if s.TxProfile != "" {
+		if profile != "auto" {
+			return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof",
+				"local outgoing profile override requires auto receive policy")
+		}
+		switch s.TxProfile {
+		case "udp", "icmp", "tcp", "gre", "ipip", "proto58", "proto58-echo", "l2tpv3":
+		default:
+			return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof", "invalid local outgoing profile override")
+		}
+	}
+	requiredEncap := EncapUDP
+	if profile != "" && profile != "udp" && profile != "auto" {
+		requiredEncap = EncapNative
+	}
+	if l.Encapsulation != requiredEncap || !l.Underlay.Local.Is4() || !l.Underlay.Peer.Is4() ||
+		l.Underlay.Local.IsUnspecified() || l.Underlay.Peer.IsUnspecified() ||
+		l.Underlay.Local.IsMulticast() || l.Underlay.Peer.IsMulticast() {
+		return stlerr.New(stlerr.CodeUnsupported, "validate_link", string(l.ID), "spoof",
+			"Spoof Direct TUN needs exact real reachable IPv4 endpoints")
+	}
+	if l.Addresses.Local.Bits() != 32 || l.Addresses.Peer.Bits() != 32 ||
+		l.Addresses.Local.Addr().IsUnspecified() || l.Addresses.Peer.Addr().IsUnspecified() ||
+		l.Addresses.Local.Addr().IsLoopback() || l.Addresses.Peer.Addr().IsLoopback() ||
+		l.Addresses.Local.Addr().IsMulticast() || l.Addresses.Peer.Addr().IsMulticast() ||
+		l.Addresses.Local.Contains(l.Underlay.Local) || l.Addresses.Local.Contains(l.Underlay.Peer) ||
+		l.Addresses.Peer.Contains(l.Underlay.Local) || l.Addresses.Peer.Contains(l.Underlay.Peer) {
+		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof",
+			"Spoof private /32 routes must be distinct and must not capture either real peer endpoint")
+	}
+	localEP := netip.AddrPortFrom(l.Underlay.Local, s.ListenPort)
+	peerEP := netip.AddrPortFrom(l.Underlay.Peer, s.PeerPort)
+	if _, err := ParseSpoofAlternates(s.LocalAlternates, localEP); err != nil {
+		return err
+	}
+	if _, err := ParseSpoofAlternates(s.PeerAlternates, peerEP); err != nil {
+		return err
+	}
+	if err := s.PrivateMTU.Validate(); err != nil {
+		return err
+	}
+	if s.PrivateMTU.Mode == MTUManual && (s.PrivateMTU.Bytes < 576 || s.PrivateMTU.Bytes > 65431) {
+		return stlerr.New(stlerr.CodeUnsupported, "validate_link", string(l.ID), "spoof",
+			"Spoof private MTU must fit authenticated IPv4 outer packet (576..65431)")
+	}
+	if s.DiscoveryPPS < 0 || s.BackgroundPPS < 0 {
+		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof",
+			"Spoof scan packet rates must be nonnegative; zero uses the adaptive default")
+	}
+	if s.ListenPort == 0 || s.PeerPort == 0 ||
+		!filepath.IsAbs(s.SourceFile) || filepath.Clean(s.SourceFile) != s.SourceFile {
+		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof",
+			"Spoof requires real receive ports and an absolute local source file path")
+	}
+	bind := s.BindIPv4
+	if !bind.IsValid() {
+		bind = l.Underlay.Local
+	}
+	if !bind.Is4() || bind.IsUnspecified() || bind.IsMulticast() {
+		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof",
+			"Spoof local receive bind must be a usable locally assigned IPv4")
+	}
+	port := s.BindPort
+	if port == 0 {
+		port = s.ListenPort
+	}
+	if _, err := ParseSpoofAlternates(s.BindAlternates, netip.AddrPortFrom(bind, port)); err != nil {
+		return err
+	}
+	if s.ManageIngress && s.IngressInterface == "" {
+		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof",
+			"managed Spoof ingress requires explicit --ingress-device; outbound --device is independent")
+	}
+	for _, device := range []string{s.Interface, s.IngressInterface} {
+		if device != "" && (len(device) >= 16 || strings.TrimSpace(device) != device ||
+			strings.ContainsAny(device, "\x00\r\n\t /")) {
+			return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof",
+				"Spoof local ingress/egress interface name is invalid")
+		}
+	}
+	if !canonicalSpoofPublicKey(s.LocalPublicKey) ||
+		(s.Role == "recipient" && !canonicalSpoofPublicKey(s.PeerPublicKey)) ||
+		(s.Role == "creator" && s.PeerPublicKey != "" && !canonicalSpoofPublicKey(s.PeerPublicKey)) ||
+		(s.PeerPublicKey != "" && s.PeerPublicKey == s.LocalPublicKey) {
+		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof",
+			"Spoof public identity invalid, equal to peer, or not yet obtained by recipient")
+	}
+	if len(s.MaterialSHA256) != 64 {
+		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof", "Spoof protected material digest required")
+	}
+	if _, err := hex.DecodeString(s.MaterialSHA256); err != nil ||
+		strings.ToLower(s.MaterialSHA256) != s.MaterialSHA256 {
+		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof", "Spoof material digest must be canonical SHA256")
+	}
+	if l.MTU.Mode == MTUManual && l.MTU.Bytes < 576 {
+		return stlerr.New(stlerr.CodeUnsupported, "validate_link", string(l.ID), "spoof",
+			"Spoof private TUN requires an IPv4-capable MTU")
+	}
+	return nil
+}
+
 // Empty preserves the original plain-QUIC representation. Public versioned
 // inputs may offer an explicit "plain" choice, but normalize it at admission.
 const (
@@ -201,6 +401,7 @@ type Link struct {
 	WSS       WSSOptions       `json:"wss,omitzero"`
 	QUIC      QUICOptions      `json:"quic,omitzero"`
 	MASQUE    MASQUEOptions    `json:"masque,omitzero"`
+	Spoof     SpoofOptions     `json:"spoof,omitzero"`
 }
 
 // ResourceClaim is a secret-free identity for a collision-sensitive host
@@ -271,6 +472,14 @@ func (l Link) Validate() error {
 	}
 	if l.Backend != BackendWireGuardQUIC && l.QUIC != (QUICOptions{}) {
 		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "QUIC options are only allowed with wireguard-quic")
+	}
+	if l.Backend != BackendSpoof && l.Spoof != (SpoofOptions{}) {
+		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "Spoof options are only valid for the Spoof backend")
+	}
+	if l.Backend == BackendSpoof {
+		if err := l.ValidateSpoofTopology(); err != nil {
+			return err
+		}
 	}
 	if l.Backend != BackendMASQUE && l.MASQUE != (MASQUEOptions{}) {
 		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), string(l.Backend), "MASQUE options are only allowed with masque")

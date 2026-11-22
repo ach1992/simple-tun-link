@@ -43,6 +43,10 @@ type MTUManager interface {
 type Engine struct {
 	quicRetirement   QUICRetirementStore
 	masqueRetirement MASQUERetirementStore
+	spoofRPFilter    SpoofRPFilterManager
+	spoofRetirement  interface {
+		RetireAfterRemove(context.Context, domain.Link) error
+	}
 	// Package-private material seams support ordering and crash tests only.
 	quicPreviewMaterial           func(string, quic.Plan, uint16, string, quic.CredentialBundle) (quic.HelperConfigIdentity, error)
 	quicStageGeneration           func(context.Context, string, quic.Plan, uint16, string, string, quic.CredentialBundle, quic.HelperConfigIdentity) (quic.HelperConfigIdentity, error)
@@ -256,6 +260,25 @@ func (e *Engine) EnsureWithWSSCredentialAdmitted(ctx context.Context, desired do
 	}, admission)
 }
 
+// EnsureWithSpoofProvision stages the endpoint's own protected Noise identity
+// and immutable helper topology under the same canonical Engine transaction.
+// Local provisioning and helper activation do not require any remote path.
+func (e *Engine) EnsureWithSpoofProvision(ctx context.Context, desired domain.Link, stage func() error) (Result, error) {
+	if desired.Backend != domain.BackendSpoof || stage == nil {
+		return Result{}, stlerr.New(stlerr.CodeUnsupported, "spoof_provision", string(desired.ID), "spoof", "Spoof requires local protected provisioning")
+	}
+	return e.ensureWithProvision(ctx, desired, true, stage, nil)
+}
+
+// SetSpoofRetirementStore installs exact committed-identity credential cleanup
+// after a successful Engine Remove. Never delete secrets in backend.Stop;
+// that operation must retain rollback capability before State is committed.
+func (e *Engine) SetSpoofRetirementStore(s interface {
+	RetireAfterRemove(context.Context, domain.Link) error
+}) {
+	e.spoofRetirement = s
+}
+
 // EnsureWithMASQUEProvision stages immutable per-Link mTLS material while the
 // canonical maintenance and Link locks are held. It never bypasses the shared
 // Engine's backend/State/rollback/restore transaction.
@@ -433,6 +456,40 @@ func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.
 				stlerr.OperationEvidence{Stage: "credential_retirement", HostMutation: "attempted", DesiredState: "committed", Rollback: "not_attempted"})
 		}
 	}
+	if prior.Backend == domain.BackendSpoof {
+		if e.spoofRPFilter == nil {
+			fresh, loadErr := e.store.Load(ctx)
+			if loadErr != nil {
+				return result, loadErr
+			}
+			if len(fresh.SpoofRPFilterClaims) != 0 || len(fresh.SpoofRPFilterSettings) != 0 {
+				return result, stlerr.WithEvidence(
+					stlerr.New(stlerr.CodeState, "remove", string(id), "spoof", "confirmed rp_filter settings remain journaled but their managed host restorer is unavailable"),
+					stlerr.OperationEvidence{Stage: "rp_filter_restore", HostMutation: "not_attempted", DesiredState: "committed", Rollback: "not_attempted"})
+			}
+		}
+		if e.spoofRPFilter != nil {
+			if err := e.spoofRPFilter.Release(ctx, e.store, id); err != nil {
+				return result, stlerr.WithEvidence(
+					stlerr.Wrap(stlerr.CodeState, "remove", string(id), "spoof",
+						"Spoof Link removal committed; rp_filter restoration remains pending; use stl link rp-filter restore <id> --confirm <id>", err),
+					stlerr.OperationEvidence{Stage: "rp_filter_restore", HostMutation: "attempted", DesiredState: "committed", Rollback: "not_attempted"})
+			}
+		}
+		if err := e.retireSpoofCredentialLocked(ctx, id); err != nil {
+			return result, stlerr.WithEvidence(
+				stlerr.Wrap(stlerr.CodeState, "remove", string(id), "spoof", "Spoof Link removed; original protected material retirement still requires reconciliation", err),
+				stlerr.OperationEvidence{Stage: "credential_retirement", HostMutation: "attempted", DesiredState: "committed", Rollback: "not_attempted"})
+		}
+		// Link deletion alone is not the last-host-owner boundary. Keep the
+		// same restore unit until both the rp_filter journal and committed
+		// protected credential retirement are durably settled.
+		if err := e.cleanupRestoreIfSettled(ctx); err != nil {
+			return result, stlerr.WithEvidence(
+				stlerr.Wrap(stlerr.CodeState, "remove", string(id), "spoof", "Spoof Link removed and material settled, but restore persistence cleanup remains retryable", err),
+				stlerr.OperationEvidence{Stage: "persistence_cleanup", HostMutation: "attempted", DesiredState: "committed", Rollback: "not_attempted"})
+		}
+	}
 	if prior.Backend == domain.BackendIPsec {
 		if err := e.retireIPsecCredentialLocked(ctx, id); err != nil {
 			hostMutation := "not_attempted"
@@ -478,6 +535,9 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 	if _, pending := snapshot.FindMASQUEOperation(desired.ID); pending {
 		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID), "masque",
 			"unresolved MASQUE pre-effect operation blocks new host effects")
+	}
+	if _, reserved := snapshot.FindSpoofRemovalReceipt(desired.ID); reserved {
+		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID), "spoof", "retired Spoof Link ID is permanently reserved")
 	}
 	if _, reserved := snapshot.FindMASQUERemovalReceipt(desired.ID); reserved {
 		return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(desired.ID), "masque",
@@ -579,9 +639,11 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 				"cannot invalidate previous credential removal receipt", err)
 		}
 	}
-	if provision != nil {
+	credentialProvisionAttempted := false
+	if provision != nil && desired.Backend != domain.BackendSpoof {
 		// This callback can persist a protected local key even if it
 		// subsequently fails or Engine network Apply never runs.
+		credentialProvisionAttempted = true
 		if err := provision(); err != nil {
 			return Result{}, stlerr.WithEvidence(
 				stlerr.Wrap(stlerr.CodeState, "ensure_imported", string(desired.ID), string(desired.Backend),
@@ -595,8 +657,19 @@ func (e *Engine) executeEnsure(ctx context.Context, desired domain.Link, rejectR
 		previous := record.Desired
 		prior = &previous
 	}
-	result, err := e.executeLocked(ctx, backend.Request{Operation: backend.OperationEnsure, Prior: prior, Link: desired}, record, "")
-	if err != nil && provision != nil {
+	// Spoof credential publication must occur only after the Engine has
+	// acquired resource locks and rejected definite port/address conflicts.
+	// All other credential workflows retain their existing ordering.
+	var spoofProvision func() error
+	if provision != nil && desired.Backend == domain.BackendSpoof {
+		spoofProvision = func() error {
+			credentialProvisionAttempted = true
+			return provision()
+		}
+	}
+	result, err := e.executeLockedWithSpoofProvision(ctx,
+		backend.Request{Operation: backend.OperationEnsure, Prior: prior, Link: desired}, record, spoofProvision)
+	if err != nil && credentialProvisionAttempted {
 		if observed := stlerr.EvidenceOf(err); observed != nil {
 			observed.CredentialProvision = "attempted"
 			err = stlerr.WithEvidence(err, *observed)
@@ -611,7 +684,19 @@ func (e *Engine) executeLocked(ctx context.Context, request backend.Request, pri
 	return e.executeLockedWithIPsec(ctx, request, prior, senderDigest, false)
 }
 
-func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Request, prior state.LinkRecord, senderDigest string, activateIPsec bool) (result Result, err error) {
+// executeLockedWithSpoofProvision defers only Spoof's local protected-key
+// publication until after final locked resource-conflict admission.
+func (e *Engine) executeLockedWithSpoofProvision(ctx context.Context, request backend.Request,
+	prior state.LinkRecord, provision func() error) (Result, error) {
+	return e.executeLockedWithIPsecAndSpoofProvision(ctx, request, prior, "", false, provision)
+}
+
+func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Request, prior state.LinkRecord, senderDigest string, activateIPsec bool) (Result, error) {
+	return e.executeLockedWithIPsecAndSpoofProvision(ctx, request, prior, senderDigest, activateIPsec, nil)
+}
+
+func (e *Engine) executeLockedWithIPsecAndSpoofProvision(ctx context.Context, request backend.Request,
+	prior state.LinkRecord, senderDigest string, activateIPsec bool, spoofProvision func() error) (result Result, err error) {
 	// Stage evidence is derived from this Engine execution, never error text.
 	// "attempted" does not assert which resources were actually changed.
 	evidence := stlerr.OperationEvidence{
@@ -727,6 +812,9 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 			string(link.ID), string(link.Backend),
 			"unfinished MASQUE pre-effect journal: no host mutation permitted")
 	}
+	if _, reserved := fresh.FindSpoofRemovalReceipt(link.ID); reserved {
+		return Result{}, stlerr.New(stlerr.CodeConflict, string(request.Operation), string(link.ID), "spoof", "retired Spoof identity cannot be reused")
+	}
 	if _, reserved := fresh.FindMASQUERemovalReceipt(link.ID); reserved {
 		return Result{}, stlerr.New(stlerr.CodeConflict, string(request.Operation),
 			string(link.ID), string(link.Backend), "MASQUE removed Link remains reserved")
@@ -838,6 +926,22 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		if _, removed := fresh.FindRemovalReceipt(link.ID); removed {
 			return Result{}, stlerr.New(stlerr.CodeConflict, "ensure", string(link.ID), string(link.Backend),
 				"previous removal authorization was not invalidated")
+		}
+	}
+	if spoofProvision != nil {
+		if link.Backend != domain.BackendSpoof || request.Operation != backend.OperationEnsure {
+			return Result{}, errors.New("Spoof credential provision requires an Engine Ensure transaction")
+		}
+		// A confirmed conflict must never stage a new protected key. Once
+		// this point is reached, resource locks remain held through Apply and
+		// State commit. Uncertain later host effects intentionally retain the
+		// key for original-Link reconciliation rather than deleting it blindly.
+		if err := spoofProvision(); err != nil {
+			return Result{}, stlerr.WithEvidence(
+				stlerr.Wrap(stlerr.CodeState, "spoof_provision", string(link.ID), string(link.Backend),
+					"protected Spoof identity/config cannot be staged; no host mutation attempted", err),
+				stlerr.OperationEvidence{Stage: "credential_provision", HostMutation: "not_attempted",
+					DesiredState: "no_commit_attempted", Rollback: "not_required", CredentialProvision: "attempted"})
 		}
 	}
 	var preparedQUIC state.QUICCrashOperation
@@ -1554,6 +1658,12 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 				}
 				snapshot.RemovalReceipts = append(snapshot.RemovalReceipts, state.RemovalReceipt{LinkID: link.ID, Backend: domain.BackendWireGuardQUIC, LocalPublicKey: link.WireGuard.LocalPublicKey, QUICLink: link, QUICGeneration: prior.QUICGeneration, QUICOriginalTermination: quicOriginalTermination})
 			}
+			if link.Backend == domain.BackendSpoof {
+				if _, exists := snapshot.FindSpoofRemovalReceipt(link.ID); exists {
+					return fmt.Errorf("Spoof original retirement receipt already exists")
+				}
+				snapshot.SpoofRemovalReceipts = append(snapshot.SpoofRemovalReceipts, state.SpoofRemovalReceipt{Link: link})
+			}
 			if link.Backend == domain.BackendMASQUE {
 				if _, exists := snapshot.FindMASQUERemovalReceipt(link.ID); exists {
 					return fmt.Errorf("MASQUE original material retirement receipt exists")
@@ -1605,7 +1715,7 @@ func (e *Engine) executeLockedWithIPsec(ctx context.Context, request backend.Req
 		}
 		// Pending pre-effect journals still need the host restore entry point
 		// even after the last ordinary Link is durably removed.
-		remaining = len(snapshot.Links) + len(snapshot.QUICCrashOperations) + len(snapshot.WSSCrashOperations) + len(snapshot.MASQUEOperations)
+		remaining = outstandingRestoreObligations(*snapshot)
 		return nil
 	})
 	if commitErr != nil {

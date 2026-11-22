@@ -80,6 +80,9 @@ type Snapshot struct {
 	MASQUEOperations        []MASQUEOperation        `json:"masque_operations,omitempty"`
 	MASQUERemovalReceipts   []MASQUERemovalReceipt   `json:"masque_removal_receipts,omitempty"`
 	MASQUERecoveryReceipts  []MASQUERecoveryReceipt  `json:"masque_recovery_receipts,omitempty"`
+	SpoofRemovalReceipts    []SpoofRemovalReceipt    `json:"spoof_removal_receipts,omitempty"`
+	SpoofRPFilterClaims     []SpoofRPFilterClaim     `json:"spoof_rp_filter_claims,omitempty"`
+	SpoofRPFilterSettings   []SpoofRPFilterSetting   `json:"spoof_rp_filter_settings,omitempty"`
 }
 
 func EmptySnapshot() Snapshot {
@@ -156,6 +159,13 @@ func (s *Snapshot) normalize() {
 	s.MASQUEOperations = canonicalMASQUEOperations(s.MASQUEOperations)
 	sort.Slice(s.MASQUERecoveryReceipts, func(i, j int) bool {
 		return s.MASQUERecoveryReceipts[i].LinkID < s.MASQUERecoveryReceipts[j].LinkID
+	})
+	sort.Slice(s.SpoofRPFilterClaims, func(i, j int) bool { return s.SpoofRPFilterClaims[i].LinkID < s.SpoofRPFilterClaims[j].LinkID })
+	sort.Slice(s.SpoofRPFilterSettings, func(i, j int) bool {
+		return s.SpoofRPFilterSettings[i].Interface < s.SpoofRPFilterSettings[j].Interface
+	})
+	sort.Slice(s.SpoofRemovalReceipts, func(i, j int) bool {
+		return s.SpoofRemovalReceipts[i].Link.ID < s.SpoofRemovalReceipts[j].Link.ID
 	})
 	sort.Slice(s.MASQUERemovalReceipts, func(i, j int) bool {
 		return s.MASQUERemovalReceipts[i].Link.ID < s.MASQUERemovalReceipts[j].Link.ID
@@ -275,6 +285,7 @@ func (s *FileStore) Update(ctx context.Context, mutate func(*Snapshot) error) er
 	for i := range previousMASQUE {
 		previousMASQUE[i].Resources = append([]domain.ResourceClaim(nil), previousMASQUE[i].Resources...)
 	}
+	previousSpoofRetirements := append([]SpoofRemovalReceipt(nil), snapshot.SpoofRemovalReceipts...)
 	previousRetirements := append([]MASQUERemovalReceipt(nil), snapshot.MASQUERemovalReceipts...)
 	previousMASQUERecoveries := append([]MASQUERecoveryReceipt(nil), snapshot.MASQUERecoveryReceipts...)
 	if err := mutate(&snapshot); err != nil {
@@ -284,6 +295,10 @@ func (s *FileStore) Update(ctx context.Context, mutate func(*Snapshot) error) er
 	if err := validateSnapshot(snapshot); err != nil {
 		return err
 	}
+	if err := validateSpoofReceiptTransition(previousSpoofRetirements, snapshot.SpoofRemovalReceipts); err != nil {
+		return err
+	}
+
 	if err := validateMASQUEStateTransition(previousMASQUE, previousRetirements, previousMASQUERecoveries, snapshot); err != nil {
 		return err
 	}
@@ -627,6 +642,12 @@ func validateSnapshot(snapshot Snapshot) error {
 				return fmt.Errorf("invalid resource claim for %q: %w", record.Desired.ID, err)
 			}
 		}
+	}
+	if err := validateSpoofReceipts(snapshot); err != nil {
+		return err
+	}
+	if err := validateSpoofRPFilter(snapshot); err != nil {
+		return err
 	}
 	if err := validateMASQUELifecycle(snapshot); err != nil {
 		return err

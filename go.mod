@@ -5,9 +5,13 @@ go 1.27.0
 toolchain go1.27.1
 
 require (
+	github.com/flynn/noise v1.1.0
 	github.com/strongswan/govici v0.8.2
 	golang.org/x/net v0.63.0
 	golang.org/x/sys v0.50.0
 )
 
-require golang.org/x/text v0.44.0 // indirect
+require (
+	golang.org/x/crypto v0.59.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
+)

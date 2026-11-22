@@ -202,6 +202,7 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		menuOption(out, "3", "WireGuard / WSS + TLS", "Sensitive peer JSON; hidden paste")
 		menuOption(out, "4", "WireGuard / QUIC + TLS", "Sensitive peer JSON; hidden paste")
 		menuOption(out, "5", "MASQUE / CONNECT-IP", "Sensitive peer JSON; hidden paste")
+		menuOption(out, "6", "Spoof / Direct TUN", "Confidential Setup Code file; not terminal paste")
 		menuOption(out, "0", "Back", "Main menu")
 		fmt.Fprint(out, "Choose type [1]: ")
 		mode, err := readMenuAnswer(reader)
@@ -209,7 +210,7 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			return 0
 		}
 		if err != nil {
-			menuNotice(out, "WARNING", "Choose a listed number: 0, 1, 2, 3, 4 or 5.")
+			menuNotice(out, "WARNING", "Choose a listed number: 0, 1, 2, 3, 4, 5 or 6.")
 			continue
 		}
 		if mode == "" {
@@ -218,9 +219,12 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		if mode == "0" || strings.EqualFold(mode, "q") {
 			return 0
 		}
-		if mode != "1" && mode != "2" && mode != "3" && mode != "4" && mode != "5" {
-			menuNotice(out, "WARNING", "Choose 1 for plain tunnels, 2 for WireGuard/IPsec, 3 for WSS, 4 for QUIC or 5 for MASQUE.")
+		if mode != "1" && mode != "2" && mode != "3" && mode != "4" && mode != "5" && mode != "6" {
+			menuNotice(out, "WARNING", "Choose 1 for plain tunnels, 2 for WireGuard/IPsec, 3 for WSS, 4 for QUIC, 5 for MASQUE or 6 for Spoof.")
 			continue
+		}
+		if mode == "6" {
+			return menuImportSpoof(input, reader, out, errOut, options)
 		}
 		if mode == "5" {
 			return menuImportMASQUE(input, reader, out, errOut, options)

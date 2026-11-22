@@ -6,6 +6,54 @@ This is the **wire-format and compatibility contract** for
 [SECURITY.md](SECURITY.md). Pairing decodes and inverts
 configuration; it must **never mutate a host by previewing**.
 
+## Spoof offline handoff (distinct contract; development only)
+
+Issue #262 introduces the separate sensitive `stl-spoof-v1.`
+Setup Code. It is a **single manual A-to-B transfer**,
+not a second normal export/answer or a modified legacy `stl://`
+schema. It contains the unpredictable 256-bit bootstrap secret, the
+creator's **public** X25519 identity, one stable Link ID, both known
+**real** reachable IPv4 receive endpoints/port-or-identifiers, the
+two private IPv4 addresses and one permitted *outer profile policy*.
+Omitting the outer field in the original version preserves UDP;
+explicit values may be `auto`, `udp`, `icmp`, `tcp`, `gre`, `ipip`,
+`proto58`, `proto58-echo`, or `l2tpv3`. These are STL-owned
+packet formats and **not** interoperable conventional tunnel session
+negotiations; `auto` permits each endpoint to discover its own
+outgoing profile separately. For `--outer auto`, the optional
+`--tx-outer PROFILE` is **only local**, not carried in the Code,
+and does not authorize an unrelated peer identity.
+
+For ICMP, the endpoint numeric `PORT` is an Echo identifier,
+not a UDP/TCP listener; other raw profiles use a link-scoped
+discriminator or protocol data Session ID. B generates and retains
+its own long-term private identity on Import. Neither endpoint's
+Source candidates, selected outgoing Source, history file nor
+private identity are exchanged in the Code. Generic JSON, Status,
+Diagnose and logs must never expose the confidential Code.
+
+Noise `XKpsk0_25519_ChaChaPoly_SHA256` establishes fresh in-band
+sessions. The creator's first accepted authenticated enrollment
+durably pins B's public identity; later sessions must match it.
+The real peer cryptographically acknowledges the actually received
+Source/profile before claiming a connected outgoing path. A stolen
+**valid** Code before first enrollment can win that first binding;
+the protocol cannot infer a leak. Revocation of an unbound Code
+uses canonical committed Link Remove and a fresh Link ID/Code;
+the retired identity cannot be repurposed. Same-Link recovery from
+outage and reboot reuses the original identities and saved root-only
+working path history without a second transfer.
+
+The 8 raw packet formats, including experimental protocol 58 and
+L2TPv3-style/115, and both independently chosen outgoing directions
+were validated as an STL-managed authenticated TUN with private
+bidirectional ICMP in two task-owned isolated Debian containers.
+This does not prove their external provider/WAN reachability,
+interoperability with full L2TP/GRE/IPIP peers or stable release
+readiness. Independent review and required CI/release gates remain
+outstanding. See [the runbook](SPOOF-CARRIER.md) and
+[Issue #262](https://github.com/ach1992/simple-tun-link/issues/262).
+
 ## Why a versioned Quick Link?
 
 STL uses a simple one-step `quick` offer so that the receiving

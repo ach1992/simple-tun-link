@@ -1336,6 +1336,153 @@ unit-name cleanup or a regenerated peer handoff. Legitimate committed
 post-reboot restoration requires trusted changed-kernel evidence and fresh
 host vacancy, preserving the same Link and credential identity.
 
+## Spoof Direct TUN Carrier (Issue #262; development branch only)
+
+In `stl menu`, select **Create tunnel → 10 (Spoof)** or
+**Import Setup Link → 6 (Spoof)**. Interactive review requires `YES`
+before delegating to the same Engine; the confidential Code is a protected
+file, not pasted into an ordinary terminal. The exact per-host Source file
+is checked and can be Rechecked before confirmation.
+
+The standalone root-only commands are `stl link create-spoof`,
+`stl link import-spoof`, `stl link resume-spoof`,
+`stl link spoof-status LINK_ID --json` and post-Remove
+`stl link retire-spoof LINK_ID --confirm LINK_ID`. On Create,
+`--outer auto` (default) independently discovers a working Source
+IPv4, one of the explicitly paired real peer destinations, and one
+of the STL raw outer packet profiles (UDP/17, ICMP/1,
+TCP-looking RST/6, GRE-shaped/47, nested IPIP/4, bare/echo-shaped
+protocol 58 and L2TPv3-style/115). `--outer PROFILE` instead pins one
+profile for both endpoints using the original confidential
+`stl-spoof-v1.` Setup Code. The profile numbers are raw-IP identifiers,
+**not** live TCP sessions, conventional GRE/IPIP endpoints, valid ICMPv6
+over IPv4, or full kernel L2TPv3 pseudowires.
+
+An optional `--tx-outer PROFILE` flag, valid only with a Code's
+`--outer auto`, locks **only the local endpoint's outgoing profile**.
+For example Create on A with `--outer auto --tx-outer udp` and
+Import on B with `--tx-outer icmp` accepts asymmetric A→B UDP and
+B→A ICMP on a single authenticated private TUN Link. B's local
+override does not change the private Code or A's policy. The guided
+menu includes the same Auto/default or explicit profile choice plus
+the optional local Auto override. Recipient B has its own independent
+Source inventory file; none crosses the offline Code boundary.
+
+After connectivity failure, the helper first retries all available
+historically confirmed (Source, profile, real peer destination) combinations with a few
+bounded passes, then exhaustively and repeatedly checks the full
+current local inventory times its enabled profiles and paired
+destinations. While healthy, authenticated backup scans keep running
+at a separately bounded low rate. Results are pinned
+to the verified Link identity, stored in mode 0600 original per-Link
+history across reboots, and removed by original Engine-owned Remove.
+No country/ASN/address-block permission restriction or arbitrary
+candidate-count ceiling is imposed by the product. Status distinguishes
+scheduled source/profile attempts from authenticated bilateral
+connectivity, including the selected Source/profile/real destination, sampled
+quality, actual verified TUN MTU, history count and recovery stage. Inner ICMP/TCP/UDP can run inside any proven profile.
+
+The optional creator-only `--creator-alts` and `--recipient-alts`
+accept comma-separated, *explicit real* IPv4:port receivers and bind
+those alternates to the **original one-time protected Setup Code**.
+B imports the same Code; B cannot mutate its alternate list at Import.
+If a primary/alternate peer IP/port changes unexpectedly, creating a
+new Link with a new Code is required (unlike changing local Source
+candidate addresses). The additional `--discovery-pps N` and
+`--background-pps N` flags set optional, positive local per-Link
+packet-rate budgets; omitted/zero values use independently bounded
+defaults. The optional `--mtu auto` (default on new Spoof Create and
+Import) probes exact encrypted outer DF payload sizes, while
+`--mtu N` selects a validated manual private TUN MTU. MTU policy,
+profile pinning, Source inventory path and packet rates remain
+endpoint-local; repeat the exact originals when resuming an
+interrupted creator setup.
+
+An explicitly requested `--manage-ingress --ingress-device eth0` first
+inspects current host INPUT policy. If the traffic is already
+permitted, it creates no redundant rules. When a relevant direct
+iptables INPUT block is identified, it manages only this Link's
+precisely identified IPv4 ACCEPT exceptions for the outer receive
+interface and, when needed, for decrypted peer-to-local packets
+arriving on the original TUN (/32 peer and /32 local destination), via
+the installed `iptables` host interface. An authenticated handshake
+can succeed even while a host-wide INPUT DROP rejects the inner
+private ICMP/TCP/UDP packets; verify real application delivery. Setup and Import preflight
+report a missing or unusable firewall CLI **before** local creation;
+unrelated firewall rules, default policy, IPv6 and provider ACLs are
+untouched. Operators must understand their existing firewall chain
+ordering and any separate nftables filtering: a successful rule insert
+does not prove public reachability, so use authenticated Link status
+and real private traffic. Without opt-in, STL never modifies host
+firewall policy for Spoof.
+
+A successful CLI Create/Import records **local provisioning only**,
+not remote reachability. Canonical `link status`, manual
+`link diagnose`, boot Restore and exact-owner
+`link remove LINK_ID --confirm LINK_ID` apply. The original A's
+`resume-spoof --setup ORIGINAL_FILE` reuses the same protected
+identity on interrupted provisioning; repeat its original
+`--tx-outer` value if manually overridden. Retired Link IDs cannot
+be reissued. See the [Spoof runbook](SPOOF-CARRIER.md) for commands
+and actual two-container evidence, limits and release gates.
+
+### Spoof NAT / L3 status / reverse-path remediation
+
+The paired external `--creator`/`--recipient` IPv4:port endpoints and
+`--creator-alts`/`--recipient-alts` remain immutable in the ONE
+confidential Setup Code. Each server may independently override its local
+post-DNAT listener via `--bind-ipv4`, `--bind-port` and
+`--bind-alts`. `--device` is the outgoing NIC; `--ingress-device`
+is the incoming NIC, required for `--manage-ingress`. The guided
+network prompt accepts `advanced` for these local choices.
+STL does NOT create router port forwarding or auto-discover NAT mappings.
+
+`spoof-status --json` separately reports authenticated outer transport
+(`runtime.state`), actual private-IPv4 ICMP (`runtime.private_l3_status`:
+UNVERIFIED, VERIFIED_ICMP, ICMP_PROBE_FAILED), and Linux effective
+`rp_filter` (`max(all,interface)`). A failed ICMP probe does not prove TCP/UDP
+is blocked. It also reports the operator-confirmed `rp_filter_managed` claim
+when present; status itself remains entirely read-only. Verified private
+ICMP applies to the exact current Session/Source/Profile/Destination route:
+quality-driven route switches invalidate the old result immediately and
+ignore in-flight results from superseded route generations. The generic
+human-readable `link status` also displays the independent private-ICMP
+status.
+
+**Operator-approved rp_filter repair** (Spoof Links only):
+
+```text
+stl link rp-filter plan <link-id> --mode (loose|off) [--interface NIC] [--json]
+stl link rp-filter apply <link-id> --mode (loose|off) --confirm <link-id> [--interface NIC] [--json]
+stl link rp-filter restore <link-id> --confirm <link-id> [--json]
+```
+
+`plan` previews concrete `all` and incoming-NIC changes without host
+mutation. `apply` requires exact matching Link ID consent and writes only the
+approved effective policy, with persisted original values and readback;
+`restore` releases this Link's approved policy while preserving active sibling
+owners. `Off` explicitly supports `all=0` **and** NIC `=0` when necessary.
+Changing `all` affects other interfaces/services and may alter their effective
+strictness in either direction. The interactive menu (`My tunnels` -> Spoof ->
+`Fix rp_filter`) shows and confirms the same actions. If the receiving NIC is
+ambiguous (including post-DNAT), supply the actual NIC with `--interface`.
+During the canonical reboot Restore, STL reconciles operator-approved policy
+before restoring Spoof helpers. On an interrupted Remove, use the original ID
+with `rp-filter restore` to finish the journaled rollback. Foreign/unknown
+changes are preserved with a diagnostic instead of being overwritten.
+Even an already-compatible effective Loose policy supplied by `all=2` has
+its global dependency recorded without requiring a needless NIC change;
+foreign global reset/drift is diagnosed explicitly. The existing recovery
+unit remains installed while an rp_filter journal or committed Spoof
+credential-retirement receipt is unsettled; `link restore --all` reconciles
+both after interruption, and the unit is removed only after all exact
+owner-scoped work finishes.
+
+An interrupted post-commit Spoof Remove can be resumed via
+`stl link retire-spoof LINK_ID --confirm LINK_ID`. The Engine
+requires its exact durable original receipt, verifies original
+owned material/quarantine and leaves foreign/uncertain files untouched.
+
 ## MASQUE CONNECT-IP Carrier (v0.1.28+)
 
 MASQUE creator JSON and explicit desired MASQUE Link schema v6
