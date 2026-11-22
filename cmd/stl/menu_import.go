@@ -220,7 +220,7 @@ func menuImport(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			return 0
 		}
 		if mode != "1" && mode != "2" && mode != "3" && mode != "4" && mode != "5" && mode != "6" {
-			menuNotice(out, "WARNING", "Choose 1 for plain, 2 for WireGuard/IPsec, 3 for WSS, 4 for QUIC, 5 for MASQUE or 6 for Spoof.")
+			menuNotice(out, "WARNING", "Choose 1 for plain tunnels, 2 for WireGuard/IPsec, 3 for WSS, 4 for QUIC, 5 for MASQUE or 6 for Spoof.")
 			continue
 		}
 		if mode == "6" {
