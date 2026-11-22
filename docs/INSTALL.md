@@ -35,10 +35,14 @@ Releases, PRs and dated Issue evidence, not this current operator runbook.
   provisioner owns its separately attested private strongSwan runtime
   under the same Engine/maintenance authority; neither component
   may adopt a foreign unit.
-- The installer first reuses **working host tools**. Installed distro
-  packages satisfy their prerequisites normally; if an expected package name
-  is absent but the existing tool in a root-controlled system directory passes
-  a read-only compatibility probe, STL skips installation and version checks.
+- The installer first reuses **working host tools**. For common CLI
+  prerequisites it probes the actual command even if its distro package is
+  reported installed; an installed **broken** command does not count as ready.
+  A functional existing tool in a root-controlled system directory is reused
+  regardless of which package (if any) provided it, without numeric version pins.
+  If a package is already installed but its command is unusable, STL reports
+  an actionable repair error rather than silently accepting it or automatically
+  reinstalling/upgrading that package.
   This applies to `iproute2`, `iptables`/`ip6tables`, `kmod`,
   `wireguard-tools` (`wg`) and `nftables` (`nft`). The selected kernel/backend
   still checks its actual capabilities. External IPsec services/plugins or

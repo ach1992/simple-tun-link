@@ -485,8 +485,12 @@ printf 'APT_SIMULATION_SELECTIVE_CAPTURE_AND_FULL_DIAGNOSTICS=PASS\n'
     fi
   done
   existing_package=iproute2
+  prerequisite_tool_usable() { return 0; }
+  prerequisite_satisfied iproute2 || fail 'installed working package was not reused'
   prerequisite_tool_usable() { return 1; }
-  prerequisite_satisfied iproute2 || fail 'already installed official package became a forced reinstall'
+  if prerequisite_satisfied iproute2; then
+    fail 'broken tool from nominally installed package falsely accepted'
+  fi
   if prerequisite_satisfied iptables; then fail 'unusable alternate firewall tool accepted'; fi
   existing_package=
   prerequisite_tool_usable() { [[ $1 != ip6tables ]]; }
@@ -521,11 +525,20 @@ printf 'PREREQUISITE_WORKING_TOOL_REUSE_NO_VERSION_PIN_AND_IPSEC_BOUNDARY=PASS\n
   grep -Fq 'no APT changes' "$root/available-reuse.out" ||
     fail 'no-APT success result not explained'
   prerequisite_satisfied() { [[ $1 != iproute2 ]]; }
+  package_installed() { return 1; }
   if ( ensure_packages > "$root/missing-requires-apt.out" 2>&1 ); then
     fail 'actually missing prerequisite bypassed APT dependency gate'
   fi
   grep -Fq 'selected prerequisites are missing' "$root/missing-requires-apt.out" ||
     fail 'missing prerequisite had no actionable package-manager error'
+  package_installed() { [[ $1 == iproute2 ]]; }
+  if ( ensure_packages > "$root/installed-broken.out" 2>&1 ); then
+    fail 'installed but broken tool falsely passed without a working command'
+  fi
+  grep -Fq 'installed selected prerequisite iproute2 is unusable' "$root/installed-broken.out" ||
+    fail 'installed but broken tool has no precise manual repair explanation'
+  ! grep -q 'unnecessary APT' "$root/installed-broken.out" ||
+    fail 'installed broken tool attempted APT'
 )
 printf 'ALREADY_USABLE_TOOLS_SKIP_MISSING_APT_AND_REPOSITORY_GATES=PASS\n'
 

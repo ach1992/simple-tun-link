@@ -719,15 +719,19 @@ prerequisite_tool_usable() {
 
 prerequisite_satisfied() {
   local pkg=$1
-  package_installed "$pkg" && return 0
+  # A nominally installed distro package is NOT enough when its required
+  # command is broken, absent or cannot perform a read-only compatibility
+  # probe. Check these same capabilities for both distro and alternate tools.
   case "$pkg" in
     iproute2) prerequisite_tool_usable ip -json address show ;;
     iptables) prerequisite_tool_usable iptables -V && prerequisite_tool_usable ip6tables -V ;;
     kmod) prerequisite_tool_usable modprobe --version && prerequisite_tool_usable modinfo --version ;;
     wireguard-tools) prerequisite_tool_usable wg --version ;;
     nftables) prerequisite_tool_usable nft --version ;;
-    # IPsec vendor daemons/plugins need independently proved service/crypto
-    # ownership. WSS/QUIC helper trust is a separate authenticated contract.
+    # These three are vendor-package eligibility only. Actual IPsec daemon,
+    # service and cryptographic plugin admission remains separately verified.
+    charon-systemd|strongswan-swanctl|libstrongswan-standard-plugins)
+      package_installed "$pkg" ;;
     *) return 1 ;;
   esac
 }
@@ -1486,7 +1490,11 @@ ensure_packages() {
   local pkg missing_ipsec=0 before_plan
   local -a missing=()
   for pkg in "${packages[@]}"; do
-    prerequisite_satisfied "$pkg" || missing+=("$pkg")
+    prerequisite_satisfied "$pkg" && continue
+    if package_installed "$pkg"; then
+      fail "installed selected prerequisite $pkg is unusable; inspect/repair its actual tool or package without automatic reinstall/upgrade. No APT attempted."
+    fi
+    missing+=("$pkg")
   done
   if [[ $expected_missing_supplied == 1 && "${missing[*]}" != "$expected_missing" ]]; then
     fail 'selected package inventory changed since confirmation; no APT attempted'
@@ -1569,7 +1577,7 @@ ensure_packages() {
     fail "APT_PACKAGE_INSTALL failed; missing selected packages: ${missing[*]}. No automatic retry: partial dpkg/service effects are possible. Inspect dpkg --audit and active APT processes, reconcile first, and if sources were unreachable manually configure a trusted signed Debian/Ubuntu regional mirror; STL will not rewrite sources."
   fi
   for pkg in "${packages[@]}"; do
-    prerequisite_satisfied "$pkg" || fail "selected prerequisite remains unavailable: $pkg"
+    prerequisite_satisfied "$pkg" || fail "selected prerequisite is still unusable after APT: $pkg; repair the actual tool or package before continuing"
   done
   if [[ $missing_ipsec == 1 ]]; then
     ipsec_normalize_new_vendor
@@ -1586,7 +1594,11 @@ if [[ $action == requirements ]]; then
   if [[ -z $os_release_fixture ]]; then
     missing=()
     for pkg in "${packages[@]}"; do
-      prerequisite_satisfied "$pkg" || missing+=("$pkg")
+      prerequisite_satisfied "$pkg" && continue
+      if package_installed "$pkg"; then
+        fail "installed selected prerequisite $pkg is unusable; inspect/repair its actual tool or package without automatic reinstall/upgrade. No APT attempted."
+      fi
+      missing+=("$pkg")
     done
     printf 'missing_packages=%s\n' "${missing[*]}"
     if (( ${#missing[@]} == 0 )); then
