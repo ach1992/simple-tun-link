@@ -152,7 +152,8 @@ func strictStateTopLevelFields(raw []byte) (map[string]json.RawMessage, error) {
 			"ipsec_removal_receipts", "removal_receipts",
 			"wss_crash_operations", "quic_crash_operations",
 			"quic_abandonment_receipts", "masque_operations",
-			"masque_removal_receipts", "masque_recovery_receipts":
+			"masque_removal_receipts", "masque_recovery_receipts",
+			"spoof_removal_receipts", "spoof_rp_filter_claims", "spoof_rp_filter_settings":
 		default:
 			return refuse()
 		}

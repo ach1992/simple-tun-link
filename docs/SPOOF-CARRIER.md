@@ -320,7 +320,15 @@ sudo stl link remove LINK_ID --confirm LINK_ID --json
 This locally removes only verified original resources, deletes the
 matching protected identity after committed removal and reserves the
 original Link ID permanently. Remove must work without the peer online.
-The confidential **operator-owned Setup Code file** is external to
+Its fully retired original-identity receipt is intentionally preserved in
+State as a permanent ID reservation; this does **not** prevent a normal
+read-only `stl maintenance pre-uninstall --json` success when no Links or
+other obligations remain. An **unfinished** Spoof retirement or a retained
+`rp_filter` host-policy claim/journal blocks Uninstall until its original
+STL recovery is completed. Inspect the reported reason and use the exact
+`retire-spoof` or `stl link restore --all` reconciliation as applicable;
+do not delete State records or edit sysctls to force Uninstall. The
+confidential **operator-owned Setup Code file** is external to
 STL's per-Link protected material: remove your original transferred
 file from its trusted storage separately when you no longer need it.
 Re-issue a fresh Link/Code if an unbound Code might have been exposed.
