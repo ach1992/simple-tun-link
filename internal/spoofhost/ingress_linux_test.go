@@ -16,7 +16,8 @@ func ingressFixture(t *testing.T, outer string) domain.Link {
 	link := domain.Link{
 		ID:      "lnk_1234567890abcdef1234567890abcdef",
 		Backend: domain.BackendSpoof, Encapsulation: domain.EncapUDP,
-		Underlay: domain.Underlay{Local: netip.MustParseAddr("10.244.62.221"), Peer: netip.MustParseAddr("10.244.62.222")},
+		Underlay:  domain.Underlay{Local: netip.MustParseAddr("10.244.62.221"), Peer: netip.MustParseAddr("10.244.62.222")},
+		Addresses: domain.LinkAddresses{Local: netip.MustParsePrefix("10.245.42.1/32"), Peer: netip.MustParsePrefix("10.245.42.2/32")},
 		Spoof: domain.SpoofOptions{
 			OuterProtocol: outer, ListenPort: 48001, PeerPort: 48002, Interface: "eth0",
 			LocalAlternates: "10.244.62.223:48011",
@@ -28,8 +29,8 @@ func ingressFixture(t *testing.T, outer string) domain.Link {
 func TestSpoofIngressRulesExactProtocolDestinationAndMarker(t *testing.T) {
 	link := ingressFixture(t, "auto")
 	rules, err := ingressRules(link)
-	if err != nil || len(rules) != 14 {
-		t.Fatalf("want 2 endpoints x7 protocol rules, got %d: %v", len(rules), err)
+	if err != nil || len(rules) != 15 {
+		t.Fatalf("want 2 endpoints x7 outer protocols plus private TUN, got %d: %v", len(rules), err)
 	}
 	markers := map[string]bool{}
 	for _, r := range rules {
@@ -42,6 +43,18 @@ func TestSpoofIngressRulesExactProtocolDestinationAndMarker(t *testing.T) {
 		}
 		markers[marker] = true
 		joined := strings.Join(args, " ")
+		if r.private {
+			if !strings.Contains(joined, "-i stls1234567890") ||
+				!strings.Contains(joined, "-s 10.245.42.2/32 -d 10.245.42.1/32") ||
+				!strings.Contains(joined, "--comment "+marker) || !strings.HasSuffix(joined, "-j ACCEPT") ||
+				strings.Contains(joined, " --dport ") || strings.Contains(joined, " -p ") {
+				t.Fatalf("unexpected private TUN exception: %s", joined)
+			}
+			if readOwnedMarkerCount("-A INPUT "+joined+"\n", marker) != 1 {
+				t.Fatal("private TUN owner marker not recognizable")
+			}
+			continue
+		}
 		if strings.Contains(joined, "-s ") || !strings.Contains(joined, "-d "+r.endpoint.Addr().String()+"/32") || !strings.Contains(joined, "-i eth0") ||
 			!strings.Contains(joined, "--comment "+marker) || !strings.HasSuffix(joined, "-j ACCEPT") {
 			t.Fatalf("unexpected broad or malformed owned rule: %s", joined)
@@ -63,10 +76,13 @@ func TestSpoofIngressRulesExactProtocolDestinationAndMarker(t *testing.T) {
 func TestSpoofIngressOptInAndRawProfileScoping(t *testing.T) {
 	link := ingressFixture(t, "proto58-echo")
 	rules, err := ingressRules(link)
-	if err != nil || len(rules) != 2 {
-		t.Fatalf("proto58 echo should share one IP protocol per endpoint, got %d: %v", len(rules), err)
+	if err != nil || len(rules) != 3 {
+		t.Fatalf("proto58 echo needs one IP protocol per endpoint plus private TUN, got %d: %v", len(rules), err)
 	}
 	for _, r := range rules {
+		if r.private {
+			continue
+		}
 		args, _, err := r.args(link)
 		if err != nil || !strings.Contains(strings.Join(args, " "), " -p 58 ") {
 			t.Fatalf("expected exact IPv4 protocol 58: %v %v", args, err)

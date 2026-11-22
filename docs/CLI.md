@@ -1401,8 +1401,12 @@ An explicitly requested `--manage-ingress --device eth0` first
 inspects current host INPUT policy. If the traffic is already
 permitted, it creates no redundant rules. When a relevant direct
 iptables INPUT block is identified, it manages only this Link's
-precisely identified IPv4 ACCEPT exceptions via
-the installed `iptables` host interface. Setup and Import preflight
+precisely identified IPv4 ACCEPT exceptions for the outer receive
+interface and, when needed, for decrypted peer-to-local packets
+arriving on the original TUN (/32 peer and /32 local destination), via
+the installed `iptables` host interface. An authenticated handshake
+can succeed even while a host-wide INPUT DROP rejects the inner
+private ICMP/TCP/UDP packets; verify real application delivery. Setup and Import preflight
 report a missing or unusable firewall CLI **before** local creation;
 unrelated firewall rules, default policy, IPv6 and provider ACLs are
 untouched. Operators must understand their existing firewall chain

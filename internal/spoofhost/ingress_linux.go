@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	spoofcarrier "github.com/ach1992/simple-tun-link/internal/carrier/spoof"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 )
 
@@ -26,6 +27,7 @@ import (
 type managedIngress struct {
 	endpoint netip.AddrPort
 	protocol string
+	private  bool // decrypted peer -> local TUN INPUT, not an outer receiver
 }
 
 func ingressRules(link domain.Link) ([]managedIngress, error) {
@@ -51,15 +53,36 @@ func ingressRules(link domain.Link) ([]managedIngress, error) {
 	if outer == "proto58-echo" {
 		names = []string{"proto58"}
 	}
-	out := make([]managedIngress, 0, len(endpoints)*len(names))
+	out := make([]managedIngress, 0, len(endpoints)*len(names)+1)
 	for _, ep := range endpoints {
 		for _, profile := range names {
-			out = append(out, managedIngress{ep, profile})
+			out = append(out, managedIngress{endpoint: ep, protocol: profile})
 		}
 	}
+	// A host-wide INPUT DROP can permit an authenticated outer handshake
+	// while silently dropping its decrypted private IPv4 packets as they
+	// enter the local TUN. Inspect and, only when blocked, admit the exact
+	// peer -> local private pair through this Link-owned TUN interface.
+	out = append(out, managedIngress{protocol: "private", private: true})
 	return out, nil
 }
 func (r managedIngress) args(link domain.Link) ([]string, string, error) {
+	if r.private {
+		if r.protocol != "private" || !link.Addresses.Local.Addr().Is4() || !link.Addresses.Peer.Addr().Is4() {
+			return nil, "", errors.New("Spoof private TUN ingress requires exact IPv4 peers")
+		}
+		name, err := spoofcarrier.TunnelName(link.ID)
+		if err != nil {
+			return nil, "", err
+		}
+		local, peer := link.Addresses.Local.Addr().String(), link.Addresses.Peer.Addr().String()
+		args := []string{"-i", name, "-s", peer + "/32", "-d", local + "/32"}
+		canonical := string(link.ID) + "|private|" + name + "|" + peer + "|" + local
+		digest := sha256.Sum256([]byte(canonical))
+		marker := "stl:spoof:" + string(link.ID) + ":" + hex.EncodeToString(digest[:8])
+		args = append(args, "-m", "comment", "--comment", marker, "-j", "ACCEPT")
+		return args, marker, nil
+	}
 	if !r.endpoint.Addr().Is4() || r.endpoint.Port() == 0 {
 		return nil, "", errors.New("invalid managed Spoof receiver")
 	}

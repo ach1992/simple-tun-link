@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	spoofcarrier "github.com/ach1992/simple-tun-link/internal/carrier/spoof"
 	"github.com/ach1992/simple-tun-link/internal/domain"
 )
 
@@ -68,9 +69,20 @@ func needsIngressException(snapshot string, link domain.Link, route managedIngre
 func inputRuleVerdict(fields []string, route managedIngress, link domain.Link) (verdict string, relevant, exact bool) {
 	relevant, exact = true, true
 	protocol := map[string]string{"udp": "17", "tcp": "6", "icmp": "1", "gre": "47", "ipip": "4", "proto58": "58", "l2tpv3": "115"}[route.protocol]
+	device, destination := link.Spoof.Interface, route.endpoint.Addr()
+	if route.private {
+		var err error
+		device, err = spoofcarrier.TunnelName(link.ID)
+		if err != nil {
+			return "", true, false
+		}
+		destination = link.Addresses.Local.Addr()
+		protocol = "0" // any decrypted private IPv4 protocol
+	}
 	if protocol == "" {
 		return "", false, false
 	}
+	narrower := false // a protocol-specific ACCEPT cannot allow all private L3
 	for i := 2; i < len(fields); i++ {
 		flag := fields[i]
 		if flag == "!" {
@@ -84,7 +96,7 @@ func inputRuleVerdict(fields []string, route managedIngress, link domain.Link) (
 		case "-j":
 			verdict = value
 		case "-i":
-			if value != link.Spoof.Interface {
+			if value != device {
 				return "", false, true
 			}
 		case "-d":
@@ -96,14 +108,32 @@ func inputRuleVerdict(fields []string, route managedIngress, link domain.Link) (
 				}
 				prefix = netip.PrefixFrom(address, address.BitLen())
 			}
-			if !prefix.Contains(route.endpoint.Addr()) {
+			if !prefix.Contains(destination) {
 				return "", false, true
 			}
 		case "-s":
-			if value != "0.0.0.0/0" && value != "0/0" {
+			if route.private {
+				prefix, err := netip.ParsePrefix(value)
+				if err != nil {
+					addr, e := netip.ParseAddr(value)
+					if e != nil {
+						return "", true, false
+					}
+					prefix = netip.PrefixFrom(addr, addr.BitLen())
+				}
+				if !prefix.Contains(link.Addresses.Peer.Addr()) {
+					return "", false, true
+				}
+			} else if value != "0.0.0.0/0" && value != "0/0" {
 				return "", true, false
 			}
 		case "-p":
+			if route.private {
+				if value != "all" && value != "0" {
+					narrower = true
+				}
+				break
+			}
 			matches := value == "all" || value == "0" || value == protocol ||
 				(value == "udp" && protocol == "17") || (value == "tcp" && protocol == "6") ||
 				(value == "icmp" && protocol == "1") || (value == "gre" && protocol == "47") ||
@@ -112,6 +142,10 @@ func inputRuleVerdict(fields []string, route managedIngress, link domain.Link) (
 				return "", false, true
 			}
 		case "--dport":
+			if route.private {
+				narrower = true
+				break
+			}
 			if protocol != "17" && protocol != "6" {
 				return "", false, true
 			}
@@ -123,6 +157,10 @@ func inputRuleVerdict(fields []string, route managedIngress, link domain.Link) (
 				return "", false, true
 			}
 		case "--icmp-type":
+			if route.private {
+				narrower = true
+				break
+			}
 			if protocol != "1" {
 				return "", false, true
 			}
@@ -130,6 +168,9 @@ func inputRuleVerdict(fields []string, route managedIngress, link domain.Link) (
 				return "", true, false
 			}
 		case "-m":
+			if route.private && (value == "tcp" || value == "udp" || value == "icmp") {
+				narrower = true
+			}
 			if value != "tcp" && value != "udp" && value != "icmp" && value != "comment" &&
 				value != "conntrack" && value != "state" {
 				return "", true, false
@@ -151,6 +192,11 @@ func inputRuleVerdict(fields []string, route managedIngress, link domain.Link) (
 			return "", true, false
 		}
 		i++
+	}
+	if route.private && narrower && verdict == "ACCEPT" {
+		// Permitting just ICMP, TCP or one port does not admit all
+		// encrypted peer traffic after it enters the local TUN.
+		return "", false, true
 	}
 	return verdict, relevant, exact
 }

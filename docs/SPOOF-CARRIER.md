@@ -82,7 +82,11 @@ adopt foreign services or delete foreign network state. With explicit
 per-endpoint `--manage-ingress --device DEVICE`, it may install
 and remove only the original Link's own tightly scoped IPv4 INPUT rules
 via a supported `iptables` CLI (legacy or nft backend) **only
-when a relevant host INPUT-chain blocker is detected**. If current
+when a relevant host INPUT-chain blocker is detected**. This covers
+both the real-endpoint outer receive path and the **decrypted private
+peer -> local TUN** INPUT path. A default INPUT DROP applies to
+local TUN traffic too; an authenticated outer handshake alone does
+not prove that inner TCP/UDP/ICMP reaches the application. If current
 policy and rules already admit a path, STL adds no redundant rule.
 It does not automatically flush a chain, change default policy
 or manage foreign rules. Native nft
@@ -318,9 +322,14 @@ creates narrowly matched Link-owned rules for UDP/TCP destination port,
 ICMP Echo Reply, and the supported raw IPv4 protocol numbers. For
 non-port-based raw protocols, only the exact local destination,
 interface and protocol can be matched by IPv4 firewall rules; cryptographic
-authentication remains the actual peer check. When a relevant direct INPUT drop is found, required exceptions are
-inserted ahead of the applicable iptables INPUT denial, independently
-inspected on Ensure/Restore, and removed during owned Link retirement.
+authentication remains the actual peer check. The exact private TUN
+exception, when needed, is limited to the original Link's TUN
+interface, authenticated peer private /32 source and local private /32
+destination; it does not open the TUN for foreign sources or unrelated
+private destinations. When a relevant direct INPUT drop is found,
+required exceptions are inserted ahead of the applicable iptables
+INPUT denial, independently inspected on Ensure/Restore, and removed
+during owned Link retirement.
 On permissive INPUT chains there are **zero** added firewall rules. This cannot
 override a separate nftables drop hook or an ISP filter and **is not**
 a blanket firewall-opening promise. The menu requires explicit consent; an unavailable prerequisite fails

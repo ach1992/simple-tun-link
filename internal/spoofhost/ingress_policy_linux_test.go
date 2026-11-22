@@ -7,7 +7,7 @@ import "testing"
 func TestSpoofIngressPermissionOnlyWhenBlocked(t *testing.T) {
 	link := ingressFixture(t, "auto")
 	routes, err := ingressRules(link)
-	if err != nil || len(routes) != 14 {
+	if err != nil || len(routes) != 15 {
 		t.Fatalf("unexpected routes %d %v", len(routes), err)
 	}
 	tests := []struct {
@@ -37,7 +37,7 @@ func TestSpoofIngressPermissionOnlyWhenBlocked(t *testing.T) {
 				case "blocked primary only":
 					want = r.endpoint.Port() == 48001
 				case "existing explicit allow":
-					want = r.endpoint.Port() == 48011
+					want = r.private || r.endpoint.Port() == 48011
 				}
 				if got != want {
 					t.Fatalf("%s at %s, got exception=%v expected=%v", r.protocol, r.endpoint, got, want)
