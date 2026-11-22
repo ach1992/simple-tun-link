@@ -44,8 +44,13 @@ and the protocol-115 option is **not** STL's existing native L2TPv3 Backend.
 Current Spoof development also separates authenticated, externally
 advertised endpoints from local NAT bind addresses, incoming from
 outgoing NICs, and outer transport from verified private application
-traffic; Linux reverse-path filtering is diagnosed without silent
-shared sysctl changes.
+traffic. Linux reverse-path filtering is diagnosed read-only;
+when an actual asymmetric receive path is blocked, an operator may use
+**Fix rp_filter** in the Spoof tunnel menu or explicit CLI
+`rp-filter plan/apply/restore` to select `Loose (2)` or `Off (0)`.
+STL previews shared/global effects, requires approval and journals
+verified values for reboot recovery and owner-aware rollback;
+no shared Linux sysctl is silently changed.
 
 No Spoof code has been merged into Stable or deployed to real production
 servers. See the [operator guide](docs/SPOOF-CARRIER.md) for actual support,

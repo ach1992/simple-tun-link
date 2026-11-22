@@ -556,15 +556,21 @@ func linkSpoofCommand(args []string, stdout, stderr io.Writer, options *runtimeO
 			return spoofCLIError(err, stderr)
 		}
 		status := spoofhost.TrustedRuntimeStatus(opts.stateRoot, id, observed)
-		rp := spoofhost.ReadRPFilterStatus(record.Desired)
+		rpManaged := rpFilterStatusForLink(snapshot, id)
+		rpLink := record.Desired
+		if rpManaged != nil && rpLink.Spoof.IngressInterface == "" {
+			rpLink.Spoof.IngressInterface = rpManaged.Interface
+		}
+		rp := effectiveSpoofRPFilterStatus(rpLink)
 		if asJSON {
 			r := struct {
-				SchemaVersion      int                      `json:"schema_version"`
-				LocallyProvisioned bool                     `json:"locally_provisioned"`
-				ManagedHelperReady bool                     `json:"managed_helper_ready"`
-				Runtime            spoofhost.RuntimeStatus  `json:"runtime"`
-				RPFilter           spoofhost.RPFilterStatus `json:"rp_filter"`
-			}{1, true, observed.RuntimeReady, status, rp}
+				SchemaVersion      int                       `json:"schema_version"`
+				LocallyProvisioned bool                      `json:"locally_provisioned"`
+				ManagedHelperReady bool                      `json:"managed_helper_ready"`
+				Runtime            spoofhost.RuntimeStatus   `json:"runtime"`
+				RPFilter           spoofhost.RPFilterStatus  `json:"rp_filter"`
+				RPFilterManaged    *state.SpoofRPFilterClaim `json:"rp_filter_managed,omitempty"`
+			}{1, true, observed.RuntimeReady, status, rp, rpManaged}
 			if json.NewEncoder(stdout).Encode(r) != nil {
 				return 1
 			}
@@ -574,12 +580,18 @@ func linkSpoofCommand(args []string, stdout, stderr io.Writer, options *runtimeO
 			if status.PrivateICMPError != "" {
 				fmt.Fprintf(stdout, "Private ICMP check: %s (TCP/UDP may still be usable; verify independently)\n", status.PrivateICMPError)
 			}
+			if rpManaged != nil {
+				fmt.Fprintf(stdout, "STL rp_filter policy: managed %s on %s; explicit owner cleanup on Remove/reboot.\n", rpManaged.Mode, rpManaged.Interface)
+			}
 			if rp.ReadError != "" {
 				fmt.Fprintf(stdout, "rp_filter inspection: %s\n", rp.ReadError)
 			} else if rp.Mode == "UNVERIFIED" {
 				fmt.Fprintf(stdout, "Incoming rp_filter: UNVERIFIED; %s\n", rp.Note)
 			} else {
 				fmt.Fprintf(stdout, "Incoming rp_filter: %s (all=%d interface=%d effective=%d); %s\n", rp.Mode, rp.All, rp.Interface, rp.Effective, rp.Note)
+				if rp.Mode == "STRICT" || rp.Mode == "LOOSE" {
+					fmt.Fprintf(stdout, "If this Linux policy blocks the Link, preview: stl link rp-filter plan %s --mode loose (or --mode off)\n", id)
+				}
 			}
 		}
 		return 0

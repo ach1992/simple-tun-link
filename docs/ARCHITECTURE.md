@@ -273,8 +273,13 @@ Outer two-way authenticated connectivity is not evidence of working
 decrypted private TUN traffic. A separate fresh private IPv4 echo
 probe checks the actual end-to-end Linux datapath. Its failure is
 ICMP-specific, not a claim that TCP/UDP are necessarily blocked.
-Read-only `rp_filter` inspection calculates the Linux effective
-max(all, incoming NIC) without silently changing shared policy.
+Read-only `rp_filter` inspection calculates Linux effective
+`max(all, incoming NIC)`. A separate explicitly confirmed Engine-owned Spoof
+policy change can select Loose or Off, including global `all=0` when Off
+requires it. Host-wide effects are previewed, originals and shared Link
+owners journaled before kernel writes, and readbacks verified. The same
+manager reconciles on Restore and reverses owned deltas after Remove or
+manual restoration; unrelated State and providers are not adopted.
 
 Exact Engine-owned post-Remove `SpoofRemovalReceipt` is durable.
 Crash-interrupted protected-file quarantine can be retried under

@@ -63,6 +63,9 @@ func menuManage(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 		if selected.Backend == domain.BackendIPsec {
 			menuActionOption(out, "7", "Connect IPsec", "Explicit IKEv2 initiation after peer import", "CONNECT")
 		}
+		if selected.Backend == domain.BackendSpoof {
+			menuActionOption(out, "7", "Fix rp_filter", "Preview Loose/Off or restore previous host settings", "NETWORK")
+		}
 		menuOption(out, "0", "Back", "Main menu")
 		fmt.Fprint(out, "Choose an action: ")
 		action, err := readMenuAnswer(reader)
@@ -132,6 +135,10 @@ func menuManage(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, op
 			}
 			menuSensitiveHandoffAction(input, reader, out, errOut, options, selected, true)
 		case "7":
+			if selected.Backend == domain.BackendSpoof {
+				menuSpoofRPFilter(input, reader, out, errOut, options, selected)
+				break
+			}
 			if selected.Backend != domain.BackendIPsec {
 				menuNotice(out, "WARNING", "Connect IPsec is available for saved IPsec tunnels only.")
 				break

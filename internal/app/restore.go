@@ -24,9 +24,23 @@ func (e *Engine) RestoreAll(ctx context.Context) ([]Result, error) {
 	}
 	defer maintenanceRelease()
 
+	// A confirmed Link rp_filter policy is applied before restoring helpers.
+	// A crash, reboot or interrupted Remove can leave a durable host-setting
+	// journal to reconcile even when no desired Links remain. Failed Spoof
+	// host policy must not prevent independent GRE/IPsec/etc Link recovery.
+	var rpReconcileErr error
+	if e.spoofRPFilter != nil {
+		rpReconcileErr = e.spoofRPFilter.Reconcile(ctx, e.store)
+	}
 	snapshot, err := e.store.Load(ctx)
 	if err != nil {
 		return nil, stlerr.Wrap(stlerr.CodeState, "restore_all", "", "", "cannot load persisted Links", err)
+	}
+
+	if rpReconcileErr != nil && len(snapshot.Links) == 0 {
+		// Never retire the reboot reconciliation unit while a confirmed,
+		// journaled host policy might still require its original cleanup.
+		return nil, stlerr.Wrap(stlerr.CodeState, "restore_all", "", "spoof", "pending confirmed rp_filter host policy requires reconciliation before empty-state cleanup", rpReconcileErr)
 	}
 
 	// A crash journal is NOT a committed, healthy Link, and an empty
@@ -101,6 +115,9 @@ func (e *Engine) RestoreAll(ctx context.Context) ([]Result, error) {
 
 	results := make([]Result, 0, len(snapshot.Links))
 	var perLinkFailures []error
+	if rpReconcileErr != nil {
+		perLinkFailures = append(perLinkFailures, stlerr.Wrap(stlerr.CodeState, "restore", "", "spoof", "operator-confirmed rp_filter settings could not be reconciled; unrelated Links will still be attempted", rpReconcileErr))
+	}
 	for _, record := range restoreDependencyOrder(snapshot.Links) {
 		if record.WSSSupersededBy != "" {
 			// A superseded original is retained as protected State, not as a

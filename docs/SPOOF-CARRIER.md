@@ -135,15 +135,44 @@ or `ICMP_PROBE_FAILED` after a failed check. TCP/UDP can work
 even if ICMP is blocked; validate separately using applications/
 `link diagnose`.
 
-**Reverse-path filtering:** `spoof-status` reports the real
-`rp_filter` values for Linux `all`, selected incoming NIC,
-and effective `max(all,interface)`. Strict mode may reject a
-valid asymmetric inbound Source. Per-NIC loose=2 can supersede
-all=1, but impacts all services on that shared NIC and must not
-be silently applied. Verify the actual source/reverse route/drop
-cause, obtain operator approval and preserve originals for rollback.
-Provider-side anti-spoofing is distinct and not bypassed by
-local sysctls.
+**Reverse-path filtering (`rp_filter`):** `spoof-status` reports the actual
+`all`, incoming NIC and effective `max(all,interface)` Linux policy. An
+asymmetric return route may work under Strict if the reverse FIB matches;
+never assume Strict itself proves a drop. When `rp_filter` is a likely blocker,
+STL can modify the receiving server's settings after an **explicit preview and
+operator confirmation**, without re-pairing or creating another tunnel:
+
+```sh
+stl link rp-filter plan LINK_ID --mode loose
+stl link rp-filter apply LINK_ID --mode loose --confirm LINK_ID
+# If Loose still cannot pass the asymmetric return path:
+stl link rp-filter plan LINK_ID --mode off
+stl link rp-filter apply LINK_ID --mode off --confirm LINK_ID
+# Undo this Link's approved policy independently of other active STL Links:
+stl link rp-filter restore LINK_ID --confirm LINK_ID
+```
+
+`stl menu` -> My tunnels -> Spoof tunnel -> **Fix rp_filter** provides the
+same interactive `Loose (2)` / `Off (0)` / `Restore previous` actions with
+fresh `APPLY` or `RESTORE` confirmation. Use `--interface NIC` if automatic
+incoming NIC discovery cannot distinguish DNAT/multiple interfaces.
+`plan` is entirely read-only. `Off (0)` may require both
+`net.ipv4.conf.all.rp_filter=0` and the incoming NIC's value `=0` because
+Linux uses the **maximum** of the two. Changing `all` can make effective
+filtering on OTHER interfaces weaker **or stronger** depending on their own
+settings: inspect the explicit host-level impact before approving. `Loose (2)`
+usually changes the receiving NIC only. No version/provider/IP allowlist
+prevents the operator from selecting Off.
+
+Every confirmed change is journaled in STL's existing canonical State before
+writing the kernel and verified by readback, with ownership-aware sharing
+between concurrently active Spoof Links. It is reapplied during STL's owned
+reboot Restore and returned to the verified original on Link Remove or
+explicit `rp-filter restore`. After an interrupted Remove, repeat that
+`restore` with the same original ID; unknown external sysctl changes are
+reported instead of overwritten blindly. This is an on-host Linux fix, **not**
+NAT traversal, provider-side anti-spoofing or a guarantee that the remote
+network will accept candidate packets.
 
 **Interrupted Remove:** The Engine can safely resume original
 protected quarantine via `stl link retire-spoof LINK_ID --confirm

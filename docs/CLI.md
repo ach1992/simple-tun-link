@@ -1438,13 +1438,33 @@ network prompt accepts `advanced` for these local choices.
 STL does NOT create router port forwarding or auto-discover NAT mappings.
 
 `spoof-status --json` separately reports authenticated outer transport
-(`runtime.state`), actual private-IPv4 ICMP
-(`runtime.private_l3_status`: UNVERIFIED, VERIFIED_ICMP,
-ICMP_PROBE_FAILED), and read-only effective Linux `rp_filter` on
-the incoming NIC (`max(all,interface)`). A failed ICMP probe does
-not prove TCP/UDP is blocked. Shared NIC/global sysctls are **not**
-silently relaxed by STL: inspect actual reverse-route and drop evidence
-and obtain operator approval before changing them.
+(`runtime.state`), actual private-IPv4 ICMP (`runtime.private_l3_status`:
+UNVERIFIED, VERIFIED_ICMP, ICMP_PROBE_FAILED), and Linux effective
+`rp_filter` (`max(all,interface)`). A failed ICMP probe does not prove TCP/UDP
+is blocked. It also reports the operator-confirmed `rp_filter_managed` claim
+when present; status itself remains entirely read-only.
+
+**Operator-approved rp_filter repair** (Spoof Links only):
+
+```text
+stl link rp-filter plan <link-id> --mode (loose|off) [--interface NIC] [--json]
+stl link rp-filter apply <link-id> --mode (loose|off) --confirm <link-id> [--interface NIC] [--json]
+stl link rp-filter restore <link-id> --confirm <link-id> [--json]
+```
+
+`plan` previews concrete `all` and incoming-NIC changes without host
+mutation. `apply` requires exact matching Link ID consent and writes only the
+approved effective policy, with persisted original values and readback;
+`restore` releases this Link's approved policy while preserving active sibling
+owners. `Off` explicitly supports `all=0` **and** NIC `=0` when necessary.
+Changing `all` affects other interfaces/services and may alter their effective
+strictness in either direction. The interactive menu (`My tunnels` -> Spoof ->
+`Fix rp_filter`) shows and confirms the same actions. If the receiving NIC is
+ambiguous (including post-DNAT), supply the actual NIC with `--interface`.
+During the canonical reboot Restore, STL reconciles operator-approved policy
+before restoring Spoof helpers. On an interrupted Remove, use the original ID
+with `rp-filter restore` to finish the journaled rollback. Foreign/unknown
+changes are preserved with a diagnostic instead of being overwritten.
 
 An interrupted post-commit Spoof Remove can be resumed via
 `stl link retire-spoof LINK_ID --confirm LINK_ID`. The Engine

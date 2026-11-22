@@ -151,11 +151,16 @@ or partially applied work must report an unconfirmed result and a safe
 reconciliation route, not optimistic success or a blind retry.
 
 Ordinary host-to-host Links do not justify a default-route rewrite,
-firewall flush, global IP forwarding, globally disabled `rp_filter`,
+firewall flush, global IP forwarding, silent globally disabled `rp_filter`,
 takeover of a primary network manager or deletion of sibling/foreign
-Link objects. Valid user-approved advanced settings are not prohibited
-for arbitrary policy reasons, but they still require technical and
-ownership validation.
+Link objects. A confirmed Spoof Link may explicitly change Linux `rp_filter`
+to Loose or Off (including `all=0` if needed), after showing prospective
+shared-interface/global impact. It journals original values and remaining
+Link owners, verifies kernel readbacks, restores approved deltas on Remove,
+and reconciles reboot/crashes. Non-STL sysctl changes that cannot be
+attributed are not silently overwritten. Valid user-approved advanced
+settings are not prohibited for arbitrary policy reasons, but they still
+require technical and ownership validation.
 
 ## IPsec runtime and strongSwan safety
 

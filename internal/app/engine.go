@@ -43,6 +43,7 @@ type MTUManager interface {
 type Engine struct {
 	quicRetirement   QUICRetirementStore
 	masqueRetirement MASQUERetirementStore
+	spoofRPFilter    SpoofRPFilterManager
 	spoofRetirement  interface {
 		RetireAfterRemove(context.Context, domain.Link) error
 	}
@@ -456,6 +457,14 @@ func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.
 		}
 	}
 	if prior.Backend == domain.BackendSpoof {
+		if e.spoofRPFilter != nil {
+			if err := e.spoofRPFilter.Release(ctx, e.store, id); err != nil {
+				return result, stlerr.WithEvidence(
+					stlerr.Wrap(stlerr.CodeState, "remove", string(id), "spoof",
+						"Spoof Link removal committed; rp_filter restoration remains pending; use stl link rp-filter restore <id> --confirm <id>", err),
+					stlerr.OperationEvidence{Stage: "rp_filter_restore", HostMutation: "attempted", DesiredState: "committed", Rollback: "not_attempted"})
+			}
+		}
 		if err := e.retireSpoofCredentialLocked(ctx, id); err != nil {
 			return result, stlerr.WithEvidence(
 				stlerr.Wrap(stlerr.CodeState, "remove", string(id), "spoof", "Spoof Link removed; original protected material retirement still requires reconciliation", err),
