@@ -34,11 +34,11 @@ func ingressRules(link domain.Link) ([]managedIngress, error) {
 	if !link.Spoof.ManageIngress {
 		return nil, nil
 	}
-	if link.Spoof.Interface == "" {
-		return nil, errors.New("managed Spoof ingress requires a specific operator-approved --device interface")
+	if link.Spoof.IngressInterface == "" {
+		return nil, errors.New("managed Spoof ingress requires explicit --ingress-device")
 	}
-	local := netip.AddrPortFrom(link.Underlay.Local, link.Spoof.ListenPort)
-	other, err := domain.ParseSpoofAlternates(link.Spoof.LocalAlternates, local)
+	local := receiveBindEndpoint(link)
+	other, err := domain.ParseSpoofAlternates(link.Spoof.BindAlternates, local)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +86,7 @@ func (r managedIngress) args(link domain.Link) ([]string, string, error) {
 	if !r.endpoint.Addr().Is4() || r.endpoint.Port() == 0 {
 		return nil, "", errors.New("invalid managed Spoof receiver")
 	}
-	args := []string{"-i", link.Spoof.Interface, "-d", r.endpoint.Addr().String() + "/32"}
+	args := []string{"-i", link.Spoof.IngressInterface, "-d", r.endpoint.Addr().String() + "/32"}
 	protocol := r.protocol
 	if protocol == "proto58-echo" {
 		protocol = "proto58"
@@ -109,7 +109,7 @@ func (r managedIngress) args(link domain.Link) ([]string, string, error) {
 	default:
 		return nil, "", fmt.Errorf("unsupported Spoof ingress profile %q", r.protocol)
 	}
-	canonical := string(link.ID) + "|" + link.Spoof.Interface + "|" + r.endpoint.String() + "|" + protocol
+	canonical := string(link.ID) + "|" + link.Spoof.IngressInterface + "|" + r.endpoint.String() + "|" + protocol
 	digest := sha256.Sum256([]byte(canonical))
 	marker := "stl:spoof:" + string(link.ID) + ":" + hex.EncodeToString(digest[:8])
 	args = append(args, "-m", "comment", "--comment", marker, "-j", "ACCEPT")
@@ -132,6 +132,9 @@ func readOwnedMarkerCount(output, marker string) int {
 // confidential Setup Code so unavailable firewall backends do not create
 // a misleading half-provisioned Link.
 func PreflightIngressPrerequisites(ctx context.Context, link domain.Link) error {
+	if err := validateReceiveBindings(link); err != nil {
+		return err
+	}
 	if !link.Spoof.ManageIngress {
 		return nil
 	}
@@ -236,31 +239,11 @@ func validateIngressDevice(link domain.Link) error {
 	if !link.Spoof.ManageIngress {
 		return nil
 	}
-	network, err := net.InterfaceByName(link.Spoof.Interface)
+	network, err := net.InterfaceByName(link.Spoof.IngressInterface)
 	if err != nil || network.Flags&net.FlagUp == 0 {
 		return errors.New("Spoof selected ingress device missing or DOWN")
 	}
-	local := netip.AddrPortFrom(link.Underlay.Local, link.Spoof.ListenPort)
-	other, _ := domain.ParseSpoofAlternates(link.Spoof.LocalAlternates, local)
-	all := append([]netip.AddrPort{local}, other...)
-	addresses, err := network.Addrs()
-	if err != nil {
-		return err
-	}
-	for _, ep := range all {
-		present := false
-		for _, address := range addresses {
-			prefix, e := netip.ParsePrefix(address.String())
-			if e == nil && prefix.Addr() == ep.Addr() {
-				present = true
-				break
-			}
-		}
-		if !present {
-			return fmt.Errorf("Spoof managed ingress real receive IPv4 %s not assigned to selected interface %s", ep.Addr(), network.Name)
-		}
-	}
-	return nil
+	return validateReceiveBindings(link)
 }
 func ensureIngress(ctx context.Context, link domain.Link) (func(context.Context) error, error) {
 	rules, err := ingressRules(link)

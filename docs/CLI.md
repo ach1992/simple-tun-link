@@ -1397,7 +1397,7 @@ profile pinning, Source inventory path and packet rates remain
 endpoint-local; repeat the exact originals when resuming an
 interrupted creator setup.
 
-An explicitly requested `--manage-ingress --device eth0` first
+An explicitly requested `--manage-ingress --ingress-device eth0` first
 inspects current host INPUT policy. If the traffic is already
 permitted, it creates no redundant rules. When a relevant direct
 iptables INPUT block is identified, it manages only this Link's
@@ -1424,6 +1424,31 @@ identity on interrupted provisioning; repeat its original
 `--tx-outer` value if manually overridden. Retired Link IDs cannot
 be reissued. See the [Spoof runbook](SPOOF-CARRIER.md) for commands
 and actual two-container evidence, limits and release gates.
+
+### Spoof NAT / L3 status / reverse-path remediation
+
+The paired external `--creator`/`--recipient` IPv4:port endpoints and
+`--creator-alts`/`--recipient-alts` remain immutable in the ONE
+confidential Setup Code. Each server may independently override its local
+post-DNAT listener via `--bind-ipv4`, `--bind-port` and
+`--bind-alts`. `--device` is the outgoing NIC; `--ingress-device`
+is the incoming NIC, required for `--manage-ingress`. The guided
+network prompt accepts `advanced` for these local choices.
+STL does NOT create router port forwarding or auto-discover NAT mappings.
+
+`spoof-status --json` separately reports authenticated outer transport
+(`runtime.state`), actual private-IPv4 ICMP
+(`runtime.private_l3_status`: UNVERIFIED, VERIFIED_ICMP,
+ICMP_PROBE_FAILED), and read-only effective Linux `rp_filter` on
+the incoming NIC (`max(all,interface)`). A failed ICMP probe does
+not prove TCP/UDP is blocked. Shared NIC/global sysctls are **not**
+silently relaxed by STL: inspect actual reverse-route and drop evidence
+and obtain operator approval before changing them.
+
+An interrupted post-commit Spoof Remove can be resumed via
+`stl link retire-spoof LINK_ID --confirm LINK_ID`. The Engine
+requires its exact durable original receipt, verifies original
+owned material/quarantine and leaves foreign/uncertain files untouched.
 
 ## MASQUE CONNECT-IP Carrier (v0.1.28+)
 

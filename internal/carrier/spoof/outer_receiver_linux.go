@@ -4,12 +4,14 @@ package spoof
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
 	"net/netip"
 	"os"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -45,11 +47,38 @@ func OpenFrameReceiver(local netip.AddrPort, profile, device string) (FrameRecei
 		}
 		return OpenRawProfileReceiver(local, profile, device)
 	}
-	conn, err := OpenReceiver(local)
-	if err != nil {
-		return nil, err
+	if device == "" {
+		conn, err := OpenReceiver(local)
+		if err != nil {
+			return nil, err
+		}
+		return &udpFrameReceiver{conn}, nil
 	}
-	return &udpFrameReceiver{conn}, nil
+	// UDP needs the same explicit ingress-device separation as the raw
+	// profile receivers. Outgoing --device never constrains this socket.
+	iface, err := net.InterfaceByName(device)
+	if err != nil || iface.Flags&net.FlagUp == 0 {
+		return nil, fmt.Errorf("Spoof UDP ingress interface %q missing or DOWN", device)
+	}
+	config := net.ListenConfig{Control: func(network, address string, raw syscall.RawConn) error {
+		var optionErr error
+		if e := raw.Control(func(fd uintptr) {
+			optionErr = unix.SetsockoptString(int(fd), unix.SOL_SOCKET, unix.SO_BINDTODEVICE, device)
+		}); e != nil {
+			return e
+		}
+		return optionErr
+	}}
+	conn, err := config.ListenPacket(context.Background(), "udp4", local.String())
+	if err != nil {
+		return nil, fmt.Errorf("Spoof UDP listener bind %s on ingress %s: %w", local, device, err)
+	}
+	udp, ok := conn.(*net.UDPConn)
+	if !ok {
+		conn.Close()
+		return nil, errors.New("Spoof UDP listener did not return UDPConn")
+	}
+	return &udpFrameReceiver{udp}, nil
 }
 
 type ICMPReceiver struct {

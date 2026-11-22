@@ -119,8 +119,17 @@ func parseSpoofMTU(raw string) (domain.MTUPolicy, error) {
 	return domain.MTUPolicy{Mode: domain.MTUManual, Bytes: m}, nil
 }
 
+// spoofLocalNetwork is configured independently at each endpoint. None of
+// these receive bindings/host NIC choices is published in the Setup Code.
+type spoofLocalNetwork struct {
+	BindIPv4         string
+	BindPort         uint16
+	BindAlternates   string
+	IngressInterface string
+}
+
 func spoofLinkFromSetup(offer pairing.SpoofSetup, material spoofhost.Material, sourceFile, device, txProfile string,
-	discoveryPPS, backgroundPPS int, mtu domain.MTUPolicy, manageIngress bool) (domain.Link, error) {
+	discoveryPPS, backgroundPPS int, mtu domain.MTUPolicy, manageIngress bool, localNetwork ...spoofLocalNetwork) (domain.Link, error) {
 	role := material.Role()
 	if role != "creator" && role != "recipient" {
 		return domain.Link{}, errors.New("invalid local Spoof identity role")
@@ -154,6 +163,28 @@ func spoofLinkFromSetup(offer pairing.SpoofSetup, material spoofhost.Material, s
 	if err != nil {
 		return domain.Link{}, err
 	}
+	bindIP, bindPort, bindAlts, ingress := local.Addr(), local.Port(), "", ""
+	if len(localNetwork) > 1 {
+		return domain.Link{}, errors.New("one local Spoof binding configuration permitted")
+	}
+	if len(localNetwork) == 1 {
+		conf := localNetwork[0]
+		ingress = conf.IngressInterface
+		if conf.BindIPv4 != "" {
+			parsed, err := netip.ParseAddr(conf.BindIPv4)
+			if err != nil || !parsed.Is4() || parsed.String() != conf.BindIPv4 {
+				return domain.Link{}, errors.New("Spoof --bind-ipv4 must be one canonical locally assigned IPv4")
+			}
+			bindIP = parsed
+		}
+		if conf.BindPort != 0 {
+			bindPort = conf.BindPort
+		}
+		bindAlts = conf.BindAlternates
+		if _, err := domain.ParseSpoofAlternates(bindAlts, netip.AddrPortFrom(bindIP, bindPort)); err != nil {
+			return domain.Link{}, fmt.Errorf("local receive bind alternates: %w", err)
+		}
+	}
 	outer := offer.OuterProtocol()
 	encapsulation := domain.EncapUDP
 	if outer != "" && outer != "udp" && outer != "auto" {
@@ -164,12 +195,20 @@ func spoofLinkFromSetup(offer pairing.SpoofSetup, material spoofhost.Material, s
 		Addresses: domain.LinkAddresses{Local: netip.PrefixFrom(privateLocal, 32), Peer: netip.PrefixFrom(privatePeer, 32)},
 		Spoof: domain.SpoofOptions{OuterProtocol: outer, TxProfile: txProfile, Role: role, SourceFile: sourceFile,
 			LocalAlternates: localAltText, PeerAlternates: peerAltText, DiscoveryPPS: discoveryPPS, BackgroundPPS: backgroundPPS, PrivateMTU: mtu, ManageIngress: manageIngress, ListenPort: local.Port(),
-			PeerPort: peer.Port(), BindIPv4: local.Addr(), Interface: device,
+			PeerPort: peer.Port(), BindIPv4: bindIP, BindPort: bindPort, BindAlternates: bindAlts, IngressInterface: ingress, Interface: device,
 			LocalPublicKey: base64.RawURLEncoding.EncodeToString(self[:]),
 			PeerPublicKey:  remoteIdentity, MaterialSHA256: digest},
 	}
 	return link, link.Validate()
 }
+func spoofLocalOptions(bindIPv4 *string, bindPort *int, bindAlts, ingressDevice *string) (spoofLocalNetwork, error) {
+	if *bindPort < 0 || *bindPort > 65535 {
+		return spoofLocalNetwork{}, errors.New("--bind-port must be 1..65535 (or omit for advertised port)")
+	}
+	return spoofLocalNetwork{BindIPv4: *bindIPv4, BindPort: uint16(*bindPort),
+		BindAlternates: *bindAlts, IngressInterface: *ingressDevice}, nil
+}
+
 func spoofResult(out io.Writer, jsonOutput bool, op string, result app.Result, offerPath string) int {
 	if jsonOutput {
 		v := struct {
@@ -204,6 +243,10 @@ func linkSpoofCommand(args []string, stdout, stderr io.Writer, options *runtimeO
 		creatorIP := f.String("creator-private", "", "creator's tunnel IPv4")
 		recipientIP := f.String("recipient-private", "", "recipient's tunnel IPv4")
 		sources := f.String("sources", spoof.DefaultSourcesPath, "local Source file path")
+		bindIPv4 := f.String("bind-ipv4", "", "local post-DNAT receive-bind IPv4 (default=local advertised IPv4)")
+		bindPort := f.Int("bind-port", 0, "post-DNAT receive-bind port (default=local advertised port)")
+		bindAlts := f.String("bind-alts", "", "additional locally assigned IPv4:PORT bind endpoints; NOT advertised")
+		ingressDevice := f.String("ingress-device", "", "optional actual receiving interface, independent of --device (required with --manage-ingress)")
 		device := f.String("device", "", "explicit local egress interface (optional)")
 		outer := f.String("outer", "auto", "STL outer profile: auto, udp, icmp, tcp, gre, ipip, proto58, proto58-echo, l2tpv3")
 		txProfile := f.String("tx-outer", "", "optional local outgoing profile when --outer auto; remote peer may choose independently")
@@ -211,7 +254,7 @@ func linkSpoofCommand(args []string, stdout, stderr io.Writer, options *runtimeO
 		recipientAlts := f.String("recipient-alts", "", "comma-separated additional recipient real IPv4:PORT receive endpoints")
 		discoveryPPS := f.Int("discovery-pps", 0, "local disconnected discovery packets per second; zero=default")
 		backgroundPPS := f.Int("background-pps", 0, "local connected background packets per second; zero=default")
-		manageIngress := f.Bool("manage-ingress", false, "opt-in Link-owned, precise reversible IPv4 INPUT rules; requires --device")
+		manageIngress := f.Bool("manage-ingress", false, "opt-in exact Link-owned ingress rules; requires --ingress-device")
 		mtuRaw := f.String("mtu", "auto", "private TUN MTU: auto or 576..65431 IPv4 bytes")
 		output := f.String("output", "", "private 0600 Setup Code filename")
 		asJSON := f.Bool("json", false, "machine response")
@@ -277,7 +320,11 @@ func linkSpoofCommand(args []string, stdout, stderr io.Writer, options *runtimeO
 		if err != nil {
 			return spoofCLIError(err, stderr)
 		}
-		link, err := spoofLinkFromSetup(offer, m, *sources, *device, *txProfile, *discoveryPPS, *backgroundPPS, mtu, *manageIngress)
+		network, err := spoofLocalOptions(bindIPv4, bindPort, bindAlts, ingressDevice)
+		if err != nil {
+			return spoofCLIError(err, stderr)
+		}
+		link, err := spoofLinkFromSetup(offer, m, *sources, *device, *txProfile, *discoveryPPS, *backgroundPPS, mtu, *manageIngress, network)
 		if err != nil {
 			return spoofCLIError(err, stderr)
 		}
@@ -320,9 +367,13 @@ func linkSpoofCommand(args []string, stdout, stderr io.Writer, options *runtimeO
 		f.SetOutput(stderr)
 		setup := f.String("setup", "", "private creator-issued Setup Code file")
 		sources := f.String("sources", spoof.DefaultSourcesPath, "recipient-local source list")
+		bindIPv4 := f.String("bind-ipv4", "", "local post-DNAT receive-bind IPv4 (default=local advertised IPv4)")
+		bindPort := f.Int("bind-port", 0, "post-DNAT receive-bind port (default=local advertised port)")
+		bindAlts := f.String("bind-alts", "", "additional locally assigned IPv4:PORT bind endpoints; NOT advertised")
+		ingressDevice := f.String("ingress-device", "", "optional actual receiving interface, independent of --device (required with --manage-ingress)")
 		device := f.String("device", "", "optional recipient-local egress interface")
 		txProfile := f.String("tx-outer", "", "optional local outgoing profile when Code uses auto; use same flag for exact creator resume")
-		manageIngress := f.Bool("manage-ingress", false, "opt-in Link-owned, precise reversible IPv4 INPUT rules; requires --device")
+		manageIngress := f.Bool("manage-ingress", false, "opt-in exact Link-owned ingress rules; requires --ingress-device")
 		mtuRaw := f.String("mtu", "auto", "endpoint-local private TUN MTU: auto or 576..65431; use original for resume")
 		discoveryPPS := f.Int("discovery-pps", 0, "local disconnected discovery packets per second; use original for resume")
 		backgroundPPS := f.Int("background-pps", 0, "local connected background packets per second; use original for resume")
@@ -365,7 +416,11 @@ func linkSpoofCommand(args []string, stdout, stderr io.Writer, options *runtimeO
 			if err != nil {
 				return spoofCLIError(err, stderr)
 			}
-			link, err := spoofLinkFromSetup(offer, m, *sources, *device, *txProfile, *discoveryPPS, *backgroundPPS, mtu, *manageIngress)
+			network, err := spoofLocalOptions(bindIPv4, bindPort, bindAlts, ingressDevice)
+			if err != nil {
+				return spoofCLIError(err, stderr)
+			}
+			link, err := spoofLinkFromSetup(offer, m, *sources, *device, *txProfile, *discoveryPPS, *backgroundPPS, mtu, *manageIngress, network)
 			if err != nil {
 				return spoofCLIError(err, stderr)
 			}
@@ -429,7 +484,11 @@ func linkSpoofCommand(args []string, stdout, stderr io.Writer, options *runtimeO
 		if err != nil {
 			return spoofCLIError(err, stderr)
 		}
-		link, err := spoofLinkFromSetup(offer, m, *sources, *device, *txProfile, *discoveryPPS, *backgroundPPS, mtu, *manageIngress)
+		network, err := spoofLocalOptions(bindIPv4, bindPort, bindAlts, ingressDevice)
+		if err != nil {
+			return spoofCLIError(err, stderr)
+		}
+		link, err := spoofLinkFromSetup(offer, m, *sources, *device, *txProfile, *discoveryPPS, *backgroundPPS, mtu, *manageIngress, network)
 		if err != nil {
 			return spoofCLIError(err, stderr)
 		}
@@ -497,19 +556,31 @@ func linkSpoofCommand(args []string, stdout, stderr io.Writer, options *runtimeO
 			return spoofCLIError(err, stderr)
 		}
 		status := spoofhost.TrustedRuntimeStatus(opts.stateRoot, id, observed)
+		rp := spoofhost.ReadRPFilterStatus(record.Desired)
 		if asJSON {
 			r := struct {
-				SchemaVersion      int                     `json:"schema_version"`
-				LocallyProvisioned bool                    `json:"locally_provisioned"`
-				ManagedHelperReady bool                    `json:"managed_helper_ready"`
-				Runtime            spoofhost.RuntimeStatus `json:"runtime"`
-			}{1, true, observed.RuntimeReady, status}
+				SchemaVersion      int                      `json:"schema_version"`
+				LocallyProvisioned bool                     `json:"locally_provisioned"`
+				ManagedHelperReady bool                     `json:"managed_helper_ready"`
+				Runtime            spoofhost.RuntimeStatus  `json:"runtime"`
+				RPFilter           spoofhost.RPFilterStatus `json:"rp_filter"`
+			}{1, true, observed.RuntimeReady, status, rp}
 			if json.NewEncoder(stdout).Encode(r) != nil {
 				return 1
 			}
 		} else {
-			fmt.Fprintf(stdout, "Link %s, helper ready=%t, runtime=%s, bilateral=%t, private tx/rx=%d/%d, candidates=%d, last error=%s\n",
-				id, observed.RuntimeReady, status.State, status.BilateralConfirmed, status.SentPrivatePackets, status.ReceivedPrivatePackets, status.SourceCandidates, status.LastError)
+			fmt.Fprintf(stdout, "Link %s, helper ready=%t, authenticated transport=%s, bilateral=%t, private IPv4 ICMP=%s, private tx/rx=%d/%d, candidates=%d, last error=%s\n",
+				id, observed.RuntimeReady, status.State, status.BilateralConfirmed, status.PrivateL3Status, status.SentPrivatePackets, status.ReceivedPrivatePackets, status.SourceCandidates, status.LastError)
+			if status.PrivateICMPError != "" {
+				fmt.Fprintf(stdout, "Private ICMP check: %s (TCP/UDP may still be usable; verify independently)\n", status.PrivateICMPError)
+			}
+			if rp.ReadError != "" {
+				fmt.Fprintf(stdout, "rp_filter inspection: %s\n", rp.ReadError)
+			} else if rp.Mode == "UNVERIFIED" {
+				fmt.Fprintf(stdout, "Incoming rp_filter: UNVERIFIED; %s\n", rp.Note)
+			} else {
+				fmt.Fprintf(stdout, "Incoming rp_filter: %s (all=%d interface=%d effective=%d); %s\n", rp.Mode, rp.All, rp.Interface, rp.Effective, rp.Note)
+			}
 		}
 		return 0
 	default:

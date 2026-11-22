@@ -79,7 +79,7 @@ private /32 TUN address, exact peer /32 route, owned interface alias,
 protected local X25519 material, restore unit, resource claims, and
 durable removal receipt. It does **not** replace unrelated interfaces,
 adopt foreign services or delete foreign network state. With explicit
-per-endpoint `--manage-ingress --device DEVICE`, it may install
+per-endpoint `--manage-ingress --ingress-device DEVICE`, it may install
 and remove only the original Link's own tightly scoped IPv4 INPUT rules
 via a supported `iptables` CLI (legacy or nft backend) **only
 when a relevant host INPUT-chain blocker is detected**. This covers
@@ -103,6 +103,52 @@ The canonical Engine reserves the actual resources for the selected
 profile(s); `auto` reserves all necessary profile namespaces.
 Keep endpoint identifiers nonzero and avoid collisions with other
 services/Links.
+
+## Current remediation — NAT, private L3 and recovery
+
+**Simple host:** The original paired external IPv4:port endpoint is
+locally assigned and is also the default receive-bind address. Nothing
+special is needed.
+
+**NAT / port forwarding:** When a paired external endpoint such as
+`203.0.113.10:48001` is DNAT-forwarded by an operator-controlled
+router to an assigned private address `10.10.0.3:49001`, use
+`--bind-ipv4 10.10.0.3 --bind-port 49001` **on that server only**.
+Optional `--bind-alts IP:PORT,...` declare more locally assigned
+receive sockets, independent of original `--creator-alts`/
+`--recipient-alts`, which remain immutable and authenticated
+in the Setup Code. `--device` selects outgoing; `--ingress-device`
+selects actual incoming NIC; these need not be the same. Use the
+guided menu's `advanced` option. STL never configures the
+external DNAT/port-forward mapping itself.
+
+**Firewall:** Managed rules use
+`--manage-ingress --ingress-device eth0` and target the actual
+post-DNAT locally bound destination (plus exact private TUN input).
+No unrelated host rules are removed. Independent nftables hooks can
+still reject traffic.
+
+**True private IPv4 status:** `CONNECTED` describes the bilateral
+Noise outer transport. `runtime.private_l3_status` is separately
+`UNVERIFIED`, `VERIFIED_ICMP` after real private IPv4 echo,
+or `ICMP_PROBE_FAILED` after a failed check. TCP/UDP can work
+even if ICMP is blocked; validate separately using applications/
+`link diagnose`.
+
+**Reverse-path filtering:** `spoof-status` reports the real
+`rp_filter` values for Linux `all`, selected incoming NIC,
+and effective `max(all,interface)`. Strict mode may reject a
+valid asymmetric inbound Source. Per-NIC loose=2 can supersede
+all=1, but impacts all services on that shared NIC and must not
+be silently applied. Verify the actual source/reverse route/drop
+cause, obtain operator approval and preserve originals for rollback.
+Provider-side anti-spoofing is distinct and not bypassed by
+local sysctls.
+
+**Interrupted Remove:** The Engine can safely resume original
+protected quarantine via `stl link retire-spoof LINK_ID --confirm
+LINK_ID` only if the exact committed removal receipt is present.
+Retry is idempotent; foreign or uncertain files are preserved.
 
 ## Interactive workflow
 

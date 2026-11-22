@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/netip"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -180,6 +181,57 @@ func askSpoofTxPreference(p createPrompts, outer string) (string, error) {
 	}
 }
 
+// Simple hosts keep a single outgoing-interface prompt. The optional
+// advanced step exposes actual local receiver/NAT topology without requiring
+// another Setup Code or coupling the incoming and outgoing interfaces.
+func askSpoofLocalNetwork(p createPrompts, chosen string) (device string, network spoofLocalNetwork, err error) {
+	if !strings.EqualFold(strings.TrimSpace(chosen), "advanced") {
+		return chosen, network, nil
+	}
+	device, err = p.ask("Outgoing interface (Enter=kernel route): ")
+	if err != nil {
+		return
+	}
+	network.IngressInterface, err = p.ask("Actual incoming interface (Enter=any; required for managed INPUT rules): ")
+	if err != nil {
+		return
+	}
+	network.BindIPv4, err = p.ask("Local receive-bind IPv4 after any DNAT (Enter=advertised IPv4): ")
+	if err != nil {
+		return
+	}
+	port, e := p.ask("Local receive-bind port after forwarding (Enter=advertised port): ")
+	if e != nil {
+		err = e
+		return
+	}
+	if port != "" {
+		v, e := strconv.Atoi(port)
+		if e != nil || v < 1 || v > 65535 {
+			err = fmt.Errorf("local receive-bind port must be 1..65535")
+			return
+		}
+		network.BindPort = uint16(v)
+	}
+	network.BindAlternates, err = p.ask("Additional locally assigned receive-bind IPv4:port endpoints (Enter=none): ")
+	return
+}
+func appendSpoofLocalNetworkArgs(args []string, network spoofLocalNetwork) []string {
+	if network.BindIPv4 != "" {
+		args = append(args, "--bind-ipv4", network.BindIPv4)
+	}
+	if network.BindPort != 0 {
+		args = append(args, "--bind-port", strconv.Itoa(int(network.BindPort)))
+	}
+	if network.BindAlternates != "" {
+		args = append(args, "--bind-alts", network.BindAlternates)
+	}
+	if network.IngressInterface != "" {
+		args = append(args, "--ingress-device", network.IngressInterface)
+	}
+	return args
+}
+
 func menuCreateSpoof(input io.Reader, reader *bufio.Reader, out, errOut io.Writer, opts *runtimeOptions) int {
 	p := createPrompts{reader: reader, out: out, errOut: errOut}
 	menuScreen(out, "Create / Spoof Direct TUN")
@@ -221,7 +273,11 @@ func menuCreateSpoof(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	if err != nil {
 		return p.failed(err)
 	}
-	device, err := p.ask("Optional sending network interface (Enter=kernel route): ")
+	deviceInput, err := p.ask("Optional outgoing interface (Enter=kernel route, advanced=separate incoming NIC / NAT binds): ")
+	if err != nil {
+		return p.failed(err)
+	}
+	device, network, err := askSpoofLocalNetwork(p, deviceInput)
 	if err != nil {
 		return p.failed(err)
 	}
@@ -240,8 +296,8 @@ func menuCreateSpoof(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	if manageAnswer != "" && !manageIngress && !strings.EqualFold(manageAnswer, "no") && !strings.EqualFold(manageAnswer, "n") {
 		return p.failed(fmt.Errorf("answer yes or no for managed Spoof ingress"))
 	}
-	if manageIngress && device == "" {
-		return p.failed(fmt.Errorf("managed ingress requires an exact local network interface; supply the sending/receiving interface"))
+	if manageIngress && network.IngressInterface == "" {
+		return p.failed(fmt.Errorf("managed ingress requires an exact incoming interface; choose advanced at the outgoing-interface prompt"))
 	}
 
 	output, err := askSpoofFilePath(p, "Confidential Setup Code output file")
@@ -265,12 +321,24 @@ func menuCreateSpoof(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	menuField(out, "Private Link IPv4", aIP+" <-> "+bIP)
 	menuField(out, "Local source list", source)
 	if manageIngress {
-		menuField(out, "Managed IPv4 INPUT", "ON (exact Link-owned rules on "+device+")")
+		menuField(out, "Managed IPv4 INPUT", "ON (exact Link-owned rules on "+network.IngressInterface+")")
 	}
 	if mtuRaw != "" {
 		menuField(out, "Local TUN MTU", mtuRaw)
 	}
 	menuField(out, "Outgoing device", device)
+	if network.IngressInterface != "" {
+		menuField(out, "Incoming device", network.IngressInterface)
+	}
+	if network.BindIPv4 != "" {
+		menuField(out, "Receive-bind IPv4", network.BindIPv4)
+	}
+	if network.BindPort != 0 {
+		menuField(out, "Receive-bind port", strconv.Itoa(int(network.BindPort)))
+	}
+	if network.BindAlternates != "" {
+		menuField(out, "Additional local binds", network.BindAlternates)
+	}
 	menuField(out, "Protected Setup Code", output)
 	menuNotice(out, "WARNING", "Create provisions only this host's managed Link, protected credentials, TUN and restore intent. It does not prove peer connectivity. Transfer the Code privately only once.")
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
@@ -305,6 +373,7 @@ func menuCreateSpoof(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	if device != "" {
 		args = append(args, "--device", device)
 	}
+	args = appendSpoofLocalNetworkArgs(args, network)
 	code := linkSpoofCommand(args, out, errOut, opts)
 	if code == 0 {
 		menuNotice(out, "OK", "Local Spoof Link provisioned; transfer the original confidential Code file to B, then Import on B. Link status is not proof of connectivity.")
@@ -333,7 +402,11 @@ func menuImportSpoof(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	if err != nil {
 		return p.failed(err)
 	}
-	device, err := p.ask("Optional sending network interface (Enter=kernel route): ")
+	deviceInput, err := p.ask("Optional outgoing interface (Enter=kernel route, advanced=separate incoming NIC / NAT binds): ")
+	if err != nil {
+		return p.failed(err)
+	}
+	device, network, err := askSpoofLocalNetwork(p, deviceInput)
 	if err != nil {
 		return p.failed(err)
 	}
@@ -352,8 +425,8 @@ func menuImportSpoof(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	if manageAnswer != "" && !manageIngress && !strings.EqualFold(manageAnswer, "no") && !strings.EqualFold(manageAnswer, "n") {
 		return p.failed(fmt.Errorf("answer yes or no for managed Spoof ingress"))
 	}
-	if manageIngress && device == "" {
-		return p.failed(fmt.Errorf("managed ingress requires an exact local network interface; supply the sending/receiving interface"))
+	if manageIngress && network.IngressInterface == "" {
+		return p.failed(fmt.Errorf("managed ingress requires an exact incoming interface; choose advanced at the outgoing-interface prompt"))
 	}
 
 	menuScreen(out, "Review / recipient Spoof Link")
@@ -373,12 +446,24 @@ func menuImportSpoof(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	menuField(out, "Private IPv4 B -> A", offer.RecipientPrivateIPv4().String()+" -> "+offer.CreatorPrivateIPv4().String())
 	menuField(out, "Local source list", source)
 	if manageIngress {
-		menuField(out, "Managed IPv4 INPUT", "ON (exact Link-owned rules on "+device+")")
+		menuField(out, "Managed IPv4 INPUT", "ON (exact Link-owned rules on "+network.IngressInterface+")")
 	}
 	if mtuRaw != "" {
 		menuField(out, "Local TUN MTU", mtuRaw)
 	}
 	menuField(out, "Outgoing device", device)
+	if network.IngressInterface != "" {
+		menuField(out, "Incoming device", network.IngressInterface)
+	}
+	if network.BindIPv4 != "" {
+		menuField(out, "Receive-bind IPv4", network.BindIPv4)
+	}
+	if network.BindPort != 0 {
+		menuField(out, "Receive-bind port", strconv.Itoa(int(network.BindPort)))
+	}
+	if network.BindAlternates != "" {
+		menuField(out, "Additional local binds", network.BindAlternates)
+	}
 	menuNotice(out, "WARNING", "B generates and retains its own private identity. This confirmed Import only provisions local resources; successful authentication is observed later.")
 	if err := clearQueuedMenuConfirmation(input, reader); err != nil {
 		return p.failed(err)
@@ -404,6 +489,7 @@ func menuImportSpoof(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	if device != "" {
 		args = append(args, "--device", device)
 	}
+	args = appendSpoofLocalNetworkArgs(args, network)
 	code := linkSpoofCommand(args, out, errOut, opts)
 	if code == 0 {
 		menuNotice(out, "OK", "Spoof Link imported; verify authenticated bilateral status and private application traffic on both ends.")

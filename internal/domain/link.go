@@ -194,13 +194,16 @@ type SpoofOptions struct {
 	DiscoveryPPS    int       `json:"discovery_pps,omitempty"`
 	BackgroundPPS   int       `json:"background_pps,omitempty"`
 
-	ListenPort     uint16     `json:"listen_port"`
-	PeerPort       uint16     `json:"peer_port"`
-	BindIPv4       netip.Addr `json:"bind_ipv4,omitzero"`
-	Interface      string     `json:"interface,omitempty"`
-	LocalPublicKey string     `json:"local_public_key"`
-	PeerPublicKey  string     `json:"peer_public_key,omitempty"`
-	MaterialSHA256 string     `json:"material_sha256"`
+	ListenPort       uint16     `json:"listen_port"`
+	PeerPort         uint16     `json:"peer_port"`
+	BindIPv4         netip.Addr `json:"bind_ipv4,omitzero"`          // locally assigned receiver, distinct from advertised Underlay.Local
+	BindPort         uint16     `json:"bind_port,omitempty"`         // post-DNAT local destination; zero=advertised port
+	BindAlternates   string     `json:"bind_alternates,omitempty"`   // additional local receivers, NOT advertised in Setup Code
+	IngressInterface string     `json:"ingress_interface,omitempty"` // receive NIC, independent of outgoing Interface
+	Interface        string     `json:"interface,omitempty"`         // outgoing NIC only
+	LocalPublicKey   string     `json:"local_public_key"`
+	PeerPublicKey    string     `json:"peer_public_key,omitempty"`
+	MaterialSHA256   string     `json:"material_sha256"`
 }
 
 func canonicalSpoofPublicKey(value string) bool {
@@ -322,17 +325,31 @@ func (l Link) ValidateSpoofTopology() error {
 		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof",
 			"Spoof requires real receive ports and an absolute local source file path")
 	}
-	if s.BindIPv4.IsValid() && !s.BindIPv4.Is4() {
-		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof",
-			"Spoof local receive bind must be IPv4")
+	bind := s.BindIPv4
+	if !bind.IsValid() {
+		bind = l.Underlay.Local
 	}
-	if s.ManageIngress && s.Interface == "" {
-		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof", "managed Spoof ingress requires an explicit receiving/sending interface")
-	}
-	if s.Interface != "" && (len(s.Interface) >= 16 || strings.TrimSpace(s.Interface) != s.Interface ||
-		strings.ContainsAny(s.Interface, "\x00\r\n\t /")) {
+	if !bind.Is4() || bind.IsUnspecified() || bind.IsMulticast() {
 		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof",
-			"Spoof optional local egress device name is invalid")
+			"Spoof local receive bind must be a usable locally assigned IPv4")
+	}
+	port := s.BindPort
+	if port == 0 {
+		port = s.ListenPort
+	}
+	if _, err := ParseSpoofAlternates(s.BindAlternates, netip.AddrPortFrom(bind, port)); err != nil {
+		return err
+	}
+	if s.ManageIngress && s.IngressInterface == "" {
+		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof",
+			"managed Spoof ingress requires explicit --ingress-device; outbound --device is independent")
+	}
+	for _, device := range []string{s.Interface, s.IngressInterface} {
+		if device != "" && (len(device) >= 16 || strings.TrimSpace(device) != device ||
+			strings.ContainsAny(device, "\x00\r\n\t /")) {
+			return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof",
+				"Spoof local ingress/egress interface name is invalid")
+		}
 	}
 	if !canonicalSpoofPublicKey(s.LocalPublicKey) ||
 		(s.Role == "recipient" && !canonicalSpoofPublicKey(s.PeerPublicKey)) ||

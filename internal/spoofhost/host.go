@@ -238,6 +238,9 @@ func (h *Host) Preflight(ctx context.Context, link domain.Link, removing bool) e
 		if len(link.Spoof.SourceFile) == 0 {
 			return errors.New("Spoof Source file not configured")
 		}
+		if err := validateReceiveBindings(link); err != nil {
+			return err
+		}
 		if err := validateIngressDevice(link); err != nil {
 			return err
 		}

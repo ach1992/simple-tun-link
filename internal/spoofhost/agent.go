@@ -26,36 +26,40 @@ import (
 // RuntimeStatus is diagnostic evidence written by the original helper.
 // A locally started helper is not evidence of a viable remote session.
 type RuntimeStatus struct {
-	SchemaVersion          int           `json:"schema_version"`
-	LinkID                 domain.LinkID `json:"link_id"`
-	PID                    int           `json:"pid"`
-	State                  string        `json:"state"`
-	SelectedSource         string        `json:"selected_source,omitempty"`
-	SelectedProfile        string        `json:"selected_profile,omitempty"`
-	SelectedDestination    string        `json:"selected_destination,omitempty"`
-	RecentWorkingPaths     int           `json:"recent_working_paths"`
-	ScannedProbes          uint64        `json:"scanned_probes"`
-	SelectedRTTMs          float64       `json:"selected_rtt_ms,omitempty"`
-	SelectedJitterMs       float64       `json:"selected_jitter_ms,omitempty"`
-	SelectedLossPercent    float64       `json:"selected_loss_percent,omitempty"`
-	TunnelMTU              int           `json:"tunnel_mtu,omitempty"`
-	MTUStatus              string        `json:"mtu_status,omitempty"`
-	VerifiedMTU            int           `json:"verified_mtu,omitempty"`
-	UnackedProbes          int           `json:"unacked_probes"`
-	RecoveryStage          string        `json:"recovery_stage,omitempty"`
-	ActiveReceiveProfiles  []string      `json:"active_receive_profiles,omitempty"`
-	UnavailableReceivers   []string      `json:"unavailable_receivers,omitempty"`
-	SourceCandidates       int           `json:"source_candidates"`
-	SourceScanPosition     int           `json:"source_scan_position"`
-	SourceScanProfileIndex int           `json:"source_scan_profile_index"`
-	SourceScanPasses       uint64        `json:"source_scan_passes"`
-	Authenticated          bool          `json:"authenticated"`
-	BilateralConfirmed     bool          `json:"bilateral_confirmed"`
-	SentPrivatePackets     uint64        `json:"sent_private_packets"`
-	ReceivedPrivatePackets uint64        `json:"received_private_packets"`
-	LastError              string        `json:"last_error,omitempty"`
-	UpdatedAt              time.Time     `json:"updated_at"`
-	LastAuthenticatedAt    time.Time     `json:"last_authenticated_at,omitempty"`
+	SchemaVersion            int           `json:"schema_version"`
+	LinkID                   domain.LinkID `json:"link_id"`
+	PID                      int           `json:"pid"`
+	State                    string        `json:"state"`
+	SelectedSource           string        `json:"selected_source,omitempty"`
+	SelectedProfile          string        `json:"selected_profile,omitempty"`
+	SelectedDestination      string        `json:"selected_destination,omitempty"`
+	RecentWorkingPaths       int           `json:"recent_working_paths"`
+	ScannedProbes            uint64        `json:"scanned_probes"`
+	SelectedRTTMs            float64       `json:"selected_rtt_ms,omitempty"`
+	SelectedJitterMs         float64       `json:"selected_jitter_ms,omitempty"`
+	SelectedLossPercent      float64       `json:"selected_loss_percent,omitempty"`
+	TunnelMTU                int           `json:"tunnel_mtu,omitempty"`
+	MTUStatus                string        `json:"mtu_status,omitempty"`
+	VerifiedMTU              int           `json:"verified_mtu,omitempty"`
+	UnackedProbes            int           `json:"unacked_probes"`
+	RecoveryStage            string        `json:"recovery_stage,omitempty"`
+	ActiveReceiveProfiles    []string      `json:"active_receive_profiles,omitempty"`
+	UnavailableReceivers     []string      `json:"unavailable_receivers,omitempty"`
+	SourceCandidates         int           `json:"source_candidates"`
+	SourceScanPosition       int           `json:"source_scan_position"`
+	SourceScanProfileIndex   int           `json:"source_scan_profile_index"`
+	SourceScanPasses         uint64        `json:"source_scan_passes"`
+	Authenticated            bool          `json:"authenticated"`
+	BilateralConfirmed       bool          `json:"bilateral_confirmed"`
+	SentPrivatePackets       uint64        `json:"sent_private_packets"`
+	ReceivedPrivatePackets   uint64        `json:"received_private_packets"`
+	PrivateL3Status          string        `json:"private_l3_status"` // UNVERIFIED, VERIFIED_ICMP, or ICMP_PROBE_FAILED
+	PrivateICMPLastCheckAt   time.Time     `json:"private_icmp_last_check_at,omitempty"`
+	PrivateICMPLastSuccessAt time.Time     `json:"private_icmp_last_success_at,omitempty"`
+	PrivateICMPError         string        `json:"private_icmp_error,omitempty"`
+	LastError                string        `json:"last_error,omitempty"`
+	UpdatedAt                time.Time     `json:"updated_at"`
+	LastAuthenticatedAt      time.Time     `json:"last_authenticated_at,omitempty"`
 }
 type Agent struct {
 	root                 string
@@ -97,20 +101,25 @@ type Agent struct {
 	lastPendingSend      time.Time
 	lastSourceRefresh    time.Time
 	connected            bool
+	privateCheckSession  *carrier.Session
 	bindPeer             func(*carrier.Session) error
 	status               RuntimeStatus
 }
 
 func newAgent(root string, link domain.Link, material Material, bind func(*carrier.Session) error) *Agent {
 	return &Agent{root: root, link: link, material: material, bindPeer: bind,
-		status: RuntimeStatus{SchemaVersion: 1, LinkID: link.ID, PID: os.Getpid(), State: "WAITING_FOR_PEER"}}
+		status: RuntimeStatus{SchemaVersion: 1, LinkID: link.ID, PID: os.Getpid(), State: "WAITING_FOR_PEER", PrivateL3Status: "UNVERIFIED"}}
 }
 func (a *Agent) localEndpoint() netip.AddrPort {
 	bind := a.link.Spoof.BindIPv4
 	if !bind.IsValid() {
 		bind = a.link.Underlay.Local
 	}
-	return netip.AddrPortFrom(bind, a.link.Spoof.ListenPort)
+	port := a.link.Spoof.BindPort
+	if port == 0 {
+		port = a.link.Spoof.ListenPort
+	}
+	return netip.AddrPortFrom(bind, port)
 }
 func (a *Agent) peerEndpoint() netip.AddrPort {
 	return netip.AddrPortFrom(a.link.Underlay.Peer, a.link.Spoof.PeerPort)
@@ -122,6 +131,11 @@ func (a *Agent) peerEndpoints() []netip.AddrPort {
 }
 func (a *Agent) localEndpoints() []netip.AddrPort {
 	primary := a.localEndpoint()
+	more, _ := domain.ParseSpoofAlternates(a.link.Spoof.BindAlternates, primary)
+	return append([]netip.AddrPort{primary}, more...)
+}
+func (a *Agent) advertisedLocalEndpoints() []netip.AddrPort {
+	primary := netip.AddrPortFrom(a.link.Underlay.Local, a.link.Spoof.ListenPort)
 	more, _ := domain.ParseSpoofAlternates(a.link.Spoof.LocalAlternates, primary)
 	return append([]netip.AddrPort{primary}, more...)
 }
@@ -218,6 +232,15 @@ func (a *Agent) publishStatus() {
 		a.status.SelectedLossPercent = q.lossPercent()
 	}
 	a.status.RecoveryStage = a.stage
+	if !a.connected || a.session == nil || a.privateCheckSession != a.session {
+		a.status.PrivateL3Status = "UNVERIFIED"
+	} else if a.status.PrivateL3Status == "VERIFIED_ICMP" &&
+		time.Since(a.status.PrivateICMPLastSuccessAt) > 35*time.Second {
+		a.status.PrivateL3Status = "UNVERIFIED"
+	}
+	if a.status.PrivateL3Status == "" {
+		a.status.PrivateL3Status = "UNVERIFIED"
+	}
 	a.status.SourceCandidates = len(a.inventory.Addresses)
 	a.status.SourceScanPosition, a.status.SourceScanProfileIndex, a.status.SourceScanPasses = a.cursor.PathProgress()
 	a.status.Authenticated = a.session != nil
@@ -654,11 +677,19 @@ func (a *Agent) receivedTo(frame carrier.Frame, outer, realDestination netip.Add
 	} // don't advertise an unconfirmed path
 	switch kind {
 	case carrier.KindKeepalive:
-		if len(plain) == 8 || (len(plain) >= 576 && len(plain) <= 1280) {
-			// MTU probes carry large authenticated padding, but only their
-			// first eight bytes are the nonce to acknowledge. Echoing the
-			// entire padding fails validation and would make PMTU always fail.
-			if err = a.sendObservedControlWithNonce(carrier.KindKeepaliveAck, outer.Addr(), outerProfile, realDestination, plain[:8]); err != nil {
+		if len(plain) == 14 || (len(plain) >= 576 && len(plain) <= 1280) {
+			// Authenticated route probe: echo the *advertised* destination
+			// selected by the peer, never an internal post-DNAT bind address.
+			// It must belong to this Link's immutable advertised endpoints.
+			addr, ok := netip.AddrFromSlice(plain[8:12])
+			if !ok {
+				return nil
+			}
+			advertised := netip.AddrPortFrom(addr, uint16(plain[12])<<8|uint16(plain[13]))
+			if !slices.Contains(a.advertisedLocalEndpoints(), advertised) {
+				return nil
+			}
+			if err = a.sendObservedControlWithNonce(carrier.KindKeepaliveAck, outer.Addr(), outerProfile, advertised, plain[:8]); err != nil {
 				return err
 			}
 		} else {
@@ -835,9 +866,9 @@ func (a *Agent) run(ctx context.Context) error {
 	defer tun.Close()
 	var receiver carrier.FrameReceiver
 	if len(a.localEndpoints()) == 1 {
-		receiver, err = carrier.OpenFrameReceiver(a.localEndpoint(), a.link.Spoof.OuterProtocol, a.link.Spoof.Interface)
+		receiver, err = carrier.OpenFrameReceiver(a.localEndpoint(), a.link.Spoof.OuterProtocol, a.link.Spoof.IngressInterface)
 	} else {
-		receiver, err = carrier.OpenMultiEndpointReceiver(a.localEndpoints(), a.link.Spoof.OuterProtocol, a.link.Spoof.Interface)
+		receiver, err = carrier.OpenMultiEndpointReceiver(a.localEndpoints(), a.link.Spoof.OuterProtocol, a.link.Spoof.IngressInterface)
 	}
 	if err != nil {
 		return err
@@ -881,6 +912,9 @@ func (a *Agent) run(ctx context.Context) error {
 	packets := make(chan []byte, 128)
 	frames := make(chan receivedFrame, 128)
 	readErrors := make(chan error, 2)
+	privateProbeResults := make(chan privateProbeResult, 1)
+	var lastPrivateProbe time.Time
+	var privateProbePending bool
 	go func() {
 		for ctx.Err() == nil {
 			packet, err := tun.ReadPacket(ctx)
@@ -908,9 +942,13 @@ func (a *Agent) run(ctx context.Context) error {
 			var outer netip.AddrPort
 			var outerProfile string
 			var err error
-			realDestination := a.localEndpoint()
+			// Inbound bind addresses may be post-DNAT and MUST NEVER leak
+			// into the authenticated advertised destination inventory.
+			realDestination := netip.AddrPortFrom(a.link.Underlay.Local, a.link.Spoof.ListenPort)
 			if rp, ok := receiver.(carrier.PathFrameReceiver); ok {
-				n, outer, realDestination, outerProfile, err = rp.ReadPathFrame(buffer)
+				var localBind netip.AddrPort
+				n, outer, localBind, outerProfile, err = rp.ReadPathFrame(buffer)
+				_ = localBind // raw input cannot reveal the pre-DNAT advertised destination
 			} else if rp, ok := receiver.(carrier.ProfileFrameReceiver); ok {
 				n, outer, outerProfile, err = rp.ReadProfileFrame(buffer)
 			} else {
@@ -973,6 +1011,37 @@ func (a *Agent) run(ctx context.Context) error {
 			}
 		case <-tick.C:
 			a.tick()
+			if a.connected && a.session != nil && !privateProbePending &&
+				(lastPrivateProbe.IsZero() || time.Since(lastPrivateProbe) >= 10*time.Second) {
+				lastPrivateProbe = time.Now()
+				privateProbePending = true
+				session, dest := a.session, a.chosenDestination
+				local, peer := a.link.Addresses.Local.Addr(), a.link.Addresses.Peer.Addr()
+				go func() {
+					err := privateICMPProbe(ctx, local, peer)
+					select {
+					case privateProbeResults <- privateProbeResult{session: session, destination: dest, err: err}:
+					case <-ctx.Done():
+					}
+				}()
+			}
+		case evidence := <-privateProbeResults:
+			privateProbePending = false
+			if !a.connected || a.session == nil || evidence.session != a.session ||
+				evidence.destination != a.chosenDestination {
+				continue
+			}
+			a.privateCheckSession = a.session
+			a.status.PrivateICMPLastCheckAt = time.Now().UTC()
+			if evidence.err == nil {
+				a.status.PrivateL3Status = "VERIFIED_ICMP"
+				a.status.PrivateICMPLastSuccessAt = a.status.PrivateICMPLastCheckAt
+				a.status.PrivateICMPError = ""
+			} else {
+				a.status.PrivateL3Status = "ICMP_PROBE_FAILED"
+				a.status.PrivateICMPError = evidence.err.Error()
+			}
+			a.publishStatus()
 		case <-report.C:
 			a.publishStatus()
 		}

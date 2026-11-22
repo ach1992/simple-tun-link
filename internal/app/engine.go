@@ -456,10 +456,7 @@ func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.
 		}
 	}
 	if prior.Backend == domain.BackendSpoof {
-		if e.spoofRetirement == nil {
-			return result, stlerr.New(stlerr.CodeState, "remove", string(id), "spoof", "Spoof removed but protected material retirement is not configured")
-		}
-		if err := e.spoofRetirement.RetireAfterRemove(ctx, prior); err != nil {
+		if err := e.retireSpoofCredentialLocked(ctx, id); err != nil {
 			return result, stlerr.WithEvidence(
 				stlerr.Wrap(stlerr.CodeState, "remove", string(id), "spoof", "Spoof Link removed; original protected material retirement still requires reconciliation", err),
 				stlerr.OperationEvidence{Stage: "credential_retirement", HostMutation: "attempted", DesiredState: "committed", Rollback: "not_attempted"})

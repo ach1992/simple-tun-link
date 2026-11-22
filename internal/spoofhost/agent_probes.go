@@ -61,14 +61,19 @@ func (a *Agent) sendSizedProbe(route carrier.SourcePath, innerMTU int) error {
 	if id == 0 {
 		return errors.New("invalid probe nonce")
 	}
-	payload := nonce[:]
+	// Advertised destination is carried inside the authenticated probe.
+	// DNAT destroys the original address on the receiving socket, so the
+	// receiver cannot derive which declared external destination was used.
+	// The sender includes its actual chosen destination with each nonce.
+	length := 14
 	if innerMTU > 0 {
-		// An inner IPv4 datagram of length N and this N-byte authenticated
-		// Keepalive have the same encrypted outer wire size.
-		full := make([]byte, innerMTU)
-		copy(full, nonce[:])
-		payload = full
+		// Preserve the exact outer payload size for authenticated PMTU.
+		length = innerMTU
 	}
+	payload := make([]byte, length)
+	copy(payload, nonce[:])
+	copy(payload[8:12], route.Destination.Addr().AsSlice())
+	binary.BigEndian.PutUint16(payload[12:14], route.Destination.Port())
 	encoded, err := a.session.Seal(carrier.KindKeepalive, payload)
 	if err != nil {
 		return err

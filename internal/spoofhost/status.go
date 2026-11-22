@@ -11,7 +11,7 @@ import (
 // current, exactly identified systemd helper and is fresh. The status file is
 // never a substitute for live unit/TUN/route ownership or for peer traffic.
 func TrustedRuntimeStatus(root string, id domain.LinkID, host spoofbackend.HostObservation) RuntimeStatus {
-	unknown := RuntimeStatus{SchemaVersion: 1, LinkID: id, State: "STOPPED_OR_UNVERIFIED"}
+	unknown := RuntimeStatus{SchemaVersion: 1, LinkID: id, State: "STOPPED_OR_UNVERIFIED", PrivateL3Status: "UNVERIFIED"}
 	if !host.RuntimeReady || !host.UnitActive || !host.UnitOwned || host.HelperPID <= 1 {
 		return unknown
 	}
@@ -27,6 +27,16 @@ func TrustedRuntimeStatus(root string, id domain.LinkID, host spoofbackend.HostO
 	// of private application success. Never upgrade a contradictory report.
 	if report.State == "CONNECTED" && (!report.Authenticated || !report.BilateralConfirmed) {
 		return unknown
+	}
+	if report.PrivateL3Status != "VERIFIED_ICMP" && report.PrivateL3Status != "ICMP_PROBE_FAILED" {
+		report.PrivateL3Status = "UNVERIFIED"
+	}
+	if report.PrivateL3Status == "VERIFIED_ICMP" && (report.PrivateICMPLastSuccessAt.IsZero() ||
+		time.Since(report.PrivateICMPLastSuccessAt) > 35*time.Second) {
+		report.PrivateL3Status = "UNVERIFIED"
+	}
+	if report.State != "CONNECTED" {
+		report.PrivateL3Status = "UNVERIFIED"
 	}
 	return report
 }

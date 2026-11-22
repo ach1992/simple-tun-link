@@ -260,6 +260,27 @@ Code, with no lifetime retry ceiling. The local scan and low-rate
 background packet budgets are separately tunable and do not impose
 Source inventory limits.
 
+The immutable one-time pairing protects only the advertised external
+IPv4:port primary/alternate destinations. Post-DNAT local
+`BindIPv4`/`BindPort`/`BindAlternates` are endpoint-local,
+independent of `IngressInterface` (incoming NIC) and `Interface`
+(outgoing NIC). Noise-authenticated destination probes carry the
+chosen advertised destination even if the kernel DNAT translation
+hides it from the local socket. No STUN, NAT traversal or guessed
+destination is introduced.
+
+Outer two-way authenticated connectivity is not evidence of working
+decrypted private TUN traffic. A separate fresh private IPv4 echo
+probe checks the actual end-to-end Linux datapath. Its failure is
+ICMP-specific, not a claim that TCP/UDP are necessarily blocked.
+Read-only `rp_filter` inspection calculates the Linux effective
+max(all, incoming NIC) without silently changing shared policy.
+
+Exact Engine-owned post-Remove `SpoofRemovalReceipt` is durable.
+Crash-interrupted protected-file quarantine can be retried under
+the same maintenance/Link locks using `retire-spoof` and an
+original-receipt-bound marker. Unknown resources remain preserved.
+
 Optional Link-scoped `ManageIngress` relies on preflighted, installed
 iptables-compatible host support and an explicitly chosen interface.
 It stores no second manager: the original Host's inspected resources,

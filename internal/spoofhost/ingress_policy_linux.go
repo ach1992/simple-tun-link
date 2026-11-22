@@ -69,7 +69,7 @@ func needsIngressException(snapshot string, link domain.Link, route managedIngre
 func inputRuleVerdict(fields []string, route managedIngress, link domain.Link) (verdict string, relevant, exact bool) {
 	relevant, exact = true, true
 	protocol := map[string]string{"udp": "17", "tcp": "6", "icmp": "1", "gre": "47", "ipip": "4", "proto58": "58", "l2tpv3": "115"}[route.protocol]
-	device, destination := link.Spoof.Interface, route.endpoint.Addr()
+	device, destination := link.Spoof.IngressInterface, route.endpoint.Addr()
 	if route.private {
 		var err error
 		device, err = spoofcarrier.TunnelName(link.ID)

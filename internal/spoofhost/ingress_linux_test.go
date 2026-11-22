@@ -19,9 +19,10 @@ func ingressFixture(t *testing.T, outer string) domain.Link {
 		Underlay:  domain.Underlay{Local: netip.MustParseAddr("10.244.62.221"), Peer: netip.MustParseAddr("10.244.62.222")},
 		Addresses: domain.LinkAddresses{Local: netip.MustParsePrefix("10.245.42.1/32"), Peer: netip.MustParsePrefix("10.245.42.2/32")},
 		Spoof: domain.SpoofOptions{
-			OuterProtocol: outer, ListenPort: 48001, PeerPort: 48002, Interface: "eth0",
-			LocalAlternates: "10.244.62.223:48011",
-			ManageIngress:   true,
+			OuterProtocol: outer, ListenPort: 48001, PeerPort: 48002,
+			Interface: "out0", IngressInterface: "eth0",
+			LocalAlternates: "10.244.62.223:48011", BindAlternates: "10.244.62.223:48011",
+			ManageIngress: true,
 		},
 	}
 	return link
@@ -94,7 +95,7 @@ func TestSpoofIngressOptInAndRawProfileScoping(t *testing.T) {
 		t.Fatal("default must never alter host firewall")
 	}
 	link.Spoof.ManageIngress = true
-	link.Spoof.Interface = ""
+	link.Spoof.IngressInterface = ""
 	if _, err = ingressRules(link); err == nil {
 		t.Fatal("managed ingress without explicit interface accepted")
 	}

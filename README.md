@@ -41,6 +41,12 @@ not proof of public WAN reachability, stealth or native GRE/IPIP/L2TP
 interoperability. In
 particular, TCP-looking packets are **not** a real established TCP connection
 and the protocol-115 option is **not** STL's existing native L2TPv3 Backend.
+Current Spoof development also separates authenticated, externally
+advertised endpoints from local NAT bind addresses, incoming from
+outgoing NICs, and outer transport from verified private application
+traffic; Linux reverse-path filtering is diagnosed without silent
+shared sysctl changes.
+
 No Spoof code has been merged into Stable or deployed to real production
 servers. See the [operator guide](docs/SPOOF-CARRIER.md) for actual support,
 source-list capacity, exact testing and remaining gates.

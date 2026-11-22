@@ -11,7 +11,7 @@ import (
 func TestSpoofManagedIngressRestoresRulesWithoutRestartingHealthyHelper(t *testing.T) {
 	link := spoofFixture(t, "auto")
 	link.Spoof.ManageIngress = true
-	link.Spoof.Interface = "eth0"
+	link.Spoof.IngressInterface = "eth0"
 	ctx := context.Background()
 	host := &fixtureHost{
 		current: HostObservation{
@@ -51,7 +51,7 @@ func TestSpoofManagedIngressRestoresRulesWithoutRestartingHealthyHelper(t *testi
 func TestSpoofManagedIngressRemovalSchedulesExactOwnedResource(t *testing.T) {
 	link := spoofFixture(t, "auto")
 	link.Spoof.ManageIngress = true
-	link.Spoof.Interface = "eth0"
+	link.Spoof.IngressInterface = "eth0"
 	ctx := context.Background()
 	host := &fixtureHost{current: HostObservation{FirewallExists: true, FirewallReady: false}}
 	backend, _ := New(host)
