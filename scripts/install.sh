@@ -685,6 +685,53 @@ package_installed() {
   [[ $result == 'install ok installed' ]]
 }
 
+# The distro package NAME is a delivery mechanism, not the runtime contract.
+# An existing usable tool installed through another package or root-owned
+# local installation should not trigger APT. The selected Engine/backend
+# separately rechecks real kernel, packet and service readiness.
+prerequisite_tool_usable() {
+  local executable=$1 candidate resolved current uid mode
+  shift
+  # This is the normal privileged runtime search path, not a caller PATH.
+  candidate=$(PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin command -v -- "$executable") || return 1
+  [[ $candidate == /* ]] || return 1
+  resolved=$(realpath -e -- "$candidate") || return 1
+  [[ -f $resolved && -x $resolved ]] || return 1
+  if [[ $EUID == 0 ]]; then
+    # Both the discovered executable's directory and the resolved target
+    # chain must be root-controlled (including /usr/local alternatives).
+    local start
+    for start in "$resolved" "$(dirname -- "$candidate")"; do
+      current=$(realpath -e -- "$start") || return 1
+      while :; do
+        uid=$(stat -c %u -- "$current") || return 1
+        mode=$(stat -c %a -- "$current") || return 1
+        [[ $uid == 0 && $mode =~ ^[0-7]{3,4}$ ]] || return 1
+        (( (8#$mode & 8#022) == 0 )) || return 1
+        [[ $current == / ]] && break
+        current=$(dirname -- "$current")
+      done
+    done
+  fi
+  # Never demand a specific version string, and bound a broken tool's probe.
+  timeout -k 1 5 "$resolved" "$@" >/dev/null 2>&1
+}
+
+prerequisite_satisfied() {
+  local pkg=$1
+  package_installed "$pkg" && return 0
+  case "$pkg" in
+    iproute2) prerequisite_tool_usable ip -json address show ;;
+    iptables) prerequisite_tool_usable iptables -V && prerequisite_tool_usable ip6tables -V ;;
+    kmod) prerequisite_tool_usable modprobe --version && prerequisite_tool_usable modinfo --version ;;
+    wireguard-tools) prerequisite_tool_usable wg --version ;;
+    nftables) prerequisite_tool_usable nft --version ;;
+    # IPsec vendor daemons/plugins need independently proved service/crypto
+    # ownership. WSS/QUIC helper trust is a separate authenticated contract.
+    *) return 1 ;;
+  esac
+}
+
 # Accept a distribution-authenticated Release with at least one valid signature
 # from the installed official archive keyring. gpgv can return 2 for another
 # co-signer absent from that keyring (as on Debian 12 in Nov 2026). Do not
@@ -1441,7 +1488,7 @@ ensure_packages() {
   command -v apt-get >/dev/null && command -v dpkg-query >/dev/null ||
     fail 'apt-get and dpkg-query are required on supported distributions'
   for pkg in "${packages[@]}"; do
-    package_installed "$pkg" || missing+=("$pkg")
+    prerequisite_satisfied "$pkg" || missing+=("$pkg")
   done
   if [[ $expected_missing_supplied == 1 && "${missing[*]}" != "$expected_missing" ]]; then
     fail 'selected package inventory changed since confirmation; no APT attempted'
@@ -1452,7 +1499,7 @@ ensure_packages() {
     [[ $expected_apt_plan_sha256_supplied == 0 ||
        $expected_apt_plan_sha256 == e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 ]] ||
       fail 'APT plan changed since confirmation; no APT attempted'
-    printf '[OK] STL dependencies already installed for %s %s (%s).\n' "$os_id" "$os_version" "$backends" >&2
+    printf '[OK] STL prerequisites already available for %s %s (%s); no APT changes.\n' "$os_id" "$os_version" "$backends" >&2
     return
   fi
   # Source-level trust bypasses must fail before even the first APT refresh.
@@ -1519,7 +1566,7 @@ ensure_packages() {
     fail "APT_PACKAGE_INSTALL failed; missing selected packages: ${missing[*]}. No automatic retry: partial dpkg/service effects are possible. Inspect dpkg --audit and active APT processes, reconcile first, and if sources were unreachable manually configure a trusted signed Debian/Ubuntu regional mirror; STL will not rewrite sources."
   fi
   for pkg in "${packages[@]}"; do
-    package_installed "$pkg" || fail "selected package remains unavailable: $pkg"
+    prerequisite_satisfied "$pkg" || fail "selected prerequisite remains unavailable: $pkg"
   done
   if [[ $missing_ipsec == 1 ]]; then
     ipsec_normalize_new_vendor
@@ -1537,7 +1584,7 @@ if [[ $action == requirements ]]; then
     command -v dpkg-query >/dev/null || fail 'cannot inspect installed packages'
     missing=()
     for pkg in "${packages[@]}"; do
-      package_installed "$pkg" || missing+=("$pkg")
+      prerequisite_satisfied "$pkg" || missing+=("$pkg")
     done
     printf 'missing_packages=%s\n' "${missing[*]}"
     apt_resolve_plan

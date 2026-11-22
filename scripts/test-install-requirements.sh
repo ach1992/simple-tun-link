@@ -453,4 +453,47 @@ done
 unset -f apt-get apt_sources_must_be_authenticated apt_verify_distro_candidates package_installed
 printf 'APT_SIMULATION_SELECTIVE_CAPTURE_AND_FULL_DIAGNOSTICS=PASS\n'
 
+# Package names are not the admission contract when an existing tool is
+# usable. Exercise the exact production helper, not a duplicate test policy;
+# nothing below runs APT or alters the host package database.
+(
+  sed -n '/^prerequisite_tool_usable() {/,/^}/p' "$installer" > "$root/prerequisite-probe.sh"
+  sed -n '/^prerequisite_satisfied() {/,/^}/p' "$installer" >> "$root/prerequisite-probe.sh"
+  [[ $(grep -c '^prerequisite_tool_usable() {' "$root/prerequisite-probe.sh") == 1 &&
+     $(grep -c '^prerequisite_satisfied() {' "$root/prerequisite-probe.sh") == 1 ]] ||
+    fail 'canonical capability-based package reuse functions unavailable'
+  # shellcheck source=/dev/null
+  source "$root/prerequisite-probe.sh"
+  prerequisite_tool_usable cat --version || fail 'working root-controlled system executable not accepted'
+  if prerequisite_tool_usable cat --not-an-option; then
+    fail 'unusable executable accepted solely because it exists'
+  fi
+  package_installed() { [[ $1 == "${existing_package:-none}" ]]; }
+  prerequisite_tool_usable() {
+    case "$*" in
+      'ip -json address show'|'iptables -V'|'ip6tables -V'|'modprobe --version'|'modinfo --version'|'wg --version'|'nft --version') return 0 ;;
+      *) return 1 ;;
+    esac
+  }
+  existing_package=
+  for pkg in iproute2 iptables kmod wireguard-tools nftables; do
+    prerequisite_satisfied "$pkg" || fail "functional alternative blocked by package name: $pkg"
+  done
+  for pkg in charon-systemd strongswan-swanctl libstrongswan-standard-plugins; do
+    if prerequisite_satisfied "$pkg"; then
+      fail "unverified IPsec vendor service/plugin accepted on tool-version proof: $pkg"
+    fi
+  done
+  existing_package=iproute2
+  prerequisite_tool_usable() { return 1; }
+  prerequisite_satisfied iproute2 || fail 'already installed official package became a forced reinstall'
+  if prerequisite_satisfied iptables; then fail 'unusable alternate firewall tool accepted'; fi
+  existing_package=
+  prerequisite_tool_usable() { [[ $1 != ip6tables ]]; }
+  if prerequisite_satisfied iptables; then fail 'missing IPv6 firewall command was ignored'; fi
+  prerequisite_tool_usable() { [[ $1 != modinfo ]]; }
+  if prerequisite_satisfied kmod; then fail 'missing module metadata capability was ignored'; fi
+)
+printf 'PREREQUISITE_WORKING_TOOL_REUSE_NO_VERSION_PIN_AND_IPSEC_BOUNDARY=PASS\n'
+
 printf 'Installer requirements checks PASS (capability-based Debian/Ubuntu, signed GPGV status, package plans, unsafe inputs).\n'

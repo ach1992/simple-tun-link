@@ -35,7 +35,17 @@ Releases, PRs and dated Issue evidence, not this current operator runbook.
   provisioner owns its separately attested private strongSwan runtime
   under the same Engine/maintenance authority; neither component
   may adopt a foreign unit.
-- The installer selects only approved missing packages from the
+- The installer first reuses **working host tools**. Installed distro
+  packages satisfy their prerequisites normally; if an expected package name
+  is absent but the existing tool in a root-controlled system directory passes
+  a read-only compatibility probe, STL skips installation and version checks.
+  This applies to `iproute2`, `iptables`/`ip6tables`, `kmod`,
+  `wireguard-tools` (`wg`) and `nftables` (`nft`). The selected kernel/backend
+  still checks its actual capabilities. External IPsec services/plugins or
+  WSS/QUIC helpers cannot be adopted by a simple `--version`; they require
+  separate verified ownership and protocol compatibility. PREPARE never
+  automatically upgrades an existing package or working tool.
+- The installer selects only approved genuinely missing packages from the
   configured signed distro repositories. The default native GRE/IPIP
   set needs `iproute2`, `iptables` and `kmod`; WireGuard adds
   `wireguard-tools`; IPsec may need `charon-systemd`,
