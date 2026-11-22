@@ -302,6 +302,13 @@ func healthBlocked(link domain.Link, reason, summary, next string) healthLinkChe
 }
 
 func healthDiagnosticFailure(link domain.Link, err error) healthLinkCheck {
+	if link.Backend == domain.BackendSpoof {
+		observation := stlerr.Public(err)
+		switch observation.ReasonCode {
+		case "spoof_local_helper_unverified", "spoof_bilateral_unconfirmed", "spoof_private_icmp_unverified":
+			return healthUnavailable(link, observation.ReasonCode, observation.Detail, observation.NextStep)
+		}
+	}
 	if link.Backend == domain.BackendIPsec && stlerr.Public(err).ReasonCode == "ipsec_sa_not_established" {
 		return healthBlocked(link, "ipsec_sa_not_established",
 			"IPsec is locally configured but has no matching security association; no peer ping was attempted.",

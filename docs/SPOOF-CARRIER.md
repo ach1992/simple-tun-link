@@ -292,7 +292,16 @@ Inspect **three different facts** rather than one vague `OK`:
 control datagrams). These do **not** prove that your application is
 reachable: use an actual private ICMP/TCP/UDP test when needed.
 `link diagnose` is explicitly invoked traffic-generating private
-ICMP quality measurement; it does not prove outer-path PMTU.
+ICMP quality measurement **only after** a fresh, verified authenticated
+bilateral path exists; it does not prove outer-path PMTU. Until then,
+per-Link CLI, guided menu Check connection and `diagnose --all` report
+`spoof_bilateral_unconfirmed` with a read-only `spoof-status` next action,
+**not** an unexplained generic diagnostic failure or a fabricated ping.
+Unverified original systemd helper/TUN/route ownership is separately
+reported as `spoof_local_helper_unverified`. If a private ICMP measurement
+fails after authentication, the separate result is
+`spoof_private_icmp_unverified`; neither that result nor an unconfirmed
+carrier is silently promoted to a connected private application path.
 
 ## Recovery and retirement
 

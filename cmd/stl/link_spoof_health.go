@@ -41,11 +41,19 @@ func inspectSpoofQuality(ctx context.Context, link domain.Link, opts runtimeOpti
 	}
 	host, err := inspector.DiagnosticState(ctx, link)
 	if err != nil || !host.RuntimeReady {
-		return linkDiagnostic{}, stlerr.New(stlerr.CodeInspect, "spoof_health", string(link.ID), "spoof", "Spoof original systemd helper, TUN, private route or material not verified")
+		failure := stlerr.New(stlerr.CodeInspect, "spoof_health", string(link.ID), "spoof",
+			"Spoof local helper, TUN, private route or credential identity is not verified; no private ICMP probes were sent")
+		failure.ReasonCode = "spoof_local_helper_unverified"
+		failure.NextStep = "Run stl link spoof-status " + string(link.ID) + " --json; inspect the original helper, systemd unit, TUN and private route without adopting foreign resources."
+		return linkDiagnostic{}, failure
 	}
 	runtime := spoofhost.TrustedRuntimeStatus(opts.stateRoot, link.ID, host)
 	if runtime.State != "CONNECTED" || !runtime.BilateralConfirmed || !runtime.Authenticated {
-		return linkDiagnostic{}, stlerr.New(stlerr.CodeInspect, "spoof_health", string(link.ID), "spoof", "Spoof private probing unavailable until authenticated bilateral path is confirmed; check spoof-status")
+		failure := stlerr.New(stlerr.CodeInspect, "spoof_health", string(link.ID), "spoof",
+			"Spoof local Link is provisioned, but an authenticated bilateral path has not been confirmed; no private ICMP probes were sent")
+		failure.ReasonCode = "spoof_bilateral_unconfirmed"
+		failure.NextStep = "Run stl link spoof-status " + string(link.ID) + " --json on both peers; check authenticated, bilateral_confirmed, Source candidates and exact real destinations. Retry private diagnosis only after bilateral confirmation."
+		return linkDiagnostic{}, failure
 	}
 	device, err := carrier.TunnelName(link.ID)
 	if err != nil {
@@ -57,7 +65,11 @@ func inspectSpoofQuality(ctx context.Context, link domain.Link, opts runtimeOpti
 	}
 	report, err := diagnostics.ObservePrivateLinkQuality(ctx, link, device, runner)
 	if err != nil {
-		return linkDiagnostic{}, stlerr.New(stlerr.CodeInspect, "spoof_health", string(link.ID), "spoof", "Spoof private ICMP quality probe failed; inspect peer status and Source viability")
+		failure := stlerr.New(stlerr.CodeInspect, "spoof_health", string(link.ID), "spoof",
+			"Spoof authenticated carrier was observed, but the private IPv4 ICMP quality probe was not verified")
+		failure.ReasonCode = "spoof_private_icmp_unverified"
+		failure.NextStep = "Inspect peer private routes, ICMP policy and current Spoof status; the probe failure is not proof that the carrier has disconnected."
+		return linkDiagnostic{}, failure
 	}
 	return linkDiagnostic{report: report, mtu: report.MTU, quality: report.Quality}, nil
 }
