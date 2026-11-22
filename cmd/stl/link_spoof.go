@@ -106,10 +106,16 @@ func spoofLinkFromSetup(offer pairing.SpoofSetup, material spoofhost.Material, s
 	if err != nil {
 		return domain.Link{}, err
 	}
-	link := domain.Link{ID: offer.LinkID(), Backend: domain.BackendSpoof, Encapsulation: domain.EncapUDP,
+	encapsulation := domain.EncapUDP
+	outer := ""
+	if offer.OuterProtocol() == "icmp" {
+		outer = "icmp"
+		encapsulation = domain.EncapNative
+	}
+	link := domain.Link{ID: offer.LinkID(), Backend: domain.BackendSpoof, Encapsulation: encapsulation,
 		Underlay:  domain.Underlay{Local: local.Addr(), Peer: peer.Addr()},
 		Addresses: domain.LinkAddresses{Local: netip.PrefixFrom(privateLocal, 32), Peer: netip.PrefixFrom(privatePeer, 32)},
-		Spoof: domain.SpoofOptions{Role: role, SourceFile: sourceFile, ListenPort: local.Port(),
+		Spoof: domain.SpoofOptions{OuterProtocol: outer, Role: role, SourceFile: sourceFile, ListenPort: local.Port(),
 			PeerPort: peer.Port(), BindIPv4: local.Addr(), Interface: device,
 			LocalPublicKey: base64.RawURLEncoding.EncodeToString(self[:]),
 			PeerPublicKey:  remoteIdentity, MaterialSHA256: digest},
@@ -151,6 +157,7 @@ func linkSpoofCommand(args []string, stdout, stderr io.Writer, options *runtimeO
 		recipientIP := f.String("recipient-private", "", "recipient's tunnel IPv4")
 		sources := f.String("sources", spoof.DefaultSourcesPath, "local Source file path")
 		device := f.String("device", "", "explicit local egress interface (optional)")
+		outer := f.String("outer", "udp", "outer IPv4 protocol: udp or icmp")
 		output := f.String("output", "", "private 0600 Setup Code filename")
 		asJSON := f.Bool("json", false, "machine response")
 		if f.Parse(args[1:]) != nil || len(f.Args()) != 0 {
@@ -187,6 +194,10 @@ func linkSpoofCommand(args []string, stdout, stderr io.Writer, options *runtimeO
 			return spoofCLIError(err, stderr)
 		}
 		offer, err := pairing.NewSpoofSetup(id, a, b, aIP, bIP, pub)
+		if err != nil {
+			return spoofCLIError(err, stderr)
+		}
+		offer, err = offer.WithOuterProtocol(*outer)
 		if err != nil {
 			return spoofCLIError(err, stderr)
 		}

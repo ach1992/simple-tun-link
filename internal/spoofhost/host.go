@@ -20,6 +20,7 @@ import (
 	spoofbackend "github.com/ach1992/simple-tun-link/internal/backend/spoof"
 	carrier "github.com/ach1992/simple-tun-link/internal/carrier/spoof"
 	"github.com/ach1992/simple-tun-link/internal/domain"
+	"github.com/ach1992/simple-tun-link/internal/linux"
 )
 
 type Host struct{ root, executable string }
@@ -226,9 +227,8 @@ func (h *Host) Preflight(ctx context.Context, link domain.Link, removing bool) e
 	if err = h.verifyMaterialConfig(link); err != nil {
 		return err
 	}
-	exe, err := os.Stat(h.executable)
-	if err != nil || !exe.Mode().IsRegular() || exe.Mode().Perm()&0o022 != 0 || exe.Mode().Perm()&0o111 == 0 {
-		return errors.New("Spoof executable must be installed root-owned regular executable")
+	if err := linux.VerifyTrustedSTLExecutable(h.executable); err != nil {
+		return fmt.Errorf("Spoof helper executable cannot be trusted: %w", err)
 	}
 	if !removing {
 		if len(link.Spoof.SourceFile) == 0 {

@@ -12,8 +12,10 @@ Issue #262 introduces the separate sensitive `stl-spoof-v1.` Setup Code.
 It is a **single manual A-to-B transfer**, not a second normal export/answer
 or a modified legacy `stl://` schema. It contains the unpredictable 256-bit
 bootstrap secret, the creator's **public** X25519 identity, one stable Link
-ID, both known **real** reachable IPv4 receive endpoints/ports, and the
-two private IPv4 addresses. Both sides keep their long-term private keys
+ID, both known **real** reachable IPv4 receive endpoints/ports, the
+immutable **outer protocol** (`udp` default or explicitly `icmp`),
+and the two private IPv4 addresses. For ICMP, a receive endpoint's
+numeric `PORT` is its ICMP Echo identifier, not a UDP/TCP port. Both sides keep their long-term private keys
 locally; B generates its own on Import. The peer Source candidate lists
 are intentionally never exchanged in the offer. Generic JSON, Status,
 Diagnose and logs must not expose this code.
@@ -22,10 +24,16 @@ Noise `XKpsk0_25519_ChaChaPoly_SHA256` establishes fresh in-band sessions.
 The creator's first accepted authenticated enrollment durably pins B's
 public identity; later sessions must match it. A stolen **valid** Code before
 first enrollment can win that first binding; the protocol cannot infer a
-leak. Explicit revoke/reissue for an unbound offer and same-Link recovery
-without a second transfer are required before the feature is accepted.
-The current parser and crypto core are source-only, not a shipped working
-Create/Import/TUN workflow.
+leak. Revocation of an unbound Code uses canonical committed Link Remove
+and a fresh Link ID/Code; it cannot be repurposed after Remove. Same-Link
+recovery from service restart and reboot requires no second transfer.
+The development UDP candidate passed isolated two-container Create,
+Import and managed TUN/Noise/ICMP/TCP/UDP tests. An earlier outer ICMP
+Echo Request prototype also passed, but the safer, now-selected Echo
+Reply variant needs a fresh isolated end-to-end test; it has only passed
+wire-format tests. Independent review and public-WAN acceptance are also
+outstanding, and the feature is not in Stable.
+See [the runbook](SPOOF-CARRIER.md) and [Issue #262](https://github.com/ach1992/simple-tun-link/issues/262).
 
 ## Why a versioned Quick Link?
 

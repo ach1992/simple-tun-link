@@ -15,6 +15,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -28,8 +29,8 @@ func run(opts options) error {
 	if opts.port < 1 || opts.port > 65535 {
 		return errors.New("bad test port")
 	}
-	here := fmt.Sprintf("%s:%d", opts.local, opts.port)
-	peer := fmt.Sprintf("%s:%d", opts.peer, opts.port)
+	here := net.JoinHostPort(opts.local, strconv.Itoa(opts.port))
+	peer := net.JoinHostPort(opts.peer, strconv.Itoa(opts.port))
 	const timeout = 45 * time.Second
 	switch opts.protocol {
 	case "tcp":

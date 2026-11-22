@@ -178,6 +178,9 @@ type MASQUEOptions struct {
 // provider. No bootstrap secret or private X25519 identity belongs in State.
 // The role describes setup provenance, NOT an asymmetric data direction.
 type SpoofOptions struct {
+	// Empty means legacy/default raw UDP; ICMP is an explicit separately
+	// authenticated profile, not automatic transport hopping.
+	OuterProtocol  string     `json:"outer_protocol,omitempty"`
 	Role           string     `json:"role"`
 	SourceFile     string     `json:"source_file"`
 	ListenPort     uint16     `json:"listen_port"`
@@ -213,7 +216,15 @@ func (l Link) ValidateSpoofTopology() error {
 	if s.Role != "creator" && s.Role != "recipient" {
 		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof", "Spoof endpoint role must be creator or recipient")
 	}
-	if l.Encapsulation != EncapUDP || !l.Underlay.Local.Is4() || !l.Underlay.Peer.Is4() ||
+	profile := s.OuterProtocol
+	if profile != "" && profile != "udp" && profile != "icmp" {
+		return stlerr.New(stlerr.CodeUnsupported, "validate_link", string(l.ID), "spoof", "unsupported Spoof outer protocol")
+	}
+	requiredEncap := EncapUDP
+	if profile == "icmp" {
+		requiredEncap = EncapNative
+	}
+	if l.Encapsulation != requiredEncap || !l.Underlay.Local.Is4() || !l.Underlay.Peer.Is4() ||
 		l.Underlay.Local.IsUnspecified() || l.Underlay.Peer.IsUnspecified() ||
 		l.Underlay.Local.IsMulticast() || l.Underlay.Peer.IsMulticast() {
 		return stlerr.New(stlerr.CodeUnsupported, "validate_link", string(l.ID), "spoof",

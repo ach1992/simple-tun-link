@@ -1336,6 +1336,36 @@ unit-name cleanup or a regenerated peer handoff. Legitimate committed
 post-reboot restoration requires trusted changed-kernel evidence and fresh
 host vacancy, preserving the same Link and credential identity.
 
+## Spoof Direct TUN Carrier (Issue #262; development branch only)
+
+In `stl menu`, select **Create tunnel → 10 (Spoof)** or
+**Import Setup Link → 6 (Spoof)**. Interactive review requires `YES`
+before delegating to the same Engine; the confidential Code is a protected
+file, not pasted into an ordinary terminal. The exact per-host Source file
+is checked and can be Rechecked before confirmation.
+
+The standalone root-only commands are `stl link create-spoof`,
+`stl link import-spoof`, `stl link resume-spoof`, and
+`stl link spoof-status LINK_ID --json`. The optional
+`--outer udp|icmp` on Create selects **one immutable outer profile**;
+Import/Resume read the same choice from the single confidential
+`stl-spoof-v1.` Setup Code. The numeric endpoint `PORT` means
+UDP receive port for `udp` and ICMP Echo receive identifier for `icmp`.
+Every endpoint keeps its **own** local Source IPv4 file. There is no
+owner/ASN/geographic Source check or hidden cross-protocol fallback.
+Unrelated TCP/UDP/ICMP **inside** this encrypted private Link are
+transported over whichever outer profile was explicitly chosen.
+
+A successful CLI Create/Import records **local provisioning only**,
+not remote reachability. Canonical `link status`, manual
+`link diagnose`, boot Restore and exact-owner
+`link remove LINK_ID --confirm LINK_ID` apply. The original A's
+`resume-spoof --setup ORIGINAL_FILE` reuses the original identity if
+a prior provisioning attempt was interrupted. Do not re-import or
+reissue a retired Link ID. See
+[Spoof operator runbook](SPOOF-CARRIER.md) for precise examples,
+test evidence and release limitations.
+
 ## MASQUE CONNECT-IP Carrier (v0.1.28+)
 
 MASQUE creator JSON and explicit desired MASQUE Link schema v6

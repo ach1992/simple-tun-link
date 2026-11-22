@@ -35,6 +35,7 @@ type SpoofSetup struct {
 	recipientIP   netip.Addr
 	creatorPublic [32]byte
 	secret        [32]byte
+	outer         string // empty = original UDP profile; ICMP is explicit
 }
 
 func (s SpoofSetup) String() string {
@@ -52,11 +53,31 @@ func (s SpoofSetup) CreatorPublicKey() [32]byte        { return s.creatorPublic 
 // Secret returns a copy for the protected local material writer, not for
 // logging, generic status, desired State or CLI machine output.
 func (s SpoofSetup) Secret() [32]byte { return s.secret }
+func (s SpoofSetup) OuterProtocol() string {
+	if s.outer == "icmp" {
+		return "icmp"
+	}
+	return "udp"
+}
+
+// WithOuterProtocol chooses one immutable outer packet format in the single
+// offline Setup Code. No control-channel negotiation or carrier hopping.
+func (s SpoofSetup) WithOuterProtocol(profile string) (SpoofSetup, error) {
+	if profile == "udp" {
+		profile = ""
+	}
+	s.outer = profile
+	return s, s.Validate()
+}
 
 func (s SpoofSetup) Validate() error {
 	if err := s.id.Validate(); err != nil {
 		return err
 	}
+	if s.outer != "" && s.outer != "icmp" {
+		return errors.New("Spoof Setup Code outer profile must be udp or icmp")
+	}
+
 	for _, endpoint := range []netip.AddrPort{s.creator, s.recipient} {
 		if !endpoint.IsValid() || !endpoint.Addr().Is4() ||
 			endpoint.Addr().IsUnspecified() || endpoint.Addr().IsMulticast() || endpoint.Port() == 0 {
@@ -108,6 +129,7 @@ type spoofCodeV1 struct {
 	RecipientIP   string        `json:"recipient_private_ip"`
 	CreatorPublic string        `json:"creator_public_key"`
 	Secret        string        `json:"bootstrap_secret"`
+	OuterProtocol string        `json:"outer_protocol,omitempty"`
 }
 
 // EncodeSensitive is the *only* explicit secret-bearing serialization and
@@ -122,6 +144,7 @@ func (s SpoofSetup) EncodeSensitive() (string, error) {
 		CreatorIP: s.creatorIP.String(), RecipientIP: s.recipientIP.String(),
 		CreatorPublic: base64.RawURLEncoding.EncodeToString(s.creatorPublic[:]),
 		Secret:        base64.RawURLEncoding.EncodeToString(s.secret[:]),
+		OuterProtocol: s.outer,
 	})
 	if err != nil {
 		return "", err
@@ -182,7 +205,7 @@ func DecodeSensitiveSpoofSetup(code string) (SpoofSetup, error) {
 	if err != nil || len(secret) != 32 {
 		return SpoofSetup{}, errors.New("invalid bootstrap secret in Spoof Setup Code")
 	}
-	s := SpoofSetup{id: value.ID, creator: creator, recipient: recipient, creatorIP: a, recipientIP: b}
+	s := SpoofSetup{id: value.ID, creator: creator, recipient: recipient, creatorIP: a, recipientIP: b, outer: value.OuterProtocol}
 	copy(s.creatorPublic[:], pub)
 	copy(s.secret[:], secret)
 	if err := s.Validate(); err != nil {

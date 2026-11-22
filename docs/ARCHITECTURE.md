@@ -221,12 +221,19 @@ Authenticated handshake, bilateral delivery and verified private IP
 application traffic are **distinct evidence stages**. A locally created
 pending service and a successful send do not imply `CONNECTED`.
 Network adjustments, when genuinely required, must be inspected,
-link-attributed, reversible and lifecycle-owned. Normal STL real-server
-runtime must not contain laboratory or public/production host restrictions;
-the current Master's permission to execute tests only in owned private
-environments is a separate execution gate. End-to-end managed TUN, actual
-private ICMP/TCP/UDP, downtime recovery, reboot and Remove remain incomplete
-until proven by Issue #262. Existing release behavior is unchanged.
+link-attributed, reversible and lifecycle-owned. The `udp` and `icmp`
+outer profiles are independently selected **at Create**, pinned in the
+single offline Code and applied to the same per-Link Noise/TUN process.
+The ICMP receive identifier is distinct from a UDP receive port. There
+is no speculative carrier-switching protocol or unsupported outer TCP
+handshake. [The Spoof operator runbook](SPOOF-CARRIER.md) distinguishes
+inner private traffic from outer transport, records isolated test
+evidence and explicitly marks the modified ICMP Echo Reply profile as
+**awaiting renewed managed end-to-end acceptance**. Normal STL real-server runtime must not contain laboratory
+or public/production host restrictions; the current Master's permission
+to execute tests only in owned private environments is a separate
+execution gate. Full independent review, host/network acceptance,
+merge/release remain pending. Existing Stable behavior is unchanged.
 
 ## 4. Control plane vs data plane
 

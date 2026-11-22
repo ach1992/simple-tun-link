@@ -45,7 +45,7 @@ type Agent struct {
 	link              domain.Link
 	material          Material
 	tun               *carrier.PrivateTUN
-	receiver          *net.UDPConn
+	receiver          carrier.FrameReceiver
 	sender            *carrier.RawSender
 	inventory         carrier.Inventory
 	cursor            carrier.DiscoveryCursor
@@ -117,14 +117,14 @@ func (a *Agent) record(err error) {
 	}
 }
 func (a *Agent) publishStatus() {
-	if a.connected {
+	if len(a.inventory.Addresses) == 0 || a.sender == nil {
+		a.status.State = "NO_WORKING_PATH"
+	} else if a.connected {
 		a.status.State = "CONNECTED"
 	} else if a.session != nil {
 		a.status.State = "AUTHENTICATING"
 	} else if a.handshake != nil {
 		a.status.State = "DISCOVERING"
-	} else if len(a.inventory.Addresses) == 0 {
-		a.status.State = "NO_WORKING_PATH"
 	} else {
 		a.status.State = "WAITING_FOR_PEER"
 	}
@@ -224,7 +224,11 @@ func (a *Agent) refreshSources() {
 		a.inventory = inv
 		return
 	}
-	replacement, err := carrier.OpenRawSender(a.peerEndpoint(), a.link.Spoof.ListenPort, inv, a.link.Spoof.Interface)
+	openSender := carrier.OpenRawSender
+	if a.link.Spoof.OuterProtocol == "icmp" {
+		openSender = carrier.OpenICMPSender
+	}
+	replacement, err := openSender(a.peerEndpoint(), a.link.Spoof.ListenPort, inv, a.link.Spoof.Interface)
 	if err != nil {
 		a.record(err)
 		if a.sender != nil {
@@ -322,6 +326,9 @@ func (a *Agent) received(frame carrier.Frame, outer netip.AddrPort) error {
 		return nil
 	}
 	if a.material.Role() == "creator" && frame.Kind == carrier.KindHandshake1 {
+		if len(a.inventory.Addresses) == 0 || a.sender == nil {
+			return nil
+		}
 		if a.connected && time.Since(a.lastAuth) < 8*time.Second {
 			return nil
 		}
@@ -337,6 +344,12 @@ func (a *Agent) received(frame carrier.Frame, outer netip.AddrPort) error {
 		if err != nil {
 			return nil
 		}
+		// A fresh authenticated-enrollment attempt MUST discard the
+		// previously confirmed outward Source. The old source may still
+		// appear in sources.txt while its actual network path is dead.
+		// Re-probe the bounded local inventory until an authenticated
+		// KeepaliveAck identifies a working outgoing Source.
+		a.chosen = netip.Addr{}
 		a.handshake = h
 		a.attempt = frame.Attempt
 		a.pendingKind = carrier.KindHandshake2
@@ -510,7 +523,7 @@ func (a *Agent) run(ctx context.Context) error {
 	}
 	a.tun = tun
 	defer tun.Close()
-	receiver, err := carrier.OpenReceiver(a.localEndpoint())
+	receiver, err := carrier.OpenFrameReceiver(a.localEndpoint(), a.link.Spoof.OuterProtocol, a.link.Spoof.Interface)
 	if err != nil {
 		return err
 	}
@@ -552,7 +565,7 @@ func (a *Agent) run(ctx context.Context) error {
 		buffer := make([]byte, 4096)
 		for ctx.Err() == nil {
 			_ = receiver.SetReadDeadline(time.Now().Add(400 * time.Millisecond))
-			n, outer, err := receiver.ReadFromUDPAddrPort(buffer)
+			n, outer, err := receiver.ReadFrame(buffer)
 			if err != nil {
 				if e, ok := err.(net.Error); ok && e.Timeout() {
 					continue

@@ -89,6 +89,7 @@ type RawSender struct {
 	localPort uint16
 	allowed   map[netip.Addr]struct{}
 	mu        sync.Mutex
+	icmp      bool
 }
 
 func OpenRawSender(peer netip.AddrPort, localPort uint16, sources Inventory, outputInterface string) (*RawSender, error) {
@@ -125,6 +126,47 @@ func OpenRawSender(peer netip.AddrPort, localPort uint16, sources Inventory, out
 	return &RawSender{fd: fd, peer: peer, localPort: localPort, allowed: allowed}, nil
 }
 
+// OpenICMPSender uses the same pinned real peer and local user Source
+// inventory as raw UDP. The ICMP identifier is the peer's receive ID,
+// not a reply destination and not a source of authorization.
+func OpenICMPSender(peer netip.AddrPort, localID uint16, sources Inventory, outputInterface string) (*RawSender, error) {
+	s, err := OpenRawSender(peer, localID, sources, outputInterface)
+	if err != nil {
+		return nil, err
+	}
+	s.icmp = true
+	return s, nil
+}
+func BuildIPv4ICMP(source, destination netip.Addr, receiverID uint16, payload []byte) ([]byte, error) {
+	if !source.Is4() || !destination.Is4() || receiverID == 0 ||
+		len(payload) > 65535-ipv4MinHeader-8 {
+		return nil, errors.New("raw ICMP needs exact IPv4 peers, receive ID and bounded payload")
+	}
+	length := ipv4MinHeader + 8 + len(payload)
+	result := make([]byte, length)
+	result[0] = 0x45
+	binary.BigEndian.PutUint16(result[2:4], uint16(length))
+	var id [2]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return nil, fmt.Errorf("ICMP IPv4 packet ID: %w", err)
+	}
+	copy(result[4:6], id[:])
+	result[8] = 64
+	result[9] = 1 // ICMPv4
+	copy(result[12:16], source.AsSlice())
+	copy(result[16:20], destination.AsSlice())
+	result[20] = 0 // Unsolicited Echo Reply: avoid kernel reflexive replies to forged Sources.
+	binary.BigEndian.PutUint16(result[24:26], receiverID)
+	if _, err := rand.Read(id[:]); err != nil {
+		return nil, fmt.Errorf("ICMP sequence: %w", err)
+	}
+	copy(result[26:28], id[:])
+	copy(result[28:], payload)
+	binary.BigEndian.PutUint16(result[22:24], checksum16(result[20:]))
+	binary.BigEndian.PutUint16(result[10:12], checksum16(result[:20]))
+	return result, nil
+}
+
 func (s *RawSender) Send(candidate netip.Addr, frame []byte) error {
 	if s == nil {
 		return errors.New("raw sender absent")
@@ -137,7 +179,13 @@ func (s *RawSender) Send(candidate netip.Addr, frame []byte) error {
 	if _, accepted := s.allowed[candidate]; !accepted {
 		return errors.New("source address is not present in this endpoint's current local inventory")
 	}
-	packet, err := BuildIPv4UDP(candidate, s.peer.Addr(), s.localPort, s.peer.Port(), frame)
+	var packet []byte
+	var err error
+	if s.icmp {
+		packet, err = BuildIPv4ICMP(candidate, s.peer.Addr(), s.peer.Port(), frame)
+	} else {
+		packet, err = BuildIPv4UDP(candidate, s.peer.Addr(), s.localPort, s.peer.Port(), frame)
+	}
 	if err != nil {
 		return err
 	}

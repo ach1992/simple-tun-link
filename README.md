@@ -17,6 +17,16 @@ saved Link is **not** proof that packets reach its peer.
 | IPsec | Native IKEv2/XFRM, ESP or NAT-T; gated host preparation | Yes |
 | MASQUE CONNECT-IP (v0.1.28+) | Native IPv4 TUN over HTTP/2 TLS/TCP; private mTLS default and optional request-bearer Public TLS where available in the installed build | Yes |
 
+**In development, NOT in the published Stable release:** the separate
+[Spoof Direct TUN Carrier](docs/SPOOF-CARRIER.md) (Issue #262) carries
+encrypted private IPv4 ICMP/TCP/UDP over explicit raw IPv4 UDP or
+ICMP profiles. The UDP profile passed isolated two-container
+authenticated end-to-end tests. The earlier ICMP Echo Request prototype
+also passed, but was replaced with non-reflecting Echo Reply framing;
+**the new ICMP framing remains unverified end-to-end**. This does not
+imply the feature is released, accepts public Internet traffic or bypasses
+provider anti-spoofing. Outer TCP is not a supported Spoof profile.
+
 Different transports have different kernel, firewall, network and optional
 helper requirements. STL does not automatically configure provider firewalls,
 NAT or foreign VPNs, and no transport works through every network.

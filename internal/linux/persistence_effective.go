@@ -3,6 +3,7 @@ package linux
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 )
@@ -86,7 +87,8 @@ func (p SystemdPersistence) verifyEffectiveRestoreUnit(ctx context.Context, syst
 		props["FragmentPath"] != filepath.Clean(path) ||
 		props["DropInPaths"] != "" ||
 		props["NeedDaemonReload"] != "no" {
-		return errors.New("systemd restore unit has a foreign fragment, drop-in or stale manager configuration")
+		return fmt.Errorf("systemd restore unit effective identity mismatch: load_state=%q fragment=%q expected_fragment=%q dropins=%q need_daemon_reload=%q",
+			props["LoadState"], props["FragmentPath"], filepath.Clean(path), props["DropInPaths"], props["NeedDaemonReload"])
 	}
 	// The manager's normalized ExecStart has dynamic last-run metadata.
 	// Its single command, arguments and error handling must be canonical.

@@ -48,3 +48,37 @@ func TestSpoofSetupSingleConfidentialHandoff(t *testing.T) {
 		t.Fatal("invalid offer accepted")
 	}
 }
+
+// The confidential offline Setup Code must pin the selected OUTER protocol.
+// A recipient cannot silently accept ICMP on an allegedly UDP Link.
+func TestSpoofSetupICMPProfilePinnedInSingleOfflineCode(t *testing.T) {
+	id, err := domain.NewLinkID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pub [32]byte
+	pub[0] = 42
+	offer, err := NewSpoofSetup(id,
+		netip.MustParseAddrPort("192.0.2.10:42101"),
+		netip.MustParseAddrPort("198.51.100.20:42102"),
+		netip.MustParseAddr("10.245.64.1"),
+		netip.MustParseAddr("10.245.64.2"), pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	offer, err = offer.WithOuterProtocol("icmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := offer.EncodeSensitive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	received, err := DecodeSensitiveSpoofSetup(raw)
+	if err != nil || received.OuterProtocol() != "icmp" {
+		t.Fatalf("recipient lost immutable profile: %v", err)
+	}
+	if _, err = offer.WithOuterProtocol("tcp"); err == nil {
+		t.Fatal("unvalidated outer TCP accepted")
+	}
+}
