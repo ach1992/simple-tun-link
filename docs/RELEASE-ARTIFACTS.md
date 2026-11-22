@@ -151,15 +151,9 @@ These use disposable files/prefixes, fake release fixtures and guarded
 failure injection; they do not prove published download identity,
 actual distro package hooks or kernel traffic.
 
-**First AGPL distribution boundary:** published `v0.1.34` and older
-MIT-tagged assets remain immutable. An **old embedded canonical
-Installer** validates `license=MIT`, so a menu/official-catalogue
-update that executes that old Installer cannot authenticate the new
-AGPL manifest. In contrast, a supported `stl update --url` obtains
-the **complete new one-file launcher** and runs its new, AGPL-aware
-canonical Installer; an explicitly trusted downloaded one-file
-`--update` is another supported option. These distinctions are
-explained in [INSTALL.md](INSTALL.md); no old assets are changed.
+Previously published MIT releases remain immutable. For the exact
+first-release compatibility/upgrade boundaries see
+[MIT → AGPL upgrade](INSTALL.md#first-upgrade-from-mit-releases-to-agpl).
 
 Publication requires a **separately authorized** action binding an
 accepted exact source commit to an immutable version tag and complete
