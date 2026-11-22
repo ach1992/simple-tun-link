@@ -72,11 +72,29 @@ bad bash "$installer" install --bundle "$root/missing-bundle" --prefix "$root/pr
 [[ ! -e "$root/prefix/bin/stl" ]] || fail 'fixture input modified installed identity'
 bad bash "$installer" uninstall --prefix "$root/prefix" --backends all
 
-# Read-only installed-host plan now includes a live dpkg inventory but
-# never touches APT, even when one of the selected distro packages is missing.
-live_out="$(bash "$installer" requirements --backends native 2>"$root/live.err")"
-grep -q '^missing_packages=' <<< "$live_out" ||
-  fail 'normal-host read-only requirements lost missing package field'
+# Live-host REQUIREMENTS can legitimately fail on an arbitrary CI runner
+# whose installed package is broken or whose unsigned/missing APT index
+# prevents preview. Those are correct no-mutation outcomes, NOT proof of
+# an incorrect installer. The deterministic distro matrix above and the
+# dedicated selected-APT native guest E2E own successful package resolution.
+# Demand either a complete inventory or an explicit canonical failure after
+# validated distro selection; never treat a silent/partial failure as PASS.
+live_out=; live_rc=0
+live_out="$(bash "$installer" requirements --backends native 2>"$root/live.err")" || live_rc=$?
+if [[ $live_rc == 0 ]]; then
+  grep -q '^missing_packages=' <<< "$live_out" ||
+    fail 'normal-host requirements succeeded without complete package inventory'
+else
+  grep -q '^distribution=' <<< "$live_out" &&
+    grep -q '^version=' <<< "$live_out" &&
+    grep -q '^selected_backends=native$' <<< "$live_out" &&
+    grep -q '^packages=iproute2 iptables kmod$' <<< "$live_out" ||
+    fail 'failed live-host requirements omitted the canonical source inventory'
+  grep -Fq 'stl installer [FAILED]:' "$root/live.err" ||
+    fail 'failed live-host requirements did not explain the refusal'
+  if [[ $live_rc != 1 ]]; then fail 'unexpected host requirement exit status'; fi
+  printf 'LIVE_HOST_REQUIREMENTS_CORRECTLY_REFUSED_UNVERIFIED_ENVIRONMENT=PASS\n'
+fi
 # A mismatched/unsafe expected package plan must not be accepted for any
 # action other than explicit prepare, even with attacker shell variables.
 bad bash "$installer" requirements --expected-missing iptables
@@ -452,5 +470,116 @@ for fake_plan_mode in fail_stdout fail_stderr removal_after_verbose empty_plan; 
 done
 unset -f apt-get apt_sources_must_be_authenticated apt_verify_distro_candidates package_installed
 printf 'APT_SIMULATION_SELECTIVE_CAPTURE_AND_FULL_DIAGNOSTICS=PASS\n'
+
+# Package names are not the admission contract when an existing tool is
+# usable. Exercise the exact production helper, not a duplicate test policy;
+# nothing below runs APT or alters the host package database.
+(
+  sed -n '/^prerequisite_tool_usable() {/,/^}/p' "$installer" > "$root/prerequisite-probe.sh"
+  sed -n '/^prerequisite_satisfied() {/,/^}/p' "$installer" >> "$root/prerequisite-probe.sh"
+  [[ $(grep -c '^prerequisite_tool_usable() {' "$root/prerequisite-probe.sh") == 1 &&
+     $(grep -c '^prerequisite_satisfied() {' "$root/prerequisite-probe.sh") == 1 ]] ||
+    fail 'canonical capability-based package reuse functions unavailable'
+  # shellcheck source=/dev/null
+  source "$root/prerequisite-probe.sh"
+  prerequisite_tool_usable cat --version || fail 'working root-controlled system executable not accepted'
+  if prerequisite_tool_usable cat --not-an-option; then
+    fail 'unusable executable accepted solely because it exists'
+  fi
+  # Real Ubuntu iptables/ip6tables are symlink entrypoints into a multi-call
+  # executable. Checking the resolved target is legitimate, but EXECUTING it
+  # loses argv[0] and causes the same precise E2E failure as a broken tool.
+  if (( EUID != 0 )); then
+    cat > "$root/xtables-nft-multi" <<'SH'
+#!/bin/sh
+case "${0##*/}" in
+  iptables|ip6tables) [ "${1:-}" = -V ] ;;
+  *) exit 1 ;;
+esac
+SH
+    chmod 0755 "$root/xtables-nft-multi"
+    ln -s xtables-nft-multi "$root/iptables"
+    ln -s xtables-nft-multi "$root/ip6tables"
+    prerequisite_tool_usable "$root/iptables" -V ||
+      fail 'verified IPv4 firewall alias lost its multi-call program name'
+    prerequisite_tool_usable "$root/ip6tables" -V ||
+      fail 'verified IPv6 firewall alias lost its multi-call program name'
+    if prerequisite_tool_usable "$root/xtables-nft-multi" -V; then
+      fail 'multi-call target without its expected alias falsely passed'
+    fi
+  fi
+  package_installed() { [[ $1 == "${existing_package:-none}" ]]; }
+  prerequisite_tool_usable() {
+    case "$*" in
+      'ip -V'|'iptables -V'|'ip6tables -V'|'modprobe --version'|'modinfo --version'|'wg --version'|'nft --version') return 0 ;;
+      *) return 1 ;;
+    esac
+  }
+  existing_package=
+  for pkg in iproute2 iptables kmod wireguard-tools nftables; do
+    prerequisite_satisfied "$pkg" || fail "functional alternative blocked by package name: $pkg"
+  done
+  for pkg in charon-systemd strongswan-swanctl libstrongswan-standard-plugins; do
+    if prerequisite_satisfied "$pkg"; then
+      fail "unverified IPsec vendor service/plugin accepted on tool-version proof: $pkg"
+    fi
+  done
+  existing_package=iproute2
+  prerequisite_tool_usable() { return 0; }
+  prerequisite_satisfied iproute2 || fail 'installed working package was not reused'
+  prerequisite_tool_usable() { return 1; }
+  if prerequisite_satisfied iproute2; then
+    fail 'broken tool from nominally installed package falsely accepted'
+  fi
+  if prerequisite_satisfied iptables; then fail 'unusable alternate firewall tool accepted'; fi
+  existing_package=
+  prerequisite_tool_usable() { [[ $1 != ip6tables ]]; }
+  if prerequisite_satisfied iptables; then fail 'missing IPv6 firewall command was ignored'; fi
+  prerequisite_tool_usable() { [[ $1 != modinfo ]]; }
+  if prerequisite_satisfied kmod; then fail 'missing module metadata capability was ignored'; fi
+)
+printf 'PREREQUISITE_WORKING_TOOL_REUSE_NO_VERSION_PIN_AND_IPSEC_BOUNDARY=PASS\n'
+
+# Reused prerequisites must not depend on functional APT or configured
+# repositories. The exact canonical Ensure function is exercised with APT
+# operations forbidden; a truly missing prerequisite must still fail closed.
+(
+  sed -n '/^ensure_packages() {/,/^}/p' "$installer" > "$root/ensure-reuse.sh"
+  [[ $(grep -c '^ensure_packages() {' "$root/ensure-reuse.sh") == 1 ]] ||
+    fail 'cannot extract canonical selected-package installer gate'
+  # shellcheck source=/dev/null
+  source "$root/ensure-reuse.sh"
+  packages=(iproute2 iptables kmod)
+  action=install backends=native os_id=debian os_version=13 want_ipsec=0
+  expected_missing_supplied=0 expected_apt_plan_supplied=0 expected_apt_plan_sha256_supplied=0
+  prerequisite_satisfied() { return 0; }
+  command() {
+    if [[ ${1:-} == -v && ( ${2:-} == apt-get || ${2:-} == dpkg-query ) ]]; then return 1; fi
+    builtin command "$@"
+  }
+  apt_sources_must_be_authenticated() { fail 'unnecessary APT source check'; }
+  apt_update_indexes() { fail 'unnecessary APT network refresh'; }
+  apt_resolve_plan() { fail 'unnecessary APT dependency resolution'; }
+  ensure_packages > "$root/available-reuse.out" 2>&1 ||
+    fail 'working prerequisites still required unavailable APT'
+  grep -Fq 'no APT changes' "$root/available-reuse.out" ||
+    fail 'no-APT success result not explained'
+  prerequisite_satisfied() { [[ $1 != iproute2 ]]; }
+  package_installed() { return 1; }
+  if ( ensure_packages > "$root/missing-requires-apt.out" 2>&1 ); then
+    fail 'actually missing prerequisite bypassed APT dependency gate'
+  fi
+  grep -Fq 'selected prerequisites are missing' "$root/missing-requires-apt.out" ||
+    fail 'missing prerequisite had no actionable package-manager error'
+  package_installed() { [[ $1 == iproute2 ]]; }
+  if ( ensure_packages > "$root/installed-broken.out" 2>&1 ); then
+    fail 'installed but broken tool falsely passed without a working command'
+  fi
+  grep -Fq 'installed selected prerequisite iproute2 is unusable' "$root/installed-broken.out" ||
+    fail 'installed but broken tool has no precise manual repair explanation'
+  ! grep -q 'unnecessary APT' "$root/installed-broken.out" ||
+    fail 'installed broken tool attempted APT'
+)
+printf 'ALREADY_USABLE_TOOLS_SKIP_MISSING_APT_AND_REPOSITORY_GATES=PASS\n'
 
 printf 'Installer requirements checks PASS (capability-based Debian/Ubuntu, signed GPGV status, package plans, unsafe inputs).\n'

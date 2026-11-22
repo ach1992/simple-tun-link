@@ -685,6 +685,62 @@ package_installed() {
   [[ $result == 'install ok installed' ]]
 }
 
+# The distro package NAME is a delivery mechanism, not the runtime contract.
+# An existing usable tool installed through another package or root-owned
+# local installation should not trigger APT. The selected Engine/backend
+# separately rechecks real kernel, packet and service readiness.
+prerequisite_tool_usable() {
+  local executable=$1 candidate resolved current uid mode
+  shift
+  # This is the normal privileged runtime search path, not a caller PATH.
+  candidate=$(PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin command -v -- "$executable") || return 1
+  [[ $candidate == /* ]] || return 1
+  resolved=$(realpath -e -- "$candidate") || return 1
+  [[ -f $resolved && -x $resolved ]] || return 1
+  if [[ $EUID == 0 ]]; then
+    # Both the discovered executable's directory and the resolved target
+    # chain must be root-controlled (including /usr/local alternatives).
+    local start
+    for start in "$resolved" "$(dirname -- "$candidate")"; do
+      current=$(realpath -e -- "$start") || return 1
+      while :; do
+        uid=$(stat -c %u -- "$current") || return 1
+        mode=$(stat -c %a -- "$current") || return 1
+        [[ $uid == 0 && $mode =~ ^[0-7]{3,4}$ ]] || return 1
+        (( (8#$mode & 8#022) == 0 )) || return 1
+        [[ $current == / ]] && break
+        current=$(dirname -- "$current")
+      done
+    done
+  fi
+  # Execute the verified DISCOVERED entrypoint, not its canonical target.
+  # Debian/Ubuntu multi-call programs (iptables/ip6tables -> xtables-nft-multi)
+  # dispatch on argv[0]; running the resolved file name breaks a healthy tool.
+  # Root-controlled path checks above still apply to the resolved target.
+  timeout -k 1 5 "$candidate" "$@" >/dev/null 2>&1
+}
+
+prerequisite_satisfied() {
+  local pkg=$1
+  # A nominally installed distro package is NOT enough when its required
+  # command is broken, absent or cannot perform a read-only compatibility
+  # probe. Check these same capabilities for both distro and alternate tools.
+  case "$pkg" in
+    # Only binary availability belongs to PREPARE. Live netlink inventory
+    # requires host/network permissions and is verified by the selected Engine.
+    iproute2) prerequisite_tool_usable ip -V ;;
+    iptables) prerequisite_tool_usable iptables -V && prerequisite_tool_usable ip6tables -V ;;
+    kmod) prerequisite_tool_usable modprobe --version && prerequisite_tool_usable modinfo --version ;;
+    wireguard-tools) prerequisite_tool_usable wg --version ;;
+    nftables) prerequisite_tool_usable nft --version ;;
+    # These three are vendor-package eligibility only. Actual IPsec daemon,
+    # service and cryptographic plugin admission remains separately verified.
+    charon-systemd|strongswan-swanctl|libstrongswan-standard-plugins)
+      package_installed "$pkg" ;;
+    *) return 1 ;;
+  esac
+}
+
 # Accept a distribution-authenticated Release with at least one valid signature
 # from the installed official archive keyring. gpgv can return 2 for another
 # co-signer absent from that keyring (as on Debian 12 in Nov 2026). Do not
@@ -1438,10 +1494,12 @@ ipsec_report_interrupted_apt() {
 ensure_packages() {
   local pkg missing_ipsec=0 before_plan
   local -a missing=()
-  command -v apt-get >/dev/null && command -v dpkg-query >/dev/null ||
-    fail 'apt-get and dpkg-query are required on supported distributions'
   for pkg in "${packages[@]}"; do
-    package_installed "$pkg" || missing+=("$pkg")
+    prerequisite_satisfied "$pkg" && continue
+    if package_installed "$pkg"; then
+      fail "installed selected prerequisite $pkg is unusable; inspect/repair its actual tool or package without automatic reinstall/upgrade. No APT attempted."
+    fi
+    missing+=("$pkg")
   done
   if [[ $expected_missing_supplied == 1 && "${missing[*]}" != "$expected_missing" ]]; then
     fail 'selected package inventory changed since confirmation; no APT attempted'
@@ -1452,9 +1510,14 @@ ensure_packages() {
     [[ $expected_apt_plan_sha256_supplied == 0 ||
        $expected_apt_plan_sha256 == e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 ]] ||
       fail 'APT plan changed since confirmation; no APT attempted'
-    printf '[OK] STL dependencies already installed for %s %s (%s).\n' "$os_id" "$os_version" "$backends" >&2
+    printf '[OK] STL prerequisites already available for %s %s (%s); no APT changes.\n' "$os_id" "$os_version" "$backends" >&2
     return
   fi
+  # Do not require a package manager or usable repositories when the selected
+  # backend's prerequisites already work. Only genuinely missing tools may
+  # reach signed APT, with the existing exact-plan and no-upgrade guards.
+  command -v apt-get >/dev/null && command -v dpkg-query >/dev/null ||
+    fail 'selected prerequisites are missing; apt-get and dpkg-query are required for package installation'
   # Source-level trust bypasses must fail before even the first APT refresh.
   # This also covers native/WireGuard, without gating the already-installed path.
   apt_sources_must_be_authenticated
@@ -1519,7 +1582,7 @@ ensure_packages() {
     fail "APT_PACKAGE_INSTALL failed; missing selected packages: ${missing[*]}. No automatic retry: partial dpkg/service effects are possible. Inspect dpkg --audit and active APT processes, reconcile first, and if sources were unreachable manually configure a trusted signed Debian/Ubuntu regional mirror; STL will not rewrite sources."
   fi
   for pkg in "${packages[@]}"; do
-    package_installed "$pkg" || fail "selected package remains unavailable: $pkg"
+    prerequisite_satisfied "$pkg" || fail "selected prerequisite is still unusable after APT: $pkg; repair the actual tool or package before continuing"
   done
   if [[ $missing_ipsec == 1 ]]; then
     ipsec_normalize_new_vendor
@@ -1534,13 +1597,25 @@ if [[ $action == requirements ]]; then
   # preparer. A caller-supplied OS fixture must not be mixed with host dpkg.
   # This is a preview, not proof that the installed package set cannot race.
   if [[ -z $os_release_fixture ]]; then
-    command -v dpkg-query >/dev/null || fail 'cannot inspect installed packages'
     missing=()
     for pkg in "${packages[@]}"; do
-      package_installed "$pkg" || missing+=("$pkg")
+      prerequisite_satisfied "$pkg" && continue
+      if package_installed "$pkg"; then
+        fail "installed selected prerequisite $pkg is unusable; inspect/repair its actual tool or package without automatic reinstall/upgrade. No APT attempted."
+      fi
+      missing+=("$pkg")
     done
     printf 'missing_packages=%s\n' "${missing[*]}"
-    apt_resolve_plan
+    if (( ${#missing[@]} == 0 )); then
+      # Nothing to install: do not consult APT or require working repositories.
+      # Keep the exact empty-plan contract used by the guided menu.
+      apt_plan=
+      apt_plan_sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    else
+      command -v apt-get >/dev/null && command -v dpkg-query >/dev/null ||
+        fail 'selected prerequisites are missing; cannot preview APT without apt-get and dpkg-query'
+      apt_resolve_plan
+    fi
     printf 'apt_install=%s\n' "$apt_plan"
     printf 'apt_install_sha256=%s\n' "$apt_plan_sha256"
   fi
