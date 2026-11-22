@@ -20,11 +20,9 @@ saved Link is **not** proof that packets reach its peer.
 **In development, NOT in the published Stable release:** the separate
 [Spoof Direct TUN Carrier](docs/SPOOF-CARRIER.md) (Issue #262) carries
 encrypted private IPv4 ICMP/TCP/UDP over explicit raw IPv4 UDP or
-ICMP profiles. The UDP profile passed isolated two-container
-authenticated end-to-end tests. The earlier ICMP Echo Request prototype
-also passed, but was replaced with non-reflecting Echo Reply framing;
-**the new ICMP framing remains unverified end-to-end**. This does not
-imply the feature is released, accepts public Internet traffic or bypasses
+ICMP profiles. Both UDP and corrected non-reflecting ICMP Echo Reply
+outer profiles passed isolated two-container authenticated end-to-end tests.
+This does not imply the feature is released, accepts public Internet traffic or bypasses
 provider anti-spoofing. Outer TCP is not a supported Spoof profile.
 
 Different transports have different kernel, firewall, network and optional

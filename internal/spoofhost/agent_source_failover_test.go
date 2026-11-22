@@ -80,4 +80,19 @@ func TestFreshCreatorHandshakeDiscardsStaleSelectedSource(t *testing.T) {
 	if a.connected || a.session != nil {
 		t.Fatal("fresh attempt incorrectly inherited old established session")
 	}
+	// A large source file causes many copies of a single valid first
+	// handshake. Duplicates must not generate one full source sweep each,
+	// which would otherwise multiply packets quadratically.
+	firstSend := a.lastPendingSend
+	if firstSend.IsZero() {
+		t.Fatal("initial pending reply not scheduled")
+	}
+	for i := 0; i < 80; i++ {
+		if err := a.received(frame, netip.MustParseAddrPort("198.18.0.12:42002")); err != nil {
+			t.Fatalf("duplicate first flight %d failed: %v", i, err)
+		}
+	}
+	if !a.lastPendingSend.Equal(firstSend) {
+		t.Fatal("duplicate handshake prematurely triggered repeated source sweeps")
+	}
 }

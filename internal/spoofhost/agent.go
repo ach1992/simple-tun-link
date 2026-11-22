@@ -32,6 +32,8 @@ type RuntimeStatus struct {
 	State                  string        `json:"state"`
 	SelectedSource         string        `json:"selected_source,omitempty"`
 	SourceCandidates       int           `json:"source_candidates"`
+	SourceScanPosition     int           `json:"source_scan_position"`
+	SourceScanPasses       uint64        `json:"source_scan_passes"`
 	Authenticated          bool          `json:"authenticated"`
 	BilateralConfirmed     bool          `json:"bilateral_confirmed"`
 	SentPrivatePackets     uint64        `json:"sent_private_packets"`
@@ -58,6 +60,7 @@ type Agent struct {
 	pendingAt         time.Time
 	lastAuth          time.Time
 	lastSentKeepalive time.Time
+	lastPendingSend   time.Time
 	lastSourceRefresh time.Time
 	connected         bool
 	bindPeer          func(*carrier.Session) error
@@ -133,6 +136,7 @@ func (a *Agent) publishStatus() {
 		a.status.SelectedSource = a.chosen.String()
 	}
 	a.status.SourceCandidates = len(a.inventory.Addresses)
+	a.status.SourceScanPosition, a.status.SourceScanPasses = a.cursor.Progress()
 	a.status.Authenticated = a.session != nil
 	a.status.BilateralConfirmed = a.connected
 	if !a.lastAuth.IsZero() {
@@ -211,6 +215,7 @@ func (a *Agent) refreshSources() {
 			a.sender = nil
 		}
 		a.inventory = carrier.Inventory{}
+		_ = a.cursor.ReplaceInventory(a.inventory)
 		a.chosen = netip.Addr{}
 		if a.connected {
 			a.connected = false
@@ -236,11 +241,15 @@ func (a *Agent) refreshSources() {
 			a.sender = nil
 		}
 		a.inventory = carrier.Inventory{}
+		_ = a.cursor.ReplaceInventory(a.inventory)
 		return
 	}
 	old := a.sender
 	a.sender = replacement
 	a.inventory = inv
+	if err := a.cursor.ReplaceInventory(inv); err != nil {
+		a.record(err)
+	}
 	if old != nil {
 		_ = old.Close()
 	}
@@ -265,12 +274,15 @@ func (a *Agent) sendCandidates(encoded []byte) error {
 	if a.sender == nil {
 		return errors.New("raw source sender unavailable")
 	}
-	sources, err := a.cursor.NextBatch(a.inventory, 4)
+	sources, err := a.cursor.NextBatch(carrier.DiscoveryBatchSize(len(a.inventory.Addresses)))
 	if err != nil {
 		return err
 	}
 	var first error
-	for _, candidate := range sources {
+	for i, candidate := range sources {
+		if i != 0 && len(sources) > 8 {
+			time.Sleep(time.Millisecond)
+		}
 		if e := a.sender.Send(candidate, encoded); e != nil && first == nil {
 			first = e
 		}
@@ -286,6 +298,7 @@ func (a *Agent) sendPending() error {
 	if err != nil {
 		return err
 	}
+	a.lastPendingSend = time.Now()
 	return a.sendCandidates(encoded)
 }
 func (a *Agent) startRecipient() error {
@@ -309,6 +322,7 @@ func (a *Agent) startRecipient() error {
 	a.session = nil
 	a.connected = false
 	a.pendingAt = time.Now()
+	a.lastPendingSend = time.Time{}
 	a.pendingKind = carrier.KindHandshake1
 	a.pendingPayload = first
 	a.chosen = netip.Addr{}
@@ -319,6 +333,7 @@ func (a *Agent) forgetHandshake() {
 	a.handshake = nil
 	a.connected = false
 	a.pendingPayload = nil
+	a.lastPendingSend = time.Time{}
 	a.chosen = netip.Addr{}
 }
 func (a *Agent) received(frame carrier.Frame, outer netip.AddrPort) error {
@@ -334,6 +349,9 @@ func (a *Agent) received(frame carrier.Frame, outer netip.AddrPort) error {
 		}
 		// A retry with the same Attempt must not rewrite the transcript.
 		if a.handshake != nil && frame.Attempt == a.attempt {
+			if time.Since(a.lastPendingSend) < 500*time.Millisecond {
+				return nil
+			}
 			return a.sendPending()
 		}
 		h, err := carrier.NewHandshake(a.handshakeConfig(frame.Attempt))
@@ -355,6 +373,7 @@ func (a *Agent) received(frame carrier.Frame, outer netip.AddrPort) error {
 		a.pendingKind = carrier.KindHandshake2
 		a.pendingPayload = reply
 		a.pendingAt = time.Now()
+		a.lastPendingSend = time.Time{}
 		a.session = nil
 		a.connected = false
 		return a.sendPending()

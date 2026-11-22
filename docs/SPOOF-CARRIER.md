@@ -174,59 +174,90 @@ Never overwrite a Code file during idempotent retry; use
 `resume-spoof --setup ORIGINAL_FILE --sources ORIGINAL_FILE_PATH`
 on A if an earlier provision attempt was interrupted.
 
+## Source inventory scale and discovery
+
+Each endpoint reads its own literal IPv4 `sources.txt`. Duplicate addresses
+are deduplicated and the remaining unique addresses are **not capped**.
+An inventory of 50,000 addresses has been parsed and a complete
+50,000-candidate discovery traversal has been unit-tested without skipping
+or repeating an address before the pass completes.
+
+Discovery favors a previously authenticated working address when still
+present. Otherwise it uses an **exhaustive, range-diverse ordering**:
+a round-robin of IPv4 /24 groups inside a round-robin of /16 groups,
+then returns to each group for every remaining address. This is only a
+priority heuristic. One failed IP never marks an entire /24 or /16 as
+ineligible, and no country/ASN/source-IP ownership policy is applied.
+
+Source lists are re-read on the running Link after edits. The ordered
+traversal is prepared only when the inventory changes, not copied anew
+on every resend. Discovery sends at most 16 source candidates on each
+roughly 700 ms helper tick per Link, with short packet spacing for large
+batches. The `spoof-status` response reports
+`source_candidates`, `source_scan_position` and
+`source_scan_passes`. These are **scheduling progress**, not proof
+that any given packet was delivered or that the peer is connected.
+A 50,000-address scan may take tens of minutes (or more on a busy host);
+when no Source works the helper continues repeat passes without rebuilding
+the Link or requesting another Setup Code. It never assumes one bad test
+makes a Source permanently unusable.
+
+For efficient, predictable operator updates, write a fresh inventory
+into a protected temporary file and **atomically rename** it over
+the old Source file. Interrupted in-place file edits may temporarily
+show an empty/incomplete inventory; STL preserves the Link and retries.
+
 ## Scope and validated evidence
 
 In isolated Debian Incus system containers
 `stl-spoof-262-a` / `stl-spoof-262-b` on a private no-NAT bridge
-(no public forged packets), the current development branch has
-**demonstrated on the earlier Echo Request ICMP candidate**, except
-where noted. The release candidate now uses **unsolicited ICMP Echo Reply**
-to prevent automatic kernel reflection toward the forged Source. Its
-wire-format unit test passes but **this specific safer ICMP framing has
-NOT yet been re-tested in the two containers**, because the final
-isolated deployment was blocked by a tool execution control. No release
-or full acceptance claim is made for the revised ICMP profile.
+(no public forged packets), managed **UDP and unsolicited ICMP Echo
+Reply** outer profiles were both tested with Noise-authenticated
+end-to-end TUN traffic. The managed helper ran under original
+per-Link systemd supervision, and the same Link recovered without
+re-pairing after interruptions.
 
-- UDP profile: one offline A-to-B handoff, A pending before B import,
-  Noise authentication, bidirectional ICMP, SHA-256-verified TCP and
-  payload-verified UDP; original Link recovered after source inventory
-  rotation, peer service restart and both guest reboots
-- Previous ICMP Echo **Request** profile: forged-source packet delivery
-  in each direction, then full managed Noise/TUN `CONNECTED`, private
-  bidirectional ICMP, at least 10 MiB digest-verified TCP and
-  200 payload-verified UDP datagrams in **each direction**. **Do not attribute**
-  this evidence to the new safer Echo Reply framing until re-tested.
-- Both profiles automatically selected a new outgoing Source from
-  the unchanged local file after B's lab network dropped the previous
-  Source, and both reconnected after all outer UDP+ICMP paths were
-  deliberately dropped then restored
-- The profiles remained independent when only outer UDP or only outer
-  ICMP was blocked; under per-guest network emulation (12 ms + jitter,
-  1% loss, 4% reorder), TCP bytes were SHA256 verified over both
-  encrypted Links despite actual kernel packet drops
-- Two simultaneously active Links with distinct resources; removing
-  one preserved the other; the retired ID was rejected on attempted
-  re-import without redeploying the protected material
-- Complete bilateral UDP+ICMP outage, clear symptoms, independent
-  reauthentication/recovery of both without re-pair after netns firewall
-  rules were removed; no test firewall tables remained
-- Independent outer UDP vs outer ICMP path tests: dropping only the
-  other profile did not interrupt the surviving encrypted Link
-- A previously working Source remaining in both candidates, but
-  failing at the peer: both Links rediscovered a different local Source
-  without editing the file, regenerating identities or re-pairing
-- SIGKILL original helper, systemd automatic restart and reconnection
-  of the same Link (transient expected downtime)
-- Test-only 12 ms mean plus jitter, 1% loss and 4% reordering on
-  both container egress interfaces; 8 MiB SHA-256-verified private
-  TCP transferred across UDP and ICMP, with observed link-layer drops
-- DF IPv4 private ICMP packet sized 1228 bytes passed bidirectionally
-  within configured 1280-byte TUN MTU
+- Original UDP profile: private bidirectional ICMP, SHA-256 verified
+  TCP and content-verified UDP.
+- Corrected unsolicited ICMP Echo Reply profile: managed TUN
+  `CONNECTED`, bilateral private ICMP, **10 MiB SHA-256 verified
+  TCP in each direction** and **200 payload-verified UDP datagrams
+  in each direction** on the previous datapath-identical candidate.
+- The committed `3be1e65` datapath candidate was rebuilt, installed
+  with verified root ownership and tested in both guests. Both profiles
+  reconnected after canonical `RestoreAll`, and private ICMP,
+  **2 MiB SHA-256 verified TCP** and **60 UDP datagrams** passed
+  for each profile in the exact-candidate tests.
+- Both profiles independently chose another local Source after an
+  exact task-only filter dropped the previously working Source while
+  it remained listed. They later automatically recovered after a
+  bilateral full UDP+ICMP outage without new identity or Code.
+- The profiles remained independent when just outer UDP or just
+  outer ICMP was dropped; the other managed private Link remained
+  authenticated and carried traffic in each direction.
+- Test-only 12 ms mean plus jitter, 1% actual packet loss and 4%
+  reordering on both guest interfaces: SHA-256 verified TCP was
+  transferred over both carriers with no corruption.
+- Two simultaneously managed Links maintained distinct identities;
+  a third pending Link survived reboot before B's Import, was
+  authenticated with its own offline Code, then removed on both
+  endpoints with only its owned TUN/service/material retired.
+  The original active Links were unaffected.
+- `go vet ./...`, `go test ./...` and targeted race tests passed
+  for the predecessor candidate, with exact-head CI for
+  `fb2992a` subsequently succeeding in all five workflows.
+
+**Large-inventory evidence:** a complete 50,000-address traversal
+was unit-tested, and both managed UDP and ICMP Links remained authenticated
+and successfully passed private ICMP with a 50,000-address Source file
+loaded on A in the task-owned private laboratory. That file was restored
+to its original two addresses after the test. The large inventory was
+NOT exhaustively transmitted over the network; no real-provider
+forged-source delivery is claimed.
 
 **Not established by those tests:** a separate physical/VM kernel,
-real WAN/provider filtering, public Internet source spoofing, current
-Echo Reply ICMP profile end-to-end acceptance, outer TCP establishment,
-all route/rp_filter/firewall combinations,
+real WAN/provider filtering, public Internet source spoofing,
+ordinary outer TCP establishment, all route/rp_filter/firewall combinations,
 large-scale performance beyond tested netem transfers, or
 review/merge/release. Container reboot is not a full independent
 hardware/kernel reboot. These remain tracked in

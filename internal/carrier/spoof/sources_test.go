@@ -70,14 +70,35 @@ func TestReadSourcesErrorsAreActionable(t *testing.T) {
 func TestReadSourcesHasNoArbitraryCountCap(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "sources.txt")
 	var b strings.Builder
-	for i := 1; i <= 1200; i++ {
+	for i := 1; i <= 50_000; i++ {
 		fmt.Fprintf(&b, "10.%d.%d.%d\n", (i>>16)&255, (i>>8)&255, i&255)
 	}
 	if err := os.WriteFile(p, []byte(b.String()), 0600); err != nil {
 		t.Fatal(err)
 	}
 	got, err := ReadSources(p)
-	if err != nil || len(got.Addresses) != 1200 {
+	if err != nil || len(got.Addresses) != 50_000 {
 		t.Fatalf("inventory truncated: %d, %v", len(got.Addresses), err)
+	}
+}
+
+// Reading large local inventories never sends packets or performs remote
+// source-provenance checks; only literal IPv4 parsing and deduplication.
+func BenchmarkReadSources50k(b *testing.B) {
+	path := filepath.Join(b.TempDir(), "sources.txt")
+	var content strings.Builder
+	for i := 1; i <= 50_000; i++ {
+		fmt.Fprintf(&content, "10.%d.%d.%d\n", (i>>16)&255, (i>>8)&255, i&255)
+	}
+	if err := os.WriteFile(path, []byte(content.String()), 0600); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := ReadSources(path)
+		if err != nil || len(result.Addresses) != 50_000 {
+			b.Fatal(err)
+		}
 	}
 }
