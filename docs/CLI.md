@@ -1348,7 +1348,8 @@ The standalone root-only commands are `stl link create-spoof`,
 `stl link import-spoof`, `stl link resume-spoof` and
 `stl link spoof-status LINK_ID --json`. On Create,
 `--outer auto` (default) independently discovers a working Source
-IPv4 and one of the STL raw outer packet profiles (UDP/17, ICMP/1,
+IPv4, one of the explicitly paired real peer destinations, and one
+of the STL raw outer packet profiles (UDP/17, ICMP/1,
 TCP-looking RST/6, GRE-shaped/47, nested IPIP/4, bare/echo-shaped
 protocol 58 and L2TPv3-style/115). `--outer PROFILE` instead pins one
 profile for both endpoints using the original confidential
@@ -1367,16 +1368,48 @@ the optional local Auto override. Recipient B has its own independent
 Source inventory file; none crosses the offline Code boundary.
 
 After connectivity failure, the helper first retries all available
-historically confirmed (Source, profile) combinations with a few
+historically confirmed (Source, profile, real peer destination) combinations with a few
 bounded passes, then exhaustively and repeatedly checks the full
-current local inventory times its enabled profiles. Results are pinned
+current local inventory times its enabled profiles and paired
+destinations. While healthy, authenticated backup scans keep running
+at a separately bounded low rate. Results are pinned
 to the verified Link identity, stored in mode 0600 original per-Link
 history across reboots, and removed by original Engine-owned Remove.
 No country/ASN/address-block permission restriction or arbitrary
 candidate-count ceiling is imposed by the product. Status distinguishes
 scheduled source/profile attempts from authenticated bilateral
-connectivity, including the selected Source/profile, history count
-and recovery stage. Inner ICMP/TCP/UDP can run inside any proven profile.
+connectivity, including the selected Source/profile/real destination, sampled
+quality, actual verified TUN MTU, history count and recovery stage. Inner ICMP/TCP/UDP can run inside any proven profile.
+
+The optional creator-only `--creator-alts` and `--recipient-alts`
+accept comma-separated, *explicit real* IPv4:port receivers and bind
+those alternates to the **original one-time protected Setup Code**.
+B imports the same Code; B cannot mutate its alternate list at Import.
+If a primary/alternate peer IP/port changes unexpectedly, creating a
+new Link with a new Code is required (unlike changing local Source
+candidate addresses). The additional `--discovery-pps N` and
+`--background-pps N` flags set optional, positive local per-Link
+packet-rate budgets; omitted/zero values use independently bounded
+defaults. The optional `--mtu auto` (default on new Spoof Create and
+Import) probes exact encrypted outer DF payload sizes, while
+`--mtu N` selects a validated manual private TUN MTU. MTU policy,
+profile pinning, Source inventory path and packet rates remain
+endpoint-local; repeat the exact originals when resuming an
+interrupted creator setup.
+
+An explicitly requested `--manage-ingress --device eth0` first
+inspects current host INPUT policy. If the traffic is already
+permitted, it creates no redundant rules. When a relevant direct
+iptables INPUT block is identified, it manages only this Link's
+precisely identified IPv4 ACCEPT exceptions via
+the installed `iptables` host interface. Setup and Import preflight
+report a missing or unusable firewall CLI **before** local creation;
+unrelated firewall rules, default policy, IPv6 and provider ACLs are
+untouched. Operators must understand their existing firewall chain
+ordering and any separate nftables filtering: a successful rule insert
+does not prove public reachability, so use authenticated Link status
+and real private traffic. Without opt-in, STL never modifies host
+firewall policy for Spoof.
 
 A successful CLI Create/Import records **local provisioning only**,
 not remote reachability. Canonical `link status`, manual

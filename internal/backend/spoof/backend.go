@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"slices"
 	"strconv"
 
@@ -18,6 +19,8 @@ type HostObservation struct {
 	UnitExists, UnitOwned, UnitActive                        bool
 	InterfaceExists, InterfaceOwned, AddressReady, PeerRoute bool
 	RuntimeReady                                             bool // local managed helper + TUN only; never remote connectivity
+	FirewallExists                                           bool // exact original Link-owned INPUT rule(s) are installed
+	FirewallReady                                            bool // all requested Link-owned rules present and exact, not actual external reachability
 	HelperPID                                                int  // exact verified systemd MainPID
 }
 type Host interface {
@@ -45,6 +48,9 @@ func (o observation) ObservedResources() []domain.ResourceClaim {
 	var result []domain.ResourceClaim
 	if o.host.UnitExists {
 		result = append(result, domain.ResourceClaim{Kind: domain.ResourceBackendID, Key: "spoof/unit/" + string(o.link.ID)})
+	}
+	if o.link.Spoof.ManageIngress && o.host.FirewallExists {
+		result = append(result, domain.ResourceClaim{Kind: domain.ResourceBackendID, Key: "spoof/ingress/" + string(o.link.ID)})
 	}
 	if o.host.InterfaceExists {
 		name, _ := carrier.TunnelName(o.link.ID)
@@ -77,15 +83,28 @@ func expectedClaims(link domain.Link) ([]domain.ResourceClaim, error) {
 		{Kind: domain.ResourceBackendID, Key: "spoof/unit/" + string(link.ID)},
 		{Kind: domain.ResourceBackendID, Key: "spoof/material/" + string(link.ID) + "/" + link.Spoof.MaterialSHA256},
 	}
+	if link.Spoof.ManageIngress {
+		claims = append(claims, domain.ResourceClaim{Kind: domain.ResourceBackendID,
+			Key: "spoof/ingress/" + string(link.ID)})
+	}
 	profile := link.Spoof.OuterProtocol
-	if profile == "" || profile == "udp" || profile == "auto" {
-		claims = append(claims, domain.ResourceClaim{Kind: domain.ResourceUDPListenPort, Key: strconv.Itoa(int(link.Spoof.ListenPort))})
+	primary := netip.AddrPortFrom(link.Underlay.Local, link.Spoof.ListenPort)
+	otherEndpoints, err := domain.ParseSpoofAlternates(link.Spoof.LocalAlternates, primary)
+	if err != nil {
+		return nil, err
 	}
-	if profile == "icmp" || profile == "auto" {
-		claims = append(claims, domain.ResourceClaim{Kind: domain.ResourceBackendID, Key: "spoof/icmp-receive-id/" + strconv.Itoa(int(link.Spoof.ListenPort))})
-	}
-	if profile != "" && profile != "udp" && profile != "icmp" {
-		claims = append(claims, domain.ResourceClaim{Kind: domain.ResourceBackendID, Key: "spoof/raw-receive-id/" + strconv.Itoa(int(link.Spoof.ListenPort))})
+	allEndpoints := append([]netip.AddrPort{primary}, otherEndpoints...)
+	for _, ep := range allEndpoints {
+		port := strconv.Itoa(int(ep.Port()))
+		if profile == "" || profile == "udp" || profile == "auto" {
+			claims = append(claims, domain.ResourceClaim{Kind: domain.ResourceUDPListenPort, Key: port})
+		}
+		if profile == "icmp" || profile == "auto" {
+			claims = append(claims, domain.ResourceClaim{Kind: domain.ResourceBackendID, Key: "spoof/icmp-receive-id/" + port})
+		}
+		if profile != "" && profile != "udp" && profile != "icmp" {
+			claims = append(claims, domain.ResourceClaim{Kind: domain.ResourceBackendID, Key: "spoof/raw-receive-id/" + port})
+		}
 	}
 	for _, claim := range claims {
 		if err := claim.Validate(); err != nil {
@@ -101,6 +120,7 @@ func expectedClaims(link domain.Link) ([]domain.ResourceClaim, error) {
 		}
 		return 0
 	})
+	claims = slices.CompactFunc(claims, func(a, b domain.ResourceClaim) bool { return a.Canonical() == b.Canonical() })
 	return claims, nil
 }
 func ValidateTopology(link domain.Link) error {
@@ -141,9 +161,9 @@ func (b *Backend) Plan(_ context.Context, req core.Request, observed core.Observ
 	p := plan{link: req.Link, resources: claims}
 	switch req.Operation {
 	case core.OperationEnsure:
-		p.start = !o.host.RuntimeReady
+		p.start = !o.host.RuntimeReady || req.Link.Spoof.ManageIngress && !o.host.FirewallReady
 	case core.OperationRemove:
-		p.stop = o.host.UnitExists || o.host.InterfaceExists
+		p.stop = o.host.UnitExists || o.host.InterfaceExists || req.Link.Spoof.ManageIngress && o.host.FirewallExists
 	default:
 		return nil, errors.New("unsupported Spoof operation")
 	}
@@ -186,13 +206,13 @@ func (b *Backend) Validate(ctx context.Context, req core.Request, observed core.
 		if req.Prior != nil && !exactOwned(req, expected) {
 			return errors.New("Spoof previous committed topology/claims changed")
 		}
-		if req.Prior == nil && (h.UnitExists || h.InterfaceExists) {
+		if req.Prior == nil && (h.UnitExists || h.InterfaceExists || req.Link.Spoof.ManageIngress && h.FirewallExists) {
 			return errors.New("Spoof cannot adopt pre-existing service/TUN as new Link")
 		}
 		if h.UnitActive && !h.RuntimeReady {
 			return errors.New("Spoof active helper is not locally ready; investigate before repair")
 		}
-		if p.start == h.RuntimeReady {
+		if p.start != (!h.RuntimeReady || req.Link.Spoof.ManageIngress && !h.FirewallReady) {
 			return errors.New("Spoof Ensure plan stale")
 		}
 		return b.host.Preflight(ctx, req.Link, false)
@@ -200,7 +220,7 @@ func (b *Backend) Validate(ctx context.Context, req core.Request, observed core.
 		if !exactOwned(req, expected) {
 			return errors.New("Spoof Remove requires exact committed ownership")
 		}
-		if p.stop != (h.UnitExists || h.InterfaceExists) {
+		if p.stop != (h.UnitExists || h.InterfaceExists || req.Link.Spoof.ManageIngress && h.FirewallExists) {
 			return errors.New("Spoof Remove plan stale")
 		}
 		return b.host.Preflight(ctx, req.Link, true)
@@ -233,11 +253,12 @@ func (b *Backend) Verify(ctx context.Context, req core.Request) (core.Observatio
 	h := current.(observation).host
 	switch req.Operation {
 	case core.OperationEnsure:
-		if !h.RuntimeReady || !h.UnitOwned || !h.UnitActive || !h.InterfaceOwned || !h.AddressReady || !h.PeerRoute {
+		if !h.RuntimeReady || !h.UnitOwned || !h.UnitActive || !h.InterfaceOwned || !h.AddressReady || !h.PeerRoute ||
+			req.Link.Spoof.ManageIngress && !h.FirewallReady {
 			return nil, errors.New("Spoof managed helper/TUN/route not locally ready (no remote path required)")
 		}
 	case core.OperationRemove:
-		if h.UnitExists || h.InterfaceExists || h.UnitActive {
+		if h.UnitExists || h.InterfaceExists || h.UnitActive || req.Link.Spoof.ManageIngress && h.FirewallExists {
 			return nil, errors.New("Spoof host resources still present")
 		}
 	default:

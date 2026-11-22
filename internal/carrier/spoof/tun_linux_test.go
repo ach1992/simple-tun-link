@@ -40,3 +40,25 @@ func TestSpoofTunNameAndPrivatePacketBoundary(t *testing.T) {
 		t.Fatal("inconsistent inner IP length accepted")
 	}
 }
+
+// Receiver MTU is a *local outbound* constraint, not a limit on a
+// differently routed authenticated peer's valid incoming private packet.
+func TestSpoofAsymmetricLocalMTUDoesNotRejectValidRemoteIPv4(t *testing.T) {
+	local, peer := netip.MustParseAddr("10.245.100.2"), netip.MustParseAddr("10.245.100.1")
+	packet := make([]byte, 1056) // A negotiated 1100; B negotiated 1024.
+	packet[0] = 0x45
+	packet[8] = 64
+	packet[9] = 17
+	binary.BigEndian.PutUint16(packet[2:4], uint16(len(packet)))
+	copy(packet[12:16], peer.AsSlice())
+	copy(packet[16:20], local.AsSlice())
+	if err := validPrivatePacket(packet, peer, local, 1024); err == nil {
+		t.Fatal("outgoing size gate incorrectly claims to permit 1056")
+	}
+	if err := validPrivatePacket(packet, peer, local, maxAuthenticatedIncomingIPv4Bytes); err != nil {
+		t.Fatalf("valid authenticated asymmetric incoming packet rejected: %v", err)
+	}
+	if err := validPrivatePacket(packet, local, peer, maxAuthenticatedIncomingIPv4Bytes); err == nil {
+		t.Fatal("wrong remote source or inner destination accepted")
+	}
+}

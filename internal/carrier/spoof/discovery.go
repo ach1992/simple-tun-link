@@ -11,12 +11,13 @@ import (
 // then cost O(batch), not O(total source count). This matters when a Link must
 // eventually try tens of thousands of different IPv4 sources.
 type DiscoveryCursor struct {
-	Preferred     netip.Addr
-	ordered       []netip.Addr
-	positions     map[netip.Addr]int
-	next          int
-	passes        uint64
-	protocolIndex int
+	Preferred        netip.Addr
+	ordered          []netip.Addr
+	positions        map[netip.Addr]int
+	next             int
+	passes           uint64
+	protocolIndex    int
+	destinationIndex int
 }
 
 // interleavePrefix schedules one member from each distinct IPv4 prefix before
@@ -71,6 +72,7 @@ func (c *DiscoveryCursor) ReplaceInventory(inventory Inventory) error {
 	c.next = 0
 	c.passes = 0
 	c.protocolIndex = 0
+	c.destinationIndex = 0
 	if len(inventory.Addresses) == 0 {
 		return errors.New("spoof discovery has no source candidates; Recheck local source file")
 	}
@@ -136,6 +138,7 @@ func (c *DiscoveryCursor) PreferredSucceeded(addr netip.Addr) {
 	}
 	c.next = 0
 	c.protocolIndex = 0
+	c.destinationIndex = 0
 }
 
 // DiscoveryBatchSize scales the per-tick work toward a bounded complete pass,
@@ -164,32 +167,52 @@ func (c *DiscoveryCursor) Progress() (position int, passes uint64) {
 // Each source is tried with each requested profile before moving to the next
 // range-diverse source. Profiles are part of an attempted path; trying one
 // protocol for an address is NOT proof its other protocols will fail.
+// NextPathBatch retains the single-primary-endpoint policy for existing
+// Links. The additional endpoint dimension is activated only when explicitly
+// configured in the original offline pairing.
 func (c *DiscoveryCursor) NextPathBatch(profiles []string, budget int) ([]SourcePath, error) {
-	if budget <= 0 || len(c.ordered) == 0 {
-		return nil, errors.New("Spoof path discovery needs positive budget and nonempty Source inventory")
+	return c.NextRouteBatch(profiles, []netip.AddrPort{{}}, budget)
+}
+
+// NextRouteBatch lazily traverses the entire Source x profile x authorized
+// destination product. Bounded batches allocate O(batch) regardless of
+// inventory size. Only authenticated observations can promote a path.
+func (c *DiscoveryCursor) NextRouteBatch(profiles []string, endpoints []netip.AddrPort, budget int) ([]SourcePath, error) {
+	if budget <= 0 || len(c.ordered) == 0 || len(endpoints) == 0 {
+		return nil, errors.New("Spoof path discovery needs positive budget and nonempty Sources and destinations")
 	}
 	if err := ValidateProfiles(profiles); err != nil {
 		return nil, err
 	}
-	count := min(budget, len(c.ordered)*len(profiles))
+	// Stop at the first pass wrap rather than multiplying unbounded dimensions.
+	// Returning a partial nonempty final batch prevents false duplicate paths
+	// and ensures forward progress across arbitrarily large input inventories.
+	startPass := c.passes
+	count := budget
 	results := make([]SourcePath, 0, count)
 	for i := 0; i < count; i++ {
-		results = append(results, SourcePath{Source: c.ordered[c.next], Profile: profiles[c.protocolIndex]})
-		c.protocolIndex++
-		if c.protocolIndex == len(profiles) {
-			c.protocolIndex = 0
-			c.next++
-			if c.next == len(c.ordered) {
-				c.next = 0
-				c.passes++
+		results = append(results, SourcePath{Source: c.ordered[c.next],
+			Profile: profiles[c.protocolIndex], Destination: endpoints[c.destinationIndex]})
+		c.destinationIndex++
+		if c.destinationIndex == len(endpoints) {
+			c.destinationIndex = 0
+			c.protocolIndex++
+			if c.protocolIndex == len(profiles) {
+				c.protocolIndex = 0
+				c.next++
+				if c.next == len(c.ordered) {
+					c.next = 0
+					c.passes++
+				}
 			}
+		}
+		if c.passes != startPass {
+			break
 		}
 	}
 	return results, nil
 }
 
-// PathProgress exposes how far the current complete Source x Profile pass
-// has advanced; these are attempts scheduled, never confirmed deliveries.
 func (c *DiscoveryCursor) PathProgress() (position int, profileIndex int, completePasses uint64) {
 	return c.next, c.protocolIndex, c.passes
 }

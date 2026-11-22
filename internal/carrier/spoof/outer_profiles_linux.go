@@ -175,7 +175,7 @@ func OpenMultiProfileReceiver(local netip.AddrPort, device string) (*MultiProfil
 		r.wg.Add(1)
 		go func(part ProfileFrameReceiver) {
 			defer r.wg.Done()
-			buf := make([]byte, 4096)
+			buf := make([]byte, 65535)
 			for {
 				select {
 				case <-r.stop:

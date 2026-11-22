@@ -24,8 +24,8 @@ func TestGuidedSpoofCreateConfirmationIsEffectFreeBeforeYES(t *testing.T) {
 	}
 	output := filepath.Join(root, "setup.code")
 	answers := strings.Join([]string{
-		source, "1", "", "192.0.2.10:42001", "198.51.100.20:42002",
-		"10.245.62.1", "10.245.62.2", "", output, "no", "",
+		source, "1", "", "192.0.2.10:42001", "198.51.100.20:42002", "", "",
+		"10.245.62.1", "10.245.62.2", "", "", "", output, "no", "",
 	}, "\n")
 	input := strings.NewReader(answers)
 	var out, stderr bytes.Buffer
@@ -67,7 +67,7 @@ func TestGuidedSpoofImportReviewsFileWithoutEchoingCodeOrMutating(t *testing.T) 
 	if err := os.WriteFile(setup, []byte(code+"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	input := strings.NewReader(strings.Join([]string{setup, source, "", "no", ""}, "\n"))
+	input := strings.NewReader(strings.Join([]string{setup, source, "", "", "", "", "no", ""}, "\n"))
 	var out, stderr bytes.Buffer
 	if exit := menuImportSpoof(input, bufio.NewReader(input), &out, &stderr, nil); exit != 0 {
 		t.Fatalf("cancel import=%d out=%s err=%s", exit, out.String(), stderr.String())

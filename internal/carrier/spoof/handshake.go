@@ -24,16 +24,18 @@ type Role string
 // pinned public key. Nothing here assumes the underlay uses an ordinary source
 // IP or that either side has a pre-existing control connection.
 type HandshakeConfig struct {
-	Role               Role
-	LinkID             domain.LinkID
-	Attempt            [16]byte
-	CreatorEndpoint    netip.AddrPort
-	RecipientEndpoint  netip.AddrPort
-	CreatorPrivateIP   netip.Addr
-	RecipientPrivateIP netip.Addr
-	LocalPrivateKey    [32]byte
-	PeerPublicKey      []byte // required for recipient; optional bound peer on creator
-	BootstrapSecret    [32]byte
+	Role                Role
+	LinkID              domain.LinkID
+	Attempt             [16]byte
+	CreatorEndpoint     netip.AddrPort
+	RecipientEndpoint   netip.AddrPort
+	CreatorAlternates   string
+	RecipientAlternates string
+	CreatorPrivateIP    netip.Addr
+	RecipientPrivateIP  netip.Addr
+	LocalPrivateKey     [32]byte
+	PeerPublicKey       []byte // required for recipient; optional bound peer on creator
+	BootstrapSecret     [32]byte
 }
 
 type Handshake struct {
@@ -99,6 +101,12 @@ func (c HandshakeConfig) validate() error {
 			return errors.New("Noise transcript requires the two real reachable IPv4 endpoints and ports")
 		}
 	}
+	if _, err := domain.ParseSpoofAlternates(c.CreatorAlternates, c.CreatorEndpoint); err != nil {
+		return err
+	}
+	if _, err := domain.ParseSpoofAlternates(c.RecipientAlternates, c.RecipientEndpoint); err != nil {
+		return err
+	}
 	if c.CreatorEndpoint == c.RecipientEndpoint {
 		return errors.New("Noise endpoints must be distinct")
 	}
@@ -123,11 +131,16 @@ func (c HandshakeConfig) validate() error {
 }
 
 func (c HandshakeConfig) prologue() []byte {
-	// Link identity, agreed physical endpoints, private topology and attempt
-	// are unambiguous, role-invariant Noise protocol transcript context.
-	return []byte(fmt.Sprintf("STL-SPOOF-XKpsk0-v1\x00%s\x00%s\x00%s\x00%s\x00%s\x00%x",
+	// Empty alternatives retain the original authenticated transcript.
+	// Explicit paired endpoints are otherwise bound to the same Noise
+	// transcript without a second online or offline pairing exchange.
+	base := fmt.Sprintf("STL-SPOOF-XKpsk0-v1\x00%s\x00%s\x00%s\x00%s\x00%s\x00%x",
 		c.LinkID, c.CreatorEndpoint, c.RecipientEndpoint,
-		c.CreatorPrivateIP, c.RecipientPrivateIP, c.Attempt))
+		c.CreatorPrivateIP, c.RecipientPrivateIP, c.Attempt)
+	if c.CreatorAlternates != "" || c.RecipientAlternates != "" {
+		base += "\x00alts-v1\x00" + c.CreatorAlternates + "\x00" + c.RecipientAlternates
+	}
+	return []byte(base)
 }
 
 // NewHandshake instantiates Noise_XKpsk0_25519_ChaChaPoly_SHA256 (Noise

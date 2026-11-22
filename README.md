@@ -24,9 +24,14 @@ Its `Auto` policy searches local operator-supplied Source IPv4 addresses
 and STL-owned raw outer packet formats: UDP, unsolicited ICMP Echo Reply,
 TCP-looking RST packets, GRE-shaped, nested IPIP, bare/echo-shaped protocol
 58 and an L2TPv3-style protocol-115 data header. Both endpoints can choose
-different outbound Source/profile combinations, save authenticated working
-pairs across restarts, and retry previously working pairs before exhaustive
-rediscovery. Operators can instead pin a local outgoing profile.
+different outbound Source/profile/explicitly paired real destination
+combinations, save authenticated working routes across restarts, continue
+low-rate discovery of verified backups while healthy, and retry previously
+working routes before exhaustive rediscovery. The unshipped successor
+candidate also provides lightweight measured quality selection, an
+endpoint-local Auto/Manual private TUN MTU with authenticated DF evidence,
+and opt-in exact Link-owned IPv4 INPUT rules on supported iptables
+hosts (no global policy edits). Operators can instead pin a local outgoing profile.
 **All eight outer packet profiles have carried bilateral authenticated private
 ICMP in two isolated Linux containers.** This is not proof of public WAN
 reachability, stealth or full native GRE/IPIP/L2TP interoperability. In

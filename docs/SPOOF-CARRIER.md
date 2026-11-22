@@ -1,16 +1,22 @@
 # Spoof Direct TUN Carrier — development candidate (Issue #262)
 
-> **Release gate:** This document describes the candidate on the isolated
-> `feature/262-spoof-carrier` branch. It is NOT a claim that current Stable
-> `v0.1.33` has Spoof, or that public Internet anti-spoofing is bypassable.
+> **Release gate:** This document describes source candidates on the
+> original `feature/262-spoof-carrier` and isolated
+> `feature/262-smart-20261122` branches. It is **not** a claim that
+> Stable `v0.1.33` has Spoof, or that public Internet anti-spoofing
+> restrictions can be bypassed.
 > Merge/release require independent review and the full Issue #262 acceptance.
 
 ## What is carried vs how the peers reach each other
 
 Each Link is a managed, Linux-native private IPv4 **TUN /32 to /32** path,
 with **Noise XKpsk0 + ChaChaPoly encryption and authenticated identities**.
-The carrier's outer real destination always remains the configured peer
-IPv4 endpoint. The **outer source** is independently selected from the
+The carrier's outer real destination is always one of the explicitly
+operator-declared real peer IPv4:port receive endpoints in the one
+confidential Setup Code; it may vary between a primary and any paired
+alternates. STL never guesses destinations from incoming forged Sources or
+generates an arbitrary unrelated destination. The **outer source** is
+independently selected from the
 operator-provided LOCAL `sources.txt` on each server. No Source list crosses
 between peers and STL does not check ownership, country, provider, permission
 or eligibility of Source IPs. It checks literal IPv4 syntax, that the Source
@@ -51,8 +57,10 @@ without profile hopping. Neither kind of policy requires a live initial
 control connection.
 
 Automatic switching is **in the same Link**: changing the selected
-source/profile neither reissues keys nor constructs an additional Link
-or manager. Actual authenticated bilateral delivery is required before
+source/profile/authorized destination neither reissues keys nor constructs
+an additional Link or manager. Background authenticated path probes keep
+discovering and saving verified backups at a lower rate while the Link
+is healthy. Actual authenticated bilateral delivery is required before
 status reports `CONNECTED`. Not all networks permit all packet formats.
 Source-IP ownership is not inferred by the product from ASN, country
 or address prefix; operators remain responsible for applicable network
@@ -70,8 +78,18 @@ The Engine manages the original per-Link transient `systemd` service,
 private /32 TUN address, exact peer /32 route, owned interface alias,
 protected local X25519 material, restore unit, resource claims, and
 durable removal receipt. It does **not** replace unrelated interfaces,
-adopt foreign services, delete foreign network state, or write firewall
-or global network policies merely to make a test pass.
+adopt foreign services or delete foreign network state. With explicit
+per-endpoint `--manage-ingress --device DEVICE`, it may install
+and remove only the original Link's own tightly scoped IPv4 INPUT rules
+via a supported `iptables` CLI (legacy or nft backend) **only
+when a relevant host INPUT-chain blocker is detected**. If current
+policy and rules already admit a path, STL adds no redundant rule.
+It does not automatically flush a chain, change default policy
+or manage foreign rules. Native nft
+chains, external provider ACLs and `rp_filter` may still reject packets;
+verified bilateral traffic remains the only delivery proof. Ingress
+auto-management is OFF unless explicitly selected and requires the
+trusted host `iptables` command before pairing.
 
 The numeric `PORT` in `--creator/--recipient` is the UDP/TCP
 destination receive port where applicable; for ICMP it is an Echo ID,
@@ -88,8 +106,11 @@ In an interactive terminal, run `sudo stl menu`, then
 **Create tunnel → 10. Spoof / Direct TUN** on A or
 **Import Setup Link → 6. Spoof / Direct TUN** on B.
 Create offers an exact Source file **Recheck**, Auto or a manually fixed
-raw outer profile, an optional local outgoing override in Auto mode,
-review of both real endpoints and private addresses, and requires
+raw outer profile, optional real alternate IPv4:port receiving endpoints
+on both servers, an optional local outgoing override in Auto mode, a
+local Auto/Manual TUN MTU policy, an optional explicitly confirmed
+Link-scoped firewall management choice, review of real endpoints and
+private addresses, and requires
 typing `YES` before issuing the confidential Setup Code and the
 locally managed pending Link. Import accepts the original **protected
 file path**, rather than echoing a pasted secret, and also requires
@@ -119,6 +140,9 @@ sudo stl link create-spoof \
   --creator-private 10.245.62.1 \
   --recipient-private 10.245.62.2 \
   --outer auto \
+  --creator-alts 192.0.2.11:42011 \
+  --recipient-alts 198.51.100.21:42012 \
+  --mtu auto \
   --sources /root/stl/spoof/sources.txt \
   --output /root/stl/spoof/setup.code --json
 ~~~
@@ -151,6 +175,7 @@ sudo sh -c 'printf "%s\n" "198.18.0.12" > /root/stl/spoof/sources.txt'
 sudo chmod 0600 /root/stl/spoof/sources.txt
 sudo stl link import-spoof \
   --setup /root/stl/spoof/setup.code \
+  --mtu auto \
   --sources /root/stl/spoof/sources.txt --json
 ~~~
 
@@ -208,7 +233,9 @@ file from its trusted storage separately when you no longer need it.
 Re-issue a fresh Link/Code if an unbound Code might have been exposed.
 Never overwrite a Code file during idempotent retry; use
 `resume-spoof --setup ORIGINAL_FILE --sources ORIGINAL_FILE_PATH`
-(and the original `--tx-outer`, if any) on A if an earlier provision
+(and the original `--tx-outer`, local `--mtu`,
+`--discovery-pps`, `--background-pps`, `--manage-ingress` and
+`--device` options, if used) on A if an earlier provision
 attempt was interrupted.
 
 ## Source inventory scale and discovery
@@ -219,7 +246,8 @@ An inventory of 50,000 addresses has been parsed and a complete
 50,000-candidate discovery traversal has been unit-tested without skipping
 or repeating an address before the pass completes.
 
-Every confirmed **(Source IPv4, outer profile)** combination is saved
+Every confirmed **(Source IPv4, outer profile, explicitly approved real
+destination IPv4:port)** combination is saved
 in root-only `history.json` under the original Link's protected
 directory; success history is not subject to a time-based expiry or
 arbitrary number of repeated outages. The original Link retirement
@@ -234,26 +262,82 @@ not erase historical evidence. An unchanged working path reconnects
 quickly after transient interruptions or a host restart; if the cached
 paths fail, STL immediately returns to exhaustive discovery.
 
-Complete discovery is **Source × enabled outer profiles** rather than
-just one randomly chosen profile per address. Its priority ordering
+Complete discovery is **Source × enabled outer profiles × paired real
+destination endpoints**, rather than one randomly chosen profile/port
+per address. Its priority ordering
 interleaves IPv4 /24 and /16 ranges to find varied candidates early,
 but a failed sampled Source NEVER blocks the rest of its prefix,
 another profile, or a future complete pass. No Source/provider country,
 ASN, ownership, prefix or file-size policy is inferred.
 
 Source lists are re-read after local edits and the ordered traversal
-is rebuilt only when the inventory changes, not before each resend.
-The helper schedules a bounded batch of up to 16 combinations per
-roughly 700 ms tick per Link, with short packet spacing. A list
-of 50,000 Sources with all eight formats means 400,000 different
-combinations per complete pass. This can take hours when nothing
-works and must not be misreported as an exhausted one-time failure:
-the helper keeps cycling and can reconnect without a new Code.
-An actual packet sent by the local kernel is **not** a success claim;
-the peer must cryptographically confirm the received Source/profile.
+is rebuilt only when the inventory changes, not on each resend. While
+disconnected the local token-bucket scheduler defaults to about **64
+authenticated route probes/second**, with short bounded bursts; the
+operator can choose a validated positive rate with `--discovery-pps`.
+While healthy, **background** testing defaults to approximately **6
+packets/second**, separately tunable with `--background-pps`. Both
+are local to each endpoint, not an agreed paired global rate. No
+maximum Source count is imposed. For 50,000 Sources, eight profiles
+and two explicitly configured destination endpoints, one complete
+traversal contains **800,000 combinations**, and repeated healthy
+background passes can take many hours. This is **not** a timeout or
+source-disabling limit. Candidate selection interleaves /24 and /16
+ranges; historical known paths are periodically re-probed and promoted
+only after Noise-authenticated peer acknowledgements.
+
+Each session sends small authenticated keepalive/quality probes.
+The runtime reports approximate **RTT**, jitter, sample loss and
+verified backup route counts. A new path must exhibit multiple
+recent confirmed good samples and materially better quality before
+hysteresis permits a change. Selected routes are not switched merely
+because a local raw send returned success or an unverified packet
+appeared at the receiver. When an authenticated peer has gone silent
+for approximately eight seconds, recovery testing begins immediately
+while the original session and historical routes stay available; after
+a longer interval with no response a new authenticated handshake is
+attempted using the **same** offline Link identity. Persistent outage
+never deletes the Link; host/peer reboots can reconnect without new
+Setup Codes.
+
+`--mtu auto` uses an independent private TUN policy and probes
+descending size profiles from 1280 down to 576 IPv4 bytes. Each size
+requires **two** authenticated end-to-end replies to a `DF`-flagged
+outer packet before the original exact-owned private TUN MTU is
+adjusted by verified ifindex, with readback. This conservative set does
+not claim maximum physical PMTU or anything from a failed send;
+`--mtu N` permits explicit 576..65431 MTU but does not guarantee
+delivery. The Link's generic managed-native MTU manager never takes
+ownership of this per-Link Spoof helper TUN.
+
+`--manage-ingress --device eth0` is an optional endpoint-local policy,
+not part of the original peer Setup Code. It requires that all local
+receiving IPv4 endpoints really be assigned to the specified interface
+and that a working privileged `iptables` CLI exists. With Auto it
+creates narrowly matched Link-owned rules for UDP/TCP destination port,
+ICMP Echo Reply, and the supported raw IPv4 protocol numbers. For
+non-port-based raw protocols, only the exact local destination,
+interface and protocol can be matched by IPv4 firewall rules; cryptographic
+authentication remains the actual peer check. When a relevant direct INPUT drop is found, required exceptions are
+inserted ahead of the applicable iptables INPUT denial, independently
+inspected on Ensure/Restore, and removed during owned Link retirement.
+On permissive INPUT chains there are **zero** added firewall rules. This cannot
+override a separate nftables drop hook or an ISP filter and **is not**
+a blanket firewall-opening promise. The menu requires explicit consent; an unavailable prerequisite fails
+with a clear diagnostic **before** Setup Code creation. With explicit
+operator approval on a known host, full firewall disable may also be
+used as a **temporary diagnostic last resort** after snapshotting active
+rules/managers and arranging verified rollback. It is not performed
+automatically by the Link lifecycle and is not a required networking
+condition. A firewall-wide shutdown increases exposure of unrelated
+services, and may not affect separate nftables, cloud ACL or anti-spoof
+barriers. No firewall on production has been disabled by this candidate.
 
 `stl link spoof-status LINK_ID --json` distinguishes
-`selected_source`, `selected_profile`, `recent_working_paths`,
+`selected_source`, `selected_profile`, `selected_destination`,
+`selected_rtt_ms`, `selected_jitter_ms`, `selected_loss_percent`,
+`verified_mtu`, `mtu_status`, `tunnel_mtu`, `unacked_probes`,
+`scanned_probes`, `recent_working_paths`,
 `recovery_stage` (`RETRY_PREVIOUSLY_WORKING` or
 `EXHAUSTIVE_SOURCE_PROFILE_SCAN`), available/failed local receiver
 formats, inventory count, profile index, Source scan position and
@@ -264,6 +348,51 @@ For efficient, predictable operator updates, write a fresh inventory
 into a protected temporary file and **atomically rename** it over
 the old Source file. Interrupted in-place file edits may temporarily
 show an empty/incomplete inventory; STL preserves the Link and retries.
+
+## Smart multi-route isolated acceptance (2026-11-22)
+
+The isolated successor worktree `feature/262-smart-20261122` is
+**not** a Stable release. Its task-owned Debian system guests are
+`stl-spoof-262-smart-a` and `stl-spoof-262-smart-b`; the
+four original persistent Links in `stl-spoof-262-a/b` were untouched.
+A complete disposable Link was created with one protected Setup Code,
+two IPv4:port receivers on each host, Auto outer profiles, explicit
+endpoint-local scan rates and private TUN addresses. On the first
+private-lab run, removing the task-owned primary real IPs made each
+peer select the alternate real receiver and 3/3 authenticated private
+ICMP replies passed **in each direction**, with exact Link cleanup.
+
+In a separate isolated run, explicit per-destination host routes capped
+the outgoing path MTU at **1200** bytes. Both endpoints independently
+found and verified a `1100`-byte private TUN MTU from authenticated
+DF delivery. Removing the primary real destinations preserved a
+bilateral CONNECTED Link over asymmetric Auto profiles, private 3/3
+ICMP each way, **two verified TCP connections / 524,288 bytes** and
+**20 verified UDP datagrams** in EACH direction. All test-created IPs,
+host routes, transient Link material and Setup Code were removed.
+The lazy Source × eight-profile × two-destination unit test completed
+**800,000 unique combinations** from 50,000 Sources, without early
+repeat/omission. Benchmarking reported 64-combination batch time
+on the tested CPU and does not prove public-provider network scan speed.
+
+Firewall acceptance first found that isolated guests lacked
+`iptables` and lacked direct Debian repository access. Prerequisites
+were subsequently acquired from the authorized Debian mirror via the
+development host and installed **only into task-owned guests**.
+The first full real firewall end-to-end run, with explicit independent
+pre-existing DROP rules on the exact test receivers, passed: 14
+Link-owned INPUT ACCEPT rules were installed on each guest, the
+encrypted Link carried authenticated bilateral private ICMP/TCP/UDP
+even after primary receiver deletion, and all Link-owned ACCEPT
+rules were absent after removal. A new policy-specific **unit test**
+verifies that an already-permissive INPUT chain needs **no** rules;
+a new exact-binary, two-host permissive-policy E2E is still pending.
+The candidate binary was not replaced again inside the private guests
+because the current execution path required a connection-risk approval.
+External provider and independent nft hooks remain unverified. The actual public Internet,
+NAT/provider ACL diversity and real-site anti-spoofing are also
+unverified. This remains a gate until independently tested on a
+suitable authorized network.
 
 ## Scope and validated evidence
 

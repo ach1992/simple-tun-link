@@ -215,7 +215,8 @@ path. Creator A durably binds B's public identity under canonical Engine
 locks after authenticated completion, and refuses silent re-binding. The
 source-IP candidates are local-only, re-read on recovery, and independent per
 direction. The forged outer source is *not* the reply destination; each
-packet targets the configured real peer endpoint.
+packet targets one explicitly paired real peer endpoint (primary or alternate);
+a forged Source IP never becomes a reply or discovery destination.
 
 Authenticated handshake, bilateral delivery and verified private IP
 application traffic are **distinct evidence stages**. A locally created
@@ -224,8 +225,8 @@ Network adjustments, when genuinely required, must be inspected,
 Link-attributed, reversible and lifecycle-owned. The single offline Code
 pins either a manually fixed STL raw outer profile or `auto`. With
 `auto`, each endpoint receives all available profile formats and
-independently discovers the best working **Source IPv4 + packet profile**
-for its outgoing direction. Optional `--tx-outer` overrides let A and B
+independently discovers a verified **Source IPv4 + packet profile +
+operator-approved real destination IPv4:port** per outgoing direction. Optional `--tx-outer` overrides let A and B
 explicitly pin different outgoing formats in separate local protected
 configs, without another Code. This is part of the **original**
 Noise-authenticated per-Link state machine and canonical Engine; there
@@ -233,15 +234,39 @@ is no second tunnel manager, separate live initial negotiation, or
 assumption that a raw TCP RST-shaped packet establishes TCP.
 
 An original per-Link `history.json` stores every previously confirmed
-Source/profile combination (most recent first), mode 0600. On outage or
+Source/profile/real-destination combination (most recent first), mode
+0600. The helper continues low-rate authenticated discovery and backup
+refresh even while a different path is healthy; recent RTT/jitter/loss
+samples, conservative hysteresis and a route-switch cooldown prevent
+one lucky packet from triggering route changes. On outage or
 reboot, the helper tries still-listed historical paths in a few bounded
 warm attempts before exhaustive, fair and indefinitely repeating
-Source × profile discovery. A failed IP never excludes its /24, /16
-or other packet profiles. A candidate is promoted only when
+Source × profile × explicitly paired destination discovery. A failed
+IP never excludes its /24, /16, other ports or other packet profiles. A candidate is promoted only when
 the authenticated real peer confirms the exact outgoing pair.
 Original exact-owned Link Remove retires the history alongside material;
 a Source removed from the current operator file is never transmitted
 even if present in history.
+
+The endpoint-local Spoof `PrivateMTU` policy is independent of the
+generic native backend MTU engine. New Links can choose Auto (two
+Noise-authenticated DF successes are required for a candidate inner
+IPv4 payload length before changing the exact ifindex-pinned TUN) or
+Manual. Runtime diagnostics distinguish path claims, checked quality,
+verified MTU and actual application delivery. Silent peer/reboot
+recovery starts testing cached routes early without abandoning original
+identity, eventually repeating Noise handshakes on the same offline
+Code, with no lifetime retry ceiling. The local scan and low-rate
+background packet budgets are separately tunable and do not impose
+Source inventory limits.
+
+Optional Link-scoped `ManageIngress` relies on preflighted, installed
+iptables-compatible host support and an explicitly chosen interface.
+It stores no second manager: the original Host's inspected resources,
+Plan/Apply/Verify and exact Owner Remove reconcile the narrow IPv4
+INPUT allow rules for every immutable local receiving IPv4/port and
+enabled outer protocol. It does not enable default DROP/ACCEPT globally,
+modify other services or blindly claim nft/provider reachability.
 
 Outer wire profiles are STL-owned raw IPv4 UDP, ICMP Echo Reply,
 TCP-RST-shaped, GRE-shaped, nested IPIP, two protocol-58 shapes, and

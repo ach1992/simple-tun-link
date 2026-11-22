@@ -84,12 +84,13 @@ func BuildIPv4UDP(source, destination netip.Addr, sourcePort, destinationPort ui
 // candidate inventory, and optionally one verified route-selected device.
 // It cannot be used to scan other destinations or invent source addresses.
 type RawSender struct {
-	fd             int
-	peer           netip.AddrPort
-	localPort      uint16
-	allowed        map[netip.Addr]struct{}
-	mu             sync.Mutex
-	defaultProfile string
+	fd                  int
+	peer                netip.AddrPort
+	localPort           uint16
+	allowed             map[netip.Addr]struct{}
+	allowedDestinations map[netip.AddrPort]struct{}
+	mu                  sync.Mutex
+	defaultProfile      string
 }
 
 func OpenRawSender(peer netip.AddrPort, localPort uint16, sources Inventory, outputInterface string) (*RawSender, error) {
@@ -123,7 +124,8 @@ func OpenRawSender(peer netip.AddrPort, localPort uint16, sources Inventory, out
 			return fail(fmt.Errorf("bind sending device %q: %w", outputInterface, err))
 		}
 	}
-	return &RawSender{fd: fd, peer: peer, localPort: localPort, allowed: allowed, defaultProfile: ProfileUDP}, nil
+	return &RawSender{fd: fd, peer: peer, localPort: localPort, allowed: allowed,
+		allowedDestinations: map[netip.AddrPort]struct{}{peer: {}}, defaultProfile: ProfileUDP}, nil
 }
 
 // OpenICMPSender uses the same pinned real peer and local user Source
@@ -181,7 +183,48 @@ func (s *RawSender) Send(candidate netip.Addr, frame []byte) error {
 // SendProfile builds only one explicitly requested STL outer wire profile and
 // always sends to the existing fixed REAL peer. A successful local Sendto
 // does not prove remote receipt, decryption or bilateral connectivity.
+// AllowDestinations adds only preconfigured explicit real destinations to the
+// existing sender. No received forged header can widen this whitelist.
+func (s *RawSender) AllowDestinations(endpoints []netip.AddrPort) error {
+	if s == nil {
+		return errors.New("raw sender absent")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, ep := range endpoints {
+		if !ep.IsValid() || !ep.Addr().Is4() || ep.Addr().IsUnspecified() ||
+			ep.Addr().IsMulticast() || ep.Port() == 0 {
+			return errors.New("invalid operator-declared peer destination")
+		}
+	}
+	if s.allowedDestinations == nil {
+		s.allowedDestinations = map[netip.AddrPort]struct{}{s.peer: {}}
+	}
+	for _, ep := range endpoints {
+		s.allowedDestinations[ep] = struct{}{}
+	}
+	return nil
+}
+
 func (s *RawSender) SendProfile(candidate netip.Addr, profile string, frame []byte) error {
+	if s == nil {
+		return errors.New("raw sender absent")
+	}
+	return s.SendProfileTo(candidate, profile, s.peer, frame)
+}
+
+// SendProfileTo enforces exact local Source and exact explicit real
+// destination membership before any raw packet may be transmitted.
+func (s *RawSender) SendProfileTo(candidate netip.Addr, profile string, dest netip.AddrPort, frame []byte) error {
+	return s.sendProfileTo(candidate, profile, dest, frame, false)
+}
+
+// SendProbeDFTo tests the delivery of one authenticated MTU probe without
+// relying on transparent IPv4 fragmentation. Real traffic is unaffected.
+func (s *RawSender) SendProbeDFTo(candidate netip.Addr, profile string, dest netip.AddrPort, frame []byte) error {
+	return s.sendProfileTo(candidate, profile, dest, frame, true)
+}
+func (s *RawSender) sendProfileTo(candidate netip.Addr, profile string, dest netip.AddrPort, frame []byte, dontFragment bool) error {
 	if s == nil {
 		return errors.New("raw sender absent")
 	}
@@ -193,14 +236,26 @@ func (s *RawSender) SendProfile(candidate netip.Addr, profile string, frame []by
 	if _, accepted := s.allowed[candidate]; !accepted {
 		return errors.New("source address absent from this endpoint's current local inventory")
 	}
-	packet, err := BuildOuterPacket(profile, candidate, s.peer.Addr(), s.localPort, s.peer.Port(), frame)
+	if dest != s.peer {
+		if _, accepted := s.allowedDestinations[dest]; !accepted {
+			return errors.New("destination absent from this Link's operator-approved peer endpoints")
+		}
+	}
+	packet, err := BuildOuterPacket(profile, candidate, dest.Addr(), s.localPort, dest.Port(), frame)
 	if err != nil {
 		return err
 	}
+	if dontFragment {
+		// This path probe MUST prove delivery without local IPv4 fragmentation.
+		// IP_HDRINCL uses our explicit header; preserve all other header fields.
+		packet[6] |= 0x40
+		packet[10], packet[11] = 0, 0
+		binary.BigEndian.PutUint16(packet[10:12], checksum16(packet[:20]))
+	}
 	dst := unix.SockaddrInet4{}
-	copy(dst.Addr[:], s.peer.Addr().AsSlice())
+	copy(dst.Addr[:], dest.Addr().AsSlice())
 	if err = unix.Sendto(s.fd, packet, 0, &dst); err != nil {
-		return fmt.Errorf("STL raw %s send to configured real peer failed (not receipt proof): %w", profile, err)
+		return fmt.Errorf("STL raw %s send to configured real peer %s failed (not receipt proof): %w", profile, dest, err)
 	}
 	return nil
 }

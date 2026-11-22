@@ -28,14 +28,16 @@ const (
 // recipient generates its private X25519 identity locally; the creator's
 // private identity is never placed in the Setup Code.
 type SpoofSetup struct {
-	id            domain.LinkID
-	creator       netip.AddrPort
-	recipient     netip.AddrPort
-	creatorIP     netip.Addr
-	recipientIP   netip.Addr
-	creatorPublic [32]byte
-	secret        [32]byte
-	outer         string // empty = original UDP; auto or explicit STL raw outer profile
+	id                  domain.LinkID
+	creator             netip.AddrPort
+	recipient           netip.AddrPort
+	creatorIP           netip.Addr
+	recipientIP         netip.Addr
+	creatorPublic       [32]byte
+	secret              [32]byte
+	outer               string // empty = original UDP; auto or explicit STL raw outer profile
+	creatorAlternates   []netip.AddrPort
+	recipientAlternates []netip.AddrPort
 }
 
 func (s SpoofSetup) String() string {
@@ -49,6 +51,20 @@ func (s SpoofSetup) RecipientEndpoint() netip.AddrPort { return s.recipient }
 func (s SpoofSetup) CreatorPrivateIPv4() netip.Addr    { return s.creatorIP }
 func (s SpoofSetup) RecipientPrivateIPv4() netip.Addr  { return s.recipientIP }
 func (s SpoofSetup) CreatorPublicKey() [32]byte        { return s.creatorPublic }
+func (s SpoofSetup) CreatorAlternates() []netip.AddrPort {
+	return append([]netip.AddrPort(nil), s.creatorAlternates...)
+}
+func (s SpoofSetup) RecipientAlternates() []netip.AddrPort {
+	return append([]netip.AddrPort(nil), s.recipientAlternates...)
+}
+
+// WithAlternates records the explicitly advertised alternative real receive
+// endpoints in the one existing confidential Setup Code.
+func (s SpoofSetup) WithAlternates(creator, recipient []netip.AddrPort) (SpoofSetup, error) {
+	s.creatorAlternates = append([]netip.AddrPort(nil), creator...)
+	s.recipientAlternates = append([]netip.AddrPort(nil), recipient...)
+	return s, s.Validate()
+}
 
 // Secret returns a copy for the protected local material writer, not for
 // logging, generic status, desired State or CLI machine output.
@@ -87,6 +103,12 @@ func (s SpoofSetup) Validate() error {
 			return errors.New("spoof setup requires exact reachable IPv4 endpoint and receive port on each side")
 		}
 	}
+	if _, err := domain.CanonicalSpoofAlternates(s.creatorAlternates, s.creator); err != nil {
+		return err
+	}
+	if _, err := domain.CanonicalSpoofAlternates(s.recipientAlternates, s.recipient); err != nil {
+		return err
+	}
 	if s.creator == s.recipient {
 		return errors.New("spoof creator and recipient real endpoints must differ")
 	}
@@ -124,15 +146,17 @@ func NewSpoofSetup(
 }
 
 type spoofCodeV1 struct {
-	Version       int           `json:"schema_version"`
-	ID            domain.LinkID `json:"link_id"`
-	Creator       string        `json:"creator_endpoint"`
-	Recipient     string        `json:"recipient_endpoint"`
-	CreatorIP     string        `json:"creator_private_ip"`
-	RecipientIP   string        `json:"recipient_private_ip"`
-	CreatorPublic string        `json:"creator_public_key"`
-	Secret        string        `json:"bootstrap_secret"`
-	OuterProtocol string        `json:"outer_protocol,omitempty"`
+	Version             int           `json:"schema_version"`
+	ID                  domain.LinkID `json:"link_id"`
+	Creator             string        `json:"creator_endpoint"`
+	Recipient           string        `json:"recipient_endpoint"`
+	CreatorIP           string        `json:"creator_private_ip"`
+	RecipientIP         string        `json:"recipient_private_ip"`
+	CreatorPublic       string        `json:"creator_public_key"`
+	Secret              string        `json:"bootstrap_secret"`
+	OuterProtocol       string        `json:"outer_protocol,omitempty"`
+	CreatorAlternates   []string      `json:"creator_alternates,omitempty"`
+	RecipientAlternates []string      `json:"recipient_alternates,omitempty"`
 }
 
 // EncodeSensitive is the *only* explicit secret-bearing serialization and
@@ -148,6 +172,20 @@ func (s SpoofSetup) EncodeSensitive() (string, error) {
 		CreatorPublic: base64.RawURLEncoding.EncodeToString(s.creatorPublic[:]),
 		Secret:        base64.RawURLEncoding.EncodeToString(s.secret[:]),
 		OuterProtocol: s.outer,
+		CreatorAlternates: func() []string {
+			out := make([]string, 0, len(s.creatorAlternates))
+			for _, ep := range s.creatorAlternates {
+				out = append(out, ep.String())
+			}
+			return out
+		}(),
+		RecipientAlternates: func() []string {
+			out := make([]string, 0, len(s.recipientAlternates))
+			for _, ep := range s.recipientAlternates {
+				out = append(out, ep.String())
+			}
+			return out
+		}(),
 	})
 	if err != nil {
 		return "", err
@@ -208,7 +246,27 @@ func DecodeSensitiveSpoofSetup(code string) (SpoofSetup, error) {
 	if err != nil || len(secret) != 32 {
 		return SpoofSetup{}, errors.New("invalid bootstrap secret in Spoof Setup Code")
 	}
-	s := SpoofSetup{id: value.ID, creator: creator, recipient: recipient, creatorIP: a, recipientIP: b, outer: value.OuterProtocol}
+	parseAlts := func(parts []string) ([]netip.AddrPort, error) {
+		out := make([]netip.AddrPort, 0, len(parts))
+		for _, part := range parts {
+			ep, err := netip.ParseAddrPort(part)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, ep)
+		}
+		return out, nil
+	}
+	creatorAlts, err := parseAlts(value.CreatorAlternates)
+	if err != nil {
+		return SpoofSetup{}, errors.New("invalid creator alternate endpoint")
+	}
+	recipientAlts, err := parseAlts(value.RecipientAlternates)
+	if err != nil {
+		return SpoofSetup{}, errors.New("invalid recipient alternate endpoint")
+	}
+	s := SpoofSetup{id: value.ID, creator: creator, recipient: recipient, creatorIP: a, recipientIP: b,
+		outer: value.OuterProtocol, creatorAlternates: creatorAlts, recipientAlternates: recipientAlts}
 	copy(s.creatorPublic[:], pub)
 	copy(s.secret[:], secret)
 	if err := s.Validate(); err != nil {

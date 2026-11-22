@@ -181,10 +181,19 @@ type SpoofOptions struct {
 	// Empty means legacy/default raw UDP. "auto" tests all STL raw wire
 	// profiles independently on each endpoint; explicit names lock one
 	// profile without changing the original authenticated Link.
-	OuterProtocol  string     `json:"outer_protocol,omitempty"`
-	TxProfile      string     `json:"tx_profile,omitempty"` // endpoint-local outbound override only when OuterProtocol=auto
-	Role           string     `json:"role"`
-	SourceFile     string     `json:"source_file"`
+	OuterProtocol string `json:"outer_protocol,omitempty"`
+	TxProfile     string `json:"tx_profile,omitempty"` // endpoint-local outbound override only when OuterProtocol=auto
+	Role          string `json:"role"`
+	SourceFile    string `json:"source_file"`
+	// Canonical comma-separated IP:port tuples. The order is operator priority,
+	// and the primary endpoint remains in Underlay/ListenPort/PeerPort.
+	LocalAlternates string    `json:"local_alternates,omitempty"`
+	PeerAlternates  string    `json:"peer_alternates,omitempty"`
+	PrivateMTU      MTUPolicy `json:"private_mtu,omitzero"`
+	ManageIngress   bool      `json:"manage_ingress,omitempty"`
+	DiscoveryPPS    int       `json:"discovery_pps,omitempty"`
+	BackgroundPPS   int       `json:"background_pps,omitempty"`
+
 	ListenPort     uint16     `json:"listen_port"`
 	PeerPort       uint16     `json:"peer_port"`
 	BindIPv4       netip.Addr `json:"bind_ipv4,omitzero"`
@@ -209,6 +218,41 @@ func canonicalSpoofPublicKey(value string) bool {
 		}
 	}
 	return false
+}
+
+// ParseSpoofAlternates validates a comparable, canonical endpoint list. It
+// is deliberately scoped to operator-declared IPv4 destinations; it never
+// enumerates addresses, expands CIDRs, or infers a route from forged sources.
+func ParseSpoofAlternates(value string, primary netip.AddrPort) ([]netip.AddrPort, error) {
+	if value == "" {
+		return nil, nil
+	}
+	var result []netip.AddrPort
+	seen := map[netip.AddrPort]bool{primary: true}
+	for _, raw := range strings.Split(value, ",") {
+		ep, err := netip.ParseAddrPort(raw)
+		if err != nil || !ep.IsValid() || !ep.Addr().Is4() ||
+			ep.Addr().IsUnspecified() || ep.Addr().IsMulticast() || !ep.Addr().IsGlobalUnicast() ||
+			ep.Port() == 0 || ep.String() != raw || seen[ep] {
+			return nil, stlerr.New(stlerr.CodeInvalid, "spoof_alternates", "", "spoof",
+				"alternate endpoints must be unique canonical IPv4:port values, excluding the primary endpoint")
+		}
+		seen[ep] = true
+		result = append(result, ep)
+	}
+	return result, nil
+}
+
+// CanonicalSpoofAlternates converts explicit operator endpoints into the
+// compact comparable Link representation without adding artificial limits.
+func CanonicalSpoofAlternates(endpoints []netip.AddrPort, primary netip.AddrPort) (string, error) {
+	values := make([]string, 0, len(endpoints))
+	for _, ep := range endpoints {
+		values = append(values, ep.String())
+	}
+	canonical := strings.Join(values, ",")
+	_, err := ParseSpoofAlternates(canonical, primary)
+	return canonical, err
 }
 
 // ValidateSpoofTopology permits future real Linux server use; it deliberately
@@ -254,6 +298,25 @@ func (l Link) ValidateSpoofTopology() error {
 		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof",
 			"Spoof private /32 routes must be distinct and must not capture either real peer endpoint")
 	}
+	localEP := netip.AddrPortFrom(l.Underlay.Local, s.ListenPort)
+	peerEP := netip.AddrPortFrom(l.Underlay.Peer, s.PeerPort)
+	if _, err := ParseSpoofAlternates(s.LocalAlternates, localEP); err != nil {
+		return err
+	}
+	if _, err := ParseSpoofAlternates(s.PeerAlternates, peerEP); err != nil {
+		return err
+	}
+	if err := s.PrivateMTU.Validate(); err != nil {
+		return err
+	}
+	if s.PrivateMTU.Mode == MTUManual && (s.PrivateMTU.Bytes < 576 || s.PrivateMTU.Bytes > 65431) {
+		return stlerr.New(stlerr.CodeUnsupported, "validate_link", string(l.ID), "spoof",
+			"Spoof private MTU must fit authenticated IPv4 outer packet (576..65431)")
+	}
+	if s.DiscoveryPPS < 0 || s.BackgroundPPS < 0 {
+		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof",
+			"Spoof scan packet rates must be nonnegative; zero uses the adaptive default")
+	}
 	if s.ListenPort == 0 || s.PeerPort == 0 ||
 		!filepath.IsAbs(s.SourceFile) || filepath.Clean(s.SourceFile) != s.SourceFile {
 		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof",
@@ -262,6 +325,9 @@ func (l Link) ValidateSpoofTopology() error {
 	if s.BindIPv4.IsValid() && !s.BindIPv4.Is4() {
 		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof",
 			"Spoof local receive bind must be IPv4")
+	}
+	if s.ManageIngress && s.Interface == "" {
+		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof", "managed Spoof ingress requires an explicit receiving/sending interface")
 	}
 	if s.Interface != "" && (len(s.Interface) >= 16 || strings.TrimSpace(s.Interface) != s.Interface ||
 		strings.ContainsAny(s.Interface, "\x00\r\n\t /")) {

@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -84,7 +86,41 @@ func readProtectedOffer(path string) (pairing.SpoofSetup, error) {
 	}
 	return pairing.DecodeSensitiveSpoofSetup(string(raw))
 }
-func spoofLinkFromSetup(offer pairing.SpoofSetup, material spoofhost.Material, sourceFile, device, txProfile string) (domain.Link, error) {
+
+// parseSpoofAltInput accepts exact operator-declared destination IPv4:port
+// tuples only. They are not guessed or discovered from forged source headers.
+func parseSpoofAltInput(raw string, primary netip.AddrPort) ([]netip.AddrPort, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	parts := strings.Split(raw, ",")
+	result := make([]netip.AddrPort, 0, len(parts))
+	for _, part := range parts {
+		ep, err := netip.ParseAddrPort(part)
+		if err != nil {
+			return nil, fmt.Errorf("invalid Spoof alternate endpoint %q: %w", part, err)
+		}
+		result = append(result, ep)
+	}
+	if _, err := domain.CanonicalSpoofAlternates(result, primary); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func parseSpoofMTU(raw string) (domain.MTUPolicy, error) {
+	if raw == "" || raw == "auto" {
+		return domain.MTUPolicy{Mode: domain.MTUAuto}, nil
+	}
+	m, err := strconv.Atoi(raw)
+	if err != nil || m < 576 || m > 65431 {
+		return domain.MTUPolicy{}, errors.New("Spoof MTU must be auto or an IPv4-safe 576..65431 value")
+	}
+	return domain.MTUPolicy{Mode: domain.MTUManual, Bytes: m}, nil
+}
+
+func spoofLinkFromSetup(offer pairing.SpoofSetup, material spoofhost.Material, sourceFile, device, txProfile string,
+	discoveryPPS, backgroundPPS int, mtu domain.MTUPolicy, manageIngress bool) (domain.Link, error) {
 	role := material.Role()
 	if role != "creator" && role != "recipient" {
 		return domain.Link{}, errors.New("invalid local Spoof identity role")
@@ -106,6 +142,18 @@ func spoofLinkFromSetup(offer pairing.SpoofSetup, material spoofhost.Material, s
 	if err != nil {
 		return domain.Link{}, err
 	}
+	localAlts, peerAlts := offer.CreatorAlternates(), offer.RecipientAlternates()
+	if role == "recipient" {
+		localAlts, peerAlts = peerAlts, localAlts
+	}
+	localAltText, err := domain.CanonicalSpoofAlternates(localAlts, local)
+	if err != nil {
+		return domain.Link{}, err
+	}
+	peerAltText, err := domain.CanonicalSpoofAlternates(peerAlts, peer)
+	if err != nil {
+		return domain.Link{}, err
+	}
 	outer := offer.OuterProtocol()
 	encapsulation := domain.EncapUDP
 	if outer != "" && outer != "udp" && outer != "auto" {
@@ -114,7 +162,8 @@ func spoofLinkFromSetup(offer pairing.SpoofSetup, material spoofhost.Material, s
 	link := domain.Link{ID: offer.LinkID(), Backend: domain.BackendSpoof, Encapsulation: encapsulation,
 		Underlay:  domain.Underlay{Local: local.Addr(), Peer: peer.Addr()},
 		Addresses: domain.LinkAddresses{Local: netip.PrefixFrom(privateLocal, 32), Peer: netip.PrefixFrom(privatePeer, 32)},
-		Spoof: domain.SpoofOptions{OuterProtocol: outer, TxProfile: txProfile, Role: role, SourceFile: sourceFile, ListenPort: local.Port(),
+		Spoof: domain.SpoofOptions{OuterProtocol: outer, TxProfile: txProfile, Role: role, SourceFile: sourceFile,
+			LocalAlternates: localAltText, PeerAlternates: peerAltText, DiscoveryPPS: discoveryPPS, BackgroundPPS: backgroundPPS, PrivateMTU: mtu, ManageIngress: manageIngress, ListenPort: local.Port(),
 			PeerPort: peer.Port(), BindIPv4: local.Addr(), Interface: device,
 			LocalPublicKey: base64.RawURLEncoding.EncodeToString(self[:]),
 			PeerPublicKey:  remoteIdentity, MaterialSHA256: digest},
@@ -158,6 +207,12 @@ func linkSpoofCommand(args []string, stdout, stderr io.Writer, options *runtimeO
 		device := f.String("device", "", "explicit local egress interface (optional)")
 		outer := f.String("outer", "auto", "STL outer profile: auto, udp, icmp, tcp, gre, ipip, proto58, proto58-echo, l2tpv3")
 		txProfile := f.String("tx-outer", "", "optional local outgoing profile when --outer auto; remote peer may choose independently")
+		creatorAlts := f.String("creator-alts", "", "comma-separated additional creator real IPv4:PORT receive endpoints")
+		recipientAlts := f.String("recipient-alts", "", "comma-separated additional recipient real IPv4:PORT receive endpoints")
+		discoveryPPS := f.Int("discovery-pps", 0, "local disconnected discovery packets per second; zero=default")
+		backgroundPPS := f.Int("background-pps", 0, "local connected background packets per second; zero=default")
+		manageIngress := f.Bool("manage-ingress", false, "opt-in Link-owned, precise reversible IPv4 INPUT rules; requires --device")
+		mtuRaw := f.String("mtu", "auto", "private TUN MTU: auto or 576..65431 IPv4 bytes")
 		output := f.String("output", "", "private 0600 Setup Code filename")
 		asJSON := f.Bool("json", false, "machine response")
 		if f.Parse(args[1:]) != nil || len(f.Args()) != 0 {
@@ -201,13 +256,33 @@ func linkSpoofCommand(args []string, stdout, stderr io.Writer, options *runtimeO
 		if err != nil {
 			return spoofCLIError(err, stderr)
 		}
+		ca, err := parseSpoofAltInput(*creatorAlts, a)
+		if err != nil {
+			return spoofCLIError(err, stderr)
+		}
+		ra, err := parseSpoofAltInput(*recipientAlts, b)
+		if err != nil {
+			return spoofCLIError(err, stderr)
+		}
+		offer, err = offer.WithAlternates(ca, ra)
+		if err != nil {
+			return spoofCLIError(err, stderr)
+		}
+
 		m, err := spoofhost.NewMaterial(id, "creator", private, offer.Secret())
 		if err != nil {
 			return spoofCLIError(err, stderr)
 		}
-		link, err := spoofLinkFromSetup(offer, m, *sources, *device, *txProfile)
+		mtu, err := parseSpoofMTU(*mtuRaw)
 		if err != nil {
 			return spoofCLIError(err, stderr)
+		}
+		link, err := spoofLinkFromSetup(offer, m, *sources, *device, *txProfile, *discoveryPPS, *backgroundPPS, mtu, *manageIngress)
+		if err != nil {
+			return spoofCLIError(err, stderr)
+		}
+		if err := spoofhost.PreflightIngressPrerequisites(context.Background(), link); err != nil {
+			return spoofCLIError(fmt.Errorf("Spoof managed firewall preflight before Setup Code publication: %w", err), stderr)
 		}
 		if *output == "" {
 			return spoofCLIError(errors.New("confidential Setup Code file required"), stderr)
@@ -247,6 +322,10 @@ func linkSpoofCommand(args []string, stdout, stderr io.Writer, options *runtimeO
 		sources := f.String("sources", spoof.DefaultSourcesPath, "recipient-local source list")
 		device := f.String("device", "", "optional recipient-local egress interface")
 		txProfile := f.String("tx-outer", "", "optional local outgoing profile when Code uses auto; use same flag for exact creator resume")
+		manageIngress := f.Bool("manage-ingress", false, "opt-in Link-owned, precise reversible IPv4 INPUT rules; requires --device")
+		mtuRaw := f.String("mtu", "auto", "endpoint-local private TUN MTU: auto or 576..65431; use original for resume")
+		discoveryPPS := f.Int("discovery-pps", 0, "local disconnected discovery packets per second; use original for resume")
+		backgroundPPS := f.Int("background-pps", 0, "local connected background packets per second; use original for resume")
 		asJSON := f.Bool("json", false, "machine response")
 		if f.Parse(args[1:]) != nil || len(f.Args()) != 0 {
 			return 2
@@ -282,7 +361,11 @@ func linkSpoofCommand(args []string, stdout, stderr io.Writer, options *runtimeO
 			if own != offer.CreatorPublicKey() {
 				return spoofCLIError(errors.New("Creator Setup Code and original public key differ"), stderr)
 			}
-			link, err := spoofLinkFromSetup(offer, m, *sources, *device, *txProfile)
+			mtu, err := parseSpoofMTU(*mtuRaw)
+			if err != nil {
+				return spoofCLIError(err, stderr)
+			}
+			link, err := spoofLinkFromSetup(offer, m, *sources, *device, *txProfile, *discoveryPPS, *backgroundPPS, mtu, *manageIngress)
 			if err != nil {
 				return spoofCLIError(err, stderr)
 			}
@@ -300,6 +383,9 @@ func linkSpoofCommand(args []string, stdout, stderr io.Writer, options *runtimeO
 					return spoofCLIError(errors.New("original protected Spoof topology differs from pending resume"), stderr)
 				}
 				link = saved.Desired
+			}
+			if err := spoofhost.PreflightIngressPrerequisites(context.Background(), link); err != nil {
+				return spoofCLIError(fmt.Errorf("Spoof managed ingress prerequisite before provisioning: %w", err), stderr)
 			}
 			engine, err := buildRuntimeEngine(*opts)
 			if err != nil {
@@ -339,9 +425,16 @@ func linkSpoofCommand(args []string, stdout, stderr io.Writer, options *runtimeO
 		} else {
 			return spoofCLIError(err, stderr)
 		}
-		link, err := spoofLinkFromSetup(offer, m, *sources, *device, *txProfile)
+		mtu, err := parseSpoofMTU(*mtuRaw)
 		if err != nil {
 			return spoofCLIError(err, stderr)
+		}
+		link, err := spoofLinkFromSetup(offer, m, *sources, *device, *txProfile, *discoveryPPS, *backgroundPPS, mtu, *manageIngress)
+		if err != nil {
+			return spoofCLIError(err, stderr)
+		}
+		if err := spoofhost.PreflightIngressPrerequisites(context.Background(), link); err != nil {
+			return spoofCLIError(fmt.Errorf("Spoof managed ingress prerequisite before provisioning: %w", err), stderr)
 		}
 		engine, err := buildRuntimeEngine(*opts)
 		if err != nil {

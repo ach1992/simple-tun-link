@@ -96,3 +96,38 @@ func TestSpoofSetupICMPProfilePinnedInSingleOfflineCode(t *testing.T) {
 		t.Fatal("unknown experimental outer profile accepted")
 	}
 }
+
+func TestSpoofSetupAlternateRealEndpointsAuthenticatedAndCanonical(t *testing.T) {
+	id, err := domain.NewLinkID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pub [32]byte
+	pub[0] = 42
+	a := netip.MustParseAddrPort("192.0.2.20:49001")
+	b := netip.MustParseAddrPort("192.0.2.30:49002")
+	offer, err := NewSpoofSetup(id, a, b, netip.MustParseAddr("10.245.1.1"), netip.MustParseAddr("10.245.1.2"), pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aa := []netip.AddrPort{netip.MustParseAddrPort("192.0.2.20:49011")}
+	bb := []netip.AddrPort{netip.MustParseAddrPort("192.0.2.30:49012")}
+	offer, err = offer.WithAlternates(aa, bb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := offer.EncodeSensitive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodeSensitiveSpoofSetup(code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.CreatorAlternates()) != 1 || got.CreatorAlternates()[0] != aa[0] || len(got.RecipientAlternates()) != 1 || got.RecipientAlternates()[0] != bb[0] {
+		t.Fatal("alternates lost in handoff")
+	}
+	if _, err := got.WithAlternates(aa, []netip.AddrPort{b}); err == nil {
+		t.Fatal("primary destination must not appear twice")
+	}
+}

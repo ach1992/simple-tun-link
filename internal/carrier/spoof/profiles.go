@@ -97,13 +97,20 @@ func ProfileFromID(id byte) string {
 type SourcePath struct {
 	Source  netip.Addr `json:"source"`
 	Profile string     `json:"profile"`
+	// Explicit real peer endpoint; zero means the original primary endpoint.
+	Destination netip.AddrPort `json:"destination,omitempty"`
 }
 
 func (p SourcePath) Valid() bool {
 	return p.Source.Is4() && !p.Source.IsUnspecified() && ValidProfile(p.Profile) &&
-		p.Profile != "" && p.Profile != ProfileAuto
+		p.Profile != "" && p.Profile != ProfileAuto &&
+		(!p.Destination.IsValid() || (p.Destination.Addr().Is4() &&
+			!p.Destination.Addr().IsUnspecified() && !p.Destination.Addr().IsMulticast() && p.Destination.Port() != 0))
 }
 func (p SourcePath) String() string {
+	if p.Destination.IsValid() {
+		return strings.Join([]string{p.Source.String(), p.Profile, p.Destination.String()}, "/")
+	}
 	return strings.Join([]string{p.Source.String(), p.Profile}, "/")
 }
 

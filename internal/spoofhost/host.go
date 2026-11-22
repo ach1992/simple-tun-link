@@ -193,6 +193,10 @@ func (h *Host) Inspect(ctx context.Context, link domain.Link) (spoofbackend.Host
 	if err != nil {
 		return out, err
 	}
+	out.FirewallExists, out.FirewallReady, err = inspectIngress(ctx, link)
+	if err != nil {
+		return out, fmt.Errorf("inspect Link-owned Spoof ingress rules: %w", err)
+	}
 	if out.UnitOwned && out.UnitActive && out.InterfaceOwned && out.AddressReady && out.PeerRoute {
 		out.RuntimeReady = h.verifyMaterialConfig(link) == nil
 	}
@@ -234,6 +238,9 @@ func (h *Host) Preflight(ctx context.Context, link domain.Link, removing bool) e
 		if len(link.Spoof.SourceFile) == 0 {
 			return errors.New("Spoof Source file not configured")
 		}
+		if err := validateIngressDevice(link); err != nil {
+			return err
+		}
 	}
 	return ctx.Err()
 }
@@ -246,7 +253,17 @@ func (h *Host) Start(ctx context.Context, link domain.Link) (core.Rollback, erro
 		return nil, err
 	}
 	if before.RuntimeReady {
-		return nil, nil
+		if !link.Spoof.ManageIngress || before.FirewallReady {
+			return nil, nil
+		}
+		// The exact original transient helper/TUN is healthy but its owned
+		// firewall rules were removed (e.g. after an external firewall reload).
+		// Reconcile only missing Link-owned rules, never restart the tunnel.
+		undo, err := ensureIngress(ctx, link)
+		if err != nil {
+			return nil, fmt.Errorf("restore original Spoof ingress: %w", err)
+		}
+		return undo, nil
 	}
 	if before.InterfaceExists || before.UnitExists && !before.UnitOwned || before.UnitActive {
 		return nil, errors.New("Spoof foreign/partial helper cannot be adopted")
@@ -279,6 +296,9 @@ func (h *Host) Start(ctx context.Context, link domain.Link) (core.Rollback, erro
 			return undo, e
 		}
 		if now.RuntimeReady {
+			if _, e := ensureIngress(ctx, link); e != nil {
+				return undo, fmt.Errorf("start original Spoof helper ready but managed ingress failed: %w", e)
+			}
 			return undo, nil
 		}
 		if now.UnitExists && !now.UnitOwned || now.InterfaceExists && !now.InterfaceOwned && !(now.UnitOwned && now.UnitActive) {
@@ -297,38 +317,52 @@ func (h *Host) Stop(ctx context.Context, link domain.Link) (core.Rollback, error
 	if err != nil {
 		return nil, err
 	}
-	if !before.UnitExists && !before.InterfaceExists {
+	if !before.UnitExists && !before.InterfaceExists && !before.FirewallExists {
 		return nil, nil
 	}
-	if !before.UnitOwned || before.InterfaceExists && !before.InterfaceOwned {
+	if before.UnitExists && !before.UnitOwned || before.InterfaceExists && !before.InterfaceOwned {
 		return nil, errors.New("Spoof cannot stop unverified original helper/TUN")
+	}
+	if before.InterfaceExists && !before.UnitExists {
+		return nil, errors.New("Spoof cannot adopt or remove orphaned foreign/partial TUN")
 	}
 	if err := h.Preflight(ctx, link, true); err != nil {
 		return nil, err
 	}
-	_, err = h.run(ctx, "systemctl", "--system", "stop", UnitName(link.ID), "--no-pager")
-	if err != nil {
-		return nil, fmt.Errorf("Spoof stop dispatched but outcome unknown: %w", core.ErrIndeterminateHostEffect)
-	}
 	undo := func(c context.Context) error { _, e := h.Start(c, link); return e }
-	for i := 0; i < 40; i++ {
-		after, e := h.Inspect(ctx, link)
-		if e != nil {
-			return nil, fmt.Errorf("Spoof stopped helper inspection incomplete: %w", core.ErrIndeterminateHostEffect)
+	if before.UnitExists {
+		if _, err = h.run(ctx, "systemctl", "--system", "stop", UnitName(link.ID), "--no-pager"); err != nil {
+			return nil, fmt.Errorf("Spoof stop dispatched but outcome unknown: %w", core.ErrIndeterminateHostEffect)
 		}
-		if !after.UnitExists && !after.InterfaceExists {
-			return undo, nil
+		verified := false
+		for i := 0; i < 40; i++ {
+			after, e := h.Inspect(ctx, link)
+			if e != nil {
+				return undo, fmt.Errorf("Spoof stopped helper inspection incomplete: %w", core.ErrIndeterminateHostEffect)
+			}
+			if !after.UnitExists && !after.InterfaceExists {
+				verified = true
+				break
+			}
+			if after.UnitExists && !after.UnitOwned || after.InterfaceExists && !after.InterfaceOwned {
+				return nil, fmt.Errorf("Spoof ownership changed after stop: %w", core.ErrIndeterminateHostEffect)
+			}
+			select {
+			case <-ctx.Done():
+				return undo, fmt.Errorf("Spoof stop timed out: %w", core.ErrIndeterminateHostEffect)
+			case <-time.After(100 * time.Millisecond):
+			}
 		}
-		if after.UnitExists && !after.UnitOwned || after.InterfaceExists && !after.InterfaceOwned {
-			return nil, fmt.Errorf("Spoof ownership changed after stop: %w", core.ErrIndeterminateHostEffect)
-		}
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("Spoof stop timed out: %w", core.ErrIndeterminateHostEffect)
-		case <-time.After(100 * time.Millisecond):
+		if !verified {
+			return undo, fmt.Errorf("Spoof stop could not prove owned unit/TUN absence: %w", core.ErrIndeterminateHostEffect)
 		}
 	}
-	return nil, fmt.Errorf("Spoof stop could not prove owned unit/TUN absence: %w", core.ErrIndeterminateHostEffect)
+	if before.FirewallExists {
+		if err := removeIngress(ctx, link); err != nil {
+			return undo, fmt.Errorf("Spoof helper stopped but exact owned ingress removal failed: %w", err)
+		}
+	}
+	return undo, nil
 }
 
 var _ spoofbackend.Host = (*Host)(nil)

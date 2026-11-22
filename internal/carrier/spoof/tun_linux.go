@@ -10,8 +10,10 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ach1992/simple-tun-link/internal/domain"
@@ -28,12 +30,14 @@ func TunnelName(id domain.LinkID) (string, error) {
 }
 
 type PrivateTUN struct {
-	file  *os.File
-	name  string
-	local netip.Addr
-	peer  netip.Addr
-	mtu   int
-	mu    sync.Mutex
+	file      *os.File
+	name      string
+	ifIndex   int
+	ownerLink domain.LinkID
+	local     netip.Addr
+	peer      netip.Addr
+	mtu       atomic.Int32
+	mu        sync.Mutex
 }
 
 func runPrivateIP(ctx context.Context, args ...string) error {
@@ -89,7 +93,68 @@ func OpenPrivateTUN(ctx context.Context, id domain.LinkID, mtu int, local, peer 
 			return nil, err
 		}
 	}
-	return &PrivateTUN{file: f, name: name, local: local, peer: peer, mtu: mtu}, nil
+	// Pin the exact kernel interface index before any post-create mutation.
+	// Both the live TUN file and the Link-scoped alias must identify it.
+	current, err := net.InterfaceByName(name)
+	if err != nil || current.Index <= 0 {
+		f.Close()
+		return nil, fmt.Errorf("owned Spoof TUN identity unavailable after creation: %w", err)
+	}
+	alias, err := os.ReadFile(filepath.Join("/sys/class/net", name, "ifalias"))
+	if err != nil || strings.TrimSpace(string(alias)) != "stl:spoof:"+string(id) {
+		f.Close()
+		return nil, errors.New("owned Spoof TUN alias unverified after creation")
+	}
+	owned := &PrivateTUN{file: f, name: name, ifIndex: current.Index, ownerLink: id, local: local, peer: peer}
+	owned.mtu.Store(int32(mtu))
+	return owned, nil
+}
+
+func (t *PrivateTUN) MTU() int {
+	if t == nil {
+		return 0
+	}
+	return int(t.mtu.Load())
+}
+
+// SetMTU changes only the exact TUN created by this helper. The original
+// descriptor stays open and the observed kernel MTU is verified before
+// accepting the change. No global route, sysctl or unrelated interface is
+// affected.
+// The caller supplies the owning host adapter's ifindex-based Netlink write.
+// This avoids a carrier -> host import cycle and an unsafe name-based write.
+func (t *PrivateTUN) SetMTU(ctx context.Context, mtu int,
+	setByIndex func(context.Context, int, int) error) error {
+	if t == nil || mtu < 576 || mtu > 65431 || setByIndex == nil {
+		return errors.New("owned Spoof TUN MTU outside IPv4 carrier bounds")
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.file == nil {
+		return errors.New("owned Spoof TUN is closed")
+	}
+	iface, err := net.InterfaceByName(t.name)
+	if err != nil || iface == nil || iface.Flags&net.FlagUp == 0 {
+		return errors.New("Spoof TUN identity lost during MTU change")
+	}
+	if iface.Index != t.ifIndex || t.ifIndex <= 0 || t.ownerLink.Validate() != nil {
+		return errors.New("Spoof TUN index or Link ownership changed before MTU apply")
+	}
+	alias, err := os.ReadFile(filepath.Join("/sys/class/net", t.name, "ifalias"))
+	if err != nil || strings.TrimSpace(string(alias)) != "stl:spoof:"+string(t.ownerLink) {
+		return errors.New("Spoof TUN alias changed; refuse foreign MTU mutation")
+	}
+	// Netlink writes to the pinned ifindex instead of resolving a mutable
+	// interface name a second time. Keep the existing private TUN fd open.
+	if err := setByIndex(ctx, t.ifIndex, mtu); err != nil {
+		return fmt.Errorf("apply exact owned Spoof TUN MTU: %w", err)
+	}
+	observed, err := net.InterfaceByIndex(t.ifIndex)
+	if err != nil || observed.Index != t.ifIndex || observed.Name != t.name || observed.MTU != mtu {
+		return fmt.Errorf("Spoof TUN MTU/identity readback differs from requested %d: %v", mtu, err)
+	}
+	t.mtu.Store(int32(mtu))
+	return nil
 }
 
 func (t *PrivateTUN) Close() error {
@@ -105,6 +170,12 @@ func (t *PrivateTUN) Close() error {
 	t.file = nil
 	return err
 }
+
+// The local TUN MTU constrains this host's outgoing private packets ONLY.
+// An authenticated remote peer may have a different outgoing MTU. Its
+// incoming private IPv4 packet must be accepted up to the real IPv4 length
+// limit, rather than silently discarded against this host's outbound MTU.
+const maxAuthenticatedIncomingIPv4Bytes = 65535
 
 func validPrivatePacket(packet []byte, source, destination netip.Addr, mtu int) error {
 	if len(packet) < 20 || len(packet) > mtu || packet[0]>>4 != 4 {
@@ -151,7 +222,7 @@ func (t *PrivateTUN) ReadPacket(ctx context.Context) ([]byte, error) {
 		if poll[0].Revents&unix.POLLIN == 0 {
 			continue
 		}
-		b := make([]byte, t.mtu+64)
+		b := make([]byte, t.MTU()+64)
 		size, err := unix.Read(int(t.file.Fd()), b)
 		if err == unix.EINTR || err == unix.EAGAIN {
 			continue
@@ -168,7 +239,7 @@ func (t *PrivateTUN) ReadPacket(ctx context.Context) ([]byte, error) {
 		if len(p) == 0 || p[0]>>4 != 4 {
 			continue
 		}
-		if err := validPrivatePacket(p, t.local, t.peer, t.mtu); err != nil {
+		if err := validPrivatePacket(p, t.local, t.peer, t.MTU()); err != nil {
 			// Kernel/application traffic may target a different private
 			// destination immediately when the interface comes UP. It is
 			// not paired Link traffic: discard at the TUN boundary, never
@@ -183,11 +254,13 @@ func (t *PrivateTUN) ReadPacket(ctx context.Context) ([]byte, error) {
 
 // WritePacket accepts only authenticated peer->local IP packets. Caller
 // must first verify AEAD, anti-replay and pinned Link session identity.
+// The remote sender may have a larger outgoing path MTU than the local
+// endpoint; local TUN MTU never limits authenticated inbound IPv4 payload.
 func (t *PrivateTUN) WritePacket(ctx context.Context, packet []byte) error {
 	if t == nil || t.file == nil {
 		return errors.New("Spoof TUN is closed")
 	}
-	if err := validPrivatePacket(packet, t.peer, t.local, t.mtu); err != nil {
+	if err := validPrivatePacket(packet, t.peer, t.local, maxAuthenticatedIncomingIPv4Bytes); err != nil {
 		return err
 	}
 	t.mu.Lock()

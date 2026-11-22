@@ -137,7 +137,13 @@ func TestMASQUEPublicTLSMaterialIsModeAndLinkBound(t *testing.T) {
 		}
 	}
 	corrupted := append([]byte(nil), dialFiles["bearer-token"]...)
-	dialFiles["bearer-token"][1] = '-'
+	// The random URL-safe bearer may already contain '-'. Flip between two
+	// valid URL-safe characters so this negative test always mutates bytes.
+	if dialFiles["bearer-token"][1] == '-' {
+		dialFiles["bearer-token"][1] = '_'
+	} else {
+		dialFiles["bearer-token"][1] = '-'
+	}
 	if err := VerifyMaterialBundle(root, dialer, dialFiles); err == nil {
 		t.Fatal("accepted mutated request bearer in protected receiver material")
 	}
