@@ -178,12 +178,13 @@ import tarfile
 base, version, arch = sys.argv[1:]
 root = Path(base)
 binary = f"stl_{version}_linux_{arch}"
-names = [binary, "install.sh", "LICENSE", "BUILD-MANIFEST.txt",
+names = [binary, "install.sh", "LICENSE", "THIRD-PARTY-NOTICES.txt", "BUILD-MANIFEST.txt",
          "LOCAL-INSTALL.txt", "SHA256SUMS"]
 files = {
     binary: b"#!/bin/sh\nexit 0\n",
     "install.sh": b"#!/bin/bash\nexit 0\n",
     "LICENSE": b"GNU AFFERO GENERAL PUBLIC LICENSE\n",
+    "THIRD-PARTY-NOTICES.txt": b"License fixture\n",
     "BUILD-MANIFEST.txt": f"project=simple-tun-link\nversion={version}\n".encode(),
     "LOCAL-INSTALL.txt": b"fixture\n",
 }

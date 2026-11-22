@@ -113,7 +113,7 @@ func TestLicenseNoticeReadOnlyAndUnambiguous(t *testing.T) {
 	}
 	for _, value := range []string{"AGPL-3.0-only", "No warranty", "ach1992",
 		"https://www.gnu.org/licenses/agpl-3.0.html",
-		"https://github.com/ach1992/simple-tun-link"} {
+		"https://github.com/ach1992/simple-tun-link", "THIRD-PARTY-NOTICES.txt"} {
 		if !strings.Contains(out.String(), value) {
 			t.Fatalf("license notice missing %q: %q", value, out.String())
 		}

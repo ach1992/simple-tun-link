@@ -30,7 +30,7 @@ The tag mode refuses absent/mismatched tags. The script requires a
 clean Git tree and a nonexisting destination; intermediate outputs
 are staged privately and verified before atomic publication to the
 destination. It generates static linux/amd64 and linux/arm64 binaries,
-`LICENSE`, `SHA256SUMS` and `BUILD-MANIFEST.txt` with the intended
+`LICENSE`, `THIRD-PARTY-NOTICES.txt`, `SHA256SUMS` and `BUILD-MANIFEST.txt` with the intended
 source, commit, version, build date and supported build platforms.
 The binary's reported version/commit must match the manifest.
 
@@ -57,7 +57,7 @@ and checksum inventory:
 - `stl_<version>_linux_arm64_local-install.sh`
 
 Each single file contains a build-bound minimal launcher plus the **exact**
-corresponding six-member `*_local-install.tar.gz` byte sequence. Its embedded
+corresponding seven-member `*_local-install.tar.gz` byte sequence. Its embedded
 digest is checked *before* the canonical `unpack` action is invoked.
 In the ordinary copy-as-is HTTPS workflow, `sudo bash` trusts the entire downloaded launcher *before* its embedded
 checks can run; the archive digest cannot independently authenticate its
@@ -66,9 +66,9 @@ local first-hop verifies file/directory ownership, modes, links and a
 separately obtained full-file digest *before* executing transferred bytes.
 Both paths delegate to the sole canonical `scripts/install.sh`; no
 independent installer engine is added.
-The archive keeps the exact six regular members: one binary, canonical
-`install.sh`, `LICENSE`, `BUILD-MANIFEST.txt`, `LOCAL-INSTALL.txt`, and
-`SHA256SUMS` (covering the other five). Both `.sh` and `.tar.gz` are included
+The archive keeps the exact seven regular members: one binary, canonical
+`install.sh`, `LICENSE`, `THIRD-PARTY-NOTICES.txt`, `BUILD-MANIFEST.txt`,
+`LOCAL-INSTALL.txt`, and `SHA256SUMS` (covering the other six). Both `.sh` and `.tar.gz` are included
 in the release-wide SHA256SUMS; building alone does **not** publish them.
 A newly rendered Stable `stl-bootstrap.sh` also embeds the **complete-file
 SHA256 of the exact canonical `scripts/install.sh`** from the release source
@@ -146,18 +146,20 @@ These use disposable files/prefixes, fake release fixtures and guarded
 failure injection; they do not prove published download identity,
 actual distro package hooks or kernel traffic.
 
-**First AGPL distribution boundary:** previous `v0.1.34` and older
-MIT-tagged releases are immutable, and their installed embedded
-Installer validates the MIT manifest. Use the **new AGPL package's**
-architecture-matched canonical one-file `--update` path for this
-transition; do not pretend an old MIT-only `stl update --url` can
-accept changed license metadata. Source/build checks distinguish the
-AGPL candidate from prior published MIT assets.
+**First AGPL distribution boundary:** published `v0.1.34` and older
+MIT-tagged assets remain immutable. An **old embedded canonical
+Installer** validates `license=MIT`, so a menu/official-catalogue
+update that executes that old Installer cannot authenticate the new
+AGPL manifest. In contrast, a supported `stl update --url` obtains
+the **complete new one-file launcher** and runs its new, AGPL-aware
+canonical Installer; an explicitly trusted downloaded one-file
+`--update` is another supported option. These distinctions are
+explained in [INSTALL.md](INSTALL.md); no old assets are changed.
 
 Publication requires a **separately authorized** action binding an
 accepted exact source commit to an immutable version tag and complete
 assets (the two binaries, architecture-specific single-file installers and
-legacy local archives, `SHA256SUMS`, `BUILD-MANIFEST.txt`, `LICENSE` and the applicable
+legacy local archives, `SHA256SUMS`, `BUILD-MANIFEST.txt`, `LICENSE`, `THIRD-PARTY-NOTICES.txt` and the applicable
 fixed-tag bootstrap when supplied).
 Verify official GitHub release immutability **at publication**; a tag
 name, HTTPS or checksum uploaded by the same account alone is not

@@ -40,7 +40,7 @@ func menuSettings(out, errOut io.Writer, options *runtimeOptions) int {
 	menuField(out, "STL version", safeMenuText(version.Version))
 	menuField(out, "Repository", "github.com/ach1992/simple-tun-link")
 	menuField(out, "License", "AGPL-3.0-only (GNU Affero GPL v3)")
-	menuProse(out, "Copyright (c) 2026 ach1992. No warranty. View full terms in LICENSE at the repository, or use stl license.")
+	menuProse(out, "Copyright (c) 2026 ach1992. No warranty. View full terms in LICENSE and THIRD-PARTY-NOTICES.txt at the repository, or use stl license.")
 	menuField(out, "OS / Architecture", runtime.GOOS+" / "+runtime.GOARCH)
 	var info unix.Utsname
 	if unix.Uname(&info) == nil {

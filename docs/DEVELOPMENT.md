@@ -53,7 +53,10 @@ for attribution, provenance or an authorized reuse decision.** The older
 `AminMGMT/BackPack` research source was an AGPL-licensed design reference,
 not a vendored STL implementation; do not silently introduce its code or
 other external material without a focused provenance and obligation review.
-Linked Go module dependencies keep their own license notices.
+Linked Go module dependencies keep their own license notices in
+[THIRD-PARTY-NOTICES.txt](../THIRD-PARTY-NOTICES.txt). When pinned
+dependencies change, reconcile their actual upstream license texts
+and update this notice file before publishing new binaries.
 For distributed AGPLv3-covered binaries, include the Corresponding Source
 and applicable copyright/license notices; modified installations made
 remotely interactive may trigger AGPLv3 section 13 source-offer duties.

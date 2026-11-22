@@ -21,16 +21,17 @@ independent Owner gate is tracked in
 [Issue #93](https://github.com/ach1992/simple-tun-link/issues/93).
 Commands using `vX.Y.Z` require a **real published** tag.
 
-**MIT to AGPL transition:** Stable `v0.1.34` and earlier shipped an
-MIT-only embedded Installer. It expects `license=MIT` in incoming
-release metadata and therefore cannot be relied on to upgrade itself
-with `stl update --url` when the new release is AGPLv3. Instead download
-the complete **new** architecture-matched `*_local-install.sh` from an
-independently verified official release/trusted Mirror and run it with
-`--update`; the newer canonical Installer handles the transition under
-its usual lock and ownership checks. The official new-release guarded
-Stable bootstrap is another supported path. Never edit manifests, hashes
-or an old published release to bypass this license-metadata boundary.
+**MIT → AGPL transition:** The `v0.1.34` (and older) embedded canonical
+Installer checks `license=MIT`. Thus the **old installed binary's
+official-catalogue/Menu embedded-installer update path** must not be
+assumed to accept an incoming `AGPL-3.0-only` manifest. Use a complete
+**new** architecture-matched `*_local-install.sh` with explicit
+`--update`, or the guarded new-release bootstrap. A `v0.1.34`
+`stl update --url HTTPS_RELEASE_FILE_URL` is also a valid one-file
+delivery path: it downloads and invokes the **new release's embedded
+installer**, not the old MIT-only one. This requires an approved HTTPS
+source; it is not an independently signed update. Preserve State/rollback
+preconditions and never alter manifests or prior published releases.
 For environment-specific acceptance still open after a particular release,
 see [installer and distribution #146](https://github.com/ach1992/simple-tun-link/issues/146).
 Historical release/test checkpoints belong to their original immutable

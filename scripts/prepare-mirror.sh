@@ -53,7 +53,7 @@ expected() {
 regular "$source_dir/SHA256SUMS" || { echo 'Official release SHA256SUMS missing.' >&2; exit 1; }
 [[ $(sha256sum "$source_dir/SHA256SUMS" | awk '{print $1}') == "$trusted_sums" ]] ||
   { echo 'Release checksum manifest differs from independently trusted digest; nothing prepared.' >&2; exit 1; }
-files=(BUILD-MANIFEST.txt LICENSE stl-bootstrap.sh
+files=(BUILD-MANIFEST.txt LICENSE THIRD-PARTY-NOTICES.txt stl-bootstrap.sh
        "stl_${tag}_linux_amd64" "stl_${tag}_linux_arm64"
        "stl_${tag}_linux_amd64_local-install.tar.gz"
        "stl_${tag}_linux_arm64_local-install.tar.gz"

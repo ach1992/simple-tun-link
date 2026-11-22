@@ -68,6 +68,12 @@ if [[ ! -f LICENSE ]] || [[ $(sed -n '1p' LICENSE | sed 's/^[[:space:]]*//') != 
   exit 1
 fi
 
+[[ -f THIRD-PARTY-NOTICES.txt && ! -L THIRD-PARTY-NOTICES.txt &&
+   -s THIRD-PARTY-NOTICES.txt ]] || {
+  echo 'Third-party license notices missing from source' >&2
+  exit 1
+}
+
 # Go's embedded package-only preparer MUST be byte-identical to the
 # canonical release installer, not a second independently updated shell.
 cmp -s scripts/install.sh cmd/stl/canonical-installer.sh || {
@@ -82,7 +88,7 @@ for arch in amd64 arm64; do
     -o "$tmp/$filename" ./cmd/stl
 done
 
-cp LICENSE "$tmp/LICENSE"
+cp LICENSE THIRD-PARTY-NOTICES.txt "$tmp/"
 # Stable releases ship a self-pinned bootstrap using the permanent
 # releases/latest/download/stl-bootstrap.sh URL. Never for snapshots/RCs.
 stable_bootstrap=false
@@ -112,7 +118,7 @@ for arch in amd64 arm64; do
   package_dir="$tmp/.package-$arch"
   mkdir -m 0700 -- "$package_dir"
   cp -- scripts/install.sh "$package_dir/install.sh"
-  cp -- "$tmp/$filename" "$tmp/LICENSE" "$tmp/BUILD-MANIFEST.txt" "$package_dir/"
+  cp -- "$tmp/$filename" "$tmp/LICENSE" "$tmp/THIRD-PARTY-NOTICES.txt" "$tmp/BUILD-MANIFEST.txt" "$package_dir/"
   cat > "$package_dir/LOCAL-INSTALL.txt" <<EOF_LOCAL
 STL verified local archive (version $version, linux/$arch)
 
@@ -169,14 +175,14 @@ Other helpers (including Paqet) are NOT included in STL.
 EOF_LOCAL
   (
     cd "$package_dir"
-    sha256sum -- "$filename" install.sh LICENSE BUILD-MANIFEST.txt LOCAL-INSTALL.txt > SHA256SUMS
+    sha256sum -- "$filename" install.sh LICENSE THIRD-PARTY-NOTICES.txt BUILD-MANIFEST.txt LOCAL-INSTALL.txt > SHA256SUMS
     sha256sum --check SHA256SUMS >/dev/null
   )
   # Fixed member list, no absolute paths, no symlinks, canonical ordering,
   # stable timestamps and owner metadata. Never archive the staging dir itself.
   tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
     -C "$package_dir" -cf - \
-    "$filename" install.sh LICENSE BUILD-MANIFEST.txt LOCAL-INSTALL.txt SHA256SUMS \
+    "$filename" install.sh LICENSE THIRD-PARTY-NOTICES.txt BUILD-MANIFEST.txt LOCAL-INSTALL.txt SHA256SUMS \
     | gzip -n > "$tmp/$archive"
   rm -rf -- "$package_dir"
 
@@ -197,7 +203,7 @@ EOF_LOCAL
 done
 (
   cd "$tmp"
-  entries=("stl_${version}_linux_amd64" "stl_${version}_linux_arm64" "LICENSE" "BUILD-MANIFEST.txt"
+  entries=("stl_${version}_linux_amd64" "stl_${version}_linux_arm64" "LICENSE" "THIRD-PARTY-NOTICES.txt" "BUILD-MANIFEST.txt"
     "stl_${version}_linux_amd64_local-install.tar.gz"
     "stl_${version}_linux_arm64_local-install.tar.gz"
     "stl_${version}_linux_amd64_local-install.sh"

@@ -36,7 +36,7 @@ else
 fi
 SCRIPT
   chmod 0755 "$dir/stl_${version}_linux_amd64"
-  cp -- "$(dirname "$installer")/../LICENSE" "$dir/LICENSE"
+  cp -- "$(dirname "$installer")/../LICENSE" "$(dirname "$installer")/../THIRD-PARTY-NOTICES.txt" "$dir/"
   cat > "$dir/BUILD-MANIFEST.txt" <<MANIFEST
 project=simple-tun-link
 executable=stl
@@ -48,7 +48,7 @@ platforms=linux/amd64 linux/arm64
 source=https://github.com/ach1992/simple-tun-link
 mode=tag
 MANIFEST
-  (cd "$dir" && sha256sum "stl_${version}_linux_amd64" LICENSE BUILD-MANIFEST.txt > SHA256SUMS)
+  (cd "$dir" && sha256sum "stl_${version}_linux_amd64" LICENSE THIRD-PARTY-NOTICES.txt BUILD-MANIFEST.txt > SHA256SUMS)
 }
 bundle v0.1.0 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 bundle v0.1.1 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
@@ -87,7 +87,7 @@ bash "$installer" install --bundle "$root/v0.1.0" --prefix "$prefix"
 # repacked bytes must not be silently admitted as the same published tag.
 cp -a "$root/v0.1.0" "$root/repacked"
 printf '\n# syntactically valid but repacked artifact\n' >> "$root/repacked/stl_v0.1.0_linux_amd64"
-(cd "$root/repacked" && sha256sum stl_v0.1.0_linux_amd64 LICENSE BUILD-MANIFEST.txt > SHA256SUMS)
+(cd "$root/repacked" && sha256sum stl_v0.1.0_linux_amd64 LICENSE THIRD-PARTY-NOTICES.txt BUILD-MANIFEST.txt > SHA256SUMS)
 expect_failure bash "$installer" install --bundle "$root/repacked" --prefix "$prefix"
 expect_failure bash "$installer" update --bundle "$root/repacked" --prefix "$prefix"
 [[ $(sha "$prefix/bin/stl") == "$original" ]] || fail 'repacked artifact changed the owned binary'

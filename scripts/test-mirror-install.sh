@@ -32,7 +32,7 @@ make_release() {
       -ldflags "-s -w -X github.com/ach1992/simple-tun-link/internal/version.Version=$tag -X github.com/ach1992/simple-tun-link/internal/version.Commit=$commit" \
       -o "$out/$name" ./cmd/stl
   done
-  cp LICENSE "$out/LICENSE"
+  cp LICENSE THIRD-PARTY-NOTICES.txt "$out/"
   cat > "$out/BUILD-MANIFEST.txt" <<EOF
 project=simple-tun-link
 executable=stl
@@ -50,13 +50,13 @@ EOF
     pkg="$scratch/package-$tag-$arch"
     mkdir -m 0700 -p "$pkg"
     cp "$repo/scripts/install.sh" "$pkg/install.sh"
-    cp "$out/$name" "$out/LICENSE" "$out/BUILD-MANIFEST.txt" "$pkg/"
+    cp "$out/$name" "$out/LICENSE" "$out/THIRD-PARTY-NOTICES.txt" "$out/BUILD-MANIFEST.txt" "$pkg/"
     printf 'Test fixture for %s\n' "$tag" > "$pkg/LOCAL-INSTALL.txt"
     (
       cd "$pkg"
-      sha256sum -- "$name" install.sh LICENSE BUILD-MANIFEST.txt LOCAL-INSTALL.txt > SHA256SUMS
+      sha256sum -- "$name" install.sh LICENSE THIRD-PARTY-NOTICES.txt BUILD-MANIFEST.txt LOCAL-INSTALL.txt > SHA256SUMS
       tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
-        -cf - "$name" install.sh LICENSE BUILD-MANIFEST.txt LOCAL-INSTALL.txt SHA256SUMS |
+        -cf - "$name" install.sh LICENSE THIRD-PARTY-NOTICES.txt BUILD-MANIFEST.txt LOCAL-INSTALL.txt SHA256SUMS |
         gzip -n > "$out/$archive"
     )
     # Also prepare the unmodified official self-contained release asset.
@@ -75,7 +75,7 @@ EOF
   done
   bash scripts/render-stable-bootstrap.sh "$tag" "$out/stl-bootstrap.sh"
   ( cd "$out"; sha256sum -- stl_${tag}_linux_amd64 stl_${tag}_linux_arm64 \
-    LICENSE stl-bootstrap.sh BUILD-MANIFEST.txt stl_${tag}_linux_amd64_local-install.tar.gz \
+    LICENSE THIRD-PARTY-NOTICES.txt stl-bootstrap.sh BUILD-MANIFEST.txt stl_${tag}_linux_amd64_local-install.tar.gz \
     stl_${tag}_linux_arm64_local-install.tar.gz \
     stl_${tag}_linux_amd64_local-install.sh \
     stl_${tag}_linux_arm64_local-install.sh > SHA256SUMS )
@@ -686,7 +686,7 @@ bash -c "$one_liner" > "$scratch/repeat.out" 2> "$scratch/repeat.err" || {
 export STL_MIRROR_PREFIX="$scratch/old-prefix"
 mkdir -p "$STL_MIRROR_PREFIX/bin" "$STL_MIRROR_PREFIX/lib"
 mkdir -p "$scratch/old-bundle"
-cp "$scratch/old-release/BUILD-MANIFEST.txt" "$scratch/old-release/LICENSE" \
+cp "$scratch/old-release/BUILD-MANIFEST.txt" "$scratch/old-release/LICENSE" "$scratch/old-release/THIRD-PARTY-NOTICES.txt" \
   "$scratch/old-release/SHA256SUMS" "$scratch/old-release/stl_v0.9.98_linux_amd64" \
   "$scratch/old-bundle/"
 bash scripts/install.sh install --bundle "$scratch/old-bundle" \

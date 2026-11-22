@@ -152,6 +152,7 @@ func runWithRuntimeInput(args []string, input io.Reader, stdout, stderr io.Write
 		fmt.Fprintln(stdout, "No warranty. You may redistribute and modify STL under the AGPLv3 terms.")
 		fmt.Fprintln(stdout, "Complete terms: https://www.gnu.org/licenses/agpl-3.0.html")
 		fmt.Fprintln(stdout, "Corresponding source: https://github.com/ach1992/simple-tun-link")
+		fmt.Fprintln(stdout, "Third-party notices: https://github.com/ach1992/simple-tun-link/blob/main/THIRD-PARTY-NOTICES.txt")
 		return 0
 	case "version":
 		if len(args) == 2 && args[1] == "--json" {

@@ -82,8 +82,16 @@ HTTPS download URL in the same block.
 sudo stl update --url https://YOUR_MIRROR/releases/vX.Y.Z/stl_vX.Y.Z_linux_ARCH_local-install.sh
 ```
 
-Or choose **Update → HTTPS release file** in the terminal menu. The
-installed updater validates the URL/CPU/file shape, follows HTTPS-only
+Or choose **Update → HTTPS release file** in the terminal menu.
+For the first upgrade from MIT-only `v0.1.34` to AGPLv3, this
+`stl update --url` command invokes the **new** published one-file
+Installer, not the old embedded MIT-only canonical Installer. The old
+menu's **official-catalogue/embedded-installer** update path has a
+different manifest boundary and may reject the AGPL release. The
+[new one-file `--update` option](INSTALL.md#update) is an explicit fallback.
+
+On a release that supports this workflow, the installed updater validates
+the URL/CPU/file shape, follows HTTPS-only
 redirects (including GitHub's release CDN), downloads the **complete file**
 into private storage and calls the same canonical installer with explicit
 `--update`. It does **not** query the GitHub API, silently choose another
