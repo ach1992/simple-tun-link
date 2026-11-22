@@ -191,3 +191,39 @@ func TestSpoofOuterProtocolClaimsDoNotShareWrongPortNamespace(t *testing.T) {
 		t.Fatal("missing independent profile resource claims")
 	}
 }
+
+// A reverse proxy/NAT router advertises one port but the original Link
+// actually binds another. Engine claims/locks must track real listeners,
+// including local alternate binds, not external paired destinations.
+func TestSpoofClaimUsesLocalPostDNATPortNotAdvertisedPort(t *testing.T) {
+	link := spoofFixture(t, "auto")
+	link.Spoof.BindIPv4 = netip.MustParseAddr("10.10.22.3")
+	link.Spoof.BindPort = 49117
+	link.Spoof.BindAlternates = "10.10.22.3:49118"
+	link.Spoof.LocalAlternates = "203.0.113.23:48118"
+	link.Underlay.Local = netip.MustParseAddr("203.0.113.22")
+	if err := link.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	claims, err := expectedClaims(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	has := func(kind, key string) bool {
+		return slices.Contains(claims, domain.ResourceClaim{Kind: kind, Key: key})
+	}
+	for _, real := range []string{"49117", "49118"} {
+		if !has(domain.ResourceUDPListenPort, real) ||
+			!has(domain.ResourceBackendID, "spoof/icmp-receive-id/"+real) ||
+			!has(domain.ResourceBackendID, "spoof/raw-receive-id/"+real) {
+			t.Fatalf("real NAT receiver port %s omitted from collision/ownership claims: %+v", real, claims)
+		}
+	}
+	for _, external := range []string{"42001", "48118"} {
+		if has(domain.ResourceUDPListenPort, external) ||
+			has(domain.ResourceBackendID, "spoof/icmp-receive-id/"+external) ||
+			has(domain.ResourceBackendID, "spoof/raw-receive-id/"+external) {
+			t.Fatalf("advertised-but-unbound port %s falsely reserved: %+v", external, claims)
+		}
+	}
+}

@@ -87,9 +87,21 @@ func expectedClaims(link domain.Link) ([]domain.ResourceClaim, error) {
 		claims = append(claims, domain.ResourceClaim{Kind: domain.ResourceBackendID,
 			Key: "spoof/ingress/" + string(link.ID)})
 	}
+	// The Engine must reserve the actual host-local listen namespaces,
+	// NOT the paired externally advertised NAT destination ports.
+	// Otherwise two Links with different post-DNAT ports could falsely
+	// collide or a real same-bind collision could be missed.
 	profile := link.Spoof.OuterProtocol
-	primary := netip.AddrPortFrom(link.Underlay.Local, link.Spoof.ListenPort)
-	otherEndpoints, err := domain.ParseSpoofAlternates(link.Spoof.LocalAlternates, primary)
+	bind := link.Spoof.BindIPv4
+	if !bind.IsValid() {
+		bind = link.Underlay.Local
+	}
+	port := link.Spoof.BindPort
+	if port == 0 {
+		port = link.Spoof.ListenPort
+	}
+	primary := netip.AddrPortFrom(bind, port)
+	otherEndpoints, err := domain.ParseSpoofAlternates(link.Spoof.BindAlternates, primary)
 	if err != nil {
 		return nil, err
 	}
