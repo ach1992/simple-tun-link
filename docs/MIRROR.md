@@ -18,6 +18,12 @@ files. The **optional legacy pinned-bootstrap generator** can additionally
 bind the canonical installer and its release-wide `SHA256SUMS` into a generated
 bootstrap for operators who deliberately choose that extra trust mode.
 
+For ordinary offline delivery, jump to
+[simple copy-as-is Mirror](#simple-copy-as-is-mirror-recommended).
+The separately documented publisher-signed and pinned-bootstrap methods
+are optional advanced trust workflows, **not required** for the simple
+architecture-matched original Release file.
+
 ## Simple copy-as-is Mirror (recommended)
 
 A Mirror is **not a signing service, installer generator or new release
@@ -76,8 +82,13 @@ HTTPS download URL in the same block.
 sudo stl update --url https://YOUR_MIRROR/releases/vX.Y.Z/stl_vX.Y.Z_linux_ARCH_local-install.sh
 ```
 
-Or choose **Update → HTTPS release file** in the terminal menu. The
-installed updater validates the URL/CPU/file shape, follows HTTPS-only
+Or choose **Update → HTTPS release file** in the terminal menu.
+For a first-time MIT → AGPL upgrade, the old embedded Installer and
+the new complete one-file Installer behave differently; use the
+[upgrade guide](INSTALL.md#first-upgrade-from-mit-releases-to-agpl).
+
+On a release that supports this workflow, the installed updater validates
+the URL/CPU/file shape, follows HTTPS-only
 redirects (including GitHub's release CDN), downloads the **complete file**
 into private storage and calls the same canonical installer with explicit
 `--update`. It does **not** query the GitHub API, silently choose another

@@ -1,5 +1,10 @@
 # Development Guide
 
+This is the maintainer reference for toolchain, test boundaries and code
+contributions. Read [PROJECT-SPEC](PROJECT-SPEC.md) and
+[ARCHITECTURE](ARCHITECTURE.md) first for enduring product/Engine contracts.
+Release and test histories live in Releases, PRs, CI and Issues, not here.
+
 ## Principles
 
 1. Preserve the Link abstraction: consumers care about Link Addresses, not backend internals.
@@ -40,15 +45,27 @@ Do not introduce:
 - a generic plugin framework for built-in backends.
 
 Source-code reuse is separate from learning from other projects.
-Check the source's actual license and provenance before incorporating
-code or derived files into MIT-licensed STL. Public visibility is not
-a license grant; copyleft material needs an explicit compatibility
-decision rather than accidental copying. In particular, an early
-design reference, `AminMGMT/BackPack`, was identified as AGPLv3:
-**do not copy its implementation into STL's MIT-distributed code**
-without a separate reviewed licensing decision. Historical source
-audits and exact dates are recoverable from Git history, not a
-standing dependency on that project.
+New STL source and binary distributions adopt `AGPL-3.0-only`; the
+previously published MIT releases remain under their original license.
+Check the copyright holder, license and provenance of every external
+source before incorporating it. **License compatibility is not a substitute
+for attribution, provenance or an authorized reuse decision.** The older
+`AminMGMT/BackPack` research source was an AGPL-licensed design reference,
+not a vendored STL implementation; do not silently introduce its code or
+other external material without a focused provenance and obligation review.
+Linked Go module dependencies keep their own license notices in
+[THIRD-PARTY-NOTICES.txt](../THIRD-PARTY-NOTICES.txt). This file also
+retains the original complete first-party MIT copyright/license notice,
+so relicensing does not discard required provenance. The release builder
+checks that each module actually linked in both production architectures
+has its matching versioned notice in that file. When dependencies change,
+update upstream terms and author attributions from their real sources;
+do not satisfy the check with a placeholder.
+For distributed AGPLv3-covered binaries, include the Corresponding Source
+and applicable copyright/license notices; modified installations made
+remotely interactive may trigger AGPLv3 section 13 source-offer duties.
+Do not assume that publishing the source repo alone satisfies every
+redistribution or network-interaction obligation.
 
 ## External commands
 

@@ -418,7 +418,7 @@ case "$action" in
       fail 'unexpected local archive filename/version/architecture'
     version=${BASH_REMATCH[1]}
     arch=${BASH_REMATCH[3]}
-    names=("stl_${version}_linux_${arch}" install.sh LICENSE BUILD-MANIFEST.txt LOCAL-INSTALL.txt SHA256SUMS)
+    names=("stl_${version}_linux_${arch}" install.sh LICENSE THIRD-PARTY-NOTICES.txt BUILD-MANIFEST.txt LOCAL-INSTALL.txt SHA256SUMS)
     expected_names=$(printf '%s\n' "${names[@]}")
 
     # Copy the supplied archive to a private newly created operation-local
@@ -497,9 +497,9 @@ case "$action" in
     [[ -x "$destination/${names[0]}" ]] ||
       fail 'extracted STL binary is not executable'
     mapfile -t checksum_lines < "$destination/SHA256SUMS"
-    [[ ${#checksum_lines[@]} == 5 ]] ||
+    [[ ${#checksum_lines[@]} == 6 ]] ||
       fail 'local internal checksum inventory is incomplete'
-    for i in 0 1 2 3 4; do
+    for i in 0 1 2 3 4 5; do
       line=${checksum_lines[$i]}
       [[ ${line:0:64} =~ ^[0-9a-f]{64}$ &&
          ${line:64:2} == '  ' && ${line:66} == "${names[$i]}" ]] ||
@@ -513,7 +513,7 @@ case "$action" in
       fail 'extracted canonical installer syntax invalid'
     unpack_complete=1
     # EXIT cleanup removes only the private authenticated snapshot on success.
-    printf '[OK] Verified and extracted six regular release files into %s; no installation or APT operation occurred.\n' "$destination"
+    printf '[OK] Verified and extracted seven regular release files into %s; no installation or APT operation occurred.\n' "$destination"
     exit 0
     ;;
   install|update|uninstall|requirements|prepare) ;;
@@ -2015,7 +2015,7 @@ if [[ -n $bundle ]]; then
   [[ $version =~ ^(v[0-9]+\.[0-9]+\.[0-9]+([.-][a-zA-Z0-9.-]+)?|dev-[0-9a-f]{12})$ ]] || fail 'invalid bundle version'
 fi
 asset="stl_${version}_linux_${arch}"
-for file in SHA256SUMS BUILD-MANIFEST.txt LICENSE "$asset"; do
+for file in SHA256SUMS BUILD-MANIFEST.txt LICENSE THIRD-PARTY-NOTICES.txt "$asset"; do
   if [[ -n $bundle ]]; then
     is_regular "$bundle/$file" || fail "bundle file missing or unsafe: $file"
     cp -- "$bundle/$file" "$stage/$file" || fail "cannot read bundle file: $file"
@@ -2058,17 +2058,17 @@ if [[ -n $release_base ]]; then
   [[ $(hash_file "$stage/SHA256SUMS") == "$release_sums_sha256" ]] ||
     fail 'mirror_checksum_mismatch: release SHA256SUMS differs from independently pinned digest; nothing published'
 fi
-for file in BUILD-MANIFEST.txt LICENSE "$asset"; do
+for file in BUILD-MANIFEST.txt LICENSE THIRD-PARTY-NOTICES.txt "$asset"; do
   expected=$(awk -v name="$file" '$2 == name {print $1}' "$stage/SHA256SUMS")
   [[ $expected =~ ^[0-9a-f]{64}$ ]] || fail "missing/duplicate or malformed SHA256 entry for $file"
   [[ $(hash_file "$stage/$file") == "$expected" ]] || fail "checksum mismatch for $file"
 done
 manifest="$stage/BUILD-MANIFEST.txt"
-grep -qx 'project=simple-tun-link' "$manifest" && grep -qx 'executable=stl' "$manifest" && grep -qx 'license=MIT' "$manifest" && grep -qx "version=$version" "$manifest" || fail 'release manifest does not describe the intended STL build'
+grep -qx 'project=simple-tun-link' "$manifest" && grep -qx 'executable=stl' "$manifest" && grep -qx 'license=AGPL-3.0-only' "$manifest" && grep -qx "version=$version" "$manifest" || fail 'release manifest does not describe the intended STL build'
 if [[ -z $bundle ]]; then grep -qx 'mode=tag' "$manifest" || fail 'remote release must be built from a tag'; fi
 commit=$(sed -n 's/^commit=//p' "$manifest")
 [[ $commit =~ ^[0-9a-f]{40}$ ]] || fail 'invalid release commit metadata'
-[[ $(head -n 1 "$stage/LICENSE") == 'MIT License' ]] || fail 'release LICENSE is not MIT'
+[[ $(sed -n '1p' "$stage/LICENSE" | sed 's/^[[:space:]]*//') == 'GNU AFFERO GENERAL PUBLIC LICENSE' ]] || fail 'release LICENSE is not GNU AGPLv3'
 install -m 0755 -- "$stage/$asset" "$stage/incoming"
 metadata=$("$stage/incoming" version --json) || fail 'downloaded binary cannot report version metadata'
 [[ $metadata == *\"version\":\"$version\"* && $metadata == *\"commit\":\"$commit\"* ]] || fail 'release executable and manifest identity disagree'

@@ -854,7 +854,10 @@ func menuSensitiveHandoffAction(input io.Reader, reader *bufio.Reader, out, errO
 			return 2
 		}
 		fmt.Fprint(out, "Original sender-private file path (Enter=back): ")
-		path, readErr := readMenuAnswer(reader)
+		// Absolute operator-owned filenames can exceed the short menu-choice
+		// bound (128 bytes). Apply the normal Linux path bound instead; the
+		// existing private-file validation still checks trusted ownership.
+		path, readErr := readMenuAnswerBounded(reader, unix.PathMax)
 		if errors.Is(readErr, io.EOF) || readErr == nil && path == "" {
 			menuNotice(out, "INFO", "No original offer selected. Tunnel remains unchanged.")
 			return 0

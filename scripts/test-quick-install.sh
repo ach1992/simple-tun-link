@@ -17,16 +17,16 @@ mapfile -t published_commands < <(grep '^/usr/bin/env -i HOME=/ .*stl-bootstrap.
   echo 'INSTALL.md must contain three verified official commands (latest, exact, update).' >&2
   exit 1
 }
-# README exposes the literal latest Install and Update commands. Verify they
-# are exactly the commands exercised from INSTALL.md, not unchecked variants.
+# README is an entrypoint, not a duplicate installer reference. Keep ONE
+# complete Latest Stable command here and the distinct Update command in
+# INSTALL.md. All three canonical commands below remain independently tested.
 mapfile -t readme_commands < <(grep '^/usr/bin/env -i HOME=/ .*stl-bootstrap.sh' "$repo/README.md")
-[[ ${#readme_commands[@]} -eq 2 ]] || {
-  echo 'README must contain the two tested official commands (latest install and update).' >&2
+[[ ${#readme_commands[@]} -eq 1 ]] || {
+  echo 'README must contain exactly one tested Latest Stable install command.' >&2
   exit 1
 }
-[[ ${readme_commands[0]} == "${published_commands[0]}" &&
-   ${readme_commands[1]} == "${published_commands[2]}" ]] || {
-  echo 'README Install/Update commands differ from tested INSTALL.md commands.' >&2
+[[ ${readme_commands[0]} == "${published_commands[0]}" ]] || {
+  echo 'README Install command differs from the tested INSTALL.md command.' >&2
   exit 1
 }
 # Public commands must NEVER need a changing tag, branch or token.

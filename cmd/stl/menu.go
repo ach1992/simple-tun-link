@@ -148,7 +148,7 @@ func menuCommand(input io.Reader, out, errOut io.Writer, options *runtimeOptions
 		menuOption(out, "2", "Import setup link", "Join the other server")
 		menuOption(out, "3", "My tunnels", "View, share, test, remove")
 		menuOption(out, "4", "Test connectivity", "Check one or all saved tunnels")
-		menuOption(out, "5", "Settings", "Host and STL information")
+		menuOption(out, "5", "Settings", "Host, license and STL information")
 		menuActionOption(out, "6", "Update", "Official, local or mirror", "UPDATE")
 		menuActionOption(out, "7", "Uninstall", "Verify and remove installed STL", "UNINSTALL")
 		menuOption(out, "8", "Exit", "")

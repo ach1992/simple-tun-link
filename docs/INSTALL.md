@@ -1,6 +1,13 @@
 # Install, update, and uninstall
 
 For normal two-server setup start with the [README](../README.md).
+
+**Quick navigation:** choose the guarded official GitHub release bootstrap
+when available, the untouched one-file release asset for trusted HTTPS
+Mirror/offline transfer, or **Update** when already installed. Use
+[installer failures](#when-installer-selected-prepare-or-update-fails),
+[Update](#update) and
+[Uninstall](#uninstall-never-tear-down-live-links-implicitly) as needed.
 This runbook documents **current operations and recovery safeguards**,
 not the history of earlier release candidates. The active Stable
 release and its exact tag/commit are resolved from
@@ -13,6 +20,7 @@ specific real pair of WAN/NAT hosts has passed field acceptance; that
 independent Owner gate is tracked in
 [Issue #93](https://github.com/ach1992/simple-tun-link/issues/93).
 Commands using `vX.Y.Z` require a **real published** tag.
+
 For environment-specific acceptance still open after a particular release,
 see [installer and distribution #146](https://github.com/ach1992/simple-tun-link/issues/146).
 Historical release/test checkpoints belong to their original immutable
@@ -304,9 +312,10 @@ operations.
    `vX.Y.Z` means the actual published version. Optionally also download
    the architecture-matched [wstunnel v11.0.0](https://github.com/erebe/wstunnel/releases/tag/v11.0.0)
    archive for **WSS**, or [Hysteria app/v2.13.0](https://github.com/HyNetworks/hysteria/releases/tag/app%2Fv2.13.0)
-   executable for **QUIC/Salamander**. The
-   [README download table](../README.md#install-when-the-server-cannot-reach-github)
-   links **each exact AMD64/ARM64 helper asset**; the pinned SHA256s are below.
+   executable for **QUIC/Salamander**. Select the matching upstream asset
+   listed under [WSS companion](#optional-pinned-wss-companion-available-in-stable-v0110)
+   or [QUIC companion](#optional-pinned-quic-companion), where the exact
+   AMD64/ARM64 filenames and pinned SHA256s are maintained.
 2. **Upload unchanged files** to root-owned `0700` `/root/stl/` on each
    destination. Files must be root-owned `0600`/`0644`; no extraction,
    renaming or executable bit is needed. Keep exactly one matching
@@ -564,13 +573,21 @@ Stable for new installations.
 | WireGuard over WSS (optional since **v0.1.10**) | No WSS binary is included in the STL core file; obtain the exact official `wstunnel v11.0.0` architecture archive separately with the pinned SHA-256 specified below | Pass explicit `--with-wss` to the canonical one-file installer; kernel WireGuard, mTLS identity, scoped nft ingress guard and host ownership preflight are required |
 | Paqet/PCK (research only, **not shipped**) | **None** | Not an STL prerequisite; do not compile or stage it by default |
 
-For an actually published version that contains an architecture-specific
+For a published release that contains an architecture-specific
 `stl_vX.Y.Z_linux_amd64_local-install.tar.gz` **or**
-`stl_vX.Y.Z_linux_arm64_local-install.tar.gz`, the downloadable archive will
-contain `install.sh`, the matching single-arch binary, `LICENSE`,
-`BUILD-MANIFEST.txt`, `LOCAL-INSTALL.txt`, and a complete internal `SHA256SUMS`.
-The *separate* official release-wide `SHA256SUMS` identifies the complete
-archive. Verify its exact tag/source and digest against an independently
+`stl_vX.Y.Z_linux_arm64_local-install.tar.gz`, use the archive format
+documented for **that exact release**. The new AGPL package format
+(prepared for `v0.1.35`) contains **seven regular members**: the matching
+single-architecture `stl_<version>_linux_<arch>` binary, `install.sh`,
+`LICENSE`, `THIRD-PARTY-NOTICES.txt`, `BUILD-MANIFEST.txt`,
+`LOCAL-INSTALL.txt`, and internal `SHA256SUMS`. The internal
+`SHA256SUMS` authenticates **the other six members**, including the
+third-party notices. The *separate* official release-wide `SHA256SUMS`
+identifies the complete downloadable archive. Historical MIT release
+archives through `v0.1.34` used the earlier **six-member** format without
+`THIRD-PARTY-NOTICES.txt`; use their immutable release-specific installer
+and checksums, not the new AGPL archive contract.
+Verify its exact tag/source and digest against an independently
 trusted publisher reference on the Internet-connected device, then transfer
 the selected archive into a **root-owned, 0700** `/root/stl-transfer` on the
 destination. Do not create `/root/stl` ahead of time: extraction requires a
@@ -615,10 +632,11 @@ copy: never hash a writable transfer and later execute different bytes.
 The canonical `unpack` operation also rejects group/world-writable source
 archives and untrusted writable ancestors, then authenticates **its own
 private immutable-for-operation copy** and uses exactly that copy for every
-member inspection and extraction. It validates six exact regular members,
-size bounds, owners, a fresh destination, internal checksums and executable
-identity. It performs **no** APT or binary installation. For a verified
-already installer-owned host, run the existing `update --bundle /root/stl`
+member inspection and extraction. For the new AGPL format, it validates
+seven exact regular members (six payloads and an internal checksum file),
+size bounds, owners, a fresh destination, internal checksums and
+executable identity. It performs **no** APT or binary installation.
+For an already installer-owned host, run the existing `update --bundle /root/stl`
 instead of silently replacing a different version via `install`.
 
 The archive is an additional release artifact, not a second installation
@@ -838,7 +856,7 @@ only as an installer argument. The canonical installer then fetches
 `SHA256SUMS`, `BUILD-MANIFEST.txt`, `LICENSE`, and the one
 architecture-specific `stl_vX.Y.Z_linux_<arch>` executable from the **fixed
 project GitHub release URL** over HTTPS. It checks the relevant SHA-256 entries,
-MIT/commit/version metadata, and the executable's `version --json` identity
+declared license/commit/version metadata, and the executable's `version --json` identity
 **before** publication. The default GitHub path accepts no caller-provided
 download URL. A separately generated, version-specific self-hosted mirror
 bootstrap uses the same installer with a strict HTTPS release directory
@@ -862,6 +880,20 @@ stlink version --json
 ~~~
 
 ## Update
+
+### First upgrade from MIT releases to AGPL
+
+**MIT → AGPL transition:** The `v0.1.34` (and older) embedded canonical
+Installer checks `license=MIT`. Thus the **old installed binary's
+official-catalogue/Menu embedded-installer update path** must not be
+assumed to accept an incoming `AGPL-3.0-only` manifest. Use a complete
+**new** architecture-matched `*_local-install.sh` with explicit
+`--update`, or the guarded new-release bootstrap. A `v0.1.34`
+`stl update --url HTTPS_RELEASE_FILE_URL` is also a valid one-file
+delivery path: it downloads and invokes the **new release's embedded
+installer**, not the old MIT-only one. This requires an approved HTTPS
+source; it is not an independently signed update. Preserve State/rollback
+preconditions and never alter manifests or prior published releases.
 
 ### Explicit Update from an installed STL (local or HTTPS mirror)
 

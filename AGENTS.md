@@ -25,18 +25,16 @@ Hard boundaries:
   grant permission to start a helper or advertise a public Carrier.
   See [Issue #142](https://github.com/ach1992/simple-tun-link/issues/142)
   for current Owner gates.
-- **Spoof Direct TUN exception:** Issue #262 is the canonical
-  Owner-approved Direct Linux TUN + authenticated encrypted Spoof-specific
-  backend. This is deliberately NOT WireGuard-over-Spoof and NOT a new Link
-  manager. A privileged STL runtime on ordinary real Linux servers must be
-  supported, with local operator-provided IPv4 candidate files and scoped,
-  reversible required network adjustment through the existing Engine. Only
-  the current Master's TEST EXECUTION authorization is limited to owned
-  isolated networks; never encode a TEST-only gate in production runtime.
-  First Stable availability is v0.1.34; distinguish exact-source isolated
-  acceptance and release from public-WAN/provider acceptance, which remains
-  unverified. Do not conflate a published feature with field deployment;
-  #262 continues to own unmet external acceptance.
+- **Spoof Direct TUN exception:** [Issue #262](https://github.com/ach1992/simple-tun-link/issues/262)
+  is the canonical Direct Linux TUN + authenticated Spoof backend, shipped
+  since Stable v0.1.34. It is **not** WireGuard-over-Spoof or a second
+  Link manager; real Linux runtime uses independent operator-owned Source
+  IPv4 lists and only explicitly confirmed, reversible host adjustments.
+  Isolated VM/source success and official publication **do not prove public
+  ISP/WAN delivery**. Public-source packet testing, real host mutations,
+  reboot and production installation need fresh host/action authorization;
+  do not bake a temporary test-only restriction into the product.
+  #262 owns distinct outstanding physical acceptance.
 - No geography-specific data-model roles.
 - No global host tuning merely for convenience.
 - No firewall flush/default-route rewrite.

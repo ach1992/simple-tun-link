@@ -105,3 +105,24 @@ func TestGuidedCreateCancelNoticeFitsNarrowTerminal(t *testing.T) {
 		t.Fatalf("cancelled create lost prerequisite persistence guidance: %q", stdout.String())
 	}
 }
+
+func TestLicenseNoticeReadOnlyAndUnambiguous(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run([]string{"license"}, &out, &errOut); code != 0 || errOut.Len() != 0 {
+		t.Fatalf("license command failed: %d %q", code, errOut.String())
+	}
+	for _, value := range []string{"AGPL-3.0-only", "No warranty", "ach1992",
+		"https://www.gnu.org/licenses/agpl-3.0.html",
+		"https://github.com/ach1992/simple-tun-link", "THIRD-PARTY-NOTICES.txt"} {
+		if !strings.Contains(out.String(), value) {
+			t.Fatalf("license notice missing %q: %q", value, out.String())
+		}
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"license", "--json"}, &out, &errOut); code != 2 ||
+		out.Len() != 0 || !strings.Contains(errOut.String(), "usage: stl license") {
+		t.Fatalf("license should reject unsupported arguments, code=%d stdout=%q stderr=%q",
+			code, out.String(), errOut.String())
+	}
+}

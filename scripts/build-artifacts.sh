@@ -63,10 +63,24 @@ tmp="$(mktemp -d "$parent/.stl-artifacts.XXXXXXXX")"
 cleanup() { [[ -d $tmp ]] && rm -rf -- "$tmp"; }
 trap cleanup EXIT
 
-if [[ ! -f LICENSE ]] || ! grep -q 'MIT License' LICENSE; then
-  echo 'Source LICENSE is missing or not MIT' >&2
+if [[ ! -f LICENSE ]] || [[ $(sed -n '1p' LICENSE | sed 's/^[[:space:]]*//') != 'GNU AFFERO GENERAL PUBLIC LICENSE' ]] || ! grep -q 'END OF TERMS AND CONDITIONS' LICENSE; then
+  echo 'Source LICENSE is missing or not complete GNU AGPLv3' >&2
   exit 1
 fi
+
+[[ -f THIRD-PARTY-NOTICES.txt && ! -L THIRD-PARTY-NOTICES.txt &&
+   -s THIRD-PARTY-NOTICES.txt ]] || {
+  echo 'Historical and upstream legal notices missing from source' >&2
+  exit 1
+}
+# The pre-relicense MIT grant/copyright notice must survive distribution of
+# material originally covered by it, even though new releases are AGPL-only.
+grep -Fxq -- '--- Original STL MIT copyright and license notice (pre-AGPL releases) ---' THIRD-PARTY-NOTICES.txt &&
+grep -Fxq -- 'Copyright (c) 2026 ach1992' THIRD-PARTY-NOTICES.txt &&
+grep -Fxq -- '--- Go standard library/runtime (Go toolchain) ---' THIRD-PARTY-NOTICES.txt || {
+  echo 'Required historic STL MIT or Go runtime legal notice is missing' >&2
+  exit 1
+}
 
 # Go's embedded package-only preparer MUST be byte-identical to the
 # canonical release installer, not a second independently updated shell.
@@ -82,7 +96,26 @@ for arch in amd64 arm64; do
     -o "$tmp/$filename" ./cmd/stl
 done
 
-cp LICENSE "$tmp/LICENSE"
+# Keep notices synchronized with what the actual release executables link,
+# not with every historical module or test-only package in the Go graph.
+# go version -m inspects compiled binary metadata without executing it,
+# including the separately compiled ARM64 output on an AMD64 builder.
+for arch in amd64 arm64; do
+  filename="stl_${version}_linux_${arch}"
+  binary_metadata=$(go version -m "$tmp/$filename") || {
+    echo "Could not inspect actual compiled dependencies for linux/$arch" >&2
+    exit 1
+  }
+  while IFS= read -r module_version; do
+    [[ -n $module_version ]] || continue
+    grep -Fxq -- "--- $module_version ---" THIRD-PARTY-NOTICES.txt || {
+      echo "Missing legal notice for linked dependency on linux/$arch: $module_version" >&2
+      exit 1
+    }
+  done < <(awk '$1 == "dep" {print $2 " " $3}' <<< "$binary_metadata")
+done
+
+cp LICENSE THIRD-PARTY-NOTICES.txt "$tmp/"
 # Stable releases ship a self-pinned bootstrap using the permanent
 # releases/latest/download/stl-bootstrap.sh URL. Never for snapshots/RCs.
 stable_bootstrap=false
@@ -93,7 +126,7 @@ fi
 cat > "$tmp/BUILD-MANIFEST.txt" <<EOF
 project=simple-tun-link
 executable=stl
-license=MIT
+license=AGPL-3.0-only
 version=$version
 commit=$commit
 build_date=$commit_date
@@ -112,7 +145,7 @@ for arch in amd64 arm64; do
   package_dir="$tmp/.package-$arch"
   mkdir -m 0700 -- "$package_dir"
   cp -- scripts/install.sh "$package_dir/install.sh"
-  cp -- "$tmp/$filename" "$tmp/LICENSE" "$tmp/BUILD-MANIFEST.txt" "$package_dir/"
+  cp -- "$tmp/$filename" "$tmp/LICENSE" "$tmp/THIRD-PARTY-NOTICES.txt" "$tmp/BUILD-MANIFEST.txt" "$package_dir/"
   cat > "$package_dir/LOCAL-INSTALL.txt" <<EOF_LOCAL
 STL verified local archive (version $version, linux/$arch)
 
@@ -169,14 +202,14 @@ Other helpers (including Paqet) are NOT included in STL.
 EOF_LOCAL
   (
     cd "$package_dir"
-    sha256sum -- "$filename" install.sh LICENSE BUILD-MANIFEST.txt LOCAL-INSTALL.txt > SHA256SUMS
+    sha256sum -- "$filename" install.sh LICENSE THIRD-PARTY-NOTICES.txt BUILD-MANIFEST.txt LOCAL-INSTALL.txt > SHA256SUMS
     sha256sum --check SHA256SUMS >/dev/null
   )
   # Fixed member list, no absolute paths, no symlinks, canonical ordering,
   # stable timestamps and owner metadata. Never archive the staging dir itself.
   tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
     -C "$package_dir" -cf - \
-    "$filename" install.sh LICENSE BUILD-MANIFEST.txt LOCAL-INSTALL.txt SHA256SUMS \
+    "$filename" install.sh LICENSE THIRD-PARTY-NOTICES.txt BUILD-MANIFEST.txt LOCAL-INSTALL.txt SHA256SUMS \
     | gzip -n > "$tmp/$archive"
   rm -rf -- "$package_dir"
 
@@ -197,7 +230,7 @@ EOF_LOCAL
 done
 (
   cd "$tmp"
-  entries=("stl_${version}_linux_amd64" "stl_${version}_linux_arm64" "LICENSE" "BUILD-MANIFEST.txt"
+  entries=("stl_${version}_linux_amd64" "stl_${version}_linux_arm64" "LICENSE" "THIRD-PARTY-NOTICES.txt" "BUILD-MANIFEST.txt"
     "stl_${version}_linux_amd64_local-install.tar.gz"
     "stl_${version}_linux_arm64_local-install.tar.gz"
     "stl_${version}_linux_amd64_local-install.sh"
