@@ -1485,8 +1485,6 @@ ipsec_report_interrupted_apt() {
 ensure_packages() {
   local pkg missing_ipsec=0 before_plan
   local -a missing=()
-  command -v apt-get >/dev/null && command -v dpkg-query >/dev/null ||
-    fail 'apt-get and dpkg-query are required on supported distributions'
   for pkg in "${packages[@]}"; do
     prerequisite_satisfied "$pkg" || missing+=("$pkg")
   done
@@ -1502,6 +1500,11 @@ ensure_packages() {
     printf '[OK] STL prerequisites already available for %s %s (%s); no APT changes.\n' "$os_id" "$os_version" "$backends" >&2
     return
   fi
+  # Do not require a package manager or usable repositories when the selected
+  # backend's prerequisites already work. Only genuinely missing tools may
+  # reach signed APT, with the existing exact-plan and no-upgrade guards.
+  command -v apt-get >/dev/null && command -v dpkg-query >/dev/null ||
+    fail 'selected prerequisites are missing; apt-get and dpkg-query are required for package installation'
   # Source-level trust bypasses must fail before even the first APT refresh.
   # This also covers native/WireGuard, without gating the already-installed path.
   apt_sources_must_be_authenticated
@@ -1581,13 +1584,21 @@ if [[ $action == requirements ]]; then
   # preparer. A caller-supplied OS fixture must not be mixed with host dpkg.
   # This is a preview, not proof that the installed package set cannot race.
   if [[ -z $os_release_fixture ]]; then
-    command -v dpkg-query >/dev/null || fail 'cannot inspect installed packages'
     missing=()
     for pkg in "${packages[@]}"; do
       prerequisite_satisfied "$pkg" || missing+=("$pkg")
     done
     printf 'missing_packages=%s\n' "${missing[*]}"
-    apt_resolve_plan
+    if (( ${#missing[@]} == 0 )); then
+      # Nothing to install: do not consult APT or require working repositories.
+      # Keep the exact empty-plan contract used by the guided menu.
+      apt_plan=
+      apt_plan_sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    else
+      command -v apt-get >/dev/null && command -v dpkg-query >/dev/null ||
+        fail 'selected prerequisites are missing; cannot preview APT without apt-get and dpkg-query'
+      apt_resolve_plan
+    fi
     printf 'apt_install=%s\n' "$apt_plan"
     printf 'apt_install_sha256=%s\n' "$apt_plan_sha256"
   fi

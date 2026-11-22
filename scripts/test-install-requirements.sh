@@ -496,4 +496,37 @@ printf 'APT_SIMULATION_SELECTIVE_CAPTURE_AND_FULL_DIAGNOSTICS=PASS\n'
 )
 printf 'PREREQUISITE_WORKING_TOOL_REUSE_NO_VERSION_PIN_AND_IPSEC_BOUNDARY=PASS\n'
 
+# Reused prerequisites must not depend on functional APT or configured
+# repositories. The exact canonical Ensure function is exercised with APT
+# operations forbidden; a truly missing prerequisite must still fail closed.
+(
+  sed -n '/^ensure_packages() {/,/^}/p' "$installer" > "$root/ensure-reuse.sh"
+  [[ $(grep -c '^ensure_packages() {' "$root/ensure-reuse.sh") == 1 ]] ||
+    fail 'cannot extract canonical selected-package installer gate'
+  # shellcheck source=/dev/null
+  source "$root/ensure-reuse.sh"
+  packages=(iproute2 iptables kmod)
+  action=install backends=native os_id=debian os_version=13 want_ipsec=0
+  expected_missing_supplied=0 expected_apt_plan_supplied=0 expected_apt_plan_sha256_supplied=0
+  prerequisite_satisfied() { return 0; }
+  command() {
+    if [[ ${1:-} == -v && ( ${2:-} == apt-get || ${2:-} == dpkg-query ) ]]; then return 1; fi
+    builtin command "$@"
+  }
+  apt_sources_must_be_authenticated() { fail 'unnecessary APT source check'; }
+  apt_update_indexes() { fail 'unnecessary APT network refresh'; }
+  apt_resolve_plan() { fail 'unnecessary APT dependency resolution'; }
+  ensure_packages > "$root/available-reuse.out" 2>&1 ||
+    fail 'working prerequisites still required unavailable APT'
+  grep -Fq 'no APT changes' "$root/available-reuse.out" ||
+    fail 'no-APT success result not explained'
+  prerequisite_satisfied() { [[ $1 != iproute2 ]]; }
+  if ( ensure_packages > "$root/missing-requires-apt.out" 2>&1 ); then
+    fail 'actually missing prerequisite bypassed APT dependency gate'
+  fi
+  grep -Fq 'selected prerequisites are missing' "$root/missing-requires-apt.out" ||
+    fail 'missing prerequisite had no actionable package-manager error'
+)
+printf 'ALREADY_USABLE_TOOLS_SKIP_MISSING_APT_AND_REPOSITORY_GATES=PASS\n'
+
 printf 'Installer requirements checks PASS (capability-based Debian/Ubuntu, signed GPGV status, package plans, unsafe inputs).\n'

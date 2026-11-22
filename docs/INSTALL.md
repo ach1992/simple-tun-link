@@ -44,7 +44,10 @@ Releases, PRs and dated Issue evidence, not this current operator runbook.
   still checks its actual capabilities. External IPsec services/plugins or
   WSS/QUIC helpers cannot be adopted by a simple `--version`; they require
   separate verified ownership and protocol compatibility. PREPARE never
-  automatically upgrades an existing package or working tool.
+  automatically upgrades an existing package or working tool. When all
+  selected prerequisites are already available, both the installer and the
+  read-only Requirements preview bypass APT entirely; a missing/broken APT
+  repository is not a reason to reinstall an otherwise usable existing tool.
 - The installer selects only approved genuinely missing packages from the
   configured signed distro repositories. The default native GRE/IPIP
   set needs `iproute2`, `iptables` and `kmod`; WireGuard adds
