@@ -573,13 +573,21 @@ Stable for new installations.
 | WireGuard over WSS (optional since **v0.1.10**) | No WSS binary is included in the STL core file; obtain the exact official `wstunnel v11.0.0` architecture archive separately with the pinned SHA-256 specified below | Pass explicit `--with-wss` to the canonical one-file installer; kernel WireGuard, mTLS identity, scoped nft ingress guard and host ownership preflight are required |
 | Paqet/PCK (research only, **not shipped**) | **None** | Not an STL prerequisite; do not compile or stage it by default |
 
-For an actually published version that contains an architecture-specific
+For a published release that contains an architecture-specific
 `stl_vX.Y.Z_linux_amd64_local-install.tar.gz` **or**
-`stl_vX.Y.Z_linux_arm64_local-install.tar.gz`, the downloadable archive will
-contain `install.sh`, the matching single-arch binary, `LICENSE`,
-`BUILD-MANIFEST.txt`, `LOCAL-INSTALL.txt`, and a complete internal `SHA256SUMS`.
-The *separate* official release-wide `SHA256SUMS` identifies the complete
-archive. Verify its exact tag/source and digest against an independently
+`stl_vX.Y.Z_linux_arm64_local-install.tar.gz`, use the archive format
+documented for **that exact release**. The new AGPL package format
+(prepared for `v0.1.35`) contains **seven regular members**: the matching
+single-architecture `stl_<version>_linux_<arch>` binary, `install.sh`,
+`LICENSE`, `THIRD-PARTY-NOTICES.txt`, `BUILD-MANIFEST.txt`,
+`LOCAL-INSTALL.txt`, and internal `SHA256SUMS`. The internal
+`SHA256SUMS` authenticates **the other six members**, including the
+third-party notices. The *separate* official release-wide `SHA256SUMS`
+identifies the complete downloadable archive. Historical MIT release
+archives through `v0.1.34` used the earlier **six-member** format without
+`THIRD-PARTY-NOTICES.txt`; use their immutable release-specific installer
+and checksums, not the new AGPL archive contract.
+Verify its exact tag/source and digest against an independently
 trusted publisher reference on the Internet-connected device, then transfer
 the selected archive into a **root-owned, 0700** `/root/stl-transfer` on the
 destination. Do not create `/root/stl` ahead of time: extraction requires a
@@ -624,10 +632,11 @@ copy: never hash a writable transfer and later execute different bytes.
 The canonical `unpack` operation also rejects group/world-writable source
 archives and untrusted writable ancestors, then authenticates **its own
 private immutable-for-operation copy** and uses exactly that copy for every
-member inspection and extraction. It validates six exact regular members,
-size bounds, owners, a fresh destination, internal checksums and executable
-identity. It performs **no** APT or binary installation. For a verified
-already installer-owned host, run the existing `update --bundle /root/stl`
+member inspection and extraction. For the new AGPL format, it validates
+seven exact regular members (six payloads and an internal checksum file),
+size bounds, owners, a fresh destination, internal checksums and
+executable identity. It performs **no** APT or binary installation.
+For an already installer-owned host, run the existing `update --bundle /root/stl`
 instead of silently replacing a different version via `install`.
 
 The archive is an additional release artifact, not a second installation
