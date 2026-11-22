@@ -196,6 +196,8 @@ func composeRPFilterPlans(claims []state.SpoofRPFilterClaim, settings []state.Sp
 			byNIC[claim.Interface] = "loose"
 		}
 	}
+	// Every approved owner, including Loose, journals the actual all value
+	// before composing per-interface settings. Never assume all=0.
 	baseAll := 0
 	for _, setting := range settings {
 		if setting.Interface == "all" {
@@ -254,13 +256,17 @@ func (m ManagedRPFilter) planned(snapshot state.Snapshot, id domain.LinkID, ifac
 	if !found {
 		claims = append(claims, state.SpoofRPFilterClaim{LinkID: id, Interface: iface, Mode: mode})
 	}
+	// The effective Linux policy is max(all, NIC). Even a Loose-only
+	// claim must record the *observed* global baseline. If all=2 already
+	// supplies Loose, do not needlessly change the incoming NIC; if an
+	// external service later alters all, fail with explicit foreign-policy
+	// drift rather than silently treating the old effective guarantee as
+	// satisfied or overwriting another service's choice.
+	if err := m.ensureSetting(&settings, "all"); err != nil {
+		return app.SpoofRPFilterPlan{}, nil, nil, err
+	}
 	for _, claim := range claims {
 		if err := m.ensureSetting(&settings, claim.Interface); err != nil {
-			return app.SpoofRPFilterPlan{}, nil, nil, err
-		}
-	}
-	if mode == "off" || slices.ContainsFunc(claims, func(c state.SpoofRPFilterClaim) bool { return c.Mode == "off" }) {
-		if err := m.ensureSetting(&settings, "all"); err != nil {
 			return app.SpoofRPFilterPlan{}, nil, nil, err
 		}
 	}
@@ -498,9 +504,9 @@ func (m ManagedRPFilter) reconcileLocked(ctx context.Context, store state.Store)
 		used := map[string]bool{}
 		for _, c := range s.SpoofRPFilterClaims {
 			used[c.Interface] = true
-			if c.Mode == "off" {
-				used["all"] = true
-			}
+			// A Loose claim can depend on all=2 without changing it.
+			// Retain that baseline for honest drift detection at Restore.
+			used["all"] = true
 		}
 		kept := make([]state.SpoofRPFilterSetting, 0, len(s.SpoofRPFilterSettings))
 		for _, setting := range s.SpoofRPFilterSettings {

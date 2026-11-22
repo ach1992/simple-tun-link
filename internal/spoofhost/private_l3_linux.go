@@ -102,7 +102,8 @@ func icmp16Checksum(data []byte) uint16 {
 }
 
 type privateProbeResult struct {
-	session     *spoofcarrier.Session
-	destination netip.AddrPort
-	err         error
+	session    *spoofcarrier.Session
+	path       spoofcarrier.SourcePath
+	generation uint64
+	err        error
 }

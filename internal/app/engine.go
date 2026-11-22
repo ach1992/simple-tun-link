@@ -457,6 +457,17 @@ func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.
 		}
 	}
 	if prior.Backend == domain.BackendSpoof {
+		if e.spoofRPFilter == nil {
+			fresh, loadErr := e.store.Load(ctx)
+			if loadErr != nil {
+				return result, loadErr
+			}
+			if len(fresh.SpoofRPFilterClaims) != 0 || len(fresh.SpoofRPFilterSettings) != 0 {
+				return result, stlerr.WithEvidence(
+					stlerr.New(stlerr.CodeState, "remove", string(id), "spoof", "confirmed rp_filter settings remain journaled but their managed host restorer is unavailable"),
+					stlerr.OperationEvidence{Stage: "rp_filter_restore", HostMutation: "not_attempted", DesiredState: "committed", Rollback: "not_attempted"})
+			}
+		}
 		if e.spoofRPFilter != nil {
 			if err := e.spoofRPFilter.Release(ctx, e.store, id); err != nil {
 				return result, stlerr.WithEvidence(
@@ -469,6 +480,14 @@ func (e *Engine) remove(ctx context.Context, id domain.LinkID, expected *domain.
 			return result, stlerr.WithEvidence(
 				stlerr.Wrap(stlerr.CodeState, "remove", string(id), "spoof", "Spoof Link removed; original protected material retirement still requires reconciliation", err),
 				stlerr.OperationEvidence{Stage: "credential_retirement", HostMutation: "attempted", DesiredState: "committed", Rollback: "not_attempted"})
+		}
+		// Link deletion alone is not the last-host-owner boundary. Keep the
+		// same restore unit until both the rp_filter journal and committed
+		// protected credential retirement are durably settled.
+		if err := e.cleanupRestoreIfSettled(ctx); err != nil {
+			return result, stlerr.WithEvidence(
+				stlerr.Wrap(stlerr.CodeState, "remove", string(id), "spoof", "Spoof Link removed and material settled, but restore persistence cleanup remains retryable", err),
+				stlerr.OperationEvidence{Stage: "persistence_cleanup", HostMutation: "attempted", DesiredState: "committed", Rollback: "not_attempted"})
 		}
 	}
 	if prior.Backend == domain.BackendIPsec {
@@ -1696,7 +1715,7 @@ func (e *Engine) executeLockedWithIPsecAndSpoofProvision(ctx context.Context, re
 		}
 		// Pending pre-effect journals still need the host restore entry point
 		// even after the last ordinary Link is durably removed.
-		remaining = len(snapshot.Links) + len(snapshot.QUICCrashOperations) + len(snapshot.WSSCrashOperations) + len(snapshot.MASQUEOperations)
+		remaining = outstandingRestoreObligations(*snapshot)
 		return nil
 	})
 	if commitErr != nil {

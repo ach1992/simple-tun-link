@@ -249,9 +249,9 @@ func linkReadCommand(args []string, stdout, stderr io.Writer, options *runtimeOp
 				return 1
 			}
 		} else {
-			fmt.Fprintf(stdout, "Link %s: Spoof helper=%t, private route=%t, state=%s, authenticated bilateral=%t, tx/rx=%d/%d private packets (application success not implied)\n",
+			fmt.Fprintf(stdout, "Link %s: Spoof helper=%t, private route=%t, state=%s, authenticated bilateral=%t, private ICMP=%s, tx/rx=%d/%d private packets (application success not implied)\n",
 				id, host.RuntimeReady, host.PeerRoute, runtime.State,
-				connectivity == "authenticated_bilateral", runtime.SentPrivatePackets, runtime.ReceivedPrivatePackets)
+				connectivity == "authenticated_bilateral", runtime.PrivateL3Status, runtime.SentPrivatePackets, runtime.ReceivedPrivatePackets)
 		}
 		return 0
 	}

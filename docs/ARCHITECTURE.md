@@ -271,20 +271,30 @@ destination is introduced.
 
 Outer two-way authenticated connectivity is not evidence of working
 decrypted private TUN traffic. A separate fresh private IPv4 echo
-probe checks the actual end-to-end Linux datapath. Its failure is
-ICMP-specific, not a claim that TCP/UDP are necessarily blocked.
+probe checks the actual end-to-end Linux datapath. Success applies only
+to the selected Session and exact Source/Profile/Destination generation;
+a route switch invalidates earlier private-L3 evidence immediately, including
+in-flight results. Its failure is ICMP-specific, not a claim that TCP/UDP are necessarily blocked.
 Read-only `rp_filter` inspection calculates Linux effective
 `max(all, incoming NIC)`. A separate explicitly confirmed Engine-owned Spoof
 policy change can select Loose or Off, including global `all=0` when Off
 requires it. Host-wide effects are previewed, originals and shared Link
 owners journaled before kernel writes, and readbacks verified. The same
 manager reconciles on Restore and reverses owned deltas after Remove or
-manual restoration; unrelated State and providers are not adopted.
+manual restoration; unrelated State and providers are not adopted. Even
+if global `all=2` alone supplies Loose, its read-only policy dependency is
+journaled; later foreign global changes are surfaced rather than overwritten.
+The original restore unit remains installed for unsettled post-Remove
+rp_filter or original Spoof credential retirement journals, and is retired
+only after the final owner-scoped durable recovery is completed.
 
 Exact Engine-owned post-Remove `SpoofRemovalReceipt` is durable.
 Crash-interrupted protected-file quarantine can be retried under
 the same maintenance/Link locks using `retire-spoof` and an
-original-receipt-bound marker. Unknown resources remain preserved.
+original-receipt-bound marker. Parent-directory and marker/payload
+fsync barriers prevent receipt deletion from preceding durable protected-file
+unlinks. Pending original receipts can also be resumed by canonical Restore.
+Unknown resources remain preserved.
 
 Optional Link-scoped `ManageIngress` relies on preflighted, installed
 iptables-compatible host support and an explicitly chosen interface.

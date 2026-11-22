@@ -1442,7 +1442,12 @@ STL does NOT create router port forwarding or auto-discover NAT mappings.
 UNVERIFIED, VERIFIED_ICMP, ICMP_PROBE_FAILED), and Linux effective
 `rp_filter` (`max(all,interface)`). A failed ICMP probe does not prove TCP/UDP
 is blocked. It also reports the operator-confirmed `rp_filter_managed` claim
-when present; status itself remains entirely read-only.
+when present; status itself remains entirely read-only. Verified private
+ICMP applies to the exact current Session/Source/Profile/Destination route:
+quality-driven route switches invalidate the old result immediately and
+ignore in-flight results from superseded route generations. The generic
+human-readable `link status` also displays the independent private-ICMP
+status.
 
 **Operator-approved rp_filter repair** (Spoof Links only):
 
@@ -1465,6 +1470,13 @@ During the canonical reboot Restore, STL reconciles operator-approved policy
 before restoring Spoof helpers. On an interrupted Remove, use the original ID
 with `rp-filter restore` to finish the journaled rollback. Foreign/unknown
 changes are preserved with a diagnostic instead of being overwritten.
+Even an already-compatible effective Loose policy supplied by `all=2` has
+its global dependency recorded without requiring a needless NIC change;
+foreign global reset/drift is diagnosed explicitly. The existing recovery
+unit remains installed while an rp_filter journal or committed Spoof
+credential-retirement receipt is unsettled; `link restore --all` reconciles
+both after interruption, and the unit is removed only after all exact
+owner-scoped work finishes.
 
 An interrupted post-commit Spoof Remove can be resumed via
 `stl link retire-spoof LINK_ID --confirm LINK_ID`. The Engine

@@ -20,6 +20,19 @@ import (
 // RetireAfterRemove is called by the canonical Engine after the SAME atomic
 // state update both deletes the Link and records its irreversible receipt.
 func (h *Host) RetireAfterRemove(ctx context.Context, link domain.Link) error {
+	return h.retireAfterRemove(ctx, link, nil)
+}
+
+// The phase callback is nil in production. Isolated privileged tests inject
+// interruption exactly after durable boundaries and partial file unlinks,
+// without changing the canonical Engine or weakening original ownership.
+func (h *Host) retireAfterRemove(ctx context.Context, link domain.Link, phase func(string) error) error {
+	checkpoint := func(stage string) error {
+		if phase != nil {
+			return phase(stage)
+		}
+		return nil
+	}
 	if h == nil || ctx == nil || ctx.Err() != nil || os.Geteuid() != 0 ||
 		link.Backend != domain.BackendSpoof || link.Validate() != nil {
 		return errors.New("Spoof retirement requires original valid Link and privileged Engine")
@@ -83,15 +96,42 @@ func (h *Host) RetireAfterRemove(ctx context.Context, link domain.Link) error {
 			return err
 		}
 		err = unix.Renameat2(parentfd, filepath.Base(orig), parentfd, filepath.Base(quarantine), unix.RENAME_NOREPLACE)
-		_ = unix.Close(parentfd)
+		if err == nil {
+			err = checkpoint("renamed_before_parent_sync")
+		}
+		if err == nil {
+			err = unix.Fsync(parentfd)
+		}
+		closeErr := unix.Close(parentfd)
+		if err == nil {
+			err = closeErr
+		}
 		if err != nil {
-			return fmt.Errorf("Spoof original retirement rename: %w", err)
+			return fmt.Errorf("Spoof retirement rename/parent durability: %w", err)
+		}
+		if err := checkpoint("renamed_parent_durable"); err != nil {
+			return err
 		}
 		targetInfo, targetErr = os.Lstat(quarantine)
 	} else if !errors.Is(originalErr, fs.ErrNotExist) {
 		return errors.New("Spoof original directory cannot be verified")
 	}
 	if targetErr == nil {
+		// An interrupted prior process might have renamed the directory
+		// without syncing its parent. Make the original quarantine rename
+		// durable before unlinking *any* protected material on this retry.
+		parentDir, err := os.Open(parent)
+		if err != nil {
+			return err
+		}
+		err = parentDir.Sync()
+		closeErr := parentDir.Close()
+		if err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return fmt.Errorf("Spoof retirement parent directory durability: %w", err)
+		}
 		if !targetInfo.IsDir() || requirePrivateDirectory(quarantine) != nil {
 			return errors.New("Spoof retirement directory identity invalid")
 		}
@@ -136,19 +176,45 @@ func (h *Host) RetireAfterRemove(ctx context.Context, link domain.Link) error {
 				folder.Close()
 				return fmt.Errorf("Spoof exact quarantine cleanup: %w", err)
 			}
+			if err = checkpoint("payload_unlinked:" + name); err != nil {
+				folder.Close()
+				return err
+			}
+		}
+		// The exact receipt marker must remain durable until all payload
+		// unlinks have been fsynced. A power-loss replay must never observe
+		// surviving protected files with an absent original marker.
+		if err = folder.Sync(); err != nil {
+			folder.Close()
+			return err
+		}
+		if err = checkpoint("payloads_durable_marker_present"); err != nil {
+			folder.Close()
+			return err
 		}
 		if len(names) != 0 {
 			if err = unix.Unlinkat(int(folder.Fd()), spoofRetireMarker, 0); err != nil {
 				folder.Close()
 				return fmt.Errorf("Spoof exact retirement marker cleanup: %w", err)
 			}
+			if err = checkpoint("marker_unlinked_before_sync"); err != nil {
+				folder.Close()
+				return err
+			}
 		}
 		if err = folder.Sync(); err != nil {
 			folder.Close()
 			return err
 		}
+		if err = checkpoint("marker_unlink_durable"); err != nil {
+			folder.Close()
+			return err
+		}
 		folder.Close()
 		if err = os.Remove(quarantine); err != nil {
+			return err
+		}
+		if err = checkpoint("quarantine_removed_before_parent_sync"); err != nil {
 			return err
 		}
 	} else if !errors.Is(originalErr, fs.ErrNotExist) || !errors.Is(targetErr, fs.ErrNotExist) {
@@ -161,6 +227,9 @@ func (h *Host) RetireAfterRemove(ctx context.Context, link domain.Link) error {
 	err = p.Sync()
 	p.Close()
 	if err != nil {
+		return err
+	}
+	if err := checkpoint("quarantine_parent_durable"); err != nil {
 		return err
 	}
 	if receipt.Retired {

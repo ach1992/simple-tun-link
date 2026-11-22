@@ -62,48 +62,51 @@ type RuntimeStatus struct {
 	LastAuthenticatedAt      time.Time     `json:"last_authenticated_at,omitempty"`
 }
 type Agent struct {
-	root                 string
-	link                 domain.Link
-	material             Material
-	tun                  *carrier.PrivateTUN
-	receiver             carrier.FrameReceiver
-	sender               *carrier.RawSender
-	inventory            carrier.Inventory
-	cursor               carrier.DiscoveryCursor
-	chosen               netip.Addr
-	chosenProfile        string
-	chosenDestination    netip.AddrPort
-	profiles             []string
-	historicalPaths      []carrier.SourcePath
-	quality              pathQualityState
-	mtuState             adaptiveMTUState
-	probes               map[uint64]pendingProbe
-	lastDiscoveryBudget  time.Time
-	lastBackgroundBudget time.Time
-	discoveryCredits     float64
-	backgroundCredits    float64
-	backgroundCounter    uint64
-	backupPosition       int
-	warmPaths            []carrier.SourcePath
-	warmPosition         int
-	warmPass             int
-	warmEnabled          bool
-	stage                string
-	handshake            *carrier.Handshake
-	session              *carrier.Session
-	attempt              [16]byte
-	pendingKind          carrier.FrameKind
-	pendingPayload       []byte
-	pendingAt            time.Time
-	lastAuth             time.Time
-	lastSelectedProbeAck time.Time
-	lastSentKeepalive    time.Time
-	lastPendingSend      time.Time
-	lastSourceRefresh    time.Time
-	connected            bool
-	privateCheckSession  *carrier.Session
-	bindPeer             func(*carrier.Session) error
-	status               RuntimeStatus
+	root                   string
+	link                   domain.Link
+	material               Material
+	tun                    *carrier.PrivateTUN
+	receiver               carrier.FrameReceiver
+	sender                 *carrier.RawSender
+	inventory              carrier.Inventory
+	cursor                 carrier.DiscoveryCursor
+	chosen                 netip.Addr
+	chosenProfile          string
+	chosenDestination      netip.AddrPort
+	profiles               []string
+	historicalPaths        []carrier.SourcePath
+	quality                pathQualityState
+	mtuState               adaptiveMTUState
+	probes                 map[uint64]pendingProbe
+	lastDiscoveryBudget    time.Time
+	lastBackgroundBudget   time.Time
+	discoveryCredits       float64
+	backgroundCredits      float64
+	backgroundCounter      uint64
+	backupPosition         int
+	warmPaths              []carrier.SourcePath
+	warmPosition           int
+	warmPass               int
+	warmEnabled            bool
+	stage                  string
+	handshake              *carrier.Handshake
+	session                *carrier.Session
+	attempt                [16]byte
+	pendingKind            carrier.FrameKind
+	pendingPayload         []byte
+	pendingAt              time.Time
+	lastAuth               time.Time
+	lastSelectedProbeAck   time.Time
+	lastSentKeepalive      time.Time
+	lastPendingSend        time.Time
+	lastSourceRefresh      time.Time
+	connected              bool
+	privateCheckSession    *carrier.Session
+	privateCheckPath       carrier.SourcePath
+	privateCheckGeneration uint64
+	selectedPathGeneration uint64
+	bindPeer               func(*carrier.Session) error
+	status                 RuntimeStatus
 }
 
 func newAgent(root string, link domain.Link, material Material, bind func(*carrier.Session) error) *Agent {
@@ -232,7 +235,9 @@ func (a *Agent) publishStatus() {
 		a.status.SelectedLossPercent = q.lossPercent()
 	}
 	a.status.RecoveryStage = a.stage
-	if !a.connected || a.session == nil || a.privateCheckSession != a.session {
+	if !a.connected || a.session == nil || a.privateCheckSession != a.session ||
+		a.privateCheckGeneration != a.selectedPathGeneration ||
+		a.privateCheckPath != selected {
 		a.status.PrivateL3Status = "UNVERIFIED"
 	} else if a.status.PrivateL3Status == "VERIFIED_ICMP" &&
 		time.Since(a.status.PrivateICMPLastSuccessAt) > 35*time.Second {
@@ -497,13 +502,38 @@ func (a *Agent) sendCandidates(encoded []byte) error {
 	return first
 }
 
+// selectedPath identifies the complete authenticated local sending route;
+// an unchanged peer destination does not imply unchanged Source/Profile.
+func (a *Agent) selectedPath() carrier.SourcePath {
+	return carrier.SourcePath{Source: a.chosen, Profile: a.chosenProfile,
+		Destination: a.chosenDestination}
+}
+
+// invalidatePrivateProof is called when the selected route or connection
+// generation changes. A private ICMP result observed on the previous path
+// must never be published as proof of this new route, even if the same Noise
+// Session and peer destination are retained.
+func (a *Agent) invalidatePrivateProof() {
+	a.selectedPathGeneration++
+	a.privateCheckSession = nil
+	a.privateCheckPath = carrier.SourcePath{}
+	a.status.PrivateL3Status = "UNVERIFIED"
+	a.status.PrivateICMPError = ""
+	a.status.PrivateICMPLastCheckAt = time.Time{}
+	a.status.PrivateICMPLastSuccessAt = time.Time{}
+}
+
 func (a *Agent) confirmedPath(path carrier.SourcePath) bool {
 	if !a.knownSource(path) {
 		return false
 	}
+	path.Destination = a.effectiveDestination(path.Destination)
+	if a.selectedPath() != path || !a.connected {
+		a.invalidatePrivateProof()
+	}
 	a.chosen = path.Source
 	a.chosenProfile = path.Profile
-	a.chosenDestination = a.effectiveDestination(path.Destination)
+	a.chosenDestination = path.Destination
 	a.cursor.PreferredSucceeded(path.Source)
 	return true
 }
@@ -1015,37 +1045,50 @@ func (a *Agent) run(ctx context.Context) error {
 				(lastPrivateProbe.IsZero() || time.Since(lastPrivateProbe) >= 10*time.Second) {
 				lastPrivateProbe = time.Now()
 				privateProbePending = true
-				session, dest := a.session, a.chosenDestination
+				session, route, generation := a.session, a.selectedPath(), a.selectedPathGeneration
 				local, peer := a.link.Addresses.Local.Addr(), a.link.Addresses.Peer.Addr()
 				go func() {
 					err := privateICMPProbe(ctx, local, peer)
 					select {
-					case privateProbeResults <- privateProbeResult{session: session, destination: dest, err: err}:
+					case privateProbeResults <- privateProbeResult{session: session, path: route, generation: generation, err: err}:
 					case <-ctx.Done():
 					}
 				}()
 			}
 		case evidence := <-privateProbeResults:
 			privateProbePending = false
-			if !a.connected || a.session == nil || evidence.session != a.session ||
-				evidence.destination != a.chosenDestination {
-				continue
+			if a.acceptPrivateProbeResult(evidence) {
+				a.publishStatus()
 			}
-			a.privateCheckSession = a.session
-			a.status.PrivateICMPLastCheckAt = time.Now().UTC()
-			if evidence.err == nil {
-				a.status.PrivateL3Status = "VERIFIED_ICMP"
-				a.status.PrivateICMPLastSuccessAt = a.status.PrivateICMPLastCheckAt
-				a.status.PrivateICMPError = ""
-			} else {
-				a.status.PrivateL3Status = "ICMP_PROBE_FAILED"
-				a.status.PrivateICMPError = evidence.err.Error()
-			}
-			a.publishStatus()
 		case <-report.C:
 			a.publishStatus()
 		}
 	}
+}
+
+// acceptPrivateProbeResult admits only proof from the exact selected-route
+// generation, not merely the destination or the long-lived Noise Session.
+// A late result from a Source/Profile that was deselected (or reselected)
+// cannot resurrect historical VERIFIED_ICMP evidence.
+func (a *Agent) acceptPrivateProbeResult(evidence privateProbeResult) bool {
+	if !a.connected || a.session == nil || evidence.session != a.session ||
+		evidence.generation != a.selectedPathGeneration ||
+		evidence.path != a.selectedPath() {
+		return false
+	}
+	a.privateCheckSession = a.session
+	a.privateCheckPath = evidence.path
+	a.privateCheckGeneration = evidence.generation
+	a.status.PrivateICMPLastCheckAt = time.Now().UTC()
+	if evidence.err == nil {
+		a.status.PrivateL3Status = "VERIFIED_ICMP"
+		a.status.PrivateICMPLastSuccessAt = a.status.PrivateICMPLastCheckAt
+		a.status.PrivateICMPError = ""
+	} else {
+		a.status.PrivateL3Status = "ICMP_PROBE_FAILED"
+		a.status.PrivateICMPError = evidence.err.Error()
+	}
+	return true
 }
 
 // RunAgent runs a per-Link managed helper under the original transient

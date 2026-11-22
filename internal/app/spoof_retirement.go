@@ -61,5 +61,8 @@ func (e *Engine) RetireSpoofCredential(ctx context.Context, id domain.LinkID) er
 		return fmt.Errorf("Spoof retirement Link lock unavailable: %w", err)
 	}
 	defer linkRelease()
-	return e.retireSpoofCredentialLocked(ctx, id)
+	if err := e.retireSpoofCredentialLocked(ctx, id); err != nil {
+		return err
+	}
+	return e.cleanupRestoreIfSettled(ctx)
 }

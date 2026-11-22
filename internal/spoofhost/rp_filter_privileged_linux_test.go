@@ -95,4 +95,35 @@ func TestPrivilegedSpoofRPFilterKernelOffLooseRollback(t *testing.T) {
 			t.Fatalf("released kernel baseline %s=%d %v", name, value, err)
 		}
 	}
+	// With global all=2, incoming NIC=1, effective Loose is already
+	// satisfied. The approved operation must journal its shared dependency
+	// WITHOUT altering the NIC or global value unnecessarily.
+	if err := manager.write(ctx, "all", 2); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := manager.Apply(ctx, store, link.ID, iface, "loose")
+	if err != nil || plan.EffectiveBefore != 2 || plan.EffectiveAfter != 2 || len(plan.Changes) != 0 {
+		t.Fatalf("global-2 kernel Loose mutated an already-compatible NIC: %+v %v", plan, err)
+	}
+	if err := manager.write(ctx, "all", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Reconcile(ctx, store); err == nil {
+		t.Fatal("changed foreign global policy not detected")
+	}
+	if actual, _ := manager.read("all"); actual != 1 {
+		t.Fatal("unapproved global sysctl overwrite")
+	}
+	if err := manager.write(ctx, "all", 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Release(ctx, store, link.ID); err != nil {
+		t.Fatal(err)
+	}
+	if actual, _ := manager.read(iface); actual != 1 {
+		t.Fatal("original NIC policy not restored")
+	}
+	if actual, _ := manager.read("all"); actual != 2 {
+		t.Fatal("global-2 baseline not retained")
+	}
 }

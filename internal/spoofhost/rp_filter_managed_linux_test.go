@@ -284,3 +284,91 @@ func TestManagedRPFilterWriteOrderingAvoidsUnnecessaryTransientStrict(t *testing
 		}
 	}
 }
+
+func TestManagedRPFilterLooseUsesGlobalTwoWithoutUnnecessaryNICChange(t *testing.T) {
+	for _, nic := range []int{0, 1, 2} {
+		t.Run(string(rune('0'+nic)), func(t *testing.T) {
+			lab := newRPFilterLab(t, 2, nic, 0)
+			ctx := context.Background()
+			plan, err := lab.manager.Preview(ctx, lab.snap(), lab.linkA.ID, "in0", "loose")
+			if err != nil || plan.EffectiveBefore != 2 || plan.EffectiveAfter != 2 || len(plan.Changes) != 0 {
+				t.Fatalf("already-compatible effective Loose changed unexpectedly: %+v %v", plan, err)
+			}
+			applied, err := lab.manager.Apply(ctx, lab.store, lab.linkA.ID, "in0", "loose")
+			if err != nil || len(applied.Changes) != 0 {
+				t.Fatalf("approved baseline-only claim changed NIC: %+v %v", applied, err)
+			}
+			lab.expect("all", 2)
+			lab.expect("in0", nic)
+			snapshot := lab.snap()
+			if len(snapshot.SpoofRPFilterSettings) != 2 {
+				t.Fatalf("global baseline not journaled for Loose: %+v", snapshot.SpoofRPFilterSettings)
+			}
+			// Simulated unrelated sysctl reset changes the effective Loose
+			// policy. Never silently adopt or clobber this foreign setting;
+			// report an explicit owner conflict and retain the journal.
+			lab.set("all", 1)
+			if err := lab.manager.Reconcile(ctx, lab.store); err == nil || !strings.Contains(err.Error(), "outside STL") {
+				t.Fatalf("external policy drift not reported: %v", err)
+			}
+			lab.expect("all", 1)
+			lab.expect("in0", nic)
+			if len(lab.snap().SpoofRPFilterClaims) != 1 {
+				t.Fatal("lost owner after conflict")
+			}
+			lab.set("all", 2)
+			if err := lab.manager.Reconcile(ctx, lab.store); err != nil {
+				t.Fatalf("original policy restored but journal unrecoverable: %v", err)
+			}
+			if err := lab.manager.Release(ctx, lab.store, lab.linkA.ID); err != nil {
+				t.Fatal(err)
+			}
+			lab.expect("all", 2)
+			lab.expect("in0", nic)
+			if len(lab.snap().SpoofRPFilterSettings) != 0 {
+				t.Fatal("original global baseline not released")
+			}
+		})
+	}
+}
+
+func TestManagedRPFilterGlobalTwoMixedOwnersReleaseOrders(t *testing.T) {
+	for _, reverse := range []bool{false, true} {
+		lab := newRPFilterLab(t, 2, 1, 0)
+		ctx := context.Background()
+		if _, err := lab.manager.Apply(ctx, lab.store, lab.linkA.ID, "in0", "loose"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := lab.manager.Apply(ctx, lab.store, lab.linkB.ID, "in1", "off"); err != nil {
+			t.Fatal(err)
+		}
+		lab.expect("all", 0)
+		lab.expect("in0", 2)
+		lab.expect("in1", 0)
+		if reverse {
+			if err := lab.manager.Release(ctx, lab.store, lab.linkA.ID); err != nil {
+				t.Fatal(err)
+			}
+			lab.expect("all", 0)
+			lab.expect("in0", 1)
+			if err := lab.manager.Release(ctx, lab.store, lab.linkB.ID); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			if err := lab.manager.Release(ctx, lab.store, lab.linkB.ID); err != nil {
+				t.Fatal(err)
+			}
+			lab.expect("all", 2)
+			lab.expect("in0", 1)
+			if err := lab.manager.Release(ctx, lab.store, lab.linkA.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		lab.expect("all", 2)
+		lab.expect("in0", 1)
+		lab.expect("in1", 0)
+		if s := lab.snap(); len(s.SpoofRPFilterClaims) != 0 || len(s.SpoofRPFilterSettings) != 0 {
+			t.Fatal("mixed owners left orphan journal")
+		}
+	}
+}

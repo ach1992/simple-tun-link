@@ -558,7 +558,9 @@ func linkSpoofCommand(args []string, stdout, stderr io.Writer, options *runtimeO
 		status := spoofhost.TrustedRuntimeStatus(opts.stateRoot, id, observed)
 		rpManaged := rpFilterStatusForLink(snapshot, id)
 		rpLink := record.Desired
-		if rpManaged != nil && rpLink.Spoof.IngressInterface == "" {
+		if rpManaged != nil {
+			// Explicit owner override takes precedence for managed policy
+			// diagnostics; saved default ingress remains available in Link.
 			rpLink.Spoof.IngressInterface = rpManaged.Interface
 		}
 		rp := effectiveSpoofRPFilterStatus(rpLink)

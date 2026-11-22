@@ -36,11 +36,29 @@ func (e *Engine) RestoreAll(ctx context.Context) ([]Result, error) {
 	if err != nil {
 		return nil, stlerr.Wrap(stlerr.CodeState, "restore_all", "", "", "cannot load persisted Links", err)
 	}
+	if e.spoofRPFilter == nil && (len(snapshot.SpoofRPFilterClaims) != 0 || len(snapshot.SpoofRPFilterSettings) != 0) {
+		rpReconcileErr = errors.New("confirmed Spoof rp_filter journal present but host policy manager unavailable")
+	}
+	// A committed Spoof Remove receipt is an authorization to resume only
+	// that exact original retirement. Do this before considering the host's
+	// last restore-unit owner; a crash during Remove cannot strand secrets.
+	spoofRetireFailures := e.restorePendingSpoofRetirements(ctx, snapshot)
+	if len(snapshot.SpoofRemovalReceipts) != 0 {
+		snapshot, err = e.store.Load(ctx)
+		if err != nil {
+			return nil, stlerr.Wrap(stlerr.CodeState, "restore_all", "", "spoof", "cannot reload Spoof credential retirement receipts", err)
+		}
+	}
 
 	if rpReconcileErr != nil && len(snapshot.Links) == 0 {
 		// Never retire the reboot reconciliation unit while a confirmed,
 		// journaled host policy might still require its original cleanup.
 		return nil, stlerr.Wrap(stlerr.CodeState, "restore_all", "", "spoof", "pending confirmed rp_filter host policy requires reconciliation before empty-state cleanup", rpReconcileErr)
+	}
+
+	if len(snapshot.Links) == 0 && (len(spoofRetireFailures) > 0 || outstandingSpoofRecovery(snapshot) > 0) {
+		return nil, stlerr.Wrap(stlerr.CodeState, "restore_all", "", "spoof",
+			"pending committed Spoof credential/host policy recovery forbids last restore-unit cleanup", errors.Join(spoofRetireFailures...))
 	}
 
 	// A crash journal is NOT a committed, healthy Link, and an empty
@@ -79,6 +97,9 @@ func (e *Engine) RestoreAll(ctx context.Context) ([]Result, error) {
 			reconcileErr = stlerr.New(stlerr.CodeConflict, "restore_all", "", "wireguard-wss",
 				"unresolved WSS pre-effect intent prevents restore-unit cleanup")
 		}
+		if reconcileErr == nil && outstandingRestoreObligations(fresh) > 0 {
+			reconcileErr = stlerr.New(stlerr.CodeConflict, "restore_all", "", "spoof", "pending Link or confirmed host recovery forbids restore-unit cleanup")
+		}
 		if reconcileErr == nil && len(fresh.Links) == 0 {
 			committed := false
 			if witness, ok := e.store.(interface {
@@ -114,7 +135,7 @@ func (e *Engine) RestoreAll(ctx context.Context) ([]Result, error) {
 	}
 
 	results := make([]Result, 0, len(snapshot.Links))
-	var perLinkFailures []error
+	perLinkFailures := spoofRetireFailures
 	if rpReconcileErr != nil {
 		perLinkFailures = append(perLinkFailures, stlerr.Wrap(stlerr.CodeState, "restore", "", "spoof", "operator-confirmed rp_filter settings could not be reconciled; unrelated Links will still be attempted", rpReconcileErr))
 	}

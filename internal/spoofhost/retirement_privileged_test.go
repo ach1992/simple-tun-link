@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -117,6 +118,61 @@ func TestPrivilegedSpoofRetirementCrashQuarantineRecovery(t *testing.T) {
 			t.Fatal("exact receipt not retired")
 		}
 	})
+	for _, stage := range []string{
+		"renamed_before_parent_sync", "renamed_parent_durable",
+		"payload_unlinked:material.json", "payloads_durable_marker_present",
+		"marker_unlinked_before_sync", "marker_unlink_durable",
+		"quarantine_removed_before_parent_sync", "quarantine_parent_durable",
+	} {
+		t.Run("interrupted_"+stage, func(t *testing.T) {
+			link, original, store := makeOriginal()
+			quarantine := filepath.Join(filepath.Dir(original), ".retired-"+string(link.ID)+"-"+link.Spoof.MaterialSHA256)
+			tripped := 0
+			err := h.retireAfterRemove(context.Background(), link, func(at string) error {
+				if at == stage {
+					tripped++
+					return errors.New("injected interruption after " + stage)
+				}
+				return nil
+			})
+			if tripped != 1 || err == nil || !strings.Contains(err.Error(), "injected interruption") {
+				t.Fatalf("phase %s failed to interrupt exactly once: hit=%d err=%v", stage, tripped, err)
+			}
+			before, err := store.Load(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if receipt, ok := before.FindSpoofRemovalReceipt(link.ID); !ok || receipt.Retired {
+				t.Fatal("interrupted original retirement marked completed")
+			}
+			if _, err := os.Stat(quarantine); err == nil && stage != "marker_unlinked_before_sync" &&
+				stage != "marker_unlink_durable" && stage != "quarantine_removed_before_parent_sync" &&
+				stage != "quarantine_parent_durable" {
+				if err := verifySpoofRetirementMarker(quarantine, link); err != nil {
+					t.Fatalf("payload cleanup phase lost exact durable marker: %v", err)
+				}
+			}
+			if err := h.RetireAfterRemove(context.Background(), link); err != nil {
+				t.Fatalf("durable interrupted stage %s could not resume: %v", stage, err)
+			}
+			if err := h.RetireAfterRemove(context.Background(), link); err != nil {
+				t.Fatalf("final idempotent retry: %v", err)
+			}
+			if _, err := os.Lstat(original); !os.IsNotExist(err) {
+				t.Fatalf("original still exists: %v", err)
+			}
+			if _, err := os.Lstat(quarantine); !os.IsNotExist(err) {
+				t.Fatalf("quarantine still exists: %v", err)
+			}
+			after, err := store.Load(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if receipt, ok := after.FindSpoofRemovalReceipt(link.ID); !ok || !receipt.Retired {
+				t.Fatal("durably cleared original receipt not retired")
+			}
+		})
+	}
 	t.Run("foreign_original_is_preserved", func(t *testing.T) {
 		link, original, store := makeOriginal()
 		foreign := filepath.Join(original, "foreign.critical")

@@ -105,5 +105,5 @@ func (e *Engine) RestoreSpoofRPFilter(ctx context.Context, id domain.LinkID) err
 	if err := e.spoofRPFilter.Release(ctx, e.store, id); err != nil {
 		return fmt.Errorf("Spoof rp_filter cleanup pending; retry link rp-filter restore: %w", err)
 	}
-	return nil
+	return e.cleanupRestoreIfSettled(ctx)
 }

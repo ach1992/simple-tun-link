@@ -131,7 +131,10 @@ still reject traffic.
 **True private IPv4 status:** `CONNECTED` describes the bilateral
 Noise outer transport. `runtime.private_l3_status` is separately
 `UNVERIFIED`, `VERIFIED_ICMP` after real private IPv4 echo,
-or `ICMP_PROBE_FAILED` after a failed check. TCP/UDP can work
+or `ICMP_PROBE_FAILED` after a failed check. Private evidence is tied to
+its exact authenticated Session/Source/Profile/Destination generation: a
+change in selected route immediately returns to `UNVERIFIED`, and delayed
+results for an older route cannot revalidate a replacement. TCP/UDP can work
 even if ICMP is blocked; validate separately using applications/
 `link diagnose`.
 
@@ -161,8 +164,11 @@ incoming NIC discovery cannot distinguish DNAT/multiple interfaces.
 Linux uses the **maximum** of the two. Changing `all` can make effective
 filtering on OTHER interfaces weaker **or stronger** depending on their own
 settings: inspect the explicit host-level impact before approving. `Loose (2)`
-usually changes the receiving NIC only. No version/provider/IP allowlist
-prevents the operator from selecting Off.
+usually changes the receiving NIC only. A global `all=2` may already
+provide effective Loose without any NIC write; STL journals that shared
+baseline and reports later foreign changes rather than silently overwriting
+them. No version/provider/IP allowlist prevents the operator from selecting
+Off.
 
 Every confirmed change is journaled in STL's existing canonical State before
 writing the kernel and verified by readback, with ownership-aware sharing
@@ -170,14 +176,22 @@ between concurrently active Spoof Links. It is reapplied during STL's owned
 reboot Restore and returned to the verified original on Link Remove or
 explicit `rp-filter restore`. After an interrupted Remove, repeat that
 `restore` with the same original ID; unknown external sysctl changes are
-reported instead of overwritten blindly. This is an on-host Linux fix, **not**
-NAT traversal, provider-side anti-spoofing or a guarantee that the remote
+reported instead of overwritten blindly. The same reboot Restore unit remains
+installed while a removed Link has an unsettled `rp_filter` journal or exact
+protected-material retirement receipt. Following a crash, `restore --all`
+attempts both owner-scoped recoveries. Only after successful durable cleanup
+of the last owner can STL remove the shared recovery unit.
+This is an on-host Linux fix, **not** NAT traversal, provider-side anti-spoofing or a guarantee that the remote
 network will accept candidate packets.
 
 **Interrupted Remove:** The Engine can safely resume original
 protected quarantine via `stl link retire-spoof LINK_ID --confirm
 LINK_ID` only if the exact committed removal receipt is present.
-Retry is idempotent; foreign or uncertain files are preserved.
+Retry is idempotent; foreign or uncertain files are preserved. Its filesystem
+retirement order durably syncs the quarantine parent after rename, the
+protected-file unlinks while the exact receipt marker still exists, the
+subsequent marker unlink, and the removed quarantine parent **before**
+marking the State receipt retired.
 
 ## Interactive workflow
 
