@@ -35,7 +35,7 @@ type SpoofSetup struct {
 	recipientIP   netip.Addr
 	creatorPublic [32]byte
 	secret        [32]byte
-	outer         string // empty = original UDP profile; ICMP is explicit
+	outer         string // empty = original UDP; auto or explicit STL raw outer profile
 }
 
 func (s SpoofSetup) String() string {
@@ -54,14 +54,15 @@ func (s SpoofSetup) CreatorPublicKey() [32]byte        { return s.creatorPublic 
 // logging, generic status, desired State or CLI machine output.
 func (s SpoofSetup) Secret() [32]byte { return s.secret }
 func (s SpoofSetup) OuterProtocol() string {
-	if s.outer == "icmp" {
-		return "icmp"
+	if s.outer == "" {
+		return "udp"
 	}
-	return "udp"
+	return s.outer
 }
 
-// WithOuterProtocol chooses one immutable outer packet format in the single
-// offline Setup Code. No control-channel negotiation or carrier hopping.
+// WithOuterProtocol pins either one explicit outgoing profile or the STL-owned
+// auto policy in the original offline Code. Each endpoint discovers and
+// selects its own outgoing path independently without a live setup channel.
 func (s SpoofSetup) WithOuterProtocol(profile string) (SpoofSetup, error) {
 	if profile == "udp" {
 		profile = ""
@@ -74,8 +75,10 @@ func (s SpoofSetup) Validate() error {
 	if err := s.id.Validate(); err != nil {
 		return err
 	}
-	if s.outer != "" && s.outer != "icmp" {
-		return errors.New("Spoof Setup Code outer profile must be udp or icmp")
+	switch s.outer {
+	case "", "auto", "icmp", "tcp", "gre", "ipip", "proto58", "proto58-echo", "l2tpv3":
+	default:
+		return errors.New("Spoof Setup Code outer profile must be an STL-supported raw profile or auto")
 	}
 
 	for _, endpoint := range []netip.AddrPort{s.creator, s.recipient} {

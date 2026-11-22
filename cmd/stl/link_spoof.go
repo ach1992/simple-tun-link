@@ -84,7 +84,7 @@ func readProtectedOffer(path string) (pairing.SpoofSetup, error) {
 	}
 	return pairing.DecodeSensitiveSpoofSetup(string(raw))
 }
-func spoofLinkFromSetup(offer pairing.SpoofSetup, material spoofhost.Material, sourceFile, device string) (domain.Link, error) {
+func spoofLinkFromSetup(offer pairing.SpoofSetup, material spoofhost.Material, sourceFile, device, txProfile string) (domain.Link, error) {
 	role := material.Role()
 	if role != "creator" && role != "recipient" {
 		return domain.Link{}, errors.New("invalid local Spoof identity role")
@@ -106,16 +106,15 @@ func spoofLinkFromSetup(offer pairing.SpoofSetup, material spoofhost.Material, s
 	if err != nil {
 		return domain.Link{}, err
 	}
+	outer := offer.OuterProtocol()
 	encapsulation := domain.EncapUDP
-	outer := ""
-	if offer.OuterProtocol() == "icmp" {
-		outer = "icmp"
+	if outer != "" && outer != "udp" && outer != "auto" {
 		encapsulation = domain.EncapNative
 	}
 	link := domain.Link{ID: offer.LinkID(), Backend: domain.BackendSpoof, Encapsulation: encapsulation,
 		Underlay:  domain.Underlay{Local: local.Addr(), Peer: peer.Addr()},
 		Addresses: domain.LinkAddresses{Local: netip.PrefixFrom(privateLocal, 32), Peer: netip.PrefixFrom(privatePeer, 32)},
-		Spoof: domain.SpoofOptions{OuterProtocol: outer, Role: role, SourceFile: sourceFile, ListenPort: local.Port(),
+		Spoof: domain.SpoofOptions{OuterProtocol: outer, TxProfile: txProfile, Role: role, SourceFile: sourceFile, ListenPort: local.Port(),
 			PeerPort: peer.Port(), BindIPv4: local.Addr(), Interface: device,
 			LocalPublicKey: base64.RawURLEncoding.EncodeToString(self[:]),
 			PeerPublicKey:  remoteIdentity, MaterialSHA256: digest},
@@ -157,7 +156,8 @@ func linkSpoofCommand(args []string, stdout, stderr io.Writer, options *runtimeO
 		recipientIP := f.String("recipient-private", "", "recipient's tunnel IPv4")
 		sources := f.String("sources", spoof.DefaultSourcesPath, "local Source file path")
 		device := f.String("device", "", "explicit local egress interface (optional)")
-		outer := f.String("outer", "udp", "outer IPv4 protocol: udp or icmp")
+		outer := f.String("outer", "auto", "STL outer profile: auto, udp, icmp, tcp, gre, ipip, proto58, proto58-echo, l2tpv3")
+		txProfile := f.String("tx-outer", "", "optional local outgoing profile when --outer auto; remote peer may choose independently")
 		output := f.String("output", "", "private 0600 Setup Code filename")
 		asJSON := f.Bool("json", false, "machine response")
 		if f.Parse(args[1:]) != nil || len(f.Args()) != 0 {
@@ -205,7 +205,7 @@ func linkSpoofCommand(args []string, stdout, stderr io.Writer, options *runtimeO
 		if err != nil {
 			return spoofCLIError(err, stderr)
 		}
-		link, err := spoofLinkFromSetup(offer, m, *sources, *device)
+		link, err := spoofLinkFromSetup(offer, m, *sources, *device, *txProfile)
 		if err != nil {
 			return spoofCLIError(err, stderr)
 		}
@@ -246,6 +246,7 @@ func linkSpoofCommand(args []string, stdout, stderr io.Writer, options *runtimeO
 		setup := f.String("setup", "", "private creator-issued Setup Code file")
 		sources := f.String("sources", spoof.DefaultSourcesPath, "recipient-local source list")
 		device := f.String("device", "", "optional recipient-local egress interface")
+		txProfile := f.String("tx-outer", "", "optional local outgoing profile when Code uses auto; use same flag for exact creator resume")
 		asJSON := f.Bool("json", false, "machine response")
 		if f.Parse(args[1:]) != nil || len(f.Args()) != 0 {
 			return 2
@@ -281,7 +282,7 @@ func linkSpoofCommand(args []string, stdout, stderr io.Writer, options *runtimeO
 			if own != offer.CreatorPublicKey() {
 				return spoofCLIError(errors.New("Creator Setup Code and original public key differ"), stderr)
 			}
-			link, err := spoofLinkFromSetup(offer, m, *sources, *device)
+			link, err := spoofLinkFromSetup(offer, m, *sources, *device, *txProfile)
 			if err != nil {
 				return spoofCLIError(err, stderr)
 			}
@@ -338,7 +339,7 @@ func linkSpoofCommand(args []string, stdout, stderr io.Writer, options *runtimeO
 		} else {
 			return spoofCLIError(err, stderr)
 		}
-		link, err := spoofLinkFromSetup(offer, m, *sources, *device)
+		link, err := spoofLinkFromSetup(offer, m, *sources, *device, *txProfile)
 		if err != nil {
 			return spoofCLIError(err, stderr)
 		}

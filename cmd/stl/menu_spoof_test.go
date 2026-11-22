@@ -24,7 +24,7 @@ func TestGuidedSpoofCreateConfirmationIsEffectFreeBeforeYES(t *testing.T) {
 	}
 	output := filepath.Join(root, "setup.code")
 	answers := strings.Join([]string{
-		source, "1", "192.0.2.10:42001", "198.51.100.20:42002",
+		source, "1", "", "192.0.2.10:42001", "198.51.100.20:42002",
 		"10.245.62.1", "10.245.62.2", "", output, "no", "",
 	}, "\n")
 	input := strings.NewReader(answers)

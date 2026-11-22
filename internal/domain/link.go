@@ -178,9 +178,11 @@ type MASQUEOptions struct {
 // provider. No bootstrap secret or private X25519 identity belongs in State.
 // The role describes setup provenance, NOT an asymmetric data direction.
 type SpoofOptions struct {
-	// Empty means legacy/default raw UDP; ICMP is an explicit separately
-	// authenticated profile, not automatic transport hopping.
+	// Empty means legacy/default raw UDP. "auto" tests all STL raw wire
+	// profiles independently on each endpoint; explicit names lock one
+	// profile without changing the original authenticated Link.
 	OuterProtocol  string     `json:"outer_protocol,omitempty"`
+	TxProfile      string     `json:"tx_profile,omitempty"` // endpoint-local outbound override only when OuterProtocol=auto
 	Role           string     `json:"role"`
 	SourceFile     string     `json:"source_file"`
 	ListenPort     uint16     `json:"listen_port"`
@@ -217,11 +219,24 @@ func (l Link) ValidateSpoofTopology() error {
 		return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof", "Spoof endpoint role must be creator or recipient")
 	}
 	profile := s.OuterProtocol
-	if profile != "" && profile != "udp" && profile != "icmp" {
+	switch profile {
+	case "", "udp", "auto", "icmp", "tcp", "gre", "ipip", "proto58", "proto58-echo", "l2tpv3":
+	default:
 		return stlerr.New(stlerr.CodeUnsupported, "validate_link", string(l.ID), "spoof", "unsupported Spoof outer protocol")
 	}
+	if s.TxProfile != "" {
+		if profile != "auto" {
+			return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof",
+				"local outgoing profile override requires auto receive policy")
+		}
+		switch s.TxProfile {
+		case "udp", "icmp", "tcp", "gre", "ipip", "proto58", "proto58-echo", "l2tpv3":
+		default:
+			return stlerr.New(stlerr.CodeInvalid, "validate_link", string(l.ID), "spoof", "invalid local outgoing profile override")
+		}
+	}
 	requiredEncap := EncapUDP
-	if profile == "icmp" {
+	if profile != "" && profile != "udp" && profile != "auto" {
 		requiredEncap = EncapNative
 	}
 	if l.Encapsulation != requiredEncap || !l.Underlay.Local.Is4() || !l.Underlay.Peer.Is4() ||

@@ -221,18 +221,40 @@ Authenticated handshake, bilateral delivery and verified private IP
 application traffic are **distinct evidence stages**. A locally created
 pending service and a successful send do not imply `CONNECTED`.
 Network adjustments, when genuinely required, must be inspected,
-link-attributed, reversible and lifecycle-owned. The `udp` and `icmp`
-outer profiles are independently selected **at Create**, pinned in the
-single offline Code and applied to the same per-Link Noise/TUN process.
-The ICMP receive identifier is distinct from a UDP receive port. There
-is no speculative carrier-switching protocol or unsupported outer TCP
-handshake. [The Spoof operator runbook](SPOOF-CARRIER.md) distinguishes
-inner private traffic from outer transport, records isolated test
-evidence and explicitly marks the modified ICMP Echo Reply profile as
-**awaiting renewed managed end-to-end acceptance**. Normal STL real-server runtime must not contain laboratory
-or public/production host restrictions; the current Master's permission
-to execute tests only in owned private environments is a separate
-execution gate. Full independent review, host/network acceptance,
+Link-attributed, reversible and lifecycle-owned. The single offline Code
+pins either a manually fixed STL raw outer profile or `auto`. With
+`auto`, each endpoint receives all available profile formats and
+independently discovers the best working **Source IPv4 + packet profile**
+for its outgoing direction. Optional `--tx-outer` overrides let A and B
+explicitly pin different outgoing formats in separate local protected
+configs, without another Code. This is part of the **original**
+Noise-authenticated per-Link state machine and canonical Engine; there
+is no second tunnel manager, separate live initial negotiation, or
+assumption that a raw TCP RST-shaped packet establishes TCP.
+
+An original per-Link `history.json` stores every previously confirmed
+Source/profile combination (most recent first), mode 0600. On outage or
+reboot, the helper tries still-listed historical paths in a few bounded
+warm attempts before exhaustive, fair and indefinitely repeating
+Source × profile discovery. A failed IP never excludes its /24, /16
+or other packet profiles. A candidate is promoted only when
+the authenticated real peer confirms the exact outgoing pair.
+Original exact-owned Link Remove retires the history alongside material;
+a Source removed from the current operator file is never transmitted
+even if present in history.
+
+Outer wire profiles are STL-owned raw IPv4 UDP, ICMP Echo Reply,
+TCP-RST-shaped, GRE-shaped, nested IPIP, two protocol-58 shapes, and
+an RFC3931-style protocol-115 data session header carrying an STL
+Noise frame. They are not drop-in conventional GRE, TCP session, IPIP
+or native L2TPv3 backends. All eight profiles and the asymmetric
+UDP/ICMP combination were authenticated and carried bilateral private
+ICMP on owned private Linux guests; no WAN interoperability or
+provider-filter-bypass claim is implied. See the
+[Spoof operator runbook](SPOOF-CARRIER.md). Real-server runtime
+does not contain test-only environment restrictions; present
+development testing is limited by separate authorized execution scope.
+Full independent review, host/network acceptance,
 merge/release remain pending. Existing Stable behavior is unchanged.
 
 ## 4. Control plane vs data plane

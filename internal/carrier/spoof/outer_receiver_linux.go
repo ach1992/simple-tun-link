@@ -34,11 +34,16 @@ func (r *udpFrameReceiver) ReadFrame(payload []byte) (int, netip.AddrPort, error
 // remains the default; ICMP requires the separately validated raw path.
 func OpenFrameReceiver(local netip.AddrPort, profile, device string) (FrameReceiver, error) {
 	switch profile {
-	case "icmp":
+	case ProfileAuto:
+		return OpenMultiProfileReceiver(local, device)
+	case ProfileICMP:
 		return OpenICMPReceiver(local, device)
-	case "", "udp": // explicitly supported default outer profile
+	case "", ProfileUDP: // preserve published draft explicit UDP default
 	default:
-		return nil, fmt.Errorf("unsupported Spoof outer receiver profile %q", profile)
+		if !ValidProfile(profile) {
+			return nil, fmt.Errorf("unsupported Spoof outer receiver profile %q", profile)
+		}
+		return OpenRawProfileReceiver(local, profile, device)
 	}
 	conn, err := OpenReceiver(local)
 	if err != nil {

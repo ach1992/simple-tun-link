@@ -84,12 +84,12 @@ func BuildIPv4UDP(source, destination netip.Addr, sourcePort, destinationPort ui
 // candidate inventory, and optionally one verified route-selected device.
 // It cannot be used to scan other destinations or invent source addresses.
 type RawSender struct {
-	fd        int
-	peer      netip.AddrPort
-	localPort uint16
-	allowed   map[netip.Addr]struct{}
-	mu        sync.Mutex
-	icmp      bool
+	fd             int
+	peer           netip.AddrPort
+	localPort      uint16
+	allowed        map[netip.Addr]struct{}
+	mu             sync.Mutex
+	defaultProfile string
 }
 
 func OpenRawSender(peer netip.AddrPort, localPort uint16, sources Inventory, outputInterface string) (*RawSender, error) {
@@ -123,7 +123,7 @@ func OpenRawSender(peer netip.AddrPort, localPort uint16, sources Inventory, out
 			return fail(fmt.Errorf("bind sending device %q: %w", outputInterface, err))
 		}
 	}
-	return &RawSender{fd: fd, peer: peer, localPort: localPort, allowed: allowed}, nil
+	return &RawSender{fd: fd, peer: peer, localPort: localPort, allowed: allowed, defaultProfile: ProfileUDP}, nil
 }
 
 // OpenICMPSender uses the same pinned real peer and local user Source
@@ -134,7 +134,7 @@ func OpenICMPSender(peer netip.AddrPort, localID uint16, sources Inventory, outp
 	if err != nil {
 		return nil, err
 	}
-	s.icmp = true
+	s.defaultProfile = ProfileICMP
 	return s, nil
 }
 func BuildIPv4ICMP(source, destination netip.Addr, receiverID uint16, payload []byte) ([]byte, error) {
@@ -171,28 +171,36 @@ func (s *RawSender) Send(candidate netip.Addr, frame []byte) error {
 	if s == nil {
 		return errors.New("raw sender absent")
 	}
+	profile := s.defaultProfile
+	if profile == "" {
+		profile = ProfileUDP
+	}
+	return s.SendProfile(candidate, profile, frame)
+}
+
+// SendProfile builds only one explicitly requested STL outer wire profile and
+// always sends to the existing fixed REAL peer. A successful local Sendto
+// does not prove remote receipt, decryption or bilateral connectivity.
+func (s *RawSender) SendProfile(candidate netip.Addr, profile string, frame []byte) error {
+	if s == nil {
+		return errors.New("raw sender absent")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.fd < 0 {
 		return errors.New("raw sender closed")
 	}
 	if _, accepted := s.allowed[candidate]; !accepted {
-		return errors.New("source address is not present in this endpoint's current local inventory")
+		return errors.New("source address absent from this endpoint's current local inventory")
 	}
-	var packet []byte
-	var err error
-	if s.icmp {
-		packet, err = BuildIPv4ICMP(candidate, s.peer.Addr(), s.peer.Port(), frame)
-	} else {
-		packet, err = BuildIPv4UDP(candidate, s.peer.Addr(), s.localPort, s.peer.Port(), frame)
-	}
+	packet, err := BuildOuterPacket(profile, candidate, s.peer.Addr(), s.localPort, s.peer.Port(), frame)
 	if err != nil {
 		return err
 	}
 	dst := unix.SockaddrInet4{}
 	copy(dst.Addr[:], s.peer.Addr().AsSlice())
-	if err := unix.Sendto(s.fd, packet, 0, &dst); err != nil {
-		return fmt.Errorf("raw send to configured real peer failed (not delivery proof): %w", err)
+	if err = unix.Sendto(s.fd, packet, 0, &dst); err != nil {
+		return fmt.Errorf("STL raw %s send to configured real peer failed (not receipt proof): %w", profile, err)
 	}
 	return nil
 }

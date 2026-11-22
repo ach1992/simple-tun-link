@@ -1345,26 +1345,48 @@ file, not pasted into an ordinary terminal. The exact per-host Source file
 is checked and can be Rechecked before confirmation.
 
 The standalone root-only commands are `stl link create-spoof`,
-`stl link import-spoof`, `stl link resume-spoof`, and
-`stl link spoof-status LINK_ID --json`. The optional
-`--outer udp|icmp` on Create selects **one immutable outer profile**;
-Import/Resume read the same choice from the single confidential
-`stl-spoof-v1.` Setup Code. The numeric endpoint `PORT` means
-UDP receive port for `udp` and ICMP Echo receive identifier for `icmp`.
-Every endpoint keeps its **own** local Source IPv4 file. There is no
-owner/ASN/geographic Source check or hidden cross-protocol fallback.
-Unrelated TCP/UDP/ICMP **inside** this encrypted private Link are
-transported over whichever outer profile was explicitly chosen.
+`stl link import-spoof`, `stl link resume-spoof` and
+`stl link spoof-status LINK_ID --json`. On Create,
+`--outer auto` (default) independently discovers a working Source
+IPv4 and one of the STL raw outer packet profiles (UDP/17, ICMP/1,
+TCP-looking RST/6, GRE-shaped/47, nested IPIP/4, bare/echo-shaped
+protocol 58 and L2TPv3-style/115). `--outer PROFILE` instead pins one
+profile for both endpoints using the original confidential
+`stl-spoof-v1.` Setup Code. The profile numbers are raw-IP identifiers,
+**not** live TCP sessions, conventional GRE/IPIP endpoints, valid ICMPv6
+over IPv4, or full kernel L2TPv3 pseudowires.
+
+An optional `--tx-outer PROFILE` flag, valid only with a Code's
+`--outer auto`, locks **only the local endpoint's outgoing profile**.
+For example Create on A with `--outer auto --tx-outer udp` and
+Import on B with `--tx-outer icmp` accepts asymmetric A→B UDP and
+B→A ICMP on a single authenticated private TUN Link. B's local
+override does not change the private Code or A's policy. The guided
+menu includes the same Auto/default or explicit profile choice plus
+the optional local Auto override. Recipient B has its own independent
+Source inventory file; none crosses the offline Code boundary.
+
+After connectivity failure, the helper first retries all available
+historically confirmed (Source, profile) combinations with a few
+bounded passes, then exhaustively and repeatedly checks the full
+current local inventory times its enabled profiles. Results are pinned
+to the verified Link identity, stored in mode 0600 original per-Link
+history across reboots, and removed by original Engine-owned Remove.
+No country/ASN/address-block permission restriction or arbitrary
+candidate-count ceiling is imposed by the product. Status distinguishes
+scheduled source/profile attempts from authenticated bilateral
+connectivity, including the selected Source/profile, history count
+and recovery stage. Inner ICMP/TCP/UDP can run inside any proven profile.
 
 A successful CLI Create/Import records **local provisioning only**,
 not remote reachability. Canonical `link status`, manual
 `link diagnose`, boot Restore and exact-owner
 `link remove LINK_ID --confirm LINK_ID` apply. The original A's
-`resume-spoof --setup ORIGINAL_FILE` reuses the original identity if
-a prior provisioning attempt was interrupted. Do not re-import or
-reissue a retired Link ID. See
-[Spoof operator runbook](SPOOF-CARRIER.md) for precise examples,
-test evidence and release limitations.
+`resume-spoof --setup ORIGINAL_FILE` reuses the same protected
+identity on interrupted provisioning; repeat its original
+`--tx-outer` value if manually overridden. Retired Link IDs cannot
+be reissued. See the [Spoof runbook](SPOOF-CARRIER.md) for commands
+and actual two-container evidence, limits and release gates.
 
 ## MASQUE CONNECT-IP Carrier (v0.1.28+)
 

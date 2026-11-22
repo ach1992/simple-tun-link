@@ -17,13 +17,24 @@ saved Link is **not** proof that packets reach its peer.
 | IPsec | Native IKEv2/XFRM, ESP or NAT-T; gated host preparation | Yes |
 | MASQUE CONNECT-IP (v0.1.28+) | Native IPv4 TUN over HTTP/2 TLS/TCP; private mTLS default and optional request-bearer Public TLS where available in the installed build | Yes |
 
-**In development, NOT in the published Stable release:** the separate
-[Spoof Direct TUN Carrier](docs/SPOOF-CARRIER.md) (Issue #262) carries
-encrypted private IPv4 ICMP/TCP/UDP over explicit raw IPv4 UDP or
-ICMP profiles. Both UDP and corrected non-reflecting ICMP Echo Reply
-outer profiles passed isolated two-container authenticated end-to-end tests.
-This does not imply the feature is released, accepts public Internet traffic or bypasses
-provider anti-spoofing. Outer TCP is not a supported Spoof profile.
+**In development, NOT in the published Stable release:** the
+[Spoof Direct TUN Carrier](docs/SPOOF-CARRIER.md) (Issue #262) encrypts
+private IPv4 ICMP/TCP/UDP within one authenticated managed Link.
+Its `Auto` policy searches local operator-supplied Source IPv4 addresses
+and STL-owned raw outer packet formats: UDP, unsolicited ICMP Echo Reply,
+TCP-looking RST packets, GRE-shaped, nested IPIP, bare/echo-shaped protocol
+58 and an L2TPv3-style protocol-115 data header. Both endpoints can choose
+different outbound Source/profile combinations, save authenticated working
+pairs across restarts, and retry previously working pairs before exhaustive
+rediscovery. Operators can instead pin a local outgoing profile.
+**All eight outer packet profiles have carried bilateral authenticated private
+ICMP in two isolated Linux containers.** This is not proof of public WAN
+reachability, stealth or full native GRE/IPIP/L2TP interoperability. In
+particular, TCP-looking packets are **not** a real established TCP connection
+and the protocol-115 option is **not** STL's existing native L2TPv3 Backend.
+No Spoof code has been merged into Stable or deployed to real production
+servers. See the [operator guide](docs/SPOOF-CARRIER.md) for actual support,
+source-list capacity, exact testing and remaining gates.
 
 Different transports have different kernel, firewall, network and optional
 helper requirements. STL does not automatically configure provider firewalls,

@@ -31,8 +31,14 @@ type RuntimeStatus struct {
 	PID                    int           `json:"pid"`
 	State                  string        `json:"state"`
 	SelectedSource         string        `json:"selected_source,omitempty"`
+	SelectedProfile        string        `json:"selected_profile,omitempty"`
+	RecentWorkingPaths     int           `json:"recent_working_paths"`
+	RecoveryStage          string        `json:"recovery_stage,omitempty"`
+	ActiveReceiveProfiles  []string      `json:"active_receive_profiles,omitempty"`
+	UnavailableReceivers   []string      `json:"unavailable_receivers,omitempty"`
 	SourceCandidates       int           `json:"source_candidates"`
 	SourceScanPosition     int           `json:"source_scan_position"`
+	SourceScanProfileIndex int           `json:"source_scan_profile_index"`
 	SourceScanPasses       uint64        `json:"source_scan_passes"`
 	Authenticated          bool          `json:"authenticated"`
 	BilateralConfirmed     bool          `json:"bilateral_confirmed"`
@@ -52,6 +58,14 @@ type Agent struct {
 	inventory         carrier.Inventory
 	cursor            carrier.DiscoveryCursor
 	chosen            netip.Addr
+	chosenProfile     string
+	profiles          []string
+	historicalPaths   []carrier.SourcePath
+	warmPaths         []carrier.SourcePath
+	warmPosition      int
+	warmPass          int
+	warmEnabled       bool
+	stage             string
 	handshake         *carrier.Handshake
 	session           *carrier.Session
 	attempt           [16]byte
@@ -132,11 +146,15 @@ func (a *Agent) publishStatus() {
 		a.status.State = "WAITING_FOR_PEER"
 	}
 	a.status.SelectedSource = ""
+	a.status.SelectedProfile = ""
 	if a.chosen.IsValid() {
 		a.status.SelectedSource = a.chosen.String()
+		a.status.SelectedProfile = a.chosenProfile
 	}
+	a.status.RecentWorkingPaths = len(a.historicalPaths)
+	a.status.RecoveryStage = a.stage
 	a.status.SourceCandidates = len(a.inventory.Addresses)
-	a.status.SourceScanPosition, a.status.SourceScanPasses = a.cursor.Progress()
+	a.status.SourceScanPosition, a.status.SourceScanProfileIndex, a.status.SourceScanPasses = a.cursor.PathProgress()
 	a.status.Authenticated = a.session != nil
 	a.status.BilateralConfirmed = a.connected
 	if !a.lastAuth.IsZero() {
@@ -217,7 +235,9 @@ func (a *Agent) refreshSources() {
 		a.inventory = carrier.Inventory{}
 		_ = a.cursor.ReplaceInventory(a.inventory)
 		a.chosen = netip.Addr{}
+		a.chosenProfile = ""
 		if a.connected {
+			a.beginRecovery()
 			a.connected = false
 			a.session = nil
 			a.handshake = nil
@@ -250,45 +270,167 @@ func (a *Agent) refreshSources() {
 	if err := a.cursor.ReplaceInventory(inv); err != nil {
 		a.record(err)
 	}
+	if !a.connected {
+		a.beginRecovery()
+	}
 	if old != nil {
 		_ = old.Close()
 	}
 	if a.chosen.IsValid() && !slices.Contains(inv.Addresses, a.chosen) {
+		a.beginRecovery()
 		a.chosen = netip.Addr{}
+		a.chosenProfile = ""
 		a.connected = false
 		a.session = nil
 		a.handshake = nil
 		a.record(errors.New("previous selected Source disappeared; rediscovery in same Link"))
 	}
 }
+
+// The locally pinned profile is always honored. Auto is the only policy
+// that actively tests/switches outer profiles on the same original Link.
+func (a *Agent) enabledProfiles() []string {
+	if len(a.profiles) > 0 {
+		return a.profiles
+	}
+	policy := a.link.Spoof.OuterProtocol
+	if a.link.Spoof.TxProfile != "" {
+		policy = a.link.Spoof.TxProfile
+	}
+	profiles, err := carrier.TransmitProfiles(policy)
+	if err != nil {
+		return nil
+	}
+	a.profiles = profiles
+	return profiles
+}
+
+func (a *Agent) beginRecovery() {
+	a.warmPaths = a.warmPaths[:0]
+	for _, path := range a.historicalPaths {
+		if a.knownSource(path) {
+			a.warmPaths = append(a.warmPaths, path)
+		}
+	}
+	a.warmPosition = 0
+	a.warmPass = 0
+	a.warmEnabled = len(a.warmPaths) > 0
+	if a.warmEnabled {
+		a.stage = "RETRY_PREVIOUSLY_WORKING"
+	} else {
+		a.stage = "EXHAUSTIVE_SOURCE_PROFILE_SCAN"
+	}
+}
+
+func (a *Agent) knownSource(path carrier.SourcePath) bool {
+	if !path.Valid() || !a.cursor.Contains(path.Source) {
+		return false
+	}
+	return slices.Contains(a.enabledProfiles(), path.Profile)
+}
+
 func (a *Agent) sendSelected(encoded []byte) error {
 	if a.sender == nil {
 		return errors.New("local Source file unavailable")
 	}
-	if a.chosen.IsValid() {
-		return a.sender.Send(a.chosen, encoded)
+	if a.chosen.IsValid() && a.chosenProfile != "" {
+		return a.sender.SendProfile(a.chosen, a.chosenProfile, encoded)
 	}
 	return a.sendCandidates(encoded)
 }
+
+func (a *Agent) nextCandidatePaths() ([]carrier.SourcePath, error) {
+	budget := carrier.DiscoveryBatchSize(len(a.inventory.Addresses))
+	if budget == 0 {
+		return nil, errors.New("no local Source candidates")
+	}
+	// Each retained path is tried up to three times in separate passes
+	// before falling back to the complete inventory x profile matrix.
+	// "Three" is NOT a failure ceiling or a permanent disqualification:
+	// complete scans repeat indefinitely, even for these same paths.
+	if a.warmEnabled {
+		if len(a.warmPaths) > 0 && a.warmPass < 3 {
+			left := min(budget, len(a.warmPaths)-a.warmPosition)
+			paths := append([]carrier.SourcePath(nil), a.warmPaths[a.warmPosition:a.warmPosition+left]...)
+			a.warmPosition += left
+			if a.warmPosition >= len(a.warmPaths) {
+				a.warmPosition = 0
+				a.warmPass++
+			}
+			a.stage = "RETRY_PREVIOUSLY_WORKING"
+			return paths, nil
+		}
+		a.warmEnabled = false
+	}
+	a.stage = "EXHAUSTIVE_SOURCE_PROFILE_SCAN"
+	return a.cursor.NextPathBatch(a.enabledProfiles(), budget)
+}
+
 func (a *Agent) sendCandidates(encoded []byte) error {
 	if a.sender == nil {
 		return errors.New("raw source sender unavailable")
 	}
-	sources, err := a.cursor.NextBatch(carrier.DiscoveryBatchSize(len(a.inventory.Addresses)))
+	paths, err := a.nextCandidatePaths()
 	if err != nil {
 		return err
 	}
 	var first error
-	for i, candidate := range sources {
-		if i != 0 && len(sources) > 8 {
+	sent := 0
+	for _, path := range paths {
+		if sent > 0 && len(paths) > 8 {
 			time.Sleep(time.Millisecond)
 		}
-		if e := a.sender.Send(candidate, encoded); e != nil && first == nil {
+		if e := a.sender.SendProfile(path.Source, path.Profile, encoded); e != nil && first == nil {
 			first = e
 		}
+		sent++
 	}
 	return first
 }
+
+func (a *Agent) confirmedPath(path carrier.SourcePath) bool {
+	if !a.knownSource(path) {
+		return false
+	}
+	a.chosen = path.Source
+	a.chosenProfile = path.Profile
+	a.cursor.PreferredSucceeded(path.Source)
+	return true
+}
+
+func (a *Agent) rememberCurrentPath() {
+	path := carrier.SourcePath{Source: a.chosen, Profile: a.chosenProfile}
+	if !a.knownSource(path) {
+		return
+	}
+	updated, changed := rememberPath(a.historicalPaths, path)
+	if !changed {
+		return
+	}
+	// Keep the authenticated candidate in memory if persistence encounters
+	// an error, but surface the exact failure: a reboot would forget it.
+	a.historicalPaths = updated
+	if err := writeHistory(a.root, a.link.ID, updated); err != nil {
+		a.record(fmt.Errorf("persist confirmed Spoof Source/profile history: %w", err))
+	}
+}
+
+func (a *Agent) applyAuthenticatedHint(payload []byte) bool {
+	if len(payload) != 4 && len(payload) != 5 {
+		return false
+	}
+	var source [4]byte
+	copy(source[:], payload[:4])
+	profile := a.link.Spoof.OuterProtocol
+	if profile == "" {
+		profile = carrier.ProfileUDP
+	}
+	if len(payload) == 5 {
+		profile = carrier.ProfileFromID(payload[4])
+	}
+	return a.confirmedPath(carrier.SourcePath{Source: netip.AddrFrom4(source), Profile: profile})
+}
+
 func (a *Agent) sendPending() error {
 	if a.pendingPayload == nil {
 		return nil
@@ -326,6 +468,7 @@ func (a *Agent) startRecipient() error {
 	a.pendingKind = carrier.KindHandshake1
 	a.pendingPayload = first
 	a.chosen = netip.Addr{}
+	a.chosenProfile = ""
 	return a.sendPending()
 }
 func (a *Agent) forgetHandshake() {
@@ -335,8 +478,9 @@ func (a *Agent) forgetHandshake() {
 	a.pendingPayload = nil
 	a.lastPendingSend = time.Time{}
 	a.chosen = netip.Addr{}
+	a.chosenProfile = ""
 }
-func (a *Agent) received(frame carrier.Frame, outer netip.AddrPort) error {
+func (a *Agent) received(frame carrier.Frame, outer netip.AddrPort, outerProfile string) error {
 	if frame.LinkID != a.link.ID {
 		return nil
 	}
@@ -367,7 +511,11 @@ func (a *Agent) received(frame carrier.Frame, outer netip.AddrPort) error {
 		// appear in sources.txt while its actual network path is dead.
 		// Re-probe the bounded local inventory until an authenticated
 		// KeepaliveAck identifies a working outgoing Source.
+		if a.connected {
+			a.beginRecovery()
+		}
 		a.chosen = netip.Addr{}
+		a.chosenProfile = ""
 		a.handshake = h
 		a.attempt = frame.Attempt
 		a.pendingKind = carrier.KindHandshake2
@@ -388,10 +536,9 @@ func (a *Agent) received(frame carrier.Frame, outer netip.AddrPort) error {
 			a.pendingKind = carrier.KindHandshake3
 			a.pendingPayload = reply
 			a.pendingAt = time.Now()
-			// The observed responder outer source is a directional hint only, not identity.
-			if slices.Contains(a.inventory.Addresses, outer.Addr()) {
-				a.cursor.PreferredSucceeded(outer.Addr())
-			}
+			// The other endpoint's claimed Source cannot be our own
+			// transmitted-Source hint. Only authenticated feedback later
+			// tells this endpoint which local Source/profile reached it.
 			return a.sendPending()
 		}
 		if a.material.Role() == "creator" && frame.Kind == carrier.KindHandshake3 && a.pendingKind == carrier.KindHandshake2 {
@@ -410,7 +557,7 @@ func (a *Agent) received(frame carrier.Frame, outer netip.AddrPort) error {
 			a.session = session
 			a.pendingPayload = nil
 			a.lastAuth = time.Now()
-			return a.sendControl(carrier.KindKeepalive, outer.Addr())
+			return a.sendControl(carrier.KindKeepalive, outer.Addr(), outerProfile)
 		}
 	}
 	if a.session == nil {
@@ -426,35 +573,28 @@ func (a *Agent) received(frame carrier.Frame, outer netip.AddrPort) error {
 	} // don't advertise an unconfirmed path
 	switch kind {
 	case carrier.KindKeepalive:
-		if len(plain) == 4 {
-			var address [4]byte
-			copy(address[:], plain)
-			candidate := netip.AddrFrom4(address)
-			if slices.Contains(a.inventory.Addresses, candidate) {
-				a.chosen = candidate
-				a.cursor.PreferredSucceeded(candidate)
-			}
-		}
-		if err = a.sendControl(carrier.KindKeepaliveAck, outer.Addr()); err != nil {
+		a.applyAuthenticatedHint(plain)
+		if err = a.sendControl(carrier.KindKeepaliveAck, outer.Addr(), outerProfile); err != nil {
 			return err
 		}
 	case carrier.KindKeepaliveAck:
-		if len(plain) == 4 {
-			var address [4]byte
-			copy(address[:], plain)
-			candidate := netip.AddrFrom4(address)
-			if slices.Contains(a.inventory.Addresses, candidate) {
-				a.chosen = candidate
-				a.cursor.PreferredSucceeded(candidate)
-			}
-		}
-		if !a.connected {
-			a.connected = true
-			a.status.LastError = ""
-			fmt.Fprintln(os.Stderr, "spoof link", a.link.ID, "authenticated bilateral path confirmed; private IPv4 ready")
-			// Confirm the creator has proof that the recipient saw its response.
-			if err = a.sendControl(carrier.KindKeepaliveAck, outer.Addr()); err != nil {
-				return err
+		// A completed Noise exchange alone does not establish a working
+		// outgoing path. The real peer must authenticate an observation
+		// of the exact Source/profile that we sent to it.
+		if a.applyAuthenticatedHint(plain) {
+			// Authenticated route feedback may promote a new working path
+			// even during an existing session; preserve EVERY newly
+			// confirmed Source/profile combination, not only the first.
+			a.rememberCurrentPath()
+			if !a.connected {
+				a.connected = true
+				a.stage = "CONNECTED"
+				a.status.LastError = ""
+				fmt.Fprintln(os.Stderr, "spoof link", a.link.ID,
+					"authenticated bilateral path confirmed:", a.chosen.String(), a.chosenProfile)
+				if err = a.sendControl(carrier.KindKeepaliveAck, outer.Addr(), outerProfile); err != nil {
+					return err
+				}
 			}
 		}
 	case carrier.KindData:
@@ -465,16 +605,18 @@ func (a *Agent) received(frame carrier.Frame, outer netip.AddrPort) error {
 	}
 	return nil
 }
-func (a *Agent) sendControl(kind carrier.FrameKind, observedPeerSource netip.Addr) error {
+func (a *Agent) sendControl(kind carrier.FrameKind, observedPeerSource netip.Addr, observedProfile string) error {
 	if a.session == nil {
 		return nil
 	}
-	// This address is an authenticated observation exchanged only over Noise.
-	// It does not authorize use of any Source absent from the LOCAL file.
-	payload := make([]byte, 4)
+	// The observation is exchanged only inside Noise AEAD. The receiver
+	// verifies it belongs to its own CURRENT source inventory and enabled
+	// TX policy before selecting it. The hint is not an identity.
+	payload := make([]byte, 5)
 	if observedPeerSource.Is4() {
 		copy(payload, observedPeerSource.AsSlice())
 	}
+	payload[4] = carrier.ProfileID(observedProfile)
 	encrypted, err := a.session.Seal(kind, payload)
 	if err != nil {
 		return err
@@ -492,9 +634,10 @@ func (a *Agent) tick() {
 		if time.Since(a.lastAuth) > 12*time.Second {
 			a.record(errors.New("authenticated peer liveness expired; rediscovering without re-pair"))
 			a.forgetHandshake()
+			a.beginRecovery()
 		} else if time.Since(a.lastSentKeepalive) >= 3*time.Second {
 			a.lastSentKeepalive = time.Now()
-			if err := a.sendControl(carrier.KindKeepalive, netip.Addr{}); err != nil {
+			if err := a.sendControl(carrier.KindKeepalive, netip.Addr{}, ""); err != nil {
 				a.record(err)
 			}
 			return
@@ -524,15 +667,16 @@ func (a *Agent) tick() {
 	}
 	if a.session != nil && time.Since(a.lastSentKeepalive) > 800*time.Millisecond {
 		a.lastSentKeepalive = time.Now()
-		if err := a.sendControl(carrier.KindKeepalive, netip.Addr{}); err != nil {
+		if err := a.sendControl(carrier.KindKeepalive, netip.Addr{}, ""); err != nil {
 			a.record(err)
 		}
 	}
 }
 
 type receivedFrame struct {
-	frame carrier.Frame
-	outer netip.AddrPort
+	frame   carrier.Frame
+	outer   netip.AddrPort
+	profile string
 }
 
 func (a *Agent) run(ctx context.Context) error {
@@ -555,6 +699,30 @@ func (a *Agent) run(ctx context.Context) error {
 	}()
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
+	history, historyErr := readHistory(a.root, a.link.ID)
+	if historyErr != nil {
+		a.record(fmt.Errorf("load prior confirmed Spoof paths: %w", historyErr))
+	}
+	a.historicalPaths = history
+	if len(history) > 0 {
+		a.beginRecovery()
+	}
+	if r, ok := receiver.(interface {
+		AvailableProfiles() []string
+		FailedProfiles() []string
+	}); ok {
+		a.status.ActiveReceiveProfiles = r.AvailableProfiles()
+		a.status.UnavailableReceivers = r.FailedProfiles()
+		if len(a.status.UnavailableReceivers) > 0 {
+			fmt.Fprintln(os.Stderr, "spoof link", a.link.ID, "unavailable auto receive profiles:", a.status.UnavailableReceivers)
+		}
+	} else {
+		profile := a.link.Spoof.OuterProtocol
+		if profile == "" {
+			profile = carrier.ProfileUDP
+		}
+		a.status.ActiveReceiveProfiles = []string{profile}
+	}
 	a.refreshSources()
 	a.publishStatus()
 	defer func() { a.connected = false; a.status.State = "STOPPED"; a.publishStatus() }()
@@ -584,7 +752,19 @@ func (a *Agent) run(ctx context.Context) error {
 		buffer := make([]byte, 4096)
 		for ctx.Err() == nil {
 			_ = receiver.SetReadDeadline(time.Now().Add(400 * time.Millisecond))
-			n, outer, err := receiver.ReadFrame(buffer)
+			var n int
+			var outer netip.AddrPort
+			var outerProfile string
+			var err error
+			if rp, ok := receiver.(carrier.ProfileFrameReceiver); ok {
+				n, outer, outerProfile, err = rp.ReadProfileFrame(buffer)
+			} else {
+				n, outer, err = receiver.ReadFrame(buffer)
+				outerProfile = a.link.Spoof.OuterProtocol
+				if outerProfile == "" {
+					outerProfile = carrier.ProfileUDP
+				}
+			}
 			if err != nil {
 				if e, ok := err.(net.Error); ok && e.Timeout() {
 					continue
@@ -602,7 +782,7 @@ func (a *Agent) run(ctx context.Context) error {
 				continue
 			}
 			select {
-			case frames <- receivedFrame{frame, outer}:
+			case frames <- receivedFrame{frame: frame, outer: outer, profile: outerProfile}:
 			case <-ctx.Done():
 				return
 			}
@@ -633,7 +813,7 @@ func (a *Agent) run(ctx context.Context) error {
 			}
 			a.status.SentPrivatePackets++
 		case incoming := <-frames:
-			if err = a.received(incoming.frame, incoming.outer); err != nil {
+			if err = a.received(incoming.frame, incoming.outer, incoming.profile); err != nil {
 				a.record(err)
 			}
 		case <-tick.C:

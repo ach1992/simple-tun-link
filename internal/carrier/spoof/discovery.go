@@ -11,11 +11,12 @@ import (
 // then cost O(batch), not O(total source count). This matters when a Link must
 // eventually try tens of thousands of different IPv4 sources.
 type DiscoveryCursor struct {
-	Preferred netip.Addr
-	ordered   []netip.Addr
-	positions map[netip.Addr]int
-	next      int
-	passes    uint64
+	Preferred     netip.Addr
+	ordered       []netip.Addr
+	positions     map[netip.Addr]int
+	next          int
+	passes        uint64
+	protocolIndex int
 }
 
 // interleavePrefix schedules one member from each distinct IPv4 prefix before
@@ -69,6 +70,7 @@ func (c *DiscoveryCursor) ReplaceInventory(inventory Inventory) error {
 	c.positions = nil
 	c.next = 0
 	c.passes = 0
+	c.protocolIndex = 0
 	if len(inventory.Addresses) == 0 {
 		return errors.New("spoof discovery has no source candidates; Recheck local source file")
 	}
@@ -133,6 +135,7 @@ func (c *DiscoveryCursor) PreferredSucceeded(addr netip.Addr) {
 		c.positions[addr] = 0
 	}
 	c.next = 0
+	c.protocolIndex = 0
 }
 
 // DiscoveryBatchSize scales the per-tick work toward a bounded complete pass,
@@ -154,4 +157,46 @@ func DiscoveryBatchSize(candidates int) int {
 // pass and when a new source file snapshot replaces the prior inventory.
 func (c *DiscoveryCursor) Progress() (position int, passes uint64) {
 	return c.next, c.passes
+}
+
+// NextPathBatch enumerates the complete inventory x profiles Cartesian
+// product lazily and exhaustively, with no O(inventory*profiles) allocation.
+// Each source is tried with each requested profile before moving to the next
+// range-diverse source. Profiles are part of an attempted path; trying one
+// protocol for an address is NOT proof its other protocols will fail.
+func (c *DiscoveryCursor) NextPathBatch(profiles []string, budget int) ([]SourcePath, error) {
+	if budget <= 0 || len(c.ordered) == 0 {
+		return nil, errors.New("Spoof path discovery needs positive budget and nonempty Source inventory")
+	}
+	if err := ValidateProfiles(profiles); err != nil {
+		return nil, err
+	}
+	count := min(budget, len(c.ordered)*len(profiles))
+	results := make([]SourcePath, 0, count)
+	for i := 0; i < count; i++ {
+		results = append(results, SourcePath{Source: c.ordered[c.next], Profile: profiles[c.protocolIndex]})
+		c.protocolIndex++
+		if c.protocolIndex == len(profiles) {
+			c.protocolIndex = 0
+			c.next++
+			if c.next == len(c.ordered) {
+				c.next = 0
+				c.passes++
+			}
+		}
+	}
+	return results, nil
+}
+
+// PathProgress exposes how far the current complete Source x Profile pass
+// has advanced; these are attempts scheduled, never confirmed deliveries.
+func (c *DiscoveryCursor) PathProgress() (position int, profileIndex int, completePasses uint64) {
+	return c.next, c.protocolIndex, c.passes
+}
+
+// Contains is O(1) lookup into the current operator-provided snapshot.
+// It never makes a previously learned Source permissible after removal.
+func (c *DiscoveryCursor) Contains(source netip.Addr) bool {
+	_, ok := c.positions[source]
+	return ok
 }

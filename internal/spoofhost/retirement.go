@@ -95,14 +95,14 @@ func (h *Host) RetireAfterRemove(ctx context.Context, link domain.Link) error {
 			folder.Close()
 			return err
 		}
-		allowed := map[string]bool{"material.json": true, "link.json": true, "status.json": true}
+		allowed := map[string]bool{"material.json": true, "link.json": true, "status.json": true, "history.json": true}
 		for _, name := range names {
 			if !allowed[name] {
 				folder.Close()
 				return fmt.Errorf("Spoof quarantine has unexpected file %q; preserve all", name)
 			}
 			info, err := os.Lstat(filepath.Join(quarantine, name))
-			if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size() > 8192 ||
+			if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || (name != "history.json" && info.Size() > 8192) ||
 				info.Sys().(*syscall.Stat_t).Uid != uint32(os.Geteuid()) {
 				folder.Close()
 				return errors.New("Spoof quarantine file identity unverified")

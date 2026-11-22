@@ -104,20 +104,61 @@ func askSpoofPrivateIPs(p createPrompts, a, b string) (string, string, error) {
 
 func askSpoofOuter(p createPrompts) (string, error) {
 	for {
-		menuOption(p.out, "1", "UDP", "Raw UDP with a local receive port (default)")
-		menuOption(p.out, "2", "ICMP", "Raw ICMP Echo Reply with a per-Link receive identifier")
-		value, err := p.ask("Outer packet profile [1]: ")
+		menuOption(p.out, "1", "Auto (recommended)", "Find working IPv4 Source and outer profile independently on each server; self-recover")
+		menuOption(p.out, "2", "UDP", "Only raw IPv4 UDP")
+		menuOption(p.out, "3", "ICMP", "Only unsolicited ICMP Echo Reply")
+		menuOption(p.out, "4", "TCP-looking", "Raw TCP RST-framed datagrams, NOT a TCP connection")
+		menuOption(p.out, "5", "GRE", "STL experimental GRE packet framing")
+		menuOption(p.out, "6", "IPIP", "STL experimental nested-IPv4 framing")
+		menuOption(p.out, "7", "Protocol 58", "Bare IPv4 protocol-58 experimental framing")
+		menuOption(p.out, "8", "Protocol 58 echo-shaped", "Experimental 58 wrapper (not standards-compliant ICMPv6)")
+		menuOption(p.out, "9", "L2TPv3 IP/115", "Experimental L2TPv3-style data header, not the native L2TPv3 backend")
+		value, err := p.ask("Outer Source/Transport discovery [1]: ")
 		if err != nil {
 			return "", err
 		}
 		switch strings.ToLower(value) {
-		case "", "1", "udp":
+		case "", "1", "auto":
+			return "auto", nil
+		case "2", "udp":
 			return "udp", nil
-		case "2", "icmp":
+		case "3", "icmp":
 			return "icmp", nil
+		case "4", "tcp":
+			return "tcp", nil
+		case "5", "gre":
+			return "gre", nil
+		case "6", "ipip":
+			return "ipip", nil
+		case "7", "proto58":
+			return "proto58", nil
+		case "8", "proto58-echo":
+			return "proto58-echo", nil
+		case "9", "l2tpv3":
+			return "l2tpv3", nil
 		default:
-			menuProse(p.out, "Choose 1 for UDP or 2 for ICMP. This setting is pinned in the offline Code.")
+			menuProse(p.out, "Select Auto or a listed STL outer packet profile.")
 		}
+	}
+}
+
+func askSpoofTxPreference(p createPrompts, outer string) (string, error) {
+	if outer != "auto" {
+		return "", nil
+	}
+	for {
+		candidate, err := p.ask("Optional outgoing profile lock for THIS server (Enter=Auto, else udp/icmp/tcp/gre/ipip/proto58/proto58-echo/l2tpv3): ")
+		if err != nil {
+			return "", err
+		}
+		candidate = strings.ToLower(strings.TrimSpace(candidate))
+		if candidate == "" || candidate == "auto" {
+			return "", nil
+		}
+		if spoof.ValidProfile(candidate) {
+			return candidate, nil
+		}
+		menuProse(p.out, "Choose a known STL profile or Enter to keep automatic discovery.")
 	}
 }
 
@@ -131,6 +172,10 @@ func menuCreateSpoof(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		return p.failed(err)
 	}
 	outer, err := askSpoofOuter(p)
+	if err != nil {
+		return p.failed(err)
+	}
+	txProfile, err := askSpoofTxPreference(p, outer)
 	if err != nil {
 		return p.failed(err)
 	}
@@ -153,6 +198,9 @@ func menuCreateSpoof(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 
 	menuScreen(out, "Review / Spoof Link")
 	menuField(out, "Outer carrier", outer)
+	if txProfile != "" {
+		menuField(out, "Local outgoing profile", txProfile)
+	}
 	menuField(out, "A real endpoint", a)
 	menuField(out, "B real endpoint", b)
 	menuField(out, "Private Link IPv4", aIP+" <-> "+bIP)
@@ -174,6 +222,9 @@ func menuCreateSpoof(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	args := []string{"create-spoof", "--creator", a, "--recipient", b,
 		"--creator-private", aIP, "--recipient-private", bIP,
 		"--sources", source, "--outer", outer, "--output", output}
+	if txProfile != "" {
+		args = append(args, "--tx-outer", txProfile)
+	}
 	if device != "" {
 		args = append(args, "--device", device)
 	}
@@ -201,6 +252,10 @@ func menuImportSpoof(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	if err != nil {
 		return p.failed(err)
 	}
+	txProfile, err := askSpoofTxPreference(p, offer.OuterProtocol())
+	if err != nil {
+		return p.failed(err)
+	}
 	device, err := p.ask("Optional sending network interface (Enter=kernel route): ")
 	if err != nil {
 		return p.failed(err)
@@ -208,6 +263,9 @@ func menuImportSpoof(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 	menuScreen(out, "Review / recipient Spoof Link")
 	menuField(out, "Link ID", string(offer.LinkID()))
 	menuField(out, "Outer carrier", offer.OuterProtocol())
+	if txProfile != "" {
+		menuField(out, "Local outgoing profile", txProfile)
+	}
 	menuField(out, "B real receive endpoint", offer.RecipientEndpoint().String())
 	menuField(out, "A real peer endpoint", offer.CreatorEndpoint().String())
 	menuField(out, "Private IPv4 B -> A", offer.RecipientPrivateIPv4().String()+" -> "+offer.CreatorPrivateIPv4().String())
@@ -226,6 +284,9 @@ func menuImportSpoof(input io.Reader, reader *bufio.Reader, out, errOut io.Write
 		return 0
 	}
 	args := []string{"import-spoof", "--setup", setupFile, "--sources", source}
+	if txProfile != "" {
+		args = append(args, "--tx-outer", txProfile)
+	}
 	if device != "" {
 		args = append(args, "--device", device)
 	}

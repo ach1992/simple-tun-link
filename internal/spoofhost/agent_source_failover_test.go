@@ -70,7 +70,7 @@ func TestFreshCreatorHandshakeDiscardsStaleSelectedSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	frame := carrier.Frame{LinkID: id, Attempt: attempt, Kind: carrier.KindHandshake1, Payload: first}
-	_ = a.received(frame, netip.MustParseAddrPort("198.18.0.12:42002"))
+	_ = a.received(frame, netip.MustParseAddrPort("198.18.0.12:42002"), carrier.ProfileUDP)
 	if a.handshake == nil || a.pendingKind != carrier.KindHandshake2 {
 		t.Fatal("valid fresh session request not adopted")
 	}
@@ -88,7 +88,7 @@ func TestFreshCreatorHandshakeDiscardsStaleSelectedSource(t *testing.T) {
 		t.Fatal("initial pending reply not scheduled")
 	}
 	for i := 0; i < 80; i++ {
-		if err := a.received(frame, netip.MustParseAddrPort("198.18.0.12:42002")); err != nil {
+		if err := a.received(frame, netip.MustParseAddrPort("198.18.0.12:42002"), carrier.ProfileUDP); err != nil {
 			t.Fatalf("duplicate first flight %d failed: %v", i, err)
 		}
 	}

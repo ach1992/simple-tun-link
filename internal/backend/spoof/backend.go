@@ -77,10 +77,15 @@ func expectedClaims(link domain.Link) ([]domain.ResourceClaim, error) {
 		{Kind: domain.ResourceBackendID, Key: "spoof/unit/" + string(link.ID)},
 		{Kind: domain.ResourceBackendID, Key: "spoof/material/" + string(link.ID) + "/" + link.Spoof.MaterialSHA256},
 	}
-	if link.Spoof.OuterProtocol == "icmp" {
-		claims = append(claims, domain.ResourceClaim{Kind: domain.ResourceBackendID, Key: "spoof/icmp-receive-id/" + strconv.Itoa(int(link.Spoof.ListenPort))})
-	} else {
+	profile := link.Spoof.OuterProtocol
+	if profile == "" || profile == "udp" || profile == "auto" {
 		claims = append(claims, domain.ResourceClaim{Kind: domain.ResourceUDPListenPort, Key: strconv.Itoa(int(link.Spoof.ListenPort))})
+	}
+	if profile == "icmp" || profile == "auto" {
+		claims = append(claims, domain.ResourceClaim{Kind: domain.ResourceBackendID, Key: "spoof/icmp-receive-id/" + strconv.Itoa(int(link.Spoof.ListenPort))})
+	}
+	if profile != "" && profile != "udp" && profile != "icmp" {
+		claims = append(claims, domain.ResourceClaim{Kind: domain.ResourceBackendID, Key: "spoof/raw-receive-id/" + strconv.Itoa(int(link.Spoof.ListenPort))})
 	}
 	for _, claim := range claims {
 		if err := claim.Validate(); err != nil {

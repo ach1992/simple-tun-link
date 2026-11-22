@@ -78,7 +78,21 @@ func TestSpoofSetupICMPProfilePinnedInSingleOfflineCode(t *testing.T) {
 	if err != nil || received.OuterProtocol() != "icmp" {
 		t.Fatalf("recipient lost immutable profile: %v", err)
 	}
-	if _, err = offer.WithOuterProtocol("tcp"); err == nil {
-		t.Fatal("unvalidated outer TCP accepted")
+	for _, profile := range []string{"auto", "tcp", "gre", "ipip", "proto58", "proto58-echo", "l2tpv3"} {
+		candidate, e := offer.WithOuterProtocol(profile)
+		if e != nil {
+			t.Fatalf("STL raw profile %s rejected: %v", profile, e)
+		}
+		code, e := candidate.EncodeSensitive()
+		if e != nil {
+			t.Fatal(e)
+		}
+		decoded, e := DecodeSensitiveSpoofSetup(code)
+		if e != nil || decoded.OuterProtocol() != profile {
+			t.Fatalf("STL profile %s not pinned in offline Code: %v", profile, e)
+		}
+	}
+	if _, err = offer.WithOuterProtocol("not-a-profile"); err == nil {
+		t.Fatal("unknown experimental outer profile accepted")
 	}
 }

@@ -16,22 +16,47 @@ between peers and STL does not check ownership, country, provider, permission
 or eligibility of Source IPs. It checks literal IPv4 syntax, that the Source
 appears in this Link's current local file, and whether packets work.
 
-Do not confuse:
+Do not confuse the **inner application protocol** with the **outer
+IPv4 carrier**. One encrypted TUN may carry application TCP, UDP and ICMP
+over any working outer packet format.
 
-| Layer | Tested transport | Meaning |
-| --- | --- | --- |
-| **Inside** the Link | ICMP / TCP / UDP | Ordinary private IPv4 application traffic carried encrypted by the same Link |
-| **Outside**, profile `udp` | Raw IPv4 UDP | Authenticated frames to the *real peer* UDP receive port, with the selected Source IPv4 |
-| **Outside**, profile `icmp` | Raw ICMPv4 unsolicited Echo Reply (no kernel reflexive reply to forged Source) | Authenticated frames to the *real peer* with the selected Source IPv4; per-Link ICMP receive identifier |
-| **Outside**, TCP | **Not supported for this Spoof carrier** | TCP's three-way handshake ordinarily returns to the claimed source, not automatically to the actual sender. Emitting a forged SYN is not evidence of an established TCP data connection |
+| Outer STL profile | IPv4 protocol | What is actually sent |
+| --- | ---: | --- |
+| `udp` | 17 | Raw IPv4 UDP datagrams and a bound real-destination UDP receive port |
+| `icmp` | 1 | Unsolicited ICMPv4 Echo Reply with per-Link receive identifier; no solicited kernel echo |
+| `tcp` | 6 | TCP-header **RST-shaped raw datagrams**; **not** a TCP handshake, reliable TCP session or TCP/TLS tunnel |
+| `gre` | 47 | GRE-shaped wrapper with an experimental EtherType and STL-owned Noise payload; not a general GRE interface |
+| `ipip` | 4 | Nested IPv4 packet with experimental inner protocol number and STL-owned Noise payload; not general kernel IPIP interoperation |
+| `proto58` | 58 | Bare STL-authenticated raw packets in IPv4 protocol 58 |
+| `proto58-echo` | 58 | Echo-reply-shaped wrapper, **not** valid native ICMPv6 carried over IPv6 |
+| `l2tpv3` | 115 | RFC 3931-style nonzero data Session ID preceding STL's own authenticated payload; **not** a native kernel L2TPv3 pseudowire or negotiated session |
 
-Both `udp` and `icmp` are **explicit, immutable per-Link profiles**.
-There is no implicit cross-protocol carrier hopping or unproven fallback.
-The creator selects a profile, the **single confidential offline Code**
-pins it for the recipient, and both sides use that same profile.
-Multiple independent Links with different profiles can coexist.
-Protocol names do not imply traversal of arbitrary firewalls, NAT,
-provider anti-spoofing, non-default routing or IPv4 restrictions.
+The standard IPv4 protocol numbers are allocated by
+[IANA](https://www.iana.org/assignments/protocol-numbers), and IP protocol
+115 uses a [L2TPv3 Session ID data header (RFC 3931)](https://www.rfc-editor.org/rfc/rfc3931).
+The experimental wrappers here are specific to STL. All eight profiles
+have passed authenticated private ICMP in the two owned isolated Linux
+containers; no blanket Internet/provider acceptance is implied.
+
+**Default: `--outer auto`**. The creator's single offline Code pins the
+original *permitted receive/discovery policy* for both ends. Each endpoint
+separately chooses its **local outgoing** Source and outer profile;
+there is no expectation that the two directions use the same pair.
+`--tx-outer PROFILE` is an **endpoint-local override** usable with
+`--outer auto` to pin that host's outgoing protocol; the other endpoint
+may choose differently. Without an override both sides automatically
+choose and rediscover independently. A fixed `--outer udp`, `icmp`,
+or another named profile pins that profile for both sides by default,
+without profile hopping. Neither kind of policy requires a live initial
+control connection.
+
+Automatic switching is **in the same Link**: changing the selected
+source/profile neither reissues keys nor constructs an additional Link
+or manager. Actual authenticated bilateral delivery is required before
+status reports `CONNECTED`. Not all networks permit all packet formats.
+Source-IP ownership is not inferred by the product from ASN, country
+or address prefix; operators remain responsible for applicable network
+authorization.
 
 ## Prerequisites and scoped changes
 
@@ -48,17 +73,22 @@ durable removal receipt. It does **not** replace unrelated interfaces,
 adopt foreign services, delete foreign network state, or write firewall
 or global network policies merely to make a test pass.
 
-For ICMP the numeric `PORT` in `--creator/--recipient` is a distinct
-16-bit **ICMP Echo identifier**, not a UDP/TCP listener. Operators must
-choose nonzero identifiers without colliding with other managed Spoof ICMP
-Links. UDP uses ordinary UDP receive ports.
+The numeric `PORT` in `--creator/--recipient` is the UDP/TCP
+destination receive port where applicable; for ICMP it is an Echo ID,
+for L2TPv3-style data it participates in the session identifier, and
+for other raw profiles it is a per-Link receive discriminator.
+The canonical Engine reserves the actual resources for the selected
+profile(s); `auto` reserves all necessary profile namespaces.
+Keep endpoint identifiers nonzero and avoid collisions with other
+services/Links.
 
 ## Interactive workflow
 
 In an interactive terminal, run `sudo stl menu`, then
 **Create tunnel → 10. Spoof / Direct TUN** on A or
 **Import Setup Link → 6. Spoof / Direct TUN** on B.
-Create offers an exact Source file **Recheck**, a choice of UDP or ICMP,
+Create offers an exact Source file **Recheck**, Auto or a manually fixed
+raw outer profile, an optional local outgoing override in Auto mode,
 review of both real endpoints and private addresses, and requires
 typing `YES` before issuing the confidential Setup Code and the
 locally managed pending Link. Import accepts the original **protected
@@ -88,14 +118,20 @@ sudo stl link create-spoof \
   --recipient 198.51.100.20:42002 \
   --creator-private 10.245.62.1 \
   --recipient-private 10.245.62.2 \
-  --outer udp \
+  --outer auto \
   --sources /root/stl/spoof/sources.txt \
   --output /root/stl/spoof/setup.code --json
 ~~~
 
-For an ICMP-only candidate, choose `--outer icmp`, a distinct Link
-address pair and endpoint identifiers; keep the `--outer` choice
-identical across the two peers via the Code.
+To constrain both sides to one carrier, specify `--outer icmp` (or
+another supported name) instead of `auto`. To test **asymmetric**
+manual directions with the same offline Code, use `--outer auto`
+and `--tx-outer udp` on A; when B imports, pass
+`--tx-outer icmp`. The local overrides are stored in separate
+protected Link configs, not transferred as peer private keys.
+For an interrupted `resume-spoof`, repeat the same `--tx-outer`
+value used on the original side so original immutable topology
+is preserved.
 
 The output contains `link_id`, `provisioned=true`,
 `peer_connected=false`, and the **path** of the private Setup Code.
@@ -172,7 +208,8 @@ file from its trusted storage separately when you no longer need it.
 Re-issue a fresh Link/Code if an unbound Code might have been exposed.
 Never overwrite a Code file during idempotent retry; use
 `resume-spoof --setup ORIGINAL_FILE --sources ORIGINAL_FILE_PATH`
-on A if an earlier provision attempt was interrupted.
+(and the original `--tx-outer`, if any) on A if an earlier provision
+attempt was interrupted.
 
 ## Source inventory scale and discovery
 
@@ -182,25 +219,46 @@ An inventory of 50,000 addresses has been parsed and a complete
 50,000-candidate discovery traversal has been unit-tested without skipping
 or repeating an address before the pass completes.
 
-Discovery favors a previously authenticated working address when still
-present. Otherwise it uses an **exhaustive, range-diverse ordering**:
-a round-robin of IPv4 /24 groups inside a round-robin of /16 groups,
-then returns to each group for every remaining address. This is only a
-priority heuristic. One failed IP never marks an entire /24 or /16 as
-ineligible, and no country/ASN/source-IP ownership policy is applied.
+Every confirmed **(Source IPv4, outer profile)** combination is saved
+in root-only `history.json` under the original Link's protected
+directory; success history is not subject to a time-based expiry or
+arbitrary number of repeated outages. The original Link retirement
+removes that exact owned history with its credentials.
 
-Source lists are re-read on the running Link after edits. The ordered
-traversal is prepared only when the inventory changes, not copied anew
-on every resend. Discovery sends at most 16 source candidates on each
-roughly 700 ms helper tick per Link, with short packet spacing for large
-batches. The `spoof-status` response reports
-`source_candidates`, `source_scan_position` and
-`source_scan_passes`. These are **scheduling progress**, not proof
-that any given packet was delivered or that the peer is connected.
-A 50,000-address scan may take tens of minutes (or more on a busy host);
-when no Source works the helper continues repeat passes without rebuilding
-the Link or requesting another Setup Code. It never assumes one bad test
-makes a Source permanently unusable.
+When an authenticated session is lost, STL first tries recent
+historically successful **paths** in most-recent-first order, three
+bounded attempts over the cache. This is just a scheduling preference,
+**not** three maximum retries or three lifetime attempts. Missing
+Sources in the current local `sources.txt` are not retried, but do
+not erase historical evidence. An unchanged working path reconnects
+quickly after transient interruptions or a host restart; if the cached
+paths fail, STL immediately returns to exhaustive discovery.
+
+Complete discovery is **Source × enabled outer profiles** rather than
+just one randomly chosen profile per address. Its priority ordering
+interleaves IPv4 /24 and /16 ranges to find varied candidates early,
+but a failed sampled Source NEVER blocks the rest of its prefix,
+another profile, or a future complete pass. No Source/provider country,
+ASN, ownership, prefix or file-size policy is inferred.
+
+Source lists are re-read after local edits and the ordered traversal
+is rebuilt only when the inventory changes, not before each resend.
+The helper schedules a bounded batch of up to 16 combinations per
+roughly 700 ms tick per Link, with short packet spacing. A list
+of 50,000 Sources with all eight formats means 400,000 different
+combinations per complete pass. This can take hours when nothing
+works and must not be misreported as an exhausted one-time failure:
+the helper keeps cycling and can reconnect without a new Code.
+An actual packet sent by the local kernel is **not** a success claim;
+the peer must cryptographically confirm the received Source/profile.
+
+`stl link spoof-status LINK_ID --json` distinguishes
+`selected_source`, `selected_profile`, `recent_working_paths`,
+`recovery_stage` (`RETRY_PREVIOUSLY_WORKING` or
+`EXHAUSTIVE_SOURCE_PROFILE_SCAN`), available/failed local receiver
+formats, inventory count, profile index, Source scan position and
+completed full passes. These counters indicate scheduled attempts,
+not proof that unselected paths were delivered.
 
 For efficient, predictable operator updates, write a fresh inventory
 into a protected temporary file and **atomically rename** it over
@@ -246,6 +304,59 @@ re-pairing after interruptions.
 - `go vet ./...`, `go test ./...` and targeted race tests passed
   for the predecessor candidate, with exact-head CI for
   `fb2992a` subsequently succeeding in all five workflows.
+
+**Additional candidate test campaign (after the original UDP/ICMP checks):**
+The task-owned isolated Debian A/B guests received a newly built,
+root-owned candidate. An `auto` Link with a single protected offline
+Code independently selected `ipip` on both sides, passed encrypted
+private ICMP 2/2 bidirectionally, and preserved learned history in
+a protected 0600 per-Link file.
+
+A separate isolated test campaign created, imported and tested
+**all eight individual outer packet profiles** (UDP, unsolicited ICMP
+Echo Reply, TCP-looking, GRE, IPIP, bare/echo-shaped protocol 58 and
+L2TPv3-style 115). Each selected profile achieved Noise-authenticated
+`CONNECTED` status and 2/2 private ICMP in both directions.
+An expanded full-L3 campaign subsequently transferred **1,048,576 verified
+TCP bytes and 50 verified UDP datagrams in each direction for EACH of
+the eight outer profiles** (plus private ICMP in both directions). Both
+client and server payload verification passed; the final task-owned
+script reported `ALL_RAW_PROFILES_AUTHENTICATED_ICMP_TCP_UDP_BIDIRECTIONAL_OK`.
+Each test-only Link was subsequently removed on both endpoints,
+including its protected identity and history.
+
+An Auto-receiving Link with locally pinned **A→B UDP and B→A ICMP**
+achieved both independent outgoing selections and 3/3 private ICMP
+without another Code; it later carried an **8 MiB verified TCP**
+transfer and **250 verified UDP datagrams** A→B.
+The task-only B-side filter blocking A's previous UDP Source `.11`
+triggered genuine autonomous replacement with Source `.99` while B
+continued on ICMP. When the operator's A-side file was changed to
+drop `.99` (temporarily and atomically), the original Link recovered
+through `.11` again, retained both previously authenticated historical
+paths, and resumed private traffic. The original two-Source file was
+restored and all test-only filter rules removed.
+
+Another Auto/Auto Link originally selected IPIP/4 on both sides.
+Blocking outer IPIP/4 inbound on task-owned B forced a same-Link
+transport rediscovery; A selected L2TPv3-style/115 and B selected
+bare protocol 58, and private ICMP again passed 3/3 each direction.
+The task-only filter was then deleted.
+After deploying the newest development binary with verified owner
+root:root mode 0755 in both guests, canonical Restore recovered
+four persistent Links. Restarting B's Incus system container also
+recovered all four through the boot-triggered
+`simple-tun-link-restore.service`; local and historical Source/profile
+state remained private and reused. A manual Restore started immediately
+while the container was still booting briefly reported
+`observation_unverified` (inspection raced startup), but the boot
+Restore reported success, the resulting services all became active,
+a later manual Restore reported `restored 4 link(s)`, and bilateral
+private ICMP passed. This is isolated container reboot evidence,
+not an independent physical OS/kernel restart.
+
+These are isolated Linux-container results, NOT WAN/provider
+interoperability evidence.
 
 **Large-inventory evidence:** a complete 50,000-address traversal
 was unit-tested, and both managed UDP and ICMP Links remained authenticated
