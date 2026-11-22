@@ -584,15 +584,78 @@ On this candidate the full Go test suite, `go vet` and relevant
 app/Spoof race tests all passed on Dev Server (job
 `1795316244157195973`, exit 0).
 
-**Important limits:** the optional managed firewall E2E in the
-independent VMs was stopped by the platform safety control; no
-permission rule or new Link was created in that attempt. Separate
-missing-iptables preflight failed safely and precisely, and older
-isolated **container** default-DROP Allow/Remove evidence remains
-available; neither substitutes for a complete native VM
-nftables/iptables/manager matrix. Other OS/kernel versions, strict
-`rp_filter`, asymmetric real NAT, stressed network conditions
-and actual ISP anti-spoof filtering are not proven by the above
-successes. PR #263 must be reconciled to the exact final HEAD,
-pass fresh required CI and independent read-only review before
-any proposed Merge/Release.
+**Native-VM firewall and fault acceptance after the previous checkpoint
+(2026-11-22):** On the same two task-owned, independently booted Debian
+13 VMs, using the exact pre-fix `900af8d` binary, managed ingress on a
+permissive `-P INPUT ACCEPT` installed **zero** Link-owned rules while
+bilateral authenticated private ICMP, 524,288 verified TCP bytes in each
+direction, and 20 verified UDP datagrams in each direction passed;
+exact Link removal returned to the same empty INPUT chain (Test Server
+job `1795317457156824820`, exit 0). With independently injected
+per-receiver UDP DROP rules, actual DROP counters incremented; STL
+inserted exactly one original Link-owned exception on each guest before
+the DROP, then the same private payload tests passed. All test-only
+DROP/ACCEPT rules and Link material were verified absent afterward
+(job `1795317525911905889`, exit 0).
+
+A more representative stateful **default `INPUT DROP` with a
+pre-existing `ESTABLISHED,RELATED` allow** exposed a previously
+unidentified product bug: the managed outer UDP exception admitted
+the encrypted handshake, so both sides reported `CONNECTED`, but B's
+kernel silently dropped decrypted incoming peer packets from the
+original per-Link TUN. Actual private A-to-B ICMP lost 3/3 packets.
+The causal reproduction on the original isolated Link showed the
+private ping failing with TUN INPUT blocked, passing 3/3 after adding
+an exact `-i <Link TUN> -s <peer /32> -d <local /32> -j ACCEPT`,
+and failing again after removing just that temporary rule; all
+original policy/traffic were restored (job `1795317701386592920`,
+exit 0). **Fix `0ef641b`** extends opt-in managed ingress with
+one independent, exact-owned private-TUN rule **only when the same
+iptables INPUT policy really blocks it**. This does not change
+default policy, skip authentication, permit other TUN peers or
+affect any independent Link. Unit tests cover permissive, direct
+DROP, existing exact accept, stateful allowance, outer vs private
+direction, and narrow protocol/port rules. With the rebuilt fix
+(SHA256 `aaab81ec79d8c6d91f416bed66ce27c41b079cec263954be5aba094a33e480ee`),
+the formerly failing native-VM test verified a real default-DROP
+counter, exactly **two** required Link-owned rules on blocked B
+(one outer and one private TUN, with the foreign stateful rule retained),
+bilateral private ICMP 3/3 each direction, 524,288 verified TCP bytes
+and 20 UDP datagrams in each direction, and complete exact rollback
+(Test Server job `1795317985490694638`, exit 0 and
+`STATEFUL_DROP_VM_EXACT_ROLLBACK_RC=0`). The **same fixed binary**
+was independently re-tested on two permissive `INPUT ACCEPT` VMs:
+zero added INPUT rules, bilateral private ICMP 3/3, 524,288 verified
+TCP bytes and 20 UDP datagrams in each direction, and exact
+Link/material removal (job `1795318095403856835`, exit 0,
+`VM_PERMISSIVE_EXACT_CLEANUP_EXIT=0`). Neither VM needed a
+global firewall disable. This fixed-commit runtime acceptance does not
+by itself constitute exact-final-HEAD CI or independent PR review.
+
+Further negative-path checks on the pre-fix private VM setup:
+temporarily withholding A's protected Source file reported
+`NO_WORKING_PATH`, then recovered the same bilateral Link automatically
+after restoring the file (job `1795316613771542919`, exit 0);
+forced asymmetric reverse-path filtering on B made the Link honestly
+`RECONNECTING` before restoring its original `rp_filter=2`,
+original routes and the bilateral private path (job
+`1795316804393996134`, exit 0); a full bilateral underlay outage
+for 65 seconds retained 16 historical paths, never reported false
+bilateral CONNECTED, and recovered automatically when both task-only
+blackhole routes were removed (job `1795316901709449135`,
+exit 0). Exact task-only netem at VM B tested 12 ms delay
+(3 ms jitter), 1% loss, 4% reordering, 1% duplication and 25 Mbit/s
+limit: packet-drop counters recorded 20 actual drops and 2 MiB of
+SHA256-verified TCP data in **each direction** passed; task-owned
+root netem was removed and the original kernel mq/fq_codel qdisc
+independently verified restored (job `1795317329185500594`, exit 0).
+
+**Still unverified:** separate native nftables hooks/managers other
+than inspected iptables-nft, multi-distro and ARM64 native Spoof VM,
+real ISP/provider anti-spoof filtering, public WAN/NAT diversity, and
+any production-site Firewall effect. Scoped guest permission tests do
+not imply production authorization or a guarantee of provider
+reachability. PR #263 requires exact final-HEAD GitHub CI, independent
+strict read-only review, and explicit Owner approval for any
+Merge/Release; public/production testing needs its own scoped
+authorization.
