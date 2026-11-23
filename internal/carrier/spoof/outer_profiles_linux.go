@@ -140,11 +140,7 @@ func OpenMultiProfileReceiver(local netip.AddrPort, device string) (*MultiProfil
 		var err error
 		switch profile {
 		case ProfileUDP:
-			var c *net.UDPConn
-			c, err = OpenReceiver(local)
-			if err == nil {
-				part = &udpFrameReceiver{UDPConn: c}
-			}
+			part, err = openUDPFrameReceiver(local, device)
 		case ProfileICMP:
 			var c *ICMPReceiver
 			c, err = OpenICMPReceiver(local, device)

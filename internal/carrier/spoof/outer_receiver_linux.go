@@ -47,6 +47,12 @@ func OpenFrameReceiver(local netip.AddrPort, profile, device string) (FrameRecei
 		}
 		return OpenRawProfileReceiver(local, profile, device)
 	}
+	return openUDPFrameReceiver(local, device)
+}
+
+// Auto and fixed UDP use the same ingress binding; outgoing device selection
+// never substitutes for the operator's independent receiving interface.
+func openUDPFrameReceiver(local netip.AddrPort, device string) (*udpFrameReceiver, error) {
 	if device == "" {
 		conn, err := OpenReceiver(local)
 		if err != nil {
