@@ -206,8 +206,12 @@ reads must not write migration State or silently acquire host authority.
 
 ### Explicit QUIC obfuscation / State v6 acceptance
 
-The current runtime writes **State v6** and reads valid v1–v5 snapshots without
-read-time migration writes. Verify preserved v5 Plain Link/config/material
+Historical **State v6** introduced explicit QUIC obfuscation and read valid
+v1–v5 snapshots without read-time migration writes. The **current runtime
+writes State v7** and reads valid historical v1–v6; follow the
+[current State and rollback guidance](INSTALL.md#state-v6-explicit-quic-obfuscation-and-rollback).
+Preserve the historical v6 compatibility acceptance below: verify preserved
+v5 Plain Link/config/material
 identity, rejection of obfuscation fields grafted into older State, and
 complete mode/optional-secret binding in managed operations, generations and
 retirement receipts. Creator/private-offer v2 and desired-input v5 require
