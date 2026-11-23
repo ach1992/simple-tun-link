@@ -77,6 +77,12 @@ raw socket capability (`CAP_NET_RAW`). The two **real** endpoint IPv4
 addresses must have a path for the selected outer protocol. This is not
 checked as a prerequisite for local Link creation; an offline peer is valid.
 
+A host default route is not required when an explicit route reaches the real
+outer peer endpoint. While the owned TUN is being configured, the private
+peer route appears after the interface and address. Its temporary absence
+is pending local readiness; unrelated command and parsing failures still
+remain errors.
+
 The Engine manages the original per-Link transient `systemd` service,
 private /32 TUN address, exact peer /32 route, owned interface alias,
 protected local X25519 material, restore unit, resource claims, and
@@ -498,12 +504,23 @@ Fresh one-Code pairing, same-Link Source rotation, managed-helper restart,
 100/100 UDP datagrams in each direction passed. The test did not alter
 global firewall, default routes or reverse-path filtering.
 
-The opposite tested nonlocal Source left the UK interface but was absent
-from the Iran capture across the attempted profiles. That locates the
-failure somewhere along that delivery path; it does not identify the
-dropping hop or prove that every other Source would fail. The two
-directions can use different Sources and profiles. A working forged
-Source in one direction does not require a forged Source in the other.
+The [strict follow-up matrix](https://github.com/ach1992/simple-tun-link/issues/262#issuecomment-7090866179)
+excluded both endpoint real addresses from both Source files and used 23
+other operator-provided addresses per side. All 368 directional
+Source/profile combinations were captured leaving their hosts: every
+Iran-origin Source reached the UK in each of the eight profiles, while
+none of the UK-origin combinations reached Iran. The UK emitted 7,957
+current-Link handshake replies and Iran received none. Exact Link ID and
+outer-header decoding found zero frames using either endpoint's real
+Source or an address outside the configured inventories.
+
+Strict bilateral-forged pairing therefore did not complete on that pair.
+These captures distinguish host emission from arrival but do not identify
+the dropping hop or establish a rule for every other Source or provider.
+The earlier private-traffic success remains the asymmetric forged/real
+case. The two directions can use different Sources and profiles; a
+working forged Source in one direction does not require a forged Source
+in the other.
 
 **Still unverified:** Other provider/Source combinations, physical
 translated-NAT and full host-reboot behavior remain separate field

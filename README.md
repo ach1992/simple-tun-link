@@ -44,7 +44,9 @@ policies, and optional helpers. **A saved or running tunnel is not proof
 of two-way traffic.** Spoof has passed isolated multi-host tests and a
 bounded real-WAN test with a forged Source in one direction and a real
 Source in the return direction, including private ICMP/TCP/UDP. The
-tested reverse forged-Source path did not deliver packets; see the
+strict follow-up excluded both real Sources and tried 23 candidates across
+eight profiles in each direction; none of the UK-origin forged candidates
+arrived in Iran. See the
 [Spoof operator guide](docs/SPOOF-CARRIER.md#verification-boundaries-and-historical-evidence)
 for exact evidence and remaining qualification. No single method is
 guaranteed to work on every network.
