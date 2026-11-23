@@ -41,10 +41,13 @@ transport you select.
 
 The choice depends on kernel features, firewalls, the provider's network
 policies, and optional helpers. **A saved or running tunnel is not proof
-of two-way traffic.** Spoof has passed isolated multi-host tests, but
-public ISP/WAN source-address delivery and anti-spoof/NAT behavior are
-not yet established; see the [Spoof operator guide](docs/SPOOF-CARRIER.md).
-No single method is guaranteed to work on every network.
+of two-way traffic.** Spoof has passed isolated multi-host tests and a
+bounded real-WAN test with a forged Source in one direction and a real
+Source in the return direction, including private ICMP/TCP/UDP. The
+tested reverse forged-Source path did not deliver packets; see the
+[Spoof operator guide](docs/SPOOF-CARRIER.md#verification-boundaries-and-historical-evidence)
+for exact evidence and remaining qualification. No single method is
+guaranteed to work on every network.
 
 ## Requirements
 
