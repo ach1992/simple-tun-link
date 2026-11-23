@@ -3,10 +3,12 @@
 > **Availability and evidence:** Introduced in official Stable `v0.1.34`;
 > `v0.1.33` and earlier do not contain this Carrier. The implementation
 > passed exact-source independent reviews and isolated native-KVM acceptance.
-> Neither a published version nor private test success proves that any
-> specific ISP/provider accepts the selected outer source or that real
-> public-WAN bilateral Spoof connectivity works. Physical field acceptance
-> and optional deployment are tracked separately in [Issue #262](https://github.com/ach1992/simple-tun-link/issues/262).
+> A bounded public-WAN test on official v0.1.35 also verified fresh pairing,
+> private ICMP/TCP/UDP and same-Link recovery with a forged Source in one
+> direction and a real Source in the return direction. This is evidence for
+> that tested path, not every Source/provider combination. See
+> [verification boundaries](#verification-boundaries-and-historical-evidence)
+> and [Issue #262](https://github.com/ach1992/simple-tun-link/issues/262).
 
 ## What is carried vs how the peers reach each other
 
@@ -74,6 +76,12 @@ root privileges, systemd, `/dev/net/tun`, `iproute2` and the relevant
 raw socket capability (`CAP_NET_RAW`). The two **real** endpoint IPv4
 addresses must have a path for the selected outer protocol. This is not
 checked as a prerequisite for local Link creation; an offline peer is valid.
+
+A host default route is not required when an explicit route reaches the real
+outer peer endpoint. While the owned TUN is being configured, the private
+peer route appears after the interface and address. Its temporary absence
+is pending local readiness; unrelated command and parsing failures still
+remain errors.
 
 The Engine manages the original per-Link transient `systemd` service,
 private /32 TUN address, exact peer /32 route, owned interface alias,
@@ -486,8 +494,39 @@ comments; its [v0.1.34 delivery receipt](https://github.com/ach1992/simple-tun-l
 records exact source and artifact identity. Detailed historical
 campaigns are recoverable from that Issue and Git history.
 
-**Still unverified:** The private-lab successes do not show that any
-particular public ISP permits the selected outer Source IPv4 or that
-real public-WAN/translated-NAT paths carry a working bilateral Link.
-No software release authorizes arbitrary third-party-source traffic,
-host-wide firewall shutdowns or production deployment.
+**Real-WAN evidence:** The
+[2026-11-23 physical acceptance receipt](https://github.com/ach1992/simple-tun-link/issues/262#issuecomment-7090632162)
+records official v0.1.35 on an authorized Iran/UK server pair. A nonlocal
+Source sent by the Iran host arrived unchanged at the UK host, and Auto
+formed a bidirectional encrypted Link using a real-Source return path.
+Fresh one-Code pairing, same-Link Source rotation, managed-helper restart,
+1280-byte private DF ping, 2 MiB SHA256-verified TCP transfers and
+100/100 UDP datagrams in each direction passed. The test did not alter
+global firewall, default routes or reverse-path filtering.
+
+The [strict follow-up matrix](https://github.com/ach1992/simple-tun-link/issues/262#issuecomment-7090866179)
+excluded both endpoint real addresses from both Source files and used 23
+other operator-provided addresses per side. All 368 directional
+Source/profile combinations were captured leaving their hosts: every
+Iran-origin Source reached the UK in each of the eight profiles, while
+none of the UK-origin combinations reached Iran. The UK emitted 7,957
+current-Link handshake replies and Iran received none. Exact Link ID and
+outer-header decoding found zero frames using either endpoint's real
+Source or an address outside the configured inventories.
+
+Strict bilateral-forged pairing therefore did not complete on that pair.
+These captures distinguish host emission from arrival but do not identify
+the dropping hop or establish a rule for every other Source or provider.
+The earlier private-traffic success remains the asymmetric forged/real
+case. The two directions can use different Sources and profiles; a
+working forged Source in one direction does not require a forged Source
+in the other.
+
+**Still unverified:** Other provider/Source combinations, physical
+translated-NAT and full host-reboot behavior remain separate field
+qualifications. The large-inventory cursor test is not proof of initial
+two-peer pairing when only sparse candidates work, and same-tuple path-MTU
+changes need distinct validation. Short data transfers do not establish a
+throughput SLA or long-duration stability. No software release authorizes
+arbitrary third-party-source traffic, host-wide firewall shutdowns or
+production deployment.

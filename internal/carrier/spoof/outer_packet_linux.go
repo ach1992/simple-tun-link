@@ -145,10 +145,13 @@ func DecodeOuterPacket(wire []byte, local netip.AddrPort, allowedProfile string)
 		body = body[4:]
 		profile = ProfileGRE
 	case 4:
+		// The outer destination was already checked against the local bind.
+		// DNAT leaves this experimental nested header addressed to the
+		// advertised endpoint, so it need not equal the post-DNAT bind IP.
+		// The enclosed STL frame still requires the Link's Noise identity.
 		if len(body) < 20 || body[0] != 0x45 || body[9] != ipipInnerExperimentalProtocol ||
 			checksum16(body[:20]) != 0 ||
-			int(binary.BigEndian.Uint16(body[2:4])) != len(body) ||
-			!bytes.Equal(body[16:20], local.Addr().AsSlice()) {
+			int(binary.BigEndian.Uint16(body[2:4])) != len(body) {
 			return nil, netip.AddrPort{}, "", errInvalid
 		}
 		body = body[20:]
