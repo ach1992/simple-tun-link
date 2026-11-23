@@ -56,7 +56,7 @@ func (h *Host) run(ctx context.Context, tool string, args ...string) ([]byte, er
 		return nil, errors.New("Spoof host output exceeds diagnostics buffer")
 	}
 	if err != nil {
-		return nil, fmt.Errorf("Spoof %s %v failed: %w: %s", tool, args, err, strings.TrimSpace(string(data)))
+		return data, fmt.Errorf("Spoof %s %v failed: %w: %s", tool, args, err, strings.TrimSpace(string(data)))
 	}
 	return data, nil
 }
@@ -161,8 +161,22 @@ func (h *Host) inspectTUN(ctx context.Context, link domain.Link) (exists, owned,
 	}
 	addressReady = addressReady && count == 1 && nic.Flags&net.FlagUp != 0
 	raw, err := h.run(ctx, "ip", "-4", "-json", "route", "get", link.Addresses.Peer.Addr().String())
-	if err != nil {
-		return true, owned, addressReady, false, err
+	route, err = privatePeerRouteReady(raw, err, name, link.Addresses.Local.Addr())
+	return exists, owned, addressReady, route, err
+}
+
+// The TUN becomes visible before OpenPrivateTUN adds its peer route. With no
+// fallback route, iproute2 reports ENETUNREACH during that normal setup window.
+// Only that exact lookup result is pending; execution and parse errors remain
+// errors. Host.run fixes LANG/LC_ALL to C, so this diagnostic is unambiguous.
+func privatePeerRouteReady(raw []byte, commandErr error, name string, local netip.Addr) (bool, error) {
+	if commandErr != nil {
+		var exitErr *exec.ExitError
+		if errors.As(commandErr, &exitErr) && exitErr.ExitCode() == 2 &&
+			strings.TrimSpace(string(raw)) == "RTNETLINK answers: Network is unreachable" {
+			return false, nil
+		}
+		return false, commandErr
 	}
 	var routes []struct {
 		Dev       string `json:"dev"`
@@ -170,14 +184,13 @@ func (h *Host) inspectTUN(ctx context.Context, link domain.Link) (exists, owned,
 		Preferred string `json:"prefsrc"`
 	}
 	if json.Unmarshal(raw, &routes) != nil || len(routes) != 1 {
-		return true, owned, addressReady, false, errors.New("Spoof private route inventory invalid")
+		return false, errors.New("Spoof private route inventory invalid")
 	}
 	source := routes[0].Preferred
 	if source == "" {
 		source = routes[0].Src
 	}
-	route = routes[0].Dev == name && source == link.Addresses.Local.Addr().String()
-	return exists, owned, addressReady, route, nil
+	return routes[0].Dev == name && source == local.String(), nil
 }
 func (h *Host) Inspect(ctx context.Context, link domain.Link) (spoofbackend.HostObservation, error) {
 	var out spoofbackend.HostObservation
